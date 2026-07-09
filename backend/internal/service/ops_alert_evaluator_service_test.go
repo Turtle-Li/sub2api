@@ -4,6 +4,9 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -250,5 +253,148 @@ func TestComputeRuleMetricNewIndicators(t *testing.T) {
 			}
 			require.InDelta(t, tt.wantValue, gotValue, 0.0001)
 		})
+	}
+}
+
+func TestComputeRuleMetricNetworkBandwidth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+
+	t.Run("bandwidth utilization uses the higher configured direction", func(t *testing.T) {
+		t.Parallel()
+
+		opsService := newNetworkMetricTestOpsService(t, &OpsNetworkBandwidthSettings{
+			Enabled:         true,
+			Iface:           "eth0",
+			RXLimitMbps:     float64Ptr(20),
+			TXLimitMbps:     float64Ptr(10),
+			LimitSource:     opsNetworkLimitSourceManual,
+			WarnPercent:     80,
+			CriticalPercent: 95,
+		}, opsNetworkCounters{
+			RXBytes: 2_500_000,
+			TXBytes: 5_000_000,
+		}, opsNetworkCounters{}, now.Add(-10*time.Second), nil)
+
+		svc := &OpsAlertEvaluatorService{opsService: opsService, opsRepo: &stubOpsRepo{}}
+		got, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "bandwidth_utilization"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.True(t, ok)
+		require.Greater(t, got, 35.0)
+		require.Less(t, got, 45.0)
+	})
+
+	t.Run("bandwidth utilization is unavailable without a matching limit", func(t *testing.T) {
+		t.Parallel()
+
+		opsService := newNetworkMetricTestOpsService(t, &OpsNetworkBandwidthSettings{
+			Enabled:         true,
+			Iface:           "eth0",
+			LimitSource:     opsNetworkLimitSourceUnknown,
+			WarnPercent:     80,
+			CriticalPercent: 95,
+		}, opsNetworkCounters{
+			RXBytes: 2_500_000,
+			TXBytes: 5_000_000,
+		}, opsNetworkCounters{}, now.Add(-10*time.Second), nil)
+
+		svc := &OpsAlertEvaluatorService{opsService: opsService, opsRepo: &stubOpsRepo{}}
+		got, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "bandwidth_utilization"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.False(t, ok)
+		require.Zero(t, got)
+	})
+
+	t.Run("legacy bandwidth utilization metric remains readable", func(t *testing.T) {
+		t.Parallel()
+
+		opsService := newNetworkMetricTestOpsService(t, &OpsNetworkBandwidthSettings{
+			Enabled:         true,
+			Iface:           "eth0",
+			RXLimitMbps:     float64Ptr(20),
+			TXLimitMbps:     float64Ptr(10),
+			LimitSource:     opsNetworkLimitSourceManual,
+			WarnPercent:     80,
+			CriticalPercent: 95,
+		}, opsNetworkCounters{
+			RXBytes: 2_500_000,
+			TXBytes: 5_000_000,
+		}, opsNetworkCounters{}, now.Add(-10*time.Second), nil)
+
+		svc := &OpsAlertEvaluatorService{opsService: opsService, opsRepo: &stubOpsRepo{}}
+		got, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_bandwidth_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.True(t, ok)
+		require.Greater(t, got, 35.0)
+		require.Less(t, got, 45.0)
+	})
+
+	t.Run("deprecated direction-specific utilization metrics remain readable", func(t *testing.T) {
+		t.Parallel()
+
+		opsService := newNetworkMetricTestOpsService(t, &OpsNetworkBandwidthSettings{
+			Enabled:         true,
+			Iface:           "eth0",
+			RXLimitMbps:     float64Ptr(20),
+			TXLimitMbps:     float64Ptr(10),
+			LimitSource:     opsNetworkLimitSourceManual,
+			WarnPercent:     80,
+			CriticalPercent: 95,
+		}, opsNetworkCounters{
+			RXBytes: 2_500_000,
+			TXBytes: 5_000_000,
+		}, opsNetworkCounters{}, now.Add(-10*time.Second), nil)
+		svc := &OpsAlertEvaluatorService{opsService: opsService, opsRepo: &stubOpsRepo{}}
+		tx, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_tx_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.True(t, ok)
+		require.Greater(t, tx, 35.0)
+		require.Less(t, tx, 45.0)
+
+		rx, ok := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "network_rx_utilization_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+		require.True(t, ok)
+		require.Greater(t, rx, 9.0)
+		require.Less(t, rx, 11.0)
+	})
+
+}
+
+func newNetworkMetricTestOpsService(
+	t *testing.T,
+	cfg *OpsNetworkBandwidthSettings,
+	current opsNetworkCounters,
+	last opsNetworkCounters,
+	lastAt time.Time,
+	samples []opsNetworkSample,
+) *OpsService {
+	t.Helper()
+
+	tmp := t.TempDir()
+	statsDir := filepath.Join(tmp, "eth0", "statistics")
+	require.NoError(t, os.MkdirAll(statsDir, 0o755))
+	writeCounter := func(name string, value uint64) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(statsDir, name), []byte(fmt.Sprintf("%d\n", value)), 0o644))
+	}
+	writeCounter("rx_bytes", current.RXBytes)
+	writeCounter("tx_bytes", current.TXBytes)
+	writeCounter("rx_dropped", current.RXDropped)
+	writeCounter("tx_dropped", current.TXDropped)
+	writeCounter("rx_errors", current.RXErrors)
+	writeCounter("tx_errors", current.TXErrors)
+
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	return &OpsService{
+		settingRepo: &settingRepoStub{values: map[string]string{
+			SettingKeyOpsMonitoringEnabled:        "true",
+			SettingKeyOpsNetworkBandwidthSettings: string(rawCfg),
+		}},
+		networkSampler: &opsNetworkSampler{
+			basePath:  tmp,
+			procPath:  filepath.Join(tmp, "route"),
+			lastIface: "eth0",
+			last:      last,
+			lastAt:    lastAt,
+			samples:   samples,
+		},
 	}
 }

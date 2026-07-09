@@ -229,6 +229,16 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		metricValue, ok := s.computeRuleMetric(ctx, rule, systemMetrics, windowStart, windowEnd, scopePlatform, scopeGroupID)
 		if !ok {
 			s.resetRuleState(rule.ID, now)
+			if activeEvent, err := s.opsRepo.GetActiveAlertEvent(ctx, rule.ID); err == nil && activeEvent != nil {
+				resolvedAt := now
+				if err := s.opsRepo.UpdateAlertEventStatus(ctx, activeEvent.ID, OpsAlertStatusResolved, &resolvedAt); err != nil {
+					logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] resolve unavailable metric event failed (event=%d): %v", activeEvent.ID, err)
+				} else {
+					eventsResolved++
+				}
+			} else if err != nil {
+				logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] get active event for unavailable metric failed (rule=%d): %v", rule.ID, err)
+			}
 			continue
 		}
 		rulesEvaluated++
@@ -455,6 +465,42 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 			return *systemMetrics.MemoryUsagePercent, true
 		}
 		return 0, false
+	case "bandwidth_utilization", "network_bandwidth_utilization_percent":
+		if s == nil || s.opsService == nil {
+			return 0, false
+		}
+		summary, err := s.opsService.GetNetworkBandwidthSummary(ctx)
+		if err != nil || summary == nil || summary.MaxUtilizationPercent == nil {
+			return 0, false
+		}
+		return *summary.MaxUtilizationPercent, true
+	case "network_rx_utilization_percent":
+		if s == nil || s.opsService == nil {
+			return 0, false
+		}
+		summary, err := s.opsService.GetNetworkBandwidthSummary(ctx)
+		if err != nil || summary == nil || summary.RXUtilizationPercent == nil {
+			return 0, false
+		}
+		return *summary.RXUtilizationPercent, true
+	case "network_tx_utilization_percent":
+		if s == nil || s.opsService == nil {
+			return 0, false
+		}
+		summary, err := s.opsService.GetNetworkBandwidthSummary(ctx)
+		if err != nil || summary == nil || summary.TXUtilizationPercent == nil {
+			return 0, false
+		}
+		return *summary.TXUtilizationPercent, true
+	case "network_saturation_suspected":
+		if s == nil || s.opsService == nil {
+			return 0, false
+		}
+		summary, err := s.opsService.GetNetworkBandwidthSummary(ctx)
+		if err != nil || summary == nil {
+			return 0, false
+		}
+		return 0, true
 	case "concurrency_queue_depth":
 		if systemMetrics != nil && systemMetrics.ConcurrencyQueueDepth != nil {
 			return float64(*systemMetrics.ConcurrencyQueueDepth), true
@@ -666,7 +712,7 @@ func buildOpsAlertDescription(rule *OpsAlertRule, value float64, windowMinutes i
 		windowMinutes = 1
 	}
 	return fmt.Sprintf("%s %s %.2f (current %.2f) over last %dm (%s)",
-		strings.TrimSpace(rule.MetricType),
+		opsAlertMetricDisplayName(rule.MetricType),
 		strings.TrimSpace(rule.Operator),
 		rule.Threshold,
 		value,
@@ -762,7 +808,7 @@ func opsAlertEmailVariables(rule *OpsAlertRule, event *OpsAlertEvent) map[string
 	if rule != nil {
 		variables["rule_name"] = strings.TrimSpace(rule.Name)
 		variables["severity"] = strings.TrimSpace(rule.Severity)
-		variables["metric_type"] = strings.TrimSpace(rule.MetricType)
+		variables["metric_type"] = opsAlertMetricDisplayName(rule.MetricType)
 		variables["operator"] = strings.TrimSpace(rule.Operator)
 		variables["threshold_value"] = fmt.Sprintf("%.2f", rule.Threshold)
 		if strings.TrimSpace(rule.Description) != "" {
@@ -791,7 +837,7 @@ func buildOpsAlertEmailBody(rule *OpsAlertRule, event *OpsAlertEvent) string {
 	if rule == nil || event == nil {
 		return ""
 	}
-	metric := strings.TrimSpace(rule.MetricType)
+	metric := opsAlertMetricDisplayName(rule.MetricType)
 	value := "-"
 	threshold := fmt.Sprintf("%.2f", rule.Threshold)
 	if event.MetricValue != nil {
@@ -818,6 +864,13 @@ func buildOpsAlertEmailBody(rule *OpsAlertRule, event *OpsAlertEvent) string {
 		event.FiredAt.Format(time.RFC3339),
 		htmlEscape(event.Description),
 	)
+}
+
+func opsAlertMetricDisplayName(metricType string) string {
+	if strings.TrimSpace(metricType) == "network_bandwidth_utilization_percent" {
+		return "bandwidth_utilization"
+	}
+	return strings.TrimSpace(metricType)
 }
 
 func shouldSendOpsAlertEmailByMinSeverity(minSeverity string, ruleSeverity string) bool {

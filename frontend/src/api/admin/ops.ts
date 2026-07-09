@@ -451,6 +451,93 @@ export async function getRealtimeTrafficSummary(
   return data
 }
 
+export interface OpsNetworkBandwidthSettings {
+  enabled: boolean
+  iface: string
+  rx_limit_mbps?: number | null
+  tx_limit_mbps?: number | null
+  limit_source: 'unknown' | 'manual' | 'cloud_api'
+  abnormal_retry_protection_enabled: boolean
+  abnormal_retry_protection_trigger_percent: number
+  abnormal_retry_protection_min_body_bytes: number
+  abnormal_retry_protection_window_seconds: number
+  abnormal_retry_protection_max_repeats: number
+}
+
+export type OpsNetworkBandwidthSettingsUpdate = Partial<OpsNetworkBandwidthSettings> & {
+  clear_rx_limit?: boolean
+  clear_tx_limit?: boolean
+}
+
+export interface OpsNetworkInterfaceInfo {
+  name: string
+  state: string
+  is_default: boolean
+}
+
+export interface OpsNetworkInterfacesResponse {
+  interfaces: OpsNetworkInterfaceInfo[]
+  default_iface?: string
+}
+
+export interface OpsNetworkBandwidthSummary {
+  enabled: boolean
+  iface: string
+  limit_source: 'unknown' | 'manual' | 'cloud_api'
+  rx_limit_mbps?: number | null
+  tx_limit_mbps?: number | null
+  rx_mbps: number
+  tx_mbps: number
+  max_mbps: number
+  rx_utilization_percent?: number | null
+  tx_utilization_percent?: number | null
+  max_utilization_percent?: number | null
+  rx_bytes_delta: number
+  tx_bytes_delta: number
+  rx_dropped_delta: number
+  tx_dropped_delta: number
+  rx_errors_delta: number
+  tx_errors_delta: number
+  elapsed_seconds: number
+  sample_count: number
+  rx_avg_1m_mbps: number
+  tx_avg_1m_mbps: number
+  rx_avg_5m_mbps: number
+  tx_avg_5m_mbps: number
+  rx_avg_15m_mbps: number
+  tx_avg_15m_mbps: number
+  rx_peak_1h_mbps: number
+  tx_peak_1h_mbps: number
+  status: 'ok' | 'warning' | 'critical' | 'unknown' | 'disabled' | 'warming_up'
+  collected_at: string
+  notice?: string
+}
+
+export interface OpsNetworkBandwidthSummaryResponse {
+  enabled: boolean
+  summary: OpsNetworkBandwidthSummary | null
+}
+
+export async function getNetworkBandwidthSummary(): Promise<OpsNetworkBandwidthSummaryResponse> {
+  const { data } = await apiClient.get<OpsNetworkBandwidthSummaryResponse>('/admin/ops/network/summary')
+  return data
+}
+
+export async function getNetworkBandwidthSettings(): Promise<OpsNetworkBandwidthSettings> {
+  const { data } = await apiClient.get<OpsNetworkBandwidthSettings>('/admin/ops/network/settings')
+  return data
+}
+
+export async function getNetworkInterfaces(): Promise<OpsNetworkInterfacesResponse> {
+  const { data } = await apiClient.get<OpsNetworkInterfacesResponse>('/admin/ops/network/interfaces')
+  return data
+}
+
+export async function updateNetworkBandwidthSettings(settings: OpsNetworkBandwidthSettingsUpdate): Promise<OpsNetworkBandwidthSettings> {
+  const { data } = await apiClient.put<OpsNetworkBandwidthSettings>('/admin/ops/network/settings', settings)
+  return data
+}
+
 /**
  * Subscribe to realtime QPS updates via WebSocket.
  *
@@ -679,6 +766,9 @@ export type MetricType =
   | 'upstream_error_rate'
   | 'cpu_usage_percent'
   | 'memory_usage_percent'
+  | 'bandwidth_utilization'
+  | 'network_bandwidth_utilization_percent'
+  | 'network_saturation_suspected'
   | 'concurrency_queue_depth'
   | 'group_available_accounts'
   | 'group_available_ratio'
@@ -1323,6 +1413,10 @@ export const opsAPI = {
   getUserConcurrencyStats,
   getAccountAvailabilityStats,
   getRealtimeTrafficSummary,
+  getNetworkBandwidthSummary,
+  getNetworkBandwidthSettings,
+  getNetworkInterfaces,
+  updateNetworkBandwidthSettings,
   subscribeQPS,
 
   // Legacy unified endpoints

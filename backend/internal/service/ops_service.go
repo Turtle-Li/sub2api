@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -46,6 +47,12 @@ type OpsService struct {
 	// UpdateOpsAdvancedSettings 写入新配置后调用，把最新的 quota auto-pause 全局默认阈值
 	// 立即同步到调度热路径读取的内存缓存，避免下次请求才能感知新值。
 	quotaAutoPauseSink func(OpsOpenAIAccountQuotaAutoPauseSettings)
+
+	networkSampler          *opsNetworkSampler
+	networkSamplerStartOnce sync.Once
+	networkSamplerStopOnce  sync.Once
+	networkSamplerStopCh    chan struct{}
+	networkSamplerWG        sync.WaitGroup
 }
 
 // CleanupReloader 由 OpsCleanupService 实现。
@@ -99,6 +106,7 @@ func NewOpsService(
 		geminiCompatService:       geminiCompatService,
 		antigravityGatewayService: antigravityGatewayService,
 		systemLogSink:             systemLogSink,
+		networkSampler:            newOpsNetworkSampler(),
 	}
 	svc.applyRuntimeLogConfigOnStartup(context.Background())
 	return svc

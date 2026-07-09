@@ -22,6 +22,7 @@ import (
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
@@ -35,8 +36,10 @@ type OpenAIGatewayHandler struct {
 	errorPassthroughService  *service.ErrorPassthroughService
 	contentModerationService *service.ContentModerationService
 	opsService               *service.OpsService
+	retryProtectionRedis     *redis.Client
 	concurrencyHelper        *ConcurrencyHelper
 	imageLimiter             *imageConcurrencyLimiter
+	retryProtectionCache     openAIAbnormalRetryRuntimeCache
 	maxAccountSwitches       int
 	cfg                      *config.Config
 }
@@ -124,6 +127,7 @@ func NewOpenAIGatewayHandler(
 	errorPassthroughService *service.ErrorPassthroughService,
 	contentModerationService *service.ContentModerationService,
 	opsService *service.OpsService,
+	redisClient *redis.Client,
 	cfg *config.Config,
 ) *OpenAIGatewayHandler {
 	pingInterval := time.Duration(0)
@@ -142,6 +146,7 @@ func NewOpenAIGatewayHandler(
 		errorPassthroughService:  errorPassthroughService,
 		contentModerationService: contentModerationService,
 		opsService:               opsService,
+		retryProtectionRedis:     redisClient,
 		concurrencyHelper:        NewConcurrencyHelper(concurrencyService, SSEPingFormatComment, pingInterval),
 		imageLimiter:             &imageConcurrencyLimiter{},
 		maxAccountSwitches:       maxAccountSwitches,
@@ -183,6 +188,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
+
+	retryProtectionRequestMeta := openAIAbnormalRetryRequestMetaFromRequest(c.Request)
 
 	// Read request body
 	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
@@ -256,6 +263,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.String("reason", "previous_response_id_requires_wsv2"),
 		)
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is only supported on Responses WebSocket v2")
+		return
+	}
+	if h.enforceOpenAIAbnormalRetryProtection(c, body, reqLog, false, retryProtectionRequestMeta) {
 		return
 	}
 
@@ -683,6 +693,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
+	retryProtectionRequestMeta := openAIAbnormalRetryRequestMetaFromRequest(c.Request)
+
 	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
@@ -714,6 +726,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	reqStream := gjson.GetBytes(body, "stream").Bool()
 
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+	if h.enforceOpenAIAbnormalRetryProtection(c, body, reqLog, true, retryProtectionRequestMeta) {
+		return
+	}
 
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))

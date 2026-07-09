@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -33,6 +33,7 @@ async function load() {
 onMounted(() => {
   load()
   loadGroups()
+  loadBandwidthAlertAvailability()
 })
 
 const sortedRules = computed(() => {
@@ -46,6 +47,9 @@ const draft = ref<AlertRule | null>(null)
 
 type MetricGroup = 'system' | 'group' | 'account'
 
+const BANDWIDTH_UTILIZATION_METRIC: MetricType = 'bandwidth_utilization'
+const LEGACY_BANDWIDTH_UTILIZATION_METRIC: MetricType = 'network_bandwidth_utilization_percent'
+
 interface MetricDefinition {
   type: MetricType
   group: MetricGroup
@@ -54,6 +58,8 @@ interface MetricDefinition {
   recommendedOperator: Operator
   recommendedThreshold: number
   unit?: string
+  disabled?: boolean
+  hidden?: boolean
 }
 
 const groupMetricTypes = new Set<MetricType>([
@@ -61,6 +67,10 @@ const groupMetricTypes = new Set<MetricType>([
   'group_available_ratio',
   'group_rate_limit_ratio'
 ])
+
+function isBandwidthUtilizationMetric(metricType: unknown): boolean {
+  return metricType === BANDWIDTH_UTILIZATION_METRIC || metricType === LEGACY_BANDWIDTH_UTILIZATION_METRIC
+}
 
 function parsePositiveInt(value: unknown): number | null {
   if (value == null) return null
@@ -70,6 +80,24 @@ function parsePositiveInt(value: unknown): number | null {
 }
 
 const groupOptionsBase = ref<SelectOption[]>([])
+const bandwidthLimitConfigured = ref(false)
+
+function hasConfiguredBandwidthLimit(settings: Awaited<ReturnType<typeof opsAPI.getNetworkBandwidthSettings>> | null): boolean {
+  if (!settings) return false
+  const rx = settings.rx_limit_mbps
+  const tx = settings.tx_limit_mbps
+  return (typeof rx === 'number' && Number.isFinite(rx) && rx > 0) || (typeof tx === 'number' && Number.isFinite(tx) && tx > 0)
+}
+
+async function loadBandwidthAlertAvailability() {
+  try {
+    const settings = await opsAPI.getNetworkBandwidthSettings()
+    bandwidthLimitConfigured.value = hasConfiguredBandwidthLimit(settings)
+  } catch (err) {
+    console.error('[OpsAlertRulesCard] Failed to load bandwidth settings', err)
+    bandwidthLimitConfigured.value = false
+  }
+}
 
 async function loadGroups() {
   try {
@@ -159,6 +187,17 @@ const metricDefinitions = computed(() => {
       unit: '%'
     },
     {
+      type: BANDWIDTH_UTILIZATION_METRIC,
+      group: 'system',
+      label: t('admin.ops.alertRules.metrics.networkBandwidthUtilization'),
+      description: t('admin.ops.alertRules.metricDescriptions.networkBandwidthUtilization'),
+      recommendedOperator: '>',
+      recommendedThreshold: 90,
+      unit: '%',
+      disabled: !bandwidthLimitConfigured.value,
+      hidden: !bandwidthLimitConfigured.value && !isBandwidthUtilizationMetric(draft.value?.metric_type)
+    },
+    {
       type: 'concurrency_queue_depth',
       group: 'system',
       label: t('admin.ops.alertRules.metrics.queueDepth'),
@@ -243,12 +282,37 @@ const metricDefinitions = computed(() => {
 const selectedMetricDefinition = computed(() => {
   const metricType = draft.value?.metric_type
   if (!metricType) return null
+  if (isBandwidthUtilizationMetric(metricType)) {
+    return metricDefinitions.value.find((m) => m.type === BANDWIDTH_UTILIZATION_METRIC) ?? null
+  }
   return metricDefinitions.value.find((m) => m.type === metricType) ?? null
 })
 
+function applyBandwidthMetricRecommendation(metricType: MetricType) {
+  if (!draft.value) return
+  if (!isBandwidthUtilizationMetric(metricType)) return
+  const definition = metricDefinitions.value.find((m) => m.type === BANDWIDTH_UTILIZATION_METRIC)
+  if (!definition) return
+
+  draft.value.operator = definition.recommendedOperator
+  draft.value.threshold = definition.recommendedThreshold
+}
+
+function formatMetricType(metricType: string): string {
+  return isBandwidthUtilizationMetric(metricType) ? BANDWIDTH_UTILIZATION_METRIC : metricType
+}
+
+watch(
+  () => draft.value?.metric_type,
+  (metricType, previousMetricType) => {
+    if (!metricType || !previousMetricType || metricType === previousMetricType) return
+    applyBandwidthMetricRecommendation(metricType)
+  }
+)
+
 const metricOptions = computed(() => {
   const buildGroup = (group: MetricGroup): SelectOption[] => {
-    const items = metricDefinitions.value.filter((m) => m.group === group)
+    const items = metricDefinitions.value.filter((m) => m.group === group && !m.hidden)
     if (items.length === 0) return []
     const headerValue = `__group__${group}`
     return [
@@ -258,7 +322,7 @@ const metricOptions = computed(() => {
         disabled: true,
         kind: 'group'
       },
-      ...items.map((m) => ({ value: m.type, label: m.label }))
+      ...items.map((m) => ({ value: m.type, label: m.label, disabled: m.disabled }))
     ]
   }
 
@@ -296,15 +360,20 @@ function newRuleDraft(): AlertRule {
   }
 }
 
-function openCreate() {
+async function openCreate() {
+  await loadBandwidthAlertAvailability()
   editingId.value = null
   draft.value = newRuleDraft()
   showEditor.value = true
 }
 
-function openEdit(rule: AlertRule) {
+async function openEdit(rule: AlertRule) {
+  await loadBandwidthAlertAvailability()
   editingId.value = rule.id ?? null
   draft.value = JSON.parse(JSON.stringify(rule))
+  if (draft.value && draft.value.metric_type === LEGACY_BANDWIDTH_UTILIZATION_METRIC) {
+    draft.value.metric_type = BANDWIDTH_UTILIZATION_METRIC
+  }
   showEditor.value = true
 }
 
@@ -314,6 +383,9 @@ const editorValidation = computed(() => {
   if (!r) return { valid: true, errors }
   if (!r.name || !r.name.trim()) errors.push(t('admin.ops.alertRules.validation.nameRequired'))
   if (!r.metric_type) errors.push(t('admin.ops.alertRules.validation.metricRequired'))
+  if (isBandwidthUtilizationMetric(r.metric_type) && !bandwidthLimitConfigured.value) {
+    errors.push(t('admin.ops.alertRules.validation.bandwidthLimitRequired'))
+  }
   if (groupMetricTypes.has(r.metric_type) && !parsePositiveInt(r.filters?.group_id)) {
     errors.push(t('admin.ops.alertRules.validation.groupIdRequired'))
   }
@@ -453,7 +525,7 @@ function cancelDelete() {
                 </div>
               </td>
               <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-700 dark:text-gray-200">
-                <span class="font-mono">{{ row.metric_type }}</span>
+                <span class="font-mono">{{ formatMetricType(row.metric_type) }}</span>
                 <span class="mx-1 text-gray-400">{{ row.operator }}</span>
                 <span class="font-mono">{{ row.threshold }}</span>
               </td>
@@ -503,6 +575,9 @@ function cancelDelete() {
             <Select v-model="draft!.metric_type" :options="metricOptions" />
             <div v-if="selectedMetricDefinition" class="mt-1 space-y-0.5 text-xs text-gray-500 dark:text-gray-400">
               <p>{{ selectedMetricDefinition.description }}</p>
+              <p v-if="isBandwidthUtilizationMetric(draft!.metric_type) && !bandwidthLimitConfigured" class="font-semibold text-amber-600 dark:text-amber-300">
+                {{ t('admin.ops.alertRules.hints.bandwidthLimitRequired') }}
+              </p>
               <p>
                 {{
                   t('admin.ops.alertRules.hints.recommended', {

@@ -347,6 +347,9 @@ const (
 	// SettingKeyOpsAdvancedSettings stores JSON config for ops advanced settings (data retention, aggregation).
 	SettingKeyOpsAdvancedSettings = "ops_advanced_settings"
 
+	// SettingKeyOpsNetworkBandwidthSettings stores JSON config for host network bandwidth monitoring.
+	SettingKeyOpsNetworkBandwidthSettings = "ops_network_bandwidth_settings"
+
 	// SettingKeyOpsRuntimeLogConfig stores JSON config for runtime log settings.
 	SettingKeyOpsRuntimeLogConfig = "ops_runtime_log_config"
 

@@ -33,7 +33,14 @@ func (s *settingRepoStub) GetValue(ctx context.Context, key string) (string, err
 }
 
 func (s *settingRepoStub) Set(ctx context.Context, key, value string) error {
-	panic("unexpected Set call")
+	if s.err != nil {
+		return s.err
+	}
+	if s.values == nil {
+		s.values = make(map[string]string)
+	}
+	s.values[key] = value
+	return nil
 }
 
 func (s *settingRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
@@ -50,7 +57,16 @@ func (s *settingRepoStub) GetMultiple(ctx context.Context, keys []string) (map[s
 }
 
 func (s *settingRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
-	panic("unexpected SetMultiple call")
+	if s.err != nil {
+		return s.err
+	}
+	if s.values == nil {
+		s.values = make(map[string]string)
+	}
+	for k, v := range settings {
+		s.values[k] = v
+	}
+	return nil
 }
 
 func (s *settingRepoStub) GetAll(ctx context.Context) (map[string]string, error) {
