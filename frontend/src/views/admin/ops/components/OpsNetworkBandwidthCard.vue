@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import {
   opsAPI,
@@ -45,6 +46,7 @@ const retryProtectionTriggerInput = ref('90')
 const retryProtectionMinBodyMBInput = ref('5')
 const retryProtectionWindowInput = ref('60')
 const retryProtectionMaxRepeatsInput = ref('1')
+const retryAdvancedOpen = ref(false)
 
 const recommendedRetryProtection = {
   triggerPercent: 90,
@@ -117,6 +119,12 @@ const retryEstimate = computed(() => {
     blockAttempt: Math.floor(maxRepeats) + 2
   }
 })
+const retryUsesRecommendedSettings = computed(() => (
+  Number(retryProtectionTriggerInput.value) === recommendedRetryProtection.triggerPercent
+  && Number(retryProtectionMinBodyMBInput.value) === recommendedRetryProtection.minBodyMB
+  && Number(retryProtectionWindowInput.value) === recommendedRetryProtection.windowSeconds
+  && Number(retryProtectionMaxRepeatsInput.value) === recommendedRetryProtection.maxRepeats
+))
 
 async function loadData() {
   loading.value = true
@@ -134,6 +142,7 @@ async function loadData() {
 async function openSettings() {
   showSettings.value = true
   formError.value = ''
+  retryAdvancedOpen.value = false
   settingsLoading.value = true
   try {
     const [data, ifaceData] = await Promise.all([
@@ -167,15 +176,24 @@ async function saveSettings() {
   formError.value = ''
   const rxLimit = parseOptionalPositive(rxLimitInput.value)
   const txLimit = parseOptionalPositive(txLimitInput.value)
-  const retryTrigger = parseRequiredNumber(retryProtectionTriggerInput.value, 1, 100)
-  const retryMinBodyMB = parseRequiredNumber(retryProtectionMinBodyMBInput.value, 0.001, 256)
-  const retryWindow = parseRequiredInteger(retryProtectionWindowInput.value, 1, 3600)
-  const retryMaxRepeats = parseRequiredInteger(retryProtectionMaxRepeatsInput.value, 1, 10)
+  const parsedRetryTrigger = parseRequiredNumber(retryProtectionTriggerInput.value, 1, 100)
+  const parsedRetryMinBodyMB = parseRequiredNumber(retryProtectionMinBodyMBInput.value, 0.001, 256)
+  const parsedRetryWindow = parseRequiredInteger(retryProtectionWindowInput.value, 1, 3600)
+  const parsedRetryMaxRepeats = parseRequiredInteger(retryProtectionMaxRepeatsInput.value, 1, 10)
+  const retrySettingsValid = parsedRetryTrigger !== undefined
+    && parsedRetryMinBodyMB !== undefined
+    && parsedRetryWindow !== undefined
+    && parsedRetryMaxRepeats !== undefined
 
-  if (rxLimit === undefined || txLimit === undefined || retryTrigger === undefined || retryMinBodyMB === undefined || retryWindow === undefined || retryMaxRepeats === undefined) {
+  if (rxLimit === undefined || txLimit === undefined || (retryProtectionEnabledInput.value && !retrySettingsValid)) {
     formError.value = t('admin.ops.network.invalidSettings')
     return
   }
+
+  const retryTrigger = parsedRetryTrigger ?? recommendedRetryProtection.triggerPercent
+  const retryMinBodyMB = parsedRetryMinBodyMB ?? recommendedRetryProtection.minBodyMB
+  const retryWindow = parsedRetryWindow ?? recommendedRetryProtection.windowSeconds
+  const retryMaxRepeats = parsedRetryMaxRepeats ?? recommendedRetryProtection.maxRepeats
 
   const hasManualLimit = rxLimit !== null || txLimit !== null
   const payload: SettingsPayload = {
@@ -231,6 +249,10 @@ watch(
   },
   { immediate: true }
 )
+
+watch(retryProtectionEnabledInput, (value) => {
+  if (!value) retryAdvancedOpen.value = false
+})
 
 function normalizePercent(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -347,6 +369,7 @@ function formatIfaceOption(item: OpsNetworkInterfaceInfo): string {
           {{ t(`admin.ops.network.status.${summary.status}`) }}
         </span>
         <button
+          data-testid="network-settings-button"
           class="rounded-lg bg-gray-100 p-1.5 text-gray-600 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600"
           :disabled="settingsLoading || saving"
           :title="t('admin.ops.network.settings')"
@@ -504,108 +527,114 @@ function formatIfaceOption(item: OpsNetworkInterfaceInfo): string {
             </label>
           </div>
 
-          <div class="space-y-4 rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/60 dark:bg-amber-950/20">
-            <label class="flex items-start justify-between gap-4">
-              <span>
-                <span class="block text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.network.retryProtection') }}</span>
-                <span class="mt-0.5 block text-xs text-gray-600 dark:text-gray-400">{{ t('admin.ops.network.retryProtectionHint') }}</span>
-              </span>
-              <input v-model="retryProtectionEnabledInput" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-            </label>
-
-            <div class="rounded-lg border border-amber-200 bg-white/80 p-3 text-xs leading-5 text-gray-700 dark:border-amber-900/60 dark:bg-dark-900/60 dark:text-gray-300">
-              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div class="font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.network.retryRecommendedTitle') }}</div>
-                <button
-                  type="button"
-                  class="btn btn-secondary btn-sm self-start"
-                  :disabled="!retryProtectionEnabledInput"
-                  @click="applyRecommendedRetryProtection"
-                >
-                  {{ t('admin.ops.network.retryUseRecommended') }}
-                </button>
+          <div
+            data-testid="retry-protection-section"
+            class="rounded-xl border p-4 transition-colors"
+            :class="retryProtectionEnabledInput
+              ? 'border-amber-200 bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/20'
+              : 'border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-900'"
+          >
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <div class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.network.retryProtection') }}</div>
+                <p class="mt-0.5 text-xs leading-5 text-gray-600 dark:text-gray-400">{{ t('admin.ops.network.retryProtectionHint') }}</p>
               </div>
-              <p class="mt-2 text-gray-600 dark:text-gray-400">
-                {{ t('admin.ops.network.retryRecommendedBody') }}
-              </p>
-              <p class="mt-2 font-mono text-[11px] text-gray-500 dark:text-gray-400">
-                {{ t('admin.ops.network.retryFormula') }}
-              </p>
+              <Toggle v-model="retryProtectionEnabledInput" data-testid="retry-protection-toggle" class="mt-0.5" />
             </div>
 
-            <div
-              v-if="retryEstimate"
-              class="grid grid-cols-1 gap-3 rounded-lg bg-white/70 p-3 text-xs dark:bg-dark-900/60 sm:grid-cols-3"
-            >
-              <div>
-                <div class="text-gray-500 dark:text-gray-400">{{ t('admin.ops.network.retryBudget') }}</div>
-                <div class="mt-1 font-mono font-bold text-gray-900 dark:text-white">{{ formatBytes(retryEstimate.budgetBytes) }}</div>
-                <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                  {{ t('admin.ops.network.retryBudgetHint', { direction: retryEstimate.direction, limit: formatMbps(retryEstimate.limitMbps) }) }}
-                </div>
-              </div>
-              <div>
-                <div class="text-gray-500 dark:text-gray-400">{{ t('admin.ops.network.retryCandidate') }}</div>
-                <div class="mt-1 font-mono font-bold text-gray-900 dark:text-white">{{ formatBytes(retryEstimate.effectiveCandidateBytes) }}</div>
-                <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                  {{ t('admin.ops.network.retryCandidateHint', { dynamic: formatBytes(retryEstimate.dynamicCandidateBytes) }) }}
+            <div v-if="retryProtectionEnabledInput" class="mt-4 space-y-4 border-t border-amber-200/80 pt-4 dark:border-amber-900/60">
+              <div v-if="retryEstimate" class="flex gap-3 text-xs leading-5 text-gray-600 dark:text-gray-300">
+                <Icon name="shield" size="sm" class="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.network.retryCurrentStrategy') }}</span>
+                    <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                      {{ retryUsesRecommendedSettings ? t('admin.ops.network.retryPresetRecommended') : t('admin.ops.network.retryPresetCustom') }}
+                    </span>
+                  </div>
+                  <p class="mt-1">
+                    {{ t('admin.ops.network.retryStrategySummary', {
+                      trigger: retryProtectionTriggerInput,
+                      window: retryProtectionWindowInput,
+                      repeats: retryProtectionMaxRepeatsInput
+                    }) }}
+                  </p>
+                  <p class="mt-1 text-gray-500 dark:text-gray-400">
+                    {{ t('admin.ops.network.retryEstimateSummary', {
+                      direction: retryEstimate.direction,
+                      limit: formatMbps(retryEstimate.limitMbps),
+                      candidate: formatBytes(retryEstimate.effectiveCandidateBytes),
+                      budget: formatBytes(retryEstimate.budgetBytes),
+                      count: retryEstimate.blockAttempt
+                    }) }}
+                  </p>
                 </div>
               </div>
-              <div>
-                <div class="text-gray-500 dark:text-gray-400">{{ t('admin.ops.network.retryBlockRule') }}</div>
-                <div class="mt-1 font-mono font-bold text-gray-900 dark:text-white">
-                  {{ t('admin.ops.network.retryBlockAttempt', { count: retryEstimate.blockAttempt }) }}
+
+              <div v-else class="flex gap-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                <Icon name="infoCircle" size="sm" class="mt-0.5 shrink-0" />
+                <span>{{ t('admin.ops.network.retryNeedsLimitHint') }}</span>
+              </div>
+
+              <button
+                data-testid="retry-advanced-toggle"
+                type="button"
+                class="flex w-full items-center justify-between border-t border-amber-200/80 pt-3 text-left text-sm font-medium text-gray-700 hover:text-gray-900 dark:border-amber-900/60 dark:text-gray-300 dark:hover:text-white"
+                :aria-expanded="retryAdvancedOpen"
+                @click="retryAdvancedOpen = !retryAdvancedOpen"
+              >
+                <span class="flex items-center gap-2">
+                  <Icon name="cog" size="sm" />
+                  {{ t('admin.ops.network.retryAdvancedSettings') }}
+                </span>
+                <Icon :name="retryAdvancedOpen ? 'chevronUp' : 'chevronDown'" size="sm" />
+              </button>
+
+              <div v-if="retryAdvancedOpen" class="space-y-4 border-t border-amber-200/80 pt-4 dark:border-amber-900/60">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('admin.ops.network.retryAdvancedHint') }}</p>
+                  <button type="button" class="btn btn-secondary btn-sm shrink-0 self-start" @click="applyRecommendedRetryProtection">
+                    {{ t('admin.ops.network.retryUseRecommended') }}
+                  </button>
                 </div>
-                <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                  {{ t('admin.ops.network.retryBlockRuleHint') }}
+
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label class="block">
+                    <span class="mb-1.5 block text-xs font-semibold text-gray-600 dark:text-gray-300">{{ t('admin.ops.network.retryTriggerPercent') }}</span>
+                    <div class="relative">
+                      <input v-model="retryProtectionTriggerInput" type="number" min="1" max="100" step="1" class="input pr-10" />
+                      <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-gray-400">%</span>
+                    </div>
+                  </label>
+
+                  <label class="block">
+                    <span class="mb-1.5 block text-xs font-semibold text-gray-600 dark:text-gray-300">{{ t('admin.ops.network.retryMinBody') }}</span>
+                    <div class="relative">
+                      <input data-testid="retry-min-body-input" v-model="retryProtectionMinBodyMBInput" type="number" min="0.001" max="256" step="0.001" class="input pr-12" />
+                      <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-gray-400">MB</span>
+                    </div>
+                    <p class="mt-1 text-[11px] leading-4 text-gray-500 dark:text-gray-400">{{ t('admin.ops.network.retryMinBodyHint') }}</p>
+                  </label>
+
+                  <label class="block">
+                    <span class="mb-1.5 block text-xs font-semibold text-gray-600 dark:text-gray-300">{{ t('admin.ops.network.retryWindow') }}</span>
+                    <div class="relative">
+                      <input v-model="retryProtectionWindowInput" type="number" min="1" max="3600" step="1" class="input pr-10" />
+                      <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-gray-400">s</span>
+                    </div>
+                  </label>
+
+                  <label class="block">
+                    <span class="mb-1.5 block text-xs font-semibold text-gray-600 dark:text-gray-300">{{ t('admin.ops.network.retryMaxRepeats') }}</span>
+                    <input v-model="retryProtectionMaxRepeatsInput" type="number" min="1" max="10" step="1" class="input" />
+                  </label>
                 </div>
               </div>
-            </div>
 
-            <div v-else class="rounded-lg bg-white/70 px-3 py-2 text-xs leading-5 text-gray-600 dark:bg-dark-900/60 dark:text-gray-400">
-              {{ t('admin.ops.network.retryNeedsLimitHint') }}
-            </div>
-
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label class="block">
-                <span class="mb-1.5 block text-xs font-semibold text-gray-600 dark:text-gray-300">{{ t('admin.ops.network.retryTriggerPercent') }}</span>
-                <div class="relative">
-                  <input v-model="retryProtectionTriggerInput" type="number" min="1" max="100" step="1" class="input pr-10" :disabled="!retryProtectionEnabledInput" />
-                  <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-gray-400">%</span>
-                </div>
-              </label>
-
-              <label class="block">
-                <span class="mb-1.5 block text-xs font-semibold text-gray-600 dark:text-gray-300">{{ t('admin.ops.network.retryMinBody') }}</span>
-                <div class="relative">
-                  <input v-model="retryProtectionMinBodyMBInput" type="number" min="0.001" max="256" step="0.5" class="input pr-12" :disabled="!retryProtectionEnabledInput" />
-                  <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-gray-400">MB</span>
-                </div>
-              </label>
-
-              <label class="block">
-                <span class="mb-1.5 block text-xs font-semibold text-gray-600 dark:text-gray-300">{{ t('admin.ops.network.retryWindow') }}</span>
-                <div class="relative">
-                  <input v-model="retryProtectionWindowInput" type="number" min="1" max="3600" step="1" class="input pr-10" :disabled="!retryProtectionEnabledInput" />
-                  <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-gray-400">s</span>
-                </div>
-              </label>
-
-              <label class="block">
-                <span class="mb-1.5 block text-xs font-semibold text-gray-600 dark:text-gray-300">{{ t('admin.ops.network.retryMaxRepeats') }}</span>
-                <input v-model="retryProtectionMaxRepeatsInput" type="number" min="1" max="10" step="1" class="input" :disabled="!retryProtectionEnabledInput" />
-              </label>
-            </div>
-
-            <div class="rounded-lg bg-white/70 px-3 py-2 text-xs leading-5 text-gray-600 dark:bg-dark-900/60 dark:text-gray-400">
-              {{ t('admin.ops.network.retryAutoBodyHint', { min: retryProtectionMinBodyMBInput || recommendedRetryProtection.minBodyMB }) }}
-            </div>
-
-            <div
-              v-if="retryProtectionEnabledInput"
-              class="rounded-lg border border-amber-200 bg-amber-100/80 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/40 dark:text-amber-200"
-            >
-              {{ t('admin.ops.network.retryProtectionWarning') }}
+              <div class="flex gap-2 text-xs leading-5 text-amber-800 dark:text-amber-200">
+                <Icon name="exclamationTriangle" size="sm" class="mt-0.5 shrink-0" />
+                <span>{{ t('admin.ops.network.retryProtectionWarning') }}</span>
+              </div>
             </div>
           </div>
 
