@@ -46,6 +46,13 @@ const retryProtectionMinBodyMBInput = ref('5')
 const retryProtectionWindowInput = ref('60')
 const retryProtectionMaxRepeatsInput = ref('1')
 
+const recommendedRetryProtection = {
+  triggerPercent: 90,
+  minBodyMB: 5,
+  windowSeconds: 60,
+  maxRepeats: 1
+}
+
 const summary = computed<OpsNetworkBandwidthSummary | null>(() => response.value?.summary ?? null)
 const enabled = computed(() => response.value?.enabled !== false && summary.value?.enabled !== false)
 const hasRxLimit = computed(() => typeof summary.value?.rx_limit_mbps === 'number' && Number.isFinite(summary.value.rx_limit_mbps))
@@ -75,6 +82,40 @@ const ifaceOptions = computed(() => {
     items.unshift({ name: ifaceInput.value, state: 'unknown', is_default: false })
   }
   return items
+})
+const retryLimitInfo = computed(() => {
+  const rxLimit = parseOptionalPositive(rxLimitInput.value)
+  const txLimit = parseOptionalPositive(txLimitInput.value)
+  const rx = typeof rxLimit === 'number' ? rxLimit : null
+  const tx = typeof txLimit === 'number' ? txLimit : null
+  if (rx === null && tx === null) return null
+  if (rx !== null && (tx === null || rx <= tx)) {
+    return { mbps: rx, direction: t('admin.ops.network.rx') }
+  }
+  return { mbps: tx as number, direction: t('admin.ops.network.tx') }
+})
+const retryEstimate = computed(() => {
+  const limit = retryLimitInfo.value
+  const trigger = Number(retryProtectionTriggerInput.value)
+  const minBodyMB = Number(retryProtectionMinBodyMBInput.value)
+  const windowSeconds = Number(retryProtectionWindowInput.value)
+  const maxRepeats = Number(retryProtectionMaxRepeatsInput.value)
+  if (!limit || !Number.isFinite(trigger) || !Number.isFinite(minBodyMB) || !Number.isFinite(windowSeconds) || !Number.isFinite(maxRepeats)) {
+    return null
+  }
+  if (limit.mbps <= 0 || trigger <= 0 || windowSeconds <= 0 || maxRepeats <= 0) return null
+  const budgetBytes = limit.mbps * 1_000_000 * windowSeconds * (trigger / 100) / 8
+  const dynamicCandidateBytes = budgetBytes / (Math.floor(maxRepeats) + 2)
+  const minCandidateBytes = minBodyMB * 1024 * 1024
+  const effectiveCandidateBytes = Math.max(minCandidateBytes, dynamicCandidateBytes)
+  return {
+    limitMbps: limit.mbps,
+    direction: limit.direction,
+    budgetBytes,
+    dynamicCandidateBytes,
+    effectiveCandidateBytes,
+    blockAttempt: Math.floor(maxRepeats) + 2
+  }
 })
 
 async function loadData() {
@@ -231,6 +272,13 @@ function formatInputNumber(value: unknown): string {
 function bytesToMB(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 5
   return Math.round((value / 1024 / 1024) * 1000) / 1000
+}
+
+function applyRecommendedRetryProtection() {
+  retryProtectionTriggerInput.value = String(recommendedRetryProtection.triggerPercent)
+  retryProtectionMinBodyMBInput.value = String(recommendedRetryProtection.minBodyMB)
+  retryProtectionWindowInput.value = String(recommendedRetryProtection.windowSeconds)
+  retryProtectionMaxRepeatsInput.value = String(recommendedRetryProtection.maxRepeats)
 }
 
 function parseOptionalPositive(value: unknown): number | null | undefined {
@@ -457,13 +505,66 @@ function formatIfaceOption(item: OpsNetworkInterfaceInfo): string {
           </div>
 
           <div class="space-y-4 rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/60 dark:bg-amber-950/20">
-            <label class="flex items-center justify-between gap-4">
+            <label class="flex items-start justify-between gap-4">
               <span>
                 <span class="block text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.network.retryProtection') }}</span>
                 <span class="mt-0.5 block text-xs text-gray-600 dark:text-gray-400">{{ t('admin.ops.network.retryProtectionHint') }}</span>
               </span>
               <input v-model="retryProtectionEnabledInput" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
             </label>
+
+            <div class="rounded-lg border border-amber-200 bg-white/80 p-3 text-xs leading-5 text-gray-700 dark:border-amber-900/60 dark:bg-dark-900/60 dark:text-gray-300">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div class="font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.network.retryRecommendedTitle') }}</div>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm self-start"
+                  :disabled="!retryProtectionEnabledInput"
+                  @click="applyRecommendedRetryProtection"
+                >
+                  {{ t('admin.ops.network.retryUseRecommended') }}
+                </button>
+              </div>
+              <p class="mt-2 text-gray-600 dark:text-gray-400">
+                {{ t('admin.ops.network.retryRecommendedBody') }}
+              </p>
+              <p class="mt-2 font-mono text-[11px] text-gray-500 dark:text-gray-400">
+                {{ t('admin.ops.network.retryFormula') }}
+              </p>
+            </div>
+
+            <div
+              v-if="retryEstimate"
+              class="grid grid-cols-1 gap-3 rounded-lg bg-white/70 p-3 text-xs dark:bg-dark-900/60 sm:grid-cols-3"
+            >
+              <div>
+                <div class="text-gray-500 dark:text-gray-400">{{ t('admin.ops.network.retryBudget') }}</div>
+                <div class="mt-1 font-mono font-bold text-gray-900 dark:text-white">{{ formatBytes(retryEstimate.budgetBytes) }}</div>
+                <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  {{ t('admin.ops.network.retryBudgetHint', { direction: retryEstimate.direction, limit: formatMbps(retryEstimate.limitMbps) }) }}
+                </div>
+              </div>
+              <div>
+                <div class="text-gray-500 dark:text-gray-400">{{ t('admin.ops.network.retryCandidate') }}</div>
+                <div class="mt-1 font-mono font-bold text-gray-900 dark:text-white">{{ formatBytes(retryEstimate.effectiveCandidateBytes) }}</div>
+                <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  {{ t('admin.ops.network.retryCandidateHint', { dynamic: formatBytes(retryEstimate.dynamicCandidateBytes) }) }}
+                </div>
+              </div>
+              <div>
+                <div class="text-gray-500 dark:text-gray-400">{{ t('admin.ops.network.retryBlockRule') }}</div>
+                <div class="mt-1 font-mono font-bold text-gray-900 dark:text-white">
+                  {{ t('admin.ops.network.retryBlockAttempt', { count: retryEstimate.blockAttempt }) }}
+                </div>
+                <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  {{ t('admin.ops.network.retryBlockRuleHint') }}
+                </div>
+              </div>
+            </div>
+
+            <div v-else class="rounded-lg bg-white/70 px-3 py-2 text-xs leading-5 text-gray-600 dark:bg-dark-900/60 dark:text-gray-400">
+              {{ t('admin.ops.network.retryNeedsLimitHint') }}
+            </div>
 
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label class="block">
@@ -497,7 +598,7 @@ function formatIfaceOption(item: OpsNetworkInterfaceInfo): string {
             </div>
 
             <div class="rounded-lg bg-white/70 px-3 py-2 text-xs leading-5 text-gray-600 dark:bg-dark-900/60 dark:text-gray-400">
-              {{ t('admin.ops.network.retryAutoBodyHint') }}
+              {{ t('admin.ops.network.retryAutoBodyHint', { min: retryProtectionMinBodyMBInput || recommendedRetryProtection.minBodyMB }) }}
             </div>
 
             <div
