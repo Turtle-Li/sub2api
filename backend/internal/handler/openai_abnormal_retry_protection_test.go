@@ -352,6 +352,19 @@ func TestOpenAIAbnormalRetryProtectionBlocksOnlyAfterCumulativeBudget(t *testing
 	}
 }
 
+func BenchmarkOpenAIAbnormalRetryRequestFingerprint15MB(b *testing.B) {
+	body := bytes.Repeat([]byte("x"), 15*1024*1024)
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if got := openAIAbnormalRetryRequestFingerprint(body); got == "" {
+			b.Fatal("empty fingerprint")
+		}
+	}
+}
+
 func floatPtrForOpenAIRetryProtectionTest(v float64) *float64 {
 	return &v
 }
