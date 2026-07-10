@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -36,6 +36,9 @@ const response = ref<OpsNetworkBandwidthSummaryResponse | null>(null)
 const settings = ref<OpsNetworkBandwidthSettings | null>(null)
 const interfaces = ref<OpsNetworkInterfaceInfo[]>([])
 const defaultIface = ref('')
+
+const bandwidthRefreshIntervalMs = 5_000
+let bandwidthRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 const enabledInput = ref(true)
 const ifaceInput = ref('')
@@ -136,6 +139,28 @@ async function loadData() {
     errorMessage.value = err?.response?.data?.detail || t('admin.ops.network.loadFailed')
   } finally {
     loading.value = false
+  }
+}
+
+function refreshLatestSample() {
+  if (document.visibilityState === 'hidden' || loading.value || !enabled.value) return
+  void loadData()
+}
+
+function startBandwidthAutoRefresh() {
+  if (bandwidthRefreshTimer) return
+  bandwidthRefreshTimer = setInterval(refreshLatestSample, bandwidthRefreshIntervalMs)
+}
+
+function stopBandwidthAutoRefresh() {
+  if (!bandwidthRefreshTimer) return
+  clearInterval(bandwidthRefreshTimer)
+  bandwidthRefreshTimer = null
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    refreshLatestSample()
   }
 }
 
@@ -252,6 +277,16 @@ watch(
 
 watch(retryProtectionEnabledInput, (value) => {
   if (!value) retryAdvancedOpen.value = false
+})
+
+onMounted(() => {
+  startBandwidthAutoRefresh()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onUnmounted(() => {
+  stopBandwidthAutoRefresh()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 function normalizePercent(value: unknown): number | null {

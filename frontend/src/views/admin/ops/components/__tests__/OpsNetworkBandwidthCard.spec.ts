@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 
@@ -115,6 +115,24 @@ describe('OpsNetworkBandwidthCard abnormal retry settings', () => {
       default_iface: 'eth0'
     })
     updateNetworkBandwidthSettings.mockResolvedValue({ ...defaultSettings })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('refreshes the latest bandwidth sample independently every five seconds', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountCard()
+    await flushPromises()
+
+    expect(getNetworkBandwidthSummary).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    await flushPromises()
+
+    expect(getNetworkBandwidthSummary).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
   })
 
   it('hides retry details while disabled and keeps advanced settings collapsed when enabled', async () => {
