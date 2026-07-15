@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 
 const routeState = vi.hoisted(() => ({
   query: {} as Record<string, unknown>,
@@ -47,6 +47,8 @@ vi.mock('@/api/payment', () => ({
 import PaymentResultView from '../PaymentResultView.vue'
 import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
+
+enableAutoUnmount(afterEach)
 
 const orderFactory = (status: string) => ({
   id: 42,
