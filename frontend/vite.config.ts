@@ -44,7 +44,9 @@ export default defineConfig(({ mode }) => {
     plugins: [
       vue(),
       checker({
-        vueTsc: true
+        vueTsc: true,
+        // Release already runs vue-tsc before bundling; avoid a duplicate build-time pass.
+        enableBuild: false
       }),
       injectPublicSettings(backendUrl)
     ],
