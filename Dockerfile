@@ -133,9 +133,10 @@ COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/
 # Create data directory
 RUN mkdir -p /app/data && chown sub2api:sub2api /app/data
 
-# Copy entrypoint script (fixes volume permissions then drops to sub2api)
-COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
+# Copy entrypoint with a fixed mode. The server-side release service uses a
+# restrictive umask for its disposable Git worktree, so a later `chmod +x`
+# would otherwise preserve no read bit for the runtime user.
+COPY --chmod=755 deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
 
 # Expose port (can be overridden by SERVER_PORT env var)
 EXPOSE 8080
