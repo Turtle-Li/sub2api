@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feature/batch-image-foundation
     paths-ignore:
       - '.github/**'
       - 'deploy/**'
