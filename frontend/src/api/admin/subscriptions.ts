@@ -13,6 +13,33 @@ import type {
   PaginatedResponse
 } from '@/types'
 
+export interface GrantResetCardsRequest {
+  group_ids: number[]
+  count: number
+  expires_at: string
+}
+
+export interface GrantResetCardsResult {
+  group_ids: number[]
+  recipient_count: number
+  card_count: number
+  recipients_by_group: Record<string, number>
+  expires_at: string
+}
+
+export interface GrantResetCardsToSubscriptionRequest {
+  count: number
+  expires_at: string
+}
+
+export interface GrantResetCardsToSubscriptionResult {
+  subscription_id: number
+  user_id: number
+  group_id: number
+  card_count: number
+  expires_at: string
+}
+
 /**
  * List all subscriptions with pagination
  * @param page - Page number (default: 1)
@@ -149,6 +176,39 @@ export async function resetQuota(
 }
 
 /**
+ * Grant stackable reset cards to active subscriptions in selected groups.
+ * Reuse idempotencyKey when retrying the same logical grant.
+ */
+export async function grantResetCards(
+  request: GrantResetCardsRequest,
+  idempotencyKey: string
+): Promise<GrantResetCardsResult> {
+  const { data } = await apiClient.post<GrantResetCardsResult>(
+    '/admin/subscriptions/reset-cards/grant',
+    request,
+    { headers: { 'Idempotency-Key': idempotencyKey } }
+  )
+  return data
+}
+
+/**
+ * Grant stackable reset cards to exactly one active subscription.
+ * Reuse idempotencyKey when retrying the same logical grant.
+ */
+export async function grantResetCardsToSubscription(
+  subscriptionId: number,
+  request: GrantResetCardsToSubscriptionRequest,
+  idempotencyKey: string
+): Promise<GrantResetCardsToSubscriptionResult> {
+  const { data } = await apiClient.post<GrantResetCardsToSubscriptionResult>(
+    `/admin/subscriptions/${subscriptionId}/reset-cards/grant`,
+    request,
+    { headers: { 'Idempotency-Key': idempotencyKey } }
+  )
+  return data
+}
+
+/**
  * List subscriptions by group
  * @param groupId - Group ID
  * @param page - Page number
@@ -200,6 +260,8 @@ export const subscriptionsAPI = {
   revoke,
   restore,
   resetQuota,
+  grantResetCards,
+  grantResetCardsToSubscription,
   listByGroup,
   listByUser
 }

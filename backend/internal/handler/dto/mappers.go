@@ -634,6 +634,8 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		ImageSize:                 l.ImageSize,
 		ImageInputSize:            l.ImageInputSize,
 		ImageOutputSize:           l.ImageOutputSize,
+		ImageInputTokens:          l.ImageInputTokens,
+		ImageInputCost:            l.ImageInputCost,
 		ImageOutputTokens:         l.ImageOutputTokens,
 		ImageOutputCost:           l.ImageOutputCost,
 		ImageSizeSource:           l.ImageSizeSource,
@@ -757,6 +759,13 @@ func UserSubscriptionFromServiceAdmin(sub *service.UserSubscription) *AdminUserS
 }
 
 func userSubscriptionFromServiceBase(sub *service.UserSubscription) UserSubscription {
+	resetCardBatches := make([]SubscriptionResetCardBatch, 0, len(sub.ResetCardBatches))
+	for _, batch := range sub.ResetCardBatches {
+		resetCardBatches = append(resetCardBatches, SubscriptionResetCardBatch{
+			Remaining: batch.Remaining,
+			ExpiresAt: batch.ExpiresAt,
+		})
+	}
 	return UserSubscription{
 		ID:                 sub.ID,
 		UserID:             sub.UserID,
@@ -775,6 +784,8 @@ func userSubscriptionFromServiceBase(sub *service.UserSubscription) UserSubscrip
 		RevokedAt:          sub.DeletedAt,
 		User:               UserFromServiceShallow(sub.User),
 		Group:              GroupFromServiceShallow(sub.Group),
+		ResetCardCount:     sub.ResetCardCount,
+		ResetCardBatches:   resetCardBatches,
 	}
 }
 

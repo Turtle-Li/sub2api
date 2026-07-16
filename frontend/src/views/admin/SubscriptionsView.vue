@@ -159,6 +159,10 @@
             >
               <Icon name="questionCircle" size="md" />
             </button>
+            <button @click="openResetCardGrantModal()" class="btn btn-secondary">
+              <Icon name="gift" size="md" class="mr-2" />
+              {{ t('admin.subscriptions.grantResetCards') }}
+            </button>
             <button @click="showAssignModal = true" class="btn btn-primary">
               <Icon name="plus" size="md" class="mr-2" />
               {{ t('admin.subscriptions.assignSubscription') }}
@@ -389,15 +393,6 @@
               </button>
               <button
                 v-if="row.status === 'active'"
-                @click="handleResetQuota(row)"
-                :disabled="resettingQuota && resettingSubscription?.id === row.id"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-orange-50 hover:text-orange-600 dark:hover:bg-orange-900/20 dark:hover:text-orange-400 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Icon name="refresh" size="sm" />
-                <span class="text-xs">{{ t('admin.subscriptions.resetQuota') }}</span>
-              </button>
-              <button
-                v-if="row.status === 'active'"
                 @click="handleRevoke(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
               >
@@ -411,6 +406,18 @@
               >
                 <Icon name="refresh" size="sm" />
                 <span class="text-xs">{{ t('admin.subscriptions.restore') }}</span>
+              </button>
+              <button
+                v-if="row.status === 'active'"
+                @click="openSubscriptionActionMenu(row, $event)"
+                class="subscription-action-menu-trigger flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-dark-700 dark:hover:text-white"
+                :class="{
+                  'bg-gray-100 text-gray-900 dark:bg-dark-700 dark:text-white':
+                    activeSubscriptionActionMenuId === row.id
+                }"
+              >
+                <Icon name="more" size="sm" />
+                <span class="text-xs">{{ t('common.more') }}</span>
               </button>
             </div>
           </template>
@@ -438,6 +445,169 @@
       />
       </template>
     </TablePageLayout>
+
+    <!-- Per-subscription actions (teleported to avoid table clipping) -->
+    <Teleport to="body">
+      <div
+        v-if="activeSubscriptionActionMenuId !== null && subscriptionActionMenuPosition"
+        class="subscription-action-menu-content fixed z-[9999] w-44 overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
+        :style="{
+          top: subscriptionActionMenuPosition.top + 'px',
+          left: subscriptionActionMenuPosition.left + 'px'
+        }"
+      >
+        <div class="py-1">
+          <template v-for="subscription in subscriptions" :key="subscription.id">
+            <template v-if="subscription.id === activeSubscriptionActionMenuId">
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+                @click="openResetCardGrantModal(subscription); closeSubscriptionActionMenu()"
+              >
+                <Icon name="gift" size="sm" class="text-primary-500" :stroke-width="2" />
+                {{ t('admin.subscriptions.grantResetCardsShort') }}
+              </button>
+              <button
+                type="button"
+                :disabled="resettingQuota && resettingSubscription?.id === subscription.id"
+                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-300 dark:hover:bg-dark-700"
+                @click="handleResetQuota(subscription); closeSubscriptionActionMenu()"
+              >
+                <Icon name="refresh" size="sm" class="text-orange-500" :stroke-width="2" />
+                {{ t('admin.subscriptions.resetQuota') }}
+              </button>
+            </template>
+          </template>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Grant Reset Cards Modal -->
+    <BaseDialog
+      :show="showGrantResetCardsModal"
+      :title="resetCardGrantTarget
+        ? t('admin.subscriptions.grantResetCardsToUserTitle')
+        : t('admin.subscriptions.grantResetCardsTitle')"
+      width="normal"
+      @close="closeResetCardGrantModal"
+    >
+      <form
+        id="grant-reset-cards-form"
+        class="space-y-5"
+        @submit.prevent="handleGrantResetCards"
+      >
+        <p class="text-sm text-gray-600 dark:text-gray-400">
+          {{ resetCardGrantTarget
+            ? t('admin.subscriptions.grantResetCardsToUserDesc')
+            : t('admin.subscriptions.grantResetCardsDesc') }}
+        </p>
+
+        <div
+          v-if="resetCardGrantTarget"
+          class="rounded-lg border border-primary-200 bg-primary-50/60 p-4 dark:border-primary-800 dark:bg-primary-900/10"
+        >
+          <p class="input-label mb-2">{{ t('admin.subscriptions.resetCardsForm.target') }}</p>
+          <div class="flex flex-wrap items-center gap-3">
+            <div>
+              <p class="font-medium text-gray-900 dark:text-white">
+                {{ resetCardGrantTarget.user?.email || t('admin.redeem.userPrefix', { id: resetCardGrantTarget.user_id }) }}
+              </p>
+              <p v-if="resetCardGrantTarget.user?.username" class="text-xs text-gray-500 dark:text-gray-400">
+                {{ resetCardGrantTarget.user.username }}
+              </p>
+            </div>
+            <GroupBadge
+              v-if="resetCardGrantTarget.group"
+              :name="resetCardGrantTarget.group.name"
+              :platform="resetCardGrantTarget.group.platform"
+              :subscription-type="resetCardGrantTarget.group.subscription_type"
+              :rate-multiplier="resetCardGrantTarget.group.rate_multiplier"
+              :show-rate="false"
+            />
+          </div>
+          <p class="input-hint mt-2">
+            {{ t('admin.subscriptions.resetCardsForm.targetHint') }}
+          </p>
+        </div>
+
+        <div v-else>
+          <label class="input-label">{{ t('admin.subscriptions.resetCardsForm.groups') }}</label>
+          <div class="max-h-56 space-y-2 overflow-y-auto rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+            <label
+              v-for="option in subscriptionGroupOptions"
+              :key="option.value"
+              class="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 hover:bg-gray-50 dark:hover:bg-dark-700"
+            >
+              <input
+                v-model="resetCardGrantForm.group_ids"
+                type="checkbox"
+                :value="option.value"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <GroupBadge
+                :name="option.label"
+                :platform="option.platform"
+                :subscription-type="option.subscriptionType"
+                :rate-multiplier="option.rate"
+              />
+            </label>
+            <p
+              v-if="subscriptionGroupOptions.length === 0"
+              class="py-4 text-center text-sm text-gray-500 dark:text-gray-400"
+            >
+              {{ t('common.noOptionsFound') }}
+            </p>
+          </div>
+          <p class="input-hint">{{ t('admin.subscriptions.resetCardsForm.groupsHint') }}</p>
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label">
+              {{ resetCardGrantTarget
+                ? t('admin.subscriptions.resetCardsForm.directCount')
+                : t('admin.subscriptions.resetCardsForm.count') }}
+            </label>
+            <input
+              v-model.number="resetCardGrantForm.count"
+              type="number"
+              min="1"
+              max="1000"
+              step="1"
+              class="input"
+              required
+            />
+            <p class="input-hint">{{ t('admin.subscriptions.resetCardsForm.countHint') }}</p>
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.subscriptions.resetCardsForm.expiresAt') }}</label>
+            <input
+              v-model="resetCardGrantForm.expires_at"
+              type="datetime-local"
+              class="input"
+              required
+            />
+            <p class="input-hint">{{ t('admin.subscriptions.resetCardsForm.expiresAtHint') }}</p>
+          </div>
+        </div>
+      </form>
+
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button type="button" class="btn btn-secondary" @click="closeResetCardGrantModal">
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            type="submit"
+            form="grant-reset-cards-form"
+            class="btn btn-primary"
+            :disabled="grantingResetCards"
+          >
+            {{ grantingResetCards ? t('common.processing') : t('admin.subscriptions.grantResetCards') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
 
     <!-- Assign Subscription Modal -->
     <BaseDialog
@@ -778,6 +948,7 @@ import GroupBadge from '@/components/common/GroupBadge.vue'
 import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { getRemainingDurationParts, isOneTimeDailyQuota, type RemainingDurationParts } from '@/utils/subscriptionQuota'
+import { createIdempotencyKey } from '@/utils/idempotency'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -920,6 +1091,9 @@ const groups = ref<Group[]>([])
 const loading = ref(false)
 let abortController: AbortController | null = null
 
+const activeSubscriptionActionMenuId = ref<number | null>(null)
+const subscriptionActionMenuPosition = ref<{ top: number; left: number } | null>(null)
+
 // Toolbar user filter (fuzzy search -> select user_id)
 const filterUserKeyword = ref('')
 const filterUserResults = ref<SimpleUser[]>([])
@@ -957,11 +1131,14 @@ const pagination = reactive({
 })
 
 const showAssignModal = ref(false)
+const showGrantResetCardsModal = ref(false)
+const resetCardGrantTarget = ref<UserSubscription | null>(null)
 const showExtendModal = ref(false)
 const showRevokeDialog = ref(false)
 const showRestoreDialog = ref(false)
 const showResetQuotaConfirm = ref(false)
 const submitting = ref(false)
+const grantingResetCards = ref(false)
 const resettingSubscription = ref<UserSubscription | null>(null)
 const resettingQuota = ref(false)
 const extendingSubscription = ref<UserSubscription | null>(null)
@@ -973,6 +1150,14 @@ const assignForm = reactive({
   group_id: null as number | null,
   validity_days: 30
 })
+
+const resetCardGrantForm = reactive({
+  group_ids: [] as number[],
+  count: 1,
+  expires_at: ''
+})
+let resetCardGrantOperationKey: string | null = null
+let resetCardGrantFingerprint = ''
 
 const extendForm = reactive({
   days: 30
@@ -1006,12 +1191,43 @@ const subscriptionGroupOptions = computed(() =>
     }))
 )
 
+const closeSubscriptionActionMenu = () => {
+  activeSubscriptionActionMenuId.value = null
+  subscriptionActionMenuPosition.value = null
+}
+
+const openSubscriptionActionMenu = (subscription: UserSubscription, event: MouseEvent) => {
+  if (activeSubscriptionActionMenuId.value === subscription.id) {
+    closeSubscriptionActionMenu()
+    return
+  }
+
+  const trigger = event.currentTarget as HTMLElement | null
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  const menuWidth = 176
+  const menuHeight = 88
+  const padding = 8
+  const left = Math.max(
+    padding,
+    Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - padding)
+  )
+  let top = rect.bottom + 4
+  if (top + menuHeight > window.innerHeight - padding) {
+    top = Math.max(padding, rect.top - menuHeight - 4)
+  }
+
+  activeSubscriptionActionMenuId.value = subscription.id
+  subscriptionActionMenuPosition.value = { top, left }
+}
+
 const applyFilters = () => {
   pagination.page = 1
   loadSubscriptions()
 }
 
 const loadSubscriptions = async () => {
+  closeSubscriptionActionMenu()
   if (abortController) {
     abortController.abort()
   }
@@ -1188,6 +1404,128 @@ const closeAssignModal = () => {
   userSearchKeyword.value = ''
   userSearchResults.value = []
   showUserDropdown.value = false
+}
+
+const toLocalDateTimeInput = (date: Date): string => {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
+
+const openResetCardGrantModal = (subscription?: UserSubscription) => {
+  resetCardGrantTarget.value = subscription || null
+  resetCardGrantForm.group_ids = []
+  resetCardGrantForm.count = 1
+  resetCardGrantForm.expires_at = toLocalDateTimeInput(
+    new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+  )
+  resetCardGrantOperationKey = null
+  resetCardGrantFingerprint = ''
+  showGrantResetCardsModal.value = true
+}
+
+const closeResetCardGrantModal = () => {
+  if (grantingResetCards.value) return
+  showGrantResetCardsModal.value = false
+  resetCardGrantTarget.value = null
+  resetCardGrantOperationKey = null
+  resetCardGrantFingerprint = ''
+}
+
+const handleGrantResetCards = async () => {
+  if (grantingResetCards.value) return
+  const target = resetCardGrantTarget.value
+  if (!target && resetCardGrantForm.group_ids.length === 0) {
+    appStore.showError(t('admin.subscriptions.pleaseSelectResetCardGroups'))
+    return
+  }
+  if (
+    !Number.isInteger(resetCardGrantForm.count) ||
+    resetCardGrantForm.count < 1 ||
+    resetCardGrantForm.count > 1000
+  ) {
+    appStore.showError(t('admin.subscriptions.invalidResetCardCount'))
+    return
+  }
+  const expiresAt = new Date(resetCardGrantForm.expires_at)
+  const maxExpiresAt = new Date('2099-12-31T23:59:59Z')
+  if (
+    !resetCardGrantForm.expires_at ||
+    Number.isNaN(expiresAt.getTime()) ||
+    expiresAt <= new Date() ||
+    expiresAt > maxExpiresAt
+  ) {
+    appStore.showError(t('admin.subscriptions.invalidResetCardExpiry'))
+    return
+  }
+
+  const request = {
+    count: resetCardGrantForm.count,
+    expires_at: expiresAt.toISOString()
+  }
+  const fingerprint = JSON.stringify(
+    target
+      ? { subscription_id: target.id, ...request }
+      : {
+          group_ids: [...resetCardGrantForm.group_ids].sort((a, b) => a - b),
+          ...request
+        }
+  )
+  if (!resetCardGrantOperationKey || resetCardGrantFingerprint !== fingerprint) {
+    resetCardGrantOperationKey = createIdempotencyKey(
+      target ? 'subscription-reset-card-grant-one' : 'subscription-reset-card-grant'
+    )
+    resetCardGrantFingerprint = fingerprint
+  }
+
+  grantingResetCards.value = true
+  try {
+    if (target) {
+      const result = await adminAPI.subscriptions.grantResetCardsToSubscription(
+        target.id,
+        request,
+        resetCardGrantOperationKey
+      )
+      appStore.showSuccess(
+        t('admin.subscriptions.resetCardsGrantedToUser', {
+          cards: result.card_count,
+          user: target.user?.email || `#${target.user_id}`,
+          group: target.group?.name || `#${target.group_id}`
+        })
+      )
+    } else {
+      const result = await adminAPI.subscriptions.grantResetCards(
+        {
+          group_ids: [...resetCardGrantForm.group_ids].sort((a, b) => a - b),
+          ...request
+        },
+        resetCardGrantOperationKey
+      )
+      if (result.recipient_count === 0) {
+        appStore.showWarning(t('admin.subscriptions.resetCardsNoRecipients'))
+        resetCardGrantOperationKey = null
+        resetCardGrantFingerprint = ''
+        return
+      }
+      appStore.showSuccess(
+        t('admin.subscriptions.resetCardsGranted', {
+          cards: result.card_count,
+          recipients: result.recipient_count
+        })
+      )
+    }
+    showGrantResetCardsModal.value = false
+    resetCardGrantTarget.value = null
+    resetCardGrantOperationKey = null
+    resetCardGrantFingerprint = ''
+    await loadSubscriptions()
+  } catch (error: any) {
+    appStore.showError(
+      error?.message || t('admin.subscriptions.failedToGrantResetCards')
+    )
+    console.error('Error granting reset cards:', error)
+  } finally {
+    grantingResetCards.value = false
+  }
 }
 
 const handleAssignSubscription = async () => {
@@ -1417,6 +1755,12 @@ const formatResetTime = (windowStart: string | null, period: 'daily' | 'weekly' 
 // Handle click outside to close dropdowns
 const handleClickOutside = (event: MouseEvent) => {
   const target = event.target as HTMLElement
+  if (
+    !target.closest('.subscription-action-menu-trigger') &&
+    !target.closest('.subscription-action-menu-content')
+  ) {
+    closeSubscriptionActionMenu()
+  }
   if (!target.closest('[data-assign-user-search]')) showUserDropdown.value = false
   if (!target.closest('[data-filter-user-search]')) showFilterUserDropdown.value = false
   if (columnDropdownRef.value && !columnDropdownRef.value.contains(target)) {

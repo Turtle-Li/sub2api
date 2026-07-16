@@ -132,7 +132,15 @@ export default {
     resetIn: '{time} 后重置',
     quotaEndsIn: '额度将在 {time} 后结束',
     windowNotActive: '等待首次使用',
-    usageOf: '已用 {used} / {limit}'
+    usageOf: '已用 {used} / {limit}',
+    resetCards: '额度重置卡',
+    resetCardBatch: '{count} 张 · {date} 到期',
+    noResetCards: '暂无可用重置卡',
+    useResetCard: '立即重置',
+    useResetCardTitle: '使用额度重置卡',
+    useResetCardConfirm: '确定为“{group}”使用 1 张重置卡吗？每日、每周和每月用量都会归零，并从今天重新计算。',
+    resetCardUsed: '额度已重置，消耗 1 张重置卡',
+    failedToUseResetCard: '使用重置卡失败'
   },
 
   // Onboarding Tour

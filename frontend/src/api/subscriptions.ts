@@ -67,10 +67,27 @@ export async function getSubscriptionProgress(
   return response.data
 }
 
+/**
+ * Consume one reset card and reset all usage windows on an owned subscription.
+ * Reuse idempotencyKey when retrying the same logical use.
+ */
+export async function useResetCard(
+  subscriptionId: number,
+  idempotencyKey: string
+): Promise<UserSubscription> {
+  const response = await apiClient.post<UserSubscription>(
+    `/subscriptions/${subscriptionId}/use-reset-card`,
+    undefined,
+    { headers: { 'Idempotency-Key': idempotencyKey } }
+  )
+  return response.data
+}
+
 export default {
   getMySubscriptions,
   getActiveSubscriptions,
   getSubscriptionsProgress,
   getSubscriptionSummary,
-  getSubscriptionProgress
+  getSubscriptionProgress,
+  useResetCard
 }
