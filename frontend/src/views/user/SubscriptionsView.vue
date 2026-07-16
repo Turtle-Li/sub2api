@@ -100,6 +100,51 @@
               }}</span>
             </div>
 
+            <!-- Self-service quota reset cards -->
+            <div
+              class="rounded-xl border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-800/70 dark:bg-amber-900/15"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
+                    <Icon name="gift" size="sm" />
+                    {{ t('userSubscriptions.resetCards') }}
+                    <span class="rounded-full bg-amber-200 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-800 dark:text-amber-100">
+                      ×{{ subscription.reset_card_count || 0 }}
+                    </span>
+                  </div>
+                  <div
+                    v-if="subscription.reset_card_batches?.length"
+                    class="mt-2 max-h-28 space-y-1 overflow-y-auto pr-1 text-xs text-amber-700 dark:text-amber-300"
+                  >
+                    <p
+                      v-for="batch in subscription.reset_card_batches || []"
+                      :key="`${batch.expires_at}-${batch.remaining}`"
+                    >
+                      {{
+                        t('userSubscriptions.resetCardBatch', {
+                          count: batch.remaining,
+                          date: formatDateTime(batch.expires_at)
+                        })
+                      }}
+                    </p>
+                  </div>
+                  <p v-else class="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">
+                    {{ t('userSubscriptions.noResetCards') }}
+                  </p>
+                </div>
+                <button
+                  v-if="subscription.status === 'active'"
+                  type="button"
+                  class="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  :disabled="!subscription.reset_card_count || usingResetCardId === subscription.id"
+                  @click="requestUseResetCard(subscription)"
+                >
+                  {{ usingResetCardId === subscription.id ? t('common.processing') : t('userSubscriptions.useResetCard') }}
+                </button>
+              </div>
+            </div>
+
             <!-- Daily Usage -->
             <div v-if="subscription.group?.daily_limit_usd" class="space-y-2">
               <div class="flex items-center justify-between">
@@ -243,6 +288,15 @@
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        :show="showUseResetCardConfirm"
+        :title="t('userSubscriptions.useResetCardTitle')"
+        :message="t('userSubscriptions.useResetCardConfirm', { group: resetCardSubscription?.group?.name || `Group #${resetCardSubscription?.group_id || ''}` })"
+        :confirm-text="usingResetCardId !== null ? t('common.processing') : t('userSubscriptions.useResetCard')"
+        @confirm="confirmUseResetCard"
+        @cancel="cancelUseResetCard"
+      />
     </div>
   </AppLayout>
 </template>
@@ -256,10 +310,12 @@ import subscriptionsAPI from '@/api/subscriptions'
 import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { formatDateOnly } from '@/utils/format'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { formatDateOnly, formatDateTime } from '@/utils/format'
 import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
 import { platformBorderClass, platformBadgeClass, platformButtonClass, platformLabel } from '@/utils/platformColors'
 import { getRemainingDurationParts, isOneTimeDailyQuota, type RemainingDurationParts } from '@/utils/subscriptionQuota'
+import { createIdempotencyKey } from '@/utils/idempotency'
 
 function platformAccentDotClass(p: string): string {
   switch (p) {
@@ -277,6 +333,10 @@ const appStore = useAppStore()
 
 const subscriptions = ref<UserSubscription[]>([])
 const loading = ref(true)
+const showUseResetCardConfirm = ref(false)
+const resetCardSubscription = ref<UserSubscription | null>(null)
+const usingResetCardId = ref<number | null>(null)
+let useResetCardOperationKey: string | null = null
 
 function subscriptionHasPeakRate(subscription: UserSubscription): boolean {
   return hasPeakRate(subscription.group)
@@ -295,6 +355,55 @@ async function loadSubscriptions() {
     appStore.showError(t('userSubscriptions.failedToLoad'))
   } finally {
     loading.value = false
+  }
+}
+
+function requestUseResetCard(subscription: UserSubscription) {
+  if (!subscription.reset_card_count) return
+  resetCardSubscription.value = subscription
+  useResetCardOperationKey = createIdempotencyKey(
+    `subscription-reset-card-use-${subscription.id}`
+  )
+  showUseResetCardConfirm.value = true
+}
+
+function cancelUseResetCard() {
+  if (usingResetCardId.value !== null) return
+  showUseResetCardConfirm.value = false
+  resetCardSubscription.value = null
+  useResetCardOperationKey = null
+}
+
+async function confirmUseResetCard() {
+  const subscription = resetCardSubscription.value
+  if (!subscription || usingResetCardId.value !== null) return
+
+  usingResetCardId.value = subscription.id
+  try {
+    useResetCardOperationKey ??= createIdempotencyKey(
+      `subscription-reset-card-use-${subscription.id}`
+    )
+    await subscriptionsAPI.useResetCard(subscription.id, useResetCardOperationKey)
+    appStore.showSuccess(t('userSubscriptions.resetCardUsed'))
+    showUseResetCardConfirm.value = false
+    resetCardSubscription.value = null
+    useResetCardOperationKey = null
+    await loadSubscriptions()
+  } catch (error: any) {
+    appStore.showError(error?.message || t('userSubscriptions.failedToUseResetCard'))
+    console.error('Failed to use reset card:', error)
+    if (
+      ['RESET_CARD_UNAVAILABLE', 'SUBSCRIPTION_NOT_FOUND', 'SUBSCRIPTION_EXPIRED', 'SUBSCRIPTION_SUSPENDED'].includes(
+        error?.code
+      )
+    ) {
+      showUseResetCardConfirm.value = false
+      resetCardSubscription.value = null
+      useResetCardOperationKey = null
+      await loadSubscriptions()
+    }
+  } finally {
+    usingResetCardId.value = null
   }
 }
 

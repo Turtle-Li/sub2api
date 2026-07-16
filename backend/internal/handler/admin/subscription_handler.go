@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -222,6 +223,115 @@ type ResetSubscriptionQuotaRequest struct {
 	Daily   bool `json:"daily"`
 	Weekly  bool `json:"weekly"`
 	Monthly bool `json:"monthly"`
+}
+
+type GrantSubscriptionResetCardsRequest struct {
+	GroupIDs  []int64   `json:"group_ids" binding:"required,min=1,dive,gt=0"`
+	Count     int       `json:"count" binding:"required,min=1,max=1000"`
+	ExpiresAt time.Time `json:"expires_at" binding:"required"`
+}
+
+type GrantSubscriptionResetCardsResponse struct {
+	GroupIDs          []int64         `json:"group_ids"`
+	RecipientCount    int64           `json:"recipient_count"`
+	CardCount         int64           `json:"card_count"`
+	RecipientsByGroup map[int64]int64 `json:"recipients_by_group"`
+	ExpiresAt         time.Time       `json:"expires_at"`
+}
+
+type GrantSubscriptionResetCardsToSubscriptionRequest struct {
+	Count     int       `json:"count" binding:"required,min=1,max=1000"`
+	ExpiresAt time.Time `json:"expires_at" binding:"required"`
+}
+
+type GrantSubscriptionResetCardsToSubscriptionResponse struct {
+	SubscriptionID int64     `json:"subscription_id"`
+	UserID         int64     `json:"user_id"`
+	GroupID        int64     `json:"group_id"`
+	CardCount      int64     `json:"card_count"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
+// GrantResetCards grants stackable, expiring reset cards to every active
+// subscription in the selected groups.
+// POST /api/v1/admin/subscriptions/reset-cards/grant
+func (h *SubscriptionHandler) GrantResetCards(c *gin.Context) {
+	var req GrantSubscriptionResetCardsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	payload := struct {
+		AdminID int64                              `json:"admin_id"`
+		Body    GrantSubscriptionResetCardsRequest `json:"body"`
+	}{
+		AdminID: getAdminIDFromContext(c),
+		Body:    req,
+	}
+	executeAdminIdempotentJSON(c, "admin.subscriptions.reset-cards.grant", payload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		result, err := h.subscriptionService.GrantResetCards(ctx, &service.GrantSubscriptionResetCardsInput{
+			GroupIDs:  req.GroupIDs,
+			Count:     req.Count,
+			ExpiresAt: req.ExpiresAt,
+			IssuedBy:  payload.AdminID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &GrantSubscriptionResetCardsResponse{
+			GroupIDs:          result.GroupIDs,
+			RecipientCount:    result.RecipientCount,
+			CardCount:         result.CardCount,
+			RecipientsByGroup: result.RecipientsByGroup,
+			ExpiresAt:         result.ExpiresAt,
+		}, nil
+	})
+}
+
+// GrantResetCardsToSubscription grants stackable, expiring reset cards to one
+// specific active subscription selected from the admin subscription list.
+// POST /api/v1/admin/subscriptions/:id/reset-cards/grant
+func (h *SubscriptionHandler) GrantResetCardsToSubscription(c *gin.Context) {
+	subscriptionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || subscriptionID <= 0 {
+		response.BadRequest(c, "Invalid subscription ID")
+		return
+	}
+
+	var req GrantSubscriptionResetCardsToSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	payload := struct {
+		AdminID        int64                                            `json:"admin_id"`
+		SubscriptionID int64                                            `json:"subscription_id"`
+		Body           GrantSubscriptionResetCardsToSubscriptionRequest `json:"body"`
+	}{
+		AdminID:        getAdminIDFromContext(c),
+		SubscriptionID: subscriptionID,
+		Body:           req,
+	}
+	executeAdminIdempotentJSON(c, "admin.subscriptions.reset-cards.grant-one", payload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		result, err := h.subscriptionService.GrantResetCardsToSubscription(ctx, &service.GrantSubscriptionResetCardsToSubscriptionInput{
+			SubscriptionID: subscriptionID,
+			Count:          req.Count,
+			ExpiresAt:      req.ExpiresAt,
+			IssuedBy:       payload.AdminID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &GrantSubscriptionResetCardsToSubscriptionResponse{
+			SubscriptionID: result.SubscriptionID,
+			UserID:         result.UserID,
+			GroupID:        result.GroupID,
+			CardCount:      result.CardCount,
+			ExpiresAt:      result.ExpiresAt,
+		}, nil
+	})
 }
 
 // ResetQuota resets daily, weekly, and/or monthly usage for a subscription.

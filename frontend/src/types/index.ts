@@ -1766,6 +1766,13 @@ export interface UserSubscription {
   expires_at: string | null
   user?: User
   group?: Group
+  reset_card_count?: number
+  reset_card_batches?: SubscriptionResetCardBatch[]
+}
+
+export interface SubscriptionResetCardBatch {
+  remaining: number
+  expires_at: string
 }
 
 export interface SubscriptionProgress {

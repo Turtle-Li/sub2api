@@ -135,7 +135,15 @@ export default {
     resetIn: 'Resets in {time}',
     quotaEndsIn: 'Quota ends in {time}',
     windowNotActive: 'Awaiting first use',
-    usageOf: '{used} of {limit}'
+    usageOf: '{used} of {limit}',
+    resetCards: 'Quota Reset Cards',
+    resetCardBatch: '{count} card(s) · expires {date}',
+    noResetCards: 'No reset cards available',
+    useResetCard: 'Reset Now',
+    useResetCardTitle: 'Use Quota Reset Card',
+    useResetCardConfirm: 'Use one reset card for “{group}”? Daily, weekly, and monthly usage will be cleared and restarted from today.',
+    resetCardUsed: 'Quota reset; one reset card was consumed',
+    failedToUseResetCard: 'Failed to use reset card'
   },
 
   // Onboarding Tour

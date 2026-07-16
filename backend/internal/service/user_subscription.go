@@ -30,6 +30,9 @@ type UserSubscription struct {
 	User           *User
 	Group          *Group
 	AssignedByUser *User
+
+	ResetCardCount   int
+	ResetCardBatches []SubscriptionResetCardBatch
 }
 
 func (s *UserSubscription) IsActive() bool {

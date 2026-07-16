@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"context"
+	"strconv"
+
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -185,4 +188,35 @@ func (h *SubscriptionHandler) GetSummary(c *gin.Context) {
 	}
 
 	response.Success(c, summary)
+}
+
+// UseResetCard consumes one reset card owned by the current user and resets all
+// usage windows on that subscription.
+// POST /api/v1/subscriptions/:id/use-reset-card
+func (h *SubscriptionHandler) UseResetCard(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
+	subscriptionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || subscriptionID <= 0 {
+		response.BadRequest(c, "Invalid subscription ID")
+		return
+	}
+
+	payload := struct {
+		UserID         int64 `json:"user_id"`
+		SubscriptionID int64 `json:"subscription_id"`
+	}{
+		UserID:         subject.UserID,
+		SubscriptionID: subscriptionID,
+	}
+	executeUserIdempotentJSON(c, "user.subscriptions.reset-cards.use", payload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		subscription, execErr := h.subscriptionService.UseResetCard(ctx, subject.UserID, subscriptionID)
+		if execErr != nil {
+			return nil, execErr
+		}
+		return dto.UserSubscriptionFromService(subscription), nil
+	})
 }

@@ -622,6 +622,14 @@ type UserSubscription struct {
 
 	User  *User  `json:"user,omitempty"`
 	Group *Group `json:"group,omitempty"`
+
+	ResetCardCount   int                          `json:"reset_card_count"`
+	ResetCardBatches []SubscriptionResetCardBatch `json:"reset_card_batches"`
+}
+
+type SubscriptionResetCardBatch struct {
+	Remaining int       `json:"remaining"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // AdminUserSubscription 是管理员接口使用的订阅 DTO（包含分配信息/备注等字段）。

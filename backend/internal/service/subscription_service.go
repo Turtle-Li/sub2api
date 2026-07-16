@@ -47,6 +47,7 @@ type SubscriptionService struct {
 	userSubRepo         UserSubscriptionRepository
 	billingCacheService *BillingCacheService
 	entClient           *dbent.Client
+	resetCardRepo       SubscriptionResetCardRepository
 
 	// L1 缓存：加速中间件热路径的订阅查询
 	subCacheL1     *ristretto.Cache
@@ -693,7 +694,15 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 
 // GetByID 根据ID获取订阅
 func (s *SubscriptionService) GetByID(ctx context.Context, id int64) (*UserSubscription, error) {
-	return s.userSubRepo.GetByID(ctx, id)
+	sub, err := s.userSubRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	items := []UserSubscription{*sub}
+	if err := s.attachResetCardSummaries(ctx, items); err != nil {
+		return nil, err
+	}
+	return &items[0], nil
 }
 
 // GetActiveSubscription 获取用户对特定分组的有效订阅
@@ -744,6 +753,9 @@ func (s *SubscriptionService) ListUserSubscriptions(ctx context.Context, userID 
 	}
 	normalizeExpiredWindows(subs)
 	normalizeSubscriptionStatus(subs)
+	if err := s.attachResetCardSummaries(ctx, subs); err != nil {
+		return nil, err
+	}
 	return subs, nil
 }
 
@@ -754,6 +766,9 @@ func (s *SubscriptionService) ListActiveUserSubscriptions(ctx context.Context, u
 		return nil, err
 	}
 	normalizeExpiredWindows(subs)
+	if err := s.attachResetCardSummaries(ctx, subs); err != nil {
+		return nil, err
+	}
 	return subs, nil
 }
 
@@ -766,6 +781,9 @@ func (s *SubscriptionService) ListGroupSubscriptions(ctx context.Context, groupI
 	}
 	normalizeExpiredWindows(subs)
 	normalizeSubscriptionStatus(subs)
+	if err := s.attachResetCardSummaries(ctx, subs); err != nil {
+		return nil, nil, err
+	}
 	return subs, pag, nil
 }
 
@@ -778,6 +796,9 @@ func (s *SubscriptionService) List(ctx context.Context, page, pageSize int, user
 	}
 	normalizeExpiredWindows(subs)
 	normalizeSubscriptionStatus(subs)
+	if err := s.attachResetCardSummaries(ctx, subs); err != nil {
+		return nil, nil, err
+	}
 	return subs, pag, nil
 }
 
