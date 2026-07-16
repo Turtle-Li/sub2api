@@ -10,6 +10,35 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | **Apple container** | Native local stack on macOS 26 | Not needed (auto-setup) |
 | **Binary Install** | Production servers, systemd | Web-based wizard |
 
+## Automatic Production Releases (Dedicated Server)
+
+For a dedicated Sub2API host, `install-autodeploy.sh` installs a lightweight
+`systemd` timer instead of a CI server. Every five minutes it fetches the
+configured custom production branch, fork `main`, and official upstream
+`main`; it builds a disposable merge candidate on the server and uses the
+existing blue-green release script only after a successful build. Merge
+conflicts, build failures, and health-check failures never switch traffic.
+
+The installer deliberately defaults the production branch to the current
+checked-out branch, so install it from the customization branch rather than
+from a plain upstream `main` checkout:
+
+```bash
+sudo deploy/install-autodeploy.sh \
+  --production-branch feature/batch-image-foundation \
+  --production-repo https://github.com/Turtle-Li/sub2api.git \
+  --upstream-repo https://github.com/Wei-Shaw/sub2api.git
+
+/opt/sub2api/scripts/sub2api-autodeploy.sh --check
+systemctl list-timers sub2api-autodeploy.timer
+journalctl -u sub2api-autodeploy.service -n 100 --no-pager
+```
+
+The live configuration is `/etc/sub2api-autodeploy.env`, logs are stored in
+`/var/log/sub2api-release/`, and the timer never pushes merge commits back to
+GitHub. Use `systemctl start sub2api-autodeploy.service` for an immediate
+normal run after a successful `--check`.
+
 ## Files
 
 | File | Description |

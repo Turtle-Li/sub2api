@@ -1,0 +1,17 @@
+[Unit]
+Description=Sub2API automatic server-side release check
+Wants=network-online.target
+After=network-online.target docker.service
+ConditionPathExists=/opt/sub2api/scripts/sub2api-autodeploy.sh
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=-/etc/sub2api-autodeploy.env
+ExecStart=/opt/sub2api/scripts/sub2api-autodeploy.sh
+TimeoutStartSec=75min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

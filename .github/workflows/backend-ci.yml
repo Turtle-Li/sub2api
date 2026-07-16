@@ -16,6 +16,9 @@ jobs:
         run: |
           /bin/bash -n deploy/apple-container.sh
           /bin/bash deploy/tests/apple-container-test.sh
+          /bin/bash -n deploy/install-autodeploy.sh
+          /bin/bash -n deploy/sub2api-autodeploy.sh
+          /bin/bash -n deploy/sub2api-server-release.sh
 
   test:
     runs-on: ubuntu-latest

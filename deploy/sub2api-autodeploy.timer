@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Sub2API source branches for an automatic release
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=sub2api-autodeploy.service
+
+[Install]
+WantedBy=timers.target
