@@ -162,6 +162,27 @@ rollback() {
   log "Rollback completed"
 }
 
+cleanup_failed_inactive_target() {
+  local active_config
+
+  if ! docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/')"; then
+    log "WARNING: could not read Caddy configuration; retaining failed target ${NEW_CONTAINER}" >&2
+    return 0
+  fi
+  if ! printf '%s' "$active_config" | grep -qF "$OLD_UPSTREAM" \
+    || printf '%s' "$active_config" | grep -qF "$NEW_UPSTREAM"; then
+    log "WARNING: Caddy does not conclusively point at ${OLD_UPSTREAM}; retaining ${NEW_CONTAINER}" >&2
+    return 0
+  fi
+
+  log "Removing failed inactive target ${NEW_CONTAINER}; Caddy still points at ${OLD_CONTAINER}"
+  docker rm -f "$NEW_CONTAINER" >>"${LOG_DIR}/failed-target-cleanup.log" 2>&1 \
+    || log "WARNING: could not remove failed inactive target ${NEW_CONTAINER}" >&2
+}
+
 log "Switching ${OLD_UPSTREAM} to ${NEW_UPSTREAM} through the existing blue-green script"
 if ! env \
   OLD_CONTAINER="$OLD_CONTAINER" \
@@ -174,7 +195,9 @@ if ! env \
   bash "$BLUE_GREEN_SCRIPT" >"$SWITCH_LOG" 2>&1; then
   tail -120 "$SWITCH_LOG" >&2 || true
   if docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
-    rollback || true
+    if rollback; then
+      cleanup_failed_inactive_target
+    fi
   fi
   die "blue-green release failed"
 fi
