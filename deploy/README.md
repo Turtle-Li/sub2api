@@ -10,14 +10,18 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | **Apple container** | Native local stack on macOS 26 | Not needed (auto-setup) |
 | **Binary Install** | Production servers, systemd | Web-based wizard |
 
-## Automatic Production Releases (Dedicated Server)
+## Event-driven Production Releases (Dedicated Server)
 
-For a dedicated Sub2API host, `install-autodeploy.sh` installs a lightweight
-`systemd` timer instead of a CI server. Every five minutes it fetches the
-configured custom production branch, fork `main`, and official upstream
-`main`; it builds a disposable merge candidate on the server and uses the
-existing blue-green release script only after a successful build. Merge
-conflicts, build failures, and health-check failures never switch traffic.
+The recommended path is a GitHub Actions `push` workflow, not a polling CI
+server. A push to the fork's `main` or configured custom production branch
+starts `sub2api-autodeploy.service` over a restricted SSH key. The server then
+fetches only the fork refs, builds a disposable candidate, and uses the
+existing blue-green release script after a successful build. Merge conflicts,
+build failures, and health-check failures never switch traffic.
+
+Official upstream changes are deliberately merged into fork `main` by a
+maintainer first. The release server does not poll or merge the official
+upstream itself.
 
 The installer deliberately defaults the production branch to the current
 checked-out branch, so install it from the customization branch rather than
@@ -26,18 +30,32 @@ from a plain upstream `main` checkout:
 ```bash
 sudo deploy/install-autodeploy.sh \
   --production-branch feature/batch-image-foundation \
-  --production-repo https://github.com/Turtle-Li/sub2api.git \
-  --upstream-repo https://github.com/Wei-Shaw/sub2api.git
+  --production-repo https://github.com/Turtle-Li/sub2api.git
 
 /opt/sub2api/scripts/sub2api-autodeploy.sh --check
-systemctl list-timers sub2api-autodeploy.timer
 journalctl -u sub2api-autodeploy.service -n 100 --no-pager
 ```
 
-The live configuration is `/etc/sub2api-autodeploy.env`, logs are stored in
-`/var/log/sub2api-release/`, and the timer never pushes merge commits back to
-GitHub. Use `systemctl start sub2api-autodeploy.service` for an immediate
-normal run after a successful `--check`.
+The workflow is `.github/workflows/sub2api-production-deploy.yml`. It requires
+the repository secrets `SUB2API_DEPLOY_SSH_KEY`, `SUB2API_DEPLOY_HOST`,
+`SUB2API_DEPLOY_PORT`, `SUB2API_DEPLOY_USER`, and
+`SUB2API_DEPLOY_KNOWN_HOSTS`. The live configuration is
+`/etc/sub2api-autodeploy.env`, and server logs are stored in
+`/var/log/sub2api-release/`.
+
+Install the dedicated forced-command account before adding the key to GitHub:
+
+```bash
+sudo deploy/install-github-deploy-trigger.sh \
+  --public-key-file /path/to/sub2api-github-deploy.pub
+```
+
+The account has no interactive shell access. Its key can only start
+`sub2api-autodeploy.service`; it cannot run arbitrary SSH commands.
+
+`sub2api-autodeploy.timer` is disabled by default. It can be explicitly used
+as a fallback with `sudo deploy/install-autodeploy.sh --enable-timer`, but it
+is not part of the normal production path.
 
 ## Files
 
@@ -46,6 +64,8 @@ normal run after a successful `--check`.
 | `docker-compose.yml` | Docker Compose configuration (named volumes) |
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
+| `install-github-deploy-trigger.sh` | Installs the restricted GitHub Actions deploy-key account |
+| `sub2api-github-deploy-trigger.sh` | Fixed SSH command that starts the release service |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
 | `.env.example` | Container environment variables template |

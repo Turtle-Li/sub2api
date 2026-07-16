@@ -1,5 +1,5 @@
 [Unit]
-Description=Sub2API automatic server-side release check
+Description=Sub2API event-driven server-side release
 Wants=network-online.target
 After=network-online.target docker.service
 ConditionPathExists=/opt/sub2api/scripts/sub2api-autodeploy.sh

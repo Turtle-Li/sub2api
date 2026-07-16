@@ -1,0 +1,65 @@
+name: Deploy Sub2API production
+
+on:
+  push:
+    branches:
+      - main
+      - feature/batch-image-foundation
+    paths-ignore:
+      - '.github/**'
+      - 'deploy/**'
+      - 'docs/**'
+      - 'AGENTS.md'
+      - 'README*'
+  workflow_dispatch:
+
+# The runner only holds a restricted SSH key that can start one fixed systemd
+# service. It neither checks out source nor builds the application.
+permissions: {}
+
+concurrency:
+  group: sub2api-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Start server-side blue-green release
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DEPLOY_HOST: ${{ secrets.SUB2API_DEPLOY_HOST }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.SUB2API_DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_KEY: ${{ secrets.SUB2API_DEPLOY_SSH_KEY }}
+      DEPLOY_PORT: ${{ secrets.SUB2API_DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.SUB2API_DEPLOY_USER }}
+    steps:
+      - name: Validate deployment configuration
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          test -n "$DEPLOY_KEY"
+          test -n "$DEPLOY_PORT"
+          test -n "$DEPLOY_USER"
+
+      - name: Configure restricted SSH client
+        run: |
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Start verified server-side release
+        run: |
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o IdentitiesOnly=yes \
+            -o LogLevel=ERROR \
+            -o ServerAliveCountMax=180 \
+            -o ServerAliveInterval=30 \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" deploy

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 # Install the Sub2API automatic release controller on the dedicated Sub2API
-# host.  It only installs scripts, configuration, and a systemd timer; it does
-# not alter Caddy, containers, data, or immediately release an image.
+# host. It installs the server-side release service and optional polling
+# fallback; it does not alter Caddy, containers, data, or immediately release
+# an image.
 
 set -Eeuo pipefail
 
@@ -17,7 +18,7 @@ PRODUCTION_REPO_URL="${SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL:-}"
 UPSTREAM_REPO_URL="${SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL:-}"
 HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://www.turtleligpt.com/health}"
 REPLACE_CONFIG=false
-ENABLE_TIMER=true
+ENABLE_TIMER=false
 
 usage() {
   cat <<'EOF'
@@ -29,7 +30,8 @@ Options:
   --upstream-repo URL         Git URL of the official upstream.
   --health-url URL            Public URL checked after the blue-green switch.
   --replace-config            Replace an existing /etc/sub2api-autodeploy.env.
-  --no-enable                 Install files but do not enable/start the timer.
+  --enable-timer              Enable the periodic polling fallback (off by default).
+  --no-enable                 Do not enable the timer (kept for compatibility).
   --help                      Show this help.
 EOF
 }
@@ -58,6 +60,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --replace-config)
       REPLACE_CONFIG=true
+      ;;
+    --enable-timer)
+      ENABLE_TIMER=true
       ;;
     --no-enable)
       ENABLE_TIMER=false
@@ -119,13 +124,16 @@ fi
 
 require_simple_value SUB2API_AUTODEPLOY_PRODUCTION_BRANCH "$PRODUCTION_BRANCH"
 require_simple_value SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL "$PRODUCTION_REPO_URL"
-require_simple_value SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL "$UPSTREAM_REPO_URL"
+if [ -n "$UPSTREAM_REPO_URL" ]; then
+  require_simple_value SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL "$UPSTREAM_REPO_URL"
+fi
 require_simple_value SUB2API_PUBLIC_HEALTH_URL "$HEALTH_URL"
 git -C "$SOURCE_ROOT" check-ref-format --branch "$PRODUCTION_BRANCH" >/dev/null
 
 for file in \
   deploy/sub2api-autodeploy.sh \
   deploy/sub2api-server-release.sh \
+  deploy/sub2api-github-deploy-trigger.sh \
   deploy/sub2api-autodeploy.service \
   deploy/sub2api-autodeploy.timer; do
   [ -r "${SOURCE_ROOT}/${file}" ] || die "installer source is incomplete: ${file}"
@@ -133,6 +141,7 @@ done
 
 bash -n "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh"
 
 if [ -e "$CONFIG_FILE" ] && [ "$REPLACE_CONFIG" != "true" ]; then
   echo "Keeping existing automatic-release configuration: ${CONFIG_FILE}"
@@ -148,7 +157,9 @@ else
     printf 'SUB2API_AUTODEPLOY_MAIN_REMOTE=%s\n' 'fork'
     printf 'SUB2API_AUTODEPLOY_MAIN_REPO_URL=%s\n' "$PRODUCTION_REPO_URL"
     printf 'SUB2API_AUTODEPLOY_MAIN_BRANCH=%s\n' 'main'
-    printf 'SUB2API_AUTODEPLOY_MERGE_UPSTREAM=%s\n' 'true'
+    # Official upstream updates are merged into fork/main deliberately before
+    # this service is triggered; never merge them from the production server.
+    printf 'SUB2API_AUTODEPLOY_MERGE_UPSTREAM=%s\n' 'false'
     printf 'SUB2API_AUTODEPLOY_UPSTREAM_REMOTE=%s\n' 'origin'
     printf 'SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL=%s\n' "$UPSTREAM_REPO_URL"
     printf 'SUB2API_AUTODEPLOY_UPSTREAM_BRANCH=%s\n' 'main'
@@ -164,6 +175,8 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh" \
   "${SCRIPT_DIR}/sub2api-autodeploy.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
+install -D -m 755 "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh" \
+  "${SCRIPT_DIR}/sub2api-github-deploy-trigger.sh"
 install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.service" \
   "${UNIT_DIR}/sub2api-autodeploy.service"
 install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.timer" \
@@ -174,7 +187,8 @@ if [ "$ENABLE_TIMER" = "true" ]; then
   systemctl enable --now sub2api-autodeploy.timer
   echo "Enabled sub2api-autodeploy.timer (checks every five minutes)."
 else
-  echo "Installed files without enabling the timer."
+  systemctl disable --now sub2api-autodeploy.timer >/dev/null 2>&1 || true
+  echo "Installed event-driven release service; polling timer is disabled."
 fi
 
 echo "Validate without releasing: ${SCRIPT_DIR}/sub2api-autodeploy.sh --check"

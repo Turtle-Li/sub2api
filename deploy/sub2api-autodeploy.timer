@@ -1,5 +1,5 @@
 [Unit]
-Description=Check Sub2API source branches for an automatic release
+Description=Optional polling fallback for Sub2API releases
 
 [Timer]
 OnBootSec=5min

@@ -18,6 +18,8 @@ jobs:
           /bin/bash deploy/tests/apple-container-test.sh
           /bin/bash -n deploy/install-autodeploy.sh
           /bin/bash -n deploy/sub2api-autodeploy.sh
+          /bin/bash -n deploy/sub2api-github-deploy-trigger.sh
+          /bin/bash -n deploy/install-github-deploy-trigger.sh
           /bin/bash -n deploy/sub2api-server-release.sh
 
   test:

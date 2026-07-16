@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-# Poll the configured Git refs, build a disposable merge candidate on the
+# Fetch the configured Git refs, build a disposable merge candidate on the
 # production host, and hand the verified image to the existing blue-green
-# release mechanism.  This deliberately never pushes merge commits: a failed
-# upstream merge must not mutate the source branches or interrupt production.
+# release mechanism. It is normally started by an authenticated GitHub Actions
+# push event. This deliberately never pushes merge commits or merges official
+# upstream changes unless an operator explicitly opts in.
 
 set -Eeuo pipefail
 
@@ -37,7 +38,7 @@ MERGE_MAIN="${SUB2API_AUTODEPLOY_MERGE_MAIN:-true}"
 UPSTREAM_REMOTE="${SUB2API_AUTODEPLOY_UPSTREAM_REMOTE:-origin}"
 UPSTREAM_REPO_URL="${SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL:-}"
 UPSTREAM_BRANCH="${SUB2API_AUTODEPLOY_UPSTREAM_BRANCH:-main}"
-MERGE_UPSTREAM="${SUB2API_AUTODEPLOY_MERGE_UPSTREAM:-true}"
+MERGE_UPSTREAM="${SUB2API_AUTODEPLOY_MERGE_UPSTREAM:-false}"
 
 PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://www.turtleligpt.com/health}"
 FAILURE_RETRY_SECONDS="${SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS:-1800}"
