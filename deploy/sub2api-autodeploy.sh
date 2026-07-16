@@ -7,6 +7,17 @@
 
 set -Eeuo pipefail
 
+# systemd supplies this file through EnvironmentFile, while operators may run
+# `--check` directly over SSH. Load the same trusted root-owned file here so
+# both entry points resolve the identical release configuration.
+CONFIG_FILE="${SUB2API_AUTODEPLOY_CONFIG_FILE:-/etc/sub2api-autodeploy.env}"
+if [ -r "$CONFIG_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$CONFIG_FILE"
+  set +a
+fi
+
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 STATE_ROOT="${SUB2API_AUTODEPLOY_STATE_DIR:-/var/lib/sub2api-autodeploy}"
 REPO_DIR="${SUB2API_AUTODEPLOY_REPO_DIR:-${STATE_ROOT}/repo}"
