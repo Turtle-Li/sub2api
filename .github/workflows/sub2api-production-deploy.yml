@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feature/batch-image-foundation
     paths-ignore:
       - '.github/**'
       - 'deploy/**'
@@ -45,10 +44,13 @@ jobs:
         run: |
           umask 077
           mkdir -p "$HOME/.ssh"
-          printf '%s' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          # GitHub secrets commonly omit the final newline. OpenSSH's key
+          # loader requires it on some runner images; normalize CRLF as well.
+          printf '%s\n' "$DEPLOY_KEY" | tr -d '\r' > "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
 
       - name: Start verified server-side release
         run: |

@@ -18,7 +18,9 @@ ARG NPM_CONFIG_REGISTRY=
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
 # -----------------------------------------------------------------------------
-FROM ${NODE_IMAGE} AS frontend-builder
+# --platform=$BUILDPLATFORM: the frontend output is JS (arch-neutral), so build
+# it on the native host arch instead of under QEMU emulation for the target.
+FROM --platform=${BUILDPLATFORM} ${NODE_IMAGE} AS frontend-builder
 ARG NPM_CONFIG_REGISTRY
 
 WORKDIR /app/frontend
@@ -44,10 +46,20 @@ RUN nice -n 10 pnpm run build
 # -----------------------------------------------------------------------------
 # Stage 2: Backend Builder
 # -----------------------------------------------------------------------------
-FROM ${GOLANG_IMAGE} AS backend-builder
+# --platform=$BUILDPLATFORM: run the Go toolchain on the native host arch and
+# cross-compile to the target arch below. The binary is CGO_ENABLED=0, so this
+# is a clean pure-Go cross-compile — no QEMU emulation of go mod download / go
+# build (emulated networking here was dropping module fetches with EOF).
+FROM --platform=${BUILDPLATFORM} ${GOLANG_IMAGE} AS backend-builder
 
+ARG VERSION=
+ARG COMMIT=docker
+ARG DATE
 ARG GOPROXY
 ARG GOSUMDB
+# Populated by buildx from the --platform target (e.g. linux/amd64).
+ARG TARGETOS
+ARG TARGETARCH
 
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
@@ -59,6 +71,8 @@ WORKDIR /app/backend
 
 # Copy go mod files first (better caching)
 COPY backend/go.mod backend/go.sum ./
+# Cache mount keeps the module cache across builds so a transient CDN blip on
+# retry resumes instead of re-fetching every zip from scratch.
 RUN --mount=type=cache,id=sub2api-go-mod,target=/go/pkg/mod,sharing=locked \
     go mod download
 
@@ -70,15 +84,12 @@ COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist
 
 # Build the binary (BuildType=release for CI builds, embed frontend)
 # Version precedence: build arg VERSION > exact git tag > cmd/server/VERSION
-ARG VERSION=
-ARG COMMIT=docker
-ARG DATE
 RUN --mount=type=cache,id=sub2api-go-mod,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,id=sub2api-go-build,target=/root/.cache/go-build,sharing=locked \
     VERSION_VALUE="${VERSION}" && \
     if [ -z "${VERSION_VALUE}" ]; then VERSION_VALUE="$(./scripts/resolve-version.sh)"; fi && \
     DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
-    CGO_ENABLED=0 GOOS=linux nice -n 10 go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} nice -n 10 go build \
     -tags embed \
     -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" \
     -trimpath \
@@ -133,9 +144,9 @@ COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/
 # Create data directory
 RUN mkdir -p /app/data && chown sub2api:sub2api /app/data
 
-# Copy entrypoint with a fixed mode. The server-side release service uses a
-# restrictive umask for its disposable Git worktree, so a later `chmod +x`
-# would otherwise preserve no read bit for the runtime user.
+# Copy entrypoint script (fixes volume permissions then drops to sub2api).
+# Set its mode while copying so strict disposable build worktrees never need
+# a separate chmod read of the source file.
 COPY --chmod=755 deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
 
 # Expose port (can be overridden by SERVER_PORT env var)
