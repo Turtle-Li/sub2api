@@ -10,6 +10,12 @@ function paramsFromDeeplink(deeplink: string): URLSearchParams {
   return new URLSearchParams(query)
 }
 
+function decodeBase64Utf8(value: string): string {
+  const binary = atob(value)
+  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
+
 describe('ccswitchImport utils', () => {
   it('defaults OpenAI CC Switch imports to the current Codex model', () => {
     expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe('gpt-5.6-terra')
@@ -36,6 +42,30 @@ describe('ccswitchImport utils', () => {
     expect(params.get('endpoint')).toBe(baseInput.baseUrl)
     expect(params.get('model')).toBe(OPENAI_CC_SWITCH_CODEX_MODEL)
     expect(atob(params.get('usageScript') || '')).toBe(baseInput.usageScript)
+
+    const importedSettings = JSON.parse(decodeBase64Utf8(params.get('config') || ''))
+    expect(params.get('configFormat')).toBe('json')
+    expect(importedSettings.auth.OPENAI_API_KEY).toBe(baseInput.apiKey)
+    expect(importedSettings.config).toContain('model_provider = "custom"')
+    expect(importedSettings.config).toContain(`model = "${OPENAI_CC_SWITCH_CODEX_MODEL}"`)
+    expect(importedSettings.config).toContain(`base_url = "${baseInput.baseUrl}"`)
+    expect(importedSettings.config).toContain('wire_api = "responses"')
+    expect(importedSettings.config).toContain('supports_websockets = true')
+    expect(importedSettings.config).toContain('[features]\nresponses_websockets_v2 = true')
+  })
+
+  it('UTF-8 encodes provider names in the Codex settings payload', () => {
+    const params = paramsFromDeeplink(
+      buildCcSwitchImportDeeplink({
+        ...baseInput,
+        providerName: '乌龟李 Sub2',
+        platform: 'openai',
+        clientType: 'claude'
+      })
+    )
+
+    const importedSettings = JSON.parse(decodeBase64Utf8(params.get('config') || ''))
+    expect(importedSettings.config).toContain('name = "乌龟李 Sub2"')
   })
 
   it.each([
@@ -53,6 +83,7 @@ describe('ccswitchImport utils', () => {
     expect(params.get('app')).toBe(app)
     expect(params.get('endpoint')).toBe(baseInput.baseUrl)
     expect(params.has('model')).toBe(false)
+    expect(params.has('config')).toBe(false)
   })
 
   it('keeps Antigravity imports on the selected client endpoint without a model parameter', () => {
@@ -67,5 +98,6 @@ describe('ccswitchImport utils', () => {
     expect(params.get('app')).toBe('gemini')
     expect(params.get('endpoint')).toBe(`${baseInput.baseUrl}/antigravity`)
     expect(params.has('model')).toBe(false)
+    expect(params.has('config')).toBe(false)
   })
 })

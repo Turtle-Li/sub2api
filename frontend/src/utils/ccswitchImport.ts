@@ -19,6 +19,53 @@ export interface CcSwitchImportDeeplinkInput {
   usageScript: string
 }
 
+interface CcSwitchCodexSettings {
+  auth: {
+    OPENAI_API_KEY: string
+  }
+  config: string
+}
+
+function encodeBase64Utf8(value: string): string {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ''
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+
+  return btoa(binary)
+}
+
+function buildCodexWebSocketSettings(
+  providerName: string,
+  endpoint: string,
+  apiKey: string,
+  model: string
+): CcSwitchCodexSettings {
+  const tomlString = (value: string) => JSON.stringify(value)
+
+  return {
+    auth: {
+      OPENAI_API_KEY: apiKey
+    },
+    config: `model_provider = "custom"
+model = ${tomlString(model)}
+model_reasoning_effort = "high"
+disable_response_storage = true
+
+[model_providers.custom]
+name = ${tomlString(providerName)}
+base_url = ${tomlString(endpoint)}
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = true
+
+[features]
+responses_websockets_v2 = true`
+  }
+}
+
 export function resolveCcSwitchImportConfig(
   platform: GroupPlatform | undefined | null,
   clientType: CcSwitchClientType,
@@ -66,6 +113,16 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
 
   if (config.model) {
     entries.splice(2, 0, ['model', config.model])
+  }
+
+  if (config.app === 'codex' && config.model) {
+    const codexSettings = buildCodexWebSocketSettings(
+      input.providerName,
+      config.endpoint,
+      input.apiKey,
+      config.model
+    )
+    entries.push(['config', encodeBase64Utf8(JSON.stringify(codexSettings))])
   }
 
   return `ccswitch://v1/import?${new URLSearchParams(entries).toString()}`
