@@ -190,17 +190,20 @@ gateway:
     # Safe rollout: measure/cache only and keep the original upstream payload.
     # 安全灰度：只测量和缓存，仍向上游发送原始 payload。
     attachment_optimizer_dry_run: true
-    # Second-stage experiment: upload optimized inline images to the configured
-    # image_storage bucket and replace data URLs with short-lived HTTPS URLs.
+    # Second-stage experiment: upload optimized inline images through the
+    # independent admin-managed Attachment Gateway R2 config and replace data
+    # URLs with short-lived HTTPS URLs. Backup/image_storage credentials are
+    # not reused.
     # It runs only in scoped rewrite mode; dry-run never writes externally.
-    # 二阶段实验：把压缩图上传到 image_storage，并以短时 HTTPS URL 替换 data URL。
+    # 二阶段实验：通过后台独立的 Attachment Gateway R2 配置上传压缩图，并以短时
+    # HTTPS URL 替换 data URL；不复用备份或 image_storage 凭证。
     # 仅 scoped rewrite 生效；dry-run 绝不写对象存储。
     url_rewrite_enabled: false
     url_rewrite_min_body_bytes: 524288
     url_upload_timeout_ms: 15000
     url_object_prefix: "attachments/"
-    # In-process reuse window for a returned signed URL. Keep it shorter than
-    # image_storage.presign_expiry_hours.
+    # In-process reuse window for a returned signed URL. Runtime logic also
+    # caps this before the actual signature expiry.
     url_cache_ttl_seconds: 900
     max_concurrent_url_uploads: 2
     # Observe aggregate attachment pressure; enforcement has its own gate.

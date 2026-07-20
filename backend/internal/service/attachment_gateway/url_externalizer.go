@@ -3,7 +3,9 @@ package attachment_gateway
 import (
 	"context"
 	"errors"
+	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,11 @@ const (
 	defaultMaxConcurrentUploads   = 2
 )
 
+var (
+	errObjectStorageConfigChanged = errors.New("attachment gateway: object storage config changed during upload")
+	errObjectStorageURLUnsafe     = errors.New("attachment gateway: signed object URL is too close to expiry")
+)
+
 // ObjectStorage is the narrow storage contract needed by URL externalization.
 // service.ImageStorage and the existing S3/R2 implementation satisfy it.
 type ObjectStorage interface {
@@ -29,6 +36,19 @@ type ObjectStorage interface {
 // restarts while still returning a fresh signed URL.
 type contentAddressedObjectStorage interface {
 	Ensure(ctx context.Context, key, contentType string, data []byte) (url string, uploaded bool, err error)
+}
+
+// readyObjectStorage is implemented by the dynamic Attachment R2 provider so
+// a disabled or incomplete configuration can skip URL rewriting once per
+// request instead of failing once per image.
+type readyObjectStorage interface {
+	Ready(ctx context.Context) bool
+}
+
+// versionedObjectStorage lets a hot config update invalidate cached presigned
+// URLs that point at the previous bucket or credentials.
+type versionedObjectStorage interface {
+	CacheVersion() uint64
 }
 
 // URLConfig controls the optional second-stage conversion from inline data
@@ -88,6 +108,8 @@ func (c URLConfig) validate() error {
 // hashes, image bytes and request content.
 type URLMetrics struct {
 	Enabled             bool
+	StorageReady        bool
+	StorageUnavailable  bool
 	OriginalBodyBytes   int
 	RewrittenBodyBytes  int
 	ImageCount          int
@@ -124,10 +146,11 @@ type URLExternalizer struct {
 	store  ObjectStorage
 	now    func() time.Time
 
-	mu        sync.Mutex
-	published map[string]publishedURL
-	group     singleflight.Group
-	slots     chan struct{}
+	mu           sync.Mutex
+	published    map[string]publishedURL
+	storeVersion uint64
+	group        singleflight.Group
+	slots        chan struct{}
 }
 
 func NewURLExternalizer(config URLConfig, store ObjectStorage) (*URLExternalizer, error) {
@@ -169,6 +192,12 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 	if !e.Enabled() {
 		return result
 	}
+	if readyStore, ok := e.store.(readyObjectStorage); ok && !readyStore.Ready(ctx) {
+		result.Metrics.StorageUnavailable = true
+		return result
+	}
+	result.Metrics.StorageReady = true
+	storageVersion := e.syncStorageVersion()
 	if len(body) < e.config.MinBodyBytes {
 		result.Metrics.SkippedBelowTrigger = true
 		return result
@@ -194,7 +223,7 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 			return rawURL
 		}
 
-		url, cacheHit, shared, uploaded, uploadErr := e.publish(ctx, parsed)
+		url, cacheHit, shared, uploaded, uploadErr := e.publish(ctx, parsed, storageVersion)
 		if uploadErr != nil {
 			if errors.Is(uploadErr, context.DeadlineExceeded) {
 				result.Metrics.TimedOut = true
@@ -218,6 +247,14 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 		result.Metrics.Errors++
 		return result
 	}
+	// A destination or credential switch during this request must not leave a
+	// mixture of URLs from the previous storage generation in the forwarded
+	// payload. Keep the optimized inline data URLs and let the next request use
+	// the new generation instead.
+	if !e.storageVersionCurrent(storageVersion) {
+		result.Metrics.Errors++
+		return result
+	}
 	if ctx.Err() != nil {
 		result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	}
@@ -228,14 +265,24 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 	return result
 }
 
-func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
+func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage, storageVersion uint64) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
 	hash := optimizedHash(image.Bytes)
-	if cached, ok := e.cached(hash); ok {
+	if !e.storageVersionCurrent(storageVersion) {
+		return "", false, false, false, errObjectStorageConfigChanged
+	}
+	if cached, ok := e.cached(hash, storageVersion); ok {
 		return cached, true, false, false, nil
 	}
 
-	channel := e.group.DoChan(hash, func() (any, error) {
-		if cached, ok := e.cached(hash); ok {
+	flightKey := hash
+	if _, ok := e.store.(versionedObjectStorage); ok {
+		flightKey = strconv.FormatUint(storageVersion, 10) + ":" + hash
+	}
+	channel := e.group.DoChan(flightKey, func() (any, error) {
+		if !e.storageVersionCurrent(storageVersion) {
+			return "", errObjectStorageConfigChanged
+		}
+		if cached, ok := e.cached(hash, storageVersion); ok {
 			return publishResult{URL: cached, CacheHit: true}, nil
 		}
 		select {
@@ -259,9 +306,9 @@ func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage) (url 
 		if !isFetchableAttachmentURL(published) {
 			return "", errors.New("attachment gateway: object storage returned a non-HTTPS URL")
 		}
-		e.mu.Lock()
-		e.published[hash] = publishedURL{URL: published, ExpiresAt: e.now().Add(e.config.URLCacheTTL)}
-		e.mu.Unlock()
+		if rememberErr := e.remember(hash, published, storageVersion); rememberErr != nil {
+			return "", rememberErr
+		}
 		return publishResult{URL: published, CacheHit: !didUpload, Uploaded: didUpload}, nil
 	})
 
@@ -280,19 +327,105 @@ func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage) (url 
 	}
 }
 
-func (e *URLExternalizer) cached(hash string) (string, bool) {
+func (e *URLExternalizer) remember(hash, published string, storageVersion uint64) error {
+	if !e.storageVersionCurrent(storageVersion) {
+		return errObjectStorageConfigChanged
+	}
 	now := e.now()
+	expiresAt := now.Add(e.config.URLCacheTTL)
+	if signedExpiry, ok := presignedURLExpiry(published); ok {
+		// Never hand out a URL from the process cache near its signing expiry.
+		// One minute is intentionally conservative relative to OpenAI fetch time.
+		safeExpiry := signedExpiry.Add(-time.Minute)
+		if safeExpiry.Before(expiresAt) {
+			expiresAt = safeExpiry
+		}
+	}
+	if !expiresAt.After(now) {
+		return errObjectStorageURLUnsafe
+	}
+	e.mu.Lock()
+	if _, ok := e.store.(versionedObjectStorage); ok && e.storeVersion != storageVersion {
+		e.mu.Unlock()
+		return errObjectStorageConfigChanged
+	}
+	e.published[hash] = publishedURL{URL: published, ExpiresAt: expiresAt}
+	e.mu.Unlock()
+	if !e.storageVersionCurrent(storageVersion) {
+		return errObjectStorageConfigChanged
+	}
+	return nil
+}
+
+func (e *URLExternalizer) syncStorageVersion() uint64 {
+	versioned, ok := e.store.(versionedObjectStorage)
+	if !ok {
+		return 0
+	}
+	version := versioned.CacheVersion()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if version == e.storeVersion {
+		return version
+	}
+	e.published = make(map[string]publishedURL)
+	e.storeVersion = version
+	return version
+}
+
+func (e *URLExternalizer) storageVersionCurrent(expected uint64) bool {
+	versioned, ok := e.store.(versionedObjectStorage)
+	return !ok || versioned.CacheVersion() == expected
+}
+
+func presignedURLExpiry(raw string) (time.Time, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	query := parsed.Query()
+	dateValue := query.Get("X-Amz-Date")
+	expiresValue := query.Get("X-Amz-Expires")
+	if dateValue == "" || expiresValue == "" {
+		return time.Time{}, false
+	}
+	signedAt, err := time.Parse("20060102T150405Z", dateValue)
+	if err != nil {
+		return time.Time{}, false
+	}
+	expiresSeconds, err := strconv.ParseInt(expiresValue, 10, 64)
+	if err != nil || expiresSeconds <= 0 {
+		return time.Time{}, false
+	}
+	return signedAt.Add(time.Duration(expiresSeconds) * time.Second), true
+}
+
+func (e *URLExternalizer) cached(hash string, storageVersion uint64) (string, bool) {
+	if !e.storageVersionCurrent(storageVersion) {
+		return "", false
+	}
+	now := e.now()
+	e.mu.Lock()
+	if _, ok := e.store.(versionedObjectStorage); ok && e.storeVersion != storageVersion {
+		e.mu.Unlock()
+		return "", false
+	}
 	entry, ok := e.published[hash]
 	if !ok {
+		e.mu.Unlock()
 		return "", false
 	}
 	if !now.Before(entry.ExpiresAt) {
 		delete(e.published, hash)
+		e.mu.Unlock()
 		return "", false
 	}
-	return entry.URL, true
+	url := entry.URL
+	e.mu.Unlock()
+	if !e.storageVersionCurrent(storageVersion) {
+		return "", false
+	}
+	return url, true
 }
 
 func (e *URLExternalizer) objectKey(hash, mimeType string) string {

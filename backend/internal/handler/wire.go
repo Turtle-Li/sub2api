@@ -18,6 +18,7 @@ func ProvideAdminHandlers(
 	announcementHandler *admin.AnnouncementHandler,
 	dataManagementHandler *admin.DataManagementHandler,
 	backupHandler *admin.BackupHandler,
+	attachmentGatewayHandler *admin.AttachmentGatewayHandler,
 	oauthHandler *admin.OAuthHandler,
 	openaiOAuthHandler *admin.OpenAIOAuthHandler,
 	geminiOAuthHandler *admin.GeminiOAuthHandler,
@@ -56,6 +57,7 @@ func ProvideAdminHandlers(
 		Announcement:           announcementHandler,
 		DataManagement:         dataManagementHandler,
 		Backup:                 backupHandler,
+		AttachmentGateway:      attachmentGatewayHandler,
 		OAuth:                  oauthHandler,
 		OpenAIOAuth:            openaiOAuthHandler,
 		GeminiOAuth:            geminiOAuthHandler,
@@ -122,7 +124,7 @@ func ProvideOpenAIGatewayHandler(
 	opsService *service.OpsService,
 	grokQuotaService *service.GrokQuotaService,
 	retryProtectionRegistrar service.OpenAIAbnormalRetryRegistrar,
-	imageStorage service.ImageStorage,
+	attachmentR2Service *service.AttachmentR2Service,
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
 ) *OpenAIGatewayHandler {
@@ -131,7 +133,7 @@ func ProvideOpenAIGatewayHandler(
 	h.securityAuditCoordinator = coordinator
 	h.grokMediaEligibilityProber = grokQuotaService
 	h.retryProtectionRegistrar = retryProtectionRegistrar
-	h.attachmentURLExternalizer = newResponsesAttachmentURLExternalizer(cfg, imageStorage)
+	h.attachmentURLExternalizer = newResponsesAttachmentURLExternalizer(cfg, attachmentR2Service)
 	return h
 }
 
@@ -240,6 +242,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAnnouncementHandler,
 	admin.NewDataManagementHandler,
 	admin.NewBackupHandler,
+	admin.NewAttachmentGatewayHandler,
 	admin.NewOAuthHandler,
 	admin.NewOpenAIOAuthHandler,
 	admin.NewGeminiOAuthHandler,

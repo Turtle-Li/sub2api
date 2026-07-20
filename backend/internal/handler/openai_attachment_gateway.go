@@ -230,6 +230,8 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		zap.Bool("budget_enforced", budgetEnforced),
 		zap.Float64("optimize_duration_ms", metrics.OptimizeDurationMS),
 		zap.Bool("url_rewrite_enabled", experiment.URLRewriteEnabled),
+		zap.Bool("url_storage_ready", urlMetrics.StorageReady),
+		zap.Bool("url_storage_unavailable", urlMetrics.StorageUnavailable),
 		zap.Int("url_externalized_count", urlMetrics.ExternalizedCount),
 		zap.Int("url_upload_count", urlMetrics.UploadCount),
 		zap.Int("url_cache_hits", urlMetrics.CacheHits),

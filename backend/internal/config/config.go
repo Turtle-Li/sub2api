@@ -783,9 +783,9 @@ type ImageConcurrencyConfig struct {
 type AttachmentGatewayConfig struct {
 	AttachmentOptimizerEnabled bool `mapstructure:"attachment_optimizer_enabled"`
 	AttachmentOptimizerDryRun  bool `mapstructure:"attachment_optimizer_dry_run"`
-	// URLRewriteEnabled externalizes optimized inline images to the configured
-	// S3-compatible image storage only while the scoped rollout is in rewrite.
-	// Dry-run never writes to object storage.
+	// URLRewriteEnabled externalizes optimized inline images through Attachment
+	// Gateway's independently persisted R2 config only while the scoped rollout
+	// is in rewrite. Dry-run never writes to object storage.
 	URLRewriteEnabled            bool   `mapstructure:"url_rewrite_enabled"`
 	URLRewriteMinBodyBytes       int    `mapstructure:"url_rewrite_min_body_bytes"`
 	URLUploadTimeoutMilliseconds int    `mapstructure:"url_upload_timeout_ms"`
@@ -2958,13 +2958,6 @@ func (c *Config) Validate() error {
 			}
 			if attachment.MaxConcurrentURLUploads <= 0 {
 				return fmt.Errorf("gateway.attachment_gateway.max_concurrent_url_uploads must be positive")
-			}
-			if !c.ImageStorage.IsConfigured() {
-				return fmt.Errorf("gateway.attachment_gateway.url_rewrite_enabled requires configured image_storage credentials")
-			}
-			if strings.TrimSpace(c.ImageStorage.PublicBaseURL) == "" && c.ImageStorage.PresignExpiry > 0 &&
-				attachment.URLCacheTTLSeconds >= c.ImageStorage.PresignExpiry*60*60 {
-				return fmt.Errorf("gateway.attachment_gateway.url_cache_ttl_seconds must be shorter than image_storage.presign_expiry_hours")
 			}
 		}
 		if attachment.RequestBudgetEnforce && !attachment.RequestBudgetEnabled {

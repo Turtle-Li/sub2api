@@ -72,6 +72,9 @@ func RegisterAdminRoutes(
 		// 数据库备份恢复
 		registerBackupRoutes(admin, h, stepUpAuth)
 
+		// Attachment Gateway 独立 R2 配置
+		registerAttachmentGatewayRoutes(admin, h, stepUpAuth)
+
 		// 运维监控（Ops）
 		registerOpsRoutes(admin, h)
 
@@ -597,6 +600,17 @@ func registerBackupRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAut
 
 		// 恢复操作：整库覆盖可回滚安全设置（含 step-up 开关本身）——要求 step-up 2FA
 		backup.POST("/:id/restore", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.RestoreBackup)
+	}
+}
+
+func registerAttachmentGatewayRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
+	attachmentGateway := admin.Group("/attachment-gateway")
+	{
+		attachmentGateway.GET("/r2-config", h.Admin.AttachmentGateway.GetR2Config)
+		// Changing the object destination or credentials can exfiltrate request
+		// attachments, so persistence requires the same step-up gate as backup S3.
+		attachmentGateway.PUT("/r2-config", gin.HandlerFunc(stepUpAuth), h.Admin.AttachmentGateway.UpdateR2Config)
+		attachmentGateway.POST("/r2-config/test", h.Admin.AttachmentGateway.TestR2Connection)
 	}
 }
 

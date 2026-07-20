@@ -65,3 +65,53 @@ func TestS3ImageStorageEnsureReusesExistingContentAddressedObject(t *testing.T) 
 	require.Equal(t, 1, putCalls)
 	mu.Unlock()
 }
+
+func TestS3ImageStorageProbeWritesReadsAndDeletesTemporaryObject(t *testing.T) {
+	var mu sync.Mutex
+	objects := map[string][]byte{}
+	methods := make([]string, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		methods = append(methods, r.Method)
+		switch r.Method {
+		case http.MethodPut:
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			objects[r.URL.Path] = body
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			body, ok := objects[r.URL.Path]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write(body)
+		case http.MethodDelete:
+			delete(objects, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	store, err := NewS3ImageStorage(context.Background(), &config.ImageStorageConfig{
+		Endpoint:        server.URL,
+		Region:          "auto",
+		Bucket:          "private-bucket",
+		AccessKeyID:     "test-access",
+		SecretAccessKey: "test-secret",
+		ForcePathStyle:  true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.Probe(context.Background(), "canary/.sub2api-connection-test/probe.txt"))
+
+	mu.Lock()
+	require.Equal(t, []string{http.MethodPut, http.MethodGet, http.MethodDelete}, methods)
+	require.Empty(t, objects)
+	mu.Unlock()
+}

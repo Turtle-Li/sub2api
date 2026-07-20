@@ -72,20 +72,26 @@ post-compression inline image bytes:
 - `url_rewrite_enabled: false` is the leaf switch;
 - it runs only for an explicitly scoped request while rollout mode is
   `rewrite`; `dry_run` never writes to object storage;
-- it reuses the existing S3-compatible `image_storage` credentials without
-  enabling async image tasks when `image_storage.enabled` remains false;
+- it uses the independent admin-managed `attachment_gateway_r2_config` setting;
+  backup S3 and async-image `image_storage` credentials are never reused;
+- secrets are encrypted with the existing server secret encryptor, reads are
+  redacted, and an empty secret on update preserves the prior encrypted value;
+- saved settings hot-reload immediately in the current process and within a
+  short refresh window in another active process;
 - deterministic SHA-256 object keys plus R2/S3 `HeadObject` avoid re-uploading
   the same optimized bytes after a process restart;
 - an in-memory URL cache reuses still-valid presigned URLs within the configured
-  window, and singleflight prevents concurrent upload stampedes;
+  window, never outlives the signature safety window, and is invalidated when
+  storage config changes; singleflight prevents concurrent upload stampedes;
 - storage errors, timeouts, non-HTTPS URLs and unsupported images fail open to
   the compressed data URL;
 - URLs, object keys, hashes, credentials and image contents are never logged.
 
-For private R2 buckets, leave `image_storage.public_base_url` empty. The
-existing S3 adapter then emits a short-lived presigned GET URL. Configure the
-bucket lifecycle separately so objects expire after the desired retention
-period.
+Configure the private bucket under System Settings > Attachment Gateway. The
+connection test writes, fetches through a presigned URL, and removes one tiny
+probe object without persisting submitted values. Use an Object Read & Write
+token scoped to that bucket; configure an R2 lifecycle rule separately so hash
+objects expire after the desired retention period.
 
 This package runs after the reverse proxy has accepted the request. It can
 reduce Sub2-to-upstream bytes but cannot fix a Caddy 413 that rejects the

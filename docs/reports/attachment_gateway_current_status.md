@@ -3,6 +3,11 @@
 更新时间：2026-07-20 21:03 CST
 范围：生产只读复核、admin 台式机 HTTP canary、最近 24 小时日志与本地报告整理。
 
+> 2026-07-21 00:20 本地开发补充：独立 Attachment Gateway R2 配置、管理后台专用入口和
+> 私有 presigned URL 外置 MVP 已完成自动回归；尚未 push、部署、填写真实凭证或改动
+> 生产开关。下面的“生产状态”和历史结论仍描述当前线上版本，线上仍只发送压缩后的
+> Base64，不使用 R2 URL。
+
 ## 1. 当前结论
 
 Attachment Gateway 已证明能够显著降低可压缩图片请求的 Sub2→OpenAI 上行体积，
@@ -258,3 +263,4 @@ scope 开 enforcement，避免误伤有效请求。
 - `docs/reports/data/attachment_gateway_production_canary_20260720.json`
 - `docs/reports/attachment_gateway_transport_r2_video.md`
 - `docs/reports/data/attachment_gateway_transparent_benchmark_20260720.json`
+- `docs/reports/attachment_gateway_r2_url_mvp.md`

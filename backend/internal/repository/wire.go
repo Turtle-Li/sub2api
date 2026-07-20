@@ -141,6 +141,7 @@ var ProviderSet = wire.NewSet(
 	// Backup infrastructure
 	NewPgDumper,
 	NewS3BackupStoreFactory,
+	NewAttachmentR2StoreFactory,
 
 	// Image storage (async image task result offload)
 	ProvideImageStorage,
@@ -177,12 +178,10 @@ func ProvideEnt(cfg *config.Config) (*ent.Client, error) {
 	return client, err
 }
 
-// ProvideImageStorage 提供图片结果与 Attachment Gateway 共用的对象存储实现。
-// 两个功能各有独立开关；只要任一功能启用且凭证齐全就构造客户端。
+// ProvideImageStorage only serves async image task result offload. Attachment
+// Gateway uses its independently persisted AttachmentR2Service configuration.
 func ProvideImageStorage(cfg *config.Config) (service.ImageStorage, error) {
-	attachmentURLActive := cfg.Gateway.AttachmentGateway.AttachmentOptimizerEnabled &&
-		cfg.Gateway.AttachmentGateway.URLRewriteEnabled
-	if !cfg.ImageStorage.IsConfigured() || (!cfg.ImageStorage.Enabled && !attachmentURLActive) {
+	if !cfg.ImageStorage.Active() {
 		return nil, nil
 	}
 	store, err := NewS3ImageStorage(context.Background(), &cfg.ImageStorage)
