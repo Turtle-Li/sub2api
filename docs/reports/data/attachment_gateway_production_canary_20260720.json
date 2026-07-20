@@ -275,6 +275,19 @@
     "canary_app_errors": 0,
     "canary_caddy_5xx": 0
   },
+  "network_download_probe": {
+    "direction": "public internet to server only",
+    "server_upload_tested": false,
+    "disk_written": false,
+    "cloudflare_single_connection_mbps": [9.3, 9.3, 9.3],
+    "vultr_tokyo_single_connection_mbps": 9.0,
+    "cloudflare_four_connection_aggregate_mbps": 8.6,
+    "inferred_downlink_class_mbps": 10,
+    "estimated_200mb_ingress_seconds": 178,
+    "estimated_256mb_ingress_seconds": 228,
+    "recommended_responses_ingress_limit_bytes": 200000000,
+    "production_limit_changed_by_probe": false
+  },
   "transport": {
     "desktop_codex_http_verified": true,
     "desktop_codex_openai_ws_mode": false,
