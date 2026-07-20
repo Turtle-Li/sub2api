@@ -1,0 +1,197 @@
+{
+  "date": "2026-07-20",
+  "production_commit": "17b7be8d11e88437302bb4cf05ed9a29e9348311",
+  "production_image": "sub2api:auto-20260720-1623-17b7be8d",
+  "scope": {
+    "allow_unscoped": false,
+    "allowed_api_key_ids": [27],
+    "allowed_user_ids": [1],
+    "allowed_group_ids": [],
+    "final_rollout_mode": "rewrite"
+  },
+  "release": {
+    "active_container": "sub2api-blue",
+    "healthy": true,
+    "app_5xx": 0,
+    "app_fatal": 0,
+    "caddy_5xx": 0,
+    "caddy_body_limit_bytes": 16000000
+  },
+  "method6_initial_canary": {
+    "stopped_before_rewrite": true,
+    "stop_reason": "two of three additional cold image formats reached the 5000 ms request budget",
+    "admin_cases": [
+      {
+        "name": "opaque_png",
+        "original_body_bytes": 1013836,
+        "optimized_body_bytes": 103589,
+        "forward_body_bytes": 1013836,
+        "optimize_duration_ms": 3624.886929,
+        "timed_out": false,
+        "errors": 0
+      },
+      {
+        "name": "jpeg",
+        "original_body_bytes": 754909,
+        "optimized_body_bytes": 754909,
+        "forward_body_bytes": 754909,
+        "optimize_duration_ms": 5000.872783,
+        "timed_out": true,
+        "errors": 0
+      },
+      {
+        "name": "webp",
+        "original_body_bytes": 1759087,
+        "optimized_body_bytes": 391215,
+        "forward_body_bytes": 1759087,
+        "optimize_duration_ms": 4146.786564,
+        "timed_out": false,
+        "errors": 0
+      },
+      {
+        "name": "transparent_png",
+        "original_body_bytes": 3305473,
+        "optimized_body_bytes": 3305473,
+        "forward_body_bytes": 3305473,
+        "optimize_duration_ms": 5000.160195,
+        "timed_out": true,
+        "errors": 0
+      }
+    ],
+    "observed_peak_cpu_percent": 102.25,
+    "observed_peak_rss_mib": 420.6,
+    "post_off_cpu_percent": 4.48,
+    "post_off_rss_mib": 84.43
+  },
+  "method0_canary": {
+    "dry_run_cases": [
+      {
+        "name": "opaque_png",
+        "original_body_bytes": 1013836,
+        "optimized_body_bytes": 112653,
+        "forward_body_bytes": 1013836,
+        "original_image_bytes": 725538,
+        "optimized_image_bytes": 49650,
+        "optimize_duration_ms": 1078.808981,
+        "cache_hit": false,
+        "timed_out": false,
+        "errors": 0
+      },
+      {
+        "name": "jpeg",
+        "original_body_bytes": 754909,
+        "optimized_body_bytes": 754909,
+        "forward_body_bytes": 754909,
+        "original_image_bytes": 531361,
+        "optimized_image_bytes": 0,
+        "optimize_duration_ms": 1819.576598,
+        "cache_hit": false,
+        "skipped_not_smaller": 1,
+        "timed_out": false,
+        "errors": 0
+      },
+      {
+        "name": "webp",
+        "original_body_bytes": 1759087,
+        "optimized_body_bytes": 408591,
+        "forward_body_bytes": 1759087,
+        "original_image_bytes": 1284490,
+        "optimized_image_bytes": 271620,
+        "optimize_duration_ms": 1326.85823,
+        "cache_hit": false,
+        "timed_out": false,
+        "errors": 0
+      },
+      {
+        "name": "transparent_png_lossless",
+        "original_body_bytes": 3305473,
+        "optimized_body_bytes": 2908030,
+        "forward_body_bytes": 3305473,
+        "original_image_bytes": 2444324,
+        "optimized_image_bytes": 2146240,
+        "optimize_duration_ms": 3149.891655,
+        "cache_hit": false,
+        "timed_out": false,
+        "errors": 0
+      }
+    ],
+    "warm_rewrite_cases": [
+      {
+        "name": "opaque_png",
+        "forward_body_bytes": 112653,
+        "optimize_duration_ms": 86.953086,
+        "cache_hits": 1,
+        "payload_rewritten": true
+      },
+      {
+        "name": "jpeg",
+        "forward_body_bytes": 754909,
+        "optimize_duration_ms": 1461.679727,
+        "cache_hits": 0,
+        "skipped_not_smaller": 1,
+        "payload_rewritten": false
+      },
+      {
+        "name": "webp",
+        "forward_body_bytes": 408591,
+        "optimize_duration_ms": 154.112714,
+        "cache_hits": 1,
+        "payload_rewritten": true
+      },
+      {
+        "name": "transparent_png_lossless",
+        "forward_body_bytes": 2908030,
+        "optimize_duration_ms": 347.00358,
+        "cache_hits": 1,
+        "payload_rewritten": true
+      }
+    ],
+    "five_image_http": {
+      "original_body_bytes": 7662531,
+      "optimized_body_bytes": 4112226,
+      "forward_body_bytes": 4112226,
+      "image_count": 5,
+      "optimized_image_count": 4,
+      "cache_hits": 4,
+      "skipped_not_smaller": 1,
+      "optimize_duration_ms": 2602.654749,
+      "timed_out": false,
+      "errors": 0
+    },
+    "repeated_large_http": {
+      "original_body_bytes": 13749545,
+      "optimized_body_bytes": 2945577,
+      "forward_body_bytes": 2945577,
+      "image_count": 8,
+      "optimized_image_count": 8,
+      "cache_hits": 8,
+      "optimize_duration_ms": 984.384668,
+      "timed_out": false,
+      "errors": 0
+    },
+    "known_answer_quality": {
+      "opaque_png": "exact",
+      "jpeg": "exact",
+      "webp": "exact",
+      "transparent_png": "exact",
+      "five_image_request": "exact",
+      "eight_identical_image_request": "exact"
+    },
+    "post_request_cpu_percent": 2.53,
+    "post_request_rss_mib": 113.6
+  },
+  "transport": {
+    "desktop_codex_http_verified": true,
+    "desktop_codex_openai_ws_mode": false,
+    "production_ws_requests_observed_last_2h": 0,
+    "read_upstream_events_during_canary": 0,
+    "write_upstream_events_during_canary": 0,
+    "real_ws_quality_verdict": "not_observed",
+    "automated_ws_passthrough_and_ctx_pool_regression": "passed"
+  },
+  "known_gaps": [
+    "The target API key had no new request after rewrite was enabled, so its next real large request is still pending observation.",
+    "JPEG outputs that are not at least 5 percent smaller are safely passed through but do not have a negative-result cache.",
+    "No real Responses WebSocket traffic was available; production WS stability is not claimed from this HTTP canary."
+  ]
+}

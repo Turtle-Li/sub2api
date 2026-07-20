@@ -1,7 +1,28 @@
 # Attachment Gateway 生产内部灰度运行手册
 
 日期：2026-07-20
-执行状态：**未执行**。必须等用户醒来并明确开始后再连接服务器、push 或发布。
+执行状态：**HTTP scoped canary 已执行**。method 6 触发停止线后已回退；method 0 修正
+完成发布、dry-run、rewrite、真实图片 A/B 与缓存验证。Key 27 + admin user 1 保持精确
+范围，普通用户未开启。真实 WS 流量尚未出现。
+
+## 0. 执行摘要
+
+- 活跃版本：`17b7be8d11e88437302bb4cf05ed9a29e9348311`；蓝绿发布与健康审计通过；
+- 当前范围：`allowed_api_key_ids=[27]`、`allowed_user_ids=[1]`、
+  `allow_unscoped=false`；
+- 当前模式：`rewrite`；控制文件为 0600，属主与应用配置一致，应用 UID 可读；
+- 近 14 MB 重复 HTTP：13,749,545 → 2,945,577 B，8 个 cache hit，984.4 ms；
+- 原图/rewrite：PNG、JPEG、WebP、透明 PNG、5 图和 8 重复图的固定答案全部一致；
+- WS：桌面客户端相关 feature 已移除，生产最近 2 小时无 WS usage，不能给出真实 WS
+  稳定性结论；自动化 passthrough/ctx_pool 矩阵通过。
+
+首次切 `dry_run` 时发现控制文件由 root 原子创建为 `root:root 0600`，应用 UID 1000
+无法读取，因而正确 fail-closed 为 `off`。修正为继承 `config.yaml` 属主后生效。以后所有
+原子切换都必须同时保留原属主、0600 权限并用应用 UID 回读验证。
+
+第一轮 method 6 中 JPEG 和透明 PNG 达到 5 秒预算，因此按第 8 节立即关闭。method 0
+保持 q85/q90/lossless，仅改变 libwebp 速度/搜索强度，随后四格式均在预算内。完整指标见
+`docs/reports/data/attachment_gateway_production_canary_20260720.json`。
 
 ## 1. 灰度目标与边界
 
