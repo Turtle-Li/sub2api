@@ -164,6 +164,7 @@ else
     printf 'SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL=%s\n' "$UPSTREAM_REPO_URL"
     printf 'SUB2API_AUTODEPLOY_UPSTREAM_BRANCH=%s\n' 'main'
     printf 'SUB2API_PUBLIC_HEALTH_URL=%s\n' "$HEALTH_URL"
+    printf 'SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS=%s\n' '900'
     printf 'SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS=%s\n' '1800'
   } >"$config_temp"
   install -D -m 600 "$config_temp" "$CONFIG_FILE"

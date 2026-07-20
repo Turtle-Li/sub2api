@@ -50,6 +50,12 @@ the active color from Caddy and selects only an absent or stopped target. If
 every other color is still running, it stops safely instead of interrupting a
 drain container.
 
+Concurrent release checks wait up to
+`SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS` (900 seconds by default). Lock timeouts
+and same-candidate failure cooldowns exit nonzero so GitHub reports that no
+release occurred; only an already-successful source fingerprint is a clean
+no-op.
+
 Install the dedicated forced-command account before adding the key to GitHub:
 
 ```bash

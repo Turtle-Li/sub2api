@@ -41,6 +41,7 @@ UPSTREAM_BRANCH="${SUB2API_AUTODEPLOY_UPSTREAM_BRANCH:-main}"
 MERGE_UPSTREAM="${SUB2API_AUTODEPLOY_MERGE_UPSTREAM:-false}"
 
 PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://www.turtleligpt.com/health}"
+LOCK_WAIT_SECONDS="${SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS:-900}"
 FAILURE_RETRY_SECONDS="${SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS:-1800}"
 RELEASE_LOG_ROOT="${SUB2API_RELEASE_LOG_DIR:-/var/log/sub2api-release}"
 GIT_FETCH_FILTER="${SUB2API_AUTODEPLOY_GIT_FETCH_FILTER:-blob:none}"
@@ -206,6 +207,9 @@ require_bool SUB2API_AUTODEPLOY_MERGE_UPSTREAM "$MERGE_UPSTREAM"
 case "$FAILURE_RETRY_SECONDS" in
   ''|*[!0-9]*) die "SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS must be a non-negative integer" ;;
 esac
+case "$LOCK_WAIT_SECONDS" in
+  ''|*[!0-9]*) die "SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS must be a non-negative integer" ;;
+esac
 [ -n "$PRODUCTION_REPO_URL" ] || die "SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL is required"
 [ -x "$RELEASE_HELPER" ] || die "release helper is missing or not executable: ${RELEASE_HELPER}"
 
@@ -218,9 +222,8 @@ fi
 
 mkdir -p "$STATE_ROOT" "$WORK_ROOT"
 exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  log "Another automatic release check is already running; skipping"
-  exit 0
+if ! flock -w "$LOCK_WAIT_SECONDS" 9; then
+  die "another automatic release check is still running after ${LOCK_WAIT_SECONDS}s; no release was attempted"
 fi
 
 if [ ! -d "${REPO_DIR}/.git" ]; then
@@ -282,8 +285,8 @@ if [ "$FORCE" != "true" ]; then
   if [ "$failed_fingerprint" = "$FINGERPRINT" ] \
     && [[ "$failed_at" =~ ^[0-9]+$ ]] \
     && [ $((now_epoch - failed_at)) -lt "$FAILURE_RETRY_SECONDS" ]; then
-    log "The same candidate failed recently; retrying after ${FAILURE_RETRY_SECONDS}s or with --force"
-    exit 0
+    retry_after=$((FAILURE_RETRY_SECONDS - (now_epoch - failed_at)))
+    die "the same candidate failed recently; release is cooling down for another ${retry_after}s (use --force only after diagnosing the earlier failure)"
   fi
 fi
 
