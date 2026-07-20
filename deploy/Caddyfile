@@ -79,8 +79,16 @@ api.sub2api.com {
 	# =========================================================================
 	# 请求大小限制 (防止大文件攻击)
 	# =========================================================================
-	request_body {
-		max_size 256MB
+	# Responses accepts large multimodal JSON up to 100 MB. Keep every other
+	# endpoint at 16 MB so this exception cannot widen the general attack
+	# surface. WebSocket message frames are bounded independently by Sub2API.
+	@responses_request_body path /v1/responses /v1/responses/* /responses /responses/*
+	request_body @responses_request_body {
+		max_size 100MB
+	}
+	@non_responses_request_body not path /v1/responses /v1/responses/* /responses /responses/*
+	request_body @non_responses_request_body {
+		max_size 16MB
 	}
 
 	# =========================================================================

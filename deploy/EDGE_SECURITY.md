@@ -15,6 +15,9 @@ terminate healthy long generations and streams.
   image, video, and batch-image endpoints.
 - `gateway.text_max_body_size: 33554432` limits the known pure-text
   `/embeddings` and `/alpha/search` endpoints to 32 MiB.
+- The bundled Caddy baseline accepts at most 100 MB on Responses routes and
+  16 MB on every other route. Responses WebSocket frames use the matching
+  100,000,000-byte application read limit instead of Caddy's HTTP-body limit.
 - H2C defaults to 50 concurrent streams per connection, a 2 MiB connection
   upload window, and a 512 KiB stream upload window.
 - Invalid credential abuse is limited in process by trusted client IP (IPv6
