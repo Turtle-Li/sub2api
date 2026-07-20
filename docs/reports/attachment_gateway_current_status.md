@@ -1,6 +1,6 @@
 # Sub2 Attachment Gateway 当前进度与问题报告
 
-更新时间：2026-07-20 20:20 CST
+更新时间：2026-07-20 21:03 CST
 范围：生产只读复核、admin 台式机 HTTP canary、最近 24 小时日志与本地报告整理。
 
 ## 1. 当前结论
@@ -224,7 +224,7 @@ scope 开 enforcement，避免误伤有效请求。
 
 ## 8. 建议与下一步
 
-当前建议：**保持现状继续观察，不全量、不接 R2、不打开 request-budget enforce。**
+当前建议：**保持生产现状继续观察，不全量、不立即接生产 R2、不打开 request-budget enforce。**
 
 1. 等 API Key 27 下一笔真实图片大请求，记录压缩率、cache hit、状态、retry 与 TTFT。
 2. 有可控客户端时补 HTTP / ctx_pool 的真实 A/B；此前不宣称 WS 生产验证完成。
@@ -232,8 +232,22 @@ scope 开 enforcement，避免误伤有效请求。
 4. 将 Responses 公网绝对入口从 256MB 收紧到 200MB，并在扩大 scope 前增加大 body
    并发、速率和 RSS 告警。
 5. 累积 `budget_would_reject` 样本后，再评估仅对当前 scope 开启请求级 enforce。
-6. R2/URL 化暂不需要；当前 data URL + 本地 hash 缓存已经证明能解决主要 TX 问题。
+6. R2/URL 化进入下一阶段实验候选，优先覆盖复杂透明图、压不动的图片和未来客户端直传；
+   先做私有 bucket + 短时签名 URL canary，不直接接生产。
 7. ctx_pool 继续独立推进；它解决上下文/连接复用，不能替代附件压缩。
+
+### 8.1 21:03 补充：HTTP 入站、透明 PNG、R2 与视频
+
+- Caddy 网络层可边收边代理，但 Responses handler 会先完整读取 JSON；服务端图片压缩
+  不能缩短用户第一次上传到 Sub2 的时间，`stream=true` 只影响 SSE 响应。
+- 本地透明图策略比较证明：`Exact=false` 对“完全透明像素含隐藏 RGB”的样本可在 alpha
+  与黑/白背景合成误差为 0 时，把 8.41MB 降到 2.17MB，并把编码从约 491ms 降到
+  197ms。本地候选已修改 encoder ID，普通与 `nodynamic` 全量测试均通过，尚未发布生产。
+- 高熵半透明样本 lossless 基本无收益；q90/q95 虽下降约 57%-60%，可见 RGB 误差过高，
+  不适合作为默认规则。该类应原样 + R2 URL，而不是强制有损。
+- Responses 支持图片 URL 和文件 URL，但没有原生 `input_video`；大视频应直传 R2 后异步
+  抽帧和 ASR，再发送帧与字幕。R2 只存原视频并不能让 Codex 原生观看。
+- 详细数据与方案见 `docs/reports/attachment_gateway_transport_r2_video.md`。
 
 ## 9. 关联报告
 
@@ -242,3 +256,5 @@ scope 开 enforcement，避免误伤有效请求。
 - `docs/reports/attachment_gateway_next_step.md`
 - `docs/reports/attachment_optimizer_test.md`
 - `docs/reports/data/attachment_gateway_production_canary_20260720.json`
+- `docs/reports/attachment_gateway_transport_r2_video.md`
+- `docs/reports/data/attachment_gateway_transparent_benchmark_20260720.json`

@@ -254,6 +254,30 @@ func TestTransparentImageUsesLosslessPolicyAndPreservesAlpha(t *testing.T) {
 	require.Less(t, alpha, uint32(0xffff))
 }
 
+func TestTransparentLosslessDiscardsOnlyInvisibleRGB(t *testing.T) {
+	source := makeHiddenRGBTransparentImage(640, 420)
+	encoder := libwebpEncoder{}
+	nonExact, err := encoder.Encode(source, encodeOptions{Quality: 100, Lossless: true})
+	require.NoError(t, err)
+
+	var exact bytes.Buffer
+	require.NoError(t, webp.Encode(&exact, source, webp.Options{
+		Quality:  100,
+		Lossless: true,
+		Method:   webpEncoderMethod,
+		Exact:    true,
+	}))
+	require.Less(t, len(nonExact), exact.Len())
+
+	decodedAll, err := webp.DecodeAll(bytes.NewReader(nonExact))
+	require.NoError(t, err)
+	require.NotEmpty(t, decodedAll.Image)
+	decoded := decodedAll.Image[0]
+	require.Zero(t, meanAbsoluteAlphaError(source, decoded))
+	require.LessOrEqual(t, compositedRGBRMSE(source, decoded, 0), 0.5)
+	require.LessOrEqual(t, compositedRGBRMSE(source, decoded, 255), 0.5)
+}
+
 func TestCodeAndUIScreenshotHeuristicUsesConservativeQuality(t *testing.T) {
 	image := image.NewNRGBA(image.Rect(0, 0, 900, 600))
 	for y := 0; y < image.Bounds().Dy(); y++ {

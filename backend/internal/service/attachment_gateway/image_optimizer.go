@@ -19,7 +19,7 @@ const (
 	// production-sized fixtures retain the required savings with substantially
 	// less CPU and allocation than the exhaustive method 6 search.
 	webpEncoderMethod = 0
-	webpEncoderID     = "gen2brain-webp-v0.6.4-method0"
+	webpEncoderID     = "gen2brain-webp-v0.6.4-method0-nonexact"
 )
 
 type libwebpEncoder struct{}
@@ -32,7 +32,12 @@ func (libwebpEncoder) Encode(source image.Image, options encodeOptions) ([]byte,
 		Quality:  options.Quality,
 		Lossless: options.Lossless,
 		Method:   webpEncoderMethod,
-		Exact:    true,
+		// Exact only preserves RGB values under fully transparent pixels.
+		// Those values are invisible after alpha compositing, but retaining
+		// them can make exported design assets several times larger and slower
+		// to encode. Alpha and every visible pixel remain covered by the
+		// selected lossless/lossy policy.
+		Exact: false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("attachment gateway: encode WebP: %w", err)
