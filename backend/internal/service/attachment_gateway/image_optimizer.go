@@ -13,7 +13,14 @@ import (
 	webp "github.com/gen2brain/webp"
 )
 
-const webpEncoderID = "gen2brain-webp-v0.6.4-method6"
+const (
+	// Attachment optimization sits directly on the request path. Method 0
+	// keeps libwebp's quality setting while favoring bounded encode latency;
+	// production-sized fixtures retain the required savings with substantially
+	// less CPU and allocation than the exhaustive method 6 search.
+	webpEncoderMethod = 0
+	webpEncoderID     = "gen2brain-webp-v0.6.4-method0"
+)
 
 type libwebpEncoder struct{}
 
@@ -24,7 +31,7 @@ func (libwebpEncoder) Encode(source image.Image, options encodeOptions) ([]byte,
 	err := webp.Encode(&output, source, webp.Options{
 		Quality:  options.Quality,
 		Lossless: options.Lossless,
-		Method:   6,
+		Method:   webpEncoderMethod,
 		Exact:    true,
 	})
 	if err != nil {

@@ -10,6 +10,17 @@
   release configuration read-only. Do not assume the production branch or
   active container from local state.
 
+## Windows desktop test client
+
+- Connect only through the configured SSH alias `turtle-windows`; do not copy
+  its address, port, credentials, or relay details into repository files.
+- This host is an authorized real-client canary source for Sub2API HTTP/WS and
+  attachment tests. Keep work inside a dedicated temporary test directory and
+  do not install, remove, or change unrelated desktop software or user files.
+- Never print or copy Codex/API credentials. Use the desktop's existing client
+  configuration and report only numeric Sub2 IDs plus privacy-safe byte/count,
+  cache, timing, status, and transport metrics.
+
 ## Release boundary
 
 - The documented production path is the event-driven blue-green release in
