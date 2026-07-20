@@ -43,6 +43,13 @@ the repository secrets `SUB2API_DEPLOY_SSH_KEY`, `SUB2API_DEPLOY_HOST`,
 `/etc/sub2api-autodeploy.env`, and server logs are stored in
 `/var/log/sub2api-release/`.
 
+The production helper recognizes `sub2api-blue`, `sub2api-green`, and the
+legacy `sub2api` application name. Long-lived Responses WebSocket connections
+can keep an old color draining across a later release, so the helper resolves
+the active color from Caddy and selects only an absent or stopped target. If
+every other color is still running, it stops safely instead of interrupting a
+drain container.
+
 Install the dedicated forced-command account before adding the key to GitHub:
 
 ```bash

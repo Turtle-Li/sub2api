@@ -1,0 +1,11 @@
+{
+  "attachment_optimizer_enabled": false,
+  "threshold_bytes": 524288,
+  "max_image_bytes": 67108864,
+  "quality": 85,
+  "min_savings_ratio": 0.05,
+  "cache_dir": "image_cache",
+  "ttl_seconds": 604800,
+  "replacement_mode": "data_url",
+  "public_base_url": ""
+}

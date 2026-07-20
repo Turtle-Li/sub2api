@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	attachmentgateway "github.com/Wei-Shaw/sub2api/internal/service/attachment_gateway"
 
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -41,9 +42,15 @@ type OpenAIGatewayHandler struct {
 	retryProtectionRedis       *redis.Client
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter
+	attachmentOptimizer        responsesAttachmentOptimizer
 	retryProtectionCache       openAIAbnormalRetryRuntimeCache
 	maxAccountSwitches         int
 	cfg                        *config.Config
+}
+
+type responsesAttachmentOptimizer interface {
+	Enabled() bool
+	Optimize(context.Context, []byte) attachmentgateway.Result
 }
 
 type grokMediaEligibilityProber interface {
@@ -167,6 +174,7 @@ func NewOpenAIGatewayHandler(
 		opsService:               opsService,
 		concurrencyHelper:        NewConcurrencyHelper(concurrencyService, SSEPingFormatComment, pingInterval),
 		imageLimiter:             &imageConcurrencyLimiter{},
+		attachmentOptimizer:      newResponsesAttachmentOptimizer(cfg),
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
 	}
@@ -313,7 +321,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
-	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	seedOpenAIForwardImageIntentHint(c, channelMapping.Mapped, imageIntent)
 
 	// 提前校验 function_call_output 是否具备可关联上下文，避免上游 400。
@@ -352,6 +359,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.handleStreamingAwareError(c, status, code, message, streamStarted)
 		return
 	}
+
+	// Attachment Gateway Phase 1 runs once per logical request, after auth,
+	// retry protection, audit and billing, but before the account failover loop.
+	// The original body remains the source of all security/session fingerprints.
+	forwardBody := body
+	if requestPlatform == service.PlatformOpenAI && isBareOpenAIResponsesPath(c) {
+		forwardBody = h.optimizeResponsesAttachments(c.Request.Context(), reqLog, apiKey, body)
+	}
+	forwardBody = openAIModelMappedBody(forwardBody, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 
 	// Generate session hash (header first; fallback to prompt_cache_key)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
@@ -1588,6 +1604,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		firstMessage,
 		openAIWSIngressFallbackSessionSeed(subject.UserID, apiKey.ID, apiKey.GroupID),
 	)
+	// Phase 1 covers the first response.create frame for ctx_pool/passthrough
+	// ingress. Security audit and session hashing above intentionally keep using
+	// the original bytes. Subsequent turns remain unchanged in this phase.
+	forwardFirstMessage := firstMessage
+	if requestPlatform == service.PlatformOpenAI {
+		forwardFirstMessage = h.optimizeResponsesAttachments(ctx, reqLog, apiKey, firstMessage)
+	}
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
@@ -1859,9 +1882,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		// 应用渠道模型映射到 WebSocket 首条消息
-		wsFirstMessage := firstMessage
+		wsFirstMessage := forwardFirstMessage
 		if channelMappingWS.Mapped {
-			wsFirstMessage = h.gatewayService.ReplaceModelInBody(firstMessage, channelMappingWS.MappedModel)
+			wsFirstMessage = h.gatewayService.ReplaceModelInBody(forwardFirstMessage, channelMappingWS.MappedModel)
 		}
 		// 切组/会话失配防护：previous_response_id 未在当前分组命中粘连账号（StickyPreviousHit=false），
 		// 说明该会话链不属于本次调度到的账号，原样转发会触发上游会话链鉴权失败（“鉴权失败，请检查 API Key”）。

@@ -179,6 +179,40 @@ gateway:
   # Pure-text endpoint body limit (embeddings and alpha/search), default 32 MiB.
   # 纯文本端点请求体上限（embeddings、alpha/search），默认 32 MiB。
   text_max_body_size: 33554432
+  # Experimental Responses attachment optimizer. Phase 1 is intentionally off.
+  # Responses 图片附件优化实验。Phase 1 默认关闭，不改变现有转发行为。
+  attachment_gateway:
+    attachment_optimizer_enabled: false
+    # Safe rollout: measure/cache only and keep the original upstream payload.
+    # 安全灰度：只测量和缓存，仍向上游发送原始 payload。
+    attachment_optimizer_dry_run: true
+    # Optional live switch containing exactly: off, dry_run, or rewrite.
+    # 配置后，文件缺失或内容非法会安全回退为 off，无需重启即可切换灰度模式。
+    rollout_control_file: ""
+    # Keep false in production; explicitly list internal API keys/groups below.
+    # 生产保持 false，并显式填写内部测试 API key/group ID。
+    allow_unscoped: false
+    allowed_api_key_ids: []
+    # Explicit users are useful for an admin's rotating local-test keys.
+    # 可显式允许管理员用户的全部本地测试 Key，仍不会扩到普通用户。
+    allowed_user_ids: []
+    allowed_group_ids: []
+    optimize_timeout_ms: 5000
+    threshold_bytes: 524288
+    max_image_bytes: 67108864
+    max_total_image_bytes_per_request: 67108864
+    max_pixels: 50000000
+    quality: 85
+    # Transparent images use lossless WebP; likely code/UI screenshots use this quality.
+    # 透明图使用无损 WebP；疑似代码/UI 截图使用此质量。
+    special_quality: 90
+    min_savings_ratio: 0.05
+    cache_dir: "data/attachment_cache"
+    cache_ttl_seconds: 604800
+    cache_max_bytes: 536870912
+    cache_cleanup_interval_seconds: 600
+    max_images_per_request: 20
+    max_concurrent_encodes: 2
   # Max bytes to read for non-stream upstream responses (default: 8MB)
   # 非流式上游响应体读取上限（默认 8MB）
   upstream_response_read_max_bytes: 8388608

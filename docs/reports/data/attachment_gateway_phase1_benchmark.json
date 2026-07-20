@@ -1,0 +1,113 @@
+{
+  "date": "2026-07-20",
+  "environment": {
+    "os": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M1 Pro",
+    "benchmark_mode": "one iteration for cold/warm scenario snapshots"
+  },
+  "commands": {
+    "scenarios": "go test ./internal/service/attachment_gateway -run '^$' -bench '^BenchmarkPhase1Scenarios$' -benchtime=1x -benchmem -count=1",
+    "loopback": "go test ./internal/service/attachment_gateway -run '^$' -bench '^BenchmarkPhase1LoopbackForward$' -benchtime=5x -benchmem -count=1",
+    "quality": "go test -v ./internal/service/attachment_gateway -run '^TestQuality'"
+  },
+  "scenarios": [
+    {
+      "name": "one_large_png",
+      "original_body_bytes": 14590515,
+      "optimized_body_bytes": 1577556,
+      "saved_percent": 89.19,
+      "cold_ns_per_op": 3783019667,
+      "cold_bytes_per_op": 293295848,
+      "cold_allocs_per_op": 214142,
+      "warm_ns_per_op": 182877083,
+      "warm_bytes_per_op": 49237416,
+      "warm_allocs_per_op": 45,
+      "warm_cache_hits": 1,
+      "theoretical_upload_seconds_at_5_mbps_original": 23.344824,
+      "theoretical_upload_seconds_at_5_mbps_optimized": 2.52409
+    },
+    {
+      "name": "five_images",
+      "original_body_bytes": 12241951,
+      "optimized_body_bytes": 1340404,
+      "saved_percent": 89.05,
+      "cold_ns_per_op": 3186434500,
+      "cold_bytes_per_op": 254116632,
+      "cold_allocs_per_op": 494884,
+      "warm_ns_per_op": 150182541,
+      "warm_bytes_per_op": 41500968,
+      "warm_allocs_per_op": 200,
+      "warm_cache_hits": 5,
+      "theoretical_upload_seconds_at_5_mbps_original": 19.587122,
+      "theoretical_upload_seconds_at_5_mbps_optimized": 2.144646
+    },
+    {
+      "name": "large_plus_1m_context",
+      "original_body_bytes": 15639091,
+      "optimized_body_bytes": 2626132,
+      "saved_percent": 83.21,
+      "cold_ns_per_op": 3798996500,
+      "cold_bytes_per_op": 295384384,
+      "cold_allocs_per_op": 214029,
+      "warm_ns_per_op": 183695750,
+      "warm_bytes_per_op": 51334632,
+      "warm_allocs_per_op": 45,
+      "warm_cache_hits": 1,
+      "theoretical_upload_seconds_at_5_mbps_original": 25.022546,
+      "theoretical_upload_seconds_at_5_mbps_optimized": 4.201811
+    }
+  ],
+  "loopback_forward": {
+    "samples_per_case": 5,
+    "original_body_ns_per_op": 5921542,
+    "optimized_body_ns_per_op": 758050,
+    "note": "127.0.0.1 HTTP sink only; not an upstream latency measurement"
+  },
+  "quality": {
+    "code_ocr": [
+      {
+        "quality": 85,
+        "optimized_bytes": 22558,
+        "similarity_to_original_tesseract_output": 0.9799
+      },
+      {
+        "quality": 90,
+        "optimized_bytes": 25078,
+        "similarity_to_original_tesseract_output": 0.9698
+      }
+    ],
+    "ui_edge_f1": [
+      {
+        "quality": 85,
+        "score": 1.0
+      },
+      {
+        "quality": 90,
+        "score": 1.0
+      }
+    ],
+    "photo_psnr_db": [
+      {
+        "quality": 85,
+        "optimized_bytes": 73460,
+        "score": 29.03
+      },
+      {
+        "quality": 90,
+        "optimized_bytes": 120828,
+        "score": 29.31
+      }
+    ],
+    "limitation": "Offline OCR and structural proxies only; no real vision-model semantic A/B was called"
+  },
+  "safety": {
+    "production_requests": 0,
+    "openai_requests": 0,
+    "remote_server_connections": 0,
+    "external_network_targets": 0,
+    "loopback_only": true,
+    "production_config_modified": false,
+    "caddy_modified": false
+  }
+}

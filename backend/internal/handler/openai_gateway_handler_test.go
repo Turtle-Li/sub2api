@@ -1483,9 +1483,11 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 }
 
 type openAIResponsesWSUsageLogCase struct {
-	firstPayload   string
-	userAgent      *string
-	channelMapping map[string]string
+	firstPayload      string
+	userAgent         *string
+	channelMapping    map[string]string
+	wsMode            string
+	attachmentGateway *config.AttachmentGatewayConfig
 }
 
 type openAIResponsesWSUsageLogResult struct {
@@ -2127,6 +2129,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		defer func() {
 			_ = conn.CloseNow()
 		}()
+		conn.SetReadLimit(4 * 1024 * 1024)
 
 		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
 		msgType, payload, readErr := conn.Read(readCtx)
@@ -2150,12 +2153,16 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			upstreamErrCh <- writeErr
 			return
 		}
-		_ = conn.Close(coderws.StatusNormalClosure, "done")
 		upstreamErrCh <- nil
+		_ = conn.CloseNow()
 	}))
 	defer upstreamServer.Close()
 
 	groupID := int64(4201)
+	wsMode := tc.wsMode
+	if wsMode == "" {
+		wsMode = service.OpenAIWSIngressModePassthrough
+	}
 	account := service.Account{
 		ID:          9901,
 		Name:        "openai-ws-passthrough-usage-e2e",
@@ -2170,7 +2177,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		},
 		Extra: map[string]any{
 			"openai_apikey_responses_websockets_v2_enabled": true,
-			"openai_apikey_responses_websockets_v2_mode":    service.OpenAIWSIngressModePassthrough,
+			"openai_apikey_responses_websockets_v2_mode":    wsMode,
 		},
 	}
 
@@ -2186,6 +2193,9 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+	if tc.attachmentGateway != nil {
+		cfg.Gateway.AttachmentGateway = *tc.attachmentGateway
+	}
 
 	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account}
 	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 1)}
@@ -2243,6 +2253,8 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		billingCacheService: billingCacheSvc,
 		apiKeyService:       &service.APIKeyService{},
 		concurrencyHelper:   NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Second),
+		attachmentOptimizer: newResponsesAttachmentOptimizer(cfg),
+		cfg:                 cfg,
 	}
 
 	apiKey := &service.APIKey{

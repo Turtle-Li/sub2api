@@ -1,0 +1,546 @@
+{
+  "environment": {
+    "machine": "arm64",
+    "numpy": "2.4.6",
+    "pillow": "12.2.0",
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "python": "3.11.4",
+    "tool_versions": {
+      "cwebp": "1.6.0",
+      "oxipng": "oxipng 10.1.1",
+      "pngquant": "3.0.3",
+      "tesseract": "tesseract 5.5.2",
+      "zopflipng": "ZopfliPNG, a Portable Network Graphics (PNG) image optimizer."
+    }
+  },
+  "fixtures": {
+    "code": {
+      "bytes": 87427,
+      "dimensions": [
+        1800,
+        1100
+      ],
+      "filename": "code.png"
+    },
+    "large": {
+      "bytes": 10579969,
+      "dimensions": [
+        2500,
+        2100
+      ],
+      "filename": "large.png"
+    },
+    "photo": {
+      "bytes": 1476604,
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "filename": "ChatGPT Image 2026年6月14日 02_04_36.png"
+    },
+    "screenshot": {
+      "bytes": 286665,
+      "dimensions": [
+        1365,
+        900
+      ],
+      "filename": "admin-network-screenshot.png"
+    }
+  },
+  "generated_at": "2026-07-19T22:12:47Z",
+  "payload_scenarios": [
+    {
+      "caddy_10mb_status_if_pre_ingress_optimized": 200,
+      "caddy_10mb_status_without_pre_ingress_optimizer": 413,
+      "cold_optimizer": {
+        "cache_hits": 0,
+        "elapsed_ms": 1351.8516670155805,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 1,
+        "images_optimized": 1,
+        "input_body_bytes": 14106892,
+        "optimized_image_bytes": 771930,
+        "original_image_bytes": 10579969,
+        "output_body_bytes": 1029505,
+        "skipped_below_threshold": 0,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      },
+      "data_url_saved_percent": 92.702,
+      "image_count": 1,
+      "long_context_bytes": 0,
+      "loopback_optimized": {
+        "max_ms": 1.455,
+        "median_ms": 0.967,
+        "min_ms": 0.801,
+        "samples": 5
+      },
+      "loopback_original": {
+        "max_ms": 8.801,
+        "median_ms": 5.762,
+        "min_ms": 4.787,
+        "samples": 5
+      },
+      "optimized_data_url_body_bytes": 1029505,
+      "optimized_url_body_bytes": 351,
+      "original_body_bytes": 14106892,
+      "scenario": "one_large_image",
+      "theoretical_optimized_upload_ms_at_5mbps": 1647.208,
+      "theoretical_upload_ms_at_5mbps": 22571.027,
+      "url_optimizer": {
+        "cache_hits": 1,
+        "elapsed_ms": 59.861999994609505,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 1,
+        "images_optimized": 1,
+        "input_body_bytes": 14106892,
+        "optimized_image_bytes": 771930,
+        "original_image_bytes": 10579969,
+        "output_body_bytes": 351,
+        "skipped_below_threshold": 0,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      },
+      "url_saved_percent": 99.998,
+      "warm_optimizer": {
+        "cache_hits": 1,
+        "elapsed_ms": 64.10208300803788,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 1,
+        "images_optimized": 1,
+        "input_body_bytes": 14106892,
+        "optimized_image_bytes": 771930,
+        "original_image_bytes": 10579969,
+        "output_body_bytes": 1029505,
+        "skipped_below_threshold": 0,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      }
+    },
+    {
+      "caddy_10mb_status_if_pre_ingress_optimized": 200,
+      "caddy_10mb_status_without_pre_ingress_optimizer": 200,
+      "cold_optimizer": {
+        "cache_hits": 0,
+        "elapsed_ms": 375.6616250029765,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 5,
+        "images_optimized": 3,
+        "input_body_bytes": 3990160,
+        "optimized_image_bytes": 109796,
+        "original_image_bytes": 2992188,
+        "output_body_bytes": 353311,
+        "skipped_below_threshold": 2,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      },
+      "data_url_saved_percent": 91.145,
+      "image_count": 5,
+      "long_context_bytes": 0,
+      "loopback_optimized": {
+        "max_ms": 1.381,
+        "median_ms": 0.704,
+        "min_ms": 0.535,
+        "samples": 5
+      },
+      "loopback_original": {
+        "max_ms": 3.739,
+        "median_ms": 2.732,
+        "min_ms": 1.999,
+        "samples": 5
+      },
+      "optimized_data_url_body_bytes": 353311,
+      "optimized_url_body_bytes": 207169,
+      "original_body_bytes": 3990160,
+      "scenario": "five_images",
+      "theoretical_optimized_upload_ms_at_5mbps": 565.298,
+      "theoretical_upload_ms_at_5mbps": 6384.256,
+      "url_optimizer": {
+        "cache_hits": 3,
+        "elapsed_ms": 17.81070898869075,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 5,
+        "images_optimized": 3,
+        "input_body_bytes": 3990160,
+        "optimized_image_bytes": 109796,
+        "original_image_bytes": 2992188,
+        "output_body_bytes": 207169,
+        "skipped_below_threshold": 2,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      },
+      "url_saved_percent": 94.808,
+      "warm_optimizer": {
+        "cache_hits": 3,
+        "elapsed_ms": 19.224165997002274,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 5,
+        "images_optimized": 3,
+        "input_body_bytes": 3990160,
+        "optimized_image_bytes": 109796,
+        "original_image_bytes": 2992188,
+        "output_body_bytes": 353311,
+        "skipped_below_threshold": 2,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      }
+    },
+    {
+      "caddy_10mb_status_if_pre_ingress_optimized": 200,
+      "caddy_10mb_status_without_pre_ingress_optimizer": 413,
+      "cold_optimizer": {
+        "cache_hits": 0,
+        "elapsed_ms": 1273.8597080169711,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 1,
+        "images_optimized": 1,
+        "input_body_bytes": 15169449,
+        "optimized_image_bytes": 771930,
+        "original_image_bytes": 10579969,
+        "output_body_bytes": 2092062,
+        "skipped_below_threshold": 0,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      },
+      "data_url_saved_percent": 86.209,
+      "image_count": 1,
+      "long_context_bytes": 1048576,
+      "loopback_optimized": {
+        "max_ms": 1.8,
+        "median_ms": 1.312,
+        "min_ms": 1.178,
+        "samples": 5
+      },
+      "loopback_original": {
+        "max_ms": 7.432,
+        "median_ms": 5.208,
+        "min_ms": 4.689,
+        "samples": 5
+      },
+      "optimized_data_url_body_bytes": 2092062,
+      "optimized_url_body_bytes": 1062908,
+      "original_body_bytes": 15169449,
+      "scenario": "large_image_plus_1mb_context",
+      "theoretical_optimized_upload_ms_at_5mbps": 3347.299,
+      "theoretical_upload_ms_at_5mbps": 24271.118,
+      "url_optimizer": {
+        "cache_hits": 1,
+        "elapsed_ms": 65.83983299788088,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 1,
+        "images_optimized": 1,
+        "input_body_bytes": 15169449,
+        "optimized_image_bytes": 771930,
+        "original_image_bytes": 10579969,
+        "output_body_bytes": 1062908,
+        "skipped_below_threshold": 0,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      },
+      "url_saved_percent": 92.993,
+      "warm_optimizer": {
+        "cache_hits": 1,
+        "elapsed_ms": 70.93674998031929,
+        "enabled": true,
+        "errors": 0,
+        "images_detected": 1,
+        "images_optimized": 1,
+        "input_body_bytes": 15169449,
+        "optimized_image_bytes": 771930,
+        "original_image_bytes": 10579969,
+        "output_body_bytes": 2092062,
+        "skipped_below_threshold": 0,
+        "skipped_not_smaller": 0,
+        "skipped_unsupported": 0
+      }
+    }
+  ],
+  "png_tools": [
+    {
+      "category": "photo",
+      "elapsed_ms": 1991.996,
+      "exit_code": 0,
+      "lossless": true,
+      "optimized_bytes": 1286132,
+      "original_bytes": 1476604,
+      "saved_percent": 12.899,
+      "ssim": 1.0,
+      "tool": "oxipng_o4"
+    },
+    {
+      "category": "photo",
+      "elapsed_ms": 67237.328,
+      "exit_code": 0,
+      "lossless": true,
+      "optimized_bytes": 1296234,
+      "original_bytes": 1476604,
+      "saved_percent": 12.215,
+      "ssim": 1.0,
+      "tool": "zopflipng"
+    },
+    {
+      "category": "photo",
+      "elapsed_ms": 517.32,
+      "exit_code": 0,
+      "lossless": false,
+      "optimized_bytes": 573228,
+      "original_bytes": 1476604,
+      "saved_percent": 61.179,
+      "ssim": 0.981805,
+      "tool": "pngquant_q80_95"
+    },
+    {
+      "category": "screenshot",
+      "elapsed_ms": 1762.421,
+      "exit_code": 0,
+      "lossless": true,
+      "optimized_bytes": 192843,
+      "original_bytes": 286665,
+      "saved_percent": 32.729,
+      "ssim": 1.0,
+      "tool": "oxipng_o4"
+    },
+    {
+      "category": "screenshot",
+      "elapsed_ms": 24298.281,
+      "exit_code": 0,
+      "lossless": true,
+      "optimized_bytes": 177632,
+      "original_bytes": 286665,
+      "saved_percent": 38.035,
+      "ssim": 1.0,
+      "tool": "zopflipng"
+    },
+    {
+      "category": "screenshot",
+      "elapsed_ms": 162.272,
+      "exit_code": 0,
+      "lossless": false,
+      "optimized_bytes": 77387,
+      "original_bytes": 286665,
+      "saved_percent": 73.004,
+      "ssim": 0.99376,
+      "tool": "pngquant_q80_95"
+    },
+    {
+      "category": "code",
+      "elapsed_ms": 1251.303,
+      "exit_code": 0,
+      "lossless": true,
+      "optimized_bytes": 64414,
+      "original_bytes": 87427,
+      "saved_percent": 26.323,
+      "ssim": 1.0,
+      "tool": "oxipng_o4"
+    },
+    {
+      "category": "code",
+      "elapsed_ms": 28587.007,
+      "exit_code": 0,
+      "lossless": true,
+      "optimized_bytes": 61945,
+      "original_bytes": 87427,
+      "saved_percent": 29.147,
+      "ssim": 1.0,
+      "tool": "zopflipng"
+    },
+    {
+      "category": "code",
+      "elapsed_ms": 179.432,
+      "exit_code": 0,
+      "lossless": false,
+      "optimized_bytes": 26337,
+      "original_bytes": 87427,
+      "saved_percent": 69.875,
+      "ssim": 0.99991,
+      "tool": "pngquant_q80_95"
+    }
+  ],
+  "safety": {
+    "network_targets": [
+      "127.0.0.1 loopback mock only"
+    ],
+    "openai_requests": 0,
+    "production_requests": 0
+  },
+  "visual_tools": [
+    {
+      "category": "photo",
+      "elapsed_ms": 41.254,
+      "exit_code": 0,
+      "optimized_bytes": 92638,
+      "original_bytes": 1476604,
+      "quality": 80,
+      "saved_percent": 93.726,
+      "ssim": 0.968137,
+      "tool": "jpeg_q80"
+    },
+    {
+      "category": "photo",
+      "elapsed_ms": 40.137,
+      "exit_code": 0,
+      "optimized_bytes": 148365,
+      "original_bytes": 1476604,
+      "quality": 90,
+      "saved_percent": 89.952,
+      "ssim": 0.977161,
+      "tool": "jpeg_q90"
+    },
+    {
+      "category": "photo",
+      "elapsed_ms": 131.678,
+      "exit_code": 0,
+      "optimized_bytes": 43596,
+      "original_bytes": 1476604,
+      "quality": 80,
+      "saved_percent": 97.048,
+      "ssim": 0.97427,
+      "tool": "webp_q80"
+    },
+    {
+      "category": "photo",
+      "elapsed_ms": 134.653,
+      "exit_code": 0,
+      "optimized_bytes": 51922,
+      "original_bytes": 1476604,
+      "quality": 85,
+      "saved_percent": 96.484,
+      "ssim": 0.975666,
+      "tool": "webp_q85"
+    },
+    {
+      "category": "photo",
+      "elapsed_ms": 159.504,
+      "exit_code": 0,
+      "optimized_bytes": 67702,
+      "original_bytes": 1476604,
+      "quality": 90,
+      "saved_percent": 95.415,
+      "ssim": 0.979082,
+      "tool": "webp_q90"
+    },
+    {
+      "category": "screenshot",
+      "elapsed_ms": 27.621,
+      "exit_code": 0,
+      "optimized_bytes": 43234,
+      "original_bytes": 286665,
+      "quality": 80,
+      "saved_percent": 84.918,
+      "ssim": 0.987413,
+      "tool": "jpeg_q80"
+    },
+    {
+      "category": "screenshot",
+      "elapsed_ms": 24.201,
+      "exit_code": 0,
+      "optimized_bytes": 62760,
+      "original_bytes": 286665,
+      "quality": 90,
+      "saved_percent": 78.107,
+      "ssim": 0.99067,
+      "tool": "jpeg_q90"
+    },
+    {
+      "category": "screenshot",
+      "elapsed_ms": 90.339,
+      "exit_code": 0,
+      "optimized_bytes": 16246,
+      "original_bytes": 286665,
+      "quality": 80,
+      "saved_percent": 94.333,
+      "ssim": 0.985041,
+      "tool": "webp_q80"
+    },
+    {
+      "category": "screenshot",
+      "elapsed_ms": 91.63,
+      "exit_code": 0,
+      "optimized_bytes": 19604,
+      "original_bytes": 286665,
+      "quality": 85,
+      "saved_percent": 93.161,
+      "ssim": 0.986195,
+      "tool": "webp_q85"
+    },
+    {
+      "category": "screenshot",
+      "elapsed_ms": 95.195,
+      "exit_code": 0,
+      "optimized_bytes": 23468,
+      "original_bytes": 286665,
+      "quality": 90,
+      "saved_percent": 91.813,
+      "ssim": 0.988727,
+      "tool": "webp_q90"
+    },
+    {
+      "category": "code",
+      "elapsed_ms": 24.969,
+      "exit_code": 0,
+      "ocr_similarity": 0.907801,
+      "optimized_bytes": 89044,
+      "original_bytes": 87427,
+      "quality": 80,
+      "saved_percent": -1.85,
+      "ssim": 0.990745,
+      "tool": "jpeg_q80"
+    },
+    {
+      "category": "code",
+      "elapsed_ms": 30.873,
+      "exit_code": 0,
+      "ocr_similarity": 0.903319,
+      "optimized_bytes": 114793,
+      "original_bytes": 87427,
+      "quality": 90,
+      "saved_percent": -31.302,
+      "ssim": 0.99541,
+      "tool": "jpeg_q90"
+    },
+    {
+      "category": "code",
+      "elapsed_ms": 122.722,
+      "exit_code": 0,
+      "ocr_similarity": 0.914773,
+      "optimized_bytes": 41976,
+      "original_bytes": 87427,
+      "quality": 80,
+      "saved_percent": 51.987,
+      "ssim": 0.996872,
+      "tool": "webp_q80"
+    },
+    {
+      "category": "code",
+      "elapsed_ms": 125.642,
+      "exit_code": 0,
+      "ocr_similarity": 0.905444,
+      "optimized_bytes": 46542,
+      "original_bytes": 87427,
+      "quality": 85,
+      "saved_percent": 46.765,
+      "ssim": 0.997749,
+      "tool": "webp_q85"
+    },
+    {
+      "category": "code",
+      "elapsed_ms": 124.483,
+      "exit_code": 0,
+      "ocr_similarity": 0.896552,
+      "optimized_bytes": 53698,
+      "original_bytes": 87427,
+      "quality": 90,
+      "saved_percent": 38.58,
+      "ssim": 0.998535,
+      "tool": "webp_q90"
+    }
+  ]
+}

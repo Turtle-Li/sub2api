@@ -87,22 +87,39 @@ flock -n 9 || die "another production release is already running"
 available_bytes="$(df --output=avail -B1 / | tail -1 | tr -d '[:space:]')"
 [ "$available_bytes" -ge "$MIN_FREE_BYTES" ] || die "less than 8 GiB is free on the server"
 
-active_upstream="$(grep -oE 'sub2api(-green)?:8080' "${APP_DIR}/Caddyfile" | sort -u)"
+active_upstream="$(grep -oE 'sub2api(-(blue|green))?:8080' "${APP_DIR}/Caddyfile" | sort -u)"
 upstream_count="$(printf '%s\n' "$active_upstream" | sed '/^$/d' | wc -l)"
 [ "$upstream_count" -eq 1 ] || die "Caddy upstream is ambiguous: $active_upstream"
 
 OLD_CONTAINER="${active_upstream%:8080}"
+# A third color is intentional. Long-lived Responses WebSocket connections can
+# keep a previous container draining through the next release, so a strict
+# two-name toggle can otherwise leave no safe target. Never recycle another
+# running color merely to free a name.
 case "$OLD_CONTAINER" in
-  sub2api)
-    NEW_CONTAINER="sub2api-green"
+  sub2api-blue)
+    release_candidates=(sub2api-green sub2api)
     ;;
   sub2api-green)
-    NEW_CONTAINER="sub2api"
+    release_candidates=(sub2api-blue sub2api)
+    ;;
+  sub2api)
+    release_candidates=(sub2api-green sub2api-blue)
     ;;
   *)
     die "unsupported active container: $OLD_CONTAINER"
     ;;
 esac
+
+NEW_CONTAINER=""
+for candidate in "${release_candidates[@]}"; do
+  candidate_running="$(docker inspect "$candidate" --format '{{.State.Running}}' 2>/dev/null || true)"
+  if [ "$candidate_running" != "true" ]; then
+    NEW_CONTAINER="$candidate"
+    break
+  fi
+done
+[ -n "$NEW_CONTAINER" ] || die "no absent or stopped release target; other colors are still draining"
 
 OLD_UPSTREAM="${OLD_CONTAINER}:8080"
 NEW_UPSTREAM="${NEW_CONTAINER}:8080"

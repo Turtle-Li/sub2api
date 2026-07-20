@@ -777,6 +777,35 @@ type ImageConcurrencyConfig struct {
 	MaxWaitingRequests int `mapstructure:"max_waiting_requests"`
 }
 
+// AttachmentGatewayConfig controls the experimental Responses attachment
+// optimizer. It is deliberately disabled by default and currently handles only
+// inline PNG/JPEG/WebP image data URLs.
+type AttachmentGatewayConfig struct {
+	AttachmentOptimizerEnabled bool `mapstructure:"attachment_optimizer_enabled"`
+	AttachmentOptimizerDryRun  bool `mapstructure:"attachment_optimizer_dry_run"`
+	// RolloutControlFile optionally provides a live, fail-closed canary mode
+	// switch. The file must contain exactly off, dry_run, or rewrite.
+	RolloutControlFile           string  `mapstructure:"rollout_control_file"`
+	AllowUnscoped                bool    `mapstructure:"allow_unscoped"`
+	AllowedAPIKeyIDs             []int64 `mapstructure:"allowed_api_key_ids"`
+	AllowedUserIDs               []int64 `mapstructure:"allowed_user_ids"`
+	AllowedGroupIDs              []int64 `mapstructure:"allowed_group_ids"`
+	OptimizeTimeoutMilliseconds  int     `mapstructure:"optimize_timeout_ms"`
+	ThresholdBytes               int     `mapstructure:"threshold_bytes"`
+	MaxImageBytes                int     `mapstructure:"max_image_bytes"`
+	MaxTotalImageBytesPerRequest int     `mapstructure:"max_total_image_bytes_per_request"`
+	MaxPixels                    int64   `mapstructure:"max_pixels"`
+	Quality                      int     `mapstructure:"quality"`
+	SpecialQuality               int     `mapstructure:"special_quality"`
+	MinSavingsRatio              float64 `mapstructure:"min_savings_ratio"`
+	CacheDir                     string  `mapstructure:"cache_dir"`
+	CacheTTLSeconds              int     `mapstructure:"cache_ttl_seconds"`
+	CacheMaxBytes                int64   `mapstructure:"cache_max_bytes"`
+	CacheCleanupIntervalSeconds  int     `mapstructure:"cache_cleanup_interval_seconds"`
+	MaxImagesPerRequest          int     `mapstructure:"max_images_per_request"`
+	MaxConcurrentEncodes         int     `mapstructure:"max_concurrent_encodes"`
+}
+
 const (
 	ImageConcurrencyOverflowModeReject = "reject"
 	ImageConcurrencyOverflowModeWait   = "wait"
@@ -833,6 +862,8 @@ type GatewayConfig struct {
 	OpenAIHTTP2 GatewayOpenAIHTTP2Config `mapstructure:"openai_http2"`
 	// ImageConcurrency: 图片生成独立并发限制配置（默认关闭）
 	ImageConcurrency ImageConcurrencyConfig `mapstructure:"image_concurrency"`
+	// AttachmentGateway: Responses 图片附件优化实验（默认关闭）。
+	AttachmentGateway AttachmentGatewayConfig `mapstructure:"attachment_gateway"`
 
 	// HTTP 上游连接池配置（性能优化：支持高并发场景调优）
 	// MaxIdleConns: 所有主机的最大空闲连接总数
@@ -2128,6 +2159,29 @@ func setDefaults() {
 	viper.SetDefault("gateway.image_concurrency.overflow_mode", ImageConcurrencyOverflowModeReject)
 	viper.SetDefault("gateway.image_concurrency.wait_timeout_seconds", 30)
 	viper.SetDefault("gateway.image_concurrency.max_waiting_requests", 100)
+	// Attachment Gateway Phase 1 is an opt-in experiment. Keeping the leaf
+	// switch false guarantees no request parsing, cache I/O or payload rewrite.
+	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_enabled", false)
+	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_dry_run", true)
+	viper.SetDefault("gateway.attachment_gateway.rollout_control_file", "")
+	viper.SetDefault("gateway.attachment_gateway.allow_unscoped", false)
+	viper.SetDefault("gateway.attachment_gateway.allowed_api_key_ids", []int64{})
+	viper.SetDefault("gateway.attachment_gateway.allowed_user_ids", []int64{})
+	viper.SetDefault("gateway.attachment_gateway.allowed_group_ids", []int64{})
+	viper.SetDefault("gateway.attachment_gateway.optimize_timeout_ms", 5000)
+	viper.SetDefault("gateway.attachment_gateway.threshold_bytes", 512*1024)
+	viper.SetDefault("gateway.attachment_gateway.max_image_bytes", 64*1024*1024)
+	viper.SetDefault("gateway.attachment_gateway.max_total_image_bytes_per_request", 64*1024*1024)
+	viper.SetDefault("gateway.attachment_gateway.max_pixels", int64(50_000_000))
+	viper.SetDefault("gateway.attachment_gateway.quality", 85)
+	viper.SetDefault("gateway.attachment_gateway.special_quality", 90)
+	viper.SetDefault("gateway.attachment_gateway.min_savings_ratio", 0.05)
+	viper.SetDefault("gateway.attachment_gateway.cache_dir", "data/attachment_cache")
+	viper.SetDefault("gateway.attachment_gateway.cache_ttl_seconds", 7*24*60*60)
+	viper.SetDefault("gateway.attachment_gateway.cache_max_bytes", int64(512*1024*1024))
+	viper.SetDefault("gateway.attachment_gateway.cache_cleanup_interval_seconds", 10*60)
+	viper.SetDefault("gateway.attachment_gateway.max_images_per_request", 20)
+	viper.SetDefault("gateway.attachment_gateway.max_concurrent_encodes", 2)
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
@@ -2842,6 +2896,58 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.ImageConcurrency.MaxWaitingRequests < 0 {
 		return fmt.Errorf("gateway.image_concurrency.max_waiting_requests must be non-negative")
+	}
+	attachment := c.Gateway.AttachmentGateway
+	// Dormant experiment values cannot block startup. Validate the tuning block
+	// only when the leaf feature gate is explicitly enabled.
+	if attachment.AttachmentOptimizerEnabled {
+		if attachment.OptimizeTimeoutMilliseconds <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.optimize_timeout_ms must be positive")
+		}
+		if attachment.ThresholdBytes < 0 {
+			return fmt.Errorf("gateway.attachment_gateway.threshold_bytes must be non-negative")
+		}
+		if attachment.MaxImageBytes <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.max_image_bytes must be positive")
+		}
+		if attachment.MaxTotalImageBytesPerRequest <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.max_total_image_bytes_per_request must be positive")
+		}
+		if attachment.MaxPixels <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.max_pixels must be positive")
+		}
+		if attachment.Quality < 1 || attachment.Quality > 100 || attachment.SpecialQuality < 1 || attachment.SpecialQuality > 100 {
+			return fmt.Errorf("gateway.attachment_gateway quality values must be between 1 and 100")
+		}
+		if attachment.MinSavingsRatio < 0 || attachment.MinSavingsRatio >= 1 {
+			return fmt.Errorf("gateway.attachment_gateway.min_savings_ratio must be in [0,1)")
+		}
+		if strings.TrimSpace(attachment.CacheDir) == "" {
+			return fmt.Errorf("gateway.attachment_gateway.cache_dir must not be empty")
+		}
+		if attachment.CacheTTLSeconds <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.cache_ttl_seconds must be positive")
+		}
+		if attachment.CacheMaxBytes <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.cache_max_bytes must be positive")
+		}
+		if attachment.CacheCleanupIntervalSeconds <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.cache_cleanup_interval_seconds must be positive")
+		}
+		if attachment.MaxImagesPerRequest <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.max_images_per_request must be positive")
+		}
+		if attachment.MaxConcurrentEncodes <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.max_concurrent_encodes must be positive")
+		}
+		allowedIDs := append([]int64(nil), attachment.AllowedAPIKeyIDs...)
+		allowedIDs = append(allowedIDs, attachment.AllowedUserIDs...)
+		allowedIDs = append(allowedIDs, attachment.AllowedGroupIDs...)
+		for _, id := range allowedIDs {
+			if id <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway allowed IDs must be positive")
+			}
+		}
 	}
 	if c.Gateway.MaxIdleConns <= 0 {
 		return fmt.Errorf("gateway.max_idle_conns must be positive")

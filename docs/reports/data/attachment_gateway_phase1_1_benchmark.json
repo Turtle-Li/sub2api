@@ -1,0 +1,161 @@
+{
+  "generated_at": "2026-07-20T12:33:29+08:00",
+  "scope": "local-only hardening validation; no production or OpenAI requests",
+  "environment": {
+    "os": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M1 Pro",
+    "go": "go1.26.5"
+  },
+  "production_tag_benchmark": {
+    "build_tags": [
+      "nodynamic"
+    ],
+    "environment": "darwin/arm64 Apple M1 Pro",
+    "scenarios": [
+      {
+        "name": "one_large_png",
+        "cold_duration_ms": 3928.274833,
+        "warm_duration_ms": 253.486084,
+        "original_body_bytes": 14590515,
+        "optimized_body_bytes": 1577556,
+        "saved_percent": 89.19
+      },
+      {
+        "name": "five_images",
+        "cold_duration_ms": 3309.463334,
+        "warm_duration_ms": 212.015958,
+        "original_body_bytes": 12241951,
+        "optimized_body_bytes": 1340404,
+        "saved_percent": 89.05
+      },
+      {
+        "name": "large_plus_1m_context",
+        "cold_duration_ms": 4014.748,
+        "warm_duration_ms": 258.265541,
+        "original_body_bytes": 15639091,
+        "optimized_body_bytes": 2626132,
+        "saved_percent": 83.21
+      }
+    ]
+  },
+  "linux_amd64_alpine_validation": {
+    "root_dockerfile_image_manifest": "sha256:0c95ce27443240b5ef977ed5cdfda5d43a40380af95f5a38910f98ebb04a28b7",
+    "deploy_dockerfile_image_manifest": "sha256:17960fd32c00732e4cb59d31be05be19a6fc01c5ab819ca0bba15078660a5420",
+    "build_tags": [
+      "embed",
+      "nodynamic"
+    ],
+    "version_command": "passed",
+    "static_binary": true,
+    "loopback_original_body_bytes": 2448643,
+    "loopback_optimized_body_bytes": 267360,
+    "loopback_saved_percent": 89.08,
+    "loopback_original_status": 413,
+    "loopback_optimized_status": 204,
+    "loopback_cold_duration_ms": 1250.227417,
+    "loopback_warm_duration_ms": 62.619833,
+    "warm_cache_hit": true,
+    "timeout_background_worker_concurrency_bound": "passed",
+    "performance_note": "executed under amd64 emulation on an arm64 host; use only as a functional image check, not production Xeon latency"
+  },
+  "phase1_scenarios": [
+    {
+      "name": "one_large_png",
+      "original_body_bytes": 14590515,
+      "optimized_body_bytes": 1577556,
+      "saved_percent": 89.1878,
+      "cold_ns_per_op": 4030264792,
+      "warm_ns_per_op": 252040750,
+      "cold_allocated_bytes_per_op": 307900800,
+      "warm_allocated_bytes_per_op": 63835560,
+      "warm_cache_hits": 1
+    },
+    {
+      "name": "five_images",
+      "original_body_bytes": 12241951,
+      "optimized_body_bytes": 1340404,
+      "saved_percent": 89.0507,
+      "cold_ns_per_op": 3295876792,
+      "warm_ns_per_op": 213206708,
+      "cold_allocated_bytes_per_op": 265825792,
+      "warm_allocated_bytes_per_op": 53748008,
+      "warm_cache_hits": 5
+    },
+    {
+      "name": "large_plus_1m_context",
+      "original_body_bytes": 15639091,
+      "optimized_body_bytes": 2626132,
+      "saved_percent": 83.2079,
+      "cold_ns_per_op": 3867659167,
+      "warm_ns_per_op": 258553917,
+      "cold_allocated_bytes_per_op": 309989416,
+      "warm_allocated_bytes_per_op": 65932776,
+      "warm_cache_hits": 1
+    }
+  ],
+  "benchmark_process": {
+    "wall_seconds": 25.72,
+    "user_seconds": 24.03,
+    "system_seconds": 0.74,
+    "maximum_resident_set_bytes": 415694848,
+    "note": "maximum RSS covers the complete benchmark test process and fixture generation; it is not per-request RSS"
+  },
+  "loopback_forward_5x": {
+    "original_ns_per_op": 6999350,
+    "optimized_ns_per_op": 775567
+  },
+  "loopback_upstream_limit": {
+    "limit_bytes": 1048576,
+    "original_body_bytes": 2448643,
+    "optimized_body_bytes": 267360,
+    "saved_percent": 89.0813,
+    "original_status": 413,
+    "optimized_status": 204,
+    "cold_duration_ms": 685.222125,
+    "warm_duration_ms": 42.936584,
+    "warm_cache_hit": true
+  },
+  "websocket_first_frame": {
+    "original_bytes": 713641,
+    "optimized_bytes": 19134,
+    "saved_percent": 97.3188,
+    "modes_passed": [
+      "passthrough_dry_run",
+      "passthrough_rewrite",
+      "ctx_pool_dry_run",
+      "ctx_pool_rewrite"
+    ]
+  },
+  "quality": {
+    "code_ocr_similarity_q85": 0.9799,
+    "code_ocr_similarity_q90": 0.9698,
+    "ui_dashboard_ocr_similarity_q85": 0.9871,
+    "ui_dashboard_ocr_similarity_q90": 1.0,
+    "ui_edge_f1_q85": 1.0,
+    "ui_edge_f1_q90": 1.0,
+    "photo_psnr_db_q85": 29.03,
+    "photo_psnr_db_q90": 29.31,
+    "real_vision_model_ab_test": "pending controlled production canary"
+  },
+  "verification": {
+    "full_go_test": "passed",
+    "full_nodynamic_go_test": "passed",
+    "focused_go_vet": "passed",
+    "focused_race": "passed",
+    "go_mod_verify": "passed",
+    "git_diff_check": "passed",
+    "deploy_caddyfile_changed": false,
+    "root_dockerfile_linux_amd64": "passed",
+    "deploy_dockerfile_linux_amd64": "passed",
+    "goreleaser_equivalent_static_binary_in_alpine": "passed",
+    "goreleaser_yaml_parse": "passed",
+    "goreleaser_cross_compile_targets": [
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/amd64",
+      "darwin/arm64",
+      "windows/amd64"
+    ]
+  }
+}

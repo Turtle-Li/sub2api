@@ -1,0 +1,85 @@
+package config
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestAttachmentGatewayDefaultsAreSafeAndDisabled(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	attachment := cfg.Gateway.AttachmentGateway
+	require.False(t, attachment.AttachmentOptimizerEnabled)
+	require.True(t, attachment.AttachmentOptimizerDryRun)
+	require.Empty(t, attachment.RolloutControlFile)
+	require.False(t, attachment.AllowUnscoped)
+	require.Empty(t, attachment.AllowedAPIKeyIDs)
+	require.Empty(t, attachment.AllowedUserIDs)
+	require.Empty(t, attachment.AllowedGroupIDs)
+	require.Equal(t, 5000, attachment.OptimizeTimeoutMilliseconds)
+	require.Equal(t, 512*1024, attachment.ThresholdBytes)
+	require.Equal(t, 64*1024*1024, attachment.MaxImageBytes)
+	require.Equal(t, 64*1024*1024, attachment.MaxTotalImageBytesPerRequest)
+	require.Equal(t, int64(50_000_000), attachment.MaxPixels)
+	require.Equal(t, 85, attachment.Quality)
+	require.Equal(t, 90, attachment.SpecialQuality)
+	require.InDelta(t, 0.05, attachment.MinSavingsRatio, 0.000001)
+	require.Equal(t, "data/attachment_cache", attachment.CacheDir)
+	require.Equal(t, 7*24*60*60, attachment.CacheTTLSeconds)
+	require.Equal(t, int64(512*1024*1024), attachment.CacheMaxBytes)
+	require.Equal(t, 10*60, attachment.CacheCleanupIntervalSeconds)
+	require.Equal(t, 20, attachment.MaxImagesPerRequest)
+	require.Equal(t, 2, attachment.MaxConcurrentEncodes)
+}
+
+func TestAttachmentGatewayValidationRejectsUnsafeValues(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		mutate  func(*AttachmentGatewayConfig)
+		message string
+	}{
+		{name: "zero timeout", mutate: func(c *AttachmentGatewayConfig) { c.OptimizeTimeoutMilliseconds = 0 }, message: "optimize_timeout_ms"},
+		{name: "negative threshold", mutate: func(c *AttachmentGatewayConfig) { c.ThresholdBytes = -1 }, message: "threshold_bytes"},
+		{name: "zero image limit", mutate: func(c *AttachmentGatewayConfig) { c.MaxImageBytes = 0 }, message: "max_image_bytes"},
+		{name: "zero request image bytes", mutate: func(c *AttachmentGatewayConfig) { c.MaxTotalImageBytesPerRequest = 0 }, message: "max_total_image_bytes_per_request"},
+		{name: "zero pixel limit", mutate: func(c *AttachmentGatewayConfig) { c.MaxPixels = 0 }, message: "max_pixels"},
+		{name: "invalid quality", mutate: func(c *AttachmentGatewayConfig) { c.Quality = 101 }, message: "quality"},
+		{name: "invalid savings", mutate: func(c *AttachmentGatewayConfig) { c.MinSavingsRatio = 1 }, message: "min_savings_ratio"},
+		{name: "empty cache", mutate: func(c *AttachmentGatewayConfig) { c.CacheDir = "" }, message: "cache_dir"},
+		{name: "zero ttl", mutate: func(c *AttachmentGatewayConfig) { c.CacheTTLSeconds = 0 }, message: "cache_ttl_seconds"},
+		{name: "zero cache size", mutate: func(c *AttachmentGatewayConfig) { c.CacheMaxBytes = 0 }, message: "cache_max_bytes"},
+		{name: "zero cleanup interval", mutate: func(c *AttachmentGatewayConfig) { c.CacheCleanupIntervalSeconds = 0 }, message: "cache_cleanup_interval_seconds"},
+		{name: "zero image count", mutate: func(c *AttachmentGatewayConfig) { c.MaxImagesPerRequest = 0 }, message: "max_images_per_request"},
+		{name: "zero concurrency", mutate: func(c *AttachmentGatewayConfig) { c.MaxConcurrentEncodes = 0 }, message: "max_concurrent_encodes"},
+		{name: "invalid API key scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedAPIKeyIDs = []int64{0} }, message: "allowed IDs"},
+		{name: "invalid user scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedUserIDs = []int64{0} }, message: "allowed IDs"},
+		{name: "invalid group scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedGroupIDs = []int64{-1} }, message: "allowed IDs"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			clone := *cfg
+			clone.Gateway.AttachmentGateway.AttachmentOptimizerEnabled = true
+			testCase.mutate(&clone.Gateway.AttachmentGateway)
+			require.ErrorContains(t, clone.Validate(), testCase.message)
+		})
+	}
+}
+
+func TestAttachmentGatewayDormantValuesCannotBlockStartup(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	cfg.Gateway.AttachmentGateway.AttachmentOptimizerEnabled = false
+	cfg.Gateway.AttachmentGateway.CacheDir = ""
+	cfg.Gateway.AttachmentGateway.MaxImageBytes = -1
+
+	require.NoError(t, cfg.Validate())
+}
