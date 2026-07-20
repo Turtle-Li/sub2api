@@ -1,7 +1,7 @@
-# Attachment Gateway 请求级预算与 64MB 入站验证
+# Attachment Gateway 请求级预算与 256MB 入站验证
 
 日期：2026-07-20
-状态：代码与本地门禁完成；尚未切换生产 Caddy。
+状态：代码、本地门禁、scoped 生产 rewrite 与独立 Caddy 切换均已完成。
 
 ## 结论
 
@@ -11,7 +11,7 @@ Responses 放宽原始入站 body，让 Sub2 先压缩，再对实际上游 body
 安全数据流为：
 
 ```text
-Responses 原始 body（Caddy 最多 64MB）
+Responses 原始 body（Caddy 最多 256,000,000 B）
   -> 原始 body 重复请求保护
   -> scoped Attachment Gateway
   -> 聚合小图压缩与 hash 缓存
@@ -80,21 +80,26 @@ go vet ./internal/config ./internal/service/attachment_gateway ./internal/handle
 HTTP handler 集成测试确认：预算拒绝返回 413，且 upstream 调用次数不增加；WS
 passthrough/ctx_pool 首帧允许场景保持通过。
 
-## Caddy 候选
+## Caddy 生产结果
 
-已用生产同版本 `caddy:2.11-alpine` 离线验证候选配置：
+初始 64MB 候选通过后，依据服务器 RX 充足、TX 为瓶颈的现场条件，最终生产配置为：
 
-- `/v1/responses`、`/responses`：64MB；
+- `/v1/responses`、`/responses`：256MB；
 - 其他路径：16MB；
-- 两组 `Content-Length` 提前拒绝规则分别为 64,000,000 与 16,000,000 B；
+- 两组 `Content-Length` 提前拒绝规则分别为 256,000,000 与 16,000,000 B；
 - chunked body 仍由对应 `request_body` 上限约束。
+
+边界 smoke 为 Responses 256,000,001 B → 413、非 Responses 16,000,001 B → 413。
+台式机真实 17,485,303 B / 12 图请求进入 Sub2 后压到 3,985,423 B，HTTP 200，
+模型 marker 正确，证明旧 16MB 门以上的请求现在能先压缩再转发。
 
 ## 生产切换顺序
 
 1. 先发布应用代码，Caddy 保持 16MB；
 2. 设置全局 Responses 上游转发保险 `16000000`；
 3. Key 27 与 admin user 1 开启 request-budget observe 和聚合小图 rewrite；
-4. 健康检查与小于 16MB smoke 通过后，只把 Responses 入站提高到 64MB；
-5. 用 admin 测试 16–64MB 可压缩 body、不可压缩文件、HTTP 热缓存和 WS 回归；
-6. 观察 `budget_would_reject` 后，再只对当前 scope 开启 enforcement；
+4. 健康检查与小于 16MB smoke 通过后，先把 Responses 入站提高到 64MB，再独立提高到
+   256MB 应用绝对安全网以内；
+5. 用 admin 测试 17.49MB 可压缩 body、HTTP 热缓存、PNG/JPEG/WebP 语义与小图 OCR；
+6. 继续观察 `budget_would_reject`；当前 `request_budget_enforce` 仍保持关闭；
 7. 普通用户的附件优化仍不全量开启。

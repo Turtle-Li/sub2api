@@ -1,7 +1,8 @@
 {
   "date": "2026-07-20",
-  "production_commit": "17b7be8d11e88437302bb4cf05ed9a29e9348311",
-  "production_image": "sub2api:auto-20260720-1623-17b7be8d",
+  "production_commit": "08a77b31d47d8f7509373f75bc71b56dd74d1200",
+  "attachment_feature_commit": "888badf71608aea4e18385d3b09fd6254a8d7783",
+  "production_image": "sub2api:auto-20260720-1857-08a77b31",
   "scope": {
     "allow_unscoped": false,
     "allowed_api_key_ids": [27],
@@ -15,7 +16,9 @@
     "app_5xx": 0,
     "app_fatal": 0,
     "caddy_5xx": 0,
-    "caddy_body_limit_bytes": 16000000
+    "caddy_responses_body_limit_bytes": 256000000,
+    "caddy_non_responses_body_limit_bytes": 16000000,
+    "openai_responses_max_forward_body_bytes": 16000000
   },
   "method6_initial_canary": {
     "stopped_before_rewrite": true,
@@ -180,6 +183,98 @@
     "post_request_cpu_percent": 2.53,
     "post_request_rss_mib": 113.6
   },
+  "request_budget_and_ingress_canary": {
+    "request_budget_enabled": true,
+    "request_budget_enforce": false,
+    "aggregate_small_image_enabled": true,
+    "caddy_boundary_cases": [
+      {
+        "name": "responses_over_limit",
+        "content_length": 256000001,
+        "status": 413
+      },
+      {
+        "name": "non_responses_over_limit",
+        "content_length": 16000001,
+        "status": 413
+      }
+    ],
+    "windows_desktop_direct_http": [
+      {
+        "name": "text",
+        "original_body_bytes": 187,
+        "optimized_body_bytes": 187,
+        "status": 200,
+        "content_marker_exact": true
+      },
+      {
+        "name": "png",
+        "original_body_bytes": 1969071,
+        "optimized_body_bytes": 113312,
+        "status": 200,
+        "cache_hits": 1,
+        "optimize_duration_ms": 308.092572,
+        "content_marker_exact": true
+      },
+      {
+        "name": "twelve_identical_webp_over_old_16mb_gate",
+        "original_body_bytes": 17485303,
+        "optimized_body_bytes": 3985423,
+        "status": 200,
+        "image_count": 12,
+        "optimized_image_count": 10,
+        "cache_hits": 10,
+        "skipped_request_image_limit": 2,
+        "optimize_duration_ms": 2705.130494,
+        "content_marker_exact": true
+      }
+    ],
+    "model_quality_after_rewrite": [
+      {
+        "name": "png_logo_q85",
+        "original_body_bytes": 1969222,
+        "optimized_body_bytes": 113463,
+        "status": 200,
+        "optimize_duration_ms": 330.715243,
+        "semantic_tokens_exact": true
+      },
+      {
+        "name": "jpeg_logo_q85",
+        "original_body_bytes": 1513435,
+        "optimized_body_bytes": 114659,
+        "status": 200,
+        "optimize_duration_ms": 242.543869,
+        "semantic_tokens_exact": true
+      },
+      {
+        "name": "webp_logo_q85",
+        "original_body_bytes": 1457431,
+        "optimized_body_bytes": 107443,
+        "status": 200,
+        "optimize_duration_ms": 259.763528,
+        "semantic_tokens_exact": true
+      },
+      {
+        "name": "eight_small_ui_png_aggregate_q90",
+        "original_body_bytes": 3058674,
+        "optimized_body_bytes": 272922,
+        "status": 200,
+        "cache_hits": 8,
+        "optimize_duration_ms": 409.437435,
+        "ocr_tokens_exact": true
+      }
+    ],
+    "transparent_png_fail_open": {
+      "original_body_bytes": 2158409,
+      "optimized_body_bytes": 2158409,
+      "optimize_duration_ms": 5004.291823,
+      "timed_out": true,
+      "payload_rewritten": false
+    },
+    "post_reload_health": "healthy",
+    "canary_app_errors": 0,
+    "canary_caddy_5xx": 0
+  },
   "transport": {
     "desktop_codex_http_verified": true,
     "desktop_codex_openai_ws_mode": false,
@@ -192,6 +287,7 @@
   "known_gaps": [
     "The target API key had no new request after rewrite was enabled, so its next real large request is still pending observation.",
     "JPEG outputs that are not at least 5 percent smaller are safely passed through but do not have a negative-result cache.",
+    "A complex transparent PNG reached the 5000 ms optimizer budget and safely failed open; transparent-image fast-skip heuristics should be evaluated before wider rollout.",
     "No real Responses WebSocket traffic was available; production WS stability is not claimed from this HTTP canary."
   ]
 }

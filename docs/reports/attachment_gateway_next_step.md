@@ -2,10 +2,11 @@
 
 日期：2026-07-20
 状态：method 0 候选已发布并完成 scoped HTTP dry-run/rewrite；API Key 27 与 admin user 1
-可用，普通用户仍关闭。
+可用，普通用户仍关闭。Responses Caddy 原始入站已独立提高到 256,000,000 B，其他 API
+仍为 16,000,000 B，实际 OpenAI Responses 转发仍受 16,000,000 B 硬保险保护。
 
-> 2026-07-20 补充：请求级附件预算、聚合小图策略与“64MB Responses 入站 / 16MB
-> 实际上游转发保险”已完成本地实现和门禁。设计、真实小图流量与切换顺序见
+> 2026-07-20 补充：请求级附件预算、聚合小图策略与“256MB Responses 入站 / 16MB
+> 实际上游转发保险”已完成生产 canary。设计、真实小图流量与切换顺序见
 > `docs/reports/attachment_gateway_request_budget.md`。
 
 ## 决策
@@ -14,8 +15,9 @@
 
 - Go：继续保持 API Key 27 + admin user 1 的 scoped rewrite，观察目标用户下一笔真实大请求；
 - Go：PNG/WebP 正缓存、q85/q90 与透明 PNG lossless 继续作为候选；
+- Go：保留 Responses 256,000,000 B 入站与 16,000,000 B 上游硬保险；
 - No-Go：全量用户、默认开启、`allow_unscoped=true`；
-- No-Go：与本次发布捆绑修改 Caddy、接 R2 或改 HTTP/WS 路由。
+- No-Go：接 R2 或改 HTTP/WS 路由。
 
 允许内部 canary 的原因：默认关闭和空 scope 都是 no-op；dry-run、5 秒时间预算、
 decoded bytes/pixels/图片数/并发限制、缓存 TTL/容量清理、panic/超时 fail-open 已补齐；
@@ -42,10 +44,16 @@ method 6 第一轮因 JPEG/透明 PNG 达到 5 秒预算而停止并回 `off`。
 | 透明 PNG lossless | 3,305,473 → 2,908,030 B；冷 3,149.9 ms，热 347.0 ms |
 | 5 图 HTTP | 7,662,531 → 4,112,226 B；4 hits；2,602.7 ms |
 | 8 张相同 WebP HTTP | 13,749,545 → 2,945,577 B；8 hits；984.4 ms |
+| 12 张相同 WebP / 旧门以上 | 17,485,303 → 3,985,423 B；10 hits；2,705.1 ms；HTTP 200 |
+| 8 张小 UI PNG | 3,058,674 → 272,922 B；8 hits；OCR 精确 |
 
 真实 Codex 原图/rewrite 的已知答案 A/B 全部逐字段一致。发布后 active container healthy，
 发布审计 app 5xx、fatal、Caddy 5xx 均为 0。完整数据见
 `docs/reports/data/attachment_gateway_production_canary_20260720.json`。
+
+台式机直连模型质量补测中，PNG、JPEG、WebP 压缩后均准确识别乌龟、电路、对话气泡和
+颜色；聚合小图 q90 后仍准确读取品牌、邮箱与中文 UI 字段。该结果验证的是模型实际读取
+压缩后 payload，不只是像素指标。
 
 ## Phase 1.1 method 6 本地历史结果
 
@@ -70,14 +78,16 @@ method 6 第一轮因 JPEG/透明 PNG 达到 5 秒预算而停止并回 `off`。
 
 ## Caddy 413 的硬边界
 
-Sub2 Attachment Gateway 位于 Caddy 之后。2026-07-20 生产只读复核确认当前 Responses
-ingress 前置门为十进制 16,000,000 bytes，因此约 14.0 MB 的请求可以进入 Sub2 并由
-优化器处理；超过该门的请求仍会在到达优化器前被拒绝。
+Sub2 Attachment Gateway 位于 Caddy 之后，因此生产已把 Responses 专用原始入站门独立
+提高到十进制 256,000,000 B；非 Responses 仍为 16,000,000 B。精确边界验证为：
 
-生产 canary 已验证 13,749,545 B 的授权 admin HTTP 请求可进入 Sub2 并降到
-2,945,577 B。对 16 MB 以上的 Client → Caddy 413，仍需另立方案：
-优先客户端/CCSwitch 本地预处理；受控提高 Caddy Responses 上限只能单独评审，不能借
-本次功能顺带上线。
+- Responses `256,000,001 B` → Caddy 413；
+- 非 Responses `16,000,001 B` → Caddy 413；
+- Responses `17,485,303 B` → 进入 Sub2，压到 `3,985,423 B`，模型 HTTP 200。
+
+这解决了旧 16 MB Caddy 门阻止优化器运行的问题，但不代表 256 MB 原始请求必然成功。
+压缩失败、不可支持附件或压后仍超过 16,000,000 B 时，Sub2 会在上游/failover 前拒绝，
+避免继续消耗服务器上行。
 
 ## 第一版应保留的功能
 

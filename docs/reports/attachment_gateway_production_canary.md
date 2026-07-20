@@ -5,13 +5,20 @@
 完成发布、dry-run、rewrite、真实图片 A/B 与缓存验证。Key 27 + admin user 1 保持精确
 范围，普通用户未开启。真实 WS 流量尚未出现。
 
+> 后续状态更新：Attachment 功能提交 `888badf71608` 已包含在当前生产版本
+> `08a77b31d47d` / `sub2api:auto-20260720-1857-08a77b31`。本运行手册完成后，Caddy
+> 作为独立变更把 Responses 原始入站提高到 256,000,000 B；非 Responses 和实际
+> OpenAI Responses 转发仍分别限制为 16,000,000 B。详见
+> `attachment_gateway_current_status.md`。
+
 ## 0. 执行摘要
 
-- 活跃版本：`17b7be8d11e88437302bb4cf05ed9a29e9348311`；蓝绿发布与健康审计通过；
+- 活跃版本：`08a77b31d47d8f7509373f75bc71b56dd74d1200`；蓝绿发布与健康审计通过；
 - 当前范围：`allowed_api_key_ids=[27]`、`allowed_user_ids=[1]`、
   `allow_unscoped=false`；
 - 当前模式：`rewrite`；控制文件为 0600，属主与应用配置一致，应用 UID 可读；
-- 近 14 MB 重复 HTTP：13,749,545 → 2,945,577 B，8 个 cache hit，984.4 ms；
+- 17 MB 以上重复 HTTP：17,485,303 → 3,985,423 B，10 个 cache hit，2,705.1 ms，
+  模型 HTTP 200；
 - 原图/rewrite：PNG、JPEG、WebP、透明 PNG、5 图和 8 重复图的固定答案全部一致；
 - WS：桌面客户端相关 feature 已移除，生产最近 2 小时无 WS usage，不能给出真实 WS
   稳定性结论；自动化 passthrough/ctx_pool 矩阵通过。
@@ -37,7 +44,8 @@
 
 - 不对普通用户或全分组开启；
 - `allow_unscoped` 不得设为 `true`；
-- 不修改 Caddy body limit；
+- 本灰度步骤内不顺带修改 Caddy body limit；后续如需调整必须作为独立变更单独备份、
+  校验、热重载和做边界 smoke；
 - 不接 R2/S3、不替换 URL；
 - 不删除现有缓存、旧容器、数据库或 release 日志；
 - 不在日志、报告或命令行保存 API key、base64、图片内容或 prompt。

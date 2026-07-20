@@ -3,6 +3,10 @@
 日期：2026-07-20
 状态：本地实验实现已落地，功能默认关闭；未连接生产服务器，未修改生产配置或 Caddy。
 
+> **后续状态说明**：本文保留实现前计划。当前功能提交 `888badf71608` 已进入生产镜像，
+> 仅 API Key 27 与 admin user 1 使用 scoped rewrite；Responses 入站为 256,000,000 B，
+> 实际上游仍限制为 16,000,000 B。最新状态见 `attachment_gateway_current_status.md`。
+
 Phase 1.1 更新：灰度 allowlist、dry-run、5 秒 fail-open 时间预算、请求总图片
 bytes 限制、缓存 TTL/容量清理和 HTTP/WS 本地端到端矩阵均已实现。当前发布边界与
 操作步骤见 `attachment_gateway_production_canary.md`。生产 CGO0 构建已固定
