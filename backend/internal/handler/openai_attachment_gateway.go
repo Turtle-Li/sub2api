@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -25,6 +26,17 @@ const (
 	attachmentGatewayControlMaxBytes                              = 64
 )
 
+type responsesAttachmentPreparation struct {
+	Body            []byte
+	BudgetViolation *responsesAttachmentBudgetViolation
+}
+
+type responsesAttachmentBudgetViolation struct {
+	Reason   string
+	Observed int
+	Limit    int
+}
+
 func newResponsesAttachmentOptimizer(cfg *config.Config) responsesAttachmentOptimizer {
 	if cfg == nil {
 		return nil
@@ -37,20 +49,25 @@ func newResponsesAttachmentOptimizer(cfg *config.Config) responsesAttachmentOpti
 		return optimizer
 	}
 	optimizer, err := attachmentgateway.New(attachmentgateway.Config{
-		Enabled:              experiment.AttachmentOptimizerEnabled,
-		ThresholdBytes:       experiment.ThresholdBytes,
-		MaxImageBytes:        experiment.MaxImageBytes,
-		MaxTotalImageBytes:   experiment.MaxTotalImageBytesPerRequest,
-		MaxPixels:            experiment.MaxPixels,
-		Quality:              experiment.Quality,
-		SpecialQuality:       experiment.SpecialQuality,
-		MinSavingsRatio:      experiment.MinSavingsRatio,
-		CacheDir:             experiment.CacheDir,
-		CacheTTL:             time.Duration(experiment.CacheTTLSeconds) * time.Second,
-		CacheMaxBytes:        experiment.CacheMaxBytes,
-		CacheCleanupInterval: time.Duration(experiment.CacheCleanupIntervalSeconds) * time.Second,
-		MaxImagesPerRequest:  experiment.MaxImagesPerRequest,
-		MaxConcurrentEncode:  experiment.MaxConcurrentEncodes,
+		Enabled:                           experiment.AttachmentOptimizerEnabled,
+		RequestBudgetEnabled:              experiment.RequestBudgetEnabled,
+		ThresholdBytes:                    experiment.ThresholdBytes,
+		AggregateSmallImageEnabled:        experiment.AggregateSmallImageEnabled,
+		AggregateSmallImageTriggerBytes:   experiment.AggregateSmallImageTriggerBytes,
+		AggregateSmallImageTriggerCount:   experiment.AggregateSmallImageTriggerCount,
+		AggregateSmallImageThresholdBytes: experiment.AggregateSmallImageThresholdBytes,
+		MaxImageBytes:                     experiment.MaxImageBytes,
+		MaxTotalImageBytes:                experiment.MaxTotalImageBytesPerRequest,
+		MaxPixels:                         experiment.MaxPixels,
+		Quality:                           experiment.Quality,
+		SpecialQuality:                    experiment.SpecialQuality,
+		MinSavingsRatio:                   experiment.MinSavingsRatio,
+		CacheDir:                          experiment.CacheDir,
+		CacheTTL:                          time.Duration(experiment.CacheTTLSeconds) * time.Second,
+		CacheMaxBytes:                     experiment.CacheMaxBytes,
+		CacheCleanupInterval:              time.Duration(experiment.CacheCleanupIntervalSeconds) * time.Second,
+		MaxImagesPerRequest:               experiment.MaxImagesPerRequest,
+		MaxConcurrentEncode:               experiment.MaxConcurrentEncodes,
 	})
 	if err != nil {
 		// Config validation should normally catch this. Fail closed on the feature
@@ -67,18 +84,57 @@ func (h *OpenAIGatewayHandler) optimizeResponsesAttachments(
 	apiKey *service.APIKey,
 	body []byte,
 ) []byte {
+	return h.prepareResponsesAttachments(ctx, reqLog, apiKey, body).Body
+}
+
+func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
+	ctx context.Context,
+	reqLog *zap.Logger,
+	apiKey *service.APIKey,
+	body []byte,
+) responsesAttachmentPreparation {
+	passthrough := responsesAttachmentPreparation{Body: body}
 	if h == nil || h.attachmentOptimizer == nil || !h.attachmentOptimizer.Enabled() {
-		return body
+		return passthrough
 	}
 	experiment := h.attachmentGatewayConfig()
 	if !responsesAttachmentOptimizerInScope(experiment, apiKey) || experiment.OptimizeTimeoutMilliseconds <= 0 {
-		return body
+		return passthrough
 	}
 	rolloutMode := resolveAttachmentGatewayRolloutMode(experiment)
 	if rolloutMode == attachmentGatewayRolloutOff {
-		return body
+		return passthrough
 	}
 	dryRun := rolloutMode == attachmentGatewayRolloutDryRun
+	if experiment.RequestBudgetEnabled && experiment.RequestBudgetEnforce && rolloutMode == attachmentGatewayRolloutRewrite {
+		inlineStats, inspectErr := attachmentgateway.InspectInlineAttachments(body)
+		if inspectErr == nil {
+			if budgetViolation := evaluateResponsesAttachmentBudgetPreflight(experiment, len(body), inlineStats); budgetViolation != nil {
+				if reqLog == nil {
+					reqLog = logger.L()
+				}
+				reqLog.Warn("openai.attachment_gateway_experiment",
+					zap.Bool("experimental", true),
+					zap.String("rollout_mode", string(rolloutMode)),
+					zap.String("budget_stage", "preflight"),
+					zap.Bool("payload_rewritten", false),
+					zap.Int("original_body_bytes", len(body)),
+					zap.Int("forward_body_bytes", 0),
+					zap.Bool("request_budget_enabled", true),
+					zap.Bool("request_budget_enforce", true),
+					zap.Int("original_inline_attachment_count", inlineStats.Count),
+					zap.Int("original_inline_attachment_bytes", inlineStats.Bytes),
+					zap.Int("original_unsupported_attachment_count", inlineStats.UnsupportedCount),
+					zap.Bool("budget_would_reject", true),
+					zap.Bool("budget_enforced", true),
+					zap.String("budget_reason", budgetViolation.Reason),
+					zap.Int("budget_observed", budgetViolation.Observed),
+					zap.Int("budget_limit", budgetViolation.Limit),
+				)
+				return responsesAttachmentPreparation{Body: body, BudgetViolation: budgetViolation}
+			}
+		}
+	}
 
 	optimizeCtx, cancel := context.WithTimeout(ctx, time.Duration(experiment.OptimizeTimeoutMilliseconds)*time.Millisecond)
 	defer cancel()
@@ -86,7 +142,13 @@ func (h *OpenAIGatewayHandler) optimizeResponsesAttachments(
 	metrics := result.Metrics
 	contextErr := optimizeCtx.Err()
 	timedOut := metrics.TimedOut || errors.Is(contextErr, context.DeadlineExceeded)
-	payloadRewritten := !dryRun && contextErr == nil && !bytes.Equal(result.Body, body)
+	budgetViolation := evaluateResponsesAttachmentBudget(experiment, metrics)
+	budgetEnforced := budgetViolation != nil && experiment.RequestBudgetEnforce && rolloutMode == attachmentGatewayRolloutRewrite
+	forwardBody := result.Body
+	if dryRun || contextErr != nil || budgetEnforced {
+		forwardBody = body
+	}
+	payloadRewritten := !budgetEnforced && !dryRun && contextErr == nil && !bytes.Equal(result.Body, body)
 	fields := []zap.Field{
 		zap.Bool("experimental", true),
 		zap.String("rollout_mode", string(rolloutMode)),
@@ -94,7 +156,7 @@ func (h *OpenAIGatewayHandler) optimizeResponsesAttachments(
 		zap.Bool("payload_rewritten", payloadRewritten),
 		zap.Int("original_body_bytes", metrics.OriginalBodyBytes),
 		zap.Int("optimized_body_bytes", metrics.OptimizedBodyBytes),
-		zap.Int("forward_body_bytes", chooseAttachmentForwardBodyBytes(dryRun, contextErr, body, result.Body)),
+		zap.Int("forward_body_bytes", len(forwardBody)),
 		zap.Int("image_count", metrics.ImageCount),
 		zap.Int("optimized_image_count", metrics.OptimizedImageCount),
 		zap.Int("original_image_bytes", metrics.OriginalImageBytes),
@@ -108,21 +170,128 @@ func (h *OpenAIGatewayHandler) optimizeResponsesAttachments(
 		zap.Int("skipped_not_smaller", metrics.SkippedNotSmaller),
 		zap.Int("skipped_request_image_limit", metrics.SkippedRequestImageLimit),
 		zap.Int("skipped_total_image_bytes", metrics.SkippedTotalImageBytes),
+		zap.Bool("aggregate_pressure", metrics.AggregatePressure),
+		zap.Int("effective_threshold_bytes", metrics.EffectiveThresholdBytes),
+		zap.Bool("request_budget_enabled", experiment.RequestBudgetEnabled),
+		zap.Bool("request_budget_enforce", experiment.RequestBudgetEnforce),
+		zap.Int("original_inline_attachment_count", metrics.OriginalInlineAttachmentCount),
+		zap.Int("original_inline_attachment_bytes", metrics.OriginalInlineAttachmentBytes),
+		zap.Int("original_unsupported_attachment_count", metrics.OriginalUnsupportedAttachmentCount),
+		zap.Int("candidate_inline_attachment_count", metrics.CandidateInlineAttachmentCount),
+		zap.Int("candidate_inline_attachment_bytes", metrics.CandidateInlineAttachmentBytes),
+		zap.Int("candidate_unsupported_attachment_count", metrics.CandidateUnsupportedAttachmentCount),
+		zap.Bool("budget_would_reject", budgetViolation != nil),
+		zap.Bool("budget_enforced", budgetEnforced),
 		zap.Float64("optimize_duration_ms", metrics.OptimizeDurationMS),
 		zap.Int("errors", metrics.Errors),
+	}
+	if budgetViolation != nil {
+		fields = append(fields,
+			zap.String("budget_reason", budgetViolation.Reason),
+			zap.Int("budget_observed", budgetViolation.Observed),
+			zap.Int("budget_limit", budgetViolation.Limit),
+		)
 	}
 	if reqLog == nil {
 		reqLog = logger.L()
 	}
-	if metrics.Errors > 0 || timedOut {
+	if metrics.Errors > 0 || timedOut || budgetViolation != nil {
 		reqLog.Warn("openai.attachment_gateway_experiment", fields...)
 	} else {
 		reqLog.Info("openai.attachment_gateway_experiment", fields...)
 	}
-	if dryRun || contextErr != nil {
-		return body
+	if budgetEnforced {
+		return responsesAttachmentPreparation{Body: body, BudgetViolation: budgetViolation}
 	}
-	return result.Body
+	return responsesAttachmentPreparation{Body: forwardBody}
+}
+
+func evaluateResponsesAttachmentBudgetPreflight(experiment config.AttachmentGatewayConfig, bodyBytes int, stats attachmentgateway.InlineAttachmentStats) *responsesAttachmentBudgetViolation {
+	if !experiment.RequestBudgetEnabled || stats.Count == 0 {
+		return nil
+	}
+	if stats.Count > experiment.MaxInlineAttachmentCount {
+		return &responsesAttachmentBudgetViolation{
+			Reason:   "inline_attachment_count",
+			Observed: stats.Count,
+			Limit:    experiment.MaxInlineAttachmentCount,
+		}
+	}
+	// If there is no image the optimizer can transform, neither the inline
+	// payload nor the body can shrink. Rejecting here avoids spending the
+	// optimization timeout on PDF/audio/video or bare file payloads.
+	if stats.OptimizableImageCount == 0 {
+		if stats.Bytes > experiment.MaxInlineAttachmentBytes {
+			return &responsesAttachmentBudgetViolation{
+				Reason:   "inline_attachment_bytes",
+				Observed: stats.Bytes,
+				Limit:    experiment.MaxInlineAttachmentBytes,
+			}
+		}
+		if bodyBytes > experiment.MaxForwardBodyBytes {
+			return &responsesAttachmentBudgetViolation{
+				Reason:   "forward_body_bytes",
+				Observed: bodyBytes,
+				Limit:    experiment.MaxForwardBodyBytes,
+			}
+		}
+	}
+	return nil
+}
+
+func evaluateResponsesAttachmentBudget(experiment config.AttachmentGatewayConfig, metrics attachmentgateway.Metrics) *responsesAttachmentBudgetViolation {
+	if !experiment.RequestBudgetEnabled || metrics.CandidateInlineAttachmentCount == 0 {
+		return nil
+	}
+	if metrics.CandidateInlineAttachmentCount > experiment.MaxInlineAttachmentCount {
+		return &responsesAttachmentBudgetViolation{
+			Reason:   "inline_attachment_count",
+			Observed: metrics.CandidateInlineAttachmentCount,
+			Limit:    experiment.MaxInlineAttachmentCount,
+		}
+	}
+	if metrics.CandidateInlineAttachmentBytes > experiment.MaxInlineAttachmentBytes {
+		return &responsesAttachmentBudgetViolation{
+			Reason:   "inline_attachment_bytes",
+			Observed: metrics.CandidateInlineAttachmentBytes,
+			Limit:    experiment.MaxInlineAttachmentBytes,
+		}
+	}
+	if metrics.OptimizedBodyBytes > experiment.MaxForwardBodyBytes {
+		return &responsesAttachmentBudgetViolation{
+			Reason:   "forward_body_bytes",
+			Observed: metrics.OptimizedBodyBytes,
+			Limit:    experiment.MaxForwardBodyBytes,
+		}
+	}
+	return nil
+}
+
+func responsesAttachmentBudgetMessage(violation *responsesAttachmentBudgetViolation) string {
+	if violation == nil {
+		return "Attachment request exceeds the configured budget."
+	}
+	switch violation.Reason {
+	case "inline_attachment_count":
+		return fmt.Sprintf("Too many inline attachments after optimization; limit is %d.", violation.Limit)
+	case "inline_attachment_bytes":
+		return fmt.Sprintf("Inline attachment payload remains too large after optimization; limit is %s.", formatBodyLimit(int64(violation.Limit)))
+	case "forward_body_bytes":
+		return fmt.Sprintf("Request body remains too large after attachment optimization; limit is %s.", formatBodyLimit(int64(violation.Limit)))
+	default:
+		return "Attachment request exceeds the configured budget."
+	}
+}
+
+func (h *OpenAIGatewayHandler) openAIResponsesMaxForwardBodyBytes() int64 {
+	if h == nil || h.cfg == nil {
+		return 0
+	}
+	return h.cfg.Gateway.OpenAIResponsesMaxForwardBodySize
+}
+
+func openAIResponsesForwardBodyLimitMessage(limit int64) string {
+	return fmt.Sprintf("Request body remains too large for upstream forwarding after attachment optimization; limit is %d bytes.", limit)
 }
 
 // resolveAttachmentGatewayRolloutMode keeps the static config behavior when no
@@ -201,11 +370,4 @@ func responsesAttachmentOptimizerInScope(experiment config.AttachmentGatewayConf
 		}
 	}
 	return false
-}
-
-func chooseAttachmentForwardBodyBytes(dryRun bool, contextErr error, original, optimized []byte) int {
-	if dryRun || contextErr != nil {
-		return len(original)
-	}
-	return len(optimized)
 }

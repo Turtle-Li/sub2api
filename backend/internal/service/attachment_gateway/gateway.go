@@ -76,6 +76,29 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		return result
 	}
 
+	effectiveThreshold := g.config.ThresholdBytes
+	result.Metrics.EffectiveThresholdBytes = effectiveThreshold
+	if g.config.RequestBudgetEnabled || g.config.AggregateSmallImageEnabled {
+		inlineStats, inspectErr := InspectInlineAttachments(body)
+		if inspectErr != nil {
+			result.Metrics.Errors++
+			return result
+		}
+		result.Metrics.OriginalInlineAttachmentCount = inlineStats.Count
+		result.Metrics.OriginalInlineAttachmentBytes = inlineStats.Bytes
+		result.Metrics.OriginalUnsupportedAttachmentCount = inlineStats.UnsupportedCount
+		result.Metrics.CandidateInlineAttachmentCount = inlineStats.Count
+		result.Metrics.CandidateInlineAttachmentBytes = inlineStats.Bytes
+		result.Metrics.CandidateUnsupportedAttachmentCount = inlineStats.UnsupportedCount
+		if g.config.AggregateSmallImageEnabled &&
+			(inlineStats.OptimizableImageBytes >= g.config.AggregateSmallImageTriggerBytes ||
+				inlineStats.OptimizableImageCount >= g.config.AggregateSmallImageTriggerCount) {
+			result.Metrics.AggregatePressure = true
+			effectiveThreshold = g.config.AggregateSmallImageThresholdBytes
+			result.Metrics.EffectiveThresholdBytes = effectiveThreshold
+		}
+	}
+
 	contextFailureRecorded := false
 	recordContextFailure := func(err error) {
 		if contextFailureRecorded {
@@ -128,7 +151,7 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 			return rawURL
 		}
 		totalImageBytes += len(parsed.Bytes)
-		if len(parsed.Bytes) < g.config.ThresholdBytes {
+		if len(parsed.Bytes) < effectiveThreshold {
 			result.Metrics.SkippedBelowThreshold++
 			return rawURL
 		}
@@ -176,6 +199,20 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	}
 	result.Body = optimizedBody
 	result.Metrics.OptimizedBodyBytes = len(optimizedBody)
+	if g.config.RequestBudgetEnabled || g.config.AggregateSmallImageEnabled {
+		inlineStats, inspectErr := InspectInlineAttachments(optimizedBody)
+		if inspectErr != nil {
+			result.Body = body
+			result.Metrics.OptimizedBodyBytes = len(body)
+			result.Metrics.OptimizedImageCount = 0
+			result.Metrics.OptimizedImageBytes = 0
+			result.Metrics.Errors++
+			return result
+		}
+		result.Metrics.CandidateInlineAttachmentCount = inlineStats.Count
+		result.Metrics.CandidateInlineAttachmentBytes = inlineStats.Bytes
+		result.Metrics.CandidateUnsupportedAttachmentCount = inlineStats.UnsupportedCount
+	}
 	return result
 }
 

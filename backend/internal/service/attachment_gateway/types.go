@@ -10,21 +10,24 @@ import (
 )
 
 const (
-	sha256HexLength                   = sha256.Size * 2
-	defaultThresholdBytes             = 512 * 1024
-	defaultMaxImageBytes              = 64 * 1024 * 1024
-	defaultMaxTotalImageBytes         = 64 * 1024 * 1024
-	defaultMaxPixels            int64 = 50_000_000
-	defaultQuality                    = 85
-	defaultSpecialQuality             = 90
-	defaultMinSavingsRatio            = 0.05
-	defaultCacheTTL                   = 7 * 24 * time.Hour
-	defaultCacheMaxBytes        int64 = 512 * 1024 * 1024
-	defaultCacheCleanupInterval       = 10 * time.Minute
-	defaultMaxImagesPerRequest        = 20
-	defaultMaxConcurrentEncode        = 2
-	defaultCacheDir                   = "data/attachment_cache"
-	policyVersion                     = "phase1-v1"
+	sha256HexLength                      = sha256.Size * 2
+	defaultThresholdBytes                = 512 * 1024
+	defaultMaxImageBytes                 = 64 * 1024 * 1024
+	defaultMaxTotalImageBytes            = 64 * 1024 * 1024
+	defaultMaxPixels               int64 = 50_000_000
+	defaultQuality                       = 85
+	defaultSpecialQuality                = 90
+	defaultMinSavingsRatio               = 0.05
+	defaultCacheTTL                      = 7 * 24 * time.Hour
+	defaultCacheMaxBytes           int64 = 512 * 1024 * 1024
+	defaultCacheCleanupInterval          = 10 * time.Minute
+	defaultMaxImagesPerRequest           = 20
+	defaultMaxConcurrentEncode           = 2
+	defaultAggregateTriggerBytes         = 4 * 1024 * 1024
+	defaultAggregateTriggerCount         = 8
+	defaultAggregateThresholdBytes       = 128 * 1024
+	defaultCacheDir                      = "data/attachment_cache"
+	policyVersion                        = "phase1-v1"
 )
 
 var (
@@ -38,39 +41,49 @@ var (
 // Config controls the Phase 1 attachment optimizer. The zero-value is disabled.
 // New applies conservative defaults to the remaining fields.
 type Config struct {
-	Enabled              bool
-	ThresholdBytes       int
-	MaxImageBytes        int
-	MaxTotalImageBytes   int
-	MaxPixels            int64
-	Quality              int
-	SpecialQuality       int
-	MinSavingsRatio      float64
-	CacheDir             string
-	CacheTTL             time.Duration
-	CacheMaxBytes        int64
-	CacheCleanupInterval time.Duration
-	MaxImagesPerRequest  int
-	MaxConcurrentEncode  int
+	Enabled                           bool
+	RequestBudgetEnabled              bool
+	ThresholdBytes                    int
+	AggregateSmallImageEnabled        bool
+	AggregateSmallImageTriggerBytes   int
+	AggregateSmallImageTriggerCount   int
+	AggregateSmallImageThresholdBytes int
+	MaxImageBytes                     int
+	MaxTotalImageBytes                int
+	MaxPixels                         int64
+	Quality                           int
+	SpecialQuality                    int
+	MinSavingsRatio                   float64
+	CacheDir                          string
+	CacheTTL                          time.Duration
+	CacheMaxBytes                     int64
+	CacheCleanupInterval              time.Duration
+	MaxImagesPerRequest               int
+	MaxConcurrentEncode               int
 }
 
 // DefaultConfig returns the complete Phase 1 policy with the experiment off.
 func DefaultConfig() Config {
 	return Config{
-		Enabled:              false,
-		ThresholdBytes:       defaultThresholdBytes,
-		MaxImageBytes:        defaultMaxImageBytes,
-		MaxTotalImageBytes:   defaultMaxTotalImageBytes,
-		MaxPixels:            defaultMaxPixels,
-		Quality:              defaultQuality,
-		SpecialQuality:       defaultSpecialQuality,
-		MinSavingsRatio:      defaultMinSavingsRatio,
-		CacheDir:             defaultCacheDir,
-		CacheTTL:             defaultCacheTTL,
-		CacheMaxBytes:        defaultCacheMaxBytes,
-		CacheCleanupInterval: defaultCacheCleanupInterval,
-		MaxImagesPerRequest:  defaultMaxImagesPerRequest,
-		MaxConcurrentEncode:  defaultMaxConcurrentEncode,
+		Enabled:                           false,
+		RequestBudgetEnabled:              false,
+		ThresholdBytes:                    defaultThresholdBytes,
+		AggregateSmallImageEnabled:        false,
+		AggregateSmallImageTriggerBytes:   defaultAggregateTriggerBytes,
+		AggregateSmallImageTriggerCount:   defaultAggregateTriggerCount,
+		AggregateSmallImageThresholdBytes: defaultAggregateThresholdBytes,
+		MaxImageBytes:                     defaultMaxImageBytes,
+		MaxTotalImageBytes:                defaultMaxTotalImageBytes,
+		MaxPixels:                         defaultMaxPixels,
+		Quality:                           defaultQuality,
+		SpecialQuality:                    defaultSpecialQuality,
+		MinSavingsRatio:                   defaultMinSavingsRatio,
+		CacheDir:                          defaultCacheDir,
+		CacheTTL:                          defaultCacheTTL,
+		CacheMaxBytes:                     defaultCacheMaxBytes,
+		CacheCleanupInterval:              defaultCacheCleanupInterval,
+		MaxImagesPerRequest:               defaultMaxImagesPerRequest,
+		MaxConcurrentEncode:               defaultMaxConcurrentEncode,
 	}
 }
 
@@ -78,6 +91,15 @@ func (c Config) withDefaults() Config {
 	defaults := DefaultConfig()
 	if c.ThresholdBytes == 0 {
 		c.ThresholdBytes = defaults.ThresholdBytes
+	}
+	if c.AggregateSmallImageTriggerBytes == 0 {
+		c.AggregateSmallImageTriggerBytes = defaults.AggregateSmallImageTriggerBytes
+	}
+	if c.AggregateSmallImageTriggerCount == 0 {
+		c.AggregateSmallImageTriggerCount = defaults.AggregateSmallImageTriggerCount
+	}
+	if c.AggregateSmallImageThresholdBytes == 0 {
+		c.AggregateSmallImageThresholdBytes = defaults.AggregateSmallImageThresholdBytes
 	}
 	if c.MaxImageBytes == 0 {
 		c.MaxImageBytes = defaults.MaxImageBytes
@@ -122,6 +144,17 @@ func (c Config) validate() error {
 	if c.ThresholdBytes < 0 {
 		return errors.New("attachment gateway: threshold bytes must be non-negative")
 	}
+	if c.AggregateSmallImageEnabled {
+		if c.AggregateSmallImageTriggerBytes <= 0 {
+			return errors.New("attachment gateway: aggregate image trigger bytes must be positive")
+		}
+		if c.AggregateSmallImageTriggerCount <= 0 {
+			return errors.New("attachment gateway: aggregate image trigger count must be positive")
+		}
+		if c.AggregateSmallImageThresholdBytes <= 0 || c.AggregateSmallImageThresholdBytes > c.ThresholdBytes {
+			return errors.New("attachment gateway: aggregate image threshold must be positive and no greater than the normal threshold")
+		}
+	}
 	if c.MaxImageBytes <= 0 {
 		return errors.New("attachment gateway: max image bytes must be positive")
 	}
@@ -161,24 +194,32 @@ func (c Config) validate() error {
 // Metrics is safe to log: it contains only counts, byte sizes, durations and
 // cache outcomes, never image bytes, base64 strings, prompts or hashes.
 type Metrics struct {
-	Enabled                  bool
-	OriginalBodyBytes        int
-	OptimizedBodyBytes       int
-	ImageCount               int
-	OptimizedImageCount      int
-	OriginalImageBytes       int
-	OptimizedImageBytes      int
-	CacheHit                 bool
-	CacheHits                int
-	CacheShared              int
-	TimedOut                 bool
-	SkippedBelowThreshold    int
-	SkippedUnsupported       int
-	SkippedNotSmaller        int
-	SkippedRequestImageLimit int
-	SkippedTotalImageBytes   int
-	Errors                   int
-	OptimizeDurationMS       float64
+	Enabled                             bool
+	OriginalBodyBytes                   int
+	OptimizedBodyBytes                  int
+	ImageCount                          int
+	OptimizedImageCount                 int
+	OriginalImageBytes                  int
+	OptimizedImageBytes                 int
+	CacheHit                            bool
+	CacheHits                           int
+	CacheShared                         int
+	TimedOut                            bool
+	SkippedBelowThreshold               int
+	SkippedUnsupported                  int
+	SkippedNotSmaller                   int
+	SkippedRequestImageLimit            int
+	SkippedTotalImageBytes              int
+	AggregatePressure                   bool
+	EffectiveThresholdBytes             int
+	OriginalInlineAttachmentCount       int
+	OriginalInlineAttachmentBytes       int
+	OriginalUnsupportedAttachmentCount  int
+	CandidateInlineAttachmentCount      int
+	CandidateInlineAttachmentBytes      int
+	CandidateUnsupportedAttachmentCount int
+	Errors                              int
+	OptimizeDurationMS                  float64
 }
 
 // Result contains the body to forward and privacy-safe request metrics.

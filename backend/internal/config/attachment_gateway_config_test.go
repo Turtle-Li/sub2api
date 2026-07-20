@@ -14,6 +14,8 @@ func TestAttachmentGatewayDefaultsAreSafeAndDisabled(t *testing.T) {
 	attachment := cfg.Gateway.AttachmentGateway
 	require.False(t, attachment.AttachmentOptimizerEnabled)
 	require.True(t, attachment.AttachmentOptimizerDryRun)
+	require.False(t, attachment.RequestBudgetEnabled)
+	require.False(t, attachment.RequestBudgetEnforce)
 	require.Empty(t, attachment.RolloutControlFile)
 	require.False(t, attachment.AllowUnscoped)
 	require.Empty(t, attachment.AllowedAPIKeyIDs)
@@ -21,6 +23,13 @@ func TestAttachmentGatewayDefaultsAreSafeAndDisabled(t *testing.T) {
 	require.Empty(t, attachment.AllowedGroupIDs)
 	require.Equal(t, 5000, attachment.OptimizeTimeoutMilliseconds)
 	require.Equal(t, 512*1024, attachment.ThresholdBytes)
+	require.False(t, attachment.AggregateSmallImageEnabled)
+	require.Equal(t, 4*1024*1024, attachment.AggregateSmallImageTriggerBytes)
+	require.Equal(t, 8, attachment.AggregateSmallImageTriggerCount)
+	require.Equal(t, 128*1024, attachment.AggregateSmallImageThresholdBytes)
+	require.Equal(t, 32, attachment.MaxInlineAttachmentCount)
+	require.Equal(t, 12*1024*1024, attachment.MaxInlineAttachmentBytes)
+	require.Equal(t, 14*1024*1024, attachment.MaxForwardBodyBytes)
 	require.Equal(t, 64*1024*1024, attachment.MaxImageBytes)
 	require.Equal(t, 64*1024*1024, attachment.MaxTotalImageBytesPerRequest)
 	require.Equal(t, int64(50_000_000), attachment.MaxPixels)
@@ -45,6 +54,7 @@ func TestAttachmentGatewayValidationRejectsUnsafeValues(t *testing.T) {
 		mutate  func(*AttachmentGatewayConfig)
 		message string
 	}{
+		{name: "enforce without budget", mutate: func(c *AttachmentGatewayConfig) { c.RequestBudgetEnforce = true; c.RequestBudgetEnabled = false }, message: "request_budget_enforce"},
 		{name: "zero timeout", mutate: func(c *AttachmentGatewayConfig) { c.OptimizeTimeoutMilliseconds = 0 }, message: "optimize_timeout_ms"},
 		{name: "negative threshold", mutate: func(c *AttachmentGatewayConfig) { c.ThresholdBytes = -1 }, message: "threshold_bytes"},
 		{name: "zero image limit", mutate: func(c *AttachmentGatewayConfig) { c.MaxImageBytes = 0 }, message: "max_image_bytes"},
@@ -61,6 +71,42 @@ func TestAttachmentGatewayValidationRejectsUnsafeValues(t *testing.T) {
 		{name: "invalid API key scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedAPIKeyIDs = []int64{0} }, message: "allowed IDs"},
 		{name: "invalid user scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedUserIDs = []int64{0} }, message: "allowed IDs"},
 		{name: "invalid group scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedGroupIDs = []int64{-1} }, message: "allowed IDs"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			clone := *cfg
+			clone.Gateway.AttachmentGateway.AttachmentOptimizerEnabled = true
+			testCase.mutate(&clone.Gateway.AttachmentGateway)
+			require.ErrorContains(t, clone.Validate(), testCase.message)
+		})
+	}
+}
+
+func TestAttachmentGatewayBudgetValidationRejectsUnsafeValues(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		mutate  func(*AttachmentGatewayConfig)
+		message string
+	}{
+		{name: "zero aggregate trigger bytes", mutate: func(c *AttachmentGatewayConfig) {
+			c.AggregateSmallImageEnabled = true
+			c.AggregateSmallImageTriggerBytes = 0
+		}, message: "aggregate_small_image_trigger_bytes"},
+		{name: "zero aggregate trigger count", mutate: func(c *AttachmentGatewayConfig) {
+			c.AggregateSmallImageEnabled = true
+			c.AggregateSmallImageTriggerCount = 0
+		}, message: "aggregate_small_image_trigger_count"},
+		{name: "aggregate threshold above normal", mutate: func(c *AttachmentGatewayConfig) {
+			c.AggregateSmallImageEnabled = true
+			c.AggregateSmallImageThresholdBytes = c.ThresholdBytes + 1
+		}, message: "aggregate_small_image_threshold_bytes"},
+		{name: "zero attachment count", mutate: func(c *AttachmentGatewayConfig) { c.RequestBudgetEnabled = true; c.MaxInlineAttachmentCount = 0 }, message: "max_inline_attachment_count"},
+		{name: "zero attachment bytes", mutate: func(c *AttachmentGatewayConfig) { c.RequestBudgetEnabled = true; c.MaxInlineAttachmentBytes = 0 }, message: "max_inline_attachment_bytes"},
+		{name: "zero forward bytes", mutate: func(c *AttachmentGatewayConfig) { c.RequestBudgetEnabled = true; c.MaxForwardBodyBytes = 0 }, message: "max_forward_body_bytes"},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

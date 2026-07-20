@@ -42,6 +42,7 @@ func TestLoadHTTPIngressSafetyDefaults(t *testing.T) {
 	require.Equal(t, 10, cfg.Server.ReadHeaderTimeout)
 	require.Equal(t, 64*1024, cfg.Server.MaxHeaderBytes)
 	require.Equal(t, int64(32*1024*1024), cfg.Gateway.TextMaxBodySize)
+	require.Zero(t, cfg.Gateway.OpenAIResponsesMaxForwardBodySize)
 	require.True(t, cfg.APIKeyAuth.InvalidAbuse.Enabled)
 	require.Equal(t, 120, cfg.APIKeyAuth.InvalidAbuse.Threshold)
 	require.Equal(t, 16384, cfg.APIKeyAuth.InvalidAbuse.Capacity)
@@ -1442,6 +1443,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway max body size",
 			mutate:  func(c *Config) { c.Gateway.MaxBodySize = 0 },
 			wantErr: "gateway.max_body_size",
+		},
+		{
+			name:    "responses forward body exceeds gateway body",
+			mutate:  func(c *Config) { c.Gateway.OpenAIResponsesMaxForwardBodySize = c.Gateway.MaxBodySize + 1 },
+			wantErr: "gateway.openai_responses_max_forward_body_size",
 		},
 		{
 			name:    "gateway text body exceeds media body",

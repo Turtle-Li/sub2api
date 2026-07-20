@@ -4,6 +4,10 @@
 状态：method 0 候选已发布并完成 scoped HTTP dry-run/rewrite；API Key 27 与 admin user 1
 可用，普通用户仍关闭。
 
+> 2026-07-20 补充：请求级附件预算、聚合小图策略与“64MB Responses 入站 / 16MB
+> 实际上游转发保险”已完成本地实现和门禁。设计、真实小图流量与切换顺序见
+> `docs/reports/attachment_gateway_request_budget.md`。
+
 ## 决策
 
 当前结论是 **“条件 Go”**：

@@ -22,6 +22,24 @@ When enabled it:
   budget without touching unknown files;
 - fails open per image and emits only byte/count/duration metrics.
 
+The request-level budget is a second, separately gated Phase 1 capability:
+
+- `request_budget_enabled: false` keeps aggregate inspection completely off;
+- `aggregate_small_image_enabled: false` can lower the per-image threshold from
+  512 KiB to 128 KiB only when supported images exceed the configured aggregate
+  byte/count trigger;
+- candidate attachment count/bytes and candidate forward-body bytes are
+  measured after optimization;
+- `request_budget_enforce: false` logs `budget_would_reject` but never rejects;
+- enforcement is possible only in `rewrite` mode and returns 413 before any
+  upstream account/failover attempt;
+- PDF, Office, audio and video remain unmodified, but recognized inline fields
+  count toward the aggregate budget.
+
+The optimizer work limits remain fail-open and are not upload quotas. In
+particular, `max_images_per_request` still means "stop optimizing more images";
+it never silently changes into a rejection rule.
+
 Application integration adds three rollout barriers in addition to the leaf
 feature switch:
 

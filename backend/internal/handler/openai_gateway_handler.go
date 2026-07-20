@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -365,9 +366,24 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// The original body remains the source of all security/session fingerprints.
 	forwardBody := body
 	if requestPlatform == service.PlatformOpenAI && isBareOpenAIResponsesPath(c) {
-		forwardBody = h.optimizeResponsesAttachments(c.Request.Context(), reqLog, apiKey, body)
+		preparedAttachments := h.prepareResponsesAttachments(c.Request.Context(), reqLog, apiKey, body)
+		if preparedAttachments.BudgetViolation != nil {
+			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", responsesAttachmentBudgetMessage(preparedAttachments.BudgetViolation))
+			return
+		}
+		forwardBody = preparedAttachments.Body
 	}
 	forwardBody = openAIModelMappedBody(forwardBody, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
+	if maxForwardBytes := h.openAIResponsesMaxForwardBodyBytes(); maxForwardBytes > 0 && int64(len(forwardBody)) > maxForwardBytes {
+		reqLog.Warn("openai.responses_forward_body_too_large",
+			zap.Int("original_body_bytes", len(body)),
+			zap.Int("forward_body_bytes", len(forwardBody)),
+			zap.Int64("max_forward_body_bytes", maxForwardBytes),
+			zap.Bool("payload_rewritten", !bytes.Equal(forwardBody, body)),
+		)
+		h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", openAIResponsesForwardBodyLimitMessage(maxForwardBytes))
+		return
+	}
 
 	// Generate session hash (header first; fallback to prompt_cache_key)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
@@ -1609,7 +1625,23 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	// the original bytes. Subsequent turns remain unchanged in this phase.
 	forwardFirstMessage := firstMessage
 	if requestPlatform == service.PlatformOpenAI {
-		forwardFirstMessage = h.optimizeResponsesAttachments(ctx, reqLog, apiKey, firstMessage)
+		preparedAttachments := h.prepareResponsesAttachments(ctx, reqLog, apiKey, firstMessage)
+		if preparedAttachments.BudgetViolation != nil {
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, responsesAttachmentBudgetMessage(preparedAttachments.BudgetViolation))
+			return
+		}
+		forwardFirstMessage = preparedAttachments.Body
+		if maxForwardBytes := h.openAIResponsesMaxForwardBodyBytes(); maxForwardBytes > 0 && int64(len(forwardFirstMessage)) > maxForwardBytes {
+			reqLog.Warn("openai.responses_forward_body_too_large",
+				zap.Int("original_body_bytes", len(firstMessage)),
+				zap.Int("forward_body_bytes", len(forwardFirstMessage)),
+				zap.Int64("max_forward_body_bytes", maxForwardBytes),
+				zap.Bool("payload_rewritten", !bytes.Equal(forwardFirstMessage, firstMessage)),
+				zap.Bool("ws_ingress", true),
+			)
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, openAIResponsesForwardBodyLimitMessage(maxForwardBytes))
+			return
+		}
 	}
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0

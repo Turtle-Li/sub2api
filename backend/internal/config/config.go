@@ -783,27 +783,38 @@ type ImageConcurrencyConfig struct {
 type AttachmentGatewayConfig struct {
 	AttachmentOptimizerEnabled bool `mapstructure:"attachment_optimizer_enabled"`
 	AttachmentOptimizerDryRun  bool `mapstructure:"attachment_optimizer_dry_run"`
+	// RequestBudgetEnabled adds privacy-safe aggregate attachment accounting.
+	// RequestBudgetEnforce remains a separate explicit gate for 413 responses.
+	RequestBudgetEnabled bool `mapstructure:"request_budget_enabled"`
+	RequestBudgetEnforce bool `mapstructure:"request_budget_enforce"`
 	// RolloutControlFile optionally provides a live, fail-closed canary mode
 	// switch. The file must contain exactly off, dry_run, or rewrite.
-	RolloutControlFile           string  `mapstructure:"rollout_control_file"`
-	AllowUnscoped                bool    `mapstructure:"allow_unscoped"`
-	AllowedAPIKeyIDs             []int64 `mapstructure:"allowed_api_key_ids"`
-	AllowedUserIDs               []int64 `mapstructure:"allowed_user_ids"`
-	AllowedGroupIDs              []int64 `mapstructure:"allowed_group_ids"`
-	OptimizeTimeoutMilliseconds  int     `mapstructure:"optimize_timeout_ms"`
-	ThresholdBytes               int     `mapstructure:"threshold_bytes"`
-	MaxImageBytes                int     `mapstructure:"max_image_bytes"`
-	MaxTotalImageBytesPerRequest int     `mapstructure:"max_total_image_bytes_per_request"`
-	MaxPixels                    int64   `mapstructure:"max_pixels"`
-	Quality                      int     `mapstructure:"quality"`
-	SpecialQuality               int     `mapstructure:"special_quality"`
-	MinSavingsRatio              float64 `mapstructure:"min_savings_ratio"`
-	CacheDir                     string  `mapstructure:"cache_dir"`
-	CacheTTLSeconds              int     `mapstructure:"cache_ttl_seconds"`
-	CacheMaxBytes                int64   `mapstructure:"cache_max_bytes"`
-	CacheCleanupIntervalSeconds  int     `mapstructure:"cache_cleanup_interval_seconds"`
-	MaxImagesPerRequest          int     `mapstructure:"max_images_per_request"`
-	MaxConcurrentEncodes         int     `mapstructure:"max_concurrent_encodes"`
+	RolloutControlFile                string  `mapstructure:"rollout_control_file"`
+	AllowUnscoped                     bool    `mapstructure:"allow_unscoped"`
+	AllowedAPIKeyIDs                  []int64 `mapstructure:"allowed_api_key_ids"`
+	AllowedUserIDs                    []int64 `mapstructure:"allowed_user_ids"`
+	AllowedGroupIDs                   []int64 `mapstructure:"allowed_group_ids"`
+	OptimizeTimeoutMilliseconds       int     `mapstructure:"optimize_timeout_ms"`
+	ThresholdBytes                    int     `mapstructure:"threshold_bytes"`
+	AggregateSmallImageEnabled        bool    `mapstructure:"aggregate_small_image_enabled"`
+	AggregateSmallImageTriggerBytes   int     `mapstructure:"aggregate_small_image_trigger_bytes"`
+	AggregateSmallImageTriggerCount   int     `mapstructure:"aggregate_small_image_trigger_count"`
+	AggregateSmallImageThresholdBytes int     `mapstructure:"aggregate_small_image_threshold_bytes"`
+	MaxInlineAttachmentCount          int     `mapstructure:"max_inline_attachment_count"`
+	MaxInlineAttachmentBytes          int     `mapstructure:"max_inline_attachment_bytes"`
+	MaxForwardBodyBytes               int     `mapstructure:"max_forward_body_bytes"`
+	MaxImageBytes                     int     `mapstructure:"max_image_bytes"`
+	MaxTotalImageBytesPerRequest      int     `mapstructure:"max_total_image_bytes_per_request"`
+	MaxPixels                         int64   `mapstructure:"max_pixels"`
+	Quality                           int     `mapstructure:"quality"`
+	SpecialQuality                    int     `mapstructure:"special_quality"`
+	MinSavingsRatio                   float64 `mapstructure:"min_savings_ratio"`
+	CacheDir                          string  `mapstructure:"cache_dir"`
+	CacheTTLSeconds                   int     `mapstructure:"cache_ttl_seconds"`
+	CacheMaxBytes                     int64   `mapstructure:"cache_max_bytes"`
+	CacheCleanupIntervalSeconds       int     `mapstructure:"cache_cleanup_interval_seconds"`
+	MaxImagesPerRequest               int     `mapstructure:"max_images_per_request"`
+	MaxConcurrentEncodes              int     `mapstructure:"max_concurrent_encodes"`
 }
 
 const (
@@ -826,6 +837,9 @@ type GatewayConfig struct {
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
+	// OpenAIResponsesMaxForwardBodySize caps the actual HTTP/WS Responses body
+	// after optional attachment optimization and model mapping. Zero disables it.
+	OpenAIResponsesMaxForwardBodySize int64 `mapstructure:"openai_responses_max_forward_body_size"`
 	// TextMaxBodySize limits endpoints that cannot carry inline image/video payloads.
 	TextMaxBodySize int64 `mapstructure:"text_max_body_size"`
 	// 非流式上游响应体读取上限（字节），用于防止无界读取导致内存放大
@@ -2163,6 +2177,8 @@ func setDefaults() {
 	// switch false guarantees no request parsing, cache I/O or payload rewrite.
 	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_dry_run", true)
+	viper.SetDefault("gateway.attachment_gateway.request_budget_enabled", false)
+	viper.SetDefault("gateway.attachment_gateway.request_budget_enforce", false)
 	viper.SetDefault("gateway.attachment_gateway.rollout_control_file", "")
 	viper.SetDefault("gateway.attachment_gateway.allow_unscoped", false)
 	viper.SetDefault("gateway.attachment_gateway.allowed_api_key_ids", []int64{})
@@ -2170,6 +2186,13 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.allowed_group_ids", []int64{})
 	viper.SetDefault("gateway.attachment_gateway.optimize_timeout_ms", 5000)
 	viper.SetDefault("gateway.attachment_gateway.threshold_bytes", 512*1024)
+	viper.SetDefault("gateway.attachment_gateway.aggregate_small_image_enabled", false)
+	viper.SetDefault("gateway.attachment_gateway.aggregate_small_image_trigger_bytes", 4*1024*1024)
+	viper.SetDefault("gateway.attachment_gateway.aggregate_small_image_trigger_count", 8)
+	viper.SetDefault("gateway.attachment_gateway.aggregate_small_image_threshold_bytes", 128*1024)
+	viper.SetDefault("gateway.attachment_gateway.max_inline_attachment_count", 32)
+	viper.SetDefault("gateway.attachment_gateway.max_inline_attachment_bytes", 12*1024*1024)
+	viper.SetDefault("gateway.attachment_gateway.max_forward_body_bytes", 14*1024*1024)
 	viper.SetDefault("gateway.attachment_gateway.max_image_bytes", 64*1024*1024)
 	viper.SetDefault("gateway.attachment_gateway.max_total_image_bytes_per_request", 64*1024*1024)
 	viper.SetDefault("gateway.attachment_gateway.max_pixels", int64(50_000_000))
@@ -2185,6 +2208,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
+	viper.SetDefault("gateway.openai_responses_max_forward_body_size", int64(0))
 	viper.SetDefault("gateway.text_max_body_size", int64(32*1024*1024))
 	viper.SetDefault("gateway.upstream_response_read_max_bytes", DefaultUpstreamResponseReadMaxBytes)
 	viper.SetDefault("gateway.proxy_probe_response_read_max_bytes", int64(1024*1024))
@@ -2851,6 +2875,9 @@ func (c *Config) Validate() error {
 	if c.Gateway.MaxBodySize <= 0 {
 		return fmt.Errorf("gateway.max_body_size must be positive")
 	}
+	if c.Gateway.OpenAIResponsesMaxForwardBodySize < 0 || c.Gateway.OpenAIResponsesMaxForwardBodySize > c.Gateway.MaxBodySize {
+		return fmt.Errorf("gateway.openai_responses_max_forward_body_size must be zero or no greater than gateway.max_body_size")
+	}
 	if c.Gateway.TextMaxBodySize <= 0 || c.Gateway.TextMaxBodySize > c.Gateway.MaxBodySize {
 		return fmt.Errorf("gateway.text_max_body_size must be positive and no greater than gateway.max_body_size")
 	}
@@ -2901,11 +2928,36 @@ func (c *Config) Validate() error {
 	// Dormant experiment values cannot block startup. Validate the tuning block
 	// only when the leaf feature gate is explicitly enabled.
 	if attachment.AttachmentOptimizerEnabled {
+		if attachment.RequestBudgetEnforce && !attachment.RequestBudgetEnabled {
+			return fmt.Errorf("gateway.attachment_gateway.request_budget_enforce requires request_budget_enabled")
+		}
 		if attachment.OptimizeTimeoutMilliseconds <= 0 {
 			return fmt.Errorf("gateway.attachment_gateway.optimize_timeout_ms must be positive")
 		}
 		if attachment.ThresholdBytes < 0 {
 			return fmt.Errorf("gateway.attachment_gateway.threshold_bytes must be non-negative")
+		}
+		if attachment.AggregateSmallImageEnabled {
+			if attachment.AggregateSmallImageTriggerBytes <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.aggregate_small_image_trigger_bytes must be positive")
+			}
+			if attachment.AggregateSmallImageTriggerCount <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.aggregate_small_image_trigger_count must be positive")
+			}
+			if attachment.AggregateSmallImageThresholdBytes <= 0 || attachment.AggregateSmallImageThresholdBytes > attachment.ThresholdBytes {
+				return fmt.Errorf("gateway.attachment_gateway.aggregate_small_image_threshold_bytes must be positive and no greater than threshold_bytes")
+			}
+		}
+		if attachment.RequestBudgetEnabled {
+			if attachment.MaxInlineAttachmentCount <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.max_inline_attachment_count must be positive")
+			}
+			if attachment.MaxInlineAttachmentBytes <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.max_inline_attachment_bytes must be positive")
+			}
+			if attachment.MaxForwardBodyBytes <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.max_forward_body_bytes must be positive")
+			}
 		}
 		if attachment.MaxImageBytes <= 0 {
 			return fmt.Errorf("gateway.attachment_gateway.max_image_bytes must be positive")

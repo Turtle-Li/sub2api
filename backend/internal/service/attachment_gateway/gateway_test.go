@@ -94,6 +94,93 @@ func TestBelowThresholdIsExactNoop(t *testing.T) {
 	require.Zero(t, result.Metrics.OptimizedImageCount)
 }
 
+func TestAggregatePressureLowersThresholdForMediumSmallImages(t *testing.T) {
+	sourceA := makePhotoLikePNG(t, 420, 300, 71)
+	sourceB := makePhotoLikePNG(t, 420, 300, 72)
+	config := DefaultConfig()
+	config.Enabled = true
+	config.RequestBudgetEnabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = max(len(sourceA), len(sourceB)) + 1
+	config.AggregateSmallImageEnabled = true
+	config.AggregateSmallImageTriggerBytes = 1 << 30
+	config.AggregateSmallImageTriggerCount = 2
+	config.AggregateSmallImageThresholdBytes = 1
+	gateway, err := New(config)
+	require.NoError(t, err)
+	body := makeResponsesPayload(t, []string{
+		dataURL("image/png", sourceA),
+		dataURL("image/png", sourceB),
+	}, 0)
+
+	coldStarted := time.Now()
+	result := gateway.Optimize(context.Background(), body)
+	coldDuration := time.Since(coldStarted)
+	warmStarted := time.Now()
+	warm := gateway.Optimize(context.Background(), body)
+	warmDuration := time.Since(warmStarted)
+
+	require.True(t, result.Metrics.AggregatePressure)
+	require.Equal(t, 1, result.Metrics.EffectiveThresholdBytes)
+	require.Equal(t, 2, result.Metrics.OptimizedImageCount)
+	require.Equal(t, 2, result.Metrics.OriginalInlineAttachmentCount)
+	require.Equal(t, 2, result.Metrics.CandidateInlineAttachmentCount)
+	require.Less(t, result.Metrics.CandidateInlineAttachmentBytes, result.Metrics.OriginalInlineAttachmentBytes)
+	require.Equal(t, result.Body, warm.Body)
+	require.Equal(t, 2, warm.Metrics.CacheHits)
+	t.Logf(
+		"aggregate small images: body=%d->%d saved=%.2f%% cold=%s warm=%s cache_hits=%d",
+		len(body),
+		len(result.Body),
+		(1-float64(len(result.Body))/float64(len(body)))*100,
+		coldDuration,
+		warmDuration,
+		warm.Metrics.CacheHits,
+	)
+}
+
+func TestRequestBudgetInspectionCountsUnsupportedInlineFiles(t *testing.T) {
+	source := makePhotoLikePNG(t, 180, 120, 73)
+	config := DefaultConfig()
+	config.Enabled = true
+	config.RequestBudgetEnabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = len(source) + 1
+	gateway, err := New(config)
+	require.NoError(t, err)
+	payload := map[string]any{
+		"model": "gpt-test",
+		"input": []any{
+			map[string]any{"type": "input_image", "image_url": dataURL("image/png", source)},
+			map[string]any{"type": "input_file", "filename": "report.pdf", "file_data": "data:application/pdf;base64,QUJDRA=="},
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	result := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, body, result.Body)
+	require.Equal(t, 2, result.Metrics.OriginalInlineAttachmentCount)
+	require.Equal(t, 1, result.Metrics.OriginalUnsupportedAttachmentCount)
+	require.Equal(t, result.Metrics.OriginalInlineAttachmentBytes, result.Metrics.CandidateInlineAttachmentBytes)
+}
+
+func TestRequestBudgetInspectionDoesNotCountDataURLInText(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.RequestBudgetEnabled = true
+	config.CacheDir = t.TempDir()
+	gateway, err := New(config)
+	require.NoError(t, err)
+	body := []byte(`{"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_text","text":"data:image/png;base64,QUJD"}]}]}`)
+
+	result := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, body, result.Body)
+	require.Zero(t, result.Metrics.OriginalInlineAttachmentCount)
+}
+
 func TestCacheHitReusesContentAddressedEntry(t *testing.T) {
 	cacheDir := t.TempDir()
 	config := DefaultConfig()

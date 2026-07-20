@@ -110,6 +110,7 @@ func TestOptimizeResponsesAttachmentsSkipsCallWhenGateIsOff(t *testing.T) {
 
 type attachmentGatewayCaptureUpstream struct {
 	requestBody []byte
+	calls       int
 }
 
 func (u *attachmentGatewayCaptureUpstream) Do(request *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -118,6 +119,7 @@ func (u *attachmentGatewayCaptureUpstream) Do(request *http.Request, _ string, _
 		return nil, err
 	}
 	u.requestBody = append([]byte(nil), requestBody...)
+	u.calls++
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -158,9 +160,12 @@ func TestResponsesAttachmentGatewayLocalForwardIntegration(t *testing.T) {
 	cfg.Default.RateMultiplier = 1
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Gateway.MaxAccountSwitches = 1
+	cfg.Gateway.OpenAIResponsesMaxForwardBodySize = 64 * 1024 * 1024
 	cfg.Gateway.AttachmentGateway = config.AttachmentGatewayConfig{
 		AttachmentOptimizerEnabled:  true,
 		AttachmentOptimizerDryRun:   false,
+		RequestBudgetEnabled:        true,
+		RequestBudgetEnforce:        true,
 		AllowUnscoped:               true,
 		OptimizeTimeoutMilliseconds: 5000,
 		ThresholdBytes:              1,
@@ -173,6 +178,9 @@ func TestResponsesAttachmentGatewayLocalForwardIntegration(t *testing.T) {
 		CacheTTLSeconds:             3600,
 		MaxImagesPerRequest:         5,
 		MaxConcurrentEncodes:        1,
+		MaxInlineAttachmentCount:    1,
+		MaxInlineAttachmentBytes:    64 * 1024 * 1024,
+		MaxForwardBodyBytes:         64 * 1024 * 1024,
 	}
 
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{account}}
@@ -220,6 +228,51 @@ func TestResponsesAttachmentGatewayLocalForwardIntegration(t *testing.T) {
 	require.Contains(t, string(upstream.requestBody), "data:image/webp;base64,")
 	require.NotContains(t, string(upstream.requestBody), "data:image/png;base64,")
 	require.Contains(t, string(upstream.requestBody), `"detail":"high"`)
+	require.Equal(t, 1, upstream.calls)
+
+	// Attachment count cannot shrink, so the same handler rejects an over-count
+	// request during the privacy-safe preflight, before encoding or upstream
+	// failover work.
+	twoImagePayload := `{"model":"gpt-test","stream":false,"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString(imageData) + `"},{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString(imageData) + `"}]}]}`
+	rejectRecorder := httptest.NewRecorder()
+	rejectContext, _ := gin.CreateTestContext(rejectRecorder)
+	rejectContext.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(twoImagePayload))
+	rejectContext.Request.Header.Set("Content-Type", "application/json")
+	rejectContext.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID:      6122,
+		GroupID: &groupID,
+		User:    &service.User{ID: 6123, Status: service.StatusActive},
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+	})
+	rejectContext.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 6123, Concurrency: 1})
+
+	handler.Responses(rejectContext)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, rejectRecorder.Code)
+	require.Contains(t, rejectRecorder.Body.String(), "Too many inline attachments")
+	require.Equal(t, 1, upstream.calls, "budget rejection must happen before upstream forwarding")
+
+	// When Caddy later admits a larger Responses body, requests outside the
+	// optimizer scope still retain an application-level upstream cap.
+	cfg.Gateway.AttachmentGateway.AllowUnscoped = false
+	cfg.Gateway.OpenAIResponsesMaxForwardBodySize = int64(len(payload) - 1)
+	capRecorder := httptest.NewRecorder()
+	capContext, _ := gin.CreateTestContext(capRecorder)
+	capContext.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(payload))
+	capContext.Request.Header.Set("Content-Type", "application/json")
+	capContext.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID:      6122,
+		GroupID: &groupID,
+		User:    &service.User{ID: 6123, Status: service.StatusActive},
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+	})
+	capContext.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 6123, Concurrency: 1})
+
+	handler.Responses(capContext)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, capRecorder.Code)
+	require.Contains(t, capRecorder.Body.String(), "upstream forwarding")
+	require.Equal(t, 1, upstream.calls, "unscoped oversized body must not reach upstream")
 }
 
 func TestResponsesAttachmentOptimizerScopeIsFailClosed(t *testing.T) {
@@ -340,6 +393,129 @@ func TestResponsesAttachmentOptimizerDryRunMeasuresButForwardsOriginal(t *testin
 	require.EqualValues(t, len(body), entries[0].ContextMap()["forward_body_bytes"])
 }
 
+func TestResponsesAttachmentBudgetEvaluatesCandidateAfterOptimization(t *testing.T) {
+	body := []byte(`{"model":"original","padding":"large"}`)
+	optimized := []byte(`{"model":"optimized"}`)
+	fake := &fakeResponsesAttachmentOptimizer{
+		enabled: true,
+		result: attachmentgateway.Result{
+			Body: optimized,
+			Metrics: attachmentgateway.Metrics{
+				Enabled:                        true,
+				OriginalBodyBytes:              200,
+				OptimizedBodyBytes:             80,
+				OriginalInlineAttachmentCount:  1,
+				OriginalInlineAttachmentBytes:  180,
+				CandidateInlineAttachmentCount: 1,
+				CandidateInlineAttachmentBytes: 50,
+			},
+		},
+	}
+	handler := &OpenAIGatewayHandler{
+		attachmentOptimizer: fake,
+		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
+			AttachmentOptimizerEnabled:  true,
+			AllowUnscoped:               true,
+			OptimizeTimeoutMilliseconds: 1000,
+			RequestBudgetEnabled:        true,
+			RequestBudgetEnforce:        true,
+			MaxInlineAttachmentCount:    4,
+			MaxInlineAttachmentBytes:    100,
+			MaxForwardBodyBytes:         100,
+		}),
+	}
+
+	prepared := handler.prepareResponsesAttachments(context.Background(), zap.NewNop(), &service.APIKey{ID: 1}, body)
+
+	require.Nil(t, prepared.BudgetViolation)
+	require.Equal(t, optimized, prepared.Body)
+}
+
+func TestResponsesAttachmentBudgetEnforcementIsSeparateFromObservation(t *testing.T) {
+	body := []byte(`{"model":"original"}`)
+	optimized := []byte(`{"model":"optimized"}`)
+	newHandler := func(enforce bool, dryRun bool, logger *zap.Logger) (*OpenAIGatewayHandler, *fakeResponsesAttachmentOptimizer) {
+		fake := &fakeResponsesAttachmentOptimizer{
+			enabled: true,
+			result: attachmentgateway.Result{
+				Body: optimized,
+				Metrics: attachmentgateway.Metrics{
+					Enabled:                        true,
+					OriginalBodyBytes:              len(body),
+					OptimizedBodyBytes:             200,
+					CandidateInlineAttachmentCount: 2,
+					CandidateInlineAttachmentBytes: 150,
+				},
+			},
+		}
+		return &OpenAIGatewayHandler{
+			attachmentOptimizer: fake,
+			cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
+				AttachmentOptimizerEnabled:  true,
+				AttachmentOptimizerDryRun:   dryRun,
+				AllowUnscoped:               true,
+				OptimizeTimeoutMilliseconds: 1000,
+				RequestBudgetEnabled:        true,
+				RequestBudgetEnforce:        enforce,
+				MaxInlineAttachmentCount:    1,
+				MaxInlineAttachmentBytes:    100,
+				MaxForwardBodyBytes:         100,
+			}),
+		}, fake
+	}
+
+	t.Run("observe only forwards candidate", func(t *testing.T) {
+		core, observed := observer.New(zap.WarnLevel)
+		handler, _ := newHandler(false, false, zap.New(core))
+		prepared := handler.prepareResponsesAttachments(context.Background(), zap.New(core), &service.APIKey{ID: 1}, body)
+		require.Nil(t, prepared.BudgetViolation)
+		require.Equal(t, optimized, prepared.Body)
+		require.Len(t, observed.All(), 1)
+		require.Equal(t, true, observed.All()[0].ContextMap()["budget_would_reject"])
+		require.Equal(t, false, observed.All()[0].ContextMap()["budget_enforced"])
+	})
+
+	t.Run("rewrite enforcement rejects", func(t *testing.T) {
+		handler, _ := newHandler(true, false, zap.NewNop())
+		prepared := handler.prepareResponsesAttachments(context.Background(), zap.NewNop(), &service.APIKey{ID: 1}, body)
+		require.NotNil(t, prepared.BudgetViolation)
+		require.Equal(t, "inline_attachment_count", prepared.BudgetViolation.Reason)
+		require.Equal(t, body, prepared.Body)
+		require.Contains(t, responsesAttachmentBudgetMessage(prepared.BudgetViolation), "limit is 1")
+	})
+
+	t.Run("dry run never rejects", func(t *testing.T) {
+		handler, _ := newHandler(true, true, zap.NewNop())
+		prepared := handler.prepareResponsesAttachments(context.Background(), zap.NewNop(), &service.APIKey{ID: 1}, body)
+		require.Nil(t, prepared.BudgetViolation)
+		require.Equal(t, body, prepared.Body)
+	})
+}
+
+func TestResponsesAttachmentBudgetPreflightRejectsUnoptimizableFileWithoutEncoderWork(t *testing.T) {
+	body := []byte(`{"model":"gpt-test","input":[{"type":"input_file","filename":"report.pdf","file_data":"data:application/pdf;base64,QUJDREVGR0g="}]}`)
+	fake := &fakeResponsesAttachmentOptimizer{enabled: true}
+	handler := &OpenAIGatewayHandler{
+		attachmentOptimizer: fake,
+		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
+			AttachmentOptimizerEnabled:  true,
+			AllowUnscoped:               true,
+			OptimizeTimeoutMilliseconds: 1000,
+			RequestBudgetEnabled:        true,
+			RequestBudgetEnforce:        true,
+			MaxInlineAttachmentCount:    4,
+			MaxInlineAttachmentBytes:    20,
+			MaxForwardBodyBytes:         1024,
+		}),
+	}
+
+	prepared := handler.prepareResponsesAttachments(context.Background(), zap.NewNop(), &service.APIKey{ID: 1}, body)
+
+	require.NotNil(t, prepared.BudgetViolation)
+	require.Equal(t, "inline_attachment_bytes", prepared.BudgetViolation.Reason)
+	require.Zero(t, fake.calls)
+}
+
 func TestResponsesAttachmentOptimizerRolloutControlSwitchesLiveAndFailsClosed(t *testing.T) {
 	body := []byte(`{"model":"original"}`)
 	optimized := []byte(`{"model":"optimized"}`)
@@ -455,12 +631,17 @@ func TestResponsesAttachmentGatewayWebSocketLocalForwardMatrix(t *testing.T) {
 				experiment := config.AttachmentGatewayConfig{
 					AttachmentOptimizerEnabled:  true,
 					AttachmentOptimizerDryRun:   dryRun,
+					RequestBudgetEnabled:        true,
+					RequestBudgetEnforce:        true,
 					AllowedAPIKeyIDs:            []int64{1801},
 					OptimizeTimeoutMilliseconds: 5000,
 					ThresholdBytes:              1,
 					CacheDir:                    t.TempDir(),
 					MinSavingsRatio:             0.01,
 					MaxConcurrentEncodes:        1,
+					MaxInlineAttachmentCount:    5,
+					MaxInlineAttachmentBytes:    64 * 1024 * 1024,
+					MaxForwardBodyBytes:         64 * 1024 * 1024,
 				}
 				got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
 					firstPayload:      payload,

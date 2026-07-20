@@ -176,6 +176,10 @@ gateway:
   # Max request body size in bytes (default: 256MB)
   # 请求体最大字节数（默认 256MB）
   max_body_size: 268435456
+  # Optional post-optimization Responses upstream body cap. Keep 0 unless the
+  # edge accepts larger raw bodies than upstream should receive.
+  # 可选：附件优化后的 Responses 上游请求体上限；仅在边缘允许更大原始 body 时启用。
+  openai_responses_max_forward_body_size: 0
   # Pure-text endpoint body limit (embeddings and alpha/search), default 32 MiB.
   # 纯文本端点请求体上限（embeddings、alpha/search），默认 32 MiB。
   text_max_body_size: 33554432
@@ -186,6 +190,10 @@ gateway:
     # Safe rollout: measure/cache only and keep the original upstream payload.
     # 安全灰度：只测量和缓存，仍向上游发送原始 payload。
     attachment_optimizer_dry_run: true
+    # Observe aggregate attachment pressure; enforcement has its own gate.
+    # 统计聚合附件压力；返回 413 仍需单独开启 enforcement。
+    request_budget_enabled: false
+    request_budget_enforce: false
     # Optional live switch containing exactly: off, dry_run, or rewrite.
     # 配置后，文件缺失或内容非法会安全回退为 off，无需重启即可切换灰度模式。
     rollout_control_file: ""
@@ -199,6 +207,17 @@ gateway:
     allowed_group_ids: []
     optimize_timeout_ms: 5000
     threshold_bytes: 524288
+    # Under aggregate pressure, allow medium-small supported images into the
+    # same WebP/cache path. Both switches remain off by default.
+    aggregate_small_image_enabled: false
+    aggregate_small_image_trigger_bytes: 4194304
+    aggregate_small_image_trigger_count: 8
+    aggregate_small_image_threshold_bytes: 131072
+    # Candidate limits are evaluated after optimization. In dry-run they only
+    # emit would-reject metrics; rewrite+enforce is required to return 413.
+    max_inline_attachment_count: 32
+    max_inline_attachment_bytes: 12582912
+    max_forward_body_bytes: 14680064
     max_image_bytes: 67108864
     max_total_image_bytes_per_request: 67108864
     max_pixels: 50000000
