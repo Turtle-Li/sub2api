@@ -26,8 +26,13 @@ func TestResolveOpenAIWSClientFirstMessageTimeout(t *testing.T) {
 	cfg := &config.Config{}
 	require.Equal(t, defaultTimeout, ResolveOpenAIWSClientFirstMessageTimeout(cfg))
 
-	cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds = 120
-	require.Equal(t, 120*time.Second, ResolveOpenAIWSClientFirstMessageTimeout(cfg))
+	cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds = 90
+	require.Equal(t, 90*time.Second, ResolveOpenAIWSClientFirstMessageTimeout(cfg))
+
+	require.Equal(t, config.DefaultOpenAIWSClientReadLimitBytes, ResolveOpenAIWSClientReadLimitBytes(nil))
+	require.Equal(t, config.DefaultOpenAIWSClientReadLimitBytes, ResolveOpenAIWSClientReadLimitBytes(&config.Config{}))
+	cfg.Gateway.OpenAIWS.ClientReadLimitBytes = 32_000_000
+	require.Equal(t, int64(32_000_000), ResolveOpenAIWSClientReadLimitBytes(cfg))
 }
 
 func TestPrepareOpenAIWSHTTPBridgeBodyStripsWSFields(t *testing.T) {

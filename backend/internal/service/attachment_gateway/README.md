@@ -51,7 +51,7 @@ feature switch:
 - `attachment_optimizer_dry_run: true` measures and populates cache but sends
   the original payload;
 - `allow_unscoped: false` requires an explicit API-key or group allowlist;
-- `optimize_timeout_ms: 5000` returns the original payload when the request
+- `optimize_timeout_ms: 120000` returns the original payload when the request
   time budget expires.
 
 For production canaries, `rollout_control_file` can point at a tiny file whose

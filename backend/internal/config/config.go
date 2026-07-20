@@ -1110,8 +1110,15 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 	return ""
 }
 
-// DefaultOpenAIWSClientFirstMessageTimeoutSeconds preserves the legacy ingress deadline.
-const DefaultOpenAIWSClientFirstMessageTimeoutSeconds = 30
+const (
+	// DefaultOpenAIWSClientFirstMessageTimeoutSeconds allows a 100 MB ingress
+	// frame enough time on a normal client uplink without leaving a stalled
+	// authenticated socket open for several minutes.
+	DefaultOpenAIWSClientFirstMessageTimeoutSeconds = 120
+	// DefaultOpenAIWSClientReadLimitBytes keeps WebSocket ingress aligned with
+	// the production Responses request-body policy.
+	DefaultOpenAIWSClientReadLimitBytes int64 = 100_000_000
+)
 
 // GatewayOpenAIWSConfig OpenAI Responses WebSocket 配置。
 // 注意：默认全局开启；如需回滚可使用 force_http 或关闭 enabled。
@@ -2244,7 +2251,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.store_disabled_conn_mode", "strict")
 	viper.SetDefault("gateway.openai_ws.store_disabled_force_new_conn", true)
 	viper.SetDefault("gateway.openai_ws.prewarm_generate_enabled", false)
-	viper.SetDefault("gateway.openai_ws.client_read_limit_bytes", 64*1024*1024)
+	viper.SetDefault("gateway.openai_ws.client_read_limit_bytes", DefaultOpenAIWSClientReadLimitBytes)
 	viper.SetDefault("gateway.openai_ws.http_bridge_enabled", true)
 	viper.SetDefault("gateway.openai_ws.http_bridge_threshold_bytes", 15*1024*1024)
 	viper.SetDefault("gateway.openai_ws.responses_websockets", false)
@@ -2303,7 +2310,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_dry_run", true)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_min_body_bytes", 512*1024)
-	viper.SetDefault("gateway.attachment_gateway.url_upload_timeout_ms", 15_000)
+	viper.SetDefault("gateway.attachment_gateway.url_upload_timeout_ms", 60_000)
 	viper.SetDefault("gateway.attachment_gateway.url_object_prefix", "attachments/")
 	viper.SetDefault("gateway.attachment_gateway.url_cache_ttl_seconds", 15*60)
 	viper.SetDefault("gateway.attachment_gateway.max_concurrent_url_uploads", 2)
@@ -2314,7 +2321,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.allowed_api_key_ids", []int64{})
 	viper.SetDefault("gateway.attachment_gateway.allowed_user_ids", []int64{})
 	viper.SetDefault("gateway.attachment_gateway.allowed_group_ids", []int64{})
-	viper.SetDefault("gateway.attachment_gateway.optimize_timeout_ms", 5000)
+	viper.SetDefault("gateway.attachment_gateway.optimize_timeout_ms", 120_000)
 	viper.SetDefault("gateway.attachment_gateway.threshold_bytes", 512*1024)
 	viper.SetDefault("gateway.attachment_gateway.aggregate_small_image_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.aggregate_small_image_trigger_bytes", 4*1024*1024)
@@ -2323,8 +2330,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.max_inline_attachment_count", 32)
 	viper.SetDefault("gateway.attachment_gateway.max_inline_attachment_bytes", 12*1024*1024)
 	viper.SetDefault("gateway.attachment_gateway.max_forward_body_bytes", 14*1024*1024)
-	viper.SetDefault("gateway.attachment_gateway.max_image_bytes", 64*1024*1024)
-	viper.SetDefault("gateway.attachment_gateway.max_total_image_bytes_per_request", 64*1024*1024)
+	viper.SetDefault("gateway.attachment_gateway.max_image_bytes", 100_000_000)
+	viper.SetDefault("gateway.attachment_gateway.max_total_image_bytes_per_request", 100_000_000)
 	viper.SetDefault("gateway.attachment_gateway.max_pixels", int64(50_000_000))
 	viper.SetDefault("gateway.attachment_gateway.quality", 85)
 	viper.SetDefault("gateway.attachment_gateway.special_quality", 90)

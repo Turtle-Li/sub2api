@@ -12,8 +12,8 @@ import (
 const (
 	sha256HexLength                      = sha256.Size * 2
 	defaultThresholdBytes                = 512 * 1024
-	defaultMaxImageBytes                 = 64 * 1024 * 1024
-	defaultMaxTotalImageBytes            = 64 * 1024 * 1024
+	defaultMaxImageBytes                 = 100_000_000
+	defaultMaxTotalImageBytes            = 100_000_000
 	defaultMaxPixels               int64 = 50_000_000
 	defaultQuality                       = 85
 	defaultSpecialQuality                = 90

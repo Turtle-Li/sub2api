@@ -222,7 +222,9 @@ gateway:
     # 仅 scoped rewrite 生效；dry-run 绝不写对象存储。
     url_rewrite_enabled: false
     url_rewrite_min_body_bytes: 524288
-    url_upload_timeout_ms: 15000
+    # R2 sees optimized bytes, so keep this bounded well below the ingress and
+    # image-processing ceilings.
+    url_upload_timeout_ms: 60000
     url_object_prefix: "attachments/"
     # In-process reuse window for a returned signed URL. Runtime logic also
     # caps this before the actual signature expiry.
@@ -243,7 +245,9 @@ gateway:
     # 可显式允许管理员用户的全部本地测试 Key，仍不会扩到普通用户。
     allowed_user_ids: []
     allowed_group_ids: []
-    optimize_timeout_ms: 5000
+    # Total request-local image optimization budget for a 100 MB ingress.
+    # Encoder concurrency remains bounded independently below.
+    optimize_timeout_ms: 120000
     threshold_bytes: 524288
     # Under aggregate pressure, allow medium-small supported images into the
     # same WebP/cache path. Both switches remain off by default.
@@ -256,8 +260,8 @@ gateway:
     max_inline_attachment_count: 32
     max_inline_attachment_bytes: 12582912
     max_forward_body_bytes: 14680064
-    max_image_bytes: 67108864
-    max_total_image_bytes_per_request: 67108864
+    max_image_bytes: 100000000
+    max_total_image_bytes_per_request: 100000000
     max_pixels: 50000000
     quality: 85
     # Transparent images use lossless WebP; likely code/UI screenshots use this quality.
@@ -377,8 +381,10 @@ gateway:
     # ingress 默认模式：off|ctx_pool|passthrough|http_bridge（仅 mode_router_v2_enabled=true 生效；关闭时账号级 WS mode 被忽略）
     # 兼容旧值：shared/dedicated 会按 ctx_pool 处理。
     ingress_mode_default: ctx_pool
-    # 完整读取并解压首条客户端消息的总超时（秒）；大请求或慢链路可调高到 120-300。
-    client_first_message_timeout_seconds: 30
+    # 完整读取并解压首条客户端消息的总超时（秒）；100MB 入站最多等待 120 秒。
+    client_first_message_timeout_seconds: 120
+    # 入站客户端 WS 单帧上限，与 Responses HTTP 100MB 策略保持一致。
+    client_read_limit_bytes: 100000000
     # Close a client WebSocket that stays idle between completed turns (seconds). Set 0 to disable.
     ingress_inter_turn_idle_timeout_seconds: 300
     # Limit live client WebSocket ingress sessions per API key across all instances. Set 0 to disable.

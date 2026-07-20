@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	openAIWSClientReadLimitBytesDefault     int64 = 64 * 1024 * 1024
 	openAIWSHTTPBridgeThresholdBytesDefault int64 = 15 * 1024 * 1024
 	openAIWSHTTPBridgeErrorBodyLimitBytes         = 64 * 1024
 )
@@ -33,7 +32,7 @@ func ResolveOpenAIWSClientFirstMessageTimeout(cfg *config.Config) time.Duration 
 
 func ResolveOpenAIWSClientReadLimitBytes(cfg *config.Config) int64 {
 	if cfg == nil || cfg.Gateway.OpenAIWS.ClientReadLimitBytes <= 0 {
-		return openAIWSClientReadLimitBytesDefault
+		return config.DefaultOpenAIWSClientReadLimitBytes
 	}
 	return cfg.Gateway.OpenAIWS.ClientReadLimitBytes
 }
