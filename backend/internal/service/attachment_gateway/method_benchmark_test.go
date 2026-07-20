@@ -197,8 +197,8 @@ func meanAbsoluteAlphaError(left, right image.Image) float64 {
 	var samples uint64
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			leftPixel := color.NRGBAModel.Convert(left.At(x, y)).(color.NRGBA)
-			rightPixel := color.NRGBAModel.Convert(right.At(x, y)).(color.NRGBA)
+			leftPixel := toNRGBA(left.At(x, y))
+			rightPixel := toNRGBA(right.At(x, y))
 			total += uint64(absDiff8(leftPixel.A, rightPixel.A))
 			samples++
 		}
@@ -212,8 +212,8 @@ func compositedRGBRMSE(left, right image.Image, background uint8) float64 {
 	var samples float64
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			leftPixel := color.NRGBAModel.Convert(left.At(x, y)).(color.NRGBA)
-			rightPixel := color.NRGBAModel.Convert(right.At(x, y)).(color.NRGBA)
+			leftPixel := toNRGBA(left.At(x, y))
+			rightPixel := toNRGBA(right.At(x, y))
 			for _, pair := range [][2]uint8{
 				{leftPixel.R, rightPixel.R},
 				{leftPixel.G, rightPixel.G},
@@ -228,6 +228,14 @@ func compositedRGBRMSE(left, right image.Image, background uint8) float64 {
 		}
 	}
 	return math.Sqrt(squaredTotal / samples)
+}
+
+func toNRGBA(value color.Color) color.NRGBA {
+	converted, ok := color.NRGBAModel.Convert(value).(color.NRGBA)
+	if !ok {
+		panic("color.NRGBAModel returned a non-NRGBA value")
+	}
+	return converted
 }
 
 func compositeChannel(value, alpha, background uint8) uint8 {
