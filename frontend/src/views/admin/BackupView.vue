@@ -54,6 +54,9 @@
         </div>
       </div>
 
+      <!-- Attachment Gateway object storage -->
+      <AttachmentGatewayR2Settings />
+
       <!-- Schedule Config -->
       <div class="card p-6">
         <div class="mb-4">
@@ -287,6 +290,7 @@ import { useAppStore } from '@/stores'
 import type { BackupS3Config, BackupScheduleConfig, BackupRecord } from '@/api/admin/backup'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
+import AttachmentGatewayR2Settings from '@/views/admin/settings/AttachmentGatewayR2Settings.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()

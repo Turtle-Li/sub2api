@@ -10,8 +10,7 @@ export default {
         users: 'Users',
         gateway: 'Gateway',
         email: 'Email',
-        attachments: 'Attachments',
-        backup: 'Backup',
+        backup: 'Storage & Backup',
         payment: 'Payment',
       },
       attachmentGatewayR2: {

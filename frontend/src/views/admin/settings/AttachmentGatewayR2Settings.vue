@@ -1,11 +1,10 @@
 <template>
-  <div class="space-y-6">
-    <div class="card">
-      <div class="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+  <div class="card p-6">
+    <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">
             {{ t('admin.settings.attachmentGatewayR2.title') }}
-          </h2>
+          </h3>
           <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
             {{ t('admin.settings.attachmentGatewayR2.description') }}
           </p>
@@ -19,13 +18,13 @@
         </span>
       </div>
 
-      <div v-if="loading" class="flex items-center gap-2 p-6 text-sm text-gray-500 dark:text-gray-400">
+    <div v-if="loading" class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
         <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>
         {{ t('common.loading') }}
       </div>
 
-      <div v-else class="space-y-5 p-6">
-        <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-200">
+    <div v-else class="space-y-4">
+        <div class="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-200">
           <p class="font-medium">{{ t('admin.settings.attachmentGatewayR2.safetyTitle') }}</p>
           <p class="mt-1">{{ t('admin.settings.attachmentGatewayR2.safetyHint') }}</p>
         </div>
@@ -42,9 +41,9 @@
           <Toggle v-model="form.enabled" data-testid="attachment-r2-enabled" />
         </div>
 
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div>
-            <label class="input-label">{{ t('admin.settings.attachmentGatewayR2.endpoint') }}</label>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.settings.attachmentGatewayR2.endpoint') }}</label>
             <input
               v-model.trim="form.endpoint"
               class="input w-full"
@@ -53,26 +52,26 @@
             />
           </div>
           <div>
-            <label class="input-label">{{ t('admin.settings.attachmentGatewayR2.region') }}</label>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.settings.attachmentGatewayR2.region') }}</label>
             <input v-model.trim="form.region" class="input w-full" placeholder="auto" autocomplete="off" />
           </div>
           <div>
-            <label class="input-label">{{ t('admin.settings.attachmentGatewayR2.bucket') }}</label>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.settings.attachmentGatewayR2.bucket') }}</label>
             <input v-model.trim="form.bucket" class="input w-full" autocomplete="off" />
           </div>
           <div>
-            <label class="input-label">{{ t('admin.settings.attachmentGatewayR2.prefix') }}</label>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.settings.attachmentGatewayR2.prefix') }}</label>
             <input v-model.trim="form.prefix" class="input w-full" placeholder="sub2api/" autocomplete="off" />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.settings.attachmentGatewayR2.prefixHint') }}
             </p>
           </div>
           <div>
-            <label class="input-label">{{ t('admin.settings.attachmentGatewayR2.accessKeyId') }}</label>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.settings.attachmentGatewayR2.accessKeyId') }}</label>
             <input v-model.trim="form.access_key_id" class="input w-full" autocomplete="off" />
           </div>
           <div>
-            <label class="input-label">{{ t('admin.settings.attachmentGatewayR2.secretAccessKey') }}</label>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.settings.attachmentGatewayR2.secretAccessKey') }}</label>
             <input
               v-model="form.secret_access_key"
               type="password"
@@ -85,7 +84,7 @@
             </p>
           </div>
           <div>
-            <label class="input-label">{{ t('admin.settings.attachmentGatewayR2.presignExpiry') }}</label>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.settings.attachmentGatewayR2.presignExpiry') }}</label>
             <input
               v-model.number="form.presign_expiry_minutes"
               type="number"
@@ -103,25 +102,24 @@
           </label>
         </div>
 
-        <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200">
+        <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200">
           <p>{{ t('admin.settings.attachmentGatewayR2.permissionHint') }}</p>
           <p class="mt-1">{{ t('admin.settings.attachmentGatewayR2.probeHint') }}</p>
           <p class="mt-1">{{ t('admin.settings.attachmentGatewayR2.lifecycleHint') }}</p>
         </div>
 
         <div class="flex flex-wrap gap-2">
-          <button type="button" class="btn btn-secondary" :disabled="testing || saving" @click="testConnection">
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="testing || saving" @click="testConnection">
             {{ testing ? t('common.loading') : t('admin.settings.attachmentGatewayR2.testConnection') }}
           </button>
-          <button type="button" class="btn btn-primary" :disabled="saving || testing" @click="saveConfig">
+          <button type="button" class="btn btn-primary btn-sm" :disabled="saving || testing" @click="saveConfig">
             {{ saving ? t('common.loading') : t('common.save') }}
           </button>
         </div>
-      </div>
     </div>
-
-    <TotpStepUpDialog :controller="stepUp" />
   </div>
+
+  <TotpStepUpDialog :controller="stepUp" />
 </template>
 
 <script setup lang="ts">

@@ -7495,18 +7495,13 @@
         </div>
         <!-- /Tab: Email -->
 
-        <!-- Tab: Backup -->
+        <!-- Tab: Storage & Backup -->
         <div v-show="activeTab === 'backup'">
           <BackupSettings />
         </div>
 
-        <!-- Tab: Attachment Gateway -->
-        <div v-if="activeTab === 'attachments'">
-          <AttachmentGatewayR2Settings />
-        </div>
-
         <!-- Save Button -->
-        <div v-show="activeTab !== 'backup' && activeTab !== 'attachments'" class="flex justify-end">
+        <div v-show="activeTab !== 'backup'" class="flex justify-end">
           <button
             type="submit"
             :disabled="saving || loadFailed"
@@ -7624,7 +7619,6 @@ import Toggle from "@/components/common/Toggle.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
-import AttachmentGatewayR2Settings from "@/views/admin/settings/AttachmentGatewayR2Settings.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import { useClipboard } from "@/composables/useClipboard";
@@ -7685,7 +7679,6 @@ type SettingsTab =
   | "gateway"
   | "payment"
   | "email"
-  | "attachments"
   | "backup";
 const activeTab = ref<SettingsTab>("general");
 const settingsTabs = [
@@ -7697,7 +7690,6 @@ const settingsTabs = [
   { key: "gateway" as SettingsTab, icon: "server" as const },
   { key: "payment" as SettingsTab, icon: "creditCard" as const },
   { key: "email" as SettingsTab, icon: "mail" as const },
-  { key: "attachments" as SettingsTab, icon: "cloud" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
 ];
 

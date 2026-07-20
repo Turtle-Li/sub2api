@@ -27,7 +27,9 @@ Attachment Gateway 不再复用数据库备份或异步生图的 S3 凭证。独
 attachment_gateway_r2_config
 ```
 
-管理入口：系统设置 → 附件网关。管理 API：
+管理入口：系统设置 → 存储与备份 → Attachment Gateway 专用 R2。该位置与上游新增的
+异步/批量生图对象存储卡片保持一致，但凭证仍独立保存，不与数据库备份或生图复用。
+管理 API：
 
 ```text
 GET  /api/v1/admin/attachment-gateway/r2-config

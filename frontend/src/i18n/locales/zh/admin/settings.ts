@@ -10,8 +10,7 @@ export default {
         users: '用户默认值',
         gateway: '网关服务',
         email: '邮件设置',
-        attachments: '附件网关',
-        backup: '数据备份',
+        backup: '存储与备份',
         payment: '支付设置',
       },
       attachmentGatewayR2: {
