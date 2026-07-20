@@ -43,6 +43,7 @@ type OpenAIGatewayHandler struct {
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter
 	attachmentOptimizer        responsesAttachmentOptimizer
+	attachmentURLExternalizer  responsesAttachmentURLExternalizer
 	retryProtectionCache       openAIAbnormalRetryRuntimeCache
 	maxAccountSwitches         int
 	cfg                        *config.Config
@@ -51,6 +52,11 @@ type OpenAIGatewayHandler struct {
 type responsesAttachmentOptimizer interface {
 	Enabled() bool
 	Optimize(context.Context, []byte) attachmentgateway.Result
+}
+
+type responsesAttachmentURLExternalizer interface {
+	Enabled() bool
+	Externalize(context.Context, []byte) attachmentgateway.URLResult
 }
 
 type grokMediaEligibilityProber interface {

@@ -783,6 +783,15 @@ type ImageConcurrencyConfig struct {
 type AttachmentGatewayConfig struct {
 	AttachmentOptimizerEnabled bool `mapstructure:"attachment_optimizer_enabled"`
 	AttachmentOptimizerDryRun  bool `mapstructure:"attachment_optimizer_dry_run"`
+	// URLRewriteEnabled externalizes optimized inline images to the configured
+	// S3-compatible image storage only while the scoped rollout is in rewrite.
+	// Dry-run never writes to object storage.
+	URLRewriteEnabled            bool   `mapstructure:"url_rewrite_enabled"`
+	URLRewriteMinBodyBytes       int    `mapstructure:"url_rewrite_min_body_bytes"`
+	URLUploadTimeoutMilliseconds int    `mapstructure:"url_upload_timeout_ms"`
+	URLObjectPrefix              string `mapstructure:"url_object_prefix"`
+	URLCacheTTLSeconds           int    `mapstructure:"url_cache_ttl_seconds"`
+	MaxConcurrentURLUploads      int    `mapstructure:"max_concurrent_url_uploads"`
 	// RequestBudgetEnabled adds privacy-safe aggregate attachment accounting.
 	// RequestBudgetEnforce remains a separate explicit gate for 413 responses.
 	RequestBudgetEnabled bool `mapstructure:"request_budget_enabled"`
@@ -2177,6 +2186,12 @@ func setDefaults() {
 	// switch false guarantees no request parsing, cache I/O or payload rewrite.
 	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_dry_run", true)
+	viper.SetDefault("gateway.attachment_gateway.url_rewrite_enabled", false)
+	viper.SetDefault("gateway.attachment_gateway.url_rewrite_min_body_bytes", 512*1024)
+	viper.SetDefault("gateway.attachment_gateway.url_upload_timeout_ms", 15_000)
+	viper.SetDefault("gateway.attachment_gateway.url_object_prefix", "attachments/")
+	viper.SetDefault("gateway.attachment_gateway.url_cache_ttl_seconds", 15*60)
+	viper.SetDefault("gateway.attachment_gateway.max_concurrent_url_uploads", 2)
 	viper.SetDefault("gateway.attachment_gateway.request_budget_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.request_budget_enforce", false)
 	viper.SetDefault("gateway.attachment_gateway.rollout_control_file", "")
@@ -2928,6 +2943,30 @@ func (c *Config) Validate() error {
 	// Dormant experiment values cannot block startup. Validate the tuning block
 	// only when the leaf feature gate is explicitly enabled.
 	if attachment.AttachmentOptimizerEnabled {
+		if attachment.URLRewriteEnabled {
+			if attachment.URLRewriteMinBodyBytes <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.url_rewrite_min_body_bytes must be positive")
+			}
+			if attachment.URLUploadTimeoutMilliseconds <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.url_upload_timeout_ms must be positive")
+			}
+			if strings.TrimSpace(attachment.URLObjectPrefix) == "" {
+				return fmt.Errorf("gateway.attachment_gateway.url_object_prefix must not be empty")
+			}
+			if attachment.URLCacheTTLSeconds <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.url_cache_ttl_seconds must be positive")
+			}
+			if attachment.MaxConcurrentURLUploads <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.max_concurrent_url_uploads must be positive")
+			}
+			if !c.ImageStorage.IsConfigured() {
+				return fmt.Errorf("gateway.attachment_gateway.url_rewrite_enabled requires configured image_storage credentials")
+			}
+			if strings.TrimSpace(c.ImageStorage.PublicBaseURL) == "" && c.ImageStorage.PresignExpiry > 0 &&
+				attachment.URLCacheTTLSeconds >= c.ImageStorage.PresignExpiry*60*60 {
+				return fmt.Errorf("gateway.attachment_gateway.url_cache_ttl_seconds must be shorter than image_storage.presign_expiry_hours")
+			}
+		}
 		if attachment.RequestBudgetEnforce && !attachment.RequestBudgetEnabled {
 			return fmt.Errorf("gateway.attachment_gateway.request_budget_enforce requires request_budget_enabled")
 		}

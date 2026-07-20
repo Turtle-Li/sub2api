@@ -3,11 +3,14 @@ package repository
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
@@ -64,6 +67,32 @@ func (s *S3ImageStorage) Save(ctx context.Context, key, contentType string, data
 		return "", fmt.Errorf("S3 PutObject: %w", err)
 	}
 
+	return s.objectURL(ctx, key)
+}
+
+// Ensure reuses an existing deterministic object key when possible. This is
+// used by Attachment Gateway hash caching so a process restart does not force
+// the same optimized bytes through the server uplink again.
+func (s *S3ImageStorage) Ensure(ctx context.Context, key, contentType string, data []byte) (string, bool, error) {
+	finish := servertiming.ObserveDependency(ctx, "s3")
+	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &key})
+	finish()
+	if err == nil {
+		url, urlErr := s.objectURL(ctx, key)
+		return url, false, urlErr
+	}
+	if !isS3ObjectNotFound(err) {
+		return "", false, fmt.Errorf("S3 HeadObject: %w", err)
+	}
+
+	url, saveErr := s.Save(ctx, key, contentType, data)
+	if saveErr != nil {
+		return "", false, saveErr
+	}
+	return url, true, nil
+}
+
+func (s *S3ImageStorage) objectURL(ctx context.Context, key string) (string, error) {
 	if s.publicBaseURL != "" {
 		return s.publicBaseURL + "/" + strings.TrimLeft(key, "/"), nil
 	}
@@ -77,4 +106,9 @@ func (s *S3ImageStorage) Save(ctx context.Context, key, contentType string, data
 		return "", fmt.Errorf("presign url: %w", err)
 	}
 	return result.URL, nil
+}
+
+func isS3ObjectNotFound(err error) bool {
+	var responseErr *smithyhttp.ResponseError
+	return errors.As(err, &responseErr) && responseErr.HTTPStatusCode() == http.StatusNotFound
 }

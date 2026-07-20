@@ -78,6 +78,30 @@ func newResponsesAttachmentOptimizer(cfg *config.Config) responsesAttachmentOpti
 	return optimizer
 }
 
+func newResponsesAttachmentURLExternalizer(
+	cfg *config.Config,
+	storage service.ImageStorage,
+) responsesAttachmentURLExternalizer {
+	if cfg == nil || !cfg.Gateway.AttachmentGateway.URLRewriteEnabled || storage == nil {
+		return nil
+	}
+	experiment := cfg.Gateway.AttachmentGateway
+	externalizer, err := attachmentgateway.NewURLExternalizer(attachmentgateway.URLConfig{
+		Enabled:              experiment.URLRewriteEnabled,
+		MinBodyBytes:         experiment.URLRewriteMinBodyBytes,
+		ObjectPrefix:         experiment.URLObjectPrefix,
+		URLCacheTTL:          time.Duration(experiment.URLCacheTTLSeconds) * time.Second,
+		MaxImageBytes:        experiment.MaxImageBytes,
+		MaxImagesPerRequest:  experiment.MaxImagesPerRequest,
+		MaxConcurrentUploads: experiment.MaxConcurrentURLUploads,
+	}, storage)
+	if err != nil {
+		logger.L().Warn("attachment_gateway.url_initialization_failed", zap.Error(err))
+		return nil
+	}
+	return externalizer
+}
+
 func (h *OpenAIGatewayHandler) optimizeResponsesAttachments(
 	ctx context.Context,
 	reqLog *zap.Logger,
@@ -141,7 +165,29 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 	result := h.attachmentOptimizer.Optimize(optimizeCtx, body)
 	metrics := result.Metrics
 	contextErr := optimizeCtx.Err()
-	timedOut := metrics.TimedOut || errors.Is(contextErr, context.DeadlineExceeded)
+	urlMetrics := attachmentgateway.URLMetrics{}
+	if !dryRun && contextErr == nil && experiment.URLRewriteEnabled && h.attachmentURLExternalizer != nil && h.attachmentURLExternalizer.Enabled() {
+		uploadCtx, uploadCancel := context.WithTimeout(ctx, time.Duration(experiment.URLUploadTimeoutMilliseconds)*time.Millisecond)
+		externalized := h.attachmentURLExternalizer.Externalize(uploadCtx, result.Body)
+		uploadContextErr := uploadCtx.Err()
+		uploadCancel()
+		urlMetrics = externalized.Metrics
+		result.Body = externalized.Body
+		metrics.OptimizedBodyBytes = len(externalized.Body)
+		if experiment.RequestBudgetEnabled || experiment.AggregateSmallImageEnabled {
+			if inlineStats, inspectErr := attachmentgateway.InspectInlineAttachments(externalized.Body); inspectErr == nil {
+				metrics.CandidateInlineAttachmentCount = inlineStats.Count
+				metrics.CandidateInlineAttachmentBytes = inlineStats.Bytes
+				metrics.CandidateUnsupportedAttachmentCount = inlineStats.UnsupportedCount
+			} else {
+				urlMetrics.Errors++
+			}
+		}
+		if errors.Is(uploadContextErr, context.DeadlineExceeded) {
+			urlMetrics.TimedOut = true
+		}
+	}
+	timedOut := metrics.TimedOut || errors.Is(contextErr, context.DeadlineExceeded) || urlMetrics.TimedOut
 	budgetViolation := evaluateResponsesAttachmentBudget(experiment, metrics)
 	budgetEnforced := budgetViolation != nil && experiment.RequestBudgetEnforce && rolloutMode == attachmentGatewayRolloutRewrite
 	forwardBody := result.Body
@@ -183,6 +229,15 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		zap.Bool("budget_would_reject", budgetViolation != nil),
 		zap.Bool("budget_enforced", budgetEnforced),
 		zap.Float64("optimize_duration_ms", metrics.OptimizeDurationMS),
+		zap.Bool("url_rewrite_enabled", experiment.URLRewriteEnabled),
+		zap.Int("url_externalized_count", urlMetrics.ExternalizedCount),
+		zap.Int("url_upload_count", urlMetrics.UploadCount),
+		zap.Int("url_cache_hits", urlMetrics.CacheHits),
+		zap.Int("url_cache_shared", urlMetrics.CacheShared),
+		zap.Bool("url_skipped_below_trigger", urlMetrics.SkippedBelowTrigger),
+		zap.Bool("url_timed_out", urlMetrics.TimedOut),
+		zap.Float64("url_duration_ms", urlMetrics.DurationMS),
+		zap.Int("url_errors", urlMetrics.Errors),
 		zap.Int("errors", metrics.Errors),
 	}
 	if budgetViolation != nil {
@@ -195,7 +250,7 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 	if reqLog == nil {
 		reqLog = logger.L()
 	}
-	if metrics.Errors > 0 || timedOut || budgetViolation != nil {
+	if metrics.Errors > 0 || urlMetrics.Errors > 0 || timedOut || budgetViolation != nil {
 		reqLog.Warn("openai.attachment_gateway_experiment", fields...)
 	} else {
 		reqLog.Info("openai.attachment_gateway_experiment", fields...)

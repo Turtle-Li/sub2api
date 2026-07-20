@@ -177,10 +177,12 @@ func ProvideEnt(cfg *config.Config) (*ent.Client, error) {
 	return client, err
 }
 
-// ProvideImageStorage 提供异步图片任务结果转存所用的对象存储实现。
-// 仅当开关打开且 S3 凭证齐全时返回具体实现，否则返回 nil（功能整体禁用）。
+// ProvideImageStorage 提供图片结果与 Attachment Gateway 共用的对象存储实现。
+// 两个功能各有独立开关；只要任一功能启用且凭证齐全就构造客户端。
 func ProvideImageStorage(cfg *config.Config) (service.ImageStorage, error) {
-	if !cfg.ImageStorage.Active() {
+	attachmentURLActive := cfg.Gateway.AttachmentGateway.AttachmentOptimizerEnabled &&
+		cfg.Gateway.AttachmentGateway.URLRewriteEnabled
+	if !cfg.ImageStorage.IsConfigured() || (!cfg.ImageStorage.Enabled && !attachmentURLActive) {
 		return nil, nil
 	}
 	store, err := NewS3ImageStorage(context.Background(), &cfg.ImageStorage)

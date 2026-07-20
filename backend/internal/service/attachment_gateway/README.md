@@ -61,10 +61,31 @@ the optimization CPU/latency cost, and an encoder already executing cannot be
 preempted; concurrency bounds keep that work finite while the request fails
 open at its deadline.
 
-Phase 1 does not process files, PDF, Office, audio, video, remote URLs or
-`file_id`; it does not create public URLs or use R2/S3. HTTP Responses and the
-first WebSocket ingress turn can use the experiment. Subsequent WebSocket turns
-are deliberately unchanged pending a transform-hook design.
+Phase 1 does not process files, PDF, Office, audio, video or `file_id`.
+HTTP Responses and the first WebSocket ingress turn can use the experiment.
+Subsequent WebSocket turns are deliberately unchanged pending a transform-hook
+design.
+
+An additional, separately disabled URL experiment can externalize the
+post-compression inline image bytes:
+
+- `url_rewrite_enabled: false` is the leaf switch;
+- it runs only for an explicitly scoped request while rollout mode is
+  `rewrite`; `dry_run` never writes to object storage;
+- it reuses the existing S3-compatible `image_storage` credentials without
+  enabling async image tasks when `image_storage.enabled` remains false;
+- deterministic SHA-256 object keys plus R2/S3 `HeadObject` avoid re-uploading
+  the same optimized bytes after a process restart;
+- an in-memory URL cache reuses still-valid presigned URLs within the configured
+  window, and singleflight prevents concurrent upload stampedes;
+- storage errors, timeouts, non-HTTPS URLs and unsupported images fail open to
+  the compressed data URL;
+- URLs, object keys, hashes, credentials and image contents are never logged.
+
+For private R2 buckets, leave `image_storage.public_base_url` empty. The
+existing S3 adapter then emits a short-lived presigned GET URL. Configure the
+bucket lifecycle separately so objects expire after the desired retention
+period.
 
 This package runs after the reverse proxy has accepted the request. It can
 reduce Sub2-to-upstream bytes but cannot fix a Caddy 413 that rejects the

@@ -122,6 +122,7 @@ func ProvideOpenAIGatewayHandler(
 	opsService *service.OpsService,
 	grokQuotaService *service.GrokQuotaService,
 	retryProtectionRegistrar service.OpenAIAbnormalRetryRegistrar,
+	imageStorage service.ImageStorage,
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
 ) *OpenAIGatewayHandler {
@@ -130,6 +131,7 @@ func ProvideOpenAIGatewayHandler(
 	h.securityAuditCoordinator = coordinator
 	h.grokMediaEligibilityProber = grokQuotaService
 	h.retryProtectionRegistrar = retryProtectionRegistrar
+	h.attachmentURLExternalizer = newResponsesAttachmentURLExternalizer(cfg, imageStorage)
 	return h
 }
 

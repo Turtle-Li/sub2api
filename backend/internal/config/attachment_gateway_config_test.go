@@ -14,6 +14,12 @@ func TestAttachmentGatewayDefaultsAreSafeAndDisabled(t *testing.T) {
 	attachment := cfg.Gateway.AttachmentGateway
 	require.False(t, attachment.AttachmentOptimizerEnabled)
 	require.True(t, attachment.AttachmentOptimizerDryRun)
+	require.False(t, attachment.URLRewriteEnabled)
+	require.Equal(t, 512*1024, attachment.URLRewriteMinBodyBytes)
+	require.Equal(t, 15_000, attachment.URLUploadTimeoutMilliseconds)
+	require.Equal(t, "attachments/", attachment.URLObjectPrefix)
+	require.Equal(t, 15*60, attachment.URLCacheTTLSeconds)
+	require.Equal(t, 2, attachment.MaxConcurrentURLUploads)
 	require.False(t, attachment.RequestBudgetEnabled)
 	require.False(t, attachment.RequestBudgetEnforce)
 	require.Empty(t, attachment.RolloutControlFile)
@@ -42,6 +48,29 @@ func TestAttachmentGatewayDefaultsAreSafeAndDisabled(t *testing.T) {
 	require.Equal(t, 10*60, attachment.CacheCleanupIntervalSeconds)
 	require.Equal(t, 20, attachment.MaxImagesPerRequest)
 	require.Equal(t, 2, attachment.MaxConcurrentEncodes)
+}
+
+func TestAttachmentGatewayURLRewriteRequiresStorageAndSafeValues(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	attachment := &cfg.Gateway.AttachmentGateway
+	attachment.AttachmentOptimizerEnabled = true
+	attachment.URLRewriteEnabled = true
+	require.ErrorContains(t, cfg.Validate(), "image_storage credentials")
+
+	cfg.ImageStorage.Bucket = "private-attachments"
+	cfg.ImageStorage.AccessKeyID = "test-access"
+	cfg.ImageStorage.SecretAccessKey = "test-secret"
+	require.NoError(t, cfg.Validate())
+
+	attachment.URLCacheTTLSeconds = cfg.ImageStorage.PresignExpiry * 60 * 60
+	require.ErrorContains(t, cfg.Validate(), "shorter than image_storage.presign_expiry_hours")
+	attachment.URLCacheTTLSeconds = 15 * 60
+
+	attachment.URLUploadTimeoutMilliseconds = 0
+	require.ErrorContains(t, cfg.Validate(), "url_upload_timeout_ms")
 }
 
 func TestAttachmentGatewayValidationRejectsUnsafeValues(t *testing.T) {

@@ -34,6 +34,19 @@ type fakeResponsesAttachmentOptimizer struct {
 	calls   int
 }
 
+type fakeResponsesAttachmentURLExternalizer struct {
+	enabled bool
+	result  attachmentgateway.URLResult
+	calls   int
+}
+
+func (f *fakeResponsesAttachmentURLExternalizer) Enabled() bool { return f.enabled }
+
+func (f *fakeResponsesAttachmentURLExternalizer) Externalize(_ context.Context, _ []byte) attachmentgateway.URLResult {
+	f.calls++
+	return f.result
+}
+
 func (f *fakeResponsesAttachmentOptimizer) Enabled() bool { return f.enabled }
 
 func (f *fakeResponsesAttachmentOptimizer) Optimize(_ context.Context, _ []byte) attachmentgateway.Result {
@@ -106,6 +119,80 @@ func TestOptimizeResponsesAttachmentsSkipsCallWhenGateIsOff(t *testing.T) {
 
 	require.Equal(t, body, result)
 	require.Zero(t, fake.calls)
+}
+
+func TestOptimizeResponsesAttachmentsExternalizesOnlyInRewriteMode(t *testing.T) {
+	originalBody := []byte(`{"model":"gpt-test","input":"original"}`)
+	optimizedBody := []byte(`{"model":"gpt-test","input":[{"type":"input_image","image_url":"data:image/webp;base64,AA=="}]}`)
+	urlBody := []byte(`{"model":"gpt-test","input":[{"type":"input_image","image_url":"https://r2.example.test/image.webp?sig=x"}]}`)
+	optimizer := &fakeResponsesAttachmentOptimizer{enabled: true, result: attachmentgateway.Result{
+		Body: optimizedBody,
+		Metrics: attachmentgateway.Metrics{
+			Enabled:            true,
+			OriginalBodyBytes:  len(originalBody),
+			OptimizedBodyBytes: len(optimizedBody),
+		},
+	}}
+	externalizer := &fakeResponsesAttachmentURLExternalizer{enabled: true, result: attachmentgateway.URLResult{
+		Body: urlBody,
+		Metrics: attachmentgateway.URLMetrics{
+			Enabled:            true,
+			OriginalBodyBytes:  len(optimizedBody),
+			RewrittenBodyBytes: len(urlBody),
+			ExternalizedCount:  1,
+			UploadCount:        1,
+		},
+	}}
+	handler := &OpenAIGatewayHandler{
+		attachmentOptimizer:       optimizer,
+		attachmentURLExternalizer: externalizer,
+		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
+			AttachmentOptimizerEnabled:   true,
+			AttachmentOptimizerDryRun:    false,
+			URLRewriteEnabled:            true,
+			URLUploadTimeoutMilliseconds: 1000,
+			AllowUnscoped:                true,
+			OptimizeTimeoutMilliseconds:  1000,
+		}),
+	}
+
+	result := handler.optimizeResponsesAttachments(context.Background(), zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
+
+	require.Equal(t, urlBody, result)
+	require.Equal(t, 1, optimizer.calls)
+	require.Equal(t, 1, externalizer.calls)
+}
+
+func TestOptimizeResponsesAttachmentsDryRunNeverWritesObjectStorage(t *testing.T) {
+	originalBody := []byte(`{"model":"gpt-test","input":"original"}`)
+	optimizedBody := []byte(`{"model":"gpt-test","input":"optimized"}`)
+	optimizer := &fakeResponsesAttachmentOptimizer{enabled: true, result: attachmentgateway.Result{
+		Body: optimizedBody,
+		Metrics: attachmentgateway.Metrics{
+			Enabled:            true,
+			OriginalBodyBytes:  len(originalBody),
+			OptimizedBodyBytes: len(optimizedBody),
+		},
+	}}
+	externalizer := &fakeResponsesAttachmentURLExternalizer{enabled: true}
+	handler := &OpenAIGatewayHandler{
+		attachmentOptimizer:       optimizer,
+		attachmentURLExternalizer: externalizer,
+		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
+			AttachmentOptimizerEnabled:   true,
+			AttachmentOptimizerDryRun:    true,
+			URLRewriteEnabled:            true,
+			URLUploadTimeoutMilliseconds: 1000,
+			AllowUnscoped:                true,
+			OptimizeTimeoutMilliseconds:  1000,
+		}),
+	}
+
+	result := handler.optimizeResponsesAttachments(context.Background(), zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
+
+	require.Equal(t, originalBody, result)
+	require.Equal(t, 1, optimizer.calls)
+	require.Zero(t, externalizer.calls)
 }
 
 type attachmentGatewayCaptureUpstream struct {

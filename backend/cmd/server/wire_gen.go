@@ -274,17 +274,17 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	coordinator := securityaudit.NewCoordinator(legacyEngine, promptService)
 	gatewayHandler := handler.ProvideGatewayHandler(gatewayService, openAIGatewayService, geminiMessagesCompatService, antigravityGatewayService, userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool, errorPassthroughService, contentModerationService, userMessageQueueService, configConfig, settingService, coordinator)
 	openAIAbnormalRetryRegistrar := repository.NewOpenAIAbnormalRetryRegistrar(redisClient)
-	openAIGatewayHandler := handler.ProvideOpenAIGatewayHandler(openAIGatewayService, concurrencyService, billingCacheService, apiKeyService, usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, grokQuotaService, openAIAbnormalRetryRegistrar, configConfig, coordinator)
+	imageStorage, err := repository.ProvideImageStorage(configConfig)
+	if err != nil {
+		return nil, err
+	}
+	openAIGatewayHandler := handler.ProvideOpenAIGatewayHandler(openAIGatewayService, concurrencyService, billingCacheService, apiKeyService, usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, grokQuotaService, openAIAbnormalRetryRegistrar, imageStorage, configConfig, coordinator)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	totpHandler := handler.NewTotpHandler(totpService)
 	handlerPaymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService)
 	paymentWebhookHandler := handler.NewPaymentWebhookHandler(paymentService, registry)
 	availableChannelHandler := handler.NewAvailableChannelHandler(channelService, apiKeyService, settingService)
 	imageTaskStore := repository.NewImageTaskStore(redisClient)
-	imageStorage, err := repository.ProvideImageStorage(configConfig)
-	if err != nil {
-		return nil, err
-	}
 	imageTaskService := service.ProvideImageTaskService(imageTaskStore, imageStorage, configConfig)
 	asyncImageHandler := handler.NewAsyncImageHandler(imageTaskService, openAIGatewayHandler)
 	batchImageRepository := repository.NewBatchImageRepository(db)
