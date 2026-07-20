@@ -488,6 +488,249 @@ func TestDiskCacheHitSurvivesGatewayRestart(t *testing.T) {
 	require.Zero(t, secondEncoder.calls.Load())
 }
 
+func TestNegativeCacheHitSkipsReencodeAndSurvivesGatewayRestart(t *testing.T) {
+	cacheDir := t.TempDir()
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = cacheDir
+	config.ThresholdBytes = 1
+	source := makePhotoLikePNG(t, 420, 300, 141)
+	body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+
+	firstEncoder := &notSmallerEncoder{outputSize: len(source)}
+	firstGateway, err := newWithEncoder(config, firstEncoder)
+	require.NoError(t, err)
+	disableAsyncCacheCleanupForTest(firstGateway)
+	first := firstGateway.Optimize(context.Background(), body)
+	warm := firstGateway.Optimize(context.Background(), body)
+
+	require.Equal(t, body, first.Body)
+	require.Equal(t, 1, first.Metrics.SkippedNotSmaller)
+	require.Zero(t, first.Metrics.NegativeCacheHits)
+	require.Zero(t, first.Metrics.CacheHits)
+	require.Equal(t, body, warm.Body)
+	require.True(t, warm.Metrics.NegativeCacheHit)
+	require.Equal(t, 1, warm.Metrics.NegativeCacheHits)
+	require.Zero(t, warm.Metrics.CacheHits)
+	require.Zero(t, warm.Metrics.OptimizedImageCount)
+	require.Equal(t, int32(1), firstEncoder.calls.Load())
+	negativeFiles := mustGlob(t, filepath.Join(cacheDir, "*.negative.json"))
+	require.Len(t, negativeFiles, 1)
+	require.Empty(t, mustGlob(t, filepath.Join(cacheDir, "*.webp")))
+	require.Empty(t, mustGlob(t, filepath.Join(cacheDir, ".attachment-gateway-*")))
+	negativeInfo, err := os.Stat(negativeFiles[0])
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), negativeInfo.Mode().Perm())
+	directoryInfo, err := os.Stat(cacheDir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), directoryInfo.Mode().Perm())
+	t.Logf(
+		"negative cache cold=%.3fms warm=%.3fms encoder_calls=%d",
+		first.Metrics.OptimizeDurationMS,
+		warm.Metrics.OptimizeDurationMS,
+		firstEncoder.calls.Load(),
+	)
+
+	restartEncoder := &notSmallerEncoder{outputSize: len(source)}
+	restartedGateway, err := newWithEncoder(config, restartEncoder)
+	require.NoError(t, err)
+	disableAsyncCacheCleanupForTest(restartedGateway)
+	restarted := restartedGateway.Optimize(context.Background(), body)
+
+	require.Equal(t, body, restarted.Body)
+	require.True(t, restarted.Metrics.NegativeCacheHit)
+	require.Equal(t, 1, restarted.Metrics.NegativeCacheHits)
+	require.Zero(t, restarted.Metrics.CacheHits)
+	require.Zero(t, restartEncoder.calls.Load())
+}
+
+func TestNegativeCacheUsesDecodedBytesHashAcrossBase64Whitespace(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	source := makePhotoLikePNG(t, 420, 300, 146)
+	encoded := base64.StdEncoding.EncodeToString(source)
+	withWhitespace := strings.Join(splitStringEvery(encoded, 64), "\n")
+	firstBody := makeResponsesPayload(t, []string{"data:image/png;base64," + encoded}, 0)
+	secondBody := makeResponsesPayload(t, []string{"data:image/png;base64," + withWhitespace}, 0)
+	encoder := &notSmallerEncoder{outputSize: len(source)}
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	disableAsyncCacheCleanupForTest(gateway)
+
+	first := gateway.Optimize(context.Background(), firstBody)
+	second := gateway.Optimize(context.Background(), secondBody)
+
+	require.Equal(t, firstBody, first.Body)
+	require.Equal(t, secondBody, second.Body)
+	require.True(t, second.Metrics.NegativeCacheHit)
+	require.Equal(t, 1, second.Metrics.NegativeCacheHits)
+	require.Equal(t, int32(1), encoder.calls.Load())
+}
+
+func TestRealEncoderNegativeCacheAvoidsRepeatedWebPWork(t *testing.T) {
+	pngSource := makePhotoLikePNG(t, 2600, 1800, 147)
+	decoded, err := png.Decode(bytes.NewReader(pngSource))
+	require.NoError(t, err)
+	encoder := libwebpEncoder{}
+	webpSource, err := encoder.Encode(decoded, encodeOptions{Quality: 85})
+	require.NoError(t, err)
+
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	require.GreaterOrEqual(t, len(webpSource), config.ThresholdBytes)
+	gateway, err := New(config)
+	require.NoError(t, err)
+	disableAsyncCacheCleanupForTest(gateway)
+	body := makeResponsesPayload(t, []string{dataURL("image/webp", webpSource)}, 0)
+
+	first := gateway.Optimize(context.Background(), body)
+	warm := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, body, first.Body)
+	require.Equal(t, 1, first.Metrics.SkippedNotSmaller)
+	require.Equal(t, body, warm.Body)
+	require.True(t, warm.Metrics.NegativeCacheHit)
+	require.Equal(t, 1, warm.Metrics.NegativeCacheHits)
+	require.Zero(t, warm.Metrics.CacheHits)
+	t.Logf(
+		"real WebP negative cache source=%dB cold=%.3fms warm=%.3fms",
+		len(webpSource),
+		first.Metrics.OptimizeDurationMS,
+		warm.Metrics.OptimizeDurationMS,
+	)
+}
+
+func TestNegativeCacheExpiresAndPolicyChangeForcesFreshEncode(t *testing.T) {
+	t.Run("ttl", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Enabled = true
+		config.CacheDir = t.TempDir()
+		config.ThresholdBytes = 1
+		config.NegativeCacheTTL = time.Hour
+		source := makePhotoLikePNG(t, 420, 300, 142)
+		body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+		encoder := &notSmallerEncoder{outputSize: len(source)}
+		gateway, err := newWithEncoder(config, encoder)
+		require.NoError(t, err)
+		now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+		gateway.cache.now = func() time.Time { return now }
+		disableAsyncCacheCleanupForTest(gateway)
+
+		first := gateway.Optimize(context.Background(), body)
+		now = now.Add(2 * time.Hour)
+		second := gateway.Optimize(context.Background(), body)
+
+		require.Zero(t, first.Metrics.NegativeCacheHits)
+		require.Zero(t, second.Metrics.NegativeCacheHits)
+		require.Equal(t, 1, second.Metrics.SkippedNotSmaller)
+		require.Equal(t, int32(2), encoder.calls.Load())
+	})
+
+	t.Run("policy fingerprint", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		baseConfig := DefaultConfig()
+		baseConfig.Enabled = true
+		baseConfig.CacheDir = cacheDir
+		baseConfig.ThresholdBytes = 1
+		source := makePhotoLikePNG(t, 420, 300, 143)
+		body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+
+		firstEncoder := &notSmallerEncoder{outputSize: len(source)}
+		firstGateway, err := newWithEncoder(baseConfig, firstEncoder)
+		require.NoError(t, err)
+		disableAsyncCacheCleanupForTest(firstGateway)
+		firstGateway.Optimize(context.Background(), body)
+
+		changedConfig := baseConfig
+		changedConfig.MinSavingsRatio = 0.10
+		changedEncoder := &notSmallerEncoder{outputSize: len(source)}
+		changedGateway, err := newWithEncoder(changedConfig, changedEncoder)
+		require.NoError(t, err)
+		disableAsyncCacheCleanupForTest(changedGateway)
+		result := changedGateway.Optimize(context.Background(), body)
+
+		require.Zero(t, result.Metrics.NegativeCacheHits)
+		require.Equal(t, 1, result.Metrics.SkippedNotSmaller)
+		require.Equal(t, int32(1), changedEncoder.calls.Load())
+	})
+}
+
+func TestCorruptNegativeCacheMetadataIsRejectedAndRebuilt(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	source := makePhotoLikePNG(t, 420, 300, 144)
+	body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+	encoder := &notSmallerEncoder{outputSize: len(source)}
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	disableAsyncCacheCleanupForTest(gateway)
+
+	gateway.Optimize(context.Background(), body)
+	metadataPath := mustGlob(t, filepath.Join(config.CacheDir, "*.negative.json"))[0]
+	require.NoError(t, os.WriteFile(metadataPath, []byte("{"), 0o600))
+	result := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, body, result.Body)
+	require.Zero(t, result.Metrics.NegativeCacheHits)
+	require.Equal(t, 1, result.Metrics.SkippedNotSmaller)
+	require.Equal(t, int32(2), encoder.calls.Load())
+}
+
+func TestConcurrentNegativeResultsSingleflightOneEncode(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	source := makePhotoLikePNG(t, 420, 300, 145)
+	body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+	encoder := &notSmallerEncoder{outputSize: len(source), delay: 40 * time.Millisecond}
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	disableAsyncCacheCleanupForTest(gateway)
+
+	const concurrency = 12
+	start := make(chan struct{})
+	results := make(chan Result, concurrency)
+	var workers sync.WaitGroup
+	for range concurrency {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			results <- gateway.Optimize(context.Background(), body)
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+
+	negativeHits := 0
+	negativeShared := 0
+	coldCreators := 0
+	for result := range results {
+		require.Equal(t, body, result.Body)
+		require.Equal(t, 1, result.Metrics.SkippedNotSmaller)
+		require.Zero(t, result.Metrics.CacheHits)
+		require.Zero(t, result.Metrics.CacheShared)
+		switch {
+		case result.Metrics.NegativeCacheHit:
+			negativeHits++
+		case result.Metrics.NegativeCacheShared > 0:
+			negativeShared++
+		default:
+			coldCreators++
+		}
+	}
+	require.Equal(t, int32(1), encoder.calls.Load())
+	require.LessOrEqual(t, coldCreators, 1)
+	require.GreaterOrEqual(t, negativeHits+negativeShared, concurrency-1)
+}
+
 func TestDecodedHashIgnoresBase64Whitespace(t *testing.T) {
 	config := DefaultConfig()
 	config.Enabled = true
@@ -690,6 +933,22 @@ func (e *countingEncoder) Encode(_ image.Image, _ encodeOptions) ([]byte, error)
 	e.calls.Add(1)
 	time.Sleep(40 * time.Millisecond)
 	return bytes.Repeat([]byte{0x42}, 128), nil
+}
+
+type notSmallerEncoder struct {
+	calls      atomic.Int32
+	outputSize int
+	delay      time.Duration
+}
+
+func (e *notSmallerEncoder) ID() string { return "not-smaller-test-encoder" }
+
+func (e *notSmallerEncoder) Encode(_ image.Image, _ encodeOptions) ([]byte, error) {
+	e.calls.Add(1)
+	if e.delay > 0 {
+		time.Sleep(e.delay)
+	}
+	return bytes.Repeat([]byte{0x66}, e.outputSize), nil
 }
 
 type blockingEncoder struct {

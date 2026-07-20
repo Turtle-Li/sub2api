@@ -212,7 +212,15 @@ type OpenAIWSIngressHooks struct {
 	InitialRequestModel string
 	BeforeTurn          func(turn int) error
 	BeforeRequest       func(turn int, payload []byte, originalModel string) error
-	AfterTurn           func(turn int, result *OpenAIForwardResult, turnErr error)
+	// TransformRequest runs after security/policy checks and before the payload
+	// is forwarded. The first frame may already have been transformed by the
+	// handler; callers can return it unchanged for turn 1. Implementations must
+	// never log or retain request contents.
+	TransformRequest func(turn int, payload []byte, originalModel string) ([]byte, error)
+	// ObserveForwardRequest receives the final HTTP-bridge payload after replay
+	// assembly. It is intended for privacy-safe aggregate size/count metrics.
+	ObserveForwardRequest func(turn int, payload []byte, originalModel string)
+	AfterTurn             func(turn int, result *OpenAIForwardResult, turnErr error)
 }
 
 func (s *OpenAIGatewayService) getOpenAIWSConnPool() *openAIWSConnPool {

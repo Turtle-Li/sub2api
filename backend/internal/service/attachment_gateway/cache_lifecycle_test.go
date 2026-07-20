@@ -14,7 +14,7 @@ import (
 func TestCacheCleanupRemovesExpiredPairsAndProtectsUnknownFiles(t *testing.T) {
 	cacheDir := t.TempDir()
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	cache := newImageCache(cacheDir, time.Hour, 1<<30, time.Minute, "test-policy", "test-optimizer")
+	cache := newImageCache(cacheDir, time.Hour, 1<<30, time.Minute, time.Hour, 100, "test-policy", "test-optimizer")
 	cache.now = func() time.Time { return now }
 
 	expiredHash := sourceHash([]byte("expired"))
@@ -43,7 +43,7 @@ func TestCacheCleanupRemovesExpiredPairsAndProtectsUnknownFiles(t *testing.T) {
 func TestCacheCleanupEvictsOldestPairsToByteBudget(t *testing.T) {
 	cacheDir := t.TempDir()
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	cache := newImageCache(cacheDir, time.Hour, 1<<30, time.Minute, "test-policy", "test-optimizer")
+	cache := newImageCache(cacheDir, time.Hour, 1<<30, time.Minute, time.Hour, 100, "test-policy", "test-optimizer")
 	cache.now = func() time.Time { return now }
 
 	hashes := []string{
@@ -67,6 +67,35 @@ func TestCacheCleanupEvictsOldestPairsToByteBudget(t *testing.T) {
 		assertPathExists(t, filepath.Join(cacheDir, hash+".webp"))
 		assertPathExists(t, filepath.Join(cacheDir, hash+".json"))
 	}
+}
+
+func TestNegativeCacheCleanupRemovesExpiredAndCorruptEntriesAndCapsCount(t *testing.T) {
+	cacheDir := t.TempDir()
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	cache := newImageCache(cacheDir, time.Hour, 1<<30, time.Minute, time.Hour, 2, "test-policy", "test-optimizer")
+	cache.now = func() time.Time { return now }
+
+	expiredHash := sourceHash([]byte("negative-expired"))
+	oldestHash := sourceHash([]byte("negative-oldest"))
+	middleHash := sourceHash([]byte("negative-middle"))
+	newestHash := sourceHash([]byte("negative-newest"))
+	corruptHash := sourceHash([]byte("negative-corrupt"))
+	writeNegativeCacheEntryForTest(t, cache, expiredHash, now.Add(-2*time.Hour), now.Add(-time.Minute))
+	writeNegativeCacheEntryForTest(t, cache, oldestHash, now.Add(-3*time.Minute), now.Add(time.Hour))
+	writeNegativeCacheEntryForTest(t, cache, middleHash, now.Add(-2*time.Minute), now.Add(time.Hour))
+	writeNegativeCacheEntryForTest(t, cache, newestHash, now.Add(-time.Minute), now.Add(time.Hour))
+	require.NoError(t, atomicWrite(cache.negativePath(corruptHash), []byte("{")))
+	unknownPath := filepath.Join(cacheDir, "do-not-delete.negative.txt")
+	require.NoError(t, os.WriteFile(unknownPath, []byte("owner data"), 0o600))
+
+	require.NoError(t, cache.cleanup())
+
+	assertPathMissing(t, cache.negativePath(expiredHash))
+	assertPathMissing(t, cache.negativePath(corruptHash))
+	assertPathMissing(t, cache.negativePath(oldestHash))
+	assertPathExists(t, cache.negativePath(middleHash))
+	assertPathExists(t, cache.negativePath(newestHash))
+	assertPathExists(t, unknownPath)
 }
 
 func writeCachePairForCleanupTest(
@@ -101,6 +130,34 @@ func writeCachePairForCleanupTest(
 	metadataInfo, err := os.Stat(metadataPath)
 	require.NoError(t, err)
 	return imageInfo.Size() + metadataInfo.Size()
+}
+
+func writeNegativeCacheEntryForTest(
+	t *testing.T,
+	cache *imageCache,
+	hash string,
+	createdAt time.Time,
+	expiresAt time.Time,
+) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(cache.dir, 0o700))
+	metadata := NegativeMetadata{
+		OriginalHash:     hash,
+		OriginalSize:     2048,
+		OriginalMIMEType: "image/webp",
+		CandidateSize:    2048,
+		Width:            32,
+		Height:           32,
+		Quality:          85,
+		Reason:           negativeCacheReasonNotSmaller,
+		Policy:           cache.policy,
+		Optimizer:        cache.optimizer,
+		CreatedAt:        createdAt,
+		ExpiresAt:        expiresAt,
+	}
+	metadataBytes, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	require.NoError(t, atomicWrite(cache.negativePath(hash), metadataBytes))
 }
 
 func assertPathExists(t *testing.T, path string) {

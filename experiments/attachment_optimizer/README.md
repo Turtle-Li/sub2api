@@ -64,3 +64,27 @@ python3 run_benchmarks.py \
 The benchmark requires `pngquant`, `zopflipng`, `oxipng`, `cwebp`, `tesseract`,
 Pillow, NumPy, and scikit-image. Its OpenAI forward target is a loopback HTTP
 sink, so timing is useful for relative payload/CPU comparison only.
+
+Run a deliberately small real-client WebSocket transport canary from an
+authorized machine that already has Codex configured:
+
+```bash
+python3 ws_transport_canary.py --turns 2
+```
+
+For a known-answer PNG/JPEG/WebP first-frame check, use one turn and require a
+marker that the prompt permits only when the expected visual facts are present:
+
+```bash
+python3 ws_transport_canary.py \
+  --turns 1 \
+  --image ./known-answer.jpg \
+  --expected-marker IMAGE_WS_OK \
+  --image-check-prompt "Inspect the image and reply exactly IMAGE_WS_OK only when the known facts match."
+```
+
+The canary reads that machine's existing Codex provider and API-key files. It
+never prints either value, the prompt, image contents, URL, or model output. It
+emits only byte count, turn number, terminal event, timing, marker match, and
+close status. Keep it inside the dedicated canary directory; do not copy
+credential files with it.

@@ -16,9 +16,15 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+const (
+	negativeCacheSuffix           = ".negative.json"
+	negativeCacheReasonNotSmaller = "not_smaller"
+)
+
 type cacheLookup struct {
-	Image optimizedImage
-	Hit   bool
+	Image    optimizedImage
+	Negative *NegativeMetadata
+	Hit      bool
 }
 
 type imageCache struct {
@@ -26,6 +32,8 @@ type imageCache struct {
 	ttl             time.Duration
 	maxBytes        int64
 	cleanupInterval time.Duration
+	negativeTTL     time.Duration
+	negativeMax     int
 	policy          string
 	optimizer       string
 	now             func() time.Time
@@ -37,19 +45,30 @@ type imageCache struct {
 }
 
 type cacheEntry struct {
-	hash         string
-	imagePath    string
-	metadataPath string
-	size         int64
-	createdAt    time.Time
+	hash      string
+	paths     []string
+	size      int64
+	createdAt time.Time
+	negative  bool
 }
 
-func newImageCache(dir string, ttl time.Duration, maxBytes int64, cleanupInterval time.Duration, policy, optimizer string) *imageCache {
+func newImageCache(
+	dir string,
+	ttl time.Duration,
+	maxBytes int64,
+	cleanupInterval time.Duration,
+	negativeTTL time.Duration,
+	negativeMaxEntries int,
+	policy,
+	optimizer string,
+) *imageCache {
 	return &imageCache{
 		dir:             filepath.Clean(dir),
 		ttl:             ttl,
 		maxBytes:        maxBytes,
 		cleanupInterval: cleanupInterval,
+		negativeTTL:     negativeTTL,
+		negativeMax:     negativeMaxEntries,
 		policy:          policy,
 		optimizer:       optimizer,
 		now:             time.Now,
@@ -59,41 +78,56 @@ func newImageCache(dir string, ttl time.Duration, maxBytes int64, cleanupInterva
 func (c *imageCache) getOrCreate(
 	ctx context.Context,
 	hash string,
-	create func() (optimizedImage, error),
-) (optimizedImage, bool, bool, error) {
+	create func() (cacheLookup, error),
+) (cacheLookup, bool, error) {
 	if cached, ok := c.load(hash); ok {
-		return cached, true, false, nil
+		return cacheLookup{Image: cached, Hit: true}, false, nil
+	}
+	if negative, ok := c.loadNegative(hash); ok {
+		return cacheLookup{Negative: &negative, Hit: true}, false, nil
 	}
 
 	resultChannel := c.flight.DoChan(hash+":"+c.policy, func() (any, error) {
 		if cached, ok := c.load(hash); ok {
 			return cacheLookup{Image: cached, Hit: true}, nil
 		}
+		if negative, ok := c.loadNegative(hash); ok {
+			return cacheLookup{Negative: &negative, Hit: true}, nil
+		}
 		created, err := create()
 		if err != nil {
 			return cacheLookup{}, err
 		}
-		if err := c.store(hash, created); err != nil {
-			return cacheLookup{}, err
+		switch {
+		case created.Negative != nil:
+			if err := c.storeNegative(hash, *created.Negative); err != nil {
+				return cacheLookup{}, err
+			}
+		case len(created.Image.Bytes) > 0:
+			if err := c.store(hash, created.Image); err != nil {
+				return cacheLookup{}, err
+			}
+		default:
+			return cacheLookup{}, errors.New("attachment gateway: cache create returned no result")
 		}
-		return cacheLookup{Image: created, Hit: false}, nil
+		return created, nil
 	})
 
 	select {
 	case <-ctx.Done():
-		return optimizedImage{}, false, false, ctx.Err()
+		return cacheLookup{}, false, ctx.Err()
 	case result := <-resultChannel:
 		if result.Err != nil {
-			return optimizedImage{}, false, result.Shared, result.Err
+			return cacheLookup{}, result.Shared, result.Err
 		}
 		lookup, ok := result.Val.(cacheLookup)
 		if !ok {
-			return optimizedImage{}, false, result.Shared, errors.New("attachment gateway: invalid cache singleflight result")
+			return cacheLookup{}, result.Shared, errors.New("attachment gateway: invalid cache singleflight result")
 		}
 		// A shared in-flight encode is tracked separately from a persisted-cache
 		// hit. Treating Shared as Hit would overstate cache effectiveness during a
 		// cold stampede and hide the encode that still occurred.
-		return lookup.Image, lookup.Hit, result.Shared, nil
+		return lookup, result.Shared, nil
 	}
 }
 
@@ -129,6 +163,37 @@ func (c *imageCache) loadLocked(hash string) (optimizedImage, bool) {
 	return optimizedImage{Bytes: encoded, Metadata: metadata}, true
 }
 
+func (c *imageCache) loadNegative(hash string) (NegativeMetadata, bool) {
+	c.filesMu.RLock()
+	defer c.filesMu.RUnlock()
+	return c.loadNegativeLocked(hash)
+}
+
+func (c *imageCache) loadNegativeLocked(hash string) (NegativeMetadata, bool) {
+	metadataBytes, err := os.ReadFile(c.negativePath(hash))
+	if err != nil {
+		return NegativeMetadata{}, false
+	}
+	var metadata NegativeMetadata
+	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+		return NegativeMetadata{}, false
+	}
+	if metadata.OriginalHash != hash ||
+		metadata.OriginalSize <= 0 ||
+		metadata.CandidateSize <= 0 ||
+		metadata.Width <= 0 ||
+		metadata.Height <= 0 ||
+		metadata.Quality < 1 || metadata.Quality > 100 ||
+		metadata.Reason != negativeCacheReasonNotSmaller ||
+		metadata.Policy != c.policy ||
+		metadata.Optimizer != c.optimizer ||
+		metadata.CreatedAt.IsZero() ||
+		!metadata.ExpiresAt.After(c.now().UTC()) {
+		return NegativeMetadata{}, false
+	}
+	return metadata, true
+}
+
 func (c *imageCache) store(hash string, image optimizedImage) error {
 	c.filesMu.Lock()
 	err := c.storeLocked(hash, image)
@@ -160,6 +225,44 @@ func (c *imageCache) storeLocked(hash string, image optimizedImage) error {
 	if err := atomicWrite(metadataPath, metadataBytes); err != nil {
 		return err
 	}
+	// A valid positive result always wins. Remove an obsolete negative decision
+	// best-effort after the complete positive pair has been published.
+	_ = os.Remove(c.negativePath(hash))
+	return nil
+}
+
+func (c *imageCache) storeNegative(hash string, metadata NegativeMetadata) error {
+	c.filesMu.Lock()
+	err := c.storeNegativeLocked(hash, metadata)
+	c.filesMu.Unlock()
+	if err == nil {
+		c.triggerCleanup()
+	}
+	return err
+}
+
+func (c *imageCache) storeNegativeLocked(hash string, metadata NegativeMetadata) error {
+	if metadata.OriginalHash != hash || metadata.Reason != negativeCacheReasonNotSmaller {
+		return errors.New("attachment gateway: negative cache metadata mismatch")
+	}
+	if err := os.MkdirAll(c.dir, 0o700); err != nil {
+		return fmt.Errorf("attachment gateway: create cache directory: %w", err)
+	}
+	if err := os.Chmod(c.dir, 0o700); err != nil {
+		return fmt.Errorf("attachment gateway: secure cache directory: %w", err)
+	}
+	metadataBytes, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return fmt.Errorf("attachment gateway: encode negative cache metadata: %w", err)
+	}
+	if err := atomicWrite(c.negativePath(hash), metadataBytes); err != nil {
+		return err
+	}
+	// A policy-valid positive entry would have been returned before creation.
+	// Any pair still present here is obsolete or corrupt and must not shadow the
+	// newly published deterministic negative decision.
+	imagePath, metadataPath := c.paths(hash)
+	_ = removeCachePair(imagePath, metadataPath)
 	return nil
 }
 
@@ -184,9 +287,10 @@ func (c *imageCache) triggerCleanup() {
 	}()
 }
 
-// cleanup removes expired or malformed cache pairs, then evicts the oldest
-// remaining pairs until the configured byte budget is met. Unknown files,
-// temporary files, directories and non-cache names are deliberately ignored.
+// cleanup removes expired or malformed positive/negative cache entries, caps
+// negative decisions by count, then evicts the oldest remaining entries until
+// the shared byte budget is met. Unknown files, temporary files, directories
+// and non-cache names are deliberately ignored.
 func (c *imageCache) cleanup() error {
 	c.filesMu.Lock()
 	defer c.filesMu.Unlock()
@@ -213,16 +317,58 @@ func (c *imageCache) cleanup() error {
 			continue
 		}
 		if pairs[hash] == nil {
-			pairs[hash] = make(map[string]string, 2)
+			pairs[hash] = make(map[string]string, 3)
 		}
 		pairs[hash][extension] = filepath.Join(c.dir, directoryEntry.Name())
 	}
 
 	now := c.now().UTC()
-	validEntries := make([]cacheEntry, 0, len(pairs))
+	validEntries := make([]cacheEntry, 0, len(pairs)*2)
+	negativeEntries := make([]cacheEntry, 0)
 	var totalBytes int64
 	var cleanupErr error
 	for hash, pair := range pairs {
+		if negativePath, hasNegative := pair[negativeCacheSuffix]; hasNegative {
+			metadataBytes, readErr := os.ReadFile(negativePath)
+			var metadata NegativeMetadata
+			metadataErr := json.Unmarshal(metadataBytes, &metadata)
+			if readErr != nil ||
+				metadataErr != nil ||
+				metadata.OriginalHash != hash ||
+				metadata.OriginalSize <= 0 ||
+				metadata.CandidateSize <= 0 ||
+				metadata.Width <= 0 ||
+				metadata.Height <= 0 ||
+				metadata.Quality < 1 || metadata.Quality > 100 ||
+				metadata.Reason != negativeCacheReasonNotSmaller ||
+				metadata.Policy == "" ||
+				metadata.Optimizer == "" ||
+				metadata.ExpiresAt.IsZero() {
+				cleanupErr = errors.Join(cleanupErr, removeCacheFiles(negativePath))
+			} else if !metadata.ExpiresAt.After(now) {
+				cleanupErr = errors.Join(cleanupErr, removeCacheFiles(negativePath))
+			} else if metadataInfo, metadataInfoErr := os.Stat(negativePath); metadataInfoErr != nil {
+				if !errors.Is(metadataInfoErr, os.ErrNotExist) {
+					cleanupErr = errors.Join(cleanupErr, metadataInfoErr)
+				}
+			} else {
+				createdAt := metadata.CreatedAt
+				if createdAt.IsZero() {
+					createdAt = metadataInfo.ModTime()
+				}
+				entry := cacheEntry{
+					hash:      hash,
+					paths:     []string{negativePath},
+					size:      metadataInfo.Size(),
+					createdAt: createdAt,
+					negative:  true,
+				}
+				validEntries = append(validEntries, entry)
+				negativeEntries = append(negativeEntries, entry)
+				totalBytes += entry.size
+			}
+		}
+
 		imagePath, hasImage := pair[".webp"]
 		metadataPath, hasMetadata := pair[".json"]
 		if !hasImage || !hasMetadata {
@@ -258,29 +404,41 @@ func (c *imageCache) cleanup() error {
 		}
 		entrySize := imageInfo.Size() + metadataInfo.Size()
 		validEntries = append(validEntries, cacheEntry{
-			hash:         hash,
-			imagePath:    imagePath,
-			metadataPath: metadataPath,
-			size:         entrySize,
-			createdAt:    createdAt,
+			hash:      hash,
+			paths:     []string{imagePath, metadataPath},
+			size:      entrySize,
+			createdAt: createdAt,
 		})
 		totalBytes += entrySize
+	}
+
+	removed := make(map[string]struct{})
+	if len(negativeEntries) > c.negativeMax {
+		sortCacheEntries(negativeEntries)
+		for _, entry := range negativeEntries[:len(negativeEntries)-c.negativeMax] {
+			if removeErr := removeCacheFiles(entry.paths...); removeErr != nil {
+				cleanupErr = errors.Join(cleanupErr, removeErr)
+				continue
+			}
+			removed[entry.paths[0]] = struct{}{}
+			totalBytes -= entry.size
+		}
 	}
 
 	if totalBytes <= c.maxBytes {
 		return cleanupErr
 	}
-	sort.Slice(validEntries, func(left, right int) bool {
-		if validEntries[left].createdAt.Equal(validEntries[right].createdAt) {
-			return validEntries[left].hash < validEntries[right].hash
-		}
-		return validEntries[left].createdAt.Before(validEntries[right].createdAt)
-	})
+	sortCacheEntries(validEntries)
 	for _, entry := range validEntries {
 		if totalBytes <= c.maxBytes {
 			break
 		}
-		if removeErr := removeCachePair(entry.imagePath, entry.metadataPath); removeErr != nil {
+		if entry.negative {
+			if _, wasRemoved := removed[entry.paths[0]]; wasRemoved {
+				continue
+			}
+		}
+		if removeErr := removeCacheFiles(entry.paths...); removeErr != nil {
 			cleanupErr = errors.Join(cleanupErr, removeErr)
 			continue
 		}
@@ -290,8 +448,15 @@ func (c *imageCache) cleanup() error {
 }
 
 func parseCacheFilename(name string) (string, string, bool) {
-	extension := filepath.Ext(name)
-	if extension != ".json" && extension != ".webp" {
+	extension := ""
+	switch {
+	case strings.HasSuffix(name, negativeCacheSuffix):
+		extension = negativeCacheSuffix
+	case strings.HasSuffix(name, ".json"):
+		extension = ".json"
+	case strings.HasSuffix(name, ".webp"):
+		extension = ".webp"
+	default:
 		return "", "", false
 	}
 	hash := strings.TrimSuffix(name, extension)
@@ -304,9 +469,25 @@ func parseCacheFilename(name string) (string, string, bool) {
 	return hash, extension, true
 }
 
+func sortCacheEntries(entries []cacheEntry) {
+	sort.Slice(entries, func(left, right int) bool {
+		if entries[left].createdAt.Equal(entries[right].createdAt) {
+			if entries[left].hash == entries[right].hash {
+				return entries[left].negative && !entries[right].negative
+			}
+			return entries[left].hash < entries[right].hash
+		}
+		return entries[left].createdAt.Before(entries[right].createdAt)
+	})
+}
+
 func removeCachePair(imagePath, metadataPath string) error {
+	return removeCacheFiles(imagePath, metadataPath)
+}
+
+func removeCacheFiles(paths ...string) error {
 	var removeErr error
-	for _, path := range []string{imagePath, metadataPath} {
+	for _, path := range paths {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			removeErr = errors.Join(removeErr, fmt.Errorf("attachment gateway: remove cache file: %w", err))
 		}
@@ -316,6 +497,10 @@ func removeCachePair(imagePath, metadataPath string) error {
 
 func (c *imageCache) paths(hash string) (string, string) {
 	return filepath.Join(c.dir, hash+".webp"), filepath.Join(c.dir, hash+".json")
+}
+
+func (c *imageCache) negativePath(hash string) string {
+	return filepath.Join(c.dir, hash+negativeCacheSuffix)
 }
 
 func atomicWrite(path string, content []byte) error {

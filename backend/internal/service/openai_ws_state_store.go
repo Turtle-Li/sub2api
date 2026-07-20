@@ -53,6 +53,7 @@ type OpenAIWSStateStore interface {
 	BindResponseConn(responseID, connID string, ttl time.Duration)
 	GetResponseConn(responseID string) (string, bool)
 	DeleteResponseConn(responseID string)
+	DeleteResponseConnIfMatch(responseID, connID string) bool
 
 	BindSessionTurnState(groupID int64, sessionHash, turnState string, ttl time.Duration)
 	GetSessionTurnState(groupID int64, sessionHash string) (string, bool)
@@ -61,6 +62,7 @@ type OpenAIWSStateStore interface {
 	BindSessionConn(groupID int64, sessionHash, connID string, ttl time.Duration)
 	GetSessionConn(groupID int64, sessionHash string) (string, bool)
 	DeleteSessionConn(groupID int64, sessionHash string)
+	DeleteSessionConnIfMatch(groupID int64, sessionHash, connID string) bool
 }
 
 type defaultOpenAIWSStateStore struct {
@@ -211,6 +213,25 @@ func (s *defaultOpenAIWSStateStore) DeleteResponseConn(responseID string) {
 	s.responseToConnMu.Unlock()
 }
 
+// DeleteResponseConnIfMatch removes a stale response binding only when it
+// still points at the failed connection. This avoids an old failure racing
+// with and deleting a newer binding established by another request.
+func (s *defaultOpenAIWSStateStore) DeleteResponseConnIfMatch(responseID, connID string) bool {
+	id := normalizeOpenAIWSResponseID(responseID)
+	conn := strings.TrimSpace(connID)
+	if id == "" || conn == "" {
+		return false
+	}
+	s.responseToConnMu.Lock()
+	defer s.responseToConnMu.Unlock()
+	binding, ok := s.responseToConn[id]
+	if !ok || strings.TrimSpace(binding.connID) != conn {
+		return false
+	}
+	delete(s.responseToConn, id)
+	return true
+}
+
 func (s *defaultOpenAIWSStateStore) BindSessionTurnState(groupID int64, sessionHash, turnState string, ttl time.Duration) {
 	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
 	state := strings.TrimSpace(turnState)
@@ -299,6 +320,25 @@ func (s *defaultOpenAIWSStateStore) DeleteSessionConn(groupID int64, sessionHash
 	s.sessionToConnMu.Lock()
 	delete(s.sessionToConn, key)
 	s.sessionToConnMu.Unlock()
+}
+
+// DeleteSessionConnIfMatch is the session-binding counterpart of
+// DeleteResponseConnIfMatch. It deliberately uses compare-and-delete so a
+// delayed stale-connection failure cannot erase a concurrent fresh binding.
+func (s *defaultOpenAIWSStateStore) DeleteSessionConnIfMatch(groupID int64, sessionHash, connID string) bool {
+	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	conn := strings.TrimSpace(connID)
+	if key == "" || conn == "" {
+		return false
+	}
+	s.sessionToConnMu.Lock()
+	defer s.sessionToConnMu.Unlock()
+	binding, ok := s.sessionToConn[key]
+	if !ok || strings.TrimSpace(binding.connID) != conn {
+		return false
+	}
+	delete(s.sessionToConn, key)
+	return true
 }
 
 func (s *defaultOpenAIWSStateStore) maybeCleanup() {

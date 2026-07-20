@@ -81,6 +81,8 @@ func TestOptimizeResponsesAttachmentsUsesOnlyPrivacySafeLogFields(t *testing.T) 
 				OptimizedImageBytes: 256,
 				CacheHit:            true,
 				CacheHits:           1,
+				NegativeCacheHit:    true,
+				NegativeCacheHits:   1,
 				OptimizeDurationMS:  12.5,
 			},
 		},
@@ -108,6 +110,7 @@ func TestOptimizeResponsesAttachmentsUsesOnlyPrivacySafeLogFields(t *testing.T) 
 	require.NotContains(t, entries[0].ContextMap(), "base64")
 	require.NotContains(t, entries[0].ContextMap(), "hash")
 	require.NotContains(t, entries[0].Message, "TOP_SECRET_BASE64")
+	require.Equal(t, int64(1), entries[0].ContextMap()["negative_cache_hits"])
 }
 
 func TestOptimizeResponsesAttachmentsSkipsCallWhenGateIsOff(t *testing.T) {
@@ -141,6 +144,52 @@ func TestOptimizeResponsesAttachmentsExternalizesOnlyInRewriteMode(t *testing.T)
 			RewrittenBodyBytes: len(urlBody),
 			ExternalizedCount:  1,
 			UploadCount:        1,
+		},
+	}}
+	handler := &OpenAIGatewayHandler{
+		attachmentOptimizer:       optimizer,
+		attachmentURLExternalizer: externalizer,
+		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
+			AttachmentOptimizerEnabled:   true,
+			AttachmentOptimizerDryRun:    false,
+			URLRewriteEnabled:            true,
+			URLUploadTimeoutMilliseconds: 1000,
+			AllowUnscoped:                true,
+			OptimizeTimeoutMilliseconds:  1000,
+		}),
+	}
+
+	result := handler.optimizeResponsesAttachments(context.Background(), zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
+
+	require.Equal(t, urlBody, result)
+	require.Equal(t, 1, optimizer.calls)
+	require.Equal(t, 1, externalizer.calls)
+}
+
+func TestNegativeCachePassthroughStillUsesR2URLExternalizer(t *testing.T) {
+	originalBody := []byte(`{"model":"gpt-test","input":[{"type":"input_image","image_url":"data:image/webp;base64,AA=="}]}`)
+	urlBody := []byte(`{"model":"gpt-test","input":[{"type":"input_image","image_url":"https://r2.example.test/image.webp?sig=x"}]}`)
+	optimizer := &fakeResponsesAttachmentOptimizer{enabled: true, result: attachmentgateway.Result{
+		Body: originalBody,
+		Metrics: attachmentgateway.Metrics{
+			Enabled:            true,
+			OriginalBodyBytes:  len(originalBody),
+			OptimizedBodyBytes: len(originalBody),
+			ImageCount:         1,
+			SkippedNotSmaller:  1,
+			NegativeCacheHit:   true,
+			NegativeCacheHits:  1,
+			OptimizeDurationMS: 0.2,
+		},
+	}}
+	externalizer := &fakeResponsesAttachmentURLExternalizer{enabled: true, result: attachmentgateway.URLResult{
+		Body: urlBody,
+		Metrics: attachmentgateway.URLMetrics{
+			Enabled:            true,
+			OriginalBodyBytes:  len(originalBody),
+			RewrittenBodyBytes: len(urlBody),
+			ExternalizedCount:  1,
+			CacheHits:          1,
 		},
 	}}
 	handler := &OpenAIGatewayHandler{

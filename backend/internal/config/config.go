@@ -822,6 +822,8 @@ type AttachmentGatewayConfig struct {
 	CacheTTLSeconds                   int     `mapstructure:"cache_ttl_seconds"`
 	CacheMaxBytes                     int64   `mapstructure:"cache_max_bytes"`
 	CacheCleanupIntervalSeconds       int     `mapstructure:"cache_cleanup_interval_seconds"`
+	NegativeCacheTTLSeconds           int     `mapstructure:"negative_cache_ttl_seconds"`
+	NegativeCacheMaxEntries           int     `mapstructure:"negative_cache_max_entries"`
 	MaxImagesPerRequest               int     `mapstructure:"max_images_per_request"`
 	MaxConcurrentEncodes              int     `mapstructure:"max_concurrent_encodes"`
 }
@@ -2218,6 +2220,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.cache_ttl_seconds", 7*24*60*60)
 	viper.SetDefault("gateway.attachment_gateway.cache_max_bytes", int64(512*1024*1024))
 	viper.SetDefault("gateway.attachment_gateway.cache_cleanup_interval_seconds", 10*60)
+	viper.SetDefault("gateway.attachment_gateway.negative_cache_ttl_seconds", 24*60*60)
+	viper.SetDefault("gateway.attachment_gateway.negative_cache_max_entries", 10_000)
 	viper.SetDefault("gateway.attachment_gateway.max_images_per_request", 20)
 	viper.SetDefault("gateway.attachment_gateway.max_concurrent_encodes", 2)
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
@@ -3017,6 +3021,12 @@ func (c *Config) Validate() error {
 		}
 		if attachment.CacheCleanupIntervalSeconds <= 0 {
 			return fmt.Errorf("gateway.attachment_gateway.cache_cleanup_interval_seconds must be positive")
+		}
+		if attachment.NegativeCacheTTLSeconds <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.negative_cache_ttl_seconds must be positive")
+		}
+		if attachment.NegativeCacheMaxEntries <= 0 {
+			return fmt.Errorf("gateway.attachment_gateway.negative_cache_max_entries must be positive")
 		}
 		if attachment.MaxImagesPerRequest <= 0 {
 			return fmt.Errorf("gateway.attachment_gateway.max_images_per_request must be positive")

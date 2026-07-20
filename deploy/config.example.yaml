@@ -246,6 +246,13 @@ gateway:
     cache_ttl_seconds: 604800
     cache_max_bytes: 536870912
     cache_cleanup_interval_seconds: 600
+    # Cache deterministic "not at least 5% smaller" decisions so repeated
+    # images skip raster decode/encode. Entries are policy-versioned and share
+    # the disk byte budget above, with an additional count cap.
+    # 缓存“压缩不足 5%”结果，重复图片跳过图像解码/编码；绑定策略版本，
+    # 并同时受共享磁盘字节预算和独立条目数上限约束。
+    negative_cache_ttl_seconds: 86400
+    negative_cache_max_entries: 10000
     max_images_per_request: 20
     max_concurrent_encodes: 2
   # Max bytes to read for non-stream upstream responses (default: 8MB)

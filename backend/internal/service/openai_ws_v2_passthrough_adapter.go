@@ -903,6 +903,24 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				model = capturedSessionModel
 			}
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
+			if policyErr == nil && blocked == nil && isResponseCreate && hooks != nil && hooks.TransformRequest != nil {
+				turnNo := int(completedTurns.Load()) + 1
+				if turnNo < 2 {
+					turnNo = 2
+				}
+				transformed, transformErr := hooks.TransformRequest(turnNo, out, requestModelForThisFrame)
+				if transformErr != nil {
+					return payload, nil, transformErr
+				}
+				if len(transformed) == 0 || !gjson.ValidBytes(transformed) {
+					return payload, nil, NewOpenAIWSClientCloseError(
+						coderws.StatusPolicyViolation,
+						"invalid websocket request payload after attachment processing",
+						errors.New("invalid transformed websocket payload"),
+					)
+				}
+				out = transformed
+			}
 			// 多轮 passthrough usage：仅在成功（non-block / non-err）
 			// 的 response.create 帧上更新 usageMeta，使用
 			// filter 处理后的 payload，与首帧 policy-after-extract 语义

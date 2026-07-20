@@ -41,6 +41,20 @@ func TestOpenAIWSStateStore_ResponseConnTTL(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestOpenAIWSStateStore_DeleteResponseConnIfMatch(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	store.BindResponseConn("resp_compare_delete", "conn_new", time.Minute)
+
+	require.False(t, store.DeleteResponseConnIfMatch("resp_compare_delete", "conn_old"))
+	connID, ok := store.GetResponseConn("resp_compare_delete")
+	require.True(t, ok)
+	require.Equal(t, "conn_new", connID, "旧连接失败不能删除并发建立的新绑定")
+
+	require.True(t, store.DeleteResponseConnIfMatch("resp_compare_delete", "conn_new"))
+	_, ok = store.GetResponseConn("resp_compare_delete")
+	require.False(t, ok)
+}
+
 func TestOpenAIWSStateStore_SessionTurnStateTTL(t *testing.T) {
 	store := NewOpenAIWSStateStore(nil)
 	store.BindSessionTurnState(9, "session_hash_1", "turn_state_1", 30*time.Millisecond)
@@ -72,6 +86,20 @@ func TestOpenAIWSStateStore_SessionConnTTL(t *testing.T) {
 
 	time.Sleep(60 * time.Millisecond)
 	_, ok = store.GetSessionConn(9, "session_hash_conn_1")
+	require.False(t, ok)
+}
+
+func TestOpenAIWSStateStore_DeleteSessionConnIfMatch(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	store.BindSessionConn(9, "session_compare_delete", "conn_new", time.Minute)
+
+	require.False(t, store.DeleteSessionConnIfMatch(9, "session_compare_delete", "conn_old"))
+	connID, ok := store.GetSessionConn(9, "session_compare_delete")
+	require.True(t, ok)
+	require.Equal(t, "conn_new", connID, "旧连接失败不能删除并发建立的新会话绑定")
+
+	require.True(t, store.DeleteSessionConnIfMatch(9, "session_compare_delete", "conn_new"))
+	_, ok = store.GetSessionConn(9, "session_compare_delete")
 	require.False(t, ok)
 }
 

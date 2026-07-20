@@ -12,6 +12,9 @@ When enabled it:
   and images with transparency as lossless WebP;
 - never resizes the raster;
 - caches by SHA-256 of decoded source bytes under `data/attachment_cache`;
+- persists policy-versioned negative decisions for images whose WebP result is
+  not at least 5% smaller, so repeats skip raster decode and encode without
+  being reported as positive cache hits;
 - deduplicates concurrent cache misses with in-process singleflight;
 - bounds request-side base64/decode work and worker-side raster/WebP work with
   separate slots, so a non-cancellable encoder still holds capacity after its
@@ -20,6 +23,8 @@ When enabled it:
   limits;
 - expires cache pairs and evicts the oldest pairs above the configured byte
   budget without touching unknown files;
+- bounds negative decisions independently by a 24-hour TTL and 10,000-entry
+  cap while counting their metadata against the shared cache byte budget;
 - fails open per image and emits only byte/count/duration metrics.
 
 The request-level budget is a second, separately gated Phase 1 capability:
@@ -103,7 +108,7 @@ Run focused verification:
 cd backend
 go test ./internal/config ./internal/handler
 go test -race ./internal/service/attachment_gateway \
-  -run '^(TestConcurrentRequestsSingleflightOneEncode|TestTimedOutBackgroundEncodeStillHoldsConcurrencySlot|TestCacheCleanup.*)$'
+  -run '^(TestConcurrentRequestsSingleflightOneEncode|TestConcurrentNegativeResultsSingleflightOneEncode|TestNegativeCache.*|TestTimedOutBackgroundEncodeStillHoldsConcurrencySlot|TestCacheCleanup.*)$'
 go test -tags nodynamic ./...
 go test ./internal/service/attachment_gateway \
   -run '^$' -bench '^BenchmarkPhase1Scenarios$' -benchtime=1x -benchmem

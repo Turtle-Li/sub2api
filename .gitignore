@@ -150,6 +150,7 @@ docs/reports/data/*
 !docs/reports/data/attachment_optimizer_benchmark.json
 !docs/reports/data/attachment_gateway_phase1_benchmark.json
 !docs/reports/data/attachment_gateway_phase1_1_benchmark.json
+!docs/reports/data/attachment_gateway_r2_canary_20260721.json
 !docs/legal/
 !docs/legal/*.md
 .serena/

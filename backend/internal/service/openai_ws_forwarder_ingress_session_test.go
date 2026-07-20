@@ -169,7 +169,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	require.Len(t, captureConn.writes, 2, "应向同一上游连接发送两轮 response.create")
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_IdleTimeoutReleasesStoreDisabledSession(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledStrictSkipsIdlePoolAndReleasesOnTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -178,6 +178,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_IdleTimeoutRelea
 	cfg.Gateway.OpenAIWS.Enabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.StoreDisabledConnMode = openAIWSStoreDisabledConnModeStrict
 	cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = 1
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
@@ -213,6 +214,14 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_IdleTimeoutRelea
 		Credentials: map[string]any{"api_key": "sk-test"},
 		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
 	}
+	pooledIdleClient := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp_must_not_reuse","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+	}}
+	pooledIdleConn := newOpenAIWSConn("strict-idle-must-skip", account.ID, pooledIdleClient, nil)
+	accountPool := pool.getOrCreateAccountPool(account.ID)
+	accountPool.mu.Lock()
+	accountPool.conns[pooledIdleConn.id] = pooledIdleConn
+	accountPool.mu.Unlock()
 
 	serverErrCh := make(chan error, 1)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -253,6 +262,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_IdleTimeoutRelea
 	cancelRead()
 	require.NoError(t, err)
 	require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
+	require.Equal(t, "resp_idle_timeout", gjson.GetBytes(event, "response.id").String())
 
 	closeReadCtx, cancelCloseRead := context.WithTimeout(context.Background(), 3*time.Second)
 	_, _, err = clientConn.Read(closeReadCtx)
@@ -280,6 +290,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_IdleTimeoutRelea
 		require.False(t, conn.isLeased(), "idle close must release the upstream lease")
 	}
 	ap.mu.Unlock()
+	require.Equal(t, 1, captureDialer.DialCount(), "store=false strict 新会话必须新拨连接")
+	require.Empty(t, pooledIdleClient.writes, "store=false strict 新会话不能复用空闲池连接")
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_FollowupCreateCanOmitModel(t *testing.T) {
@@ -3238,7 +3250,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 	require.Empty(t, secondWrites, "不能把会触发 No tool call found 的重放请求发到新上游")
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailBeforeDownstreamRetriesOnce(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailRetrySkipsSecondStaleConn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -3248,9 +3260,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailBeforeD
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
-	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
@@ -3375,6 +3387,15 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailBeforeD
 	firstTurn := readMessage()
 	require.Equal(t, "resp_turn_write_retry_1", gjson.GetBytes(firstTurn, "response.id").String())
 
+	// Simulate a second stale idle connection already sitting in the account
+	// pool. The retry must dial a fresh connection instead of consuming it.
+	secondStaleConn := &openAIWSWriteFailAfterFirstTurnConn{failOnWrite: true}
+	pooledSecondStale := newOpenAIWSConn("preloaded-stale", account.ID, secondStaleConn, nil)
+	accountPool := pool.getOrCreateAccountPool(account.ID)
+	accountPool.mu.Lock()
+	accountPool.conns[pooledSecondStale.id] = pooledSecondStale
+	accountPool.mu.Unlock()
+
 	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_turn_write_retry_1"}`)
 	secondTurn := readMessage()
 	require.Equal(t, "resp_turn_write_retry_2", gjson.GetBytes(secondTurn, "response.id").String())
@@ -3386,7 +3407,14 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailBeforeD
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 ingress websocket 结束超时")
 	}
-	require.Equal(t, 2, dialer.DialCount(), "第二轮 turn 上游写失败且未写下游时应自动重试并换连")
+	require.Equal(t, 2, dialer.DialCount(), "第二轮 turn 上游写失败后必须新拨第三条连接")
+	require.Zero(t, secondStaleConn.WriteCount(), "安全重试不能再次命中池中的第二条 stale connection")
+	stateStore := svc.getOpenAIWSStateStore()
+	_, staleBindingExists := stateStore.GetResponseConn("resp_turn_write_retry_1")
+	require.False(t, staleBindingExists, "失败连接对应的 previous_response_id 绑定必须失效")
+	freshConnID, freshBindingExists := stateStore.GetResponseConn("resp_turn_write_retry_2")
+	require.True(t, freshBindingExists)
+	require.NotEmpty(t, freshConnID)
 	hooksMu.Lock()
 	beforeTurn1 := beforeTurnCalls[1]
 	beforeTurn2 := beforeTurnCalls[2]
@@ -4047,11 +4075,13 @@ type openAIWSWriteFailAfterFirstTurnConn struct {
 	mu          sync.Mutex
 	events      [][]byte
 	failOnWrite bool
+	writeCount  int
 }
 
 func (c *openAIWSWriteFailAfterFirstTurnConn) WriteJSON(context.Context, any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.writeCount++
 	if c.failOnWrite {
 		return errors.New("write failed on stale conn")
 	}
@@ -4078,6 +4108,12 @@ func (c *openAIWSWriteFailAfterFirstTurnConn) Ping(context.Context) error {
 
 func (c *openAIWSWriteFailAfterFirstTurnConn) Close() error {
 	return nil
+}
+
+func (c *openAIWSWriteFailAfterFirstTurnConn) WriteCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writeCount
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ClientDisconnectStillDrainsUpstream(t *testing.T) {

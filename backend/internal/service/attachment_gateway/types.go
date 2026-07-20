@@ -21,6 +21,8 @@ const (
 	defaultCacheTTL                      = 7 * 24 * time.Hour
 	defaultCacheMaxBytes           int64 = 512 * 1024 * 1024
 	defaultCacheCleanupInterval          = 10 * time.Minute
+	defaultNegativeCacheTTL              = 24 * time.Hour
+	defaultNegativeCacheMaxEntries       = 10_000
 	defaultMaxImagesPerRequest           = 20
 	defaultMaxConcurrentEncode           = 2
 	defaultAggregateTriggerBytes         = 4 * 1024 * 1024
@@ -58,6 +60,8 @@ type Config struct {
 	CacheTTL                          time.Duration
 	CacheMaxBytes                     int64
 	CacheCleanupInterval              time.Duration
+	NegativeCacheTTL                  time.Duration
+	NegativeCacheMaxEntries           int
 	MaxImagesPerRequest               int
 	MaxConcurrentEncode               int
 }
@@ -82,6 +86,8 @@ func DefaultConfig() Config {
 		CacheTTL:                          defaultCacheTTL,
 		CacheMaxBytes:                     defaultCacheMaxBytes,
 		CacheCleanupInterval:              defaultCacheCleanupInterval,
+		NegativeCacheTTL:                  defaultNegativeCacheTTL,
+		NegativeCacheMaxEntries:           defaultNegativeCacheMaxEntries,
 		MaxImagesPerRequest:               defaultMaxImagesPerRequest,
 		MaxConcurrentEncode:               defaultMaxConcurrentEncode,
 	}
@@ -130,6 +136,12 @@ func (c Config) withDefaults() Config {
 	}
 	if c.CacheCleanupInterval == 0 {
 		c.CacheCleanupInterval = defaults.CacheCleanupInterval
+	}
+	if c.NegativeCacheTTL == 0 {
+		c.NegativeCacheTTL = defaults.NegativeCacheTTL
+	}
+	if c.NegativeCacheMaxEntries == 0 {
+		c.NegativeCacheMaxEntries = defaults.NegativeCacheMaxEntries
 	}
 	if c.MaxImagesPerRequest == 0 {
 		c.MaxImagesPerRequest = defaults.MaxImagesPerRequest
@@ -182,6 +194,12 @@ func (c Config) validate() error {
 	if c.CacheCleanupInterval <= 0 {
 		return errors.New("attachment gateway: cache cleanup interval must be positive")
 	}
+	if c.NegativeCacheTTL <= 0 {
+		return errors.New("attachment gateway: negative cache TTL must be positive")
+	}
+	if c.NegativeCacheMaxEntries <= 0 {
+		return errors.New("attachment gateway: negative cache max entries must be positive")
+	}
 	if c.MaxImagesPerRequest <= 0 {
 		return errors.New("attachment gateway: max images per request must be positive")
 	}
@@ -204,6 +222,9 @@ type Metrics struct {
 	CacheHit                            bool
 	CacheHits                           int
 	CacheShared                         int
+	NegativeCacheHit                    bool
+	NegativeCacheHits                   int
+	NegativeCacheShared                 int
 	TimedOut                            bool
 	SkippedBelowThreshold               int
 	SkippedUnsupported                  int
@@ -241,6 +262,26 @@ type Metadata struct {
 	Height           int       `json:"height"`
 	Quality          int       `json:"quality"`
 	Lossless         bool      `json:"lossless"`
+	Policy           string    `json:"policy"`
+	Optimizer        string    `json:"optimizer"`
+	CreatedAt        time.Time `json:"created_at"`
+	ExpiresAt        time.Time `json:"expires_at"`
+}
+
+// NegativeMetadata records a deterministic "not smaller" optimization
+// outcome. It contains no image bytes, base64, prompt, URL or user data. The
+// policy and optimizer fingerprints ensure an encoder/policy change forces a
+// fresh attempt instead of reusing an obsolete decision.
+type NegativeMetadata struct {
+	OriginalHash     string    `json:"original_hash"`
+	OriginalSize     int       `json:"original_size"`
+	OriginalMIMEType string    `json:"original_mime_type"`
+	CandidateSize    int       `json:"candidate_size"`
+	Width            int       `json:"width"`
+	Height           int       `json:"height"`
+	Quality          int       `json:"quality"`
+	Lossless         bool      `json:"lossless"`
+	Reason           string    `json:"reason"`
 	Policy           string    `json:"policy"`
 	Optimizer        string    `json:"optimizer"`
 	CreatedAt        time.Time `json:"created_at"`

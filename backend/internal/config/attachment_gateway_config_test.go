@@ -46,6 +46,8 @@ func TestAttachmentGatewayDefaultsAreSafeAndDisabled(t *testing.T) {
 	require.Equal(t, 7*24*60*60, attachment.CacheTTLSeconds)
 	require.Equal(t, int64(512*1024*1024), attachment.CacheMaxBytes)
 	require.Equal(t, 10*60, attachment.CacheCleanupIntervalSeconds)
+	require.Equal(t, 24*60*60, attachment.NegativeCacheTTLSeconds)
+	require.Equal(t, 10_000, attachment.NegativeCacheMaxEntries)
 	require.Equal(t, 20, attachment.MaxImagesPerRequest)
 	require.Equal(t, 2, attachment.MaxConcurrentEncodes)
 }
@@ -86,6 +88,8 @@ func TestAttachmentGatewayValidationRejectsUnsafeValues(t *testing.T) {
 		{name: "zero ttl", mutate: func(c *AttachmentGatewayConfig) { c.CacheTTLSeconds = 0 }, message: "cache_ttl_seconds"},
 		{name: "zero cache size", mutate: func(c *AttachmentGatewayConfig) { c.CacheMaxBytes = 0 }, message: "cache_max_bytes"},
 		{name: "zero cleanup interval", mutate: func(c *AttachmentGatewayConfig) { c.CacheCleanupIntervalSeconds = 0 }, message: "cache_cleanup_interval_seconds"},
+		{name: "zero negative cache ttl", mutate: func(c *AttachmentGatewayConfig) { c.NegativeCacheTTLSeconds = 0 }, message: "negative_cache_ttl_seconds"},
+		{name: "zero negative cache entries", mutate: func(c *AttachmentGatewayConfig) { c.NegativeCacheMaxEntries = 0 }, message: "negative_cache_max_entries"},
 		{name: "zero image count", mutate: func(c *AttachmentGatewayConfig) { c.MaxImagesPerRequest = 0 }, message: "max_images_per_request"},
 		{name: "zero concurrency", mutate: func(c *AttachmentGatewayConfig) { c.MaxConcurrentEncodes = 0 }, message: "max_concurrent_encodes"},
 		{name: "invalid API key scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedAPIKeyIDs = []int64{0} }, message: "allowed IDs"},

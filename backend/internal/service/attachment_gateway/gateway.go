@@ -18,9 +18,18 @@ type Gateway struct {
 	encodeSlots    chan struct{}
 }
 
+type imageOptimizationResult struct {
+	Image               optimizedImage
+	CacheHit            bool
+	CacheShared         bool
+	NegativeCacheHit    bool
+	NegativeCacheShared bool
+}
+
 // New creates an attachment gateway without touching the filesystem. Cache
 // directories are created lazily only after the experiment is enabled and an
-// eligible image produces a useful optimization.
+// eligible image produces either a useful optimization or a deterministic
+// negative-cache decision.
 func New(config Config) (*Gateway, error) {
 	return newWithEncoder(config, libwebpEncoder{})
 }
@@ -35,9 +44,18 @@ func newWithEncoder(config Config, encoder imageEncoder) (*Gateway, error) {
 	}
 	policy := policyFingerprint(config, encoder.ID())
 	return &Gateway{
-		config:         config,
-		encoder:        encoder,
-		cache:          newImageCache(config.CacheDir, config.CacheTTL, config.CacheMaxBytes, config.CacheCleanupInterval, policy, encoder.ID()),
+		config:  config,
+		encoder: encoder,
+		cache: newImageCache(
+			config.CacheDir,
+			config.CacheTTL,
+			config.CacheMaxBytes,
+			config.CacheCleanupInterval,
+			config.NegativeCacheTTL,
+			config.NegativeCacheMaxEntries,
+			policy,
+			encoder.ID(),
+		),
 		transformSlots: make(chan struct{}, config.MaxConcurrentEncode),
 		encodeSlots:    make(chan struct{}, config.MaxConcurrentEncode),
 	}, nil
@@ -156,7 +174,14 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 			return rawURL
 		}
 
-		optimized, cacheHit, cacheShared, optimizeErr := g.optimizeImage(ctx, parsed)
+		optimization, optimizeErr := g.optimizeImage(ctx, parsed)
+		if optimization.NegativeCacheHit {
+			result.Metrics.NegativeCacheHit = true
+			result.Metrics.NegativeCacheHits++
+		}
+		if optimization.NegativeCacheShared {
+			result.Metrics.NegativeCacheShared++
+		}
 		if optimizeErr != nil {
 			if errors.Is(optimizeErr, errNotSmaller) {
 				result.Metrics.SkippedNotSmaller++
@@ -170,16 +195,16 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 			return rawURL
 		}
 
-		if cacheHit {
+		if optimization.CacheHit {
 			result.Metrics.CacheHit = true
 			result.Metrics.CacheHits++
 		}
-		if cacheShared {
+		if optimization.CacheShared {
 			result.Metrics.CacheShared++
 		}
 		result.Metrics.OptimizedImageCount++
-		result.Metrics.OptimizedImageBytes += len(optimized.Bytes)
-		return "data:image/webp;base64," + base64.StdEncoding.EncodeToString(optimized.Bytes)
+		result.Metrics.OptimizedImageBytes += len(optimization.Image.Bytes)
+		return "data:image/webp;base64," + base64.StdEncoding.EncodeToString(optimization.Image.Bytes)
 	})
 	if rewriteErr != nil {
 		result.Metrics.Errors++
@@ -219,12 +244,12 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 func (g *Gateway) optimizeImage(
 	ctx context.Context,
 	input dataURLImage,
-) (optimizedImage, bool, bool, error) {
+) (imageOptimizationResult, error) {
 	hash := sourceHash(input.Bytes)
-	return g.cache.getOrCreate(ctx, hash, func() (created optimizedImage, createErr error) {
+	lookup, shared, err := g.cache.getOrCreate(ctx, hash, func() (created cacheLookup, createErr error) {
 		defer func() {
 			if recover() != nil {
-				created = optimizedImage{}
+				created = cacheLookup{}
 				createErr = errors.New("attachment gateway: image transform panicked")
 			}
 		}()
@@ -237,14 +262,14 @@ func (g *Gateway) optimizeImage(
 		case g.encodeSlots <- struct{}{}:
 			defer func() { <-g.encodeSlots }()
 		case <-ctx.Done():
-			return optimizedImage{}, ctx.Err()
+			return cacheLookup{}, ctx.Err()
 		}
 		decoded, width, height, err := decodeImage(input.Bytes, input.MIMEType, g.config.MaxPixels)
 		if err != nil {
-			return optimizedImage{}, err
+			return cacheLookup{}, err
 		}
 		if err := ctx.Err(); err != nil {
-			return optimizedImage{}, err
+			return cacheLookup{}, err
 		}
 		policy := chooseImagePolicy(decoded, g.config)
 
@@ -253,14 +278,30 @@ func (g *Gateway) optimizeImage(
 			Lossless: policy.Lossless,
 		})
 		if err != nil {
-			return optimizedImage{}, err
+			return cacheLookup{}, err
 		}
 		if err := ctx.Err(); err != nil {
-			return optimizedImage{}, err
+			return cacheLookup{}, err
 		}
 		minimumSavings := int(float64(len(input.Bytes)) * g.config.MinSavingsRatio)
 		if len(encoded)+minimumSavings >= len(input.Bytes) {
-			return optimizedImage{}, errNotSmaller
+			now := g.cache.now().UTC()
+			negative := NegativeMetadata{
+				OriginalHash:     hash,
+				OriginalSize:     len(input.Bytes),
+				OriginalMIMEType: input.MIMEType,
+				CandidateSize:    len(encoded),
+				Width:            width,
+				Height:           height,
+				Quality:          policy.Quality,
+				Lossless:         policy.Lossless,
+				Reason:           negativeCacheReasonNotSmaller,
+				Policy:           g.cache.policy,
+				Optimizer:        g.encoder.ID(),
+				CreatedAt:        now,
+				ExpiresAt:        now.Add(g.cache.negativeTTL),
+			}
+			return cacheLookup{Negative: &negative}, nil
 		}
 
 		now := g.cache.now().UTC()
@@ -280,18 +321,33 @@ func (g *Gateway) optimizeImage(
 			CreatedAt:        now,
 			ExpiresAt:        now.Add(g.cache.ttl),
 		}
-		return optimizedImage{Bytes: encoded, Metadata: metadata}, nil
+		return cacheLookup{Image: optimizedImage{Bytes: encoded, Metadata: metadata}}, nil
 	})
+	if err != nil {
+		return imageOptimizationResult{}, err
+	}
+	if lookup.Negative != nil {
+		return imageOptimizationResult{
+			NegativeCacheHit:    lookup.Hit,
+			NegativeCacheShared: shared,
+		}, errNotSmaller
+	}
+	return imageOptimizationResult{
+		Image:       lookup.Image,
+		CacheHit:    lookup.Hit,
+		CacheShared: shared,
+	}, nil
 }
 
 func (m Metrics) String() string {
 	return fmt.Sprintf(
-		"body=%d->%d images=%d optimized=%d cache_hits=%d duration_ms=%.3f",
+		"body=%d->%d images=%d optimized=%d cache_hits=%d negative_cache_hits=%d duration_ms=%.3f",
 		m.OriginalBodyBytes,
 		m.OptimizedBodyBytes,
 		m.ImageCount,
 		m.OptimizedImageCount,
 		m.CacheHits,
+		m.NegativeCacheHits,
 		m.OptimizeDurationMS,
 	)
 }

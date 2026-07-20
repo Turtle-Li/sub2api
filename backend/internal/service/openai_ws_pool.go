@@ -1590,6 +1590,35 @@ func (p *openAIWSConnPool) evictConn(accountID int64, connID string) {
 	}
 }
 
+// HasConn reports whether a connection binding still resolves to a live pool
+// entry. It is intentionally only a routing hint: Acquire remains responsible
+// for handling a connection that closes immediately after this check.
+func (p *openAIWSConnPool) HasConn(accountID int64, connID string) bool {
+	if p == nil || accountID <= 0 {
+		return false
+	}
+	connID = stringsTrim(connID)
+	if connID == "" {
+		return false
+	}
+	ap, ok := p.getAccountPool(accountID)
+	if !ok || ap == nil {
+		return false
+	}
+	ap.mu.Lock()
+	conn, exists := ap.conns[connID]
+	ap.mu.Unlock()
+	if !exists || conn == nil {
+		return false
+	}
+	select {
+	case <-conn.closedCh:
+		return false
+	default:
+		return true
+	}
+}
+
 func (p *openAIWSConnPool) PinConn(accountID int64, connID string) bool {
 	if p == nil || accountID <= 0 {
 		return false

@@ -66,6 +66,8 @@ func newResponsesAttachmentOptimizer(cfg *config.Config) responsesAttachmentOpti
 		CacheTTL:                          time.Duration(experiment.CacheTTLSeconds) * time.Second,
 		CacheMaxBytes:                     experiment.CacheMaxBytes,
 		CacheCleanupInterval:              time.Duration(experiment.CacheCleanupIntervalSeconds) * time.Second,
+		NegativeCacheTTL:                  time.Duration(experiment.NegativeCacheTTLSeconds) * time.Second,
+		NegativeCacheMaxEntries:           experiment.NegativeCacheMaxEntries,
 		MaxImagesPerRequest:               experiment.MaxImagesPerRequest,
 		MaxConcurrentEncode:               experiment.MaxConcurrentEncodes,
 	})
@@ -210,6 +212,9 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		zap.Bool("cache_hit", metrics.CacheHit),
 		zap.Int("cache_hits", metrics.CacheHits),
 		zap.Int("cache_shared", metrics.CacheShared),
+		zap.Bool("negative_cache_hit", metrics.NegativeCacheHit),
+		zap.Int("negative_cache_hits", metrics.NegativeCacheHits),
+		zap.Int("negative_cache_shared", metrics.NegativeCacheShared),
 		zap.Bool("timed_out", timedOut),
 		zap.Int("skipped_below_threshold", metrics.SkippedBelowThreshold),
 		zap.Int("skipped_unsupported", metrics.SkippedUnsupported),

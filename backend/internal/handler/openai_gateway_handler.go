@@ -1625,12 +1625,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		firstMessage,
 		openAIWSIngressFallbackSessionSeed(subject.UserID, apiKey.ID, apiKey.GroupID),
 	)
-	// Phase 1 covers the first response.create frame for ctx_pool/passthrough
-	// ingress. Security audit and session hashing above intentionally keep using
-	// the original bytes. Subsequent turns remain unchanged in this phase.
+	// Security audit and session hashing above intentionally keep using the
+	// original first-frame bytes. Attachment processing runs here for turn 1;
+	// subsequent response.create frames use the lifecycle transform hook below.
 	forwardFirstMessage := firstMessage
 	if requestPlatform == service.PlatformOpenAI {
-		preparedAttachments := h.prepareResponsesAttachments(ctx, reqLog, apiKey, firstMessage)
+		preparedAttachments := h.prepareResponsesAttachments(ctx, reqLog.With(zap.Int("ws_turn", 1)), apiKey, firstMessage)
 		if preparedAttachments.BudgetViolation != nil {
 			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, responsesAttachmentBudgetMessage(preparedAttachments.BudgetViolation))
 			return
@@ -1818,6 +1818,74 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					return service.NewOpenAIWSClientCloseError(securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision), nil)
 				}
 				return nil
+			},
+			TransformRequest: func(turn int, payload []byte, originalModel string) ([]byte, error) {
+				if turn <= 1 || requestPlatform != service.PlatformOpenAI {
+					return payload, nil
+				}
+				turnLog := reqLog.With(
+					zap.Int("ws_turn", turn),
+					zap.Bool("ws_subsequent_turn", true),
+				)
+				prepared := h.prepareResponsesAttachments(ctx, turnLog, apiKey, payload)
+				if prepared.BudgetViolation != nil {
+					return nil, service.NewOpenAIWSClientCloseError(
+						coderws.StatusPolicyViolation,
+						responsesAttachmentBudgetMessage(prepared.BudgetViolation),
+						nil,
+					)
+				}
+				forwardPayload := prepared.Body
+				if maxForwardBytes := h.openAIResponsesMaxForwardBodyBytes(); maxForwardBytes > 0 && int64(len(forwardPayload)) > maxForwardBytes {
+					turnLog.Warn("openai.responses_forward_body_too_large",
+						zap.Int("original_body_bytes", len(payload)),
+						zap.Int("forward_body_bytes", len(forwardPayload)),
+						zap.Int64("max_forward_body_bytes", maxForwardBytes),
+						zap.Bool("payload_rewritten", !bytes.Equal(forwardPayload, payload)),
+						zap.Bool("ws_ingress", true),
+					)
+					return nil, service.NewOpenAIWSClientCloseError(
+						coderws.StatusPolicyViolation,
+						openAIResponsesForwardBodyLimitMessage(maxForwardBytes),
+						nil,
+					)
+				}
+				return forwardPayload, nil
+			},
+			ObserveForwardRequest: func(turn int, payload []byte, originalModel string) {
+				if requestPlatform != service.PlatformOpenAI || h.attachmentOptimizer == nil || !h.attachmentOptimizer.Enabled() {
+					return
+				}
+				experiment := h.attachmentGatewayConfig()
+				if !responsesAttachmentOptimizerInScope(experiment, apiKey) || resolveAttachmentGatewayRolloutMode(experiment) == attachmentGatewayRolloutOff {
+					return
+				}
+				turnLog := reqLog.With(
+					zap.Int("ws_turn", turn),
+					zap.Bool("ws_http_bridge", true),
+				)
+				stats, inspectErr := attachmentgateway.InspectInlineAttachments(payload)
+				if inspectErr != nil {
+					turnLog.Warn("openai.websocket_bridge_forward_payload_observation",
+						zap.Int("forward_body_bytes", len(payload)),
+						zap.Bool("inspection_failed", true),
+					)
+					return
+				}
+				nonInlineBytes := len(payload) - stats.Bytes
+				if nonInlineBytes < 0 {
+					nonInlineBytes = 0
+				}
+				turnLog.Info("openai.websocket_bridge_forward_payload_observation",
+					zap.Int("forward_body_bytes", len(payload)),
+					zap.Int("inline_attachment_count", stats.Count),
+					zap.Int("inline_attachment_bytes", stats.Bytes),
+					zap.Int("optimizable_image_count", stats.OptimizableImageCount),
+					zap.Int("optimizable_image_bytes", stats.OptimizableImageBytes),
+					zap.Int("unsupported_attachment_count", stats.UnsupportedCount),
+					zap.Int("non_inline_payload_bytes", nonInlineBytes),
+					zap.Bool("inspection_failed", false),
+				)
 			},
 			BeforeTurn: func(turn int) error {
 				// turn==1 的会话屏蔽已由握手层检查覆盖；连接内 flag 只拦截后续 turn。

@@ -1,0 +1,311 @@
+{
+  "date": "2026-07-21",
+  "environment": "production_scoped_canary",
+  "deployment": {
+    "active_container": "sub2api-blue",
+    "image": "sub2api:auto-20260721-0206-7affb6a0",
+    "source_commit": "7affb6a03",
+    "health_after_tests": "healthy",
+    "rollout_mode": "rewrite",
+    "allowed_api_key_ids": [27],
+    "allowed_user_ids": [1],
+    "allow_unscoped": false,
+    "request_budget_enforce": false,
+    "url_rewrite_enabled": true
+  },
+  "r2_probe": {
+    "put_presigned_get_delete": "passed",
+    "credentials_logged": false
+  },
+  "http": [
+    {
+      "case": "jpeg_cold",
+      "original_body_bytes": 5020854,
+      "forward_body_bytes": 789,
+      "url_upload_count": 1,
+      "url_cache_hits": 0,
+      "model_result": "PHOTO_MARKER_9Q; red=1; green=3; blue_triangle=1"
+    },
+    {
+      "case": "jpeg_hot_1",
+      "original_body_bytes": 5020854,
+      "forward_body_bytes": 789,
+      "url_upload_count": 0,
+      "url_cache_hits": 1,
+      "model_result": "matched"
+    },
+    {
+      "case": "jpeg_hot_2",
+      "original_body_bytes": 5020854,
+      "forward_body_bytes": 789,
+      "url_upload_count": 0,
+      "url_cache_hits": 1,
+      "model_result": "matched"
+    },
+    {
+      "case": "webp",
+      "original_body_bytes": 2064342,
+      "forward_body_bytes": 789,
+      "url_upload_count": 1,
+      "url_cache_hits": 0,
+      "model_result": "matched"
+    },
+    {
+      "case": "complex_transparent_png",
+      "original_body_bytes": 5911495,
+      "forward_body_bytes": 779,
+      "url_upload_count": 1,
+      "url_cache_hits": 0,
+      "url_timed_out": false,
+      "url_duration_ms": 7739.33902,
+      "model_result": "ALPHA_OK_73; overlapping_circles=3"
+    },
+    {
+      "case": "small_png_below_threshold",
+      "original_body_bytes": 5163,
+      "forward_body_bytes": 5163,
+      "url_externalized_count": 0,
+      "model_result": "SMALL_INLINE_5"
+    },
+    {
+      "case": "five_images_cold_mixed",
+      "original_body_bytes": 13929029,
+      "forward_body_bytes": 3090,
+      "url_externalized_count": 5,
+      "url_upload_count": 2,
+      "url_cache_hits": 3,
+      "model_result": "all_five_markers_in_order"
+    },
+    {
+      "case": "five_images_hot",
+      "original_body_bytes": 13929029,
+      "forward_body_bytes": 3090,
+      "url_externalized_count": 5,
+      "url_upload_count": 0,
+      "url_cache_hits": 5,
+      "model_result": "all_five_markers_in_order"
+    },
+    {
+      "case": "long_context_plus_image",
+      "original_body_bytes": 5086850,
+      "forward_body_bytes": 66785,
+      "url_upload_count": 0,
+      "url_cache_hits": 1,
+      "model_result": "CONTEXT_END_42 and PHOTO_MARKER_9Q"
+    }
+  ],
+  "websocket_http_bridge": {
+    "image_url_hot_pair": [
+      {
+        "round": 1,
+        "original_body_bytes": 1260210,
+        "forward_body_bytes": 861,
+        "url_cache_hits": 1,
+        "first_text_ms": 4445.7,
+        "completed_ms": 5379.7,
+        "model_result": "PHOTO_MARKER_9Q; red=1; green=3; blue_triangle=1"
+      },
+      {
+        "round": 2,
+        "original_body_bytes": 1260210,
+        "forward_body_bytes": 861,
+        "url_cache_hits": 1,
+        "first_text_ms": 4939.2,
+        "completed_ms": 5839.1,
+        "model_result": "PHOTO_MARKER_9Q; red=1; green=3; blue_triangle=1"
+      }
+    ],
+    "pixel_equivalent_cold_hot_pair": [
+      {
+        "round": 1,
+        "original_body_bytes": 1261586,
+        "forward_body_bytes": 861,
+        "optimized_image_count": 0,
+        "skipped_not_smaller": 1,
+        "optimize_duration_ms": 1646.283489,
+        "url_upload_count": 1,
+        "url_cache_hits": 0,
+        "url_duration_ms": 3843.778662,
+        "first_text_ms": 8038.3,
+        "completed_ms": 9015.6,
+        "model_result": "PHOTO_MARKER_9Q; red=1; green=3; blue_triangle=1"
+      },
+      {
+        "round": 2,
+        "original_body_bytes": 1261586,
+        "forward_body_bytes": 861,
+        "optimized_image_count": 0,
+        "skipped_not_smaller": 1,
+        "optimize_duration_ms": 2273.597324,
+        "url_upload_count": 0,
+        "url_cache_hits": 1,
+        "url_duration_ms": 118.706412,
+        "first_text_ms": 4796.8,
+        "completed_ms": 5611.7,
+        "model_result": "PHOTO_MARKER_9Q; red=1; green=3; blue_triangle=1"
+      }
+    ],
+    "same_connection_turns": [
+      {"turn": 1, "first_text_ms": 1903.5, "completed_ms": 2124.7, "output": "BRIDGE_TURN_1"},
+      {"turn": 2, "first_text_ms": 2122.7, "completed_ms": 2302.5, "output": "BRIDGE_TURN_2"},
+      {"turn": 3, "first_text_ms": 3163.6, "completed_ms": 3250.1, "output": "BRIDGE_TURN_3"},
+      {"turn": 4, "first_text_ms": 3800.2, "completed_ms": 3982.9, "output": "BRIDGE_TURN_4"},
+      {"turn": 5, "first_text_ms": 1092.9, "completed_ms": 1246.4, "output": "BRIDGE_TURN_5"}
+    ],
+    "return_smoke_after_ctx_pool": {
+      "turns": 2,
+      "terminal_events": ["response.completed", "response.completed"],
+      "first_event_ms": [722.12, 629.86],
+      "completed_ms": [1371.32, 1602.42],
+      "markers_matched": true,
+      "close_code": 1000,
+      "read_upstream_events": 0,
+      "write_upstream_events": 0,
+      "keepalive_timeout_events": 0
+    },
+    "post_switch_verification_0500": {
+      "effective_account_id": 2,
+      "effective_mode": "http_bridge",
+      "text_same_connection": {
+        "turns": 5,
+        "terminal_events": [
+          "response.completed",
+          "response.completed",
+          "response.completed",
+          "response.completed",
+          "response.completed"
+        ],
+        "first_event_ms": [786.48, 664.8, 762.36, 886.16, 720.24],
+        "completed_ms": [1341.14, 1793.1, 1790.13, 1739.8, 1748.5],
+        "markers_matched": true,
+        "close_code": 1000
+      },
+      "known_answer_jpeg_cold_hot": [
+        {
+          "round": "cold",
+          "source_image_bytes": 3880099,
+          "original_body_bytes": 5173889,
+          "optimized_image_bytes": 1141304,
+          "forward_body_bytes": 916,
+          "cache_hits": 0,
+          "url_upload_count": 1,
+          "url_cache_hits": 0,
+          "optimize_duration_ms": 3474.716236,
+          "url_duration_ms": 2704.650705,
+          "first_event_ms": 15904.65,
+          "completed_ms": 17569.64,
+          "visual_marker_matched": true
+        },
+        {
+          "round": "hot",
+          "source_image_bytes": 3880099,
+          "original_body_bytes": 5173889,
+          "optimized_image_bytes": 1141304,
+          "forward_body_bytes": 916,
+          "cache_hits": 1,
+          "url_upload_count": 0,
+          "url_cache_hits": 1,
+          "optimize_duration_ms": 1078.262711,
+          "url_duration_ms": 88.952832,
+          "first_event_ms": 9818.01,
+          "completed_ms": 11252.52,
+          "visual_marker_matched": true
+        }
+      ],
+      "observation_window": {
+        "captured_at": "2026-07-21T05:08:38+08:00",
+        "bridge_connections": 8,
+        "bridge_turns_completed": 38,
+        "ctx_pool_protocol_confirms": 0,
+        "read_upstream_events": 0,
+        "write_upstream_events": 0,
+        "retry_events": 0,
+        "keepalive_timeout_events": 0,
+        "close_1011_events": 0,
+        "panic_events": 0
+      },
+      "long_bridge_replay_observation": {
+        "turns_at_or_above_16000000_bytes": 27,
+        "max_payload_bytes": 18901137,
+        "completed": true,
+        "interpretation": "http_bridge replayed accumulated store=false context after the first frame; this is Sub2-to-OpenAI payload, not a new client upload"
+      }
+    },
+    "post_restore_observation": {
+      "captured_at": "2026-07-21T05:08:38+08:00",
+      "bridge_connections": 8,
+      "bridge_turns_completed": 38,
+      "ctx_pool_protocol_confirms": 0,
+      "read_upstream_events": 0,
+      "write_upstream_events": 0,
+      "keepalive_timeout_events": 0,
+      "known_invalid_canary_400s": 2,
+      "unrelated_existing_tool_output_400s": 1
+    },
+    "successful_image_connections": 4,
+    "successful_multi_turn_connections": 1,
+    "successful_turns": 9,
+    "read_upstream_events": 0,
+    "write_upstream_events": 0,
+    "lease_lost_events": 0,
+    "panic_events": 0,
+    "abnormal_close_events": 0
+  },
+  "known_test_client_errors": [
+    "The first hand-written WS probe omitted store=false and received the expected upstream 400; the corrected probe passed.",
+    "One multi-turn probe used a string input where this ingress requires a list and received the expected 400; the corrected five-turn probe passed."
+  ],
+  "resource_snapshot_after_tests": {
+    "cpu_percent": 4.3,
+    "rss_mib": 264,
+    "container_memory_limit_gib": 3.82
+  },
+  "negative_result_cache": {
+    "status": "implemented_locally_not_deployed",
+    "key": "sha256(decoded_source_bytes)",
+    "default_ttl_seconds": 86400,
+    "max_entries": 10000,
+    "shares_positive_cache_byte_budget": true,
+    "policy_and_encoder_versioned": true,
+    "atomic_write": true,
+    "singleflight": true,
+    "positive_and_negative_metrics_separate": true,
+    "real_libwebp_test": {
+      "source_bytes": 579454,
+      "cold_optimize_ms": 463.789,
+      "warm_optimize_ms": 16.304,
+      "warm_reduction_percent": 96.5
+    },
+    "tests": [
+      "same-process hit",
+      "decoded hash across base64 whitespace",
+      "restart hit",
+      "concurrent cold stampede",
+      "TTL expiry",
+      "corrupt metadata",
+      "policy fingerprint change",
+      "entry-count cleanup",
+      "race detector"
+    ]
+  },
+  "open_issue": "Production still runs 7affb6a03 without the local negative-result-cache candidate. Publish only to the existing exact scope, then repeat the 1.26 MB not-smaller WebP cold/hot canary and confirm negative_cache_hits=1, cache_hits=0, and the R2 URL cache remains effective.",
+  "ctx_pool": {
+    "production_comparison_status": "completed_then_reverted_to_http_bridge",
+    "account_id": 2,
+    "isolated_canary_account": false,
+    "pressure_test_stopped_after_stale_failures": true,
+    "stream_false_result": "expected_400",
+    "same_connection_turns_completed": 5,
+    "first_text_ms_range": [1230, 2090],
+    "new_r2_object_cold_hot": "passed",
+    "model_content_match": true,
+    "existing_r2_object_failures": 2,
+    "client_close_code": 1011,
+    "server_close_reason": "keepalive ping timeout",
+    "retry_reason": "read_upstream",
+    "stale_reused_connections": 2,
+    "ordinary_user_read_upstream_or_keepalive_failures": 0,
+    "decision": "keep_http_bridge_as_production_default",
+    "account_restored_at": "2026-07-21T04:20:22+08:00"
+  }
+}
