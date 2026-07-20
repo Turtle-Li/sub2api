@@ -7,7 +7,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/google/wire"
-	"github.com/redis/go-redis/v9"
 )
 
 // ProvideAdminHandlers creates the AdminHandlers struct
@@ -122,7 +121,7 @@ func ProvideOpenAIGatewayHandler(
 	contentModerationService *service.ContentModerationService,
 	opsService *service.OpsService,
 	grokQuotaService *service.GrokQuotaService,
-	redisClient *redis.Client,
+	retryProtectionRegistrar service.OpenAIAbnormalRetryRegistrar,
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
 ) *OpenAIGatewayHandler {
@@ -130,7 +129,7 @@ func ProvideOpenAIGatewayHandler(
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.securityAuditCoordinator = coordinator
 	h.grokMediaEligibilityProber = grokQuotaService
-	h.retryProtectionRedis = redisClient
+	h.retryProtectionRegistrar = retryProtectionRegistrar
 	return h
 }
 

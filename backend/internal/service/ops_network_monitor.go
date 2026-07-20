@@ -57,7 +57,6 @@ type opsNetworkSampler struct {
 	mu        sync.Mutex
 	basePath  string
 	procPath  string
-	iface     string
 	lastIface string
 	last      opsNetworkCounters
 	lastAt    time.Time
@@ -745,7 +744,7 @@ func detectDefaultInterfaceFromRoute(routePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
 	if !scanner.Scan() {
 		return "", scanner.Err()

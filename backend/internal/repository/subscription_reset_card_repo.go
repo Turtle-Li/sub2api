@@ -53,7 +53,7 @@ func (r *subscriptionResetCardRepository) GrantToGroups(
 	if err != nil {
 		return nil, fmt.Errorf("grant subscription reset cards: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var groupID int64
 		if err := rows.Scan(&groupID); err != nil {
@@ -102,7 +102,7 @@ func (r *subscriptionResetCardRepository) GrantToSubscriptions(
 	if err != nil {
 		return nil, fmt.Errorf("grant reset cards to subscriptions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var subscriptionID int64
 		if err := rows.Scan(&subscriptionID); err != nil {
@@ -143,7 +143,7 @@ func (r *subscriptionResetCardRepository) ListAvailable(
 	if err != nil {
 		return nil, fmt.Errorf("list available subscription reset cards: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
 			subscriptionID int64

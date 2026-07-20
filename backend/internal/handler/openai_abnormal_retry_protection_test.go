@@ -3,13 +3,11 @@ package handler
 import (
 	"bytes"
 	"context"
-	"strconv"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 )
 
 func TestOpenAIAbnormalRetryProtectionUsesAnyConfiguredBandwidthDirection(t *testing.T) {
@@ -165,86 +163,41 @@ func TestComputeOpenAIAbnormalRetryEffectiveCandidateUsesMinBodyBytes(t *testing
 	}
 }
 
-func TestOpenAIAbnormalRetryRedisRegisterSharesStateAcrossInstances(t *testing.T) {
-	mr := miniredis.RunT(t)
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = rdb.Close() })
-
-	now := time.Unix(400, 0)
-	window := time.Minute
-	bodyBytes := int64(15 * 1000 * 1000)
-
-	first := registerOpenAIAbnormalRetryFingerprint(context.Background(), rdb, "same-fingerprint", "same-bucket", "hash-1", bodyBytes, now, window)
-	if first.stateStore != "redis" {
-		t.Fatalf("register source = %s, want redis", first.stateStore)
-	}
-	if first.entry.count != 1 || first.entry.totalBytes != bodyBytes {
-		t.Fatalf("first redis register = %#v, want count=1 total=%d", first.entry, bodyBytes)
-	}
-	if first.bucket.count != 1 || first.bucket.totalBytes != bodyBytes || first.bucket.distinctHashes != 1 {
-		t.Fatalf("first redis bucket = %#v, want count=1 total=%d distinct=1", first.bucket, bodyBytes)
-	}
-
-	second := registerOpenAIAbnormalRetryFingerprint(context.Background(), rdb, "same-fingerprint", "same-bucket", "hash-1", bodyBytes, now.Add(time.Second), window)
-	if second.stateStore != "redis" {
-		t.Fatalf("second register source = %s, want redis", second.stateStore)
-	}
-	if second.entry.count != 2 || second.entry.totalBytes != bodyBytes*2 {
-		t.Fatalf("second redis register = %#v, want count=2 total=%d", second.entry, bodyBytes*2)
-	}
-	if second.bucket.count != 2 || second.bucket.totalBytes != bodyBytes*2 || second.bucket.distinctHashes != 1 {
-		t.Fatalf("second redis bucket = %#v, want count=2 total=%d distinct=1", second.bucket, bodyBytes*2)
-	}
-
-	ttl := mr.TTL("openai:abretry:v1:exact:same-fingerprint")
-	if ttl <= 0 {
-		t.Fatalf("redis key TTL = %s, want positive sliding TTL", ttl)
-	}
+type stubOpenAIAbnormalRetryRegistrar struct {
+	registration service.OpenAIAbnormalRetryRegistration
+	err          error
 }
 
-func TestOpenAIAbnormalRetryRedisRegisterTracksBucketCardinality(t *testing.T) {
-	mr := miniredis.RunT(t)
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = rdb.Close() })
+func (s stubOpenAIAbnormalRetryRegistrar) Register(context.Context, string, string, string, int64, time.Duration) (service.OpenAIAbnormalRetryRegistration, error) {
+	return s.registration, s.err
+}
 
-	now := time.Unix(500, 0)
-	window := time.Minute
-	bodyBytes := int64(15 * 1000 * 1000)
-	var got openAIAbnormalRetryRegisterResult
-	for i := 0; i < 4; i++ {
-		got = registerOpenAIAbnormalRetryFingerprint(
-			context.Background(),
-			rdb,
-			"fingerprint-"+strconv.Itoa(i),
-			"api-path-le_15mb",
-			"hash-"+strconv.Itoa(i),
-			bodyBytes,
-			now.Add(time.Duration(i)*time.Second),
-			window,
-		)
-		if got.entry.count != 1 || got.entry.totalBytes != bodyBytes {
-			t.Fatalf("different fingerprints must not increase exact repeat count: got %#v", got.entry)
-		}
-	}
-	if got.stateStore != "redis" {
-		t.Fatalf("state store = %s, want redis", got.stateStore)
-	}
-	if got.bucket.count != 4 || got.bucket.distinctHashes != 4 || !got.bucket.highCardinality {
-		t.Fatalf("bucket stats = %#v, want high-cardinality count=4 distinct=4", got.bucket)
-	}
-	runtime := openAIAbnormalRetryRuntime{congested: true, budgetBytes: bodyBytes, maxRepeats: 1}
-	if shouldBlockOpenAIAbnormalRetry(runtime, got.entry) {
-		t.Fatalf("high-cardinality observation must not block when exact fingerprint did not repeat: entry=%#v bucket=%#v", got.entry, got.bucket)
+func TestOpenAIAbnormalRetryRegistrarResultMapsToHandlerState(t *testing.T) {
+	got := registerOpenAIAbnormalRetryFingerprint(
+		context.Background(),
+		stubOpenAIAbnormalRetryRegistrar{registration: service.OpenAIAbnormalRetryRegistration{
+			Count:          1,
+			TotalBytes:     15 * 1000 * 1000,
+			BucketCount:    4,
+			BucketBytes:    60 * 1000 * 1000,
+			DistinctHashes: 4,
+		}},
+		"same-fingerprint",
+		"same-bucket",
+		"hash-1",
+		15*1000*1000,
+		time.Unix(500, 0),
+		time.Minute,
+	)
+	if got.stateStore != "redis" || got.entry.count != 1 || got.bucket.count != 4 || !got.bucket.highCardinality {
+		t.Fatalf("registrar result = %#v, want mapped redis state with high-cardinality bucket", got)
 	}
 }
 
 func TestOpenAIAbnormalRetryRedisRegisterFallsBackToMemory(t *testing.T) {
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
-	t.Cleanup(func() { _ = rdb.Close() })
-
 	got := registerOpenAIAbnormalRetryFingerprint(
 		context.Background(),
-		rdb,
+		stubOpenAIAbnormalRetryRegistrar{err: errors.New("redis unavailable")},
 		"same-fingerprint",
 		"same-bucket",
 		"hash-1",
@@ -347,7 +300,7 @@ func TestOpenAIAbnormalRetryProtectionBlocksOnlyAfterCumulativeBudget(t *testing
 		t.Fatalf("second 15MB request should remain below 5Mbps/60s/90%% budget: %#v budget=%d", second, runtime.budgetBytes)
 	}
 	third := store.register("same-body", bodyBytes, now.Add(20*time.Second), time.Minute)
-	if !(third.count > runtime.maxRepeats && third.totalBytes > runtime.budgetBytes) {
+	if third.count <= runtime.maxRepeats || third.totalBytes <= runtime.budgetBytes {
 		t.Fatalf("third 15MB request should exceed cumulative budget: %#v budget=%d", third, runtime.budgetBytes)
 	}
 }

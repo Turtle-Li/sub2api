@@ -207,7 +207,7 @@ func removeASCIIWhitespace(value string) string {
 		case ' ', '\t', '\r', '\n':
 			continue
 		default:
-			builder.WriteRune(char)
+			_, _ = builder.WriteRune(char)
 		}
 	}
 	return builder.String()
