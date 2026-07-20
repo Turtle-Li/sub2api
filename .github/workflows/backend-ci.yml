@@ -81,3 +81,12 @@ jobs:
           version: v2.9
           args: --timeout=30m
           working-directory: backend
+
+  production-deploy:
+    name: Deploy production after CI
+    needs: [shell, test, frontend, golangci-lint]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/sub2api-production-deploy.yml
+    with:
+      expected_sha: ${{ github.sha }}
+    secrets: inherit

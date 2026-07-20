@@ -24,7 +24,6 @@ import (
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
@@ -40,7 +39,7 @@ type OpenAIGatewayHandler struct {
 	securityAuditCoordinator   *securityaudit.Coordinator
 	grokMediaEligibilityProber grokMediaEligibilityProber
 	opsService                 *service.OpsService
-	retryProtectionRedis       *redis.Client
+	retryProtectionRegistrar   service.OpenAIAbnormalRetryRegistrar
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter
 	attachmentOptimizer        responsesAttachmentOptimizer

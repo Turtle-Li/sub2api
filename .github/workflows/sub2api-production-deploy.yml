@@ -1,19 +1,17 @@
 name: Deploy Sub2API production
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - '.github/**'
-      - 'deploy/**'
-      - 'docs/**'
-      - 'AGENTS.md'
-      - 'README*'
+  workflow_call:
+    inputs:
+      expected_sha:
+        description: Commit SHA that passed CI
+        required: true
+        type: string
   workflow_dispatch:
 
-# The runner only holds a restricted SSH key that can start one fixed systemd
-# service. It neither checks out source nor builds the application.
+# Automatic calls arrive only after every CI job has passed. Manual dispatch is
+# retained as an explicit recovery path. The runner only holds a restricted SSH
+# key that can start one fixed systemd service; it does not build the app.
 permissions: {}
 
 concurrency:
@@ -32,7 +30,27 @@ jobs:
       DEPLOY_PORT: ${{ secrets.SUB2API_DEPLOY_PORT }}
       DEPLOY_USER: ${{ secrets.SUB2API_DEPLOY_USER }}
     steps:
+      - name: Confirm the tested commit is still current
+        id: freshness
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          if [ -z "$EXPECTED_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CURRENT_SHA=$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')
+          test -n "$CURRENT_SHA"
+          if [ "$CURRENT_SHA" != "$EXPECTED_SHA" ]; then
+            echo "A newer main commit exists; this verified release is stale and will be skipped."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+
       - name: Validate deployment configuration
+        if: steps.freshness.outputs.deploy == 'true'
         run: |
           test -n "$DEPLOY_HOST"
           test -n "$DEPLOY_KNOWN_HOSTS"
@@ -41,6 +59,7 @@ jobs:
           test -n "$DEPLOY_USER"
 
       - name: Configure restricted SSH client
+        if: steps.freshness.outputs.deploy == 'true'
         run: |
           umask 077
           mkdir -p "$HOME/.ssh"
@@ -53,6 +72,7 @@ jobs:
           ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
 
       - name: Start verified server-side release
+        if: steps.freshness.outputs.deploy == 'true'
         run: |
           ssh \
             -i "$HOME/.ssh/id_ed25519" \
