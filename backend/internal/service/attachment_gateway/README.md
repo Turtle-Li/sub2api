@@ -43,7 +43,8 @@ The request-level budget is a second, separately gated Phase 1 capability:
 
 The optimizer work limits remain fail-open and are not upload quotas. In
 particular, `max_images_per_request` still means "stop optimizing more images";
-it never silently changes into a rejection rule.
+it never silently changes into a rejection rule. R2 URL rewriting is bounded
+separately by `url_rewrite_max_images_per_request` (default 50).
 
 Application integration adds three rollout barriers in addition to the leaf
 feature switch:
@@ -90,6 +91,8 @@ post-compression inline image bytes:
   storage config changes; singleflight prevents concurrent upload stampedes;
 - storage errors, timeouts, non-HTTPS URLs and unsupported images fail open to
   the compressed data URL;
+- `url_rewrite_max_images_per_request` limits only R2 externalization and does
+  not reduce the independent compression limit;
 - URLs, object keys, hashes, credentials and image contents are never logged.
 
 Configure the private bucket under System Settings > Attachment Gateway. The

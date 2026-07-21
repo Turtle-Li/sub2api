@@ -94,7 +94,7 @@ func newResponsesAttachmentURLExternalizer(
 		ObjectPrefix:         experiment.URLObjectPrefix,
 		URLCacheTTL:          time.Duration(experiment.URLCacheTTLSeconds) * time.Second,
 		MaxImageBytes:        experiment.MaxImageBytes,
-		MaxImagesPerRequest:  experiment.MaxImagesPerRequest,
+		MaxImagesPerRequest:  experiment.URLRewriteMaxImagesPerRequest,
 		MaxConcurrentUploads: experiment.MaxConcurrentURLUploads,
 	}, storage)
 	if err != nil {
@@ -352,8 +352,8 @@ func (h *OpenAIGatewayHandler) openAIResponsesMaxForwardBodyBytes() int64 {
 	return h.cfg.Gateway.OpenAIResponsesMaxForwardBodySize
 }
 
-func openAIResponsesForwardBodyLimitMessage(limit int64) string {
-	return fmt.Sprintf("Request body remains too large for upstream forwarding after attachment optimization; limit is %d bytes.", limit)
+func openAIResponsesForwardBodyLimitMessage(_ int64) string {
+	return "当前请求体过大，请新建对话后继续执行任务。"
 }
 
 // resolveAttachmentGatewayRolloutMode keeps the static config behavior when no

@@ -872,12 +872,13 @@ type AttachmentGatewayConfig struct {
 	// URLRewriteEnabled externalizes optimized inline images through Attachment
 	// Gateway's independently persisted R2 config only while the scoped rollout
 	// is in rewrite. Dry-run never writes to object storage.
-	URLRewriteEnabled            bool   `mapstructure:"url_rewrite_enabled"`
-	URLRewriteMinBodyBytes       int    `mapstructure:"url_rewrite_min_body_bytes"`
-	URLUploadTimeoutMilliseconds int    `mapstructure:"url_upload_timeout_ms"`
-	URLObjectPrefix              string `mapstructure:"url_object_prefix"`
-	URLCacheTTLSeconds           int    `mapstructure:"url_cache_ttl_seconds"`
-	MaxConcurrentURLUploads      int    `mapstructure:"max_concurrent_url_uploads"`
+	URLRewriteEnabled             bool   `mapstructure:"url_rewrite_enabled"`
+	URLRewriteMinBodyBytes        int    `mapstructure:"url_rewrite_min_body_bytes"`
+	URLRewriteMaxImagesPerRequest int    `mapstructure:"url_rewrite_max_images_per_request"`
+	URLUploadTimeoutMilliseconds  int    `mapstructure:"url_upload_timeout_ms"`
+	URLObjectPrefix               string `mapstructure:"url_object_prefix"`
+	URLCacheTTLSeconds            int    `mapstructure:"url_cache_ttl_seconds"`
+	MaxConcurrentURLUploads       int    `mapstructure:"max_concurrent_url_uploads"`
 	// RequestBudgetEnabled adds privacy-safe aggregate attachment accounting.
 	// RequestBudgetEnforce remains a separate explicit gate for 413 responses.
 	RequestBudgetEnabled bool `mapstructure:"request_budget_enabled"`
@@ -2310,6 +2311,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_dry_run", true)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_min_body_bytes", 512*1024)
+	viper.SetDefault("gateway.attachment_gateway.url_rewrite_max_images_per_request", 50)
 	viper.SetDefault("gateway.attachment_gateway.url_upload_timeout_ms", 60_000)
 	viper.SetDefault("gateway.attachment_gateway.url_object_prefix", "attachments/")
 	viper.SetDefault("gateway.attachment_gateway.url_cache_ttl_seconds", 15*60)
@@ -3158,6 +3160,9 @@ func (c *Config) Validate() error {
 		if attachment.URLRewriteEnabled {
 			if attachment.URLRewriteMinBodyBytes <= 0 {
 				return fmt.Errorf("gateway.attachment_gateway.url_rewrite_min_body_bytes must be positive")
+			}
+			if attachment.URLRewriteMaxImagesPerRequest <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.url_rewrite_max_images_per_request must be positive")
 			}
 			if attachment.URLUploadTimeoutMilliseconds <= 0 {
 				return fmt.Errorf("gateway.attachment_gateway.url_upload_timeout_ms must be positive")

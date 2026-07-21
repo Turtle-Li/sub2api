@@ -222,6 +222,10 @@ gateway:
     # 仅 scoped rewrite 生效；dry-run 绝不写对象存储。
     url_rewrite_enabled: false
     url_rewrite_min_body_bytes: 524288
+    # R2 externalization has its own per-request image cap and does not change
+    # the compression cap configured by max_images_per_request below.
+    # R2 外置数量独立于下方压缩数量上限。
+    url_rewrite_max_images_per_request: 50
     # R2 sees optimized bytes, so keep this bounded well below the ingress and
     # image-processing ceilings.
     url_upload_timeout_ms: 60000

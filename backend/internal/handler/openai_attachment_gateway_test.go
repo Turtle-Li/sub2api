@@ -40,6 +40,15 @@ type fakeResponsesAttachmentURLExternalizer struct {
 	calls   int
 }
 
+type recordingResponsesAttachmentStorage struct {
+	calls int
+}
+
+func (s *recordingResponsesAttachmentStorage) Save(_ context.Context, key, _ string, _ []byte) (string, error) {
+	s.calls++
+	return "https://r2.example.test/" + key + "?signature=test", nil
+}
+
 func (f *fakeResponsesAttachmentURLExternalizer) Enabled() bool { return f.enabled }
 
 func (f *fakeResponsesAttachmentURLExternalizer) Externalize(_ context.Context, _ []byte) attachmentgateway.URLResult {
@@ -62,6 +71,43 @@ func TestResponsesAttachmentOptimizerDisabledByDefault(t *testing.T) {
 	body := []byte("{ \"model\": \"gpt-test\" }\n")
 	handler := &OpenAIGatewayHandler{attachmentOptimizer: optimizer}
 	require.Equal(t, body, handler.optimizeResponsesAttachments(context.Background(), zap.NewNop(), nil, body))
+}
+
+func TestResponsesAttachmentURLExternalizerUsesIndependentImageLimit(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.AttachmentGateway = config.AttachmentGatewayConfig{
+		URLRewriteEnabled:             true,
+		URLRewriteMinBodyBytes:        1,
+		URLRewriteMaxImagesPerRequest: 2,
+		URLObjectPrefix:               "attachments/",
+		URLCacheTTLSeconds:            60,
+		MaxConcurrentURLUploads:       1,
+		MaxImageBytes:                 1024,
+		MaxImagesPerRequest:           1,
+	}
+	storage := &recordingResponsesAttachmentStorage{}
+	externalizer := newResponsesAttachmentURLExternalizer(cfg, storage)
+	require.NotNil(t, externalizer)
+
+	firstImage := base64.StdEncoding.EncodeToString([]byte("first-image"))
+	secondImage := base64.StdEncoding.EncodeToString([]byte("second-image"))
+	body := []byte(`{"model":"gpt-test","input":[{"role":"user","content":[` +
+		`{"type":"input_image","image_url":"data:image/webp;base64,` + firstImage + `"},` +
+		`{"type":"input_image","image_url":"data:image/webp;base64,` + secondImage + `"}` +
+		`]}]}`)
+
+	result := externalizer.Externalize(context.Background(), body)
+
+	require.Equal(t, 2, storage.calls)
+	require.Equal(t, 2, result.Metrics.ExternalizedCount)
+	require.NotContains(t, string(result.Body), "data:image")
+}
+
+func TestOpenAIResponsesForwardBodyLimitMessageIsActionableChinese(t *testing.T) {
+	message := openAIResponsesForwardBodyLimitMessage(16_000_000)
+
+	require.Equal(t, "当前请求体过大，请新建对话后继续执行任务。", message)
+	require.NotContains(t, message, "16000000")
 }
 
 func TestOptimizeResponsesAttachmentsUsesOnlyPrivacySafeLogFields(t *testing.T) {
@@ -407,7 +453,7 @@ func TestResponsesAttachmentGatewayLocalForwardIntegration(t *testing.T) {
 	handler.Responses(capContext)
 
 	require.Equal(t, http.StatusRequestEntityTooLarge, capRecorder.Code)
-	require.Contains(t, capRecorder.Body.String(), "upstream forwarding")
+	require.Contains(t, capRecorder.Body.String(), openAIResponsesForwardBodyLimitMessage(cfg.Gateway.OpenAIResponsesMaxForwardBodySize))
 	require.Equal(t, 1, upstream.calls, "unscoped oversized body must not reach upstream")
 }
 
