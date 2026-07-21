@@ -663,6 +663,7 @@ export default {
       resetQuota: 'Reset Quota',
       resetQuotaTitle: 'Reset Usage Quota',
       resetQuotaConfirm: "Reset the daily, weekly, and monthly usage quota for '{user}'? Usage will be zeroed and windows restarted from today.",
+      remainingResetCount: 'Resets remaining: {count}',
       grantResetCards: 'Grant Reset Cards',
       grantResetCardsShort: 'Grant Uses',
       grantResetCardsTitle: 'Grant Reset Cards by Group',

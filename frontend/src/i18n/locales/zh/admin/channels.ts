@@ -663,6 +663,7 @@ export default {
       resetQuota: '重置配额',
       resetQuotaTitle: '重置用量配额',
       resetQuotaConfirm: "确定要重置 '{user}' 的每日、每周和每月用量配额吗？用量将归零并从今天开始重新计算。",
+      remainingResetCount: '剩余重置次数：{count}',
       grantResetCards: '发放重置卡',
       grantResetCardsShort: '发次数',
       grantResetCardsTitle: '按分组发放重置卡',
