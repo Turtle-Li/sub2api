@@ -342,6 +342,26 @@
                   {{ t('admin.subscriptions.unlimited') }}
                 </span>
               </div>
+
+              <!-- Remaining self-service quota resets -->
+              <div class="flex justify-end pt-0.5">
+                <span
+                  data-test="remaining-reset-count"
+                  class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium tabular-nums ring-1 ring-inset"
+                  :class="
+                    (row.reset_card_count ?? 0) > 0
+                      ? 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:ring-amber-800'
+                      : 'bg-gray-50 text-gray-500 ring-gray-200 dark:bg-dark-700 dark:text-gray-400 dark:ring-dark-600'
+                  "
+                >
+                  <Icon name="gift" size="xs" :stroke-width="2" />
+                  {{
+                    t('admin.subscriptions.remainingResetCount', {
+                      count: row.reset_card_count ?? 0
+                    })
+                  }}
+                </span>
+              </div>
             </div>
           </template>
 
