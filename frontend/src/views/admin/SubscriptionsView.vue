@@ -236,21 +236,40 @@
                     ${{ row.group?.daily_limit_usd?.toFixed(2) }}
                   </span>
                 </div>
-                <div class="reset-info" v-if="row.daily_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
+                <div
+                  v-if="
+                    row.daily_window_start ||
+                    (!row.group?.weekly_limit_usd && !row.group?.monthly_limit_usd)
+                  "
+                  class="reset-info"
+                >
+                  <template v-if="row.daily_window_start">
+                    <svg
+                      class="h-3 w-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>{{ formatDailyUsageWindow(row) }}</span>
+                  </template>
+                  <span
+                    v-if="!row.group?.weekly_limit_usd && !row.group?.monthly_limit_usd"
+                    data-test="remaining-reset-count"
+                    class="ml-auto shrink-0 text-gray-500 dark:text-gray-400"
                   >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatDailyUsageWindow(row) }}</span>
+                    {{
+                      t('admin.subscriptions.remainingResetCount', {
+                        count: row.reset_card_count ?? 0
+                      })
+                    }}
+                  </span>
                 </div>
               </div>
 
@@ -273,21 +292,37 @@
                     ${{ row.group?.weekly_limit_usd?.toFixed(2) }}
                   </span>
                 </div>
-                <div class="reset-info" v-if="row.weekly_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
+                <div
+                  v-if="row.weekly_window_start || !row.group?.monthly_limit_usd"
+                  class="reset-info"
+                >
+                  <template v-if="row.weekly_window_start">
+                    <svg
+                      class="h-3 w-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>{{ formatResetTime(row.weekly_window_start, 'weekly') }}</span>
+                  </template>
+                  <span
+                    v-if="!row.group?.monthly_limit_usd"
+                    data-test="remaining-reset-count"
+                    class="ml-auto shrink-0 text-gray-500 dark:text-gray-400"
                   >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatResetTime(row.weekly_window_start, 'weekly') }}</span>
+                    {{
+                      t('admin.subscriptions.remainingResetCount', {
+                        count: row.reset_card_count ?? 0
+                      })
+                    }}
+                  </span>
                 </div>
               </div>
 
@@ -310,21 +345,33 @@
                     ${{ row.group?.monthly_limit_usd?.toFixed(2) }}
                   </span>
                 </div>
-                <div class="reset-info" v-if="row.monthly_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
+                <div class="reset-info">
+                  <template v-if="row.monthly_window_start">
+                    <svg
+                      class="h-3 w-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>{{ formatResetTime(row.monthly_window_start, 'monthly') }}</span>
+                  </template>
+                  <span
+                    data-test="remaining-reset-count"
+                    class="ml-auto shrink-0 text-gray-500 dark:text-gray-400"
                   >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatResetTime(row.monthly_window_start, 'monthly') }}</span>
+                    {{
+                      t('admin.subscriptions.remainingResetCount', {
+                        count: row.reset_card_count ?? 0
+                      })
+                    }}
+                  </span>
                 </div>
               </div>
 
@@ -341,20 +388,10 @@
                 <span class="text-xs font-medium text-emerald-700 dark:text-emerald-300">
                   {{ t('admin.subscriptions.unlimited') }}
                 </span>
-              </div>
-
-              <!-- Remaining self-service quota resets -->
-              <div class="flex justify-end pt-0.5">
                 <span
                   data-test="remaining-reset-count"
-                  class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium tabular-nums ring-1 ring-inset"
-                  :class="
-                    (row.reset_card_count ?? 0) > 0
-                      ? 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:ring-amber-800'
-                      : 'bg-gray-50 text-gray-500 ring-gray-200 dark:bg-dark-700 dark:text-gray-400 dark:ring-dark-600'
-                  "
+                  class="ml-auto shrink-0 text-[10px] text-gray-500 dark:text-gray-400"
                 >
-                  <Icon name="gift" size="xs" :stroke-width="2" />
                   {{
                     t('admin.subscriptions.remainingResetCount', {
                       count: row.reset_card_count ?? 0
