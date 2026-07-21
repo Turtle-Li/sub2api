@@ -44,7 +44,7 @@ vi.mock('vue-i18n', async () => {
     useI18n: () => ({
       t: (key: string, params?: Record<string, unknown>) =>
         key === 'admin.subscriptions.remainingResetCount'
-          ? `Resets remaining: ${params?.count ?? 0}`
+          ? `Resets: ${params?.count ?? 0}`
           : key
     })
   }
@@ -79,16 +79,16 @@ describe('admin SubscriptionsView reset counts', () => {
           daily_usage_usd: 1,
           weekly_usage_usd: 2,
           monthly_usage_usd: 3,
-          daily_window_start: null,
+          daily_window_start: '2026-07-01T00:00:00Z',
           weekly_window_start: null,
-          monthly_window_start: null,
+          monthly_window_start: '2026-07-01T00:00:00Z',
           created_at: '2026-07-01T00:00:00Z',
           updated_at: '2026-07-01T00:00:00Z',
           reset_card_count: 4,
           group: {
             daily_limit_usd: 10,
             weekly_limit_usd: null,
-            monthly_limit_usd: null
+            monthly_limit_usd: 30
           }
         },
         {
@@ -121,7 +121,7 @@ describe('admin SubscriptionsView reset counts', () => {
     getAllGroups.mockResolvedValue([])
   })
 
-  it('shows each subscription remaining reset count in the usage cell', async () => {
+  it('shows each reset count as plain text on the last usage line', async () => {
     const wrapper = mount(SubscriptionsView, {
       global: {
         stubs: {
@@ -146,7 +146,10 @@ describe('admin SubscriptionsView reset counts', () => {
 
     await flushPromises()
 
-    expect(wrapper.findAll('[data-test="remaining-reset-count"]').map((item) => item.text()))
-      .toEqual(['Resets remaining: 4', 'Resets remaining: 0'])
+    const counts = wrapper.findAll('[data-test="remaining-reset-count"]')
+
+    expect(counts.map((item) => item.text())).toEqual(['Resets: 4', 'Resets: 0'])
+    expect(counts[0].classes()).not.toContain('rounded-full')
+    expect(counts[0].element.closest('.reset-info')).not.toBeNull()
   })
 })
