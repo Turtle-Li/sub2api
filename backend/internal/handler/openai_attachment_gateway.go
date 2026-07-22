@@ -48,6 +48,7 @@ func newResponsesAttachmentOptimizer(cfg *config.Config) responsesAttachmentOpti
 		optimizer, _ := attachmentgateway.New(attachmentgateway.DefaultConfig())
 		return optimizer
 	}
+	maxImagesToInspect, maxColdEncodes := responsesAttachmentOptimizerLimits(experiment)
 	optimizer, err := attachmentgateway.New(attachmentgateway.Config{
 		Enabled:                           experiment.AttachmentOptimizerEnabled,
 		RequestBudgetEnabled:              experiment.RequestBudgetEnabled,
@@ -68,7 +69,8 @@ func newResponsesAttachmentOptimizer(cfg *config.Config) responsesAttachmentOpti
 		CacheCleanupInterval:              time.Duration(experiment.CacheCleanupIntervalSeconds) * time.Second,
 		NegativeCacheTTL:                  time.Duration(experiment.NegativeCacheTTLSeconds) * time.Second,
 		NegativeCacheMaxEntries:           experiment.NegativeCacheMaxEntries,
-		MaxImagesPerRequest:               experiment.MaxImagesPerRequest,
+		MaxImagesPerRequest:               maxImagesToInspect,
+		MaxColdEncodesPerRequest:          maxColdEncodes,
 		MaxConcurrentEncode:               experiment.MaxConcurrentEncodes,
 	})
 	if err != nil {
@@ -78,6 +80,18 @@ func newResponsesAttachmentOptimizer(cfg *config.Config) responsesAttachmentOpti
 		return nil
 	}
 	return optimizer
+}
+
+func responsesAttachmentOptimizerLimits(experiment config.AttachmentGatewayConfig) (maxImagesToInspect, maxColdEncodes int) {
+	maxImagesToInspect = experiment.MaxImagesPerRequest
+	maxColdEncodes = experiment.MaxImagesPerRequest
+	if experiment.URLRewriteEnabled && experiment.URLRewriteMaxImagesPerRequest > maxImagesToInspect {
+		// URL externalization may intentionally cover more accumulated images
+		// than one request is allowed to cold-encode. Inspect the same range so
+		// positive and negative compression-cache hits remain reusable.
+		maxImagesToInspect = experiment.URLRewriteMaxImagesPerRequest
+	}
+	return maxImagesToInspect, maxColdEncodes
 }
 
 func newResponsesAttachmentURLExternalizer(
@@ -215,11 +229,13 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		zap.Bool("negative_cache_hit", metrics.NegativeCacheHit),
 		zap.Int("negative_cache_hits", metrics.NegativeCacheHits),
 		zap.Int("negative_cache_shared", metrics.NegativeCacheShared),
+		zap.Int("cold_encode_count", metrics.ColdEncodeCount),
 		zap.Bool("timed_out", timedOut),
 		zap.Int("skipped_below_threshold", metrics.SkippedBelowThreshold),
 		zap.Int("skipped_unsupported", metrics.SkippedUnsupported),
 		zap.Int("skipped_not_smaller", metrics.SkippedNotSmaller),
 		zap.Int("skipped_request_image_limit", metrics.SkippedRequestImageLimit),
+		zap.Int("skipped_cold_encode_limit", metrics.SkippedColdEncodeLimit),
 		zap.Int("skipped_total_image_bytes", metrics.SkippedTotalImageBytes),
 		zap.Bool("aggregate_pressure", metrics.AggregatePressure),
 		zap.Int("effective_threshold_bytes", metrics.EffectiveThresholdBytes),

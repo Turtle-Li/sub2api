@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
@@ -70,6 +71,7 @@ func (g *Gateway) Enabled() bool {
 // can be safely and usefully optimized. Per-image failures are fail-open.
 func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	started := time.Now()
+	var coldEncodeCount atomic.Int64
 	result = Result{
 		Body: body,
 		Metrics: Metrics{
@@ -80,6 +82,9 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	}
 	defer func() {
 		result.Metrics.OptimizeDurationMS = float64(time.Since(started)) / float64(time.Millisecond)
+	}()
+	defer func() {
+		result.Metrics.ColdEncodeCount = int(coldEncodeCount.Load())
 	}()
 	defer func() {
 		if recover() != nil {
@@ -118,6 +123,18 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	}
 
 	contextFailureRecorded := false
+	reserveColdEncode := func() bool {
+		limit := int64(g.config.MaxColdEncodesPerRequest)
+		for {
+			current := coldEncodeCount.Load()
+			if current >= limit {
+				return false
+			}
+			if coldEncodeCount.CompareAndSwap(current, current+1) {
+				return true
+			}
+		}
+	}
 	recordContextFailure := func(err error) {
 		if contextFailureRecorded {
 			return
@@ -174,7 +191,7 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 			return rawURL
 		}
 
-		optimization, optimizeErr := g.optimizeImage(ctx, parsed)
+		optimization, optimizeErr := g.optimizeImage(ctx, parsed, reserveColdEncode)
 		if optimization.NegativeCacheHit {
 			result.Metrics.NegativeCacheHit = true
 			result.Metrics.NegativeCacheHits++
@@ -183,7 +200,9 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 			result.Metrics.NegativeCacheShared++
 		}
 		if optimizeErr != nil {
-			if errors.Is(optimizeErr, errNotSmaller) {
+			if errors.Is(optimizeErr, errColdEncodeLimit) {
+				result.Metrics.SkippedColdEncodeLimit++
+			} else if errors.Is(optimizeErr, errNotSmaller) {
 				result.Metrics.SkippedNotSmaller++
 			} else if errors.Is(optimizeErr, errUnsupportedMediaType) || errors.Is(optimizeErr, errAnimatedImage) {
 				result.Metrics.SkippedUnsupported++
@@ -244,6 +263,7 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 func (g *Gateway) optimizeImage(
 	ctx context.Context,
 	input dataURLImage,
+	reserveColdEncode func() bool,
 ) (imageOptimizationResult, error) {
 	hash := sourceHash(input.Bytes)
 	lookup, shared, err := g.cache.getOrCreate(ctx, hash, func() (created cacheLookup, createErr error) {
@@ -253,6 +273,9 @@ func (g *Gateway) optimizeImage(
 				createErr = errors.New("attachment gateway: image transform panicked")
 			}
 		}()
+		if reserveColdEncode == nil || !reserveColdEncode() {
+			return cacheLookup{}, errColdEncodeLimit
+		}
 		// singleflight.DoChan runs create in its own goroutine. If the request
 		// context expires while a third-party encoder is already running, the
 		// caller can fail open before that encoder returns. Hold a worker-owned
@@ -341,11 +364,12 @@ func (g *Gateway) optimizeImage(
 
 func (m Metrics) String() string {
 	return fmt.Sprintf(
-		"body=%d->%d images=%d optimized=%d cache_hits=%d negative_cache_hits=%d duration_ms=%.3f",
+		"body=%d->%d images=%d optimized=%d cold_encodes=%d cache_hits=%d negative_cache_hits=%d duration_ms=%.3f",
 		m.OriginalBodyBytes,
 		m.OptimizedBodyBytes,
 		m.ImageCount,
 		m.OptimizedImageCount,
+		m.ColdEncodeCount,
 		m.CacheHits,
 		m.NegativeCacheHits,
 		m.OptimizeDurationMS,

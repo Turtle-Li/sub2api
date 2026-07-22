@@ -103,6 +103,24 @@ func TestResponsesAttachmentURLExternalizerUsesIndependentImageLimit(t *testing.
 	require.NotContains(t, string(result.Body), "data:image")
 }
 
+func TestResponsesAttachmentOptimizerSeparatesScanAndColdEncodeLimits(t *testing.T) {
+	experiment := config.AttachmentGatewayConfig{
+		URLRewriteEnabled:             true,
+		URLRewriteMaxImagesPerRequest: 50,
+		MaxImagesPerRequest:           32,
+	}
+
+	maxImagesToInspect, maxColdEncodes := responsesAttachmentOptimizerLimits(experiment)
+
+	require.Equal(t, 50, maxImagesToInspect)
+	require.Equal(t, 32, maxColdEncodes)
+
+	experiment.URLRewriteEnabled = false
+	maxImagesToInspect, maxColdEncodes = responsesAttachmentOptimizerLimits(experiment)
+	require.Equal(t, 32, maxImagesToInspect)
+	require.Equal(t, 32, maxColdEncodes)
+}
+
 func TestOpenAIResponsesForwardBodyLimitMessageIsActionableChinese(t *testing.T) {
 	message := openAIResponsesForwardBodyLimitMessage(16_000_000)
 
@@ -118,18 +136,20 @@ func TestOptimizeResponsesAttachmentsUsesOnlyPrivacySafeLogFields(t *testing.T) 
 		result: attachmentgateway.Result{
 			Body: optimizedBody,
 			Metrics: attachmentgateway.Metrics{
-				Enabled:             true,
-				OriginalBodyBytes:   len(secretBody),
-				OptimizedBodyBytes:  len(optimizedBody),
-				ImageCount:          1,
-				OptimizedImageCount: 1,
-				OriginalImageBytes:  1024,
-				OptimizedImageBytes: 256,
-				CacheHit:            true,
-				CacheHits:           1,
-				NegativeCacheHit:    true,
-				NegativeCacheHits:   1,
-				OptimizeDurationMS:  12.5,
+				Enabled:                true,
+				OriginalBodyBytes:      len(secretBody),
+				OptimizedBodyBytes:     len(optimizedBody),
+				ImageCount:             1,
+				OptimizedImageCount:    1,
+				OriginalImageBytes:     1024,
+				OptimizedImageBytes:    256,
+				CacheHit:               true,
+				CacheHits:              1,
+				NegativeCacheHit:       true,
+				NegativeCacheHits:      1,
+				ColdEncodeCount:        1,
+				SkippedColdEncodeLimit: 2,
+				OptimizeDurationMS:     12.5,
 			},
 		},
 	}
@@ -157,6 +177,8 @@ func TestOptimizeResponsesAttachmentsUsesOnlyPrivacySafeLogFields(t *testing.T) 
 	require.NotContains(t, entries[0].ContextMap(), "hash")
 	require.NotContains(t, entries[0].Message, "TOP_SECRET_BASE64")
 	require.Equal(t, int64(1), entries[0].ContextMap()["negative_cache_hits"])
+	require.Equal(t, int64(1), entries[0].ContextMap()["cold_encode_count"])
+	require.Equal(t, int64(2), entries[0].ContextMap()["skipped_cold_encode_limit"])
 }
 
 func TestOptimizeResponsesAttachmentsSkipsCallWhenGateIsOff(t *testing.T) {

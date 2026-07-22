@@ -911,8 +911,11 @@ type AttachmentGatewayConfig struct {
 	CacheCleanupIntervalSeconds       int     `mapstructure:"cache_cleanup_interval_seconds"`
 	NegativeCacheTTLSeconds           int     `mapstructure:"negative_cache_ttl_seconds"`
 	NegativeCacheMaxEntries           int     `mapstructure:"negative_cache_max_entries"`
-	MaxImagesPerRequest               int     `mapstructure:"max_images_per_request"`
-	MaxConcurrentEncodes              int     `mapstructure:"max_concurrent_encodes"`
+	// MaxImagesPerRequest remains the per-request cold-encode budget. When R2
+	// URL rewriting covers more images, compression cache lookup follows the R2
+	// scan limit while only cache misses consume this budget.
+	MaxImagesPerRequest  int `mapstructure:"max_images_per_request"`
+	MaxConcurrentEncodes int `mapstructure:"max_concurrent_encodes"`
 }
 
 const (

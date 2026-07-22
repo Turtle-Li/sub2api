@@ -439,6 +439,141 @@ func TestMaxImagesPerRequestBoundsWork(t *testing.T) {
 	require.Equal(t, 1, result.Metrics.SkippedRequestImageLimit)
 }
 
+func TestColdEncodeLimitStillReusesLaterPositiveCacheHits(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	config.MaxImagesPerRequest = 3
+	config.MaxColdEncodesPerRequest = 1
+	encoder := &countingEncoder{}
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+
+	cachedSource := makePhotoLikePNG(t, 420, 300, 21)
+	warmBody := makeResponsesPayload(t, []string{dataURL("image/png", cachedSource)}, 0)
+	warm := gateway.Optimize(context.Background(), warmBody)
+	require.Equal(t, 1, warm.Metrics.ColdEncodeCount)
+	require.Equal(t, 1, warm.Metrics.OptimizedImageCount)
+
+	firstCold := makePhotoLikePNG(t, 420, 300, 22)
+	secondCold := makePhotoLikePNG(t, 420, 300, 23)
+	body := makeResponsesPayload(t, []string{
+		dataURL("image/png", firstCold),
+		dataURL("image/png", cachedSource),
+		dataURL("image/png", secondCold),
+	}, 0)
+	result := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, 3, result.Metrics.ImageCount)
+	require.Equal(t, 1, result.Metrics.ColdEncodeCount)
+	require.Equal(t, 2, result.Metrics.OptimizedImageCount)
+	require.Equal(t, 1, result.Metrics.CacheHits)
+	require.Equal(t, 1, result.Metrics.SkippedColdEncodeLimit)
+	require.Zero(t, result.Metrics.SkippedRequestImageLimit)
+	require.Zero(t, result.Metrics.Errors)
+	require.Equal(t, int32(2), encoder.calls.Load())
+}
+
+func TestColdEncodeLimitStillReusesLaterNegativeCacheHits(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	config.MaxImagesPerRequest = 3
+	config.MaxColdEncodesPerRequest = 1
+
+	cachedSource := makePhotoLikePNG(t, 420, 300, 24)
+	firstCold := makePhotoLikePNG(t, 420, 300, 25)
+	secondCold := makePhotoLikePNG(t, 420, 300, 26)
+	encoder := &notSmallerEncoder{outputSize: max(len(cachedSource), len(firstCold), len(secondCold))}
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	disableAsyncCacheCleanupForTest(gateway)
+
+	warmBody := makeResponsesPayload(t, []string{dataURL("image/png", cachedSource)}, 0)
+	warm := gateway.Optimize(context.Background(), warmBody)
+	require.Equal(t, 1, warm.Metrics.ColdEncodeCount)
+	require.Equal(t, 1, warm.Metrics.SkippedNotSmaller)
+
+	body := makeResponsesPayload(t, []string{
+		dataURL("image/png", firstCold),
+		dataURL("image/png", cachedSource),
+		dataURL("image/png", secondCold),
+	}, 0)
+	result := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, 3, result.Metrics.ImageCount)
+	require.Equal(t, 1, result.Metrics.ColdEncodeCount)
+	require.Equal(t, 1, result.Metrics.NegativeCacheHits)
+	require.Equal(t, 2, result.Metrics.SkippedNotSmaller)
+	require.Equal(t, 1, result.Metrics.SkippedColdEncodeLimit)
+	require.Zero(t, result.Metrics.Errors)
+	require.Equal(t, int32(2), encoder.calls.Load())
+}
+
+func TestBelowThresholdImagesDoNotConsumeColdEncodeBudget(t *testing.T) {
+	smallSource := makePhotoLikePNG(t, 80, 60, 27)
+	firstCold := makePhotoLikePNG(t, 420, 300, 28)
+	secondCold := makePhotoLikePNG(t, 420, 300, 29)
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = len(smallSource) + 1
+	config.MaxImagesPerRequest = 3
+	config.MaxColdEncodesPerRequest = 1
+	encoder := &countingEncoder{}
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	body := makeResponsesPayload(t, []string{
+		dataURL("image/png", smallSource),
+		dataURL("image/png", firstCold),
+		dataURL("image/png", secondCold),
+	}, 0)
+
+	result := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, 1, result.Metrics.SkippedBelowThreshold)
+	require.Equal(t, 1, result.Metrics.ColdEncodeCount)
+	require.Equal(t, 1, result.Metrics.OptimizedImageCount)
+	require.Equal(t, 1, result.Metrics.SkippedColdEncodeLimit)
+	require.Equal(t, int32(1), encoder.calls.Load())
+}
+
+func TestColdEncodeLimitEventuallyWarmsAllAccumulatedImages(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	config.MaxImagesPerRequest = 3
+	config.MaxColdEncodesPerRequest = 1
+	encoder := &countingEncoder{}
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	body := makeResponsesPayload(t, []string{
+		dataURL("image/png", makePhotoLikePNG(t, 420, 300, 30)),
+		dataURL("image/png", makePhotoLikePNG(t, 420, 300, 31)),
+		dataURL("image/png", makePhotoLikePNG(t, 420, 300, 32)),
+	}, 0)
+
+	first := gateway.Optimize(context.Background(), body)
+	second := gateway.Optimize(context.Background(), body)
+	third := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, 1, first.Metrics.OptimizedImageCount)
+	require.Equal(t, 2, first.Metrics.SkippedColdEncodeLimit)
+	require.Equal(t, 1, second.Metrics.CacheHits)
+	require.Equal(t, 2, second.Metrics.OptimizedImageCount)
+	require.Equal(t, 1, second.Metrics.SkippedColdEncodeLimit)
+	require.Equal(t, 2, third.Metrics.CacheHits)
+	require.Equal(t, 3, third.Metrics.OptimizedImageCount)
+	require.Zero(t, third.Metrics.SkippedColdEncodeLimit)
+	require.Equal(t, 1, first.Metrics.ColdEncodeCount)
+	require.Equal(t, 1, second.Metrics.ColdEncodeCount)
+	require.Equal(t, 1, third.Metrics.ColdEncodeCount)
+	require.Equal(t, int32(3), encoder.calls.Load())
+}
+
 func TestMaxTotalImageBytesPerRequestBoundsWork(t *testing.T) {
 	sourceA := makePhotoLikePNG(t, 420, 300, 31)
 	sourceB := makePhotoLikePNG(t, 420, 300, 32)

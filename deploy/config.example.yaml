@@ -283,6 +283,9 @@ gateway:
     # 并同时受共享磁盘字节预算和独立条目数上限约束。
     negative_cache_ttl_seconds: 86400
     negative_cache_max_entries: 10000
+    # Cold WebP encode budget per request. When R2 scans more images, positive
+    # and negative cache hits beyond this count are still reused.
+    # 每请求冷 WebP 编码预算；R2 扫描更多图片时，超出该数量的正/负缓存命中仍会复用。
     max_images_per_request: 20
     max_concurrent_encodes: 2
   # Max bytes to read for non-stream upstream responses (default: 8MB)

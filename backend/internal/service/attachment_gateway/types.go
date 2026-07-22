@@ -10,26 +10,27 @@ import (
 )
 
 const (
-	sha256HexLength                      = sha256.Size * 2
-	defaultThresholdBytes                = 512 * 1024
-	defaultMaxImageBytes                 = 100_000_000
-	defaultMaxTotalImageBytes            = 100_000_000
-	defaultMaxPixels               int64 = 50_000_000
-	defaultQuality                       = 85
-	defaultSpecialQuality                = 90
-	defaultMinSavingsRatio               = 0.05
-	defaultCacheTTL                      = 7 * 24 * time.Hour
-	defaultCacheMaxBytes           int64 = 512 * 1024 * 1024
-	defaultCacheCleanupInterval          = 10 * time.Minute
-	defaultNegativeCacheTTL              = 24 * time.Hour
-	defaultNegativeCacheMaxEntries       = 10_000
-	defaultMaxImagesPerRequest           = 20
-	defaultMaxConcurrentEncode           = 2
-	defaultAggregateTriggerBytes         = 4 * 1024 * 1024
-	defaultAggregateTriggerCount         = 8
-	defaultAggregateThresholdBytes       = 128 * 1024
-	defaultCacheDir                      = "data/attachment_cache"
-	policyVersion                        = "phase1-v1"
+	sha256HexLength                       = sha256.Size * 2
+	defaultThresholdBytes                 = 512 * 1024
+	defaultMaxImageBytes                  = 100_000_000
+	defaultMaxTotalImageBytes             = 100_000_000
+	defaultMaxPixels                int64 = 50_000_000
+	defaultQuality                        = 85
+	defaultSpecialQuality                 = 90
+	defaultMinSavingsRatio                = 0.05
+	defaultCacheTTL                       = 7 * 24 * time.Hour
+	defaultCacheMaxBytes            int64 = 512 * 1024 * 1024
+	defaultCacheCleanupInterval           = 10 * time.Minute
+	defaultNegativeCacheTTL               = 24 * time.Hour
+	defaultNegativeCacheMaxEntries        = 10_000
+	defaultMaxImagesPerRequest            = 20
+	defaultMaxColdEncodesPerRequest       = defaultMaxImagesPerRequest
+	defaultMaxConcurrentEncode            = 2
+	defaultAggregateTriggerBytes          = 4 * 1024 * 1024
+	defaultAggregateTriggerCount          = 8
+	defaultAggregateThresholdBytes        = 128 * 1024
+	defaultCacheDir                       = "data/attachment_cache"
+	policyVersion                         = "phase1-v1"
 )
 
 var (
@@ -38,6 +39,7 @@ var (
 	errTooManyPixels        = errors.New("attachment gateway: image dimensions exceed configured limit")
 	errAnimatedImage        = errors.New("attachment gateway: animated images are not supported")
 	errNotSmaller           = errors.New("attachment gateway: optimized image does not meet minimum savings")
+	errColdEncodeLimit      = errors.New("attachment gateway: request cold encode limit reached")
 )
 
 // Config controls the Phase 1 attachment optimizer. The zero-value is disabled.
@@ -62,8 +64,11 @@ type Config struct {
 	CacheCleanupInterval              time.Duration
 	NegativeCacheTTL                  time.Duration
 	NegativeCacheMaxEntries           int
-	MaxImagesPerRequest               int
-	MaxConcurrentEncode               int
+	// MaxImagesPerRequest bounds image discovery and cache lookup work. The
+	// cold-encode budget below is independent so cache hits do not consume it.
+	MaxImagesPerRequest      int
+	MaxColdEncodesPerRequest int
+	MaxConcurrentEncode      int
 }
 
 // DefaultConfig returns the complete Phase 1 policy with the experiment off.
@@ -89,6 +94,7 @@ func DefaultConfig() Config {
 		NegativeCacheTTL:                  defaultNegativeCacheTTL,
 		NegativeCacheMaxEntries:           defaultNegativeCacheMaxEntries,
 		MaxImagesPerRequest:               defaultMaxImagesPerRequest,
+		MaxColdEncodesPerRequest:          defaultMaxColdEncodesPerRequest,
 		MaxConcurrentEncode:               defaultMaxConcurrentEncode,
 	}
 }
@@ -145,6 +151,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxImagesPerRequest == 0 {
 		c.MaxImagesPerRequest = defaults.MaxImagesPerRequest
+	}
+	if c.MaxColdEncodesPerRequest == 0 {
+		c.MaxColdEncodesPerRequest = defaults.MaxColdEncodesPerRequest
 	}
 	if c.MaxConcurrentEncode == 0 {
 		c.MaxConcurrentEncode = defaults.MaxConcurrentEncode
@@ -203,6 +212,9 @@ func (c Config) validate() error {
 	if c.MaxImagesPerRequest <= 0 {
 		return errors.New("attachment gateway: max images per request must be positive")
 	}
+	if c.MaxColdEncodesPerRequest <= 0 {
+		return errors.New("attachment gateway: max cold encodes per request must be positive")
+	}
 	if c.MaxConcurrentEncode <= 0 {
 		return errors.New("attachment gateway: max concurrent encodes must be positive")
 	}
@@ -225,11 +237,13 @@ type Metrics struct {
 	NegativeCacheHit                    bool
 	NegativeCacheHits                   int
 	NegativeCacheShared                 int
+	ColdEncodeCount                     int
 	TimedOut                            bool
 	SkippedBelowThreshold               int
 	SkippedUnsupported                  int
 	SkippedNotSmaller                   int
 	SkippedRequestImageLimit            int
+	SkippedColdEncodeLimit              int
 	SkippedTotalImageBytes              int
 	AggregatePressure                   bool
 	EffectiveThresholdBytes             int
