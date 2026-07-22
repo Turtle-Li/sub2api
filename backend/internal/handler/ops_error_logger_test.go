@@ -241,6 +241,33 @@ func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, rec.Code)
 }
 
+func TestOpsErrorLoggerMiddleware_SkipsDeletedBatchImageOutput(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+
+	gin.SetMode(gin.TestMode)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.GET("/api/v1/batch-images/:id/items/:custom_id/content", func(c *gin.Context) {
+		batchImageError(c, service.ErrBatchImageOutputDeleted)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/batch-images/batch-1/items/item-1/content", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusGone, recorder.Code)
+	require.JSONEq(t, `{
+		"error": {
+			"type": "invalid_request_error",
+			"code": "BATCH_IMAGE_OUTPUT_DELETED",
+			"message": "batch image output has been deleted"
+		}
+	}`, recorder.Body.String())
+	require.Equal(t, int64(0), OpsErrorLogEnqueuedTotal())
+	require.Equal(t, int64(0), OpsErrorLogQueueLength())
+}
+
 // setupOpsErrorLogTestQueue 阻止 enqueueOpsErrorLog 启动真实 worker，改用可检查的测试队列。
 func setupOpsErrorLogTestQueue(t *testing.T, size int) {
 	t.Helper()
