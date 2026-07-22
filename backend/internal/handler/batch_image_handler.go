@@ -298,6 +298,9 @@ func batchImageOwnerFromContext(c *gin.Context) (service.BatchImageOwner, bool) 
 }
 
 func batchImageError(c *gin.Context, err error) {
+	if errors.Is(err, service.ErrBatchImageOutputDeleted) {
+		markOpsExpectedBusinessError(c)
+	}
 	status := infraerrors.Code(err)
 	code := infraerrors.Reason(err)
 	message := infraerrors.Message(err)

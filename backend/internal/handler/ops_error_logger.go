@@ -30,6 +30,7 @@ const (
 	opsStreamKey                 = "ops_stream"
 	opsAccountIDKey              = "ops_account_id"
 	opsRoutingCapacityLimitedKey = "ops_routing_capacity_limited"
+	opsExpectedBusinessErrorKey  = "ops_expected_business_error"
 
 	opsUpstreamModelKey = "ops_upstream_model"
 	opsRequestTypeKey   = "ops_request_type"
@@ -487,6 +488,28 @@ func markOpsRoutingCapacityLimited(c *gin.Context) {
 	c.Set(opsRoutingCapacityLimitedKey, true)
 }
 
+// markOpsExpectedBusinessError marks a non-success HTTP response as an expected
+// business state. The response is still returned to the client, but it should
+// not be persisted in the ops "error requests" feed.
+func markOpsExpectedBusinessError(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	c.Set(opsExpectedBusinessErrorKey, true)
+}
+
+func shouldSkipOpsErrorLogForExpectedBusinessError(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	v, ok := c.Get(opsExpectedBusinessErrorKey)
+	if !ok {
+		return false
+	}
+	marked, _ := v.(bool)
+	return marked
+}
+
 func markOpsRoutingCapacityLimitedIfNoAvailable(c *gin.Context, err error) {
 	if !isOpsNoAvailableAccountError(err) {
 		return
@@ -705,6 +728,9 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 
 		if shouldSkipOpsErrorLogForCyber(c) {
+			return
+		}
+		if shouldSkipOpsErrorLogForExpectedBusinessError(c) {
 			return
 		}
 
