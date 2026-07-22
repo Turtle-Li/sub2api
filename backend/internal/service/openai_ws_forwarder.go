@@ -210,8 +210,12 @@ type OpenAIWSIngressHooks struct {
 	// InitialRequestModel 是首帧渠道映射前的请求模型，只用于 usage metadata
 	// 的 reasoning effort 后缀推导，禁止用于上游请求或计费模型。
 	InitialRequestModel string
-	BeforeTurn          func(turn int) error
-	BeforeRequest       func(turn int, payload []byte, originalModel string) error
+	// MaxReasoningEffort limits explicit reasoning effort values for this WS session.
+	MaxReasoningEffort string
+	// ReasoningEffortMappings rewrites explicit effort values for this WS session.
+	ReasoningEffortMappings []ReasoningEffortMapping
+	BeforeTurn              func(turn int) error
+	BeforeRequest           func(turn int, payload []byte, originalModel string) error
 	// TransformRequest runs after security/policy checks and before the payload
 	// is forwarded. The first frame may already have been transformed by the
 	// handler; callers can return it unchanged for turn 1. Implementations must
