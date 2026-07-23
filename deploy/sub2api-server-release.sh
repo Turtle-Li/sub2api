@@ -30,6 +30,12 @@ MIN_FREE_BYTES="${SUB2API_RELEASE_MIN_FREE_BYTES:-8589934592}"
 BUILD_TIMEOUT_SECONDS="${SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS:-3000}"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 ALLOW_PREEXISTING_DRAINING_CONTAINER="${SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER:-false}"
+DRAIN_MONITOR_SCRIPT="${SUB2API_DRAIN_MONITOR_SCRIPT:-${APP_DIR}/scripts/sub2api-drain-monitor.sh}"
+DRAIN_INTERVAL_SECONDS="${SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS:-60}"
+DRAIN_ACTIVE_WINDOW_SECONDS="${SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS:-600}"
+DRAIN_RETRY_DELAY_SECONDS="${SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS:-3600}"
+DRAIN_MAX_RUNTIME_SECONDS="${SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS:-0}"
+DRAIN_CADDY_CONFIG_PATH="${SUB2API_RELEASE_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -56,6 +62,12 @@ require_positive_integer() {
   [ "$2" -gt 0 ] || die "$1 must be a positive integer"
 }
 
+require_non_negative_integer() {
+  case "$2" in
+    ''|*[!0-9]*) die "$1 must be a non-negative integer" ;;
+  esac
+}
+
 require_bool() {
   case "$2" in
     true|false) ;;
@@ -63,12 +75,16 @@ require_bool() {
   esac
 }
 
-for command_name in docker curl flock grep awk timeout perl; do
+for command_name in docker curl flock grep awk timeout perl systemd-run; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RELEASE_MIN_FREE_BYTES "$MIN_FREE_BYTES"
 require_positive_integer SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS "$BUILD_TIMEOUT_SECONDS"
 require_bool SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER "$ALLOW_PREEXISTING_DRAINING_CONTAINER"
+require_positive_integer SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS "$DRAIN_INTERVAL_SECONDS"
+require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACTIVE_WINDOW_SECONDS"
+require_non_negative_integer SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS "$DRAIN_RETRY_DELAY_SECONDS"
+require_non_negative_integer SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS "$DRAIN_MAX_RUNTIME_SECONDS"
 
 case "$SOURCE_DIR" in
   "${WORK_ROOT%/}"/*) ;;
@@ -92,6 +108,7 @@ flock -n 9 || die "another production release is already running"
 [ -d "$SOURCE_DIR" ] || die "source directory does not exist: $SOURCE_DIR"
 [ -f "$SOURCE_DIR/Dockerfile" ] || die "repository Dockerfile is missing"
 [ -x "$BLUE_GREEN_SCRIPT" ] || die "blue-green script is missing or not executable"
+[ -x "$DRAIN_MONITOR_SCRIPT" ] || die "drain monitor is missing or not executable: $DRAIN_MONITOR_SCRIPT"
 
 available_bytes="$(df --output=avail -B1 / | tail -1 | tr -d '[:space:]')"
 [ "$available_bytes" -ge "$MIN_FREE_BYTES" ] || die "less than 8 GiB is free on the server"
@@ -264,6 +281,42 @@ if printf '%s' "$active_config" | grep -qF "$OLD_UPSTREAM"; then
   rollback || true
   die "active Caddy config still contains old upstream $OLD_UPSTREAM"
 fi
+
+# The blue-green helper starts a nohup monitor, but this release helper itself
+# runs inside a Type=oneshot systemd service. systemd kills remaining processes
+# in that service's cgroup when the main process exits, regardless of nohup.
+# Start a second, independently managed transient service after all rollback
+# gates have passed. It uses its own lock/PID files, so the short-lived helper
+# monitor and this persistent monitor can overlap safely.
+drain_unit="sub2api-drain-${OLD_CONTAINER}-${RUN_ID}"
+drain_unit_log="${LOG_DIR}/drain-unit-launch.log"
+log "Starting persistent drain monitor unit ${drain_unit} for ${OLD_CONTAINER}"
+if ! systemd-run \
+  --quiet \
+  --unit="$drain_unit" \
+  --collect \
+  --description="Drain ${OLD_CONTAINER} after Sub2API release ${RUN_ID}" \
+  --property=Type=exec \
+  --property=Nice=10 \
+  --setenv="APP_DIR=${APP_DIR}" \
+  --setenv="DRAIN_CONTAINER=${OLD_CONTAINER}" \
+  --setenv="ACTIVE_CONTAINER=${NEW_CONTAINER}" \
+  --setenv="REQUIRED_CADDY_UPSTREAM=${NEW_UPSTREAM}" \
+  --setenv="FORBIDDEN_CADDY_UPSTREAM=${OLD_UPSTREAM}" \
+  --setenv="CADDY_CONTAINER=${CADDY_CONTAINER}" \
+  --setenv="CADDY_ACTIVE_CONFIG_PATH=${DRAIN_CADDY_CONFIG_PATH}" \
+  --setenv="INTERVAL_SECONDS=${DRAIN_INTERVAL_SECONDS}" \
+  --setenv="ACTIVE_WINDOW_SECONDS=${DRAIN_ACTIVE_WINDOW_SECONDS}" \
+  --setenv="RETRY_DELAY_SECONDS=${DRAIN_RETRY_DELAY_SECONDS}" \
+  --setenv="MAX_RUNTIME_SECONDS=${DRAIN_MAX_RUNTIME_SECONDS}" \
+  --setenv="STOP_DRAIN_CONTAINER=true" \
+  --setenv="LOG_FILE=${LOG_DIR}/drain-monitor.log" \
+  --setenv="LOCK_FILE=/run/${drain_unit}.lock" \
+  --setenv="PID_FILE=/run/${drain_unit}.pid" \
+  "$DRAIN_MONITOR_SCRIPT" >"$drain_unit_log" 2>&1; then
+  die "could not start persistent drain monitor; ${NEW_CONTAINER} remains active and ${OLD_CONTAINER} was retained for safety"
+fi
+printf '%s\n' "$drain_unit" >"${LOG_DIR}/drain-unit.name"
 
 app_5xx="$(docker logs --since "$build_started" "$NEW_CONTAINER" 2>&1 | grep -Ec '"status_code":[[:space:]]*5[0-9]{2}' || true)"
 app_fatal="$(docker logs --since "$build_started" "$NEW_CONTAINER" 2>&1 | grep -Eic 'panic|fatal|redis.*(error|fail|timeout)|database.*(error|fail)' || true)"

@@ -35,7 +35,10 @@ mkdir -p "$FAKE_BIN" "$APP_DIR/scripts" "$SOURCE_DIR"
 printf 'FROM scratch\n' >"${SOURCE_DIR}/Dockerfile"
 printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${APP_DIR}/scripts/sub2api-blue-green-release.sh"
-chmod +x "${APP_DIR}/scripts/sub2api-blue-green-release.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' >"${APP_DIR}/scripts/sub2api-drain-monitor.sh"
+chmod +x \
+  "${APP_DIR}/scripts/sub2api-blue-green-release.sh" \
+  "${APP_DIR}/scripts/sub2api-drain-monitor.sh"
 
 cat >"${FAKE_BIN}/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -110,6 +113,12 @@ shift
 exec "$@"
 EOF
 chmod +x "${FAKE_BIN}/timeout"
+
+cat >"${FAKE_BIN}/systemd-run" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${FAKE_BIN}/systemd-run"
 
 run_release() {
   env \

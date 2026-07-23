@@ -51,6 +51,12 @@ release fails closed while any inactive application container is still
 running, because every application container also consumes shared background
 queues even when Caddy sends it no HTTP traffic. Let the drain monitor stop the
 old color, or verify that it has zero active connections before stopping it.
+After the switch passes all rollback gates, the release helper launches that
+monitor as an independent transient systemd unit. This is required because the
+automatic release service is `Type=oneshot`: a plain `nohup` child is still
+killed with the service cgroup when the release command exits. The unit name is
+recorded in the release log directory as `drain-unit.name`, and its output is
+written to `drain-monitor.log`.
 `SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=true` is an emergency
 override for deployments where background queues are disabled or the operator
 has separately fenced their consumers; it should not be enabled on normal
