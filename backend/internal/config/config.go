@@ -228,6 +228,22 @@ type BatchImageConfig struct {
 	VertexOutputRetentionHours   int    `mapstructure:"vertex_output_retention_hours"`
 	VertexBatchPredictionBaseURL string `mapstructure:"vertex_batch_prediction_base_url"`
 	VertexGCSBaseURL             string `mapstructure:"vertex_gcs_base_url"`
+	// DeliveryEnabled moves completed Vertex JSONL results through the dedicated
+	// Cloudflare Workflow into private COS before a job is settled.
+	DeliveryEnabled             bool   `mapstructure:"delivery_enabled"`
+	DeliveryWorkerURL           string `mapstructure:"delivery_worker_url"`
+	DeliverySharedSecret        string `mapstructure:"delivery_shared_secret"`
+	DeliverySourceURLTTLSeconds int    `mapstructure:"delivery_source_url_ttl_seconds"`
+	DeliveryUploadURLTTLSeconds int    `mapstructure:"delivery_upload_url_ttl_seconds"`
+	DeliveryDownloadTTLSeconds  int    `mapstructure:"delivery_download_ttl_seconds"`
+	DeliveryPollSeconds         int    `mapstructure:"delivery_poll_seconds"`
+	DeliveryCOSEndpoint         string `mapstructure:"delivery_cos_endpoint"`
+	DeliveryCOSRegion           string `mapstructure:"delivery_cos_region"`
+	DeliveryCOSBucket           string `mapstructure:"delivery_cos_bucket"`
+	DeliveryCOSAccessKeyID      string `mapstructure:"delivery_cos_access_key_id"`
+	DeliveryCOSSecretAccessKey  string `mapstructure:"delivery_cos_secret_access_key"`
+	DeliveryCOSPrefix           string `mapstructure:"delivery_cos_prefix"`
+	DeliveryCOSForcePathStyle   bool   `mapstructure:"delivery_cos_force_path_style"`
 }
 
 // ImageStorageConfig 配置异步图片任务结果上传的 S3 兼容对象存储。
@@ -2105,6 +2121,20 @@ func setDefaults() {
 	viper.SetDefault("batch_image.vertex_output_retention_hours", 72)
 	viper.SetDefault("batch_image.vertex_batch_prediction_base_url", "")
 	viper.SetDefault("batch_image.vertex_gcs_base_url", "")
+	viper.SetDefault("batch_image.delivery_enabled", false)
+	viper.SetDefault("batch_image.delivery_worker_url", "")
+	viper.SetDefault("batch_image.delivery_shared_secret", "")
+	viper.SetDefault("batch_image.delivery_source_url_ttl_seconds", 3600)
+	viper.SetDefault("batch_image.delivery_upload_url_ttl_seconds", 3600)
+	viper.SetDefault("batch_image.delivery_download_ttl_seconds", 300)
+	viper.SetDefault("batch_image.delivery_poll_seconds", 10)
+	viper.SetDefault("batch_image.delivery_cos_endpoint", "")
+	viper.SetDefault("batch_image.delivery_cos_region", "ap-shanghai")
+	viper.SetDefault("batch_image.delivery_cos_bucket", "")
+	viper.SetDefault("batch_image.delivery_cos_access_key_id", "")
+	viper.SetDefault("batch_image.delivery_cos_secret_access_key", "")
+	viper.SetDefault("batch_image.delivery_cos_prefix", "sub2-batch-image/prod/")
+	viper.SetDefault("batch_image.delivery_cos_force_path_style", false)
 
 	// Image storage (async image task result offload to S3-compatible object storage)
 	viper.SetDefault("image_storage.enabled", false)
@@ -2970,6 +3000,57 @@ func (c *Config) Validate() error {
 		}
 		if c.BatchImage.VertexOutputRetentionHours <= 0 {
 			return fmt.Errorf("batch_image.vertex_output_retention_hours must be positive")
+		}
+	}
+	if c.BatchImage.DeliveryEnabled {
+		if !c.BatchImage.VertexEnabled {
+			return fmt.Errorf("batch_image.delivery_enabled requires batch_image.vertex_enabled")
+		}
+		workerURL, err := url.Parse(strings.TrimSpace(c.BatchImage.DeliveryWorkerURL))
+		if err != nil || workerURL.Scheme != "https" || workerURL.Host == "" || workerURL.User != nil || workerURL.RawQuery != "" || workerURL.Fragment != "" {
+			return fmt.Errorf("batch_image.delivery_worker_url must be an HTTPS origin")
+		}
+		if workerURL.Path != "" && workerURL.Path != "/" {
+			return fmt.Errorf("batch_image.delivery_worker_url must not contain a path")
+		}
+		if len(c.BatchImage.DeliverySharedSecret) < 32 {
+			return fmt.Errorf("batch_image.delivery_shared_secret must contain at least 32 characters")
+		}
+		for name, value := range map[string]int{
+			"delivery_source_url_ttl_seconds": c.BatchImage.DeliverySourceURLTTLSeconds,
+			"delivery_upload_url_ttl_seconds": c.BatchImage.DeliveryUploadURLTTLSeconds,
+			"delivery_download_ttl_seconds":   c.BatchImage.DeliveryDownloadTTLSeconds,
+			"delivery_poll_seconds":           c.BatchImage.DeliveryPollSeconds,
+		} {
+			if value <= 0 {
+				return fmt.Errorf("batch_image.%s must be positive", name)
+			}
+		}
+		if c.BatchImage.DeliverySourceURLTTLSeconds > 604800 || c.BatchImage.DeliveryUploadURLTTLSeconds > 604800 {
+			return fmt.Errorf("batch_image delivery capability TTL must not exceed seven days")
+		}
+		if c.BatchImage.DeliveryDownloadTTLSeconds > 3600 {
+			return fmt.Errorf("batch_image.delivery_download_ttl_seconds must not exceed one hour")
+		}
+		for name, value := range map[string]string{
+			"delivery_cos_endpoint":          c.BatchImage.DeliveryCOSEndpoint,
+			"delivery_cos_region":            c.BatchImage.DeliveryCOSRegion,
+			"delivery_cos_bucket":            c.BatchImage.DeliveryCOSBucket,
+			"delivery_cos_access_key_id":     c.BatchImage.DeliveryCOSAccessKeyID,
+			"delivery_cos_secret_access_key": c.BatchImage.DeliveryCOSSecretAccessKey,
+			"delivery_cos_prefix":            c.BatchImage.DeliveryCOSPrefix,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("batch_image.%s must not be empty when delivery is enabled", name)
+			}
+		}
+		cosURL, err := url.Parse(strings.TrimSpace(c.BatchImage.DeliveryCOSEndpoint))
+		if err != nil || cosURL.Scheme != "https" || cosURL.Host == "" || cosURL.User != nil || cosURL.RawQuery != "" || cosURL.Fragment != "" {
+			return fmt.Errorf("batch_image.delivery_cos_endpoint must be an HTTPS endpoint")
+		}
+		cosPrefix := strings.Trim(strings.TrimSpace(c.BatchImage.DeliveryCOSPrefix), "/")
+		if cosPrefix == "" || strings.Contains(cosPrefix, "..") {
+			return fmt.Errorf("batch_image.delivery_cos_prefix is invalid")
 		}
 	}
 	if c.Dashboard.Enabled {

@@ -41,6 +41,7 @@ type BatchImageDownloadPermit interface {
 
 type BatchImageContentStream struct {
 	Reader        io.ReadCloser
+	RedirectURL   string
 	ContentType   string
 	Filename      string
 	ContentLength *int64
@@ -75,6 +76,7 @@ type BatchImageDownloadService struct {
 	ProviderRegistry *BatchImageProviderRegistry
 	AccountResolver  BatchImageAccountResolver
 	Limiter          BatchImageDownloadLimiter
+	DeliveryStore    BatchImageDeliveryObjectStore
 	Config           *config.Config
 }
 
@@ -96,12 +98,13 @@ func (w *batchImageDownloadLimitWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func NewBatchImageDownloadService(repo BatchImageRepository, accountRepo AccountRepository, limiter BatchImageDownloadLimiter, cfg *config.Config) *BatchImageDownloadService {
+func NewBatchImageDownloadService(repo BatchImageRepository, accountRepo AccountRepository, limiter BatchImageDownloadLimiter, deliveryStore BatchImageDeliveryObjectStore, cfg *config.Config) *BatchImageDownloadService {
 	return &BatchImageDownloadService{
 		Repo:             repo,
 		ProviderRegistry: NewBatchImageProviderRegistryFromConfig(cfg),
 		AccountResolver:  &BatchImageAccountRepositoryResolver{Repo: accountRepo},
 		Limiter:          limiter,
+		DeliveryStore:    deliveryStore,
 		Config:           cfg,
 	}
 }
@@ -123,6 +126,36 @@ func (s *BatchImageDownloadService) OpenItemContent(ctx context.Context, owner B
 	}
 	if imageIndex >= item.ImageCount {
 		return nil, ErrBatchImageItemImageIndexOutOfRange
+	}
+	if isBatchImageCOSDeliveredItem(item) {
+		if s.DeliveryStore == nil || s.Config == nil || !s.Config.BatchImage.DeliveryEnabled {
+			return nil, ErrBatchImageDeliveryNotConfigured
+		}
+		contentType := normalizeBatchImageDeliveryMime(batchImageDerefString(item.MimeType))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		extension := strings.TrimSpace(batchImageDerefString(item.FileExtension))
+		if extension == "" {
+			extension = batchImageFileExtension(contentType)
+		}
+		if extension == "" {
+			extension = "bin"
+		}
+		filename := BatchImageSafeDownloadFilename(item.CustomID, extension)
+		key, err := BatchImageDeliveryObjectKey(s.Config, job.BatchID, item.CustomID, imageIndex)
+		if err != nil {
+			return nil, ErrBatchImageDownloadFailed
+		}
+		signed, err := s.DeliveryStore.PresignGet(ctx, key, filename, s.deliveryDownloadTTL())
+		if err != nil {
+			return nil, ErrBatchImageDownloadFailed
+		}
+		return &BatchImageContentStream{
+			RedirectURL: signed,
+			ContentType: contentType,
+			Filename:    filename,
+		}, nil
 	}
 
 	permit, err := s.acquirePermit(ctx, owner.UserID, "item")
@@ -197,6 +230,11 @@ func (s *BatchImageDownloadService) StreamZip(ctx context.Context, owner BatchIm
 	}
 	if len(successItems) > maxItems {
 		return nil, ErrBatchImageZipTooManyItems
+	}
+	for _, item := range successItems {
+		if isBatchImageCOSDeliveredItem(item) {
+			return nil, ErrBatchImageZipCOSUnavailable
+		}
 	}
 	failedItems, err := s.Repo.ListBatchImageItemsForDownload(ctx, job.BatchID, BatchImageItemStatusFailed, maxItems)
 	if err != nil {
@@ -417,6 +455,13 @@ func (s *BatchImageDownloadService) maxDownloadDuration() time.Duration {
 		return time.Duration(s.Config.BatchImage.MaxDownloadDurationSeconds) * time.Second
 	}
 	return defaultBatchImageDownloadDuration
+}
+
+func (s *BatchImageDownloadService) deliveryDownloadTTL() time.Duration {
+	if s != nil && s.Config != nil && s.Config.BatchImage.DeliveryDownloadTTLSeconds > 0 {
+		return time.Duration(s.Config.BatchImage.DeliveryDownloadTTLSeconds) * time.Second
+	}
+	return 5 * time.Minute
 }
 
 func ExtractBatchImagePartsFromResultLine(line []byte) (*BatchImageLineImages, error) {

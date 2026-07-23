@@ -91,6 +91,9 @@ var (
 	ErrBatchImageDownloadTooLarge         = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_DOWNLOAD_TOO_LARGE", "batch image download is too large")
 	ErrBatchImageItemImageIndexOutOfRange = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_ITEM_IMAGE_INDEX_OUT_OF_RANGE", "batch image item image index is out of range")
 	ErrBatchImageZipTooManyItems          = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_ZIP_TOO_MANY_ITEMS", "batch image ZIP contains too many items; use single item downloads")
+	ErrBatchImageZipCOSUnavailable        = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_ZIP_COS_UNAVAILABLE", "ZIP download is unavailable for COS-delivered jobs; download items individually")
+	ErrBatchImageDeliveryFailed           = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_DELIVERY_FAILED", "batch image result delivery failed")
+	ErrBatchImageDeliveryNotConfigured    = infraerrors.New(http.StatusInternalServerError, "BATCH_IMAGE_DELIVERY_NOT_CONFIGURED", "batch image result delivery is not configured")
 	ErrBatchImageOutputDeleteNotReady     = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_OUTPUT_DELETE_NOT_READY", "batch image output can only be deleted after completion")
 	ErrBatchImageRecordDeleteNotReady     = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_RECORD_DELETE_NOT_READY", "batch image record can only be deleted after the job finishes")
 	ErrBatchImageCleanupFailed            = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_CLEANUP_FAILED", "batch image cleanup failed")
@@ -338,6 +341,16 @@ type BatchImageRepository interface {
 	SetBatchImageOutputExpiresAt(ctx context.Context, batchID string, expiresAt time.Time) error
 	RecordBatchImageCleanupFailure(ctx context.Context, batchID, code, message string) error
 	AppendBatchImageEvent(ctx context.Context, batchID, eventType string, payload any) error
+}
+
+// BatchImageDeliveryObjectStore exposes only exact-object capabilities required
+// by the batch delivery control plane. Implementations must keep permanent COS
+// credentials server-side and return short-lived signed URLs.
+type BatchImageDeliveryObjectStore interface {
+	PresignPut(ctx context.Context, key string, expires time.Duration) (string, error)
+	PresignGet(ctx context.Context, key, filename string, expires time.Duration) (string, error)
+	Head(ctx context.Context, key string) (size int64, contentType string, err error)
+	Delete(ctx context.Context, keys []string) error
 }
 
 func NewBatchImageID() (string, error) {

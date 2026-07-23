@@ -192,6 +192,19 @@ func (h *BatchImageHandler) ItemContent(c *gin.Context) {
 		batchImageError(c, err)
 		return
 	}
+	if stream.RedirectURL != "" {
+		c.Header("Cache-Control", "private, no-store")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("Location", stream.RedirectURL)
+		c.Status(http.StatusFound)
+		h.markDownloadedBestEffort(c, owner)
+		return
+	}
+	if stream.Reader == nil {
+		batchImageError(c, service.ErrBatchImageDownloadFailed)
+		return
+	}
 	defer func() { _ = stream.Reader.Close() }()
 
 	c.Header("Content-Type", stream.ContentType)

@@ -124,6 +124,7 @@ var ProviderSet = wire.NewSet(
 	NewImageTaskStore,
 	NewBatchImageQueue,
 	NewBatchImageDownloadLimiter,
+	ProvideBatchImageDeliveryObjectStore,
 	NewLeaderLockCache,
 	ProvideSchedulerCache,
 	NewSchedulerOutboxRepository,

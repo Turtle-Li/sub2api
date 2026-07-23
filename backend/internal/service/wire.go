@@ -50,8 +50,8 @@ func ProvideBatchImageModelPricingResolver(resolver *ModelPricingResolver) *Batc
 	return &BatchImageModelPricingResolver{Resolver: resolver}
 }
 
-func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, cfg *config.Config) *BatchImageCleanupService {
-	svc := NewBatchImageCleanupService(repo, accountRepo, cfg)
+func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, deliveryStore BatchImageDeliveryObjectStore, cfg *config.Config) *BatchImageCleanupService {
+	svc := NewBatchImageCleanupService(repo, accountRepo, deliveryStore, cfg)
 	svc.Start()
 	return svc
 }

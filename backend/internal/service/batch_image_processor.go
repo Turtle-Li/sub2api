@@ -51,6 +51,7 @@ type BatchImageProviderProcessor struct {
 	ProviderRegistry *BatchImageProviderRegistry
 	AccountResolver  BatchImageAccountResolver
 	Indexer          *BatchImageResultIndexer
+	Delivery         BatchImageResultDelivery
 	BillingRepo      UsageBillingRepository
 	AuthCache        APIKeyAuthCacheInvalidator
 	DefaultRequeue   time.Duration
@@ -176,15 +177,31 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 }
 
 func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (BatchImageProcessResult, error) {
-	indexer := p.Indexer
-	if indexer == nil {
-		indexer = &BatchImageResultIndexer{Repo: p.Repo}
+	var (
+		result       *BatchImageIndexResult
+		err          error
+		deliveryMode bool
+	)
+	if p.Delivery != nil && p.Delivery.Applies(job) {
+		deliveryMode = true
+		var requeueAfter time.Duration
+		result, requeueAfter, err = p.Delivery.Process(ctx, job, provider, account)
+		if err == nil && result == nil {
+			if requeueAfter <= 0 {
+				requeueAfter = p.requeueDelay(0)
+			}
+			return BatchImageProcessResult{RequeueAfter: requeueAfter}, nil
+		}
+	} else {
+		indexer := p.Indexer
+		if indexer == nil {
+			indexer = &BatchImageResultIndexer{Repo: p.Repo}
+		}
+		if indexer.Repo == nil {
+			indexer.Repo = p.Repo
+		}
+		result, err = indexer.Index(ctx, job, provider, account)
 	}
-	if indexer.Repo == nil {
-		indexer.Repo = p.Repo
-	}
-
-	result, err := indexer.Index(ctx, job, provider, account)
 	if err != nil {
 		if errors.Is(err, ErrBatchImageIndexOutputMissing) {
 			return BatchImageProcessResult{}, err
@@ -197,6 +214,8 @@ func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *B
 		code := "INDEX_PARSE_FAILED"
 		if errors.Is(err, ErrBatchImageDuplicateCustomID) {
 			code = "DUPLICATE_CUSTOM_ID_IN_OUTPUT"
+		} else if deliveryMode {
+			code = "RESULT_DELIVERY_FAILED"
 		}
 		msg := truncateBatchImageMessage(err.Error(), batchImageMaxErrorMessageLength)
 		transitionErr := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusFailed, BatchImageTransitionOptions{

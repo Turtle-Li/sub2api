@@ -24,6 +24,7 @@ type BatchImageCleanupService struct {
 	Repo             BatchImageRepository
 	ProviderRegistry *BatchImageProviderRegistry
 	AccountResolver  BatchImageAccountResolver
+	DeliveryStore    BatchImageDeliveryObjectStore
 	Config           *config.Config
 
 	cancel context.CancelFunc
@@ -31,11 +32,12 @@ type BatchImageCleanupService struct {
 	mu     sync.Mutex
 }
 
-func NewBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, cfg *config.Config) *BatchImageCleanupService {
+func NewBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, deliveryStore BatchImageDeliveryObjectStore, cfg *config.Config) *BatchImageCleanupService {
 	return &BatchImageCleanupService{
 		Repo:             repo,
 		ProviderRegistry: NewBatchImageProviderRegistryFromConfig(cfg),
 		AccountResolver:  &BatchImageAccountRepositoryResolver{Repo: accountRepo},
+		DeliveryStore:    deliveryStore,
 		Config:           cfg,
 	}
 }
@@ -204,21 +206,13 @@ func (s *BatchImageCleanupService) cleanupJob(ctx context.Context, job *BatchIma
 		return ErrUnsupportedCleanupTarget
 	}
 
+	if target == CleanupTargetOutput {
+		if err := s.cleanupCOSDelivery(ctx, job); err != nil {
+			return s.recordCleanupFailure(ctx, job, target, reason, err)
+		}
+	}
 	if err := s.callProviderCleanup(ctx, job, target); err != nil {
-		code := cleanupFailureCode(err)
-		msg := sanitizeBatchImagePublicMessage(err.Error())
-		if recordErr := s.Repo.RecordBatchImageCleanupFailure(ctx, job.BatchID, code, msg); recordErr != nil {
-			logger.L().Warn("batch_image.cleanup_failure_record_failed",
-				zap.String("batch_id", job.BatchID),
-				zap.Error(recordErr),
-			)
-		}
-		event := string(target) + "_cleanup_failed"
-		s.appendCleanupEvent(ctx, job.BatchID, event, map[string]any{"batch_id": job.BatchID, "cleanup_target": string(target), "reason": reason, "error_code": code})
-		if errors.Is(err, ErrBatchImageProviderUnsafeCleanupPath) {
-			return ErrBatchImageCleanupUnsafePath
-		}
-		return ErrBatchImageProviderCleanupFailed
+		return s.recordCleanupFailure(ctx, job, target, reason, err)
 	}
 
 	deletedAt := time.Now()
@@ -226,6 +220,67 @@ func (s *BatchImageCleanupService) cleanupJob(ctx context.Context, job *BatchIma
 		return s.Repo.MarkBatchImageInputDeleted(ctx, job.BatchID, deletedAt)
 	}
 	return s.Repo.MarkBatchImageOutputDeleted(ctx, job.BatchID, deletedAt)
+}
+
+func (s *BatchImageCleanupService) recordCleanupFailure(ctx context.Context, job *BatchImageJob, target CleanupTarget, reason string, err error) error {
+	code := cleanupFailureCode(err)
+	msg := sanitizeBatchImagePublicMessage(err.Error())
+	if recordErr := s.Repo.RecordBatchImageCleanupFailure(ctx, job.BatchID, code, msg); recordErr != nil {
+		logger.L().Warn("batch_image.cleanup_failure_record_failed",
+			zap.String("batch_id", job.BatchID),
+			zap.Error(recordErr),
+		)
+	}
+	event := string(target) + "_cleanup_failed"
+	s.appendCleanupEvent(ctx, job.BatchID, event, map[string]any{"batch_id": job.BatchID, "cleanup_target": string(target), "reason": reason, "error_code": code})
+	if errors.Is(err, ErrBatchImageProviderUnsafeCleanupPath) {
+		return ErrBatchImageCleanupUnsafePath
+	}
+	return ErrBatchImageProviderCleanupFailed
+}
+
+func (s *BatchImageCleanupService) cleanupCOSDelivery(ctx context.Context, job *BatchImageJob) error {
+	if s == nil || job == nil || s.Config == nil || !s.Config.BatchImage.DeliveryEnabled ||
+		job.Provider != BatchImageProviderVertex {
+		return nil
+	}
+	if s.DeliveryStore == nil {
+		return ErrBatchImageDeliveryNotConfigured
+	}
+	const pageSize = 500
+	maxImages := s.Config.BatchImage.MaxOutputImagesPerItem
+	if maxImages <= 0 || maxImages > 16 {
+		maxImages = 4
+	}
+	var keys []string
+	for offset := 0; ; offset += pageSize {
+		items, err := s.Repo.ListBatchImageItems(ctx, job.BatchID, BatchImageItemFilter{
+			Limit:  pageSize,
+			Offset: offset,
+		})
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			if item == nil {
+				continue
+			}
+			for imageIndex := 0; imageIndex < maxImages; imageIndex++ {
+				key, err := BatchImageDeliveryObjectKey(s.Config, job.BatchID, item.CustomID, imageIndex)
+				if err != nil {
+					return err
+				}
+				keys = append(keys, key)
+			}
+		}
+		if len(items) < pageSize {
+			break
+		}
+	}
+	if err := s.DeliveryStore.Delete(ctx, keys); err != nil {
+		return ErrBatchImageCleanupFailed.WithCause(err)
+	}
+	return nil
 }
 
 func (s *BatchImageCleanupService) callProviderCleanup(ctx context.Context, job *BatchImageJob, target CleanupTarget) error {

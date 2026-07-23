@@ -7,7 +7,7 @@ Supported providers:
 - `gemini_api`
 - `vertex`
 
-API users do not see Gemini file names, Vertex job names, GCS paths, signed URLs, API keys, or service account material. Downloads are proxied through Sub2API in this MVP.
+API users do not see Gemini file names, Vertex job names, GCS paths, API keys, service-account material, or permanent COS credentials. When private-COS delivery is enabled, the authenticated item endpoint returns a short-lived exact-object redirect; the signature is a temporary bearer capability and is never included in list/status JSON.
 
 ## API Routes
 
@@ -64,7 +64,7 @@ Submit request:
 
 - Per prompt item: up to 4 output images.
 - Per batch job: up to 200 expected output images after expansion. This is the hard generated-output cap for a single job; clients and Codex skills must split larger workloads before submission.
-- The output-image limit intentionally matches the default ZIP item limit so newly submitted jobs are always downloadable as one ZIP by item count. ZIP byte size is still capped separately by `max_download_bytes_per_request`.
+- Legacy provider-streamed jobs can use ZIP subject to the item and byte caps. COS-delivered jobs intentionally disable server-side ZIP so a bulk archive cannot pull all image bytes back through the Sub2API host; clients download successful items individually and may assemble a ZIP locally.
 
 Public batch response:
 
@@ -136,6 +136,19 @@ output_deleted             -> output_deleted
 
 `completed -> output_deleted` happens after manual output deletion or TTL cleanup.
 
+For Vertex jobs with private-COS delivery enabled, `indexing` includes a durable delivery gate:
+
+```text
+list small GCS object metadata
+  -> exact GCS signed GET + exact COS signed PUT capabilities
+  -> Cloudflare Workflow streams JSONL/images directly
+  -> Sub2 validates the returned manifest and COS HEAD metadata
+  -> settling
+```
+
+Sub2 never sends a Google OAuth token or COS permanent credential to the Worker. Image bytes and
+Base64 do not traverse the Sub2 host.
+
 ## Redis
 
 Redis is used for wakeups, retries, worker coordination, per-job locks, and download limiting. PostgreSQL remains the source of truth.
@@ -191,6 +204,10 @@ After output cleanup, downloads return `410 Gone` with `BATCH_IMAGE_OUTPUT_DELET
 
 Cleanup never accepts user-supplied provider paths. Provider cleanup must use server-generated refs and prefix-safe deletion.
 
+For COS-delivered Vertex jobs, output cleanup removes every deterministic COS item key before
+deleting the managed GCS output. A cleanup failure keeps the output state retryable and does not
+falsely mark it deleted.
+
 For the managed Vertex/GCS batch bucket, disable Cloud Storage soft delete or configure lifecycle carefully to avoid hidden retained storage cost.
 
 ## Provider Notes
@@ -211,6 +228,9 @@ For the managed Vertex/GCS batch bucket, disable Cloud Storage soft delete or co
 - Vertex job name and GCS paths are internal.
 - Batch image output should be treated as `1K`/default only in MVP.
 - Do not promise `2K` or `4K`.
+- Optional delivery mode moves completed JSONL images through a dedicated Cloudflare Workflow
+  into private Tencent COS before settlement. Only source listing and COS `HEAD`/signing control
+  traffic touches Sub2.
 
 Other Gemini account/login types are not selected by the current batch image providers unless they expose equivalent API-key or service-account credentials through the same provider flow. They were not covered by the 2026-07-07 PR validation.
 
@@ -297,9 +317,28 @@ batch_image:
   vertex_output_retention_hours: 72
   vertex_batch_prediction_base_url: ""
   vertex_gcs_base_url: ""
+
+  delivery_enabled: false
+  delivery_worker_url: "https://turtle-batch-image-pump.example.workers.dev"
+  delivery_shared_secret: "<at least 32 random characters>"
+  delivery_source_url_ttl_seconds: 3600
+  delivery_upload_url_ttl_seconds: 3600
+  delivery_download_ttl_seconds: 300
+  delivery_poll_seconds: 10
+  delivery_cos_endpoint: "https://cos.ap-shanghai.myqcloud.com"
+  delivery_cos_region: "ap-shanghai"
+  delivery_cos_bucket: "image-1309919944"
+  delivery_cos_access_key_id: "<dedicated CAM key>"
+  delivery_cos_secret_access_key: "<dedicated CAM secret>"
+  delivery_cos_prefix: "sub2-batch-image/prod/"
+  delivery_cos_force_path_style: false
 ```
 
 Feature flags default to disabled.
+
+The CAM identity should be restricted to this bucket and prefix. Keep the bucket private. The
+Worker stores only `delivery_shared_secret`; it receives expiring exact-object URLs rather than
+the Google service-account key or COS CAM key.
 
 ## Operations Checklist
 
@@ -310,26 +349,28 @@ Feature flags default to disabled.
 - Configure the Vertex managed GCS bucket if using Vertex.
 - Ensure bucket permissions are correct.
 - Disable or manage GCS soft delete.
+- If delivery is enabled, deploy the dedicated Worker/Workflow, configure the same HMAC secret
+  at both ends, keep COS private, and grant the CAM key only the required object operations under
+  `delivery_cos_prefix`.
 - Configure cleanup worker settings.
 - Configure max items per job.
 - Configure download concurrency.
 - Confirm billing pricing.
 - Run smoke tests before enabling.
 
-## Future Optimization
-
-- Optional object-storage download offload: persist completed image outputs to an operator-configured object store such as GCS, S3, or R2, then issue short-lived signed download links to users. This would avoid routing large image/ZIP downloads through the Sub2API server, which is useful for small-bandwidth deployments. Keep it opt-in because it needs extra storage credentials, lifecycle cleanup, signed-URL expiry policy, access auditing, and compatibility with output deletion.
-
 ## Security Checklist
 
 - No provider refs in public responses.
 - No GCS URI exposure.
-- No signed URL exposure.
+- No signed URL in JSON, logs, events, or recovery files. A successful authenticated content
+  request necessarily receives one short-lived COS signature in its `Location` header.
 - No service account exposure.
 - No API key exposure.
+- No permanent COS credential exposure.
 - No image bytes/base64 in PostgreSQL.
 - No base64 in logs.
 - Owner-scoped status, item, download, cancel, and delete routes.
+- Cross-host clients must not forward the Sub2 `Authorization` header to COS.
 - Output deletion is owner-scoped.
 - Cleanup paths are server-generated only.
 
