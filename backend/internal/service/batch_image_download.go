@@ -58,6 +58,21 @@ type BatchImageZipResult struct {
 	ErrorCount int
 }
 
+type BatchImageResultFile struct {
+	Index       int    `json:"index"`
+	Name        string `json:"name"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"`
+	URL         string `json:"url"`
+}
+
+type BatchImageResultFiles struct {
+	Object    string                 `json:"object"`
+	BatchID   string                 `json:"batch_id"`
+	ExpiresAt int64                  `json:"expires_at"`
+	Data      []BatchImageResultFile `json:"data"`
+}
+
 type BatchImageLineImages struct {
 	CustomID     string
 	Images       []BatchImageInlineImage
@@ -121,43 +136,15 @@ func (s *BatchImageDownloadService) OpenItemContent(ctx context.Context, owner B
 	if err != nil {
 		return nil, err
 	}
+	if isBatchImageCOSArchivedItem(item) {
+		return nil, ErrBatchImageArchiveClientRequired
+	}
 	if item.Status != BatchImageItemStatusSuccess {
 		return nil, ErrBatchImageItemFailed
 	}
 	if imageIndex >= item.ImageCount {
 		return nil, ErrBatchImageItemImageIndexOutOfRange
 	}
-	if isBatchImageCOSDeliveredItem(item) {
-		if s.DeliveryStore == nil || s.Config == nil || !s.Config.BatchImage.DeliveryEnabled {
-			return nil, ErrBatchImageDeliveryNotConfigured
-		}
-		contentType := normalizeBatchImageDeliveryMime(batchImageDerefString(item.MimeType))
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-		extension := strings.TrimSpace(batchImageDerefString(item.FileExtension))
-		if extension == "" {
-			extension = batchImageFileExtension(contentType)
-		}
-		if extension == "" {
-			extension = "bin"
-		}
-		filename := BatchImageSafeDownloadFilename(item.CustomID, extension)
-		key, err := BatchImageDeliveryObjectKey(s.Config, job.BatchID, item.CustomID, imageIndex)
-		if err != nil {
-			return nil, ErrBatchImageDownloadFailed
-		}
-		signed, err := s.DeliveryStore.PresignGet(ctx, key, filename, s.deliveryDownloadTTL())
-		if err != nil {
-			return nil, ErrBatchImageDownloadFailed
-		}
-		return &BatchImageContentStream{
-			RedirectURL: signed,
-			ContentType: contentType,
-			Filename:    filename,
-		}, nil
-	}
-
 	permit, err := s.acquirePermit(ctx, owner.UserID, "item")
 	if err != nil {
 		return nil, err
@@ -216,6 +203,13 @@ func (s *BatchImageDownloadService) StreamZip(ctx context.Context, owner BatchIm
 	if err != nil {
 		return nil, err
 	}
+	archiveItems, err := s.Repo.ListBatchImageItemsForDownload(ctx, job.BatchID, BatchImageItemStatusResultAvailable, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(archiveItems) > 0 && isBatchImageCOSArchivedItem(archiveItems[0]) {
+		return nil, ErrBatchImageArchiveClientRequired
+	}
 	maxItems := opts.MaxItems
 	if cap := s.maxZipItems(); maxItems <= 0 || maxItems > cap {
 		// 客户端传入的 max_items 不得放大管理员配置的 ZIP 上限。
@@ -230,11 +224,6 @@ func (s *BatchImageDownloadService) StreamZip(ctx context.Context, owner BatchIm
 	}
 	if len(successItems) > maxItems {
 		return nil, ErrBatchImageZipTooManyItems
-	}
-	for _, item := range successItems {
-		if isBatchImageCOSDeliveredItem(item) {
-			return nil, ErrBatchImageZipCOSUnavailable
-		}
 	}
 	failedItems, err := s.Repo.ListBatchImageItemsForDownload(ctx, job.BatchID, BatchImageItemStatusFailed, maxItems)
 	if err != nil {
@@ -304,6 +293,61 @@ func (s *BatchImageDownloadService) StreamZip(ctx context.Context, owner BatchIm
 			return result, ErrBatchImageDownloadTooLarge.WithCause(err)
 		}
 		return result, ErrBatchImageDownloadFailed.WithCause(err)
+	}
+	return result, nil
+}
+
+// ResultFiles returns short-lived, exact-object COS capabilities after owner
+// authorization. The caller downloads and decodes JSONL locally; Sub2 never
+// proxies the Base64 media bytes.
+func (s *BatchImageDownloadService) ResultFiles(ctx context.Context, owner BatchImageOwner, batchID string) (*BatchImageResultFiles, error) {
+	job, err := s.getCompletedJob(ctx, owner, batchID)
+	if err != nil {
+		return nil, err
+	}
+	if s.DeliveryStore == nil || s.Config == nil || !s.Config.BatchImage.DeliveryEnabled {
+		return nil, ErrBatchImageDeliveryNotConfigured
+	}
+	items, err := s.Repo.ListBatchImageItemsForDownload(ctx, job.BatchID, BatchImageItemStatusResultAvailable, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, ErrBatchImageResultArchiveUnavailable
+	}
+	fileCount, ok := batchImageCOSArchiveFileCount(items[0])
+	if !ok {
+		return nil, ErrBatchImageResultArchiveUnavailable
+	}
+	ttl := s.deliveryDownloadTTL()
+	result := &BatchImageResultFiles{
+		Object:    "list",
+		BatchID:   job.BatchID,
+		ExpiresAt: time.Now().Add(ttl).Unix(),
+		Data:      make([]BatchImageResultFile, 0, fileCount),
+	}
+	for fileIndex := 0; fileIndex < fileCount; fileIndex++ {
+		key, keyErr := BatchImageDeliveryArchiveObjectKey(s.Config, job.BatchID, fileIndex)
+		if keyErr != nil {
+			return nil, ErrBatchImageDownloadFailed
+		}
+		size, contentType, headErr := s.DeliveryStore.Head(ctx, key)
+		if headErr != nil || size <= 0 ||
+			normalizeBatchImageArchiveContentType(contentType) != batchImageCOSArchiveContentType {
+			return nil, ErrBatchImageResultMissing
+		}
+		name := fmt.Sprintf("%s-result-%04d.jsonl", job.BatchID, fileIndex+1)
+		signed, signErr := s.DeliveryStore.PresignGet(ctx, key, name, ttl)
+		if signErr != nil {
+			return nil, ErrBatchImageDownloadFailed
+		}
+		result.Data = append(result.Data, BatchImageResultFile{
+			Index:       fileIndex,
+			Name:        name,
+			Size:        size,
+			ContentType: batchImageCOSArchiveContentType,
+			URL:         signed,
+		})
 	}
 	return result, nil
 }

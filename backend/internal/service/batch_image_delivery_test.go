@@ -116,12 +116,13 @@ func TestGCSV4SignedURLHasVerifiableExactObjectSignature(t *testing.T) {
 	require.NoError(t, rsa.VerifyPKCS1v15(&privateKey.PublicKey, crypto.SHA256, digest[:], signature))
 }
 
-func TestBatchImageDeliveryCompletesThroughSignedControlPlane(t *testing.T) {
+func TestBatchImageDeliveryArchivesRawJSONLAndUsesVertexCompletionStats(t *testing.T) {
 	const (
 		batchID  = "imgbatch_0123456789abcdef0123456789abcdef"
 		customID = "cover"
 		secret   = "0123456789abcdef0123456789abcdef"
 	)
+	success, failed, incomplete := 1, 0, 0
 	repo := newFakeBatchImageRepository()
 	repo.jobs[batchID] = &BatchImageJob{
 		BatchID:   batchID,
@@ -132,7 +133,10 @@ func TestBatchImageDeliveryCompletesThroughSignedControlPlane(t *testing.T) {
 	repo.items[batchID] = []CreateBatchImageItemParams{{
 		JobID: batchID, CustomID: customID, Status: BatchImageItemStatusPending,
 	}}
-	store := &fakeBatchImageDeliveryStore{headSize: 24, headType: "image/png"}
+	store := &fakeBatchImageDeliveryStore{
+		headSize: 128,
+		headType: batchImageCOSArchiveContentType,
+	}
 
 	var observedRequest batchImagePumpRequest
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -154,24 +158,20 @@ func TestBatchImageDeliveryCompletesThroughSignedControlPlane(t *testing.T) {
 			return
 		}
 		require.NoError(t, json.Unmarshal(body, &observedRequest))
+		require.Len(t, observedRequest.Files, 1)
 		output := batchImagePumpOutput{
-			Version:      1,
-			RunID:        observedRequest.RunID,
-			JobID:        batchID,
-			Status:       "completed",
-			SuccessCount: 1,
-			Items: []batchImagePumpResultItem{{
-				CustomID: customID,
-				Status:   "succeeded",
-				Images: []batchImagePumpImage{{
-					Index:     0,
-					ObjectKey: observedRequest.Items[0].Uploads[0].ObjectKey,
-					Size:      24,
-					SHA256:    strings.Repeat("a", 64),
-					MimeType:  "image/png",
-					Width:     2,
-					Height:    3,
-				}},
+			Version:     2,
+			RunID:       observedRequest.RunID,
+			JobID:       batchID,
+			Status:      "completed",
+			SourceBytes: 128,
+			Files: []batchImagePumpArchivedFile{{
+				Index:       0,
+				SourceID:    observedRequest.Files[0].SourceID,
+				ObjectKey:   observedRequest.Files[0].ObjectKey,
+				Size:        128,
+				ContentType: batchImageCOSArchiveContentType,
+				ETag:        "archive-etag",
 			}},
 		}
 		writer.WriteHeader(http.StatusAccepted)
@@ -191,12 +191,16 @@ func TestBatchImageDeliveryCompletesThroughSignedControlPlane(t *testing.T) {
 		DeliveryUploadURLTTLSeconds: 3600,
 		DeliveryPollSeconds:         10,
 		DeliveryCOSPrefix:           "sub2-batch-image/prod/",
-		MaxOutputImagesPerItem:      4,
 	}}
 	delivery := NewBatchImageDeliveryService(repo, store, cfg)
 	delivery.HTTPClient = server.Client()
 	provider := &fakeBatchImageDeliveryProvider{
-		fakeProcessorProvider: &fakeProcessorProvider{},
+		fakeProcessorProvider: &fakeProcessorProvider{status: &BatchProviderStatus{
+			InternalState:   BatchProviderStateSucceeded,
+			SuccessfulCount: &success,
+			FailedCount:     &failed,
+			IncompleteCount: &incomplete,
+		}},
 		sources: []BatchImageSignedResultSource{{
 			ID:  "result-001.jsonl",
 			URL: "https://storage.googleapis.com/safe-bucket/output.jsonl?X-Goog-Signature=secret",
@@ -206,23 +210,26 @@ func TestBatchImageDeliveryCompletesThroughSignedControlPlane(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, requeue)
 	require.Equal(t, 1, result.SuccessCount)
-	require.Len(t, observedRequest.Items[0].Uploads, 4)
-	require.Len(t, store.putKeys, 4)
+	require.Len(t, store.putKeys, 1)
 	require.Len(t, store.headKeys, 1)
-	require.Equal(t, batchImageCOSDeliveryMarker, batchImageDerefString(repo.items[batchID][0].ProviderSourceObject))
+	require.Equal(t, BatchImageItemStatusResultAvailable, repo.items[batchID][0].Status)
+	fileCount, ok := batchImageCOSArchiveFileCount(&BatchImageItem{
+		ProviderSourceObject: repo.items[batchID][0].ProviderSourceObject,
+	})
+	require.True(t, ok)
+	require.Equal(t, 1, fileCount)
 }
 
-func TestCOSDeliveredItemReturnsShortLivedRedirectAndDisablesZIP(t *testing.T) {
+func TestArchivedResultReturnsShortLivedFileCapabilitiesAndRequiresClientDecode(t *testing.T) {
 	const batchID = "imgbatch_0123456789abcdef0123456789abcdef"
 	apiKeyID := int64(2)
-	marker := batchImageCOSDeliveryMarker
-	mime := "image/png"
-	extension := "png"
+	marker := batchImageCOSArchiveMarker(1)
 	repo := newFakeBatchImageRepository()
 	repo.jobs[batchID] = &BatchImageJob{
 		BatchID:      batchID,
 		UserID:       1,
 		APIKeyID:     &apiKeyID,
+		Provider:     BatchImageProviderVertex,
 		Status:       BatchImageJobStatusCompleted,
 		SuccessCount: 1,
 		ItemCount:    1,
@@ -230,13 +237,13 @@ func TestCOSDeliveredItemReturnsShortLivedRedirectAndDisablesZIP(t *testing.T) {
 	repo.items[batchID] = []CreateBatchImageItemParams{{
 		JobID:                batchID,
 		CustomID:             "cover",
-		Status:               BatchImageItemStatusSuccess,
+		Status:               BatchImageItemStatusResultAvailable,
 		ProviderSourceObject: &marker,
-		MimeType:             &mime,
-		FileExtension:        &extension,
 		ImageCount:           1,
 	}}
 	store := &fakeBatchImageDeliveryStore{
+		headSize:     128,
+		headType:     batchImageCOSArchiveContentType,
 		presignedGet: "https://image-1309919944.cos.ap-shanghai.myqcloud.com/object?q-signature=short-lived",
 	}
 	cfg := &config.Config{BatchImage: config.BatchImageConfig{
@@ -245,24 +252,17 @@ func TestCOSDeliveredItemReturnsShortLivedRedirectAndDisablesZIP(t *testing.T) {
 		DeliveryCOSPrefix:          "sub2-batch-image/prod/",
 	}}
 	service := &BatchImageDownloadService{Repo: repo, DeliveryStore: store, Config: cfg}
-	stream, err := service.OpenItemContent(
-		context.Background(),
-		BatchImageOwner{UserID: 1, APIKeyID: apiKeyID},
-		batchID,
-		"cover",
-		0,
-	)
-	require.NoError(t, err)
-	require.Nil(t, stream.Reader)
-	require.Contains(t, stream.RedirectURL, "q-signature=short-lived")
-	require.Len(t, store.getKeys, 1)
+	owner := BatchImageOwner{UserID: 1, APIKeyID: apiKeyID}
 
-	_, err = service.StreamZip(
-		context.Background(),
-		BatchImageOwner{UserID: 1, APIKeyID: apiKeyID},
-		batchID,
-		BatchImageZipOptions{},
-		io.Discard,
-	)
-	require.ErrorIs(t, err, ErrBatchImageZipCOSUnavailable)
+	files, err := service.ResultFiles(context.Background(), owner, batchID)
+	require.NoError(t, err)
+	require.Len(t, files.Data, 1)
+	require.Contains(t, files.Data[0].URL, "q-signature=short-lived")
+	require.Equal(t, int64(128), files.Data[0].Size)
+
+	_, err = service.OpenItemContent(context.Background(), owner, batchID, "cover", 0)
+	require.ErrorIs(t, err, ErrBatchImageArchiveClientRequired)
+
+	_, err = service.StreamZip(context.Background(), owner, batchID, BatchImageZipOptions{}, io.Discard)
+	require.ErrorIs(t, err, ErrBatchImageArchiveClientRequired)
 }

@@ -634,6 +634,19 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 		require.ErrorIs(t, err, ErrBatchImageJobNotFound)
 	})
 
+	t.Run("private archive items expose readiness without a false error", func(t *testing.T) {
+		marker := batchImageCOSArchiveMarker(1)
+		item := BatchImageItemToPublic(&BatchImageItem{
+			CustomID:             "archived",
+			Status:               BatchImageItemStatusResultAvailable,
+			ProviderSourceObject: &marker,
+			ImageCount:           1,
+		})
+		require.Equal(t, BatchImageItemStatusResultAvailable, item.Status)
+		require.Nil(t, item.Error)
+		require.Equal(t, 1, item.ImageCount)
+	})
+
 	t.Run("cancel active job calls provider and waits for confirmed terminal state", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		apiKeyID := int64(22)

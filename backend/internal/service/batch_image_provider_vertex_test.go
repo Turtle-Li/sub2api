@@ -173,6 +173,32 @@ func TestVertexProvider_GetMapsStates(t *testing.T) {
 	}
 }
 
+func TestVertexProvider_GetMapsCompletionStats(t *testing.T) {
+	output := "gs://managed-bucket/batch-image/test/imgbatch_abc123/output/"
+	provider := newTestVertexProvider(&fakeVertexBatchClient{got: &VertexBatchPredictionJob{
+		Name:  "projects/proj/locations/global/batchPredictionJobs/job-1",
+		State: "JOB_STATE_SUCCEEDED",
+		OutputConfig: VertexBatchOutputConfig{
+			GCSDestination: VertexBatchGCSDestination{OutputURIPrefix: output},
+		},
+		CompletionStats: &VertexCompletionStats{
+			SuccessfulCount: "17",
+			FailedCount:     "2",
+			IncompleteCount: "1",
+		},
+	}}, &fakeVertexObjectStore{})
+
+	got, err := provider.Get(
+		context.Background(),
+		vertexJobWithName("projects/proj/locations/global/batchPredictionJobs/job-1"),
+		vertexServiceAccount(),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 17, *got.SuccessfulCount)
+	require.Equal(t, 2, *got.FailedCount)
+	require.Equal(t, 1, *got.IncompleteCount)
+}
+
 func TestVertexProvider_OpenResultReturnsCombinedJSONLStream(t *testing.T) {
 	output := "gs://managed-bucket/batch-image/test/imgbatch_abc123/output/"
 	store := &fakeVertexObjectStore{

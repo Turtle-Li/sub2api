@@ -774,6 +774,7 @@ import {
   listBatchImageJobs,
   listBatchImageItems,
   listBatchImageModels,
+  listBatchImageResultFiles,
   saveBlob,
   submitBatchImageJob,
   type BatchImageItem,
@@ -783,6 +784,13 @@ import {
   type BatchImageStatus,
   type BatchImageSubmitItem,
 } from '@/api/batchImage'
+import {
+  buildBatchImageArchiveZip,
+  loadBatchImageArchivePreview,
+  scanBatchImageArchiveItems,
+  type BatchImageArchiveCapabilityProvider,
+  type BatchImageArchiveItem,
+} from '@/utils/batchImageArchive'
 import type { ApiKey } from '@/types'
 import type { Column } from '@/components/common/types'
 
@@ -1090,7 +1098,8 @@ API 调用规范：
 - 提交：POST ${joinEndpointPath(endpointBase.value, '/v1/images/batches')}
 - 查询：GET ${joinEndpointPath(endpointBase.value, '/v1/images/batches/{id}')}
 - 明细：GET ${joinEndpointPath(endpointBase.value, '/v1/images/batches/{id}/items')}
-- 下载：GET ${joinEndpointPath(endpointBase.value, '/v1/images/batches/{id}/download')}
+- 私有 COS 结果文件：GET ${joinEndpointPath(endpointBase.value, '/v1/images/batches/{id}/result-files')}
+- 旧任务兼容下载：GET ${joinEndpointPath(endpointBase.value, '/v1/images/batches/{id}/download')}
 - 取消：POST ${joinEndpointPath(endpointBase.value, '/v1/images/batches/{id}/cancel')}
 
 提交请求体：
@@ -1121,16 +1130,19 @@ API 调用规范：
 - 不要把参考图 base64 写入最终回复、日志或公开文件。恢复记录中只保存参考图文件名、用途、数量和请求 JSON 文件路径；若请求 JSON 文件包含 base64，应保存在用户指定输出目录且不要提交到仓库。
 - output_count 表示同一 prompt 和参考图重复生成几张，默认 1，每条最多 4；这不是依赖 Gemini 单次请求返回多图，而是系统展开成多个真实任务项。提交前必须确认预计输出图总数不超过 200，超过就拆分成多组任务。绝不能因为参考图附件有更高的内部保护阈值，就提交会生成超过 200 张图的任务。
 - 当前对用户的批量生图计费仍按成功输出图片数量结算，不单独对参考图加价。可以向用户说明：参考图会产生少量上游输入 token 和临时存储成本，且会随 output_count 重复计算；页面显示的冻结/结算金额按输出图片数量计算。
+- 新 Vertex 任务完成后，先调用 result-files 获取短时、只读、精确对象的私有 COS JSONL 下载地址。在本机直接下载 JSONL、逐行解析 response.candidates[].content.parts[].inlineData.data、Base64 解码图片，并在本机生成 ZIP；图片正文不得经过 Sub2 日本服务器。
+- 请求 COS 签名地址时绝不能携带 Sub2 的 Authorization 头，必须禁止输出 verbose/trace，不得把签名地址写进日志、恢复记录、提交记录或最终回复。签名过期时重新调用已认证的 result-files，不能修改签名参数。
+- result-files 明确返回 BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE 时，才使用旧的 /download 兼容接口；网络、CORS、签名或归档校验错误不得静默回退到日本服务器下载。
 - 提交成功后，必须立刻在输出目录写入本地恢复记录，例如 batch-image-resume.json。不要在恢复记录里保存 API Key。
-- 恢复记录至少包含：endpoint、task_name、batch_id、model、output_dir、request_file、submitted_at、last_status、status_url、items_url、download_url、prompt_count、expected_output_count，以及可用于失败重试的 custom_id 到 prompt 映射或请求 JSON 文件路径。
+- 恢复记录至少包含：endpoint、task_name、batch_id、model、output_dir、request_file、submitted_at、last_status、status_url、items_url、result_files_url、legacy_download_url、prompt_count、expected_output_count，以及可用于失败重试的 custom_id 到 prompt 映射或请求 JSON 文件路径；禁止保存实际 COS 签名 URL。
 - 每次查询状态后更新恢复记录，写入 last_checked_at、last_status、成功数、失败数、实际扣费和失败摘要。会话中断或暂停后，下次必须能凭该文件继续查询、下载或重试。
 - 不要高频轮询。首次查询等待约 20 到 30 秒；queued 状态每 60 到 120 秒查询一次；如果连续 3 次仍是 queued，就先停止主动查询，告诉用户任务仍在排队，并保留恢复记录，之后可继续其他任务或等待用户稍后让你恢复。
 - running 状态每约 60 秒查询一次，服务器压力大或大批量任务时可以更久；processing_results 等接近完成的状态可每 20 到 45 秒查询一次。
 - 任务完成后报告任务名、任务 id、成功数、失败数、实际扣费和保存路径。
-- 只下载成功图片。部分失败时，先展示失败 custom_id、错误码、错误来源和简要原因。
+- 本地解析完整 JSONL 后只保存成功图片；部分失败时，先展示失败 custom_id、错误码、错误来源和简要原因。
 - 重试只能重试失败项，不能重复提交已成功项。若历史任务没有保存失败项 prompt，必须告诉用户无法自动重试，并询问用户是否提供原 prompt。
 - 取消任务前必须提醒：已被系统索引为成功的图片仍会按成功项结算扣费，其余冻结金额会释放。
-- 图片预览按需加载；不要为了查看列表自动批量加载图片内容。`)
+- 图片预览按需加载；不要为了查看列表自动批量加载图片内容。点单张预览时可以流式扫描 JSONL，找到目标 custom_id 后立即停止读取。`)
 
 function joinEndpointPath(base: string, path: string): string {
   return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
@@ -1843,11 +1855,43 @@ async function retryFailedJob(job: BatchImageJobRow | BatchImageJob) {
 }
 
 async function ensureItemsForRetry(apiKey: string, batchId: string) {
-  if (selectedBatchId.value === batchId && items.value.length > 0) {
-    return items.value
+  const sourceItems = selectedBatchId.value === batchId && items.value.length > 0
+    ? items.value
+    : (await listBatchImageItems(apiKey, batchId)).data || []
+  if (!sourceItems.some(item => item.status === 'result_available')) {
+    return sourceItems
   }
-  const result = await listBatchImageItems(apiKey, batchId)
-  return result.data || []
+  const resolved = await scanBatchImageArchiveItems(resultArchiveCapabilities(apiKey, batchId))
+  const resolvedByID = new Map(resolved.map(item => [item.custom_id, item]))
+  const expectedIDs = new Set(sourceItems.map(item => item.custom_id))
+  if (resolved.some(item => !expectedIDs.has(item.custom_id))) {
+    const error = new Error('The private result archive does not match the task items.')
+    ;(error as any).code = 'BATCH_IMAGE_RESULT_MISSING'
+    throw error
+  }
+  const completed = sourceItems.map(item => resolvedByID.get(item.custom_id) || ({
+    custom_id: item.custom_id,
+    status: 'failed',
+    mime_type: null,
+    file_extension: null,
+    image_count: 0,
+    error: {
+      code: 'RESULT_MISSING',
+      message: 'provider result was not found for item',
+      source: 'provider',
+    },
+  } satisfies BatchImageArchiveItem))
+  const job = batchJobs.value.find(item => item.id === batchId)
+    || (currentJob.value?.id === batchId ? currentJob.value : null)
+  const successCount = completed.filter(item => item.status === 'success').length
+  if (job && (successCount !== job.success_count || completed.length - successCount !== job.fail_count)) {
+    const error = new Error('The private result archive does not match Vertex completion statistics.')
+    ;(error as any).code = 'BATCH_IMAGE_RESULT_MISSING'
+    throw error
+  }
+  const merged = sourceItems.map(item => mergeArchiveItem(item, completed.find(result => result.custom_id === item.custom_id)!))
+  applyResolvedArchiveItems(batchId, completed)
+  return merged
 }
 
 function retryCustomID(customID: string) {
@@ -1859,7 +1903,60 @@ function rootBatchIdForRetry(job: BatchImageJobRow | BatchImageJob) {
   return job.parent_batch_id || job.id
 }
 
-async function downloadJob(job: (BatchImageJobRow | Pick<BatchImageJob, 'id'>)) {
+function resultArchiveCapabilities(apiKey: string, batchId: string): BatchImageArchiveCapabilityProvider {
+  return async () => {
+    const result = await listBatchImageResultFiles(apiKey, batchId)
+    return result.data || []
+  }
+}
+
+function mergeArchiveItem<T extends BatchImageItem>(item: T, resolved: BatchImageArchiveItem): T {
+  return {
+    ...item,
+    status: resolved.status,
+    mime_type: resolved.mime_type,
+    file_extension: resolved.file_extension,
+    image_count: resolved.image_count,
+    error: resolved.error,
+  }
+}
+
+function applyResolvedArchiveItems(batchId: string, resolved: BatchImageArchiveItem[]) {
+  if (!resolved.length || !items.value.length) return
+  const byID = new Map(resolved.map(item => [item.custom_id, item]))
+  items.value = items.value.map((item) => {
+    if (item.batch_id !== batchId) return item
+    const archiveItem = byID.get(item.custom_id)
+    return archiveItem ? mergeArchiveItem(item, archiveItem) : item
+  })
+}
+
+async function downloadJobBlob(apiKey: string, job: BatchImageJobRow | BatchImageJob): Promise<Blob> {
+  try {
+    const expected = await listBatchImageItems(apiKey, job.id)
+    const expectedItems = expected.data || []
+    const archive = await buildBatchImageArchiveZip(
+      resultArchiveCapabilities(apiKey, job.id),
+      {
+        batchId: job.id,
+        model: job.model,
+        itemCount: job.item_count,
+        successCount: job.success_count,
+        failCount: job.fail_count,
+        expectedCustomIds: expectedItems.map(item => item.custom_id),
+      },
+    )
+    applyResolvedArchiveItems(job.id, archive.items)
+    return archive.blob
+  } catch (error: any) {
+    if (String(error?.code || '') !== 'BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE') {
+      throw error
+    }
+    return downloadBatchImageZip(apiKey, job.id)
+  }
+}
+
+async function downloadJob(job: BatchImageJobRow | BatchImageJob) {
   if (downloading.value) return
   closeMoreMenu()
   applyJobApiKey(job)
@@ -1868,7 +1965,7 @@ async function downloadJob(job: (BatchImageJobRow | Pick<BatchImageJob, 'id'>)) 
   downloading.value = true
   downloadingBatchId.value = job.id
   try {
-    const blob = await downloadBatchImageZip(key.key, job.id)
+    const blob = await downloadJobBlob(key.key, job)
     saveBlob(blob, `${job.id}.zip`)
     markJobDownloaded(job.id)
   } catch (error: any) {
@@ -1888,7 +1985,7 @@ async function downloadSelectedJobs() {
       if (!key) continue
       downloading.value = true
       downloadingBatchId.value = row.id
-      const blob = await downloadBatchImageZip(key.key, row.id)
+      const blob = await downloadJobBlob(key.key, row)
       saveBlob(blob, `${row.id}.zip`)
       markJobDownloaded(row.id)
     }
@@ -1957,7 +2054,8 @@ function removeJobFromList(batchId: string) {
 }
 
 function canLoadItemPreview(item: BatchImageItem) {
-  return (item.status === 'succeeded' || item.status === 'success') && item.image_count > 0
+  return item.status === 'result_available'
+    || ((item.status === 'succeeded' || item.status === 'success') && item.image_count > 0)
 }
 
 function isSuccessfulImageItem(item: Pick<BatchImageItem, 'status' | 'image_count'>) {
@@ -2247,7 +2345,21 @@ async function loadItemPreview(item: BatchImageItem) {
       itemPreviewUrls[previewKey] = URL.createObjectURL(cached)
       return
     }
-    const blob = await getBatchImageItemContent(key.key, batchId, item.custom_id, 0)
+    let blob: Blob
+    if (item.status === 'result_available') {
+      const resolved = await loadBatchImageArchivePreview(
+        resultArchiveCapabilities(key.key, batchId),
+        item.custom_id,
+      )
+      applyResolvedArchiveItems(batchId, [resolved])
+      if (!resolved.image) {
+        appStore.showError(friendlyItemError(resolved.error))
+        return
+      }
+      blob = resolved.image
+    } else {
+      blob = await getBatchImageItemContent(key.key, batchId, item.custom_id, 0)
+    }
     const thumbnail = await createThumbnailBlob(blob).catch(() => blob)
     itemPreviewUrls[previewKey] = URL.createObjectURL(thumbnail)
     if (thumbnail !== blob || thumbnail.size <= 1024 * 1024) {
@@ -2334,6 +2446,7 @@ function statusBadgeClass(jobOrStatus: BatchImageStatus | Pick<BatchImageJob, 's
 function itemStatusLabel(status: string) {
   const statusKeys: Record<string, string> = {
     pending: 'pending',
+    result_available: 'resultAvailable',
     succeeded: 'succeeded',
     success: 'succeeded',
     failed: 'failed',
@@ -2351,6 +2464,7 @@ function itemDisplayStatusLabel(item: BatchImageDetailItem) {
 function itemStatusBadgeClass(status: string) {
   if (status === 'succeeded' || status === 'success') return 'badge-success'
   if (status === 'failed' || status === 'cancelled') return 'badge-danger'
+  if (status === 'result_available') return 'badge-warning'
   return 'badge-primary'
 }
 
@@ -2365,6 +2479,7 @@ function itemResultLabel(item: BatchImageDetailItem) {
   if (item.status === 'succeeded' || item.status === 'success') {
     return itemPreviewUrls[itemPreviewKey(item)] ? t('batchImage.itemResult.readyPreview') : t('batchImage.itemResult.readyDownload')
   }
+  if (item.status === 'result_available') return t('batchImage.itemResult.resultAvailable')
   if (item.status === 'failed') return t('batchImage.itemResult.noUsableImage')
   if (item.status === 'cancelled') return t('batchImage.itemResult.cancelled')
   return t('batchImage.itemResult.waiting')
@@ -2374,6 +2489,7 @@ function itemResultClass(item: BatchImageDetailItem) {
   if (isRecoveredOriginalFailure(item)) return 'bg-gray-100 text-gray-500 ring-gray-200 dark:bg-dark-800 dark:text-gray-400 dark:ring-dark-700'
   if (item.error || item.status === 'failed' || item.status === 'cancelled') return 'bg-red-50 text-red-700 ring-red-100 dark:bg-red-950/30 dark:text-red-300 dark:ring-red-900/50'
   if (item.status === 'succeeded' || item.status === 'success') return 'bg-emerald-50 text-emerald-700 ring-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:ring-emerald-900/50'
+  if (item.status === 'result_available') return 'bg-amber-50 text-amber-700 ring-amber-100 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-900/50'
   return 'bg-gray-50 text-gray-500 ring-gray-200 dark:bg-dark-800 dark:text-gray-400 dark:ring-dark-700'
 }
 
@@ -2449,6 +2565,7 @@ type BatchImageTextKey =
   | 'notReady'
   | 'outputDeleted'
   | 'resultMissing'
+  | 'archiveClientFailed'
   | 'itemFailed'
   | 'itemImageIndexOutOfRange'
   | 'downloadLimited'
@@ -2560,6 +2677,9 @@ function batchImageErrorMessage(error: any, fallback: string) {
   }
   if (code === 'BATCH_IMAGE_RESULT_MISSING') {
     return batchImageAdminError(batchImageText('resultMissing'), error)
+  }
+  if (code.startsWith('ARCHIVE_')) {
+    return batchImageAdminError(batchImageText('archiveClientFailed'), error)
   }
   if (code === 'BATCH_IMAGE_ITEM_FAILED') {
     return batchImagePlainError(batchImageText('itemFailed'))

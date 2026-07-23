@@ -247,35 +247,15 @@ func (s *BatchImageCleanupService) cleanupCOSDelivery(ctx context.Context, job *
 	if s.DeliveryStore == nil {
 		return ErrBatchImageDeliveryNotConfigured
 	}
-	const pageSize = 500
-	maxImages := s.Config.BatchImage.MaxOutputImagesPerItem
-	if maxImages <= 0 || maxImages > 16 {
-		maxImages = 4
-	}
-	var keys []string
-	for offset := 0; ; offset += pageSize {
-		items, err := s.Repo.ListBatchImageItems(ctx, job.BatchID, BatchImageItemFilter{
-			Limit:  pageSize,
-			Offset: offset,
-		})
+	// Archive shard keys are deterministic. Deleting the full bounded range is
+	// idempotent and avoids granting the COS credential ListBucket permission.
+	keys := make([]string, 0, batchImageDeliveryMaxSourceFiles)
+	for fileIndex := 0; fileIndex < batchImageDeliveryMaxSourceFiles; fileIndex++ {
+		key, err := BatchImageDeliveryArchiveObjectKey(s.Config, job.BatchID, fileIndex)
 		if err != nil {
 			return err
 		}
-		for _, item := range items {
-			if item == nil {
-				continue
-			}
-			for imageIndex := 0; imageIndex < maxImages; imageIndex++ {
-				key, err := BatchImageDeliveryObjectKey(s.Config, job.BatchID, item.CustomID, imageIndex)
-				if err != nil {
-					return err
-				}
-				keys = append(keys, key)
-			}
-		}
-		if len(items) < pageSize {
-			break
-		}
+		keys = append(keys, key)
 	}
 	if err := s.DeliveryStore.Delete(ctx, keys); err != nil {
 		return ErrBatchImageCleanupFailed.WithCause(err)

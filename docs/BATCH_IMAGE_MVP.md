@@ -7,7 +7,10 @@ Supported providers:
 - `gemini_api`
 - `vertex`
 
-API users do not see Gemini file names, Vertex job names, GCS paths, API keys, service-account material, or permanent COS credentials. When private-COS delivery is enabled, the authenticated item endpoint returns a short-lived exact-object redirect; the signature is a temporary bearer capability and is never included in list/status JSON.
+API users do not see Gemini file names, Vertex job names, GCS paths, API keys, service-account
+material, or permanent COS credentials. Private-COS delivery exposes short-lived exact-object
+read capabilities only through the authenticated `result-files` endpoint. Those URLs are
+temporary bearer capabilities and are never included in task list/status/item responses.
 
 ## API Routes
 
@@ -16,6 +19,7 @@ POST   /v1/images/batches
 GET    /v1/images/batches/{id}
 GET    /v1/images/batches/{id}/items
 GET    /v1/images/batches/{id}/items/{custom_id}/content
+GET    /v1/images/batches/{id}/result-files
 GET    /v1/images/batches/{id}/download
 POST   /v1/images/batches/{id}/cancel
 DELETE /v1/images/batches/{id}/outputs
@@ -64,7 +68,9 @@ Submit request:
 
 - Per prompt item: up to 4 output images.
 - Per batch job: up to 200 expected output images after expansion. This is the hard generated-output cap for a single job; clients and Codex skills must split larger workloads before submission.
-- Legacy provider-streamed jobs can use ZIP subject to the item and byte caps. COS-delivered jobs intentionally disable server-side ZIP so a bulk archive cannot pull all image bytes back through the Sub2API host; clients download successful items individually and may assemble a ZIP locally.
+- Legacy provider-streamed jobs can use server ZIP subject to the item and byte caps. New
+  COS-delivered jobs return raw JSONL result-file capabilities; browsers and Codex decode images
+  and assemble ZIP files locally, so bulk media never traverses the Sub2API host.
 
 Public batch response:
 
@@ -105,6 +111,11 @@ Public items response:
 }
 ```
 
+For a COS-archived Vertex job, persisted items initially use `result_available`. Their exact
+per-item success/error metadata lives inside the private JSONL and is overlaid by the browser or
+Codex after local parsing. Aggregate job counts and settlement remain authoritative from Vertex
+`completionStats`; the Sub2 host does not download JSONL merely to populate the item table.
+
 ## Lifecycle
 
 Internal lifecycle:
@@ -141,13 +152,16 @@ For Vertex jobs with private-COS delivery enabled, `indexing` includes a durable
 ```text
 list small GCS object metadata
   -> exact GCS signed GET + exact COS signed PUT capabilities
-  -> Cloudflare Workflow streams JSONL/images directly
-  -> Sub2 validates the returned manifest and COS HEAD metadata
+  -> Cloudflare Workflow streams each raw JSONL shard unchanged
+  -> Sub2 validates shard metadata with exact-object COS HEAD
+  -> Sub2 reconciles aggregate counts with Vertex completionStats
   -> settling
 ```
 
-Sub2 never sends a Google OAuth token or COS permanent credential to the Worker. Image bytes and
-Base64 do not traverse the Sub2 host.
+The Worker does not parse JSONL or decode Base64. One Workflow step uses one GCS GET and one COS
+PUT for a result shard; Workflow instances provide durable queueing and retries. Sub2 never sends
+a Google OAuth token or COS permanent credential to the Worker. Image bytes and Base64 do not
+traverse the Sub2 host.
 
 ## Redis
 
@@ -204,7 +218,7 @@ After output cleanup, downloads return `410 Gone` with `BATCH_IMAGE_OUTPUT_DELET
 
 Cleanup never accepts user-supplied provider paths. Provider cleanup must use server-generated refs and prefix-safe deletion.
 
-For COS-delivered Vertex jobs, output cleanup removes every deterministic COS item key before
+For COS-delivered Vertex jobs, output cleanup removes every bounded deterministic COS raw-shard key before
 deleting the managed GCS output. A cleanup failure keeps the output state retryable and does not
 falsely mark it deleted.
 
@@ -228,9 +242,9 @@ For the managed Vertex/GCS batch bucket, disable Cloud Storage soft delete or co
 - Vertex job name and GCS paths are internal.
 - Batch image output should be treated as `1K`/default only in MVP.
 - Do not promise `2K` or `4K`.
-- Optional delivery mode moves completed JSONL images through a dedicated Cloudflare Workflow
-  into private Tencent COS before settlement. Only source listing and COS `HEAD`/signing control
-  traffic touches Sub2.
+- Optional delivery mode streams completed JSONL shards unchanged through a dedicated Cloudflare
+  Workflow into private Tencent COS before settlement. Only source listing, Vertex status, and
+  exact-object COS `HEAD`/signing control traffic touches Sub2.
 
 Other Gemini account/login types are not selected by the current batch image providers unless they expose equivalent API-key or service-account credentials through the same provider flow. They were not covered by the 2026-07-07 PR validation.
 
@@ -323,7 +337,7 @@ batch_image:
   delivery_shared_secret: "<at least 32 random characters>"
   delivery_source_url_ttl_seconds: 3600
   delivery_upload_url_ttl_seconds: 3600
-  delivery_download_ttl_seconds: 300
+  delivery_download_ttl_seconds: 900
   delivery_poll_seconds: 10
   delivery_cos_endpoint: "https://cos.ap-shanghai.myqcloud.com"
   delivery_cos_region: "ap-shanghai"
@@ -340,6 +354,28 @@ The CAM identity should be restricted to this bucket and prefix. Keep the bucket
 Worker stores only `delivery_shared_secret`; it receives expiring exact-object URLs rather than
 the Google service-account key or COS CAM key.
 
+Production uses this object-only CAM scope; it deliberately omits `ListBucket`, bucket ACL,
+bucket policy, and public-read permissions:
+
+```json
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": [
+        "name/cos:PutObject",
+        "name/cos:GetObject",
+        "name/cos:DeleteObject"
+      ],
+      "resource": [
+        "qcs::cos:ap-shanghai:uid/1309919944:image-1309919944/sub2-batch-image/prod/*"
+      ]
+    }
+  ]
+}
+```
+
 ## Operations Checklist
 
 - Enable `batch_image.enabled`.
@@ -352,6 +388,8 @@ the Google service-account key or COS CAM key.
 - If delivery is enabled, deploy the dedicated Worker/Workflow, configure the same HMAC secret
   at both ends, keep COS private, and grant the CAM key only the required object operations under
   `delivery_cos_prefix`.
+- Configure COS CORS for the exact production frontend origins, `GET`/`HEAD`, and only required
+  response headers. Do not use browser credentials; the signed query is the temporary authority.
 - Configure cleanup worker settings.
 - Configure max items per job.
 - Configure download concurrency.
@@ -362,8 +400,9 @@ the Google service-account key or COS CAM key.
 
 - No provider refs in public responses.
 - No GCS URI exposure.
-- No signed URL in JSON, logs, events, or recovery files. A successful authenticated content
-  request necessarily receives one short-lived COS signature in its `Location` header.
+- No signed URL in list/status/item JSON, logs, events, recovery files, referrers, or error text.
+  The authenticated `result-files` response necessarily contains short-lived COS signatures and
+  must use `private, no-store` plus `Referrer-Policy: no-referrer`.
 - No service account exposure.
 - No API key exposure.
 - No permanent COS credential exposure.
@@ -371,6 +410,9 @@ the Google service-account key or COS CAM key.
 - No base64 in logs.
 - Owner-scoped status, item, download, cancel, and delete routes.
 - Cross-host clients must not forward the Sub2 `Authorization` header to COS.
+- Clients must fall back to server ZIP only for the explicit
+  `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE` legacy response, never after COS network/CORS/signature
+  or archive-integrity errors.
 - Output deletion is owner-scoped.
 - Cleanup paths are server-generated only.
 

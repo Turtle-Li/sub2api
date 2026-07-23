@@ -679,6 +679,8 @@ func (s *BatchImagePublicService) ListItems(ctx context.Context, owner BatchImag
 		filter.Status = BatchImageItemStatusSuccess
 	case "pending":
 		filter.Status = BatchImageItemStatusPending
+	case "result_available":
+		filter.Status = BatchImageItemStatusResultAvailable
 	case "failed":
 		filter.Status = BatchImageItemStatusFailed
 	default:
@@ -1196,6 +1198,10 @@ func BatchImageItemToPublic(item *BatchImageItem) BatchImagePublicItem {
 	}
 	if item.Status == BatchImageItemStatusSuccess {
 		out.Status = "succeeded"
+		return out
+	}
+	if item.Status == BatchImageItemStatusResultAvailable {
+		out.Status = BatchImageItemStatusResultAvailable
 		return out
 	}
 	out.Error = &BatchImagePublicError{

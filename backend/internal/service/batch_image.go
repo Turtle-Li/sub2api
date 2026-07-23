@@ -33,6 +33,9 @@ const (
 	BatchImageItemStatusSuccess   = "success"
 	BatchImageItemStatusFailed    = "failed"
 	BatchImageItemStatusCancelled = "cancelled"
+	// ResultAvailable means the private result archive is ready. Item-level
+	// image/error details are intentionally decoded by the task owner's client.
+	BatchImageItemStatusResultAvailable = "result_available"
 )
 
 var (
@@ -94,6 +97,8 @@ var (
 	ErrBatchImageZipCOSUnavailable        = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_ZIP_COS_UNAVAILABLE", "ZIP download is unavailable for COS-delivered jobs; download items individually")
 	ErrBatchImageDeliveryFailed           = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_DELIVERY_FAILED", "batch image result delivery failed")
 	ErrBatchImageDeliveryNotConfigured    = infraerrors.New(http.StatusInternalServerError, "BATCH_IMAGE_DELIVERY_NOT_CONFIGURED", "batch image result delivery is not configured")
+	ErrBatchImageArchiveClientRequired    = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_ARCHIVE_CLIENT_REQUIRED", "this result archive must be decoded by the client")
+	ErrBatchImageResultArchiveUnavailable = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE", "client-side result archive is unavailable for this job")
 	ErrBatchImageOutputDeleteNotReady     = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_OUTPUT_DELETE_NOT_READY", "batch image output can only be deleted after completion")
 	ErrBatchImageRecordDeleteNotReady     = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_RECORD_DELETE_NOT_READY", "batch image record can only be deleted after the job finishes")
 	ErrBatchImageCleanupFailed            = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_CLEANUP_FAILED", "batch image cleanup failed")

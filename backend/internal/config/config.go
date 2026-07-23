@@ -228,8 +228,9 @@ type BatchImageConfig struct {
 	VertexOutputRetentionHours   int    `mapstructure:"vertex_output_retention_hours"`
 	VertexBatchPredictionBaseURL string `mapstructure:"vertex_batch_prediction_base_url"`
 	VertexGCSBaseURL             string `mapstructure:"vertex_gcs_base_url"`
-	// DeliveryEnabled moves completed Vertex JSONL results through the dedicated
-	// Cloudflare Workflow into private COS before a job is settled.
+	// DeliveryEnabled streams completed Vertex JSONL result files unchanged
+	// through a dedicated Cloudflare Workflow into private COS. Browsers and
+	// trusted clients decode the archive locally; Sub2 never proxies image bytes.
 	DeliveryEnabled             bool   `mapstructure:"delivery_enabled"`
 	DeliveryWorkerURL           string `mapstructure:"delivery_worker_url"`
 	DeliverySharedSecret        string `mapstructure:"delivery_shared_secret"`
@@ -2126,7 +2127,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.delivery_shared_secret", "")
 	viper.SetDefault("batch_image.delivery_source_url_ttl_seconds", 3600)
 	viper.SetDefault("batch_image.delivery_upload_url_ttl_seconds", 3600)
-	viper.SetDefault("batch_image.delivery_download_ttl_seconds", 300)
+	viper.SetDefault("batch_image.delivery_download_ttl_seconds", 900)
 	viper.SetDefault("batch_image.delivery_poll_seconds", 10)
 	viper.SetDefault("batch_image.delivery_cos_endpoint", "")
 	viper.SetDefault("batch_image.delivery_cos_region", "ap-shanghai")

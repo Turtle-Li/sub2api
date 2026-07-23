@@ -99,6 +99,21 @@ export interface BatchImageModelsResponse {
   data: BatchImageModel[]
 }
 
+export interface BatchImageResultFile {
+  index: number
+  name: string
+  size: number
+  content_type: string
+  url: string
+}
+
+export interface BatchImageResultFilesResponse {
+  object: string
+  batch_id: string
+  expires_at: number
+  data: BatchImageResultFile[]
+}
+
 export interface BatchImageJobsListOptions {
   limit?: number
   cursor?: string
@@ -192,8 +207,9 @@ export async function listBatchImageItems(
   batchId: string,
   status = '',
 ): Promise<BatchImageItemsResponse> {
-  const query = status ? `?status=${encodeURIComponent(status)}` : ''
-  const response = await fetch(buildGatewayUrl(`/v1/images/batches/${encodeURIComponent(batchId)}/items${query}`), {
+  const params = new URLSearchParams({ limit: '500' })
+  if (status) params.set('status', status)
+  const response = await fetch(buildGatewayUrl(`/v1/images/batches/${encodeURIComponent(batchId)}/items?${params.toString()}`), {
     headers: authHeaders(apiKey),
   })
   if (!response.ok) throw await parseBatchImageError(response)
@@ -223,6 +239,19 @@ export async function getBatchImageItemContent(apiKey: string, batchId: string, 
   })
   if (!response.ok) throw await parseBatchImageError(response)
   return response.blob()
+}
+
+export async function listBatchImageResultFiles(
+  apiKey: string,
+  batchId: string,
+): Promise<BatchImageResultFilesResponse> {
+  const response = await fetch(buildGatewayUrl(`/v1/images/batches/${encodeURIComponent(batchId)}/result-files`), {
+    headers: authHeaders(apiKey),
+    cache: 'no-store',
+    referrerPolicy: 'no-referrer',
+  })
+  if (!response.ok) throw await parseBatchImageError(response)
+  return response.json()
 }
 
 export async function deleteBatchImageJobRecord(apiKey: string, batchId: string): Promise<void> {

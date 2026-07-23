@@ -1,66 +1,50 @@
 ---
 name: sub2api-batch-image
-description: Use when the user wants Codex to submit, monitor, download, retry, or cancel Gemini/Vertex batch image generation jobs through Sub2API, including prompt lists, per-item reference images, output_count repeated generations, private-COS item downloads, and recovery records.
+description: Submit, monitor, download, preview, retry, or cancel Gemini/Vertex batch image jobs through Sub2API. Use for prompt batches, per-item reference images, output_count repeats, private Tencent COS JSONL results, local image decoding/ZIP creation, and resumable recovery records.
 ---
 
 # Sub2API Batch Image
 
-Use this skill to act as the batch-image execution agent. The user should not need to fill
-the web form manually. Infer the task name, prompt list, reference-image mapping, model, API
-key, and output directory from the conversation or files; ask only when a required decision
-is missing.
+Act as the execution agent. Infer the task name, prompts, reference mapping, model, API key,
+and output directory from the conversation or files. Ask only when a required decision is
+missing; do not make the user fill the web form.
 
-## Required Inputs
+Never expose API keys, reference-image Base64, Google/COS credentials, or signed URLs in chat,
+logs, shell traces, git, recovery records, or public files.
 
-- `SUB2API_BASE_URL` or an explicit endpoint from the user.
-- A user API key that belongs to a group with batch image generation enabled.
-- Prompt list and output directory.
-- Optional: preferred model, task name, reference images, and output count per prompt.
+## Submit
 
-Never write API keys, reference-image Base64, cloud credentials, COS signed URLs, or Google
-signed URLs into chat, logs, git commits, recovery records, or public files.
-
-## Hard Capacity Rules
-
-- Before submitting, calculate `expected_output_count = sum(item.output_count || 1)`.
-- One batch job must generate at most `200` output images. Split larger work before submission.
-- Reference images are inputs, not output images. Do not treat their job-level attachment
-  guardrail as an output limit or planning target.
-
-## API Workflow
-
-Use the public batch-image API:
+Use these authenticated endpoints:
 
 ```text
 GET    {base}/v1/images/batches/models
 POST   {base}/v1/images/batches
 GET    {base}/v1/images/batches/{id}
-GET    {base}/v1/images/batches/{id}/items
-GET    {base}/v1/images/batches/{id}/items/{custom_id}/content?image_index=0
+GET    {base}/v1/images/batches/{id}/items?limit=500
+GET    {base}/v1/images/batches/{id}/result-files
+GET    {base}/v1/images/batches/{id}/download          # legacy only
 POST   {base}/v1/images/batches/{id}/cancel
 ```
 
-Use `Authorization: Bearer <user api key>` and an `Idempotency-Key` for submission.
-
-## Submit Request
+Send `Authorization: Bearer <user API key>`. Add `Idempotency-Key` when submitting.
 
 ```json
 {
   "model": "gemini-2.5-flash-image",
-  "task_name": "optional human-readable name",
+  "task_name": "descriptive name",
   "image_size": "1K",
   "response_mime_type": "image/png",
   "items": [
     {
       "custom_id": "img_001",
-      "prompt": "full prompt text",
+      "prompt": "full prompt",
       "output_count": 1,
       "reference_images": [
         {
           "id": "subject",
           "type": "reference",
           "mime_type": "image/png",
-          "data": "<base64 without data:image/... prefix>"
+          "data": "<base64 without a data URL prefix>"
         }
       ]
     }
@@ -68,77 +52,74 @@ Use `Authorization: Bearer <user api key>` and an `Idempotency-Key` for submissi
 }
 ```
 
-`output_count` defaults to `1`. It repeats the same prompt and reference set as real provider
-items; do not rely on one upstream request returning multiple images.
+Apply these limits before submission:
 
-Limits:
+- Calculate `expected_output_count = sum(output_count || 1)`; split above `200`.
+- Keep `output_count` between `1` and `4`.
+- Allow at most `3` references per Flash Image item or `14` per Pro Image item.
+- Keep expanded references at or below `1000`, decoded inline references at or below `128MB`,
+  and each inline reference at or below `10MB`.
+- Accept PNG, JPEG, or WebP inline references. Use only managed internal `gs://` file URIs.
+- Treat references as inputs, not output-count capacity. Large repeated references consume
+  provider input tokens; prefer managed `gs://` references or split the job.
 
-- `output_count`: `1` to `4` per prompt.
-- Expected output images per job: at most `200` after `sum(output_count)`.
-- Flash Image models: at most `3` reference images per prompt item.
-- Pro Image models: at most `14` reference images per prompt item.
-- Reference attachments per job: at most `1000` after output-count expansion.
-- Inline references per job: at most `128MB` decoded after expansion.
-- Each inline reference: at most `10MB`.
-- Reference MIME types: `image/png`, `image/jpeg`, `image/webp`.
-- `file_uri` references must be internal Google Cloud Storage `gs://...` URIs.
+## Download Private COS Results
 
-For repeated or large reference images, prefer managed `gs://` references or split the job.
+New Vertex jobs finish as one or more raw JSONL objects in private COS. Sub2 returns short-lived
+exact-object read capabilities only after API-key ownership checks. The JSONL contains image
+Base64; Sub2 and the Japan server must not proxy those media bytes.
 
-## Private COS Download Rules
-
-New Vertex jobs are copied from Google to private Tencent COS by a Cloudflare Workflow before
-Sub2 marks them complete. Image bodies do not pass through the Sub2/Japan server.
-
-- List items first and download only `succeeded` items.
-- Call the stable authenticated Sub2 item-content endpoint for every image index.
-- The endpoint returns HTTP `302` to an exact-object COS GET signature valid for only a few
-  minutes. Follow it in memory (`curl -L`, an HTTP client with redirects enabled, or equivalent).
-- Do not print, persist, cache, or include the redirect `Location` in error messages. Anyone who
-  obtains that URL can read that one object until it expires.
-- If a signature expires, call the authenticated Sub2 endpoint again; never try to refresh or
-  modify COS query parameters.
-- Never request or store COS `SecretId`/`SecretKey`. Codex is authorized through the user's Sub2
-  API key and ownership checks, not by direct bucket credentials.
-- Server-side ZIP is intentionally unavailable for COS-delivered jobs because it would pull all
-  media back through Japan. Download individual items and assemble a ZIP locally only if needed.
-- Legacy pre-COS jobs may still use the old server-streamed download path.
-
-Example that avoids exposing the redirect:
+Use the bundled downloader from this skill directory:
 
 ```bash
-curl --fail --silent --show-error --location \
-  -H "Authorization: Bearer ${SUB2API_API_KEY}" \
-  "${SUB2API_BASE_URL}/v1/images/batches/${BATCH_ID}/items/${CUSTOM_ID}/content?image_index=0" \
-  --output "${OUTPUT_FILE}"
+python3 scripts/download_result_archive.py \
+  --base-url "${SUB2API_BASE_URL}" \
+  --batch-id "${BATCH_ID}" \
+  --output-dir "/absolute/output/parent"
 ```
 
-Do not add verbose or trace flags to this command because they reveal signed URLs and auth
-headers.
+Set `SUB2API_API_KEY` in the existing process environment or approved secret store. Never put
+its literal value in the command. The script:
 
-## Cost And Recovery
+- calls `result-files` without printing its response;
+- downloads COS with no Sub2 `Authorization` header and rejects redirects;
+- refreshes expired 401/403 capabilities through Sub2;
+- streams JSONL, decodes and validates raster images locally;
+- reconciles item IDs and success/failure counts with Vertex completion statistics;
+- writes `images/`, `manifest.json`, `errors.json`, and a local ZIP under
+  `<output-parent>/<batch-id>/`;
+- falls back to `/download` only when Sub2 explicitly returns
+  `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE`, which identifies a legacy job.
 
-- Billing is based on successful output image count and configured batch unit price.
-- Reference inputs still consume provider input tokens and temporary storage, repeated by
-  `output_count`; warn before large reference-heavy submissions.
-- Immediately after submit, write `batch-image-resume.json` in the output directory without an
-  API key or signed URL.
-- Record `endpoint`, task name, batch ID, model, output directory, request file, submission time,
-  last status, status URL, items URL, prompt count, expected output count, and custom-id mapping.
-- If the request file contains reference Base64, keep it only in the user-selected output
-  directory and never commit it.
-- Update the record after status checks with time, status, counts, actual cost, and failures.
+Do not replace this with verbose `curl`, shell tracing, or code that prints the `result-files`
+JSON. A signed URL grants read access to the whole task shard until expiry. On COS/CORS/network,
+signature, or archive-integrity errors, fail closed; never silently route a new job through the
+Japan server. Never request COS `SecretId` or `SecretKey`.
 
-## Polling And Completion
+For a web preview, load only on explicit request. Stream the JSONL until the requested
+`custom_id`, stop reading, and cache only a compressed local thumbnail. Do not fetch image bytes
+merely to render the task list.
 
-- First status check: `20-30s`.
-- `queued`: every `60-120s`; after three unchanged checks, stop active polling and report it.
-- `running`: about every `60s`.
-- `processing_results` / `settling`: every `20-45s`.
-- On completion, report task name, batch ID, success/failure counts, actual cost, and save path.
-- For partial failures, list failed `custom_id`, code, source, and a short reason.
-- Retry only failed items; never resubmit already successful custom IDs.
-- Before cancellation, warn that already indexed successes remain billable and the remaining
-  hold is released.
-- Do not fetch image bytes just to inspect a list; download only for saving or explicit preview.
+## Recovery And Polling
 
+Immediately after submission, write `batch-image-resume.json` in the chosen output parent.
+Exclude API keys and signed URLs. Record the endpoint, task name, batch ID, model, request file,
+output directory, submission time, status/items/result-files/legacy-download endpoint paths,
+prompt count, expected output count, and custom-ID-to-prompt mapping. If a request file contains
+reference Base64, keep it only in the output directory and never commit it.
+
+Poll without pressure:
+
+- first check after `20-30s`;
+- `queued`: every `60-120s`; stop active polling after three unchanged checks;
+- `running`: about every `60s`;
+- `processing_results` or `settling`: every `20-45s`.
+
+Update the recovery record after each check with time, state, aggregate counts, actual cost, and
+failure summary. On completion, download locally and report the task name, ID, counts, cost, and
+save path. Parse the JSONL before listing per-item failures or retrying. Retry failed and missing
+items only; never resubmit successful IDs.
+
+Before cancellation, warn that already indexed successes remain billable and the remaining hold
+is released. Billing uses successful output count; reference inputs can still add upstream input
+token and temporary-storage cost.

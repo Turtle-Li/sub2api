@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,11 +103,18 @@ type VertexBatchInstanceConfig struct {
 }
 
 type VertexBatchPredictionJob struct {
-	Name         string                  `json:"name"`
-	DisplayName  string                  `json:"displayName"`
-	State        string                  `json:"state"`
-	OutputConfig VertexBatchOutputConfig `json:"outputConfig"`
-	Error        *VertexBatchJobError    `json:"error"`
+	Name            string                  `json:"name"`
+	DisplayName     string                  `json:"displayName"`
+	State           string                  `json:"state"`
+	OutputConfig    VertexBatchOutputConfig `json:"outputConfig"`
+	CompletionStats *VertexCompletionStats  `json:"completionStats"`
+	Error           *VertexBatchJobError    `json:"error"`
+}
+
+type VertexCompletionStats struct {
+	SuccessfulCount string `json:"successfulCount"`
+	FailedCount     string `json:"failedCount"`
+	IncompleteCount string `json:"incompleteCount"`
 }
 
 type VertexBatchJobError struct {
@@ -621,7 +629,21 @@ func mapVertexBatchState(job *VertexBatchPredictionJob) *BatchProviderStatus {
 		}
 		status.ErrorMessage = strings.TrimSpace(job.Error.Message)
 	}
+	if job.CompletionStats != nil {
+		status.SuccessfulCount = parseVertexCompletionCount(job.CompletionStats.SuccessfulCount)
+		status.FailedCount = parseVertexCompletionCount(job.CompletionStats.FailedCount)
+		status.IncompleteCount = parseVertexCompletionCount(job.CompletionStats.IncompleteCount)
+	}
 	return status
+}
+
+func parseVertexCompletionCount(value string) *int {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
+	if err != nil || parsed < 0 {
+		return nil
+	}
+	resolved := int(parsed)
+	return &resolved
 }
 
 func vertexProviderError(reason, message string, cause error) error {

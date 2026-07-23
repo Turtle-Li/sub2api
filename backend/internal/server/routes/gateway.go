@@ -208,6 +208,7 @@ func RegisterGatewayRoutes(
 		gateway.GET("/images/batches/:id", h.BatchImage.Get)
 		gateway.GET("/images/batches/:id/items", h.BatchImage.Items)
 		gateway.GET("/images/batches/:id/items/:custom_id/content", h.BatchImage.ItemContent)
+		gateway.GET("/images/batches/:id/result-files", h.BatchImage.ResultFiles)
 		gateway.GET("/images/batches/:id/download", h.BatchImage.Download)
 		gateway.POST("/images/batches/:id/cancel", h.BatchImage.Cancel)
 		gateway.DELETE("/images/batches/:id", h.BatchImage.DeleteRecord)

@@ -24,12 +24,14 @@ import (
 )
 
 const (
-	batchImageCOSDeliveryMarker   = "cos:v1"
-	batchImagePumpControlMaxBytes = 1280 * 1024
-	batchImagePumpRequestMaxBytes = 900 * 1024
-	batchImagePumpTimestampHeader = "X-Turtle-Pump-Timestamp"
-	batchImagePumpNonceHeader     = "X-Turtle-Pump-Nonce"
-	batchImagePumpSignatureHeader = "X-Turtle-Pump-Signature"
+	batchImageCOSArchiveMarkerPrefix = "cos-jsonl:v1:"
+	batchImageCOSArchiveContentType  = "application/x-ndjson"
+	batchImageDeliveryMaxSourceFiles = 20
+	batchImagePumpControlMaxBytes    = 256 * 1024
+	batchImagePumpRequestMaxBytes    = 256 * 1024
+	batchImagePumpTimestampHeader    = "X-Turtle-Pump-Timestamp"
+	batchImagePumpNonceHeader        = "X-Turtle-Pump-Nonce"
+	batchImagePumpSignatureHeader    = "X-Turtle-Pump-Signature"
 )
 
 type BatchImageResultDelivery interface {
@@ -44,64 +46,37 @@ type BatchImageDeliveryService struct {
 	HTTPClient *http.Client
 }
 
-type batchImagePumpSource struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
-}
-
-type batchImagePumpUpload struct {
+type batchImagePumpFile struct {
 	Index     int    `json:"index"`
+	SourceID  string `json:"source_id"`
+	SourceURL string `json:"source_url"`
 	ObjectKey string `json:"object_key"`
-	URL       string `json:"url"`
-}
-
-type batchImagePumpRequestItem struct {
-	CustomID string                 `json:"custom_id"`
-	Uploads  []batchImagePumpUpload `json:"uploads"`
+	UploadURL string `json:"upload_url"`
 }
 
 type batchImagePumpRequest struct {
-	Version int                         `json:"version"`
-	RunID   string                      `json:"run_id"`
-	JobID   string                      `json:"job_id"`
-	Sources []batchImagePumpSource      `json:"sources"`
-	Items   []batchImagePumpRequestItem `json:"items"`
+	Version int                  `json:"version"`
+	RunID   string               `json:"run_id"`
+	JobID   string               `json:"job_id"`
+	Files   []batchImagePumpFile `json:"files"`
 }
 
-type batchImagePumpImage struct {
-	Index     int    `json:"index"`
-	ObjectKey string `json:"object_key"`
-	Size      int64  `json:"size"`
-	SHA256    string `json:"sha256"`
-	MimeType  string `json:"mime_type"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
-	ETag      string `json:"etag"`
-}
-
-type batchImagePumpError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-type batchImagePumpResultItem struct {
-	CustomID string                `json:"custom_id"`
-	Status   string                `json:"status"`
-	Error    *batchImagePumpError  `json:"error"`
-	Images   []batchImagePumpImage `json:"images"`
+type batchImagePumpArchivedFile struct {
+	Index       int    `json:"index"`
+	SourceID    string `json:"source_id"`
+	ObjectKey   string `json:"object_key"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"`
+	ETag        string `json:"etag"`
 }
 
 type batchImagePumpOutput struct {
-	Version      int                        `json:"version"`
-	RunID        string                     `json:"run_id"`
-	JobID        string                     `json:"job_id"`
-	Status       string                     `json:"status"`
-	SuccessCount int                        `json:"success_count"`
-	FailCount    int                        `json:"fail_count"`
-	UnknownCount int                        `json:"unknown_count"`
-	SourceBytes  int64                      `json:"source_bytes"`
-	ImageBytes   int64                      `json:"image_bytes"`
-	Items        []batchImagePumpResultItem `json:"items"`
+	Version     int                          `json:"version"`
+	RunID       string                       `json:"run_id"`
+	JobID       string                       `json:"job_id"`
+	Status      string                       `json:"status"`
+	SourceBytes int64                        `json:"source_bytes"`
+	Files       []batchImagePumpArchivedFile `json:"files"`
 }
 
 type batchImagePumpStatus struct {
@@ -137,12 +112,12 @@ func (s *BatchImageDeliveryService) Process(ctx context.Context, job *BatchImage
 		return nil, 0, err
 	}
 	if statusCode == http.StatusNotFound {
-		request, err := s.buildPumpRequest(ctx, job, provider, account, runID)
-		if err != nil {
-			return nil, 0, err
+		request, buildErr := s.buildPumpRequest(ctx, job, provider, account, runID)
+		if buildErr != nil {
+			return nil, 0, buildErr
 		}
-		body, err := json.Marshal(request)
-		if err != nil || len(body) > batchImagePumpRequestMaxBytes {
+		body, marshalErr := json.Marshal(request)
+		if marshalErr != nil || len(body) > batchImagePumpRequestMaxBytes {
 			return nil, 0, ErrBatchImageDeliveryFailed
 		}
 		status, statusCode, err = s.pumpRequest(ctx, http.MethodPost, "/v1/jobs", body)
@@ -157,7 +132,7 @@ func (s *BatchImageDeliveryService) Process(ctx context.Context, job *BatchImage
 	case "queued", "running", "waiting", "paused", "unknown":
 		return nil, s.pollDelay(), nil
 	case "complete":
-		return s.indexCompletedDelivery(ctx, job, runID, status.Output)
+		return s.indexCompletedArchive(ctx, job, provider, account, runID, status.Output)
 	case "errored", "terminated":
 		return nil, 0, ErrBatchImageDeliveryFailed
 	default:
@@ -174,48 +149,34 @@ func (s *BatchImageDeliveryService) buildPumpRequest(ctx context.Context, job *B
 	if err != nil {
 		return nil, err
 	}
-	expected, err := s.expectedItems(ctx, job.BatchID)
-	if err != nil {
-		return nil, err
-	}
-	if len(expected) == 0 {
+	if len(sources) == 0 {
 		return nil, ErrBatchImageIndexNoResultLines
 	}
+	if len(sources) > batchImageDeliveryMaxSourceFiles {
+		return nil, ErrBatchImageDeliveryFailed
+	}
 	request := &batchImagePumpRequest{
-		Version: 1,
+		Version: 2,
 		RunID:   runID,
 		JobID:   job.BatchID,
-		Sources: make([]batchImagePumpSource, 0, len(sources)),
-		Items:   make([]batchImagePumpRequestItem, 0, len(expected)),
+		Files:   make([]batchImagePumpFile, 0, len(sources)),
 	}
-	for _, source := range sources {
-		request.Sources = append(request.Sources, batchImagePumpSource{ID: source.ID, URL: source.URL})
-	}
-	maxImages := s.Config.BatchImage.MaxOutputImagesPerItem
-	if maxImages <= 0 || maxImages > 16 {
-		maxImages = 4
-	}
-	for _, item := range expected {
-		out := batchImagePumpRequestItem{
-			CustomID: item.CustomID,
-			Uploads:  make([]batchImagePumpUpload, 0, maxImages),
+	for index, source := range sources {
+		key, keyErr := BatchImageDeliveryArchiveObjectKey(s.Config, job.BatchID, index)
+		if keyErr != nil {
+			return nil, keyErr
 		}
-		for imageIndex := 0; imageIndex < maxImages; imageIndex++ {
-			key, err := BatchImageDeliveryObjectKey(s.Config, job.BatchID, item.CustomID, imageIndex)
-			if err != nil {
-				return nil, err
-			}
-			signed, err := s.Store.PresignPut(ctx, key, s.uploadURLTTL())
-			if err != nil {
-				return nil, ErrBatchImageDeliveryFailed
-			}
-			out.Uploads = append(out.Uploads, batchImagePumpUpload{
-				Index:     imageIndex,
-				ObjectKey: key,
-				URL:       signed,
-			})
+		signed, signErr := s.Store.PresignPut(ctx, key, s.uploadURLTTL())
+		if signErr != nil {
+			return nil, ErrBatchImageDeliveryFailed
 		}
-		request.Items = append(request.Items, out)
+		request.Files = append(request.Files, batchImagePumpFile{
+			Index:     index,
+			SourceID:  source.ID,
+			SourceURL: source.URL,
+			ObjectKey: key,
+			UploadURL: signed,
+		})
 	}
 	return request, nil
 }
@@ -240,112 +201,109 @@ func (s *BatchImageDeliveryService) expectedItems(ctx context.Context, batchID s
 	return result, nil
 }
 
-func (s *BatchImageDeliveryService) indexCompletedDelivery(ctx context.Context, job *BatchImageJob, runID string, output *batchImagePumpOutput) (*BatchImageIndexResult, time.Duration, error) {
-	if output == nil || output.Version != 1 || output.RunID != runID || output.JobID != job.BatchID || output.Status != "completed" {
+func (s *BatchImageDeliveryService) indexCompletedArchive(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account, runID string, output *batchImagePumpOutput) (*BatchImageIndexResult, time.Duration, error) {
+	if output == nil || output.Version != 2 || output.RunID != runID ||
+		output.JobID != job.BatchID || output.Status != "completed" ||
+		len(output.Files) == 0 || len(output.Files) > batchImageDeliveryMaxSourceFiles ||
+		output.SourceBytes <= 0 {
 		return nil, 0, ErrBatchImageDeliveryFailed
 	}
-	if output.SuccessCount < 0 || output.FailCount < 0 || output.UnknownCount < 0 ||
-		output.SourceBytes < 0 || output.ImageBytes < 0 {
+
+	sourceProvider, ok := provider.(BatchImageSignedResultSourceProvider)
+	if !ok {
 		return nil, 0, ErrBatchImageDeliveryFailed
+	}
+	sources, err := sourceProvider.SignedResultSources(ctx, job, account, s.sourceURLTTL())
+	if err != nil || len(sources) != len(output.Files) {
+		return nil, 0, ErrBatchImageDeliveryFailed
+	}
+	var verifiedBytes int64
+	for index, file := range output.Files {
+		expectedKey, keyErr := BatchImageDeliveryArchiveObjectKey(s.Config, job.BatchID, index)
+		if keyErr != nil || file.Index != index || file.SourceID != sources[index].ID ||
+			file.ObjectKey != expectedKey || file.Size <= 0 ||
+			normalizeBatchImageArchiveContentType(file.ContentType) != batchImageCOSArchiveContentType {
+			return nil, 0, ErrBatchImageDeliveryFailed
+		}
+		size, contentType, headErr := s.Store.Head(ctx, expectedKey)
+		if headErr != nil || size != file.Size ||
+			normalizeBatchImageArchiveContentType(contentType) != batchImageCOSArchiveContentType {
+			return nil, 0, ErrBatchImageDeliveryFailed
+		}
+		verifiedBytes += size
+	}
+	if verifiedBytes != output.SourceBytes {
+		return nil, 0, ErrBatchImageDeliveryFailed
+	}
+
+	successCount, failCount, ready := s.authoritativeCompletionCounts(ctx, job, provider, account)
+	if !ready {
+		return nil, s.pollDelay(), nil
 	}
 	expected, err := s.expectedItems(ctx, job.BatchID)
 	if err != nil {
 		return nil, 0, err
 	}
-	expectedByID := make(map[string]*BatchImageItem, len(expected))
-	for _, item := range expected {
-		expectedByID[item.CustomID] = item
-	}
-	if len(output.Items) != len(expectedByID) || output.SuccessCount+output.FailCount != len(expectedByID) {
+	if len(expected) != job.ItemCount || successCount+failCount != len(expected) {
 		return nil, 0, ErrBatchImageDeliveryFailed
 	}
-	seen := make(map[string]struct{}, len(output.Items))
+
+	marker := batchImageCOSArchiveMarker(len(output.Files))
 	now := time.Now()
-	params := make([]CreateBatchImageItemParams, 0, len(output.Items))
-	result := &BatchImageIndexResult{}
-	for _, item := range output.Items {
-		if _, ok := expectedByID[item.CustomID]; !ok {
-			return nil, 0, ErrBatchImageDeliveryFailed
-		}
-		if _, duplicate := seen[item.CustomID]; duplicate {
-			return nil, 0, ErrBatchImageDuplicateCustomID
-		}
-		seen[item.CustomID] = struct{}{}
-		param := CreateBatchImageItemParams{
-			JobID:     job.BatchID,
-			CustomID:  item.CustomID,
-			Status:    BatchImageItemStatusFailed,
-			IndexedAt: &now,
-		}
-		switch item.Status {
-		case "succeeded":
-			if len(item.Images) == 0 {
-				return nil, 0, ErrBatchImageDeliveryFailed
-			}
-			primaryMime := normalizeBatchImageDeliveryMime(item.Images[0].MimeType)
-			for imageIndex, image := range item.Images {
-				expectedKey, err := BatchImageDeliveryObjectKey(s.Config, job.BatchID, item.CustomID, imageIndex)
-				if err != nil || image.Index != imageIndex || image.ObjectKey != expectedKey ||
-					image.Size <= 0 || !isBatchImageDeliveryMime(image.MimeType) ||
-					normalizeBatchImageDeliveryMime(image.MimeType) != primaryMime ||
-					image.Width <= 0 || image.Height <= 0 || !isSHA256Hex(image.SHA256) {
-					return nil, 0, ErrBatchImageDeliveryFailed
-				}
-				size, contentType, err := s.Store.Head(ctx, image.ObjectKey)
-				if err != nil || size != image.Size ||
-					normalizeBatchImageDeliveryMime(contentType) != normalizeBatchImageDeliveryMime(image.MimeType) {
-					return nil, 0, ErrBatchImageDeliveryFailed
-				}
-			}
-			mimeType := primaryMime
-			extension := batchImageFileExtension(mimeType)
-			marker := batchImageCOSDeliveryMarker
-			param.Status = BatchImageItemStatusSuccess
-			param.ProviderSourceObject = &marker
-			param.MimeType = &mimeType
-			param.FileExtension = &extension
-			param.ImageCount = len(item.Images)
-			result.SuccessCount++
-		case "failed":
-			code := sanitizeBatchImageDeliveryCode(item.Error)
-			message := "provider returned an item error"
-			if item.Error != nil && strings.TrimSpace(item.Error.Message) != "" {
-				message = sanitizeBatchImagePublicMessage(item.Error.Message)
-			}
-			param.ErrorCode = &code
-			param.ErrorMessage = &message
-			result.FailCount++
-		default:
-			return nil, 0, ErrBatchImageDeliveryFailed
-		}
-		params = append(params, param)
-		result.TotalCount++
+	params := make([]CreateBatchImageItemParams, 0, len(expected))
+	for _, item := range expected {
+		params = append(params, CreateBatchImageItemParams{
+			JobID:                job.BatchID,
+			CustomID:             item.CustomID,
+			Status:               BatchImageItemStatusResultAvailable,
+			ProviderSourceObject: &marker,
+			ImageCount:           1,
+			IndexedAt:            &now,
+		})
 	}
-	if result.SuccessCount != output.SuccessCount || result.FailCount != output.FailCount {
-		return nil, 0, ErrBatchImageDeliveryFailed
+	result := &BatchImageIndexResult{
+		TotalCount:   len(expected),
+		SuccessCount: successCount,
+		FailCount:    failCount,
 	}
 	if err := s.Repo.ReplaceBatchImageItemsForJob(ctx, job.BatchID, params, BatchImageCounts{
-		SuccessCount: result.SuccessCount,
-		FailCount:    result.FailCount,
+		SuccessCount: successCount,
+		FailCount:    failCount,
 	}); err != nil {
 		return nil, 0, err
 	}
-	if err := s.Repo.AppendBatchImageEvent(ctx, job.BatchID, "cos_delivery_completed", map[string]any{
+	if err := s.Repo.AppendBatchImageEvent(ctx, job.BatchID, "cos_jsonl_archive_completed", map[string]any{
 		"batch_id":       job.BatchID,
 		"run_id":         runID,
-		"success_count":  result.SuccessCount,
-		"fail_count":     result.FailCount,
-		"unknown_count":  output.UnknownCount,
+		"success_count":  successCount,
+		"fail_count":     failCount,
+		"source_files":   len(output.Files),
 		"source_bytes":   output.SourceBytes,
-		"image_bytes":    output.ImageBytes,
 		"storage_bucket": s.Config.BatchImage.DeliveryCOSBucket,
 	}); err != nil {
-		logger.L().Warn("batch_image.cos_delivery_event_failed",
+		logger.L().Warn("batch_image.cos_archive_event_failed",
 			zap.String("batch_id", job.BatchID),
 			zap.Error(err),
 		)
 	}
 	return result, 0, nil
+}
+
+func (s *BatchImageDeliveryService) authoritativeCompletionCounts(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (int, int, bool) {
+	status, err := provider.Get(ctx, job, account)
+	if err != nil || status == nil || status.InternalState != BatchProviderStateSucceeded ||
+		status.SuccessfulCount == nil || status.FailedCount == nil {
+		return 0, 0, false
+	}
+	successCount := *status.SuccessfulCount
+	failCount := *status.FailedCount
+	if status.IncompleteCount != nil {
+		failCount += *status.IncompleteCount
+	}
+	if successCount < 0 || failCount < 0 || successCount+failCount != job.ItemCount {
+		return 0, 0, false
+	}
+	return successCount, failCount, true
 }
 
 func (s *BatchImageDeliveryService) pumpRequest(ctx context.Context, method, path string, body []byte) (*batchImagePumpStatus, int, error) {
@@ -386,8 +344,6 @@ func (s *BatchImageDeliveryService) pumpRequest(ctx context.Context, method, pat
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		// url.Error embeds the request URL. Keep even the Worker origin out of
-		// propagated operational errors for a consistent no-capability-log rule.
 		return nil, 0, ErrBatchImageDeliveryFailed
 	}
 	defer func() { _ = response.Body.Close() }()
@@ -427,71 +383,48 @@ func batchImageDeliveryRunID(batchID string) string {
 	return strings.TrimSpace(batchID) + "-" + hex.EncodeToString(sum[:8])
 }
 
-func BatchImageDeliveryObjectKey(cfg *config.Config, batchID, customID string, imageIndex int) (string, error) {
-	if cfg == nil || !IsValidBatchImageID(batchID) || strings.TrimSpace(customID) == "" ||
-		imageIndex < 0 || imageIndex >= 16 {
+func BatchImageDeliveryArchiveObjectKey(cfg *config.Config, batchID string, fileIndex int) (string, error) {
+	if cfg == nil || !IsValidBatchImageID(batchID) ||
+		fileIndex < 0 || fileIndex >= batchImageDeliveryMaxSourceFiles {
 		return "", ErrBatchImageCleanupUnsafePath
 	}
 	prefix := strings.Trim(strings.TrimSpace(cfg.BatchImage.DeliveryCOSPrefix), "/")
 	if prefix == "" || strings.Contains(prefix, "..") {
 		return "", ErrBatchImageCleanupUnsafePath
 	}
-	customHash := sha256.Sum256([]byte(customID))
-	return fmt.Sprintf("%s/%s/%s/%d", prefix, batchID, hex.EncodeToString(customHash[:]), imageIndex), nil
+	return fmt.Sprintf("%s/%s/raw/%04d.jsonl", prefix, batchID, fileIndex), nil
 }
 
-func isBatchImageCOSDeliveredItem(item *BatchImageItem) bool {
-	return item != nil && strings.TrimSpace(batchImageDerefString(item.ProviderSourceObject)) == batchImageCOSDeliveryMarker
+func batchImageCOSArchiveMarker(fileCount int) string {
+	return batchImageCOSArchiveMarkerPrefix + strconv.Itoa(fileCount)
 }
 
-func isBatchImageDeliveryMime(value string) bool {
-	switch normalizeBatchImageDeliveryMime(value) {
-	case "image/png", "image/jpeg", "image/webp", "image/gif":
-		return true
-	default:
-		return false
+func batchImageCOSArchiveFileCount(item *BatchImageItem) (int, bool) {
+	if item == nil || item.ProviderSourceObject == nil {
+		return 0, false
 	}
+	raw := strings.TrimSpace(*item.ProviderSourceObject)
+	if !strings.HasPrefix(raw, batchImageCOSArchiveMarkerPrefix) {
+		return 0, false
+	}
+	count, err := strconv.Atoi(strings.TrimPrefix(raw, batchImageCOSArchiveMarkerPrefix))
+	if err != nil || count <= 0 || count > batchImageDeliveryMaxSourceFiles {
+		return 0, false
+	}
+	return count, true
 }
 
-func normalizeBatchImageDeliveryMime(value string) string {
+func isBatchImageCOSArchivedItem(item *BatchImageItem) bool {
+	_, ok := batchImageCOSArchiveFileCount(item)
+	return ok
+}
+
+func normalizeBatchImageArchiveContentType(value string) string {
 	value = strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
-	if value == "image/jpg" {
-		return "image/jpeg"
+	if value == "application/jsonl" || value == "application/ndjson" {
+		return batchImageCOSArchiveContentType
 	}
 	return value
-}
-
-func isSHA256Hex(value string) bool {
-	if len(value) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
-}
-
-func sanitizeBatchImageDeliveryCode(itemError *batchImagePumpError) string {
-	code := "PROVIDER_ITEM_FAILED"
-	if itemError != nil && strings.TrimSpace(itemError.Code) != "" {
-		code = strings.TrimSpace(itemError.Code)
-	}
-	var out strings.Builder
-	for _, character := range code {
-		switch {
-		case character >= 'A' && character <= 'Z',
-			character >= 'a' && character <= 'z',
-			character >= '0' && character <= '9',
-			character == '_',
-			character == '-':
-			_, _ = out.WriteRune(character)
-		}
-		if out.Len() >= 100 {
-			break
-		}
-	}
-	if out.Len() == 0 {
-		return "PROVIDER_ITEM_FAILED"
-	}
-	return out.String()
 }
 
 func (s *BatchImageDeliveryService) sourceURLTTL() time.Duration {

@@ -120,6 +120,9 @@ type BatchProviderStatus struct {
 	Done          bool
 
 	ProviderOutputRef string
+	SuccessfulCount   *int
+	FailedCount       *int
+	IncompleteCount   *int
 
 	ErrorCode    string
 	ErrorMessage string

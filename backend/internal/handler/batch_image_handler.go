@@ -221,6 +221,24 @@ func (h *BatchImageHandler) ItemContent(c *gin.Context) {
 	h.markDownloadedBestEffort(c, owner)
 }
 
+func (h *BatchImageHandler) ResultFiles(c *gin.Context) {
+	owner, ok := batchImageOwnerFromContext(c)
+	if !ok {
+		batchImageError(c, infraerrors.New(http.StatusUnauthorized, "API_KEY_REQUIRED", "API key is required"))
+		return
+	}
+	result, err := h.download.ResultFiles(c.Request.Context(), owner, c.Param("id"))
+	if err != nil {
+		batchImageError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.JSON(http.StatusOK, result)
+	h.markDownloadedBestEffort(c, owner)
+}
+
 // markDownloadedBestEffort 在响应体已写出后标记下载状态；
 // 此时无法再向客户端返回错误，失败只能记日志（不能静默丢弃）。
 func (h *BatchImageHandler) markDownloadedBestEffort(c *gin.Context, owner service.BatchImageOwner) {
