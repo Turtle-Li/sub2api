@@ -638,7 +638,15 @@ func mapVertexBatchState(job *VertexBatchPredictionJob) *BatchProviderStatus {
 }
 
 func parseVertexCompletionCount(value string) *int {
-	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
+	value = strings.TrimSpace(value)
+	// Vertex exposes completionStats as protobuf JSON. Zero-valued int64
+	// fields are commonly omitted, so an empty field inside a present
+	// completionStats object means zero rather than "not ready".
+	if value == "" {
+		resolved := 0
+		return &resolved
+	}
+	parsed, err := strconv.ParseInt(value, 10, 32)
 	if err != nil || parsed < 0 {
 		return nil
 	}
