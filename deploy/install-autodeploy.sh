@@ -166,6 +166,7 @@ else
     printf 'SUB2API_PUBLIC_HEALTH_URL=%s\n' "$HEALTH_URL"
     printf 'SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS=%s\n' '900'
     printf 'SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS=%s\n' '1800'
+    printf 'SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=%s\n' 'false'
   } >"$config_temp"
   install -D -m 600 "$config_temp" "$CONFIG_FILE"
   rm -f "$config_temp"

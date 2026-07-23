@@ -45,10 +45,16 @@ the repository secrets `SUB2API_DEPLOY_SSH_KEY`, `SUB2API_DEPLOY_HOST`,
 
 The production helper recognizes `sub2api-blue`, `sub2api-green`, and the
 legacy `sub2api` application name. Long-lived Responses WebSocket connections
-can keep an old color draining across a later release, so the helper resolves
-the active color from Caddy and selects only an absent or stopped target. If
-every other color is still running, it stops safely instead of interrupting a
-drain container.
+can keep an old color draining after a release, so the helper resolves the
+active color from Caddy and selects only an absent or stopped target. A later
+release fails closed while any inactive application container is still
+running, because every application container also consumes shared background
+queues even when Caddy sends it no HTTP traffic. Let the drain monitor stop the
+old color, or verify that it has zero active connections before stopping it.
+`SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=true` is an emergency
+override for deployments where background queues are disabled or the operator
+has separately fenced their consumers; it should not be enabled on normal
+Sub2API production hosts.
 
 Concurrent release checks wait up to
 `SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS` (900 seconds by default). Lock timeouts

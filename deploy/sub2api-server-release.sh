@@ -29,6 +29,7 @@ LOCK_FILE="${SUB2API_RELEASE_LOCK_FILE:-/var/lock/sub2api-release.lock}"
 MIN_FREE_BYTES="${SUB2API_RELEASE_MIN_FREE_BYTES:-8589934592}"
 BUILD_TIMEOUT_SECONDS="${SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS:-3000}"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
+ALLOW_PREEXISTING_DRAINING_CONTAINER="${SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER:-false}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -55,11 +56,19 @@ require_positive_integer() {
   [ "$2" -gt 0 ] || die "$1 must be a positive integer"
 }
 
+require_bool() {
+  case "$2" in
+    true|false) ;;
+    *) die "$1 must be true or false" ;;
+  esac
+}
+
 for command_name in docker curl flock grep awk timeout perl; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RELEASE_MIN_FREE_BYTES "$MIN_FREE_BYTES"
 require_positive_integer SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS "$BUILD_TIMEOUT_SECONDS"
+require_bool SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER "$ALLOW_PREEXISTING_DRAINING_CONTAINER"
 
 case "$SOURCE_DIR" in
   "${WORK_ROOT%/}"/*) ;;
@@ -92,10 +101,11 @@ upstream_count="$(printf '%s\n' "$active_upstream" | sed '/^$/d' | wc -l)"
 [ "$upstream_count" -eq 1 ] || die "Caddy upstream is ambiguous: $active_upstream"
 
 OLD_CONTAINER="${active_upstream%:8080}"
-# A third color is intentional. Long-lived Responses WebSocket connections can
-# keep a previous container draining through the next release, so a strict
-# two-name toggle can otherwise leave no safe target. Never recycle another
-# running color merely to free a name.
+# Three names remain available so a deliberately approved long-lived drain can
+# be retained. By default, however, a release refuses to start while any
+# inactive application container is still running: every application container
+# also starts background queue consumers, so an old binary could otherwise
+# process a new job with stale semantics even though Caddy sends it no traffic.
 case "$OLD_CONTAINER" in
   sub2api-blue)
     release_candidates=(sub2api-green sub2api)
@@ -110,6 +120,18 @@ case "$OLD_CONTAINER" in
     die "unsupported active container: $OLD_CONTAINER"
     ;;
 esac
+
+running_inactive_containers=()
+for candidate in "${release_candidates[@]}"; do
+  candidate_running="$(docker inspect "$candidate" --format '{{.State.Running}}' 2>/dev/null || true)"
+  if [ "$candidate_running" = "true" ]; then
+    running_inactive_containers+=("$candidate")
+  fi
+done
+if [ "${#running_inactive_containers[@]}" -gt 0 ] \
+  && [ "$ALLOW_PREEXISTING_DRAINING_CONTAINER" != "true" ]; then
+  die "pre-existing inactive container(s) are still running: ${running_inactive_containers[*]}; wait for the drain monitor or stop them only after verifying zero active connections, because they can consume shared background queues"
+fi
 
 NEW_CONTAINER=""
 for candidate in "${release_candidates[@]}"; do
