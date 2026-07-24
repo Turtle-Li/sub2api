@@ -191,6 +191,9 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 			resetMonthly: func(context.Context, int64, time.Time) error { return nil },
 		}
 		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
+		subscriptionService.SetResetCardRepository(subscriptionLimitResetCardRepoStub{
+			available: map[int64]service.SubscriptionResetCardSummary{},
+		})
 		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
 
 		w := httptest.NewRecorder()
@@ -258,6 +261,9 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 			resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
 		}
 		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
+		subscriptionService.SetResetCardRepository(subscriptionLimitResetCardRepoStub{
+			available: map[int64]service.SubscriptionResetCardSummary{},
+		})
 		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
 
 		w := httptest.NewRecorder()
@@ -267,6 +273,9 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 
 		require.Equal(t, http.StatusTooManyRequests, w.Code)
 		require.Contains(t, w.Body.String(), "USAGE_LIMIT_EXCEEDED")
+		require.Contains(t, w.Body.String(), "订阅每日额度已用完")
+		require.Contains(t, w.Body.String(), "当前没有可用重置次数")
+		require.Contains(t, w.Body.String(), "请升级套餐或购买额外额度")
 	})
 }
 

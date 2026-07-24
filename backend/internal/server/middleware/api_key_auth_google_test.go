@@ -887,6 +887,11 @@ func TestApiKeyAuthWithSubscriptionGoogle_SubscriptionLimitExceededReturns429(t 
 		resetWeekly:    func(ctx context.Context, id int64, start time.Time) error { return nil },
 		resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
 	}, nil, nil, &config.Config{RunMode: config.RunModeStandard})
+	subscriptionService.SetResetCardRepository(subscriptionLimitResetCardRepoStub{
+		available: map[int64]service.SubscriptionResetCardSummary{
+			sub.ID: {AvailableCount: 2},
+		},
+	})
 
 	r := gin.New()
 	r.Use(APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, &config.Config{RunMode: config.RunModeStandard}))
@@ -902,5 +907,7 @@ func TestApiKeyAuthWithSubscriptionGoogle_SubscriptionLimitExceededReturns429(t 
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, http.StatusTooManyRequests, resp.Error.Code)
 	require.Equal(t, "RESOURCE_EXHAUSTED", resp.Error.Status)
-	require.Contains(t, resp.Error.Message, "daily usage limit exceeded")
+	require.Contains(t, resp.Error.Message, "订阅每日额度已用完")
+	require.Contains(t, resp.Error.Message, "当前还有 2 次可用重置次数")
+	require.Contains(t, resp.Error.Message, "请前往「订阅」页面使用")
 }

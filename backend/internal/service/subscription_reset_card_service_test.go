@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,19 +12,21 @@ import (
 )
 
 type resetCardRepositoryStub struct {
-	grantGroups             []int64
-	grantSubscriptions      []int64
-	grantQuantity           int
-	grantExpiresAt          time.Time
-	grantIssuedBy           int64
-	grantResult             map[int64]int64
-	grantSubscriptionResult map[int64]int64
-	grantErr                error
-	consumeUserID           int64
-	consumeSubID            int64
-	consumeGroupID          int64
-	consumeErr              error
-	availableResult         map[int64]SubscriptionResetCardSummary
+	grantGroups              []int64
+	grantSubscriptions       []int64
+	grantQuantity            int
+	grantExpiresAt           time.Time
+	grantIssuedBy            int64
+	grantResult              map[int64]int64
+	grantSubscriptionResult  map[int64]int64
+	grantErr                 error
+	consumeUserID            int64
+	consumeSubID             int64
+	consumeGroupID           int64
+	consumeErr               error
+	availableResult          map[int64]SubscriptionResetCardSummary
+	availableErr             error
+	availableSubscriptionIDs []int64
 }
 
 func (r *resetCardRepositoryStub) GrantToGroups(_ context.Context, groupIDs []int64, quantity int, expiresAt time.Time, issuedBy int64, _ time.Time) (map[int64]int64, error) {
@@ -42,14 +45,55 @@ func (r *resetCardRepositoryStub) GrantToSubscriptions(_ context.Context, subscr
 	return r.grantSubscriptionResult, r.grantErr
 }
 
-func (r *resetCardRepositoryStub) ListAvailable(_ context.Context, _ []int64, _ time.Time) (map[int64]SubscriptionResetCardSummary, error) {
-	return r.availableResult, nil
+func (r *resetCardRepositoryStub) ListAvailable(_ context.Context, subscriptionIDs []int64, _ time.Time) (map[int64]SubscriptionResetCardSummary, error) {
+	r.availableSubscriptionIDs = append([]int64(nil), subscriptionIDs...)
+	return r.availableResult, r.availableErr
 }
 
 func (r *resetCardRepositoryStub) ConsumeAndReset(_ context.Context, userID, subscriptionID int64, _, _ time.Time) (int64, error) {
 	r.consumeUserID = userID
 	r.consumeSubID = subscriptionID
 	return r.consumeGroupID, r.consumeErr
+}
+
+func TestGetAvailableResetCardCount(t *testing.T) {
+	t.Run("returns count for selected subscription", func(t *testing.T) {
+		cardRepo := &resetCardRepositoryStub{
+			availableResult: map[int64]SubscriptionResetCardSummary{
+				7: {AvailableCount: 3},
+			},
+		}
+		svc := NewSubscriptionService(nil, nil, nil, nil, nil)
+		svc.SetResetCardRepository(cardRepo)
+
+		count, err := svc.GetAvailableResetCardCount(context.Background(), 7)
+
+		require.NoError(t, err)
+		require.Equal(t, 3, count)
+		require.Equal(t, []int64{7}, cardRepo.availableSubscriptionIDs)
+	})
+
+	t.Run("returns zero when no cards are available", func(t *testing.T) {
+		cardRepo := &resetCardRepositoryStub{availableResult: map[int64]SubscriptionResetCardSummary{}}
+		svc := NewSubscriptionService(nil, nil, nil, nil, nil)
+		svc.SetResetCardRepository(cardRepo)
+
+		count, err := svc.GetAvailableResetCardCount(context.Background(), 7)
+
+		require.NoError(t, err)
+		require.Zero(t, count)
+	})
+
+	t.Run("propagates repository errors", func(t *testing.T) {
+		wantErr := errors.New("database unavailable")
+		cardRepo := &resetCardRepositoryStub{availableErr: wantErr}
+		svc := NewSubscriptionService(nil, nil, nil, nil, nil)
+		svc.SetResetCardRepository(cardRepo)
+
+		_, err := svc.GetAvailableResetCardCount(context.Background(), 7)
+
+		require.ErrorIs(t, err, wantErr)
+	})
 }
 
 type resetCardGroupRepoStub struct {

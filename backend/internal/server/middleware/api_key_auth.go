@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -249,13 +250,20 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 				if validateErr != nil {
 					code := "SUBSCRIPTION_INVALID"
 					status := 403
+					message := validateErr.Error()
 					if errors.Is(validateErr, service.ErrDailyLimitExceeded) ||
 						errors.Is(validateErr, service.ErrWeeklyLimitExceeded) ||
 						errors.Is(validateErr, service.ErrMonthlyLimitExceeded) {
 						code = "USAGE_LIMIT_EXCEEDED"
 						status = 429
+						message = subscriptionUsageLimitMessage(
+							c.Request.Context(),
+							subscriptionService,
+							subscription,
+							validateErr,
+						)
 					}
-					AbortWithError(c, status, code, validateErr.Error())
+					AbortWithError(c, status, code, message)
 					return
 				}
 			} else {
@@ -285,6 +293,41 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 
 		c.Next()
 	}
+}
+
+func subscriptionUsageLimitMessage(
+	ctx context.Context,
+	subscriptionService *service.SubscriptionService,
+	subscription *service.UserSubscription,
+	limitErr error,
+) string {
+	window := "订阅"
+	switch {
+	case errors.Is(limitErr, service.ErrDailyLimitExceeded):
+		window = "订阅每日"
+	case errors.Is(limitErr, service.ErrWeeklyLimitExceeded):
+		window = "订阅每周"
+	case errors.Is(limitErr, service.ErrMonthlyLimitExceeded):
+		window = "订阅每月"
+	}
+	prefix := window + "额度已用完。"
+
+	if subscriptionService == nil || subscription == nil {
+		return prefix + "请前往「订阅」页面查看可用重置次数，或升级套餐/购买额外额度后再试。"
+	}
+
+	count, err := subscriptionService.GetAvailableResetCardCount(ctx, subscription.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to query reset cards for usage-limit guidance",
+			"subscription_id", subscription.ID,
+			"error", err,
+		)
+		return prefix + "请前往「订阅」页面查看可用重置次数，或升级套餐/购买额外额度后再试。"
+	}
+	if count > 0 {
+		return fmt.Sprintf("%s你当前还有 %d 次可用重置次数，请前往「订阅」页面使用后再试。", prefix, count)
+	}
+	return prefix + "当前没有可用重置次数，请升级套餐或购买额外额度后再试。"
 }
 
 func apiKeyHeadersTooLarge(c *gin.Context) bool {

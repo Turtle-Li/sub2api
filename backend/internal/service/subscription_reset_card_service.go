@@ -23,6 +23,25 @@ func (s *SubscriptionService) SetResetCardRepository(repo SubscriptionResetCardR
 	s.resetCardRepo = repo
 }
 
+// GetAvailableResetCardCount returns the current number of unexpired reset
+// cards for one subscription. Gateway middleware calls this only after a
+// subscription usage limit is reached, keeping the normal request path free of
+// an additional database query.
+func (s *SubscriptionService) GetAvailableResetCardCount(ctx context.Context, subscriptionID int64) (int, error) {
+	if s.resetCardRepo == nil {
+		return 0, ErrResetCardRepositoryUnavailable
+	}
+	if subscriptionID <= 0 {
+		return 0, ErrSubscriptionNotFound
+	}
+
+	summaries, err := s.resetCardRepo.ListAvailable(ctx, []int64{subscriptionID}, time.Now())
+	if err != nil {
+		return 0, err
+	}
+	return summaries[subscriptionID].AvailableCount, nil
+}
+
 func (s *SubscriptionService) GrantResetCards(ctx context.Context, input *GrantSubscriptionResetCardsInput) (*GrantSubscriptionResetCardsResult, error) {
 	if s.resetCardRepo == nil {
 		return nil, ErrResetCardRepositoryUnavailable
