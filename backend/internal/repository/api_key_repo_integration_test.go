@@ -4,11 +4,14 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
@@ -171,6 +174,31 @@ func (s *APIKeyRepoSuite) TestUpdate_ClearGroupID() {
 	s.Require().Nil(got.GroupID, "expected GroupID to be cleared")
 }
 
+func (s *APIKeyRepoSuite) TestUpdate_CannotMoveSixthKeyIntoGroup() {
+	user := s.mustCreateUser("group-limit-update@test.com")
+	targetGroup := s.mustCreateGroup("g-limit-update-target")
+	sourceGroup := s.mustCreateGroup("g-limit-update-source")
+
+	for i := 1; i <= service.MaxAPIKeysPerUserGroup; i++ {
+		s.mustCreateApiKey(
+			user.ID,
+			fmt.Sprintf("sk-group-limit-target-%d", i),
+			fmt.Sprintf("Target %d", i),
+			&targetGroup.ID,
+		)
+	}
+	moving := s.mustCreateApiKey(user.ID, "sk-group-limit-moving", "Moving", &sourceGroup.ID)
+	moving.GroupID = &targetGroup.ID
+
+	err := s.repo.Update(s.ctx, moving)
+	s.Require().ErrorIs(err, service.ErrAPIKeyGroupLimitExceeded)
+
+	persisted, err := s.repo.GetByID(s.ctx, moving.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(persisted.GroupID)
+	s.Require().Equal(sourceGroup.ID, *persisted.GroupID)
+}
+
 // --- Delete ---
 
 func (s *APIKeyRepoSuite) TestDelete() {
@@ -213,6 +241,46 @@ func (s *APIKeyRepoSuite) TestCreate_AfterSoftDelete_AllowsSameKey() {
 	s.Require().NoError(s.repo.Create(s.ctx, second), "create second key with same key")
 	s.Require().NotZero(second.ID)
 	s.Require().NotEqual(first.ID, second.ID, "recreated key should be a new row")
+}
+
+func (s *APIKeyRepoSuite) TestCreate_EnforcesPerUserGroupLimit() {
+	user := s.mustCreateUser("group-limit-create@test.com")
+	group := s.mustCreateGroup("g-limit-create")
+
+	for i := 1; i <= service.MaxAPIKeysPerUserGroup; i++ {
+		key := &service.APIKey{
+			UserID:  user.ID,
+			Key:     fmt.Sprintf("sk-group-limit-create-%d", i),
+			Name:    fmt.Sprintf("Device %d", i),
+			GroupID: &group.ID,
+			Status:  service.StatusActive,
+		}
+		s.Require().NoError(s.repo.Create(s.ctx, key))
+	}
+
+	sixth := &service.APIKey{
+		UserID:  user.ID,
+		Key:     "sk-group-limit-create-6",
+		Name:    "Device 6",
+		GroupID: &group.ID,
+		Status:  service.StatusActive,
+	}
+	err := s.repo.Create(s.ctx, sixth)
+	s.Require().ErrorIs(err, service.ErrAPIKeyGroupLimitExceeded)
+	s.Require().Zero(sixth.ID)
+
+	// A deleted key frees one of the five slots.
+	keys, _, err := s.repo.ListByUserID(
+		s.ctx,
+		user.ID,
+		pagination.PaginationParams{Page: 1, PageSize: 10},
+		service.APIKeyListFilters{GroupID: &group.ID},
+	)
+	s.Require().NoError(err)
+	s.Require().Len(keys, service.MaxAPIKeysPerUserGroup)
+	s.Require().NoError(s.repo.Delete(s.ctx, keys[0].ID))
+	s.Require().NoError(s.repo.Create(s.ctx, sixth))
+	s.Require().NotZero(sixth.ID)
 }
 
 // --- ListByUserID / CountByUserID ---
@@ -500,6 +568,75 @@ func (s *APIKeyRepoSuite) TestIncrementQuotaUsedAndGetState() {
 	s.Require().NoError(err, "GetByID")
 	s.Require().Equal(3.5, got.QuotaUsed)
 	s.Require().Equal(service.StatusAPIKeyQuotaExhausted, got.Status)
+}
+
+func TestCreate_GroupLimitIsAtomicUnderConcurrency(t *testing.T) {
+	client := testEntClient(t)
+	repo := NewAPIKeyRepository(client, integrationDB).(*apiKeyRepository)
+	ctx := context.Background()
+	suffix := time.Now().Format("20060102150405.000000000")
+
+	u, err := client.User.Create().
+		SetEmail("group-limit-concurrent-" + suffix + "@test.com").
+		SetPasswordHash("hash").
+		SetStatus(service.StatusActive).
+		SetRole(service.RoleUser).
+		Save(ctx)
+	require.NoError(t, err)
+	g, err := client.Group.Create().
+		SetName("g-limit-concurrent-" + suffix).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM api_keys WHERE user_id = $1`, u.ID)
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM groups WHERE id = $1`, g.ID)
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, u.ID)
+	})
+
+	const attempts = 12
+	errs := make([]error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			key := &service.APIKey{
+				UserID:  u.ID,
+				Key:     fmt.Sprintf("sk-group-limit-concurrent-%s-%d", suffix, idx),
+				Name:    fmt.Sprintf("Device %d", idx),
+				GroupID: &g.ID,
+				Status:  service.StatusActive,
+			}
+			errs[idx] = repo.Create(ctx, key)
+		}(i)
+	}
+	wg.Wait()
+
+	successes := 0
+	limitErrors := 0
+	for _, createErr := range errs {
+		switch {
+		case createErr == nil:
+			successes++
+		case errors.Is(createErr, service.ErrAPIKeyGroupLimitExceeded):
+			limitErrors++
+		default:
+			require.NoError(t, createErr)
+		}
+	}
+	require.Equal(t, service.MaxAPIKeysPerUserGroup, successes)
+	require.Equal(t, attempts-service.MaxAPIKeysPerUserGroup, limitErrors)
+
+	count, err := client.APIKey.Query().
+		Where(
+			apikey.UserIDEQ(u.ID),
+			apikey.GroupIDEQ(g.ID),
+			apikey.DeletedAtIsNil(),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, service.MaxAPIKeysPerUserGroup, count)
 }
 
 // TestIncrementQuotaUsed_Concurrent 使用真实数据库验证并发原子性。

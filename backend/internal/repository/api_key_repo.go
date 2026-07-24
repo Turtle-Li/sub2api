@@ -41,7 +41,16 @@ func (r *apiKeyRepository) activeQuery() *dbent.APIKeyQuery {
 }
 
 func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) error {
-	builder := r.client.APIKey.Create().
+	if key.GroupID == nil {
+		return r.createWithClient(ctx, clientFromContext(ctx, r.client), key)
+	}
+	return r.withAPIKeyGroupLimitTx(ctx, key.UserID, *key.GroupID, 0, func(txCtx context.Context, client *dbent.Client) error {
+		return r.createWithClient(txCtx, client, key)
+	})
+}
+
+func (r *apiKeyRepository) createWithClient(ctx context.Context, client *dbent.Client, key *service.APIKey) error {
+	builder := client.APIKey.Create().
 		SetUserID(key.UserID).
 		SetKey(key.Key).
 		SetName(key.Name).
@@ -70,6 +79,68 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		key.UpdatedAt = created.UpdatedAt
 	}
 	return translatePersistenceError(err, nil, service.ErrAPIKeyExists)
+}
+
+// withAPIKeyGroupLimitTx serializes writes for one (user, group) pair and
+// checks the limit in the same transaction as the write. This prevents two
+// simultaneous requests from both observing a free slot and creating a sixth
+// key. excludeKeyID lets updates keep their current key out of the count.
+func (r *apiKeyRepository) withAPIKeyGroupLimitTx(
+	ctx context.Context,
+	userID int64,
+	groupID int64,
+	excludeKeyID int64,
+	fn func(context.Context, *dbent.Client) error,
+) error {
+	run := func(txCtx context.Context, client *dbent.Client) error {
+		if client.Driver().Dialect() == dialect.Postgres {
+			lockName := fmt.Sprintf("api-key-group-limit:%d:%d", userID, groupID)
+			if _, err := client.ExecContext(txCtx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockName); err != nil {
+				return fmt.Errorf("lock api key group limit: %w", err)
+			}
+		}
+
+		query := client.APIKey.Query().Where(
+			apikey.UserIDEQ(userID),
+			apikey.GroupIDEQ(groupID),
+			apikey.DeletedAtIsNil(),
+		)
+		if excludeKeyID > 0 {
+			query = query.Where(apikey.IDNEQ(excludeKeyID))
+		}
+		count, err := query.Count(txCtx)
+		if err != nil {
+			return fmt.Errorf("count api keys in group: %w", err)
+		}
+		if count >= service.MaxAPIKeysPerUserGroup {
+			return service.ErrAPIKeyGroupLimitExceeded
+		}
+		return fn(txCtx, client)
+	}
+
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		return run(ctx, tx.Client())
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		// Some integration callers provide a client already bound to a
+		// transaction without attaching that transaction to the context.
+		if errors.Is(err, dbent.ErrTxStarted) {
+			return run(ctx, r.client)
+		}
+		return fmt.Errorf("begin api key group limit transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if err := run(txCtx, tx.Client()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit api key group limit transaction: %w", err)
+	}
+	return nil
 }
 
 func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
@@ -222,12 +293,20 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 }
 
 func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) error {
+	if key.GroupID == nil {
+		return r.updateWithClient(ctx, clientFromContext(ctx, r.client), key)
+	}
+	return r.withAPIKeyGroupLimitTx(ctx, key.UserID, *key.GroupID, key.ID, func(txCtx context.Context, client *dbent.Client) error {
+		return r.updateWithClient(txCtx, client, key)
+	})
+}
+
+func (r *apiKeyRepository) updateWithClient(ctx context.Context, client *dbent.Client, key *service.APIKey) error {
 	// 使用原子操作：将软删除检查与更新合并到同一语句，避免竞态条件。
 	// 之前的实现先检查 Exist 再 UpdateOneID，若在两步之间发生软删除，
 	// 则会更新已删除的记录。
 	// 这里选择 Update().Where()，确保只有未软删除记录能被更新。
 	// 同时显式设置 updated_at，避免二次查询带来的并发可见性问题。
-	client := clientFromContext(ctx, r.client)
 	now := time.Now()
 	builder := client.APIKey.Update().
 		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).
