@@ -2478,9 +2478,9 @@ func TestLoad_DefaultBatchImagePromptLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.BatchImage.MaxPromptCharsPerItem != 16000 {
+	if cfg.BatchImage.MaxPromptCharsPerItem != 24000 {
 		t.Fatalf(
-			"batch_image.max_prompt_chars_per_item = %d, want 16000",
+			"batch_image.max_prompt_chars_per_item = %d, want 24000",
 			cfg.BatchImage.MaxPromptCharsPerItem,
 		)
 	}
