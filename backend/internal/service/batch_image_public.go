@@ -924,10 +924,12 @@ func batchImageRepeatSuffixWidth(count int) int {
 
 func maxBatchImageReferenceImagesForModel(model string) int {
 	model = strings.ToLower(strings.TrimSpace(model))
-	if strings.Contains(model, "pro-image") {
+	if strings.Contains(model, "gemini-3.1-flash-image") ||
+		strings.Contains(model, "gemini-3.1-flash-lite-image") ||
+		strings.Contains(model, "gemini-3-pro-image") {
 		return 14
 	}
-	if strings.Contains(model, "flash-image") {
+	if strings.Contains(model, "gemini-2.5-flash-image") {
 		return 3
 	}
 	return 0

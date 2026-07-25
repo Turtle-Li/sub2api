@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -207,6 +208,28 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Len(t, repo.items[got.ID], 3)
 	})
 
+	t.Run("accepts nine references per item for gemini 3.1 flash image", func(t *testing.T) {
+		svc, _, _, gemini, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		req.Model = "gemini-3.1-flash-image"
+		req.Items = req.Items[:1]
+		for index := 1; index <= 9; index++ {
+			req.Items[0].ReferenceImages = append(
+				req.Items[0].ReferenceImages,
+				BatchImageReferenceInput{
+					ID:       fmt.Sprintf("ref-%02d", index),
+					MimeType: "image/png",
+					Data:     []byte{byte(index)},
+				},
+			)
+		}
+
+		_, err := svc.Submit(ctx, testBatchImageOwner(), req, "")
+		require.NoError(t, err)
+		require.Len(t, gemini.submits, 1)
+		require.Len(t, gemini.submits[0].Items[0].ReferenceImages, 9)
+	})
+
 	t.Run("validates request fields", func(t *testing.T) {
 		tests := []struct {
 			name   string
@@ -230,6 +253,18 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 					{MimeType: "image/png", Data: []byte("2")},
 					{MimeType: "image/png", Data: []byte("3")},
 					{MimeType: "image/png", Data: []byte("4")},
+				}
+			}, want: ErrBatchImageTooManyReferenceImages},
+			{name: "too_many_reference_images_for_gemini_3_1_flash", mutate: func(r *BatchImageSubmitRequest) {
+				r.Model = "gemini-3.1-flash-image"
+				for index := 1; index <= 15; index++ {
+					r.Items[0].ReferenceImages = append(
+						r.Items[0].ReferenceImages,
+						BatchImageReferenceInput{
+							MimeType: "image/png",
+							Data:     []byte{byte(index)},
+						},
+					)
 				}
 			}, want: ErrBatchImageTooManyReferenceImages},
 			{name: "bad_reference_mime", mutate: func(r *BatchImageSubmitRequest) {
