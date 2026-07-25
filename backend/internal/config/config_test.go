@@ -2471,3 +2471,17 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 		t.Fatalf("image stream timeout = %d, want greater than ordinary stream timeout %d", cfg.Gateway.ImageStreamDataIntervalTimeout, cfg.Gateway.StreamDataIntervalTimeout)
 	}
 }
+
+func TestLoad_DefaultBatchImagePromptLimit(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.BatchImage.MaxPromptCharsPerItem != 16000 {
+		t.Fatalf(
+			"batch_image.max_prompt_chars_per_item = %d, want 16000",
+			cfg.BatchImage.MaxPromptCharsPerItem,
+		)
+	}
+}

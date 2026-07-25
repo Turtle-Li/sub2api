@@ -22,7 +22,7 @@ const (
 	defaultBatchImageMaxItems           = 200
 	defaultBatchImageMaxOutputImages    = 200
 	defaultBatchImageMaxOutputCount     = 4
-	defaultBatchImageMaxPromptChars     = 8000
+	defaultBatchImageMaxPromptChars     = 16000
 	defaultBatchImageResponseMime       = "image/png"
 	defaultBatchImageImageSize          = "1K"
 	defaultBatchImageDiscountMultiplier = 0.5
