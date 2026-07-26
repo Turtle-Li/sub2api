@@ -13,9 +13,10 @@ import (
 )
 
 type promptAuditOrderCase struct {
-	file       string
-	function   string
-	auditToken string
+	file           string
+	function       string
+	preflightToken string
+	auditToken     string
 }
 
 func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.T) {
@@ -32,7 +33,12 @@ func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.
 		{file: "openai_embeddings.go", function: "Embeddings", auditToken: "checkSecurityAudit"},
 		{file: "openai_alpha_search.go", function: "AlphaSearch", auditToken: "checkSecurityAudit"},
 		{file: "image_task_handler.go", function: "Submit", auditToken: "checkSecurityAuditBeforeSubmit"},
-		{file: "batch_image_handler.go", function: "Submit", auditToken: "checkSecurityAuditBeforeSubmit"},
+		{
+			file:           "batch_image_handler.go",
+			function:       "Submit",
+			preflightToken: "ValidateSubmitRequest",
+			auditToken:     "checkSecurityAuditBeforeSubmit",
+		},
 	}
 	sideEffectTokens := []string{
 		"CheckBillingEligibility(", "SelectAccount", ".Forward", "acquireResponsesUserSlot(",
@@ -44,6 +50,11 @@ func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.
 			functionSource := stripGoComments(goFunctionSource(t, tt.file, tt.function))
 			auditIndex := strings.Index(functionSource, tt.auditToken)
 			require.NotEqual(t, -1, auditIndex, "missing Prompt Audit gate")
+			if tt.preflightToken != "" {
+				preflightIndex := strings.Index(functionSource, tt.preflightToken)
+				require.NotEqual(t, -1, preflightIndex, "missing side-effect-free preflight validation")
+				require.Lessf(t, preflightIndex, auditIndex, "%s must run before %s", tt.preflightToken, tt.auditToken)
+			}
 			foundSideEffect := false
 			for _, sideEffect := range sideEffectTokens {
 				index := strings.Index(functionSource, sideEffect)

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -144,12 +145,25 @@ func TestBatchImagePromptGuardRunsBeforePersistenceOrBilling(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := blockingHandlerPromptEngine()
 	openAI := &OpenAIGatewayHandler{securityAuditCoordinator: securityaudit.NewCoordinator(nil, engine)}
-	h := &BatchImageHandler{openAI: openAI}
+	h := &BatchImageHandler{
+		service: &service.BatchImagePublicService{Config: &config.Config{BatchImage: config.BatchImageConfig{
+			Enabled:                       true,
+			MaxItemsPerJobDefault:         10,
+			MaxOutputImagesPerJob:         10,
+			MaxOutputImagesPerItem:        4,
+			MaxPromptCharsPerItem:         24000,
+			MaxReferenceImagesPerJob:      10,
+			MaxReferenceInlineBytesPerJob: 1024 * 1024,
+			DefaultResponseMimeType:       "image/png",
+			DefaultImageSize:              "1K",
+		}}},
+		openAI: openAI,
+	}
 	router := gin.New()
 	router.Use(securityAuditMediaTestMiddleware)
 	router.POST("/v1/images/batches", h.Submit)
 	body := map[string]any{
-		"model": "gemini-image-test",
+		"model": "gemini-2.5-flash-image",
 		"items": []map[string]any{{
 			"custom_id": "one", "prompt": "blocked batch prompt",
 			"reference_images": []map[string]any{{"mime_type": "image/png", "data": []byte("BINARY_CANARY")}},
@@ -160,7 +174,7 @@ func TestBatchImagePromptGuardRunsBeforePersistenceOrBilling(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/images/batches", strings.NewReader(string(raw)))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
-	require.NotPanics(t, func() { router.ServeHTTP(recorder, request) }, "nil service would panic if Submit were reached")
+	require.NotPanics(t, func() { router.ServeHTTP(recorder, request) })
 	require.Equal(t, http.StatusForbidden, recorder.Code)
 	evaluated, _, requests := engine.snapshot()
 	require.Equal(t, 1, evaluated)

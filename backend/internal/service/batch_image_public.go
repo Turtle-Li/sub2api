@@ -196,10 +196,23 @@ func NewBatchImagePublicService(repo BatchImageRepository, accountRepo AccountRe
 	}
 }
 
+// ValidateSubmitRequest performs the side-effect-free request checks used by
+// Submit. Handlers call it before slow security-audit work so malformed
+// requests fail fast without selecting an account, reserving balance, or
+// contacting an upstream provider.
+func (s *BatchImagePublicService) ValidateSubmitRequest(req BatchImageSubmitRequest) error {
+	if s == nil || s.Config == nil || !s.Config.BatchImage.Enabled {
+		return ErrBatchImageDisabled
+	}
+	_, err := s.validateSubmitRequest(req)
+	return err
+}
+
 func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOwner, req BatchImageSubmitRequest, idempotencyKey string) (*BatchImagePublicBatch, error) {
 	if !s.enabled() {
 		return nil, ErrBatchImageDisabled
 	}
+	taskNameProvided := strings.TrimSpace(req.TaskName) != ""
 	normalized, err := s.validateSubmitRequest(req)
 	if err != nil {
 		return nil, err
@@ -209,21 +222,19 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err := s.ensureGroupAllowsBatchImage(ctx, owner.GroupID); err != nil {
 		return nil, err
 	}
-	requestHash := HashBatchImageSubmitRequest(normalized)
+	requestHash := hashBatchImageIdempotencyRequest(normalized, taskNameProvided)
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if idempotencyKey != "" {
-		existing, err := s.Repo.GetBatchImageJobByIdempotencyKey(ctx, owner.UserID, owner.APIKeyID, idempotencyKey)
+		existing, err := s.getIdempotentBatchImageSubmission(
+			ctx,
+			owner,
+			idempotencyKey,
+			requestHash,
+			normalized,
+			taskNameProvided,
+		)
 		if err == nil {
-			if batchImageDerefString(existing.RequestHash) != requestHash {
-				return nil, ErrBatchImageIdempotencyConflict
-			}
-			if existing.Status == BatchImageJobStatusSubmitted && s.Queue != nil {
-				if enqueueErr := s.Queue.Enqueue(ctx, existing.BatchID); enqueueErr != nil && !errors.Is(enqueueErr, ErrBatchImageAlreadyQueued) {
-					_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, existing.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(enqueueErr.Error()), false)
-					return nil, ErrBatchImageQueueFailed
-				}
-			}
-			return BatchImageJobToPublic(existing), nil
+			return existing, nil
 		}
 		if !errors.Is(err, ErrBatchImageJobNotFound) {
 			return nil, err
@@ -283,6 +294,25 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		RequestHash:             batchImageStringPtr(requestHash),
 	})
 	if err != nil {
+		// The unique owner/key index closes the race between the lookup above
+		// and this insert. Recover the winner exactly as a normal idempotent
+		// retry instead of surfacing a persistence conflict or submitting twice.
+		if idempotencyKey != "" && errors.Is(err, ErrBatchImageJobExists) {
+			existing, recoveryErr := s.getIdempotentBatchImageSubmission(
+				ctx,
+				owner,
+				idempotencyKey,
+				requestHash,
+				normalized,
+				taskNameProvided,
+			)
+			if recoveryErr == nil {
+				return existing, nil
+			}
+			if !errors.Is(recoveryErr, ErrBatchImageJobNotFound) {
+				return nil, recoveryErr
+			}
+		}
 		return nil, err
 	}
 	if err := reserveBatchImageBalanceHold(ctx, s.BillingRepo, job, requestHash); err != nil {
@@ -397,6 +427,40 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		return nil, err
 	}
 	return BatchImageJobToPublic(created), nil
+}
+
+func (s *BatchImagePublicService) getIdempotentBatchImageSubmission(
+	ctx context.Context,
+	owner BatchImageOwner,
+	idempotencyKey string,
+	requestHash string,
+	normalized BatchImageSubmitRequest,
+	taskNameProvided bool,
+) (*BatchImagePublicBatch, error) {
+	existing, err := s.Repo.GetBatchImageJobByIdempotencyKey(ctx, owner.UserID, owner.APIKeyID, idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	existingHash := batchImageDerefString(existing.RequestHash)
+	hashMatches := existingHash == requestHash
+	if !hashMatches && !taskNameProvided {
+		// Before generated task names were excluded from the idempotency hash,
+		// retries could conflict as soon as the wall clock moved to the next
+		// second. Match legacy rows using the task name persisted by the winner.
+		legacyRequest := normalized
+		legacyRequest.TaskName = strings.TrimSpace(existing.TaskName)
+		hashMatches = existingHash == HashBatchImageSubmitRequest(legacyRequest)
+	}
+	if !hashMatches {
+		return nil, ErrBatchImageIdempotencyConflict
+	}
+	if existing.Status == BatchImageJobStatusSubmitted && s.Queue != nil {
+		if enqueueErr := s.Queue.Enqueue(ctx, existing.BatchID); enqueueErr != nil && !errors.Is(enqueueErr, ErrBatchImageAlreadyQueued) {
+			_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, existing.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(enqueueErr.Error()), false)
+			return nil, ErrBatchImageQueueFailed
+		}
+	}
+	return BatchImageJobToPublic(existing), nil
 }
 
 func (s *BatchImagePublicService) releaseFailedSubmitHold(ctx context.Context, job *BatchImageJob, requestHash string) error {
@@ -1260,6 +1324,15 @@ func HashBatchImageSubmitRequest(req BatchImageSubmitRequest) string {
 	b, _ := json.Marshal(req)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+func hashBatchImageIdempotencyRequest(req BatchImageSubmitRequest, taskNameProvided bool) string {
+	if !taskNameProvided {
+		// The display-only default is based on wall-clock time and therefore
+		// cannot be part of a stable Idempotency-Key fingerprint.
+		req.TaskName = ""
+	}
+	return HashBatchImageSubmitRequest(req)
 }
 
 func batchImageProviderPlatform(provider string) string {

@@ -57,6 +57,8 @@ const schedulerOutboxPendingDedupKeyMigration = "153_scheduler_outbox_pending_de
 const schedulerOutboxPendingDedupKeyIndex = "idx_scheduler_outbox_pending_dedup_key"
 const latestAPIKeyIPIndexMigration = "174_add_usage_logs_api_key_latest_ip_index_notx.sql"
 const latestAPIKeyIPIndex = "idx_usage_logs_api_key_latest_ip"
+const batchImageIdempotencyUniqueMigration = "187_batch_image_idempotency_unique_notx.sql"
+const batchImageIdempotencyUniqueIndex = "idx_batch_image_jobs_owner_idempotency"
 
 type migrationChecksumCompatibilityRule struct {
 	fileChecksum       string
@@ -283,6 +285,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationConnectio
 		return dropInvalidIndexIfPresent(ctx, db, schedulerOutboxPendingDedupKeyIndex)
 	case latestAPIKeyIPIndexMigration:
 		return dropInvalidIndexIfPresent(ctx, db, latestAPIKeyIPIndex)
+	case batchImageIdempotencyUniqueMigration:
+		return prepareBatchImageIdempotencyUniqueMigration(ctx, db)
 	default:
 		return nil
 	}
@@ -302,6 +306,32 @@ func preparePaymentOrdersOutTradeNoUniqueMigration(ctx context.Context, db migra
 	}
 
 	return dropInvalidIndexIfPresent(ctx, db, paymentOrdersOutTradeNoUniqueIndex)
+}
+
+func prepareBatchImageIdempotencyUniqueMigration(ctx context.Context, db migrationConnection) error {
+	var duplicateGroups int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT 1
+			FROM batch_image_jobs
+			WHERE api_key_id IS NOT NULL
+			  AND idempotency_key IS NOT NULL
+			  AND idempotency_key <> ''
+			GROUP BY user_id, api_key_id, idempotency_key
+			HAVING COUNT(*) > 1
+		) duplicates
+	`).Scan(&duplicateGroups); err != nil {
+		return fmt.Errorf("precheck duplicate batch image idempotency keys: %w", err)
+	}
+	if duplicateGroups > 0 {
+		return fmt.Errorf(
+			"%d duplicate batch image idempotency key groups block %s; remediate duplicates before retrying",
+			duplicateGroups,
+			batchImageIdempotencyUniqueMigration,
+		)
+	}
+	return dropInvalidIndexIfPresent(ctx, db, batchImageIdempotencyUniqueIndex)
 }
 
 func dropInvalidIndexIfPresent(ctx context.Context, db migrationConnection, indexName string) error {

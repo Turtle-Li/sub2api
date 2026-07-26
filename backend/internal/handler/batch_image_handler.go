@@ -39,6 +39,10 @@ func (h *BatchImageHandler) Submit(c *gin.Context) {
 		batchImageError(c, infraerrors.New(http.StatusUnauthorized, "API_KEY_REQUIRED", "API key is required"))
 		return
 	}
+	if err := h.service.ValidateSubmitRequest(req); err != nil {
+		batchImageError(c, err)
+		return
+	}
 	if !h.checkSecurityAuditBeforeSubmit(c, &req) {
 		return
 	}

@@ -450,6 +450,78 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.NotEmpty(t, first.ID)
 	})
 
+	t.Run("idempotency insert race recovers the winning batch", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		normalized, err := svc.validateSubmitRequest(req)
+		require.NoError(t, err)
+
+		apiKeyID := int64(22)
+		requestHash := hashBatchImageIdempotencyRequest(normalized, false)
+		winner := &BatchImageJob{
+			BatchID:        "imgbatch_idempotency_winner",
+			UserID:         11,
+			APIKeyID:       &apiKeyID,
+			Status:         BatchImageJobStatusSubmitted,
+			Provider:       BatchImageProviderGeminiAPI,
+			Model:          req.Model,
+			TaskName:       normalized.TaskName,
+			IdempotencyKey: batchImageStringPtr("client-key"),
+			RequestHash:    batchImageStringPtr(requestHash),
+			CreatedAt:      time.Now(),
+		}
+		repo.jobs[winner.BatchID] = winner
+		svc.Repo = &idempotencyRaceBatchImageRepository{
+			fakeBatchImageRepository: repo,
+			initialLookupMiss:        true,
+		}
+
+		got, err := svc.Submit(ctx, testBatchImageOwner(), req, "client-key")
+		require.NoError(t, err)
+		require.Equal(t, winner.BatchID, got.ID)
+		require.Equal(t, []string{winner.BatchID}, queue.enqueued)
+		require.Empty(t, gemini.submits)
+		require.Empty(t, svc.BillingRepo.(*fakeBatchImageBillingRepo).reserves)
+	})
+
+	t.Run("idempotency ignores generated task name and matches legacy hashes", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		normalized, err := svc.validateSubmitRequest(req)
+		require.NoError(t, err)
+
+		firstGenerated := normalized
+		firstGenerated.TaskName = "2026-07-26 15:00:00"
+		secondGenerated := normalized
+		secondGenerated.TaskName = "2026-07-26 15:00:01"
+		require.Equal(
+			t,
+			hashBatchImageIdempotencyRequest(firstGenerated, false),
+			hashBatchImageIdempotencyRequest(secondGenerated, false),
+		)
+
+		apiKeyID := int64(22)
+		legacyHash := HashBatchImageSubmitRequest(firstGenerated)
+		repo.jobs["imgbatch_legacy_idempotency"] = &BatchImageJob{
+			BatchID:        "imgbatch_legacy_idempotency",
+			UserID:         11,
+			APIKeyID:       &apiKeyID,
+			Status:         BatchImageJobStatusSubmitted,
+			Provider:       BatchImageProviderGeminiAPI,
+			Model:          req.Model,
+			TaskName:       firstGenerated.TaskName,
+			IdempotencyKey: batchImageStringPtr("legacy-client-key"),
+			RequestHash:    batchImageStringPtr(legacyHash),
+			CreatedAt:      time.Now(),
+		}
+
+		got, err := svc.Submit(ctx, testBatchImageOwner(), req, "legacy-client-key")
+		require.NoError(t, err)
+		require.Equal(t, "imgbatch_legacy_idempotency", got.ID)
+		require.Equal(t, []string{"imgbatch_legacy_idempotency"}, queue.enqueued)
+		require.Empty(t, gemini.submits)
+	})
+
 	t.Run("public response does not expose internals", func(t *testing.T) {
 		svc, _, _, _, _ := newTestBatchImagePublicService(true)
 		got, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "")
@@ -891,6 +963,31 @@ func (r *publicBatchImageAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx co
 type publicBatchImageQueue struct {
 	enqueued []string
 	err      error
+}
+
+type idempotencyRaceBatchImageRepository struct {
+	*fakeBatchImageRepository
+	initialLookupMiss bool
+}
+
+func (r *idempotencyRaceBatchImageRepository) GetBatchImageJobByIdempotencyKey(
+	ctx context.Context,
+	userID int64,
+	apiKeyID int64,
+	key string,
+) (*BatchImageJob, error) {
+	if r.initialLookupMiss {
+		r.initialLookupMiss = false
+		return nil, ErrBatchImageJobNotFound
+	}
+	return r.fakeBatchImageRepository.GetBatchImageJobByIdempotencyKey(ctx, userID, apiKeyID, key)
+}
+
+func (r *idempotencyRaceBatchImageRepository) CreateBatchImageJob(
+	context.Context,
+	CreateBatchImageJobParams,
+) (*BatchImageJob, error) {
+	return nil, ErrBatchImageJobExists
 }
 
 func (q *publicBatchImageQueue) Enqueue(_ context.Context, batchID string) error {
