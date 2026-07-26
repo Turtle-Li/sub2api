@@ -31,6 +31,7 @@ const (
 	maxBatchImageReferenceImageBytes    = 10 * 1024 * 1024
 	defaultBatchImageMaxReferenceImages = 1000
 	defaultBatchImageMaxReferenceBytes  = 128 * 1024 * 1024
+	defaultBatchImageProviderSubmitTime = 10 * time.Minute
 )
 
 type BatchImageAccountSelectionRepository interface {
@@ -353,22 +354,32 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		}
 		return nil, err
 	}
-	if err := reserveBatchImageBalanceHold(ctx, s.BillingRepo, job, requestHash); err != nil {
+	// A durable batch now exists. Provider creation and all related state
+	// transitions must outlive the HTTP client connection: a client-side
+	// timeout means "confirm by idempotency key", not "cancel the upstream
+	// submit". A server-owned deadline still bounds a genuinely stuck submit.
+	submitCtx, submitCancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		s.providerSubmitTimeout(),
+	)
+	defer submitCancel()
+
+	if err := reserveBatchImageBalanceHold(submitCtx, s.BillingRepo, job, requestHash); err != nil {
 		code := "BILLING_HOLD_FAILED"
 		if errors.Is(err, ErrBatchImageInsufficientBalance) {
 			code = "INSUFFICIENT_BALANCE"
 		}
-		_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, code, sanitizeBatchImagePublicMessage(err.Error()), true)
-		s.hidePreUpstreamSubmitFailure(ctx, owner, job)
+		_ = s.Repo.RecordBatchImageJobSubmitFailure(submitCtx, job.BatchID, code, sanitizeBatchImagePublicMessage(err.Error()), true)
+		s.hidePreUpstreamSubmitFailure(submitCtx, owner, job)
 		return nil, err
 	}
-	s.invalidateAuthCache(ctx, owner.UserID)
-	if err := s.createPendingItems(ctx, job.BatchID, requestHash, normalized.Items); err != nil {
-		if releaseErr := s.releaseFailedSubmitHold(ctx, job, requestHash); releaseErr != nil {
+	s.invalidateAuthCache(submitCtx, owner.UserID)
+	if err := s.createPendingItems(submitCtx, job.BatchID, requestHash, normalized.Items); err != nil {
+		if releaseErr := s.releaseFailedSubmitHold(submitCtx, job, requestHash); releaseErr != nil {
 			return nil, releaseErr
 		}
-		_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, "ITEM_CREATE_FAILED", sanitizeBatchImagePublicMessage(err.Error()), true)
-		s.hidePreUpstreamSubmitFailure(ctx, owner, job)
+		_ = s.Repo.RecordBatchImageJobSubmitFailure(submitCtx, job.BatchID, "ITEM_CREATE_FAILED", sanitizeBatchImagePublicMessage(err.Error()), true)
+		s.hidePreUpstreamSubmitFailure(submitCtx, owner, job)
 		return nil, ErrBatchImageQueueFailed
 	}
 
@@ -397,30 +408,30 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	// 上游提交（上传参考图 + 创建批任务）可能长达数分钟且不刷新 updated_at，
 	// 会被 stale 恢复扫描误判为滞留并退款。提交前转入 uploading 刷新时间戳，
 	// 提交期间用心跳持续续期。
-	if err := s.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusUploading, BatchImageTransitionOptions{
+	if err := s.Repo.TransitionBatchImageJobStatus(submitCtx, job.BatchID, BatchImageJobStatusUploading, BatchImageTransitionOptions{
 		EventType:    "upload_started",
 		EventPayload: map[string]any{"batch_id": job.BatchID},
 	}); err != nil {
-		if releaseErr := s.releaseFailedSubmitHold(ctx, job, requestHash); releaseErr != nil {
+		if releaseErr := s.releaseFailedSubmitHold(submitCtx, job, requestHash); releaseErr != nil {
 			return nil, releaseErr
 		}
 		// 并发 Cancel 等导致的非法转换：job 已处于终态，不再覆盖其状态。
 		if !errors.Is(err, ErrBatchImageInvalidTransition) {
-			_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, "UPLOAD_TRANSITION_FAILED", sanitizeBatchImagePublicMessage(err.Error()), true)
-			s.hidePreUpstreamSubmitFailure(ctx, owner, job)
+			_ = s.Repo.RecordBatchImageJobSubmitFailure(submitCtx, job.BatchID, "UPLOAD_TRANSITION_FAILED", sanitizeBatchImagePublicMessage(err.Error()), true)
+			s.hidePreUpstreamSubmitFailure(submitCtx, owner, job)
 		}
 		return nil, err
 	}
 	job.Status = BatchImageJobStatusUploading
 
-	hbCtx, hbCancel := context.WithCancel(ctx)
+	hbCtx, hbCancel := context.WithCancel(submitCtx)
 	hbDone := make(chan struct{})
 	go s.runSubmitHeartbeat(hbCtx, job.BatchID, hbDone)
-	providerJob, err := provider.Submit(ctx, job, account, input)
+	providerJob, err := provider.Submit(submitCtx, job, account, input)
 	hbCancel()
 	<-hbDone
 	if err != nil {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(submitCtx), 15*time.Second)
 		defer cleanupCancel()
 		if releaseErr := s.releaseFailedSubmitHold(cleanupCtx, job, requestHash); releaseErr != nil {
 			return nil, releaseErr
@@ -432,15 +443,15 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		return nil, publicErr
 	}
 	if providerJob == nil || strings.TrimSpace(providerJob.ProviderJobName) == "" {
-		if releaseErr := s.releaseFailedSubmitHold(ctx, job, requestHash); releaseErr != nil {
+		if releaseErr := s.releaseFailedSubmitHold(submitCtx, job, requestHash); releaseErr != nil {
 			return nil, releaseErr
 		}
-		_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, "PROVIDER_SUBMIT_FAILED", "provider job name missing", true)
-		s.hidePreUpstreamSubmitFailure(ctx, owner, job)
+		_ = s.Repo.RecordBatchImageJobSubmitFailure(submitCtx, job.BatchID, "PROVIDER_SUBMIT_FAILED", "provider job name missing", true)
+		s.hidePreUpstreamSubmitFailure(submitCtx, owner, job)
 		return nil, ErrBatchImageProviderSubmitFailed
 	}
 
-	if err := s.Repo.UpdateBatchImageJobProviderSubmit(ctx, UpdateBatchImageJobProviderSubmitParams{
+	if err := s.Repo.UpdateBatchImageJobProviderSubmit(submitCtx, UpdateBatchImageJobProviderSubmitParams{
 		BatchID:           job.BatchID,
 		ProviderJobName:   providerJob.ProviderJobName,
 		ProviderInputRef:  providerJob.ProviderInputRef,
@@ -451,18 +462,20 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	}); err != nil {
 		// job 可能已被恢复扫描转 failed 并退款：上游批任务已创建成功，
 		// 必须尽力取消并清理输入，否则上游照常产生成本（孤儿任务）。
-		s.abortOrphanProviderJob(ctx, provider, job, account, providerJob)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(submitCtx), 30*time.Second)
+		defer cleanupCancel()
+		s.abortOrphanProviderJob(cleanupCtx, provider, job, account, providerJob)
 		return nil, err
 	}
 
 	if s.Queue != nil {
-		if err := s.Queue.Enqueue(ctx, job.BatchID); err != nil && !errors.Is(err, ErrBatchImageAlreadyQueued) {
-			_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(err.Error()), false)
+		if err := s.Queue.Enqueue(submitCtx, job.BatchID); err != nil && !errors.Is(err, ErrBatchImageAlreadyQueued) {
+			_ = s.Repo.RecordBatchImageJobSubmitFailure(submitCtx, job.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(err.Error()), false)
 			return nil, ErrBatchImageQueueFailed
 		}
 	}
 
-	created, err := s.Repo.GetBatchImageJobByBatchID(ctx, job.BatchID)
+	created, err := s.Repo.GetBatchImageJobByBatchID(submitCtx, job.BatchID)
 	if err != nil {
 		return nil, err
 	}
@@ -553,6 +566,13 @@ func (s *BatchImagePublicService) submitHeartbeatInterval() time.Duration {
 		interval = 15 * time.Second
 	}
 	return interval
+}
+
+func (s *BatchImagePublicService) providerSubmitTimeout() time.Duration {
+	if s != nil && s.Config != nil && s.Config.BatchImage.ProviderSubmitTimeoutSeconds > 0 {
+		return time.Duration(s.Config.BatchImage.ProviderSubmitTimeoutSeconds) * time.Second
+	}
+	return defaultBatchImageProviderSubmitTime
 }
 
 // abortOrphanProviderJob 在上游任务创建成功但本地状态推进失败时，

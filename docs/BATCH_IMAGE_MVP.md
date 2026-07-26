@@ -317,6 +317,7 @@ batch_image:
   error_retry_delay_seconds: 60
   lock_conflict_delay_seconds: 5
   stale_active_after_seconds: 600
+  provider_submit_timeout_seconds: 600
   delayed_mover_interval_seconds: 5
   recovery_interval_seconds: 300
   delayed_move_limit: 100
@@ -349,6 +350,12 @@ batch_image:
 ```
 
 Feature flags default to disabled.
+
+Once a batch row is durable, provider submission uses the server-owned
+`provider_submit_timeout_seconds` deadline rather than the HTTP client's
+connection lifetime. Clients that time out must retry with the same
+idempotency key; they receive `BATCH_IMAGE_SUBMIT_PENDING` until the provider
+job reference is durable, without starting a second upstream submission.
 
 The CAM identity should be restricted to this bucket and prefix. Keep the bucket private. The
 Worker stores only `delivery_shared_secret`; it receives expiring exact-object URLs rather than

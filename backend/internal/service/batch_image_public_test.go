@@ -415,6 +415,65 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		}
 	})
 
+	t.Run("provider submit survives client disconnect after durable job creation", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		providerStarted := make(chan struct{})
+		providerRelease := make(chan struct{})
+		gemini.submitHook = func(providerCtx context.Context) error {
+			close(providerStarted)
+			select {
+			case <-providerCtx.Done():
+				return providerCtx.Err()
+			case <-providerRelease:
+				return nil
+			}
+		}
+		callerCtx, cancelCaller := context.WithCancel(context.Background())
+		req := validBatchImageSubmitRequest()
+		type submitResult struct {
+			batch *BatchImagePublicBatch
+			err   error
+		}
+		result := make(chan submitResult, 1)
+		go func() {
+			batch, err := svc.Submit(
+				callerCtx,
+				testBatchImageOwner(),
+				req,
+				"client-disconnect",
+			)
+			result <- submitResult{batch: batch, err: err}
+		}()
+
+		<-providerStarted
+		cancelCaller()
+		pending, err := svc.FindIdempotentSubmit(
+			context.Background(),
+			testBatchImageOwner(),
+			req,
+			"client-disconnect",
+		)
+		require.Nil(t, pending)
+		require.ErrorIs(t, err, ErrBatchImageSubmitPending)
+		close(providerRelease)
+		got := <-result
+
+		require.NoError(t, got.err)
+		require.NotNil(t, got.batch)
+		require.Equal(t, BatchImageJobStatusSubmitted, repo.jobs[got.batch.ID].Status)
+		require.Equal(t, "providers/gemini_api/job", batchImageDerefString(repo.jobs[got.batch.ID].ProviderJobName))
+		require.Equal(t, []string{got.batch.ID}, queue.enqueued)
+		replayed, err := svc.FindIdempotentSubmit(
+			context.Background(),
+			testBatchImageOwner(),
+			req,
+			"client-disconnect",
+		)
+		require.NoError(t, err)
+		require.Equal(t, got.batch.ID, replayed.ID)
+		require.Len(t, gemini.submits, 1)
+	})
+
 	t.Run("provider failure with release failure enqueues billing retry", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		gemini.submitErr = errors.New("projects/secret-provider-job failed")
@@ -1173,6 +1232,7 @@ type publicBatchImageProvider struct {
 	name           string
 	submits        []BatchImageInput
 	submitErr      error
+	submitHook     func(context.Context) error
 	cancelCount    int
 	cancelErr      error
 	result         string
@@ -1184,8 +1244,13 @@ func (p *publicBatchImageProvider) Name() string { return p.name }
 
 func (p *publicBatchImageProvider) SupportsAccount(*Account) bool { return true }
 
-func (p *publicBatchImageProvider) Submit(_ context.Context, _ *BatchImageJob, _ *Account, input BatchImageInput) (*BatchProviderJob, error) {
+func (p *publicBatchImageProvider) Submit(ctx context.Context, _ *BatchImageJob, _ *Account, input BatchImageInput) (*BatchProviderJob, error) {
 	p.submits = append(p.submits, input)
+	if p.submitHook != nil {
+		if err := p.submitHook(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if p.submitErr != nil {
 		return nil, p.submitErr
 	}

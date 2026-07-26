@@ -213,6 +213,7 @@ type BatchImageConfig struct {
 	ErrorRetryDelaySeconds            int    `mapstructure:"error_retry_delay_seconds"`
 	LockConflictDelaySeconds          int    `mapstructure:"lock_conflict_delay_seconds"`
 	StaleActiveAfterSeconds           int    `mapstructure:"stale_active_after_seconds"`
+	ProviderSubmitTimeoutSeconds      int    `mapstructure:"provider_submit_timeout_seconds"`
 	DelayedMoverIntervalSeconds       int    `mapstructure:"delayed_mover_interval_seconds"`
 	RecoveryIntervalSeconds           int    `mapstructure:"recovery_interval_seconds"`
 	DelayedMoveLimit                  int    `mapstructure:"delayed_move_limit"`
@@ -2122,6 +2123,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.error_retry_delay_seconds", 60)
 	viper.SetDefault("batch_image.lock_conflict_delay_seconds", 5)
 	viper.SetDefault("batch_image.stale_active_after_seconds", 600)
+	viper.SetDefault("batch_image.provider_submit_timeout_seconds", 600)
 	viper.SetDefault("batch_image.delayed_mover_interval_seconds", 5)
 	viper.SetDefault("batch_image.recovery_interval_seconds", 300)
 	viper.SetDefault("batch_image.delayed_move_limit", 100)
