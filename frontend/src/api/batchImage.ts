@@ -1,6 +1,7 @@
 import { buildGatewayUrl } from './client'
 
 export type BatchImageStatus =
+  | 'submitting'
   | 'queued'
   | 'running'
   | 'indexing'

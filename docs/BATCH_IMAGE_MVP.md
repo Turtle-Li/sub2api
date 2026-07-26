@@ -135,14 +135,15 @@ completed -> output_deleted
 Public status mapping:
 
 ```text
-created/uploading/submitted -> queued
-running                    -> running
-indexing                   -> processing_results
-settling                   -> settling
-completed                  -> completed
-failed                     -> failed
-cancelled                  -> cancelled
-output_deleted             -> output_deleted
+created/uploading -> submitting
+submitted         -> queued
+running           -> running
+indexing          -> processing_results
+settling          -> settling
+completed         -> completed
+failed            -> failed
+cancelled         -> cancelled
+output_deleted    -> output_deleted
 ```
 
 `completed -> output_deleted` happens after manual output deletion or TTL cleanup.

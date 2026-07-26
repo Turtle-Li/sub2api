@@ -9,8 +9,9 @@ export default {
       downloadStatus: 'Download status',
     },
     status: {
-      queued: 'Queued',
-      running: 'Generating',
+      submitting: 'Submitting to Gemini',
+      queued: 'Queued by Gemini',
+      running: 'Generating with Gemini',
       processingResults: 'Processing results',
       settling: 'Settling',
       completed: 'Completed',
@@ -21,7 +22,7 @@ export default {
       allFailed: 'All failed',
     },
     itemStatus: {
-      pending: 'Queued',
+      pending: 'Waiting for generation',
       resultAvailable: 'Result available',
       succeeded: 'Succeeded',
       failed: 'Failed',

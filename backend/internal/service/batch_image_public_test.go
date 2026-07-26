@@ -765,6 +765,13 @@ func TestBatchImageJobToPublicIncludesSanitizedTerminalError(t *testing.T) {
 	require.Equal(t, "service", got.Error.Source)
 }
 
+func TestPublicBatchImageStatusDistinguishesLocalSubmitFromProviderQueue(t *testing.T) {
+	require.Equal(t, "submitting", PublicBatchImageStatus(BatchImageJobStatusCreated))
+	require.Equal(t, "submitting", PublicBatchImageStatus(BatchImageJobStatusUploading))
+	require.Equal(t, "queued", PublicBatchImageStatus(BatchImageJobStatusSubmitted))
+	require.Equal(t, "running", PublicBatchImageStatus(BatchImageJobStatusRunning))
+}
+
 func TestBatchImagePublicService_ListModels(t *testing.T) {
 	ctx := context.Background()
 

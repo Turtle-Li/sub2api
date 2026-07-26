@@ -675,6 +675,8 @@ func (s *BatchImagePublicService) List(ctx context.Context, owner BatchImageOwne
 	filter.TaskNameLike = strings.TrimSpace(query.TaskName)
 	switch strings.TrimSpace(query.Status) {
 	case "", "all":
+	case "submitting":
+		filter.Status = BatchImageJobStatusUploading
 	case "queued":
 		filter.Status = BatchImageJobStatusSubmitted
 	case "processing_results":
@@ -1381,7 +1383,9 @@ func batchImageItemErrorSource(item *BatchImageItem) string {
 
 func PublicBatchImageStatus(status string) string {
 	switch status {
-	case BatchImageJobStatusCreated, BatchImageJobStatusUploading, BatchImageJobStatusSubmitted:
+	case BatchImageJobStatusCreated, BatchImageJobStatusUploading:
+		return "submitting"
+	case BatchImageJobStatusSubmitted:
 		return "queued"
 	case BatchImageJobStatusRunning:
 		return "running"

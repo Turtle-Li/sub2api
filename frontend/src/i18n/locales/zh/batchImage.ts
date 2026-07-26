@@ -9,8 +9,9 @@ export default {
       downloadStatus: '下载状态',
     },
     status: {
-      queued: '排队中',
-      running: '生成中',
+      submitting: '正在提交至 Gemini',
+      queued: 'Gemini 排队中',
+      running: 'Gemini 生成中',
       processingResults: '整理结果',
       settling: '结算中',
       completed: '已完成',
@@ -21,7 +22,7 @@ export default {
       allFailed: '全部失败',
     },
     itemStatus: {
-      pending: '排队中',
+      pending: '等待生成',
       resultAvailable: '结果可读取',
       succeeded: '成功',
       failed: '失败',

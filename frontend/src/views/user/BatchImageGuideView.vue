@@ -860,6 +860,7 @@ const columns = computed<Column[]>(() => [
 
 const statusFilterOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('batchImage.filters.allStatuses') },
+  { value: 'submitting', label: t('batchImage.status.submitting') },
   { value: 'queued', label: t('batchImage.status.queued') },
   { value: 'running', label: t('batchImage.status.running') },
   { value: 'processing_results', label: t('batchImage.status.processingResults') },
@@ -2417,6 +2418,7 @@ function statusLabel(jobOrStatus: BatchImageStatus | Pick<BatchImageJob, 'status
     return t('batchImage.status.allFailed')
   }
   const statusKeys: Record<string, string> = {
+    submitting: 'submitting',
     queued: 'queued',
     running: 'running',
     indexing: 'processingResults',
