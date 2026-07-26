@@ -385,6 +385,11 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 			require.Equal(t, "PROVIDER_SUBMIT_FAILED", batchImageDerefString(job.LastErrorCode))
 			require.Equal(t, "upstream provider operation failed", batchImageDerefString(job.LastErrorMessage))
 			require.NotNil(t, job.UserDeletedAt)
+			for _, item := range repo.items[job.BatchID] {
+				require.Equal(t, BatchImageItemStatusFailed, item.Status)
+				require.Equal(t, "PROVIDER_SUBMIT_FAILED", batchImageDerefString(item.ErrorCode))
+				require.Equal(t, "upstream provider operation failed", batchImageDerefString(item.ErrorMessage))
+			}
 		}
 	})
 
@@ -404,6 +409,9 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		for _, job := range repo.jobs {
 			require.Equal(t, BatchImageJobStatusFailed, job.Status)
 			require.NotNil(t, job.UserDeletedAt)
+			for _, item := range repo.items[job.BatchID] {
+				require.Equal(t, BatchImageItemStatusFailed, item.Status)
+			}
 		}
 	})
 

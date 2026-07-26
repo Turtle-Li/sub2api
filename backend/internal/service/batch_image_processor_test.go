@@ -526,6 +526,13 @@ func (r *fakeBatchImageRepository) TransitionBatchImageJobStatus(_ context.Conte
 	job.Status = toStatus
 	job.LastErrorCode = opts.ErrorCode
 	job.LastErrorMessage = opts.ErrorMessage
+	if toStatus == BatchImageJobStatusFailed {
+		r.failPendingItems(
+			batchID,
+			batchImageDerefString(opts.ErrorCode),
+			batchImageDerefString(opts.ErrorMessage),
+		)
+	}
 	r.transitions[batchID] = append(r.transitions[batchID], toStatus)
 	if opts.EventType != "" {
 		r.events[batchID] = append(r.events[batchID], opts.EventType)
@@ -559,6 +566,7 @@ func (r *fakeBatchImageRepository) FailStaleUnsubmittedBatchImageJob(_ context.C
 	job.LastErrorCode = batchImageStringPtr(code)
 	job.LastErrorMessage = batchImageStringPtr(message)
 	job.UpdatedAt = time.Now()
+	r.failPendingItems(batchID, code, message)
 	r.transitions[batchID] = append(r.transitions[batchID], BatchImageJobStatusFailed)
 	r.events[batchID] = append(r.events[batchID], "billing_hold_recovery_failed_unsubmitted")
 	return true, nil
@@ -601,6 +609,7 @@ func (r *fakeBatchImageRepository) RecordBatchImageJobSubmitFailure(_ context.Co
 	}
 	if markFailed {
 		job.Status = BatchImageJobStatusFailed
+		r.failPendingItems(batchID, code, message)
 	}
 	job.LastErrorCode = batchImageOptionalStringPtr(code)
 	job.LastErrorMessage = batchImageOptionalStringPtr(message)
@@ -610,6 +619,21 @@ func (r *fakeBatchImageRepository) RecordBatchImageJobSubmitFailure(_ context.Co
 	}
 	r.events[batchID] = append(r.events[batchID], eventType)
 	return nil
+}
+
+func (r *fakeBatchImageRepository) failPendingItems(batchID, code, message string) {
+	for index := range r.items[batchID] {
+		if r.items[batchID][index].Status != BatchImageItemStatusPending {
+			continue
+		}
+		r.items[batchID][index].Status = BatchImageItemStatusFailed
+		if r.items[batchID][index].ErrorCode == nil {
+			r.items[batchID][index].ErrorCode = batchImageOptionalStringPtr(code)
+		}
+		if r.items[batchID][index].ErrorMessage == nil {
+			r.items[batchID][index].ErrorMessage = batchImageOptionalStringPtr(message)
+		}
+	}
 }
 
 func (r *fakeBatchImageRepository) MarkBatchImageJobSettled(_ context.Context, params MarkBatchImageJobSettledParams) error {

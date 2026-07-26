@@ -162,8 +162,35 @@ WHERE batch_id = $1
 }
 
 func (r *batchImageRepository) FailStaleUnsubmittedBatchImageJob(ctx context.Context, batchID string, cutoff time.Time, code, message string) (bool, error) {
+	if r.db == nil {
+		return r.failStaleUnsubmittedBatchImageJobWithSQL(
+			ctx, r.sql, batchID, cutoff, code, message,
+		)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	failed, err := r.failStaleUnsubmittedBatchImageJobWithSQL(
+		ctx, tx, batchID, cutoff, code, message,
+	)
+	if err != nil || !failed {
+		return failed, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *batchImageRepository) failStaleUnsubmittedBatchImageJobWithSQL(ctx context.Context, sqlq batchImageSQLExecutor, batchID string, cutoff time.Time, code, message string) (bool, error) {
 	now := time.Now()
-	res, err := r.sql.ExecContext(ctx, `
+	res, err := sqlq.ExecContext(ctx, `
 UPDATE batch_image_jobs
 SET status = 'failed',
     last_error_code = $2,
@@ -185,7 +212,10 @@ WHERE batch_id = $1
 	if affected == 0 {
 		return false, nil
 	}
-	return true, appendBatchImageEventWithSQL(ctx, r.sql, batchID, "billing_hold_recovery_failed_unsubmitted", map[string]any{
+	if err := failPendingBatchImageItemsWithSQL(ctx, sqlq, batchID, code, message); err != nil {
+		return false, err
+	}
+	return true, appendBatchImageEventWithSQL(ctx, sqlq, batchID, "billing_hold_recovery_failed_unsubmitted", map[string]any{
 		"batch_id":   batchID,
 		"error_code": code,
 	})
@@ -250,12 +280,34 @@ WHERE batch_id = $1`, params.BatchID, params.ProviderJobName, params.ProviderInp
 }
 
 func (r *batchImageRepository) RecordBatchImageJobSubmitFailure(ctx context.Context, batchID, code, message string, markFailed bool) error {
+	if r.db == nil {
+		return r.recordBatchImageJobSubmitFailureWithSQL(
+			ctx, r.sql, batchID, code, message, markFailed,
+		)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if err := r.recordBatchImageJobSubmitFailureWithSQL(
+		ctx, tx, batchID, code, message, markFailed,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *batchImageRepository) recordBatchImageJobSubmitFailureWithSQL(ctx context.Context, sqlq batchImageSQLExecutor, batchID, code, message string, markFailed bool) error {
 	now := time.Now()
 	statusSQL := "status"
 	if markFailed {
 		statusSQL = "'failed'"
 	}
-	_, err := r.sql.ExecContext(ctx, `
+	_, err := sqlq.ExecContext(ctx, `
 UPDATE batch_image_jobs
 SET status = `+statusSQL+`,
     last_error_code = $2,
@@ -267,11 +319,51 @@ WHERE batch_id = $1`, batchID, code, message, now)
 	if err != nil {
 		return err
 	}
+	if markFailed {
+		if err := failPendingBatchImageItemsWithSQL(
+			ctx, sqlq, batchID, code, message,
+		); err != nil {
+			return err
+		}
+	}
 	eventType := "submit_failed"
 	if !markFailed {
 		eventType = "queue_failed"
 	}
-	return appendBatchImageEventWithSQL(ctx, r.sql, batchID, eventType, map[string]any{"error_code": code})
+	return appendBatchImageEventWithSQL(ctx, sqlq, batchID, eventType, map[string]any{"error_code": code})
+}
+
+func failPendingBatchImageItemsWithSQL(ctx context.Context, sqlq batchImageSQLExecutor, batchID, code, message string) error {
+	result, err := sqlq.ExecContext(ctx, `
+UPDATE batch_image_items
+SET status = 'failed',
+    error_code = COALESCE(NULLIF(error_code, ''), NULLIF($2, ''), 'BATCH_IMAGE_JOB_FAILED'),
+    error_message = COALESCE(NULLIF(error_message, ''), NULLIF($3, ''), 'batch image job failed before item processing')
+WHERE job_id = $1
+  AND status = 'pending'`, batchID, code, message)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return err
+	}
+	_, err = sqlq.ExecContext(ctx, `
+UPDATE batch_image_jobs
+SET success_count = (
+        SELECT COUNT(*)
+        FROM batch_image_items
+        WHERE job_id = $1
+          AND status IN ('success', 'result_available')
+    ),
+    fail_count = (
+        SELECT COUNT(*)
+        FROM batch_image_items
+        WHERE job_id = $1
+          AND status = 'failed'
+    )
+WHERE batch_id = $1`, batchID)
+	return err
 }
 
 func (r *batchImageRepository) MarkBatchImageJobSettled(ctx context.Context, params service.MarkBatchImageJobSettledParams) error {
@@ -383,6 +475,17 @@ SET
     output_deleted_at = CASE WHEN $2::varchar = 'output_deleted' AND output_deleted_at IS NULL THEN $3 ELSE output_deleted_at END
 WHERE batch_id = $1`, batchID, toStatus, now, opts.ErrorCode, opts.ErrorMessage); err != nil {
 		return err
+	}
+	if toStatus == service.BatchImageJobStatusFailed {
+		if err := failPendingBatchImageItemsWithSQL(
+			ctx,
+			sqlq,
+			batchID,
+			derefString(opts.ErrorCode),
+			derefString(opts.ErrorMessage),
+		); err != nil {
+			return err
+		}
 	}
 
 	if opts.EventType != "" {

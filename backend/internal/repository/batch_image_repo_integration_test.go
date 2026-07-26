@@ -191,6 +191,94 @@ func TestBatchImageRepository_ItemCustomIDUniqueness(t *testing.T) {
 	require.Len(t, items, 1)
 }
 
+func TestBatchImageRepository_SubmitFailureFailsOnlyPendingItems(t *testing.T) {
+	ctx := context.Background()
+	tx := testTx(t)
+	repo := newBatchImageRepositoryWithSQL(tx)
+	batchID := batchImageTestID(t, "submit-failure-items")
+
+	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
+		BatchID:   batchID,
+		UserID:    1001,
+		Provider:  service.BatchImageProviderGeminiAPI,
+		Model:     "gemini-3.1-flash-image",
+		ItemCount: 2,
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.BulkCreateBatchImageItems(ctx, []service.CreateBatchImageItemParams{
+		{JobID: batchID, CustomID: "pending", Status: service.BatchImageItemStatusPending},
+		{JobID: batchID, CustomID: "success", Status: service.BatchImageItemStatusSuccess, ImageCount: 1},
+	}))
+
+	require.NoError(t, repo.RecordBatchImageJobSubmitFailure(
+		ctx,
+		batchID,
+		"SUBMIT_STALE_BEFORE_PROVIDER",
+		"batch image submission did not reach provider before recovery cutoff",
+		true,
+	))
+
+	items, err := repo.ListBatchImageItems(ctx, batchID, service.BatchImageItemFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	byID := map[string]*service.BatchImageItem{}
+	for _, item := range items {
+		byID[item.CustomID] = item
+	}
+	require.Equal(t, service.BatchImageItemStatusFailed, byID["pending"].Status)
+	require.Equal(t, "SUBMIT_STALE_BEFORE_PROVIDER", derefString(byID["pending"].ErrorCode))
+	require.Equal(
+		t,
+		"batch image submission did not reach provider before recovery cutoff",
+		derefString(byID["pending"].ErrorMessage),
+	)
+	require.Equal(t, service.BatchImageItemStatusSuccess, byID["success"].Status)
+	job, err := repo.GetBatchImageJobByBatchID(ctx, batchID)
+	require.NoError(t, err)
+	require.Equal(t, 1, job.SuccessCount)
+	require.Equal(t, 1, job.FailCount)
+}
+
+func TestBatchImageRepository_StalePreProviderFailureFailsPendingItems(t *testing.T) {
+	ctx := context.Background()
+	tx := testTx(t)
+	repo := newBatchImageRepositoryWithSQL(tx)
+	batchID := batchImageTestID(t, "stale-submit-items")
+
+	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
+		BatchID:   batchID,
+		UserID:    1001,
+		Provider:  service.BatchImageProviderVertex,
+		Model:     "gemini-3.1-flash-image",
+		Status:    service.BatchImageJobStatusUploading,
+		ItemCount: 1,
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.BulkCreateBatchImageItems(ctx, []service.CreateBatchImageItemParams{{
+		JobID: batchID, CustomID: "pending", Status: service.BatchImageItemStatusPending,
+	}}))
+
+	failed, err := repo.FailStaleUnsubmittedBatchImageJob(
+		ctx,
+		batchID,
+		time.Now().Add(time.Minute),
+		"SUBMIT_STALE_BEFORE_PROVIDER",
+		"batch image submission did not reach provider before recovery cutoff",
+	)
+	require.NoError(t, err)
+	require.True(t, failed)
+
+	items, err := repo.ListBatchImageItems(ctx, batchID, service.BatchImageItemFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, service.BatchImageItemStatusFailed, items[0].Status)
+	require.Equal(t, "SUBMIT_STALE_BEFORE_PROVIDER", derefString(items[0].ErrorCode))
+	job, err := repo.GetBatchImageJobByBatchID(ctx, batchID)
+	require.NoError(t, err)
+	require.Zero(t, job.SuccessCount)
+	require.Equal(t, 1, job.FailCount)
+}
+
 func TestBatchImageRepository_ReplaceBatchImageItemsForJob(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
