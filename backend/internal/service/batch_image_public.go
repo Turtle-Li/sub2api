@@ -106,24 +106,25 @@ type BatchImagePricingSnapshot struct {
 }
 
 type BatchImagePublicBatch struct {
-	ID              string   `json:"id"`
-	Object          string   `json:"object"`
-	TaskName        string   `json:"task_name"`
-	ParentBatchID   *string  `json:"parent_batch_id,omitempty"`
-	Status          string   `json:"status"`
-	Model           string   `json:"model"`
-	Provider        string   `json:"provider"`
-	ItemCount       int      `json:"item_count"`
-	SuccessCount    int      `json:"success_count"`
-	FailCount       int      `json:"fail_count"`
-	EstimatedCost   float64  `json:"estimated_cost"`
-	HoldAmount      float64  `json:"hold_amount"`
-	ActualCost      *float64 `json:"actual_cost"`
-	CreatedAt       int64    `json:"created_at"`
-	SubmittedAt     *int64   `json:"submitted_at"`
-	SettledAt       *int64   `json:"settled_at"`
-	DownloadedAt    *int64   `json:"downloaded_at,omitempty"`
-	OutputDeletedAt *int64   `json:"output_deleted_at,omitempty"`
+	ID              string                 `json:"id"`
+	Object          string                 `json:"object"`
+	TaskName        string                 `json:"task_name"`
+	ParentBatchID   *string                `json:"parent_batch_id,omitempty"`
+	Status          string                 `json:"status"`
+	Model           string                 `json:"model"`
+	Provider        string                 `json:"provider"`
+	ItemCount       int                    `json:"item_count"`
+	SuccessCount    int                    `json:"success_count"`
+	FailCount       int                    `json:"fail_count"`
+	EstimatedCost   float64                `json:"estimated_cost"`
+	HoldAmount      float64                `json:"hold_amount"`
+	ActualCost      *float64               `json:"actual_cost"`
+	CreatedAt       int64                  `json:"created_at"`
+	SubmittedAt     *int64                 `json:"submitted_at"`
+	SettledAt       *int64                 `json:"settled_at"`
+	DownloadedAt    *int64                 `json:"downloaded_at,omitempty"`
+	OutputDeletedAt *int64                 `json:"output_deleted_at,omitempty"`
+	Error           *BatchImagePublicError `json:"error"`
 }
 
 type BatchImagePublicItem struct {
@@ -206,6 +207,43 @@ func (s *BatchImagePublicService) ValidateSubmitRequest(req BatchImageSubmitRequ
 	}
 	_, err := s.validateSubmitRequest(req)
 	return err
+}
+
+// FindIdempotentSubmit resolves a previously persisted request before the
+// handler repeats the slow prompt audit. A local pre-provider row is not an
+// accepted Gemini submission: callers must keep confirming until a provider
+// job name exists or the row reaches a terminal failure.
+func (s *BatchImagePublicService) FindIdempotentSubmit(
+	ctx context.Context,
+	owner BatchImageOwner,
+	req BatchImageSubmitRequest,
+	idempotencyKey string,
+) (*BatchImagePublicBatch, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return nil, nil
+	}
+	if !s.enabled() {
+		return nil, ErrBatchImageDisabled
+	}
+	taskNameProvided := strings.TrimSpace(req.TaskName) != ""
+	normalized, err := s.validateSubmitRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	requestHash := hashBatchImageIdempotencyRequest(normalized, taskNameProvided)
+	existing, err := s.getIdempotentBatchImageSubmission(
+		ctx,
+		owner,
+		idempotencyKey,
+		requestHash,
+		normalized,
+		taskNameProvided,
+	)
+	if errors.Is(err, ErrBatchImageJobNotFound) {
+		return nil, nil
+	}
+	return existing, err
 }
 
 func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOwner, req BatchImageSubmitRequest, idempotencyKey string) (*BatchImagePublicBatch, error) {
@@ -382,13 +420,15 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	hbCancel()
 	<-hbDone
 	if err != nil {
-		if releaseErr := s.releaseFailedSubmitHold(ctx, job, requestHash); releaseErr != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cleanupCancel()
+		if releaseErr := s.releaseFailedSubmitHold(cleanupCtx, job, requestHash); releaseErr != nil {
 			return nil, releaseErr
 		}
 		publicErr := batchImageProviderSubmitPublicError(err)
 		reason := batchImageProviderSubmitRecordCode(publicErr)
-		_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, reason, sanitizeBatchImagePublicMessage(err.Error()), true)
-		s.hidePreUpstreamSubmitFailure(ctx, owner, job)
+		_ = s.Repo.RecordBatchImageJobSubmitFailure(cleanupCtx, job.BatchID, reason, sanitizeBatchImagePublicMessage(err.Error()), true)
+		s.hidePreUpstreamSubmitFailure(cleanupCtx, owner, job)
 		return nil, publicErr
 	}
 	if providerJob == nil || strings.TrimSpace(providerJob.ProviderJobName) == "" {
@@ -453,6 +493,14 @@ func (s *BatchImagePublicService) getIdempotentBatchImageSubmission(
 	}
 	if !hashMatches {
 		return nil, ErrBatchImageIdempotencyConflict
+	}
+	if existing.ProviderJobName == nil || strings.TrimSpace(*existing.ProviderJobName) == "" {
+		switch existing.Status {
+		case BatchImageJobStatusCreated, BatchImageJobStatusUploading, BatchImageJobStatusSubmitted:
+			return nil, ErrBatchImageSubmitPending
+		default:
+			return nil, ErrBatchImagePreviousSubmitFailed
+		}
 	}
 	if existing.Status == BatchImageJobStatusSubmitted && s.Queue != nil {
 		if enqueueErr := s.Queue.Enqueue(ctx, existing.BatchID); enqueueErr != nil && !errors.Is(enqueueErr, ErrBatchImageAlreadyQueued) {
@@ -1227,6 +1275,20 @@ func BatchImageJobToPublic(job *BatchImageJob) *BatchImagePublicBatch {
 	if job.HoldAmount != nil {
 		holdAmount = *job.HoldAmount
 	}
+	var publicError *BatchImagePublicError
+	if code := strings.TrimSpace(batchImageDerefString(job.LastErrorCode)); code != "" {
+		message := sanitizeBatchImagePublicMessage(
+			batchImageDerefString(job.LastErrorMessage),
+		)
+		if message == "" {
+			message = code
+		}
+		publicError = &BatchImagePublicError{
+			Code:    code,
+			Message: message,
+			Source:  "service",
+		}
+	}
 	return &BatchImagePublicBatch{
 		ID:              job.BatchID,
 		Object:          "image.batch",
@@ -1246,6 +1308,7 @@ func BatchImageJobToPublic(job *BatchImageJob) *BatchImagePublicBatch {
 		SettledAt:       batchImageUnixPtr(job.SettledAt),
 		DownloadedAt:    batchImageUnixPtr(job.DownloadedAt),
 		OutputDeletedAt: batchImageUnixPtr(job.OutputDeletedAt),
+		Error:           publicError,
 	}
 }
 

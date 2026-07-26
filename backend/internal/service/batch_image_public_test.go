@@ -388,6 +388,25 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		}
 	})
 
+	t.Run("provider failure cleanup survives client context cancellation", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		gemini.submitErr = context.Canceled
+		billing := svc.BillingRepo.(*fakeBatchImageBillingRepo)
+		billing.requireLiveReleaseContext = true
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := svc.Submit(cancelled, testBatchImageOwner(), validBatchImageSubmitRequest(), "")
+
+		require.ErrorIs(t, err, ErrBatchImageProviderSubmitFailed)
+		require.Empty(t, queue.enqueued)
+		require.Len(t, billing.releases, 1)
+		for _, job := range repo.jobs {
+			require.Equal(t, BatchImageJobStatusFailed, job.Status)
+			require.NotNil(t, job.UserDeletedAt)
+		}
+	})
+
 	t.Run("provider failure with release failure enqueues billing retry", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		gemini.submitErr = errors.New("projects/secret-provider-job failed")
@@ -450,6 +469,94 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.NotEmpty(t, first.ID)
 	})
 
+	t.Run("idempotency preflight returns a provider-backed batch without side effects", func(t *testing.T) {
+		svc, _, queue, gemini, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		first, err := svc.Submit(ctx, testBatchImageOwner(), req, "preflight-client-key")
+		require.NoError(t, err)
+
+		replayed, err := svc.FindIdempotentSubmit(
+			ctx,
+			testBatchImageOwner(),
+			req,
+			"preflight-client-key",
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, replayed)
+		require.Equal(t, first.ID, replayed.ID)
+		require.Len(t, gemini.submits, 1)
+		require.Equal(t, []string{first.ID}, queue.enqueued)
+	})
+
+	t.Run("idempotency does not expose a pre-provider upload as accepted", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		normalized, normalizeErr := svc.validateSubmitRequest(req)
+		require.NoError(t, normalizeErr)
+		apiKeyID := int64(22)
+		key := "pending-client-key"
+		requestHash := hashBatchImageIdempotencyRequest(normalized, false)
+		repo.jobs["imgbatch_pending_submit"] = &BatchImageJob{
+			BatchID:        "imgbatch_pending_submit",
+			UserID:         11,
+			APIKeyID:       &apiKeyID,
+			Status:         BatchImageJobStatusUploading,
+			Provider:       BatchImageProviderGeminiAPI,
+			Model:          req.Model,
+			TaskName:       normalized.TaskName,
+			IdempotencyKey: batchImageStringPtr(key),
+			RequestHash:    batchImageStringPtr(requestHash),
+			CreatedAt:      time.Now(),
+		}
+
+		replayed, err := svc.FindIdempotentSubmit(
+			ctx,
+			testBatchImageOwner(),
+			req,
+			key,
+		)
+
+		require.Nil(t, replayed)
+		require.ErrorIs(t, err, ErrBatchImageSubmitPending)
+		_, err = svc.Submit(ctx, testBatchImageOwner(), req, key)
+		require.ErrorIs(t, err, ErrBatchImageSubmitPending)
+		require.Empty(t, gemini.submits)
+		require.Empty(t, queue.enqueued)
+	})
+
+	t.Run("idempotency reports a failed pre-provider attempt as failed", func(t *testing.T) {
+		svc, repo, _, _, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		normalized, normalizeErr := svc.validateSubmitRequest(req)
+		require.NoError(t, normalizeErr)
+		apiKeyID := int64(22)
+		key := "failed-client-key"
+		requestHash := hashBatchImageIdempotencyRequest(normalized, false)
+		repo.jobs["imgbatch_failed_submit"] = &BatchImageJob{
+			BatchID:        "imgbatch_failed_submit",
+			UserID:         11,
+			APIKeyID:       &apiKeyID,
+			Status:         BatchImageJobStatusFailed,
+			Provider:       BatchImageProviderGeminiAPI,
+			Model:          req.Model,
+			TaskName:       normalized.TaskName,
+			IdempotencyKey: batchImageStringPtr(key),
+			RequestHash:    batchImageStringPtr(requestHash),
+			CreatedAt:      time.Now(),
+		}
+
+		replayed, err := svc.FindIdempotentSubmit(
+			ctx,
+			testBatchImageOwner(),
+			req,
+			key,
+		)
+
+		require.Nil(t, replayed)
+		require.ErrorIs(t, err, ErrBatchImagePreviousSubmitFailed)
+	})
+
 	t.Run("idempotency insert race recovers the winning batch", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		req := validBatchImageSubmitRequest()
@@ -459,16 +566,17 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		apiKeyID := int64(22)
 		requestHash := hashBatchImageIdempotencyRequest(normalized, false)
 		winner := &BatchImageJob{
-			BatchID:        "imgbatch_idempotency_winner",
-			UserID:         11,
-			APIKeyID:       &apiKeyID,
-			Status:         BatchImageJobStatusSubmitted,
-			Provider:       BatchImageProviderGeminiAPI,
-			Model:          req.Model,
-			TaskName:       normalized.TaskName,
-			IdempotencyKey: batchImageStringPtr("client-key"),
-			RequestHash:    batchImageStringPtr(requestHash),
-			CreatedAt:      time.Now(),
+			BatchID:         "imgbatch_idempotency_winner",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			Status:          BatchImageJobStatusSubmitted,
+			Provider:        BatchImageProviderGeminiAPI,
+			Model:           req.Model,
+			ProviderJobName: batchImageStringPtr("provider-idempotency-winner"),
+			TaskName:        normalized.TaskName,
+			IdempotencyKey:  batchImageStringPtr("client-key"),
+			RequestHash:     batchImageStringPtr(requestHash),
+			CreatedAt:       time.Now(),
 		}
 		repo.jobs[winner.BatchID] = winner
 		svc.Repo = &idempotencyRaceBatchImageRepository{
@@ -503,16 +611,17 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		apiKeyID := int64(22)
 		legacyHash := HashBatchImageSubmitRequest(firstGenerated)
 		repo.jobs["imgbatch_legacy_idempotency"] = &BatchImageJob{
-			BatchID:        "imgbatch_legacy_idempotency",
-			UserID:         11,
-			APIKeyID:       &apiKeyID,
-			Status:         BatchImageJobStatusSubmitted,
-			Provider:       BatchImageProviderGeminiAPI,
-			Model:          req.Model,
-			TaskName:       firstGenerated.TaskName,
-			IdempotencyKey: batchImageStringPtr("legacy-client-key"),
-			RequestHash:    batchImageStringPtr(legacyHash),
-			CreatedAt:      time.Now(),
+			BatchID:         "imgbatch_legacy_idempotency",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			Status:          BatchImageJobStatusSubmitted,
+			Provider:        BatchImageProviderGeminiAPI,
+			Model:           req.Model,
+			ProviderJobName: batchImageStringPtr("provider-legacy-idempotency"),
+			TaskName:        firstGenerated.TaskName,
+			IdempotencyKey:  batchImageStringPtr("legacy-client-key"),
+			RequestHash:     batchImageStringPtr(legacyHash),
+			CreatedAt:       time.Now(),
 		}
 
 		got, err := svc.Submit(ctx, testBatchImageOwner(), req, "legacy-client-key")
@@ -566,6 +675,27 @@ func TestBatchImagePublicService_List(t *testing.T) {
 	require.Len(t, got.Data, 1)
 	require.Equal(t, "visible-1", got.Data[0].ID)
 	require.False(t, got.HasMore)
+}
+
+func TestBatchImageJobToPublicIncludesSanitizedTerminalError(t *testing.T) {
+	job := &BatchImageJob{
+		BatchID:       "imgbatch_failed_before_provider",
+		Status:        BatchImageJobStatusFailed,
+		Provider:      BatchImageProviderGeminiAPI,
+		Model:         "gemini-3.1-flash-image",
+		LastErrorCode: batchImageStringPtr("SUBMIT_STALE_BEFORE_PROVIDER"),
+		LastErrorMessage: batchImageStringPtr(
+			"submit failed for projects/secret-provider-job",
+		),
+		CreatedAt: time.Now(),
+	}
+
+	got := BatchImageJobToPublic(job)
+
+	require.NotNil(t, got.Error)
+	require.Equal(t, "SUBMIT_STALE_BEFORE_PROVIDER", got.Error.Code)
+	require.Equal(t, "upstream provider operation failed", got.Error.Message)
+	require.Equal(t, "service", got.Error.Source)
 }
 
 func TestBatchImagePublicService_ListModels(t *testing.T) {

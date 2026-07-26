@@ -426,16 +426,17 @@ func (r *fakeBatchImagePricingResolver) BatchImageUnitPrice(_ context.Context, j
 }
 
 type fakeBatchImageBillingRepo struct {
-	commands       []*UsageBillingCommand
-	reserves       []*BatchImageBalanceHoldCommand
-	captures       []*BatchImageBalanceHoldCommand
-	releases       []*BatchImageBalanceHoldCommand
-	seen           map[string]struct{}
-	alreadyApplied map[string]bool
-	err            error
-	reserveErr     error
-	captureErr     error
-	releaseErr     error
+	commands                  []*UsageBillingCommand
+	reserves                  []*BatchImageBalanceHoldCommand
+	captures                  []*BatchImageBalanceHoldCommand
+	releases                  []*BatchImageBalanceHoldCommand
+	seen                      map[string]struct{}
+	alreadyApplied            map[string]bool
+	err                       error
+	reserveErr                error
+	captureErr                error
+	releaseErr                error
+	requireLiveReleaseContext bool
 }
 
 func (r *fakeBatchImageBillingRepo) Apply(_ context.Context, cmd *UsageBillingCommand) (*UsageBillingApplyResult, error) {
@@ -474,7 +475,10 @@ func (r *fakeBatchImageBillingRepo) CaptureBatchImageBalance(_ context.Context, 
 	return r.applyHold(cmd, &r.captures)
 }
 
-func (r *fakeBatchImageBillingRepo) ReleaseBatchImageBalance(_ context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
+func (r *fakeBatchImageBillingRepo) ReleaseBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
+	if r.requireLiveReleaseContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if r.releaseErr != nil {
 		r.releases = append(r.releases, cmd)
 		return nil, r.releaseErr
