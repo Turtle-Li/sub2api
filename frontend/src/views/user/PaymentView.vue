@@ -1131,10 +1131,24 @@ onMounted(async () => {
     if (checkout.value.balance_disabled) {
       activeTab.value = 'subscription'
     }
-    // Handle renewal navigation: ?tab=subscription&group=123
+    // Handle desktop and renewal deep links. The hosted payment page remains
+    // responsible for order creation, but preserves the user's desktop choice.
+    if (route.query.tab === 'recharge' && !checkout.value.balance_disabled) {
+      activeTab.value = 'recharge'
+      const requestedAmount = Number(route.query.amount)
+      if (Number.isFinite(requestedAmount) && requestedAmount > 0) {
+        amount.value = requestedAmount
+      }
+    }
     if (route.query.tab === 'subscription') {
       activeTab.value = 'subscription'
-      if (route.query.group) {
+      const requestedPlanID = Number(route.query.plan_id)
+      const requestedPlan = Number.isFinite(requestedPlanID)
+        ? checkout.value.plans.find(plan => plan.id === requestedPlanID)
+        : undefined
+      if (requestedPlan) {
+        selectedPlan.value = requestedPlan
+      } else if (route.query.group) {
         const groupId = Number(route.query.group)
         const groupPlans = checkout.value.plans.filter(p => p.group_id === groupId)
         if (groupPlans.length === 1) {
