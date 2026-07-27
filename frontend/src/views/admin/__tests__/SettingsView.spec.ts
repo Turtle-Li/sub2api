@@ -356,6 +356,7 @@ const baseSettingsResponse = {
   site_logo: "",
   site_subtitle: "",
   api_base_url: "",
+  desktop_control_plane_url: "",
   contact_info: "",
   doc_url: "",
   home_content: "",
@@ -658,6 +659,54 @@ describe("admin SettingsView payment visible method controls", () => {
     });
     fetchPublicSettings.mockResolvedValue(undefined);
     adminSettingsFetch.mockResolvedValue(undefined);
+  });
+
+  it("loads and saves the desktop control plane separately from api_base_url", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      api_base_url: "https://models.example.com",
+      desktop_control_plane_url: "https://accounts.example.com",
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+
+    const input = wrapper.get(
+      '[data-testid="desktop-control-plane-url-input"]',
+    );
+    expect((input.element as HTMLInputElement).value).toBe(
+      "https://accounts.example.com",
+    );
+    expect(wrapper.text()).toContain(
+      "admin.settings.site.desktopControlPlaneUrlHint",
+    );
+
+    await input.setValue("https://new-accounts.example.com/");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api_base_url: "https://models.example.com",
+        desktop_control_plane_url: "https://new-accounts.example.com",
+      }),
+    );
+  });
+
+  it("rejects a non-HTTPS desktop control plane before saving", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper
+      .get('[data-testid="desktop-control-plane-url-input"]')
+      .setValue("http://accounts.example.com");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith(
+      "admin.settings.site.desktopControlPlaneUrlInvalid",
+    );
   });
 
   it("does not render legacy visible payment method controls", async () => {

@@ -63,6 +63,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		normalizedWhitelist = []string{}
 	}
 	settings.RegistrationEmailSuffixWhitelist = normalizedWhitelist
+	desktopControlPlaneURL, err := NormalizeDesktopControlPlaneURL(settings.DesktopControlPlaneURL)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_DESKTOP_CONTROL_PLANE_URL", err.Error())
+	}
+	settings.DesktopControlPlaneURL = desktopControlPlaneURL
 	normalizedForwardedClientIPHeaders, err := config.NormalizeForwardedClientIPHeaders(settings.ForwardedClientIPHeaders)
 	if err != nil {
 		return nil, infraerrors.BadRequest("INVALID_FORWARDED_CLIENT_IP_HEADERS", err.Error())
@@ -269,6 +274,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeySiteLogo] = settings.SiteLogo
 	updates[SettingKeySiteSubtitle] = settings.SiteSubtitle
 	updates[SettingKeyAPIBaseURL] = settings.APIBaseURL
+	updates[SettingKeyDesktopControlPlaneURL] = settings.DesktopControlPlaneURL
 	updates[SettingKeyContactInfo] = settings.ContactInfo
 	updates[SettingKeyDocURL] = settings.DocURL
 	updates[SettingKeyHomeContent] = settings.HomeContent

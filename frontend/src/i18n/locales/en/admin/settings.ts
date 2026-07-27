@@ -499,6 +499,12 @@ export default {
         siteSubtitle: 'Site Subtitle',
         siteSubtitlePlaceholder: 'Subscription to API Conversion Platform',
         siteSubtitleHint: 'Displayed on login and register pages',
+        desktopControlPlaneUrl: 'Desktop Account Control Plane URL',
+        desktopControlPlaneUrlPlaceholder: 'https://www.example.com',
+        desktopControlPlaneUrlHint:
+          'Used only for desktop login, account, and key APIs. Leave empty to follow the current website. HTTPS is required; this is not the model API endpoint (api_base_url).',
+        desktopControlPlaneUrlInvalid:
+          'The desktop account control plane must be an HTTPS origin without a path, credentials, query, or fragment.',
         apiBaseUrl: 'API Base URL',
         apiBaseUrlPlaceholder: 'https://api.example.com',
         apiBaseUrlHint:

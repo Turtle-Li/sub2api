@@ -287,6 +287,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.APIBaseURL != after.APIBaseURL {
 		changed = append(changed, "api_base_url")
 	}
+	if before.DesktopControlPlaneURL != after.DesktopControlPlaneURL {
+		changed = append(changed, "desktop_control_plane_url")
+	}
 	if before.ContactInfo != after.ContactInfo {
 		changed = append(changed, "contact_info")
 	}
