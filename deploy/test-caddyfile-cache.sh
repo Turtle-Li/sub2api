@@ -15,4 +15,14 @@ if ! printf '%s\n' "$active_config" | grep -Eq '^[[:space:]]*reverse_proxy[[:spa
 	exit 1
 fi
 
-echo "Caddyfile preserves backend Cache-Control policy and reverse_proxy routing"
+if ! printf '%s\n' "$active_config" | grep -Eq '^[[:space:]]*@large_multimodal_request_body[[:space:]]+path[[:space:]].*/v1/images/batches([[:space:]]|$)'; then
+	echo "Caddyfile must give the exact Batch Image submit path the multimodal body budget" >&2
+	exit 1
+fi
+
+if ! printf '%s\n' "$active_config" | grep -Eq '^[[:space:]]*@standard_request_body[[:space:]]+not[[:space:]]+path[[:space:]].*/v1/images/batches([[:space:]]|$)'; then
+	echo "Caddyfile standard-body matcher must exclude the exact Batch Image submit path" >&2
+	exit 1
+fi
+
+echo "Caddyfile preserves backend cache policy, routing, and scoped multimodal body limits"

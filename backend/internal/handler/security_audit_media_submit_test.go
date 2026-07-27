@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,6 +28,15 @@ type handlerPromptEngine struct {
 	evaluated int
 	enqueued  int
 	requests  []securityaudit.Request
+}
+
+type batchImageReadTrap struct {
+	read bool
+}
+
+func (r *batchImageReadTrap) Read(_ []byte) (int, error) {
+	r.read = true
+	return 0, errors.New("request body must not be read before authentication")
 }
 
 func (e *handlerPromptEngine) EffectiveMode() securityaudit.Mode { return e.mode }
@@ -182,6 +192,27 @@ func TestBatchImagePromptGuardRunsBeforePersistenceOrBilling(t *testing.T) {
 	require.Contains(t, string(requests[0].Body), "blocked batch prompt")
 	require.NotContains(t, string(requests[0].Body), "BINARY_CANARY")
 	require.NotContains(t, string(requests[0].Body), "QklOQVJZX0NBTkFSWQ==")
+}
+
+func TestBatchImageSubmitAuthenticatesBeforeReadingLargeBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &BatchImageHandler{}
+	router := gin.New()
+	router.POST("/v1/images/batches", h.Submit)
+	body := &batchImageReadTrap{}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/images/batches",
+		body,
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+	require.False(t, body.read)
+	require.Contains(t, recorder.Body.String(), "API_KEY_REQUIRED")
 }
 
 func TestSecurityAuditBlockingFailuresLeaveAllDownstreamCountersAtZero(t *testing.T) {

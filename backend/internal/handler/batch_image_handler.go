@@ -29,14 +29,14 @@ func NewBatchImageHandler(service *service.BatchImagePublicService, download *se
 }
 
 func (h *BatchImageHandler) Submit(c *gin.Context) {
-	var req service.BatchImageSubmitRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		batchImageError(c, service.ErrBatchImageInvalidItems)
-		return
-	}
 	owner, ok := batchImageOwnerFromContext(c)
 	if !ok {
 		batchImageError(c, infraerrors.New(http.StatusUnauthorized, "API_KEY_REQUIRED", "API key is required"))
+		return
+	}
+	var req service.BatchImageSubmitRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		batchImageError(c, service.ErrBatchImageInvalidItems)
 		return
 	}
 	if err := h.service.ValidateSubmitRequest(req); err != nil {

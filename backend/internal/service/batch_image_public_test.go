@@ -230,6 +230,73 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Len(t, gemini.submits[0].Items[0].ReferenceImages, 9)
 	})
 
+	t.Run("expands shared references without changing semantic request hash", func(t *testing.T) {
+		svc, _, _, gemini, _ := newTestBatchImagePublicService(true)
+		shared := []BatchImageSharedReferenceInput{
+			{SharedReferenceID: "shared-front", MimeType: "image/png", Data: []byte("front")},
+			{SharedReferenceID: "shared-back", MimeType: "image/png", Data: []byte("back")},
+		}
+		compact := validBatchImageSubmitRequest()
+		compact.Model = "gemini-3.1-flash-image"
+		compact.SharedReferenceImages = shared
+		compact.Items[0].ReferenceImages = []BatchImageReferenceInput{
+			{ID: "product-front", Type: "product_truth", SharedReferenceID: "shared-front"},
+			{ID: "product-back", Type: "product_truth", SharedReferenceID: "shared-back"},
+			{ID: "scene-one", Type: "scene", MimeType: "image/jpeg", Data: []byte("scene-1")},
+		}
+		compact.Items[1].ReferenceImages = []BatchImageReferenceInput{
+			{ID: "product-back-view", Type: "product_truth", SharedReferenceID: "shared-back"},
+			{ID: "product-front-view", Type: "product_truth", SharedReferenceID: "shared-front"},
+			{ID: "scene-two", Type: "scene", MimeType: "image/jpeg", Data: []byte("scene-2")},
+		}
+
+		expanded := compact
+		expanded.SharedReferenceImages = nil
+		expanded.Items = append([]BatchImageSubmitItem(nil), compact.Items...)
+		expanded.Items[0].ReferenceImages = []BatchImageReferenceInput{
+			{ID: "product-front", Type: "product_truth", MimeType: "image/png", Data: []byte("front")},
+			{ID: "product-back", Type: "product_truth", MimeType: "image/png", Data: []byte("back")},
+			{ID: "scene-one", Type: "scene", MimeType: "image/jpeg", Data: []byte("scene-1")},
+		}
+		expanded.Items[1].ReferenceImages = []BatchImageReferenceInput{
+			{ID: "product-back-view", Type: "product_truth", MimeType: "image/png", Data: []byte("back")},
+			{ID: "product-front-view", Type: "product_truth", MimeType: "image/png", Data: []byte("front")},
+			{ID: "scene-two", Type: "scene", MimeType: "image/jpeg", Data: []byte("scene-2")},
+		}
+		normalizedCompact, err := svc.validateSubmitRequest(compact)
+		require.NoError(t, err)
+		normalizedExpanded, err := svc.validateSubmitRequest(expanded)
+		require.NoError(t, err)
+		require.Equal(
+			t,
+			HashBatchImageSubmitRequest(normalizedExpanded),
+			HashBatchImageSubmitRequest(normalizedCompact),
+		)
+
+		_, err = svc.Submit(ctx, testBatchImageOwner(), compact, "")
+		require.NoError(t, err)
+		require.Len(t, gemini.submits, 1)
+		require.Len(t, gemini.submits[0].Items, 2)
+		require.Equal(
+			t,
+			[]string{"product-front", "product-back", "scene-one"},
+			[]string{
+				gemini.submits[0].Items[0].ReferenceImages[0].ID,
+				gemini.submits[0].Items[0].ReferenceImages[1].ID,
+				gemini.submits[0].Items[0].ReferenceImages[2].ID,
+			},
+		)
+		require.Equal(
+			t,
+			[]string{"product-back-view", "product-front-view", "scene-two"},
+			[]string{
+				gemini.submits[0].Items[1].ReferenceImages[0].ID,
+				gemini.submits[0].Items[1].ReferenceImages[1].ID,
+				gemini.submits[0].Items[1].ReferenceImages[2].ID,
+			},
+		)
+	})
+
 	t.Run("validates request fields", func(t *testing.T) {
 		tests := []struct {
 			name   string
@@ -266,6 +333,32 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 						},
 					)
 				}
+			}, want: ErrBatchImageTooManyReferenceImages},
+			{name: "shared_and_item_references_obey_per_item_model_limit", mutate: func(r *BatchImageSubmitRequest) {
+				r.Model = "gemini-3.1-flash-image"
+				for index := 1; index <= 14; index++ {
+					r.SharedReferenceImages = append(
+						r.SharedReferenceImages,
+						BatchImageSharedReferenceInput{
+							SharedReferenceID: fmt.Sprintf("shared-%02d", index),
+							MimeType:          "image/png",
+							Data:              []byte{byte(index)},
+						},
+					)
+					r.Items[0].ReferenceImages = append(
+						r.Items[0].ReferenceImages,
+						BatchImageReferenceInput{
+							SharedReferenceID: fmt.Sprintf("shared-%02d", index),
+						},
+					)
+				}
+				r.Items[0].ReferenceImages = append(
+					r.Items[0].ReferenceImages,
+					BatchImageReferenceInput{
+						MimeType: "image/png",
+						Data:     []byte("item-specific"),
+					},
+				)
 			}, want: ErrBatchImageTooManyReferenceImages},
 			{name: "bad_reference_mime", mutate: func(r *BatchImageSubmitRequest) {
 				r.Items[0].ReferenceImages = []BatchImageReferenceInput{{MimeType: "application/octet-stream", Data: []byte("x")}}
