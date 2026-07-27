@@ -106,6 +106,48 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 	})
 }
 
+// GetDesktopSettings returns the narrow, unauthenticated discovery contract
+// used by desktop clients to locate the account control plane.
+// GET /api/v1/settings/desktop
+func (h *SettingHandler) GetDesktopSettings(c *gin.Context) {
+	controlPlaneURL, err := h.settingService.GetDesktopControlPlaneURL(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if controlPlaneURL == "" {
+		controlPlaneURL = desktopRequestOrigin(c)
+	}
+	if controlPlaneURL == "" {
+		response.InternalError(c, "desktop control plane URL is unavailable")
+		return
+	}
+
+	response.Success(c, dto.DesktopSettings{
+		SchemaVersion:   1,
+		ControlPlaneURL: controlPlaneURL,
+	})
+}
+
+func desktopRequestOrigin(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	host := strings.TrimSpace(c.Request.Host)
+	if host == "" {
+		return ""
+	}
+	scheme := "http"
+	if isRequestHTTPS(c) {
+		scheme = "https"
+	}
+	origin, err := service.NormalizeDesktopControlPlaneURL(scheme + "://" + host)
+	if err != nil {
+		return ""
+	}
+	return origin
+}
+
 // UnsubscribeNotificationEmail handles optional notification email opt-outs.
 // GET /api/v1/settings/email-unsubscribe?token=...
 func (h *SettingHandler) UnsubscribeNotificationEmail(c *gin.Context) {

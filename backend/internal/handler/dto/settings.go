@@ -135,6 +135,7 @@ type SystemSettings struct {
 	SiteLogo                    string           `json:"site_logo"`
 	SiteSubtitle                string           `json:"site_subtitle"`
 	APIBaseURL                  string           `json:"api_base_url"`
+	DesktopControlPlaneURL      string           `json:"desktop_control_plane_url"`
 	ContactInfo                 string           `json:"contact_info"`
 	DocURL                      string           `json:"doc_url"`
 	HomeContent                 string           `json:"home_content"`
@@ -309,6 +310,11 @@ type SystemSettings struct {
 type DefaultSubscriptionSetting struct {
 	GroupID      int64 `json:"group_id"`
 	ValidityDays int   `json:"validity_days"`
+}
+
+type DesktopSettings struct {
+	SchemaVersion   int    `json:"schema_version"`
+	ControlPlaneURL string `json:"control_plane_url"`
 }
 
 type PublicSettings struct {

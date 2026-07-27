@@ -216,6 +216,7 @@ func RegisterAuthRoutes(
 	// 公开设置（无需认证）
 	settings := v1.Group("/settings")
 	{
+		settings.GET("/desktop", h.Setting.GetDesktopSettings)
 		settings.GET("/public", h.Setting.GetPublicSettings)
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
 	}
