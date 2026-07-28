@@ -130,6 +130,9 @@ run_release() {
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS=30 \
+    SUB2API_RELEASE_BUILD_GOMAXPROCS=1 \
+    SUB2API_RELEASE_BUILD_GO_PARALLELISM=1 \
+    SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT=768MiB \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
     /bin/bash "$SCRIPT" \
       "$SOURCE_DIR" \
@@ -157,5 +160,8 @@ if ALLOW_DRAINING=true run_release >"$override_output" 2>&1; then
 fi
 assert_contains "$override_output" 'Building sub2api:auto-test'
 assert_contains "$DOCKER_CALLS" 'build --progress=plain'
+assert_contains "$DOCKER_CALLS" '--build-arg BUILD_GOMAXPROCS=1'
+assert_contains "$DOCKER_CALLS" '--build-arg BUILD_GO_PARALLELISM=1'
+assert_contains "$DOCKER_CALLS" '--build-arg BUILD_GO_MEMORY_LIMIT=768MiB'
 
 printf 'Server release inactive-container guard tests passed.\n'

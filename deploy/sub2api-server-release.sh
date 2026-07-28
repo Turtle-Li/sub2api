@@ -28,6 +28,9 @@ SWITCH_LOG="${LOG_DIR}/switch.log"
 LOCK_FILE="${SUB2API_RELEASE_LOCK_FILE:-/var/lock/sub2api-release.lock}"
 MIN_FREE_BYTES="${SUB2API_RELEASE_MIN_FREE_BYTES:-8589934592}"
 BUILD_TIMEOUT_SECONDS="${SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS:-3000}"
+BUILD_GOMAXPROCS="${SUB2API_RELEASE_BUILD_GOMAXPROCS:-1}"
+BUILD_GO_PARALLELISM="${SUB2API_RELEASE_BUILD_GO_PARALLELISM:-1}"
+BUILD_GO_MEMORY_LIMIT="${SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT:-768MiB}"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 ALLOW_PREEXISTING_DRAINING_CONTAINER="${SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER:-false}"
 DRAIN_MONITOR_SCRIPT="${SUB2API_DRAIN_MONITOR_SCRIPT:-${APP_DIR}/scripts/sub2api-drain-monitor.sh}"
@@ -75,11 +78,22 @@ require_bool() {
   esac
 }
 
+require_go_memory_limit() {
+  case "$2" in
+    ''|*[!0-9kKmMgGtTpPeEiIbB]*) die "$1 must be a Go memory quantity" ;;
+    *[bB]) ;;
+    *) die "$1 must include a memory unit" ;;
+  esac
+}
+
 for command_name in docker curl flock grep awk timeout perl systemd-run; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RELEASE_MIN_FREE_BYTES "$MIN_FREE_BYTES"
 require_positive_integer SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS "$BUILD_TIMEOUT_SECONDS"
+require_positive_integer SUB2API_RELEASE_BUILD_GOMAXPROCS "$BUILD_GOMAXPROCS"
+require_positive_integer SUB2API_RELEASE_BUILD_GO_PARALLELISM "$BUILD_GO_PARALLELISM"
+require_go_memory_limit SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT "$BUILD_GO_MEMORY_LIMIT"
 require_bool SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER "$ALLOW_PREEXISTING_DRAINING_CONTAINER"
 require_positive_integer SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS "$DRAIN_INTERVAL_SECONDS"
 require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACTIVE_WINDOW_SECONDS"
@@ -187,6 +201,9 @@ if ! timeout "$BUILD_TIMEOUT_SECONDS" env DOCKER_BUILDKIT=1 docker build \
   --build-arg "GOPROXY=https://goproxy.cn,direct" \
   --build-arg "GOSUMDB=sum.golang.google.cn" \
   --build-arg "NPM_CONFIG_REGISTRY=https://registry.npmmirror.com" \
+  --build-arg "BUILD_GOMAXPROCS=${BUILD_GOMAXPROCS}" \
+  --build-arg "BUILD_GO_PARALLELISM=${BUILD_GO_PARALLELISM}" \
+  --build-arg "BUILD_GO_MEMORY_LIMIT=${BUILD_GO_MEMORY_LIMIT}" \
   --build-arg "COMMIT=${COMMIT}" \
   --build-arg "VERSION=${VERSION}" \
   --build-arg "DATE=${build_started}" \
