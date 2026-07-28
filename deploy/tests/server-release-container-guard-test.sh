@@ -66,6 +66,13 @@ case "$command_name" in
       *Config.Image*) printf 'sub2api:auto-old\n' ;;
     esac
     ;;
+  image)
+    [ "${2:-}" = "inspect" ] || exit 1
+    exit 0
+    ;;
+  tag)
+    exit 0
+    ;;
   logs)
     exit 0
     ;;
@@ -163,5 +170,17 @@ assert_contains "$DOCKER_CALLS" 'build --progress=plain'
 assert_contains "$DOCKER_CALLS" '--build-arg BUILD_GOMAXPROCS=1'
 assert_contains "$DOCKER_CALLS" '--build-arg BUILD_GO_PARALLELISM=1'
 assert_contains "$DOCKER_CALLS" '--build-arg BUILD_GO_MEMORY_LIMIT=768MiB'
+
+: >"$DOCKER_CALLS"
+prebuilt_output="${TEST_ROOT}/prebuilt.log"
+if ALLOW_DRAINING=true SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX='sub2api:prebuilt-' run_release >"$prebuilt_output" 2>&1; then
+  fail 'fake prebuilt release unexpectedly succeeded'
+fi
+assert_contains "$prebuilt_output" 'Using externally built image sub2api:prebuilt-abc123'
+assert_contains "$DOCKER_CALLS" 'image inspect sub2api:prebuilt-abc123'
+assert_contains "$DOCKER_CALLS" 'tag sub2api:prebuilt-abc123 sub2api:auto-test'
+if grep -Fq -- 'build ' "$DOCKER_CALLS"; then
+  fail 'server-side image build ran despite a prebuilt image'
+fi
 
 printf 'Server release inactive-container guard tests passed.\n'

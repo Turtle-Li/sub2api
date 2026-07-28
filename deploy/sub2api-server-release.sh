@@ -31,6 +31,10 @@ BUILD_TIMEOUT_SECONDS="${SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS:-3000}"
 BUILD_GOMAXPROCS="${SUB2API_RELEASE_BUILD_GOMAXPROCS:-1}"
 BUILD_GO_PARALLELISM="${SUB2API_RELEASE_BUILD_GO_PARALLELISM:-1}"
 BUILD_GO_MEMORY_LIMIT="${SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT:-768MiB}"
+# When set, production must receive an image built elsewhere before a release.
+# The full commit SHA is appended to this prefix (for example,
+# sub2api:prebuilt-<commit>) and the server never invokes docker build.
+PREBUILT_IMAGE_PREFIX="${SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX:-}"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 ALLOW_PREEXISTING_DRAINING_CONTAINER="${SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER:-false}"
 DRAIN_MONITOR_SCRIPT="${SUB2API_DRAIN_MONITOR_SCRIPT:-${APP_DIR}/scripts/sub2api-drain-monitor.sh}"
@@ -94,6 +98,10 @@ require_positive_integer SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS "$BUILD_TIMEOUT_S
 require_positive_integer SUB2API_RELEASE_BUILD_GOMAXPROCS "$BUILD_GOMAXPROCS"
 require_positive_integer SUB2API_RELEASE_BUILD_GO_PARALLELISM "$BUILD_GO_PARALLELISM"
 require_go_memory_limit SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT "$BUILD_GO_MEMORY_LIMIT"
+case "$PREBUILT_IMAGE_PREFIX" in
+  '') ;;
+  *[!A-Za-z0-9./:_-]*) die "SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX contains unsupported characters" ;;
+esac
 require_bool SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER "$ALLOW_PREEXISTING_DRAINING_CONTAINER"
 require_positive_integer SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS "$DRAIN_INTERVAL_SECONDS"
 require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACTIVE_WINDOW_SECONDS"
@@ -194,23 +202,31 @@ log "Preflight: active=${OLD_CONTAINER} target=${NEW_CONTAINER} recent_requests_
 log "Preflight: disk_free=$(df -h / | awk 'NR==2 {print $4}') load=$(cut -d' ' -f1-3 /proc/loadavg)"
 
 build_started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-log "Building ${IMAGE} on the server; detailed output is in ${BUILD_LOG}"
-if ! timeout "$BUILD_TIMEOUT_SECONDS" env DOCKER_BUILDKIT=1 docker build \
-  --progress=plain \
-  --tag "$IMAGE" \
-  --build-arg "GOPROXY=https://goproxy.cn,direct" \
-  --build-arg "GOSUMDB=sum.golang.google.cn" \
-  --build-arg "NPM_CONFIG_REGISTRY=https://registry.npmmirror.com" \
-  --build-arg "BUILD_GOMAXPROCS=${BUILD_GOMAXPROCS}" \
-  --build-arg "BUILD_GO_PARALLELISM=${BUILD_GO_PARALLELISM}" \
-  --build-arg "BUILD_GO_MEMORY_LIMIT=${BUILD_GO_MEMORY_LIMIT}" \
-  --build-arg "COMMIT=${COMMIT}" \
-  --build-arg "VERSION=${VERSION}" \
-  --build-arg "DATE=${build_started}" \
-  --file "${SOURCE_DIR}/Dockerfile" \
-  "$SOURCE_DIR" >"$BUILD_LOG" 2>&1; then
-  tail -100 "$BUILD_LOG" >&2 || true
-  die "Docker build failed"
+if [ -n "$PREBUILT_IMAGE_PREFIX" ]; then
+  PREBUILT_IMAGE="${PREBUILT_IMAGE_PREFIX}${COMMIT}"
+  log "Using externally built image ${PREBUILT_IMAGE}; server-side compilation is disabled"
+  docker image inspect "$PREBUILT_IMAGE" >/dev/null 2>&1 || \
+    die "prebuilt image is missing: ${PREBUILT_IMAGE}"
+  docker tag "$PREBUILT_IMAGE" "$IMAGE" || die "failed to tag prebuilt image"
+else
+  log "Building ${IMAGE} on the server; detailed output is in ${BUILD_LOG}"
+  if ! timeout "$BUILD_TIMEOUT_SECONDS" env DOCKER_BUILDKIT=1 docker build \
+    --progress=plain \
+    --tag "$IMAGE" \
+    --build-arg "GOPROXY=https://goproxy.cn,direct" \
+    --build-arg "GOSUMDB=sum.golang.google.cn" \
+    --build-arg "NPM_CONFIG_REGISTRY=https://registry.npmmirror.com" \
+    --build-arg "BUILD_GOMAXPROCS=${BUILD_GOMAXPROCS}" \
+    --build-arg "BUILD_GO_PARALLELISM=${BUILD_GO_PARALLELISM}" \
+    --build-arg "BUILD_GO_MEMORY_LIMIT=${BUILD_GO_MEMORY_LIMIT}" \
+    --build-arg "COMMIT=${COMMIT}" \
+    --build-arg "VERSION=${VERSION}" \
+    --build-arg "DATE=${build_started}" \
+    --file "${SOURCE_DIR}/Dockerfile" \
+    "$SOURCE_DIR" >"$BUILD_LOG" 2>&1; then
+    tail -100 "$BUILD_LOG" >&2 || true
+    die "Docker build failed"
+  fi
 fi
 
 docker image inspect "$IMAGE" >/dev/null || die "built image is missing"
