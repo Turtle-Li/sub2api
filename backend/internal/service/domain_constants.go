@@ -265,6 +265,9 @@ const (
 	SettingKeySiteSubtitle                = "site_subtitle"                 // 网站副标题
 	SettingKeyAPIBaseURL                  = "api_base_url"                  // API端点地址（用于客户端配置和导入）
 	SettingKeyDesktopControlPlaneURL      = "desktop_control_plane_url"     // 桌面端账号控制面地址（与模型 API 端点独立）
+	SettingKeyDesktopPromotions           = "desktop_promotions"            // 桌面端合作推广目录（JSON 数组）
+	SettingKeyDesktopUpdatePolicy         = "desktop_update_policy"         // TT Switch 版本发布与最低可用版本策略（JSON）
+	SettingKeyDesktopStorageConfig        = "desktop_storage_config"        // TT Switch 专用腾讯云 COS 配置（JSON，SecretKey 加密）
 	SettingKeyContactInfo                 = "contact_info"                  // 客服联系方式
 	SettingKeyDocURL                      = "doc_url"                       // 文档链接
 	SettingKeyHomeContent                 = "home_content"                  // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）

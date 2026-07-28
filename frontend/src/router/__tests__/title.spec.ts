@@ -25,6 +25,19 @@ describe('resolveDocumentTitle', () => {
 })
 
 describe('resolveRouteDocumentTitle', () => {
+  it('独立控制台不拼接服务站点名称', () => {
+    const route = {
+      name: 'TTSwitchConsole',
+      params: {},
+      meta: {
+        title: 'TT Switch Console',
+        standaloneTitle: true
+      }
+    }
+
+    expect(resolveRouteDocumentTitle(route, 'Service Admin')).toBe('TT Switch Console')
+  })
+
   it('自定义页面菜单加载后，使用菜单名称作为标题', () => {
     const route = {
       name: 'CustomPage',

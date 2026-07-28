@@ -692,6 +692,33 @@ const routes: RouteRecordRaw[] = [
     }
   },
 
+  // ==================== TT Switch Console ====================
+  {
+    path: '/tt-switch-console',
+    name: 'TTSwitchConsole',
+    component: () => import('@/views/desktop-console/DesktopConsoleView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'TT Switch Console',
+      standaloneTitle: true,
+      desktopConsole: true,
+      hideInMenu: true
+    }
+  },
+  ...(import.meta.env.DEV
+    ? [{
+        path: '/__preview/tt-switch-storage',
+        name: 'TTSwitchStoragePreview',
+        component: () => import('@/views/desktop-console/DesktopStoragePreview.vue'),
+        meta: {
+          requiresAuth: false,
+          title: 'TT Switch Storage Preview',
+          hideInMenu: true
+        }
+      } satisfies RouteRecordRaw]
+    : []),
+
   // ==================== 404 Not Found ====================
   {
     path: '/:pathMatch(.*)*',

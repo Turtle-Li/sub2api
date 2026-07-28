@@ -60,6 +60,72 @@ func TestSettingHandlerGetDesktopSettingsFallsBackToRequestOrigin(t *testing.T) 
 	require.Equal(t, "https://discovery.example.com", response.Data.ControlPlaneURL)
 }
 
+func TestSettingHandlerGetDesktopPromotionsOnlyReturnsActiveItems(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{
+		values: map[string]string{
+			service.SettingKeyDesktopPromotions: `[
+				{"id":"turtle-chat","title":"Turtle Chat","summary":"网页聊天","target_url":"https://chat.example.com","cta_label":"打开","icon":"chat","surfaces":["discover"],"enabled":true,"sort_order":1},
+				{"id":"hidden","title":"Hidden","summary":"","target_url":"https://hidden.example.com","cta_label":"打开","icon":"link","surfaces":["discover"],"enabled":false,"sort_order":2}
+			]`,
+		},
+	}, &config.Config{}), "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/desktop-promotions", nil)
+
+	h.GetDesktopPromotions(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Code int `json:"code"`
+		Data struct {
+			SchemaVersion int                        `json:"schema_version"`
+			Items         []service.DesktopPromotion `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Equal(t, 1, response.Data.SchemaVersion)
+	require.Len(t, response.Data.Items, 1)
+	require.Equal(t, "turtle-chat", response.Data.Items[0].ID)
+}
+
+func TestSettingHandlerGetDesktopUpdatePolicyComputesRequiredStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{
+		values: map[string]string{
+			service.SettingKeyDesktopUpdatePolicy: `{
+				"schema_version":1,
+				"latest_version":"1.4.0",
+				"minimum_supported_version":"1.2.0",
+				"enforcement_enabled":true,
+				"reason":"security fix",
+				"manual_download_url":"https://download.example.com/tt-switch"
+			}`,
+		},
+	}, &config.Config{}), "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/desktop/update-policy", nil)
+	c.Request.Header.Set("User-Agent", "TT-Switch/1.1.9")
+
+	h.GetDesktopUpdatePolicy(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Code int                         `json:"code"`
+		Data service.DesktopUpdateStatus `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Data.UpdateRequired)
+	require.True(t, response.Data.UpdateAvailable)
+	require.Equal(t, "1.2.0", response.Data.MinimumSupportedVersion)
+}
+
 type desktopSettingsResponse struct {
 	Code int `json:"code"`
 	Data struct {

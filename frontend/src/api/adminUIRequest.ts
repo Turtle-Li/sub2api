@@ -6,7 +6,13 @@ function isAdminPath(path: string): boolean {
     path === '/admin' ||
     path.startsWith('/admin/') ||
     path === '/api/v1/admin' ||
-    path.startsWith('/api/v1/admin/')
+    path.startsWith('/api/v1/admin/') ||
+    path === '/tt-switch-console' ||
+    path.startsWith('/tt-switch-console/') ||
+    path === '/desktop-console' ||
+    path.startsWith('/desktop-console/') ||
+    path === '/api/v1/desktop-console' ||
+    path.startsWith('/api/v1/desktop-console/')
   )
 }
 

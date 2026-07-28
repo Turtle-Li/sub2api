@@ -5435,29 +5435,6 @@
                 </div>
               </div>
 
-              <!-- Desktop account control plane -->
-              <div>
-                <label
-                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  {{ t("admin.settings.site.desktopControlPlaneUrl") }}
-                </label>
-                <input
-                  v-model="form.desktop_control_plane_url"
-                  type="url"
-                  inputmode="url"
-                  autocomplete="off"
-                  data-testid="desktop-control-plane-url-input"
-                  class="input font-mono text-sm"
-                  :placeholder="
-                    t('admin.settings.site.desktopControlPlaneUrlPlaceholder')
-                  "
-                />
-                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t("admin.settings.site.desktopControlPlaneUrlHint") }}
-                </p>
-              </div>
-
               <!-- Model API Base URL -->
               <div>
                 <label
@@ -8521,7 +8498,6 @@ const form = reactive<SettingsForm>({
   site_logo: "",
   site_subtitle: "Subscription to API Conversion Platform",
   api_base_url: "",
-  desktop_control_plane_url: "",
   contact_info: "",
   doc_url: "",
   home_content: "",
@@ -9988,36 +9964,6 @@ async function saveSettings() {
     // Optional URL fields: auto-clear invalid values so they don't cause backend 400 errors
     if (!isValidHttpUrl(form.frontend_url)) form.frontend_url = "";
     if (!isValidHttpUrl(form.doc_url)) form.doc_url = "";
-    const normalizeDesktopControlPlaneUrl = (value: string): string | null => {
-      const trimmed = value.trim();
-      if (!trimmed) return "";
-      try {
-        const url = new URL(trimmed);
-        if (
-          url.protocol !== "https:" ||
-          url.username !== "" ||
-          url.password !== "" ||
-          url.search !== "" ||
-          url.hash !== "" ||
-          (url.pathname !== "" && url.pathname !== "/")
-        ) {
-          return null;
-        }
-        return url.origin;
-      } catch {
-        return null;
-      }
-    };
-    const desktopControlPlaneUrl = normalizeDesktopControlPlaneUrl(
-      form.desktop_control_plane_url,
-    );
-    if (desktopControlPlaneUrl === null) {
-      appStore.showError(
-        t("admin.settings.site.desktopControlPlaneUrlInvalid"),
-      );
-      return;
-    }
-    form.desktop_control_plane_url = desktopControlPlaneUrl;
     syncWeChatConnectMode();
     const wechatStoredMode = deriveWeChatConnectStoredMode(
       form.wechat_connect_open_enabled,
@@ -10071,7 +10017,6 @@ async function saveSettings() {
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle,
       api_base_url: form.api_base_url,
-      desktop_control_plane_url: form.desktop_control_plane_url,
       contact_info: form.contact_info,
       doc_url: form.doc_url,
       home_content: form.home_content,

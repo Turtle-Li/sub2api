@@ -120,6 +120,33 @@ func RegisterAdminRoutes(
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
 	}
+
+	// TT Switch has an independent control-plane namespace and UI. It reuses
+	// administrator authentication, audit logging, and compliance enforcement,
+	// but is intentionally not nested under the service admin API.
+	desktopConsole := v1.Group("/desktop-console")
+	desktopConsole.Use(gin.HandlerFunc(adminAuth))
+	desktopConsole.Use(gin.HandlerFunc(auditLog))
+	desktopConsole.Use(middleware.AdminComplianceGuard(settingService))
+	{
+		desktopConsole.GET("/settings", h.Admin.Setting.GetDesktopConsoleSettings)
+		desktopConsole.GET("/storage", h.Admin.Setting.GetDesktopStorageSettings)
+		desktopConsole.PUT(
+			"/settings",
+			gin.HandlerFunc(stepUpAuth),
+			h.Admin.Setting.UpdateDesktopConsoleSettings,
+		)
+		desktopConsole.PUT(
+			"/storage",
+			gin.HandlerFunc(stepUpAuth),
+			h.Admin.Setting.UpdateDesktopStorageSettings,
+		)
+		desktopConsole.POST(
+			"/storage/test",
+			gin.HandlerFunc(stepUpAuth),
+			h.Admin.Setting.TestDesktopStorageConnection,
+		)
+	}
 }
 
 func registerPromptAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

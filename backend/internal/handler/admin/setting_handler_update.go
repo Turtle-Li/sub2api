@@ -136,7 +136,6 @@ type UpdateSettingsRequest struct {
 	SiteLogo                    string                `json:"site_logo"`
 	SiteSubtitle                string                `json:"site_subtitle"`
 	APIBaseURL                  string                `json:"api_base_url"`
-	DesktopControlPlaneURL      *string               `json:"desktop_control_plane_url"`
 	ContactInfo                 string                `json:"contact_info"`
 	DocURL                      string                `json:"doc_url"`
 	HomeContent                 string                `json:"home_content"`
@@ -408,11 +407,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if req.ForwardedClientIPHeaders != nil {
 		forwardedClientIPHeaders = append([]string(nil), (*req.ForwardedClientIPHeaders)...)
 	}
-	desktopControlPlaneURL := previousSettings.DesktopControlPlaneURL
-	if req.DesktopControlPlaneURL != nil {
-		desktopControlPlaneURL = *req.DesktopControlPlaneURL
-	}
-
 	// 开启敏感操作 step-up 门控属自锁风险操作：仅允许本人已启用 TOTP 的管理员会话开启，
 	// 否则开启后操作者立即被挡在所有敏感操作之外。仅在 false→true 的开启瞬间校验，
 	// 保持开启状态的常规设置保存不受影响。
@@ -1354,7 +1348,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		SiteLogo:                               req.SiteLogo,
 		SiteSubtitle:                           req.SiteSubtitle,
 		APIBaseURL:                             req.APIBaseURL,
-		DesktopControlPlaneURL:                 desktopControlPlaneURL,
 		ContactInfo:                            req.ContactInfo,
 		DocURL:                                 req.DocURL,
 		HomeContent:                            req.HomeContent,
@@ -1884,7 +1877,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		SiteLogo:                                               updatedSettings.SiteLogo,
 		SiteSubtitle:                                           updatedSettings.SiteSubtitle,
 		APIBaseURL:                                             updatedSettings.APIBaseURL,
-		DesktopControlPlaneURL:                                 updatedSettings.DesktopControlPlaneURL,
 		ContactInfo:                                            updatedSettings.ContactInfo,
 		DocURL:                                                 updatedSettings.DocURL,
 		HomeContent:                                            updatedSettings.HomeContent,

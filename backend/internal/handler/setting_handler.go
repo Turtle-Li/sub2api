@@ -4,6 +4,7 @@ import (
 	"html"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -127,6 +128,42 @@ func (h *SettingHandler) GetDesktopSettings(c *gin.Context) {
 		SchemaVersion:   1,
 		ControlPlaneURL: controlPlaneURL,
 	})
+}
+
+// GetDesktopPromotions returns the active, presentation-safe promotion
+// catalog for TT Switch. Disabled and out-of-window items are filtered here so
+// older clients cannot accidentally surface them.
+// GET /api/v1/settings/desktop-promotions
+func (h *SettingHandler) GetDesktopPromotions(c *gin.Context) {
+	items, err := h.settingService.GetDesktopPromotions(c.Request.Context(), time.Now())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.DesktopPromotions{
+		SchemaVersion: 1,
+		Items:         items,
+	})
+}
+
+// GetDesktopUpdatePolicy returns the version decision for the requesting TT
+// Switch build. It remains public so a blocked or logged-out client can still
+// discover and install the required signed update.
+// GET /api/v1/desktop/update-policy
+func (h *SettingHandler) GetDesktopUpdatePolicy(c *gin.Context) {
+	policy, err := h.settingService.GetDesktopUpdatePolicy(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	clientVersion, _ := service.DesktopClientVersion(
+		c.GetHeader("X-TT-Switch-Version"),
+		c.GetHeader("User-Agent"),
+	)
+	if clientVersion == "" {
+		clientVersion = strings.TrimSpace(c.Query("current_version"))
+	}
+	response.Success(c, policy.StatusFor(clientVersion, time.Now()))
 }
 
 func desktopRequestOrigin(c *gin.Context) string {

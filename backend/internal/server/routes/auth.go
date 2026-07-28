@@ -216,9 +216,19 @@ func RegisterAuthRoutes(
 	// 公开设置（无需认证）
 	settings := v1.Group("/settings")
 	{
+		// Compatibility aliases for desktop builds released before the
+		// independent TT Switch control-plane namespace.
 		settings.GET("/desktop", h.Setting.GetDesktopSettings)
+		settings.GET("/desktop-promotions", h.Setting.GetDesktopPromotions)
+		settings.GET("/desktop-update-policy", h.Setting.GetDesktopUpdatePolicy)
 		settings.GET("/public", h.Setting.GetPublicSettings)
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
+	}
+	desktop := v1.Group("/desktop")
+	{
+		desktop.GET("/discovery", h.Setting.GetDesktopSettings)
+		desktop.GET("/promotions", h.Setting.GetDesktopPromotions)
+		desktop.GET("/update-policy", h.Setting.GetDesktopUpdatePolicy)
 	}
 
 	// 需要认证的当前用户信息

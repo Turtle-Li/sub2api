@@ -116,6 +116,7 @@ func registerRoutes(
 
 	// API v1
 	v1 := r.Group("/api/v1")
+	v1.Use(middleware2.DesktopVersionGuard(settingService))
 
 	// 注册各模块路由
 	routes.RegisterAuthRoutes(v1, h, jwtAuth, auditLog, redisClient, settingService)

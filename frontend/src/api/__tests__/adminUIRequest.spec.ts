@@ -19,6 +19,8 @@ describe('Admin UI request marker', () => {
     '/api/v1/admin',
     '/api/v1/admin/accounts?status=active',
     'https://api.example.test/api/v1/admin/dashboard',
+    '/desktop-console/settings',
+    '/api/v1/desktop-console/settings',
   ])('marks Admin API request %s before page navigation', (requestURL) => {
     expect(shouldMarkAdminUIRequest(requestURL, '/login')).toBe(true)
   })
@@ -29,6 +31,10 @@ describe('Admin UI request marker', () => {
       expect(shouldMarkAdminUIRequest(requestURL, '/admin/dashboard')).toBe(true)
     }
   )
+
+  it('marks shared requests while TT Switch Console is active', () => {
+    expect(shouldMarkAdminUIRequest('/auth/me', '/tt-switch-console')).toBe(true)
+  })
 
   it.each([
     ['/keys', '/dashboard'],

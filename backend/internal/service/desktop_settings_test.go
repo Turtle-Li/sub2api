@@ -47,19 +47,36 @@ func TestNormalizeDesktopControlPlaneURL(t *testing.T) {
 func TestSettingServiceDesktopControlPlaneURLPersistence(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	svc := NewSettingService(repo, &config.Config{})
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		DesktopControlPlaneURL: " https://control.example.com/ ",
+	updated, err := svc.UpdateDesktopConsoleSettings(context.Background(), DesktopConsoleSettings{
+		ControlPlaneURL: " https://control.example.com/ ",
+		Promotions: []DesktopPromotion{{
+			ID:        "turtle-chat",
+			Title:     "Turtle Chat",
+			TargetURL: "https://chat.example.com",
+			Icon:      "chat",
+			Surfaces:  []string{"discover"},
+			Enabled:   true,
+		}},
+		UpdatePolicy: DesktopUpdatePolicy{
+			LatestVersion:           "1.4.0",
+			MinimumSupportedVersion: "1.2.0",
+			EnforcementEnabled:      true,
+		},
 	})
 
 	require.NoError(t, err)
+	require.Equal(t, DesktopConsoleSchemaVersion, updated.SchemaVersion)
 	require.Equal(t, "https://control.example.com", repo.updates[SettingKeyDesktopControlPlaneURL])
+	require.JSONEq(t, `[{"id":"turtle-chat","title":"Turtle Chat","summary":"","target_url":"https://chat.example.com","cta_label":"打开","icon":"chat","surfaces":["discover"],"enabled":true,"sort_order":0}]`, repo.updates[SettingKeyDesktopPromotions])
+	require.JSONEq(t, `{"schema_version":1,"latest_version":"1.4.0","minimum_supported_version":"1.2.0","enforcement_enabled":true}`, repo.updates[SettingKeyDesktopUpdatePolicy])
+	require.Len(t, repo.updates, 3)
 }
 
 func TestSettingServiceDesktopControlPlaneURLRejectsInsecurePublicURL(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	svc := NewSettingService(repo, &config.Config{})
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		DesktopControlPlaneURL: "http://control.example.com",
+	_, err := svc.UpdateDesktopConsoleSettings(context.Background(), DesktopConsoleSettings{
+		ControlPlaneURL: "http://control.example.com",
 	})
 
 	require.Error(t, err)

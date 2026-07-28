@@ -59,6 +59,7 @@ type SettingHandler struct {
 	paymentService           *service.PaymentService
 	userAttributeService     *service.UserAttributeService
 	notificationEmailService *service.NotificationEmailService
+	desktopStorageService    *service.DesktopStorageService
 	totpService              *service.TotpService
 	userService              *service.UserService
 }
@@ -80,6 +81,12 @@ func NewSettingHandler(settingService *service.SettingService, emailService *ser
 // the constructor signature used by existing unit tests.
 func (h *SettingHandler) SetNotificationEmailService(notificationEmailService *service.NotificationEmailService) {
 	h.notificationEmailService = notificationEmailService
+}
+
+// SetDesktopStorageService attaches the isolated TT Switch COS configuration
+// service without widening the general system-settings contract.
+func (h *SettingHandler) SetDesktopStorageService(desktopStorageService *service.DesktopStorageService) {
+	h.desktopStorageService = desktopStorageService
 }
 
 // SetStepUpDeps attaches the services backing the step-up switch preconditions
@@ -225,7 +232,6 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		SiteLogo:                                               settings.SiteLogo,
 		SiteSubtitle:                                           settings.SiteSubtitle,
 		APIBaseURL:                                             settings.APIBaseURL,
-		DesktopControlPlaneURL:                                 settings.DesktopControlPlaneURL,
 		ContactInfo:                                            settings.ContactInfo,
 		DocURL:                                                 settings.DocURL,
 		HomeContent:                                            settings.HomeContent,

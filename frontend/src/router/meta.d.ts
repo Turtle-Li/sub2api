@@ -64,5 +64,15 @@ declare module 'vue-router' {
      * i18n key for the page description
      */
     descriptionKey?: string
+
+    /**
+     * Use the route title without the service-site suffix.
+     */
+    standaloneTitle?: boolean
+
+    /**
+     * Marks the independent TT Switch control-plane surface.
+     */
+    desktopConsole?: boolean
   }
 }
