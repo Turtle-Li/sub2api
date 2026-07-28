@@ -59,6 +59,7 @@ type BatchImageSubmitRequest struct {
 	AspectRatio           string                           `json:"aspect_ratio"`
 	ImageSize             string                           `json:"image_size"`
 	Metadata              map[string]string                `json:"metadata"`
+	SessionID             *string                          `json:"-"`
 }
 
 type BatchImageSubmitItem struct {
@@ -340,6 +341,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		HoldID:                  &holdID,
 		IdempotencyKey:          batchImageOptionalStringPtr(idempotencyKey),
 		RequestHash:             batchImageStringPtr(requestHash),
+		SessionID:               normalized.SessionID,
 	})
 	if err != nil {
 		// The unique owner/key index closes the race between the lookup above
