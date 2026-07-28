@@ -44,7 +44,7 @@ func TestNormalizeDesktopControlPlaneURL(t *testing.T) {
 	}
 }
 
-func TestSettingServiceDesktopControlPlaneURLPersistence(t *testing.T) {
+func TestSettingServiceDesktopConsoleSettingsPersistence(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	svc := NewSettingService(repo, &config.Config{})
 	updated, err := svc.UpdateDesktopConsoleSettings(context.Background(), DesktopConsoleSettings{
@@ -72,7 +72,29 @@ func TestSettingServiceDesktopControlPlaneURLPersistence(t *testing.T) {
 	require.Len(t, repo.updates, 3)
 }
 
+func TestSettingServiceDesktopControlPlaneURLPersistence(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		DesktopControlPlaneURL: " https://control.example.com/ ",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "https://control.example.com", repo.updates[SettingKeyDesktopControlPlaneURL])
+}
+
 func TestSettingServiceDesktopControlPlaneURLRejectsInsecurePublicURL(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		DesktopControlPlaneURL: "http://control.example.com",
+	})
+
+	require.Error(t, err)
+	require.Nil(t, repo.updates)
+}
+
+func TestSettingServiceDesktopConsoleRejectsInsecurePublicURL(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	svc := NewSettingService(repo, &config.Config{})
 	_, err := svc.UpdateDesktopConsoleSettings(context.Background(), DesktopConsoleSettings{

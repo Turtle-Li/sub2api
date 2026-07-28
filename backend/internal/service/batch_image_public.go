@@ -49,15 +49,17 @@ type BatchImageUserGroupRateRepository interface {
 }
 
 type BatchImageSubmitRequest struct {
-	Model            string                 `json:"model"`
-	TaskName         string                 `json:"task_name"`
-	ParentBatchID    string                 `json:"parent_batch_id"`
-	Provider         string                 `json:"provider"`
-	Items            []BatchImageSubmitItem `json:"items"`
-	ResponseMimeType string                 `json:"response_mime_type"`
-	AspectRatio      string                 `json:"aspect_ratio"`
-	ImageSize        string                 `json:"image_size"`
-	Metadata         map[string]string      `json:"metadata"`
+	Model                 string                           `json:"model"`
+	TaskName              string                           `json:"task_name"`
+	ParentBatchID         string                           `json:"parent_batch_id"`
+	Provider              string                           `json:"provider"`
+	SharedReferenceImages []BatchImageSharedReferenceInput `json:"shared_reference_images,omitempty"`
+	Items                 []BatchImageSubmitItem           `json:"items"`
+	ResponseMimeType      string                           `json:"response_mime_type"`
+	AspectRatio           string                           `json:"aspect_ratio"`
+	ImageSize             string                           `json:"image_size"`
+	Metadata              map[string]string                `json:"metadata"`
+	SessionID             *string                          `json:"-"`
 }
 
 type BatchImageSubmitItem struct {
@@ -68,11 +70,19 @@ type BatchImageSubmitItem struct {
 }
 
 type BatchImageReferenceInput struct {
-	ID       string `json:"id,omitempty"`
-	Type     string `json:"type,omitempty"`
-	MimeType string `json:"mime_type"`
-	Data     []byte `json:"data,omitempty"`
-	FileURI  string `json:"file_uri,omitempty"`
+	ID                string `json:"id,omitempty"`
+	Type              string `json:"type,omitempty"`
+	SharedReferenceID string `json:"shared_reference_id,omitempty"`
+	MimeType          string `json:"mime_type,omitempty"`
+	Data              []byte `json:"data,omitempty"`
+	FileURI           string `json:"file_uri,omitempty"`
+}
+
+type BatchImageSharedReferenceInput struct {
+	SharedReferenceID string `json:"shared_reference_id"`
+	MimeType          string `json:"mime_type"`
+	Data              []byte `json:"data,omitempty"`
+	FileURI           string `json:"file_uri,omitempty"`
 }
 
 type BatchImageOwner struct {
@@ -331,6 +341,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		HoldID:                  &holdID,
 		IdempotencyKey:          batchImageOptionalStringPtr(idempotencyKey),
 		RequestHash:             batchImageStringPtr(requestHash),
+		SessionID:               normalized.SessionID,
 	})
 	if err != nil {
 		// The unique owner/key index closes the race between the lookup above
@@ -396,7 +407,13 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	for _, item := range normalized.Items {
 		refs := make([]BatchImageReference, 0, len(item.ReferenceImages))
 		for _, ref := range item.ReferenceImages {
-			refs = append(refs, BatchImageReference(ref))
+			refs = append(refs, BatchImageReference{
+				ID:       ref.ID,
+				Type:     ref.Type,
+				MimeType: ref.MimeType,
+				Data:     ref.Data,
+				FileURI:  ref.FileURI,
+			})
 		}
 		input.Items = append(input.Items, BatchImageInputItem{
 			CustomID:        item.CustomID,
@@ -930,6 +947,21 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 	if len(req.Items) > maxItems {
 		return req, ErrBatchImageInvalidItems
 	}
+	// Validation is called more than once across preflight, idempotency lookup,
+	// and durable submission. Clone slice-backed fields before normalization so
+	// one pass cannot append shared references into the caller's request and
+	// make a later pass apply them a second time.
+	req.Items = append([]BatchImageSubmitItem(nil), req.Items...)
+	for index := range req.Items {
+		req.Items[index].ReferenceImages = append(
+			[]BatchImageReferenceInput(nil),
+			req.Items[index].ReferenceImages...,
+		)
+	}
+	req.SharedReferenceImages = append(
+		[]BatchImageSharedReferenceInput(nil),
+		req.SharedReferenceImages...,
+	)
 	if req.ResponseMimeType == "" {
 		req.ResponseMimeType = s.defaultResponseMimeType()
 	}
@@ -941,6 +973,13 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 	}
 	req.ImageSize = defaultBatchImageImageSize
 	req.Metadata = sanitizeBatchImageMetadata(req.Metadata)
+	sharedReferences, err := normalizeBatchImageSharedReferenceInputs(
+		req.SharedReferenceImages,
+	)
+	if err != nil {
+		return req, err
+	}
+	usedSharedReferences := make(map[string]struct{}, len(sharedReferences))
 
 	seen := make(map[string]struct{}, len(req.Items))
 	totalReferenceImages := 0
@@ -948,6 +987,15 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 	totalOutputImages := 0
 	expandedItems := make([]BatchImageSubmitItem, 0, len(req.Items))
 	for i := range req.Items {
+		resolvedReferences, resolveErr := resolveBatchImageReferenceInputs(
+			req.Items[i].ReferenceImages,
+			sharedReferences,
+			usedSharedReferences,
+		)
+		if resolveErr != nil {
+			return req, resolveErr
+		}
+		req.Items[i].ReferenceImages = resolvedReferences
 		req.Items[i].CustomID = strings.TrimSpace(req.Items[i].CustomID)
 		if req.Items[i].CustomID == "" {
 			req.Items[i].CustomID = fmt.Sprintf("item_%06d", i+1)
@@ -995,6 +1043,13 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 			expandedItems = append(expandedItems, expanded)
 		}
 	}
+	if len(usedSharedReferences) != len(sharedReferences) {
+		return req, ErrBatchImageInvalidReferenceImage
+	}
+	// Shared references are a compact transport representation only. Clear
+	// them after expansion so legacy and compact requests have the same
+	// semantic request hash and therefore the same idempotency behavior.
+	req.SharedReferenceImages = nil
 	req.Items = expandedItems
 	return req, nil
 }
@@ -1010,30 +1065,98 @@ func normalizeBatchImageReferenceInputs(model string, item *BatchImageSubmitItem
 	out := make([]BatchImageReferenceInput, 0, len(item.ReferenceImages))
 	inlineBytes := 0
 	for _, ref := range item.ReferenceImages {
-		ref.ID = truncateBatchImageMessage(strings.TrimSpace(ref.ID), 80)
-		ref.Type = truncateBatchImageMessage(strings.TrimSpace(ref.Type), 40)
-		ref.MimeType = normalizeBatchImageReferenceMimeType(ref.MimeType)
-		ref.FileURI = strings.TrimSpace(ref.FileURI)
-		if ref.MimeType == "" {
-			return 0, 0, ErrBatchImageInvalidReferenceImage
+		normalized, err := normalizeBatchImageReferenceInput(ref)
+		if err != nil {
+			return 0, 0, err
 		}
-		if len(ref.Data) == 0 && ref.FileURI == "" {
-			return 0, 0, ErrBatchImageInvalidReferenceImage
-		}
-		if len(ref.Data) > 0 && ref.FileURI != "" {
-			return 0, 0, ErrBatchImageInvalidReferenceImage
-		}
-		if len(ref.Data) > maxBatchImageReferenceImageBytes {
-			return 0, 0, ErrBatchImageInvalidReferenceImage
-		}
-		if ref.FileURI != "" && !strings.HasPrefix(ref.FileURI, "gs://") {
-			return 0, 0, ErrBatchImageInvalidReferenceImage
-		}
-		inlineBytes += len(ref.Data)
-		out = append(out, ref)
+		inlineBytes += len(normalized.Data)
+		out = append(out, normalized)
 	}
 	item.ReferenceImages = out
 	return len(out), inlineBytes, nil
+}
+
+func normalizeBatchImageSharedReferenceInputs(
+	inputs []BatchImageSharedReferenceInput,
+) (map[string]BatchImageReferenceInput, error) {
+	if len(inputs) == 0 {
+		return map[string]BatchImageReferenceInput{}, nil
+	}
+	out := make(map[string]BatchImageReferenceInput, len(inputs))
+	for _, shared := range inputs {
+		sharedID := strings.TrimSpace(shared.SharedReferenceID)
+		if sharedID == "" || len(sharedID) > 100 {
+			return nil, ErrBatchImageInvalidReferenceImage
+		}
+		if _, exists := out[sharedID]; exists {
+			return nil, ErrBatchImageInvalidReferenceImage
+		}
+		normalized, err := normalizeBatchImageReferenceInput(
+			BatchImageReferenceInput{
+				MimeType: shared.MimeType,
+				Data:     shared.Data,
+				FileURI:  shared.FileURI,
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+		out[sharedID] = normalized
+	}
+	return out, nil
+}
+
+func resolveBatchImageReferenceInputs(
+	inputs []BatchImageReferenceInput,
+	shared map[string]BatchImageReferenceInput,
+	used map[string]struct{},
+) ([]BatchImageReferenceInput, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	out := make([]BatchImageReferenceInput, 0, len(inputs))
+	for _, ref := range inputs {
+		sharedID := strings.TrimSpace(ref.SharedReferenceID)
+		if sharedID == "" {
+			out = append(out, ref)
+			continue
+		}
+		if len(ref.Data) > 0 ||
+			strings.TrimSpace(ref.FileURI) != "" ||
+			strings.TrimSpace(ref.MimeType) != "" {
+			return nil, ErrBatchImageInvalidReferenceImage
+		}
+		payload, exists := shared[sharedID]
+		if !exists {
+			return nil, ErrBatchImageInvalidReferenceImage
+		}
+		ref.SharedReferenceID = ""
+		ref.MimeType = payload.MimeType
+		ref.Data = payload.Data
+		ref.FileURI = payload.FileURI
+		used[sharedID] = struct{}{}
+		out = append(out, ref)
+	}
+	return out, nil
+}
+
+func normalizeBatchImageReferenceInput(
+	ref BatchImageReferenceInput,
+) (BatchImageReferenceInput, error) {
+	ref.ID = truncateBatchImageMessage(strings.TrimSpace(ref.ID), 80)
+	ref.Type = truncateBatchImageMessage(strings.TrimSpace(ref.Type), 40)
+	ref.SharedReferenceID = strings.TrimSpace(ref.SharedReferenceID)
+	ref.MimeType = normalizeBatchImageReferenceMimeType(ref.MimeType)
+	ref.FileURI = strings.TrimSpace(ref.FileURI)
+	if ref.SharedReferenceID != "" ||
+		ref.MimeType == "" ||
+		(len(ref.Data) == 0 && ref.FileURI == "") ||
+		(len(ref.Data) > 0 && ref.FileURI != "") ||
+		len(ref.Data) > maxBatchImageReferenceImageBytes ||
+		(ref.FileURI != "" && !strings.HasPrefix(ref.FileURI, "gs://")) {
+		return ref, ErrBatchImageInvalidReferenceImage
+	}
+	return ref, nil
 }
 
 func normalizeBatchImageReferenceMimeType(v string) string {

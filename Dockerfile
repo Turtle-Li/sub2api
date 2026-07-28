@@ -14,6 +14,12 @@ ARG POSTGRES_IMAGE=postgres:18-alpine
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 ARG NPM_CONFIG_REGISTRY=
+# Production releases run on a small shared host. Keep Go compilation
+# deliberately serial and apply a Go runtime memory target so a candidate
+# build cannot starve the live instance.
+ARG BUILD_GOMAXPROCS=1
+ARG BUILD_GO_PARALLELISM=1
+ARG BUILD_GO_MEMORY_LIMIT=768MiB
 
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
@@ -57,6 +63,9 @@ ARG COMMIT=docker
 ARG DATE
 ARG GOPROXY
 ARG GOSUMDB
+ARG BUILD_GOMAXPROCS
+ARG BUILD_GO_PARALLELISM
+ARG BUILD_GO_MEMORY_LIMIT
 # Populated by buildx from the --platform target (e.g. linux/amd64).
 ARG TARGETOS
 ARG TARGETARCH
@@ -89,7 +98,8 @@ RUN --mount=type=cache,id=sub2api-go-mod,target=/go/pkg/mod,sharing=locked \
     VERSION_VALUE="${VERSION}" && \
     if [ -z "${VERSION_VALUE}" ]; then VERSION_VALUE="$(./scripts/resolve-version.sh)"; fi && \
     DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} nice -n 10 go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOMAXPROCS="${BUILD_GOMAXPROCS}" GOMEMLIMIT="${BUILD_GO_MEMORY_LIMIT}" nice -n 10 go build \
+    -p "${BUILD_GO_PARALLELISM}" \
     -tags "embed nodynamic" \
     -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" \
     -trimpath \

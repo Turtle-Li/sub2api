@@ -31,6 +31,13 @@ Submit request:
 {
   "model": "gemini-2.5-flash-image",
   "provider": "gemini_api",
+  "shared_reference_images": [
+    {
+      "shared_reference_id": "sha256:example-product-front",
+      "mime_type": "image/png",
+      "data": "<base64 image bytes sent once>"
+    }
+  ],
   "items": [
     {
       "custom_id": "cover_001",
@@ -39,9 +46,8 @@ Submit request:
       "reference_images": [
         {
           "id": "product-front",
-          "type": "subject",
-          "mime_type": "image/png",
-          "data": "<base64 image bytes without a data URL prefix>"
+          "type": "product_truth",
+          "shared_reference_id": "sha256:example-product-front"
         },
         {
           "id": "style",
@@ -57,10 +63,23 @@ Submit request:
 }
 ```
 
-`reference_images` is optional per item. Inline `data` is a base64 string decoded by the backend; `file_uri` is reserved for internal Google Cloud Storage references and must be a `gs://` URI. Each reference image must use one of `image/png`, `image/jpeg`, or `image/webp`. Current model limits are:
+`shared_reference_images` is an optional compact transport pool. An item references a
+pooled payload with `shared_reference_id` while retaining its own ordered `id` and `type`.
+Sub2API resolves the pool before validation, request hashing, idempotency checks, and
+provider JSONL generation. It is intended for product-truth images reused by every output,
+but item order and role labels remain independent. Every pool entry must be referenced.
+The field does not weaken per-item model limits: resolved shared and inline references are
+counted together. The normalized request clears the transport pool and reference IDs, so
+an expanded legacy request and its compact equivalent have the same semantic request hash.
 
-- `gemini-2.5-flash-image` and other Flash Image aliases: up to 3 reference images per item.
-- `gemini-3-pro-image` and other Pro Image aliases: up to 14 reference images per item.
+`reference_images` is optional per item and should contain only references specific to that
+output, such as its assigned scene. Inline `data` is a base64 string decoded by the backend;
+`file_uri` is reserved for internal Google Cloud Storage references and must be a `gs://`
+URI. Each reference image must use one of `image/png`, `image/jpeg`, or `image/webp`.
+Current model limits are:
+
+- `gemini-2.5-flash-image`: up to 3 reference images per item.
+- `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, and `gemini-3-pro-image`: up to 14 reference images per item.
 - Per batch job: up to 1000 reference image attachments total after `output_count` expansion across all items. This is an internal Sub2API guardrail for request size and cost control, not the generated-image cap and not a Pro Image per-item capability. The generated-output cap is 200 images per job.
 - Per batch job: up to 128 MB decoded inline reference image data total. For large batches or repeated reference images, prefer `gs://` `file_uri` references or split the request into multiple jobs.
 
