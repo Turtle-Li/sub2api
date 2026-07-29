@@ -20,8 +20,8 @@ SUDO_CALLS="${TEST_ROOT}/sudo-calls.log"
 
 COMMIT="0123456789abcdef0123456789abcdef01234567"
 VERSION="0.1.test+github"
-IMAGE_ID="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-WRONG_IMAGE_ID="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+LOADED_IMAGE_ID="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+WRONG_DIGEST="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 INCOMING_IMAGE="sub2api:github-${COMMIT}"
 EXPECTED_SOURCE="https://github.com/Turtle-Li/sub2api"
 
@@ -66,11 +66,13 @@ cat >"${ARCHIVE_ROOT}/manifest.json" <<EOF
 EOF
 printf '{}\n' >"${ARCHIVE_ROOT}/config.json"
 tar -cf "$ARCHIVE" -C "$ARCHIVE_ROOT" manifest.json config.json
+ARCHIVE_DIGEST="sha256:$(sha256sum "$ARCHIVE" | awk '{print $1}')"
 
 cat >"${ARCHIVE_ROOT}/manifest.json" <<EOF
 [{"Config":"config.json","RepoTags":["sub2api:github-deadbeef"],"Layers":[]}]
 EOF
 tar -cf "$WRONG_ARCHIVE" -C "$ARCHIVE_ROOT" manifest.json config.json
+WRONG_ARCHIVE_DIGEST="sha256:$(sha256sum "$WRONG_ARCHIVE" | awk '{print $1}')"
 
 cat >"${FAKE_BIN}/zstd" <<'EOF'
 #!/usr/bin/env bash
@@ -158,7 +160,7 @@ run_receiver() {
     FAKE_COMMIT="$COMMIT" \
     FAKE_DOCKER_CALLS="$DOCKER_CALLS" \
     FAKE_EXPECTED_SOURCE="$EXPECTED_SOURCE" \
-    FAKE_IMAGE_ID="$IMAGE_ID" \
+    FAKE_IMAGE_ID="$LOADED_IMAGE_ID" \
     FAKE_INCOMING_IMAGE="$INCOMING_IMAGE" \
     FAKE_RELEASE_CALLS="$RELEASE_CALLS" \
     FAKE_VERSION="$VERSION" \
@@ -173,7 +175,7 @@ run_receiver() {
 }
 
 success_output="${TEST_ROOT}/success.log"
-run_receiver "$ARCHIVE" "$COMMIT" "$VERSION" "$IMAGE_ID" \
+run_receiver "$ARCHIVE" "$COMMIT" "$VERSION" "$ARCHIVE_DIGEST" \
   >"$success_output" 2>&1
 assert_contains "$success_output" \
   'GitHub-built release completed without production-side compilation'
@@ -187,20 +189,26 @@ if grep -Eq '(^| )build(x)?( |$)' "$DOCKER_CALLS"; then
 fi
 candidate_count="$(find "${TEST_ROOT}/logs" -name candidate.env -type f | wc -l | tr -d '[:space:]')"
 [ "$candidate_count" = "1" ] || fail "expected one candidate record, got ${candidate_count}"
+candidate_file="$(find "${TEST_ROOT}/logs" -name candidate.env -type f)"
+assert_contains "$candidate_file" "archive_digest=${ARCHIVE_DIGEST}"
+assert_contains "$candidate_file" "loaded_image_id=${LOADED_IMAGE_ID}"
 
 release_count_before="$(line_count "$RELEASE_CALLS")"
-wrong_id_output="${TEST_ROOT}/wrong-id.log"
-if run_receiver "$ARCHIVE" "$COMMIT" "$VERSION" "$WRONG_IMAGE_ID" \
-  >"$wrong_id_output" 2>&1; then
-  fail 'receiver accepted a mismatched immutable image ID'
-fi
-assert_contains "$wrong_id_output" 'image ID mismatch'
-[ "$(line_count "$RELEASE_CALLS")" = "$release_count_before" ] \
-  || fail 'release helper ran after an image ID mismatch'
-
 loads_before="$(grep -c '^image load$' "$DOCKER_CALLS" || true)"
+wrong_digest_output="${TEST_ROOT}/wrong-digest.log"
+if run_receiver "$ARCHIVE" "$COMMIT" "$VERSION" "$WRONG_DIGEST" \
+  >"$wrong_digest_output" 2>&1; then
+  fail 'receiver accepted a mismatched archive digest'
+fi
+assert_contains "$wrong_digest_output" 'archive digest mismatch'
+[ "$(line_count "$RELEASE_CALLS")" = "$release_count_before" ] \
+  || fail 'release helper ran after an archive digest mismatch'
+loads_after="$(grep -c '^image load$' "$DOCKER_CALLS" || true)"
+[ "$loads_after" = "$loads_before" ] \
+  || fail 'receiver loaded an archive whose digest was invalid'
+
 wrong_manifest_output="${TEST_ROOT}/wrong-manifest.log"
-if run_receiver "$WRONG_ARCHIVE" "$COMMIT" "$VERSION" "$IMAGE_ID" \
+if run_receiver "$WRONG_ARCHIVE" "$COMMIT" "$VERSION" "$WRONG_ARCHIVE_DIGEST" \
   >"$wrong_manifest_output" 2>&1; then
   fail 'receiver accepted a Docker archive with an unexpected tag'
 fi
@@ -225,16 +233,16 @@ EOF
 chmod +x "${FAKE_BIN}/sudo"
 
 trigger_receiver="${APP_DIR}/scripts/sub2api-github-image-release.sh"
-SSH_ORIGINAL_COMMAND="deploy-image ${COMMIT} ${VERSION} ${IMAGE_ID}" \
+SSH_ORIGINAL_COMMAND="deploy-image ${COMMIT} ${VERSION} ${ARCHIVE_DIGEST}" \
   FAKE_SUDO_CALLS="$SUDO_CALLS" \
   SUB2API_APP_DIR="$APP_DIR" \
   SUB2API_SUDO_BIN="${FAKE_BIN}/sudo" \
   /bin/bash "$TRIGGER"
 assert_contains "$SUDO_CALLS" \
-  "-n ${trigger_receiver} ${COMMIT} ${VERSION} ${IMAGE_ID}"
+  "-n ${trigger_receiver} ${COMMIT} ${VERSION} ${ARCHIVE_DIGEST}"
 
 sudo_count_before="$(line_count "$SUDO_CALLS")"
-if SSH_ORIGINAL_COMMAND="deploy-image ${COMMIT} ${VERSION} ${IMAGE_ID} extra" \
+if SSH_ORIGINAL_COMMAND="deploy-image ${COMMIT} ${VERSION} ${ARCHIVE_DIGEST} extra" \
   FAKE_SUDO_CALLS="$SUDO_CALLS" \
   SUB2API_APP_DIR="$APP_DIR" \
   SUB2API_SUDO_BIN="${FAKE_BIN}/sudo" \

@@ -19,9 +19,9 @@ case "$ORIGINAL_COMMAND" in
     ;;
 esac
 
-IFS=' ' read -r action commit version image_id extra <<<"$ORIGINAL_COMMAND"
+IFS=' ' read -r action commit version archive_digest extra <<<"$ORIGINAL_COMMAND"
 if [ "$action" != "deploy-image" ] || [ -n "${extra:-}" ]; then
-  echo "Only 'deploy-image COMMIT VERSION IMAGE_ID' is permitted." >&2
+  echo "Only 'deploy-image COMMIT VERSION ARCHIVE_DIGEST' is permitted." >&2
   exit 2
 fi
 case "$commit" in
@@ -32,18 +32,18 @@ case "$version" in
   ''|*[!0-9A-Za-z._+-]*) echo "Invalid version." >&2; exit 2 ;;
 esac
 [ "${#version}" -le 64 ] || { echo "Version is too long." >&2; exit 2; }
-case "$image_id" in
+case "$archive_digest" in
   sha256:*) ;;
-  *) echo "Invalid image ID." >&2; exit 2 ;;
+  *) echo "Invalid archive digest." >&2; exit 2 ;;
 esac
-image_id_hex="${image_id#sha256:}"
-case "$image_id_hex" in
-  *[!0-9a-f]*|'') echo "Invalid image ID." >&2; exit 2 ;;
+archive_digest_hex="${archive_digest#sha256:}"
+case "$archive_digest_hex" in
+  *[!0-9a-f]*|'') echo "Invalid archive digest." >&2; exit 2 ;;
 esac
-[ "${#image_id_hex}" -eq 64 ] || { echo "Invalid image ID length." >&2; exit 2; }
+[ "${#archive_digest_hex}" -eq 64 ] || { echo "Invalid archive digest length." >&2; exit 2; }
 [ -f "$IMAGE_RELEASE_SCRIPT" ] || {
   echo "GitHub image release helper is unavailable." >&2
   exit 1
 }
 
-exec "$SUDO_BIN" -n "$IMAGE_RELEASE_SCRIPT" "$commit" "$version" "$image_id"
+exec "$SUDO_BIN" -n "$IMAGE_RELEASE_SCRIPT" "$commit" "$version" "$archive_digest"

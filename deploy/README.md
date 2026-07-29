@@ -17,17 +17,19 @@ artifact releases, and production deployment are all manually dispatched.
 The production workflow checks out the exact fork `main` commit on a
 GitHub-hosted runner, builds one `linux/amd64` Docker image, and streams a
 zstd-compressed Docker archive through the restricted deploy SSH key.
-The runner derives the portable image ID from the config object in that exact
-saved archive. This is intentional: Docker's containerd image store can assign
-a different local ID before `docker save`, while the archive config digest is
-the ID preserved by `docker load` on the production daemon.
+The runner hashes the exact compressed archive before upload, and production
+verifies that digest before loading it. Docker/containerd may assign different
+local image and config IDs both during `docker save` and again during
+`docker load`, so those daemon-local IDs are recorded for diagnostics but are
+not treated as cross-host transport identities. Production separately verifies
+the loaded image's platform plus source, revision, and version labels.
 
 The production host does not check out source, download build dependencies, or
 compile the application in the normal path. Its receiver enforces a compressed
-upload size limit, verifies the archive tag, image ID, `linux/amd64` platform,
-and OCI source/revision/version labels, then passes the verified local image to
-the existing blue-green release helper. A failed identity check, health check,
-or traffic switch never replaces the active color.
+upload size limit, verifies the archive digest and tag, the `linux/amd64`
+platform, and OCI source/revision/version labels, then passes the verified local
+image to the existing blue-green release helper. A failed identity check,
+health check, or traffic switch never replaces the active color.
 
 Official upstream changes are deliberately merged into fork `main` by a
 maintainer first. The release server does not poll or merge the official
@@ -88,7 +90,7 @@ sudo deploy/install-github-deploy-trigger.sh \
 ```
 
 The account has no interactive shell access. Its key accepts only the validated
-`deploy-image COMMIT VERSION IMAGE_ID` protocol and cannot start the legacy
+`deploy-image COMMIT VERSION ARCHIVE_DIGEST` protocol and cannot start the legacy
 source-build service or run arbitrary SSH commands.
 
 `sub2api-autodeploy.timer` is disabled by default. It can be explicitly used

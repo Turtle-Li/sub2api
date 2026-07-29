@@ -180,9 +180,11 @@ jobs:
 
           ARCHIVE_BYTES=$(wc -c <"$ARCHIVE_PATH" | tr -d '[:space:]')
           test "$ARCHIVE_BYTES" -gt 0
+          ARCHIVE_SHA256=$(sha256sum "$ARCHIVE_PATH" | awk '{print $1}')
           {
             echo "path=$ARCHIVE_PATH"
-            echo "image_id=sha256:${ARCHIVE_CONFIG_HEX}"
+            echo "config_id=sha256:${ARCHIVE_CONFIG_HEX}"
+            echo "digest=sha256:${ARCHIVE_SHA256}"
             echo "bytes=$ARCHIVE_BYTES"
           } >> "$GITHUB_OUTPUT"
 
@@ -199,7 +201,7 @@ jobs:
 
       - name: Upload image and start verified blue-green release
         env:
-          ARCHIVE_IMAGE_ID: ${{ steps.archive.outputs.image_id }}
+          ARCHIVE_DIGEST: ${{ steps.archive.outputs.digest }}
           ARCHIVE_PATH: ${{ steps.archive.outputs.path }}
           SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
           VERSION: ${{ steps.metadata.outputs.version }}
@@ -215,13 +217,14 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -p "$DEPLOY_PORT" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "deploy-image ${SOURCE_COMMIT} ${VERSION} ${ARCHIVE_IMAGE_ID}" \
+            "deploy-image ${SOURCE_COMMIT} ${VERSION} ${ARCHIVE_DIGEST}" \
             < "$ARCHIVE_PATH"
 
       - name: Record release summary
         env:
           ARCHIVE_BYTES: ${{ steps.archive.outputs.bytes }}
-          ARCHIVE_IMAGE_ID: ${{ steps.archive.outputs.image_id }}
+          ARCHIVE_CONFIG_ID: ${{ steps.archive.outputs.config_id }}
+          ARCHIVE_DIGEST: ${{ steps.archive.outputs.digest }}
           IMAGE_ID: ${{ steps.image.outputs.id }}
           SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
           VERSION: ${{ steps.metadata.outputs.version }}
@@ -232,7 +235,8 @@ jobs:
             echo "- Commit: \`${SOURCE_COMMIT}\`"
             echo "- Version: \`${VERSION}\`"
             echo "- Runner image ID: \`${IMAGE_ID}\`"
-            echo "- Portable archive image ID: \`${ARCHIVE_IMAGE_ID}\`"
+            echo "- Archive config ID: \`${ARCHIVE_CONFIG_ID}\`"
+            echo "- Compressed archive digest: \`${ARCHIVE_DIGEST}\`"
             echo "- Compressed archive bytes: \`${ARCHIVE_BYTES}\`"
             echo "- Build: GitHub-hosted linux/amd64 runner"
             echo "- Production: verified image load and blue-green switch only"

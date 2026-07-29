@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 
 # Receive one zstd-compressed Docker archive from the restricted GitHub Actions
-# SSH account, validate its immutable build identity, load it into Docker, and
-# hand it to the existing blue-green release helper. No source checkout,
-# dependency download, or compilation occurs on the production host.
+# SSH account, verify the exact transport digest and immutable build labels,
+# load it into Docker, and hand it to the existing blue-green release helper.
+# No source checkout, dependency download, or compilation occurs on the
+# production host.
 
 set -Eeuo pipefail
 
 if [ "$#" -ne 3 ]; then
-  echo "Usage: sub2api-github-image-release.sh COMMIT VERSION IMAGE_ID" >&2
+  echo "Usage: sub2api-github-image-release.sh COMMIT VERSION ARCHIVE_DIGEST" >&2
   exit 2
 fi
 
 COMMIT="$1"
 VERSION="$2"
-EXPECTED_IMAGE_ID="$3"
+EXPECTED_ARCHIVE_DIGEST="$3"
 
 CONFIG_FILE="${SUB2API_AUTODEPLOY_CONFIG_FILE:-/etc/sub2api-autodeploy.env}"
 if [ -r "$CONFIG_FILE" ]; then
@@ -82,15 +83,15 @@ case "$VERSION" in
   ''|*[!0-9A-Za-z._+-]*) die "invalid version" ;;
 esac
 [ "${#VERSION}" -le 64 ] || die "version is too long"
-case "$EXPECTED_IMAGE_ID" in
+case "$EXPECTED_ARCHIVE_DIGEST" in
   sha256:*) ;;
-  *) die "image ID must use sha256" ;;
+  *) die "archive digest must use sha256" ;;
 esac
-image_id_hex="${EXPECTED_IMAGE_ID#sha256:}"
-case "$image_id_hex" in
-  *[!0-9a-f]*|'') die "invalid image ID" ;;
+archive_digest_hex="${EXPECTED_ARCHIVE_DIGEST#sha256:}"
+case "$archive_digest_hex" in
+  *[!0-9a-f]*|'') die "invalid archive digest" ;;
 esac
-[ "${#image_id_hex}" -eq 64 ] || die "image ID must contain 64 hex characters"
+[ "${#archive_digest_hex}" -eq 64 ] || die "archive digest must contain 64 hex characters"
 case "$MAX_UPLOAD_BYTES" in
   ''|*[!0-9]*) die "SUB2API_GITHUB_IMAGE_MAX_BYTES must be a positive integer" ;;
 esac
@@ -103,7 +104,7 @@ case "$EXPECTED_SOURCE" in
   *$'\n'*|*$'\r'*|*' '*) die "SUB2API_GITHUB_IMAGE_SOURCE must not contain whitespace" ;;
 esac
 
-for command_name in docker flock head python3 tar wc zstd; do
+for command_name in docker flock head python3 sha256sum tar wc zstd; do
   require_cmd "$command_name"
 done
 [ -x "$RELEASE_HELPER" ] || die "release helper is missing or not executable: ${RELEASE_HELPER}"
@@ -118,6 +119,9 @@ head -c "$((MAX_UPLOAD_BYTES + 1))" >"$ARCHIVE"
 archive_bytes="$(wc -c <"$ARCHIVE" | tr -d '[:space:]')"
 [ "$archive_bytes" -gt 0 ] || die "image archive is empty"
 [ "$archive_bytes" -le "$MAX_UPLOAD_BYTES" ] || die "image archive exceeds the configured size limit"
+actual_archive_digest="sha256:$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+[ "$actual_archive_digest" = "$EXPECTED_ARCHIVE_DIGEST" ] \
+  || die "archive digest mismatch: expected ${EXPECTED_ARCHIVE_DIGEST}, got ${actual_archive_digest}"
 zstd -t --quiet "$ARCHIVE" || die "image archive failed zstd validation"
 
 if ! zstd -dc -- "$ARCHIVE" \
@@ -144,9 +148,19 @@ if ! zstd -dc -- "$ARCHIVE" | docker image load >"$LOAD_LOG" 2>&1; then
   die "docker image load failed"
 fi
 
+# Docker/containerd may reserialize image metadata during both save and load,
+# so daemon-local image/config IDs are diagnostic values, not transport
+# identities. The archive digest above protects the exact uploaded bytes.
 actual_image_id="$(docker image inspect "$INCOMING_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
-[ "$actual_image_id" = "$EXPECTED_IMAGE_ID" ] \
-  || die "image ID mismatch: expected ${EXPECTED_IMAGE_ID}, got ${actual_image_id:-missing}"
+case "$actual_image_id" in
+  sha256:*) ;;
+  *) die "loaded image ID is invalid: ${actual_image_id:-missing}" ;;
+esac
+actual_image_id_hex="${actual_image_id#sha256:}"
+case "$actual_image_id_hex" in
+  *[!0-9a-f]*|'') die "loaded image ID is invalid: ${actual_image_id}" ;;
+esac
+[ "${#actual_image_id_hex}" -eq 64 ] || die "loaded image ID must contain 64 hex characters"
 [ "$(docker image inspect "$INCOMING_IMAGE" --format '{{.Architecture}}')" = "amd64" ] \
   || die "image architecture is not amd64"
 [ "$(docker image inspect "$INCOMING_IMAGE" --format '{{.Os}}')" = "linux" ] \
@@ -163,13 +177,14 @@ cat >"${LOG_DIR}/candidate.env" <<EOF
 run_id=${RUN_ID}
 source_commit=${COMMIT}
 version=${VERSION}
-image_id=${EXPECTED_IMAGE_ID}
+archive_digest=${EXPECTED_ARCHIVE_DIGEST}
+loaded_image_id=${actual_image_id}
 incoming_image=${INCOMING_IMAGE}
 release_image=${RELEASE_IMAGE}
 archive_bytes=${archive_bytes}
 EOF
 
-log "Image identity verified; starting blue-green release with ${RELEASE_IMAGE}"
+log "Archive digest and image identity verified; starting blue-green release with ${RELEASE_IMAGE}"
 if ! "$RELEASE_HELPER" \
   --prebuilt "$RELEASE_IMAGE" "$COMMIT" "$VERSION" "$PUBLIC_HEALTH_URL" "$RUN_ID"; then
   die "blue-green release rejected or rolled back the GitHub-built image"
