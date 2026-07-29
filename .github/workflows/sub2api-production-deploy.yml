@@ -34,6 +34,9 @@ jobs:
           test -n "$DEPLOY_KEY"
           test -n "$DEPLOY_PORT"
           test -n "$DEPLOY_USER"
+          command -v python3 >/dev/null
+          command -v sha256sum >/dev/null
+          command -v tar >/dev/null
           command -v zstd >/dev/null
 
       - name: Configure restricted SSH client
@@ -130,6 +133,59 @@ jobs:
           test "${#IMAGE_ID_HEX}" -eq 64
           echo "id=$IMAGE_ID" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare portable Docker archive
+        id: archive
+        env:
+          IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+        run: |
+          ARCHIVE_PATH="${RUNNER_TEMP}/sub2api-${SOURCE_COMMIT}.docker.tar.zst"
+          docker image save "$IMAGE_TAG" | zstd -T0 -3 -o "$ARCHIVE_PATH"
+          zstd -t --quiet "$ARCHIVE_PATH"
+
+          ARCHIVE_CONFIG_PATH=$(
+            zstd -dc -- "$ARCHIVE_PATH" \
+              | tar -xOf - manifest.json \
+              | python3 -c '
+          import json
+          import re
+          import sys
+
+          expected_tag = sys.argv[1]
+          manifest = json.load(sys.stdin)
+          if len(manifest) != 1:
+              raise SystemExit("archive must contain exactly one image")
+          entry = manifest[0]
+          tags = entry.get("RepoTags") or []
+          if tags != [expected_tag]:
+              raise SystemExit(f"archive tag mismatch: {tags!r}")
+          config = entry.get("Config")
+          if not isinstance(config, str) or not re.fullmatch(
+              r"(?:blobs/sha256/[0-9a-f]{64}|[0-9a-f]{64}\.json)",
+              config,
+          ):
+              raise SystemExit(f"invalid archive config path: {config!r}")
+          print(config)
+          ' "$IMAGE_TAG"
+          )
+          ARCHIVE_CONFIG_BASENAME="${ARCHIVE_CONFIG_PATH##*/}"
+          ARCHIVE_CONFIG_HEX="${ARCHIVE_CONFIG_BASENAME%.json}"
+          SAVED_CONFIG_HEX=$(
+            zstd -dc -- "$ARCHIVE_PATH" \
+              | tar -xOf - "$ARCHIVE_CONFIG_PATH" \
+              | sha256sum \
+              | awk '{print $1}'
+          )
+          test "$SAVED_CONFIG_HEX" = "$ARCHIVE_CONFIG_HEX"
+
+          ARCHIVE_BYTES=$(wc -c <"$ARCHIVE_PATH" | tr -d '[:space:]')
+          test "$ARCHIVE_BYTES" -gt 0
+          {
+            echo "path=$ARCHIVE_PATH"
+            echo "image_id=sha256:${ARCHIVE_CONFIG_HEX}"
+            echo "bytes=$ARCHIVE_BYTES"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Confirm main has not advanced
         env:
           SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
@@ -143,28 +199,29 @@ jobs:
 
       - name: Upload image and start verified blue-green release
         env:
-          IMAGE_ID: ${{ steps.image.outputs.id }}
-          IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
+          ARCHIVE_IMAGE_ID: ${{ steps.archive.outputs.image_id }}
+          ARCHIVE_PATH: ${{ steps.archive.outputs.path }}
           SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
           VERSION: ${{ steps.metadata.outputs.version }}
         run: |
-          docker image save "$IMAGE_TAG" \
-            | zstd -T0 -3 \
-            | ssh \
-                -i "$HOME/.ssh/id_ed25519" \
-                -o BatchMode=yes \
-                -o ConnectTimeout=20 \
-                -o IdentitiesOnly=yes \
-                -o LogLevel=ERROR \
-                -o ServerAliveCountMax=180 \
-                -o ServerAliveInterval=30 \
-                -o StrictHostKeyChecking=yes \
-                -p "$DEPLOY_PORT" \
-                "$DEPLOY_USER@$DEPLOY_HOST" \
-                "deploy-image ${SOURCE_COMMIT} ${VERSION} ${IMAGE_ID}"
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o IdentitiesOnly=yes \
+            -o LogLevel=ERROR \
+            -o ServerAliveCountMax=180 \
+            -o ServerAliveInterval=30 \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy-image ${SOURCE_COMMIT} ${VERSION} ${ARCHIVE_IMAGE_ID}" \
+            < "$ARCHIVE_PATH"
 
       - name: Record release summary
         env:
+          ARCHIVE_BYTES: ${{ steps.archive.outputs.bytes }}
+          ARCHIVE_IMAGE_ID: ${{ steps.archive.outputs.image_id }}
           IMAGE_ID: ${{ steps.image.outputs.id }}
           SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
           VERSION: ${{ steps.metadata.outputs.version }}
@@ -174,7 +231,9 @@ jobs:
             echo
             echo "- Commit: \`${SOURCE_COMMIT}\`"
             echo "- Version: \`${VERSION}\`"
-            echo "- Image ID: \`${IMAGE_ID}\`"
+            echo "- Runner image ID: \`${IMAGE_ID}\`"
+            echo "- Portable archive image ID: \`${ARCHIVE_IMAGE_ID}\`"
+            echo "- Compressed archive bytes: \`${ARCHIVE_BYTES}\`"
             echo "- Build: GitHub-hosted linux/amd64 runner"
             echo "- Production: verified image load and blue-green switch only"
           } >> "$GITHUB_STEP_SUMMARY"
