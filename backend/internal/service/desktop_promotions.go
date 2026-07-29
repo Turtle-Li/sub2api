@@ -177,7 +177,7 @@ func normalizeDesktopPromotionURL(raw string) (string, error) {
 	if host == "" {
 		return "", fmt.Errorf("must include a host")
 	}
-	if scheme != "https" && !(scheme == "http" && isDesktopPromotionLoopback(host)) {
+	if scheme != "https" && (scheme != "http" || !isDesktopPromotionLoopback(host)) {
 		return "", fmt.Errorf("must use HTTPS (HTTP is allowed only for loopback development)")
 	}
 	parsed.Scheme = scheme

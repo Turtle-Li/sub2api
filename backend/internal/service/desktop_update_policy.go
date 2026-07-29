@@ -225,7 +225,7 @@ func normalizeDesktopDownloadURL(raw string) (string, error) {
 	if address := net.ParseIP(host); address != nil && address.IsLoopback() {
 		isLoopback = true
 	}
-	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopback) {
+	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !isLoopback) {
 		return "", fmt.Errorf("must use HTTPS")
 	}
 	if parsed.User != nil || parsed.Fragment != "" {

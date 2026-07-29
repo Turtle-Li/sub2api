@@ -186,7 +186,7 @@ func (s *DesktopStorageService) TestConnection(
 		fmt.Sprintf("desktop-console-%d.txt", time.Now().UnixNano()),
 	)
 	if err := prober.Probe(ctx, objectKey); err != nil {
-		return nil, fmt.Errorf("Tencent COS write/read/delete probe failed: %w", err)
+		return nil, fmt.Errorf("tencent COS write/read/delete probe failed: %w", err)
 	}
 	return &DesktopStorageProbeResult{
 		Endpoint:  desktopStorageEndpoint(in.Region),

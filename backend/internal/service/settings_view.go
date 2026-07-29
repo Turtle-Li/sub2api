@@ -135,8 +135,6 @@ type SystemSettings struct {
 	SiteLogo                    string
 	SiteSubtitle                string
 	APIBaseURL                  string
-	DesktopControlPlaneURL      string
-	DesktopPromotions           string // JSON array of desktop promotion items
 	ContactInfo                 string
 	DocURL                      string
 	HomeContent                 string

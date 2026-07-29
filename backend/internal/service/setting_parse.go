@@ -325,8 +325,6 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		SiteLogo:                         settings[SettingKeySiteLogo],
 		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
 		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
-		DesktopControlPlaneURL:           strings.TrimSpace(settings[SettingKeyDesktopControlPlaneURL]),
-		DesktopPromotions:                settings[SettingKeyDesktopPromotions],
 		ContactInfo:                      settings[SettingKeyContactInfo],
 		DocURL:                           settings[SettingKeyDocURL],
 		HomeContent:                      settings[SettingKeyHomeContent],
