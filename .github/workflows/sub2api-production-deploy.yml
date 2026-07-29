@@ -9,9 +9,9 @@ on:
         type: string
   workflow_dispatch:
 
-# Automatic calls arrive only after every CI job has passed. Manual dispatch is
-# retained as an explicit recovery path. The runner only holds a restricted SSH
-# key that can start one fixed systemd service; it does not build the app.
+# Production deployment is always an explicit action. The runner only holds a
+# restricted SSH key that can start one fixed systemd service; it does not
+# build the app.
 permissions: {}
 
 concurrency:
