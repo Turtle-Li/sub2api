@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
 
-# Build a source tree that was prepared by sub2api-autodeploy.sh, then release
-# it through the existing blue-green switch.  It keeps the build and release
-# lock on the server so timer runs and manual releases cannot overlap.
+# Release either a legacy server-prepared source tree or a prebuilt image
+# through the existing blue-green switch. GitHub's production workflow always
+# uses --prebuilt, so production performs no source checkout or compilation.
+# The legacy source mode remains available for explicit recovery operations.
 
 set -Eeuo pipefail
 
 if [ "$#" -ne 6 ]; then
   echo "Usage: sub2api-server-release.sh SOURCE_DIR IMAGE COMMIT VERSION HEALTH_URL RUN_ID" >&2
+  echo "   or: sub2api-server-release.sh --prebuilt IMAGE COMMIT VERSION HEALTH_URL RUN_ID" >&2
   exit 2
 fi
 
-SOURCE_DIR="$1"
+PREBUILT_MODE=false
+if [ "$1" = "--prebuilt" ]; then
+  PREBUILT_MODE=true
+  SOURCE_DIR=""
+else
+  SOURCE_DIR="$1"
+fi
 IMAGE="$2"
 COMMIT="$3"
 VERSION="$4"
@@ -90,14 +98,17 @@ require_go_memory_limit() {
   esac
 }
 
-for command_name in docker curl flock grep awk timeout perl systemd-run; do
+for command_name in docker curl flock grep awk perl systemd-run; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RELEASE_MIN_FREE_BYTES "$MIN_FREE_BYTES"
-require_positive_integer SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS "$BUILD_TIMEOUT_SECONDS"
-require_positive_integer SUB2API_RELEASE_BUILD_GOMAXPROCS "$BUILD_GOMAXPROCS"
-require_positive_integer SUB2API_RELEASE_BUILD_GO_PARALLELISM "$BUILD_GO_PARALLELISM"
-require_go_memory_limit SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT "$BUILD_GO_MEMORY_LIMIT"
+if [ "$PREBUILT_MODE" != "true" ] && [ -z "$PREBUILT_IMAGE_PREFIX" ]; then
+  require_cmd timeout
+  require_positive_integer SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS "$BUILD_TIMEOUT_SECONDS"
+  require_positive_integer SUB2API_RELEASE_BUILD_GOMAXPROCS "$BUILD_GOMAXPROCS"
+  require_positive_integer SUB2API_RELEASE_BUILD_GO_PARALLELISM "$BUILD_GO_PARALLELISM"
+  require_go_memory_limit SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT "$BUILD_GO_MEMORY_LIMIT"
+fi
 case "$PREBUILT_IMAGE_PREFIX" in
   '') ;;
   *[!A-Za-z0-9./:_-]*) die "SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX contains unsupported characters" ;;
@@ -108,10 +119,12 @@ require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACT
 require_non_negative_integer SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS "$DRAIN_RETRY_DELAY_SECONDS"
 require_non_negative_integer SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS "$DRAIN_MAX_RUNTIME_SECONDS"
 
-case "$SOURCE_DIR" in
-  "${WORK_ROOT%/}"/*) ;;
-  *) die "refusing source outside automatic-release work root: $SOURCE_DIR" ;;
-esac
+if [ "$PREBUILT_MODE" != "true" ]; then
+  case "$SOURCE_DIR" in
+    "${WORK_ROOT%/}"/*) ;;
+    *) die "refusing source outside automatic-release work root: $SOURCE_DIR" ;;
+  esac
+fi
 case "$IMAGE" in
   sub2api:auto-*) ;;
   *) die "refusing unexpected image tag: $IMAGE" ;;
@@ -127,8 +140,10 @@ mkdir -p "$LOG_DIR"
 exec 9>"$LOCK_FILE"
 flock -n 9 || die "another production release is already running"
 
-[ -d "$SOURCE_DIR" ] || die "source directory does not exist: $SOURCE_DIR"
-[ -f "$SOURCE_DIR/Dockerfile" ] || die "repository Dockerfile is missing"
+if [ "$PREBUILT_MODE" != "true" ]; then
+  [ -d "$SOURCE_DIR" ] || die "source directory does not exist: $SOURCE_DIR"
+  [ -f "$SOURCE_DIR/Dockerfile" ] || die "repository Dockerfile is missing"
+fi
 [ -x "$BLUE_GREEN_SCRIPT" ] || die "blue-green script is missing or not executable"
 [ -x "$DRAIN_MONITOR_SCRIPT" ] || die "drain monitor is missing or not executable: $DRAIN_MONITOR_SCRIPT"
 
@@ -202,13 +217,19 @@ log "Preflight: active=${OLD_CONTAINER} target=${NEW_CONTAINER} recent_requests_
 log "Preflight: disk_free=$(df -h / | awk 'NR==2 {print $4}') load=$(cut -d' ' -f1-3 /proc/loadavg)"
 
 build_started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-if [ -n "$PREBUILT_IMAGE_PREFIX" ]; then
+BUILT_ON_SERVER=false
+if [ "$PREBUILT_MODE" = "true" ]; then
+  log "Using GitHub-built image ${IMAGE}; production-side compilation is disabled"
+  docker image inspect "$IMAGE" >/dev/null 2>&1 || \
+    die "GitHub-built image is missing: ${IMAGE}"
+elif [ -n "$PREBUILT_IMAGE_PREFIX" ]; then
   PREBUILT_IMAGE="${PREBUILT_IMAGE_PREFIX}${COMMIT}"
   log "Using externally built image ${PREBUILT_IMAGE}; server-side compilation is disabled"
   docker image inspect "$PREBUILT_IMAGE" >/dev/null 2>&1 || \
     die "prebuilt image is missing: ${PREBUILT_IMAGE}"
   docker tag "$PREBUILT_IMAGE" "$IMAGE" || die "failed to tag prebuilt image"
 else
+  BUILT_ON_SERVER=true
   log "Building ${IMAGE} on the server; detailed output is in ${BUILD_LOG}"
   if ! timeout "$BUILD_TIMEOUT_SECONDS" env DOCKER_BUILDKIT=1 docker build \
     --progress=plain \
@@ -230,7 +251,7 @@ else
 fi
 
 docker image inspect "$IMAGE" >/dev/null || die "built image is missing"
-log "Build completed: $(docker image inspect "$IMAGE" --format '{{.Id}} {{.Size}} bytes')"
+log "Image ready: $(docker image inspect "$IMAGE" --format '{{.Id}} {{.Size}} bytes')"
 
 rollback() {
   log "Public verification failed; attempting automatic rollback to ${OLD_CONTAINER}"
@@ -373,7 +394,8 @@ while IFS= read -r old_tag; do
   docker image rm "$old_tag" >>"${LOG_DIR}/image-cleanup.log" 2>&1 || true
 done < <(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^sub2api:auto-' || true)
 
-if docker buildx prune --help 2>&1 | grep -q -- '--max-used-space'; then
+if [ "$BUILT_ON_SERVER" = "true" ] \
+  && docker buildx prune --help 2>&1 | grep -q -- '--max-used-space'; then
   docker buildx prune --force --max-used-space 8GB >"${LOG_DIR}/cache-cleanup.log" 2>&1 || true
 fi
 

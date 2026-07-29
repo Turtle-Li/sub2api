@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-# Install the Sub2API automatic release controller on the dedicated Sub2API
-# host. It installs the server-side release service and optional polling
-# fallback; it does not alter Caddy, containers, data, or immediately release
-# an image.
+# Install the Sub2API release controller on the dedicated Sub2API host. The
+# normal path receives a GitHub-built image and only performs blue-green
+# release work. The source-based service and polling timer remain available as
+# an explicit recovery fallback. This installer does not release an image.
 
 set -Eeuo pipefail
 
@@ -17,6 +17,8 @@ PRODUCTION_BRANCH="${SUB2API_AUTODEPLOY_PRODUCTION_BRANCH:-}"
 PRODUCTION_REPO_URL="${SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL:-}"
 UPSTREAM_REPO_URL="${SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL:-}"
 HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://www.turtleligpt.com/health}"
+GITHUB_IMAGE_SOURCE="${SUB2API_GITHUB_IMAGE_SOURCE:-}"
+RECOVERY_MERGE_MAIN=true
 REPLACE_CONFIG=false
 ENABLE_TIMER=false
 
@@ -106,8 +108,28 @@ derive_remote_url() {
     || true
 }
 
+derive_github_image_source() {
+  local repository_url="$1"
+  case "$repository_url" in
+    https://github.com/*)
+      printf '%s\n' "${repository_url%.git}"
+      ;;
+    git@github.com:*)
+      printf 'https://github.com/%s\n' "${repository_url#git@github.com:}" \
+        | sed 's/\.git$//'
+      ;;
+    ssh://git@github.com/*)
+      printf 'https://github.com/%s\n' "${repository_url#ssh://git@github.com/}" \
+        | sed 's/\.git$//'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 [ "$(id -u)" -eq 0 ] || die "run this installer as root on the Sub2API server"
-for command_name in git install systemctl docker curl flock; do
+for command_name in git install systemctl docker curl flock head python3 sed tar wc zstd; do
   require_cmd "$command_name"
 done
 [ -d "$APP_DIR" ] || die "Sub2API application directory does not exist: $APP_DIR"
@@ -115,11 +137,18 @@ done
 if [ -z "$PRODUCTION_BRANCH" ]; then
   PRODUCTION_BRANCH="$(git -C "$SOURCE_ROOT" branch --show-current 2>/dev/null || true)"
 fi
+if [ "$PRODUCTION_BRANCH" = "main" ]; then
+  RECOVERY_MERGE_MAIN=false
+fi
 if [ -z "$PRODUCTION_REPO_URL" ]; then
   PRODUCTION_REPO_URL="$(derive_remote_url fork origin)"
 fi
 if [ -z "$UPSTREAM_REPO_URL" ]; then
   UPSTREAM_REPO_URL="$(derive_remote_url origin fork)"
+fi
+if [ -z "$GITHUB_IMAGE_SOURCE" ]; then
+  GITHUB_IMAGE_SOURCE="$(derive_github_image_source "$PRODUCTION_REPO_URL")" \
+    || die "set SUB2API_GITHUB_IMAGE_SOURCE to the canonical https://github.com/OWNER/REPO URL"
 fi
 
 require_simple_value SUB2API_AUTODEPLOY_PRODUCTION_BRANCH "$PRODUCTION_BRANCH"
@@ -128,10 +157,16 @@ if [ -n "$UPSTREAM_REPO_URL" ]; then
   require_simple_value SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL "$UPSTREAM_REPO_URL"
 fi
 require_simple_value SUB2API_PUBLIC_HEALTH_URL "$HEALTH_URL"
+require_simple_value SUB2API_GITHUB_IMAGE_SOURCE "$GITHUB_IMAGE_SOURCE"
+case "$GITHUB_IMAGE_SOURCE" in
+  https://github.com/*) ;;
+  *) die "SUB2API_GITHUB_IMAGE_SOURCE must be an https://github.com URL" ;;
+esac
 git -C "$SOURCE_ROOT" check-ref-format --branch "$PRODUCTION_BRANCH" >/dev/null
 
 for file in \
   deploy/sub2api-autodeploy.sh \
+  deploy/sub2api-github-image-release.sh \
   deploy/sub2api-server-release.sh \
   deploy/sub2api-github-deploy-trigger.sh \
   deploy/sub2api-autodeploy.service \
@@ -140,6 +175,7 @@ for file in \
 done
 
 bash -n "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh"
 
@@ -153,7 +189,7 @@ else
     printf 'SUB2API_AUTODEPLOY_PRODUCTION_REMOTE=%s\n' 'fork'
     printf 'SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL=%s\n' "$PRODUCTION_REPO_URL"
     printf 'SUB2API_AUTODEPLOY_PRODUCTION_BRANCH=%s\n' "$PRODUCTION_BRANCH"
-    printf 'SUB2API_AUTODEPLOY_MERGE_MAIN=%s\n' 'true'
+    printf 'SUB2API_AUTODEPLOY_MERGE_MAIN=%s\n' "$RECOVERY_MERGE_MAIN"
     printf 'SUB2API_AUTODEPLOY_MAIN_REMOTE=%s\n' 'fork'
     printf 'SUB2API_AUTODEPLOY_MAIN_REPO_URL=%s\n' "$PRODUCTION_REPO_URL"
     printf 'SUB2API_AUTODEPLOY_MAIN_BRANCH=%s\n' 'main'
@@ -163,6 +199,8 @@ else
     printf 'SUB2API_AUTODEPLOY_UPSTREAM_REMOTE=%s\n' 'origin'
     printf 'SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL=%s\n' "$UPSTREAM_REPO_URL"
     printf 'SUB2API_AUTODEPLOY_UPSTREAM_BRANCH=%s\n' 'main'
+    printf 'SUB2API_GITHUB_IMAGE_SOURCE=%s\n' "$GITHUB_IMAGE_SOURCE"
+    printf 'SUB2API_GITHUB_IMAGE_MAX_BYTES=%s\n' '1073741824'
     printf 'SUB2API_PUBLIC_HEALTH_URL=%s\n' "$HEALTH_URL"
     printf 'SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS=%s\n' '900'
     printf 'SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS=%s\n' '1800'
@@ -175,6 +213,8 @@ fi
 
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh" \
   "${SCRIPT_DIR}/sub2api-autodeploy.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh" \
+  "${SCRIPT_DIR}/sub2api-github-image-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
 install -D -m 755 "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh" \
@@ -190,7 +230,7 @@ if [ "$ENABLE_TIMER" = "true" ]; then
   echo "Enabled sub2api-autodeploy.timer (checks every five minutes)."
 else
   systemctl disable --now sub2api-autodeploy.timer >/dev/null 2>&1 || true
-  echo "Installed event-driven release service; polling timer is disabled."
+  echo "Installed GitHub image receiver and recovery service; polling timer is disabled."
 fi
 
 echo "Validate without releasing: ${SCRIPT_DIR}/sub2api-autodeploy.sh --check"

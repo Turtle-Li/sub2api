@@ -150,6 +150,25 @@ run_release() {
       'guard-test'
 }
 
+run_github_prebuilt_release() {
+  env \
+    PATH="${FAKE_BIN}:${PATH}" \
+    FAKE_DOCKER_CALLS="$DOCKER_CALLS" \
+    SUB2API_APP_DIR="$APP_DIR" \
+    SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
+    SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
+    SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
+    SUB2API_RELEASE_MIN_FREE_BYTES=1 \
+    SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
+    /bin/bash "$SCRIPT" \
+      --prebuilt \
+      'sub2api:auto-test' \
+      'abc123' \
+      '0.1.test' \
+      'https://example.invalid/health' \
+      'github-prebuilt-test'
+}
+
 strict_output="${TEST_ROOT}/strict.log"
 if run_release >"$strict_output" 2>&1; then
   fail 'running inactive container was accepted by default'
@@ -181,6 +200,18 @@ assert_contains "$DOCKER_CALLS" 'image inspect sub2api:prebuilt-abc123'
 assert_contains "$DOCKER_CALLS" 'tag sub2api:prebuilt-abc123 sub2api:auto-test'
 if grep -Fq -- 'build ' "$DOCKER_CALLS"; then
   fail 'server-side image build ran despite a prebuilt image'
+fi
+
+: >"$DOCKER_CALLS"
+github_prebuilt_output="${TEST_ROOT}/github-prebuilt.log"
+if ALLOW_DRAINING=true run_github_prebuilt_release >"$github_prebuilt_output" 2>&1; then
+  fail 'fake GitHub-prebuilt release unexpectedly succeeded'
+fi
+assert_contains "$github_prebuilt_output" \
+  'Using GitHub-built image sub2api:auto-test; production-side compilation is disabled'
+assert_contains "$DOCKER_CALLS" 'image inspect sub2api:auto-test'
+if grep -Fq -- 'build ' "$DOCKER_CALLS"; then
+  fail 'production-side image build ran in explicit --prebuilt mode'
 fi
 
 printf 'Server release inactive-container guard tests passed.\n'

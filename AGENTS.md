@@ -25,9 +25,11 @@
 
 - The documented production path is the explicitly dispatched blue-green
   release in `deploy/README.md`; ordinary pushes and tags must not start
-  GitHub Actions. Application state lives under `/opt/sub2api`, release
-  configuration under `/etc/sub2api-autodeploy.env`, and logs under
-  `/var/log/sub2api-release/`.
+  GitHub Actions. GitHub Actions builds and packages the exact `main` commit;
+  production may only validate and load that image before the blue-green
+  switch, not fetch source or compile it. Application state lives under
+  `/opt/sub2api`, release configuration under
+  `/etc/sub2api-autodeploy.env`, and logs under `/var/log/sub2api-release/`.
 - A local test, build, or report does not authorize an SSH session, push,
   release, production configuration change, Caddy change, or cache deletion.
 - Before a release, resolve the configured production repository and branch,

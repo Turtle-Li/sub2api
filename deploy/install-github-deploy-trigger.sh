@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 
 # Provision a dedicated, forced-command SSH account for the GitHub Actions
-# production deploy workflow. The account can only start the existing
-# root-owned sub2api-autodeploy.service through a narrowly scoped sudo rule.
+# production deploy workflow. The account can only pass a strictly validated
+# image upload to the root-owned receiver.
 
 set -Eeuo pipefail
 
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 TRIGGER_SCRIPT="${APP_DIR}/scripts/sub2api-github-deploy-trigger.sh"
+IMAGE_RELEASE_SCRIPT="${APP_DIR}/scripts/sub2api-github-image-release.sh"
 DEPLOY_USER="${SUB2API_GITHUB_DEPLOY_USER:-sub2api-github-deploy}"
 DEPLOY_HOME="${SUB2API_GITHUB_DEPLOY_HOME:-/var/lib/sub2api-github-deploy}"
-SERVICE_NAME="sub2api-autodeploy.service"
 PUBLIC_KEY_FILE=""
 
 usage() {
@@ -63,11 +63,12 @@ case "$DEPLOY_USER" in
   ''|-*|*[!a-zA-Z0-9_-]*) die "deploy user contains unsupported characters" ;;
 esac
 
-for command_name in install useradd getent id ssh-keygen visudo sudo systemctl; do
+for command_name in install useradd getent id ssh-keygen visudo sudo; do
   require_cmd "$command_name"
 done
 [ -x "$TRIGGER_SCRIPT" ] || die "release trigger is missing or not executable: $TRIGGER_SCRIPT"
-systemctl cat "$SERVICE_NAME" >/dev/null || die "required systemd service is missing: $SERVICE_NAME"
+[ -x "$IMAGE_RELEASE_SCRIPT" ] \
+  || die "GitHub image receiver is missing or not executable: $IMAGE_RELEASE_SCRIPT"
 
 key_line="$(awk 'NF && $1 !~ /^#/ { print; exit }' "$PUBLIC_KEY_FILE")"
 [ -n "$key_line" ] || die "public key file contains no key"
@@ -101,8 +102,14 @@ install -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 600 "$authorized_keys_temp" \
 rm -f "$authorized_keys_temp"
 
 sudoers_temp="$(mktemp)"
-printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl start %s\n' \
-  "$DEPLOY_USER" "$SERVICE_NAME" >"$sudoers_temp"
+{
+  # The receiver's stdin is a compressed binary stream. Keep sudo from
+  # inserting an intermediary pseudo-terminal for this one noninteractive
+  # account.
+  printf 'Defaults:%s !use_pty\n' "$DEPLOY_USER"
+  printf '%s ALL=(root) NOPASSWD: %s *\n' \
+    "$DEPLOY_USER" "$IMAGE_RELEASE_SCRIPT"
+} >"$sudoers_temp"
 visudo -cf "$sudoers_temp" >/dev/null || {
   rm -f "$sudoers_temp"
   die "generated sudoers policy did not validate"
