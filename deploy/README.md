@@ -17,6 +17,10 @@ artifact releases, and production deployment are all manually dispatched.
 The production workflow checks out the exact fork `main` commit on a
 GitHub-hosted runner, builds one `linux/amd64` Docker image, and streams a
 zstd-compressed Docker archive through the restricted deploy SSH key.
+The runner derives the portable image ID from the config object in that exact
+saved archive. This is intentional: Docker's containerd image store can assign
+a different local ID before `docker save`, while the archive config digest is
+the ID preserved by `docker load` on the production daemon.
 
 The production host does not check out source, download build dependencies, or
 compile the application in the normal path. Its receiver enforces a compressed
