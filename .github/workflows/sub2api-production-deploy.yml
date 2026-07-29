@@ -3,18 +3,21 @@ name: Deploy Sub2API production
 on:
   workflow_dispatch:
 
-# Production deployment is always an explicit action. The runner only holds a
-# restricted SSH key that can start one fixed systemd service; it does not
-# build the app.
-permissions: {}
+# A production release is always explicit. GitHub builds the exact main commit
+# into a linux/amd64 image, compresses its Docker archive, and streams it over
+# the existing restricted SSH account. Production only loads the verified image
+# and performs the blue-green switch; it never checks out source or compiles.
+permissions:
+  contents: read
 
 concurrency:
   group: sub2api-production-deploy
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Start server-side blue-green release
+  build-and-deploy:
+    name: Build image and run blue-green release
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -31,6 +34,7 @@ jobs:
           test -n "$DEPLOY_KEY"
           test -n "$DEPLOY_PORT"
           test -n "$DEPLOY_USER"
+          command -v zstd >/dev/null
 
       - name: Configure restricted SSH client
         run: |
@@ -44,16 +48,133 @@ jobs:
           chmod 600 "$HOME/.ssh/known_hosts"
           ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
 
-      - name: Start verified server-side release
+      - name: Checkout production source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: main
+
+      - name: Resolve immutable build metadata
+        id: metadata
         run: |
-          ssh \
-            -i "$HOME/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o ConnectTimeout=20 \
-            -o IdentitiesOnly=yes \
-            -o LogLevel=ERROR \
-            -o ServerAliveCountMax=180 \
-            -o ServerAliveInterval=30 \
-            -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_PORT" \
-            "$DEPLOY_USER@$DEPLOY_HOST" deploy
+          SOURCE_COMMIT=$(git rev-parse HEAD)
+          VERSION=$(tr -d '[:space:]' < backend/cmd/server/VERSION)
+          case "$SOURCE_COMMIT" in
+            *[!0-9a-f]*|'') echo "Invalid source commit" >&2; exit 1 ;;
+          esac
+          test "${#SOURCE_COMMIT}" -eq 40
+          case "$VERSION" in
+            ''|*[!0-9A-Za-z._+-]*) echo "Invalid release version" >&2; exit 1 ;;
+          esac
+          BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          IMAGE_TAG="sub2api:github-${SOURCE_COMMIT}"
+          {
+            echo "commit=$SOURCE_COMMIT"
+            echo "version=$VERSION"
+            echo "build_date=$BUILD_DATE"
+            echo "image_tag=$IMAGE_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build production linux/amd64 image
+        env:
+          BUILD_DATE: ${{ steps.metadata.outputs.build_date }}
+          IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --load \
+            --progress=plain \
+            --provenance=false \
+            --tag "$IMAGE_TAG" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${SOURCE_COMMIT}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "org.opencontainers.image.created=${BUILD_DATE}" \
+            --build-arg "GOPROXY=https://proxy.golang.org,direct" \
+            --build-arg "GOSUMDB=sum.golang.org" \
+            --build-arg "COMMIT=${SOURCE_COMMIT}" \
+            --build-arg "VERSION=${VERSION}" \
+            --build-arg "DATE=${BUILD_DATE}" \
+            --cache-from "type=gha,scope=sub2api-production-linux-amd64" \
+            --cache-to "type=gha,mode=max,scope=sub2api-production-linux-amd64" \
+            --file Dockerfile \
+            .
+
+      - name: Verify image identity
+        id: image
+        env:
+          IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          test "$(docker image inspect "$IMAGE_TAG" --format '{{.Architecture}}')" = "amd64"
+          test "$(docker image inspect "$IMAGE_TAG" --format '{{.Os}}')" = "linux"
+          test "$(docker image inspect "$IMAGE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/${GITHUB_REPOSITORY}"
+          test "$(docker image inspect "$IMAGE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_COMMIT"
+          test "$(docker image inspect "$IMAGE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VERSION"
+          IMAGE_ID=$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}')
+          case "$IMAGE_ID" in
+            sha256:*) ;;
+            *) echo "Image ID does not use sha256: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          IMAGE_ID_HEX=${IMAGE_ID#sha256:}
+          case "$IMAGE_ID_HEX" in
+            ''|*[!0-9a-f]*) echo "Invalid image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          test "${#IMAGE_ID_HEX}" -eq 64
+          echo "id=$IMAGE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm main has not advanced
+        env:
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+        run: |
+          CURRENT_MAIN=$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')
+          test -n "$CURRENT_MAIN"
+          if [ "$CURRENT_MAIN" != "$SOURCE_COMMIT" ]; then
+            echo "main advanced from ${SOURCE_COMMIT} to ${CURRENT_MAIN}; refusing to deploy a stale image." >&2
+            exit 1
+          fi
+
+      - name: Upload image and start verified blue-green release
+        env:
+          IMAGE_ID: ${{ steps.image.outputs.id }}
+          IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          docker image save "$IMAGE_TAG" \
+            | zstd -T0 -3 \
+            | ssh \
+                -i "$HOME/.ssh/id_ed25519" \
+                -o BatchMode=yes \
+                -o ConnectTimeout=20 \
+                -o IdentitiesOnly=yes \
+                -o LogLevel=ERROR \
+                -o ServerAliveCountMax=180 \
+                -o ServerAliveInterval=30 \
+                -o StrictHostKeyChecking=yes \
+                -p "$DEPLOY_PORT" \
+                "$DEPLOY_USER@$DEPLOY_HOST" \
+                "deploy-image ${SOURCE_COMMIT} ${VERSION} ${IMAGE_ID}"
+
+      - name: Record release summary
+        env:
+          IMAGE_ID: ${{ steps.image.outputs.id }}
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          {
+            echo "### Sub2API production release"
+            echo
+            echo "- Commit: \`${SOURCE_COMMIT}\`"
+            echo "- Version: \`${VERSION}\`"
+            echo "- Image ID: \`${IMAGE_ID}\`"
+            echo "- Build: GitHub-hosted linux/amd64 runner"
+            echo "- Production: verified image load and blue-green switch only"
+          } >> "$GITHUB_STEP_SUMMARY"

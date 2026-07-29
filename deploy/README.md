@@ -13,24 +13,28 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 ## Explicit Production Releases (Dedicated Server)
 
 Ordinary pushes and tags do not start GitHub Actions. CI, security scans,
-artifact releases, and production deployment are all manually dispatched to
-protect the private repository's Actions quota. When production deployment is
-explicitly requested, the workflow starts `sub2api-autodeploy.service` over a
-restricted SSH key. The server then fetches only the fork refs, uses the exact
-prebuilt candidate, and runs the existing blue-green release script. Missing
-images, merge conflicts, and health-check failures never switch traffic.
+artifact releases, and production deployment are all manually dispatched.
+The production workflow checks out the exact fork `main` commit on a
+GitHub-hosted runner, builds one `linux/amd64` Docker image, and streams a
+zstd-compressed Docker archive through the restricted deploy SSH key.
+
+The production host does not check out source, download build dependencies, or
+compile the application in the normal path. Its receiver enforces a compressed
+upload size limit, verifies the archive tag, image ID, `linux/amd64` platform,
+and OCI source/revision/version labels, then passes the verified local image to
+the existing blue-green release helper. A failed identity check, health check,
+or traffic switch never replaces the active color.
 
 Official upstream changes are deliberately merged into fork `main` by a
 maintainer first. The release server does not poll or merge the official
 upstream itself.
 
-The installer deliberately defaults the production branch to the current
-checked-out branch, so install it from the customization branch rather than
-from a plain upstream `main` checkout:
+Install the root-owned receiver and the disabled-by-default recovery service on
+the production host:
 
 ```bash
 sudo deploy/install-autodeploy.sh \
-  --production-branch feature/batch-image-foundation \
+  --production-branch main \
   --production-repo https://github.com/Turtle-Li/sub2api.git
 
 /opt/sub2api/scripts/sub2api-autodeploy.sh --check
@@ -38,12 +42,39 @@ journalctl -u sub2api-autodeploy.service -n 100 --no-pager
 ```
 
 Run the manual `CI` workflow first when GitHub-hosted verification is desired,
-then explicitly run `.github/workflows/sub2api-production-deploy.yml`. It requires
-the repository secrets `SUB2API_DEPLOY_SSH_KEY`, `SUB2API_DEPLOY_HOST`,
+then explicitly dispatch `.github/workflows/sub2api-production-deploy.yml` from
+`main`. The workflow refuses other refs and aborts if `main` advances while the
+image is building. It requires the repository secrets
+`SUB2API_DEPLOY_SSH_KEY`, `SUB2API_DEPLOY_HOST`,
 `SUB2API_DEPLOY_PORT`, `SUB2API_DEPLOY_USER`, and
 `SUB2API_DEPLOY_KNOWN_HOSTS`. The live configuration is
 `/etc/sub2api-autodeploy.env`, and server logs are stored in
-`/var/log/sub2api-release/`.
+`/var/log/sub2api-release/`. Build cache remains on GitHub Actions; no image
+registry credentials are needed because the archive is transferred directly.
+
+The production helper recognizes `sub2api-blue`, `sub2api-green`, and the
+legacy `sub2api` application name. Long-lived Responses WebSocket connections
+can keep an old color draining after a release, so the helper resolves the
+active color from Caddy and selects only an absent or stopped target. A later
+release fails closed while any inactive application container is still
+running, because every application container also consumes shared background
+queues even when Caddy sends it no HTTP traffic. Let the drain monitor stop the
+old color, or verify that it has zero active connections before stopping it.
+After the switch passes all rollback gates, the release helper launches that
+monitor as an independent transient systemd unit. This is required because the
+automatic release service is `Type=oneshot`: a plain `nohup` child is still
+killed with the service cgroup when the release command exits. The unit name is
+recorded in the release log directory as `drain-unit.name`, and its output is
+written to `drain-monitor.log`.
+`SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=true` is an emergency
+override for deployments where background queues are disabled or the operator
+has separately fenced their consumers; it should not be enabled on normal
+Sub2API production hosts.
+
+GitHub workflow concurrency serializes production runs. The receiver also holds
+an exclusive upload/release lock and fails closed if another release is in
+progress. The archive defaults to a 1 GiB compressed size limit, configurable
+with `SUB2API_GITHUB_IMAGE_MAX_BYTES`.
 
 Install the dedicated forced-command account before adding the key to GitHub:
 
@@ -52,12 +83,14 @@ sudo deploy/install-github-deploy-trigger.sh \
   --public-key-file /path/to/sub2api-github-deploy.pub
 ```
 
-The account has no interactive shell access. Its key can only start
-`sub2api-autodeploy.service`; it cannot run arbitrary SSH commands.
+The account has no interactive shell access. Its key accepts only the validated
+`deploy-image COMMIT VERSION IMAGE_ID` protocol and cannot start the legacy
+source-build service or run arbitrary SSH commands.
 
 `sub2api-autodeploy.timer` is disabled by default. It can be explicitly used
-as a fallback with `sudo deploy/install-autodeploy.sh --enable-timer`, but it
-is not part of the normal production path.
+by a root operator as a source-build recovery fallback with
+`sudo deploy/install-autodeploy.sh --enable-timer`, but it is not part of the
+normal production path.
 
 ## Files
 
@@ -67,7 +100,10 @@ is not part of the normal production path.
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
 | `install-github-deploy-trigger.sh` | Installs the restricted GitHub Actions deploy-key account |
-| `sub2api-github-deploy-trigger.sh` | Fixed SSH command that starts the release service |
+| `sub2api-github-deploy-trigger.sh` | Forced SSH command that validates the deploy protocol |
+| `sub2api-github-image-release.sh` | Validates and loads a GitHub-built image before blue-green release |
+| `sub2api-server-release.sh` | Runs preflight, blue-green switch, verification, rollback, and draining |
+| `sub2api-autodeploy.sh` | Legacy source-preparation recovery controller |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
 | `.env.example` | Container environment variables template |
