@@ -10,14 +10,15 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | **Apple container** | Native local stack on macOS 26 | Not needed (auto-setup) |
 | **Binary Install** | Production servers, systemd | Web-based wizard |
 
-## Event-driven Production Releases (Dedicated Server)
+## Explicit Production Releases (Dedicated Server)
 
-The recommended path is a GitHub Actions `push` workflow, not a polling CI
-server. A push to the fork's `main` or configured custom production branch
-starts `sub2api-autodeploy.service` over a restricted SSH key. The server then
-fetches only the fork refs, builds a disposable candidate, and uses the
-existing blue-green release script after a successful build. Merge conflicts,
-build failures, and health-check failures never switch traffic.
+Ordinary pushes and tags do not start GitHub Actions. CI, security scans,
+artifact releases, and production deployment are all manually dispatched to
+protect the private repository's Actions quota. When production deployment is
+explicitly requested, the workflow starts `sub2api-autodeploy.service` over a
+restricted SSH key. The server then fetches only the fork refs, uses the exact
+prebuilt candidate, and runs the existing blue-green release script. Missing
+images, merge conflicts, and health-check failures never switch traffic.
 
 Official upstream changes are deliberately merged into fork `main` by a
 maintainer first. The release server does not poll or merge the official
@@ -36,7 +37,8 @@ sudo deploy/install-autodeploy.sh \
 journalctl -u sub2api-autodeploy.service -n 100 --no-pager
 ```
 
-The workflow is `.github/workflows/sub2api-production-deploy.yml`. It requires
+Run the manual `CI` workflow first when GitHub-hosted verification is desired,
+then explicitly run `.github/workflows/sub2api-production-deploy.yml`. It requires
 the repository secrets `SUB2API_DEPLOY_SSH_KEY`, `SUB2API_DEPLOY_HOST`,
 `SUB2API_DEPLOY_PORT`, `SUB2API_DEPLOY_USER`, and
 `SUB2API_DEPLOY_KNOWN_HOSTS`. The live configuration is

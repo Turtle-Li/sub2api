@@ -1,19 +1,11 @@
 name: Deploy Sub2API production
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - '.github/**'
-      - 'deploy/**'
-      - 'docs/**'
-      - 'AGENTS.md'
-      - 'README*'
   workflow_dispatch:
 
-# The runner only holds a restricted SSH key that can start one fixed systemd
-# service. It neither checks out source nor builds the application.
+# Production deployment is always an explicit action. The runner only holds a
+# restricted SSH key that can start one fixed systemd service; it does not
+# build the app.
 permissions: {}
 
 concurrency:
