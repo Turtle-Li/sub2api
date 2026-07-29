@@ -142,7 +142,7 @@ func (s *APIKeyRepoSuite) TestUpdate() {
 
 	key.Name = "Renamed"
 	key.Status = service.StatusDisabled
-	err := s.repo.Update(s.ctx, key)
+	err := s.repo.Update(s.ctx, key, service.APIKeyUpdateFields{Name: true, Status: true})
 	s.Require().NoError(err, "Update")
 
 	got, err := s.repo.GetByID(s.ctx, key.ID)
@@ -166,7 +166,7 @@ func (s *APIKeyRepoSuite) TestUpdate_ClearGroupID() {
 	s.Require().NoError(s.repo.Create(s.ctx, key))
 
 	key.GroupID = nil
-	err := s.repo.Update(s.ctx, key)
+	err := s.repo.Update(s.ctx, key, service.APIKeyUpdateFields{GroupID: true})
 	s.Require().NoError(err, "Update")
 
 	got, err := s.repo.GetByID(s.ctx, key.ID)
@@ -190,7 +190,7 @@ func (s *APIKeyRepoSuite) TestUpdate_CannotMoveSixthKeyIntoGroup() {
 	moving := s.mustCreateApiKey(user.ID, "sk-group-limit-moving", "Moving", &sourceGroup.ID)
 	moving.GroupID = &targetGroup.ID
 
-	err := s.repo.Update(s.ctx, moving)
+	err := s.repo.Update(s.ctx, moving, service.APIKeyUpdateFields{GroupID: true})
 	s.Require().ErrorIs(err, service.ErrAPIKeyGroupLimitExceeded)
 
 	persisted, err := s.repo.GetByID(s.ctx, moving.ID)
@@ -436,7 +436,7 @@ func (s *APIKeyRepoSuite) TestCRUD_Search_ClearGroupID() {
 	key.Name = "Renamed"
 	key.Status = service.StatusDisabled
 	key.GroupID = nil
-	s.Require().NoError(s.repo.Update(s.ctx, key), "Update")
+	s.Require().NoError(s.repo.Update(s.ctx, key, service.APIKeyUpdateFields{Name: true, Status: true, GroupID: true}), "Update")
 
 	got2, err := s.repo.GetByID(s.ctx, key.ID)
 	s.Require().NoError(err, "GetByID")
@@ -554,7 +554,7 @@ func (s *APIKeyRepoSuite) TestIncrementQuotaUsedAndGetState() {
 	key := s.mustCreateApiKey(user.ID, "sk-quota-state", "QuotaState", nil)
 	key.Quota = 3
 	key.QuotaUsed = 1
-	s.Require().NoError(s.repo.Update(s.ctx, key), "Update quota")
+	s.Require().NoError(s.repo.Update(s.ctx, key, service.APIKeyUpdateFields{Quota: true, QuotaUsed: true}), "Update quota")
 
 	state, err := s.repo.IncrementQuotaUsedAndGetState(s.ctx, key.ID, 2.5)
 	s.Require().NoError(err, "IncrementQuotaUsedAndGetState")
