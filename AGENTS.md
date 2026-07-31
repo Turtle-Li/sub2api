@@ -4,8 +4,12 @@
 
 - Connect only through the configured SSH alias `sub2api-new`; do not copy a
   raw host, port, or key into project scripts.
-- This server is dedicated to Sub2API. Do not install, deploy, clean up, or
-  debug unrelated applications, databases, games, or temporary services on it.
+- This server is shared only with Turtle's GPT. Sub2API owns `/opt/sub2api`,
+  its `sub2api*` containers, volumes, images, release logs, and loopback ports;
+  do not inspect, modify, restart, prune, or reuse Turtle's GPT resources from
+  a Sub2API task. Keep both projects' deployment directories, Compose projects,
+  containers, volumes, ports, reverse-proxy sites, backups, and rollback paths
+  isolated.
 - Before any remote action, read `deploy/README.md` and inspect the root-owned
   release configuration read-only. Do not assume the production branch or
   active container from local state.
