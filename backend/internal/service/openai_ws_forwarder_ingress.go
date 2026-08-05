@@ -1145,6 +1145,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	currentTurnReplayInputExists := false
 	skipBeforeTurn := false
 	forceNewConnNextAcquire := false
+	// A strict recovery changes transport only for a failed turn. Keep its
+	// outcome visible so operators can distinguish a transparent replacement
+	// from a client-visible retry after recovery itself fails.
+	strictRecoveryPending := false
+	strictRecoverySourceConnID := ""
 	hasCurrentOrReplayFunctionCallOutput := func(payload []byte) bool {
 		if openAIWSRawPayloadHasToolCallOutput(payload) {
 			return true
@@ -1306,6 +1311,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						)
 						currentPayload = updatedWithInput
 						currentPayloadBytes = len(updatedWithInput)
+						strictRecoveryPending = true
+						strictRecoverySourceConnID = strings.TrimSpace(connID)
 						resetSessionLease(true)
 						forceNewConnNextAcquire = true
 						skipBeforeTurn = true
@@ -1539,6 +1546,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if sessionLease == nil {
 			acquiredLease, acquireErr := acquireTurnLease(turn, preferredConnID, forcePreferredConn, forceNewConnNextAcquire)
 			if acquireErr != nil {
+				if strictRecoveryPending {
+					logOpenAIWSModeInfo(
+						"ingress_ws_turn_retry_strict_recovery_failed account_id=%d turn=%d source_conn_id=%s replacement_conn_id=%s outcome=acquire_failed cause=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(strictRecoverySourceConnID, openAIWSIDValueMaxLen),
+						truncateOpenAIWSLogValue(preferredConnID, openAIWSIDValueMaxLen),
+						truncateOpenAIWSLogValue(acquireErr.Error(), openAIWSLogValueMaxLen),
+					)
+				}
 				return fmt.Errorf("acquire upstream websocket: %w", acquireErr)
 			}
 			forceNewConnNextAcquire = false
@@ -1691,6 +1708,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if retryIngressTurn(relayErr, turn, connID) {
 				continue
 			}
+			if strictRecoveryPending {
+				logOpenAIWSModeInfo(
+					"ingress_ws_turn_retry_strict_recovery_failed account_id=%d turn=%d source_conn_id=%s replacement_conn_id=%s outcome=relay_failed cause=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(strictRecoverySourceConnID, openAIWSIDValueMaxLen),
+					truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+					truncateOpenAIWSLogValue(relayErr.Error(), openAIWSLogValueMaxLen),
+				)
+			}
 			finalErr := relayErr
 			if unwrapped := errors.Unwrap(relayErr); unwrapped != nil {
 				finalErr = unwrapped
@@ -1700,6 +1727,34 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			resetSessionLease(true)
 			return finalErr
+		}
+		if strictRecoveryPending {
+			successful, responseID, terminalEvent := openAIWSIngressStrictRecoveryResultMetadata(result)
+			responseID = truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen)
+			terminalEvent = normalizeOpenAIWSLogValue(terminalEvent)
+			if successful {
+				logOpenAIWSModeInfo(
+					"ingress_ws_turn_retry_strict_recovery_completed account_id=%d turn=%d source_conn_id=%s replacement_conn_id=%s response_id=%s terminal_event=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(strictRecoverySourceConnID, openAIWSIDValueMaxLen),
+					truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+					responseID,
+					terminalEvent,
+				)
+			} else {
+				logOpenAIWSModeInfo(
+					"ingress_ws_turn_retry_strict_recovery_failed account_id=%d turn=%d source_conn_id=%s replacement_conn_id=%s outcome=upstream_terminal_failed response_id=%s terminal_event=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(strictRecoverySourceConnID, openAIWSIDValueMaxLen),
+					truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+					responseID,
+					terminalEvent,
+				)
+			}
+			strictRecoveryPending = false
+			strictRecoverySourceConnID = ""
 		}
 		turnRetry = 0
 		turnPrevRecoveryTried = false

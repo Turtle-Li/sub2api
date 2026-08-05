@@ -163,6 +163,13 @@ func isOpenAIWSIngressKeepalivePingTimeout(err error) bool {
 	return strings.Contains(strings.ToLower(turnErr.cause.Error()), "keepalive ping timeout")
 }
 
+func openAIWSIngressStrictRecoveryResultMetadata(result *OpenAIForwardResult) (successful bool, responseID, terminalEvent string) {
+	if result == nil {
+		return false, "", ""
+	}
+	return result.SucceededForScheduling(), result.RequestID, result.UpstreamTerminalEvent
+}
+
 func openAIWSIngressTurnRetryReason(err error) string {
 	var turnErr *openAIWSIngressTurnError
 	if !errors.As(err, &turnErr) || turnErr == nil {

@@ -82,6 +82,30 @@ func TestIsOpenAIWSIngressKeepalivePingTimeout(t *testing.T) {
 	))
 }
 
+func TestOpenAIWSIngressStrictRecoveryResultMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		result            *OpenAIForwardResult
+		wantSuccessful    bool
+		wantResponseID    string
+		wantTerminalEvent string
+	}{
+		{name: "nil", result: nil},
+		{name: "completed", result: &OpenAIForwardResult{RequestID: "resp_completed", OpenAIWSMode: true, UpstreamTerminalEvent: "response.completed"}, wantSuccessful: true, wantResponseID: "resp_completed", wantTerminalEvent: "response.completed"},
+		{name: "done", result: &OpenAIForwardResult{RequestID: "resp_done", OpenAIWSMode: true, UpstreamTerminalEvent: "response.done"}, wantSuccessful: true, wantResponseID: "resp_done", wantTerminalEvent: "response.done"},
+		{name: "failed", result: &OpenAIForwardResult{RequestID: "resp_failed", OpenAIWSMode: true, UpstreamTerminalEvent: "response.failed"}, wantResponseID: "resp_failed", wantTerminalEvent: "response.failed"},
+		{name: "incomplete", result: &OpenAIForwardResult{RequestID: "resp_incomplete", OpenAIWSMode: true, UpstreamTerminalEvent: "response.incomplete"}, wantResponseID: "resp_incomplete", wantTerminalEvent: "response.incomplete"},
+		{name: "cancelled", result: &OpenAIForwardResult{RequestID: "resp_cancelled", OpenAIWSMode: true, UpstreamTerminalEvent: "response.cancelled"}, wantResponseID: "resp_cancelled", wantTerminalEvent: "response.cancelled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			successful, responseID, terminalEvent := openAIWSIngressStrictRecoveryResultMetadata(tc.result)
+			require.Equal(t, tc.wantSuccessful, successful)
+			require.Equal(t, tc.wantResponseID, responseID)
+			require.Equal(t, tc.wantTerminalEvent, terminalEvent)
+		})
+	}
+}
+
 func TestOpenAIWSIngressPreviousResponseRecoveryEnabled(t *testing.T) {
 	t.Parallel()
 
