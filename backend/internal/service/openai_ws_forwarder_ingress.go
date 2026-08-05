@@ -1261,11 +1261,84 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return false
 		}
 		if isStrictAffinityTurn(currentPayload) {
+			if !isOpenAIWSIngressKeepalivePingTimeout(relayErr) {
+				logOpenAIWSModeInfo(
+					"ingress_ws_turn_retry_skip account_id=%d turn=%d conn_id=%s reason=strict_affinity_non_keepalive_transport",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+				)
+				return false
+			}
+			// A connection-bound previous_response_id cannot be sent on a fresh
+			// upstream WebSocket.  Do not expose a transient transport failure to
+			// the client when this turn has not produced any downstream event:
+			// rebuild it as one full-context create on a brand-new connection.
+			//
+			// Function-call outputs are safe only when the replay buffer contains
+			// their matching function-call context.  Otherwise preserving the
+			// strict binding is the only way to avoid creating a request the
+			// upstream cannot validate.
+			hasFunctionCallOutput := hasCurrentOrReplayFunctionCallOutput(currentPayload)
+			hasReplayToolContext := hasFunctionCallOutput &&
+				currentTurnReplayInputExists &&
+				openAIWSRawItemsHaveToolCallContextForOutputs(currentTurnReplayInput)
+			previousResponseID := strings.TrimSpace(openAIWSPayloadStringFromRaw(currentPayload, "previous_response_id"))
+			if previousResponseID != "" && (!hasFunctionCallOutput || hasReplayToolContext) {
+				updatedPayload, removed, dropErr := dropPreviousResponseIDFromRawPayload(currentPayload)
+				if dropErr == nil && removed {
+					updatedWithInput, setInputErr := setOpenAIWSPayloadInputSequence(
+						updatedPayload,
+						currentTurnReplayInput,
+						currentTurnReplayInputExists,
+					)
+					if setInputErr == nil {
+						turnRetry++
+						logOpenAIWSModeInfo(
+							"ingress_ws_turn_retry_strict_recovery account_id=%d turn=%d retry=%d reason=%s conn_id=%s has_function_call_output=%v has_replay_tool_context=%v",
+							account.ID,
+							turn,
+							turnRetry,
+							truncateOpenAIWSLogValue(openAIWSIngressTurnRetryReason(relayErr), openAIWSLogValueMaxLen),
+							truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+							hasFunctionCallOutput,
+							hasReplayToolContext,
+						)
+						currentPayload = updatedWithInput
+						currentPayloadBytes = len(updatedWithInput)
+						resetSessionLease(true)
+						forceNewConnNextAcquire = true
+						skipBeforeTurn = true
+						return true
+					}
+					logOpenAIWSModeInfo(
+						"ingress_ws_turn_retry_skip account_id=%d turn=%d conn_id=%s reason=strict_affinity_full_input_error cause=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+						truncateOpenAIWSLogValue(setInputErr.Error(), openAIWSLogValueMaxLen),
+					)
+				} else {
+					reason := "not_removed"
+					if dropErr != nil {
+						reason = "drop_error"
+					}
+					logOpenAIWSModeInfo(
+						"ingress_ws_turn_retry_skip account_id=%d turn=%d conn_id=%s reason=strict_affinity_%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+						normalizeOpenAIWSLogValue(reason),
+					)
+				}
+			}
 			logOpenAIWSModeInfo(
-				"ingress_ws_turn_retry_skip account_id=%d turn=%d conn_id=%s reason=strict_affinity",
+				"ingress_ws_turn_retry_skip account_id=%d turn=%d conn_id=%s reason=strict_affinity_unsafe_replay has_function_call_output=%v has_replay_tool_context=%v",
 				account.ID,
 				turn,
 				truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+				hasFunctionCallOutput,
+				hasReplayToolContext,
 			)
 			return false
 		}

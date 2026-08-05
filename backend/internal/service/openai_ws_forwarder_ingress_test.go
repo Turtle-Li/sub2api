@@ -62,6 +62,26 @@ func TestIsOpenAIWSIngressPreviousResponseNotFound(t *testing.T) {
 	))
 }
 
+func TestIsOpenAIWSIngressKeepalivePingTimeout(t *testing.T) {
+	t.Parallel()
+
+	keepalive := wrapOpenAIWSIngressTurnError(
+		"read_upstream",
+		coderws.CloseError{Code: coderws.StatusInternalError, Reason: "keepalive ping timeout"},
+		false,
+	)
+	require.True(t, isOpenAIWSIngressKeepalivePingTimeout(keepalive))
+	require.True(t, isOpenAIWSIngressKeepalivePingTimeout(
+		wrapOpenAIWSIngressTurnError("read_upstream", errors.New("failed to get reader: keepalive ping timeout"), false),
+	))
+	require.False(t, isOpenAIWSIngressKeepalivePingTimeout(
+		wrapOpenAIWSIngressTurnError("write_upstream", errors.New("keepalive ping timeout"), false),
+	))
+	require.False(t, isOpenAIWSIngressKeepalivePingTimeout(
+		wrapOpenAIWSIngressTurnError("read_upstream", coderws.CloseError{Code: coderws.StatusInternalError, Reason: "keepalive ping timeout"}, true),
+	))
+}
+
 func TestOpenAIWSIngressPreviousResponseRecoveryEnabled(t *testing.T) {
 	t.Parallel()
 

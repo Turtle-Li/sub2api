@@ -143,6 +143,26 @@ func isOpenAIWSIngressTurnRetryable(err error) bool {
 	}
 }
 
+// isOpenAIWSIngressKeepalivePingTimeout identifies the upstream close that
+// motivated strict-affinity recovery.  Keep this narrower than the generic
+// turn retry predicate: a write timeout cannot tell us whether the upstream
+// accepted the request, so replaying it would widen the at-least-once window.
+func isOpenAIWSIngressKeepalivePingTimeout(err error) bool {
+	var turnErr *openAIWSIngressTurnError
+	if !errors.As(err, &turnErr) || turnErr == nil || turnErr.wroteDownstream {
+		return false
+	}
+	if strings.TrimSpace(turnErr.stage) != "read_upstream" || turnErr.cause == nil {
+		return false
+	}
+	var closeErr coderws.CloseError
+	if errors.As(turnErr.cause, &closeErr) {
+		return closeErr.Code == coderws.StatusInternalError &&
+			strings.EqualFold(strings.TrimSpace(closeErr.Reason), "keepalive ping timeout")
+	}
+	return strings.Contains(strings.ToLower(turnErr.cause.Error()), "keepalive ping timeout")
+}
+
 func openAIWSIngressTurnRetryReason(err error) string {
 	var turnErr *openAIWSIngressTurnError
 	if !errors.As(err, &turnErr) || turnErr == nil {

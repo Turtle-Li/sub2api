@@ -3250,7 +3250,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 	require.Empty(t, secondWrites, "不能把会触发 No tool call found 的重放请求发到新上游")
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailRetrySkipsSecondStaleConn(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledStrictAffinityKeepaliveReadFailRecoversOnFreshConn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -3272,6 +3272,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailRetrySk
 		events: [][]byte{
 			[]byte(`{"type":"response.completed","response":{"id":"resp_turn_write_retry_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
+		readErrAfterEvents:     coderws.CloseError{Code: coderws.StatusInternalError, Reason: "keepalive ping timeout"},
+		failOnWriteAfterEvents: false,
 	}
 	secondConn := &openAIWSCaptureConn{
 		events: [][]byte{
@@ -3383,12 +3385,13 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailRetrySk
 		return message
 	}
 
-	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false}`)
+	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"store":false,"input":[{"type":"input_text","text":"hello"}]}`)
 	firstTurn := readMessage()
 	require.Equal(t, "resp_turn_write_retry_1", gjson.GetBytes(firstTurn, "response.id").String())
 
 	// Simulate a second stale idle connection already sitting in the account
-	// pool. The retry must dial a fresh connection instead of consuming it.
+	// pool. The keepalive-close recovery must dial a fresh connection instead
+	// of consuming it.
 	secondStaleConn := &openAIWSWriteFailAfterFirstTurnConn{failOnWrite: true}
 	pooledSecondStale := newOpenAIWSConn("preloaded-stale", account.ID, secondStaleConn, nil)
 	accountPool := pool.getOrCreateAccountPool(account.ID)
@@ -3396,7 +3399,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailRetrySk
 	accountPool.conns[pooledSecondStale.id] = pooledSecondStale
 	accountPool.mu.Unlock()
 
-	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_turn_write_retry_1"}`)
+	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"store":false,"previous_response_id":"resp_turn_write_retry_1","input":[{"type":"input_text","text":"world"}]}`)
 	secondTurn := readMessage()
 	require.Equal(t, "resp_turn_write_retry_2", gjson.GetBytes(secondTurn, "response.id").String())
 
@@ -3407,14 +3410,24 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailRetrySk
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 ingress websocket 结束超时")
 	}
-	require.Equal(t, 2, dialer.DialCount(), "第二轮 turn 上游写失败后必须新拨第三条连接")
-	require.Zero(t, secondStaleConn.WriteCount(), "安全重试不能再次命中池中的第二条 stale connection")
+	require.Equal(t, 2, dialer.DialCount(), "第二轮 keepalive 断连后必须新拨第三条连接")
+	require.Equal(t, 2, firstConn.WriteCount(), "第二轮请求会先写入旧连接，再在首个下游事件前收到 keepalive 关闭")
+	require.Zero(t, secondStaleConn.WriteCount(), "安全恢复不能再次命中池中的第二条 stale connection")
 	stateStore := svc.getOpenAIWSStateStore()
 	_, staleBindingExists := stateStore.GetResponseConn("resp_turn_write_retry_1")
 	require.False(t, staleBindingExists, "失败连接对应的 previous_response_id 绑定必须失效")
 	freshConnID, freshBindingExists := stateStore.GetResponseConn("resp_turn_write_retry_2")
 	require.True(t, freshBindingExists)
 	require.NotEmpty(t, freshConnID)
+	secondConn.mu.Lock()
+	secondWrites := append([]map[string]any(nil), secondConn.writes...)
+	secondConn.mu.Unlock()
+	require.Len(t, secondWrites, 1, "严格续链恢复只能在新连接重放一次")
+	recoveredRequest := requestToJSONString(secondWrites[0])
+	require.False(t, gjson.Get(recoveredRequest, "previous_response_id").Exists(), "新连接不能沿用旧连接的 previous_response_id")
+	require.Len(t, gjson.Get(recoveredRequest, "input").Array(), 2, "恢复请求必须携带完整上下文")
+	require.Equal(t, "hello", gjson.Get(recoveredRequest, "input.0.text").String())
+	require.Equal(t, "world", gjson.Get(recoveredRequest, "input.1.text").String())
 	hooksMu.Lock()
 	beforeTurn1 := beforeTurnCalls[1]
 	beforeTurn2 := beforeTurnCalls[2]
@@ -4072,10 +4085,12 @@ func (c *openAIWSPreflightFailConn) PingCount() int {
 }
 
 type openAIWSWriteFailAfterFirstTurnConn struct {
-	mu          sync.Mutex
-	events      [][]byte
-	failOnWrite bool
-	writeCount  int
+	mu                     sync.Mutex
+	events                 [][]byte
+	failOnWrite            bool
+	failOnWriteAfterEvents bool
+	readErrAfterEvents     error
+	writeCount             int
 }
 
 func (c *openAIWSWriteFailAfterFirstTurnConn) WriteJSON(context.Context, any) error {
@@ -4092,11 +4107,14 @@ func (c *openAIWSWriteFailAfterFirstTurnConn) ReadMessage(context.Context) ([]by
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.events) == 0 {
+		if c.readErrAfterEvents != nil {
+			return nil, c.readErrAfterEvents
+		}
 		return nil, io.EOF
 	}
 	event := c.events[0]
 	c.events = c.events[1:]
-	if len(c.events) == 0 {
+	if len(c.events) == 0 && c.failOnWriteAfterEvents {
 		c.failOnWrite = true
 	}
 	return event, nil
