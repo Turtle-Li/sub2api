@@ -1408,10 +1408,12 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 			statusCode:     529,
 			body:           `{"error":{"message":"server overloaded","type":"server_error"}}`,
 			expectFailover: true,
-			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, start time.Time) {
+			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
 				require.Empty(t, repo.rateLimitCalls)
-				require.Len(t, repo.overloadCalls, 1)
-				require.WithinDuration(t, start.Add(10*time.Minute), repo.overloadCalls[0], 5*time.Second)
+				// One 529 is request-scoped capacity shedding. The handler first
+				// spends its bounded same-account retry budget; only repeated
+				// logical retry-exhausted requests persist an overload cooldown.
+				require.Empty(t, repo.overloadCalls)
 			},
 		},
 		{
@@ -1468,10 +1470,9 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 			statusCode:     529,
 			body:           `{"error":{"message":"server overloaded","type":"server_error"}}`,
 			expectFailover: true,
-			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, start time.Time) {
+			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
 				require.Empty(t, repo.rateLimitCalls)
-				require.Len(t, repo.overloadCalls, 1)
-				require.WithinDuration(t, start.Add(10*time.Minute), repo.overloadCalls[0], 5*time.Second)
+				require.Empty(t, repo.overloadCalls)
 			},
 		},
 	}
