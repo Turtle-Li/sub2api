@@ -18,11 +18,28 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+const openAIWSSameAccountRetryDelay = 500 * time.Millisecond
+
 func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Duration {
 	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds <= 0 {
 		return 0
 	}
 	return time.Duration(s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
+}
+
+// newOpenAIWSDownstreamWriteContext binds writes directly to the client
+// lifecycle while excluding the separate ingress-lease cancellation signal.
+// This lets a lease-loss path finish its current client write before
+// ReadOpenAIWSClientMessage sends the retryable close frame.
+func newOpenAIWSDownstreamWriteContext(controlCtx context.Context, hooks *OpenAIWSIngressHooks, timeout time.Duration) (context.Context, context.CancelFunc) {
+	writeParent := controlCtx
+	if hooks != nil && hooks.ClientLifecycleContext != nil {
+		writeParent = hooks.ClientLifecycleContext
+	}
+	if writeParent == nil {
+		writeParent = context.Background()
+	}
+	return context.WithTimeout(writeParent, timeout)
 }
 
 func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
@@ -77,6 +94,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 				return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
 			}
+			// 注意：透传 relay 只回调 hooks.AfterTurn，没有 turn 起始回调，
+			// 因此下面这条路径永远不会触发 hooks.BeforeTurn——分组利润控制的
+			// turn 级复核与 turn 级 pricingAt 冻结都不覆盖透传 ingress，
+			// 只有建连时的准入门生效。handler 侧据此把 turn 定价留作零值，
+			// 由 RecordUsage 回退到记录时刻（见 openAIWSTurnPricing 注释）。
 			return s.proxyResponsesWebSocketV2Passthrough(
 				ctx,
 				c,
@@ -364,7 +386,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// the kernel send buffer before any close frame is queued.
 			eventBytes := buildOpenAIFastPolicyBlockedWSEvent(blocked)
 			if eventBytes != nil {
-				writeCtx, cancel := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
+				writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 				_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
 				cancel()
 			}
@@ -391,7 +413,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	writeClientMessage := func(message []byte) error {
-		writeCtx, cancel := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
+		writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 		defer cancel()
 		return clientConn.Write(writeCtx, coderws.MessageText, message)
 	}
@@ -884,6 +906,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
+				capacityShed := isOpenAIWSCapacityShedError(errCodeRaw, errTypeRaw, errMsgRaw)
+				if capacityShed {
+					s.recordOpenAIStreamUpstreamError(c, account, false, "", "ws_error_event", upstreamMessage, errMessage)
+				}
 				recoverablePrevNotFound := fallbackReason == openAIWSIngressStagePreviousResponseNotFound &&
 					turnPreviousResponseID != "" &&
 					!turnHasFunctionCallOutput &&
@@ -938,6 +964,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						errors.New(errMsg),
 						false,
 					)
+				}
+				if capacityShed && !wroteDownstream {
+					lease.MarkBroken()
+					return nil, &UpstreamFailoverError{
+						StatusCode:             http.StatusServiceUnavailable,
+						ResponseBody:           append([]byte(nil), upstreamMessage...),
+						ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+						RetryableOnSameAccount: true,
+						RequestScopedTransient: true,
+					}
 				}
 				if !wroteDownstream && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
 					lease.MarkBroken()
@@ -1134,6 +1170,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	turn := 1
 	turnRetry := 0
+	sameAccountRetryCount := 0
 	turnPrevRecoveryTried := false
 	lastTurnFinishedAt := time.Time{}
 	lastTurnResponseID := ""
@@ -1702,6 +1739,28 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize)
 		if relayErr != nil {
 			lastTurnClean = false
+			var failoverErr *UpstreamFailoverError
+			if errors.As(relayErr, &failoverErr) && failoverErr.RetryableOnSameAccount {
+				retryLimit := account.GetPoolModeRetryCount()
+				if sameAccountRetryCount < retryLimit {
+					sameAccountRetryCount++
+					logOpenAIWSModeInfo(
+						"ingress_ws_pool_mode_same_account_retry account_id=%d turn=%d retry=%d retry_limit=%d status=%d",
+						account.ID,
+						turn,
+						sameAccountRetryCount,
+						retryLimit,
+						failoverErr.StatusCode,
+					)
+					resetSessionLease(true)
+					if err := sleepWithContext(ctx, openAIWSSameAccountRetryDelay); err != nil {
+						return err
+					}
+					forceNewConnNextAcquire = true
+					skipBeforeTurn = true
+					continue
+				}
+			}
 			if recoverIngressPrevResponseNotFound(relayErr, turn, connID) {
 				continue
 			}
@@ -1757,6 +1816,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			strictRecoverySourceConnID = ""
 		}
 		turnRetry = 0
+		sameAccountRetryCount = 0
 		turnPrevRecoveryTried = false
 		lastTurnFinishedAt = time.Now()
 		lastTurnClean = true

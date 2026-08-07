@@ -1182,10 +1182,26 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if eventType == "error" {
 					s.handleOpenAIWSErrorEventTransientFailure(ctx, account, capturedSessionModel, handshakeHeaders, payload)
 				}
-				if wroteDownstream || eventType != "error" {
+				if eventType != "error" {
 					return nil
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
+				capacityShed := isOpenAIWSCapacityShedError(errCodeRaw, errTypeRaw, errMsgRaw)
+				if capacityShed {
+					s.recordOpenAIStreamUpstreamError(c, account, false, "", "ws_error_event", payload, errMsgRaw)
+					if !wroteDownstream {
+						return &UpstreamFailoverError{
+							StatusCode:             http.StatusServiceUnavailable,
+							ResponseBody:           append([]byte(nil), payload...),
+							ResponseHeaders:        cloneHeader(handshakeHeaders),
+							RetryableOnSameAccount: true,
+							RequestScopedTransient: true,
+						}
+					}
+				}
+				if wroteDownstream {
+					return nil
+				}
 				if !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
 					return nil
 				}

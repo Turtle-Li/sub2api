@@ -59,6 +59,47 @@ func TestIsOpenAIWSTokenEvent_TerminalEventsExcluded(t *testing.T) {
 	}
 }
 
+func TestOpenAIWSCapacityShedErrorClassification(t *testing.T) {
+	cases := []struct {
+		name    string
+		code    string
+		typ     string
+		message string
+		want    bool
+	}{
+		{name: "server overloaded code", code: "server_is_overloaded", want: true},
+		{name: "slow down code", code: "slow_down", want: true},
+		{name: "overloaded message", message: "Our servers are currently overloaded. Please try again later.", want: true},
+		{name: "ordinary server error", code: "server_error", typ: "server_error", message: "Internal error", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isOpenAIWSCapacityShedError(tc.code, tc.typ, tc.message))
+		})
+	}
+	require.Equal(t, http.StatusServiceUnavailable, openAIWSErrorHTTPStatusFromRaw("server_is_overloaded", ""))
+	require.Equal(t, http.StatusServiceUnavailable, openAIWSErrorHTTPStatusFromRaw("slow_down", ""))
+}
+
+func TestOpenAIWSCapacityShedIsRecordedForOps(t *testing.T) {
+	payload := []byte(`{"type":"error","error":{"code":"server_is_overloaded","type":"service_unavailable_err","message":"Our servers are currently overloaded. Please try again later."}}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	svc := &OpenAIGatewayService{}
+	svc.recordOpenAIStreamUpstreamError(c, &Account{ID: 7, Platform: PlatformOpenAI, Name: "oauth-pro"}, false, "", "ws_error_event", payload, "Our servers are currently overloaded. Please try again later.")
+
+	status, ok := c.Get(OpsUpstreamStatusCodeKey)
+	require.True(t, ok)
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, ok := rawEvents.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, events, 1)
+	require.Equal(t, "ws_error_event", events[0].Kind)
+	require.Equal(t, int64(7), events[0].AccountID)
+}
+
 // TestOpenAIWSCyberPolicyMark_ResponseFailed 验证 WS 路径 response.failed cyber_policy 标记逻辑。
 //
 // 全量转发循环（forwardOpenAIWSV2 / sendAndRelay）依赖真实 WebSocket 连接，

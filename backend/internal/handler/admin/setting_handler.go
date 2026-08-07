@@ -54,6 +54,7 @@ type SettingHandler struct {
 	settingService           *service.SettingService
 	emailService             *service.EmailService
 	turnstileService         *service.TurnstileService
+	aliyunCaptchaService     *service.AliyunCaptchaService
 	opsService               *service.OpsService
 	paymentConfigService     *service.PaymentConfigService
 	paymentService           *service.PaymentService
@@ -87,6 +88,12 @@ func (h *SettingHandler) SetNotificationEmailService(notificationEmailService *s
 // service without widening the general system-settings contract.
 func (h *SettingHandler) SetDesktopStorageService(desktopStorageService *service.DesktopStorageService) {
 	h.desktopStorageService = desktopStorageService
+}
+
+// SetAliyunCaptchaService attaches the Aliyun captcha credential validator without
+// changing the constructor signature used by existing unit tests.
+func (h *SettingHandler) SetAliyunCaptchaService(aliyunCaptchaService *service.AliyunCaptchaService) {
+	h.aliyunCaptchaService = aliyunCaptchaService
 }
 
 // SetStepUpDeps attaches the services backing the step-up switch preconditions
@@ -163,6 +170,18 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		TurnstileEnabled:                                       settings.TurnstileEnabled,
 		TurnstileSiteKey:                                       settings.TurnstileSiteKey,
 		TurnstileSecretKeyConfigured:                           settings.TurnstileSecretKeyConfigured,
+		TencentCaptchaEnabled:                                  settings.TencentCaptchaEnabled,
+		TencentCaptchaAppID:                                    settings.TencentCaptchaAppID,
+		TencentCaptchaAppSecretKeyConfigured:                   settings.TencentCaptchaAppSecretKeyConfigured,
+		TencentCaptchaCloudSecretIDConfigured:                  settings.TencentCaptchaCloudSecretIDConfigured,
+		TencentCaptchaCloudSecretKeyConfigured:                 settings.TencentCaptchaCloudSecretKeyConfigured,
+		TencentCaptchaRegion:                                   settings.TencentCaptchaRegion,
+		AliyunCaptchaEnabled:                                   settings.AliyunCaptchaEnabled,
+		AliyunCaptchaAccessKeyID:                               settings.AliyunCaptchaAccessKeyID,
+		AliyunCaptchaAccessKeySecretConfigured:                 settings.AliyunCaptchaAccessKeySecretConfigured,
+		AliyunCaptchaSceneID:                                   settings.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:                                    settings.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:                                    settings.AliyunCaptchaRegion,
 		APIKeyACLTrustForwardedIP:                              settings.APIKeyACLTrustForwardedIP,
 		ForwardedClientIPHeaders:                               settings.ForwardedClientIPHeaders,
 		LinuxDoConnectEnabled:                                  settings.LinuxDoConnectEnabled,
@@ -286,6 +305,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableClientDatelineNormalization:                      settings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            settings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                                   settings.OpenAICodexUserAgent,
+		OpenAICodexClientVersion:                               settings.OpenAICodexClientVersion,
+		OpenAICodexClientVersionSynced:                         settings.OpenAICodexClientVersionSynced,
+		OpenAICodexVersionAutoSyncEnabled:                      settings.OpenAICodexVersionAutoSyncEnabled,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  settings.CodexCLIOnlyBlacklist,
