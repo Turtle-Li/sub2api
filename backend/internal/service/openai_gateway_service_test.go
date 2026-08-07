@@ -1653,6 +1653,7 @@ func TestOpenAIStreamingResponseFailedBeforeOutputCapacityErrorReturnsFailover(t
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.RequestScopedTransient)
 	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -1698,6 +1699,40 @@ func TestOpenAIStreamingResponseFailedBeforeOutputServerOverloadedCodeReturnsFai
 	require.True(t, failoverErr.RequestScopedTransient)
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
+}
+
+func TestOpenAIStreamingCapacityAfterOutputIsObservableWithoutCooldownSample(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &OpenAIGatewayService{
+		cfg:                &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		openaiCapacityShed: newOpenAICapacityShedState(8),
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	account := &Account{ID: 77, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Name: "pro-account"}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": []string{"rid-partial-capacity"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.output_text.delta","delta":"partial sentence"}`,
+			"",
+			"event: response.failed",
+			`data: {"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"Selected model is at capacity. Please try a different model."}}}`,
+			"",
+		}, "\n"))),
+	}
+
+	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "gpt-5.6", "gpt-5.6")
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.Contains(t, rec.Body.String(), "partial sentence")
+	streamErr, ok := GetOpsStreamError(c)
+	require.True(t, ok)
+	require.True(t, streamErr.CountTowardsSLA)
+	require.Equal(t, http.StatusServiceUnavailable, streamErr.IntendedStatus)
+	require.Zero(t, svc.getOpenAICapacityShedState().failureStreak(account.ID, time.Now()))
 }
 
 func TestOpenAIStreamingResponseFailedBeforeOutputRateLimitUsesPoolRetryPolicy(t *testing.T) {
@@ -1859,6 +1894,10 @@ func TestOpenAIStreamingResponseFailedAfterOutputSanitizesVerboseResponseForClie
 	require.NotContains(t, body, `"instructions"`)
 	require.NotContains(t, body, `"output"`)
 	require.NotContains(t, body, `"usage"`)
+	streamErr, ok := GetOpsStreamError(c)
+	require.True(t, ok)
+	require.True(t, streamErr.CountTowardsSLA)
+	require.Equal(t, http.StatusBadRequest, streamErr.IntendedStatus)
 }
 
 func TestOpenAIStreamingContextWindowResponseFailedBeforeOutputPassesThrough(t *testing.T) {

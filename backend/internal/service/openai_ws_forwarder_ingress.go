@@ -906,7 +906,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
-				capacityShed := isOpenAIWSCapacityShedError(errCodeRaw, errTypeRaw, errMsgRaw)
+				capacityShed := account.Platform == PlatformOpenAI && isOpenAIWSCapacityShedError(errCodeRaw, errTypeRaw, errMsgRaw)
 				if capacityShed {
 					s.recordOpenAIStreamUpstreamError(c, account, false, "", "ws_error_event", upstreamMessage, errMessage)
 				}

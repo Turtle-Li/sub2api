@@ -36,6 +36,9 @@ const (
 	maxSameAccountRetries = 3
 	// sameAccountRetryDelay 同账号重试间隔
 	sameAccountRetryDelay = 500 * time.Millisecond
+	// Capacity shedding asks callers to slow down. Keep retries request-local
+	// but back them off so a single account is not hammered immediately.
+	openAICapacityRetryMaxDelay = 2 * time.Second
 	// singleAccountBackoffDelay 单账号分组 503 退避重试固定延时。
 	// Service 层在 SingleAccountRetry 模式下已做充分原地重试（最多 3 次、总等待 30s），
 	// Handler 层只需短暂间隔后重新进入 Service 层即可。
@@ -47,6 +50,20 @@ const (
 	// 同时把整池越线时的无谓选号开销限制在常数级。
 	maxProfitVetoAttempts = 10
 )
+
+func openAISameAccountRetryDelay(failoverErr *service.UpstreamFailoverError, retryCount int) time.Duration {
+	if failoverErr == nil || !failoverErr.RequestScopedTransient || retryCount <= 1 {
+		return sameAccountRetryDelay
+	}
+	delay := sameAccountRetryDelay
+	for i := 1; i < retryCount && delay < openAICapacityRetryMaxDelay; i++ {
+		delay *= 2
+	}
+	if delay > openAICapacityRetryMaxDelay {
+		return openAICapacityRetryMaxDelay
+	}
+	return delay
+}
 
 // profitVetoExhaustedMessage 是利润否决次数耗尽时返回给客户端的文案。
 // 语义上等同于「无可用账号」：候选账号都不满足分组的利润约束。

@@ -225,6 +225,9 @@ func openAIWSPayloadTransientStatus(payload []byte) int {
 	if len(payload) == 0 {
 		return 0
 	}
+	if isOpenAIUpstreamCapacityShedError(payload, extractOpenAISSEErrorMessage(payload)) {
+		return http.StatusServiceUnavailable
+	}
 	status := int(gjson.GetBytes(payload, "response.error.status_code").Int())
 	if status == 0 {
 		status = int(gjson.GetBytes(payload, "response.error.status").Int())
@@ -637,7 +640,8 @@ func isOpenAIWSCapacityShedError(codeRaw, errTypeRaw, msgRaw string) bool {
 	}
 	return strings.Contains(message, "servers are currently overloaded") ||
 		strings.Contains(message, "server is overloaded") ||
-		strings.Contains(message, "slow down")
+		strings.Contains(message, "slow down") ||
+		strings.Contains(message, "selected model is at capacity")
 }
 
 func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string) {

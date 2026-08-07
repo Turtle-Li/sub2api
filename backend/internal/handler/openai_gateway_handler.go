@@ -664,11 +664,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 							select {
 							case <-c.Request.Context().Done():
 								return
-							case <-time.After(sameAccountRetryDelay):
+							case <-time.After(openAISameAccountRetryDelay(failoverErr, sameAccountRetryCount[account.ID])):
 							}
 							continue
 						}
 					}
+					h.gatewayService.RecordOpenAICapacityShedRetryExhausted(c.Request.Context(), account, failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
@@ -1217,11 +1218,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 							select {
 							case <-c.Request.Context().Done():
 								return
-							case <-time.After(sameAccountRetryDelay):
+							case <-time.After(openAISameAccountRetryDelay(failoverErr, sameAccountRetryCount[account.ID])):
 							}
 							continue
 						}
 					}
+					h.gatewayService.RecordOpenAICapacityShedRetryExhausted(c.Request.Context(), account, failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
@@ -1887,6 +1889,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	switchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	handleWSFailover := func(account *service.Account, failoverErr *service.UpstreamFailoverError) bool {
@@ -1904,6 +1907,24 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		if ctx.Err() != nil {
 			return false
 		}
+		if failoverErr.RetryableOnSameAccount {
+			retryLimit := account.GetPoolModeRetryCount()
+			if sameAccountRetryCount[account.ID] < retryLimit {
+				sameAccountRetryCount[account.ID]++
+				retryCount := sameAccountRetryCount[account.ID]
+				reqLog.Warn("openai.websocket_same_account_retry",
+					zap.Int64("account_id", account.ID),
+					zap.Int("upstream_status", failoverErr.StatusCode),
+					zap.Int("retry_limit", retryLimit),
+					zap.Int("retry_count", retryCount),
+				)
+				if !sleepWithContext(ctx, openAISameAccountRetryDelay(failoverErr, retryCount)) {
+					return false
+				}
+				return ensureUserSlotHeld()
+			}
+		}
+		h.gatewayService.RecordOpenAICapacityShedRetryExhausted(ctx, account, failoverErr)
 		h.gatewayService.RecordOpenAIAccountSwitch()
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr

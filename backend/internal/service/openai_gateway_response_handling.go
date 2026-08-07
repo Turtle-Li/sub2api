@@ -431,6 +431,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					})
 				}
 				if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+					// Capacity shedding must reach failover before a broad configured
+					// passthrough rule commits the HTTP 200 stream.
+					if isOpenAIAccountStreamCapacityShedError(account, dataBytes, failedMessage) {
+						sawFailedEvent = true
+						streamEarlyErr = s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, dataBytes, failedMessage, resp.Header)
+						return
+					}
 					if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, dataBytes, failedMessage); matched {
 						sawFailedEvent = true
 						// 命中透传规则也要记录 ops 上游错误事件（对齐 CC/Messages 与
@@ -452,6 +459,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 						streamEarlyErr = s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, dataBytes, failedMessage, resp.Header)
 						return
 					}
+				}
+				if openAIStreamClientOutputStarted(c, clientOutputStarted) {
+					failedMessage = s.recordOpenAIStreamTerminalFailure(c, account, false, upstreamRequestID, dataBytes, failedMessage)
 				}
 				forceFlushFailedEvent = true
 				sawFailedEvent = true

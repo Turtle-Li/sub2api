@@ -126,6 +126,7 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		shouldDisable = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 	}
 	return newOpenAIUpstreamFailoverError(
+		account,
 		resp.StatusCode,
 		resp.Header,
 		respBody,

@@ -297,11 +297,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 							select {
 							case <-c.Request.Context().Done():
 								return
-							case <-time.After(sameAccountRetryDelay):
+							case <-time.After(openAISameAccountRetryDelay(failoverErr, sameAccountRetryCount[account.ID])):
 							}
 							continue
 						}
 					}
+					h.gatewayService.RecordOpenAICapacityShedRetryExhausted(c.Request.Context(), account, failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr

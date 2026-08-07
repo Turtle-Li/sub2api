@@ -90,6 +90,7 @@ func TestOpenAIWSCapacityShedErrorClassification(t *testing.T) {
 		{name: "server overloaded code", code: "server_is_overloaded", want: true},
 		{name: "slow down code", code: "slow_down", want: true},
 		{name: "overloaded message", message: "Our servers are currently overloaded. Please try again later.", want: true},
+		{name: "model capacity message", message: "Selected model is at capacity. Please try a different model.", want: true},
 		{name: "ordinary server error", code: "server_error", typ: "server_error", message: "Internal error", want: false},
 	}
 	for _, tc := range cases {

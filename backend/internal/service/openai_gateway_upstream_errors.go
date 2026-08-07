@@ -164,6 +164,42 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 	return match(string(upstreamBody))
 }
 
+// isOpenAICapacityShedError identifies the request-scoped capacity signal
+// emitted by OpenAI upstreams. It appears as HTTP 529, a server_is_overloaded
+// / slow_down code, or the message "Selected model is at capacity".
+func isOpenAICapacityShedError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if upstreamStatusCode == 529 {
+		return true
+	}
+	if upstreamStatusCode != http.StatusBadRequest && upstreamStatusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.code").String()))
+	if code == "" {
+		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "response.error.code").String()))
+	}
+	if code == "server_is_overloaded" || code == "slow_down" {
+		return true
+	}
+	matchMessage := func(value string) bool {
+		return strings.Contains(strings.ToLower(strings.TrimSpace(value)), "selected model is at capacity")
+	}
+	if matchMessage(upstreamMsg) {
+		return true
+	}
+	for _, path := range []string{"error.message", "response.error.message", "message"} {
+		if matchMessage(gjson.GetBytes(upstreamBody, path).String()) {
+			return true
+		}
+	}
+	return false
+}
+
+func isOpenAIAccountCapacityShedError(account *Account, upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	return account != nil && account.Platform == PlatformOpenAI &&
+		isOpenAICapacityShedError(upstreamStatusCode, upstreamMsg, upstreamBody)
+}
+
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 	match := func(text string) bool {
 		lower := strings.ToLower(strings.TrimSpace(text))
@@ -242,17 +278,20 @@ func isOpenAIRequestBodyTooLargeError(statusCode int, upstreamMsg string, upstre
 }
 
 func newOpenAIUpstreamFailoverError(
+	account *Account,
 	statusCode int,
 	responseHeaders http.Header,
 	responseBody []byte,
 	upstreamMsg string,
 	retryableOnSameAccount bool,
 ) *UpstreamFailoverError {
+	capacityShed := isOpenAIAccountCapacityShedError(account, statusCode, upstreamMsg, responseBody)
 	failoverErr := &UpstreamFailoverError{
 		StatusCode:             statusCode,
 		ResponseBody:           responseBody,
 		ResponseHeaders:        responseHeaders.Clone(),
-		RetryableOnSameAccount: retryableOnSameAccount,
+		RetryableOnSameAccount: retryableOnSameAccount || capacityShed,
+		RequestScopedTransient: capacityShed,
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, responseBody) {
 		failoverErr.RetryableOnSameAccount = false
@@ -396,6 +435,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		})
 		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel...)
 		return nil, newOpenAIUpstreamFailoverError(
+			account,
 			resp.StatusCode,
 			resp.Header,
 			body,

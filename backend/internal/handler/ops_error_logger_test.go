@@ -268,6 +268,29 @@ func TestOpsErrorLoggerMiddleware_SkipsDeletedBatchImageOutput(t *testing.T) {
 	require.Equal(t, int64(0), OpsErrorLogQueueLength())
 }
 
+func TestOpsErrorLoggerMiddleware_PersistsTerminalStreamFailureWithSemanticStatus(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+
+	gin.SetMode(gin.TestMode)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.GET("/v1/responses", func(c *gin.Context) {
+		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Selected model is at capacity", "")
+		service.MarkOpsStreamFailure(c, "upstream_error", "server_is_overloaded", "Selected model is at capacity", http.StatusServiceUnavailable)
+		c.Status(http.StatusOK)
+	})
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/responses", nil))
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	job := <-opsErrorLogQueue
+	require.Equal(t, http.StatusServiceUnavailable, job.entry.StatusCode)
+	require.Equal(t, "upstream_error", job.entry.ErrorType)
+	require.Equal(t, "Selected model is at capacity", job.entry.ErrorMessage)
+}
+
 // setupOpsErrorLogTestQueue 阻止 enqueueOpsErrorLog 启动真实 worker，改用可检查的测试队列。
 func setupOpsErrorLogTestQueue(t *testing.T, size int) {
 	t.Helper()
