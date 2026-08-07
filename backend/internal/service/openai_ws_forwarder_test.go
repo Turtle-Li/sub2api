@@ -59,6 +59,26 @@ func TestIsOpenAIWSTokenEvent_TerminalEventsExcluded(t *testing.T) {
 	}
 }
 
+func TestOpenAIWSIngressEventStartsUnsafeOutput(t *testing.T) {
+	cases := []struct {
+		eventType string
+		want      bool
+	}{
+		{eventType: "response.created", want: false},
+		{eventType: "response.in_progress", want: false},
+		{eventType: "response.queued", want: false},
+		{eventType: "error", want: false},
+		{eventType: "response.output_text.delta", want: true},
+		{eventType: "response.output_item.added", want: true},
+		{eventType: "response.completed", want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.eventType, func(t *testing.T) {
+			require.Equal(t, tc.want, openAIWSIngressEventStartsUnsafeOutput(tc.eventType, nil))
+		})
+	}
+}
+
 func TestOpenAIWSCapacityShedErrorClassification(t *testing.T) {
 	cases := []struct {
 		name    string

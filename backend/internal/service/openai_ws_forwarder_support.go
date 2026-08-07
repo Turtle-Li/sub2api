@@ -320,6 +320,22 @@ func isOpenAIWSTokenEvent(eventType string) bool {
 	return false
 }
 
+// openAIWSIngressEventStartsUnsafeOutput distinguishes harmless Responses
+// preamble events from content that cannot be replayed safely. A response
+// created/in-progress event only acknowledges the turn; it does not expose
+// model output. Capacity errors arriving after that preamble can still be
+// retried on a fresh upstream connection and, if needed, fail over to the
+// next account. Once any non-preamble event is sent, preserve the existing
+// no-replay boundary for streamed output and tool calls.
+func openAIWSIngressEventStartsUnsafeOutput(eventType string, _ []byte) bool {
+	switch strings.TrimSpace(eventType) {
+	case "", "error", "response.created", "response.in_progress", "response.queued":
+		return false
+	default:
+		return true
+	}
+}
+
 func replaceOpenAIWSMessageModel(message []byte, fromModel, toModel string) []byte {
 	if len(message) == 0 {
 		return message

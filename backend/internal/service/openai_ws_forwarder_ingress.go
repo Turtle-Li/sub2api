@@ -1043,7 +1043,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 							wroteDownstream,
 						)
 					}
-				} else {
+				} else if openAIWSIngressEventStartsUnsafeOutput(eventType, upstreamMessage) {
 					wroteDownstream = true
 				}
 			}
