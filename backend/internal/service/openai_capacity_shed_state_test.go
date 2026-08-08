@@ -85,6 +85,55 @@ func TestNonOpenAICapacityDoesNotUseOpenAIRetryPolicy(t *testing.T) {
 	require.False(t, failoverErr.RetryableOnSameAccount)
 }
 
+func TestOpenAICapacityShedMessageOnlyHTTPVariants(t *testing.T) {
+	account := &Account{ID: 103, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{
+			name:   "503 servers currently overloaded",
+			status: http.StatusServiceUnavailable,
+			body:   `{"error":{"message":"Our servers are currently overloaded. Please try again later."}}`,
+			want:   true,
+		},
+		{
+			name:   "400 servers overloaded",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"message":"Our servers are overloaded. Please try again later."}}`,
+			want:   true,
+		},
+		{
+			name:   "500 capacity wording is not a known request scoped status",
+			status: http.StatusInternalServerError,
+			body:   `{"error":{"message":"Selected model is at capacity."}}`,
+			want:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(tc.body)
+			require.Equal(t, tc.want, isOpenAICapacityShedError(tc.status, "", body))
+			failoverErr := newOpenAIUpstreamFailoverError(account, tc.status, http.Header{}, body, "", false)
+			require.Equal(t, tc.want, failoverErr.RequestScopedTransient)
+			require.Equal(t, tc.want, failoverErr.RetryableOnSameAccount)
+		})
+	}
+}
+
+func TestOpenAITransientProcessingErrorDoesNotClassifyRawBodySlowDownAsCapacity(t *testing.T) {
+	body := []byte(`{"error":{"message":"invalid request body"},"request_echo":"please slow down"}`)
+	require.False(t, isOpenAITransientProcessingError(http.StatusBadRequest, "", body))
+	require.False(t, isOpenAICapacityShedError(http.StatusBadRequest, "", body))
+}
+
+func TestOpenAIHTTPMessageClassifierDoesNotTreatGenericSlowDownAsCapacity(t *testing.T) {
+	body := []byte(`{"error":{"type":"invalid_request_error","message":"Please slow down while fixing the request."}}`)
+	require.False(t, isOpenAITransientProcessingError(http.StatusBadRequest, "", body))
+	require.False(t, isOpenAICapacityShedError(http.StatusBadRequest, "", body))
+}
+
 func TestOpenAIStreamCapacityStatusPrefersRateLimitAndMessageOnlyWebSocket(t *testing.T) {
 	payload := []byte(`{"response":{"error":{"type":"invalid_request_error","code":"server_is_overloaded"}}}`)
 	require.Equal(t, http.StatusTooManyRequests, openAIStreamFailedEventSemanticStatus(payload, "rate_limit exceeded"))

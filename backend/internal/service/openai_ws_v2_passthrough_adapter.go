@@ -1200,7 +1200,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return nil
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
-				capacityShed := account.Platform == PlatformOpenAI && isOpenAIWSCapacityShedError(errCodeRaw, errTypeRaw, errMsgRaw)
+				capacityShed := account.Platform == PlatformOpenAI && isOpenAIWSRequestScopedCapacityShed(errCodeRaw, errTypeRaw, errMsgRaw)
 				if capacityShed {
 					s.recordOpenAIStreamUpstreamError(c, account, false, "", "ws_error_event", payload, errMsgRaw)
 					if !wroteDownstream {

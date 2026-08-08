@@ -632,16 +632,24 @@ func isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw string) bool {
 // shedding. These errors must be observable as provider failures, but they
 // must not quarantine an OAuth account: the same request may succeed on a
 // bounded retry or on another pooled account.
-func isOpenAIWSCapacityShedError(codeRaw, errTypeRaw, msgRaw string) bool {
+func isOpenAIWSCapacityShedError(codeRaw, _ string, msgRaw string) bool {
 	code := strings.ToLower(strings.TrimSpace(codeRaw))
 	message := strings.ToLower(strings.TrimSpace(msgRaw))
 	if code == "server_is_overloaded" || code == "slow_down" {
 		return true
 	}
-	return strings.Contains(message, "servers are currently overloaded") ||
+	return isOpenAICapacityShedMessage(message) ||
 		strings.Contains(message, "server is overloaded") ||
-		strings.Contains(message, "slow down") ||
-		strings.Contains(message, "selected model is at capacity")
+		strings.Contains(message, "slow down")
+}
+
+// isOpenAIWSRequestScopedCapacityShed applies the WS capacity classifier only
+// after excluding explicit rate-limit signals. A rate-limit event may ask the
+// client to "slow down", but it must retain 429 handling instead of becoming a
+// same-account capacity retry.
+func isOpenAIWSRequestScopedCapacityShed(codeRaw, errTypeRaw, msgRaw string) bool {
+	return !isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) &&
+		isOpenAIWSCapacityShedError(codeRaw, errTypeRaw, msgRaw)
 }
 
 func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string) {
@@ -733,12 +741,30 @@ func openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw string) int {
 	}
 }
 
+// openAIWSErrorHTTPStatusFromEventFields preserves the capacity message when
+// a WebSocket error omits error.code. The raw mapper intentionally serves
+// callers that only have code/type; bridge callers with the message must use
+// this helper so code-less shedding reaches the same request-scoped failover
+// path as HTTP and SSE.
+func openAIWSErrorHTTPStatusFromEventFields(codeRaw, errTypeRaw, msgRaw string) int {
+	// A rate-limit code/type remains authoritative even when its human message
+	// says "slow down". This preserves 429 cooldown and failover semantics over
+	// the broader capacity-message classifier.
+	if isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
+		return http.StatusTooManyRequests
+	}
+	if isOpenAIWSRequestScopedCapacityShed(codeRaw, errTypeRaw, msgRaw) {
+		return http.StatusServiceUnavailable
+	}
+	return openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+}
+
 func openAIWSErrorHTTPStatus(message []byte) int {
 	if len(message) == 0 {
 		return http.StatusBadGateway
 	}
-	codeRaw, errTypeRaw, _ := parseOpenAIWSErrorEventFields(message)
-	return openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	codeRaw, errTypeRaw, msgRaw := parseOpenAIWSErrorEventFields(message)
+	return openAIWSErrorHTTPStatusFromEventFields(codeRaw, errTypeRaw, msgRaw)
 }
 
 func (s *OpenAIGatewayService) openAIWSFallbackCooldown() time.Duration {

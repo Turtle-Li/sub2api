@@ -837,10 +837,7 @@ func isOpenAIUpstreamCapacityShedError(payload []byte, message string) bool {
 	if isOpenAIUpstreamCapacityShedEvent(payload) {
 		return true
 	}
-	lower := strings.ToLower(strings.TrimSpace(message))
-	return strings.Contains(lower, "selected model is at capacity") ||
-		strings.Contains(lower, "servers are currently overloaded") ||
-		strings.Contains(lower, "our servers are overloaded")
+	return isOpenAICapacityShedMessage(message)
 }
 
 func isOpenAIAccountStreamCapacityShedError(account *Account, payload []byte, message string) bool {

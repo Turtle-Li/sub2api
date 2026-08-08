@@ -90,6 +90,9 @@ func TestOpenAIWSCapacityShedErrorClassification(t *testing.T) {
 		{name: "server overloaded code", code: "server_is_overloaded", want: true},
 		{name: "slow down code", code: "slow_down", want: true},
 		{name: "overloaded message", message: "Our servers are currently overloaded. Please try again later.", want: true},
+		{name: "our servers overloaded message", message: "Our servers are overloaded. Please try again later.", want: true},
+		{name: "singular server overloaded message", message: "The server is overloaded. Please retry.", want: true},
+		{name: "slow down message", message: "Please slow down and retry later.", want: true},
 		{name: "model capacity message", message: "Selected model is at capacity. Please try a different model.", want: true},
 		{name: "ordinary server error", code: "server_error", typ: "server_error", message: "Internal error", want: false},
 	}
@@ -100,6 +103,11 @@ func TestOpenAIWSCapacityShedErrorClassification(t *testing.T) {
 	}
 	require.Equal(t, http.StatusServiceUnavailable, openAIWSErrorHTTPStatusFromRaw("server_is_overloaded", ""))
 	require.Equal(t, http.StatusServiceUnavailable, openAIWSErrorHTTPStatusFromRaw("slow_down", ""))
+	require.Equal(t, http.StatusServiceUnavailable, openAIWSErrorHTTPStatusFromEventFields("", "", "Our servers are overloaded. Please try again later."))
+	require.Equal(t, http.StatusServiceUnavailable, openAIWSErrorHTTPStatus([]byte(`{"type":"error","error":{"message":"Our servers are overloaded. Please try again later."}}`)))
+	require.Equal(t, http.StatusTooManyRequests, openAIWSErrorHTTPStatusFromEventFields("rate_limit_exceeded", "rate_limit_error", "Rate limit reached; please slow down."))
+	require.False(t, isOpenAIWSRequestScopedCapacityShed("rate_limit_exceeded", "rate_limit_error", "Rate limit reached; please slow down."))
+	require.True(t, isOpenAIWSRequestScopedCapacityShed("", "", "Our servers are overloaded. Please try again later."))
 }
 
 func TestOpenAIWSCapacityShedIsRecordedForOps(t *testing.T) {

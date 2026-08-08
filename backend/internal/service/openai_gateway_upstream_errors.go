@@ -152,11 +152,21 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 			strings.Contains(lower, "request id")
 	}
 
+	// A code-less capacity message must enter the same request-scoped failover
+	// path as server_is_overloaded. Match the union only in a parsed upstream
+	// message field (or the separately extracted message), never arbitrary raw
+	// body text that might echo a user prompt or an unrelated advisory.
+	if isOpenAICapacityShedMessage(upstreamMsg) {
+		return true
+	}
 	if match(upstreamMsg) {
 		return true
 	}
 	if len(upstreamBody) == 0 {
 		return false
+	}
+	if isOpenAICapacityShedMessageInBody(upstreamBody) {
+		return true
 	}
 	if match(gjson.GetBytes(upstreamBody, "error.message").String()) {
 		return true
@@ -164,9 +174,30 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 	return match(string(upstreamBody))
 }
 
+// isOpenAICapacityShedMessage identifies the code-less capacity variants
+// emitted consistently by OpenAI HTTP and SSE upstreams. WebSocket adapters
+// retain their additional protocol-specific phrases separately, rather than
+// broadening HTTP body-message classification with generic text like
+// "slow down".
+func isOpenAICapacityShedMessage(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(lower, "selected model is at capacity") ||
+		strings.Contains(lower, "servers are currently overloaded") ||
+		strings.Contains(lower, "our servers are overloaded")
+}
+
+func isOpenAICapacityShedMessageInBody(upstreamBody []byte) bool {
+	for _, path := range []string{"error.message", "response.error.message", "message"} {
+		if isOpenAICapacityShedMessage(gjson.GetBytes(upstreamBody, path).String()) {
+			return true
+		}
+	}
+	return false
+}
+
 // isOpenAICapacityShedError identifies the request-scoped capacity signal
 // emitted by OpenAI upstreams. It appears as HTTP 529, a server_is_overloaded
-// / slow_down code, or the message "Selected model is at capacity".
+// / slow_down code, or a known capacity-shedding message.
 func isOpenAICapacityShedError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	if upstreamStatusCode == 529 {
 		return true
@@ -181,18 +212,10 @@ func isOpenAICapacityShedError(upstreamStatusCode int, upstreamMsg string, upstr
 	if code == "server_is_overloaded" || code == "slow_down" {
 		return true
 	}
-	matchMessage := func(value string) bool {
-		return strings.Contains(strings.ToLower(strings.TrimSpace(value)), "selected model is at capacity")
-	}
-	if matchMessage(upstreamMsg) {
+	if isOpenAICapacityShedMessage(upstreamMsg) {
 		return true
 	}
-	for _, path := range []string{"error.message", "response.error.message", "message"} {
-		if matchMessage(gjson.GetBytes(upstreamBody, path).String()) {
-			return true
-		}
-	}
-	return false
+	return isOpenAICapacityShedMessageInBody(upstreamBody)
 }
 
 func isOpenAIAccountCapacityShedError(account *Account, upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {

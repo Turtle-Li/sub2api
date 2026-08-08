@@ -101,7 +101,7 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_TempUnschedulableReturnsFailove
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	upstreamBody := []byte(`{"error":{"message":"Our servers are currently overloaded. Please try again later."}}`)
+	upstreamBody := []byte(`{"error":{"message":"The selected upstream model is warming up. Please try again later."}}`)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		{
 			StatusCode: http.StatusBadRequest,
@@ -138,7 +138,7 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_TempUnschedulableReturnsFailove
 			"temp_unschedulable_enabled": true,
 			"temp_unschedulable_rules": []any{map[string]any{
 				"error_code":       float64(http.StatusBadRequest),
-				"keywords":         []any{"our servers are currently overloaded", "please try again later"},
+				"keywords":         []any{"selected upstream model is warming up", "please try again later"},
 				"duration_minutes": float64(1),
 			}},
 		},
@@ -170,7 +170,63 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_TempUnschedulableReturnsFailove
 	require.NotEmpty(t, secondRec.Body.String())
 }
 
-func TestFailoverOpenAIUpstreamHTTPError_NilContextSkipsTempUnschedulablePolicy(t *testing.T) {
+// A code-less 400 capacity response must become a request-scoped failover: it
+// cannot be passed back to the client after the account-state fast path has
+// deliberately skipped the operator's model-only temporary-unschedulable rule.
+func TestOpenAIGatewayService_ForwardAsAnthropic_MessageOnlyCapacityShedReturnsRetryableFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := []byte(`{"error":{"message":"Our servers are currently overloaded. Please try again later."}}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+	}}}
+	repo := &tempUnschedulableOpenAIAccountRepo{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+			Enabled: false, AllowInsecureHTTP: true,
+		}}},
+		httpUpstream:     upstream,
+		rateLimitService: rateLimitService,
+	}
+	account := &Account{
+		ID: 5101, Name: "capacity-shed", Platform: PlatformOpenAI,
+		Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":                    "sk-test",
+			"base_url":                   "http://upstream.example",
+			"model_provider":             "env-openai",
+			"temp_unschedulable_enabled": true,
+			"temp_unschedulable_rules": []any{map[string]any{
+				"error_code":       float64(http.StatusBadRequest),
+				"keywords":         []any{"our servers are currently overloaded", "please try again later"},
+				"duration_minutes": float64(1),
+			}},
+		},
+	}
+
+	_, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.True(t, failoverErr.RequestScopedTransient)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.ShouldRetryNextAccount())
+	require.Zero(t, repo.modelRateLimitAccountID, "capacity shedding must not create an account-and-model cooldown before bounded retries")
+	require.False(t, IsResponseCommitted(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Empty(t, rec.Body.String())
+}
+
+func TestFailoverOpenAIUpstreamHTTPError_MessageOnlyCapacityShedFailsOverWithoutTempUnschedulablePolicy(t *testing.T) {
 	repo := &tempUnschedulableOpenAIAccountRepo{}
 	svc := &OpenAIGatewayService{
 		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
@@ -194,7 +250,39 @@ func TestFailoverOpenAIUpstreamHTTPError_NilContextSkipsTempUnschedulablePolicy(
 		"Our servers are currently overloaded.", "gpt-5.4",
 	)
 
-	require.Nil(t, got)
+	require.NotNil(t, got)
+	require.True(t, got.RequestScopedTransient)
+	require.True(t, got.RetryableOnSameAccount)
+	require.True(t, got.ShouldRetryNextAccount())
+	require.Zero(t, repo.modelRateLimitAccountID)
+	require.Empty(t, repo.modelRateLimitKey)
+}
+
+func TestFailoverOpenAIUpstreamHTTPError_NilContextNonCapacity400SkipsPolicyWithoutPanic(t *testing.T) {
+	repo := &tempUnschedulableOpenAIAccountRepo{}
+	svc := &OpenAIGatewayService{
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+	account := &Account{
+		ID: 5102, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"temp_unschedulable_enabled": true,
+			"temp_unschedulable_rules": []any{map[string]any{
+				"error_code":       float64(http.StatusBadRequest),
+				"keywords":         []any{"temporary model warmup"},
+				"duration_minutes": float64(1),
+			}},
+		},
+	}
+	body := []byte(`{"error":{"message":"temporary model warmup"}}`)
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}}
+
+	require.NotPanics(t, func() {
+		got := svc.failoverOpenAIUpstreamHTTPError(
+			context.Background(), nil, account, resp, body, "temporary model warmup", "gpt-5.4",
+		)
+		require.Nil(t, got)
+	})
 	require.Zero(t, repo.modelRateLimitAccountID)
 	require.Empty(t, repo.modelRateLimitKey)
 }

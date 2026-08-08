@@ -397,7 +397,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			if errMessage == "" {
 				errMessage = "upstream error event"
 			}
-			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
+			statusCode := openAIWSErrorHTTPStatusFromEventFields(errCodeRaw, errTypeRaw, errMsgRaw)
 			shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(statusCode, errMessage, upstreamMessage)
 			if account.Platform == PlatformGrok {
 				// SSE error events do not carry an HTTP status. The local status
