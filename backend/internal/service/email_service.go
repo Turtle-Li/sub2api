@@ -317,6 +317,15 @@ func (s *EmailService) GenerateVerifyCode() (string, error) {
 
 // SendVerifyCode 发送验证码邮件
 func (s *EmailService) SendVerifyCode(ctx context.Context, email, siteName string, locale ...string) error {
+	return s.sendVerifyCode(ctx, email, siteName, 0, locale...)
+}
+
+// SendVerifyCodeForUser sends a verification email for an authenticated user.
+func (s *EmailService) SendVerifyCodeForUser(ctx context.Context, email, siteName string, userID int64, locale ...string) error {
+	return s.sendVerifyCode(ctx, email, siteName, userID, locale...)
+}
+
+func (s *EmailService) sendVerifyCode(ctx context.Context, email, siteName string, userID int64, locale ...string) error {
 	// 检查是否在冷却期内
 	existing, err := s.cache.GetVerificationCode(ctx, email)
 	if err == nil && existing != nil {
@@ -348,6 +357,7 @@ func (s *EmailService) SendVerifyCode(ctx context.Context, email, siteName strin
 			Locale:         firstEmailLocale(locale),
 			RecipientEmail: email,
 			RecipientName:  emailRecipientName(email),
+			UserID:         userID,
 			Variables: map[string]string{
 				"verification_code":  code,
 				"expires_in_minutes": strconv.Itoa(int(verifyCodeTTL / time.Minute)),

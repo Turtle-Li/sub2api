@@ -134,7 +134,7 @@ func (s *AuthService) SendEmailIdentityBindCode(ctx context.Context, userID int6
 	if s.settingService != nil {
 		siteName = s.settingService.GetSiteName(ctx)
 	}
-	return s.emailService.SendVerifyCode(ctx, normalizedEmail, siteName, firstEmailLocale(locale))
+	return s.emailService.SendVerifyCodeForUser(ctx, normalizedEmail, siteName, userID, firstEmailLocale(locale))
 }
 
 func normalizeEmailForIdentityBinding(email string) (string, error) {
