@@ -2852,12 +2852,16 @@ func matchBlockedKeyword(text string, keywords []string) (string, bool) {
 	if text == "" || len(keywords) == 0 {
 		return "", false
 	}
-	lower := strings.ToLower(text)
+	normalizedText := normalizeContentModerationKeywordText(text)
+	if normalizedText == "" {
+		return "", false
+	}
 	for _, kw := range keywords {
-		if kw == "" {
+		normalizedKeyword := normalizeContentModerationKeywordText(kw)
+		if normalizedKeyword == "" {
 			continue
 		}
-		if strings.Contains(lower, strings.ToLower(kw)) {
+		if strings.Contains(normalizedText, normalizedKeyword) {
 			return kw, true
 		}
 	}

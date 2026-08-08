@@ -2,7 +2,57 @@ package service
 
 import (
 	"strings"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
+
+// normalizeContentModerationKeywordText applies only low-risk, deterministic
+// normalization before matching configured phrases. It catches common Unicode
+// obfuscation (full-width characters and invisible format controls) while
+// deliberately preserving punctuation so that broad fuzzy matching does not
+// create surprising false positives.
+func normalizeContentModerationKeywordText(text string) string {
+	if text == "" {
+		return ""
+	}
+
+	normalized := norm.NFKC.String(text)
+	var builder strings.Builder
+	builder.Grow(len(normalized))
+	pendingSpace := false
+	for _, r := range normalized {
+		if isContentModerationIgnorableRune(r) {
+			continue
+		}
+		if unicode.IsSpace(r) {
+			if builder.Len() > 0 {
+				pendingSpace = true
+			}
+			continue
+		}
+		if pendingSpace {
+			builder.WriteByte(' ')
+			pendingSpace = false
+		}
+		builder.WriteRune(r)
+	}
+
+	return strings.ToLower(builder.String())
+}
+
+func isContentModerationIgnorableRune(r rune) bool {
+	// Unicode Cf contains soft hyphen, bidi controls, zero-width joiners,
+	// word joiners and tag characters. They are formatting controls rather
+	// than visible content, so ignoring them is safe for phrase matching.
+	if unicode.Is(unicode.Cf, r) {
+		return true
+	}
+	// Variation selectors are Mn, not Cf, but are also invisible when inserted
+	// into an ASCII/Chinese phrase and are occasionally used for obfuscation.
+	return (r >= '\uFE00' && r <= '\uFE0F') ||
+		(r >= '\U000E0100' && r <= '\U000E01EF')
+}
 
 type contentModerationKeywordMatcher struct {
 	nodes           []contentModerationKeywordNode
@@ -39,11 +89,12 @@ func newContentModerationKeywordMatcher(keywords []string) *contentModerationKey
 	originalKeywords := append([]string(nil), keywords...)
 
 	for keywordIndex, keyword := range keywords {
+		keyword = normalizeContentModerationKeywordText(keyword)
 		if keyword == "" {
 			continue
 		}
 		state := int32(0)
-		for _, label := range []byte(strings.ToLower(keyword)) {
+		for _, label := range []byte(keyword) {
 			next := contentModerationKeywordBuildTransition(buildNodes, buildEdges, state, label)
 			if next < 0 {
 				next = int32(len(buildNodes))
@@ -168,11 +219,14 @@ func (m *contentModerationKeywordMatcher) Match(text string) (string, bool) {
 	if m == nil || text == "" || len(m.nodes) == 0 || len(m.keywords) == 0 {
 		return "", false
 	}
-	lower := strings.ToLower(text)
+	normalized := normalizeContentModerationKeywordText(text)
+	if normalized == "" {
+		return "", false
+	}
 	state := int32(0)
 	bestKeyword := int32(-1)
-	for index := 0; index < len(lower); index++ {
-		label := lower[index]
+	for index := 0; index < len(normalized); index++ {
+		label := normalized[index]
 		for {
 			next := m.next(state, label)
 			if next != 0 {

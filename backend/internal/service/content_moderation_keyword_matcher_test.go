@@ -21,6 +21,11 @@ func TestContentModerationKeywordMatcherMatchesLegacyBehavior(t *testing.T) {
 		{name: "unicode", text: "这里包含敏感词和世界", keywords: []string{"世界", "敏感词"}},
 		{name: "duplicates", text: "duplicate", keywords: []string{"duplicate", "DUPLICATE"}},
 		{name: "empty entries", text: "blocked", keywords: []string{"", "blocked"}},
+		{name: "full-width characters", text: "ＡＣＴ as ＤＡＮ", keywords: []string{"act as dan"}},
+		{name: "zero-width insertion", text: "act\u200bas dan", keywords: []string{"act as dan"}},
+		{name: "format-control insertion", text: "act\u00ad \u202eas\U000e0001 dan", keywords: []string{"act as dan"}},
+		{name: "whitespace variants", text: "bypass   your\nsafety restrictions", keywords: []string{"bypass your safety restrictions"}},
+		{name: "punctuation remains significant", text: "act-as-dan", keywords: []string{"act as dan"}},
 	}
 
 	for _, tt := range tests {
