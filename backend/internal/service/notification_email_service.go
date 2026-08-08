@@ -40,8 +40,9 @@ const (
 	notificationEmailLocaleUserKeyPrefix  = "notification_email_locale:user:"
 	notificationEmailLocaleEmailKeyPrefix = "notification_email_locale:email:"
 	notificationEmailUnsubscribeSecretKey = "notification_email_unsubscribe_secret"
-	notificationEmailDefaultLocale        = "en"
+	notificationEmailLocaleEnglish        = "en"
 	notificationEmailLocaleChinese        = "zh"
+	notificationEmailFallbackLocale       = notificationEmailLocaleChinese
 	notificationEmailMaxSubjectLength     = 200
 	notificationEmailMaxHTMLLength        = 30000
 	notificationEmailUnsubscribeTTL       = 365 * 24 * time.Hour
@@ -49,7 +50,7 @@ const (
 
 var (
 	notificationEmailPlaceholderPattern = regexp.MustCompile(`{{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*}}`)
-	notificationEmailLocales            = []string{notificationEmailDefaultLocale, notificationEmailLocaleChinese}
+	notificationEmailLocales            = []string{notificationEmailLocaleEnglish, notificationEmailLocaleChinese}
 	notificationEmailCommonPlaceholders = []string{"site_name", "recipient_name", "recipient_email"}
 	// Keep summary values separate so admins can rearrange or omit individual metrics in the template.
 	notificationEmailOpsSummaryPlaceholders = []string{
@@ -395,6 +396,9 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 	locale := normalizeNotificationLocale(input.Locale)
 	if strings.TrimSpace(input.Locale) == "" {
 		locale = s.ResolveRecipientLocale(ctx, input.UserID, recipient)
+	} else if input.UserID > 0 {
+		// Only authenticated flows may update a durable recipient preference.
+		s.RememberRecipientLocale(ctx, input.UserID, recipient, input.Locale)
 	}
 	tmpl, err := s.GetTemplate(ctx, normalizedEvent, locale)
 	if err != nil {
@@ -433,12 +437,10 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 
 func (s *NotificationEmailService) RememberRecipientLocale(ctx context.Context, userID int64, email, acceptLanguage string) {
 	locale := normalizeNotificationLocale(acceptLanguage)
-	if strings.TrimSpace(acceptLanguage) == "" || s == nil || s.settingRepo == nil {
+	if userID <= 0 || strings.TrimSpace(acceptLanguage) == "" || s == nil || s.settingRepo == nil {
 		return
 	}
-	if userID > 0 {
-		_ = s.settingRepo.Set(ctx, notificationEmailLocaleUserKeyPrefix+strconv.FormatInt(userID, 10), locale)
-	}
+	_ = s.settingRepo.Set(ctx, notificationEmailLocaleUserKeyPrefix+strconv.FormatInt(userID, 10), locale)
 	if emailHash := notificationEmailHash(email); emailHash != "" {
 		_ = s.settingRepo.Set(ctx, notificationEmailLocaleEmailKeyPrefix+emailHash, locale)
 	}
@@ -446,7 +448,7 @@ func (s *NotificationEmailService) RememberRecipientLocale(ctx context.Context, 
 
 func (s *NotificationEmailService) ResolveRecipientLocale(ctx context.Context, userID int64, email string) string {
 	if s == nil || s.settingRepo == nil {
-		return notificationEmailDefaultLocale
+		return notificationEmailFallbackLocale
 	}
 	if userID > 0 {
 		if locale, err := s.settingRepo.GetValue(ctx, notificationEmailLocaleUserKeyPrefix+strconv.FormatInt(userID, 10)); err == nil && strings.TrimSpace(locale) != "" {
@@ -458,7 +460,7 @@ func (s *NotificationEmailService) ResolveRecipientLocale(ctx context.Context, u
 			return normalizeNotificationLocale(locale)
 		}
 	}
-	return notificationEmailDefaultLocale
+	return notificationEmailFallbackLocale
 }
 
 func (s *NotificationEmailService) IsUnsubscribed(ctx context.Context, email, event string) (bool, error) {
@@ -796,7 +798,7 @@ func notificationEmailPlaceholdersIn(raw string) []string {
 func normalizeNotificationLocale(raw string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
 	if trimmed == "" {
-		return notificationEmailDefaultLocale
+		return notificationEmailFallbackLocale
 	}
 	for _, part := range strings.Split(trimmed, ",") {
 		tag := strings.TrimSpace(strings.Split(part, ";")[0])
@@ -804,10 +806,10 @@ func normalizeNotificationLocale(raw string) string {
 			return notificationEmailLocaleChinese
 		}
 		if strings.HasPrefix(tag, "en") {
-			return notificationEmailDefaultLocale
+			return notificationEmailLocaleEnglish
 		}
 	}
-	return notificationEmailDefaultLocale
+	return notificationEmailFallbackLocale
 }
 
 func notificationEmailTemplateKey(event, locale string) string {
@@ -1156,7 +1158,7 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 
 var notificationEmailOfficialTemplates = map[string]map[string]notificationEmailOfficialTemplate{
 	NotificationEmailEventAuthVerifyCode: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Email verification code",
 			HTML: notificationEmailCard("#4f46e5", "Email verification code", `
 <p>Hello {{recipient_name}},</p>
@@ -1176,7 +1178,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventAuthPasswordReset: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Password reset request",
 			HTML: notificationEmailCard("#7c3aed", "Password reset", `
 <p>Hello {{recipient_name}},</p>
@@ -1198,7 +1200,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventNotificationEmailVerifyCode: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Notification email verification code",
 			HTML: notificationEmailCard("#0ea5e9", "Notification email verification", `
 <p>Hello {{recipient_name}},</p>
@@ -1219,7 +1221,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventSubscriptionPurchaseSuccess: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Subscription purchase successful",
 			HTML: notificationEmailCard("#2563eb", "Subscription activated", `
 <p>Hello {{recipient_name}},</p>
@@ -1237,7 +1239,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventSubscriptionExpiryReminder: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Subscription expires in {{days_remaining}} day(s)",
 			HTML: notificationEmailCard("#f97316", "Subscription expiry reminder", `
 <p>Hello {{recipient_name}},</p>
@@ -1255,7 +1257,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventBalanceLow: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Low balance alert",
 			HTML: notificationEmailCard("#d97706", "Low balance alert", `
 <p>Hello {{recipient_name}},</p>
@@ -1275,7 +1277,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventBalanceRechargeSuccess: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Balance recharge successful",
 			HTML: notificationEmailCard("#16a34a", "Recharge successful", `
 <p>Hello {{recipient_name}},</p>
@@ -1293,7 +1295,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventAccountQuotaAlert: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Account quota alert - {{account_name}}",
 			HTML: notificationEmailCard("#dc2626", "Account quota alert", `
 <p>The upstream account <strong>{{account_name}}</strong> has crossed its configured quota alert threshold.</p>
@@ -1321,7 +1323,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventContentModerationViolation: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Risk control notice",
 			HTML: notificationEmailCard("#ef4444", "Risk control notice", `
 <p>Hello {{recipient_name}},</p>
@@ -1349,7 +1351,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventContentModerationDisabled: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Account disabled by risk control",
 			HTML: notificationEmailCard("#b91c1c", "Account disabled", `
 <p>Hello {{recipient_name}},</p>
@@ -1377,7 +1379,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventCyberPolicyNotice: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[{{site_name}}] Cyber-security policy notice",
 			HTML: notificationEmailCard("#ef4444", "Cyber-security policy notice", `
 <p>Hello {{recipient_name}},</p>
@@ -1405,7 +1407,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventOpsAlert: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[Ops Alert][{{severity}}] {{rule_name}}",
 			HTML: notificationEmailCard("#ea580c", "Ops alert", `
 <p><strong>Rule</strong>: {{rule_name}}</p>
@@ -1427,9 +1429,9 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 		},
 	},
 	NotificationEmailEventOpsScheduledReport: {
-		notificationEmailDefaultLocale: {
+		notificationEmailLocaleEnglish: {
 			Subject: "[Ops Report] {{report_name}}",
-			HTML:    notificationEmailOpsScheduledReportTemplate(notificationEmailDefaultLocale),
+			HTML:    notificationEmailOpsScheduledReportTemplate(notificationEmailLocaleEnglish),
 		},
 		notificationEmailLocaleChinese: {
 			Subject: "[运维报表] {{report_name}}",
@@ -1446,31 +1448,31 @@ func notificationEmailOpsScheduledReportTemplate(locale string) string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { margin: 0; padding: 24px 12px; background: #f4f6f8; color: #1f2937; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-    .container { width: 100%; max-width: 680px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe7ea; border-radius: 8px; overflow: hidden; }
-    .header { padding: 28px 32px 24px; background: #0f766e; color: #ffffff; }
-    .eyebrow { margin: 0 0 8px; color: #ccfbf1; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
-    h1 { margin: 0; font-size: 26px; line-height: 1.3; }
-    .header p { margin: 8px 0 0; color: #e6fffb; font-size: 14px; }
-    .content { padding: 28px 32px 32px; }
-    .meta { width: 100%; margin: 0 0 20px; border-collapse: collapse; background: #f8fafc; border: 1px solid #e2e8f0; }
-    .meta td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; vertical-align: top; }
-    .meta tr:last-child td { border-bottom: 0; }
-    .meta-label { width: 112px; color: #64748b; font-weight: 600; }
-    .section-title { margin: 28px 0 12px; color: #0f172a; font-size: 16px; line-height: 1.4; }
-    .metric-grid { width: 100%; border-collapse: separate; border-spacing: 8px; margin: -8px; }
-    .metric-cell { width: 50%; padding: 14px 16px; border: 1px solid #e2e8f0; background: #ffffff; vertical-align: top; }
-    .metric-label { display: block; color: #64748b; font-size: 12px; line-height: 1.4; }
-    .metric-value { display: block; margin-top: 6px; color: #0f172a; font-size: 20px; font-weight: 700; line-height: 1.2; }
-    .metric-value.good { color: #15803d; }
-    .metric-value.alert { color: #b91c1c; }
-    .detail { width: 100%; border-collapse: collapse; }
-    .detail td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
-    .detail td:first-child { width: 56%; color: #475569; }
-    .detail td:last-child { color: #0f172a; font-weight: 600; text-align: right; }
-    .report-detail { margin-top: 28px; }
-    .report-detail:empty { display: none; }
-    .footer { padding: 18px 32px; background: #f8fafc; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 12px; line-height: 1.6; }
+	    body { margin: 0; padding: 36px 16px; background:#07111f; color: #dbe7f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+	    .container { width: 100%; max-width: 680px; margin: 0 auto; background: #0f1b2d; border: 1px solid #1f3b5b; border-radius:22px; overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36); }
+	    .header { padding: 32px; background:#2563eb; background:linear-gradient(135deg,#2563eb 0%,#4f46e5 48%,#14b8a6 100%); color: #ffffff; }
+	    .eyebrow { margin: 0 0 8px; color: #e0f2fe; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+	    h1 { margin: 0; font-size: 26px; line-height: 1.3; }
+	    .header p { margin: 8px 0 0; color: #dbeafe; font-size: 14px; }
+	    .content { padding: 28px 32px 32px; }
+	    .meta { width: 100%; margin: 0 0 20px; border-collapse: collapse; background: #0b1625; border: 1px solid #1e334d; }
+	    .meta td { padding: 10px 12px; border-bottom: 1px solid #1e334d; color: #dbe7f5; font-size: 13px; vertical-align: top; }
+	    .meta tr:last-child td { border-bottom: 0; }
+	    .meta-label { width: 112px; color: #8ea6c4; font-weight: 600; }
+	    .section-title { margin: 28px 0 12px; color: #ffffff; font-size: 16px; line-height: 1.4; }
+	    .metric-grid { width: 100%; border-collapse: separate; border-spacing: 8px; margin: -8px; }
+	    .metric-cell { width: 50%; padding: 14px 16px; border: 1px solid #24476b; background: #081320; vertical-align: top; }
+	    .metric-label { display: block; color: #8ea6c4; font-size: 12px; line-height: 1.4; }
+	    .metric-value { display: block; margin-top: 6px; color: #ffffff; font-size: 20px; font-weight: 700; line-height: 1.2; }
+	    .metric-value.good { color: #4ade80; }
+	    .metric-value.alert { color: #f87171; }
+	    .detail { width: 100%; border-collapse: collapse; }
+	    .detail td { padding: 10px 12px; border-bottom: 1px solid #1e334d; font-size: 13px; }
+	    .detail td:first-child { width: 56%; color: #8ea6c4; }
+	    .detail td:last-child { color: #ffffff; font-weight: 600; text-align: right; }
+	    .report-detail { margin-top: 28px; }
+	    .report-detail:empty { display: none; }
+	    .footer { padding: 18px 32px; background: #0a1422; border-top: 1px solid #1e334d; color: #64748b; font-size: 12px; line-height: 1.6; }
     @media only screen and (max-width: 620px) {
       body { padding: 0; }
       .container { border: 0; border-radius: 0; }
@@ -1541,31 +1543,31 @@ func notificationEmailOpsScheduledReportTemplate(locale string) string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { margin: 0; padding: 24px 12px; background: #f4f6f8; color: #1f2937; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .container { width: 100%; max-width: 680px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe7ea; border-radius: 8px; overflow: hidden; }
-    .header { padding: 28px 32px 24px; background: #0f766e; color: #ffffff; }
-    .eyebrow { margin: 0 0 8px; color: #ccfbf1; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
-    h1 { margin: 0; font-size: 26px; line-height: 1.3; }
-    .header p { margin: 8px 0 0; color: #e6fffb; font-size: 14px; }
-    .content { padding: 28px 32px 32px; }
-    .meta { width: 100%; margin: 0 0 20px; border-collapse: collapse; background: #f8fafc; border: 1px solid #e2e8f0; }
-    .meta td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; vertical-align: top; }
-    .meta tr:last-child td { border-bottom: 0; }
-    .meta-label { width: 112px; color: #64748b; font-weight: 600; }
-    .section-title { margin: 28px 0 12px; color: #0f172a; font-size: 16px; line-height: 1.4; }
-    .metric-grid { width: 100%; border-collapse: separate; border-spacing: 8px; margin: -8px; }
-    .metric-cell { width: 50%; padding: 14px 16px; border: 1px solid #e2e8f0; background: #ffffff; vertical-align: top; }
-    .metric-label { display: block; color: #64748b; font-size: 12px; line-height: 1.4; }
-    .metric-value { display: block; margin-top: 6px; color: #0f172a; font-size: 20px; font-weight: 700; line-height: 1.2; }
-    .metric-value.good { color: #15803d; }
-    .metric-value.alert { color: #b91c1c; }
-    .detail { width: 100%; border-collapse: collapse; }
-    .detail td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
-    .detail td:first-child { width: 56%; color: #475569; }
-    .detail td:last-child { color: #0f172a; font-weight: 600; text-align: right; }
-    .report-detail { margin-top: 28px; }
-    .report-detail:empty { display: none; }
-    .footer { padding: 18px 32px; background: #f8fafc; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 12px; line-height: 1.6; }
+	    body { margin: 0; padding: 36px 16px; background:#07111f; color: #dbe7f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+	    .container { width: 100%; max-width: 680px; margin: 0 auto; background: #0f1b2d; border: 1px solid #1f3b5b; border-radius:22px; overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36); }
+	    .header { padding: 32px; background:#2563eb; background:linear-gradient(135deg,#2563eb 0%,#4f46e5 48%,#14b8a6 100%); color: #ffffff; }
+	    .eyebrow { margin: 0 0 8px; color: #e0f2fe; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+	    h1 { margin: 0; font-size: 26px; line-height: 1.3; }
+	    .header p { margin: 8px 0 0; color: #dbeafe; font-size: 14px; }
+	    .content { padding: 28px 32px 32px; }
+	    .meta { width: 100%; margin: 0 0 20px; border-collapse: collapse; background: #0b1625; border: 1px solid #1e334d; }
+	    .meta td { padding: 10px 12px; border-bottom: 1px solid #1e334d; color: #dbe7f5; font-size: 13px; vertical-align: top; }
+	    .meta tr:last-child td { border-bottom: 0; }
+	    .meta-label { width: 112px; color: #8ea6c4; font-weight: 600; }
+	    .section-title { margin: 28px 0 12px; color: #ffffff; font-size: 16px; line-height: 1.4; }
+	    .metric-grid { width: 100%; border-collapse: separate; border-spacing: 8px; margin: -8px; }
+	    .metric-cell { width: 50%; padding: 14px 16px; border: 1px solid #24476b; background: #081320; vertical-align: top; }
+	    .metric-label { display: block; color: #8ea6c4; font-size: 12px; line-height: 1.4; }
+	    .metric-value { display: block; margin-top: 6px; color: #ffffff; font-size: 20px; font-weight: 700; line-height: 1.2; }
+	    .metric-value.good { color: #4ade80; }
+	    .metric-value.alert { color: #f87171; }
+	    .detail { width: 100%; border-collapse: collapse; }
+	    .detail td { padding: 10px 12px; border-bottom: 1px solid #1e334d; font-size: 13px; }
+	    .detail td:first-child { width: 56%; color: #8ea6c4; }
+	    .detail td:last-child { color: #ffffff; font-weight: 600; text-align: right; }
+	    .report-detail { margin-top: 28px; }
+	    .report-detail:empty { display: none; }
+	    .footer { padding: 18px 32px; background: #0a1422; border-top: 1px solid #1e334d; color: #64748b; font-size: 12px; line-height: 1.6; }
     @media only screen and (max-width: 620px) {
       body { padding: 0; }
       .container { border: 0; border-radius: 0; }
@@ -1636,23 +1638,61 @@ func notificationEmailCard(accent, title, content string) string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>` + title + `</title>
   <style>
-    body { margin: 0; padding: 24px; background: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #18181b; }
-    .container { max-width: 640px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(15, 23, 42, 0.10); }
-    .header { background: ` + accent + `; color: #ffffff; padding: 28px 32px; }
-    .header h1 { margin: 0; font-size: 24px; line-height: 1.25; }
-    .content { padding: 32px; font-size: 15px; line-height: 1.7; }
-    .button { display: inline-block; margin-top: 12px; padding: 11px 18px; border-radius: 8px; background: ` + accent + `; color: #ffffff; text-decoration: none; font-weight: 600; }
-    .muted { color: #71717a; font-size: 13px; }
-    .footer { padding: 18px 32px; background: #fafafa; color: #a1a1aa; font-size: 12px; }
+    .email-content p { margin: 0 0 18px; color: #dbe7f5; font-size: 15px; line-height: 1.8; }
+    .email-content strong { color: #ffffff; }
+    .email-content a { color: #7dd3fc; }
+    .email-content table { color: #dbe7f5; }
+    .email-content td { padding: 9px 10px; border-bottom: 1px solid #1e334d; color: #dbe7f5; font-size: 13px; line-height: 1.6; }
+    .email-content .button { display: inline-block; margin-top: 12px; padding: 11px 18px; border-radius: 8px; background: ` + accent + `; color: #ffffff; text-decoration: none; font-weight: 700; }
+    .email-content .muted { color: #8ea6c4; font-size: 13px; }
+    @media only screen and (max-width: 620px) {
+      .email-shell { padding: 20px 10px !important; }
+      .brand-row, .email-header, .email-content, .email-footer { padding-left: 20px !important; padding-right: 20px !important; }
+    }
   </style>
 </head>
-<body>
-  <div class="container">
-    <div class="header"><h1>` + title + `</h1></div>
-    <div class="content">` + content + `</div>
-    <div class="footer">This email was sent by {{site_name}}. Please do not reply directly.</div>
-  </div>
+<body style="margin:0; padding:0; background:#07111f; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',Arial,sans-serif; color:#e5edf7;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="email-shell" style="width:100%; background:#07111f; margin:0; padding:36px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%; max-width:640px; border-collapse:separate; border-spacing:0;">
+          <tr>
+            <td class="brand-row" style="padding:0 4px 18px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="left" style="padding:0; border:0; color:#ffffff; font-size:20px; font-weight:800;">{{site_name}}</td>
+                  <td align="right" style="padding:0; border:0; color:#7dd3fc; font-size:12px;">Secure Notice</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0; background:#0f1b2d; border:1px solid #1f3b5b; border-radius:22px; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,0.36);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td class="email-header" style="padding:32px; background:#2563eb; background:linear-gradient(135deg,#2563eb 0%,#4f46e5 48%,#14b8a6 100%);">
+                    <div style="display:inline-block; padding:6px 12px; border-radius:999px; background:rgba(255,255,255,0.16); color:#e0f2fe; font-size:12px; font-weight:700;">ACCOUNT NOTIFICATION</div>
+                    <h1 style="margin:18px 0 0; color:#ffffff; font-size:28px; line-height:1.25; font-weight:800;">` + title + `</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="email-content" style="padding:34px; background:#0f1b2d; color:#dbe7f5; font-size:15px; line-height:1.8;">` + content + `</td>
+                </tr>
+                <tr>
+                  <td class="email-footer" style="padding:20px 34px; background:#0a1422; border-top:1px solid #1e334d; color:#64748b; font-size:12px; line-height:1.7;">This email was sent by {{site_name}}. Please do not reply directly.</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:18px 12px 0; color:#475569; font-size:12px; line-height:1.6;">&copy; {{site_name}} · Account Notification</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>`
 }

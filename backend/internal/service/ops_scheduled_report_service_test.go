@@ -115,6 +115,11 @@ func TestOpsScheduledReportLegacyTemplateReceivesSummaryHTML(t *testing.T) {
 		`<section data-template="legacy">{{report_html}}</section>`,
 	)
 	require.NoError(t, err)
+	require.NoError(t, repo.Set(
+		ctx,
+		notificationEmailLocaleEmailKeyPrefix+notificationEmailHash("ops@example.com"),
+		notificationEmailLocaleEnglish,
+	))
 
 	svc := &OpsScheduledReportService{
 		opsService:   &OpsService{opsRepo: &opsRepoMock{}},

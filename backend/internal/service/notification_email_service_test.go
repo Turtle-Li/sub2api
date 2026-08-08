@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -308,17 +309,25 @@ func TestNotificationEmailFallbackClassification(t *testing.T) {
 }
 
 func TestEmailQueueTasksPreserveLocaleHints(t *testing.T) {
-	queue := &EmailQueueService{taskChan: make(chan EmailTask, 2)}
+	queue := &EmailQueueService{taskChan: make(chan EmailTask, 3)}
 	require.NoError(t, queue.EnqueueVerifyCode("user@example.com", "Sub2API", "zh-CN"))
+	require.NoError(t, queue.EnqueueVerifyCodeForUser("member@example.com", "Sub2API", 42, "en-US"))
 	require.NoError(t, queue.EnqueuePasswordReset("user@example.com", "Sub2API", "https://example.com/reset", "en-US"))
 
 	verifyTask := <-queue.taskChan
 	require.Equal(t, TaskTypeVerifyCode, verifyTask.TaskType)
 	require.Equal(t, "zh-CN", verifyTask.Locale)
+	require.Zero(t, verifyTask.UserID)
+
+	authenticatedVerifyTask := <-queue.taskChan
+	require.Equal(t, TaskTypeVerifyCode, authenticatedVerifyTask.TaskType)
+	require.Equal(t, "en-US", authenticatedVerifyTask.Locale)
+	require.Equal(t, int64(42), authenticatedVerifyTask.UserID)
 
 	resetTask := <-queue.taskChan
 	require.Equal(t, TaskTypePasswordReset, resetTask.TaskType)
 	require.Equal(t, "en-US", resetTask.Locale)
+	require.Zero(t, resetTask.UserID)
 }
 
 func TestOpsScheduledReportDeliverySourceIDIncludesReportIdentity(t *testing.T) {
@@ -365,6 +374,230 @@ func TestNotificationEmailLocaleMemoryNormalizesAcceptLanguage(t *testing.T) {
 	svc.RememberRecipientLocale(ctx, 42, "User@Example.com", "zh-CN,zh;q=0.9,en;q=0.8")
 	require.Equal(t, "zh", svc.ResolveRecipientLocale(ctx, 42, "user@example.com"))
 	require.Equal(t, "zh", svc.ResolveRecipientLocale(ctx, 0, "user@example.com"))
+}
+
+func TestNotificationEmailLocaleMemoryRejectsUnauthenticatedRecipients(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	recipient := "anonymous@example.com"
+
+	svc.RememberRecipientLocale(ctx, 0, recipient, "en-US")
+	svc.RememberRecipientLocale(ctx, -1, recipient, "en-US")
+
+	_, err := repo.GetValue(ctx, notificationEmailLocaleEmailKeyPrefix+notificationEmailHash(recipient))
+	require.ErrorIs(t, err, ErrSettingNotFound)
+	require.Equal(t, notificationEmailLocaleChinese, svc.ResolveRecipientLocale(ctx, 0, recipient))
+}
+
+func TestEmailServiceAuthenticatedVerifyCodePersistsLocale(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, repo.SetMultiple(ctx, smtpServer.settings()))
+
+	emailSvc := NewEmailService(repo, &notificationEmailCacheStub{})
+	svc := NewNotificationEmailService(repo, emailSvc)
+	recipient := "member@example.com"
+
+	require.NoError(t, emailSvc.SendVerifyCodeForUser(ctx, recipient, "Sub2API", 42, "en-US"))
+	require.Equal(t, notificationEmailLocaleEnglish, svc.ResolveRecipientLocale(ctx, 42, recipient))
+	require.Contains(t, smtpServer.lastMessageBody(t), "Email verification code")
+}
+
+func TestAuthEmailBindingVerifyCodePersistsAuthenticatedLocale(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, repo.SetMultiple(ctx, smtpServer.settings()))
+
+	emailSvc := NewEmailService(repo, &notificationEmailCacheStub{})
+	notificationSvc := NewNotificationEmailService(repo, emailSvc)
+	user := &User{ID: 42, Email: "existing@example.com"}
+	authSvc := &AuthService{
+		userRepo:     &notificationEmailUserRepoStub{user: user},
+		emailService: emailSvc,
+	}
+
+	require.NoError(t, authSvc.SendEmailIdentityBindCode(ctx, user.ID, "member@example.com", "en-US"))
+	require.Equal(t, notificationEmailLocaleEnglish, notificationSvc.ResolveRecipientLocale(ctx, user.ID, "member@example.com"))
+	require.Contains(t, smtpServer.lastMessageBody(t), "Email verification code")
+}
+
+func TestTotpVerifyCodePersistsLocaleForLaterSystemEmail(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, repo.SetMultiple(ctx, smtpServer.settings()))
+	require.NoError(t, repo.Set(ctx, SettingKeyEmailVerifyEnabled, "true"))
+
+	emailSvc := NewEmailService(repo, &notificationEmailCacheStub{})
+	notificationSvc := NewNotificationEmailService(repo, emailSvc)
+	queue := NewEmailQueueService(emailSvc, 1)
+	t.Cleanup(queue.Stop)
+	user := &User{ID: 42, Email: "member@example.com", Role: RoleUser}
+	totpSvc := NewTotpService(
+		&notificationEmailUserRepoStub{user: user},
+		nil,
+		nil,
+		NewSettingService(repo, nil),
+		emailSvc,
+		queue,
+	)
+
+	require.NoError(t, totpSvc.SendVerifyCode(ctx, user.ID, "en-US"))
+	require.Eventually(t, func() bool {
+		return smtpServer.messageCount() == 1 &&
+			notificationSvc.ResolveRecipientLocale(ctx, user.ID, user.Email) == notificationEmailLocaleEnglish
+	}, 3*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, notificationSvc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventSubscriptionExpiryReminder,
+		RecipientEmail: user.Email,
+		RecipientName:  "Member",
+		UserID:         user.ID,
+		Variables: map[string]string{
+			"subscription_group": "Codex",
+			"expiry_time":        "2026-08-16 12:00",
+			"days_remaining":     "7",
+		},
+	}))
+	require.Contains(t, smtpServer.lastMessageBody(t), "Subscription expiry reminder")
+}
+
+func TestNotificationEmailLocaleFallbackDefaultsToChinese(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+
+	require.Equal(t, notificationEmailLocaleChinese, normalizeNotificationLocale(""))
+	require.Equal(t, notificationEmailLocaleChinese, normalizeNotificationLocale("ja-JP"))
+	require.Equal(t, notificationEmailLocaleChinese, svc.ResolveRecipientLocale(ctx, 0, "unknown@example.com"))
+	require.Equal(t, notificationEmailLocaleChinese, svc.ResolveRecipientLocale(ctx, 42, "unknown@example.com"))
+	require.Equal(t, notificationEmailLocaleChinese, NewNotificationEmailService(nil, nil).ResolveRecipientLocale(ctx, 42, "unknown@example.com"))
+	require.Equal(t, notificationEmailLocaleEnglish, normalizeNotificationLocale("en-US,en;q=0.9"))
+	require.Equal(t, notificationEmailLocaleChinese, normalizeNotificationLocale("zh-Hans-CN"))
+}
+
+func TestNotificationEmailSendRemembersAuthenticatedExplicitLocale(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, repo.SetMultiple(ctx, smtpServer.settings()))
+
+	emailSvc := NewEmailService(repo, nil)
+	svc := NewNotificationEmailService(repo, emailSvc)
+	recipient := "User@Example.com"
+	userID := int64(42)
+
+	require.NoError(t, svc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventBalanceRechargeSuccess,
+		Locale:         "en-US",
+		RecipientEmail: recipient,
+		RecipientName:  "User",
+		UserID:         userID,
+		Variables: map[string]string{
+			"recharge_amount": "10.00",
+			"current_balance": "25.00",
+			"order_id":        "1001",
+		},
+	}))
+	userLocale, err := repo.GetValue(ctx, notificationEmailLocaleUserKeyPrefix+"42")
+	require.NoError(t, err)
+	require.Equal(t, notificationEmailLocaleEnglish, userLocale)
+	emailLocale, err := repo.GetValue(ctx, notificationEmailLocaleEmailKeyPrefix+notificationEmailHash(recipient))
+	require.NoError(t, err)
+	require.Equal(t, notificationEmailLocaleEnglish, emailLocale)
+
+	require.NoError(t, svc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventSubscriptionExpiryReminder,
+		RecipientEmail: recipient,
+		RecipientName:  "User",
+		UserID:         userID,
+		Variables: map[string]string{
+			"subscription_group": "Codex",
+			"expiry_time":        "2026-08-16 12:00",
+			"days_remaining":     "7",
+		},
+	}))
+	require.Contains(t, smtpServer.lastMessageBody(t), "Subscription expiry reminder")
+
+	require.NoError(t, svc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventBalanceRechargeSuccess,
+		Locale:         "zh-CN",
+		RecipientEmail: recipient,
+		RecipientName:  "User",
+		UserID:         userID,
+		Variables: map[string]string{
+			"recharge_amount": "10.00",
+			"current_balance": "35.00",
+			"order_id":        "1002",
+		},
+	}))
+	userLocale, err = repo.GetValue(ctx, notificationEmailLocaleUserKeyPrefix+"42")
+	require.NoError(t, err)
+	require.Equal(t, notificationEmailLocaleChinese, userLocale)
+
+	require.NoError(t, svc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventSubscriptionExpiryReminder,
+		RecipientEmail: recipient,
+		RecipientName:  "User",
+		UserID:         userID,
+		Variables: map[string]string{
+			"subscription_group": "Codex",
+			"expiry_time":        "2026-08-16 12:00",
+			"days_remaining":     "7",
+		},
+	}))
+	require.Contains(t, smtpServer.lastMessageBody(t), "订阅到期提醒")
+}
+
+func TestNotificationEmailSendDoesNotRememberUnauthenticatedExplicitLocale(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, repo.SetMultiple(ctx, smtpServer.settings()))
+
+	emailSvc := NewEmailService(repo, nil)
+	svc := NewNotificationEmailService(repo, emailSvc)
+	recipient := "unknown@example.com"
+	require.NoError(t, svc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventAuthVerifyCode,
+		Locale:         "en-US",
+		RecipientEmail: recipient,
+		Variables: map[string]string{
+			"verification_code":  "123456",
+			"expires_in_minutes": "15",
+		},
+	}))
+
+	_, err := repo.GetValue(ctx, notificationEmailLocaleEmailKeyPrefix+notificationEmailHash(recipient))
+	require.ErrorIs(t, err, ErrSettingNotFound)
+	require.Equal(t, notificationEmailLocaleChinese, svc.ResolveRecipientLocale(ctx, 0, recipient))
+}
+
+func TestOfficialNotificationEmailTemplatesUseBilingualBrandLayout(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+
+	for _, event := range notificationEmailEventOrder {
+		for _, locale := range []string{notificationEmailLocaleEnglish, notificationEmailLocaleChinese} {
+			t.Run(event+"/"+locale, func(t *testing.T) {
+				tmpl, err := svc.GetTemplate(ctx, event, locale)
+				require.NoError(t, err)
+				require.False(t, tmpl.IsCustom)
+				require.Contains(t, tmpl.HTML, "background:#07111f")
+				require.Contains(t, tmpl.HTML, "linear-gradient(135deg")
+				require.Contains(t, tmpl.HTML, "border-radius:22px")
+				require.Contains(t, tmpl.HTML, "{{site_name}}")
+				require.NotContains(t, tmpl.HTML, "background: #f4f4f5")
+
+				preview, err := svc.PreviewTemplate(ctx, NotificationEmailPreviewInput{Event: event, Locale: locale})
+				require.NoError(t, err)
+				require.Contains(t, preview.HTML, "background:#07111f")
+				require.NotContains(t, preview.HTML, "{{site_name}}")
+			})
+		}
+	}
 }
 
 func TestNotificationEmailDeliveryKeyUsesShortStableHash(t *testing.T) {
@@ -478,6 +711,74 @@ func TestNotificationEmailSendRespectsLegacyDeliveryKey(t *testing.T) {
 type notificationEmailMemorySettingRepo struct {
 	mu     sync.RWMutex
 	values map[string]string
+}
+
+type notificationEmailCacheStub struct{}
+
+type notificationEmailUserRepoStub struct {
+	UserRepository
+	user *User
+}
+
+func (r *notificationEmailUserRepoStub) GetByID(_ context.Context, id int64) (*User, error) {
+	if r.user == nil || r.user.ID != id {
+		return nil, ErrUserNotFound
+	}
+	return r.user, nil
+}
+
+func (r *notificationEmailUserRepoStub) GetByEmail(_ context.Context, email string) (*User, error) {
+	if r.user == nil || !strings.EqualFold(r.user.Email, email) {
+		return nil, ErrUserNotFound
+	}
+	return r.user, nil
+}
+
+func (*notificationEmailCacheStub) GetVerificationCode(context.Context, string) (*VerificationCodeData, error) {
+	return nil, nil
+}
+
+func (*notificationEmailCacheStub) SetVerificationCode(context.Context, string, *VerificationCodeData, time.Duration) error {
+	return nil
+}
+
+func (*notificationEmailCacheStub) DeleteVerificationCode(context.Context, string) error { return nil }
+
+func (*notificationEmailCacheStub) GetNotifyVerifyCode(context.Context, string) (*VerificationCodeData, error) {
+	return nil, nil
+}
+
+func (*notificationEmailCacheStub) SetNotifyVerifyCode(context.Context, string, *VerificationCodeData, time.Duration) error {
+	return nil
+}
+
+func (*notificationEmailCacheStub) DeleteNotifyVerifyCode(context.Context, string) error { return nil }
+
+func (*notificationEmailCacheStub) GetPasswordResetToken(context.Context, string) (*PasswordResetTokenData, error) {
+	return nil, nil
+}
+
+func (*notificationEmailCacheStub) SetPasswordResetToken(context.Context, string, *PasswordResetTokenData, time.Duration) error {
+	return nil
+}
+
+func (*notificationEmailCacheStub) DeletePasswordResetToken(context.Context, string) error {
+	return nil
+}
+func (*notificationEmailCacheStub) IsPasswordResetEmailInCooldown(context.Context, string) bool {
+	return false
+}
+
+func (*notificationEmailCacheStub) SetPasswordResetEmailCooldown(context.Context, string, time.Duration) error {
+	return nil
+}
+
+func (*notificationEmailCacheStub) IncrNotifyCodeUserRate(context.Context, int64, time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (*notificationEmailCacheStub) GetNotifyCodeUserRate(context.Context, int64) (int64, error) {
+	return 0, nil
 }
 
 func newNotificationEmailMemorySettingRepo() *notificationEmailMemorySettingRepo {
