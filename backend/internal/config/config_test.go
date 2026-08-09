@@ -2547,14 +2547,14 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	if cfg.Gateway.ImageNonstreamKeepaliveInterval != 0 {
 		t.Fatalf("image_nonstream_keepalive_interval = %d, want 0", cfg.Gateway.ImageNonstreamKeepaliveInterval)
 	}
-	if cfg.Gateway.ImageConcurrency.Enabled {
-		t.Fatalf("image_concurrency.enabled = true, want false")
+	if !cfg.Gateway.ImageConcurrency.Enabled {
+		t.Fatalf("image_concurrency.enabled = false, want true in release mode")
 	}
-	if cfg.Gateway.ImageConcurrency.MaxConcurrentRequests != 0 {
-		t.Fatalf("image_concurrency.max_concurrent_requests = %d, want 0", cfg.Gateway.ImageConcurrency.MaxConcurrentRequests)
+	if cfg.Gateway.ImageConcurrency.MaxConcurrentRequests != 16 {
+		t.Fatalf("image_concurrency.max_concurrent_requests = %d, want 16", cfg.Gateway.ImageConcurrency.MaxConcurrentRequests)
 	}
-	if cfg.Gateway.ImageConcurrency.OverflowMode != ImageConcurrencyOverflowModeReject {
-		t.Fatalf("image_concurrency.overflow_mode = %q, want %q", cfg.Gateway.ImageConcurrency.OverflowMode, ImageConcurrencyOverflowModeReject)
+	if cfg.Gateway.ImageConcurrency.OverflowMode != ImageConcurrencyOverflowModeWait {
+		t.Fatalf("image_concurrency.overflow_mode = %q, want %q", cfg.Gateway.ImageConcurrency.OverflowMode, ImageConcurrencyOverflowModeWait)
 	}
 	if cfg.Gateway.ImageConcurrency.WaitTimeoutSeconds != 30 {
 		t.Fatalf("image_concurrency.wait_timeout_seconds = %d, want 30", cfg.Gateway.ImageConcurrency.WaitTimeoutSeconds)
@@ -2579,7 +2579,22 @@ func TestLoad_DefaultBatchImagePromptLimit(t *testing.T) {
 			cfg.BatchImage.MaxPromptCharsPerItem,
 		)
 	}
+	if cfg.BatchImage.WorkerConcurrency != 2 {
+		t.Fatalf("batch_image.worker_concurrency = %d, want 2 in release mode", cfg.BatchImage.WorkerConcurrency)
+	}
+}
+
+func TestLoad_DebugConcurrencyDefaultsRemainConservative(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	viper.Set("server.mode", "debug")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
 	if cfg.BatchImage.WorkerConcurrency != 1 {
 		t.Fatalf("batch_image.worker_concurrency = %d, want 1", cfg.BatchImage.WorkerConcurrency)
+	}
+	if cfg.Gateway.ImageConcurrency.Enabled || cfg.Gateway.ImageConcurrency.MaxConcurrentRequests != 0 {
+		t.Fatalf("debug image concurrency defaults unexpectedly enabled: %+v", cfg.Gateway.ImageConcurrency)
 	}
 }
