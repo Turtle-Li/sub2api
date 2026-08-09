@@ -236,9 +236,9 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	return order, nil
 }
 
-func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount float64, options []RechargeOption) map[string]interface{} {
+func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount float64, options []RechargeOption) map[string]any {
 	option, _ := rechargeOptionForAmount(options, requestAmount)
-	return map[string]interface{}{
+	return map[string]any{
 		"kind":                      "balance",
 		"label":                     option.Label,
 		"description":               option.Description,
@@ -250,18 +250,18 @@ func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount
 		"pay_amount":                payAmount,
 		"estimated_rate_multiplier": option.EstimatedRateMultiplier,
 		"estimated_tokens":          option.EstimatedTokens,
-		"entitlements": map[string]interface{}{
+		"entitlements": map[string]any{
 			"balance_bonus": option.BalanceBonus,
 			"concurrency":   option.Concurrency,
 		},
 	}
 }
 
-func buildPaymentProductSnapshot(plan *dbent.SubscriptionPlan, orderAmount, payAmount float64, subscriptionDays int) map[string]interface{} {
+func buildPaymentProductSnapshot(plan *dbent.SubscriptionPlan, orderAmount, payAmount float64, subscriptionDays int) map[string]any {
 	if plan == nil {
 		return nil
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"kind":              "subscription",
 		"plan_id":           plan.ID,
 		"name":              plan.Name,

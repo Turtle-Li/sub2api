@@ -32,10 +32,10 @@ func normalizeContentModerationKeywordText(text string) string {
 			continue
 		}
 		if pendingSpace {
-			builder.WriteByte(' ')
+			_ = builder.WriteByte(' ')
 			pendingSpace = false
 		}
-		builder.WriteRune(r)
+		_, _ = builder.WriteRune(r)
 	}
 
 	return strings.ToLower(builder.String())

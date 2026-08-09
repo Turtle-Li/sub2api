@@ -9,7 +9,7 @@ import (
 )
 
 func TestNormalizePlanEntitlements(t *testing.T) {
-	normalized, entitlements, err := normalizePlanEntitlements(map[string]interface{}{
+	normalized, entitlements, err := normalizePlanEntitlements(map[string]any{
 		"balance_bonus":          12.5,
 		"reset_card_count":       2,
 		"reset_card_expiry_days": 30,
@@ -26,7 +26,7 @@ func TestNormalizePlanEntitlements(t *testing.T) {
 }
 
 func TestNormalizePlanEntitlementsRejectsInvalidResetCardExpiry(t *testing.T) {
-	_, _, err := normalizePlanEntitlements(map[string]interface{}{
+	_, _, err := normalizePlanEntitlements(map[string]any{
 		"reset_card_count":       1,
 		"reset_card_expiry_days": 0,
 	})
@@ -139,7 +139,7 @@ func TestBuildPaymentProductSnapshotCapturesEntitlements(t *testing.T) {
 		OriginalPrice: &original,
 		ValidityDays:  1,
 		ValidityUnit:  "quarter",
-		Entitlements: map[string]interface{}{
+		Entitlements: map[string]any{
 			"balance_bonus":          8.0,
 			"reset_card_count":       2,
 			"reset_card_expiry_days": 30,
@@ -167,14 +167,20 @@ func TestBuildPaymentBalanceProductSnapshotUsesServerPresetOnly(t *testing.T) {
 	require.Equal(t, 55.0, snapshot["credited_amount"])
 	require.Equal(t, 0.9, snapshot["estimated_rate_multiplier"])
 	require.Equal(t, int64(8_000_000), snapshot["estimated_tokens"])
-	require.Equal(t, 5.0, snapshot["entitlements"].(map[string]interface{})["balance_bonus"])
-	require.Equal(t, 5, snapshot["entitlements"].(map[string]interface{})["concurrency"])
+	entitlements, ok := snapshot["entitlements"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, 5.0, entitlements["balance_bonus"])
+	require.Equal(t, 5, entitlements["concurrency"])
 
 	manual := buildPaymentBalanceProductSnapshot(50.0001, 50.0001, 51.5, options)
-	require.Equal(t, 0, manual["entitlements"].(map[string]interface{})["concurrency"])
+	manualEntitlements, ok := manual["entitlements"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, 0, manualEntitlements["concurrency"])
 
 	disabled := buildPaymentBalanceProductSnapshot(50, 50, 51.5, []RechargeOption{{Amount: 50, Concurrency: 20, Enabled: false}})
-	require.Equal(t, 0, disabled["entitlements"].(map[string]interface{})["concurrency"])
+	disabledEntitlements, ok := disabled["entitlements"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, 0, disabledEntitlements["concurrency"])
 }
 
 func TestBalanceConcurrencyEntitlementIsMonotonicAndIdempotent(t *testing.T) {
@@ -189,8 +195,8 @@ func TestBalanceConcurrencyEntitlementIsMonotonicAndIdempotent(t *testing.T) {
 	order := &dbent.PaymentOrder{
 		ID:     991,
 		UserID: user.ID,
-		ProductSnapshot: map[string]interface{}{
-			"entitlements": map[string]interface{}{"concurrency": 5},
+		ProductSnapshot: map[string]any{
+			"entitlements": map[string]any{"concurrency": 5},
 		},
 	}
 
@@ -229,8 +235,8 @@ func TestSubscriptionConcurrencyEntitlementIsMonotonicAndIdempotent(t *testing.T
 	order := &dbent.PaymentOrder{
 		ID:     993,
 		UserID: user.ID,
-		ProductSnapshot: map[string]interface{}{
-			"entitlements": map[string]interface{}{"concurrency": 5},
+		ProductSnapshot: map[string]any{
+			"entitlements": map[string]any{"concurrency": 5},
 		},
 	}
 

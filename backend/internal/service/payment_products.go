@@ -118,9 +118,9 @@ func calculateRechargeCreditedAmount(paymentAmount, multiplier float64, options 
 	return math.Round((credited+option.BalanceBonus)*100) / 100
 }
 
-func normalizePlanEntitlements(raw map[string]interface{}) (map[string]interface{}, PlanEntitlements, error) {
+func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlements, error) {
 	if raw == nil {
-		raw = map[string]interface{}{}
+		raw = map[string]any{}
 	}
 	encoded, err := json.Marshal(raw)
 	if err != nil {
@@ -150,14 +150,14 @@ func normalizePlanEntitlements(raw map[string]interface{}) (map[string]interface
 	if err != nil {
 		return nil, PlanEntitlements{}, fmt.Errorf("encode canonical plan entitlements: %w", err)
 	}
-	var normalized map[string]interface{}
+	var normalized map[string]any
 	if err := json.Unmarshal(canonical, &normalized); err != nil {
 		return nil, PlanEntitlements{}, fmt.Errorf("decode canonical plan entitlements: %w", err)
 	}
 	return normalized, entitlements, nil
 }
 
-func PlanEntitlementsFromRaw(raw map[string]interface{}) PlanEntitlements {
+func PlanEntitlementsFromRaw(raw map[string]any) PlanEntitlements {
 	_, entitlements, err := normalizePlanEntitlements(raw)
 	if err != nil {
 		return PlanEntitlements{}

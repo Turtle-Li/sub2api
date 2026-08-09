@@ -787,7 +787,7 @@ func paymentOrderEntitlementsStrict(order *dbent.PaymentOrder) (PlanEntitlements
 	if order == nil || order.ProductSnapshot == nil {
 		return PlanEntitlements{}, nil
 	}
-	raw, ok := order.ProductSnapshot["entitlements"].(map[string]interface{})
+	raw, ok := order.ProductSnapshot["entitlements"].(map[string]any)
 	if !ok {
 		if _, exists := order.ProductSnapshot["entitlements"]; !exists {
 			return PlanEntitlements{}, nil
