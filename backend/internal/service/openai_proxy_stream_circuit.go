@@ -255,6 +255,28 @@ func (s *OpenAIGatewayService) recordOpenAIProxyStreamDisconnect(account *Accoun
 	)
 }
 
+// recordOpenAIProxyCapacityShed treats repeated terminal capacity failures as
+// a short-lived route preference signal. It never changes an account's proxy
+// assignment: the scheduler simply prefers accounts on other proxy IDs while
+// this existing fail-open circuit is active.
+func (s *OpenAIGatewayService) recordOpenAIProxyCapacityShed(account *Account) {
+	proxyID, ok := openAIProxyStreamCircuitProxyID(account)
+	if !ok {
+		return
+	}
+	circuit := s.getOpenAIProxyStreamCircuit()
+	tripped, until := circuit.recordFailure(proxyID, time.Now())
+	if !tripped {
+		return
+	}
+	logger.L().With(zap.String("component", "service.openai_gateway")).Warn(
+		"openai.proxy_quarantined_capacity_shed",
+		zap.Int64("proxy_id", proxyID),
+		zap.Int64("account_id", account.ID),
+		zap.Time("until", until),
+	)
+}
+
 func (s *OpenAIGatewayService) clearOpenAIProxyStreamDisconnect(account *Account) {
 	proxyID, ok := openAIProxyStreamCircuitProxyID(account)
 	if !ok {

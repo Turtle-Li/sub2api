@@ -1789,7 +1789,7 @@ func TestOpenAIStreamingResponseFailedBeforeOutputServerOverloadedCodeReturnsFai
 	require.Empty(t, rec.Body.String())
 }
 
-func TestOpenAIStreamingCapacityAfterOutputIsObservableWithoutCooldownSample(t *testing.T) {
+func TestOpenAIStreamingCapacityAfterOutputRecordsCooldownSample(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &OpenAIGatewayService{
 		cfg:                &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
@@ -1820,7 +1820,7 @@ func TestOpenAIStreamingCapacityAfterOutputIsObservableWithoutCooldownSample(t *
 	require.True(t, ok)
 	require.True(t, streamErr.CountTowardsSLA)
 	require.Equal(t, http.StatusServiceUnavailable, streamErr.IntendedStatus)
-	require.Zero(t, svc.getOpenAICapacityShedState().failureStreak(account.ID, time.Now()))
+	require.Equal(t, 1, svc.getOpenAICapacityShedState().failureStreak(account.ID, time.Now()))
 }
 
 func TestOpenAIStreamingResponseFailedBeforeOutputRateLimitUsesPoolRetryPolicy(t *testing.T) {

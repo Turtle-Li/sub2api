@@ -271,10 +271,19 @@ func (s *OpenAIGatewayService) handleOpenAIWSTerminalTransientFailure(ctx contex
 	eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 	terminalEvent := normalizeOpenAIWSTerminalEvent(eventType)
 	if terminalEvent != "response.failed" {
+		if terminalEvent == "response.completed" || terminalEvent == "response.done" {
+			s.clearOpenAIProxyStreamDisconnect(account)
+		}
 		return terminalEvent
 	}
 	status := openAIWSPayloadTransientStatus(payload)
 	if status != 0 {
+		if account != nil && account.Platform == PlatformOpenAI && isOpenAIUpstreamCapacityShedError(payload, extractOpenAISSEErrorMessage(payload)) {
+			// A terminal WS response has already been sent to the client and cannot
+			// be replayed safely. Count explicit capacity failures so repeated
+			// incidents remove the account from later scheduling instead.
+			s.RecordOpenAICapacityShedTerminalFailure(ctx, account, payload, extractOpenAISSEErrorMessage(payload))
+		}
 		s.handleOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
 	}
 	return terminalEvent

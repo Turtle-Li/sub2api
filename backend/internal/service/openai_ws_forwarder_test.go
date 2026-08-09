@@ -218,6 +218,46 @@ func TestOpenAIWSTerminalEvent_ResponseFailedRecordsModelTransient(t *testing.T)
 	require.True(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-5.5"))
 }
 
+func TestOpenAIWSTerminalCapacityFailuresTripAccountCooldown(t *testing.T) {
+	repo := &capacityShedRepoStub{}
+	cfg := &config.Config{}
+	cfg.RateLimit.OverloadCooldownMinutes = 6
+	rateLimits := NewRateLimitService(repo, nil, cfg, nil, nil)
+	svc := &OpenAIGatewayService{
+		cfg:                cfg,
+		rateLimitService:   rateLimits,
+		openaiCapacityShed: newOpenAICapacityShedState(8),
+	}
+	rateLimits.SetAccountRuntimeBlocker(svc)
+	account := &Account{ID: 5204, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	payload := []byte(`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`)
+
+	for range openAICapacityShedThreshold {
+		require.Equal(t, "response.failed", svc.handleOpenAIWSTerminalTransientFailure(context.Background(), account, "gpt-5.6-sol", http.Header{}, payload))
+	}
+	require.Equal(t, 1, repo.overloadCalls)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
+func TestOpenAIWSTerminalSuccessClearsProxyCapacityObservation(t *testing.T) {
+	proxyID := int64(5205)
+	account := &Account{ID: 5205, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ProxyID: &proxyID}
+	svc := &OpenAIGatewayService{openaiCapacityShed: newOpenAICapacityShedState(8)}
+	svc.openaiProxyStreamCircuit = newOpenAIProxyStreamCircuit(openAIProxyStreamCircuitSettings{
+		failureThreshold: 2,
+		failureWindow:    time.Minute,
+		quarantineTTL:    10 * time.Minute,
+		maxEntries:       16,
+	})
+	failed := []byte(`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`)
+	completed := []byte(`{"type":"response.completed","response":{"id":"resp_ok","status":"completed"}}`)
+
+	svc.handleOpenAIWSTerminalTransientFailure(context.Background(), account, "gpt-5.6-sol", http.Header{}, failed)
+	require.Equal(t, "response.completed", svc.handleOpenAIWSTerminalTransientFailure(context.Background(), account, "gpt-5.6-sol", http.Header{}, completed))
+	svc.handleOpenAIWSTerminalTransientFailure(context.Background(), account, "gpt-5.6-sol", http.Header{}, failed)
+	require.False(t, svc.isOpenAIProxyStreamQuarantined(context.Background(), account))
+}
+
 func TestOpenAIWSErrorEvent_ServerErrorRecordsModelTransient(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)

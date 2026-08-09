@@ -165,13 +165,8 @@ func (s *OpenAIGatewayService) getOpenAICapacityShedState() *openAICapacityShedS
 	return s.openaiCapacityShed
 }
 
-// RecordOpenAICapacityShedRetryExhausted records exactly one logical OpenAI
-// request after its same-account retry budget was exhausted by a capacity
-// signal. Three such logical failures inside 15 minutes use the existing
-// operator-configured overload cooldown; successes deliberately do not erase
-// the evidence in between.
-func (s *OpenAIGatewayService) RecordOpenAICapacityShedRetryExhausted(ctx context.Context, account *Account, failoverErr *UpstreamFailoverError) {
-	if s == nil || account == nil || account.Platform != PlatformOpenAI || failoverErr == nil || !failoverErr.RequestScopedTransient {
+func (s *OpenAIGatewayService) recordOpenAICapacityShedFailure(ctx context.Context, account *Account, signal, eventName string) {
+	if s == nil || account == nil || account.Platform != PlatformOpenAI {
 		return
 	}
 	state := s.getOpenAICapacityShedState()
@@ -179,8 +174,12 @@ func (s *OpenAIGatewayService) RecordOpenAICapacityShedRetryExhausted(ctx contex
 		return
 	}
 	decision := state.recordFailure(account.ID, time.Now())
-	slog.Warn("openai_capacity_shed_retry_exhausted",
+	if eventName == "" {
+		eventName = "openai_capacity_shed_failure"
+	}
+	slog.Warn(eventName,
 		"account_id", account.ID,
+		"signal", signal,
 		"failure_count", decision.FailureCount,
 		"threshold", openAICapacityShedThreshold,
 		"window_seconds", int(openAICapacityShedFailureWindow.Seconds()),
@@ -202,4 +201,28 @@ func (s *OpenAIGatewayService) RecordOpenAICapacityShedRetryExhausted(ctx contex
 		cooldown = time.Duration(s.cfg.RateLimit.OverloadCooldownMinutes) * time.Minute
 	}
 	s.BlockAccountScheduling(account, time.Now().Add(cooldown), "openai_capacity_shed")
+}
+
+// RecordOpenAICapacityShedRetryExhausted records exactly one logical OpenAI
+// request after its same-account retry budget was exhausted by a capacity
+// signal. Three such logical failures inside 15 minutes use the existing
+// operator-configured overload cooldown; successes deliberately do not erase
+// the evidence in between.
+func (s *OpenAIGatewayService) RecordOpenAICapacityShedRetryExhausted(ctx context.Context, account *Account, failoverErr *UpstreamFailoverError) {
+	if s == nil || account == nil || account.Platform != PlatformOpenAI || failoverErr == nil || !failoverErr.RequestScopedTransient {
+		return
+	}
+	s.recordOpenAICapacityShedFailure(ctx, account, "retry_exhausted", "openai_capacity_shed_retry_exhausted")
+}
+
+// RecordOpenAICapacityShedTerminalFailure records a capacity failure after a
+// streamed response has already started. Replaying that request is unsafe, so
+// this only contributes to the account's later cooldown decision; it never
+// triggers a second upstream request for the current client response.
+func (s *OpenAIGatewayService) RecordOpenAICapacityShedTerminalFailure(ctx context.Context, account *Account, payload []byte, message string) {
+	if s == nil || account == nil || account.Platform != PlatformOpenAI || !isOpenAIUpstreamCapacityShedError(payload, message) {
+		return
+	}
+	s.recordOpenAIProxyCapacityShed(account)
+	s.recordOpenAICapacityShedFailure(ctx, account, "terminal_failure", "openai_capacity_shed_terminal_failure")
 }

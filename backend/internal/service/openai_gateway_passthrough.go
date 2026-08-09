@@ -1104,8 +1104,8 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
 }
 
 // recordOpenAIStreamTerminalFailure preserves a semantic error for Ops when
-// the HTTP stream is already committed as 200. It must not affect the account
-// cooldown tracker: no request-level retry can safely happen after output.
+// the HTTP stream is already committed as 200. Capacity failures also feed the
+// later account cooldown tracker, but never replay the already-started request.
 func (s *OpenAIGatewayService) recordOpenAIStreamTerminalFailure(
 	c *gin.Context,
 	account *Account,
@@ -1115,6 +1115,9 @@ func (s *OpenAIGatewayService) recordOpenAIStreamTerminalFailure(
 	message string,
 ) string {
 	message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, upstreamRequestID, "request_error", payload, message)
+	if c != nil && c.Request != nil {
+		s.RecordOpenAICapacityShedTerminalFailure(c.Request.Context(), account, payload, message)
+	}
 	statusCode := openAIStreamFailedEventSemanticStatus(payload, message)
 	if statusCode < http.StatusBadRequest {
 		statusCode = http.StatusBadGateway

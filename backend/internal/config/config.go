@@ -1025,7 +1025,7 @@ type GatewayConfig struct {
 	OpenAIScheduler GatewayOpenAISchedulerConfig `mapstructure:"openai_scheduler"`
 	// OpenAIHTTP2: OpenAI HTTP 上游协议策略（默认启用 HTTP/2，可按代理能力回退 HTTP/1.1）
 	OpenAIHTTP2 GatewayOpenAIHTTP2Config `mapstructure:"openai_http2"`
-	// OpenAIProxyStreamCircuit: Responses SSE 代理断流熔断策略。
+	// OpenAIProxyStreamCircuit: Responses 流断开与明确容量错误的代理路由熔断策略。
 	OpenAIProxyStreamCircuit GatewayOpenAIProxyStreamCircuitConfig `mapstructure:"openai_proxy_stream_circuit"`
 	// ImageConcurrency: 图片生成独立并发限制配置（默认关闭）
 	ImageConcurrency ImageConcurrencyConfig `mapstructure:"image_concurrency"`
@@ -1130,13 +1130,14 @@ type GatewayOpenAIHTTP2Config struct {
 }
 
 // GatewayOpenAIProxyStreamCircuitConfig controls the bounded, in-process
-// proxy-ID circuit used for incomplete OpenAI Responses SSE streams.
+// proxy-ID circuit used for incomplete OpenAI Responses streams and repeated
+// structured capacity failures.
 type GatewayOpenAIProxyStreamCircuitConfig struct {
-	// Disabled: 完全关闭代理断流熔断（默认开启）。
+	// Disabled: 完全关闭代理流故障熔断（默认开启）。
 	Disabled bool `mapstructure:"disabled"`
-	// FailureThreshold: 统计窗口内多少次断流后隔离代理。
+	// FailureThreshold: 统计窗口内多少次流故障或明确容量失败后隔离代理。
 	FailureThreshold int `mapstructure:"failure_threshold"`
-	// WindowSeconds: 断流统计窗口（秒）。
+	// WindowSeconds: 流故障与明确容量失败的统计窗口（秒）。
 	WindowSeconds int `mapstructure:"window_seconds"`
 	// TTLSeconds: 代理隔离持续时间（秒）。
 	TTLSeconds int `mapstructure:"ttl_seconds"`

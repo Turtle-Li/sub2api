@@ -122,6 +122,42 @@ func TestOpenAICapacityShedMessageOnlyHTTPVariants(t *testing.T) {
 	}
 }
 
+func TestOpenAICapacityShedTerminalFailuresTripCooldownWithoutReplaying(t *testing.T) {
+	repo := &capacityShedRepoStub{}
+	cfg := &config.Config{}
+	cfg.RateLimit.OverloadCooldownMinutes = 6
+	rateLimits := NewRateLimitService(repo, nil, cfg, nil, nil)
+	svc := &OpenAIGatewayService{
+		cfg:                cfg,
+		rateLimitService:   rateLimits,
+		openaiCapacityShed: newOpenAICapacityShedState(8),
+	}
+	rateLimits.SetAccountRuntimeBlocker(svc)
+	account := &Account{ID: 104, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	payload := []byte(`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`)
+
+	for i := 0; i < openAICapacityShedThreshold-1; i++ {
+		svc.RecordOpenAICapacityShedTerminalFailure(context.Background(), account, payload, "Our servers are currently overloaded. Please try again later.")
+	}
+	require.Zero(t, repo.overloadCalls, "terminal failures must wait for the repeated-failure threshold")
+	require.Equal(t, openAICapacityShedThreshold-1, svc.getOpenAICapacityShedState().failureStreak(account.ID, time.Now()))
+
+	// The threshold only changes future scheduling. It does not issue another
+	// upstream request or alter the current response body.
+	svc.RecordOpenAICapacityShedTerminalFailure(context.Background(), account, payload, "Our servers are currently overloaded. Please try again later.")
+	require.Equal(t, 1, repo.overloadCalls)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
+func TestOpenAICapacityShedTerminalFailureIgnoresGenericServerError(t *testing.T) {
+	svc := &OpenAIGatewayService{openaiCapacityShed: newOpenAICapacityShedState(8)}
+	account := &Account{ID: 105, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	payload := []byte(`{"type":"response.failed","response":{"error":{"code":"server_error","message":"temporary upstream failure"}}}`)
+
+	svc.RecordOpenAICapacityShedTerminalFailure(context.Background(), account, payload, "temporary upstream failure")
+	require.Zero(t, svc.getOpenAICapacityShedState().failureStreak(account.ID, time.Now()))
+}
+
 func TestOpenAITransientProcessingErrorDoesNotClassifyRawBodySlowDownAsCapacity(t *testing.T) {
 	body := []byte(`{"error":{"message":"invalid request body"},"request_echo":"please slow down"}`)
 	require.False(t, isOpenAITransientProcessingError(http.StatusBadRequest, "", body))
