@@ -53,7 +53,13 @@ const mountPlanCard = (groupPlatform: string, overrides: Partial<SubscriptionPla
 
 describe("SubscriptionPlanCard", () => {
   it("does not show Antigravity model scopes for OpenAI plans", () => {
-    const text = mountPlanCard("openai").text();
+    const wrapper = mountPlanCard("openai")
+    const text = wrapper.text();
+
+    expect(wrapper.classes()).toContain("payment-product-card")
+    expect(wrapper.find(".payment-product-card__body").exists()).toBe(true)
+    expect(wrapper.find(".payment-product-card__meta").exists()).toBe(true)
+    expect(wrapper.find("button").classes()).toContain("payment-product-card__action")
 
     expect(text).not.toContain("Claude");
     expect(text).not.toContain("Gemini");

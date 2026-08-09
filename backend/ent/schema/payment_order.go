@@ -98,6 +98,9 @@ func (PaymentOrder) Fields() []ent.Field {
 		field.JSON("provider_snapshot", map[string]any{}).
 			Optional().
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
+		field.JSON("product_snapshot", map[string]any{}).
+			Optional().
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
 
 		// 状态
 		field.String("status").

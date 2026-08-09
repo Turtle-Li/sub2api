@@ -710,6 +710,8 @@ export default {
         rechargeFeeRate: 'Recharge Fee Rate',
         rechargeFeeRateHint: 'Percentage of service fee charged on top of recharge amount, 0 means no fee',
         rechargeFeePreview: 'Preview: Recharge 100, fee {fee}',
+        rechargeOptions: 'Recharge Presets JSON',
+        rechargeOptionsHint: 'Each item may set amount, original_price, label, description, balance_bonus, concurrency, estimated_rate_multiplier, estimated_tokens, sort_order and enabled. Discount is derived from list price and sale amount; balance_bonus and concurrency are real entitlements, while rate and tokens are display estimates only. Empty uses defaults.',
         orderTimeout: 'Order Timeout',
         orderTimeoutHint: 'In minutes, minimum 1',
         maxPendingOrders: 'Max Pending Orders',

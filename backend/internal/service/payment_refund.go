@@ -194,6 +194,13 @@ func (s *PaymentService) validateRefundRequest(ctx context.Context, oid, uid int
 	if o.Status != OrderStatusCompleted {
 		return nil, infraerrors.BadRequest("INVALID_STATUS", "only completed orders can request refund")
 	}
+	if entitlements, err := paymentOrderEntitlementsStrict(o); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "payment order entitlement snapshot is invalid")
+	} else if paymentEntitlementsRequireManualRefund(entitlements) {
+		// Product bonuses and account upgrades are not reversible yet. A
+		// self-service refund must not leave paid benefits behind.
+		return nil, infraerrors.Forbidden("REFUND_REQUIRES_MANUAL_REVIEW", "orders with non-reversible entitlements require manual refund review")
+	}
 	// Check provider instance allows user refund
 	inst, err := s.getRefundOrderProviderInstance(ctx, o)
 	if err != nil || inst == nil {
@@ -209,6 +216,11 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return nil, nil, infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if entitlements, entitlementErr := paymentOrderEntitlementsStrict(o); entitlementErr != nil {
+		return nil, nil, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "payment order entitlement snapshot is invalid")
+	} else if paymentEntitlementsRequireManualRefund(entitlements) {
+		return nil, nil, infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "orders with non-reversible entitlements require manual entitlement rollback")
 	}
 	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundPending, OrderStatusRefundFailed}
 	if !psSliceContains(ok, o.Status) {

@@ -121,6 +121,33 @@ func TestPrepareRefundRejectsLegacyGuessedProviderInstance(t *testing.T) {
 	require.Equal(t, "REFUND_DISABLED", infraerrors.Reason(err))
 }
 
+func TestRefundRejectsOrdersWithNonReversibleEntitlements(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "non-reversible-entitlements")
+	order, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusCompleted).
+		SetProductSnapshot(map[string]interface{}{
+			"entitlements": map[string]interface{}{
+				"balance_bonus":          5.0,
+				"reset_card_count":       1,
+				"reset_card_expiry_days": 30,
+				"concurrency":            5,
+			},
+		}).Save(ctx)
+	require.NoError(t, err)
+	order, err = client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, order.ProductSnapshot)
+	require.IsType(t, map[string]interface{}{}, order.ProductSnapshot["entitlements"])
+
+	svc := &PaymentService{entClient: client}
+	_, _, err = svc.PrepareRefund(ctx, order.ID, 0, "", false, false)
+	require.Equal(t, "REFUND_REQUIRES_MANUAL_REVIEW", infraerrors.Reason(err))
+	_, err = svc.validateRefundRequest(ctx, order.ID, order.UserID)
+	require.Equal(t, "REFUND_REQUIRES_MANUAL_REVIEW", infraerrors.Reason(err))
+}
+
 func TestPrepDeductBalanceRequiresForceWhenBalanceIsInsufficient(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

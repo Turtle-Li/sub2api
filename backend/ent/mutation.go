@@ -29035,6 +29035,7 @@ type PaymentOrderMutation struct {
 	provider_instance_id     *string
 	provider_key             *string
 	provider_snapshot        *map[string]interface{}
+	product_snapshot         *map[string]interface{}
 	status                   *string
 	refund_amount            *float64
 	addrefund_amount         *float64
@@ -30169,6 +30170,55 @@ func (m *PaymentOrderMutation) ResetProviderSnapshot() {
 	delete(m.clearedFields, paymentorder.FieldProviderSnapshot)
 }
 
+// SetProductSnapshot sets the "product_snapshot" field.
+func (m *PaymentOrderMutation) SetProductSnapshot(value map[string]interface{}) {
+	m.product_snapshot = &value
+}
+
+// ProductSnapshot returns the value of the "product_snapshot" field in the mutation.
+func (m *PaymentOrderMutation) ProductSnapshot() (r map[string]interface{}, exists bool) {
+	v := m.product_snapshot
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProductSnapshot returns the old "product_snapshot" field's value of the PaymentOrder entity.
+// If the PaymentOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PaymentOrderMutation) OldProductSnapshot(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProductSnapshot is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProductSnapshot requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProductSnapshot: %w", err)
+	}
+	return oldValue.ProductSnapshot, nil
+}
+
+// ClearProductSnapshot clears the value of the "product_snapshot" field.
+func (m *PaymentOrderMutation) ClearProductSnapshot() {
+	m.product_snapshot = nil
+	m.clearedFields[paymentorder.FieldProductSnapshot] = struct{}{}
+}
+
+// ProductSnapshotCleared returns if the "product_snapshot" field was cleared in this mutation.
+func (m *PaymentOrderMutation) ProductSnapshotCleared() bool {
+	_, ok := m.clearedFields[paymentorder.FieldProductSnapshot]
+	return ok
+}
+
+// ResetProductSnapshot resets all changes to the "product_snapshot" field.
+func (m *PaymentOrderMutation) ResetProductSnapshot() {
+	m.product_snapshot = nil
+	delete(m.clearedFields, paymentorder.FieldProductSnapshot)
+}
+
 // SetStatus sets the "status" field.
 func (m *PaymentOrderMutation) SetStatus(s string) {
 	m.status = &s
@@ -31028,7 +31078,7 @@ func (m *PaymentOrderMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *PaymentOrderMutation) Fields() []string {
-	fields := make([]string, 0, 39)
+	fields := make([]string, 0, 40)
 	if m.user != nil {
 		fields = append(fields, paymentorder.FieldUserID)
 	}
@@ -31091,6 +31141,9 @@ func (m *PaymentOrderMutation) Fields() []string {
 	}
 	if m.provider_snapshot != nil {
 		fields = append(fields, paymentorder.FieldProviderSnapshot)
+	}
+	if m.product_snapshot != nil {
+		fields = append(fields, paymentorder.FieldProductSnapshot)
 	}
 	if m.status != nil {
 		fields = append(fields, paymentorder.FieldStatus)
@@ -31196,6 +31249,8 @@ func (m *PaymentOrderMutation) Field(name string) (ent.Value, bool) {
 		return m.ProviderKey()
 	case paymentorder.FieldProviderSnapshot:
 		return m.ProviderSnapshot()
+	case paymentorder.FieldProductSnapshot:
+		return m.ProductSnapshot()
 	case paymentorder.FieldStatus:
 		return m.Status()
 	case paymentorder.FieldRefundAmount:
@@ -31283,6 +31338,8 @@ func (m *PaymentOrderMutation) OldField(ctx context.Context, name string) (ent.V
 		return m.OldProviderKey(ctx)
 	case paymentorder.FieldProviderSnapshot:
 		return m.OldProviderSnapshot(ctx)
+	case paymentorder.FieldProductSnapshot:
+		return m.OldProductSnapshot(ctx)
 	case paymentorder.FieldStatus:
 		return m.OldStatus(ctx)
 	case paymentorder.FieldRefundAmount:
@@ -31474,6 +31531,13 @@ func (m *PaymentOrderMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetProviderSnapshot(v)
+		return nil
+	case paymentorder.FieldProductSnapshot:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProductSnapshot(v)
 		return nil
 	case paymentorder.FieldStatus:
 		v, ok := value.(string)
@@ -31748,6 +31812,9 @@ func (m *PaymentOrderMutation) ClearedFields() []string {
 	if m.FieldCleared(paymentorder.FieldProviderSnapshot) {
 		fields = append(fields, paymentorder.FieldProviderSnapshot)
 	}
+	if m.FieldCleared(paymentorder.FieldProductSnapshot) {
+		fields = append(fields, paymentorder.FieldProductSnapshot)
+	}
 	if m.FieldCleared(paymentorder.FieldRefundReason) {
 		fields = append(fields, paymentorder.FieldRefundReason)
 	}
@@ -31821,6 +31888,9 @@ func (m *PaymentOrderMutation) ClearField(name string) error {
 		return nil
 	case paymentorder.FieldProviderSnapshot:
 		m.ClearProviderSnapshot()
+		return nil
+	case paymentorder.FieldProductSnapshot:
+		m.ClearProductSnapshot()
 		return nil
 	case paymentorder.FieldRefundReason:
 		m.ClearRefundReason()
@@ -31922,6 +31992,9 @@ func (m *PaymentOrderMutation) ResetField(name string) error {
 		return nil
 	case paymentorder.FieldProviderSnapshot:
 		m.ResetProviderSnapshot()
+		return nil
+	case paymentorder.FieldProductSnapshot:
+		m.ResetProductSnapshot()
 		return nil
 	case paymentorder.FieldStatus:
 		m.ResetStatus()
@@ -39689,6 +39762,7 @@ type SubscriptionPlanMutation struct {
 	addvalidity_days  *int
 	validity_unit     *string
 	features          *string
+	entitlements      *map[string]interface{}
 	product_name      *string
 	for_sale          *bool
 	sort_order        *int
@@ -40217,6 +40291,55 @@ func (m *SubscriptionPlanMutation) ResetFeatures() {
 	m.features = nil
 }
 
+// SetEntitlements sets the "entitlements" field.
+func (m *SubscriptionPlanMutation) SetEntitlements(value map[string]interface{}) {
+	m.entitlements = &value
+}
+
+// Entitlements returns the value of the "entitlements" field in the mutation.
+func (m *SubscriptionPlanMutation) Entitlements() (r map[string]interface{}, exists bool) {
+	v := m.entitlements
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEntitlements returns the old "entitlements" field's value of the SubscriptionPlan entity.
+// If the SubscriptionPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SubscriptionPlanMutation) OldEntitlements(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEntitlements is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEntitlements requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEntitlements: %w", err)
+	}
+	return oldValue.Entitlements, nil
+}
+
+// ClearEntitlements clears the value of the "entitlements" field.
+func (m *SubscriptionPlanMutation) ClearEntitlements() {
+	m.entitlements = nil
+	m.clearedFields[subscriptionplan.FieldEntitlements] = struct{}{}
+}
+
+// EntitlementsCleared returns if the "entitlements" field was cleared in this mutation.
+func (m *SubscriptionPlanMutation) EntitlementsCleared() bool {
+	_, ok := m.clearedFields[subscriptionplan.FieldEntitlements]
+	return ok
+}
+
+// ResetEntitlements resets all changes to the "entitlements" field.
+func (m *SubscriptionPlanMutation) ResetEntitlements() {
+	m.entitlements = nil
+	delete(m.clearedFields, subscriptionplan.FieldEntitlements)
+}
+
 // SetProductName sets the "product_name" field.
 func (m *SubscriptionPlanMutation) SetProductName(s string) {
 	m.product_name = &s
@@ -40451,7 +40574,7 @@ func (m *SubscriptionPlanMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SubscriptionPlanMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 15)
 	if m.group_id != nil {
 		fields = append(fields, subscriptionplan.FieldGroupID)
 	}
@@ -40478,6 +40601,9 @@ func (m *SubscriptionPlanMutation) Fields() []string {
 	}
 	if m.features != nil {
 		fields = append(fields, subscriptionplan.FieldFeatures)
+	}
+	if m.entitlements != nil {
+		fields = append(fields, subscriptionplan.FieldEntitlements)
 	}
 	if m.product_name != nil {
 		fields = append(fields, subscriptionplan.FieldProductName)
@@ -40520,6 +40646,8 @@ func (m *SubscriptionPlanMutation) Field(name string) (ent.Value, bool) {
 		return m.ValidityUnit()
 	case subscriptionplan.FieldFeatures:
 		return m.Features()
+	case subscriptionplan.FieldEntitlements:
+		return m.Entitlements()
 	case subscriptionplan.FieldProductName:
 		return m.ProductName()
 	case subscriptionplan.FieldForSale:
@@ -40557,6 +40685,8 @@ func (m *SubscriptionPlanMutation) OldField(ctx context.Context, name string) (e
 		return m.OldValidityUnit(ctx)
 	case subscriptionplan.FieldFeatures:
 		return m.OldFeatures(ctx)
+	case subscriptionplan.FieldEntitlements:
+		return m.OldEntitlements(ctx)
 	case subscriptionplan.FieldProductName:
 		return m.OldProductName(ctx)
 	case subscriptionplan.FieldForSale:
@@ -40638,6 +40768,13 @@ func (m *SubscriptionPlanMutation) SetField(name string, value ent.Value) error 
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetFeatures(v)
+		return nil
+	case subscriptionplan.FieldEntitlements:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEntitlements(v)
 		return nil
 	case subscriptionplan.FieldProductName:
 		v, ok := value.(string)
@@ -40770,6 +40907,9 @@ func (m *SubscriptionPlanMutation) ClearedFields() []string {
 	if m.FieldCleared(subscriptionplan.FieldOriginalPrice) {
 		fields = append(fields, subscriptionplan.FieldOriginalPrice)
 	}
+	if m.FieldCleared(subscriptionplan.FieldEntitlements) {
+		fields = append(fields, subscriptionplan.FieldEntitlements)
+	}
 	return fields
 }
 
@@ -40786,6 +40926,9 @@ func (m *SubscriptionPlanMutation) ClearField(name string) error {
 	switch name {
 	case subscriptionplan.FieldOriginalPrice:
 		m.ClearOriginalPrice()
+		return nil
+	case subscriptionplan.FieldEntitlements:
+		m.ClearEntitlements()
 		return nil
 	}
 	return fmt.Errorf("unknown SubscriptionPlan nullable field %s", name)
@@ -40821,6 +40964,9 @@ func (m *SubscriptionPlanMutation) ResetField(name string) error {
 		return nil
 	case subscriptionplan.FieldFeatures:
 		m.ResetFeatures()
+		return nil
+	case subscriptionplan.FieldEntitlements:
+		m.ResetEntitlements()
 		return nil
 	case subscriptionplan.FieldProductName:
 		m.ResetProductName()

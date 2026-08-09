@@ -27,6 +27,12 @@ export function planValiditySuffix(
   if (base === 'week') {
     return `${days}${t('payment.weeks')}`
   }
+  if (base === 'quarter') {
+    return days === 1 ? t('payment.quarter') : `${days}${t('payment.quarters')}`
+  }
+  if (base === 'year') {
+    return days === 1 ? t('payment.perYear') : `${days}${t('payment.years')}`
+  }
   // 其余单位（含数据库默认的 day 与未知值）后端一律按天计费，展示保持一致。
   return `${days}${t('payment.days')}`
 }

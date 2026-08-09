@@ -61,6 +61,8 @@ type PaymentOrder struct {
 	ProviderKey *string `json:"provider_key,omitempty"`
 	// ProviderSnapshot holds the value of the "provider_snapshot" field.
 	ProviderSnapshot map[string]interface{} `json:"provider_snapshot,omitempty"`
+	// ProductSnapshot holds the value of the "product_snapshot" field.
+	ProductSnapshot map[string]interface{} `json:"product_snapshot,omitempty"`
 	// Status holds the value of the "status" field.
 	Status string `json:"status,omitempty"`
 	// RefundAmount holds the value of the "refund_amount" field.
@@ -128,7 +130,7 @@ func (*PaymentOrder) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case paymentorder.FieldProviderSnapshot:
+		case paymentorder.FieldProviderSnapshot, paymentorder.FieldProductSnapshot:
 			values[i] = new([]byte)
 		case paymentorder.FieldForceRefund:
 			values[i] = new(sql.NullBool)
@@ -296,6 +298,14 @@ func (_m *PaymentOrder) assignValues(columns []string, values []any) error {
 			} else if value != nil && len(*value) > 0 {
 				if err := json.Unmarshal(*value, &_m.ProviderSnapshot); err != nil {
 					return fmt.Errorf("unmarshal field provider_snapshot: %w", err)
+				}
+			}
+		case paymentorder.FieldProductSnapshot:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field product_snapshot", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.ProductSnapshot); err != nil {
+					return fmt.Errorf("unmarshal field product_snapshot: %w", err)
 				}
 			}
 		case paymentorder.FieldStatus:
@@ -537,6 +547,9 @@ func (_m *PaymentOrder) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("provider_snapshot=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ProviderSnapshot))
+	builder.WriteString(", ")
+	builder.WriteString("product_snapshot=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ProductSnapshot))
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(_m.Status)

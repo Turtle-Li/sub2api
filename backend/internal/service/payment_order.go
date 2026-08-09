@@ -59,7 +59,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		orderAmount = plan.Price
 		limitAmount = plan.Price
 	} else if req.OrderType == payment.OrderTypeBalance {
-		orderAmount = calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
+		orderAmount = calculateRechargeCreditedAmount(req.Amount, cfg.BalanceRechargeMultiplier, cfg.RechargeOptions)
 	}
 	feeRate := cfg.RechargeFeeRate
 	methodCurrency := payment.DefaultPaymentCurrency
@@ -127,6 +127,11 @@ func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrder
 	if (cfg.MinAmount > 0 && req.Amount < cfg.MinAmount) || (cfg.MaxAmount > 0 && req.Amount > cfg.MaxAmount) {
 		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "amount out of range").
 			WithMetadata(map[string]string{"min": fmt.Sprintf("%.2f", cfg.MinAmount), "max": fmt.Sprintf("%.2f", cfg.MaxAmount)})
+	}
+	if len(EnabledRechargeOptionsForCheckout(cfg.RechargeOptions)) > 0 {
+		if _, ok := rechargeOptionForAmount(cfg.RechargeOptions, req.Amount); !ok {
+			return nil, infraerrors.BadRequest("INVALID_RECHARGE_OPTION", "amount must match an enabled recharge option")
+		}
 	}
 	return nil, nil
 }
@@ -207,7 +212,14 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		b.SetProviderSnapshot(providerSnapshot)
 	}
 	if plan != nil {
-		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID).SetSubscriptionDays(psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit))
+		subscriptionDays := psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit)
+		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID).SetSubscriptionDays(subscriptionDays)
+		b.SetProductSnapshot(buildPaymentProductSnapshot(plan, orderAmount, payAmount, subscriptionDays))
+	} else if req.OrderType == payment.OrderTypeBalance {
+		// Resolve balance entitlements only from the server-side configured
+		// preset. The client-provided amount can select a preset, but can never
+		// provide the concurrency target itself.
+		b.SetProductSnapshot(buildPaymentBalanceProductSnapshot(req.Amount, orderAmount, payAmount, cfg.RechargeOptions))
 	}
 	order, err := b.Save(ctx)
 	if err != nil {
@@ -222,6 +234,49 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		return nil, fmt.Errorf("commit order transaction: %w", err)
 	}
 	return order, nil
+}
+
+func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount float64, options []RechargeOption) map[string]interface{} {
+	option, _ := rechargeOptionForAmount(options, requestAmount)
+	return map[string]interface{}{
+		"kind":                      "balance",
+		"label":                     option.Label,
+		"description":               option.Description,
+		"request_amount":            requestAmount,
+		"list_price":                option.OriginalPrice,
+		"price":                     requestAmount,
+		"discount_percent":          rechargeOptionDiscountPercent(option),
+		"credited_amount":           creditedAmount,
+		"pay_amount":                payAmount,
+		"estimated_rate_multiplier": option.EstimatedRateMultiplier,
+		"estimated_tokens":          option.EstimatedTokens,
+		"entitlements": map[string]interface{}{
+			"balance_bonus": option.BalanceBonus,
+			"concurrency":   option.Concurrency,
+		},
+	}
+}
+
+func buildPaymentProductSnapshot(plan *dbent.SubscriptionPlan, orderAmount, payAmount float64, subscriptionDays int) map[string]interface{} {
+	if plan == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"kind":              "subscription",
+		"plan_id":           plan.ID,
+		"name":              plan.Name,
+		"product_name":      plan.ProductName,
+		"currency":          plan.Currency,
+		"list_price":        plan.OriginalPrice,
+		"price":             plan.Price,
+		"order_amount":      orderAmount,
+		"pay_amount":        payAmount,
+		"discount_percent":  PlanDiscountPercent(plan.Price, plan.OriginalPrice),
+		"validity_days":     plan.ValidityDays,
+		"validity_unit":     plan.ValidityUnit,
+		"subscription_days": subscriptionDays,
+		"entitlements":      plan.Entitlements,
+	}
 }
 
 func (s *PaymentService) allocateOutTradeNo(ctx context.Context, tx *dbent.Tx) (string, error) {

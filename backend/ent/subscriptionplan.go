@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -35,6 +36,8 @@ type SubscriptionPlan struct {
 	ValidityUnit string `json:"validity_unit,omitempty"`
 	// Features holds the value of the "features" field.
 	Features string `json:"features,omitempty"`
+	// Entitlements holds the value of the "entitlements" field.
+	Entitlements map[string]interface{} `json:"entitlements,omitempty"`
 	// ProductName holds the value of the "product_name" field.
 	ProductName string `json:"product_name,omitempty"`
 	// ForSale holds the value of the "for_sale" field.
@@ -53,6 +56,8 @@ func (*SubscriptionPlan) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case subscriptionplan.FieldEntitlements:
+			values[i] = new([]byte)
 		case subscriptionplan.FieldForSale:
 			values[i] = new(sql.NullBool)
 		case subscriptionplan.FieldPrice, subscriptionplan.FieldOriginalPrice:
@@ -138,6 +143,14 @@ func (_m *SubscriptionPlan) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field features", values[i])
 			} else if value.Valid {
 				_m.Features = value.String
+			}
+		case subscriptionplan.FieldEntitlements:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field entitlements", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Entitlements); err != nil {
+					return fmt.Errorf("unmarshal field entitlements: %w", err)
+				}
 			}
 		case subscriptionplan.FieldProductName:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -233,6 +246,9 @@ func (_m *SubscriptionPlan) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("features=")
 	builder.WriteString(_m.Features)
+	builder.WriteString(", ")
+	builder.WriteString("entitlements=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Entitlements))
 	builder.WriteString(", ")
 	builder.WriteString("product_name=")
 	builder.WriteString(_m.ProductName)

@@ -1,28 +1,31 @@
 <template>
   <div
     :class="[
-      'group relative flex flex-col overflow-hidden rounded-2xl border transition-all',
-      'hover:shadow-xl hover:-translate-y-0.5',
+      'payment-product-card',
       borderClass,
-      'bg-white dark:bg-dark-800',
     ]"
   >
     <!-- Colored top accent bar -->
     <div :class="['h-1.5', accentClass]" />
 
-    <div class="flex flex-1 flex-col p-4">
+    <div class="payment-product-card__body">
       <!-- Header: name + badge + price -->
       <div class="mb-3 flex items-start justify-between gap-2">
         <div class="min-w-0 flex-1">
+          <div class="mb-2 flex flex-wrap items-center gap-1.5">
+            <span class="text-[11px] font-medium text-gray-400 dark:text-dark-500">{{ t('payment.tabSubscribe') }}</span>
+            <span v-if="periodDisplay" class="text-[11px] font-medium text-gray-400 dark:text-dark-500">{{ periodDisplay }}</span>
+          </div>
           <h3
             :title="plan.name"
             class="h-12 min-w-0 break-words [overflow-wrap:anywhere] text-base font-bold leading-6 text-gray-900 dark:text-white line-clamp-2"
           >
             {{ plan.name }}
           </h3>
-          <p v-if="plan.description" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400 line-clamp-2">
+          <p v-if="plan.description" class="mt-1 min-h-10 text-xs leading-relaxed text-gray-500 dark:text-dark-400 line-clamp-2">
             {{ plan.description }}
           </p>
+          <div v-else class="mt-1 min-h-10" aria-hidden="true" />
         </div>
         <div class="shrink-0 text-right">
           <div class="flex items-baseline gap-1">
@@ -38,13 +41,13 @@
           </div>
           <div v-if="plan.original_price" class="mt-0.5 flex items-center justify-end gap-1.5">
             <span class="text-xs text-gray-400 line-through dark:text-dark-500">{{ planCurrencySymbol }}{{ plan.original_price }}<template v-if="plan.currency"> {{ plan.currency }}</template></span>
-            <span :class="['rounded px-1 py-0.5 text-[10px] font-semibold', discountClass]">{{ discountText }}</span>
+            <span :class="['rounded-full px-1.5 py-0.5 text-[10px] font-bold', discountClass]">{{ discountText }}</span>
           </div>
         </div>
       </div>
 
       <!-- Group quota info (compact) -->
-      <div class="mb-3 grid grid-cols-2 gap-x-3 gap-y-1 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-dark-700/50">
+      <div class="payment-product-card__meta gap-y-1">
         <div class="flex items-center justify-between">
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.rate') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">{{ rateDisplay }}</span>
@@ -90,12 +93,19 @@
         </div>
       </div>
 
+      <div v-if="hasEntitlements" class="payment-product-card__benefits space-y-1 border border-emerald-100 bg-emerald-50/60 dark:border-emerald-900/40 dark:bg-emerald-950/20">
+        <p v-if="plan.entitlements?.balance_bonus" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ plan.entitlements.balance_bonus.toFixed(2) }} {{ t('payment.entitlements.balanceBonus') }}</p>
+        <p v-if="plan.entitlements?.reset_card_count" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ plan.entitlements.reset_card_count }} {{ t('payment.entitlements.resetCards', { days: plan.entitlements.reset_card_expiry_days }) }}</p>
+        <p v-if="plan.entitlements?.concurrency" class="font-medium text-emerald-700 dark:text-emerald-300">{{ t('payment.entitlements.concurrency', { count: plan.entitlements.concurrency }) }}</p>
+        <p v-if="plan.entitlements?.message" class="text-emerald-700/80 dark:text-emerald-300/80">{{ plan.entitlements.message }}</p>
+      </div>
+
       <div class="flex-1" />
 
       <!-- Subscribe Button -->
       <button
         type="button"
-        :class="['w-full rounded-xl py-2.5 text-sm font-semibold transition-all active:scale-[0.98]', btnClass]"
+        :class="['payment-product-card__action', btnClass]"
         @click="emit('select', plan)"
       >
         {{ isRenewal ? t('payment.renewNow') : t('payment.subscribeNow') }}
@@ -143,10 +153,24 @@ const btnClass = computed(() => platformButtonClass(platform.value))
 const discountClass = computed(() => platformDiscountClass(platform.value))
 const pLabel = computed(() => platformLabel(platform.value))
 
+const periodDisplay = computed(() => {
+  const label = String(props.plan.period_label || '').trim().toLowerCase()
+  if (label === 'quarter') return t('payment.periods.quarter')
+  if (label === 'year') return t('payment.periods.year')
+  if (label === 'month') return t('payment.periods.month')
+  return ''
+})
+
 const discountText = computed(() => {
+  if (props.plan.discount_percent && props.plan.discount_percent > 0) return `-${Math.round(props.plan.discount_percent)}%`
   if (!props.plan.original_price || props.plan.original_price <= 0) return ''
   const pct = Math.round((1 - props.plan.price / props.plan.original_price) * 100)
   return pct > 0 ? `-${pct}%` : ''
+})
+
+const hasEntitlements = computed(() => {
+  const entitlements = props.plan.entitlements
+  return Boolean(entitlements && (entitlements.balance_bonus > 0 || entitlements.reset_card_count > 0 || entitlements.concurrency > 0 || entitlements.message))
 })
 
 const rateDisplay = computed(() => {

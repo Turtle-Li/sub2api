@@ -31,6 +31,8 @@ const (
 	FieldValidityUnit = "validity_unit"
 	// FieldFeatures holds the string denoting the features field in the database.
 	FieldFeatures = "features"
+	// FieldEntitlements holds the string denoting the entitlements field in the database.
+	FieldEntitlements = "entitlements"
 	// FieldProductName holds the string denoting the product_name field in the database.
 	FieldProductName = "product_name"
 	// FieldForSale holds the string denoting the for_sale field in the database.
@@ -57,6 +59,7 @@ var Columns = []string{
 	FieldValidityDays,
 	FieldValidityUnit,
 	FieldFeatures,
+	FieldEntitlements,
 	FieldProductName,
 	FieldForSale,
 	FieldSortOrder,

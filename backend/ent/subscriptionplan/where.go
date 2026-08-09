@@ -619,6 +619,16 @@ func FeaturesContainsFold(v string) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldContainsFold(FieldFeatures, v))
 }
 
+// EntitlementsIsNil applies the IsNil predicate on the "entitlements" field.
+func EntitlementsIsNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIsNull(FieldEntitlements))
+}
+
+// EntitlementsNotNil applies the NotNil predicate on the "entitlements" field.
+func EntitlementsNotNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldEntitlements))
+}
+
 // ProductNameEQ applies the EQ predicate on the "product_name" field.
 func ProductNameEQ(v string) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldProductName, v))

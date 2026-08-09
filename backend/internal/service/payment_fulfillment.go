@@ -334,6 +334,10 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 
 	switch action {
 	case redeemActionSkipCompleted:
+		if err := grantPaymentOrderConcurrency(ctx, s.entClient, o); err != nil {
+			return err
+		}
+		s.invalidatePaymentAuthCache(ctx, o.UserID)
 		if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
 			return err
 		}
@@ -350,6 +354,10 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 	if _, err := s.redeemService.Redeem(ContextSkipRedeemAffiliate(ctx), o.UserID, o.RechargeCode); err != nil {
 		return fmt.Errorf("redeem balance: %w", err)
 	}
+	if err := grantPaymentOrderConcurrency(ctx, s.entClient, o); err != nil {
+		return err
+	}
+	s.invalidatePaymentAuthCache(ctx, o.UserID)
 	if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
 		return err
 	}
@@ -411,9 +419,11 @@ func (s *PaymentService) dispatchPaymentFulfillmentNotification(o *dbent.Payment
 
 func (s *PaymentService) sendBalanceRechargeSuccessNotification(ctx context.Context, o *dbent.PaymentOrder) error {
 	currentBalance := ""
+	currentConcurrency := ""
 	if s.userRepo != nil {
 		if user, err := s.userRepo.GetByID(ctx, o.UserID); err == nil && user != nil {
 			currentBalance = fmt.Sprintf("%.2f", user.Balance)
+			currentConcurrency = strconv.Itoa(user.Concurrency)
 		}
 	}
 	return s.notificationEmailService.Send(ctx, NotificationEmailSendInput{
@@ -426,6 +436,7 @@ func (s *PaymentService) sendBalanceRechargeSuccessNotification(ctx context.Cont
 		Variables: map[string]string{
 			"recharge_amount": fmt.Sprintf("%.2f", o.Amount),
 			"current_balance": currentBalance,
+			"concurrency":     currentConcurrency,
 			"order_id":        strconv.FormatInt(o.ID, 10),
 		},
 	})
@@ -436,8 +447,14 @@ func (s *PaymentService) sendSubscriptionPurchaseSuccessNotification(ctx context
 		"subscription_group": "Subscription",
 		"subscription_days":  "",
 		"expiry_time":        "",
+		"balance_bonus":      "0.00",
+		"reset_card_count":   "0",
+		"concurrency":        strconv.Itoa(paymentOrderEntitlements(o).Concurrency),
 		"order_id":           strconv.FormatInt(o.ID, 10),
 	}
+	entitlements := paymentOrderEntitlements(o)
+	variables["balance_bonus"] = fmt.Sprintf("%.2f", entitlements.BalanceBonus)
+	variables["reset_card_count"] = strconv.Itoa(entitlements.ResetCardCount)
 	if o.SubscriptionDays != nil {
 		variables["subscription_days"] = strconv.Itoa(*o.SubscriptionDays)
 	}
@@ -573,6 +590,9 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	} else {
 		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", groupID)
 	}
+	if err := grantPaymentProductEntitlements(txCtx, txClient, o, groupID); err != nil {
+		return err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit subscription fulfillment tx: %w", err)
@@ -580,9 +600,205 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	// Assignment cache invalidation is deferred while this transaction is open,
 	// then performed synchronously against the committed subscription.
 	if err := s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID); err != nil {
-		return fmt.Errorf("invalidate subscription cache after fulfillment: %w", err)
+		// The entitlement transaction has already committed. Cache convergence is
+		// recoverable; returning an error here would incorrectly mark a paid,
+		// fulfilled order as FAILED and make retries loop on Redis outages.
+		slog.Warn("subscription cache invalidation after payment fulfillment failed", "orderID", o.ID, "userID", o.UserID, "groupID", groupID, "err", err)
+	}
+	s.invalidatePaymentAuthCache(ctx, o.UserID)
+	return nil
+}
+
+func (s *PaymentService) invalidatePaymentAuthCache(ctx context.Context, userID int64) {
+	if s != nil && s.authCacheInvalidator != nil && userID > 0 {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+}
+
+func grantPaymentProductEntitlements(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, groupID int64) error {
+	if order == nil || client == nil {
+		return nil
+	}
+	claimed, err := client.PaymentAuditLog.Query().
+		Where(
+			paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+			paymentauditlog.ActionEQ("SUBSCRIPTION_BENEFITS_GRANTED"),
+		).
+		Limit(1).Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("check subscription benefits audit: %w", err)
+	}
+	if claimed {
+		return nil
+	}
+
+	entitlements, err := paymentOrderEntitlementsStrict(order)
+	if err != nil {
+		return err
+	}
+	if entitlements.BalanceBonus <= 0 && entitlements.ResetCardCount <= 0 && entitlements.Concurrency <= 0 {
+		return nil
+	}
+	if entitlements.Concurrency > 0 {
+		if err := setPaymentUserConcurrencyAtLeast(ctx, client, order.UserID, entitlements.Concurrency); err != nil {
+			return fmt.Errorf("grant subscription concurrency: %w", err)
+		}
+	}
+	if entitlements.BalanceBonus > 0 {
+		if err := client.User.UpdateOneID(order.UserID).
+			AddBalance(entitlements.BalanceBonus).
+			AddTotalRecharged(entitlements.BalanceBonus).
+			Exec(ctx); err != nil {
+			return fmt.Errorf("grant subscription balance bonus: %w", err)
+		}
+	}
+	if entitlements.ResetCardCount > 0 {
+		now := time.Now()
+		expiresAt := now.Add(time.Duration(entitlements.ResetCardExpiryDays) * 24 * time.Hour)
+		rows, err := client.QueryContext(ctx, `
+			INSERT INTO subscription_reset_grants (
+				subscription_id, user_id, group_id, quantity, used_count,
+				expires_at, issued_by, created_at, updated_at
+			)
+			SELECT us.id, us.user_id, us.group_id, $3, 0, $4, NULL, $5, $5
+			FROM user_subscriptions us
+			WHERE us.user_id = $1 AND us.group_id = $2
+				AND us.deleted_at IS NULL AND us.status = 'active' AND us.expires_at > $5
+			RETURNING id
+		`, order.UserID, groupID, entitlements.ResetCardCount, expiresAt, now)
+		if err != nil {
+			return fmt.Errorf("grant subscription reset cards: %w", err)
+		}
+		var grantID int64
+		if rows.Next() {
+			if err := rows.Scan(&grantID); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan subscription reset card grant: %w", err)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("iterate subscription reset card grant: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close subscription reset card grant: %w", err)
+		}
+		if grantID == 0 {
+			return fmt.Errorf("subscription reset card recipient is unavailable")
+		}
+	}
+	detail, _ := json.Marshal(map[string]any{
+		"balanceBonus":   entitlements.BalanceBonus,
+		"resetCardCount": entitlements.ResetCardCount,
+		"concurrency":    entitlements.Concurrency,
+	})
+	if _, err := client.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(order.ID, 10)).
+		SetAction("SUBSCRIPTION_BENEFITS_GRANTED").
+		SetDetail(string(detail)).
+		SetOperator("system").
+		Save(ctx); err != nil {
+		return fmt.Errorf("record subscription benefits audit: %w", err)
 	}
 	return nil
+}
+
+// grantPaymentOrderConcurrency applies a balance-order concurrency target in
+// its own transaction. The audit row and user update commit together, so a
+// crash can only leave a retryable order; the monotonic target update is safe
+// to repeat and safe if callbacks for different tiers arrive out of order.
+func grantPaymentOrderConcurrency(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder) error {
+	if client == nil || order == nil {
+		return nil
+	}
+	entitlements, err := paymentOrderEntitlementsStrict(order)
+	if err != nil {
+		return err
+	}
+	if entitlements.Concurrency <= 0 {
+		return nil
+	}
+	tx, err := client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin balance concurrency tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	claimed, err := tx.Client().PaymentAuditLog.Query().
+		Where(
+			paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+			paymentauditlog.ActionEQ("PAYMENT_CONCURRENCY_GRANTED"),
+		).
+		Limit(1).Exist(txCtx)
+	if err != nil {
+		return fmt.Errorf("check payment concurrency audit: %w", err)
+	}
+	if claimed {
+		return tx.Commit()
+	}
+	if err := setPaymentUserConcurrencyAtLeast(txCtx, tx.Client(), order.UserID, entitlements.Concurrency); err != nil {
+		return fmt.Errorf("grant balance concurrency: %w", err)
+	}
+	detail, _ := json.Marshal(map[string]any{"concurrency": entitlements.Concurrency})
+	if _, err := tx.Client().PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(order.ID, 10)).
+		SetAction("PAYMENT_CONCURRENCY_GRANTED").
+		SetDetail(string(detail)).
+		SetOperator("system").Save(txCtx); err != nil {
+		return fmt.Errorf("record balance concurrency audit: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit balance concurrency tx: %w", err)
+	}
+	return nil
+}
+
+// setPaymentUserConcurrencyAtLeast is atomic and monotonic: a paid target may
+// raise the account cap, but a late callback for a lower tier must never reduce
+// an administrator-set or later-purchased higher cap.
+func setPaymentUserConcurrencyAtLeast(ctx context.Context, client *dbent.Client, userID int64, target int) error {
+	if client == nil || userID <= 0 || target <= 0 {
+		return nil
+	}
+	result, err := client.ExecContext(ctx, `
+		UPDATE users
+		SET concurrency = CASE WHEN concurrency < $1 THEN $1 ELSE concurrency END
+		WHERE id = $2
+	`, target, userID)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("user %d not found while updating concurrency", userID)
+	}
+	return nil
+}
+
+func paymentOrderEntitlements(order *dbent.PaymentOrder) PlanEntitlements {
+	entitlements, _ := paymentOrderEntitlementsStrict(order)
+	return entitlements
+}
+
+func paymentOrderEntitlementsStrict(order *dbent.PaymentOrder) (PlanEntitlements, error) {
+	if order == nil || order.ProductSnapshot == nil {
+		return PlanEntitlements{}, nil
+	}
+	raw, ok := order.ProductSnapshot["entitlements"].(map[string]interface{})
+	if !ok {
+		if _, exists := order.ProductSnapshot["entitlements"]; !exists {
+			return PlanEntitlements{}, nil
+		}
+		return PlanEntitlements{}, fmt.Errorf("invalid payment order entitlement snapshot")
+	}
+	_, entitlements, err := normalizePlanEntitlements(raw)
+	if err != nil {
+		return PlanEntitlements{}, fmt.Errorf("decode payment order entitlements: %w", err)
+	}
+	return entitlements, nil
 }
 
 func hasPaymentSubscriptionAssignmentAudit(ctx context.Context, client *dbent.Client, orderID int64) (bool, error) {

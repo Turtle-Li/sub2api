@@ -64,6 +64,9 @@ Configure the following in Admin Dashboard **Settings → Payment Settings**:
 | **Order Timeout** | Order timeout in minutes (minimum 1) | 30 |
 | **Max Pending Orders** | Maximum concurrent pending orders per user | 3 |
 | **Load Balance Strategy** | Strategy for selecting provider instances | Round Robin |
+| **Recharge Presets** | Fixed recharge amounts and entitlements (JSON array): `amount`, `original_price`, `label`, `description`, `balance_bonus`, `concurrency`, `estimated_rate_multiplier`, `estimated_tokens`, `sort_order`, `enabled` | Empty (compatible fallback presets) |
+
+Recharge presets are fixed tiers; users cannot enter a custom amount. The server derives the discount from `original_price` and `amount`. `balance_bonus` (extra balance after the global multiplier) and `concurrency` (user concurrency target) are real fulfillment entitlements. `estimated_rate_multiplier` and `estimated_tokens` are display-only estimates. When enabled tiers exist, the server accepts only their exact amounts.
 
 ### Frontend Visible Method Routing
 
@@ -99,6 +102,18 @@ Prevents users from repeatedly creating and canceling orders:
 |---------|-------------|
 | **Help Image** | Customer service QR code or help image (supports upload) |
 | **Help Text** | Instructions displayed on the payment page |
+
+### Subscription Products, Discounts, and Entitlements
+
+In **Payment Management → Subscription Plans**, administrators can create multiple saleable plans and
+configure list/final price (strikethrough price and discount), day/week/month/quarter/year validity,
+features, bonus balance, and reset-card grants. Quarters and years are currently fulfilled as fixed
+90/365-day periods; automatic renewal is not included.
+
+An order captures an immutable product, price, period, and entitlement snapshot. After payment, the
+server activates the subscription and grants each configured benefit in the same fulfillment transaction
+with idempotent audit actions, so webhook retries and manual retries cannot duplicate a grant. See
+[`PAYMENT_COMMERCE_DESIGN.md`](PAYMENT_COMMERCE_DESIGN.md) for the full contract and future coupon boundary.
 
 ---
 
@@ -237,7 +252,7 @@ User selects amount and payment method
   Webhook callback verified → Order PAID
        │
        ▼
-  Auto top-up to user balance → Order COMPLETED
+  Balance order: credit balance; subscription order: activate plan and grant benefits → Order COMPLETED
 ```
 
 ### Order Status Reference
@@ -246,7 +261,7 @@ User selects amount and payment method
 |--------|-------------|
 | `PENDING` | Waiting for user to complete payment |
 | `PAID` | Payment confirmed, awaiting balance credit |
-| `COMPLETED` | Balance credited successfully |
+| `COMPLETED` | Balance credited or subscription benefits granted successfully |
 | `EXPIRED` | Timed out without payment |
 | `CANCELLED` | Cancelled by user |
 | `FAILED` | Balance credit failed, admin can retry |
@@ -274,7 +289,7 @@ If you previously used [Sub2ApiPay](https://github.com/touwaeriol/sub2apipay) as
 | Payment Methods | EasyPay, Alipay, WeChat, Stripe | Same |
 | Configuration | Environment variables + separate admin UI | Unified in Sub2API admin dashboard |
 | Top-up Integration | Via Admin API callback | Internal processing, more reliable |
-| Subscription Plans | Supported | Not yet (planned) |
+| Subscription Plans | Supported | Multiple plans, static discounts, quarter/year periods, and purchase benefits |
 | Order Management | Separate admin interface | Integrated in Sub2API admin dashboard |
 
 ### Migration Steps

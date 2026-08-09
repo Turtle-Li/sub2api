@@ -109,6 +109,7 @@ function checkoutInfoFixture(overrides: Partial<CheckoutInfoResponse> = {}) {
     balance_recharge_multiplier: 1,
     subscription_usd_to_cny_rate: 0,
     recharge_fee_rate: 0,
+    recharge_options: [],
     help_text: '',
     help_image_url: '',
     stripe_publishable_key: '',
@@ -291,6 +292,37 @@ describe('PaymentView subscription plan grid', () => {
       'lg:grid-cols-3',
     ]))
   })
+
+  it('defaults to quarterly plans and switches the visible set to annual plans', async () => {
+    routeState.path = '/purchase'
+    routeState.query = { tab: 'subscription' }
+    const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({
+      plans: [
+        { ...basePlan, id: 1, name: '季度基础', period_label: 'quarter', discount_percent: 12 },
+        { ...basePlan, id: 2, name: '季度专业', period_label: 'quarter', discount_percent: 18 },
+        { ...basePlan, id: 3, name: '年度基础', period_label: 'year', discount_percent: 24 },
+      ],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(2)
+    const annualTab = wrapper.findAll('button').find(button => button.text().includes('payment.periods.year'))
+    expect(annualTab).toBeDefined()
+    await annualTab!.trigger('click')
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(1)
+  })
 })
 
 describe('PaymentView subscription confirmation amounts', () => {
@@ -451,6 +483,64 @@ describe('PaymentView desktop deep links', () => {
     await flushPromises()
 
     expect(wrapper.findComponent(AmountInput).props('modelValue')).toBe(200)
+  })
+
+  it('uses enabled recharge presets returned by the server', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_options: [
+        { amount: 120, label: 'Popular', sort_order: 20, enabled: true },
+        { amount: 30, label: 'Starter', sort_order: 10, enabled: true },
+        { amount: 50, label: 'Hidden', sort_order: 5, enabled: false },
+      ],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const amountInput = wrapper.findComponent(AmountInput)
+    expect(amountInput.props('amounts')).toEqual([30, 120])
+    expect(amountInput.props('modelValue')).toBe(30)
+    expect(amountInput.props('options')).toEqual([
+      { amount: 30, label: 'Starter', sort_order: 10, enabled: true },
+      { amount: 120, label: 'Popular', sort_order: 20, enabled: true },
+    ])
+  })
+
+  it('ignores a desktop recharge amount that is not one of the configured tiers', async () => {
+    routeState.query = {
+      source: 'desktop',
+      tab: 'recharge',
+      amount: '200',
+    }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_options: [
+        { amount: 30, label: 'Starter', sort_order: 10, enabled: true },
+        { amount: 120, label: 'Popular', sort_order: 20, enabled: true },
+      ],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.findComponent(AmountInput).props('modelValue')).toBe(30)
   })
 })
 

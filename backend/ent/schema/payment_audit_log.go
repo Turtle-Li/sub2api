@@ -50,5 +50,9 @@ func (PaymentAuditLog) Fields() []ent.Field {
 func (PaymentAuditLog) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("order_id"),
+		// Payment fulfillment uses (order_id, action) as the durable idempotency
+		// key. Keep Ent's generated schema aligned with migration 131 so new
+		// environments cannot silently lose the uniqueness guarantee.
+		index.Fields("order_id", "action").Unique(),
 	}
 }
