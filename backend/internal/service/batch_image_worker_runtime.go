@@ -78,12 +78,15 @@ func (r *BatchImageWorkerRuntime) Start() {
 	r.cancel = cancel
 	r.done = done
 
+	workerConcurrency := r.workerConcurrency()
 	var wg sync.WaitGroup
-	wg.Add(4)
-	go func() {
-		defer wg.Done()
-		r.worker.Run(ctx)
-	}()
+	wg.Add(workerConcurrency + 3)
+	for range workerConcurrency {
+		go func() {
+			defer wg.Done()
+			r.worker.Run(ctx)
+		}()
+	}
 	go func() {
 		defer wg.Done()
 		r.worker.RunDelayedMover(ctx)
@@ -100,6 +103,16 @@ func (r *BatchImageWorkerRuntime) Start() {
 		wg.Wait()
 		close(done)
 	}()
+}
+
+func (r *BatchImageWorkerRuntime) workerConcurrency() int {
+	if r == nil || r.cfg == nil || r.cfg.BatchImage.WorkerConcurrency <= 0 {
+		return 1
+	}
+	if r.cfg.BatchImage.WorkerConcurrency > config.BatchImageWorkerConcurrencyMax {
+		return config.BatchImageWorkerConcurrencyMax
+	}
+	return r.cfg.BatchImage.WorkerConcurrency
 }
 
 func (r *BatchImageWorkerRuntime) runBillingRecovery(ctx context.Context) {

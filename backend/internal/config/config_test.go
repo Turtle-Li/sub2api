@@ -1921,6 +1921,22 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.image_concurrency.max_waiting_requests must be non-negative",
 		},
 		{
+			name: "batch image worker concurrency zero",
+			mutate: func(c *Config) {
+				c.BatchImage.QueueEnabled = true
+				c.BatchImage.WorkerConcurrency = 0
+			},
+			wantErr: "batch_image.worker_concurrency must be between 1 and 16",
+		},
+		{
+			name: "batch image worker concurrency too high",
+			mutate: func(c *Config) {
+				c.BatchImage.QueueEnabled = true
+				c.BatchImage.WorkerConcurrency = 17
+			},
+			wantErr: "batch_image.worker_concurrency must be between 1 and 16",
+		},
+		{
 			name:    "gateway max line size",
 			mutate:  func(c *Config) { c.Gateway.MaxLineSize = 1024 },
 			wantErr: "gateway.max_line_size must be at least",
@@ -2562,5 +2578,8 @@ func TestLoad_DefaultBatchImagePromptLimit(t *testing.T) {
 			"batch_image.max_prompt_chars_per_item = %d, want 24000",
 			cfg.BatchImage.MaxPromptCharsPerItem,
 		)
+	}
+	if cfg.BatchImage.WorkerConcurrency != 1 {
+		t.Fatalf("batch_image.worker_concurrency = %d, want 1", cfg.BatchImage.WorkerConcurrency)
 	}
 }

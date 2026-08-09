@@ -41,4 +41,17 @@ do
   check_application_security_opt "$compose_file"
 done
 
+production_compose=deploy/docker-compose.yml
+for required_line in \
+  'GATEWAY_IMAGE_CONCURRENCY_ENABLED=${GATEWAY_IMAGE_CONCURRENCY_ENABLED:-true}' \
+  'GATEWAY_IMAGE_CONCURRENCY_MAX_CONCURRENT_REQUESTS=${GATEWAY_IMAGE_CONCURRENCY_MAX_CONCURRENT_REQUESTS:-16}' \
+  'GATEWAY_IMAGE_CONCURRENCY_OVERFLOW_MODE=${GATEWAY_IMAGE_CONCURRENCY_OVERFLOW_MODE:-wait}' \
+  'BATCH_IMAGE_WORKER_CONCURRENCY=${BATCH_IMAGE_WORKER_CONCURRENCY:-2}'
+do
+  grep -Fqx "      - ${required_line}" "$production_compose" || {
+    printf '%s is missing production backpressure setting: %s\n' "$production_compose" "$required_line" >&2
+    exit 1
+  }
+done
+
 printf 'docker compose security test passed\n'

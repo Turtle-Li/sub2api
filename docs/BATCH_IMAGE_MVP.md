@@ -187,7 +187,11 @@ traverse the Sub2 host.
 
 Redis is used for wakeups, retries, worker coordination, per-job locks, and download limiting. PostgreSQL remains the source of truth.
 
-`batch_image.queue_enabled` defaults to `false`. When it is set to `true`, app startup starts `BatchImageWorker` runtime loops for the Redis ready queue, delayed queue mover, and stale active recovery. The worker reserves jobs from the Redis ready queue and blocks there when no job is available.
+`batch_image.queue_enabled` defaults to `false`. When it is set to `true`, app startup starts `batch_image.worker_concurrency` independent `BatchImageWorker` consumers plus one delayed queue mover and one stale active recovery loop. The worker count defaults to `1` and is validated in the range `1..16`. Each consumer reserves jobs from the Redis ready queue and keeps the existing per-job Redis lock and heartbeat while Provider I/O is in flight.
+
+Size the worker count against both the upstream account concurrency and the host budget. On the current 2 vCPU production shape, start at `2`; raising it beyond the available Gemini/Vertex account concurrency only increases queue and database pressure without adding throughput.
+
+The production Compose file also enables the process-local synchronous image gate at `16` requests with `wait` overflow and `100` waiting entries. This is a host backpressure limit for image response bodies, not a Provider quota: Gemini account slots and image2 account slots are still selected by the Redis/DB account scheduler.
 
 Redis structures:
 
@@ -342,6 +346,7 @@ batch_image:
   recovery_interval_seconds: 300
   delayed_move_limit: 100
   recover_limit: 100
+  worker_concurrency: 1
 
   vertex_enabled: false
   vertex_project_id: ""

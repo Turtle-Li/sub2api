@@ -219,9 +219,12 @@ type BatchImageConfig struct {
 	RecoveryIntervalSeconds           int    `mapstructure:"recovery_interval_seconds"`
 	DelayedMoveLimit                  int    `mapstructure:"delayed_move_limit"`
 	RecoverLimit                      int    `mapstructure:"recover_limit"`
-	VertexEnabled                     bool   `mapstructure:"vertex_enabled"`
-	VertexProjectID                   string `mapstructure:"vertex_project_id"`
-	VertexLocation                    string `mapstructure:"vertex_location"`
+	// WorkerConcurrency controls independent Redis queue consumers in this
+	// process. Each consumer still owns a durable per-job lock.
+	WorkerConcurrency int    `mapstructure:"worker_concurrency"`
+	VertexEnabled     bool   `mapstructure:"vertex_enabled"`
+	VertexProjectID   string `mapstructure:"vertex_project_id"`
+	VertexLocation    string `mapstructure:"vertex_location"`
 	// VertexManagedGCSBucket is a server-owned bucket for batch JSONL input/output.
 	// Disable Cloud Storage soft delete on this bucket to avoid retaining deleted batch objects.
 	VertexManagedGCSBucket       string `mapstructure:"vertex_managed_gcs_bucket"`
@@ -248,6 +251,10 @@ type BatchImageConfig struct {
 	DeliveryCOSPrefix           string `mapstructure:"delivery_cos_prefix"`
 	DeliveryCOSForcePathStyle   bool   `mapstructure:"delivery_cos_force_path_style"`
 }
+
+// BatchImageWorkerConcurrencyMax is the process-level safety ceiling. Larger
+// values belong in horizontal scaling, not an unbounded in-process fan-out.
+const BatchImageWorkerConcurrencyMax = 16
 
 // ImageStorageConfig 配置异步图片任务结果上传的 S3 兼容对象存储。
 // Enabled 同时作为异步图片任务功能的总开关：未启用或未配置完整凭证时，
@@ -2179,6 +2186,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.recovery_interval_seconds", 300)
 	viper.SetDefault("batch_image.delayed_move_limit", 100)
 	viper.SetDefault("batch_image.recover_limit", 100)
+	viper.SetDefault("batch_image.worker_concurrency", 1)
 	viper.SetDefault("batch_image.vertex_enabled", false)
 	viper.SetDefault("batch_image.vertex_project_id", "")
 	viper.SetDefault("batch_image.vertex_location", "global")
@@ -3088,6 +3096,12 @@ func (c *Config) Validate() error {
 		}
 		if c.BatchImage.RecoverLimit <= 0 {
 			return fmt.Errorf("batch_image.recover_limit must be positive")
+		}
+		if c.BatchImage.WorkerConcurrency <= 0 || c.BatchImage.WorkerConcurrency > BatchImageWorkerConcurrencyMax {
+			return fmt.Errorf(
+				"batch_image.worker_concurrency must be between 1 and %d",
+				BatchImageWorkerConcurrencyMax,
+			)
 		}
 	}
 	if c.BatchImage.VertexEnabled {
