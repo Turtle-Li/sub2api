@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
@@ -33,10 +34,14 @@ const (
 	codexFingerprintFull codexFingerprintMode = "full"
 )
 
-const codexFingerprintModeExtraKey = "codex_fingerprint_mode"
+const (
+	codexFingerprintModeExtraKey  = "codex_fingerprint_mode"
+	codexFingerprintIDsContextKey = "codex_fingerprint_ids"
+)
 
 // GetCodexFingerprintMode 从账号 extra JSON 读取指纹收敛模式。
-// 未设置时默认 session（设备+会话收敛），显式设为 "off" 才关闭。
+// 未设置或无效时默认关闭。这样不会在升级后改变既有 OAuth 账号的会话边界，
+// 管理员必须显式选择某个收敛模式才会生效。
 func (a *Account) GetCodexFingerprintMode() codexFingerprintMode {
 	if a == nil || !a.IsOpenAIOAuth() {
 		return codexFingerprintOff
@@ -46,7 +51,7 @@ func (a *Account) GetCodexFingerprintMode() codexFingerprintMode {
 	case codexFingerprintOff, codexFingerprintDevice, codexFingerprintSession, codexFingerprintFull:
 		return codexFingerprintMode(raw)
 	default:
-		return codexFingerprintSession
+		return codexFingerprintOff
 	}
 }
 
@@ -99,6 +104,7 @@ func resolveConvergedThreadID(account *Account, clientSessionID string) string {
 // 由 resolveCodexFingerprintIDs 一次性生成，同一个实例在头改写和体改写之间共享，
 // 确保所有载体中的 turn_id 等随机字段一致。
 type codexFingerprintIDs struct {
+	accountID      int64
 	mode           codexFingerprintMode
 	installationID string
 	sessionID      string
@@ -117,7 +123,7 @@ func resolveCodexFingerprintIDs(account *Account, clientSessionID string, mode c
 		return nil
 	}
 
-	ids := &codexFingerprintIDs{mode: mode}
+	ids := &codexFingerprintIDs{accountID: account.ID, mode: mode}
 
 	ids.installationID = resolveConvergedInstallationID(account)
 	if ids.installationID == "" {
@@ -175,6 +181,41 @@ func resolveCodexFingerprintIDsFromRequest(account *Account, clientHeaders http.
 		clientSessionID = extractClientSessionID(clientHeaders)
 	}
 	return resolveCodexFingerprintIDs(account, clientSessionID, mode)
+}
+
+func storeCodexFingerprintIDs(c *gin.Context, ids *codexFingerprintIDs) {
+	if c == nil || ids == nil {
+		return
+	}
+	c.Set(codexFingerprintIDsContextKey, ids)
+}
+
+func codexFingerprintIDsFromContext(c *gin.Context, account *Account) *codexFingerprintIDs {
+	if c == nil {
+		return nil
+	}
+	value, ok := c.Get(codexFingerprintIDsContextKey)
+	if !ok {
+		return nil
+	}
+	ids, _ := value.(*codexFingerprintIDs)
+	if ids == nil || account == nil || ids.accountID != account.ID {
+		return nil
+	}
+	return ids
+}
+
+// resolveCodexFingerprintIDsFromContext 优先复用同一个请求中已经生成的 IDs。
+// session/full 模式包含随机 turn_id，HTTP 请求体和握手头必须共享该实例。
+func resolveCodexFingerprintIDsFromContext(account *Account, c *gin.Context) *codexFingerprintIDs {
+	if ids := codexFingerprintIDsFromContext(c, account); ids != nil {
+		return ids
+	}
+	var clientHeaders http.Header
+	if c != nil && c.Request != nil {
+		clientHeaders = c.Request.Header
+	}
+	return resolveCodexFingerprintIDsFromRequest(account, clientHeaders)
 }
 
 // applyCodexFingerprintHeaders 按预计算的收敛 ID 改写出站 HTTP 头中的设备指纹。
@@ -279,6 +320,27 @@ func applyCodexFingerprintClientMetadata(reqBody map[string]any, ids *codexFinge
 
 	reqBody["client_metadata"] = existing
 	return true
+}
+
+// applyCodexFingerprintRawPayload 将 JSON 载荷解码、改写并重新编码。
+// 非 JSON 请求保持原样，让既有调用方继续按原有路径处理其校验或上游错误。
+func applyCodexFingerprintRawPayload(payload []byte, ids *codexFingerprintIDs) ([]byte, bool) {
+	if len(payload) == 0 || ids == nil {
+		return payload, false
+	}
+
+	decoded := make(map[string]any)
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return payload, false
+	}
+	if !applyCodexFingerprintClientMetadata(decoded, ids) {
+		return payload, false
+	}
+	rebuilt, err := json.Marshal(decoded)
+	if err != nil {
+		return payload, false
+	}
+	return rebuilt, true
 }
 
 // rewriteClientMetadataEmbeddedTurnMetadata 改写 client_metadata 中内嵌的

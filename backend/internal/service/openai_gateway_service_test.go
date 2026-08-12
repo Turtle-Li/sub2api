@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -3060,6 +3061,45 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *test
 	require.Empty(t, req.Header.Get("OpenAI-Beta"), "Codex OAuth HTTP must not synthesize the legacy responses beta header")
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
+}
+
+func TestOpenAIBuildUpstreamRequestOpenAIPassthroughConvergesOAuthDeviceOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5","client_metadata":{"x-codex-installation-id":"client-device","session_id":"client-session","x-codex-turn-metadata":"{\"installation_id\":\"client-device\",\"session_id\":\"client-session\"}"}}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("session_id", "client-session")
+	c.Request.Header.Set("X-Codex-Installation-ID", "client-device")
+	c.Request.Header.Set("X-Codex-Turn-Metadata", `{"installation_id":"client-device","session_id":"client-session"}`)
+
+	svc := &OpenAIGatewayService{}
+	account := &Account{
+		ID:       3201,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			codexFingerprintModeExtraKey: "device",
+			"openai_device_id":           "per-account-device",
+		},
+	}
+
+	req, err := svc.buildUpstreamRequestOpenAIPassthrough(c.Request.Context(), c, account, body, "token")
+	require.NoError(t, err)
+	require.Equal(t, "per-account-device", req.Header.Get("x-codex-installation-id"))
+	require.Equal(t, isolateOpenAISessionID(0, "client-session"), req.Header.Get("session_id"), "device 模式保留既有会话隔离")
+	var headerMetadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(req.Header.Get("x-codex-turn-metadata")), &headerMetadata))
+	require.Equal(t, "per-account-device", headerMetadata["installation_id"])
+	require.Equal(t, "client-session", headerMetadata["session_id"])
+
+	forwarded, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, "per-account-device", gjson.GetBytes(forwarded, "client_metadata.x-codex-installation-id").String())
+	require.Equal(t, "client-session", gjson.GetBytes(forwarded, "client_metadata.session_id").String())
+	bodyMetadata := gjson.Parse(gjson.GetBytes(forwarded, "client_metadata.x-codex-turn-metadata").String())
+	require.Equal(t, "per-account-device", bodyMetadata.Get("installation_id").String())
+	require.Equal(t, "client-session", bodyMetadata.Get("session_id").String())
 }
 
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesExplicitAPIKeyBetaHeader(t *testing.T) {

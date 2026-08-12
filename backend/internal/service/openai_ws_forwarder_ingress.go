@@ -397,6 +397,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 		normalized = policyApplied
+		// ctx_pool 是当前 OAuth 的主路径。每轮都在最终载荷上覆写指纹，避免前面的
+		// metadata 注入、模型策略或兼容转换重新带回客户端设备标识。
+		var clientHeaders http.Header
+		if c != nil && c.Request != nil {
+			clientHeaders = c.Request.Header
+		}
+		fingerprintIDs := resolveCodexFingerprintIDsFromRequest(account, clientHeaders)
+		if rewritten, changed := applyCodexFingerprintRawPayload(normalized, fingerprintIDs); changed {
+			normalized = rewritten
+		}
+		storeCodexFingerprintIDs(c, fingerprintIDs)
 		ingressSessionOriginalModel = originalModel
 
 		return openAIWSClientPayload{
@@ -1904,6 +1915,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return parseErr
 		}
 		nextRoutingFields := gjson.GetManyBytes(nextPayload.payloadRaw, "model", "service_tier")
+		applyCodexFingerprintHeaders(baseAcquireReq.Headers, codexFingerprintIDsFromContext(c, account))
 		if nextPayload.promptCacheKey != "" {
 			// ingress 会话在整个客户端 WS 生命周期内复用同一上游连接；
 			// prompt_cache_key 对握手头的更新仅在未来需要重新建连时生效。

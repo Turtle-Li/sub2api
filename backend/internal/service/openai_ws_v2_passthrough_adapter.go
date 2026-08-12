@@ -752,6 +752,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
 	}
 	firstClientMessage = updatedFirst
+	if account.Type == AccountTypeOAuth {
+		// Passthrough 不会进入 ctx_pool 的 parseClientPayload。首帧先改写并缓存，
+		// 使握手头和随后的 response.create 共享同一组收敛 IDs。
+		fingerprintIDs := resolveCodexFingerprintIDsFromContext(account, c)
+		if rewritten, changed := applyCodexFingerprintRawPayload(firstClientMessage, fingerprintIDs); changed {
+			firstClientMessage = rewritten
+		}
+		storeCodexFingerprintIDs(c, fingerprintIDs)
+	}
 
 	// 在 policy filter 之后再提取 service_tier / reasoning_effort 用于
 	// usage 上报：filter
@@ -1036,6 +1045,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					)
 				}
 				out = transformed
+			}
+			if policyErr == nil && blocked == nil && isResponseCreate && account.Type == AccountTypeOAuth {
+				var clientHeaders http.Header
+				if c != nil && c.Request != nil {
+					clientHeaders = c.Request.Header
+				}
+				fingerprintIDs := resolveCodexFingerprintIDsFromRequest(account, clientHeaders)
+				if rewritten, changed := applyCodexFingerprintRawPayload(out, fingerprintIDs); changed {
+					out = rewritten
+				}
+				storeCodexFingerprintIDs(c, fingerprintIDs)
 			}
 			// 多轮 passthrough usage：仅在成功（non-block / non-err）
 			// 的 response.create 帧上更新 usageMeta，使用

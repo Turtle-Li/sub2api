@@ -86,6 +86,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
+	// setOpenAIWSTurnMetadata 会以入站头覆盖嵌入式 metadata；在其之后重写，
+	// 才能保证 HTTP->WS 路径的握手头和 response.create 载荷使用同一设备 ID。
+	applyCodexFingerprintClientMetadata(payload, codexFingerprintIDsFromContext(c, account))
 	payloadEventType := openAIWSPayloadString(payload, "type")
 	if payloadEventType == "" {
 		payloadEventType = "response.create"

@@ -424,6 +424,41 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersPreservesCodexIdentity(t *test
 	require.Empty(t, headers.Get("X-Test"))
 }
 
+func TestOpenAIGatewayService_BuildOpenAIWSHeadersConvergesOAuthDeviceOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("session_id", "client-session")
+	c.Request.Header.Set("X-Codex-Installation-ID", "client-device")
+	c.Request.Header.Set("X-Codex-Turn-Metadata", `{"installation_id":"client-device","session_id":"client-session"}`)
+
+	svc := &OpenAIGatewayService{}
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "test-account",
+		},
+		Extra: map[string]any{
+			codexFingerprintModeExtraKey: "device",
+			"openai_device_id":           "per-account-device",
+		},
+	}
+	headers, _, err := svc.buildOpenAIWSHeaders(
+		context.Background(), c, account, "token",
+		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+		true, "", c.GetHeader(openAIWSTurnMetadataHeader), "", "", "",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "per-account-device", headers.Get("x-codex-installation-id"))
+	require.Equal(t, isolateOpenAISessionID(0, "client-session"), headers.Get("session_id"), "device 模式保留既有用户会话隔离")
+	var turnMetadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(headers.Get(openAIWSTurnMetadataHeader)), &turnMetadata))
+	require.Equal(t, "per-account-device", turnMetadata["installation_id"])
+	require.Equal(t, "client-session", turnMetadata["session_id"])
+}
+
 func TestLogOpenAIWSBindResponseAccountWarn(t *testing.T) {
 	require.NotPanics(t, func() {
 		logOpenAIWSBindResponseAccountWarn(1, 2, "resp_ok", nil)
@@ -733,10 +768,12 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 		},
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
+			codexFingerprintModeExtraKey:      "device",
+			"openai_device_id":                "per-account-device",
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"store":true,"input":[{"type":"input_text","text":"hello","namespace":"native-wsv2"}]}`)
+	body := []byte(`{"model":"gpt-5.1","stream":false,"store":true,"client_metadata":{"x-codex-installation-id":"client-device","session_id":"client-session","x-codex-turn-metadata":"{\"installation_id\":\"client-device\",\"session_id\":\"client-session\"}"},"input":[{"type":"input_text","text":"hello","namespace":"native-wsv2"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -755,6 +792,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	// 测试中未设置 api_key 到 context，apiKeyID=0。
 	require.Equal(t, isolateOpenAISessionID(0, "sess-oauth-1"), captureDialer.lastHeaders.Get("session_id"))
 	require.Equal(t, isolateOpenAISessionID(0, "conv-oauth-1"), captureDialer.lastHeaders.Get("conversation_id"))
+	require.Equal(t, "per-account-device", captureDialer.lastHeaders.Get("x-codex-installation-id"))
+	require.Equal(t, "per-account-device", gjson.Get(requestJSON, "client_metadata.x-codex-installation-id").String())
+	require.Equal(t, "client-session", gjson.Get(requestJSON, "client_metadata.session_id").String(), "device 模式不改写载荷会话")
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testing.T) {
