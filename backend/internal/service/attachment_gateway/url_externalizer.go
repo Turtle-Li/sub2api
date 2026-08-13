@@ -358,13 +358,11 @@ func (e *URLExternalizer) externalize(
 		}
 		if ctx.Err() != nil {
 			result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
-			dispatchStopped = true
 			break
 		}
 		rawURL, tokenErr := imageURLTokenValue(body, token)
 		if tokenErr != nil {
 			result.Metrics.Errors++
-			dispatchStopped = true
 			break
 		}
 		result.Metrics.ImageCount++
