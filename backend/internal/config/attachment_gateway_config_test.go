@@ -50,6 +50,7 @@ func TestAttachmentGatewayDefaultsAreSafeAndDisabled(t *testing.T) {
 	require.Equal(t, 24*60*60, attachment.NegativeCacheTTLSeconds)
 	require.Equal(t, 10_000, attachment.NegativeCacheMaxEntries)
 	require.Equal(t, 20, attachment.MaxImagesPerRequest)
+	require.Zero(t, attachment.MaxColdEncodesPerRequest)
 	require.Equal(t, 2, attachment.MaxConcurrentEncodes)
 }
 
@@ -64,6 +65,9 @@ func TestAttachmentGatewayURLRewriteUsesRuntimeStorageAndValidatesSafeValues(t *
 	require.NoError(t, cfg.Validate())
 
 	attachment.URLRewriteMaxImagesPerRequest = 0
+	require.ErrorContains(t, cfg.Validate(), "url_rewrite_max_images_per_request")
+	attachment.URLRewriteMaxImagesPerRequest = 50
+	attachment.URLRewriteMaxImagesPerRequest = AttachmentGatewayMaxImagesPerRequest + 1
 	require.ErrorContains(t, cfg.Validate(), "url_rewrite_max_images_per_request")
 	attachment.URLRewriteMaxImagesPerRequest = 50
 
@@ -96,6 +100,11 @@ func TestAttachmentGatewayValidationRejectsUnsafeValues(t *testing.T) {
 		{name: "zero negative cache ttl", mutate: func(c *AttachmentGatewayConfig) { c.NegativeCacheTTLSeconds = 0 }, message: "negative_cache_ttl_seconds"},
 		{name: "zero negative cache entries", mutate: func(c *AttachmentGatewayConfig) { c.NegativeCacheMaxEntries = 0 }, message: "negative_cache_max_entries"},
 		{name: "zero image count", mutate: func(c *AttachmentGatewayConfig) { c.MaxImagesPerRequest = 0 }, message: "max_images_per_request"},
+		{name: "excessive image count", mutate: func(c *AttachmentGatewayConfig) { c.MaxImagesPerRequest = AttachmentGatewayMaxImagesPerRequest + 1 }, message: "max_images_per_request"},
+		{name: "negative cold encode count", mutate: func(c *AttachmentGatewayConfig) { c.MaxColdEncodesPerRequest = -1 }, message: "max_cold_encodes_per_request"},
+		{name: "excessive cold encode count", mutate: func(c *AttachmentGatewayConfig) {
+			c.MaxColdEncodesPerRequest = AttachmentGatewayMaxImagesPerRequest + 1
+		}, message: "max_cold_encodes_per_request"},
 		{name: "zero concurrency", mutate: func(c *AttachmentGatewayConfig) { c.MaxConcurrentEncodes = 0 }, message: "max_concurrent_encodes"},
 		{name: "invalid API key scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedAPIKeyIDs = []int64{0} }, message: "allowed IDs"},
 		{name: "invalid user scope", mutate: func(c *AttachmentGatewayConfig) { c.AllowedUserIDs = []int64{0} }, message: "allowed IDs"},

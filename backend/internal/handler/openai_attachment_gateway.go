@@ -84,7 +84,13 @@ func newResponsesAttachmentOptimizer(cfg *config.Config) responsesAttachmentOpti
 
 func responsesAttachmentOptimizerLimits(experiment config.AttachmentGatewayConfig) (maxImagesToInspect, maxColdEncodes int) {
 	maxImagesToInspect = experiment.MaxImagesPerRequest
-	maxColdEncodes = experiment.MaxImagesPerRequest
+	maxColdEncodes = experiment.MaxColdEncodesPerRequest
+	if maxColdEncodes <= 0 {
+		// Directly constructed configs in integrations predating the separate
+		// setting retain the historical cold-encode budget rather than silently
+		// changing behavior. Loaded configs always receive an explicit default.
+		maxColdEncodes = experiment.MaxImagesPerRequest
+	}
 	if experiment.URLRewriteEnabled && experiment.URLRewriteMaxImagesPerRequest > maxImagesToInspect {
 		// URL externalization may intentionally cover more accumulated images
 		// than one request is allowed to cold-encode. Inspect the same range so

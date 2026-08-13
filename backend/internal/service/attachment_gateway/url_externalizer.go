@@ -3,6 +3,7 @@ package attachment_gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"path"
 	"strconv"
@@ -98,8 +99,11 @@ func (c URLConfig) validate() error {
 	if c.URLCacheTTL <= 0 {
 		return errors.New("attachment gateway: URL cache TTL must be positive")
 	}
-	if c.MaxImageBytes <= 0 || c.MaxImagesPerRequest <= 0 || c.MaxConcurrentUploads <= 0 {
+	if c.MaxImageBytes <= 0 || c.MaxConcurrentUploads <= 0 {
 		return errors.New("attachment gateway: URL rewrite limits must be positive")
+	}
+	if c.MaxImagesPerRequest <= 0 || c.MaxImagesPerRequest > maxImagesPerRequest {
+		return fmt.Errorf("attachment gateway: URL rewrite max images per request must be between 1 and %d", maxImagesPerRequest)
 	}
 	return nil
 }
@@ -139,6 +143,21 @@ type publishResult struct {
 	Uploaded bool
 }
 
+type imageURLPublishJob struct {
+	index   int
+	image   dataURLImage
+	release func()
+}
+
+type imageURLPublishOutcome struct {
+	index    int
+	url      string
+	cacheHit bool
+	shared   bool
+	uploaded bool
+	err      error
+}
+
 // URLExternalizer uploads inline image bytes under deterministic content-hash
 // keys and rewrites the request to HTTPS URLs. Failures are per-image fail-open.
 type URLExternalizer struct {
@@ -151,6 +170,7 @@ type URLExternalizer struct {
 	storeVersion uint64
 	group        singleflight.Group
 	slots        chan struct{}
+	parseSlots   chan struct{}
 }
 
 func NewURLExternalizer(config URLConfig, store ObjectStorage) (*URLExternalizer, error) {
@@ -159,11 +179,12 @@ func NewURLExternalizer(config URLConfig, store ObjectStorage) (*URLExternalizer
 		return nil, err
 	}
 	return &URLExternalizer{
-		config:    config,
-		store:     store,
-		now:       time.Now,
-		published: make(map[string]publishedURL),
-		slots:     make(chan struct{}, config.MaxConcurrentUploads),
+		config:     config,
+		store:      store,
+		now:        time.Now,
+		published:  make(map[string]publishedURL),
+		slots:      make(chan struct{}, config.MaxConcurrentUploads),
+		parseSlots: make(chan struct{}, config.MaxConcurrentUploads),
 	}, nil
 }
 
@@ -203,49 +224,100 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 		return result
 	}
 
-	rewritten, changed, err := rewriteImageURLs(body, func(rawURL string) string {
+	tokens, _, err := collectImageDataURLTokens(body, e.config.MaxImagesPerRequest)
+	if err != nil {
+		result.Metrics.Errors++
+		return result
+	}
+	if len(tokens) == 0 {
+		return result
+	}
+
+	workerCount := e.config.MaxConcurrentUploads
+	if workerCount > len(tokens) {
+		workerCount = len(tokens)
+	}
+	jobs := make(chan imageURLPublishJob)
+	outcomes := make(chan imageURLPublishOutcome, len(tokens))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for job := range jobs {
+				func() {
+					defer job.release()
+					url, cacheHit, shared, uploaded, publishErr := e.publishSafely(ctx, job.image, storageVersion)
+					outcomes <- imageURLPublishOutcome{
+						index:    job.index,
+						url:      url,
+						cacheHit: cacheHit,
+						shared:   shared,
+						uploaded: uploaded,
+						err:      publishErr,
+					}
+				}()
+			}
+		}()
+	}
+
+	dispatchStopped := false
+	for index, token := range tokens {
 		if ctx.Err() != nil {
 			result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
-			return rawURL
+			dispatchStopped = true
+			break
 		}
-		if !isImageDataURL(rawURL) {
-			return rawURL
+		rawURL, tokenErr := imageURLTokenValue(body, token)
+		if tokenErr != nil {
+			result.Metrics.Errors++
+			dispatchStopped = true
+			break
 		}
 		result.Metrics.ImageCount++
-		if result.Metrics.ImageCount > e.config.MaxImagesPerRequest {
-			return rawURL
-		}
-		parsed, _, parseErr := parseImageDataURL(rawURL, e.config.MaxImageBytes)
+		parsed, release, parseErr := e.parseImageDataURLWithSlot(ctx, rawURL)
 		if parseErr != nil {
 			if !errors.Is(parseErr, errUnsupportedMediaType) {
 				result.Metrics.Errors++
 			}
-			return rawURL
+			release()
+			continue
 		}
+		select {
+		case jobs <- imageURLPublishJob{index: index, image: parsed, release: release}:
+		case <-ctx.Done():
+			result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
+			release()
+			dispatchStopped = true
+		}
+		if dispatchStopped {
+			break
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	close(outcomes)
 
-		url, cacheHit, shared, uploaded, uploadErr := e.publish(ctx, parsed, storageVersion)
-		if uploadErr != nil {
-			if errors.Is(uploadErr, context.DeadlineExceeded) {
+	rewritten := make([]imageURLRewrite, len(tokens))
+	for outcome := range outcomes {
+		if outcome.err != nil {
+			if errors.Is(outcome.err, context.DeadlineExceeded) {
 				result.Metrics.TimedOut = true
-			} else if !errors.Is(uploadErr, context.Canceled) {
+			} else if !errors.Is(outcome.err, context.Canceled) {
 				result.Metrics.Errors++
 			}
-			return rawURL
+			continue
 		}
-		if cacheHit {
+		if outcome.cacheHit {
 			result.Metrics.CacheHits++
-		} else if uploaded && !shared {
+		} else if outcome.uploaded && !outcome.shared {
 			result.Metrics.UploadCount++
 		}
-		if shared {
+		if outcome.shared {
 			result.Metrics.CacheShared++
 		}
 		result.Metrics.ExternalizedCount++
-		return url
-	})
-	if err != nil {
-		result.Metrics.Errors++
-		return result
+		rewritten[outcome.index] = imageURLRewrite{value: outcome.url, changed: true}
 	}
 	// A destination or credential switch during this request must not leave a
 	// mixture of URLs from the previous storage generation in the forwarded
@@ -258,11 +330,54 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 	if ctx.Err() != nil {
 		result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	}
+	rewrittenBody, changed, rewriteErr := rewriteImageURLTokens(body, tokens, rewritten)
+	if rewriteErr != nil {
+		result.Metrics.Errors++
+		return result
+	}
 	if changed {
-		result.Body = rewritten
-		result.Metrics.RewrittenBodyBytes = len(rewritten)
+		result.Body = rewrittenBody
+		result.Metrics.RewrittenBodyBytes = len(rewrittenBody)
 	}
 	return result
+}
+
+func (e *URLExternalizer) parseImageDataURLWithSlot(ctx context.Context, rawURL string) (dataURLImage, func(), error) {
+	select {
+	case e.parseSlots <- struct{}{}:
+	case <-ctx.Done():
+		return dataURLImage{}, func() {}, ctx.Err()
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			<-e.parseSlots
+		}
+	}
+	parsed, _, err := parseImageDataURL(rawURL, e.config.MaxImageBytes)
+	if err != nil {
+		release()
+		return parsed, func() {}, err
+	}
+	return parsed, release, nil
+}
+
+func (e *URLExternalizer) publishSafely(
+	ctx context.Context,
+	image dataURLImage,
+	storageVersion uint64,
+) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
+	defer func() {
+		if recover() != nil {
+			url = ""
+			cacheHit = false
+			shared = false
+			uploaded = false
+			err = errors.New("attachment gateway: image upload panicked")
+		}
+	}()
+	return e.publish(ctx, image, storageVersion)
 }
 
 func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage, storageVersion uint64) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
@@ -278,7 +393,15 @@ func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage, stora
 	if _, ok := e.store.(versionedObjectStorage); ok {
 		flightKey = strconv.FormatUint(storageVersion, 10) + ":" + hash
 	}
-	channel := e.group.DoChan(flightKey, func() (any, error) {
+	channel := e.group.DoChan(flightKey, func() (value any, resultErr error) {
+		workCtx, cancelWork := detachedWorkContext(ctx)
+		defer cancelWork()
+		defer func() {
+			if recover() != nil {
+				value = nil
+				resultErr = errors.New("attachment gateway: object storage upload panicked")
+			}
+		}()
 		if !e.storageVersionCurrent(storageVersion) {
 			return "", errObjectStorageConfigChanged
 		}
@@ -296,9 +419,9 @@ func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage, stora
 		didUpload := true
 		var saveErr error
 		if contentStore, ok := e.store.(contentAddressedObjectStorage); ok {
-			published, didUpload, saveErr = contentStore.Ensure(ctx, key, image.MIMEType, image.Bytes)
+			published, didUpload, saveErr = contentStore.Ensure(workCtx, key, image.MIMEType, image.Bytes)
 		} else {
-			published, saveErr = e.store.Save(ctx, key, image.MIMEType, image.Bytes)
+			published, saveErr = e.store.Save(workCtx, key, image.MIMEType, image.Bytes)
 		}
 		if saveErr != nil {
 			return "", saveErr
