@@ -373,8 +373,9 @@ func TestApplyCodexFingerprintRawPayload_DeviceMode(t *testing.T) {
 	assert.Equal(t, "per-account-device", metadata["x-codex-installation-id"])
 	assert.Equal(t, "client-session", metadata["session_id"], "device 模式不得改写客户端会话")
 	var turnMetadata map[string]any
-	err := json.Unmarshal([]byte(metadata["x-codex-turn-metadata"].(string)), &turnMetadata)
-	require.NoError(t, err)
+	if err := json.Unmarshal([]byte(metadata["x-codex-turn-metadata"].(string)), &turnMetadata); err != nil {
+		t.Fatal(err)
+	}
 	assert.Equal(t, "per-account-device", turnMetadata["installation_id"])
 	assert.Equal(t, "client-session", turnMetadata["session_id"])
 }
