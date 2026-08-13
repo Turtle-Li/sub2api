@@ -108,17 +108,30 @@ func TestResponsesAttachmentOptimizerSeparatesScanAndColdEncodeLimits(t *testing
 		URLRewriteEnabled:             true,
 		URLRewriteMaxImagesPerRequest: 50,
 		MaxImagesPerRequest:           32,
+		MaxColdEncodesPerRequest:      8,
 	}
 
 	maxImagesToInspect, maxColdEncodes := responsesAttachmentOptimizerLimits(experiment)
 
 	require.Equal(t, 50, maxImagesToInspect)
-	require.Equal(t, 32, maxColdEncodes)
+	require.Equal(t, 8, maxColdEncodes)
 
 	experiment.URLRewriteEnabled = false
 	maxImagesToInspect, maxColdEncodes = responsesAttachmentOptimizerLimits(experiment)
 	require.Equal(t, 32, maxImagesToInspect)
+	require.Equal(t, 8, maxColdEncodes)
+
+	experiment.MaxColdEncodesPerRequest = 0
+	maxImagesToInspect, maxColdEncodes = responsesAttachmentOptimizerLimits(experiment)
+	require.Equal(t, 32, maxImagesToInspect)
 	require.Equal(t, 32, maxColdEncodes)
+
+	// Existing loaded deployments omit the new field. Preserve a customized
+	// legacy image cap rather than silently widening cold raster work.
+	experiment.MaxImagesPerRequest = 7
+	maxImagesToInspect, maxColdEncodes = responsesAttachmentOptimizerLimits(experiment)
+	require.Equal(t, 7, maxImagesToInspect)
+	require.Equal(t, 7, maxColdEncodes)
 }
 
 func TestOpenAIResponsesForwardBodyLimitMessageIsActionableChinese(t *testing.T) {

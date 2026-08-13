@@ -947,12 +947,21 @@ type AttachmentGatewayConfig struct {
 	CacheCleanupIntervalSeconds       int     `mapstructure:"cache_cleanup_interval_seconds"`
 	NegativeCacheTTLSeconds           int     `mapstructure:"negative_cache_ttl_seconds"`
 	NegativeCacheMaxEntries           int     `mapstructure:"negative_cache_max_entries"`
-	// MaxImagesPerRequest remains the per-request cold-encode budget. When R2
-	// URL rewriting covers more images, compression cache lookup follows the R2
-	// scan limit while only cache misses consume this budget.
-	MaxImagesPerRequest  int `mapstructure:"max_images_per_request"`
-	MaxConcurrentEncodes int `mapstructure:"max_concurrent_encodes"`
+	// MaxImagesPerRequest bounds attachment discovery and cache lookup work.
+	// MaxColdEncodesPerRequest independently bounds new raster work, so a
+	// scoped rollout can inspect/reuse a longer history without forcing every
+	// request to cold-encode that entire history. Zero inherits
+	// MaxImagesPerRequest to preserve existing deployments until explicitly
+	// tuned.
+	MaxImagesPerRequest      int `mapstructure:"max_images_per_request"`
+	MaxColdEncodesPerRequest int `mapstructure:"max_cold_encodes_per_request"`
+	MaxConcurrentEncodes     int `mapstructure:"max_concurrent_encodes"`
 }
+
+// AttachmentGatewayMaxImagesPerRequest is a hard safety ceiling for every
+// request-local attachment scan. Larger values provide no practical benefit on
+// a 100 MB ingress, but can multiply decode, cache and object-storage work.
+const AttachmentGatewayMaxImagesPerRequest = 256
 
 const (
 	ImageConcurrencyOverflowModeReject = "reject"
@@ -2536,6 +2545,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.negative_cache_ttl_seconds", 24*60*60)
 	viper.SetDefault("gateway.attachment_gateway.negative_cache_max_entries", 10_000)
 	viper.SetDefault("gateway.attachment_gateway.max_images_per_request", 20)
+	viper.SetDefault("gateway.attachment_gateway.max_cold_encodes_per_request", 0)
 	viper.SetDefault("gateway.attachment_gateway.max_concurrent_encodes", 2)
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
@@ -3449,8 +3459,8 @@ func (c *Config) Validate() error {
 			if attachment.URLRewriteMinBodyBytes <= 0 {
 				return fmt.Errorf("gateway.attachment_gateway.url_rewrite_min_body_bytes must be positive")
 			}
-			if attachment.URLRewriteMaxImagesPerRequest <= 0 {
-				return fmt.Errorf("gateway.attachment_gateway.url_rewrite_max_images_per_request must be positive")
+			if attachment.URLRewriteMaxImagesPerRequest <= 0 || attachment.URLRewriteMaxImagesPerRequest > AttachmentGatewayMaxImagesPerRequest {
+				return fmt.Errorf("gateway.attachment_gateway.url_rewrite_max_images_per_request must be between 1 and %d", AttachmentGatewayMaxImagesPerRequest)
 			}
 			if attachment.URLUploadTimeoutMilliseconds <= 0 {
 				return fmt.Errorf("gateway.attachment_gateway.url_upload_timeout_ms must be positive")
@@ -3529,8 +3539,11 @@ func (c *Config) Validate() error {
 		if attachment.NegativeCacheMaxEntries <= 0 {
 			return fmt.Errorf("gateway.attachment_gateway.negative_cache_max_entries must be positive")
 		}
-		if attachment.MaxImagesPerRequest <= 0 {
-			return fmt.Errorf("gateway.attachment_gateway.max_images_per_request must be positive")
+		if attachment.MaxImagesPerRequest <= 0 || attachment.MaxImagesPerRequest > AttachmentGatewayMaxImagesPerRequest {
+			return fmt.Errorf("gateway.attachment_gateway.max_images_per_request must be between 1 and %d", AttachmentGatewayMaxImagesPerRequest)
+		}
+		if attachment.MaxColdEncodesPerRequest < 0 || attachment.MaxColdEncodesPerRequest > AttachmentGatewayMaxImagesPerRequest {
+			return fmt.Errorf("gateway.attachment_gateway.max_cold_encodes_per_request must be between 0 and %d", AttachmentGatewayMaxImagesPerRequest)
 		}
 		if attachment.MaxConcurrentEncodes <= 0 {
 			return fmt.Errorf("gateway.attachment_gateway.max_concurrent_encodes must be positive")

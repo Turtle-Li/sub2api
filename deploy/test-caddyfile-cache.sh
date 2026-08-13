@@ -55,8 +55,18 @@ if ! printf '%s\n' "$active_config" | grep -Eq '^[[:space:]]*@large_multimodal_r
 	exit 1
 fi
 
+if ! printf '%s\n' "$active_config" | grep -Eq '^[[:space:]]*@large_multimodal_request_body[[:space:]]+path[[:space:]].*/backend-api/codex/responses([[:space:]]|$)'; then
+	echo "Caddyfile must give the Codex Responses alias the multimodal body budget" >&2
+	exit 1
+fi
+
 if ! printf '%s\n' "$active_config" | grep -Eq '^[[:space:]]*@standard_request_body[[:space:]]+not[[:space:]]+path[[:space:]].*/v1/images/batches([[:space:]]|$)'; then
 	echo "Caddyfile standard-body matcher must exclude the exact Batch Image submit path" >&2
+	exit 1
+fi
+
+if ! printf '%s\n' "$active_config" | grep -Eq '^[[:space:]]*@standard_request_body[[:space:]]+not[[:space:]]+path[[:space:]].*/backend-api/codex/responses([[:space:]]|$)'; then
+	echo "Caddyfile standard-body matcher must exclude the Codex Responses alias" >&2
 	exit 1
 fi
 

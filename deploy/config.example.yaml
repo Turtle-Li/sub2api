@@ -301,10 +301,16 @@ gateway:
     # 并同时受共享磁盘字节预算和独立条目数上限约束。
     negative_cache_ttl_seconds: 86400
     negative_cache_max_entries: 10000
-    # Cold WebP encode budget per request. When R2 scans more images, positive
-    # and negative cache hits beyond this count are still reused.
-    # 每请求冷 WebP 编码预算；R2 扫描更多图片时，超出该数量的正/负缓存命中仍会复用。
+    # Attachment discovery/cache lookup cap per request. When R2 scans more
+    # images, positive and negative cache hits beyond this count are not read.
+    # 每请求附件扫描/缓存查找上限；超过该数量的图片不进入本次处理。
     max_images_per_request: 20
+    # Cold WebP encode budget is independent of discovery. Zero inherits
+    # max_images_per_request for backward-compatible deployments; a scoped
+    # canary may set it explicitly to cap newly admitted raster work.
+    # 冷 WebP 编码预算独立于扫描上限；0 继承 max_images_per_request，灰度可显式
+    # 设置以限制新图栅格处理数量。
+    max_cold_encodes_per_request: 20
     max_concurrent_encodes: 2
   # Max bytes to read for non-stream upstream responses (default: 8MB)
   # 非流式上游响应体读取上限（默认 8MB）

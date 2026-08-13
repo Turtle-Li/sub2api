@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,6 +26,18 @@ type imageOptimizationResult struct {
 	CacheShared         bool
 	NegativeCacheHit    bool
 	NegativeCacheShared bool
+}
+
+type imageOptimizationJob struct {
+	index   int
+	image   dataURLImage
+	release func()
+}
+
+type imageOptimizationOutcome struct {
+	index        int
+	optimization imageOptimizationResult
+	err          error
 }
 
 // New creates an attachment gateway without touching the filesystem. Cache
@@ -146,52 +159,101 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		}
 		result.Metrics.Errors++
 	}
+	tokens, truncated, rewriteErr := collectImageDataURLTokens(body, g.config.MaxImagesPerRequest)
+	if rewriteErr != nil {
+		result.Metrics.Errors++
+		return result
+	}
+	if len(tokens) == 0 {
+		return result
+	}
+
+	workerCount := g.config.MaxConcurrentEncode
+	if workerCount > len(tokens) {
+		workerCount = len(tokens)
+	}
+	jobs := make(chan imageOptimizationJob)
+	outcomes := make(chan imageOptimizationOutcome, len(tokens))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for job := range jobs {
+				func() {
+					defer job.release()
+					optimization, optimizeErr := g.optimizeImageSafely(ctx, job.image, reserveColdEncode)
+					outcomes <- imageOptimizationOutcome{
+						index:        job.index,
+						optimization: optimization,
+						err:          optimizeErr,
+					}
+				}()
+			}
+		}()
+	}
+
 	totalImageBytes := 0
-	optimizedBody, changed, rewriteErr := rewriteImageURLs(body, func(rawURL string) string {
+	dispatchStopped := false
+	for index, token := range tokens {
 		if err := ctx.Err(); err != nil {
 			recordContextFailure(err)
-			return rawURL
+			dispatchStopped = true
+			break
 		}
-		if !isImageDataURL(rawURL) {
-			return rawURL
+		rawURL, tokenErr := imageURLTokenValue(body, token)
+		if tokenErr != nil {
+			result.Metrics.Errors++
+			dispatchStopped = true
+			break
 		}
 		result.Metrics.ImageCount++
-		if result.Metrics.ImageCount > g.config.MaxImagesPerRequest {
-			result.Metrics.SkippedRequestImageLimit++
-			return rawURL
-		}
-		// Base64 decoding itself allocates decoded-image bytes, so acquire the
-		// same bounded transform slot before parsing rather than only around the
-		// raster decoder/encoder.
-		select {
-		case g.transformSlots <- struct{}{}:
-			defer func() { <-g.transformSlots }()
-		case <-ctx.Done():
-			recordContextFailure(ctx.Err())
-			return rawURL
-		}
-		parsed, _, err := parseImageDataURL(rawURL, g.config.MaxImageBytes)
-		if err != nil {
-			if errors.Is(err, errUnsupportedMediaType) {
+		parsed, release, parseErr := g.parseImageDataURLWithSlot(ctx, rawURL)
+		if parseErr != nil {
+			if errors.Is(parseErr, errUnsupportedMediaType) {
 				result.Metrics.SkippedUnsupported++
+			} else if errors.Is(parseErr, context.DeadlineExceeded) || errors.Is(parseErr, context.Canceled) {
+				recordContextFailure(parseErr)
+				dispatchStopped = true
+				break
 			} else {
 				result.Metrics.Errors++
 			}
-			return rawURL
+			release()
+			continue
 		}
 
 		result.Metrics.OriginalImageBytes += len(parsed.Bytes)
 		if len(parsed.Bytes) > g.config.MaxTotalImageBytes-totalImageBytes {
 			result.Metrics.SkippedTotalImageBytes++
-			return rawURL
+			release()
+			continue
 		}
 		totalImageBytes += len(parsed.Bytes)
 		if len(parsed.Bytes) < effectiveThreshold {
 			result.Metrics.SkippedBelowThreshold++
-			return rawURL
+			release()
+			continue
 		}
 
-		optimization, optimizeErr := g.optimizeImage(ctx, parsed, reserveColdEncode)
+		select {
+		case jobs <- imageOptimizationJob{index: index, image: parsed, release: release}:
+		case <-ctx.Done():
+			recordContextFailure(ctx.Err())
+			release()
+			dispatchStopped = true
+		}
+		if dispatchStopped {
+			break
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	close(outcomes)
+
+	rewritten := make([]imageURLRewrite, len(tokens))
+	for outcome := range outcomes {
+		optimization := outcome.optimization
 		if optimization.NegativeCacheHit {
 			result.Metrics.NegativeCacheHit = true
 			result.Metrics.NegativeCacheHits++
@@ -199,19 +261,19 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		if optimization.NegativeCacheShared {
 			result.Metrics.NegativeCacheShared++
 		}
-		if optimizeErr != nil {
-			if errors.Is(optimizeErr, errColdEncodeLimit) {
+		if outcome.err != nil {
+			if errors.Is(outcome.err, errColdEncodeLimit) {
 				result.Metrics.SkippedColdEncodeLimit++
-			} else if errors.Is(optimizeErr, errNotSmaller) {
+			} else if errors.Is(outcome.err, errNotSmaller) {
 				result.Metrics.SkippedNotSmaller++
-			} else if errors.Is(optimizeErr, errUnsupportedMediaType) || errors.Is(optimizeErr, errAnimatedImage) {
+			} else if errors.Is(outcome.err, errUnsupportedMediaType) || errors.Is(outcome.err, errAnimatedImage) {
 				result.Metrics.SkippedUnsupported++
-			} else if errors.Is(optimizeErr, context.DeadlineExceeded) || errors.Is(optimizeErr, context.Canceled) {
-				recordContextFailure(optimizeErr)
+			} else if errors.Is(outcome.err, context.DeadlineExceeded) || errors.Is(outcome.err, context.Canceled) {
+				recordContextFailure(outcome.err)
 			} else {
 				result.Metrics.Errors++
 			}
-			return rawURL
+			continue
 		}
 
 		if optimization.CacheHit {
@@ -223,13 +285,18 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		}
 		result.Metrics.OptimizedImageCount++
 		result.Metrics.OptimizedImageBytes += len(optimization.Image.Bytes)
-		return "data:image/webp;base64," + base64.StdEncoding.EncodeToString(optimization.Image.Bytes)
-	})
-	if rewriteErr != nil {
-		result.Metrics.Errors++
-		result.Metrics.OptimizedImageCount = 0
-		result.Metrics.OptimizedImageBytes = 0
-		return result
+		rewritten[outcome.index] = imageURLRewrite{
+			value:   "data:image/webp;base64," + base64.StdEncoding.EncodeToString(optimization.Image.Bytes),
+			changed: true,
+		}
+	}
+	if truncated {
+		// The bounded collector observed at least one more eligible image, but
+		// intentionally did not retain it. Keep the historical metric shape
+		// (the first skipped image is counted) without allocating per-image
+		// state for an adversarially long request.
+		result.Metrics.ImageCount++
+		result.Metrics.SkippedRequestImageLimit++
 	}
 	if err := ctx.Err(); err != nil {
 		recordContextFailure(err)
@@ -238,6 +305,13 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		return result
 	}
 
+	optimizedBody, changed, rewriteErr := rewriteImageURLTokens(body, tokens, rewritten)
+	if rewriteErr != nil {
+		result.Metrics.Errors++
+		result.Metrics.OptimizedImageCount = 0
+		result.Metrics.OptimizedImageBytes = 0
+		return result
+	}
 	if !changed {
 		return result
 	}
@@ -260,6 +334,45 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	return result
 }
 
+func (g *Gateway) optimizeImageSafely(
+	ctx context.Context,
+	input dataURLImage,
+	reserveColdEncode func() bool,
+) (optimization imageOptimizationResult, err error) {
+	defer func() {
+		if recover() != nil {
+			optimization = imageOptimizationResult{}
+			err = errors.New("attachment gateway: image transform panicked")
+		}
+	}()
+	return g.optimizeImage(ctx, input, reserveColdEncode)
+}
+
+// parseImageDataURLWithSlot keeps a transform slot from data URL decoding
+// through the worker's raster transform. That bounds decoded-image memory
+// across requests, including workers waiting behind a still-running encoder.
+// Callers must check the per-request image limit before invoking it.
+func (g *Gateway) parseImageDataURLWithSlot(ctx context.Context, rawURL string) (dataURLImage, func(), error) {
+	select {
+	case g.transformSlots <- struct{}{}:
+	case <-ctx.Done():
+		return dataURLImage{}, func() {}, ctx.Err()
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			<-g.transformSlots
+		}
+	}
+	parsed, _, parseErr := parseImageDataURL(rawURL, g.config.MaxImageBytes)
+	if parseErr != nil {
+		release()
+		return parsed, func() {}, parseErr
+	}
+	return parsed, release, nil
+}
+
 func (g *Gateway) optimizeImage(
 	ctx context.Context,
 	input dataURLImage,
@@ -267,6 +380,8 @@ func (g *Gateway) optimizeImage(
 ) (imageOptimizationResult, error) {
 	hash := sourceHash(input.Bytes)
 	lookup, shared, err := g.cache.getOrCreate(ctx, hash, func() (created cacheLookup, createErr error) {
+		workCtx, cancelWork := detachedWorkContext(ctx)
+		defer cancelWork()
 		defer func() {
 			if recover() != nil {
 				created = cacheLookup{}
@@ -276,11 +391,10 @@ func (g *Gateway) optimizeImage(
 		if reserveColdEncode == nil || !reserveColdEncode() {
 			return cacheLookup{}, errColdEncodeLimit
 		}
-		// singleflight.DoChan runs create in its own goroutine. If the request
-		// context expires while a third-party encoder is already running, the
-		// caller can fail open before that encoder returns. Hold a worker-owned
-		// slot here so those non-cancellable background transforms remain bounded
-		// even after the request-owned transform slot has been released.
+		// singleflight.DoChan runs create in its own goroutine. Admission still
+		// follows the request context: a canceled request must not queue a new
+		// decoded image behind existing work. Once admitted, workCtx lets the
+		// bounded encoder finish and populate the reusable cache.
 		select {
 		case g.encodeSlots <- struct{}{}:
 			defer func() { <-g.encodeSlots }()
@@ -291,7 +405,7 @@ func (g *Gateway) optimizeImage(
 		if err != nil {
 			return cacheLookup{}, err
 		}
-		if err := ctx.Err(); err != nil {
+		if err := workCtx.Err(); err != nil {
 			return cacheLookup{}, err
 		}
 		policy := chooseImagePolicy(decoded, g.config)
@@ -303,7 +417,7 @@ func (g *Gateway) optimizeImage(
 		if err != nil {
 			return cacheLookup{}, err
 		}
-		if err := ctx.Err(); err != nil {
+		if err := workCtx.Err(); err != nil {
 			return cacheLookup{}, err
 		}
 		minimumSavings := int(float64(len(input.Bytes)) * g.config.MinSavingsRatio)

@@ -40,6 +40,18 @@ type blockingVersionedObjectStorage struct {
 	once    sync.Once
 }
 
+type parallelObjectStorage struct {
+	mu          sync.Mutex
+	calls       int
+	active      int
+	maxActive   int
+	required    int
+	started     chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+	releaseOnce sync.Once
+}
+
 func (s *dynamicRecordingObjectStorage) Ready(context.Context) bool { return s.ready }
 func (s *dynamicRecordingObjectStorage) CacheVersion() uint64       { return s.version }
 
@@ -100,6 +112,34 @@ func (s *recordingObjectStorage) callCount() int {
 	return s.calls
 }
 
+func (s *parallelObjectStorage) Save(_ context.Context, key, _ string, _ []byte) (string, error) {
+	s.mu.Lock()
+	s.calls++
+	s.active++
+	if s.active > s.maxActive {
+		s.maxActive = s.active
+	}
+	if s.active >= s.required {
+		s.startedOnce.Do(func() { close(s.started) })
+	}
+	s.mu.Unlock()
+	<-s.release
+	s.mu.Lock()
+	s.active--
+	s.mu.Unlock()
+	return "https://r2.example.test/" + key + "?signature=parallel", nil
+}
+
+func (s *parallelObjectStorage) maxConcurrent() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxActive
+}
+
+func (s *parallelObjectStorage) releaseAll() {
+	s.releaseOnce.Do(func() { close(s.release) })
+}
+
 func testInlineImageBody(data []byte) []byte {
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return []byte(`{"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/webp;base64,` + encoded + `"}]}]}`)
@@ -151,6 +191,79 @@ func TestURLExternalizerPublishesOnceAndReusesHashURL(t *testing.T) {
 	require.True(t, strings.HasPrefix(store.keys[0], "attachments/"))
 	require.True(t, strings.HasSuffix(store.keys[0], ".webp"))
 	store.mu.Unlock()
+}
+
+func TestURLExternalizerBoundsTokenCollection(t *testing.T) {
+	store := &recordingObjectStorage{}
+	externalizer, err := NewURLExternalizer(URLConfig{
+		Enabled:              true,
+		MinBodyBytes:         1,
+		ObjectPrefix:         "attachments/",
+		URLCacheTTL:          time.Hour,
+		MaxImageBytes:        1024,
+		MaxImagesPerRequest:  2,
+		MaxConcurrentUploads: 2,
+	}, store)
+	require.NoError(t, err)
+
+	urls := make([]string, 10_000)
+	for index := range urls {
+		urls[index] = dataURL("image/webp", []byte("tiny"))
+	}
+	body := makeResponsesPayload(t, urls, 0)
+
+	result := externalizer.Externalize(context.Background(), body)
+
+	require.Equal(t, 2, result.Metrics.ImageCount)
+	require.Equal(t, 2, result.Metrics.ExternalizedCount)
+	// Both retained fields contain the same bytes, so the existing
+	// content-hash singleflight contract performs one physical upload.
+	require.Equal(t, 1, store.callCount())
+	require.Contains(t, string(result.Body), "data:image/webp;base64,")
+}
+
+func TestURLExternalizerUsesConfiguredParallelUploadsPerRequest(t *testing.T) {
+	store := &parallelObjectStorage{
+		required: 2,
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	t.Cleanup(store.releaseAll)
+	externalizer, err := NewURLExternalizer(URLConfig{
+		Enabled:              true,
+		MinBodyBytes:         1,
+		ObjectPrefix:         "attachments/",
+		URLCacheTTL:          time.Hour,
+		MaxImageBytes:        1024,
+		MaxImagesPerRequest:  2,
+		MaxConcurrentUploads: 2,
+	}, store)
+	require.NoError(t, err)
+	body := makeResponsesPayload(t, []string{
+		dataURL("image/webp", []byte("first-image")),
+		dataURL("image/webp", []byte("second-image")),
+	}, 0)
+
+	resultCh := make(chan URLResult, 1)
+	go func() {
+		resultCh <- externalizer.Externalize(context.Background(), body)
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("same-request uploads did not start in parallel")
+	}
+	require.Equal(t, 2, store.maxConcurrent())
+	store.releaseAll()
+
+	select {
+	case result := <-resultCh:
+		require.Equal(t, 2, result.Metrics.ExternalizedCount)
+		require.Equal(t, 2, result.Metrics.UploadCount)
+		require.NotContains(t, string(result.Body), "data:image")
+	case <-time.After(2 * time.Second):
+		t.Fatal("same-request externalization did not complete")
+	}
 }
 
 func TestURLExternalizerUploadFailureFailsOpen(t *testing.T) {
@@ -313,6 +426,52 @@ func TestURLExternalizerConfigChangeDuringUploadCannotRestoreStaleURLCache(t *te
 	require.NotEqual(t, body, second.Body)
 	require.Equal(t, 0, second.Metrics.CacheHits)
 	require.Equal(t, 2, store.callCount())
+}
+
+func TestCanceledRequestStillWarmsURLCacheForRetry(t *testing.T) {
+	store := &blockingVersionedObjectStorage{
+		version: 1,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	externalizer, err := NewURLExternalizer(URLConfig{
+		Enabled:              true,
+		MinBodyBytes:         1,
+		URLCacheTTL:          time.Hour,
+		MaxImageBytes:        1024,
+		MaxImagesPerRequest:  1,
+		MaxConcurrentUploads: 1,
+	}, store)
+	require.NoError(t, err)
+	body := testInlineImageBody([]byte("canceled-upload"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resultCh := make(chan URLResult, 1)
+	go func() {
+		resultCh <- externalizer.Externalize(ctx, body)
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("object storage upload did not start")
+	}
+	cancel()
+
+	select {
+	case result := <-resultCh:
+		require.Equal(t, body, result.Body)
+	case <-time.After(time.Second):
+		t.Fatal("canceled externalization did not fail open")
+	}
+	close(store.release)
+
+	var warm URLResult
+	require.Eventually(t, func() bool {
+		warm = externalizer.Externalize(context.Background(), body)
+		return warm.Metrics.CacheHits == 1
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, 1, warm.Metrics.ExternalizedCount)
+	require.Equal(t, 1, store.callCount())
 }
 
 func TestURLExternalizerCacheNeverOutlivesPresignedURL(t *testing.T) {

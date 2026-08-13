@@ -93,11 +93,11 @@ api.sub2api.com {
 	# Keep every other endpoint at 16 MB so these exceptions cannot widen the
 	# general attack surface. WebSocket message frames are bounded
 	# independently by Sub2API.
-	@large_multimodal_request_body path /v1/responses /v1/responses/* /responses /responses/* /v1/images/batches
+	@large_multimodal_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
 	request_body @large_multimodal_request_body {
 		max_size 100MB
 	}
-	@standard_request_body not path /v1/responses /v1/responses/* /responses /responses/* /v1/images/batches
+	@standard_request_body not path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
 	request_body @standard_request_body {
 		max_size 16MB
 	}

@@ -24,6 +24,7 @@ const (
 	defaultNegativeCacheTTL               = 24 * time.Hour
 	defaultNegativeCacheMaxEntries        = 10_000
 	defaultMaxImagesPerRequest            = 20
+	maxImagesPerRequest                   = 256
 	defaultMaxColdEncodesPerRequest       = defaultMaxImagesPerRequest
 	defaultMaxConcurrentEncode            = 2
 	defaultAggregateTriggerBytes          = 4 * 1024 * 1024
@@ -153,7 +154,9 @@ func (c Config) withDefaults() Config {
 		c.MaxImagesPerRequest = defaults.MaxImagesPerRequest
 	}
 	if c.MaxColdEncodesPerRequest == 0 {
-		c.MaxColdEncodesPerRequest = defaults.MaxColdEncodesPerRequest
+		// Preserve the former single-cap behavior for direct package callers
+		// that predate the separate cold-encode setting.
+		c.MaxColdEncodesPerRequest = c.MaxImagesPerRequest
 	}
 	if c.MaxConcurrentEncode == 0 {
 		c.MaxConcurrentEncode = defaults.MaxConcurrentEncode
@@ -209,11 +212,11 @@ func (c Config) validate() error {
 	if c.NegativeCacheMaxEntries <= 0 {
 		return errors.New("attachment gateway: negative cache max entries must be positive")
 	}
-	if c.MaxImagesPerRequest <= 0 {
-		return errors.New("attachment gateway: max images per request must be positive")
+	if c.MaxImagesPerRequest <= 0 || c.MaxImagesPerRequest > maxImagesPerRequest {
+		return fmt.Errorf("attachment gateway: max images per request must be between 1 and %d", maxImagesPerRequest)
 	}
-	if c.MaxColdEncodesPerRequest <= 0 {
-		return errors.New("attachment gateway: max cold encodes per request must be positive")
+	if c.MaxColdEncodesPerRequest <= 0 || c.MaxColdEncodesPerRequest > maxImagesPerRequest {
+		return fmt.Errorf("attachment gateway: max cold encodes per request must be between 1 and %d", maxImagesPerRequest)
 	}
 	if c.MaxConcurrentEncode <= 0 {
 		return errors.New("attachment gateway: max concurrent encodes must be positive")

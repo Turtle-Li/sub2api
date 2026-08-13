@@ -22,7 +22,15 @@ type dataURLImage struct {
 	Bytes    []byte
 }
 
-type imageURLVisitor func(rawURL string) string
+type imageURLToken struct {
+	start int
+	end   int
+}
+
+type imageURLRewrite struct {
+	value   string
+	changed bool
+}
 
 type jsonStringReplacement struct {
 	start int
@@ -30,67 +38,79 @@ type jsonStringReplacement struct {
 	value []byte
 }
 
-// rewriteImageURLs visits only known Responses-style image fields. It splices
-// changed JSON string tokens into the original body instead of decoding the
-// complete document into map[string]any. This preserves unrelated number
-// lexemes and avoids a second full-body buffer inside json.Decoder.
-func rewriteImageURLs(body []byte, visitor imageURLVisitor) ([]byte, bool, error) {
+const maxTokenPreallocation = 64
+
+// collectImageDataURLTokens returns at most limit known Responses-style image
+// fields whose decoded value is a data:image URL. It stops after finding one
+// further eligible field and reports truncated. That keeps per-request token,
+// outcome and replacement allocations bounded by the configured image limit
+// even if a valid 100 MB JSON document contains a huge number of tiny parts.
+//
+// It deliberately does not decode the complete document into map[string]any:
+// unrelated number lexemes and formatting remain untouched for the later
+// splice. The returned tokens are safe to process concurrently before calling
+// rewriteImageURLTokens.
+func collectImageDataURLTokens(body []byte, limit int) (tokens []imageURLToken, truncated bool, err error) {
+	if limit <= 0 {
+		return nil, false, errors.New("attachment gateway: image URL token limit must be positive")
+	}
 	if !json.Valid(body) {
-		return body, false, errors.New("attachment gateway: invalid JSON body")
+		return nil, false, errors.New("attachment gateway: invalid JSON body")
 	}
 
 	root := gjson.ParseBytes(body)
-	replacements := make([]jsonStringReplacement, 0, 4)
-	seen := make(map[[2]int]struct{})
-	var rewriteErr error
+	initialCapacity := min(limit, maxTokenPreallocation)
+	tokens = make([]imageURLToken, 0, initialCapacity)
+	seen := make(map[[2]int]struct{}, initialCapacity)
+	var visitErr error
 
-	visitString := func(value gjson.Result) {
-		if rewriteErr != nil || value.Type != gjson.String {
-			return
-		}
-		rawURL := value.String()
-		rewritten := visitor(rawURL)
-		if rewritten == rawURL {
-			return
+	visitString := func(value gjson.Result) bool {
+		if value.Type != gjson.String {
+			return true
 		}
 		start := value.Index
 		end := start + len(value.Raw)
 		if start < 0 || end > len(body) || end <= start || !bytes.Equal(body[start:end], []byte(value.Raw)) {
-			rewriteErr = errors.New("attachment gateway: invalid JSON string location")
-			return
+			visitErr = errors.New("attachment gateway: invalid JSON string location")
+			return false
 		}
 		key := [2]int{start, end}
 		if _, exists := seen[key]; exists {
-			return
+			return true
 		}
-		encoded, err := json.Marshal(rewritten)
-		if err != nil {
-			rewriteErr = errors.New("attachment gateway: encode rewritten image URL")
-			return
+		rawURL, valueErr := imageURLTokenValue(body, imageURLToken{start: start, end: end})
+		if valueErr != nil {
+			visitErr = valueErr
+			return false
+		}
+		if !isImageDataURL(rawURL) {
+			return true
+		}
+		if len(tokens) >= limit {
+			truncated = true
+			return false
 		}
 		seen[key] = struct{}{}
-		replacements = append(replacements, jsonStringReplacement{start: start, end: end, value: encoded})
+		tokens = append(tokens, imageURLToken{start: start, end: end})
+		return true
 	}
 
-	var walk func(gjson.Result)
-	walk = func(value gjson.Result) {
-		if rewriteErr != nil {
-			return
-		}
+	var walk func(gjson.Result) bool
+	walk = func(value gjson.Result) bool {
 		if value.IsArray() {
+			continueWalk := true
 			value.ForEach(func(_, child gjson.Result) bool {
-				walk(child)
-				return rewriteErr == nil
+				continueWalk = walk(child)
+				return continueWalk
 			})
-			return
+			return continueWalk
 		}
 		if !value.IsObject() {
-			return
+			return true
 		}
 
 		var partType string
 		var imageURL gjson.Result
-		children := make([]gjson.Result, 0, 4)
 		value.ForEach(func(key, child gjson.Result) bool {
 			switch key.String() {
 			case "type":
@@ -100,32 +120,61 @@ func rewriteImageURLs(body []byte, visitor imageURLVisitor) ([]byte, bool, error
 			case "image_url":
 				imageURL = child
 			}
-			if child.IsArray() || child.IsObject() {
-				children = append(children, child)
-			}
 			return true
 		})
 
 		switch partType {
 		case "input_image":
-			visitString(imageURL)
+			if !visitString(imageURL) {
+				return false
+			}
 		case "image_url":
 			if imageURL.Type == gjson.String {
-				visitString(imageURL)
+				if !visitString(imageURL) {
+					return false
+				}
 			} else if imageURL.IsObject() {
-				visitString(imageURL.Get("url"))
+				if !visitString(imageURL.Get("url")) {
+					return false
+				}
 			}
 		}
-		for _, child := range children {
-			walk(child)
-			if rewriteErr != nil {
-				return
+		continueWalk := true
+		value.ForEach(func(_, child gjson.Result) bool {
+			if child.IsArray() || child.IsObject() {
+				continueWalk = walk(child)
 			}
-		}
+			return continueWalk
+		})
+		return continueWalk
 	}
 	walk(root)
-	if rewriteErr != nil {
-		return body, false, rewriteErr
+	if visitErr != nil {
+		return nil, false, visitErr
+	}
+	return tokens, truncated, nil
+}
+
+// rewriteImageURLTokens applies replacements collected from
+// collectImageDataURLTokens. It preserves unrelated JSON bytes exactly, including
+// large numeric lexemes and formatting.
+func rewriteImageURLTokens(body []byte, tokens []imageURLToken, rewritten []imageURLRewrite) ([]byte, bool, error) {
+	if len(tokens) != len(rewritten) {
+		return body, false, errors.New("attachment gateway: image URL replacement count mismatch")
+	}
+	replacements := make([]jsonStringReplacement, 0, len(tokens))
+	for index, token := range tokens {
+		if !rewritten[index].changed {
+			continue
+		}
+		if _, err := imageURLTokenValue(body, token); err != nil {
+			return body, false, err
+		}
+		encoded, err := json.Marshal(rewritten[index].value)
+		if err != nil {
+			return body, false, errors.New("attachment gateway: encode rewritten image URL")
+		}
+		replacements = append(replacements, jsonStringReplacement{start: token.start, end: token.end, value: encoded})
 	}
 	if len(replacements) == 0 {
 		return body, false, nil
@@ -150,6 +199,17 @@ func rewriteImageURLs(body []byte, visitor imageURLVisitor) ([]byte, bool, error
 	}
 	output = append(output, body[cursor:]...)
 	return output, true, nil
+}
+
+func imageURLTokenValue(body []byte, token imageURLToken) (string, error) {
+	if token.start < 0 || token.end > len(body) || token.end <= token.start {
+		return "", errors.New("attachment gateway: invalid JSON string location")
+	}
+	var value string
+	if err := json.Unmarshal(body[token.start:token.end], &value); err != nil {
+		return "", errors.New("attachment gateway: invalid JSON string location")
+	}
+	return value, nil
 }
 
 func parseImageDataURL(raw string, maxImageBytes int) (dataURLImage, bool, error) {

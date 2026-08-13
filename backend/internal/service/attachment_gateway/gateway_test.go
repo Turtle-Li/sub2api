@@ -417,6 +417,45 @@ func TestConcurrentRequestsSingleflightOneEncode(t *testing.T) {
 	require.GreaterOrEqual(t, cacheHits+cacheShared, concurrency-1)
 }
 
+func TestSameRequestUsesConfiguredParallelColdEncodes(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	config.MaxImagesPerRequest = 2
+	config.MaxColdEncodesPerRequest = 2
+	config.MaxConcurrentEncode = 2
+	encoder := newParallelEncoder(2)
+	encoder.releaseAllOnCleanup(t)
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	body := makeResponsesPayload(t, []string{
+		dataURL("image/png", makePhotoLikePNG(t, 420, 300, 91)),
+		dataURL("image/png", makePhotoLikePNG(t, 420, 300, 92)),
+	}, 0)
+
+	resultCh := make(chan Result, 1)
+	go func() {
+		resultCh <- gateway.Optimize(context.Background(), body)
+	}()
+	select {
+	case <-encoder.started:
+	case <-time.After(time.Second):
+		t.Fatal("same-request encodes did not start in parallel")
+	}
+	require.Equal(t, int32(2), encoder.maxActive.Load())
+	encoder.releaseAll()
+
+	select {
+	case result := <-resultCh:
+		require.Equal(t, 2, result.Metrics.OptimizedImageCount)
+		require.Equal(t, 2, result.Metrics.ColdEncodeCount)
+	case <-time.After(2 * time.Second):
+		t.Fatal("same-request optimization did not complete")
+	}
+	require.Equal(t, int32(2), encoder.calls.Load())
+}
+
 func TestMaxImagesPerRequestBoundsWork(t *testing.T) {
 	config := DefaultConfig()
 	config.Enabled = true
@@ -437,6 +476,32 @@ func TestMaxImagesPerRequestBoundsWork(t *testing.T) {
 	require.Equal(t, 2, result.Metrics.ImageCount)
 	require.Equal(t, 1, result.Metrics.OptimizedImageCount)
 	require.Equal(t, 1, result.Metrics.SkippedRequestImageLimit)
+}
+
+func TestMaxImagesPerRequestBoundsTokenCollection(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1024
+	config.MaxImagesPerRequest = 2
+	config.MaxColdEncodesPerRequest = 2
+	gateway, err := New(config)
+	require.NoError(t, err)
+
+	urls := make([]string, 10_000)
+	for index := range urls {
+		urls[index] = dataURL("image/png", []byte("tiny"))
+	}
+	body := makeResponsesPayload(t, urls, 0)
+
+	result := gateway.Optimize(context.Background(), body)
+
+	require.Equal(t, body, result.Body)
+	// The collector only retains the configured limit plus an overflow signal;
+	// it must not materialize per-image state for the remaining 9,998 fields.
+	require.Equal(t, 3, result.Metrics.ImageCount)
+	require.Equal(t, 1, result.Metrics.SkippedRequestImageLimit)
+	require.Equal(t, 2, result.Metrics.SkippedBelowThreshold)
 }
 
 func TestColdEncodeLimitStillReusesLaterPositiveCacheHits(t *testing.T) {
@@ -965,6 +1030,48 @@ func TestTransformDeadlineFailsOpen(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestCanceledRequestStillWarmsImageCacheForRetry(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	config.MaxConcurrentEncode = 1
+	encoder := newFirstCallBlockingEncoder()
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	source := makePhotoLikePNG(t, 240, 160, 74)
+	body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resultCh := make(chan Result, 1)
+	go func() {
+		resultCh <- gateway.Optimize(ctx, body)
+	}()
+	select {
+	case <-encoder.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("cold encode did not start")
+	}
+	cancel()
+
+	select {
+	case result := <-resultCh:
+		require.Equal(t, body, result.Body)
+		require.Positive(t, result.Metrics.Errors)
+	case <-time.After(time.Second):
+		t.Fatal("canceled request did not fail open")
+	}
+	close(encoder.releaseFirst)
+
+	var warm Result
+	require.Eventually(t, func() bool {
+		warm = gateway.Optimize(context.Background(), body)
+		return warm.Metrics.CacheHit
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, 1, warm.Metrics.OptimizedImageCount)
+	require.Equal(t, int32(1), encoder.calls.Load())
+}
+
 func TestTimedOutBackgroundEncodeStillHoldsConcurrencySlot(t *testing.T) {
 	config := DefaultConfig()
 	config.Enabled = true
@@ -1060,6 +1167,53 @@ func TestWebPQuality85And90KeepCodeLikeRasterReadable(t *testing.T) {
 
 type countingEncoder struct {
 	calls atomic.Int32
+}
+
+type parallelEncoder struct {
+	calls       atomic.Int32
+	active      atomic.Int32
+	maxActive   atomic.Int32
+	required    int32
+	started     chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func newParallelEncoder(required int32) *parallelEncoder {
+	return &parallelEncoder{
+		required: required,
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (e *parallelEncoder) ID() string { return "parallel-test-encoder" }
+
+func (e *parallelEncoder) Encode(_ image.Image, _ encodeOptions) ([]byte, error) {
+	e.calls.Add(1)
+	active := e.active.Add(1)
+	for {
+		current := e.maxActive.Load()
+		if active <= current || e.maxActive.CompareAndSwap(current, active) {
+			break
+		}
+	}
+	if active >= e.required {
+		e.startedOnce.Do(func() { close(e.started) })
+	}
+	<-e.release
+	e.active.Add(-1)
+	return bytes.Repeat([]byte{0x42}, 128), nil
+}
+
+func (e *parallelEncoder) releaseAll() {
+	e.releaseOnce.Do(func() { close(e.release) })
+}
+
+func (e *parallelEncoder) releaseAllOnCleanup(t testing.TB) {
+	t.Helper()
+	t.Cleanup(e.releaseAll)
 }
 
 func (e *countingEncoder) ID() string { return "counting-test-encoder" }
