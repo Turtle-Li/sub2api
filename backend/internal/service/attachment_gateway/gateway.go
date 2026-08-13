@@ -189,13 +189,11 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	for index, token := range tokens {
 		if err := ctx.Err(); err != nil {
 			recordContextFailure(err)
-			dispatchStopped = true
 			break
 		}
 		rawURL, tokenErr := imageURLTokenValue(body, token)
 		if tokenErr != nil {
 			result.Metrics.Errors++
-			dispatchStopped = true
 			break
 		}
 		result.Metrics.ImageCount++
@@ -205,7 +203,6 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 				result.Metrics.SkippedUnsupported++
 			} else if errors.Is(parseErr, context.DeadlineExceeded) || errors.Is(parseErr, context.Canceled) {
 				recordContextFailure(parseErr)
-				dispatchStopped = true
 				break
 			} else {
 				result.Metrics.Errors++
