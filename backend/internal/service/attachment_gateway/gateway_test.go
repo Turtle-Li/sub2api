@@ -1072,6 +1072,189 @@ func TestCanceledRequestStillWarmsImageCacheForRetry(t *testing.T) {
 	require.Equal(t, int32(1), encoder.calls.Load())
 }
 
+func TestRehydrateFromCacheJoinsCanceledEncodeWithoutStartingAnother(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	config.MaxConcurrentEncode = 1
+	encoder := newFirstCallBlockingEncoder()
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	source := makePhotoLikePNG(t, 240, 160, 75)
+	body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	defer cancelRequest()
+	requestDone := make(chan Result, 1)
+	go func() { requestDone <- gateway.Optimize(requestCtx, body) }()
+	select {
+	case <-encoder.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("cold encode did not start")
+	}
+	cancelRequest()
+	select {
+	case result := <-requestDone:
+		require.Equal(t, body, result.Body)
+	case <-time.After(time.Second):
+		t.Fatal("canceled request did not fail open")
+	}
+
+	rehydrated := make(chan Result, 1)
+	go func() { rehydrated <- gateway.RehydrateFromCache(context.Background(), body) }()
+	require.Never(t, func() bool { return encoder.calls.Load() > 1 }, 100*time.Millisecond, 10*time.Millisecond)
+	close(encoder.releaseFirst)
+	select {
+	case result := <-rehydrated:
+		require.Equal(t, 1, result.Metrics.OptimizedImageCount)
+		require.Contains(t, string(result.Body), "data:image/webp;base64,")
+	case <-time.After(2 * time.Second):
+		t.Fatal("cache-only rehydrate did not join in-flight encode")
+	}
+	require.Equal(t, int32(1), encoder.calls.Load())
+}
+
+func TestRehydrateFromCacheNeverStartsColdEncodeOnCacheMiss(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	encoder := &countingEncoder{}
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	source := makePhotoLikePNG(t, 240, 160, 76)
+	body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+
+	result := gateway.RehydrateFromCache(context.Background(), body)
+
+	require.Equal(t, body, result.Body)
+	require.Zero(t, result.Metrics.OptimizedImageCount)
+	require.Zero(t, encoder.calls.Load())
+}
+
+func TestCanceledEncodeRehydrateWarmsURLCacheWithoutSecondUpload(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	config.MaxConcurrentEncode = 1
+	encoder := newFirstCallBlockingEncoder()
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	store := &recordingObjectStorage{}
+	externalizer, err := NewURLExternalizer(URLConfig{
+		Enabled:              true,
+		MinBodyBytes:         1,
+		URLCacheTTL:          time.Hour,
+		MaxImageBytes:        config.MaxImageBytes,
+		MaxImagesPerRequest:  1,
+		MaxConcurrentUploads: 1,
+	}, store)
+	require.NoError(t, err)
+	source := makePhotoLikePNG(t, 240, 160, 77)
+	body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	defer cancelRequest()
+	requestDone := make(chan Result, 1)
+	go func() { requestDone <- gateway.Optimize(requestCtx, body) }()
+	select {
+	case <-encoder.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("cold encode did not start")
+	}
+	cancelRequest()
+	select {
+	case result := <-requestDone:
+		require.Equal(t, body, result.Body)
+	case <-time.After(time.Second):
+		t.Fatal("canceled request did not fail open")
+	}
+
+	rehydrated := make(chan Result, 1)
+	go func() { rehydrated <- gateway.RehydrateFromCache(context.Background(), body) }()
+	close(encoder.releaseFirst)
+	var warm Result
+	select {
+	case warm = <-rehydrated:
+		require.Equal(t, 1, warm.Metrics.OptimizedImageCount)
+	case <-time.After(2 * time.Second):
+		t.Fatal("cache-only rehydrate did not finish")
+	}
+
+	firstURL := externalizer.Externalize(context.Background(), warm.Body)
+	require.Equal(t, 1, firstURL.Metrics.ExternalizedCount)
+	require.Equal(t, 1, firstURL.Metrics.UploadCount)
+	require.Equal(t, 1, store.callCount())
+	secondURL := externalizer.Externalize(context.Background(), warm.Body)
+	require.Equal(t, 1, secondURL.Metrics.ExternalizedCount)
+	require.Equal(t, 1, secondURL.Metrics.CacheHits)
+	require.Equal(t, 1, store.callCount())
+}
+
+func TestColdEncodeCountOnlyTracksAcquiredEncodeSlots(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	config.MaxConcurrentEncode = 1
+	encoder := newFirstCallBlockingEncoder()
+	gateway, err := newWithEncoder(config, encoder)
+	require.NoError(t, err)
+	firstBody := makeResponsesPayload(t, []string{dataURL("image/png", makePhotoLikePNG(t, 240, 160, 78))}, 0)
+	secondSource := makePhotoLikePNG(t, 240, 160, 79)
+	secondBody := makeResponsesPayload(t, []string{dataURL("image/png", secondSource)}, 0)
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	firstDone := make(chan Result, 1)
+	go func() { firstDone <- gateway.Optimize(firstCtx, firstBody) }()
+	select {
+	case <-encoder.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first encode did not start")
+	}
+	cancelFirst()
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first canceled request did not return")
+	}
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	secondDone := make(chan Result, 1)
+	go func() { secondDone <- gateway.Optimize(secondCtx, secondBody) }()
+	require.Eventually(t, func() bool {
+		return cacheFlightExists(gateway, secondSource)
+	}, time.Second, 10*time.Millisecond)
+	cancelSecond()
+	var second Result
+	select {
+	case second = <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second canceled request did not return")
+	}
+	require.Zero(t, second.Metrics.ColdEncodeCount, "queued work must not be reported as an acquired encoder slot")
+	require.Equal(t, 1, second.Metrics.CacheLookupCount, "the queued cache flight must remain observable for cancellation recovery")
+	require.Equal(t, int32(1), encoder.calls.Load())
+
+	close(encoder.releaseFirst)
+	require.Eventually(t, func() bool {
+		return len(gateway.encodeSlots) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func cacheFlightExists(gateway *Gateway, source []byte) bool {
+	if gateway == nil || gateway.cache == nil {
+		return false
+	}
+	gateway.cache.flightMu.Lock()
+	defer gateway.cache.flightMu.Unlock()
+	_, exists := gateway.cache.flights[gateway.cache.flightKey(sourceHash(source))]
+	return exists
+}
+
 func TestTimedOutBackgroundEncodeStillHoldsConcurrencySlot(t *testing.T) {
 	config := DefaultConfig()
 	config.Enabled = true

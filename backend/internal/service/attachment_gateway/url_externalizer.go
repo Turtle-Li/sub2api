@@ -22,8 +22,9 @@ const (
 )
 
 var (
-	errObjectStorageConfigChanged = errors.New("attachment gateway: object storage config changed during upload")
-	errObjectStorageURLUnsafe     = errors.New("attachment gateway: signed object URL is too close to expiry")
+	errObjectStorageConfigChanged   = errors.New("attachment gateway: object storage config changed during upload")
+	errObjectStorageURLUnsafe       = errors.New("attachment gateway: signed object URL is too close to expiry")
+	errObjectStorageWriteSuppressed = errors.New("attachment gateway: object storage write suppressed")
 )
 
 // ObjectStorage is the narrow storage contract needed by URL externalization.
@@ -123,6 +124,7 @@ type URLMetrics struct {
 	CacheShared         int
 	SkippedBelowTrigger bool
 	TimedOut            bool
+	WriteSuppressed     bool
 	Errors              int
 	DurationMS          float64
 }
@@ -193,6 +195,75 @@ func (e *URLExternalizer) Enabled() bool {
 }
 
 func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result URLResult) {
+	return e.externalize(ctx, body, nil, nil)
+}
+
+// ExternalizeWithWriteGuard applies normal URL externalization while checking a
+// live write guard immediately before every physical object-storage write. A
+// nil guard permits writes. It is used by the handler's normal and background
+// paths so an emergency rollout change also covers a request queued for an
+// upload slot.
+func (e *URLExternalizer) ExternalizeWithWriteGuard(
+	ctx context.Context,
+	body []byte,
+	canWrite func() bool,
+) (result URLResult) {
+	return e.externalize(ctx, body, nil, canWrite)
+}
+
+// ExternalizeSelected is the cancellation-recovery variant of Externalize.
+// It only publishes the retained image-token positions, which prevents a
+// partial cache rehydrate from uploading untouched source data URLs.
+func (e *URLExternalizer) ExternalizeSelected(ctx context.Context, body []byte, selectedIndexes []int) (result URLResult) {
+	return e.externalizeSelected(ctx, body, selectedIndexes, nil)
+}
+
+// ExternalizeSelectedWithWriteGuard is the cancellation-recovery variant for
+// a live rollout. canWrite is re-evaluated immediately after an upload slot is
+// acquired, before object storage is touched. A nil guard permits writes.
+func (e *URLExternalizer) ExternalizeSelectedWithWriteGuard(
+	ctx context.Context,
+	body []byte,
+	selectedIndexes []int,
+	canWrite func() bool,
+) (result URLResult) {
+	return e.externalizeSelected(ctx, body, selectedIndexes, canWrite)
+}
+
+func (e *URLExternalizer) externalizeSelected(
+	ctx context.Context,
+	body []byte,
+	selectedIndexes []int,
+	canWrite func() bool,
+) (result URLResult) {
+	if len(selectedIndexes) == 0 {
+		return URLResult{Body: body, Metrics: URLMetrics{
+			Enabled:            e.Enabled(),
+			OriginalBodyBytes:  len(body),
+			RewrittenBodyBytes: len(body),
+		}}
+	}
+	selected := make(map[int]struct{}, len(selectedIndexes))
+	for _, index := range selectedIndexes {
+		if index < 0 {
+			return URLResult{Body: body, Metrics: URLMetrics{
+				Enabled:            e.Enabled(),
+				OriginalBodyBytes:  len(body),
+				RewrittenBodyBytes: len(body),
+				Errors:             1,
+			}}
+		}
+		selected[index] = struct{}{}
+	}
+	return e.externalize(ctx, body, selected, canWrite)
+}
+
+func (e *URLExternalizer) externalize(
+	ctx context.Context,
+	body []byte,
+	selected map[int]struct{},
+	canWrite func() bool,
+) (result URLResult) {
 	started := time.Now()
 	result = URLResult{Body: body, Metrics: URLMetrics{
 		Enabled:            e.Enabled(),
@@ -232,10 +303,29 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 	if len(tokens) == 0 {
 		return result
 	}
+	if selected != nil {
+		for index := range selected {
+			if index >= len(tokens) {
+				result.Metrics.Errors++
+				return result
+			}
+		}
+	}
 
+	selectedCount := len(tokens)
+	if selected != nil {
+		selectedCount = len(selected)
+		if selectedCount > len(tokens) {
+			result.Metrics.Errors++
+			return result
+		}
+	}
+	if selectedCount == 0 {
+		return result
+	}
 	workerCount := e.config.MaxConcurrentUploads
-	if workerCount > len(tokens) {
-		workerCount = len(tokens)
+	if workerCount > selectedCount {
+		workerCount = selectedCount
 	}
 	jobs := make(chan imageURLPublishJob)
 	outcomes := make(chan imageURLPublishOutcome, len(tokens))
@@ -247,7 +337,7 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 			for job := range jobs {
 				func() {
 					defer job.release()
-					url, cacheHit, shared, uploaded, publishErr := e.publishSafely(ctx, job.image, storageVersion)
+					url, cacheHit, shared, uploaded, publishErr := e.publishSafely(ctx, job.image, storageVersion, canWrite)
 					outcomes <- imageURLPublishOutcome{
 						index:    job.index,
 						url:      url,
@@ -263,6 +353,11 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 
 	dispatchStopped := false
 	for index, token := range tokens {
+		if selected != nil {
+			if _, wanted := selected[index]; !wanted {
+				continue
+			}
+		}
 		if ctx.Err() != nil {
 			result.Metrics.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 			dispatchStopped = true
@@ -303,6 +398,8 @@ func (e *URLExternalizer) Externalize(ctx context.Context, body []byte) (result 
 		if outcome.err != nil {
 			if errors.Is(outcome.err, context.DeadlineExceeded) {
 				result.Metrics.TimedOut = true
+			} else if errors.Is(outcome.err, errObjectStorageWriteSuppressed) {
+				result.Metrics.WriteSuppressed = true
 			} else if !errors.Is(outcome.err, context.Canceled) {
 				result.Metrics.Errors++
 			}
@@ -367,6 +464,7 @@ func (e *URLExternalizer) publishSafely(
 	ctx context.Context,
 	image dataURLImage,
 	storageVersion uint64,
+	canWrite func() bool,
 ) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
 	defer func() {
 		if recover() != nil {
@@ -377,10 +475,15 @@ func (e *URLExternalizer) publishSafely(
 			err = errors.New("attachment gateway: image upload panicked")
 		}
 	}()
-	return e.publish(ctx, image, storageVersion)
+	return e.publish(ctx, image, storageVersion, canWrite)
 }
 
-func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage, storageVersion uint64) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
+func (e *URLExternalizer) publish(
+	ctx context.Context,
+	image dataURLImage,
+	storageVersion uint64,
+	canWrite func() bool,
+) (url string, cacheHit bool, shared bool, uploaded bool, err error) {
 	hash := optimizedHash(image.Bytes)
 	if !e.storageVersionCurrent(storageVersion) {
 		return "", false, false, false, errObjectStorageConfigChanged
@@ -413,6 +516,13 @@ func (e *URLExternalizer) publish(ctx context.Context, image dataURLImage, stora
 			defer func() { <-e.slots }()
 		case <-ctx.Done():
 			return "", ctx.Err()
+		}
+		// The handler has already checked its live rollout control before this
+		// background operation started. Check once more after any queueing for the
+		// bounded upload slot and immediately before storage I/O, so an emergency
+		// rollback cannot be bypassed by an in-flight wait.
+		if canWrite != nil && !canWrite() {
+			return "", errObjectStorageWriteSuppressed
 		}
 		key := e.objectKey(hash, image.MIMEType)
 		published := ""

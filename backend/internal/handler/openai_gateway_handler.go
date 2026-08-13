@@ -46,6 +46,7 @@ type OpenAIGatewayHandler struct {
 	imageLimiter               *imageConcurrencyLimiter
 	attachmentOptimizer        responsesAttachmentOptimizer
 	attachmentURLExternalizer  responsesAttachmentURLExternalizer
+	attachmentWarmupSlots      chan struct{}
 	retryProtectionCache       openAIAbnormalRetryRuntimeCache
 	maxAccountSwitches         int
 	cfg                        *config.Config
@@ -54,11 +55,15 @@ type OpenAIGatewayHandler struct {
 type responsesAttachmentOptimizer interface {
 	Enabled() bool
 	Optimize(context.Context, []byte) attachmentgateway.Result
+	RehydrateFromCache(context.Context, []byte) attachmentgateway.Result
 }
 
 type responsesAttachmentURLExternalizer interface {
 	Enabled() bool
 	Externalize(context.Context, []byte) attachmentgateway.URLResult
+	ExternalizeWithWriteGuard(context.Context, []byte, func() bool) attachmentgateway.URLResult
+	ExternalizeSelected(context.Context, []byte, []int) attachmentgateway.URLResult
+	ExternalizeSelectedWithWriteGuard(context.Context, []byte, []int, func() bool) attachmentgateway.URLResult
 }
 
 type openAIWSTurnChannelMappingSnapshot struct {
@@ -243,6 +248,7 @@ func NewOpenAIGatewayHandler(
 		concurrencyHelper:        NewConcurrencyHelper(concurrencyService, SSEPingFormatComment, pingInterval),
 		imageLimiter:             &imageConcurrencyLimiter{},
 		attachmentOptimizer:      newResponsesAttachmentOptimizer(cfg),
+		attachmentWarmupSlots:    make(chan struct{}, 1),
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
 	}
