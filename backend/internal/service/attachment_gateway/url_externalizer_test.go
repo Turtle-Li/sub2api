@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -191,6 +192,100 @@ func TestURLExternalizerPublishesOnceAndReusesHashURL(t *testing.T) {
 	require.True(t, strings.HasPrefix(store.keys[0], "attachments/"))
 	require.True(t, strings.HasSuffix(store.keys[0], ".webp"))
 	store.mu.Unlock()
+}
+
+func TestURLExternalizerSelectedPublishesOnlyRehydratedImages(t *testing.T) {
+	store := &recordingObjectStorage{}
+	externalizer, err := NewURLExternalizer(URLConfig{
+		Enabled:              true,
+		MinBodyBytes:         1,
+		ObjectPrefix:         "attachments/",
+		URLCacheTTL:          time.Hour,
+		MaxImageBytes:        1024,
+		MaxImagesPerRequest:  4,
+		MaxConcurrentUploads: 2,
+	}, store)
+	require.NoError(t, err)
+	first := dataURL("image/webp", []byte("rehydrated-image"))
+	second := dataURL("image/webp", []byte("untouched-source-image"))
+	body := makeResponsesPayload(t, []string{first, second}, 0)
+
+	result := externalizer.ExternalizeSelected(context.Background(), body, []int{0})
+
+	require.Equal(t, 1, result.Metrics.ExternalizedCount)
+	require.Equal(t, 1, result.Metrics.UploadCount)
+	require.Equal(t, 1, store.callCount())
+	require.Contains(t, string(result.Body), "https://r2.example.test/attachments/")
+	require.Contains(t, string(result.Body), second)
+}
+
+func TestURLExternalizerWriteGuardRechecksAfterQueuedUploadSlot(t *testing.T) {
+	store := &recordingObjectStorage{}
+	externalizer, err := NewURLExternalizer(URLConfig{
+		Enabled:              true,
+		MinBodyBytes:         1,
+		ObjectPrefix:         "attachments/",
+		URLCacheTTL:          time.Hour,
+		MaxImageBytes:        1024,
+		MaxImagesPerRequest:  1,
+		MaxConcurrentUploads: 1,
+	}, store)
+	require.NoError(t, err)
+	// Occupy the only physical-upload slot. The worker below can parse its
+	// selected WebP but must block immediately before the storage write.
+	externalizer.slots <- struct{}{}
+	defer func() { <-externalizer.slots }()
+
+	var allowWrite atomic.Bool
+	allowWrite.Store(true)
+	body := testInlineImageBody([]byte("queued-warmup-image"))
+	resultCh := make(chan URLResult, 1)
+	go func() {
+		resultCh <- externalizer.ExternalizeSelectedWithWriteGuard(
+			context.Background(),
+			body,
+			[]int{0},
+			allowWrite.Load,
+		)
+	}()
+	require.Eventually(t, func() bool {
+		// parseSlots remains held by the worker until publish returns, proving it
+		// is queued on slots rather than merely scheduled by the test goroutine.
+		return len(externalizer.parseSlots) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	allowWrite.Store(false)
+	<-externalizer.slots
+	result := <-resultCh
+	// The deferred cleanup should not attempt a second receive after the test
+	// has released the manually occupied slot.
+	externalizer.slots <- struct{}{}
+
+	require.Equal(t, body, result.Body)
+	require.True(t, result.Metrics.WriteSuppressed)
+	require.Zero(t, result.Metrics.Errors)
+	require.Zero(t, result.Metrics.ExternalizedCount)
+	require.Zero(t, store.callCount())
+}
+
+func TestURLExternalizerSelectedRejectsTokenIndexOutsideCurrentBody(t *testing.T) {
+	store := &recordingObjectStorage{}
+	externalizer, err := NewURLExternalizer(URLConfig{
+		Enabled:              true,
+		MinBodyBytes:         1,
+		URLCacheTTL:          time.Hour,
+		MaxImageBytes:        1024,
+		MaxImagesPerRequest:  4,
+		MaxConcurrentUploads: 1,
+	}, store)
+	require.NoError(t, err)
+	body := testInlineImageBody([]byte("one-image"))
+
+	result := externalizer.ExternalizeSelected(context.Background(), body, []int{1})
+
+	require.Equal(t, body, result.Body)
+	require.Positive(t, result.Metrics.Errors)
+	require.Zero(t, store.callCount())
 }
 
 func TestURLExternalizerBoundsTokenCollection(t *testing.T) {

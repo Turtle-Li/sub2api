@@ -85,6 +85,8 @@ func (g *Gateway) Enabled() bool {
 func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	started := time.Now()
 	var coldEncodeCount atomic.Int64
+	var admittedColdEncodeCount atomic.Int64
+	var cacheLookupCount atomic.Int64
 	result = Result{
 		Body: body,
 		Metrics: Metrics{
@@ -98,6 +100,7 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	}()
 	defer func() {
 		result.Metrics.ColdEncodeCount = int(coldEncodeCount.Load())
+		result.Metrics.CacheLookupCount = int(cacheLookupCount.Load())
 	}()
 	defer func() {
 		if recover() != nil {
@@ -112,38 +115,20 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 		return result
 	}
 
-	effectiveThreshold := g.config.ThresholdBytes
-	result.Metrics.EffectiveThresholdBytes = effectiveThreshold
-	if g.config.RequestBudgetEnabled || g.config.AggregateSmallImageEnabled {
-		inlineStats, inspectErr := InspectInlineAttachments(body)
-		if inspectErr != nil {
-			result.Metrics.Errors++
-			return result
-		}
-		result.Metrics.OriginalInlineAttachmentCount = inlineStats.Count
-		result.Metrics.OriginalInlineAttachmentBytes = inlineStats.Bytes
-		result.Metrics.OriginalUnsupportedAttachmentCount = inlineStats.UnsupportedCount
-		result.Metrics.CandidateInlineAttachmentCount = inlineStats.Count
-		result.Metrics.CandidateInlineAttachmentBytes = inlineStats.Bytes
-		result.Metrics.CandidateUnsupportedAttachmentCount = inlineStats.UnsupportedCount
-		if g.config.AggregateSmallImageEnabled &&
-			(inlineStats.OptimizableImageBytes >= g.config.AggregateSmallImageTriggerBytes ||
-				inlineStats.OptimizableImageCount >= g.config.AggregateSmallImageTriggerCount) {
-			result.Metrics.AggregatePressure = true
-			effectiveThreshold = g.config.AggregateSmallImageThresholdBytes
-			result.Metrics.EffectiveThresholdBytes = effectiveThreshold
-		}
+	effectiveThreshold, inspectOK := g.prepareInlineAttachmentMetrics(body, &result.Metrics)
+	if !inspectOK {
+		return result
 	}
 
 	contextFailureRecorded := false
 	reserveColdEncode := func() bool {
 		limit := int64(g.config.MaxColdEncodesPerRequest)
 		for {
-			current := coldEncodeCount.Load()
+			current := admittedColdEncodeCount.Load()
 			if current >= limit {
 				return false
 			}
-			if coldEncodeCount.CompareAndSwap(current, current+1) {
+			if admittedColdEncodeCount.CompareAndSwap(current, current+1) {
 				return true
 			}
 		}
@@ -182,7 +167,13 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 			for job := range jobs {
 				func() {
 					defer job.release()
-					optimization, optimizeErr := g.optimizeImageSafely(ctx, job.image, reserveColdEncode)
+					optimization, optimizeErr := g.optimizeImageSafely(
+						ctx,
+						job.image,
+						reserveColdEncode,
+						func() { coldEncodeCount.Add(1) },
+						func() { cacheLookupCount.Add(1) },
+					)
 					outcomes <- imageOptimizationOutcome{
 						index:        job.index,
 						optimization: optimization,
@@ -334,10 +325,210 @@ func (g *Gateway) Optimize(ctx context.Context, body []byte) (result Result) {
 	return result
 }
 
+// RehydrateFromCache rebuilds a Responses body from completed cache entries or
+// from encodes that were already in progress when it was called. Unlike
+// Optimize, it never admits a new cold encode. It is intended for bounded
+// cancellation recovery before URL externalization, so a disconnected client
+// cannot create a second wave of raster work while already-admitted work can
+// still become reusable.
+func (g *Gateway) RehydrateFromCache(ctx context.Context, body []byte) (result Result) {
+	started := time.Now()
+	result = Result{
+		Body: body,
+		Metrics: Metrics{
+			Enabled:            g.Enabled(),
+			OriginalBodyBytes:  len(body),
+			OptimizedBodyBytes: len(body),
+		},
+	}
+	defer func() {
+		result.Metrics.OptimizeDurationMS = float64(time.Since(started)) / float64(time.Millisecond)
+	}()
+	defer func() {
+		if recover() != nil {
+			result.Body = body
+			result.Metrics.OptimizedBodyBytes = len(body)
+			result.Metrics.OptimizedImageCount = 0
+			result.Metrics.OptimizedImageBytes = 0
+			result.Metrics.Errors++
+		}
+	}()
+	if !g.Enabled() {
+		return result
+	}
+	effectiveThreshold, inspectOK := g.prepareInlineAttachmentMetrics(body, &result.Metrics)
+	if !inspectOK {
+		return result
+	}
+
+	tokens, truncated, rewriteErr := collectImageDataURLTokens(body, g.config.MaxImagesPerRequest)
+	if rewriteErr != nil {
+		result.Metrics.Errors++
+		return result
+	}
+	if len(tokens) == 0 {
+		return result
+	}
+
+	rewritten := make([]imageURLRewrite, len(tokens))
+	rehydratedIndexes := make([]int, 0, len(tokens))
+	totalImageBytes := 0
+	for index, token := range tokens {
+		if err := ctx.Err(); err != nil {
+			recordRehydrateContextFailure(&result.Metrics, err)
+			return result
+		}
+		rawURL, tokenErr := imageURLTokenValue(body, token)
+		if tokenErr != nil {
+			result.Metrics.Errors++
+			return result
+		}
+		result.Metrics.ImageCount++
+		parsed, release, parseErr := g.parseImageDataURLWithSlot(ctx, rawURL)
+		if parseErr != nil {
+			if errors.Is(parseErr, errUnsupportedMediaType) {
+				result.Metrics.SkippedUnsupported++
+			} else if errors.Is(parseErr, context.Canceled) || errors.Is(parseErr, context.DeadlineExceeded) {
+				recordRehydrateContextFailure(&result.Metrics, parseErr)
+				release()
+				return result
+			} else {
+				result.Metrics.Errors++
+			}
+			release()
+			continue
+		}
+		result.Metrics.OriginalImageBytes += len(parsed.Bytes)
+		if len(parsed.Bytes) > g.config.MaxTotalImageBytes-totalImageBytes {
+			result.Metrics.SkippedTotalImageBytes++
+			release()
+			continue
+		}
+		totalImageBytes += len(parsed.Bytes)
+		if len(parsed.Bytes) < effectiveThreshold {
+			result.Metrics.SkippedBelowThreshold++
+			release()
+			continue
+		}
+		hash := sourceHash(parsed.Bytes)
+		release()
+
+		lookup, found, shared, lookupErr := g.cache.loadOrJoin(ctx, hash)
+		if lookupErr != nil {
+			if errors.Is(lookupErr, context.Canceled) || errors.Is(lookupErr, context.DeadlineExceeded) {
+				recordRehydrateContextFailure(&result.Metrics, lookupErr)
+				return result
+			}
+			result.Metrics.Errors++
+			continue
+		}
+		if !found {
+			// No producer was present at the time the cancellation recovery began.
+			// Do not start one here: this path is deliberately cache-only.
+			continue
+		}
+		if lookup.Negative != nil {
+			if lookup.Hit {
+				result.Metrics.NegativeCacheHit = true
+				result.Metrics.NegativeCacheHits++
+			}
+			if shared {
+				result.Metrics.NegativeCacheShared++
+			}
+			continue
+		}
+		if lookup.Hit {
+			result.Metrics.CacheHit = true
+			result.Metrics.CacheHits++
+		}
+		if shared {
+			result.Metrics.CacheShared++
+		}
+		result.Metrics.OptimizedImageCount++
+		result.Metrics.OptimizedImageBytes += len(lookup.Image.Bytes)
+		rewritten[index] = imageURLRewrite{
+			value:   "data:image/webp;base64," + base64.StdEncoding.EncodeToString(lookup.Image.Bytes),
+			changed: true,
+		}
+		rehydratedIndexes = append(rehydratedIndexes, index)
+	}
+	if truncated {
+		result.Metrics.ImageCount++
+		result.Metrics.SkippedRequestImageLimit++
+	}
+	if err := ctx.Err(); err != nil {
+		recordRehydrateContextFailure(&result.Metrics, err)
+		return result
+	}
+	optimizedBody, changed, rewriteErr := rewriteImageURLTokens(body, tokens, rewritten)
+	if rewriteErr != nil {
+		result.Metrics.Errors++
+		return result
+	}
+	if !changed {
+		return result
+	}
+	result.Body = optimizedBody
+	result.Metrics.OptimizedBodyBytes = len(optimizedBody)
+	result.RehydratedImageIndexes = rehydratedIndexes
+	if g.config.RequestBudgetEnabled || g.config.AggregateSmallImageEnabled {
+		inlineStats, inspectErr := InspectInlineAttachments(optimizedBody)
+		if inspectErr != nil {
+			result.Body = body
+			result.Metrics.OptimizedBodyBytes = len(body)
+			result.Metrics.OptimizedImageCount = 0
+			result.Metrics.OptimizedImageBytes = 0
+			result.Metrics.Errors++
+			return result
+		}
+		result.Metrics.CandidateInlineAttachmentCount = inlineStats.Count
+		result.Metrics.CandidateInlineAttachmentBytes = inlineStats.Bytes
+		result.Metrics.CandidateUnsupportedAttachmentCount = inlineStats.UnsupportedCount
+	}
+	return result
+}
+
+func (g *Gateway) prepareInlineAttachmentMetrics(body []byte, metrics *Metrics) (int, bool) {
+	effectiveThreshold := g.config.ThresholdBytes
+	metrics.EffectiveThresholdBytes = effectiveThreshold
+	if !g.config.RequestBudgetEnabled && !g.config.AggregateSmallImageEnabled {
+		return effectiveThreshold, true
+	}
+	inlineStats, inspectErr := InspectInlineAttachments(body)
+	if inspectErr != nil {
+		metrics.Errors++
+		return effectiveThreshold, false
+	}
+	metrics.OriginalInlineAttachmentCount = inlineStats.Count
+	metrics.OriginalInlineAttachmentBytes = inlineStats.Bytes
+	metrics.OriginalUnsupportedAttachmentCount = inlineStats.UnsupportedCount
+	metrics.CandidateInlineAttachmentCount = inlineStats.Count
+	metrics.CandidateInlineAttachmentBytes = inlineStats.Bytes
+	metrics.CandidateUnsupportedAttachmentCount = inlineStats.UnsupportedCount
+	if g.config.AggregateSmallImageEnabled &&
+		(inlineStats.OptimizableImageBytes >= g.config.AggregateSmallImageTriggerBytes ||
+			inlineStats.OptimizableImageCount >= g.config.AggregateSmallImageTriggerCount) {
+		metrics.AggregatePressure = true
+		effectiveThreshold = g.config.AggregateSmallImageThresholdBytes
+		metrics.EffectiveThresholdBytes = effectiveThreshold
+	}
+	return effectiveThreshold, true
+}
+
+func recordRehydrateContextFailure(metrics *Metrics, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		metrics.TimedOut = true
+		return
+	}
+	metrics.Errors++
+}
+
 func (g *Gateway) optimizeImageSafely(
 	ctx context.Context,
 	input dataURLImage,
 	reserveColdEncode func() bool,
+	recordColdEncodeStarted func(),
+	recordCacheLookup func(),
 ) (optimization imageOptimizationResult, err error) {
 	defer func() {
 		if recover() != nil {
@@ -345,7 +536,7 @@ func (g *Gateway) optimizeImageSafely(
 			err = errors.New("attachment gateway: image transform panicked")
 		}
 	}()
-	return g.optimizeImage(ctx, input, reserveColdEncode)
+	return g.optimizeImage(ctx, input, reserveColdEncode, recordColdEncodeStarted, recordCacheLookup)
 }
 
 // parseImageDataURLWithSlot keeps a transform slot from data URL decoding
@@ -377,8 +568,13 @@ func (g *Gateway) optimizeImage(
 	ctx context.Context,
 	input dataURLImage,
 	reserveColdEncode func() bool,
+	recordColdEncodeStarted func(),
+	recordCacheLookup func(),
 ) (imageOptimizationResult, error) {
 	hash := sourceHash(input.Bytes)
+	if recordCacheLookup != nil {
+		recordCacheLookup()
+	}
 	lookup, shared, err := g.cache.getOrCreate(ctx, hash, func() (created cacheLookup, createErr error) {
 		workCtx, cancelWork := detachedWorkContext(ctx)
 		defer cancelWork()
@@ -398,6 +594,9 @@ func (g *Gateway) optimizeImage(
 		select {
 		case g.encodeSlots <- struct{}{}:
 			defer func() { <-g.encodeSlots }()
+			if recordColdEncodeStarted != nil {
+				recordColdEncodeStarted()
+			}
 		case <-ctx.Done():
 			return cacheLookup{}, ctx.Err()
 		}
@@ -478,11 +677,12 @@ func (g *Gateway) optimizeImage(
 
 func (m Metrics) String() string {
 	return fmt.Sprintf(
-		"body=%d->%d images=%d optimized=%d cold_encodes=%d cache_hits=%d negative_cache_hits=%d duration_ms=%.3f",
+		"body=%d->%d images=%d optimized=%d cache_lookups=%d cold_encodes=%d cache_hits=%d negative_cache_hits=%d duration_ms=%.3f",
 		m.OriginalBodyBytes,
 		m.OptimizedBodyBytes,
 		m.ImageCount,
 		m.OptimizedImageCount,
+		m.CacheLookupCount,
 		m.ColdEncodeCount,
 		m.CacheHits,
 		m.NegativeCacheHits,

@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -27,6 +25,17 @@ type cacheLookup struct {
 	Hit      bool
 }
 
+// imageCacheFlight is deliberately owned by imageCache rather than exposing
+// singleflight internals. Besides preserving the normal get-or-create
+// behavior, it lets cancellation recovery join work that is already in
+// progress without accidentally creating a new raster encode.
+type imageCacheFlight struct {
+	done   chan struct{}
+	lookup cacheLookup
+	err    error
+	shared bool
+}
+
 type imageCache struct {
 	dir             string
 	ttl             time.Duration
@@ -37,7 +46,8 @@ type imageCache struct {
 	policy          string
 	optimizer       string
 	now             func() time.Time
-	flight          singleflight.Group
+	flightMu        sync.Mutex
+	flights         map[string]*imageCacheFlight
 	filesMu         sync.RWMutex
 	cleanupStateMu  sync.Mutex
 	cleanupRunning  bool
@@ -72,6 +82,7 @@ func newImageCache(
 		policy:          policy,
 		optimizer:       optimizer,
 		now:             time.Now,
+		flights:         make(map[string]*imageCacheFlight),
 	}
 }
 
@@ -87,47 +98,128 @@ func (c *imageCache) getOrCreate(
 		return cacheLookup{Negative: &negative, Hit: true}, false, nil
 	}
 
-	resultChannel := c.flight.DoChan(hash+":"+c.policy, func() (any, error) {
+	flight, producer := c.getOrStartFlight(hash)
+	if producer {
+		go c.completeFlight(hash, flight, create)
+	}
+	lookup, err := waitForImageCacheFlight(ctx, flight)
+	if err != nil {
+		return cacheLookup{}, c.flightWasShared(flight), err
+	}
+	// A shared in-flight encode is tracked separately from a persisted-cache
+	// hit. Treating Shared as Hit would overstate cache effectiveness during a
+	// cold stampede and hide the encode that still occurred.
+	return lookup, c.flightWasShared(flight), nil
+}
+
+// loadOrJoin reads a completed cache entry or waits for an already-created
+// producer. It never starts a new producer. This is the cancellation recovery
+// boundary: a disconnected client may reuse work that was already admitted,
+// but cannot turn a retry prewarm into additional cold raster work.
+func (c *imageCache) loadOrJoin(ctx context.Context, hash string) (lookup cacheLookup, found bool, shared bool, err error) {
+	if cached, ok := c.load(hash); ok {
+		return cacheLookup{Image: cached, Hit: true}, true, false, nil
+	}
+	if negative, ok := c.loadNegative(hash); ok {
+		return cacheLookup{Negative: &negative, Hit: true}, true, false, nil
+	}
+
+	c.flightMu.Lock()
+	flight := c.flights[c.flightKey(hash)]
+	c.flightMu.Unlock()
+	if flight == nil {
+		// A producer publishes its on-disk cache entry before removing the
+		// flight. Recheck after observing no flight so a just-completed encode is
+		// still eligible for cancellation recovery.
 		if cached, ok := c.load(hash); ok {
-			return cacheLookup{Image: cached, Hit: true}, nil
+			return cacheLookup{Image: cached, Hit: true}, true, false, nil
 		}
 		if negative, ok := c.loadNegative(hash); ok {
-			return cacheLookup{Negative: &negative, Hit: true}, nil
+			return cacheLookup{Negative: &negative, Hit: true}, true, false, nil
 		}
-		created, err := create()
-		if err != nil {
+		return cacheLookup{}, false, false, nil
+	}
+	lookup, err = waitForImageCacheFlight(ctx, flight)
+	if err != nil {
+		return cacheLookup{}, true, true, err
+	}
+	return lookup, true, true, nil
+}
+
+func (c *imageCache) getOrStartFlight(hash string) (*imageCacheFlight, bool) {
+	key := c.flightKey(hash)
+	c.flightMu.Lock()
+	defer c.flightMu.Unlock()
+	if existing := c.flights[key]; existing != nil {
+		existing.shared = true
+		return existing, false
+	}
+	flight := &imageCacheFlight{done: make(chan struct{})}
+	c.flights[key] = flight
+	return flight, true
+}
+
+func (c *imageCache) completeFlight(hash string, flight *imageCacheFlight, create func() (cacheLookup, error)) {
+	lookup, err := c.createCacheLookup(hash, create)
+	c.flightMu.Lock()
+	flight.lookup = lookup
+	flight.err = err
+	delete(c.flights, c.flightKey(hash))
+	close(flight.done)
+	c.flightMu.Unlock()
+}
+
+func (c *imageCache) flightWasShared(flight *imageCacheFlight) bool {
+	c.flightMu.Lock()
+	defer c.flightMu.Unlock()
+	return flight.shared
+}
+
+func (c *imageCache) createCacheLookup(hash string, create func() (lookup cacheLookup, err error)) (lookup cacheLookup, err error) {
+	defer func() {
+		if recover() != nil {
+			lookup = cacheLookup{}
+			err = errors.New("attachment gateway: cache producer panicked")
+		}
+	}()
+	if cached, ok := c.load(hash); ok {
+		return cacheLookup{Image: cached, Hit: true}, nil
+	}
+	if negative, ok := c.loadNegative(hash); ok {
+		return cacheLookup{Negative: &negative, Hit: true}, nil
+	}
+	created, err := create()
+	if err != nil {
+		return cacheLookup{}, err
+	}
+	switch {
+	case created.Negative != nil:
+		if err := c.storeNegative(hash, *created.Negative); err != nil {
 			return cacheLookup{}, err
 		}
-		switch {
-		case created.Negative != nil:
-			if err := c.storeNegative(hash, *created.Negative); err != nil {
-				return cacheLookup{}, err
-			}
-		case len(created.Image.Bytes) > 0:
-			if err := c.store(hash, created.Image); err != nil {
-				return cacheLookup{}, err
-			}
-		default:
-			return cacheLookup{}, errors.New("attachment gateway: cache create returned no result")
+	case len(created.Image.Bytes) > 0:
+		if err := c.store(hash, created.Image); err != nil {
+			return cacheLookup{}, err
 		}
-		return created, nil
-	})
+	default:
+		return cacheLookup{}, errors.New("attachment gateway: cache create returned no result")
+	}
+	return created, nil
+}
 
+func (c *imageCache) flightKey(hash string) string {
+	return hash + ":" + c.policy
+}
+
+func waitForImageCacheFlight(ctx context.Context, flight *imageCacheFlight) (cacheLookup, error) {
 	select {
 	case <-ctx.Done():
-		return cacheLookup{}, false, ctx.Err()
-	case result := <-resultChannel:
-		if result.Err != nil {
-			return cacheLookup{}, result.Shared, result.Err
+		return cacheLookup{}, ctx.Err()
+	case <-flight.done:
+		if flight.err != nil {
+			return cacheLookup{}, flight.err
 		}
-		lookup, ok := result.Val.(cacheLookup)
-		if !ok {
-			return cacheLookup{}, result.Shared, errors.New("attachment gateway: invalid cache singleflight result")
-		}
-		// A shared in-flight encode is tracked separately from a persisted-cache
-		// hit. Treating Shared as Hit would overstate cache effectiveness during a
-		// cold stampede and hide the encode that still occurred.
-		return lookup, result.Shared, nil
+		return flight.lookup, nil
 	}
 }
 

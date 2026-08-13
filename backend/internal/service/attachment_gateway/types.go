@@ -227,16 +227,21 @@ func (c Config) validate() error {
 // Metrics is safe to log: it contains only counts, byte sizes, durations and
 // cache outcomes, never image bytes, base64 strings, prompts or hashes.
 type Metrics struct {
-	Enabled                             bool
-	OriginalBodyBytes                   int
-	OptimizedBodyBytes                  int
-	ImageCount                          int
-	OptimizedImageCount                 int
-	OriginalImageBytes                  int
-	OptimizedImageBytes                 int
-	CacheHit                            bool
-	CacheHits                           int
-	CacheShared                         int
+	Enabled             bool
+	OriginalBodyBytes   int
+	OptimizedBodyBytes  int
+	ImageCount          int
+	OptimizedImageCount int
+	OriginalImageBytes  int
+	OptimizedImageBytes int
+	CacheHit            bool
+	CacheHits           int
+	CacheShared         int
+	// CacheLookupCount counts images that reached the local image-cache
+	// lookup/flight boundary. It is distinct from CacheHits and ColdEncodeCount:
+	// a canceled request can have an in-flight cache producer before it obtains
+	// a global encoder slot.
+	CacheLookupCount                    int
 	NegativeCacheHit                    bool
 	NegativeCacheHits                   int
 	NegativeCacheShared                 int
@@ -261,9 +266,14 @@ type Metrics struct {
 }
 
 // Result contains the body to forward and privacy-safe request metrics.
+// RehydratedImageIndexes is populated only by RehydrateFromCache. It identifies
+// the bounded image-token positions that were reconstructed from an existing
+// positive cache entry or in-flight encode; cancellation recovery uses it to
+// avoid uploading untouched source images to object storage.
 type Result struct {
-	Body    []byte
-	Metrics Metrics
+	Body                   []byte
+	Metrics                Metrics
+	RehydratedImageIndexes []int
 }
 
 // Metadata is persisted next to each optimized image. Hashes identify decoded
