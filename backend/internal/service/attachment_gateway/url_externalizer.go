@@ -303,12 +303,10 @@ func (e *URLExternalizer) externalize(
 	if len(tokens) == 0 {
 		return result
 	}
-	if selected != nil {
-		for index := range selected {
-			if index >= len(tokens) {
-				result.Metrics.Errors++
-				return result
-			}
+	for index := range selected {
+		if index >= len(tokens) {
+			result.Metrics.Errors++
+			return result
 		}
 	}
 
