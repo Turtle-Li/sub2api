@@ -249,6 +249,31 @@ func TestAdminService_ListGroups_PassesSortParams(t *testing.T) {
 	}, repo.listWithFiltersParams)
 }
 
+func TestAdminService_CreateGroup_LongContextPricingDefaultsEnabled(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:           "default-long-context",
+		Platform:       PlatformOpenAI,
+		RateMultiplier: 1,
+	})
+	require.NoError(t, err)
+	require.True(t, group.LongContextPricingEnabled)
+	require.True(t, repo.created.LongContextPricingEnabled)
+
+	disabled := false
+	group, err = svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                      "disabled-long-context",
+		Platform:                  PlatformOpenAI,
+		RateMultiplier:            1,
+		LongContextPricingEnabled: &disabled,
+	})
+	require.NoError(t, err)
+	require.False(t, group.LongContextPricingEnabled)
+	require.False(t, repo.created.LongContextPricingEnabled)
+}
+
 // TestAdminService_CreateGroup_WithImagePricing 测试创建分组时 ImagePrice 字段正确传递
 func TestAdminService_CreateGroup_WithImagePricing(t *testing.T) {
 	repo := &groupRepoStubForAdmin{}

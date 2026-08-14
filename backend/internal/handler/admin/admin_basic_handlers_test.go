@@ -166,7 +166,7 @@ func TestUserHandlerBindAuthIdentityMapsRequest(t *testing.T) {
 }
 
 func TestGroupHandlerEndpoints(t *testing.T) {
-	router, _ := setupAdminRouter()
+	router, adminSvc := setupAdminRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/groups", nil)
@@ -242,6 +242,21 @@ func TestGroupHandlerEndpoints(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, adminSvc.lastCreateGroupInput)
+	require.Nil(t, adminSvc.lastCreateGroupInput.LongContextPricingEnabled)
+
+	body, _ = json.Marshal(map[string]any{
+		"name":                         "explicitly-disabled",
+		"platform":                     "anthropic",
+		"long_context_pricing_enabled": false,
+	})
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/groups", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, adminSvc.lastCreateGroupInput.LongContextPricingEnabled)
+	require.False(t, *adminSvc.lastCreateGroupInput.LongContextPricingEnabled)
 
 	body, _ = json.Marshal(map[string]any{"name": "update"})
 	rec = httptest.NewRecorder()
