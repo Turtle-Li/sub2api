@@ -176,6 +176,7 @@ func (s *authCacheStub) SubscribeAuthCacheInvalidation(ctx context.Context, hand
 }
 
 func TestAPIKeyService_GetByKey_UsesL2Cache(t *testing.T) {
+	inputPrice := 2.5e-6
 	cache := &authCacheStub{}
 	repo := &authRepoStub{
 		getByKeyForAuth: func(ctx context.Context, key string) (*APIKey, error) {
@@ -216,6 +217,12 @@ func TestAPIKeyService_GetByKey_UsesL2Cache(t *testing.T) {
 				ModelRouting: map[string][]int64{
 					"claude-opus-*": {1, 2},
 				},
+				ModelPricing: []ChannelModelPricing{{
+					Platform:    PlatformAnthropic,
+					Models:      []string{"claude-opus-4-6"},
+					BillingMode: BillingModeToken,
+					InputPrice:  &inputPrice,
+				}},
 			},
 		},
 	}
@@ -230,6 +237,7 @@ func TestAPIKeyService_GetByKey_UsesL2Cache(t *testing.T) {
 	require.Equal(t, groupID, apiKey.Group.ID)
 	require.True(t, apiKey.Group.ModelRoutingEnabled)
 	require.Equal(t, map[string][]int64{"claude-opus-*": {1, 2}}, apiKey.Group.ModelRouting)
+	require.Equal(t, cacheEntry.Snapshot.Group.ModelPricing, apiKey.Group.ModelPricing)
 }
 
 func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t *testing.T) {
@@ -456,20 +464,34 @@ func TestAPIKeyService_GetByKey_CacheMissStoresL2(t *testing.T) {
 
 func TestAPIKeyService_GetByKey_UsesL1Cache(t *testing.T) {
 	var calls int32
+	inputPrice := 2.5e-6
+	groupID := int64(9)
 	cache := &authCacheStub{}
 	repo := &authRepoStub{
 		getByKeyForAuth: func(ctx context.Context, key string) (*APIKey, error) {
 			atomic.AddInt32(&calls, 1)
 			return &APIKey{
-				ID:     21,
-				UserID: 3,
-				Status: StatusActive,
+				ID:      21,
+				UserID:  3,
+				GroupID: &groupID,
+				Status:  StatusActive,
 				User: &User{
 					ID:          3,
 					Status:      StatusActive,
 					Role:        RoleUser,
 					Balance:     5,
 					Concurrency: 2,
+				},
+				Group: &Group{
+					ID:       groupID,
+					Platform: PlatformAnthropic,
+					Status:   StatusActive,
+					ModelPricing: []ChannelModelPricing{{
+						Platform:    PlatformAnthropic,
+						Models:      []string{"claude-opus-4-6"},
+						BillingMode: BillingModeToken,
+						InputPrice:  &inputPrice,
+					}},
 				},
 			}, nil
 		},
@@ -483,14 +505,16 @@ func TestAPIKeyService_GetByKey_UsesL1Cache(t *testing.T) {
 	svc := NewAPIKeyService(repo, nil, nil, nil, nil, cache, cfg)
 	require.NotNil(t, svc.authCacheL1)
 
-	_, err := svc.GetByKey(context.Background(), "k-l1")
+	first, err := svc.GetByKey(context.Background(), "k-l1")
 	require.NoError(t, err)
+	require.Len(t, first.Group.ModelPricing, 1)
 	svc.authCacheL1.Wait()
 	cacheKey := svc.authCacheKey("k-l1")
 	_, ok := svc.authCacheL1.Get(cacheKey)
 	require.True(t, ok)
-	_, err = svc.GetByKey(context.Background(), "k-l1")
+	second, err := svc.GetByKey(context.Background(), "k-l1")
 	require.NoError(t, err)
+	require.Equal(t, first.Group.ModelPricing, second.Group.ModelPricing)
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
 }
 
