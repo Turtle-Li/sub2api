@@ -48,3 +48,16 @@
   canary enablement must be scoped to explicitly approved API-key, user, or
   group IDs; `allow_unscoped` stays `false` and Caddy limits are a separate
   change.
+
+## Upstream update scope
+
+- Classify upstream updates against enabled production configuration, existing
+  traffic, and locally owned behavior before expanding feature review. An
+  upstream capability that is not enabled or used in production, and cannot
+  alter an existing path through migrations, defaults, shared serialization,
+  or cache materialization, should pass the normal merge, build, migration,
+  and release gates without local feature repairs.
+- Add compatibility work only when a change reaches an enabled production path
+  or a locally owned optimization, or when repository evidence shows that an
+  otherwise unused feature changes existing behavior through a shared boundary.
+  Record the existing path that justifies the added work.
