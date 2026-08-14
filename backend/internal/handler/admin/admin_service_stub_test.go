@@ -25,6 +25,7 @@ type stubAdminService struct {
 	boundAuthIdentityFor                int64
 	createdAccounts                     []*service.CreateAccountInput
 	createdProxies                      []*service.CreateProxyInput
+	lastCreateGroupInput                *service.CreateGroupInput
 	updatedProxyIDs                     []int64
 	updatedProxies                      []*service.UpdateProxyInput
 	testedProxyIDs                      []int64
@@ -353,6 +354,7 @@ func (s *stubAdminService) PreviewCompositeRoute(ctx context.Context, groupID in
 }
 
 func (s *stubAdminService) CreateGroup(ctx context.Context, input *service.CreateGroupInput) (*service.Group, error) {
+	s.lastCreateGroupInput = input
 	group := service.Group{ID: 200, Name: input.Name, Status: service.StatusActive}
 	return &group, nil
 }
