@@ -41,6 +41,22 @@ func RegisterAuthRoutes(
 		auth.POST("/login/2fa", rateLimiter.LimitWithOptions("auth-login-2fa", 20, time.Minute, middleware.RateLimitOptions{
 			FailureMode: middleware.RateLimitFailClose,
 		}), h.Auth.Login2FA)
+		// TT Switch authenticates natively. These endpoints deliberately do not
+		// accept browser CAPTCHA proofs; their route identity selects stricter
+		// server-side, fail-closed limits while the ordinary web routes above keep
+		// their CAPTCHA requirement.
+		auth.POST("/desktop/login", rateLimiter.LimitWithOptions("desktop-native-login", 5, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.Auth.DesktopLogin)
+		auth.POST("/desktop/login/2fa", rateLimiter.LimitWithOptions("desktop-native-login-2fa", 5, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.Auth.Login2FA)
+		auth.POST("/desktop/register", rateLimiter.LimitWithOptions("desktop-native-register", 3, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.Auth.DesktopRegister)
+		auth.POST("/desktop/send-verify-code", rateLimiter.LimitWithOptions("desktop-native-send-verify-code", 3, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.Auth.DesktopSendVerifyCode)
 		auth.POST("/passkey/login/begin", rateLimiter.LimitWithOptions("passkey-login-begin", 20, time.Minute, middleware.RateLimitOptions{
 			FailureMode: middleware.RateLimitFailClose,
 		}), h.Passkey.BeginLogin)
