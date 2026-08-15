@@ -149,16 +149,17 @@
 - **THEN** 运行态 MUST 显示 error/degraded 和稳定错误码，而不是显示健康
 
 ### Requirement: Qwen3Guard 返回必须被严格归一化
-系统 SHALL 严格解析单一 `Safety` 行和单一 `Categories` 行，并支持 Violent、Non-violent Illegal Acts、Sexual Content or Sexual Acts、PII、Suicide & Self-Harm、Unethical Acts、Politically Sensitive Topics、Copyright Violation、Jailbreak 九类输入风险。额外非空说明、重复字段、未知 Safety 或无法解析响应 MUST 视为 invalid_response。
+系统 SHALL 严格解析单一 `Safety` 行和单一 `Categories` 行，并支持 Violent、Non-violent Illegal Acts、Sexual Content or Sexual Acts、PII、Suicide & Self-Harm、Unethical Acts、Politically Sensitive Topics、Copyright Violation、Jailbreak 九类输入风险。重复 canonical 字段、未知 Safety 或无法解析响应 MUST 视为 invalid_response；非 canonical 的辅助说明可被忽略，且不得改变审计结果或被持久化。
 
 #### Scenario: Safe 结果
 - **WHEN** Guard 返回 `Safety: Safe`
 - **THEN** 归一化结果 MUST 为 pass/low/Allow
+- **THEN** Categories、MatchedScanners、UnknownCategories、ScannerScores 和 ScannerEvidence MUST 为空，且不得形成事项或并入后续 Unsafe 分片的风险事实
 
 #### Scenario: Controversial 结果
 - **WHEN** Guard 返回 `Safety: Controversial`
-- **THEN** 默认结果 MUST 为 flag/Warn
-- **THEN** 命中已启用的 Jailbreak、PII 或 Suicide & Self-Harm 时 MUST 提升为 critical/Block
+- **THEN** 无论类别为何，归一化结果 MUST 为 pass/low/Allow，且不得产生风险告警、Warn 或 Block
+- **THEN** Categories、MatchedScanners、UnknownCategories、ScannerScores 和 ScannerEvidence MUST 为空，且不得形成事项或并入后续 Unsafe 分片的风险事实
 
 #### Scenario: Unsafe 结果
 - **WHEN** Guard 返回 `Safety: Unsafe` 且命中至少一个已启用类别
@@ -169,9 +170,14 @@
 - **THEN** 系统 MUST 记录 `unknown_unsafe` 并保持 Block 语义
 
 #### Scenario: 严格响应解析失败
-- **WHEN** Guard 响应缺少字段、包含重复字段、出现额外非空说明或 Safety 不在允许枚举中
+- **WHEN** Guard 响应缺少 canonical 字段、包含重复 canonical 字段或 Safety 不在允许枚举中
 - **THEN** 系统 MUST 返回 `prompt_guard_invalid_response`
 - **THEN** 系统 MUST NOT 把该结果伪装为 Safe
+
+#### Scenario: 辅助 Guard 字段
+- **WHEN** Guard 在两个 canonical 字段外返回非 canonical 的辅助字段（例如 `Refusal: No`）
+- **THEN** 系统 MUST 仅根据 `Safety` 与 `Categories` 归一化结果
+- **THEN** 辅助字段 MUST NOT 改变审计结果或被持久化
 
 ### Requirement: 长提示词必须完整进行 Unicode 分片审计
 系统 SHALL 按 Unicode rune 而不是字节对提示词分片。最新用户输入 MUST 作为优先片段，其他输入按确定顺序完整覆盖；异步任务必须在每片开始前刷新 processing 租约，并为每片开始、完成、失败及最终聚合输出不含正文的结构化日志。

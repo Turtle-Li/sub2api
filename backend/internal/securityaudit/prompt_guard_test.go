@@ -246,6 +246,24 @@ func TestGuardEvaluatorFlagSharedDeadlineFailClosedAndContextCancel(t *testing.T
 	})
 }
 
+func TestGuardEvaluatorControversialPolicyPassesWithoutRiskMetric(t *testing.T) {
+	result, err := ParseQwen3Guard("Safety: Controversial\nCategories: Jailbreak", AllScannerIDs)
+	require.NoError(t, err)
+	metrics := NewAtomicMetrics()
+	evaluator := newGuardEvaluator(PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
+		return result, nil
+	}), nil, metrics, 2, 2)
+	decision, err := evaluator.Evaluate(context.Background(), guardConfig(
+		ActiveEndpoint{ID: "one", Enabled: true, TimeoutMS: 1000, InputLimit: 100},
+	), PromptSnapshot{ScanText: "ordinary prompt", PromptLength: 15})
+	require.NoError(t, err)
+	require.Equal(t, DecisionAllow, decision.Kind)
+	require.True(t, decision.AllowNextStage)
+	require.Equal(t, int64(1), metrics.Snapshot().Allowed)
+	require.Zero(t, metrics.Snapshot().Flagged)
+	require.Zero(t, metrics.Snapshot().Blocked)
+}
+
 func TestGuardEvaluatorRecordsExistingResultOnceAndRecordFailureDoesNotChangeDecision(t *testing.T) {
 	for _, recordErr := range []error{nil, errors.New("database unavailable")} {
 		repo := &fakeJobRepository{recordBlockingErr: recordErr}

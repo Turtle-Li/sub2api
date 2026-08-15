@@ -77,10 +77,10 @@
 - [x] 7.1 定义九类 Qwen3Guard 官方输入类别和目标项目展示标签
 - [x] 7.2 构建 OpenAI Chat Completions 请求，固定 role=user、temperature=0、max_tokens=64、seed=42
 - [x] 7.3 实现 choices/message/content 提取，兼容目标审计节点允许的最小合法响应形态
-- [x] 7.4 实现严格单 Safety 行、单 Categories 行、无额外非空说明解析
-- [x] 7.5 实现类别别名归一、未知类别保留和启用类别过滤
-- [x] 7.6 实现 Safe/Controversial/Unsafe 到 pass/flag/critical 与 Allow/Warn/Block 的确定性映射
-- [x] 7.7 实现 Jailbreak、PII、Suicide & Self-Harm 的高风险 Controversial 提升规则
+- [x] 7.4 实现严格单 Safety 行、单 Categories 行解析，并忽略不参与决策的辅助字段
+- [x] 7.5 实现类别别名归一、Unsafe 未知类别保留和启用类别过滤
+- [x] 7.6 实现 Safe/Controversial 到无风险 Pass / Allow、Unsafe 到风险决策的确定性映射
+- [x] 7.7 取消 Jailbreak、PII、Suicide & Self-Harm 的 Controversial 提升规则，所有 Controversial 保持 Pass / Allow
 - [x] 7.8 实现多分片最严重结果聚合、分类/证据去重、分片 metadata 和 Block 早停
 - [x] 7.9 确保只有全部必要分片成功才能 Allow，部分成功不得产生 Safe
 - [x] 7.10 添加模型合法输出、重复字段、额外说明、未知 Safety、未知类别、禁用类别和多分片聚合测试

@@ -35,8 +35,8 @@ ok github.com/mt21625457/aicodex/internal/gatewayadapter/transport 3.233s
 | 9 | Guard SSRF、DNS/Dial 复检、重定向/响应上限；`outbound_security.go` | prompt-input-audit：凭据和出站地址安全 | `prompt_outbound_security.go` | A03 |
 | 10 | Qwen3Guard `Safety/Categories` 解析；`qwen3guard.go` | prompt-input-audit：严格归一 | `prompt_qwen3guard.go` | A08 |
 | 11 | 九类官方输入风险；`qwen3guard.go`、页面 scanner catalog | prompt-input-audit：九类；console：九类配置 | `prompt_qwen3guard.go`、前端 types/viewModel | A08、C04 |
-| 12 | Safe/Controversial/Unsafe → Allow/Warn/Block；`openai_client.go`、`normalize.go` | prompt-input-audit：严格归一；guard：fail-closed | `prompt_qwen3guard.go`、`prompt_scanner.go` | A08、G06 |
-| 13 | 高风险 Controversial 提升、未知 Unsafe 保持 Block；`openai_client.go` | prompt-input-audit：严格归一 | `prompt_qwen3guard.go` | A08 |
+| 12 | Safe/Controversial → 无风险 Allow，Unsafe → Warn/Block；`openai_client.go`、`normalize.go` | prompt-input-audit：严格归一；guard：fail-closed | `prompt_qwen3guard.go`、`prompt_scanner.go` | A08、G06 |
+| 13 | Controversial 始终 Pass / Allow、未知 Unsafe 保持 Block；`openai_client.go` | prompt-input-audit：严格归一 | `prompt_qwen3guard.go` | A08 |
 | 14 | Chat/Responses/Claude 多协议快照；`snapshot.go`、`multiprotocol.go` | prompt-input-audit：按协议提取 | `prompt_snapshot.go` | A04 |
 | 15 | Gemini、图片/媒体等 transport 传递提示词上下文；gatewayadapter changes | prompt-input-audit：所有文本入口；guard：路由覆盖 | `prompt_snapshot.go`、各 Handler 薄接线 | A04、G04 |
 | 16 | Responses WS 首轮和后续帧；`ws_responses.go`、顺序测试 | prompt-input-guard：每个 response.create 门禁 | `openai_gateway_handler.go` 薄接线 | G08 |

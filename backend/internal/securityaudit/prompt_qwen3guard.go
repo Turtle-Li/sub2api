@@ -88,6 +88,8 @@ func NormalizeCategory(value string) string {
 func ParseQwen3Guard(content string, enabledScanners []string) (*NormalizedResult, error) {
 	var safety string
 	var categoryLine string
+	var safetySeen bool
+	var categoriesSeen bool
 	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -96,14 +98,16 @@ func ParseQwen3Guard(content string, enabledScanners []string) (*NormalizedResul
 		lower := strings.ToLower(line)
 		switch {
 		case strings.HasPrefix(lower, "safety:"):
-			if safety != "" {
+			if safetySeen {
 				return nil, &GuardError{Code: ErrorCodeInvalidResponse}
 			}
+			safetySeen = true
 			safety = strings.TrimSpace(line[len("safety:"):])
 		case strings.HasPrefix(lower, "categories:"):
-			if categoryLine != "" {
+			if categoriesSeen {
 				return nil, &GuardError{Code: ErrorCodeInvalidResponse}
 			}
+			categoriesSeen = true
 			categoryLine = strings.TrimSpace(line[len("categories:"):])
 		default:
 			// Auxiliary Guard fields, such as Refusal, do not affect audit decisions.
@@ -148,18 +152,20 @@ func ParseQwen3Guard(content string, enabledScanners []string) (*NormalizedResul
 			matched = append(matched, category)
 		}
 	}
+	if safety != "Unsafe" {
+		// Only explicit Unsafe is a risk outcome. Clear every
+		// category-derived artifact so it cannot create an issue summary or
+		// contaminate a later Unsafe chunk during aggregation.
+		knownList, unknownList, matched = nil, nil, nil
+	}
 	result := &NormalizedResult{
 		Safety: safety, Categories: knownList, MatchedScanners: matched, UnknownCategories: unknownList,
 		ScannerScores: map[string]float64{}, ScannerEvidence: map[string]string{},
 		ScannerBackend: "qwen3guard-openai", ScannerVersion: "qwen3guard",
-		PolicyID: "priority", PolicyVersion: 1,
+		PolicyID: "priority", PolicyVersion: 2,
 		Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow,
 	}
 	score := 0.0
-	if safety == "Controversial" {
-		score = 0.5
-		result.Decision, result.RiskLevel, result.Action = EventFlag, RiskMedium, ActionWarn
-	}
 	if safety == "Unsafe" {
 		score = 1
 		if len(matched) > 0 || len(unknownList) > 0 || len(knownList) == 0 {
@@ -171,9 +177,6 @@ func ParseQwen3Guard(content string, enabledScanners []string) (*NormalizedResul
 	for _, category := range matched {
 		result.ScannerScores[category] = score
 		result.ScannerEvidence[category] = ScannerCatalog[category].Label
-		if safety == "Controversial" && isElevatedControversial(category) {
-			result.Decision, result.RiskLevel, result.Action = EventCritical, RiskCritical, ActionBlock
-		}
 	}
 	return result, nil
 }
@@ -181,10 +184,6 @@ func ParseQwen3Guard(content string, enabledScanners []string) (*NormalizedResul
 func unknownCategoryID(value string) string {
 	digest := sha256.Sum256([]byte(strings.TrimSpace(strings.ToLower(value))))
 	return fmt.Sprintf("unknown:%x", digest[:8])
-}
-
-func isElevatedControversial(category string) bool {
-	return category == "jailbreak" || category == "pii" || category == "suicide_and_self_harm"
 }
 
 type OpenAICompatibleScanner struct {

@@ -457,23 +457,23 @@ Runner 生命周期由应用启动/停止管理：
 解析要求：
 
 - 响应体上限 256 KiB。
-- 只接受一个非空 `Safety:` 行和一个 `Categories:` 行。
+- 必须恰有一个非空 `Safety:` 行和一个非空 `Categories:` 行；两者是唯一决定审计结果的 canonical 字段。
 - 只接受 Safe、Controversial、Unsafe。
-- 不允许额外非空说明。
-- 类别做大小写/标点别名归一，但未知类别必须保留风险事实。
+- 非 canonical 的辅助字段（例如 `Refusal:`）允许存在、不得改变审计结果，也不得被写入事件或日志。
+- 类别做大小写/标点别名归一；只有 `Unsafe` 的未知类别必须保留风险事实。
 
 策略映射：
 
-| Safety | 已启用类别 | 结果 |
+| Safety | 类别状态 | 结果 |
 | --- | --- | --- |
-| Safe | 任意 | Pass / Allow |
-| Controversial | 普通类别 | Flag / Warn |
-| Controversial | Jailbreak/PII/Suicide & Self-Harm | Critical / Block |
+| Safe | 任意 | Pass / Allow，不产生风险告警 |
+| Controversial | 任意类别（包括未知或禁用） | Pass / Allow，不产生风险告警 |
 | Unsafe | 至少一个启用类别 | Critical / Block |
 | Unsafe | 未知类别 | Critical / Block + unknown_unsafe |
 | Unsafe | 仅命中明确禁用类别 | Flag / Warn，保留事实 |
 
 scanner score 只用于展示排序，不得被解释为真实置信度阈值。
+只有明确 `Unsafe` 结果参与风险告警或阻断决策；所有非 `Unsafe`（Safe 或 Controversial）的类别、命中扫描器、未知分类、分数和证据均须在归一化边界清空，使其不能生成事项或污染后续 Unsafe 分片聚合。该映射以 `policy_id=priority`、`policy_version=2` 写入新事件；历史事件保留其生成时的策略版本。
 
 管理 API 还应从 categories、scanner evidence 和 Guard policy 确定性派生 `issue_summaries`。每项至少包含 category、scanner_id、title、description、severity/label、action/label、code、score 和脱敏 evidence；可选位置必须是 rune 范围和不可逆命中 Hash，不能返回原文。该摘要是展示 DTO，不要求新增数据库列，防止复制同一风险事实。
 
