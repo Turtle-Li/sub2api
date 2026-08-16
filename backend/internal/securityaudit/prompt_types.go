@@ -247,7 +247,7 @@ const (
 	// changing what the upstream gateway accepts. Oversized inputs are logged as
 	// an audit drop and must be surfaced by operations; they are never reported
 	// as successfully scanned.
-	LargeAuditBodyThresholdBytes = 1 * 1024 * 1024
+	LargeAuditBodyThresholdBytes = 256 * 1024
 	MaxAsyncAuditBodyBytes       = 32 * 1024 * 1024
 	LargeAuditEnqueueSlots       = 1
 )
