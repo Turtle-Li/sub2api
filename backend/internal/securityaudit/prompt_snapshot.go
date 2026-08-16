@@ -663,7 +663,7 @@ func latestUserOnlySegments(values []promptSegment) []string {
 	// Keep one segment so the async payload cannot accidentally treat a
 	// multipart user turn as historical context during chunking.
 	result := []string{strings.Join(currentUserText, "\n\n")}
-	return appendAlwaysScannedText(result, normalized, latestUserStart, latestUserEnd)
+	return appendAlwaysScannedToFirstSegment(result, normalized, latestUserStart, latestUserEnd)
 }
 
 // blockingSegmentsLatestUserAndPreviousOutput limits synchronous guard input to
@@ -717,6 +717,21 @@ func appendAlwaysScannedText(result []string, values []promptSegment, selectedSt
 		}
 		if segment.alwaysScan && strings.TrimSpace(segment.text) != "" {
 			result = append(result, segment.text)
+		}
+	}
+	return result
+}
+
+func appendAlwaysScannedToFirstSegment(result []string, values []promptSegment, selectedStart, selectedEnd int) []string {
+	if len(result) == 0 {
+		return result
+	}
+	for index, segment := range values {
+		if index >= selectedStart && index < selectedEnd {
+			continue
+		}
+		if segment.alwaysScan && strings.TrimSpace(segment.text) != "" {
+			result[0] += "\n\n" + segment.text
 		}
 	}
 	return result
