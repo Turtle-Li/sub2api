@@ -40,6 +40,31 @@ func applyStagedCodexFingerprintHeaders(c *gin.Context, account *Account, h http
 	applyCodexFingerprintHeaders(h, codexFingerprintIDsFromContext(c, account))
 }
 
+// codexFingerprintIDsStagedForAccount reports whether the current context has
+// already made a non-nil fingerprint decision for this account. A nil value
+// carries no account identity, so treat it as unresolved; this lets a retry or
+// failover that selects a converged account resolve fresh IDs instead of
+// inheriting the prior off-mode decision.
+func codexFingerprintIDsStagedForAccount(c *gin.Context, account *Account) (*codexFingerprintIDs, bool) {
+	if c == nil {
+		return nil, false
+	}
+	value, ok := c.Get(codexFingerprintIDsContextKey)
+	if !ok {
+		return nil, false
+	}
+	ids, typed := value.(*codexFingerprintIDs)
+	if !typed || ids == nil {
+		return nil, false
+	}
+	if account == nil || ids.accountID != account.ID {
+		// A failover attempt can reuse the gin context with a different account;
+		// that stale decision must not suppress resolution for the new account.
+		return nil, false
+	}
+	return ids, true
+}
+
 // codexFingerprintMode 控制 OAuth 账号出站请求的设备指纹收敛强度。
 // 多人共享同一 OAuth 账号时，每个用户的 Codex 客户端会携带各自不同的
 // installation_id / session_id / thread_id，上游据此判定设备数和会话数。

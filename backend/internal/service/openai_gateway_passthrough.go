@@ -369,6 +369,32 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	body []byte,
 	token string,
 ) (*http.Request, error) {
+	// The normal passthrough entry point resolves and stages fingerprint IDs
+	// before calling this builder. Keep the builder self-contained as well:
+	// direct callers (including retry/test seams) must produce the same body and
+	// headers, while an already-staged set must be reused so session/full modes
+	// do not generate a second turn identity.
+	if account.Type == AccountTypeOAuth && !isOpenAIResponsesCompactPath(c) {
+		fingerprintIDs, staged := codexFingerprintIDsStagedForAccount(c, account)
+		if !staged {
+			var clientHeaders http.Header
+			if c != nil && c.Request != nil {
+				clientHeaders = c.Request.Header
+			}
+			fingerprintIDs = resolveCodexFingerprintIDsFromRequest(account, clientHeaders)
+			if fingerprintIDs != nil {
+				rewritten, changed, rewriteErr := applyCodexFingerprintClientMetadataRaw(body, fingerprintIDs)
+				if rewriteErr != nil {
+					return nil, rewriteErr
+				}
+				if changed {
+					body = rewritten
+				}
+			}
+			stageCodexFingerprintIDs(c, fingerprintIDs)
+		}
+	}
+
 	targetURL := openaiPlatformAPIURL
 	switch account.Type {
 	case AccountTypeOAuth:

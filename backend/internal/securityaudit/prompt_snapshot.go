@@ -32,9 +32,10 @@ const (
 )
 
 type promptSegment struct {
-	text string
-	user bool
-	role string
+	text     string
+	user     bool
+	role     string
+	boundary bool
 }
 
 func ExtractPromptSnapshot(req Request) (PromptSnapshot, error) {
@@ -172,11 +173,26 @@ func extractMessages(value any, wantedRoles ...string) []promptSegment {
 		}
 		role := strings.ToLower(stringValue(message["role"]))
 		if _, match := wanted[role]; !match {
+			// Even an unsupported role is a message boundary. Its text is not
+			// part of this extractor's audit scope, but it must not let two user
+			// messages collapse into one latest turn.
+			result = append(result, promptSegment{role: role, boundary: true})
 			continue
 		}
 		texts := contentTexts(message["content"])
+		added := false
 		for _, text := range texts {
 			result = append(result, promptSegment{text: text, user: role == "user", role: role})
+			if strings.TrimSpace(text) != "" {
+				added = true
+			}
+		}
+		if !added {
+			// Preserve a role boundary for assistant/tool messages whose useful
+			// payload is carried in tool_calls or another non-text field. Without
+			// this marker, latest-user selection can bridge an older user turn into
+			// the current one and recreate the historical false positive.
+			result = append(result, promptSegment{user: role == "user", role: role, boundary: true})
 		}
 	}
 	return result
@@ -223,14 +239,26 @@ func extractResponses(value any) []promptSegment {
 			case map[string]any:
 				role := strings.ToLower(stringValue(entry["role"]))
 				if role != "" && !isClientInstructionRole(role) {
+					result = append(result, promptSegment{role: role, boundary: true})
 					continue
 				}
+				added := false
 				if content, exists := entry["content"]; exists {
 					for _, text := range contentTexts(content) {
 						result = append(result, promptSegment{text: text, user: role == "" || role == "user", role: role})
+						if strings.TrimSpace(text) != "" {
+							added = true
+						}
 					}
 				} else if text := stringValue(entry["text"]); text != "" {
 					result = append(result, promptSegment{text: text, user: role == "" || role == "user", role: role})
+					added = true
+				}
+				if !added {
+					// Responses function_call/function_call_output items commonly
+					// omit role and carry their payload in non-text fields. Keep an
+					// invisible boundary so they cannot join two user turns.
+					result = append(result, promptSegment{user: role == "user", role: role, boundary: true})
 				}
 			}
 		}
@@ -238,9 +266,13 @@ func extractResponses(value any) []promptSegment {
 	case map[string]any:
 		role := strings.ToLower(stringValue(typed["role"]))
 		if role != "" && !isClientInstructionRole(role) {
-			return nil
+			return []promptSegment{{role: role, boundary: true}}
 		}
-		return promptSegmentsForRole(contentTexts(typed["content"]), role)
+		texts := contentTexts(typed["content"])
+		if !hasNonEmptyPromptText(texts) {
+			return []promptSegment{{user: role == "user", role: role, boundary: role != ""}}
+		}
+		return promptSegmentsForRole(texts, role)
 	default:
 		return nil
 	}
@@ -273,15 +305,21 @@ func extractGemini(value any) []promptSegment {
 		}
 		role := strings.ToLower(stringValue(content["role"]))
 		if role != "" && !isClientInstructionRole(role) {
+			result = append(result, promptSegment{role: role, boundary: true})
 			continue
 		}
 		parts, _ := content["parts"].([]any)
+		added := false
 		for _, part := range parts {
 			if object, ok := part.(map[string]any); ok {
-				if text := stringValue(object["text"]); text != "" {
+				if text := stringValue(object["text"]); strings.TrimSpace(text) != "" {
 					result = append(result, promptSegment{text: text, user: role == "" || role == "user", role: role})
+					added = true
 				}
 			}
+		}
+		if !added {
+			result = append(result, promptSegment{user: role == "user", role: role, boundary: true})
 		}
 	}
 	return result
@@ -458,6 +496,15 @@ func contentTexts(value any) []string {
 	return nil
 }
 
+func hasNonEmptyPromptText(texts []string) bool {
+	for _, text := range texts {
+		if strings.TrimSpace(text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeSegmentsLatestUserFirst(values []promptSegment) []string {
 	normalized := normalizedPromptSegments(values)
 	if len(normalized) == 0 {
@@ -481,7 +528,7 @@ func normalizeSegmentsLatestUserFirst(values []promptSegment) []string {
 }
 
 func latestUserOnlySegments(values []promptSegment) []string {
-	normalized := normalizedPromptSegments(values)
+	normalized := normalizedPromptSegmentsForTurnSelection(values)
 	latestUserStart := latestUserSegmentStart(normalized)
 	if latestUserStart < 0 {
 		return nil
@@ -492,7 +539,12 @@ func latestUserOnlySegments(values []promptSegment) []string {
 	}
 	currentUserText := make([]string, 0, latestUserEnd-latestUserStart)
 	for _, segment := range normalized[latestUserStart:latestUserEnd] {
-		currentUserText = append(currentUserText, segment.text)
+		if !segment.boundary {
+			currentUserText = append(currentUserText, segment.text)
+		}
+	}
+	if strings.TrimSpace(strings.Join(currentUserText, "\n\n")) == "" {
+		return nil
 	}
 	// Keep one segment so the async payload cannot accidentally treat a
 	// multipart user turn as historical context during chunking.
@@ -504,7 +556,7 @@ func latestUserOnlySegments(values []promptSegment) []string {
 // deliberately opt-in because full transcript scanning remains stronger at
 // finding client-controlled content placed in older or non-user messages.
 func blockingSegmentsLatestUserAndPreviousOutput(values []promptSegment) []string {
-	normalized := normalizedPromptSegments(values)
+	normalized := normalizedPromptSegmentsForTurnSelection(values)
 	latestUserStart := latestUserSegmentStart(normalized)
 	if latestUserStart < 0 {
 		// A request without user content cannot be narrowed safely. Preserve the
@@ -517,7 +569,12 @@ func blockingSegmentsLatestUserAndPreviousOutput(values []promptSegment) []strin
 	}
 	currentUserText := make([]string, 0, latestUserEnd-latestUserStart)
 	for _, segment := range normalized[latestUserStart:latestUserEnd] {
-		currentUserText = append(currentUserText, segment.text)
+		if !segment.boundary {
+			currentUserText = append(currentUserText, segment.text)
+		}
+	}
+	if strings.TrimSpace(strings.Join(currentUserText, "\n\n")) == "" {
+		return nil
 	}
 	// A single client turn may have several text content parts. Keep it in one
 	// priority segment so every part of the latest input is scanned before the
@@ -548,6 +605,18 @@ func normalizedPromptSegments(values []promptSegment) []promptSegment {
 	return normalized
 }
 
+func normalizedPromptSegmentsForTurnSelection(values []promptSegment) []promptSegment {
+	normalized := make([]promptSegment, 0, len(values))
+	for _, value := range values {
+		value.text = strings.TrimSpace(value.text)
+		if value.text == "" && !value.boundary {
+			continue
+		}
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
 func latestUserSegmentStart(values []promptSegment) int {
 	latest := -1
 	for index := len(values) - 1; index >= 0; index-- {
@@ -556,7 +625,7 @@ func latestUserSegmentStart(values []promptSegment) int {
 			break
 		}
 	}
-	for latest > 0 && isUserSegment(values[latest-1]) {
+	for latest > 0 && isUserSegment(values[latest-1]) && !values[latest-1].boundary && !values[latest].boundary {
 		latest--
 	}
 	return latest
@@ -573,7 +642,9 @@ func isAssistantOutputSegment(segment promptSegment) bool {
 func promptSegmentTexts(values []promptSegment) []string {
 	result := make([]string, 0, len(values))
 	for _, value := range values {
-		result = append(result, value.text)
+		if value.text != "" {
+			result = append(result, value.text)
+		}
 	}
 	return result
 }

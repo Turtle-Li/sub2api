@@ -167,6 +167,48 @@ func TestExtractAsyncPromptSnapshotUsesLatestUserTurnOnly(t *testing.T) {
 	}
 }
 
+func TestExtractAsyncPromptSnapshotDoesNotBridgeToolCallOnlyMessages(t *testing.T) {
+	body := []byte(`{
+		"messages":[
+			{"role":"user","content":"历史越狱文本"},
+			{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},
+			{"role":"tool","content":null,"tool_call_id":"call_1"},
+			{"role":"user","content":"正常的最新问题"}
+		]
+	}`)
+
+	snapshot, err := ExtractAsyncPromptSnapshot(Request{Protocol: "openai_chat_completions", Body: body})
+	require.NoError(t, err)
+	require.Equal(t, "正常的最新问题", snapshot.ScanText)
+	require.NotContains(t, snapshot.ScanText, "历史越狱文本")
+	require.NotContains(t, snapshot.FullPrompt, "历史越狱文本")
+}
+
+func TestExtractAsyncPromptSnapshotDoesNotBridgeRolelessResponsesItems(t *testing.T) {
+	body := []byte(`{
+		"input":[
+			{"role":"user","content":"历史越狱文本"},
+			{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_1","output":"ok"},
+			{"role":"user","content":"正常的最新问题"}
+		]
+	}`)
+
+	snapshot, err := ExtractAsyncPromptSnapshot(Request{Protocol: "openai_responses", Body: body})
+	require.NoError(t, err)
+	require.Equal(t, "正常的最新问题", snapshot.ScanText)
+	require.NotContains(t, snapshot.ScanText, "历史越狱文本")
+	require.NotContains(t, snapshot.FullPrompt, "历史越狱文本")
+}
+
+func TestExtractAsyncPromptSnapshotDoesNotAuditHistoricalTextForImageOnlyLatestUser(t *testing.T) {
+	_, err := ExtractAsyncPromptSnapshot(Request{
+		Protocol: "openai_chat_completions",
+		Body:     []byte(`{"messages":[{"role":"user","content":"历史越狱文本"},{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}`),
+	})
+	require.ErrorIs(t, err, ErrNoPromptText)
+}
+
 func TestExtractAsyncPromptSnapshotRequiresUserText(t *testing.T) {
 	_, err := ExtractAsyncPromptSnapshot(Request{
 		Protocol: "openai_chat_completions",

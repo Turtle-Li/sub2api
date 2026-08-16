@@ -3115,6 +3115,9 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughConvergesOAuthDeviceOnly(t *
 			"openai_device_id":           "per-account-device",
 		},
 	}
+	// A previous off-mode attempt can leave a typed-nil decision in the shared
+	// context; the builder must resolve IDs for this explicitly converged account.
+	stageCodexFingerprintIDs(c, nil)
 
 	req, err := svc.buildUpstreamRequestOpenAIPassthrough(c.Request.Context(), c, account, body, "token")
 	require.NoError(t, err)
