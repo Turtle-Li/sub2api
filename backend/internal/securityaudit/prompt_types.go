@@ -250,6 +250,7 @@ const (
 	LargeAuditBodyThresholdBytes = 256 * 1024
 	MaxAsyncAuditBodyBytes       = 32 * 1024 * 1024
 	LargeAuditEnqueueSlots       = 1
+	LargeLaneFairnessSmallJobs   = 8
 )
 
 type PromptJobLane string

@@ -67,7 +67,7 @@ type JobRepository interface {
 	CreateStagingWithCapacity(ctx context.Context, snapshot PromptSnapshot, configVersion int64, maxAttempts, capacity int) (*Job, error)
 	PublishQueued(ctx context.Context, jobID int64) error
 	MarkStagingFailed(ctx context.Context, jobID int64, code, message string) error
-	ClaimNextJob(ctx context.Context, now time.Time, includeLarge bool) (*Job, bool, error)
+	ClaimNextJob(ctx context.Context, now time.Time, includeLarge, preferLarge bool) (*Job, bool, error)
 	RefreshLease(ctx context.Context, jobID, claimVersion int64, now time.Time) error
 	Complete(ctx context.Context, job *Job, result *NormalizedResult, storePassEvents bool) (*Event, error)
 	Retry(ctx context.Context, jobID, claimVersion int64, next time.Time, code, message string) error
@@ -140,13 +140,16 @@ func (r *PostgreSQLRepository) MarkStagingFailed(ctx context.Context, jobID int6
 	return requireOneRow(result, err, ErrLeaseLost)
 }
 
-func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time, includeLarge bool) (*Job, bool, error) {
+func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time, includeLarge, preferLarge bool) (*Job, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
 		WITH candidate AS (
 			SELECT id FROM prompt_audit_jobs
 			WHERE status IN ('queued','retry') AND next_attempt_at <= $1
 			  AND ($2 OR prompt_length <= $3)
-			ORDER BY CASE WHEN prompt_length > $3 THEN 1 ELSE 0 END, next_attempt_at, id
+			ORDER BY CASE
+				WHEN $4 AND prompt_length > $3 THEN 0
+				WHEN NOT $4 AND prompt_length <= $3 THEN 0
+				ELSE 1 END, next_attempt_at, id
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)
@@ -155,7 +158,7 @@ func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time, 
 			processing_started_at=$1, updated_at=$1
 		FROM candidate
 		WHERE j.id=candidate.id
-		RETURNING `+jobColumns("j"), now.UTC(), includeLarge, LargePromptThresholdRunes)
+		RETURNING `+jobColumns("j"), now.UTC(), includeLarge, LargePromptThresholdRunes, preferLarge)
 	job, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil

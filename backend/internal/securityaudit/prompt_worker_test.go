@@ -130,7 +130,7 @@ func (r *fakeJobRepository) MarkStagingFailed(_ context.Context, _ int64, code, 
 	r.markedCode = code
 	return nil
 }
-func (r *fakeJobRepository) ClaimNextJob(context.Context, time.Time, bool) (*Job, bool, error) {
+func (r *fakeJobRepository) ClaimNextJob(context.Context, time.Time, bool, bool) (*Job, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.claimQueue) == 0 {

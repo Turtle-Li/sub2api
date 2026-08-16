@@ -87,6 +87,7 @@ func (r *Runner) worker(ctx context.Context, workerID int) {
 	defer r.wg.Done()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	smallJobsSinceLarge := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -98,16 +99,25 @@ func (r *Runner) worker(ctx context.Context, workerID int) {
 				continue
 			}
 			for {
-				// Worker zero is the reserved large-job lane. It prefers small jobs
-				// and only claims a large job when no normal job is waiting; all other
-				// active workers stay available for ordinary requests.
-				job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now(), workerID == 0)
+				// Worker zero services both lanes. Keep small requests fast, but do
+				// not let an uninterrupted small stream starve a large job past the
+				// payload TTL. Other workers remain dedicated to small requests.
+				includeLarge := workerID == 0
+				preferLarge := includeLarge && smallJobsSinceLarge >= LargeLaneFairnessSmallJobs
+				job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now(), includeLarge, preferLarge)
 				if err != nil {
 					r.setLastError("claim_job_failed", err.Error())
 					break
 				}
 				if !claimed {
 					break
+				}
+				if includeLarge {
+					if promptJobLane(job.Snapshot.PromptLength) == PromptJobLaneLarge {
+						smallJobsSinceLarge = 0
+					} else {
+						smallJobsSinceLarge++
+					}
 				}
 				r.runtime.active.Add(1)
 				r.processSafely(ctx, workerID, cfg, job)

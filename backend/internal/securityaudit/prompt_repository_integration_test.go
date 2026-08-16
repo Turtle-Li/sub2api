@@ -247,7 +247,7 @@ func TestPromptAuditRepositoryAdmissionClaimFencingAndEventTransaction(t *testin
 		go func() {
 			defer wg.Done()
 			<-claimStart
-			job, claimed, claimErr := repo.ClaimNextJob(ctx, time.Now().Add(time.Second), true)
+			job, claimed, claimErr := repo.ClaimNextJob(ctx, time.Now().Add(time.Second), true, false)
 			require.NoError(t, claimErr)
 			if claimed {
 				claims <- job
@@ -268,7 +268,7 @@ func TestPromptAuditRepositoryAdmissionClaimFencingAndEventTransaction(t *testin
 	reclaimed, err := repo.ReclaimStale(ctx, time.Now().Add(time.Hour), time.Now().Add(time.Hour), 10)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), reclaimed)
-	secondClaim, claimed, err := repo.ClaimNextJob(ctx, time.Now().Add(time.Second), true)
+	secondClaim, claimed, err := repo.ClaimNextJob(ctx, time.Now().Add(time.Second), true, false)
 	require.NoError(t, err)
 	require.True(t, claimed)
 	require.Greater(t, secondClaim.ClaimVersion, firstClaim.ClaimVersion)
