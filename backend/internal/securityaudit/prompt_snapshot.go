@@ -23,6 +23,15 @@ var (
 
 const promptAuditPrioritySeparator = "\x00SUB2API_PROMPT_AUDIT_PRIORITY_END\x00"
 
+const (
+	// Codex sends rollout context as a string input to the Responses API. Keep
+	// recognition deliberately narrow: ordinary user strings must stay on the
+	// existing path even when they happen to contain similar prose.
+	codexRolloutPromptPrefix       = "Analyze this rollout and produce JSON with"
+	codexRolloutContextMarker      = "rollout_context:"
+	codexRolloutConversationMarker = "rendered conversation (pre-rendered from rollout `.jsonl`; filtered response items):"
+)
+
 type promptSnapshotScope uint8
 
 const (
@@ -134,7 +143,7 @@ func extractProtocolSegments(protocol string, document any) []promptSegment {
 		if segments := extractChatLikeSegments(root); len(segments) > 0 {
 			return segments
 		}
-		if responses := append(extractInstructions(root["instructions"]), extractResponses(root["input"])...); len(responses) > 0 {
+		if responses := append(extractInstructions(root["instructions"]), extractResponsesValue(root["input"], false)...); len(responses) > 0 {
 			return responses
 		}
 		if gemini := extractGeminiRoot(root); len(gemini) > 0 {
@@ -227,8 +236,17 @@ func extractAnthropicSystem(value any) []promptSegment {
 }
 
 func extractResponses(value any) []promptSegment {
+	return extractResponsesValue(value, true)
+}
+
+func extractResponsesValue(value any, parseCodexRollout bool) []promptSegment {
 	switch typed := value.(type) {
 	case string:
+		if parseCodexRollout {
+			if segments, ok := extractCodexRolloutString(typed); ok {
+				return segments
+			}
+		}
 		return []promptSegment{{text: typed, user: true, role: "user"}}
 	case []any:
 		result := make([]promptSegment, 0, len(typed))
@@ -276,6 +294,86 @@ func extractResponses(value any) []promptSegment {
 	default:
 		return nil
 	}
+}
+
+// extractCodexRolloutString recognizes the exact wrapper currently emitted by
+// Codex for rollout-backed Responses requests. A failed or incomplete parse is
+// intentionally reported as false so callers retain the original string input.
+func extractCodexRolloutString(value string) ([]promptSegment, bool) {
+	trimmed := strings.TrimSpace(value)
+	if !strings.HasPrefix(trimmed, codexRolloutPromptPrefix) {
+		return nil, false
+	}
+	if strings.Count(trimmed, codexRolloutConversationMarker) != 1 {
+		return nil, false
+	}
+	markerIndex := strings.Index(trimmed, codexRolloutConversationMarker)
+	if markerIndex < len(codexRolloutPromptPrefix) {
+		return nil, false
+	}
+	header := strings.TrimSpace(trimmed[:markerIndex])
+	if !strings.Contains(header, codexRolloutContextMarker) {
+		return nil, false
+	}
+	arrayText := strings.TrimSpace(trimmed[markerIndex+len(codexRolloutConversationMarker):])
+	if arrayText == "" {
+		return nil, false
+	}
+	var items []any
+	if err := json.Unmarshal([]byte(arrayText), &items); err != nil {
+		return nil, false
+	}
+
+	segments := make([]promptSegment, 0, len(items)+1)
+	// Keep the generated header as an explicit boundary. It is context for the
+	// nested messages, not the latest user turn itself.
+	segments = append(segments, promptSegment{text: header, role: "rollout_context", boundary: true})
+	hasMessageText := false
+	hasUserText := false
+	for index, item := range items {
+		// Items are distinct rollout records even when two adjacent records carry
+		// the same role. Keep multipart content within one record together, but
+		// never let an older user record merge into the latest one.
+		if index > 0 {
+			segments = append(segments, promptSegment{boundary: true})
+		}
+		object, ok := item.(map[string]any)
+		if !ok {
+			segments = append(segments, promptSegment{boundary: true})
+			continue
+		}
+		if strings.ToLower(stringValue(object["type"])) != "message" {
+			// Function/tool-call items can carry large client-controlled payloads,
+			// but they are not message text. Preserve their turn boundary without
+			// accidentally auditing their arguments as a user message.
+			segments = append(segments, promptSegment{role: strings.ToLower(stringValue(object["role"])), boundary: true})
+			continue
+		}
+		role := strings.ToLower(stringValue(object["role"]))
+		if !isClientInstructionRole(role) {
+			segments = append(segments, promptSegment{role: role, boundary: true})
+			continue
+		}
+		texts := contentTexts(object["content"])
+		added := false
+		for _, text := range texts {
+			segments = append(segments, promptSegment{text: text, user: role == "user", role: role})
+			if strings.TrimSpace(text) != "" {
+				added = true
+				hasMessageText = true
+				if role == "user" {
+					hasUserText = true
+				}
+			}
+		}
+		if !added {
+			segments = append(segments, promptSegment{user: role == "user", role: role, boundary: true})
+		}
+	}
+	if !hasMessageText || !hasUserText {
+		return nil, false
+	}
+	return segments, true
 }
 
 func isClientInstructionRole(role string) bool {
