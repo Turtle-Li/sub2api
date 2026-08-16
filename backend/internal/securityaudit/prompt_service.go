@@ -23,13 +23,14 @@ type PromptService struct {
 	metrics   *AtomicMetrics
 	clock     Clock
 
-	lifecycleMu  sync.Mutex
-	cancel       context.CancelFunc
-	background   context.Context
-	enqueueWG    sync.WaitGroup
-	enqueueSlots chan struct{}
-	probeMu      sync.RWMutex
-	probes       map[string]ProbeResult
+	lifecycleMu       sync.Mutex
+	cancel            context.CancelFunc
+	background        context.Context
+	enqueueWG         sync.WaitGroup
+	enqueueSlots      chan struct{}
+	largeEnqueueSlots chan struct{}
+	probeMu           sync.RWMutex
+	probes            map[string]ProbeResult
 }
 
 func NewPromptService(
@@ -45,7 +46,7 @@ func NewPromptService(
 	return &PromptService{
 		config: config, repo: repo, payload: payload, scanner: scanner, metrics: metrics,
 		enqueuer: enqueuer, evaluator: evaluator, runner: runner, clock: realClock{},
-		enqueueSlots: make(chan struct{}, 128), probes: map[string]ProbeResult{},
+		enqueueSlots: make(chan struct{}, 128), largeEnqueueSlots: make(chan struct{}, LargeAuditEnqueueSlots), probes: map[string]ProbeResult{},
 	}
 }
 
@@ -111,27 +112,45 @@ func (s *PromptService) Enqueue(_ context.Context, req Request) error {
 	if s == nil || s.enqueuer == nil || s.EffectiveMode() != ModeAsync {
 		return nil
 	}
+	if len(req.Body) > MaxAsyncAuditBodyBytes {
+		if s.metrics != nil {
+			s.metrics.IncDropped()
+		}
+		LogWarn(EventEnqueueDropped, map[string]any{
+			"request_id": req.RequestID, "status": "dropped", "error_code": "input_too_large",
+			"input_bytes": len(req.Body), "max_input_bytes": MaxAsyncAuditBodyBytes,
+		})
+		return nil
+	}
+	slots := s.enqueueSlots
+	if len(req.Body) > LargeAuditBodyThresholdBytes && s.largeEnqueueSlots != nil {
+		slots = s.largeEnqueueSlots
+	}
 	select {
-	case s.enqueueSlots <- struct{}{}:
+	case slots <- struct{}{}:
 	default:
 		if s.metrics != nil {
 			s.metrics.IncDropped()
 		}
-		LogWarn(EventEnqueueDropped, map[string]any{"request_id": req.RequestID, "status": "dropped", "error_code": "local_enqueue_busy"})
+		errorCode := "local_enqueue_busy"
+		if slots == s.largeEnqueueSlots {
+			errorCode = "large_input_enqueue_busy"
+		}
+		LogWarn(EventEnqueueDropped, map[string]any{"request_id": req.RequestID, "status": "dropped", "error_code": errorCode, "input_bytes": len(req.Body)})
 		return nil
 	}
 	s.lifecycleMu.Lock()
 	background := s.background
 	s.lifecycleMu.Unlock()
 	if background == nil {
-		<-s.enqueueSlots
+		<-slots
 		return errors.New("prompt audit service not started")
 	}
 	requestCopy := req.Clone()
 	s.enqueueWG.Add(1)
 	go func() {
 		defer s.enqueueWG.Done()
-		defer func() { <-s.enqueueSlots }()
+		defer func() { <-slots }()
 		ctx, cancel := context.WithTimeout(background, 2*time.Second)
 		defer cancel()
 		_ = s.enqueuer.Enqueue(ctx, requestCopy)

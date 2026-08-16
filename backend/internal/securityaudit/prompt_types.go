@@ -239,7 +239,18 @@ type QueueStats struct {
 // change is needed. Tune it from observed chunk latency before making it
 // configurable; the next trigger is sustained small-job queue age despite a
 // free large lane.
-const LargePromptThresholdRunes = 64 * 1024
+const (
+	LargePromptThresholdRunes = 64 * 1024
+
+	// Async audit admission is intentionally smaller than the gateway's
+	// multimodal body limit. This bounds parser/clone amplification without
+	// changing what the upstream gateway accepts. Oversized inputs are logged as
+	// an audit drop and must be surfaced by operations; they are never reported
+	// as successfully scanned.
+	LargeAuditBodyThresholdBytes = 1 * 1024 * 1024
+	MaxAsyncAuditBodyBytes       = 32 * 1024 * 1024
+	LargeAuditEnqueueSlots       = 1
+)
 
 type PromptJobLane string
 
