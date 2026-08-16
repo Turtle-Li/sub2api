@@ -1830,8 +1830,12 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (enableCodexFingerprintMode.value) {
     const extra = ensureExtra()
-    // 批量更新对 extra 使用 JSONB merge，关闭时必须显式覆盖旧值。
-    extra.codex_fingerprint_mode = codexFingerprintMode.value
+    // off = 默认值，清键即可；device/session/full 是显式 opt-in，必须落键（#5610）。
+    if (codexFingerprintMode.value !== 'off') {
+      extra.codex_fingerprint_mode = codexFingerprintMode.value
+    } else {
+      delete extra.codex_fingerprint_mode
+    }
   }
 
   if (enableOpenAICompactMode.value) {

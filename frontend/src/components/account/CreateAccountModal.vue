@@ -4840,6 +4840,8 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   } else {
     delete extra.codex_cli_only_allow_app_server
   }
+  // 收敛是显式 opt-in：off 即默认值，不落键；device/session/full 必须显式写入，
+  // 否则管理员的选择会被当成默认而丢失（#5610）。
   if (codexFingerprintMode.value !== 'off') {
     extra.codex_fingerprint_mode = codexFingerprintMode.value
   } else {
