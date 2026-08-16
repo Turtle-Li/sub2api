@@ -98,7 +98,10 @@ func (r *Runner) worker(ctx context.Context, workerID int) {
 				continue
 			}
 			for {
-				job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now())
+				// Worker zero is the reserved large-job lane. It prefers small jobs
+				// and only claims a large job when no normal job is waiting; all other
+				// active workers stay available for ordinary requests.
+				job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now(), workerID == 0)
 				if err != nil {
 					r.setLastError("claim_job_failed", err.Error())
 					break
@@ -135,6 +138,8 @@ func (r *Runner) processSafely(ctx context.Context, workerID int, cfg ActiveConf
 
 func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig, job *Job) error {
 	baseFields := jobLogFields(job)
+	lane := promptJobLane(job.Snapshot.PromptLength)
+	baseFields["job_lane"] = string(lane)
 	LogInfo(EventAuditStarted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "attempts": job.Attempts, "status": "processing"}))
 	scanText, err := r.payload.Get(ctx, job.ID)
 	if err != nil {

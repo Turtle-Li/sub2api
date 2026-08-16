@@ -41,10 +41,11 @@ const (
 )
 
 type promptSegment struct {
-	text     string
-	user     bool
-	role     string
-	boundary bool
+	text       string
+	user       bool
+	role       string
+	boundary   bool
+	alwaysScan bool
 }
 
 func ExtractPromptSnapshot(req Request) (PromptSnapshot, error) {
@@ -304,9 +305,6 @@ func extractCodexRolloutString(value string) ([]promptSegment, bool) {
 	if !strings.HasPrefix(trimmed, codexRolloutPromptPrefix) {
 		return nil, false
 	}
-	if strings.Count(trimmed, codexRolloutConversationMarker) != 1 {
-		return nil, false
-	}
 	markerIndex := strings.Index(trimmed, codexRolloutConversationMarker)
 	if markerIndex < len(codexRolloutPromptPrefix) {
 		return nil, false
@@ -327,7 +325,10 @@ func extractCodexRolloutString(value string) ([]promptSegment, bool) {
 	segments := make([]promptSegment, 0, len(items)+1)
 	// Keep the generated header as an explicit boundary. It is context for the
 	// nested messages, not the latest user turn itself.
-	segments = append(segments, promptSegment{text: header, role: "rollout_context", boundary: true})
+	// The wrapper is client-controlled at this boundary. Keep its header in the
+	// scan even when latest-turn mode narrows the nested conversation, so a
+	// forged wrapper cannot hide a finding in metadata that the parser discards.
+	segments = append(segments, promptSegment{text: header, role: "rollout_context", boundary: true, alwaysScan: true})
 	hasMessageText := false
 	hasUserText := false
 	for index, item := range items {
@@ -337,7 +338,7 @@ func extractCodexRolloutString(value string) ([]promptSegment, bool) {
 		if index > 0 {
 			segments = append(segments, promptSegment{boundary: true})
 		}
-		object, ok := item.(map[string]any)
+		object, ok := unwrapRolloutMessageItem(item)
 		if !ok {
 			segments = append(segments, promptSegment{boundary: true})
 			continue
@@ -374,6 +375,21 @@ func extractCodexRolloutString(value string) ([]promptSegment, bool) {
 		return nil, false
 	}
 	return segments, true
+}
+
+func unwrapRolloutMessageItem(item any) (map[string]any, bool) {
+	object, ok := item.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	if strings.EqualFold(stringValue(object["type"]), "response_item") {
+		payload, ok := object["payload"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		return payload, true
+	}
+	return object, true
 }
 
 func isClientInstructionRole(role string) bool {
@@ -646,7 +662,8 @@ func latestUserOnlySegments(values []promptSegment) []string {
 	}
 	// Keep one segment so the async payload cannot accidentally treat a
 	// multipart user turn as historical context during chunking.
-	return []string{strings.Join(currentUserText, "\n\n")}
+	result := []string{strings.Join(currentUserText, "\n\n")}
+	return appendAlwaysScannedText(result, normalized, latestUserStart, latestUserEnd)
 }
 
 // blockingSegmentsLatestUserAndPreviousOutput limits synchronous guard input to
@@ -689,7 +706,20 @@ func blockingSegmentsLatestUserAndPreviousOutput(values []promptSegment) []strin
 		selected = append(selected, normalized[start:index+1]...)
 		break
 	}
-	return promptSegmentTexts(selected)
+	selectedTexts := promptSegmentTexts(selected)
+	return appendAlwaysScannedText(selectedTexts, normalized, latestUserStart, latestUserEnd)
+}
+
+func appendAlwaysScannedText(result []string, values []promptSegment, selectedStart, selectedEnd int) []string {
+	for index, segment := range values {
+		if index >= selectedStart && index < selectedEnd {
+			continue
+		}
+		if segment.alwaysScan && strings.TrimSpace(segment.text) != "" {
+			result = append(result, segment.text)
+		}
+	}
+	return result
 }
 
 func normalizedPromptSegments(values []promptSegment) []promptSegment {

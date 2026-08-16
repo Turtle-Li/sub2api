@@ -67,7 +67,7 @@ type JobRepository interface {
 	CreateStagingWithCapacity(ctx context.Context, snapshot PromptSnapshot, configVersion int64, maxAttempts, capacity int) (*Job, error)
 	PublishQueued(ctx context.Context, jobID int64) error
 	MarkStagingFailed(ctx context.Context, jobID int64, code, message string) error
-	ClaimNextJob(ctx context.Context, now time.Time) (*Job, bool, error)
+	ClaimNextJob(ctx context.Context, now time.Time, includeLarge bool) (*Job, bool, error)
 	RefreshLease(ctx context.Context, jobID, claimVersion int64, now time.Time) error
 	Complete(ctx context.Context, job *Job, result *NormalizedResult, storePassEvents bool) (*Event, error)
 	Retry(ctx context.Context, jobID, claimVersion int64, next time.Time, code, message string) error
@@ -140,12 +140,13 @@ func (r *PostgreSQLRepository) MarkStagingFailed(ctx context.Context, jobID int6
 	return requireOneRow(result, err, ErrLeaseLost)
 }
 
-func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time) (*Job, bool, error) {
+func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time, includeLarge bool) (*Job, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
 		WITH candidate AS (
 			SELECT id FROM prompt_audit_jobs
 			WHERE status IN ('queued','retry') AND next_attempt_at <= $1
-			ORDER BY next_attempt_at, id
+			  AND ($2 OR prompt_length <= $3)
+			ORDER BY CASE WHEN prompt_length > $3 THEN 1 ELSE 0 END, next_attempt_at, id
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)
@@ -154,7 +155,7 @@ func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time) 
 			processing_started_at=$1, updated_at=$1
 		FROM candidate
 		WHERE j.id=candidate.id
-		RETURNING `+jobColumns("j"), now.UTC())
+		RETURNING `+jobColumns("j"), now.UTC(), includeLarge, LargePromptThresholdRunes)
 	job, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
@@ -247,7 +248,10 @@ func (r *PostgreSQLRepository) ReclaimStale(ctx context.Context, stagingBefore, 
 }
 
 func (r *PostgreSQLRepository) QueueStats(ctx context.Context) (QueueStats, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM prompt_audit_jobs GROUP BY status`)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT status, prompt_length > $1 AS is_large, COUNT(*)
+		FROM prompt_audit_jobs
+		GROUP BY status, is_large`, LargePromptThresholdRunes)
 	if err != nil {
 		return QueueStats{}, err
 	}
@@ -255,23 +259,34 @@ func (r *PostgreSQLRepository) QueueStats(ctx context.Context) (QueueStats, erro
 	var stats QueueStats
 	for rows.Next() {
 		var status string
+		var isLarge bool
 		var count int64
-		if err := rows.Scan(&status, &count); err != nil {
+		if err := rows.Scan(&status, &isLarge, &count); err != nil {
 			return QueueStats{}, err
 		}
 		switch status {
 		case "staging":
-			stats.Staging = count
+			stats.Staging += count
 		case "queued":
-			stats.Queued = count
+			stats.Queued += count
+			if isLarge {
+				stats.QueuedLarge = count
+			} else {
+				stats.QueuedSmall = count
+			}
 		case "processing":
-			stats.Processing = count
+			stats.Processing += count
+			if isLarge {
+				stats.ProcessingLarge = count
+			} else {
+				stats.ProcessingSmall = count
+			}
 		case "retry":
-			stats.Retry = count
+			stats.Retry += count
 		case "done":
-			stats.Done = count
+			stats.Done += count
 		case "failed":
-			stats.Failed = count
+			stats.Failed += count
 		}
 	}
 	stats.Active = stats.Staging + stats.Queued + stats.Processing + stats.Retry

@@ -23,6 +23,12 @@ type advancingClock struct {
 	step time.Duration
 }
 
+func TestPromptJobLaneUsesPersistedPromptLength(t *testing.T) {
+	require.Equal(t, PromptJobLaneSmall, promptJobLane(LargePromptThresholdRunes))
+	require.Equal(t, PromptJobLaneLarge, promptJobLane(LargePromptThresholdRunes+1))
+	require.Equal(t, PromptJobLaneSmall, promptJobLane(0))
+}
+
 func (c *advancingClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -124,7 +130,7 @@ func (r *fakeJobRepository) MarkStagingFailed(_ context.Context, _ int64, code, 
 	r.markedCode = code
 	return nil
 }
-func (r *fakeJobRepository) ClaimNextJob(context.Context, time.Time) (*Job, bool, error) {
+func (r *fakeJobRepository) ClaimNextJob(context.Context, time.Time, bool) (*Job, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.claimQueue) == 0 {

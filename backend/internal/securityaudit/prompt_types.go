@@ -220,13 +220,39 @@ type AuditMetricsSnapshot struct {
 }
 
 type QueueStats struct {
-	Staging    int64 `json:"staging"`
-	Queued     int64 `json:"queued"`
-	Processing int64 `json:"processing"`
-	Retry      int64 `json:"retry"`
-	Done       int64 `json:"done"`
-	Failed     int64 `json:"failed"`
-	Active     int64 `json:"active"`
+	Staging         int64 `json:"staging"`
+	Queued          int64 `json:"queued"`
+	Processing      int64 `json:"processing"`
+	Retry           int64 `json:"retry"`
+	Done            int64 `json:"done"`
+	Failed          int64 `json:"failed"`
+	Active          int64 `json:"active"`
+	QueuedSmall     int64 `json:"queued_small"`
+	QueuedLarge     int64 `json:"queued_large"`
+	ProcessingSmall int64 `json:"processing_small"`
+	ProcessingLarge int64 `json:"processing_large"`
+}
+
+// LargePromptThresholdRunes is intentionally conservative: jobs above this
+// size can require many sequential guard chunks and must not consume every
+// normal-work slot. It is derived from persisted prompt_length, so no schema
+// change is needed. Tune it from observed chunk latency before making it
+// configurable; the next trigger is sustained small-job queue age despite a
+// free large lane.
+const LargePromptThresholdRunes = 64 * 1024
+
+type PromptJobLane string
+
+const (
+	PromptJobLaneSmall PromptJobLane = "small"
+	PromptJobLaneLarge PromptJobLane = "large"
+)
+
+func promptJobLane(promptLength int) PromptJobLane {
+	if promptLength > LargePromptThresholdRunes {
+		return PromptJobLaneLarge
+	}
+	return PromptJobLaneSmall
 }
 
 type RuntimeSnapshot struct {
