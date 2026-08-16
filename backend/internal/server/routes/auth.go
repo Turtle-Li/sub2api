@@ -263,6 +263,8 @@ func RegisterAuthRoutes(
 		// independent TT Switch control-plane namespace.
 		settings.GET("/desktop", h.Setting.GetDesktopSettings)
 		settings.GET("/desktop-promotions", h.Setting.GetDesktopPromotions)
+		settings.GET("/desktop-tools", h.Setting.GetDesktopTools)
+		settings.GET("/desktop-tools/version", h.Setting.GetDesktopToolVersion)
 		settings.GET("/desktop-update-policy", h.Setting.GetDesktopUpdatePolicy)
 		settings.GET("/public", h.Setting.GetPublicSettings)
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
@@ -271,6 +273,8 @@ func RegisterAuthRoutes(
 	{
 		desktop.GET("/discovery", h.Setting.GetDesktopSettings)
 		desktop.GET("/promotions", h.Setting.GetDesktopPromotions)
+		desktop.GET("/tools", h.Setting.GetDesktopTools)
+		desktop.GET("/tools/version", h.Setting.GetDesktopToolVersion)
 		desktop.GET("/update-policy", h.Setting.GetDesktopUpdatePolicy)
 	}
 

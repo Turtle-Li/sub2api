@@ -300,6 +300,7 @@ const (
 	SettingKeyAPIBaseURL                  = "api_base_url"                  // API端点地址（用于客户端配置和导入）
 	SettingKeyDesktopControlPlaneURL      = "desktop_control_plane_url"     // 桌面端账号控制面地址（与模型 API 端点独立）
 	SettingKeyDesktopPromotions           = "desktop_promotions"            // 桌面端合作推广目录（JSON 数组）
+	SettingKeyDesktopTools                = "desktop_tools"                 // TT Switch 配置驱动工具目录（版本化 JSON）
 	SettingKeyDesktopUpdatePolicy         = "desktop_update_policy"         // TT Switch 版本发布与最低可用版本策略（JSON）
 	SettingKeyDesktopStorageConfig        = "desktop_storage_config"        // TT Switch 专用腾讯云 COS 配置（JSON，SecretKey 加密）
 	SettingKeyContactInfo                 = "contact_info"                  // 客服联系方式

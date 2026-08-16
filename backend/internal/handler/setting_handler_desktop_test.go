@@ -92,6 +92,41 @@ func TestSettingHandlerGetDesktopPromotionsOnlyReturnsActiveItems(t *testing.T) 
 	require.Equal(t, "turtle-chat", response.Data.Items[0].ID)
 }
 
+func TestSettingHandlerGetDesktopToolsSupportsVersionProbeAndDynamicTools(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &settingHandlerPublicRepoStub{values: map[string]string{
+		service.SettingKeyDesktopTools: `{
+			"schema_version":1,
+			"version":9,
+			"tools":[
+				{"id":"test_tool","name":"测试工具","description":"无需更新客户端","icon":"tool","enabled":true,"ui":{"type":"switch"},"action":{"type":"config_update","target":"codex"},"defaults":{"enabled":false},"settings":[]},
+				{"id":"hidden_tool","name":"隐藏工具","description":"停用","icon":"tool","enabled":false,"ui":{"type":"switch"},"action":{"type":"config_update","target":"codex"},"defaults":{"enabled":false},"settings":[]}
+			]
+		}`,
+	}}
+	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version")
+
+	versionRecorder := httptest.NewRecorder()
+	versionContext, _ := gin.CreateTestContext(versionRecorder)
+	versionContext.Request = httptest.NewRequest(http.MethodGet, "/api/v1/desktop/tools/version", nil)
+	h.GetDesktopToolVersion(versionContext)
+	require.Equal(t, http.StatusOK, versionRecorder.Code)
+	require.JSONEq(t, `{"code":0,"data":{"schema_version":1,"version":9},"message":"success"}`, versionRecorder.Body.String())
+
+	catalogRecorder := httptest.NewRecorder()
+	catalogContext, _ := gin.CreateTestContext(catalogRecorder)
+	catalogContext.Request = httptest.NewRequest(http.MethodGet, "/api/v1/desktop/tools", nil)
+	h.GetDesktopTools(catalogContext)
+	require.Equal(t, http.StatusOK, catalogRecorder.Code)
+	var response struct {
+		Data service.DesktopToolCatalog `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(catalogRecorder.Body.Bytes(), &response))
+	require.Equal(t, int64(9), response.Data.Version)
+	require.Len(t, response.Data.Tools, 1)
+	require.Equal(t, "test_tool", response.Data.Tools[0].ID)
+}
+
 func TestSettingHandlerGetDesktopUpdatePolicyComputesRequiredStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

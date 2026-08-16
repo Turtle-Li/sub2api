@@ -71,6 +71,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeySiteLogo:                                  "",
 		SettingKeyDesktopControlPlaneURL:                    "",
 		SettingKeyDesktopPromotions:                         "[]",
+		SettingKeyDesktopTools:                              defaultDesktopToolCatalogJSON,
 		SettingKeyDesktopUpdatePolicy:                       `{"schema_version":1,"latest_version":"","minimum_supported_version":"","enforcement_enabled":false,"enforce_after":"","reason":"","manual_download_url":""}`,
 		SettingKeyDesktopStorageConfig:                      `{"schema_version":1,"enabled":false,"provider":"tencent_cos","region":"","bucket":"","secret_id":"","release_prefix":"releases/","theme_prefix":"themes/","quarantine_prefix":"theme-quarantine/","public_base_url":""}`,
 		SettingKeyPurchaseSubscriptionEnabled:               "false",

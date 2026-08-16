@@ -161,6 +161,33 @@ func (h *SettingHandler) GetDesktopPromotions(c *gin.Context) {
 	})
 }
 
+// GetDesktopTools returns the active declaration-only tool catalog used by
+// TT Switch. The catalog contains no commands or paths; local clients still
+// enforce their own action allowlist before changing configuration.
+// GET /api/v1/desktop/tools
+func (h *SettingHandler) GetDesktopTools(c *gin.Context) {
+	catalog, err := h.settingService.GetDesktopToolCatalog(c.Request.Context(), false)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, catalog)
+}
+
+// GetDesktopToolVersion is the cheap synchronization probe used by TT Switch.
+// GET /api/v1/desktop/tools/version
+func (h *SettingHandler) GetDesktopToolVersion(c *gin.Context) {
+	catalog, err := h.settingService.GetDesktopToolCatalog(c.Request.Context(), false)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, service.DesktopToolCatalogVersion{
+		SchemaVersion: catalog.SchemaVersion,
+		Version:       catalog.Version,
+	})
+}
+
 // GetDesktopUpdatePolicy returns the version decision for the requesting TT
 // Switch build. It remains public so a blocked or logged-out client can still
 // discover and install the required signed update.
