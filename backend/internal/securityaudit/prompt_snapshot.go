@@ -23,6 +23,14 @@ var (
 
 const promptAuditPrioritySeparator = "\x00SUB2API_PROMPT_AUDIT_PRIORITY_END\x00"
 
+type promptSnapshotScope uint8
+
+const (
+	promptSnapshotScopeFull promptSnapshotScope = iota
+	promptSnapshotScopeLatestUser
+	promptSnapshotScopeLatestUserAndPreviousOutput
+)
+
 type promptSegment struct {
 	text string
 	user bool
@@ -30,25 +38,40 @@ type promptSegment struct {
 }
 
 func ExtractPromptSnapshot(req Request) (PromptSnapshot, error) {
-	return extractPromptSnapshot(req, false)
+	return extractPromptSnapshot(req, promptSnapshotScopeFull)
 }
 
-// ExtractBlockingPromptSnapshot builds the narrow, low-latency blocking input
-// when configured. Asynchronous auditing always uses ExtractPromptSnapshot so
-// the complete client-controlled transcript is retained for review.
+// ExtractAsyncPromptSnapshot builds the actionable async audit input. The
+// current user turn is the only text allowed to produce a finding; older
+// client-controlled context is intentionally excluded from this scan.
+func ExtractAsyncPromptSnapshot(req Request) (PromptSnapshot, error) {
+	return extractPromptSnapshot(req, promptSnapshotScopeLatestUser)
+}
+
+// ExtractBlockingPromptSnapshot builds the synchronous guard input. The
+// latest-turn option is deliberately independent from asynchronous auditing.
 func ExtractBlockingPromptSnapshot(req Request, latestTurnOnly bool) (PromptSnapshot, error) {
-	return extractPromptSnapshot(req, latestTurnOnly)
+	scope := promptSnapshotScopeFull
+	if latestTurnOnly {
+		scope = promptSnapshotScopeLatestUserAndPreviousOutput
+	}
+	return extractPromptSnapshot(req, scope)
 }
 
-func extractPromptSnapshot(req Request, latestTurnOnly bool) (PromptSnapshot, error) {
+func extractPromptSnapshot(req Request, scope promptSnapshotScope) (PromptSnapshot, error) {
 	var document any
 	if err := json.Unmarshal(req.Body, &document); err != nil {
 		return PromptSnapshot{}, errors.New("prompt audit request JSON is invalid")
 	}
 	extracted := extractProtocolSegments(req.Protocol, document)
-	segments := normalizeSegmentsLatestUserFirst(extracted)
-	if latestTurnOnly {
+	var segments []string
+	switch scope {
+	case promptSnapshotScopeLatestUser:
+		segments = latestUserOnlySegments(extracted)
+	case promptSnapshotScopeLatestUserAndPreviousOutput:
 		segments = blockingSegmentsLatestUserAndPreviousOutput(extracted)
+	default:
+		segments = normalizeSegmentsLatestUserFirst(extracted)
 	}
 	if len(segments) == 0 {
 		return PromptSnapshot{}, ErrNoPromptText
@@ -457,6 +480,25 @@ func normalizeSegmentsLatestUserFirst(values []promptSegment) []string {
 	return result
 }
 
+func latestUserOnlySegments(values []promptSegment) []string {
+	normalized := normalizedPromptSegments(values)
+	latestUserStart := latestUserSegmentStart(normalized)
+	if latestUserStart < 0 {
+		return nil
+	}
+	latestUserEnd := latestUserStart
+	for latestUserEnd < len(normalized) && isUserSegment(normalized[latestUserEnd]) {
+		latestUserEnd++
+	}
+	currentUserText := make([]string, 0, latestUserEnd-latestUserStart)
+	for _, segment := range normalized[latestUserStart:latestUserEnd] {
+		currentUserText = append(currentUserText, segment.text)
+	}
+	// Keep one segment so the async payload cannot accidentally treat a
+	// multipart user turn as historical context during chunking.
+	return []string{strings.Join(currentUserText, "\n\n")}
+}
+
 // blockingSegmentsLatestUserAndPreviousOutput limits synchronous guard input to
 // the current user turn and the nearest preceding assistant/model turn. It is
 // deliberately opt-in because full transcript scanning remains stronger at
@@ -632,6 +674,37 @@ func BuildFullPrompt(value string, maxRunes int) string {
 // metadata joiner yields the original multi-segment text.
 func FullPromptFromScanText(scanText string) string {
 	return BuildFullPrompt(strings.ReplaceAll(scanText, promptAuditPrioritySeparator, "\n\n"), DefaultFullPromptMaxRunes)
+}
+
+// latestUserScanText narrows a legacy full-transcript async payload to the
+// priority segment written by the previous async implementation. New
+// latest-user payloads contain no separator and pass through unchanged.
+func latestUserScanText(scanText string, legacyMessageCount int) (string, bool) {
+	if legacyMessageCount <= 1 || strings.Count(scanText, promptAuditPrioritySeparator) != 1 {
+		return scanText, false
+	}
+	latest, _, ok := strings.Cut(scanText, promptAuditPrioritySeparator)
+	if !ok || strings.TrimSpace(latest) == "" {
+		return scanText, false
+	}
+	return latest, true
+}
+
+func replaceSnapshotWithScanText(snapshot *PromptSnapshot, scanText string) {
+	if snapshot == nil {
+		return
+	}
+	metadataText := strings.ReplaceAll(scanText, promptAuditPrioritySeparator, "\n\n")
+	digest := sha256.Sum256([]byte(metadataText))
+	snapshot.PromptHash = hex.EncodeToString(digest[:])
+	snapshot.RedactedPreview = BuildPromptPreview(metadataText, DefaultPromptPreviewMaxRunes)
+	snapshot.FullPrompt = BuildFullPrompt(metadataText, DefaultFullPromptMaxRunes)
+	snapshot.PromptLength = utf8.RuneCountInString(metadataText)
+	if strings.TrimSpace(metadataText) == "" {
+		snapshot.MessageCount = 0
+	} else {
+		snapshot.MessageCount = 1
+	}
 }
 
 func TrimRunes(value string, limit int) string {

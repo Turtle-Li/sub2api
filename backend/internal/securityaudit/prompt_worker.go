@@ -140,6 +140,12 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 	if err != nil {
 		return r.finishFailure(ctx, job, &GuardError{Code: "payload_missing", Retryable: false, Cause: err})
 	}
+	if job.ExecutionMode == ModeAsync {
+		if latest, narrowed := latestUserScanText(scanText, job.Snapshot.MessageCount); narrowed {
+			scanText = latest
+			replaceSnapshotWithScanText(&job.Snapshot, scanText)
+		}
+	}
 	// The job row only carries redacted metadata; the full prompt for the audit
 	// event is reconstructed here from the transient scan payload.
 	job.Snapshot.FullPrompt = FullPromptFromScanText(scanText)

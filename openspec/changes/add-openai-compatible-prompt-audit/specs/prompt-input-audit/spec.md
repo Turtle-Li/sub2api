@@ -52,7 +52,7 @@
 - **THEN** 系统 MUST 将响应判定为无效或不可用
 
 ### Requirement: 系统必须按协议提取用户输入提示词快照
-系统 SHALL 从目标项目所有已支持、包含用户文本的模型入口提取提示词快照。快照 MUST 包含 request ID、user ID、用户名、用户邮箱、API key ID/名称、group ID/名称、provider、endpoint、protocol、model、提示词 Hash、脱敏预览、Unicode 字符数和消息数量；文本审计 MUST 优先扫描最新用户输入，同时完整覆盖需要审计的历史用户文本。
+系统 SHALL 从目标项目所有已支持、包含用户文本的模型入口提取提示词快照。快照 MUST 包含 request ID、user ID、用户名、用户邮箱、API key ID/名称、group ID/名称、provider、endpoint、protocol、model、提示词 Hash、脱敏预览、Unicode 字符数和消息数量；异步审计的可操作判定 MUST 只使用最新用户轮次，历史上下文 MAY 仅用于明确标记的遥测，且 MUST NOT 单独产生异步风险事件。
 
 #### Scenario: 提取 OpenAI Chat Completions 输入
 - **WHEN** `/v1/chat/completions` 或等价兼容入口包含一个或多个 `role=user` 消息
@@ -180,17 +180,17 @@
 - **THEN** 辅助字段 MUST NOT 改变审计结果或被持久化
 
 ### Requirement: 长提示词必须完整进行 Unicode 分片审计
-系统 SHALL 按 Unicode rune 而不是字节对提示词分片。最新用户输入 MUST 作为优先片段，其他输入按确定顺序完整覆盖；异步任务必须在每片开始前刷新 processing 租约，并为每片开始、完成、失败及最终聚合输出不含正文的结构化日志。
+系统 SHALL 按 Unicode rune 而不是字节对提示词分片。异步任务 MUST 只对最新用户轮次进行可操作扫描；同步全量模式或明确启用的遥测模式才可扫描其他输入。异步任务必须在每片开始前刷新 processing 租约，并为每片开始、完成、失败及最终聚合输出不含正文的结构化日志。
 
 #### Scenario: 输入超过节点单片上限
 - **WHEN** 提示词 Unicode 字符数超过节点 input_limit
-- **THEN** 系统 MUST 生成覆盖全部非空文本的连续分片
+- **THEN** 系统 MUST 为当前审计范围生成覆盖全部非空文本的连续分片
 - **THEN** 任一分片 Block MUST 使聚合结果为 Block
 - **THEN** 只有全部必要分片成功后才能产生 Allow
 
 #### Scenario: 最新输入包含风险
 - **WHEN** 最新用户输入位于长会话尾部并包含 Block 风险
-- **THEN** 该输入 MUST 在历史文本之前接受扫描
+- **THEN** 该输入 MUST 接受完整分片扫描并决定异步可操作结果
 - **THEN** 同步模式 MAY 在确认 Block 后停止后续分片，但 MUST NOT 部分放行
 
 #### Scenario: 多分片扫描完成

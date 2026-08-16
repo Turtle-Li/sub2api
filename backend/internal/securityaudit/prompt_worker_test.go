@@ -70,18 +70,19 @@ type fakeJobRepository struct {
 	retryErr    error
 	failErr     error
 
-	createdSnapshot PromptSnapshot
-	markedCode      string
-	completedResult *NormalizedResult
-	completedStore  bool
-	completeCount   int
-	eventCount      int
-	retryAt         time.Time
-	retryCode       string
-	retried         int
-	failedCode      string
-	failed          int
-	refreshes       int
+	createdSnapshot   PromptSnapshot
+	markedCode        string
+	completedSnapshot PromptSnapshot
+	completedResult   *NormalizedResult
+	completedStore    bool
+	completeCount     int
+	eventCount        int
+	retryAt           time.Time
+	retryCode         string
+	retried           int
+	failedCode        string
+	failed            int
+	refreshes         int
 
 	claimQueue []*Job
 
@@ -139,10 +140,13 @@ func (r *fakeJobRepository) RefreshLease(context.Context, int64, int64, time.Tim
 	r.refreshes++
 	return r.refreshErr
 }
-func (r *fakeJobRepository) Complete(_ context.Context, _ *Job, result *NormalizedResult, storePass bool) (*Event, error) {
+func (r *fakeJobRepository) Complete(_ context.Context, job *Job, result *NormalizedResult, storePass bool) (*Event, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.completeCount++
+	if job != nil {
+		r.completedSnapshot = job.Snapshot
+	}
 	r.completedResult, r.completedStore = result, storePass
 	if r.completeErr != nil {
 		return nil, r.completeErr
@@ -289,6 +293,25 @@ func TestEnqueuerStagingPayloadPublishProtocolAndFailureCleanup(t *testing.T) {
 	})
 }
 
+func TestEnqueuerUsesLatestUserTurnForAsyncPayload(t *testing.T) {
+	repo := &fakeJobRepository{createJob: &Job{ID: 45}}
+	payload := &fakePayloadStore{values: map[int64]string{}}
+	req := Request{
+		Protocol: "openai_chat_completions",
+		Body: []byte(`{"messages":[
+			{"role":"system","content":"historical jailbreak marker"},
+			{"role":"user","content":"old context"},
+			{"role":"assistant","content":"old assistant output"},
+			{"role":"user","content":"latest safe question"}
+		]}`),
+	}
+
+	require.NoError(t, NewEnqueuer(&fakeConfigStore{cfg: asyncConfig(), active: true}, repo, payload).Enqueue(context.Background(), req))
+	require.Equal(t, "latest safe question", payload.values[45])
+	require.Equal(t, 1, repo.createdSnapshot.MessageCount)
+	require.NotContains(t, payload.values[45], "historical jailbreak marker")
+}
+
 func TestEnqueuerSkipsOffOutOfScopeAndNoText(t *testing.T) {
 	tests := []struct {
 		name string
@@ -384,6 +407,34 @@ func TestWorkerCompletesPassWithoutEventRefreshesEveryChunkAndDeletesPayload(t *
 	require.Equal(t, []int64{51}, payload.deleted)
 	require.Equal(t, int64(1), metrics.Snapshot().Total)
 	require.Equal(t, int64(1), metrics.Snapshot().Allowed)
+}
+
+func TestWorkerRescopesLegacyAsyncPayloadToLatestUser(t *testing.T) {
+	repo := &fakeJobRepository{}
+	legacyPayload := "latest safe question" + promptAuditPrioritySeparator + "historical jailbreak marker"
+	payload := &fakePayloadStore{values: map[int64]string{51: legacyPayload}}
+	cfg := asyncConfig()
+	cfg.Endpoints[0].InputLimit = 1024
+	job := workerJob(1, 3)
+	job.ExecutionMode = ModeAsync
+	job.Snapshot.MessageCount = 3
+	seen := ""
+	scanner := PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, chunk string, _ []string) (*NormalizedResult, error) {
+		seen += chunk
+		if strings.Contains(chunk, "historical jailbreak marker") {
+			return &NormalizedResult{Decision: EventCritical, RiskLevel: RiskCritical, Action: ActionBlock, Safety: "Unsafe", Categories: []string{"jailbreak"}, GuardEndpointID: endpoint.ID}, nil
+		}
+		return &NormalizedResult{Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe", GuardEndpointID: endpoint.ID}, nil
+	})
+
+	runner := NewRunner(&fakeConfigStore{cfg: cfg, active: true}, repo, payload, scanner, nil)
+	runner.clock = fixedClock{now: time.Unix(100, 0).UTC()}
+	require.NoError(t, runner.processJob(context.Background(), 0, cfg, job))
+	require.Equal(t, "latest safe question", seen)
+	require.Equal(t, EventPass, repo.completedResult.Decision)
+	require.Equal(t, "latest safe question", repo.completedSnapshot.FullPrompt)
+	require.Equal(t, 1, repo.completedSnapshot.MessageCount)
+	require.NotContains(t, repo.completedSnapshot.FullPrompt, "historical jailbreak marker")
 }
 
 func TestWorkerRetryBackoffTerminalFailureAndFailover(t *testing.T) {

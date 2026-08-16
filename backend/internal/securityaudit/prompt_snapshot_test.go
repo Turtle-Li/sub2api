@@ -82,6 +82,21 @@ func TestFullPromptFromScanTextRestoresMultiSegmentLayout(t *testing.T) {
 	require.Equal(t, singleMeta, FullPromptFromScanText(singleScan))
 }
 
+func TestLatestUserScanTextRescopesLegacyAsyncPayload(t *testing.T) {
+	legacy := "latest user" + promptAuditPrioritySeparator + "historical context"
+	latest, narrowed := latestUserScanText(legacy, 3)
+	require.True(t, narrowed)
+	require.Equal(t, "latest user", latest)
+
+	unchanged, narrowed := latestUserScanText("latest user", 1)
+	require.False(t, narrowed)
+	require.Equal(t, "latest user", unchanged)
+
+	unchanged, narrowed = latestUserScanText("latest user"+promptAuditPrioritySeparator+"history", 2)
+	require.True(t, narrowed)
+	require.Equal(t, "latest user", unchanged)
+}
+
 func TestSplitRunesDoesNotSplitUTF8(t *testing.T) {
 	chunks := SplitRunes("中文😀éabc", 2)
 	require.Equal(t, []string{"中文", "😀e", "́a", "bc"}, chunks)
@@ -126,6 +141,38 @@ func TestPromptSnapshotLatestUserTextBlockIsOnePrioritizedSegment(t *testing.T) 
 	require.Contains(t, snapshot.ScanText, "tool client injection")
 	require.NotContains(t, snapshot.ScanText, "IMAGE_CANARY_BASE64")
 	require.Equal(t, utf8.RuneCountInString(metadataTextForTest(snapshot.ScanText)), snapshot.PromptLength)
+}
+
+func TestExtractAsyncPromptSnapshotUsesLatestUserTurnOnly(t *testing.T) {
+	body := []byte(`{
+		"messages":[
+			{"role":"system","content":"historical jailbreak marker"},
+			{"role":"user","content":"older user context"},
+			{"role":"assistant","content":"old assistant output with self-harm marker"},
+			{"role":"tool","content":"old tool payload with jailbreak marker"},
+			{"role":"user","content":[
+				{"type":"text","text":"正常的最新问题"},
+				{"type":"text","text":"请解释单元测试"}
+			]}
+		]
+	}`)
+
+	snapshot, err := ExtractAsyncPromptSnapshot(Request{Protocol: "openai_chat_completions", Body: body})
+	require.NoError(t, err)
+	require.Equal(t, "正常的最新问题\n\n请解释单元测试", snapshot.ScanText)
+	require.Equal(t, 1, snapshot.MessageCount)
+	for _, historical := range []string{"historical jailbreak marker", "older user context", "old assistant output", "old tool payload"} {
+		require.NotContains(t, snapshot.ScanText, historical)
+		require.NotContains(t, snapshot.FullPrompt, historical)
+	}
+}
+
+func TestExtractAsyncPromptSnapshotRequiresUserText(t *testing.T) {
+	_, err := ExtractAsyncPromptSnapshot(Request{
+		Protocol: "openai_chat_completions",
+		Body:     []byte(`{"messages":[{"role":"system","content":"system only"},{"role":"assistant","content":"output only"}]}`),
+	})
+	require.ErrorIs(t, err, ErrNoPromptText)
 }
 
 func TestPromptSnapshotSeparatesAnthropicUserPromptFromHarnessBlocks(t *testing.T) {
