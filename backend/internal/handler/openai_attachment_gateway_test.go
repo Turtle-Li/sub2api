@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -14,8 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,126 +42,6 @@ type fakeResponsesAttachmentURLExternalizer struct {
 	enabled bool
 	result  attachmentgateway.URLResult
 	calls   int
-}
-
-type cancellationWarmupOptimizer struct {
-	mu                    sync.Mutex
-	optimizeCalls         int
-	rehydrateCalls        int
-	firstImageCount       int
-	firstColdEncodeCount  int
-	firstCacheHits        int
-	firstCacheShared      int
-	firstCacheLookupCount int
-	firstOptimizeStarted  chan struct{}
-	firstOptimizeOnce     sync.Once
-	rehydrateStarted      chan struct{}
-	rehydrateOnce         sync.Once
-	rehydrateRelease      chan struct{}
-	rehydrateResult       attachmentgateway.Result
-}
-
-func (o *cancellationWarmupOptimizer) Enabled() bool { return true }
-
-func (o *cancellationWarmupOptimizer) Optimize(ctx context.Context, body []byte) attachmentgateway.Result {
-	o.mu.Lock()
-	o.optimizeCalls++
-	call := o.optimizeCalls
-	o.mu.Unlock()
-	if call == 1 {
-		o.firstOptimizeOnce.Do(func() { close(o.firstOptimizeStarted) })
-		<-ctx.Done()
-		return attachmentgateway.Result{
-			Body: body,
-			Metrics: attachmentgateway.Metrics{
-				Enabled:            true,
-				OriginalBodyBytes:  len(body),
-				OptimizedBodyBytes: len(body),
-				ImageCount:         o.firstImageCount,
-				ColdEncodeCount:    o.firstColdEncodeCount,
-				CacheHits:          o.firstCacheHits,
-				CacheShared:        o.firstCacheShared,
-				CacheLookupCount:   o.firstCacheLookupCount,
-			},
-		}
-	}
-	return attachmentgateway.Result{Body: body}
-}
-
-func (o *cancellationWarmupOptimizer) RehydrateFromCache(ctx context.Context, _ []byte) attachmentgateway.Result {
-	o.mu.Lock()
-	o.rehydrateCalls++
-	o.mu.Unlock()
-	o.rehydrateOnce.Do(func() { close(o.rehydrateStarted) })
-	select {
-	case <-o.rehydrateRelease:
-		return o.rehydrateResult
-	case <-ctx.Done():
-		return attachmentgateway.Result{Metrics: attachmentgateway.Metrics{TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded), Errors: 1}}
-	}
-}
-
-func (o *cancellationWarmupOptimizer) counts() (optimize, rehydrate int) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.optimizeCalls, o.rehydrateCalls
-}
-
-type recordingWarmupExternalizer struct {
-	enabled    bool
-	called     chan []byte
-	calls      atomic.Int32
-	selectedMu sync.Mutex
-	selected   [][]int
-}
-
-func (e *recordingWarmupExternalizer) Enabled() bool { return e.enabled }
-
-func (e *recordingWarmupExternalizer) Externalize(ctx context.Context, body []byte) attachmentgateway.URLResult {
-	return e.ExternalizeSelected(ctx, body, nil)
-}
-
-func (e *recordingWarmupExternalizer) ExternalizeWithWriteGuard(
-	ctx context.Context,
-	body []byte,
-	canWrite func() bool,
-) attachmentgateway.URLResult {
-	return e.ExternalizeSelectedWithWriteGuard(ctx, body, nil, canWrite)
-}
-
-func (e *recordingWarmupExternalizer) ExternalizeSelected(ctx context.Context, body []byte, selected []int) attachmentgateway.URLResult {
-	e.calls.Add(1)
-	e.selectedMu.Lock()
-	e.selected = append(e.selected, append([]int(nil), selected...))
-	e.selectedMu.Unlock()
-	if ctx.Err() == nil {
-		select {
-		case e.called <- append([]byte(nil), body...):
-		default:
-		}
-	}
-	return attachmentgateway.URLResult{Body: body, Metrics: attachmentgateway.URLMetrics{Enabled: true, StorageReady: true}}
-}
-
-func (e *recordingWarmupExternalizer) selectedIndexes() []int {
-	e.selectedMu.Lock()
-	defer e.selectedMu.Unlock()
-	if len(e.selected) == 0 {
-		return nil
-	}
-	return append([]int(nil), e.selected[len(e.selected)-1]...)
-}
-
-func (e *recordingWarmupExternalizer) ExternalizeSelectedWithWriteGuard(
-	ctx context.Context,
-	body []byte,
-	selected []int,
-	canWrite func() bool,
-) attachmentgateway.URLResult {
-	if canWrite != nil && !canWrite() {
-		return attachmentgateway.URLResult{Body: body, Metrics: attachmentgateway.URLMetrics{Enabled: true, WriteSuppressed: true}}
-	}
-	return e.ExternalizeSelected(ctx, body, selected)
 }
 
 type recordingResponsesAttachmentStorage struct {
@@ -468,32 +345,24 @@ func TestOptimizeResponsesAttachmentsDryRunNeverWritesObjectStorage(t *testing.T
 	require.Zero(t, externalizer.calls)
 }
 
-func TestCanceledOptimizationWarmsExistingCacheThenExternalizes(t *testing.T) {
+func TestCanceledAttachmentSkipsURLExternalization(t *testing.T) {
 	originalBody := []byte(`{"model":"gpt-test","input":"original"}`)
 	optimizedBody := []byte(`{"model":"gpt-test","input":"optimized"}`)
-	optimizer := &cancellationWarmupOptimizer{
-		firstImageCount:       1,
-		firstColdEncodeCount:  1,
-		firstCacheLookupCount: 1,
-		firstOptimizeStarted:  make(chan struct{}),
-		rehydrateStarted:      make(chan struct{}),
-		rehydrateRelease:      make(chan struct{}),
-		rehydrateResult: attachmentgateway.Result{
-			Body:                   optimizedBody,
-			RehydratedImageIndexes: []int{0},
+	optimizer := &fakeResponsesAttachmentOptimizer{
+		enabled: true,
+		result: attachmentgateway.Result{
+			Body: optimizedBody,
 			Metrics: attachmentgateway.Metrics{
-				Enabled:             true,
-				OriginalBodyBytes:   len(originalBody),
-				OptimizedBodyBytes:  len(optimizedBody),
-				OptimizedImageCount: 1,
+				Enabled:            true,
+				OriginalBodyBytes:  len(originalBody),
+				OptimizedBodyBytes: len(optimizedBody),
 			},
 		},
 	}
-	externalizer := &recordingWarmupExternalizer{enabled: true, called: make(chan []byte, 1)}
+	externalizer := &fakeResponsesAttachmentURLExternalizer{enabled: true}
 	handler := &OpenAIGatewayHandler{
 		attachmentOptimizer:       optimizer,
 		attachmentURLExternalizer: externalizer,
-		attachmentWarmupSlots:     make(chan struct{}, 1),
 		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
 			AttachmentOptimizerEnabled:   true,
 			URLRewriteEnabled:            true,
@@ -503,355 +372,13 @@ func TestCanceledOptimizationWarmsExistingCacheThenExternalizes(t *testing.T) {
 		}),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	prepared := make(chan responsesAttachmentPreparation, 1)
-	go func() {
-		prepared <- handler.prepareResponsesAttachments(ctx, zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
-	}()
-	select {
-	case <-optimizer.firstOptimizeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("optimizer did not begin")
-	}
 	cancel()
-	select {
-	case result := <-prepared:
-		require.Equal(t, originalBody, result.Body)
-	case <-time.After(time.Second):
-		t.Fatal("canceled request did not return promptly")
-	}
-	select {
-	case <-optimizer.rehydrateStarted:
-	case <-time.After(time.Second):
-		t.Fatal("cache-only warmup was not scheduled")
-	}
-	close(optimizer.rehydrateRelease)
-	select {
-	case uploaded := <-externalizer.called:
-		require.Equal(t, optimizedBody, uploaded)
-	case <-time.After(time.Second):
-		t.Fatal("completed cache warmup did not externalize")
-	}
-	optimizeCalls, rehydrateCalls := optimizer.counts()
-	require.Equal(t, 1, optimizeCalls)
-	require.Equal(t, 1, rehydrateCalls)
-	require.Equal(t, int32(1), externalizer.calls.Load())
-}
 
-func TestCanceledOptimizationWarmsExistingPositiveCacheWithoutColdEncode(t *testing.T) {
-	originalBody := []byte(`{"model":"gpt-test","input":"original"}`)
-	optimizedBody := []byte(`{"model":"gpt-test","input":"optimized"}`)
-	optimizer := &cancellationWarmupOptimizer{
-		firstImageCount:       1,
-		firstColdEncodeCount:  0,
-		firstCacheHits:        1,
-		firstCacheLookupCount: 1,
-		firstOptimizeStarted:  make(chan struct{}),
-		rehydrateStarted:      make(chan struct{}),
-		rehydrateRelease:      make(chan struct{}),
-		rehydrateResult: attachmentgateway.Result{
-			Body:                   optimizedBody,
-			RehydratedImageIndexes: []int{0},
-			Metrics:                attachmentgateway.Metrics{Enabled: true, OptimizedImageCount: 1, CacheHits: 1},
-		},
-	}
-	externalizer := &recordingWarmupExternalizer{enabled: true, called: make(chan []byte, 1)}
-	handler := &OpenAIGatewayHandler{
-		attachmentOptimizer:       optimizer,
-		attachmentURLExternalizer: externalizer,
-		attachmentWarmupSlots:     make(chan struct{}, 1),
-		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
-			AttachmentOptimizerEnabled:   true,
-			URLRewriteEnabled:            true,
-			AllowUnscoped:                true,
-			OptimizeTimeoutMilliseconds:  1000,
-			URLUploadTimeoutMilliseconds: 1000,
-		}),
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	prepared := make(chan responsesAttachmentPreparation, 1)
-	go func() {
-		prepared <- handler.prepareResponsesAttachments(ctx, zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
-	}()
-	select {
-	case <-optimizer.firstOptimizeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("optimizer did not begin")
-	}
-	cancel()
-	select {
-	case result := <-prepared:
-		require.Equal(t, originalBody, result.Body)
-	case <-time.After(time.Second):
-		t.Fatal("canceled request did not return promptly")
-	}
-	select {
-	case <-optimizer.rehydrateStarted:
-	case <-time.After(time.Second):
-		t.Fatal("cache-hit warmup was not scheduled")
-	}
-	close(optimizer.rehydrateRelease)
-	select {
-	case uploaded := <-externalizer.called:
-		require.Equal(t, optimizedBody, uploaded)
-	case <-time.After(time.Second):
-		t.Fatal("positive cache warmup did not externalize")
-	}
-	require.Equal(t, int32(1), externalizer.calls.Load())
-}
+	prepared := handler.prepareResponsesAttachments(ctx, zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
 
-func TestCanceledOptimizationWarmsQueuedCacheFlightWithoutAcquiredEncodeSlot(t *testing.T) {
-	originalBody := []byte(`{"model":"gpt-test","input":"original"}`)
-	optimizedBody := []byte(`{"model":"gpt-test","input":"optimized"}`)
-	optimizer := &cancellationWarmupOptimizer{
-		firstImageCount:       1,
-		firstCacheLookupCount: 1,
-		firstOptimizeStarted:  make(chan struct{}),
-		rehydrateStarted:      make(chan struct{}),
-		rehydrateRelease:      make(chan struct{}),
-		rehydrateResult: attachmentgateway.Result{
-			Body:                   optimizedBody,
-			RehydratedImageIndexes: []int{0},
-			Metrics:                attachmentgateway.Metrics{Enabled: true, OptimizedImageCount: 1},
-		},
-	}
-	externalizer := &recordingWarmupExternalizer{enabled: true, called: make(chan []byte, 1)}
-	handler := &OpenAIGatewayHandler{
-		attachmentOptimizer:       optimizer,
-		attachmentURLExternalizer: externalizer,
-		attachmentWarmupSlots:     make(chan struct{}, 1),
-		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
-			AttachmentOptimizerEnabled:   true,
-			URLRewriteEnabled:            true,
-			AllowUnscoped:                true,
-			OptimizeTimeoutMilliseconds:  1000,
-			URLUploadTimeoutMilliseconds: 1000,
-		}),
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	prepared := make(chan responsesAttachmentPreparation, 1)
-	go func() {
-		prepared <- handler.prepareResponsesAttachments(ctx, zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
-	}()
-	select {
-	case <-optimizer.firstOptimizeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("optimizer did not begin")
-	}
-	cancel()
-	select {
-	case <-prepared:
-	case <-time.After(time.Second):
-		t.Fatal("canceled request did not return promptly")
-	}
-	select {
-	case <-optimizer.rehydrateStarted:
-	case <-time.After(time.Second):
-		t.Fatal("queued cache-flight warmup was not scheduled")
-	}
-	close(optimizer.rehydrateRelease)
-	select {
-	case uploaded := <-externalizer.called:
-		require.Equal(t, optimizedBody, uploaded)
-	case <-time.After(time.Second):
-		t.Fatal("queued cache flight did not externalize after completing")
-	}
-	require.Equal(t, int32(1), externalizer.calls.Load())
-}
-
-func TestCanceledOptimizationWarmupUsesURLRewritePrefixLimit(t *testing.T) {
-	originalBody := []byte(`{"model":"gpt-test","input":"original"}`)
-	optimizedBody := []byte(`{"model":"gpt-test","input":"optimized"}`)
-	optimizer := &cancellationWarmupOptimizer{
-		firstImageCount:       3,
-		firstColdEncodeCount:  1,
-		firstCacheLookupCount: 3,
-		firstOptimizeStarted:  make(chan struct{}),
-		rehydrateStarted:      make(chan struct{}),
-		rehydrateRelease:      make(chan struct{}),
-		rehydrateResult: attachmentgateway.Result{
-			Body:                   optimizedBody,
-			RehydratedImageIndexes: []int{0, 1, 2},
-			Metrics:                attachmentgateway.Metrics{Enabled: true, OptimizedImageCount: 3},
-		},
-	}
-	externalizer := &recordingWarmupExternalizer{enabled: true, called: make(chan []byte, 1)}
-	handler := &OpenAIGatewayHandler{
-		attachmentOptimizer:       optimizer,
-		attachmentURLExternalizer: externalizer,
-		attachmentWarmupSlots:     make(chan struct{}, 1),
-		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
-			AttachmentOptimizerEnabled:    true,
-			URLRewriteEnabled:             true,
-			URLRewriteMaxImagesPerRequest: 2,
-			AllowUnscoped:                 true,
-			OptimizeTimeoutMilliseconds:   1000,
-			URLUploadTimeoutMilliseconds:  1000,
-		}),
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	prepared := make(chan responsesAttachmentPreparation, 1)
-	go func() {
-		prepared <- handler.prepareResponsesAttachments(ctx, zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
-	}()
-	select {
-	case <-optimizer.firstOptimizeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("optimizer did not begin")
-	}
-	cancel()
-	select {
-	case <-prepared:
-	case <-time.After(time.Second):
-		t.Fatal("canceled request did not return promptly")
-	}
-	select {
-	case <-optimizer.rehydrateStarted:
-	case <-time.After(time.Second):
-		t.Fatal("warmup was not scheduled")
-	}
-	close(optimizer.rehydrateRelease)
-	select {
-	case uploaded := <-externalizer.called:
-		require.Equal(t, optimizedBody, uploaded)
-	case <-time.After(time.Second):
-		t.Fatal("valid URL-rewrite prefix did not externalize")
-	}
-	require.Equal(t, []int{0, 1}, externalizer.selectedIndexes())
-}
-
-func TestAttachmentGatewaySelectedURLIndexes(t *testing.T) {
-	require.Equal(t, []int{0, 1}, attachmentGatewaySelectedURLIndexes([]int{-1, 0, 1, 2, 99}, 2))
-	require.Equal(t, []int{0}, attachmentGatewaySelectedURLIndexes([]int{0}, 0))
-}
-
-func TestCanceledOptimizationWarmupHasOneSlotAndNeverBlocksSecondRequest(t *testing.T) {
-	originalBody := []byte(`{"model":"gpt-test","input":"original"}`)
-	optimizer := &cancellationWarmupOptimizer{
-		firstImageCount:       1,
-		firstColdEncodeCount:  1,
-		firstCacheLookupCount: 1,
-		firstOptimizeStarted:  make(chan struct{}),
-		rehydrateStarted:      make(chan struct{}),
-		rehydrateRelease:      make(chan struct{}),
-		rehydrateResult: attachmentgateway.Result{
-			Body:                   []byte(`{"model":"gpt-test","input":"optimized"}`),
-			RehydratedImageIndexes: []int{0},
-			Metrics:                attachmentgateway.Metrics{Enabled: true, OptimizedImageCount: 1},
-		},
-	}
-	externalizer := &recordingWarmupExternalizer{enabled: true, called: make(chan []byte, 2)}
-	handler := &OpenAIGatewayHandler{
-		attachmentOptimizer:       optimizer,
-		attachmentURLExternalizer: externalizer,
-		attachmentWarmupSlots:     make(chan struct{}, 1),
-		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
-			AttachmentOptimizerEnabled:   true,
-			URLRewriteEnabled:            true,
-			AllowUnscoped:                true,
-			OptimizeTimeoutMilliseconds:  1000,
-			URLUploadTimeoutMilliseconds: 1000,
-		}),
-	}
-
-	firstCtx, cancelFirst := context.WithCancel(context.Background())
-	firstDone := make(chan responsesAttachmentPreparation, 1)
-	go func() {
-		firstDone <- handler.prepareResponsesAttachments(firstCtx, zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
-	}()
-	select {
-	case <-optimizer.firstOptimizeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("first optimizer did not begin")
-	}
-	cancelFirst()
-	select {
-	case <-firstDone:
-	case <-time.After(time.Second):
-		t.Fatal("first canceled request did not return promptly")
-	}
-	select {
-	case <-optimizer.rehydrateStarted:
-	case <-time.After(time.Second):
-		t.Fatal("first warmup was not scheduled")
-	}
-
-	secondCtx, cancelSecond := context.WithCancel(context.Background())
-	cancelSecond()
-	started := time.Now()
-	second := handler.prepareResponsesAttachments(secondCtx, zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
-	require.Equal(t, originalBody, second.Body)
-	require.Less(t, time.Since(started), time.Second)
-	_, rehydrateCalls := optimizer.counts()
-	require.Equal(t, 1, rehydrateCalls, "second cancellation must not queue behind the one warmup slot")
-
-	close(optimizer.rehydrateRelease)
-	select {
-	case <-externalizer.called:
-	case <-time.After(time.Second):
-		t.Fatal("first warmup did not complete")
-	}
-}
-
-func TestCanceledOptimizationWarmupRechecksLiveRolloutBeforeObjectWrite(t *testing.T) {
-	originalBody := []byte(`{"model":"gpt-test","input":"original"}`)
-	controlFile := filepath.Join(t.TempDir(), "attachment-gateway.mode")
-	require.NoError(t, os.WriteFile(controlFile, []byte("rewrite\n"), 0o600))
-	optimizer := &cancellationWarmupOptimizer{
-		firstImageCount:       1,
-		firstColdEncodeCount:  1,
-		firstCacheLookupCount: 1,
-		firstOptimizeStarted:  make(chan struct{}),
-		rehydrateStarted:      make(chan struct{}),
-		rehydrateRelease:      make(chan struct{}),
-		rehydrateResult: attachmentgateway.Result{
-			Body:                   []byte(`{"model":"gpt-test","input":"optimized"}`),
-			RehydratedImageIndexes: []int{0},
-			Metrics:                attachmentgateway.Metrics{Enabled: true, OptimizedImageCount: 1},
-		},
-	}
-	externalizer := &recordingWarmupExternalizer{enabled: true, called: make(chan []byte, 1)}
-	handler := &OpenAIGatewayHandler{
-		attachmentOptimizer:       optimizer,
-		attachmentURLExternalizer: externalizer,
-		attachmentWarmupSlots:     make(chan struct{}, 1),
-		cfg: attachmentGatewayHandlerTestConfig(config.AttachmentGatewayConfig{
-			AttachmentOptimizerEnabled:   true,
-			URLRewriteEnabled:            true,
-			RolloutControlFile:           controlFile,
-			AllowUnscoped:                true,
-			OptimizeTimeoutMilliseconds:  1000,
-			URLUploadTimeoutMilliseconds: 1000,
-		}),
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	prepared := make(chan responsesAttachmentPreparation, 1)
-	go func() {
-		prepared <- handler.prepareResponsesAttachments(ctx, zap.NewNop(), &service.APIKey{ID: 1}, originalBody)
-	}()
-	select {
-	case <-optimizer.firstOptimizeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("optimizer did not begin")
-	}
-	cancel()
-	select {
-	case <-prepared:
-	case <-time.After(time.Second):
-		t.Fatal("canceled request did not return promptly")
-	}
-	select {
-	case <-optimizer.rehydrateStarted:
-	case <-time.After(time.Second):
-		t.Fatal("warmup was not scheduled")
-	}
-	require.NoError(t, os.WriteFile(controlFile, []byte("off\n"), 0o600))
-	close(optimizer.rehydrateRelease)
-	require.Never(t, func() bool { return externalizer.calls.Load() > 0 }, 250*time.Millisecond, 10*time.Millisecond)
+	require.Equal(t, originalBody, prepared.Body)
+	require.Equal(t, 1, optimizer.calls)
+	require.Zero(t, externalizer.calls, "cancellation must not start a new URL/object-storage phase")
 }
 
 type attachmentGatewayCaptureUpstream struct {

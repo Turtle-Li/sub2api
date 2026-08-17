@@ -62,15 +62,21 @@ content fails closed to `off`, allowing an immediate mode change without
 recycling a container or interrupting long-lived Responses streams. An empty
 config value preserves the static `attachment_optimizer_dry_run` behavior.
 
-The feature remains a synchronous experiment. Dry-run requests can still pay
-the optimization CPU/latency cost, and an encoder already executing cannot be
-preempted; concurrency bounds keep that work finite while the request fails
-open at its deadline.
+The foreground path remains a synchronous experiment. Dry-run requests can
+still pay the optimization CPU/latency cost, and an encoder already executing
+cannot be preempted; concurrency bounds keep that work finite while the request
+fails open at its deadline. If an HTTP client disconnects after the body is
+buffered, the handler classifies the request as client-closed (499) before
+forward-body validation and does not start any new compression, cache
+rehydration, or object-storage work. An encoder or upload admitted before
+cancellation may finish under the existing concurrency bounds. WebSocket
+cancellation similarly stops attachment processing through the connection
+lifecycle.
 
 Phase 1 does not process files, PDF, Office, audio, video or `file_id`.
 HTTP Responses and the first WebSocket ingress turn can use the experiment.
-Subsequent WebSocket turns are deliberately unchanged pending a transform-hook
-design.
+Subsequent WebSocket turns use the same cancellation guard before policy-size
+validation; their attachment transformation remains synchronous.
 
 An additional, separately disabled URL experiment can externalize the
 post-compression inline image bytes:
