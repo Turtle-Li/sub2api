@@ -22,7 +22,7 @@ const (
 	defaultBatchImageMaxItems           = 200
 	defaultBatchImageMaxOutputImages    = 200
 	defaultBatchImageMaxOutputCount     = 4
-	defaultBatchImageMaxPromptChars     = 8000
+	defaultBatchImageMaxPromptChars     = 16000
 	defaultBatchImageResponseMime       = "image/png"
 	defaultBatchImageImageSize          = "1K"
 	defaultBatchImageDiscountMultiplier = 0.5
@@ -200,7 +200,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if !s.enabled() {
 		return nil, ErrBatchImageDisabled
 	}
-	normalized, err := s.validateSubmitRequest(req)
+	normalized, err := s.ValidateSubmitRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -217,13 +217,13 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 			if batchImageDerefString(existing.RequestHash) != requestHash {
 				return nil, ErrBatchImageIdempotencyConflict
 			}
-			if existing.Status == BatchImageJobStatusSubmitted && s.Queue != nil {
+			if existing.Status == BatchImageJobStatusSubmitted && existing.ProviderJobName != nil && s.Queue != nil {
 				if enqueueErr := s.Queue.Enqueue(ctx, existing.BatchID); enqueueErr != nil && !errors.Is(enqueueErr, ErrBatchImageAlreadyQueued) {
 					_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, existing.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(enqueueErr.Error()), false)
 					return nil, ErrBatchImageQueueFailed
 				}
 			}
-			return BatchImageJobToPublic(existing), nil
+			return batchImageIdempotentSubmitResult(existing)
 		}
 		if !errors.Is(err, ErrBatchImageJobNotFound) {
 			return nil, err
@@ -352,13 +352,15 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	hbCancel()
 	<-hbDone
 	if err != nil {
-		if releaseErr := s.releaseFailedSubmitHold(ctx, job, requestHash); releaseErr != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cleanupCancel()
+		if releaseErr := s.releaseFailedSubmitHold(cleanupCtx, job, requestHash); releaseErr != nil {
 			return nil, releaseErr
 		}
 		publicErr := batchImageProviderSubmitPublicError(err)
 		reason := batchImageProviderSubmitRecordCode(publicErr)
-		_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, reason, sanitizeBatchImagePublicMessage(err.Error()), true)
-		s.hidePreUpstreamSubmitFailure(ctx, owner, job)
+		_ = s.Repo.RecordBatchImageJobSubmitFailure(cleanupCtx, job.BatchID, reason, sanitizeBatchImagePublicMessage(err.Error()), true)
+		s.hidePreUpstreamSubmitFailure(cleanupCtx, owner, job)
 		return nil, publicErr
 	}
 	if providerJob == nil || strings.TrimSpace(providerJob.ProviderJobName) == "" {
@@ -769,6 +771,71 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 	return BatchImageJobToPublic(updated), nil
 }
 
+// ValidateSubmitRequest performs the same inexpensive, side-effect-free
+// validation used by Submit. HTTP handlers call it before prompt auditing so
+// malformed or oversized requests fail immediately instead of consuming an
+// audit call and making the submit outcome look like a transport timeout.
+func (s *BatchImagePublicService) ValidateSubmitRequest(req BatchImageSubmitRequest) (BatchImageSubmitRequest, error) {
+	if s == nil || s.Config == nil || !s.Config.BatchImage.Enabled {
+		return req, ErrBatchImageDisabled
+	}
+	return s.validateSubmitRequest(req)
+}
+
+// FindIdempotentSubmit returns a previously persisted submit without
+// re-running prompt auditing. Submit already guarantees that the stored
+// request passed the audit gate, and comparing the normalized request hash
+// prevents a caller from reusing the key for different content.
+func (s *BatchImagePublicService) FindIdempotentSubmit(
+	ctx context.Context,
+	owner BatchImageOwner,
+	req BatchImageSubmitRequest,
+	idempotencyKey string,
+) (*BatchImagePublicBatch, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return nil, nil
+	}
+	if !s.enabled() {
+		return nil, ErrBatchImageDisabled
+	}
+	normalized, err := s.ValidateSubmitRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	existing, err := s.Repo.GetBatchImageJobByIdempotencyKey(
+		ctx,
+		owner.UserID,
+		owner.APIKeyID,
+		idempotencyKey,
+	)
+	if errors.Is(err, ErrBatchImageJobNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if batchImageDerefString(existing.RequestHash) != HashBatchImageSubmitRequest(normalized) {
+		return nil, ErrBatchImageIdempotencyConflict
+	}
+	return batchImageIdempotentSubmitResult(existing)
+}
+
+func batchImageIdempotentSubmitResult(existing *BatchImageJob) (*BatchImagePublicBatch, error) {
+	if existing == nil {
+		return nil, ErrBatchImageJobNotFound
+	}
+	if existing.ProviderJobName != nil && strings.TrimSpace(*existing.ProviderJobName) != "" {
+		return BatchImageJobToPublic(existing), nil
+	}
+	switch existing.Status {
+	case BatchImageJobStatusCreated, BatchImageJobStatusUploading, BatchImageJobStatusSubmitted:
+		return nil, ErrBatchImageSubmitPending
+	default:
+		return nil, ErrBatchImagePreviousSubmitFailed
+	}
+}
+
 func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequest) (BatchImageSubmitRequest, error) {
 	req.Model = strings.TrimSpace(req.Model)
 	req.TaskName = strings.TrimSpace(req.TaskName)
@@ -875,6 +942,7 @@ func normalizeBatchImageReferenceInputs(model string, item *BatchImageSubmitItem
 	}
 	out := make([]BatchImageReferenceInput, 0, len(item.ReferenceImages))
 	inlineBytes := 0
+	objectReferences := 0
 	for _, ref := range item.ReferenceImages {
 		ref.ID = truncateBatchImageMessage(strings.TrimSpace(ref.ID), 80)
 		ref.Type = truncateBatchImageMessage(strings.TrimSpace(ref.Type), 40)
@@ -896,10 +964,27 @@ func normalizeBatchImageReferenceInputs(model string, item *BatchImageSubmitItem
 			return 0, 0, ErrBatchImageInvalidReferenceImage
 		}
 		inlineBytes += len(ref.Data)
+		if batchImageObjectReference(ref.Type) {
+			objectReferences++
+		}
 		out = append(out, ref)
+	}
+	if objectReferences > maxBatchImageObjectReferencesForModel(model) {
+		return 0, 0, ErrBatchImageTooManyReferenceImages
 	}
 	item.ReferenceImages = out
 	return len(out), inlineBytes, nil
+}
+
+func batchImageObjectReference(referenceType string) bool {
+	switch strings.ToLower(strings.TrimSpace(referenceType)) {
+	case "scene_reference", "style_reference", "style_continuity",
+		"edit_mask", "mask":
+		return false
+	default:
+		// Unknown and blank roles fail safe as high-fidelity object inputs.
+		return true
+	}
 }
 
 func normalizeBatchImageReferenceMimeType(v string) string {
@@ -924,8 +1009,31 @@ func batchImageRepeatSuffixWidth(count int) int {
 
 func maxBatchImageReferenceImagesForModel(model string) int {
 	model = strings.ToLower(strings.TrimSpace(model))
+	if strings.Contains(model, "gemini-3.1-flash-lite-image") {
+		return 14
+	}
+	if strings.Contains(model, "gemini-3.1-flash-image") {
+		return 14
+	}
 	if strings.Contains(model, "pro-image") {
 		return 14
+	}
+	if strings.Contains(model, "flash-image") {
+		return 3
+	}
+	return 0
+}
+
+func maxBatchImageObjectReferencesForModel(model string) int {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if strings.Contains(model, "gemini-3.1-flash-lite-image") {
+		return 14
+	}
+	if strings.Contains(model, "gemini-3.1-flash-image") {
+		return 10
+	}
+	if strings.Contains(model, "pro-image") {
+		return 6
 	}
 	if strings.Contains(model, "flash-image") {
 		return 3

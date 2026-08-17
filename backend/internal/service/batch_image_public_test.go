@@ -251,6 +251,55 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		}
 	})
 
+	t.Run("enforces the gemini 3.1 flash reference boundary", func(t *testing.T) {
+		newReferences := func(count int, referenceType string) []BatchImageReferenceInput {
+			references := make([]BatchImageReferenceInput, count)
+			for i := range references {
+				references[i] = BatchImageReferenceInput{
+					Type:     referenceType,
+					MimeType: "image/png",
+					Data:     []byte("ref"),
+				}
+			}
+			return references
+		}
+
+		svc, _, _, gemini, _ := newTestBatchImagePublicService(true)
+		accepted := validBatchImageSubmitRequest()
+		accepted.Model = "gemini-3.1-flash-image"
+		accepted.Items[0].ReferenceImages = append(
+			newReferences(10, "product_truth"),
+			newReferences(4, "scene_reference")...,
+		)
+
+		_, err := svc.Submit(ctx, testBatchImageOwner(), accepted, "")
+		require.NoError(t, err)
+		require.Len(t, gemini.submits, 1)
+		require.Len(t, gemini.submits[0].Items[0].ReferenceImages, 14)
+
+		tooManyObjects := validBatchImageSubmitRequest()
+		tooManyObjects.Model = "gemini-3.1-flash-image"
+		tooManyObjects.Items[0].ReferenceImages = newReferences(
+			11,
+			"product_truth",
+		)
+
+		_, err = svc.Submit(ctx, testBatchImageOwner(), tooManyObjects, "")
+		require.ErrorIs(t, err, ErrBatchImageTooManyReferenceImages)
+		require.Len(t, gemini.submits, 1)
+
+		tooManyTotal := validBatchImageSubmitRequest()
+		tooManyTotal.Model = "gemini-3.1-flash-image"
+		tooManyTotal.Items[0].ReferenceImages = append(
+			newReferences(10, "product_truth"),
+			newReferences(5, "scene_reference")...,
+		)
+
+		_, err = svc.Submit(ctx, testBatchImageOwner(), tooManyTotal, "")
+		require.ErrorIs(t, err, ErrBatchImageTooManyReferenceImages)
+		require.Len(t, gemini.submits, 1)
+	})
+
 	t.Run("rejects too many items", func(t *testing.T) {
 		svc, _, _, _, _ := newTestBatchImagePublicService(true)
 		req := validBatchImageSubmitRequest()
@@ -353,6 +402,25 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		}
 	})
 
+	t.Run("provider failure cleanup survives client context cancellation", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		gemini.submitErr = context.Canceled
+		billing := svc.BillingRepo.(*fakeBatchImageBillingRepo)
+		billing.requireLiveReleaseContext = true
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := svc.Submit(cancelled, testBatchImageOwner(), validBatchImageSubmitRequest(), "")
+
+		require.ErrorIs(t, err, ErrBatchImageProviderSubmitFailed)
+		require.Empty(t, queue.enqueued)
+		require.Len(t, billing.releases, 1)
+		for _, job := range repo.jobs {
+			require.Equal(t, BatchImageJobStatusFailed, job.Status)
+			require.NotNil(t, job.UserDeletedAt)
+		}
+	})
+
 	t.Run("provider failure with release failure enqueues billing retry", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		gemini.submitErr = errors.New("projects/secret-provider-job failed")
@@ -402,6 +470,90 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Equal(t, []string{first.ID}, queue.enqueued)
 	})
 
+	t.Run("idempotency preflight returns persisted batch without side effects", func(t *testing.T) {
+		svc, _, queue, gemini, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		first, err := svc.Submit(ctx, testBatchImageOwner(), req, "client-key")
+		require.NoError(t, err)
+
+		replayed, err := svc.FindIdempotentSubmit(
+			ctx,
+			testBatchImageOwner(),
+			req,
+			"client-key",
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, replayed)
+		require.Equal(t, first.ID, replayed.ID)
+		require.Len(t, gemini.submits, 1)
+		require.Equal(t, []string{first.ID}, queue.enqueued)
+	})
+
+	t.Run("idempotency does not expose a pre-provider upload as accepted", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		apiKeyID := int64(22)
+		key := "client-key-pending"
+		normalized, normalizeErr := svc.ValidateSubmitRequest(req)
+		require.NoError(t, normalizeErr)
+		hash := HashBatchImageSubmitRequest(normalized)
+		repo.jobs["imgbatch_pending_submit"] = &BatchImageJob{
+			BatchID:        "imgbatch_pending_submit",
+			UserID:         11,
+			APIKeyID:       &apiKeyID,
+			Status:         BatchImageJobStatusUploading,
+			Provider:       BatchImageProviderGeminiAPI,
+			Model:          req.Model,
+			IdempotencyKey: &key,
+			RequestHash:    &hash,
+		}
+
+		replayed, err := svc.FindIdempotentSubmit(
+			ctx,
+			testBatchImageOwner(),
+			req,
+			key,
+		)
+
+		require.Nil(t, replayed)
+		require.ErrorIs(t, err, ErrBatchImageSubmitPending)
+		_, err = svc.Submit(ctx, testBatchImageOwner(), req, key)
+		require.ErrorIs(t, err, ErrBatchImageSubmitPending)
+		require.Empty(t, gemini.submits)
+		require.Empty(t, queue.enqueued)
+	})
+
+	t.Run("idempotency reports a failed pre-provider attempt as failed", func(t *testing.T) {
+		svc, repo, _, _, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		apiKeyID := int64(22)
+		key := "client-key-failed"
+		normalized, normalizeErr := svc.ValidateSubmitRequest(req)
+		require.NoError(t, normalizeErr)
+		hash := HashBatchImageSubmitRequest(normalized)
+		repo.jobs["imgbatch_failed_submit"] = &BatchImageJob{
+			BatchID:        "imgbatch_failed_submit",
+			UserID:         11,
+			APIKeyID:       &apiKeyID,
+			Status:         BatchImageJobStatusFailed,
+			Provider:       BatchImageProviderGeminiAPI,
+			Model:          req.Model,
+			IdempotencyKey: &key,
+			RequestHash:    &hash,
+		}
+
+		replayed, err := svc.FindIdempotentSubmit(
+			ctx,
+			testBatchImageOwner(),
+			req,
+			key,
+		)
+
+		require.Nil(t, replayed)
+		require.ErrorIs(t, err, ErrBatchImagePreviousSubmitFailed)
+	})
+
 	t.Run("idempotency conflict rejects changed request", func(t *testing.T) {
 		svc, _, _, _, _ := newTestBatchImagePublicService(true)
 		req := validBatchImageSubmitRequest()
@@ -424,6 +576,62 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.NoError(t, err)
 		requireBatchImagePublicJSONHasNoInternals(t, string(body))
 	})
+}
+
+func TestMaxBatchImageReferenceImagesForModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int
+	}{
+		{model: "gemini-3.1-flash-image", want: 14},
+		{model: "gemini-3.1-flash-image-preview", want: 14},
+		{model: "gemini-3.1-flash-lite-image", want: 14},
+		{model: "gemini-3.1-flash-lite-image-preview", want: 14},
+		{model: "gemini-2.5-flash-image", want: 3},
+		{model: "gemini-3-pro-image-preview", want: 14},
+		{model: "unsupported-model", want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			require.Equal(t, tt.want, maxBatchImageReferenceImagesForModel(tt.model))
+		})
+	}
+}
+
+func TestBatchImagePromptLimitDefaultsToSixteenKilobytes(t *testing.T) {
+	svc := &BatchImagePublicService{}
+	require.Equal(t, 16_000, svc.maxPromptChars())
+
+	configured := &BatchImagePublicService{
+		Config: &config.Config{BatchImage: config.BatchImageConfig{
+			MaxPromptCharsPerItem: 12_000,
+		}},
+	}
+	require.Equal(t, 12_000, configured.maxPromptChars())
+}
+
+func TestBatchImagePromptLimitAcceptsVSOEnvelopeAndRejectsOverflow(t *testing.T) {
+	svc := &BatchImagePublicService{
+		Config: &config.Config{BatchImage: config.BatchImageConfig{
+			MaxPromptCharsPerItem: 16_000,
+		}},
+	}
+	req := validBatchImageSubmitRequest()
+	req.Items[0].Prompt = strings.Repeat("x", 8_127)
+
+	normalized, err := svc.validateSubmitRequest(req)
+	require.NoError(t, err)
+	require.Len(t, normalized.Items[0].Prompt, 8_127)
+
+	req.Items[0].Prompt = strings.Repeat("x", 16_001)
+	_, err = svc.validateSubmitRequest(req)
+	require.ErrorIs(t, err, ErrBatchImagePromptTooLong)
+
+	svc.Config.BatchImage.MaxPromptCharsPerItem = 8
+	req.Items[0].Prompt = "中文中"
+	_, err = svc.validateSubmitRequest(req)
+	require.ErrorIs(t, err, ErrBatchImagePromptTooLong)
 }
 
 func TestBatchImagePublicService_List(t *testing.T) {

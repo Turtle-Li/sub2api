@@ -75,8 +75,8 @@ func TestBuildVertexBatchJSONL_RejectsEmptyPrompt(t *testing.T) {
 func TestBuildVertexBatchJSONL_WritesReferenceImages(t *testing.T) {
 	input := validVertexBatchInput()
 	input.Items[0].ReferenceImages = []BatchImageReference{
-		{MimeType: "image/png", Data: []byte("png-bytes")},
-		{MimeType: "image/jpeg", FileURI: "gs://bucket/refs/style.jpg"},
+		{Type: "product_truth", MimeType: "image/png", Data: []byte("png-bytes")},
+		{Type: "scene_reference", MimeType: "image/jpeg", FileURI: "gs://bucket/refs/style.jpg"},
 	}
 
 	jsonl, err := BuildVertexBatchJSONL(input)
@@ -89,12 +89,14 @@ func TestBuildVertexBatchJSONL_WritesReferenceImages(t *testing.T) {
 	request := got["request"].(map[string]any)
 	contents := request["contents"].([]any)
 	parts := contents[0].(map[string]any)["parts"].([]any)
-	require.Len(t, parts, 3)
+	require.Len(t, parts, 5)
 	require.Equal(t, "A clean product hero image", parts[0].(map[string]any)["text"])
-	inlineData := parts[1].(map[string]any)["inlineData"].(map[string]any)
+	require.Contains(t, parts[1].(map[string]any)["text"], "ROLE=PRODUCT_TRUTH")
+	inlineData := parts[2].(map[string]any)["inlineData"].(map[string]any)
 	require.Equal(t, "image/png", inlineData["mimeType"])
 	require.Equal(t, "cG5nLWJ5dGVz", inlineData["data"])
-	fileData := parts[2].(map[string]any)["fileData"].(map[string]any)
+	require.Contains(t, parts[3].(map[string]any)["text"], "ROLE=SCENE_REFERENCE")
+	fileData := parts[4].(map[string]any)["fileData"].(map[string]any)
 	require.Equal(t, "image/jpeg", fileData["mimeType"])
 	require.Equal(t, "gs://bucket/refs/style.jpg", fileData["fileUri"])
 }

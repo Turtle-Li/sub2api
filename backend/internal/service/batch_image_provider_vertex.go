@@ -526,11 +526,14 @@ func BuildVertexBatchJSONL(input BatchImageInput) ([]byte, error) {
 
 func vertexBatchImageParts(prompt string, refs []BatchImageReference) ([]any, error) {
 	parts := []any{map[string]any{"text": prompt}}
-	for _, ref := range refs {
+	for index, ref := range refs {
 		mimeType := normalizeBatchImageReferenceMimeType(ref.MimeType)
 		if mimeType == "" {
 			return nil, batchImageProviderInputError("reference image mime_type is required")
 		}
+		parts = append(parts, map[string]any{
+			"text": batchImageReferenceRoleInstruction(index, ref.Type),
+		})
 		fileURI := strings.TrimSpace(ref.FileURI)
 		switch {
 		case len(ref.Data) > 0 && fileURI == "":

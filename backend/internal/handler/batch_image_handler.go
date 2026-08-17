@@ -39,6 +39,28 @@ func (h *BatchImageHandler) Submit(c *gin.Context) {
 		batchImageError(c, infraerrors.New(http.StatusUnauthorized, "API_KEY_REQUIRED", "API key is required"))
 		return
 	}
+	if h.service != nil {
+		normalized, err := h.service.ValidateSubmitRequest(req)
+		if err != nil {
+			batchImageError(c, err)
+			return
+		}
+		req = normalized
+		replayed, err := h.service.FindIdempotentSubmit(
+			c.Request.Context(),
+			owner,
+			req,
+			c.GetHeader("Idempotency-Key"),
+		)
+		if err != nil {
+			batchImageError(c, err)
+			return
+		}
+		if replayed != nil {
+			c.JSON(http.StatusOK, replayed)
+			return
+		}
+	}
 	if !h.checkSecurityAuditBeforeSubmit(c, &req) {
 		return
 	}

@@ -321,11 +321,14 @@ func BuildGeminiBatchJSONL(input BatchImageInput) ([]byte, error) {
 
 func batchImageGeminiParts(prompt string, refs []BatchImageReference) ([]geminiPart, error) {
 	parts := []geminiPart{{Text: prompt}}
-	for _, ref := range refs {
+	for index, ref := range refs {
 		mimeType := normalizeBatchImageReferenceMimeType(ref.MimeType)
 		if mimeType == "" {
 			return nil, batchImageProviderInputError("reference image mime_type is required")
 		}
+		parts = append(parts, geminiPart{
+			Text: batchImageReferenceRoleInstruction(index, ref.Type),
+		})
 		fileURI := strings.TrimSpace(ref.FileURI)
 		switch {
 		case len(ref.Data) > 0 && fileURI == "":

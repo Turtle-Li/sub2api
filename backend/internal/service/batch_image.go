@@ -79,6 +79,8 @@ var (
 	ErrBatchImageReferenceImagesTooLarge    = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_REFERENCE_IMAGES_TOO_LARGE", "batch image reference images are too large")
 	ErrBatchImageTooManyOutputImages        = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_TOO_MANY_OUTPUT_IMAGES", "too many batch image output images")
 	ErrBatchImageProviderSubmitFailed       = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_PROVIDER_SUBMIT_FAILED", "batch image provider submit failed")
+	ErrBatchImageSubmitPending              = infraerrors.New(http.StatusTooEarly, "BATCH_IMAGE_SUBMIT_PENDING", "batch image submit outcome is still being confirmed")
+	ErrBatchImagePreviousSubmitFailed       = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_PREVIOUS_SUBMIT_FAILED", "the previous batch image submit failed before provider creation")
 	ErrBatchImageQueueFailed                = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_QUEUE_FAILED", "batch image queue failed")
 	ErrBatchImageIdempotencyConflict        = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_IDEMPOTENCY_CONFLICT", "idempotency key reused with different batch image request")
 	ErrBatchImageCancelFailed               = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_CANCEL_FAILED", "batch image cancel failed")

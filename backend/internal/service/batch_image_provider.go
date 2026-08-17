@@ -95,6 +95,31 @@ type BatchImageReference struct {
 	FileURI  string
 }
 
+func batchImageReferenceRoleInstruction(index int, referenceType string) string {
+	prefix := fmt.Sprintf("REFERENCE_IMAGE_%02d ROLE=", index+1)
+	switch strings.ToLower(strings.TrimSpace(referenceType)) {
+	case "product_truth":
+		return prefix + "PRODUCT_TRUTH. The following image is one co-equal view of the exact same SKU. Inspect it jointly with every other PRODUCT_TRUTH image for product identity, geometry, construction, material, color, pattern, logo, text, and workmanship. Upload order grants no extra authority. Do not use it as a scene or style template."
+	case "edit_target":
+		return prefix + "EDIT_TARGET. The following image is the complete frame to edit. Preserve every unrequested pixel and product fact."
+	case "edit_reference":
+		return prefix + "EDIT_REFERENCE. The following image supplies only the requested replacement color, surface, material, pattern, or object facts named in the approved edit. It is not a scene or composition template."
+	case "edit_mask", "mask":
+		return prefix + "EDIT_MASK. The following image is an aligned black-and-white mask: white pixels mark requested edit locations and black pixels are protected. It contains no product, scene, style, color, material, or pattern truth."
+	case "scene_reference":
+		return prefix + "SCENE_REFERENCE. The following image supplies environment, composition, camera, background, and allowed placement only. Never copy product identity, geometry, construction, material, color, pattern, logo, text, or other products from it."
+	case "style_reference":
+		return prefix + "STYLE_REFERENCE. The following image supplies lighting, color grade, visual style, and art direction only. Never copy product identity, geometry, construction, material, color, pattern, logo, text, composition, camera, background, or other products from it."
+	case "style_continuity", "continuity_reference":
+		return prefix + "STYLE_CONTINUITY. The following image supplies presentation continuity only, such as composition, camera, background, and lighting. It supplies no product identity, geometry, construction, material, color, pattern, logo, or text truth."
+	case "logo_reference":
+		return prefix + "LOGO_REFERENCE. The following image supplies only the requested logo or wordmark appearance and text. It supplies no product geometry, material, pattern, scene, composition, or style truth."
+	default:
+		// Never echo an untrusted caller-supplied type into the model prompt.
+		return prefix + "REFERENCE. The following image is supplemental evidence only. Follow the main prompt and do not infer permissions beyond it."
+	}
+}
+
 type BatchProviderJob struct {
 	ProviderJobName   string
 	ProviderInputRef  string

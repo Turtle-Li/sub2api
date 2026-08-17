@@ -287,7 +287,7 @@ batch_image:
   max_items_per_job_trial: 50
   max_output_images_per_job: 200
   max_output_images_per_item: 4
-  max_prompt_chars_per_item: 8000
+  max_prompt_chars_per_item: 16000
   max_reference_images_per_job: 1000
   max_reference_inline_bytes_per_job: 134217728
   default_response_mime_type: "image/png"
@@ -347,6 +347,9 @@ batch_image:
   delivery_cos_prefix: "sub2-batch-image/prod/"
   delivery_cos_force_path_style: false
 ```
+
+`max_prompt_chars_per_item` is the legacy key name; the limit is enforced on
+UTF-8 bytes. The default 16,000-byte ceiling matches VSO's pre-submit guard.
 
 Feature flags default to disabled.
 

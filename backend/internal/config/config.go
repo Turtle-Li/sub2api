@@ -181,11 +181,13 @@ type IdempotencyConfig struct {
 }
 
 type BatchImageConfig struct {
-	Enabled                           bool   `mapstructure:"enabled"`
-	MaxItemsPerJobDefault             int    `mapstructure:"max_items_per_job_default"`
-	MaxItemsPerJobTrial               int    `mapstructure:"max_items_per_job_trial"`
-	MaxOutputImagesPerJob             int    `mapstructure:"max_output_images_per_job"`
-	MaxOutputImagesPerItem            int    `mapstructure:"max_output_images_per_item"`
+	Enabled                bool `mapstructure:"enabled"`
+	MaxItemsPerJobDefault  int  `mapstructure:"max_items_per_job_default"`
+	MaxItemsPerJobTrial    int  `mapstructure:"max_items_per_job_trial"`
+	MaxOutputImagesPerJob  int  `mapstructure:"max_output_images_per_job"`
+	MaxOutputImagesPerItem int  `mapstructure:"max_output_images_per_item"`
+	// MaxPromptCharsPerItem is a legacy config name; enforcement is on
+	// UTF-8 bytes so every client and relay uses the same transport ceiling.
 	MaxPromptCharsPerItem             int    `mapstructure:"max_prompt_chars_per_item"`
 	MaxReferenceImagesPerJob          int    `mapstructure:"max_reference_images_per_job"`
 	MaxReferenceInlineBytesPerJob     int    `mapstructure:"max_reference_inline_bytes_per_job"`
@@ -2095,7 +2097,7 @@ func setDefaults() {
 	viper.SetDefault("batch_image.max_items_per_job_trial", 50)
 	viper.SetDefault("batch_image.max_output_images_per_job", 200)
 	viper.SetDefault("batch_image.max_output_images_per_item", 4)
-	viper.SetDefault("batch_image.max_prompt_chars_per_item", 8000)
+	viper.SetDefault("batch_image.max_prompt_chars_per_item", 16000)
 	viper.SetDefault("batch_image.max_reference_images_per_job", 1000)
 	viper.SetDefault("batch_image.max_reference_inline_bytes_per_job", 134217728)
 	viper.SetDefault("batch_image.default_response_mime_type", "image/png")

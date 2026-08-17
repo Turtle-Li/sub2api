@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -168,6 +169,45 @@ func TestBatchImagePromptGuardRunsBeforePersistenceOrBilling(t *testing.T) {
 	require.Contains(t, string(requests[0].Body), "blocked batch prompt")
 	require.NotContains(t, string(requests[0].Body), "BINARY_CANARY")
 	require.NotContains(t, string(requests[0].Body), "QklOQVJZX0NBTkFSWQ==")
+}
+
+func TestBatchImageValidationRejectsOversizedPromptBeforePromptGuard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := blockingHandlerPromptEngine()
+	openAI := &OpenAIGatewayHandler{securityAuditCoordinator: securityaudit.NewCoordinator(nil, engine)}
+	h := &BatchImageHandler{
+		openAI: openAI,
+		service: &service.BatchImagePublicService{
+			Config: &config.Config{BatchImage: config.BatchImageConfig{
+				Enabled:               true,
+				MaxPromptCharsPerItem: 8,
+			}},
+		},
+	}
+	router := gin.New()
+	router.Use(securityAuditMediaTestMiddleware)
+	router.POST("/v1/images/batches", h.Submit)
+	body := map[string]any{
+		"model": "gemini-image-test",
+		"items": []map[string]any{{
+			"custom_id": "one",
+			"prompt":    "123456789",
+		}},
+	}
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, "/v1/images/batches", strings.NewReader(string(raw)))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "BATCH_IMAGE_PROMPT_TOO_LONG")
+	evaluated, enqueued, requests := engine.snapshot()
+	require.Zero(t, evaluated)
+	require.Zero(t, enqueued)
+	require.Empty(t, requests)
 }
 
 func TestSecurityAuditBlockingFailuresLeaveAllDownstreamCountersAtZero(t *testing.T) {
