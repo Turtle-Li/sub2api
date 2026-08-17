@@ -633,7 +633,7 @@ type UpstreamFailoverError struct {
 	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
 	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
 	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	RequestScopedTransient   bool        // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
+	RequestScopedTransient   bool        // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试；单次不惩罚账号，连续耗尽由容量状态机触发冷却
 	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
 	Stage                    GatewayFailureStage
 	Scope                    GatewayFailureScope
@@ -665,6 +665,13 @@ func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
 	if e == nil {
 		return false
 	}
+	// Capacity shedding is explicitly request-scoped. Do not degrade the
+	// account's scheduler health for a signal that can affect every account;
+	// the OpenAI capacity-shed streak tracker applies account cooldown only
+	// after repeated logical failures.
+	if e.RequestScopedTransient {
+		return false
+	}
 	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
 }
 
@@ -680,7 +687,8 @@ type sseStreamErrorEventError struct {
 func (e *sseStreamErrorEventError) Error() string { return "have error in stream" }
 
 // TempUnscheduleRetryableError 对 RetryableOnSameAccount 类型的 failover 错误触发临时封禁。
-// 由 handler 层在同账号重试全部用尽、切换账号时调用。
+// 由 handler 层在同账号重试全部用尽、切换账号时调用；请求级容量降载由专用
+// streak tracker 在多个逻辑请求连续失败后再执行冷却，避免一次降载摘掉账号。
 func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
 	if failoverErr == nil || !failoverErr.RetryableOnSameAccount {
 		return

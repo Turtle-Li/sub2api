@@ -188,11 +188,21 @@ func (s *PaymentService) validateRefundRequest(ctx context.Context, oid, uid int
 	if o.UserID != uid {
 		return nil, infraerrors.Forbidden("FORBIDDEN", "no permission")
 	}
+	if o.OrderType == payment.OrderTypeSubscriptionResetCards {
+		return nil, infraerrors.Forbidden("REFUND_REQUIRES_MANUAL_REVIEW", "reset-card purchases require manual entitlement review")
+	}
 	if o.OrderType != payment.OrderTypeBalance {
 		return nil, infraerrors.BadRequest("INVALID_ORDER_TYPE", "only balance orders can request refund")
 	}
 	if o.Status != OrderStatusCompleted {
 		return nil, infraerrors.BadRequest("INVALID_STATUS", "only completed orders can request refund")
+	}
+	if entitlements, err := paymentOrderEntitlementsStrict(o); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "payment order entitlement snapshot is invalid")
+	} else if paymentEntitlementsRequireManualRefund(entitlements) {
+		// Product bonuses and account upgrades are not reversible yet. A
+		// self-service refund must not leave paid benefits behind.
+		return nil, infraerrors.Forbidden("REFUND_REQUIRES_MANUAL_REVIEW", "orders with non-reversible entitlements require manual refund review")
 	}
 	// Check provider instance allows user refund
 	inst, err := s.getRefundOrderProviderInstance(ctx, o)
@@ -209,6 +219,14 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return nil, nil, infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if o.OrderType == payment.OrderTypeSubscriptionResetCards {
+		return nil, nil, infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "reset-card purchases require manual entitlement rollback")
+	}
+	if entitlements, entitlementErr := paymentOrderEntitlementsStrict(o); entitlementErr != nil {
+		return nil, nil, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "payment order entitlement snapshot is invalid")
+	} else if paymentEntitlementsRequireManualRefund(entitlements) {
+		return nil, nil, infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "orders with non-reversible entitlements require manual entitlement rollback")
 	}
 	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundPending, OrderStatusRefundFailed}
 	if !psSliceContains(ok, o.Status) {
@@ -514,7 +532,7 @@ func (s *PaymentService) refundFinalizePlan(o *dbent.PaymentOrder) *RefundPlan {
 	if reason == "" {
 		reason = fmt.Sprintf("refund order:%d", o.ID)
 	}
-	return &RefundPlan{
+	plan := &RefundPlan{
 		OrderID:       o.ID,
 		Order:         o,
 		RefundAmount:  refundAmount,
@@ -530,6 +548,11 @@ func (s *PaymentService) refundFinalizePlan(o *dbent.PaymentOrder) *RefundPlan {
 			return 0
 		}(),
 	}
+	if o.OrderType == payment.OrderTypeSubscriptionResetCards {
+		plan.DeductionType = payment.DeductionTypeNone
+		plan.BalanceToDeduct = 0
+	}
+	return plan
 }
 
 func (s *PaymentService) applyRefundFinalDeduction(ctx context.Context, p *RefundPlan) error {

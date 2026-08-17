@@ -87,10 +87,12 @@ type wechatOAuthUserInfoResponse struct {
 }
 
 type wechatPaymentOAuthContext struct {
-	PaymentType string `json:"payment_type"`
-	Amount      string `json:"amount,omitempty"`
-	OrderType   string `json:"order_type,omitempty"`
-	PlanID      int64  `json:"plan_id,omitempty"`
+	PaymentType         string `json:"payment_type"`
+	Amount              string `json:"amount,omitempty"`
+	OrderType           string `json:"order_type,omitempty"`
+	PlanID              int64  `json:"plan_id,omitempty"`
+	ResetSubscriptionID int64  `json:"reset_subscription_id,omitempty"`
+	ResetCardQuantity   int    `json:"reset_card_quantity,omitempty"`
 }
 
 // WeChatOAuthStart starts the WeChat OAuth login flow and stores the short-lived
@@ -356,10 +358,12 @@ func (h *AuthHandler) WeChatPaymentOAuthStart(c *gin.Context) {
 		redirectTo = wechatPaymentOAuthDefaultTo
 	}
 	rawContext, err := encodeWeChatPaymentOAuthContext(wechatPaymentOAuthContext{
-		PaymentType: paymentType,
-		Amount:      strings.TrimSpace(c.Query("amount")),
-		OrderType:   strings.TrimSpace(c.Query("order_type")),
-		PlanID:      parseWeChatPaymentPlanID(c.Query("plan_id")),
+		PaymentType:         paymentType,
+		Amount:              strings.TrimSpace(c.Query("amount")),
+		OrderType:           strings.TrimSpace(c.Query("order_type")),
+		PlanID:              parseWeChatPaymentPlanID(c.Query("plan_id")),
+		ResetSubscriptionID: parseWeChatPaymentPlanID(c.Query("reset_subscription_id")),
+		ResetCardQuantity:   parseWeChatPaymentResetCardQuantity(c.Query("reset_card_quantity")),
 	})
 	if err != nil {
 		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_CONTEXT_ENCODE_FAILED", "failed to encode oauth context").WithCause(err))
@@ -456,13 +460,15 @@ func (h *AuthHandler) WeChatPaymentOAuthCallback(c *gin.Context) {
 	}
 
 	resumeToken, err := h.wechatPaymentResumeService().CreateWeChatPaymentResumeToken(service.WeChatPaymentResumeClaims{
-		OpenID:      openid,
-		PaymentType: paymentContext.PaymentType,
-		Amount:      paymentContext.Amount,
-		OrderType:   paymentContext.OrderType,
-		PlanID:      paymentContext.PlanID,
-		RedirectTo:  redirectTo,
-		Scope:       scope,
+		OpenID:              openid,
+		PaymentType:         paymentContext.PaymentType,
+		Amount:              paymentContext.Amount,
+		OrderType:           paymentContext.OrderType,
+		PlanID:              paymentContext.PlanID,
+		ResetSubscriptionID: paymentContext.ResetSubscriptionID,
+		ResetCardQuantity:   paymentContext.ResetCardQuantity,
+		RedirectTo:          redirectTo,
+		Scope:               scope,
 	})
 	if err != nil {
 		redirectOAuthError(c, frontendCallback, "invalid_context", "failed to encode payment resume context", "")
@@ -472,6 +478,22 @@ func (h *AuthHandler) WeChatPaymentOAuthCallback(c *gin.Context) {
 	fragment := url.Values{}
 	fragment.Set("wechat_resume_token", resumeToken)
 	fragment.Set("redirect", redirectTo)
+	// The signed resume token remains the source of truth. These reset-order
+	// fields are only routing hints so the frontend can restore the right
+	// purchase panel before it submits the token back to the API.
+	resumeOrderType := paymentContext.OrderType
+	if resumeOrderType == "" && paymentContext.ResetSubscriptionID > 0 {
+		resumeOrderType = payment.OrderTypeSubscriptionResetCards
+	}
+	if resumeOrderType == payment.OrderTypeSubscriptionResetCards {
+		fragment.Set("order_type", payment.OrderTypeSubscriptionResetCards)
+		if paymentContext.ResetSubscriptionID > 0 {
+			fragment.Set("reset_subscription_id", strconv.FormatInt(paymentContext.ResetSubscriptionID, 10))
+		}
+		if paymentContext.ResetCardQuantity > 0 {
+			fragment.Set("reset_card_quantity", strconv.Itoa(paymentContext.ResetCardQuantity))
+		}
+	}
 	redirectWithFragment(c, frontendCallback, fragment)
 }
 
@@ -1336,6 +1358,11 @@ func decodeWeChatPaymentOAuthContext(raw string) (wechatPaymentOAuthContext, err
 func parseWeChatPaymentPlanID(raw string) int64 {
 	id, _ := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	return id
+}
+
+func parseWeChatPaymentResetCardQuantity(raw string) int {
+	quantity, _ := strconv.Atoi(strings.TrimSpace(raw))
+	return quantity
 }
 
 func wechatPaymentSetCookie(c *gin.Context, name string, value string, maxAgeSec int, secure bool) {

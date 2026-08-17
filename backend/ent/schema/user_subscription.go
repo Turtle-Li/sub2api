@@ -37,6 +37,25 @@ func (UserSubscription) Fields() []ent.Field {
 	return []ent.Field{
 		field.Int64("user_id"),
 		field.Int64("group_id"),
+		// Platform is copied from the subscription group when a term is created
+		// or switched. It makes the one-subscription-per-platform rule durable
+		// even when a user upgrades to a different group on the same platform.
+		field.String("platform").
+			MaxLen(50).
+			Default(domain.PlatformAnthropic),
+		// Plans are mutable catalog records, so retain only their ID as purchase
+		// provenance rather than a foreign-key edge. The immutable order snapshot
+		// remains the source of truth for historical commercial terms.
+		field.Int64("plan_id").
+			Optional().
+			Nillable(),
+		field.Float("plan_price").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}),
+		field.Int("plan_validity_days").
+			Optional().
+			Nillable(),
 
 		field.Time("starts_at").
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
@@ -111,9 +130,9 @@ func (UserSubscription) Indexes() []ent.Index {
 		// 活跃订阅查询复合索引（线上由 SQL 迁移创建部分索引，schema 仅用于模型可读性对齐）
 		index.Fields("user_id", "status", "expires_at"),
 		index.Fields("assigned_by"),
-		// 唯一约束通过部分索引实现（WHERE deleted_at IS NULL），支持软删除后重新订阅
-		// 见迁移文件 016_soft_delete_partial_unique_indexes.sql
-		index.Fields("user_id", "group_id"),
+		// 唯一约束通过部分索引实现（WHERE deleted_at IS NULL），支持软删除后重新订阅。
+		// 迁移 196 将其从 user+group 升级为 user+platform，避免同一平台并存套餐。
+		index.Fields("user_id", "platform"),
 		index.Fields("deleted_at"),
 	}
 }

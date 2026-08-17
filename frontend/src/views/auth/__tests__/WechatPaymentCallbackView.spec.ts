@@ -79,6 +79,26 @@ describe('WechatPaymentCallbackView', () => {
     })
   })
 
+  it('keeps reset-card routing hints when resuming an opaque token', async () => {
+    locationState.current.hash =
+      '#wechat_resume_token=reset-resume-token&order_type=subscription_reset&reset_subscription_id=42&reset_card_quantity=3&redirect=%2Fpurchase%3Ftab%3Dsubscription'
+
+    mount(WechatPaymentCallbackView)
+    await flushPromises()
+
+    expect(replaceMock).toHaveBeenCalledWith({
+      path: '/purchase',
+      query: {
+        tab: 'subscription',
+        wechat_resume: '1',
+        wechat_resume_token: 'reset-resume-token',
+        order_type: 'subscription_reset',
+        reset_subscription_id: '42',
+        reset_card_quantity: '3',
+      },
+    })
+  })
+
   it('redirects legacy openid callback payloads back to purchase while preserving resume context', async () => {
     locationState.current.hash =
       '#openid=openid-123&state=oauth-state&scope=snsapi_base&payment_type=wxpay_direct&amount=128&order_type=subscription&plan_id=7&redirect=%2Fpayment%3Ffrom%3Dwechat'

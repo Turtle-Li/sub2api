@@ -140,10 +140,14 @@ func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanReq
 	if err != nil {
 		return nil, err
 	}
+	entitlements, _, err := normalizePlanEntitlements(req.Entitlements)
+	if err != nil {
+		return nil, infraerrors.BadRequest("PLAN_ENTITLEMENTS_INVALID", err.Error())
+	}
 	b := s.entClient.SubscriptionPlan.Create().
 		SetGroupID(req.GroupID).SetName(req.Name).SetDescription(req.Description).
 		SetPrice(req.Price).SetCurrency(currency).SetValidityDays(req.ValidityDays).SetValidityUnit(req.ValidityUnit).
-		SetFeatures(req.Features).SetProductName(req.ProductName).
+		SetFeatures(req.Features).SetEntitlements(entitlements).SetProductName(req.ProductName).
 		SetForSale(req.ForSale).SetSortOrder(req.SortOrder)
 	if req.OriginalPrice != nil {
 		b.SetOriginalPrice(*req.OriginalPrice)
@@ -198,6 +202,13 @@ func (s *PaymentConfigService) UpdatePlan(ctx context.Context, id int64, req Upd
 	}
 	if req.SortOrder != nil {
 		u.SetSortOrder(*req.SortOrder)
+	}
+	if req.Entitlements != nil {
+		entitlements, _, err := normalizePlanEntitlements(req.Entitlements)
+		if err != nil {
+			return nil, infraerrors.BadRequest("PLAN_ENTITLEMENTS_INVALID", err.Error())
+		}
+		u.SetEntitlements(entitlements)
 	}
 	return u.Save(ctx)
 }

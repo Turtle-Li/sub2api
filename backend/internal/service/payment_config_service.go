@@ -40,6 +40,7 @@ const (
 	SettingCancelWindowMode              = "CANCEL_RATE_LIMIT_WINDOW_MODE"
 	SettingAlipayForceQRCode             = "ALIPAY_FORCE_QRCODE"
 	SettingAlipayMobilePrecreateDeepLink = "ALIPAY_MOBILE_PRECREATE_DEEP_LINK"
+	SettingRechargeOptions               = "PAYMENT_RECHARGE_OPTIONS"
 )
 
 // Default values for payment configuration settings.
@@ -79,7 +80,8 @@ type PaymentConfig struct {
 	// Force Alipay mobile users to use QR code instead of mobile redirect
 	AlipayForceQRCode bool `json:"alipay_force_qrcode"`
 	// Use Alipay face-to-face precreate and an app deep link on mobile clients.
-	AlipayMobilePrecreateDeepLink bool `json:"alipay_mobile_precreate_deep_link"`
+	AlipayMobilePrecreateDeepLink bool             `json:"alipay_mobile_precreate_deep_link"`
+	RechargeOptions               []RechargeOption `json:"recharge_options"`
 }
 
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
@@ -113,10 +115,11 @@ type UpdatePaymentConfigRequest struct {
 	// Use Alipay face-to-face precreate and an app deep link on mobile clients.
 	AlipayMobilePrecreateDeepLink *bool `json:"alipay_mobile_precreate_deep_link"`
 
-	VisibleMethodAlipaySource  *string `json:"payment_visible_method_alipay_source"`
-	VisibleMethodWxpaySource   *string `json:"payment_visible_method_wxpay_source"`
-	VisibleMethodAlipayEnabled *bool   `json:"payment_visible_method_alipay_enabled"`
-	VisibleMethodWxpayEnabled  *bool   `json:"payment_visible_method_wxpay_enabled"`
+	VisibleMethodAlipaySource  *string          `json:"payment_visible_method_alipay_source"`
+	VisibleMethodWxpaySource   *string          `json:"payment_visible_method_wxpay_source"`
+	VisibleMethodAlipayEnabled *bool            `json:"payment_visible_method_alipay_enabled"`
+	VisibleMethodWxpayEnabled  *bool            `json:"payment_visible_method_wxpay_enabled"`
+	RechargeOptions            []RechargeOption `json:"recharge_options"`
 }
 
 // MethodLimits holds per-payment-type limits.
@@ -163,33 +166,35 @@ type UpdateProviderInstanceRequest struct {
 	AllowUserRefund *bool             `json:"allow_user_refund"`
 }
 type CreatePlanRequest struct {
-	GroupID       int64    `json:"group_id"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	Price         float64  `json:"price"`
-	OriginalPrice *float64 `json:"original_price"`
-	Currency      string   `json:"currency"`
-	ValidityDays  int      `json:"validity_days"`
-	ValidityUnit  string   `json:"validity_unit"`
-	Features      string   `json:"features"`
-	ProductName   string   `json:"product_name"`
-	ForSale       bool     `json:"for_sale"`
-	SortOrder     int      `json:"sort_order"`
+	GroupID       int64                  `json:"group_id"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
+	Price         float64                `json:"price"`
+	OriginalPrice *float64               `json:"original_price"`
+	Currency      string                 `json:"currency"`
+	ValidityDays  int                    `json:"validity_days"`
+	ValidityUnit  string                 `json:"validity_unit"`
+	Features      string                 `json:"features"`
+	ProductName   string                 `json:"product_name"`
+	ForSale       bool                   `json:"for_sale"`
+	SortOrder     int                    `json:"sort_order"`
+	Entitlements  map[string]interface{} `json:"entitlements"`
 }
 
 type UpdatePlanRequest struct {
-	GroupID       *int64   `json:"group_id"`
-	Name          *string  `json:"name"`
-	Description   *string  `json:"description"`
-	Price         *float64 `json:"price"`
-	OriginalPrice *float64 `json:"original_price"`
-	Currency      *string  `json:"currency"`
-	ValidityDays  *int     `json:"validity_days"`
-	ValidityUnit  *string  `json:"validity_unit"`
-	Features      *string  `json:"features"`
-	ProductName   *string  `json:"product_name"`
-	ForSale       *bool    `json:"for_sale"`
-	SortOrder     *int     `json:"sort_order"`
+	GroupID       *int64                 `json:"group_id"`
+	Name          *string                `json:"name"`
+	Description   *string                `json:"description"`
+	Price         *float64               `json:"price"`
+	OriginalPrice *float64               `json:"original_price"`
+	Currency      *string                `json:"currency"`
+	ValidityDays  *int                   `json:"validity_days"`
+	ValidityUnit  *string                `json:"validity_unit"`
+	Features      *string                `json:"features"`
+	ProductName   *string                `json:"product_name"`
+	ForSale       *bool                  `json:"for_sale"`
+	SortOrder     *int                   `json:"sort_order"`
+	Entitlements  map[string]interface{} `json:"entitlements"`
 }
 
 // PaymentConfigService manages payment configuration and CRUD for
@@ -225,6 +230,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		SettingCancelRateLimitOn, SettingCancelRateLimitMax,
 		SettingCancelWindowSize, SettingCancelWindowUnit, SettingCancelWindowMode,
 		SettingAlipayForceQRCode, SettingAlipayMobilePrecreateDeepLink,
+		SettingRechargeOptions,
 		SettingPaymentVisibleMethodAlipayEnabled, SettingPaymentVisibleMethodAlipaySource,
 		SettingPaymentVisibleMethodWxpayEnabled, SettingPaymentVisibleMethodWxpaySource,
 	}
@@ -264,6 +270,7 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 
 		AlipayForceQRCode:             vals[SettingAlipayForceQRCode] == "true",
 		AlipayMobilePrecreateDeepLink: vals[SettingAlipayMobilePrecreateDeepLink] == "true",
+		RechargeOptions:               normalizeRechargeOptions(vals[SettingRechargeOptions]),
 	}
 	cfg.AlipayMobilePrecreateDeepLink = pcEnvBoolOverride(
 		SettingAlipayMobilePrecreateDeepLink,
@@ -424,6 +431,13 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	}
 	if req.VisibleMethodWxpayEnabled != nil {
 		m[SettingPaymentVisibleMethodWxpayEnabled] = formatBoolOrEmpty(req.VisibleMethodWxpayEnabled)
+	}
+	if req.RechargeOptions != nil {
+		encoded, err := encodeRechargeOptions(req.RechargeOptions)
+		if err != nil {
+			return infraerrors.BadRequest("INVALID_RECHARGE_OPTIONS", err.Error())
+		}
+		m[SettingRechargeOptions] = encoded
 	}
 	return s.settingRepo.SetMultiple(ctx, m)
 }

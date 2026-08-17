@@ -8,6 +8,7 @@ export default {
     common: { actions: 'Actions', never: 'Never' },
     mode: { off: 'Off', async_audit: 'Async audit only', blocking: 'Synchronous audit and block' },
     status: { disabled: 'Disabled', running: 'Running', degraded: 'Degraded', error: 'Error', healthy: 'Healthy', failed: 'Failed', stale: 'Stale heartbeat' },
+    circuit: { closed: 'Available', open: 'Paused', half_open: 'Recovery probe running' },
     decisions: { pass: 'Pass', flag: 'Flag', critical: 'Critical' },
     riskLevels: { low: 'Low', medium: 'Medium', high: 'High', critical: 'Critical' },
     scanners: {
@@ -36,7 +37,7 @@ export default {
       title: 'Runtime overview',
       description: 'Shows the configuration currently active on the server. Unsaved draft changes do not affect these values.',
       process: 'Process status', mode: 'Effective mode', version: 'Active / expected version', workers: 'Active / total workers',
-      queue: 'Active jobs / capacity', dependencies: 'Dependencies', guardMetrics: 'Synchronous Guard metrics', latest: 'Latest processing and error',
+      queue: 'Active jobs / capacity', dependencies: 'Dependencies', guardMetrics: 'Synchronous Guard metrics', latest: 'Latest processing and error', circuits: 'Node circuits', nextProbe: 'next probe {time}',
       queueBreakdown: 'queued {queued} · processing {processing} · retry {retry} · done {done} · failed {failed}',
       deliveryTotals: 'Total enqueued {enqueued} · dropped {dropped} · processed {processed} · failed {failed}',
     },

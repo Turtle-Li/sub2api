@@ -60,6 +60,15 @@
           <p v-if="runtime.last_error_code" class="mt-1 break-words text-sm text-red-600 dark:text-red-300">
             {{ runtime.last_error_code }}<span v-if="runtime.last_error_message"> · {{ runtime.last_error_message }}</span>
           </p>
+          <div v-if="circuitItems.length" class="mt-3">
+            <p class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.promptAudit.runtime.circuits') }}</p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <span v-for="circuit in circuitItems" :key="circuit.id" class="rounded-md px-2 py-1 text-xs" :class="circuitClass(circuit.state)">
+                {{ circuit.id }} · {{ t(`admin.promptAudit.circuit.${circuit.state}`) }}
+                <template v-if="circuit.nextProbeAt"> · {{ t('admin.promptAudit.runtime.nextProbe', { time: formatDate(circuit.nextProbeAt) }) }}</template>
+              </span>
+            </div>
+          </div>
           <div v-if="Object.keys(runtime.endpoints).length" class="mt-3 flex flex-wrap gap-2">
             <span v-for="(probe, id) in runtime.endpoints" :key="id" class="rounded-md px-2 py-1 text-xs" :class="probe.ok ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'">
               {{ id }} · {{ probe.status }} · {{ probe.latency_ms }} ms
@@ -108,6 +117,12 @@ const guardMetricItems = computed(() => {
   ]
 })
 
+const circuitItems = computed(() => Object.entries(props.runtime?.circuits ?? {}).map(([id, circuit]) => ({
+  id,
+  state: circuit.state,
+  nextProbeAt: circuit.next_probe_at,
+})))
+
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value))
 }
@@ -117,5 +132,11 @@ function statusDot(status: string): string {
   if (status === 'disabled') return 'bg-gray-400'
   if (status === 'degraded') return 'bg-amber-500'
   return 'bg-red-500'
+}
+
+function circuitClass(state: string): string {
+  if (state === 'closed') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+  if (state === 'half_open') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+  return 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'
 }
 </script>

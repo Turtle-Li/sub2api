@@ -337,6 +337,7 @@ onMounted(async () => {
       pendingAuthTokenField.value = registerData.pending_auth_token_field || activePendingSession?.token_field || 'pending_auth_token'
       pendingProvider.value = registerData.pending_provider || activePendingSession?.provider || ''
       pendingRedirect.value = registerData.pending_redirect || activePendingSession?.redirect || ''
+      pendingRedirect.value = registerData.desktop_auth_redirect || pendingRedirect.value
       pendingAdoptionDecision.value = registerData.pending_adoption_decision
         ? {
             adoptDisplayName: registerData.pending_adoption_decision.adopt_display_name === true,
@@ -755,8 +756,13 @@ function handleBack(): void {
   // Clear session data
   sessionStorage.removeItem('register_data')
 
-  // Go back to registration
-  router.push('/register')
+  // Keep a pending TT Switch authorization request intact when the user
+  // returns to registration. Otherwise completing registration would land on
+  // the dashboard instead of the explicit desktop-approval page.
+  void router.push({
+    path: '/register',
+    query: pendingRedirect.value ? { redirect: pendingRedirect.value } : {}
+  })
 }
 
 function buildEmailSuffixNotAllowedMessage(): string {

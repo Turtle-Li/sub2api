@@ -60,6 +60,15 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/desktop-auth',
+    name: 'DesktopAuthorization',
+    component: () => import('@/views/auth/DesktopAuthorizationView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: 'Authorize TT Switch'
+    }
+  },
+  {
     path: '/email-verify',
     name: 'EmailVerify',
     component: () => import('@/views/auth/EmailVerifyView.vue'),

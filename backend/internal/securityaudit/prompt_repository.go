@@ -68,6 +68,9 @@ type JobRepository interface {
 	PublishQueued(ctx context.Context, jobID int64) error
 	MarkStagingFailed(ctx context.Context, jobID int64, code, message string) error
 	ClaimNextJob(ctx context.Context, now time.Time) (*Job, bool, error)
+	// ReleaseUnstarted returns a just-claimed job to the queue without consuming
+	// an attempt. It is used when a circuit opens between admission and dispatch.
+	ReleaseUnstarted(ctx context.Context, jobID, claimVersion int64, now time.Time) error
 	RefreshLease(ctx context.Context, jobID, claimVersion int64, now time.Time) error
 	Complete(ctx context.Context, job *Job, result *NormalizedResult, storePassEvents bool) (*Event, error)
 	Retry(ctx context.Context, jobID, claimVersion int64, next time.Time, code, message string) error
@@ -160,6 +163,15 @@ func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time) 
 		return nil, false, nil
 	}
 	return job, err == nil, err
+}
+
+func (r *PostgreSQLRepository) ReleaseUnstarted(ctx context.Context, jobID, claimVersion int64, now time.Time) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE prompt_audit_jobs
+		SET status='queued', attempts=GREATEST(attempts-1, 0), processing_started_at=NULL,
+			next_attempt_at=$3, updated_at=$3, last_error_code='', last_error_message=''
+		WHERE id=$1 AND status='processing' AND claim_version=$2`, jobID, claimVersion, now.UTC())
+	return requireOneRow(result, err, ErrLeaseLost)
 }
 
 func (r *PostgreSQLRepository) RefreshLease(ctx context.Context, jobID, claimVersion int64, now time.Time) error {

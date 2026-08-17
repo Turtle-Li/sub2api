@@ -4,14 +4,22 @@ package provider
 
 import (
 	"context"
+	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/wechatpay-apiv3/wechatpay-go/core"
@@ -333,6 +341,109 @@ func TestNewWxpay(t *testing.T) {
 				t.Errorf("instanceID = %q, want %q", got.instanceID, "test-instance")
 			}
 		})
+	}
+}
+
+func TestVerifyNotificationAcceptsLocallySignedAndEncryptedCallback(t *testing.T) {
+	merchantPrivatePEM, _ := generateTestKeyPair(t)
+	platformKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate local WeChat platform key: %v", err)
+	}
+	platformPublicDER, err := x509.MarshalPKIXPublicKey(&platformKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal local WeChat platform public key: %v", err)
+	}
+	provider, err := NewWxpay("local-wxpay-account", map[string]string{
+		"appId":       "wx-local-payment-401",
+		"mchId":       "1900000401",
+		"privateKey":  merchantPrivatePEM,
+		"apiV3Key":    "12345678901234567890123456789012",
+		"certSerial":  "LOCAL_MERCHANT_SERIAL_401",
+		"publicKey":   string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: platformPublicDER})),
+		"publicKeyId": "LOCAL_PLATFORM_KEY_401",
+	})
+	if err != nil {
+		t.Fatalf("NewWxpay: %v", err)
+	}
+
+	rawBody, headers := locallySignedWxpayCallback(t, platformKey, "12345678901234567890123456789012")
+	notification, err := provider.VerifyNotification(context.Background(), rawBody, headers)
+	if err != nil {
+		t.Fatalf("verify locally signed and encrypted callback: %v", err)
+	}
+	if notification.OrderID != "sub2_local_wxpay_401" || notification.TradeNo != "4200002401202608064010000001" {
+		t.Fatalf("unexpected notification identifiers: %+v", notification)
+	}
+	if notification.Amount != 23.4 || notification.Status != payment.NotificationStatusSuccess {
+		t.Fatalf("unexpected notification payment state: %+v", notification)
+	}
+	if notification.Metadata[wxpayMetadataAppID] != "wx-local-payment-401" || notification.Metadata[wxpayMetadataMerchantID] != "1900000401" {
+		t.Fatalf("unexpected callback metadata: %+v", notification.Metadata)
+	}
+
+	if _, err := provider.VerifyNotification(context.Background(), rawBody+" ", headers); err == nil {
+		t.Fatal("expected callback body altered after signing to fail verification")
+	}
+}
+
+func locallySignedWxpayCallback(t *testing.T, platformKey *rsa.PrivateKey, apiV3Key string) (string, map[string]string) {
+	t.Helper()
+	plaintext, err := json.Marshal(map[string]interface{}{
+		"appid":            "wx-local-payment-401",
+		"mchid":            "1900000401",
+		"out_trade_no":     "sub2_local_wxpay_401",
+		"transaction_id":   "4200002401202608064010000001",
+		"trade_state":      wxpayTradeStateSuccess,
+		"trade_state_desc": "支付成功",
+		"amount": map[string]interface{}{
+			"total":    2340,
+			"currency": wxpayCurrency,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal local WeChat transaction: %v", err)
+	}
+	block, err := aes.NewCipher([]byte(apiV3Key))
+	if err != nil {
+		t.Fatalf("create local WeChat AES cipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("create local WeChat AES-GCM: %v", err)
+	}
+	resourceNonce := "localnonce01"
+	associatedData := "transaction"
+	ciphertext := gcm.Seal(nil, []byte(resourceNonce), plaintext, []byte(associatedData))
+	body, err := json.Marshal(map[string]interface{}{
+		"id":            "evt_local_wxpay_401",
+		"create_time":   time.Now().UTC().Format(time.RFC3339),
+		"event_type":    wxpayEventTransactionSuccess,
+		"resource_type": "encrypt-resource",
+		"summary":       "local payment test",
+		"resource": map[string]string{
+			"original_type":   "transaction",
+			"algorithm":       "AEAD_AES_256_GCM",
+			"ciphertext":      base64.StdEncoding.EncodeToString(ciphertext),
+			"associated_data": associatedData,
+			"nonce":           resourceNonce,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal local WeChat callback: %v", err)
+	}
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	signingNonce := "local-signing-nonce-401"
+	digest := sha256.Sum256([]byte(timestamp + "\n" + signingNonce + "\n" + string(body) + "\n"))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, platformKey, crypto.SHA256, digest[:])
+	if err != nil {
+		t.Fatalf("sign local WeChat callback: %v", err)
+	}
+	return string(body), map[string]string{
+		"wechatpay-serial":    "LOCAL_PLATFORM_KEY_401",
+		"wechatpay-signature": base64.StdEncoding.EncodeToString(signature),
+		"wechatpay-timestamp": timestamp,
+		"wechatpay-nonce":     signingNonce,
 	}
 }
 

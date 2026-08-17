@@ -28,6 +28,7 @@ This directory contains the Vue Router configuration for the Sub2API frontend ap
 | `/usage`     | UsageView     | Usage records and statistics |
 | `/redeem`    | RedeemView    | Redeem code interface        |
 | `/profile`   | ProfileView   | User profile settings        |
+| `/desktop-auth` | DesktopAuthorizationView | Explicitly approves a short-lived TT Switch device authorization after browser login |
 
 ### Admin Routes (Admin Role Required)
 

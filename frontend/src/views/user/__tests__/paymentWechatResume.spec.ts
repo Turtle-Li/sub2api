@@ -35,6 +35,25 @@ describe('parseWechatResumeRoute', () => {
       planId: undefined,
     })
   })
+
+  it('keeps the target subscription and quantity for reset-count purchases', () => {
+    expect(parseWechatResumeRoute({
+      wechat_resume: '1',
+      wechat_resume_token: 'reset-resume-token',
+      payment_type: 'wxpay',
+      order_type: 'subscription_reset',
+      reset_subscription_id: '42',
+      reset_card_quantity: '3',
+    }, [], 88)).toEqual({
+      wechatResumeToken: 'reset-resume-token',
+      paymentType: 'wxpay',
+      orderType: 'subscription_reset',
+      orderAmount: 0,
+      planId: undefined,
+      resetSubscriptionId: 42,
+      resetCardQuantity: 3,
+    })
+  })
 })
 
 describe('stripWechatResumeQuery', () => {
@@ -48,6 +67,8 @@ describe('stripWechatResumeQuery', () => {
       amount: '12.5',
       order_type: 'subscription',
       plan_id: '7',
+      reset_subscription_id: '42',
+      reset_card_quantity: '3',
       state: 'state-123',
       scope: 'snsapi_base',
     })).toEqual({

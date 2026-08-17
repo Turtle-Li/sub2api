@@ -4,9 +4,11 @@ import { normalizeVisibleMethod } from '@/components/payment/paymentFlow'
 
 export interface ParsedWechatResumeRoute {
   orderAmount: number
-  orderType: 'balance' | 'subscription'
+  orderType: 'balance' | 'subscription' | 'subscription_reset'
   paymentType: string
   planId?: number
+  resetSubscriptionId?: number
+  resetCardQuantity?: number
   openid?: string
   wechatResumeToken?: string
 }
@@ -40,9 +42,16 @@ export function parseWechatResumeRoute(
   const paymentType = normalizeVisibleMethod(readQueryString(query, 'payment_type')) || 'wxpay'
   const planId = Number.parseInt(readQueryString(query, 'plan_id'), 10)
   const hasPlanId = Number.isFinite(planId) && planId > 0
-  const orderType = readQueryString(query, 'order_type') === 'subscription' || hasPlanId
-    ? 'subscription'
-    : 'balance'
+  const resetSubscriptionId = Number.parseInt(readQueryString(query, 'reset_subscription_id'), 10)
+  const resetCardQuantity = Number.parseInt(readQueryString(query, 'reset_card_quantity'), 10)
+  const hasResetSubscriptionId = Number.isFinite(resetSubscriptionId) && resetSubscriptionId > 0
+  const hasResetCardQuantity = Number.isFinite(resetCardQuantity) && resetCardQuantity > 0
+  const requestedOrderType = readQueryString(query, 'order_type')
+  const orderType = requestedOrderType === 'subscription_reset' || hasResetSubscriptionId
+    ? 'subscription_reset'
+    : requestedOrderType === 'subscription' || hasPlanId
+      ? 'subscription'
+      : 'balance'
 
   if (wechatResumeToken) {
     return {
@@ -51,6 +60,8 @@ export function parseWechatResumeRoute(
       orderType,
       orderAmount: 0,
       planId: hasPlanId ? planId : undefined,
+      resetSubscriptionId: hasResetSubscriptionId ? resetSubscriptionId : undefined,
+      resetCardQuantity: hasResetCardQuantity ? Math.min(100, resetCardQuantity) : undefined,
     }
   }
 
@@ -62,9 +73,9 @@ export function parseWechatResumeRoute(
   const rawAmount = Number.parseFloat(readQueryString(query, 'amount'))
   const orderAmount = Number.isFinite(rawAmount) && rawAmount > 0
     ? rawAmount
-    : (orderType === 'subscription'
+    : orderType === 'subscription'
       ? (plans.find(plan => plan.id === planId)?.price ?? 0)
-      : fallbackBalanceAmount)
+      : orderType === 'subscription_reset' ? 0 : fallbackBalanceAmount
 
   return {
     openid,
@@ -72,6 +83,8 @@ export function parseWechatResumeRoute(
     orderType,
     orderAmount,
     planId: hasPlanId ? planId : undefined,
+    resetSubscriptionId: hasResetSubscriptionId ? resetSubscriptionId : undefined,
+    resetCardQuantity: hasResetCardQuantity ? Math.min(100, resetCardQuantity) : undefined,
   }
 }
 
@@ -86,5 +99,7 @@ export function stripWechatResumeQuery(query: LocationQuery): LocationQueryRaw {
   delete nextQuery.amount
   delete nextQuery.order_type
   delete nextQuery.plan_id
+  delete nextQuery.reset_subscription_id
+  delete nextQuery.reset_card_quantity
   return nextQuery
 }

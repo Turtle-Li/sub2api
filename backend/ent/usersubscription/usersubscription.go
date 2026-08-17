@@ -25,6 +25,14 @@ const (
 	FieldUserID = "user_id"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
+	// FieldPlatform holds the string denoting the platform field in the database.
+	FieldPlatform = "platform"
+	// FieldPlanID holds the string denoting the plan_id field in the database.
+	FieldPlanID = "plan_id"
+	// FieldPlanPrice holds the string denoting the plan_price field in the database.
+	FieldPlanPrice = "plan_price"
+	// FieldPlanValidityDays holds the string denoting the plan_validity_days field in the database.
+	FieldPlanValidityDays = "plan_validity_days"
 	// FieldStartsAt holds the string denoting the starts_at field in the database.
 	FieldStartsAt = "starts_at"
 	// FieldExpiresAt holds the string denoting the expires_at field in the database.
@@ -97,6 +105,10 @@ var Columns = []string{
 	FieldDeletedAt,
 	FieldUserID,
 	FieldGroupID,
+	FieldPlatform,
+	FieldPlanID,
+	FieldPlanPrice,
+	FieldPlanValidityDays,
 	FieldStartsAt,
 	FieldExpiresAt,
 	FieldStatus,
@@ -135,6 +147,10 @@ var (
 	DefaultUpdatedAt func() time.Time
 	// UpdateDefaultUpdatedAt holds the default value on update for the "updated_at" field.
 	UpdateDefaultUpdatedAt func() time.Time
+	// DefaultPlatform holds the default value on creation for the "platform" field.
+	DefaultPlatform string
+	// PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
+	PlatformValidator func(string) error
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -180,6 +196,26 @@ func ByUserID(opts ...sql.OrderTermOption) OrderOption {
 // ByGroupID orders the results by the group_id field.
 func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
+}
+
+// ByPlatform orders the results by the platform field.
+func ByPlatform(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlatform, opts...).ToFunc()
+}
+
+// ByPlanID orders the results by the plan_id field.
+func ByPlanID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanID, opts...).ToFunc()
+}
+
+// ByPlanPrice orders the results by the plan_price field.
+func ByPlanPrice(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanPrice, opts...).ToFunc()
+}
+
+// ByPlanValidityDays orders the results by the plan_validity_days field.
+func ByPlanValidityDays(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanValidityDays, opts...).ToFunc()
 }
 
 // ByStartsAt orders the results by the starts_at field.

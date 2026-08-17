@@ -51,26 +51,29 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 	}
 	// Enrich plans with group platform for frontend color coding
 	type planWithPlatform struct {
-		ID                 int64    `json:"id"`
-		GroupID            int64    `json:"group_id"`
-		GroupPlatform      string   `json:"group_platform"`
-		GroupName          string   `json:"group_name"`
-		RateMultiplier     float64  `json:"rate_multiplier"`
-		PeakRateEnabled    bool     `json:"peak_rate_enabled"`
-		PeakStart          string   `json:"peak_start"`
-		PeakEnd            string   `json:"peak_end"`
-		PeakRateMultiplier float64  `json:"peak_rate_multiplier"`
-		Name               string   `json:"name"`
-		Description        string   `json:"description"`
-		Price              float64  `json:"price"`
-		OriginalPrice      *float64 `json:"original_price,omitempty"`
-		Currency           string   `json:"currency,omitempty"`
-		ValidityDays       int      `json:"validity_days"`
-		ValidityUnit       string   `json:"validity_unit"`
-		Features           string   `json:"features"`
-		ProductName        string   `json:"product_name"`
-		ForSale            bool     `json:"for_sale"`
-		SortOrder          int      `json:"sort_order"`
+		ID                 int64                    `json:"id"`
+		GroupID            int64                    `json:"group_id"`
+		GroupPlatform      string                   `json:"group_platform"`
+		GroupName          string                   `json:"group_name"`
+		RateMultiplier     float64                  `json:"rate_multiplier"`
+		PeakRateEnabled    bool                     `json:"peak_rate_enabled"`
+		PeakStart          string                   `json:"peak_start"`
+		PeakEnd            string                   `json:"peak_end"`
+		PeakRateMultiplier float64                  `json:"peak_rate_multiplier"`
+		Name               string                   `json:"name"`
+		Description        string                   `json:"description"`
+		Price              float64                  `json:"price"`
+		OriginalPrice      *float64                 `json:"original_price,omitempty"`
+		Currency           string                   `json:"currency,omitempty"`
+		ValidityDays       int                      `json:"validity_days"`
+		ValidityUnit       string                   `json:"validity_unit"`
+		Features           string                   `json:"features"`
+		ProductName        string                   `json:"product_name"`
+		Entitlements       service.PlanEntitlements `json:"entitlements"`
+		DiscountPercent    float64                  `json:"discount_percent"`
+		PeriodLabel        string                   `json:"period_label"`
+		ForSale            bool                     `json:"for_sale"`
+		SortOrder          int                      `json:"sort_order"`
 	}
 	groupInfo := h.configService.GetGroupInfoMap(c.Request.Context(), plans)
 	result := make([]planWithPlatform, 0, len(plans))
@@ -84,7 +87,10 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			Currency:     p.Currency,
 			ValidityDays: p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: p.Features,
-			ProductName: p.ProductName, ForSale: p.ForSale, SortOrder: p.SortOrder,
+			ProductName: p.ProductName, Entitlements: service.PlanEntitlementsFromRaw(p.Entitlements),
+			DiscountPercent: service.PlanDiscountPercent(p.Price, p.OriginalPrice),
+			PeriodLabel:     service.PlanPeriodLabel(p.ValidityDays, p.ValidityUnit),
+			ForSale:         p.ForSale, SortOrder: p.SortOrder,
 		})
 	}
 	response.Success(c, result)
@@ -136,7 +142,9 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 			Name:        p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			Currency:     p.Currency,
 			ValidityDays: p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: parseFeatures(p.Features),
-			ProductName: p.ProductName,
+			ProductName: p.ProductName, Entitlements: service.PlanEntitlementsFromRaw(p.Entitlements),
+			DiscountPercent: service.PlanDiscountPercent(p.Price, p.OriginalPrice),
+			PeriodLabel:     service.PlanPeriodLabel(p.ValidityDays, p.ValidityUnit),
 		})
 	}
 
@@ -149,6 +157,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		BalanceRechargeMultiplier:     cfg.BalanceRechargeMultiplier,
 		SubscriptionUSDToCNYRate:      cfg.SubscriptionUSDToCNYRate,
 		RechargeFeeRate:               cfg.RechargeFeeRate,
+		RechargeOptions:               service.EnabledRechargeOptionsForCheckout(cfg.RechargeOptions),
 		HelpText:                      cfg.HelpText,
 		HelpImageURL:                  cfg.HelpImageURL,
 		StripePublishableKey:          cfg.StripePublishableKey,
@@ -166,6 +175,7 @@ type checkoutInfoResponse struct {
 	BalanceRechargeMultiplier     float64                         `json:"balance_recharge_multiplier"`
 	SubscriptionUSDToCNYRate      float64                         `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate               float64                         `json:"recharge_fee_rate"`
+	RechargeOptions               []service.RechargeOption        `json:"recharge_options"`
 	HelpText                      string                          `json:"help_text"`
 	HelpImageURL                  string                          `json:"help_image_url"`
 	StripePublishableKey          string                          `json:"stripe_publishable_key"`
@@ -174,28 +184,31 @@ type checkoutInfoResponse struct {
 }
 
 type checkoutPlan struct {
-	ID                 int64    `json:"id"`
-	GroupID            int64    `json:"group_id"`
-	GroupPlatform      string   `json:"group_platform"`
-	GroupName          string   `json:"group_name"`
-	RateMultiplier     float64  `json:"rate_multiplier"`
-	PeakRateEnabled    bool     `json:"peak_rate_enabled"`
-	PeakStart          string   `json:"peak_start"`
-	PeakEnd            string   `json:"peak_end"`
-	PeakRateMultiplier float64  `json:"peak_rate_multiplier"`
-	DailyLimitUSD      *float64 `json:"daily_limit_usd"`
-	WeeklyLimitUSD     *float64 `json:"weekly_limit_usd"`
-	MonthlyLimitUSD    *float64 `json:"monthly_limit_usd"`
-	ModelScopes        []string `json:"supported_model_scopes"`
-	Name               string   `json:"name"`
-	Description        string   `json:"description"`
-	Price              float64  `json:"price"`
-	OriginalPrice      *float64 `json:"original_price,omitempty"`
-	Currency           string   `json:"currency,omitempty"`
-	ValidityDays       int      `json:"validity_days"`
-	ValidityUnit       string   `json:"validity_unit"`
-	Features           []string `json:"features"`
-	ProductName        string   `json:"product_name"`
+	ID                 int64                    `json:"id"`
+	GroupID            int64                    `json:"group_id"`
+	GroupPlatform      string                   `json:"group_platform"`
+	GroupName          string                   `json:"group_name"`
+	RateMultiplier     float64                  `json:"rate_multiplier"`
+	PeakRateEnabled    bool                     `json:"peak_rate_enabled"`
+	PeakStart          string                   `json:"peak_start"`
+	PeakEnd            string                   `json:"peak_end"`
+	PeakRateMultiplier float64                  `json:"peak_rate_multiplier"`
+	DailyLimitUSD      *float64                 `json:"daily_limit_usd"`
+	WeeklyLimitUSD     *float64                 `json:"weekly_limit_usd"`
+	MonthlyLimitUSD    *float64                 `json:"monthly_limit_usd"`
+	ModelScopes        []string                 `json:"supported_model_scopes"`
+	Name               string                   `json:"name"`
+	Description        string                   `json:"description"`
+	Price              float64                  `json:"price"`
+	OriginalPrice      *float64                 `json:"original_price,omitempty"`
+	Currency           string                   `json:"currency,omitempty"`
+	ValidityDays       int                      `json:"validity_days"`
+	ValidityUnit       string                   `json:"validity_unit"`
+	Features           []string                 `json:"features"`
+	ProductName        string                   `json:"product_name"`
+	Entitlements       service.PlanEntitlements `json:"entitlements"`
+	DiscountPercent    float64                  `json:"discount_percent"`
+	PeriodLabel        string                   `json:"period_label"`
 }
 
 // parseFeatures splits a newline-separated features string into a string slice.
@@ -228,14 +241,16 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 
 // CreateOrderRequest is the request body for creating a payment order.
 type CreateOrderRequest struct {
-	Amount            float64 `json:"amount"`
-	PaymentType       string  `json:"payment_type" binding:"required"`
-	OpenID            string  `json:"openid"`
-	WechatResumeToken string  `json:"wechat_resume_token"`
-	ReturnURL         string  `json:"return_url"`
-	PaymentSource     string  `json:"payment_source"`
-	OrderType         string  `json:"order_type"`
-	PlanID            int64   `json:"plan_id"`
+	Amount              float64 `json:"amount"`
+	PaymentType         string  `json:"payment_type" binding:"required"`
+	OpenID              string  `json:"openid"`
+	WechatResumeToken   string  `json:"wechat_resume_token"`
+	ReturnURL           string  `json:"return_url"`
+	PaymentSource       string  `json:"payment_source"`
+	OrderType           string  `json:"order_type"`
+	PlanID              int64   `json:"plan_id"`
+	ResetSubscriptionID int64   `json:"reset_subscription_id"`
+	ResetCardQuantity   int     `json:"reset_card_quantity"`
 	// IsMobile lets the frontend declare its mobile status directly. When
 	// nil we fall back to User-Agent heuristics (which miss iPadOS / some
 	// embedded browsers that strip the "Mobile" keyword).
@@ -272,20 +287,22 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 		mobile = *req.IsMobile
 	}
 	result, err := h.paymentService.CreateOrder(c.Request.Context(), service.CreateOrderRequest{
-		UserID:          subject.UserID,
-		Amount:          req.Amount,
-		PaymentType:     req.PaymentType,
-		OpenID:          req.OpenID,
-		ClientIP:        c.ClientIP(),
-		IsMobile:        mobile,
-		IsWeChatBrowser: isWeChatBrowser(c),
-		SrcHost:         c.Request.Host,
-		SrcURL:          c.Request.Referer(),
-		ReturnURL:       req.ReturnURL,
-		PaymentSource:   req.PaymentSource,
-		OrderType:       req.OrderType,
-		PlanID:          req.PlanID,
-		Locale:          c.GetHeader("Accept-Language"),
+		UserID:              subject.UserID,
+		Amount:              req.Amount,
+		PaymentType:         req.PaymentType,
+		OpenID:              req.OpenID,
+		ClientIP:            c.ClientIP(),
+		IsMobile:            mobile,
+		IsWeChatBrowser:     isWeChatBrowser(c),
+		SrcHost:             c.Request.Host,
+		SrcURL:              c.Request.Referer(),
+		ReturnURL:           req.ReturnURL,
+		PaymentSource:       req.PaymentSource,
+		OrderType:           req.OrderType,
+		PlanID:              req.PlanID,
+		ResetSubscriptionID: req.ResetSubscriptionID,
+		ResetCardQuantity:   req.ResetCardQuantity,
+		Locale:              c.GetHeader("Accept-Language"),
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -323,11 +340,33 @@ func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeC
 		}
 		req.Amount = amount
 	}
-	if claims.OrderType != "" {
-		req.OrderType = claims.OrderType
+	resumeOrderType := claims.OrderType
+	if resumeOrderType == "" && claims.ResetSubscriptionID > 0 {
+		resumeOrderType = payment.OrderTypeSubscriptionResetCards
+	}
+	if resumeOrderType != "" {
+		req.OrderType = resumeOrderType
 	}
 	if claims.PlanID > 0 {
 		req.PlanID = claims.PlanID
+	}
+	if resumeOrderType == payment.OrderTypeSubscriptionResetCards {
+		if claims.ResetSubscriptionID <= 0 || claims.ResetCardQuantity < 1 || claims.ResetCardQuantity > service.MaxResetCardPurchaseQuantity {
+			return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token has invalid reset-card context")
+		}
+		if req.ResetSubscriptionID > 0 && req.ResetSubscriptionID != claims.ResetSubscriptionID {
+			return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token subscription mismatch")
+		}
+		if req.ResetCardQuantity > 0 && req.ResetCardQuantity != claims.ResetCardQuantity {
+			return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token quantity mismatch")
+		}
+		req.ResetSubscriptionID = claims.ResetSubscriptionID
+		req.ResetCardQuantity = claims.ResetCardQuantity
+	} else {
+		// Reset-card fields are meaningful only for the signed reset order type.
+		// Do not let stale query parameters survive a token recovery.
+		req.ResetSubscriptionID = 0
+		req.ResetCardQuantity = 0
 	}
 	return nil
 }

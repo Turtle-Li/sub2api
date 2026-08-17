@@ -79,11 +79,14 @@ type fakeJobRepository struct {
 	retryAt         time.Time
 	retryCode       string
 	retried         int
+	released        int
 	failedCode      string
 	failed          int
 	refreshes       int
 
 	claimQueue []*Job
+	claimHook  func()
+	claimed    map[int64]*Job
 
 	recordBlockingCalls    int
 	recordBlockingSnapshot PromptSnapshot
@@ -125,13 +128,32 @@ func (r *fakeJobRepository) MarkStagingFailed(_ context.Context, _ int64, code, 
 }
 func (r *fakeJobRepository) ClaimNextJob(context.Context, time.Time) (*Job, bool, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if len(r.claimQueue) == 0 {
+		r.mu.Unlock()
 		return nil, false, nil
 	}
 	job := r.claimQueue[0]
 	r.claimQueue = r.claimQueue[1:]
+	if r.claimed == nil {
+		r.claimed = map[int64]*Job{}
+	}
+	r.claimed[job.ID] = job
+	hook := r.claimHook
+	r.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return job, true, nil
+}
+func (r *fakeJobRepository) ReleaseUnstarted(_ context.Context, jobID, _ int64, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.released++
+	if job := r.claimed[jobID]; job != nil {
+		r.claimQueue = append([]*Job{job}, r.claimQueue...)
+		delete(r.claimed, jobID)
+	}
+	return nil
 }
 func (r *fakeJobRepository) RefreshLease(context.Context, int64, int64, time.Time) error {
 	r.mu.Lock()

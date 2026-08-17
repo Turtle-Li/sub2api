@@ -36,6 +36,19 @@ SWITCH_LOG="${LOG_DIR}/switch.log"
 LOCK_FILE="${SUB2API_RELEASE_LOCK_FILE:-/var/lock/sub2api-release.lock}"
 MIN_FREE_BYTES="${SUB2API_RELEASE_MIN_FREE_BYTES:-8589934592}"
 BUILD_TIMEOUT_SECONDS="${SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS:-3000}"
+# Keep every release knob defined under `set -u`.  The GitHub prebuilt path
+# does not need the source-build values, but validating the common drain and
+# image settings must still be deterministic when the server env file omits
+# optional keys.
+PREBUILT_IMAGE_PREFIX="${SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX:-}"
+ALLOW_PREEXISTING_DRAINING_CONTAINER="${SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER:-false}"
+DRAIN_INTERVAL_SECONDS="${SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS:-30}"
+DRAIN_ACTIVE_WINDOW_SECONDS="${SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS:-60}"
+DRAIN_RETRY_DELAY_SECONDS="${SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS:-5}"
+DRAIN_MAX_RUNTIME_SECONDS="${SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS:-1800}"
+BUILD_GOMAXPROCS="${SUB2API_RELEASE_BUILD_GOMAXPROCS:-1}"
+BUILD_GO_PARALLELISM="${SUB2API_RELEASE_BUILD_GO_PARALLELISM:-1}"
+BUILD_GO_MEMORY_LIMIT="${SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT:-768MiB}"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 
 timestamp() {
@@ -163,7 +176,10 @@ OLD_HEALTH="$(docker inspect "$OLD_CONTAINER" --format '{{if .State.Health}}{{.S
 if docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
   target_running="$(docker inspect "$NEW_CONTAINER" --format '{{.State.Running}}')"
   if [ "$target_running" = "true" ]; then
-    die "inactive target ${NEW_CONTAINER} is still running, probably draining a previous release; retry later"
+    if [ "$ALLOW_PREEXISTING_DRAINING_CONTAINER" != "true" ]; then
+      die "pre-existing inactive container(s) are still running: ${NEW_CONTAINER}; they can consume shared background queues"
+    fi
+    log "WARNING: allowing pre-existing inactive container ${NEW_CONTAINER} because SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=true"
   fi
 fi
 

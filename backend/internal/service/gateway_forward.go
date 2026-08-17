@@ -33,9 +33,10 @@ const (
 )
 
 func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode int) bool {
-	// OAuth/Setup Token 账号：仅 403 重试
+	// OAuth/Setup Token 账号：403 认证抖动和 529 明确过载先在同一账号
+	// 做有界重试；耗尽后才让 failover 层切换账号并落冷却状态。
 	if account.IsOAuth() {
-		return statusCode == 403
+		return statusCode == 403 || statusCode == 529
 	}
 
 	// API Key 账号：未配置的错误码重试

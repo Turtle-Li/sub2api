@@ -6,7 +6,8 @@ import PolicyPanel from '../components/PolicyPanel.vue'
 import EventWorkspace from '../components/EventWorkspace.vue'
 import EventDetailDialog from '../components/EventDetailDialog.vue'
 import FilterDeleteDialog from '../components/FilterDeleteDialog.vue'
-import type { PromptAuditDraft, PromptAuditEndpointDraft, PromptAuditEvent, PromptEventFilters } from '../types'
+import RuntimeOverview from '../components/RuntimeOverview.vue'
+import type { PromptAuditDraft, PromptAuditEndpointDraft, PromptAuditEvent, PromptAuditRuntime, PromptEventFilters } from '../types'
 import { emptyEventFilters, resolveDeleteRangeFilters, SCANNER_CATALOG } from '../viewModel'
 
 vi.mock('vue-i18n', async () => {
@@ -25,6 +26,22 @@ const endpoint = (): PromptAuditEndpointDraft => ({
 
 describe('Prompt Audit components', () => {
   beforeEach(() => vi.restoreAllMocks())
+
+  it('shows an open Guard circuit and its scheduled recovery probe', () => {
+    const runtime: PromptAuditRuntime = {
+      process_status: 'degraded', effective_mode: 'async_audit', expected_config_version: 7, active_config_version: 7,
+      worker_total: 1, worker_active: 0, queue_capacity: 10,
+      queue: { staging: 0, queued: 2, processing: 0, retry: 0, done: 0, failed: 0, active: 2 },
+      processed_total: 0, failed_total: 3, enqueued_total: 5, dropped_total: 0,
+      database_status: 'ok', redis_status: 'ok', endpoints: {},
+      circuits: { 'office-mini': { state: 'open', consecutive_failures: 3, next_probe_at: '2026-08-15T00:00:30Z' } },
+      guard_metrics: { total: 3, allowed: 0, flagged: 0, blocked: 0, unavailable: 3, invalid: 0, timeouts: 0, failovers: 0, bulkhead_full: 0, record_failed: 0 },
+    }
+
+    const wrapper = mount(RuntimeOverview, { props: { runtime, loading: false, error: '' } })
+    expect(wrapper.text()).toContain('office-mini · admin.promptAudit.circuit.open')
+    expect(wrapper.text()).toContain('admin.promptAudit.runtime.nextProbe')
+  })
 
   it('edits a saved endpoint with blank-secret keep, explicit clear, replacement, and probe actions', async () => {
     const wrapper = mount(EndpointPool, {

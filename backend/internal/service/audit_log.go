@@ -126,6 +126,10 @@ func auditNormalizeBodyKey(key string) string {
 var auditBodySensitiveExactKeys = func() map[string]struct{} {
 	builtin := []string{
 		"code", "codes", "pin", "cvv",
+		// Device authorization codes and PKCE values are authentication material.
+		// They are intentionally treated like credentials even though the browser
+		// only receives the short user code.
+		"user_code", "device_code", "code_verifier", "code_challenge",
 		"authorization", "cookie", "x-api-key",
 		"key",
 		// 字符串值内嵌完整凭证的字段：

@@ -1158,6 +1158,40 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return nil
 				}
 				eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+				if eventType == "response.failed" {
+					cyberHit := false
+					if hit, code, msg := detectOpenAICyberPolicy(payload); hit {
+						cyberHit = true
+						MarkOpsCyberPolicy(c, CyberPolicyMark{
+							Code:           code,
+							Message:        msg,
+							Body:           truncateString(string(payload), 4096),
+							UpstreamStatus: http.StatusOK,
+						})
+					}
+					if !cyberHit {
+						failedMessage := extractOpenAISSEErrorMessage(payload)
+						if completedTurns.Load() == 0 && !wroteDownstream && isOpenAIUpstreamCapacityShedEvent(payload) {
+							return s.newOpenAIStreamFailoverError(
+								c,
+								account,
+								true,
+								handshakeHeaders.Get("x-request-id"),
+								payload,
+								failedMessage,
+								handshakeHeaders,
+							)
+						}
+						s.recordOpenAIStreamTerminalFailure(
+							c,
+							account,
+							true,
+							handshakeHeaders.Get("x-request-id"),
+							payload,
+							failedMessage,
+						)
+					}
+				}
 				if isOpenAIWSTerminalEvent(eventType) {
 					s.handleOpenAIWSTerminalTransientFailure(ctx, account, capturedSessionModel, handshakeHeaders, payload)
 				}

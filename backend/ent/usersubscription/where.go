@@ -80,6 +80,26 @@ func GroupID(v int64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldGroupID, v))
 }
 
+// Platform applies equality check predicate on the "platform" field. It's identical to PlatformEQ.
+func Platform(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPlatform, v))
+}
+
+// PlanID applies equality check predicate on the "plan_id" field. It's identical to PlanIDEQ.
+func PlanID(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPlanID, v))
+}
+
+// PlanPrice applies equality check predicate on the "plan_price" field. It's identical to PlanPriceEQ.
+func PlanPrice(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPlanPrice, v))
+}
+
+// PlanValidityDays applies equality check predicate on the "plan_validity_days" field. It's identical to PlanValidityDaysEQ.
+func PlanValidityDays(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPlanValidityDays, v))
+}
+
 // StartsAt applies equality check predicate on the "starts_at" field. It's identical to StartsAtEQ.
 func StartsAt(v time.Time) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldStartsAt, v))
@@ -308,6 +328,221 @@ func GroupIDIn(vs ...int64) predicate.UserSubscription {
 // GroupIDNotIn applies the NotIn predicate on the "group_id" field.
 func GroupIDNotIn(vs ...int64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldNotIn(FieldGroupID, vs...))
+}
+
+// PlatformEQ applies the EQ predicate on the "platform" field.
+func PlatformEQ(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPlatform, v))
+}
+
+// PlatformNEQ applies the NEQ predicate on the "platform" field.
+func PlatformNEQ(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldPlatform, v))
+}
+
+// PlatformIn applies the In predicate on the "platform" field.
+func PlatformIn(vs ...string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldPlatform, vs...))
+}
+
+// PlatformNotIn applies the NotIn predicate on the "platform" field.
+func PlatformNotIn(vs ...string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldPlatform, vs...))
+}
+
+// PlatformGT applies the GT predicate on the "platform" field.
+func PlatformGT(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldPlatform, v))
+}
+
+// PlatformGTE applies the GTE predicate on the "platform" field.
+func PlatformGTE(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldPlatform, v))
+}
+
+// PlatformLT applies the LT predicate on the "platform" field.
+func PlatformLT(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldPlatform, v))
+}
+
+// PlatformLTE applies the LTE predicate on the "platform" field.
+func PlatformLTE(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldPlatform, v))
+}
+
+// PlatformContains applies the Contains predicate on the "platform" field.
+func PlatformContains(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldContains(FieldPlatform, v))
+}
+
+// PlatformHasPrefix applies the HasPrefix predicate on the "platform" field.
+func PlatformHasPrefix(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldHasPrefix(FieldPlatform, v))
+}
+
+// PlatformHasSuffix applies the HasSuffix predicate on the "platform" field.
+func PlatformHasSuffix(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldHasSuffix(FieldPlatform, v))
+}
+
+// PlatformEqualFold applies the EqualFold predicate on the "platform" field.
+func PlatformEqualFold(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEqualFold(FieldPlatform, v))
+}
+
+// PlatformContainsFold applies the ContainsFold predicate on the "platform" field.
+func PlatformContainsFold(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldContainsFold(FieldPlatform, v))
+}
+
+// PlanIDEQ applies the EQ predicate on the "plan_id" field.
+func PlanIDEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPlanID, v))
+}
+
+// PlanIDNEQ applies the NEQ predicate on the "plan_id" field.
+func PlanIDNEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldPlanID, v))
+}
+
+// PlanIDIn applies the In predicate on the "plan_id" field.
+func PlanIDIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldPlanID, vs...))
+}
+
+// PlanIDNotIn applies the NotIn predicate on the "plan_id" field.
+func PlanIDNotIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldPlanID, vs...))
+}
+
+// PlanIDGT applies the GT predicate on the "plan_id" field.
+func PlanIDGT(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldPlanID, v))
+}
+
+// PlanIDGTE applies the GTE predicate on the "plan_id" field.
+func PlanIDGTE(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldPlanID, v))
+}
+
+// PlanIDLT applies the LT predicate on the "plan_id" field.
+func PlanIDLT(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldPlanID, v))
+}
+
+// PlanIDLTE applies the LTE predicate on the "plan_id" field.
+func PlanIDLTE(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldPlanID, v))
+}
+
+// PlanIDIsNil applies the IsNil predicate on the "plan_id" field.
+func PlanIDIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldPlanID))
+}
+
+// PlanIDNotNil applies the NotNil predicate on the "plan_id" field.
+func PlanIDNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldPlanID))
+}
+
+// PlanPriceEQ applies the EQ predicate on the "plan_price" field.
+func PlanPriceEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPlanPrice, v))
+}
+
+// PlanPriceNEQ applies the NEQ predicate on the "plan_price" field.
+func PlanPriceNEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldPlanPrice, v))
+}
+
+// PlanPriceIn applies the In predicate on the "plan_price" field.
+func PlanPriceIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldPlanPrice, vs...))
+}
+
+// PlanPriceNotIn applies the NotIn predicate on the "plan_price" field.
+func PlanPriceNotIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldPlanPrice, vs...))
+}
+
+// PlanPriceGT applies the GT predicate on the "plan_price" field.
+func PlanPriceGT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldPlanPrice, v))
+}
+
+// PlanPriceGTE applies the GTE predicate on the "plan_price" field.
+func PlanPriceGTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldPlanPrice, v))
+}
+
+// PlanPriceLT applies the LT predicate on the "plan_price" field.
+func PlanPriceLT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldPlanPrice, v))
+}
+
+// PlanPriceLTE applies the LTE predicate on the "plan_price" field.
+func PlanPriceLTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldPlanPrice, v))
+}
+
+// PlanPriceIsNil applies the IsNil predicate on the "plan_price" field.
+func PlanPriceIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldPlanPrice))
+}
+
+// PlanPriceNotNil applies the NotNil predicate on the "plan_price" field.
+func PlanPriceNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldPlanPrice))
+}
+
+// PlanValidityDaysEQ applies the EQ predicate on the "plan_validity_days" field.
+func PlanValidityDaysEQ(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPlanValidityDays, v))
+}
+
+// PlanValidityDaysNEQ applies the NEQ predicate on the "plan_validity_days" field.
+func PlanValidityDaysNEQ(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldPlanValidityDays, v))
+}
+
+// PlanValidityDaysIn applies the In predicate on the "plan_validity_days" field.
+func PlanValidityDaysIn(vs ...int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldPlanValidityDays, vs...))
+}
+
+// PlanValidityDaysNotIn applies the NotIn predicate on the "plan_validity_days" field.
+func PlanValidityDaysNotIn(vs ...int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldPlanValidityDays, vs...))
+}
+
+// PlanValidityDaysGT applies the GT predicate on the "plan_validity_days" field.
+func PlanValidityDaysGT(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldPlanValidityDays, v))
+}
+
+// PlanValidityDaysGTE applies the GTE predicate on the "plan_validity_days" field.
+func PlanValidityDaysGTE(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldPlanValidityDays, v))
+}
+
+// PlanValidityDaysLT applies the LT predicate on the "plan_validity_days" field.
+func PlanValidityDaysLT(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldPlanValidityDays, v))
+}
+
+// PlanValidityDaysLTE applies the LTE predicate on the "plan_validity_days" field.
+func PlanValidityDaysLTE(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldPlanValidityDays, v))
+}
+
+// PlanValidityDaysIsNil applies the IsNil predicate on the "plan_validity_days" field.
+func PlanValidityDaysIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldPlanValidityDays))
+}
+
+// PlanValidityDaysNotNil applies the NotNil predicate on the "plan_validity_days" field.
+func PlanValidityDaysNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldPlanValidityDays))
 }
 
 // StartsAtEQ applies the EQ predicate on the "starts_at" field.

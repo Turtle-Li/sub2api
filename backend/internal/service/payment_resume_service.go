@@ -55,16 +55,18 @@ type ResumeTokenClaims struct {
 }
 
 type WeChatPaymentResumeClaims struct {
-	TokenType   string `json:"tk,omitempty"`
-	OpenID      string `json:"openid"`
-	PaymentType string `json:"pt,omitempty"`
-	Amount      string `json:"amt,omitempty"`
-	OrderType   string `json:"ot,omitempty"`
-	PlanID      int64  `json:"pid,omitempty"`
-	RedirectTo  string `json:"rd,omitempty"`
-	Scope       string `json:"scp,omitempty"`
-	IssuedAt    int64  `json:"iat"`
-	ExpiresAt   int64  `json:"exp,omitempty"`
+	TokenType           string `json:"tk,omitempty"`
+	OpenID              string `json:"openid"`
+	PaymentType         string `json:"pt,omitempty"`
+	Amount              string `json:"amt,omitempty"`
+	OrderType           string `json:"ot,omitempty"`
+	PlanID              int64  `json:"pid,omitempty"`
+	ResetSubscriptionID int64  `json:"rsid,omitempty"`
+	ResetCardQuantity   int    `json:"rcq,omitempty"`
+	RedirectTo          string `json:"rd,omitempty"`
+	Scope               string `json:"scp,omitempty"`
+	IssuedAt            int64  `json:"iat"`
+	ExpiresAt           int64  `json:"exp,omitempty"`
 }
 
 type PaymentResumeService struct {
@@ -383,7 +385,14 @@ func (s *PaymentResumeService) CreateWeChatPaymentResumeToken(claims WeChatPayme
 		claims.PaymentType = payment.TypeWxpay
 	}
 	if claims.OrderType == "" {
-		claims.OrderType = payment.OrderTypeBalance
+		// Older OAuth start URLs may carry only the target subscription ID.
+		// Preserve that intent instead of silently turning the resumed order into
+		// a balance recharge when the context is re-signed.
+		if claims.ResetSubscriptionID > 0 {
+			claims.OrderType = payment.OrderTypeSubscriptionResetCards
+		} else {
+			claims.OrderType = payment.OrderTypeBalance
+		}
 	}
 	claims.TokenType = wechatPaymentResumeTokenType
 	return s.createSignedToken(claims)

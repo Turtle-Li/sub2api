@@ -6,7 +6,6 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/group"
-	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
@@ -39,6 +38,18 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
 		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
 		SetNillableAssignedBy(sub.AssignedBy)
+	if sub.Platform != "" {
+		builder.SetPlatform(sub.Platform)
+	}
+	if sub.PlanID != nil {
+		builder.SetPlanID(*sub.PlanID)
+	}
+	if sub.PlanPrice != nil {
+		builder.SetPlanPrice(*sub.PlanPrice)
+	}
+	if sub.PlanValidityDays != nil {
+		builder.SetPlanValidityDays(*sub.PlanValidityDays)
+	}
 
 	if sub.StartsAt.IsZero() {
 		builder.SetStartsAt(time.Now())
@@ -140,6 +151,10 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 	builder := client.UserSubscription.UpdateOneID(sub.ID).
 		SetUserID(sub.UserID).
 		SetGroupID(sub.GroupID).
+		SetPlatform(sub.Platform).
+		SetNillablePlanID(sub.PlanID).
+		SetNillablePlanPrice(sub.PlanPrice).
+		SetNillablePlanValidityDays(sub.PlanValidityDays).
 		SetStartsAt(sub.StartsAt).
 		SetExpiresAt(sub.ExpiresAt).
 		SetStatus(sub.Status).
@@ -246,11 +261,10 @@ func (r *userSubscriptionRepository) List(ctx context.Context, params pagination
 		q = q.Where(usersubscription.GroupIDEQ(*groupID))
 	}
 	if platform != "" {
-		groupPredicates := []predicate.Group{group.PlatformEQ(platform)}
-		if includeSoftDeleted {
-			groupPredicates = append(groupPredicates, group.DeletedAtIsNil())
-		}
-		q = q.Where(usersubscription.HasGroupWith(groupPredicates...))
+		// Subscription platform is materialized at purchase/assignment time.
+		// Filtering through the current group would misclassify historical rows
+		// after a group is edited or an expired row is switched to another group.
+		q = q.Where(usersubscription.PlatformEQ(platform))
 	}
 
 	// Status filtering with real-time expiration check
@@ -644,6 +658,10 @@ func userSubscriptionEntityToServiceWithStatusMapping(m *dbent.UserSubscription,
 		ID:                 m.ID,
 		UserID:             m.UserID,
 		GroupID:            m.GroupID,
+		Platform:           m.Platform,
+		PlanID:             m.PlanID,
+		PlanPrice:          m.PlanPrice,
+		PlanValidityDays:   m.PlanValidityDays,
 		StartsAt:           m.StartsAt,
 		ExpiresAt:          m.ExpiresAt,
 		Status:             status,

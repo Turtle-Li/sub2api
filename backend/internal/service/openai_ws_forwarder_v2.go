@@ -564,7 +564,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		imageCounter.AddSSEData(message)
 
 		if eventType == "response.failed" {
+			cyberHit := false
 			if hit, code, msg := detectOpenAICyberPolicy(message); hit {
+				cyberHit = true
 				MarkOpsCyberPolicy(c, CyberPolicyMark{
 					Code:           code,
 					Message:        msg,
@@ -573,6 +575,29 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 					UpstreamInTok:  usage.InputTokens,
 					UpstreamOutTok: usage.OutputTokens,
 				})
+			}
+			if !cyberHit {
+				failedMessage := extractOpenAISSEErrorMessage(message)
+				if !wroteDownstream && isOpenAIUpstreamCapacityShedEvent(message) {
+					lease.MarkBroken()
+					return nil, s.newOpenAIStreamFailoverError(
+						c,
+						account,
+						false,
+						lease.HandshakeHeader("x-request-id"),
+						message,
+						failedMessage,
+						lease.HandshakeHeaders(),
+					)
+				}
+				s.recordOpenAIStreamTerminalFailure(
+					c,
+					account,
+					false,
+					lease.HandshakeHeader("x-request-id"),
+					message,
+					failedMessage,
+				)
 			}
 		}
 

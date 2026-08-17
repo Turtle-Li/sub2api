@@ -187,6 +187,18 @@ func TestBackendModeAuthGuard(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			name:       "enabled_allows_desktop_device_start",
+			enabled:    "true",
+			path:       "/api/v1/auth/desktop/start",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "enabled_allows_desktop_device_token",
+			enabled:    "true",
+			path:       "/api/v1/auth/desktop/token",
+			wantStatus: http.StatusOK,
+		},
+		{
 			name:       "enabled_allows_logout",
 			enabled:    "true",
 			path:       "/api/v1/auth/logout",

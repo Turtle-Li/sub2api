@@ -88,7 +88,7 @@
 - **THEN** 页面 MUST 提供重新加载/对比入口，不得自动用旧草稿覆盖新配置
 
 ### Requirement: 页面必须展示真实运行态和同步 Guard 指标
-页面 SHALL 展示 process_status、Worker 总数/活动数、队列容量/长度、queued/processing/done/failed 数、处理/失败总数、最近时间、节点连通性、配置版本一致性、Redis Payload Store 状态和同步 Guard Allow/Flag/Block/Unavailable/timeout/failover/bulkhead 指标。
+页面 SHALL 展示 process_status、Worker 总数/活动数、队列容量/长度、queued/processing/done/failed 数、处理/失败总数、最近时间、节点连通性、跨容器共享的每节点熔断状态/下次恢复探测时间、配置版本一致性、Redis Payload Store 状态和同步 Guard Allow/Flag/Block/Unavailable/timeout/failover/bulkhead 指标。
 
 #### Scenario: 配置版本未同步
 - **WHEN** expected_config_version 与 active_config_version 不一致

@@ -227,6 +227,10 @@ func (s *SubscriptionService) assignOrExtendSubscription(ctx context.Context, in
 	if !group.IsSubscriptionType() {
 		return nil, false, ErrGroupNotSubscriptionType
 	}
+	platformSub, err := s.findUserPlatformSubscription(ctx, input.UserID, group.Platform)
+	if err != nil {
+		return nil, false, err
+	}
 
 	// 查询是否已有订阅
 	existingSub, err := s.userSubRepo.GetByUserIDAndGroupID(ctx, input.UserID, input.GroupID)
@@ -241,6 +245,23 @@ func (s *SubscriptionService) assignOrExtendSubscription(ctx context.Context, in
 	}
 	if validityDays > MaxValidityDays {
 		validityDays = MaxValidityDays
+	}
+	if platformSub != nil && platformSub.GroupID != input.GroupID {
+		if platformSub.ExpiresAt.After(s.subscriptionNow()) {
+			return nil, false, ErrSubscriptionAlreadyExists.WithMetadata(map[string]string{
+				"platform":       group.Platform,
+				"existing_group": strconv.FormatInt(platformSub.GroupID, 10),
+			})
+		}
+		replaced, replaceErr := s.replaceExpiredPlatformSubscription(ctx, platformSub, input, group.Platform, validityDays)
+		if replaceErr != nil {
+			return nil, false, replaceErr
+		}
+		if !deferCacheInvalidation {
+			s.maybeInvalidateAssignmentCaches(input.UserID, platformSub.GroupID, false)
+			s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, false)
+		}
+		return replaced, true, nil
 	}
 
 	// 已有订阅，执行续期（在事务中完成所有更新）
@@ -258,7 +279,7 @@ func (s *SubscriptionService) assignOrExtendSubscription(ctx context.Context, in
 	}
 
 	// 没有订阅，创建新订阅
-	sub, err := s.createSubscription(ctx, input)
+	sub, err := s.createSubscription(ctx, input, group.Platform)
 	if err != nil {
 		return nil, false, err
 	}
@@ -406,7 +427,7 @@ func appendSubscriptionNotes(existingNotes, newNotes string) string {
 }
 
 // createSubscription 创建新订阅（内部方法）
-func (s *SubscriptionService) createSubscription(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, error) {
+func (s *SubscriptionService) createSubscription(ctx context.Context, input *AssignSubscriptionInput, platform string) (*UserSubscription, error) {
 	validityDays := input.ValidityDays
 	if validityDays <= 0 {
 		validityDays = 30
@@ -424,6 +445,7 @@ func (s *SubscriptionService) createSubscription(ctx context.Context, input *Ass
 	sub := &UserSubscription{
 		UserID:     input.UserID,
 		GroupID:    input.GroupID,
+		Platform:   platform,
 		StartsAt:   now,
 		ExpiresAt:  expiresAt,
 		Status:     SubscriptionStatusActive,
@@ -510,6 +532,26 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 	if !group.IsSubscriptionType() {
 		return nil, false, ErrGroupNotSubscriptionType
 	}
+	platformSub, err := s.findUserPlatformSubscription(ctx, input.UserID, group.Platform)
+	if err != nil {
+		return nil, false, err
+	}
+	if platformSub != nil && platformSub.GroupID != input.GroupID && platformSub.ExpiresAt.After(s.subscriptionNow()) {
+		return nil, false, ErrSubscriptionAlreadyExists.WithMetadata(map[string]string{
+			"platform":       group.Platform,
+			"existing_group": strconv.FormatInt(platformSub.GroupID, 10),
+		})
+	}
+	if platformSub != nil && platformSub.GroupID != input.GroupID {
+		validityDays := normalizeAssignValidityDays(input.ValidityDays)
+		replaced, replaceErr := s.replaceExpiredPlatformSubscription(ctx, platformSub, input, group.Platform, validityDays)
+		if replaceErr != nil {
+			return nil, false, replaceErr
+		}
+		s.maybeInvalidateAssignmentCaches(input.UserID, platformSub.GroupID, false)
+		s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, false)
+		return replaced, true, nil
+	}
 
 	// 检查是否已存在订阅；若已存在，则按幂等成功返回现有订阅
 	exists, err := s.userSubRepo.ExistsByUserIDAndGroupID(ctx, input.UserID, input.GroupID)
@@ -540,7 +582,7 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 		return sub, true, nil
 	}
 
-	sub, err := s.createSubscription(ctx, input)
+	sub, err := s.createSubscription(ctx, input, group.Platform)
 	if err != nil {
 		return nil, false, err
 	}
@@ -557,6 +599,99 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 	}
 
 	return sub, false, nil
+}
+
+// findUserPlatformSubscription centralizes the application-level guard used
+// before the database partial unique index. The index remains authoritative
+// under races; this lookup makes ordinary admin/assignment errors actionable.
+func (s *SubscriptionService) findUserPlatformSubscription(ctx context.Context, userID int64, platform string) (*UserSubscription, error) {
+	platform = strings.TrimSpace(platform)
+	if platform == "" {
+		return nil, nil
+	}
+	subs, err := s.userSubRepo.ListByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range subs {
+		sub := &subs[i]
+		if strings.EqualFold(strings.TrimSpace(sub.Platform), platform) {
+			return sub, nil
+		}
+		if sub.Group != nil && strings.EqualFold(strings.TrimSpace(sub.Group.Platform), platform) {
+			return sub, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *SubscriptionService) subscriptionNow() time.Time {
+	if s != nil && s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// replaceExpiredPlatformSubscription reuses the single historical row for a
+// platform when an administrator assigns a different group after expiry. This
+// preserves the record while starting a clean term from the current time.
+func (s *SubscriptionService) replaceExpiredPlatformSubscription(
+	ctx context.Context,
+	existing *UserSubscription,
+	input *AssignSubscriptionInput,
+	platform string,
+	validityDays int,
+) (*UserSubscription, error) {
+	if existing == nil || input == nil {
+		return nil, ErrSubscriptionNotFound
+	}
+	err := s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
+		locked, err := s.userSubRepo.GetByIDForUpdate(txCtx, existing.ID)
+		if err != nil {
+			return fmt.Errorf("lock expired platform subscription: %w", err)
+		}
+		now := s.subscriptionNow()
+		if locked.ExpiresAt.After(now) {
+			return ErrSubscriptionAlreadyExists.WithMetadata(map[string]string{
+				"platform":       platform,
+				"existing_group": strconv.FormatInt(locked.GroupID, 10),
+			})
+		}
+		windowStart := now
+		updated := *locked
+		updated.GroupID = input.GroupID
+		updated.Platform = platform
+		updated.StartsAt = now
+		updated.ExpiresAt = now.AddDate(0, 0, validityDays)
+		if updated.ExpiresAt.After(MaxExpiresAt) {
+			updated.ExpiresAt = MaxExpiresAt
+		}
+		updated.Status = SubscriptionStatusActive
+		updated.DailyWindowStart = &windowStart
+		updated.WeeklyWindowStart = &windowStart
+		updated.MonthlyWindowStart = &windowStart
+		updated.DailyUsageUSD = 0
+		updated.WeeklyUsageUSD = 0
+		updated.MonthlyUsageUSD = 0
+		// An admin assignment has no catalog price. Do not let terms from the
+		// previous paid row influence a later upgrade quote.
+		updated.PlanID = nil
+		updated.PlanPrice = nil
+		updated.PlanValidityDays = nil
+		updated.AssignedAt = now
+		if input.AssignedBy > 0 {
+			assignedBy := input.AssignedBy
+			updated.AssignedBy = &assignedBy
+		} else {
+			updated.AssignedBy = nil
+		}
+		updated.Notes = appendSubscriptionNotes(locked.Notes, input.Notes)
+		return s.userSubRepo.Update(txCtx, &updated)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.userSubRepo.GetByID(ctx, existing.ID)
 }
 
 func detectAssignSemanticConflict(existing *UserSubscription, input *AssignSubscriptionInput) (string, bool) {
@@ -623,12 +758,28 @@ func (s *SubscriptionService) RestoreSubscription(ctx context.Context, subscript
 		return nil, ErrSubscriptionNotRevoked
 	}
 
-	exists, err := s.userSubRepo.ExistsActiveByUserIDAndGroupID(ctx, sub.UserID, sub.GroupID)
-	if err != nil {
-		return nil, err
+	platform := strings.TrimSpace(sub.Platform)
+	if platform == "" && sub.Group != nil {
+		platform = strings.TrimSpace(sub.Group.Platform)
 	}
-	if exists {
-		return nil, ErrSubscriptionRestoreConflict
+	if platform != "" {
+		live, err := s.findUserPlatformSubscription(ctx, sub.UserID, platform)
+		if err != nil {
+			return nil, err
+		}
+		if live != nil && live.ID != sub.ID {
+			return nil, ErrSubscriptionRestoreConflict
+		}
+	} else {
+		// Legacy rows without a materialized platform retain the former
+		// group-level check until migration 196 has backfilled their platform.
+		exists, err := s.userSubRepo.ExistsActiveByUserIDAndGroupID(ctx, sub.UserID, sub.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, ErrSubscriptionRestoreConflict
+		}
 	}
 
 	restoredStatus := sub.Status
@@ -664,11 +815,24 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 	}
 
 	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
 	isExpired := !sub.ExpiresAt.After(now)
 
-	// 如果订阅已过期，不允许负向调整
-	if isExpired && days < 0 {
+	// 已过期订阅的调整是重新订阅：从当前时间起算并重置用量窗口。
+	// 暂停状态保留原有的“只调整期限、不自动恢复”语义。
+	if isExpired && sub.Status != SubscriptionStatusSuspended && days <= 0 {
 		return nil, infraerrors.BadRequest("CANNOT_SHORTEN_EXPIRED", "cannot shorten an expired subscription")
+	}
+	if isExpired && sub.Status != SubscriptionStatusSuspended {
+		if err := s.updateExistingSubscriptionTerm(ctx, sub.ID, days, "", true); err != nil {
+			return nil, err
+		}
+		if err := s.invalidateSubscriptionCaches(sub.UserID, sub.GroupID); err != nil {
+			return nil, err
+		}
+		return s.userSubRepo.GetByID(ctx, subscriptionID)
 	}
 
 	// 计算新的过期时间

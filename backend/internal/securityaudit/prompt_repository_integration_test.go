@@ -295,6 +295,39 @@ func TestPromptAuditRepositoryAdmissionClaimFencingAndEventTransaction(t *testin
 	require.Equal(t, "failed", status)
 }
 
+func TestPromptAuditRepositoryReleaseUnstartedRestoresAttemptBudget(t *testing.T) {
+	db := openPromptAuditIntegrationDB(t)
+	repo := NewPostgreSQLRepository(db)
+	ctx := context.Background()
+	job, err := repo.CreateStagingWithCapacity(ctx, integrationSnapshot("release-unstarted"), 1, 1, 8)
+	require.NoError(t, err)
+	require.NoError(t, repo.PublishQueued(ctx, job.ID))
+
+	claimedAt := time.Now().UTC()
+	claimed, ok, err := repo.ClaimNextJob(ctx, claimedAt)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1, claimed.Attempts)
+	require.Equal(t, int64(1), claimed.ClaimVersion)
+
+	releaseAt := claimedAt.Add(time.Second)
+	require.NoError(t, repo.ReleaseUnstarted(ctx, claimed.ID, claimed.ClaimVersion, releaseAt))
+	var status string
+	var attempts int
+	var processingStartedAt *time.Time
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT status, attempts, processing_started_at FROM prompt_audit_jobs WHERE id=$1`, claimed.ID).Scan(&status, &attempts, &processingStartedAt))
+	require.Equal(t, "queued", status)
+	require.Zero(t, attempts)
+	require.Nil(t, processingStartedAt)
+	require.ErrorIs(t, repo.ReleaseUnstarted(ctx, claimed.ID, claimed.ClaimVersion, releaseAt), ErrLeaseLost)
+
+	reclaimed, ok, err := repo.ClaimNextJob(ctx, releaseAt.Add(time.Second))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1, reclaimed.Attempts)
+	require.Greater(t, reclaimed.ClaimVersion, claimed.ClaimVersion)
+}
+
 func TestPromptAuditRepositoryForeignKeysFiltersAndStableIdentitySnapshots(t *testing.T) {
 	db := openPromptAuditIntegrationDB(t)
 	repo := NewPostgreSQLRepository(db)

@@ -355,6 +355,24 @@ export async function getPublicSettings(): Promise<PublicSettings> {
   return data
 }
 
+export interface DesktopAuthorizationApprovalResponse {
+  status: 'approved' | 'expired'
+}
+
+/**
+ * Confirms a TT Switch device authorization for the currently authenticated
+ * browser account. The device code and its PKCE verifier never leave TT Switch.
+ */
+export async function approveDesktopAuthorization(
+  userCode: string,
+): Promise<DesktopAuthorizationApprovalResponse> {
+  const { data } = await apiClient.post<DesktopAuthorizationApprovalResponse>(
+    '/auth/desktop/approve',
+    { user_code: userCode.trim().toUpperCase() },
+  )
+  return data
+}
+
 export type WeChatOAuthMode = 'open' | 'mp'
 export type WeChatOAuthUnavailableReason =
   | 'not_configured'
@@ -694,6 +712,7 @@ export const authAPI = {
   getTokenExpiresAt,
   clearAuthToken,
   getPublicSettings,
+  approveDesktopAuthorization,
   sendVerifyCode,
   sendPendingOAuthVerifyCode,
   validatePromoCode,

@@ -23,27 +23,45 @@
         </p>
       </div>
 
-      <!-- Subscriptions Grid -->
-      <div v-else class="grid gap-6 lg:grid-cols-2">
+      <!-- Platform selector and subscriptions -->
+      <div v-else class="space-y-4">
+        <div v-if="subscriptionPlatformOptions.length > 1" class="flex max-w-full overflow-x-auto rounded-xl border border-gray-200 bg-gray-50 p-1 dark:border-dark-700 dark:bg-dark-800">
+          <button
+            v-for="platform in subscriptionPlatformOptions"
+            :key="platform.key"
+            type="button"
+            :aria-pressed="selectedSubscriptionPlatform === platform.key"
+            class="shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition-all focus:outline-none focus:ring-2 focus:ring-primary-500/40"
+            :class="selectedSubscriptionPlatform === platform.key ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+            @click="selectedSubscriptionPlatform = platform.key"
+          >
+            {{ platform.label }}
+          </button>
+        </div>
+        <div v-if="visibleSubscriptions.length === 0" class="card p-8 text-center text-sm text-gray-500 dark:text-dark-400">
+          {{ t('userSubscriptions.noPlatformSubscriptions') }}
+        </div>
+        <!-- Subscriptions Grid -->
+        <div v-else class="grid gap-6 lg:grid-cols-2">
         <div
-          v-for="subscription in subscriptions"
+          v-for="subscription in visibleSubscriptions"
           :key="subscription.id"
           class="overflow-hidden rounded-2xl border bg-white dark:bg-dark-800"
-          :class="platformBorderClass(subscription.group?.platform || '')"
+          :class="platformBorderClass(subscriptionPlatform(subscription))"
         >
           <!-- Header -->
           <div
             class="flex items-center justify-between border-b border-gray-100 p-4 dark:border-dark-700"
           >
             <div class="flex items-center gap-3">
-              <div :class="['h-1.5 w-1.5 shrink-0 rounded-full', platformAccentDotClass(subscription.group?.platform || '')]" />
+              <div :class="['h-1.5 w-1.5 shrink-0 rounded-full', platformAccentDotClass(subscriptionPlatform(subscription))]" />
               <div>
                 <div class="flex items-center gap-2">
                   <h3 class="font-semibold text-gray-900 dark:text-white">
                     {{ subscription.group?.name || `Group #${subscription.group_id}` }}
                   </h3>
-                  <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', platformBadgeClass(subscription.group?.platform || '')]">
-                    {{ platformLabel(subscription.group?.platform || '') }}
+                  <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', platformBadgeClass(subscriptionPlatform(subscription))]">
+                    {{ platformLabel(subscriptionPlatform(subscription)) }}
                   </span>
                 </div>
                 <p v-if="subscription.group?.description" class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">
@@ -71,11 +89,11 @@
                 {{ t(`userSubscriptions.status.${subscription.status}`) }}
               </span>
               <button
-                v-if="subscription.status === 'active'"
-                :class="['rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors', platformButtonClass(subscription.group?.platform || '')]"
+                v-if="subscription.status === 'active' || subscription.status === 'expired'"
+                :class="['rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors', platformButtonClass(subscriptionPlatform(subscription))]"
                 @click="router.push({ path: '/purchase', query: { tab: 'subscription', group: String(subscription.group_id) } })"
               >
-                {{ t('payment.renewNow') }}
+                {{ subscription.status === 'active' ? t('userSubscriptions.renew') : t('userSubscriptions.resubscribe') }}
               </button>
             </div>
           </div>
@@ -133,15 +151,25 @@
                     {{ t('userSubscriptions.noResetCards') }}
                   </p>
                 </div>
-                <button
-                  v-if="subscription.status === 'active'"
-                  type="button"
-                  class="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="!subscription.reset_card_count || usingResetCardId === subscription.id"
-                  @click="requestUseResetCard(subscription)"
-                >
-                  {{ usingResetCardId === subscription.id ? t('common.processing') : t('userSubscriptions.useResetCard') }}
-                </button>
+                <div class="flex shrink-0 flex-wrap justify-end gap-2">
+                  <button
+                    v-if="subscription.status === 'active' && subscription.plan_price && subscription.plan_price > 0"
+                    type="button"
+                    class="rounded-lg border border-amber-600 px-3 py-1.5 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                    @click="router.push({ path: '/purchase', query: { tab: 'subscription', reset_subscription_id: String(subscription.id) } })"
+                  >
+                    {{ t('userSubscriptions.buyResetCards') }}
+                  </button>
+                  <button
+                    v-if="subscription.status === 'active'"
+                    type="button"
+                    class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!subscription.reset_card_count || usingResetCardId === subscription.id"
+                    @click="requestUseResetCard(subscription)"
+                  >
+                    {{ usingResetCardId === subscription.id ? t('common.processing') : t('userSubscriptions.useResetCard') }}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -287,6 +315,7 @@
             </div>
           </div>
         </div>
+        </div>
       </div>
 
       <ConfirmDialog
@@ -302,7 +331,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
@@ -328,6 +357,8 @@ function platformAccentDotClass(p: string): string {
     case 'openai': return 'bg-emerald-500'
     case 'antigravity': return 'bg-purple-500'
     case 'gemini': return 'bg-blue-500'
+    case 'grok': return 'bg-zinc-700'
+    case 'composite': return 'bg-cyan-500'
     default: return 'bg-gray-400'
   }
 }
@@ -338,10 +369,27 @@ const appStore = useAppStore()
 
 const subscriptions = ref<UserSubscription[]>([])
 const loading = ref(true)
+const selectedSubscriptionPlatform = ref('')
 const showUseResetCardConfirm = ref(false)
 const resetCardSubscription = ref<UserSubscription | null>(null)
 const usingResetCardId = ref<number | null>(null)
 let useResetCardOperationKey: string | null = null
+
+function subscriptionPlatform(subscription: UserSubscription): string {
+  return subscription.platform || subscription.group?.platform || ''
+}
+
+const subscriptionPlatformOptions = computed(() => {
+  const platforms = [...new Set(subscriptions.value.map(subscriptionPlatform).filter(Boolean))]
+  return [
+    { key: '', label: t('payment.allPlatforms') },
+    ...platforms.map(key => ({ key, label: platformLabel(key) })),
+  ]
+})
+
+const visibleSubscriptions = computed(() => subscriptions.value.filter((subscription) => {
+  return !selectedSubscriptionPlatform.value || subscriptionPlatform(subscription) === selectedSubscriptionPlatform.value
+}))
 
 function subscriptionHasPeakRate(subscription: UserSubscription): boolean {
   return hasPeakRate(subscription.group)
@@ -355,6 +403,9 @@ async function loadSubscriptions() {
   try {
     loading.value = true
     subscriptions.value = await subscriptionsAPI.getMySubscriptions()
+    if (!subscriptionPlatformOptions.value.some(option => option.key === selectedSubscriptionPlatform.value)) {
+      selectedSubscriptionPlatform.value = ''
+    }
   } catch (error) {
     console.error('Failed to load subscriptions:', error)
     appStore.showError(t('userSubscriptions.failedToLoad'))

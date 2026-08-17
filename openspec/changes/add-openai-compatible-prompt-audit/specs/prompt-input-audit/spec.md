@@ -14,7 +14,7 @@
 - **THEN** 提示词审计命中 MUST NOT 自动触发现有内容审核的邮件、封号或 Hash 黑名单副作用
 
 ### Requirement: 提示词审计节点必须使用 OpenAI 兼容协议
-系统 SHALL 仅支持通过 OpenAI 兼容 Chat Completions 接口调用提示词审计节点。节点配置 MUST 支持名称、Base URL、API Key、Model、超时、单片输入上限、启用状态和有序优先级；默认模型 MUST 为 `sileader/qwen3guard:0.6b`。
+系统 SHALL 仅支持通过 OpenAI 兼容 Chat Completions 接口调用提示词审计节点。节点配置 MUST 支持名称、Base URL、API Key、Model、超时、单片输入上限、启用状态和有序优先级；默认模型 MUST 为 `sileader/qwen3guard:0.6b`，单个配置最多允许 64 个节点。
 
 #### Scenario: Worker 调用已配置节点
 - **WHEN** Worker 领取到可处理任务并选择一个启用节点
@@ -25,6 +25,10 @@
 #### Scenario: 管理员保存未填写模型的节点
 - **WHEN** 管理员保存一个 Base URL 有效但 Model 为空的节点
 - **THEN** 系统 MUST 将节点模型归一为 `sileader/qwen3guard:0.6b`
+
+#### Scenario: 管理员保存过多节点
+- **WHEN** 管理员提交超过 64 个 Guard 节点的配置
+- **THEN** 系统 MUST 拒绝保存并返回稳定错误码 `prompt_audit_too_many_endpoints`
 
 #### Scenario: 管理员探测节点
 - **WHEN** 管理员请求探测一个节点
@@ -147,6 +151,42 @@
 - **WHEN** 数据库、Redis、配置或加密依赖导致 Worker 无法启动
 - **THEN** 主 API MUST 继续提供非提示词审计能力
 - **THEN** 运行态 MUST 显示 error/degraded 和稳定错误码，而不是显示健康
+
+### Requirement: 异步审计必须在 Guard 故障时停止调度并由后台恢复探测解除
+系统 SHALL 保留进程内熔断器作为同步请求的快速 fail-closed 保护，并以 Redis 共享、租约化的熔断状态协调所有消费同一异步队列的 active 或 draining 应用容器；该状态只允许保存哈希后的节点代际和运行态，不得包含提示词、节点 URL 或凭据。节点代际 MUST 随节点目标、模型、超时、输入上限或凭据轮换变化，但不得因队列容量、分组范围等无关配置版本变化而重置。单节点在 30 秒窗口内连续 3 次模型不可用、认证/协议失败或无效响应后 MUST 熔断 30 秒。所有启用节点均熔断时，异步 Worker MUST 停止领取新任务，保留已排队任务并不得继续调用 Guard；主模型请求仍 MUST 按异步模式原样继续。Redis 共享状态不可用时，异步 Worker MUST 保守停止调度并暴露 degraded/runtime 错误，且不得把该错误同步传播给主模型请求。恢复只能由后台定时探测发起，探测必须有界且在全部容器间至多持有一个租约，成功后才重新允许调度。共享冷却和租约时间 MUST 由 Redis 服务端时间计算，不得依赖容器时钟；本地开路事件的首次共享发布失败时，后台 MUST 以原剩余冷却时间重试发布。共享 closed 标记只有在可证明对应同一或更新开路 fence 的成功探测后，才可以清除本地开路状态。
+
+#### Scenario: 异步 Guard 全部熔断
+- **WHEN** 所有启用 Guard 节点都处于熔断或恢复探测中
+- **THEN** Worker MUST 不领取新的 queued/retry 任务且 MUST 不发起新的 Guard 调用
+- **THEN** 主模型请求 MUST 不因该状态失败、等待或改变响应
+
+#### Scenario: 后台探测恢复节点
+- **WHEN** 节点熔断冷却期结束
+- **THEN** 仅持有共享恢复租约的后台探测 MAY 发送一条有界的 Guard 请求
+- **THEN** 探测成功后 Worker MAY 恢复领取任务；失败后节点 MUST 保持熔断并等待下一轮探测
+
+#### Scenario: 无关配置保存
+- **WHEN** 节点仍为同一代际，仅更新队列容量、审计分组或其他无关配置
+- **THEN** 已熔断节点 MUST 保持隔离，且不得因 config_version 变化重新允许 Guard 调用
+
+#### Scenario: 临时禁用后重新启用相同节点
+- **WHEN** 已熔断节点被临时禁用，随后以相同目标、模型、超时、输入上限和凭据重新启用
+- **THEN** 系统 MUST 保持其隔离状态，且只能由后台恢复探测重新允许 Guard 调用
+
+#### Scenario: 开路与领取竞态
+- **WHEN** Worker 通过首次调度检查后，另一个请求或容器在其领取任务前打开全部节点熔断
+- **THEN** Worker MUST 重新检查共享状态并释放未开始的 processing claim
+- **THEN** 该任务 MUST 保持可排队状态且不得消耗一次模型调用重试次数
+
+#### Scenario: 共享发布短暂失败
+- **WHEN** 同步请求打开本地熔断但 Redis 发布暂时失败
+- **THEN** 该请求 MUST 保持既有 fail-closed 延迟边界，不得等待 Redis
+- **THEN** 后台 MUST 在 Redis 恢复后发布本地事件的剩余冷却时间，其他 Worker 在此之前不得因缺少共享记录恢复调度
+
+#### Scenario: 旧恢复标记
+- **WHEN** Redis 中存在早于本地新失败的 closed 标记
+- **THEN** 系统 MUST 保持本地开路并覆盖或重建共享隔离状态
+- **THEN** 只有带有同一或更新 fence 的成功后台探测才可以恢复本地节点
 
 ### Requirement: Qwen3Guard 返回必须被严格归一化
 系统 SHALL 严格解析单一 `Safety` 行和单一 `Categories` 行，并支持 Violent、Non-violent Illegal Acts、Sexual Content or Sexual Acts、PII、Suicide & Self-Harm、Unethical Acts、Politically Sensitive Topics、Copyright Violation、Jailbreak 九类输入风险。额外非空说明、重复字段、未知 Safety 或无法解析响应 MUST 视为 invalid_response。

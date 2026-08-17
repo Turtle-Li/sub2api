@@ -170,6 +170,7 @@ func ProvideAdminSettingHandler(settingService *service.SettingService, emailSer
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
 	authHandler *AuthHandler,
+	desktopAuthHandler *DesktopAuthHandler,
 	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
 	usageHandler *UsageHandler,
@@ -194,6 +195,7 @@ func ProvideHandlers(
 ) *Handlers {
 	return &Handlers{
 		Auth:             authHandler,
+		DesktopAuth:      desktopAuthHandler,
 		User:             userHandler,
 		APIKey:           apiKeyHandler,
 		Usage:            usageHandler,
@@ -220,6 +222,7 @@ func ProvideHandlers(
 var ProviderSet = wire.NewSet(
 	// Top-level handlers
 	NewAuthHandler,
+	NewDesktopAuthHandler,
 	NewUserHandler,
 	NewAPIKeyHandler,
 	NewUsageHandler,

@@ -377,6 +377,44 @@ func TestLogOpsStreamError_UpstreamFailureCountsTowardsSLA(t *testing.T) {
 	require.Contains(t, job.entry.ErrorBody, service.OpenAIUpstreamHTTP2StreamErrorCode)
 }
 
+func TestOpsErrorLoggerMiddleware_UpstreamContextFinalStreamFailureUsesLogicalStatus(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+	gin.SetMode(gin.TestMode)
+
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.POST("/v1/responses", func(c *gin.Context) {
+		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Please retry later.", "")
+		service.MarkOpsStreamFailure(
+			c,
+			"upstream_error",
+			"server_is_overloaded",
+			"Please retry later.",
+			http.StatusServiceUnavailable,
+		)
+		c.Header("Content-Type", "text/event-stream")
+		c.Status(http.StatusOK)
+		_, _ = c.Writer.WriteString("event: response.failed\ndata: {}\n\n")
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, "wire status remains committed as 200")
+	require.Equal(t, int64(1), OpsErrorLogEnqueuedTotal())
+	job := <-opsErrorLogQueue
+	require.NotNil(t, job.entry)
+	require.Equal(t, http.StatusServiceUnavailable, job.entry.StatusCode, "logical status makes the final stream failure visible to error lists and SLA metrics")
+	require.Equal(t, http.StatusServiceUnavailable, *job.entry.UpstreamStatusCode)
+	require.Equal(t, "upstream_error", job.entry.ErrorType)
+	require.Equal(t, "upstream", job.entry.ErrorPhase)
+	require.Equal(t, "provider", job.entry.ErrorOwner)
+	require.Equal(t, "Please retry later.", job.entry.ErrorMessage)
+	require.False(t, job.entry.IsBusinessLimited)
+}
+
 // 未标记流内错误时 logOpsStreamError 必须是 no-op（不误记正常的 200 流）。
 func TestLogOpsStreamError_NoopWhenNotMarked(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 4)

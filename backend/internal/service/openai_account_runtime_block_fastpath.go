@@ -72,6 +72,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s == nil || account == nil {
 		return false
 	}
+	capacityShed := account.Platform == PlatformOpenAI && isOpenAICapacityShedError(statusCode, "", responseBody)
 	stateCtx = withTempUnschedulableModel(stateCtx, canonicalModel)
 	if s.rateLimitService != nil && len(canonicalModel) > 0 && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel[0], statusCode, responseBody) {
 		return true
@@ -79,7 +80,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	// Isolate a custom temporary-unschedulable match to the known upstream
 	// model before entering the generic account error path. This keeps the
 	// account available to other models and avoids the account runtime blocker.
-	if s.rateLimitService != nil && statusCode != http.StatusUnauthorized && len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
+	if s.rateLimitService != nil && !capacityShed && statusCode != http.StatusUnauthorized && len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
 		s.rateLimitService.HandleTempUnschedulable(stateCtx, account, statusCode, responseBody, canonicalModel[0]) {
 		return true
 	}
@@ -89,7 +90,14 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s.rateLimitService == nil {
 		return false
 	}
-	shouldDisable := s.rateLimitService.HandleUpstreamError(stateCtx, account, statusCode, headers, responseBody)
+	// Capacity signals are retryable at request scope. In particular, do not
+	// let the generic 529 handler persist a cooldown before this request has
+	// used its bounded same-account retries. The capacity-shed tracker persists
+	// the configured cooldown only after repeated logical failures.
+	shouldDisable := false
+	if !capacityShed {
+		shouldDisable = s.rateLimitService.HandleUpstreamError(stateCtx, account, statusCode, headers, responseBody)
+	}
 	modelTempMatched := statusCode != http.StatusUnauthorized && tempUnschedulableModel(stateCtx, nil) != "" &&
 		len(matchTempUnschedulableRules(account, statusCode, responseBody)) > 0
 	if shouldDisable && !modelTempMatched {
@@ -100,7 +108,8 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	// cooldown here would block the next approved retry before that budget is used.
 	poolModeRetryable := account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode)
 	if !shouldDisable && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey &&
-		shouldCooldownOpenAITransientUpstreamError(statusCode, responseBody) && !poolModeRetryable {
+		shouldCooldownOpenAITransientUpstreamError(statusCode, responseBody) && !poolModeRetryable &&
+		!capacityShed {
 		model := ""
 		if len(canonicalModel) > 0 {
 			model = canonicalModel[0]

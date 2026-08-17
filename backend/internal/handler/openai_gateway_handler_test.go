@@ -97,6 +97,24 @@ func TestOpenAIHandleStreamingAwareError_JSONEscaping(t *testing.T) {
 	}
 }
 
+func TestOpenAIFailoverExhaustionCommittedStreamCountsAsLogicalFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	(&OpenAIGatewayHandler{}).handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusBadGateway,
+		ResponseBody: []byte(`{"error":{"message":"Please retry later."}}`),
+	}, true)
+
+	streamErr, ok := service.GetOpsStreamError(c)
+	require.True(t, ok)
+	require.True(t, streamErr.CountTowardsSLA)
+	require.Equal(t, http.StatusBadGateway, streamErr.IntendedStatus)
+	require.Contains(t, recorder.Body.String(), "response.failed")
+}
+
 func TestOpenAIHandleStreamingAwareErrorWithCode_EmitsStableClassification(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

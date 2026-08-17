@@ -103,6 +103,15 @@ func (s *subscriptionGroupRepoStub) GetByID(context.Context, int64) (*Group, err
 	return s.group, nil
 }
 
+type subscriptionGroupsByIDStub struct {
+	groupRepoNoop
+	groups map[int64]*Group
+}
+
+func (s *subscriptionGroupsByIDStub) GetByID(_ context.Context, id int64) (*Group, error) {
+	return s.groups[id], nil
+}
+
 type userSubRepoNoop struct{}
 
 func (userSubRepoNoop) Create(context.Context, *UserSubscription) error {
@@ -225,6 +234,17 @@ func (s *subscriptionUserSubRepoStub) GetByUserIDAndGroupID(_ context.Context, u
 	}
 	cp := *sub
 	return &cp, nil
+}
+
+func (s *subscriptionUserSubRepoStub) ListByUserID(_ context.Context, userID int64) ([]UserSubscription, error) {
+	result := make([]UserSubscription, 0, len(s.byID))
+	for _, subscription := range s.byID {
+		if subscription.UserID != userID {
+			continue
+		}
+		result = append(result, *subscription)
+	}
+	return result, nil
 }
 
 func (s *subscriptionUserSubRepoStub) Create(_ context.Context, sub *UserSubscription) error {
@@ -459,6 +479,68 @@ func TestAssignSubscriptionRenewsExpiredAndAppendsDifferentNotes(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "old assignment\nnew assignment", sub.Notes)
+}
+
+func TestAssignSubscriptionReusesExpiredPlatformRowForAnotherGroup(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	oldPlanID := int64(12)
+	oldPlanPrice := 30.0
+	oldPlanDays := 30
+	oldWindow := now.AddDate(0, 0, -40)
+	groupRepo := &subscriptionGroupsByIDStub{groups: map[int64]*Group{
+		10: {ID: 10, Platform: "openai", SubscriptionType: SubscriptionTypeSubscription},
+		20: {ID: 20, Platform: "openai", SubscriptionType: SubscriptionTypeSubscription},
+	}}
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:                 101,
+		UserID:             2001,
+		GroupID:            10,
+		Platform:           "openai",
+		PlanID:             &oldPlanID,
+		PlanPrice:          &oldPlanPrice,
+		PlanValidityDays:   &oldPlanDays,
+		StartsAt:           now.AddDate(0, 0, -70),
+		ExpiresAt:          now.AddDate(0, 0, -40),
+		Status:             SubscriptionStatusExpired,
+		DailyWindowStart:   &oldWindow,
+		WeeklyWindowStart:  &oldWindow,
+		MonthlyWindowStart: &oldWindow,
+		DailyUsageUSD:      1,
+		WeeklyUsageUSD:     2,
+		MonthlyUsageUSD:    3,
+		Notes:              "old assignment",
+	})
+
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
+	svc.now = func() time.Time { return now }
+
+	subscription, err := svc.AssignSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       2001,
+		GroupID:      20,
+		ValidityDays: 14,
+		AssignedBy:   8,
+		Notes:        "new assignment",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(101), subscription.ID)
+	require.Equal(t, int64(20), subscription.GroupID)
+	require.Equal(t, "openai", subscription.Platform)
+	require.Equal(t, SubscriptionStatusActive, subscription.Status)
+	require.Equal(t, now, subscription.StartsAt)
+	require.Equal(t, now.AddDate(0, 0, 14), subscription.ExpiresAt)
+	require.Equal(t, now, *subscription.DailyWindowStart)
+	require.Equal(t, now, *subscription.WeeklyWindowStart)
+	require.Equal(t, now, *subscription.MonthlyWindowStart)
+	require.Zero(t, subscription.DailyUsageUSD)
+	require.Zero(t, subscription.WeeklyUsageUSD)
+	require.Zero(t, subscription.MonthlyUsageUSD)
+	require.Nil(t, subscription.PlanID)
+	require.Nil(t, subscription.PlanPrice)
+	require.Nil(t, subscription.PlanValidityDays)
+	require.Equal(t, "old assignment\nnew assignment", subscription.Notes)
+	require.Equal(t, 0, subRepo.createCalls)
 }
 
 func TestAssignSubscriptionConflictWhenSemanticsMismatch(t *testing.T) {

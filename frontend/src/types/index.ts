@@ -1930,6 +1930,10 @@ export interface UserSubscription {
   id: number
   user_id: number
   group_id: number
+  platform?: string
+  plan_id?: number | null
+  plan_price?: number | null
+  plan_validity_days?: number | null
   status: 'active' | 'expired' | 'revoked' | 'suspended'
   starts_at: string
   daily_usage_usd: number

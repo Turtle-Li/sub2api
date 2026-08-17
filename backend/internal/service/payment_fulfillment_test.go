@@ -7,11 +7,14 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
+	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -611,7 +614,7 @@ func TestAlreadyProcessedRecoversStaleRechargingLease(t *testing.T) {
 		ctx,
 		client,
 		OrderStatusRecharging,
-		time.Now().Add(-paymentFulfillmentLeaseDuration-time.Minute),
+		time.Now().UTC().Add(-paymentFulfillmentLeaseDuration-time.Minute),
 	)
 	_, err := client.PaymentAuditLog.Create().
 		SetOrderID(strconv.FormatInt(order.ID, 10)).
@@ -639,7 +642,7 @@ func TestAlreadyProcessedRecoversStaleRechargingLease(t *testing.T) {
 func TestFulfillmentLeaseVersionRejectsStaleWorker(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
-	staleAt := time.Now().Add(-paymentFulfillmentLeaseDuration - time.Minute)
+	staleAt := time.Now().UTC().Add(-paymentFulfillmentLeaseDuration - time.Minute)
 	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusRecharging, staleAt)
 	svc := &PaymentService{entClient: client}
 
@@ -672,7 +675,7 @@ func TestExecuteBalanceFulfillmentRecoversAfterRedeemWithoutCreditingAgain(t *te
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
-	staleAt := time.Now().Add(-paymentFulfillmentLeaseDuration - time.Minute)
+	staleAt := time.Now().UTC().Add(-paymentFulfillmentLeaseDuration - time.Minute)
 	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusRecharging, staleAt)
 	order, err := client.PaymentOrder.UpdateOneID(order.ID).
 		SetOrderType(payment.OrderTypeBalance).
@@ -683,7 +686,7 @@ func TestExecuteBalanceFulfillmentRecoversAfterRedeemWithoutCreditingAgain(t *te
 		Save(ctx)
 	require.NoError(t, err)
 
-	redeemRepo := &redeemCodeRepoStub{codesByCode: map[string]*RedeemCode{
+	redeemRepo := &paymentOrderLifecycleRedeemRepo{codesByCode: map[string]*RedeemCode{
 		order.RechargeCode: {
 			ID:     101,
 			Code:   order.RechargeCode,
@@ -716,7 +719,7 @@ func TestDuplicatePaymentNotificationDoesNotReprocessCompletedBalanceOrder(t *te
 		Save(ctx)
 	require.NoError(t, err)
 
-	redeemRepo := &redeemCodeRepoStub{codesByCode: map[string]*RedeemCode{
+	redeemRepo := &paymentOrderLifecycleRedeemRepo{codesByCode: map[string]*RedeemCode{
 		order.RechargeCode: {
 			ID:     102,
 			Code:   order.RechargeCode,
@@ -770,11 +773,488 @@ func TestPaymentNotificationRejectsAmountMismatchBeforeFulfillment(t *testing.T)
 	require.Equal(t, OrderStatusPending, reloaded.Status)
 }
 
+func TestConcurrentDuplicateAlipayNotificationsCreditLocalUserExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPending, time.Now())
+	order, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetOrderType(payment.OrderTypeBalance).
+		ClearPlanID().
+		ClearSubscriptionGroupID().
+		ClearSubscriptionDays().
+		Save(ctx)
+	require.NoError(t, err)
+
+	localUser := &User{ID: order.UserID, Email: order.UserEmail, Username: order.UserName}
+	userRepo := &mockUserRepo{getByIDUser: localUser}
+	userRepo.updateBalanceFn = func(_ context.Context, userID int64, amount float64) error {
+		require.Equal(t, order.UserID, userID)
+		localUser.Balance += amount
+		return nil
+	}
+	redeemRepo := &paymentOrderLifecycleRedeemRepo{codesByCode: map[string]*RedeemCode{
+		order.RechargeCode: {
+			ID: 201, Code: order.RechargeCode, Type: RedeemTypeBalance, Value: order.Amount, Status: StatusUnused,
+		},
+	}}
+	svc := &PaymentService{
+		entClient:     client,
+		redeemService: NewRedeemService(redeemRepo, userRepo, nil, nil, nil, client, nil, nil),
+	}
+	notification := &payment.PaymentNotification{
+		TradeNo: "alipay-local-concurrent-201", OrderID: order.OutTradeNo, Amount: order.PayAmount, Status: payment.NotificationStatusSuccess,
+	}
+
+	const callbacks = 6
+	start := make(chan struct{})
+	errs := make(chan error, callbacks)
+	var workers sync.WaitGroup
+	for i := 0; i < callbacks; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			errs <- svc.HandlePaymentNotification(ctx, notification, payment.TypeAlipay)
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(errs)
+
+	// A concurrently losing callback can legitimately receive a conflict and be
+	// retried by Alipay. Replay once after the burst to model that retry and make
+	// sure the final state is terminal rather than leaving a local test account
+	// in a pending/recharging state.
+	for callbackErr := range errs {
+		if callbackErr != nil {
+			require.True(t,
+				infraerrors.Reason(callbackErr) == "CONFLICT" || strings.Contains(strings.ToLower(callbackErr.Error()), "database is locked"),
+				"unexpected concurrent callback error: %v", callbackErr,
+			)
+		}
+	}
+	require.NoError(t, svc.HandlePaymentNotification(ctx, notification, payment.TypeAlipay))
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+	require.Len(t, redeemRepo.useCalls, 1, "concurrent callbacks must redeem one and only one order code")
+	require.Equal(t, order.Amount, localUser.Balance, "the local test user must receive the balance exactly once")
+}
+
+func TestExpiryAndLatePaymentCallbacksHaveNoLossOrDoubleCredit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPending, time.Now())
+	order, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetOrderType(payment.OrderTypeBalance).
+		ClearPlanID().
+		ClearSubscriptionGroupID().
+		ClearSubscriptionDays().
+		SetPaymentTradeNo("alipay-local-expiry-301").
+		SetExpiresAt(time.Now().Add(-time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	provider := &paymentOrderLifecycleQueryProvider{resp: &payment.QueryOrderResponse{Status: payment.ProviderStatusPending}}
+	registry := payment.NewRegistry()
+	registry.Register(provider)
+	svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true}
+
+	expired, err := svc.ExpireTimedOutOrders(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, expired)
+	require.Equal(t, 1, provider.cancelCalls, "an unpaid upstream Alipay order must be closed on timeout")
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusExpired, reloaded.Status)
+
+	localUser := &User{ID: order.UserID, Email: order.UserEmail, Username: order.UserName}
+	userRepo := &mockUserRepo{getByIDUser: localUser}
+	userRepo.updateBalanceFn = func(_ context.Context, userID int64, amount float64) error {
+		require.Equal(t, order.UserID, userID)
+		localUser.Balance += amount
+		return nil
+	}
+	redeemRepo := &paymentOrderLifecycleRedeemRepo{codesByCode: map[string]*RedeemCode{
+		order.RechargeCode: {
+			ID: 301, Code: order.RechargeCode, Type: RedeemTypeBalance, Value: order.Amount, Status: StatusUnused,
+		},
+	}}
+	svc.redeemService = NewRedeemService(redeemRepo, userRepo, nil, nil, nil, client, nil, nil)
+	lateNotification := &payment.PaymentNotification{
+		TradeNo: "alipay-local-late-301", OrderID: order.OutTradeNo, Amount: order.PayAmount, Status: payment.NotificationStatusSuccess,
+	}
+	require.NoError(t, svc.HandlePaymentNotification(ctx, lateNotification, payment.TypeAlipay))
+
+	reloaded, err = client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status, "a paid callback in the expiry grace window must be recovered")
+	require.Len(t, redeemRepo.useCalls, 1)
+	require.Equal(t, order.Amount, localUser.Balance)
+	recoveredCount, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("ORDER_RECOVERED")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, recoveredCount)
+
+	tooLate, err := client.PaymentOrder.Create().
+		SetUserID(order.UserID).
+		SetUserEmail(order.UserEmail).
+		SetUserName(order.UserName).
+		SetAmount(order.Amount).
+		SetPayAmount(order.PayAmount).
+		SetFeeRate(0).
+		SetRechargeCode("PAY-TOO-LATE-302").
+		SetOutTradeNo("sub2_local_too_late_302").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("alipay-local-too-late-302").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusExpired).
+		SetExpiresAt(time.Now().Add(-time.Hour)).
+		SetUpdatedAt(time.Now().Add(-paymentGraceMinutes*time.Minute - time.Second)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("local-test").
+		Save(ctx)
+	require.NoError(t, err)
+	redeemRepo.codesByCode[tooLate.RechargeCode] = &RedeemCode{ID: 302, Code: tooLate.RechargeCode, Type: RedeemTypeBalance, Value: tooLate.Amount, Status: StatusUnused}
+
+	require.NoError(t, svc.HandlePaymentNotification(ctx, &payment.PaymentNotification{
+		TradeNo: "alipay-local-too-late-302", OrderID: tooLate.OutTradeNo, Amount: tooLate.PayAmount, Status: payment.NotificationStatusSuccess,
+	}, payment.TypeAlipay))
+	reloadedTooLate, err := client.PaymentOrder.Get(ctx, tooLate.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusExpired, reloadedTooLate.Status, "payment outside the grace period must not revive an expired order")
+	require.Len(t, redeemRepo.useCalls, 1, "an out-of-grace callback must not credit the local test user")
+
+	staleCases := []struct {
+		name      string
+		status    string
+		expiresAt time.Time
+		updatedAt time.Time
+	}{
+		{
+			name:      "pending past expiry grace",
+			status:    OrderStatusPending,
+			expiresAt: time.Now().Add(-paymentGraceMinutes*time.Minute - time.Second),
+			updatedAt: time.Now(),
+		},
+		{
+			name:      "cancelled past callback grace",
+			status:    OrderStatusCancelled,
+			expiresAt: time.Now().Add(time.Hour),
+			updatedAt: time.Now().Add(-paymentGraceMinutes*time.Minute - time.Second),
+		},
+		{
+			name:      "provider creation failure past callback grace",
+			status:    OrderStatusFailed,
+			expiresAt: time.Now().Add(-paymentGraceMinutes*time.Minute - time.Second),
+			updatedAt: time.Now(),
+		},
+	}
+	for index, tc := range staleCases {
+		t.Run(tc.name, func(t *testing.T) {
+			suffix := strconv.Itoa(index + 303)
+			stale, createErr := client.PaymentOrder.Create().
+				SetUserID(order.UserID).
+				SetUserEmail(order.UserEmail).
+				SetUserName(order.UserName).
+				SetAmount(order.Amount).
+				SetPayAmount(order.PayAmount).
+				SetFeeRate(0).
+				SetRechargeCode("PAY-STALE-" + suffix).
+				SetOutTradeNo("sub2_local_stale_" + suffix).
+				SetPaymentType(payment.TypeAlipay).
+				SetPaymentTradeNo("").
+				SetOrderType(payment.OrderTypeBalance).
+				SetStatus(tc.status).
+				SetExpiresAt(tc.expiresAt).
+				SetUpdatedAt(tc.updatedAt).
+				SetClientIP("127.0.0.1").
+				SetSrcHost("local-test").
+				Save(ctx)
+			require.NoError(t, createErr)
+			redeemRepo.codesByCode[stale.RechargeCode] = &RedeemCode{ID: int64(index + 303), Code: stale.RechargeCode, Type: RedeemTypeBalance, Value: stale.Amount, Status: StatusUnused}
+
+			require.NoError(t, svc.HandlePaymentNotification(ctx, &payment.PaymentNotification{
+				TradeNo: "alipay-local-stale-" + suffix, OrderID: stale.OutTradeNo, Amount: stale.PayAmount, Status: payment.NotificationStatusSuccess,
+			}, payment.TypeAlipay))
+			reloadedStale, reloadErr := client.PaymentOrder.Get(ctx, stale.ID)
+			require.NoError(t, reloadErr)
+			require.Equal(t, tc.status, reloadedStale.Status)
+			require.Nil(t, reloadedStale.PaidAt)
+			require.Len(t, redeemRepo.useCalls, 1, "a callback outside the grace window must not credit the user")
+		})
+	}
+
+	failedBeforePayment, err := client.PaymentOrder.Create().
+		SetUserID(order.UserID).
+		SetUserEmail(order.UserEmail).
+		SetUserName(order.UserName).
+		SetAmount(order.Amount).
+		SetPayAmount(order.PayAmount).
+		SetFeeRate(0).
+		SetRechargeCode("PAY-FAILED-BEFORE-CALLBACK-305").
+		SetOutTradeNo("sub2_local_failed_before_callback_305").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusFailed).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("local-test").
+		Save(ctx)
+	require.NoError(t, err)
+	redeemRepo.codesByCode[failedBeforePayment.RechargeCode] = &RedeemCode{ID: 305, Code: failedBeforePayment.RechargeCode, Type: RedeemTypeBalance, Value: failedBeforePayment.Amount, Status: StatusUnused}
+	require.NoError(t, svc.HandlePaymentNotification(ctx, &payment.PaymentNotification{
+		TradeNo: "alipay-local-failed-before-callback-305", OrderID: failedBeforePayment.OutTradeNo, Amount: failedBeforePayment.PayAmount, Status: payment.NotificationStatusSuccess,
+	}, payment.TypeAlipay))
+	reloadedFailed, err := client.PaymentOrder.Get(ctx, failedBeforePayment.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloadedFailed.Status)
+	require.NotNil(t, reloadedFailed.PaidAt, "a valid callback must persist payment facts before retrying fulfillment")
+	require.Equal(t, "alipay-local-failed-before-callback-305", reloadedFailed.PaymentTradeNo)
+	require.Len(t, redeemRepo.useCalls, 2, "the recovered provider-creation failure must fulfill exactly once")
+}
+
+func TestSubscriptionSnapshotBenefitsAreGrantedExactlyOnceAfterRecovery(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	_, err := client.ExecContext(ctx, `
+		CREATE TABLE subscription_reset_grants (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			subscription_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			group_id INTEGER NOT NULL,
+			quantity INTEGER NOT NULL,
+			used_count INTEGER NOT NULL DEFAULT 0,
+			expires_at DATETIME NOT NULL,
+			issued_by INTEGER,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`)
+	require.NoError(t, err)
+
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPaid, time.Now())
+	_, err = client.User.UpdateOneID(order.UserID).SetConcurrency(3).Save(ctx)
+	require.NoError(t, err)
+	group, err := client.Group.Create().SetName("local-payment-benefits-group-" + strconv.FormatInt(time.Now().UnixNano(), 10)).Save(ctx)
+	require.NoError(t, err)
+	activeUntil := time.Now().Add(30 * 24 * time.Hour)
+	_, err = client.UserSubscription.Create().
+		SetUserID(order.UserID).
+		SetGroupID(group.ID).
+		SetStartsAt(time.Now().Add(-time.Hour)).
+		SetExpiresAt(activeUntil).
+		SetStatus(SubscriptionStatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	order, err = client.PaymentOrder.UpdateOneID(order.ID).
+		SetSubscriptionGroupID(group.ID).
+		SetProductSnapshot(map[string]interface{}{
+			"entitlements": map[string]interface{}{
+				"balance_bonus":          5.25,
+				"reset_card_count":       2,
+				"reset_card_expiry_days": 14,
+				"concurrency":            5,
+			},
+		}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID: 91, UserID: order.UserID, GroupID: group.ID, StartsAt: time.Now().Add(-time.Hour), ExpiresAt: activeUntil,
+		Status: SubscriptionStatusActive, Notes: paymentSubscriptionOrderNote(order.ID),
+	})
+	groupRepo := &subscriptionGroupRepoStub{group: &Group{
+		ID: group.ID, Name: group.Name, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription,
+	}}
+	svc := &PaymentService{
+		entClient:       client,
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, subRepo, nil, nil, nil),
+	}
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+	assertSubscriptionSnapshotBenefits(t, ctx, client, order, 5.25, 2)
+	userAfterFirstFulfillment, err := client.User.Get(ctx, order.UserID)
+	require.NoError(t, err)
+	require.Equal(t, 5, userAfterFirstFulfillment.Concurrency)
+
+	// Simulate a recovery worker seeing a stale fulfillment lease after the
+	// assignment transaction has committed. The payment-order audit is the
+	// durable idempotency key: no benefit may be issued a second time.
+	_, err = client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusRecharging).
+		SetUpdatedAt(time.Now().UTC().Add(-paymentFulfillmentLeaseDuration - time.Minute)).
+		ClearCompletedAt().
+		Save(ctx)
+	require.NoError(t, err)
+	recoveryCandidate, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusRecharging, recoveryCandidate.Status)
+	require.True(t, recoveryCandidate.UpdatedAt.Before(time.Now().UTC().Add(-paymentFulfillmentLeaseDuration)), "recovery test must own a stale lease")
+	claimable, err := client.PaymentOrder.Query().Where(
+		paymentorder.IDEQ(order.ID),
+		paymentorder.StatusEQ(OrderStatusRecharging),
+		paymentorder.UpdatedAtLTE(time.Now().UTC().Add(-paymentFulfillmentLeaseDuration)),
+	).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, claimable, "the database stale-lease predicate must match the recovery order")
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+	assertSubscriptionSnapshotBenefits(t, ctx, client, order, 5.25, 2)
+	userAfterRecovery, err := client.User.Get(ctx, order.UserID)
+	require.NoError(t, err)
+	require.Equal(t, 5, userAfterRecovery.Concurrency)
+}
+
+func TestExecuteSubscriptionResetCardsFulfillmentGrantsOneTwoWeekBatchExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	_, err := client.ExecContext(ctx, `
+		CREATE TABLE subscription_reset_grants (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			subscription_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			group_id INTEGER NOT NULL,
+			quantity INTEGER NOT NULL,
+			used_count INTEGER NOT NULL DEFAULT 0,
+			expires_at DATETIME NOT NULL,
+			issued_by INTEGER,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`)
+	require.NoError(t, err)
+
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPaid, time.Now())
+	group, err := client.Group.Create().
+		SetName("local-reset-card-purchase-" + strconv.FormatInt(time.Now().UnixNano(), 10)).
+		SetPlatform("openai").
+		Save(ctx)
+	require.NoError(t, err)
+	planPrice := 30.0
+	sourcePlanID := int64(9001)
+	subscription, err := client.UserSubscription.Create().
+		SetUserID(order.UserID).
+		SetGroupID(group.ID).
+		SetPlatform("openai").
+		SetStartsAt(time.Now().Add(-time.Hour)).
+		SetExpiresAt(time.Now().AddDate(0, 0, 30)).
+		SetStatus(SubscriptionStatusActive).
+		SetPlanID(sourcePlanID).
+		SetPlanPrice(planPrice).
+		SetPlanValidityDays(30).
+		Save(ctx)
+	require.NoError(t, err)
+	order, err = client.PaymentOrder.UpdateOneID(order.ID).
+		SetOrderType(payment.OrderTypeSubscriptionResetCards).
+		SetSubscriptionGroupID(group.ID).
+		SetProductSnapshot(map[string]interface{}{
+			"kind":                      "subscription_reset_cards",
+			"subscription_id":           subscription.ID,
+			"group_id":                  group.ID,
+			"platform":                  "openai",
+			"quantity":                  3,
+			"unit_price":                10.0,
+			"order_amount":              30.0,
+			"pay_amount":                30.0,
+			"validity_days":             resetCardPurchaseValidityDays,
+			"source_plan_id":            sourcePlanID,
+			"source_plan_price":         planPrice,
+			"source_plan_validity_days": 30,
+		}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	before := time.Now()
+	require.NoError(t, svc.ExecuteSubscriptionResetCardsFulfillment(ctx, order.ID))
+	after := time.Now()
+
+	completed, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, completed.Status)
+	rows, err := client.QueryContext(ctx, "SELECT quantity, expires_at FROM subscription_reset_grants WHERE subscription_id = $1", subscription.ID)
+	require.NoError(t, err)
+	defer rows.Close()
+	require.True(t, rows.Next())
+	var quantity int
+	var expiresAt time.Time
+	require.NoError(t, rows.Scan(&quantity, &expiresAt))
+	require.Equal(t, 3, quantity)
+	require.False(t, rows.Next())
+	require.NoError(t, rows.Err())
+	require.False(t, expiresAt.Before(before.AddDate(0, 0, resetCardPurchaseValidityDays).Add(-time.Minute)))
+	require.False(t, expiresAt.After(after.AddDate(0, 0, resetCardPurchaseValidityDays).Add(time.Minute)))
+
+	// Simulate a process failure after the grant transaction committed but before
+	// the outer order could remain completed. A recovery pass must see the audit
+	// record and never add a second reset-card batch.
+	staleAt := time.Now().UTC().Add(-paymentFulfillmentLeaseDuration - time.Minute)
+	_, err = client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusRecharging).
+		SetUpdatedAt(staleAt).
+		ClearCompletedAt().
+		Save(ctx)
+	require.NoError(t, err)
+	require.NoError(t, svc.ExecuteSubscriptionResetCardsFulfillment(ctx, order.ID))
+
+	countRows, err := client.QueryContext(ctx, "SELECT COUNT(*) FROM subscription_reset_grants WHERE subscription_id = $1", subscription.ID)
+	require.NoError(t, err)
+	defer countRows.Close()
+	require.True(t, countRows.Next())
+	var grantCount int
+	require.NoError(t, countRows.Scan(&grantCount))
+	require.Equal(t, 1, grantCount)
+	require.NoError(t, countRows.Err())
+	auditCount, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("SUBSCRIPTION_RESET_CARDS_GRANTED")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, auditCount)
+}
+
+func assertSubscriptionSnapshotBenefits(t *testing.T, ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, wantBonus float64, wantResetCards int) {
+	t.Helper()
+	user, err := client.User.Get(ctx, order.UserID)
+	require.NoError(t, err)
+	require.InDelta(t, wantBonus, user.Balance, 0.000001)
+	require.InDelta(t, wantBonus, user.TotalRecharged, 0.000001)
+
+	rows, err := client.QueryContext(ctx, "SELECT quantity FROM subscription_reset_grants WHERE user_id = $1 AND group_id = $2", order.UserID, *order.SubscriptionGroupID)
+	require.NoError(t, err)
+	defer rows.Close()
+	count := 0
+	quantity := 0
+	for rows.Next() {
+		count++
+		require.NoError(t, rows.Scan(&quantity))
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, 1, count, "the reset-card benefit must have one order-level grant row")
+	require.Equal(t, wantResetCards, quantity)
+
+	for _, action := range []string{"SUBSCRIPTION_ASSIGNED", "SUBSCRIPTION_BENEFITS_GRANTED"} {
+		auditCount, err := client.PaymentAuditLog.Query().
+			Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ(action)).
+			Count(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, auditCount, "audit action %s must be idempotent", action)
+	}
+}
+
 func TestExecuteSubscriptionFulfillmentRecoversCommittedAssignmentWithoutExtendingAgain(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
-	staleAt := time.Now().Add(-paymentFulfillmentLeaseDuration - time.Minute)
+	staleAt := time.Now().UTC().Add(-paymentFulfillmentLeaseDuration - time.Minute)
 	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusRecharging, staleAt)
 
 	expiresAt := time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)

@@ -376,6 +376,42 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
 		}
 		imageCounter.AddSSEData(upstreamMessage)
+		if eventType == "response.failed" {
+			cyberHit := false
+			if hit, code, msg := detectOpenAICyberPolicy(upstreamMessage); hit {
+				cyberHit = true
+				MarkOpsCyberPolicy(c, CyberPolicyMark{
+					Code:           code,
+					Message:        msg,
+					Body:           truncateString(string(upstreamMessage), 4096),
+					UpstreamStatus: http.StatusOK,
+					UpstreamInTok:  usage.InputTokens,
+					UpstreamOutTok: usage.OutputTokens,
+				})
+			}
+			if !cyberHit {
+				failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+				if turn == 1 && !wroteDownstream && isOpenAIUpstreamCapacityShedEvent(upstreamMessage) {
+					return nil, s.newOpenAIStreamFailoverError(
+						c,
+						account,
+						true,
+						resp.Header.Get("x-request-id"),
+						upstreamMessage,
+						failedMessage,
+						resp.Header,
+					)
+				}
+				s.recordOpenAIStreamTerminalFailure(
+					c,
+					account,
+					true,
+					resp.Header.Get("x-request-id"),
+					upstreamMessage,
+					failedMessage,
+				)
+			}
+		}
 
 		if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && strings.Contains(trimmedData, mappedModel) {
 			upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)

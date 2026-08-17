@@ -71,20 +71,22 @@ func generateRandomString(n int) string {
 }
 
 type CreateOrderRequest struct {
-	UserID          int64
-	Amount          float64
-	PaymentType     string
-	OpenID          string
-	ClientIP        string
-	IsMobile        bool
-	IsWeChatBrowser bool
-	SrcHost         string
-	SrcURL          string
-	ReturnURL       string
-	PaymentSource   string
-	OrderType       string
-	PlanID          int64
-	Locale          string
+	UserID              int64
+	Amount              float64
+	PaymentType         string
+	OpenID              string
+	ClientIP            string
+	IsMobile            bool
+	IsWeChatBrowser     bool
+	SrcHost             string
+	SrcURL              string
+	ReturnURL           string
+	PaymentSource       string
+	OrderType           string
+	PlanID              int64
+	ResetSubscriptionID int64
+	ResetCardQuantity   int
+	Locale              string
 }
 
 type CreateOrderResponse struct {
@@ -198,6 +200,7 @@ type PaymentService struct {
 	resumeService            *PaymentResumeService
 	affiliateService         *AffiliateService
 	notificationEmailService *NotificationEmailService
+	authCacheInvalidator     APIKeyAuthCacheInvalidator
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService) *PaymentService {
@@ -208,6 +211,13 @@ func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, load
 
 func (s *PaymentService) SetNotificationEmailService(notificationEmailService *NotificationEmailService) {
 	s.notificationEmailService = notificationEmailService
+}
+
+// SetAuthCacheInvalidator wires the cross-instance auth snapshot invalidator
+// after construction. Payment fulfillment updates user concurrency in a DB
+// transaction; this hook makes the new value visible without waiting for TTL.
+func (s *PaymentService) SetAuthCacheInvalidator(invalidator APIKeyAuthCacheInvalidator) {
+	s.authCacheInvalidator = invalidator
 }
 
 // --- Provider Registry ---
@@ -347,10 +357,14 @@ func psSliceContains(sl []string, s string) bool {
 
 // Subscription validity period unit constants.
 const (
-	validityUnitWeek   = "week"
-	validityUnitWeeks  = "weeks"
-	validityUnitMonth  = "month"
-	validityUnitMonths = "months"
+	validityUnitWeek     = "week"
+	validityUnitWeeks    = "weeks"
+	validityUnitMonth    = "month"
+	validityUnitMonths   = "months"
+	validityUnitQuarter  = "quarter"
+	validityUnitQuarters = "quarters"
+	validityUnitYear     = "year"
+	validityUnitYears    = "years"
 )
 
 func psComputeValidityDays(days int, unit string) int {
@@ -359,6 +373,10 @@ func psComputeValidityDays(days int, unit string) int {
 		return days * 7
 	case validityUnitMonth, validityUnitMonths:
 		return days * 30
+	case validityUnitQuarter, validityUnitQuarters:
+		return days * 90
+	case validityUnitYear, validityUnitYears:
+		return days * 365
 	default:
 		return days
 	}

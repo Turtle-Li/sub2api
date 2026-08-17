@@ -416,6 +416,56 @@ func TestWeChatPaymentOAuthCallbackRedirectsWithOpaqueResumeToken(t *testing.T) 
 	require.Equal(t, "/purchase?from=wechat", claims.RedirectTo)
 }
 
+func TestWeChatPaymentOAuthCallbackExposesResetCardRoutingHints(t *testing.T) {
+	originalAccessTokenURL := wechatOAuthAccessTokenURL
+	t.Cleanup(func() {
+		wechatOAuthAccessTokenURL = originalAccessTokenURL
+	})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/sns/oauth2/access_token") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"wechat-access","openid":"openid-reset","scope":"snsapi_base"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+	wechatOAuthAccessTokenURL = upstream.URL + "/sns/oauth2/access_token"
+
+	handler, client := newWeChatOAuthTestHandlerWithSettings(t, false, wechatOAuthTestSettings("mp", "wx-mp-app", "wx-mp-secret", "/auth/wechat/callback"))
+	defer client.Close()
+	handler.cfg.Totp.EncryptionKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	handler.cfg.Totp.EncryptionKeyConfigured = true
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/wechat/payment/callback?code=wechat-code&state=state-reset", nil)
+	req.Host = "api.example.com"
+	req.AddCookie(encodedCookie(wechatPaymentOAuthStateName, "state-reset"))
+	req.AddCookie(encodedCookie(wechatPaymentOAuthRedirect, "/purchase?tab=subscription"))
+	req.AddCookie(encodedCookie(wechatPaymentOAuthContextName, `{"payment_type":"wxpay","order_type":"subscription_reset","reset_subscription_id":42,"reset_card_quantity":3}`))
+	req.AddCookie(encodedCookie(wechatPaymentOAuthScope, "snsapi_base"))
+	c.Request = req
+
+	handler.WeChatPaymentOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	parsed, err := url.Parse(recorder.Header().Get("Location"))
+	require.NoError(t, err)
+	fragment, err := url.ParseQuery(parsed.Fragment)
+	require.NoError(t, err)
+	require.Equal(t, payment.OrderTypeSubscriptionResetCards, fragment.Get("order_type"))
+	require.Equal(t, "42", fragment.Get("reset_subscription_id"))
+	require.Equal(t, "3", fragment.Get("reset_card_quantity"))
+
+	claims, err := handler.wechatPaymentResumeService().ParseWeChatPaymentResumeToken(fragment.Get("wechat_resume_token"))
+	require.NoError(t, err)
+	require.Equal(t, payment.OrderTypeSubscriptionResetCards, claims.OrderType)
+	require.EqualValues(t, 42, claims.ResetSubscriptionID)
+	require.Equal(t, 3, claims.ResetCardQuantity)
+}
+
 func TestWeChatPaymentOAuthCallbackUsesExplicitPaymentResumeSigningKeyWhenMixedKeysConfigured(t *testing.T) {
 	originalAccessTokenURL := wechatOAuthAccessTokenURL
 	t.Cleanup(func() {

@@ -315,6 +315,25 @@ func TestCreateWeChatPaymentResumeTokenRejectsMissingSigningKey(t *testing.T) {
 	}
 }
 
+func TestCreateWeChatPaymentResumeTokenInfersResetCardOrderType(t *testing.T) {
+	svc := NewPaymentResumeService([]byte("reset-card-resume-key"))
+	token, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:              "openid-reset",
+		ResetSubscriptionID: 42,
+		ResetCardQuantity:   2,
+	})
+	if err != nil {
+		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
+	}
+	claims, err := svc.ParseWeChatPaymentResumeToken(token)
+	if err != nil {
+		t.Fatalf("ParseWeChatPaymentResumeToken returned error: %v", err)
+	}
+	if claims.OrderType != payment.OrderTypeSubscriptionResetCards {
+		t.Fatalf("order type = %q, want %q", claims.OrderType, payment.OrderTypeSubscriptionResetCards)
+	}
+}
+
 func TestParseWeChatPaymentResumeTokenRejectsFallbackSignedTokenWhenSigningKeyMissing(t *testing.T) {
 	t.Parallel()
 

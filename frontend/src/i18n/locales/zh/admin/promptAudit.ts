@@ -8,6 +8,7 @@ export default {
     common: { actions: '操作', never: '从未' },
     mode: { off: '已关闭', async_audit: '异步只审计', blocking: '同步审计并阻止' },
     status: { disabled: '未启用', running: '运行中', degraded: '降级', error: '错误', healthy: '健康', failed: '失败', stale: '心跳过期' },
+    circuit: { closed: '可用', open: '已暂停', half_open: '恢复探测中' },
     decisions: { pass: '通过', flag: '标记', critical: '严重' },
     riskLevels: { low: '低', medium: '中', high: '高', critical: '严重' },
     scanners: {
@@ -36,7 +37,7 @@ export default {
       title: '运行概览',
       description: '显示服务端当前生效状态；未保存的草稿不会改变这些数值。',
       process: '进程状态', mode: '生效模式', version: '生效 / 期望版本', workers: '活动 / 总 Worker',
-      queue: '活动任务 / 容量', dependencies: '依赖', guardMetrics: '同步 Guard 指标', latest: '最近处理与错误',
+      queue: '活动任务 / 容量', dependencies: '依赖', guardMetrics: '同步 Guard 指标', latest: '最近处理与错误', circuits: '节点熔断状态', nextProbe: '下次探测 {time}',
       queueBreakdown: 'queued {queued} · processing {processing} · retry {retry} · done {done} · failed {failed}',
       deliveryTotals: '累计入队 {enqueued} · 丢弃 {dropped} · 处理 {processed} · 失败 {failed}',
     },

@@ -82,6 +82,27 @@ type LoginRequest struct {
 	TencentCaptchaRandstr string `json:"tencent_captcha_randstr"`
 }
 
+// DesktopLoginRequest is deliberately separate from the browser request.
+// Native clients do not supply a web CAPTCHA proof; route policy, rather than
+// a caller-controlled header, selects the server-side protection profile.
+type DesktopLoginRequest struct {
+	Email    string `json:"email" binding:"required,email"`
+	Password string `json:"password" binding:"required"`
+}
+
+type DesktopRegisterRequest struct {
+	Email          string `json:"email" binding:"required,email"`
+	Password       string `json:"password" binding:"required,min=6"`
+	VerifyCode     string `json:"verify_code"`
+	PromoCode      string `json:"promo_code"`
+	InvitationCode string `json:"invitation_code"`
+	AffCode        string `json:"aff_code"`
+}
+
+type DesktopSendVerifyCodeRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
 func captchaProof(turnstileToken, tencentTicket, tencentRandstr string) service.CaptchaProof {
 	return service.CaptchaProof{
 		TurnstileToken: turnstileToken,
@@ -92,6 +113,7 @@ func captchaProof(turnstileToken, tencentTicket, tencentRandstr string) service.
 
 // AuthResponse 认证响应格式（匹配前端期望）
 type AuthResponse struct {
+	Status       string    `json:"status,omitempty"`
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token,omitempty"` // 新增：Refresh Token
 	ExpiresIn    int       `json:"expires_in,omitempty"`    // 新增：Access Token有效期（秒）
@@ -116,6 +138,14 @@ func (h *AuthHandler) respondWithTokenPair(c *gin.Context, user *service.User) {
 }
 
 func respondWithTokenPair(c *gin.Context, authService *service.AuthService, user *service.User) {
+	respondWithTokenPairWithStatus(c, authService, user, "")
+}
+
+// respondWithTokenPairWithStatus is used by flows that need to expose an
+// explicit protocol state alongside the normal token-pair response. Keeping
+// the field empty for ordinary login responses preserves their existing JSON
+// contract.
+func respondWithTokenPairWithStatus(c *gin.Context, authService *service.AuthService, user *service.User, status string) {
 	if err := ensureLoginUserActive(user); err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -131,6 +161,7 @@ func respondWithTokenPair(c *gin.Context, authService *service.AuthService, user
 			return
 		}
 		response.Success(c, AuthResponse{
+			Status:      status,
 			AccessToken: token,
 			TokenType:   "Bearer",
 			User:        dto.UserFromService(user),
@@ -138,6 +169,7 @@ func respondWithTokenPair(c *gin.Context, authService *service.AuthService, user
 		return
 	}
 	response.Success(c, AuthResponse{
+		Status:       status,
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresIn:    tokenPair.ExpiresIn,
@@ -190,14 +222,34 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
+	h.completeRegistration(c, req.Email, req.Password, req.VerifyCode, req.PromoCode, req.InvitationCode, req.AffCode)
+}
+
+// DesktopRegister creates an account without a browser CAPTCHA proof. This is
+// intentionally available only through the separately rate-limited native
+// route; the ordinary web registration route keeps its CAPTCHA policy.
+func (h *AuthHandler) DesktopRegister(c *gin.Context) {
+	var req DesktopRegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	h.completeRegistration(c, req.Email, req.Password, req.VerifyCode, req.PromoCode, req.InvitationCode, req.AffCode)
+}
+
+func (h *AuthHandler) completeRegistration(
+	c *gin.Context,
+	email, password, verifyCode, promoCode, invitationCode, affCode string,
+) {
 	_, user, err := h.authService.RegisterWithVerification(
 		c.Request.Context(),
-		req.Email,
-		req.Password,
-		req.VerifyCode,
-		req.PromoCode,
-		req.InvitationCode,
-		req.AffCode,
+		email,
+		password,
+		verifyCode,
+		promoCode,
+		invitationCode,
+		affCode,
 	)
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -222,7 +274,24 @@ func (h *AuthHandler) SendVerifyCode(c *gin.Context) {
 		return
 	}
 
-	result, err := h.authService.SendVerifyCodeAsync(c.Request.Context(), req.Email, c.GetHeader("Accept-Language"))
+	h.completeSendVerifyCode(c, req.Email)
+}
+
+// DesktopSendVerifyCode is the native counterpart to SendVerifyCode. It does
+// not weaken the browser route: the route table grants this exception only to
+// the independently throttled desktop endpoint.
+func (h *AuthHandler) DesktopSendVerifyCode(c *gin.Context) {
+	var req DesktopSendVerifyCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	h.completeSendVerifyCode(c, req.Email)
+}
+
+func (h *AuthHandler) completeSendVerifyCode(c *gin.Context, email string) {
+	result, err := h.authService.SendVerifyCodeAsync(c.Request.Context(), email, c.GetHeader("Accept-Language"))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -249,7 +318,24 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	token, user, err := h.authService.Login(c.Request.Context(), req.Email, req.Password)
+	h.completePasswordLogin(c, req.Email, req.Password)
+}
+
+// DesktopLogin is a first-class native authentication endpoint. It never uses
+// a CAPTCHA token from the desktop process; abuse protection is enforced by
+// the dedicated server-side route and the shared account/TOTP controls.
+func (h *AuthHandler) DesktopLogin(c *gin.Context) {
+	var req DesktopLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	h.completePasswordLogin(c, req.Email, req.Password)
+}
+
+func (h *AuthHandler) completePasswordLogin(c *gin.Context, email, password string) {
+	token, user, err := h.authService.Login(c.Request.Context(), email, password)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

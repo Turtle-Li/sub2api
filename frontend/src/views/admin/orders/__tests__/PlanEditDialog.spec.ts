@@ -4,6 +4,7 @@ import { mount } from '@vue/test-utils'
 
 import PlanEditDialog from '../PlanEditDialog.vue'
 import type { AdminGroup } from '@/types'
+import type { SubscriptionPlan } from '@/types/payment'
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -192,5 +193,58 @@ describe('PlanEditDialog', () => {
 
     expect(options).toContain('OpenAI + Claude + Gemini + Grok — composite (1.2x)')
     expect(options).not.toContain('Standard OpenAI — openai (1x)')
+  })
+
+  it('only offers active subscription groups for new plans', () => {
+    const wrapper = mountDialog({
+      groups: [
+        groupFixture({ id: 20, name: 'Active subscription', status: 'active' }),
+        groupFixture({ id: 21, name: 'Inactive subscription', status: 'inactive' }),
+        groupFixture({ id: 22, name: 'Active standard', subscription_type: 'standard' }),
+      ],
+    })
+
+    const options = wrapper.findAll('option').map(option => option.text())
+
+    expect(options).toContain('Active subscription — openai (1x)')
+    expect(options).not.toContain('Inactive subscription — openai (1x)')
+    expect(options).not.toContain('Active standard — openai (1x)')
+  })
+
+  it('keeps an inactive subscription group visible while editing its existing plan', async () => {
+    const wrapper = mount(PlanEditDialog, {
+      props: {
+        show: false,
+        plan: {
+          id: 99,
+          group_id: 21,
+          group_platform: 'openai',
+          name: 'Legacy plan',
+          description: 'Legacy',
+          price: 10,
+          features: [],
+          validity_days: 30,
+          validity_unit: 'days',
+          for_sale: true,
+          sort_order: 0,
+        } as SubscriptionPlan,
+        groups: [
+          groupFixture({ id: 21, name: 'Inactive subscription', status: 'inactive' }),
+        ],
+      },
+      global: {
+        stubs: {
+          BaseDialog: BaseDialogStub,
+          Select: SelectStub,
+          Icon: true,
+          GroupBadge: true,
+        },
+      },
+    })
+
+    await wrapper.setProps({ show: true })
+    await wrapper.vm.$nextTick()
+    const options = wrapper.findAll('option').map(option => option.text())
+    expect(options).toContain('Inactive subscription — openai (1x)')
   })
 })

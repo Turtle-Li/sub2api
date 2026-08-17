@@ -108,6 +108,14 @@ import { RegisterView } from '@/views/auth'
 - Redirects to `/dashboard` after successful registration
 - Redirects authenticated users away from register page
 
+### DesktopAuthorizationView.vue
+
+The protected `/desktop-auth?user_code=ABCD-EFGH` route is the browser half of
+TT Switch device authorization. The user first signs in or registers through
+the normal web flow (including any configured CAPTCHA), then explicitly confirms
+the displayed short code. The page posts only `user_code`; the high-entropy
+device code and PKCE verifier stay inside TT Switch.
+
 ## Architecture
 
 ### Component Structure

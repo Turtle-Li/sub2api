@@ -912,6 +912,8 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 			"threshold":           "20.00",
 			"recharge_url":        "https://example.com/recharge",
 			"recharge_amount":     "50.00",
+			"balance_bonus":       "10.00",
+			"reset_card_count":    "2",
 			"order_id":            "1024",
 			"unsubscribe_url":     "https://example.com/unsubscribe",
 			"account_id":          "1001",
@@ -1067,7 +1069,7 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 		Description:  "Sent after a subscription purchase is fulfilled.",
 		Category:     "subscription",
 		Optional:     false,
-		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...), "subscription_group", "subscription_days", "expiry_time", "order_id"),
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...), "subscription_group", "subscription_days", "expiry_time", "balance_bonus", "reset_card_count", "order_id"),
 	},
 	NotificationEmailEventSubscriptionExpiryReminder: {
 		Event:        NotificationEmailEventSubscriptionExpiryReminder,
@@ -1225,6 +1227,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p>Hello {{recipient_name}},</p>
 <p>Your subscription for <strong>{{subscription_group}}</strong> has been activated for <strong>{{subscription_days}}</strong> days.</p>
 <p>Expiry time: <strong>{{expiry_time}}</strong></p>
+<p>Order benefits: bonus balance <strong>{{balance_bonus}}</strong>; reset cards <strong>{{reset_card_count}}</strong>.</p>
 <p>Order ID: {{order_id}}</p>`),
 		},
 		notificationEmailLocaleChinese: {
@@ -1233,6 +1236,7 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p>{{recipient_name}}，您好：</p>
 <p>您的 <strong>{{subscription_group}}</strong> 订阅已成功开通，有效期 <strong>{{subscription_days}}</strong> 天。</p>
 <p>到期时间：<strong>{{expiry_time}}</strong></p>
+<p>订单赠送：余额 <strong>{{balance_bonus}}</strong>；额度重置次数 <strong>{{reset_card_count}}</strong>。</p>
 <p>订单号：{{order_id}}</p>`),
 		},
 	},

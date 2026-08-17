@@ -1407,10 +1407,9 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 			statusCode:     529,
 			body:           `{"error":{"message":"server overloaded","type":"server_error"}}`,
 			expectFailover: true,
-			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, start time.Time) {
+			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
 				require.Empty(t, repo.rateLimitCalls)
-				require.Len(t, repo.overloadCalls, 1)
-				require.WithinDuration(t, start.Add(10*time.Minute), repo.overloadCalls[0], 5*time.Second)
+				require.Empty(t, repo.overloadCalls, "529 must first use the bounded request retry budget")
 			},
 		},
 		{
@@ -1467,10 +1466,9 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 			statusCode:     529,
 			body:           `{"error":{"message":"server overloaded","type":"server_error"}}`,
 			expectFailover: true,
-			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, start time.Time) {
+			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
 				require.Empty(t, repo.rateLimitCalls)
-				require.Len(t, repo.overloadCalls, 1)
-				require.WithinDuration(t, start.Add(10*time.Minute), repo.overloadCalls[0], 5*time.Second)
+				require.Empty(t, repo.overloadCalls, "529 must first use the bounded request retry budget")
 			},
 		},
 	}
@@ -1529,6 +1527,10 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 			require.True(t, arr[len(arr)-1].Passthrough)
 			if tc.expectFailover {
 				require.Equal(t, "failover", arr[len(arr)-1].Kind)
+				if tc.statusCode == 529 {
+					require.True(t, failoverErr.RequestScopedTransient)
+					require.True(t, failoverErr.RetryableOnSameAccount)
+				}
 			} else {
 				require.Equal(t, "http_error", arr[len(arr)-1].Kind)
 			}

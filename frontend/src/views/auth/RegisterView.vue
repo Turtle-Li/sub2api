@@ -319,7 +319,7 @@
       <p class="text-gray-500 dark:text-dark-400">
         {{ t('auth.alreadyHaveAccount') }}
         <router-link
-          to="/login"
+          :to="{ path: '/login', query: typeof route.query.redirect === 'string' ? { redirect: route.query.redirect } : {} }"
           class="font-medium text-primary-600 transition-colors hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300"
         >
           {{ t('auth.signIn') }}
@@ -1004,6 +1004,8 @@ async function handleRegister(): Promise<void> {
           tencent_captcha_randstr: tencentCaptchaEnabled.value ? tencentCaptchaRandstr.value : undefined,
           promo_code: formData.promo_code || undefined,
           invitation_code: formData.invitation_code || undefined,
+          desktop_auth_redirect:
+            typeof route.query.redirect === 'string' ? route.query.redirect : undefined,
           ...(affCode ? { aff_code: affCode } : {})
         })
       )
@@ -1030,8 +1032,9 @@ async function handleRegister(): Promise<void> {
     // Show success toast
     appStore.showSuccess(t('auth.accountCreatedSuccess', { siteName: siteName.value }))
 
-    // Redirect to dashboard
-    await router.push('/dashboard')
+    // Preserve a TT Switch authorization request across browser registration.
+    const redirectTo = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
+    await router.push(redirectTo)
   } catch (error: unknown) {
     // Handle registration error
     errorMessage.value = buildAuthErrorMessage(error, {

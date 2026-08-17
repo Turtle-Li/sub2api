@@ -78,10 +78,11 @@ func TestRevokeSubscription_InvalidatesL1CacheSynchronously(t *testing.T) {
 type restoreUserSubRepoStub struct {
 	userSubRepoNoop
 
-	sub            *UserSubscription
-	existsActive   bool
-	restoreCalls   int
-	restoredStatus string
+	sub               *UserSubscription
+	existsActive      bool
+	liveSubscriptions []UserSubscription
+	restoreCalls      int
+	restoredStatus    string
 }
 
 func (r *restoreUserSubRepoStub) GetByIDIncludeDeleted(_ context.Context, id int64) (*UserSubscription, error) {
@@ -94,6 +95,16 @@ func (r *restoreUserSubRepoStub) GetByIDIncludeDeleted(_ context.Context, id int
 
 func (r *restoreUserSubRepoStub) ExistsActiveByUserIDAndGroupID(context.Context, int64, int64) (bool, error) {
 	return r.existsActive, nil
+}
+
+func (r *restoreUserSubRepoStub) ListByUserID(_ context.Context, userID int64) ([]UserSubscription, error) {
+	result := make([]UserSubscription, 0, len(r.liveSubscriptions))
+	for _, subscription := range r.liveSubscriptions {
+		if subscription.UserID == userID {
+			result = append(result, subscription)
+		}
+	}
+	return result, nil
 }
 
 func (r *restoreUserSubRepoStub) Restore(_ context.Context, id int64, restoredStatus string) (*UserSubscription, error) {
@@ -167,6 +178,36 @@ func TestRestoreSubscription_LiveSubscriptionConflict(t *testing.T) {
 	t.Cleanup(svc.Stop)
 
 	_, err := svc.RestoreSubscription(context.Background(), 1)
+	require.ErrorIs(t, err, ErrSubscriptionRestoreConflict)
+	require.Zero(t, repo.restoreCalls)
+}
+
+func TestRestoreSubscription_RejectsLiveSubscriptionOnSamePlatform(t *testing.T) {
+	deletedAt := time.Now().Add(-time.Hour)
+	repo := &restoreUserSubRepoStub{
+		sub: &UserSubscription{
+			ID:        1,
+			UserID:    10,
+			GroupID:   20,
+			Platform:  "openai",
+			Status:    SubscriptionStatusActive,
+			ExpiresAt: time.Now().Add(24 * time.Hour),
+			DeletedAt: &deletedAt,
+		},
+		liveSubscriptions: []UserSubscription{{
+			ID:        2,
+			UserID:    10,
+			GroupID:   21,
+			Platform:  "openai",
+			Status:    SubscriptionStatusActive,
+			ExpiresAt: time.Now().Add(24 * time.Hour),
+		}},
+	}
+	svc := NewSubscriptionService(groupRepoNoop{}, repo, nil, nil, nil)
+	t.Cleanup(svc.Stop)
+
+	_, err := svc.RestoreSubscription(context.Background(), 1)
+
 	require.ErrorIs(t, err, ErrSubscriptionRestoreConflict)
 	require.Zero(t, repo.restoreCalls)
 }

@@ -13,6 +13,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOpenAISameAccountRetryDelayBacksOffCapacityShed(t *testing.T) {
+	capacityErr := &service.UpstreamFailoverError{RequestScopedTransient: true}
+	require.Equal(t, 500*time.Millisecond, openAISameAccountRetryDelay(capacityErr, 1))
+	require.Equal(t, time.Second, openAISameAccountRetryDelay(capacityErr, 2))
+	require.Equal(t, 2*time.Second, openAISameAccountRetryDelay(capacityErr, 3))
+	require.Equal(t, 2*time.Second, openAISameAccountRetryDelay(capacityErr, 10))
+
+	require.Equal(t, sameAccountRetryDelay, openAISameAccountRetryDelay(&service.UpstreamFailoverError{}, 3))
+}
+
 // ---------------------------------------------------------------------------
 // Mock
 // ---------------------------------------------------------------------------

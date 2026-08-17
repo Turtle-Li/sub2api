@@ -124,6 +124,12 @@ func (_c *SubscriptionPlanCreate) SetNillableFeatures(v *string) *SubscriptionPl
 	return _c
 }
 
+// SetEntitlements sets the "entitlements" field.
+func (_c *SubscriptionPlanCreate) SetEntitlements(v map[string]interface{}) *SubscriptionPlanCreate {
+	_c.mutation.SetEntitlements(v)
+	return _c
+}
+
 // SetProductName sets the "product_name" field.
 func (_c *SubscriptionPlanCreate) SetProductName(v string) *SubscriptionPlanCreate {
 	_c.mutation.SetProductName(v)
@@ -395,6 +401,10 @@ func (_c *SubscriptionPlanCreate) createSpec() (*SubscriptionPlan, *sqlgraph.Cre
 		_spec.SetField(subscriptionplan.FieldFeatures, field.TypeString, value)
 		_node.Features = value
 	}
+	if value, ok := _c.mutation.Entitlements(); ok {
+		_spec.SetField(subscriptionplan.FieldEntitlements, field.TypeJSON, value)
+		_node.Entitlements = value
+	}
 	if value, ok := _c.mutation.ProductName(); ok {
 		_spec.SetField(subscriptionplan.FieldProductName, field.TypeString, value)
 		_node.ProductName = value
@@ -602,6 +612,24 @@ func (u *SubscriptionPlanUpsert) SetFeatures(v string) *SubscriptionPlanUpsert {
 // UpdateFeatures sets the "features" field to the value that was provided on create.
 func (u *SubscriptionPlanUpsert) UpdateFeatures() *SubscriptionPlanUpsert {
 	u.SetExcluded(subscriptionplan.FieldFeatures)
+	return u
+}
+
+// SetEntitlements sets the "entitlements" field.
+func (u *SubscriptionPlanUpsert) SetEntitlements(v map[string]interface{}) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldEntitlements, v)
+	return u
+}
+
+// UpdateEntitlements sets the "entitlements" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateEntitlements() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldEntitlements)
+	return u
+}
+
+// ClearEntitlements clears the value of the "entitlements" field.
+func (u *SubscriptionPlanUpsert) ClearEntitlements() *SubscriptionPlanUpsert {
+	u.SetNull(subscriptionplan.FieldEntitlements)
 	return u
 }
 
@@ -862,6 +890,27 @@ func (u *SubscriptionPlanUpsertOne) SetFeatures(v string) *SubscriptionPlanUpser
 func (u *SubscriptionPlanUpsertOne) UpdateFeatures() *SubscriptionPlanUpsertOne {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.UpdateFeatures()
+	})
+}
+
+// SetEntitlements sets the "entitlements" field.
+func (u *SubscriptionPlanUpsertOne) SetEntitlements(v map[string]interface{}) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetEntitlements(v)
+	})
+}
+
+// UpdateEntitlements sets the "entitlements" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateEntitlements() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateEntitlements()
+	})
+}
+
+// ClearEntitlements clears the value of the "entitlements" field.
+func (u *SubscriptionPlanUpsertOne) ClearEntitlements() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearEntitlements()
 	})
 }
 
@@ -1297,6 +1346,27 @@ func (u *SubscriptionPlanUpsertBulk) SetFeatures(v string) *SubscriptionPlanUpse
 func (u *SubscriptionPlanUpsertBulk) UpdateFeatures() *SubscriptionPlanUpsertBulk {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.UpdateFeatures()
+	})
+}
+
+// SetEntitlements sets the "entitlements" field.
+func (u *SubscriptionPlanUpsertBulk) SetEntitlements(v map[string]interface{}) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetEntitlements(v)
+	})
+}
+
+// UpdateEntitlements sets the "entitlements" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateEntitlements() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateEntitlements()
+	})
+}
+
+// ClearEntitlements clears the value of the "entitlements" field.
+func (u *SubscriptionPlanUpsertBulk) ClearEntitlements() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearEntitlements()
 	})
 }
 

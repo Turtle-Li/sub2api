@@ -19,14 +19,17 @@ type PromptService struct {
 	enqueuer  *Enqueuer
 	runner    *Runner
 	evaluator *GuardEvaluator
-	scanner   *OpenAICompatibleScanner
+	scanner   PromptScanner
 	metrics   *AtomicMetrics
 	clock     Clock
+	circuit   *GuardCircuit
+	shared    *sharedGuardCircuit
 
 	lifecycleMu  sync.Mutex
 	cancel       context.CancelFunc
 	background   context.Context
 	enqueueWG    sync.WaitGroup
+	circuitWG    sync.WaitGroup
 	enqueueSlots chan struct{}
 	probeMu      sync.RWMutex
 	probes       map[string]ProbeResult
@@ -36,15 +39,21 @@ func NewPromptService(
 	config ConfigStore,
 	repo *PostgreSQLRepository,
 	payload *RedisPayloadStore,
-	scanner *OpenAICompatibleScanner,
+	scanner PromptScanner,
 	metrics *AtomicMetrics,
 ) *PromptService {
+	clock := realClock{}
+	circuit := newGuardCircuit(clock)
+	var shared *sharedGuardCircuit
+	if payload != nil {
+		shared = newSharedGuardCircuit(newRedisSharedGuardCircuitStore(payload.client), clock)
+	}
 	enqueuer := NewEnqueuer(config, repo, payload, metrics)
-	evaluator := NewGuardEvaluator(scanner, repo, metrics)
-	runner := NewRunner(config, repo, payload, scanner, metrics)
+	evaluator := newGuardEvaluatorWithCircuits(scanner, repo, metrics, 64, 16, circuit, shared)
+	runner := newRunnerWithCircuits(config, repo, payload, scanner, metrics, circuit, shared)
 	return &PromptService{
 		config: config, repo: repo, payload: payload, scanner: scanner, metrics: metrics,
-		enqueuer: enqueuer, evaluator: evaluator, runner: runner, clock: realClock{},
+		enqueuer: enqueuer, evaluator: evaluator, runner: runner, clock: clock, circuit: circuit, shared: shared,
 		enqueueSlots: make(chan struct{}, 128), probes: map[string]ProbeResult{},
 	}
 }
@@ -63,6 +72,10 @@ func (s *PromptService) Start(ctx context.Context) error {
 	s.lifecycleMu.Unlock()
 	configErr := s.config.Start(background)
 	workerErr := s.runner.Start(background)
+	if (s.circuit != nil || s.shared != nil) && s.scanner != nil {
+		s.circuitWG.Add(1)
+		go s.circuitProbeLoop(background)
+	}
 	return errors.Join(configErr, workerErr)
 }
 
@@ -82,7 +95,11 @@ func (s *PromptService) Shutdown(ctx context.Context) error {
 		workerErr = s.runner.Shutdown(ctx)
 	}
 	done := make(chan struct{})
-	go func() { s.enqueueWG.Wait(); close(done) }()
+	go func() {
+		s.enqueueWG.Wait()
+		s.circuitWG.Wait()
+		close(done)
+	}()
 	select {
 	case <-done:
 	case <-ctx.Done():
@@ -180,11 +197,19 @@ func (s *PromptService) Runtime(ctx context.Context) RuntimeSnapshot {
 	if hasConfig {
 		workerTotal, queueCapacity = cfg.WorkerCount, cfg.QueueCapacity
 	}
+	circuits := map[string]GuardCircuitSnapshot{}
+	if hasConfig && s.circuit != nil {
+		circuits = s.circuit.Snapshot(cfg)
+	}
+	var sharedCircuitErr error
+	if hasConfig && s.shared != nil {
+		circuits, sharedCircuitErr = s.shared.Overlay(ctx, cfg, circuits)
+	}
 	runtime := RuntimeSnapshot{
 		ProcessStatus: "disabled", EffectiveMode: mode, ExpectedConfigVersion: expected,
 		ActiveConfigVersion: activeVersion, ConfigLoadedAt: loadedAt, ConfigLoadError: loadError,
 		WorkerTotal: workerTotal, QueueCapacity: queueCapacity, DatabaseStatus: "ok", RedisStatus: "ok",
-		Endpoints: s.probeSnapshot(), GuardMetrics: s.metrics.Snapshot(),
+		Endpoints: s.probeSnapshot(), Circuits: circuits, GuardMetrics: s.metrics.Snapshot(),
 	}
 	if s.repo != nil {
 		stats, err := s.repo.QueueStats(ctx)
@@ -201,6 +226,12 @@ func (s *PromptService) Runtime(ctx context.Context) RuntimeSnapshot {
 		runtime.RedisStatus = "error"
 		if runtime.LastErrorCode == "" {
 			runtime.LastErrorCode = "payload_store_unavailable"
+		}
+	}
+	if sharedCircuitErr != nil {
+		runtime.RedisStatus = "error"
+		if runtime.LastErrorCode == "" {
+			runtime.LastErrorCode, runtime.LastErrorMessage = sanitizeStoredError("payload_store_unavailable")
 		}
 	}
 	activeWorkers, processed, failed, heartbeat, lastProcessed, workerCode, workerMessage := s.runner.Snapshot()
@@ -221,8 +252,42 @@ func (s *PromptService) Runtime(ctx context.Context) RuntimeSnapshot {
 		if heartbeat == nil || s.clock.Now().Sub(*heartbeat) > 10*time.Second {
 			runtime.ProcessStatus = "degraded"
 		}
+		if hasConfig && len(cfg.EnabledEndpoints()) > 0 {
+			available, err := s.hasAvailableCircuitEndpoint(ctx, cfg)
+			if err != nil {
+				runtime.RedisStatus = "error"
+				if runtime.LastErrorCode == "" {
+					runtime.LastErrorCode, runtime.LastErrorMessage = sanitizeStoredError("payload_store_unavailable")
+				}
+			}
+			if !available {
+				runtime.ProcessStatus = "degraded"
+				if runtime.LastErrorCode == "" {
+					runtime.LastErrorCode, runtime.LastErrorMessage = sanitizeStoredError(ErrorCodeUnavailable)
+				}
+			}
+		}
 	}
 	return runtime
+}
+
+func (s *PromptService) hasAvailableCircuitEndpoint(ctx context.Context, cfg ActiveConfig) (bool, error) {
+	for _, endpoint := range cfg.EnabledEndpoints() {
+		if s.circuit != nil && !s.circuit.Allows(cfg, endpoint) {
+			continue
+		}
+		if s.shared != nil {
+			allowed, err := s.shared.Allows(ctx, cfg, endpoint)
+			if err != nil {
+				return false, err
+			}
+			if !allowed {
+				continue
+			}
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 type ProbeRequest struct {
@@ -288,6 +353,170 @@ func (s *PromptService) Probe(ctx context.Context, request ProbeRequest) ProbeRe
 		code = "authentication_failed"
 	}
 	return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: code, Message: "审计节点探测失败", HTTPStatus: resp.StatusCode, Retryable: retryable, TokenApplied: tokenApplied})
+}
+
+func (s *PromptService) circuitProbeLoop(ctx context.Context) {
+	defer s.circuitWG.Done()
+	reconcileTicker := time.NewTicker(guardCircuitSharedReconcileInterval)
+	defer reconcileTicker.Stop()
+	probeTicker := time.NewTicker(guardCircuitProbeInterval)
+	defer probeTicker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-reconcileTicker.C:
+			s.reconcileSharedOpenCircuits(ctx)
+		case <-probeTicker.C:
+			s.probeOpenCircuits(ctx)
+		}
+	}
+}
+
+// reconcileSharedOpenCircuits republishes a local failure if its initial
+// best-effort Redis write failed. It never probes the model and can only clear
+// local state after the shared fence proves a later background recovery.
+func (s *PromptService) reconcileSharedOpenCircuits(ctx context.Context) {
+	if s == nil || s.config == nil || s.circuit == nil || s.shared == nil {
+		return
+	}
+	cfg, ok := s.config.Active()
+	if !ok || cfg.EffectiveMode() == ModeOff {
+		return
+	}
+	s.circuit.PruneInactive(cfg)
+	s.shared.PruneInactive(cfg)
+	snapshots := s.circuit.Snapshot(cfg)
+	for _, endpoint := range cfg.EnabledEndpoints() {
+		local := snapshots[endpoint.ID]
+		if local.State != GuardCircuitOpen {
+			continue
+		}
+		recovered, err := s.shared.ReconcileLocalOpen(ctx, cfg, endpoint, local)
+		if err == nil && recovered {
+			s.circuit.MarkRecoveredByBackgroundProbe(cfg, endpoint)
+		}
+	}
+}
+
+// probeOpenCircuits is the sole path that can transition an open Guard
+// circuit back to service. Foreground traffic never doubles as a recovery
+// probe, so opening the breaker eliminates request-path pressure on a failed
+// model until this bounded heartbeat succeeds.
+func (s *PromptService) probeOpenCircuits(ctx context.Context) {
+	if s == nil || s.config == nil || s.scanner == nil || (s.circuit == nil && s.shared == nil) {
+		return
+	}
+	cfg, ok := s.config.Active()
+	if !ok || cfg.EffectiveMode() == ModeOff {
+		return
+	}
+	if s.circuit != nil {
+		s.circuit.PruneInactive(cfg)
+	}
+	if s.shared != nil {
+		s.shared.PruneInactive(cfg)
+	}
+	for _, endpoint := range cfg.EnabledEndpoints() {
+		localProbe, localGeneration, sharedLease := false, uint64(0), ""
+		local := GuardCircuitSnapshot{}
+		if s.circuit != nil {
+			local = s.circuit.Snapshot(cfg)[endpoint.ID]
+		}
+		if s.shared != nil && s.circuit != nil {
+			if local.State == GuardCircuitOpen {
+				recovered, err := s.shared.ReconcileLocalOpen(ctx, cfg, endpoint, local)
+				if err != nil {
+					continue
+				}
+				if recovered {
+					s.circuit.MarkRecoveredByBackgroundProbe(cfg, endpoint)
+					continue
+				}
+			}
+		}
+		if s.shared != nil {
+			probeState, leaseID, err := s.shared.TryBeginProbe(ctx, cfg, endpoint)
+			if err != nil {
+				// Async consumers remain stopped when the shared state cannot be
+				// consulted. Do not fan out an uncoordinated recovery request.
+				continue
+			}
+			switch probeState {
+			case sharedGuardCircuitProbeAcquired:
+				sharedLease = leaseID
+				if s.circuit != nil {
+					localProbe = s.circuit.BeginProbe(cfg, endpoint)
+					if localProbe {
+						localGeneration = local.Generation
+					}
+				}
+			case sharedGuardCircuitProbeBusy:
+				continue
+			case sharedGuardCircuitProbeRecovered:
+				// A local open was reconciled above. A closed marker that has not
+				// passed that fence is not evidence that this process recovered.
+				continue
+			case sharedGuardCircuitProbeMissing:
+				if s.circuit == nil || !s.circuit.BeginProbe(cfg, endpoint) {
+					continue
+				}
+				localProbe = true
+				localGeneration = local.Generation
+			}
+		} else if s.circuit != nil {
+			localProbe = s.circuit.BeginProbe(cfg, endpoint)
+			if localProbe {
+				localGeneration = local.Generation
+			}
+		}
+		if !localProbe && sharedLease == "" {
+			continue
+		}
+		started := s.clock.Now()
+		probeCtx, cancel := context.WithTimeout(ctx, guardCircuitProbeTimeout(endpoint))
+		result, err := callPromptScanner(probeCtx, s.scanner, endpoint, guardCircuitProbeText, cfg.Scanners)
+		cancel()
+		if err == nil && result == nil {
+			err = &GuardError{Code: ErrorCodeInvalidResponse}
+		}
+		if localProbe {
+			s.circuit.FinishProbe(cfg, endpoint, err)
+		}
+		if sharedLease != "" {
+			_ = s.shared.FinishLocalProbe(ctx, cfg, endpoint, sharedLease, err, localGeneration)
+		} else if s.shared != nil && err == nil {
+			_ = s.shared.FinishLocalProbe(ctx, cfg, endpoint, "", nil, localGeneration)
+		} else if err != nil && s.shared != nil {
+			if s.circuit != nil {
+				_ = s.shared.PublishLocalOpen(ctx, cfg, endpoint, s.circuit.Snapshot(cfg)[endpoint.ID])
+			} else {
+				_ = s.shared.Open(ctx, cfg, endpoint)
+			}
+		}
+		if err == nil {
+			s.finishProbe(endpoint.ID, started, ProbeResult{OK: true, Status: "healthy", Message: "审计节点恢复探测成功"})
+			continue
+		}
+		code := guardErrorCode(err)
+		retryable := false
+		var guardErr *GuardError
+		if errors.As(err, &guardErr) {
+			retryable = guardErr.Retryable
+		}
+		s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: code, Message: "审计节点恢复探测失败", Retryable: retryable})
+	}
+}
+
+func guardCircuitProbeTimeout(endpoint ActiveEndpoint) time.Duration {
+	timeout := time.Duration(endpoint.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = DefaultTimeoutMS * time.Millisecond
+	}
+	if timeout > guardCircuitProbeTimeoutMax {
+		return guardCircuitProbeTimeoutMax
+	}
+	return timeout
 }
 
 func modelsResponseReady(body []byte, model string) bool {
@@ -368,6 +597,9 @@ func (s *PromptService) finishProbe(id string, started time.Time, result ProbeRe
 		LogWarn(EventProbeFailed, map[string]any{"guard_endpoint_id": id, "status": result.Status, "latency_ms": result.LatencyMS, "http_status": result.HTTPStatus, "error_code": result.ErrorCode, "retryable": result.Retryable})
 	}
 	s.probeMu.Lock()
+	if s.probes == nil {
+		s.probes = make(map[string]ProbeResult)
+	}
 	s.probes[id] = result
 	s.probeMu.Unlock()
 	return result

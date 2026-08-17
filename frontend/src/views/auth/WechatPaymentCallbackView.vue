@@ -115,6 +115,8 @@ onMounted(async () => {
   const amount = readParam('amount')
   const orderType = readParam('order_type')
   const planId = readParam('plan_id')
+  const resetSubscriptionId = readParam('reset_subscription_id')
+  const resetCardQuantity = readParam('reset_card_quantity')
   const redirectURL = new URL(
     normalizeRedirectPath(readParam('redirect')),
     window.location.origin,
@@ -132,6 +134,11 @@ onMounted(async () => {
 
   if (resumeToken) {
     query.wechat_resume_token = resumeToken
+    // The backend signs the complete context. These fields only tell the
+    // purchase page which panel to render while it resumes that token.
+    appendQueryParam(query, 'order_type', orderType)
+    appendQueryParam(query, 'reset_subscription_id', resetSubscriptionId)
+    appendQueryParam(query, 'reset_card_quantity', resetCardQuantity)
   } else {
     query.openid = openid
     appendQueryParam(query, 'state', state)
@@ -140,6 +147,8 @@ onMounted(async () => {
     appendQueryParam(query, 'amount', amount)
     appendQueryParam(query, 'order_type', orderType)
     appendQueryParam(query, 'plan_id', planId)
+    appendQueryParam(query, 'reset_subscription_id', resetSubscriptionId)
+    appendQueryParam(query, 'reset_card_quantity', resetCardQuantity)
   }
 
   await router.replace({

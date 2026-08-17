@@ -7,6 +7,10 @@ const t = (key: string): string =>
     'payment.days': '天',
     'payment.weeks': '周',
     'payment.months': '个月',
+    'payment.quarter': '季度',
+    'payment.quarters': '季度',
+    'payment.perYear': '年',
+    'payment.years': '年',
   })[key] ?? key
 
 const suffix = (validity_days: number, validity_unit: string) =>
@@ -37,10 +41,15 @@ describe('planValiditySuffix', () => {
     expect(suffix(30, '')).toBe('30天')
   })
 
-  // 后端 psComputeValidityDays 对未知单位一律按天计费，显示保持一致，
-  // 避免出现「显示 1 年、实际 1 天」这类误导。
+  it('renders quarter and year plans with the billed period', () => {
+    expect(suffix(1, 'quarter')).toBe('季度')
+    expect(suffix(2, 'quarters')).toBe('2季度')
+    expect(suffix(1, 'year')).toBe('年')
+    expect(suffix(2, 'years')).toBe('2年')
+  })
+
+  // 后端 psComputeValidityDays 对未知单位一律按天计费，显示保持一致。
   it('falls back to days for units billing does not honor', () => {
-    expect(suffix(1, 'year')).toBe('1天')
     expect(suffix(365, 'unknown')).toBe('365天')
   })
 

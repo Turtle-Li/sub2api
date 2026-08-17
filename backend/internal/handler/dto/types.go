@@ -618,9 +618,13 @@ type Setting struct {
 }
 
 type UserSubscription struct {
-	ID      int64 `json:"id"`
-	UserID  int64 `json:"user_id"`
-	GroupID int64 `json:"group_id"`
+	ID               int64    `json:"id"`
+	UserID           int64    `json:"user_id"`
+	GroupID          int64    `json:"group_id"`
+	Platform         string   `json:"platform"`
+	PlanID           *int64   `json:"plan_id,omitempty"`
+	PlanPrice        *float64 `json:"plan_price,omitempty"`
+	PlanValidityDays *int     `json:"plan_validity_days,omitempty"`
 
 	StartsAt  time.Time `json:"starts_at"`
 	ExpiresAt time.Time `json:"expires_at"`

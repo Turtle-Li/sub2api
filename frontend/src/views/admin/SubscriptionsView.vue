@@ -1241,7 +1241,9 @@ const platformFilterOptions = computed(() => [
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'gemini', label: 'Gemini' },
-  { value: 'antigravity', label: 'Antigravity' }
+  { value: 'antigravity', label: 'Antigravity' },
+  { value: 'grok', label: 'Grok' },
+  { value: 'composite', label: 'Composite' },
 ])
 
 // Group options for assign (only subscription type groups)
@@ -1641,13 +1643,23 @@ const closeExtendModal = () => {
 const handleExtendSubscription = async () => {
   if (!extendingSubscription.value) return
 
-  // 前端验证：调整后的过期时间必须在未来
+  // 已过期记录的正数调整等同于重新订阅，后端会从当前时间起算。
+  // 不能继续以历史到期时间预览，否则一个很早到期的订阅会被错误拦截。
   if (extendingSubscription.value.expires_at) {
+    const now = new Date()
     const expiresAt = new Date(extendingSubscription.value.expires_at)
-    const newExpiresAt = new Date(expiresAt.getTime() + extendForm.days * 24 * 60 * 60 * 1000)
-    if (newExpiresAt <= new Date()) {
-      appStore.showError(t('admin.subscriptions.adjustWouldExpire'))
-      return
+    const isExpired = extendingSubscription.value.status === 'expired' || expiresAt <= now
+    if (isExpired) {
+      if (extendForm.days <= 0) {
+        appStore.showError(t('admin.subscriptions.adjustWouldExpire'))
+        return
+      }
+    } else {
+      const newExpiresAt = new Date(expiresAt.getTime() + extendForm.days * 24 * 60 * 60 * 1000)
+      if (newExpiresAt <= now) {
+        appStore.showError(t('admin.subscriptions.adjustWouldExpire'))
+        return
+      }
     }
   }
 

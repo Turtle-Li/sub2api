@@ -53,7 +53,13 @@ const mountPlanCard = (groupPlatform: string, overrides: Partial<SubscriptionPla
 
 describe("SubscriptionPlanCard", () => {
   it("does not show Antigravity model scopes for OpenAI plans", () => {
-    const text = mountPlanCard("openai").text();
+    const wrapper = mountPlanCard("openai")
+    const text = wrapper.text();
+
+    expect(wrapper.classes()).toContain("payment-product-card")
+    expect(wrapper.find(".payment-product-card__body").exists()).toBe(true)
+    expect(wrapper.find(".payment-product-card__meta").exists()).toBe(true)
+    expect(wrapper.find("button").classes()).toContain("payment-product-card__action")
 
     expect(text).not.toContain("Claude");
     expect(text).not.toContain("Gemini");
@@ -147,5 +153,40 @@ describe("SubscriptionPlanCard", () => {
       "justify-end",
     ]));
     expect(badge?.element.parentElement?.textContent).toContain("/ 30payment.days");
+  });
+
+  it("blocks a cross-tier purchase until a legacy subscription has known purchase terms", () => {
+    const wrapper = mount(SubscriptionPlanCard, {
+      props: {
+        plan: {
+          id: 2,
+          group_id: 20,
+          group_platform: "openai",
+          name: "Pro",
+          price: 30,
+          amount: 3000,
+          features: [],
+          rate_multiplier: 1,
+          validity_days: 30,
+          validity_unit: "day",
+          supported_model_scopes: [],
+          is_active: true,
+        },
+        activeSubscriptions: [{
+          id: 100,
+          user_id: 1,
+          group_id: 10,
+          platform: "openai",
+          status: "active",
+          starts_at: "2026-08-01T00:00:00Z",
+          expires_at: "2026-09-01T00:00:00Z",
+        }],
+      },
+      global: { plugins: [i18n, createPinia()] },
+    });
+
+    const button = wrapper.get("button");
+    expect(button.attributes("disabled")).toBeDefined();
+    expect(button.text()).toBe("payment.upgradeUnavailable");
   });
 });

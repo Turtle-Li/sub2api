@@ -109,6 +109,14 @@ export interface PromptGuardMetrics {
   latency_max_ms?: number
 }
 
+export interface PromptGuardCircuit {
+  state: 'closed' | 'open' | 'half_open' | string
+  consecutive_failures: number
+  opened_at?: string
+  next_probe_at?: string
+  last_probe_at?: string
+}
+
 export interface PromptAuditRuntime {
   process_status: 'disabled' | 'running' | 'degraded' | 'error' | string
   effective_mode: PromptAuditMode
@@ -131,6 +139,7 @@ export interface PromptAuditRuntime {
   database_status: string
   redis_status: string
   endpoints: Record<string, PromptProbeResult>
+  circuits: Record<string, PromptGuardCircuit>
   guard_metrics: PromptGuardMetrics
 }
 

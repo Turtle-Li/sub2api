@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
@@ -225,6 +227,113 @@ func TestVerifyNotificationWithProvidersFailsWhenAllProvidersReject(t *testing.T
 
 	_, _, err := verifyNotificationWithProviders(context.Background(), providers, "{}", nil)
 	require.Error(t, err)
+}
+
+func TestSimulatedAlipayAndWxpayCallbacksReachFulfillmentService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name         string
+		providerKey  string
+		body         string
+		notification *payment.PaymentNotification
+		invoke       func(*PaymentWebhookHandler, *gin.Context)
+		wantBody     string
+	}{
+		{
+			name:        "alipay local callback",
+			providerKey: payment.TypeAlipay,
+			body:        "out_trade_no=sub2_local_alipay_101&trade_status=TRADE_SUCCESS",
+			notification: &payment.PaymentNotification{
+				OrderID: "sub2_local_alipay_101",
+				TradeNo: "alipay-local-trade-101",
+				Amount:  12.5,
+				Status:  payment.NotificationStatusSuccess,
+			},
+			invoke:   func(h *PaymentWebhookHandler, c *gin.Context) { h.AlipayNotify(c) },
+			wantBody: "success",
+		},
+		{
+			name:        "wxpay local callback",
+			providerKey: payment.TypeWxpay,
+			body:        `{"id":"evt_local_102","event_type":"TRANSACTION.SUCCESS"}`,
+			notification: &payment.PaymentNotification{
+				OrderID: "sub2_local_wxpay_102",
+				TradeNo: "wxpay-local-trade-102",
+				Amount:  23.4,
+				Status:  payment.NotificationStatusSuccess,
+			},
+			invoke: func(h *PaymentWebhookHandler, c *gin.Context) { h.WxpayNotify(c) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := webhookHandlerProviderStub{key: tt.providerKey, notification: tt.notification}
+			paymentSvc := &paymentWebhookServiceStub{providers: []payment.Provider{provider}}
+			handler := NewPaymentWebhookHandler(paymentSvc, payment.NewRegistry())
+
+			w := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/payment/webhook/"+tt.providerKey, strings.NewReader(tt.body))
+			if tt.providerKey == payment.TypeWxpay {
+				request.Header.Set("Wechatpay-Signature", "local-test-signature")
+			}
+			c, _ := gin.CreateTestContext(w)
+			c.Request = request
+
+			tt.invoke(handler, c)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			if tt.providerKey == payment.TypeWxpay {
+				var response wxpaySuccessResponse
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+				require.Equal(t, wxpaySuccessCode, response.Code)
+				require.Equal(t, wxpaySuccessMessage, response.Message)
+			} else {
+				require.Equal(t, tt.wantBody, w.Body.String())
+			}
+
+			received := paymentSvc.notifications()
+			require.Len(t, received, 1)
+			require.Equal(t, tt.providerKey, received[0].providerKey)
+			require.Equal(t, tt.notification.OrderID, received[0].notification.OrderID)
+			require.Equal(t, tt.notification.TradeNo, received[0].notification.TradeNo)
+			require.Equal(t, tt.notification.Amount, received[0].notification.Amount)
+			require.Equal(t, payment.NotificationStatusSuccess, received[0].notification.Status)
+		})
+	}
+}
+
+type capturedPaymentNotification struct {
+	providerKey  string
+	notification *payment.PaymentNotification
+}
+
+type paymentWebhookServiceStub struct {
+	providers []payment.Provider
+
+	mu       sync.Mutex
+	received []capturedPaymentNotification
+}
+
+func (s *paymentWebhookServiceStub) GetWebhookProviders(context.Context, string, string) ([]payment.Provider, error) {
+	return s.providers, nil
+}
+
+func (s *paymentWebhookServiceStub) HandlePaymentNotification(_ context.Context, notification *payment.PaymentNotification, providerKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copy := *notification
+	s.received = append(s.received, capturedPaymentNotification{providerKey: providerKey, notification: &copy})
+	return nil
+}
+
+func (s *paymentWebhookServiceStub) notifications() []capturedPaymentNotification {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]capturedPaymentNotification, len(s.received))
+	copy(out, s.received)
+	return out
 }
 
 type webhookHandlerProviderStub struct {

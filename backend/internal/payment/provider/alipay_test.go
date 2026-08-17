@@ -4,8 +4,16 @@ package provider
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 
@@ -134,6 +142,81 @@ func TestNewAlipay(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVerifyNotificationAcceptsLocallySignedCallbackAndRejectsTampering(t *testing.T) {
+	platformKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate local Alipay platform key: %v", err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(platformKey)
+	if err != nil {
+		t.Fatalf("marshal local merchant key: %v", err)
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(&platformKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal local platform public key: %v", err)
+	}
+	provider, err := NewAlipay("local-alipay-account", map[string]string{
+		"appId":      "2026000000000101",
+		"privateKey": string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})),
+		"publicKey":  string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})),
+	})
+	if err != nil {
+		t.Fatalf("NewAlipay: %v", err)
+	}
+
+	rawBody := locallySignedAlipayCallback(t, platformKey, url.Values{
+		"app_id":       {"2026000000000101"},
+		"notify_time":  {"2026-08-06 10:00:00"},
+		"out_trade_no": {"sub2_local_alipay_101"},
+		"trade_no":     {"2026080622001410100000000001"},
+		"trade_status": {"TRADE_SUCCESS"},
+		"total_amount": {"23.40"},
+	})
+
+	notification, err := provider.VerifyNotification(context.Background(), rawBody, nil)
+	if err != nil {
+		t.Fatalf("verify locally signed callback: %v", err)
+	}
+	if notification.OrderID != "sub2_local_alipay_101" || notification.TradeNo != "2026080622001410100000000001" {
+		t.Fatalf("unexpected notification identifiers: %+v", notification)
+	}
+	if notification.Amount != 23.4 || notification.Status != payment.NotificationStatusSuccess {
+		t.Fatalf("unexpected notification payment state: %+v", notification)
+	}
+	if notification.Metadata["app_id"] != "2026000000000101" {
+		t.Fatalf("app_id metadata = %q", notification.Metadata["app_id"])
+	}
+
+	// The amount is in the signed field set. Altering it without resigning must
+	// be rejected before it reaches payment fulfillment.
+	tampered := strings.Replace(rawBody, "total_amount=23.40", "total_amount=99.99", 1)
+	if _, err := provider.VerifyNotification(context.Background(), tampered, nil); err == nil {
+		t.Fatal("expected tampered locally signed callback to fail verification")
+	}
+}
+
+func locallySignedAlipayCallback(t *testing.T, privateKey *rsa.PrivateKey, values url.Values) string {
+	t.Helper()
+	pairs := make([]string, 0, len(values))
+	for key, vals := range values {
+		if key == "sign" || key == "sign_type" || key == "alipay_cert_sn" {
+			continue
+		}
+		for _, value := range vals {
+			pairs = append(pairs, key+"="+value)
+		}
+	}
+	sort.Strings(pairs)
+	digest := sha256.Sum256([]byte(strings.Join(pairs, "&")))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, digest[:])
+	if err != nil {
+		t.Fatalf("sign local Alipay callback: %v", err)
+	}
+	values.Set("sign_type", "RSA2")
+	values.Set("sign", base64.StdEncoding.EncodeToString(signature))
+	return values.Encode()
 }
 
 func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {

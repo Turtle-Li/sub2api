@@ -7631,6 +7631,11 @@
                     </p>
                   </div>
                 </div>
+                <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-800">
+                  <label class="input-label">{{ t("admin.settings.payment.rechargeOptions") }}</label>
+                  <textarea v-model="form.payment_recharge_options_json" rows="6" class="input font-mono text-xs" placeholder='[{"amount":20,"original_price":20,"label":"体验档","description":"适合轻量试用","balance_bonus":0,"concurrency":2,"estimated_rate_multiplier":1,"estimated_tokens":2000000,"sort_order":10,"enabled":true}]'></textarea>
+                  <p class="mt-1 text-xs text-gray-400">{{ t("admin.settings.payment.rechargeOptionsHint") }}</p>
+                </div>
                 <!-- Row 3: Pending orders + load balance + cancel rate limit (all in one row) -->
                 <div class="flex flex-wrap items-end gap-4">
                   <div class="w-28">
@@ -9156,6 +9161,7 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_weight_upstream_cost: string;
   openai_advanced_scheduler_weight_previous_response: string;
   openai_advanced_scheduler_weight_session_sticky: string;
+  payment_recharge_options_json: string;
   // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
 };
@@ -9214,6 +9220,8 @@ const form = reactive<SettingsForm>({
   payment_balance_recharge_multiplier: 1,
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
+  payment_recharge_options: [] as Array<Record<string, unknown>>,
+  payment_recharge_options_json: "[]",
   payment_enabled_types: [],
   payment_help_image_url: "",
   payment_help_text: "",
@@ -10381,6 +10389,7 @@ async function loadSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
+    form.payment_recharge_options_json = JSON.stringify(settings.payment_recharge_options || [], null, 2);
     syncCaptchaProviderSelection();
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
       form.claude_oauth_system_prompt_blocks =
@@ -10602,6 +10611,15 @@ function findDuplicateDefaultSubscription(
 async function saveSettings() {
   saving.value = true;
   try {
+    let normalizedRechargeOptions: Array<Record<string, unknown>>;
+    try {
+      const parsed = JSON.parse(form.payment_recharge_options_json || "[]");
+      if (!Array.isArray(parsed)) throw new Error("not an array");
+      normalizedRechargeOptions = parsed;
+    } catch {
+      appStore.showError("充值档位必须是 JSON 数组。 Recharge presets must be a JSON array.");
+      return;
+    }
     const normalizedTableDefaultPageSize = Math.floor(
       Number(form.table_default_page_size),
     );
@@ -10976,6 +10994,7 @@ async function saveSettings() {
       payment_subscription_usd_to_cny_rate:
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
+      payment_recharge_options: normalizedRechargeOptions,
       payment_enabled_types: form.payment_enabled_types,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,

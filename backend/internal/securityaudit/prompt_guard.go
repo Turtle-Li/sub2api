@@ -12,6 +12,8 @@ type GuardEvaluator struct {
 	repo    JobRepository
 	metrics Metrics
 	clock   Clock
+	circuit *GuardCircuit
+	shared  *sharedGuardCircuit
 
 	global       chan struct{}
 	perNodeLimit int
@@ -20,18 +22,29 @@ type GuardEvaluator struct {
 }
 
 func NewGuardEvaluator(scanner PromptScanner, repo JobRepository, metrics Metrics) *GuardEvaluator {
-	return newGuardEvaluator(scanner, repo, metrics, 64, 16)
+	return newGuardEvaluatorWithCircuit(scanner, repo, metrics, 64, 16, newGuardCircuit(realClock{}))
 }
 
 func newGuardEvaluator(scanner PromptScanner, repo JobRepository, metrics Metrics, globalLimit, perNodeLimit int) *GuardEvaluator {
+	return newGuardEvaluatorWithCircuit(scanner, repo, metrics, globalLimit, perNodeLimit, newGuardCircuit(realClock{}))
+}
+
+func newGuardEvaluatorWithCircuit(scanner PromptScanner, repo JobRepository, metrics Metrics, globalLimit, perNodeLimit int, circuit *GuardCircuit) *GuardEvaluator {
+	return newGuardEvaluatorWithCircuits(scanner, repo, metrics, globalLimit, perNodeLimit, circuit, nil)
+}
+
+func newGuardEvaluatorWithCircuits(scanner PromptScanner, repo JobRepository, metrics Metrics, globalLimit, perNodeLimit int, circuit *GuardCircuit, shared *sharedGuardCircuit) *GuardEvaluator {
 	if globalLimit < 1 {
 		globalLimit = 64
 	}
 	if perNodeLimit < 1 {
 		perNodeLimit = 16
 	}
+	if circuit == nil {
+		circuit = newGuardCircuit(realClock{})
+	}
 	return &GuardEvaluator{scanner: scanner, repo: repo, metrics: metrics, clock: realClock{},
-		global: make(chan struct{}, globalLimit), perNodeLimit: perNodeLimit, nodes: map[string]chan struct{}{}}
+		global: make(chan struct{}, globalLimit), perNodeLimit: perNodeLimit, nodes: map[string]chan struct{}{}, circuit: circuit, shared: shared}
 }
 
 func (g *GuardEvaluator) Evaluate(ctx context.Context, cfg ActiveConfig, snapshot PromptSnapshot) (*PromptDecision, error) {
@@ -190,6 +203,13 @@ func logGuardFailure(snapshot PromptSnapshot, cfg ActiveConfig, kind DecisionKin
 func (g *GuardEvaluator) scanChunk(ctx context.Context, cfg ActiveConfig, endpoints []ActiveEndpoint, chunk string) (*NormalizedResult, error) {
 	var lastErr error
 	for index, endpoint := range endpoints {
+		if g.circuit != nil && !g.circuit.Allows(cfg, endpoint) {
+			lastErr = &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
+			if index < len(endpoints)-1 && g.metrics != nil {
+				g.metrics.IncFailover()
+			}
+			continue
+		}
 		semaphore := g.nodeSemaphore(endpoint.ID)
 		select {
 		case semaphore <- struct{}{}:
@@ -208,10 +228,19 @@ func (g *GuardEvaluator) scanChunk(ctx context.Context, cfg ActiveConfig, endpoi
 		result, err := callPromptScanner(ctx, g.scanner, endpoint, chunk, cfg.Scanners)
 		<-semaphore
 		if err == nil && result != nil {
+			if g.circuit != nil {
+				g.circuit.RecordSuccess(cfg, endpoint)
+			}
 			return result, nil
 		}
 		if err == nil {
 			err = &GuardError{Code: ErrorCodeInvalidResponse, Retryable: false}
+		}
+		if g.circuit != nil && g.circuit.RecordFailure(cfg, endpoint, err) && g.shared != nil {
+			// The caller already receives its established fail-closed result. Publish
+			// asynchronously so draining async consumers stop claiming jobs without
+			// making Redis availability part of synchronous request latency.
+			g.shared.ReportLocalOpen(cfg, endpoint, g.circuit.Snapshot(cfg)[endpoint.ID])
 		}
 		lastErr = err
 		var guardErr *GuardError

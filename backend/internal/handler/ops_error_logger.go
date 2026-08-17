@@ -885,18 +885,38 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				effectiveUpstreamStatus = *upstreamStatusCode
 			}
 
-			recoveredMsg := "Recovered upstream error"
+			recordedStatus := status
+			recordedType := "upstream_error"
+			recordedCode := ""
+			recordedMsg := "Recovered upstream error"
 			if finalAccountAuth {
-				recoveredMsg = "Recovered account authentication failure"
+				recordedMsg = "Recovered account authentication failure"
 			} else if effectiveUpstreamStatus > 0 {
-				recoveredMsg += " " + strconvItoa(effectiveUpstreamStatus)
+				recordedMsg += " " + strconvItoa(effectiveUpstreamStatus)
 			}
 			if upstreamErrorMessage != nil && strings.TrimSpace(*upstreamErrorMessage) != "" {
-				recoveredMsg += ": " + strings.TrimSpace(*upstreamErrorMessage)
+				recordedMsg += ": " + strings.TrimSpace(*upstreamErrorMessage)
 			}
-			recoveredMsg = truncateString(recoveredMsg, 2048)
-			recoveredPhase, recoveredBusinessLimited, recoveredOwner, recoveredSource := classifyOpsErrorLog(
-				c, "upstream_error", recoveredMsg, "", effectiveUpstreamStatus,
+			// A response.failed can terminate an already-open HTTP 200 stream. It
+			// still has upstream context, so it enters this branch rather than
+			// logOpsStreamError. Preserve the wire status only for genuinely
+			// recovered attempts; final semantic failures must use their intended
+			// status so request errors, SLA metrics, and alert rules can see them.
+			if streamErr, ok := service.GetOpsStreamError(c); ok && streamErr.CountTowardsSLA && streamErr.IntendedStatus >= http.StatusBadRequest {
+				recordedStatus = streamErr.IntendedStatus
+				recordedType = normalizeOpsErrorType(streamErr.ErrType, streamErr.Code)
+				recordedCode = streamErr.Code
+				if msg := strings.TrimSpace(streamErr.Message); msg != "" {
+					recordedMsg = msg
+				}
+			}
+			recordedMsg = truncateString(recordedMsg, 2048)
+			severityStatus := recordedStatus
+			if severityStatus < http.StatusBadRequest && effectiveUpstreamStatus > 0 {
+				severityStatus = effectiveUpstreamStatus
+			}
+			recordedPhase, recordedBusinessLimited, recordedOwner, recordedSource := classifyOpsErrorLog(
+				c, recordedType, recordedMsg, recordedCode, recordedStatus,
 			)
 
 			entry := &service.OpsInsertErrorLogInput{
@@ -938,19 +958,19 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				}(),
 				UserAgent: c.GetHeader("User-Agent"),
 
-				ErrorPhase: recoveredPhase,
-				ErrorType:  "upstream_error",
+				ErrorPhase: recordedPhase,
+				ErrorType:  recordedType,
 				// Severity should reflect the upstream failure, not the final client status (200).
-				Severity:          classifyOpsSeverity("upstream_error", effectiveUpstreamStatus),
-				StatusCode:        status,
-				IsBusinessLimited: recoveredBusinessLimited,
+				Severity:          classifyOpsSeverity(recordedType, severityStatus),
+				StatusCode:        recordedStatus,
+				IsBusinessLimited: recordedBusinessLimited,
 				IsCountTokens:     isCountTokensRequest(c),
 
-				ErrorMessage: recoveredMsg,
+				ErrorMessage: recordedMsg,
 				ErrorBody:    "",
 
-				ErrorSource: recoveredSource,
-				ErrorOwner:  recoveredOwner,
+				ErrorSource: recordedSource,
+				ErrorOwner:  recordedOwner,
 
 				UpstreamStatusCode:   upstreamStatusCode,
 				UpstreamErrorMessage: upstreamErrorMessage,

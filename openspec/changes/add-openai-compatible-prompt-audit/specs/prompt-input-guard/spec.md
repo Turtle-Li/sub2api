@@ -121,6 +121,11 @@
 - **THEN** HTTP 状态 MUST 为 503
 - **THEN** error_code MUST 为 `prompt_guard_unavailable`
 
+#### Scenario: 同步 Guard 节点已熔断
+- **WHEN** 适用请求的所有 Guard 节点均处于熔断或恢复探测中
+- **THEN** 系统 MUST 不再向 Guard 发送该请求正文
+- **THEN** 系统 MUST 保持既有 fail-closed 语义并返回 503 `prompt_guard_unavailable`
+
 #### Scenario: HTTP Guard 响应非法
 - **WHEN** Guard 输出无法严格解析
 - **THEN** HTTP 状态 MUST 为 503

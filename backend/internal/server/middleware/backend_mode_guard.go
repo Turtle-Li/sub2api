@@ -34,6 +34,8 @@ func backendModeAllowsAuthPath(path string) bool {
 		"/auth/login/2fa",
 		"/auth/passkey/login/begin",
 		"/auth/passkey/login/finish",
+		"/auth/desktop/start",
+		"/auth/desktop/token",
 		"/auth/logout",
 		"/auth/refresh",
 	} {

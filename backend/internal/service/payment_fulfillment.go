@@ -16,6 +16,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
+	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
@@ -29,6 +30,94 @@ import (
 var ErrOrderNotFound = errors.New("payment order not found")
 
 const paymentFulfillmentLeaseDuration = 5 * time.Minute
+
+func paymentSnapshotInt64(snapshot map[string]interface{}, key string) (int64, bool) {
+	if snapshot == nil {
+		return 0, false
+	}
+	value, ok := snapshot[key]
+	if !ok {
+		return 0, false
+	}
+	switch value := value.(type) {
+	case int:
+		return int64(value), true
+	case int64:
+		return value, true
+	case float64:
+		if math.Trunc(value) != value || math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, false
+		}
+		return int64(value), true
+	case json.Number:
+		parsed, err := value.Int64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func paymentSnapshotInt(snapshot map[string]interface{}, key string) (int, bool) {
+	value, ok := paymentSnapshotInt64(snapshot, key)
+	if !ok || value > int64(math.MaxInt) || value < int64(math.MinInt) {
+		return 0, false
+	}
+	return int(value), true
+}
+
+func paymentSnapshotFloat64(snapshot map[string]interface{}, key string) float64 {
+	if snapshot == nil {
+		return 0
+	}
+	value, ok := snapshot[key]
+	if !ok {
+		return 0
+	}
+	switch value := value.(type) {
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0
+		}
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		parsed, err := value.Float64()
+		if err != nil {
+			return 0
+		}
+		return parsed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func paymentSnapshotString(snapshot map[string]interface{}, key string) string {
+	if snapshot == nil {
+		return ""
+	}
+	value, ok := snapshot[key]
+	if !ok {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
 
 type paymentFulfillmentLease struct {
 	version time.Time
@@ -154,11 +243,22 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 	c, err := s.entClient.PaymentOrder.Update().Where(
 		paymentorder.IDEQ(o.ID),
 		paymentorder.Or(
-			paymentorder.StatusEQ(OrderStatusPending),
-			paymentorder.StatusEQ(OrderStatusCancelled),
+			paymentorder.And(
+				paymentorder.StatusEQ(OrderStatusPending),
+				paymentorder.ExpiresAtGTE(grace),
+			),
+			paymentorder.And(
+				paymentorder.StatusEQ(OrderStatusCancelled),
+				paymentorder.UpdatedAtGTE(grace),
+			),
 			paymentorder.And(
 				paymentorder.StatusEQ(OrderStatusExpired),
 				paymentorder.UpdatedAtGTE(grace),
+			),
+			paymentorder.And(
+				paymentorder.StatusEQ(OrderStatusFailed),
+				paymentorder.PaidAtIsNil(),
+				paymentorder.ExpiresAtGTE(grace),
 			),
 		),
 	).SetStatus(OrderStatusPaid).SetPayAmount(paid).SetPaymentTradeNo(tradeNo).SetPaidAt(now).ClearFailedAt().ClearFailedReason().Save(ctx)
@@ -218,10 +318,16 @@ func (s *PaymentService) executeFulfillment(ctx context.Context, oid int64) erro
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
 	}
-	if o.OrderType == payment.OrderTypeSubscription {
+	switch o.OrderType {
+	case payment.OrderTypeSubscription:
 		return s.ExecuteSubscriptionFulfillment(ctx, oid)
+	case payment.OrderTypeSubscriptionResetCards:
+		return s.ExecuteSubscriptionResetCardsFulfillment(ctx, oid)
+	case payment.OrderTypeBalance:
+		return s.ExecuteBalanceFulfillment(ctx, oid)
+	default:
+		return infraerrors.BadRequest("INVALID_ORDER_TYPE", "unsupported payment order type")
 	}
-	return s.ExecuteBalanceFulfillment(ctx, oid)
 }
 
 func (s *PaymentService) ExecuteBalanceFulfillment(ctx context.Context, oid int64) error {
@@ -334,6 +440,10 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 
 	switch action {
 	case redeemActionSkipCompleted:
+		if err := grantPaymentOrderConcurrency(ctx, s.entClient, o); err != nil {
+			return err
+		}
+		s.invalidatePaymentAuthCache(ctx, o.UserID)
 		if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
 			return err
 		}
@@ -350,6 +460,10 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 	if _, err := s.redeemService.Redeem(ContextSkipRedeemAffiliate(ctx), o.UserID, o.RechargeCode); err != nil {
 		return fmt.Errorf("redeem balance: %w", err)
 	}
+	if err := grantPaymentOrderConcurrency(ctx, s.entClient, o); err != nil {
+		return err
+	}
+	s.invalidatePaymentAuthCache(ctx, o.UserID)
 	if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
 		return err
 	}
@@ -411,9 +525,11 @@ func (s *PaymentService) dispatchPaymentFulfillmentNotification(o *dbent.Payment
 
 func (s *PaymentService) sendBalanceRechargeSuccessNotification(ctx context.Context, o *dbent.PaymentOrder) error {
 	currentBalance := ""
+	currentConcurrency := ""
 	if s.userRepo != nil {
 		if user, err := s.userRepo.GetByID(ctx, o.UserID); err == nil && user != nil {
 			currentBalance = fmt.Sprintf("%.2f", user.Balance)
+			currentConcurrency = strconv.Itoa(user.Concurrency)
 		}
 	}
 	return s.notificationEmailService.Send(ctx, NotificationEmailSendInput{
@@ -426,6 +542,7 @@ func (s *PaymentService) sendBalanceRechargeSuccessNotification(ctx context.Cont
 		Variables: map[string]string{
 			"recharge_amount": fmt.Sprintf("%.2f", o.Amount),
 			"current_balance": currentBalance,
+			"concurrency":     currentConcurrency,
 			"order_id":        strconv.FormatInt(o.ID, 10),
 		},
 	})
@@ -436,8 +553,14 @@ func (s *PaymentService) sendSubscriptionPurchaseSuccessNotification(ctx context
 		"subscription_group": "Subscription",
 		"subscription_days":  "",
 		"expiry_time":        "",
+		"balance_bonus":      "0.00",
+		"reset_card_count":   "0",
+		"concurrency":        strconv.Itoa(paymentOrderEntitlements(o).Concurrency),
 		"order_id":           strconv.FormatInt(o.ID, 10),
 	}
+	entitlements := paymentOrderEntitlements(o)
+	variables["balance_bonus"] = fmt.Sprintf("%.2f", entitlements.BalanceBonus)
+	variables["reset_card_count"] = strconv.Itoa(entitlements.ResetCardCount)
 	if o.SubscriptionDays != nil {
 		variables["subscription_days"] = strconv.Itoa(*o.SubscriptionDays)
 	}
@@ -511,9 +634,264 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder, lease
 	return s.markCompleted(ctx, o, lease, "SUBSCRIPTION_SUCCESS")
 }
 
+// ExecuteSubscriptionResetCardsFulfillment grants standalone reset cards after
+// payment. Its grant audit is committed in the same transaction as the insert,
+// so provider retries cannot create an extra batch.
+func (s *PaymentService) ExecuteSubscriptionResetCardsFulfillment(ctx context.Context, oid int64) error {
+	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
+	if err != nil {
+		return infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if o.Status == OrderStatusCompleted {
+		return nil
+	}
+	if psIsRefundStatus(o.Status) {
+		return infraerrors.BadRequest("INVALID_STATUS", "refund-related order cannot fulfill")
+	}
+	if o.Status != OrderStatusPaid && o.Status != OrderStatusFailed && o.Status != OrderStatusRecharging {
+		return infraerrors.BadRequest("INVALID_STATUS", "order cannot fulfill in status "+o.Status)
+	}
+	lease, err := s.acquirePaymentFulfillmentLease(ctx, o)
+	if err != nil {
+		return err
+	}
+	if lease == nil {
+		return nil
+	}
+	if err := s.doSubscriptionResetCards(ctx, o, lease); err != nil {
+		s.markFailed(ctx, oid, lease, err)
+		return err
+	}
+	return nil
+}
+
+func (s *PaymentService) doSubscriptionResetCards(ctx context.Context, o *dbent.PaymentOrder, lease *paymentFulfillmentLease) error {
+	groupID, err := s.grantPurchasedResetCards(ctx, o)
+	if err != nil {
+		return err
+	}
+	if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
+		return err
+	}
+	if err := s.markCompleted(ctx, o, lease, "SUBSCRIPTION_RESET_CARDS_SUCCESS"); err != nil {
+		return err
+	}
+	if s.subscriptionSvc != nil && groupID > 0 {
+		if err := s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID); err != nil {
+			slog.Warn("subscription cache invalidation after reset-card purchase failed", "orderID", o.ID, "userID", o.UserID, "groupID", groupID, "err", err)
+		}
+	}
+	return nil
+}
+
+func (s *PaymentService) grantPurchasedResetCards(ctx context.Context, o *dbent.PaymentOrder) (int64, error) {
+	if o == nil || o.ProductSnapshot == nil {
+		return 0, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "reset card purchase is missing product details")
+	}
+	subscriptionID, ok := paymentSnapshotInt64(o.ProductSnapshot, "subscription_id")
+	if !ok || subscriptionID <= 0 {
+		return 0, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "reset card purchase is missing subscription")
+	}
+	quantity, ok := paymentSnapshotInt(o.ProductSnapshot, "quantity")
+	if !ok || quantity < 1 || quantity > maxResetCardPurchaseQuantity {
+		return 0, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "reset card purchase has invalid quantity")
+	}
+	validityDays, ok := paymentSnapshotInt(o.ProductSnapshot, "validity_days")
+	if !ok || validityDays != resetCardPurchaseValidityDays {
+		return 0, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "reset card purchase has invalid validity")
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin reset card purchase tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	auditOrderID := strconv.FormatInt(o.ID, 10)
+	audit, auditErr := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(auditOrderID),
+		paymentauditlog.ActionEQ("SUBSCRIPTION_RESET_CARDS_GRANTED"),
+	).Only(txCtx)
+	if auditErr != nil && !dbent.IsNotFound(auditErr) {
+		return 0, fmt.Errorf("check reset card purchase audit: %w", auditErr)
+	}
+	alreadyGranted := auditErr == nil
+	if alreadyGranted {
+		var detail struct {
+			GroupID int64 `json:"groupID"`
+		}
+		_ = json.Unmarshal([]byte(audit.Detail), &detail)
+		if err := tx.Commit(); err != nil {
+			return 0, fmt.Errorf("commit already granted reset card purchase: %w", err)
+		}
+		return detail.GroupID, nil
+	}
+
+	now := time.Now()
+	subscription, err := client.UserSubscription.Query().Where(
+		usersubscription.IDEQ(subscriptionID),
+		usersubscription.UserIDEQ(o.UserID),
+		usersubscription.StatusEQ(SubscriptionStatusActive),
+		usersubscription.ExpiresAtGT(now),
+	).ForUpdate().Only(txCtx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return 0, infraerrors.BadRequest("RESET_CARD_SUBSCRIPTION_UNAVAILABLE", "an active subscription is required to receive reset cards")
+		}
+		return 0, fmt.Errorf("lock reset card purchase subscription: %w", err)
+	}
+	// A concurrent worker can have read the missing audit before waiting on the
+	// subscription row lock. Re-read after FOR UPDATE so it observes the first
+	// worker's committed grant and exits idempotently instead of colliding with
+	// the unique (order_id, action) audit key.
+	if !alreadyGranted {
+		audit, auditErr = client.PaymentAuditLog.Query().Where(
+			paymentauditlog.OrderIDEQ(auditOrderID),
+			paymentauditlog.ActionEQ("SUBSCRIPTION_RESET_CARDS_GRANTED"),
+		).Only(txCtx)
+		if auditErr != nil && !dbent.IsNotFound(auditErr) {
+			return 0, fmt.Errorf("recheck reset card purchase audit: %w", auditErr)
+		}
+		if auditErr == nil {
+			var detail struct {
+				GroupID int64 `json:"groupID"`
+			}
+			_ = json.Unmarshal([]byte(audit.Detail), &detail)
+			if err := tx.Commit(); err != nil {
+				return 0, fmt.Errorf("commit already granted reset card purchase: %w", err)
+			}
+			return detail.GroupID, nil
+		}
+	}
+	if snapshotPlatform := paymentSnapshotString(o.ProductSnapshot, "platform"); snapshotPlatform != "" &&
+		!strings.EqualFold(snapshotPlatform, strings.TrimSpace(subscription.Platform)) {
+		return 0, infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "subscription platform changed before reset cards were granted")
+	}
+	if snapshotGroupID, ok := paymentSnapshotInt64(o.ProductSnapshot, "group_id"); ok && snapshotGroupID != subscription.GroupID {
+		return 0, infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "subscription group changed before reset cards were granted")
+	}
+	if err := validatePurchasedResetCardSource(subscription, o.ProductSnapshot, o.Amount, quantity); err != nil {
+		return 0, err
+	}
+	expiresAt := now.AddDate(0, 0, validityDays)
+	rows, err := client.QueryContext(txCtx, `
+		INSERT INTO subscription_reset_grants (
+			subscription_id, user_id, group_id, quantity, used_count,
+			expires_at, issued_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 0, $5, NULL, $6, $6)
+		RETURNING id
+	`, subscription.ID, o.UserID, subscription.GroupID, quantity, expiresAt, now)
+	if err != nil {
+		return 0, fmt.Errorf("insert purchased reset cards: %w", err)
+	}
+	var grantID int64
+	if rows.Next() {
+		if err := rows.Scan(&grantID); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("scan purchased reset card grant: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, fmt.Errorf("iterate purchased reset card grant: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close purchased reset card grant: %w", err)
+	}
+	if grantID == 0 {
+		return 0, fmt.Errorf("purchased reset card grant was not created")
+	}
+	detail, _ := json.Marshal(map[string]any{
+		"subscriptionID": subscription.ID,
+		"groupID":        subscription.GroupID,
+		"quantity":       quantity,
+		"validityDays":   validityDays,
+		"grantID":        grantID,
+	})
+	if _, err := client.PaymentAuditLog.Create().
+		SetOrderID(auditOrderID).
+		SetAction("SUBSCRIPTION_RESET_CARDS_GRANTED").
+		SetDetail(string(detail)).
+		SetOperator("system").
+		Save(txCtx); err != nil {
+		return 0, fmt.Errorf("record reset card purchase audit: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit reset card purchase: %w", err)
+	}
+	return subscription.GroupID, nil
+}
+
+func validatePurchasedResetCardSource(subscription *dbent.UserSubscription, snapshot map[string]interface{}, orderAmount float64, quantity int) error {
+	if subscription == nil || snapshot == nil {
+		return infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "reset card purchase is missing source terms")
+	}
+	sourcePlanID, hasSourcePlanID := paymentSnapshotInt64(snapshot, "source_plan_id")
+	if !hasSourcePlanID || sourcePlanID <= 0 || subscription.PlanID == nil || *subscription.PlanID != sourcePlanID {
+		return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "subscription plan changed before reset cards were granted")
+	}
+	_, hasSourcePrice := snapshot["source_plan_price"]
+	if !hasSourcePrice {
+		return infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "reset card purchase is missing source price")
+	}
+	expectedPrice := paymentSnapshotFloat64(snapshot, "source_plan_price")
+	if expectedPrice <= 0 || subscription.PlanPrice == nil || math.Abs(*subscription.PlanPrice-expectedPrice) > 0.005 {
+		return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "subscription price changed before reset cards were granted")
+	}
+	if sourceDays, ok := paymentSnapshotInt(snapshot, "source_plan_validity_days"); !ok || sourceDays <= 0 || subscription.PlanValidityDays == nil || *subscription.PlanValidityDays != sourceDays {
+		return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "subscription validity changed before reset cards were granted")
+	}
+	unitPrice := roundUpPaymentAmount(expectedPrice / 3)
+	snapshotUnitPrice := paymentSnapshotFloat64(snapshot, "unit_price")
+	expectedAmount := roundUpPaymentAmount(unitPrice * float64(quantity))
+	if snapshotUnitPrice <= 0 || math.Abs(snapshotUnitPrice-unitPrice) > 0.005 || math.Abs(orderAmount-expectedAmount) > 0.005 {
+		return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "reset card purchase price changed before cards were granted")
+	}
+	return nil
+}
+
 func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, o *dbent.PaymentOrder, groupID int64, days int) error {
-	if s.subscriptionSvc == nil {
-		return errors.New("subscription service is unavailable")
+	if s == nil || s.entClient == nil || o == nil {
+		return errors.New("subscription fulfillment is unavailable")
+	}
+	if s.groupRepo == nil {
+		return errors.New("subscription group repository is unavailable")
+	}
+	group, err := s.groupRepo.GetByID(ctx, groupID)
+	if err != nil || group == nil || !group.IsSubscriptionType() {
+		return fmt.Errorf("group %d no longer exists or is not a subscription group", groupID)
+	}
+	platform := strings.TrimSpace(group.Platform)
+	if platform == "" {
+		return errors.New("subscription group has no platform")
+	}
+	if snapshotPlatform := paymentSnapshotString(o.ProductSnapshot, "platform"); snapshotPlatform != "" && !strings.EqualFold(snapshotPlatform, platform) {
+		return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "subscription platform changed before payment completed")
+	}
+	operation := paymentSnapshotString(o.ProductSnapshot, "operation")
+	if operation == "" {
+		// Orders created before operation snapshots used the old same-group
+		// assign-or-extend semantics. Treat them as renewals for compatibility.
+		operation = subscriptionPurchaseOperationRenew
+	}
+	if operation != subscriptionPurchaseOperationSubscribe &&
+		operation != subscriptionPurchaseOperationRenew &&
+		operation != subscriptionPurchaseOperationResubscribe &&
+		operation != subscriptionPurchaseOperationUpgrade {
+		return fmt.Errorf("unsupported subscription purchase operation %q", operation)
+	}
+	targetPlanID := o.PlanID
+	targetPrice := paymentSnapshotFloat64(o.ProductSnapshot, "price")
+	if targetPrice <= 0 {
+		targetPrice = o.Amount
+	}
+	targetDays := days
+	if snapshotDays, ok := paymentSnapshotInt(o.ProductSnapshot, "subscription_days"); ok && snapshotDays > 0 {
+		targetDays = snapshotDays
+	}
+	if targetDays <= 0 {
+		return errors.New("subscription order has invalid validity")
 	}
 
 	tx, err := s.entClient.Tx(ctx)
@@ -521,7 +899,6 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 		return fmt.Errorf("begin subscription fulfillment tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-
 	txCtx := dbent.NewTxContext(ctx, tx)
 	txClient := tx.Client()
 	alreadyAssigned, err := hasPaymentSubscriptionAssignmentAudit(txCtx, txClient, o.ID)
@@ -529,31 +906,48 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 		return fmt.Errorf("check subscription assignment audit: %w", err)
 	}
 
-	recoveredFromNote := false
+	orderNote := paymentSubscriptionOrderNote(o.ID)
+	query := txClient.UserSubscription.Query().Where(
+		usersubscription.UserIDEQ(o.UserID),
+		usersubscription.PlatformEQ(platform),
+	).ForUpdate()
+	existing, lookupErr := query.Only(txCtx)
+	if dbent.IsNotFound(lookupErr) {
+		existing = nil
+		lookupErr = nil
+	}
+	if lookupErr != nil {
+		return fmt.Errorf("lock existing platform subscription: %w", lookupErr)
+	}
+	oldGroupID := int64(0)
+	if existing != nil {
+		oldGroupID = existing.GroupID
+	}
+
 	if !alreadyAssigned {
-		orderNote := paymentSubscriptionOrderNote(o.ID)
-		existing, lookupErr := s.subscriptionSvc.userSubRepo.GetByUserIDAndGroupID(txCtx, o.UserID, groupID)
-		switch {
-		case lookupErr == nil && existing != nil && hasPaymentSubscriptionOrderNote(existing.Notes, orderNote):
-			recoveredFromNote = true
-		case lookupErr != nil && !errors.Is(lookupErr, ErrSubscriptionNotFound):
-			return fmt.Errorf("check existing subscription assignment: %w", lookupErr)
-		default:
-			if _, _, err := s.subscriptionSvc.assignOrExtendSubscription(txCtx, &AssignSubscriptionInput{
-				UserID:       o.UserID,
-				GroupID:      groupID,
-				ValidityDays: days,
-				AssignedBy:   0,
-				Notes:        orderNote,
-			}, true); err != nil {
-				return fmt.Errorf("assign subscription: %w", err)
+		if existing != nil && hasPaymentSubscriptionOrderNote(subscriptionEntityNotes(existing), orderNote) {
+			alreadyAssigned = true
+		} else {
+			if err := validatePaymentSubscriptionSource(existing, o.ProductSnapshot); err != nil {
+				return err
+			}
+			var sourceID int64
+			if parsed, ok := paymentSnapshotInt64(o.ProductSnapshot, "source_subscription_id"); ok {
+				sourceID = parsed
+			}
+			if err := applyPaymentSubscriptionTerm(txCtx, txClient, existing, o, groupID, platform, targetPlanID, targetPrice, targetDays, operation, sourceID, orderNote); err != nil {
+				return err
 			}
 		}
+	}
 
+	if !alreadyAssigned {
 		detail, _ := json.Marshal(map[string]any{
-			"groupID":           groupID,
-			"validityDays":      days,
-			"recoveredFromNote": recoveredFromNote,
+			"groupID":       groupID,
+			"platform":      platform,
+			"validityDays":  targetDays,
+			"operation":     operation,
+			"previousGroup": oldGroupID,
 		})
 		if _, err := txClient.PaymentAuditLog.Create().
 			SetOrderID(strconv.FormatInt(o.ID, 10)).
@@ -561,28 +955,395 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 			SetDetail(string(detail)).
 			SetOperator("system").
 			Save(txCtx); err != nil {
-			if dbent.IsConstraintError(err) {
-				_ = tx.Rollback()
-				claimed, checkErr := hasPaymentSubscriptionAssignmentAudit(ctx, s.entClient, o.ID)
-				if checkErr == nil && claimed {
-					return s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID)
-				}
-			}
 			return fmt.Errorf("record subscription assignment audit: %w", err)
 		}
 	} else {
-		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", groupID)
+		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", groupID, "operation", operation)
+	}
+	if err := grantPaymentProductEntitlements(txCtx, txClient, o, groupID); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit subscription fulfillment tx: %w", err)
 	}
-	// Assignment cache invalidation is deferred while this transaction is open,
-	// then performed synchronously against the committed subscription.
-	if err := s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID); err != nil {
-		return fmt.Errorf("invalidate subscription cache after fulfillment: %w", err)
+	if s.subscriptionSvc != nil {
+		for _, cacheGroupID := range uniqueCacheGroupIDs(oldGroupID, groupID) {
+			if err := s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, cacheGroupID); err != nil {
+				// The entitlement transaction has already committed. Cache
+				// convergence is recoverable and must not fail a paid order.
+				slog.Warn("subscription cache invalidation after payment fulfillment failed", "orderID", o.ID, "userID", o.UserID, "groupID", cacheGroupID, "err", err)
+			}
+		}
+	}
+	s.invalidatePaymentAuthCache(ctx, o.UserID)
+	return nil
+}
+
+func applyPaymentSubscriptionTerm(ctx context.Context, client *dbent.Client, existing *dbent.UserSubscription, order *dbent.PaymentOrder, groupID int64, platform string, planID *int64, planPrice float64, days int, operation string, sourceID int64, orderNote string) error {
+	if client == nil || order == nil {
+		return errors.New("subscription term input is missing")
+	}
+	now := time.Now()
+	if existing != nil && sourceID > 0 && existing.ID != sourceID && operation == subscriptionPurchaseOperationUpgrade {
+		return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "the source subscription changed before payment completed")
+	}
+	if operation == subscriptionPurchaseOperationUpgrade {
+		if existing == nil || existing.Status != SubscriptionStatusActive || !existing.ExpiresAt.After(now) {
+			return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "the source subscription is no longer active")
+		}
+		if existing.PlanPrice == nil || existing.PlanValidityDays == nil ||
+			!subscriptionUnitPriceHigher(planPrice, days, *existing.PlanPrice, *existing.PlanValidityDays) {
+			return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "the target subscription is no longer a higher tier")
+		}
+		if existing.GroupID == groupID && existing.PlanID != nil && planID != nil && *existing.PlanID == *planID {
+			return nil
+		}
+		if sourceID > 0 && existing.ID != sourceID {
+			return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "the source subscription changed before payment completed")
+		}
+		return updatePaymentSubscriptionRow(ctx, client, existing, groupID, platform, planID, planPrice, days, existing.StartsAt, existing.ExpiresAt, false, orderNote)
+	}
+
+	if existing != nil && existing.Status == SubscriptionStatusSuspended && existing.ExpiresAt.After(now) {
+		return infraerrors.Conflict("SUBSCRIPTION_NOT_ACTIVE", "suspended subscriptions must be restored before purchase")
+	}
+	if existing != nil && existing.ExpiresAt.After(now) && existing.GroupID != groupID {
+		return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", "another subscription on this platform is already active")
+	}
+	if existing == nil {
+		startsAt := now
+		expiresAt := paymentSubscriptionExpiresAt(startsAt, days)
+		builder := client.UserSubscription.Create().
+			SetUserID(order.UserID).
+			SetGroupID(groupID).
+			SetPlatform(platform).
+			SetStartsAt(startsAt).
+			SetExpiresAt(expiresAt).
+			SetStatus(SubscriptionStatusActive).
+			SetDailyWindowStart(startsAt).
+			SetWeeklyWindowStart(startsAt).
+			SetMonthlyWindowStart(startsAt).
+			SetDailyUsageUsd(0).
+			SetWeeklyUsageUsd(0).
+			SetMonthlyUsageUsd(0).
+			SetNotes(orderNote).
+			SetNillablePlanID(planID).
+			SetNillablePlanPrice(optionalFloat64(planPrice)).
+			SetNillablePlanValidityDays(optionalInt(days))
+		if _, err := builder.Save(ctx); err != nil {
+			return fmt.Errorf("create paid subscription: %w", err)
+		}
+		return nil
+	}
+
+	if hasPaymentSubscriptionOrderNote(subscriptionEntityNotes(existing), orderNote) {
+		return nil
+	}
+	if existing.ExpiresAt.After(now) {
+		newExpiresAt := paymentSubscriptionExpiresAt(existing.ExpiresAt, days)
+		return updatePaymentSubscriptionRow(ctx, client, existing, groupID, platform, planID, planPrice, days, existing.StartsAt, newExpiresAt, false, orderNote)
+	}
+	newExpiresAt := paymentSubscriptionExpiresAt(now, days)
+	return updatePaymentSubscriptionRow(ctx, client, existing, groupID, platform, planID, planPrice, days, now, newExpiresAt, true, orderNote)
+}
+
+// validatePaymentSubscriptionSource prevents a delayed paid order from
+// applying a quote against a subscription that changed after checkout. The
+// source fields are present only on newly-created orders, so old orders keep
+// their historical fulfillment behavior.
+func validatePaymentSubscriptionSource(existing *dbent.UserSubscription, snapshot map[string]interface{}) error {
+	if existing == nil || snapshot == nil {
+		return nil
+	}
+	conflict := func(message string) error {
+		return infraerrors.Conflict("SUBSCRIPTION_PURCHASE_TERMS_CHANGED", message)
+	}
+	if sourceID, ok := paymentSnapshotInt64(snapshot, "source_subscription_id"); ok && sourceID > 0 && existing.ID != sourceID {
+		return conflict("the source subscription changed before payment completed")
+	}
+	if sourceGroupID, ok := paymentSnapshotInt64(snapshot, "source_group_id"); ok && sourceGroupID > 0 && existing.GroupID != sourceGroupID {
+		return conflict("the source subscription group changed before payment completed")
+	}
+	if sourcePlanID, ok := paymentSnapshotInt64(snapshot, "source_plan_id"); ok && sourcePlanID > 0 {
+		if existing.PlanID == nil || *existing.PlanID != sourcePlanID {
+			return conflict("the source subscription plan changed before payment completed")
+		}
+	}
+	if _, hasSourcePrice := snapshot["source_plan_price"]; hasSourcePrice {
+		sourcePrice := paymentSnapshotFloat64(snapshot, "source_plan_price")
+		if sourcePrice <= 0 || existing.PlanPrice == nil || math.Abs(*existing.PlanPrice-sourcePrice) > 0.005 {
+			return conflict("the source subscription price changed before payment completed")
+		}
+	}
+	if sourceDays, ok := paymentSnapshotInt(snapshot, "source_plan_validity_days"); ok && sourceDays > 0 {
+		if existing.PlanValidityDays == nil || *existing.PlanValidityDays != sourceDays {
+			return conflict("the source subscription validity changed before payment completed")
+		}
 	}
 	return nil
+}
+
+func paymentSubscriptionExpiresAt(startsAt time.Time, days int) time.Time {
+	expiresAt := startsAt.AddDate(0, 0, days)
+	if expiresAt.After(MaxExpiresAt) {
+		return MaxExpiresAt
+	}
+	return expiresAt
+}
+
+func updatePaymentSubscriptionRow(ctx context.Context, client *dbent.Client, existing *dbent.UserSubscription, groupID int64, platform string, planID *int64, planPrice float64, days int, startsAt, expiresAt time.Time, resetUsage bool, note string) error {
+	update := client.UserSubscription.UpdateOneID(existing.ID).
+		SetGroupID(groupID).
+		SetPlatform(platform).
+		SetStartsAt(startsAt).
+		SetExpiresAt(expiresAt).
+		SetStatus(SubscriptionStatusActive).
+		SetNillablePlanID(planID).
+		SetNillablePlanPrice(optionalFloat64(planPrice)).
+		SetNillablePlanValidityDays(optionalInt(days)).
+		SetNotes(appendSubscriptionNotes(subscriptionEntityNotes(existing), note))
+	if resetUsage {
+		update.SetDailyWindowStart(startsAt).
+			SetWeeklyWindowStart(startsAt).
+			SetMonthlyWindowStart(startsAt).
+			SetDailyUsageUsd(0).
+			SetWeeklyUsageUsd(0).
+			SetMonthlyUsageUsd(0)
+	}
+	if _, err := update.Save(ctx); err != nil {
+		return fmt.Errorf("update paid subscription term: %w", err)
+	}
+	return nil
+}
+
+func optionalFloat64(value float64) *float64 {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	return &value
+}
+
+func subscriptionEntityNotes(subscription *dbent.UserSubscription) string {
+	if subscription == nil || subscription.Notes == nil {
+		return ""
+	}
+	return *subscription.Notes
+}
+
+func optionalInt(value int) *int {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
+func uniqueCacheGroupIDs(values ...int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	out := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func (s *PaymentService) invalidatePaymentAuthCache(ctx context.Context, userID int64) {
+	if s != nil && s.authCacheInvalidator != nil && userID > 0 {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+}
+
+func grantPaymentProductEntitlements(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, groupID int64) error {
+	if order == nil || client == nil {
+		return nil
+	}
+	claimed, err := client.PaymentAuditLog.Query().
+		Where(
+			paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+			paymentauditlog.ActionEQ("SUBSCRIPTION_BENEFITS_GRANTED"),
+		).
+		Limit(1).Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("check subscription benefits audit: %w", err)
+	}
+	if claimed {
+		return nil
+	}
+
+	entitlements, err := paymentOrderEntitlementsStrict(order)
+	if err != nil {
+		return err
+	}
+	if entitlements.BalanceBonus <= 0 && entitlements.ResetCardCount <= 0 && entitlements.Concurrency <= 0 {
+		return nil
+	}
+	if entitlements.Concurrency > 0 {
+		if err := setPaymentUserConcurrencyAtLeast(ctx, client, order.UserID, entitlements.Concurrency); err != nil {
+			return fmt.Errorf("grant subscription concurrency: %w", err)
+		}
+	}
+	if entitlements.BalanceBonus > 0 {
+		if err := client.User.UpdateOneID(order.UserID).
+			AddBalance(entitlements.BalanceBonus).
+			AddTotalRecharged(entitlements.BalanceBonus).
+			Exec(ctx); err != nil {
+			return fmt.Errorf("grant subscription balance bonus: %w", err)
+		}
+	}
+	if entitlements.ResetCardCount > 0 {
+		now := time.Now()
+		expiresAt := now.Add(time.Duration(entitlements.ResetCardExpiryDays) * 24 * time.Hour)
+		rows, err := client.QueryContext(ctx, `
+			INSERT INTO subscription_reset_grants (
+				subscription_id, user_id, group_id, quantity, used_count,
+				expires_at, issued_by, created_at, updated_at
+			)
+			SELECT us.id, us.user_id, us.group_id, $3, 0, $4, NULL, $5, $5
+			FROM user_subscriptions us
+			WHERE us.user_id = $1 AND us.group_id = $2
+				AND us.deleted_at IS NULL AND us.status = 'active' AND us.expires_at > $5
+			RETURNING id
+		`, order.UserID, groupID, entitlements.ResetCardCount, expiresAt, now)
+		if err != nil {
+			return fmt.Errorf("grant subscription reset cards: %w", err)
+		}
+		var grantID int64
+		if rows.Next() {
+			if err := rows.Scan(&grantID); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan subscription reset card grant: %w", err)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("iterate subscription reset card grant: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close subscription reset card grant: %w", err)
+		}
+		if grantID == 0 {
+			return fmt.Errorf("subscription reset card recipient is unavailable")
+		}
+	}
+	detail, _ := json.Marshal(map[string]any{
+		"balanceBonus":   entitlements.BalanceBonus,
+		"resetCardCount": entitlements.ResetCardCount,
+		"concurrency":    entitlements.Concurrency,
+	})
+	if _, err := client.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(order.ID, 10)).
+		SetAction("SUBSCRIPTION_BENEFITS_GRANTED").
+		SetDetail(string(detail)).
+		SetOperator("system").
+		Save(ctx); err != nil {
+		return fmt.Errorf("record subscription benefits audit: %w", err)
+	}
+	return nil
+}
+
+// grantPaymentOrderConcurrency applies a balance-order concurrency target in
+// its own transaction. The audit row and user update commit together, so a
+// crash can only leave a retryable order; the monotonic target update is safe
+// to repeat and safe if callbacks for different tiers arrive out of order.
+func grantPaymentOrderConcurrency(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder) error {
+	if client == nil || order == nil {
+		return nil
+	}
+	entitlements, err := paymentOrderEntitlementsStrict(order)
+	if err != nil {
+		return err
+	}
+	if entitlements.Concurrency <= 0 {
+		return nil
+	}
+	tx, err := client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin balance concurrency tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	claimed, err := tx.Client().PaymentAuditLog.Query().
+		Where(
+			paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+			paymentauditlog.ActionEQ("PAYMENT_CONCURRENCY_GRANTED"),
+		).
+		Limit(1).Exist(txCtx)
+	if err != nil {
+		return fmt.Errorf("check payment concurrency audit: %w", err)
+	}
+	if claimed {
+		return tx.Commit()
+	}
+	if err := setPaymentUserConcurrencyAtLeast(txCtx, tx.Client(), order.UserID, entitlements.Concurrency); err != nil {
+		return fmt.Errorf("grant balance concurrency: %w", err)
+	}
+	detail, _ := json.Marshal(map[string]any{"concurrency": entitlements.Concurrency})
+	if _, err := tx.Client().PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(order.ID, 10)).
+		SetAction("PAYMENT_CONCURRENCY_GRANTED").
+		SetDetail(string(detail)).
+		SetOperator("system").Save(txCtx); err != nil {
+		return fmt.Errorf("record balance concurrency audit: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit balance concurrency tx: %w", err)
+	}
+	return nil
+}
+
+// setPaymentUserConcurrencyAtLeast is atomic and monotonic: a paid target may
+// raise the account cap, but a late callback for a lower tier must never reduce
+// an administrator-set or later-purchased higher cap.
+func setPaymentUserConcurrencyAtLeast(ctx context.Context, client *dbent.Client, userID int64, target int) error {
+	if client == nil || userID <= 0 || target <= 0 {
+		return nil
+	}
+	result, err := client.ExecContext(ctx, `
+		UPDATE users
+		SET concurrency = CASE WHEN concurrency < $1 THEN $1 ELSE concurrency END
+		WHERE id = $2
+	`, target, userID)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("user %d not found while updating concurrency", userID)
+	}
+	return nil
+}
+
+func paymentOrderEntitlements(order *dbent.PaymentOrder) PlanEntitlements {
+	entitlements, _ := paymentOrderEntitlementsStrict(order)
+	return entitlements
+}
+
+func paymentOrderEntitlementsStrict(order *dbent.PaymentOrder) (PlanEntitlements, error) {
+	if order == nil || order.ProductSnapshot == nil {
+		return PlanEntitlements{}, nil
+	}
+	raw, ok := order.ProductSnapshot["entitlements"].(map[string]interface{})
+	if !ok {
+		if _, exists := order.ProductSnapshot["entitlements"]; !exists {
+			return PlanEntitlements{}, nil
+		}
+		return PlanEntitlements{}, fmt.Errorf("invalid payment order entitlement snapshot")
+	}
+	_, entitlements, err := normalizePlanEntitlements(raw)
+	if err != nil {
+		return PlanEntitlements{}, fmt.Errorf("decode payment order entitlements: %w", err)
+	}
+	return entitlements, nil
 }
 
 func hasPaymentSubscriptionAssignmentAudit(ctx context.Context, client *dbent.Client, orderID int64) (bool, error) {
@@ -699,7 +1460,7 @@ func affiliateRebateBaseAmount(o *dbent.PaymentOrder) float64 {
 		return 0
 	}
 	switch o.OrderType {
-	case payment.OrderTypeBalance, payment.OrderTypeSubscription:
+	case payment.OrderTypeBalance, payment.OrderTypeSubscription, payment.OrderTypeSubscriptionResetCards:
 		return o.Amount
 	default:
 		return 0

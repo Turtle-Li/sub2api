@@ -951,7 +951,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			imageCounter.AddSSEData(upstreamMessage)
 
 			if eventType == "response.failed" {
+				cyberHit := false
 				if hit, code, msg := detectOpenAICyberPolicy(upstreamMessage); hit {
+					cyberHit = true
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,
 						Message:        msg,
@@ -960,6 +962,29 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						UpstreamInTok:  usage.InputTokens,
 						UpstreamOutTok: usage.OutputTokens,
 					})
+				}
+				if !cyberHit {
+					failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+					if turn == 1 && !wroteDownstream && isOpenAIUpstreamCapacityShedEvent(upstreamMessage) {
+						lease.MarkBroken()
+						return nil, s.newOpenAIStreamFailoverError(
+							c,
+							account,
+							false,
+							lease.HandshakeHeader("x-request-id"),
+							upstreamMessage,
+							failedMessage,
+							lease.HandshakeHeaders(),
+						)
+					}
+					s.recordOpenAIStreamTerminalFailure(
+						c,
+						account,
+						false,
+						lease.HandshakeHeader("x-request-id"),
+						upstreamMessage,
+						failedMessage,
+					)
 				}
 			}
 

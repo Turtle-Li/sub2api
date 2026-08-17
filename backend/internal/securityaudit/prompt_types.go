@@ -230,28 +230,29 @@ type QueueStats struct {
 }
 
 type RuntimeSnapshot struct {
-	ProcessStatus         string                 `json:"process_status"`
-	EffectiveMode         Mode                   `json:"effective_mode"`
-	ExpectedConfigVersion int64                  `json:"expected_config_version"`
-	ActiveConfigVersion   int64                  `json:"active_config_version"`
-	ConfigLoadedAt        *time.Time             `json:"config_loaded_at,omitempty"`
-	ConfigLoadError       string                 `json:"config_load_error,omitempty"`
-	WorkerTotal           int                    `json:"worker_total"`
-	WorkerActive          int64                  `json:"worker_active"`
-	WorkerHeartbeatAt     *time.Time             `json:"worker_heartbeat_at,omitempty"`
-	QueueCapacity         int                    `json:"queue_capacity"`
-	Queue                 QueueStats             `json:"queue"`
-	ProcessedTotal        int64                  `json:"processed_total"`
-	FailedTotal           int64                  `json:"failed_total"`
-	EnqueuedTotal         int64                  `json:"enqueued_total"`
-	DroppedTotal          int64                  `json:"dropped_total"`
-	LastProcessedAt       *time.Time             `json:"last_processed_at,omitempty"`
-	LastErrorCode         string                 `json:"last_error_code,omitempty"`
-	LastErrorMessage      string                 `json:"last_error_message,omitempty"`
-	DatabaseStatus        string                 `json:"database_status"`
-	RedisStatus           string                 `json:"redis_status"`
-	Endpoints             map[string]ProbeResult `json:"endpoints"`
-	GuardMetrics          GuardMetricsSnapshot   `json:"guard_metrics"`
+	ProcessStatus         string                          `json:"process_status"`
+	EffectiveMode         Mode                            `json:"effective_mode"`
+	ExpectedConfigVersion int64                           `json:"expected_config_version"`
+	ActiveConfigVersion   int64                           `json:"active_config_version"`
+	ConfigLoadedAt        *time.Time                      `json:"config_loaded_at,omitempty"`
+	ConfigLoadError       string                          `json:"config_load_error,omitempty"`
+	WorkerTotal           int                             `json:"worker_total"`
+	WorkerActive          int64                           `json:"worker_active"`
+	WorkerHeartbeatAt     *time.Time                      `json:"worker_heartbeat_at,omitempty"`
+	QueueCapacity         int                             `json:"queue_capacity"`
+	Queue                 QueueStats                      `json:"queue"`
+	ProcessedTotal        int64                           `json:"processed_total"`
+	FailedTotal           int64                           `json:"failed_total"`
+	EnqueuedTotal         int64                           `json:"enqueued_total"`
+	DroppedTotal          int64                           `json:"dropped_total"`
+	LastProcessedAt       *time.Time                      `json:"last_processed_at,omitempty"`
+	LastErrorCode         string                          `json:"last_error_code,omitempty"`
+	LastErrorMessage      string                          `json:"last_error_message,omitempty"`
+	DatabaseStatus        string                          `json:"database_status"`
+	RedisStatus           string                          `json:"redis_status"`
+	Endpoints             map[string]ProbeResult          `json:"endpoints"`
+	Circuits              map[string]GuardCircuitSnapshot `json:"circuits"`
+	GuardMetrics          GuardMetricsSnapshot            `json:"guard_metrics"`
 }
 
 type Clock interface {

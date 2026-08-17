@@ -665,6 +665,8 @@ export default {
         rechargeFeeRate: '充值手续费率',
         rechargeFeeRateHint: '用户充值时额外收取的手续费百分比，0 表示不收取手续费',
         rechargeFeePreview: '预览：充值 100 元，手续费 {fee} 元',
+        rechargeOptions: '充值档位 JSON',
+        rechargeOptionsHint: '每项可配置 amount、original_price、label、description、balance_bonus、concurrency、estimated_rate_multiplier、estimated_tokens、sort_order、enabled。折扣由原价与售价自动计算；balance_bonus 和 concurrency 会实际发放，倍率与 Token 仅用于页面估算展示。留空使用默认档位。',
         orderTimeout: '订单超时时间',
         orderTimeoutHint: '单位：分钟，至少 1 分钟',
         maxPendingOrders: '最大待支付订单数',

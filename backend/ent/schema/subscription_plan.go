@@ -54,6 +54,9 @@ func (SubscriptionPlan) Fields() []ent.Field {
 		field.String("features").
 			SchemaType(map[string]string{dialect.Postgres: "text"}).
 			Default(""),
+		field.JSON("entitlements", map[string]any{}).
+			Optional().
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
 		field.String("product_name").
 			MaxLen(100).
 			Default(""),

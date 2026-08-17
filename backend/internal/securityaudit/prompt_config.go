@@ -14,17 +14,18 @@ import (
 )
 
 const (
-	DefaultWorkerCount   = 4
-	MaxWorkerCount       = 32
-	DefaultQueueCapacity = 32768
-	MaxQueueCapacity     = 100000
-	DefaultTimeoutMS     = 3000
-	MinTimeoutMS         = 100
-	MaxTimeoutMS         = 30000
-	DefaultInputLimit    = 4000
-	MinInputLimit        = 128
-	MaxInputLimit        = 100000
-	DefaultPayloadTTL    = 30 * time.Minute
+	DefaultWorkerCount    = 4
+	MaxWorkerCount        = 32
+	DefaultQueueCapacity  = 32768
+	MaxQueueCapacity      = 100000
+	DefaultTimeoutMS      = 3000
+	MinTimeoutMS          = 100
+	MaxTimeoutMS          = 30000
+	DefaultInputLimit     = 4000
+	MinInputLimit         = 128
+	MaxInputLimit         = 100000
+	MaxGuardEndpointCount = 64
+	DefaultPayloadTTL     = 30 * time.Minute
 )
 
 type SecretEncryptor interface {
@@ -273,6 +274,9 @@ func validateStorageConfig(cfg storageConfig) error {
 	if len(cfg.Scanners) == 0 {
 		return infraerrors.BadRequest("prompt_audit_scanners_required", "至少需要启用一个风险分类")
 	}
+	if len(cfg.Endpoints) > MaxGuardEndpointCount {
+		return infraerrors.BadRequest("prompt_audit_too_many_endpoints", "审计节点数量超出允许范围")
+	}
 	seen := make(map[string]struct{}, len(cfg.Endpoints))
 	enabled := 0
 	for _, ep := range cfg.Endpoints {
@@ -317,6 +321,9 @@ func validateUpdateConfigRequest(req UpdateConfigRequest) error {
 	}
 	if len(req.Scanners) == 0 {
 		return infraerrors.BadRequest("prompt_audit_scanners_required", "至少需要启用一个风险分类")
+	}
+	if len(req.Endpoints) > MaxGuardEndpointCount {
+		return infraerrors.BadRequest("prompt_audit_too_many_endpoints", "审计节点数量超出允许范围")
 	}
 	for _, scanner := range req.Scanners {
 		if _, ok := ScannerCatalog[NormalizeCategory(scanner)]; !ok {

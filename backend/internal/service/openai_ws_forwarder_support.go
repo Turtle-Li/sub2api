@@ -225,6 +225,13 @@ func openAIWSPayloadTransientStatus(payload []byte) int {
 	if len(payload) == 0 {
 		return 0
 	}
+	// Responses WebSocket commonly carries the capacity failure as a terminal
+	// response.failed message rather than an HTTP 400/529. Reuse the shared
+	// classifier so the exact "Selected model is at capacity" form gets the
+	// same request-scoped treatment as server_is_overloaded/slow_down.
+	if isOpenAIUpstreamCapacityShedEvent(payload) {
+		return http.StatusServiceUnavailable
+	}
 	status := int(gjson.GetBytes(payload, "response.error.status_code").Int())
 	if status == 0 {
 		status = int(gjson.GetBytes(payload, "response.error.status").Int())

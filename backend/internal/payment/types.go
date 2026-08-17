@@ -37,10 +37,12 @@ const (
 	OrderStatusRefundFailed      = "REFUND_FAILED"
 )
 
-// Order types distinguish balance recharges from subscription purchases.
+// Order types distinguish balance recharges, subscription terms, and
+// subscription quota-reset-card purchases.
 const (
-	OrderTypeBalance      = "balance"
-	OrderTypeSubscription = "subscription"
+	OrderTypeBalance                = "balance"
+	OrderTypeSubscription           = "subscription"
+	OrderTypeSubscriptionResetCards = "subscription_reset"
 )
 
 // Entity statuses shared across users, groups, etc.

@@ -26,6 +26,8 @@ type Runner struct {
 	scanner PromptScanner
 	metrics Metrics
 	clock   Clock
+	circuit *GuardCircuit
+	shared  *sharedGuardCircuit
 	runtime WorkerRuntime
 
 	mu     sync.Mutex
@@ -34,7 +36,18 @@ type Runner struct {
 }
 
 func NewRunner(config ConfigStore, repo JobRepository, payload PayloadStore, scanner PromptScanner, metrics Metrics) *Runner {
-	return &Runner{config: config, repo: repo, payload: payload, scanner: scanner, metrics: metrics, clock: realClock{}}
+	return newRunnerWithCircuit(config, repo, payload, scanner, metrics, newGuardCircuit(realClock{}))
+}
+
+func newRunnerWithCircuit(config ConfigStore, repo JobRepository, payload PayloadStore, scanner PromptScanner, metrics Metrics, circuit *GuardCircuit) *Runner {
+	return newRunnerWithCircuits(config, repo, payload, scanner, metrics, circuit, nil)
+}
+
+func newRunnerWithCircuits(config ConfigStore, repo JobRepository, payload PayloadStore, scanner PromptScanner, metrics Metrics, circuit *GuardCircuit, shared *sharedGuardCircuit) *Runner {
+	if circuit == nil {
+		circuit = newGuardCircuit(realClock{})
+	}
+	return &Runner{config: config, repo: repo, payload: payload, scanner: scanner, metrics: metrics, clock: realClock{}, circuit: circuit, shared: shared}
 }
 
 func (r *Runner) Start(ctx context.Context) error {
@@ -94,23 +107,74 @@ func (r *Runner) worker(ctx context.Context, workerID int) {
 		case <-ticker.C:
 			r.runtime.heartbeatNS.Store(r.clock.Now().UnixNano())
 			cfg, ok := r.config.Active()
-			if !ok || !cfg.RiskControlEnabled || !cfg.Enabled || workerID >= cfg.WorkerCount {
+			if !ok || workerID >= cfg.WorkerCount || !r.CanSchedule(ctx, cfg) {
 				continue
 			}
-			for {
-				job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now())
-				if err != nil {
-					r.setLastError("claim_job_failed", err.Error())
-					break
-				}
-				if !claimed {
-					break
-				}
-				r.runtime.active.Add(1)
-				r.processSafely(ctx, workerID, cfg, job)
-				r.runtime.active.Add(-1)
+			r.processAvailable(ctx, workerID, cfg)
+		}
+	}
+}
+
+// CanSchedule is deliberately asynchronous-mode only. Blocking evaluations
+// have no queue to schedule and preserve their existing fail-closed behavior.
+func (r *Runner) CanSchedule(ctx context.Context, cfg ActiveConfig) bool {
+	return r.canSchedule(ctx, cfg, false)
+}
+
+func (r *Runner) canSchedule(ctx context.Context, cfg ActiveConfig, freshSharedState bool) bool {
+	if r == nil || cfg.EffectiveMode() != ModeAsync || len(cfg.EnabledEndpoints()) == 0 {
+		return false
+	}
+	for _, endpoint := range cfg.EnabledEndpoints() {
+		if r.circuit != nil && !r.circuit.Allows(cfg, endpoint) {
+			continue
+		}
+		if r.shared != nil {
+			var allowed bool
+			var err error
+			if freshSharedState {
+				allowed, err = r.shared.AllowsFresh(ctx, cfg, endpoint)
+			} else {
+				allowed, err = r.shared.Allows(ctx, cfg, endpoint)
+			}
+			if err != nil {
+				r.setLastError(ErrorCodeUnavailable, err.Error())
+				return false
+			}
+			if !allowed {
+				continue
 			}
 		}
+		return true
+	}
+	return false
+}
+
+func (r *Runner) processAvailable(ctx context.Context, workerID int, cfg ActiveConfig) {
+	for {
+		if !r.canSchedule(ctx, cfg, true) {
+			return
+		}
+		job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now())
+		if err != nil {
+			r.setLastError("claim_job_failed", err.Error())
+			return
+		}
+		if !claimed {
+			return
+		}
+		// A synchronous request or another blue-green consumer can open the
+		// circuit after the admission check and before PostgreSQL grants this
+		// claim. Return that untouched job without burning a retry attempt.
+		if !r.canSchedule(ctx, cfg, true) {
+			if err := r.releaseUnstarted(ctx, job); err != nil {
+				r.setLastError(ErrorCodeUnavailable, err.Error())
+			}
+			return
+		}
+		r.runtime.active.Add(1)
+		r.processSafely(ctx, workerID, cfg, job)
+		r.runtime.active.Add(-1)
 	}
 }
 
@@ -126,6 +190,9 @@ func (r *Runner) processSafely(ctx context.Context, workerID int, cfg ActiveConf
 		}
 	}()
 	if err := r.processJob(ctx, workerID, cfg, job); err != nil {
+		if errors.Is(err, errGuardJobReleased) {
+			return
+		}
 		r.runtime.failed.Add(1)
 	} else {
 		r.runtime.processed.Add(1)
@@ -156,8 +223,14 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 		}
 		chunkStarted := r.clock.Now()
 		LogInfo(EventChunkStarted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks), "chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength, "input_limit": minimumInputLimit(endpoints), "status": "started"}))
-		result, scanErr := scanWithFailover(ctx, r.scanner, cfg.Scanners, endpoints, chunk, r.metrics)
+		result, scanErr := scanWithSharedCircuitFailover(ctx, r.scanner, cfg.Scanners, endpoints, chunk, r.metrics, r.circuit, r.shared, cfg)
 		if scanErr != nil {
+			if len(results) == 0 && errors.Is(scanErr, errGuardCircuitOpen) {
+				if err := r.releaseUnstarted(ctx, job); err != nil {
+					return err
+				}
+				return errGuardJobReleased
+			}
 			LogWarn(EventChunkFailed, mergeLogFields(baseFields, map[string]any{
 				"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks),
 				"chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength,
@@ -201,6 +274,13 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 		LogWarn(EventFindingRecorded, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "event_id": event.ID, "decision": aggregated.Decision, "risk_level": aggregated.RiskLevel, "action": aggregated.Action, "guard_endpoint_id": aggregated.GuardEndpointID, "status": "recorded"}))
 	}
 	return nil
+}
+
+func (r *Runner) releaseUnstarted(ctx context.Context, job *Job) error {
+	if r == nil || r.repo == nil || job == nil {
+		return errors.New("prompt audit release dependencies unavailable")
+	}
+	return r.repo.ReleaseUnstarted(ctx, job.ID, job.ClaimVersion, r.clock.Now())
 }
 
 func (r *Runner) observeAsyncFailure(err error, latency time.Duration) {
@@ -307,14 +387,57 @@ func (r *Runner) setLastError(code, _ string) {
 }
 
 func scanWithFailover(ctx context.Context, scanner PromptScanner, scanners []string, endpoints []ActiveEndpoint, chunk string, metrics Metrics) (*NormalizedResult, error) {
+	return scanWithCircuitFailover(ctx, scanner, scanners, endpoints, chunk, metrics, nil, ActiveConfig{})
+}
+
+func scanWithCircuitFailover(ctx context.Context, scanner PromptScanner, scanners []string, endpoints []ActiveEndpoint, chunk string, metrics Metrics, circuit *GuardCircuit, cfg ActiveConfig) (*NormalizedResult, error) {
+	return scanWithSharedCircuitFailover(ctx, scanner, scanners, endpoints, chunk, metrics, circuit, nil, cfg)
+}
+
+var (
+	errGuardCircuitOpen = errors.New("prompt guard circuit open")
+	errGuardJobReleased = errors.New("prompt audit job released before scan")
+)
+
+func scanWithSharedCircuitFailover(ctx context.Context, scanner PromptScanner, scanners []string, endpoints []ActiveEndpoint, chunk string, metrics Metrics, circuit *GuardCircuit, shared *sharedGuardCircuit, cfg ActiveConfig) (*NormalizedResult, error) {
 	var lastErr error
+	calledModel := false
 	for index, endpoint := range endpoints {
+		if circuit != nil && !circuit.Allows(cfg, endpoint) {
+			lastErr = &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Cause: errGuardCircuitOpen}
+			if index < len(endpoints)-1 && metrics != nil {
+				metrics.IncFailover()
+			}
+			continue
+		}
+		if shared != nil {
+			allowed, err := shared.AllowsFresh(ctx, cfg, endpoint)
+			if err != nil || !allowed {
+				lastErr = &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Cause: errGuardCircuitOpen}
+				if index < len(endpoints)-1 && metrics != nil {
+					metrics.IncFailover()
+				}
+				continue
+			}
+		}
+		calledModel = true
+		// Keep the worker's existing outer panic containment contract. A scanner
+		// panic is handled by processSafely as worker_panic; normal endpoint
+		// failures below are the ones that participate in circuit accounting.
 		result, err := scanner.Scan(ctx, endpoint, chunk, scanners)
 		if err == nil && result != nil {
+			if circuit != nil {
+				circuit.RecordSuccess(cfg, endpoint)
+			}
 			return result, nil
 		}
 		if err == nil {
 			err = &GuardError{Code: ErrorCodeInvalidResponse, Retryable: false}
+		}
+		if circuit != nil && circuit.RecordFailure(cfg, endpoint, err) && shared != nil {
+			if openErr := shared.PublishLocalOpen(ctx, cfg, endpoint, circuit.Snapshot(cfg)[endpoint.ID]); openErr != nil {
+				return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Cause: openErr}
+			}
 		}
 		lastErr = err
 		var guardErr *GuardError
@@ -327,6 +450,9 @@ func scanWithFailover(ctx context.Context, scanner PromptScanner, scanners []str
 	}
 	if lastErr == nil {
 		lastErr = &GuardError{Code: ErrorCodeUnavailable}
+	}
+	if !calledModel && errors.Is(lastErr, errGuardCircuitOpen) {
+		return nil, lastErr
 	}
 	return nil, lastErr
 }

@@ -21,7 +21,7 @@ export type OrderStatus =
 
 export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex'
 
-export type OrderType = 'balance' | 'subscription'
+export type OrderType = 'balance' | 'subscription' | 'subscription_reset'
 
 // ==================== Configuration ====================
 
@@ -71,6 +71,7 @@ export interface CheckoutInfoResponse {
   /** Subscription CNY conversion rate (1 USD = X CNY); 0 = disabled, plan price is charged as-is */
   subscription_usd_to_cny_rate: number
   recharge_fee_rate: number
+  recharge_options: RechargeOption[]
   help_text: string
   help_image_url: string
   stripe_publishable_key: string
@@ -134,6 +135,36 @@ export interface SubscriptionPlan {
   features: string[]
   for_sale: boolean
   sort_order: number
+  entitlements?: PlanEntitlements
+  discount_percent?: number
+  period_label?: string
+}
+
+export interface PlanEntitlements {
+  balance_bonus: number
+  reset_card_count: number
+  reset_card_expiry_days: number
+  /** Minimum user concurrency target; 0 means unchanged. */
+  concurrency: number
+  message?: string
+}
+
+export interface RechargeOption {
+  amount: number
+  /** Display-only list price. The UI derives the discount from this and amount. */
+  original_price?: number
+  label?: string
+  description?: string
+  /** Extra balance granted after applying the global recharge multiplier. */
+  balance_bonus?: number
+  /** Minimum user concurrency target for this exact preset amount. */
+  concurrency?: number
+  /** Display-only estimated billing multiplier for this tier. */
+  estimated_rate_multiplier?: number
+  /** Display-only approximate token quantity for this tier. */
+  estimated_tokens?: number
+  sort_order: number
+  enabled: boolean
 }
 
 export interface PaymentChannel {
@@ -171,6 +202,8 @@ export interface CreateOrderRequest {
   payment_type: string
   order_type: string
   plan_id?: number
+  reset_subscription_id?: number
+  reset_card_quantity?: number
   return_url?: string
   payment_source?: string
   openid?: string

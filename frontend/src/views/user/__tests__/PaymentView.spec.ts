@@ -6,6 +6,7 @@ import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
+import type { UserSubscription } from '@/types'
 
 const routeState = vi.hoisted(() => ({
   path: '/purchase',
@@ -23,6 +24,9 @@ const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
+const activeSubscriptionsState = vi.hoisted(() => ({
+  value: [] as UserSubscription[],
+}))
 
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
@@ -65,7 +69,7 @@ vi.mock('@/stores/payment', () => ({
 
 vi.mock('@/stores/subscriptions', () => ({
   useSubscriptionStore: () => ({
-    activeSubscriptions: [],
+    activeSubscriptions: activeSubscriptionsState.value,
     fetchActiveSubscriptions,
   }),
 }))
@@ -88,6 +92,10 @@ vi.mock('@/utils/device', () => ({
   isMobileDevice: () => true,
 }))
 
+beforeEach(() => {
+  activeSubscriptionsState.value = []
+})
+
 function checkoutInfoFixture(overrides: Partial<CheckoutInfoResponse> = {}) {
   const wxpayMethod: MethodLimit = {
     daily_limit: 0,
@@ -109,6 +117,7 @@ function checkoutInfoFixture(overrides: Partial<CheckoutInfoResponse> = {}) {
     balance_recharge_multiplier: 1,
     subscription_usd_to_cny_rate: 0,
     recharge_fee_rate: 0,
+    recharge_options: [],
     help_text: '',
     help_image_url: '',
     stripe_publishable_key: '',
@@ -291,6 +300,65 @@ describe('PaymentView subscription plan grid', () => {
       'lg:grid-cols-3',
     ]))
   })
+
+  it('defaults to quarterly plans and switches the visible set to annual plans', async () => {
+    routeState.path = '/purchase'
+    routeState.query = { tab: 'subscription' }
+    const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({
+      plans: [
+        { ...basePlan, id: 1, name: '季度基础', period_label: 'quarter', discount_percent: 12 },
+        { ...basePlan, id: 2, name: '季度专业', period_label: 'quarter', discount_percent: 18 },
+        { ...basePlan, id: 3, name: '年度基础', period_label: 'year', discount_percent: 24 },
+      ],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(2)
+    const annualTab = wrapper.findAll('button').find(button => button.text().includes('payment.periods.year'))
+    expect(annualTab).toBeDefined()
+    await annualTab!.trigger('click')
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(1)
+  })
+
+  it('restores the requested platform and filters the plan set to that platform', async () => {
+    routeState.path = '/purchase'
+    routeState.query = { tab: 'subscription', platform: 'gemini' }
+    const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({
+      plans: [
+        { ...basePlan, id: 1, name: 'OpenAI Pro', group_platform: 'openai', period_label: 'month' },
+        { ...basePlan, id: 2, name: 'Gemini Pro', group_platform: 'gemini', period_label: 'month' },
+      ],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const cards = wrapper.findAllComponents(SubscriptionPlanCard)
+    expect(cards).toHaveLength(1)
+    expect(cards[0].props('plan')).toMatchObject({ id: 2, group_platform: 'gemini' })
+  })
 })
 
 describe('PaymentView subscription confirmation amounts', () => {
@@ -383,6 +451,67 @@ describe('PaymentView subscription confirmation amounts', () => {
   })
 })
 
+describe('PaymentView reset-card purchase', () => {
+  it('creates a standalone reset-card order for the selected subscription', async () => {
+    routeState.path = '/purchase'
+    routeState.query = { tab: 'subscription', reset_subscription_id: '42' }
+    activeSubscriptionsState.value = [{
+      id: 42,
+      user_id: 1,
+      group_id: 3,
+      platform: 'openai',
+      plan_price: 30,
+      plan_validity_days: 30,
+      status: 'active',
+      starts_at: '2026-08-01T00:00:00Z',
+      expires_at: '2026-09-01T00:00:00Z',
+      daily_usage_usd: 0,
+      weekly_usage_usd: 0,
+      monthly_usage_usd: 0,
+      daily_window_start: '2026-08-01T00:00:00Z',
+      weekly_window_start: '2026-08-01T00:00:00Z',
+      monthly_window_start: '2026-08-01T00:00:00Z',
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-01T00:00:00Z',
+      group: { id: 3, name: 'OpenAI Pro', platform: 'openai' } as UserSubscription['group'],
+    }]
+    createOrder.mockReset().mockResolvedValue({
+      order_id: 42,
+      amount: 10,
+      pay_amount: 10,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=reset-card',
+      out_trade_no: 'sub2_reset_42',
+    })
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture())
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const submit = wrapper.findAll('button').find(button => button.text().includes('payment.createOrder'))
+    expect(submit).toBeDefined()
+    await submit!.trigger('click')
+    await flushPromises()
+
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      order_type: 'subscription_reset',
+      reset_subscription_id: 42,
+      reset_card_quantity: 1,
+    }))
+  })
+})
+
 describe('PaymentView desktop deep links', () => {
   beforeEach(() => {
     vi.useRealTimers()
@@ -451,6 +580,64 @@ describe('PaymentView desktop deep links', () => {
     await flushPromises()
 
     expect(wrapper.findComponent(AmountInput).props('modelValue')).toBe(200)
+  })
+
+  it('uses enabled recharge presets returned by the server', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_options: [
+        { amount: 120, label: 'Popular', sort_order: 20, enabled: true },
+        { amount: 30, label: 'Starter', sort_order: 10, enabled: true },
+        { amount: 50, label: 'Hidden', sort_order: 5, enabled: false },
+      ],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const amountInput = wrapper.findComponent(AmountInput)
+    expect(amountInput.props('amounts')).toEqual([30, 120])
+    expect(amountInput.props('modelValue')).toBe(30)
+    expect(amountInput.props('options')).toEqual([
+      { amount: 30, label: 'Starter', sort_order: 10, enabled: true },
+      { amount: 120, label: 'Popular', sort_order: 20, enabled: true },
+    ])
+  })
+
+  it('ignores a desktop recharge amount that is not one of the configured tiers', async () => {
+    routeState.query = {
+      source: 'desktop',
+      tab: 'recharge',
+      amount: '200',
+    }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_options: [
+        { amount: 30, label: 'Starter', sort_order: 10, enabled: true },
+        { amount: 120, label: 'Popular', sort_order: 20, enabled: true },
+      ],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.findComponent(AmountInput).props('modelValue')).toBe(30)
   })
 })
 

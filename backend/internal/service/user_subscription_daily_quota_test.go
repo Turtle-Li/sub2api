@@ -94,6 +94,43 @@ func TestAssignOrExtendSubscription_ExpiredSubscriptionAppendsMatchingNotes(t *t
 	require.Equal(t, "same\nsame", renewed.Notes)
 }
 
+func TestExtendSubscription_ExpiredSubscriptionRestartsTermAndUsageWindows(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	oldStart := now.AddDate(0, 0, -45)
+	oldWindowStart := oldStart.Add(2 * time.Hour)
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:                 102,
+		UserID:             202,
+		GroupID:            1,
+		StartsAt:           oldStart,
+		ExpiresAt:          oldStart.AddDate(0, 0, 30),
+		Status:             SubscriptionStatusExpired,
+		DailyWindowStart:   &oldWindowStart,
+		WeeklyWindowStart:  &oldWindowStart,
+		MonthlyWindowStart: &oldWindowStart,
+		DailyUsageUSD:      10,
+		WeeklyUsageUSD:     20,
+		MonthlyUsageUSD:    30,
+	})
+	svc := NewSubscriptionService(groupRepoNoop{}, subRepo, nil, nil, nil)
+	svc.now = func() time.Time { return now }
+
+	renewed, err := svc.ExtendSubscription(context.Background(), 102, 14)
+
+	require.NoError(t, err)
+	require.Equal(t, SubscriptionStatusActive, renewed.Status)
+	require.Equal(t, now, renewed.StartsAt)
+	require.Equal(t, now.AddDate(0, 0, 14), renewed.ExpiresAt)
+	require.NotNil(t, renewed.DailyWindowStart)
+	require.Equal(t, now, *renewed.DailyWindowStart)
+	require.Equal(t, now, *renewed.WeeklyWindowStart)
+	require.Equal(t, now, *renewed.MonthlyWindowStart)
+	require.Zero(t, renewed.DailyUsageUSD)
+	require.Zero(t, renewed.WeeklyUsageUSD)
+	require.Zero(t, renewed.MonthlyUsageUSD)
+}
+
 func TestUserSubscriptionNeedsDailyReset_DailyCardKeepsOneTimeQuota(t *testing.T) {
 	start := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
 	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC)

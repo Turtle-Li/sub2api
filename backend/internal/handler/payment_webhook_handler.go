@@ -19,8 +19,17 @@ import (
 
 // PaymentWebhookHandler handles payment provider webhook callbacks.
 type PaymentWebhookHandler struct {
-	paymentService *service.PaymentService
+	paymentService paymentWebhookService
 	registry       *payment.Registry
+}
+
+// paymentWebhookService is the narrow payment-service contract needed by a
+// webhook endpoint. Keeping this boundary explicit lets the callback contract
+// be exercised with local, signed-provider simulators without changing the
+// production PaymentService implementation.
+type paymentWebhookService interface {
+	GetWebhookProviders(ctx context.Context, providerKey, outTradeNo string) ([]payment.Provider, error)
+	HandlePaymentNotification(ctx context.Context, notification *payment.PaymentNotification, providerKey string) error
 }
 
 // maxWebhookBodySize is the maximum allowed webhook request body size (1 MB).
@@ -30,7 +39,7 @@ const maxWebhookBodySize = 1 << 20
 const webhookLogTruncateLen = 200
 
 // NewPaymentWebhookHandler creates a new PaymentWebhookHandler.
-func NewPaymentWebhookHandler(paymentService *service.PaymentService, registry *payment.Registry) *PaymentWebhookHandler {
+func NewPaymentWebhookHandler(paymentService paymentWebhookService, registry *payment.Registry) *PaymentWebhookHandler {
 	return &PaymentWebhookHandler{
 		paymentService: paymentService,
 		registry:       registry,

@@ -71,6 +71,14 @@ func TestConfigRejectsBlockingWithoutAudit(t *testing.T) {
 	require.Error(t, validateStorageConfig(storage))
 }
 
+func TestConfigRejectsTooManyGuardEndpoints(t *testing.T) {
+	storage := DefaultStorageConfig()
+	storage.Endpoints = make([]StorageEndpoint, MaxGuardEndpointCount+1)
+	err := validateStorageConfig(storage)
+	require.Error(t, err)
+	require.Equal(t, "prompt_audit_too_many_endpoints", infraerrors.Reason(err))
+}
+
 func TestPublicConfigNeverMarshalsToken(t *testing.T) {
 	storage := DefaultStorageConfig()
 	storage.Endpoints = []StorageEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: DefaultGuardModel, TokenCiphertext: "GUARD_TOKEN_CANARY_SECRET", TimeoutMS: 1000, InputLimit: 1000, Enabled: true}}
@@ -440,6 +448,7 @@ func TestUpdateConfigStrictBoundsAndKnownValues(t *testing.T) {
 		{name: "timeout high", mutate: func(req *UpdateConfigRequest) { req.Endpoints[0].TimeoutMS = MaxTimeoutMS + 1 }, reason: "prompt_audit_invalid_timeout"},
 		{name: "input low", mutate: func(req *UpdateConfigRequest) { req.Endpoints[0].InputLimit = MinInputLimit - 1 }, reason: "prompt_audit_invalid_input_limit"},
 		{name: "input high", mutate: func(req *UpdateConfigRequest) { req.Endpoints[0].InputLimit = MaxInputLimit + 1 }, reason: "prompt_audit_invalid_input_limit"},
+		{name: "too many endpoints", mutate: func(req *UpdateConfigRequest) { req.Endpoints = make([]UpdateEndpoint, MaxGuardEndpointCount+1) }, reason: "prompt_audit_too_many_endpoints"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

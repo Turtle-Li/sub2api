@@ -62,6 +62,23 @@ func TestRedactAuditBody_JSONRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestRedactAuditBody_RedactsDesktopAuthorizationCodes(t *testing.T) {
+	raw := []byte(`{
+		"user_code":"ABCD-EFGH",
+		"device_code":"desktop-device-secret",
+		"code_verifier":"desktop-verifier-secret",
+		"code_challenge":"desktop-challenge-value"
+	}`)
+	out := RedactAuditBody(raw, "application/json")
+	for _, secret := range []string{
+		"ABCD-EFGH", "desktop-device-secret", "desktop-verifier-secret", "desktop-challenge-value",
+	} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("redacted body still contains desktop authorization material %q: %s", secret, out)
+		}
+	}
+}
+
 // 裸键 "session"（Ollama Cloud 会话保存的请求体字段）值整体就是浏览器 Cookie 明文，
 // 必须命中键级脱敏；session_id 等运行态标识不受影响，保留以便追责。
 func TestRedactAuditBody_BareSessionKeyRedacted(t *testing.T) {

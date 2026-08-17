@@ -2250,6 +2250,7 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(accountID int64, model string, success bool, firstTokenMs *int) {
 	if success {
 		s.clearOpenAIAccountModelTransientState(accountID, normalizeOpenAIAccountModelTransientModel(model))
+		s.recordOpenAICapacityShedSchedulingSuccess(accountID)
 	}
 	scheduler := s.getOpenAIAccountScheduler(context.Background())
 	if scheduler == nil {

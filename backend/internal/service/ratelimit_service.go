@@ -1569,6 +1569,20 @@ func persistOpenAI429PlanType(ctx context.Context, repo AccountRepository, accou
 // handle529 处理529过载错误
 // 根据配置决定是否暂停账号调度及冷却时长
 func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
+	s.applyOverloadCooldown(ctx, account, "529")
+}
+
+// handleRepeatedOpenAICapacityShed handles repeated response.failed capacity
+// signals after their request-local retry budget has been exhausted. Reuse the
+// existing overload switch and duration so operators have one cooldown policy.
+func (s *RateLimitService) handleRepeatedOpenAICapacityShed(ctx context.Context, account *Account) {
+	s.applyOverloadCooldown(ctx, account, "openai_capacity_shed")
+}
+
+func (s *RateLimitService) applyOverloadCooldown(ctx context.Context, account *Account, reason string) {
+	if s == nil || account == nil || account.ID <= 0 {
+		return
+	}
 	var settings *OverloadCooldownSettings
 	if s.settingService != nil {
 		var err error
@@ -1580,7 +1594,10 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	}
 	// 回退到配置文件
 	if settings == nil {
-		cooldown := s.cfg.RateLimit.OverloadCooldownMinutes
+		cooldown := 0
+		if s.cfg != nil {
+			cooldown = s.cfg.RateLimit.OverloadCooldownMinutes
+		}
 		if cooldown <= 0 {
 			cooldown = 10
 		}
@@ -1588,7 +1605,7 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	}
 
 	if !settings.Enabled {
-		slog.Info("account_529_ignored", "account_id", account.ID, "reason", "overload_cooldown_disabled")
+		slog.Info("account_overload_ignored", "account_id", account.ID, "signal", reason, "reason", "overload_cooldown_disabled")
 		return
 	}
 
@@ -1598,13 +1615,17 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	}
 
 	until := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
-	s.notifyAccountSchedulingBlocked(account, until, "529")
+	s.notifyAccountSchedulingBlocked(account, until, reason)
+	if s.accountRepo == nil {
+		slog.Warn("overload_set_skipped", "account_id", account.ID, "signal", reason, "reason", "account_repository_unavailable")
+		return
+	}
 	if err := s.accountRepo.SetOverloaded(ctx, account.ID, until); err != nil {
-		slog.Warn("overload_set_failed", "account_id", account.ID, "error", err)
+		slog.Warn("overload_set_failed", "account_id", account.ID, "signal", reason, "error", err)
 		return
 	}
 
-	slog.Info("account_overloaded", "account_id", account.ID, "until", until)
+	slog.Info("account_overloaded", "account_id", account.ID, "signal", reason, "until", until)
 }
 
 // UpdateSessionWindow 从成功响应更新5h窗口状态

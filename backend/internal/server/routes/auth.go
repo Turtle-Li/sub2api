@@ -41,6 +41,31 @@ func RegisterAuthRoutes(
 		auth.POST("/login/2fa", rateLimiter.LimitWithOptions("auth-login-2fa", 20, time.Minute, middleware.RateLimitOptions{
 			FailureMode: middleware.RateLimitFailClose,
 		}), h.Auth.Login2FA)
+		// TT Switch authenticates natively. These endpoints deliberately do not
+		// accept browser CAPTCHA proofs; their route identity selects stricter
+		// server-side, fail-closed limits while the ordinary web routes above keep
+		// their CAPTCHA requirement.
+		auth.POST("/desktop/login", rateLimiter.LimitWithOptions("desktop-native-login", 5, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.Auth.DesktopLogin)
+		auth.POST("/desktop/login/2fa", rateLimiter.LimitWithOptions("desktop-native-login-2fa", 5, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.Auth.Login2FA)
+		auth.POST("/desktop/register", rateLimiter.LimitWithOptions("desktop-native-register", 3, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.Auth.DesktopRegister)
+		auth.POST("/desktop/send-verify-code", rateLimiter.LimitWithOptions("desktop-native-send-verify-code", 3, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.Auth.DesktopSendVerifyCode)
+		// TT Switch creates a short-lived device transaction here; no password or
+		// captcha proof is accepted by this endpoint. Browser confirmation remains
+		// behind the ordinary web login/registration protections.
+		auth.POST("/desktop/start", rateLimiter.LimitWithOptions("desktop-auth-start", 10, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.DesktopAuth.Start)
+		auth.POST("/desktop/token", rateLimiter.LimitWithOptions("desktop-auth-token", 30, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.DesktopAuth.Token)
 		auth.POST("/passkey/login/begin", rateLimiter.LimitWithOptions("passkey-login-begin", 20, time.Minute, middleware.RateLimitOptions{
 			FailureMode: middleware.RateLimitFailClose,
 		}), h.Passkey.BeginLogin)
@@ -258,5 +283,10 @@ func RegisterAuthRoutes(
 		// 撤销所有会话（需要认证）
 		authenticated.POST("/auth/revoke-all-sessions", h.Auth.RevokeAllSessions)
 		authenticated.POST("/auth/oauth/bind-token", h.Auth.PrepareOAuthBindAccessTokenCookie)
+		// The low-entropy user code is safe only with an already authenticated
+		// browser identity, an explicit confirmation, and a fail-closed IP limit.
+		authenticated.POST("/auth/desktop/approve", rateLimiter.LimitWithOptions("desktop-auth-approve", 20, time.Minute, middleware.RateLimitOptions{
+			FailureMode: middleware.RateLimitFailClose,
+		}), h.DesktopAuth.Approve)
 	}
 }

@@ -79,6 +79,62 @@ func (_c *UserSubscriptionCreate) SetGroupID(v int64) *UserSubscriptionCreate {
 	return _c
 }
 
+// SetPlatform sets the "platform" field.
+func (_c *UserSubscriptionCreate) SetPlatform(v string) *UserSubscriptionCreate {
+	_c.mutation.SetPlatform(v)
+	return _c
+}
+
+// SetNillablePlatform sets the "platform" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePlatform(v *string) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPlatform(*v)
+	}
+	return _c
+}
+
+// SetPlanID sets the "plan_id" field.
+func (_c *UserSubscriptionCreate) SetPlanID(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetPlanID(v)
+	return _c
+}
+
+// SetNillablePlanID sets the "plan_id" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePlanID(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPlanID(*v)
+	}
+	return _c
+}
+
+// SetPlanPrice sets the "plan_price" field.
+func (_c *UserSubscriptionCreate) SetPlanPrice(v float64) *UserSubscriptionCreate {
+	_c.mutation.SetPlanPrice(v)
+	return _c
+}
+
+// SetNillablePlanPrice sets the "plan_price" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePlanPrice(v *float64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPlanPrice(*v)
+	}
+	return _c
+}
+
+// SetPlanValidityDays sets the "plan_validity_days" field.
+func (_c *UserSubscriptionCreate) SetPlanValidityDays(v int) *UserSubscriptionCreate {
+	_c.mutation.SetPlanValidityDays(v)
+	return _c
+}
+
+// SetNillablePlanValidityDays sets the "plan_validity_days" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePlanValidityDays(v *int) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPlanValidityDays(*v)
+	}
+	return _c
+}
+
 // SetStartsAt sets the "starts_at" field.
 func (_c *UserSubscriptionCreate) SetStartsAt(v time.Time) *UserSubscriptionCreate {
 	_c.mutation.SetStartsAt(v)
@@ -326,6 +382,10 @@ func (_c *UserSubscriptionCreate) defaults() error {
 		v := usersubscription.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.Platform(); !ok {
+		v := usersubscription.DefaultPlatform
+		_c.mutation.SetPlatform(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := usersubscription.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -365,6 +425,14 @@ func (_c *UserSubscriptionCreate) check() error {
 	}
 	if _, ok := _c.mutation.GroupID(); !ok {
 		return &ValidationError{Name: "group_id", err: errors.New(`ent: missing required field "UserSubscription.group_id"`)}
+	}
+	if _, ok := _c.mutation.Platform(); !ok {
+		return &ValidationError{Name: "platform", err: errors.New(`ent: missing required field "UserSubscription.platform"`)}
+	}
+	if v, ok := _c.mutation.Platform(); ok {
+		if err := usersubscription.PlatformValidator(v); err != nil {
+			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.platform": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.StartsAt(); !ok {
 		return &ValidationError{Name: "starts_at", err: errors.New(`ent: missing required field "UserSubscription.starts_at"`)}
@@ -436,6 +504,22 @@ func (_c *UserSubscriptionCreate) createSpec() (*UserSubscription, *sqlgraph.Cre
 	if value, ok := _c.mutation.DeletedAt(); ok {
 		_spec.SetField(usersubscription.FieldDeletedAt, field.TypeTime, value)
 		_node.DeletedAt = &value
+	}
+	if value, ok := _c.mutation.Platform(); ok {
+		_spec.SetField(usersubscription.FieldPlatform, field.TypeString, value)
+		_node.Platform = value
+	}
+	if value, ok := _c.mutation.PlanID(); ok {
+		_spec.SetField(usersubscription.FieldPlanID, field.TypeInt64, value)
+		_node.PlanID = &value
+	}
+	if value, ok := _c.mutation.PlanPrice(); ok {
+		_spec.SetField(usersubscription.FieldPlanPrice, field.TypeFloat64, value)
+		_node.PlanPrice = &value
+	}
+	if value, ok := _c.mutation.PlanValidityDays(); ok {
+		_spec.SetField(usersubscription.FieldPlanValidityDays, field.TypeInt, value)
+		_node.PlanValidityDays = &value
 	}
 	if value, ok := _c.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)
@@ -651,6 +735,90 @@ func (u *UserSubscriptionUpsert) SetGroupID(v int64) *UserSubscriptionUpsert {
 // UpdateGroupID sets the "group_id" field to the value that was provided on create.
 func (u *UserSubscriptionUpsert) UpdateGroupID() *UserSubscriptionUpsert {
 	u.SetExcluded(usersubscription.FieldGroupID)
+	return u
+}
+
+// SetPlatform sets the "platform" field.
+func (u *UserSubscriptionUpsert) SetPlatform(v string) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPlatform, v)
+	return u
+}
+
+// UpdatePlatform sets the "platform" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePlatform() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPlatform)
+	return u
+}
+
+// SetPlanID sets the "plan_id" field.
+func (u *UserSubscriptionUpsert) SetPlanID(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPlanID, v)
+	return u
+}
+
+// UpdatePlanID sets the "plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePlanID() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPlanID)
+	return u
+}
+
+// AddPlanID adds v to the "plan_id" field.
+func (u *UserSubscriptionUpsert) AddPlanID(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldPlanID, v)
+	return u
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (u *UserSubscriptionUpsert) ClearPlanID() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPlanID)
+	return u
+}
+
+// SetPlanPrice sets the "plan_price" field.
+func (u *UserSubscriptionUpsert) SetPlanPrice(v float64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPlanPrice, v)
+	return u
+}
+
+// UpdatePlanPrice sets the "plan_price" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePlanPrice() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPlanPrice)
+	return u
+}
+
+// AddPlanPrice adds v to the "plan_price" field.
+func (u *UserSubscriptionUpsert) AddPlanPrice(v float64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldPlanPrice, v)
+	return u
+}
+
+// ClearPlanPrice clears the value of the "plan_price" field.
+func (u *UserSubscriptionUpsert) ClearPlanPrice() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPlanPrice)
+	return u
+}
+
+// SetPlanValidityDays sets the "plan_validity_days" field.
+func (u *UserSubscriptionUpsert) SetPlanValidityDays(v int) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPlanValidityDays, v)
+	return u
+}
+
+// UpdatePlanValidityDays sets the "plan_validity_days" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePlanValidityDays() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPlanValidityDays)
+	return u
+}
+
+// AddPlanValidityDays adds v to the "plan_validity_days" field.
+func (u *UserSubscriptionUpsert) AddPlanValidityDays(v int) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldPlanValidityDays, v)
+	return u
+}
+
+// ClearPlanValidityDays clears the value of the "plan_validity_days" field.
+func (u *UserSubscriptionUpsert) ClearPlanValidityDays() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPlanValidityDays)
 	return u
 }
 
@@ -951,6 +1119,104 @@ func (u *UserSubscriptionUpsertOne) SetGroupID(v int64) *UserSubscriptionUpsertO
 func (u *UserSubscriptionUpsertOne) UpdateGroupID() *UserSubscriptionUpsertOne {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.UpdateGroupID()
+	})
+}
+
+// SetPlatform sets the "platform" field.
+func (u *UserSubscriptionUpsertOne) SetPlatform(v string) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlatform(v)
+	})
+}
+
+// UpdatePlatform sets the "platform" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePlatform() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlatform()
+	})
+}
+
+// SetPlanID sets the "plan_id" field.
+func (u *UserSubscriptionUpsertOne) SetPlanID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanID(v)
+	})
+}
+
+// AddPlanID adds v to the "plan_id" field.
+func (u *UserSubscriptionUpsertOne) AddPlanID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPlanID(v)
+	})
+}
+
+// UpdatePlanID sets the "plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePlanID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanID()
+	})
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (u *UserSubscriptionUpsertOne) ClearPlanID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanID()
+	})
+}
+
+// SetPlanPrice sets the "plan_price" field.
+func (u *UserSubscriptionUpsertOne) SetPlanPrice(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanPrice(v)
+	})
+}
+
+// AddPlanPrice adds v to the "plan_price" field.
+func (u *UserSubscriptionUpsertOne) AddPlanPrice(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPlanPrice(v)
+	})
+}
+
+// UpdatePlanPrice sets the "plan_price" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePlanPrice() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanPrice()
+	})
+}
+
+// ClearPlanPrice clears the value of the "plan_price" field.
+func (u *UserSubscriptionUpsertOne) ClearPlanPrice() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanPrice()
+	})
+}
+
+// SetPlanValidityDays sets the "plan_validity_days" field.
+func (u *UserSubscriptionUpsertOne) SetPlanValidityDays(v int) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanValidityDays(v)
+	})
+}
+
+// AddPlanValidityDays adds v to the "plan_validity_days" field.
+func (u *UserSubscriptionUpsertOne) AddPlanValidityDays(v int) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPlanValidityDays(v)
+	})
+}
+
+// UpdatePlanValidityDays sets the "plan_validity_days" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePlanValidityDays() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanValidityDays()
+	})
+}
+
+// ClearPlanValidityDays clears the value of the "plan_validity_days" field.
+func (u *UserSubscriptionUpsertOne) ClearPlanValidityDays() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanValidityDays()
 	})
 }
 
@@ -1449,6 +1715,104 @@ func (u *UserSubscriptionUpsertBulk) SetGroupID(v int64) *UserSubscriptionUpsert
 func (u *UserSubscriptionUpsertBulk) UpdateGroupID() *UserSubscriptionUpsertBulk {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.UpdateGroupID()
+	})
+}
+
+// SetPlatform sets the "platform" field.
+func (u *UserSubscriptionUpsertBulk) SetPlatform(v string) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlatform(v)
+	})
+}
+
+// UpdatePlatform sets the "platform" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePlatform() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlatform()
+	})
+}
+
+// SetPlanID sets the "plan_id" field.
+func (u *UserSubscriptionUpsertBulk) SetPlanID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanID(v)
+	})
+}
+
+// AddPlanID adds v to the "plan_id" field.
+func (u *UserSubscriptionUpsertBulk) AddPlanID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPlanID(v)
+	})
+}
+
+// UpdatePlanID sets the "plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePlanID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanID()
+	})
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (u *UserSubscriptionUpsertBulk) ClearPlanID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanID()
+	})
+}
+
+// SetPlanPrice sets the "plan_price" field.
+func (u *UserSubscriptionUpsertBulk) SetPlanPrice(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanPrice(v)
+	})
+}
+
+// AddPlanPrice adds v to the "plan_price" field.
+func (u *UserSubscriptionUpsertBulk) AddPlanPrice(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPlanPrice(v)
+	})
+}
+
+// UpdatePlanPrice sets the "plan_price" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePlanPrice() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanPrice()
+	})
+}
+
+// ClearPlanPrice clears the value of the "plan_price" field.
+func (u *UserSubscriptionUpsertBulk) ClearPlanPrice() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanPrice()
+	})
+}
+
+// SetPlanValidityDays sets the "plan_validity_days" field.
+func (u *UserSubscriptionUpsertBulk) SetPlanValidityDays(v int) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanValidityDays(v)
+	})
+}
+
+// AddPlanValidityDays adds v to the "plan_validity_days" field.
+func (u *UserSubscriptionUpsertBulk) AddPlanValidityDays(v int) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPlanValidityDays(v)
+	})
+}
+
+// UpdatePlanValidityDays sets the "plan_validity_days" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePlanValidityDays() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanValidityDays()
+	})
+}
+
+// ClearPlanValidityDays clears the value of the "plan_validity_days" field.
+func (u *UserSubscriptionUpsertBulk) ClearPlanValidityDays() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanValidityDays()
 	})
 }
 

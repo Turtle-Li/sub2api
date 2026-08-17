@@ -85,6 +85,101 @@ func (_u *UserSubscriptionUpdate) SetNillableGroupID(v *int64) *UserSubscription
 	return _u
 }
 
+// SetPlatform sets the "platform" field.
+func (_u *UserSubscriptionUpdate) SetPlatform(v string) *UserSubscriptionUpdate {
+	_u.mutation.SetPlatform(v)
+	return _u
+}
+
+// SetNillablePlatform sets the "platform" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePlatform(v *string) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPlatform(*v)
+	}
+	return _u
+}
+
+// SetPlanID sets the "plan_id" field.
+func (_u *UserSubscriptionUpdate) SetPlanID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetPlanID()
+	_u.mutation.SetPlanID(v)
+	return _u
+}
+
+// SetNillablePlanID sets the "plan_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePlanID(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPlanID(*v)
+	}
+	return _u
+}
+
+// AddPlanID adds value to the "plan_id" field.
+func (_u *UserSubscriptionUpdate) AddPlanID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddPlanID(v)
+	return _u
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (_u *UserSubscriptionUpdate) ClearPlanID() *UserSubscriptionUpdate {
+	_u.mutation.ClearPlanID()
+	return _u
+}
+
+// SetPlanPrice sets the "plan_price" field.
+func (_u *UserSubscriptionUpdate) SetPlanPrice(v float64) *UserSubscriptionUpdate {
+	_u.mutation.ResetPlanPrice()
+	_u.mutation.SetPlanPrice(v)
+	return _u
+}
+
+// SetNillablePlanPrice sets the "plan_price" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePlanPrice(v *float64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPlanPrice(*v)
+	}
+	return _u
+}
+
+// AddPlanPrice adds value to the "plan_price" field.
+func (_u *UserSubscriptionUpdate) AddPlanPrice(v float64) *UserSubscriptionUpdate {
+	_u.mutation.AddPlanPrice(v)
+	return _u
+}
+
+// ClearPlanPrice clears the value of the "plan_price" field.
+func (_u *UserSubscriptionUpdate) ClearPlanPrice() *UserSubscriptionUpdate {
+	_u.mutation.ClearPlanPrice()
+	return _u
+}
+
+// SetPlanValidityDays sets the "plan_validity_days" field.
+func (_u *UserSubscriptionUpdate) SetPlanValidityDays(v int) *UserSubscriptionUpdate {
+	_u.mutation.ResetPlanValidityDays()
+	_u.mutation.SetPlanValidityDays(v)
+	return _u
+}
+
+// SetNillablePlanValidityDays sets the "plan_validity_days" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePlanValidityDays(v *int) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPlanValidityDays(*v)
+	}
+	return _u
+}
+
+// AddPlanValidityDays adds value to the "plan_validity_days" field.
+func (_u *UserSubscriptionUpdate) AddPlanValidityDays(v int) *UserSubscriptionUpdate {
+	_u.mutation.AddPlanValidityDays(v)
+	return _u
+}
+
+// ClearPlanValidityDays clears the value of the "plan_validity_days" field.
+func (_u *UserSubscriptionUpdate) ClearPlanValidityDays() *UserSubscriptionUpdate {
+	_u.mutation.ClearPlanValidityDays()
+	return _u
+}
+
 // SetStartsAt sets the "starts_at" field.
 func (_u *UserSubscriptionUpdate) SetStartsAt(v time.Time) *UserSubscriptionUpdate {
 	_u.mutation.SetStartsAt(v)
@@ -436,6 +531,11 @@ func (_u *UserSubscriptionUpdate) defaults() error {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *UserSubscriptionUpdate) check() error {
+	if v, ok := _u.mutation.Platform(); ok {
+		if err := usersubscription.PlatformValidator(v); err != nil {
+			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.platform": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := usersubscription.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
@@ -470,6 +570,36 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if _u.mutation.DeletedAtCleared() {
 		_spec.ClearField(usersubscription.FieldDeletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Platform(); ok {
+		_spec.SetField(usersubscription.FieldPlatform, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PlanID(); ok {
+		_spec.SetField(usersubscription.FieldPlanID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPlanID(); ok {
+		_spec.AddField(usersubscription.FieldPlanID, field.TypeInt64, value)
+	}
+	if _u.mutation.PlanIDCleared() {
+		_spec.ClearField(usersubscription.FieldPlanID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.PlanPrice(); ok {
+		_spec.SetField(usersubscription.FieldPlanPrice, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPlanPrice(); ok {
+		_spec.AddField(usersubscription.FieldPlanPrice, field.TypeFloat64, value)
+	}
+	if _u.mutation.PlanPriceCleared() {
+		_spec.ClearField(usersubscription.FieldPlanPrice, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.PlanValidityDays(); ok {
+		_spec.SetField(usersubscription.FieldPlanValidityDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedPlanValidityDays(); ok {
+		_spec.AddField(usersubscription.FieldPlanValidityDays, field.TypeInt, value)
+	}
+	if _u.mutation.PlanValidityDaysCleared() {
+		_spec.ClearField(usersubscription.FieldPlanValidityDays, field.TypeInt)
 	}
 	if value, ok := _u.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)
@@ -728,6 +858,101 @@ func (_u *UserSubscriptionUpdateOne) SetNillableGroupID(v *int64) *UserSubscript
 	if v != nil {
 		_u.SetGroupID(*v)
 	}
+	return _u
+}
+
+// SetPlatform sets the "platform" field.
+func (_u *UserSubscriptionUpdateOne) SetPlatform(v string) *UserSubscriptionUpdateOne {
+	_u.mutation.SetPlatform(v)
+	return _u
+}
+
+// SetNillablePlatform sets the "platform" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePlatform(v *string) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPlatform(*v)
+	}
+	return _u
+}
+
+// SetPlanID sets the "plan_id" field.
+func (_u *UserSubscriptionUpdateOne) SetPlanID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetPlanID()
+	_u.mutation.SetPlanID(v)
+	return _u
+}
+
+// SetNillablePlanID sets the "plan_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePlanID(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPlanID(*v)
+	}
+	return _u
+}
+
+// AddPlanID adds value to the "plan_id" field.
+func (_u *UserSubscriptionUpdateOne) AddPlanID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddPlanID(v)
+	return _u
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearPlanID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPlanID()
+	return _u
+}
+
+// SetPlanPrice sets the "plan_price" field.
+func (_u *UserSubscriptionUpdateOne) SetPlanPrice(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetPlanPrice()
+	_u.mutation.SetPlanPrice(v)
+	return _u
+}
+
+// SetNillablePlanPrice sets the "plan_price" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePlanPrice(v *float64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPlanPrice(*v)
+	}
+	return _u
+}
+
+// AddPlanPrice adds value to the "plan_price" field.
+func (_u *UserSubscriptionUpdateOne) AddPlanPrice(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddPlanPrice(v)
+	return _u
+}
+
+// ClearPlanPrice clears the value of the "plan_price" field.
+func (_u *UserSubscriptionUpdateOne) ClearPlanPrice() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPlanPrice()
+	return _u
+}
+
+// SetPlanValidityDays sets the "plan_validity_days" field.
+func (_u *UserSubscriptionUpdateOne) SetPlanValidityDays(v int) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetPlanValidityDays()
+	_u.mutation.SetPlanValidityDays(v)
+	return _u
+}
+
+// SetNillablePlanValidityDays sets the "plan_validity_days" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePlanValidityDays(v *int) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPlanValidityDays(*v)
+	}
+	return _u
+}
+
+// AddPlanValidityDays adds value to the "plan_validity_days" field.
+func (_u *UserSubscriptionUpdateOne) AddPlanValidityDays(v int) *UserSubscriptionUpdateOne {
+	_u.mutation.AddPlanValidityDays(v)
+	return _u
+}
+
+// ClearPlanValidityDays clears the value of the "plan_validity_days" field.
+func (_u *UserSubscriptionUpdateOne) ClearPlanValidityDays() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPlanValidityDays()
 	return _u
 }
 
@@ -1095,6 +1320,11 @@ func (_u *UserSubscriptionUpdateOne) defaults() error {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *UserSubscriptionUpdateOne) check() error {
+	if v, ok := _u.mutation.Platform(); ok {
+		if err := usersubscription.PlatformValidator(v); err != nil {
+			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.platform": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := usersubscription.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
@@ -1146,6 +1376,36 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 	}
 	if _u.mutation.DeletedAtCleared() {
 		_spec.ClearField(usersubscription.FieldDeletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Platform(); ok {
+		_spec.SetField(usersubscription.FieldPlatform, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PlanID(); ok {
+		_spec.SetField(usersubscription.FieldPlanID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPlanID(); ok {
+		_spec.AddField(usersubscription.FieldPlanID, field.TypeInt64, value)
+	}
+	if _u.mutation.PlanIDCleared() {
+		_spec.ClearField(usersubscription.FieldPlanID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.PlanPrice(); ok {
+		_spec.SetField(usersubscription.FieldPlanPrice, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPlanPrice(); ok {
+		_spec.AddField(usersubscription.FieldPlanPrice, field.TypeFloat64, value)
+	}
+	if _u.mutation.PlanPriceCleared() {
+		_spec.ClearField(usersubscription.FieldPlanPrice, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.PlanValidityDays(); ok {
+		_spec.SetField(usersubscription.FieldPlanValidityDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedPlanValidityDays(); ok {
+		_spec.AddField(usersubscription.FieldPlanValidityDays, field.TypeInt, value)
+	}
+	if _u.mutation.PlanValidityDaysCleared() {
+		_spec.ClearField(usersubscription.FieldPlanValidityDays, field.TypeInt)
 	}
 	if value, ok := _u.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)
