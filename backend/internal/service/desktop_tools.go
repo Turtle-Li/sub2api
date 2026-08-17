@@ -94,16 +94,16 @@ type DesktopToolCatalogVersion struct {
 }
 
 type DesktopToolDefinition struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Icon        string                 `json:"icon"`
-	SortOrder   int                    `json:"sort_order"`
-	Enabled     bool                   `json:"enabled"`
-	UI          DesktopToolUI          `json:"ui"`
-	Action      DesktopToolAction      `json:"action"`
-	Defaults    map[string]interface{} `json:"defaults"`
-	Settings    []DesktopToolSetting   `json:"settings"`
+	ID          string               `json:"id"`
+	Name        string               `json:"name"`
+	Description string               `json:"description"`
+	Icon        string               `json:"icon"`
+	SortOrder   int                  `json:"sort_order"`
+	Enabled     bool                 `json:"enabled"`
+	UI          DesktopToolUI        `json:"ui"`
+	Action      DesktopToolAction    `json:"action"`
+	Defaults    map[string]any       `json:"defaults"`
+	Settings    []DesktopToolSetting `json:"settings"`
 }
 
 type DesktopToolUI struct {
@@ -121,7 +121,7 @@ type DesktopToolSetting struct {
 	Label         string              `json:"label"`
 	Description   string              `json:"description,omitempty"`
 	Type          string              `json:"type"`
-	Default       interface{}         `json:"default,omitempty"`
+	Default       any                 `json:"default,omitempty"`
 	Options       []DesktopToolOption `json:"options,omitempty"`
 	OptionsSource string              `json:"options_source,omitempty"`
 	Min           *int                `json:"min,omitempty"`
@@ -253,7 +253,7 @@ func normalizeDesktopTool(tool DesktopToolDefinition) (DesktopToolDefinition, er
 		return DesktopToolDefinition{}, fmt.Errorf("too many settings (maximum %d)", maxDesktopToolSettings)
 	}
 	if tool.Defaults == nil {
-		tool.Defaults = map[string]interface{}{}
+		tool.Defaults = map[string]any{}
 	}
 	if rawEnabled, exists := tool.Defaults["enabled"]; exists {
 		if _, ok := rawEnabled.(bool); !ok {
@@ -302,7 +302,7 @@ func normalizeDesktopTool(tool DesktopToolDefinition) (DesktopToolDefinition, er
 	return tool, nil
 }
 
-func normalizeDesktopToolSetting(setting DesktopToolSetting) (DesktopToolSetting, interface{}, error) {
+func normalizeDesktopToolSetting(setting DesktopToolSetting) (DesktopToolSetting, any, error) {
 	setting.ID = strings.ToLower(strings.TrimSpace(setting.ID))
 	setting.Label = strings.TrimSpace(setting.Label)
 	setting.Description = strings.TrimSpace(setting.Description)
@@ -384,7 +384,7 @@ func normalizeDesktopToolSetting(setting DesktopToolSetting) (DesktopToolSetting
 	return setting, value, nil
 }
 
-func normalizeDesktopToolValue(value interface{}, setting DesktopToolSetting) (interface{}, error) {
+func normalizeDesktopToolValue(value any, setting DesktopToolSetting) (any, error) {
 	switch setting.Type {
 	case "switch":
 		if typed, ok := value.(bool); ok {
@@ -421,7 +421,7 @@ func normalizeDesktopToolValue(value interface{}, setting DesktopToolSetting) (i
 	}
 }
 
-func desktopToolInteger(value interface{}) (int, bool) {
+func desktopToolInteger(value any) (int, bool) {
 	switch typed := value.(type) {
 	case int:
 		return typed, true

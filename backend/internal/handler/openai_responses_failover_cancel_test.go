@@ -9,11 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	attachmentgateway "github.com/Wei-Shaw/sub2api/internal/service/attachment_gateway"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -41,6 +44,35 @@ func (u *openAIResponsesFailoverCancelUpstream) Do(_ *http.Request, _ string, ac
 		Header:     http.Header{"Content-Type": []string{"text/html"}},
 		Body:       io.NopCloser(bytes.NewBufferString("<html>520: unknown error</html>")),
 	}, nil
+}
+
+type cancelingResponsesAttachmentOptimizer struct {
+	calls   atomic.Int32
+	started chan struct{}
+	once    sync.Once
+}
+
+func (o *cancelingResponsesAttachmentOptimizer) Enabled() bool { return true }
+
+func (o *cancelingResponsesAttachmentOptimizer) Optimize(ctx context.Context, body []byte) attachmentgateway.Result {
+	if o.calls.Add(1) > 1 {
+		return attachmentgateway.Result{Body: body}
+	}
+	o.once.Do(func() { close(o.started) })
+	<-ctx.Done()
+	return attachmentgateway.Result{
+		Body: body,
+		Metrics: attachmentgateway.Metrics{
+			Enabled:            true,
+			OriginalBodyBytes:  len(body),
+			OptimizedBodyBytes: len(body),
+			Errors:             1,
+		},
+	}
+}
+
+func (o *cancelingResponsesAttachmentOptimizer) RehydrateFromCache(_ context.Context, body []byte) attachmentgateway.Result {
+	return attachmentgateway.Result{Body: body}
 }
 
 func (u *openAIResponsesFailoverCancelUpstream) calls() []int64 {
@@ -174,6 +206,57 @@ func TestOpenAIGatewayHandlerResponses_FailoverAbortsWhenClientDisconnected(t *t
 	require.Len(t, events, 1)
 	require.Equal(t, "failover", events[0].Kind)
 	require.Equal(t, 520, events[0].UpstreamStatusCode)
+}
+
+// TestOpenAIGatewayHandlerResponses_CanceledAttachmentDoesNotBecomeForward413
+// covers the attachment-specific boundary: the body is already buffered, the
+// optimizer observes a client cancellation before its first image token, and
+// the original body is larger than the application forwarding cap. The
+// canceled request must be classified as 499 before the cap can emit 413.
+func TestOpenAIGatewayHandlerResponses_CanceledAttachmentDoesNotBecomeForward413(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	upstream := &openAIResponsesFailoverCancelUpstream{}
+	handler := newOpenAIResponsesFailoverTestHandler(t, upstream)
+	handler.cfg.Gateway.OpenAIResponsesMaxForwardBodySize = 64
+	handler.cfg.Gateway.AttachmentGateway = config.AttachmentGatewayConfig{
+		AttachmentOptimizerEnabled:  true,
+		RequestBudgetEnabled:        true,
+		AllowUnscoped:               true,
+		OptimizeTimeoutMilliseconds: 1000,
+	}
+	optimizer := &cancelingResponsesAttachmentOptimizer{started: make(chan struct{})}
+	handler.attachmentOptimizer = optimizer
+
+	body := append([]byte(`{"model":"gpt-5.1","stream":false,"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}],"padding":"`), bytes.Repeat([]byte("x"), 256)...)
+	body = append(body, []byte(`"}`)...)
+	c, rec := newOpenAIResponsesFailoverTestContext(t, ctx)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body)).WithContext(ctx)
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	done := make(chan struct{})
+	go func() {
+		handler.Responses(c)
+		close(done)
+	}()
+	select {
+	case <-optimizer.started:
+	case <-time.After(time.Second):
+		t.Fatal("attachment optimizer did not begin")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled Responses request did not return")
+	}
+
+	require.Equal(t, statusClientClosedRequest, c.Writer.Status())
+	require.Zero(t, rec.Body.Len(), "a disconnected client must not receive a 413 body")
+	require.Empty(t, upstream.calls(), "canceled request must stop before upstream forwarding")
+	require.Equal(t, int32(1), optimizer.calls.Load(), "cancellation must not schedule a second optimization")
 }
 
 // TestOpenAIGatewayHandlerResponses_FailoverContinuesForConnectedClient 回归

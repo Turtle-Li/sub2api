@@ -1030,6 +1030,31 @@ func TestTransformDeadlineFailsOpen(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestPreCanceledRequestStopsBeforeFirstImageDispatch(t *testing.T) {
+	config := DefaultConfig()
+	config.Enabled = true
+	config.CacheDir = t.TempDir()
+	config.ThresholdBytes = 1
+	gateway, err := New(config)
+	require.NoError(t, err)
+	source := makePhotoLikePNG(t, 240, 160, 72)
+	body := makeResponsesPayload(t, []string{dataURL("image/png", source)}, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := gateway.Optimize(ctx, body)
+
+	// This metric shape is the signal the handler uses to distinguish a
+	// cancellation before token dispatch from a detector/image failure.
+	require.Equal(t, body, result.Body)
+	require.Equal(t, 1, result.Metrics.Errors)
+	require.Zero(t, result.Metrics.ImageCount)
+	require.Zero(t, result.Metrics.OptimizedImageCount)
+	require.False(t, result.Metrics.TimedOut)
+}
+
+// An encode admitted before cancellation may finish and remain reusable; this
+// is distinct from starting a new optimization after the request is canceled.
 func TestCanceledRequestStillWarmsImageCacheForRetry(t *testing.T) {
 	config := DefaultConfig()
 	config.Enabled = true
