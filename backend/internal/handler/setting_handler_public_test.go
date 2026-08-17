@@ -120,3 +120,54 @@ func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *
 	require.True(t, resp.Data.WeChatOAuthOpenEnabled)
 	require.True(t, resp.Data.WeChatOAuthMPEnabled)
 }
+
+func TestSettingHandler_GetDesktopDiscovery_ExposesOnlyManagedEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{
+		values: map[string]string{
+			service.SettingKeyDesktopControlPlaneURL: "  https://account.next.example.com/  ",
+			service.SettingKeyAPIBaseURL:             "https://provider.example.com",
+			service.SettingKeySiteName:               "Private deployment name",
+		},
+	}, &config.Config{}), "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/desktop", nil)
+
+	h.GetDesktopDiscovery(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "public, max-age=300, stale-if-error=86400", recorder.Header().Get("Cache-Control"))
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			SchemaVersion   int    `json:"schema_version"`
+			ControlPlaneURL string `json:"control_plane_url"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, 1, resp.Data.SchemaVersion)
+	require.Equal(t, "https://account.next.example.com", resp.Data.ControlPlaneURL)
+	require.NotContains(t, recorder.Body.String(), "provider.example.com")
+	require.NotContains(t, recorder.Body.String(), "Private deployment name")
+}
+
+func TestSettingHandler_GetDesktopDiscovery_FallsBackToRequestOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{
+		values: map[string]string{},
+	}, &config.Config{}), "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "http://www.turtleligpt.com/api/v1/settings/desktop", nil)
+	c.Request.Header.Set("X-Forwarded-Proto", "https")
+
+	h.GetDesktopDiscovery(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"control_plane_url":"https://www.turtleligpt.com"`)
+}

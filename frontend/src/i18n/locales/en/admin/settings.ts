@@ -493,6 +493,10 @@ export default {
         apiBaseUrlPlaceholder: 'https://api.example.com',
         apiBaseUrlHint:
           'Used for "Use Key", "Import to CC Switch", and callback URL suggestions. Leave empty to use current site URL.',
+        desktopControlPlaneUrl: 'Desktop Control Plane URL',
+        desktopControlPlaneUrlPlaceholder: 'https://www.example.com',
+        desktopControlPlaneUrlHint:
+          'Base URL for official desktop login and account APIs. Leave empty to use this website origin. Change it here to migrate released clients to a new domain. HTTPS is required in production.',
         tablePreferencesTitle: 'Global Table Preferences',
         tablePreferencesDescription: 'Configure default pagination behavior for shared table components',
         tableDefaultPageSize: 'Default Rows Per Page',

@@ -370,7 +370,7 @@
           </template>
 
           <template #cell-actions="{ row }">
-            <div class="flex items-center gap-1">
+            <div data-test="key-row-actions" class="flex flex-wrap items-center gap-1">
               <!-- Use Key Button -->
               <button
                 @click="openUseKeyModal(row)"
@@ -388,6 +388,17 @@
                 <Icon name="upload" size="sm" />
                 <span class="text-xs">{{ t('keys.importToCcSwitch') }}</span>
               </button>
+              <!-- TT Switch Website -->
+              <a
+                data-test="tt-switch-site-link"
+                :href="ttSwitchSiteUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-violet-50 hover:text-violet-600 dark:hover:bg-violet-900/20 dark:hover:text-violet-400"
+              >
+                <Icon name="externalLink" size="sm" />
+                <span class="whitespace-nowrap text-xs">{{ t('keys.visitTtSwitchSite') }}</span>
+              </a>
               <!-- Toggle Status Button -->
               <button
                 @click="toggleKeyStatus(row)"
@@ -1149,6 +1160,10 @@ import {
   buildCcSwitchImportDeeplink,
   type CcSwitchClientType
 } from '@/utils/ccswitchImport'
+
+const ttSwitchSiteUrl =
+  (import.meta.env.VITE_TT_SWITCH_SITE_URL as string | undefined)?.trim() ||
+  'https://ttswitch-1309919944.cos.ap-shanghai.myqcloud.com/site/index.html'
 
 // Helper to format date for datetime-local input
 const formatDateTimeLocal = (isoDate: string): string => {

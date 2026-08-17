@@ -135,6 +135,7 @@ type SystemSettings struct {
 	SiteLogo                    string           `json:"site_logo"`
 	SiteSubtitle                string           `json:"site_subtitle"`
 	APIBaseURL                  string           `json:"api_base_url"`
+	DesktopControlPlaneURL      string           `json:"desktop_control_plane_url"`
 	ContactInfo                 string           `json:"contact_info"`
 	DocURL                      string           `json:"doc_url"`
 	HomeContent                 string           `json:"home_content"`
@@ -372,6 +373,15 @@ type PublicSettings struct {
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
 	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
+}
+
+// DesktopDiscovery is the narrow, unauthenticated bootstrap contract used by
+// official desktop clients before login. Keep it free of credentials and
+// implementation details so released clients can safely poll it for endpoint
+// migrations.
+type DesktopDiscovery struct {
+	SchemaVersion   int    `json:"schema_version"`
+	ControlPlaneURL string `json:"control_plane_url"`
 }
 
 type LoginAgreementDocument struct {

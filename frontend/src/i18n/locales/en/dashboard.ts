@@ -96,6 +96,7 @@ export default {
     copyToClipboard: 'Copy to clipboard',
     copied: 'Copied!',
     importToCcSwitch: 'Import to CCS',
+    visitTtSwitchSite: 'TT Switch Website',
     enable: 'Enable',
     disable: 'Disable',
     nameLabel: 'Name',

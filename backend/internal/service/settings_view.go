@@ -135,6 +135,7 @@ type SystemSettings struct {
 	SiteLogo                    string
 	SiteSubtitle                string
 	APIBaseURL                  string
+	DesktopControlPlaneURL      string
 	ContactInfo                 string
 	DocURL                      string
 	HomeContent                 string
@@ -295,6 +296,7 @@ type PublicSettings struct {
 	SiteLogo                         string
 	SiteSubtitle                     string
 	APIBaseURL                       string
+	DesktopControlPlaneURL           string
 	ContactInfo                      string
 	DocURL                           string
 	HomeContent                      string

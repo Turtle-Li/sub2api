@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type { ApiKey } from '@/types'
 import KeysView from '../KeysView.vue'
@@ -48,6 +51,9 @@ const messages: Record<string, string> = {
   'keys.lastUsedIP': 'Last Used IP',
   'keys.rateLimitColumn': 'Rate Limit',
   'keys.searchPlaceholder': 'Search name or key...',
+  'keys.importToCcSwitch': 'Import to CCS',
+  'keys.useKey': 'Use Key',
+  'keys.visitTtSwitchSite': 'TT Switch Website',
   'keys.status.active': 'Active',
   'keys.status.expired': 'Expired',
   'keys.status.inactive': 'Inactive',
@@ -173,6 +179,9 @@ const DataTableStub = {
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
         </div>
+        <div data-test="actions">
+          <slot name="cell-actions" :row="row" />
+        </div>
         <div
           v-if="columns.some((col) => col.key === 'last_used_ip')"
           data-test="last-used-ip"
@@ -255,6 +264,11 @@ const getButtonByText = (wrapper: VueWrapper, text: string) => {
   }
   return button
 }
+
+const keysViewSource = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../KeysView.vue'),
+  'utf8'
+)
 
 describe('user KeysView column settings', () => {
   beforeEach(() => {
@@ -392,6 +406,27 @@ describe('user KeysView column settings', () => {
     const wrapper = await mountView()
 
     expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
+  })
+
+  it('links to the TT Switch website without replacing the CC Switch import action', async () => {
+    const wrapper = await mountView()
+
+    const websiteLink = wrapper.get('[data-test="tt-switch-site-link"]')
+    expect(websiteLink.text()).toContain('TT Switch Website')
+    expect(websiteLink.attributes('href')).toBe(
+      'https://ttswitch-1309919944.cos.ap-shanghai.myqcloud.com/site/index.html'
+    )
+    expect(websiteLink.attributes('target')).toBe('_blank')
+    expect(websiteLink.attributes('rel')).toBe('noopener noreferrer')
+    expect(wrapper.get('[data-test="key-row-actions"]').classes()).toContain('flex-wrap')
+    expect(getButtonByText(wrapper, 'Import to CCS').exists()).toBe(true)
+  })
+
+  it('allows the TT Switch website to be overridden through Vite env', () => {
+    expect(keysViewSource).toContain('import.meta.env.VITE_TT_SWITCH_SITE_URL')
+    expect(keysViewSource).toContain(
+      'https://ttswitch-1309919944.cos.ap-shanghai.myqcloud.com/site/index.html'
+    )
   })
 
   it('marks current concurrency as sortable', async () => {

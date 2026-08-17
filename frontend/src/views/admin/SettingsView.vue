@@ -5389,6 +5389,26 @@
                 </p>
               </div>
 
+              <!-- Desktop control plane URL -->
+              <div>
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.site.desktopControlPlaneUrl") }}
+                </label>
+                <input
+                  v-model="form.desktop_control_plane_url"
+                  type="url"
+                  class="input font-mono text-sm"
+                  :placeholder="
+                    t('admin.settings.site.desktopControlPlaneUrlPlaceholder')
+                  "
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.site.desktopControlPlaneUrlHint") }}
+                </p>
+              </div>
+
               <!-- Global Table Preferences -->
               <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
                 <h3 class="text-sm font-medium text-gray-900 dark:text-white">
@@ -8395,6 +8415,7 @@ const form = reactive<SettingsForm>({
   site_logo: "",
   site_subtitle: "Subscription to API Conversion Platform",
   api_base_url: "",
+  desktop_control_plane_url: "",
   contact_info: "",
   doc_url: "",
   home_content: "",
@@ -9857,9 +9878,34 @@ async function saveSettings() {
         return false;
       }
     };
+    const isValidDesktopControlPlaneUrl = (url: string): boolean => {
+      if (!url) return true;
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol === "https:") return true;
+        return (
+          parsed.protocol === "http:" &&
+          ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
+        );
+      } catch {
+        return false;
+      }
+    };
     // Optional URL fields: auto-clear invalid values so they don't cause backend 400 errors
     if (!isValidHttpUrl(form.frontend_url)) form.frontend_url = "";
     if (!isValidHttpUrl(form.doc_url)) form.doc_url = "";
+    if (
+      form.desktop_control_plane_url &&
+      !isValidDesktopControlPlaneUrl(form.desktop_control_plane_url)
+    ) {
+      appStore.showError(
+        localText(
+          "桌面端控制面地址必须使用 HTTPS（本机开发可使用 loopback HTTP）。",
+          "Desktop control plane URL must use HTTPS (loopback HTTP is allowed for local development).",
+        ),
+      );
+      return;
+    }
     syncWeChatConnectMode();
     const wechatStoredMode = deriveWeChatConnectStoredMode(
       form.wechat_connect_open_enabled,
@@ -9913,6 +9959,7 @@ async function saveSettings() {
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle,
       api_base_url: form.api_base_url,
+      desktop_control_plane_url: form.desktop_control_plane_url,
       contact_info: form.contact_info,
       doc_url: form.doc_url,
       home_content: form.home_content,

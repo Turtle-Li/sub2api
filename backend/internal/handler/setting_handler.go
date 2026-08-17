@@ -106,6 +106,43 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 	})
 }
 
+// GetDesktopDiscovery returns the administrator-managed account/control-plane
+// endpoint used by official desktop clients before authentication.
+// GET /api/v1/settings/desktop
+func (h *SettingHandler) GetDesktopDiscovery(c *gin.Context) {
+	settings, err := h.settingService.GetPublicSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	controlPlaneURL, normalizeErr := service.NormalizeDesktopControlPlaneURL(settings.DesktopControlPlaneURL)
+	if normalizeErr != nil || controlPlaneURL == "" {
+		controlPlaneURL, normalizeErr = service.NormalizeDesktopControlPlaneURL(desktopRequestOrigin(c))
+	}
+	if normalizeErr != nil || controlPlaneURL == "" {
+		response.InternalError(c, "desktop control plane endpoint is unavailable")
+		return
+	}
+
+	c.Header("Cache-Control", "public, max-age=300, stale-if-error=86400")
+	response.Success(c, dto.DesktopDiscovery{
+		SchemaVersion:   1,
+		ControlPlaneURL: controlPlaneURL,
+	})
+}
+
+func desktopRequestOrigin(c *gin.Context) string {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := strings.TrimSpace(strings.Split(c.GetHeader("X-Forwarded-Proto"), ",")[0]); forwarded != "" {
+		scheme = strings.ToLower(forwarded)
+	}
+	return scheme + "://" + strings.TrimSpace(c.Request.Host)
+}
+
 // UnsubscribeNotificationEmail handles optional notification email opt-outs.
 // GET /api/v1/settings/email-unsubscribe?token=...
 func (h *SettingHandler) UnsubscribeNotificationEmail(c *gin.Context) {

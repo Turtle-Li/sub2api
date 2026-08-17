@@ -485,6 +485,10 @@ export default {
         apiBaseUrl: 'API 端点地址',
         apiBaseUrlHint: '用于"使用密钥"、"导入到 CC Switch"和回调地址建议，留空则使用当前站点地址',
         apiBaseUrlPlaceholder: 'https://api.example.com',
+        desktopControlPlaneUrl: '桌面端控制面地址',
+        desktopControlPlaneUrlPlaceholder: 'https://www.example.com',
+        desktopControlPlaneUrlHint:
+          '官方桌面端登录与账户接口的基础地址。留空时自动使用当前网站地址；以后更换域名只需修改这里，客户端会自动发现并迁移。生产环境必须使用 HTTPS。',
         tablePreferencesTitle: '通用表格设置',
         tablePreferencesDescription: '设置后台与用户侧表格组件的默认分页行为',
         tableDefaultPageSize: '默认每页条数',
