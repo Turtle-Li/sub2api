@@ -375,8 +375,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// headers, while an already-staged set must be reused so session/full modes
 	// do not generate a second turn identity.
 	if account.Type == AccountTypeOAuth && !isOpenAIResponsesCompactPath(c) {
-		fingerprintIDs, staged := codexFingerprintIDsStagedForAccount(c, account)
+		_, staged := codexFingerprintIDsStagedForAccount(c, account)
 		if !staged {
+			var fingerprintIDs *codexFingerprintIDs
 			var clientHeaders http.Header
 			if c != nil && c.Request != nil {
 				clientHeaders = c.Request.Header
