@@ -448,6 +448,7 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersConvergesOAuthDeviceOnly(t *te
 		},
 		Extra: map[string]any{
 			codexFingerprintModeExtraKey: "device",
+			codexFingerprintSeedExtraKey: "11111111-1111-4111-8111-111111111111",
 			"openai_device_id":           "per-account-device",
 		},
 	}
@@ -816,6 +817,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
 			codexFingerprintModeExtraKey:      "device",
+			codexFingerprintSeedExtraKey:      "11111111-1111-4111-8111-111111111111",
 			"openai_device_id":                "per-account-device",
 		},
 	}
