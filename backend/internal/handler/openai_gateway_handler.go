@@ -46,7 +46,6 @@ type OpenAIGatewayHandler struct {
 	imageLimiter               *imageConcurrencyLimiter
 	attachmentOptimizer        responsesAttachmentOptimizer
 	attachmentURLExternalizer  responsesAttachmentURLExternalizer
-	attachmentWarmupSlots      chan struct{}
 	retryProtectionCache       openAIAbnormalRetryRuntimeCache
 	maxAccountSwitches         int
 	cfg                        *config.Config
@@ -258,7 +257,6 @@ func NewOpenAIGatewayHandler(
 		concurrencyHelper:        NewConcurrencyHelper(concurrencyService, SSEPingFormatComment, pingInterval),
 		imageLimiter:             &imageConcurrencyLimiter{},
 		attachmentOptimizer:      newResponsesAttachmentOptimizer(cfg),
-		attachmentWarmupSlots:    make(chan struct{}, 1),
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
 	}
@@ -472,8 +470,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// retry protection, audit and billing, but before the account failover loop.
 	// The original body remains the source of all security/session fingerprints.
 	forwardBody := body
+	attachmentPreparationRan := false
 	if requestPlatform == service.PlatformOpenAI && isBareOpenAIResponsesPath(c) {
+		attachmentPreparationRan = true
 		preparedAttachments := h.prepareResponsesAttachments(c.Request.Context(), reqLog, apiKey, body)
+		// The body is fully buffered before attachment optimization. A client can
+		// disconnect while the optimizer is running; classify that request before
+		// any budget or forwarding-size response turns it into a misleading 413.
+		if failoverClientGone(c) {
+			return
+		}
 		if preparedAttachments.BudgetViolation != nil {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", responsesAttachmentBudgetMessage(preparedAttachments.BudgetViolation))
 			return
@@ -481,6 +487,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		forwardBody = preparedAttachments.Body
 	}
 	forwardBody = openAIModelMappedBody(forwardBody, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
+	// Recheck after model mapping as cancellation can race the first guard.
+	if attachmentPreparationRan && failoverClientGone(c) {
+		return
+	}
 	if maxForwardBytes := h.openAIResponsesMaxForwardBodyBytes(); maxForwardBytes > 0 && int64(len(forwardBody)) > maxForwardBytes {
 		reqLog.Warn("openai.responses_forward_body_too_large",
 			zap.Int("original_body_bytes", len(body)),
@@ -1898,6 +1908,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	forwardFirstMessage := firstMessage
 	if requestPlatform == service.PlatformOpenAI {
 		preparedAttachments := h.prepareResponsesAttachments(ctx, reqLog.With(zap.Int("ws_turn", 1)), apiKey, firstMessage)
+		// The client may close the WS while attachment work is running. Do not
+		// reinterpret the untouched body as a policy-size violation; the deferred
+		// connection close handles the already-disconnected client.
+		if ctx.Err() != nil {
+			return
+		}
 		if preparedAttachments.BudgetViolation != nil {
 			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, responsesAttachmentBudgetMessage(preparedAttachments.BudgetViolation))
 			return
@@ -2179,6 +2195,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					zap.Bool("ws_subsequent_turn", true),
 				)
 				prepared := h.prepareResponsesAttachments(ctx, turnLog, apiKey, payload)
+				if ctx.Err() != nil {
+					return nil, service.NewOpenAIWSClientCloseError(
+						coderws.StatusNormalClosure,
+						"client disconnected during attachment processing",
+						ctx.Err(),
+					)
+				}
 				if prepared.BudgetViolation != nil {
 					return nil, service.NewOpenAIWSClientCloseError(
 						coderws.StatusPolicyViolation,

@@ -20,11 +20,10 @@ import (
 type attachmentGatewayRolloutMode string
 
 const (
-	attachmentGatewayRolloutOff                 attachmentGatewayRolloutMode = "off"
-	attachmentGatewayRolloutDryRun              attachmentGatewayRolloutMode = "dry_run"
-	attachmentGatewayRolloutRewrite             attachmentGatewayRolloutMode = "rewrite"
-	attachmentGatewayControlMaxBytes                                         = 64
-	attachmentGatewayDefaultURLRewriteMaxImages                              = 50
+	attachmentGatewayRolloutOff      attachmentGatewayRolloutMode = "off"
+	attachmentGatewayRolloutDryRun   attachmentGatewayRolloutMode = "dry_run"
+	attachmentGatewayRolloutRewrite  attachmentGatewayRolloutMode = "rewrite"
+	attachmentGatewayControlMaxBytes                              = 64
 )
 
 type responsesAttachmentPreparation struct {
@@ -189,7 +188,9 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 	metrics := result.Metrics
 	contextErr := optimizeCtx.Err()
 	urlMetrics := attachmentgateway.URLMetrics{}
-	if !dryRun && contextErr == nil && experiment.URLRewriteEnabled && h.attachmentURLExternalizer != nil && h.attachmentURLExternalizer.Enabled() {
+	// A canceled foreground request must not start a new URL/object-storage
+	// phase; only work already admitted by the service may finish.
+	if !dryRun && contextErr == nil && ctx.Err() == nil && experiment.URLRewriteEnabled && h.attachmentURLExternalizer != nil && h.attachmentURLExternalizer.Enabled() {
 		uploadCtx, uploadCancel := context.WithTimeout(ctx, time.Duration(experiment.URLUploadTimeoutMilliseconds)*time.Millisecond)
 		externalized := h.attachmentURLExternalizer.ExternalizeWithWriteGuard(
 			uploadCtx,
@@ -215,9 +216,6 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		if errors.Is(uploadContextErr, context.DeadlineExceeded) {
 			urlMetrics.TimedOut = true
 		}
-	}
-	if shouldWarmResponsesAttachmentURLs(experiment, rolloutMode, dryRun, contextErr, metrics, h.attachmentURLExternalizer) {
-		h.warmResponsesAttachmentURLs(reqLog, experiment, body)
 	}
 	timedOut := metrics.TimedOut || errors.Is(contextErr, context.DeadlineExceeded) || urlMetrics.TimedOut
 	budgetViolation := evaluateResponsesAttachmentBudget(experiment, metrics)
@@ -258,6 +256,7 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		zap.Int("effective_threshold_bytes", metrics.EffectiveThresholdBytes),
 		zap.Bool("request_budget_enabled", experiment.RequestBudgetEnabled),
 		zap.Bool("request_budget_enforce", experiment.RequestBudgetEnforce),
+		zap.Bool("context_canceled", errors.Is(contextErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)),
 		zap.Int("original_inline_attachment_count", metrics.OriginalInlineAttachmentCount),
 		zap.Int("original_inline_attachment_bytes", metrics.OriginalInlineAttachmentBytes),
 		zap.Int("original_unsupported_attachment_count", metrics.OriginalUnsupportedAttachmentCount),
@@ -300,163 +299,6 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		return responsesAttachmentPreparation{Body: body, BudgetViolation: budgetViolation}
 	}
 	return responsesAttachmentPreparation{Body: forwardBody}
-}
-
-func shouldWarmResponsesAttachmentURLs(
-	experiment config.AttachmentGatewayConfig,
-	rolloutMode attachmentGatewayRolloutMode,
-	dryRun bool,
-	contextErr error,
-	metrics attachmentgateway.Metrics,
-	externalizer responsesAttachmentURLExternalizer,
-) bool {
-	// This is intentionally narrower than normal rewrite. The request must have
-	// been canceled (not timed out), be authorized for rewrite, and have already
-	// observed reusable image work. RehydrateFromCache below is cache-only, so
-	// the background task can only reuse work that was in flight or already
-	// cached.
-	//
-	// A cancellation can race a positive cache hit or an already-created cache
-	// flight before it obtains the global encoder slot. CacheLookupCount captures
-	// that boundary; the recovery remains cache-only, so a miss still exits
-	// without starting raster work. Retain the older signal fields as defensive
-	// compatibility for an alternate optimizer implementation.
-	hasReusableImageWork := metrics.CacheLookupCount > 0 || metrics.ColdEncodeCount > 0 || metrics.CacheHits > 0 || metrics.CacheShared > 0
-	return !dryRun &&
-		!experiment.RequestBudgetEnforce &&
-		rolloutMode == attachmentGatewayRolloutRewrite &&
-		errors.Is(contextErr, context.Canceled) &&
-		hasReusableImageWork &&
-		experiment.URLRewriteEnabled &&
-		externalizer != nil &&
-		externalizer.Enabled()
-}
-
-func (h *OpenAIGatewayHandler) warmResponsesAttachmentURLs(
-	reqLog *zap.Logger,
-	experiment config.AttachmentGatewayConfig,
-	body []byte,
-) {
-	if h == nil || h.attachmentOptimizer == nil || h.attachmentURLExternalizer == nil || h.attachmentWarmupSlots == nil {
-		return
-	}
-	select {
-	case h.attachmentWarmupSlots <- struct{}{}:
-	default:
-		return
-	}
-	if reqLog == nil {
-		reqLog = logger.L()
-	}
-	go func() {
-		defer func() { <-h.attachmentWarmupSlots }()
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				reqLog.Warn("openai.attachment_gateway_warmup", zap.Bool("panicked", true))
-			}
-		}()
-		// Do not retain or inspect a canceled request's body after an emergency
-		// rollback. The recheck is deliberately inside the goroutine because the
-		// rollout control file is live and may have changed after scheduling.
-		if resolveAttachmentGatewayRolloutMode(experiment) != attachmentGatewayRolloutRewrite {
-			return
-		}
-
-		warmCtx, warmCancel := context.WithTimeout(context.Background(), time.Duration(experiment.OptimizeTimeoutMilliseconds)*time.Millisecond)
-		warmed := h.attachmentOptimizer.RehydrateFromCache(warmCtx, body)
-		warmContextErr := warmCtx.Err()
-		warmCancel()
-		if warmContextErr != nil || warmed.Metrics.OptimizedImageCount == 0 {
-			logResponsesAttachmentWarmup(reqLog, warmed.Metrics, attachmentgateway.URLMetrics{}, warmContextErr, nil)
-			return
-		}
-		// A second live-control check prevents an object write when the operator
-		// turns rewrite off while the cache producer is completing.
-		if resolveAttachmentGatewayRolloutMode(experiment) != attachmentGatewayRolloutRewrite {
-			return
-		}
-		selectedIndexes := attachmentGatewaySelectedURLIndexes(
-			warmed.RehydratedImageIndexes,
-			experiment.URLRewriteMaxImagesPerRequest,
-		)
-		if len(selectedIndexes) == 0 {
-			return
-		}
-		uploadCtx, uploadCancel := context.WithTimeout(context.Background(), time.Duration(experiment.URLUploadTimeoutMilliseconds)*time.Millisecond)
-		externalized := h.attachmentURLExternalizer.ExternalizeSelectedWithWriteGuard(
-			uploadCtx,
-			warmed.Body,
-			selectedIndexes,
-			func() bool {
-				return resolveAttachmentGatewayRolloutMode(experiment) == attachmentGatewayRolloutRewrite
-			},
-		)
-		uploadContextErr := uploadCtx.Err()
-		uploadCancel()
-		logResponsesAttachmentWarmup(reqLog, warmed.Metrics, externalized.Metrics, warmContextErr, uploadContextErr)
-	}()
-}
-
-// attachmentGatewaySelectedURLIndexes trims cache-rehydrated token indexes to
-// the URL externalizer's own bounded collector. The two limits may differ: the
-// optimizer is allowed to inspect more images for cache reuse than R2 is
-// allowed to publish. Passing an out-of-range selected index would otherwise
-// intentionally fail the complete URL rewrite open, including valid prefix
-// images that are safe to prewarm.
-func attachmentGatewaySelectedURLIndexes(indexes []int, urlLimit int) []int {
-	if len(indexes) == 0 {
-		return nil
-	}
-	if urlLimit <= 0 {
-		// Loaded configurations always receive this Viper default; retain the
-		// same behavior for lightweight handlers constructed directly by tests or
-		// integrations without running the complete config loader.
-		urlLimit = attachmentGatewayDefaultURLRewriteMaxImages
-	}
-	selected := make([]int, 0, len(indexes))
-	for _, index := range indexes {
-		if index < 0 || index >= urlLimit {
-			continue
-		}
-		selected = append(selected, index)
-	}
-	return selected
-}
-
-func logResponsesAttachmentWarmup(
-	reqLog *zap.Logger,
-	metrics attachmentgateway.Metrics,
-	urlMetrics attachmentgateway.URLMetrics,
-	warmContextErr error,
-	uploadContextErr error,
-) {
-	if reqLog == nil {
-		reqLog = logger.L()
-	}
-	fields := []zap.Field{
-		zap.Bool("background", true),
-		zap.Int("optimized_image_count", metrics.OptimizedImageCount),
-		zap.Int("cache_hits", metrics.CacheHits),
-		zap.Int("cache_shared", metrics.CacheShared),
-		zap.Int("cache_lookup_count", metrics.CacheLookupCount),
-		zap.Int("negative_cache_hits", metrics.NegativeCacheHits),
-		zap.Int("negative_cache_shared", metrics.NegativeCacheShared),
-		zap.Bool("warm_timed_out", errors.Is(warmContextErr, context.DeadlineExceeded)),
-		zap.Bool("url_storage_ready", urlMetrics.StorageReady),
-		zap.Bool("url_storage_unavailable", urlMetrics.StorageUnavailable),
-		zap.Bool("url_write_suppressed", urlMetrics.WriteSuppressed),
-		zap.Int("url_externalized_count", urlMetrics.ExternalizedCount),
-		zap.Int("url_upload_count", urlMetrics.UploadCount),
-		zap.Int("url_cache_hits", urlMetrics.CacheHits),
-		zap.Int("url_cache_shared", urlMetrics.CacheShared),
-		zap.Bool("url_timed_out", urlMetrics.TimedOut || errors.Is(uploadContextErr, context.DeadlineExceeded)),
-		zap.Int("errors", metrics.Errors+urlMetrics.Errors),
-	}
-	if metrics.Errors > 0 || urlMetrics.Errors > 0 || warmContextErr != nil || uploadContextErr != nil || urlMetrics.StorageUnavailable {
-		reqLog.Warn("openai.attachment_gateway_warmup", fields...)
-		return
-	}
-	reqLog.Info("openai.attachment_gateway_warmup", fields...)
 }
 
 func evaluateResponsesAttachmentBudgetPreflight(experiment config.AttachmentGatewayConfig, bodyBytes int, stats attachmentgateway.InlineAttachmentStats) *responsesAttachmentBudgetViolation {

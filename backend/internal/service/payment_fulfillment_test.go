@@ -967,8 +967,8 @@ func TestSubscriptionSnapshotBenefitsAreGrantedExactlyOnceAfterRecovery(t *testi
 	require.NoError(t, err)
 	order, err = client.PaymentOrder.UpdateOneID(order.ID).
 		SetSubscriptionGroupID(group.ID).
-		SetProductSnapshot(map[string]interface{}{
-			"entitlements": map[string]interface{}{
+		SetProductSnapshot(map[string]any{
+			"entitlements": map[string]any{
 				"balance_bonus":          5.25,
 				"reset_card_count":       2,
 				"reset_card_expiry_days": 14,
