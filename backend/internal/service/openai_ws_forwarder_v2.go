@@ -62,6 +62,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
 	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
+	turnState := ""
+	turnMetadata := ""
+	if c != nil && c.Request != nil {
+		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
+		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
+	}
+	setOpenAIWSTurnMetadata(payload, turnMetadata)
+	applyStagedCodexFingerprintClientMetadata(c, account, payload)
 	previousResponseID := openAIWSPayloadString(payload, "previous_response_id")
 	previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 	promptCacheKey := openAIWSPayloadString(payload, "prompt_cache_key")
@@ -79,16 +87,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if raw, ok := payload["stream"]; ok {
 		streamValue = normalizeOpenAIWSLogValue(strings.TrimSpace(fmt.Sprintf("%v", raw)))
 	}
-	turnState := ""
-	turnMetadata := ""
-	if c != nil && c.Request != nil {
-		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
-		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
-	}
-	setOpenAIWSTurnMetadata(payload, turnMetadata)
-	// setOpenAIWSTurnMetadata 会以入站头覆盖嵌入式 metadata；在其之后重写，
-	// 才能保证 HTTP->WS 路径的握手头和 response.create 载荷使用同一设备 ID。
-	applyCodexFingerprintClientMetadata(payload, codexFingerprintIDsFromContext(c, account))
 	payloadEventType := openAIWSPayloadString(payload, "type")
 	if payloadEventType == "" {
 		payloadEventType = "response.create"

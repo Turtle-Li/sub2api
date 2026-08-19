@@ -93,7 +93,13 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 				headers.Add("x-codex-beta-features", value)
 			}
 		}
-		for _, name := range [...]string{"x-codex-window-id", "x-codex-installation-id"} {
+		for _, name := range [...]string{
+			"x-codex-window-id",
+			"x-codex-installation-id",
+			"session-id",
+			"thread-id",
+			"x-client-request-id",
+		} {
 			if value := c.Request.Header.Get(name); strings.TrimSpace(value) != "" {
 				headers.Set(name, value)
 			}
@@ -128,6 +134,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	if metadata := strings.TrimSpace(turnMetadata); metadata != "" {
 		headers.Set(openAIWSTurnMetadataHeader, metadata)
 	}
+	applyStagedCodexFingerprintHeaders(c, account, headers)
 
 	if account != nil && account.Type == AccountTypeOAuth {
 		if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {
@@ -154,7 +161,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		}
 	}
 	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
-		headers.Set("user-agent", codexCLIUserAgent)
+		headers.Set("user-agent", CodexCanonicalUserAgent())
 	}
 	if account != nil && account.Type == AccountTypeOAuth {
 		// HTTP->WS 会复用 Forward 中预计算的 IDs；直连 WS 则使用入站连接当前轮次的 IDs。
