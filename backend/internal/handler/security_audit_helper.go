@@ -16,6 +16,12 @@ const securityAuditCompletedContextKey = "sub2api.security_audit.completed"
 const securityAuditWSTurnContextKey = "sub2api.security_audit.ws_turn"
 const securityAuditWSDedupeContextKey = "sub2api.security_audit.ws_dedupe"
 
+// cyberPolicyPromptContextKey carries the current request/turn's complete
+// audit prompt in memory until a post-upstream cyber_policy hit is recorded.
+// It intentionally contains prompt text only; headers and the raw request
+// envelope are never persisted through this path.
+const cyberPolicyPromptContextKey = "sub2api.cyber_policy.prompt"
+
 type securityAuditWSDedupeEntry struct {
 	stage    string
 	turn     int
@@ -69,6 +75,7 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 	if c == nil || c.Request == nil {
 		return nil
 	}
+	captureCyberPolicyPrompt(c, protocol, body)
 	cacheCompletion := cachesSecurityAuditCompletion(stage)
 	if cacheCompletion {
 		if completed, exists := c.Get(securityAuditCompletedContextKey); exists && completed == true {
@@ -126,6 +133,36 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 	return &decision
 }
 
+// captureCyberPolicyPrompt snapshots the full textual audit prompt while the
+// request body is still available. The value is request-scoped and is only
+// consumed if the upstream later marks this request with cyber_policy.
+func captureCyberPolicyPrompt(c *gin.Context, protocol string, body []byte) {
+	if c == nil {
+		return
+	}
+	snapshot, err := securityaudit.ExtractPromptSnapshot(securityaudit.Request{
+		Protocol: protocol,
+		Body:     body,
+	})
+	if err != nil {
+		c.Set(cyberPolicyPromptContextKey, "")
+		return
+	}
+	c.Set(cyberPolicyPromptContextKey, snapshot.FullPrompt)
+}
+
+func cyberPolicyPromptFromContext(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, ok := c.Get(cyberPolicyPromptContextKey)
+	if !ok {
+		return ""
+	}
+	prompt, _ := value.(string)
+	return strings.TrimSpace(prompt)
+}
+
 func logSecurityAuditStart(reqLog *zap.Logger, request securityaudit.Request, bodyBytes int, cached bool) {
 	if reqLog == nil {
 		return
@@ -164,6 +201,7 @@ func buildSecurityAuditRequest(c *gin.Context, apiKey *service.APIKey, subject m
 		APIKeyID: legacy.APIKeyID, APIKeyName: legacy.APIKeyName, GroupID: cloneSecurityAuditGroupID(legacy.GroupID),
 		GroupName: legacy.GroupName, Provider: legacy.Provider, Endpoint: legacy.Endpoint,
 		Protocol: legacy.Protocol, Model: legacy.Model, Body: body, Stage: strings.TrimSpace(stage),
+		FullPrompt: legacy.FullPrompt,
 	}
 	if apiKey != nil && apiKey.User != nil {
 		request.Username = apiKey.User.Username

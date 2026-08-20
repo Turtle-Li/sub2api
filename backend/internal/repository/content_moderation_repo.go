@@ -52,17 +52,17 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 INSERT INTO content_moderation_logs (
     request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
     endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
-    category_scores, threshold_snapshot, input_excerpt, upstream_latency_ms, error,
+    category_scores, threshold_snapshot, input_excerpt, full_prompt, upstream_latency_ms, error,
     violation_count, auto_banned, email_sent, queue_delay_ms, matched_keyword
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
     $8, $9, $10, $11, $12, $13, $14, $15,
-    $16::jsonb, $17::jsonb, $18, $19, $20,
-    $21, $22, $23, $24, $25
+    $16::jsonb, $17::jsonb, $18, $19, $20, $21,
+    $22, $23, $24, $25, $26
 ) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
-		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, latency, log.Error,
+		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, log.FullPrompt, latency, log.Error,
 		log.ViolationCount, log.AutoBanned, log.EmailSent, nullableIntPtr(log.QueueDelayMS), log.MatchedKeyword,
 	).Scan(&log.ID, &log.CreatedAt)
 	if err != nil {
@@ -111,71 +111,106 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 
 	items := make([]service.ContentModerationLog, 0)
 	for rows.Next() {
-		var item service.ContentModerationLog
-		var userID, apiKeyID, groupID, latency, queueDelay sql.NullInt64
-		var scoresRaw, thresholdsRaw []byte
-		if err := rows.Scan(
-			&item.ID,
-			&item.RequestID,
-			&userID,
-			&item.UserEmail,
-			&apiKeyID,
-			&item.APIKeyName,
-			&groupID,
-			&item.GroupName,
-			&item.Endpoint,
-			&item.Provider,
-			&item.Model,
-			&item.Mode,
-			&item.Action,
-			&item.Flagged,
-			&item.HighestCategory,
-			&item.HighestScore,
-			&scoresRaw,
-			&thresholdsRaw,
-			&item.InputExcerpt,
-			&latency,
-			&item.Error,
-			&item.ViolationCount,
-			&item.AutoBanned,
-			&item.EmailSent,
-			&item.UserStatus,
-			&queueDelay,
-			&item.MatchedKeyword,
-			&item.CreatedAt,
-		); err != nil {
+		item, err := scanContentModerationLog(rows, false)
+		if err != nil {
 			return nil, nil, fmt.Errorf("scan content moderation log: %w", err)
 		}
-		if userID.Valid {
-			v := userID.Int64
-			item.UserID = &v
-		}
-		if apiKeyID.Valid {
-			v := apiKeyID.Int64
-			item.APIKeyID = &v
-		}
-		if groupID.Valid {
-			v := groupID.Int64
-			item.GroupID = &v
-		}
-		if latency.Valid {
-			v := int(latency.Int64)
-			item.UpstreamLatencyMS = &v
-		}
-		if queueDelay.Valid {
-			v := int(queueDelay.Int64)
-			item.QueueDelayMS = &v
-		}
-		item.CategoryScores = map[string]float64{}
-		_ = json.Unmarshal(scoresRaw, &item.CategoryScores)
-		item.ThresholdSnapshot = map[string]float64{}
-		_ = json.Unmarshal(thresholdsRaw, &item.ThresholdSnapshot)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("iterate content moderation logs: %w", err)
 	}
 	return items, paginationResultFromTotal(total, params), nil
+}
+
+func (r *contentModerationRepository) GetLog(ctx context.Context, id int64) (*service.ContentModerationLog, error) {
+	row := r.db.QueryRowContext(ctx, `
+SELECT
+    l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
+    l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
+    l.category_scores, l.threshold_snapshot, l.input_excerpt, l.full_prompt, l.upstream_latency_ms, l.error,
+    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.matched_keyword, l.created_at
+FROM content_moderation_logs l
+LEFT JOIN users u ON u.id = l.user_id
+WHERE l.id = $1`, id)
+	item, err := scanContentModerationLog(row, true)
+	if err != nil {
+		return nil, fmt.Errorf("get content moderation log: %w", err)
+	}
+	return &item, nil
+}
+
+type contentModerationRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanContentModerationLog(scanner contentModerationRowScanner, includeFullPrompt bool) (service.ContentModerationLog, error) {
+	var item service.ContentModerationLog
+	var userID, apiKeyID, groupID, latency, queueDelay sql.NullInt64
+	var scoresRaw, thresholdsRaw []byte
+	dest := []any{
+		&item.ID,
+		&item.RequestID,
+		&userID,
+		&item.UserEmail,
+		&apiKeyID,
+		&item.APIKeyName,
+		&groupID,
+		&item.GroupName,
+		&item.Endpoint,
+		&item.Provider,
+		&item.Model,
+		&item.Mode,
+		&item.Action,
+		&item.Flagged,
+		&item.HighestCategory,
+		&item.HighestScore,
+		&scoresRaw,
+		&thresholdsRaw,
+		&item.InputExcerpt,
+	}
+	if includeFullPrompt {
+		dest = append(dest, &item.FullPrompt)
+	}
+	dest = append(dest,
+		&latency,
+		&item.Error,
+		&item.ViolationCount,
+		&item.AutoBanned,
+		&item.EmailSent,
+		&item.UserStatus,
+		&queueDelay,
+		&item.MatchedKeyword,
+		&item.CreatedAt,
+	)
+	if err := scanner.Scan(dest...); err != nil {
+		return service.ContentModerationLog{}, err
+	}
+	if userID.Valid {
+		v := userID.Int64
+		item.UserID = &v
+	}
+	if apiKeyID.Valid {
+		v := apiKeyID.Int64
+		item.APIKeyID = &v
+	}
+	if groupID.Valid {
+		v := groupID.Int64
+		item.GroupID = &v
+	}
+	if latency.Valid {
+		v := int(latency.Int64)
+		item.UpstreamLatencyMS = &v
+	}
+	if queueDelay.Valid {
+		v := int(queueDelay.Int64)
+		item.QueueDelayMS = &v
+	}
+	item.CategoryScores = map[string]float64{}
+	_ = json.Unmarshal(scoresRaw, &item.CategoryScores)
+	item.ThresholdSnapshot = map[string]float64{}
+	_ = json.Unmarshal(thresholdsRaw, &item.ThresholdSnapshot)
+	return item, nil
 }
 
 func (r *contentModerationRepository) CountFlaggedByUserSince(ctx context.Context, userID int64, since time.Time, excludeCyberPolicy bool) (int, error) {

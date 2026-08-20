@@ -191,6 +191,7 @@ export interface ContentModerationLog {
   category_scores: Record<string, number>
   threshold_snapshot: Record<string, number>
   input_excerpt: string
+  full_prompt?: string
   upstream_latency_ms: number | null
   error: string
   violation_count: number
@@ -267,6 +268,11 @@ export async function listLogs(
   return data
 }
 
+export async function getLog(id: number): Promise<ContentModerationLog> {
+  const { data } = await apiClient.get<ContentModerationLog>(`/admin/risk-control/logs/${id}`)
+  return data
+}
+
 export async function unbanUser(userID: number): Promise<ContentModerationUnbanUserResponse> {
   const { data } = await apiClient.post<ContentModerationUnbanUserResponse>(
     `/admin/risk-control/users/${userID}/unban`
@@ -292,6 +298,7 @@ export const riskControlAPI = {
   getStatus,
   testAPIKeys,
   listLogs,
+  getLog,
   unbanUser,
   deleteFlaggedHash,
   clearFlaggedHashes,

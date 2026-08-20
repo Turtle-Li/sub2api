@@ -41,6 +41,10 @@ func (r *cyberOrderingTestRepo) ListLogs(ctx context.Context, filter ContentMode
 	return nil, nil, nil
 }
 
+func (r *cyberOrderingTestRepo) GetLog(ctx context.Context, id int64) (*ContentModerationLog, error) {
+	return nil, nil
+}
+
 func (r *cyberOrderingTestRepo) CountFlaggedByUserSince(ctx context.Context, userID int64, since time.Time, excludeCyberPolicy bool) (int, error) {
 	return 0, nil
 }
@@ -116,6 +120,7 @@ func TestRecordCyberPolicyEvent_WritesLogWhenEnabled(t *testing.T) {
 		UpstreamMessage: "flagged",
 		UpstreamBody:    `{"error":{"code":"cyber_policy"}}`,
 		UpstreamStatus:  400,
+		FullPrompt:      "instructions with sk-proj-1234567890abcdef",
 	})
 
 	logs := repo.snapshotLogs()
@@ -155,6 +160,8 @@ func TestRecordCyberPolicyEvent_WritesLogWhenEnabled(t *testing.T) {
 	// Error field should also contain the upstream body JSON
 	require.True(t, strings.Contains(log.Error, "cyber_policy") || strings.Contains(log.Error, "flagged"),
 		"Error should mention flagged or cyber_policy")
+	require.Equal(t, "instructions with sk-proj-1234567890abcdef", log.FullPrompt,
+		"full prompt must remain unredacted for cyber_policy detail analysis")
 }
 
 func TestRecordCyberPolicyEvent_RespectsContentModerationScope(t *testing.T) {

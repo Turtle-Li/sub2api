@@ -1104,7 +1104,7 @@
                 {{ inputDetailRow.group_name }}
               </span>
             </div>
-            <pre class="mt-4 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ inputDetailText }}</pre>
+            <pre class="mt-4 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ inputDetailLoading ? t('common.loading') : inputDetailText }}</pre>
           </div>
         </div>
 
@@ -1202,6 +1202,7 @@ const defaultBlockMessage = () => t('admin.riskControl.defaultBlockMessage')
 const loading = ref(true)
 const saving = ref(false)
 const logsLoading = ref(false)
+const inputDetailLoading = ref(false)
 const statusLoading = ref(false)
 const apiKeyTesting = ref(false)
 const hashActionLoading = ref(false)
@@ -1586,7 +1587,7 @@ const riskThresholdRows = computed<RiskThresholdRow[]>(() => (
 
 const inputDetailText = computed(() => {
   if (!inputDetailRow.value) return '-'
-  return inputDetailRow.value.input_excerpt || inputDetailRow.value.error || '-'
+  return inputDetailRow.value.full_prompt || inputDetailRow.value.input_excerpt || inputDetailRow.value.error || '-'
 })
 
 const queueUsagePercent = computed(() => `${Math.min(100, Math.max(0, status.value?.queue_usage_percent ?? 0)).toFixed(1)}%`)
@@ -1886,10 +1887,26 @@ function inputSummaryText(row: ContentModerationLog): string {
 
 function openInputDetail(row: ContentModerationLog) {
   inputDetailRow.value = row
+  inputDetailLoading.value = true
+  void adminAPI.riskControl.getLog(row.id)
+    .then((detail) => {
+      if (inputDetailRow.value?.id === row.id) {
+        inputDetailRow.value = detail
+      }
+    })
+    .catch((err: unknown) => {
+      appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.logsFailed')))
+    })
+    .finally(() => {
+      if (inputDetailRow.value?.id === row.id) {
+        inputDetailLoading.value = false
+      }
+    })
 }
 
 function closeInputDetail() {
   inputDetailRow.value = null
+  inputDetailLoading.value = false
 }
 
 async function unbanUser(row: ContentModerationLog) {

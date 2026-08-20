@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -63,6 +64,7 @@ const (
 	maxContentModerationTimeoutMS     = 30000
 	maxModerationInputRunes           = 12000
 	maxModerationExcerptRunes         = 240
+	maxModerationFullPromptRunes      = 65536
 
 	defaultContentModerationWorkerCount          = 4
 	maxContentModerationWorkerCount              = 32
@@ -319,6 +321,10 @@ type ContentModerationCheckInput struct {
 	Model      string
 	Protocol   string
 	Body       []byte
+	// FullPrompt is an optional complete textual prompt snapshot captured by
+	// the gateway while the request body is available. It is only persisted
+	// into a blocked log's detail field; the body itself is never persisted.
+	FullPrompt string
 }
 
 type ContentModerationInput struct {
@@ -406,6 +412,7 @@ type ContentModerationLog struct {
 	CategoryScores    map[string]float64 `json:"category_scores"`
 	ThresholdSnapshot map[string]float64 `json:"threshold_snapshot"`
 	InputExcerpt      string             `json:"input_excerpt"`
+	FullPrompt        string             `json:"full_prompt,omitempty"`
 	UpstreamLatencyMS *int               `json:"upstream_latency_ms,omitempty"`
 	Error             string             `json:"error"`
 	ViolationCount    int                `json:"violation_count"`
@@ -481,6 +488,7 @@ type ContentModerationClearHashesResult struct {
 type ContentModerationRepository interface {
 	CreateLog(ctx context.Context, log *ContentModerationLog) error
 	ListLogs(ctx context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error)
+	GetLog(ctx context.Context, id int64) (*ContentModerationLog, error)
 	// CountFlaggedByUserSince 统计窗口内计入封号的违规次数（排除 hash_block；
 	// excludeCyberPolicy 为 true 时额外排除 cyber_policy 行）。
 	CountFlaggedByUserSince(ctx context.Context, userID int64, since time.Time, excludeCyberPolicy bool) (int, error)
@@ -1311,6 +1319,23 @@ func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentM
 	return s.repo.ListLogs(ctx, filter)
 }
 
+func (s *ContentModerationService) GetLog(ctx context.Context, id int64) (*ContentModerationLog, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_REPOSITORY_UNAVAILABLE", "内容审核日志仓储不可用")
+	}
+	if id <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_LOG_ID", "内容审核日志 ID 无效")
+	}
+	log, err := s.repo.GetLog(ctx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, infraerrors.NotFound("CONTENT_MODERATION_LOG_NOT_FOUND", "内容审核日志不存在")
+		}
+		return nil, err
+	}
+	return log, nil
+}
+
 func (s *ContentModerationService) UnbanUser(ctx context.Context, userID int64) (*ContentModerationUnbanUserResult, error) {
 	if s == nil || s.userRepo == nil {
 		return nil, infraerrors.InternalServer("CONTENT_MODERATION_USER_REPOSITORY_UNAVAILABLE", "用户仓储不可用")
@@ -1861,7 +1886,7 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 	if input.APIKeyID > 0 {
 		apiKeyID = &input.APIKeyID
 	}
-	return &ContentModerationLog{
+	log := &ContentModerationLog{
 		RequestID:         input.RequestID,
 		UserID:            userID,
 		UserEmail:         input.UserEmail,
@@ -1884,6 +1909,34 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 		QueueDelayMS:      queueDelay,
 		Error:             errText,
 	}
+	if shouldPersistFullModerationPrompt(action, flagged) {
+		fullPrompt := input.FullPrompt
+		if fullPrompt == "" {
+			fullPrompt = text
+		}
+		log.FullPrompt = sanitizeFullModerationPrompt(fullPrompt)
+	}
+	return log
+}
+
+func shouldPersistFullModerationPrompt(action string, flagged bool) bool {
+	if !flagged {
+		return false
+	}
+	switch action {
+	case ContentModerationActionBlock, ContentModerationActionHashBlock, ContentModerationActionKeywordBlock, ContentModerationActionCyberPolicy:
+		return true
+	default:
+		return false
+	}
+}
+
+// sanitizeFullModerationPrompt removes only PostgreSQL-invalid NUL bytes and
+// applies a generous bound. Unlike InputExcerpt, this field is deliberately
+// not redacted and is exposed only by the admin detail endpoint.
+func sanitizeFullModerationPrompt(value string) string {
+	value = strings.ReplaceAll(value, "\x00", "")
+	return trimRunes(strings.TrimSpace(value), maxModerationFullPromptRunes)
 }
 
 func (s *ContentModerationService) persistContentModerationLog(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog, hashText string, recordHash bool, applySideEffects bool) {
@@ -2987,6 +3040,10 @@ type CyberPolicyRecordInput struct {
 	UpstreamStatus  int
 	UpstreamInTok   int
 	UpstreamOutTok  int
+	// FullPrompt is the complete textual audit prompt captured at ingress.
+	// It excludes headers and the raw JSON envelope and is only persisted for
+	// this flagged cyber_policy event.
+	FullPrompt string
 }
 
 // RecordCyberPolicyEvent 把一次 cyber_policy 硬阻断写入风控中心日志、计入违规计数、
@@ -3041,6 +3098,7 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		Flagged:         true,
 		HighestCategory: "cyber_policy",
 		HighestScore:    1.0,
+		FullPrompt:      sanitizeFullModerationPrompt(in.FullPrompt),
 		Error:           trimRunes(redactContentModerationSecrets(errBody), maxModerationExcerptRunes*4),
 		CreatedAt:       time.Now(),
 	}

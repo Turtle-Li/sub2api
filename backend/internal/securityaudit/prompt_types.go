@@ -81,6 +81,9 @@ type Request struct {
 	Model      string
 	Body       []byte
 	Stage      string
+	// FullPrompt is captured by the gateway for blocked-event persistence; it
+	// is never serialized as part of the request body sent upstream.
+	FullPrompt string
 }
 
 func (r Request) Clone() Request {

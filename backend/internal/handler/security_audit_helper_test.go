@@ -25,6 +25,35 @@ func TestCachesSecurityAuditCompletionSkipsWebSocketStages(t *testing.T) {
 	require.False(t, isSecurityAuditWebSocketStage("http"))
 }
 
+func TestRunSecurityAuditCapturesCompleteCyberPolicyPrompt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	body := []byte(`{"instructions":"SYSTEM_CANARY_unredacted","input":"USER_CANARY_unredacted"}`)
+	_ = runSecurityAudit(c, nil, nil, nil, nil, middleware2.AuthSubject{}, "openai_responses", "gpt-test", body, "http")
+
+	prompt := cyberPolicyPromptFromContext(c)
+	require.Contains(t, prompt, "SYSTEM_CANARY_unredacted")
+	require.Contains(t, prompt, "USER_CANARY_unredacted")
+}
+
+func TestRunSecurityAuditReplacesCyberPolicyPromptForEachWebSocketTurn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	first := []byte(`{"input":"first turn"}`)
+	second := []byte(`{"input":"second turn"}`)
+	_ = runSecurityAudit(c, nil, nil, nil, nil, middleware2.AuthSubject{}, "openai_responses", "gpt-test", first, "first_turn")
+	require.Contains(t, cyberPolicyPromptFromContext(c), "first turn")
+	_ = runSecurityAudit(c, nil, nil, nil, nil, middleware2.AuthSubject{}, "openai_responses", "gpt-test", second, "subsequent_turn")
+	require.Contains(t, cyberPolicyPromptFromContext(c), "second turn")
+	require.NotContains(t, cyberPolicyPromptFromContext(c), "first turn")
+}
+
 func TestRunSecurityAuditDoesNotSkipSubsequentWebSocketTurns(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := &turnCountingEngine{mode: securityaudit.ModeAsync}

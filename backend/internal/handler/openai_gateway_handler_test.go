@@ -1243,6 +1243,10 @@ func (r *contentModerationHandlerTestRepo) ListLogs(ctx context.Context, filter 
 	return nil, nil, nil
 }
 
+func (r *contentModerationHandlerTestRepo) GetLog(ctx context.Context, id int64) (*service.ContentModerationLog, error) {
+	return nil, nil
+}
+
 func (r *contentModerationHandlerTestRepo) CountFlaggedByUserSince(ctx context.Context, userID int64, since time.Time, excludeCyberPolicy bool) (int, error) {
 	return 0, nil
 }

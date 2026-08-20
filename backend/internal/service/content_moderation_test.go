@@ -94,6 +94,10 @@ func (r *contentModerationTestRepo) ListLogs(ctx context.Context, filter Content
 	return nil, nil, nil
 }
 
+func (r *contentModerationTestRepo) GetLog(ctx context.Context, id int64) (*ContentModerationLog, error) {
+	return nil, nil
+}
+
 func (r *contentModerationTestRepo) CountFlaggedByUserSince(ctx context.Context, userID int64, since time.Time, excludeCyberPolicy bool) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -417,6 +421,23 @@ func TestBuildContentModerationLog_RedactsInputExcerpt(t *testing.T) {
 
 	require.NotContains(t, log.InputExcerpt, "sk-proj-1234567890abcdef")
 	require.Contains(t, log.InputExcerpt, "[已脱敏]")
+	require.Empty(t, log.FullPrompt, "non-blocking flagged rows must not persist full prompt")
+}
+
+func TestBuildContentModerationLog_PersistsUnredactedFullPromptOnlyForBlockedAction(t *testing.T) {
+	svc := &ContentModerationService{}
+	cfg := defaultContentModerationConfig()
+	prompt := "blocked sk-proj-1234567890abcdef\x00 tail"
+
+	log := svc.buildLog(ContentModerationCheckInput{}, cfg, ContentModerationActionBlock, true, "sexual", 0.8, nil, prompt, nil, nil, "")
+
+	require.Contains(t, log.InputExcerpt, "[已脱敏]")
+	require.NotContains(t, log.InputExcerpt, "sk-proj-1234567890abcdef")
+	require.Equal(t, "blocked sk-proj-1234567890abcdef tail", log.FullPrompt)
+
+	fullPrompt := "system context\nuser sk-proj-1234567890abcdef"
+	log = svc.buildLog(ContentModerationCheckInput{FullPrompt: fullPrompt}, cfg, ContentModerationActionBlock, true, "sexual", 0.8, nil, "latest user excerpt", nil, nil, "")
+	require.Equal(t, fullPrompt, log.FullPrompt, "blocked logs should prefer the complete ingress prompt over the excerpt")
 }
 
 func TestRedactContentModerationSecrets_LongHexAndTokens(t *testing.T) {

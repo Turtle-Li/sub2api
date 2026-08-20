@@ -3562,6 +3562,10 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		ClientIP:        clientIPStr,
 		CreatedAt:       time.Now(),
 	}
+	// The request body has already been consumed by the time the upstream
+	// cyber marker is observed. The audit helper captured the complete textual
+	// prompt in the request-scoped context while it was still available.
+	auditPrompt := cyberPolicyPromptFromContext(c)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -3581,6 +3585,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 				UpstreamStatus:  mark.UpstreamStatus,
 				UpstreamInTok:   mark.UpstreamInTok,
 				UpstreamOutTok:  mark.UpstreamOutTok,
+				FullPrompt:      auditPrompt,
 			})
 		}
 		if forwardErrored && gwSvc != nil {
