@@ -125,7 +125,7 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_CapacityShedReturnsRequestScope
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	upstreamBody := []byte(`{"error":{"message":"The selected upstream model is warming up. Please try again later."}}`)
+	upstreamBody := []byte(`{"error":{"message":"Our servers are currently overloaded. Please try again later."}}`)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		{
 			StatusCode: http.StatusBadRequest,
@@ -162,7 +162,7 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_CapacityShedReturnsRequestScope
 			"temp_unschedulable_enabled": true,
 			"temp_unschedulable_rules": []any{map[string]any{
 				"error_code":       float64(http.StatusBadRequest),
-				"keywords":         []any{"selected upstream model is warming up", "please try again later"},
+				"keywords":         []any{"our servers are currently overloaded", "please try again later"},
 				"duration_minutes": float64(1),
 			}},
 		},
@@ -263,17 +263,17 @@ func TestFailoverOpenAIUpstreamHTTPError_MessageOnlyCapacityShedFailsOverWithout
 			"temp_unschedulable_enabled": true,
 			"temp_unschedulable_rules": []any{map[string]any{
 				"error_code":       float64(http.StatusBadRequest),
-				"keywords":         []any{"custom temporary outage"},
+				"keywords":         []any{"servers are currently overloaded"},
 				"duration_minutes": float64(1),
 			}},
 		},
 	}
-	body := []byte(`{"error":{"message":"Custom temporary outage."}}`)
+	body := []byte(`{"error":{"message":"Our servers are currently overloaded."}}`)
 	resp := &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}}
 
 	got := svc.failoverOpenAIUpstreamHTTPError(
 		context.Background(), nil, account, resp, body,
-		"Custom temporary outage.", "gpt-5.4",
+		"Our servers are currently overloaded.", "gpt-5.4",
 	)
 
 	require.NotNil(t, got)
@@ -3122,6 +3122,7 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughConvergesOAuthDeviceOnly(t *
 		Extra: map[string]any{
 			codexFingerprintModeExtraKey: "device",
 			"openai_device_id":           "per-account-device",
+			codexFingerprintSeedExtraKey: testCodexFingerprintSeed,
 		},
 	}
 	// A previous off-mode attempt can leave a typed-nil decision in the shared
