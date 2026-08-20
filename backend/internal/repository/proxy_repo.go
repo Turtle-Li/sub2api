@@ -237,7 +237,7 @@ func invalidateProxyProbeSnapshots(ctx context.Context, exec sqlExecutor, proxyI
 				OR (platform IN ('openai', 'anthropic')
 					AND extra ? 'ollama_cloud_usage_snapshot'
 					AND extra -> 'ollama_cloud_usage_snapshot' <> 'null'::jsonb)
-				OR (platform = 'openai'
+			OR (platform IN ('openai', 'deepseek')
 					AND extra ? 'opencode_go_usage_snapshot'
 					AND extra -> 'opencode_go_usage_snapshot' <> 'null'::jsonb)
 			)

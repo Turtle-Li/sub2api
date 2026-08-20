@@ -383,7 +383,9 @@ func TestBulkUpdateOpenCodeGoProxyChangeClearsSnapshotOnly(t *testing.T) {
 
 func TestInvalidateProxyProbeSnapshotsClearsOpenCodeGoSnapshot(t *testing.T) {
 	client, mock := newOllamaCloudUsageRepositoryTestClient(t)
-	mock.ExpectQuery(`(?s)UPDATE accounts.*opencode_go_usage_snapshot.*RETURNING id`).
+	// OpenCode Go eligibility includes API-key DeepSeek accounts as well as
+	// OpenAI; changing a bound proxy must invalidate either provider's snapshot.
+	mock.ExpectQuery(`(?s)UPDATE accounts.*opencode_go_usage_snapshot.*platform IN \('openai', 'deepseek'\).*RETURNING id`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)))
 
