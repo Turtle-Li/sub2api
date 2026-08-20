@@ -117,7 +117,7 @@ func isOpenAIInstructionsRequiredError(upstreamStatusCode int, upstreamMsg strin
 }
 
 func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
-	if upstreamStatusCode != http.StatusBadRequest && upstreamStatusCode != http.StatusServiceUnavailable {
+	if upstreamStatusCode < http.StatusBadRequest {
 		return false
 	}
 
@@ -131,6 +131,15 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 
 	if len(upstreamBody) > 0 && hasOpenAIServerOverloadedCode(upstreamBody) {
 		return true
+	}
+	if isOpenAICapacityShedMessage(upstreamMsg) ||
+		isOpenAICapacityShedMessage(gjson.GetBytes(upstreamBody, "error.message").String()) ||
+		isOpenAICapacityShedMessage(gjson.GetBytes(upstreamBody, "response.error.message").String()) ||
+		isOpenAICapacityShedMessage(string(upstreamBody)) {
+		return true
+	}
+	if upstreamStatusCode != http.StatusBadRequest && upstreamStatusCode != http.StatusServiceUnavailable {
+		return false
 	}
 	if upstreamStatusCode != http.StatusBadRequest {
 		return false
@@ -182,6 +191,8 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 func isOpenAICapacityShedMessage(message string) bool {
 	lower := strings.ToLower(strings.TrimSpace(message))
 	return strings.Contains(lower, "selected model is at capacity") ||
+		strings.Contains(lower, "server is overloaded") ||
+		strings.Contains(lower, "servers are overloaded") ||
 		strings.Contains(lower, "servers are currently overloaded") ||
 		strings.Contains(lower, "our servers are overloaded")
 }
@@ -221,6 +232,17 @@ func isOpenAICapacityShedError(upstreamStatusCode int, upstreamMsg string, upstr
 func isOpenAIAccountCapacityShedError(account *Account, upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	return account != nil && account.Platform == PlatformOpenAI &&
 		isOpenAICapacityShedError(upstreamStatusCode, upstreamMsg, upstreamBody)
+}
+
+// isOpenAIRequestScopedCapacityShed is used by OpenAI-only runtime paths that
+// do not have an account argument at the call site. Keep this classifier
+// broader than the account/status-aware helper: a Responses/SSE event may
+// carry a capacity code or message without an HTTP status.
+func isOpenAIRequestScopedCapacityShed(upstreamMsg string, upstreamBody []byte) bool {
+	return isOpenAIUpstreamCapacityShedEvent(upstreamBody) ||
+		isOpenAICapacityShedMessage(upstreamMsg) ||
+		isOpenAICapacityShedMessageInBody(upstreamBody) ||
+		isOpenAICapacityShedMessage(string(upstreamBody))
 }
 
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
@@ -318,6 +340,7 @@ func newOpenAIUpstreamFailoverError(
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, responseBody) {
 		failoverErr.RetryableOnSameAccount = false
+		failoverErr.RequestScopedTransient = false
 		failoverErr.Scope = GatewayFailureScopeAccount
 		failoverErr.Reason = openAIRequestBodyTooLargeReason
 		failoverErr.NextAccountAction = NextAccountRetry

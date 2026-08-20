@@ -291,6 +291,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CtxPoolConverges
 			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeCtxPool,
 			codexFingerprintModeExtraKey:                "device",
 			"openai_device_id":                          "per-account-device",
+			codexFingerprintSeedExtraKey:                testCodexFingerprintSeed,
 		},
 	}
 
@@ -1257,6 +1258,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,
 			codexFingerprintModeExtraKey:                "device",
 			"openai_device_id":                          "per-account-device",
+			codexFingerprintSeedExtraKey:                testCodexFingerprintSeed,
 		},
 	}
 

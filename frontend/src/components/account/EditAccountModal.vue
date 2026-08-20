@@ -28,7 +28,7 @@
 
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
-        <div>
+        <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="editBaseUrl"
@@ -61,6 +61,20 @@
             :current-url="editBaseUrl"
             @select="onCnPresetSelect"
           />
+        </div>
+        <div v-else>
+          <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.endpoints') }}</label>
+          <div class="mt-2 space-y-3">
+            <div v-for="item in editAdaptiveProtocolOptions" :key="item.value">
+              <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                {{ t(`admin.accounts.cnProviders.apiProtocol.${item.labelKey}`) }}
+              </label>
+              <input v-model="editAdaptiveBaseUrls[item.value]" type="text" class="input" />
+            </div>
+          </div>
+          <p v-if="account.platform !== 'deepseek'" class="input-hint">
+            {{ t('admin.accounts.cnProviders.apiProtocol.responsesFallbackDesc') }}
+          </p>
         </div>
         <!-- Account Mode Selection (CN providers) -->
         <div v-if="isCNApiKeyAccount">
@@ -540,7 +554,7 @@
         </div>
       </div>
 
-      <!-- Header Override Section (anthropic/openai apikey + grok apikey/oauth) -->
+      <!-- Header Override Section (eligible API-key platforms + grok OAuth) -->
       <div v-if="headerOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <div>
@@ -1793,6 +1807,91 @@
         @updated="handleOllamaCloudUsageUpdated"
       />
 
+      <section
+        v-if="account?.opencode_go_usage?.eligible"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="opencode-go-usage-settings"
+      >
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.accounts.opencodeGo.title') }}
+            </h3>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.opencodeGo.panelHint') }}
+            </p>
+          </div>
+          <span
+            class="whitespace-nowrap rounded px-2 py-1 text-xs font-medium"
+            :class="opencodeGoStatusOk
+              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+              : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
+          >
+            {{ opencodeGoStatusLabel }}
+          </span>
+        </div>
+
+        <div v-if="opencodeGoLoading" class="flex h-20 items-center justify-center text-gray-400">
+          <Icon name="refresh" size="sm" class="animate-spin" />
+        </div>
+        <template v-else>
+          <div
+            v-if="opencodeGoSnapshot"
+            class="border-y border-gray-100 py-3 dark:border-dark-700"
+            data-testid="opencode-go-usage-details"
+          >
+            <div class="grid grid-cols-[minmax(4rem,auto)_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.rolling') }}</span>
+              <span class="break-words text-gray-900 dark:text-white">{{ opencodeGoWindowSummary(opencodeGoSnapshot.data?.rolling) }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.weekly') }}</span>
+              <span class="break-words text-gray-900 dark:text-white">{{ opencodeGoWindowSummary(opencodeGoSnapshot.data?.weekly) }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.monthly') }}</span>
+              <span class="break-words text-gray-900 dark:text-white">{{ opencodeGoWindowSummary(opencodeGoSnapshot.data?.monthly) }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.status') }}</span>
+              <span class="break-words font-medium text-gray-900 dark:text-white">{{ opencodeGoStatusLabel }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.updatedAt') }}</span>
+              <span class="break-words text-gray-900 dark:text-white">{{ opencodeGoFormatDate(opencodeGoSnapshot.fetched_at || opencodeGoSnapshot.last_attempt_at) }}</span>
+            </div>
+            <p
+              v-if="opencodeGoSnapshot.last_error"
+              class="mt-2 break-words border-t border-gray-100 pt-2 text-xs text-amber-700 dark:border-dark-700 dark:text-amber-300"
+            >
+              {{ t(`admin.accounts.opencodeGo.errors.${opencodeGoSnapshot.last_error}`, opencodeGoSnapshot.last_error) }}
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              :disabled="opencodeGoRefreshing"
+              data-testid="opencode-go-refresh"
+              @click="refreshOpenCodeGoUsage"
+            >
+              <Icon name="refresh" size="xs" class="mr-1.5" :class="{ 'animate-spin': opencodeGoRefreshing }" />
+              {{ t('admin.accounts.opencodeGo.refreshNow') }}
+            </button>
+          </div>
+
+          <div class="flex items-center justify-between gap-4 border-t border-gray-100 pt-4 dark:border-dark-700">
+            <div>
+              <label class="text-sm font-medium text-gray-900 dark:text-white">
+                {{ t('admin.accounts.opencodeGo.autoRefresh') }}
+              </label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.opencodeGo.autoRefreshHint') }}
+              </p>
+            </div>
+            <Toggle
+              :model-value="opencodeGoState?.auto_refresh_enabled ?? false"
+              :disabled="opencodeGoSaving"
+              data-testid="opencode-go-auto-refresh"
+              @update:model-value="setOpenCodeGoAutoRefresh"
+            />
+          </div>
+        </template>
+      </section>
+
       <!-- Anthropic API Key 自动透传开关 -->
       <div
         v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
@@ -1966,7 +2065,7 @@
 
       <!-- OpenAI API 长上下文计费开关 -->
       <div
-        v-if="account?.platform === 'openai' && !isSparkShadow && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && !isSparkShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2761,7 +2860,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch, nextTick } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -2775,7 +2874,9 @@ import type {
   OpenAICompactMode,
   OpenAIResponsesMode,
   OpenAIEndpointCapability,
-  OllamaCloudUsageState
+  OllamaCloudUsageState,
+  OpenCodeGoUsageState,
+  OpenCodeGoUsageWindow
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -2802,15 +2903,19 @@ import {
   isHeaderOverrideCapable,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows,
+  defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
   type CnAccountMode,
   type CnApiProtocol,
+  type CnNativeApiProtocol,
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
+import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
@@ -2851,9 +2956,95 @@ const authStore = useAuthStore()
 // 故隐藏代理选择器。
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
 
+const hideAccountLongContextBilling = computed(() => {
+  return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
+})
+
 const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
   if (props.account) emit('updated', { ...props.account, ollama_cloud_usage: state })
 }
+
+// OpenCode Go usage panel state
+const opencodeGoState = ref<OpenCodeGoUsageState | null>(props.account?.opencode_go_usage ?? null)
+const opencodeGoLoading = ref(false)
+const opencodeGoSaving = ref(false)
+const opencodeGoRefreshing = ref(false)
+const opencodeGoSnapshot = computed(() => opencodeGoState.value?.snapshot)
+const opencodeGoStatusOk = computed(() => opencodeGoSnapshot.value?.status === 'ok')
+const opencodeGoStatusLabel = computed(() => {
+  if (!opencodeGoSnapshot.value) return t('admin.accounts.opencodeGo.notRefreshed')
+  if (opencodeGoSnapshot.value.status === 'unauthorized') return t('admin.accounts.opencodeGo.unauthorized')
+  if (opencodeGoSnapshot.value.status === 'failed') return t('admin.accounts.opencodeGo.failed')
+  return t('admin.accounts.opencodeGo.ok')
+})
+const opencodeGoFormatPercent = (value?: number) => typeof value === 'number' && Number.isFinite(value)
+  ? `${value.toFixed(value % 1 ? 1 : 0)}%`
+  : '-'
+const opencodeGoFormatDate = (value?: string) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+const opencodeGoWindowSummary = (window?: OpenCodeGoUsageWindow) => {
+  if (!window) return '-'
+  const reset = window.resets_at ? opencodeGoFormatDate(window.resets_at) : null
+  return reset
+    ? t('admin.accounts.opencodeGo.windowWithReset', { percent: opencodeGoFormatPercent(window.percent), reset })
+    : opencodeGoFormatPercent(window.percent)
+}
+
+const applyOpenCodeGoState = (next: OpenCodeGoUsageState) => {
+  opencodeGoState.value = next
+  if (props.account) emit('updated', { ...props.account, opencode_go_usage: next })
+}
+
+const loadOpenCodeGoUsage = async () => {
+  opencodeGoLoading.value = true
+  try {
+    applyOpenCodeGoState(await adminAPI.accounts.getOpenCodeGoUsage(props.account!.id))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.opencodeGo.loadFailed')))
+  } finally {
+    opencodeGoLoading.value = false
+  }
+}
+
+const setOpenCodeGoAutoRefresh = async (enabled: boolean) => {
+  opencodeGoSaving.value = true
+  try {
+    applyOpenCodeGoState(await adminAPI.accounts.setOpenCodeGoUsageAutoRefresh(props.account!.id, enabled))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.opencodeGo.autoRefreshFailed')))
+  } finally {
+    opencodeGoSaving.value = false
+  }
+}
+
+const refreshOpenCodeGoUsage = async () => {
+  opencodeGoRefreshing.value = true
+  try {
+    applyOpenCodeGoState(await adminAPI.accounts.refreshOpenCodeGoUsage(props.account!.id))
+    appStore.showSuccess(t('admin.accounts.opencodeGo.refreshSuccess'))
+  } catch (error) {
+    appStore.showError(extractI18nErrorMessage(
+      error,
+      t,
+      'admin.accounts.opencodeGo.errors',
+      t('admin.accounts.opencodeGo.refreshFailed')
+    ))
+  } finally {
+    opencodeGoRefreshing.value = false
+  }
+}
+
+watch(() => props.account?.id, () => {
+  opencodeGoState.value = props.account?.opencode_go_usage ?? null
+  if (opencodeGoState.value && !opencodeGoState.value.snapshot) void loadOpenCodeGoUsage()
+})
+
+onMounted(() => {
+  if (opencodeGoState.value && !opencodeGoState.value.snapshot) void loadOpenCodeGoUsage()
+})
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
@@ -2904,8 +3095,13 @@ const cnPresetPlatform = computed<'kimi' | 'zhipu' | 'deepseek'>(() => {
   }
   return 'kimi'
 })
-const editApiProtocol = ref<CnApiProtocol>('chat_completions')
+const editApiProtocol = ref<CnApiProtocol>('adaptive')
 const editAccountMode = ref<CnAccountMode>('payg')
+const editAdaptiveBaseUrls = ref<Record<CnNativeApiProtocol, string>>({
+  chat_completions: '',
+  anthropic: '',
+  responses: ''
+})
 // 回填窗口标志：syncFormFromAccount 会同步改写 editAccountMode / editApiProtocol，
 // 而 watcher（pre-flush）在同步代码执行完之后才触发——若不抑制，会把刚恢复的
 // 存储版 base_url（可能是用户自定义/中转地址）覆盖为官方预设并在下次保存时持久化。
@@ -2925,6 +3121,7 @@ const cnAccountModeOptions = computed<Array<{ value: CnAccountMode; labelKey: 'p
 )
 const cnProtocolOptions = computed<Array<{ value: CnApiProtocol; labelKey: string }>>(() => {
   const opts: Array<{ value: CnApiProtocol; labelKey: string }> = [
+    { value: 'adaptive', labelKey: 'adaptive' },
     { value: 'chat_completions', labelKey: 'chatCompletions' },
     { value: 'anthropic', labelKey: 'anthropic' }
   ]
@@ -2933,16 +3130,51 @@ const cnProtocolOptions = computed<Array<{ value: CnApiProtocol; labelKey: strin
   }
   return opts
 })
-watch(editApiProtocol, (protocol) => {
+const editAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol; labelKey: string }>>(() => {
+  const opts: Array<{ value: CnNativeApiProtocol; labelKey: string }> = [
+    { value: 'chat_completions', labelKey: 'chatCompletions' },
+    { value: 'anthropic', labelKey: 'anthropic' }
+  ]
+  if (props.account?.platform === 'deepseek') opts.push({ value: 'responses', labelKey: 'responses' })
+  return opts
+})
+watch(editApiProtocol, (protocol, previousProtocol) => {
   if (!isCNApiKeyAccount.value || syncingForm.value) return
+  if (protocol === 'adaptive') {
+    const defaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, editAccountMode.value)
+    for (const item of editAdaptiveProtocolOptions.value) {
+      if (!editAdaptiveBaseUrls.value[item.value]) editAdaptiveBaseUrls.value[item.value] = defaults[item.value]
+    }
+    if (previousProtocol !== 'adaptive' && editBaseUrl.value.trim()) {
+      editAdaptiveBaseUrls.value[previousProtocol] = editBaseUrl.value.trim()
+    }
+    editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
+    return
+  }
+  if (previousProtocol === 'adaptive') {
+    editBaseUrl.value = editAdaptiveBaseUrls.value[protocol] ||
+      defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
+    return
+  }
   editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
 })
-watch(editAccountMode, (mode) => {
+watch(editAccountMode, (mode, previousMode) => {
   if (!isCNApiKeyAccount.value || syncingForm.value) return
   // deepseek 无 coding 套餐：防御性回退（UI 已隐藏该选项）。
   const effectiveMode = props.account!.platform === 'deepseek' && mode === 'coding' ? 'payg' : mode
   if (effectiveMode !== mode) {
     editAccountMode.value = effectiveMode
+    return
+  }
+  if (editApiProtocol.value === 'adaptive') {
+    const previousDefaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, previousMode)
+    const nextDefaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, mode)
+    for (const item of editAdaptiveProtocolOptions.value) {
+      if (!editAdaptiveBaseUrls.value[item.value] || editAdaptiveBaseUrls.value[item.value] === previousDefaults[item.value]) {
+        editAdaptiveBaseUrls.value[item.value] = nextDefaults[item.value]
+      }
+    }
+    editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
     return
   }
   editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, mode, editApiProtocol.value)
@@ -3730,7 +3962,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   loadTempUnschedRules(credentials)
   loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
-  // Load header override state (anthropic/openai apikey + grok apikey/oauth)
+  // Load header override state for eligible account platforms/types
   headerOverrideEnabled.value = false
   headerOverrideRows.value = []
   if (newAccount.credentials && isHeaderOverrideCapable(newAccount.platform, newAccount.type)) {
@@ -3769,10 +4001,46 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       editAccountMode.value = credentials.account_mode === 'coding' ? 'coding' : 'payg'
       const storedProtocol = credentials.api_protocol
       editApiProtocol.value =
-        storedProtocol === 'anthropic' || storedProtocol === 'responses' ? storedProtocol : 'chat_completions'
+        storedProtocol === 'adaptive' ||
+        storedProtocol === 'chat_completions' ||
+        storedProtocol === 'anthropic' ||
+        storedProtocol === 'responses'
+          ? storedProtocol
+          : 'chat_completions'
       if (newAccount.platform !== 'deepseek' && editApiProtocol.value === 'responses') {
         editApiProtocol.value = 'chat_completions'
       }
+      const adaptiveDefaults = defaultCNAdaptiveBaseUrls(newAccount.platform, editAccountMode.value)
+      const storedBaseUrls = (credentials.api_base_urls as Record<string, unknown> | undefined) || {}
+      const legacyBaseUrl = typeof credentials.base_url === 'string' ? credentials.base_url.trim() : ''
+      const storedChatBaseUrl = typeof storedBaseUrls.chat_completions === 'string'
+        ? storedBaseUrls.chat_completions.trim()
+        : ''
+      const storedAnthropicBaseUrl = typeof storedBaseUrls.anthropic === 'string'
+        ? storedBaseUrls.anthropic.trim()
+        : ''
+      const storedResponsesBaseUrl = typeof storedBaseUrls.responses === 'string'
+        ? storedBaseUrls.responses.trim()
+        : ''
+      const nextAdaptiveBaseUrls: Record<CnNativeApiProtocol, string> = {
+        chat_completions: storedChatBaseUrl || adaptiveDefaults.chat_completions,
+        anthropic: storedAnthropicBaseUrl || adaptiveDefaults.anthropic,
+        responses: storedResponsesBaseUrl || adaptiveDefaults.responses
+      }
+      const legacyProtocol: CnNativeApiProtocol = editApiProtocol.value === 'anthropic'
+        ? 'anthropic'
+        : editApiProtocol.value === 'responses'
+          ? 'responses'
+          : 'chat_completions'
+      const storedLegacyBaseUrl = legacyProtocol === 'anthropic'
+        ? storedAnthropicBaseUrl
+        : legacyProtocol === 'responses'
+          ? storedResponsesBaseUrl
+          : storedChatBaseUrl
+      if (legacyBaseUrl && !storedLegacyBaseUrl) {
+        nextAdaptiveBaseUrls[legacyProtocol] = legacyBaseUrl
+      }
+      editAdaptiveBaseUrls.value = nextAdaptiveBaseUrls
     }
     const platformDefaultUrl =
       newAccount.platform === 'openai'
@@ -3786,7 +4054,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
                 newAccount.platform === 'deepseek'
               ? defaultCNBaseUrl(newAccount.platform, editAccountMode.value, editApiProtocol.value)
               : 'https://api.anthropic.com'
-    editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
+    editBaseUrl.value = isCNApiKeyAccount.value && editApiProtocol.value === 'adaptive'
+      ? editAdaptiveBaseUrls.value.chat_completions
+      : (credentials.base_url as string) || platformDefaultUrl
 
     // Load model mappings and detect mode
     loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
@@ -4458,6 +4728,17 @@ const handleSubmit = async () => {
       if (isCNApiKeyAccount.value) {
         newCredentials.account_mode = editAccountMode.value
         newCredentials.api_protocol = editApiProtocol.value
+        if (editApiProtocol.value === 'adaptive') {
+          const defaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, editAccountMode.value)
+          const protocolBaseUrls: Record<string, string> = {}
+          for (const item of editAdaptiveProtocolOptions.value) {
+            protocolBaseUrls[item.value] = (editAdaptiveBaseUrls.value[item.value] || defaults[item.value]).trim()
+          }
+          newCredentials.api_base_urls = protocolBaseUrls
+          newCredentials.base_url = protocolBaseUrls.chat_completions
+        } else {
+          delete newCredentials.api_base_urls
+        }
       }
 
       // Handle API key
@@ -4520,7 +4801,7 @@ const handleSubmit = async () => {
         delete newCredentials.custom_error_codes
       }
 
-      // Add header override if enabled (anthropic/openai/grok apikey)
+      // Add header override if enabled for this API-key platform
       if (isHeaderOverrideCapable(props.account.platform, 'apikey')) {
         if (headerOverrideEnabled.value) {
           const headerError = validateHeaderOverrideRows(headerOverrideRows.value)

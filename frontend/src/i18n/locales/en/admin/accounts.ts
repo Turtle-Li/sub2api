@@ -118,6 +118,10 @@ export default {
         },
         apiProtocol: {
           title: 'API Protocol',
+          adaptive: 'Adaptive',
+          adaptiveDesc: 'Uses the matching native provider endpoint for each inbound protocol, converting only when unavailable.',
+          endpoints: 'Protocol endpoints',
+          responsesFallbackDesc: 'Responses requests are converted to Chat Completions because this provider has no native Responses endpoint.',
           chatCompletions: 'Chat Completions',
           chatCompletionsDesc: 'Standard OpenAI-compatible endpoint; requests in other formats are converted.',
           anthropic: 'Anthropic',
@@ -256,6 +260,33 @@ export default {
           response_too_large: 'Settings page exceeded the response limit',
           invalid_html: 'Settings page format was not recognized',
           OLLAMA_CLOUD_USAGE_REFRESH_RATE_LIMITED: 'Refresh is limited. Try again in {retry_after_seconds} seconds.'
+        }
+      },
+      opencodeGo: {
+        title: 'OpenCode Go usage',
+        panelHint: 'Usage windows reported by the upstream OpenCode Go account. Refreshed on demand or automatically when enabled.',
+        notRefreshed: 'Not refreshed',
+        refreshNow: 'Refresh usage',
+        autoRefresh: 'Automatic usage refresh',
+        autoRefreshHint: 'Runs only when the account switch and the global switch are both enabled.',
+        rolling: '5 hour',
+        rollingShort: '5h',
+        weekly: 'Week',
+        weeklyShort: 'W',
+        monthly: 'Month',
+        monthlyShort: 'M',
+        status: 'Status',
+        updatedAt: 'Updated',
+        ok: 'Current',
+        unauthorized: 'Session expired',
+        failed: 'Refresh failed',
+        windowWithReset: '{percent} used, resets {reset}',
+        loadFailed: 'Failed to load OpenCode Go usage settings',
+        autoRefreshFailed: 'Failed to update automatic usage refresh',
+        refreshSuccess: 'OpenCode Go usage refreshed',
+        refreshFailed: 'Failed to refresh OpenCode Go usage',
+        errors: {
+          OPENCODE_GO_USAGE_REFRESH_RATE_LIMITED: 'Refresh is limited. Try again in {retry_after_seconds} seconds.'
         }
       },
       upstreamBilling: {

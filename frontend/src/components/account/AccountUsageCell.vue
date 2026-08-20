@@ -571,6 +571,10 @@
         :account="account"
         @updated="handleOllamaCloudUsageUpdated"
       />
+      <OpenCodeGoUsageCell
+        v-if="account.opencode_go_usage?.eligible"
+        :account="account"
+      />
       <!-- Today stats row (requests, tokens, cost, user_cost) -->
       <div
         v-if="todayStats"
@@ -652,6 +656,7 @@ import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
+import OpenCodeGoUsageCell from './OpenCodeGoUsageCell.vue'
 
 // Module-level cache shared across all AccountUsageCell instances
 const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()

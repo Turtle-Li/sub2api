@@ -602,7 +602,7 @@
         </div>
       </div>
 
-      <!-- Header Override (anthropic/openai apikey only) -->
+      <!-- Header Override (eligible API-key platforms + grok OAuth) -->
       <div v-if="allHeaderOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="flex items-center justify-between">
           <div class="flex-1 pr-4">
@@ -1600,7 +1600,7 @@ const allBillingProbeCapable = computed(() => {
   )
 })
 
-// 是否全部为 anthropic/openai 平台的 apikey 账号（请求头覆写仅在此条件下显示）
+// 是否全部为支持请求头覆写的平台/账号类型
 // 所选平台 × 所选类型的全组合均需具备覆写资格（实际选中账号是该组合的子集，
 // 按交叉积判定偏保守但绝不放行不合资格的账号）
 const allHeaderOverrideCapable = computed(() => {
@@ -2090,11 +2090,12 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (enableCodexFingerprintMode.value) {
     const extra = ensureExtra()
-    // off = 默认值，清键即可；device/session/full 是显式 opt-in，必须落键（#5610）。
+    // 批量接口对 extra 使用 JSONB 合并，关闭时不能靠删键清除既有值；
+    // 显式写入 off 才能覆盖此前的 device/session/full 配置（#5610）。
     if (codexFingerprintMode.value !== 'off') {
       extra.codex_fingerprint_mode = codexFingerprintMode.value
     } else {
-      delete extra.codex_fingerprint_mode
+      extra.codex_fingerprint_mode = 'off'
     }
   }
 

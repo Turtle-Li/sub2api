@@ -80,6 +80,27 @@ func TestGetBaseURL(t *testing.T) {
 	}
 }
 
+func TestOpenCodeGoBaseURLCanonicalizedForOutboundRequests(t *testing.T) {
+	for _, raw := range []string{
+		"HTTPS://OPENCODE.AI/ZEN/GO/V1",
+		"https://opencode.ai:443/zen/go/v1/",
+	} {
+		account := &Account{
+			Platform: PlatformDeepseek,
+			Type:     AccountTypeAPIKey,
+			Credentials: map[string]any{
+				"base_url": raw,
+			},
+		}
+		require.True(t, IsOpenCodeGoUsageAccount(account))
+		require.Equal(t, openCodeGoUsageCanonicalBaseURL, account.GetOpenAIBaseURL())
+		require.Equal(t,
+			"https://opencode.ai/zen/go/v1/chat/completions",
+			buildOpenAIEndpointURL(account.GetOpenAIBaseURL(), "/v1/chat/completions"),
+		)
+	}
+}
+
 func TestGetGeminiBaseURL(t *testing.T) {
 	const defaultGeminiURL = "https://generativelanguage.googleapis.com"
 
