@@ -32,7 +32,7 @@ vi.mock('vue-i18n', async () => {
           'admin.accounts.opencodeGo.rollingShort': '5h',
           'admin.accounts.opencodeGo.weeklyShort': 'W',
           'admin.accounts.opencodeGo.monthlyShort': 'M',
-          'admin.accounts.opencodeGo.refreshNow': 'Refresh usage',
+          'admin.accounts.usageWindow.activeQuery': 'Query',
           'admin.accounts.opencodeGo.refreshSuccess': 'OpenCode Go usage refreshed',
           'admin.accounts.opencodeGo.refreshFailed': 'Failed to refresh OpenCode Go usage',
           'admin.accounts.opencodeGo.unauthorized': 'unauthorized',
@@ -127,7 +127,9 @@ describe('OpenCodeGoUsageCell', () => {
     expect(wrapper.find('[data-testid="opencode-go-status-badge"]').exists()).toBe(false)
     const query = wrapper.get('[data-testid="opencode-go-usage-query"]')
     expect(query.classes()).toEqual(expect.arrayContaining(['text-blue-600', 'hover:bg-blue-50']))
-    expect(query.text()).toBe('Refresh usage')
+    expect(query.text()).toBe('Query')
+    expect(cell.element.compareDocumentPosition(query.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(query.element.compareDocumentPosition(bars[0].element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('refreshes through the OpenCode Go endpoint and emits the updated state', async () => {
