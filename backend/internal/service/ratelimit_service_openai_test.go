@@ -117,6 +117,73 @@ func TestCalculateOpenAI429ResetTime_NoCodexHeaders(t *testing.T) {
 	}
 }
 
+func TestParseOpenAIRateLimitResetTime_OpenCodeGoUsageLimit(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want time.Duration
+	}{
+		{
+			name: "days",
+			body: `{"type":"error","error":{"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 2 days."}}`,
+			want: 48 * time.Hour,
+		},
+		{
+			name: "hours",
+			body: `{"type":"error","error":{"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 18 hours."}}`,
+			want: 18 * time.Hour,
+		},
+		{
+			name: "hours and minutes",
+			body: `{"type":"error","error":{"type":"GoUsageLimitError","message":"5-hour usage limit reached. Resets in 4hr 59min."}}`,
+			want: 4*time.Hour + 59*time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := time.Now()
+			resetAt := parseOpenAIRateLimitResetTime([]byte(tt.body))
+			after := time.Now()
+
+			require.NotNil(t, resetAt)
+			actual := time.Unix(*resetAt, 0)
+			require.False(t, actual.Before(before.Add(tt.want).Truncate(time.Second)))
+			require.False(t, actual.After(after.Add(tt.want)))
+		})
+	}
+}
+
+func TestParseOpenAIRateLimitResetTime_DoesNotParseUnknownErrorMessage(t *testing.T) {
+	body := []byte(`{"error":{"type":"rate_limit_error","message":"Resets in 2 days."}}`)
+
+	require.Nil(t, parseOpenAIRateLimitResetTime(body))
+}
+
+func TestHandle429_DeepSeekOpenCodeGoUsageLimitUsesMessageResetDuration(t *testing.T) {
+	repo := &openAI429SnapshotRepo{}
+	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	account := &Account{
+		ID:       125,
+		Platform: PlatformDeepseek,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "open-code-key",
+			"base_url": "https://opencode.ai/zen/go/v1",
+		},
+	}
+	body := []byte(`{"error":{"type":"GoUsageLimitError","message":"5-hour usage limit reached. Resets in 4hr 59min."}}`)
+
+	before := time.Now()
+	svc.handle429(context.Background(), account, http.Header{}, body)
+	after := time.Now()
+
+	require.Equal(t, account.ID, repo.rateLimitedID)
+	expectedResetAfter := 4*time.Hour + 59*time.Minute
+	require.False(t, repo.rateLimitedAt.Before(before.Add(expectedResetAfter-time.Second)))
+	require.False(t, repo.rateLimitedAt.After(after.Add(expectedResetAfter)))
+}
+
 func TestCalculateOpenAI429ResetTime_ReversedWindowOrder(t *testing.T) {
 	svc := &RateLimitService{}
 
@@ -150,13 +217,15 @@ func TestCalculateOpenAI429ResetTime_ReversedWindowOrder(t *testing.T) {
 type openAI429SnapshotRepo struct {
 	mockAccountRepoForGemini
 	rateLimitedID      int64
+	rateLimitedAt      time.Time
 	updatedExtra       map[string]any
 	bulkUpdatedIDs     []int64
 	bulkUpdatedPayload AccountBulkUpdate
 }
 
-func (r *openAI429SnapshotRepo) SetRateLimited(_ context.Context, id int64, _ time.Time) error {
+func (r *openAI429SnapshotRepo) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
 	r.rateLimitedID = id
+	r.rateLimitedAt = resetAt
 	return nil
 }
 
