@@ -468,9 +468,11 @@ func (s *OpenCodeGoUsageService) GetState(ctx context.Context, accountID int64) 
 	return OpenCodeGoUsageStateFromAccount(account), nil
 }
 
-// ResolveOpenCodeGoUsageAccounts overlays group-owned managed state onto the
-// supplied account objects. The repository resolves all matching siblings in one
-// bounded query, so account-list responses do not issue one query per row.
+// ResolveOpenCodeGoUsageAccounts overlays managed state onto the supplied account
+// objects. The auto-refresh switch is shared by the API-key group, while usage
+// snapshots are scoped by (group, proxy) because a proxy change invalidates the
+// snapshot for that transport. The repository resolves all matching siblings in
+// one bounded query, so account-list responses do not issue one query per row.
 func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Context, accounts []*Account) error {
 	if s == nil || s.accountRepo == nil || len(accounts) == 0 {
 		return nil
@@ -493,6 +495,7 @@ func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Cont
 		return fmt.Errorf("resolve OpenCode Go usage groups: %w", err)
 	}
 	sources := make(map[string]*Account)
+	snapshotSources := make(map[openCodeGoUsageSnapshotSourceKey]*Account)
 	for index := range siblings {
 		candidate := &siblings[index]
 		fingerprint, valid := openCodeGoUsageGroupFingerprint(candidate)
@@ -504,6 +507,26 @@ func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Cont
 			(candidate.UpdatedAt.Equal(current.UpdatedAt) && candidate.ID < current.ID) {
 			sources[fingerprint] = candidate
 		}
+		candidateSnapshot := decodeOpenCodeGoUsageSnapshot(candidate.Extra)
+		if candidateSnapshot != nil {
+			proxyID, hasProxy := openCodeGoUsageProxyKey(candidate)
+			snapshotKey := openCodeGoUsageSnapshotSourceKey{
+				groupFingerprint: fingerprint,
+				proxyID:          proxyID,
+				hasProxy:         hasProxy,
+			}
+			currentSnapshotSource := snapshotSources[snapshotKey]
+			var currentSnapshot *OpenCodeGoUsageSnapshot
+			if currentSnapshotSource != nil {
+				currentSnapshot = decodeOpenCodeGoUsageSnapshot(currentSnapshotSource.Extra)
+			}
+			if currentSnapshotSource == nil || currentSnapshot == nil ||
+				candidate.UpdatedAt.After(currentSnapshotSource.UpdatedAt) ||
+				(candidate.UpdatedAt.Equal(currentSnapshotSource.UpdatedAt) &&
+					candidateSnapshot.LastAttemptAt.After(currentSnapshot.LastAttemptAt)) {
+				snapshotSources[snapshotKey] = candidate
+			}
+		}
 	}
 	resolvedSources := make(map[string]*Account, len(sources))
 	for fingerprint, source := range sources {
@@ -512,42 +535,49 @@ func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Cont
 		maps.Copy(clone.Extra, source.Extra)
 		resolvedSources[fingerprint] = &clone
 	}
-	for index := range siblings {
-		candidate := &siblings[index]
-		fingerprint, valid := openCodeGoUsageGroupFingerprint(candidate)
-		source := resolvedSources[fingerprint]
-		if !valid || source == nil {
-			continue
-		}
-		candidateSnapshot := decodeOpenCodeGoUsageSnapshot(candidate.Extra)
-		currentSnapshot := decodeOpenCodeGoUsageSnapshot(source.Extra)
-		if candidateSnapshot != nil && (currentSnapshot == nil || candidateSnapshot.LastAttemptAt.After(currentSnapshot.LastAttemptAt)) {
-			source.Extra[OpenCodeGoUsageSnapshotExtraKey] = candidate.Extra[OpenCodeGoUsageSnapshotExtraKey]
-		}
-	}
 	for _, account := range eligible {
 		fingerprint, _ := openCodeGoUsageGroupFingerprint(account)
-		applyOpenCodeGoUsageManagedExtra(account, resolvedSources[fingerprint])
+		proxyID, hasProxy := openCodeGoUsageProxyKey(account)
+		snapshotSource := snapshotSources[openCodeGoUsageSnapshotSourceKey{
+			groupFingerprint: fingerprint,
+			proxyID:          proxyID,
+			hasProxy:         hasProxy,
+		}]
+		applyOpenCodeGoUsageManagedExtra(account, resolvedSources[fingerprint], snapshotSource)
 	}
 	return nil
 }
 
-func applyOpenCodeGoUsageManagedExtra(target, source *Account) {
+type openCodeGoUsageSnapshotSourceKey struct {
+	groupFingerprint string
+	proxyID          int64
+	hasProxy         bool
+}
+
+func openCodeGoUsageProxyKey(account *Account) (key int64, hasProxy bool) {
+	if account == nil || account.ProxyID == nil {
+		return 0, false
+	}
+	return *account.ProxyID, true
+}
+
+func applyOpenCodeGoUsageManagedExtra(target, autoRefreshSource, snapshotSource *Account) {
 	if target == nil {
 		return
 	}
 	if target.Extra == nil {
 		target.Extra = make(map[string]any)
 	}
-	for _, key := range []string{
-		OpenCodeGoUsageAutoRefreshExtraKey,
-		OpenCodeGoUsageSnapshotExtraKey,
-	} {
-		delete(target.Extra, key)
-		if source != nil && source.Extra != nil {
-			if value, ok := source.Extra[key]; ok {
-				target.Extra[key] = value
-			}
+	delete(target.Extra, OpenCodeGoUsageAutoRefreshExtraKey)
+	if autoRefreshSource != nil && autoRefreshSource.Extra != nil {
+		if value, ok := autoRefreshSource.Extra[OpenCodeGoUsageAutoRefreshExtraKey]; ok {
+			target.Extra[OpenCodeGoUsageAutoRefreshExtraKey] = value
+		}
+	}
+	delete(target.Extra, OpenCodeGoUsageSnapshotExtraKey)
+	if snapshotSource != nil && snapshotSource.Extra != nil {
+		if value, ok := snapshotSource.Extra[OpenCodeGoUsageSnapshotExtraKey]; ok {
+			target.Extra[OpenCodeGoUsageSnapshotExtraKey] = value
 		}
 	}
 }

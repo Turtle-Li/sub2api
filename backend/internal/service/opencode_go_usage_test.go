@@ -590,6 +590,45 @@ func TestOpenCodeGoUsageGroupSharesStateAcrossSiblings(t *testing.T) {
 	require.Equal(t, before+1, repo.groupResolveCalls.Load(), "one list batch must issue one group lookup")
 }
 
+func TestOpenCodeGoUsageGroupDoesNotReuseSnapshotAcrossProxyIDs(t *testing.T) {
+	oldProxyID := int64(41)
+	newProxyID := int64(42)
+	changed := openCodeGoUsageAccount(75)
+	changed.Platform = PlatformDeepseek
+	changed.Credentials["api_key"] = "shared-key"
+	changed.ProxyID = &newProxyID
+	changed.Extra[OpenCodeGoUsageAutoRefreshExtraKey] = true
+	// A proxy change invalidates this row's snapshot, but leaves the group
+	// auto-refresh switch enabled.
+	delete(changed.Extra, OpenCodeGoUsageSnapshotExtraKey)
+
+	sibling := openCodeGoUsageAccount(76)
+	sibling.Platform = PlatformDeepseek
+	sibling.Credentials = map[string]any{
+		"base_url": "https://opencode.ai/zen/go/v1/",
+		"api_key":  "shared-key",
+	}
+	sibling.ProxyID = &oldProxyID
+	sibling.Extra[OpenCodeGoUsageAutoRefreshExtraKey] = true
+	sibling.Extra[OpenCodeGoUsageSnapshotExtraKey] = &OpenCodeGoUsageSnapshot{
+		Status:        OpenCodeGoUsageStatusOK,
+		LastAttemptAt: time.Now().Add(-time.Hour),
+		FetchedAt:     ptr(time.Now().Add(-time.Hour)),
+	}
+
+	repo := &openCodeGoUsageTestRepo{accounts: map[int64]*Account{
+		changed.ID: changed,
+		sibling.ID: sibling,
+	}}
+	svc := newOpenCodeGoUsageTestService(t, repo, &openCodeGoUsageHTTPStub{}, &upstreamBillingProbeSettingRepo{})
+
+	state, err := svc.GetState(context.Background(), changed.ID)
+	require.NoError(t, err)
+	require.True(t, state.Eligible)
+	require.True(t, state.AutoRefreshEnabled)
+	require.Nil(t, state.Snapshot, "a snapshot from the old proxy must not be resurrected")
+}
+
 func TestOpenCodeGoUsageSetAutoRefreshAndSnapshotAreGroupScoped(t *testing.T) {
 	first := openCodeGoUsageAccount(81)
 	first.Credentials["api_key"] = "shared-key"
