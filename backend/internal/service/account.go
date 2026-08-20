@@ -1313,13 +1313,13 @@ func (a *Account) GetOpenAIBaseURL() string {
 	if a.IsCNProvider() && a.IsAdaptiveAPIProtocol() {
 		if baseURLs, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
 			if baseURL, ok := baseURLs[APIProtocolChatCompletions].(string); ok && strings.TrimSpace(baseURL) != "" {
-				return strings.TrimSpace(baseURL)
+				return canonicalOpenCodeGoUsageBaseURL(baseURL)
 			}
 		}
 	}
 	if a.Type == AccountTypeAPIKey || a.Type == AccountTypeUpstream {
 		if baseURL := strings.TrimSpace(a.GetCredential("base_url")); baseURL != "" {
-			return baseURL
+			return canonicalOpenCodeGoUsageBaseURL(baseURL)
 		}
 	}
 	// 平台默认 base_url：CN 供应商按 account_mode 选择 payg / coding 默认值。
@@ -1397,12 +1397,12 @@ func (a *Account) GetCNProtocolBaseURL(protocol string) string {
 	if a.IsAdaptiveAPIProtocol() {
 		if baseURLs, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
 			if baseURL, ok := baseURLs[protocol].(string); ok && strings.TrimSpace(baseURL) != "" {
-				return strings.TrimSpace(baseURL)
+				return canonicalOpenCodeGoUsageBaseURL(baseURL)
 			}
 		}
 		if protocol == APIProtocolChatCompletions {
 			if baseURL := strings.TrimSpace(a.GetCredential("base_url")); baseURL != "" {
-				return baseURL
+				return canonicalOpenCodeGoUsageBaseURL(baseURL)
 			}
 		}
 	}

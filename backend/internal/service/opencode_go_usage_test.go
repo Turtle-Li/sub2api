@@ -610,10 +610,11 @@ func TestOpenCodeGoUsageGroupDoesNotReuseSnapshotAcrossProxyIDs(t *testing.T) {
 	}
 	sibling.ProxyID = &oldProxyID
 	sibling.Extra[OpenCodeGoUsageAutoRefreshExtraKey] = true
+	fetchedAt := time.Now().Add(-time.Hour)
 	sibling.Extra[OpenCodeGoUsageSnapshotExtraKey] = &OpenCodeGoUsageSnapshot{
 		Status:        OpenCodeGoUsageStatusOK,
 		LastAttemptAt: time.Now().Add(-time.Hour),
-		FetchedAt:     ptr(time.Now().Add(-time.Hour)),
+		FetchedAt:     &fetchedAt,
 	}
 
 	repo := &openCodeGoUsageTestRepo{accounts: map[int64]*Account{

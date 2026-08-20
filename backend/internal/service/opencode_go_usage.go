@@ -28,6 +28,7 @@ import (
 const (
 	OpenCodeGoUsageAutoRefreshExtraKey = "opencode_go_usage_auto_refresh"
 	OpenCodeGoUsageSnapshotExtraKey    = "opencode_go_usage_snapshot"
+	openCodeGoUsageCanonicalBaseURL    = "https://opencode.ai/zen/go/v1"
 
 	// OpenCodeGoUsageMinFetchInterval is the hard floor between two successful
 	// fetches of the same group, mirroring the floor nextOpenCodeGoUsageDelay
@@ -469,10 +470,11 @@ func (s *OpenCodeGoUsageService) GetState(ctx context.Context, accountID int64) 
 }
 
 // ResolveOpenCodeGoUsageAccounts overlays managed state onto the supplied account
-// objects. The auto-refresh switch is shared by the API-key group, while usage
-// snapshots are scoped by (group, proxy) because a proxy change invalidates the
-// snapshot for that transport. The repository resolves all matching siblings in
-// one bounded query, so account-list responses do not issue one query per row.
+// objects. The auto-refresh switch is shared by the API-key group. A snapshot
+// from a different proxy is not used to refill a row whose own snapshot was
+// invalidated, while a successful refresh may still fan the fresh group result
+// out to all siblings. The repository resolves all matching siblings in one
+// bounded query, so account-list responses do not issue one query per row.
 func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Context, accounts []*Account) error {
 	if s == nil || s.accountRepo == nil || len(accounts) == 0 {
 		return nil
@@ -535,10 +537,17 @@ func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Cont
 		maps.Copy(clone.Extra, source.Extra)
 		resolvedSources[fingerprint] = &clone
 	}
+	resolvedSnapshotSources := make(map[openCodeGoUsageSnapshotSourceKey]*Account, len(snapshotSources))
+	for key, source := range snapshotSources {
+		clone := *source
+		clone.Extra = make(map[string]any, len(source.Extra))
+		maps.Copy(clone.Extra, source.Extra)
+		resolvedSnapshotSources[key] = &clone
+	}
 	for _, account := range eligible {
 		fingerprint, _ := openCodeGoUsageGroupFingerprint(account)
 		proxyID, hasProxy := openCodeGoUsageProxyKey(account)
-		snapshotSource := snapshotSources[openCodeGoUsageSnapshotSourceKey{
+		snapshotSource := resolvedSnapshotSources[openCodeGoUsageSnapshotSourceKey{
 			groupFingerprint: fingerprint,
 			proxyID:          proxyID,
 			hasProxy:         hasProxy,
@@ -933,6 +942,17 @@ func isOpenCodeGoBaseURL(raw string) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSuffix(parsed.Path, "/"), "/zen/go/v1")
+}
+
+// canonicalOpenCodeGoUsageBaseURL keeps accepted case/port variants from
+// leaking into outbound request paths. URL paths are case-sensitive upstream,
+// while eligibility intentionally accepts harmless spelling variants.
+func canonicalOpenCodeGoUsageBaseURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if isOpenCodeGoBaseURL(trimmed) {
+		return openCodeGoUsageCanonicalBaseURL
+	}
+	return trimmed
 }
 
 func openCodeGoUsageIdentity(account *Account) map[string]any {
