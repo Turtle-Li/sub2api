@@ -1,8 +1,26 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import OpenCodeGoUsageCell from '../OpenCodeGoUsageCell.vue'
 import UsageProgressBar from '../UsageProgressBar.vue'
 import type { Account, OpenCodeGoUsageState } from '@/types'
+
+const { refreshOpenCodeGoUsage, showSuccess, showError } = vi.hoisted(() => ({
+  refreshOpenCodeGoUsage: vi.fn(),
+  showSuccess: vi.fn(),
+  showError: vi.fn()
+}))
+
+vi.mock('@/api/admin', () => ({
+  adminAPI: {
+    accounts: {
+      refreshOpenCodeGoUsage
+    }
+  }
+}))
+
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => ({ showSuccess, showError })
+}))
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -14,6 +32,9 @@ vi.mock('vue-i18n', async () => {
           'admin.accounts.opencodeGo.rollingShort': '5h',
           'admin.accounts.opencodeGo.weeklyShort': 'W',
           'admin.accounts.opencodeGo.monthlyShort': 'M',
+          'admin.accounts.opencodeGo.refreshNow': 'Refresh usage',
+          'admin.accounts.opencodeGo.refreshSuccess': 'OpenCode Go usage refreshed',
+          'admin.accounts.opencodeGo.refreshFailed': 'Failed to refresh OpenCode Go usage',
           'admin.accounts.opencodeGo.unauthorized': 'unauthorized',
           'admin.accounts.opencodeGo.failed': 'failed',
           'admin.accounts.opencodeGo.ok': 'ok'
@@ -70,6 +91,12 @@ const account = (state = usageState()): Account => ({
 })
 
 describe('OpenCodeGoUsageCell', () => {
+  beforeEach(() => {
+    refreshOpenCodeGoUsage.mockReset()
+    showSuccess.mockReset()
+    showError.mockReset()
+  })
+
   it('renders rolling, weekly and monthly windows in a shrinkable mobile-safe cell', () => {
     const wrapper = mount(OpenCodeGoUsageCell, { props: { account: account() } })
     const cell = wrapper.get('[data-testid="opencode-go-usage-cell"]')
@@ -98,7 +125,24 @@ describe('OpenCodeGoUsageCell', () => {
     })
 
     expect(wrapper.find('[data-testid="opencode-go-status-badge"]').exists()).toBe(false)
-    expect(wrapper.findAll('button')).toHaveLength(0)
+    const query = wrapper.get('[data-testid="opencode-go-usage-query"]')
+    expect(query.classes()).toEqual(expect.arrayContaining(['text-blue-600', 'hover:bg-blue-50']))
+    expect(query.text()).toBe('Refresh usage')
+  })
+
+  it('refreshes through the OpenCode Go endpoint and emits the updated state', async () => {
+    const next = usageState()
+    next.snapshot!.data!.rolling!.percent = 43
+    refreshOpenCodeGoUsage.mockResolvedValueOnce(next)
+    const wrapper = mount(OpenCodeGoUsageCell, { props: { account: account() } })
+
+    await wrapper.get('[data-testid="opencode-go-usage-query"]').trigger('click')
+    await flushPromises()
+
+    expect(refreshOpenCodeGoUsage).toHaveBeenCalledWith(7)
+    expect(wrapper.findAllComponents(UsageProgressBar)[0].props('utilization')).toBe(43)
+    expect(wrapper.emitted<OpenCodeGoUsageState[]>('updated')?.[0]?.[0]).toEqual(next)
+    expect(showSuccess).toHaveBeenCalledWith('OpenCode Go usage refreshed')
   })
 
   it('shows a status badge when the snapshot status is not ok', () => {
