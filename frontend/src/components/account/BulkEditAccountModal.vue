@@ -2090,11 +2090,12 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (enableCodexFingerprintMode.value) {
     const extra = ensureExtra()
-    // off = 默认值，清键即可；device/session/full 是显式 opt-in，必须落键（#5610）。
+    // 批量接口对 extra 使用 JSONB 合并，关闭时不能靠删键清除既有值；
+    // 显式写入 off 才能覆盖此前的 device/session/full 配置（#5610）。
     if (codexFingerprintMode.value !== 'off') {
       extra.codex_fingerprint_mode = codexFingerprintMode.value
     } else {
-      delete extra.codex_fingerprint_mode
+      extra.codex_fingerprint_mode = 'off'
     }
   }
 
