@@ -52,7 +52,7 @@ func TestUpdateOpenCodeGoUsageSnapshotWritesSnapshotOnly(t *testing.T) {
 	credentials, err := json.Marshal(normalizeJSONMap(account.Credentials))
 	require.NoError(t, err)
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*platform\s+IN\s+\('openai',\s+'deepseek'\).*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 		WithArgs("key", account.ID, account.Platform, account.Type, string(credentials), nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "anchor_matches", "auto_refresh", "snapshot"}).
 			AddRow(account.ID, true, `true`, string(previousSnapshotJSON)))
@@ -287,7 +287,7 @@ func TestBulkUpdateOpenCodeGoIdentityCleanupIsValueConditional(t *testing.T) {
 	require.NotEmpty(t, exec.execQueries)
 	query := normalizeSQLWhitespace(exec.execQueries[0])
 	// OpenCode 分支必须出现在 Ollama 分支之前，且只在旧行是 opencode base URL 时触发。
-	require.Contains(t, query, "platform = 'openai' AND type = 'apikey'")
+	require.Contains(t, query, "platform IN ('openai', 'deepseek') AND type = 'apikey'")
 	require.Contains(t, query, "- 'opencode_go_usage_auto_refresh' - 'opencode_go_usage_snapshot'")
 	opencodeBranch := strings.Index(query, "opencode_go_usage_auto_refresh")
 	ollamaBranch := strings.Index(query, "ollama_cloud_usage_auto_refresh")
@@ -296,7 +296,7 @@ func TestBulkUpdateOpenCodeGoIdentityCleanupIsValueConditional(t *testing.T) {
 	require.Less(t, opencodeBranch, ollamaBranch)
 }
 
-// F1 回归：OpenCode eligible 判定必须包含旧行 opencode base URL，否则 OpenAI+Ollama
+// F1 回归：OpenCode eligible 判定必须包含旧行 opencode base URL，否则 OpenAI/DeepSeek+Ollama
 // 行在代理变化时会先命中 OpenCode 分支而遮蔽 Ollama 快照清理。这里断言 OpenCode 分支
 // 的 WHEN 携带 opencode 正则（与 Ollama 正则互斥），真实行为由 integration 测试覆盖。
 func TestBulkUpdateOpenCodeGoEligiblePredicateIncludesBaseURL(t *testing.T) {
@@ -312,7 +312,7 @@ func TestBulkUpdateOpenCodeGoEligiblePredicateIncludesBaseURL(t *testing.T) {
 	require.NotEmpty(t, exec.execQueries)
 	query := normalizeSQLWhitespace(exec.execQueries[0])
 	// 第一个 WHEN 分支是 OpenCode 快照失效分支（代理变化），其 eligible 判定必须
-	// 包含 opencode base URL 正则，使 OpenAI+Ollama 行无法命中该分支。
+	// 包含 opencode base URL 正则，使 OpenAI/DeepSeek+Ollama 行无法命中该分支。
 	caseStart := strings.Index(query, "CASE")
 	firstThen := strings.Index(query, "THEN")
 	require.NotEqual(t, -1, caseStart)

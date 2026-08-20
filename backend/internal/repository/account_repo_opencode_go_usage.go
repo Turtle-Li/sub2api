@@ -19,10 +19,10 @@ const (
 	opencodeGoBaseURLMatchSQLPrefix = "btrim("
 	opencodeGoBaseURLMatchSQLSuffix = ") ~ '" + opencodeGoBaseURLRegexSQL + "'"
 	opencodeGoUsageEligibleSQL      = `
-	platform = 'openai'
-	AND type = 'apikey'
-	AND ` + opencodeGoBaseURLMatchSQLPrefix + `credentials ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `
-	AND jsonb_typeof(credentials -> 'api_key') = 'string'
+		platform IN ('openai', 'deepseek')
+		AND type = 'apikey'
+		AND ` + opencodeGoBaseURLMatchSQLPrefix + `credentials ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `
+		AND jsonb_typeof(credentials -> 'api_key') = 'string'
 `
 )
 

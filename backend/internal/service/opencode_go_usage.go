@@ -59,7 +59,7 @@ var (
 		"OPENCODE_GO_USAGE_UNAVAILABLE", "OpenCode Go usage is unavailable",
 	)
 	ErrOpenCodeGoUsageAccountInvalid = infraerrors.BadRequest(
-		"OPENCODE_GO_USAGE_ACCOUNT_INVALID", "account must be an OpenAI API key account using https://opencode.ai/zen/go/v1",
+		"OPENCODE_GO_USAGE_ACCOUNT_INVALID", "account must be an OpenAI or DeepSeek API key account using https://opencode.ai/zen/go/v1",
 	)
 	ErrOpenCodeGoUsageIdentityChanged = infraerrors.Conflict(
 		"OPENCODE_GO_USAGE_IDENTITY_CHANGED", "account identity or proxy changed during refresh; retry",
@@ -869,11 +869,17 @@ func OpenCodeGoUsageStateFromAccount(account *Account) *OpenCodeGoUsageState {
 }
 
 func IsOpenCodeGoUsageAccount(account *Account) bool {
-	if account == nil || account.Type != AccountTypeAPIKey || account.Platform != PlatformOpenAI {
+	if account == nil || account.Type != AccountTypeAPIKey || !isOpenCodeGoUsagePlatform(account.Platform) {
 		return false
 	}
 	baseURL, _ := account.Credentials["base_url"].(string)
 	return isOpenCodeGoBaseURL(baseURL)
+}
+
+// isOpenCodeGoUsagePlatform 仅允许配置 OpenCode Go 兼容端点的平台。
+// 线上账号使用 deepseek 平台标识，但实际指向 https://opencode.ai/zen/go/v1。
+func isOpenCodeGoUsagePlatform(platform string) bool {
+	return platform == PlatformOpenAI || platform == PlatformDeepseek
 }
 
 func isOpenCodeGoBaseURL(raw string) bool {

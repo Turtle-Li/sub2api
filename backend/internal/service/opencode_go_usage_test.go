@@ -302,6 +302,21 @@ func TestOpenCodeGoUsageRefresh200Success(t *testing.T) {
 	require.Equal(t, "application/json", stub.lastRequest.Header.Get("Accept"))
 }
 
+func TestOpenCodeGoUsageRefreshSupportsDeepSeekPlatform(t *testing.T) {
+	account := openCodeGoUsageAccount(8)
+	account.Platform = PlatformDeepseek
+	repo := &openCodeGoUsageTestRepo{accounts: map[int64]*Account{8: account}}
+	stub := &openCodeGoUsageHTTPStub{body: []byte(openCodeGoUsageFixture)}
+	svc := newOpenCodeGoUsageTestService(t, repo, stub, &upstreamBillingProbeSettingRepo{})
+
+	state, err := svc.Refresh(context.Background(), 8)
+
+	require.NoError(t, err)
+	require.True(t, state.Eligible)
+	require.Equal(t, OpenCodeGoUsageStatusOK, state.Snapshot.Status)
+	require.Equal(t, "Bearer key-8", stub.lastRequest.Header.Get("Authorization"))
+}
+
 func TestOpenCodeGoUsageRefresh401Unauthorized(t *testing.T) {
 	account := openCodeGoUsageAccount(7)
 	account.Extra[OpenCodeGoUsageAutoRefreshExtraKey] = true
@@ -771,6 +786,11 @@ func TestIsOpenCodeGoUsageAccount(t *testing.T) {
 	account = base()
 	account.Platform = PlatformAnthropic
 	require.False(t, IsOpenCodeGoUsageAccount(account))
+
+	// DeepSeek 账号也可能通过自定义 OpenAI 兼容上游指向同一个 OpenCode Go 端点。
+	account = base()
+	account.Platform = PlatformDeepseek
+	require.True(t, IsOpenCodeGoUsageAccount(account))
 
 	// non-apikey type
 	account = base()

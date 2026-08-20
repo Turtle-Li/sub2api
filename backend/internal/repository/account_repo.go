@@ -643,8 +643,9 @@ func lockAndMergeAccountProbeExtra(
 			extra -> 'ollama_cloud_usage_auto_refresh',
 			extra -> 'ollama_cloud_usage_snapshot',
 			COALESCE(
-				platform = 'openai'
-				AND $2 = 'openai'
+				platform IN ('openai', 'deepseek')
+				AND $2 IN ('openai', 'deepseek')
+				AND platform = $2
 				AND type = 'apikey'
 				AND $3 = 'apikey'
 				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key'
@@ -854,7 +855,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				-- openai/anthropic apikey 行在 api_key/base_url 变化时都会命中，
 				-- 若排在前面会遮蔽 opencode 行的清理。opencode 与 ollama base URL
 				-- 正则互斥，旧行只会命中其中一个分支。
-				WHEN platform = 'openai'
+				WHEN platform IN ('openai', 'deepseek')
 					AND type = 'apikey'
 					AND credentials IS DISTINCT FROM $1::jsonb
 					AND `+opencodeGoBaseURLMatchSQLPrefix+`credentials ->> 'base_url'`+opencodeGoBaseURLMatchSQLSuffix+`
@@ -3024,10 +3025,10 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 		// 代理不属于 OpenCode 组身份，但 snapshot 外呼与 CAS 经代理：
 		// 组身份变化清除开关+快照，仅代理变化清除快照而保留开关。
-		// eligible 判定必须包含旧行 opencode base URL：否则 OpenAI+Ollama 行在
+		// eligible 判定必须包含旧行 opencode base URL：否则 OpenAI/DeepSeek+Ollama 行在
 		// 代理变化时会先命中 OpenCode 分支（CASE 按序求值）而遮蔽 Ollama 分支的
 		// 快照清理。opencode 与 ollama 正则互斥，带上 base URL 后两套分支互斥。
-		opencodeEligibleAccount := "platform = 'openai' AND type = 'apikey' AND " + opencodeOldBaseURL
+		opencodeEligibleAccount := "platform IN ('openai', 'deepseek') AND type = 'apikey' AND " + opencodeOldBaseURL
 		opencodeGroupIdentityChanged := ""
 		if len(opencodeGroupIdentityChanges) > 0 {
 			opencodeGroupIdentityChanged = "(" + opencodeEligibleAccount + " AND (" + joinClauses(opencodeGroupIdentityChanges, " OR ") + "))"
