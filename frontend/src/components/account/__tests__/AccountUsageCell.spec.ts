@@ -120,6 +120,53 @@ describe('AccountUsageCell', () => {
     expect(updatedAccount?.ollama_cloud_usage?.auto_refresh_enabled).toBe(false)
   })
 
+  it('DeepSeek OpenCode Go accounts render the official usage windows instead of the pay-as-you-go balance probe', () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 9010,
+          platform: 'deepseek',
+          type: 'apikey',
+          credentials: {
+            account_mode: 'payg',
+            base_url: 'https://opencode.ai/zen/go/v1'
+          },
+          opencode_go_usage: {
+            account_id: 9010,
+            eligible: true,
+            auto_refresh_enabled: false,
+            snapshot: {
+              status: 'ok',
+              last_attempt_at: '2026-08-21T00:00:00Z',
+              data: {
+                rolling: { percent: 10 },
+                weekly: { percent: 20 },
+                monthly: { percent: 30 }
+              }
+            }
+          }
+        })
+      },
+      global: {
+        stubs: {
+          OpenCodeGoUsageCell: {
+            props: ['account'],
+            template: '<div data-test="opencode-go-usage">{{ account.opencode_go_usage.snapshot.data.rolling.percent }}</div>'
+          },
+          CNProviderBalanceCell: {
+            template: '<div data-test="cn-provider-balance">balance</div>'
+          },
+          CNProviderQuotaCell: true,
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    expect(wrapper.get('[data-test="opencode-go-usage"]').text()).toBe('10')
+    expect(wrapper.find('[data-test="cn-provider-balance"]').exists()).toBe(false)
+  })
+
   it('Antigravity 图片用量会聚合新旧 image 模型', async () => {
     getUsage.mockResolvedValue({
       antigravity_quota: {

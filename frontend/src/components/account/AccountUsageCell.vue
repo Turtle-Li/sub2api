@@ -719,6 +719,10 @@ let visibilityObserver: IntersectionObserver | null = null
 
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
+  // OpenCode Go accounts may use the DeepSeek platform label for gateway
+  // compatibility, but their official usage endpoint is not a DeepSeek payg
+  // balance endpoint. Let the API-key branch render OpenCodeGoUsageCell first.
+  if (props.account.opencode_go_usage?.eligible) return false
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
   // CN providers: apikey 账号也有滚动用量窗口（coding plan）或余额（payg），
