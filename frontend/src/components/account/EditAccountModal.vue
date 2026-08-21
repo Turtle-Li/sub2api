@@ -3198,10 +3198,14 @@ watch(editAccountMode, (mode, previousMode) => {
 const cnProtocolDescKey = computed(
   () => cnProtocolOptions.value.find(o => o.value === editApiProtocol.value)?.labelKey ?? 'chatCompletions'
 )
-// 点击预设端点：回填 base url 与对应模式/协议。
-function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol; url: string }) {
+// 点击预设端点：回填 base url 与账号类型。OpenCode Go 是跨协议端点，
+// 不应把用户当前选择的 Anthropic/Responses 等协议静默改成 Chat Completions。
+function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol; preserveProtocol?: boolean; url: string }) {
   editAccountMode.value = preset.mode
-  editApiProtocol.value = preset.protocol
+  if (!preset.preserveProtocol) editApiProtocol.value = preset.protocol
+  if (preset.preserveProtocol && editApiProtocol.value === 'adaptive') {
+    editAdaptiveBaseUrls.value.chat_completions = preset.url
+  }
   editBaseUrl.value = preset.url
 }
 // Bedrock credentials

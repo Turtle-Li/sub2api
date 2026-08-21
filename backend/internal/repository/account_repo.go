@@ -649,8 +649,8 @@ func lockAndMergeAccountProbeExtra(
 				AND type = 'apikey'
 				AND $3 = 'apikey'
 				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key'
-				AND `+opencodeGoUsageNameURLMatchSQL("name", "credentials ->> 'base_url'")+`
-				AND `+opencodeGoUsageNameURLMatchSQL("name", "$4::jsonb ->> 'base_url'")+`,
+				AND `+opencodeGoUsageURLMatchSQL("credentials ->> 'base_url'")+`
+				AND `+opencodeGoUsageURLMatchSQL("$4::jsonb ->> 'base_url'")+`,
 				false
 			),
 			extra -> 'opencode_go_usage_auto_refresh',
@@ -858,10 +858,10 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				WHEN platform IN ('openai', 'deepseek')
 					AND type = 'apikey'
 					AND credentials IS DISTINCT FROM $1::jsonb
-					AND `+opencodeGoUsageNameURLMatchSQL("name", "credentials ->> 'base_url'")+`
+					AND `+opencodeGoUsageURLMatchSQL("credentials ->> 'base_url'")+`
 					AND (
 						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
-						OR (`+opencodeGoUsageNameURLMatchSQL("name", "$1::jsonb ->> 'base_url'")+`) IS NOT TRUE
+						OR (`+opencodeGoUsageURLMatchSQL("$1::jsonb ->> 'base_url'")+`) IS NOT TRUE
 					)
 				THEN COALESCE(extra, '{}'::jsonb)
 					- 'upstream_billing_probe'
@@ -2982,32 +2982,22 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	}
 
 	// OpenCode Go 身份清理与 Ollama 同范式但更精确：仅当旧行满足统一的
-	// name-keyword/URL eligibility 规则时才可能持有受管键，且只在该组身份
+	// URL eligibility 规则时才可能持有受管键，且只在该组身份
 	//（api_key / normalized base URL）真正变化或不再 eligible 时清除，避免与
 	// Ollama 分支交叉误清。
 	opencodeGroupIdentityChanges := make([]string, 0, 2)
 	// Keep the SQL-side old-row eligibility identical to the service rule:
-	// OpenCode/DeepSeek name keywords take precedence over the URL fallback.
-	opencodeOldEligibility := opencodeGoUsageNameURLMatchSQL("name", "credentials ->> 'base_url'")
+	// the saved URL keywords take precedence over the exact URL fallback.
+	opencodeOldEligibility := opencodeGoUsageURLMatchSQL("credentials ->> 'base_url'")
 	if _, ok := updates.Credentials["api_key"]; ok {
 		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
 			opencodeOldEligibility+" AND credentials -> 'api_key' IS DISTINCT FROM "+credentialPlaceholder+"::jsonb -> 'api_key'")
 	}
 	if _, ok := updates.Credentials["base_url"]; ok {
 		// NULL-safe：新 base_url 缺失/为 null 时 URL fallback 为 NULL；IS NOT
-		// TRUE 把 NULL 视为不匹配。OpenCode name keyword 仍可使新表达式成立。
+		// TRUE 把 NULL 视为不匹配。OpenCode URL keyword 仍可使新表达式成立。
 		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
-			opencodeOldEligibility+" AND ("+opencodeGoUsageNameURLMatchSQL("name", credentialPlaceholder+"::jsonb ->> 'base_url'")+") IS NOT TRUE")
-	}
-	if namePlaceholder != "" {
-		// A name-only edit can switch an account from explicit OpenCode mode to
-		// explicit DeepSeek balance mode.  Treat loss of eligibility as a group
-		// identity transition so stale managed OpenCode state cannot survive and
-		// reappear if the name is later changed back.
-		newName := namePlaceholder + "::text"
-		opencodeNewNameEligibility := opencodeGoUsageNameURLMatchSQL(newName, "credentials ->> 'base_url'")
-		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
-			opencodeOldEligibility+" AND ("+opencodeNewNameEligibility+") IS NOT TRUE")
+			opencodeOldEligibility+" AND ("+opencodeGoUsageURLMatchSQL(credentialPlaceholder+"::jsonb ->> 'base_url'")+") IS NOT TRUE")
 	}
 
 	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || len(opencodeGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed {
@@ -3043,7 +3033,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 		// 代理不属于 OpenCode 组身份，但 snapshot 外呼与 CAS 经代理：
 		// 组身份变化清除开关+快照，仅代理变化清除快照而保留开关。
-		// eligible 判定必须复用统一的 name-keyword/URL 规则：否则
+		// eligible 判定必须复用统一的 URL-keyword/URL 规则：否则
 		// OpenAI/DeepSeek+Ollama 行在代理变化时会先命中 OpenCode 分支（CASE 按序
 		// 求值）而遮蔽 Ollama 分支的快照清理。
 		opencodeEligibleAccount := "platform IN ('openai', 'deepseek') AND type = 'apikey' AND " + opencodeOldEligibility

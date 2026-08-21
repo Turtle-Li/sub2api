@@ -43,8 +43,8 @@ const presets = computed(() => {
   const all = CN_BASE_URL_PRESETS[props.platform] ?? []
   // 只按协议过滤：同协议下 payg/coding 两档都展示，点击即同时切换账号类型。
   if (props.protocol == null) return all
-  // OpenCode Go 是 DeepSeek 的恢复入口，即使当前协议不是 chat_completions
-  // 也要保留显示；点击后由调用方切回兼容协议并恢复官方 URL。
+  // OpenCode Go 是 DeepSeek 的跨协议恢复入口，即使当前协议不是
+  // chat_completions 也要保留显示；选择它只填充 URL，不改用户当前协议。
   return all.filter(p => p.protocol === props.protocol || isOpenCodeGoBaseUrl(p.url))
 })
 

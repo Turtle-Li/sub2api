@@ -848,7 +848,7 @@ func TestIsOpenCodeGoUsageAccount(t *testing.T) {
 	require.False(t, IsOpenCodeGoUsageAccount(account))
 }
 
-func TestIsOpenCodeGoUsageAccountNameKeywordsOverrideURLFallback(t *testing.T) {
+func TestIsOpenCodeGoUsageAccountURLKeywordsOverrideURLFallback(t *testing.T) {
 	base := func(name, baseURL string) *Account {
 		return &Account{
 			Name: name, Platform: PlatformDeepseek, Type: AccountTypeAPIKey,
@@ -856,17 +856,17 @@ func TestIsOpenCodeGoUsageAccountNameKeywordsOverrideURLFallback(t *testing.T) {
 		}
 	}
 
-	// OpenCode is an explicit mode selector, even when the saved endpoint is
-	// the official DeepSeek URL (or is absent from the credentials).
-	require.True(t, IsOpenCodeGoUsageAccount(base("opencode-go", "https://api.deepseek.com")))
-	require.True(t, IsOpenCodeGoUsageAccount(base("OpenCode Go", "")))
+	// The saved URL controls the usage surface, regardless of the display name.
+	require.True(t, IsOpenCodeGoUsageAccount(base("DeepSeek official", "https://relay.example.com/opencode/go/v1")))
+	require.False(t, IsOpenCodeGoUsageAccount(base("OpenCode Go", "https://api.deepseek.com")))
+	require.False(t, IsOpenCodeGoUsageAccount(base("OpenCode Go", "")))
 
-	// DeepSeek is the explicit balance selector and wins over the legacy URL
-	// fallback, but OpenCode has priority when both keywords are present.
-	require.False(t, IsOpenCodeGoUsageAccount(base("deepseek-official", "https://opencode.ai/zen/go/v1")))
-	require.True(t, IsOpenCodeGoUsageAccount(base("deepseek-opencode", "https://api.deepseek.com")))
+	// DeepSeek wins when both URL keywords are present only if OpenCode is not
+	// present; OpenCode has the higher priority when both are present.
+	require.False(t, IsOpenCodeGoUsageAccount(base("arbitrary label", "https://relay.example.com/deepseek/v1")))
+	require.True(t, IsOpenCodeGoUsageAccount(base("arbitrary label", "https://relay.example.com/deepseek-opencode/v1")))
 
-	// Names without either keyword retain the URL-based compatibility behavior.
+	// The exact official OpenCode Go URL remains supported for legacy accounts.
 	require.True(t, IsOpenCodeGoUsageAccount(base("custom-provider", "https://opencode.ai/zen/go/v1")))
 	require.False(t, IsOpenCodeGoUsageAccount(base("custom-provider", "https://api.deepseek.com")))
 }

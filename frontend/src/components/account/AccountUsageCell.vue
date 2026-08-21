@@ -659,7 +659,7 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
-import { accountUsageKeyword, cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
+import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
 import OpenCodeGoUsageCell from './OpenCodeGoUsageCell.vue'
 
 // Module-level cache shared across all AccountUsageCell instances
@@ -722,17 +722,13 @@ let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = nul
 let visibilityObserver: IntersectionObserver | null = null
 
 const shouldRenderOpenCodeGoUsage = (account: Account): boolean => {
-  const keyword = accountUsageKeyword(account.name)
-  if (keyword === 'deepseek') return false
-  if (keyword === 'opencode') return account.opencode_go_usage?.eligible === true
   return account.opencode_go_usage?.eligible === true
 }
 
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
-  // Explicit account-name keywords decide the display mode first: DeepSeek
-  // names keep the balance branch, while OpenCode names use the Go branch.
-  // Keyword-free legacy accounts retain the backend URL eligibility fallback.
+  // The backend determines eligibility from the saved upstream URL. Account
+  // names are labels only and must not override that state.
   if (shouldRenderOpenCodeGoUsage(props.account)) return false
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
@@ -776,9 +772,8 @@ const cnAccountMode = computed(() => {
 const cnQuotaCellVisible = computed(() => cnQuotaCellVisibleFn(props.account.platform, cnAccountMode.value))
 const cnBalanceCellVisible = computed(() => cnBalanceCellVisibleFn(props.account.platform, cnAccountMode.value))
 
-// Account names may carry an explicit routing keyword. `deepseek` forces the
-// ordinary balance view, while `opencode` selects Go usage; accounts without
-// either keyword retain the backend's URL-based eligibility fallback.
+// The backend URL eligibility is the single routing decision for OpenCode Go;
+// account names remain display-only labels.
 const useOpenCodeGoUsage = computed(() => {
   return shouldRenderOpenCodeGoUsage(props.account)
 })

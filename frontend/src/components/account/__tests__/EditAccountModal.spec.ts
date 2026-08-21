@@ -496,7 +496,7 @@ describe('EditAccountModal', () => {
     account.credentials = {
       api_key: 'sk-opencode',
       account_mode: 'payg',
-      api_protocol: 'responses',
+      api_protocol: 'anthropic',
       base_url: 'https://api.deepseek.com'
     }
     updateAccountMock.mockReset().mockResolvedValue(account)
@@ -511,7 +511,7 @@ describe('EditAccountModal', () => {
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
-      api_protocol: 'chat_completions',
+      api_protocol: 'anthropic',
       base_url: OPENCODE_GO_BASE_URL
     })
   })

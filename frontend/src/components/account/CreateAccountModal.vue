@@ -4060,10 +4060,14 @@ watch(apiProtocol, (protocol) => {
   }
   apiKeyBaseUrl.value = defaultCNBaseUrl(form.platform, accountMode.value, protocol)
 })
-// 点击预设端点：同时回填 base url、账号类型与协议。
-function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol; url: string }) {
+// 点击预设端点：回填 base url 与账号类型。OpenCode Go 是跨协议端点，
+// 不应把用户当前选择的 Anthropic/Responses 等协议静默改成 Chat Completions。
+function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol; preserveProtocol?: boolean; url: string }) {
   accountMode.value = preset.mode
-  apiProtocol.value = preset.protocol
+  if (!preset.preserveProtocol) apiProtocol.value = preset.protocol
+  if (preset.preserveProtocol && apiProtocol.value === 'adaptive') {
+    adaptiveBaseUrls.value.chat_completions = preset.url
+  }
   apiKeyBaseUrl.value = preset.url
 }
 

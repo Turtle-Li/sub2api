@@ -178,7 +178,7 @@ describe('AccountUsageCell', () => {
     expect(accountBilled.element.compareDocumentPosition(usage.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('uses the DeepSeek balance view when the account name carries the deepseek keyword', () => {
+  it('uses the OpenCode Go view when the saved URL is OpenCode, regardless of account name', () => {
     const wrapper = mount(AccountUsageCell, {
       props: {
         account: makeAccount({
@@ -210,8 +210,8 @@ describe('AccountUsageCell', () => {
       }
     })
 
-    expect(wrapper.find('[data-test="cn-provider-balance"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="opencode-go-usage"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="cn-provider-balance"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="opencode-go-usage"]').exists()).toBe(true)
   })
 
   it('Antigravity 图片用量会聚合新旧 image 模型', async () => {

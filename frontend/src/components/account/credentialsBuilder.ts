@@ -263,23 +263,14 @@ export type CnNativeApiProtocol = Exclude<CnApiProtocol, 'adaptive'>
 export interface CnBaseUrlPreset {
   mode: CnAccountMode
   protocol: CnApiProtocol
+  /** Keep the user's selected protocol when this endpoint is chosen. */
+  preserveProtocol?: boolean
   /** 专有名词，不参与 i18n */
   label: string
   url: string
 }
 
 export const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
-
-export type AccountUsageKeyword = 'opencode' | 'deepseek'
-
-/** Explicit account-name routing keywords override URL-based compatibility fallback. */
-export function accountUsageKeyword(value: unknown): AccountUsageKeyword | null {
-  if (typeof value !== 'string') return null
-  const normalized = value.trim().toLowerCase()
-  if (normalized.includes('opencode')) return 'opencode'
-  if (normalized.includes('deepseek')) return 'deepseek'
-  return null
-}
 
 /** Keep the frontend recovery affordance aligned with the backend eligibility rule. */
 export function isOpenCodeGoBaseUrl(value: unknown): value is string {
@@ -324,7 +315,13 @@ export const CN_BASE_URL_PRESETS: Record<'kimi' | 'zhipu' | 'deepseek', CnBaseUr
     { mode: 'payg', protocol: 'chat_completions', label: 'DeepSeek', url: 'https://api.deepseek.com' },
     { mode: 'payg', protocol: 'anthropic', label: 'DeepSeek Anthropic', url: 'https://api.deepseek.com/anthropic' },
     { mode: 'payg', protocol: 'responses', label: 'DeepSeek Responses', url: 'https://api.deepseek.com' },
-    { mode: 'payg', protocol: 'chat_completions', label: 'OpenCode Go', url: OPENCODE_GO_BASE_URL }
+    {
+      mode: 'payg',
+      protocol: 'chat_completions',
+      preserveProtocol: true,
+      label: 'OpenCode Go',
+      url: OPENCODE_GO_BASE_URL
+    }
   ]
 }
 

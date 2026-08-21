@@ -296,10 +296,10 @@ func TestBulkUpdateOpenCodeGoIdentityCleanupIsValueConditional(t *testing.T) {
 	require.Less(t, opencodeBranch, ollamaBranch)
 }
 
-func TestOpenCodeGoUsageEligibleSQLUsesNameKeywordPrecedence(t *testing.T) {
+func TestOpenCodeGoUsageEligibleSQLUsesURLKeywordPrecedence(t *testing.T) {
 	query := normalizeSQLWhitespace(opencodeGoUsageEligibleSQL)
-	opencode := strings.Index(query, "POSITION('opencode' IN LOWER(COALESCE(name")
-	deepseek := strings.Index(query, "POSITION('deepseek' IN LOWER(COALESCE(name")
+	opencode := strings.Index(query, "POSITION('opencode' IN LOWER(COALESCE(credentials ->> 'base_url'")
+	deepseek := strings.Index(query, "POSITION('deepseek' IN LOWER(COALESCE(credentials ->> 'base_url'")
 	require.NotEqual(t, -1, opencode)
 	require.NotEqual(t, -1, deepseek)
 	require.Less(t, opencode, deepseek, "OpenCode must be checked before DeepSeek")
@@ -307,7 +307,7 @@ func TestOpenCodeGoUsageEligibleSQLUsesNameKeywordPrecedence(t *testing.T) {
 	require.Contains(t, query, "jsonb_typeof(credentials -> 'api_key') = 'string'")
 }
 
-func TestBulkUpdateOpenCodeGoNameChangeClearsWhenDeepSeekModeWins(t *testing.T) {
+func TestBulkUpdateOpenCodeGoNameChangeDoesNotAffectURLEligibility(t *testing.T) {
 	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
 	repo := newAccountRepositoryWithSQL(nil, exec, nil)
 	name := "deepseek-official"
@@ -318,10 +318,9 @@ func TestBulkUpdateOpenCodeGoNameChangeClearsWhenDeepSeekModeWins(t *testing.T) 
 	require.NotEmpty(t, exec.execQueries)
 	query := normalizeSQLWhitespace(exec.execQueries[0])
 	require.Contains(t, query, "name = $1")
-	require.Contains(t, query, "POSITION('opencode' IN LOWER(COALESCE($1::text")
-	require.Contains(t, query, "POSITION('deepseek' IN LOWER(COALESCE($1::text")
-	require.Contains(t, query, "IS NOT TRUE")
-	require.Contains(t, query, "- 'opencode_go_usage_auto_refresh' - 'opencode_go_usage_snapshot'")
+	require.NotContains(t, query, "COALESCE($1::text")
+	require.NotContains(t, query, "opencode_go_usage_auto_refresh")
+	require.NotContains(t, query, "opencode_go_usage_snapshot")
 }
 
 // F1 回归：OpenCode eligible 判定必须包含旧行 opencode base URL，否则 OpenAI/DeepSeek+Ollama

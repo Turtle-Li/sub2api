@@ -20,29 +20,29 @@ const (
 	opencodeGoBaseURLMatchSQLSuffix = ") ~ '" + opencodeGoBaseURLRegexSQL + "'"
 )
 
-// opencodeGoUsageNameURLMatchSQL mirrors service.IsOpenCodeGoUsageAccount:
-// account names are an explicit mode selector, while accounts without either
-// keyword retain the exact OpenCode Go base URL compatibility fallback.  The
-// opencode branch is intentionally first so a name containing both keywords
-// remains an OpenCode account.
-func opencodeGoUsageNameURLMatchSQL(nameExpr, baseURLExpr string) string {
-	lowerName := "LOWER(COALESCE(" + nameExpr + ", ''))"
-	return "(POSITION('opencode' IN " + lowerName + ") > 0 OR (POSITION('deepseek' IN " + lowerName + ") = 0 AND " +
-		opencodeGoBaseURLMatchSQLPrefix + baseURLExpr + opencodeGoBaseURLMatchSQLSuffix + "))"
+// opencodeGoUsageURLMatchSQL mirrors service.IsOpenCodeGoUsageAccount. The
+// saved upstream URL is the only usage-mode selector: an opencode keyword
+// selects OpenCode Go, a deepseek keyword selects the official balance path,
+// and the exact OpenCode Go URL remains a compatibility fallback.
+func opencodeGoUsageURLMatchSQL(baseURLExpr string) string {
+	lowerURL := "LOWER(COALESCE(" + baseURLExpr + ", ''))"
+	urlWithoutQuery := "POSITION('?' IN COALESCE(" + baseURLExpr + ", '')) = 0 AND POSITION('#' IN COALESCE(" + baseURLExpr + ", '')) = 0"
+	return "(" + urlWithoutQuery + " AND (POSITION('opencode' IN " + lowerURL + ") > 0 OR (POSITION('deepseek' IN " + lowerURL + ") = 0 AND " +
+		opencodeGoBaseURLMatchSQLPrefix + baseURLExpr + opencodeGoBaseURLMatchSQLSuffix + ")))"
 }
 
-func opencodeGoUsageEligibleSQLFor(nameExpr, credentialsExpr string) string {
+func opencodeGoUsageEligibleSQLFor(credentialsExpr string) string {
 	return `
 		platform IN ('openai', 'deepseek')
 		AND type = 'apikey'
-		AND ` + opencodeGoUsageNameURLMatchSQL(nameExpr, credentialsExpr+` ->> 'base_url'`) + `
+		AND ` + opencodeGoUsageURLMatchSQL(credentialsExpr+` ->> 'base_url'`) + `
 		AND jsonb_typeof(` + credentialsExpr + ` -> 'api_key') = 'string'
 `
 }
 
 // opencodeGoUsageEligibleSQL is reused by every group/auto-refresh query and
 // managed-state UPDATE so the keyword precedence cannot drift between paths.
-var opencodeGoUsageEligibleSQL = opencodeGoUsageEligibleSQLFor("name", "credentials")
+var opencodeGoUsageEligibleSQL = opencodeGoUsageEligibleSQLFor("credentials")
 
 // ListOpenCodeGoUsageGroupAccounts resolves every sibling for all supplied
 // identities with one ID query and one batch hydration. API keys are query
