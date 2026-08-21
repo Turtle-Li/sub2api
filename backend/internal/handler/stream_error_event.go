@@ -120,6 +120,15 @@ func inboundIsResponses(c *gin.Context) bool {
 	return strings.HasSuffix(p, "/responses") || strings.Contains(p, "/responses/")
 }
 
+func isClientBillingErrorCode(code string) bool {
+	switch strings.TrimSpace(code) {
+	case "USAGE_LIMIT_EXCEEDED", "INSUFFICIENT_BALANCE":
+		return true
+	default:
+		return false
+	}
+}
+
 // synthesizeResponseID 为合成的 response.failed 事件生成一个稳定的 id。
 // 优先复用 server 端生成的 request_id（存在 request.Context 里，由 request_logger 写入），
 // 以便客户端报错能与 server 日志关联；缺失时回退 uuid。

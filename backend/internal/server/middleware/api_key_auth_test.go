@@ -1434,6 +1434,16 @@ func TestAPIKeyAuthRejectsExhaustedBalance(t *testing.T) {
 
 	require.Equal(t, http.StatusForbidden, w.Code)
 	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+
+	// Codex Responses receives the same top-level business code with a user-facing
+	// recharge hint instead of the generic English compatibility message.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.Header.Set("x-api-key", apiKey.Key)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "账户余额不足，请充值后再试。")
 }
 
 func TestAPIKeyAuthOpenAIQuotaErrorFormat(t *testing.T) {

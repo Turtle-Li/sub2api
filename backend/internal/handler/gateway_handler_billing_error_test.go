@@ -3,10 +3,12 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,11 +50,47 @@ func TestBillingErrorDetails_BillingServiceUnavailableMapsTo503(t *testing.T) {
 	require.Equal(t, 0, retryAfter, "non-RPM errors should not set Retry-After")
 }
 
-func TestBillingErrorDetails_UnknownErrorFallsBackTo403(t *testing.T) {
+func TestBillingErrorDetails_MapsInsufficientBalanceToBusinessError(t *testing.T) {
 	status, code, msg, _ := billingErrorDetails(service.ErrInsufficientBalance)
 	require.Equal(t, http.StatusForbidden, status)
-	require.Equal(t, "billing_error", code)
-	require.NotEmpty(t, msg)
+	require.Equal(t, "INSUFFICIENT_BALANCE", code)
+	require.Equal(t, "账户余额不足，请充值后再试。", msg)
+}
+
+func TestBillingErrorDetails_MapsSubscriptionLimitToBusinessError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		msg  string
+	}{
+		{"daily", service.ErrDailyLimitExceeded, "订阅每日额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。"},
+		{"weekly", service.ErrWeeklyLimitExceeded, "订阅每周额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。"},
+		{"monthly", service.ErrMonthlyLimitExceeded, "订阅每月额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, code, msg, retryAfter := billingErrorDetails(tc.err)
+			require.Equal(t, http.StatusTooManyRequests, status)
+			require.Equal(t, "USAGE_LIMIT_EXCEEDED", code)
+			require.Equal(t, tc.msg, msg)
+			require.Zero(t, retryAfter)
+		})
+	}
+}
+
+func TestResponsesErrorResponseUsesTopLevelBusinessBillingShape(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	(&GatewayHandler{}).responsesErrorResponse(
+		c,
+		http.StatusTooManyRequests,
+		"USAGE_LIMIT_EXCEEDED",
+		"订阅每周额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。",
+	)
+
+	require.JSONEq(t, `{"code":"USAGE_LIMIT_EXCEEDED","message":"订阅每周额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。"}`, w.Body.String())
 }
 
 func TestExtractQuotaResetSeconds_T19_HappyPath(t *testing.T) {

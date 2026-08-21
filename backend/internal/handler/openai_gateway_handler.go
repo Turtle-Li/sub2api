@@ -2973,6 +2973,16 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 		}
 		return
 	}
+	// Codex 的 Responses 客户端需要直接读取业务拒绝的顶层 code/message。
+	// 其他错误继续使用 OpenAI Responses 的 error 子对象，避免改变协议兼容性。
+	clientBillingCode := strings.TrimSpace(code)
+	if clientBillingCode == "" {
+		clientBillingCode = strings.TrimSpace(errType)
+	}
+	if inboundIsResponses(c) && isClientBillingErrorCode(clientBillingCode) {
+		c.JSON(status, gin.H{"code": clientBillingCode, "message": message})
+		return
+	}
 
 	// Normal case: return JSON response with proper status code
 	if code == "" {

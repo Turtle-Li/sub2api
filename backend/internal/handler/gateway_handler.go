@@ -2346,6 +2346,13 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 		retrySeconds := 60 - int(time.Now().Unix()%60)
 		return http.StatusTooManyRequests, "rate_limit_exceeded", msg, retrySeconds
 	}
+	if errors.Is(err, service.ErrDailyLimitExceeded) ||
+		errors.Is(err, service.ErrWeeklyLimitExceeded) ||
+		errors.Is(err, service.ErrMonthlyLimitExceeded) {
+		// 订阅耗尽是用户可理解的业务拒绝，不应在二次计费检查中退化成
+		// rate_limit_exceeded；Codex 需要稳定的业务码和可直接展示的引导。
+		return http.StatusTooManyRequests, "USAGE_LIMIT_EXCEEDED", subscriptionLimitExceededMessage(err), 0
+	}
 	if errors.Is(err, service.ErrUserPlatformDailyQuotaExhausted) ||
 		errors.Is(err, service.ErrUserPlatformWeeklyQuotaExhausted) ||
 		errors.Is(err, service.ErrUserPlatformMonthlyQuotaExhausted) {
@@ -2353,6 +2360,9 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 		// 错误码用 rate_limit_exceeded 与 OpenAI 兼容客户端一致；细分类型由 ErrCode + window_resets_at metadata 区分。
 		msg := pkgerrors.Message(err)
 		return http.StatusTooManyRequests, "rate_limit_exceeded", msg, extractQuotaResetSeconds(err)
+	}
+	if errors.Is(err, service.ErrInsufficientBalance) {
+		return http.StatusForbidden, "INSUFFICIENT_BALANCE", "账户余额不足，请充值后再试。", 0
 	}
 	msg := pkgerrors.Message(err)
 	if msg == "" {
@@ -2363,6 +2373,19 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 		msg = "Billing error"
 	}
 	return http.StatusForbidden, "billing_error", msg, 0
+}
+
+func subscriptionLimitExceededMessage(err error) string {
+	window := "订阅"
+	switch {
+	case errors.Is(err, service.ErrDailyLimitExceeded):
+		window = "订阅每日"
+	case errors.Is(err, service.ErrWeeklyLimitExceeded):
+		window = "订阅每周"
+	case errors.Is(err, service.ErrMonthlyLimitExceeded):
+		window = "订阅每月"
+	}
+	return window + "额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。"
 }
 
 func (h *GatewayHandler) metadataBridgeEnabled() bool {

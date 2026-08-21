@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -224,6 +225,38 @@ func TestOpenAIHandleStreamingAwareError_BareResponsesRouteEmitsResponseFailed(t
 	id, _ := resp["id"].(string)
 	assert.True(t, strings.HasPrefix(id, "resp_"))
 	assert.Equal(t, "rate_limit_exceeded", errObj["code"])
+}
+
+func TestOpenAIHandleStreamingAwareError_ResponsesBillingUsesTopLevelBusinessShape(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		code    string
+		message string
+	}{
+		{
+			name:    "subscription",
+			status:  http.StatusTooManyRequests,
+			code:    "USAGE_LIMIT_EXCEEDED",
+			message: "订阅每周额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。",
+		},
+		{
+			name:    "payg balance",
+			status:  http.StatusForbidden,
+			code:    "INSUFFICIENT_BALANCE",
+			message: "账户余额不足，请充值后再试。",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, w := newGinContextForEndpoint(t, EndpointResponses)
+			h := &OpenAIGatewayHandler{}
+			h.handleStreamingAwareError(c, tc.status, tc.code, tc.message, false)
+
+			assert.Equal(t, tc.status, w.Code)
+			assert.JSONEq(t, fmt.Sprintf(`{"code":%q,"message":%q}`, tc.code, tc.message), w.Body.String())
+		})
+	}
 }
 
 // Synthesized response.failed id falls back to uuid when no request_id is present.
