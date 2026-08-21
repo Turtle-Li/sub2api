@@ -43,7 +43,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { CNProviderBalanceEntry, CNProviderBalanceResult } from '@/api/admin/cnProviders'
@@ -69,6 +69,14 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const data = ref<CNProviderBalanceResult | null>(null)
 
+// Keep balance cells consistent with coding-plan and OpenCode Go cells: use
+// the persisted snapshot immediately, then refresh stale balances once when
+// the account enters the page. The module-level debounce prevents a table
+// remount or pagination cycle from probing the same account repeatedly.
+const BALANCE_SNAPSHOT_STALE_MS = 15 * 60 * 1000
+const AUTO_PROBE_DEBOUNCE_MS = 5 * 60 * 1000
+const lastAutoProbeAt = new Map<number, number>()
+
 const extraKey = (suffix: string) => `${props.account.platform}_${suffix}`
 
 // 落库快照（后端周期探测/响应式写入 account.Extra）。
@@ -92,6 +100,13 @@ const snapshotBalances = computed<CNProviderBalanceEntry[]>(() => {
   })
 })
 const balanceLow = computed(() => props.account.extra?.[extraKey('balance_low')] === true)
+
+const snapshotIsStale = computed(() => {
+  const updatedAt = props.account.extra?.[extraKey('balance_updated_at')]
+  if (typeof updatedAt !== 'string' || !updatedAt) return true
+  const timestamp = new Date(updatedAt).getTime()
+  return Number.isNaN(timestamp) || Date.now() - timestamp > BALANCE_SNAPSHOT_STALE_MS
+})
 
 // 优先用探测结果，其次落库快照。多币种返回全部明细，否则主币种单条。
 const currentEntries = computed<CNProviderBalanceEntry[]>(() => {
@@ -158,6 +173,14 @@ const handleProbe = async () => {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  if (!visible.value || !snapshotIsStale.value) return
+  const last = lastAutoProbeAt.get(props.account.id) ?? 0
+  if (Date.now() - last < AUTO_PROBE_DEBOUNCE_MS) return
+  lastAutoProbeAt.set(props.account.id, Date.now())
+  void handleProbe()
+})
 
 watch(
   () => props.account.id,
