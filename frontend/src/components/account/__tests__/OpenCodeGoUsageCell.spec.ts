@@ -4,10 +4,8 @@ import OpenCodeGoUsageCell from '../OpenCodeGoUsageCell.vue'
 import UsageProgressBar from '../UsageProgressBar.vue'
 import type { Account, OpenCodeGoUsageState } from '@/types'
 
-const { refreshOpenCodeGoUsage, showSuccess, showError } = vi.hoisted(() => ({
-  refreshOpenCodeGoUsage: vi.fn(),
-  showSuccess: vi.fn(),
-  showError: vi.fn()
+const { refreshOpenCodeGoUsage } = vi.hoisted(() => ({
+  refreshOpenCodeGoUsage: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -16,10 +14,6 @@ vi.mock('@/api/admin', () => ({
       refreshOpenCodeGoUsage
     }
   }
-}))
-
-vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({ showSuccess, showError })
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -33,7 +27,6 @@ vi.mock('vue-i18n', async () => {
           'admin.accounts.opencodeGo.weeklyShort': 'W',
           'admin.accounts.opencodeGo.monthlyShort': 'M',
           'admin.accounts.usageWindow.activeQuery': 'Query',
-          'admin.accounts.opencodeGo.refreshSuccess': 'OpenCode Go usage refreshed',
           'admin.accounts.opencodeGo.refreshFailed': 'Failed to refresh OpenCode Go usage',
           'admin.accounts.opencodeGo.unauthorized': 'unauthorized',
           'admin.accounts.opencodeGo.failed': 'failed',
@@ -93,8 +86,6 @@ const account = (state = usageState()): Account => ({
 describe('OpenCodeGoUsageCell', () => {
   beforeEach(() => {
     refreshOpenCodeGoUsage.mockReset()
-    showSuccess.mockReset()
-    showError.mockReset()
   })
 
   it('renders rolling, weekly and monthly windows in a shrinkable mobile-safe cell', () => {
@@ -128,8 +119,7 @@ describe('OpenCodeGoUsageCell', () => {
     const query = wrapper.get('[data-testid="opencode-go-usage-query"]')
     expect(query.classes()).toEqual(expect.arrayContaining(['text-blue-600', 'hover:bg-blue-50']))
     expect(query.text()).toBe('Query')
-    expect(cell.element.compareDocumentPosition(query.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(query.element.compareDocumentPosition(bars[0].element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(bars[0].element.compareDocumentPosition(query.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('refreshes through the OpenCode Go endpoint and emits the updated state', async () => {
@@ -144,7 +134,17 @@ describe('OpenCodeGoUsageCell', () => {
     expect(refreshOpenCodeGoUsage).toHaveBeenCalledWith(7)
     expect(wrapper.findAllComponents(UsageProgressBar)[0].props('utilization')).toBe(43)
     expect(wrapper.emitted<OpenCodeGoUsageState[]>('updated')?.[0]?.[0]).toEqual(next)
-    expect(showSuccess).toHaveBeenCalledWith('OpenCode Go usage refreshed')
+    expect(wrapper.find('[data-testid="opencode-go-refresh-error"]').exists()).toBe(false)
+  })
+
+  it('keeps refresh failures inline instead of showing a toast', async () => {
+    refreshOpenCodeGoUsage.mockRejectedValueOnce(new Error('upstream unavailable'))
+    const wrapper = mount(OpenCodeGoUsageCell, { props: { account: account() } })
+
+    await wrapper.get('[data-testid="opencode-go-usage-query"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="opencode-go-refresh-error"]').text()).toContain('upstream unavailable')
   })
 
   it('shows a status badge when the snapshot status is not ok', () => {

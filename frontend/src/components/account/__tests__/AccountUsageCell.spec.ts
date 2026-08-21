@@ -145,7 +145,14 @@ describe('AccountUsageCell', () => {
               }
             }
           }
-        })
+        }),
+        todayStats: {
+          requests: 12,
+          tokens: 1_200,
+          cost: 0.12,
+          standard_cost: 0.12,
+          user_cost: 0.2
+        }
       },
       global: {
         stubs: {
@@ -163,8 +170,11 @@ describe('AccountUsageCell', () => {
       }
     })
 
-    expect(wrapper.get('[data-test="opencode-go-usage"]').text()).toBe('10')
+    const usage = wrapper.get('[data-test="opencode-go-usage"]')
+    expect(usage.text()).toBe('10')
     expect(wrapper.find('[data-test="cn-provider-balance"]').exists()).toBe(false)
+    const accountBilled = wrapper.get('[title="usage.accountBilled"]')
+    expect(accountBilled.element.compareDocumentPosition(usage.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('Antigravity 图片用量会聚合新旧 image 模型', async () => {

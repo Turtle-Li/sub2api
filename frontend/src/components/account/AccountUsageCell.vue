@@ -571,11 +571,6 @@
         :account="account"
         @updated="handleOllamaCloudUsageUpdated"
       />
-      <OpenCodeGoUsageCell
-        v-if="account.opencode_go_usage?.eligible"
-        :account="account"
-        @updated="handleOpenCodeGoUsageUpdated"
-      />
       <!-- Today stats row (requests, tokens, cost, user_cost) -->
       <div
         v-if="todayStats"
@@ -600,6 +595,7 @@
           </span>
         </div>
       </div>
+
       <!-- Loading skeleton for today stats -->
       <div
         v-else-if="todayStatsLoading"
@@ -609,6 +605,13 @@
         <div class="h-3 w-8 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
         <div class="h-3 w-12 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
       </div>
+
+      <!-- OpenCode Go usage follows the shared today-stats-first account layout. -->
+      <OpenCodeGoUsageCell
+        v-if="account.opencode_go_usage?.eligible"
+        :account="account"
+        @updated="handleOpenCodeGoUsageUpdated"
+      />
 
       <!-- API Key accounts with quota limits: show progress bars -->
       <UsageProgressBar
@@ -634,7 +637,7 @@
 
       <!-- No data at all -->
       <div
-        v-if="!todayStats && !todayStatsLoading && !hasApiKeyQuota && !account.ollama_cloud_usage?.eligible"
+        v-if="!todayStats && !todayStatsLoading && !hasApiKeyQuota && !account.ollama_cloud_usage?.eligible && !account.opencode_go_usage?.eligible"
         class="text-xs text-gray-400"
       >-</div>
     </div>

@@ -4,33 +4,6 @@
     class="min-w-0 max-w-full space-y-1"
     data-testid="opencode-go-usage-cell"
   >
-    <div class="flex flex-wrap items-center gap-1.5">
-      <button
-        type="button"
-        class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
-        :disabled="refreshing"
-        :title="t('admin.accounts.usageWindow.activeQuery')"
-        data-testid="opencode-go-usage-query"
-        @click="refreshUsage"
-      >
-        <svg
-          class="h-2.5 w-2.5"
-          :class="{ 'animate-spin': refreshing }"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-          />
-        </svg>
-        {{ t('admin.accounts.usageWindow.activeQuery') }}
-      </button>
-    </div>
     <UsageProgressBar
       v-if="snapshot?.data?.rolling"
       :label="t('admin.accounts.opencodeGo.rollingShort')"
@@ -65,6 +38,40 @@
     >
       {{ statusLabel }}
     </span>
+    <div class="flex items-center pt-0.5">
+      <button
+        type="button"
+        class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
+        :disabled="refreshing"
+        :title="t('admin.accounts.usageWindow.activeQuery')"
+        data-testid="opencode-go-usage-query"
+        @click="refreshUsage"
+      >
+        <svg
+          class="h-2.5 w-2.5"
+          :class="{ 'animate-spin': refreshing }"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
+        </svg>
+        {{ t('admin.accounts.usageWindow.activeQuery') }}
+      </button>
+    </div>
+    <div
+      v-if="refreshError"
+      class="text-[10px] text-red-600 dark:text-red-400"
+      data-testid="opencode-go-refresh-error"
+    >
+      {{ refreshError }}
+    </div>
   </div>
   <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
 </template>
@@ -73,7 +80,6 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import { useAppStore } from '@/stores/app'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { Account } from '@/types'
 import UsageProgressBar from './UsageProgressBar.vue'
@@ -81,9 +87,9 @@ import UsageProgressBar from './UsageProgressBar.vue'
 const props = defineProps<{ account: Account }>()
 const emit = defineEmits<{ updated: [state: NonNullable<Account['opencode_go_usage']>] }>()
 const { t } = useI18n()
-const appStore = useAppStore()
 const state = ref(props.account.opencode_go_usage)
 const refreshing = ref(false)
+const refreshError = ref<string | null>(null)
 const snapshot = computed(() => state.value?.snapshot)
 const statusLabel = computed(() => {
   if (snapshot.value?.status === 'unauthorized') return t('admin.accounts.opencodeGo.unauthorized')
@@ -98,18 +104,18 @@ watch(() => props.account.opencode_go_usage, (next) => {
 const refreshUsage = async () => {
   if (refreshing.value) return
   refreshing.value = true
+  refreshError.value = null
   try {
     const next = await adminAPI.accounts.refreshOpenCodeGoUsage(props.account.id)
     state.value = next
     emit('updated', next)
-    appStore.showSuccess(t('admin.accounts.opencodeGo.refreshSuccess'))
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(
+    refreshError.value = extractI18nErrorMessage(
       error,
       t,
       'admin.accounts.opencodeGo.errors',
       t('admin.accounts.opencodeGo.refreshFailed')
-    ))
+    )
   } finally {
     refreshing.value = false
   }
