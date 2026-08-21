@@ -2905,6 +2905,7 @@ import {
   validateHeaderOverrideRows,
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
+  isOpenCodeGoBaseUrl,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
   type CnAccountMode,
@@ -3145,15 +3146,26 @@ watch(editApiProtocol, (protocol, previousProtocol) => {
     for (const item of editAdaptiveProtocolOptions.value) {
       if (!editAdaptiveBaseUrls.value[item.value]) editAdaptiveBaseUrls.value[item.value] = defaults[item.value]
     }
-    if (previousProtocol !== 'adaptive' && editBaseUrl.value.trim()) {
-      editAdaptiveBaseUrls.value[previousProtocol] = editBaseUrl.value.trim()
+    const currentBaseUrl = editBaseUrl.value.trim()
+    if (previousProtocol !== 'adaptive' && currentBaseUrl && !isOpenCodeGoBaseUrl(currentBaseUrl)) {
+      editAdaptiveBaseUrls.value[previousProtocol] = currentBaseUrl
+    }
+    if (isOpenCodeGoBaseUrl(currentBaseUrl)) {
+      editAdaptiveBaseUrls.value.chat_completions = currentBaseUrl
     }
     editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
     return
   }
+  // OpenCode Go usage is identified by the upstream URL. Protocol changes
+  // must not silently replace that URL with a DeepSeek default endpoint.
+  if (isOpenCodeGoBaseUrl(editBaseUrl.value)) return
   if (previousProtocol === 'adaptive') {
-    editBaseUrl.value = editAdaptiveBaseUrls.value[protocol] ||
-      defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
+    const adaptiveBaseUrl = editAdaptiveBaseUrls.value[protocol]
+    if (isOpenCodeGoBaseUrl(adaptiveBaseUrl)) {
+      editBaseUrl.value = adaptiveBaseUrl
+      return
+    }
+    editBaseUrl.value = adaptiveBaseUrl || defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
     return
   }
   editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
@@ -3174,9 +3186,13 @@ watch(editAccountMode, (mode, previousMode) => {
         editAdaptiveBaseUrls.value[item.value] = nextDefaults[item.value]
       }
     }
+    if (isOpenCodeGoBaseUrl(editBaseUrl.value)) {
+      editAdaptiveBaseUrls.value.chat_completions = editBaseUrl.value.trim()
+    }
     editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
     return
   }
+  if (isOpenCodeGoBaseUrl(editBaseUrl.value)) return
   editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, mode, editApiProtocol.value)
 })
 const cnProtocolDescKey = computed(

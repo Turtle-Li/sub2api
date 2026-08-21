@@ -55,6 +55,7 @@ vi.mock('vue-i18n', async () => {
 })
 
 import EditAccountModal from '../EditAccountModal.vue'
+import { OPENCODE_GO_BASE_URL } from '../credentialsBuilder'
 
 const BaseDialogStub = defineComponent({
   name: 'BaseDialog',
@@ -460,6 +461,84 @@ describe('EditAccountModal', () => {
       api_base_urls: {
         chat_completions: 'https://relay.example.com/v1'
       }
+    })
+  })
+
+  it('preserves the OpenCode Go URL when switching DeepSeek API protocols', async () => {
+    const account = buildAccount()
+    account.platform = 'deepseek'
+    account.credentials = {
+      api_key: 'sk-opencode',
+      account_mode: 'payg',
+      api_protocol: 'chat_completions',
+      base_url: OPENCODE_GO_BASE_URL
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const responsesButton = wrapper
+      .findAll('button')
+      .find(button => button.text().includes('admin.accounts.cnProviders.apiProtocol.responses'))
+    expect(responsesButton).toBeDefined()
+    await responsesButton!.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      api_protocol: 'responses',
+      base_url: OPENCODE_GO_BASE_URL
+    })
+  })
+
+  it('offers an OpenCode Go preset to recover an account after its URL was changed', async () => {
+    const account = buildAccount()
+    account.platform = 'deepseek'
+    account.credentials = {
+      api_key: 'sk-opencode',
+      account_mode: 'payg',
+      api_protocol: 'responses',
+      base_url: 'https://api.deepseek.com'
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const openCodePreset = wrapper
+      .findAll('[data-testid="cn-base-url-preset"]')
+      .find(button => button.text().includes('OpenCode Go'))
+    expect(openCodePreset).toBeDefined()
+    await openCodePreset!.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      api_protocol: 'chat_completions',
+      base_url: OPENCODE_GO_BASE_URL
+    })
+  })
+
+  it('lets an OpenCode Go account explicitly switch back to the official DeepSeek endpoint', async () => {
+    const account = buildAccount()
+    account.platform = 'deepseek'
+    account.credentials = {
+      api_key: 'sk-deepseek',
+      account_mode: 'payg',
+      api_protocol: 'chat_completions',
+      base_url: OPENCODE_GO_BASE_URL
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const officialPreset = wrapper
+      .findAll('[data-testid="cn-base-url-preset"]')
+      .find(button => button.text().includes('DeepSeek'))
+    expect(officialPreset).toBeDefined()
+    await officialPreset!.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      api_protocol: 'chat_completions',
+      base_url: 'https://api.deepseek.com'
     })
   })
 

@@ -9,6 +9,7 @@ import {
   applyPlanType,
   buildHeaderOverridesObject,
   buildPlanTypeOptions,
+  isOpenCodeGoBaseUrl,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
   GROK_BASE_URL_PRESETS,
@@ -200,6 +201,21 @@ describe('isCustomGrokBaseUrl', () => {
     expect(isCustomGrokBaseUrl('https://relay.example.com/v1')).toBe(true)
     expect(isCustomGrokBaseUrl('https://relay.example.com/xai/v1')).toBe(true)
     expect(isCustomGrokBaseUrl('http://relay.example.com/v1')).toBe(true)
+  })
+})
+
+describe('isOpenCodeGoBaseUrl', () => {
+  it('accepts the canonical URL and harmless URL variants', () => {
+    expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v1')).toBe(true)
+    expect(isOpenCodeGoBaseUrl('HTTPS://OPENCODE.AI:443/zen/go/v1/')).toBe(true)
+  })
+
+  it('rejects non-OpenCode hosts, paths, ports and query strings', () => {
+    expect(isOpenCodeGoBaseUrl('https://api.deepseek.com')).toBe(false)
+    expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v2')).toBe(false)
+    expect(isOpenCodeGoBaseUrl('https://opencode.ai:8443/zen/go/v1')).toBe(false)
+    expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v1?raw=1')).toBe(false)
+    expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v1//')).toBe(false)
   })
 })
 

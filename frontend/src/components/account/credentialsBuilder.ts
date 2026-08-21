@@ -268,6 +268,33 @@ export interface CnBaseUrlPreset {
   url: string
 }
 
+export const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
+
+/** Keep the frontend recovery affordance aligned with the backend eligibility rule. */
+export function isOpenCodeGoBaseUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed || /[?#]/.test(trimmed)) return false
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return false
+  }
+
+  return (
+    parsed.protocol.toLowerCase() === 'https:' &&
+    parsed.hostname.toLowerCase() === 'opencode.ai' &&
+    (parsed.port === '' || parsed.port === '443') &&
+    parsed.username === '' &&
+    parsed.password === '' &&
+    parsed.search === '' &&
+    parsed.hash === '' &&
+    parsed.pathname.replace(/\/$/, '').toLowerCase() === '/zen/go/v1'
+  )
+}
+
 /** 各供应商按账号类型 × API 协议分档的快捷端点（点击快速填充，输入框仍可自由填写）。 */
 export const CN_BASE_URL_PRESETS: Record<'kimi' | 'zhipu' | 'deepseek', CnBaseUrlPreset[]> = {
   kimi: [
@@ -285,7 +312,8 @@ export const CN_BASE_URL_PRESETS: Record<'kimi' | 'zhipu' | 'deepseek', CnBaseUr
   deepseek: [
     { mode: 'payg', protocol: 'chat_completions', label: 'DeepSeek', url: 'https://api.deepseek.com' },
     { mode: 'payg', protocol: 'anthropic', label: 'DeepSeek Anthropic', url: 'https://api.deepseek.com/anthropic' },
-    { mode: 'payg', protocol: 'responses', label: 'DeepSeek Responses', url: 'https://api.deepseek.com' }
+    { mode: 'payg', protocol: 'responses', label: 'DeepSeek Responses', url: 'https://api.deepseek.com' },
+    { mode: 'payg', protocol: 'chat_completions', label: 'OpenCode Go', url: OPENCODE_GO_BASE_URL }
   ]
 }
 
