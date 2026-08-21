@@ -86,6 +86,20 @@ const account = (state = usageState()): Account => ({
 describe('OpenCodeGoUsageCell', () => {
   beforeEach(() => {
     refreshOpenCodeGoUsage.mockReset()
+    refreshOpenCodeGoUsage.mockResolvedValue(usageState())
+  })
+
+  it('refreshes once when the eligible account enters the page', async () => {
+    const refreshed = usageState()
+    refreshed.snapshot!.data!.rolling!.percent = 43
+    refreshOpenCodeGoUsage.mockResolvedValueOnce(refreshed)
+
+    const wrapper = mount(OpenCodeGoUsageCell, { props: { account: account() } })
+    await flushPromises()
+
+    expect(refreshOpenCodeGoUsage).toHaveBeenCalledTimes(1)
+    expect(refreshOpenCodeGoUsage).toHaveBeenCalledWith(7)
+    expect(wrapper.findAllComponents(UsageProgressBar)[0].props('utilization')).toBe(43)
   })
 
   it('renders rolling, weekly and monthly windows in a shrinkable mobile-safe cell', () => {
@@ -125,21 +139,24 @@ describe('OpenCodeGoUsageCell', () => {
   it('refreshes through the OpenCode Go endpoint and emits the updated state', async () => {
     const next = usageState()
     next.snapshot!.data!.rolling!.percent = 43
-    refreshOpenCodeGoUsage.mockResolvedValueOnce(next)
     const wrapper = mount(OpenCodeGoUsageCell, { props: { account: account() } })
+    await flushPromises()
+    refreshOpenCodeGoUsage.mockResolvedValueOnce(next)
 
     await wrapper.get('[data-testid="opencode-go-usage-query"]').trigger('click')
     await flushPromises()
 
-    expect(refreshOpenCodeGoUsage).toHaveBeenCalledWith(7)
+    expect(refreshOpenCodeGoUsage).toHaveBeenCalledTimes(2)
+    expect(refreshOpenCodeGoUsage).toHaveBeenLastCalledWith(7)
     expect(wrapper.findAllComponents(UsageProgressBar)[0].props('utilization')).toBe(43)
-    expect(wrapper.emitted<OpenCodeGoUsageState[]>('updated')?.[0]?.[0]).toEqual(next)
+    expect(wrapper.emitted<OpenCodeGoUsageState[]>('updated')?.at(-1)?.[0]).toEqual(next)
     expect(wrapper.find('[data-testid="opencode-go-refresh-error"]').exists()).toBe(false)
   })
 
   it('keeps refresh failures inline instead of showing a toast', async () => {
-    refreshOpenCodeGoUsage.mockRejectedValueOnce(new Error('upstream unavailable'))
     const wrapper = mount(OpenCodeGoUsageCell, { props: { account: account() } })
+    await flushPromises()
+    refreshOpenCodeGoUsage.mockRejectedValueOnce(new Error('upstream unavailable'))
 
     await wrapper.get('[data-testid="opencode-go-usage-query"]').trigger('click')
     await flushPromises()
@@ -169,6 +186,7 @@ describe('OpenCodeGoUsageCell', () => {
     const wrapper = mount(OpenCodeGoUsageCell, { props: { account: account(usageState({ eligible: false })) } })
     expect(wrapper.find('[data-testid="opencode-go-usage-cell"]').exists()).toBe(false)
     expect(wrapper.text()).toBe('-')
+    expect(refreshOpenCodeGoUsage).not.toHaveBeenCalled()
   })
 
   it('reacts to an account snapshot update', async () => {
