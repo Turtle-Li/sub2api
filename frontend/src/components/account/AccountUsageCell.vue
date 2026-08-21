@@ -608,7 +608,7 @@
 
       <!-- OpenCode Go usage follows the shared today-stats-first account layout. -->
       <OpenCodeGoUsageCell
-        v-if="account.opencode_go_usage?.eligible"
+        v-if="useOpenCodeGoUsage"
         :account="account"
         @updated="handleOpenCodeGoUsageUpdated"
       />
@@ -637,7 +637,7 @@
 
       <!-- No data at all -->
       <div
-        v-if="!todayStats && !todayStatsLoading && !hasApiKeyQuota && !account.ollama_cloud_usage?.eligible && !account.opencode_go_usage?.eligible"
+        v-if="!todayStats && !todayStatsLoading && !hasApiKeyQuota && !account.ollama_cloud_usage?.eligible && !useOpenCodeGoUsage"
         class="text-xs text-gray-400"
       >-</div>
     </div>
@@ -659,7 +659,7 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
-import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
+import { accountUsageKeyword, cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
 import OpenCodeGoUsageCell from './OpenCodeGoUsageCell.vue'
 
 // Module-level cache shared across all AccountUsageCell instances
@@ -721,12 +721,19 @@ let desktopViewportMediaQuery: MediaQueryList | null = null
 let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = null
 let visibilityObserver: IntersectionObserver | null = null
 
+const shouldRenderOpenCodeGoUsage = (account: Account): boolean => {
+  const keyword = accountUsageKeyword(account.name)
+  if (keyword === 'deepseek') return false
+  if (keyword === 'opencode') return account.opencode_go_usage?.eligible === true
+  return account.opencode_go_usage?.eligible === true
+}
+
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
-  // OpenCode Go accounts may use the DeepSeek platform label for gateway
-  // compatibility, but their official usage endpoint is not a DeepSeek payg
-  // balance endpoint. Let the API-key branch render OpenCodeGoUsageCell first.
-  if (props.account.opencode_go_usage?.eligible) return false
+  // Explicit account-name keywords decide the display mode first: DeepSeek
+  // names keep the balance branch, while OpenCode names use the Go branch.
+  // Keyword-free legacy accounts retain the backend URL eligibility fallback.
+  if (shouldRenderOpenCodeGoUsage(props.account)) return false
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
   // CN providers: apikey 账号也有滚动用量窗口（coding plan）或余额（payg），
@@ -768,6 +775,13 @@ const cnAccountMode = computed(() => {
 })
 const cnQuotaCellVisible = computed(() => cnQuotaCellVisibleFn(props.account.platform, cnAccountMode.value))
 const cnBalanceCellVisible = computed(() => cnBalanceCellVisibleFn(props.account.platform, cnAccountMode.value))
+
+// Account names may carry an explicit routing keyword. `deepseek` forces the
+// ordinary balance view, while `opencode` selects Go usage; accounts without
+// either keyword retain the backend's URL-based eligibility fallback.
+const useOpenCodeGoUsage = computed(() => {
+  return shouldRenderOpenCodeGoUsage(props.account)
+})
 
 const isBatchManaged = computed(() => typeof props.requestBatchedUsage === 'function')
 

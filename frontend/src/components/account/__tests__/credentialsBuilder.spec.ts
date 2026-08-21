@@ -9,6 +9,7 @@ import {
   applyPlanType,
   buildHeaderOverridesObject,
   buildPlanTypeOptions,
+  accountUsageKeyword,
   isOpenCodeGoBaseUrl,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
@@ -216,6 +217,15 @@ describe('isOpenCodeGoBaseUrl', () => {
     expect(isOpenCodeGoBaseUrl('https://opencode.ai:8443/zen/go/v1')).toBe(false)
     expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v1?raw=1')).toBe(false)
     expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v1//')).toBe(false)
+  })
+})
+
+describe('accountUsageKeyword', () => {
+  it('prioritizes explicit OpenCode over DeepSeek in account names', () => {
+    expect(accountUsageKeyword('DeepSeek official')).toBe('deepseek')
+    expect(accountUsageKeyword('OpenCode Go')).toBe('opencode')
+    expect(accountUsageKeyword('deepseek-opencode')).toBe('opencode')
+    expect(accountUsageKeyword('ordinary account')).toBeNull()
   })
 })
 

@@ -296,6 +296,34 @@ func TestBulkUpdateOpenCodeGoIdentityCleanupIsValueConditional(t *testing.T) {
 	require.Less(t, opencodeBranch, ollamaBranch)
 }
 
+func TestOpenCodeGoUsageEligibleSQLUsesNameKeywordPrecedence(t *testing.T) {
+	query := normalizeSQLWhitespace(opencodeGoUsageEligibleSQL)
+	opencode := strings.Index(query, "POSITION('opencode' IN LOWER(COALESCE(name")
+	deepseek := strings.Index(query, "POSITION('deepseek' IN LOWER(COALESCE(name")
+	require.NotEqual(t, -1, opencode)
+	require.NotEqual(t, -1, deepseek)
+	require.Less(t, opencode, deepseek, "OpenCode must be checked before DeepSeek")
+	require.Contains(t, query, "btrim(credentials ->> 'base_url')")
+	require.Contains(t, query, "jsonb_typeof(credentials -> 'api_key') = 'string'")
+}
+
+func TestBulkUpdateOpenCodeGoNameChangeClearsWhenDeepSeekModeWins(t *testing.T) {
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
+	repo := newAccountRepositoryWithSQL(nil, exec, nil)
+	name := "deepseek-official"
+
+	_, err := repo.BulkUpdate(context.Background(), []int64{17}, service.AccountBulkUpdate{Name: &name})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, exec.execQueries)
+	query := normalizeSQLWhitespace(exec.execQueries[0])
+	require.Contains(t, query, "name = $1")
+	require.Contains(t, query, "POSITION('opencode' IN LOWER(COALESCE($1::text")
+	require.Contains(t, query, "POSITION('deepseek' IN LOWER(COALESCE($1::text")
+	require.Contains(t, query, "IS NOT TRUE")
+	require.Contains(t, query, "- 'opencode_go_usage_auto_refresh' - 'opencode_go_usage_snapshot'")
+}
+
 // F1 回归：OpenCode eligible 判定必须包含旧行 opencode base URL，否则 OpenAI/DeepSeek+Ollama
 // 行在代理变化时会先命中 OpenCode 分支而遮蔽 Ollama 快照清理。这里断言 OpenCode 分支
 // 的 WHEN 携带 opencode 正则（与 Ollama 正则互斥），真实行为由 integration 测试覆盖。

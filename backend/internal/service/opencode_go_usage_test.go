@@ -848,6 +848,29 @@ func TestIsOpenCodeGoUsageAccount(t *testing.T) {
 	require.False(t, IsOpenCodeGoUsageAccount(account))
 }
 
+func TestIsOpenCodeGoUsageAccountNameKeywordsOverrideURLFallback(t *testing.T) {
+	base := func(name, baseURL string) *Account {
+		return &Account{
+			Name: name, Platform: PlatformDeepseek, Type: AccountTypeAPIKey,
+			Credentials: map[string]any{"base_url": baseURL, "api_key": "k"},
+		}
+	}
+
+	// OpenCode is an explicit mode selector, even when the saved endpoint is
+	// the official DeepSeek URL (or is absent from the credentials).
+	require.True(t, IsOpenCodeGoUsageAccount(base("opencode-go", "https://api.deepseek.com")))
+	require.True(t, IsOpenCodeGoUsageAccount(base("OpenCode Go", "")))
+
+	// DeepSeek is the explicit balance selector and wins over the legacy URL
+	// fallback, but OpenCode has priority when both keywords are present.
+	require.False(t, IsOpenCodeGoUsageAccount(base("deepseek-official", "https://opencode.ai/zen/go/v1")))
+	require.True(t, IsOpenCodeGoUsageAccount(base("deepseek-opencode", "https://api.deepseek.com")))
+
+	// Names without either keyword retain the URL-based compatibility behavior.
+	require.True(t, IsOpenCodeGoUsageAccount(base("custom-provider", "https://opencode.ai/zen/go/v1")))
+	require.False(t, IsOpenCodeGoUsageAccount(base("custom-provider", "https://api.deepseek.com")))
+}
+
 func TestOpenCodeGoUsageGroupFingerprint(t *testing.T) {
 	first := openCodeGoUsageAccount(1)
 	first.Credentials["api_key"] = "shared-key"
@@ -867,6 +890,7 @@ func TestOpenCodeGoUsageGroupFingerprint(t *testing.T) {
 
 	// ineligible accounts have no fingerprint
 	account := openCodeGoUsageAccount(4)
+	account.Name = "custom-provider"
 	account.Credentials["base_url"] = "https://opencode.ai/v1"
 	_, ok := openCodeGoUsageGroupFingerprint(account)
 	require.False(t, ok)
@@ -877,6 +901,7 @@ func TestScheduleOpenCodeGoUsageActivityOnlyForOpenCode(t *testing.T) {
 	openCode := openCodeGoUsageAccount(1)
 	openCode.Credentials["api_key"] = "k"
 	other := openCodeGoUsageAccount(2)
+	other.Name = "custom-provider"
 	other.Credentials["base_url"] = "https://opencode.ai/v1"
 
 	scheduleOpenCodeGoUsageActivity(deferred, openCode)
@@ -959,6 +984,7 @@ func TestOpenCodeGoUsageStateFromAccount(t *testing.T) {
 
 func TestOpenCodeGoUsageRefreshRejectsIneligibleAccount(t *testing.T) {
 	account := openCodeGoUsageAccount(7)
+	account.Name = "custom-provider"
 	account.Credentials["base_url"] = "https://opencode.ai/v1"
 	repo := &openCodeGoUsageTestRepo{accounts: map[int64]*Account{7: account}}
 	stub := &openCodeGoUsageHTTPStub{body: []byte(openCodeGoUsageFixture)}

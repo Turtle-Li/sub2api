@@ -18,13 +18,31 @@ const (
 	opencodeGoBaseURLRegexSQL       = `^[hH][tT][tT][pP][sS]://[oO][pP][eE][nN][cC][oO][dD][eE]\.[aA][iI](:[4][4][3])?/[zZ][eE][nN]/[gG][oO]/[vV]1/?$`
 	opencodeGoBaseURLMatchSQLPrefix = "btrim("
 	opencodeGoBaseURLMatchSQLSuffix = ") ~ '" + opencodeGoBaseURLRegexSQL + "'"
-	opencodeGoUsageEligibleSQL      = `
+)
+
+// opencodeGoUsageNameURLMatchSQL mirrors service.IsOpenCodeGoUsageAccount:
+// account names are an explicit mode selector, while accounts without either
+// keyword retain the exact OpenCode Go base URL compatibility fallback.  The
+// opencode branch is intentionally first so a name containing both keywords
+// remains an OpenCode account.
+func opencodeGoUsageNameURLMatchSQL(nameExpr, baseURLExpr string) string {
+	lowerName := "LOWER(COALESCE(" + nameExpr + ", ''))"
+	return "(POSITION('opencode' IN " + lowerName + ") > 0 OR (POSITION('deepseek' IN " + lowerName + ") = 0 AND " +
+		opencodeGoBaseURLMatchSQLPrefix + baseURLExpr + opencodeGoBaseURLMatchSQLSuffix + "))"
+}
+
+func opencodeGoUsageEligibleSQLFor(nameExpr, credentialsExpr string) string {
+	return `
 		platform IN ('openai', 'deepseek')
 		AND type = 'apikey'
-		AND ` + opencodeGoBaseURLMatchSQLPrefix + `credentials ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `
-		AND jsonb_typeof(credentials -> 'api_key') = 'string'
+		AND ` + opencodeGoUsageNameURLMatchSQL(nameExpr, credentialsExpr+` ->> 'base_url'`) + `
+		AND jsonb_typeof(` + credentialsExpr + ` -> 'api_key') = 'string'
 `
-)
+}
+
+// opencodeGoUsageEligibleSQL is reused by every group/auto-refresh query and
+// managed-state UPDATE so the keyword precedence cannot drift between paths.
+var opencodeGoUsageEligibleSQL = opencodeGoUsageEligibleSQLFor("name", "credentials")
 
 // ListOpenCodeGoUsageGroupAccounts resolves every sibling for all supplied
 // identities with one ID query and one batch hydration. API keys are query

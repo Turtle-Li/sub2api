@@ -649,8 +649,8 @@ func lockAndMergeAccountProbeExtra(
 				AND type = 'apikey'
 				AND $3 = 'apikey'
 				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key'
-				AND `+opencodeGoBaseURLMatchSQLPrefix+`credentials ->> 'base_url'`+opencodeGoBaseURLMatchSQLSuffix+`
-				AND `+opencodeGoBaseURLMatchSQLPrefix+`$4::jsonb ->> 'base_url'`+opencodeGoBaseURLMatchSQLSuffix+`,
+				AND `+opencodeGoUsageNameURLMatchSQL("name", "credentials ->> 'base_url'")+`
+				AND `+opencodeGoUsageNameURLMatchSQL("name", "$4::jsonb ->> 'base_url'")+`,
 				false
 			),
 			extra -> 'opencode_go_usage_auto_refresh',
@@ -858,10 +858,10 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				WHEN platform IN ('openai', 'deepseek')
 					AND type = 'apikey'
 					AND credentials IS DISTINCT FROM $1::jsonb
-					AND `+opencodeGoBaseURLMatchSQLPrefix+`credentials ->> 'base_url'`+opencodeGoBaseURLMatchSQLSuffix+`
+					AND `+opencodeGoUsageNameURLMatchSQL("name", "credentials ->> 'base_url'")+`
 					AND (
 						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
-						OR (`+opencodeGoBaseURLMatchSQLPrefix+`$1::jsonb ->> 'base_url'`+opencodeGoBaseURLMatchSQLSuffix+`) IS NOT TRUE
+						OR (`+opencodeGoUsageNameURLMatchSQL("name", "$1::jsonb ->> 'base_url'")+`) IS NOT TRUE
 					)
 				THEN COALESCE(extra, '{}'::jsonb)
 					- 'upstream_billing_probe'
@@ -2894,9 +2894,14 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	args := make([]any, 0, 8)
 
 	idx := 1
+	namePlaceholder := ""
 	ollamaProxyIdentityChanged := ""
 	if updates.Name != nil {
-		setClauses = append(setClauses, "name = $"+itoa(idx))
+		namePlaceholder = "$" + itoa(idx)
+		// Cast the placeholder explicitly so PostgreSQL does not infer one
+		// parameter as varchar from the assignment and text from the keyword
+		// predicate below (which otherwise raises "inconsistent types deduced").
+		setClauses = append(setClauses, "name = "+namePlaceholder+"::text")
 		args = append(args, *updates.Name)
 		idx++
 	}
@@ -2976,20 +2981,33 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 				" AND "+ollamaCloudBaseURLMatchesSQL(credentialPlaceholder+"::jsonb ->> 'base_url'")+")")
 	}
 
-	// OpenCode Go 身份清理与 Ollama 同范式但更精确：仅当旧行是 opencode base URL
-	// 身份时才可能持有受管键，且只在该组身份（api_key / normalized base URL）真正
-	// 变化或不再 eligible 时清除，避免与 Ollama 分支交叉误清。
+	// OpenCode Go 身份清理与 Ollama 同范式但更精确：仅当旧行满足统一的
+	// name-keyword/URL eligibility 规则时才可能持有受管键，且只在该组身份
+	//（api_key / normalized base URL）真正变化或不再 eligible 时清除，避免与
+	// Ollama 分支交叉误清。
 	opencodeGroupIdentityChanges := make([]string, 0, 2)
-	opencodeOldBaseURL := opencodeGoBaseURLMatchSQLPrefix + "credentials ->> 'base_url'" + opencodeGoBaseURLMatchSQLSuffix
+	// Keep the SQL-side old-row eligibility identical to the service rule:
+	// OpenCode/DeepSeek name keywords take precedence over the URL fallback.
+	opencodeOldEligibility := opencodeGoUsageNameURLMatchSQL("name", "credentials ->> 'base_url'")
 	if _, ok := updates.Credentials["api_key"]; ok {
 		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
-			opencodeOldBaseURL+" AND credentials -> 'api_key' IS DISTINCT FROM "+credentialPlaceholder+"::jsonb -> 'api_key'")
+			opencodeOldEligibility+" AND credentials -> 'api_key' IS DISTINCT FROM "+credentialPlaceholder+"::jsonb -> 'api_key'")
 	}
 	if _, ok := updates.Credentials["base_url"]; ok {
-		// NULL-safe：新 base_url 缺失/为 null 时 regex(NULL) 为 NULL，NOT NULL 仍为
-		// NULL 会令 WHEN 不命中而残留 OpenCode 状态；IS NOT TRUE 把 NULL 视为不匹配。
+		// NULL-safe：新 base_url 缺失/为 null 时 URL fallback 为 NULL；IS NOT
+		// TRUE 把 NULL 视为不匹配。OpenCode name keyword 仍可使新表达式成立。
 		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
-			opencodeOldBaseURL+" AND ("+opencodeGoBaseURLMatchSQLPrefix+credentialPlaceholder+"::jsonb ->> 'base_url'"+opencodeGoBaseURLMatchSQLSuffix+") IS NOT TRUE")
+			opencodeOldEligibility+" AND ("+opencodeGoUsageNameURLMatchSQL("name", credentialPlaceholder+"::jsonb ->> 'base_url'")+") IS NOT TRUE")
+	}
+	if namePlaceholder != "" {
+		// A name-only edit can switch an account from explicit OpenCode mode to
+		// explicit DeepSeek balance mode.  Treat loss of eligibility as a group
+		// identity transition so stale managed OpenCode state cannot survive and
+		// reappear if the name is later changed back.
+		newName := namePlaceholder + "::text"
+		opencodeNewNameEligibility := opencodeGoUsageNameURLMatchSQL(newName, "credentials ->> 'base_url'")
+		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
+			opencodeOldEligibility+" AND ("+opencodeNewNameEligibility+") IS NOT TRUE")
 	}
 
 	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || len(opencodeGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed {
@@ -3025,10 +3043,10 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 		// 代理不属于 OpenCode 组身份，但 snapshot 外呼与 CAS 经代理：
 		// 组身份变化清除开关+快照，仅代理变化清除快照而保留开关。
-		// eligible 判定必须包含旧行 opencode base URL：否则 OpenAI/DeepSeek+Ollama 行在
-		// 代理变化时会先命中 OpenCode 分支（CASE 按序求值）而遮蔽 Ollama 分支的
-		// 快照清理。opencode 与 ollama 正则互斥，带上 base URL 后两套分支互斥。
-		opencodeEligibleAccount := "platform IN ('openai', 'deepseek') AND type = 'apikey' AND " + opencodeOldBaseURL
+		// eligible 判定必须复用统一的 name-keyword/URL 规则：否则
+		// OpenAI/DeepSeek+Ollama 行在代理变化时会先命中 OpenCode 分支（CASE 按序
+		// 求值）而遮蔽 Ollama 分支的快照清理。
+		opencodeEligibleAccount := "platform IN ('openai', 'deepseek') AND type = 'apikey' AND " + opencodeOldEligibility
 		opencodeGroupIdentityChanged := ""
 		if len(opencodeGroupIdentityChanges) > 0 {
 			opencodeGroupIdentityChanged = "(" + opencodeEligibleAccount + " AND (" + joinClauses(opencodeGroupIdentityChanges, " OR ") + "))"

@@ -270,6 +270,17 @@ export interface CnBaseUrlPreset {
 
 export const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 
+export type AccountUsageKeyword = 'opencode' | 'deepseek'
+
+/** Explicit account-name routing keywords override URL-based compatibility fallback. */
+export function accountUsageKeyword(value: unknown): AccountUsageKeyword | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized.includes('opencode')) return 'opencode'
+  if (normalized.includes('deepseek')) return 'deepseek'
+  return null
+}
+
 /** Keep the frontend recovery affordance aligned with the backend eligibility rule. */
 export function isOpenCodeGoBaseUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false

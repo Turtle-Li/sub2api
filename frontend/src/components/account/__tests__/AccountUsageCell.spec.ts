@@ -125,6 +125,7 @@ describe('AccountUsageCell', () => {
       props: {
         account: makeAccount({
           id: 9010,
+          name: 'opencode-go',
           platform: 'deepseek',
           type: 'apikey',
           credentials: {
@@ -175,6 +176,42 @@ describe('AccountUsageCell', () => {
     expect(wrapper.find('[data-test="cn-provider-balance"]').exists()).toBe(false)
     const accountBilled = wrapper.get('[title="usage.accountBilled"]')
     expect(accountBilled.element.compareDocumentPosition(usage.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('uses the DeepSeek balance view when the account name carries the deepseek keyword', () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 9011,
+          name: 'deepseek-official',
+          platform: 'deepseek',
+          type: 'apikey',
+          credentials: { account_mode: 'payg', base_url: 'https://opencode.ai/zen/go/v1' },
+          opencode_go_usage: {
+            account_id: 9011,
+            eligible: true,
+            auto_refresh_enabled: false,
+            snapshot: { status: 'ok', data: { rolling: { percent: 10 } } }
+          }
+        })
+      },
+      global: {
+        stubs: {
+          OpenCodeGoUsageCell: {
+            template: '<div data-test="opencode-go-usage">go</div>'
+          },
+          CNProviderBalanceCell: {
+            template: '<div data-test="cn-provider-balance">balance</div>'
+          },
+          CNProviderQuotaCell: true,
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    expect(wrapper.find('[data-test="cn-provider-balance"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="opencode-go-usage"]').exists()).toBe(false)
   })
 
   it('Antigravity 图片用量会聚合新旧 image 模型', async () => {

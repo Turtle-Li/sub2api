@@ -151,7 +151,7 @@ func TestUpdateCredentialsOpenCodeGoMissingBaseURLClearsManagedState(t *testing.
 	now := time.Now().UTC()
 
 	account := mustCreateAccount(t, tx.Client(), &service.Account{
-		Name: "opencode-missing-base-url", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+		Name: "custom-missing-base-url", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
 		Credentials: map[string]any{"api_key": "old-key", "base_url": "https://opencode.ai/zen/go/v1"},
 		Extra: map[string]any{
 			service.OpenCodeGoUsageAutoRefreshExtraKey: true,
@@ -179,7 +179,7 @@ func TestBulkUpdateOpenCodeGoRemovedBaseURLClearsManagedState(t *testing.T) {
 	now := time.Now().UTC()
 
 	account := mustCreateAccount(t, tx.Client(), &service.Account{
-		Name: "opencode-bulk-remove-base-url", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+		Name: "custom-bulk-remove-base-url", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
 		Credentials: map[string]any{"api_key": "old-key", "base_url": "https://opencode.ai/zen/go/v1"},
 		Extra: map[string]any{
 			service.OpenCodeGoUsageAutoRefreshExtraKey: true,
@@ -218,6 +218,56 @@ func TestOpenCodeGoUsageEligibleSQLAcceptsDefaultPort443(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, groups, 1)
 	require.Equal(t, account.ID, groups[0].ID)
+}
+
+func TestOpenCodeGoUsageNameKeywordsOverrideURLFallback(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	repo := newAccountRepositoryWithSQL(tx.Client(), tx, nil)
+
+	create := func(name, key, baseURL string) *service.Account {
+		t.Helper()
+		return mustCreateAccount(t, tx.Client(), &service.Account{
+			Name: name, Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey,
+			Credentials: map[string]any{"api_key": key, "base_url": baseURL},
+			Extra:       map[string]any{},
+		})
+	}
+	opencode := create("opencode-go", "keyword-opencode", "https://api.deepseek.com")
+	deepseek := create("deepseek-official", "keyword-deepseek", "https://opencode.ai/zen/go/v1")
+	legacy := create("custom-provider", "keyword-legacy", "https://opencode.ai/zen/go/v1")
+
+	groups, err := repo.ListOpenCodeGoUsageGroupAccounts(ctx, []*service.Account{opencode, deepseek, legacy})
+	require.NoError(t, err)
+	ids := make(map[int64]struct{}, len(groups))
+	for _, account := range groups {
+		ids[account.ID] = struct{}{}
+	}
+	require.Contains(t, ids, opencode.ID)
+	require.NotContains(t, ids, deepseek.ID)
+	require.Contains(t, ids, legacy.ID)
+}
+
+func TestBulkUpdateOpenCodeGoNameChangeClearsManagedState(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	repo := newAccountRepositoryWithSQL(tx.Client(), tx, nil)
+	account := mustCreateAccount(t, tx.Client(), &service.Account{
+		Name: "opencode-go", Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "keyword-cleanup", "base_url": "https://api.deepseek.com"},
+		Extra: map[string]any{
+			service.OpenCodeGoUsageAutoRefreshExtraKey: true,
+			service.OpenCodeGoUsageSnapshotExtraKey:    map[string]any{"status": service.OpenCodeGoUsageStatusOK},
+		},
+	})
+	name := "deepseek-official"
+	rows, err := repo.BulkUpdate(ctx, []int64{account.ID}, service.AccountBulkUpdate{Name: &name})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rows)
+	loaded, err := repo.GetByID(ctx, account.ID)
+	require.NoError(t, err)
+	require.NotContains(t, loaded.Extra, service.OpenCodeGoUsageAutoRefreshExtraKey)
+	require.NotContains(t, loaded.Extra, service.OpenCodeGoUsageSnapshotExtraKey)
 }
 
 // F7：生产故障路径——前端脱敏普通编辑（incoming Extra 不含 OpenCode 受管键）经真实

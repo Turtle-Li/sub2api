@@ -60,7 +60,7 @@ var (
 		"OPENCODE_GO_USAGE_UNAVAILABLE", "OpenCode Go usage is unavailable",
 	)
 	ErrOpenCodeGoUsageAccountInvalid = infraerrors.BadRequest(
-		"OPENCODE_GO_USAGE_ACCOUNT_INVALID", "account must be an OpenAI or DeepSeek API key account using https://opencode.ai/zen/go/v1",
+		"OPENCODE_GO_USAGE_ACCOUNT_INVALID", "account must be an OpenAI or DeepSeek API key account named with 'opencode' or using https://opencode.ai/zen/go/v1 (names containing only 'deepseek' use balance)",
 	)
 	ErrOpenCodeGoUsageIdentityChanged = infraerrors.Conflict(
 		"OPENCODE_GO_USAGE_IDENTITY_CHANGED", "account identity or proxy changed during refresh; retry",
@@ -911,8 +911,35 @@ func IsOpenCodeGoUsageAccount(account *Account) bool {
 	if account == nil || account.Type != AccountTypeAPIKey || !isOpenCodeGoUsagePlatform(account.Platform) {
 		return false
 	}
+	// Account names are an explicit operator choice for the usage surface.  An
+	// OpenCode-labelled account must use the OpenCode Go window even when its
+	// forwarding base URL is an ordinary compatible endpoint.  A DeepSeek-
+	// labelled account is explicitly the official balance account, unless the
+	// higher-priority OpenCode keyword is also present.  Names without either
+	// keyword retain the original URL-based compatibility rule.
+	usageKeyword := accountUsageKeyword(account.Name)
+	if usageKeyword == "opencode" {
+		return true
+	}
+	if usageKeyword == "deepseek" {
+		return false
+	}
 	baseURL, _ := account.Credentials["base_url"].(string)
 	return isOpenCodeGoBaseURL(baseURL)
+}
+
+// accountUsageKeyword returns the explicit usage-mode keyword carried by an
+// account name.  OpenCode wins when a name contains both keywords so an
+// operator can use a name such as "deepseek-opencode" without ambiguity.
+func accountUsageKeyword(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if strings.Contains(normalized, "opencode") {
+		return "opencode"
+	}
+	if strings.Contains(normalized, "deepseek") {
+		return "deepseek"
+	}
+	return ""
 }
 
 // isOpenCodeGoUsagePlatform 仅允许配置 OpenCode Go 兼容端点的平台。
