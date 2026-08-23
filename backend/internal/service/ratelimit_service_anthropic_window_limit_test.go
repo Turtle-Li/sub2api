@@ -18,6 +18,7 @@ type anthropicWindowLimitRepo struct {
 	tempUnschedCalls        int
 	lastRateLimitReset      time.Time
 	modelRateLimitCalls     int
+	modelRateLimitScopes    []string
 	lastModelRateLimitScope string
 	lastModelRateLimitReset time.Time
 	sessionWindowCalls      int
@@ -37,6 +38,7 @@ func (r *anthropicWindowLimitRepo) SetTempUnschedulable(_ context.Context, _ int
 
 func (r *anthropicWindowLimitRepo) SetModelRateLimit(_ context.Context, _ int64, scope string, resetAt time.Time, _ ...string) error {
 	r.modelRateLimitCalls++
+	r.modelRateLimitScopes = append(r.modelRateLimitScopes, scope)
 	r.lastModelRateLimitScope = scope
 	r.lastModelRateLimitReset = resetAt
 	return nil
@@ -110,6 +112,161 @@ func fable429Headers(reset5h, resetOI time.Time) http.Header {
 	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(resetOI.Unix(), 10))
 	headers.Set("anthropic-ratelimit-unified-status", "rejected")
 	return headers
+}
+
+func TestHandleUpstreamError_AnthropicFableCreditsRequiredOnlyLimitsModel(t *testing.T) {
+	now := time.Now()
+	resetAt := now.Add(10 * 24 * time.Hour).Truncate(time.Second)
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-overage-disabled-reason", "org_level_disabled")
+	headers.Set("anthropic-ratelimit-unified-overage-status", "rejected")
+	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(resetAt.Unix(), 10))
+
+	repo := &anthropicWindowLimitRepo{}
+	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
+	body := []byte(`{
+        "type":"error",
+        "error":{
+            "type":"rate_limit_error",
+            "message":"Usage credits are required for this model.",
+            "details":{
+                "error_code":"credits_required",
+                "disabled_reason":"org_level_disabled",
+                "exhausted_included_allowance":false,
+                "model":"claude-fable-5"
+            }
+        }
+    }`)
+
+	shouldDisable := svc.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusTooManyRequests,
+		headers,
+		body,
+		"claude-fable-5",
+	)
+
+	require.False(t, shouldDisable)
+	require.Zero(t, repo.rateLimitCalls, "credits_required must never mark the whole Claude account")
+	require.Zero(t, repo.tempUnschedCalls, "credits_required must not widen into account temp-unsched")
+	require.Equal(t, 1, repo.modelRateLimitCalls)
+	require.Equal(t, anthropicFableRateLimitKey, repo.lastModelRateLimitScope)
+	require.Equal(t, resetAt, repo.lastModelRateLimitReset)
+}
+
+func TestHandleUpstreamError_AnthropicFableCreditsRequiredWithoutResetUsesModelFallback(t *testing.T) {
+	startedAt := time.Now()
+	repo := &anthropicWindowLimitRepo{}
+	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
+	body := []byte(`{"error":{"message":"Usage credits are required for this model.","details":{"error_code":"credits_required","disabled_reason":"org_level_disabled","model":"claude-fable-5"}}}`)
+
+	svc.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusTooManyRequests,
+		http.Header{},
+		body,
+		"claude-fable-5",
+	)
+
+	require.Zero(t, repo.rateLimitCalls)
+	require.Zero(t, repo.tempUnschedCalls)
+	require.Equal(t, 1, repo.modelRateLimitCalls)
+	require.Equal(t, anthropicFableRateLimitKey, repo.lastModelRateLimitScope)
+	require.WithinDuration(t, startedAt.Add(defaultRateLimit429CooldownSeconds*time.Second), repo.lastModelRateLimitReset, time.Second)
+}
+
+func TestHandleUpstreamError_AnthropicFableAliasIsAlsoModelLimited(t *testing.T) {
+	repo := &anthropicWindowLimitRepo{}
+	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
+	body := []byte(`{"error":{"message":"Usage credits are required for this model.","details":{"error_code":"credits_required","disabled_reason":"org_level_disabled","model":"claude-fable-5"}}}`)
+
+	svc.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusTooManyRequests,
+		http.Header{},
+		body,
+		"claude-fable-5",
+		"cheap-alias",
+	)
+
+	require.Zero(t, repo.rateLimitCalls)
+	require.ElementsMatch(t, []string{anthropicFableRateLimitKey, "cheap-alias"}, repo.modelRateLimitScopes)
+}
+
+func TestHandleUpstreamError_AnthropicFableCreditsRequiredPreservesReal7dExhaustion(t *testing.T) {
+	now := time.Now()
+	reset7d := now.Add(72 * time.Hour).Truncate(time.Second)
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-7d-status", "rejected")
+	headers.Set("anthropic-ratelimit-unified-7d-reset", strconv.FormatInt(reset7d.Unix(), 10))
+	headers.Set("anthropic-ratelimit-unified-overage-disabled-reason", "org_level_disabled")
+
+	repo := &anthropicWindowLimitRepo{}
+	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
+	body := []byte(`{"error":{"message":"Usage credits are required for this model.","details":{"error_code":"credits_required","disabled_reason":"org_level_disabled","model":"claude-fable-5"}}}`)
+
+	svc.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusTooManyRequests,
+		headers,
+		body,
+		"claude-fable-5",
+	)
+
+	require.Equal(t, 1, repo.rateLimitCalls, "an explicitly rejected 7d account window must still win")
+	require.Equal(t, reset7d, repo.lastRateLimitReset)
+	require.Zero(t, repo.modelRateLimitCalls)
+}
+
+func TestHandleUpstreamError_AnthropicRejectedWindowWithMalformedResetUsesAggregateAccountLimit(t *testing.T) {
+	now := time.Now()
+	aggregateReset := now.Add(2 * time.Hour).Truncate(time.Second)
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-7d-status", "rejected")
+	headers.Set("anthropic-ratelimit-unified-7d-reset", "not-a-timestamp")
+	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(aggregateReset.Unix(), 10))
+
+	repo := &anthropicWindowLimitRepo{}
+	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
+	body := []byte(`{"error":{"message":"Usage credits are required for this model.","details":{"error_code":"credits_required","disabled_reason":"org_level_disabled","model":"claude-fable-5"}}}`)
+
+	svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, headers, body, "claude-fable-5")
+
+	require.Equal(t, 1, repo.rateLimitCalls)
+	require.Equal(t, aggregateReset, repo.lastRateLimitReset)
+	require.Zero(t, repo.modelRateLimitCalls)
+}
+
+func TestHandleUpstreamError_AnthropicRejectedWindowWithoutResetUsesAccountFallback(t *testing.T) {
+	startedAt := time.Now()
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-5h-status", "rejected")
+
+	repo := &anthropicWindowLimitRepo{}
+	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
+	body := []byte(`{"error":{"message":"Usage credits are required for this model.","details":{"error_code":"credits_required","disabled_reason":"org_level_disabled","model":"claude-fable-5"}}}`)
+
+	svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, headers, body, "claude-fable-5")
+
+	require.Equal(t, 1, repo.rateLimitCalls)
+	require.WithinDuration(t, startedAt.Add(defaultRateLimit429CooldownSeconds*time.Second), repo.lastRateLimitReset, time.Second)
+	require.Zero(t, repo.modelRateLimitCalls)
+}
+
+func TestIsAnthropicWindowExceeded_AcceptsNumericSurpassedThreshold(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-7d_oi-surpassed-threshold", "1.0")
+	require.True(t, isAnthropicWindowExceeded(headers, "7d_oi"))
 }
 
 func TestHandleUpstreamError_Anthropic7dOiOnlyMarksModelRateLimit(t *testing.T) {

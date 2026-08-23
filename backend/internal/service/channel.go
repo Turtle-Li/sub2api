@@ -438,9 +438,13 @@ type ChannelUsageFields struct {
 
 // SupportedModel 渠道的一个支持模型条目（无通配符、可直接展示给用户）
 type SupportedModel struct {
-	Name     string               // 用户侧模型名
-	Platform string               // 所属平台
-	Pricing  *ChannelModelPricing // 定价详情（nil 表示未配置定价）
+	Name           string               // 用户侧模型名
+	Platform       string               // 所属平台
+	Pricing        *ChannelModelPricing // 定价详情（nil 表示未配置定价）
+	ProbeModelName string               // 内部探测能力/价格判定使用的映射后模型名（不对用户暴露）
+	ProbeCost      *float64             // 固定最小文本探测（hi + 1 output token）的当前估算成本
+	ProbeEligible  bool                 // 是否已确认支持最小文本探测；false 时客户端必须 fail closed
+	CreditsGated   bool                 // 映射后的模型需要额外 usage credits（例如 Fable）
 }
 
 // wildcardSuffix 是模型模式中的通配符后缀标记（仅支持尾部匹配）。
@@ -576,16 +580,18 @@ func (c *Channel) SupportedModels() []SupportedModel {
 		return name, nil
 	}
 
-	add := func(platform, displayName string, pricing *ChannelModelPricing) {
+	add := func(platform, displayName, probeModelName string, pricing *ChannelModelPricing, creditsGated bool) {
 		key := dedupKey{platform: platform, name: strings.ToLower(displayName)}
 		if _, ok := seen[key]; ok {
 			return
 		}
 		seen[key] = struct{}{}
 		result = append(result, SupportedModel{
-			Name:     displayName,
-			Platform: platform,
-			Pricing:  pricing,
+			Name:           displayName,
+			Platform:       platform,
+			Pricing:        pricing,
+			ProbeModelName: probeModelName,
+			CreditsGated:   creditsGated,
 		})
 	}
 
@@ -605,7 +611,7 @@ func (c *Channel) SupportedModels() []SupportedModel {
 				for _, candidate := range pidx.names {
 					if strings.HasPrefix(strings.ToLower(candidate), prefixLower) {
 						display, pricing := lookup(pidx, candidate)
-						add(platform, display, pricing)
+						add(platform, display, candidate, pricing, isAnthropicFableModel(candidate))
 					}
 				}
 				continue
@@ -621,7 +627,7 @@ func (c *Channel) SupportedModels() []SupportedModel {
 			_, pricing := lookup(pidx, pricingKey)
 			// 显示名优先用 src 在定价里的原始大小写（若 src 本身是个定价模型名）
 			displayName, _ := lookup(pidx, src)
-			add(platform, displayName, pricing)
+			add(platform, displayName, pricingKey, pricing, isAnthropicFableModel(pricingKey))
 		}
 	}
 
@@ -629,7 +635,7 @@ func (c *Channel) SupportedModels() []SupportedModel {
 	for platform, pidx := range idx {
 		for _, name := range pidx.names {
 			display, pricing := lookup(pidx, name)
-			add(platform, display, pricing)
+			add(platform, display, name, pricing, isAnthropicFableModel(name))
 		}
 	}
 

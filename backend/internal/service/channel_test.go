@@ -751,6 +751,25 @@ func TestSupportedModels_ExactMappingUsesTargetPricing(t *testing.T) {
 	require.Equal(t, int64(200), got[1].Pricing.ID)
 }
 
+func TestSupportedModels_FableAliasCarriesCreditsGatedMetadata(t *testing.T) {
+	ch := &Channel{
+		ModelPricing: []ChannelModelPricing{{
+			Platform: "anthropic",
+			Models:   []string{"claude-fable-5"},
+		}},
+		ModelMapping: map[string]map[string]string{
+			"anthropic": {"cheap-alias": "claude-fable-5"},
+		},
+	}
+
+	got := ch.SupportedModels()
+	require.Len(t, got, 2)
+	require.Equal(t, "cheap-alias", got[0].Name)
+	require.True(t, got[0].CreditsGated)
+	require.Equal(t, "claude-fable-5", got[1].Name)
+	require.True(t, got[1].CreditsGated)
+}
+
 func TestSupportedModels_ExactMappingTargetMissingFromPricing(t *testing.T) {
 	// `src → target` 但 target 不在渠道定价里 —— 结果中 src 的 Pricing 为 nil
 	// （等待 ListAvailable 阶段的全局 LiteLLM 回落填充）。

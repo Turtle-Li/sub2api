@@ -64,6 +64,7 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 		// 无分组时只使用原生 anthropic 平台
 		platform = PlatformAnthropic
 	}
+	ctx = s.withChannelMappedModelRateLimit(ctx, groupID, requestedModel)
 	ctx = s.withGatewayProfitControlGate(ctx, groupID)
 
 	// Claude Code 限制可能已将 groupID 解析为 fallback group，
@@ -117,6 +118,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		return nil, err
 	}
 	ctx = s.withGroupContext(ctx, group)
+	ctx = s.withChannelMappedModelRateLimit(ctx, groupID, requestedModel)
 	ctx = s.withGatewayProfitControlGate(ctx, groupID)
 
 	// Claude Code 限制可能已将 groupID 解析为 fallback group，
@@ -1097,6 +1099,14 @@ func (s *GatewayService) isAccountSchedulableForSelection(account *Account) bool
 		return false
 	}
 	return account.IsSchedulable()
+}
+
+func (s *GatewayService) withChannelMappedModelRateLimit(ctx context.Context, groupID *int64, requestedModel string) context.Context {
+	if s == nil || s.channelService == nil || groupID == nil || strings.TrimSpace(requestedModel) == "" {
+		return ctx
+	}
+	mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
+	return withChannelMappedModelRateLimitContext(ctx, mapping.MappedModel)
 }
 
 func (s *GatewayService) isAccountSchedulableForModelSelection(ctx context.Context, account *Account, requestedModel string) bool {

@@ -6,10 +6,118 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEstimateMinimalTextProbeCost(t *testing.T) {
+	input := 2e-6
+	output := 8e-6
+	cost, ok := estimateMinimalTextProbeCost(&ChannelModelPricing{
+		BillingMode: BillingModeToken,
+		InputPrice:  &input,
+		OutputPrice: &output,
+	}, time.Now())
+	require.True(t, ok)
+	require.InDelta(t, 1e-5, cost, 1e-12)
+
+	cheapInput := 1e-6
+	cheapOutput := 2e-6
+	multiplier := 2.0
+	cost, ok = estimateMinimalTextProbeCost(&ChannelModelPricing{
+		BillingMode: BillingModeToken,
+		InputPrice:  &input,
+		OutputPrice: &output,
+		Intervals: []PricingInterval{{
+			MinTokens:        0,
+			InputPrice:       &cheapInput,
+			OutputPrice:      &cheapOutput,
+			InputMultiplier:  &multiplier,
+			OutputMultiplier: &multiplier,
+		}},
+	}, time.Now())
+	require.True(t, ok)
+	// Explicit interval prices win over multipliers.
+	require.InDelta(t, 3e-6, cost, 1e-12)
+
+	perRequest := 0.0004
+	cost, ok = estimateMinimalTextProbeCost(&ChannelModelPricing{
+		BillingMode:     BillingModePerRequest,
+		PerRequestPrice: &perRequest,
+	}, time.Now())
+	require.True(t, ok)
+	require.InDelta(t, perRequest, cost, 1e-12)
+
+	_, ok = estimateMinimalTextProbeCost(&ChannelModelPricing{BillingMode: BillingModeImage}, time.Now())
+	require.False(t, ok)
+
+	_, ok = estimateMinimalTextProbeCost(&ChannelModelPricing{
+		BillingMode: BillingModeToken,
+		InputPrice:  &input,
+	}, time.Now())
+	require.False(t, ok, "partial pricing must not understate a probe cost")
+}
+
+func TestPopulateMinimalProbeMetadataExcludesRealtimeAudioAndUsesMappedTarget(t *testing.T) {
+	input := 1e-7
+	output := 2e-7
+	pricing := &ChannelModelPricing{
+		BillingMode: BillingModeToken,
+		InputPrice:  &input,
+		OutputPrice: &output,
+	}
+	svc := &ChannelService{pricingService: newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
+		"gemini-live-2.5-flash-preview-native-audio-09-2025": {
+			Mode:               "realtime",
+			InputCostPerToken:  input,
+			OutputCostPerToken: output,
+		},
+		"gemini-2.5-flash-lite": {
+			Mode:               "chat",
+			InputCostPerToken:  input,
+			OutputCostPerToken: output,
+		},
+	})}
+
+	models := []SupportedModel{
+		{
+			Name:           "cheap-live-alias",
+			ProbeModelName: "gemini-live-2.5-flash-preview-native-audio-09-2025",
+			Pricing:        pricing,
+		},
+		{
+			Name:           "safe-text-alias",
+			ProbeModelName: "gemini-2.5-flash-lite",
+			Pricing:        pricing,
+		},
+		{
+			Name:    "custom-text-model",
+			Pricing: pricing,
+		},
+	}
+
+	svc.populateMinimalProbeMetadata(models, time.Now())
+	require.False(t, models[0].ProbeEligible, "mapped realtime target must never enter a text probe")
+	require.Nil(t, models[0].ProbeCost)
+	require.True(t, models[1].ProbeEligible)
+	require.NotNil(t, models[1].ProbeCost)
+	require.True(t, models[2].ProbeEligible, "normal custom text models remain usable")
+}
+
+func TestMinimalTextProbeEligibleRejectsNonTextModesAndNames(t *testing.T) {
+	svc := &ChannelService{pricingService: newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
+		"embed-model":  {Mode: "embedding"},
+		"speech-model": {Mode: "audio_speech"},
+	})}
+
+	require.False(t, svc.minimalTextProbeEligible(SupportedModel{Name: "embed-model"}))
+	require.False(t, svc.minimalTextProbeEligible(SupportedModel{Name: "speech-model"}))
+	require.False(t, svc.minimalTextProbeEligible(SupportedModel{Name: "unknown-native-audio-model"}))
+	require.False(t, svc.minimalTextProbeEligible(SupportedModel{Name: "unknown-live-preview"}))
+	require.True(t, svc.minimalTextProbeEligible(SupportedModel{Name: "custom-chat-model"}))
+}
 
 // stubGroupRepoForAvailable 是 ListAvailable 测试用的 GroupRepository stub，
 // 仅实现 ListActive；其他方法对本测试无关，返回零值即可。
@@ -259,6 +367,27 @@ func TestFillGlobalPricingFallback_NilPricing(t *testing.T) {
 	require.NotNil(t, models[0].Pricing)
 	require.NotNil(t, models[0].Pricing.InputPrice)
 	require.InDelta(t, 5e-6, *models[0].Pricing.InputPrice, 1e-12)
+}
+
+func TestFillGlobalPricingFallbackUsesMappedProbeTarget(t *testing.T) {
+	pricingSvc := newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
+		"gemini-2.5-flash-lite": {
+			Mode:               "chat",
+			InputCostPerToken:  1e-7,
+			OutputCostPerToken: 4e-7,
+		},
+	})
+	svc := &ChannelService{pricingService: pricingSvc}
+
+	models := []SupportedModel{{
+		Name:           "customer-facing-alias",
+		ProbeModelName: "gemini-2.5-flash-lite",
+		Platform:       "gemini",
+	}}
+	svc.fillGlobalPricingFallback(models)
+	require.NotNil(t, models[0].Pricing)
+	require.NotNil(t, models[0].Pricing.InputPrice)
+	require.InDelta(t, 1e-7, *models[0].Pricing.InputPrice, 1e-12)
 }
 
 func TestFillGlobalPricingFallback_EmptyPricingFillsFromLiteLLM(t *testing.T) {

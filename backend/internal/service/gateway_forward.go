@@ -19,6 +19,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func rateLimitModelAliases(currentModel, originalModel string) []string {
+	currentModel = strings.TrimSpace(currentModel)
+	originalModel = strings.TrimSpace(originalModel)
+	models := make([]string, 0, 2)
+	if currentModel != "" {
+		models = append(models, currentModel)
+	}
+	if originalModel != "" && !strings.EqualFold(originalModel, currentModel) {
+		models = append(models, originalModel)
+	}
+	return models
+}
+
 // 重试相关常量
 const (
 	// 最大尝试次数（包含首次请求）。过多重试会导致请求堆积与资源耗尽。
@@ -724,7 +737,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-		s.handleFailoverSideEffects(ctx, resp, account, reqModel)
+		s.handleFailoverSideEffects(ctx, resp, account, rateLimitModelAliases(reqModel, parsed.OriginalModel)...)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -751,7 +764,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			respBody, readErr := s.readUpstreamErrorBody(resp)
 			if readErr != nil {
 				// ReadAll failed, fall back to normal error handling without consuming the stream
-				return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+				return s.handleErrorResponse(ctx, resp, c, account, rateLimitModelAliases(reqModel, parsed.OriginalModel)...)
 			}
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -787,11 +800,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				} else {
 					logger.LegacyPrintf("service.gateway", "Account %d: 400 error, attempting failover", account.ID)
 				}
-				s.handleFailoverSideEffects(ctx, resp, account, reqModel)
+				s.handleFailoverSideEffects(ctx, resp, account, rateLimitModelAliases(reqModel, parsed.OriginalModel)...)
 				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
 			}
 		}
-		return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+		return s.handleErrorResponse(ctx, resp, c, account, rateLimitModelAliases(reqModel, parsed.OriginalModel)...)
 	}
 
 	// 处理正常响应
@@ -827,7 +840,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 						Header:     resp.Header.Clone(),
 						Body:       io.NopCloser(bytes.NewReader(body)),
 					}
-					s.handleFailoverSideEffects(ctx, syntheticResp, account, reqModel)
+					s.handleFailoverSideEffects(ctx, syntheticResp, account, rateLimitModelAliases(reqModel, parsed.OriginalModel)...)
 				}
 
 				upstreamMsg := sanitizeUpstreamErrorMessage(

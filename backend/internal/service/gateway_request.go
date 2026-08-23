@@ -280,7 +280,8 @@ func DescribeInvalidJSON(body []byte) error {
 // 3. 避免重复 json.Unmarshal，减少 CPU 和内存开销
 type ParsedRequest struct {
 	Body            *RequestBodyRef // 原始请求体引用（保留用于转发）；替换内容请走 ReplaceBody
-	Model           string          // 请求的模型名称
+	Model           string          // 当前请求模型（可能已被渠道映射）
+	OriginalModel   string          // 渠道映射前的用户模型名；后续 ReplaceBody 不覆盖
 	Stream          bool            // 是否为流式请求
 	MetadataUserID  string          // metadata.user_id（用于会话亲和）
 	HasSystem       bool            // 是否包含 system 字段（包含 null 也视为显式传入）
@@ -354,6 +355,7 @@ func ParseGatewayRequest(body *RequestBodyRef, protocol string) (*ParsedRequest,
 	if err := parseGatewayRequestCurrentBody(parsed, protocol); err != nil {
 		return nil, err
 	}
+	parsed.OriginalModel = parsed.Model
 	return parsed, nil
 }
 

@@ -17,6 +17,27 @@ const (
 	anthropicFableRateLimitKey = "claude-fable-5"
 )
 
+type channelMappedModelRateLimitContextKey struct{}
+
+func withChannelMappedModelRateLimitContext(ctx context.Context, model string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, channelMappedModelRateLimitContextKey{}, model)
+}
+
+func channelMappedModelFromRateLimitContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	model, _ := ctx.Value(channelMappedModelRateLimitContextKey{}).(string)
+	return strings.TrimSpace(model)
+}
+
 // isRateLimitActiveForKey 检查指定 key 的限流是否生效
 func (a *Account) isRateLimitActiveForKey(key string) bool {
 	resetAt := a.modelRateLimitResetAt(key)
@@ -86,7 +107,8 @@ func (a *Account) modelRateLimitKeysForRequest(ctx context.Context, requestedMod
 			keys = append(keys, openAIImageGenerationRateLimitKey)
 		}
 	case PlatformAnthropic:
-		if isAnthropicFableModel(modelKey) && modelKey != anthropicFableRateLimitKey {
+		channelMappedModel := channelMappedModelFromRateLimitContext(ctx)
+		if (isAnthropicFableModel(modelKey) || isAnthropicFableModel(channelMappedModel)) && modelKey != anthropicFableRateLimitKey {
 			keys = append(keys, anthropicFableRateLimitKey)
 		}
 	}

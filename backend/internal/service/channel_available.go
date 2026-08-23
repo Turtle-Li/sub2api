@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
+	"time"
 )
 
 // AvailableGroupRef 渠道视图中关联分组的简要信息。
@@ -91,6 +93,7 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 
 		supported := ch.SupportedModels()
 		s.fillGlobalPricingFallback(supported)
+		s.populateMinimalProbeMetadata(supported, time.Now())
 
 		out = append(out, AvailableChannel{
 			ID:                 ch.ID,
@@ -110,6 +113,166 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 	return out, nil
 }
 
+const (
+	minimalProbeInputTokens  = 1
+	minimalProbeOutputTokens = 1
+)
+
+// populateMinimalProbeMetadata explicitly marks models that are safe for the
+// synchronous text-only connectivity probe, then attaches a comparable cost when
+// pricing is known. Clients treat a missing/false ProbeEligible as fail-closed.
+// Group/user multipliers are intentionally omitted: within one Group they scale
+// every candidate equally and therefore do not change which model is cheapest.
+func (s *ChannelService) populateMinimalProbeMetadata(models []SupportedModel, at time.Time) {
+	for i := range models {
+		models[i].ProbeEligible = s.minimalTextProbeEligible(models[i])
+		if !models[i].ProbeEligible {
+			models[i].ProbeCost = nil
+			continue
+		}
+		cost, ok := estimateMinimalTextProbeCost(models[i].Pricing, at)
+		if !ok {
+			models[i].ProbeCost = nil
+			continue
+		}
+		models[i].ProbeCost = &cost
+	}
+}
+
+func (s *ChannelService) minimalTextProbeEligible(model SupportedModel) bool {
+	probeModelName := strings.TrimSpace(model.ProbeModelName)
+	if probeModelName == "" {
+		probeModelName = strings.TrimSpace(model.Name)
+	}
+	if probeModelName == "" || obviousNonTextProbeModel(probeModelName) {
+		return false
+	}
+
+	if model.Pricing != nil {
+		mode := model.Pricing.BillingMode
+		if mode == BillingModeImage || mode == BillingModeVideo {
+			return false
+		}
+	}
+
+	// A catalogue hit is authoritative for protocol capability. Realtime/audio,
+	// embedding and image modes can expose token prices but cannot be called by
+	// the ordinary /messages or chat-completions connectivity probe.
+	if s != nil && s.pricingService != nil {
+		if pricing := s.pricingService.GetIdentifiedModelPricing(probeModelName); pricing != nil {
+			switch strings.ToLower(strings.TrimSpace(pricing.Mode)) {
+			case "chat", "responses", "completion":
+				return true
+			default:
+				return false
+			}
+		}
+	}
+
+	// Custom models may not exist in the global catalogue. A normal token or
+	// per-request billing model with no media/capability marker remains eligible.
+	return true
+}
+
+func obviousNonTextProbeModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	for _, marker := range []string{
+		"image", "video", "embedding", "moderation", "realtime", "transcrib",
+		"speech", "tts", "native-audio", "audio", "-live", "live-",
+	} {
+		if strings.Contains(model, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func estimateMinimalTextProbeCost(pricing *ChannelModelPricing, at time.Time) (float64, bool) {
+	if pricing == nil {
+		return 0, false
+	}
+	mode := pricing.BillingMode
+	if mode == "" {
+		mode = BillingModeToken
+	}
+	if mode == BillingModeImage || mode == BillingModeVideo {
+		return 0, false
+	}
+
+	if mode == BillingModePerRequest {
+		price := pricing.PerRequestPrice
+		if interval := pricing.GetIntervalForContext(minimalProbeInputTokens); interval != nil && interval.PerRequestPrice != nil {
+			price = interval.PerRequestPrice
+		}
+		value, ok := validProbePrice(price)
+		return value, ok
+	}
+
+	interval := pricing.GetIntervalForContext(minimalProbeInputTokens)
+	input, inputKnown := probeTokenPrice(pricing.InputPrice, intervalPrice(interval, true), intervalMultiplier(interval, true))
+	output, outputKnown := probeTokenPrice(pricing.OutputPrice, intervalPrice(interval, false), intervalMultiplier(interval, false))
+	// The probe necessarily consumes both input and output tokens. A partial
+	// price would understate the cost and could incorrectly win the ranking, so
+	// expose no estimate unless both sides are known.
+	if !inputKnown || !outputKnown {
+		return 0, false
+	}
+	cost := input*minimalProbeInputTokens + output*minimalProbeOutputTokens
+	cost *= pricing.TimePricing.MultiplierAt(at)
+	if math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 {
+		return 0, false
+	}
+	return cost, true
+}
+
+func intervalPrice(interval *PricingInterval, input bool) *float64 {
+	if interval == nil {
+		return nil
+	}
+	if input {
+		return interval.InputPrice
+	}
+	return interval.OutputPrice
+}
+
+func intervalMultiplier(interval *PricingInterval, input bool) *float64 {
+	if interval == nil {
+		return nil
+	}
+	if input {
+		return interval.InputMultiplier
+	}
+	return interval.OutputMultiplier
+}
+
+func probeTokenPrice(base, explicit, multiplier *float64) (float64, bool) {
+	if explicit != nil {
+		return validProbePrice(explicit)
+	}
+	value, ok := validProbePrice(base)
+	if !ok {
+		return 0, false
+	}
+	if multiplier != nil {
+		factor, valid := validProbePrice(multiplier)
+		if !valid {
+			return 0, false
+		}
+		value *= factor
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func validProbePrice(value *float64) (float64, bool) {
+	if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 {
+		return 0, false
+	}
+	return *value, true
+}
+
 // fillGlobalPricingFallback 对未命中渠道定价的支持模型，从全局 LiteLLM 数据合成一份
 // 展示用定价。仅用于「可用渠道」展示，不影响真实计费链路。
 //
@@ -126,7 +289,11 @@ func (s *ChannelService) fillGlobalPricingFallback(models []SupportedModel) {
 		if !pricingNeedsFallback(models[i].Pricing) {
 			continue
 		}
-		lp := s.pricingService.GetModelPricing(models[i].Name)
+		pricingModelName := models[i].ProbeModelName
+		if pricingModelName == "" {
+			pricingModelName = models[i].Name
+		}
+		lp := s.pricingService.GetModelPricing(pricingModelName)
 		if lp == nil {
 			continue
 		}

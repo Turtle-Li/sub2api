@@ -307,12 +307,26 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	// otherwise a broad "rate limit" keyword rule can shorten a multi-hour
 	// cooldown to a local temporary pause.
 	if statusCode == http.StatusTooManyRequests && account.Platform == PlatformAnthropic {
-		// 7d_oi 是 Fable 模型专属的 7d 窗口：只标记模型级限流，账号对其他模型仍可调度。
-		fableLimited := s.persistAnthropicFableWindowLimit(ctx, account, headers)
-		if s.persistAnthropicExhaustedWindowLimit(ctx, account, headers) {
+		// Explicit 5h/7d exhaustion remains account-scoped even when that
+		// window's reset header is absent or malformed. The helper falls back to
+		// a valid aggregate reset or the configured short cooldown.
+		accountWindowLimited := s.persistAnthropicExhaustedWindowLimit(ctx, account, headers)
+		// 7d_oi is independent from the account 5h/7d windows. Record it even
+		// when an account window also fired, so the Fable family remains blocked
+		// after the shorter account cooldown expires.
+		fableWindowLimited := s.persistAnthropicFableWindowLimit(ctx, account, headers)
+		if accountWindowLimited {
 			return false
 		}
-		if fableLimited {
+		// Fable can return 429 when the organization has not enabled purchasable
+		// usage credits. That is a deterministic model capability failure, not an
+		// exhausted 5h/7d account window. Handle it before any generic 429 parser so
+		// an aggregate reset header can never take the whole Claude account offline.
+		if s.persistAnthropicFableCreditsRequiredLimit(ctx, account, headers, responseBody, requestedModel...) {
+			return false
+		}
+		// 7d_oi 是 Fable 模型专属的 7d 窗口：只标记模型级限流，账号对其他模型仍可调度。
+		if fableWindowLimited {
 			return false
 		}
 	}
@@ -1318,7 +1332,7 @@ func selectAnthropicExhaustedWindow(headers http.Header, now time.Time) *anthrop
 	reset7d, ok7dReset := parseAnthropicWindowReset(headers, "7d", now)
 
 	exceeded5h := isAnthropic5hRejected(headers) || isAnthropicWindowExceeded(headers, "5h")
-	exceeded7d := isAnthropicWindowExceeded(headers, "7d")
+	exceeded7d := isAnthropicWindowRejected(headers, "7d") || isAnthropicWindowExceeded(headers, "7d")
 
 	if exceeded7d && ok7dReset {
 		return &anthropicWindowLimit{
@@ -1393,8 +1407,30 @@ func (s *RateLimitService) persistAnthropicExhaustedWindowLimit(ctx context.Cont
 	}
 	now := time.Now()
 	limit := selectAnthropicExhaustedWindow(headers, now)
-	if limit == nil {
+	explicitAccountExhaustion := isAnthropicWindowRejected(headers, "5h") ||
+		isAnthropicWindowExceeded(headers, "5h") ||
+		isAnthropicWindowRejected(headers, "7d") ||
+		isAnthropicWindowExceeded(headers, "7d")
+	if limit == nil && !explicitAccountExhaustion {
 		return false
+	}
+	if limit == nil {
+		resetAt, ok := parseAnthropicAggregateReset(headers, now)
+		if !ok {
+			cooldown, enabled := s.get429FallbackCooldown(ctx, account)
+			if !enabled || cooldown <= 0 {
+				slog.Info("anthropic_account_window_rate_limit_skipped",
+					"account_id", account.ID,
+					"reason", "fallback_disabled")
+				return true
+			}
+			resetAt = now.Add(cooldown)
+		}
+		limit = &anthropicWindowLimit{
+			window:  "fallback",
+			resetAt: resetAt,
+			reason:  "anthropic_account_window_exhausted",
+		}
 	}
 	if !shouldPersistAnthropicWindowLimit(account, limit, now) {
 		slog.Info("anthropic_window_rate_limit_kept",
@@ -1423,6 +1459,116 @@ func (s *RateLimitService) persistAnthropicExhaustedWindowLimit(ctx context.Cont
 }
 
 const anthropicFableWindowReason = "anthropic_7d_oi_window_exhausted"
+const anthropicFableCreditsRequiredReason = "anthropic_fable_usage_credits_required"
+
+type anthropicCreditsRequiredPayload struct {
+	Error struct {
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Details struct {
+			ErrorCode      string `json:"error_code"`
+			DisabledReason string `json:"disabled_reason"`
+			Model          string `json:"model"`
+		} `json:"details"`
+	} `json:"error"`
+}
+
+// persistAnthropicFableCreditsRequiredLimit handles the model-specific 429
+// returned when Fable needs separately purchased usage credits. It always
+// consumes a recognised signal, even if persistence fails or fallback cooldown
+// is disabled, so callers never widen the failure into an account-level block.
+func (s *RateLimitService) persistAnthropicFableCreditsRequiredLimit(
+	ctx context.Context,
+	account *Account,
+	headers http.Header,
+	responseBody []byte,
+	requestedModel ...string,
+) bool {
+	if s == nil || s.accountRepo == nil || account == nil {
+		return false
+	}
+
+	var payload anthropicCreditsRequiredPayload
+	if err := json.Unmarshal(responseBody, &payload); err != nil {
+		return false
+	}
+	creditsRequired := strings.EqualFold(strings.TrimSpace(payload.Error.Type), "credits_required") ||
+		strings.EqualFold(strings.TrimSpace(payload.Error.Code), "credits_required") ||
+		strings.EqualFold(strings.TrimSpace(payload.Error.Details.ErrorCode), "credits_required")
+	orgDisabled := strings.EqualFold(strings.TrimSpace(payload.Error.Details.DisabledReason), "org_level_disabled") ||
+		strings.EqualFold(strings.TrimSpace(headers.Get("anthropic-ratelimit-unified-overage-disabled-reason")), "org_level_disabled")
+	messageRequiresCredits := strings.Contains(strings.ToLower(strings.TrimSpace(payload.Error.Message)), "usage credits are required")
+	if !creditsRequired && !(orgDisabled && messageRequiresCredits) {
+		return false
+	}
+
+	requested := firstRequestedModel(requestedModel)
+	mapped := strings.TrimSpace(account.GetMappedModel(requested))
+	bodyModel := strings.TrimSpace(payload.Error.Details.Model)
+	if !isAnthropicFableModel(requested) && !isAnthropicFableModel(mapped) && !isAnthropicFableModel(bodyModel) {
+		return false
+	}
+
+	now := time.Now()
+	// A genuine, explicitly exhausted account window still wins. The existing
+	// account-level path owns the write and its bounded reset validation.
+	if selectAnthropicExhaustedWindow(headers, now) != nil {
+		return false
+	}
+
+	resetAt, ok := parseAnthropicWindowReset(headers, "7d_oi", now)
+	if !ok {
+		// credits_required resets may point at a monthly credit boundary rather
+		// than the normal 7d_oi window. The scope is model-only, but still bound the
+		// timestamp so malformed headers cannot create an effectively permanent key.
+		resetAt, ok = parseAnthropicResetTimestamp(
+			headers.Get("anthropic-ratelimit-unified-reset"),
+			now,
+			31*24*time.Hour,
+		)
+	}
+	if !ok {
+		cooldown, enabled := s.get429FallbackCooldown(ctx, account)
+		if !enabled || cooldown <= 0 {
+			slog.Info("anthropic_fable_credits_required_model_rate_limit_skipped",
+				"account_id", account.ID,
+				"reason", "fallback_disabled")
+			return true
+		}
+		resetAt = now.Add(cooldown)
+	}
+
+	limitKeys := []string{anthropicFableRateLimitKey}
+	seenKeys := map[string]struct{}{strings.ToLower(anthropicFableRateLimitKey): {}}
+	for _, candidate := range requestedModel {
+		candidate = strings.TrimSpace(candidate)
+		key := strings.ToLower(candidate)
+		if candidate == "" || isAnthropicFableModel(candidate) {
+			continue
+		}
+		if _, exists := seenKeys[key]; exists {
+			continue
+		}
+		seenKeys[key] = struct{}{}
+		limitKeys = append(limitKeys, candidate)
+	}
+	for _, key := range limitKeys {
+		if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, key, resetAt, anthropicFableCreditsRequiredReason); err != nil {
+			slog.Warn("anthropic_fable_credits_required_model_rate_limit_failed",
+				"account_id", account.ID,
+				"scope", key,
+				"reset_at", resetAt,
+				"error", err)
+		}
+	}
+	slog.Info("anthropic_fable_credits_required_model_rate_limited",
+		"account_id", account.ID,
+		"scopes", limitKeys,
+		"reset_at", resetAt,
+		"reset_in", time.Until(resetAt).Truncate(time.Second))
+	return true
+}
 
 // selectAnthropicFableWindowLimit parses the Anthropic 7d_oi per-model window
 // headers (the Fable-only 7d window, e.g. anthropic-ratelimit-unified-7d_oi-*).
@@ -1561,8 +1707,13 @@ func isAnthropicWindowExceeded(headers http.Header, window string) bool {
 	prefix := "anthropic-ratelimit-unified-" + window + "-"
 
 	// Check surpassed-threshold first (most explicit signal)
-	if st := headers.Get(prefix + "surpassed-threshold"); strings.EqualFold(st, "true") {
-		return true
+	if st := strings.TrimSpace(headers.Get(prefix + "surpassed-threshold")); st != "" {
+		if strings.EqualFold(st, "true") {
+			return true
+		}
+		if threshold, err := strconv.ParseFloat(st, 64); err == nil && threshold >= 1.0-1e-9 {
+			return true
+		}
 	}
 
 	// Fall back to utilization >= 1.0
