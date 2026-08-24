@@ -837,6 +837,11 @@ func TestIsOpenCodeGoUsageAccount(t *testing.T) {
 	account.Type = "oauth"
 	require.False(t, IsOpenCodeGoUsageAccount(account))
 
+	// Imported upstream/relay accounts use the same base_url + api_key shape.
+	account = base()
+	account.Type = AccountTypeUpstream
+	require.True(t, IsOpenCodeGoUsageAccount(account))
+
 	// query string rejected
 	account = base()
 	account.Credentials["base_url"] = "https://opencode.ai/zen/go/v1?x=1"

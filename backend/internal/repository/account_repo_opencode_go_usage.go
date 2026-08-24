@@ -34,7 +34,7 @@ func opencodeGoUsageURLMatchSQL(baseURLExpr string) string {
 func opencodeGoUsageEligibleSQLFor(credentialsExpr string) string {
 	return `
 		platform IN ('openai', 'deepseek')
-		AND type = 'apikey'
+		AND type IN ('apikey', 'upstream')
 		AND ` + opencodeGoUsageURLMatchSQL(credentialsExpr+` ->> 'base_url'`) + `
 		AND jsonb_typeof(` + credentialsExpr + ` -> 'api_key') = 'string'
 `

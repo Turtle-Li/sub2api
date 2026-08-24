@@ -272,6 +272,11 @@ export interface CnBaseUrlPreset {
 
 export const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 
+/** OpenCode Go usage is available for native API-key and imported upstream accounts. */
+export function isOpenCodeGoUsageAccountType(value: unknown): value is 'apikey' | 'upstream' {
+  return value === 'apikey' || value === 'upstream'
+}
+
 /** Keep the frontend recovery affordance aligned with the backend eligibility rule. */
 export function isOpenCodeGoBaseUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false

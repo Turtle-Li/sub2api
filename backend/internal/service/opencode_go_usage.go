@@ -908,7 +908,7 @@ func OpenCodeGoUsageStateFromAccount(account *Account) *OpenCodeGoUsageState {
 }
 
 func IsOpenCodeGoUsageAccount(account *Account) bool {
-	if account == nil || account.Type != AccountTypeAPIKey || !isOpenCodeGoUsagePlatform(account.Platform) {
+	if account == nil || !isOpenCodeGoUsageAccountType(account.Type) || !isOpenCodeGoUsagePlatform(account.Platform) {
 		return false
 	}
 	// The saved upstream URL is the source of truth for the usage surface. The
@@ -934,6 +934,14 @@ func IsOpenCodeGoUsageAccount(account *Account) bool {
 		return false
 	}
 	return false
+}
+
+// isOpenCodeGoUsageAccountType covers both account shapes that carry a
+// base_url + api_key pair. OpenCode Go is commonly created as an API-key
+// account, but imported upstream/relay accounts use the upstream type while
+// retaining the same credentials and usage endpoint.
+func isOpenCodeGoUsageAccountType(accountType string) bool {
+	return accountType == AccountTypeAPIKey || accountType == AccountTypeUpstream
 }
 
 // isOpenCodeGoOfficialHost reports whether the saved URL points at the official

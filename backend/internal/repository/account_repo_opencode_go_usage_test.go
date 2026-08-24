@@ -287,7 +287,7 @@ func TestBulkUpdateOpenCodeGoIdentityCleanupIsValueConditional(t *testing.T) {
 	require.NotEmpty(t, exec.execQueries)
 	query := normalizeSQLWhitespace(exec.execQueries[0])
 	// OpenCode 分支必须出现在 Ollama 分支之前，且只在旧行是 opencode base URL 时触发。
-	require.Contains(t, query, "platform IN ('openai', 'deepseek') AND type = 'apikey'")
+	require.Contains(t, query, "platform IN ('openai', 'deepseek') AND type IN ('apikey', 'upstream')")
 	require.Contains(t, query, "- 'opencode_go_usage_auto_refresh' - 'opencode_go_usage_snapshot'")
 	opencodeBranch := strings.Index(query, "opencode_go_usage_auto_refresh")
 	ollamaBranch := strings.Index(query, "ollama_cloud_usage_auto_refresh")

@@ -83,7 +83,7 @@ import { adminAPI } from '@/api/admin'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { Account } from '@/types'
 import UsageProgressBar from './UsageProgressBar.vue'
-import { isOpenCodeGoUsageUrl } from './credentialsBuilder'
+import { isOpenCodeGoUsageAccountType, isOpenCodeGoUsageUrl } from './credentialsBuilder'
 
 const props = defineProps<{ account: Account }>()
 const emit = defineEmits<{ updated: [state: NonNullable<Account['opencode_go_usage']>] }>()
@@ -93,7 +93,7 @@ const refreshing = ref(false)
 const refreshError = ref<string | null>(null)
 const urlEligible = computed(() => {
   if (
-    props.account.type !== 'apikey' ||
+    !isOpenCodeGoUsageAccountType(props.account.type) ||
     (props.account.platform !== 'openai' && props.account.platform !== 'deepseek')
   ) {
     return false

@@ -662,6 +662,7 @@ import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 import {
   cnQuotaCellVisible as cnQuotaCellVisibleFn,
   cnBalanceCellVisible as cnBalanceCellVisibleFn,
+  isOpenCodeGoUsageAccountType,
   isOpenCodeGoUsageUrl
 } from './credentialsBuilder'
 import OpenCodeGoUsageCell from './OpenCodeGoUsageCell.vue'
@@ -728,7 +729,7 @@ let visibilityObserver: IntersectionObserver | null = null
 const shouldRenderOpenCodeGoUsage = (account: Account): boolean => {
   if (account.opencode_go_usage?.eligible === true) return true
   if (
-    account.type !== 'apikey' ||
+    !isOpenCodeGoUsageAccountType(account.type) ||
     (account.platform !== 'openai' && account.platform !== 'deepseek')
   ) {
     return false

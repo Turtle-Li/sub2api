@@ -10,6 +10,7 @@ import {
   buildHeaderOverridesObject,
   buildPlanTypeOptions,
   isOpenCodeGoBaseUrl,
+  isOpenCodeGoUsageAccountType,
   isOpenCodeGoUsageUrl,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
@@ -21,6 +22,19 @@ import {
   splitHeaderOverridesObject,
   validateHeaderOverrideRows
 } from '../credentialsBuilder'
+
+describe('isOpenCodeGoUsageAccountType', () => {
+  it('accepts API-key and imported upstream accounts', () => {
+    expect(isOpenCodeGoUsageAccountType('apikey')).toBe(true)
+    expect(isOpenCodeGoUsageAccountType('upstream')).toBe(true)
+  })
+
+  it('rejects OAuth and credential-free account types', () => {
+    expect(isOpenCodeGoUsageAccountType('oauth')).toBe(false)
+    expect(isOpenCodeGoUsageAccountType('service_account')).toBe(false)
+    expect(isOpenCodeGoUsageAccountType(undefined)).toBe(false)
+  })
+})
 
 describe('applyInterceptWarmup', () => {
   it('create + enabled=true: should set intercept_warmup_requests to true', () => {

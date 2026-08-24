@@ -646,8 +646,8 @@ func lockAndMergeAccountProbeExtra(
 				platform IN ('openai', 'deepseek')
 				AND $2 IN ('openai', 'deepseek')
 				AND platform = $2
-				AND type = 'apikey'
-				AND $3 = 'apikey'
+				AND type IN ('apikey', 'upstream')
+				AND $3 IN ('apikey', 'upstream')
 				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key'
 				AND `+opencodeGoUsageURLMatchSQL("credentials ->> 'base_url'")+`
 				AND `+opencodeGoUsageURLMatchSQL("$4::jsonb ->> 'base_url'")+`,
@@ -856,7 +856,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				-- 若排在前面会遮蔽 opencode 行的清理。opencode 与 ollama base URL
 				-- 正则互斥，旧行只会命中其中一个分支。
 				WHEN platform IN ('openai', 'deepseek')
-					AND type = 'apikey'
+					AND type IN ('apikey', 'upstream')
 					AND credentials IS DISTINCT FROM $1::jsonb
 					AND `+opencodeGoUsageURLMatchSQL("credentials ->> 'base_url'")+`
 					AND (
@@ -3036,7 +3036,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		// eligible 判定必须复用统一的 URL-keyword/URL 规则：否则
 		// OpenAI/DeepSeek+Ollama 行在代理变化时会先命中 OpenCode 分支（CASE 按序
 		// 求值）而遮蔽 Ollama 分支的快照清理。
-		opencodeEligibleAccount := "platform IN ('openai', 'deepseek') AND type = 'apikey' AND " + opencodeOldEligibility
+		opencodeEligibleAccount := "platform IN ('openai', 'deepseek') AND type IN ('apikey', 'upstream') AND " + opencodeOldEligibility
 		opencodeGroupIdentityChanged := ""
 		if len(opencodeGroupIdentityChanges) > 0 {
 			opencodeGroupIdentityChanged = "(" + opencodeEligibleAccount + " AND (" + joinClauses(opencodeGroupIdentityChanges, " OR ") + "))"
