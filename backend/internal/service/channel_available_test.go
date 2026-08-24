@@ -535,7 +535,7 @@ func TestFillGlobalPricingFallback_NilPricing(t *testing.T) {
 	models := []SupportedModel{
 		{Name: "claude-opus-4-5", Platform: "anthropic"},
 	}
-	svc.fillGlobalPricingFallback(models)
+	fillGlobalPricingFallback(svc.pricingService, models)
 	require.NotNil(t, models[0].Pricing)
 	require.NotNil(t, models[0].Pricing.InputPrice)
 	require.InDelta(t, 5e-6, *models[0].Pricing.InputPrice, 1e-12)
@@ -556,7 +556,7 @@ func TestFillGlobalPricingFallbackUsesMappedProbeTarget(t *testing.T) {
 		ProbeModelName: "gemini-2.5-flash-lite",
 		Platform:       "gemini",
 	}}
-	svc.fillGlobalPricingFallback(models)
+	fillGlobalPricingFallback(svc.pricingService, models)
 	require.NotNil(t, models[0].Pricing)
 	require.NotNil(t, models[0].Pricing.InputPrice)
 	require.InDelta(t, 1e-7, *models[0].Pricing.InputPrice, 1e-12)
@@ -582,7 +582,7 @@ func TestFillGlobalPricingFallback_EmptyPricingFillsFromLiteLLM(t *testing.T) {
 			},
 		},
 	}
-	svc.fillGlobalPricingFallback(models)
+	fillGlobalPricingFallback(svc.pricingService, models)
 	require.NotNil(t, models[0].Pricing)
 	require.Equal(t, BillingModeImage, models[0].Pricing.BillingMode)
 	require.NotNil(t, models[0].Pricing.ImageOutputPrice)
@@ -603,7 +603,7 @@ func TestFillGlobalPricingFallback_KeepsExistingPrice(t *testing.T) {
 	models := []SupportedModel{
 		{Name: "served-model", Platform: "anthropic", Pricing: existing},
 	}
-	svc.fillGlobalPricingFallback(models)
+	fillGlobalPricingFallback(svc.pricingService, models)
 	require.Same(t, existing, models[0].Pricing)
 }
 

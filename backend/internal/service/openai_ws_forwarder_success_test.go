@@ -459,14 +459,15 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersConvergesOAuthDeviceOnly(t *te
 	)
 	require.NoError(t, err)
 	require.Equal(t, "per-account-device", headers.Get("x-codex-installation-id"))
-	require.Equal(t, isolateOpenAISessionID(0, "client-session"), headers.Get("session_id"), "device 模式保留既有用户会话隔离")
+	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "client-session"), headers.Get("session_id"), "device 模式保留既有用户会话隔离（并按凭据身份命名空间收敛）")
 	var turnMetadata map[string]any
 	require.NoError(t, json.Unmarshal([]byte(headers.Get(openAIWSTurnMetadataHeader)), &turnMetadata))
 	require.Equal(t, "per-account-device", turnMetadata["installation_id"])
-	require.Equal(t, "client-session", turnMetadata["session_id"])
+	// turn metadata 内嵌的会话身份也按凭据命名空间收敛。
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "session", "client-session"), turnMetadata["session_id"])
 }
 
-func TestOpenAIGatewayService_BuildOpenAIWSHeadersDeviceModePreservesClientSessionIdentity(t *testing.T) {
+func TestOpenAIGatewayService_BuildOpenAIWSHeadersDeviceModePreservesNamespacedClientSessionIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -501,10 +502,10 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersDeviceModePreservesClientSessi
 	require.NoError(t, err)
 	require.Equal(t, ids.installationID, headers.Get("x-codex-installation-id"))
 	require.NotEqual(t, "client-installation", headers.Get("x-codex-installation-id"))
-	require.Equal(t, "client-window", headers.Get("x-codex-window-id"))
-	require.Equal(t, "client-session", headers.Get("session-id"))
-	require.Equal(t, "client-thread", headers.Get("thread-id"))
-	require.Equal(t, "client-request", headers.Get("x-client-request-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "window", "client-window"), headers.Get("x-codex-window-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "session", "client-session"), headers.Get("session-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "thread", "client-thread"), headers.Get("thread-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "request", "client-request"), headers.Get("x-client-request-id"))
 }
 
 func TestLogOpenAIWSBindResponseAccountWarn(t *testing.T) {
@@ -837,13 +838,16 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.Equal(t, "native-wsv2", gjson.Get(requestJSON, "input.0.namespace").String(), "OAuth WSv2 应保留原生 namespace")
 	require.Equal(t, openAIWSBetaV2Value, captureDialer.lastHeaders.Get("OpenAI-Beta"))
 	require.Equal(t, "remote_compaction_v2", captureDialer.lastHeaders.Get("x-codex-beta-features"))
-	// OAuth 账号的 session_id/conversation_id 应被 isolateOpenAISessionID 隔离，
+	// OAuth 账号的 session_id/conversation_id 应同时按 API key 和上游账号隔离，
 	// 测试中未设置 api_key 到 context，apiKeyID=0。
-	require.Equal(t, isolateOpenAISessionID(0, "sess-oauth-1"), captureDialer.lastHeaders.Get("session_id"))
-	require.Equal(t, isolateOpenAISessionID(0, "conv-oauth-1"), captureDialer.lastHeaders.Get("conversation_id"))
+	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "sess-oauth-1"), captureDialer.lastHeaders.Get("session_id"))
+	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "conv-oauth-1"), captureDialer.lastHeaders.Get("conversation_id"))
 	require.Equal(t, "per-account-device", captureDialer.lastHeaders.Get("x-codex-installation-id"))
 	require.Equal(t, "per-account-device", gjson.Get(requestJSON, "client_metadata.x-codex-installation-id").String())
-	require.Equal(t, "client-session", gjson.Get(requestJSON, "client_metadata.session_id").String(), "device 模式不改写载荷会话")
+	// 握手头已按凭据身份收敛，载荷必须同样收敛：若头部收敛而载荷保留原始
+	// client-session，上游仍可凭载荷把同一会话关联到多个账号，隔离即失效。
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "session", "client-session"),
+		gjson.Get(requestJSON, "client_metadata.session_id").String(), "device 模式下载荷会话按凭据身份收敛")
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testing.T) {
@@ -1065,8 +1069,8 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 	require.NotNil(t, result)
 	require.Equal(t, "resp_prompt_cache_key", result.RequestID)
 
-	// OAuth 账号的 session_id 应被 isolateOpenAISessionID 隔离（apiKeyID=0，未在 context 设置）。
-	require.Equal(t, isolateOpenAISessionID(0, "pcache_123"), captureDialer.lastHeaders.Get("session_id"))
+	// OAuth 账号的 session_id 应同时按 API key 和上游账号隔离（apiKeyID=0）。
+	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "pcache_123"), captureDialer.lastHeaders.Get("session_id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 	require.NotNil(t, captureConn.lastWrite)
 	require.True(t, gjson.Get(requestToJSONString(captureConn.lastWrite), "stream").Exists())
@@ -1944,13 +1948,13 @@ func (c *openAIWSCaptureConn) WriteJSON(ctx context.Context, value any) error {
 		c.writes = append(c.writes, cloneMapStringAny(payload))
 	case json.RawMessage:
 		var parsed map[string]any
-		if err := json.Unmarshal(payload, &parsed); err == nil {
+		if err := decodeOpenAIJSONUseNumber(payload, &parsed); err == nil {
 			c.lastWrite = cloneMapStringAny(parsed)
 			c.writes = append(c.writes, cloneMapStringAny(parsed))
 		}
 	case []byte:
 		var parsed map[string]any
-		if err := json.Unmarshal(payload, &parsed); err == nil {
+		if err := decodeOpenAIJSONUseNumber(payload, &parsed); err == nil {
 			c.lastWrite = cloneMapStringAny(parsed)
 			c.writes = append(c.writes, cloneMapStringAny(parsed))
 		}

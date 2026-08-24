@@ -915,14 +915,40 @@ func IsOpenCodeGoUsageAccount(account *Account) bool {
 	// account name is only a display label and must not change whether an
 	// official DeepSeek balance or OpenCode Go window is shown.
 	baseURL, _ := account.Credentials["base_url"].(string)
-	usageKeyword := accountUsageURLKeyword(baseURL)
-	if usageKeyword == "opencode" {
+	// The official host is judged strictly: only the exact Zen Go endpoint is a
+	// usage surface, so a wrong port/path/query on opencode.ai stays ineligible
+	// instead of being rescued by a substring match on the host name.
+	if isOpenCodeGoBaseURL(baseURL) {
 		return true
 	}
-	if usageKeyword == "deepseek" {
+	if isOpenCodeGoOfficialHost(baseURL) {
 		return false
 	}
-	return isOpenCodeGoBaseURL(baseURL)
+	// Third-party relays never match the official URL, so fall back to the
+	// usage-mode keyword carried by the saved URL. OpenCode wins over DeepSeek
+	// when a relay URL contains both.
+	switch accountUsageURLKeyword(baseURL) {
+	case "opencode":
+		return true
+	case "deepseek":
+		return false
+	}
+	return false
+}
+
+// isOpenCodeGoOfficialHost reports whether the saved URL points at the official
+// OpenCode host at all, regardless of port or path. Such a URL must be matched
+// exactly by isOpenCodeGoBaseURL or rejected outright.
+func isOpenCodeGoOfficialHost(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Opaque != "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "opencode.ai")
 }
 
 // accountUsageURLKeyword returns the usage-mode keyword carried by the saved
