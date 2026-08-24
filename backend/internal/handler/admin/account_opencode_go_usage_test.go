@@ -137,8 +137,11 @@ func TestOpenCodeGoUsageStateEmbeddedInListAndDetail(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC()
 	account := &service.Account{
-		ID: 7, Name: "opencode", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
-		Credentials: map[string]any{"base_url": "https://opencode.ai/zen/go/v1", "api_key": "test-key"},
+		ID: 7, Name: "opencode", Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "https://opencode.ai/zen/go", "api_key": "test-key",
+			"account_mode": service.AccountModePayG, "api_protocol": service.APIProtocolAnthropic,
+		},
 		Extra: map[string]any{
 			service.OpenCodeGoUsageAutoRefreshExtraKey: true,
 			service.OpenCodeGoUsageSnapshotExtraKey: &service.OpenCodeGoUsageSnapshot{

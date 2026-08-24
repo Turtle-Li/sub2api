@@ -129,7 +129,7 @@ func (s *OpenAIGatewayService) nativeAnthropicTargetURL(account *Account) (strin
 	if err != nil {
 		return "", fmt.Errorf("invalid base_url: %w", err)
 	}
-	return strings.TrimRight(validatedURL, "/") + "/v1/messages", nil
+	return buildAnthropicMessagesEndpointURL(validatedURL), nil
 }
 
 func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(

@@ -29,3 +29,21 @@ func TestBuildOpenAIEndpointURLPreservesURLComponents(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildAnthropicMessagesEndpointURLOnlyNormalizesOpenCodeGo(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		base string
+		want string
+	}{
+		{name: "OpenCode legacy base", base: "https://opencode.ai/zen/go", want: "https://opencode.ai/zen/go/v1/messages"},
+		{name: "OpenCode canonical base", base: "https://opencode.ai/zen/go/v1", want: "https://opencode.ai/zen/go/v1/messages"},
+		{name: "OpenCode spelling variant", base: "HTTPS://OPENCODE.AI:443/ZEN/GO/V1/", want: "https://opencode.ai/zen/go/v1/messages"},
+		{name: "provider base", base: "https://open.bigmodel.cn/api/anthropic", want: "https://open.bigmodel.cn/api/anthropic/v1/messages"},
+		{name: "custom versioned base keeps legacy join", base: "https://relay.example/v4", want: "https://relay.example/v4/v1/messages"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			require.Equal(t, testCase.want, buildAnthropicMessagesEndpointURL(testCase.base))
+		})
+	}
+}

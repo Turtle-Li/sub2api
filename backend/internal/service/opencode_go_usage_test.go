@@ -792,8 +792,17 @@ func TestIsOpenCodeGoUsageAccount(t *testing.T) {
 	}
 	require.True(t, IsOpenCodeGoUsageAccount(base()))
 
-	// trailing slash on the path is allowed
+	// Production Anthropic accounts keep the unversioned routing base because
+	// the native gateway appends /v1/messages. It is the same OpenCode Go
+	// account and must remain eligible for the fixed /v1/usage probe.
 	account := base()
+	account.Platform = PlatformDeepseek
+	account.Credentials["api_protocol"] = APIProtocolAnthropic
+	account.Credentials["base_url"] = "https://opencode.ai/zen/go"
+	require.True(t, IsOpenCodeGoUsageAccount(account))
+
+	// trailing slash on the path is allowed
+	account = base()
 	account.Credentials["base_url"] = "https://opencode.ai/zen/go/v1/"
 	require.True(t, IsOpenCodeGoUsageAccount(account))
 
@@ -871,7 +880,8 @@ func TestIsOpenCodeGoUsageAccountURLKeywordsOverrideURLFallback(t *testing.T) {
 	require.False(t, IsOpenCodeGoUsageAccount(base("arbitrary label", "https://relay.example.com/deepseek/v1")))
 	require.True(t, IsOpenCodeGoUsageAccount(base("arbitrary label", "https://relay.example.com/deepseek-opencode/v1")))
 
-	// The exact official OpenCode Go URL remains supported for legacy accounts.
+	// Both protocol-specific official base forms remain supported.
+	require.True(t, IsOpenCodeGoUsageAccount(base("custom-provider", "https://opencode.ai/zen/go")))
 	require.True(t, IsOpenCodeGoUsageAccount(base("custom-provider", "https://opencode.ai/zen/go/v1")))
 	require.False(t, IsOpenCodeGoUsageAccount(base("custom-provider", "https://api.deepseek.com")))
 }
@@ -880,7 +890,7 @@ func TestOpenCodeGoUsageGroupFingerprint(t *testing.T) {
 	first := openCodeGoUsageAccount(1)
 	first.Credentials["api_key"] = "shared-key"
 	second := openCodeGoUsageAccount(2)
-	second.Credentials = map[string]any{"base_url": "HTTPS://OPENCODE.AI/ZEN/GO/V1/", "api_key": "shared-key"}
+	second.Credentials = map[string]any{"base_url": "https://opencode.ai/zen/go", "api_key": "shared-key"}
 	third := openCodeGoUsageAccount(3)
 	third.Credentials["api_key"] = "other-key"
 

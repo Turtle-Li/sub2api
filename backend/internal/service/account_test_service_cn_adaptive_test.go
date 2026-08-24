@@ -229,6 +229,39 @@ func TestAccountTestService_AnthropicProtocolProbesNativeEndpointWithoutBetaQuer
 	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
 }
 
+func TestAccountTestService_AnthropicProtocolAcceptsCanonicalOpenCodeGoBaseURL(t *testing.T) {
+	account := anthropicProtocolCNAccount(315, PlatformDeepseek, map[string]any{
+		"base_url": "HTTPS://OPENCODE.AI:443/ZEN/GO/V1/",
+	})
+	svc, upstream := adaptiveCNAccountTestService(account, adaptiveCNAnthropicTestResponse())
+	c, recorder := newTestContext()
+
+	err := svc.TestAccountConnection(c, account.ID, "gpt-5.1-codex-mini", "", AccountTestModeDefault)
+
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "https://opencode.ai/zen/go/v1/messages", upstream.requests[0].URL.String())
+	require.NotContains(t, recorder.Body.String(), "looks like an OpenAI-compatible endpoint")
+}
+
+func TestAccountTestService_AnthropicProtocolRejectsOpenCodeGoURLForOtherProviders(t *testing.T) {
+	for index, platform := range []string{PlatformKimi, PlatformZhipu} {
+		t.Run(platform, func(t *testing.T) {
+			account := anthropicProtocolCNAccount(int64(316+index), platform, map[string]any{
+				"base_url": "https://opencode.ai/zen/go/v1",
+			})
+			svc, upstream := adaptiveCNAccountTestService(account)
+			c, recorder := newTestContext()
+
+			err := svc.TestAccountConnection(c, account.ID, "test-model", "", AccountTestModeDefault)
+
+			require.Error(t, err)
+			require.Empty(t, upstream.requests)
+			require.Contains(t, recorder.Body.String(), "looks like an OpenAI-compatible endpoint")
+		})
+	}
+}
+
 func TestAccountTestService_AnthropicProtocolFallsBackToProviderDefaultNotAnthropicDotCom(t *testing.T) {
 	// base_url intentionally absent: forwarding resolves the per-platform default
 	// Anthropic endpoint. The old fall-through probed https://api.anthropic.com

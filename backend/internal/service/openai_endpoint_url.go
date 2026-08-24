@@ -27,6 +27,17 @@ func buildOpenAIEndpointURL(base string, endpoint string) string {
 	return parsed.String()
 }
 
+// buildAnthropicMessagesEndpointURL preserves the established {base}/v1/messages
+// contract for provider and relay URLs. OpenCode Go is the narrow exception:
+// its accepted bases may already contain /v1, so normalize them before joining.
+func buildAnthropicMessagesEndpointURL(base string) string {
+	normalized := strings.TrimSpace(base)
+	if isOpenCodeGoBaseURL(normalized) {
+		return strings.TrimRight(canonicalOpenCodeGoUsageBaseURL(normalized), "/") + "/messages"
+	}
+	return strings.TrimRight(normalized, "/") + "/v1/messages"
+}
+
 func buildOpenAIResponsesInputTokensURL(base string) string {
 	return buildOpenAIEndpointURL(base, "/v1/responses/input_tokens")
 }

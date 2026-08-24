@@ -915,9 +915,10 @@ func IsOpenCodeGoUsageAccount(account *Account) bool {
 	// account name is only a display label and must not change whether an
 	// official DeepSeek balance or OpenCode Go window is shown.
 	baseURL, _ := account.Credentials["base_url"].(string)
-	// The official host is judged strictly: only the exact Zen Go endpoint is a
-	// usage surface, so a wrong port/path/query on opencode.ai stays ineligible
-	// instead of being rescued by a substring match on the host name.
+	// The official host is judged strictly: only the two protocol-compatible Zen
+	// Go bases are usage surfaces. Anthropic accounts keep /zen/go because their
+	// native endpoint builder adds /v1/messages; OpenAI-format accounts commonly
+	// store /zen/go/v1. Wrong ports, paths, and queries remain ineligible.
 	if isOpenCodeGoBaseURL(baseURL) {
 		return true
 	}
@@ -945,8 +946,8 @@ func isOpenCodeGoUsageAccountType(accountType string) bool {
 }
 
 // isOpenCodeGoOfficialHost reports whether the saved URL points at the official
-// OpenCode host at all, regardless of port or path. Such a URL must be matched
-// exactly by isOpenCodeGoBaseURL or rejected outright.
+// OpenCode host at all, regardless of port or path. Such a URL must match one
+// of the protocol-compatible bases exactly or be rejected outright.
 func isOpenCodeGoOfficialHost(raw string) bool {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -1002,7 +1003,8 @@ func isOpenCodeGoBaseURL(raw string) bool {
 	if parsed.RawPath != "" {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSuffix(parsed.Path, "/"), "/zen/go/v1")
+	path := strings.ToLower(strings.TrimSuffix(parsed.Path, "/"))
+	return path == "/zen/go" || path == "/zen/go/v1"
 }
 
 // canonicalOpenCodeGoUsageBaseURL keeps accepted case/port variants from

@@ -74,6 +74,50 @@ data: {"type":"message_stop"}
 	}
 }
 
+func TestNativeAnthropicTargetURLAcceptsVersionedAndUnversionedBases(t *testing.T) {
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}
+	for _, testCase := range []struct {
+		name     string
+		baseURL  string
+		expected string
+	}{
+		{
+			name:     "legacy OpenCode Go Anthropic base",
+			baseURL:  "https://opencode.ai/zen/go",
+			expected: "https://opencode.ai/zen/go/v1/messages",
+		},
+		{
+			name:     "canonical OpenCode Go base",
+			baseURL:  "https://opencode.ai/zen/go/v1",
+			expected: "https://opencode.ai/zen/go/v1/messages",
+		},
+		{
+			name:     "OpenCode Go spelling variants are canonicalized",
+			baseURL:  "HTTPS://OPENCODE.AI:443/ZEN/GO/V1/",
+			expected: "https://opencode.ai/zen/go/v1/messages",
+		},
+		{
+			name:     "provider Anthropic base",
+			baseURL:  "https://open.bigmodel.cn/api/anthropic",
+			expected: "https://open.bigmodel.cn/api/anthropic/v1/messages",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			account := &Account{
+				ID: 703, Platform: PlatformDeepseek, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{
+					"api_key": "sk-test", "api_protocol": APIProtocolAnthropic,
+					"base_url": testCase.baseURL,
+				},
+			}
+
+			targetURL, err := svc.nativeAnthropicTargetURL(account)
+			require.NoError(t, err)
+			require.Equal(t, testCase.expected, targetURL)
+		})
+	}
+}
+
 func TestNativeAnthropicPassthroughRecordsOutputConfigEffort(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"k3","max_tokens":32,"stream":false,` +

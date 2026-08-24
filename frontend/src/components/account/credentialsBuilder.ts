@@ -298,16 +298,16 @@ export function isOpenCodeGoBaseUrl(value: unknown): value is string {
     parsed.password === '' &&
     parsed.search === '' &&
     parsed.hash === '' &&
-    parsed.pathname.replace(/\/$/, '').toLowerCase() === '/zen/go/v1'
+    ['/zen/go', '/zen/go/v1'].includes(parsed.pathname.replace(/\/$/, '').toLowerCase())
   )
 }
 
 /**
  * Returns whether a saved upstream URL selects the OpenCode Go usage surface.
  *
- * The official endpoint is matched strictly. Third-party relay URLs keep the
- * backend's legacy keyword fallback (OpenCode wins over DeepSeek), while
- * official-host variants with a wrong path/port/query remain ineligible.
+ * The official protocol bases are matched strictly. Third-party relay URLs
+ * keep the backend's legacy keyword fallback (OpenCode wins over DeepSeek),
+ * while official-host variants with a wrong path/port/query remain ineligible.
  */
 export function isOpenCodeGoUsageUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false

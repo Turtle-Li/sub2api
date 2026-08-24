@@ -221,6 +221,7 @@ describe('isCustomGrokBaseUrl', () => {
 
 describe('isOpenCodeGoBaseUrl', () => {
   it('accepts the canonical URL and harmless URL variants', () => {
+    expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go')).toBe(true)
     expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v1')).toBe(true)
     expect(isOpenCodeGoBaseUrl('HTTPS://OPENCODE.AI:443/zen/go/v1/')).toBe(true)
   })
@@ -236,6 +237,7 @@ describe('isOpenCodeGoBaseUrl', () => {
 
 describe('isOpenCodeGoUsageUrl', () => {
   it('uses the strict official URL and recognizes relay URLs by keyword', () => {
+    expect(isOpenCodeGoUsageUrl('https://opencode.ai/zen/go')).toBe(true)
     expect(isOpenCodeGoUsageUrl('https://opencode.ai/zen/go/v1')).toBe(true)
     expect(isOpenCodeGoUsageUrl('https://relay.example.com/opencode/go/v1')).toBe(true)
     expect(isOpenCodeGoUsageUrl('https://relay.example.com/deepseek-opencode/v1')).toBe(true)

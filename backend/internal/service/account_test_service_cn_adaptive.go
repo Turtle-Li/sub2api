@@ -61,7 +61,7 @@ func (s *AccountTestService) testCNProviderAdaptiveAnthropicConnection(c *gin.Co
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid adaptive Anthropic base URL: %s", err.Error()))
 	}
-	apiURL := strings.TrimRight(baseURL, "/") + "/v1/messages"
+	apiURL := buildAnthropicMessagesEndpointURL(baseURL)
 
 	payload, err := createTestPayload(testModelID)
 	if err != nil {
@@ -231,10 +231,10 @@ func (s *AccountTestService) testCNProviderAnthropicConnection(c *gin.Context, a
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Anthropic base URL: %s", err.Error()))
 	}
-	if hint := cnAnthropicBaseURLMisconfigHint(baseURL); hint != "" {
+	if hint := cnAnthropicBaseURLMisconfigHint(account, baseURL); hint != "" {
 		return s.sendErrorAndEnd(c, hint)
 	}
-	apiURL := strings.TrimRight(baseURL, "/") + "/v1/messages"
+	apiURL := buildAnthropicMessagesEndpointURL(baseURL)
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
@@ -285,7 +285,14 @@ func (s *AccountTestService) testCNProviderAnthropicConnection(c *gin.Context, a
 // endpoint (paas path, version segment, or chat/completions / responses
 // suffix). The naive {base}/v1/messages join would 404 (e.g.
 // .../api/paas/v4/v1/messages) with no hint about the actual misconfiguration.
-func cnAnthropicBaseURLMisconfigHint(baseURL string) string {
+func cnAnthropicBaseURLMisconfigHint(account *Account, baseURL string) string {
+	// OpenCode Go deliberately shares a versioned base across OpenAI-compatible
+	// and Anthropic protocols. The OpenCode-aware endpoint builder appends only
+	// /messages when the saved base already ends in /v1. Only DeepSeek accounts
+	// support this endpoint; do not send another provider's key to OpenCode.
+	if account != nil && account.Platform == PlatformDeepseek && isOpenCodeGoBaseURL(baseURL) {
+		return ""
+	}
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return ""

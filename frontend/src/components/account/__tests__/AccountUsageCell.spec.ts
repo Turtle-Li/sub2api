@@ -214,7 +214,7 @@ describe('AccountUsageCell', () => {
     expect(wrapper.find('[data-test="opencode-go-usage"]').exists()).toBe(true)
   })
 
-  it('uses the saved OpenCode URL even when the usage state is missing from a stale account row', () => {
+  it('uses the production Anthropic OpenCode URL when usage state is missing from a stale account row', () => {
     const wrapper = mount(AccountUsageCell, {
       props: {
         account: makeAccount({
@@ -224,7 +224,8 @@ describe('AccountUsageCell', () => {
           type: 'apikey',
           credentials: {
             account_mode: 'payg',
-            base_url: 'https://opencode.ai/zen/go/v1'
+            api_protocol: 'anthropic',
+            base_url: 'https://opencode.ai/zen/go'
           },
           opencode_go_usage: undefined
         })

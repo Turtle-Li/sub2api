@@ -82,6 +82,7 @@ func TestGetBaseURL(t *testing.T) {
 
 func TestOpenCodeGoBaseURLCanonicalizedForOutboundRequests(t *testing.T) {
 	for _, raw := range []string{
+		"https://opencode.ai/zen/go",
 		"HTTPS://OPENCODE.AI/ZEN/GO/V1",
 		"https://opencode.ai:443/zen/go/v1/",
 	} {
