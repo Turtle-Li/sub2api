@@ -34,6 +34,16 @@ do
       GATEWAY_MAX_IDLE_CONNS_PER_HOST) value=120 ;;
     esac
 
+    # The production Compose file deliberately enables bounded image
+    # backpressure. Other deployment variants retain backend defaults.
+    if [ "$compose_file" = "deploy/docker-compose.yml" ]; then
+      case "$key" in
+        GATEWAY_IMAGE_CONCURRENCY_ENABLED) value=true ;;
+        GATEWAY_IMAGE_CONCURRENCY_MAX_CONCURRENT_REQUESTS) value=16 ;;
+        GATEWAY_IMAGE_CONCURRENCY_OVERFLOW_MODE) value=wait ;;
+      esac
+    fi
+
     expected=$(printf '      - %s=${%s:-%s}' "$key" "$key" "$value")
     expected_count=$(grep -Fxc "$expected" "$compose_file" || true)
     key_count=$(grep -Ec "^[[:space:]]*-[[:space:]]*${key}([[:space:]]*=.*)?[[:space:]]*$" "$compose_file" || true)

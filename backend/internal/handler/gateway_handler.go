@@ -1354,10 +1354,6 @@ type openAIProbeModelListItem struct {
 	probeModelFields
 }
 
-func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
-	writeOpenAIModelsListWithProbeMetadata(c, modelIDs, nil)
-}
-
 func writeOpenAIModelsListWithProbeMetadata(c *gin.Context, modelIDs []string, metadata map[string]service.ProbeModelMetadata) {
 	defaultsByID := make(map[string]openai.Model, len(openai.DefaultModels))
 	for _, model := range openai.DefaultModels {

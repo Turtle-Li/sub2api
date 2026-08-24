@@ -1532,7 +1532,7 @@ func (s *RateLimitService) persistAnthropicFableCreditsRequiredLimit(
 	orgDisabled := strings.EqualFold(strings.TrimSpace(payload.Error.Details.DisabledReason), "org_level_disabled") ||
 		strings.EqualFold(strings.TrimSpace(headers.Get("anthropic-ratelimit-unified-overage-disabled-reason")), "org_level_disabled")
 	messageRequiresCredits := strings.Contains(strings.ToLower(strings.TrimSpace(payload.Error.Message)), "usage credits are required")
-	if !creditsRequired && !(orgDisabled && messageRequiresCredits) {
+	if !creditsRequired && (!orgDisabled || !messageRequiresCredits) {
 		return false
 	}
 
