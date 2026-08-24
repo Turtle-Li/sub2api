@@ -10,6 +10,7 @@ import {
   buildHeaderOverridesObject,
   buildPlanTypeOptions,
   isOpenCodeGoBaseUrl,
+  isOpenCodeGoUsageUrl,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
   GROK_BASE_URL_PRESETS,
@@ -216,6 +217,21 @@ describe('isOpenCodeGoBaseUrl', () => {
     expect(isOpenCodeGoBaseUrl('https://opencode.ai:8443/zen/go/v1')).toBe(false)
     expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v1?raw=1')).toBe(false)
     expect(isOpenCodeGoBaseUrl('https://opencode.ai/zen/go/v1//')).toBe(false)
+  })
+})
+
+describe('isOpenCodeGoUsageUrl', () => {
+  it('uses the strict official URL and recognizes relay URLs by keyword', () => {
+    expect(isOpenCodeGoUsageUrl('https://opencode.ai/zen/go/v1')).toBe(true)
+    expect(isOpenCodeGoUsageUrl('https://relay.example.com/opencode/go/v1')).toBe(true)
+    expect(isOpenCodeGoUsageUrl('https://relay.example.com/deepseek-opencode/v1')).toBe(true)
+  })
+
+  it('rejects DeepSeek pay-as-you-go URLs and malformed official variants', () => {
+    expect(isOpenCodeGoUsageUrl('https://api.deepseek.com')).toBe(false)
+    expect(isOpenCodeGoUsageUrl('https://relay.example.com/deepseek/v1')).toBe(false)
+    expect(isOpenCodeGoUsageUrl('https://opencode.ai/zen/go/v2')).toBe(false)
+    expect(isOpenCodeGoUsageUrl('https://opencode.ai/zen/go/v1?raw=1')).toBe(false)
   })
 })
 

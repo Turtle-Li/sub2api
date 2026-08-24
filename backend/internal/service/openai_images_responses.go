@@ -332,6 +332,9 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
+	if parsed.N > openAIImagesMaxN {
+		return nil, fmt.Errorf("n must be between 1 and %d", openAIImagesMaxN)
+	}
 	prompt := strings.TrimSpace(parsed.Prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")

@@ -1280,6 +1280,7 @@ func TestNormalizeOpenAIResponsesImageOnlyModel_BuildsImageToolRequest(t *testin
 	reqBody := map[string]any{
 		"model":         "gpt-image-2",
 		"prompt":        "draw a cat",
+		"n":             openAIImagesMaxN,
 		"size":          "1024x1024",
 		"output_format": "png",
 	}
@@ -1300,6 +1301,7 @@ func TestNormalizeOpenAIResponsesImageOnlyModel_BuildsImageToolRequest(t *testin
 	require.True(t, ok)
 	require.Equal(t, "image_generation", tool["type"])
 	require.Equal(t, "gpt-image-2", tool["model"])
+	require.Equal(t, openAIImagesMaxN, tool["n"])
 	require.Equal(t, "1024x1024", tool["size"])
 	require.Equal(t, "png", tool["output_format"])
 

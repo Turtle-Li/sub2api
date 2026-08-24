@@ -56,7 +56,7 @@ const usageState = (overrides: Partial<OpenCodeGoUsageState> = {}): OpenCodeGoUs
   ...overrides
 })
 
-const account = (state = usageState()): Account => ({
+const account = (state: OpenCodeGoUsageState | undefined = usageState()): Account => ({
   id: 7,
   name: 'opencode',
   platform: 'openai',
@@ -83,6 +83,11 @@ const account = (state = usageState()): Account => ({
   session_window_status: null
 })
 
+const accountWithOfficialURL = (state?: OpenCodeGoUsageState): Account => ({
+  ...account(state),
+  credentials: { base_url: 'https://opencode.ai/zen/go/v1' }
+})
+
 describe('OpenCodeGoUsageCell', () => {
   beforeEach(() => {
     refreshOpenCodeGoUsage.mockReset()
@@ -99,6 +104,19 @@ describe('OpenCodeGoUsageCell', () => {
 
     expect(refreshOpenCodeGoUsage).toHaveBeenCalledTimes(1)
     expect(refreshOpenCodeGoUsage).toHaveBeenCalledWith(7)
+    expect(wrapper.findAllComponents(UsageProgressBar)[0].props('utilization')).toBe(43)
+  })
+
+  it('derives eligibility from the saved URL when the row has no usage state yet', async () => {
+    const refreshed = usageState()
+    refreshed.snapshot!.data!.rolling!.percent = 43
+    refreshOpenCodeGoUsage.mockResolvedValueOnce(refreshed)
+
+    const wrapper = mount(OpenCodeGoUsageCell, { props: { account: accountWithOfficialURL() } })
+    await flushPromises()
+
+    expect(refreshOpenCodeGoUsage).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="opencode-go-usage-cell"]').exists()).toBe(true)
     expect(wrapper.findAllComponents(UsageProgressBar)[0].props('utilization')).toBe(43)
   })
 

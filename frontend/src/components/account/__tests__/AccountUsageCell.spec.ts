@@ -214,6 +214,40 @@ describe('AccountUsageCell', () => {
     expect(wrapper.find('[data-test="opencode-go-usage"]').exists()).toBe(true)
   })
 
+  it('uses the saved OpenCode URL even when the usage state is missing from a stale account row', () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 9012,
+          name: 'stale-opencode-row',
+          platform: 'deepseek',
+          type: 'apikey',
+          credentials: {
+            account_mode: 'payg',
+            base_url: 'https://opencode.ai/zen/go/v1'
+          },
+          opencode_go_usage: undefined
+        })
+      },
+      global: {
+        stubs: {
+          OpenCodeGoUsageCell: {
+            template: '<div data-test="opencode-go-usage">go</div>'
+          },
+          CNProviderBalanceCell: {
+            template: '<div data-test="cn-provider-balance">balance</div>'
+          },
+          CNProviderQuotaCell: true,
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    expect(wrapper.find('[data-test="opencode-go-usage"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="cn-provider-balance"]').exists()).toBe(false)
+  })
+
   it('Antigravity 图片用量会聚合新旧 image 模型', async () => {
     getUsage.mockResolvedValue({
       antigravity_quota: {

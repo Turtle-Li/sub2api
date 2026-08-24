@@ -659,7 +659,11 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
-import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
+import {
+  cnQuotaCellVisible as cnQuotaCellVisibleFn,
+  cnBalanceCellVisible as cnBalanceCellVisibleFn,
+  isOpenCodeGoUsageUrl
+} from './credentialsBuilder'
 import OpenCodeGoUsageCell from './OpenCodeGoUsageCell.vue'
 
 // Module-level cache shared across all AccountUsageCell instances
@@ -722,7 +726,14 @@ let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = nul
 let visibilityObserver: IntersectionObserver | null = null
 
 const shouldRenderOpenCodeGoUsage = (account: Account): boolean => {
-  return account.opencode_go_usage?.eligible === true
+  if (account.opencode_go_usage?.eligible === true) return true
+  if (
+    account.type !== 'apikey' ||
+    (account.platform !== 'openai' && account.platform !== 'deepseek')
+  ) {
+    return false
+  }
+  return isOpenCodeGoUsageUrl(account.credentials?.base_url)
 }
 
 // Show usage windows for OAuth and Setup Token accounts

@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="state?.eligible"
+    v-if="usageEligible"
     class="min-w-0 max-w-full space-y-1"
     data-testid="opencode-go-usage-cell"
   >
@@ -83,6 +83,7 @@ import { adminAPI } from '@/api/admin'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { Account } from '@/types'
 import UsageProgressBar from './UsageProgressBar.vue'
+import { isOpenCodeGoUsageUrl } from './credentialsBuilder'
 
 const props = defineProps<{ account: Account }>()
 const emit = defineEmits<{ updated: [state: NonNullable<Account['opencode_go_usage']>] }>()
@@ -90,6 +91,16 @@ const { t } = useI18n()
 const state = ref(props.account.opencode_go_usage)
 const refreshing = ref(false)
 const refreshError = ref<string | null>(null)
+const urlEligible = computed(() => {
+  if (
+    props.account.type !== 'apikey' ||
+    (props.account.platform !== 'openai' && props.account.platform !== 'deepseek')
+  ) {
+    return false
+  }
+  return isOpenCodeGoUsageUrl(props.account.credentials?.base_url)
+})
+const usageEligible = computed(() => state.value?.eligible === true || urlEligible.value)
 const snapshot = computed(() => state.value?.snapshot)
 const statusLabel = computed(() => {
   if (snapshot.value?.status === 'unauthorized') return t('admin.accounts.opencodeGo.unauthorized')
@@ -122,7 +133,7 @@ const refreshUsage = async () => {
 }
 
 onMounted(() => {
-  if (state.value?.eligible) {
+  if (usageEligible.value) {
     void refreshUsage()
   }
 })

@@ -297,6 +297,33 @@ export function isOpenCodeGoBaseUrl(value: unknown): value is string {
   )
 }
 
+/**
+ * Returns whether a saved upstream URL selects the OpenCode Go usage surface.
+ *
+ * The official endpoint is matched strictly. Third-party relay URLs keep the
+ * backend's legacy keyword fallback (OpenCode wins over DeepSeek), while
+ * official-host variants with a wrong path/port/query remain ineligible.
+ */
+export function isOpenCodeGoUsageUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed || /[?#]/.test(trimmed)) return false
+  // Keep the type-guard input independent from the already narrowed string;
+  // otherwise TypeScript treats the false branch as `never`.
+  const candidate: unknown = trimmed
+  if (isOpenCodeGoBaseUrl(candidate)) return true
+
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.hostname.toLowerCase() === 'opencode.ai') return false
+  } catch {
+    // Keep the backend-compatible keyword fallback for legacy relay values.
+  }
+
+  const normalized = trimmed.toLowerCase()
+  return normalized.includes('opencode')
+}
+
 /** 各供应商按账号类型 × API 协议分档的快捷端点（点击快速填充，输入框仍可自由填写）。 */
 export const CN_BASE_URL_PRESETS: Record<'kimi' | 'zhipu' | 'deepseek', CnBaseUrlPreset[]> = {
   kimi: [

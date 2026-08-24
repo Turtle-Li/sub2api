@@ -1178,6 +1178,7 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 			modified = true
 		}
 		for _, key := range []string{
+			"n",
 			"size",
 			"quality",
 			"background",
