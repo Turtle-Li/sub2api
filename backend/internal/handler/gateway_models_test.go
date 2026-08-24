@@ -34,6 +34,9 @@ type gatewayModelItemForTest struct {
 	SupportsReasoningEffort bool                                  `json:"supportsReasoningEffort"`
 	ReasoningEffort         string                                `json:"reasoningEffort"`
 	ReasoningEfforts        []gatewayReasoningEffortOptionForTest `json:"reasoningEfforts"`
+	ProbeEligible           *bool                                 `json:"probe_eligible"`
+	ProbeCost               *float64                              `json:"probe_cost"`
+	CreditsGated            bool                                  `json:"credits_gated"`
 }
 
 type gatewayReasoningEffortOptionForTest struct {
@@ -100,6 +103,45 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	require.Equal(t, "list", got.Object)
 	require.Contains(t, modelIDsForTest(got.Data), "gemini-2.5-flash")
 	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
+}
+
+func TestGatewayModels_TTSwitchProbeCatalogueFailsClosedWithoutVerifier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(14)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformAnthropic,
+						Credentials: map[string]any{"model_mapping": map[string]any{
+							"claude-haiku-fast": "claude-fable-5",
+						}},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models?tt_switch_probe=1", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Data, 1)
+	require.Equal(t, "claude-haiku-fast", got.Data[0].ID)
+	require.NotNil(t, got.Data[0].ProbeEligible, "opt-in catalogue must explicitly publish the fail-closed decision")
+	require.False(t, *got.Data[0].ProbeEligible)
+	require.Nil(t, got.Data[0].ProbeCost)
 }
 
 func TestGatewayModels_Grok45AdvertisesReasoningEffortForGrokBuild(t *testing.T) {

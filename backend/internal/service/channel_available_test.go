@@ -119,6 +119,178 @@ func TestMinimalTextProbeEligibleRejectsNonTextModesAndNames(t *testing.T) {
 	require.True(t, svc.minimalTextProbeEligible(SupportedModel{Name: "custom-chat-model"}))
 }
 
+func TestVerifiedMinimalTextProbeMetadataFailsClosedForAliasesAndCreditsModels(t *testing.T) {
+	input := 1e-7
+	output := 2e-7
+	channelService := &ChannelService{pricingService: newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
+		"claude-haiku-safe": {
+			Mode:               "chat",
+			InputCostPerToken:  input,
+			OutputCostPerToken: output,
+		},
+		"known-image-model": {
+			Mode:               "image_generation",
+			InputCostPerToken:  input,
+			OutputCostPerToken: output,
+		},
+	})}
+
+	billingService := NewBillingService(nil, channelService.pricingService)
+	cost, eligible, gated := verifiedMinimalTextProbeMetadata(channelService, billingService, "claude-haiku-safe", time.Now())
+	require.True(t, eligible)
+	require.False(t, gated)
+	require.InDelta(t, input+output, cost, 1e-12)
+
+	_, eligible, gated = verifiedMinimalTextProbeMetadata(channelService, billingService, "cheap-text-alias", time.Now())
+	require.False(t, eligible, "unknown aliases have no authoritative capability or price")
+	require.False(t, gated)
+
+	_, eligible, gated = verifiedMinimalTextProbeMetadata(channelService, billingService, "claude-fable-5", time.Now())
+	require.False(t, eligible)
+	require.True(t, gated)
+
+	_, eligible, gated = verifiedMinimalTextProbeMetadata(channelService, billingService, "known-image-model", time.Now())
+	require.False(t, eligible)
+	require.False(t, gated)
+
+	cost, eligible, gated = verifiedMinimalTextProbeMetadata(channelService, billingService, "deepseek-v4-flash", time.Now())
+	require.True(t, eligible, "reviewed canonical billing fallbacks remain available when LiteLLM is behind")
+	require.False(t, gated)
+	require.Greater(t, cost, 0.0)
+
+	_, eligible, _ = verifiedMinimalTextProbeMetadata(channelService, billingService, "cheap-deepseek-v4-flash-alias", time.Now())
+	require.False(t, eligible, "fuzzy billing matches must not make an arbitrary alias probe-safe")
+
+	cost, eligible, gated = verifiedMinimalTextProbeMetadata(channelService, billingService, "k3", time.Now())
+	require.True(t, eligible, "the official Kimi Code bare model ID has an exact reviewed fallback")
+	require.False(t, gated)
+	require.Greater(t, cost, 0.0)
+}
+
+func TestGetVerifiedProbeModelMetadataChecksAccountMappingTargetsAndMaximumCost(t *testing.T) {
+	groupID := int64(14)
+	lowInput := 1e-7
+	lowOutput := 2e-7
+	highInput := 4e-7
+	highOutput := 8e-7
+	pricing := newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
+		"claude-haiku-low": {
+			Mode:               "chat",
+			InputCostPerToken:  lowInput,
+			OutputCostPerToken: lowOutput,
+		},
+		"claude-haiku-high": {
+			Mode:               "chat",
+			InputCostPerToken:  highInput,
+			OutputCostPerToken: highOutput,
+		},
+		"claude-fable-5": {
+			Mode:               "chat",
+			InputCostPerToken:  lowInput,
+			OutputCostPerToken: lowOutput,
+		},
+	})
+	repo := &modelsListAccountRepoStub{byGroup: map[int64][]Account{
+		groupID: {
+			{
+				ID:       1,
+				Platform: PlatformAnthropic,
+				Credentials: map[string]any{"model_mapping": map[string]any{
+					"claude-haiku-safe":   "claude-haiku-low",
+					"claude-haiku-faster": "claude-fable-5",
+				}},
+			},
+			{
+				ID:       2,
+				Platform: PlatformAnthropic,
+				Credentials: map[string]any{"model_mapping": map[string]any{
+					"claude-haiku-safe": "claude-haiku-high",
+				}},
+			},
+		},
+	}}
+	channelService := newAvailableChannelService(nil, &stubGroupRepoForAvailable{})
+	channelService.pricingService = pricing
+	svc := &GatewayService{
+		accountRepo:    repo,
+		channelService: channelService,
+		billingService: NewBillingService(nil, pricing),
+	}
+
+	metadata := svc.GetVerifiedProbeModelMetadata(
+		context.Background(),
+		&groupID,
+		PlatformAnthropic,
+		[]string{"claude-haiku-safe", "claude-haiku-faster"},
+	)
+
+	safe := metadata["claude-haiku-safe"]
+	require.True(t, safe.ProbeEligible)
+	require.False(t, safe.CreditsGated)
+	require.NotNil(t, safe.ProbeCost)
+	require.InDelta(t, highInput+highOutput, *safe.ProbeCost, 1e-12, "the worst schedulable target bounds probe cost")
+
+	disguisedFable := metadata["claude-haiku-faster"]
+	require.False(t, disguisedFable.ProbeEligible)
+	require.True(t, disguisedFable.CreditsGated)
+	require.Nil(t, disguisedFable.ProbeCost)
+}
+
+func TestGetVerifiedProbeModelMetadataUsesCompositeTargetPlatformForChannelMapping(t *testing.T) {
+	groupID := int64(99)
+	pricing := newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
+		"claude-haiku-safe": {
+			Mode:               "chat",
+			InputCostPerToken:  1e-7,
+			OutputCostPerToken: 2e-7,
+		},
+	})
+	channel := Channel{
+		ID:       1,
+		Status:   StatusActive,
+		GroupIDs: []int64{groupID},
+		ModelMapping: map[string]map[string]string{
+			PlatformAnthropic: {
+				"gpt-probe": "claude-haiku-safe",
+			},
+			PlatformOpenAI: {
+				"gpt-probe": "claude-fable-5",
+			},
+		},
+	}
+	channelService := &ChannelService{pricingService: pricing}
+	channelService.cache.Store(populateChannelCache([]Channel{channel}, map[int64]string{groupID: PlatformComposite}))
+	repo := &modelsListAccountRepoStub{byGroup: map[int64][]Account{
+		groupID: {
+			{
+				ID:       1,
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeAPIKey,
+				Credentials: map[string]any{"model_mapping": map[string]any{
+					"gpt-probe": "gpt-probe",
+				}},
+			},
+		},
+	}}
+	svc := &GatewayService{
+		accountRepo:    repo,
+		channelService: channelService,
+		billingService: NewBillingService(nil, pricing),
+	}
+
+	metadata := svc.GetVerifiedProbeModelMetadata(
+		context.Background(),
+		&groupID,
+		PlatformComposite,
+		[]string{"gpt-probe"},
+	)
+
+	entry := metadata["gpt-probe"]
+	require.False(t, entry.ProbeEligible, "the OpenAI mapping must win for an OpenAI-family composite request")
+	require.True(t, entry.CreditsGated, "an unsafe target must not be hidden by the earlier Anthropic mapping")
+	require.Nil(t, entry.ProbeCost)
+}
+
 // stubGroupRepoForAvailable 是 ListAvailable 测试用的 GroupRepository stub，
 // 仅实现 ListActive；其他方法对本测试无关，返回零值即可。
 // listActiveErr 非 nil 时，ListActive 返回该错误用于错误传播测试。

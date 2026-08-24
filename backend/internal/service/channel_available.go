@@ -174,6 +174,73 @@ func (s *ChannelService) minimalTextProbeEligible(model SupportedModel) bool {
 	return true
 }
 
+// verifiedMinimalTextProbeMetadata is the strict variant used by the
+// authenticated /models probe catalogue. Unlike the public channel catalogue,
+// it must not treat an unknown custom model as text-capable: the caller is
+// resolving account/channel mapping targets, so a missing capability or price
+// must fail closed instead of trusting a source alias.
+//
+// The dynamic LiteLLM catalogue is preferred because it also records endpoint
+// capability. When it has no entry, the billing service's exact, reviewed
+// fallback cards cover newer canonical text models such as deepseek-v4-flash
+// and kimi-k3. We deliberately do not call the billing service's fuzzy lookup:
+// an arbitrary alias containing "haiku" or "deepseek-v4-flash" must not become
+// probe-safe merely because its name looks cheap.
+func verifiedMinimalTextProbeMetadata(channelService *ChannelService, billingService *BillingService, model string, at time.Time) (float64, bool, bool) {
+	model = strings.TrimSpace(model)
+	creditsGated := isAnthropicFableModel(model)
+	if model == "" || creditsGated || obviousNonTextProbeModel(model) {
+		return 0, false, creditsGated
+	}
+
+	if channelService != nil && channelService.pricingService != nil {
+		if identified := channelService.pricingService.GetIdentifiedModelPricing(model); identified != nil {
+			switch strings.ToLower(strings.TrimSpace(identified.Mode)) {
+			case "chat", "responses", "completion":
+			default:
+				return 0, false, false
+			}
+
+			pricing := synthesizePricingFromLiteLLM(identified, nil)
+			cost, ok := estimateMinimalTextProbeCost(pricing, at)
+			if !ok {
+				return 0, false, false
+			}
+			return cost, true, false
+		}
+	}
+
+	if billingService == nil {
+		return 0, false, false
+	}
+	pricingModel := strictProbeFallbackPricingModel(model)
+	pricing, ok := billingService.fallbackPrices[pricingModel]
+	if !ok || pricing == nil {
+		return 0, false, false
+	}
+	input := pricing.InputPricePerToken
+	output := pricing.OutputPricePerToken
+	cost := input*minimalProbeInputTokens + output*minimalProbeOutputTokens
+	if math.IsNaN(input) || math.IsInf(input, 0) || input < 0 ||
+		math.IsNaN(output) || math.IsInf(output, 0) || output < 0 ||
+		math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 {
+		return 0, false, false
+	}
+	return cost, true, false
+}
+
+func strictProbeFallbackPricingModel(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	switch model {
+	case "k3", "k3-256k":
+		return "kimi-k3"
+	case "deepseek-chat", "deepseek-reasoner":
+		return "deepseek-v4-flash"
+	default:
+		return model
+	}
+}
+
 func obviousNonTextProbeModel(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
 	for _, marker := range []string{

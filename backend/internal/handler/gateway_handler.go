@@ -1088,14 +1088,24 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID)
 		if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
 			availableModels = filterModelsByCustomList(availableModels, defaultModelIDsForPlatform(service.PlatformComposite), apiKey.Group.ModelsListConfig.Models)
+			if h.writeVerifiedProbeModelsIfRequested(c, service.PlatformComposite, groupID, availableModels, true) {
+				return
+			}
 			writeCustomModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
 		if len(availableModels) > 0 {
+			if h.writeVerifiedProbeModelsIfRequested(c, service.PlatformComposite, groupID, availableModels, false) {
+				return
+			}
 			writeModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
-		writeModelsList(c, service.PlatformComposite, defaultModelIDsForPlatform(service.PlatformComposite))
+		defaultModels := defaultModelIDsForPlatform(service.PlatformComposite)
+		if h.writeVerifiedProbeModelsIfRequested(c, service.PlatformComposite, groupID, defaultModels, false) {
+			return
+		}
+		writeModelsList(c, service.PlatformComposite, defaultModels)
 		return
 	}
 
@@ -1104,16 +1114,26 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
 		fallbackModels := defaultModelIDsForPlatform(platform)
 		availableModels = filterModelsByCustomList(customModelsListSource(platform, availableModels, fallbackModels), fallbackModels, apiKey.Group.ModelsListConfig.Models)
+		if h.writeVerifiedProbeModelsIfRequested(c, platform, groupID, availableModels, true) {
+			return
+		}
 		writeCustomModelsList(c, platform, availableModels)
 		return
 	}
 
 	if len(availableModels) > 0 {
+		if h.writeVerifiedProbeModelsIfRequested(c, platform, groupID, availableModels, false) {
+			return
+		}
 		writeModelsList(c, platform, availableModels)
 		return
 	}
 
 	// Fallback to default models
+	defaultModels := defaultModelIDsForPlatform(platform)
+	if h.writeVerifiedProbeModelsIfRequested(c, platform, groupID, defaultModels, false) {
+		return
+	}
 	if platform == service.PlatformOpenAI {
 		c.JSON(http.StatusOK, gin.H{
 			"object": "list",
@@ -1171,9 +1191,67 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	return models
 }
 
+const ttSwitchProbeMetadataQuery = "tt_switch_probe"
+
+func (h *GatewayHandler) writeVerifiedProbeModelsIfRequested(c *gin.Context, platform string, groupID *int64, modelIDs []string, custom bool) bool {
+	if c.Query(ttSwitchProbeMetadataQuery) != "1" {
+		return false
+	}
+	metadata := h.gatewayService.GetVerifiedProbeModelMetadata(c.Request.Context(), groupID, platform, modelIDs)
+	if custom {
+		writeCustomModelsListWithProbeMetadata(c, platform, modelIDs, metadata)
+	} else {
+		writeModelsListWithProbeMetadata(c, platform, modelIDs, metadata)
+	}
+	return true
+}
+
+type probeModelFields struct {
+	ProbeEligible bool     `json:"probe_eligible"`
+	ProbeCost     *float64 `json:"probe_cost,omitempty"`
+	CreditsGated  bool     `json:"credits_gated,omitempty"`
+}
+
+func probeFieldsForModel(metadata map[string]service.ProbeModelMetadata, modelID string) probeModelFields {
+	entry := metadata[modelID]
+	return probeModelFields{
+		ProbeEligible: entry.ProbeEligible,
+		ProbeCost:     entry.ProbeCost,
+		CreditsGated:  entry.CreditsGated,
+	}
+}
+
+type claudeProbeModelListItem struct {
+	claude.Model
+	probeModelFields
+}
+
 func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
+	writeModelsListWithProbeMetadata(c, platform, modelIDs, nil)
+}
+
+func writeModelsListWithProbeMetadata(c *gin.Context, platform string, modelIDs []string, metadata map[string]service.ProbeModelMetadata) {
 	if platform == service.PlatformGrok {
-		writeGrokModelsList(c, modelIDs)
+		writeGrokModelsListWithProbeMetadata(c, modelIDs, metadata)
+		return
+	}
+	if metadata != nil {
+		models := make([]claudeProbeModelListItem, 0, len(modelIDs))
+		for _, modelID := range modelIDs {
+			models = append(models, claudeProbeModelListItem{
+				Model: claude.Model{
+					ID:          modelID,
+					Type:        "model",
+					DisplayName: modelID,
+					CreatedAt:   "2024-01-01T00:00:00Z",
+				},
+				probeModelFields: probeFieldsForModel(metadata, modelID),
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"object": "list",
+			"data":   models,
+		})
 		return
 	}
 	models := make([]claude.Model, 0, len(modelIDs))
@@ -1192,11 +1270,15 @@ func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
 }
 
 func writeCustomModelsList(c *gin.Context, platform string, modelIDs []string) {
+	writeCustomModelsListWithProbeMetadata(c, platform, modelIDs, nil)
+}
+
+func writeCustomModelsListWithProbeMetadata(c *gin.Context, platform string, modelIDs []string, metadata map[string]service.ProbeModelMetadata) {
 	if platform == service.PlatformOpenAI {
-		writeOpenAIModelsList(c, modelIDs)
+		writeOpenAIModelsListWithProbeMetadata(c, modelIDs, metadata)
 		return
 	}
-	writeModelsList(c, platform, modelIDs)
+	writeModelsListWithProbeMetadata(c, platform, modelIDs, metadata)
 }
 
 type grokReasoningEffortOption struct {
@@ -1210,9 +1292,14 @@ type grokModelListItem struct {
 	SupportsReasoningEffort bool                        `json:"supportsReasoningEffort,omitempty"`
 	ReasoningEffort         string                      `json:"reasoningEffort,omitempty"`
 	ReasoningEfforts        []grokReasoningEffortOption `json:"reasoningEfforts,omitempty"`
+	*probeModelFields
 }
 
 func writeGrokModelsList(c *gin.Context, modelIDs []string) {
+	writeGrokModelsListWithProbeMetadata(c, modelIDs, nil)
+}
+
+func writeGrokModelsListWithProbeMetadata(c *gin.Context, modelIDs []string, metadata map[string]service.ProbeModelMetadata) {
 	defaults := xai.DefaultModels()
 	defaultsByID := make(map[string]xai.Model, len(defaults))
 	for _, model := range defaults {
@@ -1231,6 +1318,10 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 			}
 		}
 		item := grokModelListItem{Model: model}
+		if metadata != nil {
+			fields := probeFieldsForModel(metadata, modelID)
+			item.probeModelFields = &fields
+		}
 		if grokModelSupportsConfigurableReasoning(modelID) {
 			item.SupportsReasoningEffort = true
 			item.ReasoningEffort = "high"
@@ -1258,7 +1349,16 @@ func grokModelSupportsConfigurableReasoning(modelID string) bool {
 	}
 }
 
+type openAIProbeModelListItem struct {
+	openai.Model
+	probeModelFields
+}
+
 func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
+	writeOpenAIModelsListWithProbeMetadata(c, modelIDs, nil)
+}
+
+func writeOpenAIModelsListWithProbeMetadata(c *gin.Context, modelIDs []string, metadata map[string]service.ProbeModelMetadata) {
 	defaultsByID := make(map[string]openai.Model, len(openai.DefaultModels))
 	for _, model := range openai.DefaultModels {
 		defaultsByID[model.ID] = model
@@ -1278,6 +1378,20 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 			Type:        "model",
 			DisplayName: modelID,
 		})
+	}
+	if metadata != nil {
+		items := make([]openAIProbeModelListItem, 0, len(models))
+		for _, model := range models {
+			items = append(items, openAIProbeModelListItem{
+				Model:            model,
+				probeModelFields: probeFieldsForModel(metadata, model.ID),
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"object": "list",
+			"data":   items,
+		})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",

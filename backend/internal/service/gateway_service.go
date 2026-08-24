@@ -1439,6 +1439,108 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	return cloneStringSlice(models)
 }
 
+// ProbeModelMetadata is attached only to the authenticated TT Switch probe
+// catalogue. It intentionally omits resolved mapping targets: clients need a
+// safety/cost decision, not account or channel routing internals.
+type ProbeModelMetadata struct {
+	ProbeEligible bool
+	ProbeCost     *float64
+	CreditsGated  bool
+}
+
+// GetVerifiedProbeModelMetadata evaluates the complete request mapping chain
+// for every schedulable account that could accept each source model. A source
+// is eligible only when every possible target is an identified text model with
+// a complete one-input/one-output-token price. The maximum target cost is
+// exposed so the client cannot rank an alias by a cheaper-looking source name.
+func (s *GatewayService) GetVerifiedProbeModelMetadata(ctx context.Context, groupID *int64, platform string, models []string) map[string]ProbeModelMetadata {
+	metadata := make(map[string]ProbeModelMetadata, len(models))
+	if s == nil || s.accountRepo == nil || len(models) == 0 {
+		return metadata
+	}
+
+	var accounts []Account
+	var err error
+	if groupID != nil {
+		accounts, err = s.accountRepo.ListSchedulableByGroupID(ctx, *groupID)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulable(ctx)
+	}
+	if err != nil || len(accounts) == 0 {
+		return metadata
+	}
+
+	platform = strings.TrimSpace(platform)
+	at := time.Now()
+	for _, sourceModel := range models {
+		sourceModel = strings.TrimSpace(sourceModel)
+		if sourceModel == "" {
+			continue
+		}
+
+		requestPlatform := platform
+		mappingCtx := ctx
+		if platform == PlatformComposite {
+			resolvedPlatform, ok := DetectModelPlatform(sourceModel)
+			if !ok {
+				metadata[sourceModel] = ProbeModelMetadata{}
+				continue
+			}
+			requestPlatform = resolvedPlatform
+			mappingCtx = WithResolvedTargetPlatform(ctx, resolvedPlatform)
+		}
+
+		possibleAccountCount := 0
+		allTargetsSafe := true
+		creditsGated := false
+		var maximumCost float64
+		costKnown := false
+		for i := range accounts {
+			account := &accounts[i]
+			useMixedScheduling := requestPlatform == PlatformAnthropic || requestPlatform == PlatformGemini
+			if requestPlatform != "" && !s.isAccountAllowedForPlatform(account, requestPlatform, useMixedScheduling) {
+				continue
+			}
+			// Account selection is performed with the original request model.
+			// Only accounts the scheduler could actually choose belong in the
+			// safety envelope.
+			if !s.isModelSupportedByAccountWithContext(mappingCtx, account, sourceModel) {
+				continue
+			}
+			possibleAccountCount++
+
+			channelMappedModel := sourceModel
+			if groupID != nil {
+				mapping := s.ResolveChannelMapping(mappingCtx, *groupID, sourceModel)
+				channelMappedModel = strings.TrimSpace(mapping.MappedModel)
+			}
+			targetModel := resolveAccountUpstreamModel(account, channelMappedModel)
+			if account.Platform == PlatformOpenAI {
+				targetModel = resolveOpenAIAccountUpstreamModelForRequest(account, channelMappedModel, false)
+			}
+			cost, eligible, gated := verifiedMinimalTextProbeMetadata(s.channelService, s.billingService, targetModel, at)
+			creditsGated = creditsGated || gated
+			if !eligible || gated {
+				allTargetsSafe = false
+				break
+			}
+			if !costKnown || cost > maximumCost {
+				maximumCost = cost
+				costKnown = true
+			}
+		}
+
+		entry := ProbeModelMetadata{CreditsGated: creditsGated}
+		if possibleAccountCount > 0 && allTargetsSafe && costKnown {
+			cost := maximumCost
+			entry.ProbeEligible = true
+			entry.ProbeCost = &cost
+		}
+		metadata[sourceModel] = entry
+	}
+	return metadata
+}
+
 // GetSchedulablePlatforms returns the concrete platforms that currently have
 // schedulable accounts in the target group.
 func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *int64) map[string]struct{} {
