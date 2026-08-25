@@ -1410,9 +1410,11 @@ func (s *OpenAIGatewayService) reportOpenAIImagesOAuthCollectError(c *gin.Contex
 
 // buildOpenAIImagesUsageRaw 以 Responses usage JSON 的字段布局重建聚合后的 usage，
 // 字段路径与 openAIUsageFromGJSON 的解析路径保持一致。
-func buildOpenAIImagesUsageRaw(usage OpenAIUsage) []byte {
+func buildOpenAIImagesUsageRaw(usage OpenAIUsage, imageCount int) []byte {
 	if usage == (OpenAIUsage{}) {
-		return nil
+		if imageCount <= 0 {
+			return nil
+		}
 	}
 
 	body := []byte(`{}`)
@@ -1433,6 +1435,9 @@ func buildOpenAIImagesUsageRaw(usage OpenAIUsage) []byte {
 	}
 	if usage.ImageOutputTokens > 0 {
 		body, _ = sjson.SetBytes(body, "output_tokens_details.image_tokens", usage.ImageOutputTokens)
+	}
+	if imageCount > 0 {
+		body, _ = sjson.SetBytes(body, "images", imageCount)
 	}
 	return body
 }
@@ -2220,13 +2225,28 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthFanoutNonStreaming(
 
 	upstreamTotalStart := time.Now()
 	resultCh := make(chan openAIImagesOAuthFanoutAttemptResult, targetCount)
+	maxConcurrent := account.Concurrency
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+	if maxConcurrent > targetCount {
+		maxConcurrent = targetCount
+	}
+	fanoutSlots := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	for _, attempt := range prepared {
 		attempt := attempt
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			select {
+			case fanoutSlots <- struct{}{}:
+			case <-fanoutCtx.Done():
+				resultCh <- openAIImagesOAuthFanoutAttemptResult{index: attempt.index, err: fanoutCtx.Err()}
+				return
+			}
 			result := s.runOpenAIImagesOAuthFanoutAttempt(account, proxyURL, requestModel, attempt)
+			<-fanoutSlots
 			if result.err != nil || result.statusCode >= 400 {
 				cancelFanout()
 			}
@@ -2281,15 +2301,24 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthFanoutNonStreaming(
 		firstMeta.Model = strings.TrimSpace(requestModel)
 	}
 
-	responseBody, err := buildOpenAIImagesAPIResponse(results, createdAt, buildOpenAIImagesUsageRaw(usage), firstMeta, parsed.ResponseFormat)
+	responseBody, err := buildOpenAIImagesAPIResponse(results, createdAt, buildOpenAIImagesUsageRaw(usage, len(results)), firstMeta, parsed.ResponseFormat)
 	if err != nil {
 		return nil, err
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), firstHeaders, s.responseHeaderFilter)
 	c.Data(http.StatusOK, "application/json; charset=utf-8", responseBody)
 
+	requestID := ""
+	for _, candidate := range requestIDs {
+		if candidate = strings.TrimSpace(candidate); candidate != "" {
+			requestID = candidate
+			break
+		}
+	}
 	return &OpenAIForwardResult{
-		RequestID:        strings.Join(requestIDs, ","),
+		// usage_logs.request_id is capped at 64 bytes. Keep one upstream ID for
+		// durable billing; child IDs are intentionally not concatenated here.
+		RequestID:        requestID,
 		Usage:            usage,
 		Model:            requestModel,
 		UpstreamModel:    requestModel,
@@ -2317,7 +2346,7 @@ func (s *OpenAIGatewayService) runOpenAIImagesOAuthFanoutAttempt(
 		result.upstreamURL = safeUpstreamURL(attempt.req.URL.String())
 	}
 
-	resp, err := s.httpUpstream.Do(attempt.req, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(attempt.req, proxyURL, account)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		result.upstreamMsg = safeErr

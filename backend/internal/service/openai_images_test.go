@@ -109,6 +109,10 @@ func TestOpenAIGatewayServiceParseOpenAIImagesRequest_MultipartEdit(t *testing.T
 	require.NoError(t, err)
 	_, err = part.Write([]byte("fake-image-bytes"))
 	require.NoError(t, err)
+	part, err = writer.CreateFormFile("image[1]", "reference.png")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("fake-reference-bytes"))
+	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(body.Bytes()))
@@ -128,7 +132,7 @@ func TestOpenAIGatewayServiceParseOpenAIImagesRequest_MultipartEdit(t *testing.T
 	require.Equal(t, openAIImagesMaxN, parsed.N)
 	require.Equal(t, "1536x1024", parsed.Size)
 	require.Equal(t, "2K", parsed.SizeTier)
-	require.Len(t, parsed.Uploads, 1)
+	require.Len(t, parsed.Uploads, 2)
 	require.Equal(t, OpenAIImagesCapabilityNative, parsed.RequiredCapability)
 }
 
@@ -874,10 +878,11 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 	svc.httpUpstream = upstream
 
 	account := &Account{
-		ID:       1,
-		Name:     "openai-oauth",
-		Platform: PlatformOpenAI,
-		Type:     AccountTypeOAuth,
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 2,
 		Credentials: map[string]any{
 			"access_token":       "token-123",
 			"chatgpt_account_id": "acct-123",
@@ -898,6 +903,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 	require.Len(t, upstream.requests, 3)
 	require.Len(t, upstream.bodies, 3)
 	require.GreaterOrEqual(t, upstream.maxFlight, 2)
+	require.LessOrEqual(t, upstream.maxFlight, 2)
 	require.Equal(t, chatgptCodexURL, upstream.lastReq.URL.String())
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
@@ -933,6 +939,9 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 	require.Equal(t, int64(138), gjson.Get(rec.Body.String(), "usage.input_tokens").Int())
 	require.Equal(t, int64(7377), gjson.Get(rec.Body.String(), "usage.output_tokens").Int())
 	require.Equal(t, int64(7377), gjson.Get(rec.Body.String(), "usage.output_tokens_details.image_tokens").Int())
+	require.Equal(t, int64(3), gjson.Get(rec.Body.String(), "usage.images").Int())
+	require.LessOrEqual(t, len(result.RequestID), 64)
+	require.Contains(t, []string{"req_img_1", "req_img_2", "req_img_3"}, result.RequestID)
 }
 
 func TestOpenAIGatewayServiceForwardImages_OAuthRejectsStreamingN(t *testing.T) {
@@ -2112,6 +2121,40 @@ func TestBuildOpenAIImagesResponsesRequest_StripsInputFidelity(t *testing.T) {
 	require.NotNil(t, body)
 	require.False(t, gjson.GetBytes(body, "tools.0.input_fidelity").Exists())
 	require.Equal(t, "edit", gjson.GetBytes(body, "tools.0.action").String())
+}
+
+func TestBuildOpenAIImagesResponsesRequest_PreservesMultipleInputImages(t *testing.T) {
+	parsed := &OpenAIImagesRequest{
+		Endpoint:       openAIImagesEditsEndpoint,
+		Model:          "gpt-image-2",
+		Prompt:         "combine the references",
+		InputImageURLs: []string{"https://example.com/one.png", "https://example.com/two.png"},
+	}
+
+	body, err := buildOpenAIImagesResponsesRequest(parsed, "gpt-image-2")
+	require.NoError(t, err)
+	require.Equal(t, "combine the references", gjson.GetBytes(body, "input.0.content.0.text").String())
+	require.Equal(t, "https://example.com/one.png", gjson.GetBytes(body, "input.0.content.1.image_url").String())
+	require.Equal(t, "https://example.com/two.png", gjson.GetBytes(body, "input.0.content.2.image_url").String())
+	require.Len(t, gjson.GetBytes(body, "input.0.content").Array(), 3)
+}
+
+func TestBuildOpenAIImagesResponsesRequest_PreservesMultipleMultipartUploads(t *testing.T) {
+	parsed := &OpenAIImagesRequest{
+		Endpoint: openAIImagesEditsEndpoint,
+		Model:    "gpt-image-2",
+		Prompt:   "combine the references",
+		Uploads: []OpenAIImagesUpload{
+			{FileName: "one.png", ContentType: "image/png", Data: []byte("one")},
+			{FileName: "two.png", ContentType: "image/png", Data: []byte("two")},
+		},
+	}
+
+	body, err := buildOpenAIImagesResponsesRequest(parsed, "gpt-image-2")
+	require.NoError(t, err)
+	require.Equal(t, "data:image/png;base64,b25l", gjson.GetBytes(body, "input.0.content.1.image_url").String())
+	require.Equal(t, "data:image/png;base64,dHdv", gjson.GetBytes(body, "input.0.content.2.image_url").String())
+	require.Len(t, gjson.GetBytes(body, "input.0.content").Array(), 3)
 }
 
 func TestBuildOpenAIImagesResponsesRequest_RequiresVerbatimUserPrompt(t *testing.T) {
