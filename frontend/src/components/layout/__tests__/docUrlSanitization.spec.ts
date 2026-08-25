@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 const headerSource = readFileSync(resolve(dir, '../AppHeader.vue'), 'utf8')
-const homeViewSource = readFileSync(resolve(dir, '../../../views/HomeView.vue'), 'utf8')
+// 公开站点（首页及其子页）的 doc_url 现在统一在 useSite 里取，
+// HomeView 不再自己读这个字段。
+const siteSource = readFileSync(resolve(dir, '../../site/useSite.ts'), 'utf8')
 const keyUsageViewSource = readFileSync(resolve(dir, '../../../views/KeyUsageView.vue'), 'utf8')
 
 describe('doc_url sanitization', () => {
@@ -18,12 +20,12 @@ describe('doc_url sanitization', () => {
     expect(headerSource).toContain('sanitizeUrl(appStore.docUrl)')
   })
 
-  it('HomeView imports sanitizeUrl', () => {
-    expect(homeViewSource).toContain("import { sanitizeUrl } from '@/utils/url'")
+  it('useSite imports sanitizeUrl', () => {
+    expect(siteSource).toContain("import { sanitizeUrl } from '@/utils/url'")
   })
 
-  it('HomeView applies sanitizeUrl to docUrl', () => {
-    expect(homeViewSource).toContain('sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl')
+  it('useSite applies sanitizeUrl to docUrl', () => {
+    expect(siteSource).toContain('sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl')
   })
 
   it('KeyUsageView imports sanitizeUrl', () => {

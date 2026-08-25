@@ -1,0 +1,622 @@
+/**
+ * TurtleRoute 公开站点视觉系统
+ *
+ * 编辑体 / 技术规格表方向：结构由 1px 分隔线承担，没有圆角卡片、
+ * 没有阴影、没有渐变。等宽字承担全部元数据与序号，字号跨度拉到
+ * 极限，六边形是唯一的形状语言。
+ *
+ * 所有规则都挂在 `.tr` 下，不会漏进后台的组件库。由 SiteLayout
+ * 导入一次（沿用 AppLayout 导入 onboarding.css 的约定）。
+ */
+
+/* ── 调色板 ─────────────────────────────────────────────────────
+   暖纸底而不是常见的冷灰，一个取自 mark 的绿，一个只给降级态的
+   琥珀。除此之外不上色。 */
+.tr {
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --bg: #faf9f4;
+  --surface: #ffffff;
+  --ink: #14170f;
+  --ink-2: #4a4f43;
+  --muted: #767b6e;
+  --rule: #e0dfd3;
+  --accent: #0f5132;
+  --accent-wash: #edf2ec;
+  --warn: #8a6512;
+
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.dark .tr {
+  --bg: #0b0d09;
+  --surface: #11140f;
+  --ink: #eaeee3;
+  --ink-2: #b4baa9;
+  --muted: #868c7b;
+  --rule: #242819;
+  --accent: #5fc794;
+  --accent-wash: #14231a;
+  --warn: #c9a256;
+}
+
+/* ── 分隔线 ─────────────────────────────────────────────────────
+   页面的全部结构靠这个，没有卡片也没有阴影。 */
+.tr .hairline,
+.tr .hairline-t,
+.tr .hairline-b {
+  border-color: var(--rule);
+  border-style: solid;
+  border-width: 0;
+}
+.tr .hairline {
+  border-width: 1px;
+}
+.tr .hairline-t {
+  border-top-width: 1px;
+}
+.tr .hairline-b {
+  border-bottom-width: 1px;
+}
+
+/* ── 字号阶梯 ───────────────────────────────────────────────────
+   跨度刻意拉大：声明是元数据的许多倍，这是页面不至于读成一叠等
+   重卡片的根本原因。
+
+   `text-wrap: balance` 对中文尤其重要——贪心断行会把双字词的后
+   一个字单独甩到下一行。 */
+.tr .display-xl {
+  font-size: clamp(2.125rem, 6.2vw, 4.5rem);
+  line-height: 1.06;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.tr .display-lg {
+  font-size: clamp(1.75rem, 4vw, 3rem);
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.tr .display-md {
+  font-size: clamp(1.375rem, 2.6vw, 2rem);
+  line-height: 1.22;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.tr .display-sm {
+  font-size: 1.0625rem;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.tr .wordmark {
+  font-size: clamp(1.75rem, 5vw, 3.25rem);
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+
+.tr .lede {
+  font-size: clamp(1rem, 1.5vw, 1.1875rem);
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.tr .lede-sm {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+.tr .body-sm {
+  font-size: 0.875rem;
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+
+.tr .meta,
+.tr .meta-strong,
+.tr .index {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+.tr .meta {
+  color: var(--muted);
+}
+.tr .meta-strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+.tr .index {
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.2em;
+}
+
+/* 中文正文不该被拉字距或转大写，`meta` 用在中文句子上时叠这个。 */
+.tr .meta-cn {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.tr .dot {
+  width: 3px;
+  height: 3px;
+  background: var(--muted);
+  display: inline-block;
+}
+
+.tr .verb {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* ── 控件 ───────────────────────────────────────────────────────
+   全部直角。整个站点唯一的实心控件是 masthead 里的账号入口。 */
+.tr .btn-solid {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.25rem;
+  padding: 0 1rem;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.15s ease;
+}
+.tr .btn-solid:hover {
+  opacity: 0.82;
+}
+
+.tr .btn-outline {
+  display: inline-flex;
+  align-items: center;
+  height: 2.5rem;
+  padding: 0 1.125rem;
+  border: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink);
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.tr .btn-outline:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tr .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+.tr .btn-ghost:hover {
+  color: var(--ink);
+}
+
+.tr .icon-btn,
+.tr .nav-toggle {
+  display: flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+.tr .icon-btn:hover,
+.tr .nav-toggle:hover {
+  color: var(--ink);
+}
+
+/* ⚠️ 优先级陷阱：这里每条规则都带 `.tr ` 前缀（0,2,0），压过 Tailwind
+   的 .hidden / .lg\:flex（0,1,0）。所以凡是本文件设了 display 的类，
+   都不能再靠 Tailwind 的显示类去切换——必须像下面这样自己写断点。
+   同样的道理见 .drow-head。 */
+@media (min-width: 1024px) {
+  .tr .nav-toggle {
+    display: none;
+  }
+}
+
+.tr .navlink,
+.tr .textlink {
+  font-size: 13px;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+.tr .navlink:hover,
+.tr .textlink:hover {
+  color: var(--ink);
+}
+/* 当前所在页在 masthead 里保持高亮，多页站点必须有这个。 */
+.tr .navlink.is-current {
+  color: var(--ink);
+}
+.tr .textlink {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.tr .inlinelink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+/* 筛选项和代码 tab 读作带下划线的索引条目，不是胶囊。 */
+.tr .filterlink {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-bottom: 2px;
+  border-bottom: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.tr .filterlink:hover {
+  color: var(--ink);
+}
+.tr .filterlink.is-on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── 数据表原语 ─────────────────────────────────────────────────
+   排版共享，栅格几何由各页自己定（列不一样）。 */
+.tr .drow {
+  display: grid;
+  width: 100%;
+  align-items: center;
+  gap: 0 1.25rem;
+  text-align: left;
+}
+
+/* 排在 .drow 之后，才能盖过它的 `display: grid`。行折成两行之后
+   表头就没有意义了。 */
+.tr .drow-head {
+  display: none;
+}
+@media (min-width: 640px) {
+  .tr .drow-head {
+    display: grid;
+  }
+}
+
+.tr .drow-btn {
+  padding: 0.8125rem 0;
+  transition: background 0.12s ease;
+}
+.tr .drow-btn:hover,
+.tr .drow-btn.is-on {
+  background: var(--accent-wash);
+}
+
+.tr .dcell-id {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.tr .dcell-text {
+  font-size: 13px;
+  color: var(--ink-2);
+  /* 说明列里常混着 /v1/chat/completions 这种无空格长串，不给断词
+     规则的话窄屏会把整页撑出横向滚动。 */
+  overflow-wrap: break-word;
+}
+.tr .dcell-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tr .dcell-num {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 行首的六边形标记，替代通用的圆点。 */
+.tr .hexmark svg {
+  width: 12px;
+  height: 12px;
+}
+.tr .hexmark polygon {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  transition: fill 0.3s ease, stroke 0.3s ease;
+}
+.tr .hexmark.is-on polygon,
+.tr .hexmark.is-active polygon,
+.tr .drow-btn.is-on .hexmark polygon {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+.tr .hexmark.is-degraded polygon {
+  stroke: var(--warn);
+  stroke-dasharray: 3 3;
+}
+
+.tr .state-active {
+  color: var(--accent);
+}
+.tr .state-degraded {
+  color: var(--warn);
+}
+
+/* ── 代码 ───────────────────────────────────────────────────────
+   没有窗口外框，没有红黄绿灯：代码直接坐在分隔线下面。 */
+.tr .snippet {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: var(--ink-2);
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.tr .listing {
+  padding: 0.875rem 0;
+  overflow-x: auto;
+}
+.tr .listing-line {
+  display: flex;
+  gap: 1rem;
+  padding: 0 1rem;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.85;
+  white-space: pre;
+}
+.tr .listing-no {
+  width: 1.5rem;
+  flex-shrink: 0;
+  text-align: right;
+  color: var(--muted);
+  opacity: 0.55;
+  user-select: none;
+}
+.tr .listing-code {
+  color: var(--ink-2);
+}
+
+.tr .code-inline {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+/* ── 定义行与状态行 ─────────────────────────────────────────────── */
+.tr .staterow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 0.8125rem 0;
+}
+
+.tr .defrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 1.5rem;
+  padding: 0.8125rem 0;
+}
+.tr .defrow dt {
+  width: 7rem;
+  flex-shrink: 0;
+}
+.tr .defrow dd {
+  min-width: 0;
+}
+
+/* ── 索引行 ─────────────────────────────────────────────────────
+   目录式清单，让页面结尾不再是又一张 CTA 卡片。 */
+.tr .indexrow {
+  display: grid;
+  align-items: baseline;
+  gap: 0.25rem 1.25rem;
+  grid-template-columns: 1.75rem minmax(0, 9rem) minmax(0, 1fr) auto;
+  padding: 1rem 0;
+  transition: color 0.15s ease;
+}
+.tr .indexrow-label {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.tr .indexrow-desc {
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.tr .indexrow .arrow {
+  color: var(--muted);
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+.tr .indexrow:not(.is-inert):hover .indexrow-label {
+  color: var(--accent);
+}
+.tr .indexrow:not(.is-inert):hover .arrow {
+  color: var(--accent);
+  transform: translateX(3px);
+}
+.tr .indexrow.is-inert {
+  cursor: default;
+}
+.tr .indexrow.is-inert .indexrow-label {
+  color: var(--muted);
+}
+
+/* ── 长文正文 ───────────────────────────────────────────────────
+   /docs、/platform、/why 的说明性内容，行宽受控，标题靠上留白
+   而不是靠下划线分组。 */
+.tr .prose {
+  font-size: 0.9375rem;
+  line-height: 1.8;
+  color: var(--ink-2);
+}
+.tr .prose > * + * {
+  margin-top: 1.125rem;
+}
+.tr .prose h3 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink);
+  margin-top: 2.5rem;
+}
+.tr .prose h4 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 1.75rem;
+}
+.tr .prose ul,
+.tr .prose ol {
+  padding-left: 1.125rem;
+}
+.tr .prose li + li {
+  margin-top: 0.5rem;
+}
+.tr .prose ul > li {
+  list-style: none;
+  position: relative;
+}
+.tr .prose ul > li::before {
+  content: '';
+  position: absolute;
+  left: -1.125rem;
+  top: 0.72em;
+  width: 4px;
+  height: 4px;
+  background: var(--muted);
+}
+.tr .prose ol > li {
+  list-style: decimal;
+}
+.tr .prose ol > li::marker {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.tr .prose strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 提示块：靠一条左侧竖线，不做背景色块。 */
+.tr .note {
+  border-left: 2px solid var(--accent);
+  padding-left: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+.tr .note.is-warn {
+  border-left-color: var(--warn);
+}
+
+/* 待你替换的商业信息，视觉上必须显眼，避免误当成已定稿。 */
+.tr .placeholder {
+  border-bottom: 1px dashed var(--warn);
+  color: var(--warn);
+}
+
+/* ── 侧边导航（/docs） ──────────────────────────────────────────── */
+.tr .sidelink {
+  display: block;
+  padding: 0.5rem 0 0.5rem 0.875rem;
+  border-left: 1px solid var(--rule);
+  font-size: 13.5px;
+  color: var(--muted);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.tr .sidelink:hover {
+  color: var(--ink);
+}
+.tr .sidelink.is-current {
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+
+/* ── 焦点与动效 ─────────────────────────────────────────────────
+   焦点可见且是直角，跟其他一切一致。 */
+.tr :focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 639px) {
+  /* 三列两行：序号 / 标题 / 尾部标记在第一行，说明独占第二行。
+     每一格都要显式定位，否则尾部的箭头会被自动排版甩到下一行行首。 */
+  .tr .indexrow {
+    grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+  }
+  .tr .indexrow > *:first-child {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .tr .indexrow-label {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .tr .indexrow > *:last-child {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+  }
+  /* 说明只占中间列，不跨到箭头那一列。跨列项的 min-content 会顶着
+     中间列一起变宽，整行就撑出视口（实测 390px 下撑到 401px）。 */
+  .tr .indexrow-desc {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .tr .indexrow-label,
+  .tr .indexrow-desc {
+    min-width: 0;
+  }
+  .tr .defrow {
+    display: block;
+  }
+  .tr .defrow dt {
+    width: auto;
+    margin-bottom: 0.3125rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tr * {
+    transition: none !important;
+  }
+}

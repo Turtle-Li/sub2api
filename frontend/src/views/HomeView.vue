@@ -12,30 +12,30 @@
     <div v-else v-html="homeContent"></div>
   </div>
 
-  <!-- Compact Home Page -->
+  <!-- Compact Home Page: standalone, deliberately not wrapped in SiteLayout -->
   <div
     v-else-if="compactHomeEnabled"
     data-testid="compact-home"
-    class="flex min-h-screen flex-col bg-gray-50 text-gray-900 dark:bg-dark-950 dark:text-white"
+    class="tr flex min-h-screen flex-col"
   >
-    <header class="border-b border-gray-200 px-4 py-4 sm:px-6 dark:border-dark-800">
-      <nav class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 sm:gap-4">
+    <header class="hairline-b px-5 py-4 sm:px-8">
+      <nav class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
         <div class="flex min-w-0 flex-1 items-center gap-3">
           <img
-            :src="siteLogo || '/logo.svg'"
-            alt="Logo"
-            class="h-9 w-9 shrink-0 rounded-lg object-contain"
+            :src="siteLogo || '/turtleroute-mark.png'"
+            alt=""
+            class="h-8 w-8 shrink-0 object-contain"
           />
-          <span class="min-w-0 truncate text-base font-semibold">{{ siteName }}</span>
+          <span class="min-w-0 truncate text-[15px] font-semibold tracking-tight">{{ siteName }}</span>
         </div>
-        <div class="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+        <div class="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1">
           <LocaleSwitcher />
           <a
             v-if="docUrl"
             :href="docUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:text-dark-400 dark:hover:bg-dark-800"
+            class="icon-btn"
             :title="t('home.viewDocs')"
           >
             <Icon name="book" size="md" />
@@ -43,479 +43,383 @@
           <router-link
             v-if="showModelPlazaEntry"
             to="/model-plaza"
-            class="flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            class="icon-btn"
             :title="t('nav.modelPlaza')"
           >
             <Icon name="grid" size="md" />
-            <span class="hidden sm:inline">{{ t('nav.modelPlaza') }}</span>
           </router-link>
           <button
-            class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:text-dark-400 dark:hover:bg-dark-800"
+            class="icon-btn"
             :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
             @click="toggleTheme"
           >
             <Icon v-if="isDark" name="sun" size="md" />
             <Icon v-else name="moon" size="md" />
           </button>
-          <router-link
-            :to="isAuthenticated ? dashboardPath : '/login'"
-            class="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
-          >
+          <router-link :to="primaryDestination" class="btn-solid ml-1">
             {{ isAuthenticated ? t('home.dashboard') : t('home.login') }}
           </router-link>
         </div>
       </nav>
     </header>
 
-    <main class="flex min-w-0 flex-1 items-center justify-center px-4 py-16 sm:px-6">
-      <div class="min-w-0 max-w-2xl text-center">
+    <main class="flex min-w-0 flex-1 items-center px-5 py-20 sm:px-8">
+      <div class="mx-auto min-w-0 max-w-2xl">
         <img
-          :src="siteLogo || '/logo.svg'"
-          alt="Logo"
-          class="mx-auto mb-6 h-20 w-20 rounded-2xl object-contain"
+          :src="siteLogo || '/turtleroute-mark.png'"
+          alt=""
+          class="mb-8 h-16 w-16 object-contain"
         />
-        <h1 class="[overflow-wrap:anywhere] text-3xl font-bold md:text-4xl">{{ siteName }}</h1>
-        <p class="mt-4 whitespace-pre-wrap [overflow-wrap:anywhere] text-base text-gray-600 dark:text-dark-300">{{ siteSubtitle }}</p>
-        <router-link
-          :to="isAuthenticated ? dashboardPath : '/login'"
-          class="mt-8 inline-flex min-h-10 items-center justify-center rounded-lg bg-primary-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-primary-700"
-        >
+        <h1 class="display-xl [overflow-wrap:anywhere]">{{ siteName }}</h1>
+        <p class="lede mt-5 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ siteSubtitle }}</p>
+        <router-link :to="primaryDestination" class="btn-solid mt-9 h-11 px-6">
           {{ isAuthenticated ? t('home.goToDashboard') : t('home.login') }}
         </router-link>
       </div>
     </main>
 
-    <footer class="min-w-0 border-t border-gray-200 px-4 py-5 text-center text-sm text-gray-500 [overflow-wrap:anywhere] sm:px-6 dark:border-dark-800 dark:text-dark-400">
+    <footer class="hairline-t meta meta-cn min-w-0 px-5 py-6 [overflow-wrap:anywhere] sm:px-8">
       &copy; {{ currentYear }} {{ siteName }}
     </footer>
   </div>
 
-  <!-- Default Home Page -->
-  <div
-    v-else
-    class="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/30 to-gray-100 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
-  >
-    <!-- Background Decorations -->
-    <div class="pointer-events-none absolute inset-0 overflow-hidden">
-      <div
-        class="absolute -right-40 -top-40 h-96 w-96 rounded-full bg-primary-400/20 blur-3xl"
-      ></div>
-      <div
-        class="absolute -bottom-40 -left-40 h-96 w-96 rounded-full bg-primary-500/15 blur-3xl"
-      ></div>
-      <div
-        class="absolute left-1/3 top-1/4 h-72 w-72 rounded-full bg-primary-300/10 blur-3xl"
-      ></div>
-      <div
-        class="absolute bottom-1/4 right-1/4 h-64 w-64 rounded-full bg-primary-400/10 blur-3xl"
-      ></div>
-      <div
-        class="absolute inset-0 bg-[linear-gradient(rgba(20,184,166,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(20,184,166,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"
-      ></div>
-    </div>
+  <!-- Default Home Page: the overview of the public site -->
+  <SiteLayout v-else>
+    <div data-testid="default-home">
+      <!-- ── Statement + shell field ──────────────────────────────
+           The mark is rebuilt as page structure: shell plates and an
+           orbit drawn in hairline, bleeding off the right edge. -->
+      <section class="relative overflow-hidden">
+        <svg
+          class="shell-field"
+          viewBox="0 0 720 380"
+          fill="none"
+          aria-hidden="true"
+          preserveAspectRatio="xMinYMid slice"
+        >
+          <g transform="translate(430 190)">
+            <polygon
+              v-for="(plate, i) in plates"
+              :key="`plate-${i}`"
+              :points="hexPoints(plate.cx, plate.cy, 46)"
+              class="plate"
+            />
+            <ellipse rx="300" ry="108" transform="rotate(-20)" class="orbit" />
+            <polygon
+              v-for="(node, i) in orbit"
+              :key="`node-${i}`"
+              :points="hexPoints(node.x, node.y, 7)"
+              class="orbit-node"
+            />
+          </g>
+        </svg>
 
-    <!-- Header -->
-    <header class="relative z-20 px-6 py-4">
-      <nav class="mx-auto flex max-w-6xl items-center justify-between">
-        <!-- Logo -->
-        <div class="flex items-center">
-          <div class="h-10 w-10 overflow-hidden rounded-xl shadow-md">
-            <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
-          </div>
-        </div>
+        <div class="relative mx-auto max-w-[1180px] px-5 pb-14 pt-20 sm:px-8 sm:pb-20 sm:pt-28">
+          <h1 class="display-xl max-w-[17ch]">{{ t('home.landing.hero.title') }}</h1>
+          <p class="lede mt-7 max-w-[46ch]">{{ t('home.landing.hero.lede') }}</p>
 
-        <!-- Nav Actions -->
-        <div class="flex items-center gap-3">
-          <!-- Language Switcher -->
-          <LocaleSwitcher />
-
-          <!-- Doc Link -->
-          <a
-            v-if="docUrl"
-            :href="docUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
-            :title="t('home.viewDocs')"
-          >
-            <Icon name="book" size="md" />
-          </a>
-
-          <!-- Model Plaza Link -->
-          <router-link
-            v-if="showModelPlazaEntry"
-            to="/model-plaza"
-            class="inline-flex items-center gap-1.5 rounded-lg p-2 text-sm text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
-            :title="t('nav.modelPlaza')"
-          >
-            <Icon name="grid" size="md" />
-            <span class="hidden sm:inline">{{ t('nav.modelPlaza') }}</span>
-          </router-link>
-
-          <!-- Theme Toggle -->
-          <button
-            @click="toggleTheme"
-            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
-            :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
-          >
-            <Icon v-if="isDark" name="sun" size="md" />
-            <Icon v-else name="moon" size="md" />
-          </button>
-
-          <!-- Login / Dashboard Button -->
-          <router-link
-            v-if="isAuthenticated"
-            :to="dashboardPath"
-            class="inline-flex items-center gap-1.5 rounded-full bg-gray-900 py-1 pl-1 pr-2.5 transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
-          >
-            <span
-              class="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-primary-400 to-primary-600 text-[10px] font-semibold text-white"
-            >
-              {{ userInitial }}
-            </span>
-            <span class="text-xs font-medium text-white">{{ t('home.dashboard') }}</span>
-            <svg
-              class="h-3 w-3 text-gray-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M4.5 19.5l15-15m0 0H8.25m11.25 0v11.25"
-              />
-            </svg>
-          </router-link>
-          <router-link
-            v-else
-            to="/login"
-            class="inline-flex items-center rounded-full bg-gray-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
-          >
-            {{ t('home.login') }}
-          </router-link>
-        </div>
-      </nav>
-    </header>
-
-    <!-- Main Content -->
-    <main class="relative z-10 flex-1 px-6 py-16">
-      <div class="mx-auto max-w-6xl">
-        <!-- Hero Section - Left/Right Layout -->
-        <div class="mb-12 flex flex-col items-center justify-between gap-12 lg:flex-row lg:gap-16">
-          <!-- Left: Text Content -->
-          <div class="flex-1 text-center lg:text-left">
-            <h1
-              class="mb-4 text-4xl font-bold text-gray-900 dark:text-white md:text-5xl lg:text-6xl"
-            >
-              {{ siteName }}
-            </h1>
-            <p class="mb-8 text-lg text-gray-600 dark:text-dark-300 md:text-xl">
-              {{ siteSubtitle }}
-            </p>
-
-            <!-- CTA Button -->
-            <div>
-              <router-link
-                :to="isAuthenticated ? dashboardPath : '/login'"
-                class="btn btn-primary px-8 py-3 text-base shadow-lg shadow-primary-500/30"
-              >
-                {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
-                <Icon name="arrowRight" size="md" class="ml-2" :stroke-width="2" />
-              </router-link>
-            </div>
-          </div>
-
-          <!-- Right: Terminal Animation -->
-          <div class="flex flex-1 justify-center lg:justify-end">
-            <div class="terminal-container">
-              <div class="terminal-window">
-                <!-- Window header -->
-                <div class="terminal-header">
-                  <div class="terminal-buttons">
-                    <span class="btn-close"></span>
-                    <span class="btn-minimize"></span>
-                    <span class="btn-maximize"></span>
-                  </div>
-                  <span class="terminal-title">terminal</span>
-                </div>
-                <!-- Terminal content -->
-                <div class="terminal-body">
-                  <div class="code-line line-1">
-                    <span class="code-prompt">$</span>
-                    <span class="code-cmd">curl</span>
-                    <span class="code-flag">-X POST</span>
-                    <span class="code-url">/v1/messages</span>
-                  </div>
-                  <div class="code-line line-2">
-                    <span class="code-comment"># Routing to upstream...</span>
-                  </div>
-                  <div class="code-line line-3">
-                    <span class="code-success">200 OK</span>
-                    <span class="code-response">{ "content": "Hello!" }</span>
-                  </div>
-                  <div class="code-line line-4">
-                    <span class="code-prompt">$</span>
-                    <span class="cursor"></span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Feature Tags - Centered -->
-        <div class="mb-12 flex flex-wrap items-center justify-center gap-4 md:gap-6">
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="swap" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.subscriptionToApi')
-            }}</span>
-          </div>
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="shield" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.stickySession')
-            }}</span>
-          </div>
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="chart" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.realtimeBilling')
-            }}</span>
-          </div>
-        </div>
-
-        <!-- Features Grid -->
-        <div class="mb-12 grid gap-6 md:grid-cols-3">
-          <!-- Feature 1: Unified Gateway -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 shadow-lg shadow-blue-500/30 transition-transform group-hover:scale-110"
-            >
-              <Icon name="server" size="lg" class="text-white" />
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.unifiedGateway') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.unifiedGatewayDesc') }}
-            </p>
-          </div>
-
-          <!-- Feature 2: Account Pool -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/30 transition-transform group-hover:scale-110"
-            >
-              <svg
-                class="h-6 w-6 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1.5"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"
-                />
-              </svg>
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.multiAccount') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.multiAccountDesc') }}
-            </p>
-          </div>
-
-          <!-- Feature 3: Billing & Quota -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 shadow-lg shadow-purple-500/30 transition-transform group-hover:scale-110"
-            >
-              <svg
-                class="h-6 w-6 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1.5"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z"
-                />
-              </svg>
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.balanceQuota') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.balanceQuotaDesc') }}
-            </p>
-          </div>
-        </div>
-
-        <!-- Supported Providers -->
-        <div class="mb-8 text-center">
-          <h2 class="mb-3 text-2xl font-bold text-gray-900 dark:text-white">
-            {{ t('home.providers.title') }}
-          </h2>
-          <p class="text-sm text-gray-600 dark:text-dark-400">
-            {{ t('home.providers.description') }}
+          <p class="meta meta-cn mt-10 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span>{{ t('home.landing.hero.facts.providers', { count: providers.length }) }}</span>
+            <span class="dot" aria-hidden="true"></span>
+            <span>{{ t('home.landing.hero.facts.endpoint') }}</span>
+            <span class="dot" aria-hidden="true"></span>
+            <span>{{ t('home.landing.hero.facts.protocols') }}</span>
+          </p>
+          <p class="mt-3 font-mono text-[12px] leading-relaxed text-[color:var(--ink-2)]">
+            {{ providers.join('  ·  ') }}
           </p>
         </div>
+      </section>
 
-        <div class="mb-16 flex flex-wrap items-center justify-center gap-4">
-          <!-- Claude - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-orange-400 to-orange-500"
-            >
-              <span class="text-xs font-bold text-white">C</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.claude') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
+      <!-- ── Route table: the working surface ─────────────────────
+           Full-bleed, dense, and the one real interaction here:
+           picking a row rewrites the request example below it. -->
+      <section class="hairline-t">
+        <div class="mx-auto max-w-[1180px] px-5 sm:px-8">
+          <div class="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 py-5">
+            <h2 class="meta-strong">{{ t('home.landing.table.label') }}</h2>
+            <p class="meta">{{ t('home.landing.table.count', { shown: filteredModels.length, total: models.length }) }}</p>
           </div>
-          <!-- GPT - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-green-500 to-green-600"
+
+          <div class="hairline-t flex flex-wrap items-center gap-x-5 gap-y-2 py-3.5">
+            <span class="meta shrink-0">{{ t('home.landing.table.filterLabel') }}</span>
+            <button
+              v-for="filter in modelFilters"
+              :key="filter.key"
+              type="button"
+              class="filterlink"
+              :class="{ 'is-on': activeFilter === filter.key }"
+              :aria-pressed="activeFilter === filter.key"
+              @click="activeFilter = filter.key"
             >
-              <span class="text-xs font-bold text-white">G</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">GPT</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
+              {{ filter.label }}
+            </button>
           </div>
-          <!-- Gemini - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-600"
-            >
-              <span class="text-xs font-bold text-white">G</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.gemini') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
+
+          <!-- Column header: desktop only, rows are self-labelling on mobile -->
+          <div class="routerow drow drow-head meta hairline-t py-2.5" aria-hidden="true">
+            <span></span>
+            <span>{{ t('home.landing.table.cols.model') }}</span>
+            <span>{{ t('home.landing.table.cols.provider') }}</span>
+            <span>{{ t('home.landing.table.cols.capability') }}</span>
+            <span>{{ t('home.landing.table.cols.region') }}</span>
           </div>
-          <!-- Antigravity - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-rose-500 to-pink-600"
+
+          <div class="hairline-t">
+            <button
+              v-for="model in filteredModels"
+              :key="model.id"
+              type="button"
+              class="routerow drow drow-btn hairline-b"
+              :class="{ 'is-on': model.id === selectedModelId }"
+              :aria-pressed="model.id === selectedModelId"
+              @click="selectedModelId = model.id"
             >
-              <span class="text-xs font-bold text-white">A</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.antigravity') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
+              <span class="hexmark" aria-hidden="true">
+                <svg viewBox="-9 -9 18 18" fill="none">
+                  <polygon :points="hexPoints(0, 0, 7)" />
+                </svg>
+              </span>
+              <span class="dcell-id">{{ model.id }}</span>
+              <span class="dcell-text rowprovider">{{ model.provider }}</span>
+              <span class="dcell-meta rowtag">{{ t(`home.landing.table.tags.${model.tag}`) }}</span>
+              <span class="dcell-meta rowregion">{{ t(`home.landing.table.regions.${model.region}`) }}</span>
+            </button>
           </div>
-          <!-- More - Coming Soon -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-gray-200/50 bg-white/40 px-5 py-3 opacity-60 backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/40"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-gray-500 to-gray-600"
-            >
-              <span class="text-xs font-bold text-white">+</span>
+
+          <p class="meta meta-cn flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-4">
+            <span class="max-w-[60ch]">{{ t('home.landing.table.note') }}</span>
+            <router-link to="/models" class="textlink shrink-0">
+              {{ t('site.common.viewAll') }} →
+            </router-link>
+          </p>
+        </div>
+      </section>
+
+      <!-- ── Request example, wired to the selection above ────────── -->
+      <section class="hairline-t" :style="{ background: 'var(--surface)' }">
+        <div class="mx-auto max-w-[1180px] px-5 py-6 sm:px-8 sm:py-8">
+          <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+            <div class="flex min-w-0 items-baseline gap-3">
+              <span class="verb">POST</span>
+              <span class="truncate font-mono text-[13px] text-[color:var(--ink)]">/v1/messages</span>
             </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.more') }}</span>
-            <span
-              class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-dark-700 dark:text-dark-400"
-              >{{ t('home.providers.soon') }}</span
+            <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
+              <button
+                v-for="tab in codeTabs"
+                :key="tab.key"
+                type="button"
+                class="filterlink"
+                :class="{ 'is-on': activeCodeTab === tab.key }"
+                :aria-pressed="activeCodeTab === tab.key"
+                @click="activeCodeTab = tab.key"
+              >
+                {{ tab.label }}
+              </button>
+              <button
+                type="button"
+                class="btn-ghost"
+                @click="copyToClipboard(activeSnippet, t('home.landing.request.copied'))"
+              >
+                <Icon :name="codeCopied ? 'check' : 'copy'" size="sm" :stroke-width="2" />
+                <span>{{ codeCopied ? t('home.landing.request.copied') : t('home.landing.request.copy') }}</span>
+              </button>
+            </div>
+          </div>
+
+          <pre class="snippet hairline-t mt-5 pt-5">{{ activeSnippet }}</pre>
+
+          <p class="meta meta-cn mt-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+            <span>{{ t('home.landing.request.hint') }} · {{ t('home.landing.request.baseHint') }}</span>
+            <router-link to="/docs" class="textlink shrink-0">
+              {{ t('site.nav.docs') }} →
+            </router-link>
+          </p>
+        </div>
+      </section>
+
+      <!-- ── 01 Failover topology ─────────────────────────────────
+           Asymmetric: index and prose in a narrow left column, the
+           graph takes the rest. Clicking actually re-routes. -->
+      <section class="hairline-t">
+        <div class="mx-auto grid max-w-[1180px] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-16">
+          <div>
+            <p class="index">{{ t('home.landing.topology.index') }}</p>
+            <h2 class="display-md mt-4">{{ t('home.landing.topology.title') }}</h2>
+            <p class="lede-sm mt-5">{{ t('home.landing.topology.lede') }}</p>
+            <button type="button" class="btn-outline mt-8" @click="primaryDown = !primaryDown">
+              {{ primaryDown ? t('home.landing.topology.restore') : t('home.landing.topology.fail') }}
+            </button>
+            <p class="mt-6">
+              <router-link to="/platform" class="textlink">
+                {{ t('site.nav.platform') }} →
+              </router-link>
+            </p>
+          </div>
+
+          <div class="min-w-0">
+            <!-- Route identities live in the list below, so the graph stays
+                 unlabelled and can use its full width for the paths. -->
+            <svg
+              class="topology hidden sm:block"
+              viewBox="0 0 660 250"
+              fill="none"
+              aria-hidden="true"
             >
+              <!-- app → gateway -->
+              <line x1="118" y1="125" x2="252" y2="125" class="edge is-active" />
+              <rect x="8" y="107" width="110" height="36" class="node-box" />
+              <text x="63" y="130" class="node-label" text-anchor="middle">
+                {{ t('home.landing.topology.client') }}
+              </text>
+
+              <!-- gateway → upstreams -->
+              <path
+                v-for="route in routeNodes"
+                :key="`edge-${route.id}`"
+                :d="`M 340 125 C 460 125 500 ${route.y} 604 ${route.y}`"
+                class="edge"
+                :class="`is-${routeState(route.id)}`"
+              />
+
+              <!-- gateway -->
+              <g transform="translate(296 125)">
+                <polygon :points="hexPoints(0, 0, 44)" class="node-hex is-gateway" />
+                <polygon :points="hexPoints(0, 0, 15)" class="node-core" />
+              </g>
+              <text x="296" y="196" class="node-label" text-anchor="middle">
+                {{ t('home.landing.topology.gateway') }}
+              </text>
+
+              <!-- upstream routes -->
+              <polygon
+                v-for="route in routeNodes"
+                :key="`node-${route.id}`"
+                :points="hexPoints(630, route.y, 26)"
+                class="node-hex"
+                :class="`is-${routeState(route.id)}`"
+              />
+            </svg>
+
+            <!-- Accessible, and the only version shown on narrow screens -->
+            <dl class="hairline-t sm:mt-10">
+              <div v-for="route in routeNodes" :key="`row-${route.id}`" class="staterow hairline-b">
+                <dt class="flex min-w-0 items-center gap-3">
+                  <span class="hexmark" :class="`is-${routeState(route.id)}`" aria-hidden="true">
+                    <svg viewBox="-9 -9 18 18" fill="none">
+                      <polygon :points="hexPoints(0, 0, 7)" />
+                    </svg>
+                  </span>
+                  <span class="truncate font-mono text-[13px]">{{ route.id }}</span>
+                </dt>
+                <dd class="meta shrink-0" :class="`state-${routeState(route.id)}`">
+                  {{ t(`home.landing.topology.states.${routeState(route.id)}`) }}
+                </dd>
+              </div>
+            </dl>
+
+            <p class="meta meta-cn mt-4">{{ t('home.landing.topology.note') }}</p>
           </div>
         </div>
-      </div>
-    </main>
+      </section>
 
-    <!-- Footer -->
-    <footer class="relative z-10 border-t border-gray-200/50 px-6 py-8 dark:border-dark-800/50">
-      <div
-        class="mx-auto flex max-w-6xl flex-col items-center justify-center gap-4 text-center sm:flex-row sm:text-left"
-      >
-        <p class="text-sm text-gray-500 dark:text-dark-400">
-          &copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}
-        </p>
-        <div class="flex items-center gap-4">
-          <a
-            v-if="docUrl"
-            :href="docUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
-          >
-            {{ t('home.docs') }}
-          </a>
-          <a
-            :href="githubUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
-          >
-            GitHub
-          </a>
+      <!-- ── 02 Self-hosted routes ────────────────────────────────
+           Narrow measure, reads like a manual excerpt. Deliberately
+           the tightest column here. -->
+      <section class="hairline-t" :style="{ background: 'var(--surface)' }">
+        <div class="mx-auto max-w-[46rem] px-5 py-16 sm:px-8 sm:py-20">
+          <p class="index">{{ t('home.landing.local.index') }}</p>
+          <h2 class="display-md mt-4">{{ t('home.landing.local.title') }}</h2>
+          <p class="lede-sm mt-5">{{ t('home.landing.local.lede') }}</p>
+
+          <figure class="hairline mt-10">
+            <figcaption class="meta hairline-b px-4 py-2.5">
+              {{ t('home.landing.local.fileName') }}
+            </figcaption>
+            <div class="listing">
+              <p v-for="(line, i) in localConfigLines" :key="i" class="listing-line">
+                <span class="listing-no" aria-hidden="true">{{ i + 1 }}</span>
+                <span class="listing-code">{{ line || ' ' }}</span>
+              </p>
+            </div>
+          </figure>
+
+          <dl class="hairline-t mt-10">
+            <div v-for="point in localPoints" :key="point.term" class="defrow hairline-b">
+              <dt class="meta-strong">{{ point.term }}</dt>
+              <dd class="body-sm">{{ point.desc }}</dd>
+            </div>
+          </dl>
+
+          <p class="mt-8">
+            <router-link to="/docs" class="textlink">{{ t('site.nav.docs') }} →</router-link>
+          </p>
         </div>
-      </div>
-    </footer>
-  </div>
+      </section>
+
+      <!-- ── 03 Site index: a table of contents, not a CTA block ──── -->
+      <section class="hairline-t">
+        <div class="mx-auto max-w-[1180px] px-5 py-16 sm:px-8 sm:py-20">
+          <p class="index">{{ t('home.landing.next.index') }}</p>
+          <h2 class="display-md mt-4">{{ t('home.landing.next.title') }}</h2>
+
+          <ul class="hairline-t mt-10">
+            <li v-for="(entry, i) in siteIndex" :key="entry.key" class="hairline-b">
+              <component
+                :is="entry.to ? 'router-link' : entry.href ? 'a' : 'div'"
+                :to="entry.to"
+                :href="entry.href"
+                :target="entry.href ? '_blank' : undefined"
+                :rel="entry.href ? 'noopener noreferrer' : undefined"
+                class="indexrow"
+                :class="{ 'is-inert': !entry.to && !entry.href }"
+              >
+                <span class="meta shrink-0 tabular-nums">{{ String(i + 1).padStart(2, '0') }}</span>
+                <span class="indexrow-label">{{ entry.label }}</span>
+                <span class="indexrow-desc">{{ entry.desc }}</span>
+                <span v-if="entry.pending" class="meta shrink-0">{{ t('home.landing.next.pending') }}</span>
+                <span v-else class="arrow shrink-0" aria-hidden="true">→</span>
+              </component>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </div>
+  </SiteLayout>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useAuthStore, useAppStore } from '@/stores'
+import { ref, computed, watch, onMounted } from 'vue'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { sanitizeUrl } from '@/utils/url'
-import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
+import SiteLayout from '@/components/site/SiteLayout.vue'
+import { useSite, GITHUB_URL } from '@/components/site/useSite'
+import { hexPoints, shellPlates, orbitNodes } from '@/components/site/geometry'
+import { useClipboard } from '@/composables/useClipboard'
+import { useAppStore, useAuthStore } from '@/stores'
 
-const { t } = useI18n()
+// 紧凑首页与自定义首页分支不套 SiteLayout，样式表得自己引一次。
+// 打包器会去重，重复导入没有额外成本。
+import '@/styles/site.css'
 
-const authStore = useAuthStore()
+const {
+  t,
+  siteName,
+  siteLogo,
+  siteSubtitle,
+  docUrl,
+  isAuthenticated,
+  primaryDestination,
+  statusDestination,
+  showModelPlazaEntry,
+} = useSite()
+
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
-// Site settings - directly from appStore (already initialized from injected config)
-const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'Sub2API')
-const siteLogo = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
-const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI API Gateway Platform')
-const docUrl = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl || ''))
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
 const hasHomeContent = computed(() => homeContent.value.trim().length > 0)
 const compactHomeEnabled = computed(() => appStore.cachedPublicSettings?.compact_home_enabled === true)
-const modelPlazaEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.modelPlaza))
 
 // Check if homeContent is a URL (for iframe display)
 const isHomeContentUrl = computed(() => {
@@ -523,57 +427,215 @@ const isHomeContentUrl = computed(() => {
   return content.startsWith('http://') || content.startsWith('https://')
 })
 
-// Theme
-const isDark = ref(document.documentElement.classList.contains('dark'))
-
-// GitHub URL
-const githubUrl = 'https://github.com/Wei-Shaw/sub2api'
-
-// Auth state
-const isAuthenticated = computed(() => authStore.isAuthenticated)
-const modelPlazaRequiresAuth = computed(
-  () => appStore.cachedPublicSettings?.model_plaza_require_auth === true,
-)
-const showModelPlazaEntry = computed(
-  () => modelPlazaEnabled.value && (isAuthenticated.value || !modelPlazaRequiresAuth.value),
-)
-const isAdmin = computed(() => authStore.isAdmin)
-const dashboardPath = computed(() => isAdmin.value ? '/admin/dashboard' : '/dashboard')
-const userInitial = computed(() => {
-  const user = authStore.user
-  if (!user || !user.email) return ''
-  return user.email.charAt(0).toUpperCase()
-})
-
-// Current year for footer
 const currentYear = computed(() => new Date().getFullYear())
 
-// Toggle theme
+// 主题：初始值由 main.ts 写好，这里只切换。默认首页的切换在 SiteHeader，
+// 这份是给不套 SiteLayout 的紧凑首页用的。
+const isDark = ref(document.documentElement.classList.contains('dark'))
 function toggleTheme() {
   isDark.value = !isDark.value
   document.documentElement.classList.toggle('dark', isDark.value)
   localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
 }
 
-// Initialize theme
-function initTheme() {
-  const savedTheme = localStorage.getItem('theme')
-  if (
-    savedTheme === 'dark' ||
-    (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  ) {
-    isDark.value = true
-    document.documentElement.classList.add('dark')
+// ── Shell field geometry ───────────────────────────────────────
+const plates = shellPlates(46, 6)
+const orbit = orbitNodes([25, 150, 265])
+
+// ── Route table ────────────────────────────────────────────────
+// 代表性目录，权威列表在 /models 和模型广场。
+const providers = ['Anthropic', 'OpenAI', 'Google', 'DeepSeek', 'Moonshot', 'Zhipu', 'Alibaba', 'MiniMax']
+
+type ModelTag = 'coding' | 'reasoning' | 'multimodal' | 'general'
+type ModelRegion = 'international' | 'china'
+type ModelFilter = 'all' | ModelRegion | 'reasoning' | 'multimodal'
+
+const models: Array<{ id: string; provider: string; tag: ModelTag; region: ModelRegion }> = [
+  { id: 'claude-sonnet-4-5', provider: 'Anthropic', tag: 'coding', region: 'international' },
+  { id: 'claude-opus-4-1', provider: 'Anthropic', tag: 'reasoning', region: 'international' },
+  { id: 'gpt-4o', provider: 'OpenAI', tag: 'multimodal', region: 'international' },
+  { id: 'gemini-2.5-pro', provider: 'Google', tag: 'reasoning', region: 'international' },
+  { id: 'deepseek-v3', provider: 'DeepSeek', tag: 'general', region: 'china' },
+  { id: 'kimi-k2', provider: 'Moonshot', tag: 'coding', region: 'china' },
+  { id: 'glm-4.6', provider: 'Zhipu', tag: 'general', region: 'china' },
+  { id: 'qwen3-max', provider: 'Alibaba', tag: 'general', region: 'china' },
+]
+
+const activeFilter = ref<ModelFilter>('all')
+const modelFilters = computed(() =>
+  (['all', 'international', 'china', 'reasoning', 'multimodal'] as const).map((key) => ({
+    key,
+    label: t(`home.landing.table.filters.${key}`),
+  })),
+)
+
+const filteredModels = computed(() => {
+  const filter = activeFilter.value
+  if (filter === 'all') return models
+  if (filter === 'reasoning' || filter === 'multimodal') {
+    return models.filter((model) => model.tag === filter)
   }
+  return models.filter((model) => model.region === filter)
+})
+
+const selectedModelId = ref(models[0].id)
+
+// 选中项被筛掉时落到可见的第一行，示例始终对应看得见的那一行
+watch(filteredModels, (visible) => {
+  if (visible.length && !visible.some((model) => model.id === selectedModelId.value)) {
+    selectedModelId.value = visible[0].id
+  }
+})
+
+// ── Request example ────────────────────────────────────────────
+const apiBase =
+  typeof window !== 'undefined' ? window.location.origin : 'https://turtleroute.example.com'
+
+const codeTabs = computed(() =>
+  (['curl', 'python', 'node'] as const).map((key) => ({
+    key,
+    label: { curl: 'cURL', python: 'Python', node: 'Node.js' }[key],
+  })),
+)
+type CodeTab = 'curl' | 'python' | 'node'
+const activeCodeTab = ref<CodeTab>('curl')
+
+const activeSnippet = computed(() => {
+  const model = selectedModelId.value
+  if (activeCodeTab.value === 'python') {
+    return `import os
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="${apiBase}",
+    api_key=os.environ["TURTLEROUTE_API_KEY"],
+)
+message = client.messages.create(
+    model="${model}",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "ping"}],
+)`
+  }
+  if (activeCodeTab.value === 'node') {
+    return `import Anthropic from '@anthropic-ai/sdk'
+
+const client = new Anthropic({
+  baseURL: '${apiBase}',
+  apiKey: process.env.TURTLEROUTE_API_KEY,
+})
+
+const message = await client.messages.create({
+  model: '${model}',
+  max_tokens: 1024,
+  messages: [{ role: 'user', content: 'ping' }],
+})`
+  }
+  return `curl ${apiBase}/v1/messages \\
+  -H "Authorization: Bearer $TURTLEROUTE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${model}",
+    "max_tokens": 1024,
+    "messages": [{ "role": "user", "content": "ping" }]
+  }'`
+})
+
+const { copied: codeCopied, copyToClipboard } = useClipboard()
+
+// ── Failover topology ──────────────────────────────────────────
+// 示意，并已在页面上标注。状态变化是真的：切换会重算每条边和每个节点。
+type RouteState = 'active' | 'standby' | 'degraded'
+const routeNodes = [
+  { id: 'anthropic-primary', y: 48 },
+  { id: 'anthropic-backup', y: 125 },
+  { id: 'openai-compat', y: 202 },
+]
+const primaryDown = ref(false)
+
+function routeState(id: string): RouteState {
+  if (id === 'anthropic-primary') return primaryDown.value ? 'degraded' : 'active'
+  if (id === 'anthropic-backup') return primaryDown.value ? 'active' : 'standby'
+  return 'standby'
 }
 
+// ── Self-hosted routes ─────────────────────────────────────────
+const localConfigLines = `routes:
+  - name: local-llama
+    kind: ollama
+    base_url: http://127.0.0.1:11434
+    model: llama3.1
+
+  - name: anthropic-primary
+    kind: anthropic
+    api_key_ref: ANTHROPIC_KEY
+
+# Callers keep sending:
+#   POST /v1/messages  { "model": "local-llama", ... }`.split('\n')
+
+const localPoints = computed(() =>
+  (['endpoint', 'scheduling', 'policy'] as const).map((key) => ({
+    term: t(`home.landing.local.points.${key}.term`),
+    desc: t(`home.landing.local.points.${key}.desc`),
+  })),
+)
+
+// ── Site index ─────────────────────────────────────────────────
+// 首页是概览页，结尾这份索引就是通往各子页的入口。
+const siteIndex = computed(() => {
+  const entries: Array<{
+    key: string
+    label: string
+    desc: string
+    to?: string
+    href?: string
+    pending?: boolean
+  }> = [
+    { key: 'models', label: t('site.nav.models'), desc: t('site.nav.desc.models'), to: '/models' },
+    { key: 'platform', label: t('site.nav.platform'), desc: t('site.nav.desc.platform'), to: '/platform' },
+    { key: 'docs', label: t('site.nav.docs'), desc: t('site.nav.desc.docs'), to: '/docs' },
+    { key: 'why', label: t('site.nav.why'), desc: t('site.nav.desc.why'), to: '/why' },
+    { key: 'changelog', label: t('site.nav.changelog'), desc: t('site.nav.desc.changelog'), to: '/changelog' },
+    {
+      key: 'status',
+      label: t('site.footer.links.status'),
+      desc: t('home.landing.next.items.status.desc'),
+      to: statusDestination.value,
+    },
+  ]
+
+  if (showModelPlazaEntry.value) {
+    entries.push({
+      key: 'plaza',
+      label: t('site.footer.links.plaza'),
+      desc: t('home.landing.next.items.plaza.desc'),
+      to: '/model-plaza',
+    })
+  }
+
+  entries.push(
+    {
+      key: 'github',
+      label: t('home.landing.next.items.github.label'),
+      desc: t('home.landing.next.items.github.desc'),
+      href: GITHUB_URL,
+    },
+    {
+      key: 'app',
+      label: t('home.landing.next.items.app.label'),
+      desc: t('home.landing.next.items.app.desc'),
+      pending: true,
+    },
+  )
+
+  return entries
+})
+
 onMounted(() => {
-  initTheme()
-
-  // Check auth state
-  authStore.checkAuth()
-
-  // Ensure public settings are loaded (will use cache if already loaded from injected config)
+  // 默认首页那一支由 SiteLayout 负责初始化；这里只覆盖不经过 SiteLayout
+  // 的两支。checkAuth() 会顺带发一次 refreshUser，重复调用等于多发请求。
+  if (hasHomeContent.value || compactHomeEnabled.value) {
+    authStore.checkAuth()
+  }
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()
   }
@@ -581,164 +643,124 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* Terminal Container */
-.terminal-container {
-  position: relative;
-  display: inline-block;
+/* 只留这页私有的东西；通用令牌、字号、控件和结构原语都在
+   @/styles/site.css 里，由 SiteLayout 引入。 */
+
+/* ── Hero shell field ──────────────────────────────────────────
+   The mark redrawn at page scale, bleeding off the right edge. */
+.shell-field {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.85;
+}
+.shell-field .plate {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.shell-field .orbit {
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: 0.42;
+}
+.shell-field .orbit-node {
+  fill: var(--accent);
+  opacity: 0.6;
 }
 
-/* Terminal Window */
-.terminal-window {
-  width: 420px;
-  background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
-  border-radius: 14px;
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.4),
-    0 0 0 1px rgba(255, 255, 255, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  overflow: hidden;
-  transform: perspective(1000px) rotateX(2deg) rotateY(-2deg);
-  transition: transform 0.3s ease;
+/* ── Route table geometry ──────────────────────────────────────
+   Typography comes from .drow / .dcell-* in site.css; only the
+   column geometry is local. */
+.routerow {
+  grid-template-columns: 1.25rem minmax(0, 2.3fr) minmax(0, 1.1fr) minmax(0, 0.8fr) minmax(0, 0.6fr);
 }
 
-.terminal-window:hover {
-  transform: perspective(1000px) rotateX(0deg) rotateY(0deg) translateY(-4px);
-}
-
-/* Terminal Header */
-.terminal-header {
-  display: flex;
-  align-items: center;
-  padding: 12px 16px;
-  background: rgba(30, 41, 59, 0.8);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.terminal-buttons {
-  display: flex;
-  gap: 8px;
-}
-
-.terminal-buttons span {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.btn-close {
-  background: #ef4444;
-}
-.btn-minimize {
-  background: #eab308;
-}
-.btn-maximize {
-  background: #22c55e;
-}
-
-.terminal-title {
-  flex: 1;
-  text-align: center;
-  font-size: 12px;
-  font-family: ui-monospace, monospace;
-  color: #64748b;
-  margin-right: 52px;
-}
-
-/* Terminal Body */
-.terminal-body {
-  padding: 20px 24px;
-  font-family: ui-monospace, 'Fira Code', monospace;
-  font-size: 14px;
-  line-height: 2;
-}
-
-.code-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  opacity: 0;
-  animation: line-appear 0.5s ease forwards;
-}
-
-.line-1 {
-  animation-delay: 0.3s;
-}
-.line-2 {
-  animation-delay: 1s;
-}
-.line-3 {
-  animation-delay: 1.8s;
-}
-.line-4 {
-  animation-delay: 2.5s;
-}
-
-@keyframes line-appear {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
+/* Narrow screens fold the row into two lines: id on top, then provider
+   on the left with capability and region trailing right. */
+@media (max-width: 639px) {
+  .routerow {
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto auto;
+    gap: 0.25rem 0.625rem;
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+  .hexmark {
+    grid-row: 1;
+  }
+  .dcell-id {
+    grid-column: 2 / 5;
+    grid-row: 1;
+  }
+  .rowprovider {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .rowtag {
+    grid-column: 3;
+    grid-row: 2;
+    justify-self: end;
+  }
+  .rowregion {
+    grid-column: 4;
+    grid-row: 2;
+    justify-self: end;
   }
 }
 
-.code-prompt {
-  color: #22c55e;
-  font-weight: bold;
+/* ── Topology ──────────────────────────────────────────────────
+   Hexagons carry every node state; there are no coloured dots. */
+.topology {
+  width: 100%;
+  height: auto;
 }
-.code-cmd {
-  color: #38bdf8;
+.topology .edge {
+  stroke: var(--rule);
+  stroke-width: 1;
+  transition: stroke 0.3s ease, stroke-width 0.3s ease, opacity 0.3s ease;
 }
-.code-flag {
-  color: #a78bfa;
+.topology .edge.is-active {
+  stroke: var(--accent);
+  stroke-width: 1.75;
 }
-.code-url {
-  color: #14b8a6;
+.topology .edge.is-standby {
+  stroke-dasharray: 3 5;
 }
-.code-comment {
-  color: #64748b;
-  font-style: italic;
+.topology .edge.is-degraded {
+  stroke: var(--warn);
+  stroke-dasharray: 2 6;
+  opacity: 0.55;
 }
-.code-success {
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.15);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-weight: 600;
+.topology .node-box {
+  stroke: var(--rule);
+  stroke-width: 1;
+  fill: none;
 }
-.code-response {
-  color: #fbbf24;
+.topology .node-hex {
+  fill: none;
+  stroke: var(--rule);
+  stroke-width: 1;
+  transition: stroke 0.3s ease, fill 0.3s ease, opacity 0.3s ease;
 }
-
-/* Blinking Cursor */
-.cursor {
-  display: inline-block;
-  width: 8px;
-  height: 16px;
-  background: #22c55e;
-  animation: blink 1s step-end infinite;
+.topology .node-hex.is-gateway {
+  stroke: var(--ink);
 }
-
-@keyframes blink {
-  0%,
-  50% {
-    opacity: 1;
-  }
-  51%,
-  100% {
-    opacity: 0;
-  }
+.topology .node-hex.is-active {
+  stroke: var(--accent);
+  fill: var(--accent-wash);
+  stroke-width: 1.75;
 }
-
-/* Dark mode adjustments */
-:deep(.dark) .terminal-window {
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.6),
-    0 0 0 1px rgba(20, 184, 166, 0.2),
-    0 0 40px rgba(20, 184, 166, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+.topology .node-hex.is-degraded {
+  stroke: var(--warn);
+  stroke-dasharray: 3 4;
+  opacity: 0.6;
+}
+.topology .node-core {
+  fill: var(--accent);
+}
+.topology .node-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  fill: var(--muted);
 }
 </style>

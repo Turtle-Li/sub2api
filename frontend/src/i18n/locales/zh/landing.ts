@@ -14,100 +14,93 @@ export default {
     login: '登录',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
-    // 新增：面向用户的价值主张
-    heroSubtitle: '一个密钥，畅用多个 AI 模型',
-    heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',
-    tags: {
-      subscriptionToApi: '订阅转 API',
-      stickySession: '会话保持',
-      realtimeBilling: '按量计费'
-    },
-    // 用户痛点区块
-    painPoints: {
-      title: '你是否也遇到这些问题？',
-      items: {
-        expensive: {
-          title: '订阅费用高',
-          desc: '每个 AI 服务都要单独订阅，每月支出越来越多'
-        },
-        complex: {
-          title: '多账号难管理',
-          desc: '不同平台的账号、密钥分散各处，管理起来很麻烦'
-        },
-        unstable: {
-          title: '服务不稳定',
-          desc: '单一账号容易触发限制，影响正常使用'
-        },
-        noControl: {
-          title: '用量无法控制',
-          desc: '不知道钱花在哪了，也无法限制团队成员的使用'
+    // 默认首页（TurtleRoute 落地页）
+    landing: {
+      hero: {
+        title: '一个端点，通向所有模型',
+        lede: '统一密钥、跨服务商路由、失败自动绕行。已有的 Anthropic / OpenAI SDK 调用不用改一行。',
+        facts: {
+          providers: '{count} 家上游',
+          endpoint: '1 个统一端点',
+          protocols: '4 套协议面'
         }
-      }
-    },
-    // 解决方案区块
-    solutions: {
-      title: '我们帮你解决',
-      subtitle: '简单三步，开始省心使用 AI'
-    },
-    features: {
-      unifiedGateway: '一键接入',
-      unifiedGatewayDesc: '获取一个 API 密钥，即可调用所有已接入的 AI 模型，无需分别申请。',
-      multiAccount: '稳定可靠',
-      multiAccountDesc: '智能调度多个上游账号，自动切换和负载均衡，告别频繁报错。',
-      balanceQuota: '用多少付多少',
-      balanceQuotaDesc: '按实际使用量计费，支持设置配额上限，团队用量一目了然。'
-    },
-    // 优势对比
-    comparison: {
-      title: '为什么选择我们？',
-      headers: {
-        feature: '对比项',
-        official: '官方订阅',
-        us: '本平台'
       },
-      items: {
-        pricing: {
-          feature: '付费方式',
-          official: '固定月费，用不完也付',
-          us: '按量付费，用多少付多少'
+      table: {
+        label: '路由表',
+        note: '代表性模型，非完整目录。价格与全量列表以模型广场为准。',
+        cols: {
+          model: '模型 ID',
+          provider: '上游',
+          capability: '能力',
+          region: '区域'
         },
-        models: {
-          feature: '模型选择',
-          official: '单一服务商',
-          us: '多模型随意切换'
+        filterLabel: '筛选',
+        filters: {
+          all: '全部',
+          international: '国际',
+          china: '国内',
+          reasoning: '推理',
+          multimodal: '多模态'
         },
-        management: {
-          feature: '账号管理',
-          official: '每个服务单独管理',
-          us: '统一密钥，一站管理'
+        tags: {
+          coding: '代码',
+          reasoning: '推理',
+          multimodal: '多模态',
+          general: '通用'
         },
-        stability: {
-          feature: '服务稳定性',
-          official: '单账号易触发限制',
-          us: '多账号池，自动切换'
+        regions: {
+          international: '国际',
+          china: '国内'
         },
-        control: {
-          feature: '用量控制',
-          official: '无法限制',
-          us: '可设配额、查明细'
+        count: '{shown} / {total} 条路由',
+        viewAll: '模型广场'
+      },
+      request: {
+        label: '请求示例',
+        hint: '点上方任意一行，示例同步更新',
+        baseHint: 'base URL 取自当前站点',
+        copy: '复制',
+        copied: '已复制'
+      },
+      topology: {
+        index: '01',
+        title: '主路由挂了，请求自己换条路',
+        lede: '一个模型可以挂多条上游路由。健康检查不通过的路由会被移出轮询，调用方拿到的仍然是同一个端点、同一个密钥。',
+        client: '你的应用',
+        gateway: '统一端点',
+        states: {
+          active: '承载中',
+          standby: '待接管',
+          degraded: '已移出轮询'
+        },
+        fail: '模拟主路由故障',
+        restore: '恢复主路由',
+        note: '示意拓扑，可点击。线上真实健康状况请看渠道状态页。'
+      },
+      local: {
+        index: '02',
+        title: '本地推理后端，挂成一条普通路由',
+        lede: 'Ollama、vLLM 这类本地后端和云端服务商一样注册为路由，共用同一个端点、同一套密钥与配额策略。',
+        fileName: 'routes.yaml',
+        points: {
+          endpoint: { term: '同一端点', desc: '客户端仍然调用 /v1/messages，不区分本地与云端' },
+          scheduling: { term: '统一调度', desc: '本地路由参与同一份轮询与故障绕行策略' },
+          policy: { term: '一致口径', desc: '密钥、限额与用量统计规则保持不变' }
         }
+      },
+      next: {
+        index: '03',
+        title: '接下来',
+        items: {
+          console: { label: '控制台', desc: '创建密钥、查看用量' },
+          status: { label: '渠道状态', desc: '登录后查看各路由的实时健康状况' },
+          plaza: { label: '模型广场', desc: '完整模型目录与实时价格' },
+          docs: { label: 'API 文档', desc: '接入方式与协议差异' },
+          github: { label: 'GitHub', desc: '开源仓库与更新记录' },
+          app: { label: '桌面 App', desc: '开发中，发布后在此提供下载' }
+        },
+        pending: '开发中'
       }
-    },
-    providers: {
-      title: '已支持的 AI 模型',
-      description: '一个 API，多种选择',
-      supported: '已支持',
-      soon: '即将推出',
-      claude: 'Claude',
-      gemini: 'Gemini',
-      antigravity: 'Antigravity',
-      more: '更多'
-    },
-    // CTA 区块
-    cta: {
-      title: '准备好开始了吗？',
-      description: '注册即可获得免费试用额度，体验一站式 AI 服务',
-      button: '免费注册'
     },
     footer: {
       allRightsReserved: '保留所有权利。'

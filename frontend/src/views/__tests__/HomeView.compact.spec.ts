@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, RouterLinkStub } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 import HomeView from '../HomeView.vue'
 
@@ -44,8 +45,16 @@ function mountHome(settings: Record<string, unknown> = {}) {
     ...settings,
   }
 
+  // 默认首页现在套在 SiteLayout 里，SiteHeader 需要路由上下文来高亮当前页。
+  // RouterLink 仍然用 stub，下面的 props('to') 断言不受影响。
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }],
+  })
+
   return mount(HomeView, {
     global: {
+      plugins: [router],
       stubs: {
         RouterLink: RouterLinkStub,
         LocaleSwitcher: { template: '<div data-testid="locale-switcher" />' },
@@ -108,7 +117,7 @@ describe('HomeView compact mode', () => {
     const wrapper = mountHome(settings)
 
     expect(wrapper.find('[data-testid="compact-home"]').exists()).toBe(false)
-    expect(wrapper.find('.terminal-container').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="default-home"]').exists()).toBe(true)
   })
 
   it('links unauthenticated visitors to login', () => {
@@ -163,7 +172,8 @@ describe('HomeView compact mode', () => {
     expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
   })
 
-  it('shows the model plaza link in the default home header', () => {
+  // 默认首页的模型广场入口现在在页脚和站点索引里，不再占 masthead 的位置
+  it('shows the model plaza link on the default home', () => {
     const wrapper = mountHome({
       model_plaza_enabled: true,
       model_plaza_require_auth: false,

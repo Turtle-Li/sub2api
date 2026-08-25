@@ -186,6 +186,69 @@ const routes: RouteRecordRaw[] = [
     }
   },
 
+  // ---- Public marketing site (shares SiteLayout with /home) ----
+  {
+    path: '/models',
+    name: 'SiteModels',
+    component: () => import('@/views/site/ModelsView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Models & Pricing',
+      titleKey: 'site.nav.models'
+    }
+  },
+  {
+    path: '/platform',
+    name: 'SitePlatform',
+    component: () => import('@/views/site/PlatformView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Platform',
+      titleKey: 'site.nav.platform'
+    }
+  },
+  {
+    path: '/docs',
+    name: 'SiteDocs',
+    component: () => import('@/views/site/DocsView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Docs',
+      titleKey: 'site.nav.docs'
+    }
+  },
+  {
+    // Each docs section is a real route, so it can be linked and shared
+    path: '/docs/:section',
+    name: 'SiteDocsSection',
+    component: () => import('@/views/site/DocsView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Docs',
+      titleKey: 'site.nav.docs'
+    }
+  },
+  {
+    path: '/why',
+    name: 'SiteWhy',
+    component: () => import('@/views/site/WhyView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Why Us',
+      titleKey: 'site.nav.why'
+    }
+  },
+  {
+    path: '/changelog',
+    name: 'SiteChangelog',
+    component: () => import('@/views/site/ChangelogView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Changelog',
+      titleKey: 'site.nav.changelog'
+    }
+  },
+
   // ==================== User Routes ====================
   {
     path: '/',
