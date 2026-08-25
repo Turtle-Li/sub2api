@@ -34,6 +34,7 @@ LOG_DIR="${LOG_ROOT}/${RUN_ID}"
 BUILD_LOG="${LOG_DIR}/build.log"
 SWITCH_LOG="${LOG_DIR}/switch.log"
 LOCK_FILE="${SUB2API_RELEASE_LOCK_FILE:-/var/lock/sub2api-release.lock}"
+MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
 MIN_FREE_BYTES="${SUB2API_RELEASE_MIN_FREE_BYTES:-8589934592}"
 BUILD_TIMEOUT_SECONDS="${SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS:-3000}"
 BUILD_GOMAXPROCS="${SUB2API_RELEASE_BUILD_GOMAXPROCS:-1}"
@@ -139,6 +140,8 @@ esac
 mkdir -p "$LOG_DIR"
 exec 9>"$LOCK_FILE"
 flock -n 9 || die "another production release is already running"
+exec 8>"$MAINTENANCE_LOCK_FILE"
+flock -n 8 || die "production maintenance or runtime recovery is already running"
 
 if [ "$PREBUILT_MODE" != "true" ]; then
   [ -d "$SOURCE_DIR" ] || die "source directory does not exist: $SOURCE_DIR"
@@ -274,6 +277,9 @@ rollback() {
 
 cleanup_failed_inactive_target() {
   local active_config
+  local caddy_config
+  local host_config
+  local startup_config
 
   if ! docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
     return 0
@@ -282,11 +288,20 @@ cleanup_failed_inactive_target() {
     log "WARNING: could not read Caddy configuration; retaining failed target ${NEW_CONTAINER}" >&2
     return 0
   fi
-  if ! printf '%s' "$active_config" | grep -qF "$OLD_UPSTREAM" \
-    || printf '%s' "$active_config" | grep -qF "$NEW_UPSTREAM"; then
-    log "WARNING: Caddy does not conclusively point at ${OLD_UPSTREAM}; retaining ${NEW_CONTAINER}" >&2
+  if ! host_config="$(cat "${APP_DIR}/Caddyfile")" \
+    || ! startup_config="$(docker exec \
+      -e "CADDY_CHECK_PATH=${DRAIN_CADDY_CONFIG_PATH}" \
+      "$CADDY_CONTAINER" sh -c 'cat "$CADDY_CHECK_PATH"')"; then
+    log "WARNING: could not read every Caddy configuration view; retaining failed target ${NEW_CONTAINER}" >&2
     return 0
   fi
+  for caddy_config in "$host_config" "$startup_config" "$active_config"; do
+    if ! printf '%s' "$caddy_config" | grep -qF "$OLD_UPSTREAM" \
+      || printf '%s' "$caddy_config" | grep -qF "$NEW_UPSTREAM"; then
+      log "WARNING: Caddy does not conclusively point at ${OLD_UPSTREAM}; retaining ${NEW_CONTAINER}" >&2
+      return 0
+    fi
+  done
 
   log "Removing failed inactive target ${NEW_CONTAINER}; Caddy still points at ${OLD_CONTAINER}"
   docker rm -f "$NEW_CONTAINER" >>"${LOG_DIR}/failed-target-cleanup.log" 2>&1 \
@@ -313,26 +328,36 @@ if ! env \
 fi
 
 if ! curl -fsS --max-time 20 --retry 3 --retry-delay 2 "$PUBLIC_HEALTH_URL" >/dev/null; then
-  rollback || true
+  if rollback; then
+    cleanup_failed_inactive_target
+  fi
   die "public health check failed after switch"
 fi
 
 NEW_HEALTH="$(docker inspect "$NEW_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
 [ "$NEW_HEALTH" = "healthy" ] || {
-  rollback || true
+  if rollback; then
+    cleanup_failed_inactive_target
+  fi
   die "new container lost health after switch: $NEW_HEALTH"
 }
 
 if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/')"; then
-  rollback || true
+  if rollback; then
+    cleanup_failed_inactive_target
+  fi
   die "could not read the active Caddy configuration after switch"
 fi
 printf '%s' "$active_config" | grep -qF "$NEW_UPSTREAM" || {
-  rollback || true
+  if rollback; then
+    cleanup_failed_inactive_target
+  fi
   die "active Caddy config does not contain $NEW_UPSTREAM"
 }
 if printf '%s' "$active_config" | grep -qF "$OLD_UPSTREAM"; then
-  rollback || true
+  if rollback; then
+    cleanup_failed_inactive_target
+  fi
   die "active Caddy config still contains old upstream $OLD_UPSTREAM"
 fi
 
@@ -359,6 +384,7 @@ if ! systemd-run \
   --setenv="FORBIDDEN_CADDY_UPSTREAM=${OLD_UPSTREAM}" \
   --setenv="CADDY_CONTAINER=${CADDY_CONTAINER}" \
   --setenv="CADDY_ACTIVE_CONFIG_PATH=${DRAIN_CADDY_CONFIG_PATH}" \
+  --setenv="SUB2API_MAINTENANCE_LOCK_FILE=${MAINTENANCE_LOCK_FILE}" \
   --setenv="INTERVAL_SECONDS=${DRAIN_INTERVAL_SECONDS}" \
   --setenv="ACTIVE_WINDOW_SECONDS=${DRAIN_ACTIVE_WINDOW_SECONDS}" \
   --setenv="RETRY_DELAY_SECONDS=${DRAIN_RETRY_DELAY_SECONDS}" \

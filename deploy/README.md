@@ -35,7 +35,7 @@ Official upstream changes are deliberately merged into fork `main` by a
 maintainer first. The release server does not poll or merge the official
 upstream itself.
 
-Install the root-owned receiver and the disabled-by-default recovery service on
+Install the root-owned receiver, release service, and runtime recovery guard on
 the production host:
 
 ```bash
@@ -45,6 +45,7 @@ sudo deploy/install-autodeploy.sh \
 
 /opt/sub2api/scripts/sub2api-autodeploy.sh --check
 journalctl -u sub2api-autodeploy.service -n 100 --no-pager
+systemctl status sub2api-runtime-guard.timer --no-pager
 ```
 
 Run the manual `CI` workflow first when GitHub-hosted verification is desired,
@@ -76,6 +77,44 @@ written to `drain-monitor.log`.
 override for deployments where background queues are disabled or the operator
 has separately fenced their consumers; it should not be enabled on normal
 Sub2API production hosts.
+
+### Runtime recovery and historical fallback
+
+`install-autodeploy.sh` enables `sub2api-runtime-guard.timer` by default. The
+timer runs 30 seconds after boot and 30 seconds after each completed check. It
+does not build, pull, or create application containers. Every run acquires the
+same `/run/lock/sub2api-maintenance.lock` used by production releases, then:
+
+1. starts and verifies PostgreSQL, Redis, and Caddy, restarting a dependency
+   once if it remains unhealthy;
+2. resolves the active application from the host Caddyfile and requires the
+   host file, Caddy startup file, and live Admin API to agree;
+3. starts or restarts that active container and verifies its internal and
+   public health endpoints;
+4. if the active slot cannot recover, stops it before starting a stopped
+   historical slot, or promotes the single healthy old slot already draining;
+5. delegates the traffic change to the audited blue-green helper, then verifies
+   Docker health, the three Caddy views, and the public health endpoint.
+
+The failed active and historical fallback are never intentionally kept running
+as two healthy queue consumers. Ambiguous Caddy state, multiple running old
+slots, a missing historical container, OOM/non-zero historical exits, or lock
+contention all fail closed. Lock contention is a successful no-op because a
+release or other planned maintenance owns the runtime at that moment.
+The drain monitor also takes this lock around its final Caddy revalidation and
+`docker stop`, so it cannot stop an old slot while the guard is promoting it.
+
+Use the guard for emergency recovery instead of guessing a Compose service or
+container color:
+
+```bash
+sudo systemctl start sub2api-runtime-guard.service
+sudo journalctl -u sub2api-runtime-guard.service -n 100 --no-pager
+```
+
+Any manual database cutover or application/Caddy lifecycle command must also
+hold `/run/lock/sub2api-maintenance.lock`. A production release acquires it
+internally. Do not wrap the release command in a second `flock` invocation.
 
 GitHub workflow concurrency serializes production runs. The receiver also holds
 an exclusive upload/release lock and fails closed if another release is in
@@ -109,6 +148,10 @@ normal production path.
 | `sub2api-github-deploy-trigger.sh` | Forced SSH command that validates the deploy protocol |
 | `sub2api-github-image-release.sh` | Validates and loads a GitHub-built image before blue-green release |
 | `sub2api-server-release.sh` | Runs preflight, blue-green switch, verification, rollback, and draining |
+| `sub2api-drain-monitor.sh` | Waits for a drained slot to become idle and stops it under the maintenance lock |
+| `sub2api-runtime-guard.sh` | Recovers dependencies/active slot and safely falls back to a historical slot |
+| `sub2api-runtime-guard.service` | Root-owned one-shot runtime recovery service |
+| `sub2api-runtime-guard.timer` | Runs the runtime guard every 30 seconds |
 | `sub2api-autodeploy.sh` | Legacy source-preparation recovery controller |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |

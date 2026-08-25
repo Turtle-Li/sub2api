@@ -76,6 +76,13 @@ case "$command_name" in
   logs)
     exit 0
     ;;
+  exec)
+    printf 'reverse_proxy sub2api-green:8080\n'
+    ;;
+  rm)
+    [ "${2:-}" = "-f" ] || exit 1
+    exit 0
+    ;;
   build)
     exit 71
     ;;
@@ -85,6 +92,12 @@ case "$command_name" in
 esac
 EOF
 chmod +x "${FAKE_BIN}/docker"
+
+cat >"${FAKE_BIN}/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "${FAKE_BIN}/curl"
 
 cat >"${FAKE_BIN}/df" <<'EOF'
 #!/usr/bin/env bash
@@ -110,6 +123,18 @@ chmod +x "${FAKE_BIN}/cut"
 
 cat >"${FAKE_BIN}/flock" <<'EOF'
 #!/usr/bin/env bash
+if [ -n "${FAKE_FLOCK_COUNT_FILE:-}" ]; then
+  count=0
+  if [ -r "$FAKE_FLOCK_COUNT_FILE" ]; then
+    count="$(cat "$FAKE_FLOCK_COUNT_FILE")"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$FAKE_FLOCK_COUNT_FILE"
+  if [ -n "${FAKE_FLOCK_FAIL_ON_CALL:-}" ] \
+    && [ "$count" -eq "$FAKE_FLOCK_FAIL_ON_CALL" ]; then
+    exit 1
+  fi
+fi
 exit 0
 EOF
 chmod +x "${FAKE_BIN}/flock"
@@ -131,10 +156,13 @@ run_release() {
   env \
     PATH="${FAKE_BIN}:${PATH}" \
     FAKE_DOCKER_CALLS="$DOCKER_CALLS" \
+    FAKE_FLOCK_COUNT_FILE="${FAKE_FLOCK_COUNT_FILE:-}" \
+    FAKE_FLOCK_FAIL_ON_CALL="${FAKE_FLOCK_FAIL_ON_CALL:-}" \
     SUB2API_APP_DIR="$APP_DIR" \
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
+    SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS=30 \
     SUB2API_RELEASE_BUILD_GOMAXPROCS=1 \
@@ -158,6 +186,7 @@ run_github_prebuilt_release() {
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
+    SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
     /bin/bash "$SCRIPT" \
@@ -168,6 +197,19 @@ run_github_prebuilt_release() {
       'https://example.invalid/health' \
       'github-prebuilt-test'
 }
+
+maintenance_output="${TEST_ROOT}/maintenance-lock.log"
+flock_count_file="${TEST_ROOT}/flock-count"
+if FAKE_FLOCK_COUNT_FILE="$flock_count_file" \
+  FAKE_FLOCK_FAIL_ON_CALL=2 \
+  run_release >"$maintenance_output" 2>&1; then
+  fail 'maintenance lock contention was accepted'
+fi
+assert_contains "$maintenance_output" \
+  'production maintenance or runtime recovery is already running'
+if [ -s "$DOCKER_CALLS" ]; then
+  fail 'Docker was inspected before the maintenance lock was acquired'
+fi
 
 strict_output="${TEST_ROOT}/strict.log"
 if run_release >"$strict_output" 2>&1; then
@@ -213,5 +255,14 @@ assert_contains "$DOCKER_CALLS" 'image inspect sub2api:auto-test'
 if grep -Fq -- 'build ' "$DOCKER_CALLS"; then
   fail 'production-side image build ran in explicit --prebuilt mode'
 fi
+
+: >"$DOCKER_CALLS"
+rollback_cleanup_output="${TEST_ROOT}/rollback-cleanup.log"
+if ALLOW_DRAINING=true run_github_prebuilt_release >"$rollback_cleanup_output" 2>&1; then
+  fail 'fake release unexpectedly passed a failing public health check'
+fi
+assert_contains "$rollback_cleanup_output" 'Rollback completed'
+assert_contains "$rollback_cleanup_output" 'Removing failed inactive target sub2api-blue'
+assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
 
 printf 'Server release inactive-container guard tests passed.\n'

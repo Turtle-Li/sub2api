@@ -21,6 +21,10 @@ jobs:
           /bin/bash deploy/tests/autodeploy-control-flow-test.sh
           /bin/bash deploy/tests/github-image-release-test.sh
           /bin/bash deploy/tests/server-release-container-guard-test.sh
+          /bin/bash -n deploy/sub2api-drain-monitor.sh
+          /bin/bash deploy/tests/drain-monitor-lock-test.sh
+          /bin/bash -n deploy/sub2api-runtime-guard.sh
+          /bin/bash deploy/tests/runtime-guard-test.sh
           /bin/bash -n deploy/sub2api-github-deploy-trigger.sh
           /bin/bash -n deploy/install-github-deploy-trigger.sh
           /bin/bash -n deploy/sub2api-server-release.sh

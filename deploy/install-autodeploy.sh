@@ -12,6 +12,7 @@ APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 SCRIPT_DIR="${APP_DIR}/scripts"
 CONFIG_FILE="${SUB2API_AUTODEPLOY_CONFIG_FILE:-/etc/sub2api-autodeploy.env}"
 UNIT_DIR="${SUB2API_AUTODEPLOY_UNIT_DIR:-/etc/systemd/system}"
+RUNTIME_GUARD_EXECUTABLE="/usr/local/libexec/sub2api-runtime-guard.sh"
 
 PRODUCTION_BRANCH="${SUB2API_AUTODEPLOY_PRODUCTION_BRANCH:-}"
 PRODUCTION_REPO_URL="${SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL:-}"
@@ -129,7 +130,7 @@ derive_github_image_source() {
 }
 
 [ "$(id -u)" -eq 0 ] || die "run this installer as root on the Sub2API server"
-for command_name in git install systemctl docker curl flock head python3 sed tar wc zstd; do
+for command_name in git install systemctl docker curl flock grep head python3 sed tar wc zstd; do
   require_cmd "$command_name"
 done
 [ -d "$APP_DIR" ] || die "Sub2API application directory does not exist: $APP_DIR"
@@ -158,6 +159,7 @@ if [ -n "$UPSTREAM_REPO_URL" ]; then
 fi
 require_simple_value SUB2API_PUBLIC_HEALTH_URL "$HEALTH_URL"
 require_simple_value SUB2API_GITHUB_IMAGE_SOURCE "$GITHUB_IMAGE_SOURCE"
+require_simple_value SUB2API_APP_DIR "$APP_DIR"
 case "$GITHUB_IMAGE_SOURCE" in
   https://github.com/*) ;;
   *) die "SUB2API_GITHUB_IMAGE_SOURCE must be an https://github.com URL" ;;
@@ -168,24 +170,38 @@ for file in \
   deploy/sub2api-autodeploy.sh \
   deploy/sub2api-github-image-release.sh \
   deploy/sub2api-server-release.sh \
+  deploy/sub2api-drain-monitor.sh \
+  deploy/sub2api-runtime-guard.sh \
   deploy/sub2api-github-deploy-trigger.sh \
   deploy/sub2api-autodeploy.service \
-  deploy/sub2api-autodeploy.timer; do
+  deploy/sub2api-autodeploy.timer \
+  deploy/sub2api-runtime-guard.service \
+  deploy/sub2api-runtime-guard.timer; do
   [ -r "${SOURCE_ROOT}/${file}" ] || die "installer source is incomplete: ${file}"
 done
 
 bash -n "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh"
 
 if [ -e "$CONFIG_FILE" ] && [ "$REPLACE_CONFIG" != "true" ]; then
+  configured_app_dir="$(sed -n 's/^SUB2API_APP_DIR=//p' "$CONFIG_FILE" | tail -n 1)"
+  if [ -n "$configured_app_dir" ] && [ "$configured_app_dir" != "$APP_DIR" ]; then
+    die "existing SUB2API_APP_DIR=${configured_app_dir} does not match installer APP_DIR=${APP_DIR}; use the matching directory or --replace-config"
+  fi
+  if [ -z "$configured_app_dir" ]; then
+    printf 'SUB2API_APP_DIR=%s\n' "$APP_DIR" >>"$CONFIG_FILE"
+  fi
   echo "Keeping existing automatic-release configuration: ${CONFIG_FILE}"
 else
   config_temp="$(mktemp)"
   umask 077
   {
     printf '%s\n' '# Managed by deploy/install-autodeploy.sh'
+    printf 'SUB2API_APP_DIR=%s\n' "$APP_DIR"
     printf 'SUB2API_AUTODEPLOY_PRODUCTION_REMOTE=%s\n' 'fork'
     printf 'SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL=%s\n' "$PRODUCTION_REPO_URL"
     printf 'SUB2API_AUTODEPLOY_PRODUCTION_BRANCH=%s\n' "$PRODUCTION_BRANCH"
@@ -202,6 +218,13 @@ else
     printf 'SUB2API_GITHUB_IMAGE_SOURCE=%s\n' "$GITHUB_IMAGE_SOURCE"
     printf 'SUB2API_GITHUB_IMAGE_MAX_BYTES=%s\n' '1073741824'
     printf 'SUB2API_PUBLIC_HEALTH_URL=%s\n' "$HEALTH_URL"
+    printf 'SUB2API_MAINTENANCE_LOCK_FILE=%s\n' '/run/lock/sub2api-maintenance.lock'
+    printf 'SUB2API_RUNTIME_GUARD_RETRY_ATTEMPTS=%s\n' '20'
+    printf 'SUB2API_RUNTIME_GUARD_RETRY_INTERVAL_SECONDS=%s\n' '3'
+    printf 'SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS=%s\n' '300'
+    printf 'SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_ATTEMPTS=%s\n' '3'
+    printf 'SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_INTERVAL_SECONDS=%s\n' '3'
+    printf 'SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_MAX_TIME_SECONDS=%s\n' '20'
     printf 'SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS=%s\n' '900'
     printf 'SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS=%s\n' '1800'
     printf 'SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=%s\n' 'false'
@@ -217,14 +240,25 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh" \
   "${SCRIPT_DIR}/sub2api-github-image-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh" \
+  "${SCRIPT_DIR}/sub2api-drain-monitor.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh" \
+  "${SCRIPT_DIR}/sub2api-runtime-guard.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh" \
+  "$RUNTIME_GUARD_EXECUTABLE"
 install -D -m 755 "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh" \
   "${SCRIPT_DIR}/sub2api-github-deploy-trigger.sh"
 install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.service" \
   "${UNIT_DIR}/sub2api-autodeploy.service"
 install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.timer" \
   "${UNIT_DIR}/sub2api-autodeploy.timer"
+install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.service" \
+  "${UNIT_DIR}/sub2api-runtime-guard.service"
+install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.timer" \
+  "${UNIT_DIR}/sub2api-runtime-guard.timer"
 
 systemctl daemon-reload
+systemctl enable --now sub2api-runtime-guard.timer
 if [ "$ENABLE_TIMER" = "true" ]; then
   systemctl enable --now sub2api-autodeploy.timer
   echo "Enabled sub2api-autodeploy.timer (checks every five minutes)."
@@ -233,5 +267,7 @@ else
   echo "Installed GitHub image receiver and recovery service; polling timer is disabled."
 fi
 
+echo "Enabled sub2api-runtime-guard.timer (repairs the active production slot)."
 echo "Validate without releasing: ${SCRIPT_DIR}/sub2api-autodeploy.sh --check"
 echo "Show timer: systemctl list-timers sub2api-autodeploy.timer"
+echo "Show runtime recovery: systemctl status sub2api-runtime-guard.timer"

@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic Sub2API active-runtime recovery guard
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+RandomizedDelaySec=5s
+Persistent=true
+Unit=sub2api-runtime-guard.service
+
+[Install]
+WantedBy=timers.target

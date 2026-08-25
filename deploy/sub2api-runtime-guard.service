@@ -1,0 +1,19 @@
+[Unit]
+Description=Sub2API active-runtime recovery guard
+Wants=network-online.target
+After=network-online.target docker.service
+ConditionPathIsExecutable=/usr/local/libexec/sub2api-runtime-guard.sh
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=-/etc/sub2api-autodeploy.env
+ExecStart=/usr/local/libexec/sub2api-runtime-guard.sh
+TimeoutStartSec=15min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=journal
+StandardError=journal

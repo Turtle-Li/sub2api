@@ -39,6 +39,12 @@
 - Before a release, resolve the configured production repository and branch,
   confirm the current active container is healthy, and retain the documented
   automatic rollback path.
+- Every planned database cutover, application-container lifecycle change, and
+  Caddy upstream change must hold the shared production maintenance lock
+  documented in `deploy/README.md`. Do not issue a raw `docker stop`,
+  `docker restart`, or Compose lifecycle command against production application
+  containers outside that boundary. Emergency recovery goes through
+  `sub2api-runtime-guard.service`.
 - Production may temporarily use `sub2api-blue`, `sub2api-green`, and the
   legacy `sub2api` name at the same time. Long-lived Responses WebSockets can
   keep an old color draining across a later release. Resolve the active color
