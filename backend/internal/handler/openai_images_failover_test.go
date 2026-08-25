@@ -5,6 +5,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -63,6 +64,40 @@ type openAIImagesFailoverHTTPUpstream struct {
 	service.HTTPUpstream
 	mu         sync.Mutex
 	accountIDs []int64
+}
+
+type openAIImagesPartialHTTPUpstream struct {
+	service.HTTPUpstream
+}
+
+type openAIImagesPartialBody struct {
+	payload []byte
+	sent    bool
+}
+
+func (b *openAIImagesPartialBody) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		return copy(p, b.payload), nil
+	}
+	return 0, errors.New("stream disconnected")
+}
+
+func (b *openAIImagesPartialBody) Close() error {
+	return nil
+}
+
+func (u *openAIImagesPartialHTTPUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			"X-Request-Id": []string{"req_img_partial"},
+		},
+		Body: &openAIImagesPartialBody{payload: []byte(
+			"data: {\"type\":\"image_generation.completed\",\"created\":1710000009,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"output_tokens_details\":{\"image_tokens\":2}},\"data\":[{\"b64_json\":\"aW1hZ2U=\"}]}\n\n",
+		)},
+	}, nil
 }
 
 func (u *openAIImagesFailoverHTTPUpstream) Do(_ *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
@@ -200,4 +235,85 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 	require.Len(t, events, 2)
 	require.Equal(t, "failover", events[0].Kind)
 	require.Equal(t, "failover", events[1].Kind)
+}
+
+func TestOpenAIGatewayHandlerImages_PartialStreamFailureIsNotMarkedSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	groupID := int64(3131)
+	accounts := []service.Account{{
+		ID:          7,
+		Name:        "image-apikey",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{
+			"api_key":  "test-api-key",
+			"base_url": "https://image-upstream.example/v1",
+		},
+	}}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	gatewayService := service.NewOpenAIGatewayService(
+		openAIImagesFailoverAccountRepo{accounts: accounts},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		&openAIImagesPartialHTTPUpstream{},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	billingService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billingService.Stop)
+	handler := NewOpenAIGatewayHandler(
+		gatewayService,
+		service.NewConcurrencyService(nil),
+		billingService,
+		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg),
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+	)
+
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","stream":true}`)
+	core, observedLogs := observer.New(zap.DebugLevel)
+	requestCtx := logger.IntoContext(context.Background(), zap.New(core))
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body)).WithContext(requestCtx)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		ID:      99,
+		GroupID: &groupID,
+		Group: &service.Group{
+			ID:                   groupID,
+			AllowImageGeneration: true,
+		},
+		User: &service.User{ID: 100},
+	})
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100, Concurrency: 0})
+
+	handler.Images(c)
+
+	require.NotEmpty(t, observedLogs.FilterMessage("openai.images.forward_partial_failed").All())
+	require.Empty(t, observedLogs.FilterMessage("openai.images.request_completed").All())
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "aW1hZ2U=")
 }
