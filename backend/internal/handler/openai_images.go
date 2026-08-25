@@ -260,8 +260,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		if result != nil && result.FirstTokenMs != nil {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
+		partialForwardError := err != nil && result != nil && result.ImageCount > 0
 		if err != nil {
-			if result != nil && result.ImageCount > 0 {
+			if partialForwardError {
 				reqLog.Warn("openai.images.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
 					zap.Int("image_count", result.ImageCount),
@@ -367,7 +368,21 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				return
 			}
 		}
-		if result != nil {
+		if partialForwardError {
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), false, nil, err)
+			upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
+			wroteFallback := false
+			if !upstreamErrorAlreadyCommunicated {
+				wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+			}
+			reqLog.Warn("openai.images.forward_partial_failed",
+				zap.Int64("account_id", account.ID),
+				zap.Int("image_count", result.ImageCount),
+				zap.Bool("fallback_error_response_written", wroteFallback),
+				zap.Bool("upstream_error_response_already_written", upstreamErrorAlreadyCommunicated),
+				zap.Error(err),
+			)
+		} else if result != nil {
 			// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
 			if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
@@ -419,6 +434,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				).Error("openai.images.record_usage_failed", zap.Error(err))
 			}
 		})
+		if partialForwardError {
+			return
+		}
 
 		reqLog.Debug("openai.images.request_completed",
 			zap.Int64("account_id", account.ID),

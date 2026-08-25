@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -2224,58 +2223,60 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthFanoutNonStreaming(
 	}
 
 	upstreamTotalStart := time.Now()
-	resultCh := make(chan openAIImagesOAuthFanoutAttemptResult, targetCount)
-	maxConcurrent := account.Concurrency
-	if maxConcurrent <= 0 {
-		maxConcurrent = 1
-	}
-	if maxConcurrent > targetCount {
-		maxConcurrent = targetCount
-	}
-	fanoutSlots := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
-	for _, attempt := range prepared {
-		attempt := attempt
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case fanoutSlots <- struct{}{}:
-			case <-fanoutCtx.Done():
-				resultCh <- openAIImagesOAuthFanoutAttemptResult{index: attempt.index, err: fanoutCtx.Err()}
-				return
-			}
-			result := s.runOpenAIImagesOAuthFanoutAttempt(account, proxyURL, requestModel, attempt)
-			<-fanoutSlots
-			if result.err != nil || result.statusCode >= 400 {
-				cancelFanout()
-			}
-			resultCh <- result
-		}()
-	}
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
+	// The handler holds one account concurrency slot for this entire parent
+	// request. Run its children one at a time so a mix of ordinary requests and
+	// fan-outs can never create more upstream calls than acquired parent slots.
 	attemptResults := make([]openAIImagesOAuthFanoutAttemptResult, targetCount)
-	for result := range resultCh {
+	for _, attempt := range prepared {
+		if err := fanoutCtx.Err(); err != nil {
+			attemptResults[attempt.index] = openAIImagesOAuthFanoutAttemptResult{index: attempt.index, err: err}
+			continue
+		}
+		result := s.runOpenAIImagesOAuthFanoutAttempt(account, proxyURL, requestModel, attempt)
 		attemptResults[result.index] = result
+		if result.err != nil || result.statusCode >= 400 {
+			cancelFanout()
+		}
 	}
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamTotalStart).Milliseconds())
-	if problem := firstOpenAIImagesOAuthFanoutProblem(attemptResults); problem != nil {
-		return s.handleOpenAIImagesOAuthFanoutProblem(ctx, c, account, requestModel, writerSizeBeforeResponse, problem)
+	problem := firstOpenAIImagesOAuthFanoutProblem(attemptResults)
+	aggregated, responseBody, firstHeaders, aggregateErr := s.aggregateOpenAIImagesOAuthFanoutResults(attemptResults, requestModel, parsed, startTime)
+	if problem != nil {
+		handledResult, handledErr := s.handleOpenAIImagesOAuthFanoutProblem(ctx, c, account, requestModel, writerSizeBeforeResponse, problem)
+		// Successful children have already consumed upstream image capacity. Keep
+		// their usage for billing even when a sibling failed; the handler treats a
+		// non-nil result as a terminal partial response and does not retry another
+		// account.
+		if aggregated != nil && aggregated.ImageCount > 0 {
+			return aggregated, handledErr
+		}
+		return handledResult, handledErr
 	}
+	if aggregateErr != nil {
+		return nil, aggregateErr
+	}
+	responseheaders.WriteFilteredHeaders(c.Writer.Header(), firstHeaders, s.responseHeaderFilter)
+	c.Data(http.StatusOK, "application/json; charset=utf-8", responseBody)
+	return aggregated, nil
+}
 
+func (s *OpenAIGatewayService) aggregateOpenAIImagesOAuthFanoutResults(
+	attemptResults []openAIImagesOAuthFanoutAttemptResult,
+	requestModel string,
+	parsed *OpenAIImagesRequest,
+	startTime time.Time,
+) (*OpenAIForwardResult, []byte, http.Header, error) {
 	var usage OpenAIUsage
-	results := make([]openAIResponsesImageResult, 0, targetCount)
+	results := make([]openAIResponsesImageResult, 0, len(attemptResults))
 	var outputSizes []string
 	var createdAt int64
 	var firstMeta openAIResponsesImageResult
 	var firstHeaders http.Header
-	var requestIDs []string
-
+	requestID := ""
 	for _, attempt := range attemptResults {
+		if attempt.err != nil || attempt.statusCode >= 400 {
+			continue
+		}
 		collected := attempt.collected
 		addOpenAIUsage(&usage, collected.usage)
 		results = append(results, collected.results...)
@@ -2289,35 +2290,22 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthFanoutNonStreaming(
 		if firstHeaders == nil {
 			firstHeaders = attempt.headers.Clone()
 		}
-		if requestID := strings.TrimSpace(attempt.requestID); requestID != "" {
-			requestIDs = append(requestIDs, requestID)
+		if requestID == "" {
+			requestID = truncateString(strings.TrimSpace(attempt.requestID), 64)
 		}
 	}
-
 	if len(results) == 0 {
-		return nil, fmt.Errorf("upstream did not return image output")
+		return nil, nil, firstHeaders, fmt.Errorf("upstream did not return image output")
 	}
 	if strings.TrimSpace(firstMeta.Model) == "" {
 		firstMeta.Model = strings.TrimSpace(requestModel)
 	}
-
 	responseBody, err := buildOpenAIImagesAPIResponse(results, createdAt, buildOpenAIImagesUsageRaw(usage, len(results)), firstMeta, parsed.ResponseFormat)
 	if err != nil {
-		return nil, err
-	}
-	responseheaders.WriteFilteredHeaders(c.Writer.Header(), firstHeaders, s.responseHeaderFilter)
-	c.Data(http.StatusOK, "application/json; charset=utf-8", responseBody)
-
-	requestID := ""
-	for _, candidate := range requestIDs {
-		if candidate = strings.TrimSpace(candidate); candidate != "" {
-			requestID = candidate
-			break
-		}
+		return nil, nil, firstHeaders, err
 	}
 	return &OpenAIForwardResult{
-		// usage_logs.request_id is capped at 64 bytes. Keep one upstream ID for
-		// durable billing; child IDs are intentionally not concatenated here.
+		// usage_logs.request_id is capped at 64 bytes; child IDs are not joined.
 		RequestID:        requestID,
 		Usage:            usage,
 		Model:            requestModel,
@@ -2329,7 +2317,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthFanoutNonStreaming(
 		ImageSize:        parsed.SizeTier,
 		ImageInputSize:   parsed.Size,
 		ImageOutputSizes: outputSizes,
-	}, nil
+	}, responseBody, firstHeaders, nil
 }
 
 // runOpenAIImagesOAuthFanoutAttempt 在独立 goroutine 内执行单次 fanout 子请求。
@@ -2473,11 +2461,15 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthFanoutProblem(
 			Message:            upstreamMsg,
 		})
 		shouldDisable := s.handleFailoverSideEffects(ctx, resp, account, respBody, requestModel)
-		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RetryableOnSameAccount: !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-		}
+		return nil, s.newOpenAIAccountFailoverError(
+			account,
+			resp.StatusCode,
+			resp.Header,
+			respBody,
+			upstreamMsg,
+			shouldDisable,
+			!shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+		)
 	}
 	return s.handleOpenAIImagesErrorResponse(ctx, resp, c, account, requestModel)
 }

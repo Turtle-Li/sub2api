@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -853,7 +854,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 				StatusCode: http.StatusOK,
 				Header: http.Header{
 					"Content-Type": []string{"text/event-stream"},
-					"X-Request-Id": []string{"req_img_1"},
+					"X-Request-Id": []string{strings.Repeat("x", 128)},
 				},
 				Body: io.NopCloser(strings.NewReader(fanoutResponseBody(0))),
 			},
@@ -861,7 +862,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 				StatusCode: http.StatusOK,
 				Header: http.Header{
 					"Content-Type": []string{"text/event-stream"},
-					"X-Request-Id": []string{"req_img_2"},
+					"X-Request-Id": []string{strings.Repeat("y", 128)},
 				},
 				Body: io.NopCloser(strings.NewReader(fanoutResponseBody(1))),
 			},
@@ -869,7 +870,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 				StatusCode: http.StatusOK,
 				Header: http.Header{
 					"Content-Type": []string{"text/event-stream"},
-					"X-Request-Id": []string{"req_img_3"},
+					"X-Request-Id": []string{strings.Repeat("z", 128)},
 				},
 				Body: io.NopCloser(strings.NewReader(fanoutResponseBody(2))),
 			},
@@ -882,7 +883,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
-		Concurrency: 2,
+		Concurrency: 3,
 		Credentials: map[string]any{
 			"access_token":       "token-123",
 			"chatgpt_account_id": "acct-123",
@@ -902,8 +903,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 	require.NotNil(t, upstream.lastReq)
 	require.Len(t, upstream.requests, 3)
 	require.Len(t, upstream.bodies, 3)
-	require.GreaterOrEqual(t, upstream.maxFlight, 2)
-	require.LessOrEqual(t, upstream.maxFlight, 2)
+	require.Equal(t, 1, upstream.maxFlight)
 	require.Equal(t, chatgptCodexURL, upstream.lastReq.URL.String())
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
@@ -940,8 +940,124 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFanoutNAndReturnsAllImages(t *te
 	require.Equal(t, int64(7377), gjson.Get(rec.Body.String(), "usage.output_tokens").Int())
 	require.Equal(t, int64(7377), gjson.Get(rec.Body.String(), "usage.output_tokens_details.image_tokens").Int())
 	require.Equal(t, int64(3), gjson.Get(rec.Body.String(), "usage.images").Int())
-	require.LessOrEqual(t, len(result.RequestID), 64)
-	require.Contains(t, []string{"req_img_1", "req_img_2", "req_img_3"}, result.RequestID)
+	require.Len(t, result.RequestID, 64)
+	require.Contains(t, []string{strings.Repeat("x", 64), strings.Repeat("y", 64), strings.Repeat("z", 64)}, result.RequestID)
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthFanoutKeepsPartialUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","quality":"high","n":3}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	imageBody := func(encoded string) string {
+		return "data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000000,\"usage\":{\"input_tokens\":11,\"output_tokens\":22},\"tool_usage\":{\"image_gen\":{\"input_tokens\":46,\"output_tokens\":2459,\"output_tokens_details\":{\"image_tokens\":2459},\"images\":1}},\"output\":[{\"type\":\"image_generation_call\",\"result\":\"" + encoded + "\"}]}}\n\n" + "data: [DONE]\n\n"
+	}
+	upstream := &httpUpstreamRecorder{
+		delay: 20 * time.Millisecond,
+		responses: []*http.Response{
+			{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"partial-1"}}, Body: io.NopCloser(strings.NewReader(imageBody("aW1hZ2UtMQ==")))},
+			{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"partial-2"}}, Body: io.NopCloser(strings.NewReader(imageBody("aW1hZ2UtMg==")))},
+			{StatusCode: http.StatusBadGateway, Header: http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"partial-fail"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","code":"upstream_failure","message":"temporary"}}`))},
+		},
+	}
+	svc.httpUpstream = upstream
+	account := &Account{ID: 2, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 3, Credentials: map[string]any{"access_token": "token-123", "chatgpt_account_id": "acct-123"}}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 2, result.ImageCount)
+	require.Equal(t, 2459*2, result.Usage.OutputTokens)
+	require.Equal(t, 46*2, result.Usage.InputTokens)
+	require.Equal(t, http.StatusOK, rec.Code, "partial fanout must not write a success image response")
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthFanoutStopsAfterFirstFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","n":3}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusBadGateway, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","message":"temporary"}}`))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("unused"))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("unused"))},
+	}}
+	svc.httpUpstream = upstream
+	account := &Account{ID: 4, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 3, Credentials: map[string]any{"access_token": "token-123", "chatgpt_account_id": "acct-123"}}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Len(t, upstream.requests, 1)
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthFanoutMixedParentsRespectConcurrency(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &OpenAIGatewayService{}
+	completedBody := "data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000000,\"tool_usage\":{\"image_gen\":{\"input_tokens\":1,\"output_tokens\":1,\"output_tokens_details\":{\"image_tokens\":1},\"images\":1}},\"output\":[{\"type\":\"image_generation_call\",\"result\":\"aW1hZ2U=\"}]}}\n\ndata: [DONE]\n\n"
+	upstream := &httpUpstreamRecorder{delay: 100 * time.Millisecond}
+	for i := 0; i < 5; i++ {
+		upstream.responses = append(upstream.responses, &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(completedBody)),
+		})
+	}
+	svc.httpUpstream = upstream
+	account := &Account{ID: 3, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 3, Credentials: map[string]any{"access_token": "token-123", "chatgpt_account_id": "acct-123"}}
+
+	type preparedCall struct {
+		body   []byte
+		parsed *OpenAIImagesRequest
+		c      *gin.Context
+	}
+	prepare := func(n int) preparedCall {
+		body := []byte(fmt.Sprintf(`{"model":"gpt-image-2","prompt":"draw a cat","n":%d}`, n))
+		req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		c.Set("api_key", &APIKey{ID: 42})
+		parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+		require.NoError(t, err)
+		return preparedCall{body: body, parsed: parsed, c: c}
+	}
+	calls := []preparedCall{prepare(3), prepare(1), prepare(1)}
+	start := make(chan struct{})
+	errCh := make(chan error, len(calls))
+	var wg sync.WaitGroup
+	for _, call := range calls {
+		call := call
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := svc.ForwardImages(context.Background(), call.c, account, call.body, call.parsed, "")
+			errCh <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+	require.Equal(t, 3, upstream.maxFlight)
 }
 
 func TestOpenAIGatewayServiceForwardImages_OAuthRejectsStreamingN(t *testing.T) {
