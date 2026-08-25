@@ -328,6 +328,39 @@ func openAIImageUploadToDataURL(upload OpenAIImagesUpload) (string, error) {
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(upload.Data), nil
 }
 
+func openAIImagesResponsesInstructions(n int) string {
+	if n <= 1 {
+		return openAIImagesVerbatimPromptInstructions
+	}
+	return fmt.Sprintf(
+		"%s The downstream request requires exactly %d final images. In this single response, invoke the image_generation tool exactly %d times, once per final image. Run those tool calls in parallel when possible. Return every image as a separate image_generation_call. Do not merge the requested images into a collage and do not stop after the first image.",
+		openAIImagesVerbatimPromptInstructions,
+		n,
+		n,
+	)
+}
+
+func openAIImagesCountMismatchError(expected, actual int) *OpenAIImagesUpstreamError {
+	// Preserve the established single-image soft-failure retry: a completed n=1
+	// response with no image is often a transient tool-routing miss. Multi-image
+	// requests are strict because silently retrying/fanning out would violate the
+	// single-upstream-request contract.
+	if expected <= 0 || expected == actual || (expected == 1 && actual == 0) {
+		return nil
+	}
+	return &OpenAIImagesUpstreamError{
+		StatusCode: http.StatusBadGateway,
+		ErrorType:  "upstream_error",
+		Code:       "image_count_mismatch",
+		Message:    fmt.Sprintf("Upstream returned %d of %d requested images", actual, expected),
+	}
+}
+
+func isOpenAIImagesCountMismatchError(err error) bool {
+	var upstreamErr *OpenAIImagesUpstreamError
+	return errors.As(err, &upstreamErr) && upstreamErr.Code == "image_count_mismatch"
+}
+
 func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel string) ([]byte, error) {
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
@@ -335,8 +368,8 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	if parsed.N > openAIImagesMaxN {
 		return nil, fmt.Errorf("n must be between 1 and %d", openAIImagesMaxN)
 	}
-	prompt := strings.TrimSpace(parsed.Prompt)
-	if prompt == "" {
+	prompt := parsed.Prompt
+	if strings.TrimSpace(prompt) == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
 
@@ -359,7 +392,10 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 
 	req := []byte(`{"instructions":"","stream":true,"reasoning":{"effort":"medium","summary":"auto"},"parallel_tool_calls":true,"include":["reasoning.encrypted_content"],"model":"","store":false,"tool_choice":{"type":"image_generation"}}`)
 	req, _ = sjson.SetBytes(req, "model", openAIImagesResponsesMainModel)
-	req, _ = sjson.SetBytes(req, "instructions", openAIImagesVerbatimPromptInstructions)
+	req, _ = sjson.SetBytes(req, "instructions", openAIImagesResponsesInstructions(parsed.N))
+	if parsed.N > 1 {
+		req, _ = sjson.SetBytes(req, "max_tool_calls", parsed.N)
+	}
 
 	input := []byte(`[{"type":"message","role":"user","content":[{"type":"input_text","text":""}]}]`)
 	input, _ = sjson.SetBytes(input, "0.content.0.text", prompt)
@@ -377,9 +413,6 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	tool := []byte(`{"type":"image_generation","action":"","model":""}`)
 	tool, _ = sjson.SetBytes(tool, "action", action)
 	tool, _ = sjson.SetBytes(tool, "model", strings.TrimSpace(toolModel))
-	if shouldPassOpenAIImagesN(toolModel, parsed.N) {
-		tool, _ = sjson.SetBytes(tool, "n", parsed.N)
-	}
 	for _, field := range []struct {
 		path  string
 		value string
@@ -417,13 +450,6 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	req, _ = sjson.SetRawBytes(req, "tools", []byte(`[]`))
 	req, _ = sjson.SetRawBytes(req, "tools.-1", tool)
 	return req, nil
-}
-
-func shouldPassOpenAIImagesN(model string, n int) bool {
-	if n <= 1 {
-		return false
-	}
-	return !strings.EqualFold(strings.TrimSpace(model), "dall-e-3")
 }
 
 func extractOpenAIImagesFromResponsesCompleted(payload []byte) ([]openAIResponsesImageResult, int64, []byte, openAIResponsesImageResult, error) {
@@ -1293,6 +1319,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 	c *gin.Context,
 	responseFormat string,
 	fallbackModel string,
+	expectedImageCount int,
 ) (OpenAIUsage, int, []string, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
@@ -1302,10 +1329,15 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 		return OpenAIUsage{}, 0, nil, err
 	}
 
-	collected, err := s.collectOpenAIImagesOAuthNonStreamingBody(body, fallbackModel)
+	collected, err := s.collectOpenAIImagesOAuthNonStreamingBody(body, fallbackModel, expectedImageCount)
 	if err != nil {
 		s.reportOpenAIImagesOAuthCollectError(c, body, err)
 		return OpenAIUsage{}, 0, nil, err
+	}
+	if countErr := openAIImagesCountMismatchError(expectedImageCount, len(collected.results)); countErr != nil {
+		setOpsUpstreamError(c, countErr.StatusCode, countErr.clientMessage(), "")
+		writeOpenAIImagesUpstreamErrorResponse(c, countErr)
+		return collected.usage, len(collected.results), openAIResponsesImageResultSizes(collected.results), countErr
 	}
 
 	responseBody, err := buildOpenAIImagesAPIResponse(collected.results, collected.createdAt, collected.usageRaw, collected.firstMeta, responseFormat)
@@ -1330,12 +1362,13 @@ type openAIImagesOAuthNonStreamingResult struct {
 func (s *OpenAIGatewayService) collectOpenAIImagesOAuthNonStreamingBody(
 	body []byte,
 	fallbackModel string,
+	expectedImageCount int,
 ) (openAIImagesOAuthNonStreamingResult, error) {
 	var usage OpenAIUsage
 	forEachOpenAISSEDataPayload(string(body), func(data []byte) {
 		s.parseOpenAIImagesSSEUsageBytes(data, &usage)
 	})
-	results, createdAt, usageRaw, firstMeta, _, err := collectOpenAIImagesFromResponsesBody(body)
+	results, createdAt, usageRaw, firstMeta, foundFinal, err := collectOpenAIImagesFromResponsesBody(body)
 	if err != nil {
 		return openAIImagesOAuthNonStreamingResult{}, err
 	}
@@ -1362,6 +1395,18 @@ func (s *OpenAIGatewayService) collectOpenAIImagesOAuthNonStreamingBody(
 		}
 		if textFallbackErr := openAIImagesTextFallbackError(body); textFallbackErr != nil {
 			return openAIImagesOAuthNonStreamingResult{}, textFallbackErr
+		}
+		if foundFinal && expectedImageCount > 1 {
+			if strings.TrimSpace(firstMeta.Model) == "" {
+				firstMeta.Model = strings.TrimSpace(fallbackModel)
+			}
+			return openAIImagesOAuthNonStreamingResult{
+				usage:     usage,
+				results:   results,
+				createdAt: createdAt,
+				usageRaw:  usageRaw,
+				firstMeta: firstMeta,
+			}, nil
 		}
 		// (B) 真空响应：诊断摘要由 reportOpenAIImagesOAuthCollectError 记录到 ops。返回
 		// UpstreamFailoverError 触发重试。因实测为「同账号概率性失败」，优先
@@ -1423,6 +1468,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 	responseFormat string,
 	streamPrefix string,
 	fallbackModel string,
+	expectedImageCount int,
 ) (OpenAIUsage, int, []string, *int, error) {
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	c.Header("Content-Type", "text/event-stream")
@@ -1566,10 +1612,37 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 					processDataDone = true
 					return
 				}
+				if expectedImageCount == 1 {
+					failoverErr := &UpstreamFailoverError{
+						StatusCode:             http.StatusBadGateway,
+						ResponseBody:           append([]byte(nil), dataBytes...),
+						RetryableOnSameAccount: true,
+					}
+					setOpsUpstreamError(c, http.StatusBadGateway, "upstream did not return image output", summarizeOpenAIImagesNoOutputBody(dataBytes))
+					processDataErr = failoverErr
+					processDataDone = true
+					return
+				}
+				if countErr := openAIImagesCountMismatchError(expectedImageCount, 0); countErr != nil {
+					setOpsUpstreamError(c, countErr.StatusCode, countErr.clientMessage(), summarizeOpenAIImagesNoOutputBody(dataBytes))
+					s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBodyFromUpstream(countErr))
+					processDataErr = countErr
+					processDataDone = true
+					return
+				}
 				outputErr := fmt.Errorf("upstream did not return image output")
 				setOpsUpstreamError(c, http.StatusBadGateway, "upstream did not return image output", summarizeOpenAIImagesNoOutputBody(dataBytes))
 				s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBody(outputErr.Error()))
 				processDataErr = outputErr
+				processDataDone = true
+				return
+			}
+			if countErr := openAIImagesCountMismatchError(expectedImageCount, len(finalResults)); countErr != nil {
+				imageCount = len(finalResults)
+				imageOutputSizes = openAIResponsesImageResultSizes(finalResults)
+				setOpsUpstreamError(c, countErr.StatusCode, countErr.clientMessage(), "")
+				s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBodyFromUpstream(countErr))
+				processDataErr = countErr
 				processDataDone = true
 				return
 			}
@@ -1630,6 +1703,13 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 				mergeOpenAIResponsesImageMeta(&finalResults[i], streamMeta)
 			}
 			reconcileOpenAIResponsesImageResultSizes(finalResults, nil)
+			if countErr := openAIImagesCountMismatchError(expectedImageCount, len(finalResults)); countErr != nil {
+				imageCount = len(finalResults)
+				imageOutputSizes = openAIResponsesImageResultSizes(finalResults)
+				setOpsUpstreamError(c, countErr.StatusCode, countErr.clientMessage(), "")
+				s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBodyFromUpstream(countErr))
+				return countErr
+			}
 			for _, img := range finalResults {
 				key := openAIResponsesImageResultKey("", img)
 				if _, exists := emitted[key]; exists {
@@ -1921,9 +2001,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	// keepalive 心跳字节，避免 failover 第 2 轮起把上一轮心跳残留误判为已写响应。
 	writerSizeBeforeResponse := OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 	if parsed.Stream {
-		usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), requestModel)
+		usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), requestModel, parsed.N)
 		if err != nil {
-			if imageCount > 0 {
+			if imageCount > 0 || isOpenAIImagesCountMismatchError(err) {
 				return &OpenAIForwardResult{
 					RequestID:        truncateString(strings.TrimSpace(resp.Header.Get("x-request-id")), 64),
 					Usage:            usage,
@@ -1951,8 +2031,23 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			)
 		}
 	} else {
-		usage, imageCount, imageOutputSizes, err = s.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, parsed.ResponseFormat, requestModel)
+		usage, imageCount, imageOutputSizes, err = s.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, parsed.ResponseFormat, requestModel, parsed.N)
 		if err != nil {
+			if imageCount > 0 || isOpenAIImagesCountMismatchError(err) {
+				return &OpenAIForwardResult{
+					RequestID:        truncateString(strings.TrimSpace(resp.Header.Get("x-request-id")), 64),
+					Usage:            usage,
+					Model:            requestModel,
+					UpstreamModel:    requestModel,
+					Stream:           parsed.Stream,
+					ResponseHeaders:  resp.Header.Clone(),
+					Duration:         time.Since(startTime),
+					ImageCount:       imageCount,
+					ImageSize:        parsed.SizeTier,
+					ImageInputSize:   parsed.Size,
+					ImageOutputSizes: imageOutputSizes,
+				}, err
+			}
 			return nil, s.handleOpenAIImagesOAuthResponseError(
 				upstreamCtx,
 				c,

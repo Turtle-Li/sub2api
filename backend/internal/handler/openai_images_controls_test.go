@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestOpenAIImagesShouldRecordFailedResult(t *testing.T) {
+	mismatchErr := &service.OpenAIImagesUpstreamError{Code: "image_count_mismatch"}
+	serverErr := &service.OpenAIImagesUpstreamError{Code: "server_error"}
+
+	require.True(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 0}, mismatchErr))
+	require.True(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 1}, errors.New("stream failed")))
+	require.False(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 0}, serverErr))
+	require.False(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 0}, nil))
+	require.False(t, openAIImagesShouldRecordFailedResult(nil, mismatchErr))
+}
 
 func TestOpenAIGatewayHandlerImages_DisabledGroupRejectsBeforeScheduling(t *testing.T) {
 	gin.SetMode(gin.TestMode)

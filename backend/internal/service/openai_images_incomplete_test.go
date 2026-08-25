@@ -106,7 +106,7 @@ func TestImagesOAuthNonStreaming_CompletedNoImageTriggersSameAccountRetry(t *tes
 	}
 
 	svc := &OpenAIGatewayService{}
-	_, _, _, err := svc.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, "b64_json", "gpt-image-2")
+	_, _, _, err := svc.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, "b64_json", "gpt-image-2", 1)
 
 	if err == nil {
 		t.Fatal("completed-but-no-image should return an error")
@@ -120,6 +120,37 @@ func TestImagesOAuthNonStreaming_CompletedNoImageTriggersSameAccountRetry(t *tes
 	}
 	if !failoverErr.RetryableOnSameAccount {
 		t.Fatal("soft-failure should prefer same-account retry (probabilistic upstream failure)")
+	}
+}
+
+func TestImagesOAuthStreaming_CompletedNoImageTriggersSameAccountRetry(t *testing.T) {
+	upstreamSSE := "event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\",\"status\":\"completed\",\"model\":\"gpt-5.4-mini-2026-03-17\",\"output\":[],\"tool_usage\":{\"image_gen\":{\"output_tokens\":0}}}}\n\n"
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+	}
+
+	svc := &OpenAIGatewayService{}
+	_, imageCount, _, _, err := svc.handleOpenAIImagesOAuthStreamingResponse(resp, c, time.Now(), "b64_json", "image_generation", "gpt-image-2", 1)
+
+	var failoverErr *UpstreamFailoverError
+	if !errors.As(err, &failoverErr) {
+		t.Fatalf("expected *UpstreamFailoverError to trigger retry, got %T: %v", err, err)
+	}
+	if !failoverErr.RetryableOnSameAccount {
+		t.Fatal("streaming soft-failure should prefer same-account retry")
+	}
+	if imageCount != 0 {
+		t.Fatalf("expected zero images, got %d", imageCount)
+	}
+	if strings.Contains(rec.Body.String(), "event: error") {
+		t.Fatal("retryable empty stream must remain unflushed for failover")
 	}
 }
 
@@ -140,7 +171,7 @@ func TestImagesOAuthNonStreaming_ContentRefusalReturns400NoRetry(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(upstreamSSE))}
 
 	svc := &OpenAIGatewayService{}
-	_, _, _, err := svc.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, "b64_json", "gpt-image-2")
+	_, _, _, err := svc.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, "b64_json", "gpt-image-2", 1)
 
 	if err == nil {
 		t.Fatal("content refusal should return an error")
@@ -176,7 +207,7 @@ func TestImagesOAuthNonStreaming_TextFallbackReturnsCapabilityError(t *testing.T
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(upstreamSSE))}
 
 	svc := &OpenAIGatewayService{}
-	_, _, _, err := svc.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, "b64_json", "gpt-image-2")
+	_, _, _, err := svc.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, "b64_json", "gpt-image-2", 1)
 
 	var imgErr *OpenAIImagesUpstreamError
 	if !errors.As(err, &imgErr) {
@@ -202,7 +233,7 @@ func TestImagesOAuthStreaming_TextFallbackReturnsCapabilityError(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(upstreamSSE))}
 
 	svc := &OpenAIGatewayService{}
-	_, _, _, _, err := svc.handleOpenAIImagesOAuthStreamingResponse(resp, c, time.Now(), "b64_json", "image_generation", "gpt-image-2")
+	_, _, _, _, err := svc.handleOpenAIImagesOAuthStreamingResponse(resp, c, time.Now(), "b64_json", "image_generation", "gpt-image-2", 1)
 
 	var imgErr *OpenAIImagesUpstreamError
 	if !errors.As(err, &imgErr) {
@@ -233,7 +264,7 @@ func TestImagesOAuthStreaming_SplitSafetyRefusalReturns400(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(upstreamSSE))}
 
 	svc := &OpenAIGatewayService{}
-	_, _, _, _, err := svc.handleOpenAIImagesOAuthStreamingResponse(resp, c, time.Now(), "b64_json", "image_generation", "gpt-image-2")
+	_, _, _, _, err := svc.handleOpenAIImagesOAuthStreamingResponse(resp, c, time.Now(), "b64_json", "image_generation", "gpt-image-2", 1)
 
 	var imgErr *OpenAIImagesUpstreamError
 	if !errors.As(err, &imgErr) {

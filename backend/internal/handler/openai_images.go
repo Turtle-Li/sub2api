@@ -260,7 +260,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		if result != nil && result.FirstTokenMs != nil {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
-		partialForwardError := err != nil && result != nil && result.ImageCount > 0
+		partialForwardError := openAIImagesShouldRecordFailedResult(result, err)
 		if err != nil {
 			if partialForwardError {
 				reqLog.Warn("openai.images.forward_partial_error_with_image_result",
@@ -451,6 +451,17 @@ func (h *OpenAIGatewayHandler) openAIImagesJSONKeepaliveInterval() time.Duration
 		return 0
 	}
 	return time.Duration(h.cfg.Gateway.ImageNonstreamKeepaliveInterval) * time.Second
+}
+
+func openAIImagesShouldRecordFailedResult(result *service.OpenAIForwardResult, err error) bool {
+	if err == nil || result == nil {
+		return false
+	}
+	if result.ImageCount > 0 {
+		return true
+	}
+	var upstreamErr *service.OpenAIImagesUpstreamError
+	return errors.As(err, &upstreamErr) && upstreamErr.Code == "image_count_mismatch"
 }
 
 func isMultipartImagesContentType(contentType string) bool {

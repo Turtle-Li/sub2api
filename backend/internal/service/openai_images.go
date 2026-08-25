@@ -230,7 +230,7 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		req.Model = strings.TrimSpace(modelResult.String())
 		req.ExplicitModel = req.Model != ""
 	}
-	req.Prompt = strings.TrimSpace(gjson.GetBytes(body, "prompt").String())
+	req.Prompt = gjson.GetBytes(body, "prompt").String()
 
 	if streamResult := gjson.GetBytes(body, "stream"); streamResult.Exists() {
 		if streamResult.Type != gjson.True && streamResult.Type != gjson.False {
@@ -372,13 +372,14 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			continue
 		}
 
-		value := strings.TrimSpace(string(data))
+		rawValue := string(data)
+		value := strings.TrimSpace(rawValue)
 		switch name {
 		case "model":
 			req.Model = value
 			req.ExplicitModel = value != ""
 		case "prompt":
-			req.Prompt = value
+			req.Prompt = rawValue
 		case "size":
 			req.Size = value
 			req.ExplicitSize = value != ""
