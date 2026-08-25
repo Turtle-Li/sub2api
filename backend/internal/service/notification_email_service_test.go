@@ -734,6 +734,10 @@ func (r *notificationEmailUserRepoStub) GetByEmail(_ context.Context, email stri
 	return r.user, nil
 }
 
+func (r *notificationEmailUserRepoStub) ExistsByEmailAlias(_ context.Context, email string) (bool, error) {
+	return r.user != nil && NormalizeEmailForAliasDedup(r.user.Email) == NormalizeEmailForAliasDedup(email), nil
+}
+
 func (*notificationEmailCacheStub) GetVerificationCode(context.Context, string) (*VerificationCodeData, error) {
 	return nil, nil
 }
