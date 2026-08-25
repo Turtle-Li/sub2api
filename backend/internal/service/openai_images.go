@@ -682,7 +682,6 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	defer func() { _ = resp.Body.Close() }()
 
 	var usage OpenAIUsage
-	imageCount := parsed.N
 	var firstTokenMs *int
 	if parsed.Stream && isEventStreamResponse(resp.Header) {
 		streamUsage, streamCount, streamSizes, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime)
@@ -712,7 +711,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			return nil, err
 		}
 		usage = streamUsage
-		imageCount = streamCount
+		imageCount := streamCount
 		imageOutputSizes := streamSizes
 		firstTokenMs = ttft
 		return &OpenAIForwardResult{
@@ -738,7 +737,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			return nil, err
 		}
 		usage = nonStreamUsage
-		imageCount = nonStreamCount
+		imageCount := nonStreamCount
 		billableCount := min(imageCount, parsed.N)
 		billableUsage := OpenAIUsage{}
 		addOpenAIImagesBillableAttemptUsage(&billableUsage, usage, imageCount, billableCount, true)
