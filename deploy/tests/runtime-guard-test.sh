@@ -53,6 +53,10 @@ assert_before() {
     || fail "expected '${first}' before '${second}' in ${file}"
 }
 
+SERVICE_UNIT="${DEPLOY_DIR}/sub2api-runtime-guard.service"
+assert_contains "$SERVICE_UNIT" 'ConditionFileIsExecutable=/usr/local/libexec/sub2api-runtime-guard.sh'
+assert_not_contains "$SERVICE_UNIT" 'ConditionPathIsExecutable='
+
 mkdir -p "$FAKE_BIN"
 
 cat >"${FAKE_BIN}/docker" <<'EOF'

@@ -2,7 +2,7 @@
 Description=Sub2API active-runtime recovery guard
 Wants=network-online.target
 After=network-online.target docker.service
-ConditionPathIsExecutable=/usr/local/libexec/sub2api-runtime-guard.sh
+ConditionFileIsExecutable=/usr/local/libexec/sub2api-runtime-guard.sh
 
 [Service]
 Type=oneshot
