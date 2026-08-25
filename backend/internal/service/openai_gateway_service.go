@@ -268,15 +268,33 @@ type OpenAIForwardResult struct {
 	Duration              time.Duration
 	FirstTokenMs          *int
 	ClientDisconnect      bool
-	ImageCount            int
-	ImageSize             string
-	ImageInputSize        string
-	ImageOutputSize       string
-	ImageOutputSizes      []string
-	ImageSizeSource       string
-	ImageSizeBreakdown    map[string]int
-	VideoCount            int
-	VideoResolution       string
+	// PartialOutput reports that downstream streaming bytes were already
+	// emitted even when no final image completed. It prevents unsafe account
+	// failover and allows the failed attempt's actual usage to be recorded.
+	PartialOutput bool
+	ImageCount    int
+	// BillableImageCount caps the number of returned images charged to the user.
+	// Zero preserves the legacy behavior of billing ImageCount. The images
+	// endpoint sets this to the requested n so upstream over-delivery remains
+	// visible and is returned to the client without increasing the charge.
+	BillableImageCount int
+	// BillingUsage optionally separates user-billable token usage from the
+	// actual aggregate upstream usage retained in Usage for observability.
+	// It is used by internal shortfall retries so repeated prompt/input tokens
+	// and over-delivered image output are not passed on to the user.
+	BillingUsage *OpenAIUsage
+	// BillableImageSize keeps per-image pricing on the downstream requested
+	// tier even when an over-delivered upstream image reports a different size.
+	// Empty preserves the legacy behavior of pricing from ImageSize.
+	BillableImageSize  string
+	ImageSize          string
+	ImageInputSize     string
+	ImageOutputSize    string
+	ImageOutputSizes   []string
+	ImageSizeSource    string
+	ImageSizeBreakdown map[string]int
+	VideoCount         int
+	VideoResolution    string
 	// VideoDurationSeconds 是提交时请求的生成时长（xAI 按输出秒数计费），已归一化到 1-15 秒。
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。

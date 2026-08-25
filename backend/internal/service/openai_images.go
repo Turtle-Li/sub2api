@@ -686,21 +686,27 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	var firstTokenMs *int
 	if parsed.Stream && isEventStreamResponse(resp.Header) {
 		streamUsage, streamCount, streamSizes, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime)
+		billableCount := min(streamCount, parsed.N)
+		billableUsage := OpenAIUsage{}
+		addOpenAIImagesBillableAttemptUsage(&billableUsage, streamUsage, streamCount, billableCount, true)
 		if err != nil {
 			if streamCount > 0 {
 				return &OpenAIForwardResult{
-					RequestID:        resp.Header.Get("x-request-id"),
-					Usage:            streamUsage,
-					Model:            requestModel,
-					UpstreamModel:    upstreamModel,
-					Stream:           parsed.Stream,
-					ResponseHeaders:  resp.Header.Clone(),
-					Duration:         time.Since(startTime),
-					FirstTokenMs:     ttft,
-					ImageCount:       streamCount,
-					ImageSize:        parsed.SizeTier,
-					ImageInputSize:   parsed.Size,
-					ImageOutputSizes: streamSizes,
+					RequestID:          resp.Header.Get("x-request-id"),
+					Usage:              streamUsage,
+					BillingUsage:       &billableUsage,
+					Model:              requestModel,
+					UpstreamModel:      upstreamModel,
+					Stream:             parsed.Stream,
+					ResponseHeaders:    resp.Header.Clone(),
+					Duration:           time.Since(startTime),
+					FirstTokenMs:       ttft,
+					ImageCount:         streamCount,
+					BillableImageCount: billableCount,
+					BillableImageSize:  parsed.SizeTier,
+					ImageSize:          parsed.SizeTier,
+					ImageInputSize:     parsed.Size,
+					ImageOutputSizes:   streamSizes,
 				}, err
 			}
 			return nil, err
@@ -710,18 +716,21 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		imageOutputSizes := streamSizes
 		firstTokenMs = ttft
 		return &OpenAIForwardResult{
-			RequestID:        resp.Header.Get("x-request-id"),
-			Usage:            usage,
-			Model:            requestModel,
-			UpstreamModel:    upstreamModel,
-			Stream:           parsed.Stream,
-			ResponseHeaders:  resp.Header.Clone(),
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ImageCount:       imageCount,
-			ImageSize:        parsed.SizeTier,
-			ImageInputSize:   parsed.Size,
-			ImageOutputSizes: imageOutputSizes,
+			RequestID:          resp.Header.Get("x-request-id"),
+			Usage:              usage,
+			BillingUsage:       &billableUsage,
+			Model:              requestModel,
+			UpstreamModel:      upstreamModel,
+			Stream:             parsed.Stream,
+			ResponseHeaders:    resp.Header.Clone(),
+			Duration:           time.Since(startTime),
+			FirstTokenMs:       firstTokenMs,
+			ImageCount:         imageCount,
+			BillableImageCount: billableCount,
+			BillableImageSize:  parsed.SizeTier,
+			ImageSize:          parsed.SizeTier,
+			ImageInputSize:     parsed.Size,
+			ImageOutputSizes:   imageOutputSizes,
 		}, nil
 	} else {
 		nonStreamUsage, nonStreamCount, nonStreamSizes, err := s.handleOpenAIImagesNonStreamingResponse(resp, c)
@@ -729,22 +738,26 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			return nil, err
 		}
 		usage = nonStreamUsage
-		if nonStreamCount > 0 {
-			imageCount = nonStreamCount
-		}
+		imageCount = nonStreamCount
+		billableCount := min(imageCount, parsed.N)
+		billableUsage := OpenAIUsage{}
+		addOpenAIImagesBillableAttemptUsage(&billableUsage, usage, imageCount, billableCount, true)
 		return &OpenAIForwardResult{
-			RequestID:        resp.Header.Get("x-request-id"),
-			Usage:            usage,
-			Model:            requestModel,
-			UpstreamModel:    upstreamModel,
-			Stream:           parsed.Stream,
-			ResponseHeaders:  resp.Header.Clone(),
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ImageCount:       imageCount,
-			ImageSize:        parsed.SizeTier,
-			ImageInputSize:   parsed.Size,
-			ImageOutputSizes: nonStreamSizes,
+			RequestID:          resp.Header.Get("x-request-id"),
+			Usage:              usage,
+			BillingUsage:       &billableUsage,
+			Model:              requestModel,
+			UpstreamModel:      upstreamModel,
+			Stream:             parsed.Stream,
+			ResponseHeaders:    resp.Header.Clone(),
+			Duration:           time.Since(startTime),
+			FirstTokenMs:       firstTokenMs,
+			ImageCount:         imageCount,
+			BillableImageCount: billableCount,
+			BillableImageSize:  parsed.SizeTier,
+			ImageSize:          parsed.SizeTier,
+			ImageInputSize:     parsed.Size,
+			ImageOutputSizes:   nonStreamSizes,
 		}, nil
 	}
 }
@@ -942,6 +955,62 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	seenSSEData := false
 	fallbackTooLarge := false
 	var sseData openAISSEDataAccumulator
+	var downstreamEventName string
+	var downstreamEventHasData bool
+	var downstreamDataSemantic bool
+	var downstreamDataTerminalError bool
+
+	trackWrittenStreamLine := func(line string) {
+		trimmedLine := strings.TrimRight(line, "\r\n")
+		if eventName, ok := extractOpenAISSEEventLine(trimmedLine); ok {
+			downstreamEventName = strings.TrimSpace(eventName)
+			return
+		}
+		if trimmedLine == "event" {
+			// A repeated empty event field overrides any previous event name.
+			downstreamEventName = ""
+			return
+		}
+		if data, ok := extractOpenAISSEDataLine(trimmedLine); ok {
+			downstreamEventHasData = true
+			if gjson.Valid(data) {
+				eventType := strings.TrimSpace(gjson.Get(data, "type").String())
+				if isOpenAIImagesSemanticStreamEventName(eventType) {
+					downstreamDataSemantic = true
+				}
+				if strings.EqualFold(eventType, "error") || strings.EqualFold(eventType, "response.failed") {
+					downstreamDataTerminalError = true
+				}
+			}
+			return
+		}
+		if trimmedLine == "data" {
+			downstreamEventHasData = true
+			return
+		}
+		if strings.TrimSpace(trimmedLine) == "" {
+			eventSemantic := isOpenAIImagesSemanticStreamEventName(downstreamEventName)
+			eventTerminalError := strings.EqualFold(downstreamEventName, "error")
+			if downstreamEventHasData && (eventSemantic || downstreamDataSemantic) {
+				markOpenAIImagesSemanticOutputWritten(c)
+			}
+			if downstreamEventHasData && (eventTerminalError || downstreamDataTerminalError) {
+				markOpenAIImagesTerminalErrorWritten(c)
+			}
+			downstreamEventName = ""
+			downstreamEventHasData = false
+			downstreamDataSemantic = false
+			downstreamDataTerminalError = false
+			return
+		}
+		if isOpenAISSEControlFieldLine(trimmedLine) {
+			return
+		}
+		if !strings.HasPrefix(strings.TrimSpace(trimmedLine), ":") {
+			// A non-SSE streaming body is already client-visible semantic output.
+			markOpenAIImagesSemanticOutputWritten(c)
+		}
+	}
 
 	processSSEData := func(dataBytes []byte) {
 		seenSSEData = true
@@ -970,6 +1039,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			} else {
 				flusher.Flush()
 				lastDownstreamWriteAt = time.Now()
+				trackWrittenStreamLine(string(line))
 			}
 		}
 
@@ -1116,6 +1186,23 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			lastDownstreamWriteAt = time.Now()
 		}
 	}
+}
+
+func isOpenAIImagesSemanticStreamEventName(eventName string) bool {
+	eventName = strings.ToLower(strings.TrimSpace(eventName))
+	return eventName == "error" ||
+		eventName == "response.failed" ||
+		strings.HasSuffix(eventName, ".partial_image") ||
+		strings.HasSuffix(eventName, ".completed")
+}
+
+func isOpenAISSEControlFieldLine(line string) bool {
+	for _, field := range []string{"event", "data", "id", "retry"} {
+		if line == field || strings.HasPrefix(line, field+":") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *OpenAIGatewayService) openAIImageStreamDataInterval() time.Duration {

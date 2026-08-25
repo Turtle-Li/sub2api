@@ -3285,6 +3285,13 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 	if service.GetOpsCyberPolicy(c) != nil {
 		return true
 	}
+	// Images streaming may have written partial/completed image events without
+	// writing a terminal error. Only the explicit writer marker is safe here;
+	// error type plus changed size would either duplicate an existing terminal
+	// event or suppress the required fallback event depending on the path.
+	if service.OpenAIImagesTerminalErrorWritten(c) {
+		return true
+	}
 
 	msg := strings.TrimSpace(err.Error())
 	for _, prefix := range []string{

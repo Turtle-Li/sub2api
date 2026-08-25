@@ -3065,6 +3065,31 @@ data: {"type":"response.failed","error":{"message":"This content was flagged"}}
 		require.False(t, reported)
 	})
 
+	t.Run("images terminal error marker after write is already communicated", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+		before := c.Writer.Size()
+		_, _ = c.Writer.WriteString("event: error\ndata: {\"type\":\"error\"}\n\n")
+		c.Set("openai_images_terminal_error_written", true)
+
+		reported := openAIForwardErrorAlreadyCommunicated(c, before, &service.OpenAIImagesUpstreamError{Code: "server_error"})
+
+		require.True(t, reported)
+	})
+
+	t.Run("images partial output without terminal marker still needs fallback", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+		before := c.Writer.Size()
+		_, _ = c.Writer.WriteString("event: image_generation.partial_image\ndata: {}\n\n")
+
+		reported := openAIForwardErrorAlreadyCommunicated(c, before, &service.OpenAIImagesUpstreamError{Code: "server_error"})
+
+		require.False(t, reported)
+	})
+
 	// H-2: cyber_policy 命中且响应已写出时，即便 err 前缀不在白名单（非流式 400 cyber
 	// 返回 "openai cyber_policy:"、透传账号返回 "upstream error:"），也须判定已透传，避免
 	// ensureForwardErrorResponse 在已写出的完整响应尾部追加 SSE 污染响应体。

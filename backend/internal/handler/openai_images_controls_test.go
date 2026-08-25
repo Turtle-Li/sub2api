@@ -15,14 +15,27 @@ import (
 )
 
 func TestOpenAIImagesShouldRecordFailedResult(t *testing.T) {
-	mismatchErr := &service.OpenAIImagesUpstreamError{Code: "image_count_mismatch"}
 	serverErr := &service.OpenAIImagesUpstreamError{Code: "server_error"}
 
-	require.True(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 0}, mismatchErr))
-	require.True(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 1}, errors.New("stream failed")))
+	require.True(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{Stream: true, ImageCount: 1}, errors.New("stream failed")))
+	require.True(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{PartialOutput: true}, errors.New("partial stream failed")))
+	require.False(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 1}, serverErr))
 	require.False(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 0}, serverErr))
 	require.False(t, openAIImagesShouldRecordFailedResult(&service.OpenAIForwardResult{ImageCount: 0}, nil))
-	require.False(t, openAIImagesShouldRecordFailedResult(nil, mismatchErr))
+	require.False(t, openAIImagesShouldRecordFailedResult(nil, serverErr))
+}
+
+func TestOpenAIImagesStreamKeepaliveIsNotSemanticOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	before := service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
+	_, err := c.Writer.WriteString(":\n\n")
+	require.NoError(t, err)
+
+	require.False(t, openAIImagesResponseWritten(c, true, before))
+	require.False(t, openAIImagesForwardErrorAlreadyCommunicated(c, true, before, errors.New("upstream response failed: empty image output")))
 }
 
 func TestOpenAIGatewayHandlerImages_DisabledGroupRejectsBeforeScheduling(t *testing.T) {

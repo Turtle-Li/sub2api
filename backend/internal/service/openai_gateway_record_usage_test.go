@@ -504,6 +504,48 @@ func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputToke
 	require.InDelta(t, expectedActual, userRepo.lastAmount, 1e-12)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_TokenImageUsesBillableUsageButLogsActualUsage(t *testing.T) {
+	groupID := int64(141)
+	actualUsage := OpenAIUsage{InputTokens: 40, OutputTokens: 687, ImageOutputTokens: 687}
+	billableUsage := OpenAIUsage{InputTokens: 10, OutputTokens: 458, ImageOutputTokens: 458}
+
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
+	svc.resolver = newOpenAITokenImageChannelPricingResolverForTest(t, groupID, "gpt-5.1")
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_image_billable_usage",
+			Usage:     actualUsage, BillingUsage: &billableUsage,
+			Model: "gpt-5.1", ImageCount: 3, BillableImageCount: 2, Duration: time.Second,
+		},
+		APIKey: &APIKey{
+			ID: 1041, GroupID: i64p(groupID),
+			Group: &Group{ID: groupID, RateMultiplier: 1.0, SubscriptionType: "subscription"},
+		},
+		User: &User{ID: 2041}, Account: &Account{ID: 3041},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, actualUsage.InputTokens, usageRepo.lastLog.InputTokens)
+	require.Equal(t, actualUsage.OutputTokens, usageRepo.lastLog.OutputTokens)
+	require.Equal(t, actualUsage.ImageOutputTokens, usageRepo.lastLog.ImageOutputTokens)
+	require.Equal(t, 3, usageRepo.lastLog.ImageCount)
+	expected, err := svc.billingService.CalculateCostUnified(CostInput{
+		Ctx: context.Background(), Model: "gpt-5.1", GroupID: i64p(groupID),
+		Tokens: UsageTokens{
+			InputTokens: billableUsage.InputTokens, OutputTokens: billableUsage.OutputTokens,
+			ImageOutputTokens: billableUsage.ImageOutputTokens,
+		},
+		RateMultiplier: 1.0, Resolver: svc.resolver,
+	})
+	require.NoError(t, err)
+	require.InDelta(t, expected.TotalCost, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, expected.ActualCost, userRepo.lastAmount, 1e-12)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_TimePricingUsesPricingAt(t *testing.T) {
 	groupID := int64(16)
 	requestStart := time.Date(2024, time.January, 2, 2, 0, 0, 0, time.UTC) // 上海 10:00
@@ -2093,6 +2135,36 @@ func TestOpenAIGatewayServiceRecordUsage_ImageUsesPerImageBillingEvenWithUsageTo
 	require.InDelta(t, 0.0, usageRepo.lastLog.InputCost, 1e-12)
 	require.InDelta(t, 0.0, usageRepo.lastLog.OutputCost, 1e-12)
 	require.InDelta(t, 0.0, usageRepo.lastLog.ImageOutputCost, 1e-12)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_ImageOverageIsLoggedButNotBilled(t *testing.T) {
+	imagePrice := 0.02
+	groupID := int64(122)
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_image_overage", Model: "gpt-image-2",
+			ImageCount: 3, BillableImageCount: 2, BillableImageSize: "1K", ImageSize: "1K",
+			ImageOutputSizes: []string{"1024x1024", "1024x1024", "3840x2160"}, Duration: time.Second,
+		},
+		APIKey: &APIKey{
+			ID: 10122, GroupID: i64p(groupID),
+			Group: &Group{ID: groupID, RateMultiplier: 1.0, ImagePrice1K: &imagePrice},
+		},
+		User: &User{ID: 20122}, Account: &Account{ID: 30122},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, 3, usageRepo.lastLog.ImageCount)
+	require.NotNil(t, usageRepo.lastLog.ImageSize)
+	require.Equal(t, ImageBillingSize4K, *usageRepo.lastLog.ImageSize)
+	require.InDelta(t, 0.04, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, 0.04, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, 0.04, userRepo.lastAmount, 1e-12)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ImageSharedMultiplierPreservesExistingBehavior(t *testing.T) {

@@ -293,7 +293,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
 					h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), false, nil, err)
-					if service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
+					if openAIImagesResponseWritten(c, parsed.Stream, writerSizeBeforeForward) {
 						reqLog.Warn("openai.images.upstream_failover_skipped_after_flush",
 							zap.Int64("account_id", account.ID),
 							zap.Int("upstream_status", failoverErr.StatusCode),
@@ -349,7 +349,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					continue
 				}
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), false, nil, err)
-				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
+				upstreamErrorAlreadyCommunicated := openAIImagesForwardErrorAlreadyCommunicated(c, parsed.Stream, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
 					wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
@@ -370,7 +370,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		}
 		if partialForwardError {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), false, nil, err)
-			upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
+			upstreamErrorAlreadyCommunicated := openAIImagesForwardErrorAlreadyCommunicated(c, parsed.Stream, writerSizeBeforeForward, err)
 			wroteFallback := false
 			if !upstreamErrorAlreadyCommunicated {
 				wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
@@ -454,14 +454,21 @@ func (h *OpenAIGatewayHandler) openAIImagesJSONKeepaliveInterval() time.Duration
 }
 
 func openAIImagesShouldRecordFailedResult(result *service.OpenAIForwardResult, err error) bool {
-	if err == nil || result == nil {
+	return err != nil && result != nil && (result.PartialOutput || (result.Stream && result.ImageCount > 0))
+}
+
+func openAIImagesResponseWritten(c *gin.Context, stream bool, writerSizeBeforeForward int) bool {
+	if stream {
+		return service.OpenAIImagesSemanticOutputWritten(c)
+	}
+	return service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward
+}
+
+func openAIImagesForwardErrorAlreadyCommunicated(c *gin.Context, stream bool, writerSizeBeforeForward int, err error) bool {
+	if !openAIImagesResponseWritten(c, stream, writerSizeBeforeForward) {
 		return false
 	}
-	if result.ImageCount > 0 {
-		return true
-	}
-	var upstreamErr *service.OpenAIImagesUpstreamError
-	return errors.As(err, &upstreamErr) && upstreamErr.Code == "image_count_mismatch"
+	return openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 }
 
 func isMultipartImagesContentType(contentType string) bool {
