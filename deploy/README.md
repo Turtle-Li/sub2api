@@ -116,6 +116,29 @@ Any manual database cutover or application/Caddy lifecycle command must also
 hold `/run/lock/sub2api-maintenance.lock`. A production release acquires it
 internally. Do not wrap the release command in a second `flock` invocation.
 
+### PostgreSQL physical-standby preparation
+
+The Tokyo migration candidate is not an application traffic target. During
+physical-standby preparation its application container stays stopped, while a
+dedicated SSH tunnel binds only the gateway of the internal
+`sub2api-candidate-internal` Docker network. The installer verifies that exact
+network contract with a digest-pinned PostgreSQL 18 probe image; it never binds
+the tunnel to a wildcard or public listener. Production exposes only a
+loopback relay, and PostgreSQL accepts the fixed relay container address only.
+Redis is not part of this replication path.
+
+The candidate also runs a one-minute local watchdog. It keeps the standby
+container and SSH tunnel available, refuses to treat a promoted database or a
+running candidate application as healthy, checks the WAL receiver and replay
+byte lag, and records a non-secret status line in
+`/run/sub2api-postgres-streaming-watchdog.status`. It may restart only the
+candidate PostgreSQL container or the tunnel; it never promotes PostgreSQL or
+starts the candidate application.
+
+These installers are preparation tools, not cutover authorization. They do not
+promote the candidate, change Caddy, start a candidate application, or switch
+production database traffic.
+
 GitHub workflow concurrency serializes production runs. The receiver also holds
 an exclusive upload/release lock and fails closed if another release is in
 progress. The archive defaults to a 1 GiB compressed size limit, configurable
@@ -152,6 +175,14 @@ normal production path.
 | `sub2api-runtime-guard.sh` | Recovers dependencies/active slot and safely falls back to a historical slot |
 | `sub2api-runtime-guard.service` | Root-owned one-shot runtime recovery service |
 | `sub2api-runtime-guard.timer` | Runs the runtime guard every 30 seconds |
+| `install-postgres-streaming-primary.sh` | Installs the loopback-only production relay, restricted Tokyo tunnel account, and PostgreSQL streaming prerequisites without restarting production |
+| `install-postgres-streaming-tunnel.sh` | Installs the Tokyo-side tunnel runner, key material, strict host-key policy, and systemd unit from protected server-local inputs |
+| `sub2api-postgres-streaming-tunnel.sh` | Runs the Tokyo-side, host-key-pinned and automatically reconnecting PostgreSQL SSH tunnel |
+| `sub2api-postgres-streaming-tunnel.service` | Keeps the Tokyo-side forwarding tunnel alive under systemd |
+| `install-postgres-streaming-watchdog.sh` | Installs and immediately validates the candidate-side streaming watchdog and timer |
+| `sub2api-postgres-streaming-watchdog.sh` | Validates recovery/receiver/lag state and repairs only a stopped standby container or tunnel |
+| `sub2api-postgres-streaming-watchdog.service` | Root-owned one-shot PostgreSQL streaming health and recovery check |
+| `sub2api-postgres-streaming-watchdog.timer` | Runs the streaming watchdog once per minute and after boot |
 | `sub2api-autodeploy.sh` | Legacy source-preparation recovery controller |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |

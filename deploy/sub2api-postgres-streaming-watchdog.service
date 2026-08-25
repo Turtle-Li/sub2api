@@ -1,0 +1,25 @@
+[Unit]
+Description=Sub2API PostgreSQL standby streaming watchdog
+After=docker.service sub2api-postgres-streaming-tunnel.service
+Wants=docker.service sub2api-postgres-streaming-tunnel.service
+ConditionFileIsExecutable=/usr/local/libexec/sub2api-postgres-streaming-watchdog.sh
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0022
+ExecStart=/usr/local/libexec/sub2api-postgres-streaming-watchdog.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/run
+StandardOutput=journal
+StandardError=journal
