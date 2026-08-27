@@ -25,6 +25,9 @@ CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 CADDY_CONFIG_PATH="${SUB2API_RUNTIME_GUARD_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
 POSTGRES_CONTAINER="${SUB2API_RUNTIME_GUARD_POSTGRES_CONTAINER:-sub2api-postgres}"
 REDIS_CONTAINER="${SUB2API_RUNTIME_GUARD_REDIS_CONTAINER:-sub2api-redis}"
+# An unset mode retains the legacy behavior.  An explicitly blank or unknown
+# value is rejected below rather than silently touching local dependencies.
+DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE-local}"
 BLUE_GREEN_SCRIPT="${SUB2API_RUNTIME_GUARD_BLUE_GREEN_SCRIPT:-${APP_DIR}/scripts/sub2api-blue-green-release.sh}"
 PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://www.turtleligpt.com/health}"
 MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
@@ -41,11 +44,22 @@ PUBLIC_HEALTH_ATTEMPTS="${SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_ATTEMPTS:-3}"
 PUBLIC_HEALTH_INTERVAL_SECONDS="${SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_INTERVAL_SECONDS:-3}"
 PUBLIC_HEALTH_MAX_TIME_SECONDS="${SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_MAX_TIME_SECONDS:-20}"
 APP_PORT="${SUB2API_RUNTIME_GUARD_APP_PORT:-8080}"
+RUNTIME_GUARD_NETWORK="${SUB2API_RUNTIME_GUARD_NETWORK:-sub2api_default}"
+RUNTIME_GUARD_DATA_VOLUME="${SUB2API_RUNTIME_GUARD_DATA_VOLUME:-sub2api_sub2api_data}"
+EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
+EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
+CONTAINER_PG_CA_PATH="/etc/sub2api-db-ca/ca.crt"
+CONTAINER_REDIS_CA_PATH="/etc/ssl/certs/sub2api-db-ca.pem"
 
 ACTIVE_CONTAINER=""
 ACTIVE_UPSTREAM=""
 FALLBACK_CONTAINER=""
 FALLBACK_IMAGE=""
+EXTERNAL_ENV_KEYS=(
+  DATABASE_HOST DATABASE_PORT DATABASE_USER DATABASE_PASSWORD DATABASE_DBNAME DATABASE_SSLMODE
+  REDIS_HOST REDIS_PORT REDIS_USERNAME REDIS_PASSWORD REDIS_DB REDIS_ENABLE_TLS
+)
+EXTERNAL_OVERRIDE_KEYS=("${EXTERNAL_ENV_KEYS[@]}" PGSSLROOTCERT)
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -107,6 +121,152 @@ container_oom_killed() {
 
 container_exit_code() {
   container_field "$1" '{{.State.ExitCode}}'
+}
+
+validate_external_file_path() {
+  local label="$1"
+  local path="$2"
+  local canonical_path
+
+  case "$path" in
+    /*) ;;
+    *) die "$label must be an absolute path" ;;
+  esac
+  case "$path" in
+    *$'\n'*|*$'\r'*|*,*|*'|'*) die "$label contains an unsupported path character" ;;
+  esac
+  canonical_path="$(realpath -e -- "$path")" \
+    || die "$label must resolve to an existing canonical file"
+  [ "$canonical_path" = "$path" ] \
+    || die "$label must not traverse a symlink or contain a non-canonical path"
+}
+
+external_value() {
+  local key="$1"
+  sed -n "/^$key=/ { s/^$key=//; p; q; }" "$EXTERNAL_RUNTIME_ENV_FILE"
+}
+
+load_external_runtime_env() {
+  local line key value count
+
+  validate_external_file_path SUB2API_EXTERNAL_RUNTIME_ENV_FILE "$EXTERNAL_RUNTIME_ENV_FILE"
+  [ -f "$EXTERNAL_RUNTIME_ENV_FILE" ] && [ ! -L "$EXTERNAL_RUNTIME_ENV_FILE" ] \
+    || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE must be a regular non-symlink file"
+  [ "$(stat -c '%u' "$EXTERNAL_RUNTIME_ENV_FILE")" = 0 ] \
+    || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE must be owned by root"
+  [ "$(stat -c '%a' "$EXTERNAL_RUNTIME_ENV_FILE")" = 600 ] \
+    || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE must have mode 0600"
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+      *$'\r'*) die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE contains a carriage return" ;;
+      *=*) ;;
+      *) die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE has an invalid entry" ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      DATABASE_HOST|DATABASE_PORT|DATABASE_USER|DATABASE_PASSWORD|DATABASE_DBNAME|DATABASE_SSLMODE|REDIS_HOST|REDIS_PORT|REDIS_USERNAME|REDIS_PASSWORD|REDIS_DB|REDIS_ENABLE_TLS) ;;
+      PGSSLROOTCERT) die "PGSSLROOTCERT is managed from SUB2API_EXTERNAL_CA_FILE" ;;
+      *) die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE contains an unsupported key" ;;
+    esac
+    count="$(grep -c "^$key=" "$EXTERNAL_RUNTIME_ENV_FILE" || true)"
+    [ "$count" = 1 ] || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE contains a duplicate key"
+    [ -n "$value" ] || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE contains an empty required setting"
+  done <"$EXTERNAL_RUNTIME_ENV_FILE"
+
+  for key in "${EXTERNAL_ENV_KEYS[@]}"; do
+    [ -n "$(external_value "$key")" ] \
+      || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE is missing a required setting"
+  done
+  [ "$(external_value DATABASE_SSLMODE)" = verify-full ] \
+    || die "DATABASE_SSLMODE must be verify-full in external dependency mode"
+  [ "$(external_value REDIS_ENABLE_TLS)" = true ] \
+    || die "REDIS_ENABLE_TLS must be true in external dependency mode"
+  for key in DATABASE_PORT REDIS_PORT REDIS_DB; do
+    case "$(external_value "$key")" in
+      ''|*[!0-9]*) die "$key must be numeric in external dependency mode" ;;
+    esac
+  done
+}
+
+validate_external_ca_file() {
+  local mode group_permissions other_permissions
+
+  validate_external_file_path SUB2API_EXTERNAL_CA_FILE "$EXTERNAL_CA_FILE"
+  [ -f "$EXTERNAL_CA_FILE" ] && [ ! -L "$EXTERNAL_CA_FILE" ] \
+    || die "SUB2API_EXTERNAL_CA_FILE must be a regular non-symlink file"
+  [ "$(stat -c '%u' "$EXTERNAL_CA_FILE")" = 0 ] \
+    || die "SUB2API_EXTERNAL_CA_FILE must be owned by root"
+  mode="$(stat -c '%a' "$EXTERNAL_CA_FILE")"
+  case "$mode" in
+    ''|*[!0-9]*) die "could not read SUB2API_EXTERNAL_CA_FILE mode" ;;
+  esac
+  other_permissions=$((10#$mode % 10))
+  group_permissions=$((10#$mode / 10 % 10))
+  [ $((group_permissions & 2)) -eq 0 ] \
+    || die "SUB2API_EXTERNAL_CA_FILE must not be group-writable"
+  [ $((other_permissions & 2)) -eq 0 ] \
+    || die "SUB2API_EXTERNAL_CA_FILE must not be other-writable"
+  [ $((other_permissions & 4)) -ne 0 ] \
+    || die "SUB2API_EXTERNAL_CA_FILE must be readable by container UID 1000"
+}
+
+external_app_runtime_matches() {
+  local container_name="$1"
+  local networks mounts environment
+  local network_count mount_count key expected_value actual_value
+
+  container_exists "$container_name" || return 1
+  [ "$(container_field "$container_name" '{{.HostConfig.RestartPolicy.Name}}')" = unless-stopped ] || return 1
+  networks="$(docker inspect "$container_name" --format '{{range $network, $_ := .NetworkSettings.Networks}}{{println $network}}{{end}}')" || return 1
+  mounts="$(docker inspect "$container_name" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}')" || return 1
+  environment="$(docker inspect "$container_name" --format '{{range .Config.Env}}{{println .}}{{end}}')" || return 1
+
+  network_count="$(printf '%s\n' "$networks" | awk 'NF { count += 1 } END { print count + 0 }')"
+  mount_count="$(printf '%s\n' "$mounts" | awk 'NF { count += 1 } END { print count + 0 }')"
+  [ "$network_count" -eq 1 ] && printf '%s\n' "$networks" | grep -qxF "$RUNTIME_GUARD_NETWORK" || return 1
+  [ "$mount_count" -eq 3 ] \
+    && printf '%s\n' "$mounts" | grep -qxF "volume|$RUNTIME_GUARD_DATA_VOLUME|/app/data|true" \
+    && printf '%s\n' "$mounts" | grep -qxF "bind|$EXTERNAL_CA_FILE|$CONTAINER_PG_CA_PATH|false" \
+    && printf '%s\n' "$mounts" | grep -qxF "bind|$EXTERNAL_CA_FILE|$CONTAINER_REDIS_CA_PATH|false" \
+    || return 1
+
+  for key in "${EXTERNAL_OVERRIDE_KEYS[@]}"; do
+    if [ "$key" = PGSSLROOTCERT ]; then
+      expected_value="$CONTAINER_PG_CA_PATH"
+    else
+      expected_value="$(external_value "$key")"
+    fi
+    actual_value="$(printf '%s\n' "$environment" | awk -v expected_key="$key" '
+      index($0, expected_key "=") == 1 {
+        count += 1
+        value = substr($0, length(expected_key) + 2)
+      }
+      END {
+        if (count != 1) exit 1
+        print value
+      }')" || return 1
+    [ "$actual_value" = "$expected_value" ] || return 1
+  done
+  return 0
+}
+
+verify_external_app_runtime_before_lifecycle() {
+  local container_name="$1"
+
+  [ "$DEPENDENCY_MODE" = external ] || return 0
+  # Re-read protected inputs at the immediate lifecycle boundary so a config
+  # or CA-file change after the early Caddy preflight cannot start an app with
+  # a stale dependency contract.
+  load_external_runtime_env
+  validate_external_ca_file
+  if ! external_app_runtime_matches "$container_name"; then
+    log "external runtime verification failed before application lifecycle action: ${container_name}" >&2
+    return 1
+  fi
+  return 0
 }
 
 unique_upstream_from_file() {
@@ -353,9 +513,11 @@ try_restore_active() {
 
   status="$(container_health "$ACTIVE_CONTAINER")"
   if ! container_running "$ACTIVE_CONTAINER"; then
+    verify_external_app_runtime_before_lifecycle "$ACTIVE_CONTAINER" || return 1
     log "recovering stopped active container ${ACTIVE_CONTAINER}"
     docker start "$ACTIVE_CONTAINER" >/dev/null || return 1
   elif [ "$status" = "unhealthy" ]; then
+    verify_external_app_runtime_before_lifecycle "$ACTIVE_CONTAINER" || return 1
     log "restarting unhealthy active container ${ACTIVE_CONTAINER}"
     docker restart "$ACTIVE_CONTAINER" >/dev/null || return 1
   fi
@@ -368,6 +530,7 @@ try_restore_active() {
   # it still cannot serve internal health, make one explicit same-slot restart
   # before considering any historical image.
   if container_running "$ACTIVE_CONTAINER"; then
+    verify_external_app_runtime_before_lifecycle "$ACTIVE_CONTAINER" || return 1
     log "active container did not recover; retrying one explicit restart: ${ACTIVE_CONTAINER}"
     docker restart "$ACTIVE_CONTAINER" >/dev/null || return 1
     if wait_for_app_ready "$ACTIVE_CONTAINER"; then
@@ -462,6 +625,7 @@ select_known_good_fallback() {
 }
 
 start_fallback() {
+  verify_external_app_runtime_before_lifecycle "$FALLBACK_CONTAINER" || return 1
   log "starting historical fallback ${FALLBACK_CONTAINER}"
   docker start "$FALLBACK_CONTAINER" >/dev/null || return 1
   if wait_for_app_ready "$FALLBACK_CONTAINER"; then
@@ -554,6 +718,11 @@ acquire_maintenance_lock() {
   return 0
 }
 
+case "$DEPENDENCY_MODE" in
+  local|external) ;;
+  *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external (got: ${DEPENDENCY_MODE})" ;;
+esac
+
 for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date; do
   require_cmd "$command_name"
 done
@@ -569,6 +738,12 @@ case "$CADDY_CONFIG_PATH" in
   /*) ;;
   *) die "SUB2API_RUNTIME_GUARD_CADDY_CONFIG_PATH must be an absolute path" ;;
 esac
+if [ "$DEPENDENCY_MODE" = external ]; then
+  require_cmd realpath
+  require_cmd stat
+  load_external_runtime_env
+  validate_external_ca_file
+fi
 
 if ! acquire_maintenance_lock; then
   # A release, database cutover, or another guard owns the global maintenance
@@ -584,9 +759,21 @@ case "$ACTIVE_CONTAINER" in
   sub2api|sub2api-blue|sub2api-green) ;;
   *) die "unsupported active container parsed from Caddyfile: ${ACTIVE_CONTAINER}" ;;
 esac
+if [ "$DEPENDENCY_MODE" = external ]; then
+  external_app_runtime_matches "$ACTIVE_CONTAINER" \
+    || die "active application external runtime does not match the current external dependency contract"
+fi
 
-ensure_dependency "$POSTGRES_CONTAINER" PostgreSQL
-ensure_dependency "$REDIS_CONTAINER" Redis
+case "$DEPENDENCY_MODE" in
+  local)
+    log "runtime dependency mode=local; verifying local PostgreSQL and Redis containers"
+    ensure_dependency "$POSTGRES_CONTAINER" PostgreSQL
+    ensure_dependency "$REDIS_CONTAINER" Redis
+    ;;
+  external)
+    log "runtime dependency mode=external; skipping local PostgreSQL and Redis container inspection and lifecycle actions"
+    ;;
+esac
 ensure_caddy
 verify_caddy_matches "$ACTIVE_UPSTREAM" \
   || die "host Caddyfile and Caddy admin configuration are not consistent"
@@ -635,6 +822,10 @@ if [ "$running_inactive_count" -gt 0 ]; then
   FALLBACK_IMAGE="$(container_image "$FALLBACK_CONTAINER")"
   [ -n "$FALLBACK_IMAGE" ] \
     || die "running inactive fallback has no image reference: ${FALLBACK_CONTAINER}"
+  if [ "$DEPENDENCY_MODE" = external ]; then
+    verify_external_app_runtime_before_lifecycle "$FALLBACK_CONTAINER" \
+      || die "running historical fallback external runtime does not match the current external dependency contract"
+  fi
   container_is_healthy "$FALLBACK_CONTAINER" && app_internal_health "$FALLBACK_CONTAINER" \
     || die "running inactive fallback is not healthy: ${FALLBACK_CONTAINER}"
   isolate_active_container \

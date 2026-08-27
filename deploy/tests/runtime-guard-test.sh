@@ -12,6 +12,10 @@ TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sub2api-runtime-guard-test.XXXXXX")"
 FAKE_BIN="${TEST_ROOT}/bin"
 CASE_ROOT=""
 
+# Cases that exercise the default must not inherit an operator's shell mode.
+# Cases needing a non-default mode set it directly on the guard invocation.
+unset SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE
+
 cleanup() {
   rm -rf "$TEST_ROOT"
 }
@@ -76,13 +80,14 @@ load_state() {
   # Test-generated values only.
   # shellcheck disable=SC1090
   . "$file"
+  : "${restart_policy:=unless-stopped}"
 }
 
 save_state() {
   local file
   file="$(state_file "$1")"
-  printf 'running=%s\nhealth=%s\noom=%s\nexit_code=%s\nimage=%s\nstart_health=%s\nrestart_health=%s\n' \
-    "$running" "$health" "$oom" "$exit_code" "$image" "$start_health" "$restart_health" >"$file"
+  printf 'running=%s\nhealth=%s\noom=%s\nexit_code=%s\nimage=%s\nstart_health=%s\nrestart_health=%s\nrestart_policy=%s\n' \
+    "$running" "$health" "$oom" "$exit_code" "$image" "$start_health" "$restart_health" "$restart_policy" >"$file"
 }
 
 case "${1:-}" in
@@ -99,6 +104,10 @@ case "${1:-}" in
       *State.OOMKilled*) printf '%s\n' "$oom" ;;
       *State.ExitCode*) printf '%s\n' "$exit_code" ;;
       *Config.Image*) printf '%s\n' "$image" ;;
+      *HostConfig.RestartPolicy.Name*) printf '%s\n' "$restart_policy" ;;
+      *NetworkSettings.Networks*) cat "$(state_file "$container_name").networks" ;;
+      *range\ .Mounts*) cat "$(state_file "$container_name").mounts" ;;
+      *range\ .Config.Env*) cat "$(state_file "$container_name").envlines" ;;
       *) : ;;
     esac
     ;;
@@ -182,6 +191,31 @@ exit 0
 EOF
 chmod +x "${FAKE_BIN}/sleep"
 
+cat >"${FAKE_BIN}/realpath" <<'EOF'
+#!/usr/bin/env bash
+for target; do :; done
+[ -e "$target" ] || exit 1
+printf '%s\n' "$target"
+EOF
+chmod +x "${FAKE_BIN}/realpath"
+
+cat >"${FAKE_BIN}/stat" <<'EOF'
+#!/usr/bin/env bash
+format="${2:-}"
+path="${3:-}"
+case "$format" in
+  '%u') echo 0 ;;
+  '%a')
+    case "$path" in
+      *external-ca.crt) echo 644 ;;
+      *) echo 600 ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "${FAKE_BIN}/stat"
+
 write_container() {
   local name="$1"
   local running="$2"
@@ -193,9 +227,12 @@ write_container() {
   local restart_health="${8:-healthy}"
 
   mkdir -p "${CASE_ROOT}/containers"
-  printf 'running=%s\nhealth=%s\noom=%s\nexit_code=%s\nimage=%s\nstart_health=%s\nrestart_health=%s\n' \
+  printf 'running=%s\nhealth=%s\noom=%s\nexit_code=%s\nimage=%s\nstart_health=%s\nrestart_health=%s\nrestart_policy=unless-stopped\n' \
     "$running" "$health" "$oom" "$exit_code" "$image" "$start_health" "$restart_health" \
     >"${CASE_ROOT}/containers/${name}.env"
+  printf 'sub2api_default\n' >"${CASE_ROOT}/containers/${name}.env.networks"
+  : >"${CASE_ROOT}/containers/${name}.env.mounts"
+  : >"${CASE_ROOT}/containers/${name}.env.envlines"
 }
 
 new_case() {
@@ -235,6 +272,42 @@ write_standard_dependencies() {
   write_container sub2api-caddy true healthy false 0 caddy:2
 }
 
+write_external_runtime_files() {
+  cat >"${CASE_ROOT}/external-runtime.env" <<'EOF'
+DATABASE_HOST=postgres.example.invalid
+DATABASE_PORT=5432
+DATABASE_USER=sub2api
+DATABASE_PASSWORD=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+DATABASE_DBNAME=sub2api
+DATABASE_SSLMODE=verify-full
+REDIS_HOST=redis.example.invalid
+REDIS_PORT=6380
+REDIS_USERNAME=sub2api
+REDIS_PASSWORD=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+REDIS_DB=0
+REDIS_ENABLE_TLS=true
+EOF
+  printf 'test-ca\n' >"${CASE_ROOT}/external-ca.crt"
+}
+
+write_external_container_contract() {
+  local name="$1"
+  local mode="${2:-exact}"
+  local prefix="${CASE_ROOT}/containers/${name}.env"
+
+  if [ "$mode" = exact ]; then
+    printf 'sub2api_default\n' >"${prefix}.networks"
+    printf 'volume|sub2api_sub2api_data|/app/data|true\nbind|%s|/etc/sub2api-db-ca/ca.crt|false\nbind|%s|/etc/ssl/certs/sub2api-db-ca.pem|false\n' \
+      "${CASE_ROOT}/external-ca.crt" "${CASE_ROOT}/external-ca.crt" >"${prefix}.mounts"
+    cat "${CASE_ROOT}/external-runtime.env" >"${prefix}.envlines"
+    printf 'PGSSLROOTCERT=/etc/sub2api-db-ca/ca.crt\n' >>"${prefix}.envlines"
+  else
+    printf 'sub2api_default\n' >"${prefix}.networks"
+    printf 'volume|sub2api_sub2api_data|/app/data|true\n' >"${prefix}.mounts"
+    printf 'DATABASE_HOST=sub2api-postgres\nDATABASE_PORT=5432\nREDIS_HOST=sub2api-redis\nREDIS_PORT=6379\n' >"${prefix}.envlines"
+  fi
+}
+
 run_guard() {
   env \
     PATH="${FAKE_BIN}:${PATH}" \
@@ -252,6 +325,10 @@ run_guard() {
     SUB2API_RUNTIME_GUARD_CONFIG_FILE="${CASE_ROOT}/missing.env" \
     SUB2API_RUNTIME_GUARD_CADDYFILE="${CASE_ROOT}/app/Caddyfile" \
     SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS="${SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS:-0}" \
+    SUB2API_RUNTIME_GUARD_DATA_VOLUME="${SUB2API_RUNTIME_GUARD_DATA_VOLUME:-sub2api_sub2api_data}" \
+    SUB2API_RUNTIME_GUARD_NETWORK="${SUB2API_RUNTIME_GUARD_NETWORK:-sub2api_default}" \
+    SUB2API_EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}" \
+    SUB2API_EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}" \
     SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_ATTEMPTS=1 \
     SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_INTERVAL_SECONDS=0 \
     SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_MAX_TIME_SECONDS=1 \
@@ -376,20 +453,97 @@ assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-green'
 
-# Dependencies are separately restarted in dependency order, then a healthy
-# active app remains untouched.
+# Without a mode setting, legacy local dependency recovery remains active: the
+# dependencies are restarted in order and a healthy active app remains
+# untouched.
 new_case dependencies-start
 write_container sub2api-postgres false exited false 0 postgres:18
 write_container sub2api-redis false exited false 0 redis:8
 write_container sub2api-caddy false exited false 0 caddy:2
 write_container sub2api-green true healthy false 0 sub2api:current
 run_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'runtime dependency mode=local; verifying local PostgreSQL and Redis containers'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-postgres'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-redis'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-caddy'
 assert_before "${CASE_ROOT}/docker-calls.log" 'start sub2api-postgres' 'start sub2api-redis'
 assert_before "${CASE_ROOT}/docker-calls.log" 'start sub2api-redis' 'start sub2api-caddy'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+# External dependencies are not represented as local containers.  The guard
+# must not inspect or change PostgreSQL/Redis, but still restores Caddy and the
+# active application slot.
+new_case external-dependencies
+write_container sub2api-caddy false exited false 0 caddy:2
+write_container sub2api-green false exited false 0 sub2api:current
+write_external_runtime_files
+write_external_container_contract sub2api-green exact
+SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
+  SUB2API_EXTERNAL_RUNTIME_ENV_FILE="${CASE_ROOT}/external-runtime.env" \
+  SUB2API_EXTERNAL_CA_FILE="${CASE_ROOT}/external-ca.crt" \
+  run_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'runtime dependency mode=external; skipping local PostgreSQL and Redis container inspection and lifecycle actions'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-caddy'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'sub2api-postgres'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'sub2api-redis'
+
+# External recovery must not start an historical local-dependency container.
+# Its old environment/mount set is rejected before docker start, even though
+# the active external slot has already exhausted same-slot recovery.
+new_case external-local-fallback-never-starts
+write_container sub2api-caddy true healthy false 0 caddy:2
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_external_runtime_files
+write_external_container_contract sub2api-green exact
+write_external_container_contract sub2api-blue local
+if SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
+  SUB2API_EXTERNAL_RUNTIME_ENV_FILE="${CASE_ROOT}/external-runtime.env" \
+  SUB2API_EXTERNAL_CA_FILE="${CASE_ROOT}/external-ca.crt" \
+  run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard started a local-dependency historical fallback in external mode'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'external runtime verification failed before application lifecycle action: sub2api-blue'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+[ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'blue-green helper ran for a rejected local fallback'
+
+# The active slot is verified before Caddy can start/restart. This prevents a
+# stopped Caddy from exposing a pre-cut local-dependency app during recovery.
+new_case external-drifted-active-never-starts-caddy
+write_container sub2api-caddy false exited false 0 caddy:2
+write_container sub2api-green false exited false 0 sub2api:old-local healthy healthy
+write_external_runtime_files
+write_external_container_contract sub2api-green local
+if SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
+  SUB2API_EXTERNAL_RUNTIME_ENV_FILE="${CASE_ROOT}/external-runtime.env" \
+  SUB2API_EXTERNAL_CA_FILE="${CASE_ROOT}/external-ca.crt" \
+  run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a drifted external active container'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'active application external runtime does not match the current external dependency contract'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-caddy'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-green'
+
+# Invalid modes fail before the guard acquires its maintenance lock or reaches
+# Docker, so an operator typo cannot affect local dependencies or application
+# traffic.
+new_case invalid-dependency-mode
+if SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=unsupported run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted an unsupported dependency mode'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external (got: unsupported)'
+[ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called for an unsupported dependency mode'
+[ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'blue-green helper ran for an unsupported dependency mode'
+
+# A configured blank is also invalid; only an unset value gets the compatible
+# local default.
+new_case blank-dependency-mode
+if SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE= run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a blank dependency mode'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external (got: )'
+[ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called for a blank dependency mode'
 
 # A running but persistently unhealthy dependency receives one explicit
 # restart before the guard gives up on application recovery.

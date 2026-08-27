@@ -52,6 +52,11 @@ DRAIN_ACTIVE_WINDOW_SECONDS="${SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS:-600}
 DRAIN_RETRY_DELAY_SECONDS="${SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS:-3600}"
 DRAIN_MAX_RUNTIME_SECONDS="${SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS:-0}"
 DRAIN_CADDY_CONFIG_PATH="${SUB2API_RELEASE_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
+# Keep an explicitly blank value invalid. An unset setting preserves the
+# deployed local-dependency release behavior.
+DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE-local}"
+EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
+EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -99,6 +104,28 @@ require_go_memory_limit() {
   esac
 }
 
+require_absolute_path() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    /*) ;;
+    *) die "$name must be an absolute path" ;;
+  esac
+  case "$value" in
+    *$'\n'*|*$'\r'*) die "$name must not contain a line break" ;;
+  esac
+}
+
+run_blue_green() {
+  # Database and Redis values remain inside the root-only runtime env file.
+  # This boundary passes only the selector and paths, never credential values.
+  env \
+    SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE="$DEPENDENCY_MODE" \
+    SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$EXTERNAL_RUNTIME_ENV_FILE" \
+    SUB2API_EXTERNAL_CA_FILE="$EXTERNAL_CA_FILE" \
+    "$@"
+}
+
 for command_name in docker curl flock grep awk perl systemd-run; do
   require_cmd "$command_name"
 done
@@ -119,6 +146,14 @@ require_positive_integer SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS "$DRAIN_INTERVAL
 require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACTIVE_WINDOW_SECONDS"
 require_non_negative_integer SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS "$DRAIN_RETRY_DELAY_SECONDS"
 require_non_negative_integer SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS "$DRAIN_MAX_RUNTIME_SECONDS"
+case "$DEPENDENCY_MODE" in
+  local|external) ;;
+  *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external" ;;
+esac
+if [ "$DEPENDENCY_MODE" = "external" ]; then
+  require_absolute_path SUB2API_EXTERNAL_RUNTIME_ENV_FILE "$EXTERNAL_RUNTIME_ENV_FILE"
+  require_absolute_path SUB2API_EXTERNAL_CA_FILE "$EXTERNAL_CA_FILE"
+fi
 
 if [ "$PREBUILT_MODE" != "true" ]; then
   case "$SOURCE_DIR" in
@@ -258,7 +293,7 @@ log "Image ready: $(docker image inspect "$IMAGE" --format '{{.Id}} {{.Size}} by
 
 rollback() {
   log "Public verification failed; attempting automatic rollback to ${OLD_CONTAINER}"
-  env \
+  run_blue_green \
     OLD_CONTAINER="$NEW_CONTAINER" \
     NEW_CONTAINER="$OLD_CONTAINER" \
     NEW_IMAGE="$OLD_IMAGE" \
@@ -309,7 +344,7 @@ cleanup_failed_inactive_target() {
 }
 
 log "Switching ${OLD_UPSTREAM} to ${NEW_UPSTREAM} through the existing blue-green script"
-if ! env \
+if ! run_blue_green \
   OLD_CONTAINER="$OLD_CONTAINER" \
   NEW_CONTAINER="$NEW_CONTAINER" \
   NEW_IMAGE="$IMAGE" \

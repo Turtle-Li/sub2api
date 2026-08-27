@@ -1,0 +1,35 @@
+[Unit]
+Description=Sub2API Tokyo to production Redis forwarding tunnel
+Wants=network-online.target
+After=network-online.target
+ConditionFileIsExecutable=/usr/local/libexec/sub2api-redis-streaming-tunnel.sh
+ConditionPathExists=/etc/sub2api-redis-tunnel.conf
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sub2api-redis-tunnel
+Group=sub2api-redis-tunnel
+UMask=0077
+Environment=SUB2API_REDIS_TUNNEL_CONFIG=/etc/sub2api-redis-tunnel.conf
+ExecStart=/usr/local/libexec/sub2api-redis-streaming-tunnel.sh
+Restart=always
+RestartSec=10s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

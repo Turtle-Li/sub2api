@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Sub2API Redis replica streaming watchdog
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+RandomizedDelaySec=5s
+Persistent=true
+Unit=sub2api-redis-streaming-watchdog.service
+
+[Install]
+WantedBy=timers.target

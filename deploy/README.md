@@ -85,8 +85,8 @@ timer runs 30 seconds after boot and 30 seconds after each completed check. It
 does not build, pull, or create application containers. Every run acquires the
 same `/run/lock/sub2api-maintenance.lock` used by production releases, then:
 
-1. starts and verifies PostgreSQL, Redis, and Caddy, restarting a dependency
-   once if it remains unhealthy;
+1. in the default `local` dependency mode, starts and verifies PostgreSQL,
+   Redis, and Caddy, restarting a dependency once if it remains unhealthy;
 2. resolves the active application from the host Caddyfile and requires the
    host file, Caddy startup file, and live Admin API to agree;
 3. starts or restarts that active container and verifies its internal and
@@ -103,6 +103,37 @@ contention all fail closed. Lock contention is a successful no-op because a
 release or other planned maintenance owns the runtime at that moment.
 The drain monitor also takes this lock around its final Caddy revalidation and
 `docker stop`, so it cannot stop an old slot while the guard is promoting it.
+
+`SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE` controls whether the guard owns the
+local PostgreSQL and Redis containers. Leaving it unset, or setting it to
+`local`, preserves the behavior above. Set it explicitly to `external` only
+after those dependencies are operated outside this host's Docker runtime:
+
+```bash
+# /etc/sub2api-autodeploy.env
+SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external
+```
+
+In `external` mode, the guard never inspects, starts, or restarts
+`sub2api-postgres` or `sub2api-redis`; external dependency health must be
+monitored and recovered by its owner. Before **any** application or Caddy
+lifecycle action, it validates the selected active application against the
+current protected external runtime contract. It validates every historical
+fallback again immediately before starting or routing it. The contract requires
+the exact external database/Redis environment, the two read-only CA mounts,
+the expected data volume, and exactly one expected Docker network; a retained
+pre-cut local-dependency container fails closed and is never started.
+
+Set the same protected inputs used by the external blue-green release:
+`SUB2API_EXTERNAL_RUNTIME_ENV_FILE` and `SUB2API_EXTERNAL_CA_FILE`.
+The guard defaults its expected network and data volume to
+`sub2api_default` and `sub2api_sub2api_data`; override only when required
+with `SUB2API_RUNTIME_GUARD_NETWORK` and
+`SUB2API_RUNTIME_GUARD_DATA_VOLUME`. This validation occurs before a stopped
+Caddy can be started, so an invalid active contract cannot briefly expose an
+old local application. The only accepted values are `local` and `external`;
+an explicitly blank or unknown value fails closed before the guard acquires the
+maintenance lock or uses Docker.
 
 Use the guard for emergency recovery instead of guessing a Compose service or
 container color:
@@ -138,6 +169,90 @@ starts the candidate application.
 These installers are preparation tools, not cutover authorization. They do not
 promote the candidate, change Caddy, start a candidate application, or switch
 production database traffic.
+
+### Redis full and incremental pre-sync preparation
+
+Redis pre-sync is likewise preparation only: it does not route application
+traffic, change Caddy, start the candidate application, or authorize a
+cutover. Run all of the following under the same maintenance window/lock
+discipline as production releases.
+
+1. On production, run `install-redis-streaming-primary.sh` with a protected
+   Ed25519 public key, root-only source Redis client credential file,
+   root-only replication credential file, and the Tokyo tunnel source IPv4
+   `/32`. It creates an internal Docker relay and only a
+   `127.0.0.1:16380` host socket—production `sub2api-redis` must have no
+   published host port. The restricted SSH key permits only that exact
+   loopback destination and source `/32`.
+2. The default ACL user is `sub2api_replication`; its credential is supplied
+   only through root-only files and it receives only `+ping`, `+replconf`, and
+   `+psync`. The source sets a `64mb` (67,108,864 byte) replication backlog
+   online, without restarting production Redis, the application, or Caddy.
+   Production Redis is command-line started and has no writable
+   `redis.conf`/ACL file, so both the ACL and backlog are **runtime-only**:
+   a production Redis restart removes them. Re-run the primary preparation
+   and verify source/replica readiness immediately before any cutover.
+3. On the Tokyo candidate, run `install-redis-streaming-tunnel.sh`. Its
+   `--local-bind` must equal the gateway of the internal
+   `sub2api-candidate-internal` Docker network. The installer permits only
+   that network CIDR to reach that gateway/port in UFW, and installs a
+   strict-host-key, automatically reconnecting SSH local forward. Preload the
+   documented digest-pinned Redis probe image before running the installer;
+   the installer intentionally fails before changing UFW if that image is
+   absent.
+4. Keep the candidate application stopped and run
+   `prepare-redis-streaming-replica.sh`. Its root-owned mode-0600 runtime
+   environment must name the candidate Redis container/application container,
+   internal probe network, root-only local Redis client credential file,
+   `SUB2API_REDIS_RUNTIME_CONFIG` (the container path),
+   `SUB2API_REDIS_RUNTIME_CONFIG_SOURCE` (the host configuration file),
+   tunnel gateway/port `16380`, and `SUB2API_REDIS_REPLICATION_USER`.
+   The host file and its containing directory must be non-symlinks owned by
+   the exact numeric Redis service uid/gid (for the official image this is
+   commonly `999:1000`): directory mode `0700`, file mode `0600`. The
+   container must expose the exact host directory as a read-only directory
+   bind at the runtime configuration directory, with the same configuration
+   basename. The script verifies this contract before and during the atomic
+   replacement, preserves uid/gid/mode, atomically persists `masteruser`,
+   `masterauth`, and `replicaof`, then applies those settings at runtime.
+   A root-owned `0600` configuration can make the official Redis image fail
+   to read it after restart and is rejected. A retry may resume only the exact
+   configured replica upstream; it never rewrites another upstream or
+   promotes the candidate.
+5. After full sync is ready, run `install-redis-streaming-watchdog.sh`. The
+   one-minute watchdog writes non-secret state to
+   `/run/sub2api-redis-streaming.status` with `sync_phase=incremental`.
+   It fails closed while the candidate application is running and may only
+   start the target Redis, restart the tunnel, and monitor link/sync/offset
+   lag. Each queryable Redis `INFO replication` result must name the exact
+   `SUB2API_REDIS_TUNNEL_BIND` and `SUB2API_REDIS_TUNNEL_PORT` from the
+   root-only runtime environment; another otherwise-healthy upstream is
+   unhealthy. It never changes replication topology or promotes the candidate.
+6. Before entering the final ten-second cutover window, first disable and
+   stop **both** streaming watchdog timers, stop any currently running
+   watchdog services, and confirm the PostgreSQL and Redis watchdog services
+   are inactive. Immediately before doing that, require fresh non-secret
+   `state=healthy` status files and a successful last systemd service result
+   for both watchdogs. Then acquire the final
+   `/run/lock/sub2api-maintenance.lock` for the one cutover controller. After
+   the candidate application starts, leave both watchdog timers disabled:
+   their deliberate "candidate app running" failure behavior must not race
+   the cutover or contend for the maintenance lock. These steps do not imply
+   or authorize promotion.
+
+   ```bash
+   sudo systemctl disable --now sub2api-postgres-streaming-watchdog.timer \
+     sub2api-redis-streaming-watchdog.timer
+   sudo systemctl stop sub2api-postgres-streaming-watchdog.service \
+     sub2api-redis-streaming-watchdog.service
+   ! sudo systemctl is-active --quiet sub2api-postgres-streaming-watchdog.service
+   ! sudo systemctl is-active --quiet sub2api-redis-streaming-watchdog.service
+   ```
+
+Do not set the runtime guard to `external` merely to pre-sync Redis. That mode
+belongs only to a completed dependency ownership/cutover change; the
+preparation artifacts above leave the normal local production dependency
+ownership intact.
 
 GitHub workflow concurrency serializes production runs. The receiver also holds
 an exclusive upload/release lock and fails closed if another release is in
@@ -183,6 +298,16 @@ normal production path.
 | `sub2api-postgres-streaming-watchdog.sh` | Validates recovery/receiver/lag state and repairs only a stopped standby container or tunnel |
 | `sub2api-postgres-streaming-watchdog.service` | Root-owned one-shot PostgreSQL streaming health and recovery check |
 | `sub2api-postgres-streaming-watchdog.timer` | Runs the streaming watchdog once per minute and after boot |
+| `install-redis-streaming-primary.sh` | Installs the production internal Redis relay, restricted tunnel account, runtime-only ACL, and online backlog without production restarts |
+| `install-redis-streaming-tunnel.sh` | Installs the candidate-internal-gateway Redis SSH tunnel and its exact UFW rule |
+| `sub2api-redis-streaming-tunnel.sh` | Runs the strict-host-key, reconnecting Tokyo Redis SSH local forward |
+| `sub2api-redis-streaming-tunnel.service` | Keeps the Tokyo Redis forwarding tunnel alive under systemd |
+| `prepare-redis-streaming-replica.sh` | Persists and applies candidate replica settings only while the candidate application is stopped |
+| `install-redis-streaming-watchdog.sh` | Installs and validates the candidate Redis incremental-streaming watchdog and timer |
+| `sub2api-redis-streaming-watchdog.sh` | Monitors a replica and repairs only the target Redis/tunnel while failing closed for a running candidate app |
+| `sub2api-redis-streaming-watchdog.service` | Root-owned one-shot Redis replica health check |
+| `sub2api-redis-streaming-watchdog.timer` | Runs the Redis streaming watchdog once per minute and after boot |
+| `tests/redis-streaming-test.sh` | Static and simulated safety checks for Redis pre-sync artifacts |
 | `sub2api-autodeploy.sh` | Legacy source-preparation recovery controller |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |

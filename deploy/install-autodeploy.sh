@@ -170,6 +170,7 @@ for file in \
   deploy/sub2api-autodeploy.sh \
   deploy/sub2api-github-image-release.sh \
   deploy/sub2api-server-release.sh \
+  deploy/sub2api-blue-green-release.sh \
   deploy/sub2api-drain-monitor.sh \
   deploy/sub2api-runtime-guard.sh \
   deploy/sub2api-github-deploy-trigger.sh \
@@ -183,6 +184,7 @@ done
 bash -n "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-blue-green-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh"
@@ -240,6 +242,8 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh" \
   "${SCRIPT_DIR}/sub2api-github-image-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-blue-green-release.sh" \
+  "${SCRIPT_DIR}/sub2api-blue-green-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh" \
   "${SCRIPT_DIR}/sub2api-drain-monitor.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh" \

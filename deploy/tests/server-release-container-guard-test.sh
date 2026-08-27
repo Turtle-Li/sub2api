@@ -11,6 +11,9 @@ APP_DIR="${TEST_ROOT}/app"
 WORK_ROOT="${TEST_ROOT}/worktrees"
 SOURCE_DIR="${WORK_ROOT}/release.case"
 DOCKER_CALLS="${TEST_ROOT}/docker-calls.log"
+BLUE_GREEN_ENV_LOG="${TEST_ROOT}/blue-green-env.log"
+EXTERNAL_RUNTIME_ENV_FILE="${TEST_ROOT}/external-runtime.env"
+EXTERNAL_CA_FILE="${TEST_ROOT}/db-ca.crt"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -34,11 +37,25 @@ assert_contains() {
 mkdir -p "$FAKE_BIN" "$APP_DIR/scripts" "$SOURCE_DIR"
 printf 'FROM scratch\n' >"${SOURCE_DIR}/Dockerfile"
 printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
-printf '#!/usr/bin/env bash\nexit 0\n' >"${APP_DIR}/scripts/sub2api-blue-green-release.sh"
+cat >"${APP_DIR}/scripts/sub2api-blue-green-release.sh" <<'EOF'
+#!/usr/bin/env bash
+if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
+  printf 'mode=%s runtime=%s ca=%s old=%s new=%s\n' \
+    "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
+    "${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}" \
+    "${SUB2API_EXTERNAL_CA_FILE:-}" \
+    "${OLD_CONTAINER:-}" \
+    "${NEW_CONTAINER:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
+fi
+exit 0
+EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"${APP_DIR}/scripts/sub2api-drain-monitor.sh"
 chmod +x \
   "${APP_DIR}/scripts/sub2api-blue-green-release.sh" \
   "${APP_DIR}/scripts/sub2api-drain-monitor.sh"
+
+printf '%s\n' 'DATABASE_PASSWORD=sentinel-not-for-logs' >"$EXTERNAL_RUNTIME_ENV_FILE"
+printf '%s\n' 'test-ca' >"$EXTERNAL_CA_FILE"
 
 cat >"${FAKE_BIN}/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -198,6 +215,30 @@ run_github_prebuilt_release() {
       'github-prebuilt-test'
 }
 
+run_external_github_prebuilt_release() {
+  env \
+    PATH="$FAKE_BIN:$PATH" \
+    FAKE_DOCKER_CALLS="$DOCKER_CALLS" \
+    FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
+    SUB2API_APP_DIR="$APP_DIR" \
+    SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
+    SUB2API_RELEASE_LOG_DIR="$TEST_ROOT/logs" \
+    SUB2API_RELEASE_LOCK_FILE="$TEST_ROOT/release.lock" \
+    SUB2API_MAINTENANCE_LOCK_FILE="$TEST_ROOT/maintenance.lock" \
+    SUB2API_RELEASE_MIN_FREE_BYTES=1 \
+    SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=true \
+    SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
+    SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$EXTERNAL_RUNTIME_ENV_FILE" \
+    SUB2API_EXTERNAL_CA_FILE="$EXTERNAL_CA_FILE" \
+    /bin/bash "$SCRIPT" \
+      --prebuilt \
+      'sub2api:auto-test' \
+      'abc123' \
+      '0.1.test' \
+      'https://example.invalid/health' \
+      'external-rollback-test'
+}
+
 maintenance_output="${TEST_ROOT}/maintenance-lock.log"
 flock_count_file="${TEST_ROOT}/flock-count"
 if FAKE_FLOCK_COUNT_FILE="$flock_count_file" \
@@ -264,5 +305,25 @@ fi
 assert_contains "$rollback_cleanup_output" 'Rollback completed'
 assert_contains "$rollback_cleanup_output" 'Removing failed inactive target sub2api-blue'
 assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+
+: >"$DOCKER_CALLS"
+: >"$BLUE_GREEN_ENV_LOG"
+external_rollback_output="$TEST_ROOT/external-rollback.log"
+if run_external_github_prebuilt_release >"$external_rollback_output" 2>&1; then
+  fail 'external-mode fake release unexpectedly passed a failing public health check'
+fi
+assert_contains "$external_rollback_output" 'Rollback completed'
+[ "$(wc -l <"$BLUE_GREEN_ENV_LOG" | tr -d '[:space:]')" = 2 ] \
+  || fail 'external release did not invoke the helper for both switch and rollback'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  "mode=external runtime=$EXTERNAL_RUNTIME_ENV_FILE ca=$EXTERNAL_CA_FILE old=sub2api-green new=sub2api-blue"
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  "mode=external runtime=$EXTERNAL_RUNTIME_ENV_FILE ca=$EXTERNAL_CA_FILE old=sub2api-blue new=sub2api-green"
+if grep -Fq 'mode=local' "$BLUE_GREEN_ENV_LOG"; then
+  fail 'external rollback was permitted to fall back to local dependencies'
+fi
+if grep -Fq 'sentinel-not-for-logs' "$external_rollback_output" "$BLUE_GREEN_ENV_LOG"; then
+  fail 'external runtime secret reached a release or helper log'
+fi
 
 printf 'Server release inactive-container guard tests passed.\n'
