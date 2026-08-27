@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/shopspring/decimal"
 )
 
 // PlanEntitlements is the public, structured set of benefits delivered after
@@ -118,7 +119,13 @@ func calculateRechargeCreditedAmount(paymentAmount, multiplier float64, options 
 	if !ok || option.BalanceBonus <= 0 {
 		return credited
 	}
-	return math.Round((credited+option.BalanceBonus)*100) / 100
+	// Stay on decimal for the bonus step too. Every other amount in this package
+	// is computed with shopspring/decimal; a float round here would drift from
+	// the rest of the ledger once bonuses stop being whole numbers.
+	return decimal.NewFromFloat(credited).
+		Add(decimal.NewFromFloat(option.BalanceBonus)).
+		Round(2).
+		InexactFloat64()
 }
 
 func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlements, error) {
@@ -309,17 +316,27 @@ func PlanPeriodLabel(days int, unit string) string {
 	}
 }
 
-func normalizeRechargeOptions(raw string) []RechargeOption {
+// normalizeRechargeOptions parses the stored preset list. The bool reports
+// whether the stored value was fully understood.
+//
+// This distinction matters for safety, not just diagnostics: order validation
+// only enforces fixed tiers when at least one enabled tier survives parsing. A
+// corrupted setting that silently parsed to an empty list would therefore
+// disable the whole product layer and quietly reopen free-amount top-ups. The
+// caller turns a false here into a hard rejection instead.
+func normalizeRechargeOptions(raw string) ([]RechargeOption, bool) {
 	if strings.TrimSpace(raw) == "" {
-		return []RechargeOption{}
+		return []RechargeOption{}, true
 	}
 	var options []RechargeOption
 	if err := json.Unmarshal([]byte(raw), &options); err != nil {
-		return []RechargeOption{}
+		return []RechargeOption{}, false
 	}
+	intact := true
 	valid := make([]RechargeOption, 0, len(options))
 	for _, option := range options {
 		if validateRechargeOption(option) != nil {
+			intact = false
 			continue
 		}
 		option.Label = strings.TrimSpace(option.Label)
@@ -332,7 +349,7 @@ func normalizeRechargeOptions(raw string) []RechargeOption {
 		}
 		return valid[i].SortOrder < valid[j].SortOrder
 	})
-	return valid
+	return valid, intact
 }
 
 // EnabledRechargeOptionsForCheckout keeps disabled admin presets out of the

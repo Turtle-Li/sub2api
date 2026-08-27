@@ -29,9 +29,7 @@
         </div>
         <div class="shrink-0 text-right">
           <div class="flex items-baseline gap-1">
-            <span class="text-xs text-gray-400 dark:text-dark-500">{{ planCurrencySymbol }}</span>
-            <span :class="['text-2xl font-extrabold tracking-tight', textClass]">{{ plan.price }}</span>
-            <span v-if="plan.currency" class="text-xs font-medium text-gray-400 dark:text-dark-500">{{ plan.currency }}</span>
+            <span :class="['text-2xl font-extrabold tracking-tight', textClass]">{{ displayPrice }}</span>
           </div>
           <div class="flex items-center justify-end gap-1">
             <span :class="['inline-flex shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', badgeLightClass]">
@@ -40,7 +38,7 @@
             <span class="text-[11px] text-gray-400 dark:text-dark-500">/ {{ validitySuffix }}</span>
           </div>
           <div v-if="plan.original_price" class="mt-0.5 flex items-center justify-end gap-1.5">
-            <span class="text-xs text-gray-400 line-through dark:text-dark-500">{{ planCurrencySymbol }}{{ plan.original_price }}<template v-if="plan.currency"> {{ plan.currency }}</template></span>
+            <span class="text-xs text-gray-400 line-through dark:text-dark-500">{{ displayOriginalPrice }}</span>
             <span :class="['rounded-full px-1.5 py-0.5 text-[10px] font-bold', discountClass]">{{ discountText }}</span>
           </div>
         </div>
@@ -94,7 +92,7 @@
       </div>
 
       <div v-if="hasEntitlements" class="payment-product-card__benefits space-y-1 border border-emerald-100 bg-emerald-50/60 dark:border-emerald-900/40 dark:bg-emerald-950/20">
-        <p v-if="plan.entitlements?.balance_bonus" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ plan.entitlements.balance_bonus.toFixed(2) }} {{ t('payment.entitlements.balanceBonus') }}</p>
+        <p v-if="plan.entitlements?.balance_bonus" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ formatCredit(plan.entitlements.balance_bonus) }} {{ t('payment.entitlements.balanceBonus') }}</p>
         <p v-if="plan.entitlements?.reset_card_count" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ plan.entitlements.reset_card_count }} {{ t('payment.entitlements.resetCards', { days: plan.entitlements.reset_card_expiry_days }) }}</p>
         <p v-if="plan.entitlements?.concurrency" class="font-medium text-emerald-700 dark:text-emerald-300">{{ t('payment.entitlements.concurrency', { count: plan.entitlements.concurrency }) }}</p>
         <p v-if="plan.entitlements?.message" class="text-emerald-700/80 dark:text-emerald-300/80">{{ plan.entitlements.message }}</p>
@@ -122,7 +120,8 @@ import type { UserSubscription } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { hasPeakRate as groupHasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
 import { planValiditySuffix } from './validity'
-import { currencySymbol } from '@/components/payment/currency'
+import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from '@/components/payment/currency'
+import { subscriptionGatewayAmount } from '@/components/payment/pricing'
 import {
   platformAccentBarClass,
   platformBadgeLightClass,
@@ -134,7 +133,20 @@ import {
   platformLabel,
 } from '@/utils/platformColors'
 
-const props = defineProps<{ plan: SubscriptionPlan; activeSubscriptions?: UserSubscription[] }>()
+const props = withDefaults(defineProps<{
+  plan: SubscriptionPlan
+  activeSubscriptions?: UserSubscription[]
+  /** Gateway currency the plan will actually be charged in. */
+  displayCurrency?: string
+  locale?: string
+  /** Subscription CNY conversion rate; only applied for the default currency, as on the server. */
+  usdToCnyRate?: number
+}>(), {
+  activeSubscriptions: undefined,
+  displayCurrency: DEFAULT_PAYMENT_CURRENCY,
+  locale: undefined,
+  usdToCnyRate: 0,
+})
 const emit = defineEmits<{ select: [plan: SubscriptionPlan] }>()
 const { t } = useI18n()
 
@@ -179,7 +191,27 @@ const rateDisplay = computed(() => {
 })
 
 const appStore = useAppStore()
-const planCurrencySymbol = computed(() => currencySymbol(props.plan.currency || 'USD'))
+
+// The list card used to print plan.price behind a hardcoded USD symbol while
+// the confirm step converted the same plan into the gateway currency, so one
+// plan showed two different prices. Both now go through the server's rule.
+function formatGatewayPrice(value: number): string {
+  return formatPaymentAmount(
+    subscriptionGatewayAmount(value, props.usdToCnyRate, props.displayCurrency),
+    props.displayCurrency,
+    props.locale,
+  )
+}
+
+const displayPrice = computed(() => formatGatewayPrice(props.plan.price))
+const displayOriginalPrice = computed(() =>
+  props.plan.original_price ? formatGatewayPrice(props.plan.original_price) : ''
+)
+
+// Bonus balance is platform credit, not a gateway charge.
+function formatCredit(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2)
+}
 
 const hasPeakRate = computed(() => groupHasPeakRate(props.plan))
 

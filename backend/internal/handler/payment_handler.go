@@ -167,6 +167,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		SubscriptionUSDToCNYRate:      cfg.SubscriptionUSDToCNYRate,
 		RechargeFeeRate:               cfg.RechargeFeeRate,
 		RechargeOptions:               service.EnabledRechargeOptionsForCheckout(cfg.RechargeOptions),
+		RechargeMode:                  service.RechargeModeForConfig(cfg),
 		HelpText:                      cfg.HelpText,
 		HelpImageURL:                  cfg.HelpImageURL,
 		StripePublishableKey:          cfg.StripePublishableKey,
@@ -185,6 +186,11 @@ type checkoutInfoResponse struct {
 	SubscriptionUSDToCNYRate      float64                         `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate               float64                         `json:"recharge_fee_rate"`
 	RechargeOptions               []service.RechargeOption        `json:"recharge_options"`
+	// RechargeMode is "fixed" when the server only accepts the tiers above, and
+	// "custom" when any amount inside the min/max range is accepted. Clients
+	// must not infer this from an empty tier list — a tier list can also be
+	// empty because every tier fell outside the visible payment method limits.
+	RechargeMode string `json:"recharge_mode"`
 	HelpText                      string                          `json:"help_text"`
 	HelpImageURL                  string                          `json:"help_image_url"`
 	StripePublishableKey          string                          `json:"stripe_publishable_key"`

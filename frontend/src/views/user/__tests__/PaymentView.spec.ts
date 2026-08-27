@@ -646,6 +646,57 @@ describe('PaymentView desktop deep links', () => {
 
     expect(wrapper.findComponent(AmountInput).props('modelValue')).toBe(30)
   })
+
+  // An empty tier list has two very different causes. Previously both fell back
+  // to the hardcoded [20, 50, 100, 200, 500], so when the server had tiers that
+  // all sat outside the visible method limits the page offered five amounts the
+  // server was guaranteed to reject with INVALID_RECHARGE_OPTION.
+  it('offers the built-in amounts only when the server accepts custom amounts', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_mode: 'custom',
+      recharge_options: [],
+    }))
+
+    const custom = shallowMount(PaymentView, {
+      global: {
+        stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    expect(custom.findComponent(AmountInput).props('amounts')).toEqual([20, 50, 100, 200, 500])
+  })
+
+  it('offers no amounts when the server enforces tiers but none are selectable', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_mode: 'fixed',
+      // Every configured tier is filtered out by the visible method limits.
+      recharge_options: [],
+    }))
+
+    const fixed = shallowMount(PaymentView, {
+      global: {
+        stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    expect(fixed.findComponent(AmountInput).props('amounts')).toEqual([])
+  })
+
+  // Older servers do not send recharge_mode; keep the previous inference there.
+  it('falls back to inferring the mode when the server does not report one', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({ recharge_options: [] }))
+
+    const legacy = shallowMount(PaymentView, {
+      global: {
+        stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    expect(legacy.findComponent(AmountInput).props('amounts')).toEqual([20, 50, 100, 200, 500])
+  })
 })
 
 describe('PaymentView payment recovery', () => {

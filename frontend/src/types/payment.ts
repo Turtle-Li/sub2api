@@ -78,6 +78,15 @@ export interface CheckoutInfoResponse {
   subscription_usd_to_cny_rate: number
   recharge_fee_rate: number
   recharge_options: RechargeOption[]
+  /**
+   * "fixed" = the server accepts only the tiers in recharge_options.
+   * "custom" = any amount inside global_min/global_max is accepted.
+   * Never infer this from an empty tier list: the list is also empty when every
+   * configured tier fell outside the visible payment method limits, and in that
+   * case the server still rejects everything that is not a configured tier.
+   * Absent on older servers, which is why the union includes undefined.
+   */
+  recharge_mode?: 'fixed' | 'custom'
   help_text: string
   help_image_url: string
   stripe_publishable_key: string

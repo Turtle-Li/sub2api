@@ -208,12 +208,38 @@ func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrder
 		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "amount out of range").
 			WithMetadata(map[string]string{"min": fmt.Sprintf("%.2f", cfg.MinAmount), "max": fmt.Sprintf("%.2f", cfg.MaxAmount)})
 	}
+	// Fail closed on a corrupted preset list. Falling through would drop the
+	// fixed-tier requirement below and quietly reopen arbitrary top-up amounts
+	// that carry no entitlements.
+	if cfg.RechargeOptionsInvalid {
+		return nil, infraerrors.BadRequest("RECHARGE_OPTIONS_UNAVAILABLE", "recharge tiers are misconfigured; balance top-up is temporarily unavailable")
+	}
 	if len(EnabledRechargeOptionsForCheckout(cfg.RechargeOptions)) > 0 {
 		if _, ok := rechargeOptionForAmount(cfg.RechargeOptions, req.Amount); !ok {
 			return nil, infraerrors.BadRequest("INVALID_RECHARGE_OPTION", "amount must match an enabled recharge option")
 		}
 	}
 	return nil, nil
+}
+
+// Recharge pricing modes reported to clients so they stop inferring the mode
+// from an empty tier list. "fixed" means the server accepts only the tiers it
+// returned; "custom" means any amount inside the configured min/max is valid.
+const (
+	RechargeModeFixed  = "fixed"
+	RechargeModeCustom = "custom"
+)
+
+// RechargeModeForConfig mirrors the rule validateOrderInput enforces, so the
+// checkout contract and order validation can never drift apart.
+func RechargeModeForConfig(cfg *PaymentConfig) string {
+	if cfg == nil {
+		return RechargeModeCustom
+	}
+	if cfg.RechargeOptionsInvalid || len(EnabledRechargeOptionsForCheckout(cfg.RechargeOptions)) > 0 {
+		return RechargeModeFixed
+	}
+	return RechargeModeCustom
 }
 
 func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRequest) (*dbent.SubscriptionPlan, error) {

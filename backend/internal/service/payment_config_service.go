@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"strconv"
@@ -82,6 +83,10 @@ type PaymentConfig struct {
 	// Use Alipay face-to-face precreate and an app deep link on mobile clients.
 	AlipayMobilePrecreateDeepLink bool             `json:"alipay_mobile_precreate_deep_link"`
 	RechargeOptions               []RechargeOption `json:"recharge_options"`
+	// RechargeOptionsInvalid marks a stored preset list we could not fully
+	// parse. Order creation refuses balance top-ups while this is set rather
+	// than falling back to free amounts with no entitlements.
+	RechargeOptionsInvalid bool `json:"recharge_options_invalid"`
 	// UnifiedPayment* are a read-only projection of the runtime/Vault-backed
 	// adapter. Secrets and Vault contents are never returned to the admin API.
 	UnifiedPaymentEnabled bool     `json:"unified_payment_enabled,omitempty"`
@@ -292,7 +297,15 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 
 		AlipayForceQRCode:             vals[SettingAlipayForceQRCode] == "true",
 		AlipayMobilePrecreateDeepLink: vals[SettingAlipayMobilePrecreateDeepLink] == "true",
-		RechargeOptions:               normalizeRechargeOptions(vals[SettingRechargeOptions]),
+	}
+	rechargeOptions, rechargeOptionsIntact := normalizeRechargeOptions(vals[SettingRechargeOptions])
+	cfg.RechargeOptions = rechargeOptions
+	cfg.RechargeOptionsInvalid = !rechargeOptionsIntact
+	if !rechargeOptionsIntact {
+		slog.Error("payment recharge options setting could not be fully parsed; balance top-ups are blocked until it is fixed",
+			"setting", SettingRechargeOptions,
+			"parsed_options", len(rechargeOptions),
+		)
 	}
 	cfg.AlipayMobilePrecreateDeepLink = pcEnvBoolOverride(
 		SettingAlipayMobilePrecreateDeepLink,

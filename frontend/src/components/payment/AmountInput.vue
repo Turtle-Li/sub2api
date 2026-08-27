@@ -35,11 +35,11 @@
 
             <div class="shrink-0 text-right">
               <div class="flex items-baseline justify-end gap-1">
-                <span class="text-xs text-gray-400 dark:text-dark-500">$</span>
-                <span class="text-2xl font-extrabold tracking-tight text-primary-600 dark:text-primary-300">{{ formatAmountValue(option.amount) }}</span>
+                <span class="text-2xl font-extrabold tracking-tight text-primary-600 dark:text-primary-300">{{ formatAmount(option.amount) }}</span>
               </div>
+              <p v-if="feeRate > 0" class="mt-0.5 text-[10px] text-gray-400 dark:text-dark-500">{{ t('payment.plusFee', { rate: feeRate }) }}</p>
               <div v-if="discountPercent(option) > 0" class="mt-1 flex items-center justify-end gap-1.5">
-                <span class="text-xs text-gray-400 line-through dark:text-dark-500">${{ formatAmountValue(option.original_price || 0) }}</span>
+                <span class="text-xs text-gray-400 line-through dark:text-dark-500">{{ formatAmount(option.original_price || 0) }}</span>
                 <span class="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
                   -{{ discountPercent(option) }}%
                 </span>
@@ -60,7 +60,7 @@
 
           <div v-if="hasBenefits(option)" class="payment-product-card__benefits space-y-1 border border-emerald-100 bg-emerald-50/60 dark:border-emerald-900/40 dark:bg-emerald-950/20">
             <p v-if="option.balance_bonus && option.balance_bonus > 0" class="font-medium text-emerald-700 dark:text-emerald-300">
-              + ${{ option.balance_bonus.toFixed(2) }} {{ t('payment.entitlements.balanceBonus') }}
+              + {{ formatCredit(option.balance_bonus) }} {{ t('payment.entitlements.balanceBonus') }}
             </p>
             <p v-if="option.concurrency && option.concurrency > 0" class="font-medium text-emerald-700 dark:text-emerald-300">
               {{ t('payment.entitlements.concurrency', { count: option.concurrency }) }}
@@ -100,6 +100,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RechargeOption } from '@/types/payment'
+import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from './currency'
 
 const props = withDefaults(defineProps<{
   amounts?: number[]
@@ -107,11 +108,19 @@ const props = withDefaults(defineProps<{
   modelValue: number | null
   min?: number
   max?: number
+  /** Gateway currency the tier amounts are charged in. */
+  currency?: string
+  locale?: string
+  /** Gateway fee percentage, surfaced so the tier price is not read as the total. */
+  feeRate?: number
 }>(), {
   amounts: () => [20, 50, 100, 200, 500],
   options: () => [],
   min: 0,
   max: 0,
+  currency: DEFAULT_PAYMENT_CURRENCY,
+  locale: undefined,
+  feeRate: 0,
 })
 
 const emit = defineEmits<{
@@ -142,8 +151,18 @@ function selectAmount(amount: number) {
   emit('update:modelValue', amount)
 }
 
+// Tier amounts are charged in the gateway currency, so they must be formatted
+// with it. Hardcoding "$" put a dollar sign on the card and a yuan sign in the
+// order summary directly below it, for the same money.
 function formatAmount(value: number): string {
-  return `$${value.toFixed(2)}`
+  return formatPaymentAmount(value, props.currency, props.locale)
+}
+
+// Balance bonuses are platform credit, not a gateway charge. Labelling them
+// with a currency symbol conflates the two units; the caller's translation
+// supplies the noun.
+function formatCredit(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2)
 }
 
 function formatAmountValue(value: number): string {

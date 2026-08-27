@@ -29,9 +29,16 @@ const i18n = createI18n({
   },
 });
 
-const mountPlanCard = (groupPlatform: string, overrides: Partial<SubscriptionPlan> = {}) =>
+type PricingProps = { displayCurrency?: string; usdToCnyRate?: number };
+
+const mountPlanCard = (
+  groupPlatform: string,
+  overrides: Partial<SubscriptionPlan> = {},
+  pricing: PricingProps = {},
+) =>
   mount(SubscriptionPlanCard, {
     props: {
+      ...pricing,
       plan: {
         id: 1,
         group_id: 10,
@@ -84,13 +91,26 @@ describe("SubscriptionPlanCard", () => {
     expect(mountPlanCard("openai", { validity_days: 30, validity_unit: "day" }).text()).toContain("/ 30payment.days");
   });
 
-  it("uses the configured currency symbol while preserving USD for legacy plans", () => {
-    const cnyPlan = mountPlanCard("openai", { currency: "CNY", original_price: 20 }).text();
+  // The card used to print plan.price behind a symbol derived from plan.currency
+  // (defaulting to USD), while the confirm step converted the same plan into the
+  // gateway currency — one plan, two prices. Both now follow the server rule.
+  it("prices the plan in the gateway currency, not the plan's nominal currency", () => {
+    const text = mountPlanCard("openai", { currency: "USD", original_price: 20 }, {
+      displayCurrency: "CNY",
+    }).text();
 
-    expect(cnyPlan).toContain("¥10CNY");
-    expect(cnyPlan).toContain("¥20CNY");
-    expect(mountPlanCard("openai", { currency: "USD" }).text()).toContain("$10USD");
-    expect(mountPlanCard("openai", { currency: "" }).text()).toContain("$10");
+    expect(text).toContain("¥10.00");
+    expect(text).toContain("¥20.00");
+    expect(text).not.toContain("$10");
+  });
+
+  // Mirrors calculateSubscriptionGatewayBaseAmount: the rate is applied only for
+  // the default gateway currency. A USD gateway charges the plan price as-is.
+  it("applies the subscription rate only for the default gateway currency", () => {
+    expect(mountPlanCard("openai", {}, { displayCurrency: "CNY", usdToCnyRate: 6.75 }).text())
+      .toContain("¥67.50");
+    expect(mountPlanCard("openai", {}, { displayCurrency: "USD", usdToCnyRate: 6.75 }).text())
+      .toContain("$10.00");
   });
 
   it.each([
@@ -122,7 +142,7 @@ describe("SubscriptionPlanCard", () => {
     });
     const title = wrapper.get("h3");
     const badge = wrapper.findAll("span").find((node) => node.text() === "OpenAI");
-    const price = wrapper.findAll("span").find((node) => node.text() === "123.45");
+    const price = wrapper.findAll("span").find((node) => node.text() === "¥123.45");
 
     expect(title.element.parentElement?.classList).toContain("min-w-0");
     expect(title.element.parentElement?.classList).toContain("flex-1");

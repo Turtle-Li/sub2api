@@ -106,13 +106,14 @@ func TestPlanDiscountPercentAndPeriodLabel(t *testing.T) {
 }
 
 func TestNormalizeRechargeOptionsFiltersAndSorts(t *testing.T) {
-	options := normalizeRechargeOptions(`[
+	options, intact := normalizeRechargeOptions(`[
 		{"amount": 100, "original_price": 120, "label": "  Popular ", "balance_bonus": 8, "estimated_rate_multiplier": 0.9, "estimated_tokens": 12000000, "concurrency": 5, "sort_order": 20, "enabled": true},
 		{"amount": 10, "sort_order": 10, "enabled": true},
 		{"amount": 50, "sort_order": 30, "enabled": false},
 		{"amount": 0, "enabled": true},
 		{"amount": 200, "balance_bonus": -1, "enabled": true}
 	]`)
+	require.False(t, intact, "two entries were dropped as invalid")
 	require.Len(t, options, 3)
 	require.Equal(t, 10.0, options[0].Amount)
 	require.Equal(t, "Popular", options[1].Label)
@@ -123,7 +124,36 @@ func TestNormalizeRechargeOptionsFiltersAndSorts(t *testing.T) {
 	require.Equal(t, 5, options[1].Concurrency)
 	require.Equal(t, 16.67, rechargeOptionDiscountPercent(options[1]))
 	require.Len(t, EnabledRechargeOptionsForCheckout(options), 2)
-	require.Len(t, normalizeRechargeOptions(`[{"amount": 25}]`), 1)
+
+	legacy, legacyIntact := normalizeRechargeOptions(`[{"amount": 25}]`)
+	require.True(t, legacyIntact)
+	require.Len(t, legacy, 1)
+}
+
+// A corrupted setting must be reported, not silently normalized to "no tiers
+// configured" — that would drop the fixed-tier requirement in order validation
+// and reopen arbitrary top-up amounts.
+func TestNormalizeRechargeOptionsReportsUnparseableSetting(t *testing.T) {
+	options, intact := normalizeRechargeOptions(`{"amount": 25}`)
+	require.False(t, intact)
+	require.Empty(t, options)
+
+	empty, emptyIntact := normalizeRechargeOptions("   ")
+	require.True(t, emptyIntact, "an unset value is a valid custom-amount configuration")
+	require.Empty(t, empty)
+}
+
+func TestRechargeModeForConfig(t *testing.T) {
+	require.Equal(t, RechargeModeCustom, RechargeModeForConfig(&PaymentConfig{}))
+	require.Equal(t, RechargeModeFixed, RechargeModeForConfig(&PaymentConfig{
+		RechargeOptions: []RechargeOption{{Amount: 100, Enabled: true}},
+	}))
+	// Tiers exist but are all disabled: the server accepts free amounts again.
+	require.Equal(t, RechargeModeCustom, RechargeModeForConfig(&PaymentConfig{
+		RechargeOptions: []RechargeOption{{Amount: 100, Enabled: false}},
+	}))
+	// Corrupted config fails closed, so clients must not offer free amounts.
+	require.Equal(t, RechargeModeFixed, RechargeModeForConfig(&PaymentConfig{RechargeOptionsInvalid: true}))
 }
 
 func TestCalculateRechargeCreditedAmountAddsConfiguredBonusAfterGlobalMultiplier(t *testing.T) {

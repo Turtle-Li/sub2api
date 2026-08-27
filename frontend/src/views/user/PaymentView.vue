@@ -51,7 +51,7 @@
                 </div>
                 <div class="shrink-0 text-right">
                   <p class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.currentBalance') }}</p>
-                  <p class="mt-1 text-xl font-bold tracking-tight text-gray-900 dark:text-white">${{ user?.balance?.toFixed(2) || '0.00' }}</p>
+                  <p class="mt-1 text-xl font-bold tracking-tight text-gray-900 dark:text-white">{{ formatCreditAmount(user?.balance || 0) }}</p>
                 </div>
               </div>
             </section>
@@ -75,6 +75,9 @@
                 :options="rechargePresetOptions"
                 :min="globalMinAmount"
                 :max="globalMaxAmount"
+                :currency="selectedCurrency"
+                :locale="localeCode"
+                :fee-rate="feeRate"
               />
               <p v-if="amountError" class="mt-2 text-xs text-amber-600 dark:text-amber-300">{{ amountError }}</p>
             </section>
@@ -105,11 +108,11 @@
                 </div>
                 <div v-if="rechargeBalanceBonus > 0" class="flex justify-between">
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.rechargeBonus') }}</span>
-                  <span class="font-medium text-emerald-600 dark:text-emerald-300">+ ${{ rechargeBalanceBonus.toFixed(2) }}</span>
+                  <span class="font-medium text-emerald-600 dark:text-emerald-300">+ {{ formatCreditAmount(rechargeBalanceBonus) }}</span>
                 </div>
                 <div v-if="balanceRechargeMultiplier !== 1 || rechargeBalanceBonus > 0" class="flex justify-between" :class="{ 'border-t border-gray-200 pt-2 dark:border-dark-600': feeRate <= 0 }">
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.creditedBalance') }}</span>
-                  <span class="text-gray-900 dark:text-white">${{ creditedAmount.toFixed(2) }}</span>
+                  <span class="text-gray-900 dark:text-white">{{ formatCreditAmount(creditedAmount) }}</span>
                 </div>
                 <p v-if="balanceRechargeMultiplier !== 1" class="border-t border-gray-200 pt-2 text-xs text-gray-500 dark:border-dark-600 dark:text-gray-400">
                   {{ t('payment.rechargeRatePreview', { currency: selectedCurrency, usd: balanceRechargeMultiplier.toFixed(2) }) }}
@@ -156,7 +159,7 @@
                   {{ selectedPlan.description }}
                 </p>
                 <div v-if="hasPlanEntitlements(selectedPlan)" class="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5 text-sm dark:border-emerald-900/40 dark:bg-emerald-950/20">
-                  <p v-if="selectedPlan.entitlements?.balance_bonus" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ selectedPlan.entitlements.balance_bonus.toFixed(2) }} {{ t('payment.entitlements.balanceBonus') }}</p>
+                  <p v-if="selectedPlan.entitlements?.balance_bonus" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ formatCreditAmount(selectedPlan.entitlements.balance_bonus) }} {{ t('payment.entitlements.balanceBonus') }}</p>
                   <p v-if="selectedPlan.entitlements?.reset_card_count" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ selectedPlan.entitlements.reset_card_count }} {{ t('payment.entitlements.resetCards', { days: selectedPlan.entitlements.reset_card_expiry_days }) }}</p>
                   <p v-if="selectedPlan.entitlements?.concurrency" class="font-medium text-emerald-700 dark:text-emerald-300">{{ t('payment.entitlements.concurrency', { count: selectedPlan.entitlements.concurrency }) }}</p>
                   <p v-if="selectedPlan.entitlements?.message" class="mt-1 text-emerald-700/80 dark:text-emerald-300/80">{{ selectedPlan.entitlements.message }}</p>
@@ -249,7 +252,8 @@
                   </div>
                 </div>
                 <div :class="planGridClass">
-                  <SubscriptionPlanCard v-for="plan in visibleSubscriptionPlans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions" @select="selectPlan" />
+                  <SubscriptionPlanCard v-for="plan in visibleSubscriptionPlans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions"
+                    :display-currency="selectedCurrency" :locale="localeCode" :usd-to-cny-rate="subscriptionUsdToCnyRate" @select="selectPlan" />
                 </div>
               </div>
               <!-- Active subscriptions (compact, below plan list) -->
@@ -300,7 +304,8 @@
             </button>
             <h3 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.selectPlan') }}</h3>
             <div class="space-y-4">
-              <SubscriptionPlanCard v-for="plan in renewalPlans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions" @select="selectPlanFromModal" />
+              <SubscriptionPlanCard v-for="plan in renewalPlans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions"
+                :display-currency="selectedCurrency" :locale="localeCode" :usd-to-cny-rate="subscriptionUsdToCnyRate" @select="selectPlanFromModal" />
             </div>
           </div>
         </div>
@@ -352,7 +357,8 @@ import { platformAccentBarClass, platformBadgeLightClass, platformBadgeClass, pl
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
+import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
+import { creditedBalanceAmount, subscriptionGatewayAmount } from '@/components/payment/pricing'
 import { planValiditySuffix as validitySuffixOf } from '@/components/payment/validity'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
 import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
@@ -569,7 +575,7 @@ function onPaymentSettled() {
 // All checkout data from single API call
 const checkout = ref<CheckoutInfoResponse>({
   methods: {}, global_min: 0, global_max: 0,
-  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, recharge_options: [], help_text: '', help_image_url: '', stripe_publishable_key: '',
+  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, recharge_options: [], recharge_mode: undefined, help_text: '', help_image_url: '', stripe_publishable_key: '',
 })
 
 const renderedHelpText = computed(() => DOMPurify.sanitize(
@@ -680,6 +686,17 @@ const fallbackRechargeOptions: RechargeOption[] = [20, 50, 100, 200, 500].map((a
   sort_order,
   enabled: true,
 }))
+// The server reports whether it accepts arbitrary amounts. An empty tier list
+// is not the same signal: the list is also empty when every configured tier
+// fell outside the visible method limits, and in that case the server still
+// rejects anything that is not a configured tier. Offering the hardcoded
+// fallback there would show the user five amounts that all fail at checkout.
+const acceptsCustomAmount = computed(() => {
+  const mode = checkout.value.recharge_mode
+  if (mode) return mode === 'custom'
+  // Older servers do not send the mode; fall back to the previous inference.
+  return checkout.value.recharge_options.filter(option => option.enabled).length === 0
+})
 const rechargePresetOptions = computed(() => {
   const isAllowed = (value: number) =>
     Number.isFinite(value)
@@ -689,16 +706,24 @@ const rechargePresetOptions = computed(() => {
   const configured = checkout.value.recharge_options
     .filter(option => option.enabled && isAllowed(option.amount))
     .sort((left, right) => left.sort_order - right.sort_order || left.amount - right.amount)
-  return configured.length > 0 ? configured : fallbackRechargeOptions.filter(option => isAllowed(option.amount))
+  if (configured.length > 0) return configured
+  return acceptsCustomAmount.value ? fallbackRechargeOptions.filter(option => isAllowed(option.amount)) : []
 })
 const rechargePresetAmounts = computed(() => rechargePresetOptions.value.map(option => option.amount))
 const selectedRechargeOption = computed(() =>
   rechargePresetOptions.value.find(option => option.amount === validAmount.value) || null
 )
 const rechargeBalanceBonus = computed(() => selectedRechargeOption.value?.balance_bonus || 0)
-const creditedAmount = computed(() => Math.round((
-  validAmount.value * balanceRechargeMultiplier.value + rechargeBalanceBonus.value
-) * 100) / 100)
+// Mirrors the server's two-step rounding; a single round drifts by a cent.
+const creditedAmount = computed(() =>
+  creditedBalanceAmount(validAmount.value, balanceRechargeMultiplier.value, rechargeBalanceBonus.value)
+)
+
+// Platform credit is not a gateway charge, so it never takes a currency symbol.
+function formatCreditAmount(value: number): string {
+  const amount = Number.isFinite(value) ? value : 0
+  return `${Number.isInteger(amount) ? amount : amount.toFixed(2)} ${t('payment.creditUnit')}`
+}
 
 function hasPlanEntitlements(plan: SubscriptionPlan): boolean {
   const entitlements = plan.entitlements
@@ -741,9 +766,7 @@ function ceilPaymentAmount(value: number, currency: string): number {
 }
 
 function subscriptionPaymentAmountForCurrency(value: number, currency: string): number {
-  const rate = subscriptionUsdToCnyRate.value
-  if (rate <= 0 || currency !== DEFAULT_PAYMENT_CURRENCY) return roundPaymentAmount(value, currency)
-  return roundPaymentAmount(value * rate, currency)
+  return roundPaymentAmount(subscriptionGatewayAmount(value, subscriptionUsdToCnyRate.value, currency), currency)
 }
 
 function formatSelectedPaymentAmount(value: number): string {

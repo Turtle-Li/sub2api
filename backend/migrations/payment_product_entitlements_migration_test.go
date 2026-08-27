@@ -27,3 +27,25 @@ func TestUserConcurrencyAuthCacheInvalidationMigration(t *testing.T) {
 	require.Contains(t, sql, "OLD.total_recharged IS NOT DISTINCT FROM NEW.total_recharged")
 	require.Contains(t, sql, "OLD.rpm_limit IS NOT DISTINCT FROM NEW.rpm_limit")
 }
+
+// 196 supersedes 195. Balance moves on every billed request, so keeping it in
+// the predicate enqueued an outbox row per API key per request and collapsed
+// the auth cache for active users. Concurrency must stay — payment fulfillment
+// raises it and the cap lives in the auth snapshot.
+func TestAuthCacheInvalidationDropsBalancePredicateMigration(t *testing.T) {
+	content, err := FS.ReadFile("196_auth_cache_invalidation_drop_balance_predicate.sql")
+	require.NoError(t, err)
+
+	sql := strings.Join(strings.Fields(string(content)), " ")
+	require.Contains(t, sql, "CREATE OR REPLACE FUNCTION enqueue_user_auth_cache_invalidation()")
+	require.Contains(t, sql, "OLD.concurrency IS NOT DISTINCT FROM NEW.concurrency")
+	require.Contains(t, sql, "OLD.total_recharged IS NOT DISTINCT FROM NEW.total_recharged")
+	require.Contains(t, sql, "OLD.rpm_limit IS NOT DISTINCT FROM NEW.rpm_limit")
+	require.Contains(t, sql, "OLD.status IS NOT DISTINCT FROM NEW.status")
+	require.Contains(t, sql, "OLD.role IS NOT DISTINCT FROM NEW.role")
+	require.Contains(t, sql, "OLD.deleted_at IS NOT DISTINCT FROM NEW.deleted_at")
+
+	// The whole point of this migration: balance must no longer gate the trigger.
+	predicate := sql[strings.Index(sql, "IF TG_OP = 'UPDATE'"):strings.Index(sql, "THEN RETURN NEW;")]
+	require.NotContains(t, predicate, "OLD.balance")
+}

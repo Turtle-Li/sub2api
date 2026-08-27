@@ -5,8 +5,9 @@ import AmountInput from '../AmountInput.vue'
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
     t: (key: string, params?: Record<string, unknown>) => {
-      if (key === 'payment.rechargeTierName') return `${params?.amount} USD credit`
-      if (key === 'payment.entitlements.concurrency') return `Concurrency +${params?.count}`
+      if (key === 'payment.rechargeTierName') return `${params?.amount} credit`
+      if (key === 'payment.entitlements.concurrency') return `Concurrency raised to ${params?.count}`
+      if (key === 'payment.plusFee') return `plus ${params?.rate}% fee`
       return key
     },
   }),
@@ -48,9 +49,28 @@ describe('AmountInput', () => {
     expect(wrapper.text()).toContain('-17%')
     expect(wrapper.text()).toContain('×0.9')
     expect(wrapper.text()).toContain('≈ 12M')
-    expect(wrapper.text()).toContain('$8.00')
-    expect(wrapper.text()).toContain('Concurrency +5')
+    // Bonus balance is platform credit, so it carries no currency symbol.
+    expect(wrapper.text()).toContain('+ 8 payment.entitlements.balanceBonus')
+    expect(wrapper.text()).toContain('Concurrency raised to 5')
     expect(wrapper.find('input').exists()).toBe(false)
+  })
+
+  // Tier amounts are charged in the gateway currency. The card hardcoded "$"
+  // while the order summary right below it used the gateway currency, so the
+  // same money appeared twice with two different symbols.
+  it('prices tiers in the gateway currency and flags the fee separately', () => {
+    const cny = mount(AmountInput, { props: { modelValue: 100, options } })
+    expect(cny.text()).toContain('¥100.00')
+    expect(cny.text()).toContain('¥120.00')
+    expect(cny.text()).not.toContain('$100')
+    expect(cny.text()).not.toContain('fee')
+
+    const usd = mount(AmountInput, {
+      props: { modelValue: 100, options, currency: 'USD', feeRate: 8 },
+    })
+    expect(usd.text()).toContain('$100.00')
+    // The tier price is the tier price; the fee is called out, not folded in.
+    expect(usd.text()).toContain('plus 8% fee')
   })
 
   it('emits the selected fixed tier without accepting custom input', async () => {
