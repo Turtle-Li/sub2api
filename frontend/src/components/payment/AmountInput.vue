@@ -32,14 +32,14 @@
             </p>
           </div>
 
-          <!-- Price -->
+          <!-- Price. The list price and discount get their own row rather than
+               wrapping out of the headline, so every card breaks in the same
+               place regardless of how long its numbers are. -->
           <div class="min-w-0">
-            <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-              <span class="payment-product-card__price">{{ formatAmount(option.amount) }}</span>
-              <template v-if="discountPercent(option) > 0">
-                <span class="payment-product-card__strike">{{ formatAmount(option.original_price || 0) }}</span>
-                <span class="payment-product-card__discount">-{{ discountPercent(option) }}%</span>
-              </template>
+            <span class="payment-product-card__price">{{ formatAmount(option.amount) }}</span>
+            <div v-if="discountPercent(option) > 0" class="mt-1.5 flex flex-wrap items-center gap-2">
+              <span class="payment-product-card__strike">{{ formatAmount(option.original_price || 0) }}</span>
+              <span class="payment-product-card__discount">-{{ discountPercent(option) }}%</span>
             </div>
             <p v-if="feeRate > 0" class="mt-1.5 text-xs text-gray-400 dark:text-dark-500">
               {{ t('payment.plusFee', { rate: feeRate }) }}

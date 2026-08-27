@@ -14,7 +14,7 @@
       'lg:sticky lg:top-6',
     ]"
   >
-    <div class="payment-rail max-lg:rounded-none max-lg:border-0 max-lg:bg-transparent max-lg:p-0 max-lg:shadow-none">
+    <div class="payment-rail min-w-0 max-lg:rounded-none max-lg:border-0 max-lg:bg-transparent max-lg:p-0 max-lg:shadow-none">
       <div class="flex flex-col gap-4">
         <!-- Chosen product. Hidden on narrow screens, where the bar is a total
              plus an action and the product is already visible above it. -->
@@ -24,7 +24,7 @@
           <p v-if="productMeta" class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">{{ productMeta }}</p>
         </div>
 
-        <div v-if="methods.length > 0" :class="methodsCollapsedOnMobile ? 'max-lg:hidden' : ''">
+        <div v-if="methods.length > 0" :class="['min-w-0', methodsCollapsedOnMobile ? 'max-lg:hidden' : '']">
           <PaymentMethodSelector :methods="methods" :selected="selectedMethod" @select="emit('select-method', $event)" />
         </div>
 
@@ -103,6 +103,11 @@ const props = withDefaults(defineProps<{
   formatPay: (value: number) => string
   /** Subscriptions have a single price with no multiplier, so no breakdown. */
   showBreakdown?: boolean
+  /**
+   * Hide the method picker below `lg`. The bottom bar has room for a total and
+   * an action, not a picker. Callers that set this must render their own
+   * selector in the page body, or phone users cannot choose how to pay.
+   */
   methodsCollapsedOnMobile?: boolean
 }>(), {
   productName: '',

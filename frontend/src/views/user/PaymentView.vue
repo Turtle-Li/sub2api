@@ -132,6 +132,10 @@
               </div>
             </template>
 
+            <section v-if="railMethods.length > 0" class="mt-6 lg:hidden">
+              <PaymentMethodSelector :methods="railMethods" :selected="selectedMethod" @select="selectedMethod = $event" />
+            </section>
+
             <div v-if="checkout.help_text || checkout.help_image_url" class="card mt-6 p-4">
               <div class="flex flex-col items-center gap-3">
                 <img v-if="checkout.help_image_url" :src="checkout.help_image_url" alt=""
@@ -216,6 +220,7 @@ import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel, type PeakRateFi
 import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType, RechargeOption } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
+import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import { METHOD_ORDER, getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,

@@ -8,6 +8,7 @@ import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
+import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
 
 const routeState = vi.hoisted(() => ({
@@ -681,6 +682,32 @@ describe('PaymentView desktop deep links', () => {
     await flushPromises()
     await flushPromises()
     expect(fixed.findComponent(AmountInput).props('amounts')).toEqual([])
+  })
+
+  // The order rail collapses its method picker below `lg` — the bottom bar has
+  // room for a total and an action, not a picker. The page must therefore
+  // render its own selector, or phone users cannot choose how to pay at all.
+  it('renders a method selector outside the rail for narrow viewports', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_options: [{ amount: 30, label: 'Starter', sort_order: 10, enabled: true }],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('methodsCollapsedOnMobile')).toBe(true)
+
+    const selectors = wrapper.findAllComponents(PaymentMethodSelector)
+    expect(selectors.length).toBeGreaterThan(0)
+    const mobile = selectors[selectors.length - 1]
+    expect(mobile.props('methods')).toEqual(rail.props('methods'))
+    expect(mobile.element.closest('.lg\\:hidden')).not.toBeNull()
   })
 
   // Older servers do not send recharge_mode; keep the previous inference there.
