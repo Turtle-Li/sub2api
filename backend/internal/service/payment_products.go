@@ -16,14 +16,67 @@ import (
 // a subscription order is confirmed. Unknown JSON fields are intentionally
 // ignored so the schema can grow without breaking older clients.
 type PlanEntitlements struct {
-	BalanceBonus        float64 `json:"balance_bonus"`
-	ResetCardCount      int     `json:"reset_card_count"`
-	ResetCardExpiryDays int     `json:"reset_card_expiry_days"`
+	BalanceBonus   float64 `json:"balance_bonus"`
+	ResetCardCount int     `json:"reset_card_count"`
+	// ResetCardExpiryDays is a count in ResetCardExpiryUnit, not necessarily a
+	// number of days — the field keeps its name for compatibility with plans
+	// stored before units existed, which were all in days. This mirrors the
+	// subscription plan's own validity_days/validity_unit pair.
+	// Use ResetCardValidityDays for the real duration.
+	ResetCardExpiryDays int `json:"reset_card_expiry_days"`
+	// ResetCardExpiryUnit is day, week, or month (singular or plural, matching
+	// what the admin form has always saved for plan validity). Empty means day,
+	// which is what every pre-unit plan meant.
+	ResetCardExpiryUnit string `json:"reset_card_expiry_unit"`
 	// Concurrency is the minimum target for the user's concurrent request cap.
 	// Payment fulfillment will never lower an already higher cap. Zero means this
 	// product does not change the cap.
 	Concurrency int    `json:"concurrency"`
 	Message     string `json:"message"`
+}
+
+// Reset card expiry units. Deliberately a narrower set than subscription
+// validity: a reset card that outlives its subscription has no meaning, so
+// quarters and years are not offered.
+const (
+	resetCardExpiryUnitDay   = "day"
+	resetCardExpiryUnitWeek  = "week"
+	resetCardExpiryUnitMonth = "month"
+)
+
+// maxResetCardValidityDays bounds the computed duration rather than the raw
+// count, so "36 months" is rejected for the same reason "1100 days" is.
+const maxResetCardValidityDays = 3650
+
+// normalizeResetCardExpiryUnit accepts singular and plural spellings because
+// the admin form saves plural for plan validity and the database default for
+// that field is singular. Anything unrecognized falls back to days, matching
+// psComputeValidityDays.
+func normalizeResetCardExpiryUnit(unit string) string {
+	base := strings.ToLower(strings.TrimSpace(unit))
+	base = strings.TrimSuffix(base, "s")
+	switch base {
+	case resetCardExpiryUnitWeek:
+		return resetCardExpiryUnitWeek
+	case resetCardExpiryUnitMonth:
+		return resetCardExpiryUnitMonth
+	default:
+		return resetCardExpiryUnitDay
+	}
+}
+
+// ResetCardValidityDays converts the count/unit pair into the real number of
+// days a granted reset card stays usable. A month is 30 days, matching
+// psComputeValidityDays so subscription and reset-card periods do not drift.
+func (e PlanEntitlements) ResetCardValidityDays() int {
+	switch normalizeResetCardExpiryUnit(e.ResetCardExpiryUnit) {
+	case resetCardExpiryUnitWeek:
+		return e.ResetCardExpiryDays * 7
+	case resetCardExpiryUnitMonth:
+		return e.ResetCardExpiryDays * 30
+	default:
+		return e.ResetCardExpiryDays
+	}
 }
 
 // RechargeOption is a server-configured balance purchase preset.
@@ -146,11 +199,20 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 	if entitlements.ResetCardCount < 0 || entitlements.ResetCardCount > MaxResetCardsPerGrant {
 		return nil, PlanEntitlements{}, fmt.Errorf("reset_card_count must be between 0 and %d", MaxResetCardsPerGrant)
 	}
-	if entitlements.ResetCardCount > 0 && entitlements.ResetCardExpiryDays <= 0 {
-		return nil, PlanEntitlements{}, fmt.Errorf("reset_card_expiry_days must be positive when reset cards are granted")
+	entitlements.ResetCardExpiryUnit = normalizeResetCardExpiryUnit(entitlements.ResetCardExpiryUnit)
+	if entitlements.ResetCardCount > 0 {
+		if entitlements.ResetCardExpiryDays <= 0 {
+			return nil, PlanEntitlements{}, fmt.Errorf("reset_card_expiry_days must be positive when reset cards are granted")
+		}
+		// Bound the resolved duration, not the raw count: 36 months and 1100
+		// days are the same mistake and must fail the same way.
+		if validity := entitlements.ResetCardValidityDays(); validity > maxResetCardValidityDays {
+			return nil, PlanEntitlements{}, fmt.Errorf("reset card validity must not exceed %d days", maxResetCardValidityDays)
+		}
 	}
 	if entitlements.ResetCardCount == 0 {
 		entitlements.ResetCardExpiryDays = 0
+		entitlements.ResetCardExpiryUnit = resetCardExpiryUnitDay
 	}
 	if entitlements.Concurrency < 0 || entitlements.Concurrency > 10000 {
 		return nil, PlanEntitlements{}, fmt.Errorf("concurrency must be between 0 and 10000")

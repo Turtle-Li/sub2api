@@ -54,7 +54,12 @@ const SelectStub = defineComponent({
   setup(_props, { emit }) {
     const onChange = (event: Event) => {
       const value = (event.target as HTMLSelectElement).value
-      emit('update:modelValue', value === '' ? null : Number(value))
+      if (value === '') {
+        emit('update:modelValue', null)
+        return
+      }
+      // group_id is numeric; validity and reset-card units are strings.
+      emit('update:modelValue', Number.isNaN(Number(value)) ? value : Number(value))
     }
     return { onChange }
   },
@@ -168,6 +173,39 @@ describe('PlanEditDialog', () => {
 
     expect(wrapper.text()).not.toContain('preview')
     expect(wrapper.text()).not.toContain('¥71.43')
+  })
+
+  // Reset card validity is a count plus a unit, mirroring the plan's own
+  // validity pair. The server bounds the resolved duration, so the input's
+  // ceiling has to move with the unit or the form accepts values the API
+  // rejects.
+  it('sends the reset card validity unit and bounds the count by it', async () => {
+    const wrapper = mountDialog({ groups: [groupFixture({ id: 1 })] })
+    const numberInput = (label: string) =>
+      wrapper.findAll('input[type="number"]').find(
+        (node) => node.element.parentElement?.textContent?.includes(label),
+      )
+
+    await numberInput('payment.admin.resetCardCount')!.setValue('2')
+
+    const expiry = numberInput('payment.admin.resetCardExpiryDays')!
+    expect(expiry.attributes('max')).toBe('3650')
+
+    const unitSelect = wrapper.findAll('select').at(-1)!
+    await unitSelect.setValue('month')
+    expect(numberInput('payment.admin.resetCardExpiryDays')!.attributes('max')).toBe('121')
+
+    await unitSelect.setValue('week')
+    expect(numberInput('payment.admin.resetCardExpiryDays')!.attributes('max')).toBe('521')
+  })
+
+  it('disables the reset card period until reset cards are granted', () => {
+    const wrapper = mountDialog({ groups: [groupFixture({ id: 1 })] })
+    const expiry = wrapper.findAll('input[type="number"]').find(
+      (node) => node.element.parentElement?.textContent?.includes('payment.admin.resetCardExpiryDays'),
+    )
+
+    expect(expiry!.attributes('disabled')).toBeDefined()
   })
 
   it('allows composite subscription groups for payment plans', () => {

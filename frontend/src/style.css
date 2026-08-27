@@ -245,31 +245,137 @@
     @apply shadow-glass;
   }
 
-  /* Shared shell for user-facing payment products (recharge tiers and plans). */
+  /* ---------------------------------------------------------------------
+   * User-facing payment products (recharge tiers and subscription plans).
+   *
+   * The whole card is the control — a card that looks selectable but only
+   * responds on a small button at its bottom edge reads as broken. The button
+   * inside stays for keyboard users and for the explicit action label, but the
+   * card carries the click target, the hover state and the selected ring.
+   *
+   * Heights are intentionally not fixed. The previous version pinned the shell
+   * and three inner blocks to minimum heights so every card matched, which left
+   * a tier with no benefits holding two empty boxes. Grid alignment handles the
+   * shared baseline; a short product is allowed to render short.
+   * ------------------------------------------------------------------- */
   .payment-product-card {
-    @apply relative flex min-h-[330px] min-w-0 flex-col overflow-hidden rounded-2xl border;
-    @apply bg-white dark:bg-dark-800;
-    @apply transition-all duration-200;
-    @apply hover:-translate-y-0.5 hover:shadow-xl;
+    @apply relative flex min-w-0 cursor-pointer flex-col rounded-2xl border text-left;
+    @apply border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-800;
+    @apply transition duration-200 ease-out;
+    @apply hover:border-gray-300 hover:shadow-lg hover:shadow-gray-900/5;
+    @apply dark:hover:border-dark-600 dark:hover:shadow-black/20;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2;
+    @apply dark:focus-visible:ring-offset-dark-900;
+  }
+
+  .payment-product-card--selected {
+    @apply border-primary-500 ring-1 ring-primary-500 dark:border-primary-400 dark:ring-primary-400;
+    @apply shadow-lg shadow-primary-500/10;
+  }
+
+  /* A recommendation is a quieter signal than a selection: it tints the card
+     but never borrows the selected ring, so the two never look alike. */
+  .payment-product-card--featured:not(.payment-product-card--selected) {
+    @apply border-primary-200 dark:border-primary-900/60;
+  }
+
+  .payment-product-card__ribbon {
+    @apply absolute -top-2.5 left-5 z-10 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5;
+    @apply bg-primary-600 text-[11px] font-semibold text-white shadow-sm dark:bg-primary-500;
   }
 
   .payment-product-card__body {
-    @apply flex flex-1 flex-col p-5;
+    @apply flex flex-1 flex-col gap-4 p-5;
   }
 
-  .payment-product-card__meta {
-    @apply mb-3 grid min-h-[58px] grid-cols-2 gap-x-3 rounded-lg bg-gray-50 px-3 py-2 text-xs;
-    @apply dark:bg-dark-700/50;
+  .payment-product-card__eyebrow {
+    @apply text-[11px] font-medium uppercase tracking-wider text-gray-400 dark:text-dark-500;
   }
 
-  .payment-product-card__benefits {
-    @apply mb-3 min-h-[58px] rounded-xl px-3 py-2 text-xs;
+  .payment-product-card__title {
+    @apply min-w-0 break-words text-base font-semibold leading-snug text-gray-900 dark:text-white;
+    @apply [overflow-wrap:anywhere];
+  }
+
+  .payment-product-card__price {
+    @apply text-[2rem] font-semibold leading-none tracking-tight text-gray-900 tabular-nums dark:text-white;
+  }
+
+  .payment-product-card__strike {
+    @apply text-sm text-gray-400 line-through tabular-nums dark:text-dark-500;
+  }
+
+  .payment-product-card__discount {
+    @apply inline-flex shrink-0 items-center rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold;
+    @apply text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300;
+  }
+
+  /* Credited platform balance sits directly under the gateway price, one step
+     down in weight, so "what I pay" and "what I get" never read as one number. */
+  .payment-product-card__credit {
+    @apply flex items-baseline justify-between gap-2 rounded-lg px-3 py-2 text-xs;
+    @apply bg-gray-50 text-gray-600 dark:bg-dark-700/50 dark:text-dark-300;
+  }
+
+  .payment-product-card__list {
+    @apply flex flex-col gap-1.5 text-[13px] leading-relaxed;
+  }
+
+  .payment-product-card__list-item {
+    @apply flex items-start gap-2 text-gray-600 dark:text-dark-300;
+  }
+
+  /* Paid entitlements share the feature list but carry the accent, so they read
+     as the reason to buy without needing a separate coloured box. */
+  .payment-product-card__list-item--benefit {
+    @apply font-medium text-gray-900 dark:text-white;
   }
 
   .payment-product-card__action {
-    @apply w-full rounded-xl py-2.5 text-sm font-semibold transition-all;
-    @apply active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:ring-offset-2;
+    @apply mt-auto w-full rounded-xl py-2.5 text-sm font-semibold transition;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:ring-offset-2;
     @apply dark:focus:ring-offset-dark-800;
+  }
+
+  /* ---------------------------------------------------------------------
+   * Order rail. On wide screens it is a sticky column beside the products; on
+   * narrow screens it becomes a bar pinned to the bottom of the viewport, which
+   * is where the running total belongs on a phone.
+   * ------------------------------------------------------------------- */
+  .payment-rail {
+    @apply rounded-2xl border border-gray-200 bg-white p-5 dark:border-dark-700 dark:bg-dark-800;
+    @apply shadow-sm dark:shadow-none;
+  }
+
+  .payment-rail__row {
+    @apply flex items-baseline justify-between gap-3 text-sm;
+  }
+
+  .payment-rail__label {
+    @apply text-gray-500 dark:text-dark-400;
+  }
+
+  .payment-rail__value {
+    @apply text-gray-900 tabular-nums dark:text-white;
+  }
+
+  .payment-rail__total {
+    @apply text-xl font-semibold text-gray-900 tabular-nums dark:text-white;
+  }
+
+  .payment-segment {
+    @apply inline-flex rounded-full border border-gray-200 bg-gray-100/80 p-1;
+    @apply dark:border-dark-700 dark:bg-dark-800/80;
+  }
+
+  .payment-segment__item {
+    @apply relative rounded-full px-4 py-1.5 text-sm font-medium transition;
+    @apply text-gray-500 hover:text-gray-800 dark:text-dark-400 dark:hover:text-dark-100;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40;
+  }
+
+  .payment-segment__item--active {
+    @apply bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white;
   }
 
   .card-header {

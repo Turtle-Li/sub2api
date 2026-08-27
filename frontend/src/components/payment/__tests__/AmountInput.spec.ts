@@ -43,14 +43,14 @@ describe('AmountInput', () => {
     expect(wrapper.findAll('article')).toHaveLength(2)
     expect(wrapper.find('article').classes()).toContain('payment-product-card')
     expect(wrapper.find('.payment-product-card__body').exists()).toBe(true)
-    expect(wrapper.find('.payment-product-card__meta').exists()).toBe(true)
+    expect(wrapper.find('.payment-product-card__credit').exists()).toBe(true)
     expect(wrapper.find('button').classes()).toContain('payment-product-card__action')
     expect(wrapper.text()).toContain('Growth')
     expect(wrapper.text()).toContain('-17%')
     expect(wrapper.text()).toContain('×0.9')
     expect(wrapper.text()).toContain('≈ 12M')
     // Bonus balance is platform credit, so it carries no currency symbol.
-    expect(wrapper.text()).toContain('+ 8 payment.entitlements.balanceBonus')
+    expect(wrapper.text()).toContain('payment.entitlements.balanceBonus +8 payment.creditUnit')
     expect(wrapper.text()).toContain('Concurrency raised to 5')
     expect(wrapper.find('input').exists()).toBe(false)
   })
@@ -82,6 +82,51 @@ describe('AmountInput', () => {
     await starterCard.find('button').trigger('click')
 
     expect(wrapper.emitted('update:modelValue')).toEqual([[20]])
-    expect(starterCard.find('button').attributes('aria-pressed')).toBe('false')
+    expect(starterCard.attributes('aria-pressed')).toBe('false')
+  })
+
+  // The whole card is the control, so a click anywhere on it selects the tier.
+  it('selects a tier from the card body as well as its action button', async () => {
+    const wrapper = mount(AmountInput, { props: { modelValue: 100, options } })
+
+    await wrapper.findAll('article')[1].trigger('click')
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([[20]])
+  })
+
+  // Unconfigured estimates are omitted entirely. A row that says "not
+  // configured" tells the reader information is missing and nothing else.
+  it('omits estimate rows a tier has no data for', () => {
+    const wrapper = mount(AmountInput, { props: { modelValue: 20, options } })
+    const starter = wrapper.findAll('article')[1]
+
+    expect(starter.text()).not.toContain('payment.notConfigured')
+    expect(starter.text()).not.toContain('payment.rateEstimate')
+    expect(starter.findAll('.payment-product-card__list-item')).toHaveLength(0)
+  })
+
+  // Highlight one tier at most, and only when a discount justifies the claim.
+  it('recommends only the deepest-discounted tier', () => {
+    const wrapper = mount(AmountInput, { props: { modelValue: 100, options } })
+    const ribbons = wrapper.findAll('.payment-product-card__ribbon')
+
+    expect(ribbons).toHaveLength(1)
+    expect(wrapper.findAll('article')[0].classes()).toContain('payment-product-card--featured')
+
+    const noDiscount = mount(AmountInput, {
+      props: { modelValue: 20, options: [{ amount: 20, sort_order: 1, enabled: true }] },
+    })
+    expect(noDiscount.findAll('.payment-product-card__ribbon')).toHaveLength(0)
+  })
+
+  // The card states what actually lands in the balance, which is the tier
+  // amount through the global multiplier plus any configured bonus.
+  it('shows the credited balance for each tier', () => {
+    const wrapper = mount(AmountInput, {
+      props: { modelValue: 100, options, balanceMultiplier: 2 },
+    })
+
+    expect(wrapper.findAll('article')[0].text()).toContain('208 payment.creditUnit')
+    expect(wrapper.findAll('article')[1].text()).toContain('40 payment.creditUnit')
   })
 })

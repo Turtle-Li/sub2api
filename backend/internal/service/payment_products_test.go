@@ -321,3 +321,58 @@ func TestSubscriptionConcurrencyEntitlementIsMonotonicAndIdempotent(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, 5, user.Concurrency)
 }
+
+// Reset card expiry is a count plus a unit, mirroring the plan's own
+// validity_days/validity_unit pair. Plans stored before units existed carry no
+// unit and must keep meaning days.
+func TestResetCardValidityDaysResolvesUnits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		unit string
+		want int
+	}{
+		{name: "legacy plans have no unit", unit: "", want: 14},
+		{name: "singular day", unit: "day", want: 14},
+		{name: "plural days", unit: "days", want: 14},
+		{name: "singular week", unit: "week", want: 98},
+		{name: "plural weeks", unit: "weeks", want: 98},
+		{name: "singular month", unit: "month", want: 420},
+		{name: "plural months", unit: "months", want: 420},
+		{name: "unknown units bill as days", unit: "fortnight", want: 14},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entitlements := PlanEntitlements{ResetCardCount: 1, ResetCardExpiryDays: 14, ResetCardExpiryUnit: tc.unit}
+			require.Equal(t, tc.want, entitlements.ResetCardValidityDays())
+		})
+	}
+}
+
+func TestNormalizePlanEntitlementsBoundsResolvedResetCardValidity(t *testing.T) {
+	_, entitlements, err := normalizePlanEntitlements(map[string]any{
+		"reset_card_count":       2,
+		"reset_card_expiry_days": 3,
+		"reset_card_expiry_unit": "months",
+	})
+	require.NoError(t, err)
+	require.Equal(t, resetCardExpiryUnitMonth, entitlements.ResetCardExpiryUnit)
+	require.Equal(t, 90, entitlements.ResetCardValidityDays())
+
+	// The cap applies to the resolved duration, so a large count in a large
+	// unit is rejected just like the same duration expressed in days.
+	_, _, err = normalizePlanEntitlements(map[string]any{
+		"reset_card_count":       1,
+		"reset_card_expiry_days": 200,
+		"reset_card_expiry_unit": "months",
+	})
+	require.ErrorContains(t, err, "reset card validity must not exceed")
+
+	// Without reset cards the period is meaningless and is cleared.
+	_, cleared, err := normalizePlanEntitlements(map[string]any{
+		"reset_card_count":       0,
+		"reset_card_expiry_days": 30,
+		"reset_card_expiry_unit": "weeks",
+	})
+	require.NoError(t, err)
+	require.Zero(t, cleared.ResetCardExpiryDays)
+	require.Equal(t, resetCardExpiryUnitDay, cleared.ResetCardExpiryUnit)
+}

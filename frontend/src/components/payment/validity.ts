@@ -1,4 +1,4 @@
-import type { SubscriptionPlan } from '@/types/payment'
+import type { PlanEntitlements, SubscriptionPlan } from '@/types/payment'
 
 type TranslateFn = (key: string) => string
 
@@ -35,4 +35,25 @@ export function planValiditySuffix(
   }
   // 其余单位（含数据库默认的 day 与未知值）后端一律按天计费，展示保持一致。
   return `${days}${t('payment.days')}`
+}
+
+/**
+ * 重置卡有效期展示（"14天" / "8周" / "3个月"）。
+ *
+ * 与套餐有效期同构：数值 + 单位。历史套餐没有 reset_card_expiry_unit，
+ * 后端把空单位当作「天」，这里保持一致。单位归一化后与
+ * PlanEntitlements.ResetCardValidityDays 一一对应，避免用户看到的有效期
+ * 与实际发放的有效期不同。
+ */
+export function resetCardValidityLabel(
+  entitlements: Pick<PlanEntitlements, 'reset_card_expiry_days' | 'reset_card_expiry_unit'>,
+  t: TranslateFn,
+): string {
+  const count = entitlements.reset_card_expiry_days
+  if (!count || count <= 0) return ''
+  const unit = String(entitlements.reset_card_expiry_unit || 'day').trim().toLowerCase()
+  const base = unit.endsWith('s') ? unit.slice(0, -1) : unit
+  if (base === 'month') return `${count}${t('payment.months')}`
+  if (base === 'week') return `${count}${t('payment.weeks')}`
+  return `${count}${t('payment.days')}`
 }

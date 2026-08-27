@@ -253,10 +253,19 @@ export interface SubscriptionPlan {
   period_label?: string
 }
 
+export type ResetCardExpiryUnit = 'day' | 'week' | 'month'
+
 export interface PlanEntitlements {
   balance_bonus: number
   reset_card_count: number
+  /**
+   * A count in reset_card_expiry_unit, not necessarily days — the name is kept
+   * for plans stored before units existed, which were all in days. Mirrors the
+   * plan's own validity_days/validity_unit pair.
+   */
   reset_card_expiry_days: number
+  /** Absent on plans saved before units existed, where it means days. */
+  reset_card_expiry_unit?: ResetCardExpiryUnit
   /** Minimum user concurrency target; 0 means unchanged. */
   concurrency: number
   message?: string
