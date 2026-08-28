@@ -364,7 +364,7 @@ export default {
     rechargeBonus: 'Tier bonus',
     presetBenefit: 'Tier benefit',
     balanceCredit: 'Balance credit',
-    concurrencyBonus: 'Concurrency raised to {count}',
+    concurrencyBonus: 'Concurrency permanently raised to {count}',
     noRechargeOptions: 'No recharge tiers are available. Please contact an administrator.',
     customAmount: 'Custom Amount',
     enterAmount: 'Enter amount',
@@ -561,7 +561,7 @@ export default {
     entitlements: {
       balanceBonus: 'bonus balance',
       resetCards: 'quota reset(s), valid {validity}',
-      concurrency: 'Concurrency raised to {count} (kept if already higher)',
+      concurrency: 'Concurrency permanently raised to {count} (kept if already higher)',
     },
     refundReason: 'Refund Reason',
     refundReasonPlaceholder: 'Please describe your refund reason',

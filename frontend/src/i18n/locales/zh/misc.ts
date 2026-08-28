@@ -388,7 +388,7 @@ export default {
     rechargeBonus: '档位赠送',
     presetBenefit: '档位权益',
     balanceCredit: '余额到账',
-    concurrencyBonus: '并发上限提升至 {count}',
+    concurrencyBonus: '并发上限永久提升至 {count}',
     noRechargeOptions: '暂无可用充值档位，请联系管理员。',
     customAmount: '自定义金额',
     enterAmount: '输入金额',
@@ -585,7 +585,7 @@ export default {
     entitlements: {
       balanceBonus: '余额赠送',
       resetCards: '次额度重置（{validity}有效）',
-      concurrency: '并发上限提升至 {count}（当前更高则保持）',
+      concurrency: '并发上限永久提升至 {count}（当前更高则保持）',
     },
     refundReason: '退款原因',
     refundReasonPlaceholder: '请描述您的退款原因',
