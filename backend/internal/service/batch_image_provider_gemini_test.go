@@ -101,6 +101,31 @@ func TestBuildGeminiBatchJSONL_WritesReferenceImages(t *testing.T) {
 	require.Equal(t, "gs://bucket/refs/style.jpg", fileData["fileUri"])
 }
 
+func TestBuildGeminiBatchJSONL_LabelsTypedReferenceImagesInPlace(t *testing.T) {
+	input := validGeminiBatchInput()
+	input.Items[0].ReferenceImages = []BatchImageReference{
+		{ID: "product", Type: "PRODUCT_TRUTH", MimeType: "image/png", Data: []byte("product")},
+		{ID: "model", Type: "MODEL_REFERENCE", MimeType: "image/png", Data: []byte("model")},
+		{ID: "scene", Type: "SCENE_REFERENCE", MimeType: "image/png", Data: []byte("scene")},
+	}
+
+	jsonl, err := BuildGeminiBatchJSONL(input)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(jsonl), &got))
+	request := got["request"].(map[string]any)
+	parts := request["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	require.Len(t, parts, 7)
+	require.Contains(t, parts[1].(map[string]any)["text"], "REFERENCE_IMAGE_ROLE=PRODUCT_TRUTH")
+	require.Equal(t, "cHJvZHVjdA==", parts[2].(map[string]any)["inlineData"].(map[string]any)["data"])
+	require.Contains(t, parts[3].(map[string]any)["text"], "REFERENCE_IMAGE_ROLE=MODEL_REFERENCE")
+	require.Contains(t, parts[3].(map[string]any)["text"], "fully replace")
+	require.Equal(t, "bW9kZWw=", parts[4].(map[string]any)["inlineData"].(map[string]any)["data"])
+	require.Contains(t, parts[5].(map[string]any)["text"], "REFERENCE_IMAGE_ROLE=SCENE_REFERENCE")
+	require.Contains(t, parts[5].(map[string]any)["text"], "Ignore people")
+	require.Equal(t, "c2NlbmU=", parts[6].(map[string]any)["inlineData"].(map[string]any)["data"])
+}
+
 func TestGeminiProvider_SubmitUploadsJSONLThenCreatesBatch(t *testing.T) {
 	client := &fakeGeminiBatchClient{
 		uploaded: &GeminiUploadedFile{Name: "files/input-jsonl"},

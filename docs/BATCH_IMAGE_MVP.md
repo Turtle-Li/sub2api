@@ -76,6 +76,13 @@ an expanded legacy request and its compact equivalent have the same semantic req
 output, such as its assigned scene. Inline `data` is a base64 string decoded by the backend;
 `file_uri` is reserved for internal Google Cloud Storage references and must be a `gs://`
 URI. Each reference image must use one of `image/png`, `image/jpeg`, or `image/webp`.
+When `type` is a recognized closed role, both Gemini API and Vertex JSONL place a
+server-owned role guide immediately before that image part. This preserves per-image
+authority after provider serialization (for example, `MODEL_REFERENCE` may define the
+adult person but every worn or held product is an untrusted placeholder that must be
+replaced from `PRODUCT_TRUTH`). An empty `type` retains the legacy untyped behavior;
+an unknown non-empty `type` receives a fixed no-authority guide, and caller-controlled
+role text is never echoed into the upstream prompt.
 Current model limits are:
 
 - `gemini-2.5-flash-image`: up to 3 reference images per item.

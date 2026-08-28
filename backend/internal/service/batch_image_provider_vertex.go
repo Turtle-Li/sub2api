@@ -527,6 +527,9 @@ func BuildVertexBatchJSONL(input BatchImageInput) ([]byte, error) {
 func vertexBatchImageParts(prompt string, refs []BatchImageReference) ([]any, error) {
 	parts := []any{map[string]any{"text": prompt}}
 	for _, ref := range refs {
+		if roleGuide, ok := batchImageReferenceRoleGuide(ref.Type); ok {
+			parts = append(parts, map[string]any{"text": roleGuide})
+		}
 		mimeType := normalizeBatchImageReferenceMimeType(ref.MimeType)
 		if mimeType == "" {
 			return nil, batchImageProviderInputError("reference image mime_type is required")

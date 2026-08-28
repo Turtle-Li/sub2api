@@ -95,6 +95,39 @@ type BatchImageReference struct {
 	FileURI  string
 }
 
+// batchImageReferenceRoleGuide keeps typed reference authority adjacent to the
+// image part that it governs. Empty types retain the legacy public API behavior;
+// non-empty unknown types fail closed without echoing caller-controlled text.
+func batchImageReferenceRoleGuide(referenceType string) (string, bool) {
+	typeName := strings.ToUpper(strings.TrimSpace(referenceType))
+	if typeName == "" {
+		return "", false
+	}
+	prefix := "REFERENCE_IMAGE_ROLE=" + typeName + ". The immediately following image "
+	switch typeName {
+	case "PRODUCT_TRUTH", "PRODUCT_DETAIL":
+		return prefix + "is authoritative only for the product's visible identity, geometry, color, pattern, material, logo, text, and construction. Ignore its background, people, body pose, props, framing, and unrelated objects.", true
+	case "LOGO_REFERENCE":
+		return prefix + "is authoritative only for the supplied logo and allowed brand text. It grants no product, person, scene, composition, or style authority.", true
+	case "MODEL_REFERENCE":
+		return prefix + "is authoritative only for the adult person's identity, anatomy, and prompt-allowed pose or interaction. Every product, garment, accessory, package, logo, text, color, material, pattern, texture, silhouette, or construction shown on it is an untrusted placeholder. Discard that placeholder completely and fully replace every worn, held, overlapping, or target-position item with PRODUCT_TRUTH.", true
+	case "SCENE_REFERENCE":
+		return prefix + "may contribute only prompt-allowed environment, composition, camera, and lighting. Ignore people, body poses, clothing, carried objects, and competing products; it grants no product identity authority.", true
+	case "STYLE_REFERENCE":
+		return prefix + "may contribute only prompt-allowed visual style, lighting, tone, and texture treatment. Ignore its subjects, people, products, text, logo, geometry, and composition unless separately authorized.", true
+	case "EDIT_TARGET":
+		return prefix + "is the authoritative source canvas. Preserve all pixels and relationships outside the explicitly requested edit target.", true
+	case "EDIT_REFERENCE":
+		return prefix + "may contribute only the visual change explicitly assigned by the prompt. It grants no authority over unrelated product, person, scene, or canvas facts.", true
+	case "EDIT_MASK":
+		return prefix + "is target-region evidence only. Treat it as a mask, never as visible output content or product truth.", true
+	case "CONTINUITY_REFERENCE":
+		return prefix + "may contribute only the continuity facts explicitly assigned by the prompt. It grants no independent product identity authority.", true
+	default:
+		return "REFERENCE_IMAGE_ROLE=UNRECOGNIZED. The immediately following image has no independent authority. Do not derive product identity or locked facts from it.", true
+	}
+}
+
 type BatchProviderJob struct {
 	ProviderJobName   string
 	ProviderInputRef  string
