@@ -123,6 +123,10 @@ fallback again immediately before starting or routing it. The contract requires
 the exact external database/Redis environment, the two read-only CA mounts,
 the expected data volume, and exactly one expected Docker network; a retained
 pre-cut local-dependency container fails closed and is never started.
+Application releases in this mode also skip the local Compose PostgreSQL backup
+helper. Backup and point-in-time recovery remain the external database owner's
+responsibility; a release must not fail merely because the retired local
+`postgres` service is absent.
 
 Set the same protected inputs used by the external blue-green release:
 `SUB2API_EXTERNAL_RUNTIME_ENV_FILE` and `SUB2API_EXTERNAL_CA_FILE`.

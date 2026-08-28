@@ -40,12 +40,13 @@ printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
 cat >"${APP_DIR}/scripts/sub2api-blue-green-release.sh" <<'EOF'
 #!/usr/bin/env bash
 if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
-  printf 'mode=%s runtime=%s ca=%s old=%s new=%s\n' \
+  printf 'mode=%s runtime=%s ca=%s old=%s new=%s backup=%s\n' \
     "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
     "${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}" \
     "${SUB2API_EXTERNAL_CA_FILE:-}" \
     "${OLD_CONTAINER:-}" \
-    "${NEW_CONTAINER:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
+    "${NEW_CONTAINER:-}" \
+    "${RUN_BACKUP:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
 fi
 exit 0
 EOF
@@ -316,9 +317,13 @@ assert_contains "$external_rollback_output" 'Rollback completed'
 [ "$(wc -l <"$BLUE_GREEN_ENV_LOG" | tr -d '[:space:]')" = 2 ] \
   || fail 'external release did not invoke the helper for both switch and rollback'
 assert_contains "$BLUE_GREEN_ENV_LOG" \
-  "mode=external runtime=$EXTERNAL_RUNTIME_ENV_FILE ca=$EXTERNAL_CA_FILE old=sub2api-green new=sub2api-blue"
+  "mode=external runtime=$EXTERNAL_RUNTIME_ENV_FILE ca=$EXTERNAL_CA_FILE old=sub2api-green new=sub2api-blue backup=false"
 assert_contains "$BLUE_GREEN_ENV_LOG" \
-  "mode=external runtime=$EXTERNAL_RUNTIME_ENV_FILE ca=$EXTERNAL_CA_FILE old=sub2api-blue new=sub2api-green"
+  "mode=external runtime=$EXTERNAL_RUNTIME_ENV_FILE ca=$EXTERNAL_CA_FILE old=sub2api-blue new=sub2api-green backup=false"
+if grep -Fq 'mode=external' "$BLUE_GREEN_ENV_LOG" \
+  && grep -Fq 'backup=true' "$BLUE_GREEN_ENV_LOG"; then
+  fail 'external release invoked the local Compose backup path'
+fi
 if grep -Fq 'mode=local' "$BLUE_GREEN_ENV_LOG"; then
   fail 'external rollback was permitted to fall back to local dependencies'
 fi

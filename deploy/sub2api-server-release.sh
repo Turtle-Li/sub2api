@@ -150,9 +150,14 @@ case "$DEPENDENCY_MODE" in
   local|external) ;;
   *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external" ;;
 esac
+SWITCH_RUN_BACKUP=true
 if [ "$DEPENDENCY_MODE" = "external" ]; then
   require_absolute_path SUB2API_EXTERNAL_RUNTIME_ENV_FILE "$EXTERNAL_RUNTIME_ENV_FILE"
   require_absolute_path SUB2API_EXTERNAL_CA_FILE "$EXTERNAL_CA_FILE"
+  # External dependency owners provide their own backup policy. The local
+  # backup helper only knows the Compose-managed PostgreSQL service and must
+  # never be invoked after that service has been retired.
+  SWITCH_RUN_BACKUP=false
 fi
 
 if [ "$PREBUILT_MODE" != "true" ]; then
@@ -351,7 +356,7 @@ if ! run_blue_green \
   CADDY_UPSTREAM_FROM="$OLD_UPSTREAM" \
   CADDY_UPSTREAM_TO="$NEW_UPSTREAM" \
   PULL_IMAGE=false \
-  RUN_BACKUP=true \
+  RUN_BACKUP="$SWITCH_RUN_BACKUP" \
   bash "$BLUE_GREEN_SCRIPT" >"$SWITCH_LOG" 2>&1; then
   tail -120 "$SWITCH_LOG" >&2 || true
   if docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
