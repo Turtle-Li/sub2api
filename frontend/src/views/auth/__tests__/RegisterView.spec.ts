@@ -2,12 +2,14 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RegisterView from '@/views/auth/RegisterView.vue'
 
-const { getPublicSettingsMock, registerMock, showErrorMock, pushMock, verifyActionMock } = vi.hoisted(() => ({
+const { getPublicSettingsMock, registerMock, showErrorMock, pushMock, verifyActionMock, validateInvitationCodeMock, routeQuery } = vi.hoisted(() => ({
   getPublicSettingsMock: vi.fn(),
   registerMock: vi.fn(),
   showErrorMock: vi.fn(),
   pushMock: vi.fn(),
-  verifyActionMock: vi.fn()
+  verifyActionMock: vi.fn(),
+  validateInvitationCodeMock: vi.fn(),
+  routeQuery: {} as Record<string, string>
 }))
 
 const publicSettings = {
@@ -29,7 +31,7 @@ const publicSettings = {
 
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: pushMock }),
-  useRoute: () => ({ query: {} })
+  useRoute: () => ({ query: routeQuery })
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -60,7 +62,8 @@ vi.mock('@/api/auth', async () => {
   const actual = await vi.importActual<typeof import('@/api/auth')>('@/api/auth')
   return {
     ...actual,
-    getPublicSettings: (...args: unknown[]) => getPublicSettingsMock(...args)
+    getPublicSettings: (...args: unknown[]) => getPublicSettingsMock(...args),
+    validateInvitationCode: (...args: unknown[]) => validateInvitationCodeMock(...args)
   }
 })
 
@@ -95,8 +98,11 @@ describe('RegisterView', () => {
     verifyActionMock.mockReset()
     sessionStorage.removeItem('register_data')
     verifyActionMock.mockResolvedValue({ token: 'ticket', randstr: 'randstr' })
+    validateInvitationCodeMock.mockReset()
+    for (const key of Object.keys(routeQuery)) delete routeQuery[key]
     getPublicSettingsMock.mockResolvedValue(publicSettings)
     registerMock.mockResolvedValue({})
+    validateInvitationCodeMock.mockResolvedValue({ valid: true, code_type: 'affiliate' })
   })
 
   it.each([
@@ -197,6 +203,33 @@ describe('RegisterView', () => {
 
     expect(wrapper.find('[data-testid="affiliate-invitation-field"]').exists()).toBe(false)
     expect(wrapper.get('#invitation_code').exists()).toBe(true)
+  })
+
+  it('accepts a validated affiliate link without a manual registration code', async () => {
+    routeQuery.aff = 'AFF12345'
+    getPublicSettingsMock.mockResolvedValueOnce({
+      ...publicSettings,
+      turnstile_enabled: false,
+      invitation_code_enabled: true,
+      affiliate_code_registration_enabled: true
+    })
+
+    const wrapper = mountRegister()
+    await flushPromises()
+    await wrapper.get('#email').setValue('affiliate-link@example.com')
+    await wrapper.get('#password').setValue('secret-123')
+    await wrapper.get('#confirmPassword').setValue('secret-123')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(validateInvitationCodeMock).toHaveBeenCalledWith('AFF12345', 'affiliate')
+    expect(registerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'affiliate-link@example.com',
+        aff_code: 'AFF12345',
+        invitation_code: undefined
+      })
+    )
   })
 
   it('submits a non-whitelist email domain so the backend can enforce its registration quota', async () => {

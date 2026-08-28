@@ -36,7 +36,11 @@ import {
   persistOAuthTokenContext,
   type PendingOAuthExchangeResponse
 } from '@/api/auth'
-import { clearAllAffiliateReferralCodes } from '@/utils/oauthAffiliate'
+import {
+  clearAllAffiliateReferralCodes,
+  loadOAuthAffiliateCode,
+  oauthAffiliatePayload
+} from '@/utils/oauthAffiliate'
 
 const route = useRoute()
 const router = useRouter()
@@ -89,7 +93,8 @@ async function handleCreateAccount(payload: PendingOAuthCreateAccountPayload) {
               tencent_captcha_randstr: payload.tencentCaptchaRandstr
           }
           : {}),
-        invitation_code: payload.invitationCode || undefined
+        invitation_code: payload.invitationCode || undefined,
+        ...oauthAffiliatePayload(loadOAuthAffiliateCode())
       }
     )
 

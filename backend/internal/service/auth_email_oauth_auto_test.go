@@ -10,6 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type failingEmailOAuthInvitationRepo struct {
+	RedeemCodeRepository
+	code *RedeemCode
+}
+
+func (r *failingEmailOAuthInvitationRepo) GetByCode(context.Context, string) (*RedeemCode, error) {
+	return r.code, nil
+}
+
+func (r *failingEmailOAuthInvitationRepo) Use(context.Context, int64, int64) error {
+	return ErrInvitationCodeInvalid
+}
+
 func newEmailOAuthAutoAuthService(
 	userRepo UserRepository,
 	settings map[string]string,
@@ -86,4 +99,32 @@ func TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 	require.NotNil(t, geminiRecord, "expected gemini platform record")
 	require.NotNil(t, geminiRecord.MonthlyLimitUSD)
 	require.InDelta(t, 100.0, *geminiRecord.MonthlyLimitUSD, 0.0001)
+}
+
+func TestEmailOAuthAuto_PreservesInvitationCodeError(t *testing.T) {
+	svc := newEmailOAuthAutoAuthService(
+		&userRepoStub{nextID: 89},
+		map[string]string{
+			SettingKeyRegistrationEnabled:   "true",
+			SettingKeyInvitationCodeEnabled: "true",
+		},
+		&userPlatformQuotaRepoStub{},
+	)
+	svc.redeemRepo = &failingEmailOAuthInvitationRepo{code: &RedeemCode{
+		ID:     7,
+		Code:   "INVITE123",
+		Type:   RedeemTypeInvitation,
+		Status: StatusUnused,
+	}}
+
+	_, err := svc.createEmailOAuthUser(
+		context.Background(),
+		"invite-race@example.com",
+		"invite-race",
+		"github",
+		"INVITE123",
+		"",
+	)
+
+	require.ErrorIs(t, err, ErrInvitationCodeInvalid)
 }

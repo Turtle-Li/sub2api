@@ -70,6 +70,16 @@ func (s *SettingService) IsInvitationCodeEnabled(ctx context.Context) bool {
 	return value == "true"
 }
 
+// IsAffiliateCodeRegistrationEnabled reports whether affiliate codes may satisfy
+// the invitation-only registration gate. All three switches are authoritative.
+func (s *SettingService) IsAffiliateCodeRegistrationEnabled(ctx context.Context) bool {
+	if !s.IsInvitationCodeEnabled(ctx) || !s.IsAffiliateEnabled(ctx) {
+		return false
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyAffiliateCodeRegistrationEnabled)
+	return err == nil && value == "true"
+}
+
 // GetCustomMenuItemsRaw returns the raw JSON string of custom_menu_items setting.
 func (s *SettingService) GetCustomMenuItemsRaw(ctx context.Context) string {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyCustomMenuItems)

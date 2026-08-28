@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -527,13 +528,15 @@ func (h *AuthHandler) ValidatePromoCode(c *gin.Context) {
 
 // ValidateInvitationCodeRequest 验证邀请码请求
 type ValidateInvitationCodeRequest struct {
-	Code string `json:"code" binding:"required"`
+	Code   string `json:"code" binding:"required"`
+	Source string `json:"source,omitempty"`
 }
 
 // ValidateInvitationCodeResponse 验证邀请码响应
 type ValidateInvitationCodeResponse struct {
 	Valid     bool   `json:"valid"`
 	ErrorCode string `json:"error_code,omitempty"`
+	CodeType  string `json:"code_type,omitempty"`
 }
 
 // ValidateInvitationCode 验证邀请码（公开接口，注册前调用）
@@ -555,34 +558,25 @@ func (h *AuthHandler) ValidateInvitationCode(c *gin.Context) {
 	}
 
 	// 验证邀请码
-	redeemCode, err := h.redeemService.GetByCode(c.Request.Context(), req.Code)
+	codeType, err := h.authService.ValidateRegistrationInvitation(c.Request.Context(), req.Code, req.Source)
 	if err != nil {
+		errorCode := "INVITATION_CODE_INVALID"
+		switch {
+		case errors.Is(err, service.ErrRedeemCodeNotFound):
+			errorCode = "INVITATION_CODE_NOT_FOUND"
+		case errors.Is(err, service.ErrRedeemCodeUsed):
+			errorCode = "INVITATION_CODE_USED"
+		}
 		response.Success(c, ValidateInvitationCodeResponse{
 			Valid:     false,
-			ErrorCode: "INVITATION_CODE_NOT_FOUND",
-		})
-		return
-	}
-
-	// 检查类型和状态
-	if redeemCode.Type != service.RedeemTypeInvitation {
-		response.Success(c, ValidateInvitationCodeResponse{
-			Valid:     false,
-			ErrorCode: "INVITATION_CODE_INVALID",
-		})
-		return
-	}
-
-	if redeemCode.Status != service.StatusUnused {
-		response.Success(c, ValidateInvitationCodeResponse{
-			Valid:     false,
-			ErrorCode: "INVITATION_CODE_USED",
+			ErrorCode: errorCode,
 		})
 		return
 	}
 
 	response.Success(c, ValidateInvitationCodeResponse{
-		Valid: true,
+		Valid:    true,
+		CodeType: codeType,
 	})
 }
 

@@ -1581,6 +1581,29 @@
                 </div>
                 <Toggle v-model="form.invitation_code_enabled" />
               </div>
+              <div
+                v-if="form.invitation_code_enabled"
+                class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
+              >
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">{{
+                    t("admin.settings.registration.affiliateCodeRegistration")
+                  }}</label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.registration.affiliateCodeRegistrationHint") }}
+                  </p>
+                  <p
+                    v-if="!form.affiliate_enabled"
+                    class="mt-1 text-xs text-amber-600 dark:text-amber-400"
+                  >
+                    {{ t("admin.settings.registration.affiliateCodeRegistrationRequiresAffiliate") }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.affiliate_code_registration_enabled"
+                  :disabled="!form.affiliate_enabled"
+                />
+              </div>
               <!-- Password Reset - Only show when email verification is enabled -->
               <div
                 v-if="form.email_verify_enabled"
@@ -9595,6 +9618,7 @@ const form = reactive<SettingsForm>({
   registration_email_domain_quota_enabled: false,
   promo_code_enabled: true,
   invitation_code_enabled: false,
+  affiliate_code_registration_enabled: false,
   password_reset_enabled: false,
   totp_enabled: false,
   totp_encryption_key_configured: false,
@@ -11251,6 +11275,7 @@ async function saveSettings() {
         form.registration_email_domain_quota_enabled,
       promo_code_enabled: form.promo_code_enabled,
       invitation_code_enabled: form.invitation_code_enabled,
+      affiliate_code_registration_enabled: form.affiliate_code_registration_enabled,
       password_reset_enabled: form.password_reset_enabled,
       totp_enabled: form.totp_enabled,
       passkey_enabled: form.passkey_enabled,

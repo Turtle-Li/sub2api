@@ -89,7 +89,7 @@
             </div>
             <button
               class="btn btn-primary w-full"
-              :disabled="isSubmitting || !invitationCode.trim()"
+              :disabled="isSubmitting || (!invitationCode.trim() && !loadOAuthAffiliateCode())"
               @click="handleSubmitInvitation"
             >
               {{ isSubmitting ? t('auth.dingtalk.completing') : t('auth.dingtalk.completeRegistration') }}
@@ -250,6 +250,7 @@ import {
   isOAuthLoginCompletion,
   login2FA,
   persistOAuthTokenContext,
+  validateInvitationCode,
   type OAuthAdoptionDecision,
   type OAuthTokenResponse,
   type PendingOAuthExchangeResponse
@@ -635,11 +636,16 @@ async function finalizePendingAccountResponse(completion: DingTalkPendingActionR
 
 async function handleSubmitInvitation() {
   invitationError.value = ''
-  if (!invitationCode.value.trim()) return
+  const manualCode = invitationCode.value.trim()
+  const affCode = loadOAuthAffiliateCode()
+  if (!manualCode && !affCode) return
 
   isSubmitting.value = true
   try {
-    const affCode = loadOAuthAffiliateCode()
+    if (!manualCode && !(await validateInvitationCode(affCode, 'affiliate')).valid) {
+      invitationError.value = t('auth.invitationCodeInvalid')
+      return
+    }
     const decision = currentAdoptionDecision()
     const { data: completion } = await apiClient.post<DingTalkPendingActionResponse>(
       '/auth/oauth/dingtalk/complete-registration',

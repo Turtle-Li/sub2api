@@ -727,6 +727,10 @@ const (
 	SettingKeyWebSearchEmulationConfig = "web_search_emulation_config" // JSON 配置
 )
 
+// SettingKeyAffiliateCodeRegistrationEnabled controls whether affiliate codes
+// may satisfy invitation-only registration. Missing settings default to false.
+const SettingKeyAffiliateCodeRegistrationEnabled = "affiliate_code_registration_enabled"
+
 // SettingKeyDefaultPlatformQuotas —— 系统全局：每用户 × 平台日/周/月 USD 上限（JSON）。
 // 值为 map[platform]{daily,weekly,monthly}，null/缺省 = 不限制；0 = 禁用；>0 = USD 上限。
 const SettingKeyDefaultPlatformQuotas = "default_platform_quotas"

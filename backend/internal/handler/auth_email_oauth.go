@@ -372,11 +372,12 @@ func (h *AuthHandler) completeEmailOAuthRegistration(c *gin.Context, provider st
 		affiliateCode = pendingSessionStringValue(session.UpstreamIdentityClaims, "aff_code")
 	}
 
-	tokenPair, user, err := h.authService.RegisterVerifiedOAuthEmailAccount(
+	tokenPair, user, err := h.authService.RegisterVerifiedOAuthEmailAccountWithAffiliate(
 		c.Request.Context(),
 		strings.TrimSpace(session.ResolvedEmail),
 		req.Password,
 		strings.TrimSpace(req.InvitationCode),
+		affiliateCode,
 		strings.TrimSpace(session.ProviderType),
 	)
 	if err != nil {

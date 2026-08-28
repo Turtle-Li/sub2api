@@ -1766,12 +1766,13 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		return
 	}
 
-	tokenPair, user, err := h.authService.RegisterOAuthEmailAccount(
+	tokenPair, user, err := h.authService.RegisterOAuthEmailAccountWithAffiliate(
 		c.Request.Context(),
 		email,
 		req.Password,
 		strings.TrimSpace(req.VerifyCode),
 		strings.TrimSpace(req.InvitationCode),
+		strings.TrimSpace(req.AffCode),
 		strings.TrimSpace(session.ProviderType),
 	)
 	if err != nil {

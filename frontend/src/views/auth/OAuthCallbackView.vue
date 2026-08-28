@@ -156,6 +156,7 @@ import { buildApiUrl } from '@/api/url'
 import {
   exchangePendingOAuthCompletion,
   persistOAuthTokenContext,
+  validateInvitationCode,
   type OAuthTokenResponse
 } from '@/api/auth'
 import {
@@ -215,7 +216,7 @@ const canSubmitRegistration = computed(() => {
   if (!registrationEmail.value.trim()) return false
   if (password.value.length < 6) return false
   if (password.value !== confirmPassword.value) return false
-  if (invitationRequired.value && !invitationCode.value.trim()) return false
+  if (invitationRequired.value && !invitationCode.value.trim() && !loadOAuthAffiliateCode()) return false
   return true
 })
 
@@ -338,13 +339,21 @@ async function handleSubmitRegistration() {
     return
   }
   const code = invitationCode.value.trim()
-  if (invitationRequired.value && !code) return
+  if (invitationRequired.value && !code && !loadOAuthAffiliateCode()) return
 
   isSubmitting.value = true
   try {
+    const affiliateCode = loadOAuthAffiliateCode()
+    if (invitationRequired.value && !code && affiliateCode) {
+      const validation = await validateInvitationCode(affiliateCode, 'affiliate')
+      if (!validation.valid) {
+        registrationError.value = t('auth.invitationCodeInvalid')
+        return
+      }
+    }
     const payload: { password: string; invitation_code?: string; aff_code?: string } = {
       password: password.value,
-      ...oauthAffiliatePayload(loadOAuthAffiliateCode())
+      ...oauthAffiliatePayload(affiliateCode)
     }
     if (invitationRequired.value) {
       payload.invitation_code = code

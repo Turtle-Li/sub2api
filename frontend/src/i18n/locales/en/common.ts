@@ -297,7 +297,7 @@ export default {
     promoCodeValidating: 'Promo code is being validated, please wait',
     promoCodeInvalidCannotRegister: 'Invalid promo code. Please check and try again or clear the promo code field',
     invitationCodeLabel: 'Invitation Code',
-    invitationCodePlaceholder: 'Enter invitation code',
+    invitationCodePlaceholder: 'Enter an invitation or affiliate code',
     invitationCodeRequired: 'Invitation code is required',
     invitationCodeValid: 'Invitation code is valid',
     invitationCodeInvalid: 'Invalid or used invitation code',

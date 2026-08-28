@@ -80,7 +80,7 @@
       :data-testid="`${testIdPrefix}-create-account-submit`"
       type="button"
       class="btn btn-primary w-full"
-      :disabled="isSubmitting || !email.trim() || password.length < 6 || (invitationCodeEnabled && !invitationCode.trim()) || (turnstileEnabled && !turnstileToken)"
+      :disabled="isSubmitting || !email.trim() || password.length < 6 || (invitationCodeEnabled && !invitationCode.trim() && !affiliateRegistrationCodeValid) || (turnstileEnabled && !turnstileToken)"
       @click="handleSubmit"
     >
       {{ isSubmitting ? t('common.processing') : t('auth.createAccount') }}
@@ -100,8 +100,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TurnstileWidget from '@/components/CaptchaChallenge.vue'
-import { getPublicSettings, sendPendingOAuthVerifyCode } from '@/api/auth'
+import { getPublicSettings, sendPendingOAuthVerifyCode, validateInvitationCode } from '@/api/auth'
 import { useAppStore } from '@/stores'
+import { loadOAuthAffiliateCode } from '@/utils/oauthAffiliate'
 
 export type PendingOAuthCreateAccountPayload = {
   email: string
@@ -137,6 +138,7 @@ const sendCodeError = ref('')
 const sendCodeSuccess = ref(false)
 const countdown = ref(0)
 const invitationCodeEnabled = ref(false)
+const affiliateRegistrationCodeValid = ref(false)
 const emailVerifyEnabled = ref(true)
 const turnstileEnabled = ref(false)
 const turnstileSiteKey = ref('')
@@ -305,6 +307,9 @@ async function handleSubmit() {
   if (!trimmedEmail || password.value.length < 6) {
     return
   }
+  if (invitationCodeEnabled.value && !invitationCode.value.trim() && !affiliateRegistrationCodeValid.value) {
+    return
+  }
 
   // Turnstile 票据一次性：发送验证码已消耗上一枚，reset 后要等新票据回调。
   // 缺票时不能提交——create-account 端点会校验验证码，空 token 直接被判失败。
@@ -347,6 +352,16 @@ onMounted(async () => {
   try {
     const settings = await getPublicSettings()
     invitationCodeEnabled.value = settings.invitation_code_enabled === true
+    const affiliateRegistrationEnabled =
+      invitationCodeEnabled.value &&
+      settings.affiliate_enabled === true &&
+      settings.affiliate_code_registration_enabled === true
+    const affiliateCode = loadOAuthAffiliateCode()
+    if (affiliateRegistrationEnabled && affiliateCode) {
+      affiliateRegistrationCodeValid.value = (
+        await validateInvitationCode(affiliateCode, 'affiliate')
+      ).valid
+    }
     emailVerifyEnabled.value = settings.email_verify_enabled !== false
     turnstileEnabled.value = settings.turnstile_enabled === true
     turnstileSiteKey.value = settings.turnstile_site_key || ''
@@ -359,6 +374,7 @@ onMounted(async () => {
     aliyunCaptchaRegion.value = settings.aliyun_captcha_region || 'cn'
   } catch {
     invitationCodeEnabled.value = false
+    affiliateRegistrationCodeValid.value = false
     emailVerifyEnabled.value = true
     turnstileEnabled.value = false
     turnstileSiteKey.value = ''
