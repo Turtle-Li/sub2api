@@ -46,6 +46,7 @@ const messages: Record<string, string> = {
   'keys.expiresAt': 'Expires',
   'keys.group': 'Group',
   'keys.id': 'ID',
+  'keys.importToCcSwitch': 'Import to CCS',
   'keys.currentConcurrency': 'Current Concurrency',
   'keys.lastUsedAt': 'Last Used',
   'keys.lastUsedIP': 'Last Used IP',
@@ -177,6 +178,9 @@ const DataTableStub = {
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
         </div>
+        <div data-test="actions">
+          <slot name="cell-actions" :row="row" />
+        </div>
         <div
           v-if="columns.some((col) => col.key === 'last_used_ip')"
           data-test="last-used-ip"
@@ -263,6 +267,14 @@ const getButtonByText = (wrapper: VueWrapper, text: string) => {
     throw new Error(`Button not found: ${text}`)
   }
   return button
+}
+
+const importToCcSwitch = async (wrapper: VueWrapper) => {
+  const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+  await getButtonByText(wrapper, 'Import to CCS').trigger('click')
+  const deeplink = String(open.mock.calls.at(-1)?.[0] || '')
+  open.mockRestore()
+  return new URLSearchParams(deeplink.split('?')[1] || '')
 }
 
 describe('user KeysView column settings', () => {
@@ -640,5 +652,54 @@ describe('user KeysView column settings', () => {
       expect(wrapper.find('[data-tour="key-form-provider"]').exists()).toBe(false)
       expect(optionIds(wrapper)).toHaveLength(11)
     })
+  })
+
+  it('imports the site domain as homepage and includes every configured endpoint', async () => {
+    getPublicSettings.mockResolvedValue({
+      site_name: 'Sub2API Test',
+      site_domain: 'panel.example.com',
+      api_base_url: 'https://api.example.com',
+      custom_endpoints: [
+        { name: 'Backup 1', endpoint: 'https://backup-1.example.com', description: '' },
+        { name: 'Backup 2', endpoint: 'https://backup-2.example.com', description: '' },
+      ],
+    })
+    const wrapper = await mountView()
+
+    const params = await importToCcSwitch(wrapper)
+
+    expect(params.get('name')).toBe('Sub2API Test')
+    expect(params.get('homepage')).toBe(`${window.location.protocol}//panel.example.com`)
+    expect(params.get('endpoint')).toBe(
+      'https://api.example.com,https://backup-1.example.com,https://backup-2.example.com'
+    )
+  })
+
+  it('falls back to the API base URL when the site domain is empty', async () => {
+    getPublicSettings.mockResolvedValue({
+      site_domain: '',
+      api_base_url: 'https://api.example.com',
+      custom_endpoints: [],
+    })
+    const wrapper = await mountView()
+
+    const params = await importToCcSwitch(wrapper)
+
+    expect(params.get('homepage')).toBe('https://api.example.com')
+    expect(params.get('endpoint')).toBe('https://api.example.com')
+  })
+
+  it('falls back to the current origin when site and API addresses are empty', async () => {
+    getPublicSettings.mockResolvedValue({
+      site_domain: '',
+      api_base_url: '',
+      custom_endpoints: [],
+    })
+    const wrapper = await mountView()
+
+    const params = await importToCcSwitch(wrapper)
+
+    expect(params.get('homepage')).toBe(window.location.origin)
+    expect(params.get('endpoint')).toBe(window.location.origin)
   })
 })

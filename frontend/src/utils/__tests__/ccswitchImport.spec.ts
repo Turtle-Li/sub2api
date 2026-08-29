@@ -43,6 +43,42 @@ describe('ccswitchImport utils', () => {
     expect(atob(params.get('usageScript') || '')).toBe(baseInput.usageScript)
   })
 
+  it('imports multiple unique endpoints and keeps a separate homepage', () => {
+    const params = paramsFromDeeplink(
+      buildCcSwitchImportDeeplink({
+        ...baseInput,
+        homepage: 'https://www.example.com',
+        additionalEndpoints: [
+          'https://api-backup.example.com',
+          ' https://api.example.com ',
+          ''
+        ],
+        platform: 'anthropic',
+        clientType: 'claude'
+      })
+    )
+
+    expect(params.get('homepage')).toBe('https://www.example.com')
+    expect(params.get('endpoint')).toBe(
+      'https://api.example.com,https://api-backup.example.com'
+    )
+  })
+
+  it('normalizes every Grok endpoint before importing multiple endpoints', () => {
+    const params = paramsFromDeeplink(
+      buildCcSwitchImportDeeplink({
+        ...baseInput,
+        additionalEndpoints: ['https://api-backup.example.com/'],
+        platform: 'grok',
+        clientType: 'claude'
+      })
+    )
+
+    expect(params.get('endpoint')).toBe(
+      'https://api.example.com/v1,https://api-backup.example.com/v1'
+    )
+  })
+
   it.each([
     'https://api.example.com',
     'https://api.example.com/',

@@ -353,6 +353,7 @@ type PublicSettings struct {
 	SiteName                            string
 	SiteLogo                            string
 	SiteSubtitle                        string
+	SiteDomain                          string
 	APIBaseURL                          string
 	ContactInfo                         string
 	DocURL                              string

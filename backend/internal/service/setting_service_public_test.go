@@ -101,6 +101,20 @@ func TestSettingService_GetPublicSettings_ExposesCompactHomeEnabled(t *testing.T
 	require.False(t, missingSettings.CompactHomeEnabled)
 }
 
+func TestSettingService_GetPublicSettings_ExposesSiteDomain(t *testing.T) {
+	repo := &settingPublicRepoStub{
+		values: map[string]string{
+			SettingKeySiteDomain: "panel.example.com",
+		},
+	}
+	svc := NewSettingService(repo, &config.Config{})
+
+	settings, err := svc.GetPublicSettings(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, "panel.example.com", settings.SiteDomain)
+}
+
 func TestSettingService_ChannelMonitorHideThroughputDefaultsToPrivate(t *testing.T) {
 	missing := NewSettingService(&settingPublicRepoStub{values: map[string]string{}}, &config.Config{}).GetChannelMonitorRuntime(context.Background())
 	require.True(t, missing.HideThroughput)

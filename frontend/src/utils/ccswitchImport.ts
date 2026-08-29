@@ -13,6 +13,8 @@ export interface CcSwitchImportConfig {
 
 export interface CcSwitchImportDeeplinkInput {
   baseUrl: string
+  additionalEndpoints?: string[]
+  homepage?: string
   platform?: GroupPlatform | null
   clientType: CcSwitchClientType
   providerName: string
@@ -63,12 +65,17 @@ export function resolveCcSwitchImportConfig(
 
 export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput): string {
   const config = resolveCcSwitchImportConfig(input.platform, input.clientType, input.baseUrl)
+  const endpoints = [input.baseUrl, ...(input.additionalEndpoints || [])]
+    .map(endpoint => endpoint.trim())
+    .filter((endpoint, index, all) => endpoint && all.indexOf(endpoint) === index)
+    .map(endpoint => resolveCcSwitchImportConfig(input.platform, input.clientType, endpoint).endpoint)
+    .filter((endpoint, index, all) => all.indexOf(endpoint) === index)
   const entries: [string, string][] = [
     ['resource', 'provider'],
     ['app', config.app],
     ['name', input.providerName],
-    ['homepage', input.baseUrl],
-    ['endpoint', config.endpoint],
+    ['homepage', input.homepage || input.baseUrl],
+    ['endpoint', endpoints.join(',')],
     ['apiKey', input.apiKey],
     ['configFormat', 'json'],
     ['usageEnabled', 'true'],
