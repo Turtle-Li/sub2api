@@ -42,6 +42,7 @@ func SetupRouter(
 	var cachedFrameOrigins atomic.Pointer[[]string]
 	emptyOrigins := []string{}
 	cachedFrameOrigins.Store(&emptyOrigins)
+	siteDomainGuard := middleware2.NewSiteDomainGuard()
 
 	refreshFrameOrigins := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), frameSrcRefreshTimeout)
@@ -53,7 +54,20 @@ func SetupRouter(
 		}
 		cachedFrameOrigins.Store(&origins)
 	}
+	refreshSiteDomain := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), frameSrcRefreshTimeout)
+		defer cancel()
+		siteDomain, err := settingService.GetSiteDomain(ctx)
+		if err != nil {
+			log.Printf("Warning: Failed to refresh site domain guard: %v", err)
+			return
+		}
+		if err := siteDomainGuard.Set(siteDomain); err != nil {
+			log.Printf("Warning: Failed to apply site domain guard: %v", err)
+		}
+	}
 	refreshFrameOrigins() // 启动时初始化
+	refreshSiteDomain()
 
 	// 应用中间件
 	r.Use(middleware2.RequestLogger())
@@ -69,28 +83,39 @@ func SetupRouter(
 		return nil
 	}))
 	r.Use(middleware2.ServerTiming(cfg.Server.EnableServerTiming))
+	// Panel APIs reject requests on non-canonical hosts, including unmatched
+	// /api/v1 paths. Gateway routes are outside this prefix and pass through.
+	r.Use(siteDomainGuard.RequireHost())
 
 	// Serve embedded frontend with settings injection if available
 	if web.HasEmbeddedFrontend() {
 		frontendServer, err := web.NewFrontendServer(settingService) //nolint:staticcheck // SA4023: the !embed stub always errors; embed builds can return nil
 		if err != nil {                                              //nolint:staticcheck // SA4023: see above
 			log.Printf("Warning: Failed to create frontend server with settings injection: %v, using legacy mode", err)
-			r.Use(web.ServeEmbeddedFrontend())
-			settingService.SetOnUpdateCallback(refreshFrameOrigins)
+			r.Use(web.ServeEmbeddedFrontend(siteDomainGuard))
+			settingService.SetOnUpdateCallback(func() {
+				refreshFrameOrigins()
+				refreshSiteDomain()
+			})
 		} else {
+			frontendServer.SetSiteDomainGuard(siteDomainGuard)
 			// Register combined callback: invalidate HTML cache + refresh frame origins
 			settingService.SetOnUpdateCallback(func() {
 				frontendServer.InvalidateCache()
 				refreshFrameOrigins()
+				refreshSiteDomain()
 			})
 			r.Use(frontendServer.Middleware())
 		}
 	} else {
-		settingService.SetOnUpdateCallback(refreshFrameOrigins)
+		settingService.SetOnUpdateCallback(func() {
+			refreshFrameOrigins()
+			refreshSiteDomain()
+		})
 	}
 
 	// 注册路由
-	registerRoutes(r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, auditLog, stepUpAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg, redisClient)
+	registerRoutes(r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, auditLog, stepUpAuth, apiKeyService, subscriptionService, opsService, settingService, siteDomainGuard, compositeResolver, cfg, redisClient)
 
 	return r
 }
@@ -109,12 +134,13 @@ func registerRoutes(
 	subscriptionService *service.SubscriptionService,
 	opsService *service.OpsService,
 	settingService *service.SettingService,
+	siteDomainGuard *middleware2.SiteDomainGuard,
 	compositeResolver *service.CompositeRouteResolver,
 	cfg *config.Config,
 	redisClient *redis.Client,
 ) {
 	// 通用路由（健康检查、状态等）
-	routes.RegisterCommonRoutes(r)
+	routes.RegisterCommonRoutes(r, siteDomainGuard.RedirectHost())
 
 	// API v1
 	v1 := r.Group("/api/v1")

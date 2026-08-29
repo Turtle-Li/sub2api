@@ -36,12 +36,21 @@ type PublicSettingsProvider interface {
 
 // FrontendServer serves the embedded frontend with settings injection
 type FrontendServer struct {
-	distFS      fs.FS
-	fileServer  http.Handler
-	baseHTML    []byte
-	cache       *HTMLCache
-	settings    PublicSettingsProvider
-	overrideDir string // local file override directory
+	distFS          fs.FS
+	fileServer      http.Handler
+	baseHTML        []byte
+	cache           *HTMLCache
+	settings        PublicSettingsProvider
+	siteDomainGuard *middleware.SiteDomainGuard
+	overrideDir     string // local file override directory
+}
+
+// SetSiteDomainGuard adds canonical-domain redirects for requests that this
+// server has already identified as frontend pages or static assets.
+func (s *FrontendServer) SetSiteDomainGuard(guard *middleware.SiteDomainGuard) {
+	if s != nil {
+		s.siteDomainGuard = guard
+	}
 }
 
 // NewFrontendServer creates a new frontend server with settings injection
@@ -86,14 +95,17 @@ func (s *FrontendServer) InvalidateCache() {
 // Middleware returns the Gin middleware handler
 func (s *FrontendServer) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		path := c.Request.URL.Path
-
-		// Skip API routes
-		if shouldBypassEmbeddedFrontend(path) {
+		// Gin resolves the route before running its handler chain. Any matched
+		// backend route, including every gateway alias, must bypass the SPA server.
+		if c.FullPath() != "" {
 			c.Next()
 			return
 		}
+		if s.siteDomainGuard != nil && s.siteDomainGuard.RedirectPage(c) {
+			return
+		}
 
+		path := c.Request.URL.Path
 		cleanPath := strings.TrimPrefix(path, "/")
 		if cleanPath == "" {
 			cleanPath = "index.html"
@@ -300,7 +312,7 @@ func replaceNoncePlaceholder(html []byte, nonce string) []byte {
 
 // ServeEmbeddedFrontend returns a middleware for serving embedded frontend
 // This is the legacy function for backward compatibility when no settings provider is available
-func ServeEmbeddedFrontend() gin.HandlerFunc {
+func ServeEmbeddedFrontend(siteDomainGuards ...*middleware.SiteDomainGuard) gin.HandlerFunc {
 	distFS, err := fs.Sub(frontendFS, "dist")
 	if err != nil {
 		panic("failed to get dist subdirectory: " + err.Error())
@@ -309,13 +321,15 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 	overrideDir := filepath.Join("data", "public")
 
 	return func(c *gin.Context) {
-		path := c.Request.URL.Path
-
-		if shouldBypassEmbeddedFrontend(path) {
+		if c.FullPath() != "" {
 			c.Next()
 			return
 		}
+		if len(siteDomainGuards) > 0 && siteDomainGuards[0] != nil && siteDomainGuards[0].RedirectPage(c) {
+			return
+		}
 
+		path := c.Request.URL.Path
 		cleanPath := strings.TrimPrefix(path, "/")
 		if cleanPath == "" {
 			cleanPath = "index.html"
@@ -350,23 +364,6 @@ func tryServeOverrideFile(c *gin.Context, overrideDir, cleanPath string) bool {
 	c.File(filePath)
 	c.Abort()
 	return true
-}
-
-func shouldBypassEmbeddedFrontend(path string) bool {
-	trimmed := strings.TrimSpace(path)
-	return strings.HasPrefix(trimmed, "/api/") ||
-		strings.HasPrefix(trimmed, "/v1/") ||
-		strings.HasPrefix(trimmed, "/v1beta/") ||
-		strings.HasPrefix(trimmed, "/backend-api/") ||
-		strings.HasPrefix(trimmed, "/antigravity/") ||
-		strings.HasPrefix(trimmed, "/setup/") ||
-		trimmed == "/health" ||
-		trimmed == "/models" ||
-		trimmed == "/responses" ||
-		strings.HasPrefix(trimmed, "/responses/") ||
-		trimmed == "/alpha/search" ||
-		strings.HasPrefix(trimmed, "/images/") ||
-		strings.HasPrefix(trimmed, "/videos/")
 }
 
 func serveIndexHTML(c *gin.Context, fsys fs.FS) {

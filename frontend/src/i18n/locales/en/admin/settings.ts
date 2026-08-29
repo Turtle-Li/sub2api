@@ -628,6 +628,10 @@ export default {
         siteSubtitle: 'Site Subtitle',
         siteSubtitlePlaceholder: 'Subscription to API Conversion Platform',
         siteSubtitleHint: 'Displayed on login and register pages',
+        siteDomain: 'Site Domain',
+        siteDomainPlaceholder: 'ai.example.com',
+        siteDomainHint:
+          'Enter only the domain without http:// or https://. When configured, page requests on other domains are redirected here with 307 and panel APIs return 403. AI APIs are unaffected. Leave empty to keep the current behavior.',
         apiBaseUrl: 'API Base URL',
         apiBaseUrlPlaceholder: 'https://api.example.com',
         apiBaseUrlHint:

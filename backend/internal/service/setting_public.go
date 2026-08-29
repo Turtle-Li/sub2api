@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -151,6 +152,23 @@ func (s *SettingService) GetFrontendURL(ctx context.Context) string {
 		return strings.TrimSpace(val)
 	}
 	return s.cfg.Server.FrontendURL
+}
+
+// GetSiteDomain returns the configured canonical site domain. An absent setting
+// keeps the legacy behavior and disables host enforcement.
+func (s *SettingService) GetSiteDomain(ctx context.Context) (string, error) {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeySiteDomain)
+	if errors.Is(err, ErrSettingNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get site domain: %w", err)
+	}
+	value, err = normalizeSiteDomain(value)
+	if err != nil {
+		return "", fmt.Errorf("invalid stored site domain: %w", err)
+	}
+	return value, nil
 }
 
 // GetPublicSettings 获取公开设置（无需登录）

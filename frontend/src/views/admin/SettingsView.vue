@@ -6337,6 +6337,24 @@
                 </div>
               </div>
 
+              <!-- Site Domain -->
+              <div>
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.site.siteDomain") }}
+                </label>
+                <input
+                  v-model="form.site_domain"
+                  type="text"
+                  class="input font-mono text-sm"
+                  :placeholder="t('admin.settings.site.siteDomainPlaceholder')"
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.site.siteDomainHint") }}
+                </p>
+              </div>
+
               <!-- API Base URL -->
               <div>
                 <label
@@ -9648,6 +9666,7 @@ const form = reactive<SettingsForm>({
   site_name: "Sub2API",
   site_logo: "",
   site_subtitle: "Subscription to API Conversion Platform",
+  site_domain: "",
   api_base_url: "",
   contact_info: "",
   doc_url: "",
@@ -11306,6 +11325,7 @@ async function saveSettings() {
       site_name: form.site_name,
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle,
+      site_domain: form.site_domain,
       api_base_url: form.api_base_url,
       contact_info: form.contact_info,
       doc_url: form.doc_url,

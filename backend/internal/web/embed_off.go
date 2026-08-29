@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,6 +29,8 @@ func NewFrontendServer(settingsProvider PublicSettingsProvider) (*FrontendServer
 // InvalidateCache is a no-op for non-embed builds
 func (s *FrontendServer) InvalidateCache() {}
 
+func (s *FrontendServer) SetSiteDomainGuard(_ *middleware.SiteDomainGuard) {}
+
 // Middleware returns a handler that returns 404 for non-embed builds
 func (s *FrontendServer) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -36,7 +39,7 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 	}
 }
 
-func ServeEmbeddedFrontend() gin.HandlerFunc {
+func ServeEmbeddedFrontend(_ ...*middleware.SiteDomainGuard) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.String(http.StatusNotFound, "Frontend not embedded. Build with -tags embed to include frontend.")
 		c.Abort()

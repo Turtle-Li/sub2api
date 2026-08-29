@@ -66,6 +66,22 @@ func TestUpdateSettingsSMTPFromAliasIsWritable(t *testing.T) {
 	require.Equal(t, "new@example.com", repo.values[service.SettingKeySMTPFrom])
 }
 
+func TestUpdateSettingsNormalizesSiteDomain(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{})
+
+	rec := doUpdateSettings(t, h, map[string]any{"site_domain": " AI.EXAMPLE.COM/ "}, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "ai.example.com", repo.values[service.SettingKeySiteDomain])
+}
+
+func TestUpdateSettingsRejectsSiteDomainWithProtocol(t *testing.T) {
+	h, _ := newStepUpSwitchTestHandler(t, map[string]string{})
+
+	rec := doUpdateSettings(t, h, map[string]any{"site_domain": "https://ai.example.com"}, nil)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "INVALID_SITE_DOMAIN")
+}
+
 func TestUpdateSettingsGrokDefaultBaseURLModeIsWritable(t *testing.T) {
 	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
 		service.SettingKeyGrokDefaultBaseURLMode: service.GrokDefaultBaseURLModeCLI,

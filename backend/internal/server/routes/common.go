@@ -7,7 +7,7 @@ import (
 )
 
 // RegisterCommonRoutes 注册通用路由（健康检查、状态等）
-func RegisterCommonRoutes(r *gin.Engine) {
+func RegisterCommonRoutes(r *gin.Engine, siteRedirect gin.HandlerFunc) {
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -20,7 +20,7 @@ func RegisterCommonRoutes(r *gin.Engine) {
 
 	// Setup status endpoint (always returns needs_setup: false in normal mode)
 	// This is used by the frontend to detect when the service has restarted after setup
-	r.GET("/setup/status", func(c *gin.Context) {
+	r.GET("/setup/status", siteRedirect, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 0,
 			"data": gin.H{

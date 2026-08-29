@@ -510,6 +510,52 @@ func TestOverrideFilesNeverReceiveImmutableCacheHeaders(t *testing.T) {
 }
 
 func TestFrontendServer_Middleware(t *testing.T) {
+	t.Run("redirects_frontend_pages_but_not_ai_routes", func(t *testing.T) {
+		provider := &mockSettingsProvider{settings: map[string]string{"test": "value"}}
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+		guard := middleware.NewSiteDomainGuard()
+		require.NoError(t, guard.Set("ai.example.com"))
+		server.SetSiteDomainGuard(guard)
+
+		gatewayPaths := []string{
+			"/v1/messages",
+			"/chat/completions",
+			"/embeddings",
+			"/messages/count_tokens",
+			"/videos",
+			"/tts",
+			"/stt",
+			"/custom-voices",
+			"/realtime",
+			"/web_search",
+			"/x_search",
+		}
+		router := gin.New()
+		router.Use(server.Middleware())
+		for _, path := range gatewayPaths {
+			router.POST(path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+		}
+
+		pageResponse := httptest.NewRecorder()
+		pageRequest := httptest.NewRequest(http.MethodGet, "/dashboard?tab=keys", nil)
+		pageRequest.Host = "other.example.com"
+		router.ServeHTTP(pageResponse, pageRequest)
+		assert.Equal(t, http.StatusTemporaryRedirect, pageResponse.Code)
+		assert.Equal(t, "//ai.example.com/dashboard?tab=keys", pageResponse.Header().Get("Location"))
+
+		for _, path := range gatewayPaths {
+			t.Run(path, func(t *testing.T) {
+				apiResponse := httptest.NewRecorder()
+				apiRequest := httptest.NewRequest(http.MethodPost, path, nil)
+				apiRequest.Host = "other.example.com"
+				router.ServeHTTP(apiResponse, apiRequest)
+				assert.Equal(t, http.StatusNoContent, apiResponse.Code)
+				assert.Empty(t, apiResponse.Header().Get("Location"))
+			})
+		}
+	})
+
 	t.Run("skips_api_routes", func(t *testing.T) {
 		provider := &mockSettingsProvider{
 			settings: map[string]string{"test": "value"},
@@ -676,17 +722,6 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, assetWriter.Code)
 		assert.Equal(t, staticAssetsCacheControl, assetWriter.Header().Get("Cache-Control"))
 	})
-}
-
-func TestEmbeddedFrontendBypassesBareVideoAPIRoutes(t *testing.T) {
-	for _, path := range []string{
-		"/videos/generations",
-		"/videos/edits",
-		"/videos/extensions",
-		"/videos/request-123",
-	} {
-		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
-	}
 }
 
 func TestNewFrontendServer(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -157,6 +158,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	settings.GoogleOAuthFrontendRedirectURL = strings.TrimSpace(settings.GoogleOAuthFrontendRedirectURL)
 	if settings.GoogleOAuthFrontendRedirectURL == "" {
 		settings.GoogleOAuthFrontendRedirectURL = defaultGoogleOAuthFrontend
+	}
+	settings.SiteDomain, err = normalizeSiteDomain(settings.SiteDomain)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_SITE_DOMAIN", err.Error())
 	}
 
 	updates := make(map[string]string)
@@ -340,6 +345,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeySiteName] = settings.SiteName
 	updates[SettingKeySiteLogo] = settings.SiteLogo
 	updates[SettingKeySiteSubtitle] = settings.SiteSubtitle
+	updates[SettingKeySiteDomain] = settings.SiteDomain
 	updates[SettingKeyAPIBaseURL] = settings.APIBaseURL
 	updates[SettingKeyContactInfo] = settings.ContactInfo
 	updates[SettingKeyDocURL] = settings.DocURL
@@ -550,6 +556,25 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyAllowUserViewErrorRequests] = strconv.FormatBool(settings.AllowUserViewErrorRequests)
 
 	return updates, nil
+}
+
+func normalizeSiteDomain(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if strings.Contains(value, "://") {
+		return "", fmt.Errorf("site domain must not include http:// or https://")
+	}
+	value = strings.TrimRight(value, "/")
+	u, err := url.Parse("//" + value)
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return "", fmt.Errorf("site domain is invalid")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
+		return "", fmt.Errorf("site domain must not contain a path, query, fragment, or user info")
+	}
+	return strings.ToLower(u.Host), nil
 }
 
 func defaultAccountSchedulingThresholds() map[string]int {
