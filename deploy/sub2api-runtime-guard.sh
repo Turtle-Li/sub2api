@@ -51,7 +51,7 @@ RUNTIME_GUARD_NETWORK="${SUB2API_RUNTIME_GUARD_NETWORK:-sub2api_default}"
 RUNTIME_GUARD_DATA_VOLUME="${SUB2API_RUNTIME_GUARD_DATA_VOLUME:-sub2api_sub2api_data}"
 EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
 EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
-TRAFFIC_STATE_FILE="${SUB2API_TRAFFIC_STATE_FILE:-/var/lib/sub2api/runtime/traffic-state}"
+TRAFFIC_STATE_FILE="${SUB2API_TRAFFIC_STATE_FILE_HOST:-${SUB2API_TRAFFIC_STATE_FILE:-/var/lib/sub2api/runtime/traffic-state}}"
 BACKGROUND_STATE_DIR="${SUB2API_BACKGROUND_STATE_DIR_HOST:-/var/lib/sub2api/runtime/background}"
 HEALTH_TOKEN_FILE="${SUB2API_INTERNAL_HEALTH_TOKEN_FILE:-${APP_DIR}/secrets/internal-health-token}"
 CONTAINER_PG_CA_PATH="/etc/sub2api-db-ca/ca.crt"
@@ -345,7 +345,10 @@ application_runtime_matches() {
   return 0
 }
 
-verify_application_runtime_before_lifecycle() {
+verify_application_runtime_before_lifecycle() (
+  # The validators deliberately use die() so strict callers get precise
+  # diagnostics. Isolate them in a subshell so lifecycle callers can convert
+  # validation failure into a transaction result and persist cooldown state.
   local container_name="$1"
   if [ "$DEPENDENCY_MODE" = external ]; then
     load_external_runtime_env
@@ -359,7 +362,7 @@ verify_application_runtime_before_lifecycle() {
     }
   fi
   return 0
-}
+)
 
 unique_upstream_from_file() {
   local config_file="$1"
@@ -873,8 +876,12 @@ case "$ACTIVE_CONTAINER" in
   *) die "unsupported active container parsed from Caddyfile: ${ACTIVE_CONTAINER}" ;;
 esac
 
-verify_application_runtime_before_lifecycle "$ACTIVE_CONTAINER" \
-  || die "active application runtime does not match the configured dependency and dual-node contract"
+if container_exists "$ACTIVE_CONTAINER"; then
+  verify_application_runtime_before_lifecycle "$ACTIVE_CONTAINER" \
+    || die "active application runtime does not match the configured dependency and dual-node contract"
+else
+  log "Caddy-selected active container is absent; deferring runtime contract validation to recovery candidates: ${ACTIVE_CONTAINER}"
+fi
 
 case "$DEPENDENCY_MODE" in
   local)

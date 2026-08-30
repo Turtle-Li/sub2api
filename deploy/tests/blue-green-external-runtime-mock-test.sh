@@ -13,8 +13,10 @@ CALLS="$TEST_ROOT/calls.log"
 OUTPUT="$TEST_ROOT/output.log"
 RUNTIME_ENV="$TEST_ROOT/external.env"
 CA_FILE="$TEST_ROOT/ca.crt"
-TRAFFIC_STATE_FILE="$TEST_ROOT/traffic-state"
-BACKGROUND_STATE_FILE="$TEST_ROOT/background-state"
+RUNTIME_STATE_DIR="$TEST_ROOT/runtime"
+TRAFFIC_STATE_FILE="$RUNTIME_STATE_DIR/traffic-state"
+BACKGROUND_STATE_DIR="$RUNTIME_STATE_DIR/background"
+BACKGROUND_STATE_FILE="$BACKGROUND_STATE_DIR/sub2api-green"
 HEALTH_TOKEN_FILE="$TEST_ROOT/health-token"
 
 cleanup() {
@@ -68,7 +70,7 @@ make_state() {
   cp "$mounts_file" "$path/mounts"
 }
 
-mkdir -p "$FAKE_BIN" "$STATE_ROOT" "$APP_DIR/scripts"
+mkdir -p "$FAKE_BIN" "$STATE_ROOT" "$APP_DIR/scripts" "$BACKGROUND_STATE_DIR"
 printf 'reverse_proxy sub2api-green:8080\n' >"$APP_DIR/Caddyfile"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_DIR/scripts/backup.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_DIR/scripts/sub2api-drain-monitor.sh"
@@ -346,8 +348,8 @@ run_helper() {
     SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE="${MODE:-external}" \
     SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$RUNTIME_ENV" \
     SUB2API_EXTERNAL_CA_FILE="$CA_FILE" \
-    SUB2API_TRAFFIC_STATE_FILE="$TRAFFIC_STATE_FILE" \
-    SUB2API_BACKGROUND_STATE_FILE="$BACKGROUND_STATE_FILE" \
+    SUB2API_TRAFFIC_STATE_FILE_HOST="$TRAFFIC_STATE_FILE" \
+    SUB2API_BACKGROUND_STATE_DIR_HOST="$BACKGROUND_STATE_DIR" \
     SUB2API_INTERNAL_HEALTH_TOKEN_FILE="$HEALTH_TOKEN_FILE" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="${DUAL_NODE_RUNTIME_ENABLED:-true}" \
     RUN_BACKUP=false \

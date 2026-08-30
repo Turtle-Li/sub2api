@@ -40,8 +40,15 @@ EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
 EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
 CONTAINER_PG_CA_PATH="/etc/sub2api-db-ca/ca.crt"
 CONTAINER_REDIS_CA_PATH="/etc/ssl/certs/sub2api-db-ca.pem"
-TRAFFIC_STATE_FILE="${SUB2API_TRAFFIC_STATE_FILE:-/var/lib/sub2api/runtime/traffic-state}"
-BACKGROUND_STATE_FILE="${SUB2API_BACKGROUND_STATE_FILE:-/var/lib/sub2api/runtime/background/${NEW_CONTAINER}}"
+TRAFFIC_STATE_FILE="${SUB2API_TRAFFIC_STATE_FILE_HOST:-${SUB2API_TRAFFIC_STATE_FILE:-/var/lib/sub2api/runtime/traffic-state}}"
+BACKGROUND_STATE_DIR="${SUB2API_BACKGROUND_STATE_DIR_HOST:-/var/lib/sub2api/runtime/background}"
+if [ -n "${SUB2API_BACKGROUND_STATE_DIR_HOST:-}" ]; then
+  BACKGROUND_STATE_FILE="${BACKGROUND_STATE_DIR}/${NEW_CONTAINER}"
+else
+  # Preserve the legacy per-file override while standardizing new host-side
+  # configuration on SUB2API_BACKGROUND_STATE_DIR_HOST.
+  BACKGROUND_STATE_FILE="${SUB2API_BACKGROUND_STATE_FILE:-${BACKGROUND_STATE_DIR}/${NEW_CONTAINER}}"
+fi
 HEALTH_TOKEN_FILE="${SUB2API_INTERNAL_HEALTH_TOKEN_FILE:-${APP_DIR}/secrets/internal-health-token}"
 CONTAINER_TRAFFIC_STATE_PATH="/run/sub2api-runtime/traffic-state"
 CONTAINER_BACKGROUND_STATE_PATH="/run/sub2api-runtime/background-state"

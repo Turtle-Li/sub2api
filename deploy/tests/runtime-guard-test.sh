@@ -401,7 +401,7 @@ run_external_guard() {
   SUB2API_RUNTIME_GUARD_NETWORK=candidate-network \
   SUB2API_RUNTIME_GUARD_DATA_VOLUME=candidate-data \
   SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
-  SUB2API_TRAFFIC_STATE_FILE="${CASE_ROOT}/runtime/traffic-state" \
+  SUB2API_TRAFFIC_STATE_FILE_HOST="${CASE_ROOT}/runtime/traffic-state" \
   SUB2API_BACKGROUND_STATE_DIR_HOST="${CASE_ROOT}/runtime/background" \
   SUB2API_INTERNAL_HEALTH_TOKEN_FILE="${CASE_ROOT}/app/secrets/internal-health-token" \
     run_guard
@@ -491,6 +491,47 @@ fi
 assert_contains "${CASE_ROOT}/output.log" 'running inactive fallback does not match the configured dependency and dual-node contract: sub2api-blue'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 assert_not_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+
+# A stopped fallback with missing per-container runtime state must fail softly
+# after isolation so the outer recovery transaction records a cooldown fence.
+new_case external-stopped-fallback-missing-state
+write_standard_dependencies
+write_external_runtime_files
+rm -f "${CASE_ROOT}/runtime/background/sub2api-blue"
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+if SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS=300 run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a fallback whose background state was absent'
+fi
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+assert_contains "${CASE_ROOT}/output.log" 'historical fallback did not become healthy'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=fallback-did-not-become-healthy'
+: >"${CASE_ROOT}/docker-calls.log"
+if SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS=300 run_external_guard >"${CASE_ROOT}/cooldown.log" 2>&1; then
+  fail 'runtime guard ignored cooldown after fallback runtime validation failed'
+fi
+assert_contains "${CASE_ROOT}/cooldown.log" 'runtime recovery is cooling down'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+
+# A Caddy-selected active container can be absent after an interrupted cleanup.
+# External/dual recovery must still validate and promote a conforming fallback.
+new_case external-active-absent-fallback
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is absent: sub2api-green'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
 
 # A stopped active slot is started and proven through Docker health plus its
 # internal health endpoint before any historical candidate is considered.

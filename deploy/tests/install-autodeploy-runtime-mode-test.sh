@@ -127,4 +127,35 @@ fi
 grep -Fqx -- 'disable --now sub2api-autodeploy.timer' "$SYSTEMCTL_CALLS" \
   || fail 'polling timer was not left disabled'
 
+# Explicit runtime-mode options must never be silently ignored when a config
+# already exists. The operator must opt into a full, auditable replacement.
+config_checksum_before="$(cksum "$CONFIG_FILE")"
+: >"$SYSTEMCTL_CALLS"
+if env \
+  PATH="${FAKE_BIN}:${PATH}" \
+  FAKE_SYSTEMCTL_CALLS="$SYSTEMCTL_CALLS" \
+  SUB2API_APP_DIR="$APP_DIR" \
+  SUB2API_AUTODEPLOY_CONFIG_FILE="$CONFIG_FILE" \
+  SUB2API_AUTODEPLOY_UNIT_DIR="$UNIT_DIR" \
+  SUB2API_RUNTIME_GUARD_EXECUTABLE="${TEST_ROOT}/libexec/sub2api-runtime-guard.sh" \
+  /bin/bash "$SCRIPT" \
+    --production-branch main \
+    --production-repo https://github.com/Turtle-Li/sub2api.git \
+    --upstream-repo https://github.com/Wei-Shaw/sub2api.git \
+    --dependency-mode external \
+    --external-runtime-env-file /etc/sub2api-external-runtime.env \
+    --external-ca-file /opt/sub2api/db-host-ca/ca.crt \
+    --dual-node-runtime-enabled true \
+    --no-enable-runtime-guard \
+    --no-enable \
+    >"${TEST_ROOT}/existing-config.out" 2>&1; then
+  fail 'existing config silently accepted explicit runtime-mode options without --replace-config'
+fi
+grep -Fq -- 'runtime configuration options require --replace-config' "${TEST_ROOT}/existing-config.out" \
+  || fail 'existing-config failure did not explain the required replacement gate'
+[ "$(cksum "$CONFIG_FILE")" = "$config_checksum_before" ] \
+  || fail 'rejected runtime-mode migration changed the existing config'
+[ ! -s "$SYSTEMCTL_CALLS" ] \
+  || fail 'rejected runtime-mode migration touched systemd'
+
 printf 'Autodeploy staged external-runtime installation test passed.\n'

@@ -300,8 +300,20 @@ defaults. The required installer options are:
 --external-runtime-env-file /etc/sub2api-external-runtime.env
 --external-ca-file /opt/sub2api/db-host-ca/ca.crt
 --dual-node-runtime-enabled true
+--replace-config
 --no-enable-runtime-guard
 ```
+
+Runtime-mode options are never merged into an existing autodeploy config
+implicitly. When the config already exists, the installer fails closed unless
+`--replace-config` is present, preventing an external node from retaining the
+legacy local-dependency mode.
+
+Host runtime-state relocation uses `SUB2API_TRAFFIC_STATE_FILE_HOST` and
+`SUB2API_BACKGROUND_STATE_DIR_HOST` consistently across node-state,
+blue/green release, and runtime recovery. The application container continues
+to receive the separate container paths through `SUB2API_TRAFFIC_STATE_FILE`
+and `SUB2API_BACKGROUND_STATE_FILE`.
 
 The guard rereads the root-owned external environment and CA immediately before
 every application start/restart. It also checks the exact network, data volume,

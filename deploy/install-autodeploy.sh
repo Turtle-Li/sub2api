@@ -32,6 +32,7 @@ CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
 EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
 DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
+RUNTIME_CONFIG_EXPLICIT=false
 
 usage() {
   cat <<'EOF'
@@ -100,36 +101,43 @@ while [ "$#" -gt 0 ]; do
     --dependency-mode)
       [ "$#" -ge 2 ] || { echo "--dependency-mode requires a value" >&2; exit 2; }
       DEPENDENCY_MODE="$2"
+      RUNTIME_CONFIG_EXPLICIT=true
       shift
       ;;
     --runtime-network)
       [ "$#" -ge 2 ] || { echo "--runtime-network requires a value" >&2; exit 2; }
       RUNTIME_NETWORK="$2"
+      RUNTIME_CONFIG_EXPLICIT=true
       shift
       ;;
     --runtime-data-volume)
       [ "$#" -ge 2 ] || { echo "--runtime-data-volume requires a value" >&2; exit 2; }
       RUNTIME_DATA_VOLUME="$2"
+      RUNTIME_CONFIG_EXPLICIT=true
       shift
       ;;
     --caddy-container)
       [ "$#" -ge 2 ] || { echo "--caddy-container requires a value" >&2; exit 2; }
       CADDY_CONTAINER="$2"
+      RUNTIME_CONFIG_EXPLICIT=true
       shift
       ;;
     --external-runtime-env-file)
       [ "$#" -ge 2 ] || { echo "--external-runtime-env-file requires a value" >&2; exit 2; }
       EXTERNAL_RUNTIME_ENV_FILE="$2"
+      RUNTIME_CONFIG_EXPLICIT=true
       shift
       ;;
     --external-ca-file)
       [ "$#" -ge 2 ] || { echo "--external-ca-file requires a value" >&2; exit 2; }
       EXTERNAL_CA_FILE="$2"
+      RUNTIME_CONFIG_EXPLICIT=true
       shift
       ;;
     --dual-node-runtime-enabled)
       [ "$#" -ge 2 ] || { echo "--dual-node-runtime-enabled requires a value" >&2; exit 2; }
       DUAL_NODE_RUNTIME_ENABLED="$2"
+      RUNTIME_CONFIG_EXPLICIT=true
       shift
       ;;
     --no-enable-runtime-guard)
@@ -332,6 +340,8 @@ bash -n "${SOURCE_ROOT}/deploy/install-sub2api-cert-receiver.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-node-state.sh"
 
 if [ -e "$CONFIG_FILE" ] && [ "$REPLACE_CONFIG" != "true" ]; then
+  [ "$RUNTIME_CONFIG_EXPLICIT" != true ] \
+    || die "runtime configuration options require --replace-config when ${CONFIG_FILE} already exists"
   configured_app_dir="$(sed -n 's/^SUB2API_APP_DIR=//p' "$CONFIG_FILE" | tail -n 1)"
   if [ -n "$configured_app_dir" ] && [ "$configured_app_dir" != "$APP_DIR" ]; then
     die "existing SUB2API_APP_DIR=${configured_app_dir} does not match installer APP_DIR=${APP_DIR}; use the matching directory or --replace-config"
