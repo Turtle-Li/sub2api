@@ -217,7 +217,7 @@ and the domain site must use:
 tls /etc/sub2api-certs/current/fullchain.pem /etc/sub2api-certs/current/privkey.pem
 ```
 
-## 5. Pre-bootstrap Caddy difference (read-only audit, 2026-08-30)
+## 5. Current Caddy difference (read-only audit, 2026-08-30)
 
 | Item | Old node | Azure candidate |
 | --- | --- | --- |
@@ -225,13 +225,13 @@ tls /etc/sub2api-certs/current/fullchain.pem /etc/sub2api-certs/current/privkey.
 | Image/version | `caddy:2.11-alpine`, v2.11.4 | `caddy:2.11-alpine`, v2.11.4 |
 | Runtime user | container default/root | container default/root |
 | Caddyfile host mount | `/opt/sub2api/Caddyfile` | `/opt/sub2api/Caddyfile` |
-| Current site address | `api.turtleligpt.com` with Caddy-managed public ACME | literal `4.216.216.16`, `tls internal`, `default_sni 4.216.216.16` |
+| Current site address | `api.turtleligpt.com` with external certificate | `api.turtleligpt.com` with external certificate |
 | App upstream | `sub2api-green:8080` | `sub2api:8080` |
-| Large request budget | 128 MB on responses/image-batch routes | 128 MB on responses/image-batch routes |
+| Large request budget | 100 MB on responses/image-batch routes | 128 MB on responses/image-batch routes |
 | Default request budget | 16 MB | 16 MB |
 | Streaming tuning | `flush_interval -1`, 1800-second read/write transport bounds | no equivalent explicit streaming transport block |
 | Other sites | Existing unrelated `www/chat` sites share the old Caddy instance | candidate contains only the IP test site |
-| External cert mount | absent | absent |
+| External cert mount | `/opt/sub2api/certs/api.turtleligpt.com:/etc/sub2api-certs:ro` | `/opt/sub2api/certs/api.turtleligpt.com:/etc/sub2api-certs:ro` |
 
 Target convergence keeps the old node's unrelated sites untouched, gives both
 Sub2 API domain sites the same externally managed certificate paths and request
@@ -284,6 +284,32 @@ rollback backup. `SUB2API_DUAL_NODE_RUNTIME_ENABLED=true` then makes the helper
 require and mount the per-color read-only background state, shared traffic state,
 and UID-1000 health token. With the flag unset/false, legacy single-node releases
 retain their prior container contract instead of failing on absent runtime files.
+
+On an external-PG/Redis node, stage the installer with explicit runtime object
+names and `--no-enable-runtime-guard`. This writes the external dependency and
+dual-runtime contract while installing the guard timer in the disabled state.
+Create/verify the state files and the first conforming application color before
+enabling the timer; never let a fresh install run once with local-dependency
+defaults. The required installer options are:
+
+```text
+--dependency-mode external
+--runtime-network <exact-docker-network>
+--runtime-data-volume <exact-docker-volume>
+--caddy-container <exact-caddy-container>
+--external-runtime-env-file /etc/sub2api-external-runtime.env
+--external-ca-file /opt/sub2api/db-host-ca/ca.crt
+--dual-node-runtime-enabled true
+--no-enable-runtime-guard
+```
+
+The guard rereads the root-owned external environment and CA immediately before
+every application start/restart. It also checks the exact network, data volume,
+external CA mounts and environment, and all three dual-runtime mounts/environment
+variables for the active or fallback container. A mismatch fails closed before
+Docker lifecycle or Caddy actions. Only after authenticated direct-origin
+`livez`/`readyz` and Caddy checks pass may the operator run
+`systemctl enable --now sub2api-runtime-guard.timer`.
 
 The GCP/Cloudflare controller owns pool weights and DNS/LB state. Node scripts
 own only local readiness, background admission, image/color transition, Caddy,

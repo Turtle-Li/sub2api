@@ -336,9 +336,9 @@ run_helper() {
     OLD_CONTAINER=sub2api \
     NEW_CONTAINER=sub2api-green \
     NEW_IMAGE=sub2api:new \
-    NETWORK=sub2api_default \
-    DATA_VOLUME=sub2api_sub2api_data \
-    CADDY_CONTAINER=sub2api-caddy \
+    SUB2API_RUNTIME_GUARD_NETWORK=sub2api_default \
+    SUB2API_RUNTIME_GUARD_DATA_VOLUME=sub2api_sub2api_data \
+    SUB2API_CADDY_CONTAINER=sub2api-caddy \
     CADDYFILE="$APP_DIR/Caddyfile" \
     DRAIN_LOG_FILE="$TEST_ROOT/drain.log" \
     DRAIN_NOHUP_FILE="$TEST_ROOT/drain.nohup" \

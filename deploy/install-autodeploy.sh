@@ -12,7 +12,7 @@ APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 SCRIPT_DIR="${APP_DIR}/scripts"
 CONFIG_FILE="${SUB2API_AUTODEPLOY_CONFIG_FILE:-/etc/sub2api-autodeploy.env}"
 UNIT_DIR="${SUB2API_AUTODEPLOY_UNIT_DIR:-/etc/systemd/system}"
-RUNTIME_GUARD_EXECUTABLE="/usr/local/libexec/sub2api-runtime-guard.sh"
+RUNTIME_GUARD_EXECUTABLE="${SUB2API_RUNTIME_GUARD_EXECUTABLE:-/usr/local/libexec/sub2api-runtime-guard.sh}"
 
 PRODUCTION_BRANCH="${SUB2API_AUTODEPLOY_PRODUCTION_BRANCH:-}"
 PRODUCTION_REPO_URL="${SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL:-}"
@@ -24,6 +24,14 @@ RECOVERY_MERGE_MAIN=true
 REPLACE_CONFIG=false
 ENABLE_TIMER=false
 INSTALL_BLUE_GREEN_HELPER=false
+ENABLE_RUNTIME_GUARD=true
+DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-local}"
+RUNTIME_NETWORK="${SUB2API_RUNTIME_GUARD_NETWORK:-sub2api_default}"
+RUNTIME_DATA_VOLUME="${SUB2API_RUNTIME_GUARD_DATA_VOLUME:-sub2api_sub2api_data}"
+CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
+EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
+EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
+DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
 
 usage() {
   cat <<'EOF'
@@ -38,6 +46,16 @@ Options:
   --replace-config            Replace an existing /etc/sub2api-autodeploy.env.
   --enable-timer              Enable the periodic polling fallback (off by default).
   --install-blue-green-helper Replace the externally managed blue-green helper after backing it up.
+  --dependency-mode MODE      Application dependency mode: local or external.
+  --runtime-network NAME      Exact Docker network for application slots.
+  --runtime-data-volume NAME  Exact Docker data volume for application slots.
+  --caddy-container NAME      Exact Caddy container name.
+  --external-runtime-env-file PATH
+                              Root-owned 0600 external PG/Redis environment file.
+  --external-ca-file PATH     Root-owned CA file for external PG/Redis TLS.
+  --dual-node-runtime-enabled BOOL
+                              Enable exact traffic/background/token runtime contract.
+  --no-enable-runtime-guard   Install the runtime guard but leave its timer disabled.
   --no-enable                 Do not enable the timer (kept for compatibility).
   --help                      Show this help.
 EOF
@@ -79,6 +97,44 @@ while [ "$#" -gt 0 ]; do
     --install-blue-green-helper)
       INSTALL_BLUE_GREEN_HELPER=true
       ;;
+    --dependency-mode)
+      [ "$#" -ge 2 ] || { echo "--dependency-mode requires a value" >&2; exit 2; }
+      DEPENDENCY_MODE="$2"
+      shift
+      ;;
+    --runtime-network)
+      [ "$#" -ge 2 ] || { echo "--runtime-network requires a value" >&2; exit 2; }
+      RUNTIME_NETWORK="$2"
+      shift
+      ;;
+    --runtime-data-volume)
+      [ "$#" -ge 2 ] || { echo "--runtime-data-volume requires a value" >&2; exit 2; }
+      RUNTIME_DATA_VOLUME="$2"
+      shift
+      ;;
+    --caddy-container)
+      [ "$#" -ge 2 ] || { echo "--caddy-container requires a value" >&2; exit 2; }
+      CADDY_CONTAINER="$2"
+      shift
+      ;;
+    --external-runtime-env-file)
+      [ "$#" -ge 2 ] || { echo "--external-runtime-env-file requires a value" >&2; exit 2; }
+      EXTERNAL_RUNTIME_ENV_FILE="$2"
+      shift
+      ;;
+    --external-ca-file)
+      [ "$#" -ge 2 ] || { echo "--external-ca-file requires a value" >&2; exit 2; }
+      EXTERNAL_CA_FILE="$2"
+      shift
+      ;;
+    --dual-node-runtime-enabled)
+      [ "$#" -ge 2 ] || { echo "--dual-node-runtime-enabled requires a value" >&2; exit 2; }
+      DUAL_NODE_RUNTIME_ENABLED="$2"
+      shift
+      ;;
+    --no-enable-runtime-guard)
+      ENABLE_RUNTIME_GUARD=false
+      ;;
     --no-enable)
       ENABLE_TIMER=false
       ;;
@@ -108,6 +164,24 @@ require_simple_value() {
   local name="$1"
   local value="$2"
   [ -n "$value" ] || die "$name must not be empty"
+  case "$value" in
+    *$'\n'*|*$'\r'*|*' '*) die "$name must not contain whitespace" ;;
+  esac
+}
+
+require_docker_name() {
+  local name="$1" value="$2"
+  case "$value" in
+    ''|[!A-Za-z0-9]*|*[!A-Za-z0-9_.-]*) die "$name must be a valid Docker object name" ;;
+  esac
+}
+
+require_absolute_path() {
+  local name="$1" value="$2"
+  case "$value" in
+    /*) ;;
+    *) die "$name must be an absolute path" ;;
+  esac
   case "$value" in
     *$'\n'*|*$'\r'*|*' '*) die "$name must not contain whitespace" ;;
   esac
@@ -202,6 +276,21 @@ require_simple_value SUB2API_PUBLIC_HEALTH_URL "$HEALTH_URL"
 validate_health_resolve "$HEALTH_RESOLVE" "$HEALTH_URL"
 require_simple_value SUB2API_GITHUB_IMAGE_SOURCE "$GITHUB_IMAGE_SOURCE"
 require_simple_value SUB2API_APP_DIR "$APP_DIR"
+case "$DEPENDENCY_MODE" in
+  local|external) ;;
+  *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external" ;;
+esac
+case "$DUAL_NODE_RUNTIME_ENABLED" in
+  true|false) ;;
+  *) die "SUB2API_DUAL_NODE_RUNTIME_ENABLED must be true or false" ;;
+esac
+require_docker_name SUB2API_RUNTIME_GUARD_NETWORK "$RUNTIME_NETWORK"
+require_docker_name SUB2API_RUNTIME_GUARD_DATA_VOLUME "$RUNTIME_DATA_VOLUME"
+require_docker_name SUB2API_CADDY_CONTAINER "$CADDY_CONTAINER"
+if [ "$DEPENDENCY_MODE" = external ]; then
+  require_absolute_path SUB2API_EXTERNAL_RUNTIME_ENV_FILE "$EXTERNAL_RUNTIME_ENV_FILE"
+  require_absolute_path SUB2API_EXTERNAL_CA_FILE "$EXTERNAL_CA_FILE"
+fi
 case "$GITHUB_IMAGE_SOURCE" in
   https://github.com/*) ;;
   *) die "SUB2API_GITHUB_IMAGE_SOURCE must be an https://github.com URL" ;;
@@ -277,6 +366,14 @@ else
       printf 'SUB2API_PUBLIC_HEALTH_RESOLVE=%s\n' "$HEALTH_RESOLVE"
     fi
     printf 'SUB2API_MAINTENANCE_LOCK_FILE=%s\n' '/run/lock/sub2api-maintenance.lock'
+    printf 'SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=%s\n' "$DEPENDENCY_MODE"
+    printf 'SUB2API_RUNTIME_GUARD_NETWORK=%s\n' "$RUNTIME_NETWORK"
+    printf 'SUB2API_RUNTIME_GUARD_DATA_VOLUME=%s\n' "$RUNTIME_DATA_VOLUME"
+    printf 'SUB2API_CADDY_CONTAINER=%s\n' "$CADDY_CONTAINER"
+    if [ "$DEPENDENCY_MODE" = external ]; then
+      printf 'SUB2API_EXTERNAL_RUNTIME_ENV_FILE=%s\n' "$EXTERNAL_RUNTIME_ENV_FILE"
+      printf 'SUB2API_EXTERNAL_CA_FILE=%s\n' "$EXTERNAL_CA_FILE"
+    fi
     printf 'SUB2API_RUNTIME_GUARD_RETRY_ATTEMPTS=%s\n' '20'
     printf 'SUB2API_RUNTIME_GUARD_RETRY_INTERVAL_SECONDS=%s\n' '3'
     printf 'SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS=%s\n' '300'
@@ -286,7 +383,7 @@ else
     printf 'SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS=%s\n' '900'
     printf 'SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS=%s\n' '1800'
     printf 'SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=%s\n' 'false'
-    printf 'SUB2API_DUAL_NODE_RUNTIME_ENABLED=%s\n' 'false'
+    printf 'SUB2API_DUAL_NODE_RUNTIME_ENABLED=%s\n' "$DUAL_NODE_RUNTIME_ENABLED"
   } >"$config_temp"
   install -D -m 600 "$config_temp" "$CONFIG_FILE"
   rm -f "$config_temp"
@@ -337,7 +434,13 @@ install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.timer" \
   "${UNIT_DIR}/sub2api-runtime-guard.timer"
 
 systemctl daemon-reload
-systemctl enable --now sub2api-runtime-guard.timer
+if [ "$ENABLE_RUNTIME_GUARD" = "true" ]; then
+  systemctl enable --now sub2api-runtime-guard.timer
+  echo "Enabled sub2api-runtime-guard.timer (repairs the active production slot)."
+else
+  systemctl disable --now sub2api-runtime-guard.timer >/dev/null 2>&1 || true
+  echo "Installed sub2api-runtime-guard.timer; it remains disabled until runtime state and mounts are verified."
+fi
 if [ "$ENABLE_TIMER" = "true" ]; then
   systemctl enable --now sub2api-autodeploy.timer
   echo "Enabled sub2api-autodeploy.timer (checks every five minutes)."
@@ -346,7 +449,6 @@ else
   echo "Installed GitHub image receiver and recovery service; polling timer is disabled."
 fi
 
-echo "Enabled sub2api-runtime-guard.timer (repairs the active production slot)."
 echo "Validate without releasing: ${SCRIPT_DIR}/sub2api-autodeploy.sh --check"
 echo "Show timer: systemctl list-timers sub2api-autodeploy.timer"
 echo "Show runtime recovery: systemctl status sub2api-runtime-guard.timer"
