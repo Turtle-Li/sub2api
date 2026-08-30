@@ -390,6 +390,10 @@ EOF
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends dante-server
   fi
   systemctl disable --now danted.service >/dev/null 2>&1 || true
+  # Package installation can leave the distro-managed unit in failed state
+  # before our isolated service takes ownership. Keep it disabled, but clear
+  # the stale failure so host health views do not report a false outage.
+  systemctl reset-failed danted.service >/dev/null 2>&1 || true
   [ -x /usr/sbin/danted ] || die "danted was not installed at /usr/sbin/danted"
 
   install -m 644 "$rendered_config" "$CONFIG_FILE"
