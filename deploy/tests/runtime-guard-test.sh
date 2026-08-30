@@ -337,9 +337,10 @@ new_case() {
   cat >"${CASE_ROOT}/app/scripts/sub2api-blue-green-release.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf 'old=%s\nnew=%s\nimage=%s\nfrom=%s\nto=%s\nbackup=%s\npull=%s\nremove=%s\n' \
+printf 'old=%s\nnew=%s\nimage=%s\nfrom=%s\nto=%s\nbackup=%s\npull=%s\nremove=%s\nisolated_old=%s\n' \
   "$OLD_CONTAINER" "$NEW_CONTAINER" "$NEW_IMAGE" "$CADDY_UPSTREAM_FROM" "$CADDY_UPSTREAM_TO" \
-  "$RUN_BACKUP" "$PULL_IMAGE" "$REMOVE_EXISTING_NEW_CONTAINER" >>"$FAKE_RELEASE_CALLS"
+  "$RUN_BACKUP" "$PULL_IMAGE" "$REMOVE_EXISTING_NEW_CONTAINER" \
+  "${ALLOW_ISOLATED_OLD_CONTAINER:-false}" >>"$FAKE_RELEASE_CALLS"
 printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$CADDYFILE"
 printf '{"upstream":"%s"}\n' "$CADDY_UPSTREAM_TO" >"$FAKE_ACTIVE_CONFIG_FILE"
 printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$FAKE_STARTUP_CONFIG_FILE"
@@ -531,6 +532,7 @@ run_external_guard >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/output.log" 'active container is absent: sub2api-green'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+assert_contains "${CASE_ROOT}/release-calls.log" 'isolated_old=true'
 assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
 
 # A stopped active slot is started and proven through Docker health plus its
@@ -577,6 +579,7 @@ assert_contains "${CASE_ROOT}/release-calls.log" 'to=sub2api-blue:8080'
 assert_contains "${CASE_ROOT}/release-calls.log" 'backup=false'
 assert_contains "${CASE_ROOT}/release-calls.log" 'pull=false'
 assert_contains "${CASE_ROOT}/release-calls.log" 'remove=false'
+assert_contains "${CASE_ROOT}/release-calls.log" 'isolated_old=true'
 assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
 assert_contains "${CASE_ROOT}/active-config.json" 'sub2api-blue:8080'
 assert_contains "${CASE_ROOT}/startup-Caddyfile" 'sub2api-blue:8080'

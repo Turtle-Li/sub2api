@@ -31,6 +31,7 @@ DRAIN_LOG_FILE="${DRAIN_LOG_FILE:-/var/log/sub2api-drain-$NEW_CONTAINER.log}"
 DRAIN_NOHUP_FILE="${DRAIN_NOHUP_FILE:-/var/log/sub2api-drain-$NEW_CONTAINER.nohup}"
 DRAIN_PID_FILE="${DRAIN_PID_FILE:-/var/run/sub2api-drain-$NEW_CONTAINER.pid}"
 REMOVE_EXISTING_NEW_CONTAINER="${REMOVE_EXISTING_NEW_CONTAINER:-true}"
+ALLOW_ISOLATED_OLD_CONTAINER="${ALLOW_ISOLATED_OLD_CONTAINER:-false}"
 DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
 
 # An unset mode retains legacy local behavior.  An explicitly blank or unknown
@@ -596,6 +597,7 @@ case "$DEPENDENCY_MODE" in
 esac
 require_bool PRECREATE_ONLY "$PRECREATE_ONLY"
 require_bool REMOVE_EXISTING_NEW_CONTAINER "$REMOVE_EXISTING_NEW_CONTAINER"
+require_bool ALLOW_ISOLATED_OLD_CONTAINER "$ALLOW_ISOLATED_OLD_CONTAINER"
 require_bool RUN_BACKUP "$RUN_BACKUP"
 require_bool PULL_IMAGE "$PULL_IMAGE"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
@@ -615,10 +617,30 @@ if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
 fi
 
 cd "$APP_DIR"
-container_exists "$OLD_CONTAINER" || die "old container $OLD_CONTAINER does not exist"
 container_exists "$CADDY_CONTAINER" || die "Caddy container $CADDY_CONTAINER does not exist"
 [ -f "$CADDYFILE" ] || die "Caddyfile not found: $CADDYFILE"
-container_running "$OLD_CONTAINER" || die "old container $OLD_CONTAINER is not running; refusing to release"
+if [ "$ALLOW_ISOLATED_OLD_CONTAINER" = true ]; then
+  [ "$PRECREATE_ONLY" = false ] \
+    || die "isolated-old recovery cannot precreate a target"
+  [ "$RUN_BACKUP" = false ] \
+    || die "isolated-old recovery cannot run a backup"
+  [ "$PULL_IMAGE" = false ] \
+    || die "isolated-old recovery cannot pull an image"
+  [ "$REMOVE_EXISTING_NEW_CONTAINER" = false ] \
+    || die "isolated-old recovery cannot remove the target container"
+  [ "$NEW_CONTAINER" != "$OLD_CONTAINER" ] \
+    || die "isolated-old recovery requires distinct old and new containers"
+  if container_exists "$OLD_CONTAINER" && container_running "$OLD_CONTAINER"; then
+    die "isolated-old recovery requires $OLD_CONTAINER to be stopped before the Caddy switch"
+  fi
+  container_exists "$NEW_CONTAINER" \
+    || die "isolated-old recovery requires an existing target container: $NEW_CONTAINER"
+  container_running "$NEW_CONTAINER" \
+    || die "isolated-old recovery requires a running target container: $NEW_CONTAINER"
+else
+  container_exists "$OLD_CONTAINER" || die "old container $OLD_CONTAINER does not exist"
+  container_running "$OLD_CONTAINER" || die "old container $OLD_CONTAINER is not running; refusing to release"
+fi
 docker network inspect "$NETWORK" >/dev/null 2>&1 || die "Docker network $NETWORK does not exist"
 docker volume inspect "$DATA_VOLUME" >/dev/null 2>&1 || die "Docker volume $DATA_VOLUME does not exist"
 

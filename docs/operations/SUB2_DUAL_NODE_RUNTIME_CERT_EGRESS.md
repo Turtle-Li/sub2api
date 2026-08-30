@@ -323,6 +323,13 @@ Docker lifecycle or Caddy actions. Only after authenticated direct-origin
 `livez`/`readyz` and Caddy checks pass may the operator run
 `systemctl enable --now sub2api-runtime-guard.timer`.
 
+Runtime recovery calls the blue/green helper with the internal
+`ALLOW_ISOLATED_OLD_CONTAINER=true` contract only after it has stopped (or
+confirmed the absence of) the failed Caddy-selected slot and verified an
+already-running fallback. That mode forbids precreate, backup, pull, target
+removal, and identical old/new names; ordinary releases retain the strict
+requirement that the old slot exists and is running.
+
 The GCP/Cloudflare controller owns pool weights and DNS/LB state. Node scripts
 own only local readiness, background admission, image/color transition, Caddy,
 and local rollback. No node-side script in this change modifies Cloudflare.

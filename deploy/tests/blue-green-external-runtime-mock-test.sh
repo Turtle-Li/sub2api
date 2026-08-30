@@ -352,6 +352,8 @@ run_helper() {
     SUB2API_BACKGROUND_STATE_DIR_HOST="$BACKGROUND_STATE_DIR" \
     SUB2API_INTERNAL_HEALTH_TOKEN_FILE="$HEALTH_TOKEN_FILE" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="${DUAL_NODE_RUNTIME_ENABLED:-true}" \
+    ALLOW_ISOLATED_OLD_CONTAINER="${ALLOW_ISOLATED_OLD_CONTAINER:-false}" \
+    REMOVE_EXISTING_NEW_CONTAINER="${REMOVE_EXISTING_NEW_CONTAINER:-true}" \
     RUN_BACKUP=false \
     PULL_IMAGE=false \
     PRECREATE_ONLY="${PRECREATE_ONLY:-false}" \
@@ -400,6 +402,7 @@ assert_contains "$(state_path sub2api-green)/mounts" "bind|$TRAFFIC_STATE_FILE|/
 assert_contains "$(state_path sub2api-green)/mounts" "bind|$BACKGROUND_STATE_FILE|/run/sub2api-runtime/background-state|false"
 assert_contains "$(state_path sub2api-green)/mounts" "bind|$HEALTH_TOKEN_FILE|/run/sub2api-runtime/health-token|false"
 assert_not_contains "$OUTPUT" 'external-secret-not-for-logs'
+
 assert_not_contains "$OUTPUT" 'redis-secret-not-for-logs'
 assert_not_contains "$CALLS" 'external-secret-not-for-logs'
 
@@ -437,6 +440,32 @@ assert_contains "$CALLS" 'start sub2api-green'
 assert_not_contains "$CALLS" 'create --name sub2api-green'
 assert_not_contains "$CALLS" 'rm '
 assert_not_contains "$OUTPUT" 'external-secret-not-for-logs'
+
+# Runtime recovery is the only caller allowed to switch away from an old slot
+# that has already been isolated. The default release contract still rejects
+# it, while the explicit narrow mode reaches target validation/health.
+sed -i.bak 's/^running=.*/running=false/' "$(state_path sub2api)/meta"
+rm -f "$(state_path sub2api)/meta.bak"
+: >"$CALLS"
+if run_helper >"$OUTPUT" 2>&1; then
+  fail 'normal release accepted a stopped old container'
+fi
+assert_contains "$OUTPUT" 'old container sub2api is not running; refusing to release'
+assert_not_contains "$CALLS" 'exec sub2api-green'
+: >"$CALLS"
+if ALLOW_ISOLATED_OLD_CONTAINER=true REMOVE_EXISTING_NEW_CONTAINER=false run_helper >"$OUTPUT" 2>&1; then
+  fail 'focused isolated-old recovery unexpectedly completed beyond health probe'
+fi
+assert_not_contains "$OUTPUT" 'old container sub2api is not running; refusing to release'
+assert_contains "$CALLS" 'exec sub2api-green'
+rm -rf "$(state_path sub2api)"
+: >"$CALLS"
+if ALLOW_ISOLATED_OLD_CONTAINER=true REMOVE_EXISTING_NEW_CONTAINER=false run_helper >"$OUTPUT" 2>&1; then
+  fail 'focused absent-old recovery unexpectedly completed beyond health probe'
+fi
+assert_not_contains "$OUTPUT" 'old container sub2api does not exist'
+assert_contains "$CALLS" 'exec sub2api-green'
+make_state sub2api sub2api:old true unless-stopped "$old_env" "$old_mounts"
 
 # Drift on a stopped prepared target must fail closed with no direct reuse,
 # deletion, or start.
