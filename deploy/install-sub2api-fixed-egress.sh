@@ -139,10 +139,10 @@ render_dante_config() {
 
   cat <<EOF
 logoutput: syslog
-internal: ${tailnet_ip} port = ${PORT}
-external: ${external_interface}
 internal.protocol: ipv4
 external.protocol: ipv4
+internal: ${tailnet_ip} port = ${PORT}
+external: ${external_interface}
 clientmethod: none
 socksmethod: none
 user.notprivileged: nobody

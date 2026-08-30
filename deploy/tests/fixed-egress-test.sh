@@ -60,6 +60,10 @@ for network in (
         raise SystemExit(f"CONNECT block for {network} appears after public pass")
 if "internal: 100.79.114.100 port = 1080" not in text:
     raise SystemExit("rendered listener is not the requested Tailnet address")
+if text.index("internal.protocol: ipv4") > text.index("internal: 100.79.114.100 port = 1080"):
+    raise SystemExit("internal protocol must precede the internal address for Dante 1.4.3")
+if text.index("external.protocol: ipv4") > text.index("external: eth0"):
+    raise SystemExit("external protocol must precede the external address for Dante 1.4.3")
 PY
 
 assert_contains "$TEST_ROOT/firewall.nft" 'delete table ip sub2api_fixed_egress'
