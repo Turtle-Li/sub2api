@@ -29,6 +29,13 @@ func NewOpenAIOAuthService(proxyRepo ProxyRepository, oauthClient OpenAIOAuthCli
 	}
 }
 
+// ResolveProxyURL validates an operator-selected proxy binding before any
+// OAuth/PAT network request. A nil proxy ID is the only direct-connect case.
+func (s *OpenAIOAuthService) ResolveProxyURL(ctx context.Context, proxyID *int64) (string, error) {
+	account := &Account{ProxyID: proxyID}
+	return ResolveAccountProxyURLWithLookup(ctx, account, s.proxyRepo)
+}
+
 // SetPrivacyClientFactory 注入 ImpersonateChrome 客户端工厂，
 // 用于调用 chatgpt.com/backend-api 获取账号信息（plan_type 等）。
 func (s *OpenAIOAuthService) SetPrivacyClientFactory(factory PrivacyClientFactory) {
@@ -63,15 +70,9 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	}
 
 	// Get proxy URL if specified
-	var proxyURL string
-	if proxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
-		if err != nil {
-			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
-		}
-		if proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	proxyURL, err := s.ResolveProxyURL(ctx, proxyID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Use default redirect URI if not specified
@@ -146,13 +147,11 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	// Get proxy URL: prefer input.ProxyID, fallback to session.ProxyURL
 	proxyURL := session.ProxyURL
 	if input.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
+		resolvedProxyURL, err := s.ResolveProxyURL(ctx, input.ProxyID)
 		if err != nil {
-			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
+			return nil, err
 		}
-		if proxy != nil {
-			proxyURL = proxy.URL()
-		}
+		proxyURL = resolvedProxyURL
 	}
 
 	// Use redirect URI from session or input
@@ -344,12 +343,9 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT_TYPE", "account is not an OAuth account")
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
+	proxyURL, err := ResolveAccountProxyURLWithLookup(ctx, account, s.proxyRepo)
+	if err != nil {
+		return nil, err
 	}
 
 	accessToken := account.GetCredential("access_token")

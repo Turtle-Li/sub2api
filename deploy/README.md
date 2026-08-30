@@ -59,6 +59,11 @@ image is building. It requires the repository secrets
 `/var/log/sub2api-release/`. Build cache remains on GitHub Actions; no image
 registry credentials are needed because the archive is transferred directly.
 
+For a DNS-only multi-origin API, install each node with
+`--health-resolve api.turtleligpt.com:443:NODE_PUBLIC_IPV4`. This makes release
+and runtime-recovery health checks verify the local origin with the production
+hostname and certificate instead of following a DNS answer to a peer.
+
 The production helper recognizes `sub2api-blue`, `sub2api-green`, and the
 legacy `sub2api` application name. Long-lived Responses WebSocket connections
 can keep an old color draining after a release, so the helper resolves the

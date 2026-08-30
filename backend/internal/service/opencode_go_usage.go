@@ -639,11 +639,12 @@ func (s *OpenCodeGoUsageService) RunDue(ctx context.Context) error {
 	if !settings.Enabled {
 		return nil
 	}
-	release, acquired := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, opencodeGoUsageLeaderLockKey, s.instanceID, opencodeGoUsageLeaderLockTTL)
+	leaseCtx, release, acquired := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, opencodeGoUsageLeaderLockKey, s.instanceID, opencodeGoUsageLeaderLockTTL)
 	if !acquired {
 		return nil
 	}
 	defer release()
+	ctx = leaseCtx
 
 	writer, ok := s.accountRepo.(openCodeGoUsageRepository)
 	if !ok {

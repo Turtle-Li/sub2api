@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 )
 
 type BatchImageWorkerRuntime struct {
@@ -124,7 +125,9 @@ func (r *BatchImageWorkerRuntime) runBillingRecovery(ctx context.Context) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		_, _ = r.billingRecovery.ReleaseStaleUnsubmittedOnce(ctx)
+		if runtimegate.SharedWorkAllowed() {
+			_, _ = r.billingRecovery.ReleaseStaleUnsubmittedOnce(ctx)
+		}
 		sleepOrDone(ctx, interval)
 	}
 }

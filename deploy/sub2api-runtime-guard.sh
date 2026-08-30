@@ -26,7 +26,9 @@ CADDY_CONFIG_PATH="${SUB2API_RUNTIME_GUARD_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfi
 POSTGRES_CONTAINER="${SUB2API_RUNTIME_GUARD_POSTGRES_CONTAINER:-sub2api-postgres}"
 REDIS_CONTAINER="${SUB2API_RUNTIME_GUARD_REDIS_CONTAINER:-sub2api-redis}"
 BLUE_GREEN_SCRIPT="${SUB2API_RUNTIME_GUARD_BLUE_GREEN_SCRIPT:-${APP_DIR}/scripts/sub2api-blue-green-release.sh}"
+NODE_STATE_SCRIPT="${SUB2API_NODE_STATE_SCRIPT:-${APP_DIR}/scripts/sub2api-node-state.sh}"
 PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://www.turtleligpt.com/health}"
+PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-}"
 MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
 STATE_DIR="${SUB2API_RUNTIME_GUARD_STATE_DIR:-/var/lib/sub2api-runtime-guard}"
 FAILURE_FILE="${STATE_DIR}/last-failure.env"
@@ -75,6 +77,46 @@ require_non_negative_integer() {
   case "$2" in
     ''|*[!0-9]*) die "$1 must be a non-negative integer" ;;
   esac
+}
+
+validate_health_resolve() {
+  local value="$1" url="$2" host port address extra octet url_authority url_host url_port
+  local -a octets
+  [ -n "$value" ] || return 0
+  case "$value" in
+    -*|*$'\n'*|*$'\r'*|*' '*) die "SUB2API_PUBLIC_HEALTH_RESOLVE contains unsupported characters" ;;
+  esac
+  IFS=: read -r host port address extra <<<"$value"
+  [ -n "$host" ] && [ -n "$port" ] && [ -n "$address" ] && [ -z "$extra" ] \
+    || die "SUB2API_PUBLIC_HEALTH_RESOLVE must be HOST:PORT:IPV4"
+  case "$host" in
+    *[!A-Za-z0-9.-]*|.*|*..*|*.) die "SUB2API_PUBLIC_HEALTH_RESOLVE has an invalid host" ;;
+  esac
+  require_positive_integer SUB2API_PUBLIC_HEALTH_RESOLVE_PORT "$port"
+  [ "$port" -le 65535 ] || die "SUB2API_PUBLIC_HEALTH_RESOLVE port is out of range"
+  IFS=. read -r -a octets <<<"$address"
+  [ "${#octets[@]}" -eq 4 ] || die "SUB2API_PUBLIC_HEALTH_RESOLVE must use IPv4"
+  for octet in "${octets[@]}"; do
+    case "$octet" in ''|*[!0-9]*) die "SUB2API_PUBLIC_HEALTH_RESOLVE must use IPv4" ;; esac
+    [ "$octet" -le 255 ] || die "SUB2API_PUBLIC_HEALTH_RESOLVE must use IPv4"
+  done
+  case "$url" in
+    https://*) url_port=443 ;;
+    http://*) url_port=80 ;;
+    *) die "SUB2API_PUBLIC_HEALTH_URL must use http or https when an origin override is configured" ;;
+  esac
+  url_authority="${url#*://}"
+  url_authority="${url_authority%%/*}"
+  case "$url_authority" in
+    *@*|'') die "SUB2API_PUBLIC_HEALTH_URL has an invalid authority" ;;
+    *:*)
+      url_host="${url_authority%%:*}"
+      url_port="${url_authority##*:}"
+      ;;
+    *) url_host="$url_authority" ;;
+  esac
+  [ "$url_host" = "$host" ] && [ "$url_port" = "$port" ] \
+    || die "SUB2API_PUBLIC_HEALTH_RESOLVE host/port must match SUB2API_PUBLIC_HEALTH_URL"
 }
 
 container_exists() {
@@ -210,9 +252,13 @@ wait_for_caddy_admin() {
 
 wait_for_public_health() {
   local attempt=1
+  local -a curl_args=(-fsS --max-time "$PUBLIC_HEALTH_MAX_TIME_SECONDS")
+  if [ -n "$PUBLIC_HEALTH_RESOLVE" ]; then
+    curl_args+=(--resolve "$PUBLIC_HEALTH_RESOLVE")
+  fi
 
   while [ "$attempt" -le "$PUBLIC_HEALTH_ATTEMPTS" ]; do
-    if curl -fsS --max-time "$PUBLIC_HEALTH_MAX_TIME_SECONDS" "$PUBLIC_HEALTH_URL" >/dev/null; then
+    if curl "${curl_args[@]}" "$PUBLIC_HEALTH_URL" >/dev/null; then
       return 0
     fi
     log "waiting for public health endpoint: attempt=${attempt}/${PUBLIC_HEALTH_ATTEMPTS} url=${PUBLIC_HEALTH_URL}"
@@ -534,6 +580,19 @@ verify_fallback_switch() {
   return 0
 }
 
+reconcile_local_release_state() {
+  local result
+  [ -x "$NODE_STATE_SCRIPT" ] || {
+    log "node state helper is missing or not executable: ${NODE_STATE_SCRIPT}" >&2
+    return 1
+  }
+  result="$(env SUB2API_NODE_STATE_LOCK_HELD=1 "$NODE_STATE_SCRIPT" recover-local)" \
+    || return 1
+  if [ "$result" != NO_LOCAL_RECOVERY ]; then
+    log "node runtime state reconciled after interrupted local release: ${result}"
+  fi
+}
+
 acquire_maintenance_lock() {
   local lock_dir
 
@@ -563,6 +622,7 @@ require_non_negative_integer SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS "$COOLDOWN_S
 require_positive_integer SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_ATTEMPTS "$PUBLIC_HEALTH_ATTEMPTS"
 require_non_negative_integer SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_INTERVAL_SECONDS "$PUBLIC_HEALTH_INTERVAL_SECONDS"
 require_positive_integer SUB2API_RUNTIME_GUARD_PUBLIC_HEALTH_MAX_TIME_SECONDS "$PUBLIC_HEALTH_MAX_TIME_SECONDS"
+validate_health_resolve "$PUBLIC_HEALTH_RESOLVE" "$PUBLIC_HEALTH_URL"
 require_positive_integer SUB2API_RUNTIME_GUARD_APP_PORT "$APP_PORT"
 [ "$APP_PORT" = "8080" ] || die "SUB2API_RUNTIME_GUARD_APP_PORT must remain 8080 for the Caddy upstream contract"
 case "$CADDY_CONFIG_PATH" in
@@ -595,6 +655,8 @@ verify_caddy_startup_file "$ACTIVE_UPSTREAM" \
 
 if container_is_healthy "$ACTIVE_CONTAINER"; then
   wait_for_public_health || die "public health endpoint is unavailable while the active container is healthy"
+  reconcile_local_release_state \
+    || die "could not reconcile node state for the healthy Caddy-selected container"
   clear_failure_state
   log "active container is already healthy: ${ACTIVE_CONTAINER}"
   exit 0
@@ -617,6 +679,8 @@ if try_restore_active; then
   verify_caddy_startup_file "$ACTIVE_UPSTREAM" \
     || die "Caddy startup file changed while the active container was being recovered"
   wait_for_public_health || die "public health endpoint is unavailable after active-container recovery"
+  reconcile_local_release_state \
+    || die "could not reconcile node state after active-container recovery"
   clear_failure_state
   log "active container recovered in place: ${ACTIVE_CONTAINER}"
   exit 0
@@ -650,6 +714,8 @@ if [ "$running_inactive_count" -gt 0 ]; then
     write_failure_state 'running-fallback-verification-failed'
     die "running historical fallback failed post-switch verification"
   fi
+  reconcile_local_release_state \
+    || die "could not reconcile node state after running fallback promotion"
   clear_failure_state
   log "runtime fallback verified: active=${FALLBACK_CONTAINER} image=${FALLBACK_IMAGE}"
   exit 0
@@ -681,6 +747,9 @@ if ! verify_fallback_switch; then
   write_failure_state 'fallback-verification-failed'
   die "fallback switch verification failed; failed active remains stopped"
 fi
+
+reconcile_local_release_state \
+  || die "could not reconcile node state after fallback promotion"
 
 clear_failure_state
 log "runtime fallback verified: active=${FALLBACK_CONTAINER} image=${FALLBACK_IMAGE}"

@@ -9,11 +9,12 @@ import (
 
 // ProxyExpiryService 周期扫描到期代理并把绑定账号改投备用/直连。
 type ProxyExpiryService struct {
-	proxyRepo ProxyRepository
-	interval  time.Duration
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	wg        sync.WaitGroup
+	proxyRepo  ProxyRepository
+	interval   time.Duration
+	leaderLock *singletonJobLock
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
 }
 
 func NewProxyExpiryService(proxyRepo ProxyRepository, interval time.Duration) *ProxyExpiryService {
@@ -52,6 +53,12 @@ func (s *ProxyExpiryService) Stop() {
 func (s *ProxyExpiryService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	leaseCtx, release, acquired := s.leaderLock.try(ctx)
+	if !acquired {
+		return
+	}
+	defer release()
+	ctx = leaseCtx
 	changed, err := s.proxyRepo.SweepExpiredProxies(ctx, time.Now())
 	if err != nil {
 		log.Printf("[ProxyExpiry] sweep expired proxies failed: %v", err)

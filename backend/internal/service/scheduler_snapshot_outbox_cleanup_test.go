@@ -872,7 +872,7 @@ func TestSchedulerSnapshotServiceCleanupSkipsNonPositiveWatermark(t *testing.T) 
 	}
 	svc := NewSchedulerSnapshotService(&outboxCleanupCache{}, repo, nil, nil, nil)
 
-	svc.cleanupConsumedOutbox(0)
+	svc.cleanupConsumedOutbox(context.Background(), 0)
 
 	if repo.lockAttempts != 0 {
 		t.Fatalf("expected no lock attempt for non-positive watermark, got %d", repo.lockAttempts)

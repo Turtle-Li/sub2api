@@ -3,7 +3,11 @@ package service
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
+	"github.com/google/uuid"
 )
 
 // LeaderLockCache provides cross-instance mutual exclusion for periodic background
@@ -18,51 +22,195 @@ type LeaderLockCache interface {
 	ReleaseLeaderLock(ctx context.Context, key, owner string) error
 }
 
+type renewableLeaderLockCache interface {
+	RenewLeaderLock(ctx context.Context, key, owner string, ttl time.Duration) (bool, error)
+}
+
+type singletonJobLock struct {
+	cache LeaderLockCache
+	db    *sql.DB
+	key   string
+	owner string
+	ttl   time.Duration
+}
+
+func newSingletonJobLock(cache LeaderLockCache, db *sql.DB, key string, ttl time.Duration) *singletonJobLock {
+	return &singletonJobLock{cache: cache, db: db, key: key, owner: uuid.NewString(), ttl: ttl}
+}
+
+func (lock *singletonJobLock) try(ctx context.Context) (context.Context, func(), bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if lock == nil {
+		if !runtimegate.SharedWorkAllowed() {
+			return ctx, nil, false
+		}
+		return ctx, func() {}, true
+	}
+	return lock.tryKey(ctx, lock.key)
+}
+
+func (lock *singletonJobLock) trySuffix(ctx context.Context, suffix string) (context.Context, func(), bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if lock == nil {
+		if !runtimegate.SharedWorkAllowed() {
+			return ctx, nil, false
+		}
+		return ctx, func() {}, true
+	}
+	return lock.tryKey(ctx, lock.key+":"+suffix)
+}
+
+func (lock *singletonJobLock) acquisitionOwner() string {
+	// Each acquisition needs its own fencing token. If a previous lease expires
+	// and a later cycle re-acquires the same key, the stale cycle's deferred
+	// release must not be able to delete the newer lease.
+	return lock.owner + ":" + uuid.NewString()
+}
+
+func (lock *singletonJobLock) tryKey(ctx context.Context, key string) (context.Context, func(), bool) {
+	if !runtimegate.SharedWorkAllowed() {
+		return ctx, nil, false
+	}
+	return acquireSingletonLease(ctx, lock.cache, lock.db, key, lock.acquisitionOwner(), lock.ttl)
+}
+
+func acquireSingletonLease(
+	ctx context.Context,
+	cache LeaderLockCache,
+	db *sql.DB,
+	key string,
+	owner string,
+	ttl time.Duration,
+) (context.Context, func(), bool) {
+	if cache != nil {
+		acquired, err := cache.TryAcquireLeaderLock(ctx, key, owner, ttl)
+		// Redis is the authoritative fence whenever it is configured. Falling
+		// through from a Redis error to PostgreSQL is split-brain unsafe under a
+		// partial partition, so fail closed instead. We also deliberately avoid
+		// taking a second session advisory lock here: doing so pins one SQL pool
+		// connection per concurrent background job for the full job duration.
+		if err != nil || !acquired {
+			return ctx, nil, false
+		}
+		leaseCtx, releaseCache := startRenewableCacheLease(ctx, cache, key, owner, ttl)
+		if !runtimegate.SharedWorkAllowed() {
+			releaseCache()
+			return ctx, nil, false
+		}
+		return leaseCtx, releaseCache, true
+	}
+
+	if db != nil {
+		release, acquired, err := tryAcquireDBAdvisoryLockWithError(ctx, db, hashAdvisoryLockID(key))
+		if err != nil {
+			return ctx, nil, false
+		}
+		if acquired && !runtimegate.SharedWorkAllowed() {
+			release()
+			return ctx, nil, false
+		}
+		return ctx, release, acquired
+	}
+	if !runtimegate.SharedWorkAllowed() {
+		return ctx, nil, false
+	}
+	return ctx, func() {}, true
+}
+
+func startRenewableCacheLease(
+	parent context.Context,
+	cache LeaderLockCache,
+	key string,
+	owner string,
+	ttl time.Duration,
+) (context.Context, func()) {
+	leaseCtx, cancel := context.WithCancel(parent)
+	stopRenewal := make(chan struct{})
+	renewalDone := make(chan struct{})
+	if renewer, ok := cache.(renewableLeaderLockCache); ok {
+		go renewSingletonJobLease(leaseCtx, cancel, renewer, key, owner, ttl, stopRenewal, renewalDone)
+	} else {
+		close(renewalDone)
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(stopRenewal)
+			<-renewalDone
+			cancel()
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer releaseCancel()
+			_ = cache.ReleaseLeaderLock(releaseCtx, key, owner)
+		})
+	}
+	return leaseCtx, release
+}
+
+func renewSingletonJobLease(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	renewer renewableLeaderLockCache,
+	key string,
+	owner string,
+	ttl time.Duration,
+	stop <-chan struct{},
+	done chan<- struct{},
+) {
+	defer close(done)
+	interval := ttl / 3
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-ticker.C:
+			renewCtx, renewCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			owned, err := renewer.RenewLeaderLock(renewCtx, key, owner, ttl)
+			renewCancel()
+			if err != nil || !owned {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
 // tryAcquireSingletonLeaderLock provides best-effort single-flight execution of a
-// periodic background job across multiple instances. It prefers the Redis-backed
-// LeaderLockCache and falls back to a Postgres advisory lock when the cache is
-// unavailable or errors, mirroring the approach used by the Ops background
-// services.
+// periodic background job across multiple instances. A configured Redis lease
+// is authoritative. PostgreSQL advisory locking is used only when Redis is not
+// configured; Redis failures never fall through to a different backend.
 //
 // Semantics:
-//   - acquired      -> returns a non-nil release func and true; callers should
-//     defer the release once the job finishes.
-//   - held by peer  -> returns (nil, false); callers should skip this cycle.
+//   - acquired      -> returns a lease context, non-nil release func, and true;
+//     callers should use the lease context and defer release.
+//   - held by peer  -> returns the input context, nil, and false; callers skip.
 //   - no backend    -> when neither the cache nor a DB is configured (e.g. unit
 //     tests, or a single-instance deployment without Redis) it runs without
 //     gating, returning a no-op release and true, so the job is never silently
 //     starved.
 //
-// The TTL is purely a crash-safety bound: callers release the lock as soon as the
-// job completes, so leadership is re-contested every cycle rather than pinned to
-// one instance. The TTL must therefore be larger than the job's worst-case
-// runtime so the lock does not expire mid-run.
-func tryAcquireSingletonLeaderLock(ctx context.Context, cache LeaderLockCache, db *sql.DB, key, owner string, ttl time.Duration) (func(), bool) {
+// Redis leases renew while the job owns them and cancel the returned context if
+// renewal fails or ownership is lost. Every acquisition has a unique fencing
+// owner, so a stale release cannot delete a successor lease. The TTL is a short
+// crash-recovery bound; leadership is re-contested every cycle rather than
+// pinned to one instance.
+func tryAcquireSingletonLeaderLock(ctx context.Context, cache LeaderLockCache, db *sql.DB, key, owner string, ttl time.Duration) (context.Context, func(), bool) {
+	if !runtimegate.SharedWorkAllowed() {
+		return ctx, nil, false
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	if cache != nil {
-		ok, err := cache.TryAcquireLeaderLock(ctx, key, owner, ttl)
-		if err == nil {
-			if !ok {
-				return nil, false
-			}
-			release := func() {
-				ctx2, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				_ = cache.ReleaseLeaderLock(ctx2, key, owner)
-			}
-			return release, true
-		}
-		// Cache error: fall through to the DB advisory lock so a flaky Redis does
-		// not stampede the job across every instance.
-	}
-
-	if db != nil {
-		return tryAcquireDBAdvisoryLock(ctx, db, hashAdvisoryLockID(key))
-	}
-
-	// No coordination backend available: run without gating.
-	return func() {}, true
+	return acquireSingletonLease(ctx, cache, db, key, owner+":"+uuid.NewString(), ttl)
 }

@@ -15,7 +15,7 @@ terminate healthy long generations and streams.
   image, video, and batch-image endpoints.
 - `gateway.text_max_body_size: 33554432` limits the known pure-text
   `/embeddings` and `/alpha/search` endpoints to 32 MiB.
-- The bundled Caddy baseline accepts at most 100 MB on Responses routes and
+- The bundled Caddy baseline accepts at most 128 MB on Responses routes and
   the exact `/v1/images/batches` submit path, and 16 MB on every other route.
   The Batch Image handler authenticates before reading its potentially large
   JSON body, while its application contract still enforces reference and job

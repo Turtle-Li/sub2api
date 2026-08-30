@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/stretchr/testify/require"
 )
 
@@ -434,6 +435,29 @@ func TestTokenRefreshService_BoundsPerProviderConcurrency(t *testing.T) {
 
 	require.Equal(t, int64(8), refresher.calls.Load())
 	require.Equal(t, int64(2), refresher.maxActive.Load())
+}
+
+func TestTokenRefreshService_DrainStopsNewAccountsInsideCurrentPage(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	accounts := []Account{grokPoolAccount(1), grokPoolAccount(2), grokPoolAccount(3)}
+	repo := &poolHealthAccountRepo{pages: map[int64][]Account{0: accounts}}
+	refresher := &poolHealthRefresher{cancel: func() { runtimegate.SetProcessActive(false) }}
+	svc := newPoolHealthService(repo, refresher, config.TokenRefreshConfig{
+		MaxRetries:            1,
+		CandidatePageSize:     10,
+		ProviderConcurrency:   1,
+		ProviderQPS:           10000,
+		AttemptTimeoutSeconds: 1,
+		CycleTimeoutSeconds:   2,
+	})
+
+	svc.processRefreshContext(context.Background())
+
+	require.Equal(t, int64(1), refresher.calls.Load(), "drain must stop accounts that have not started refresh")
+	requests, updatedIDs, _, _ := repo.snapshot()
+	require.Len(t, requests, 1)
+	require.Len(t, updatedIDs, 1)
 }
 
 func TestTokenRefreshRateGate_ReservesSpacedSlotsAndHonorsCancellation(t *testing.T) {

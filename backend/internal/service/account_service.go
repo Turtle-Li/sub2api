@@ -10,9 +10,13 @@ import (
 )
 
 var (
-	ErrAccountNotFound      = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
-	ErrAccountNilInput      = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
-	ErrAccountNotInFallback = infraerrors.BadRequest("ACCOUNT_NOT_IN_FALLBACK", "account is not in proxy fallback state")
+	ErrAccountNotFound         = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
+	ErrAccountNilInput         = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
+	ErrAccountNotInFallback    = infraerrors.BadRequest("ACCOUNT_NOT_IN_FALLBACK", "account is not in proxy fallback state")
+	ErrAccountProxyCASConflict = infraerrors.Conflict(
+		"ACCOUNT_PROXY_COMPARE_AND_SET_FAILED",
+		"account proxy binding changed before the operation completed",
+	)
 )
 
 const AccountListGroupUngrouped int64 = -1
@@ -129,6 +133,18 @@ type AccountDuplicateRepository interface {
 	// CreateWithAccountGroups atomically persists an account, its exact group priorities,
 	// and the scheduler outbox event for the new routing snapshot.
 	CreateWithAccountGroups(ctx context.Context, account *Account, groups []AccountGroup) error
+}
+
+// AccountProxyCASRepository provides the narrow transactional operation used by
+// fixed-egress binding and rollback. It updates eligible OpenAI OAuth parents
+// and their credential shadows together, and rejects stale expected proxy IDs.
+type AccountProxyCASRepository interface {
+	CompareAndSwapOpenAIOAuthProxy(
+		ctx context.Context,
+		accountIDs []int64,
+		expectedProxyID int64,
+		newProxy *Proxy,
+	) ([]int64, error)
 }
 
 // AccountBillingSettingsRepository applies an admin edit without overwriting a

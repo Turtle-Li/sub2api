@@ -36,6 +36,7 @@ type OpenAICodexVersionSyncService struct {
 	settingService *SettingService
 	githubClient   GitHubReleaseClient
 	interval       time.Duration
+	leaderLock     *singletonJobLock
 	stopCh         chan struct{}
 	stopOnce       sync.Once
 	wg             sync.WaitGroup
@@ -121,6 +122,12 @@ func (s *OpenAICodexVersionSyncService) syncedWithinInterval() bool {
 func (s *OpenAICodexVersionSyncService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), openAICodexVersionSyncTimeout)
 	defer cancel()
+	leaseCtx, release, acquired := s.leaderLock.try(ctx)
+	if !acquired {
+		return
+	}
+	defer release()
+	ctx = leaseCtx
 
 	if !s.autoSyncEnabled(ctx) {
 		return

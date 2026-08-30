@@ -644,7 +644,7 @@ func TestBackupService_RunScheduledBackup_LeaderElection(t *testing.T) {
 
 		// A peer already owns the lock, so this instance is not the leader.
 		cache := &fakeLeaderLockCache{}
-		peerRelease, ok := tryAcquireSingletonLeaderLock(context.Background(), cache, nil, backupScheduledLeaderLockKey, "peer", time.Minute)
+		_, peerRelease, ok := tryAcquireSingletonLeaderLock(context.Background(), cache, nil, backupScheduledLeaderLockKey, "peer", time.Minute)
 		require.True(t, ok)
 		defer peerRelease()
 
@@ -658,7 +658,7 @@ func TestBackupService_RunScheduledBackup_LeaderElection(t *testing.T) {
 		records, err := svc.ListBackups(context.Background())
 		require.NoError(t, err)
 		require.Empty(t, records, "non-leader must not create a backup record")
-		require.Equal(t, "peer", cache.heldBy(backupScheduledLeaderLockKey), "peer keeps the lock")
+		require.True(t, strings.HasPrefix(cache.heldBy(backupScheduledLeaderLockKey), "peer:"), "peer keeps the uniquely fenced lock")
 	})
 
 	t.Run("leader runs and releases", func(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/google/uuid"
 )
 
@@ -150,6 +151,9 @@ func (w *AuthCacheInvalidationWorker) run() {
 }
 
 func (w *AuthCacheInvalidationWorker) processBatch(ctx context.Context) error {
+	if !runtimegate.SharedWorkAllowed() {
+		return nil
+	}
 	events, err := w.repo.Claim(ctx, w.workerID, authInvalidationBatchSize, authInvalidationLease)
 	if err != nil {
 		return fmt.Errorf("claim auth cache invalidations: %w", err)

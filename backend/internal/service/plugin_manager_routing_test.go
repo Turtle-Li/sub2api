@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,6 +104,28 @@ func TestOpenAIGatewayPluginRoutingPreservesAPIKeyAndFailsClosedForOAuth(t *test
 	assert.Nil(t, oauthResponse)
 	assert.Contains(t, err.Error(), "插件不可用")
 	assert.Equal(t, 1, upstream.doCalls)
+}
+
+func TestOpenAIGatewayRejectsBrokenProxyBindingBeforeAnyUpstream(t *testing.T) {
+	upstream := &pluginRoutingHTTPUpstream{}
+	service := &OpenAIGatewayService{httpUpstream: upstream}
+	proxyID := int64(42)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://example.com/v1/responses", nil)
+	require.NoError(t, err)
+
+	response, err := service.doOpenAIUpstream(request, "", &Account{
+		ID:          10,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		ProxyID:     &proxyID,
+	})
+
+	require.Nil(t, response)
+	require.Error(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, infraerrors.Code(err))
+	require.Equal(t, AccountProxyUnavailableReason, infraerrors.Reason(err))
+	require.Zero(t, upstream.doCalls, "a broken proxy binding must never fall back to direct upstream")
 }
 
 func TestStablePluginBucketIsDeterministicAndBounded(t *testing.T) {

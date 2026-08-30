@@ -320,9 +320,13 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	}
 	headers.Set("Version", headerVersion)
 
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	// Credentials may come from a parent account for a Spark shadow, but the
+	// egress policy belongs to the logical account selected by the scheduler.
+	// Shadow proxy propagation keeps both values aligned; resolving the logical
+	// account here also fails closed if that invariant is ever violated.
+	proxyURL, proxyErr := resolveCodexModelsProxyURL(account)
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 
 	request := codexModelsManifestRequest{
@@ -360,6 +364,10 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	}
 	setOpenAIChatGPTAccountHeaders(request.headers, credAccount)
 	return s.fetchCodexModelsManifestUpstream(ctx, request, ifNoneMatch)
+}
+
+func resolveCodexModelsProxyURL(account *Account) (string, error) {
+	return ResolveAccountProxyURL(account)
 }
 
 func isAgentIdentityTaskInvalidCodexModelsError(err error) bool {

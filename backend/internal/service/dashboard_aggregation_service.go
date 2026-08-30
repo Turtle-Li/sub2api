@@ -227,12 +227,13 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 
 	// Multi-instance guard: only the leader runs the periodic aggregation; peers
 	// skip this cycle to avoid N× redundant GROUP BY queries and watermark races.
-	release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, dashboardAggregationLeaderLockKey, s.instanceID, dashboardAggregationLeaderLockTTL)
+	leaseCtx, release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, dashboardAggregationLeaderLockKey, s.instanceID, dashboardAggregationLeaderLockTTL)
 	if !ok {
 		return
 	}
 	defer release()
-	defer s.runScheduledGroupUsageSync()
+	ctx = leaseCtx
+	defer s.runScheduledGroupUsageSync(ctx)
 
 	now := time.Now().UTC()
 	last, err := s.repo.GetAggregationWatermark(ctx)
@@ -273,8 +274,8 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 	s.maybeCleanupRetention(ctx, now)
 }
 
-func (s *DashboardAggregationService) runScheduledGroupUsageSync() {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationTimeout)
+func (s *DashboardAggregationService) runScheduledGroupUsageSync(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, defaultDashboardAggregationTimeout)
 	defer cancel()
 	if err := s.syncGroupUsageRollups(ctx, time.Now().UTC()); err != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 分组用量日汇总失败: %v", err)
@@ -284,11 +285,12 @@ func (s *DashboardAggregationService) runScheduledGroupUsageSync() {
 func (s *DashboardAggregationService) runStartupGroupUsageSync() {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationBackfillTimeout)
 	defer cancel()
-	release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, dashboardAggregationGroupUsageBackfillLeaderLockKey, s.instanceID, dashboardAggregationGroupUsageBackfillLeaderLockTTL)
+	leaseCtx, release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, dashboardAggregationGroupUsageBackfillLeaderLockKey, s.instanceID, dashboardAggregationGroupUsageBackfillLeaderLockTTL)
 	if !ok {
 		return
 	}
 	defer release()
+	ctx = leaseCtx
 	if err := s.syncGroupUsageRollups(ctx, time.Now().UTC()); err != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 启动分组用量回填失败: %v", err)
 	}

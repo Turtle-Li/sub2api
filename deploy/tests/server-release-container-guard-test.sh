@@ -11,6 +11,8 @@ APP_DIR="${TEST_ROOT}/app"
 WORK_ROOT="${TEST_ROOT}/worktrees"
 SOURCE_DIR="${WORK_ROOT}/release.case"
 DOCKER_CALLS="${TEST_ROOT}/docker-calls.log"
+NODE_STATE_CALLS="${TEST_ROOT}/node-state-calls.log"
+CURL_CALLS="${TEST_ROOT}/curl-calls.log"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -34,11 +36,26 @@ assert_contains() {
 mkdir -p "$FAKE_BIN" "$APP_DIR/scripts" "$SOURCE_DIR"
 printf 'FROM scratch\n' >"${SOURCE_DIR}/Dockerfile"
 printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
-printf '#!/usr/bin/env bash\nexit 0\n' >"${APP_DIR}/scripts/sub2api-blue-green-release.sh"
+cat >"${APP_DIR}/scripts/sub2api-blue-green-release.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+if [ "${FAKE_UPDATE_CADDY:-0}" = 1 ]; then
+  printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$FAKE_APP_CADDY"
+fi
+EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"${APP_DIR}/scripts/sub2api-drain-monitor.sh"
+cat >"${APP_DIR}/scripts/sub2api-node-state.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >>"$FAKE_NODE_STATE_CALLS"
+if [ "${1:-}" = status ]; then
+  printf 'traffic=accepting active_container=sub2api-green background=active\n'
+fi
+EOF
 chmod +x \
   "${APP_DIR}/scripts/sub2api-blue-green-release.sh" \
-  "${APP_DIR}/scripts/sub2api-drain-monitor.sh"
+  "${APP_DIR}/scripts/sub2api-drain-monitor.sh" \
+  "${APP_DIR}/scripts/sub2api-node-state.sh"
 
 cat >"${FAKE_BIN}/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -77,7 +94,7 @@ case "$command_name" in
     exit 0
     ;;
   exec)
-    printf 'reverse_proxy sub2api-green:8080\n'
+    cat "$FAKE_APP_CADDY"
     ;;
   rm)
     [ "${2:-}" = "-f" ] || exit 1
@@ -95,7 +112,8 @@ chmod +x "${FAKE_BIN}/docker"
 
 cat >"${FAKE_BIN}/curl" <<'EOF'
 #!/usr/bin/env bash
-exit 1
+[ -z "${FAKE_CURL_CALLS:-}" ] || printf '%s\n' "$*" >>"$FAKE_CURL_CALLS"
+[ "${FAKE_CURL_SUCCESS:-0}" = 1 ]
 EOF
 chmod +x "${FAKE_BIN}/curl"
 
@@ -156,6 +174,9 @@ run_release() {
   env \
     PATH="${FAKE_BIN}:${PATH}" \
     FAKE_DOCKER_CALLS="$DOCKER_CALLS" \
+    FAKE_NODE_STATE_CALLS="$NODE_STATE_CALLS" \
+    FAKE_CURL_CALLS="$CURL_CALLS" \
+    FAKE_APP_CADDY="${APP_DIR}/Caddyfile" \
     FAKE_FLOCK_COUNT_FILE="${FAKE_FLOCK_COUNT_FILE:-}" \
     FAKE_FLOCK_FAIL_ON_CALL="${FAKE_FLOCK_FAIL_ON_CALL:-}" \
     SUB2API_APP_DIR="$APP_DIR" \
@@ -163,12 +184,14 @@ run_release() {
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
     SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
+    SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS=30 \
     SUB2API_RELEASE_BUILD_GOMAXPROCS=1 \
     SUB2API_RELEASE_BUILD_GO_PARALLELISM=1 \
     SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT=768MiB \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
+    SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
     /bin/bash "$SCRIPT" \
       "$SOURCE_DIR" \
       'sub2api:auto-test' \
@@ -182,13 +205,18 @@ run_github_prebuilt_release() {
   env \
     PATH="${FAKE_BIN}:${PATH}" \
     FAKE_DOCKER_CALLS="$DOCKER_CALLS" \
+    FAKE_NODE_STATE_CALLS="$NODE_STATE_CALLS" \
+    FAKE_CURL_CALLS="$CURL_CALLS" \
+    FAKE_APP_CADDY="${APP_DIR}/Caddyfile" \
     SUB2API_APP_DIR="$APP_DIR" \
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
     SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
+    SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
+    SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
     /bin/bash "$SCRIPT" \
       --prebuilt \
       'sub2api:auto-test' \
@@ -209,6 +237,17 @@ assert_contains "$maintenance_output" \
   'production maintenance or runtime recovery is already running'
 if [ -s "$DOCKER_CALLS" ]; then
   fail 'Docker was inspected before the maintenance lock was acquired'
+fi
+
+: >"$DOCKER_CALLS"
+resolve_mismatch_output="${TEST_ROOT}/resolve-mismatch.log"
+if SUB2API_PUBLIC_HEALTH_RESOLVE='peer.invalid:443:192.0.2.10' \
+  run_github_prebuilt_release >"$resolve_mismatch_output" 2>&1; then
+  fail 'server release accepted a health resolve override for a peer hostname'
+fi
+assert_contains "$resolve_mismatch_output" 'host/port must match SUB2API_PUBLIC_HEALTH_URL'
+if [ -s "$DOCKER_CALLS" ]; then
+  fail 'Docker was inspected before health resolve validation'
 fi
 
 strict_output="${TEST_ROOT}/strict.log"
@@ -264,5 +303,22 @@ fi
 assert_contains "$rollback_cleanup_output" 'Rollback completed'
 assert_contains "$rollback_cleanup_output" 'Removing failed inactive target sub2api-blue'
 assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+assert_contains "$NODE_STATE_CALLS" 'bootstrap'
+assert_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
+assert_contains "$NODE_STATE_CALLS" 'abort-local'
+
+: >"$NODE_STATE_CALLS"
+successful_release_output="${TEST_ROOT}/successful-release.log"
+if ! ALLOW_DRAINING=true FAKE_CURL_SUCCESS=1 FAKE_UPDATE_CADDY=1 \
+  run_github_prebuilt_release >"$successful_release_output" 2>&1; then
+  sed -n '1,200p' "$successful_release_output" >&2
+  fail 'fake verified release did not complete'
+fi
+assert_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
+assert_contains "$NODE_STATE_CALLS" 'commit-local'
+assert_contains "$CURL_CALLS" '--resolve example.invalid:443:192.0.2.10'
+if grep -Fq -- 'abort-local' "$NODE_STATE_CALLS"; then
+  fail 'successful release invoked node-state abort'
+fi
 
 printf 'Server release inactive-container guard tests passed.\n'

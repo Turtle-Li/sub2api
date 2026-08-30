@@ -411,20 +411,23 @@ type UpdateAccountInput struct {
 
 // BulkUpdateAccountsInput describes the payload for bulk updating accounts.
 type BulkUpdateAccountsInput struct {
-	AccountIDs     []int64
-	Filters        *BulkUpdateAccountFilters
-	Name           string
-	ProxyID        *int64
-	Concurrency    *int
-	Priority       *int
-	RateMultiplier *float64 // 账号计费倍率（>=0，允许 0）
-	LoadFactor     *int
-	Status         string
-	Schedulable    *bool
-	GroupIDs       *[]int64
-	Credentials    map[string]any
-	Extra          map[string]any
-	ProbeEnabled   *bool
+	AccountIDs []int64
+	Filters    *BulkUpdateAccountFilters
+	Name       string
+	ProxyID    *int64
+	// ExpectedProxyID enables the fixed-egress compare-and-set path. Zero means
+	// the current proxy must be NULL; a positive value must match exactly.
+	ExpectedProxyID *int64
+	Concurrency     *int
+	Priority        *int
+	RateMultiplier  *float64 // 账号计费倍率（>=0，允许 0）
+	LoadFactor      *int
+	Status          string
+	Schedulable     *bool
+	GroupIDs        *[]int64
+	Credentials     map[string]any
+	Extra           map[string]any
+	ProbeEnabled    *bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool

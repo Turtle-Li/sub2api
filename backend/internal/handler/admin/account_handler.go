@@ -163,6 +163,7 @@ type BulkUpdateAccountsRequest struct {
 	Filters                 *BulkUpdateAccountFilters `json:"filters"`
 	Name                    string                    `json:"name"`
 	ProxyID                 *int64                    `json:"proxy_id"`
+	ExpectedProxyID         *int64                    `json:"expected_proxy_id"`
 	Concurrency             *int                      `json:"concurrency"`
 	Priority                *int                      `json:"priority"`
 	RateMultiplier          *float64                  `json:"rate_multiplier"`
@@ -2137,6 +2138,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		Filters:               toServiceBulkUpdateAccountFilters(req.Filters),
 		Name:                  req.Name,
 		ProxyID:               req.ProxyID,
+		ExpectedProxyID:       req.ExpectedProxyID,
 		Concurrency:           req.Concurrency,
 		Priority:              req.Priority,
 		RateMultiplier:        req.RateMultiplier,

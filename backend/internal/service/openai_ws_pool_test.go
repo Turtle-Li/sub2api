@@ -172,6 +172,29 @@ func TestOpenAIWSConnPool_EnsureTargetIdleAsync(t *testing.T) {
 	require.GreaterOrEqual(t, metrics.ScaleUpTotal, int64(2))
 }
 
+func TestOpenAIWSConnPool_DoesNotPrewarmProxyBoundAccountFromStaleSnapshot(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 1
+
+	pool := newOpenAIWSConnPool(cfg)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	account := &Account{ID: 177, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	ap := pool.getOrCreateAccountPool(account.ID)
+	ap.mu.Lock()
+	ap.lastAcquire = &openAIWSAcquireRequest{
+		Account:  account,
+		WSURL:    "wss://example.com/v1/responses",
+		ProxyURL: "socks5h://100.64.0.10:1080",
+	}
+	ap.mu.Unlock()
+
+	pool.ensureTargetIdleAsync(account.ID)
+	time.Sleep(100 * time.Millisecond)
+	require.Zero(t, dialer.DialCount(), "proxy-bound prewarm must not replay a stale egress URL")
+}
+
 func TestOpenAIWSConnPool_EnsureTargetIdleAsyncCooldown(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 4
@@ -395,6 +418,35 @@ func TestOpenAIWSConnPool_DialSuccessWakesTopologyWaiterAndCanceledWaiterDoesNot
 	require.True(t, third.Reused(), "a canceled waiter must not consume the released semaphore token")
 	require.Equal(t, first.lease.ConnID(), third.ConnID())
 	third.Release()
+}
+
+func TestOpenAIWSConnPool_DoesNotReuseConnectionAcrossProxyBindings(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(&openAIWSFakeDialer{})
+	account := &Account{ID: 991, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+
+	first, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account:  account,
+		WSURL:    "wss://example.com/v1/responses",
+		ProxyURL: "socks5h://100.64.0.10:1080",
+	})
+	require.NoError(t, err)
+	firstID := first.ConnID()
+	first.Release()
+
+	second, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account:  account,
+		WSURL:    "wss://example.com/v1/responses",
+		ProxyURL: "socks5h://100.64.0.11:1080",
+	})
+	require.NoError(t, err)
+	require.False(t, second.Reused())
+	require.NotEqual(t, firstID, second.ConnID())
+	second.Release()
 }
 
 func TestOpenAIWSConnPool_PrewarmHintChangeDoesNotInvalidateHealthyDial(t *testing.T) {

@@ -18,10 +18,12 @@ PRODUCTION_BRANCH="${SUB2API_AUTODEPLOY_PRODUCTION_BRANCH:-}"
 PRODUCTION_REPO_URL="${SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL:-}"
 UPSTREAM_REPO_URL="${SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL:-}"
 HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://www.turtleligpt.com/health}"
+HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-}"
 GITHUB_IMAGE_SOURCE="${SUB2API_GITHUB_IMAGE_SOURCE:-}"
 RECOVERY_MERGE_MAIN=true
 REPLACE_CONFIG=false
 ENABLE_TIMER=false
+INSTALL_BLUE_GREEN_HELPER=false
 
 usage() {
   cat <<'EOF'
@@ -32,8 +34,10 @@ Options:
   --production-repo URL       Git URL of the production fork.
   --upstream-repo URL         Git URL of the official upstream.
   --health-url URL            Public URL checked after the blue-green switch.
+  --health-resolve VALUE      Pin that URL to this origin as HOST:PORT:IPV4.
   --replace-config            Replace an existing /etc/sub2api-autodeploy.env.
   --enable-timer              Enable the periodic polling fallback (off by default).
+  --install-blue-green-helper Replace the externally managed blue-green helper after backing it up.
   --no-enable                 Do not enable the timer (kept for compatibility).
   --help                      Show this help.
 EOF
@@ -61,11 +65,19 @@ while [ "$#" -gt 0 ]; do
       HEALTH_URL="$2"
       shift
       ;;
+    --health-resolve)
+      [ "$#" -ge 2 ] || { echo "--health-resolve requires a value" >&2; exit 2; }
+      HEALTH_RESOLVE="$2"
+      shift
+      ;;
     --replace-config)
       REPLACE_CONFIG=true
       ;;
     --enable-timer)
       ENABLE_TIMER=true
+      ;;
+    --install-blue-green-helper)
+      INSTALL_BLUE_GREEN_HELPER=true
       ;;
     --no-enable)
       ENABLE_TIMER=false
@@ -99,6 +111,35 @@ require_simple_value() {
   case "$value" in
     *$'\n'*|*$'\r'*|*' '*) die "$name must not contain whitespace" ;;
   esac
+}
+
+validate_health_resolve() {
+  [ -n "$1" ] || return 0
+  python3 - "$1" "$2" <<'PY'
+import ipaddress
+import re
+import sys
+import urllib.parse
+
+value = sys.argv[1]
+url = sys.argv[2]
+parts = value.split(":")
+if len(parts) != 3:
+    raise SystemExit("SUB2API_PUBLIC_HEALTH_RESOLVE must be HOST:PORT:IPV4")
+host, port, address = parts
+if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", host) or ".." in host:
+    raise SystemExit("SUB2API_PUBLIC_HEALTH_RESOLVE has an invalid host")
+if not port.isdigit() or not 1 <= int(port) <= 65535:
+    raise SystemExit("SUB2API_PUBLIC_HEALTH_RESOLVE has an invalid port")
+if not isinstance(ipaddress.ip_address(address), ipaddress.IPv4Address):
+    raise SystemExit("SUB2API_PUBLIC_HEALTH_RESOLVE must use IPv4")
+parsed = urllib.parse.urlsplit(url)
+if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+    raise SystemExit("SUB2API_PUBLIC_HEALTH_URL has an invalid authority")
+url_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+if parsed.hostname != host or url_port != int(port):
+    raise SystemExit("SUB2API_PUBLIC_HEALTH_RESOLVE host/port must match SUB2API_PUBLIC_HEALTH_URL")
+PY
 }
 
 derive_remote_url() {
@@ -158,6 +199,7 @@ if [ -n "$UPSTREAM_REPO_URL" ]; then
   require_simple_value SUB2API_AUTODEPLOY_UPSTREAM_REPO_URL "$UPSTREAM_REPO_URL"
 fi
 require_simple_value SUB2API_PUBLIC_HEALTH_URL "$HEALTH_URL"
+validate_health_resolve "$HEALTH_RESOLVE" "$HEALTH_URL"
 require_simple_value SUB2API_GITHUB_IMAGE_SOURCE "$GITHUB_IMAGE_SOURCE"
 require_simple_value SUB2API_APP_DIR "$APP_DIR"
 case "$GITHUB_IMAGE_SOURCE" in
@@ -173,19 +215,32 @@ for file in \
   deploy/sub2api-drain-monitor.sh \
   deploy/sub2api-runtime-guard.sh \
   deploy/sub2api-github-deploy-trigger.sh \
+  deploy/sub2api-cert-receiver.sh \
+  deploy/sub2api-cert-deploy-trigger.sh \
+  deploy/install-sub2api-cert-receiver.sh \
+  deploy/sub2api-node-state.sh \
   deploy/sub2api-autodeploy.service \
   deploy/sub2api-autodeploy.timer \
   deploy/sub2api-runtime-guard.service \
   deploy/sub2api-runtime-guard.timer; do
   [ -r "${SOURCE_ROOT}/${file}" ] || die "installer source is incomplete: ${file}"
 done
+[ "$INSTALL_BLUE_GREEN_HELPER" != true ] \
+  || [ -r "${SOURCE_ROOT}/deploy/sub2api-blue-green-release.sh" ] \
+  || die "installer source is incomplete: deploy/sub2api-blue-green-release.sh"
 
 bash -n "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
+[ "$INSTALL_BLUE_GREEN_HELPER" != true ] \
+  || bash -n "${SOURCE_ROOT}/deploy/sub2api-blue-green-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-cert-receiver.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-cert-deploy-trigger.sh"
+bash -n "${SOURCE_ROOT}/deploy/install-sub2api-cert-receiver.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-node-state.sh"
 
 if [ -e "$CONFIG_FILE" ] && [ "$REPLACE_CONFIG" != "true" ]; then
   configured_app_dir="$(sed -n 's/^SUB2API_APP_DIR=//p' "$CONFIG_FILE" | tail -n 1)"
@@ -218,6 +273,9 @@ else
     printf 'SUB2API_GITHUB_IMAGE_SOURCE=%s\n' "$GITHUB_IMAGE_SOURCE"
     printf 'SUB2API_GITHUB_IMAGE_MAX_BYTES=%s\n' '1073741824'
     printf 'SUB2API_PUBLIC_HEALTH_URL=%s\n' "$HEALTH_URL"
+    if [ -n "$HEALTH_RESOLVE" ]; then
+      printf 'SUB2API_PUBLIC_HEALTH_RESOLVE=%s\n' "$HEALTH_RESOLVE"
+    fi
     printf 'SUB2API_MAINTENANCE_LOCK_FILE=%s\n' '/run/lock/sub2api-maintenance.lock'
     printf 'SUB2API_RUNTIME_GUARD_RETRY_ATTEMPTS=%s\n' '20'
     printf 'SUB2API_RUNTIME_GUARD_RETRY_INTERVAL_SECONDS=%s\n' '3'
@@ -228,6 +286,7 @@ else
     printf 'SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS=%s\n' '900'
     printf 'SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS=%s\n' '1800'
     printf 'SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=%s\n' 'false'
+    printf 'SUB2API_DUAL_NODE_RUNTIME_ENABLED=%s\n' 'false'
   } >"$config_temp"
   install -D -m 600 "$config_temp" "$CONFIG_FILE"
   rm -f "$config_temp"
@@ -240,6 +299,18 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh" \
   "${SCRIPT_DIR}/sub2api-github-image-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
+if [ "$INSTALL_BLUE_GREEN_HELPER" = true ]; then
+  helper_backup_dir="${APP_DIR}/backups/blue-green-helper-$(date -u +%Y%m%dT%H%M%SZ)"
+  install -d -m 700 "$helper_backup_dir"
+  if [ -f "${SCRIPT_DIR}/sub2api-blue-green-release.sh" ] \
+    && [ ! -L "${SCRIPT_DIR}/sub2api-blue-green-release.sh" ]; then
+    install -m 600 "${SCRIPT_DIR}/sub2api-blue-green-release.sh" \
+      "${helper_backup_dir}/sub2api-blue-green-release.sh"
+  fi
+  install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-blue-green-release.sh" \
+    "${SCRIPT_DIR}/sub2api-blue-green-release.sh"
+  printf 'Installed blue-green helper; rollback backup: %s\n' "$helper_backup_dir"
+fi
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh" \
   "${SCRIPT_DIR}/sub2api-drain-monitor.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh" \
@@ -248,6 +319,14 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh" \
   "$RUNTIME_GUARD_EXECUTABLE"
 install -D -m 755 "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh" \
   "${SCRIPT_DIR}/sub2api-github-deploy-trigger.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-cert-receiver.sh" \
+  "${SCRIPT_DIR}/sub2api-cert-receiver.sh"
+install -D -m 755 "${SOURCE_ROOT}/deploy/sub2api-cert-deploy-trigger.sh" \
+  "${SCRIPT_DIR}/sub2api-cert-deploy-trigger.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/install-sub2api-cert-receiver.sh" \
+  "${SCRIPT_DIR}/install-sub2api-cert-receiver.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-node-state.sh" \
+  "${SCRIPT_DIR}/sub2api-node-state.sh"
 install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.service" \
   "${UNIT_DIR}/sub2api-autodeploy.service"
 install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.timer" \

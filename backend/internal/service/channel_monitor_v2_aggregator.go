@@ -222,13 +222,14 @@ func (s *ChannelMonitorV2Aggregator) runOnce() {
 	}
 	ctx, cancel := context.WithTimeout(parent, 55*time.Second)
 	defer cancel()
-	release, acquired := tryAcquireSingletonLeaderLock(ctx, nil, s.db, channelMonitorV2AggregatorLockKey, s.instanceID, 2*time.Minute)
+	leaseCtx, release, acquired := tryAcquireSingletonLeaderLock(ctx, nil, s.db, channelMonitorV2AggregatorLockKey, s.instanceID, 2*time.Minute)
 	if !acquired {
 		return
 	}
 	if release != nil {
 		defer release()
 	}
+	ctx = leaseCtx
 
 	now := time.Now().UTC().Truncate(time.Minute)
 	if err := s.ensureCursor(ctx, now); err != nil {

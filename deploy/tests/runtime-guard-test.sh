@@ -206,6 +206,7 @@ new_case() {
   : >"${CASE_ROOT}/docker-calls.log"
   : >"${CASE_ROOT}/release-calls.log"
   : >"${CASE_ROOT}/curl-calls.log"
+  : >"${CASE_ROOT}/node-state-calls.log"
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/app/Caddyfile"
   printf '{"upstream":"sub2api-green:8080"}\n' >"${CASE_ROOT}/active-config.json"
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/startup-Caddyfile"
@@ -227,6 +228,13 @@ fi
 exit "${FAKE_RELEASE_RESULT:-0}"
 EOF
   chmod +x "${CASE_ROOT}/app/scripts/sub2api-blue-green-release.sh"
+  cat >"${CASE_ROOT}/app/scripts/sub2api-node-state.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >>"$FAKE_NODE_STATE_CALLS"
+printf 'NO_LOCAL_RECOVERY\n'
+EOF
+  chmod +x "${CASE_ROOT}/app/scripts/sub2api-node-state.sh"
 }
 
 write_standard_dependencies() {
@@ -244,11 +252,13 @@ run_guard() {
     FAKE_CURL_CALLS="${CASE_ROOT}/curl-calls.log" \
     FAKE_DOCKER_CALLS="${CASE_ROOT}/docker-calls.log" \
     FAKE_FLOCK_MODE="${FAKE_FLOCK_MODE:-success}" \
+    FAKE_NODE_STATE_CALLS="${CASE_ROOT}/node-state-calls.log" \
     FAKE_RELEASE_CALLS="${CASE_ROOT}/release-calls.log" \
     FAKE_STARTUP_CONFIG_FILE="${CASE_ROOT}/startup-Caddyfile" \
     SUB2API_APP_DIR="${CASE_ROOT}/app" \
     SUB2API_MAINTENANCE_LOCK_FILE="${CASE_ROOT}/maintenance.lock" \
     SUB2API_PUBLIC_HEALTH_URL='https://example.invalid/health' \
+    SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RUNTIME_GUARD_CONFIG_FILE="${CASE_ROOT}/missing.env" \
     SUB2API_RUNTIME_GUARD_CADDYFILE="${CASE_ROOT}/app/Caddyfile" \
     SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS="${SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS:-0}" \
@@ -273,6 +283,17 @@ assert_contains "${CASE_ROOT}/output.log" 'maintenance lock is held; exiting wit
 [ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called while maintenance lock was held'
 assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'sentinel=true'
 
+# A resolve override for a different hostname must fail before it can turn the
+# peer origin into false node-local recovery evidence.
+new_case health-resolve-host-mismatch
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+if SUB2API_PUBLIC_HEALTH_RESOLVE='peer.invalid:443:192.0.2.10' run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a health resolve override for a peer hostname'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'host/port must match SUB2API_PUBLIC_HEALTH_URL'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'inspect '
+
 # A healthy active slot only verifies Caddy consistency and exits unchanged.
 new_case active-healthy
 write_standard_dependencies
@@ -283,6 +304,7 @@ assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 [ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'blue-green helper ran for a healthy active slot'
+assert_contains "${CASE_ROOT}/node-state-calls.log" 'recover-local'
 
 # A stopped active slot is started and proven through Docker health plus its
 # internal health endpoint before any historical candidate is considered.
@@ -410,5 +432,6 @@ write_container sub2api-green true healthy false 0 sub2api:current
 FAKE_CADDY_ADMIN_MODE=fail-until-restart run_guard >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-caddy'
 assert_contains "${CASE_ROOT}/output.log" 'restarting Caddy container after its admin API remained unavailable'
+assert_contains "${CASE_ROOT}/curl-calls.log" '--resolve example.invalid:443:192.0.2.10'
 
 printf 'Runtime guard fake-Docker tests passed.\n'

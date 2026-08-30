@@ -716,11 +716,12 @@ func (s *OllamaCloudUsageService) RunDue(ctx context.Context) error {
 	if !settings.Enabled {
 		return nil
 	}
-	release, acquired := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, ollamaCloudUsageLeaderLockKey, s.instanceID, ollamaCloudUsageLeaderLockTTL)
+	leaseCtx, release, acquired := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, ollamaCloudUsageLeaderLockKey, s.instanceID, ollamaCloudUsageLeaderLockTTL)
 	if !acquired {
 		return nil
 	}
 	defer release()
+	ctx = leaseCtx
 
 	writer, ok := s.accountRepo.(ollamaCloudUsageRepository)
 	if !ok {

@@ -137,6 +137,7 @@ type SchedulerSnapshotService struct {
 	outboxRebuildRetryReason     string
 	outboxLagWarningActive       bool
 	outboxMaxIDErrorLastLoggedAt time.Time
+	outboxLeaderLock             *singletonJobLock
 
 	fullRebuildRunMu     sync.Mutex
 	fullRebuildStateMu   sync.Mutex
@@ -377,6 +378,12 @@ func (s *SchedulerSnapshotService) pollOutbox() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	leaseCtx, release, acquired := s.outboxLeaderLock.try(ctx)
+	if !acquired {
+		return
+	}
+	defer release()
+	ctx = leaseCtx
 
 	watermark, err := s.cache.GetOutboxWatermark(ctx)
 	if err != nil {
@@ -399,7 +406,7 @@ func (s *SchedulerSnapshotService) pollOutbox() {
 
 	seen := make(map[batchSeenKey]struct{})
 	for _, event := range events {
-		eventCtx, cancel := context.WithTimeout(context.Background(), outboxEventTimeout)
+		eventCtx, cancel := context.WithTimeout(ctx, outboxEventTimeout)
 		err := s.handleOutboxEvent(eventCtx, event, seen)
 		cancel()
 		if err != nil {
@@ -411,35 +418,39 @@ func (s *SchedulerSnapshotService) pollOutbox() {
 	lastID := events[len(events)-1].ID
 	var wmErr error
 	for i := range 3 {
-		wmCtx, wmCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		wmCtx, wmCancel := context.WithTimeout(ctx, 5*time.Second)
 		wmErr = s.cache.SetOutboxWatermark(wmCtx, lastID)
 		wmCancel()
 		if wmErr == nil {
 			break
 		}
 		if i < 2 {
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
 		}
 	}
 	if wmErr != nil {
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox watermark write failed: %v", wmErr)
 		return
 	}
-	s.cleanupConsumedOutbox(lastID)
+	s.cleanupConsumedOutbox(ctx, lastID)
 
 	// 只有 watermark 成功推进后，当前批次才算已消费。延迟必须按下一条待消费事件计算，
 	// 否则本批次处理越慢，越容易误触发一次更慢的全量重建，形成正反馈。
-	lagCtx, lagCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	lagCtx, lagCancel := context.WithTimeout(ctx, 5*time.Second)
 	s.checkOutboxLag(lagCtx, lastID)
 	lagCancel()
 }
 
-func (s *SchedulerSnapshotService) cleanupConsumedOutbox(watermark int64) {
+func (s *SchedulerSnapshotService) cleanupConsumedOutbox(parent context.Context, watermark int64) {
 	if s == nil || s.outboxRepo == nil || watermark <= 0 {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 
 	lease, acquired, err := s.outboxRepo.TryAcquireCleanupLock(ctx)

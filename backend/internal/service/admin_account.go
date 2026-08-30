@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -555,6 +556,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	if input.ProxyID != nil && account.IsOpenAIOAuth() && account.ParentAccountID == nil {
+		return nil, fixedEgressCASRequiredError()
+	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -937,6 +941,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 		input.AccountIDs = accountIDs
 	}
+	if input.ExpectedProxyID != nil {
+		return s.compareAndSwapFixedEgressProxy(ctx, input)
+	}
 
 	result := &BulkUpdateAccountsResult{
 		SuccessIDs: make([]int64, 0, len(input.AccountIDs)),
@@ -1011,6 +1018,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_PROXY_INHERITED",
 					"spark shadow account %d proxy is inherited from its parent and cannot be set in bulk; manage it on the parent account", acc.ID)
+			}
+			if acc != nil && acc.IsOpenAIOAuth() && acc.ParentAccountID == nil {
+				return nil, fixedEgressCASRequiredError()
 			}
 		}
 	}
@@ -1164,6 +1174,110 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	return result, nil
+}
+
+func (s *adminServiceImpl) compareAndSwapFixedEgressProxy(
+	ctx context.Context,
+	input *BulkUpdateAccountsInput,
+) (*BulkUpdateAccountsResult, error) {
+	if input == nil || input.ProxyID == nil || input.ExpectedProxyID == nil {
+		return nil, infraerrors.BadRequest("FIXED_EGRESS_CAS_INPUT_INVALID", "proxy_id and expected_proxy_id are required")
+	}
+	if input.Filters != nil || input.Name != "" || input.Concurrency != nil || input.Priority != nil ||
+		input.RateMultiplier != nil || input.LoadFactor != nil || input.Status != "" || input.Schedulable != nil ||
+		input.GroupIDs != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProbeEnabled != nil {
+		return nil, infraerrors.BadRequest("FIXED_EGRESS_CAS_INPUT_INVALID", "compare-and-set proxy updates cannot modify other account fields")
+	}
+	if *input.ProxyID < 0 || *input.ExpectedProxyID < 0 || *input.ProxyID == *input.ExpectedProxyID {
+		return nil, infraerrors.BadRequest("FIXED_EGRESS_CAS_INPUT_INVALID", "proxy IDs must be non-negative and must change")
+	}
+	seen := make(map[int64]struct{}, len(input.AccountIDs))
+	for _, accountID := range input.AccountIDs {
+		if accountID <= 0 {
+			return nil, infraerrors.BadRequest("FIXED_EGRESS_CAS_INPUT_INVALID", "account IDs must be positive")
+		}
+		if _, exists := seen[accountID]; exists {
+			return nil, infraerrors.BadRequest("FIXED_EGRESS_CAS_INPUT_INVALID", "account IDs must be unique")
+		}
+		seen[accountID] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil, infraerrors.BadRequest("FIXED_EGRESS_CAS_INPUT_INVALID", "at least one account ID is required")
+	}
+
+	targets, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(targets) != len(seen) {
+		return nil, ErrAccountProxyCASConflict
+	}
+	for _, account := range targets {
+		if account == nil || !account.IsOpenAIOAuth() || account.Status != StatusActive || account.ParentAccountID != nil {
+			return nil, infraerrors.BadRequest("FIXED_EGRESS_ACCOUNT_INELIGIBLE", "fixed egress can only be bound to active OpenAI OAuth parent accounts")
+		}
+		currentProxyID := int64(0)
+		if account.ProxyID != nil {
+			currentProxyID = *account.ProxyID
+		}
+		if currentProxyID != *input.ExpectedProxyID {
+			return nil, ErrAccountProxyCASConflict
+		}
+	}
+
+	var newProxy *Proxy
+	if *input.ProxyID > 0 {
+		newProxy, err = s.proxyRepo.GetByID(ctx, *input.ProxyID)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateFixedEgressProxy(newProxy); err != nil {
+			return nil, err
+		}
+	}
+	binder, ok := s.accountRepo.(AccountProxyCASRepository)
+	if !ok {
+		return nil, infraerrors.New(http.StatusInternalServerError, "FIXED_EGRESS_CAS_UNAVAILABLE", "account repository does not support fixed-egress compare-and-set")
+	}
+	updatedIDs, err := binder.CompareAndSwapOpenAIOAuthProxy(ctx, input.AccountIDs, *input.ExpectedProxyID, newProxy)
+	if err != nil {
+		return nil, err
+	}
+	result := &BulkUpdateAccountsResult{
+		Success:    len(updatedIDs),
+		SuccessIDs: updatedIDs,
+		FailedIDs:  []int64{},
+		Results:    make([]BulkUpdateAccountResult, 0, len(updatedIDs)),
+	}
+	for _, accountID := range updatedIDs {
+		result.Results = append(result.Results, BulkUpdateAccountResult{AccountID: accountID, Success: true})
+	}
+	return result, nil
+}
+
+func validateFixedEgressProxy(proxy *Proxy) error {
+	if proxy == nil || proxy.ID <= 0 || !proxy.IsActive() || proxy.ExpiresAt != nil ||
+		proxy.FallbackMode != FallbackModeNone || proxy.BackupProxyID != nil ||
+		proxy.Protocol != "socks5h" || proxy.Port != 1080 || proxy.Username != "" || proxy.Password != "" {
+		return infraerrors.BadRequest("FIXED_EGRESS_PROXY_INVALID", "proxy must be active Tailnet-only socks5h:1080 with no expiry, credentials, backup, or fallback")
+	}
+	ip := net.ParseIP(strings.TrimSpace(proxy.Host))
+	_, tailnet, _ := net.ParseCIDR("100.64.0.0/10")
+	if ip == nil || ip.To4() == nil || !tailnet.Contains(ip) {
+		return infraerrors.BadRequest("FIXED_EGRESS_PROXY_INVALID", "proxy host must be a Tailnet IPv4 address")
+	}
+	proxyID := proxy.ID
+	if _, err := ResolveAccountProxyURL(&Account{ID: -1, ProxyID: &proxyID, Proxy: proxy}); err != nil {
+		return infraerrors.BadRequest("FIXED_EGRESS_PROXY_INVALID", "proxy URL is invalid")
+	}
+	return nil
+}
+
+func fixedEgressCASRequiredError() error {
+	return infraerrors.BadRequest(
+		"FIXED_EGRESS_CAS_REQUIRED",
+		"OpenAI OAuth parent proxy changes require proxy_id plus expected_proxy_id",
+	)
 }
 
 func updatesUpstreamBillingProbeIdentity(credentials map[string]any) bool {
@@ -1606,11 +1720,10 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 		return ""
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
+	proxyURL, err := ResolveAccountProxyURLWithLookup(ctx, account, s.proxyRepo)
+	if err != nil {
+		logger.LegacyPrintf("service.admin", "ensure_openai_privacy_proxy_unavailable: account_id=%d reason=%s", account.ID, AccountProxyUnavailableReason)
+		return PrivacyModeFailed
 	}
 
 	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)
@@ -1640,11 +1753,10 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 		return ""
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
+	proxyURL, err := ResolveAccountProxyURLWithLookup(ctx, account, s.proxyRepo)
+	if err != nil {
+		logger.LegacyPrintf("service.admin", "force_openai_privacy_proxy_unavailable: account_id=%d reason=%s", account.ID, AccountProxyUnavailableReason)
+		return PrivacyModeFailed
 	}
 
 	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)

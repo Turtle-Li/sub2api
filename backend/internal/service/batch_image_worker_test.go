@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,6 +72,22 @@ func TestBatchImageWorker_RequeuesWhenJobLockNotAcquired(t *testing.T) {
 	require.Empty(t, queue.acked)
 }
 
+func TestBatchImageWorker_RequeuesWhenGenerationDrainsDuringReserve(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	queue := newFakeBatchImageQueue("imgbatch_worker_draining")
+	queue.onReserve = func() { runtimegate.SetProcessActive(false) }
+	processor := &fakeBatchImageProcessor{}
+	worker := NewBatchImageWorker(queue, processor, BatchImageWorkerOptions{LockConflictDelay: 3 * time.Second})
+
+	require.NoError(t, worker.RunOnce(context.Background()))
+	require.Empty(t, processor.processed)
+	require.Len(t, queue.requeued, 1)
+	require.Equal(t, 3*time.Second, queue.requeued[0].delay)
+	require.Empty(t, queue.acked)
+	require.Zero(t, queue.releaseCount, "a drained generation must not acquire the per-job lock")
+}
+
 func TestNewBatchImageWorkerOptionsFromConfig_UsesFiniteReserveTimeout(t *testing.T) {
 	opts := NewBatchImageWorkerOptionsFromConfig(nil)
 	require.Equal(t, defaultBatchImageWorkerReserveBlockTimeout, opts.ReserveBlockTimeout)
@@ -83,6 +100,7 @@ type fakeBatchImageQueue struct {
 	acked        []string
 	requeued     []fakeBatchImageRequeue
 	releaseCount int
+	onReserve    func()
 }
 
 type fakeBatchImageRequeue struct {
@@ -102,6 +120,9 @@ func (q *fakeBatchImageQueue) Enqueue(context.Context, string) error {
 }
 
 func (q *fakeBatchImageQueue) Reserve(context.Context, time.Duration) (ReservedBatchImageJob, error) {
+	if q.onReserve != nil {
+		q.onReserve()
+	}
 	return q.reserved, nil
 }
 

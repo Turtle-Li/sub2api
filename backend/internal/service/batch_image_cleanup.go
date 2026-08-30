@@ -26,6 +26,7 @@ type BatchImageCleanupService struct {
 	AccountResolver  BatchImageAccountResolver
 	DeliveryStore    BatchImageDeliveryObjectStore
 	Config           *config.Config
+	leaderLock       *singletonJobLock
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -102,6 +103,12 @@ func (s *BatchImageCleanupService) RunOnce(ctx context.Context, now time.Time) (
 	if now.IsZero() {
 		now = time.Now()
 	}
+	leaseCtx, release, acquired := s.leaderLock.try(ctx)
+	if !acquired {
+		return BatchImageCleanupRunResult{}, nil
+	}
+	defer release()
+	ctx = leaseCtx
 	limit := s.cleanupBatchSize()
 	result := BatchImageCleanupRunResult{}
 	inputCutoff := now.Add(-s.inputRetentionAfterTerminal())
