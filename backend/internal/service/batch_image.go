@@ -357,7 +357,8 @@ type BatchImageRepository interface {
 // Keeping it separate from BatchImageRepository avoids widening unrelated
 // service/test dependencies for a background-only recovery concern.
 type BatchImageQueueRecoveryRepository interface {
-	ListProviderSubmittedBatchImageJobsForQueueRecovery(ctx context.Context, afterID int64, limit int) ([]*BatchImageJob, error)
+	MaxProviderSubmittedBatchImageJobIDForQueueRecovery(ctx context.Context) (int64, error)
+	ListProviderSubmittedBatchImageJobsForQueueRecovery(ctx context.Context, afterID, throughID int64, limit int) ([]*BatchImageJob, error)
 	IsProviderSubmittedBatchImageJobQueueRecoveryEligible(ctx context.Context, batchID string) (bool, error)
 	AppendBatchImageEvent(ctx context.Context, batchID, eventType string, payload any) error
 }

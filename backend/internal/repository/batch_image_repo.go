@@ -747,14 +747,31 @@ func (r *batchImageRepository) ListStaleUnsubmittedBatchImageJobs(ctx context.Co
 	return scanBatchImageJobs(rows)
 }
 
+// MaxProviderSubmittedBatchImageJobIDForQueueRecovery fixes the tail of one
+// reconciliation pass so continuous inserts cannot prevent the cursor from
+// wrapping and revisiting a transient Redis repair failure.
+func (r *batchImageRepository) MaxProviderSubmittedBatchImageJobIDForQueueRecovery(ctx context.Context) (int64, error) {
+	var maxID int64
+	err := r.sql.QueryRowContext(ctx, `
+SELECT COALESCE(MAX(id), 0)
+FROM batch_image_jobs
+WHERE status IN ('submitted', 'running', 'indexing', 'settling')
+  AND provider_job_name IS NOT NULL
+  AND BTRIM(provider_job_name) <> ''`).Scan(&maxID)
+	return maxID, err
+}
+
 // ListProviderSubmittedBatchImageJobsForQueueRecovery returns one bounded page
 // of durable jobs that can advance through the existing provider
 // polling/indexing/settlement pipeline. Terminal and pre-provider rows must
-// never be reintroduced to Redis. The caller owns the monotonic cursor so later
-// pages cannot starve behind already healthy older jobs.
-func (r *batchImageRepository) ListProviderSubmittedBatchImageJobsForQueueRecovery(ctx context.Context, afterID int64, limit int) ([]*service.BatchImageJob, error) {
+// never be reintroduced to Redis. throughID is the fixed upper bound of one
+// pass: later inserts wait for the next pass rather than moving the tail.
+func (r *batchImageRepository) ListProviderSubmittedBatchImageJobsForQueueRecovery(ctx context.Context, afterID, throughID int64, limit int) ([]*service.BatchImageJob, error) {
 	if afterID < 0 {
 		afterID = 0
+	}
+	if throughID <= afterID {
+		return nil, nil
 	}
 	if limit <= 0 {
 		limit = 100
@@ -766,8 +783,9 @@ func (r *batchImageRepository) ListProviderSubmittedBatchImageJobsForQueueRecove
    AND provider_job_name IS NOT NULL
    AND BTRIM(provider_job_name) <> ''
    AND id > $1
+   AND id <= $2
  ORDER BY id ASC
- LIMIT $2`, afterID, limit)
+ LIMIT $3`, afterID, throughID, limit)
 	if err != nil {
 		return nil, err
 	}

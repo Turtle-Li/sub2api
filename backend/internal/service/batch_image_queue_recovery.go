@@ -28,8 +28,9 @@ type BatchImageQueueRecoveryService struct {
 	Limit   int
 	LockTTL time.Duration
 
-	cursorMu sync.Mutex
-	cursorID int64
+	cursorMu    sync.Mutex
+	cursorID    int64
+	passUpperID int64
 }
 
 // ReconcileProviderSubmittedOnce scans only provider-submitted nonterminal
@@ -46,7 +47,11 @@ func (s *BatchImageQueueRecoveryService) ReconcileProviderSubmittedOnce(ctx cont
 		limit = maxBatchImageQueueRecoveryLimit
 	}
 
-	jobs, err := s.Repo.ListProviderSubmittedBatchImageJobsForQueueRecovery(ctx, s.recoveryCursor(), limit)
+	afterID, throughID, err := s.recoveryWindow(ctx)
+	if err != nil || throughID == 0 {
+		return 0, err
+	}
+	jobs, err := s.Repo.ListProviderSubmittedBatchImageJobsForQueueRecovery(ctx, afterID, throughID, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -86,7 +91,7 @@ func (s *BatchImageQueueRecoveryService) ReconcileProviderSubmittedOnce(ctx cont
 			)
 		}
 	}
-	s.advanceRecoveryCursor(jobs, limit)
+	s.advanceRecoveryCursor(jobs, afterID, throughID, limit)
 	return recovered, lastErr
 }
 
@@ -119,24 +124,55 @@ func (s *BatchImageQueueRecoveryService) ensureEligibleEnqueued(ctx context.Cont
 	return s.Queue.EnsureEnqueued(ctx, batchID)
 }
 
-func (s *BatchImageQueueRecoveryService) recoveryCursor() int64 {
+// recoveryWindow fixes an upper bound for each complete pass. Without that
+// snapshot, a continuously full table can keep moving the tail forever and a
+// row whose Redis repair failed once would never be visited again.
+func (s *BatchImageQueueRecoveryService) recoveryWindow(ctx context.Context) (afterID, throughID int64, err error) {
+	s.cursorMu.Lock()
+	afterID = s.cursorID
+	throughID = s.passUpperID
+	s.cursorMu.Unlock()
+	if throughID > 0 {
+		return afterID, throughID, nil
+	}
+
+	throughID, err = s.Repo.MaxProviderSubmittedBatchImageJobIDForQueueRecovery(ctx)
+	if err != nil || throughID <= 0 {
+		return 0, 0, err
+	}
+
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
-	return s.cursorID
+	// Runtime invokes reconciliation serially, but preserve a coherent window
+	// if a diagnostic caller overlaps two calls.
+	if s.passUpperID == 0 {
+		s.cursorID = 0
+		s.passUpperID = throughID
+	}
+	return s.cursorID, s.passUpperID, nil
 }
 
-func (s *BatchImageQueueRecoveryService) advanceRecoveryCursor(jobs []*BatchImageJob, limit int) {
+func (s *BatchImageQueueRecoveryService) advanceRecoveryCursor(jobs []*BatchImageJob, afterID, throughID int64, limit int) {
 	nextID := int64(0)
-	if len(jobs) >= limit {
-		for _, job := range jobs {
-			if job != nil && job.ID > nextID {
-				nextID = job.ID
-			}
+	for _, job := range jobs {
+		if job != nil && job.ID > nextID {
+			nextID = job.ID
 		}
 	}
 	s.cursorMu.Lock()
-	s.cursorID = nextID
-	s.cursorMu.Unlock()
+	defer s.cursorMu.Unlock()
+	if s.passUpperID != throughID || s.cursorID != afterID {
+		return
+	}
+	if len(jobs) >= limit && nextID > afterID && nextID < throughID {
+		s.cursorID = nextID
+		return
+	}
+	// Reaching the fixed upper bound, or receiving a short/invalid page, ends
+	// the pass. The next reconciliation starts again at zero with a fresh upper
+	// bound, so every transient EnsureEnqueued failure is revisited.
+	s.cursorID = 0
+	s.passUpperID = 0
 }
 
 func isProviderSubmittedQueueRecoveryEligible(job *BatchImageJob) bool {
