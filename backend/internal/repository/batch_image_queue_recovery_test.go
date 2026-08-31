@@ -25,3 +25,39 @@ func TestBatchImageRepository_ListProviderSubmittedBatchImageJobsForQueueRecover
 	require.Empty(t, jobs)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestBatchImageRepository_ListProviderSubmittedBatchImageJobsForQueueRecoveryCapsOversizedPage(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := &batchImageRepository{sql: db}
+	mock.ExpectQuery(`(?s)SELECT .* FROM batch_image_jobs.*LIMIT \$2`).
+		WithArgs(int64(0), maxBatchImageQueueRecoveryLimit).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	jobs, err := repo.ListProviderSubmittedBatchImageJobsForQueueRecovery(
+		context.Background(), 0, maxBatchImageQueueRecoveryLimit+1,
+	)
+	require.NoError(t, err)
+	require.Empty(t, jobs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBatchImageRepository_RevalidatesQueueRecoveryEligibility(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := &batchImageRepository{sql: db}
+	mock.ExpectQuery(`(?s)SELECT EXISTS .*status IN \('submitted', 'running', 'indexing', 'settling'\).*provider_job_name IS NOT NULL.*BTRIM\(provider_job_name\) <> ''`).
+		WithArgs("imgbatch_revalidate").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	eligible, err := repo.IsProviderSubmittedBatchImageJobQueueRecoveryEligible(
+		context.Background(), "imgbatch_revalidate",
+	)
+	require.NoError(t, err)
+	require.True(t, eligible)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

@@ -64,9 +64,10 @@ func ProvideBatchImageWorkerRuntime(
 	if recoveryRepo, ok := repo.(BatchImageQueueRecoveryRepository); ok {
 		if recoveryQueue, ok := queue.(BatchImageQueueEnsurer); ok {
 			runtime.queueRecovery = &BatchImageQueueRecoveryService{
-				Repo:  recoveryRepo,
-				Queue: recoveryQueue,
-				Limit: workerOptions.RecoverLimit,
+				Repo:    recoveryRepo,
+				Queue:   recoveryQueue,
+				Limit:   workerOptions.RecoverLimit,
+				LockTTL: workerOptions.JobLockTTL,
 			}
 		}
 	}

@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -12,12 +13,14 @@ import (
 )
 
 type recordingBatchImageQueueRecoveryRepo struct {
-	jobs      []*BatchImageJob
-	listFn    func(afterID int64, limit int) []*BatchImageJob
-	listCalls int
-	cursors   []int64
-	limits    []int
-	events    []recordingBatchImageQueueRecoveryEvent
+	jobs             []*BatchImageJob
+	listFn           func(afterID int64, limit int) []*BatchImageJob
+	eligibleFn       func(batchID string) bool
+	listCalls        int
+	cursors          []int64
+	limits           []int
+	eligibilityCalls []string
+	events           []recordingBatchImageQueueRecoveryEvent
 }
 
 type recordingBatchImageQueueRecoveryEvent struct {
@@ -41,10 +44,43 @@ func (r *recordingBatchImageQueueRecoveryRepo) AppendBatchImageEvent(_ context.C
 	return nil
 }
 
+func (r *recordingBatchImageQueueRecoveryRepo) IsProviderSubmittedBatchImageJobQueueRecoveryEligible(_ context.Context, batchID string) (bool, error) {
+	r.eligibilityCalls = append(r.eligibilityCalls, batchID)
+	if r.eligibleFn != nil {
+		return r.eligibleFn(batchID), nil
+	}
+	for _, job := range r.jobs {
+		if job != nil && job.BatchID == batchID {
+			return isProviderSubmittedQueueRecoveryEligible(job), nil
+		}
+	}
+	return true, nil
+}
+
 type recordingBatchImageQueueEnsurer struct {
-	restored map[string]bool
-	calls    []string
-	ensured  chan struct{}
+	restored   map[string]bool
+	calls      []string
+	lockCalls  []string
+	lockDenied map[string]bool
+	released   int
+	ensured    chan struct{}
+}
+
+type recordingBatchImageQueueRecoveryLock struct {
+	queue *recordingBatchImageQueueEnsurer
+}
+
+func (l *recordingBatchImageQueueRecoveryLock) Release(context.Context) error {
+	l.queue.released++
+	return nil
+}
+
+func (q *recordingBatchImageQueueEnsurer) TryAcquireJobLock(_ context.Context, batchID string, _ time.Duration) (BatchImageJobLock, bool, error) {
+	q.lockCalls = append(q.lockCalls, batchID)
+	if q.lockDenied[batchID] {
+		return nil, false, nil
+	}
+	return &recordingBatchImageQueueRecoveryLock{queue: q}, true, nil
 }
 
 func (q *recordingBatchImageQueueEnsurer) EnsureEnqueued(_ context.Context, batchID string) (bool, error) {
@@ -120,6 +156,82 @@ func TestBatchImageQueueRecoveryService_RotatesBoundedDBPages(t *testing.T) {
 	// pass rather than permanently scanning only the oldest recovery window.
 	require.Equal(t, []int64{0, first.ID, second.ID, 0}, repo.cursors)
 	require.Equal(t, []string{first.BatchID, second.BatchID, first.BatchID}, queue.calls)
+}
+
+func TestBatchImageQueueRecoveryService_NormalizesOversizedLimitBeforeCursorAccounting(t *testing.T) {
+	providerJob := "providers/jobs/123"
+	jobs := make([]*BatchImageJob, maxBatchImageQueueRecoveryLimit)
+	for index := range jobs {
+		jobs[index] = &BatchImageJob{
+			ID:              int64(index + 1),
+			BatchID:         fmt.Sprintf("imgbatch_limit_%d", index+1),
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: &providerJob,
+		}
+	}
+	repo := &recordingBatchImageQueueRecoveryRepo{
+		listFn: func(afterID int64, _ int) []*BatchImageJob {
+			if afterID == 0 {
+				return jobs
+			}
+			return nil
+		},
+	}
+	queue := &recordingBatchImageQueueEnsurer{restored: map[string]bool{}}
+	svc := &BatchImageQueueRecoveryService{
+		Repo: repo, Queue: queue, Limit: maxBatchImageQueueRecoveryLimit + 1,
+	}
+
+	_, err := svc.ReconcileProviderSubmittedOnce(context.Background())
+	require.NoError(t, err)
+	_, err = svc.ReconcileProviderSubmittedOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []int{maxBatchImageQueueRecoveryLimit, maxBatchImageQueueRecoveryLimit}, repo.limits)
+	require.Equal(t, []int64{0, int64(maxBatchImageQueueRecoveryLimit)}, repo.cursors)
+}
+
+func TestBatchImageQueueRecoveryService_RevalidatesUnderJobLockBeforeEnqueue(t *testing.T) {
+	providerJob := "providers/jobs/123"
+	job := &BatchImageJob{
+		ID: 1, BatchID: "imgbatch_terminal_race", Status: BatchImageJobStatusSubmitted, ProviderJobName: &providerJob,
+	}
+	repo := &recordingBatchImageQueueRecoveryRepo{
+		jobs:       []*BatchImageJob{job},
+		eligibleFn: func(string) bool { return false },
+	}
+	queue := &recordingBatchImageQueueEnsurer{restored: map[string]bool{job.BatchID: true}}
+
+	recovered, err := (&BatchImageQueueRecoveryService{Repo: repo, Queue: queue}).ReconcileProviderSubmittedOnce(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, recovered)
+	require.Equal(t, []string{job.BatchID}, queue.lockCalls)
+	require.Equal(t, []string{job.BatchID}, repo.eligibilityCalls)
+	require.Empty(t, queue.calls)
+	require.Equal(t, 1, queue.released)
+}
+
+func TestBatchImageQueueRecoveryService_DoesNotRaceAWorkerHoldingTheJobLock(t *testing.T) {
+	providerJob := "providers/jobs/123"
+	job := &BatchImageJob{
+		ID: 1, BatchID: "imgbatch_worker_owned", Status: BatchImageJobStatusRunning, ProviderJobName: &providerJob,
+	}
+	repo := &recordingBatchImageQueueRecoveryRepo{
+		jobs: []*BatchImageJob{job},
+		eligibleFn: func(string) bool {
+			t.Fatal("eligibility must not be read without acquiring the worker lock")
+			return false
+		},
+	}
+	queue := &recordingBatchImageQueueEnsurer{
+		restored:   map[string]bool{job.BatchID: true},
+		lockDenied: map[string]bool{job.BatchID: true},
+	}
+
+	recovered, err := (&BatchImageQueueRecoveryService{Repo: repo, Queue: queue}).ReconcileProviderSubmittedOnce(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, recovered)
+	require.Empty(t, repo.eligibilityCalls)
+	require.Empty(t, queue.calls)
 }
 
 func TestBatchImageQueueRecoveryService_StandbyDoesNotScanOrEnqueue(t *testing.T) {

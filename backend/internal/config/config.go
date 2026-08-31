@@ -268,9 +268,14 @@ type BatchImageConfig struct {
 	DeliveryCOSForcePathStyle   bool   `mapstructure:"delivery_cos_force_path_style"`
 }
 
-// BatchImageWorkerConcurrencyMax is the process-level safety ceiling. Larger
-// values belong in horizontal scaling, not an unbounded in-process fan-out.
-const BatchImageWorkerConcurrencyMax = 16
+const (
+	// BatchImageWorkerConcurrencyMax is the process-level safety ceiling. Larger
+	// values belong in horizontal scaling, not an unbounded in-process fan-out.
+	BatchImageWorkerConcurrencyMax = 16
+	// BatchImageRecoverLimitMax is shared with the bounded DB reconciliation
+	// contract. Rejecting larger values avoids cross-layer page-size drift.
+	BatchImageRecoverLimitMax = 1000
+)
 
 // ImageStorageConfig 配置异步图片任务结果上传的 S3 兼容对象存储。
 // Enabled 同时作为异步图片任务功能的总开关：未启用或未配置完整凭证时，
@@ -3296,6 +3301,12 @@ func (c *Config) Validate() error {
 		}
 		if c.BatchImage.RecoverLimit <= 0 {
 			return fmt.Errorf("batch_image.recover_limit must be positive")
+		}
+		if c.BatchImage.RecoverLimit > BatchImageRecoverLimitMax {
+			return fmt.Errorf(
+				"batch_image.recover_limit must not exceed %d",
+				BatchImageRecoverLimitMax,
+			)
 		}
 		if c.BatchImage.WorkerConcurrency <= 0 || c.BatchImage.WorkerConcurrency > BatchImageWorkerConcurrencyMax {
 			return fmt.Errorf(

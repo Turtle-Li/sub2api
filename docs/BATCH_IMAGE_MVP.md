@@ -210,7 +210,7 @@ Redis structures:
 - Queue idempotency keys: `batch_image.idempotency_key_prefix`
 - Download limiter keys managed by the download limiter
 
-Workers reserve normal work from Redis. A separate active-generation reconciliation loop runs at `batch_image.recovery_interval_seconds`, with `batch_image.recover_limit` as its page size. It round-robins only durable provider-submitted jobs in `submitted`, `running`, `indexing`, or `settling` status and repairs missing Redis membership atomically; it never submits a provider job. This is a bounded reliability exception, not general database-polling work dispatch. Standby generations do not scan or write queue state.
+Workers reserve normal work from Redis. A separate active-generation reconciliation loop runs at `batch_image.recovery_interval_seconds`, with `batch_image.recover_limit` as its page size (maximum 1000; larger configuration is rejected). It round-robins only durable provider-submitted jobs in `submitted`, `running`, `indexing`, or `settling` status. Before repairing Redis membership it acquires the same per-job lock used by workers and revalidates durable eligibility, so a stale scan cannot requeue a job after a worker has persisted a terminal state and acknowledged it. Recovery never submits a provider job. This is a bounded reliability exception, not general database-polling work dispatch. Standby generations do not scan or write queue state.
 
 ## Billing
 

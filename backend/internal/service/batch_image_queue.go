@@ -39,6 +39,7 @@ type BatchImageQueue interface {
 // treating an existing inflight key as proof that the job is still reachable.
 type BatchImageQueueEnsurer interface {
 	EnsureEnqueued(ctx context.Context, batchID string) (bool, error)
+	TryAcquireJobLock(ctx context.Context, batchID string, ttl time.Duration) (BatchImageJobLock, bool, error)
 }
 
 type BatchImageService struct {

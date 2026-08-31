@@ -10,6 +10,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+const maxBatchImageQueueRecoveryLimit = 1000
+
 type batchImageSQLExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -688,6 +690,26 @@ func (r *batchImageRepository) ListBatchImageJobsDueForInputCleanup(ctx context.
 	return scanBatchImageJobs(rows)
 }
 
+// IsProviderSubmittedBatchImageJobQueueRecoveryEligible revalidates a selected
+// row while the caller holds the same Redis job lock used by workers. This
+// closes the list-to-enqueue race with a worker's terminal transition and Ack.
+func (r *batchImageRepository) IsProviderSubmittedBatchImageJobQueueRecoveryEligible(ctx context.Context, batchID string) (bool, error) {
+	var eligible bool
+	err := r.sql.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM batch_image_jobs
+  WHERE batch_id = $1
+    AND status IN ('submitted', 'running', 'indexing', 'settling')
+    AND provider_job_name IS NOT NULL
+    AND BTRIM(provider_job_name) <> ''
+)`, batchID).Scan(&eligible)
+	if err != nil {
+		return false, err
+	}
+	return eligible, nil
+}
+
 func (r *batchImageRepository) ListBatchImageJobsDueForOutputCleanup(ctx context.Context, now time.Time, limit int) ([]*service.BatchImageJob, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
@@ -734,8 +756,10 @@ func (r *batchImageRepository) ListProviderSubmittedBatchImageJobsForQueueRecove
 	if afterID < 0 {
 		afterID = 0
 	}
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 {
 		limit = 100
+	} else if limit > maxBatchImageQueueRecoveryLimit {
+		limit = maxBatchImageQueueRecoveryLimit
 	}
 	rows, err := r.sql.QueryContext(ctx, batchImageJobSelectSQL+`
  WHERE status IN ('submitted', 'running', 'indexing', 'settling')

@@ -2003,6 +2003,14 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "batch_image.worker_concurrency must be between 1 and 16",
 		},
 		{
+			name: "batch image recovery page too large",
+			mutate: func(c *Config) {
+				c.BatchImage.QueueEnabled = true
+				c.BatchImage.RecoverLimit = BatchImageRecoverLimitMax + 1
+			},
+			wantErr: "batch_image.recover_limit must not exceed 1000",
+		},
+		{
 			name:    "gateway max line size",
 			mutate:  func(c *Config) { c.Gateway.MaxLineSize = 1024 },
 			wantErr: "gateway.max_line_size must be at least",
