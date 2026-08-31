@@ -10,6 +10,7 @@ import (
 type BatchImageWorkerRuntime struct {
 	worker          *BatchImageWorker
 	billingRecovery *BatchImageBillingRecoveryService
+	queueRecovery   *BatchImageQueueRecoveryService
 	cfg             *config.Config
 
 	mu     sync.Mutex
@@ -50,14 +51,24 @@ func ProvideBatchImageWorkerRuntime(
 			Config:       cfg,
 		},
 	}
-	runtime := NewBatchImageWorkerRuntime(NewBatchImageWorker(queue, processor, NewBatchImageWorkerOptionsFromConfig(cfg)), cfg)
+	workerOptions := NewBatchImageWorkerOptionsFromConfig(cfg)
+	runtime := NewBatchImageWorkerRuntime(NewBatchImageWorker(queue, processor, workerOptions), cfg)
 	runtime.billingRecovery = &BatchImageBillingRecoveryService{
 		Repo:       repo,
 		Billing:    billingRepo,
 		AuthCache:  authCache,
 		Queue:      queue,
-		StaleAfter: NewBatchImageWorkerOptionsFromConfig(cfg).StaleActiveAfter,
-		Limit:      NewBatchImageWorkerOptionsFromConfig(cfg).RecoverLimit,
+		StaleAfter: workerOptions.StaleActiveAfter,
+		Limit:      workerOptions.RecoverLimit,
+	}
+	if recoveryRepo, ok := repo.(BatchImageQueueRecoveryRepository); ok {
+		if recoveryQueue, ok := queue.(BatchImageQueueEnsurer); ok {
+			runtime.queueRecovery = &BatchImageQueueRecoveryService{
+				Repo:  recoveryRepo,
+				Queue: recoveryQueue,
+				Limit: workerOptions.RecoverLimit,
+			}
+		}
 	}
 	runtime.Start()
 	return runtime
@@ -79,8 +90,12 @@ func (r *BatchImageWorkerRuntime) Start() {
 	r.done = done
 
 	workerConcurrency := r.workerConcurrency()
+	backgroundRoutines := 3
+	if r.queueRecovery != nil {
+		backgroundRoutines++
+	}
 	var wg sync.WaitGroup
-	wg.Add(workerConcurrency + 3)
+	wg.Add(workerConcurrency + backgroundRoutines)
 	for range workerConcurrency {
 		go func() {
 			defer wg.Done()
@@ -99,6 +114,12 @@ func (r *BatchImageWorkerRuntime) Start() {
 		defer wg.Done()
 		r.runBillingRecovery(ctx)
 	}()
+	if r.queueRecovery != nil {
+		go func() {
+			defer wg.Done()
+			r.runQueueRecovery(ctx)
+		}()
+	}
 	go func() {
 		wg.Wait()
 		close(done)
@@ -125,6 +146,22 @@ func (r *BatchImageWorkerRuntime) runBillingRecovery(ctx context.Context) {
 			return
 		}
 		_, _ = r.billingRecovery.ReleaseStaleUnsubmittedOnce(ctx)
+		sleepOrDone(ctx, interval)
+	}
+}
+
+func (r *BatchImageWorkerRuntime) runQueueRecovery(ctx context.Context) {
+	if r == nil || r.worker == nil || r.queueRecovery == nil {
+		return
+	}
+	interval := r.worker.opts.RecoveryInterval
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		if runtimegate.SharedWorkAllowed() {
+			_, _ = r.queueRecovery.ReconcileProviderSubmittedOnce(ctx)
+		}
 		sleepOrDone(ctx, interval)
 	}
 }

@@ -35,6 +35,12 @@ type BatchImageQueue interface {
 	TryAcquireJobLock(ctx context.Context, batchID string, ttl time.Duration) (BatchImageJobLock, bool, error)
 }
 
+// BatchImageQueueEnsurer repairs queue membership for a durable job without
+// treating an existing inflight key as proof that the job is still reachable.
+type BatchImageQueueEnsurer interface {
+	EnsureEnqueued(ctx context.Context, batchID string) (bool, error)
+}
+
 type BatchImageService struct {
 	repo  BatchImageRepository
 	queue BatchImageQueue

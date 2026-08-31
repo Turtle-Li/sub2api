@@ -25,6 +25,96 @@ func TestBatchImageQueue_DuplicateEnqueueReturnsAlreadyQueued(t *testing.T) {
 	require.True(t, errors.Is(err, service.ErrBatchImageAlreadyQueued))
 }
 
+func TestBatchImageQueue_EnsureEnqueuedRestoresMissingJobDespiteInflightKey(t *testing.T) {
+	ctx := context.Background()
+	queue, mr := newBatchImageQueueTest(t)
+	batchID := "imgbatch_ensure_missing"
+
+	// Simulate the historical crash window: inflight survives, but no Redis
+	// queue structure contains the durable job.
+	require.NoError(t, queue.rdb.Set(ctx, queue.inflightKey(batchID), batchID, time.Minute).Err())
+	restored, err := queue.EnsureEnqueued(ctx, batchID)
+	require.NoError(t, err)
+	require.True(t, restored)
+
+	ready, err := queue.rdb.LRange(ctx, queue.readyKey, 0, -1).Result()
+	require.NoError(t, err)
+	require.Equal(t, []string{batchID}, ready)
+	require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.delayedKey, batchID).Err(), redis.Nil)
+	require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.activeKey, batchID).Err(), redis.Nil)
+	require.Greater(t, mr.TTL(queue.inflightKey(batchID)), time.Minute)
+}
+
+func TestBatchImageQueue_EnsureEnqueuedNormalizesReadyWithoutCountingRecovery(t *testing.T) {
+	ctx := context.Background()
+	queue, _ := newBatchImageQueueTest(t)
+	batchID := "imgbatch_ensure_ready"
+	require.NoError(t, queue.rdb.LPush(ctx, queue.readyKey, batchID, batchID).Err())
+
+	restored, err := queue.EnsureEnqueued(ctx, batchID)
+	require.NoError(t, err)
+	require.False(t, restored)
+
+	ready, err := queue.rdb.LRange(ctx, queue.readyKey, 0, -1).Result()
+	require.NoError(t, err)
+	require.Equal(t, []string{batchID}, ready)
+}
+
+func TestBatchImageQueue_EnsureEnqueuedPreservesExistingReadyPosition(t *testing.T) {
+	ctx := context.Background()
+	queue, _ := newBatchImageQueueTest(t)
+	batchID := "imgbatch_ensure_position"
+	require.NoError(t, queue.rdb.RPush(ctx, queue.readyKey, "imgbatch_old", batchID, "imgbatch_new").Err())
+	before, err := queue.rdb.LRange(ctx, queue.readyKey, 0, -1).Result()
+	require.NoError(t, err)
+
+	restored, err := queue.EnsureEnqueued(ctx, batchID)
+	require.NoError(t, err)
+	require.False(t, restored)
+
+	after, err := queue.rdb.LRange(ctx, queue.readyKey, 0, -1).Result()
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
+
+func TestBatchImageQueue_EnsureEnqueuedDoesNotCopyActiveOrDelayedJob(t *testing.T) {
+	ctx := context.Background()
+	for _, state := range []struct {
+		name string
+		add  func(*batchImageQueue, string) error
+	}{
+		{
+			name: "active",
+			add: func(queue *batchImageQueue, batchID string) error {
+				return queue.rdb.ZAdd(ctx, queue.activeKey, redis.Z{Score: float64(time.Now().UnixMilli()), Member: batchID}).Err()
+			},
+		},
+		{
+			name: "delayed",
+			add: func(queue *batchImageQueue, batchID string) error {
+				return queue.rdb.ZAdd(ctx, queue.delayedKey, redis.Z{Score: float64(time.Now().Add(time.Minute).UnixMilli()), Member: batchID}).Err()
+			},
+		},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			queue, mr := newBatchImageQueueTest(t)
+			batchID := "imgbatch_ensure_" + state.name
+			require.NoError(t, state.add(queue, batchID))
+			// A corrupt duplicate ready entry must be removed while the active or
+			// delayed owner remains authoritative.
+			require.NoError(t, queue.rdb.LPush(ctx, queue.readyKey, batchID, batchID).Err())
+			require.NoError(t, queue.rdb.Set(ctx, queue.inflightKey(batchID), batchID, time.Minute).Err())
+
+			restored, err := queue.EnsureEnqueued(ctx, batchID)
+			require.NoError(t, err)
+			require.False(t, restored)
+			require.Zero(t, queue.rdb.LLen(ctx, queue.readyKey).Val())
+			require.NoError(t, queue.rdb.Get(ctx, queue.inflightKey(batchID)).Err())
+			require.Greater(t, mr.TTL(queue.inflightKey(batchID)), 30*time.Minute)
+		})
+	}
+}
+
 func TestBatchImageQueue_RequeueAfterMovesJobFromActiveToDelayed(t *testing.T) {
 	ctx := context.Background()
 	queue, _ := newBatchImageQueueTest(t)

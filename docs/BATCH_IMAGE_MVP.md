@@ -194,7 +194,7 @@ traverse the Sub2 host.
 
 Redis is used for wakeups, retries, worker coordination, per-job locks, and download limiting. PostgreSQL remains the source of truth.
 
-`batch_image.queue_enabled` defaults to `false`. When it is set to `true`, app startup starts `batch_image.worker_concurrency` independent `BatchImageWorker` consumers plus one delayed queue mover and one stale active recovery loop. The worker count defaults to `1` and is validated in the range `1..16`. Each consumer reserves jobs from the Redis ready queue and keeps the existing per-job Redis lock and heartbeat while Provider I/O is in flight.
+`batch_image.queue_enabled` defaults to `false`. When it is set to `true`, app startup starts `batch_image.worker_concurrency` independent `BatchImageWorker` consumers plus one delayed queue mover, one stale active recovery loop, and one provider-submitted queue reconciliation loop. The worker count defaults to `1` and is validated in the range `1..16`. Each consumer reserves jobs from the Redis ready queue and keeps the existing per-job Redis lock and heartbeat while Provider I/O is in flight.
 
 Size the worker count against both the upstream account concurrency and the host budget. On the current 2 vCPU production shape, start at `2`; raising it beyond the available Gemini/Vertex account concurrency only increases queue and database pressure without adding throughput.
 
@@ -210,9 +210,7 @@ Redis structures:
 - Queue idempotency keys: `batch_image.idempotency_key_prefix`
 - Download limiter keys managed by the download limiter
 
-Workers should reserve from Redis. They are not expected to run as a database scan loop.
-
-The worker does not perform DB scan polling. Database reads happen only after a Redis queue reservation yields a specific batch id.
+Workers reserve normal work from Redis. A separate active-generation reconciliation loop runs at `batch_image.recovery_interval_seconds`, with `batch_image.recover_limit` as its page size. It round-robins only durable provider-submitted jobs in `submitted`, `running`, `indexing`, or `settling` status and repairs missing Redis membership atomically; it never submits a provider job. This is a bounded reliability exception, not general database-polling work dispatch. Standby generations do not scan or write queue state.
 
 ## Billing
 

@@ -81,6 +81,35 @@ end
 return 0
 `)
 
+// batchImageEnsureEnqueuedScript reconciles durable DB state with the three
+// Redis queue structures. An inflight key is only a duplicate-suppression hint,
+// not membership evidence: a process can crash after setting it while all queue
+// entries are gone. Active and delayed jobs remain owned by their existing
+// state; otherwise ready is normalized to exactly one member.
+var batchImageEnsureEnqueuedScript = redis.NewScript(`
+if redis.call("ZSCORE", KEYS[2], ARGV[1]) or redis.call("ZSCORE", KEYS[3], ARGV[1]) then
+  redis.call("LREM", KEYS[1], 0, ARGV[1])
+  redis.call("SET", KEYS[4], ARGV[1], "PX", ARGV[2])
+  return 0
+end
+
+local first = redis.call("LPOS", KEYS[1], ARGV[1])
+if first then
+  local second = redis.call("LPOS", KEYS[1], ARGV[1], "RANK", 2)
+  if not second then
+    redis.call("SET", KEYS[4], ARGV[1], "PX", ARGV[2])
+    return 0
+  end
+  redis.call("LREM", KEYS[1], 0, ARGV[1])
+end
+redis.call("LPUSH", KEYS[1], ARGV[1])
+redis.call("SET", KEYS[4], ARGV[1], "PX", ARGV[2])
+if not first then
+  return 1
+end
+return 0
+`)
+
 type batchImageQueue struct {
 	rdb            *redis.Client
 	readyKey       string
@@ -176,6 +205,24 @@ func (q *batchImageQueue) Enqueue(ctx context.Context, batchID string) error {
 		return service.ErrBatchImageAlreadyQueued
 	}
 	return nil
+}
+
+// EnsureEnqueued atomically restores a job only when it is absent from ready,
+// delayed, and active. It refreshes the inflight key in every case and returns
+// true only when it had to add a previously unreachable job to ready.
+func (q *batchImageQueue) EnsureEnqueued(ctx context.Context, batchID string) (bool, error) {
+	if !service.IsValidBatchImageID(batchID) {
+		return false, service.ErrInvalidBatchImageQueuePayload
+	}
+
+	restored, err := batchImageEnsureEnqueuedScript.Run(ctx, q.rdb,
+		[]string{q.readyKey, q.delayedKey, q.activeKey, q.inflightKey(batchID)},
+		batchID, q.inflightTTL.Milliseconds(),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return restored == 1, nil
 }
 
 func (q *batchImageQueue) Reserve(ctx context.Context, blockTimeout time.Duration) (service.ReservedBatchImageJob, error) {
@@ -352,3 +399,4 @@ func newBatchImageLockToken() (string, error) {
 }
 
 var _ service.BatchImageQueue = (*batchImageQueue)(nil)
+var _ service.BatchImageQueueEnsurer = (*batchImageQueue)(nil)

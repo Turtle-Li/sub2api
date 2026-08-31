@@ -352,6 +352,15 @@ type BatchImageRepository interface {
 	AppendBatchImageEvent(ctx context.Context, batchID, eventType string, payload any) error
 }
 
+// BatchImageQueueRecoveryRepository is the narrow persistence boundary used to
+// reconcile durable provider-submitted jobs back into the Redis work queue.
+// Keeping it separate from BatchImageRepository avoids widening unrelated
+// service/test dependencies for a background-only recovery concern.
+type BatchImageQueueRecoveryRepository interface {
+	ListProviderSubmittedBatchImageJobsForQueueRecovery(ctx context.Context, afterID int64, limit int) ([]*BatchImageJob, error)
+	AppendBatchImageEvent(ctx context.Context, batchID, eventType string, payload any) error
+}
+
 // BatchImageDeliveryObjectStore exposes only exact-object capabilities required
 // by the batch delivery control plane. Implementations must keep permanent COS
 // credentials server-side and return short-lived signed URLs.

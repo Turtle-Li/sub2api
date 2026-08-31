@@ -725,6 +725,32 @@ func (r *batchImageRepository) ListStaleUnsubmittedBatchImageJobs(ctx context.Co
 	return scanBatchImageJobs(rows)
 }
 
+// ListProviderSubmittedBatchImageJobsForQueueRecovery returns one bounded page
+// of durable jobs that can advance through the existing provider
+// polling/indexing/settlement pipeline. Terminal and pre-provider rows must
+// never be reintroduced to Redis. The caller owns the monotonic cursor so later
+// pages cannot starve behind already healthy older jobs.
+func (r *batchImageRepository) ListProviderSubmittedBatchImageJobsForQueueRecovery(ctx context.Context, afterID int64, limit int) ([]*service.BatchImageJob, error) {
+	if afterID < 0 {
+		afterID = 0
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := r.sql.QueryContext(ctx, batchImageJobSelectSQL+`
+ WHERE status IN ('submitted', 'running', 'indexing', 'settling')
+   AND provider_job_name IS NOT NULL
+   AND BTRIM(provider_job_name) <> ''
+   AND id > $1
+ ORDER BY id ASC
+ LIMIT $2`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	return scanBatchImageJobs(rows)
+}
+
 func (r *batchImageRepository) MarkBatchImageInputDeleted(ctx context.Context, batchID string, deletedAt time.Time) error {
 	res, err := r.sql.ExecContext(ctx, `
 UPDATE batch_image_jobs
@@ -1007,6 +1033,8 @@ func scanBatchImageJobs(rows *sql.Rows) ([]*service.BatchImageJob, error) {
 	}
 	return jobs, nil
 }
+
+var _ service.BatchImageQueueRecoveryRepository = (*batchImageRepository)(nil)
 
 const batchImageItemColumns = `
 id, job_id, custom_id, status, request_hash, prompt_preview, provider_source_object,

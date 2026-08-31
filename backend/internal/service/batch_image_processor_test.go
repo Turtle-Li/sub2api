@@ -349,6 +349,7 @@ type fakeProcessorProvider struct {
 	getErr error
 	result string
 
+	submitCalls      int
 	getCalled        bool
 	openResultCalled bool
 }
@@ -358,7 +359,8 @@ func (p *fakeProcessorProvider) SupportsAccount(*Account) bool {
 	return true
 }
 func (p *fakeProcessorProvider) Submit(context.Context, *BatchImageJob, *Account, BatchImageInput) (*BatchProviderJob, error) {
-	panic("Submit must not be called by PR5 processor")
+	p.submitCalls++
+	return nil, errors.New("Submit must not be called by batch image processor")
 }
 func (p *fakeProcessorProvider) Get(context.Context, *BatchImageJob, *Account) (*BatchProviderStatus, error) {
 	p.getCalled = true
