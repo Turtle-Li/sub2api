@@ -55,6 +55,11 @@ DRAIN_MAX_RUNTIME_SECONDS="${SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS:-0}"
 DRAIN_CADDY_CONFIG_PATH="${SUB2API_RELEASE_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
 NODE_STATE_SCRIPT="${SUB2API_NODE_STATE_SCRIPT:-${APP_DIR}/scripts/sub2api-node-state.sh}"
 DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
+# Keep an explicitly blank value invalid. An unset setting preserves the
+# deployed local-dependency release behavior.
+DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE-local}"
+EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
+EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -142,6 +147,16 @@ require_go_memory_limit() {
   esac
 }
 
+run_blue_green() {
+  # Pass only the dependency selector and root-owned paths. Runtime secrets
+  # remain in the external env file and never enter this coordinator's logs.
+  env \
+    SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE="$DEPENDENCY_MODE" \
+    SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$EXTERNAL_RUNTIME_ENV_FILE" \
+    SUB2API_EXTERNAL_CA_FILE="$EXTERNAL_CA_FILE" \
+    "$@"
+}
+
 for command_name in docker curl flock grep awk perl systemd-run; do
   require_cmd "$command_name"
 done
@@ -164,6 +179,16 @@ require_positive_integer SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS "$DRAIN_INTERVAL
 require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACTIVE_WINDOW_SECONDS"
 require_non_negative_integer SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS "$DRAIN_RETRY_DELAY_SECONDS"
 require_non_negative_integer SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS "$DRAIN_MAX_RUNTIME_SECONDS"
+case "$DEPENDENCY_MODE" in
+  local|external) ;;
+  *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external" ;;
+esac
+SWITCH_RUN_BACKUP=true
+if [ "$DEPENDENCY_MODE" = external ]; then
+  # The external data-service owner owns its backup policy. The local backup
+  # helper targets the retired Compose-managed PostgreSQL service.
+  SWITCH_RUN_BACKUP=false
+fi
 
 if [ "$PREBUILT_MODE" != "true" ]; then
   case "$SOURCE_DIR" in
@@ -264,6 +289,84 @@ OLD_RUNNING="$(docker inspect "$OLD_CONTAINER" --format '{{.State.Running}}' 2>/
 OLD_HEALTH="$(docker inspect "$OLD_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)"
 [ "$OLD_RUNNING" = "true" ] || die "active container is not running: $OLD_CONTAINER"
 [ "$OLD_HEALTH" = "healthy" ] || die "active container is not healthy: $OLD_CONTAINER ($OLD_HEALTH)"
+
+caddy_config_points_to_old_only() {
+  local caddy_config="$1"
+
+  if ! printf '%s' "$caddy_config" | grep -qF "$OLD_UPSTREAM"; then
+    return 1
+  fi
+  if printf '%s' "$caddy_config" | grep -qF "$NEW_UPSTREAM"; then
+    return 1
+  fi
+  return 0
+}
+
+caddy_views_point_to_old_only() {
+  local active_config
+  local caddy_config
+  local host_config
+  local startup_config
+
+  if ! host_config="$(cat "${APP_DIR}/Caddyfile")"; then
+    log "WARNING: could not read host Caddyfile while checking ${OLD_UPSTREAM}" >&2
+    return 1
+  fi
+  if ! startup_config="$(docker exec \
+    -e "CADDY_CHECK_PATH=${DRAIN_CADDY_CONFIG_PATH}" \
+    "$CADDY_CONTAINER" sh -c 'cat "$CADDY_CHECK_PATH"')"; then
+    log "WARNING: could not read Caddy startup configuration while checking ${OLD_UPSTREAM}" >&2
+    return 1
+  fi
+  if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/')"; then
+    log "WARNING: could not read active Caddy configuration while checking ${OLD_UPSTREAM}" >&2
+    return 1
+  fi
+
+  for caddy_config in "$host_config" "$startup_config" "$active_config"; do
+    caddy_config_points_to_old_only "$caddy_config" || return 1
+  done
+  return 0
+}
+
+remove_stopped_external_inactive_target() {
+  local old_health
+  local old_running
+  local target_running
+
+  if ! docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
+    return 0
+  fi
+  [ "$NEW_CONTAINER" != "$OLD_CONTAINER" ] \
+    || die "refusing to remove Caddy-active container $OLD_CONTAINER"
+
+  if ! caddy_views_point_to_old_only; then
+    die "Caddy views do not conclusively point at ${OLD_UPSTREAM}; retaining stopped inactive target ${NEW_CONTAINER}"
+  fi
+  # Re-check the current old and target states after all release candidates
+  # and Caddy views were verified. A target that started meanwhile is never
+  # force-removed, and a degraded old generation is retained as rollback.
+  if ! old_running="$(docker inspect "$OLD_CONTAINER" --format '{{.State.Running}}')" \
+    || ! old_health="$(docker inspect "$OLD_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"; then
+    die "could not re-check active container before removing stopped target ${NEW_CONTAINER}"
+  fi
+  [ "$old_running" = true ] && [ "$old_health" = healthy ] \
+    || die "active container is no longer healthy before removing stopped target ${NEW_CONTAINER}"
+  if ! docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
+    log "Stopped inactive target ${NEW_CONTAINER} disappeared before cleanup"
+    return 0
+  fi
+  if ! target_running="$(docker inspect "$NEW_CONTAINER" --format '{{.State.Running}}')"; then
+    die "could not re-check inactive target ${NEW_CONTAINER} before cleanup"
+  fi
+  [ "$target_running" = false ] \
+    || die "inactive target ${NEW_CONTAINER} is no longer stopped; retaining it"
+
+  log "Removing stale stopped inactive target ${NEW_CONTAINER}; Caddy still points at ${OLD_CONTAINER}"
+  docker rm "$NEW_CONTAINER" >>"${LOG_DIR}/stale-target-cleanup.log" 2>&1 \
+    || die "could not remove stale stopped inactive target ${NEW_CONTAINER}"
+}
+
 run_node_state bootstrap >>"${LOG_DIR}/node-state.log" \
   || die "could not bootstrap node runtime state"
 node_state_status="$(run_node_state status)" \
@@ -271,7 +374,15 @@ node_state_status="$(run_node_state status)" \
 printf '%s\n' "$node_state_status" >>"${LOG_DIR}/node-state.log"
 [ "$node_state_status" = "traffic=accepting active_container=${OLD_CONTAINER} background=active" ] \
   || die "node runtime state is not safe for a local release: ${node_state_status}"
-
+if [ "$DEPENDENCY_MODE" = external ]; then
+  # External mode cannot safely reuse a stopped target whose runtime contract
+  # may belong to a previous data-service configuration. `preflight` refuses
+  # an unfinished local transaction, and the verified status above makes its
+  # accepting-state write idempotent before any container object is removed.
+  run_node_state preflight >>"${LOG_DIR}/node-state.log" \
+    || die "could not verify that no local release transaction is unfinished before removing an external target"
+  remove_stopped_external_inactive_target
+fi
 if docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
   target_running="$(docker inspect "$NEW_CONTAINER" --format '{{.State.Running}}')"
   if [ "$target_running" = "true" ]; then
@@ -321,8 +432,8 @@ docker image inspect "$IMAGE" >/dev/null || die "built image is missing"
 log "Image ready: $(docker image inspect "$IMAGE" --format '{{.Id}} {{.Size}} bytes')"
 
 rollback() {
-  log "Public verification failed; attempting automatic rollback to ${OLD_CONTAINER}"
-  env \
+  log "Attempting automatic rollback to ${OLD_CONTAINER}"
+  run_blue_green \
     OLD_CONTAINER="$NEW_CONTAINER" \
     NEW_CONTAINER="$OLD_CONTAINER" \
     NEW_IMAGE="$OLD_IMAGE" \
@@ -345,32 +456,13 @@ rollback() {
 }
 
 cleanup_failed_inactive_target() {
-  local active_config
-  local caddy_config
-  local host_config
-  local startup_config
-
   if ! docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
     return 0
   fi
-  if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/')"; then
-    log "WARNING: could not read Caddy configuration; retaining failed target ${NEW_CONTAINER}" >&2
+  if ! caddy_views_point_to_old_only; then
+    log "WARNING: Caddy does not conclusively point at ${OLD_UPSTREAM}; retaining ${NEW_CONTAINER}" >&2
     return 0
   fi
-  if ! host_config="$(cat "${APP_DIR}/Caddyfile")" \
-    || ! startup_config="$(docker exec \
-      -e "CADDY_CHECK_PATH=${DRAIN_CADDY_CONFIG_PATH}" \
-      "$CADDY_CONTAINER" sh -c 'cat "$CADDY_CHECK_PATH"')"; then
-    log "WARNING: could not read every Caddy configuration view; retaining failed target ${NEW_CONTAINER}" >&2
-    return 0
-  fi
-  for caddy_config in "$host_config" "$startup_config" "$active_config"; do
-    if ! printf '%s' "$caddy_config" | grep -qF "$OLD_UPSTREAM" \
-      || printf '%s' "$caddy_config" | grep -qF "$NEW_UPSTREAM"; then
-      log "WARNING: Caddy does not conclusively point at ${OLD_UPSTREAM}; retaining ${NEW_CONTAINER}" >&2
-      return 0
-    fi
-  done
 
   log "Removing failed inactive target ${NEW_CONTAINER}; Caddy still points at ${OLD_CONTAINER}"
   docker rm -f "$NEW_CONTAINER" >>"${LOG_DIR}/failed-target-cleanup.log" 2>&1 \
@@ -380,18 +472,25 @@ cleanup_failed_inactive_target() {
 run_node_state local-standby "$NEW_CONTAINER" >>"${LOG_DIR}/node-state.log" \
   || die "could not prepare ${NEW_CONTAINER} background admission state"
 log "Switching ${OLD_UPSTREAM} to ${NEW_UPSTREAM} through the existing blue-green script"
-if ! env \
+if ! run_blue_green \
   OLD_CONTAINER="$OLD_CONTAINER" \
   NEW_CONTAINER="$NEW_CONTAINER" \
   NEW_IMAGE="$IMAGE" \
   CADDY_UPSTREAM_FROM="$OLD_UPSTREAM" \
   CADDY_UPSTREAM_TO="$NEW_UPSTREAM" \
   PULL_IMAGE=false \
-  RUN_BACKUP=true \
+  RUN_BACKUP="$SWITCH_RUN_BACKUP" \
   SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
   bash "$BLUE_GREEN_SCRIPT" >"$SWITCH_LOG" 2>&1; then
   tail -120 "$SWITCH_LOG" >&2 || true
-  if docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
+  if caddy_views_point_to_old_only; then
+    log "Blue-green release failed before the Caddy switch; aborting local node state without rollback"
+    if run_node_state abort-local >>"${LOG_DIR}/node-state.log" 2>&1; then
+      cleanup_failed_inactive_target
+    else
+      log "ERROR: Caddy still points at ${OLD_CONTAINER}, but node runtime state could not be restored" >&2
+    fi
+  else
     if rollback; then
       cleanup_failed_inactive_target
     fi

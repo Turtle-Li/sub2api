@@ -13,6 +13,11 @@ SOURCE_DIR="${WORK_ROOT}/release.case"
 DOCKER_CALLS="${TEST_ROOT}/docker-calls.log"
 NODE_STATE_CALLS="${TEST_ROOT}/node-state-calls.log"
 CURL_CALLS="${TEST_ROOT}/curl-calls.log"
+BLUE_GREEN_ENV_LOG="${TEST_ROOT}/blue-green-env.log"
+EVENT_LOG="${TEST_ROOT}/events.log"
+STARTUP_CADDY="${TEST_ROOT}/startup.Caddyfile"
+ACTIVE_CADDY="${TEST_ROOT}/active-caddy.json"
+LOCAL_TRANSACTION="${TEST_ROOT}/local-release.env"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -33,14 +38,67 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local file="$1"
+  local unexpected="$2"
+  if grep -Fq -- "$unexpected" "$file"; then
+    sed -n '1,200p' "$file" >&2
+    fail "did not expect '${unexpected}' in ${file}"
+  fi
+}
+
+assert_event_order() {
+  local first="$1"
+  local second="$2"
+  local first_line
+  local second_line
+
+  first_line="$(grep -nF -- "$first" "$EVENT_LOG" | head -1 | cut -d: -f1 || true)"
+  second_line="$(grep -nF -- "$second" "$EVENT_LOG" | head -1 | cut -d: -f1 || true)"
+  [ -n "$first_line" ] && [ -n "$second_line" ] && [ "$first_line" -lt "$second_line" ] \
+    || fail "expected '${first}' before '${second}' in ${EVENT_LOG}"
+}
+
 mkdir -p "$FAKE_BIN" "$APP_DIR/scripts" "$SOURCE_DIR"
 printf 'FROM scratch\n' >"${SOURCE_DIR}/Dockerfile"
 printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
+printf 'reverse_proxy sub2api-green:8080\n' >"$STARTUP_CADDY"
+printf '{"upstream":"sub2api-green:8080"}\n' >"$ACTIVE_CADDY"
+
+reset_caddy_views() {
+  printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
+  printf 'reverse_proxy sub2api-green:8080\n' >"$STARTUP_CADDY"
+  printf '{"upstream":"sub2api-green:8080"}\n' >"$ACTIVE_CADDY"
+}
+
 cat >"${APP_DIR}/scripts/sub2api-blue-green-release.sh" <<'EOF'
 #!/usr/bin/env bash
 set -eu
-if [ "${FAKE_UPDATE_CADDY:-0}" = 1 ]; then
+if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
+  printf 'mode=%s old=%s new=%s backup=%s\n' \
+    "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
+    "${OLD_CONTAINER:-}" \
+    "${NEW_CONTAINER:-}" \
+    "${RUN_BACKUP:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
+fi
+if [ -n "${FAKE_EVENT_LOG:-}" ]; then
+  printf 'helper old=%s new=%s\n' "${OLD_CONTAINER:-}" "${NEW_CONTAINER:-}" >>"$FAKE_EVENT_LOG"
+fi
+if [ "${FAKE_BLUE_GREEN_FAIL_BEFORE_CADDY:-0}" = 1 ]; then
+  if [ "${OLD_CONTAINER:-}" = sub2api-blue ]; then
+    printf 'old container sub2api-blue is not running; refusing to release\n' >&2
+  fi
+  exit 23
+fi
+if [ "${FAKE_UPDATE_CADDY:-0}" = 1 ] \
+  || [ "${FAKE_BLUE_GREEN_FAIL_AFTER_CADDY:-0}" = 1 ]; then
   printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$FAKE_APP_CADDY"
+  printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$FAKE_STARTUP_CADDY"
+  printf '{"upstream":"%s"}\n' "$CADDY_UPSTREAM_TO" >"$FAKE_ACTIVE_CADDY"
+fi
+if [ "${FAKE_BLUE_GREEN_FAIL_AFTER_CADDY:-0}" = 1 ] \
+  && [ "${OLD_CONTAINER:-}" = sub2api-green ]; then
+  exit 24
 fi
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"${APP_DIR}/scripts/sub2api-drain-monitor.sh"
@@ -48,9 +106,15 @@ cat >"${APP_DIR}/scripts/sub2api-node-state.sh" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$*" >>"$FAKE_NODE_STATE_CALLS"
-if [ "${1:-}" = status ]; then
-  printf 'traffic=accepting active_container=sub2api-green background=active\n'
-fi
+case "${1:-}" in
+  status) printf 'traffic=accepting active_container=sub2api-green background=active\n' ;;
+  preflight)
+    [ ! -e "$FAKE_LOCAL_TRANSACTION" ] \
+      || { printf 'ERROR: an unfinished local release transaction exists\n' >&2; exit 64; }
+    ;;
+  local-standby) : >"$FAKE_LOCAL_TRANSACTION" ;;
+  abort-local) rm -f -- "$FAKE_LOCAL_TRANSACTION" ;;
+esac
 EOF
 chmod +x \
   "${APP_DIR}/scripts/sub2api-blue-green-release.sh" \
@@ -94,10 +158,28 @@ case "$command_name" in
     exit 0
     ;;
   exec)
-    cat "$FAKE_APP_CADDY"
+    case "$*" in
+      *CADDY_CHECK_PATH=*)
+        [ "${FAKE_STARTUP_CADDY_FAIL:-0}" != 1 ] || exit 61
+        cat "$FAKE_STARTUP_CADDY"
+        ;;
+      *127.0.0.1:2019/config*)
+        [ "${FAKE_ACTIVE_CADDY_FAIL:-0}" != 1 ] || exit 62
+        cat "$FAKE_ACTIVE_CADDY"
+        ;;
+      *) exit 1 ;;
+    esac
     ;;
   rm)
-    [ "${2:-}" = "-f" ] || exit 1
+    if [ "${2:-}" = "-f" ]; then
+      target_name="${3:-}"
+    else
+      target_name="${2:-}"
+    fi
+    [ "$target_name" = sub2api-blue ] || exit 1
+    if [ -n "${FAKE_EVENT_LOG:-}" ]; then
+      printf 'docker-rm %s\n' "$*" >>"$FAKE_EVENT_LOG"
+    fi
     exit 0
     ;;
   build)
@@ -177,6 +259,11 @@ run_release() {
     FAKE_NODE_STATE_CALLS="$NODE_STATE_CALLS" \
     FAKE_CURL_CALLS="$CURL_CALLS" \
     FAKE_APP_CADDY="${APP_DIR}/Caddyfile" \
+    FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
+    FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
+    FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
+    FAKE_EVENT_LOG="$EVENT_LOG" \
     FAKE_FLOCK_COUNT_FILE="${FAKE_FLOCK_COUNT_FILE:-}" \
     FAKE_FLOCK_FAIL_ON_CALL="${FAKE_FLOCK_FAIL_ON_CALL:-}" \
     SUB2API_APP_DIR="$APP_DIR" \
@@ -208,6 +295,11 @@ run_github_prebuilt_release() {
     FAKE_NODE_STATE_CALLS="$NODE_STATE_CALLS" \
     FAKE_CURL_CALLS="$CURL_CALLS" \
     FAKE_APP_CADDY="${APP_DIR}/Caddyfile" \
+    FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
+    FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
+    FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
+    FAKE_EVENT_LOG="$EVENT_LOG" \
     SUB2API_APP_DIR="$APP_DIR" \
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
@@ -224,6 +316,48 @@ run_github_prebuilt_release() {
       '0.1.test' \
       'https://example.invalid/health' \
       'github-prebuilt-test'
+}
+
+run_external_github_prebuilt_release() {
+  env \
+    PATH="${FAKE_BIN}:${PATH}" \
+    FAKE_DOCKER_CALLS="$DOCKER_CALLS" \
+    FAKE_NODE_STATE_CALLS="$NODE_STATE_CALLS" \
+    FAKE_CURL_CALLS="$CURL_CALLS" \
+    FAKE_APP_CADDY="${APP_DIR}/Caddyfile" \
+    FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
+    FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
+    FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
+    FAKE_EVENT_LOG="$EVENT_LOG" \
+    SUB2API_APP_DIR="$APP_DIR" \
+    SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
+    SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
+    SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1 \
+    SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
+    SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
+    SUB2API_RELEASE_MIN_FREE_BYTES=1 \
+    SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
+    SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
+    SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
+    /bin/bash "$SCRIPT" \
+      --prebuilt \
+      'sub2api:auto-test' \
+      'abc123' \
+      '0.1.test' \
+      'https://example.invalid/health' \
+      'external-runtime-test'
+}
+
+reset_release_case() {
+  reset_caddy_views
+  rm -f -- "$LOCAL_TRANSACTION"
+  : >"$DOCKER_CALLS"
+  : >"$NODE_STATE_CALLS"
+  : >"$CURL_CALLS"
+  : >"$BLUE_GREEN_ENV_LOG"
+  : >"$EVENT_LOG"
 }
 
 maintenance_output="${TEST_ROOT}/maintenance-lock.log"
@@ -248,6 +382,18 @@ fi
 assert_contains "$resolve_mismatch_output" 'host/port must match SUB2API_PUBLIC_HEALTH_URL'
 if [ -s "$DOCKER_CALLS" ]; then
   fail 'Docker was inspected before health resolve validation'
+fi
+
+reset_release_case
+invalid_mode_output="${TEST_ROOT}/invalid-dependency-mode.log"
+if ALLOW_DRAINING=true SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=unexpected \
+  run_github_prebuilt_release >"$invalid_mode_output" 2>&1; then
+  fail 'server release accepted an unsupported dependency mode'
+fi
+assert_contains "$invalid_mode_output" \
+  'SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external'
+if [ -s "$DOCKER_CALLS" ]; then
+  fail 'Docker was inspected before dependency-mode validation'
 fi
 
 strict_output="${TEST_ROOT}/strict.log"
@@ -295,9 +441,10 @@ if grep -Fq -- 'build ' "$DOCKER_CALLS"; then
   fail 'production-side image build ran in explicit --prebuilt mode'
 fi
 
-: >"$DOCKER_CALLS"
+reset_release_case
 rollback_cleanup_output="${TEST_ROOT}/rollback-cleanup.log"
-if ALLOW_DRAINING=true run_github_prebuilt_release >"$rollback_cleanup_output" 2>&1; then
+if ALLOW_DRAINING=true FAKE_UPDATE_CADDY=1 \
+  run_github_prebuilt_release >"$rollback_cleanup_output" 2>&1; then
   fail 'fake release unexpectedly passed a failing public health check'
 fi
 assert_contains "$rollback_cleanup_output" 'Rollback completed'
@@ -306,6 +453,10 @@ assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
 assert_contains "$NODE_STATE_CALLS" 'bootstrap'
 assert_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
 assert_contains "$NODE_STATE_CALLS" 'abort-local'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'mode=local old=sub2api-green new=sub2api-blue backup=true'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'mode=local old=sub2api-blue new=sub2api-green backup=false'
 
 : >"$NODE_STATE_CALLS"
 successful_release_output="${TEST_ROOT}/successful-release.log"
@@ -320,5 +471,134 @@ assert_contains "$CURL_CALLS" '--resolve example.invalid:443:192.0.2.10'
 if grep -Fq -- 'abort-local' "$NODE_STATE_CALLS"; then
   fail 'successful release invoked node-state abort'
 fi
+
+# The release coordinator owns the local/external backup choice, rather than
+# allowing the blue-green helper to infer it from an ambient environment.
+reset_release_case
+local_backup_output="${TEST_ROOT}/local-backup.log"
+if ! ALLOW_DRAINING=true FAKE_CURL_SUCCESS=1 FAKE_UPDATE_CADDY=1 \
+  run_github_prebuilt_release >"$local_backup_output" 2>&1; then
+  sed -n '1,200p' "$local_backup_output" >&2
+  fail 'local dependency release did not complete'
+fi
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'mode=local old=sub2api-green new=sub2api-blue backup=true'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$NODE_STATE_CALLS" 'preflight'
+
+# A stopped target from an external runtime must be discarded only after every
+# Caddy view still proves that traffic belongs to the healthy old generation.
+reset_release_case
+external_stale_output="${TEST_ROOT}/external-stale.log"
+if ! ALLOW_DRAINING=true FAKE_CURL_SUCCESS=1 FAKE_UPDATE_CADDY=1 \
+  run_external_github_prebuilt_release >"$external_stale_output" 2>&1; then
+  sed -n '1,200p' "$external_stale_output" >&2
+  fail 'external stale-target release did not complete'
+fi
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'mode=external old=sub2api-green new=sub2api-blue backup=false'
+assert_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+assert_event_order 'docker-rm rm sub2api-blue' 'helper old=sub2api-green new=sub2api-blue'
+
+# Any disagreement, including an unreadable view, prevents target removal and
+# keeps the helper/node transaction untouched.
+reset_release_case
+printf 'reverse_proxy sub2api-green:8080\n# sub2api-blue:8080\n' >"${APP_DIR}/Caddyfile"
+host_drift_output="${TEST_ROOT}/host-drift.log"
+if ALLOW_DRAINING=true run_external_github_prebuilt_release >"$host_drift_output" 2>&1; then
+  fail 'host Caddy drift was accepted'
+fi
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper old='
+assert_not_contains "$NODE_STATE_CALLS" 'local-standby'
+
+reset_release_case
+printf 'reverse_proxy sub2api-blue:8080\n' >"$STARTUP_CADDY"
+startup_drift_output="${TEST_ROOT}/startup-drift.log"
+if ALLOW_DRAINING=true run_external_github_prebuilt_release >"$startup_drift_output" 2>&1; then
+  fail 'startup Caddy drift was accepted'
+fi
+assert_contains "$startup_drift_output" 'Caddy views do not conclusively point at sub2api-green:8080'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper old='
+assert_not_contains "$NODE_STATE_CALLS" 'local-standby'
+
+reset_release_case
+printf '{"upstream":"sub2api-blue:8080"}\n' >"$ACTIVE_CADDY"
+active_drift_output="${TEST_ROOT}/active-drift.log"
+if ALLOW_DRAINING=true run_external_github_prebuilt_release >"$active_drift_output" 2>&1; then
+  fail 'active Caddy drift was accepted'
+fi
+assert_contains "$active_drift_output" 'Caddy views do not conclusively point at sub2api-green:8080'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper old='
+assert_not_contains "$NODE_STATE_CALLS" 'local-standby'
+
+reset_release_case
+startup_read_failure_output="${TEST_ROOT}/startup-read-failure.log"
+if ALLOW_DRAINING=true FAKE_STARTUP_CADDY_FAIL=1 \
+  run_external_github_prebuilt_release >"$startup_read_failure_output" 2>&1; then
+  fail 'unreadable startup Caddy view was accepted'
+fi
+assert_contains "$startup_read_failure_output" 'could not read Caddy startup configuration'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper old='
+assert_not_contains "$NODE_STATE_CALLS" 'local-standby'
+
+# A stale external target can be a previous local transaction's rollback
+# generation. The coordinator must stop before touching it and leave recovery
+# to the node-state helper.
+reset_release_case
+: >"$LOCAL_TRANSACTION"
+unfinished_transaction_output="${TEST_ROOT}/unfinished-local-transaction.log"
+if ALLOW_DRAINING=true run_external_github_prebuilt_release >"$unfinished_transaction_output" 2>&1; then
+  fail 'external stale cleanup accepted an unfinished local transaction'
+fi
+assert_contains "$unfinished_transaction_output" \
+  'could not verify that no local release transaction is unfinished before removing an external target'
+[ -e "$LOCAL_TRANSACTION" ] || fail 'external stale cleanup removed the unfinished local transaction'
+assert_contains "$NODE_STATE_CALLS" 'preflight'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper old='
+
+# A helper failure before Caddy changes is not a rollback event. Abort the
+# local transaction directly, clean the failed inactive target safely, and do
+# not reinterpret the stopped target as the old active generation.
+reset_release_case
+pre_caddy_failure_output="${TEST_ROOT}/pre-caddy-failure.log"
+if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_BEFORE_CADDY=1 \
+  run_external_github_prebuilt_release >"$pre_caddy_failure_output" 2>&1; then
+  fail 'pre-Caddy helper failure was accepted'
+fi
+assert_contains "$pre_caddy_failure_output" \
+  'Blue-green release failed before the Caddy switch; aborting local node state without rollback'
+assert_not_contains "$pre_caddy_failure_output" 'Attempting automatic rollback'
+assert_not_contains "$pre_caddy_failure_output" 'old container sub2api-green is not running'
+assert_not_contains "$pre_caddy_failure_output" 'old container sub2api-blue is not running'
+assert_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
+assert_contains "$NODE_STATE_CALLS" 'abort-local'
+[ ! -e "$LOCAL_TRANSACTION" ] || fail 'pre-Caddy failure left a local release transaction'
+[ "$(wc -l <"$BLUE_GREEN_ENV_LOG" | tr -d '[:space:]')" = 1 ] \
+  || fail 'pre-Caddy failure attempted a rollback helper invocation'
+assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+
+# If the helper reports failure after it has changed Caddy, the old-only proof
+# is unavailable and the existing rollback path remains mandatory.
+reset_release_case
+post_caddy_helper_failure_output="${TEST_ROOT}/post-caddy-helper-failure.log"
+if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_AFTER_CADDY=1 \
+  run_external_github_prebuilt_release >"$post_caddy_helper_failure_output" 2>&1; then
+  fail 'post-Caddy helper failure was accepted'
+fi
+assert_contains "$post_caddy_helper_failure_output" \
+  'Attempting automatic rollback to sub2api-green'
+assert_contains "$post_caddy_helper_failure_output" 'Rollback completed'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'mode=external old=sub2api-green new=sub2api-blue backup=false'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'mode=external old=sub2api-blue new=sub2api-green backup=false'
+assert_contains "$NODE_STATE_CALLS" 'abort-local'
+[ ! -e "$LOCAL_TRANSACTION" ] || fail 'post-Caddy helper failure left a local release transaction'
 
 printf 'Server release inactive-container guard tests passed.\n'
