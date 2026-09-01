@@ -433,7 +433,11 @@ func (s *AccountTestService) fetchModelsDevRegistry(ctx context.Context, account
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := s.doUpstreamModelsRequest(req, upstreamModelsProxyURL(account), account)
+	proxyURL, err := ResolveAccountProxyURL(account)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Account proxy is unavailable", err)
+	}
+	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +593,7 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 
 	proxyURL, err := ResolveAccountProxyURL(account)
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Account proxy is unavailable", err)
+		return nil, nil, newUpstreamModelSyncConfigError("Account proxy is unavailable", err)
 	}
 	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
