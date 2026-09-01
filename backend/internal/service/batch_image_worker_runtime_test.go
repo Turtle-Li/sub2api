@@ -148,7 +148,8 @@ func (q *parallelBatchImageRuntimeQueue) TryAcquireJobLock(context.Context, stri
 
 type noopBatchImageRuntimeLock struct{}
 
-func (noopBatchImageRuntimeLock) Release(context.Context) error { return nil }
+func (noopBatchImageRuntimeLock) Release(context.Context) error                { return nil }
+func (noopBatchImageRuntimeLock) Refresh(context.Context, time.Duration) error { return nil }
 
 type blockingBatchImageRuntimeProcessor struct {
 	release chan struct{}

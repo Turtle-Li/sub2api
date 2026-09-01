@@ -167,16 +167,49 @@ func (w *BatchImageWorker) RunOnce(ctx context.Context) error {
 	defer func() {
 		_ = lock.Release(ctx)
 	}()
+	refresher, ok := lock.(BatchImageJobLockRefresher)
+	if !ok || refresher == nil {
+		// A provider operation can outlive the initial lease. Processing without
+		// refresh support would let a second worker or Cancel acquire the same job
+		// while this worker is still producing side effects.
+		if requeueErr := w.queue.RequeueAfter(ctx, reserved.BatchID, w.opts.LockConflictDelay); requeueErr != nil {
+			return requeueErr
+		}
+		return ErrBatchImageLockNotAcquired
+	}
 
 	// 处理期间持续心跳：刷新 active zset 时间戳防止 stale 恢复把在处理的
-	// job 重投给其他 worker，并对支持续期的锁实现延长锁 TTL。
-	hbStop := make(chan struct{})
-	hbDone := make(chan struct{})
-	go w.runJobHeartbeat(ctx, reserved.BatchID, lock, hbStop, hbDone)
+	// job 重投给其他 worker，并延长锁 TTL。失锁时必须取消 processor，且
+	// 旧 worker 不得再 Ack/Requeue；由新的持锁者或 recovery 接管。
+	processCtx, processCancel := context.WithCancel(ctx)
+	defer processCancel()
+	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
+	heartbeatDone := make(chan error, 1)
+	go w.runJobHeartbeat(heartbeatCtx, reserved.BatchID, refresher, processCancel, heartbeatDone)
 
-	result, err := w.processor.Process(ctx, reserved.BatchID)
-	close(hbStop)
-	<-hbDone
+	result, err := w.processor.Process(processCtx, reserved.BatchID)
+	heartbeatCancel()
+	heartbeatErr := <-heartbeatDone
+	if heartbeatErr != nil {
+		logger.L().Warn("batch_image.worker_lost_job_lock",
+			zap.String("batch_id", reserved.BatchID),
+			zap.Error(heartbeatErr),
+		)
+		return heartbeatErr
+	}
+	// Fence the terminal queue mutation with one final ownership check. This
+	// catches a scheduler pause that outlived the lease just as Process returned
+	// and won the select against the pending heartbeat tick.
+	finalRefreshCtx, finalRefreshCancel := context.WithTimeout(ctx, w.heartbeatInterval())
+	finalRefreshErr := refresher.Refresh(finalRefreshCtx, w.opts.JobLockTTL)
+	finalRefreshCancel()
+	if finalRefreshErr != nil {
+		logger.L().Warn("batch_image.worker_lost_job_lock_before_queue_update",
+			zap.String("batch_id", reserved.BatchID),
+			zap.Error(finalRefreshErr),
+		)
+		return finalRefreshErr
+	}
 	if err != nil {
 		logger.L().Warn("batch_image.worker_process_failed",
 			zap.String("batch_id", reserved.BatchID),
@@ -205,36 +238,53 @@ func (w *BatchImageWorker) heartbeatInterval() time.Duration {
 		interval = w.opts.StaleActiveAfter
 	}
 	interval /= 3
-	if interval < time.Second {
-		interval = time.Second
+	if interval <= 0 {
+		interval = time.Nanosecond
 	}
 	return interval
 }
 
-func (w *BatchImageWorker) runJobHeartbeat(ctx context.Context, batchID string, lock BatchImageJobLock, stop <-chan struct{}, done chan<- struct{}) {
-	defer close(done)
-	ticker := time.NewTicker(w.heartbeatInterval())
+func (w *BatchImageWorker) runJobHeartbeat(
+	ctx context.Context,
+	batchID string,
+	refresher BatchImageJobLockRefresher,
+	cancelProcess context.CancelFunc,
+	done chan<- error,
+) {
+	interval := w.heartbeatInterval()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-stop:
-			return
 		case <-ctx.Done():
+			done <- nil
 			return
 		case <-ticker.C:
-			if err := w.queue.Heartbeat(ctx, batchID); err != nil && ctx.Err() == nil {
+			refreshCtx, refreshCancel := context.WithTimeout(ctx, interval)
+			refreshErr := refresher.Refresh(refreshCtx, w.opts.JobLockTTL)
+			refreshCancel()
+			if refreshErr != nil {
+				if ctx.Err() != nil {
+					done <- nil
+					return
+				}
+				logger.L().Warn("batch_image.worker_lock_refresh_failed",
+					zap.String("batch_id", batchID),
+					zap.Error(refreshErr),
+				)
+				cancelProcess()
+				done <- refreshErr
+				return
+			}
+
+			heartbeatCtx, heartbeatCancel := context.WithTimeout(ctx, interval)
+			heartbeatErr := w.queue.Heartbeat(heartbeatCtx, batchID)
+			heartbeatCancel()
+			if heartbeatErr != nil && ctx.Err() == nil {
 				logger.L().Warn("batch_image.worker_heartbeat_failed",
 					zap.String("batch_id", batchID),
-					zap.Error(err),
+					zap.Error(heartbeatErr),
 				)
-			}
-			if refresher, ok := lock.(BatchImageJobLockRefresher); ok {
-				if err := refresher.Refresh(ctx, w.opts.JobLockTTL); err != nil && ctx.Err() == nil {
-					logger.L().Warn("batch_image.worker_lock_refresh_failed",
-						zap.String("batch_id", batchID),
-						zap.Error(err),
-					)
-				}
 			}
 		}
 	}
