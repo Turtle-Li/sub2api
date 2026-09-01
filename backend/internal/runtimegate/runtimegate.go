@@ -37,11 +37,11 @@ func SharedWorkAllowed() bool {
 	if path == "" {
 		return true
 	}
-	info, err := os.Lstat(path)
+	info, err := os.Lstat(path) //nolint:gosec // G703: path is injected only by deployment as a fixed, root-validated, read-only runtime mount; it is not user or request input.
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 64 {
 		return false
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G703: path is injected only by deployment as a fixed, root-validated, read-only runtime mount; it is not user or request input.
 	if err != nil {
 		return false
 	}

@@ -296,6 +296,12 @@ func TestBatchImageQueue_JobLockFencedMutationsRejectStaleOwner(t *testing.T) {
 		require.NoError(t, queue.rdb.Del(ctx, queue.lockKey(batchID)).Err())
 		return acquire(batchID)
 	}
+	refresh := func(lock service.BatchImageJobLock) {
+		t.Helper()
+		refresher, ok := lock.(service.BatchImageJobLockRefresher)
+		require.True(t, ok)
+		require.NoError(t, refresher.Refresh(ctx, time.Minute))
+	}
 
 	t.Run("ack", func(t *testing.T) {
 		batchID := "imgbatch_fenced_ack"
@@ -310,7 +316,7 @@ func TestBatchImageQueue_JobLockFencedMutationsRejectStaleOwner(t *testing.T) {
 		require.NoError(t, queue.rdb.ZScore(ctx, queue.delayedKey, batchID).Err())
 		require.NoError(t, queue.rdb.Get(ctx, queue.inflightKey(batchID)).Err())
 		require.NoError(t, oldLock.Release(ctx))
-		require.NoError(t, newLock.(service.BatchImageJobLockRefresher).Refresh(ctx, time.Minute))
+		refresh(newLock)
 
 		require.NoError(t, newFencer.Ack(ctx))
 		require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.activeKey, batchID).Err(), redis.Nil)
@@ -331,7 +337,7 @@ func TestBatchImageQueue_JobLockFencedMutationsRejectStaleOwner(t *testing.T) {
 		require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.delayedKey, batchID).Err(), redis.Nil)
 		require.Zero(t, queue.rdb.LLen(ctx, queue.readyKey).Val())
 		require.NoError(t, oldLock.Release(ctx))
-		require.NoError(t, newLock.(service.BatchImageJobLockRefresher).Refresh(ctx, time.Minute))
+		refresh(newLock)
 
 		require.NoError(t, newFencer.RequeueAfter(ctx, time.Minute))
 		require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.activeKey, batchID).Err(), redis.Nil)
@@ -351,7 +357,7 @@ func TestBatchImageQueue_JobLockFencedMutationsRejectStaleOwner(t *testing.T) {
 		require.False(t, restored)
 		require.Zero(t, queue.rdb.LLen(ctx, queue.readyKey).Val())
 		require.NoError(t, oldLock.Release(ctx))
-		require.NoError(t, newLock.(service.BatchImageJobLockRefresher).Refresh(ctx, time.Minute))
+		refresh(newLock)
 
 		restored, err = newFencer.EnsureEnqueued(ctx)
 		require.NoError(t, err)

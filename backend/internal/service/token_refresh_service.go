@@ -524,10 +524,7 @@ func (s *TokenRefreshService) processRefreshContext(parent context.Context) {
 
 	stats := tokenRefreshPageStats{}
 	afterID := s.candidateAfterID()
-	for {
-		if !runtimegate.SharedWorkAllowed() {
-			break
-		}
+	for runtimegate.SharedWorkAllowed() {
 		if ctx.Err() != nil {
 			slog.Warn("token_refresh.cycle_stopped", "error", ctx.Err(), "resume_after_id", afterID)
 			break

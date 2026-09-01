@@ -103,10 +103,7 @@ func (r *Runner) worker(ctx context.Context, workerID int) {
 			if !ok || !cfg.RiskControlEnabled || !cfg.Enabled || workerID >= cfg.WorkerCount {
 				continue
 			}
-			for {
-				if !runtimegate.SharedWorkAllowed() {
-					break
-				}
+			for runtimegate.SharedWorkAllowed() {
 				// Worker zero services both lanes. Keep small requests fast, but do
 				// not let an uninterrupted small stream starve a large job past the
 				// payload TTL. Other workers remain dedicated to small requests.

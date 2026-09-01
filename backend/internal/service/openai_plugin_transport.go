@@ -8,26 +8,25 @@ func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 
 // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
 // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
-func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, _ string, account *Account) (*http.Response, error) {
 	resolvedProxyURL, err := ResolveAccountProxyURL(account)
 	if err != nil {
 		return nil, err
 	}
-	proxyURL = resolvedProxyURL
 	if s.pluginManager != nil {
-		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
+		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, resolvedProxyURL, account)
 		if handled {
 			return response, err
 		}
 	}
-	return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+	return s.httpUpstream.Do(request, resolvedProxyURL, account.ID, account.Concurrency)
 }
 
 // doOpenAIAccountTestUpstream 让 OpenAI OAuth 账号测试与真实转发使用同一插件路径。
 // API Key 和未命中插件的账号保持各自原有的 HTTPUpstream 行为。
 func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	request *http.Request,
-	proxyURL string,
+	_ string,
 	account *Account,
 	useTLSFallback bool,
 ) (*http.Response, error) {
@@ -35,9 +34,8 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	if err != nil {
 		return nil, err
 	}
-	proxyURL = resolvedProxyURL
 	if s.pluginManager != nil {
-		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
+		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, resolvedProxyURL, account)
 		if handled {
 			return response, err
 		}
@@ -45,11 +43,11 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	if useTLSFallback {
 		return s.httpUpstream.DoWithTLS(
 			request,
-			proxyURL,
+			resolvedProxyURL,
 			account.ID,
 			account.Concurrency,
 			s.tlsFPProfileService.ResolveTLSProfile(account),
 		)
 	}
-	return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+	return s.httpUpstream.Do(request, resolvedProxyURL, account.ID, account.Concurrency)
 }
