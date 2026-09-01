@@ -443,6 +443,16 @@ fi
 assert_contains "${CASE_ROOT}/output.log" 'runtime recovery is fenced until commit or rollback'
 [ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called before the customer Host transaction guard'
 
+new_case blue-green-caddy-transaction
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+printf 'BEFORE_SHA=test\n' >"${CASE_ROOT}/app/.sub2api-blue-green-caddy-transaction.env"
+if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted an unfinished blue-green Caddy transaction'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'runtime recovery is fenced until the release helper recovers it'
+[ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called before the blue-green Caddy transaction guard'
+
 # A resolve override for a different hostname must fail before it can turn the
 # peer origin into false node-local recovery evidence.
 new_case health-resolve-host-mismatch
@@ -686,5 +696,6 @@ FAKE_CADDY_ADMIN_MODE=fail-until-restart run_guard >"${CASE_ROOT}/output.log" 2>
 assert_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-caddy'
 assert_contains "${CASE_ROOT}/output.log" 'restarting Caddy container after its admin API remained unavailable'
 assert_contains "${CASE_ROOT}/curl-calls.log" '--resolve example.invalid:443:192.0.2.10'
+assert_contains "${CASE_ROOT}/curl-calls.log" '--noproxy *'
 
 printf 'Runtime guard fake-Docker tests passed.\n'

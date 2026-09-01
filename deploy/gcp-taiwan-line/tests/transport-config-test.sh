@@ -23,6 +23,9 @@ PYTHONPYCACHEPREFIX="${test_root}/pycache" \
     python3 -m py_compile "${line_dir}/render-azure-caddy-listeners.py"
 PYTHONPYCACHEPREFIX="${test_root}/pycache" \
     python3 -m py_compile "${line_dir}/verify-azure-caddy-json.py"
+PYTHONPYCACHEPREFIX="${test_root}/pycache" \
+    python3 -m py_compile "${line_dir}/patch-old-origin-node-state.py"
+"${line_dir}/patch-old-origin-node-state.py" --self-test
 
 source_caddy="${test_root}/Caddyfile.source"
 staged_caddy="${test_root}/Caddyfile.staged"
@@ -31,7 +34,16 @@ cat >"$source_caddy" <<'EOF'
 }
 
 api.turtleligpt.com {
-	reverse_proxy sub2api-green:8080
+	handle /v1/responses* {
+		reverse_proxy sub2api-green:8080 {
+			flush_interval -1
+		}
+	}
+	handle {
+		reverse_proxy sub2api-green:8080 {
+			flush_interval -1
+		}
+	}
 }
 EOF
 
@@ -54,8 +66,16 @@ tls_line="$(grep -nF $'\t\t\ttls' "$staged_caddy" | cut -d: -f1)"
     || fail 'PROXY listener wrapper must precede TLS'
 sed -n '/^api\.turtleligpt\.com/,$p' "$source_caddy" >"${test_root}/source.tail"
 sed -n '/^api\.turtleligpt\.com/,$p' "$staged_caddy" >"${test_root}/staged.tail"
-cmp -s "${test_root}/source.tail" "${test_root}/staged.tail" \
-    || fail 'renderer changed bytes outside the leading global-options block'
+sed -e '/^[[:space:]]*header_up X-Forwarded-For {remote_host}$/d' \
+    -e '/^[[:space:]]*header_up -X-Real-IP$/d' \
+    -e '/^[[:space:]]*header_up -CF-Connecting-IP$/d' \
+    "${test_root}/staged.tail" >"${test_root}/staged-without-policy.tail"
+cmp -s "${test_root}/source.tail" "${test_root}/staged-without-policy.tail" \
+    || fail 'renderer changed bytes outside the reviewed global/header policies'
+[[ "$(grep -Fc 'header_up X-Forwarded-For {remote_host}' "$staged_caddy")" -eq 2 \
+    && "$(grep -Fc 'header_up -X-Real-IP' "$staged_caddy")" -eq 2 \
+    && "$(grep -Fc 'header_up -CF-Connecting-IP' "$staged_caddy")" -eq 2 ]] \
+    || fail 'renderer did not harden both production API reverse proxies'
 if "${line_dir}/render-azure-caddy-listeners.py" render "$staged_caddy" \
     "${test_root}/second-render" >/dev/null 2>&1; then
     fail 'renderer accepted a non-empty global-options block'
@@ -77,10 +97,22 @@ cat >"$caddy_json" <<'EOF'
       {"wrapper": "tls"}
     ],
     "routes": [{
+      "match": [{"host": ["api-cf-test.turtleligpt.com"]}],
+      "handle": [{"handler": "static_response", "status_code": 404}],
+      "terminal": true
+    }, {
       "match": [{"host": ["api.turtleligpt.com"]}],
       "handle": [{"handler": "subroute", "routes": [{"handle": [
-        {"handler": "reverse_proxy", "upstreams": [{"dial": "sub2api-green:8080"}]}
-      ]}]}]
+        {"handler": "reverse_proxy", "headers": {"request": {
+          "delete": ["X-Real-IP", "CF-Connecting-IP"],
+          "set": {"X-Forwarded-For": ["{http.request.remote.host}"]}
+        }}, "upstreams": [{"dial": "sub2api-green:8080"}]},
+        {"handler": "reverse_proxy", "headers": {"request": {
+          "delete": ["X-Real-IP", "CF-Connecting-IP"],
+          "set": {"X-Forwarded-For": ["{http.request.remote.host}"]}
+        }}, "upstreams": [{"dial": "sub2api-green:8080"}]}
+      ]}]}],
+      "terminal": true
     }]
   }}}}
 }
@@ -102,6 +134,57 @@ with open(destination, "w", encoding="utf-8") as handle:
 PY
 if "${line_dir}/verify-azure-caddy-json.py" <"${test_root}/caddy-bad.json" >/dev/null 2>&1; then
     fail 'Caddy JSON verifier accepted a widened PROXY allowlist'
+fi
+python3 - "$caddy_json" "${test_root}/caddy-forged-header.json" <<'PY'
+import json
+import sys
+
+source, destination = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    document = json.load(handle)
+route = document["apps"]["http"]["servers"]["srv0"]["routes"][1]
+route["handle"].append({
+    "handler": "headers",
+    "request": {"set": {"CF-Connecting-IP": ["{http.request.header.CF-Connecting-IP}"]}},
+})
+with open(destination, "w", encoding="utf-8") as handle:
+    json.dump(document, handle)
+PY
+if "${line_dir}/verify-azure-caddy-json.py" <"${test_root}/caddy-forged-header.json" >/dev/null 2>&1; then
+    fail 'Caddy JSON verifier accepted a forged client-IP header path'
+fi
+python3 - "$caddy_json" "${test_root}/caddy-missing-header-policy.json" <<'PY'
+import json
+import sys
+
+source, destination = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    document = json.load(handle)
+handler = document["apps"]["http"]["servers"]["srv0"]["routes"][1]["handle"][0]["routes"][0]["handle"][0]
+del handler["headers"]["request"]["delete"]
+with open(destination, "w", encoding="utf-8") as handle:
+    json.dump(document, handle)
+PY
+if "${line_dir}/verify-azure-caddy-json.py" <"${test_root}/caddy-missing-header-policy.json" >/dev/null 2>&1; then
+    fail 'Caddy JSON verifier accepted an incomplete client-IP header policy'
+fi
+python3 - "$caddy_json" "${test_root}/caddy-shadow-route.json" <<'PY'
+import json
+import sys
+
+source, destination = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    document = json.load(handle)
+server = document["apps"]["http"]["servers"]["srv0"]
+server["routes"].insert(1, {
+    "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": "shadow:8080"}]}],
+    "terminal": True,
+})
+with open(destination, "w", encoding="utf-8") as handle:
+    json.dump(document, handle)
+PY
+if "${line_dir}/verify-azure-caddy-json.py" <"${test_root}/caddy-shadow-route.json" >/dev/null 2>&1; then
+    fail 'Caddy JSON verifier accepted an earlier catch-all production shadow route'
 fi
 
 http_server="$(awk '$1 == "server" && $2 == "azure_http" { print }' "${line_dir}/haproxy.cfg")"
@@ -130,6 +213,26 @@ grep -Fq 'pgrep -u haproxy -x haproxy' "${line_dir}/verify-transport.sh" \
     || fail 'GCP verifier does not prove the HAProxy worker dropped privileges'
 [[ "$(grep -Fc -- "--noproxy '*'" "${line_dir}/verify-transport.sh")" -eq 3 ]] \
     || fail 'transport HTTP probes do not consistently bypass ambient proxy settings'
+for metadata_bootstrap in gcp-startup-bootstrap.sh gcp-update-bootstrap.sh; do
+    grep -Fq -- "--noproxy '*'" "${line_dir}/${metadata_bootstrap}" \
+        || fail "${metadata_bootstrap} can send metadata requests through an ambient proxy"
+done
+[[ "$(grep -Fc -- "--noproxy '*'" \
+    "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh")" -eq 2 ]] \
+    || fail 'customer-Host origin probes do not consistently bypass ambient proxies'
+for host_control in sub2api-server-release.sh sub2api-runtime-guard.sh; do
+    grep -Fq -- "--noproxy '*'" "${line_dir}/../${host_control}" \
+        || fail "${host_control} public health can escape its pinned direct path"
+done
+for container_control in \
+    azure-caddy-listeners.sh \
+    verify-transport.sh \
+    ../sub2api-blue-green-release.sh \
+    ../sub2api-server-release.sh \
+    ../sub2api-runtime-guard.sh; do
+    grep -Fq -- 'wget -Y off' "${line_dir}/${container_control}" \
+        || fail "${container_control} local container control-plane probe can inherit a proxy"
+done
 
 # shellcheck disable=SC2016 # The search text intentionally names shell variables literally.
 write_state_line="$(grep -nF '    write_state "$backup_file" "$after_file" "$before_sha_local" "$after_sha_local"' \
@@ -152,6 +255,9 @@ copy_remove_line="$(awk -v start="$copy_failure_line" \
 [[ -n "$copy_failure_line" && -n "$copy_restore_line" && -n "$copy_remove_line" \
     && "$copy_failure_line" -lt "$copy_restore_line" && "$copy_restore_line" -lt "$copy_remove_line" ]] \
     || fail 'Azure bind-write failure discards recovery state before restoring its backup'
+grep -Fq 'matches neither transaction endpoint; restoring BEFORE_SHA' \
+    "${line_dir}/azure-caddy-listeners.sh" \
+    || fail 'Azure rollback does not surface a live-state drift warning'
 
 if grep -Fq 'os.replace(' "${line_dir}/../sub2api-blue-green-release.sh"; then
     fail 'blue-green Caddy updates must preserve the running file-bind inode'
@@ -161,12 +267,19 @@ for mutator in sub2api-blue-green-release.sh sub2api-server-release.sh sub2api-r
         || fail "${mutator} lacks the retained listener-transaction fence"
     grep -Fq '.cf-opt-totools-caddy.env' "${line_dir}/../${mutator}" \
         || fail "${mutator} lacks the retained customer-Host transaction fence"
+    grep -Fq '.sub2api-blue-green-caddy-transaction.env' "${line_dir}/../${mutator}" \
+        || fail "${mutator} lacks the durable blue-green Caddy transaction"
 done
 grep -Fq '.cf-opt-totools-caddy.env' "${line_dir}/azure-caddy-listeners.sh" \
     || fail 'Azure listener staging lacks the customer-Host transaction fence'
+grep -Fq '.sub2api-blue-green-caddy-transaction.env' "${line_dir}/azure-caddy-listeners.sh" \
+    || fail 'Azure listener staging lacks the blue-green transaction fence'
 grep -Fq '.gcp-tw-caddy-transaction.env' \
     "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh" \
     || fail 'customer-Host preparation lacks the Azure listener transaction fence'
+grep -Fq '.sub2api-blue-green-caddy-transaction.env' \
+    "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh" \
+    || fail 'customer-Host preparation lacks the blue-green transaction fence'
 
 grep -Fq 'gce-security-mirror-file|/etc/apt/mirrors/debian-security.list' \
     "${line_dir}/install-gcp-haproxy.sh" \
@@ -175,6 +288,14 @@ grep -Fq 'stage|activate|update|rollback|status' "${line_dir}/install-gcp-haprox
     || fail 'HAProxy installer lacks its non-disruptive update phase'
 grep -Fq "write_state STAGED" "${line_dir}/install-gcp-haproxy.sh" \
     || fail 'HAProxy recovery authority is not published before mutation'
+grep -Fq 'ORIGIN_BACKUP_PATH=%s' "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'HAProxy updates do not preserve an immutable origin recovery anchor'
+grep -Fq '|| ! run_post_update_verify; then' "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'HAProxy runtime verification is outside the update rollback transaction'
+# shellcheck disable=SC2016 # The assertion intentionally names the shell expression literally.
+grep -Fq 'HAPROXY_POST_UPDATE_VERIFY="${INSTALL_ROOT}/verify-transport.sh"' \
+    "${line_dir}/gcp-update-bootstrap.sh" \
+    || fail 'GCE updater does not bind the runtime verifier into the HAProxy transaction'
 
 grep -Fq 'readonly EXPECTED_HOSTNAME="sub2-tw-line-candidate"' \
     "${line_dir}/gcp-startup-bootstrap.sh" \
@@ -193,6 +314,7 @@ python3 - \
     "${line_dir}/install-gcp-haproxy.sh" \
     "${line_dir}/gcp-startup-bootstrap.sh" \
     "${line_dir}/gcp-update-bootstrap.sh" \
+    "${line_dir}/patch-old-origin-node-state.py" \
     "${line_dir}/render-azure-caddy-listeners.py" \
     "${line_dir}/verify-azure-caddy-json.py" \
     "${line_dir}/azure-caddy-listeners.sh" \

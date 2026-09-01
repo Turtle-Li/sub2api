@@ -48,6 +48,7 @@ PREBUILT_IMAGE_PREFIX="${SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX:-}"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 CADDY_TRANSACTION_PATH="${APP_DIR}/.gcp-tw-caddy-transaction.env"
 CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
+CADDY_SWITCH_TRANSACTION_PATH="${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
 ALLOW_PREEXISTING_DRAINING_CONTAINER="${SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER:-false}"
 DRAIN_MONITOR_SCRIPT="${SUB2API_DRAIN_MONITOR_SCRIPT:-${APP_DIR}/scripts/sub2api-drain-monitor.sh}"
 DRAIN_INTERVAL_SECONDS="${SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS:-60}"
@@ -220,6 +221,8 @@ flock -n 8 || die "production maintenance or runtime recovery is already running
   || die "unfinished GCP Taiwan Caddy listener transaction exists; commit or rollback it before a production release"
 [ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
   || die "unfinished customer Host Caddy transaction exists; commit or rollback it before a production release"
+[ ! -e "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
+  || die "unfinished blue-green Caddy upstream transaction exists; recover it before a production release"
 
 if [ "$PREBUILT_MODE" != "true" ]; then
   [ -d "$SOURCE_DIR" ] || die "source directory does not exist: $SOURCE_DIR"
@@ -536,7 +539,7 @@ if ! run_blue_green \
   die "blue-green release failed"
 fi
 
-public_health_curl_args=(-fsS --max-time 20 --retry 3 --retry-delay 2)
+public_health_curl_args=(-fsS --noproxy '*' --max-time 20 --retry 3 --retry-delay 2)
 if [ -n "$PUBLIC_HEALTH_RESOLVE" ]; then
   public_health_curl_args+=(--resolve "$PUBLIC_HEALTH_RESOLVE")
 fi
@@ -555,7 +558,7 @@ NEW_HEALTH="$(docker inspect "$NEW_CONTAINER" --format '{{if .State.Health}}{{.S
   die "new container lost health after switch: $NEW_HEALTH"
 }
 
-if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/')"; then
+if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/')"; then
   if rollback; then
     cleanup_failed_inactive_target
   fi

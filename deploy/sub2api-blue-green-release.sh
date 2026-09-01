@@ -16,8 +16,10 @@ APP_PORT="${APP_PORT:-8080}"
 CADDY_CONTAINER="${CADDY_CONTAINER:-${SUB2API_CADDY_CONTAINER:-sub2api-caddy}}"
 CADDYFILE="${CADDYFILE:-$APP_DIR/Caddyfile}"
 CADDY_CONFIG_PATH="${CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
+CADDY_STARTUP_HOST_PATH="${SUB2API_CADDY_STARTUP_HOST_PATH:-}"
 CADDY_TRANSACTION_PATH="${APP_DIR}/.gcp-tw-caddy-transaction.env"
 CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
+CADDY_SWITCH_TRANSACTION_PATH="${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
 CADDY_UPSTREAM_FROM="${CADDY_UPSTREAM_FROM:-$OLD_CONTAINER:$APP_PORT}"
 CADDY_UPSTREAM_TO="${CADDY_UPSTREAM_TO:-$NEW_CONTAINER:$APP_PORT}"
 RUN_BACKUP="${RUN_BACKUP:-true}"
@@ -72,6 +74,7 @@ TEMP_FILE=""
 RUNTIME_ENV_FILE=""
 EXTERNAL_VALUES_FILE=""
 CADDY_RW_PID=""
+CADDY_SWITCH_OWNED=false
 EXTERNAL_ENV_KEYS=(
   DATABASE_HOST DATABASE_PORT DATABASE_USER DATABASE_PASSWORD DATABASE_DBNAME DATABASE_SSLMODE
   REDIS_HOST REDIS_PORT REDIS_USERNAME REDIS_PASSWORD REDIS_DB REDIS_ENABLE_TLS
@@ -99,16 +102,32 @@ die() {
 }
 
 cleanup() {
-  local file
+  local exit_status=$? file restore_status=0 recovery_attempted=false
+  trap - EXIT
+  set +e
   if [ -n "$CADDY_RW_PID" ]; then
 	nsenter -t "$CADDY_RW_PID" -m -- \
 	  mount -n -o remount,ro,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" >/dev/null 2>&1 || true
 	CADDY_RW_PID=""
   fi
+  if [ "$CADDY_SWITCH_OWNED" = true ] && [ -e "$CADDY_SWITCH_TRANSACTION_PATH" ]; then
+    recovery_attempted=true
+    restore_caddy_switch
+    restore_status=$?
+    if [ "$restore_status" -eq 0 ]; then
+      log "restored interrupted Caddy upstream switch before exit"
+    else
+      log "ERROR: automatic Caddy restoration failed; transaction retained at $CADDY_SWITCH_TRANSACTION_PATH" >&2
+    fi
+  fi
   for file in "${TEMP_FILES[@]:-}"; do
     [ -n "$file" ] || continue
     rm -f -- "$file"
   done
+  if [ "$exit_status" -eq 0 ] && { [ "$recovery_attempted" = true ] || [ "$restore_status" -ne 0 ]; }; then
+    exit_status=1
+  fi
+  exit "$exit_status"
 }
 trap cleanup EXIT
 
@@ -603,7 +622,7 @@ caddy_config_contains() {
 caddy_active_config_contains() {
   local text="$1"
   docker exec -e CADDY_CHECK_TEXT="$text" "$CADDY_CONTAINER" sh -c \
-    '(wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/) | grep -qF "$CADDY_CHECK_TEXT"'
+    '(wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/) | grep -qF "$CADDY_CHECK_TEXT"'
 }
 
 write_file_preserving_inode() {
@@ -638,21 +657,47 @@ PY
 
 sync_caddy_startup_file() {
   local container_pid target_path
-  container_pid="$(docker inspect "$CADDY_CONTAINER" --format '{{.State.Pid}}')"
+  container_pid="$(docker inspect "$CADDY_CONTAINER" --format '{{.State.Pid}}')" || return 1
   case "$container_pid" in
-    ''|*[!0-9]*) die "could not resolve $CADDY_CONTAINER host PID" ;;
+    ''|*[!0-9]*)
+      log "ERROR: could not resolve $CADDY_CONTAINER host PID" >&2
+      return 1
+      ;;
   esac
-  [ "$container_pid" -gt 1 ] || die "$CADDY_CONTAINER host PID is invalid"
+  if [ "$container_pid" -le 1 ]; then
+    log "ERROR: $CADDY_CONTAINER host PID is invalid" >&2
+    return 1
+  fi
   case "$CADDY_CONFIG_PATH" in
     /*) ;;
-    *) die "Caddy startup config path must be absolute" ;;
+    *)
+      log "ERROR: Caddy startup config path must be absolute" >&2
+      return 1
+      ;;
   esac
-  target_path="/proc/$container_pid/root$CADDY_CONFIG_PATH"
-  [ -f "$target_path" ] || die "Caddy startup config is missing through container mount namespace"
+  if [ -n "$CADDY_STARTUP_HOST_PATH" ]; then
+    case "$CADDY_STARTUP_HOST_PATH" in
+      /*) ;;
+      *)
+        log "ERROR: Caddy startup host path override must be absolute" >&2
+        return 1
+        ;;
+    esac
+    target_path="$CADDY_STARTUP_HOST_PATH"
+  else
+    target_path="/proc/$container_pid/root$CADDY_CONFIG_PATH"
+  fi
+  if [ ! -f "$target_path" ] || [ -L "$target_path" ]; then
+    log "ERROR: Caddy startup config is missing through container mount namespace" >&2
+    return 1
+  fi
 
   nsenter -t "$container_pid" -m -- \
     mount -n -o remount,rw,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" \
-    || die "could not temporarily unlock Caddy startup config bind"
+    || {
+      log "ERROR: could not temporarily unlock Caddy startup config bind" >&2
+      return 1
+    }
   CADDY_RW_PID="$container_pid"
   if ! python3 - "$CADDYFILE" "$target_path" <<'PY'
 import os
@@ -684,27 +729,134 @@ PY
   then
     nsenter -t "$container_pid" -m -- \
       mount -n -o remount,ro,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" >/dev/null 2>&1 || true
-    die "could not synchronize Caddy startup config"
+    log "ERROR: could not synchronize Caddy startup config" >&2
+    return 1
   fi
   nsenter -t "$container_pid" -m -- \
     mount -n -o remount,ro,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" \
-    || die "could not restore read-only Caddy startup config bind"
+    || {
+      log "ERROR: could not restore read-only Caddy startup config bind" >&2
+      return 1
+    }
   CADDY_RW_PID=""
+}
+
+file_sha() {
+  sha256sum "$1" | awk '{print $1}'
+}
+
+caddy_switch_state_value() {
+  local key="$1"
+  awk -F= -v key="$key" '
+    $1 == key { count += 1; value = substr($0, length(key) + 2) }
+    END {
+      if (count != 1 || value == "") exit 1
+      print value
+    }
+  ' "$CADDY_SWITCH_TRANSACTION_PATH"
+}
+
+load_caddy_switch_transaction() {
+  local metadata expected_uid
+  [ -f "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
+    || {
+      log "ERROR: invalid Caddy switch transaction file" >&2
+      return 1
+    }
+  expected_uid="$(id -u)" || return 1
+  metadata="$(stat -c '%u:%a' "$CADDY_SWITCH_TRANSACTION_PATH")" || return 1
+  [ "$metadata" = "$expected_uid:600" ] \
+    || {
+      log "ERROR: unsafe Caddy switch transaction metadata: $metadata" >&2
+      return 1
+    }
+
+  switch_caddyfile="$(caddy_switch_state_value CADDYFILE)" || return 1
+  switch_backup="$(caddy_switch_state_value BACKUP_PATH)" || return 1
+  switch_candidate="$(caddy_switch_state_value CANDIDATE_PATH)" || return 1
+  switch_before_sha="$(caddy_switch_state_value BEFORE_SHA)" || return 1
+  switch_after_sha="$(caddy_switch_state_value AFTER_SHA)" || return 1
+  switch_upstream_from="$(caddy_switch_state_value UPSTREAM_FROM)" || return 1
+  switch_upstream_to="$(caddy_switch_state_value UPSTREAM_TO)" || return 1
+
+  [ "$switch_caddyfile" = "$CADDYFILE" ] || return 1
+  case "$switch_backup" in
+    "$CADDYFILE".bak-blue-green-*) ;;
+    *) return 1 ;;
+  esac
+  case "$switch_candidate" in
+    "$CADDYFILE".after-blue-green-*) ;;
+    *) return 1 ;;
+  esac
+  case "$switch_upstream_from:$switch_upstream_to" in
+    *$'\n'*|*$'\r'*|*'|'*) return 1 ;;
+  esac
+  [[ "$switch_upstream_from" =~ ^[A-Za-z0-9_.-]+:[0-9]+$ \
+    && "$switch_upstream_to" =~ ^[A-Za-z0-9_.-]+:[0-9]+$ ]] || return 1
+  [[ "$switch_before_sha" =~ ^[0-9a-f]{64}$ \
+    && "$switch_after_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [ -f "$switch_backup" ] && [ ! -L "$switch_backup" ] \
+    && [ -f "$switch_candidate" ] && [ ! -L "$switch_candidate" ] || return 1
+  [ "$(file_sha "$switch_backup")" = "$switch_before_sha" \
+    ] && [ "$(file_sha "$switch_candidate")" = "$switch_after_sha" ] || return 1
+}
+
+publish_caddy_switch_transaction() {
+  local temporary before_sha after_sha
+  [ ! -e "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
+    || return 1
+  before_sha="$(file_sha "$caddy_backup")" || return 1
+  after_sha="$(file_sha "$caddy_candidate")" || return 1
+  temporary="$(mktemp "${CADDY_SWITCH_TRANSACTION_PATH}.XXXXXX")" || return 1
+  {
+    printf 'CADDYFILE=%s\n' "$CADDYFILE"
+    printf 'BACKUP_PATH=%s\n' "$caddy_backup"
+    printf 'CANDIDATE_PATH=%s\n' "$caddy_candidate"
+    printf 'BEFORE_SHA=%s\n' "$before_sha"
+    printf 'AFTER_SHA=%s\n' "$after_sha"
+    printf 'UPSTREAM_FROM=%s\n' "$CADDY_UPSTREAM_FROM"
+    printf 'UPSTREAM_TO=%s\n' "$CADDY_UPSTREAM_TO"
+  } >"$temporary"
+  chmod 0600 "$temporary" || {
+    rm -f -- "$temporary"
+    return 1
+  }
+  mv -f -- "$temporary" "$CADDY_SWITCH_TRANSACTION_PATH" || {
+    rm -f -- "$temporary"
+    return 1
+  }
+  CADDY_SWITCH_OWNED=true
+  load_caddy_switch_transaction
+}
+
+commit_caddy_switch_transaction() {
+  load_caddy_switch_transaction || return 1
+  rm -f -- "$CADDY_SWITCH_TRANSACTION_PATH" || return 1
+  CADDY_SWITCH_OWNED=false
+  rm -f -- "$switch_candidate"
 }
 
 restore_caddy_switch() {
   local rollback_config
-  [ "${changed_caddy:-false}" = true ] || return 1
-  write_file_preserving_inode "$caddy_backup" "$CADDYFILE" || return 1
+  load_caddy_switch_transaction || return 1
+  write_file_preserving_inode "$switch_backup" "$CADDYFILE" || return 1
   sync_caddy_startup_file || return 1
   rollback_config="/tmp/sub2api-release-rollback-$NEW_CONTAINER.Caddyfile"
   docker cp "$CADDYFILE" "$CADDY_CONTAINER:$rollback_config" || return 1
-  docker exec "$CADDY_CONTAINER" caddy validate --config "$rollback_config" || return 1
-  docker exec "$CADDY_CONTAINER" caddy reload --force --config "$rollback_config" || return 1
-  caddy_active_config_contains "$CADDY_UPSTREAM_FROM" || return 1
-  if caddy_active_config_contains "$CADDY_UPSTREAM_TO"; then
-	return 1
+  docker exec "$CADDY_CONTAINER" caddy validate --config "$rollback_config" --adapter caddyfile \
+    || return 1
+  docker exec "$CADDY_CONTAINER" caddy reload --force --config "$rollback_config" --adapter caddyfile \
+    || return 1
+  [ "$(file_sha "$CADDYFILE")" = "$switch_before_sha" ] || return 1
+  caddy_config_contains "$CADDY_CONFIG_PATH" "$switch_upstream_from" || return 1
+  caddy_active_config_contains "$switch_upstream_from" || return 1
+  if caddy_config_contains "$CADDY_CONFIG_PATH" "$switch_upstream_to" \
+    || caddy_active_config_contains "$switch_upstream_to"; then
+    return 1
   fi
+  rm -f -- "$CADDY_SWITCH_TRANSACTION_PATH" || return 1
+  CADDY_SWITCH_OWNED=false
+  rm -f -- "$switch_candidate"
   return 0
 }
 
@@ -722,9 +874,14 @@ require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
 require_bool VALIDATE_EXTERNAL_RUNTIME_ONLY "$VALIDATE_EXTERNAL_RUNTIME_ONLY"
 require_positive_integer HEALTH_ATTEMPTS "$HEALTH_ATTEMPTS"
 require_positive_integer HEALTH_INTERVAL_SECONDS "$HEALTH_INTERVAL_SECONDS"
+require_positive_integer APP_PORT "$APP_PORT"
+require_docker_name OLD_CONTAINER "$OLD_CONTAINER"
+require_docker_name NEW_CONTAINER "$NEW_CONTAINER"
+require_docker_name CADDY_CONTAINER "$CADDY_CONTAINER"
 require_docker_name NETWORK "$NETWORK"
 require_docker_name DATA_VOLUME "$DATA_VOLUME"
-for command_name in docker nsenter perl python3 awk grep stat realpath mktemp chmod rm; do
+for command_name in awk chmod cp date docker grep id mktemp mv nsenter perl python3 \
+    realpath rm sha256sum stat; do
   require_cmd "$command_name"
 done
 validate_unified_payment_runtime
@@ -742,13 +899,31 @@ if [ "$VALIDATE_EXTERNAL_RUNTIME_ONLY" = true ]; then
   exit 0
 fi
 
+[ "$(id -u)" -eq 0 ] || die "blue-green release must run as root"
 cd "$APP_DIR"
+[ ! -e "$CADDY_SWITCH_TRANSACTION_PATH" ] || {
+  [ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
+    && [ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
+    && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
+    || die "Caddy transactions overlap; refusing automatic recovery"
+  container_exists "$CADDY_CONTAINER" \
+    || die "cannot recover the Caddy upstream switch: container $CADDY_CONTAINER is missing"
+  [ -f "$CADDYFILE" ] && [ ! -L "$CADDYFILE" ] \
+    || die "cannot recover the Caddy upstream switch: invalid Caddyfile"
+  log "recovering retained Caddy upstream switch transaction"
+  if restore_caddy_switch; then
+    die "recovered the interrupted Caddy upstream switch; rerun the release from a clean state"
+  fi
+  die "retained Caddy upstream switch could not be recovered automatically"
+}
+[ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
+  || die "refusing a symlink Caddy upstream switch transaction"
 [ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
   || die "unfinished GCP Taiwan Caddy listener transaction exists; commit or rollback it before a blue-green release"
 [ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
   || die "unfinished customer Host Caddy transaction exists; commit or rollback it before a blue-green release"
 container_exists "$CADDY_CONTAINER" || die "Caddy container $CADDY_CONTAINER does not exist"
-[ -f "$CADDYFILE" ] || die "Caddyfile not found: $CADDYFILE"
+[ -f "$CADDYFILE" ] && [ ! -L "$CADDYFILE" ] || die "invalid Caddyfile: $CADDYFILE"
 if [ "$ALLOW_ISOLATED_OLD_CONTAINER" = true ]; then
   [ "$PRECREATE_ONLY" = false ] \
     || die "isolated-old recovery cannot precreate a target"
@@ -905,62 +1080,60 @@ status="$(container_status "$NEW_CONTAINER")"
   die "$NEW_CONTAINER did not become healthy"
 }
 log "checking app health inside $NEW_CONTAINER"
-docker exec "$NEW_CONTAINER" sh -c "wget -qO- http://127.0.0.1:$APP_PORT/health >/dev/null || curl -fsS http://127.0.0.1:$APP_PORT/health >/dev/null"
+docker exec "$NEW_CONTAINER" sh -c "wget -Y off -qO- http://127.0.0.1:$APP_PORT/health >/dev/null || curl --noproxy '*' -fsS http://127.0.0.1:$APP_PORT/health >/dev/null"
 
-changed_caddy=false
-if ! grep -qF "$CADDY_UPSTREAM_TO" "$CADDYFILE"; then
-  grep -qF "$CADDY_UPSTREAM_FROM" "$CADDYFILE" || die "$CADDY_UPSTREAM_FROM not found in $CADDYFILE"
+if grep -qF "$CADDY_UPSTREAM_TO" "$CADDYFILE"; then
+  log "host Caddyfile already points at $CADDY_UPSTREAM_TO; requiring a fully converged prior switch"
+  caddy_active_config_contains "$CADDY_UPSTREAM_TO" \
+    || die "host Caddyfile points at target but active Caddy does not; no safe rollback transaction exists"
+  caddy_config_contains "$CADDY_CONFIG_PATH" "$CADDY_UPSTREAM_TO" \
+    || die "host Caddyfile points at target but startup Caddy does not; no safe rollback transaction exists"
+  if caddy_active_config_contains "$CADDY_UPSTREAM_FROM" \
+    || caddy_config_contains "$CADDY_CONFIG_PATH" "$CADDY_UPSTREAM_FROM"; then
+    die "Caddy contains both old and target upstreams; refusing an ambiguous release"
+  fi
+else
+  grep -qF "$CADDY_UPSTREAM_FROM" "$CADDYFILE" \
+    || die "$CADDY_UPSTREAM_FROM not found in $CADDYFILE"
   stamp="$(date +%Y%m%d-%H%M%S)"
   caddy_backup="$(mktemp "${CADDYFILE}.bak-blue-green-${stamp}.XXXXXX")"
+  caddy_candidate="$(mktemp "${CADDYFILE}.after-blue-green-${stamp}.XXXXXX")"
   cp -a "$CADDYFILE" "$caddy_backup"
-  log "switching Caddy upstream $CADDY_UPSTREAM_FROM -> $CADDY_UPSTREAM_TO"
-  caddy_tmp="$(mktemp)"
-  TEMP_FILES+=("$caddy_tmp")
-  perl -0pe "s/\\Q$CADDY_UPSTREAM_FROM\\E/$CADDY_UPSTREAM_TO/g" "$CADDYFILE" >"$caddy_tmp"
-  write_file_preserving_inode "$caddy_tmp" "$CADDYFILE"
-  rm -f -- "$caddy_tmp"
-  changed_caddy=true
-else
-  log "host Caddyfile already points at $CADDY_UPSTREAM_TO"
-fi
+  perl -0pe "s/\\Q$CADDY_UPSTREAM_FROM\\E/$CADDY_UPSTREAM_TO/g" \
+    "$CADDYFILE" >"$caddy_candidate"
+  [ "$(file_sha "$CADDYFILE")" = "$(file_sha "$caddy_backup")" ] \
+    || die "Caddyfile changed while the blue-green candidate was prepared"
 
-log "synchronizing Caddy startup file seen inside container"
-sync_caddy_startup_file
-container_release_caddy="/tmp/sub2api-release-$NEW_CONTAINER.Caddyfile"
-docker cp "$CADDYFILE" "$CADDY_CONTAINER:$container_release_caddy"
-if ! docker exec "$CADDY_CONTAINER" caddy validate --config "$container_release_caddy"; then
-  if restore_caddy_switch; then
-	die "Caddy validation failed; restored host, startup, and active Caddy state"
+  container_release_caddy="/tmp/sub2api-release-$NEW_CONTAINER.Caddyfile"
+  docker cp "$caddy_candidate" "$CADDY_CONTAINER:$container_release_caddy"
+  docker exec "$CADDY_CONTAINER" caddy validate --config "$container_release_caddy" --adapter caddyfile \
+    || die "Caddy candidate validation failed before any live mutation"
+  publish_caddy_switch_transaction \
+    || die "could not publish the Caddy upstream recovery transaction"
+
+  log "switching Caddy upstream $CADDY_UPSTREAM_FROM -> $CADDY_UPSTREAM_TO"
+  write_file_preserving_inode "$caddy_candidate" "$CADDYFILE" \
+    || die "could not update host Caddyfile; recovery transaction retained"
+  log "synchronizing Caddy startup file seen inside container"
+  sync_caddy_startup_file \
+    || die "could not synchronize Caddy startup file; automatic restoration will run"
+  docker exec "$CADDY_CONTAINER" caddy reload --config "$container_release_caddy" --adapter caddyfile \
+    || die "Caddy reload failed; automatic restoration will run"
+
+  log "verifying active and startup Caddy point only at $CADDY_UPSTREAM_TO"
+  caddy_active_config_contains "$CADDY_UPSTREAM_TO" \
+    || die "active Caddy did not contain the target; automatic restoration will run"
+  caddy_config_contains "$CADDY_CONFIG_PATH" "$CADDY_UPSTREAM_TO" \
+    || die "startup Caddy did not contain the target; automatic restoration will run"
+  if caddy_active_config_contains "$CADDY_UPSTREAM_FROM" \
+    || caddy_config_contains "$CADDY_CONFIG_PATH" "$CADDY_UPSTREAM_FROM"; then
+    die "Caddy retained the old upstream; automatic restoration will run"
   fi
-  die "Caddy validation failed and automatic Caddy restoration failed"
-fi
-if ! docker exec "$CADDY_CONTAINER" caddy reload --config "$container_release_caddy"; then
-  restore_caddy_switch \
-	|| die "Caddy reload failed and automatic Caddy restoration failed"
-  die "Caddy reload failed; restored host, startup, and active Caddy state"
-fi
-log "verifying active Caddy config points at $CADDY_UPSTREAM_TO"
-caddy_active_config_contains "$CADDY_UPSTREAM_TO" || {
-  restore_caddy_switch \
-	|| die "active Caddy verification failed and automatic restoration failed"
-  die "active Caddy config did not contain the target; restored the previous state"
-}
-if caddy_active_config_contains "$CADDY_UPSTREAM_FROM"; then
-  restore_caddy_switch \
-	|| die "active Caddy retained the old upstream and automatic restoration failed"
-  die "active Caddy retained the old upstream; restored the previous state"
-fi
-log "verifying Caddy startup file seen inside container"
-caddy_config_contains "$CADDY_CONFIG_PATH" "$CADDY_UPSTREAM_TO" \
-  || {
-	restore_caddy_switch \
-	  || die "startup Caddy verification failed and automatic restoration failed"
-	die "startup Caddy did not contain the target; restored the previous state"
-  }
-if caddy_config_contains "$CADDY_CONFIG_PATH" "$CADDY_UPSTREAM_FROM"; then
-  restore_caddy_switch \
-	|| die "startup Caddy retained the old upstream and automatic restoration failed"
-  die "startup Caddy retained the old upstream; restored the previous state"
+  [ "$(file_sha "$CADDYFILE")" = "$switch_after_sha" ] \
+    || die "host Caddyfile hash drifted after reload; automatic restoration will run"
+  commit_caddy_switch_transaction \
+    || die "Caddy switch passed but its recovery transaction could not be committed"
+  log "Caddy upstream switch committed; rollback backup retained at $caddy_backup"
 fi
 
 log "starting drain monitor for $OLD_CONTAINER"

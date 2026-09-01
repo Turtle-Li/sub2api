@@ -15,6 +15,7 @@ readonly CA_FILE="/etc/ssl/certs/ca-certificates.crt"
 phase="${1:-}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source_config="${HAPROXY_TEMPLATE:-${script_dir}/haproxy.cfg}"
+post_update_verify="${HAPROXY_POST_UPDATE_VERIFY:-}"
 
 die() {
     printf 'gcp-tw-haproxy: %s\n' "$*" >&2
@@ -158,6 +159,23 @@ validate_config() {
     haproxy -c -f "$path" >/dev/null
 }
 
+run_post_update_verify() {
+    local metadata
+    [[ -n "$post_update_verify" ]] || return 0
+    if [[ ! -f "$post_update_verify" || -L "$post_update_verify" ]]; then
+        printf 'gcp-tw-haproxy: invalid post-update verifier: %s\n' \
+            "$post_update_verify" >&2
+        return 1
+    fi
+    metadata="$(stat -c '%u:%g:%a' "$post_update_verify")" || return 1
+    if [[ "$metadata" != '0:0:750' ]]; then
+        printf 'gcp-tw-haproxy: post-update verifier must be root:root mode 0750: %s\n' \
+            "$post_update_verify" >&2
+        return 1
+    fi
+    "$post_update_verify" gcp
+}
+
 make_backup_dir() {
     local stamp
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -212,9 +230,19 @@ load_state() {
     before_sha="$(state_value BEFORE_SHA)"
     after_sha="$(state_value AFTER_SHA)"
     transaction_status="$(state_value_optional STATUS)"
+    origin_backup_path="$(state_value_optional ORIGIN_BACKUP_PATH)"
+    origin_sha="$(state_value_optional ORIGIN_SHA)"
     # The already-deployed first revision had no STATUS field; its only state
     # was a successfully staged configuration, so migrate it logically here.
     [[ -n "$transaction_status" ]] || transaction_status='STAGED'
+    if [[ -z "$origin_backup_path" && -z "$origin_sha" ]]; then
+        # Legacy transactions predate the immutable origin fields. Their
+        # recorded pre-stage backup is the only authoritative origin anchor.
+        origin_backup_path="$backup_path"
+        origin_sha="$before_sha"
+    elif [[ -z "$origin_backup_path" || -z "$origin_sha" ]]; then
+        die "transaction contains an incomplete immutable origin anchor"
+    fi
 
     [[ "$state_config_path" == "$CONFIG_PATH" ]] \
         || die "transaction targets an unexpected configuration path"
@@ -234,6 +262,13 @@ load_state() {
         || die "backup hash no longer matches the transaction"
     [[ "$(file_sha "$staged_path")" == "$after_sha" ]] \
         || die "staged-config hash no longer matches the transaction"
+    [[ "$origin_backup_path" == "$BACKUP_ROOT"/gcp-tw-line-*/haproxy.cfg.before ]] \
+        || die "immutable origin backup path is outside the bounded backup root"
+    [[ "$origin_sha" =~ ^[0-9a-f]{64}$ ]] \
+        || die "transaction contains an invalid immutable origin SHA-256"
+    assert_regular_file "$origin_backup_path"
+    [[ "$(file_sha "$origin_backup_path")" == "$origin_sha" ]] \
+        || die "immutable origin backup hash no longer matches the transaction"
 }
 
 write_state() {
@@ -242,6 +277,8 @@ write_state() {
     local staged="$3"
     local before="$4"
     local after="$5"
+    local origin_backup="${6:-$2}"
+    local origin_hash="${7:-$4}"
     local temporary
     temporary="$(mktemp "${STATE_PATH}.XXXXXX")"
     {
@@ -251,6 +288,8 @@ write_state() {
         printf 'STAGED_PATH=%s\n' "$staged"
         printf 'BEFORE_SHA=%s\n' "$before"
         printf 'AFTER_SHA=%s\n' "$after"
+        printf 'ORIGIN_BACKUP_PATH=%s\n' "$origin_backup"
+        printf 'ORIGIN_SHA=%s\n' "$origin_hash"
     } >"$temporary"
     install -o root -g root -m 0600 "$temporary" "$temporary.locked"
     mv -f -- "$temporary.locked" "$STATE_PATH"
@@ -258,7 +297,8 @@ write_state() {
 }
 
 write_loaded_state_status() {
-    write_state "$1" "$backup_path" "$staged_path" "$before_sha" "$after_sha"
+    write_state "$1" "$backup_path" "$staged_path" "$before_sha" "$after_sha" \
+        "$origin_backup_path" "$origin_sha"
     transaction_status="$1"
 }
 
@@ -305,7 +345,8 @@ begin_stage_from_current() {
 
     # Publish recovery authority before the first live-config mutation. A
     # killed or failed install is therefore recoverable and safely retryable.
-    write_state STAGED "$backup_file" "$after_file" "$before_sha_local" "$after_sha_local"
+    write_state STAGED "$backup_file" "$after_file" "$before_sha_local" "$after_sha_local" \
+        "${origin_backup_path:-$backup_file}" "${origin_sha:-$before_sha_local}"
     load_state
     if ! atomic_install "$staged_path" "$CONFIG_PATH" || ! validate_config "$CONFIG_PATH"; then
         if restore_loaded_before; then
@@ -413,6 +454,8 @@ update() {
     validate_config "$CONFIG_PATH"
     validate_config "$source_config"
     if [[ "$(file_sha "$source_config")" == "$current_sha" ]]; then
+        run_post_update_verify \
+            || die "unchanged HAProxy configuration failed runtime verification"
         printf 'GCP_HAPROXY_UPDATED already=true config_sha=%s\n' "$current_sha"
         return
     fi
@@ -424,18 +467,20 @@ update() {
     install -o root -g root -m 0600 "$source_config" "$after_file"
     before_sha_local="$(file_sha "$backup_file")"
     after_sha_local="$(file_sha "$after_file")"
-    write_state STAGED "$backup_file" "$after_file" "$before_sha_local" "$after_sha_local"
+    write_state STAGED "$backup_file" "$after_file" "$before_sha_local" "$after_sha_local" \
+        "$origin_backup_path" "$origin_sha"
     load_state
 
     if ! atomic_install "$staged_path" "$CONFIG_PATH" \
         || ! validate_config "$CONFIG_PATH" \
         || ! systemctl reload haproxy \
-        || ! systemctl is-active --quiet haproxy; then
+        || ! systemctl is-active --quiet haproxy \
+        || ! run_post_update_verify; then
         if restore_loaded_before && systemctl reload haproxy && systemctl is-active --quiet haproxy; then
             write_loaded_state_status ROLLED_BACK
-            die "HAProxy update failed; reloaded the exact pre-update configuration"
+            die "HAProxy update or runtime verification failed; reloaded the exact pre-update configuration"
         fi
-        die "HAProxy update and automatic restoration failed; transaction retained"
+        die "HAProxy update/verification and automatic restoration failed; transaction retained"
     fi
     printf 'GCP_HAPROXY_UPDATED already=false config_sha=%s backup=%s\n' \
         "$after_sha" "$backup_path"
@@ -455,18 +500,19 @@ rollback() {
 }
 
 status() {
-    local active enabled state='absent' current_sha='absent'
+    local active enabled state='absent' current_sha='absent' origin='absent'
     active="$(systemctl is-active haproxy 2>/dev/null || true)"
     enabled="$(systemctl is-enabled haproxy 2>/dev/null || true)"
     if [[ -e "$STATE_PATH" ]]; then
         load_state
         state="$transaction_status"
+        origin="$origin_sha"
     fi
     if [[ -f "$CONFIG_PATH" && ! -L "$CONFIG_PATH" ]]; then
         current_sha="$(file_sha "$CONFIG_PATH")"
     fi
-    printf 'GCP_HAPROXY_STATUS transaction=%s active=%s enabled=%s config_sha=%s\n' \
-        "$state" "${active:-unknown}" "${enabled:-unknown}" "$current_sha"
+    printf 'GCP_HAPROXY_STATUS transaction=%s active=%s enabled=%s config_sha=%s origin_sha=%s\n' \
+        "$state" "${active:-unknown}" "${enabled:-unknown}" "$current_sha" "$origin"
 }
 
 case "$phase" in

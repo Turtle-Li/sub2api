@@ -41,7 +41,7 @@ trap on_error ERR
 
 metadata() {
     local key="$1"
-    curl --fail --silent --show-error --connect-timeout 2 --max-time 10 \
+    curl --fail --silent --show-error --noproxy '*' --connect-timeout 2 --max-time 10 \
         -H 'Metadata-Flavor: Google' "${METADATA_ROOT}/${key}"
 }
 
@@ -85,8 +85,8 @@ install_metadata_file sub2-tw-transport-verifier sub2-tw-transport-verifier-sha 
     "${INSTALL_ROOT}/verify-transport.sh" 0750
 
 HAPROXY_TEMPLATE="${INSTALL_ROOT}/haproxy.cfg" \
+HAPROXY_POST_UPDATE_VERIFY="${INSTALL_ROOT}/verify-transport.sh" \
     "${INSTALL_ROOT}/install-gcp-haproxy.sh" update
-"${INSTALL_ROOT}/verify-transport.sh" gcp
 
 record_status 'GCP_UPDATE_PASS'
 printf 'GCP_UPDATE_PASS\n'

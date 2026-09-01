@@ -412,6 +412,16 @@ assert_contains "${TEST_ROOT}/customer-host-transaction.log" \
 rm -f "${APP_DIR}/.cf-opt-totools-caddy.env"
 
 : >"$DOCKER_CALLS"
+printf 'BEFORE_SHA=test\n' >"${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
+if run_github_prebuilt_release >"${TEST_ROOT}/blue-green-caddy-transaction.log" 2>&1; then
+  fail 'server release accepted an unfinished blue-green Caddy transaction'
+fi
+assert_contains "${TEST_ROOT}/blue-green-caddy-transaction.log" \
+  'recover it before a production release'
+[ ! -s "$DOCKER_CALLS" ] || fail 'Docker was touched before the blue-green Caddy transaction guard'
+rm -f "${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
+
+: >"$DOCKER_CALLS"
 resolve_mismatch_output="${TEST_ROOT}/resolve-mismatch.log"
 if SUB2API_PUBLIC_HEALTH_RESOLVE='peer.invalid:443:192.0.2.10' \
   run_github_prebuilt_release >"$resolve_mismatch_output" 2>&1; then
@@ -506,6 +516,7 @@ fi
 assert_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
 assert_contains "$NODE_STATE_CALLS" 'commit-local'
 assert_contains "$CURL_CALLS" '--resolve example.invalid:443:192.0.2.10'
+assert_contains "$CURL_CALLS" '--noproxy *'
 if grep -Fq -- 'abort-local' "$NODE_STATE_CALLS"; then
   fail 'successful release invoked node-state abort'
 fi

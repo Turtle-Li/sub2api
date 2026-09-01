@@ -9,6 +9,7 @@ generation paths may legitimately differ after certificate activation.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import re
@@ -19,21 +20,25 @@ from typing import Any
 API_HOST = "api.turtleligpt.com"
 EXPECTED_ALLOW = ["130.211.243.139/32"]
 UPSTREAM_RE = re.compile(r"^sub2api(?:-(?:blue|green))?:8080$")
+EXPECTED_REQUEST_HEADERS = {
+    "delete": ["X-Real-IP", "CF-Connecting-IP"],
+    "set": {"X-Forwarded-For": ["{http.request.remote.host}"]},
+}
+PROTECTED_HEADERS = {"x-forwarded-for", "x-real-ip", "cf-connecting-ip"}
 
 
 def fail(message: str) -> "NoReturn":
     raise SystemExit(f"verify-azure-caddy-json: {message}")
 
 
-def walk_handles(value: Any):
+def walk_nodes(value: Any):
     if isinstance(value, dict):
-        if value.get("handler") == "reverse_proxy":
-            yield value
+        yield value
         for child in value.values():
-            yield from walk_handles(child)
+            yield from walk_nodes(child)
     elif isinstance(value, list):
         for child in value:
-            yield from walk_handles(child)
+            yield from walk_nodes(child)
 
 
 def route_hosts(route: dict[str, Any]) -> set[str]:
@@ -46,6 +51,26 @@ def route_hosts(route: dict[str, Any]) -> set[str]:
     return hosts
 
 
+def route_is_proven_exclusive_of_api(route: dict[str, Any]) -> bool:
+    """Return true only when every OR matcher excludes the production host."""
+
+    matchers = route.get("match")
+    if not isinstance(matchers, list) or not matchers:
+        return False
+    for matcher in matchers:
+        if not isinstance(matcher, dict):
+            return False
+        hosts = matcher.get("host")
+        if not isinstance(hosts, list) or not hosts:
+            return False
+        for pattern in hosts:
+            if not isinstance(pattern, str):
+                return False
+            if fnmatch.fnmatchcase(API_HOST, pattern.lower()):
+                return False
+    return True
+
+
 def verify(document: dict[str, Any]) -> dict[str, Any]:
     servers = (
         document.get("apps", {})
@@ -54,6 +79,8 @@ def verify(document: dict[str, Any]) -> dict[str, Any]:
     )
     if not isinstance(servers, dict):
         fail("apps.http.servers is missing")
+    if len(servers) != 1:
+        fail("expected exactly one explicitly configured HTTP server")
 
     candidates: list[tuple[str, dict[str, Any]]] = []
     for name, server in servers.items():
@@ -81,34 +108,52 @@ def verify(document: dict[str, Any]) -> dict[str, Any]:
         fail("proxy_protocol must be the first :443 listener wrapper")
     if proxy_wrapper.get("allow") != EXPECTED_ALLOW:
         fail("proxy_protocol allowlist is not the frozen GCP /32")
+    if proxy_wrapper.get("timeout") != 2_000_000_000:
+        fail("proxy_protocol timeout must remain exactly 2 seconds")
     if str(proxy_wrapper.get("fallback_policy", "")).upper() != "SKIP":
         fail("proxy_protocol fallback policy must be skip")
     if not isinstance(tls_wrapper, dict) or tls_wrapper != {"wrapper": "tls"}:
         fail("tls must be the second and final :443 listener wrapper")
 
-    api_routes = [
-        route
-        for route in server.get("routes", [])
+    routes = server.get("routes", [])
+    if not isinstance(routes, list):
+        fail(":443 server routes must be a list")
+    api_route_indexes = [
+        index
+        for index, route in enumerate(routes)
         if isinstance(route, dict) and API_HOST in route_hosts(route)
     ]
-    if len(api_routes) != 1:
+    if len(api_route_indexes) != 1:
         fail("expected exactly one route for the production API hostname")
+    api_route_index = api_route_indexes[0]
+    api_route = routes[api_route_index]
+    if api_route.get("terminal") is not True:
+        fail("production API route must be terminal")
+    for route in routes[:api_route_index]:
+        if not isinstance(route, dict) or not route_is_proven_exclusive_of_api(route):
+            fail("an earlier route can intercept the production API hostname")
 
-    reverse_proxies = list(walk_handles(api_routes[0].get("handle", [])))
-    if not reverse_proxies:
-        fail("production API route has no reverse_proxy handler")
+    api_nodes = list(walk_nodes(api_route.get("handle", [])))
+    reverse_proxies = [node for node in api_nodes if node.get("handler") == "reverse_proxy"]
+    if len(reverse_proxies) != 2:
+        fail("production API route must contain exactly two reverse_proxy handlers")
+
+    for node in api_nodes:
+        if node.get("handler") != "headers":
+            continue
+        request = node.get("request")
+        if request is None:
+            continue
+        serialized = json.dumps(request, sort_keys=True).lower()
+        if any(name in serialized for name in PROTECTED_HEADERS):
+            fail("standalone headers handler mutates a protected client-IP header")
 
     upstreams: set[str] = set()
     for handler in reverse_proxies:
-        # With no trusted_proxies and no explicit X-Forwarded-For rewrite,
-        # Caddy v2.11.4 ignores client-supplied X-Forwarded-* values and derives
-        # X-Forwarded-For from the connection peer restored by PROXY v2.
         headers = handler.get("headers")
-        if headers not in (None, {}):
-            request_headers = headers.get("request", {}) if isinstance(headers, dict) else {}
-            serialized = json.dumps(request_headers, sort_keys=True).lower()
-            if "x-forwarded-for" in serialized:
-                fail("explicit X-Forwarded-For mutation is outside the reviewed contract")
+        request_headers = headers.get("request") if isinstance(headers, dict) else None
+        if request_headers != EXPECTED_REQUEST_HEADERS:
+            fail("reverse_proxy client-IP header policy does not match the frozen contract")
         for upstream in handler.get("upstreams", []):
             if isinstance(upstream, dict) and isinstance(upstream.get("dial"), str):
                 dial = upstream["dial"]
@@ -125,7 +170,7 @@ def verify(document: dict[str, Any]) -> dict[str, Any]:
         "listener_wrappers": wrappers,
         "api_host": API_HOST,
         "upstreams": sorted(upstreams),
-        "xff_policy": "caddy-default-ignore-incoming-use-connection-peer",
+        "client_ip_header_policy": "overwrite-xff-from-connection-peer-drop-xreal-cf",
     }
 
 

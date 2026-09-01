@@ -188,7 +188,7 @@ assert_azure_runtime_contract() {
         | "$json_verifier")" \
         || die "adapted startup Caddy config violates the ingress contract"
     active_fingerprint="$(docker exec "$CADDY_CONTAINER" sh -c \
-        'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/' \
+        'wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/' \
         | "$json_verifier")" \
         || die "active Caddy admin config violates the ingress contract"
     [[ "$active_fingerprint" == "$adapted_fingerprint" ]] \

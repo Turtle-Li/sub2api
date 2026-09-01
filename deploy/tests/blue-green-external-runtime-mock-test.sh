@@ -18,6 +18,10 @@ TRAFFIC_STATE_FILE="$RUNTIME_STATE_DIR/traffic-state"
 BACKGROUND_STATE_DIR="$RUNTIME_STATE_DIR/background"
 BACKGROUND_STATE_FILE="$BACKGROUND_STATE_DIR/sub2api-green"
 HEALTH_TOKEN_FILE="$TEST_ROOT/health-token"
+CADDY_STARTUP_FILE="$TEST_ROOT/caddy-startup.Caddyfile"
+CADDY_ACTIVE_FILE="$TEST_ROOT/caddy-active.json"
+CADDY_CANDIDATE_FILE="$TEST_ROOT/caddy-candidate.Caddyfile"
+NSENTER_FAIL_MARKER="$TEST_ROOT/nsenter-fail-once.marker"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -30,7 +34,10 @@ fail() {
 }
 
 assert_contains() {
-  grep -Fq -- "$2" "$1" || fail "expected required content was absent"
+  if ! grep -Fq -- "$2" "$1"; then
+    sed -n '1,160p' "$1" >&2
+    fail "expected required content was absent: $2"
+  fi
 }
 
 assert_not_contains() {
@@ -72,6 +79,8 @@ make_state() {
 
 mkdir -p "$FAKE_BIN" "$STATE_ROOT" "$APP_DIR/scripts" "$BACKGROUND_STATE_DIR"
 printf 'reverse_proxy sub2api-green:8080\n' >"$APP_DIR/Caddyfile"
+printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_STARTUP_FILE"
+printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_ACTIVE_FILE"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_DIR/scripts/backup.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_DIR/scripts/sub2api-drain-monitor.sh"
 chmod +x "$APP_DIR/scripts/backup.sh" "$APP_DIR/scripts/sub2api-drain-monitor.sh"
@@ -186,6 +195,7 @@ case "$command_name" in
       *Config.Image*) meta "$name" image ;;
       *HostConfig.RestartPolicy.Name*) meta "$name" restart ;;
       *State.Running*) meta "$name" running ;;
+      *State.Pid*) printf '4242\n' ;;
       *State.Health*)
         if [ "$(meta "$name" running)" = true ]; then printf 'healthy\n'; else printf 'created\n'; fi
         ;;
@@ -217,11 +227,42 @@ case "$command_name" in
     rm -rf "$(path_for "$1")"
     ;;
   exec)
-    # The health probe intentionally fails after start. This reaches the
-    # reuse/start boundary without entering Caddy in this focused mock.
-    exit 1
+    [ "${FAKE_DOCKER_CADDY_FLOW:-false}" = true ] || exit 1
+    while [ "${1:-}" = -e ]; do
+      export "$2"
+      shift 2
+    done
+    name="$1"
+    shift
+    if [ "$name" != sub2api-caddy ]; then
+      exit 0
+    fi
+    case "${1:-}" in
+      caddy)
+        case "${2:-}" in
+          validate) exit 0 ;;
+          reload)
+            cp "$FAKE_CADDY_CANDIDATE_FILE" "$FAKE_CADDY_ACTIVE_FILE"
+            exit 0
+            ;;
+          *) exit 69 ;;
+        esac
+        ;;
+      sh)
+        if [ -n "${CADDY_CHECK_PATH:-}" ]; then
+          grep -qF "$CADDY_CHECK_TEXT" "$FAKE_CADDY_STARTUP_FILE"
+        else
+          grep -qF "$CADDY_CHECK_TEXT" "$FAKE_CADDY_ACTIVE_FILE"
+        fi
+        ;;
+      *) exit 70 ;;
+    esac
     ;;
-  logs|cp)
+  cp)
+    [ "${FAKE_DOCKER_CADDY_FLOW:-false}" = true ] || exit 0
+    cp "$1" "$FAKE_CADDY_CANDIDATE_FILE"
+    ;;
+  logs)
     ;;
   *)
     exit 68
@@ -234,6 +275,9 @@ cat >"$FAKE_BIN/stat" <<'EOF'
 #!/usr/bin/env bash
 [ "$1" = -c ] || exit 1
 case "$2" in
+  %u:%a)
+    printf '%s:600\n' "$(id -u)"
+    ;;
   %u)
     if [ "$3" = "$FAKE_HEALTH_TOKEN_FILE" ]; then printf '1000\n'; else printf '0\n'; fi
     ;;
@@ -269,8 +313,22 @@ printf '2026-08-28T00:00:00+00:00\n'
 EOF
 chmod +x "$FAKE_BIN/date"
 
+cat >"$FAKE_BIN/id" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = -u ] || exit 64
+printf '0\n'
+EOF
+chmod +x "$FAKE_BIN/id"
+
 cat >"$FAKE_BIN/nsenter" <<'EOF'
 #!/usr/bin/env bash
+if [ "${FAKE_DOCKER_CADDY_FLOW:-false}" = true ] \
+  && [ "${FAKE_NSENTER_FAIL_RO_ONCE:-false}" = true ] \
+  && printf '%s\n' "$*" | grep -qF 'remount,ro,bind' \
+  && [ ! -e "$FAKE_NSENTER_FAIL_MARKER" ]; then
+  : >"$FAKE_NSENTER_FAIL_MARKER"
+  exit 71
+fi
 exit 0
 EOF
 chmod +x "$FAKE_BIN/nsenter"
@@ -333,6 +391,12 @@ run_helper() {
     FAKE_HEALTH_TOKEN_FILE="$HEALTH_TOKEN_FILE" \
     TEST_ROOT_MOCK="$TEST_ROOT" \
     FAKE_DOCKER_FAIL_CREATE="${FAKE_DOCKER_FAIL_CREATE:-false}" \
+    FAKE_DOCKER_CADDY_FLOW="${FAKE_DOCKER_CADDY_FLOW:-false}" \
+    FAKE_CADDY_STARTUP_FILE="$CADDY_STARTUP_FILE" \
+    FAKE_CADDY_ACTIVE_FILE="$CADDY_ACTIVE_FILE" \
+    FAKE_CADDY_CANDIDATE_FILE="$CADDY_CANDIDATE_FILE" \
+    FAKE_NSENTER_FAIL_RO_ONCE="${FAKE_NSENTER_FAIL_RO_ONCE:-false}" \
+    FAKE_NSENTER_FAIL_MARKER="$NSENTER_FAIL_MARKER" \
     FAKE_CA_MODE="${FAKE_CA_MODE:-644}" \
     FAKE_REALPATH_DRIFT="${FAKE_REALPATH_DRIFT:-false}" \
     APP_DIR="$APP_DIR" \
@@ -343,6 +407,8 @@ run_helper() {
     SUB2API_RUNTIME_GUARD_DATA_VOLUME=sub2api_sub2api_data \
     SUB2API_CADDY_CONTAINER=sub2api-caddy \
     CADDYFILE="$APP_DIR/Caddyfile" \
+    CADDY_CONFIG_PATH="$CADDY_STARTUP_FILE" \
+    SUB2API_CADDY_STARTUP_HOST_PATH="$CADDY_STARTUP_FILE" \
     DRAIN_LOG_FILE="$TEST_ROOT/drain.log" \
     DRAIN_NOHUP_FILE="$TEST_ROOT/drain.nohup" \
     DRAIN_PID_FILE="$TEST_ROOT/drain.pid" \
@@ -669,5 +735,69 @@ if (
   fail 'malformed unified payment webhook public key was accepted'
 fi
 assert_contains "$OUTPUT" 'UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid'
+
+# The Caddy switch publishes recovery authority before its first in-place
+# write. A remount failure after the startup file write must restore host,
+# startup, and active views and remove only the completed transaction.
+rm -rf "$(state_path sub2api-green)"
+printf 'reverse_proxy sub2api:8080\n' >"$APP_DIR/Caddyfile"
+printf 'reverse_proxy sub2api:8080\n' >"$CADDY_STARTUP_FILE"
+printf 'reverse_proxy sub2api:8080\n' >"$CADDY_ACTIVE_FILE"
+rm -f "$NSENTER_FAIL_MARKER" "$APP_DIR/.sub2api-blue-green-caddy-transaction.env"
+: >"$CALLS"
+if FAKE_DOCKER_CADDY_FLOW=true FAKE_NSENTER_FAIL_RO_ONCE=true \
+  run_helper >"$OUTPUT" 2>&1; then
+  fail 'forced Caddy startup remount failure was accepted'
+fi
+assert_contains "$OUTPUT" 'restored interrupted Caddy upstream switch before exit'
+assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
+[ ! -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
+  || fail 'completed automatic Caddy restoration retained its transaction'
+
+# A process killed after publication cannot run EXIT cleanup. Simulate its
+# durable state and require the next release invocation to recover and stop,
+# rather than continuing a new release on an ambiguous Caddy view.
+caddy_backup="$APP_DIR/Caddyfile.bak-blue-green-20260902-000000.recovery"
+caddy_candidate="$APP_DIR/Caddyfile.after-blue-green-20260902-000000.recovery"
+printf 'reverse_proxy sub2api:8080\n' >"$caddy_backup"
+printf 'reverse_proxy sub2api-green:8080\n' >"$caddy_candidate"
+printf 'reverse_proxy sub2api-green:8080\n' >"$APP_DIR/Caddyfile"
+printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_STARTUP_FILE"
+printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_ACTIVE_FILE"
+before_sha="$(sha256sum "$caddy_backup" | awk '{print $1}')"
+after_sha="$(sha256sum "$caddy_candidate" | awk '{print $1}')"
+{
+  printf 'CADDYFILE=%s\n' "$APP_DIR/Caddyfile"
+  printf 'BACKUP_PATH=%s\n' "$caddy_backup"
+  printf 'CANDIDATE_PATH=%s\n' "$caddy_candidate"
+  printf 'BEFORE_SHA=%s\n' "$before_sha"
+  printf 'AFTER_SHA=%s\n' "$after_sha"
+  printf 'UPSTREAM_FROM=sub2api:8080\n'
+  printf 'UPSTREAM_TO=sub2api-green:8080\n'
+} >"$APP_DIR/.sub2api-blue-green-caddy-transaction.env"
+chmod 600 "$APP_DIR/.sub2api-blue-green-caddy-transaction.env"
+: >"$CALLS"
+if FAKE_DOCKER_CADDY_FLOW=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'retained Caddy switch recovery continued as a new release'
+fi
+assert_contains "$OUTPUT" 'recovered the interrupted Caddy upstream switch; rerun the release'
+assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
+[ ! -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
+  || fail 'successful retained-transaction recovery did not clear its state'
+
+# The clean retry may now complete and must commit the transaction only after
+# all three Caddy views converge on the target generation.
+: >"$CALLS"
+FAKE_DOCKER_CADDY_FLOW=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$OUTPUT" 'Caddy upstream switch committed; rollback backup retained'
+assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api-green:8080'
+assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api-green:8080'
+assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api-green:8080'
+[ ! -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
+  || fail 'successful Caddy switch retained its recovery transaction'
 
 printf 'Blue-green external runtime mock tests passed.\n'

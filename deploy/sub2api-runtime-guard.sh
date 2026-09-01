@@ -23,6 +23,7 @@ APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 CADDYFILE="${SUB2API_RUNTIME_GUARD_CADDYFILE:-${APP_DIR}/Caddyfile}"
 CADDY_TRANSACTION_PATH="${APP_DIR}/.gcp-tw-caddy-transaction.env"
 CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
+CADDY_SWITCH_TRANSACTION_PATH="${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 CADDY_CONFIG_PATH="${SUB2API_RUNTIME_GUARD_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
 POSTGRES_CONTAINER="${SUB2API_RUNTIME_GUARD_POSTGRES_CONTAINER:-sub2api-postgres}"
@@ -391,7 +392,7 @@ unique_upstream_from_text() {
 
 caddy_admin_config() {
   docker exec "$CADDY_CONTAINER" sh -c \
-    'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/'
+    'wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/'
 }
 
 caddy_startup_config() {
@@ -407,7 +408,7 @@ app_internal_health() {
   docker exec \
     -e "SUB2API_GUARD_APP_PORT=${APP_PORT}" \
     "$container_name" \
-    sh -c 'wget -qO- "http://127.0.0.1:${SUB2API_GUARD_APP_PORT}/health" >/dev/null || curl -fsS "http://127.0.0.1:${SUB2API_GUARD_APP_PORT}/health" >/dev/null' \
+    sh -c 'wget -Y off -qO- "http://127.0.0.1:${SUB2API_GUARD_APP_PORT}/health" >/dev/null || curl --noproxy "*" -fsS "http://127.0.0.1:${SUB2API_GUARD_APP_PORT}/health" >/dev/null' \
     >/dev/null
 }
 
@@ -467,7 +468,7 @@ wait_for_caddy_admin() {
 
 wait_for_public_health() {
   local attempt=1
-  local -a curl_args=(-fsS --max-time "$PUBLIC_HEALTH_MAX_TIME_SECONDS")
+  local -a curl_args=(-fsS --noproxy '*' --max-time "$PUBLIC_HEALTH_MAX_TIME_SECONDS")
   if [ -n "$PUBLIC_HEALTH_RESOLVE" ]; then
     curl_args+=(--resolve "$PUBLIC_HEALTH_RESOLVE")
   fi
@@ -874,6 +875,8 @@ fi
   || die "unfinished GCP Taiwan Caddy listener transaction exists; runtime recovery is fenced until commit or rollback"
 [ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
   || die "unfinished customer Host Caddy transaction exists; runtime recovery is fenced until commit or rollback"
+[ ! -e "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
+  || die "unfinished blue-green Caddy upstream transaction exists; runtime recovery is fenced until the release helper recovers it"
 
 if ! ACTIVE_UPSTREAM="$(unique_upstream_from_file "$CADDYFILE")"; then
   die "Caddyfile must contain exactly one supported active upstream: ${CADDYFILE}"

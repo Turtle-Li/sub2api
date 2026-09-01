@@ -10,6 +10,7 @@ readonly CADDY_CONTAINER="sub2api-candidate-caddy"
 readonly CADDY_VERSION="v2.11.4"
 readonly TRANSACTION_PATH="/opt/sub2api/.gcp-tw-caddy-transaction.env"
 readonly CUSTOMER_HOST_TRANSACTION_PATH="/opt/sub2api/.cf-opt-totools-caddy.env"
+readonly BLUE_GREEN_TRANSACTION_PATH="/opt/sub2api/.sub2api-blue-green-caddy-transaction.env"
 readonly BACKUP_ROOT="/opt/sub2api/backups"
 
 phase="${1:-}"
@@ -265,7 +266,7 @@ assert_staged_live_state() {
         caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile \
         | "$json_verifier")" || return 1
     active_fingerprint="$(docker exec "$CADDY_CONTAINER" sh -c \
-        'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/' \
+        'wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/' \
         | "$json_verifier")" || return 1
     [[ "$active_fingerprint" == "$adapted_fingerprint" ]]
 }
@@ -291,6 +292,8 @@ stage() {
 
     [[ ! -e "$CUSTOMER_HOST_TRANSACTION_PATH" && ! -L "$CUSTOMER_HOST_TRANSACTION_PATH" ]] \
         || die "unfinished customer Host Caddy transaction exists; commit or rollback it before staging the GCP Taiwan listener"
+    [[ ! -e "$BLUE_GREEN_TRANSACTION_PATH" && ! -L "$BLUE_GREEN_TRANSACTION_PATH" ]] \
+        || die "unfinished blue-green Caddy upstream transaction exists; recover it before staging the GCP Taiwan listener"
 
     if [[ -e "$TRANSACTION_PATH" ]]; then
         load_state
@@ -340,8 +343,14 @@ stage() {
 }
 
 rollback() {
+    local observed_sha
     assert_runtime_contract
     load_state
+    observed_sha="$(file_sha "$CADDYFILE")"
+    if [[ "$observed_sha" != "$before_sha" && "$observed_sha" != "$after_sha" ]]; then
+        printf 'azure-caddy-listeners: warning: live SHA %s matches neither transaction endpoint; restoring BEFORE_SHA %s\n' \
+            "$observed_sha" "$before_sha" >&2
+    fi
 
     if ! restore_before; then
         if restore_after; then
@@ -364,7 +373,8 @@ commit() {
 }
 
 status() {
-    local transaction='absent' customer_transaction='absent' current_sha='absent'
+    local transaction='absent' customer_transaction='absent' blue_green_transaction='absent'
+    local current_sha='absent'
     assert_runtime_contract
     if [[ -e "$TRANSACTION_PATH" ]]; then
         load_state
@@ -373,9 +383,12 @@ status() {
     if [[ -e "$CUSTOMER_HOST_TRANSACTION_PATH" || -L "$CUSTOMER_HOST_TRANSACTION_PATH" ]]; then
         customer_transaction='present'
     fi
+    if [[ -e "$BLUE_GREEN_TRANSACTION_PATH" || -L "$BLUE_GREEN_TRANSACTION_PATH" ]]; then
+        blue_green_transaction='present'
+    fi
     current_sha="$(file_sha "$CADDYFILE")"
-    printf 'AZURE_CADDY_STATUS transaction=%s customer_transaction=%s config_sha=%s container=%s\n' \
-        "$transaction" "$customer_transaction" "$current_sha" "$CADDY_CONTAINER"
+    printf 'AZURE_CADDY_STATUS transaction=%s customer_transaction=%s blue_green_transaction=%s config_sha=%s container=%s\n' \
+        "$transaction" "$customer_transaction" "$blue_green_transaction" "$current_sha" "$CADDY_CONTAINER"
 }
 
 case "$phase" in

@@ -20,7 +20,7 @@ die() {
 
 metadata() {
     local key="$1"
-    curl --fail --silent --show-error --connect-timeout 2 --max-time 10 \
+    curl --fail --silent --show-error --noproxy '*' --connect-timeout 2 --max-time 10 \
         -H 'Metadata-Flavor: Google' "${METADATA_ROOT}/${key}"
 }
 
