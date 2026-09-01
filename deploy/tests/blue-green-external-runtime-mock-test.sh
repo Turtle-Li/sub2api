@@ -357,24 +357,54 @@ run_helper() {
     RUN_BACKUP=false \
     PULL_IMAGE=false \
     PRECREATE_ONLY="${PRECREATE_ONLY:-false}" \
+    VALIDATE_EXTERNAL_RUNTIME_ONLY="${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}" \
     HEALTH_ATTEMPTS=1 \
     HEALTH_INTERVAL_SECONDS=1 \
     /bin/bash "$SCRIPT"
 }
 
 : >"$CALLS"
-if FAKE_CA_MODE=664 PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+if FAKE_CA_MODE=664 VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
   fail 'group-writable external CA was accepted'
 fi
 assert_contains "$OUTPUT" 'must not be group-writable'
 [ ! -s "$CALLS" ] || fail 'Docker was touched before CA permission validation'
 
 : >"$CALLS"
-if FAKE_REALPATH_DRIFT=true PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+if FAKE_REALPATH_DRIFT=true VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
   fail 'external CA realpath drift was accepted'
 fi
 assert_contains "$OUTPUT" 'must not traverse a symlink'
 [ ! -s "$CALLS" ] || fail 'Docker was touched before canonical-path validation'
+
+: >"$CALLS"
+sed -i.bak 's/^DATABASE_SSLMODE=.*/DATABASE_SSLMODE=disable/' "$RUNTIME_ENV"
+rm -f "$RUNTIME_ENV.bak"
+invalid_runtime_env_accepted=false
+if VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  invalid_runtime_env_accepted=true
+fi
+sed -i.bak 's/^DATABASE_SSLMODE=.*/DATABASE_SSLMODE=verify-full/' "$RUNTIME_ENV"
+rm -f "$RUNTIME_ENV.bak"
+[ "$invalid_runtime_env_accepted" = false ] \
+  || fail 'runtime-only validation accepted an invalid external runtime env'
+assert_contains "$OUTPUT" 'DATABASE_SSLMODE must be verify-full in external dependency mode'
+[ ! -s "$CALLS" ] || fail 'Docker was touched before external runtime env validation'
+
+: >"$CALLS"
+if ! VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  sed -n '1,160p' "$OUTPUT" >&2
+  fail 'valid external runtime-only validation was rejected'
+fi
+assert_contains "$OUTPUT" 'external runtime contract validated; exiting before Docker or Caddy lifecycle actions'
+[ ! -s "$CALLS" ] || fail 'runtime-only validation invoked Docker'
+
+: >"$CALLS"
+if MODE=local VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'runtime-only validation accepted local dependency mode'
+fi
+assert_contains "$OUTPUT" 'VALIDATE_EXTERNAL_RUNTIME_ONLY requires external dependency mode'
+[ ! -s "$CALLS" ] || fail 'invalid runtime-only validation invoked Docker'
 
 : >"$CALLS"
 before_caddy="$(cksum "$APP_DIR/Caddyfile")"

@@ -33,6 +33,10 @@ DRAIN_PID_FILE="${DRAIN_PID_FILE:-/var/run/sub2api-drain-$NEW_CONTAINER.pid}"
 REMOVE_EXISTING_NEW_CONTAINER="${REMOVE_EXISTING_NEW_CONTAINER:-true}"
 ALLOW_ISOLATED_OLD_CONTAINER="${ALLOW_ISOLATED_OLD_CONTAINER:-false}"
 DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
+# This narrow mode validates the externally supplied dependency/runtime files
+# and exits before any Docker or Caddy lifecycle operation.  The server
+# coordinator uses it before discarding a stale stopped external target.
+VALIDATE_EXTERNAL_RUNTIME_ONLY="${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}"
 
 # An unset mode retains legacy local behavior.  An explicitly blank or unknown
 # mode is invalid rather than silently allowing local dependency use.
@@ -601,6 +605,7 @@ require_bool ALLOW_ISOLATED_OLD_CONTAINER "$ALLOW_ISOLATED_OLD_CONTAINER"
 require_bool RUN_BACKUP "$RUN_BACKUP"
 require_bool PULL_IMAGE "$PULL_IMAGE"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
+require_bool VALIDATE_EXTERNAL_RUNTIME_ONLY "$VALIDATE_EXTERNAL_RUNTIME_ONLY"
 require_positive_integer HEALTH_ATTEMPTS "$HEALTH_ATTEMPTS"
 require_positive_integer HEALTH_INTERVAL_SECONDS "$HEALTH_INTERVAL_SECONDS"
 require_docker_name NETWORK "$NETWORK"
@@ -614,6 +619,12 @@ if [ "$DEPENDENCY_MODE" = external ]; then
 fi
 if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
   validate_runtime_files
+fi
+if [ "$VALIDATE_EXTERNAL_RUNTIME_ONLY" = true ]; then
+  [ "$DEPENDENCY_MODE" = external ] \
+    || die "VALIDATE_EXTERNAL_RUNTIME_ONLY requires external dependency mode"
+  log "external runtime contract validated; exiting before Docker or Caddy lifecycle actions"
+  exit 0
 fi
 
 cd "$APP_DIR"

@@ -55,6 +55,8 @@ DRAIN_MAX_RUNTIME_SECONDS="${SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS:-0}"
 DRAIN_CADDY_CONFIG_PATH="${SUB2API_RELEASE_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
 NODE_STATE_SCRIPT="${SUB2API_NODE_STATE_SCRIPT:-${APP_DIR}/scripts/sub2api-node-state.sh}"
 DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
+NODE_STATE_DIR="${SUB2API_NODE_STATE_DIR:-/var/lib/sub2api/runtime}"
+LOCAL_RELEASE_STATE_FILE_HOST="${SUB2API_LOCAL_RELEASE_STATE_FILE_HOST:-${NODE_STATE_DIR}/local-release.env}"
 # Keep an explicitly blank value invalid. An unset setting preserves the
 # deployed local-dependency release behavior.
 DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE-local}"
@@ -232,6 +234,21 @@ run_node_state() {
   env SUB2API_NODE_STATE_LOCK_HELD=1 "$NODE_STATE_SCRIPT" "$@"
 }
 
+require_no_unfinished_local_transaction_before_stale_target_removal() {
+  if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
+    run_node_state preflight >>"${LOG_DIR}/node-state.log" \
+      || die "could not verify that no local release transaction is unfinished before removing an external target"
+    return
+  fi
+
+  # Legacy single-node releases do not invoke node-state, but a retained
+  # transaction file may still name the stopped rollback generation.  Treat
+  # every residue as unfinished, including a dangling symlink or a non-file.
+  if [ -e "$LOCAL_RELEASE_STATE_FILE_HOST" ] || [ -L "$LOCAL_RELEASE_STATE_FILE_HOST" ]; then
+    die "an unfinished local release transaction exists at ${LOCAL_RELEASE_STATE_FILE_HOST}; refusing to remove an external target"
+  fi
+}
+
 available_bytes="$(df --output=avail -B1 / | tail -1 | tr -d '[:space:]')"
 [ "$available_bytes" -ge "$MIN_FREE_BYTES" ] || die "less than 8 GiB is free on the server"
 
@@ -290,19 +307,17 @@ OLD_HEALTH="$(docker inspect "$OLD_CONTAINER" --format '{{if .State.Health}}{{.S
 [ "$OLD_RUNNING" = "true" ] || die "active container is not running: $OLD_CONTAINER"
 [ "$OLD_HEALTH" = "healthy" ] || die "active container is not healthy: $OLD_CONTAINER ($OLD_HEALTH)"
 
-caddy_config_points_to_old_only() {
+caddy_config_points_uniquely_to_old() {
   local caddy_config="$1"
+  local upstreams
+  local upstream_count
 
-  if ! printf '%s' "$caddy_config" | grep -qF "$OLD_UPSTREAM"; then
-    return 1
-  fi
-  if printf '%s' "$caddy_config" | grep -qF "$NEW_UPSTREAM"; then
-    return 1
-  fi
-  return 0
+  upstreams="$(printf '%s\n' "$caddy_config" | grep -oE 'sub2api(-(blue|green))?:8080' | sort -u || true)"
+  upstream_count="$(printf '%s\n' "$upstreams" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+  [ "$upstream_count" -eq 1 ] && [ "$upstreams" = "$OLD_UPSTREAM" ]
 }
 
-caddy_views_point_to_old_only() {
+caddy_views_point_uniquely_to_old() {
   local active_config
   local caddy_config
   local host_config
@@ -324,9 +339,26 @@ caddy_views_point_to_old_only() {
   fi
 
   for caddy_config in "$host_config" "$startup_config" "$active_config"; do
-    caddy_config_points_to_old_only "$caddy_config" || return 1
+    caddy_config_points_uniquely_to_old "$caddy_config" || return 1
   done
   return 0
+}
+
+validate_external_runtime_contract_before_stale_target_removal() {
+  local validation_log="${LOG_DIR}/external-runtime-validation.log"
+
+  if ! run_blue_green \
+    VALIDATE_EXTERNAL_RUNTIME_ONLY=true \
+    OLD_CONTAINER="$OLD_CONTAINER" \
+    NEW_CONTAINER="$NEW_CONTAINER" \
+    NEW_IMAGE="$IMAGE" \
+    RUN_BACKUP=false \
+    PULL_IMAGE=false \
+    SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
+    bash "$BLUE_GREEN_SCRIPT" >"$validation_log" 2>&1; then
+    tail -100 "$validation_log" >&2 || true
+    die "could not validate external runtime contract before removing stopped inactive target ${NEW_CONTAINER}"
+  fi
 }
 
 remove_stopped_external_inactive_target() {
@@ -340,7 +372,8 @@ remove_stopped_external_inactive_target() {
   [ "$NEW_CONTAINER" != "$OLD_CONTAINER" ] \
     || die "refusing to remove Caddy-active container $OLD_CONTAINER"
 
-  if ! caddy_views_point_to_old_only; then
+  validate_external_runtime_contract_before_stale_target_removal
+  if ! caddy_views_point_uniquely_to_old; then
     die "Caddy views do not conclusively point at ${OLD_UPSTREAM}; retaining stopped inactive target ${NEW_CONTAINER}"
   fi
   # Re-check the current old and target states after all release candidates
@@ -376,11 +409,10 @@ printf '%s\n' "$node_state_status" >>"${LOG_DIR}/node-state.log"
   || die "node runtime state is not safe for a local release: ${node_state_status}"
 if [ "$DEPENDENCY_MODE" = external ]; then
   # External mode cannot safely reuse a stopped target whose runtime contract
-  # may belong to a previous data-service configuration. `preflight` refuses
-  # an unfinished local transaction, and the verified status above makes its
-  # accepting-state write idempotent before any container object is removed.
-  run_node_state preflight >>"${LOG_DIR}/node-state.log" \
-    || die "could not verify that no local release transaction is unfinished before removing an external target"
+  # may belong to a previous data-service configuration. Node-state preflight
+  # (or the legacy transaction-file guard) refuses unfinished local recovery
+  # before any stale container object is removed.
+  require_no_unfinished_local_transaction_before_stale_target_removal
   remove_stopped_external_inactive_target
 fi
 if docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
@@ -459,7 +491,7 @@ cleanup_failed_inactive_target() {
   if ! docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
     return 0
   fi
-  if ! caddy_views_point_to_old_only; then
+  if ! caddy_views_point_uniquely_to_old; then
     log "WARNING: Caddy does not conclusively point at ${OLD_UPSTREAM}; retaining ${NEW_CONTAINER}" >&2
     return 0
   fi
@@ -483,7 +515,7 @@ if ! run_blue_green \
   SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
   bash "$BLUE_GREEN_SCRIPT" >"$SWITCH_LOG" 2>&1; then
   tail -120 "$SWITCH_LOG" >&2 || true
-  if caddy_views_point_to_old_only; then
+  if caddy_views_point_uniquely_to_old; then
     log "Blue-green release failed before the Caddy switch; aborting local node state without rollback"
     if run_node_state abort-local >>"${LOG_DIR}/node-state.log" 2>&1; then
       cleanup_failed_inactive_target

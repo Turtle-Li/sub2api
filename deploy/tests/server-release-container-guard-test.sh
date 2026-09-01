@@ -18,6 +18,8 @@ EVENT_LOG="${TEST_ROOT}/events.log"
 STARTUP_CADDY="${TEST_ROOT}/startup.Caddyfile"
 ACTIVE_CADDY="${TEST_ROOT}/active-caddy.json"
 LOCAL_TRANSACTION="${TEST_ROOT}/local-release.env"
+EXTERNAL_RUNTIME_ENV_FILE="${TEST_ROOT}/external-runtime.env"
+EXTERNAL_CA_FILE="${TEST_ROOT}/external-ca.crt"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -64,6 +66,8 @@ printf 'FROM scratch\n' >"${SOURCE_DIR}/Dockerfile"
 printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
 printf 'reverse_proxy sub2api-green:8080\n' >"$STARTUP_CADDY"
 printf '{"upstream":"sub2api-green:8080"}\n' >"$ACTIVE_CADDY"
+: >"$EXTERNAL_RUNTIME_ENV_FILE"
+: >"$EXTERNAL_CA_FILE"
 
 reset_caddy_views() {
   printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
@@ -74,6 +78,17 @@ reset_caddy_views() {
 cat >"${APP_DIR}/scripts/sub2api-blue-green-release.sh" <<'EOF'
 #!/usr/bin/env bash
 set -eu
+if [ "${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}" = true ]; then
+  if [ -n "${FAKE_EVENT_LOG:-}" ]; then
+    printf 'helper-validation old=%s new=%s\n' \
+      "${OLD_CONTAINER:-}" "${NEW_CONTAINER:-}" >>"$FAKE_EVENT_LOG"
+  fi
+  [ "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" = external ] || exit 25
+  [ -n "${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}" ] || exit 25
+  [ -n "${SUB2API_EXTERNAL_CA_FILE:-}" ] || exit 25
+  [ "${FAKE_EXTERNAL_VALIDATION_FAIL:-0}" != 1 ] || exit 25
+  exit 0
+fi
 if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
   printf 'mode=%s old=%s new=%s backup=%s\n' \
     "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
@@ -339,8 +354,11 @@ run_external_github_prebuilt_release() {
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
-    SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
+    SUB2API_DUAL_NODE_RUNTIME_ENABLED="${DUAL_NODE_RUNTIME_ENABLED:-true}" \
     SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
+    SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$EXTERNAL_RUNTIME_ENV_FILE" \
+    SUB2API_EXTERNAL_CA_FILE="$EXTERNAL_CA_FILE" \
+    SUB2API_LOCAL_RELEASE_STATE_FILE_HOST="$LOCAL_TRANSACTION" \
     /bin/bash "$SCRIPT" \
       --prebuilt \
       'sub2api:auto-test' \
@@ -499,7 +517,25 @@ assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=external old=sub2api-green new=sub2api-blue backup=false'
 assert_contains "$DOCKER_CALLS" 'rm sub2api-blue'
 assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+assert_event_order 'helper-validation old=sub2api-green new=sub2api-blue' 'docker-rm rm sub2api-blue'
 assert_event_order 'docker-rm rm sub2api-blue' 'helper old=sub2api-green new=sub2api-blue'
+
+# The real helper's external runtime validation runs before an external stale
+# target is removed. A contract failure must stop before a local transaction
+# is created or the normal helper is invoked.
+reset_release_case
+external_validation_failure_output="${TEST_ROOT}/external-validation-failure.log"
+if ALLOW_DRAINING=true FAKE_EXTERNAL_VALIDATION_FAIL=1 \
+  run_external_github_prebuilt_release >"$external_validation_failure_output" 2>&1; then
+  fail 'external stale cleanup accepted an invalid external runtime contract'
+fi
+assert_contains "$external_validation_failure_output" \
+  'could not validate external runtime contract before removing stopped inactive target sub2api-blue'
+assert_contains "$EVENT_LOG" 'helper-validation old=sub2api-green new=sub2api-blue'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper old='
+assert_not_contains "$NODE_STATE_CALLS" 'local-standby'
+[ ! -e "$LOCAL_TRANSACTION" ] || fail 'external validation failure created a local release transaction'
 
 # Any disagreement, including an unreadable view, prevents target removal and
 # keeps the helper/node transaction untouched.
@@ -509,6 +545,18 @@ host_drift_output="${TEST_ROOT}/host-drift.log"
 if ALLOW_DRAINING=true run_external_github_prebuilt_release >"$host_drift_output" 2>&1; then
   fail 'host Caddy drift was accepted'
 fi
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper old='
+assert_not_contains "$NODE_STATE_CALLS" 'local-standby'
+
+reset_release_case
+printf 'reverse_proxy sub2api-green:8080\nreverse_proxy sub2api:8080\n' >"$STARTUP_CADDY"
+legacy_upstream_output="${TEST_ROOT}/legacy-upstream-ambiguity.log"
+if ALLOW_DRAINING=true run_external_github_prebuilt_release >"$legacy_upstream_output" 2>&1; then
+  fail 'a Caddy view with a third legacy upstream was accepted'
+fi
+assert_contains "$legacy_upstream_output" \
+  'Caddy views do not conclusively point at sub2api-green:8080'
 assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
 assert_not_contains "$EVENT_LOG" 'helper old='
 assert_not_contains "$NODE_STATE_CALLS" 'local-standby'
@@ -561,6 +609,46 @@ assert_contains "$unfinished_transaction_output" \
 assert_contains "$NODE_STATE_CALLS" 'preflight'
 assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
 assert_not_contains "$EVENT_LOG" 'helper old='
+
+# Single-node compatibility mode has no node-state preflight. It must still
+# reject every retained local-transaction path before stale external cleanup.
+reset_release_case
+: >"$LOCAL_TRANSACTION"
+legacy_transaction_output="${TEST_ROOT}/legacy-local-transaction.log"
+if ALLOW_DRAINING=true DUAL_NODE_RUNTIME_ENABLED=false \
+  run_external_github_prebuilt_release >"$legacy_transaction_output" 2>&1; then
+  fail 'legacy external stale cleanup accepted a local transaction file'
+fi
+assert_contains "$legacy_transaction_output" 'an unfinished local release transaction exists at'
+assert_not_contains "$NODE_STATE_CALLS" 'preflight'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper-validation'
+assert_not_contains "$EVENT_LOG" 'helper old='
+
+reset_release_case
+ln -s "${TEST_ROOT}/missing-local-release.env" "$LOCAL_TRANSACTION"
+legacy_transaction_symlink_output="${TEST_ROOT}/legacy-local-transaction-symlink.log"
+if ALLOW_DRAINING=true DUAL_NODE_RUNTIME_ENABLED=false \
+  run_external_github_prebuilt_release >"$legacy_transaction_symlink_output" 2>&1; then
+  fail 'legacy external stale cleanup accepted a dangling local transaction symlink'
+fi
+assert_contains "$legacy_transaction_symlink_output" 'an unfinished local release transaction exists at'
+[ -L "$LOCAL_TRANSACTION" ] || fail 'legacy transaction symlink was changed'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper-validation'
+
+reset_release_case
+mkdir "$LOCAL_TRANSACTION"
+legacy_transaction_directory_output="${TEST_ROOT}/legacy-local-transaction-directory.log"
+if ALLOW_DRAINING=true DUAL_NODE_RUNTIME_ENABLED=false \
+  run_external_github_prebuilt_release >"$legacy_transaction_directory_output" 2>&1; then
+  fail 'legacy external stale cleanup accepted a non-file local transaction residue'
+fi
+assert_contains "$legacy_transaction_directory_output" 'an unfinished local release transaction exists at'
+[ -d "$LOCAL_TRANSACTION" ] || fail 'legacy transaction directory was changed'
+assert_not_contains "$DOCKER_CALLS" 'rm sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'helper-validation'
+rmdir "$LOCAL_TRANSACTION"
 
 # A helper failure before Caddy changes is not a rollback event. Abort the
 # local transaction directly, clean the failed inactive target safely, and do
