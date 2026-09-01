@@ -1249,7 +1249,9 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 			ProviderJobName: batchImageStringPtr("providers/internal/job"),
 			CreatedAt:       time.Now(),
 		}
-		svc.Config.BatchImage.JobLockTTLSeconds = 3
+		// A one-second lease exercises the production boundary where the refresh
+		// interval must remain strictly shorter than the lock TTL.
+		svc.Config.BatchImage.JobLockTTLSeconds = 1
 		providerStarted := make(chan struct{})
 		providerContinue := make(chan struct{})
 		queue.lockRefreshCh = make(chan struct{}, 1)
@@ -1277,7 +1279,7 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 		}
 		select {
 		case <-queue.lockRefreshCh:
-		case <-time.After(2 * time.Second):
+		case <-time.After(900 * time.Millisecond):
 			t.Fatal("cancel lock was not refreshed before its TTL elapsed")
 		}
 		close(providerContinue)
@@ -1285,6 +1287,49 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 		require.NoError(t, result.err)
 		require.NotNil(t, result.batch)
 		require.Equal(t, 1, gemini.cancelCount)
+		require.Equal(t, 1, queue.lockReleaseCount)
+	})
+
+	t.Run("lost job lock cancels provider status and fails closed", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		repo.jobs["imgbatch_lost_lock"] = &BatchImageJob{
+			BatchID:         "imgbatch_lost_lock",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderGeminiAPI,
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: batchImageStringPtr("providers/internal/job"),
+			CreatedAt:       time.Now(),
+		}
+		svc.Config.BatchImage.JobLockTTLSeconds = 1
+		providerStarted := make(chan struct{})
+		queue.lockRefreshErr = ErrBatchImageLockNotAcquired
+		gemini.getHook = func(ctx context.Context) {
+			close(providerStarted)
+			<-ctx.Done()
+		}
+		resultCh := make(chan error, 1)
+		go func() {
+			_, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_lost_lock")
+			resultCh <- err
+		}()
+
+		select {
+		case <-providerStarted:
+		case <-time.After(time.Second):
+			t.Fatal("provider status check did not start")
+		}
+		select {
+		case err := <-resultCh:
+			require.ErrorIs(t, err, ErrBatchImageCancelFailed)
+		case <-time.After(2 * time.Second):
+			t.Fatal("cancel did not stop after losing its job lock")
+		}
+		require.Zero(t, gemini.cancelCount)
+		require.Empty(t, queue.ensured)
 		require.Equal(t, 1, queue.lockReleaseCount)
 	})
 

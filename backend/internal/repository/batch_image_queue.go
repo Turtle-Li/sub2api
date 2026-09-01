@@ -380,12 +380,19 @@ func (l *batchImageRedisJobLock) Release(ctx context.Context) error {
 // Refresh 在仍持有锁（token 匹配）时续期 TTL，供长处理任务的心跳调用。
 func (l *batchImageRedisJobLock) Refresh(ctx context.Context, ttl time.Duration) error {
 	if l == nil || l.rdb == nil || l.key == "" || l.token == "" {
-		return nil
+		return service.ErrBatchImageLockNotAcquired
 	}
 	if ttl <= 0 {
 		ttl = defaultBatchImageJobLockTTL
 	}
-	return batchImageRefreshLockScript.Run(ctx, l.rdb, []string{l.key}, l.token, ttl.Milliseconds()).Err()
+	refreshed, err := batchImageRefreshLockScript.Run(ctx, l.rdb, []string{l.key}, l.token, ttl.Milliseconds()).Int()
+	if err != nil {
+		return err
+	}
+	if refreshed != 1 {
+		return service.ErrBatchImageLockNotAcquired
+	}
+	return nil
 }
 
 var _ service.BatchImageJobLockRefresher = (*batchImageRedisJobLock)(nil)

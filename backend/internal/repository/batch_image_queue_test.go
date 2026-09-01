@@ -269,9 +269,13 @@ func TestBatchImageQueue_JobLockRefreshExtendsTTLOnlyForHolder(t *testing.T) {
 
 	// token 不匹配时不得续期他人持有的锁。
 	require.NoError(t, queue.rdb.Set(ctx, queue.lockKey(batchID), "other-token", time.Minute).Err())
-	require.NoError(t, refresher.Refresh(ctx, 10*time.Minute))
+	require.ErrorIs(t, refresher.Refresh(ctx, 10*time.Minute), service.ErrBatchImageLockNotAcquired)
 	ttl = mr.TTL(queue.lockKey(batchID))
 	require.LessOrEqual(t, ttl, time.Minute)
+
+	// key 丢失时必须明确报告失锁，调用方才能停止旧任务的副作用。
+	require.NoError(t, queue.rdb.Del(ctx, queue.lockKey(batchID)).Err())
+	require.ErrorIs(t, refresher.Refresh(ctx, 10*time.Minute), service.ErrBatchImageLockNotAcquired)
 }
 
 func newBatchImageQueueTest(t *testing.T) (*batchImageQueue, *miniredis.Miniredis) {
