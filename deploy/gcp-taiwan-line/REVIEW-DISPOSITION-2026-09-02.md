@@ -2,51 +2,58 @@
 
 Task: `SUB2-TW-CUTOVER-20260902`
 
-Verdict before final re-review: **transport implementation ready for frozen
-review; production DNS cutover remains blocked**.
+Verdict before final frozen re-review: **transport implementation ready;
+production DNS cutover remains blocked**.
 
 Frozen implementation revision:
-`a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c`.
+`9585e61bcf5a958c1b6aa609efacb4d6bd2c9908`.
 
-## Prior review findings
+## Review findings and disposition
 
 | Finding | Disposition |
 | --- | --- |
-| Azure verifier could pass a detached or ineffective startup file | Fixed. It requires host/container SHA and device:inode equality, structurally verifies adapted startup JSON and live admin JSON, and requires equal security-contract fingerprints. The updated verifier passed on Azure. |
-| End-to-end client address handling was not reviewable | Fixed for the current Caddy contract. The full production API site is frozen in `AZURE-CADDY-RUNTIME-EVIDENCE-2026-09-02.md`; the JSON verifier rejects header-trust and explicit XFF rewrites. Direct documentation links define Caddy's default connection-peer behavior. |
-| Healthy old rollback origin and sole background ownership had no explicit fence | Fixed at the control-plane boundary. `sub2api-node-state.sh rollback-standby` atomically writes background standby before traffic accepting; tests cover it. The installed legacy helper was used as the equivalent `drain` then `preflight`, and both host/container views show `traffic=accepting`, `background=standby`. Azure intentionally remains standby until OAuth binding and exact-image recreation are authorized. |
-| HAProxy retained root privileges and had no safe live update | Fixed and live-verified. Debian `haproxy` user/group, `/var/lib/haproxy` chroot, a retryable retained transaction, and seamless `update`/reload are present. The live verifier proves worker UID and chroot. |
-| Bootstrap failure/idempotency and Debian security-mirror handling were incomplete | Fixed. Success/failure markers, healthy-rerun behavior, exact root-owned official mirror handling, and the installed Debian package revision are verified. One-shot metadata was removed. |
-| Azure/HAProxy transaction failure paths could discard recovery authority | Fixed. Azure restores before state deletion; HAProxy retains explicit `STAGED`/`ROLLED_BACK` recovery state and can restage. |
-| Transport tests were not in CI and stream/TLS evidence was overstated | Fixed where evidence exists. CI runs the transport regression and ShellCheck; direct Azure/GCP certificate fingerprints are compared automatically; 401 rows explicitly say no stream was carried. Authenticated streaming remains an explicit blocker. |
-| DNS baseline omitted other record types and proxy status | Partially fixed. Public DNS proves A `206.119.172.211`, TTL 30, and no AAAA/CNAME/SVCB/HTTPS. Cloudflare control-plane proxy status remains blocked because the available signed-in browser surface did not return a usable page snapshot; no retired credential was reused. |
-| Review snapshot was not a durable Git revision | Fixed. The implementation is committed as `a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c`; the checksum manifest covers the reviewed implementation/evidence corpus. Unrelated pre-existing optimizer report edits are excluded. |
+| Azure verifier could pass a detached or ineffective startup file | Fixed. It requires host/container SHA and device:inode equality, structurally verifies adapted startup JSON and live admin JSON, and requires equal security-contract fingerprints. |
+| Client-IP handling still trusted application-prioritized spoofable headers | Fixed. Both production reverse proxies set XFF from Caddy's PROXY-restored peer and delete `X-Real-IP`/`CF-Connecting-IP`; the renderer, JSON verifier, live fingerprints, and forged-header tests enforce it. |
+| A prior catch-all route could shadow the reviewed production route | Fixed. The production route must be terminal and every prior route must be provably host-exclusive of `api.turtleligpt.com`; a negative catch-all fixture is covered. |
+| Blue-green Caddy writes had no durable crash recovery | Fixed. A durable transaction precedes mutation, normal failures restore host/container/live views, SIGKILL recovery is conservative, and all other Caddy mutators are fenced. |
+| HAProxy post-update verification was outside rollback | Fixed and live-proved. Runtime verification now shares the update transaction, the immutable origin backup survives repeated updates, and a forced verifier failure restored/reloaded the previous config. |
+| HAProxy retained root privileges and lacked a safe live update | Fixed. Debian's `haproxy` user/group, `/var/lib/haproxy` chroot, retryable recovery state, and seamless reload are live-verified. |
+| Bootstrap failure/idempotency and Debian mirror handling were incomplete | Fixed. Success/failure markers, healthy rerun behavior, exact root-owned official mirror handling, and the installed package revision are verified; one-shot metadata was removed. |
+| Ambient proxy variables could invalidate pinned direct canaries | Fixed. Host, container, and GCE metadata calls now explicitly bypass proxy variables at the relevant boundary. |
+| Old-origin legacy state writes detached Docker single-file binds | Fixed on the old origin without migrating its lock contract. An exact-digest transformer changed only `write_state`, a no-op transition preserved inodes, and a same-image blue-green release rebuilt current mounts. Active host/container inodes match; 5xx remained zero. |
+| Transport tests were absent from CI and stream/TLS evidence was overstated | Fixed where evidence exists. The exact shell CI job passes, certificate fingerprints are compared, and unauthenticated 401 rows explicitly say no stream was carried. Authenticated streaming remains a gate. |
+| DNS baseline omitted other record types and control-plane state | Partially fixed. Authoritative DNS proves A `206.119.172.211`, TTL 300, and no AAAA/CNAME/SVCB/HTTPS. Cloudflare proxy status and action-time owner confirmation remain required. |
+| Review snapshot was not durable | Fixed. The implementation is committed at the frozen revision above; the checksum manifest covers the implementation/evidence corpus and excludes unrelated user-owned optimizer edits. |
 
-## Additional defect found during finalization
+## Transaction and ownership state
 
-Azure contained two valid retained Caddy transactions: the older customer-Host
-transaction ended at SHA `878825beb35ca208496161c107e86958d3d8140bd1d758ab6868220b8e840013`,
-which exactly matched the Taiwan listener transaction's starting SHA. The
-listener was rolled back, the customer transaction committed after its own
-semantic probes, and the listener was re-staged to
-`9dc842ad2ee0ac18d89bb3f680c761170ff5b5b38b43ab6437b3c3637c766356`.
+The older customer-Host transaction was previously resolved at its exact hash.
+Azure now retains only the Taiwan listener transaction; its live Caddyfile is
+`ee59c226...`, host/container inode is `66305:265615`, and adapted/live
+security fingerprints both equal `8a9e0879...`. The customer-Host and
+blue-green transactions are absent.
 
-Future coexistence is prevented in both directions. The customer-Host
-`prepare` refuses the Taiwan transaction; the Taiwan `stage` refuses the
-customer transaction; the server release, blue-green helper, and runtime guard
-refuse either. Rollback and commit remain available so an operator can always
-resolve a retained transaction. The live negative mutual-exclusion check,
-Azure runtime verification, and direct GCP canary passed after the repair.
+The old origin is intentionally `traffic=accepting`, `background=active` and
+is the sole background owner while production DNS still targets it. Its active
+container is healthy and sees the same traffic/background inodes as the host.
+Azure is `traffic=accepting`, `background=standby`; its runtime guard and
+autodeploy timers remain disabled until its application is safely recreated.
 
 ## Remaining production gates
 
-1. Create two authenticated fixed-egress proxy records and compare-and-set bind
-   the two still-unbound active OAuth accounts; no raw SQL.
-2. Commit or roll back the retained listener transaction, then recreate the
-   Azure application from the exact retained image so state-file bind inodes
-   are current and Azure can become the sole background owner.
+1. Create authenticated fixed-egress proxy records and compare-and-set bind the
+   two still-unbound active OAuth accounts; no raw SQL.
+2. Commit the retained listener transaction, recreate the Azure application
+   from the exact retained image, prove current state-file bind inodes, then
+   transfer sole background ownership from old to Azure under the maintenance
+   locks.
 3. Run authenticated basic generation, Responses continuation/streaming, and
    image canaries through the exact GCP address without exposing credentials.
 4. Confirm Cloudflare proxy status and obtain action-time confirmation before
-   changing the A record. Keep the old origin online and background-standby.
-No remaining gate is silently treated as passed. DNS remains on the old origin.
+   changing the A record. Keep the old origin online as the rapid DNS rollback
+   target.
+5. Complete independent final review and the requested Claude review against
+   the same frozen revision and checksum manifest.
+
+No remaining gate is silently treated as passed. DNS remains on the old
+origin.

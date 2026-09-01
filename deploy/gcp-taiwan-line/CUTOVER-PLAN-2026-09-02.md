@@ -85,24 +85,24 @@ knowledge_candidate_reason: Reusable zero-data-migration pattern for a transport
 candidate_type: infrastructure-cutover-pattern
 origin_repo: sub2api
 origin_path: deploy/gcp-taiwan-line/CUTOVER-PLAN-2026-09-02.md
-origin_revision: a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c
+origin_revision: 9585e61bcf5a958c1b6aa609efacb4d6bd2c9908
 source_change_set: SUB2-TW-CUTOVER-20260902
 classification_suggestion: project-local
 ```
 
-## 2026-09-02 05:26 execution checkpoint
+## 2026-09-02 07:05 execution checkpoint
 
 | Task | State | Evidence / blocker |
 | --- | --- | --- |
-| `T0` | Complete | Public baseline: A `206.119.172.211`, TTL 30, no AAAA/CNAME/SVCB/HTTPS; exact GCP/Azure identities, certificate, image, and rollback origin frozen. Cloudflare control-plane proxy status still needs authorized confirmation |
-| `T1` | Blocked | Old origin is now explicitly `traffic=accepting ... background=standby` in both host and active-container views. Azure active container is also standby because its state-file binds are stale; two active OAuth accounts remain unbound, so Azure cannot yet be made sole background owner |
-| `T2` | Complete, revised | Review fixes add Caddy mutator fencing, inode-preserving writes, effective-JSON verification, retryable HAProxy transactions, seamless HAProxy update, privilege drop/chroot, failure markers, CI, and whitespace coverage |
-| `T3` | Complete, transaction retained | Azure stage, exact host/container inode+SHA, adapted/live JSON fingerprint equality, forged-header rejection, direct fallback, exact rollback, and re-stage pass. The older customer-Host transaction was safely committed at its exact expected hash; both stage paths and all runtime mutators now enforce transaction mutual exclusion |
-| `T4` | Complete | GCP HAProxy `2.6.12-1+deb12u3` active as an unprivileged chrooted worker; seamless reload and rollback-capable updater pass; one-shot metadata removed; exact TCP 80/443 rule/tag active; public canary pass |
+| `T0` | Complete | Authoritative baseline: A `206.119.172.211`, TTL 300, no AAAA/CNAME/SVCB/HTTPS; exact GCP/Azure identities, certificate, image, and rollback origin frozen. Cloudflare control-plane proxy status still needs authorized confirmation |
+| `T1` | Blocked | Old origin is healthy, its active state-file binds are repaired, and it is the sole background owner. Azure remains standby with stale application state-file binds; two active OAuth accounts remain unbound, so ownership cannot yet move to Azure |
+| `T2` | Complete, revised | Frozen revision adds exact client-IP headers, route-shadow rejection, durable blue-green recovery, inode-preserving writes, runtime-verifier rollback, immutable HAProxy origin state, explicit proxy bypass, CI, and the exact-digest old-origin compatibility hotfix |
+| `T3` | Complete, transaction retained | Azure Caddy SHA `ee59c226...`, matching host/container inode, adapted/live fingerprint `8a9e0879...`, forged-PROXY rejection, direct fallback, exact rollback and re-stage pass. Only the Taiwan listener transaction remains; all other Caddy mutators are fenced |
+| `T4` | Complete | GCP HAProxy `2.6.12-1+deb12u3` config `e6891a35...` is active as an unprivileged chrooted worker. A forced verifier failure proved exact restore/reload; final update and public canary pass; one-shot metadata is absent |
 | `T5` | Partial | HTTP/2, automated TLS fingerprint equality, redirect, no-h3, manual source-IP observation, and unauthenticated SSE/WS 401 reachability pass; authenticated generation/continuation/image and a real carried stream remain pending |
-| `T6` | In progress, durable snapshot | Implementation revision `a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c` closes the prior untracked-snapshot defect. First QA/repository/Claude findings are dispositioned and live transport gates pass; final frozen re-review is still required |
+| `T6` | In progress, durable snapshot | Implementation revision `9585e61bcf5a958c1b6aa609efacb4d6bd2c9908` includes the accepted repository and Claude findings. Live transport and rollback gates pass; final frozen re-review is still required |
 | `T7` | Not started | Production DNS deliberately unchanged |
-| `T8` | Not started | Old origin remains active |
+| `T8` | Not started | Old origin remains healthy, DNS-active, and the sole background owner |
 
 Detailed evidence and fail-closed defect disposition are recorded in
 `LIVE-VALIDATION-2026-09-02.md` and

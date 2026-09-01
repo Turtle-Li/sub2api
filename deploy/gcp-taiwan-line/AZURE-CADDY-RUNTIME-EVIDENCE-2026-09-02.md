@@ -9,17 +9,20 @@ snapshot, not a reusable Caddyfile template.
 | Caddy version | `v2.11.4` |
 | Host path / container path | `/opt/sub2api/Caddyfile` / `/etc/caddy/Caddyfile` |
 | Host and container device:inode | `66305:265615` / `66305:265615` |
-| Host and container SHA-256 | `9dc842ad2ee0ac18d89bb3f680c761170ff5b5b38b43ab6437b3c3637c766356` |
-| Adapted startup contract fingerprint | `9b992e3e3f0a4b12a88c1120fa0818a92301629c0427f82b7e1ac0a1813c33ee` |
-| Live admin-API contract fingerprint | `9b992e3e3f0a4b12a88c1120fa0818a92301629c0427f82b7e1ac0a1813c33ee` |
+| Host and container SHA-256 | `ee59c226f5679464828a07eea013bc8f58054258af1da40bbf8f2cd89d8d4715` |
+| Adapted startup contract fingerprint | `8a9e08798e183dc4566fb7a72bd357ca4ad54a13d84d7fb5d20fd3336d75dd4a` |
+| Live admin-API contract fingerprint | `8a9e08798e183dc4566fb7a72bd357ca4ad54a13d84d7fb5d20fd3336d75dd4a` |
 
 The versioned JSON verifier requires exactly one `:443` server with h1/h2,
 the exact GCP `/32` PROXY wrapper before TLS, `fallback_policy skip`, exactly
-one production API route, and one supported Sub2API generation. It also
-requires HTTP-header proxy trust to remain absent and rejects any explicit
-`X-Forwarded-For` mutation. With Caddy v2.11.4, that keeps Caddy's safe default:
-incoming X-Forwarded values are ignored and the upstream X-Forwarded-For is
-derived from the connection peer restored by PROXY v2.
+one terminal production API route, and one supported Sub2API generation. Any
+earlier route must be provably host-exclusive of the production API hostname,
+so an earlier catch-all cannot bypass the protected route. Exactly two
+production reverse proxies are required. Each must replace
+`X-Forwarded-For` with the connection peer restored by PROXY v2 and delete
+`X-Real-IP` plus `CF-Connecting-IP`; standalone header handlers are rejected.
+Caddy v2.11.4 already protects its default XFF handling, while this explicit
+policy also removes the two legacy headers that the application prioritizes.
 The reviewed semantics are documented in Caddy's
 [reverse_proxy header defaults](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults)
 and [global server options](https://caddyserver.com/docs/caddyfile/options#servers).
@@ -44,6 +47,9 @@ api.turtleligpt.com {
 			max_size 100MB
 		}
 		reverse_proxy sub2api-green:8080 {
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			header_up -CF-Connecting-IP
 			flush_interval -1
 			transport http {
 				dial_timeout 30s
@@ -63,6 +69,9 @@ api.turtleligpt.com {
 			max_size 100MB
 		}
 		reverse_proxy sub2api-green:8080 {
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			header_up -CF-Connecting-IP
 			flush_interval -1
 			transport http {
 				dial_timeout 30s
@@ -75,8 +84,9 @@ api.turtleligpt.com {
 }
 ```
 
-There is no `header_up X-Forwarded-For` and no `trusted_proxies` directive in
-this complete site block/global server contract. A later blue-green release is
-expected to change only the supported upstream generation; that change
-invalidates this historical file hash and requires the effective JSON gate to
-run again.
+There is no HTTP-header `trusted_proxies` directive in this complete site
+block/global server contract. The explicit request-header policy is present in
+both production reverse proxies and is part of the adapted/live fingerprint.
+A later blue-green release is expected to change only the supported upstream
+generation; that change invalidates this historical file hash and requires the
+effective JSON gate to run again.

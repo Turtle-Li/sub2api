@@ -57,11 +57,12 @@ mainland client -> GCP Taiwan HAProxy (TCP 80/443)
 | `haproxy.cfg` | Frozen TCP-only GCP frontend/backend contract |
 | `install-gcp-haproxy.sh` | Exact-host, Debian-source-verified stage/activate/update/rollback transaction |
 | `gcp-startup-bootstrap.sh` | Hash-pinned one-shot GCE metadata bootstrap; fail-closed and credential-free |
-| `gcp-update-bootstrap.sh` | Hash-pinned one-shot metadata updater; validates and seamlessly reloads HAProxy, restoring the previous config on failure |
-| `render-azure-caddy-listeners.py` | Inserts only the exact `servers :443` listener policy into an empty global block |
-| `verify-azure-caddy-json.py` | Verifies and fingerprints the effective `:443` wrappers, API route, upstream, and safe default X-Forwarded-For contract |
+| `gcp-update-bootstrap.sh` | Hash-pinned one-shot metadata updater; validates and seamlessly reloads HAProxy, restoring the immutable pre-update config if reload or runtime verification fails |
+| `render-azure-caddy-listeners.py` | Inserts the exact `servers :443` listener policy plus the reviewed client-IP header policy into the two production reverse proxies |
+| `verify-azure-caddy-json.py` | Verifies and fingerprints the effective `:443` wrappers, route ordering, upstreams, and exact client-IP header contract |
 | `azure-caddy-listeners.sh` | Maintenance-lock-protected Azure Caddy stage/rollback/commit transaction |
 | `verify-transport.sh` | Azure, GCP-local, and public canary verification |
+| `patch-old-origin-node-state.py` | One-time exact-digest transformer used to make the old origin's legacy state writer preserve Docker single-file bind inodes |
 | `tests/transport-config-test.sh` | Offline syntax, renderer, ordering, and L4 boundary regression checks |
 | `AZURE-CADDY-RUNTIME-EVIDENCE-2026-09-02.md` | Frozen non-secret live site/listener evidence used to close the client-IP/XFF review boundary |
 
@@ -86,10 +87,13 @@ transient Azure check.
 After activation, apply reviewed HAProxy changes only through
 `gcp-update-bootstrap.sh` and the installer's `update` phase. It publishes a
 recovery transaction before changing the config, validates the candidate,
-uses `systemctl reload`, and restores/reloads the exact previous config on
-failure. The frozen HAProxy config retains Debian's `haproxy` user/group and
-chroot; `verify-transport.sh gcp` proves the live worker actually dropped
-privileges and entered `/var/lib/haproxy`.
+uses `systemctl reload`, and runs the post-update runtime verifier inside the
+same rollback transaction. A reload or verifier failure restores/reloads the
+immutable pre-update config; a controlled live verifier failure proved that
+path before the final candidate was installed. The frozen HAProxy config
+retains Debian's `haproxy` user/group and chroot; `verify-transport.sh gcp`
+proves the live worker actually dropped privileges and entered
+`/var/lib/haproxy`.
 
 The Azure listener transaction uses the canonical shared maintenance lock and
 requires the current runtime-control scripts. Its bounded commands are:
@@ -111,8 +115,18 @@ rollback or commit the retained listener transaction before an application
 release. All Caddyfile writers preserve the existing file-bind inode; the
 Azure verifier also requires host/container inode and SHA equality, validates
 the adapted startup JSON, validates the live admin-API JSON, and requires both
-security-relevant fingerprints to match. Its HTTP probes explicitly bypass
-ambient proxy variables, so `--resolve` is an actual direct-IP canary.
+security-relevant fingerprints to match. It requires exactly two production
+reverse proxies, replaces `X-Forwarded-For` with Caddy's PROXY-restored remote
+host, and removes `X-Real-IP` plus `CF-Connecting-IP` before the application.
+Earlier catch-all routes are rejected unless they are provably exclusive of
+the production hostname. Its HTTP probes explicitly bypass ambient proxy
+variables, so `--resolve` is an actual direct-IP canary.
+
+The blue-green Caddy switch also owns a durable transaction file before its
+first in-place mutation. A normal error restores the exact previous host,
+container-startup, and live Caddy views. A SIGKILL leaves the transaction for
+conservative recovery on the next run; no other Caddy mutator may proceed
+while it exists.
 
 ## Qualification evidence
 
@@ -135,8 +149,9 @@ work, not yet for a broad production or marketing claim of uniformly faster
 three-carrier throughput.
 
 The Standard control instance/address, public HTTP/ICMP test firewall, Nginx
-test endpoint, and payload were removed after testing. The retained instance's
-test metadata and tag were also removed before it was stopped.
+test endpoint, and payload were removed after testing. Temporary test metadata
+and obsolete test-only tags were removed from the retained instance; only the
+documented TCP `80/443` ingress tag remains active.
 
 ## Production cutover gates
 
@@ -146,18 +161,21 @@ DNS remains blocked until all of these pass on one frozen snapshot:
 1. Bind every active OpenAI OAuth account to one of the two verified fixed
    Tailnet SOCKS egress gateways through the authenticated admin API with a
    compare-and-set expected proxy ID. No raw database update is allowed.
-2. Recreate the Azure application with the exact retained image through the
-   audited blue-green release so its traffic/background bind mounts have fresh
-   inodes. Azure must become the sole background owner before DNS moves. Keep
-   the old origin in `traffic=accepting ... background=standby`; verify both
-   host state and the state seen inside its active container.
+2. Commit the retained Azure listener transaction, then recreate the Azure
+   application with the exact retained image through the audited blue-green
+   release so its traffic/background bind mounts have fresh inodes. The old
+   origin is currently the sole background owner; immediately before DNS
+   moves, make Azure the sole owner and fence the old origin to
+   `traffic=accepting ... background=standby`. Verify host and active-container
+   views on both machines at every ownership transition.
 3. Pass authenticated basic generation, Responses streaming/continuation, and
    image behavior through the exact GCP address without printing credentials.
 4. Pass independent QA, repository review, and the requested read-only Claude
    review on the same file hashes and evidence snapshot.
-5. Record the complete Cloudflare record set and proxy status. The public
-   baseline is A `206.119.172.211`, TTL 30, with no AAAA, CNAME, SVCB, or HTTPS
-   record. Confirm that control-plane state, then change only the
+5. Record the complete Cloudflare record set and proxy status. The current
+   authoritative public baseline is A `206.119.172.211`, TTL 300, with no
+   AAAA, CNAME, SVCB, or HTTPS record. Confirm that control-plane state and get
+   action-time owner confirmation, then change only the
    `api.turtleligpt.com` A record.
 6. Keep the old origin healthy through propagation and drain. Repeat the fixed
    mainland carrier roster during evening peak before making a broad
@@ -168,12 +186,14 @@ Fast traffic rollback is the single A-record change back to
 Stopping the GCP instance or removing its exact ingress tag is a secondary
 containment action, not a substitute for DNS rollback.
 
-The old origin's explicit rollback-ready fence keeps user HTTP enabled while
-stopping new shared leases and OAuth refresh/queue work. On the currently
-installed legacy helper this is `drain` followed by `preflight`; the reviewed
-helper exposes the equivalent single `rollback-standby` command. Do not
-reactivate the old background owner unless Azure has first been conclusively
-fenced, because DNS rollback alone must never create two shared-work owners.
+The old origin's legacy helper was hotfixed from exact source SHA-256
+`421082e4...` to `2c53593a...`, retaining its legacy maintenance lock while
+making existing state-file writes inode-preserving. A same-image blue-green
+release then rebuilt the live mounts; host and active-container inodes now
+match. Until the coordinated cutover, the old origin remains the sole active
+background owner and Azure remains standby. On rollback, fence Azure first,
+reactivate the old owner, and then restore DNS; DNS rollback alone must never
+create two shared-work owners.
 
 Google Premium Tier keeps traffic on Google's network for more of the path;
 that behavior is not itself a carrier-specific SLA. See Google's
