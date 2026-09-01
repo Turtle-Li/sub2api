@@ -32,6 +32,7 @@ const (
 	defaultBatchImageMaxReferenceImages = 1000
 	defaultBatchImageMaxReferenceBytes  = 128 * 1024 * 1024
 	defaultBatchImageProviderSubmitTime = 10 * time.Minute
+	defaultBatchImageCancelLockTTL      = 5 * time.Minute
 )
 
 type BatchImageAccountSelectionRepository interface {
@@ -871,6 +872,49 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return BatchImageJobToPublic(job), nil
 	}
 	if job.ProviderJobName != nil && strings.TrimSpace(*job.ProviderJobName) != "" {
+		ensurer, lock, err := s.acquireBatchImageCancelLock(ctx, job.BatchID)
+		if err != nil {
+			return nil, ErrBatchImageCancelFailed
+		}
+		defer func() {
+			if releaseErr := lock.Release(context.WithoutCancel(ctx)); releaseErr != nil {
+				logger.L().Warn("batch_image.cancel_lock_release_failed",
+					zap.String("batch_id", batchID),
+					zap.Error(releaseErr),
+				)
+			}
+		}()
+
+		// The worker and queue reconciler use the same per-job lock. Reload after
+		// acquiring it so cancellation never acts on a state the worker already
+		// advanced while this request was waiting for the lock.
+		job, err = s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+		if err != nil {
+			return nil, err
+		}
+		if isBatchImageProcessorDoneStatus(job.Status) {
+			if job.Status == BatchImageJobStatusFailed || job.Status == BatchImageJobStatusCancelled {
+				if err := releaseBatchImageBalanceHold(ctx, s.BillingRepo, job, batchImageDerefString(job.RequestHash)); err != nil {
+					s.enqueueBillingRetry(ctx, job.BatchID)
+					return nil, ErrBatchImageCancelFailed
+				}
+				s.invalidateAuthCache(ctx, owner.UserID)
+			}
+			return BatchImageJobToPublic(job), nil
+		}
+		// Indexing means the provider has already produced a result. Cancellation
+		// must not destroy that result; make the durable post-processing work
+		// reachable and let the normal worker finish delivery and settlement.
+		if job.Status == BatchImageJobStatusIndexing {
+			if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, nil); err != nil {
+				return nil, ErrBatchImageCancelFailed
+			}
+			return s.reloadBatchImagePublicBatch(ctx, owner, batchID)
+		}
+		if strings.TrimSpace(batchImageDerefString(job.ProviderJobName)) == "" {
+			return nil, ErrBatchImageCancelFailed
+		}
+
 		provider, ok := s.ProviderRegistry.Get(job.Provider)
 		if !ok || provider == nil {
 			return nil, ErrBatchImageUnsupportedProvider
@@ -882,7 +926,33 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		if err != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
-		if err := provider.Cancel(ctx, job, account); err != nil {
+
+		providerStatus, getErr := provider.Get(ctx, job, account)
+		if getErr == nil && isTerminalBatchProviderStatus(providerStatus) {
+			if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, providerStatus); err != nil {
+				return nil, ErrBatchImageCancelFailed
+			}
+			return s.reloadBatchImagePublicBatch(ctx, owner, batchID)
+		}
+
+		if cancelErr := provider.Cancel(ctx, job, account); cancelErr != nil {
+			// A provider can complete between the preflight Get and Cancel. Confirm
+			// the state once more before returning a generic failure so an existing
+			// successful result is recovered instead of being trapped in an
+			// infinite cancellation loop.
+			confirmed, confirmErr := provider.Get(ctx, job, account)
+			if confirmErr == nil && isTerminalBatchProviderStatus(confirmed) {
+				if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, confirmed); err != nil {
+					return nil, ErrBatchImageCancelFailed
+				}
+				return s.reloadBatchImagePublicBatch(ctx, owner, batchID)
+			}
+			// Even when cancellation genuinely failed, repair queue reachability so
+			// the worker can observe a later provider transition. Provider errors
+			// remain private and are never persisted or returned to the caller.
+			if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, nil); err != nil {
+				return nil, ErrBatchImageCancelFailed
+			}
 			return nil, ErrBatchImageCancelFailed
 		}
 		if eventErr := s.Repo.AppendBatchImageEvent(ctx, job.BatchID, "job_cancel_requested", map[string]any{"batch_id": job.BatchID}); eventErr != nil {
@@ -891,16 +961,10 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 				zap.Error(eventErr),
 			)
 		}
-		if s.Queue != nil {
-			if err := s.Queue.Enqueue(ctx, job.BatchID); err != nil && !errors.Is(err, ErrBatchImageAlreadyQueued) {
-				return nil, ErrBatchImageCancelFailed
-			}
+		if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, nil); err != nil {
+			return nil, ErrBatchImageCancelFailed
 		}
-		updated, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
-		if err != nil {
-			return nil, err
-		}
-		return BatchImageJobToPublic(updated), nil
+		return s.reloadBatchImagePublicBatch(ctx, owner, batchID)
 	}
 	if err := s.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusCancelled, BatchImageTransitionOptions{
 		EventType:    "job_cancelled",
@@ -918,6 +982,81 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return nil, err
 	}
 	return BatchImageJobToPublic(updated), nil
+}
+
+func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Context, batchID string) (BatchImageQueueEnsurer, BatchImageJobLock, error) {
+	if s == nil || s.Queue == nil {
+		return nil, nil, ErrBatchImageCancelFailed
+	}
+	ensurer, ok := s.Queue.(BatchImageQueueEnsurer)
+	if !ok || ensurer == nil {
+		return nil, nil, ErrBatchImageCancelFailed
+	}
+	lockTTL := defaultBatchImageCancelLockTTL
+	if s.Config != nil && s.Config.BatchImage.JobLockTTLSeconds > 0 {
+		lockTTL = time.Duration(s.Config.BatchImage.JobLockTTLSeconds) * time.Second
+	}
+	lock, acquired, err := ensurer.TryAcquireJobLock(ctx, batchID, lockTTL)
+	if err != nil || !acquired || lock == nil {
+		return nil, nil, ErrBatchImageCancelFailed
+	}
+	return ensurer, lock, nil
+}
+
+func (s *BatchImagePublicService) ensureBatchImageCancelContinuation(
+	ctx context.Context,
+	ensurer BatchImageQueueEnsurer,
+	job *BatchImageJob,
+	providerStatus *BatchProviderStatus,
+) (bool, error) {
+	if s == nil || s.Repo == nil || ensurer == nil || job == nil {
+		return false, ErrBatchImageCancelFailed
+	}
+	if providerStatus != nil {
+		outputRef := strings.TrimSpace(providerStatus.ProviderOutputRef)
+		if outputRef != "" && outputRef != strings.TrimSpace(batchImageDerefString(job.ProviderOutputRef)) {
+			if err := s.Repo.UpdateBatchImageJobProviderOutputRef(ctx, job.BatchID, outputRef); err != nil {
+				return false, ErrBatchImageCancelFailed
+			}
+			job.ProviderOutputRef = &outputRef
+		}
+	}
+	restored, err := ensurer.EnsureEnqueued(ctx, job.BatchID)
+	if err != nil {
+		return false, ErrBatchImageCancelFailed
+	}
+	if restored && providerStatus != nil {
+		if eventErr := s.Repo.AppendBatchImageEvent(ctx, job.BatchID, "provider_terminal_queue_recovered", map[string]any{
+			"provider_state": string(providerStatus.InternalState),
+			"source":         "cancel_reconciliation",
+		}); eventErr != nil {
+			logger.L().Warn("batch_image.cancel_recovery_event_failed",
+				zap.String("batch_id", job.BatchID),
+				zap.Error(eventErr),
+			)
+		}
+	}
+	return restored, nil
+}
+
+func (s *BatchImagePublicService) reloadBatchImagePublicBatch(ctx context.Context, owner BatchImageOwner, batchID string) (*BatchImagePublicBatch, error) {
+	updated, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+	if err != nil {
+		return nil, err
+	}
+	return BatchImageJobToPublic(updated), nil
+}
+
+func isTerminalBatchProviderStatus(status *BatchProviderStatus) bool {
+	if status == nil {
+		return false
+	}
+	switch status.InternalState {
+	case BatchProviderStateSucceeded, BatchProviderStateFailed, BatchProviderStateExpired, BatchProviderStateCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequest) (BatchImageSubmitRequest, error) {

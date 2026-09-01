@@ -174,6 +174,17 @@ output_deleted    -> output_deleted
 
 `completed -> output_deleted` happens after manual output deletion or TTL cleanup.
 
+Cancellation is provider-state aware. For a provider-backed job, the public cancel path acquires
+the same per-job lock as the worker, reloads the durable row, and checks the provider before
+requesting cancellation. A provider terminal result is never overwritten: `succeeded`, `failed`,
+`expired`, and `cancelled` are repaired into the normal worker queue with `EnsureEnqueued`, and a
+successful output reference is persisted before repair. If `Cancel` races with provider
+completion, one follow-up status check applies the same reconciliation. The worker remains the
+only component that indexes/delivers results, persists terminal state, and settles or releases the
+balance hold; cancellation reconciliation never calls `Submit`. Missing locks, unsupported queue
+repair, Redis errors, or inconclusive provider evidence fail closed with the generic public cancel
+error and do not expose provider identifiers or raw responses.
+
 For Vertex jobs with private-COS delivery enabled, `indexing` includes a durable delivery gate:
 
 ```text

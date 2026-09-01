@@ -1082,11 +1082,179 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "queued", got.Status)
 		require.Equal(t, 1, gemini.cancelCount)
+		require.Equal(t, 1, gemini.getCount)
 		billing := svc.BillingRepo.(*fakeBatchImageBillingRepo)
 		require.Empty(t, billing.releases)
-		require.Equal(t, []string{"imgbatch_cancel"}, queue.enqueued)
+		require.Equal(t, []string{"imgbatch_cancel"}, queue.ensured)
+		require.Equal(t, 1, queue.lockAttempts)
+		require.Equal(t, 1, queue.lockReleaseCount)
 		require.Equal(t, BatchImageJobStatusSubmitted, repo.jobs["imgbatch_cancel"].Status)
 		require.Contains(t, repo.events["imgbatch_cancel"], "job_cancel_requested")
+	})
+
+	t.Run("remote success is restored for delivery instead of cancelled", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		holdAmount := 0.5
+		holdID := BatchImageHoldRequestID("imgbatch_remote_success")
+		repo.jobs["imgbatch_remote_success"] = &BatchImageJob{
+			BatchID:         "imgbatch_remote_success",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderGeminiAPI,
+			Model:           "gemini-3.1-flash-image",
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: batchImageStringPtr("providers/internal/job"),
+			HoldAmount:      &holdAmount,
+			HoldID:          &holdID,
+			CreatedAt:       time.Now(),
+		}
+		gemini.getStatuses = []*BatchProviderStatus{{
+			InternalState:     BatchProviderStateSucceeded,
+			RawState:          "JOB_STATE_SUCCEEDED",
+			ProviderOutputRef: "gs://private/output/result.jsonl",
+		}}
+
+		got, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_remote_success")
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.Status)
+		require.Zero(t, gemini.cancelCount)
+		require.Equal(t, 1, gemini.getCount)
+		require.Empty(t, gemini.submits)
+		require.Equal(t, []string{"imgbatch_remote_success"}, queue.ensured)
+		require.Equal(t, "gs://private/output/result.jsonl", batchImageDerefString(repo.jobs["imgbatch_remote_success"].ProviderOutputRef))
+		require.Equal(t, BatchImageJobStatusSubmitted, repo.jobs["imgbatch_remote_success"].Status)
+		require.Empty(t, svc.BillingRepo.(*fakeBatchImageBillingRepo).releases)
+		body, marshalErr := json.Marshal(got)
+		require.NoError(t, marshalErr)
+		require.NotContains(t, string(body), "gs://")
+	})
+
+	t.Run("cancel race that reaches remote success restores the existing result", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		repo.jobs["imgbatch_cancel_race"] = &BatchImageJob{
+			BatchID:         "imgbatch_cancel_race",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderGeminiAPI,
+			Model:           "gemini-3.1-flash-image",
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: batchImageStringPtr("providers/internal/job"),
+			CreatedAt:       time.Now(),
+		}
+		gemini.getStatuses = []*BatchProviderStatus{
+			{InternalState: BatchProviderStateRunning, RawState: "JOB_STATE_RUNNING"},
+			{InternalState: BatchProviderStateSucceeded, RawState: "JOB_STATE_SUCCEEDED", ProviderOutputRef: "gs://private/output/race.jsonl"},
+		}
+		gemini.cancelErr = errors.New("projects/private/jobs/secret is already complete")
+
+		got, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_cancel_race")
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.Status)
+		require.Equal(t, 1, gemini.cancelCount)
+		require.Equal(t, 2, gemini.getCount)
+		require.Empty(t, gemini.submits)
+		require.Equal(t, []string{"imgbatch_cancel_race"}, queue.ensured)
+		require.Equal(t, "gs://private/output/race.jsonl", batchImageDerefString(repo.jobs["imgbatch_cancel_race"].ProviderOutputRef))
+		require.Empty(t, svc.BillingRepo.(*fakeBatchImageBillingRepo).releases)
+	})
+
+	t.Run("remote terminal reconciliation fails closed when queue repair fails", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		repo.jobs["imgbatch_queue_failure"] = &BatchImageJob{
+			BatchID:         "imgbatch_queue_failure",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderGeminiAPI,
+			Model:           "gemini-3.1-flash-image",
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: batchImageStringPtr("providers/internal/job"),
+			CreatedAt:       time.Now(),
+		}
+		gemini.getStatuses = []*BatchProviderStatus{{InternalState: BatchProviderStateSucceeded}}
+		queue.ensureErr = errors.New("redis private topology unavailable")
+
+		_, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_queue_failure")
+		require.ErrorIs(t, err, ErrBatchImageCancelFailed)
+		require.Zero(t, gemini.cancelCount)
+		require.NotContains(t, infraerrors.Message(err), "redis")
+	})
+
+	t.Run("indexing job continues without another provider cancellation", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		repo.jobs["imgbatch_indexing"] = &BatchImageJob{
+			BatchID:         "imgbatch_indexing",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderGeminiAPI,
+			Model:           "gemini-3.1-flash-image",
+			Status:          BatchImageJobStatusIndexing,
+			ProviderJobName: batchImageStringPtr("providers/internal/job"),
+			CreatedAt:       time.Now(),
+		}
+
+		got, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_indexing")
+		require.NoError(t, err)
+		require.Equal(t, "processing_results", got.Status)
+		require.Zero(t, gemini.getCount)
+		require.Zero(t, gemini.cancelCount)
+		require.Equal(t, []string{"imgbatch_indexing"}, queue.ensured)
+	})
+
+	t.Run("job lock conflict fails closed before touching the provider", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		repo.jobs["imgbatch_locked"] = &BatchImageJob{
+			BatchID:         "imgbatch_locked",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderGeminiAPI,
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: batchImageStringPtr("providers/internal/job"),
+			CreatedAt:       time.Now(),
+		}
+		queue.lockAcquired = false
+
+		_, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_locked")
+		require.ErrorIs(t, err, ErrBatchImageCancelFailed)
+		require.Zero(t, gemini.getCount)
+		require.Zero(t, gemini.cancelCount)
+		require.Empty(t, queue.ensured)
+	})
+
+	t.Run("provider-backed cancel requires strict queue repair support", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		repo.jobs["imgbatch_legacy_queue"] = &BatchImageJob{
+			BatchID:         "imgbatch_legacy_queue",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderGeminiAPI,
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: batchImageStringPtr("providers/internal/job"),
+			CreatedAt:       time.Now(),
+		}
+		svc.Queue = &publicBatchImageQueueWithoutEnsurer{BatchImageQueue: queue}
+
+		_, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_legacy_queue")
+		require.ErrorIs(t, err, ErrBatchImageCancelFailed)
+		require.Zero(t, gemini.getCount)
+		require.Zero(t, gemini.cancelCount)
 	})
 
 	t.Run("cancel terminal job is idempotent", func(t *testing.T) {
@@ -1134,7 +1302,7 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 
 func newTestBatchImagePublicService(enabled bool) (*BatchImagePublicService, *fakeBatchImageRepository, *publicBatchImageQueue, *publicBatchImageProvider, *publicBatchImageProvider) {
 	repo := newFakeBatchImageRepository()
-	queue := &publicBatchImageQueue{}
+	queue := &publicBatchImageQueue{lockAcquired: true}
 	gemini := &publicBatchImageProvider{name: BatchImageProviderGeminiAPI}
 	vertex := &publicBatchImageProvider{name: BatchImageProviderVertex}
 	svc := &BatchImagePublicService{
@@ -1264,8 +1432,18 @@ func (r *publicBatchImageAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx co
 }
 
 type publicBatchImageQueue struct {
-	enqueued []string
-	err      error
+	enqueued         []string
+	ensured          []string
+	err              error
+	ensureErr        error
+	lockErr          error
+	lockAcquired     bool
+	lockAttempts     int
+	lockReleaseCount int
+}
+
+type publicBatchImageQueueWithoutEnsurer struct {
+	BatchImageQueue
 }
 
 type idempotencyRaceBatchImageRepository struct {
@@ -1331,7 +1509,36 @@ func (q *publicBatchImageQueue) RecoverStaleActive(context.Context, time.Duratio
 }
 
 func (q *publicBatchImageQueue) TryAcquireJobLock(context.Context, string, time.Duration) (BatchImageJobLock, bool, error) {
-	return nil, false, nil
+	q.lockAttempts++
+	if q.lockErr != nil || !q.lockAcquired {
+		return nil, false, q.lockErr
+	}
+	return &publicBatchImageJobLock{queue: q}, true, nil
+}
+
+func (q *publicBatchImageQueue) EnsureEnqueued(_ context.Context, batchID string) (bool, error) {
+	if q.ensureErr != nil {
+		return false, q.ensureErr
+	}
+	q.ensured = append(q.ensured, batchID)
+	for _, existing := range q.enqueued {
+		if existing == batchID {
+			return false, nil
+		}
+	}
+	q.enqueued = append(q.enqueued, batchID)
+	return true, nil
+}
+
+type publicBatchImageJobLock struct {
+	queue *publicBatchImageQueue
+}
+
+func (l *publicBatchImageJobLock) Release(context.Context) error {
+	if l != nil && l.queue != nil {
+		l.queue.lockReleaseCount++
+	}
+	return nil
 }
 
 type publicBatchImageProvider struct {
@@ -1341,6 +1548,9 @@ type publicBatchImageProvider struct {
 	submitHook     func(context.Context) error
 	cancelCount    int
 	cancelErr      error
+	getCount       int
+	getStatuses    []*BatchProviderStatus
+	getErrors      []error
 	result         string
 	cleanupTargets []CleanupTarget
 	cleanupErr     error
@@ -1368,6 +1578,14 @@ func (p *publicBatchImageProvider) Submit(ctx context.Context, _ *BatchImageJob,
 }
 
 func (p *publicBatchImageProvider) Get(context.Context, *BatchImageJob, *Account) (*BatchProviderStatus, error) {
+	index := p.getCount
+	p.getCount++
+	if index < len(p.getErrors) && p.getErrors[index] != nil {
+		return nil, p.getErrors[index]
+	}
+	if index < len(p.getStatuses) {
+		return p.getStatuses[index], nil
+	}
 	return &BatchProviderStatus{InternalState: BatchProviderStateQueued}, nil
 }
 
@@ -1387,6 +1605,8 @@ func (p *publicBatchImageProvider) Cleanup(_ context.Context, _ *BatchImageJob, 
 
 var _ BatchImageAccountSelectionRepository = (*publicBatchImageAccountRepo)(nil)
 var _ BatchImageQueue = (*publicBatchImageQueue)(nil)
+var _ BatchImageQueueEnsurer = (*publicBatchImageQueue)(nil)
+var _ BatchImageQueue = (*publicBatchImageQueueWithoutEnsurer)(nil)
 var _ BatchImageProvider = (*publicBatchImageProvider)(nil)
 
 type publicBatchImageGroupRepo struct {

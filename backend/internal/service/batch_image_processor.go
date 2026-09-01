@@ -161,7 +161,7 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 		return BatchImageProcessResult{Terminal: true}, nil
 	case BatchProviderStateCancelled:
 		if err := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusCancelled, BatchImageTransitionOptions{
-			EventType:    "job_failed",
+			EventType:    "job_cancelled",
 			EventPayload: map[string]any{"provider_state": status.RawState, "error_code": "PROVIDER_BATCH_CANCELLED"},
 		}); err != nil {
 			return BatchImageProcessResult{}, err
