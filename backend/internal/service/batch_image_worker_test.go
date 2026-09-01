@@ -82,8 +82,7 @@ func TestBatchImageWorker_RefusesJobLockWithoutRefreshSupport(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrBatchImageLockNotAcquired)
 	require.Empty(t, processor.processed)
-	require.Len(t, queue.requeued, 1)
-	require.Equal(t, 3*time.Second, queue.requeued[0].delay)
+	require.Empty(t, queue.requeued, "without a token-aware fencer the worker must leave recovery to stale-active repair")
 	require.Equal(t, 1, queue.releaseCount)
 }
 
@@ -158,12 +157,39 @@ func TestBatchImageWorker_FinalOwnershipCheckPreventsAckAfterLeaseLoss(t *testin
 	require.Equal(t, 1, queue.releaseCount)
 }
 
+func TestBatchImageWorker_FencedQueueMutationRejectsLeaseLostAfterFinalRefresh(t *testing.T) {
+	tests := []struct {
+		name   string
+		result BatchImageProcessResult
+	}{
+		{name: "ack", result: BatchImageProcessResult{Terminal: true}},
+		{name: "requeue", result: BatchImageProcessResult{RequeueAfter: time.Minute}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queue := newFakeBatchImageQueue("imgbatch_worker_fence_" + tt.name)
+			queue.lockFenceErr = ErrBatchImageLockNotAcquired
+			processor := &fakeBatchImageProcessor{result: tt.result}
+			worker := NewBatchImageWorker(queue, processor, BatchImageWorkerOptions{JobLockTTL: time.Second})
+
+			err := worker.RunOnce(context.Background())
+
+			require.ErrorIs(t, err, ErrBatchImageLockNotAcquired)
+			require.Equal(t, 1, queue.lockRefreshCalls, "the final refresh succeeded before the token changed")
+			require.Empty(t, queue.acked)
+			require.Empty(t, queue.requeued)
+			require.Equal(t, 1, queue.releaseCount)
+		})
+	}
+}
+
 type fakeBatchImageQueue struct {
 	reserved            ReservedBatchImageJob
 	lockAcquired        bool
 	lockSupportsRefresh bool
 	lockRefreshErr      error
 	lockRefreshCalls    int
+	lockFenceErr        error
 	acked               []string
 	requeued            []fakeBatchImageRequeue
 	releaseCount        int
@@ -224,6 +250,8 @@ func (q *fakeBatchImageQueue) TryAcquireJobLock(context.Context, string, time.Du
 		return nonRefreshingBatchImageLock{release: func() { q.releaseCount++ }}, true, nil
 	}
 	return fakeBatchImageLock{
+		queue:   q,
+		batchID: q.reserved.BatchID,
 		release: func() { q.releaseCount++ },
 		refresh: func() error {
 			q.lockRefreshCalls++
@@ -244,6 +272,8 @@ func (l nonRefreshingBatchImageLock) Release(context.Context) error {
 }
 
 type fakeBatchImageLock struct {
+	queue   *fakeBatchImageQueue
+	batchID string
 	release func()
 	refresh func() error
 }
@@ -260,6 +290,27 @@ func (l fakeBatchImageLock) Refresh(context.Context, time.Duration) error {
 		return l.refresh()
 	}
 	return nil
+}
+
+func (l fakeBatchImageLock) Ack(ctx context.Context) error {
+	if l.queue.lockFenceErr != nil {
+		return l.queue.lockFenceErr
+	}
+	return l.queue.Ack(ctx, l.batchID)
+}
+
+func (l fakeBatchImageLock) RequeueAfter(ctx context.Context, delay time.Duration) error {
+	if l.queue.lockFenceErr != nil {
+		return l.queue.lockFenceErr
+	}
+	return l.queue.RequeueAfter(ctx, l.batchID, delay)
+}
+
+func (l fakeBatchImageLock) EnsureEnqueued(context.Context) (bool, error) {
+	if l.queue.lockFenceErr != nil {
+		return false, l.queue.lockFenceErr
+	}
+	return false, nil
 }
 
 type fakeBatchImageProcessor struct {

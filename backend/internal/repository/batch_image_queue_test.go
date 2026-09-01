@@ -278,6 +278,90 @@ func TestBatchImageQueue_JobLockRefreshExtendsTTLOnlyForHolder(t *testing.T) {
 	require.ErrorIs(t, refresher.Refresh(ctx, 10*time.Minute), service.ErrBatchImageLockNotAcquired)
 }
 
+func TestBatchImageQueue_JobLockFencedMutationsRejectStaleOwner(t *testing.T) {
+	ctx := context.Background()
+	queue, _ := newBatchImageQueueTest(t)
+
+	acquire := func(batchID string) (service.BatchImageJobLock, service.BatchImageJobLockQueueFencer) {
+		t.Helper()
+		lock, ok, err := queue.TryAcquireJobLock(ctx, batchID, time.Minute)
+		require.NoError(t, err)
+		require.True(t, ok)
+		fencer, ok := lock.(service.BatchImageJobLockQueueFencer)
+		require.True(t, ok)
+		return lock, fencer
+	}
+	replaceOwner := func(batchID string) (service.BatchImageJobLock, service.BatchImageJobLockQueueFencer) {
+		t.Helper()
+		require.NoError(t, queue.rdb.Del(ctx, queue.lockKey(batchID)).Err())
+		return acquire(batchID)
+	}
+
+	t.Run("ack", func(t *testing.T) {
+		batchID := "imgbatch_fenced_ack"
+		oldLock, oldFencer := acquire(batchID)
+		require.NoError(t, queue.rdb.ZAdd(ctx, queue.activeKey, redis.Z{Score: 1, Member: batchID}).Err())
+		require.NoError(t, queue.rdb.ZAdd(ctx, queue.delayedKey, redis.Z{Score: 2, Member: batchID}).Err())
+		require.NoError(t, queue.rdb.Set(ctx, queue.inflightKey(batchID), batchID, time.Hour).Err())
+		newLock, newFencer := replaceOwner(batchID)
+
+		require.ErrorIs(t, oldFencer.Ack(ctx), service.ErrBatchImageLockNotAcquired)
+		require.NoError(t, queue.rdb.ZScore(ctx, queue.activeKey, batchID).Err())
+		require.NoError(t, queue.rdb.ZScore(ctx, queue.delayedKey, batchID).Err())
+		require.NoError(t, queue.rdb.Get(ctx, queue.inflightKey(batchID)).Err())
+		require.NoError(t, oldLock.Release(ctx))
+		require.NoError(t, newLock.(service.BatchImageJobLockRefresher).Refresh(ctx, time.Minute))
+
+		require.NoError(t, newFencer.Ack(ctx))
+		require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.activeKey, batchID).Err(), redis.Nil)
+		require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.delayedKey, batchID).Err(), redis.Nil)
+		require.ErrorIs(t, queue.rdb.Get(ctx, queue.inflightKey(batchID)).Err(), redis.Nil)
+		require.NoError(t, newLock.Release(ctx))
+	})
+
+	t.Run("requeue", func(t *testing.T) {
+		batchID := "imgbatch_fenced_requeue"
+		oldLock, oldFencer := acquire(batchID)
+		require.NoError(t, queue.rdb.ZAdd(ctx, queue.activeKey, redis.Z{Score: 1, Member: batchID}).Err())
+		require.NoError(t, queue.rdb.Set(ctx, queue.inflightKey(batchID), batchID, time.Hour).Err())
+		newLock, newFencer := replaceOwner(batchID)
+
+		require.ErrorIs(t, oldFencer.RequeueAfter(ctx, time.Minute), service.ErrBatchImageLockNotAcquired)
+		require.NoError(t, queue.rdb.ZScore(ctx, queue.activeKey, batchID).Err())
+		require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.delayedKey, batchID).Err(), redis.Nil)
+		require.Zero(t, queue.rdb.LLen(ctx, queue.readyKey).Val())
+		require.NoError(t, oldLock.Release(ctx))
+		require.NoError(t, newLock.(service.BatchImageJobLockRefresher).Refresh(ctx, time.Minute))
+
+		require.NoError(t, newFencer.RequeueAfter(ctx, time.Minute))
+		require.ErrorIs(t, queue.rdb.ZScore(ctx, queue.activeKey, batchID).Err(), redis.Nil)
+		require.NoError(t, queue.rdb.ZScore(ctx, queue.delayedKey, batchID).Err())
+		require.NoError(t, queue.rdb.Get(ctx, queue.inflightKey(batchID)).Err())
+		require.NoError(t, newLock.Release(ctx))
+	})
+
+	t.Run("ensure enqueued", func(t *testing.T) {
+		batchID := "imgbatch_fenced_ensure"
+		oldLock, oldFencer := acquire(batchID)
+		require.NoError(t, queue.rdb.Set(ctx, queue.inflightKey(batchID), batchID, time.Hour).Err())
+		newLock, newFencer := replaceOwner(batchID)
+
+		restored, err := oldFencer.EnsureEnqueued(ctx)
+		require.ErrorIs(t, err, service.ErrBatchImageLockNotAcquired)
+		require.False(t, restored)
+		require.Zero(t, queue.rdb.LLen(ctx, queue.readyKey).Val())
+		require.NoError(t, oldLock.Release(ctx))
+		require.NoError(t, newLock.(service.BatchImageJobLockRefresher).Refresh(ctx, time.Minute))
+
+		restored, err = newFencer.EnsureEnqueued(ctx)
+		require.NoError(t, err)
+		require.True(t, restored)
+		require.Equal(t, int64(1), queue.rdb.LLen(ctx, queue.readyKey).Val())
+		require.NoError(t, queue.rdb.Get(ctx, queue.inflightKey(batchID)).Err())
+		require.NoError(t, newLock.Release(ctx))
+	})
+}
+
 func newBatchImageQueueTest(t *testing.T) (*batchImageQueue, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)

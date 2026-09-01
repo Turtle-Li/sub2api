@@ -873,7 +873,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return BatchImageJobToPublic(job), nil
 	}
 	if job.ProviderJobName != nil && strings.TrimSpace(*job.ProviderJobName) != "" {
-		ensurer, lock, lockTTL, err := s.acquireBatchImageCancelLock(ctx, job.BatchID)
+		queueFencer, lock, lockTTL, err := s.acquireBatchImageCancelLock(ctx, job.BatchID)
 		if err != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
@@ -916,7 +916,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		// must not destroy that result; make the durable post-processing work
 		// reachable and let the normal worker finish delivery and settlement.
 		if job.Status == BatchImageJobStatusIndexing {
-			if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, nil); err != nil {
+			if _, err := s.ensureBatchImageCancelContinuation(ctx, queueFencer, job, nil); err != nil {
 				return nil, ErrBatchImageCancelFailed
 			}
 			if lockGuard.Err() != nil {
@@ -952,7 +952,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 			return nil, ErrBatchImageCancelFailed
 		}
 		if getErr == nil && isTerminalBatchProviderStatus(providerStatus) {
-			if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, providerStatus); err != nil {
+			if _, err := s.ensureBatchImageCancelContinuation(ctx, queueFencer, job, providerStatus); err != nil {
 				return nil, ErrBatchImageCancelFailed
 			}
 			if lockGuard.Err() != nil {
@@ -981,7 +981,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 				return nil, ErrBatchImageCancelFailed
 			}
 			if confirmErr == nil && isTerminalBatchProviderStatus(confirmed) {
-				if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, confirmed); err != nil {
+				if _, err := s.ensureBatchImageCancelContinuation(ctx, queueFencer, job, confirmed); err != nil {
 					return nil, ErrBatchImageCancelFailed
 				}
 				if lockGuard.Err() != nil {
@@ -996,7 +996,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 			// Even when cancellation genuinely failed, repair queue reachability so
 			// the worker can observe a later provider transition. Provider errors
 			// remain private and are never persisted or returned to the caller.
-			if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, nil); err != nil {
+			if _, err := s.ensureBatchImageCancelContinuation(ctx, queueFencer, job, nil); err != nil {
 				return nil, ErrBatchImageCancelFailed
 			}
 			if lockGuard.Err() != nil {
@@ -1016,7 +1016,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		if lockGuard.Err() != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
-		if _, err := s.ensureBatchImageCancelContinuation(ctx, ensurer, job, nil); err != nil {
+		if _, err := s.ensureBatchImageCancelContinuation(ctx, queueFencer, job, nil); err != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
 		if lockGuard.Err() != nil {
@@ -1046,7 +1046,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 	return BatchImageJobToPublic(updated), nil
 }
 
-func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Context, batchID string) (BatchImageQueueEnsurer, BatchImageJobLock, time.Duration, error) {
+func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Context, batchID string) (BatchImageJobLockQueueFencer, BatchImageJobLock, time.Duration, error) {
 	if s == nil || s.Queue == nil {
 		return nil, nil, 0, ErrBatchImageCancelFailed
 	}
@@ -1062,7 +1062,12 @@ func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Contex
 	if err != nil || !acquired || lock == nil {
 		return nil, nil, 0, ErrBatchImageCancelFailed
 	}
-	return ensurer, lock, lockTTL, nil
+	queueFencer, ok := lock.(BatchImageJobLockQueueFencer)
+	if !ok || queueFencer == nil {
+		_ = lock.Release(context.WithoutCancel(ctx))
+		return nil, nil, 0, ErrBatchImageCancelFailed
+	}
+	return queueFencer, lock, lockTTL, nil
 }
 
 type batchImageCancelLockGuard struct {
@@ -1168,11 +1173,11 @@ func (g *batchImageCancelLockGuard) Stop() {
 
 func (s *BatchImagePublicService) ensureBatchImageCancelContinuation(
 	ctx context.Context,
-	ensurer BatchImageQueueEnsurer,
+	queueFencer BatchImageJobLockQueueFencer,
 	job *BatchImageJob,
 	providerStatus *BatchProviderStatus,
 ) (bool, error) {
-	if s == nil || s.Repo == nil || ensurer == nil || job == nil {
+	if s == nil || s.Repo == nil || queueFencer == nil || job == nil {
 		return false, ErrBatchImageCancelFailed
 	}
 	if providerStatus != nil {
@@ -1184,7 +1189,7 @@ func (s *BatchImagePublicService) ensureBatchImageCancelContinuation(
 			job.ProviderOutputRef = &outputRef
 		}
 	}
-	restored, err := ensurer.EnsureEnqueued(ctx, job.BatchID)
+	restored, err := queueFencer.EnsureEnqueued(ctx)
 	if err != nil {
 		return false, ErrBatchImageCancelFailed
 	}

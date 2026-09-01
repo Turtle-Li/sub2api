@@ -172,9 +172,10 @@ func (w *BatchImageWorker) RunOnce(ctx context.Context) error {
 		// A provider operation can outlive the initial lease. Processing without
 		// refresh support would let a second worker or Cancel acquire the same job
 		// while this worker is still producing side effects.
-		if requeueErr := w.queue.RequeueAfter(ctx, reserved.BatchID, w.opts.LockConflictDelay); requeueErr != nil {
-			return requeueErr
-		}
+		return ErrBatchImageLockNotAcquired
+	}
+	queueFencer, ok := lock.(BatchImageJobLockQueueFencer)
+	if !ok || queueFencer == nil {
 		return ErrBatchImageLockNotAcquired
 	}
 
@@ -215,16 +216,16 @@ func (w *BatchImageWorker) RunOnce(ctx context.Context) error {
 			zap.String("batch_id", reserved.BatchID),
 			zap.Error(err),
 		)
-		return w.queue.RequeueAfter(ctx, reserved.BatchID, w.opts.ErrorRetryDelay)
+		return queueFencer.RequeueAfter(ctx, w.opts.ErrorRetryDelay)
 	}
 	if result.Terminal {
-		return w.queue.Ack(ctx, reserved.BatchID)
+		return queueFencer.Ack(ctx)
 	}
 	delay := result.RequeueAfter
 	if delay <= 0 {
 		delay = w.opts.DefaultRequeueDelay
 	}
-	return w.queue.RequeueAfter(ctx, reserved.BatchID, delay)
+	return queueFencer.RequeueAfter(ctx, delay)
 }
 
 // BatchImageJobLockRefresher 是可选的锁续期能力；由具体锁实现按需提供。

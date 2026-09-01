@@ -116,12 +116,16 @@ func (s *BatchImageQueueRecoveryService) ensureEligibleEnqueued(ctx context.Cont
 			err = releaseErr
 		}
 	}()
+	queueFencer, ok := lock.(BatchImageJobLockQueueFencer)
+	if !ok || queueFencer == nil {
+		return false, ErrBatchImageLockNotAcquired
+	}
 
 	eligible, err := s.Repo.IsProviderSubmittedBatchImageJobQueueRecoveryEligible(ctx, batchID)
 	if err != nil || !eligible {
 		return false, err
 	}
-	return s.Queue.EnsureEnqueued(ctx, batchID)
+	return queueFencer.EnsureEnqueued(ctx)
 }
 
 // recoveryWindow fixes an upper bound for each complete pass. Without that

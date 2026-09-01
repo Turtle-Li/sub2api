@@ -24,6 +24,16 @@ type BatchImageJobLock interface {
 	Release(ctx context.Context) error
 }
 
+// BatchImageJobLockQueueFencer performs queue mutations atomically with a
+// check that the caller still owns the per-job lock. A refresh followed by an
+// unfenced mutation is insufficient because the process can pause after the
+// refresh while another owner acquires an expired lease.
+type BatchImageJobLockQueueFencer interface {
+	Ack(ctx context.Context) error
+	RequeueAfter(ctx context.Context, delay time.Duration) error
+	EnsureEnqueued(ctx context.Context) (bool, error)
+}
+
 type BatchImageQueue interface {
 	Enqueue(ctx context.Context, batchID string) error
 	Reserve(ctx context.Context, blockTimeout time.Duration) (ReservedBatchImageJob, error)

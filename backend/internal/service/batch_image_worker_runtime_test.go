@@ -142,14 +142,24 @@ func (q *parallelBatchImageRuntimeQueue) RecoverStaleActive(context.Context, tim
 	return 0, nil
 }
 
-func (q *parallelBatchImageRuntimeQueue) TryAcquireJobLock(context.Context, string, time.Duration) (BatchImageJobLock, bool, error) {
-	return noopBatchImageRuntimeLock{}, true, nil
+func (q *parallelBatchImageRuntimeQueue) TryAcquireJobLock(_ context.Context, batchID string, _ time.Duration) (BatchImageJobLock, bool, error) {
+	return noopBatchImageRuntimeLock{queue: q, batchID: batchID}, true, nil
 }
 
-type noopBatchImageRuntimeLock struct{}
+type noopBatchImageRuntimeLock struct {
+	queue   *parallelBatchImageRuntimeQueue
+	batchID string
+}
 
 func (noopBatchImageRuntimeLock) Release(context.Context) error                { return nil }
 func (noopBatchImageRuntimeLock) Refresh(context.Context, time.Duration) error { return nil }
+func (l noopBatchImageRuntimeLock) Ack(ctx context.Context) error {
+	return l.queue.Ack(ctx, l.batchID)
+}
+func (l noopBatchImageRuntimeLock) RequeueAfter(ctx context.Context, delay time.Duration) error {
+	return l.queue.RequeueAfter(ctx, l.batchID, delay)
+}
+func (noopBatchImageRuntimeLock) EnsureEnqueued(context.Context) (bool, error) { return false, nil }
 
 type blockingBatchImageRuntimeProcessor struct {
 	release chan struct{}

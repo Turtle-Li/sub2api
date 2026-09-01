@@ -97,7 +97,8 @@ type recordingBatchImageQueueEnsurer struct {
 }
 
 type recordingBatchImageQueueRecoveryLock struct {
-	queue *recordingBatchImageQueueEnsurer
+	queue   *recordingBatchImageQueueEnsurer
+	batchID string
 }
 
 func (l *recordingBatchImageQueueRecoveryLock) Release(context.Context) error {
@@ -105,12 +106,22 @@ func (l *recordingBatchImageQueueRecoveryLock) Release(context.Context) error {
 	return nil
 }
 
+func (l *recordingBatchImageQueueRecoveryLock) Ack(context.Context) error { return nil }
+
+func (l *recordingBatchImageQueueRecoveryLock) RequeueAfter(context.Context, time.Duration) error {
+	return nil
+}
+
+func (l *recordingBatchImageQueueRecoveryLock) EnsureEnqueued(ctx context.Context) (bool, error) {
+	return l.queue.EnsureEnqueued(ctx, l.batchID)
+}
+
 func (q *recordingBatchImageQueueEnsurer) TryAcquireJobLock(_ context.Context, batchID string, _ time.Duration) (BatchImageJobLock, bool, error) {
 	q.lockCalls = append(q.lockCalls, batchID)
 	if q.lockDenied[batchID] {
 		return nil, false, nil
 	}
-	return &recordingBatchImageQueueRecoveryLock{queue: q}, true, nil
+	return &recordingBatchImageQueueRecoveryLock{queue: q, batchID: batchID}, true, nil
 }
 
 func (q *recordingBatchImageQueueEnsurer) EnsureEnqueued(_ context.Context, batchID string) (bool, error) {

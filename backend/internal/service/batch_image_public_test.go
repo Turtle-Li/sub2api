@@ -1608,12 +1608,12 @@ func (q *publicBatchImageQueue) RecoverStaleActive(context.Context, time.Duratio
 	return 0, nil
 }
 
-func (q *publicBatchImageQueue) TryAcquireJobLock(context.Context, string, time.Duration) (BatchImageJobLock, bool, error) {
+func (q *publicBatchImageQueue) TryAcquireJobLock(_ context.Context, batchID string, _ time.Duration) (BatchImageJobLock, bool, error) {
 	q.lockAttempts++
 	if q.lockErr != nil || !q.lockAcquired {
 		return nil, false, q.lockErr
 	}
-	return &publicBatchImageJobLock{queue: q}, true, nil
+	return &publicBatchImageJobLock{queue: q, batchID: batchID}, true, nil
 }
 
 func (q *publicBatchImageQueue) EnsureEnqueued(_ context.Context, batchID string) (bool, error) {
@@ -1631,7 +1631,8 @@ func (q *publicBatchImageQueue) EnsureEnqueued(_ context.Context, batchID string
 }
 
 type publicBatchImageJobLock struct {
-	queue *publicBatchImageQueue
+	queue   *publicBatchImageQueue
+	batchID string
 }
 
 func (l *publicBatchImageJobLock) Release(context.Context) error {
@@ -1652,6 +1653,18 @@ func (l *publicBatchImageJobLock) Refresh(context.Context, time.Duration) error 
 		}
 	}
 	return l.queue.lockRefreshErr
+}
+
+func (l *publicBatchImageJobLock) Ack(ctx context.Context) error {
+	return l.queue.Ack(ctx, l.batchID)
+}
+
+func (l *publicBatchImageJobLock) RequeueAfter(ctx context.Context, delay time.Duration) error {
+	return l.queue.RequeueAfter(ctx, l.batchID, delay)
+}
+
+func (l *publicBatchImageJobLock) EnsureEnqueued(ctx context.Context) (bool, error) {
+	return l.queue.EnsureEnqueued(ctx, l.batchID)
 }
 
 type publicBatchImageProvider struct {

@@ -58,6 +58,58 @@ end
 return 0
 `)
 
+var batchImageFencedAckScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call("ZREM", KEYS[2], ARGV[2])
+redis.call("ZREM", KEYS[3], ARGV[2])
+redis.call("DEL", KEYS[4])
+return 1
+`)
+
+var batchImageFencedRequeueScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call("ZREM", KEYS[2], ARGV[2])
+redis.call("ZREM", KEYS[3], ARGV[2])
+if tonumber(ARGV[3]) <= 0 then
+  redis.call("LPUSH", KEYS[4], ARGV[2])
+else
+  redis.call("ZADD", KEYS[3], ARGV[3], ARGV[2])
+end
+return 1
+`)
+
+var batchImageFencedEnsureEnqueuedScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+  return -1
+end
+
+if redis.call("ZSCORE", KEYS[3], ARGV[2]) or redis.call("ZSCORE", KEYS[4], ARGV[2]) then
+  redis.call("LREM", KEYS[2], 0, ARGV[2])
+  redis.call("SET", KEYS[5], ARGV[2], "PX", ARGV[3])
+  return 0
+end
+
+local first = redis.call("LPOS", KEYS[2], ARGV[2])
+if first then
+  local second = redis.call("LPOS", KEYS[2], ARGV[2], "RANK", 2)
+  if not second then
+    redis.call("SET", KEYS[5], ARGV[2], "PX", ARGV[3])
+    return 0
+  end
+  redis.call("LREM", KEYS[2], 0, ARGV[2])
+end
+redis.call("LPUSH", KEYS[2], ARGV[2])
+redis.call("SET", KEYS[5], ARGV[2], "PX", ARGV[3])
+if not first then
+  return 1
+end
+return 0
+`)
+
 // batchImageReserveScript 原子地从 ready 弹出并写入 active zset。
 // BRPop + ZAdd 两步方案在两步之间进程崩溃时 job 会脱离所有队列结构，
 // 且 inflight 去重键（默认 7 天）会挡住所有重新入队。
@@ -353,7 +405,7 @@ func (q *batchImageQueue) TryAcquireJobLock(ctx context.Context, batchID string,
 	if !ok {
 		return nil, false, nil
 	}
-	return &batchImageRedisJobLock{rdb: q.rdb, key: key, token: token}, true, nil
+	return &batchImageRedisJobLock{rdb: q.rdb, queue: q, key: key, token: token, batchID: batchID}, true, nil
 }
 
 func (q *batchImageQueue) inflightKey(batchID string) string {
@@ -365,9 +417,11 @@ func (q *batchImageQueue) lockKey(batchID string) string {
 }
 
 type batchImageRedisJobLock struct {
-	rdb   *redis.Client
-	key   string
-	token string
+	rdb     *redis.Client
+	queue   *batchImageQueue
+	key     string
+	token   string
+	batchID string
 }
 
 func (l *batchImageRedisJobLock) Release(ctx context.Context) error {
@@ -395,7 +449,67 @@ func (l *batchImageRedisJobLock) Refresh(ctx context.Context, ttl time.Duration)
 	return nil
 }
 
+func (l *batchImageRedisJobLock) Ack(ctx context.Context) error {
+	if !l.canFenceQueueMutation() {
+		return service.ErrBatchImageLockNotAcquired
+	}
+	applied, err := batchImageFencedAckScript.Run(ctx, l.rdb,
+		[]string{l.key, l.queue.activeKey, l.queue.delayedKey, l.queue.inflightKey(l.batchID)},
+		l.token, l.batchID,
+	).Int()
+	if err != nil {
+		return err
+	}
+	if applied != 1 {
+		return service.ErrBatchImageLockNotAcquired
+	}
+	return nil
+}
+
+func (l *batchImageRedisJobLock) RequeueAfter(ctx context.Context, delay time.Duration) error {
+	if !l.canFenceQueueMutation() {
+		return service.ErrBatchImageLockNotAcquired
+	}
+	dueAtMillis := int64(0)
+	if delay > 0 {
+		dueAtMillis = time.Now().Add(delay).UnixMilli()
+	}
+	applied, err := batchImageFencedRequeueScript.Run(ctx, l.rdb,
+		[]string{l.key, l.queue.activeKey, l.queue.delayedKey, l.queue.readyKey},
+		l.token, l.batchID, dueAtMillis,
+	).Int()
+	if err != nil {
+		return err
+	}
+	if applied != 1 {
+		return service.ErrBatchImageLockNotAcquired
+	}
+	return nil
+}
+
+func (l *batchImageRedisJobLock) EnsureEnqueued(ctx context.Context) (bool, error) {
+	if !l.canFenceQueueMutation() {
+		return false, service.ErrBatchImageLockNotAcquired
+	}
+	applied, err := batchImageFencedEnsureEnqueuedScript.Run(ctx, l.rdb,
+		[]string{l.key, l.queue.readyKey, l.queue.delayedKey, l.queue.activeKey, l.queue.inflightKey(l.batchID)},
+		l.token, l.batchID, l.queue.inflightTTL.Milliseconds(),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	if applied < 0 {
+		return false, service.ErrBatchImageLockNotAcquired
+	}
+	return applied == 1, nil
+}
+
+func (l *batchImageRedisJobLock) canFenceQueueMutation() bool {
+	return l != nil && l.rdb != nil && l.queue != nil && l.key != "" && l.token != "" && service.IsValidBatchImageID(l.batchID)
+}
+
 var _ service.BatchImageJobLockRefresher = (*batchImageRedisJobLock)(nil)
+var _ service.BatchImageJobLockQueueFencer = (*batchImageRedisJobLock)(nil)
 
 func newBatchImageLockToken() (string, error) {
 	var b [16]byte
