@@ -115,6 +115,10 @@ run_monitor() {
 run_monitor >/dev/null
 grep -Fq -- 'flock:-n 8' "$EVENTS" || fail 'maintenance lock was not acquired'
 grep -Fq -- 'docker:stop sub2api-blue' "$EVENTS" || fail 'drained container was not stopped'
+grep -Fq -- 'wget -Y off -qO- http://127.0.0.1:2019/config/' "$EVENTS" \
+  || fail 'active Caddy verification did not disable wget proxy inheritance'
+grep -Fq -- 'curl --noproxy "*" -fsS http://127.0.0.1:2019/config/' "$EVENTS" \
+  || fail 'active Caddy verification curl fallback did not bypass ambient proxies'
 assert_before 'flock:-n 8' 'docker:stop sub2api-blue'
 
 : >"$EVENTS"

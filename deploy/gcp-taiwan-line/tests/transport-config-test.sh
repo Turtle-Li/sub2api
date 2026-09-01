@@ -220,6 +220,9 @@ done
 [[ "$(grep -Fc -- "--noproxy '*'" \
     "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh")" -eq 2 ]] \
     || fail 'customer-Host origin probes do not consistently bypass ambient proxies'
+grep -Fq -- 'wget -Y off -qO- http://127.0.0.1:2019/config/' \
+    "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh" \
+    || fail 'customer-Host Caddy admin probe can inherit an ambient proxy'
 for host_control in sub2api-server-release.sh sub2api-runtime-guard.sh; do
     grep -Fq -- "--noproxy '*'" "${line_dir}/../${host_control}" \
         || fail "${host_control} public health can escape its pinned direct path"
@@ -228,6 +231,7 @@ for container_control in \
     azure-caddy-listeners.sh \
     verify-transport.sh \
     ../sub2api-blue-green-release.sh \
+    ../sub2api-drain-monitor.sh \
     ../sub2api-server-release.sh \
     ../sub2api-runtime-guard.sh; do
     grep -Fq -- 'wget -Y off' "${line_dir}/${container_control}" \
@@ -292,6 +296,10 @@ grep -Fq 'ORIGIN_BACKUP_PATH=%s' "${line_dir}/install-gcp-haproxy.sh" \
     || fail 'HAProxy updates do not preserve an immutable origin recovery anchor'
 grep -Fq '|| ! run_post_update_verify; then' "${line_dir}/install-gcp-haproxy.sh" \
     || fail 'HAProxy runtime verification is outside the update rollback transaction'
+# shellcheck disable=SC2016 # The assertion intentionally names the shell expression literally.
+grep -Fq 'post_update_verify="${HAPROXY_POST_UPDATE_VERIFY:-${script_dir}/verify-transport.sh}"' \
+    "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'manual HAProxy updates do not default to the sibling runtime verifier'
 # shellcheck disable=SC2016 # The assertion intentionally names the shell expression literally.
 grep -Fq 'HAPROXY_POST_UPDATE_VERIFY="${INSTALL_ROOT}/verify-transport.sh"' \
     "${line_dir}/gcp-update-bootstrap.sh" \

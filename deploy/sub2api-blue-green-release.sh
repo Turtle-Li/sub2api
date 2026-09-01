@@ -101,24 +101,43 @@ die() {
   exit 1
 }
 
+remount_caddy_startup_read_only() {
+  local container_pid="${CADDY_RW_PID:-}"
+  [ -n "$container_pid" ] || return 0
+  if nsenter -t "$container_pid" -m -- \
+    mount -n -o remount,ro,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" \
+    >/dev/null 2>&1; then
+    CADDY_RW_PID=""
+    return 0
+  fi
+  return 1
+}
+
 cleanup() {
-  local exit_status=$? file restore_status=0 recovery_attempted=false
+  local exit_status=$? file restore_status=0 recovery_status=0 recovery_attempted=false
   trap - EXIT
   set +e
-  if [ -n "$CADDY_RW_PID" ]; then
-	nsenter -t "$CADDY_RW_PID" -m -- \
-	  mount -n -o remount,ro,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" >/dev/null 2>&1 || true
-	CADDY_RW_PID=""
+  if ! remount_caddy_startup_read_only; then
+    log "ERROR: could not restore the Caddy startup bind read-only before recovery" >&2
+    restore_status=1
   fi
   if [ "$CADDY_SWITCH_OWNED" = true ] && [ -e "$CADDY_SWITCH_TRANSACTION_PATH" ]; then
     recovery_attempted=true
     restore_caddy_switch
-    restore_status=$?
-    if [ "$restore_status" -eq 0 ]; then
+    recovery_status=$?
+    if [ "$recovery_status" -eq 0 ]; then
       log "restored interrupted Caddy upstream switch before exit"
     else
+      restore_status="$recovery_status"
       log "ERROR: automatic Caddy restoration failed; transaction retained at $CADDY_SWITCH_TRANSACTION_PATH" >&2
     fi
+  fi
+  # restore_caddy_switch re-enters sync_caddy_startup_file. If that nested
+  # recovery fails at its final remount, CADDY_RW_PID remains set; make one
+  # final best-effort safety pass before the process exits.
+  if ! remount_caddy_startup_read_only; then
+    restore_status=1
+    log "ERROR: Caddy startup bind may still be read-write after recovery" >&2
   fi
   for file in "${TEMP_FILES[@]:-}"; do
     [ -n "$file" ] || continue

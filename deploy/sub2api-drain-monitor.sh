@@ -37,7 +37,7 @@ caddy_active_config_contains() {
   docker exec \
     -e CADDY_CHECK_TEXT="$text" \
     "$CADDY_CONTAINER" \
-    sh -c '(wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/) | grep -qF "$CADDY_CHECK_TEXT"'
+    sh -c '(wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/) | grep -qF "$CADDY_CHECK_TEXT"'
 }
 
 caddy_startup_config_contains() {

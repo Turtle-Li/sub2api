@@ -323,6 +323,11 @@ chmod +x "$FAKE_BIN/id"
 cat >"$FAKE_BIN/nsenter" <<'EOF'
 #!/usr/bin/env bash
 if [ "${FAKE_DOCKER_CADDY_FLOW:-false}" = true ] \
+  && [ "${FAKE_NSENTER_FAIL_RO_ALWAYS:-false}" = true ] \
+  && printf '%s\n' "$*" | grep -qF 'remount,ro,bind'; then
+  exit 72
+fi
+if [ "${FAKE_DOCKER_CADDY_FLOW:-false}" = true ] \
   && [ "${FAKE_NSENTER_FAIL_RO_ONCE:-false}" = true ] \
   && printf '%s\n' "$*" | grep -qF 'remount,ro,bind' \
   && [ ! -e "$FAKE_NSENTER_FAIL_MARKER" ]; then
@@ -755,6 +760,27 @@ assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
 assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
 [ ! -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
   || fail 'completed automatic Caddy restoration retained its transaction'
+
+# If every read-only remount fails, automatic recovery must retain authority
+# and the EXIT trap must report that its final safety remount also failed. A
+# later clean invocation recovers all three views and stops before a new switch.
+printf 'reverse_proxy sub2api:8080\n' >"$APP_DIR/Caddyfile"
+printf 'reverse_proxy sub2api:8080\n' >"$CADDY_STARTUP_FILE"
+printf 'reverse_proxy sub2api:8080\n' >"$CADDY_ACTIVE_FILE"
+: >"$CALLS"
+if FAKE_DOCKER_CADDY_FLOW=true FAKE_NSENTER_FAIL_RO_ALWAYS=true \
+  run_helper >"$OUTPUT" 2>&1; then
+  fail 'persistent Caddy startup remount failure was accepted'
+fi
+assert_contains "$OUTPUT" 'Caddy startup bind may still be read-write after recovery'
+[ -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
+  || fail 'failed final safety remount discarded Caddy recovery authority'
+if FAKE_DOCKER_CADDY_FLOW=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'clean retry after a persistent remount failure continued as a new release'
+fi
+assert_contains "$OUTPUT" 'recovered the interrupted Caddy upstream switch; rerun the release'
+[ ! -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
+  || fail 'clean retry did not clear the retained remount-failure transaction'
 
 # A process killed after publication cannot run EXIT cleanup. Simulate its
 # durable state and require the next release invocation to recover and stop,

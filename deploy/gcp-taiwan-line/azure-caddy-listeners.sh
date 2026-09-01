@@ -298,7 +298,7 @@ stage() {
     if [[ -e "$TRANSACTION_PATH" ]]; then
         load_state
         assert_staged_live_state \
-            || die "existing transaction is not a recoverable staged Caddy state"
+            || die "existing transaction live-state verification failed; run rollback before retrying stage"
         printf 'AZURE_CADDY_STAGED already=true config_sha=%s backup=%s\n' "$after_sha" "$backup_path"
         return
     fi

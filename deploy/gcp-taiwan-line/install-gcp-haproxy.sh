@@ -15,7 +15,7 @@ readonly CA_FILE="/etc/ssl/certs/ca-certificates.crt"
 phase="${1:-}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source_config="${HAPROXY_TEMPLATE:-${script_dir}/haproxy.cfg}"
-post_update_verify="${HAPROXY_POST_UPDATE_VERIFY:-}"
+post_update_verify="${HAPROXY_POST_UPDATE_VERIFY:-${script_dir}/verify-transport.sh}"
 
 die() {
     printf 'gcp-tw-haproxy: %s\n' "$*" >&2
