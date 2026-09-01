@@ -48,6 +48,11 @@ func TestProxyResponsesWebSocketFromClient_RewritesCapacityShedCodeForClient(t *
 		{
 			name: "capacity_shed_error_and_failed_are_rewritten",
 			upstreamEvents: [][]byte{
+				// The production runtime retries a pre-output capacity shed on a
+				// fresh connection before anything reaches the client. Exercise the
+				// client rewrite only after output has started, when replay/failover
+				// is no longer safe and the error must be forwarded.
+				[]byte(`{"type":"response.output_text.delta","delta":"partial"}`),
 				[]byte(`{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}`),
 				[]byte(`{"type":"response.failed","response":{"id":"resp_shed","status":"failed","error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`),
 			},
