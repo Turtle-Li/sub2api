@@ -24,6 +24,8 @@ jobs:
           /bin/bash deploy/tests/autodeploy-control-flow-test.sh
           /bin/bash deploy/tests/github-image-release-test.sh
           /bin/bash deploy/tests/server-release-container-guard-test.sh
+          /bin/bash -n deploy/sub2api-maintenance-lock.sh
+          /bin/bash deploy/tests/maintenance-lock-test.sh
           /bin/bash -n deploy/sub2api-drain-monitor.sh
           /bin/bash deploy/tests/drain-monitor-lock-test.sh
           /bin/bash -n deploy/sub2api-runtime-guard.sh
@@ -40,6 +42,7 @@ jobs:
           /bin/bash -n deploy/sub2api-cert-receiver.sh
           /bin/bash -n deploy/sub2api-cert-deploy-trigger.sh
           /bin/bash -n deploy/install-sub2api-cert-receiver.sh
+          /bin/bash deploy/tests/install-sub2api-cert-receiver-test.sh
           /bin/bash deploy/tests/certificate-receiver-test.sh
           /bin/bash -n deploy/install-sub2api-fixed-egress.sh
           /bin/bash deploy/tests/fixed-egress-test.sh

@@ -18,11 +18,22 @@ STOP_DRAIN_CONTAINER="${STOP_DRAIN_CONTAINER:-true}"
 LOG_FILE="${LOG_FILE:-/var/log/sub2api-drain-monitor.log}"
 LOCK_FILE="${LOCK_FILE:-/tmp/sub2api-drain-monitor-${DRAIN_CONTAINER}.lock}"
 PID_FILE="${PID_FILE:-}"
-MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
 
 log() {
   printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG_FILE"
 }
+
+DRAIN_MONITOR_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAINTENANCE_LOCK_HELPER="${DRAIN_MONITOR_SCRIPT_DIR}/sub2api-maintenance-lock.sh"
+[ -r "$MAINTENANCE_LOCK_HELPER" ] && [ ! -L "$MAINTENANCE_LOCK_HELPER" ] \
+  || { log "maintenance lock helper is missing or unsafe: ${MAINTENANCE_LOCK_HELPER}"; exit 1; }
+# shellcheck disable=SC1090,SC1091 # Installed alongside this root-owned executable.
+. "$MAINTENANCE_LOCK_HELPER"
+MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
+if ! sub2api_maintenance_lock_validate_configured_path "$MAINTENANCE_LOCK_FILE"; then
+  log "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+  exit 1
+fi
 
 container_running() {
   docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null | grep -qx true
@@ -122,15 +133,10 @@ if ! flock -n 9; then
   exit 1
 fi
 
-case "$MAINTENANCE_LOCK_FILE" in
-  /*) ;;
-  *) log "maintenance lock path must be absolute: $MAINTENANCE_LOCK_FILE"; exit 1 ;;
-esac
-if [ ! -d "${MAINTENANCE_LOCK_FILE%/*}" ]; then
-  log "maintenance lock directory does not exist: ${MAINTENANCE_LOCK_FILE%/*}"
+if ! sub2api_maintenance_lock_open "$MAINTENANCE_LOCK_FILE"; then
+  log "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
   exit 1
 fi
-exec 8>>"$MAINTENANCE_LOCK_FILE"
 
 cleanup() {
   if [ -n "$PID_FILE" ] && [ -f "$PID_FILE" ] && [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$$" ]; then

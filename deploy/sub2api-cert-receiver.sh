@@ -29,7 +29,6 @@ MAX_BYTES="${SUB2API_CERT_MAX_BYTES:-262144}"
 MIN_VALIDITY_SECONDS="${SUB2API_CERT_MIN_VALIDITY_SECONDS:-604800}"
 MAX_REQUESTED_VALIDITY_SECONDS="${SUB2API_CERT_MAX_REQUESTED_VALIDITY_SECONDS:-31536000}"
 LOCK_FILE="${SUB2API_CERT_LOCK_FILE:-/run/lock/sub2api-cert-receiver.lock}"
-MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
 
 GENERATIONS_DIR="${CERT_ROOT}/generations"
 CURRENT_LINK="${CERT_ROOT}/current"
@@ -52,6 +51,14 @@ die() {
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required"
 }
+
+CERT_RECEIVER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAINTENANCE_LOCK_HELPER="${CERT_RECEIVER_SCRIPT_DIR}/sub2api-maintenance-lock.sh"
+[ -r "$MAINTENANCE_LOCK_HELPER" ] && [ ! -L "$MAINTENANCE_LOCK_HELPER" ] \
+  || die "maintenance lock helper is missing or unsafe: ${MAINTENANCE_LOCK_HELPER}"
+# shellcheck disable=SC1090,SC1091 # Installed alongside this root-owned executable.
+. "$MAINTENANCE_LOCK_HELPER"
+MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
 
 validate_generation() {
   [[ "$1" =~ ^[0-9a-f]{20}$ ]] || die "invalid certificate generation"
@@ -570,29 +577,37 @@ discard_generation() {
 }
 
 main() {
-  local action="${1:-}" test_tmp_root lock_parent maintenance_lock_parent
+  local action="${1:-}" test_tmp_root lock_parent
   validate_config
   if [ "${SUB2API_CERT_RECEIVER_ALLOW_NON_ROOT_FOR_TESTS:-0}" = 1 ]; then
     test_tmp_root="${TMPDIR:-/tmp}"
     test_tmp_root="${test_tmp_root%/}"
     [ -n "$test_tmp_root" ] && [ "$test_tmp_root" != / ] \
       || die "test mode requires a bounded temporary directory"
+    [ -d "$test_tmp_root" ] \
+      || die "test mode temporary directory does not exist: ${test_tmp_root}"
+    test_tmp_root="$(cd "$test_tmp_root" && pwd -P)"
     [ "$CONFIG_FILE" != /etc/sub2api-cert-receiver.env ] \
       || die "test mode requires an explicit non-production config file"
     case "$CONFIG_FILE" in "$test_tmp_root"/*|/tmp/*) ;; *) die "test config must be inside the temporary directory" ;; esac
     case "$CERT_ROOT" in "$test_tmp_root"/*|/tmp/*) ;; *) die "test certificate root must be inside the temporary directory" ;; esac
+    # shellcheck disable=SC2034 # Read by the sourced maintenance-lock helper.
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1
   else
     [ "$(id -u)" -eq 0 ] || die "certificate receiver must run as root"
   fi
-  for command_name in awk basename curl docker find flock grep head install ln mv openssl readlink sed stat tar tr wc; do
+  if ! sub2api_maintenance_lock_validate_configured_path "$MAINTENANCE_LOCK_FILE"; then
+    die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+  fi
+  for command_name in awk basename curl docker find flock grep head id install ln mkdir mv openssl readlink sed stat tar tr wc; do
     require_cmd "$command_name"
   done
   install -d -m 700 "$CERT_ROOT" "$GENERATIONS_DIR"
   lock_parent="$(dirname "$LOCK_FILE")"
-  maintenance_lock_parent="$(dirname "$MAINTENANCE_LOCK_FILE")"
   [ -d "$lock_parent" ] || die "certificate lock directory does not exist: $lock_parent"
-  [ -d "$maintenance_lock_parent" ] || die "maintenance lock directory does not exist: $maintenance_lock_parent"
-  exec 8>"$MAINTENANCE_LOCK_FILE"
+  if ! sub2api_maintenance_lock_open "$MAINTENANCE_LOCK_FILE"; then
+    die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+  fi
   flock -w 120 -x 8 || die "timed out waiting for the maintenance lock"
   exec 9>"$LOCK_FILE"
   flock -w 30 -x 9 || die "timed out waiting for the certificate lock"

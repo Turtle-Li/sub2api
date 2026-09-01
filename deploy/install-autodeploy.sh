@@ -7,12 +7,112 @@
 
 set -Eeuo pipefail
 
-SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The fenced re-exec runs this installer from a no-follow descriptor (FD 6),
+# so its normal dirname(BASH_SOURCE) calculation would point at /dev. Accept
+# the supplied source root only after one trusted Python gate validates the
+# private source snapshot on FD 6, unlinked nonce on FD 9, and absence of the
+# supervisor-only lock descriptors. An ordinary sudo invocation cannot forge
+# those root-owned descriptors.
+INSTALLER_FENCE_READY="${SUB2API_AUTODEPLOY_MAINTENANCE_FENCE_READY:-0}"
+INSTALLER_FENCE_VERIFIED=false
+VERIFIED_INSTALLER_FENCE_LEGACY=""
+case "$INSTALLER_FENCE_READY" in
+  0|1) ;;
+  *) printf 'ERROR: invalid inherited maintenance-lock fence marker\n' >&2; exit 1 ;;
+esac
+if [ "$INSTALLER_FENCE_READY" = 1 ]; then
+  INSTALLER_FENCE_TOKEN="${SUB2API_AUTODEPLOY_MAINTENANCE_FENCE_TOKEN:-}"
+  INSTALLER_FENCE_SOURCE_ROOT="${SUB2API_AUTODEPLOY_EXEC_SOURCE_ROOT:-}"
+  INSTALLER_FENCE_SUPERVISED="${SUB2API_AUTODEPLOY_MAINTENANCE_FENCE_SUPERVISED:-0}"
+  INSTALLER_FENCE_LEGACY="${SUB2API_AUTODEPLOY_MAINTENANCE_FENCE_LEGACY:-}"
+  [ -n "$INSTALLER_FENCE_TOKEN" ] && [ -n "$INSTALLER_FENCE_SOURCE_ROOT" ] \
+    || { printf 'ERROR: inherited maintenance-lock fence is incomplete\n' >&2; exit 1; }
+  [ "$INSTALLER_FENCE_SUPERVISED" = 1 ] \
+    || { printf 'ERROR: inherited maintenance-lock fence is not supervised\n' >&2; exit 1; }
+  case "${BASH_SOURCE[0]}" in
+    /dev/fd/6) ;;
+    *) printf 'ERROR: inherited maintenance-lock fence did not pin the installer source\n' >&2; exit 1 ;;
+  esac
+  python3 - "$INSTALLER_FENCE_TOKEN" <<'PY' || exit 1
+import os
+import stat
+import sys
+
+token = sys.argv[1]
+test_mode = os.environ.get("SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS", "0")
+if test_mode not in {"0", "1"}:
+    raise SystemExit("invalid maintenance-lock test switch")
+expected_uid = os.geteuid()
+expected_gid = os.getegid()
+if test_mode != "1" and expected_uid != 0:
+    raise SystemExit("maintenance-lock fenced installer requires root")
+try:
+    descriptor = os.fstat(9)
+    os.lseek(9, 0, os.SEEK_SET)
+    contents = os.read(9, 256).decode("ascii")
+except OSError as exc:
+    raise SystemExit(f"cannot inspect inherited maintenance-lock nonce: {exc.strerror}")
+if (
+    not stat.S_ISREG(descriptor.st_mode)
+    or descriptor.st_uid != expected_uid
+    or descriptor.st_gid != expected_gid
+    or stat.S_IMODE(descriptor.st_mode) != 0o600
+    or descriptor.st_nlink != 0
+    or contents != token
+):
+    raise SystemExit("inherited maintenance-lock nonce is unsafe")
+try:
+    source = os.fstat(6)
+except OSError as exc:
+    raise SystemExit(f"cannot inspect inherited installer source snapshot: {exc.strerror}")
+if (
+    not stat.S_ISREG(source.st_mode)
+    or source.st_uid != expected_uid
+    or source.st_gid != expected_gid
+    or stat.S_IMODE(source.st_mode) != 0o600
+    or source.st_nlink != 0
+):
+    raise SystemExit("inherited installer source snapshot is unsafe")
+for lock_descriptor in (7, 8):
+    try:
+        os.fstat(lock_descriptor)
+    except OSError:
+        continue
+    raise SystemExit(f"supervised child inherited maintenance lock FD {lock_descriptor}")
+PY
+  SOURCE_ROOT="$INSTALLER_FENCE_SOURCE_ROOT"
+  VERIFIED_INSTALLER_FENCE_LEGACY="$INSTALLER_FENCE_LEGACY"
+  # Bash continues to read this script from FD 6, so that unlinked snapshot
+  # remains open until the interpreter is done. FD 9 and every fence-related
+  # environment value are no longer needed after the one trusted check above;
+  # close/unset them before any later external command can inherit a usable
+  # re-entry capability.
+  exec 9<&-
+  unset SUB2API_AUTODEPLOY_MAINTENANCE_FENCE_READY
+  unset SUB2API_AUTODEPLOY_MAINTENANCE_FENCE_SUPERVISED
+  unset SUB2API_AUTODEPLOY_MAINTENANCE_FENCE_TOKEN
+  unset SUB2API_AUTODEPLOY_MAINTENANCE_FENCE_LEGACY
+  unset SUB2API_AUTODEPLOY_EXEC_SOURCE_ROOT
+  unset INSTALLER_FENCE_READY INSTALLER_FENCE_TOKEN INSTALLER_FENCE_SOURCE_ROOT \
+    INSTALLER_FENCE_SUPERVISED INSTALLER_FENCE_LEGACY
+  INSTALLER_FENCE_VERIFIED=true
+else
+  SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+fi
+ORIGINAL_ARGS=("$@")
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 SCRIPT_DIR="${APP_DIR}/scripts"
 CONFIG_FILE="${SUB2API_AUTODEPLOY_CONFIG_FILE:-/etc/sub2api-autodeploy.env}"
 UNIT_DIR="${SUB2API_AUTODEPLOY_UNIT_DIR:-/etc/systemd/system}"
 RUNTIME_GUARD_EXECUTABLE="${SUB2API_RUNTIME_GUARD_EXECUTABLE:-/usr/local/libexec/sub2api-runtime-guard.sh}"
+MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/sub2api-maintenance/sub2api-maintenance.lock}"
+MAINTENANCE_LOCK_DIR=""
+MAINTENANCE_LOCK_HELPER="${SOURCE_ROOT}/deploy/sub2api-maintenance-lock.sh"
+INSTALLER_SOURCE_FILE="${SOURCE_ROOT}/deploy/install-autodeploy.sh"
+MAINTENANCE_LOCK_HELPER_SOURCE_UID=""
+STAGED_MAINTENANCE_LOCK_HELPER=""
+STAGED_MAINTENANCE_LOCK_HELPER_DIR=""
+LEGACY_MAINTENANCE_LOCK_FILE="/run/lock/sub2api-maintenance.lock"
 
 PRODUCTION_BRANCH="${SUB2API_AUTODEPLOY_PRODUCTION_BRANCH:-}"
 PRODUCTION_REPO_URL="${SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL:-}"
@@ -164,8 +264,382 @@ die() {
   exit 1
 }
 
+# Production recognizes only the historical /run/lock pathname.  A separate
+# fixture-only spelling lets the shell tests model its sticky-parent fence
+# without creating /run on the developer machine.
+if [ -n "${SUB2API_MAINTENANCE_LEGACY_LOCK_FILE_FOR_TESTS:-}" ]; then
+  [ "${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" = 1 ] \
+    || die "SUB2API_MAINTENANCE_LEGACY_LOCK_FILE_FOR_TESTS is only available to maintenance-lock tests"
+  LEGACY_MAINTENANCE_LOCK_FILE="$SUB2API_MAINTENANCE_LEGACY_LOCK_FILE_FOR_TESTS"
+fi
+
+# This literal production gate runs before the normal-checkout helper staging
+# directory is created. The sourced helper repeats the complete path grammar
+# and ownership preflight below, while this early check guarantees a hostile
+# ambient override cannot cause even a private staging or lock-parent write.
+case "${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" in
+  1) ;;
+  0)
+    [ "$MAINTENANCE_LOCK_FILE" = "/run/sub2api-maintenance/sub2api-maintenance.lock" ] \
+      || die "maintenance lock path must be the canonical /run/sub2api-maintenance/sub2api-maintenance.lock: ${MAINTENANCE_LOCK_FILE}"
+    ;;
+  *) die "SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS must be 0 or 1" ;;
+esac
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required"
+}
+
+validate_source_helper_file() {
+  local label="$1" helper_path="$2" installer_path="$3"
+  local helper_owner installer_owner
+
+  validate_source_tree_file "executed installer source" "$installer_path"
+  installer_owner="$(source_tree_owner "$installer_path")" \
+    || die "cannot read owner for installer source: $installer_path"
+  validate_source_tree_file "$label" "$helper_path"
+  helper_owner="$(source_tree_owner "$helper_path")" \
+    || die "cannot read owner for $label: $helper_path"
+  [ "$helper_owner" = "$installer_owner" ] \
+    || die "$label owner must match the executed installer source: $helper_path"
+  validate_source_tree_ancestors "executed installer source" "$installer_path" "$installer_owner"
+  validate_source_tree_ancestors "$label" "$helper_path" "$installer_owner"
+  MAINTENANCE_LOCK_HELPER_SOURCE_UID="$helper_owner"
+}
+
+source_tree_owner() {
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1"
+}
+
+source_tree_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+staged_helper_digest() {
+  local digest
+
+  # This function is called only after the helper is in the private staging
+  # directory; never hash the mutable checkout pathname here.
+  digest="$(sha256sum "$1")" || return 1
+  digest="${digest%%[[:space:]]*}"
+  [ -n "$digest" ] || return 1
+  printf '%s\n' "$digest"
+}
+
+validate_source_tree_file() {
+  local label="$1" path="$2" mode permissions
+
+  [ -f "$path" ] && [ ! -L "$path" ] \
+    || die "$label is not a regular non-symlink file: $path"
+  source_tree_owner "$path" >/dev/null \
+    || die "cannot read owner for $label: $path"
+  mode="$(source_tree_mode "$path")" \
+    || die "cannot read permissions for $label: $path"
+  case "$mode" in ''|*[!0-7]*) die "$label has unsupported permissions: $path" ;; esac
+  permissions=$((8#$mode))
+  [ $((permissions & 0022)) -eq 0 ] \
+    || die "$label must not be group/other writable: $path"
+}
+
+validate_source_tree_directory() {
+  local label="$1" directory="$2" expected_owner="$3"
+  local owner mode permissions
+
+  [ ! -L "$directory" ] || die "$label ancestor is a symlink: $directory"
+  [ -d "$directory" ] || die "$label ancestor is not a directory: $directory"
+  owner="$(source_tree_owner "$directory")" \
+    || die "cannot read owner for $label ancestor: $directory"
+  [ "$owner" = 0 ] || [ "$owner" = "$expected_owner" ] \
+    || die "$label ancestor has an unexpected owner: $directory"
+  mode="$(source_tree_mode "$directory")" \
+    || die "cannot read permissions for $label ancestor: $directory"
+  case "$mode" in ''|*[!0-7]*) die "$label ancestor has unsupported permissions: $directory" ;; esac
+  permissions=$((8#$mode))
+  [ $((permissions & 0022)) -eq 0 ] \
+    || die "$label ancestor is group/other writable: $directory"
+}
+
+validate_source_tree_ancestors() {
+  local label="$1" path="$2" expected_owner="$3"
+  local parent remaining current component
+
+  case "$path" in
+    /*) ;;
+    *) die "$label has a non-absolute path: $path" ;;
+  esac
+  parent="${path%/*}"
+  [ -n "$parent" ] || parent="/"
+  remaining="${parent#/}"
+  current="/"
+  validate_source_tree_directory "$label" "$current" "$expected_owner"
+  while [ -n "$remaining" ]; do
+    component="${remaining%%/*}"
+    if [ "$component" = "$remaining" ]; then
+      remaining=""
+    else
+      remaining="${remaining#*/}"
+    fi
+    [ -n "$component" ] || die "$label ancestor path is malformed: $path"
+    if [ "$current" = / ]; then
+      current="/${component}"
+    else
+      current="${current}/${component}"
+    fi
+    validate_source_tree_directory "$label" "$current" "$expected_owner"
+  done
+}
+
+validate_root_owned_directory_chain() {
+  local label="$1" path="$2"
+  local remaining current component owner mode permissions
+
+  case "$path" in
+    /*) ;;
+    *) die "$label has a non-absolute path: $path" ;;
+  esac
+  remaining="${path#/}"
+  current="/"
+  while :; do
+    [ ! -L "$current" ] || die "$label ancestor is a symlink: $current"
+    [ -d "$current" ] || die "$label ancestor is not a directory: $current"
+    owner="$(source_tree_owner "$current")" \
+      || die "cannot read owner for $label ancestor: $current"
+    [ "$owner" = 0 ] || die "$label ancestor must be root-owned: $current"
+    mode="$(source_tree_mode "$current")" \
+      || die "cannot read permissions for $label ancestor: $current"
+    case "$mode" in ''|*[!0-7]*) die "$label ancestor has unsupported permissions: $current" ;; esac
+    permissions=$((8#$mode))
+    [ $((permissions & 0022)) -eq 0 ] \
+      || die "$label ancestor is group/other writable: $current"
+    [ -n "$remaining" ] || break
+    component="${remaining%%/*}"
+    if [ "$component" = "$remaining" ]; then
+      remaining=""
+    else
+      remaining="${remaining#*/}"
+    fi
+    [ -n "$component" ] || die "$label ancestor path is malformed: $path"
+    if [ "$current" = / ]; then
+      current="/${component}"
+    else
+      current="${current}/${component}"
+    fi
+  done
+}
+
+cleanup_staged_maintenance_lock_helper() {
+  [ -z "$STAGED_MAINTENANCE_LOCK_HELPER" ] || rm -f -- "$STAGED_MAINTENANCE_LOCK_HELPER"
+  [ -z "$STAGED_MAINTENANCE_LOCK_HELPER_DIR" ] || rmdir -- "$STAGED_MAINTENANCE_LOCK_HELPER_DIR" 2>/dev/null || true
+  STAGED_MAINTENANCE_LOCK_HELPER=""
+  STAGED_MAINTENANCE_LOCK_HELPER_DIR=""
+}
+
+stage_maintenance_lock_helper_from_fd() {
+  local source_path="$1" stage_path="$2" expected_source_uid="$3" result
+
+  if ! result="$(python3 - "$source_path" "$stage_path" "$expected_source_uid" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+import time
+
+source_path, stage_path, expected_uid_text = sys.argv[1:]
+
+
+def fail(message):
+    print(f"maintenance lock helper staging failed: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+try:
+    expected_uid = int(expected_uid_text, 10)
+except ValueError:
+    fail("maintenance lock helper has an invalid expected owner")
+
+no_follow = getattr(os, "O_NOFOLLOW", None)
+if no_follow is None:
+    fail("Python O_NOFOLLOW support is required")
+
+source_fd = -1
+stage_fd = -1
+try:
+    try:
+        source_fd = os.open(source_path, os.O_RDONLY | no_follow)
+    except OSError as exc:
+        fail(f"could not open source without following symlinks: {exc.strerror}")
+
+    source_before = os.fstat(source_fd)
+    if not stat.S_ISREG(source_before.st_mode):
+        fail("source descriptor is not a regular file")
+    if source_before.st_uid != expected_uid:
+        fail("source descriptor owner changed while staging")
+    if stat.S_IMODE(source_before.st_mode) & 0o022:
+        fail("source descriptor is group/other writable")
+    source_size = source_before.st_size
+
+    barrier = os.environ.get("SUB2API_MAINTENANCE_LOCK_TEST_AFTER_SOURCE_OPEN_BARRIER")
+    if barrier:
+        if os.environ.get("SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS") != "1":
+            fail("source-open barrier is only available to maintenance-lock tests")
+        try:
+            barrier_fd = os.open(
+                barrier,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
+                0o600,
+            )
+        except OSError as exc:
+            fail(f"could not create source-open test barrier: {exc.strerror}")
+        try:
+            os.write(barrier_fd, b"source-open\\n")
+        finally:
+            os.close(barrier_fd)
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                os.lstat(f"{barrier}.continue")
+                break
+            except FileNotFoundError:
+                if time.monotonic() >= deadline:
+                    fail("source-open test barrier timed out")
+                time.sleep(0.01)
+
+    try:
+        stage_fd = os.open(
+            stage_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
+            0o600,
+        )
+    except OSError as exc:
+        fail(f"could not create private staged helper: {exc.strerror}")
+    stage_before = os.fstat(stage_fd)
+    if not stat.S_ISREG(stage_before.st_mode):
+        fail("staged helper descriptor is not a regular file")
+    if stage_before.st_uid != os.geteuid():
+        fail("staged helper descriptor has an unexpected owner")
+
+    copied_hash = hashlib.sha256()
+    copied_size = 0
+    while True:
+        chunk = os.read(source_fd, 1024 * 1024)
+        if not chunk:
+            break
+        copied_hash.update(chunk)
+        copied_size += len(chunk)
+        view = memoryview(chunk)
+        while view:
+            written = os.write(stage_fd, view)
+            if written <= 0:
+                fail("could not write private staged helper")
+            view = view[written:]
+    os.fchmod(stage_fd, 0o600)
+    os.fsync(stage_fd)
+    stage_after = os.fstat(stage_fd)
+    if (
+        not stat.S_ISREG(stage_after.st_mode)
+        or stat.S_IMODE(stage_after.st_mode) != 0o600
+        or stage_after.st_nlink != 1
+    ):
+        fail("staged helper must be a regular mode-0600 file")
+    if stage_after.st_uid != os.geteuid():
+        fail("staged helper owner changed while staging")
+
+    source_after = os.fstat(source_fd)
+    if not stat.S_ISREG(source_after.st_mode) or source_after.st_uid != expected_uid:
+        fail("source descriptor changed while staging")
+    if stat.S_IMODE(source_after.st_mode) & 0o022:
+        fail("source descriptor became group/other writable")
+    if source_after.st_size != source_size or copied_size != source_size:
+        fail("source size changed while staging")
+
+    os.lseek(source_fd, 0, os.SEEK_SET)
+    source_after_hash = hashlib.sha256()
+    while True:
+        chunk = os.read(source_fd, 1024 * 1024)
+        if not chunk:
+            break
+        source_after_hash.update(chunk)
+    if source_after_hash.digest() != copied_hash.digest():
+        fail("source content changed while staging")
+
+    try:
+        source_path_after = os.lstat(source_path)
+    except OSError:
+        fail("source path changed while staging")
+    if (
+        not stat.S_ISREG(source_path_after.st_mode)
+        or source_path_after.st_dev != source_before.st_dev
+        or source_path_after.st_ino != source_before.st_ino
+    ):
+        fail("source path changed while staging")
+
+    print(copied_hash.hexdigest())
+finally:
+    if stage_fd >= 0:
+        os.close(stage_fd)
+    if source_fd >= 0:
+        os.close(source_fd)
+PY
+)"; then
+    printf '%s\n' "$result" >&2
+    return 1
+  fi
+  printf '%s\n' "$result"
+}
+
+stage_maintenance_lock_helper() {
+  local source_path="$1"
+  local source_digest staged_digest stage_mode stage_owner stage_root stage_template
+
+  # /run is an existing root-owned non-writable container on supported hosts.
+  # The generated directory is checked again before it ever receives source
+  # content, so root never sources directly from the user-owned checkout.
+  stage_root="${SUB2API_MAINTENANCE_LOCK_HELPER_STAGE_ROOT:-/run}"
+  if [ "$stage_root" != /run ] \
+    && [ "${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" != 1 ]; then
+    die "SUB2API_MAINTENANCE_LOCK_HELPER_STAGE_ROOT is only available to maintenance-lock tests"
+  fi
+  case "$stage_root" in
+    /*) ;;
+    *) die "maintenance lock helper staging directory must be absolute: $stage_root" ;;
+  esac
+  case "$stage_root" in
+    *$'\n'*|*$'\r'*|*'//'*|*/./*|*/../*|*/) die "maintenance lock helper staging directory is malformed: $stage_root" ;;
+  esac
+  validate_root_owned_directory_chain "maintenance lock helper staging directory" "$stage_root"
+  stage_template="${stage_root}/sub2api-maintenance-helper.XXXXXX"
+  STAGED_MAINTENANCE_LOCK_HELPER_DIR="$(umask 077; mktemp -d "$stage_template")" \
+    || die "could not create a private maintenance lock helper staging directory"
+  validate_root_owned_directory_chain \
+    "maintenance lock helper staging directory" "$STAGED_MAINTENANCE_LOCK_HELPER_DIR"
+  stage_owner="$(source_tree_owner "$STAGED_MAINTENANCE_LOCK_HELPER_DIR")" \
+    || { cleanup_staged_maintenance_lock_helper; die "cannot read maintenance lock helper staging directory owner"; }
+  stage_mode="$(source_tree_mode "$STAGED_MAINTENANCE_LOCK_HELPER_DIR")" \
+    || { cleanup_staged_maintenance_lock_helper; die "cannot read maintenance lock helper staging directory permissions"; }
+  [ "$stage_owner" = 0 ] && [ "$stage_mode" = 700 ] \
+    || { cleanup_staged_maintenance_lock_helper; die "maintenance lock helper staging directory must be root-owned mode 0700"; }
+
+  STAGED_MAINTENANCE_LOCK_HELPER="${STAGED_MAINTENANCE_LOCK_HELPER_DIR}/sub2api-maintenance-lock.sh"
+  if ! source_digest="$(stage_maintenance_lock_helper_from_fd \
+    "$source_path" "$STAGED_MAINTENANCE_LOCK_HELPER" "$MAINTENANCE_LOCK_HELPER_SOURCE_UID")"; then
+    cleanup_staged_maintenance_lock_helper
+    die "could not stage maintenance lock helper safely"
+  fi
+  staged_digest="$(staged_helper_digest "$STAGED_MAINTENANCE_LOCK_HELPER")" \
+    || { cleanup_staged_maintenance_lock_helper; die "cannot hash staged maintenance lock helper"; }
+  if [ "$source_digest" != "$staged_digest" ]; then
+    cleanup_staged_maintenance_lock_helper
+    die "staged maintenance lock helper digest mismatch"
+  fi
+  validate_root_owned_directory_chain \
+    "staged maintenance lock helper" "$STAGED_MAINTENANCE_LOCK_HELPER_DIR"
+  validate_source_tree_file "staged maintenance lock helper" "$STAGED_MAINTENANCE_LOCK_HELPER"
+  stage_owner="$(source_tree_owner "$STAGED_MAINTENANCE_LOCK_HELPER")" \
+    || { cleanup_staged_maintenance_lock_helper; die "cannot read staged maintenance lock helper owner"; }
+  stage_mode="$(source_tree_mode "$STAGED_MAINTENANCE_LOCK_HELPER")" \
+    || { cleanup_staged_maintenance_lock_helper; die "cannot read staged maintenance lock helper permissions"; }
+  [ "$stage_owner" = 0 ] && [ "$stage_mode" = 600 ] \
+    || { cleanup_staged_maintenance_lock_helper; die "staged maintenance lock helper must be root-owned mode 0600"; }
 }
 
 require_simple_value() {
@@ -253,7 +727,11 @@ derive_github_image_source() {
 }
 
 [ "$(id -u)" -eq 0 ] || die "run this installer as root on the Sub2API server"
-for command_name in git install systemctl docker curl flock grep head python3 sed tar wc zstd; do
+case "$MAINTENANCE_LOCK_FILE" in
+  /*/*) ;;
+  *) die "SUB2API_MAINTENANCE_LOCK_FILE must name a file below an absolute private directory" ;;
+esac
+for command_name in git id install mktemp rm rmdir sha256sum systemctl docker curl flock grep head python3 sed stat tar wc zstd; do
   require_cmd "$command_name"
 done
 [ -d "$APP_DIR" ] || die "Sub2API application directory does not exist: $APP_DIR"
@@ -310,6 +788,7 @@ for file in \
   deploy/sub2api-github-image-release.sh \
   deploy/sub2api-server-release.sh \
   deploy/sub2api-drain-monitor.sh \
+  deploy/sub2api-maintenance-lock.sh \
   deploy/sub2api-runtime-guard.sh \
   deploy/sub2api-github-deploy-trigger.sh \
   deploy/sub2api-cert-receiver.sh \
@@ -338,6 +817,76 @@ bash -n "${SOURCE_ROOT}/deploy/sub2api-cert-receiver.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-cert-deploy-trigger.sh"
 bash -n "${SOURCE_ROOT}/deploy/install-sub2api-cert-receiver.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-node-state.sh"
+
+# This source helper shares the ownership trust boundary of the installer the
+# operator explicitly invoked through sudo: both source files and every
+# ancestor are non-symlink and non-writable to group/other, while a normal
+# checkout owner remains valid. Python opens the checked helper with
+# O_NOFOLLOW, validates its descriptor, copies that descriptor directly into
+# a new root-only /run file with O_EXCL|O_NOFOLLOW, and binds the final lstat
+# pathname back to that descriptor before source. Only the private staging
+# file is hashed, syntax-checked, and sourced. This prevents a leaf
+# replacement between validation and source without falsely requiring a
+# root-owned checkout. Its pure preflight validates the target/ancestor chain
+# without creating a directory, so the later install -d cannot chmod a path
+# selected through .. or a symlink component.
+validate_source_helper_file "maintenance lock helper" "$MAINTENANCE_LOCK_HELPER" "$INSTALLER_SOURCE_FILE"
+trap cleanup_staged_maintenance_lock_helper EXIT
+stage_maintenance_lock_helper "$MAINTENANCE_LOCK_HELPER"
+# The copied file is below the private staging parent; never syntax-check the
+# mutable checkout pathname after its source-trust validation.
+bash -n "$STAGED_MAINTENANCE_LOCK_HELPER"
+# shellcheck disable=SC1090,SC1091 # The staged copy has a private root-only parent.
+if ! . "$STAGED_MAINTENANCE_LOCK_HELPER"; then
+  cleanup_staged_maintenance_lock_helper
+  die "could not load staged maintenance lock helper"
+fi
+cleanup_staged_maintenance_lock_helper
+if ! sub2api_maintenance_lock_validate_install_target "$MAINTENANCE_LOCK_FILE"; then
+  die "unsafe maintenance lock target: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+fi
+MAINTENANCE_LOCK_DIR="$SUB2API_MAINTENANCE_LOCK_PARENT"
+
+configured_maintenance_lock=""
+if [ -e "$CONFIG_FILE" ]; then
+  configured_maintenance_lock="$(sed -n 's/^SUB2API_MAINTENANCE_LOCK_FILE=//p' "$CONFIG_FILE" | tail -n 1)"
+fi
+
+# A retained configuration participates in the same single-lock contract as
+# the caller's environment.  Reject drift before the fence shim creates even
+# the canonical parent/file; an ordinary non-replace run must be pure when an
+# existing config points at another inode.
+if [ -e "$CONFIG_FILE" ] && [ "$REPLACE_CONFIG" != "true" ]; then
+  if [ "$configured_maintenance_lock" = "$LEGACY_MAINTENANCE_LOCK_FILE" ]; then
+    die "existing maintenance lock uses retired ${LEGACY_MAINTENANCE_LOCK_FILE}; set a private root-owned path or rerun with --replace-config"
+  fi
+  [ "$configured_maintenance_lock" = "$MAINTENANCE_LOCK_FILE" ] \
+    || die "existing SUB2API_MAINTENANCE_LOCK_FILE must equal ${MAINTENANCE_LOCK_FILE}; rerun with --replace-config"
+fi
+
+# Every installer run holds the canonical fence before it writes a config,
+# installs a script, or asks systemd to reload.  The only supported migration
+# additionally holds the exact retired /run/lock inode through the whole run,
+# closing the split-lock window between legacy release workers and the new
+# private lock. The helper's Python supervisor holds FD 7/8 while it waits for
+# this pinned-FD Bash child, so later install/systemctl descendants cannot
+# retain either maintenance lock after the installer exits.
+legacy_fence_path=""
+if [ "$REPLACE_CONFIG" = true ] \
+  && [ "$configured_maintenance_lock" = "$LEGACY_MAINTENANCE_LOCK_FILE" ]; then
+  legacy_fence_path="$LEGACY_MAINTENANCE_LOCK_FILE"
+fi
+if [ "$INSTALLER_FENCE_VERIFIED" = true ]; then
+  [ "$VERIFIED_INSTALLER_FENCE_LEGACY" = "$legacy_fence_path" ] \
+    || die "inherited maintenance-lock fence does not match the configuration migration"
+else
+  # This replaces the current shell on success; a failure is printed by the
+  # no-follow fence shim and exits before any deployment mutation.
+  sub2api_maintenance_lock_exec_installer_with_fences \
+    "$INSTALLER_SOURCE_FILE" "$SOURCE_ROOT" "$MAINTENANCE_LOCK_HELPER_SOURCE_UID" \
+    "$MAINTENANCE_LOCK_FILE" "$legacy_fence_path" "${ORIGINAL_ARGS[@]}"
+  die "could not establish maintenance lock installation fence"
+fi
 
 if [ -e "$CONFIG_FILE" ] && [ "$REPLACE_CONFIG" != "true" ]; then
   [ "$RUNTIME_CONFIG_EXPLICIT" != true ] \
@@ -375,7 +924,7 @@ else
     if [ -n "$HEALTH_RESOLVE" ]; then
       printf 'SUB2API_PUBLIC_HEALTH_RESOLVE=%s\n' "$HEALTH_RESOLVE"
     fi
-    printf 'SUB2API_MAINTENANCE_LOCK_FILE=%s\n' '/run/lock/sub2api-maintenance.lock'
+    printf 'SUB2API_MAINTENANCE_LOCK_FILE=%s\n' "$MAINTENANCE_LOCK_FILE"
     printf 'SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=%s\n' "$DEPENDENCY_MODE"
     printf 'SUB2API_RUNTIME_GUARD_NETWORK=%s\n' "$RUNTIME_NETWORK"
     printf 'SUB2API_RUNTIME_GUARD_DATA_VOLUME=%s\n' "$RUNTIME_DATA_VOLUME"
@@ -407,6 +956,8 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh" \
   "${SCRIPT_DIR}/sub2api-github-image-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-maintenance-lock.sh" \
+  "${SCRIPT_DIR}/sub2api-maintenance-lock.sh"
 if [ "$INSTALL_BLUE_GREEN_HELPER" = true ]; then
   helper_backup_dir="${APP_DIR}/backups/blue-green-helper-$(date -u +%Y%m%dT%H%M%SZ)"
   install -d -m 700 "$helper_backup_dir"
@@ -425,6 +976,8 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh" \
   "${SCRIPT_DIR}/sub2api-runtime-guard.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh" \
   "$RUNTIME_GUARD_EXECUTABLE"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-maintenance-lock.sh" \
+  "${RUNTIME_GUARD_EXECUTABLE%/*}/sub2api-maintenance-lock.sh"
 install -D -m 755 "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh" \
   "${SCRIPT_DIR}/sub2api-github-deploy-trigger.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-cert-receiver.sh" \
@@ -435,6 +988,7 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/install-sub2api-cert-receiver.sh" \
   "${SCRIPT_DIR}/install-sub2api-cert-receiver.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-node-state.sh" \
   "${SCRIPT_DIR}/sub2api-node-state.sh"
+install -d -o root -g root -m 700 "$MAINTENANCE_LOCK_DIR"
 install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.service" \
   "${UNIT_DIR}/sub2api-autodeploy.service"
 install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.timer" \

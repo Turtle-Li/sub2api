@@ -6,6 +6,7 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(cd "${TEST_DIR}/.." && pwd)"
 SCRIPT="${DEPLOY_DIR}/sub2api-server-release.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sub2api-server-release-test.XXXXXX")"
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="${TEST_ROOT}/bin"
 APP_DIR="${TEST_ROOT}/app"
 WORK_ROOT="${TEST_ROOT}/worktrees"
@@ -289,7 +290,8 @@ run_release() {
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
-    SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-1}" \
+    SUB2API_MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-${TEST_ROOT}/maintenance.lock}" \
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS=30 \
@@ -325,7 +327,8 @@ run_github_prebuilt_release() {
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
-    SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-1}" \
+    SUB2API_MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-${TEST_ROOT}/maintenance.lock}" \
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
@@ -396,6 +399,23 @@ assert_contains "$maintenance_output" \
   'production maintenance or runtime recovery is already running'
 if [ -s "$DOCKER_CALLS" ]; then
   fail 'Docker was inspected before the maintenance lock was acquired'
+fi
+
+# A safe-looking second private lock must not let the release path split away
+# from the certificate/runtime maintenance domain in production mode.
+SECOND_SAFE_LOCK="${TEST_ROOT}/second-safe/private/maintenance.lock"
+: >"$DOCKER_CALLS"
+if SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=0 \
+  SUB2API_MAINTENANCE_LOCK_FILE="$SECOND_SAFE_LOCK" \
+  run_github_prebuilt_release >"${TEST_ROOT}/production-noncanonical-lock.out" 2>&1; then
+  fail 'server release accepted a production noncanonical maintenance lock path'
+fi
+assert_contains "${TEST_ROOT}/production-noncanonical-lock.out" \
+  'maintenance lock path must be the canonical /run/sub2api-maintenance/sub2api-maintenance.lock'
+[ ! -e "${SECOND_SAFE_LOCK%/*}" ] \
+  || fail 'server release created a noncanonical lock parent before rejection'
+if [ -s "$DOCKER_CALLS" ]; then
+  fail 'server release inspected Docker before rejecting a noncanonical lock path'
 fi
 
 : >"$DOCKER_CALLS"

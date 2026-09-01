@@ -10,9 +10,12 @@ umask 077
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 TRIGGER_SCRIPT="${APP_DIR}/scripts/sub2api-cert-deploy-trigger.sh"
 RECEIVER_SCRIPT="${APP_DIR}/scripts/sub2api-cert-receiver.sh"
+MAINTENANCE_LOCK_HELPER="${APP_DIR}/scripts/sub2api-maintenance-lock.sh"
 DEPLOY_USER="${SUB2API_CERT_DEPLOY_USER:-sub2api-cert-deploy}"
 DEPLOY_HOME="${SUB2API_CERT_DEPLOY_HOME:-/var/lib/sub2api-cert-deploy}"
 CONFIG_FILE="${SUB2API_CERT_RECEIVER_CONFIG_FILE:-/etc/sub2api-cert-receiver.env}"
+MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/sub2api-maintenance/sub2api-maintenance.lock}"
+MAINTENANCE_LOCK_DIR=""
 PUBLIC_KEY_FILE=""
 SOURCE_ADDRESS=""
 DOMAIN="api.turtleligpt.com"
@@ -48,6 +51,18 @@ die() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
 }
+
+# Reject an ambient production override before validating/sourcing installed
+# helper files or touching any account/configuration target. The helper repeats
+# the full grammar and ancestry validation once it is loaded.
+case "${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" in
+  1) ;;
+  0)
+    [ "$MAINTENANCE_LOCK_FILE" = "/run/sub2api-maintenance/sub2api-maintenance.lock" ] \
+      || die "maintenance lock path must be the canonical /run/sub2api-maintenance/sub2api-maintenance.lock: ${MAINTENANCE_LOCK_FILE}"
+    ;;
+  *) die "SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS must be 0 or 1" ;;
+esac
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required"
@@ -86,6 +101,44 @@ validate_root_owned_file() {
   [ $((permissions & 0022)) -eq 0 ] || die "$label must not be group/other writable: $path"
   [ "$require_executable" != true ] || [ -x "$path" ] \
     || die "$label is not executable: $path"
+}
+
+validate_root_owned_directory_chain() {
+  local label="$1" path="$2"
+  local remaining current component owner mode permissions
+
+  case "$path" in
+    /*) ;;
+    *) die "$label has a non-absolute path: $path" ;;
+  esac
+  remaining="${path#/}"
+  current="/"
+  while :; do
+    [ ! -L "$current" ] || die "$label ancestor is a symlink: $current"
+    [ -d "$current" ] || die "$label ancestor is not a directory: $current"
+    owner="$(stat -c '%u' "$current")" \
+      || die "cannot read owner for $label ancestor: $current"
+    [ "$owner" -eq 0 ] || die "$label ancestor must be owned by root: $current"
+    mode="$(stat -c '%a' "$current")" \
+      || die "cannot read permissions for $label ancestor: $current"
+    case "$mode" in ''|*[!0-7]*) die "$label ancestor has unsupported permissions: $current" ;; esac
+    permissions=$((8#$mode))
+    [ $((permissions & 0022)) -eq 0 ] \
+      || die "$label ancestor is group/other writable: $current"
+    [ -n "$remaining" ] || break
+    component="${remaining%%/*}"
+    if [ "$component" = "$remaining" ]; then
+      remaining=""
+    else
+      remaining="${remaining#*/}"
+    fi
+    [ -n "$component" ] || die "$label ancestor path is malformed: $path"
+    if [ "$current" = / ]; then
+      current="/${component}"
+    else
+      current="${current}/${component}"
+    fi
+  done
 }
 
 validate_tailnet_source() {
@@ -149,14 +202,30 @@ validate_absolute_path caddyfile_host "$CADDYFILE_HOST_PATH"
 validate_absolute_path caddyfile_container "$CADDYFILE_CONTAINER_PATH"
 validate_absolute_path caddy_cert_root "$CADDY_CERT_ROOT"
 validate_absolute_path config_file "$CONFIG_FILE"
+validate_absolute_path maintenance_lock_file "$MAINTENANCE_LOCK_FILE"
 
 for command_name in getent id install ssh-keygen stat sudo useradd visudo; do
   require_cmd "$command_name"
 done
 validate_root_owned_file "certificate deploy trigger" "$TRIGGER_SCRIPT" true
 validate_root_owned_file "certificate receiver" "$RECEIVER_SCRIPT" true
+# Unlike the source-tree installer, this standalone installer has no trusted
+# ordinary-user checkout boundary. Its installed helper and every directory
+# used to reach it must already be root-owned and non-writable, which pins the
+# pathname between the leaf metadata check and source for non-root attackers.
+validate_root_owned_directory_chain "maintenance lock helper" "${MAINTENANCE_LOCK_HELPER%/*}"
+validate_root_owned_file "maintenance lock helper" "$MAINTENANCE_LOCK_HELPER" true
 validate_root_owned_file "Caddyfile" "$CADDYFILE_HOST_PATH" false
 [ -r "$CADDYFILE_HOST_PATH" ] || die "Caddyfile is not readable: $CADDYFILE_HOST_PATH"
+# The helper was just checked as a root-owned non-writable regular file. Its
+# preflight is read-only and prevents the later install -d from resolving an
+# unsafe target through .. or a symlink ancestor.
+# shellcheck disable=SC1090,SC1091 # The preceding metadata check pins this source.
+. "$MAINTENANCE_LOCK_HELPER"
+if ! sub2api_maintenance_lock_validate_install_target "$MAINTENANCE_LOCK_FILE"; then
+  die "unsafe maintenance lock target: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+fi
+MAINTENANCE_LOCK_DIR="$SUB2API_MAINTENANCE_LOCK_PARENT"
 
 key_line="$(awk 'NF && $1 !~ /^#/ {print; exit}' "$PUBLIC_KEY_FILE")"
 [ -n "$key_line" ] || die "public key file contains no key"
@@ -188,6 +257,7 @@ config_temp="$(mktemp)"
   printf 'SUB2API_CERT_CADDY_CERT_ROOT=%q\n' "$CADDY_CERT_ROOT"
   printf 'SUB2API_CERT_TLS_VERIFY_IP=%q\n' "$TLS_VERIFY_IP"
   printf 'SUB2API_CERT_TLS_VERIFY_PORT=%q\n' "$TLS_VERIFY_PORT"
+  printf 'SUB2API_MAINTENANCE_LOCK_FILE=%q\n' "$MAINTENANCE_LOCK_FILE"
 } >"$config_temp"
 install -o root -g root -m 600 "$config_temp" "$CONFIG_FILE"
 rm -f -- "$config_temp"
@@ -205,4 +275,5 @@ install -o root -g root -m 440 "$sudoers_temp" "/etc/sudoers.d/${DEPLOY_USER}"
 rm -f -- "$sudoers_temp"
 
 install -d -o root -g root -m 700 "${APP_DIR}/certs/${DOMAIN}" "${APP_DIR}/certs/${DOMAIN}/generations"
+install -d -o root -g root -m 700 "$MAINTENANCE_LOCK_DIR"
 printf 'Installed restricted certificate receiver for %s from %s.\n' "$DEPLOY_USER" "$SOURCE_ADDRESS"

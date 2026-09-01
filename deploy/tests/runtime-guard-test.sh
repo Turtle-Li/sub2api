@@ -9,8 +9,10 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(cd "${TEST_DIR}/.." && pwd)"
 SCRIPT="${DEPLOY_DIR}/sub2api-runtime-guard.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sub2api-runtime-guard-test.XXXXXX")"
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="${TEST_ROOT}/bin"
 CASE_ROOT=""
+REAL_STAT="$(command -v stat)"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -203,7 +205,7 @@ chmod +x "${FAKE_BIN}/realpath"
 cat >"${FAKE_BIN}/stat" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-[ "${1:-}" = -c ] || exit 1
+[ "${1:-}" = -c ] || exec "$REAL_STAT" "$@"
 format="${2:-}"
 path="${3:-}"
 case "$path" in
@@ -219,7 +221,7 @@ case "$path" in
   */internal-health-token)
     uid=1000; gid=1000; mode=600
     ;;
-  *) exit 1 ;;
+  *) exec "$REAL_STAT" "$@" ;;
 esac
 case "$format" in
   %u) printf '%s\n' "$uid" ;;
@@ -326,6 +328,7 @@ new_case() {
 
   CASE_ROOT="${TEST_ROOT}/${name}"
   mkdir -p "${CASE_ROOT}/app/scripts" "${CASE_ROOT}/containers"
+  chmod 700 "$CASE_ROOT"
   : >"${CASE_ROOT}/docker-calls.log"
   : >"${CASE_ROOT}/release-calls.log"
   : >"${CASE_ROOT}/curl-calls.log"
@@ -379,7 +382,9 @@ run_guard() {
     FAKE_NODE_STATE_CALLS="${CASE_ROOT}/node-state-calls.log" \
     FAKE_RELEASE_CALLS="${CASE_ROOT}/release-calls.log" \
     FAKE_STARTUP_CONFIG_FILE="${CASE_ROOT}/startup-Caddyfile" \
+    REAL_STAT="$REAL_STAT" \
     SUB2API_APP_DIR="${CASE_ROOT}/app" \
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1 \
     SUB2API_MAINTENANCE_LOCK_FILE="${CASE_ROOT}/maintenance.lock" \
     SUB2API_PUBLIC_HEALTH_URL='https://example.invalid/health' \
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \

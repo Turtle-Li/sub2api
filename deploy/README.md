@@ -112,7 +112,8 @@ traffic/DNS as part of an ordinary application release.
 `install-autodeploy.sh` enables `sub2api-runtime-guard.timer` by default. The
 timer runs 30 seconds after boot and 30 seconds after each completed check. It
 does not build, pull, or create application containers. Every run acquires the
-same `/run/lock/sub2api-maintenance.lock` used by production releases, then:
+same `/run/sub2api-maintenance/sub2api-maintenance.lock` used by production
+releases, then:
 
 1. starts and verifies PostgreSQL, Redis, and Caddy, restarting a dependency
    once if it remains unhealthy;
@@ -157,8 +158,30 @@ sudo journalctl -u sub2api-runtime-guard.service -n 100 --no-pager
 ```
 
 Any manual database cutover or application/Caddy lifecycle command must also
-hold `/run/lock/sub2api-maintenance.lock`. A production release acquires it
-internally. Do not wrap the release command in a second `flock` invocation.
+hold `/run/sub2api-maintenance/sub2api-maintenance.lock`. A production release
+acquires it internally. Do not wrap the release command in a second `flock`
+invocation.
+
+### Shared maintenance-lock safety
+
+The installer and every lock consumer create the `/run/sub2api-maintenance`
+parent as `root:root` mode `0700`, then create the shared lock as a one-link
+`root:root` mode `0600` regular file. Symlinks, non-regular files, unexpected
+owners, permissive modes, and hard links fail closed before `flock`; a valid
+already-held lock retains the caller's documented busy/no-op behavior. Shell
+redirection has no native `O_NOFOLLOW`, so the implementation checks the
+private parent and lock metadata both before and after opening, and confirms
+the pathname matches the open descriptor inode. This prevents unprivileged
+replacement races; root remains trusted. Existing configurations that still
+name `/run/lock/sub2api-maintenance.lock` must be migrated with
+`install-autodeploy.sh --replace-config`: before it writes configuration,
+scripts, or systemd units, the installer non-blockingly holds both that exact
+legacy inode and the canonical private lock through exit. A held legacy lock
+therefore fails without changing deployment state. Production accepts no
+`SUB2API_MAINTENANCE_LOCK_FILE` override; the caller-owned alternate-path
+switch is restricted to hermetic deployment tests. A short-lived supervisor,
+rather than `install` or `systemctl` descendants, owns the fence descriptors,
+so a persistent child cannot keep either lock busy after installation exits.
 
 GitHub workflow concurrency serializes production runs. The receiver also holds
 an exclusive upload/release lock and fails closed if another release is in
@@ -193,6 +216,7 @@ normal production path.
 | `sub2api-github-image-release.sh` | Validates and loads a GitHub-built image before blue-green release |
 | `sub2api-server-release.sh` | Runs preflight, blue-green switch, verification, rollback, and draining |
 | `sub2api-drain-monitor.sh` | Waits for a drained slot to become idle and stops it under the maintenance lock |
+| `sub2api-maintenance-lock.sh` | Validates and opens the private shared maintenance lock for root-owned helpers |
 | `sub2api-runtime-guard.sh` | Recovers dependencies/active slot and safely falls back to a historical slot |
 | `sub2api-runtime-guard.service` | Root-owned one-shot runtime recovery service |
 | `sub2api-runtime-guard.timer` | Runs the runtime guard every 30 seconds |

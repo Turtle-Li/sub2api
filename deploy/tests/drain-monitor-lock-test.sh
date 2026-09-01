@@ -5,6 +5,7 @@ set -Eeuo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONITOR="${TEST_DIR}/../sub2api-drain-monitor.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sub2api-drain-lock-test.XXXXXX")"
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="${TEST_ROOT}/bin"
 EVENTS="${TEST_ROOT}/events.log"
 
@@ -107,6 +108,7 @@ run_monitor() {
     LOG_FILE="${TEST_ROOT}/monitor.log" \
     LOCK_FILE="${TEST_ROOT}/drain.lock" \
     PID_FILE="${TEST_ROOT}/drain.pid" \
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1 \
     SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
     /bin/bash "$MONITOR"
 }

@@ -7,6 +7,7 @@ DEPLOY_DIR="$(cd "${TEST_DIR}/.." && pwd)"
 RECEIVER="${DEPLOY_DIR}/sub2api-cert-receiver.sh"
 TRIGGER="${DEPLOY_DIR}/sub2api-cert-deploy-trigger.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sub2api-cert-receiver-test.XXXXXX")"
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="${TEST_ROOT}/bin"
 CERT_ROOT="${TEST_ROOT}/certificates"
 CONFIG_FILE="${TEST_ROOT}/receiver.env"
@@ -63,19 +64,15 @@ file_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
 }
 
-assert_sticky_world_writable() {
+assert_private_lock_directory() {
   local path="$1"
   local mode
   mode="$(file_mode "$path")"
-  if [ "$mode" = 1777 ]; then
-    return
-  fi
-  [ "$mode" = 777 ] && [ -k "$path" ] \
-    || fail "shared lock directory mode changed: ${mode}"
+  [ "$mode" = 700 ] || fail "shared lock directory mode changed: ${mode}"
 }
 
 mkdir -p "$FAKE_BIN" "$CERT_ROOT" "$LOCK_DIR"
-chmod 1777 "$LOCK_DIR"
+chmod 700 "$LOCK_DIR"
 
 cat >"${FAKE_BIN}/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -242,7 +239,7 @@ prepare_one_output="${TEST_ROOT}/prepare-one.log"
 run_receiver prepare "$GEN_ONE" "$GEN_ONE_CERT_SHA" "$GEN_ONE_KEY_SHA" 604800 "$DOMAIN" \
   <"$GEN_ONE_ARCHIVE" >"$prepare_one_output"
 assert_exact "$prepare_one_output" "PREPARED ${GEN_ONE} ${GEN_ONE_CERT_SHA}"
-assert_sticky_world_writable "$LOCK_DIR"
+assert_private_lock_directory "$LOCK_DIR"
 [ ! -e "$CERT_ROOT/current" ] || fail 'prepare changed the active certificate generation'
 [ "$(file_mode "$CERT_ROOT/generations/${GEN_ONE}/privkey.pem")" = 600 ] \
   || fail 'private key mode is not 0600'

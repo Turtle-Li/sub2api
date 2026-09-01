@@ -35,7 +35,6 @@ BLUE_GREEN_SCRIPT="${SUB2API_RUNTIME_GUARD_BLUE_GREEN_SCRIPT:-${APP_DIR}/scripts
 NODE_STATE_SCRIPT="${SUB2API_NODE_STATE_SCRIPT:-${APP_DIR}/scripts/sub2api-node-state.sh}"
 PUBLIC_HEALTH_URL="${SUB2API_PUBLIC_HEALTH_URL:-https://www.turtleligpt.com/health}"
 PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-}"
-MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
 STATE_DIR="${SUB2API_RUNTIME_GUARD_STATE_DIR:-/var/lib/sub2api-runtime-guard}"
 FAILURE_FILE="${STATE_DIR}/last-failure.env"
 
@@ -88,6 +87,17 @@ die() {
   log "ERROR: $*" >&2
   exit 1
 }
+
+RUNTIME_GUARD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAINTENANCE_LOCK_HELPER="${RUNTIME_GUARD_SCRIPT_DIR}/sub2api-maintenance-lock.sh"
+[ -r "$MAINTENANCE_LOCK_HELPER" ] && [ ! -L "$MAINTENANCE_LOCK_HELPER" ] \
+  || die "maintenance lock helper is missing or unsafe: ${MAINTENANCE_LOCK_HELPER}"
+# shellcheck disable=SC1090,SC1091 # Installed alongside this root-owned executable.
+. "$MAINTENANCE_LOCK_HELPER"
+MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
+if ! sub2api_maintenance_lock_validate_configured_path "$MAINTENANCE_LOCK_FILE"; then
+  die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+fi
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required"
@@ -815,21 +825,15 @@ reconcile_local_release_state() {
 }
 
 acquire_maintenance_lock() {
-  local lock_dir
-
-  case "$MAINTENANCE_LOCK_FILE" in
-    /*) ;;
-    *) die "SUB2API_MAINTENANCE_LOCK_FILE must be an absolute path" ;;
-  esac
-  lock_dir="${MAINTENANCE_LOCK_FILE%/*}"
-  [ -d "$lock_dir" ] || die "maintenance lock directory does not exist: ${lock_dir}"
-
-  # Append mode preserves any existing inode/content.  No container, Caddy,
-  # state-file, or cooldown change happens until this non-blocking flock wins.
-  exec 9>>"$MAINTENANCE_LOCK_FILE"
-  if ! flock -n 9; then
-    log "maintenance lock is held; exiting without runtime changes"
+  # The helper validates and opens a root-owned 0600 regular file below a
+  # private root-owned 0700 parent before this non-blocking flock runs.
+  if ! sub2api_maintenance_lock_open "$MAINTENANCE_LOCK_FILE"; then
+    log "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}" >&2
     return 1
+  fi
+  if ! flock -n 8; then
+    log "maintenance lock is held; exiting without runtime changes"
+    return 75
   fi
   return 0
 }
@@ -839,7 +843,7 @@ case "$DEPENDENCY_MODE" in
   *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external (got: ${DEPENDENCY_MODE})" ;;
 esac
 
-for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date; do
+for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date tr id stat; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RUNTIME_GUARD_RETRY_ATTEMPTS "$RETRY_ATTEMPTS"
@@ -865,10 +869,15 @@ if [ "$DEPENDENCY_MODE" = external ]; then
   validate_external_ca_file
 fi
 
-if ! acquire_maintenance_lock; then
+if acquire_maintenance_lock; then
+  :
+else
+  lock_status=$?
   # A release, database cutover, or another guard owns the global maintenance
-  # boundary.  Lock contention is expected and therefore a successful no-op.
-  exit 0
+  # boundary. Lock contention is expected and therefore a successful no-op;
+  # an unsafe path is a security failure and must remain visible to systemd.
+  [ "$lock_status" -eq 75 ] && exit 0
+  exit "$lock_status"
 fi
 
 [ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
