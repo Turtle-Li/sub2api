@@ -1235,6 +1235,59 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 		require.Empty(t, queue.ensured)
 	})
 
+	t.Run("refreshes the job lock while provider status is blocked", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		repo.jobs["imgbatch_slow_status"] = &BatchImageJob{
+			BatchID:         "imgbatch_slow_status",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderGeminiAPI,
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: batchImageStringPtr("providers/internal/job"),
+			CreatedAt:       time.Now(),
+		}
+		svc.Config.BatchImage.JobLockTTLSeconds = 3
+		providerStarted := make(chan struct{})
+		providerContinue := make(chan struct{})
+		queue.lockRefreshCh = make(chan struct{}, 1)
+		gemini.getHook = func(ctx context.Context) {
+			close(providerStarted)
+			select {
+			case <-providerContinue:
+			case <-ctx.Done():
+			}
+		}
+		type cancelResult struct {
+			batch *BatchImagePublicBatch
+			err   error
+		}
+		resultCh := make(chan cancelResult, 1)
+		go func() {
+			batch, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_slow_status")
+			resultCh <- cancelResult{batch: batch, err: err}
+		}()
+
+		select {
+		case <-providerStarted:
+		case <-time.After(time.Second):
+			t.Fatal("provider status check did not start")
+		}
+		select {
+		case <-queue.lockRefreshCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("cancel lock was not refreshed before its TTL elapsed")
+		}
+		close(providerContinue)
+		result := <-resultCh
+		require.NoError(t, result.err)
+		require.NotNil(t, result.batch)
+		require.Equal(t, 1, gemini.cancelCount)
+		require.Equal(t, 1, queue.lockReleaseCount)
+	})
+
 	t.Run("provider-backed cancel requires strict queue repair support", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		apiKeyID := int64(22)
@@ -1440,6 +1493,8 @@ type publicBatchImageQueue struct {
 	lockAcquired     bool
 	lockAttempts     int
 	lockReleaseCount int
+	lockRefreshCh    chan struct{}
+	lockRefreshErr   error
 }
 
 type publicBatchImageQueueWithoutEnsurer struct {
@@ -1541,6 +1596,19 @@ func (l *publicBatchImageJobLock) Release(context.Context) error {
 	return nil
 }
 
+func (l *publicBatchImageJobLock) Refresh(context.Context, time.Duration) error {
+	if l == nil || l.queue == nil {
+		return nil
+	}
+	if l.queue.lockRefreshCh != nil {
+		select {
+		case l.queue.lockRefreshCh <- struct{}{}:
+		default:
+		}
+	}
+	return l.queue.lockRefreshErr
+}
+
 type publicBatchImageProvider struct {
 	name           string
 	submits        []BatchImageInput
@@ -1551,6 +1619,7 @@ type publicBatchImageProvider struct {
 	getCount       int
 	getStatuses    []*BatchProviderStatus
 	getErrors      []error
+	getHook        func(context.Context)
 	result         string
 	cleanupTargets []CleanupTarget
 	cleanupErr     error
@@ -1577,7 +1646,10 @@ func (p *publicBatchImageProvider) Submit(ctx context.Context, _ *BatchImageJob,
 	}, nil
 }
 
-func (p *publicBatchImageProvider) Get(context.Context, *BatchImageJob, *Account) (*BatchProviderStatus, error) {
+func (p *publicBatchImageProvider) Get(ctx context.Context, _ *BatchImageJob, _ *Account) (*BatchProviderStatus, error) {
+	if p.getHook != nil {
+		p.getHook(ctx)
+	}
 	index := p.getCount
 	p.getCount++
 	if index < len(p.getErrors) && p.getErrors[index] != nil {

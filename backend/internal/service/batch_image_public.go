@@ -872,7 +872,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return BatchImageJobToPublic(job), nil
 	}
 	if job.ProviderJobName != nil && strings.TrimSpace(*job.ProviderJobName) != "" {
-		ensurer, lock, err := s.acquireBatchImageCancelLock(ctx, job.BatchID)
+		ensurer, lock, lockTTL, err := s.acquireBatchImageCancelLock(ctx, job.BatchID)
 		if err != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
@@ -884,6 +884,8 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 				)
 			}
 		}()
+		stopLockRefresh := startBatchImageCancelLockRefresh(ctx, job.BatchID, lock, lockTTL)
+		defer stopLockRefresh()
 
 		// The worker and queue reconciler use the same per-job lock. Reload after
 		// acquiring it so cancellation never acts on a state the worker already
@@ -984,13 +986,13 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 	return BatchImageJobToPublic(updated), nil
 }
 
-func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Context, batchID string) (BatchImageQueueEnsurer, BatchImageJobLock, error) {
+func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Context, batchID string) (BatchImageQueueEnsurer, BatchImageJobLock, time.Duration, error) {
 	if s == nil || s.Queue == nil {
-		return nil, nil, ErrBatchImageCancelFailed
+		return nil, nil, 0, ErrBatchImageCancelFailed
 	}
 	ensurer, ok := s.Queue.(BatchImageQueueEnsurer)
 	if !ok || ensurer == nil {
-		return nil, nil, ErrBatchImageCancelFailed
+		return nil, nil, 0, ErrBatchImageCancelFailed
 	}
 	lockTTL := defaultBatchImageCancelLockTTL
 	if s.Config != nil && s.Config.BatchImage.JobLockTTLSeconds > 0 {
@@ -998,9 +1000,50 @@ func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Contex
 	}
 	lock, acquired, err := ensurer.TryAcquireJobLock(ctx, batchID, lockTTL)
 	if err != nil || !acquired || lock == nil {
-		return nil, nil, ErrBatchImageCancelFailed
+		return nil, nil, 0, ErrBatchImageCancelFailed
 	}
-	return ensurer, lock, nil
+	return ensurer, lock, lockTTL, nil
+}
+
+func startBatchImageCancelLockRefresh(ctx context.Context, batchID string, lock BatchImageJobLock, ttl time.Duration) func() {
+	refresher, ok := lock.(BatchImageJobLockRefresher)
+	if !ok || refresher == nil {
+		return func() {}
+	}
+	if ttl <= 0 {
+		ttl = defaultBatchImageCancelLockTTL
+	}
+	interval := ttl / 3
+	if interval < time.Second {
+		interval = time.Second
+	}
+	refreshCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-refreshCtx.Done():
+				return
+			case <-ticker.C:
+				refreshCallCtx, refreshCallCancel := context.WithTimeout(refreshCtx, interval)
+				err := refresher.Refresh(refreshCallCtx, ttl)
+				refreshCallCancel()
+				if err != nil && refreshCtx.Err() == nil {
+					logger.L().Warn("batch_image.cancel_lock_refresh_failed",
+						zap.String("batch_id", batchID),
+						zap.Error(err),
+					)
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func (s *BatchImagePublicService) ensureBatchImageCancelContinuation(
