@@ -46,6 +46,8 @@ BUILD_GO_MEMORY_LIMIT="${SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT:-768MiB}"
 # sub2api:prebuilt-<commit>) and the server never invokes docker build.
 PREBUILT_IMAGE_PREFIX="${SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX:-}"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
+CADDY_TRANSACTION_PATH="${APP_DIR}/.gcp-tw-caddy-transaction.env"
+CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
 ALLOW_PREEXISTING_DRAINING_CONTAINER="${SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER:-false}"
 DRAIN_MONITOR_SCRIPT="${SUB2API_DRAIN_MONITOR_SCRIPT:-${APP_DIR}/scripts/sub2api-drain-monitor.sh}"
 DRAIN_INTERVAL_SECONDS="${SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS:-60}"
@@ -214,6 +216,10 @@ exec 9>"$LOCK_FILE"
 flock -n 9 || die "another production release is already running"
 exec 8>"$MAINTENANCE_LOCK_FILE"
 flock -n 8 || die "production maintenance or runtime recovery is already running"
+[ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
+  || die "unfinished GCP Taiwan Caddy listener transaction exists; commit or rollback it before a production release"
+[ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
+  || die "unfinished customer Host Caddy transaction exists; commit or rollback it before a production release"
 
 if [ "$PREBUILT_MODE" != "true" ]; then
   [ -d "$SOURCE_DIR" ] || die "source directory does not exist: $SOURCE_DIR"

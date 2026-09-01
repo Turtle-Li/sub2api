@@ -11,6 +11,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
+      - name: Ensure ShellCheck
+        run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Check deployment scripts
         run: |
           /bin/bash -n deploy/apple-container.sh
@@ -47,6 +49,15 @@ jobs:
           /bin/sh deploy/tests/docker-compose-gateway-env-test.sh
           /bin/sh deploy/tests/docker-runtime-resources-test.sh
           /bin/sh deploy/test-caddyfile-cache.sh
+          /bin/bash deploy/gcp-taiwan-line/tests/transport-config-test.sh
+          shellcheck \
+            deploy/cloudflare-optimized-poc/sub2api-caddy-customer-host.sh \
+            deploy/gcp-taiwan-line/azure-caddy-listeners.sh \
+            deploy/gcp-taiwan-line/gcp-startup-bootstrap.sh \
+            deploy/gcp-taiwan-line/gcp-update-bootstrap.sh \
+            deploy/gcp-taiwan-line/install-gcp-haproxy.sh \
+            deploy/gcp-taiwan-line/verify-transport.sh \
+            deploy/gcp-taiwan-line/tests/transport-config-test.sh
 
   test:
     runs-on: ubuntu-latest

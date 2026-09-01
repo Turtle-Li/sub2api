@@ -21,6 +21,8 @@ fi
 
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 CADDYFILE="${SUB2API_RUNTIME_GUARD_CADDYFILE:-${APP_DIR}/Caddyfile}"
+CADDY_TRANSACTION_PATH="${APP_DIR}/.gcp-tw-caddy-transaction.env"
+CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 CADDY_CONFIG_PATH="${SUB2API_RUNTIME_GUARD_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
 POSTGRES_CONTAINER="${SUB2API_RUNTIME_GUARD_POSTGRES_CONTAINER:-sub2api-postgres}"
@@ -867,6 +869,11 @@ if ! acquire_maintenance_lock; then
   # boundary.  Lock contention is expected and therefore a successful no-op.
   exit 0
 fi
+
+[ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
+  || die "unfinished GCP Taiwan Caddy listener transaction exists; runtime recovery is fenced until commit or rollback"
+[ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
+  || die "unfinished customer Host Caddy transaction exists; runtime recovery is fenced until commit or rollback"
 
 if ! ACTIVE_UPSTREAM="$(unique_upstream_from_file "$CADDYFILE")"; then
   die "Caddyfile must contain exactly one supported active upstream: ${CADDYFILE}"

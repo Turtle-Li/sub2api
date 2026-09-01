@@ -14,6 +14,17 @@
   release configuration read-only. Do not assume the production branch or
   active container from local state.
 
+## GCP Taiwan line candidate
+
+- Read `deploy/gcp-taiwan-line/README.md` before operating the retained Taiwan
+  Premium candidate. Its exact static IP is the tested network identity.
+- The candidate runs the documented HAProxy transport-only ingress on exact
+  public TCP `80/443`, but production DNS still points to the old origin. It
+  has no project SSH identity, service account, runtime credential, app, data
+  service, worker, or OAuth-egress role. Do not add another line protocol,
+  widen ingress, release its address, or change DNS without satisfying the
+  documented cutover gates and the matching Vault/registry workflow.
+
 ## Windows desktop test client
 
 - Connect only through the configured SSH alias `turtle-windows`; do not copy

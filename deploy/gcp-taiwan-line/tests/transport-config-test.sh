@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+test_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+line_dir="$(cd -- "${test_dir}/.." && pwd)"
+test_root="$(mktemp -d "${TMPDIR:-/tmp}/sub2-tw-transport-test.XXXXXX")"
+trap 'rm -rf -- "$test_root"' EXIT
+
+fail() {
+    printf 'transport-config-test: %s\n' "$*" >&2
+    exit 1
+}
+
+for script in \
+    azure-caddy-listeners.sh \
+    gcp-startup-bootstrap.sh \
+    gcp-update-bootstrap.sh \
+    install-gcp-haproxy.sh \
+    verify-transport.sh; do
+    bash -n "${line_dir}/${script}"
+done
+PYTHONPYCACHEPREFIX="${test_root}/pycache" \
+    python3 -m py_compile "${line_dir}/render-azure-caddy-listeners.py"
+PYTHONPYCACHEPREFIX="${test_root}/pycache" \
+    python3 -m py_compile "${line_dir}/verify-azure-caddy-json.py"
+
+source_caddy="${test_root}/Caddyfile.source"
+staged_caddy="${test_root}/Caddyfile.staged"
+cat >"$source_caddy" <<'EOF'
+{
+}
+
+api.turtleligpt.com {
+	reverse_proxy sub2api-green:8080
+}
+EOF
+
+"${line_dir}/render-azure-caddy-listeners.py" render "$source_caddy" "$staged_caddy"
+"${line_dir}/render-azure-caddy-listeners.py" verify "$staged_caddy"
+grep -Fqx $'\tservers :443 {' "$staged_caddy" \
+    || fail 'renderer did not scope the listener policy to :443'
+grep -Fqx $'\t\tprotocols h1 h2' "$staged_caddy" \
+    || fail 'renderer did not disable HTTP/3 on the TCP-only ingress'
+grep -Fqx $'\t\t\t\tallow 130.211.243.139/32' "$staged_caddy" \
+    || fail 'renderer did not pin the PROXY allowlist to the exact GCP address'
+grep -Fqx $'\t\t\t\tfallback_policy skip' "$staged_caddy" \
+    || fail 'renderer did not preserve direct TLS fallback'
+if grep -Fq 'servers :80' "$staged_caddy"; then
+    fail 'renderer unexpectedly wrapped Caddy automatic HTTP redirect traffic'
+fi
+proxy_line="$(grep -nF $'\t\t\tproxy_protocol {' "$staged_caddy" | cut -d: -f1)"
+tls_line="$(grep -nF $'\t\t\ttls' "$staged_caddy" | cut -d: -f1)"
+[[ -n "$proxy_line" && -n "$tls_line" && "$proxy_line" -lt "$tls_line" ]] \
+    || fail 'PROXY listener wrapper must precede TLS'
+sed -n '/^api\.turtleligpt\.com/,$p' "$source_caddy" >"${test_root}/source.tail"
+sed -n '/^api\.turtleligpt\.com/,$p' "$staged_caddy" >"${test_root}/staged.tail"
+cmp -s "${test_root}/source.tail" "${test_root}/staged.tail" \
+    || fail 'renderer changed bytes outside the leading global-options block'
+if "${line_dir}/render-azure-caddy-listeners.py" render "$staged_caddy" \
+    "${test_root}/second-render" >/dev/null 2>&1; then
+    fail 'renderer accepted a non-empty global-options block'
+fi
+ln -s "$source_caddy" "${test_root}/source.link"
+if "${line_dir}/render-azure-caddy-listeners.py" render "${test_root}/source.link" \
+    "${test_root}/link-output" >/dev/null 2>&1; then
+    fail 'renderer accepted a symlink source'
+fi
+
+caddy_json="${test_root}/caddy.json"
+cat >"$caddy_json" <<'EOF'
+{
+  "apps": {"http": {"servers": {"srv0": {
+    "listen": [":443"],
+    "protocols": ["h1", "h2"],
+    "listener_wrappers": [
+      {"wrapper": "proxy_protocol", "allow": ["130.211.243.139/32"], "fallback_policy": "SKIP", "timeout": 2000000000},
+      {"wrapper": "tls"}
+    ],
+    "routes": [{
+      "match": [{"host": ["api.turtleligpt.com"]}],
+      "handle": [{"handler": "subroute", "routes": [{"handle": [
+        {"handler": "reverse_proxy", "upstreams": [{"dial": "sub2api-green:8080"}]}
+      ]}]}]
+    }]
+  }}}}
+}
+EOF
+contract_fingerprint="$("${line_dir}/verify-azure-caddy-json.py" <"$caddy_json")"
+[[ "$contract_fingerprint" =~ ^[0-9a-f]{64}$ ]] \
+    || fail 'Caddy JSON verifier did not fingerprint the valid runtime contract'
+python3 - "$caddy_json" "${test_root}/caddy-bad.json" <<'PY'
+import json
+import sys
+
+source, destination = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    document = json.load(handle)
+server = document["apps"]["http"]["servers"]["srv0"]
+server["listener_wrappers"][0]["allow"] = ["0.0.0.0/0"]
+with open(destination, "w", encoding="utf-8") as handle:
+    json.dump(document, handle)
+PY
+if "${line_dir}/verify-azure-caddy-json.py" <"${test_root}/caddy-bad.json" >/dev/null 2>&1; then
+    fail 'Caddy JSON verifier accepted a widened PROXY allowlist'
+fi
+
+http_server="$(awk '$1 == "server" && $2 == "azure_http" { print }' "${line_dir}/haproxy.cfg")"
+https_server="$(awk '$1 == "server" && $2 == "azure_https" { print }' "${line_dir}/haproxy.cfg")"
+[[ "$http_server" == *'4.216.216.16:80'* && "$http_server" != *send-proxy-v2* ]] \
+    || fail 'HAProxy HTTP backend must be plain TCP without PROXY protocol'
+[[ "$https_server" == *'4.216.216.16:443'* \
+    && "$https_server" == *send-proxy-v2* \
+    && "$https_server" == *'check-sni api.turtleligpt.com'* \
+    && "$https_server" == *'verify required'* \
+    && "$https_server" == *'verifyhost api.turtleligpt.com'* ]] \
+    || fail 'HAProxy HTTPS backend lacks the frozen PROXY/SNI/CA contract'
+if grep -Eq '^[[:space:]]*mode[[:space:]]+http([[:space:]]|$)|^[[:space:]]*bind[^#]*[[:space:]]ssl([[:space:]]|$)' \
+    "${line_dir}/haproxy.cfg"; then
+    fail 'HAProxy configuration unexpectedly terminates HTTP or TLS'
+fi
+grep -Fqx '    chroot /var/lib/haproxy' "${line_dir}/haproxy.cfg" \
+    || fail 'HAProxy must retain the Debian chroot'
+grep -Fqx '    user haproxy' "${line_dir}/haproxy.cfg" \
+    || fail 'HAProxy must drop worker privileges to the package user'
+grep -Fqx '    group haproxy' "${line_dir}/haproxy.cfg" \
+    || fail 'HAProxy must drop worker privileges to the package group'
+grep -Fqx '    timeout client-fin 1800s' "${line_dir}/haproxy.cfg" \
+    || fail 'HAProxy must not truncate half-closed long streams at 30 seconds'
+grep -Fq 'pgrep -u haproxy -x haproxy' "${line_dir}/verify-transport.sh" \
+    || fail 'GCP verifier does not prove the HAProxy worker dropped privileges'
+[[ "$(grep -Fc -- "--noproxy '*'" "${line_dir}/verify-transport.sh")" -eq 3 ]] \
+    || fail 'transport HTTP probes do not consistently bypass ambient proxy settings'
+
+# shellcheck disable=SC2016 # The search text intentionally names shell variables literally.
+write_state_line="$(grep -nF '    write_state "$backup_file" "$after_file" "$before_sha_local" "$after_sha_local"' \
+    "${line_dir}/azure-caddy-listeners.sh" | cut -d: -f1)"
+load_state_line="$(awk -v start="$write_state_line" 'NR > start && $0 == "    load_state" { print NR; exit }' \
+    "${line_dir}/azure-caddy-listeners.sh")"
+copy_live_line="$(awk -v start="$write_state_line" 'NR > start && /if ! copy_into_live_bind/ { print NR; exit }' \
+    "${line_dir}/azure-caddy-listeners.sh")"
+[[ -n "$write_state_line" && -n "$load_state_line" && -n "$copy_live_line" \
+    && "$write_state_line" -lt "$load_state_line" && "$load_state_line" -lt "$copy_live_line" ]] \
+    || fail 'Azure transaction state is not loaded before live verification/restore helpers'
+
+# shellcheck disable=SC2016 # The search text intentionally names a shell variable literally.
+copy_failure_line="$(grep -nF '    if ! copy_into_live_bind "$candidate"; then' \
+    "${line_dir}/azure-caddy-listeners.sh" | cut -d: -f1)"
+copy_restore_line="$(awk -v start="$copy_failure_line" \
+    'NR > start && /if restore_before/ { print NR; exit }' "${line_dir}/azure-caddy-listeners.sh")"
+copy_remove_line="$(awk -v start="$copy_failure_line" \
+    'NR > start && /rm -f -- "\$TRANSACTION_PATH"/ { print NR; exit }' "${line_dir}/azure-caddy-listeners.sh")"
+[[ -n "$copy_failure_line" && -n "$copy_restore_line" && -n "$copy_remove_line" \
+    && "$copy_failure_line" -lt "$copy_restore_line" && "$copy_restore_line" -lt "$copy_remove_line" ]] \
+    || fail 'Azure bind-write failure discards recovery state before restoring its backup'
+
+if grep -Fq 'os.replace(' "${line_dir}/../sub2api-blue-green-release.sh"; then
+    fail 'blue-green Caddy updates must preserve the running file-bind inode'
+fi
+for mutator in sub2api-blue-green-release.sh sub2api-server-release.sh sub2api-runtime-guard.sh; do
+    grep -Fq '.gcp-tw-caddy-transaction.env' "${line_dir}/../${mutator}" \
+        || fail "${mutator} lacks the retained listener-transaction fence"
+    grep -Fq '.cf-opt-totools-caddy.env' "${line_dir}/../${mutator}" \
+        || fail "${mutator} lacks the retained customer-Host transaction fence"
+done
+grep -Fq '.cf-opt-totools-caddy.env' "${line_dir}/azure-caddy-listeners.sh" \
+    || fail 'Azure listener staging lacks the customer-Host transaction fence'
+grep -Fq '.gcp-tw-caddy-transaction.env' \
+    "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh" \
+    || fail 'customer-Host preparation lacks the Azure listener transaction fence'
+
+grep -Fq 'gce-security-mirror-file|/etc/apt/mirrors/debian-security.list' \
+    "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'HAProxy installer rejects Debian security mirror manifests'
+grep -Fq 'stage|activate|update|rollback|status' "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'HAProxy installer lacks its non-disruptive update phase'
+grep -Fq "write_state STAGED" "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'HAProxy recovery authority is not published before mutation'
+
+grep -Fq 'readonly EXPECTED_HOSTNAME="sub2-tw-line-candidate"' \
+    "${line_dir}/gcp-startup-bootstrap.sh" \
+    || fail 'GCE bootstrap lacks an exact-host refusal'
+grep -Fq "GCP_BOOTSTRAP_PASS" "${line_dir}/gcp-startup-bootstrap.sh" \
+    || fail 'GCE bootstrap lacks a machine-readable success marker'
+grep -Fq "GCP_BOOTSTRAP_FAIL" "${line_dir}/gcp-startup-bootstrap.sh" \
+    || fail 'GCE bootstrap lacks a machine-readable failure marker'
+grep -Fq "GCP_UPDATE_PASS" "${line_dir}/gcp-update-bootstrap.sh" \
+    || fail 'GCE updater lacks a machine-readable success marker'
+grep -Fq "GCP_UPDATE_FAIL" "${line_dir}/gcp-update-bootstrap.sh" \
+    || fail 'GCE updater lacks a machine-readable failure marker'
+
+python3 - \
+    "${line_dir}/haproxy.cfg" \
+    "${line_dir}/install-gcp-haproxy.sh" \
+    "${line_dir}/gcp-startup-bootstrap.sh" \
+    "${line_dir}/gcp-update-bootstrap.sh" \
+    "${line_dir}/render-azure-caddy-listeners.py" \
+    "${line_dir}/verify-azure-caddy-json.py" \
+    "${line_dir}/azure-caddy-listeners.sh" \
+    "${line_dir}/verify-transport.sh" \
+    "$0" <<'PY'
+import pathlib
+import sys
+
+for name in sys.argv[1:]:
+    data = pathlib.Path(name).read_bytes()
+    if not data.endswith(b"\n"):
+        raise SystemExit(f"{name}: missing final newline")
+    if data.endswith(b"\n\n"):
+        raise SystemExit(f"{name}: new blank line at EOF")
+    for number, line in enumerate(data.splitlines(), 1):
+        if line.endswith((b" ", b"\t")):
+            raise SystemExit(f"{name}:{number}: trailing whitespace")
+PY
+
+printf 'Sub2 Taiwan transport static tests passed.\n'

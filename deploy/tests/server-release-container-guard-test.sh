@@ -392,6 +392,26 @@ if [ -s "$DOCKER_CALLS" ]; then
 fi
 
 : >"$DOCKER_CALLS"
+printf 'STATUS=staged\n' >"${APP_DIR}/.gcp-tw-caddy-transaction.env"
+if run_github_prebuilt_release >"${TEST_ROOT}/caddy-transaction.log" 2>&1; then
+  fail 'server release accepted an unfinished Caddy listener transaction'
+fi
+assert_contains "${TEST_ROOT}/caddy-transaction.log" \
+  'commit or rollback it before a production release'
+[ ! -s "$DOCKER_CALLS" ] || fail 'Docker was touched before the Caddy transaction guard'
+rm -f "${APP_DIR}/.gcp-tw-caddy-transaction.env"
+
+: >"$DOCKER_CALLS"
+printf 'BEFORE_SHA=test\n' >"${APP_DIR}/.cf-opt-totools-caddy.env"
+if run_github_prebuilt_release >"${TEST_ROOT}/customer-host-transaction.log" 2>&1; then
+  fail 'server release accepted an unfinished customer Host transaction'
+fi
+assert_contains "${TEST_ROOT}/customer-host-transaction.log" \
+  'commit or rollback it before a production release'
+[ ! -s "$DOCKER_CALLS" ] || fail 'Docker was touched before the customer Host transaction guard'
+rm -f "${APP_DIR}/.cf-opt-totools-caddy.env"
+
+: >"$DOCKER_CALLS"
 resolve_mismatch_output="${TEST_ROOT}/resolve-mismatch.log"
 if SUB2API_PUBLIC_HEALTH_RESOLVE='peer.invalid:443:192.0.2.10' \
   run_github_prebuilt_release >"$resolve_mismatch_output" 2>&1; then

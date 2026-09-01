@@ -83,6 +83,18 @@ override for deployments where background queues are disabled or the operator
 has separately fenced their consumers; it should not be enabled on normal
 Sub2API production hosts.
 
+### GCP Taiwan Premium transport ingress
+
+The retained GCP Taiwan Premium address now runs the approved HAProxy
+transport-only ingress for isolated explicit-IP canaries. It is not an
+application, database, worker, or OAuth-egress node, and production DNS remains
+on the old origin. Its exact resource identity, three-carrier evidence,
+versioned configuration, live validation, rollback, and remaining cutover
+gates are recorded in
+[`gcp-taiwan-line/README.md`](gcp-taiwan-line/README.md). Do not install another
+line protocol, release the tested address, add runtime credentials, or change
+traffic/DNS as part of an ordinary application release.
+
 ### Runtime recovery and historical fallback
 
 `install-autodeploy.sh` enables `sub2api-runtime-guard.timer` by default. The

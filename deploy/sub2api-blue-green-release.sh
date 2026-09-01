@@ -16,6 +16,8 @@ APP_PORT="${APP_PORT:-8080}"
 CADDY_CONTAINER="${CADDY_CONTAINER:-${SUB2API_CADDY_CONTAINER:-sub2api-caddy}}"
 CADDYFILE="${CADDYFILE:-$APP_DIR/Caddyfile}"
 CADDY_CONFIG_PATH="${CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
+CADDY_TRANSACTION_PATH="${APP_DIR}/.gcp-tw-caddy-transaction.env"
+CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
 CADDY_UPSTREAM_FROM="${CADDY_UPSTREAM_FROM:-$OLD_CONTAINER:$APP_PORT}"
 CADDY_UPSTREAM_TO="${CADDY_UPSTREAM_TO:-$NEW_CONTAINER:$APP_PORT}"
 RUN_BACKUP="${RUN_BACKUP:-true}"
@@ -604,35 +606,32 @@ caddy_active_config_contains() {
     '(wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/) | grep -qF "$CADDY_CHECK_TEXT"'
 }
 
-atomic_replace_file() {
+write_file_preserving_inode() {
   python3 - "$1" "$2" <<'PY'
 import os
-import shutil
 import sys
-import tempfile
 
 source_path, destination_path = sys.argv[1:]
-directory = os.path.dirname(destination_path) or "."
-stat = os.stat(destination_path, follow_symlinks=False)
-fd, temporary_path = tempfile.mkstemp(prefix=".sub2api-caddy.", dir=directory)
-try:
-    with os.fdopen(fd, "wb", closefd=True) as destination, open(source_path, "rb") as source:
-        shutil.copyfileobj(source, destination)
-        destination.flush()
-        os.fsync(destination.fileno())
-    os.chmod(temporary_path, stat.st_mode & 0o7777)
-    os.chown(temporary_path, stat.st_uid, stat.st_gid)
-    os.replace(temporary_path, destination_path)
-    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+with open(source_path, "rb") as source:
+    intended = source.read()
+with open(destination_path, "rb") as destination:
+    original = destination.read()
+
+def write_all(payload: bytes) -> None:
+    descriptor = os.open(destination_path, os.O_WRONLY | os.O_TRUNC | os.O_CLOEXEC)
     try:
-        os.fsync(directory_fd)
+        view = memoryview(payload)
+        written = 0
+        while written < len(view):
+            written += os.write(descriptor, view[written:])
+        os.fsync(descriptor)
     finally:
-        os.close(directory_fd)
-except Exception:
-    try:
-        os.unlink(temporary_path)
-    except FileNotFoundError:
-        pass
+        os.close(descriptor)
+
+try:
+    write_all(intended)
+except BaseException:
+    write_all(original)
     raise
 PY
 }
@@ -696,7 +695,7 @@ PY
 restore_caddy_switch() {
   local rollback_config
   [ "${changed_caddy:-false}" = true ] || return 1
-  atomic_replace_file "$caddy_backup" "$CADDYFILE" || return 1
+  write_file_preserving_inode "$caddy_backup" "$CADDYFILE" || return 1
   sync_caddy_startup_file || return 1
   rollback_config="/tmp/sub2api-release-rollback-$NEW_CONTAINER.Caddyfile"
   docker cp "$CADDYFILE" "$CADDY_CONTAINER:$rollback_config" || return 1
@@ -744,6 +743,10 @@ if [ "$VALIDATE_EXTERNAL_RUNTIME_ONLY" = true ]; then
 fi
 
 cd "$APP_DIR"
+[ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
+  || die "unfinished GCP Taiwan Caddy listener transaction exists; commit or rollback it before a blue-green release"
+[ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
+  || die "unfinished customer Host Caddy transaction exists; commit or rollback it before a blue-green release"
 container_exists "$CADDY_CONTAINER" || die "Caddy container $CADDY_CONTAINER does not exist"
 [ -f "$CADDYFILE" ] || die "Caddyfile not found: $CADDYFILE"
 if [ "$ALLOW_ISOLATED_OLD_CONTAINER" = true ]; then
@@ -914,7 +917,7 @@ if ! grep -qF "$CADDY_UPSTREAM_TO" "$CADDYFILE"; then
   caddy_tmp="$(mktemp)"
   TEMP_FILES+=("$caddy_tmp")
   perl -0pe "s/\\Q$CADDY_UPSTREAM_FROM\\E/$CADDY_UPSTREAM_TO/g" "$CADDYFILE" >"$caddy_tmp"
-  atomic_replace_file "$caddy_tmp" "$CADDYFILE"
+  write_file_preserving_inode "$caddy_tmp" "$CADDYFILE"
   rm -f -- "$caddy_tmp"
   changed_caddy=true
 else

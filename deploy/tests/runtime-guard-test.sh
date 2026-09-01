@@ -420,6 +420,29 @@ assert_contains "${CASE_ROOT}/output.log" 'maintenance lock is held; exiting wit
 [ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called while maintenance lock was held'
 assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'sentinel=true'
 
+# Runtime recovery shares the maintenance fence but must also respect a
+# listener transaction which remains authoritative after its staging command
+# releases that fence.
+new_case caddy-listener-transaction
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+printf 'STATUS=staged\n' >"${CASE_ROOT}/app/.gcp-tw-caddy-transaction.env"
+if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted an unfinished Caddy listener transaction'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'runtime recovery is fenced until commit or rollback'
+[ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called before the Caddy transaction guard'
+
+new_case customer-host-transaction
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+printf 'BEFORE_SHA=test\n' >"${CASE_ROOT}/app/.cf-opt-totools-caddy.env"
+if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted an unfinished customer Host transaction'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'runtime recovery is fenced until commit or rollback'
+[ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called before the customer Host transaction guard'
+
 # A resolve override for a different hostname must fail before it can turn the
 # peer origin into false node-local recovery evidence.
 new_case health-resolve-host-mismatch

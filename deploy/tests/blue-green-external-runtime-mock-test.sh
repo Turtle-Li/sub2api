@@ -364,6 +364,27 @@ run_helper() {
     /bin/bash "$SCRIPT"
 }
 
+# A retained listener transaction owns the complete Caddyfile until it is
+# explicitly committed or rolled back. A release must fail before Docker or
+# either application generation is touched.
+: >"$CALLS"
+printf 'STATUS=staged\n' >"$APP_DIR/.gcp-tw-caddy-transaction.env"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'blue-green release accepted an unfinished Caddy listener transaction'
+fi
+assert_contains "$OUTPUT" 'commit or rollback it before a blue-green release'
+[ ! -s "$CALLS" ] || fail 'Docker was touched before the Caddy transaction guard'
+rm -f "$APP_DIR/.gcp-tw-caddy-transaction.env"
+
+: >"$CALLS"
+printf 'BEFORE_SHA=test\n' >"$APP_DIR/.cf-opt-totools-caddy.env"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'blue-green release accepted an unfinished customer Host transaction'
+fi
+assert_contains "$OUTPUT" 'commit or rollback it before a blue-green release'
+[ ! -s "$CALLS" ] || fail 'Docker was touched before the customer Host transaction guard'
+rm -f "$APP_DIR/.cf-opt-totools-caddy.env"
+
 : >"$CALLS"
 if FAKE_CA_MODE=664 VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
   fail 'group-writable external CA was accepted'

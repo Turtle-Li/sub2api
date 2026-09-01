@@ -42,6 +42,8 @@ lock_mode="$(file_mode "${TEST_ROOT}/locks")"
 [ "$(run_state drain)" = DRAINING ]
 [ "$(run_state preflight)" = PREFLIGHT ]
 [ "$(run_state status)" = 'traffic=accepting active_container=sub2api-blue background=standby' ]
+[ "$(run_state rollback-standby)" = 'ROLLBACK_STANDBY sub2api-blue' ]
+[ "$(run_state status)" = 'traffic=accepting active_container=sub2api-blue background=standby' ]
 [ "$(run_state standby sub2api-green)" = 'STANDBY sub2api-green' ]
 if run_state standby sub2api-blue >/dev/null 2>&1; then
   printf 'FAIL: active container was accepted as standby\n' >&2
@@ -82,7 +84,7 @@ printf 'api.turtleligpt.com { reverse_proxy sub2api-green:8080 }\n' >"${TEST_ROO
 # A cluster drain/preflight must not interleave with a pending single-host
 # release transaction because the runtime guard could otherwise re-admit it.
 [ "$(run_state local-standby sub2api-blue)" = 'LOCAL_STANDBY sub2api-blue' ]
-for cluster_action in drain preflight activate abort; do
+for cluster_action in drain preflight rollback-standby activate abort; do
   if run_state "$cluster_action" >"${TEST_ROOT}/${cluster_action}.out" 2>"${TEST_ROOT}/${cluster_action}.err"; then
     printf 'FAIL: %s accepted an unfinished local release transaction\n' "$cluster_action" >&2
     exit 1

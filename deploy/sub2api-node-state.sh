@@ -189,6 +189,19 @@ main() {
       write_state "$TRAFFIC_FILE" accepting
       printf 'PREFLIGHT\n'
       ;;
+    rollback-standby)
+      [ "$#" -eq 1 ] || die "rollback-standby accepts no arguments"
+      require_no_local_transaction
+      # Keep this origin available for direct users and DNS rollback while
+      # preventing every local generation from acquiring new shared leases,
+      # OAuth refresh work, or queues.  Background fencing is written before
+      # request readiness is admitted.
+      container="$(active_container)"
+      mark_other_generations_standby "$container"
+      write_state "${BACKGROUND_DIR}/${container}" standby
+      write_state "$TRAFFIC_FILE" accepting
+      printf 'ROLLBACK_STANDBY %s\n' "$container"
+      ;;
     commit-local)
 	  [ "$#" -eq 1 ] || die "commit-local accepts no arguments"
 	  read_local_transaction
@@ -261,7 +274,7 @@ main() {
         *) die "Caddy active container does not match the local release transaction" ;;
       esac
       ;;
-    *) die "only bootstrap, status, standby, local-standby, drain, preflight, activate, abort, and recover-local are supported" ;;
+    *) die "only bootstrap, status, standby, local-standby, drain, preflight, rollback-standby, activate, abort, and recover-local are supported" ;;
   esac
 }
 
