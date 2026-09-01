@@ -100,8 +100,9 @@ func ProvideBatchImageModelPricingResolver(resolver *ModelPricingResolver) *Batc
 	return &BatchImageModelPricingResolver{Resolver: resolver}
 }
 
-func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, deliveryStore BatchImageDeliveryObjectStore, cfg *config.Config) *BatchImageCleanupService {
+func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, deliveryStore BatchImageDeliveryObjectStore, cfg *config.Config, lockCache LeaderLockCache, db *sql.DB) *BatchImageCleanupService {
 	svc := NewBatchImageCleanupService(repo, accountRepo, deliveryStore, cfg)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "batch-image-cleanup", 2*time.Minute)
 	svc.Start()
 	return svc
 }
@@ -315,12 +316,15 @@ func ProvideCNProviderBalanceCheckService(
 	balanceService *CNProviderBalanceService,
 	quotaService *CNProviderQuotaService,
 	cfg *config.Config,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 ) *CNProviderBalanceCheckService {
 	minutes := 10
 	if cfg != nil && cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes > 0 {
 		minutes = cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes
 	}
 	svc := NewCNProviderBalanceCheckService(accountRepo, balanceService, quotaService, cfg, time.Duration(minutes)*time.Minute)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "cn-provider-balance-check", 5*time.Minute)
 	svc.Start()
 	return svc
 }
@@ -380,8 +384,9 @@ func ProvideDashboardAggregationService(repo DashboardAggregationRepository, tim
 }
 
 // ProvideUsageCleanupService 创建并启动使用记录清理任务服务
-func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboardAgg *DashboardAggregationService, cfg *config.Config) *UsageCleanupService {
+func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboardAgg *DashboardAggregationService, cfg *config.Config, lockCache LeaderLockCache, db *sql.DB) *UsageCleanupService {
 	svc := NewUsageCleanupService(repo, timingWheel, dashboardAgg, cfg)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "usage-cleanup", 2*time.Minute)
 	svc.Start()
 	return svc
 }
@@ -399,15 +404,19 @@ func ProvideOpenAICodexVersionSyncService(
 	settingRepo SettingRepository,
 	settingService *SettingService,
 	githubClient GitHubReleaseClient,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 ) *OpenAICodexVersionSyncService {
 	svc := NewOpenAICodexVersionSyncService(settingRepo, settingService, githubClient, openAICodexVersionSyncInterval)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "openai-codex-version-sync", 2*time.Minute)
 	svc.Start()
 	return svc
 }
 
 // ProvideProxyExpiryService creates and starts ProxyExpiryService.
-func ProvideProxyExpiryService(proxyRepo ProxyRepository) *ProxyExpiryService {
+func ProvideProxyExpiryService(proxyRepo ProxyRepository, lockCache LeaderLockCache, db *sql.DB) *ProxyExpiryService {
 	svc := NewProxyExpiryService(proxyRepo, time.Minute)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "proxy-expiry", 30*time.Second)
 	svc.Start()
 	return svc
 }
@@ -468,8 +477,13 @@ func ProvideSchedulerSnapshotService(
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
 	cfg *config.Config,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 ) *SchedulerSnapshotService {
 	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
+	// The lease is renewed while the poll is running and is canceled if renewal
+	// proves that ownership was lost. A short TTL keeps crash recovery bounded.
+	svc.outboxLeaderLock = newSingletonJobLock(lockCache, db, "scheduler-outbox", 2*time.Minute)
 	svc.Start()
 	return svc
 }
@@ -630,8 +644,11 @@ func ProvideScheduledTestRunnerService(
 	accountTestSvc *AccountTestService,
 	rateLimitSvc *RateLimitService,
 	cfg *config.Config,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 ) *ScheduledTestRunnerService {
 	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "scheduled-test-runner", 2*time.Minute)
 	svc.Start()
 	return svc
 }
@@ -1026,8 +1043,11 @@ func ProvideChannelMonitorRunner(
 	svc *ChannelMonitorService,
 	settingService *SettingService,
 	quotaFetcher *ChannelMonitorQuotaFetcher,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 ) *ChannelMonitorRunner {
 	r := NewChannelMonitorRunner(svc, settingService)
+	r.leaderLock = newSingletonJobLock(lockCache, db, "channel-monitor", monitorRequestTimeout+monitorPingTimeout+monitorRunOneBuffer+time.Minute)
 	if svc != nil {
 		// Ensure runtime reader is set even if ProvideChannelMonitorService
 		// was constructed without settings (tests / alternate providers).

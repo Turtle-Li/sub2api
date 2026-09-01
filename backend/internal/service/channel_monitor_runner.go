@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand/v2"
+	"strconv"
 	"sync"
 	"time"
 
@@ -48,6 +49,7 @@ type monitorRunnerSvc interface {
 type ChannelMonitorRunner struct {
 	svc            monitorRunnerSvc
 	settingService *SettingService
+	leaderLock     *singletonJobLock
 
 	pool         pond.Pool
 	parentCtx    context.Context
@@ -304,6 +306,12 @@ func (r *ChannelMonitorRunner) runOne(id int64, name string) {
 	defer cancel()
 
 	defer r.releaseInFlight(id)
+	leaseCtx, release, acquired := r.leaderLock.trySuffix(ctx, strconv.FormatInt(id, 10))
+	if !acquired {
+		return
+	}
+	defer release()
+	ctx = leaseCtx
 
 	defer func() {
 		if rec := recover(); rec != nil {

@@ -131,11 +131,12 @@ func (s *SubscriptionExpiryService) sendExpiryReminders(ctx context.Context) {
 
 	// Multi-instance guard: only the leader walks every active subscription and
 	// sends reminders, avoiding N× full scans and duplicate reminder emails.
-	release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, subscriptionExpiryReminderLeaderLockKey, s.instanceID, subscriptionExpiryReminderLeaderLockTTL)
+	leaseCtx, release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, subscriptionExpiryReminderLeaderLockKey, s.instanceID, subscriptionExpiryReminderLeaderLockTTL)
 	if !ok {
 		return
 	}
 	defer release()
+	ctx = leaseCtx
 	for page := 1; ; page++ {
 		subs, pag, err := s.userSubRepo.List(ctx, pagination.PaginationParams{Page: page, PageSize: 200}, nil, nil, SubscriptionStatusActive, "", "expires_at", "asc")
 		if err != nil {

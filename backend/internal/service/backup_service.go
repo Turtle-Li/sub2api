@@ -506,12 +506,13 @@ func (s *BackupService) runScheduledBackup() {
 	// 多实例保护: 集群部署时只让 leader 执行定时备份, 避免每个实例各自对同一个
 	// 数据库跑一次全量 dump、上传时峰值内存翻倍、以及多份同名对象互相覆盖。
 	// 手动触发的备份 (CreateBackup/StartBackup) 不受此限, 运维仍可随时在任一节点强制备份。
-	release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, backupScheduledLeaderLockKey, s.instanceID, backupScheduledLeaderLockTTL)
+	leaseCtx, release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, backupScheduledLeaderLockKey, s.instanceID, backupScheduledLeaderLockTTL)
 	if !ok {
 		logger.LegacyPrintf("service.backup", "[Backup] 定时备份跳过: 本实例非 leader")
 		return
 	}
 	defer release()
+	ctx = leaseCtx
 
 	// 读取定时备份配置中的过期天数
 	schedule, _ := s.GetSchedule(ctx)

@@ -16,6 +16,7 @@ jobs:
           /bin/bash -n deploy/apple-container.sh
           /bin/bash deploy/tests/apple-container-test.sh
           /bin/bash -n deploy/install-autodeploy.sh
+          /bin/bash deploy/tests/install-autodeploy-runtime-mode-test.sh
           /bin/bash -n deploy/sub2api-autodeploy.sh
           /bin/bash -n deploy/sub2api-github-image-release.sh
           /bin/bash deploy/tests/autodeploy-control-flow-test.sh
@@ -28,6 +29,16 @@ jobs:
           /bin/bash -n deploy/sub2api-github-deploy-trigger.sh
           /bin/bash -n deploy/install-github-deploy-trigger.sh
           /bin/bash -n deploy/sub2api-server-release.sh
+          /bin/bash -n deploy/sub2api-blue-green-release.sh
+          /bin/bash deploy/tests/blue-green-external-runtime-mock-test.sh
+          /bin/bash -n deploy/sub2api-cert-receiver.sh
+          /bin/bash -n deploy/sub2api-cert-deploy-trigger.sh
+          /bin/bash -n deploy/install-sub2api-cert-receiver.sh
+          /bin/bash deploy/tests/certificate-receiver-test.sh
+          /bin/bash -n deploy/install-sub2api-fixed-egress.sh
+          /bin/bash deploy/tests/fixed-egress-test.sh
+          /bin/bash -n deploy/sub2api-node-state.sh
+          /bin/bash deploy/tests/node-state-test.sh
           /bin/sh deploy/tests/docker-compose-security-test.sh
           /bin/sh deploy/tests/docker-compose-gateway-env-test.sh
           /bin/sh deploy/tests/docker-runtime-resources-test.sh

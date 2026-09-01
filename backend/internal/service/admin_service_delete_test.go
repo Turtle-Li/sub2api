@@ -334,6 +334,8 @@ type proxyRepoStub struct {
 	countErr     error
 	accountCount int64
 	deletedIDs   []int64
+	getByID      map[int64]*Proxy
+	getByIDErr   error
 }
 
 func (s *proxyRepoStub) Create(ctx context.Context, proxy *Proxy) error {
@@ -341,7 +343,13 @@ func (s *proxyRepoStub) Create(ctx context.Context, proxy *Proxy) error {
 }
 
 func (s *proxyRepoStub) GetByID(ctx context.Context, id int64) (*Proxy, error) {
-	panic("unexpected GetByID call")
+	if s.getByIDErr != nil {
+		return nil, s.getByIDErr
+	}
+	if proxy, ok := s.getByID[id]; ok {
+		return proxy, nil
+	}
+	return nil, ErrProxyNotFound
 }
 
 func (s *proxyRepoStub) ListByIDs(ctx context.Context, ids []int64) ([]Proxy, error) {

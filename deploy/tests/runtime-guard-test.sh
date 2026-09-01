@@ -76,13 +76,18 @@ load_state() {
   # Test-generated values only.
   # shellcheck disable=SC1090
   . "$file"
+  restart_policy="${restart_policy:-unless-stopped}"
+  networks="${networks:-}"
+  mounts="${mounts:-}"
+  environment="${environment:-}"
 }
 
 save_state() {
   local file
   file="$(state_file "$1")"
-  printf 'running=%s\nhealth=%s\noom=%s\nexit_code=%s\nimage=%s\nstart_health=%s\nrestart_health=%s\n' \
-    "$running" "$health" "$oom" "$exit_code" "$image" "$start_health" "$restart_health" >"$file"
+  printf 'running=%q\nhealth=%q\noom=%q\nexit_code=%q\nimage=%q\nstart_health=%q\nrestart_health=%q\nrestart_policy=%q\nnetworks=%q\nmounts=%q\nenvironment=%q\n' \
+    "$running" "$health" "$oom" "$exit_code" "$image" "$start_health" "$restart_health" \
+    "$restart_policy" "$networks" "$mounts" "$environment" >"$file"
 }
 
 case "${1:-}" in
@@ -99,6 +104,10 @@ case "${1:-}" in
       *State.OOMKilled*) printf '%s\n' "$oom" ;;
       *State.ExitCode*) printf '%s\n' "$exit_code" ;;
       *Config.Image*) printf '%s\n' "$image" ;;
+      *HostConfig.RestartPolicy*) printf '%s\n' "$restart_policy" ;;
+      *NetworkSettings.Networks*) printf '%s\n' "$networks" ;;
+      *Mounts*) printf '%s\n' "$mounts" ;;
+      *Config.Env*) printf '%s\n' "$environment" ;;
       *) : ;;
     esac
     ;;
@@ -182,6 +191,45 @@ exit 0
 EOF
 chmod +x "${FAKE_BIN}/sleep"
 
+cat >"${FAKE_BIN}/realpath" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+path="${!#}"
+[ -e "$path" ] || exit 1
+printf '%s\n' "$path"
+EOF
+chmod +x "${FAKE_BIN}/realpath"
+
+cat >"${FAKE_BIN}/stat" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[ "${1:-}" = -c ] || exit 1
+format="${2:-}"
+path="${3:-}"
+case "$path" in
+  */external-runtime.env)
+    uid=0; gid=0; mode=600
+    ;;
+  */ca.crt)
+    uid=0; gid=0; mode=644
+    ;;
+  */traffic-state|*/background/sub2api|*/background/sub2api-blue|*/background/sub2api-green)
+    uid=0; gid=0; mode=644
+    ;;
+  */internal-health-token)
+    uid=1000; gid=1000; mode=600
+    ;;
+  *) exit 1 ;;
+esac
+case "$format" in
+  %u) printf '%s\n' "$uid" ;;
+  %g) printf '%s\n' "$gid" ;;
+  %a) printf '%s\n' "$mode" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "${FAKE_BIN}/stat"
+
 write_container() {
   local name="$1"
   local running="$2"
@@ -198,6 +246,81 @@ write_container() {
     >"${CASE_ROOT}/containers/${name}.env"
 }
 
+write_runtime_metadata() {
+  local name="$1"
+  local restart_policy="$2"
+  local networks="$3"
+  local mounts="$4"
+  local environment="$5"
+  local file="${CASE_ROOT}/containers/${name}.env"
+  [ -f "$file" ] || fail "missing container fixture: ${name}"
+  printf 'restart_policy=%q\nnetworks=%q\nmounts=%q\nenvironment=%q\n' \
+    "$restart_policy" "$networks" "$mounts" "$environment" >>"$file"
+}
+
+write_external_runtime_files() {
+  mkdir -p "${CASE_ROOT}/external" "${CASE_ROOT}/runtime/background" "${CASE_ROOT}/app/secrets"
+  cat >"${CASE_ROOT}/external/external-runtime.env" <<'EOF'
+DATABASE_HOST=postgres.invalid
+DATABASE_PORT=5432
+DATABASE_USER=sub2api
+DATABASE_PASSWORD=test-only-password
+DATABASE_DBNAME=sub2api
+DATABASE_SSLMODE=verify-full
+REDIS_HOST=redis.invalid
+REDIS_PORT=6380
+REDIS_USERNAME=sub2api
+REDIS_PASSWORD=test-only-password
+REDIS_DB=0
+REDIS_ENABLE_TLS=true
+EOF
+  printf 'test-ca\n' >"${CASE_ROOT}/external/ca.crt"
+  printf 'accepting\n' >"${CASE_ROOT}/runtime/traffic-state"
+  printf 'standby generation-test\n' >"${CASE_ROOT}/runtime/background/sub2api-green"
+  printf 'standby generation-test\n' >"${CASE_ROOT}/runtime/background/sub2api-blue"
+  printf 'standby generation-test\n' >"${CASE_ROOT}/runtime/background/sub2api"
+  printf 'test-only-health-token\n' >"${CASE_ROOT}/app/secrets/internal-health-token"
+}
+
+external_environment() {
+  cat <<'EOF'
+DATABASE_HOST=postgres.invalid
+DATABASE_PORT=5432
+DATABASE_USER=sub2api
+DATABASE_PASSWORD=test-only-password
+DATABASE_DBNAME=sub2api
+DATABASE_SSLMODE=verify-full
+REDIS_HOST=redis.invalid
+REDIS_PORT=6380
+REDIS_USERNAME=sub2api
+REDIS_PASSWORD=test-only-password
+REDIS_DB=0
+REDIS_ENABLE_TLS=true
+PGSSLROOTCERT=/etc/sub2api-db-ca/ca.crt
+EOF
+}
+
+dual_environment() {
+  external_environment
+  cat <<'EOF'
+SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state
+SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state
+SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token
+EOF
+}
+
+external_mounts() {
+  local container_name="$1"
+  cat <<EOF
+volume|candidate-data|/app/data|true
+bind|${CASE_ROOT}/external/ca.crt|/etc/sub2api-db-ca/ca.crt|false
+bind|${CASE_ROOT}/external/ca.crt|/etc/ssl/certs/sub2api-db-ca.pem|false
+bind|${CASE_ROOT}/runtime/traffic-state|/run/sub2api-runtime/traffic-state|false
+bind|${CASE_ROOT}/runtime/background/${container_name}|/run/sub2api-runtime/background-state|false
+bind|${CASE_ROOT}/app/secrets/internal-health-token|/run/sub2api-runtime/health-token|false
+EOF
+}
+
 new_case() {
   local name="$1"
 
@@ -206,6 +329,7 @@ new_case() {
   : >"${CASE_ROOT}/docker-calls.log"
   : >"${CASE_ROOT}/release-calls.log"
   : >"${CASE_ROOT}/curl-calls.log"
+  : >"${CASE_ROOT}/node-state-calls.log"
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/app/Caddyfile"
   printf '{"upstream":"sub2api-green:8080"}\n' >"${CASE_ROOT}/active-config.json"
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/startup-Caddyfile"
@@ -213,9 +337,10 @@ new_case() {
   cat >"${CASE_ROOT}/app/scripts/sub2api-blue-green-release.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf 'old=%s\nnew=%s\nimage=%s\nfrom=%s\nto=%s\nbackup=%s\npull=%s\nremove=%s\n' \
+printf 'old=%s\nnew=%s\nimage=%s\nfrom=%s\nto=%s\nbackup=%s\npull=%s\nremove=%s\nisolated_old=%s\n' \
   "$OLD_CONTAINER" "$NEW_CONTAINER" "$NEW_IMAGE" "$CADDY_UPSTREAM_FROM" "$CADDY_UPSTREAM_TO" \
-  "$RUN_BACKUP" "$PULL_IMAGE" "$REMOVE_EXISTING_NEW_CONTAINER" >>"$FAKE_RELEASE_CALLS"
+  "$RUN_BACKUP" "$PULL_IMAGE" "$REMOVE_EXISTING_NEW_CONTAINER" \
+  "${ALLOW_ISOLATED_OLD_CONTAINER:-false}" >>"$FAKE_RELEASE_CALLS"
 printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$CADDYFILE"
 printf '{"upstream":"%s"}\n' "$CADDY_UPSTREAM_TO" >"$FAKE_ACTIVE_CONFIG_FILE"
 printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$FAKE_STARTUP_CONFIG_FILE"
@@ -227,6 +352,13 @@ fi
 exit "${FAKE_RELEASE_RESULT:-0}"
 EOF
   chmod +x "${CASE_ROOT}/app/scripts/sub2api-blue-green-release.sh"
+  cat >"${CASE_ROOT}/app/scripts/sub2api-node-state.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >>"$FAKE_NODE_STATE_CALLS"
+printf 'NO_LOCAL_RECOVERY\n'
+EOF
+  chmod +x "${CASE_ROOT}/app/scripts/sub2api-node-state.sh"
 }
 
 write_standard_dependencies() {
@@ -244,11 +376,13 @@ run_guard() {
     FAKE_CURL_CALLS="${CASE_ROOT}/curl-calls.log" \
     FAKE_DOCKER_CALLS="${CASE_ROOT}/docker-calls.log" \
     FAKE_FLOCK_MODE="${FAKE_FLOCK_MODE:-success}" \
+    FAKE_NODE_STATE_CALLS="${CASE_ROOT}/node-state-calls.log" \
     FAKE_RELEASE_CALLS="${CASE_ROOT}/release-calls.log" \
     FAKE_STARTUP_CONFIG_FILE="${CASE_ROOT}/startup-Caddyfile" \
     SUB2API_APP_DIR="${CASE_ROOT}/app" \
     SUB2API_MAINTENANCE_LOCK_FILE="${CASE_ROOT}/maintenance.lock" \
     SUB2API_PUBLIC_HEALTH_URL='https://example.invalid/health' \
+    SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RUNTIME_GUARD_CONFIG_FILE="${CASE_ROOT}/missing.env" \
     SUB2API_RUNTIME_GUARD_CADDYFILE="${CASE_ROOT}/app/Caddyfile" \
     SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS="${SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS:-0}" \
@@ -259,6 +393,19 @@ run_guard() {
     SUB2API_RUNTIME_GUARD_RETRY_INTERVAL_SECONDS=0 \
     SUB2API_RUNTIME_GUARD_STATE_DIR="${CASE_ROOT}/runtime-state" \
     /bin/bash "$SCRIPT"
+}
+
+run_external_guard() {
+  SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
+  SUB2API_EXTERNAL_RUNTIME_ENV_FILE="${CASE_ROOT}/external/external-runtime.env" \
+  SUB2API_EXTERNAL_CA_FILE="${CASE_ROOT}/external/ca.crt" \
+  SUB2API_RUNTIME_GUARD_NETWORK=candidate-network \
+  SUB2API_RUNTIME_GUARD_DATA_VOLUME=candidate-data \
+  SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
+  SUB2API_TRAFFIC_STATE_FILE_HOST="${CASE_ROOT}/runtime/traffic-state" \
+  SUB2API_BACKGROUND_STATE_DIR_HOST="${CASE_ROOT}/runtime/background" \
+  SUB2API_INTERNAL_HEALTH_TOKEN_FILE="${CASE_ROOT}/app/secrets/internal-health-token" \
+    run_guard
 }
 
 # Lock contention must be a successful no-op: no Docker inspection or state
@@ -273,6 +420,17 @@ assert_contains "${CASE_ROOT}/output.log" 'maintenance lock is held; exiting wit
 [ ! -s "${CASE_ROOT}/docker-calls.log" ] || fail 'Docker was called while maintenance lock was held'
 assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'sentinel=true'
 
+# A resolve override for a different hostname must fail before it can turn the
+# peer origin into false node-local recovery evidence.
+new_case health-resolve-host-mismatch
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+if SUB2API_PUBLIC_HEALTH_RESOLVE='peer.invalid:443:192.0.2.10' run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a health resolve override for a peer hostname'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'host/port must match SUB2API_PUBLIC_HEALTH_URL'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'inspect '
+
 # A healthy active slot only verifies Caddy consistency and exits unchanged.
 new_case active-healthy
 write_standard_dependencies
@@ -283,6 +441,99 @@ assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 [ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'blue-green helper ran for a healthy active slot'
+assert_contains "${CASE_ROOT}/node-state-calls.log" 'recover-local'
+
+# External shared dependencies are never treated as local Docker containers.
+# A healthy active slot is accepted only when its exact external credentials,
+# CA, network, data volume, and dual-node runtime mounts/env match.
+new_case external-active-healthy
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'runtime dependency mode=external; skipping local PostgreSQL and Redis container inspection and lifecycle actions'
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'inspect sub2api-postgres'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'inspect sub2api-redis'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-postgres'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-redis'
+
+# A missing runtime mount fails before any application lifecycle action.
+new_case external-active-runtime-mismatch
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green false exited false 0 sub2api:current
+incomplete_mounts="$(external_mounts sub2api-green | grep -v '/run/sub2api-runtime/health-token')"
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$incomplete_mounts" "$(dual_environment)"
+if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted an external active container with a missing runtime mount'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'active application runtime does not match the configured dependency and dual-node contract'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-green'
+
+# An already-running historical slot is also checked before the failed active
+# slot is stopped. This closes the drain/fallback path that never calls start.
+new_case external-running-fallback-runtime-mismatch
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue true healthy false 0 sub2api:old-blue
+incomplete_fallback_mounts="$(external_mounts sub2api-blue | grep -v '/run/sub2api-runtime/background-state')"
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$incomplete_fallback_mounts" "$(dual_environment)"
+if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a running fallback with a missing runtime mount'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'running inactive fallback does not match the configured dependency and dual-node contract: sub2api-blue'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+
+# A stopped fallback with missing per-container runtime state must fail softly
+# after isolation so the outer recovery transaction records a cooldown fence.
+new_case external-stopped-fallback-missing-state
+write_standard_dependencies
+write_external_runtime_files
+rm -f "${CASE_ROOT}/runtime/background/sub2api-blue"
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+if SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS=300 run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a fallback whose background state was absent'
+fi
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+assert_contains "${CASE_ROOT}/output.log" 'historical fallback did not become healthy'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=fallback-did-not-become-healthy'
+: >"${CASE_ROOT}/docker-calls.log"
+if SUB2API_RUNTIME_GUARD_COOLDOWN_SECONDS=300 run_external_guard >"${CASE_ROOT}/cooldown.log" 2>&1; then
+  fail 'runtime guard ignored cooldown after fallback runtime validation failed'
+fi
+assert_contains "${CASE_ROOT}/cooldown.log" 'runtime recovery is cooling down'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+
+# A Caddy-selected active container can be absent after an interrupted cleanup.
+# External/dual recovery must still validate and promote a conforming fallback.
+new_case external-active-absent-fallback
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is absent: sub2api-green'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+assert_contains "${CASE_ROOT}/release-calls.log" 'isolated_old=true'
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
 
 # A stopped active slot is started and proven through Docker health plus its
 # internal health endpoint before any historical candidate is considered.
@@ -328,6 +579,7 @@ assert_contains "${CASE_ROOT}/release-calls.log" 'to=sub2api-blue:8080'
 assert_contains "${CASE_ROOT}/release-calls.log" 'backup=false'
 assert_contains "${CASE_ROOT}/release-calls.log" 'pull=false'
 assert_contains "${CASE_ROOT}/release-calls.log" 'remove=false'
+assert_contains "${CASE_ROOT}/release-calls.log" 'isolated_old=true'
 assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
 assert_contains "${CASE_ROOT}/active-config.json" 'sub2api-blue:8080'
 assert_contains "${CASE_ROOT}/startup-Caddyfile" 'sub2api-blue:8080'
@@ -410,5 +662,6 @@ write_container sub2api-green true healthy false 0 sub2api:current
 FAKE_CADDY_ADMIN_MODE=fail-until-restart run_guard >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-caddy'
 assert_contains "${CASE_ROOT}/output.log" 'restarting Caddy container after its admin API remained unavailable'
+assert_contains "${CASE_ROOT}/curl-calls.log" '--resolve example.invalid:443:192.0.2.10'
 
 printf 'Runtime guard fake-Docker tests passed.\n'

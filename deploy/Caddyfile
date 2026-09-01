@@ -87,7 +87,7 @@ api.sub2api.com {
 	# 请求大小限制 (防止大文件攻击)
 	# =========================================================================
 	# Responses and authenticated Batch Image submissions accept large
-	# multimodal JSON up to 100 MB. Batch Image can legitimately repeat inline
+	# multimodal JSON up to 128 MB. Batch Image can legitimately repeat inline
 	# reference images across multiple output items; its application contract
 	# still enforces per-image, per-item, per-job, and global 256 MiB limits.
 	# Keep every other endpoint at 16 MB so these exceptions cannot widen the
@@ -95,7 +95,7 @@ api.sub2api.com {
 	# independently by Sub2API.
 	@large_multimodal_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
 	request_body @large_multimodal_request_body {
-		max_size 100MB
+		max_size 128MB
 	}
 	@standard_request_body not path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
 	request_body @standard_request_body {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 )
 
@@ -485,6 +486,9 @@ func (s *TokenRefreshService) processRefresh() {
 
 // processRefreshContext executes one bounded, cursor-resumable refresh cycle.
 func (s *TokenRefreshService) processRefreshContext(parent context.Context) {
+	if !runtimegate.SharedWorkAllowed() {
+		return
+	}
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -521,6 +525,9 @@ func (s *TokenRefreshService) processRefreshContext(parent context.Context) {
 	stats := tokenRefreshPageStats{}
 	afterID := s.candidateAfterID()
 	for {
+		if !runtimegate.SharedWorkAllowed() {
+			break
+		}
 		if ctx.Err() != nil {
 			slog.Warn("token_refresh.cycle_stopped", "error", ctx.Err(), "resume_after_id", afterID)
 			break
@@ -674,11 +681,7 @@ func (s *TokenRefreshService) processProviderAccounts(
 		go func() {
 			defer wg.Done()
 			for account := range jobs {
-				if ctx.Err() != nil || state.isTripped() {
-					results <- refreshResult{accountID: account.ID, err: errRefreshSkipped}
-					continue
-				}
-				if state.isTripped() {
+				if ctx.Err() != nil || !runtimegate.SharedWorkAllowed() || state.isTripped() {
 					results <- refreshResult{accountID: account.ID, err: errRefreshSkipped}
 					continue
 				}
@@ -1456,11 +1459,13 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 		return
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
+	proxyURL, err := ResolveAccountProxyURLWithLookup(ctx, account, s.proxyRepo)
+	if err != nil {
+		slog.Warn("token_refresh.openai_privacy_proxy_unavailable",
+			"account_id", account.ID,
+			"reason", AccountProxyUnavailableReason,
+		)
+		return
 	}
 
 	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)

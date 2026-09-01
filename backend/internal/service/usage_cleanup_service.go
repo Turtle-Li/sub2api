@@ -28,6 +28,7 @@ type UsageCleanupService struct {
 	timingWheel *TimingWheelService
 	dashboard   *DashboardAggregationService
 	cfg         *config.Config
+	leaderLock  *singletonJobLock
 
 	running   int32
 	startOnce sync.Once
@@ -164,12 +165,17 @@ func (s *UsageCleanupService) runOnce() {
 		return
 	}
 	defer atomic.StoreInt32(&svc.running, 0)
-
 	parent := context.Background()
 	if svc.workerCtx != nil {
 		parent = svc.workerCtx
 	}
-	ctx, cancel := context.WithTimeout(parent, svc.taskTimeout())
+	leaseCtx, release, ok := svc.leaderLock.try(parent)
+	if !ok {
+		return
+	}
+	defer release()
+
+	ctx, cancel := context.WithTimeout(leaseCtx, svc.taskTimeout())
 	defer cancel()
 
 	task, err := svc.repo.ClaimNextPendingTask(ctx, int64(svc.taskTimeout().Seconds()))
@@ -204,6 +210,10 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 		}
 		canceled, err := s.isTaskCanceled(ctx, task.ID)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task interrupted: task=%d err=%v", task.ID, err)
+				return
+			}
 			s.markTaskFailed(task.ID, deletedTotal, err)
 			return
 		}
@@ -224,8 +234,16 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 			return
 		}
 		deletedTotal += deleted
+		if ctx != nil && ctx.Err() != nil {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task interrupted after batch: task=%d err=%v", task.ID, ctx.Err())
+			return
+		}
 		if deleted > 0 {
-			updateCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			// The claim/leader fence is still held by runOnce while this bounded
+			// bookkeeping write completes. Detach only after the cancellation check
+			// above so a deadline arriving at the edge cannot strand a completed
+			// delete batch in running state.
+			updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			if err := s.repo.UpdateTaskProgress(updateCtx, task.ID, deletedTotal); err != nil {
 				logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task progress update failed: task=%d deleted_rows=%d err=%v", task.ID, deletedTotal, err)
 			}
@@ -239,7 +257,11 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 		}
 	}
 
-	updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if ctx != nil && ctx.Err() != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task interrupted before completion: task=%d err=%v", task.ID, ctx.Err())
+		return
+	}
+	updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := s.repo.MarkTaskSucceeded(updateCtx, task.ID, deletedTotal); err != nil {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] update task succeeded failed: task=%d err=%v", task.ID, err)
@@ -273,7 +295,7 @@ func (s *UsageCleanupService) isTaskCanceled(ctx context.Context, taskID int64) 
 	if s == nil || s.repo == nil {
 		return false, fmt.Errorf("cleanup service not ready")
 	}
-	checkCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	status, err := s.repo.GetTaskStatus(checkCtx, taskID)
 	if err != nil {

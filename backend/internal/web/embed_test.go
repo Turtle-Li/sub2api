@@ -528,6 +528,8 @@ func TestFrontendServer_Middleware(t *testing.T) {
 			"/antigravity/test",
 			"/setup/init",
 			"/health",
+			"/internal/livez",
+			"/internal/readyz",
 			"/responses",
 			"/responses/compact",
 		}
@@ -790,6 +792,8 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 			"/antigravity/test",
 			"/setup/init",
 			"/health",
+			"/internal/livez",
+			"/internal/readyz",
 			"/responses",
 			"/responses/compact",
 		}

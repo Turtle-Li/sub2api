@@ -3158,6 +3158,168 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	return rows, nil
 }
 
+func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
+	ctx context.Context,
+	ids []int64,
+	expectedProxyID int64,
+	newProxy *service.Proxy,
+) ([]int64, error) {
+	if r == nil || r.client == nil || len(ids) == 0 || expectedProxyID < 0 {
+		return nil, service.ErrAccountProxyCASConflict
+	}
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	exec := tx.Client()
+
+	var newProxyID any
+	if newProxy != nil {
+		newProxyID = newProxy.ID
+		rows, queryErr := exec.QueryContext(txCtx, `
+			SELECT id
+			FROM proxies
+			WHERE id = $1
+			  AND status = $2
+			  AND protocol = $3
+			  AND host = $4
+			  AND port = $5
+			  AND COALESCE(username, '') = $6
+			  AND COALESCE(password, '') = $7
+			  AND deleted_at IS NULL
+			  AND expires_at IS NULL
+			  AND fallback_mode = $8
+			  AND backup_proxy_id IS NULL
+			FOR SHARE
+		`, newProxy.ID, service.StatusActive, "socks5h", newProxy.Host, 1080, "", "", service.FallbackModeNone)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		locked := false
+		if rows.Next() {
+			var lockedID int64
+			if scanErr := rows.Scan(&lockedID); scanErr != nil {
+				_ = rows.Close()
+				return nil, scanErr
+			}
+			locked = lockedID == newProxy.ID
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			_ = rows.Close()
+			return nil, rowsErr
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			return nil, closeErr
+		}
+		if !locked {
+			return nil, service.ErrAccountProxyCASConflict
+		}
+	}
+
+	whereExpected := "proxy_id IS NULL"
+	args := []any{pq.Array(ids), service.PlatformOpenAI, service.AccountTypeOAuth, service.StatusActive}
+	if expectedProxyID > 0 {
+		whereExpected = "proxy_id = $5"
+		args = append(args, expectedProxyID)
+	}
+	rows, err := exec.QueryContext(txCtx, `
+		SELECT id
+		FROM accounts
+		WHERE id = ANY($1)
+		  AND deleted_at IS NULL
+		  AND platform = $2
+		  AND type = $3
+		  AND status = $4
+		  AND parent_account_id IS NULL
+		  AND `+whereExpected+`
+		ORDER BY id
+		FOR UPDATE
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	parentIDs := make([]int64, 0, len(ids))
+	for rows.Next() {
+		var id int64
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
+		}
+		parentIDs = append(parentIDs, id)
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(parentIDs) != len(ids) {
+		return nil, service.ErrAccountProxyCASConflict
+	}
+	expectedIDs := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, service.ErrAccountProxyCASConflict
+		}
+		expectedIDs[id] = struct{}{}
+	}
+	if len(expectedIDs) != len(ids) {
+		return nil, service.ErrAccountProxyCASConflict
+	}
+	for _, id := range parentIDs {
+		if _, ok := expectedIDs[id]; !ok {
+			return nil, service.ErrAccountProxyCASConflict
+		}
+	}
+
+	if _, err = exec.ExecContext(txCtx, `
+		UPDATE accounts
+		SET proxy_id = $1, proxy_fallback_origin_id = NULL, updated_at = NOW()
+		WHERE id = ANY($2)
+	`, newProxyID, pq.Array(parentIDs)); err != nil {
+		return nil, err
+	}
+	shadowRows, err := exec.QueryContext(txCtx, `
+		UPDATE accounts
+		SET proxy_id = $1, proxy_fallback_origin_id = NULL, updated_at = NOW()
+		WHERE deleted_at IS NULL
+		  AND parent_account_id = ANY($2)
+		RETURNING id
+	`, newProxyID, pq.Array(parentIDs))
+	if err != nil {
+		return nil, err
+	}
+	allChangedIDs := append([]int64(nil), parentIDs...)
+	for shadowRows.Next() {
+		var id int64
+		if scanErr := shadowRows.Scan(&id); scanErr != nil {
+			_ = shadowRows.Close()
+			return nil, scanErr
+		}
+		allChangedIDs = append(allChangedIDs, id)
+	}
+	if err = shadowRows.Err(); err != nil {
+		_ = shadowRows.Close()
+		return nil, err
+	}
+	if err = shadowRows.Close(); err != nil {
+		return nil, err
+	}
+	if err = enqueueSchedulerOutbox(txCtx, exec, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, map[string]any{
+		"account_ids": allChangedIDs,
+	}); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	r.syncSchedulerAccountSnapshots(ctx, allChangedIDs)
+	return parentIDs, nil
+}
+
 type accountGroupQueryOptions struct {
 	status               string
 	schedulable          bool

@@ -77,3 +77,32 @@ func TestLeaderLockCache_TTLExpires(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok, "lock should be re-acquirable after the TTL expires")
 }
+
+func TestLeaderLockCache_RenewIsCompareAndExpire(t *testing.T) {
+	cache, mr := newLeaderLockTestCache(t)
+	ctx := context.Background()
+	const key = "scheduler:outbox:leader"
+
+	ok, err := cache.TryAcquireLeaderLock(ctx, key, "A", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = cache.RenewLeaderLock(ctx, key, "B", 3*time.Minute)
+	require.NoError(t, err)
+	require.False(t, ok, "a stale or foreign owner must not extend the lease")
+
+	mr.FastForward(45 * time.Second)
+	ok, err = cache.RenewLeaderLock(ctx, key, "A", 3*time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok, "the current owner should extend its lease")
+
+	mr.FastForward(2 * time.Minute)
+	ok, err = cache.TryAcquireLeaderLock(ctx, key, "B", time.Minute)
+	require.NoError(t, err)
+	require.False(t, ok, "the renewed lease must remain exclusive")
+
+	mr.FastForward(2 * time.Minute)
+	ok, err = cache.TryAcquireLeaderLock(ctx, key, "B", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok, "the lock should become available after the renewed TTL")
+}

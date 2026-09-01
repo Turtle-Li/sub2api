@@ -611,9 +611,9 @@ func TestDeleteAccount_CascadeToShadow(t *testing.T) {
 	require.False(t, ok, "shadow account should be cascade-deleted")
 }
 
-// TestUpdateAccount_PropagatesProxyToShadow verifies that updating a parent
-// account's ProxyID propagates the new value to its spark shadow.
-func TestUpdateAccount_PropagatesProxyToShadow(t *testing.T) {
+// TestUpdateAccount_RequiresCASForOpenAIOAuthProxy verifies that the legacy
+// single-account path cannot bypass the fixed-egress CAS transaction.
+func TestUpdateAccount_RequiresCASForOpenAIOAuthProxy(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
@@ -633,16 +633,19 @@ func TestUpdateAccount_PropagatesProxyToShadow(t *testing.T) {
 	require.NoError(t, err)
 	shadowID := shadow.ID
 
-	// Update parent's ProxyID.
+	// The legacy path must reject the update and leave parent/shadow aligned.
 	newProxy := int64(42)
 	_, err = svc.UpdateAccount(ctx, parent.ID, &UpdateAccountInput{ProxyID: &newProxy})
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Equal(t, "FIXED_EGRESS_CAS_REQUIRED", infraerrors.Reason(err))
 
-	// Shadow must carry the new ProxyID.
+	storedParent := repo.accounts[parent.ID]
+	require.NotNil(t, storedParent.ProxyID)
+	require.Equal(t, oldProxy, *storedParent.ProxyID)
 	storedShadow, ok := repo.accounts[shadowID]
 	require.True(t, ok)
 	require.NotNil(t, storedShadow.ProxyID)
-	require.Equal(t, newProxy, *storedShadow.ProxyID)
+	require.Equal(t, oldProxy, *storedShadow.ProxyID)
 }
 
 // TestUpdateAccount_RejectsCredentialWriteToShadow 验证安全不变量「影子绝不持有鉴权凭据」
@@ -689,9 +692,9 @@ func TestUpdateAccount_RejectsCredentialWriteToShadow(t *testing.T) {
 	require.NoError(t, err, "影子的非凭据字段更新应正常")
 }
 
-// TestBulkUpdateAccounts_PropagatesProxyToShadow verifies that bulk-updating
-// accounts' ProxyID propagates the new value to each account's spark shadow.
-func TestBulkUpdateAccounts_PropagatesProxyToShadow(t *testing.T) {
+// TestBulkUpdateAccounts_RequiresCASForOpenAIOAuthProxy verifies that the
+// legacy bulk path cannot bypass the fixed-egress CAS transaction.
+func TestBulkUpdateAccounts_RequiresCASForOpenAIOAuthProxy(t *testing.T) {
 	ctx := context.Background()
 	repo := newSparkShadowRepoStub()
 	svc := &adminServiceImpl{accountRepo: repo}
@@ -711,19 +714,22 @@ func TestBulkUpdateAccounts_PropagatesProxyToShadow(t *testing.T) {
 	require.NoError(t, err)
 	shadowID := shadow.ID
 
-	// Bulk update parent's ProxyID.
+	// The legacy path must reject the update and leave parent/shadow aligned.
 	newProxy := int64(99)
 	_, err = svc.BulkUpdateAccounts(ctx, &BulkUpdateAccountsInput{
 		AccountIDs: []int64{parent.ID},
 		ProxyID:    &newProxy,
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Equal(t, "FIXED_EGRESS_CAS_REQUIRED", infraerrors.Reason(err))
 
-	// Shadow must carry the new ProxyID.
+	storedParent := repo.accounts[parent.ID]
+	require.NotNil(t, storedParent.ProxyID)
+	require.Equal(t, oldProxy, *storedParent.ProxyID)
 	storedShadow, ok := repo.accounts[shadowID]
 	require.True(t, ok)
 	require.NotNil(t, storedShadow.ProxyID)
-	require.Equal(t, newProxy, *storedShadow.ProxyID)
+	require.Equal(t, oldProxy, *storedShadow.ProxyID)
 }
 
 // ── 外审 P1/P2 加固:专用测试桩 ───────────────────────────────────────────

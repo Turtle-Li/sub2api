@@ -979,13 +979,13 @@ func TestOllamaCloudUsageRunnerHonorsLeaderLockAndBackoff(t *testing.T) {
 		SettingKeyOllamaCloudUsageSettings: `{"enabled":true,"interval_minutes":60}`,
 	}}
 	cache := &fakeLeaderLockCache{}
-	_, acquired := tryAcquireSingletonLeaderLock(context.Background(), cache, nil, ollamaCloudUsageLeaderLockKey, "peer", time.Minute)
+	_, peerRelease, acquired := tryAcquireSingletonLeaderLock(context.Background(), cache, nil, ollamaCloudUsageLeaderLockKey, "peer", time.Minute)
 	require.True(t, acquired)
 	svc := newOllamaUsageTestService(t, repo, upstream, settingsRepo, true)
 	svc.lockCache = cache
 	require.NoError(t, svc.RunDue(context.Background()))
 	require.Zero(t, upstream.calls.Load())
-	require.NoError(t, cache.ReleaseLeaderLock(context.Background(), ollamaCloudUsageLeaderLockKey, "peer"))
+	peerRelease()
 	require.NoError(t, svc.RunDue(context.Background()))
 	require.Equal(t, int64(1), upstream.calls.Load())
 

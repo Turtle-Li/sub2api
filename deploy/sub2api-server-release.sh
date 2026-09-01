@@ -24,6 +24,7 @@ IMAGE="$2"
 COMMIT="$3"
 VERSION="$4"
 PUBLIC_HEALTH_URL="$5"
+PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-}"
 RUN_ID="$6"
 
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
@@ -52,6 +53,8 @@ DRAIN_ACTIVE_WINDOW_SECONDS="${SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS:-600}
 DRAIN_RETRY_DELAY_SECONDS="${SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS:-3600}"
 DRAIN_MAX_RUNTIME_SECONDS="${SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS:-0}"
 DRAIN_CADDY_CONFIG_PATH="${SUB2API_RELEASE_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
+NODE_STATE_SCRIPT="${SUB2API_NODE_STATE_SCRIPT:-${APP_DIR}/scripts/sub2api-node-state.sh}"
+DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -91,6 +94,46 @@ require_bool() {
   esac
 }
 
+validate_health_resolve() {
+  local value="$1" url="$2" host port address extra octet url_authority url_host url_port
+  local -a octets
+  [ -n "$value" ] || return 0
+  case "$value" in
+    -*|*$'\n'*|*$'\r'*|*' '*) die "SUB2API_PUBLIC_HEALTH_RESOLVE contains unsupported characters" ;;
+  esac
+  IFS=: read -r host port address extra <<<"$value"
+  [ -n "$host" ] && [ -n "$port" ] && [ -n "$address" ] && [ -z "$extra" ] \
+    || die "SUB2API_PUBLIC_HEALTH_RESOLVE must be HOST:PORT:IPV4"
+  case "$host" in
+    *[!A-Za-z0-9.-]*|.*|*..*|*.) die "SUB2API_PUBLIC_HEALTH_RESOLVE has an invalid host" ;;
+  esac
+  require_positive_integer SUB2API_PUBLIC_HEALTH_RESOLVE_PORT "$port"
+  [ "$port" -le 65535 ] || die "SUB2API_PUBLIC_HEALTH_RESOLVE port is out of range"
+  IFS=. read -r -a octets <<<"$address"
+  [ "${#octets[@]}" -eq 4 ] || die "SUB2API_PUBLIC_HEALTH_RESOLVE must use IPv4"
+  for octet in "${octets[@]}"; do
+    case "$octet" in ''|*[!0-9]*) die "SUB2API_PUBLIC_HEALTH_RESOLVE must use IPv4" ;; esac
+    [ "$octet" -le 255 ] || die "SUB2API_PUBLIC_HEALTH_RESOLVE must use IPv4"
+  done
+  case "$url" in
+    https://*) url_port=443 ;;
+    http://*) url_port=80 ;;
+    *) die "SUB2API_PUBLIC_HEALTH_URL must use http or https when an origin override is configured" ;;
+  esac
+  url_authority="${url#*://}"
+  url_authority="${url_authority%%/*}"
+  case "$url_authority" in
+    *@*|'') die "SUB2API_PUBLIC_HEALTH_URL has an invalid authority" ;;
+    *:*)
+      url_host="${url_authority%%:*}"
+      url_port="${url_authority##*:}"
+      ;;
+    *) url_host="$url_authority" ;;
+  esac
+  [ "$url_host" = "$host" ] && [ "$url_port" = "$port" ] \
+    || die "SUB2API_PUBLIC_HEALTH_RESOLVE host/port must match SUB2API_PUBLIC_HEALTH_URL"
+}
+
 require_go_memory_limit() {
   case "$2" in
     ''|*[!0-9kKmMgGtTpPeEiIbB]*) die "$1 must be a Go memory quantity" ;;
@@ -115,6 +158,8 @@ case "$PREBUILT_IMAGE_PREFIX" in
   *[!A-Za-z0-9./:_-]*) die "SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX contains unsupported characters" ;;
 esac
 require_bool SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER "$ALLOW_PREEXISTING_DRAINING_CONTAINER"
+require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
+validate_health_resolve "$PUBLIC_HEALTH_RESOLVE" "$PUBLIC_HEALTH_URL"
 require_positive_integer SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS "$DRAIN_INTERVAL_SECONDS"
 require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACTIVE_WINDOW_SECONDS"
 require_non_negative_integer SUB2API_RELEASE_DRAIN_RETRY_DELAY_SECONDS "$DRAIN_RETRY_DELAY_SECONDS"
@@ -149,6 +194,18 @@ if [ "$PREBUILT_MODE" != "true" ]; then
 fi
 [ -x "$BLUE_GREEN_SCRIPT" ] || die "blue-green script is missing or not executable"
 [ -x "$DRAIN_MONITOR_SCRIPT" ] || die "drain monitor is missing or not executable: $DRAIN_MONITOR_SCRIPT"
+[ "$DUAL_NODE_RUNTIME_ENABLED" != true ] || [ -x "$NODE_STATE_SCRIPT" ] \
+  || die "node state helper is missing or not executable: $NODE_STATE_SCRIPT"
+
+run_node_state() {
+  if [ "$DUAL_NODE_RUNTIME_ENABLED" != true ]; then
+	case "${1:-}" in
+	  status) printf 'traffic=accepting active_container=%s background=active\n' "$OLD_CONTAINER" ;;
+	esac
+	return 0
+  fi
+  env SUB2API_NODE_STATE_LOCK_HELD=1 "$NODE_STATE_SCRIPT" "$@"
+}
 
 available_bytes="$(df --output=avail -B1 / | tail -1 | tr -d '[:space:]')"
 [ "$available_bytes" -ge "$MIN_FREE_BYTES" ] || die "less than 8 GiB is free on the server"
@@ -207,6 +264,13 @@ OLD_RUNNING="$(docker inspect "$OLD_CONTAINER" --format '{{.State.Running}}' 2>/
 OLD_HEALTH="$(docker inspect "$OLD_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)"
 [ "$OLD_RUNNING" = "true" ] || die "active container is not running: $OLD_CONTAINER"
 [ "$OLD_HEALTH" = "healthy" ] || die "active container is not healthy: $OLD_CONTAINER ($OLD_HEALTH)"
+run_node_state bootstrap >>"${LOG_DIR}/node-state.log" \
+  || die "could not bootstrap node runtime state"
+node_state_status="$(run_node_state status)" \
+  || die "could not read node runtime state after bootstrap"
+printf '%s\n' "$node_state_status" >>"${LOG_DIR}/node-state.log"
+[ "$node_state_status" = "traffic=accepting active_container=${OLD_CONTAINER} background=active" ] \
+  || die "node runtime state is not safe for a local release: ${node_state_status}"
 
 if docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
   target_running="$(docker inspect "$NEW_CONTAINER" --format '{{.State.Running}}')"
@@ -267,11 +331,16 @@ rollback() {
     PULL_IMAGE=false \
     RUN_BACKUP=false \
     REMOVE_EXISTING_NEW_CONTAINER=false \
+    SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
     bash "$BLUE_GREEN_SCRIPT" >>"${LOG_DIR}/rollback.log" 2>&1 || {
       tail -100 "${LOG_DIR}/rollback.log" >&2 || true
       log "ERROR: automatic rollback failed; manual intervention is required" >&2
       return 1
     }
+  if ! run_node_state abort-local >>"${LOG_DIR}/node-state.log" 2>&1; then
+    log "ERROR: Caddy rolled back but node runtime state could not be restored" >&2
+    return 1
+  fi
   log "Rollback completed"
 }
 
@@ -308,6 +377,8 @@ cleanup_failed_inactive_target() {
     || log "WARNING: could not remove failed inactive target ${NEW_CONTAINER}" >&2
 }
 
+run_node_state local-standby "$NEW_CONTAINER" >>"${LOG_DIR}/node-state.log" \
+  || die "could not prepare ${NEW_CONTAINER} background admission state"
 log "Switching ${OLD_UPSTREAM} to ${NEW_UPSTREAM} through the existing blue-green script"
 if ! env \
   OLD_CONTAINER="$OLD_CONTAINER" \
@@ -317,6 +388,7 @@ if ! env \
   CADDY_UPSTREAM_TO="$NEW_UPSTREAM" \
   PULL_IMAGE=false \
   RUN_BACKUP=true \
+  SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
   bash "$BLUE_GREEN_SCRIPT" >"$SWITCH_LOG" 2>&1; then
   tail -120 "$SWITCH_LOG" >&2 || true
   if docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
@@ -327,7 +399,11 @@ if ! env \
   die "blue-green release failed"
 fi
 
-if ! curl -fsS --max-time 20 --retry 3 --retry-delay 2 "$PUBLIC_HEALTH_URL" >/dev/null; then
+public_health_curl_args=(-fsS --max-time 20 --retry 3 --retry-delay 2)
+if [ -n "$PUBLIC_HEALTH_RESOLVE" ]; then
+  public_health_curl_args+=(--resolve "$PUBLIC_HEALTH_RESOLVE")
+fi
+if ! curl "${public_health_curl_args[@]}" "$PUBLIC_HEALTH_URL" >/dev/null; then
   if rollback; then
     cleanup_failed_inactive_target
   fi
@@ -359,6 +435,16 @@ if printf '%s' "$active_config" | grep -qF "$OLD_UPSTREAM"; then
     cleanup_failed_inactive_target
   fi
   die "active Caddy config still contains old upstream $OLD_UPSTREAM"
+fi
+
+# Keep the already-known-good old generation as the background owner while the
+# new request path is verified. Only transfer shared-work admission after every
+# rollback-capable health/Caddy gate has passed.
+if ! run_node_state commit-local >>"${LOG_DIR}/node-state.log" 2>&1; then
+  if rollback; then
+    cleanup_failed_inactive_target
+  fi
+  die "node runtime state activation failed after the Caddy switch"
 fi
 
 # The blue-green helper starts a nohup monitor, but this release helper itself

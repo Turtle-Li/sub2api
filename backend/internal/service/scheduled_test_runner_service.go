@@ -19,6 +19,7 @@ type ScheduledTestRunnerService struct {
 	accountTestSvc *AccountTestService
 	rateLimitSvc   *RateLimitService
 	cfg            *config.Config
+	leaderLock     *singletonJobLock
 
 	cron      *cron.Cron
 	startOnce sync.Once
@@ -90,6 +91,12 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	leaseCtx, release, acquired := s.leaderLock.try(ctx)
+	if !acquired {
+		return
+	}
+	defer release()
+	ctx = leaseCtx
 
 	now := time.Now()
 	plans, err := s.planRepo.ListDue(ctx, now)

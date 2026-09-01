@@ -1392,6 +1392,29 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	}
 }
 
+func TestFetchCodexModelsManifestShadowUsesLogicalAccountProxy(t *testing.T) {
+	parentID := int64(901)
+	shadowProxyID := int64(11)
+	parentProxyID := int64(12)
+	parent := newCodexModelsTestAccount()
+	parent.ID = parentID
+	parent.ProxyID = &parentProxyID
+	parent.Proxy = &Proxy{ID: parentProxyID, Protocol: "socks5h", Host: "100.80.10.114", Port: 1080, Status: StatusActive}
+	shadow := &Account{
+		ID:              902,
+		Platform:        PlatformOpenAI,
+		Type:            AccountTypeOAuth,
+		ParentAccountID: &parentID,
+		QuotaDimension:  QuotaDimensionSpark,
+		ProxyID:         &shadowProxyID,
+		Proxy:           &Proxy{ID: shadowProxyID, Protocol: "socks5h", Host: "100.79.114.100", Port: 1080, Status: StatusActive},
+	}
+	proxyURL, err := resolveCodexModelsProxyURL(shadow)
+	require.NoError(t, err)
+	require.Equal(t, shadow.Proxy.URL(), proxyURL)
+	require.NotEqual(t, parent.Proxy.URL(), proxyURL)
+}
+
 func TestFetchCodexModelsManifestAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
@@ -2469,7 +2492,7 @@ func TestFetchCodexModelsManifestAPIKeyCacheKeyIsolatesRequestIdentity(t *testin
 	proxyID := int64(9)
 	differentProxy := newCodexModelsAPIKeyTestAccount("https://upstream.example")
 	differentProxy.ProxyID = &proxyID
-	differentProxy.Proxy = &Proxy{Protocol: "http", Host: "127.0.0.1", Port: 8080}
+	differentProxy.Proxy = &Proxy{ID: proxyID, Status: StatusActive, Protocol: "http", Host: "127.0.0.1", Port: 8080}
 	fetch(differentProxy, "0.144.0")
 	fetch(differentProxy, "0.144.0")
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"go.uber.org/zap"
 )
 
@@ -133,6 +134,10 @@ func (w *BatchImageWorker) RunOnce(ctx context.Context) error {
 	if w == nil || w.queue == nil || w.processor == nil {
 		return nil
 	}
+	if !runtimegate.SharedWorkAllowed() {
+		sleepOrDone(ctx, w.opts.ReserveBlockTimeout)
+		return nil
+	}
 
 	reserved, err := w.queue.Reserve(ctx, w.opts.ReserveBlockTimeout)
 	if errors.Is(err, ErrBatchImageQueueEmpty) {
@@ -140,6 +145,11 @@ func (w *BatchImageWorker) RunOnce(ctx context.Context) error {
 	}
 	if err != nil {
 		return err
+	}
+	// Reserve may block while a release drains this generation. Re-check after
+	// Redis hands us a job so an inactive color never starts new provider work.
+	if !runtimegate.SharedWorkAllowed() {
+		return w.queue.RequeueAfter(ctx, reserved.BatchID, w.opts.LockConflictDelay)
 	}
 
 	lock, ok, err := w.queue.TryAcquireJobLock(ctx, reserved.BatchID, w.opts.JobLockTTL)
@@ -234,6 +244,9 @@ func (w *BatchImageWorker) MoveDueDelayedOnce(ctx context.Context) (int, error) 
 	if w == nil || w.queue == nil {
 		return 0, nil
 	}
+	if !runtimegate.SharedWorkAllowed() {
+		return 0, nil
+	}
 	return w.queue.MoveDueDelayedToReady(ctx, w.opts.DelayedMoveLimit)
 }
 
@@ -255,6 +268,9 @@ func (w *BatchImageWorker) RunDelayedMover(ctx context.Context) {
 
 func (w *BatchImageWorker) RecoverStaleActiveOnce(ctx context.Context) (int, error) {
 	if w == nil || w.queue == nil {
+		return 0, nil
+	}
+	if !runtimegate.SharedWorkAllowed() {
 		return 0, nil
 	}
 	return w.queue.RecoverStaleActive(ctx, w.opts.StaleActiveAfter, w.opts.RecoverLimit)
