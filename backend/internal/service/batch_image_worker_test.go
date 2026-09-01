@@ -57,18 +57,29 @@ func TestBatchImageWorker_RequeuesOnProcessorError(t *testing.T) {
 	require.Empty(t, queue.acked)
 }
 
-func TestBatchImageWorker_RequeuesWhenJobLockNotAcquired(t *testing.T) {
+func TestBatchImageWorker_LeavesQueueUntouchedWhenJobLockNotAcquired(t *testing.T) {
 	queue := newFakeBatchImageQueue("imgbatch_worker_locked")
 	queue.lockAcquired = false
 	processor := &fakeBatchImageProcessor{}
-	worker := NewBatchImageWorker(queue, processor, BatchImageWorkerOptions{LockConflictDelay: 3 * time.Second})
+	worker := NewBatchImageWorker(queue, processor, BatchImageWorkerOptions{})
 
-	// 锁冲突必须按冲突延迟重新入队；直接丢弃会让 job 滞留 active zset，
-	// 要等 StaleActiveAfter（默认 10 分钟）才被恢复。
 	require.NoError(t, worker.RunOnce(context.Background()))
 	require.Empty(t, processor.processed)
-	require.Len(t, queue.requeued, 1)
-	require.Equal(t, 3*time.Second, queue.requeued[0].delay)
+	require.Empty(t, queue.requeued, "the current lock holder owns active queue membership")
+	require.Empty(t, queue.acked)
+}
+
+func TestBatchImageWorker_LeavesQueueUntouchedWhenJobLockLookupFails(t *testing.T) {
+	queue := newFakeBatchImageQueue("imgbatch_worker_lock_error")
+	queue.lockErr = errors.New("redis unavailable")
+	processor := &fakeBatchImageProcessor{}
+	worker := NewBatchImageWorker(queue, processor, BatchImageWorkerOptions{})
+
+	err := worker.RunOnce(context.Background())
+
+	require.Error(t, err)
+	require.Empty(t, processor.processed)
+	require.Empty(t, queue.requeued)
 	require.Empty(t, queue.acked)
 }
 
@@ -76,7 +87,7 @@ func TestBatchImageWorker_RefusesJobLockWithoutRefreshSupport(t *testing.T) {
 	queue := newFakeBatchImageQueue("imgbatch_worker_no_refresh")
 	queue.lockSupportsRefresh = false
 	processor := &fakeBatchImageProcessor{}
-	worker := NewBatchImageWorker(queue, processor, BatchImageWorkerOptions{LockConflictDelay: 3 * time.Second})
+	worker := NewBatchImageWorker(queue, processor, BatchImageWorkerOptions{})
 
 	err := worker.RunOnce(context.Background())
 
@@ -96,8 +107,7 @@ func TestBatchImageWorker_RequeuesWhenGenerationDrainsDuringReserve(t *testing.T
 
 	require.NoError(t, worker.RunOnce(context.Background()))
 	require.Empty(t, processor.processed)
-	require.Len(t, queue.requeued, 1)
-	require.Equal(t, 3*time.Second, queue.requeued[0].delay)
+	require.Empty(t, queue.requeued, "a drained generation must not mutate an unfenced reservation")
 	require.Empty(t, queue.acked)
 	require.Zero(t, queue.releaseCount, "a drained generation must not acquire the per-job lock")
 }
@@ -186,6 +196,7 @@ func TestBatchImageWorker_FencedQueueMutationRejectsLeaseLostAfterFinalRefresh(t
 type fakeBatchImageQueue struct {
 	reserved            ReservedBatchImageJob
 	lockAcquired        bool
+	lockErr             error
 	lockSupportsRefresh bool
 	lockRefreshErr      error
 	lockRefreshCalls    int
@@ -243,6 +254,9 @@ func (q *fakeBatchImageQueue) RecoverStaleActive(context.Context, time.Duration,
 }
 
 func (q *fakeBatchImageQueue) TryAcquireJobLock(context.Context, string, time.Duration) (BatchImageJobLock, bool, error) {
+	if q.lockErr != nil {
+		return nil, false, q.lockErr
+	}
 	if !q.lockAcquired {
 		return nil, false, nil
 	}

@@ -149,20 +149,21 @@ func (w *BatchImageWorker) RunOnce(ctx context.Context) error {
 	// Reserve may block while a release drains this generation. Re-check after
 	// Redis hands us a job so an inactive color never starts new provider work.
 	if !runtimegate.SharedWorkAllowed() {
-		return w.queue.RequeueAfter(ctx, reserved.BatchID, w.opts.LockConflictDelay)
+		// Reservation membership has no owner token. Mutating it without the job
+		// lock could remove the active entry of a concurrent lock holder, so leave
+		// it for stale-active recovery.
+		return nil
 	}
 
 	lock, ok, err := w.queue.TryAcquireJobLock(ctx, reserved.BatchID, w.opts.JobLockTTL)
 	if err != nil {
-		if requeueErr := w.queue.RequeueAfter(ctx, reserved.BatchID, w.opts.LockConflictDelay); requeueErr != nil {
-			return requeueErr
-		}
 		return err
 	}
 	if !ok {
-		// 锁被其他实例持有：按冲突延迟重新入队。直接丢弃会让 job 滞留在
-		// active zset，最早要等 StaleActiveAfter 才被恢复，造成分钟级停摆。
-		return w.queue.RequeueAfter(ctx, reserved.BatchID, w.opts.LockConflictDelay)
+		// Another owner already holds the job lock. A raw RequeueAfter here would
+		// delete that owner's active heartbeat anchor. The holder will finish the
+		// job; if it does not, stale-active recovery is the safe retry path.
+		return nil
 	}
 	defer func() {
 		_ = lock.Release(ctx)
