@@ -11,10 +11,10 @@ b280b5bc97631119ef1cfe618dc18d6022882f1524bca2d1f6adb8c58e14854f  deploy/tests/n
 d24b2ff150ccbfe4b3a0664bfe896b7573a05c19bf46af52b0e2ee7d57562f01  deploy/tests/runtime-guard-test.sh
 6017605a42f2ae83570940d5a085b40d293e0a3c8afca5b5e7d1a1c5d423a1f9  deploy/tests/server-release-container-guard-test.sh
 357514fb1a14700bbe1125e803ec8ccc26a50037f780b4ba3356895928927a1f  deploy/gcp-taiwan-line/AZURE-CADDY-RUNTIME-EVIDENCE-2026-09-02.md
-077189d5356eb6a7999a138750cc2fc6c687d36e4f894f44975ab256798c592d  deploy/gcp-taiwan-line/CUTOVER-PLAN-2026-09-02.md
-c9f025bd7d3167729afe142e5acb86a110e08376698afc949fd56969022b7100  deploy/gcp-taiwan-line/LIVE-VALIDATION-2026-09-02.md
+8fd9c299056c62ad95e0173af6d4bc7d9e1df610fac9ef738ac6c932fd958e87  deploy/gcp-taiwan-line/CUTOVER-PLAN-2026-09-02.md
+bc6d597988b337b9f1c2d2cf2305af63e19a034e05b53ce0f6e61b88236ae05d  deploy/gcp-taiwan-line/LIVE-VALIDATION-2026-09-02.md
 b5ff0574eab3ac3636a390fa07d96f20780302631a5c113f2417176f3efdc842  deploy/gcp-taiwan-line/README.md
-91f7316aca2d74d7cb496a096d70aad752880bdd21613c638e45b928ebaba3d6  deploy/gcp-taiwan-line/REVIEW-DISPOSITION-2026-09-02.md
+365b0cb989238cd05064815cfc83543007670bc6d472fd0e04887366711f2ce1  deploy/gcp-taiwan-line/REVIEW-DISPOSITION-2026-09-02.md
 d8d68342f8ab30c96491d0dad131e53f4df04c9992c289f6891c7a2cb8ecca77  deploy/gcp-taiwan-line/azure-caddy-listeners.sh
 08a52c4a377c442ef108f35bc4756c93f88661ae95519d0295aec0b9bbfe8f0d  deploy/gcp-taiwan-line/gcp-startup-bootstrap.sh
 d4b65855976ee02c26c09eb04e1902a57a986e2b05bde5801ed96f620cb61a7f  deploy/gcp-taiwan-line/gcp-update-bootstrap.sh

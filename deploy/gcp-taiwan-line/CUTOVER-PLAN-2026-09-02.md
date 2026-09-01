@@ -85,7 +85,7 @@ knowledge_candidate_reason: Reusable zero-data-migration pattern for a transport
 candidate_type: infrastructure-cutover-pattern
 origin_repo: sub2api
 origin_path: deploy/gcp-taiwan-line/CUTOVER-PLAN-2026-09-02.md
-origin_revision: working-tree-20260902
+origin_revision: a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c
 source_change_set: SUB2-TW-CUTOVER-20260902
 classification_suggestion: project-local
 ```
@@ -100,7 +100,7 @@ classification_suggestion: project-local
 | `T3` | Complete, transaction retained | Azure stage, exact host/container inode+SHA, adapted/live JSON fingerprint equality, forged-header rejection, direct fallback, exact rollback, and re-stage pass. The older customer-Host transaction was safely committed at its exact expected hash; both stage paths and all runtime mutators now enforce transaction mutual exclusion |
 | `T4` | Complete | GCP HAProxy `2.6.12-1+deb12u3` active as an unprivileged chrooted worker; seamless reload and rollback-capable updater pass; one-shot metadata removed; exact TCP 80/443 rule/tag active; public canary pass |
 | `T5` | Partial | HTTP/2, automated TLS fingerprint equality, redirect, no-h3, manual source-IP observation, and unauthenticated SSE/WS 401 reachability pass; authenticated generation/continuation/image and a real carried stream remain pending |
-| `T6` | In progress, prior snapshot failed | First QA found one EOF-whitespace P2. Repository review found two P1/two P2. Claude found three P1 plus P2 hardening gaps. Fixes are implemented and live transport gates pass; final frozen re-review is still required |
+| `T6` | In progress, durable snapshot | Implementation revision `a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c` closes the prior untracked-snapshot defect. First QA/repository/Claude findings are dispositioned and live transport gates pass; final frozen re-review is still required |
 | `T7` | Not started | Production DNS deliberately unchanged |
 | `T8` | Not started | Old origin remains active |
 

@@ -7,6 +7,9 @@ Checkpoint: 2026-09-02 05:45 Asia/Shanghai
 Verdict: **transport candidate PASS; production cutover BLOCKED**. The public A
 record remains `206.119.172.211`.
 
+Frozen implementation revision:
+`a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c`.
+
 ## Frozen topology
 
 - GCP `130.211.243.139`: Debian HAProxy `2.6.12-1+deb12u3`, config SHA-256
@@ -113,10 +116,9 @@ The accepted findings were repaired as follows:
    controller. The retired POC token is explicitly out of scope. A logged-in
    browser change still requires action-time owner confirmation.
 5. The first independent QA/review and requested Claude advisory review
-   correctly returned blocked findings. Independent QA/review and Claude must
-   re-run on the final frozen hashes after these repairs and documentation are
-   frozen. The artifact directory also needs a durable Git revision before the
-   review anchor can be called release-grade.
+   correctly returned blocked findings. The implementation now has a durable
+   Git revision and exact checksum manifest; independent QA/review and Claude
+   must re-run on that frozen implementation plus this evidence update.
 
 Until those blockers close, the correct state is: GCP and Azure transport stay
 available for isolated canaries, the Azure Caddy transaction remains

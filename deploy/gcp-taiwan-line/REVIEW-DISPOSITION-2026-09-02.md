@@ -5,6 +5,9 @@ Task: `SUB2-TW-CUTOVER-20260902`
 Verdict before final re-review: **transport implementation ready for frozen
 review; production DNS cutover remains blocked**.
 
+Frozen implementation revision:
+`a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c`.
+
 ## Prior review findings
 
 | Finding | Disposition |
@@ -17,7 +20,7 @@ review; production DNS cutover remains blocked**.
 | Azure/HAProxy transaction failure paths could discard recovery authority | Fixed. Azure restores before state deletion; HAProxy retains explicit `STAGED`/`ROLLED_BACK` recovery state and can restage. |
 | Transport tests were not in CI and stream/TLS evidence was overstated | Fixed where evidence exists. CI runs the transport regression and ShellCheck; direct Azure/GCP certificate fingerprints are compared automatically; 401 rows explicitly say no stream was carried. Authenticated streaming remains an explicit blocker. |
 | DNS baseline omitted other record types and proxy status | Partially fixed. Public DNS proves A `206.119.172.211`, TTL 30, and no AAAA/CNAME/SVCB/HTTPS. Cloudflare control-plane proxy status remains blocked because the available signed-in browser surface did not return a usable page snapshot; no retired credential was reused. |
-| Review snapshot was not a durable Git revision | Open. The exact working-tree hashes are frozen for review, but production cutover remains blocked until the change has a durable repository revision. Unrelated pre-existing optimizer report edits are excluded. |
+| Review snapshot was not a durable Git revision | Fixed. The implementation is committed as `a8c2821ba82d2bf7e2c4d25176ce9c7fb0abd62c`; the checksum manifest covers the reviewed implementation/evidence corpus. Unrelated pre-existing optimizer report edits are excluded. |
 
 ## Additional defect found during finalization
 
@@ -46,6 +49,4 @@ Azure runtime verification, and direct GCP canary passed after the repair.
    image canaries through the exact GCP address without exposing credentials.
 4. Confirm Cloudflare proxy status and obtain action-time confirmation before
    changing the A record. Keep the old origin online and background-standby.
-5. Record a durable Git revision for the final reviewed files.
-
 No remaining gate is silently treated as passed. DNS remains on the old origin.
