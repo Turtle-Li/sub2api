@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/stretchr/testify/require"
 )
 
@@ -153,6 +156,32 @@ func TestSchedulerSnapshotServiceInitialFullRebuildFailsClosedWhenListBucketsFai
 	svc.fullRebuildStateMu.Lock()
 	require.ErrorIs(t, svc.fullRebuildLastErr, cache.listErr)
 	svc.fullRebuildStateMu.Unlock()
+}
+
+func TestSchedulerSnapshotServiceStandbyDoesNotRunSharedFullRebuilds(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "background-state")
+	require.NoError(t, os.WriteFile(statePath, []byte("standby\n"), 0o600))
+	t.Setenv(runtimegate.StateFileEnv, statePath)
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+
+	cache := &schedulerFullRebuildTestCache{}
+	svc := NewSchedulerSnapshotService(cache, nil, nil, nil, nil)
+
+	svc.runInitialRebuild()
+	require.NoError(t, svc.triggerFullRebuild("interval"))
+
+	cache.mu.Lock()
+	listCalls := cache.listCalls
+	captures := cache.captures
+	lockCalls := cache.lockCalls
+	cache.mu.Unlock()
+	require.Zero(t, listCalls)
+	require.Zero(t, captures)
+	require.Zero(t, lockCalls)
+	requested, completed := schedulerFullRebuildState(svc)
+	require.Zero(t, requested)
+	require.Zero(t, completed)
 }
 
 func schedulerFullRebuildState(svc *SchedulerSnapshotService) (requested uint64, completed uint64) {

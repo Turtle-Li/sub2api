@@ -1153,7 +1153,7 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 		FROM accounts
 		WHERE parent_account_id = $1 AND deleted_at IS NULL
 		ORDER BY id
-		FOR NO KEY UPDATE
+		FOR UPDATE
 	`, id)
 	if err != nil {
 		return err
@@ -2210,7 +2210,17 @@ func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 }
 
 func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID int64, priority int) error {
-	_, err := r.client.AccountGroup.Create().
+	ctx, client, tx, err := r.accountGroupMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
+	}
+	if err := lockLiveAccountForGroupMutation(ctx, client, accountID); err != nil {
+		return err
+	}
+	_, err = client.AccountGroup.Create().
 		SetAccountID(accountID).
 		SetGroupID(groupID).
 		SetPriority(priority).
@@ -2219,14 +2229,27 @@ func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID i
 		return err
 	}
 	payload := buildSchedulerGroupPayload([]int64{groupID})
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue add to group failed: account=%d group=%d err=%v", accountID, groupID, err)
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
+		return err
+	}
+	if tx != nil {
+		return tx.Commit()
 	}
 	return nil
 }
 
 func (r *accountRepository) RemoveFromGroup(ctx context.Context, accountID, groupID int64) error {
-	_, err := r.client.AccountGroup.Delete().
+	ctx, client, tx, err := r.accountGroupMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
+	}
+	if err := lockLiveAccountForGroupMutation(ctx, client, accountID); err != nil {
+		return err
+	}
+	_, err = client.AccountGroup.Delete().
 		Where(
 			dbaccountgroup.AccountIDEQ(accountID),
 			dbaccountgroup.GroupIDEQ(groupID),
@@ -2236,8 +2259,11 @@ func (r *accountRepository) RemoveFromGroup(ctx context.Context, accountID, grou
 		return err
 	}
 	payload := buildSchedulerGroupPayload([]int64{groupID})
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue remove from group failed: account=%d group=%d err=%v", accountID, groupID, err)
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
+		return err
+	}
+	if tx != nil {
+		return tx.Commit()
 	}
 	return nil
 }
@@ -2260,57 +2286,44 @@ func (r *accountRepository) GetGroups(ctx context.Context, accountID int64) ([]s
 }
 
 func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
-	existingGroupIDs, err := r.loadAccountGroupIDs(ctx, accountID)
+	ctx, client, tx, err := r.accountGroupMutationClient(ctx)
 	if err != nil {
 		return err
 	}
-	// 使用事务保证删除旧绑定与创建新绑定的原子性
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
-	var txClient *dbent.Client
-	if err == nil {
-		defer func() { _ = tx.Rollback() }()
-		txClient = tx.Client()
-	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前 client
-		txClient = r.client
-	}
-
-	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
-		return err
-	}
-
-	if len(groupIDs) == 0 {
-		if tx != nil {
-			return tx.Commit()
-		}
-		return nil
-	}
-
-	builders := make([]*dbent.AccountGroupCreate, 0, len(groupIDs))
-	for i, groupID := range groupIDs {
-		builders = append(builders, txClient.AccountGroup.Create().
-			SetAccountID(accountID).
-			SetGroupID(groupID).
-			SetPriority(i+1),
-		)
-	}
-
-	if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
-		return err
-	}
-
 	if tx != nil {
-		if err := tx.Commit(); err != nil {
+		defer func() { _ = tx.Rollback() }()
+	}
+	if err := lockLiveAccountForGroupMutation(ctx, client, accountID); err != nil {
+		return err
+	}
+	existingGroupIDs, err := loadAccountGroupIDsWithClient(ctx, client, accountID)
+	if err != nil {
+		return err
+	}
+	if _, err := client.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
+		return err
+	}
+
+	if len(groupIDs) > 0 {
+		builders := make([]*dbent.AccountGroupCreate, 0, len(groupIDs))
+		for i, groupID := range groupIDs {
+			builders = append(builders, client.AccountGroup.Create().
+				SetAccountID(accountID).
+				SetGroupID(groupID).
+				SetPriority(i+1),
+			)
+		}
+		if _, err := client.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
 			return err
 		}
 	}
+
 	payload := buildSchedulerGroupPayload(mergeGroupIDs(existingGroupIDs, groupIDs))
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue bind groups failed: account=%d err=%v", accountID, err)
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
+		return err
+	}
+	if tx != nil {
+		return tx.Commit()
 	}
 	return nil
 }
@@ -3638,20 +3651,29 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 	if r == nil || r.client == nil || len(ids) == 0 || expectedProxyID < 0 {
 		return nil, service.ErrAccountProxyCASConflict
 	}
-	tx, err := r.client.Tx(ctx)
-	if err != nil {
-		return nil, err
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := r.client
+	var ownedTx *dbent.Tx
+	if contextTx != nil {
+		client = contextTx.Client()
+	} else {
+		var err error
+		ownedTx, err = r.client.Tx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = ownedTx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, ownedTx)
+		client = ownedTx.Client()
 	}
-	defer func() { _ = tx.Rollback() }()
-	txCtx := dbent.NewTxContext(ctx, tx)
-	exec := tx.Client()
 
 	var newProxyID any
 	if newProxy != nil {
 		// Do not trust the caller's proxy shape. Lock and validate the persisted
 		// row before parent account rows so direct repository callers cannot bind
 		// an external or fallback-capable proxy by bypassing the admin service.
-		lockedProxy, err := lockFixedEgressProxyForOpenAIOAuth(txCtx, exec, newProxy.ID)
+		lockedProxy, err := lockFixedEgressProxyForOpenAIOAuth(ctx, client, newProxy.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -3673,7 +3695,7 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 	// must not reactivate them, and requiring active status would make a revoked
 	// account permanently dependent on an obsolete proxy. The UPDATE below only
 	// changes proxy identity and preserves status/schedulable fields.
-	rows, err := exec.QueryContext(txCtx, `
+	rows, err := client.QueryContext(ctx, `
 		SELECT id
 		FROM accounts
 		WHERE id = ANY($1)
@@ -3723,14 +3745,14 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 		}
 	}
 
-	if _, err = exec.ExecContext(txCtx, `
+	if _, err = client.ExecContext(ctx, `
 		UPDATE accounts
 		SET proxy_id = $1, proxy_fallback_origin_id = NULL, updated_at = NOW()
 		WHERE id = ANY($2)
 	`, newProxyID, pq.Array(parentIDs)); err != nil {
 		return nil, err
 	}
-	shadowRows, err := exec.QueryContext(txCtx, `
+	shadowRows, err := client.QueryContext(ctx, `
 		UPDATE accounts
 		SET proxy_id = $1, proxy_fallback_origin_id = NULL, updated_at = NOW()
 		WHERE deleted_at IS NULL
@@ -3756,20 +3778,24 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 	if err = shadowRows.Close(); err != nil {
 		return nil, err
 	}
-	if err = enqueueSchedulerOutbox(txCtx, exec, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, map[string]any{
+	if err = enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, map[string]any{
 		"account_ids": allChangedIDs,
 	}); err != nil {
 		return nil, err
 	}
-	if err = tx.Commit(); err != nil {
-		return nil, err
+	if ownedTx != nil {
+		if err = ownedTx.Commit(); err != nil {
+			return nil, err
+		}
 	}
 	// The proxy binding changed atomically. Evict after commit instead of
 	// refetching and repopulating: a later committed mutation may invalidate the
 	// same account before this callback runs, and a delayed SetAccount could then
 	// resurrect stale scheduling state. A delayed eviction remains fail-safe; the
 	// durable outbox is the retry/rebuild path if Redis is unavailable.
-	r.retireSchedulerAccountSnapshotsDetached(ctx, allChangedIDs)
+	if contextTx == nil {
+		r.retireSchedulerAccountSnapshotsDetached(baseCtx, allChangedIDs)
+	}
 	return parentIDs, nil
 }
 
@@ -4037,8 +4063,66 @@ func uniquePositiveInt64s(ids []int64) []int64 {
 	return out
 }
 
+func (r *accountRepository) accountGroupMutationClient(ctx context.Context) (context.Context, *dbent.Client, *dbent.Tx, error) {
+	if r == nil || r.client == nil {
+		return ctx, nil, nil, service.ErrAccountNotFound
+	}
+	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+		return ctx, contextTx.Client(), nil, nil
+	}
+	tx, err := r.client.Tx(ctx)
+	if errors.Is(err, dbent.ErrTxStarted) {
+		return ctx, r.client, nil, nil
+	}
+	if err != nil {
+		return ctx, nil, nil, err
+	}
+	return dbent.NewTxContext(ctx, tx), tx.Client(), tx, nil
+}
+
+// lockLiveAccountForGroupMutation serializes group-link inserts with cascade
+// deletion. Delete holds FOR UPDATE on the parent and every live shadow; this
+// KEY SHARE lock either commits first (so Delete sees the link) or rechecks the
+// row after Delete and rejects a link to a soft-deleted account.
+func lockLiveAccountForGroupMutation(ctx context.Context, client *dbent.Client, accountID int64) error {
+	if client == nil || accountID <= 0 {
+		return service.ErrAccountNotFound
+	}
+	rows, err := client.QueryContext(ctx, `
+		SELECT id
+		FROM accounts
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR KEY SHARE
+	`, accountID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return service.ErrAccountNotFound
+	}
+	var lockedID int64
+	if err := rows.Scan(&lockedID); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if lockedID != accountID {
+		return service.ErrAccountNotFound
+	}
+	return nil
+}
+
 func (r *accountRepository) loadAccountGroupIDs(ctx context.Context, accountID int64) ([]int64, error) {
-	entries, err := r.client.AccountGroup.
+	return loadAccountGroupIDsWithClient(ctx, clientFromContext(ctx, r.client), accountID)
+}
+
+func loadAccountGroupIDsWithClient(ctx context.Context, client *dbent.Client, accountID int64) ([]int64, error) {
+	entries, err := client.AccountGroup.
 		Query().
 		Where(dbaccountgroup.AccountIDEQ(accountID)).
 		All(ctx)

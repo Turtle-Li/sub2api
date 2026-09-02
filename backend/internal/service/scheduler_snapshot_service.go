@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 )
 
 var (
@@ -327,7 +328,7 @@ func (s *SchedulerSnapshotService) UpdateAccountInCache(ctx context.Context, acc
 }
 
 func (s *SchedulerSnapshotService) runInitialRebuild() {
-	if s.cache == nil {
+	if s.cache == nil || !runtimegate.SharedWorkAllowed() {
 		return
 	}
 	_ = s.coalesceFullRebuild(func() error {
@@ -1032,6 +1033,9 @@ func (s *SchedulerSnapshotService) setRebuildSnapshot(
 func (s *SchedulerSnapshotService) triggerFullRebuild(reason string) error {
 	if s.cache == nil {
 		return ErrSchedulerCacheNotReady
+	}
+	if !runtimegate.SharedWorkAllowed() {
+		return nil
 	}
 	return s.coalesceFullRebuild(func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

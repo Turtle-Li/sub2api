@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -174,6 +175,74 @@ func TestAccountDeleteCascadesExistingShadowsAndInvalidatesBoth(t *testing.T) {
 		WHERE account_id = ANY($1)
 	`, pq.Array([]int64{parent.ID, shadow.ID})).Scan(&outboxAccounts))
 	require.Equal(t, 2, outboxAccounts)
+}
+
+func TestAccountDeleteSerializesConcurrentShadowGroupBinding(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	suffix := time.Now().UnixNano()
+	proxy := fixedEgressRaceProxy(t, fmt.Sprintf("delete-shadow-group-race-proxy-%d", suffix))
+	group := mustCreateGroup(t, integrationEntClient, &service.Group{Name: fmt.Sprintf("delete-shadow-group-race-%d", suffix)})
+	repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, nil)
+	parent := &service.Account{
+		Name:        fmt.Sprintf("delete-shadow-group-race-parent-%d", suffix),
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{},
+		Extra:       map[string]any{},
+		ProxyID:     &proxy.ID,
+	}
+	require.NoError(t, repo.Create(ctx, parent))
+	shadow := &service.Account{
+		Name:            fmt.Sprintf("delete-shadow-group-race-shadow-%d", suffix),
+		Platform:        service.PlatformOpenAI,
+		Type:            service.AccountTypeOAuth,
+		Status:          service.StatusActive,
+		Schedulable:     true,
+		Credentials:     map[string]any{},
+		Extra:           map[string]any{},
+		ParentAccountID: &parent.ID,
+		QuotaDimension:  service.QuotaDimensionSpark,
+	}
+	require.NoError(t, repo.CreateOpenAIOAuthShadow(ctx, parent.ID, &proxy.ID, shadow))
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(),
+			"DELETE FROM scheduler_outbox WHERE account_id = $1 OR account_id = $2", parent.ID, shadow.ID)
+		_, _ = integrationDB.ExecContext(context.Background(),
+			"DELETE FROM account_groups WHERE account_id = $1 OR account_id = $2", parent.ID, shadow.ID)
+		_ = integrationEntClient.Account.DeleteOneID(shadow.ID).Exec(context.Background())
+		_ = integrationEntClient.Account.DeleteOneID(parent.ID).Exec(context.Background())
+		_ = integrationEntClient.Group.DeleteOneID(group.ID).Exec(context.Background())
+		_ = integrationEntClient.Proxy.DeleteOneID(proxy.ID).Exec(context.Background())
+	})
+
+	start := make(chan struct{})
+	deleteResult := make(chan error, 1)
+	bindResult := make(chan error, 1)
+	go func() {
+		<-start
+		deleteResult <- repo.Delete(ctx, parent.ID)
+	}()
+	go func() {
+		<-start
+		bindResult <- repo.AddToGroup(ctx, shadow.ID, group.ID, 1)
+	}()
+	close(start)
+
+	require.NoError(t, <-deleteResult)
+	bindErr := <-bindResult
+	require.True(t, bindErr == nil || errors.Is(bindErr, service.ErrAccountNotFound),
+		"binding must either commit before deletion or reject the deleted shadow: %v", bindErr)
+
+	var residualLinks int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM account_groups
+		WHERE account_id = ANY($1)
+	`, pq.Array([]int64{parent.ID, shadow.ID})).Scan(&residualLinks))
+	require.Zero(t, residualLinks, "cascade deletion must remove every concurrently committed parent/shadow group link")
 }
 
 func TestClearErrorValidatesReservedFixedEgressParent(t *testing.T) {
