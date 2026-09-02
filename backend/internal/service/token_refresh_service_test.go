@@ -339,9 +339,10 @@ func (s *tokenCacheInvalidatorStub) InvalidateToken(ctx context.Context, account
 
 type tokenRefreshSchedulerCache struct {
 	SchedulerCache
-	setAccountCalls int
-	ctxErr          error
-	lastAccount     *Account
+	setAccountCalls  int
+	deleteAccountIDs []int64
+	ctxErr           error
+	lastAccount      *Account
 }
 
 func (s *tokenRefreshSchedulerCache) SetAccount(ctx context.Context, account *Account) error {
@@ -349,6 +350,36 @@ func (s *tokenRefreshSchedulerCache) SetAccount(ctx context.Context, account *Ac
 	s.ctxErr = ctx.Err()
 	s.lastAccount = snapshotOAuthRefreshAccount(account)
 	return nil
+}
+
+func (s *tokenRefreshSchedulerCache) DeleteAccount(ctx context.Context, accountID int64) error {
+	s.deleteAccountIDs = append(s.deleteAccountIDs, accountID)
+	s.ctxErr = ctx.Err()
+	return nil
+}
+
+func TestTokenRefreshPostRefreshStateSyncRetiresFixedEgressSchedulerSnapshots(t *testing.T) {
+	t.Run("OpenAI OAuth", func(t *testing.T) {
+		cache := &tokenRefreshSchedulerCache{}
+		svc := &TokenRefreshService{schedulerCache: cache}
+		account := &Account{ID: 7011, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+
+		svc.postRefreshStateSync(context.Background(), account)
+
+		require.Zero(t, cache.setAccountCalls)
+		require.Equal(t, []int64{account.ID}, cache.deleteAccountIDs)
+	})
+
+	t.Run("ordinary account still publishes", func(t *testing.T) {
+		cache := &tokenRefreshSchedulerCache{}
+		svc := &TokenRefreshService{schedulerCache: cache}
+		account := &Account{ID: 7012, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+		svc.postRefreshStateSync(context.Background(), account)
+
+		require.Equal(t, 1, cache.setAccountCalls)
+		require.Empty(t, cache.deleteAccountIDs)
+	})
 }
 
 type tempUnschedCacheStub struct {

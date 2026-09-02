@@ -70,6 +70,135 @@ func TestSchedulerCacheSetAccountClearsUnencodablePayload(t *testing.T) {
 	require.Nil(t, cached)
 }
 
+func TestSchedulerCacheRetiredFixedEgressAccountRejectsStaleOrdinaryWriter(t *testing.T) {
+	ctx := context.Background()
+	cache, _ := newSchedulerCacheUnitWithRedis(t)
+	accountID := int64(1131)
+	staleOrdinary := &service.Account{
+		ID:       accountID,
+		Name:     "stale-ordinary",
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeAPIKey,
+		Status:   service.StatusActive,
+	}
+	require.NoError(t, cache.SetAccount(ctx, staleOrdinary))
+	require.NotNil(t, mustCachedAccount(t, ctx, cache, accountID))
+
+	protected := service.Account{
+		ID:          accountID,
+		Name:        "fixed-egress-oauth",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"api_key": "not-the-full-routing-payload"},
+		GroupIDs:    []int64{41},
+	}
+	bucket := service.SchedulerBucket{GroupID: 41, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{protected}))
+
+	id := strconv.FormatInt(accountID, 10)
+	require.Equal(t, int64(1), cache.rdb.Exists(ctx, schedulerAccountRetiredKey(id)).Val(), "protected publish must create a permanent account fence")
+	_, err = cache.rdb.Get(ctx, schedulerAccountKey(id)).Bytes()
+	require.ErrorIs(t, err, redis.Nil, "protected cache entries must not retain the full routing payload")
+	metaBefore, err := cache.rdb.Get(ctx, schedulerAccountMetaKey(id)).Bytes()
+	require.NoError(t, err)
+	var metadata service.Account
+	require.NoError(t, json.Unmarshal(metaBefore, &metadata))
+	require.Equal(t, service.AccountTypeOAuth, metadata.Type, "the protected writer may still safely publish bucket metadata")
+
+	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit, "metadata keeps the bucket snapshot usable")
+	require.Len(t, snapshot, 1)
+	require.Equal(t, accountID, snapshot[0].ID)
+	cached, err := cache.GetAccount(ctx, accountID)
+	require.NoError(t, err)
+	require.Nil(t, cached, "full-account hydration must fall back to the database")
+
+	// This SetAccount models a writer that read the ordinary account before the
+	// OpenAI OAuth transition, then resumes after the protected mutation commits.
+	// The same atomic Redis script must reject both payloads.
+	require.NoError(t, cache.SetAccount(ctx, staleOrdinary))
+	_, err = cache.rdb.Get(ctx, schedulerAccountKey(id)).Bytes()
+	require.ErrorIs(t, err, redis.Nil)
+	metaAfter, err := cache.rdb.Get(ctx, schedulerAccountMetaKey(id)).Bytes()
+	require.NoError(t, err)
+	require.Equal(t, metaBefore, metaAfter, "a stale ordinary writer must not replace protected metadata")
+}
+
+func TestSchedulerCacheDeletedAccountFenceRejectsDelayedProtectedAndOrdinaryWriters(t *testing.T) {
+	ctx := context.Background()
+	cache, _ := newSchedulerCacheUnitWithRedis(t)
+	accountID := int64(1132)
+	protected := &service.Account{
+		ID:       accountID,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Status:   service.StatusActive,
+	}
+	require.NoError(t, cache.SetAccount(ctx, protected))
+	require.NoError(t, cache.RetireDeletedAccountSnapshot(ctx, accountID))
+
+	id := strconv.FormatInt(accountID, 10)
+	require.Equal(t, "deleted", cache.rdb.Get(ctx, schedulerAccountRetiredKey(id)).Val())
+	_, err := cache.rdb.Get(ctx, schedulerAccountKey(id)).Bytes()
+	require.ErrorIs(t, err, redis.Nil)
+	_, err = cache.rdb.Get(ctx, schedulerAccountMetaKey(id)).Bytes()
+	require.ErrorIs(t, err, redis.Nil)
+
+	require.NoError(t, cache.SetAccount(ctx, protected))
+	require.NoError(t, cache.SetAccount(ctx, &service.Account{
+		ID:       accountID,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeAPIKey,
+		Status:   service.StatusActive,
+	}))
+	_, err = cache.rdb.Get(ctx, schedulerAccountKey(id)).Bytes()
+	require.ErrorIs(t, err, redis.Nil)
+	_, err = cache.rdb.Get(ctx, schedulerAccountMetaKey(id)).Bytes()
+	require.ErrorIs(t, err, redis.Nil, "terminal deletion must not allow a delayed protected metadata write")
+}
+
+func TestSchedulerCacheProtectedMetadataMarshalFailureClearsStaleMetadata(t *testing.T) {
+	ctx := context.Background()
+	cache, _ := newSchedulerCacheUnitWithRedis(t)
+	accountID := int64(1133)
+	require.NoError(t, cache.SetAccount(ctx, &service.Account{
+		ID:       accountID,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeAPIKey,
+		Status:   service.StatusActive,
+	}))
+
+	invalidTime := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	err := cache.RetireAccountSnapshot(ctx, &service.Account{
+		ID:        accountID,
+		Platform:  service.PlatformOpenAI,
+		Type:      service.AccountTypeOAuth,
+		Status:    service.StatusActive,
+		ExpiresAt: &invalidTime,
+	})
+	require.Error(t, err, "the caller still receives the metadata encoding failure")
+
+	id := strconv.FormatInt(accountID, 10)
+	require.Equal(t, "protected", cache.rdb.Get(ctx, schedulerAccountRetiredKey(id)).Val())
+	_, err = cache.rdb.Get(ctx, schedulerAccountKey(id)).Bytes()
+	require.ErrorIs(t, err, redis.Nil)
+	_, err = cache.rdb.Get(ctx, schedulerAccountMetaKey(id)).Bytes()
+	require.ErrorIs(t, err, redis.Nil, "a failed protected publish must not preserve stale ordinary metadata")
+}
+
+func mustCachedAccount(t *testing.T, ctx context.Context, cache *schedulerCache, accountID int64) *service.Account {
+	t.Helper()
+	account, err := cache.GetAccount(ctx, accountID)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	return account
+}
+
 func TestSchedulerCacheUpdateLastUsedClearsUnencodablePayload(t *testing.T) {
 	ctx := context.Background()
 	cache := newSchedulerCacheUnit(t)
@@ -92,7 +221,7 @@ func TestSchedulerCacheSnapshotAccountIDReusePreservesPayloadAndMembers(t *testi
 		ID:          701,
 		Name:        "first",
 		Platform:    service.PlatformOpenAI,
-		Type:        service.AccountTypeOAuth,
+		Type:        service.AccountTypeAPIKey,
 		Credentials: map[string]any{"model_mapping": map[string]any{"z": "last", "a": "first"}},
 		Extra:       map[string]any{"mixed_scheduling": true},
 		GroupIDs:    []int64{17},
@@ -151,7 +280,7 @@ func TestSchedulerCacheSetSnapshotMatchesIDPublishing(t *testing.T) {
 		ID:          721,
 		Name:        "first",
 		Platform:    service.PlatformOpenAI,
-		Type:        service.AccountTypeOAuth,
+		Type:        service.AccountTypeAPIKey,
 		Credentials: map[string]any{"model_mapping": map[string]any{"source": "target"}},
 		Extra:       map[string]any{"mixed_scheduling": true},
 		GroupIDs:    []int64{21},

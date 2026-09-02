@@ -1246,8 +1246,8 @@ func (s *adminServiceImpl) compareAndSwapFixedEgressProxy(
 		return nil, ErrAccountProxyCASConflict
 	}
 	for _, account := range targets {
-		if account == nil || !account.IsOpenAIOAuthLike() || account.Status != StatusActive || account.ParentAccountID != nil {
-			return nil, infraerrors.BadRequest("FIXED_EGRESS_ACCOUNT_INELIGIBLE", "fixed egress can only be bound to active OpenAI Codex parent accounts")
+		if account == nil || !account.IsOpenAIOAuthLike() || account.ParentAccountID != nil {
+			return nil, infraerrors.BadRequest("FIXED_EGRESS_ACCOUNT_INELIGIBLE", "fixed egress can only be bound to OpenAI Codex parent accounts")
 		}
 		currentProxyID := int64(0)
 		if account.ProxyID != nil {
@@ -1427,16 +1427,9 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
-	// 级联删除 spark 影子账号（先删影子，再删母账号）
-	shadows, err := s.accountRepo.ListShadowsByParent(ctx, id)
-	if err != nil {
-		return fmt.Errorf("list spark shadows for cascade delete: %w", err)
-	}
-	for _, shadow := range shadows {
-		if err := s.accountRepo.Delete(ctx, shadow.ID); err != nil {
-			return fmt.Errorf("cascade delete spark shadow %d: %w", shadow.ID, err)
-		}
-	}
+	// The repository locks the parent before enumerating and deleting every
+	// credential shadow in one transaction. Splitting this into service-level
+	// list/delete calls permits a concurrent shadow create to orphan itself.
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
 		return err
 	}

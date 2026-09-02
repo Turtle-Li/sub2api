@@ -240,6 +240,39 @@ func TestAdminService_BulkUpdateAccounts_FixedEgressCompareAndSetSetupToken(t *t
 	require.Zero(t, repo.bulkUpdateCalls)
 }
 
+func TestAdminService_BulkUpdateAccounts_FixedEgressCompareAndSetAllowsInactiveParent(t *testing.T) {
+	proxyID := int64(78)
+	expectedProxyID := int64(76)
+	for _, status := range []string{StatusError, StatusDisabled} {
+		t.Run(status, func(t *testing.T) {
+			repo := &accountRepoStubForBulkUpdate{
+				getByIDsAccounts: []*Account{{
+					ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+					Status: status, ProxyID: &expectedProxyID,
+				}},
+				casUpdatedIDs: []int64{1},
+			}
+			proxy := &Proxy{
+				ID: proxyID, Protocol: "socks5h", Host: "100.81.60.44", Port: 1080,
+				Status: StatusActive, FallbackMode: FallbackModeNone,
+			}
+			svc := &adminServiceImpl{
+				accountRepo: repo,
+				proxyRepo:   &proxyRepoStub{getByID: map[int64]*Proxy{proxyID: proxy}},
+			}
+
+			result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+				AccountIDs: []int64{1}, ProxyID: &proxyID, ExpectedProxyID: &expectedProxyID,
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, []int64{1}, result.SuccessIDs)
+			require.Equal(t, 1, repo.casCalls)
+			require.Zero(t, repo.bulkUpdateCalls)
+		})
+	}
+}
+
 func TestAdminService_BulkUpdateAccounts_OpenAIOAuthProxyRequiresCompareAndSet(t *testing.T) {
 	proxyID := int64(77)
 	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{

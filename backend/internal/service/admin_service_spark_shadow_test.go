@@ -125,6 +125,12 @@ func (s *sparkShadowRepoStub) Update(_ context.Context, account *Account) error 
 }
 
 func (s *sparkShadowRepoStub) Delete(_ context.Context, id int64) error {
+	for accountID, account := range s.accounts {
+		if account.ParentAccountID != nil && *account.ParentAccountID == id {
+			delete(s.accounts, accountID)
+			delete(s.mockAccountRepoForGemini.accountsByID, accountID)
+		}
+	}
 	delete(s.accounts, id)
 	delete(s.mockAccountRepoForGemini.accountsByID, id)
 	return nil

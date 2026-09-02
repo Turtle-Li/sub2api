@@ -119,3 +119,66 @@ type SchedulerCache interface {
 	// SetOutboxWatermark 保存 outbox 水位。
 	SetOutboxWatermark(ctx context.Context, id int64) error
 }
+
+// SchedulerAccountSnapshotRetirer is implemented by caches that can retire an
+// account snapshot atomically. Retirement is intentionally stronger than a
+// best-effort DeleteAccount: it fences delayed writers so an older snapshot
+// cannot recreate a fixed-egress account after a newer mutation has committed.
+// The account may be ID-only when no fresh scheduler metadata is available.
+type SchedulerAccountSnapshotRetirer interface {
+	RetireAccountSnapshot(ctx context.Context, account *Account) error
+	RetireDeletedAccountSnapshot(ctx context.Context, accountID int64) error
+}
+
+// ShouldRetireFixedEgressSchedulerSnapshot reports the account class whose
+// single-account scheduler payload must be fenced rather than repopulated.
+// OpenAI OAuth and setup-token parents and credential shadows share the same
+// fixed-egress contract; the parent relationship does not change this cache
+// safety rule.
+func ShouldRetireFixedEgressSchedulerSnapshot(account *Account) bool {
+	return account != nil && account.IsOpenAIOAuthLike()
+}
+
+// PublishSchedulerAccountSnapshot updates an ordinary account snapshot, but
+// retires a fixed-egress OpenAI OAuth/setup-token snapshot. Caches without the
+// optional retirement capability fall back to DeleteAccount, preserving the
+// interface's fail-safe behavior for alternate implementations.
+func PublishSchedulerAccountSnapshot(ctx context.Context, cache SchedulerCache, account *Account) error {
+	if cache == nil || account == nil || account.ID <= 0 {
+		return nil
+	}
+	if ShouldRetireFixedEgressSchedulerSnapshot(account) {
+		if retirer, ok := cache.(SchedulerAccountSnapshotRetirer); ok {
+			return retirer.RetireAccountSnapshot(ctx, account)
+		}
+		return cache.DeleteAccount(ctx, account.ID)
+	}
+	return cache.SetAccount(ctx, account)
+}
+
+// RetireSchedulerAccountSnapshot fences a fixed-egress account when the
+// caller only has its ID (for example, a parent+shadow proxy CAS). A concrete
+// cache can preserve safe metadata when supplied through Publish; ID-only
+// retirement still atomically removes the full routing payload.
+func RetireSchedulerAccountSnapshot(ctx context.Context, cache SchedulerCache, accountID int64) error {
+	if cache == nil || accountID <= 0 {
+		return nil
+	}
+	if retirer, ok := cache.(SchedulerAccountSnapshotRetirer); ok {
+		return retirer.RetireAccountSnapshot(ctx, &Account{ID: accountID})
+	}
+	return cache.DeleteAccount(ctx, accountID)
+}
+
+// RetireDeletedSchedulerAccountSnapshot installs a terminal fence for an
+// account that no longer exists. Account IDs are never reused, so no delayed
+// protected or ordinary publisher may reopen its metadata or routing payload.
+func RetireDeletedSchedulerAccountSnapshot(ctx context.Context, cache SchedulerCache, accountID int64) error {
+	if cache == nil || accountID <= 0 {
+		return nil
+	}
+	if retirer, ok := cache.(SchedulerAccountSnapshotRetirer); ok {
+		return retirer.RetireDeletedAccountSnapshot(ctx, accountID)
+	}
+	return cache.DeleteAccount(ctx, accountID)
+}

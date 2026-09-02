@@ -272,11 +272,48 @@ func (r *proxyRepository) deleteSchedulerAccountSnapshots(ctx context.Context, a
 	}
 	propagationCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	for _, accountID := range accountIDs {
-		if err := r.schedulerCache.DeleteAccount(propagationCtx, accountID); err != nil {
-			logger.LegacyPrintf("repository.proxy", "[Scheduler] delete account snapshot after proxy change failed: account=%d err=%v", accountID, err)
+	protectedAccounts, err := r.fixedEgressSchedulerAccounts(propagationCtx, accountIDs)
+	if err != nil {
+		// A proxy mutation must not leave a fixed-egress account writeable by a
+		// delayed cache publisher. If the post-commit classification read fails,
+		// retire every affected ID rather than risk resurrecting a stale proxy.
+		logger.LegacyPrintf("repository.proxy", "[Scheduler] classify fixed-egress account snapshots failed; retiring all affected snapshots: err=%v", err)
+		protectedAccounts = make(map[int64]*service.Account, len(accountIDs))
+		for _, accountID := range accountIDs {
+			protectedAccounts[accountID] = nil
 		}
 	}
+	for _, accountID := range accountIDs {
+		if account, protected := protectedAccounts[accountID]; protected {
+			if account != nil {
+				err = service.PublishSchedulerAccountSnapshot(propagationCtx, r.schedulerCache, account)
+			} else {
+				err = service.RetireSchedulerAccountSnapshot(propagationCtx, r.schedulerCache, accountID)
+			}
+		} else {
+			err = r.schedulerCache.DeleteAccount(propagationCtx, accountID)
+		}
+		if err != nil {
+			logger.LegacyPrintf("repository.proxy", "[Scheduler] retire account snapshot after proxy change failed: account=%d err=%v", accountID, err)
+		}
+	}
+}
+
+func (r *proxyRepository) fixedEgressSchedulerAccounts(ctx context.Context, accountIDs []int64) (map[int64]*service.Account, error) {
+	protectedAccounts := make(map[int64]*service.Account)
+	if r == nil || r.client == nil || len(accountIDs) == 0 {
+		return protectedAccounts, nil
+	}
+	accounts, err := newAccountRepositoryWithSQL(r.client, r.sql, nil).GetByIDs(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, account := range accounts {
+		if service.ShouldRetireFixedEgressSchedulerSnapshot(account) {
+			protectedAccounts[account.ID] = account
+		}
+	}
+	return protectedAccounts, nil
 }
 
 // lockProxyForUpdate obtains the relation lock shared with OAuth proxy binding.

@@ -323,7 +323,7 @@ func (s *SchedulerSnapshotService) UpdateAccountInCache(ctx context.Context, acc
 	if s.cache == nil || account == nil {
 		return nil
 	}
-	return s.cache.SetAccount(ctx, account)
+	return PublishSchedulerAccountSnapshot(ctx, s.cache, account)
 }
 
 func (s *SchedulerSnapshotService) runInitialRebuild() {
@@ -569,7 +569,7 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 		}
 		found[account.ID] = struct{}{}
 		if s.cache != nil {
-			if err := s.cache.SetAccount(ctx, account); err != nil {
+			if err := PublishSchedulerAccountSnapshot(ctx, s.cache, account); err != nil {
 				return err
 			}
 		}
@@ -587,7 +587,7 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 		}
 		allAccountsFound = false
 		if s.cache != nil {
-			if err := s.cache.DeleteAccount(ctx, id); err != nil {
+			if err := RetireDeletedSchedulerAccountSnapshot(ctx, s.cache, id); err != nil {
 				return err
 			}
 		}
@@ -677,7 +677,7 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 	if err != nil {
 		if errors.Is(err, ErrAccountNotFound) {
 			if s.cache != nil {
-				if err := s.cache.DeleteAccount(ctx, *accountID); err != nil {
+				if err := RetireDeletedSchedulerAccountSnapshot(ctx, s.cache, *accountID); err != nil {
 					return err
 				}
 			}
@@ -686,7 +686,7 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 		return err
 	}
 	if s.cache != nil {
-		if err := s.cache.SetAccount(ctx, account); err != nil {
+		if err := PublishSchedulerAccountSnapshot(ctx, s.cache, account); err != nil {
 			return err
 		}
 	}

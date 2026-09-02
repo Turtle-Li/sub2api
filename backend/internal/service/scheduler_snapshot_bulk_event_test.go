@@ -27,12 +27,31 @@ func (r *bulkEventAccountRepo) GetByIDs(context.Context, []int64) ([]*Account, e
 	return append([]*Account(nil), r.accounts...), nil
 }
 
+type fixedEgressSingleEventAccountRepo struct {
+	*batchAccountQueryRepo
+	account *Account
+}
+
+func (r *fixedEgressSingleEventAccountRepo) GetByID(context.Context, int64) (*Account, error) {
+	return r.account, nil
+}
+
+type missingSingleEventAccountRepo struct {
+	*batchAccountQueryRepo
+}
+
+func (r *missingSingleEventAccountRepo) GetByID(context.Context, int64) (*Account, error) {
+	return nil, ErrAccountNotFound
+}
+
 type bulkEventSnapshotCache struct {
 	*batchSnapshotCache
 
-	accountMu        sync.Mutex
-	setAccountIDs    []int64
-	deleteAccountIDs []int64
+	accountMu         sync.Mutex
+	setAccountIDs     []int64
+	deleteAccountIDs  []int64
+	retiredAccountIDs []int64
+	deletedFenceIDs   []int64
 }
 
 func newBulkEventSnapshotCache() *bulkEventSnapshotCache {
@@ -53,10 +72,36 @@ func (c *bulkEventSnapshotCache) DeleteAccount(_ context.Context, accountID int6
 	return nil
 }
 
+func (c *bulkEventSnapshotCache) RetireAccountSnapshot(_ context.Context, account *Account) error {
+	if account == nil || account.ID <= 0 {
+		return nil
+	}
+	c.accountMu.Lock()
+	defer c.accountMu.Unlock()
+	c.retiredAccountIDs = append(c.retiredAccountIDs, account.ID)
+	return nil
+}
+
+func (c *bulkEventSnapshotCache) RetireDeletedAccountSnapshot(_ context.Context, accountID int64) error {
+	if accountID <= 0 {
+		return nil
+	}
+	c.accountMu.Lock()
+	defer c.accountMu.Unlock()
+	c.deletedFenceIDs = append(c.deletedFenceIDs, accountID)
+	return nil
+}
+
 func (c *bulkEventSnapshotCache) accountWrites() (set []int64, deleted []int64) {
 	c.accountMu.Lock()
 	defer c.accountMu.Unlock()
 	return append([]int64(nil), c.setAccountIDs...), append([]int64(nil), c.deleteAccountIDs...)
+}
+
+func (c *bulkEventSnapshotCache) retirementWrites() (retired []int64, deleted []int64) {
+	c.accountMu.Lock()
+	defer c.accountMu.Unlock()
+	return append([]int64(nil), c.retiredAccountIDs...), append([]int64(nil), c.deletedFenceIDs...)
 }
 
 func (c *bulkEventSnapshotCache) capturedBuckets() []SchedulerBucket {
@@ -112,6 +157,65 @@ func TestSchedulerBulkAccountEventScopesOpenAIRebuildToFreshPlatform(t *testing.
 	set, deleted := cache.accountWrites()
 	require.Equal(t, []int64{1}, set)
 	require.Empty(t, deleted)
+}
+
+func TestSchedulerBulkAccountEventRetiresFixedEgressAccountSnapshot(t *testing.T) {
+	cache := newBulkEventSnapshotCache()
+	repo := newBulkEventAccountRepo(&Account{
+		ID:       14,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+	})
+	svc := newBulkEventTestService(cache, repo)
+
+	err := svc.handleBulkAccountEvent(context.Background(), bulkEventPayload([]int64{14}, nil), make(map[batchSeenKey]struct{}))
+
+	require.NoError(t, err)
+	set, deleted := cache.accountWrites()
+	retired, deletedFence := cache.retirementWrites()
+	require.Empty(t, set)
+	require.Empty(t, deleted)
+	require.Equal(t, []int64{14}, retired, "outbox replay must retire fixed-egress snapshots instead of repopulating them")
+	require.Empty(t, deletedFence)
+}
+
+func TestSchedulerAccountEventRetiresFixedEgressAccountSnapshot(t *testing.T) {
+	cache := newBulkEventSnapshotCache()
+	id := int64(15)
+	svc := &SchedulerSnapshotService{
+		cache: cache,
+		accountRepo: &fixedEgressSingleEventAccountRepo{account: &Account{
+			ID:       id,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeSetupToken,
+		}, batchAccountQueryRepo: newBatchAccountQueryRepo()},
+	}
+
+	err := svc.handleAccountEvent(context.Background(), &id, nil, make(map[batchSeenKey]struct{}))
+
+	require.NoError(t, err)
+	set, deleted := cache.accountWrites()
+	retired, deletedFence := cache.retirementWrites()
+	require.Empty(t, set)
+	require.Empty(t, deleted)
+	require.Equal(t, []int64{id}, retired, "single-account outbox replay must retire setup-token snapshots")
+	require.Empty(t, deletedFence)
+}
+
+func TestSchedulerAccountEventMissingAccountInstallsDeletedFence(t *testing.T) {
+	cache := newBulkEventSnapshotCache()
+	id := int64(16)
+	svc := newBulkEventTestService(cache, &missingSingleEventAccountRepo{batchAccountQueryRepo: newBatchAccountQueryRepo()})
+
+	err := svc.handleAccountEvent(context.Background(), &id, nil, make(map[batchSeenKey]struct{}))
+
+	require.NoError(t, err)
+	set, deleted := cache.accountWrites()
+	retired, deletedFence := cache.retirementWrites()
+	require.Empty(t, set)
+	require.Empty(t, deleted)
+	require.Empty(t, retired)
+	require.Equal(t, []int64{id}, deletedFence, "outbox replay must recover the terminal deleted-account fence")
 }
 
 func TestSchedulerBulkAccountEventScopesCNRebuildToFreshPlatform(t *testing.T) {
@@ -210,7 +314,10 @@ func TestSchedulerBulkAccountEventMissingAccountFallsBackToAllPlatforms(t *testi
 	require.ElementsMatch(t, schedulerBucketsForTest([]int64{31, 32}, platforms[:]...), cache.capturedBuckets())
 	set, deleted := cache.accountWrites()
 	require.Equal(t, []int64{3}, set)
-	require.Equal(t, []int64{4}, deleted)
+	require.Empty(t, deleted)
+	retired, deletedFence := cache.retirementWrites()
+	require.Empty(t, retired)
+	require.Equal(t, []int64{4}, deletedFence, "missing bulk accounts must restore their terminal deleted-account fence")
 }
 
 func TestSchedulerBulkAccountEventUnknownPlatformFallsBackToAllPlatforms(t *testing.T) {

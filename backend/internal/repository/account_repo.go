@@ -1092,33 +1092,141 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 }
 
 func (r *accountRepository) Delete(ctx context.Context, id int64) error {
-	groupIDs, err := r.loadAccountGroupIDs(ctx, id)
+	if r == nil || r.client == nil || id <= 0 {
+		return service.ErrAccountNotFound
+	}
+
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := r.client
+	var tx *dbent.Tx
+	if contextTx != nil {
+		client = contextTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+		client = tx.Client()
+	}
+
+	// Lock the parent before enumerating shadows. FOR UPDATE also conflicts with
+	// the KEY SHARE lock taken by PostgreSQL foreign-key inserts. Supported
+	// repository create paths recheck the live parent under this same row lock,
+	// so they either commit first and are included below, or observe the soft-
+	// deleted parent and fail. Raw SQL writers remain outside this contract.
+	parentRows, err := client.QueryContext(ctx, `
+		/* sub2api-cascade-delete-parent-lock */
+		SELECT id
+		FROM accounts
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, id)
 	if err != nil {
 		return err
 	}
-	// 使用事务保证账号与关联分组的删除原子性
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+	parentFound := parentRows.Next()
+	if parentFound {
+		var lockedID int64
+		if err := parentRows.Scan(&lockedID); err != nil {
+			_ = parentRows.Close()
+			return err
+		}
+		parentFound = lockedID == id
+	}
+	if err := parentRows.Err(); err != nil {
+		_ = parentRows.Close()
+		return err
+	}
+	if err := parentRows.Close(); err != nil {
+		return err
+	}
+	if !parentFound {
+		return service.ErrAccountNotFound
+	}
+
+	shadowRows, err := client.QueryContext(ctx, `
+		SELECT id
+		FROM accounts
+		WHERE parent_account_id = $1 AND deleted_at IS NULL
+		ORDER BY id
+		FOR NO KEY UPDATE
+	`, id)
+	if err != nil {
+		return err
+	}
+	shadowIDs := make([]int64, 0)
+	for shadowRows.Next() {
+		var shadowID int64
+		if err := shadowRows.Scan(&shadowID); err != nil {
+			_ = shadowRows.Close()
+			return err
+		}
+		shadowIDs = append(shadowIDs, shadowID)
+	}
+	if err := shadowRows.Err(); err != nil {
+		_ = shadowRows.Close()
+		return err
+	}
+	if err := shadowRows.Close(); err != nil {
 		return err
 	}
 
-	var txClient *dbent.Client
-	if err == nil {
-		defer func() { _ = tx.Rollback() }()
-		txClient = tx.Client()
-	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前 client
-		txClient = r.client
+	affectedIDs := make([]int64, 0, 1+len(shadowIDs))
+	affectedIDs = append(affectedIDs, id)
+	affectedIDs = append(affectedIDs, shadowIDs...)
+	groupIDsByAccount := make(map[int64][]int64, len(affectedIDs))
+	groupRows, err := client.QueryContext(ctx, `
+		SELECT account_id, group_id
+		FROM account_groups
+		WHERE account_id = ANY($1)
+		ORDER BY account_id, group_id
+	`, pq.Array(affectedIDs))
+	if err != nil {
+		return err
+	}
+	for groupRows.Next() {
+		var accountID, groupID int64
+		if err := groupRows.Scan(&accountID, &groupID); err != nil {
+			_ = groupRows.Close()
+			return err
+		}
+		groupIDsByAccount[accountID] = append(groupIDsByAccount[accountID], groupID)
+	}
+	if err := groupRows.Err(); err != nil {
+		_ = groupRows.Close()
+		return err
+	}
+	if err := groupRows.Close(); err != nil {
+		return err
 	}
 
-	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(id)).Exec(ctx); err != nil {
+	if _, err := client.AccountGroup.Delete().
+		Where(dbaccountgroup.AccountIDIn(affectedIDs...)).
+		Exec(ctx); err != nil {
 		return err
 	}
-	if _, err := txClient.ExecContext(ctx, "DELETE FROM scheduled_test_plans WHERE account_id = $1", id); err != nil {
+	if _, err := client.ExecContext(ctx,
+		"DELETE FROM scheduled_test_plans WHERE account_id = ANY($1)", pq.Array(affectedIDs)); err != nil {
 		return err
 	}
-	if _, err := txClient.Account.Delete().Where(dbaccount.IDEQ(id)).Exec(ctx); err != nil {
+	if len(shadowIDs) > 0 {
+		if _, err := client.Account.Delete().Where(dbaccount.IDIn(shadowIDs...)).Exec(ctx); err != nil {
+			return err
+		}
+	}
+	if _, err := client.Account.Delete().Where(dbaccount.IDEQ(id)).Exec(ctx); err != nil {
 		return err
+	}
+	for _, accountID := range affectedIDs {
+		accountID := accountID
+		if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged,
+			&accountID, nil, buildSchedulerGroupPayload(groupIDsByAccount[accountID])); err != nil {
+			return err
+		}
 	}
 
 	if tx != nil {
@@ -1126,9 +1234,11 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 			return err
 		}
 	}
-	r.deleteSchedulerAccountSnapshot(ctx, id)
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account delete failed: account=%d err=%v", id, err)
+	// An outer transaction owns publication timing; its committed outbox rows
+	// invalidate the snapshots. Only this method's own committed transaction
+	// may evict immediately.
+	if contextTx == nil {
+		r.retireDeletedSchedulerAccountSnapshotsDetached(baseCtx, affectedIDs)
 	}
 	return nil
 }
@@ -1909,8 +2019,8 @@ func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, ac
 		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot read failed: id=%d err=%v", accountID, err)
 		return
 	}
-	if err := r.schedulerCache.SetAccount(ctx, account); err != nil {
-		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot write failed: id=%d err=%v", accountID, err)
+	if err := service.PublishSchedulerAccountSnapshot(ctx, r.schedulerCache, account); err != nil {
+		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot publish failed: id=%d err=%v", accountID, err)
 	}
 }
 
@@ -1924,12 +2034,45 @@ func (r *accountRepository) syncSchedulerAccountSnapshotDetached(ctx context.Con
 	r.syncSchedulerAccountSnapshot(propagationCtx, accountID)
 }
 
-func (r *accountRepository) deleteSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
+func (r *accountRepository) retireSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
 	if r == nil || r.schedulerCache == nil || accountID <= 0 {
 		return
 	}
-	if err := r.schedulerCache.DeleteAccount(ctx, accountID); err != nil {
-		logger.LegacyPrintf("repository.account", "[Scheduler] delete account snapshot failed: id=%d err=%v", accountID, err)
+	if err := service.RetireSchedulerAccountSnapshot(ctx, r.schedulerCache, accountID); err != nil {
+		logger.LegacyPrintf("repository.account", "[Scheduler] retire account snapshot failed: id=%d err=%v", accountID, err)
+	}
+}
+
+func (r *accountRepository) retireDeletedSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
+	if r == nil || r.schedulerCache == nil || accountID <= 0 {
+		return
+	}
+	if err := service.RetireDeletedSchedulerAccountSnapshot(ctx, r.schedulerCache, accountID); err != nil {
+		logger.LegacyPrintf("repository.account", "[Scheduler] retire deleted account snapshot failed: id=%d err=%v", accountID, err)
+	}
+}
+
+func (r *accountRepository) retireSchedulerAccountSnapshotsDetached(ctx context.Context, accountIDs []int64) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	propagationCtx, cancel := context.WithTimeout(base, 2*time.Second)
+	defer cancel()
+	for _, accountID := range accountIDs {
+		r.retireSchedulerAccountSnapshot(propagationCtx, accountID)
+	}
+}
+
+func (r *accountRepository) retireDeletedSchedulerAccountSnapshotsDetached(ctx context.Context, accountIDs []int64) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	propagationCtx, cancel := context.WithTimeout(base, 2*time.Second)
+	defer cancel()
+	for _, accountID := range accountIDs {
+		r.retireDeletedSchedulerAccountSnapshot(propagationCtx, accountID)
 	}
 }
 
@@ -1964,25 +2107,105 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 		if account == nil {
 			continue
 		}
-		if err := r.schedulerCache.SetAccount(ctx, account); err != nil {
-			logger.LegacyPrintf("repository.account", "[Scheduler] batch sync account snapshot write failed: id=%d err=%v", account.ID, err)
+		if err := service.PublishSchedulerAccountSnapshot(ctx, r.schedulerCache, account); err != nil {
+			logger.LegacyPrintf("repository.account", "[Scheduler] batch sync account snapshot publish failed: id=%d err=%v", account.ID, err)
 		}
 	}
 }
 
 func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		SetStatus(service.StatusActive).
-		SetErrorMessage("").
-		Save(ctx)
+	if r == nil || r.client == nil || id <= 0 {
+		return service.ErrAccountNotFound
+	}
+
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := r.client
+	var tx *dbent.Tx
+	if contextTx != nil {
+		client = contextTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+		client = tx.Client()
+	}
+
+	// Read the candidate identity without a row lock, then let the shared
+	// fixed-egress guards acquire proxy -> parent -> shadow locks in their
+	// canonical order and recheck the persisted relationship before activation.
+	rows, err := client.QueryContext(ctx, `
+		SELECT platform, type, status, parent_account_id, quota_dimension, proxy_id
+		FROM accounts
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
 	if err != nil {
 		return err
 	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue clear error failed: account=%d err=%v", id, err)
+	account := &service.Account{ID: id}
+	var parentID, proxyID sql.NullInt64
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+		return service.ErrAccountNotFound
 	}
-	r.syncSchedulerAccountSnapshot(ctx, id)
+	if err := rows.Scan(&account.Platform, &account.Type, &account.Status,
+		&parentID, &account.QuotaDimension, &proxyID); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if parentID.Valid {
+		value := parentID.Int64
+		account.ParentAccountID = &value
+	}
+	if proxyID.Valid {
+		value := proxyID.Int64
+		account.ProxyID = &value
+	}
+	account.Status = service.StatusActive
+	account.ErrorMessage = ""
+
+	if err := enforceOpenAIOAuthParentUpdate(ctx, client, account); err != nil {
+		return err
+	}
+	if err := enforceOpenAIOAuthShadowProxyRelation(ctx, client, account); err != nil {
+		return err
+	}
+	if err := enforcePersistedOpenAIFixedEgressRelation(ctx, client, account); err != nil {
+		return err
+	}
+	if _, err := client.Account.Update().
+		Where(dbaccount.IDEQ(id)).
+		SetStatus(service.StatusActive).
+		SetErrorMessage("").
+		Save(ctx); err != nil {
+		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+	}
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	if contextTx == nil {
+		r.syncSchedulerAccountSnapshot(baseCtx, id)
+	}
 	return nil
 }
 
@@ -3441,12 +3664,15 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 		service.PlatformOpenAI,
 		service.AccountTypeOAuth,
 		service.AccountTypeSetupToken,
-		service.StatusActive,
 	}
 	if expectedProxyID > 0 {
-		whereExpected = "proxy_id = $6"
+		whereExpected = "proxy_id = $5"
 		args = append(args, expectedProxyID)
 	}
+	// Proxy migration is also valid for error/disabled parents: changing egress
+	// must not reactivate them, and requiring active status would make a revoked
+	// account permanently dependent on an obsolete proxy. The UPDATE below only
+	// changes proxy identity and preserves status/schedulable fields.
 	rows, err := exec.QueryContext(txCtx, `
 		SELECT id
 		FROM accounts
@@ -3454,7 +3680,6 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 		  AND deleted_at IS NULL
 		  AND platform = $2
 		  AND type IN ($3, $4)
-		  AND status = $5
 		  AND parent_account_id IS NULL
 		  AND `+whereExpected+`
 		ORDER BY id
@@ -3539,7 +3764,12 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	r.syncSchedulerAccountSnapshots(ctx, allChangedIDs)
+	// The proxy binding changed atomically. Evict after commit instead of
+	// refetching and repopulating: a later committed mutation may invalidate the
+	// same account before this callback runs, and a delayed SetAccount could then
+	// resurrect stale scheduling state. A delayed eviction remains fail-safe; the
+	// durable outbox is the retry/rebuild path if Redis is unavailable.
+	r.retireSchedulerAccountSnapshotsDetached(ctx, allChangedIDs)
 	return parentIDs, nil
 }
 

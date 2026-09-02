@@ -20,6 +20,7 @@ const (
 	schedulerAccountPrefix         = "sched:acc:"
 	schedulerAccountMetaPrefix     = "sched:meta:"
 	schedulerAccountLastUsedPrefix = "sched:acc:last_used:"
+	schedulerAccountRetiredPrefix  = "sched:acc:retired:"
 	schedulerActivePrefix          = "sched:active:"
 	schedulerReadyPrefix           = "sched:ready:"
 	schedulerVersionPrefix         = "sched:ver:"
@@ -59,6 +60,50 @@ for index = 1, #ARGV do
     end
 end
 return updated
+`)
+
+// writeSchedulerOrdinaryAccountScript writes an ordinary account only while no
+// fixed-egress retirement fence exists. The fence test and both writes share
+// one Redis atomic boundary, so a stale pre-transition writer cannot restore
+// full or metadata payload after a protected account has retired them.
+var writeSchedulerOrdinaryAccountScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[3]) == 1 then
+    return 0
+end
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('SET', KEYS[2], ARGV[2])
+return 1
+`)
+
+// retireSchedulerAccountSnapshotScript makes a fixed-egress account's full
+// scheduler payload permanently unavailable while preserving its safe metadata
+// projection for bucket snapshots. A protected writer may refresh metadata;
+// an ID-only retirement leaves existing metadata untouched. A terminal deleted
+// fence wins over every delayed protected publisher. KEYS[4] is the last-used
+// side key and must be removed with the full payload. ARGV[2] explicitly
+// clears metadata when a full protected publish cannot encode fresh metadata.
+var retireSchedulerAccountSnapshotScript = redis.NewScript(`
+if redis.call('GET', KEYS[3]) == 'deleted' then
+    redis.call('DEL', KEYS[1], KEYS[2], KEYS[4])
+    return 0
+end
+redis.call('SET', KEYS[3], 'protected')
+redis.call('DEL', KEYS[1], KEYS[4])
+if ARGV[2] == '1' then
+    redis.call('DEL', KEYS[2])
+elseif ARGV[1] ~= '' then
+    redis.call('SET', KEYS[2], ARGV[1])
+end
+return 1
+`)
+
+// retireDeletedSchedulerAccountSnapshotScript is terminal because account IDs
+// are never reused. It fences every delayed ordinary/protected writer and
+// removes metadata as well as the full routing payload.
+var retireDeletedSchedulerAccountSnapshotScript = redis.NewScript(`
+redis.call('SET', KEYS[3], 'deleted')
+redis.call('DEL', KEYS[1], KEYS[2], KEYS[4])
+return 1
 `)
 
 var (
@@ -599,6 +644,58 @@ func (c *schedulerCache) SetAccount(ctx context.Context, account *service.Accoun
 	return nil
 }
 
+// RetireAccountSnapshot fences a fixed-egress account's full routing payload.
+// It is safe to call with an ID-only Account when a mutation has no fresh
+// metadata; a full fixed-egress Account additionally refreshes sched:meta.
+func (c *schedulerCache) RetireAccountSnapshot(ctx context.Context, account *service.Account) error {
+	if account == nil || account.ID <= 0 {
+		return nil
+	}
+
+	var (
+		metaPayload []byte
+		marshalErr  error
+		clearMeta   string
+	)
+	if service.ShouldRetireFixedEgressSchedulerSnapshot(account) {
+		metaPayload, marshalErr = marshalSchedulerMetadataAccount(*account)
+		if marshalErr != nil {
+			clearMeta = "1"
+			slog.Warn("scheduler cache retires account with unencodable metadata",
+				"account_id", account.ID,
+				"error", marshalErr,
+			)
+		}
+	}
+
+	id := strconv.FormatInt(account.ID, 10)
+	if _, err := retireSchedulerAccountSnapshotScript.Run(ctx, c.rdb, []string{
+		schedulerAccountKey(id),
+		schedulerAccountMetaKey(id),
+		schedulerAccountRetiredKey(id),
+		schedulerLastUsedKey(id),
+	}, string(metaPayload), clearMeta).Result(); err != nil {
+		return err
+	}
+	return marshalErr
+}
+
+// RetireDeletedAccountSnapshot is terminal: deleted account IDs must never be
+// hydrated again by a delayed post-commit cache writer.
+func (c *schedulerCache) RetireDeletedAccountSnapshot(ctx context.Context, accountID int64) error {
+	if accountID <= 0 {
+		return nil
+	}
+	id := strconv.FormatInt(accountID, 10)
+	_, err := retireDeletedSchedulerAccountSnapshotScript.Run(ctx, c.rdb, []string{
+		schedulerAccountKey(id),
+		schedulerAccountMetaKey(id),
+		schedulerAccountRetiredKey(id),
+		schedulerLastUsedKey(id),
+	}).Result()
+	return err
+}
+
 func (c *schedulerCache) DeleteAccount(ctx context.Context, accountID int64) error {
 	if accountID <= 0 {
 		return nil
@@ -724,6 +821,10 @@ func schedulerLastUsedKey(id string) string {
 	return schedulerAccountLastUsedPrefix + id
 }
 
+func schedulerAccountRetiredKey(id string) string {
+	return schedulerAccountRetiredPrefix + id
+}
+
 func ptrTime(t time.Time) *time.Time {
 	return &t
 }
@@ -797,22 +898,47 @@ func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service
 	}
 
 	for _, account := range accounts {
-		fullPayload, metaPayload, err := marshalSchedulerCacheAccount(account)
-		if err != nil {
-			slog.Warn("scheduler cache skips account with unencodable payload",
-				"account_id", account.ID,
-				"error", err,
-			)
-			continue
-		}
-
 		id := strconv.FormatInt(account.ID, 10)
-		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
-		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
-		// Keep the hot LastUsedAt side key untouched: a lagging snapshot rebuild
-		// must not overwrite a newer scheduler update.
-		accountIDs = append(accountIDs, account.ID)
-		pending++
+		if service.ShouldRetireFixedEgressSchedulerSnapshot(&account) {
+			metaPayload, err := marshalSchedulerMetadataAccount(account)
+			clearMeta := ""
+			if err != nil {
+				clearMeta = "1"
+				slog.Warn("scheduler cache retires account with unencodable metadata",
+					"account_id", account.ID,
+					"error", err,
+				)
+			}
+			retireSchedulerAccountSnapshotScript.Eval(ctx, pipe, []string{
+				schedulerAccountKey(id),
+				schedulerAccountMetaKey(id),
+				schedulerAccountRetiredKey(id),
+				schedulerLastUsedKey(id),
+			}, string(metaPayload), clearMeta)
+			// Keep the member in its bucket. sched:meta remains available for
+			// selection, while any full-account hydration falls back to DB.
+			accountIDs = append(accountIDs, account.ID)
+			pending++
+		} else {
+			fullPayload, metaPayload, err := marshalSchedulerCacheAccount(account)
+			if err != nil {
+				slog.Warn("scheduler cache skips account with unencodable payload",
+					"account_id", account.ID,
+					"error", err,
+				)
+				continue
+			}
+
+			writeSchedulerOrdinaryAccountScript.Eval(ctx, pipe, []string{
+				schedulerAccountKey(id),
+				schedulerAccountMetaKey(id),
+				schedulerAccountRetiredKey(id),
+			}, fullPayload, metaPayload)
+			// Keep the hot LastUsedAt side key untouched: a lagging snapshot rebuild
+			// must not overwrite a newer scheduler update.
+			accountIDs = append(accountIDs, account.ID)
+			pending++
+		}
 		if pending >= c.writeChunkSize {
 			if err := flush(); err != nil {
 				return nil, err
@@ -831,11 +957,19 @@ func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account: %w", err)
 	}
-	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	metaPayload, err := marshalSchedulerMetadataAccount(account)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account metadata: %w", err)
 	}
 	return fullPayload, metaPayload, nil
+}
+
+func marshalSchedulerMetadataAccount(account service.Account) ([]byte, error) {
+	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	if err != nil {
+		return nil, fmt.Errorf("marshal account metadata: %w", err)
+	}
+	return metaPayload, nil
 }
 
 func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any, error) {

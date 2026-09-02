@@ -472,9 +472,8 @@ func (s *AccountService) Delete(ctx context.Context, id int64) error {
 		return ErrAccountNotFound
 	}
 
-	// 注意:此处不级联删除 spark 影子账号。当前唯一的后台删除入口走 AdminService.DeleteAccount
-	// (已 ListShadowsByParent 先删影子再删母)。本方法目前无删除调用方;若未来有调用方经此
-	// 删除母账号,需在此补级联,否则会留下孤儿影子(外审第6轮 P3:当前不可达,记为残留)。
+	// The repository performs parent-plus-shadow deletion atomically, so every
+	// caller receives the same lifecycle guarantee.
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}
