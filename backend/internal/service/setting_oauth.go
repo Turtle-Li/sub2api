@@ -737,6 +737,23 @@ func (s *SettingService) GetWeChatConnectOAuthConfig(ctx context.Context) (WeCha
 	return s.parseWeChatConnectOAuthConfig(settings)
 }
 
+// GetOIDCConnectSkipActionCaptcha 返回 OIDC 登录启动是否跳过行为验证码。
+// 独立读取该策略，避免完整 OIDC 配置校验改变验证码优先的既有行为。
+func (s *SettingService) GetOIDCConnectSkipActionCaptcha(ctx context.Context) (bool, error) {
+	if s == nil || s.cfg == nil || s.settingRepo == nil {
+		return false, infraerrors.ServiceUnavailable("CONFIG_NOT_READY", "config not loaded")
+	}
+
+	settings, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyOIDCConnectSkipActionCaptcha})
+	if err != nil {
+		return false, fmt.Errorf("get oidc captcha setting: %w", err)
+	}
+	if raw, ok := settings[SettingKeyOIDCConnectSkipActionCaptcha]; ok {
+		return raw == "true", nil
+	}
+	return s.cfg.OIDC.SkipActionCaptcha, nil
+}
+
 // GetOIDCConnectOAuthConfig 返回用于登录的“最终生效” OIDC 配置。
 //
 // 优先级：

@@ -115,13 +115,25 @@ type oidcJWK struct {
 // OIDCOAuthStart 启动通用 OIDC OAuth 登录流程。
 // GET /api/v1/auth/oauth/oidc/start?redirect=/dashboard
 func (h *AuthHandler) OIDCOAuthStart(c *gin.Context) {
+	skipActionCaptcha := false
+	if h != nil && h.cfg != nil {
+		skipActionCaptcha = h.cfg.OIDC.SkipActionCaptcha
+	}
+	if h != nil && h.settingSvc != nil {
+		effectiveSkip, err := h.settingSvc.GetOIDCConnectSkipActionCaptcha(c.Request.Context())
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		skipActionCaptcha = effectiveSkip
+	}
+	// Turnstile 不在 OAuth action gate 的既有覆盖范围内；该开关仅短路腾讯/阿里行为验证码。
+	if !skipActionCaptcha && !h.requireActionCaptchaForOAuthLoginStart(c) {
+		return
+	}
 	cfg, err := h.getOIDCOAuthConfig(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
-		return
-	}
-	// Turnstile 不在 OAuth action gate 的既有覆盖范围内；该开关仅短路腾讯/阿里行为验证码。
-	if !cfg.SkipActionCaptcha && !h.requireActionCaptchaForOAuthLoginStart(c) {
 		return
 	}
 
