@@ -137,9 +137,13 @@ case "${1:-}" in
   exec)
     shift
     container_name=""
+    runtime_state_path=""
     while [ "$#" -gt 0 ]; do
       case "$1" in
         -e)
+          case "${2:-}" in
+            SUB2API_RUNTIME_STATE_PATH=*) runtime_state_path="${2#*=}" ;;
+          esac
           shift 2
           ;;
         *)
@@ -165,7 +169,40 @@ case "${1:-}" in
       exit 0
     fi
     load_state "$container_name" || exit 1
-    [ "$running" = true ] && [ "$health" = healthy ]
+    [ "$running" = true ] && [ "$health" = healthy ] || exit 1
+    if [ -n "$runtime_state_path" ]; then
+      case "$runtime_state_path" in
+        /run/sub2api-runtime/traffic-state)
+          runtime_host_path="$FAKE_RUNTIME_ROOT/traffic-state"
+          runtime_kind=traffic
+          ;;
+        /run/sub2api-runtime/background-state)
+          runtime_host_path="$FAKE_RUNTIME_ROOT/background/$container_name"
+          runtime_kind=background
+          ;;
+        *) exit 1 ;;
+      esac
+      runtime_identity="1:$(printf '%s' "$runtime_host_path" | cksum | awk '{print $1}')"
+      case "$command_text" in
+        *'stat -c'*)
+          if [ "${FAKE_RUNTIME_INODE_DRIFT:-false}" = true ] \
+            && [ "${FAKE_RUNTIME_DRIFT_TARGET:-traffic}" = "$runtime_kind" ]; then
+            printf '1:999\n'
+          else
+            printf '%s\n' "$runtime_identity"
+          fi
+          ;;
+        *'tr -d'*)
+          if [ "${FAKE_RUNTIME_CONTENT_DRIFT:-false}" = true ] \
+            && [ "${FAKE_RUNTIME_DRIFT_TARGET:-traffic}" = "$runtime_kind" ]; then
+            printf 'stale-container-view\n'
+          else
+            tr -d '\r\n' <"$runtime_host_path"
+          fi
+          ;;
+        *) exit 1 ;;
+      esac
+    fi
     ;;
   *)
     exit 1
@@ -227,6 +264,14 @@ case "$format" in
   %u) printf '%s\n' "$uid" ;;
   %g) printf '%s\n' "$gid" ;;
   %a) printf '%s\n' "$mode" ;;
+  %d:%i)
+    case "$path" in
+      */traffic-state|*/background/*)
+        printf '1:%s\n' "$(printf '%s' "$path" | cksum | awk '{print $1}')"
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
   *) exit 1 ;;
 esac
 EOF
@@ -379,6 +424,10 @@ run_guard() {
     FAKE_CURL_CALLS="${CASE_ROOT}/curl-calls.log" \
     FAKE_DOCKER_CALLS="${CASE_ROOT}/docker-calls.log" \
     FAKE_FLOCK_MODE="${FAKE_FLOCK_MODE:-success}" \
+    FAKE_RUNTIME_CONTENT_DRIFT="${FAKE_RUNTIME_CONTENT_DRIFT:-false}" \
+    FAKE_RUNTIME_DRIFT_TARGET="${FAKE_RUNTIME_DRIFT_TARGET:-traffic}" \
+    FAKE_RUNTIME_INODE_DRIFT="${FAKE_RUNTIME_INODE_DRIFT:-false}" \
+    FAKE_RUNTIME_ROOT="${CASE_ROOT}/runtime" \
     FAKE_NODE_STATE_CALLS="${CASE_ROOT}/node-state-calls.log" \
     FAKE_RELEASE_CALLS="${CASE_ROOT}/release-calls.log" \
     FAKE_STARTUP_CONFIG_FILE="${CASE_ROOT}/startup-Caddyfile" \
@@ -497,6 +546,58 @@ assert_not_contains "${CASE_ROOT}/docker-calls.log" 'inspect sub2api-postgres'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'inspect sub2api-redis'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-postgres'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-redis'
+
+# A correct Mount.Source path is insufficient: a single-file bind mount can
+# remain pinned to an inode that node-state already replaced.
+new_case external-active-runtime-inode-drift
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+if FAKE_RUNTIME_INODE_DRIFT=true run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a stale runtime-state bind inode'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'traffic-state bind mount inode is stale'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+
+new_case external-active-background-inode-drift
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+if FAKE_RUNTIME_INODE_DRIFT=true FAKE_RUNTIME_DRIFT_TARGET=background \
+  run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a stale background-state bind inode'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'background-state bind mount inode is stale'
+
+new_case external-active-runtime-content-drift
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+if FAKE_RUNTIME_CONTENT_DRIFT=true run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted stale runtime-state content'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'traffic-state bind mount content is stale'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+
+new_case external-active-background-content-drift
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+if FAKE_RUNTIME_CONTENT_DRIFT=true FAKE_RUNTIME_DRIFT_TARGET=background \
+  run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted stale background-state content'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'background-state bind mount content is stale'
 
 # A missing runtime mount fails before any application lifecycle action.
 new_case external-active-runtime-mismatch

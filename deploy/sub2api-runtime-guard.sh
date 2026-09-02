@@ -358,6 +358,44 @@ application_runtime_matches() {
   return 0
 }
 
+runtime_state_mount_matches() {
+  local container_name="$1" label="$2" host_path="$3" container_path="$4"
+  local host_identity container_identity host_value container_value
+
+  host_identity="$(stat -c '%d:%i' "$host_path")" || return 1
+  container_identity="$(docker exec \
+    -e "SUB2API_RUNTIME_STATE_PATH=${container_path}" \
+    "$container_name" \
+    sh -c 'stat -c "%d:%i" "$SUB2API_RUNTIME_STATE_PATH"')" || return 1
+  if [ "$host_identity" != "$container_identity" ]; then
+    log "${label} bind mount inode is stale: container=${container_name} host=${host_identity} container_view=${container_identity}" >&2
+    return 1
+  fi
+
+  host_value="$(tr -d '\r\n' <"$host_path")" || return 1
+  container_value="$(docker exec \
+    -e "SUB2API_RUNTIME_STATE_PATH=${container_path}" \
+    "$container_name" \
+    sh -c 'tr -d "\r\n" <"$SUB2API_RUNTIME_STATE_PATH"')" || return 1
+  if [ "$host_value" != "$container_value" ]; then
+    log "${label} bind mount content is stale: container=${container_name}" >&2
+    return 1
+  fi
+  return 0
+}
+
+running_container_runtime_state_matches() {
+  local container_name="$1"
+  [ "$DUAL_NODE_RUNTIME_ENABLED" = true ] || return 0
+  container_running "$container_name" || return 1
+  runtime_state_mount_matches \
+    "$container_name" traffic-state "$TRAFFIC_STATE_FILE" "$CONTAINER_TRAFFIC_STATE_PATH" \
+    || return 1
+  runtime_state_mount_matches \
+    "$container_name" background-state "${BACKGROUND_STATE_DIR}/${container_name}" "$CONTAINER_BACKGROUND_STATE_PATH" \
+    || return 1
+}
+
 verify_application_runtime_before_lifecycle() (
   # The validators deliberately use die() so strict callers get precise
   # diagnostics. Isolate them in a subshell so lifecycle callers can convert
@@ -812,7 +850,7 @@ verify_fallback_switch() {
 }
 
 reconcile_local_release_state() {
-  local result
+  local container_name="$1" result
   [ -x "$NODE_STATE_SCRIPT" ] || {
     log "node state helper is missing or not executable: ${NODE_STATE_SCRIPT}" >&2
     return 1
@@ -822,6 +860,10 @@ reconcile_local_release_state() {
   if [ "$result" != NO_LOCAL_RECOVERY ]; then
     log "node runtime state reconciled after interrupted local release: ${result}"
   fi
+  running_container_runtime_state_matches "$container_name" || {
+    log "container-visible runtime state does not match the host after reconciliation: ${container_name}" >&2
+    return 1
+  }
 }
 
 acquire_maintenance_lock() {
@@ -921,7 +963,7 @@ verify_caddy_startup_file "$ACTIVE_UPSTREAM" \
 
 if container_is_healthy "$ACTIVE_CONTAINER"; then
   wait_for_public_health || die "public health endpoint is unavailable while the active container is healthy"
-  reconcile_local_release_state \
+  reconcile_local_release_state "$ACTIVE_CONTAINER" \
     || die "could not reconcile node state for the healthy Caddy-selected container"
   clear_failure_state
   log "active container is already healthy: ${ACTIVE_CONTAINER}"
@@ -945,7 +987,7 @@ if try_restore_active; then
   verify_caddy_startup_file "$ACTIVE_UPSTREAM" \
     || die "Caddy startup file changed while the active container was being recovered"
   wait_for_public_health || die "public health endpoint is unavailable after active-container recovery"
-  reconcile_local_release_state \
+  reconcile_local_release_state "$ACTIVE_CONTAINER" \
     || die "could not reconcile node state after active-container recovery"
   clear_failure_state
   log "active container recovered in place: ${ACTIVE_CONTAINER}"
@@ -982,7 +1024,7 @@ if [ "$running_inactive_count" -gt 0 ]; then
     write_failure_state 'running-fallback-verification-failed'
     die "running historical fallback failed post-switch verification"
   fi
-  reconcile_local_release_state \
+  reconcile_local_release_state "$FALLBACK_CONTAINER" \
     || die "could not reconcile node state after running fallback promotion"
   clear_failure_state
   log "runtime fallback verified: active=${FALLBACK_CONTAINER} image=${FALLBACK_IMAGE}"
@@ -1016,7 +1058,7 @@ if ! verify_fallback_switch; then
   die "fallback switch verification failed; failed active remains stopped"
 fi
 
-reconcile_local_release_state \
+reconcile_local_release_state "$FALLBACK_CONTAINER" \
   || die "could not reconcile node state after fallback promotion"
 
 clear_failure_state
