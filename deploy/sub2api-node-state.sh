@@ -12,26 +12,61 @@ BACKGROUND_DIR="${SUB2API_BACKGROUND_STATE_DIR_HOST:-${STATE_DIR}/background}"
 LOCAL_TRANSACTION_FILE="${SUB2API_LOCAL_RELEASE_STATE_FILE_HOST:-${STATE_DIR}/local-release.env}"
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 CADDYFILE="${SUB2API_NODE_STATE_CADDYFILE:-${APP_DIR}/Caddyfile}"
-LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
 }
 
+NODE_STATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAINTENANCE_LOCK_HELPER="${NODE_STATE_SCRIPT_DIR}/sub2api-maintenance-lock.sh"
+[ -r "$MAINTENANCE_LOCK_HELPER" ] && [ ! -L "$MAINTENANCE_LOCK_HELPER" ] \
+  || die "maintenance lock helper is missing or unsafe: ${MAINTENANCE_LOCK_HELPER}"
+# shellcheck disable=SC1090,SC1091 # Installed alongside this root-owned executable.
+. "$MAINTENANCE_LOCK_HELPER"
+LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
+
 write_state() {
   local path="$1"
   local value="$2"
   local temporary="${path}.tmp.$$"
-  printf '%s\n' "$value" >"$temporary"
-  chmod 644 "$temporary"
-  mv -f -- "$temporary" "$path"
+
+  if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
+    die "runtime state path is not a regular file: $path"
+  fi
+  if [ -f "$path" ]; then
+    if [ "$(read_state "$path")" = "$value" ]; then
+      chmod 644 "$path" \
+        || die "could not set runtime state file permissions: $path"
+      return
+    fi
+    # Docker single-file bind mounts pin the current inode. Replacing this path
+    # with rename(2) leaves every already-running container on the old inode,
+    # so future drain/activate transitions never become visible. The shared
+    # maintenance lock serializes writers; a short truncate/write window fails
+    # closed in the application instead of serving stale admission state.
+    printf '%s\n' "$value" >"$path" \
+      || die "could not update runtime state file: $path"
+    chmod 644 "$path" \
+      || die "could not set runtime state file permissions: $path"
+    return
+  fi
+
+  # Before the first bind mount exists, retain atomic creation so readers never
+  # observe a partially initialized state file.
+  if ! printf '%s\n' "$value" >"$temporary" \
+    || ! chmod 644 "$temporary" \
+    || ! mv -f -- "$temporary" "$path"; then
+    rm -f -- "$temporary"
+    die "could not create runtime state file: $path"
+  fi
 }
 
 ensure_state() {
   local path="$1"
   local default_value="$2"
   local allowed_values="$3"
+  local repair_value="$4"
   local value
   if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
     die "runtime state path is not a regular file: $path"
@@ -40,12 +75,33 @@ ensure_state() {
     value="$(read_state "$path")"
     case " ${allowed_values} " in
       *" ${value} "*) ;;
-      *) die "runtime state file contains an invalid value: $path" ;;
+      *)
+        if interrupted_state_value "$value" "$allowed_values"; then
+          printf 'WARNING: repairing interrupted runtime state to %s: %s\n' \
+            "$repair_value" "$path" >&2
+          write_state "$path" "$repair_value"
+          return
+        fi
+        die "runtime state file contains an invalid value: $path"
+        ;;
     esac
     chmod 644 "$path"
     return
   fi
   write_state "$path" "$default_value"
+}
+
+interrupted_state_value() {
+  local value="$1" allowed_values="$2" allowed
+  [ -z "$value" ] && return 0
+  for allowed in $allowed_values; do
+    if [ "$value" != "$allowed" ]; then
+      case "$allowed" in
+        "$value"*) return 0 ;;
+      esac
+    fi
+  done
+  return 1
 }
 
 metadata_value() {
@@ -57,11 +113,14 @@ metadata_value() {
 write_local_transaction() {
   local previous="$1"
   local candidate="$2"
+  local final_background="$3"
   local temporary="${LOCAL_TRANSACTION_FILE}.tmp.$$"
+  validate_background_state "$final_background"
   {
     printf 'state=local-switching\n'
     printf 'previous=%s\n' "$previous"
     printf 'candidate=%s\n' "$candidate"
+    printf 'final_background=%s\n' "$final_background"
   } >"$temporary"
   chmod 600 "$temporary"
   mv -f -- "$temporary" "$LOCAL_TRANSACTION_FILE"
@@ -73,9 +132,14 @@ read_local_transaction() {
   local_state="$(metadata_value "$LOCAL_TRANSACTION_FILE" state)"
   local_previous="$(metadata_value "$LOCAL_TRANSACTION_FILE" previous)"
   local_candidate="$(metadata_value "$LOCAL_TRANSACTION_FILE" candidate)"
+  local_final_background="$(metadata_value "$LOCAL_TRANSACTION_FILE" final_background)"
+  # Transactions written by earlier releases always finalized the selected
+  # generation as active. Preserve that recovery contract after an upgrade.
+  [ -n "$local_final_background" ] || local_final_background=active
   [ "$local_state" = local-switching ] || die "local release transaction state is invalid"
   validate_container "$local_previous"
   validate_container "$local_candidate"
+  validate_background_state "$local_final_background"
   [ "$local_previous" != "$local_candidate" ] || die "local release transaction containers must differ"
 }
 
@@ -109,6 +173,28 @@ validate_container() {
   esac
 }
 
+validate_background_state() {
+  case "$1" in
+    active|standby) ;;
+    *) die "unsupported final background state: $1" ;;
+  esac
+}
+
+finalize_local_transaction() {
+  local container="$1"
+  local action="$2"
+
+  mark_other_generations_standby "$container"
+  write_state "${BACKGROUND_DIR}/${container}" "$local_final_background"
+  write_state "$TRAFFIC_FILE" accepting
+  rm -f -- "$LOCAL_TRANSACTION_FILE"
+  if [ "$local_final_background" = standby ]; then
+    printf '%s_LOCAL_STANDBY %s\n' "$action" "$container"
+  else
+    printf '%s_LOCAL %s\n' "$action" "$container"
+  fi
+}
+
 mark_other_generations_standby() {
   local active="$1"
   local candidate path
@@ -123,26 +209,33 @@ mark_other_generations_standby() {
 }
 
 main() {
-  local lock_parent container local_state local_previous local_candidate
-  [ "${SUB2API_NODE_STATE_ALLOW_NON_ROOT_FOR_TESTS:-0}" = 1 ] \
-    || [ "$(id -u)" -eq 0 ] || die "node state changes require root"
-  for command_name in chmod dirname flock grep install mv sed sort tr wc; do
+  local container local_state local_previous local_candidate local_final_background
+  if [ "${SUB2API_NODE_STATE_ALLOW_NON_ROOT_FOR_TESTS:-0}" = 1 ]; then
+    # shellcheck disable=SC2034 # Read by the sourced maintenance-lock helper.
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1
+  else
+    [ "$(id -u)" -eq 0 ] || die "node state changes require root"
+  fi
+  if ! sub2api_maintenance_lock_validate_configured_path "$LOCK_FILE"; then
+    die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+  fi
+  for command_name in chmod flock grep id install mkdir mv sed sort stat tr wc; do
     command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required"
   done
   install -d -m 755 "$STATE_DIR" "$BACKGROUND_DIR"
-  lock_parent="$(dirname "$LOCK_FILE")"
-  [ -d "$lock_parent" ] || die "maintenance lock directory does not exist: $lock_parent"
   if [ "${SUB2API_NODE_STATE_LOCK_HELD:-0}" != 1 ]; then
-    exec 9>"$LOCK_FILE"
-    flock -w 30 -x 9 || die "timed out waiting for the maintenance lock"
+    if ! sub2api_maintenance_lock_open "$LOCK_FILE"; then
+      die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+    fi
+    flock -w 30 -x 8 || die "timed out waiting for the maintenance lock"
   fi
 
   case "${1:-}" in
     bootstrap)
       [ "$#" -eq 1 ] || die "bootstrap accepts no arguments"
       container="$(active_container)"
-      ensure_state "$TRAFFIC_FILE" accepting "accepting draining"
-      ensure_state "${BACKGROUND_DIR}/${container}" active "active standby"
+      ensure_state "$TRAFFIC_FILE" accepting "accepting draining" draining
+      ensure_state "${BACKGROUND_DIR}/${container}" active "active standby" standby
       printf 'BOOTSTRAPPED\n'
       ;;
     status)
@@ -166,8 +259,22 @@ main() {
       container="$(active_container)"
       [ "$2" != "$container" ] || die "the Caddy-active container cannot be prepared as standby"
       write_state "${BACKGROUND_DIR}/$2" standby
-      write_local_transaction "$container" "$2"
+      write_local_transaction "$container" "$2" active
       printf 'LOCAL_STANDBY %s\n' "$2"
+      ;;
+    local-preserve-standby)
+      [ "$#" -eq 2 ] || die "local-preserve-standby requires CONTAINER"
+      validate_container "$2"
+      require_no_local_transaction
+      container="$(active_container)"
+      [ "$2" != "$container" ] || die "the Caddy-active container cannot be prepared as standby"
+      [ "$(read_state "$TRAFFIC_FILE")" = accepting ] \
+        || die "standby-preserving release requires accepting traffic state"
+      [ "$(read_state "${BACKGROUND_DIR}/${container}")" = standby ] \
+        || die "standby-preserving release requires the current generation to be standby"
+      write_state "${BACKGROUND_DIR}/$2" standby
+      write_local_transaction "$container" "$2" standby
+      printf 'LOCAL_PRESERVE_STANDBY %s\n' "$2"
       ;;
     drain)
       [ "$#" -eq 1 ] || die "drain accepts no arguments"
@@ -208,11 +315,7 @@ main() {
 	  container="$(active_container)"
 	  [ "$container" = "$local_candidate" ] \
 	    || die "Caddy active container does not match the local release candidate"
-	  mark_other_generations_standby "$container"
-	  write_state "${BACKGROUND_DIR}/${container}" active
-	  write_state "$TRAFFIC_FILE" accepting
-	  rm -f -- "$LOCAL_TRANSACTION_FILE"
-	  printf 'COMMITTED_LOCAL %s\n' "$container"
+	  finalize_local_transaction "$container" COMMITTED
 	  ;;
     abort-local)
 	  [ "$#" -eq 1 ] || die "abort-local accepts no arguments"
@@ -220,11 +323,7 @@ main() {
 	  container="$(active_container)"
 	  [ "$container" = "$local_previous" ] \
 	    || die "Caddy active container does not match the pre-release container"
-	  mark_other_generations_standby "$container"
-	  write_state "${BACKGROUND_DIR}/${container}" active
-	  write_state "$TRAFFIC_FILE" accepting
-	  rm -f -- "$LOCAL_TRANSACTION_FILE"
-	  printf 'ABORTED_LOCAL %s\n' "$container"
+	  finalize_local_transaction "$container" ABORTED
 	  ;;
     activate)
       [ "$#" -eq 1 ] || die "activate accepts no arguments"
@@ -258,23 +357,15 @@ main() {
       container="$(active_container)"
       case "$container" in
         "$local_candidate")
-          mark_other_generations_standby "$container"
-          write_state "${BACKGROUND_DIR}/${container}" active
-          write_state "$TRAFFIC_FILE" accepting
-          rm -f -- "$LOCAL_TRANSACTION_FILE"
-          printf 'RECOVERED_LOCAL %s\n' "$container"
+          finalize_local_transaction "$container" RECOVERED
           ;;
         "$local_previous")
-          mark_other_generations_standby "$container"
-          write_state "${BACKGROUND_DIR}/${container}" active
-          write_state "$TRAFFIC_FILE" accepting
-          rm -f -- "$LOCAL_TRANSACTION_FILE"
-          printf 'ABORTED_LOCAL %s\n' "$container"
+          finalize_local_transaction "$container" ABORTED
           ;;
         *) die "Caddy active container does not match the local release transaction" ;;
       esac
       ;;
-    *) die "only bootstrap, status, standby, local-standby, drain, preflight, rollback-standby, activate, abort, and recover-local are supported" ;;
+    *) die "only bootstrap, status, standby, local-standby, local-preserve-standby, drain, preflight, rollback-standby, commit-local, abort-local, activate, abort, and recover-local are supported" ;;
   esac
 }
 

@@ -393,6 +393,7 @@ else
     printf 'SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS=%s\n' '900'
     printf 'SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS=%s\n' '1800'
     printf 'SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=%s\n' 'false'
+    printf 'SUB2API_RELEASE_BACKGROUND_MODE=%s\n' 'activate'
     printf 'SUB2API_DUAL_NODE_RUNTIME_ENABLED=%s\n' "$DUAL_NODE_RUNTIME_ENABLED"
   } >"$config_temp"
   install -D -m 600 "$config_temp" "$CONFIG_FILE"

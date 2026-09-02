@@ -119,6 +119,14 @@ assert_contains "$CONFIG_FILE" 'SUB2API_CADDY_CONTAINER=candidate-caddy'
 assert_contains "$CONFIG_FILE" 'SUB2API_EXTERNAL_RUNTIME_ENV_FILE=/etc/sub2api-external-runtime.env'
 assert_contains "$CONFIG_FILE" 'SUB2API_EXTERNAL_CA_FILE=/opt/sub2api/db-host-ca/ca.crt'
 assert_contains "$CONFIG_FILE" 'SUB2API_DUAL_NODE_RUNTIME_ENABLED=true'
+assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_BACKGROUND_MODE=activate'
+assert_contains "$CONFIG_FILE" "SUB2API_MAINTENANCE_LOCK_FILE=${MAINTENANCE_LOCK_FILE}"
+[ -x "${APP_DIR}/scripts/sub2api-maintenance-lock.sh" ] \
+  || fail 'script-directory maintenance lock helper was not installed'
+[ -x "${TEST_ROOT}/libexec/sub2api-maintenance-lock.sh" ] \
+  || fail 'runtime-guard sibling maintenance lock helper was not installed'
+[ -d "${MAINTENANCE_LOCK_FILE%/*}" ] \
+  || fail 'private maintenance lock directory was not installed'
 grep -Fqx -- 'disable --now sub2api-runtime-guard.timer' "$SYSTEMCTL_CALLS" \
   || fail 'runtime guard timer was not explicitly left disabled'
 if grep -Fq -- 'enable --now sub2api-runtime-guard.timer' "$SYSTEMCTL_CALLS"; then

@@ -122,12 +122,15 @@ cat >"${APP_DIR}/scripts/sub2api-node-state.sh" <<'EOF'
 set -eu
 printf '%s\n' "$*" >>"$FAKE_NODE_STATE_CALLS"
 case "${1:-}" in
-  status) printf 'traffic=accepting active_container=sub2api-green background=active\n' ;;
+  status)
+    printf 'traffic=accepting active_container=sub2api-green background=%s\n' \
+      "${FAKE_NODE_STATE_BACKGROUND:-active}"
+    ;;
   preflight)
     [ ! -e "$FAKE_LOCAL_TRANSACTION" ] \
       || { printf 'ERROR: an unfinished local release transaction exists\n' >&2; exit 64; }
     ;;
-  local-standby) : >"$FAKE_LOCAL_TRANSACTION" ;;
+  local-standby|local-preserve-standby) : >"$FAKE_LOCAL_TRANSACTION" ;;
   abort-local) rm -f -- "$FAKE_LOCAL_TRANSACTION" ;;
 esac
 EOF
@@ -279,6 +282,7 @@ run_release() {
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_NODE_STATE_BACKGROUND="${FAKE_NODE_STATE_BACKGROUND:-active}" \
     FAKE_FLOCK_COUNT_FILE="${FAKE_FLOCK_COUNT_FILE:-}" \
     FAKE_FLOCK_FAIL_ON_CALL="${FAKE_FLOCK_FAIL_ON_CALL:-}" \
     SUB2API_APP_DIR="$APP_DIR" \
@@ -294,6 +298,7 @@ run_release() {
     SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT=768MiB \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
+    SUB2API_RELEASE_BACKGROUND_MODE="${RELEASE_BACKGROUND_MODE:-activate}" \
     /bin/bash "$SCRIPT" \
       "$SOURCE_DIR" \
       'sub2api:auto-test' \
@@ -315,6 +320,7 @@ run_github_prebuilt_release() {
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_NODE_STATE_BACKGROUND="${FAKE_NODE_STATE_BACKGROUND:-active}" \
     SUB2API_APP_DIR="$APP_DIR" \
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
@@ -324,6 +330,7 @@ run_github_prebuilt_release() {
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
+    SUB2API_RELEASE_BACKGROUND_MODE="${RELEASE_BACKGROUND_MODE:-activate}" \
     /bin/bash "$SCRIPT" \
       --prebuilt \
       'sub2api:auto-test' \
@@ -426,6 +433,18 @@ resolve_mismatch_output="${TEST_ROOT}/resolve-mismatch.log"
 if SUB2API_PUBLIC_HEALTH_RESOLVE='peer.invalid:443:192.0.2.10' \
   run_github_prebuilt_release >"$resolve_mismatch_output" 2>&1; then
   fail 'server release accepted a health resolve override for a peer hostname'
+fi
+
+: >"$DOCKER_CALLS"
+invalid_background_mode_output="${TEST_ROOT}/invalid-background-mode.log"
+if RELEASE_BACKGROUND_MODE=unexpected \
+  run_github_prebuilt_release >"$invalid_background_mode_output" 2>&1; then
+  fail 'server release accepted an unsupported background mode'
+fi
+assert_contains "$invalid_background_mode_output" \
+  'SUB2API_RELEASE_BACKGROUND_MODE must be activate or preserve-standby'
+if [ -s "$DOCKER_CALLS" ]; then
+  fail 'Docker was inspected before background-mode validation'
 fi
 assert_contains "$resolve_mismatch_output" 'host/port must match SUB2API_PUBLIC_HEALTH_URL'
 if [ -s "$DOCKER_CALLS" ]; then
@@ -719,5 +738,37 @@ assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=external old=sub2api-blue new=sub2api-green backup=false'
 assert_contains "$NODE_STATE_CALLS" 'abort-local'
 [ ! -e "$LOCAL_TRANSACTION" ] || fail 'post-Caddy helper failure left a local release transaction'
+
+# A request-serving rollback node must stay background-fenced before, during,
+# and after its local blue-green recreation.
+printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
+: >"$DOCKER_CALLS"
+: >"$NODE_STATE_CALLS"
+: >"$CURL_CALLS"
+preserve_mismatch_output="${TEST_ROOT}/preserve-mismatch.log"
+if ALLOW_DRAINING=true RELEASE_BACKGROUND_MODE=preserve-standby \
+  run_github_prebuilt_release >"$preserve_mismatch_output" 2>&1; then
+  fail 'standby-preserving release accepted an active current generation'
+fi
+assert_contains "$preserve_mismatch_output" \
+  'node runtime state is not safe for a preserve-standby local release'
+assert_not_contains "$NODE_STATE_CALLS" 'local-preserve-standby'
+assert_not_contains "$DOCKER_CALLS" 'build '
+
+printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
+: >"$DOCKER_CALLS"
+: >"$NODE_STATE_CALLS"
+: >"$CURL_CALLS"
+preserve_success_output="${TEST_ROOT}/preserve-success.log"
+if ! ALLOW_DRAINING=true RELEASE_BACKGROUND_MODE=preserve-standby \
+  FAKE_NODE_STATE_BACKGROUND=standby FAKE_CURL_SUCCESS=1 FAKE_UPDATE_CADDY=1 \
+  run_github_prebuilt_release >"$preserve_success_output" 2>&1; then
+  sed -n '1,200p' "$preserve_success_output" >&2
+  fail 'standby-preserving release did not complete'
+fi
+assert_contains "$NODE_STATE_CALLS" 'local-preserve-standby sub2api-blue'
+assert_contains "$NODE_STATE_CALLS" 'commit-local'
+assert_not_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
+assert_contains "$preserve_success_output" 'background_mode=preserve-standby'
 
 printf 'Server release inactive-container guard tests passed.\n'

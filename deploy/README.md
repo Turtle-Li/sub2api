@@ -83,6 +83,18 @@ override for deployments where background queues are disabled or the operator
 has separately fenced their consumers; it should not be enabled on normal
 Sub2API production hosts.
 
+On a dual-node rollback or canary origin that must continue serving requests
+without consuming shared background work, set
+`SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby` for the audited release
+invocation. The helper requires the current generation to be
+`traffic=accepting ... background=standby`, records that final state in the
+durable local transaction, and keeps the selected generation standby on
+commit, rollback, and crash recovery. The default `activate` mode retains the
+normal single-owner transfer behavior. Before intentionally transferring
+background ownership to this node, restore `activate` and use the coordinated
+cross-node ownership runbook; do not leave `preserve-standby` as an accidental
+permanent override.
+
 ### GCP Taiwan Premium transport ingress
 
 The retained GCP Taiwan Premium address now runs the approved HAProxy

@@ -35,7 +35,6 @@ LOG_DIR="${LOG_ROOT}/${RUN_ID}"
 BUILD_LOG="${LOG_DIR}/build.log"
 SWITCH_LOG="${LOG_DIR}/switch.log"
 LOCK_FILE="${SUB2API_RELEASE_LOCK_FILE:-/var/lock/sub2api-release.lock}"
-MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
 MIN_FREE_BYTES="${SUB2API_RELEASE_MIN_FREE_BYTES:-8589934592}"
 BUILD_TIMEOUT_SECONDS="${SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS:-3000}"
 BUILD_GOMAXPROCS="${SUB2API_RELEASE_BUILD_GOMAXPROCS:-1}"
@@ -65,6 +64,10 @@ LOCAL_RELEASE_STATE_FILE_HOST="${SUB2API_LOCAL_RELEASE_STATE_FILE_HOST:-${NODE_S
 DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE-local}"
 EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
 EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
+# Ordinary releases activate the newly selected generation as this node's
+# background-work owner. A request-serving rollback/canary node can explicitly
+# preserve its existing standby fence across the entire blue-green transaction.
+RELEASE_BACKGROUND_MODE="${SUB2API_RELEASE_BACKGROUND_MODE:-activate}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -83,6 +86,17 @@ die() {
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required"
 }
+
+SERVER_RELEASE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAINTENANCE_LOCK_HELPER="${SERVER_RELEASE_SCRIPT_DIR}/sub2api-maintenance-lock.sh"
+[ -r "$MAINTENANCE_LOCK_HELPER" ] && [ ! -L "$MAINTENANCE_LOCK_HELPER" ] \
+  || die "maintenance lock helper is missing or unsafe: ${MAINTENANCE_LOCK_HELPER}"
+# shellcheck disable=SC1090,SC1091 # Installed alongside this root-owned executable.
+. "$MAINTENANCE_LOCK_HELPER"
+MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
+if ! sub2api_maintenance_lock_validate_configured_path "$MAINTENANCE_LOCK_FILE"; then
+  die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+fi
 
 require_positive_integer() {
   case "$2" in
@@ -162,7 +176,7 @@ run_blue_green() {
     "$@"
 }
 
-for command_name in docker curl flock grep awk perl systemd-run; do
+for command_name in docker curl flock grep awk perl systemd-run id mkdir stat; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RELEASE_MIN_FREE_BYTES "$MIN_FREE_BYTES"
@@ -179,6 +193,12 @@ case "$PREBUILT_IMAGE_PREFIX" in
 esac
 require_bool SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER "$ALLOW_PREEXISTING_DRAINING_CONTAINER"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
+case "$RELEASE_BACKGROUND_MODE" in
+  activate|preserve-standby) ;;
+  *) die "SUB2API_RELEASE_BACKGROUND_MODE must be activate or preserve-standby" ;;
+esac
+[ "$RELEASE_BACKGROUND_MODE" != preserve-standby ] || [ "$DUAL_NODE_RUNTIME_ENABLED" = true ] \
+  || die "SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby requires SUB2API_DUAL_NODE_RUNTIME_ENABLED=true"
 validate_health_resolve "$PUBLIC_HEALTH_RESOLVE" "$PUBLIC_HEALTH_URL"
 require_positive_integer SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS "$DRAIN_INTERVAL_SECONDS"
 require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACTIVE_WINDOW_SECONDS"
@@ -215,7 +235,9 @@ esac
 mkdir -p "$LOG_DIR"
 exec 9>"$LOCK_FILE"
 flock -n 9 || die "another production release is already running"
-exec 8>"$MAINTENANCE_LOCK_FILE"
+if ! sub2api_maintenance_lock_open "$MAINTENANCE_LOCK_FILE"; then
+  die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+fi
 flock -n 8 || die "production maintenance or runtime recovery is already running"
 [ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
   || die "unfinished GCP Taiwan Caddy listener transaction exists; commit or rollback it before a production release"
@@ -342,7 +364,7 @@ caddy_views_point_uniquely_to_old() {
     log "WARNING: could not read Caddy startup configuration while checking ${OLD_UPSTREAM}" >&2
     return 1
   fi
-  if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl -fsS http://127.0.0.1:2019/config/')"; then
+  if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/')"; then
     log "WARNING: could not read active Caddy configuration while checking ${OLD_UPSTREAM}" >&2
     return 1
   fi
@@ -414,8 +436,14 @@ run_node_state bootstrap >>"${LOG_DIR}/node-state.log" \
 node_state_status="$(run_node_state status)" \
   || die "could not read node runtime state after bootstrap"
 printf '%s\n' "$node_state_status" >>"${LOG_DIR}/node-state.log"
-[ "$node_state_status" = "traffic=accepting active_container=${OLD_CONTAINER} background=active" ] \
-  || die "node runtime state is not safe for a local release: ${node_state_status}"
+EXPECTED_BACKGROUND_STATE=active
+LOCAL_STANDBY_COMMAND=local-standby
+if [ "$RELEASE_BACKGROUND_MODE" = preserve-standby ]; then
+  EXPECTED_BACKGROUND_STATE=standby
+  LOCAL_STANDBY_COMMAND=local-preserve-standby
+fi
+[ "$node_state_status" = "traffic=accepting active_container=${OLD_CONTAINER} background=${EXPECTED_BACKGROUND_STATE}" ] \
+  || die "node runtime state is not safe for a ${RELEASE_BACKGROUND_MODE} local release: ${node_state_status}"
 if [ "$DEPENDENCY_MODE" = external ]; then
   # External mode cannot safely reuse a stopped target whose runtime contract
   # may belong to a previous data-service configuration. Node-state preflight
@@ -510,7 +538,7 @@ cleanup_failed_inactive_target() {
     || log "WARNING: could not remove failed inactive target ${NEW_CONTAINER}" >&2
 }
 
-run_node_state local-standby "$NEW_CONTAINER" >>"${LOG_DIR}/node-state.log" \
+run_node_state "$LOCAL_STANDBY_COMMAND" "$NEW_CONTAINER" >>"${LOG_DIR}/node-state.log" \
   || die "could not prepare ${NEW_CONTAINER} background admission state"
 log "Switching ${OLD_UPSTREAM} to ${NEW_UPSTREAM} through the existing blue-green script"
 if ! run_blue_green \
@@ -577,9 +605,9 @@ if printf '%s' "$active_config" | grep -qF "$OLD_UPSTREAM"; then
   die "active Caddy config still contains old upstream $OLD_UPSTREAM"
 fi
 
-# Keep the already-known-good old generation as the background owner while the
-# new request path is verified. Only transfer shared-work admission after every
-# rollback-capable health/Caddy gate has passed.
+# Both release modes keep the candidate fenced during verification. Ordinary
+# releases transfer background admission only after every rollback-capable
+# gate passes; preserve-standby releases finalize without ever admitting it.
 if ! run_node_state commit-local >>"${LOG_DIR}/node-state.log" 2>&1; then
   if rollback; then
     cleanup_failed_inactive_target
@@ -651,7 +679,7 @@ if [ "$BUILT_ON_SERVER" = "true" ] \
   docker buildx prune --force --max-used-space 8GB >"${LOG_DIR}/cache-cleanup.log" 2>&1 || true
 fi
 
-log "Release verified: container=${NEW_CONTAINER} image=${IMAGE} health=${NEW_HEALTH}"
+log "Release verified: container=${NEW_CONTAINER} image=${IMAGE} health=${NEW_HEALTH} background_mode=${RELEASE_BACKGROUND_MODE}"
 log "Audit counts: app_5xx=${app_5xx} app_fatal=${app_fatal} caddy_5xx=${caddy_5xx}"
 log "Disk after release: $(df -h / | awk 'NR==2 {print $5 " used, " $4 " free"}')"
 log "Server logs: ${LOG_DIR}"
