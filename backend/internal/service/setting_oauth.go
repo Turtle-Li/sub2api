@@ -769,6 +769,7 @@ func (s *SettingService) GetOIDCConnectOAuthConfig(ctx context.Context) (config.
 		SettingKeyOIDCConnectAllowedSigningAlgs,
 		SettingKeyOIDCConnectClockSkewSeconds,
 		SettingKeyOIDCConnectRequireEmailVerified,
+		SettingKeyOIDCConnectSkipActionCaptcha,
 		SettingKeyOIDCConnectUserInfoEmailPath,
 		SettingKeyOIDCConnectUserInfoIDPath,
 		SettingKeyOIDCConnectUserInfoUsernamePath,
@@ -840,6 +841,9 @@ func (s *SettingService) GetOIDCConnectOAuthConfig(ctx context.Context) (config.
 	}
 	if raw, ok := settings[SettingKeyOIDCConnectRequireEmailVerified]; ok {
 		effective.RequireEmailVerified = raw == "true"
+	}
+	if raw, ok := settings[SettingKeyOIDCConnectSkipActionCaptcha]; ok {
+		effective.SkipActionCaptcha = raw == "true"
 	}
 	if v, ok := settings[SettingKeyOIDCConnectUserInfoEmailPath]; ok {
 		effective.UserInfoEmailPath = strings.TrimSpace(v)

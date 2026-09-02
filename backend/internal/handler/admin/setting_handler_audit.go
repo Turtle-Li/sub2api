@@ -311,6 +311,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OIDCConnectRequireEmailVerified != after.OIDCConnectRequireEmailVerified {
 		changed = append(changed, "oidc_connect_require_email_verified")
 	}
+	if before.OIDCConnectSkipActionCaptcha != after.OIDCConnectSkipActionCaptcha {
+		changed = append(changed, "oidc_connect_skip_action_captcha")
+	}
 	if before.OIDCConnectUserInfoEmailPath != after.OIDCConnectUserInfoEmailPath {
 		changed = append(changed, "oidc_connect_userinfo_email_path")
 	}

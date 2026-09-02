@@ -138,6 +138,7 @@ type UpdateSettingsRequest struct {
 	OIDCConnectAllowedSigningAlgs   string `json:"oidc_connect_allowed_signing_algs"`
 	OIDCConnectClockSkewSeconds     int    `json:"oidc_connect_clock_skew_seconds"`
 	OIDCConnectRequireEmailVerified bool   `json:"oidc_connect_require_email_verified"`
+	OIDCConnectSkipActionCaptcha    bool   `json:"oidc_connect_skip_action_captcha"`
 	OIDCConnectUserInfoEmailPath    string `json:"oidc_connect_userinfo_email_path"`
 	OIDCConnectUserInfoIDPath       string `json:"oidc_connect_userinfo_id_path"`
 	OIDCConnectUserInfoUsernamePath string `json:"oidc_connect_userinfo_username_path"`
@@ -1607,6 +1608,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OIDCConnectAllowedSigningAlgs:          req.OIDCConnectAllowedSigningAlgs,
 		OIDCConnectClockSkewSeconds:            req.OIDCConnectClockSkewSeconds,
 		OIDCConnectRequireEmailVerified:        req.OIDCConnectRequireEmailVerified,
+		OIDCConnectSkipActionCaptcha:           req.OIDCConnectSkipActionCaptcha,
 		OIDCConnectUserInfoEmailPath:           req.OIDCConnectUserInfoEmailPath,
 		OIDCConnectUserInfoIDPath:              req.OIDCConnectUserInfoIDPath,
 		OIDCConnectUserInfoUsernamePath:        req.OIDCConnectUserInfoUsernamePath,
@@ -2249,6 +2251,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OIDCConnectAllowedSigningAlgs:                          updatedSettings.OIDCConnectAllowedSigningAlgs,
 		OIDCConnectClockSkewSeconds:                            updatedSettings.OIDCConnectClockSkewSeconds,
 		OIDCConnectRequireEmailVerified:                        updatedSettings.OIDCConnectRequireEmailVerified,
+		OIDCConnectSkipActionCaptcha:                           updatedSettings.OIDCConnectSkipActionCaptcha,
 		OIDCConnectUserInfoEmailPath:                           updatedSettings.OIDCConnectUserInfoEmailPath,
 		OIDCConnectUserInfoIDPath:                              updatedSettings.OIDCConnectUserInfoIDPath,
 		OIDCConnectUserInfoUsernamePath:                        updatedSettings.OIDCConnectUserInfoUsernamePath,

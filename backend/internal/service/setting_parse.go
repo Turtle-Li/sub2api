@@ -32,6 +32,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 	oidcUsePKCEDefault := true
 	oidcValidateIDTokenDefault := true
+	oidcSkipActionCaptchaDefault := false
 	if s != nil && s.cfg != nil {
 		if s.cfg.OIDC.UsePKCEExplicit {
 			oidcUsePKCEDefault = s.cfg.OIDC.UsePKCE
@@ -39,6 +40,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		if s.cfg.OIDC.ValidateIDTokenExplicit {
 			oidcValidateIDTokenDefault = s.cfg.OIDC.ValidateIDToken
 		}
+		oidcSkipActionCaptchaDefault = s.cfg.OIDC.SkipActionCaptcha
 	}
 	loginAgreementDocumentsJSON, err := marshalLoginAgreementDocuments(defaultLoginAgreementDocuments())
 	if err != nil {
@@ -121,6 +123,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOIDCConnectAllowedSigningAlgs:             "RS256,ES256,PS256",
 		SettingKeyOIDCConnectClockSkewSeconds:               "120",
 		SettingKeyOIDCConnectRequireEmailVerified:           "false",
+		SettingKeyOIDCConnectSkipActionCaptcha:              strconv.FormatBool(oidcSkipActionCaptchaDefault),
 		SettingKeyOIDCConnectUserInfoEmailPath:              "",
 		SettingKeyOIDCConnectUserInfoIDPath:                 "",
 		SettingKeyOIDCConnectUserInfoUsernamePath:           "",
@@ -704,6 +707,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.OIDCConnectRequireEmailVerified = raw == "true"
 	} else {
 		result.OIDCConnectRequireEmailVerified = oidcBase.RequireEmailVerified
+	}
+	if raw, ok := settings[SettingKeyOIDCConnectSkipActionCaptcha]; ok {
+		result.OIDCConnectSkipActionCaptcha = raw == "true"
+	} else {
+		result.OIDCConnectSkipActionCaptcha = oidcBase.SkipActionCaptcha
 	}
 	if v, ok := settings[SettingKeyOIDCConnectUserInfoEmailPath]; ok {
 		result.OIDCConnectUserInfoEmailPath = strings.TrimSpace(v)

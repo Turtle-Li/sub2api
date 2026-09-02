@@ -132,6 +132,7 @@ type SystemSettings struct {
 	OIDCConnectAllowedSigningAlgs     string
 	OIDCConnectClockSkewSeconds       int
 	OIDCConnectRequireEmailVerified   bool
+	OIDCConnectSkipActionCaptcha      bool
 	OIDCConnectUserInfoEmailPath      string
 	OIDCConnectUserInfoIDPath         string
 	OIDCConnectUserInfoUsernamePath   string

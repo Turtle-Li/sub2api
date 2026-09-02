@@ -56,6 +56,16 @@
 - Provider 名称继续使用站点名称，API Key、用量查询脚本和平台默认模型等既有导入行为保持不变。
 - 增加多端点去重、独立官网地址和 Grok 多端点规范化测试。
 
+## OIDC SSO 直连免行为验证码
+
+- 新增设置 `oidc_connect_skip_action_captcha`，对应配置项 `oidc_connect.skip_action_captcha`，默认关闭。
+- 开启后可直接访问 `GET /api/v1/auth/oauth/oidc/start?redirect=/dashboard` 发起 OIDC SSO。
+- 该开关仅跳过腾讯天御和阿里云行为验证码；仅启用 Cloudflare Turnstile 时，OAuth start 按既有逻辑本就直接放行。
+- 登录页和注册页不增加 OIDC 专用绕过逻辑，免行为验证码入口由上述直达地址提供。
+- 其他 OAuth Provider 的验证码行为不受影响。
+- OIDC 配置校验、state、浏览器会话 Cookie、PKCE、nonce、ID Token 和 callback 校验保持不变。
+- 配置文件、数据库设置、管理设置 DTO、审计、API Contract、中英文文案及前后端类型均增加对应字段。
+
 ## 上游更新时检索
 
 ### 返利邀请码注册
@@ -110,4 +120,16 @@ custom_endpoints
 homepage
 endpoint
 site_domain
+```
+
+### OIDC SSO 直连
+
+```text
+oidc_connect.skip_action_captcha
+oidc_connect_skip_action_captcha
+SkipActionCaptcha
+OIDCOAuthStart
+requireActionCaptchaForOAuthLoginStart
+VerifyActionCaptchaIfEnabled
+/api/v1/auth/oauth/oidc/start
 ```

@@ -581,6 +581,7 @@ export interface SystemSettings {
   oidc_connect_allowed_signing_algs: string;
   oidc_connect_clock_skew_seconds: number;
   oidc_connect_require_email_verified: boolean;
+  oidc_connect_skip_action_captcha: boolean;
   oidc_connect_userinfo_email_path: string;
   oidc_connect_userinfo_id_path: string;
   oidc_connect_userinfo_username_path: string;
@@ -917,6 +918,7 @@ export interface UpdateSettingsRequest {
   oidc_connect_allowed_signing_algs?: string;
   oidc_connect_clock_skew_seconds?: number;
   oidc_connect_require_email_verified?: boolean;
+  oidc_connect_skip_action_captcha?: boolean;
   oidc_connect_userinfo_email_path?: string;
   oidc_connect_userinfo_id_path?: string;
   oidc_connect_userinfo_username_path?: string;

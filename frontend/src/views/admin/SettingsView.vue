@@ -3788,6 +3788,17 @@
                       v-model="form.oidc_connect_require_email_verified"
                     />
                   </div>
+
+                  <div
+                    class="flex items-center justify-between rounded border border-gray-200 px-4 py-3 dark:border-dark-700"
+                  >
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ t("admin.settings.oidc.skipActionCaptcha") }}
+                      </label>
+                    </div>
+                    <Toggle v-model="form.oidc_connect_skip_action_captcha" />
+                  </div>
                 </div>
 
                 <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -9813,6 +9824,7 @@ const form = reactive<SettingsForm>({
   oidc_connect_allowed_signing_algs: "RS256,ES256,PS256",
   oidc_connect_clock_skew_seconds: 120,
   oidc_connect_require_email_verified: false,
+  oidc_connect_skip_action_captcha: false,
   oidc_connect_userinfo_email_path: "",
   oidc_connect_userinfo_id_path: "",
   oidc_connect_userinfo_username_path: "",
@@ -11435,6 +11447,7 @@ async function saveSettings() {
       oidc_connect_clock_skew_seconds: form.oidc_connect_clock_skew_seconds,
       oidc_connect_require_email_verified:
         form.oidc_connect_require_email_verified,
+      oidc_connect_skip_action_captcha: form.oidc_connect_skip_action_captcha,
       oidc_connect_userinfo_email_path: form.oidc_connect_userinfo_email_path,
       oidc_connect_userinfo_id_path: form.oidc_connect_userinfo_id_path,
       oidc_connect_userinfo_username_path:

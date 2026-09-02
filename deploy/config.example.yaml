@@ -994,6 +994,9 @@ oidc_connect:
   clock_skew_seconds: 120
   # 若 Provider 返回 email_verified=false，是否拒绝登录
   require_email_verified: false
+  # 开启后可直接 GET /api/v1/auth/oauth/oidc/start?redirect=/dashboard 发起 SSO
+  # 仅跳过腾讯/阿里云行为验证码；仅启用 Turnstile 时 OAuth start 按既有逻辑本就放行
+  skip_action_captcha: false
   userinfo_email_path: ""
   userinfo_id_path: ""
   userinfo_username_path: ""
