@@ -2,7 +2,15 @@
 // registry, load balancing, and shared utilities for the payment subsystem.
 package payment
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrUpstreamStateUnconfirmed prevents a local pending order from being
+// cancelled or expired when the upstream payment service cannot prove that it
+// is safely closed. Callers must retry reconciliation instead of guessing.
+var ErrUpstreamStateUnconfirmed = errors.New("upstream payment state is not safely closed")
 
 // PaymentType represents a supported payment method.
 type PaymentType = string
@@ -18,6 +26,10 @@ const (
 	TypeLink         PaymentType = "link"
 	TypeEasyPay      PaymentType = "easypay"
 	TypeAirwallex    PaymentType = "airwallex"
+	// TypeUnifiedPay is the Sub2-side adapter for the standalone unified
+	// payment service. It remains distinct from the user-visible "alipay"
+	// method so trusted callbacks cannot be confused with direct Alipay ones.
+	TypeUnifiedPay PaymentType = "unified_pay"
 )
 
 // Order status constants shared across payment and service layers.
@@ -102,12 +114,16 @@ type CreatePaymentRequest struct {
 	OrderID     string // Internal order ID
 	Amount      string // 支付金额，按服务商实例配置的币种解释
 	PaymentType string // e.g. "alipay", "wxpay", "stripe"
+	OrderType   string // Product-owned business order type (e.g. balance/subscription)
 	Subject     string // Product description
 	NotifyURL   string // Webhook callback URL
 	ReturnURL   string // Browser redirect URL after payment
 	OpenID      string // WeChat JSAPI payer OpenID when available
 	ClientIP    string // Payer's IP address
 	IsMobile    bool   // Whether the request comes from a mobile device
+	// ExpiresInSeconds is copied from the already-persisted local order TTL so
+	// the product and unified payment service share one expiration boundary.
+	ExpiresInSeconds int
 	// AlipayMobilePrecreate routes a mobile Alipay request through
 	// alipay.trade.precreate instead of alipay.trade.wap.pay.
 	AlipayMobilePrecreate bool

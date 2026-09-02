@@ -151,16 +151,23 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 	previousStatus := o.Status
 	now := time.Now()
 	grace := now.Add(-paymentGraceMinutes * time.Minute)
+	eligibleStatus := paymentorder.Or(
+		paymentorder.StatusEQ(OrderStatusPending),
+		paymentorder.StatusEQ(OrderStatusCancelled),
+		paymentorder.And(
+			paymentorder.StatusEQ(OrderStatusExpired),
+			paymentorder.UpdatedAtGTE(grace),
+		),
+	)
+	if strings.EqualFold(strings.TrimSpace(pk), payment.TypeUnifiedPay) {
+		// payment.order.paid is a trusted normal-pay event (or an equivalent
+		// active query result). True late funds use paid_after_close and never
+		// enter this path, so delivery delay must not make Sub2 lose fulfillment.
+		eligibleStatus = paymentorder.StatusIn(OrderStatusPending, OrderStatusCancelled, OrderStatusExpired)
+	}
 	c, err := s.entClient.PaymentOrder.Update().Where(
 		paymentorder.IDEQ(o.ID),
-		paymentorder.Or(
-			paymentorder.StatusEQ(OrderStatusPending),
-			paymentorder.StatusEQ(OrderStatusCancelled),
-			paymentorder.And(
-				paymentorder.StatusEQ(OrderStatusExpired),
-				paymentorder.UpdatedAtGTE(grace),
-			),
-		),
+		eligibleStatus,
 	).SetStatus(OrderStatusPaid).SetPayAmount(paid).SetPaymentTradeNo(tradeNo).SetPaidAt(now).ClearFailedAt().ClearFailedReason().Save(ctx)
 	if err != nil {
 		return fmt.Errorf("update to PAID: %w", err)

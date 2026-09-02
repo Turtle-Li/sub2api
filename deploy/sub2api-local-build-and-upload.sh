@@ -36,6 +36,9 @@ docker buildx build \
   --platform linux/amd64 \
   --load \
   --tag "$IMAGE" \
+  --label "org.opencontainers.image.source=https://github.com/Turtle-Li/sub2api" \
+  --label "org.opencontainers.image.revision=${COMMIT}" \
+  --label "org.opencontainers.image.version=${VERSION}" \
   --build-arg "COMMIT=${COMMIT}" \
   --build-arg "VERSION=${VERSION}" \
   --build-arg "DATE=${BUILD_DATE}" \

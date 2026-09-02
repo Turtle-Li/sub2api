@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
+	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 )
 
 // --- Order Status Constants ---
@@ -199,6 +200,8 @@ type PaymentService struct {
 	affiliateService         *AffiliateService
 	notificationEmailService *NotificationEmailService
 	authCacheInvalidator     APIKeyAuthCacheInvalidator
+	unifiedPayment           *unifiedpay.Gateway
+	unifiedWebhookInbox      UnifiedWebhookInboxStore
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService) *PaymentService {
@@ -216,6 +219,49 @@ func (s *PaymentService) SetNotificationEmailService(notificationEmailService *N
 // transaction; this hook makes the new value visible without waiting for TTL.
 func (s *PaymentService) SetAuthCacheInvalidator(invalidator APIKeyAuthCacheInvalidator) {
 	s.authCacheInvalidator = invalidator
+}
+
+// SetUnifiedPayment wires the optional pay-v1 adapter and its durable Webhook
+// inbox without widening the legacy constructor used by unit tests.
+func (s *PaymentService) SetUnifiedPayment(gateway *unifiedpay.Gateway, inbox UnifiedWebhookInboxStore) {
+	s.unifiedPayment = gateway
+	s.unifiedWebhookInbox = inbox
+}
+
+func (s *PaymentService) usesUnifiedAlipay(paymentType string) bool {
+	return s != nil && s.unifiedPayment != nil && s.unifiedPayment.Enabled() &&
+		NormalizeVisibleMethod(paymentType) == payment.TypeAlipay
+}
+
+// ApplyUnifiedPaymentPresentation exposes the configured unified Alipay route
+// through the existing checkout contract without creating a fake provider row
+// in Sub2's provider-instance table.
+func (s *PaymentService) ApplyUnifiedPaymentPresentation(cfg *PaymentConfig, limits *MethodLimitsResponse) {
+	if s == nil || s.unifiedPayment == nil || !s.unifiedPayment.Enabled() || cfg == nil || !cfg.Enabled {
+		return
+	}
+	found := false
+	for _, method := range cfg.EnabledTypes {
+		if NormalizeVisibleMethod(method) == payment.TypeAlipay {
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.EnabledTypes = append(cfg.EnabledTypes, payment.TypeAlipay)
+	}
+	if limits == nil {
+		return
+	}
+	if limits.Methods == nil {
+		limits.Methods = make(map[string]MethodLimits)
+	}
+	limits.Methods[payment.TypeAlipay] = MethodLimits{
+		PaymentType: payment.TypeAlipay, Currency: payment.DefaultPaymentCurrency,
+		FeeRate: cfg.RechargeFeeRate, SingleMin: cfg.MinAmount,
+		SingleMax: cfg.MaxAmount, DailyLimit: cfg.DailyLimit,
+	}
+	limits.GlobalMin, limits.GlobalMax = pcComputeGlobalRange(limits.Methods)
 }
 
 // --- Provider Registry ---

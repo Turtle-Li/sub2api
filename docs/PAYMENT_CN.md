@@ -1,6 +1,6 @@
 # 支付系统配置指南
 
-Sub2API 内置支付系统，支持用户自助充值，无需部署独立的支付服务。
+Sub2API 内置支付系统，支持用户自助充值；也可以把支付宝收款路由到独立部署的统一支付服务。
 
 ---
 
@@ -25,6 +25,7 @@ Sub2API 内置支付系统，支持用户自助充值，无需部署独立的支
 | **支付宝官方** | 桌面二维码扫码、移动端支付宝跳转或当面付唤起 | 直接对接支付宝开放平台；移动端默认 WAP，也可选择当面付二维码唤起支付宝 |
 | **微信官方** | Native 扫码、H5、公众号/JSAPI 支付 | 直接对接微信支付 APIv3，按终端环境自动分流 |
 | **Stripe** | 银行卡、支付宝、微信支付、Link 等 | 国际支付，支持多币种 |
+| **统一支付服务** | 支付宝 | 统一接收支付宝通知，验签后以产品 Webhook 通知 Sub2；Sub2 仍保有业务订单和发货真相 |
 
 > 支付宝官方 / 微信官方与易支付可以同时作为后台服务商实例存在，但前台始终只展示 `支付宝`、`微信支付` 两个可见按钮。管理员需要分别为这两个按钮选择唯一支付来源：官方或易支付。官方渠道直接对接 API，资金直达商户账户，手续费更低；易支付通过第三方平台聚合，接入门槛更低。
 
@@ -152,6 +153,23 @@ Sub2API 内置支付系统，支持用户自助充值，无需部署独立的支
 | **应用私钥** | RSA2 应用私钥 | 是 |
 | **支付宝公钥** | 支付宝公钥 | 是 |
 
+### 统一支付服务（Sub2 产品接入）
+
+启用 `unified_payment` 后，前台仍显示原有“支付宝”按钮，但创建支付单会调用统一支付服务，
+而不再由 Sub2 直接持有支付宝 RSA 私钥。统一支付服务接收支付宝异步通知后，将签名的
+`payment-webhook.v1` 事件投递给 Sub2；Sub2 只有在验签、作用域、订单号和整数分金额全部
+一致后，才调用原有幂等发货逻辑。
+
+- Sub2 Webhook：`https://api.turtleligpt.com/api/v1/payment/webhook/unified`
+- 浏览器返回页：`https://www.turtleligpt.com/payment/result`
+- 返回页只负责展示和轮询，不能触发发货。
+- `organization_id`、`product_id`、`app_id` 和 `environment` 必须与统一支付服务登记值完全一致。
+- Sub2 请求签名私钥只通过 Vault 注入；统一支付服务只登记对应公钥。
+- Sub2 只配置统一支付服务的 Webhook 公钥，支持以 key id 并行配置轮换中的公钥。
+- 沙箱订单有效期必须在 5–120 分钟内；建议继续使用默认 30 分钟。
+
+完整部署变量见 `deploy/.env.example` 和 `deploy/config.example.yaml`。
+
 ### 微信官方
 
 直接对接微信支付 APIv3，支持 Native 扫码支付、H5 支付，以及在微信环境内的公众号/JSAPI 支付。
@@ -217,6 +235,7 @@ Sub2API 内置支付系统，支持用户自助充值，无需部署独立的支
 | **支付宝官方** | `https://your-domain.com/api/v1/payment/webhook/alipay` |
 | **微信官方** | `https://your-domain.com/api/v1/payment/webhook/wxpay` |
 | **Stripe** | `https://your-domain.com/api/v1/payment/webhook/stripe` |
+| **统一支付服务** | `https://your-domain.com/api/v1/payment/webhook/unified` |
 
 > 将 `your-domain.com` 替换为你的实际域名。EasyPay / 支付宝 / 微信的回调地址在添加服务商时自动填入，无需手动配置。
 

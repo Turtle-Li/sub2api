@@ -18,6 +18,11 @@ type paymentOrderProviderSnapshot struct {
 	MerchantAppID      string
 	MerchantID         string
 	Currency           string
+	PaymentOrderID     string
+	Environment        string
+	OrganizationID     string
+	ProductID          string
+	AppID              string
 }
 
 func psOrderProviderSnapshot(order *dbent.PaymentOrder) *paymentOrderProviderSnapshot {
@@ -33,6 +38,11 @@ func psOrderProviderSnapshot(order *dbent.PaymentOrder) *paymentOrderProviderSna
 		MerchantAppID:      psSnapshotStringValue(order.ProviderSnapshot["merchant_app_id"]),
 		MerchantID:         psSnapshotStringValue(order.ProviderSnapshot["merchant_id"]),
 		Currency:           psSnapshotStringValue(order.ProviderSnapshot["currency"]),
+		PaymentOrderID:     psSnapshotStringValue(order.ProviderSnapshot["payment_order_id"]),
+		Environment:        psSnapshotStringValue(order.ProviderSnapshot["environment"]),
+		OrganizationID:     psSnapshotStringValue(order.ProviderSnapshot["organization_id"]),
+		ProductID:          psSnapshotStringValue(order.ProviderSnapshot["product_id"]),
+		AppID:              psSnapshotStringValue(order.ProviderSnapshot["app_id"]),
 	}
 	if snapshot.SchemaVersion == 0 &&
 		snapshot.ProviderInstanceID == "" &&
@@ -78,6 +88,9 @@ func psSnapshotIntValue(value any) int {
 
 func (s *PaymentService) resolveSnapshotOrderProviderInstance(ctx context.Context, order *dbent.PaymentOrder, snapshot *paymentOrderProviderSnapshot) (*dbent.PaymentProviderInstance, error) {
 	if s == nil || s.entClient == nil || order == nil || snapshot == nil {
+		return nil, nil
+	}
+	if snapshot.ProviderKey == payment.TypeUnifiedPay {
 		return nil, nil
 	}
 
@@ -219,6 +232,25 @@ func validateProviderSnapshotMetadata(order *dbent.PaymentOrder, providerKey str
 		}
 		if actual := strings.TrimSpace(metadata["status"]); actual != "" && !strings.EqualFold(actual, "SUCCEEDED") {
 			return fmt.Errorf("airwallex status mismatch: expected SUCCEEDED, got %s", actual)
+		}
+	case payment.TypeUnifiedPay:
+		for field, expected := range map[string]string{
+			"payment_order_id": snapshot.PaymentOrderID,
+			"environment":      snapshot.Environment,
+			"organization_id":  snapshot.OrganizationID,
+			"product_id":       snapshot.ProductID,
+			"app_id":           snapshot.AppID,
+		} {
+			if expected == "" {
+				continue
+			}
+			actual := strings.TrimSpace(metadata[field])
+			if actual == "" {
+				return fmt.Errorf("unified payment notification missing %s", field)
+			}
+			if !strings.EqualFold(expected, actual) {
+				return fmt.Errorf("unified payment %s mismatch", field)
+			}
 		}
 	}
 

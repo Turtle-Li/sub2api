@@ -273,13 +273,21 @@ function restoreRecoverySnapshot(context: {
     })
   }
 
-  if (!context.routeOrderId && !context.routeOutTradeNo) {
-    return null
-  }
-
   const restored = readPaymentRecoverySnapshot(rawSnapshot)
   if (!restored) {
     return null
+  }
+
+  // The unified payment service configures one exact, product-owned return URL.
+  // Alipay may append browser-return parameters (including out_trade_no); those
+  // are matched against the local snapshot below and are never fulfillment
+  // evidence. If no provider parameters are appended, the initiating browser's
+  // short-lived snapshot still lets the canonical result page resume its order.
+  if (!context.routeOrderId && !context.routeOutTradeNo) {
+    if (Object.keys(route.query).length !== 0) {
+      return null
+    }
+    return restored
   }
 
   if (context.routeOrderId > 0 && restored.orderId !== context.routeOrderId) {

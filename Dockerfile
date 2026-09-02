@@ -106,6 +106,17 @@ RUN --mount=type=cache,id=sub2api-go-mod,target=/go/pkg/mod,sharing=locked \
     -o /app/sub2api \
     ./cmd/server
 
+# The optional unified-payment credential agent is shipped in the same
+# immutable image but runs as a separate, networkless container. It retains
+# the Sub2 request key only in memory and exposes it through a Unix socket.
+RUN --mount=type=cache,id=sub2api-go-mod,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=sub2api-go-build,target=/root/.cache/go-build,sharing=locked \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOMAXPROCS="${BUILD_GOMAXPROCS}" GOMEMLIMIT="${BUILD_GO_MEMORY_LIMIT}" nice -n 10 go build \
+    -p "${BUILD_GO_PARALLELISM}" \
+    -trimpath \
+    -o /app/sub2api-vault-agent \
+    ./cmd/sub2api-vault-agent
+
 # -----------------------------------------------------------------------------
 # Stage 3: PostgreSQL Client (version-matched with docker-compose)
 # -----------------------------------------------------------------------------
@@ -149,6 +160,7 @@ WORKDIR /app
 
 # Copy binary/resources with ownership to avoid extra full-layer chown copy
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api
+COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api-vault-agent /app/sub2api-vault-agent
 COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources
 
 # Create data directory

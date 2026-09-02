@@ -109,6 +109,75 @@ describe('PaymentResultView', () => {
     vi.useRealTimers()
   })
 
+  it('restores the current local order after the unified payment fixed return URL', async () => {
+    routeState.query = {}
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify(recoverySnapshotFactory('resume-fixed-return')),
+    )
+    pollOrderStatus.mockResolvedValueOnce(orderFactory('PENDING'))
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledWith(42)
+    expect(resolveOrderPublicByResumeToken).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.result.processing')
+  })
+
+  it('restores the local order when Alipay appends matching browser-return parameters', async () => {
+    routeState.query = {
+      app_id: '9021000167662176',
+      method: 'alipay.trade.page.pay.return',
+      out_trade_no: 'sub2_20260420abcd1234',
+      trade_no: '2026000000000000',
+      total_amount: '88.00',
+      sign: 'untrusted-browser-signature',
+      sign_type: 'RSA2',
+    }
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify(recoverySnapshotFactory('resume-alipay-return')),
+    )
+    pollOrderStatus.mockResolvedValueOnce(orderFactory('PENDING'))
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledWith(42)
+    expect(verifyOrderPublic).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.result.processing')
+  })
+
+  it('rejects an Alipay browser-return order number that does not match the local snapshot', async () => {
+    routeState.query = {
+      method: 'alipay.trade.page.pay.return',
+      out_trade_no: 'sub2_other_order',
+      sign: 'untrusted-browser-signature',
+      sign_type: 'RSA2',
+    }
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify(recoverySnapshotFactory('resume-alipay-mismatch')),
+    )
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+
+    await flushPromises()
+
+    expect(pollOrderStatus).not.toHaveBeenCalled()
+    expect(verifyOrderPublic).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.result.failed')
+  })
+
   it('renders a pending state instead of a failure state when the restored order is still pending', async () => {
     routeState.query = {
       resume_token: 'resume-42',

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -26,6 +27,7 @@ const (
 	rateLimitModeFixed         = "fixed"
 	checkPaidResultAlreadyPaid = "already_paid"
 	checkPaidResultCancelled   = "cancelled"
+	checkPaidResultUnconfirmed = "confirmation_pending"
 
 	pendingWxpayReconcileLimit = 20
 )
@@ -123,8 +125,11 @@ func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (s
 
 func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
 	if o.PaymentTradeNo != "" || o.PaymentType != "" {
-		if s.checkPaid(ctx, o) == checkPaidResultAlreadyPaid {
+		switch s.checkPaid(ctx, o) {
+		case checkPaidResultAlreadyPaid:
 			return checkPaidResultAlreadyPaid, nil
+		case checkPaidResultUnconfirmed:
+			return "", infraerrors.ServiceUnavailable("PAYMENT_CONFIRMATION_PENDING", "payment state is still being confirmed")
 		}
 	}
 	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).SetStatus(fs).Save(ctx)
@@ -203,8 +208,11 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 	}
 	if cp, ok := prov.(payment.CancelableProvider); ok {
 		finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
-		_ = cp.CancelPayment(ctx, queryRef)
+		cancelErr := cp.CancelPayment(ctx, queryRef)
 		finishProviderCall()
+		if errors.Is(cancelErr, payment.ErrUpstreamStateUnconfirmed) {
+			return checkPaidResultUnconfirmed
+		}
 	}
 	return ""
 }
@@ -238,6 +246,11 @@ func paymentOrderQueryReference(order *dbent.PaymentOrder, prov payment.Provider
 	if providerKey == "" {
 		if snapshot := psOrderProviderSnapshot(order); snapshot != nil {
 			providerKey = strings.TrimSpace(snapshot.ProviderKey)
+		}
+	}
+	if providerKey == payment.TypeUnifiedPay {
+		if snapshot := psOrderProviderSnapshot(order); snapshot != nil && snapshot.PaymentOrderID != "" {
+			return snapshot.PaymentOrderID
 		}
 	}
 	if providerKey == "" {
@@ -397,6 +410,12 @@ func (s *PaymentService) ExpireTimedOutOrders(ctx context.Context) (int, error) 
 // getOrderProvider creates a provider using the order's original instance config.
 // Falls back to registry lookup if instance ID is missing (legacy orders).
 func (s *PaymentService) getOrderProvider(ctx context.Context, o *dbent.PaymentOrder) (payment.Provider, error) {
+	if snapshot := psOrderProviderSnapshot(o); snapshot != nil && snapshot.ProviderKey == payment.TypeUnifiedPay {
+		if s.unifiedPayment == nil || !s.unifiedPayment.Enabled() {
+			return nil, fmt.Errorf("order %d unified payment gateway is disabled", o.ID)
+		}
+		return s.unifiedPayment, nil
+	}
 	inst, err := s.getOrderProviderInstance(ctx, o)
 	if err != nil {
 		return nil, fmt.Errorf("load order provider instance: %w", err)

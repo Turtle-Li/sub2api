@@ -31,6 +31,10 @@ jobs:
           /bin/bash -n deploy/sub2api-server-release.sh
           /bin/bash -n deploy/sub2api-blue-green-release.sh
           /bin/bash deploy/tests/blue-green-external-runtime-mock-test.sh
+          /bin/bash -n deploy/sub2api-unified-payment-config.sh
+          /bin/bash deploy/tests/unified-payment-config-test.sh
+          /bin/bash -n deploy/sub2api-unified-payment-vault-container.sh
+          /bin/bash deploy/tests/unified-payment-vault-container-test.sh
           /bin/bash -n deploy/sub2api-cert-receiver.sh
           /bin/bash -n deploy/sub2api-cert-deploy-trigger.sh
           /bin/bash -n deploy/install-sub2api-cert-receiver.sh

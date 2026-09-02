@@ -104,6 +104,25 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
+	UnifiedPayment          UnifiedPaymentConfig          `mapstructure:"unified_payment"`
+}
+
+// UnifiedPaymentConfig connects Sub2 to the separately deployed unified
+// payment service. Private signing material is fetched from a colocated,
+// memory-only Vault agent; it never enters configuration, Docker metadata, or
+// a host file.
+type UnifiedPaymentConfig struct {
+	Enabled                   bool   `mapstructure:"enabled"`
+	BaseURL                   string `mapstructure:"base_url"`
+	Environment               string `mapstructure:"environment"`
+	OrganizationID            string `mapstructure:"organization_id"`
+	ProductID                 string `mapstructure:"product_id"`
+	AppID                     string `mapstructure:"app_id"`
+	RequestKeyID              string `mapstructure:"request_key_id"`
+	RequestPrivateKeyVaultRef string `mapstructure:"request_private_key_vault_ref"`
+	VaultAgentSocket          string `mapstructure:"vault_agent_socket"`
+	WebhookPublicKeysJSON     string `mapstructure:"webhook_public_keys_json"`
+	ReturnURL                 string `mapstructure:"return_url"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -2781,6 +2800,17 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)
 	viper.SetDefault("gateway.user_message_queue.mode", "")
 	viper.SetDefault("update.proxy_url", "")
+	viper.SetDefault("unified_payment.enabled", false)
+	viper.SetDefault("unified_payment.base_url", "")
+	viper.SetDefault("unified_payment.environment", "")
+	viper.SetDefault("unified_payment.organization_id", "")
+	viper.SetDefault("unified_payment.product_id", "")
+	viper.SetDefault("unified_payment.app_id", "")
+	viper.SetDefault("unified_payment.request_key_id", "")
+	viper.SetDefault("unified_payment.request_private_key_vault_ref", "")
+	viper.SetDefault("unified_payment.vault_agent_socket", "")
+	viper.SetDefault("unified_payment.webhook_public_keys_json", "")
+	viper.SetDefault("unified_payment.return_url", "")
 
 	// sticky_escape_enabled is the one exception to the zero-value rule: its
 	// effective default is true, applied post-unmarshal via a viper.IsSet guard.

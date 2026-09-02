@@ -1297,6 +1297,27 @@ update:
   proxy_url: ""
 
 # =============================================================================
+# Unified Payment (统一支付服务；可选)
+# =============================================================================
+# Sub2 只创建自己的业务订单并处理可信 Webhook；支付宝异步通知由统一支付服务接收。
+# 浏览器返回页仍归 Sub2 管理，固定为本项目的 /payment/result。
+# request_private_key_vault_ref 只保存 Vault 引用；私钥由隔离网络中的内存代理提供。
+# 仓库、config.yaml、Docker 元数据、主机文件和日志中都不得出现真实值。
+unified_payment:
+  enabled: false
+  base_url: "https://pay.example.com"
+  environment: "sandbox"
+  organization_id: "00000000-0000-4000-8000-000000000000"
+  product_id: "00000000-0000-4000-8000-000000000000"
+  app_id: "app.sub2.sandbox"
+  request_key_id: "sub2.request.sandbox.v1"
+  request_private_key_vault_ref: "vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64"
+  vault_agent_socket: "/run/sub2api-payment-vault/public.sock"
+  # JSON object: webhook key id -> Base64 encoded 32-byte Ed25519 public key.
+  webhook_public_keys_json: '{}'
+  return_url: "https://sub2.example.com/payment/result"
+
+# =============================================================================
 # Image Storage (异步图片任务结果对象存储)
 # =============================================================================
 # 长耗时生图套 Cloudflare 会 524 超时，异步图片任务接口（/v1/images/generations/async

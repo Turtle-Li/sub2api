@@ -30,6 +30,8 @@ services:
     volumes:
       # Data persistence (config.yaml will be auto-generated here)
       - sub2api_data:/app/data
+      # Contains only the memory agent's Unix socket inode, never a key value.
+      - unified_payment_vault:/run/sub2api-payment-vault:ro
       # Optional: Mount custom config.yaml (uncomment and create the file first)
       # Copy config.example.yaml to config.yaml, modify it, then uncomment:
       # - ./config.yaml:/app/data/config.yaml
@@ -110,6 +112,21 @@ services:
       # with 2FA).
       # Generate a secure key: openssl rand -hex 32
       - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:-}
+
+      # =======================================================================
+      # Unified Payment (optional; secrets must be injected from Vault)
+      # =======================================================================
+      - UNIFIED_PAYMENT_ENABLED=${UNIFIED_PAYMENT_ENABLED:-false}
+      - UNIFIED_PAYMENT_BASE_URL=${UNIFIED_PAYMENT_BASE_URL:-}
+      - UNIFIED_PAYMENT_ENVIRONMENT=${UNIFIED_PAYMENT_ENVIRONMENT:-}
+      - UNIFIED_PAYMENT_ORGANIZATION_ID=${UNIFIED_PAYMENT_ORGANIZATION_ID:-}
+      - UNIFIED_PAYMENT_PRODUCT_ID=${UNIFIED_PAYMENT_PRODUCT_ID:-}
+      - UNIFIED_PAYMENT_APP_ID=${UNIFIED_PAYMENT_APP_ID:-}
+      - UNIFIED_PAYMENT_REQUEST_KEY_ID=${UNIFIED_PAYMENT_REQUEST_KEY_ID:-}
+      - UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF=${UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF:-}
+      - UNIFIED_PAYMENT_VAULT_AGENT_SOCKET=${UNIFIED_PAYMENT_VAULT_AGENT_SOCKET:-}
+      - UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON=${UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON:-}
+      - UNIFIED_PAYMENT_RETURN_URL=${UNIFIED_PAYMENT_RETURN_URL:-}
 
       # =======================================================================
       # Timezone Configuration
@@ -228,6 +245,47 @@ services:
       # grace period keeps Compose from declaring it unhealthy during bootstrap.
       start_period: 120s
 
+  # ==========================================================================
+  # Unified-payment memory Vault agent (optional profile)
+  # ==========================================================================
+  # Start and inject this networkless sidecar before enabling unified payment.
+  # The shared volume contains only public.sock; admin.sock remains private to
+  # this container's tmpfs and is reachable only through an operator-controlled
+  # docker exec. A restart deliberately clears the key and becomes unhealthy.
+  sub2api-payment-vault:
+    profiles: ["unified-payment"]
+    image: weishaw/sub2api:latest
+    container_name: sub2api-payment-vault
+    read_only: true
+    init: true
+    restart: unless-stopped
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    command:
+      - /app/sub2api-vault-agent
+      - serve
+      - --public-socket
+      - /run/sub2api-payment-vault/public.sock
+      - --admin-socket
+      - /run/sub2api-payment-vault-admin/admin.sock
+      - --allowed-ref
+      - vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64
+    volumes:
+      - unified_payment_vault:/run/sub2api-payment-vault
+    tmpfs:
+      - /run/sub2api-payment-vault-admin:rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000
+      - /tmp:rw,noexec,nosuid,nodev,size=4m,mode=0700,uid=1000,gid=1000
+    healthcheck:
+      test: ["CMD", "/app/sub2api-vault-agent", "check", "--public-socket", "/run/sub2api-payment-vault/public.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 2s
+
   # ===========================================================================
   # PostgreSQL Database
   # ===========================================================================
@@ -321,6 +379,8 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  unified_payment_vault:
     driver: local
 
 # =============================================================================

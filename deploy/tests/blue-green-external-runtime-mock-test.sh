@@ -315,6 +315,7 @@ printf '%s\n' \
   'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state' \
   'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state' \
   'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token' \
+  'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=legacy-private-key-must-be-removed' \
   'UNRELATED_SETTING=preserved' >"$old_env"
 printf '%s\n' 'volume|sub2api_sub2api_data|/app/data|true' >"$old_mounts"
 make_state sub2api sub2api:old true unless-stopped "$old_env" "$old_mounts"
@@ -576,5 +577,76 @@ if MODE=local PRECREATE_ONLY=false run_helper >"$OUTPUT" 2>&1; then
 fi
 assert_contains "$OUTPUT" 'does not match the requested image or dual-node runtime contract'
 assert_not_contains "$CALLS" 'exec '
+
+# Unified payment adds only non-secret overrides and a read-only Unix-socket
+# volume. A historical private-key environment field is always stripped.
+rm -rf "$(state_path sub2api-green)"
+: >"$CALLS"
+(
+  export SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME=sub2api_unified_payment_vault
+  export UNIFIED_PAYMENT_ENABLED=true
+  export UNIFIED_PAYMENT_BASE_URL=https://pay.totools.cn
+  export UNIFIED_PAYMENT_ENVIRONMENT=sandbox
+  export UNIFIED_PAYMENT_ORGANIZATION_ID=84fc3e66-e959-4bc8-8d78-6f8c3d3483fb
+  export UNIFIED_PAYMENT_PRODUCT_ID=00da03c5-bc5c-4edb-9d4c-c77da0e969d5
+  export UNIFIED_PAYMENT_APP_ID=app.sub2.sandbox
+  export UNIFIED_PAYMENT_REQUEST_KEY_ID=sub2.request.sandbox.v1
+  export UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
+  export UNIFIED_PAYMENT_VAULT_AGENT_SOCKET=/run/sub2api-payment-vault/public.sock
+  export UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON='{"sub2.webhook.sandbox.v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+  export UNIFIED_PAYMENT_RETURN_URL=https://www.turtleligpt.com/payment/result
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+)
+assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_ENABLED=true'
+assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON={"sub2.webhook.sandbox.v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+assert_not_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64='
+assert_contains "$(state_path sub2api-green)/mounts" 'volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|false'
+
+: >"$CALLS"
+if UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=forbidden PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'legacy unified payment private-key environment was accepted'
+fi
+assert_contains "$OUTPUT" 'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64 is forbidden'
+assert_not_contains "$OUTPUT" 'legacy-private-key-must-be-removed'
+
+: >"$CALLS"
+if (
+  export SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME=sub2api_unified_payment_vault
+  export UNIFIED_PAYMENT_ENABLED=true
+  export UNIFIED_PAYMENT_BASE_URL=https://pay.totools.cn
+  export UNIFIED_PAYMENT_ENVIRONMENT=sandbox
+  export UNIFIED_PAYMENT_ORGANIZATION_ID=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+  export UNIFIED_PAYMENT_PRODUCT_ID=00da03c5-bc5c-4edb-9d4c-c77da0e969d5
+  export UNIFIED_PAYMENT_APP_ID=app.sub2.sandbox
+  export UNIFIED_PAYMENT_REQUEST_KEY_ID=sub2.request.sandbox.v1
+  export UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
+  export UNIFIED_PAYMENT_VAULT_AGENT_SOCKET=/run/sub2api-payment-vault/public.sock
+  export UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON='{"sub2.webhook.sandbox.v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+  export UNIFIED_PAYMENT_RETURN_URL=https://www.turtleligpt.com/payment/result
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+); then
+  fail 'foreign unified payment organization scope was accepted'
+fi
+assert_contains "$OUTPUT" 'UNIFIED_PAYMENT_ORGANIZATION_ID does not match the approved Sub2 sandbox scope'
+
+: >"$CALLS"
+if (
+  export SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME=sub2api_unified_payment_vault
+  export UNIFIED_PAYMENT_ENABLED=true
+  export UNIFIED_PAYMENT_BASE_URL=https://pay.totools.cn
+  export UNIFIED_PAYMENT_ENVIRONMENT=sandbox
+  export UNIFIED_PAYMENT_ORGANIZATION_ID=84fc3e66-e959-4bc8-8d78-6f8c3d3483fb
+  export UNIFIED_PAYMENT_PRODUCT_ID=00da03c5-bc5c-4edb-9d4c-c77da0e969d5
+  export UNIFIED_PAYMENT_APP_ID=app.sub2.sandbox
+  export UNIFIED_PAYMENT_REQUEST_KEY_ID=sub2.request.sandbox.v1
+  export UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
+  export UNIFIED_PAYMENT_VAULT_AGENT_SOCKET=/run/sub2api-payment-vault/public.sock
+  export UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON='{"sub2.webhook.sandbox.v1":"not-base64"}'
+  export UNIFIED_PAYMENT_RETURN_URL=https://www.turtleligpt.com/payment/result
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+); then
+  fail 'malformed unified payment webhook public key was accepted'
+fi
+assert_contains "$OUTPUT" 'UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid'
 
 printf 'Blue-green external runtime mock tests passed.\n'

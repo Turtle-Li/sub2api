@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
+	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/shopspring/decimal"
@@ -106,6 +107,12 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	}
 	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
 	if err != nil {
+		if errors.Is(err, unifiedpay.ErrCreateStateUnconfirmed) {
+			s.writeAuditLog(ctx, order.ID, "UNIFIED_PAYMENT_CREATE_UNCONFIRMED", payment.TypeUnifiedPay, map[string]any{
+				"out_trade_no": order.OutTradeNo,
+			})
+			return nil, err
+		}
 		_, _ = s.entClient.PaymentOrder.UpdateOneID(order.ID).
 			SetStatus(OrderStatusFailed).
 			Save(ctx)
@@ -115,6 +122,15 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 }
 
 func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig) (*dbent.SubscriptionPlan, error) {
+	if s.usesUnifiedAlipay(req.PaymentType) {
+		timeoutMinutes := cfg.OrderTimeoutMin
+		if timeoutMinutes <= 0 {
+			timeoutMinutes = defaultOrderTimeoutMin
+		}
+		if timeoutMinutes < 5 || timeoutMinutes > 120 {
+			return nil, infraerrors.ServiceUnavailable("UNIFIED_PAYMENT_INVALID_TIMEOUT", "unified payment order timeout must be between 5 and 120 minutes")
+		}
+	}
 	if req.OrderType == payment.OrderTypeBalance && cfg.BalanceDisabled {
 		return nil, infraerrors.Forbidden("BALANCE_PAYMENT_DISABLED", "balance recharge has been disabled")
 	}
@@ -364,6 +380,14 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 	if len(snapshot) == 1 {
 		return nil
 	}
+	if providerKey == payment.TypeUnifiedPay {
+		snapshot["currency"] = payment.DefaultPaymentCurrency
+		for _, key := range []string{"environment", "organization_id", "product_id", "app_id"} {
+			if value := strings.TrimSpace(sel.Config[key]); value != "" {
+				snapshot[key] = value
+			}
+		}
+	}
 	return snapshot
 }
 
@@ -402,6 +426,9 @@ func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, user
 }
 
 func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, payAmount float64) (*payment.InstanceSelection, error) {
+	if s.usesUnifiedAlipay(req.PaymentType) {
+		return s.unifiedPayment.Selection(), nil
+	}
 	selectCtx, err := s.prepareCreateOrderSelectionContext(ctx, req)
 	if err != nil {
 		return nil, err
@@ -453,7 +480,13 @@ func (s *PaymentService) usesOfficialWxpayVisibleMethod(ctx context.Context) boo
 }
 
 func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.PaymentOrder, req CreateOrderRequest, cfg *PaymentConfig, limitAmount float64, payAmountStr string, payAmount float64, plan *dbent.SubscriptionPlan, sel *payment.InstanceSelection) (*CreateOrderResponse, error) {
-	prov, err := provider.CreateProvider(sel.ProviderKey, sel.InstanceID, sel.Config)
+	var prov payment.Provider
+	var err error
+	if sel != nil && sel.ProviderKey == payment.TypeUnifiedPay && s.usesUnifiedAlipay(req.PaymentType) {
+		prov = s.unifiedPayment
+	} else {
+		prov, err = provider.CreateProvider(sel.ProviderKey, sel.InstanceID, sel.Config)
+	}
 	if err != nil {
 		slog.Error("[PaymentService] CreateProvider failed", "provider", sel.ProviderKey, "instance", sel.InstanceID, "error", err)
 		// If the provider returned a structured ApplicationError (e.g. WXPAY_CONFIG_MISSING_KEY),
@@ -490,37 +523,62 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 			}
 		}
 	}
-	providerReturnURL, err := buildPaymentReturnURL(canonicalReturnURL, order.ID, outTradeNo, resumeToken)
-	if err != nil {
-		return nil, err
+	providerReturnURL := canonicalReturnURL
+	if sel.ProviderKey == payment.TypeUnifiedPay {
+		if providerReturnURL == "" || providerReturnURL != s.unifiedPayment.ReturnURL() {
+			return nil, infraerrors.BadRequest("INVALID_RETURN_URL", "return URL must match the configured Sub2 payment result page")
+		}
+	} else {
+		providerReturnURL, err = buildPaymentReturnURL(canonicalReturnURL, order.ID, outTradeNo, resumeToken)
+		if err != nil {
+			return nil, err
+		}
 	}
 	providerReq := buildProviderCreatePaymentRequest(CreateOrderRequest{
 		PaymentType: req.PaymentType,
+		OrderType:   req.OrderType,
 		OpenID:      req.OpenID,
 		ClientIP:    req.ClientIP,
 		IsMobile:    req.IsMobile,
 		ReturnURL:   providerReturnURL,
 	}, sel, outTradeNo, payAmountStr, subject)
+	providerReq.ExpiresInSeconds = int(math.Ceil(order.ExpiresAt.Sub(order.CreatedAt).Seconds()))
 	providerReq.AlipayMobilePrecreate = shouldUseAlipayMobilePrecreate(req, cfg, sel)
 	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	pr, err := prov.CreatePayment(ctx, providerReq)
 	finishProviderCall()
 	if err != nil {
 		slog.Error("[PaymentService] CreatePayment failed", "provider", sel.ProviderKey, "instance", sel.InstanceID, "error", err)
+		if sel.ProviderKey == payment.TypeUnifiedPay && errors.Is(err, unifiedpay.ErrCreateStateUnconfirmed) {
+			return nil, err
+		}
 		if appErr := new(infraerrors.ApplicationError); errors.As(err, &appErr) {
 			return nil, appErr
 		}
 		return nil, classifyCreatePaymentError(req, sel.ProviderKey, err)
 	}
 	sanitizeCreatePaymentResponseDetails(pr)
-	_, err = s.entClient.PaymentOrder.UpdateOneID(order.ID).
+	providerSnapshot := order.ProviderSnapshot
+	if sel.ProviderKey == payment.TypeUnifiedPay {
+		if providerSnapshot == nil {
+			providerSnapshot = make(map[string]any)
+		}
+		providerSnapshot["payment_order_id"] = strings.TrimSpace(pr.TradeNo)
+	}
+	update := s.entClient.PaymentOrder.UpdateOneID(order.ID).
 		SetNillablePaymentTradeNo(psNilIfEmpty(pr.TradeNo)).
 		SetNillablePayURL(psNilIfEmpty(pr.PayURL)).
 		SetNillableQrCode(psNilIfEmpty(pr.QRCode)).
 		SetNillableProviderInstanceID(psNilIfEmpty(sel.InstanceID)).
-		SetNillableProviderKey(psNilIfEmpty(sel.ProviderKey)).
-		Save(ctx)
+		SetNillableProviderKey(psNilIfEmpty(sel.ProviderKey))
+	if providerSnapshot != nil {
+		update.SetProviderSnapshot(providerSnapshot)
+	}
+	_, err = update.Save(ctx)
 	if err != nil {
+		if sel.ProviderKey == payment.TypeUnifiedPay {
+			return nil, fmt.Errorf("%w: persist remote order binding", unifiedpay.ErrCreateStateUnconfirmed)
+		}
 		return nil, fmt.Errorf("update order with payment details: %w", err)
 	}
 	s.writeAuditLog(ctx, order.ID, "ORDER_CREATED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
@@ -570,6 +628,7 @@ func buildProviderCreatePaymentRequest(req CreateOrderRequest, sel *payment.Inst
 		OrderID:            orderID,
 		Amount:             amount,
 		PaymentType:        req.PaymentType,
+		OrderType:          req.OrderType,
 		Subject:            subject,
 		ReturnURL:          req.ReturnURL,
 		OpenID:             strings.TrimSpace(req.OpenID),

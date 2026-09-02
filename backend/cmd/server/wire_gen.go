@@ -238,7 +238,12 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentConfigService := service.ProvidePaymentConfigService(client, settingRepository, encryptionKey)
 	registry := payment.ProvideRegistry()
 	defaultLoadBalancer := payment.ProvideDefaultLoadBalancer(client, encryptionKey)
-	paymentService := service.ProvidePaymentService(client, registry, defaultLoadBalancer, redeemService, subscriptionService, paymentConfigService, userRepository, groupRepository, affiliateService, notificationEmailService, apiKeyAuthCacheInvalidator)
+	gateway, err := service.ProvideUnifiedPaymentGateway(configConfig)
+	if err != nil {
+		return nil, err
+	}
+	unifiedWebhookInboxStore := repository.NewUnifiedPaymentWebhookInboxStore(db)
+	paymentService := service.ProvidePaymentService(client, registry, defaultLoadBalancer, redeemService, subscriptionService, paymentConfigService, userRepository, groupRepository, affiliateService, notificationEmailService, apiKeyAuthCacheInvalidator, gateway, unifiedWebhookInboxStore)
 	desktopStorageService := service.NewDesktopStorageService(settingRepository, secretEncryptor, backupService, imageStorageFactory)
 	settingHandler := handler.ProvideAdminSettingHandler(settingService, emailService, turnstileService, aliyunCaptchaService, opsService, paymentConfigService, paymentService, userAttributeService, notificationEmailService, totpService, userService, desktopStorageService)
 	opsHandler := admin.NewOpsHandler(opsService)

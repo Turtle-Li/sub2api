@@ -58,6 +58,12 @@ HEALTH_TOKEN_FILE="${SUB2API_INTERNAL_HEALTH_TOKEN_FILE:-${APP_DIR}/secrets/inte
 CONTAINER_TRAFFIC_STATE_PATH="/run/sub2api-runtime/traffic-state"
 CONTAINER_BACKGROUND_STATE_PATH="/run/sub2api-runtime/background-state"
 CONTAINER_HEALTH_TOKEN_PATH="/run/sub2api-runtime/health-token"
+UNIFIED_PAYMENT_VAULT_VOLUME="${SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME:-}"
+CONTAINER_UNIFIED_PAYMENT_VAULT_PATH="/run/sub2api-payment-vault"
+UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=false
+if [ "${UNIFIED_PAYMENT_ENABLED+x}" = x ]; then
+  UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=true
+fi
 
 TEMP_FILES=()
 TEMP_FILE=""
@@ -72,6 +78,14 @@ EXTERNAL_OVERRIDE_KEYS=("${EXTERNAL_ENV_KEYS[@]}" PGSSLROOTCERT)
 RUNTIME_OVERRIDE_KEYS=(
   SUB2API_TRAFFIC_STATE_FILE SUB2API_BACKGROUND_STATE_FILE SUB2API_INTERNAL_HEALTH_TOKEN_FILE
 )
+UNIFIED_PAYMENT_ENV_KEYS=(
+  UNIFIED_PAYMENT_ENABLED UNIFIED_PAYMENT_BASE_URL UNIFIED_PAYMENT_ENVIRONMENT
+  UNIFIED_PAYMENT_ORGANIZATION_ID UNIFIED_PAYMENT_PRODUCT_ID UNIFIED_PAYMENT_APP_ID
+  UNIFIED_PAYMENT_REQUEST_KEY_ID UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF
+  UNIFIED_PAYMENT_VAULT_AGENT_SOCKET UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON
+  UNIFIED_PAYMENT_RETURN_URL
+)
+PAYMENT_VAULT_MOUNT_ARGS=()
 
 log() {
   printf '%s %s\n' "$(date -Is)" "$*"
@@ -136,6 +150,60 @@ require_docker_name() {
   case "$2" in
     ''|*[!A-Za-z0-9_.-]*) die "$1 contains unsupported characters" ;;
   esac
+}
+
+validate_unified_payment_runtime() {
+  local key value webhook_prefix webhook_key
+  if [ "${UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64:-}" != "" ]; then
+    die "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64 is forbidden; use the memory-only Vault agent"
+  fi
+  [ "$UNIFIED_PAYMENT_OVERRIDE_CONFIGURED" = true ] || return 0
+  require_bool UNIFIED_PAYMENT_ENABLED "$UNIFIED_PAYMENT_ENABLED"
+  if [ "$UNIFIED_PAYMENT_ENABLED" = false ]; then
+    return 0
+  fi
+  for key in "${UNIFIED_PAYMENT_ENV_KEYS[@]}"; do
+    value="${!key-}"
+    [ -n "$value" ] || die "$key is required when unified payment is enabled"
+    case "$value" in *$'\n'*|*$'\r'*) die "$key contains unsupported characters" ;; esac
+  done
+  [ "$UNIFIED_PAYMENT_ENVIRONMENT" = sandbox ] \
+    || die "only the unified payment sandbox is approved"
+  [ "$UNIFIED_PAYMENT_BASE_URL" = "https://pay.totools.cn" ] \
+    || die "UNIFIED_PAYMENT_BASE_URL does not match the approved sandbox service"
+  [ "$UNIFIED_PAYMENT_APP_ID" = "app.sub2.sandbox" ] \
+    || die "UNIFIED_PAYMENT_APP_ID does not match the approved Sub2 sandbox app"
+  [ "$UNIFIED_PAYMENT_ORGANIZATION_ID" = "84fc3e66-e959-4bc8-8d78-6f8c3d3483fb" ] \
+    || die "UNIFIED_PAYMENT_ORGANIZATION_ID does not match the approved Sub2 sandbox scope"
+  [ "$UNIFIED_PAYMENT_PRODUCT_ID" = "00da03c5-bc5c-4edb-9d4c-c77da0e969d5" ] \
+    || die "UNIFIED_PAYMENT_PRODUCT_ID does not match the approved Sub2 sandbox scope"
+  [ "$UNIFIED_PAYMENT_REQUEST_KEY_ID" = "sub2.request.sandbox.v1" ] \
+    || die "UNIFIED_PAYMENT_REQUEST_KEY_ID does not match the approved Sub2 sandbox key"
+  [ "$UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF" = "vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64" ] \
+    || die "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF does not match the approved Vault field"
+  [ "$UNIFIED_PAYMENT_VAULT_AGENT_SOCKET" = "$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH/public.sock" ] \
+    || die "UNIFIED_PAYMENT_VAULT_AGENT_SOCKET does not match the mounted agent socket"
+  [ "$UNIFIED_PAYMENT_RETURN_URL" = "https://www.turtleligpt.com/payment/result" ] \
+    || die "UNIFIED_PAYMENT_RETURN_URL does not match the approved Sub2 result page"
+  require_docker_name SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME "$UNIFIED_PAYMENT_VAULT_VOLUME"
+  [ "$UNIFIED_PAYMENT_VAULT_VOLUME" = sub2api_unified_payment_vault ] \
+    || die "SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME does not match the approved Sub2 volume"
+  webhook_prefix='{"sub2.webhook.sandbox.v1":"'
+  case "$UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON" in
+    "$webhook_prefix"*'"}') ;;
+    *) die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid" ;;
+  esac
+  webhook_key="${UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON#"$webhook_prefix"}"
+  webhook_key="${webhook_key%\"\}}"
+  [ "${#webhook_key}" -eq 44 ] || die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid"
+  case "$webhook_key" in
+    *[!A-Za-z0-9+/=]*|*=*=*|*==*) die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid" ;;
+  esac
+  [ "${webhook_key#???????????????????????????????????????????}" = = ] \
+    || die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid"
+  PAYMENT_VAULT_MOUNT_ARGS=(
+    --mount "type=volume,source=$UNIFIED_PAYMENT_VAULT_VOLUME,target=$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH,readonly"
+  )
 }
 
 validate_absolute_path() {
@@ -270,6 +338,33 @@ write_external_overrides() {
   printf '%s=%s\n' PGSSLROOTCERT "$CONTAINER_PG_CA_PATH" >>"$output_file"
 }
 
+write_unified_payment_overrides() {
+  local output_file="$1"
+  local key value
+  [ "$UNIFIED_PAYMENT_OVERRIDE_CONFIGURED" = true ] || return 0
+  for key in "${UNIFIED_PAYMENT_ENV_KEYS[@]}"; do
+    value="${!key-}"
+    printf '%s=%s\n' "$key" "$value" >>"$output_file"
+  done
+}
+
+container_matches_unified_payment_env() {
+  local inspect_env="$1"
+  local key expected_value actual_value
+  ! grep -q '^UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=' "$inspect_env" || return 1
+  [ "$UNIFIED_PAYMENT_OVERRIDE_CONFIGURED" = true ] || return 0
+  for key in "${UNIFIED_PAYMENT_ENV_KEYS[@]}"; do
+    expected_value="${!key-}"
+    if ! actual_value="$(awk -v expected_key="$key" '
+      index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
+      END { if (count != 1) exit 1; print value }
+    ' "$inspect_env")"; then
+      return 1
+    fi
+    [ "$actual_value" = "$expected_value" ] || return 1
+  done
+}
+
 make_runtime_env_file() {
   local old_env_file output_file line key
 
@@ -281,6 +376,12 @@ make_runtime_env_file() {
   while IFS= read -r line || [ -n "$line" ]; do
     key="${line%%=*}"
 	case "$key" in
+	  UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64)
+		continue
+		;;
+	  UNIFIED_PAYMENT_ENABLED|UNIFIED_PAYMENT_BASE_URL|UNIFIED_PAYMENT_ENVIRONMENT|UNIFIED_PAYMENT_ORGANIZATION_ID|UNIFIED_PAYMENT_PRODUCT_ID|UNIFIED_PAYMENT_APP_ID|UNIFIED_PAYMENT_REQUEST_KEY_ID|UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF|UNIFIED_PAYMENT_VAULT_AGENT_SOCKET|UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON|UNIFIED_PAYMENT_RETURN_URL)
+		[ "$UNIFIED_PAYMENT_OVERRIDE_CONFIGURED" = true ] && continue
+		;;
 	  SUB2API_TRAFFIC_STATE_FILE|SUB2API_BACKGROUND_STATE_FILE|SUB2API_INTERNAL_HEALTH_TOKEN_FILE)
 		continue
 		;;
@@ -298,6 +399,7 @@ make_runtime_env_file() {
 	printf 'SUB2API_BACKGROUND_STATE_FILE=%s\n' "$CONTAINER_BACKGROUND_STATE_PATH" >>"$output_file"
 	printf 'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=%s\n' "$CONTAINER_HEALTH_TOKEN_PATH" >>"$output_file"
   fi
+  write_unified_payment_overrides "$output_file"
   RUNTIME_ENV_FILE="$output_file"
 }
 
@@ -306,7 +408,7 @@ container_matches_external_runtime() {
   local expected_restart="$2"
   local expected_running="$3"
   local actual expected_value actual_value key
-  local inspect_env inspect_networks inspect_mounts network_count mount_count
+  local inspect_env inspect_networks inspect_mounts network_count mount_count expected_mount_count
 
   [ "$(docker inspect "$container" --format '{{.Config.Image}}')" = "$NEW_IMAGE" ] || return 1
   [ "$(docker inspect "$container" --format '{{.HostConfig.RestartPolicy.Name}}')" = "$expected_restart" ] || return 1
@@ -324,11 +426,10 @@ container_matches_external_runtime() {
   inspect_mounts="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}' >"$inspect_mounts"
   mount_count="$(awk 'NF { count += 1 } END { print count + 0 }' "$inspect_mounts")"
-  if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
-	[ "$mount_count" -eq 6 ] || return 1
-  else
-	[ "$mount_count" -eq 3 ] || return 1
-  fi
+  expected_mount_count=3
+  [ "$DUAL_NODE_RUNTIME_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 3))
+  [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$mount_count" -eq "$expected_mount_count" ] || return 1
   grep -qxF "volume|$DATA_VOLUME|/app/data|true" "$inspect_mounts" || return 1
   grep -qxF "bind|$EXTERNAL_CA_FILE|$CONTAINER_PG_CA_PATH|false" "$inspect_mounts" || return 1
   grep -qxF "bind|$EXTERNAL_CA_FILE|$CONTAINER_REDIS_CA_PATH|false" "$inspect_mounts" || return 1
@@ -337,10 +438,14 @@ container_matches_external_runtime() {
 	grep -qxF "bind|$BACKGROUND_STATE_FILE|$CONTAINER_BACKGROUND_STATE_PATH|false" "$inspect_mounts" || return 1
 	grep -qxF "bind|$HEALTH_TOKEN_FILE|$CONTAINER_HEALTH_TOKEN_PATH|false" "$inspect_mounts" || return 1
   fi
+  if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
+	grep -qxF "volume|$UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" "$inspect_mounts" || return 1
+  fi
 
   new_temp_file
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
+  container_matches_unified_payment_env "$inspect_env" || return 1
   for key in "${EXTERNAL_OVERRIDE_KEYS[@]}"; do
     if [ "$key" = PGSSLROOTCERT ]; then
       expected_value="$CONTAINER_PG_CA_PATH"
@@ -381,7 +486,7 @@ container_matches_external_runtime() {
 container_matches_local_runtime() {
   local container="$1" expected_running="$2"
   local inspect_env inspect_mounts inspect_networks key expected_value actual_value
-  local mount_count network_count
+  local mount_count network_count expected_mount_count
 
   [ "$(docker inspect "$container" --format '{{.Config.Image}}')" = "$NEW_IMAGE" ] || return 1
   [ "$(docker inspect "$container" --format '{{.State.Running}}')" = "$expected_running" ] || return 1
@@ -397,15 +502,21 @@ container_matches_local_runtime() {
   inspect_mounts="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}' >"$inspect_mounts"
   mount_count="$(awk 'NF { count += 1 } END { print count + 0 }' "$inspect_mounts")"
-  [ "$mount_count" -eq 4 ] || return 1
+  expected_mount_count=4
+  [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$mount_count" -eq "$expected_mount_count" ] || return 1
   grep -qxF "volume|$DATA_VOLUME|/app/data|true" "$inspect_mounts" || return 1
   grep -qxF "bind|$TRAFFIC_STATE_FILE|$CONTAINER_TRAFFIC_STATE_PATH|false" "$inspect_mounts" || return 1
   grep -qxF "bind|$BACKGROUND_STATE_FILE|$CONTAINER_BACKGROUND_STATE_PATH|false" "$inspect_mounts" || return 1
   grep -qxF "bind|$HEALTH_TOKEN_FILE|$CONTAINER_HEALTH_TOKEN_PATH|false" "$inspect_mounts" || return 1
+  if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
+	grep -qxF "volume|$UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" "$inspect_mounts" || return 1
+  fi
 
   new_temp_file
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
+  container_matches_unified_payment_env "$inspect_env" || return 1
   for key in "${RUNTIME_OVERRIDE_KEYS[@]}"; do
 	case "$key" in
 	  SUB2API_TRAFFIC_STATE_FILE) expected_value="$CONTAINER_TRAFFIC_STATE_PATH" ;;
@@ -431,6 +542,7 @@ create_external_target() {
       --network "$NETWORK" \
       --env-file "$env_file" \
       --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
+      "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
       --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_PG_CA_PATH,readonly" \
 	  --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_REDIS_CA_PATH,readonly" \
 	  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
@@ -444,6 +556,7 @@ create_external_target() {
     --network "$NETWORK" \
     --env-file "$env_file" \
     --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
+    "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
     --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_PG_CA_PATH,readonly" \
 	--mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_REDIS_CA_PATH,readonly" \
     --restart "$restart_policy" \
@@ -461,6 +574,7 @@ create_local_target() {
       --network "$NETWORK" \
       --env-file "$env_file" \
 	  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
+	  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
 	  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
 	  --mount "type=bind,source=$BACKGROUND_STATE_FILE,target=$CONTAINER_BACKGROUND_STATE_PATH,readonly" \
 	  --mount "type=bind,source=$HEALTH_TOKEN_FILE,target=$CONTAINER_HEALTH_TOKEN_PATH,readonly" \
@@ -472,6 +586,7 @@ create_local_target() {
     --network "$NETWORK" \
     --env-file "$env_file" \
 	--mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
+	"${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
     --restart unless-stopped \
     "$NEW_IMAGE" >/dev/null
   fi
@@ -613,6 +728,7 @@ require_docker_name DATA_VOLUME "$DATA_VOLUME"
 for command_name in docker nsenter perl python3 awk grep stat realpath mktemp chmod rm; do
   require_cmd "$command_name"
 done
+validate_unified_payment_runtime
 if [ "$DEPENDENCY_MODE" = external ]; then
   load_external_runtime_env
   validate_external_ca_file
@@ -654,6 +770,10 @@ else
 fi
 docker network inspect "$NETWORK" >/dev/null 2>&1 || die "Docker network $NETWORK does not exist"
 docker volume inspect "$DATA_VOLUME" >/dev/null 2>&1 || die "Docker volume $DATA_VOLUME does not exist"
+if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
+  docker volume inspect "$UNIFIED_PAYMENT_VAULT_VOLUME" >/dev/null 2>&1 \
+    || die "Docker volume $UNIFIED_PAYMENT_VAULT_VOLUME does not exist"
+fi
 
 if [ "$DEPENDENCY_MODE" = external ]; then
   if container_exists "$NEW_CONTAINER"; then
@@ -738,6 +858,7 @@ else
 		log "precreating local target $NEW_CONTAINER from $NEW_IMAGE without starting it"
 		docker create --name "$NEW_CONTAINER" --network "$NETWORK" --env-file "$env_file" \
 		  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
+		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
 		  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
 		  --mount "type=bind,source=$BACKGROUND_STATE_FILE,target=$CONTAINER_BACKGROUND_STATE_PATH,readonly" \
 		  --mount "type=bind,source=$HEALTH_TOKEN_FILE,target=$CONTAINER_HEALTH_TOKEN_PATH,readonly" \
@@ -748,6 +869,7 @@ else
 		log "precreating local target $NEW_CONTAINER from $NEW_IMAGE without starting it"
 		docker create --name "$NEW_CONTAINER" --network "$NETWORK" --env-file "$env_file" \
 		  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
+		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
 		  --restart no "$NEW_IMAGE" >/dev/null
       fi
     else

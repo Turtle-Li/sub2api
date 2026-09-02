@@ -930,6 +930,17 @@ func TestExpiryAndLatePaymentCallbacksHaveNoLossOrDoubleCredit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusExpired, reloadedTooLate.Status, "payment outside the grace period must not revive an expired order")
 	require.Len(t, redeemRepo.useCalls, 1, "an out-of-grace callback must not credit the local test user")
+
+	// A normal paid event from the unified payment service remains authoritative
+	// even if delivery was delayed beyond Sub2's legacy provider grace window.
+	// True late funds arrive as payment.order.paid_after_close and never call
+	// this fulfillment path.
+	require.NoError(t, svc.toPaid(ctx, tooLate, "alipay-unified-normal-paid-302", tooLate.PayAmount, payment.TypeUnifiedPay))
+	reloadedTooLate, err = client.PaymentOrder.Get(ctx, tooLate.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloadedTooLate.Status)
+	require.Len(t, redeemRepo.useCalls, 2, "a trusted normal paid event must fulfill exactly once despite delivery delay")
+	require.Equal(t, order.Amount+tooLate.Amount, localUser.Balance)
 }
 
 func TestSubscriptionSnapshotBenefitsAreGrantedExactlyOnceAfterRecovery(t *testing.T) {

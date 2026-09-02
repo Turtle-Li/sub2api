@@ -26,6 +26,8 @@ type PaymentWebhookHandler struct {
 // maxWebhookBodySize is the maximum allowed webhook request body size (1 MB).
 const maxWebhookBodySize = 1 << 20
 
+const maxUnifiedWebhookBodySize = 256 << 10
+
 // webhookLogTruncateLen is the maximum length of raw body logged on verify failure.
 const webhookLogTruncateLen = 200
 
@@ -65,6 +67,28 @@ func (h *PaymentWebhookHandler) StripeWebhook(c *gin.Context) {
 // POST /api/v1/payment/webhook/airwallex
 func (h *PaymentWebhookHandler) AirwallexWebhook(c *gin.Context) {
 	h.handleNotify(c, payment.TypeAirwallex)
+}
+
+// UnifiedPaymentWebhook accepts only the signed payment-webhook.v1 contract.
+// It deliberately keeps the original multi-value headers and raw body bytes;
+// neither is normalized or logged before signature verification.
+func (h *PaymentWebhookHandler) UnifiedPaymentWebhook(c *gin.Context) {
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxUnifiedWebhookBodySize+1))
+	if err != nil || len(body) > maxUnifiedWebhookBodySize {
+		c.String(http.StatusBadRequest, "invalid webhook")
+		return
+	}
+	err = h.paymentService.HandleUnifiedPaymentWebhook(c.Request.Context(), c.Request.Header.Clone(), body)
+	switch {
+	case err == nil:
+		c.String(http.StatusOK, "success")
+	case errors.Is(err, service.ErrUnifiedWebhookInvalid):
+		slog.Warn("[Unified Payment Webhook] rejected", "error", err, "bodyLen", len(body))
+		c.String(http.StatusBadRequest, "verify failed")
+	default:
+		slog.Error("[Unified Payment Webhook] retryable failure", "error", err)
+		c.String(http.StatusServiceUnavailable, "retry")
+	}
 }
 
 // handleNotify is the shared logic for all provider webhook handlers.
