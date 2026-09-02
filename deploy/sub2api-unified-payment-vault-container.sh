@@ -13,12 +13,19 @@ VOLUME=sub2api_unified_payment_vault
 PUBLIC_DIR=/run/sub2api-payment-vault
 ADMIN_DIR=/run/sub2api-payment-vault-admin
 REQUEST_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
-LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-/run/lock/sub2api-maintenance.lock}"
 
 die() {
   printf '%s\n' 'SUB2API_PAYMENT_VAULT_CONTAINER_REJECTED' >&2
   exit 1
 }
+
+PAYMENT_VAULT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAINTENANCE_LOCK_HELPER="${PAYMENT_VAULT_SCRIPT_DIR}/sub2api-maintenance-lock.sh"
+[ -r "$MAINTENANCE_LOCK_HELPER" ] && [ ! -L "$MAINTENANCE_LOCK_HELPER" ] \
+  || die
+# shellcheck disable=SC1090,SC1091 # Installed alongside this root-owned executable.
+. "$MAINTENANCE_LOCK_HELPER"
+LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
 
 require_image() {
   local image="$1" revision platform source version
@@ -60,16 +67,28 @@ verify_container() {
   [ "$health" = '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket /run/sub2api-payment-vault/public.sock"]' ] || return 1
 }
 
-[ "$(id -u)" -eq 0 ] || die
+case "${SUB2API_PAYMENT_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS:-0}" in
+  1)
+    # shellcheck disable=SC2034 # Read by the sourced maintenance-lock helper.
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1
+    ;;
+  0) [ "$(id -u)" -eq 0 ] || die ;;
+  *) die ;;
+esac
 [ "$#" -eq 2 ] || die
 action="$1"
 image="$2"
 case "$action" in prepare|ready) ;; *) die ;; esac
+if ! sub2api_maintenance_lock_validate_configured_path "$LOCK_FILE"; then
+  die
+fi
 for command_name in docker flock; do command -v "$command_name" >/dev/null 2>&1 || die; done
 require_image "$image"
 
-exec 9>"$LOCK_FILE"
-flock -n 9 || die
+if ! sub2api_maintenance_lock_open "$LOCK_FILE"; then
+  die
+fi
+flock -n "$SUB2API_MAINTENANCE_LOCK_FD" || die
 
 if ! docker container inspect "$CONTAINER" >/dev/null 2>&1; then
   [ "$action" = prepare ] || die

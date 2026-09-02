@@ -11,11 +11,16 @@ readonly CONFIG_PATH="/etc/haproxy/haproxy.cfg"
 readonly STATE_PATH="/etc/haproxy/.gcp-tw-line-transaction.env"
 readonly BACKUP_ROOT="/etc/haproxy/backups"
 readonly CA_FILE="/etc/ssl/certs/ca-certificates.crt"
+readonly MUTATION_LOCK_DEFAULT_PATH="/run/sub2api-gcp-tw-line/haproxy-mutation.lock"
 
 phase="${1:-}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source_config="${HAPROXY_TEMPLATE:-${script_dir}/haproxy.cfg}"
 post_update_verify="${HAPROXY_POST_UPDATE_VERIFY:-${script_dir}/verify-transport.sh}"
+# Production never accepts an alternate lock identity. The explicit test-only
+# override permits hermetic non-root fixtures below their private TMPDIR.
+mutation_lock_path="${HAPROXY_MUTATION_LOCK_FILE_FOR_TESTS:-$MUTATION_LOCK_DEFAULT_PATH}"
+mutation_lock_test_mode="${HAPROXY_MUTATION_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}"
 
 die() {
     printf 'gcp-tw-haproxy: %s\n' "$*" >&2
@@ -36,7 +41,132 @@ assert_regular_file() {
 }
 
 assert_root() {
+    case "$mutation_lock_test_mode" in
+        1) return ;;
+        0) ;;
+        *) die "HAPROXY_MUTATION_LOCK_ALLOW_NON_ROOT_FOR_TESTS must be 0 or 1" ;;
+    esac
     [[ "$(id -u)" -eq 0 ]] || die "must run as root"
+}
+
+lock_metadata() {
+    local path="$1" metadata
+
+    if metadata="$(stat -c '%u:%g:%a:%h' "$path" 2>/dev/null)"; then
+        printf '%s\n' "$metadata"
+        return
+    fi
+    if metadata="$(stat -f '%u:%g:%Lp:%l' "$path" 2>/dev/null)"; then
+        printf '%s\n' "$metadata"
+        return
+    fi
+    die "could not inspect mutation-lock metadata: $path"
+}
+
+validate_mutation_lock_configuration() {
+    local test_tmp_root
+
+    case "$mutation_lock_test_mode" in
+        0|1) ;;
+        *) die "HAPROXY_MUTATION_LOCK_ALLOW_NON_ROOT_FOR_TESTS must be 0 or 1" ;;
+    esac
+    case "$mutation_lock_path" in
+        /*) ;;
+        *) die "mutation lock path must be absolute" ;;
+    esac
+    case "$mutation_lock_path" in
+        *$'\n'*|*$'\r'*|*'//'*) die "mutation lock path contains an unsafe component" ;;
+    esac
+    case "/${mutation_lock_path}/" in
+        */./*|*/../*) die "mutation lock path must not contain . or .. components" ;;
+    esac
+    if [[ "$mutation_lock_test_mode" != 1 ]]; then
+        [[ -z "${HAPROXY_MUTATION_LOCK_FILE_FOR_TESTS:-}" \
+            && "$mutation_lock_path" == "$MUTATION_LOCK_DEFAULT_PATH" ]] \
+            || die "mutation lock path is fixed to $MUTATION_LOCK_DEFAULT_PATH"
+        return
+    fi
+
+    test_tmp_root="${TMPDIR:-/tmp}"
+    [[ -d "$test_tmp_root" ]] || die "test mutation-lock root does not exist: $test_tmp_root"
+    test_tmp_root="$(cd "$test_tmp_root" && pwd -P)"
+    case "$mutation_lock_path" in
+        "$test_tmp_root"/*) ;;
+        *) die "test mutation-lock path must be inside TMPDIR" ;;
+    esac
+}
+
+assert_mutation_lock_parent_container() {
+    local path="$1" expected_uid="$2" metadata uid gid mode mode_value
+
+    [[ -d "$path" && ! -L "$path" ]] \
+        || die "mutation-lock parent container is not a regular directory: $path"
+    metadata="$(lock_metadata "$path")"
+    IFS=: read -r uid gid mode _ <<<"$metadata"
+    [[ "$uid" == "$expected_uid" ]] \
+        || die "mutation-lock parent container has an unexpected owner: $path"
+    case "$mode" in ''|*[!0-7]*) die "mutation-lock parent container has an invalid mode: $path" ;; esac
+    mode_value=$((8#$mode))
+    [[ $((mode_value & 0022)) -eq 0 ]] \
+        || die "mutation-lock parent container is group/world-writable: $path"
+}
+
+assert_mutation_lock_private_parent() {
+    local path="$1" expected_uid="$2" expected_gid="$3" metadata uid gid mode
+
+    [[ -d "$path" && ! -L "$path" ]] \
+        || die "mutation-lock parent is not a regular directory: $path"
+    metadata="$(lock_metadata "$path")"
+    IFS=: read -r uid gid mode _ <<<"$metadata"
+    [[ "$uid" == "$expected_uid" && "$gid" == "$expected_gid" && "$mode" == 700 ]] \
+        || die "mutation-lock parent must be owned privately with mode 0700: $path"
+}
+
+assert_mutation_lock_file() {
+    local path="$1" expected_uid="$2" expected_gid="$3" metadata uid gid mode links
+
+    [[ -f "$path" && ! -L "$path" ]] \
+        || die "mutation-lock path is not a regular non-symlink file: $path"
+    metadata="$(lock_metadata "$path")"
+    IFS=: read -r uid gid mode links <<<"$metadata"
+    [[ "$uid" == "$expected_uid" && "$gid" == "$expected_gid" \
+        && "$mode" == 600 && "$links" == 1 ]] \
+        || die "mutation-lock file must be privately owned mode 0600 with one link: $path"
+}
+
+acquire_mutation_lock() {
+    local expected_uid expected_gid lock_parent lock_parent_container previous_umask
+
+    validate_mutation_lock_configuration
+    expected_uid="$(id -u)"
+    expected_gid="$(id -g)"
+    lock_parent="${mutation_lock_path%/*}"
+    lock_parent_container="${lock_parent%/*}"
+    [[ -n "$lock_parent" && -n "$lock_parent_container" ]] \
+        || die "mutation lock path has no private parent"
+    assert_mutation_lock_parent_container "$lock_parent_container" "$expected_uid"
+    if [[ -e "$lock_parent" || -L "$lock_parent" ]]; then
+        assert_mutation_lock_private_parent "$lock_parent" "$expected_uid" "$expected_gid"
+    elif [[ "$mutation_lock_test_mode" == 1 ]]; then
+        install -d -m 0700 "$lock_parent"
+        assert_mutation_lock_private_parent "$lock_parent" "$expected_uid" "$expected_gid"
+    else
+        install -d -o root -g root -m 0700 "$lock_parent"
+        assert_mutation_lock_private_parent "$lock_parent" 0 0
+    fi
+    if [[ -e "$mutation_lock_path" || -L "$mutation_lock_path" ]]; then
+        assert_mutation_lock_file "$mutation_lock_path" "$expected_uid" "$expected_gid"
+    fi
+
+    previous_umask="$(umask)"
+    umask 077
+    if ! exec 9>>"$mutation_lock_path"; then
+        umask "$previous_umask"
+        die "could not open mutation lock: $mutation_lock_path"
+    fi
+    umask "$previous_umask"
+    assert_mutation_lock_file "$mutation_lock_path" "$expected_uid" "$expected_gid"
+    flock -n 9 || die "another GCP Taiwan HAProxy mutation is already running"
 }
 
 assert_target_host() {
@@ -304,7 +434,7 @@ write_loaded_state_status() {
 
 ensure_dependencies() {
     local command_name
-    for command_name in apt-cache apt-get awk date dpkg-query grep haproxy hostname id install \
+    for command_name in apt-cache apt-get awk date dpkg-query flock grep haproxy hostname id install \
         md5sum mktemp mv pgrep sha256sum stat systemctl; do
         if [[ "$command_name" == 'haproxy' ]] && ! command -v haproxy >/dev/null 2>&1; then
             continue
@@ -525,6 +655,12 @@ esac
 
 ensure_dependencies
 assert_root
+
+# Stage/update/rollback all alter the same config, transaction, and HAProxy
+# lifecycle. Activate is fenced too, so it cannot race a retained transaction.
+case "$phase" in
+    stage|activate|update|rollback) acquire_mutation_lock ;;
+esac
 
 case "$phase" in
     stage) stage ;;

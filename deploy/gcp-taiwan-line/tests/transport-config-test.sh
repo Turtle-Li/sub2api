@@ -4,7 +4,20 @@ set -Eeuo pipefail
 test_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 line_dir="$(cd -- "${test_dir}/.." && pwd)"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/sub2-tw-transport-test.XXXXXX")"
-trap 'rm -rf -- "$test_root"' EXIT
+test_root="$(cd "$test_root" && pwd -P)"
+lock_holder_pid=""
+
+cleanup() {
+    if [[ -n "${lock_holder_pid:-}" ]] && kill -0 "$lock_holder_pid" >/dev/null 2>&1; then
+        if [[ -n "${lock_holder_release:-}" ]]; then
+            : >"$lock_holder_release"
+        fi
+        kill "$lock_holder_pid" >/dev/null 2>&1 || true
+        wait "$lock_holder_pid" >/dev/null 2>&1 || true
+    fi
+    rm -rf -- "$test_root"
+}
+trap cleanup EXIT
 
 fail() {
     printf 'transport-config-test: %s\n' "$*" >&2
@@ -295,6 +308,142 @@ grep -Fq 'post_update_verify="${HAPROXY_POST_UPDATE_VERIFY:-${script_dir}/verify
 grep -Fq 'HAPROXY_POST_UPDATE_VERIFY="${INSTALL_ROOT}/verify-transport.sh"' \
     "${line_dir}/gcp-update-bootstrap.sh" \
     || fail 'GCE updater does not bind the runtime verifier into the HAProxy transaction'
+
+# The HAProxy transaction has one root-private lock domain. Use a host guard as
+# a post-lock barrier to prove every mutation phase is rejected before it can
+# touch the config, transaction, package manager, or systemd.
+grep -Fq 'readonly MUTATION_LOCK_DEFAULT_PATH="/run/sub2api-gcp-tw-line/haproxy-mutation.lock"' \
+    "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'HAProxy mutation lock default is not a private runtime path'
+grep -Fq 'apt-get awk date dpkg-query flock grep haproxy' "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'HAProxy installer does not require flock before mutation'
+grep -Fq 'stage|activate|update|rollback) acquire_mutation_lock ;;' \
+    "${line_dir}/install-gcp-haproxy.sh" \
+    || fail 'one or more HAProxy mutation phases bypass the private lock'
+
+lock_fake_bin="${test_root}/haproxy-lock-bin"
+lock_dir="${test_root}/haproxy-locks"
+lock_file="${lock_dir}/haproxy-mutation.lock"
+lock_hostname_calls="${test_root}/haproxy-lock-hostname-calls.log"
+lock_holder_ready="${test_root}/haproxy-lock-holder-ready"
+lock_holder_release="${test_root}/haproxy-lock-holder-release"
+mkdir -p "$lock_fake_bin" "$lock_dir"
+chmod 700 "$lock_dir"
+for command_name in apt-cache apt-get dpkg-query haproxy systemctl; do
+    cat >"${lock_fake_bin}/${command_name}" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    chmod +x "${lock_fake_bin}/${command_name}"
+done
+cat >"${lock_fake_bin}/flock" <<'EOF'
+#!/usr/bin/env python3
+
+import fcntl
+import sys
+
+arguments = sys.argv[1:]
+nonblocking = False
+while arguments and arguments[0].startswith("-"):
+    option = arguments.pop(0)
+    if option == "-n":
+        nonblocking = True
+    elif option not in ("-x", "-e"):
+        sys.exit(64)
+
+if len(arguments) != 1:
+    sys.exit(64)
+
+descriptor = int(arguments[0])
+operation = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+try:
+    fcntl.flock(descriptor, operation)
+except BlockingIOError:
+    sys.exit(1)
+EOF
+cat >"${lock_fake_bin}/hostname" <<'EOF'
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+printf '%s\n' "$*" >>"$HAPROXY_LOCK_TEST_HOSTNAME_CALLS"
+if [[ "${HAPROXY_LOCK_TEST_HOLD:-0}" == 1 ]]; then
+    : >"$HAPROXY_LOCK_TEST_READY"
+    while [[ ! -e "$HAPROXY_LOCK_TEST_RELEASE" ]]; do
+        sleep 0.01
+    done
+fi
+# End the holder before any config, transaction, service, or package operation.
+printf '%s\n' 'not-the-gcp-taiwan-candidate'
+EOF
+chmod +x "${lock_fake_bin}/flock" "${lock_fake_bin}/hostname"
+
+wait_for_haproxy_lock_file() {
+    local path="$1" label="$2"
+
+    for _ in $(seq 1 200); do
+        [[ -e "$path" ]] && return
+        sleep 0.01
+    done
+    fail "${label} did not become ready"
+}
+
+run_haproxy_lock_phase() {
+    local requested_phase="$1" requested_lock="$2"
+
+    env \
+        PATH="${lock_fake_bin}:${PATH}" \
+        TMPDIR="$test_root" \
+        HAPROXY_MUTATION_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1 \
+        HAPROXY_MUTATION_LOCK_FILE_FOR_TESTS="$requested_lock" \
+        HAPROXY_LOCK_TEST_HOLD="${HAPROXY_LOCK_TEST_HOLD:-0}" \
+        HAPROXY_LOCK_TEST_READY="$lock_holder_ready" \
+        HAPROXY_LOCK_TEST_RELEASE="$lock_holder_release" \
+        HAPROXY_LOCK_TEST_HOSTNAME_CALLS="$lock_hostname_calls" \
+        /bin/bash "${line_dir}/install-gcp-haproxy.sh" "$requested_phase"
+}
+
+HAPROXY_LOCK_TEST_HOLD=1 run_haproxy_lock_phase stage "$lock_file" \
+    >"${test_root}/haproxy-lock-holder.out" 2>&1 &
+lock_holder_pid=$!
+wait_for_haproxy_lock_file "$lock_holder_ready" 'HAProxy mutation lock holder'
+for requested_phase in stage activate update rollback; do
+    output="${test_root}/haproxy-${requested_phase}-contended.out"
+    if HAPROXY_LOCK_TEST_HOLD=0 run_haproxy_lock_phase "$requested_phase" "$lock_file" >"$output" 2>&1; then
+        : >"$lock_holder_release"
+        wait "$lock_holder_pid" || true
+        fail "${requested_phase} bypassed an active HAProxy mutation lock"
+    fi
+    grep -Fq 'another GCP Taiwan HAProxy mutation is already running' "$output" \
+        || { sed -n '1,120p' "$output" >&2; fail "${requested_phase} did not fail at lock contention"; }
+done
+[[ "$(wc -l <"$lock_hostname_calls")" -eq 1 ]] \
+    || fail 'a contended HAProxy phase reached host/config/service work'
+
+: >"$lock_holder_release"
+if wait "$lock_holder_pid"; then
+    fail 'test lock holder unexpectedly reached a successful stage'
+fi
+lock_holder_pid=""
+
+# The holder's descriptor is released on exit: a new phase reaches the host
+# guard instead of reporting stale flock contention.
+if HAPROXY_LOCK_TEST_HOLD=0 run_haproxy_lock_phase stage "$lock_file" \
+    >"${test_root}/haproxy-lock-reentry.out" 2>&1; then
+    fail 'post-holder stage unexpectedly succeeded'
+fi
+grep -Fq "refusing host 'not-the-gcp-taiwan-candidate'" "${test_root}/haproxy-lock-reentry.out" \
+    || { sed -n '1,120p' "${test_root}/haproxy-lock-reentry.out" >&2; fail 'mutation lock remained held after owner exit'; }
+
+unsafe_lock_parent="${test_root}/haproxy-unsafe-lock-parent"
+mkdir -m 755 "$unsafe_lock_parent"
+if HAPROXY_LOCK_TEST_HOLD=0 run_haproxy_lock_phase stage "${unsafe_lock_parent}/lock" \
+    >"${test_root}/haproxy-unsafe-parent.out" 2>&1; then
+    fail 'permissive mutation-lock parent was accepted'
+fi
+grep -Fq 'mutation-lock parent must be owned privately with mode 0700' \
+    "${test_root}/haproxy-unsafe-parent.out" \
+    || { sed -n '1,120p' "${test_root}/haproxy-unsafe-parent.out" >&2; fail 'unsafe lock parent did not fail closed'; }
 
 grep -Fq 'readonly EXPECTED_HOSTNAME="sub2-tw-line-candidate"' \
     "${line_dir}/gcp-startup-bootstrap.sh" \

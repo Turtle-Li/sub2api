@@ -12,6 +12,7 @@ TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sub2api-node-state-docker.XXXXXX")"
 TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 CONTAINER_NAME="sub2api-node-state-bind-test-$$"
 TEST_IMAGE="alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+REQUIRE_DOCKER="${SUB2API_NODE_STATE_DOCKER_BIND_REQUIRE:-0}"
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -24,11 +25,25 @@ fail() {
   exit 1
 }
 
+case "$REQUIRE_DOCKER" in
+  0|1) ;;
+  *) fail 'SUB2API_NODE_STATE_DOCKER_BIND_REQUIRE must be 0 or 1' ;;
+esac
+if [ "${CI:-}" = true ] || [ "${GITHUB_ACTIONS:-}" = true ]; then
+  REQUIRE_DOCKER=1
+fi
+
 if ! docker version >/dev/null 2>&1; then
-  printf 'SKIP: Docker is not available for the bind-mount integration test.\n'
+  if [ "$REQUIRE_DOCKER" = 1 ]; then
+    fail 'Docker is required for the bind-mount integration test'
+  fi
+  printf 'SKIP: Docker is not available; set SUB2API_NODE_STATE_DOCKER_BIND_REQUIRE=1 to require it.\n'
   exit 0
 fi
 if ! docker image inspect "$TEST_IMAGE" >/dev/null 2>&1; then
+  if [ "$REQUIRE_DOCKER" = 1 ]; then
+    fail "required pinned Alpine image is not local: $TEST_IMAGE"
+  fi
   printf 'SKIP: pinned Alpine image is not local; this test never pulls images.\n'
   exit 0
 fi

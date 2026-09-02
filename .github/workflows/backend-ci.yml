@@ -61,6 +61,21 @@ jobs:
             deploy/gcp-taiwan-line/verify-transport.sh \
             deploy/gcp-taiwan-line/tests/transport-config-test.sh
 
+  docker-bind-mount:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify Docker and preload the pinned bind-mount image
+        run: |
+          test_image='alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc'
+          docker version --format '{{.Server.Version}}'
+          docker pull "$test_image"
+          docker image inspect "$test_image" --format '{{.Id}}'
+      - name: Verify node-state bind-mount updates in a real container
+        env:
+          SUB2API_NODE_STATE_DOCKER_BIND_REQUIRE: '1'
+        run: /bin/bash deploy/tests/node-state-docker-bind-test.sh
+
   test:
     runs-on: ubuntu-latest
     steps:

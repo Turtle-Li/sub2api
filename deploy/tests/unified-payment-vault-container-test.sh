@@ -4,8 +4,11 @@ set -Eeuo pipefail
 
 TEST_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT="$(cd "$TEST_DIR/.." && pwd)/sub2api-unified-payment-vault-container.sh"
-TEST_ROOT="$(mktemp -d /tmp/sub2api-payment-vault-container.XXXXXX)"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sub2api-payment-vault-container.XXXXXX")"
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="$TEST_ROOT/bin"
+LOCK_DIR="$TEST_ROOT/locks"
+LOCK_FILE="$LOCK_DIR/maintenance.lock"
 STATE="$TEST_ROOT/container-created"
 HEALTH="$TEST_ROOT/health"
 CALLS="$TEST_ROOT/calls"
@@ -17,16 +20,34 @@ fail() {
   exit 1
 }
 
-mkdir -p "$FAKE_BIN"
+mkdir -p "$FAKE_BIN" "$LOCK_DIR"
+chmod 700 "$LOCK_DIR"
 printf 'starting\n' >"$HEALTH"
 
-cat >"$FAKE_BIN/id" <<'EOF'
-#!/usr/bin/env bash
-[ "$1" = -u ] && printf '0\n'
-EOF
 cat >"$FAKE_BIN/flock" <<'EOF'
-#!/usr/bin/env bash
-[ "$1" = -n ] && [ "$2" = 9 ]
+#!/usr/bin/env python3
+
+import fcntl
+import sys
+
+arguments = sys.argv[1:]
+nonblocking = False
+while arguments and arguments[0].startswith("-"):
+    option = arguments.pop(0)
+    if option == "-n":
+        nonblocking = True
+    elif option not in ("-x", "-e"):
+        sys.exit(64)
+
+if len(arguments) != 1:
+    sys.exit(64)
+
+descriptor = int(arguments[0])
+operation = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+try:
+    fcntl.flock(descriptor, operation)
+except BlockingIOError:
+    sys.exit(1)
 EOF
 cat >"$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -69,23 +90,26 @@ case "$1:$2" in
   *) exit 1 ;;
 esac
 EOF
-chmod +x "$FAKE_BIN/id" "$FAKE_BIN/flock" "$FAKE_BIN/docker"
+chmod +x "$FAKE_BIN/flock" "$FAKE_BIN/docker"
 
 image="sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 PATH="$FAKE_BIN:$PATH" MOCK_STATE="$STATE" MOCK_HEALTH="$HEALTH" MOCK_CALLS="$CALLS" MOCK_IMAGE="$image" \
-  SUB2API_MAINTENANCE_LOCK_FILE="$TEST_ROOT/maintenance.lock" bash "$SCRIPT" prepare "$image" >"$OUTPUT"
+  SUB2API_PAYMENT_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS=1 \
+  SUB2API_MAINTENANCE_LOCK_FILE="$LOCK_FILE" bash "$SCRIPT" prepare "$image" >"$OUTPUT"
 grep -qx 'SUB2API_PAYMENT_VAULT_CONTAINER_WAITING_FOR_INJECTION' "$OUTPUT" || fail 'prepare classification drifted'
 grep -q -- '--network none --read-only --init --restart unless-stopped --cap-drop ALL' "$CALLS" || fail 'container hardening flags missing'
 grep -q -- '--allowed-ref vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64' "$CALLS" || fail 'exact request key reference missing'
 
 printf 'healthy\n' >"$HEALTH"
 PATH="$FAKE_BIN:$PATH" MOCK_STATE="$STATE" MOCK_HEALTH="$HEALTH" MOCK_CALLS="$CALLS" MOCK_IMAGE="$image" \
-  SUB2API_MAINTENANCE_LOCK_FILE="$TEST_ROOT/maintenance.lock" bash "$SCRIPT" ready "$image" >"$OUTPUT"
+  SUB2API_PAYMENT_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS=1 \
+  SUB2API_MAINTENANCE_LOCK_FILE="$LOCK_FILE" bash "$SCRIPT" ready "$image" >"$OUTPUT"
 grep -qx 'SUB2API_PAYMENT_VAULT_CONTAINER_READY' "$OUTPUT" || fail 'ready classification drifted'
 
 before="$(wc -l <"$CALLS")"
 if PATH="$FAKE_BIN:$PATH" MOCK_STATE="$STATE" MOCK_HEALTH="$HEALTH" MOCK_CALLS="$CALLS" MOCK_IMAGE="$image" \
-  SUB2API_MAINTENANCE_LOCK_FILE="$TEST_ROOT/maintenance.lock" bash "$SCRIPT" prepare 'sub2api:latest' >"$OUTPUT" 2>&1; then
+  SUB2API_PAYMENT_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS=1 \
+  SUB2API_MAINTENANCE_LOCK_FILE="$LOCK_FILE" bash "$SCRIPT" prepare 'sub2api:latest' >"$OUTPUT" 2>&1; then
   fail 'unpinned image was accepted'
 fi
 [ "$before" = "$(wc -l <"$CALLS")" ] || fail 'rejected image reached Docker'

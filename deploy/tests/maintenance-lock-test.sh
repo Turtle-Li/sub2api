@@ -10,6 +10,8 @@ set -Eeuo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(cd "${TEST_DIR}/.." && pwd)"
 HELPER="${DEPLOY_DIR}/sub2api-maintenance-lock.sh"
+PAYMENT_VAULT_SCRIPT="${DEPLOY_DIR}/sub2api-unified-payment-vault-container.sh"
+INSTALLER_SCRIPT="${DEPLOY_DIR}/install-autodeploy.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sub2api-maintenance-lock-test.XXXXXX")"
 TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="${TEST_ROOT}/bin"
@@ -83,10 +85,21 @@ for consumer in \
   "${DEPLOY_DIR}/sub2api-server-release.sh" \
   "${DEPLOY_DIR}/sub2api-node-state.sh" \
   "${DEPLOY_DIR}/sub2api-cert-receiver.sh" \
+  "$PAYMENT_VAULT_SCRIPT" \
   "${DEPLOY_DIR}/gcp-taiwan-line/azure-caddy-listeners.sh"; do
   grep -Fq -- 'sub2api_maintenance_lock_open' "$consumer" \
     || fail "shared maintenance lock helper is not used by ${consumer}"
 done
+grep -Fq -- 'sub2api-maintenance-lock.sh' "$PAYMENT_VAULT_SCRIPT" \
+  || fail 'payment Vault container does not source the shared maintenance lock helper'
+if grep -Fq -- '/run/lock/sub2api-maintenance.lock' "$PAYMENT_VAULT_SCRIPT"; then
+  fail 'payment Vault container retained the retired public maintenance lock path'
+fi
+# The installer owns both fences only during the documented legacy migration;
+# individual runtime consumers must use the canonical private helper above.
+# shellcheck disable=SC2016 # The search text intentionally names shell variables literally.
+grep -Fq -- '"$MAINTENANCE_LOCK_FILE" "$legacy_fence_path"' "$INSTALLER_SCRIPT" \
+  || fail 'legacy maintenance-lock migration no longer retains both fences'
 
 PRIVATE_DIR="${TEST_ROOT}/private"
 mkdir -m 700 "$PRIVATE_DIR"
@@ -228,5 +241,75 @@ fi
 : >"$RELEASE_FILE"
 wait "$HOLDER_PID"
 [ "$busy_status" -eq 1 ] || fail "legitimate busy lock returned ${busy_status}, not flock contention"
+HOLDER_PID=""
+
+# The payment Vault container must contend with the exact same secure inode as
+# release, runtime, certificate, and Caddy maintenance consumers. Its image
+# inspection remains read-only, but it must not inspect/create the shared
+# container or volume once the shared lock is held.
+PAYMENT_DOCKER_CALLS="${TEST_ROOT}/payment-docker-calls.log"
+PAYMENT_OUTPUT="${TEST_ROOT}/payment-lock-contention.out"
+PAYMENT_IMAGE='sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+cat >"${FAKE_BIN}/docker" <<'EOF'
+#!/usr/bin/env bash
+
+set -eu
+
+printf '%s\n' "$*" >>"$PAYMENT_DOCKER_CALLS"
+case "$1:$2" in
+  image:inspect)
+    case "$5" in
+      *'.Os}}/{{.Architecture}}'*) printf 'linux/amd64\n' ;;
+      *'image.revision'*) printf '%s\n' "${3#sub2api:prebuilt-}" ;;
+      *'image.source'*) printf 'https://github.com/Turtle-Li/sub2api\n' ;;
+      *'image.version'*) printf '0.1.186\n' ;;
+      *) exit 97 ;;
+    esac
+    ;;
+  *) exit 97 ;;
+esac
+EOF
+chmod +x "${FAKE_BIN}/docker"
+
+PAYMENT_READY_FILE="${TEST_ROOT}/payment-holder-ready"
+RELEASE_FILE="${TEST_ROOT}/payment-holder-release"
+python3 - "$SAFE_LOCK" "$PAYMENT_READY_FILE" "$RELEASE_FILE" <<'PY' &
+import fcntl
+from pathlib import Path
+import sys
+import time
+
+lock_path, ready_path, release_path = sys.argv[1:]
+with open(lock_path, "a", encoding="utf-8") as handle:
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    Path(ready_path).touch()
+    while not Path(release_path).exists():
+        time.sleep(0.01)
+PY
+HOLDER_PID=$!
+for _ in $(seq 1 100); do
+  [ -e "$PAYMENT_READY_FILE" ] && break
+  sleep 0.05
+done
+[ -e "$PAYMENT_READY_FILE" ] \
+  || { kill "$HOLDER_PID" 2>/dev/null || true; fail 'payment lock holder did not become ready'; }
+if env \
+  PATH="${FAKE_BIN}:${PATH}" \
+  REAL_STAT="$REAL_STAT" \
+  PAYMENT_DOCKER_CALLS="$PAYMENT_DOCKER_CALLS" \
+  SUB2API_PAYMENT_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS=1 \
+  SUB2API_MAINTENANCE_LOCK_FILE="$SAFE_LOCK" \
+  /bin/bash "$PAYMENT_VAULT_SCRIPT" prepare "$PAYMENT_IMAGE" >"$PAYMENT_OUTPUT" 2>&1; then
+  : >"$RELEASE_FILE"
+  wait "$HOLDER_PID"
+  fail 'payment Vault container bypassed a held shared maintenance lock'
+fi
+: >"$RELEASE_FILE"
+wait "$HOLDER_PID"
+HOLDER_PID=""
+grep -Fxq 'SUB2API_PAYMENT_VAULT_CONTAINER_REJECTED' "$PAYMENT_OUTPUT" \
+  || { sed -n '1,120p' "$PAYMENT_OUTPUT" >&2; fail 'payment lock contention did not fail closed'; }
+[ "$(wc -l <"$PAYMENT_DOCKER_CALLS")" -eq 4 ] \
+  || { cat "$PAYMENT_DOCKER_CALLS" >&2; fail 'payment contention reached a container or volume mutation'; }
 
 printf 'Maintenance lock safety tests passed.\n'
