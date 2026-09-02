@@ -265,6 +265,42 @@ func TestUpdateRejectsPersistedOpenAIOAuthParentReclassifiedAsShadow(t *testing.
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPersistedOpenAIFixedEgressRelationRejectsPlatformOrTypePivot(t *testing.T) {
+	tests := []struct {
+		name              string
+		persistedType     string
+		candidatePlatform string
+		candidateType     string
+	}{
+		{name: "oauth-to-api-key", persistedType: service.AccountTypeOAuth, candidatePlatform: service.PlatformOpenAI, candidateType: service.AccountTypeAPIKey},
+		{name: "setup-token-to-api-key", persistedType: service.AccountTypeSetupToken, candidatePlatform: service.PlatformOpenAI, candidateType: service.AccountTypeAPIKey},
+		{name: "oauth-to-setup-token", persistedType: service.AccountTypeOAuth, candidatePlatform: service.PlatformOpenAI, candidateType: service.AccountTypeSetupToken},
+		{name: "openai-to-anthropic", persistedType: service.AccountTypeOAuth, candidatePlatform: service.PlatformAnthropic, candidateType: service.AccountTypeOAuth},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, mock := newFixedEgressGuardSQLClient(t)
+			proxyID := int64(7)
+			mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT platform, type, parent_account_id, quota_dimension, proxy_id") + `.*` + regexp.QuoteMeta("FOR NO KEY UPDATE")).
+				WithArgs(int64(41)).
+				WillReturnRows(sqlmock.NewRows([]string{"platform", "type", "parent_account_id", "quota_dimension", "proxy_id"}).
+					AddRow(service.PlatformOpenAI, tc.persistedType, nil, service.QuotaDimensionGlobal, proxyID))
+
+			err := enforcePersistedOpenAIFixedEgressRelation(context.Background(), client, &service.Account{
+				ID:             41,
+				Platform:       tc.candidatePlatform,
+				Type:           tc.candidateType,
+				QuotaDimension: service.QuotaDimensionGlobal,
+				ProxyID:        &proxyID,
+			})
+
+			require.ErrorIs(t, err, service.ErrFixedEgressCASRequired)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 func TestUpdateRejectsPersistedOpenAISetupTokenShadowReclassifiedAsParent(t *testing.T) {
 	client, mock := newFixedEgressGuardSQLClient(t)
 	mock.ExpectBegin()

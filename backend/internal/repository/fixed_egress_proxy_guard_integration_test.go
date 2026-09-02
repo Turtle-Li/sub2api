@@ -563,6 +563,110 @@ func TestFixedEgressProxyStatusChangeEvictsParentAndShadowSchedulerCache(t *test
 	require.Equal(t, 1, outboxCount)
 }
 
+func TestFixedEgressGenericUpdateRejectsSequentialTypePivot(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeOAuth, service.AccountTypeSetupToken} {
+		t.Run(accountType, func(t *testing.T) {
+			ctx := context.Background()
+			suffix := time.Now().UnixNano()
+			firstProxy := fixedEgressRaceProxy(t, fmt.Sprintf("fixed-egress-type-pivot-first-%s-%d", accountType, suffix))
+			secondProxy := fixedEgressRaceProxy(t, fmt.Sprintf("fixed-egress-type-pivot-second-%s-%d", accountType, suffix))
+			parent := mustCreateAccount(t, integrationEntClient, &service.Account{
+				Name:        fmt.Sprintf("fixed-egress-type-pivot-parent-%s-%d", accountType, suffix),
+				Platform:    service.PlatformOpenAI,
+				Type:        accountType,
+				Status:      service.StatusActive,
+				Schedulable: true,
+				ProxyID:     &firstProxy.ID,
+			})
+			t.Cleanup(func() {
+				_, _ = integrationDB.ExecContext(ctx, "DELETE FROM scheduler_outbox WHERE account_id = $1", parent.ID)
+				_, _ = integrationDB.ExecContext(ctx, "DELETE FROM scheduler_outbox WHERE payload @> jsonb_build_object('account_ids', jsonb_build_array($1::bigint))", parent.ID)
+				_ = integrationEntClient.Account.DeleteOneID(parent.ID).Exec(ctx)
+				_ = integrationEntClient.Proxy.DeleteOneID(secondProxy.ID).Exec(ctx)
+				_ = integrationEntClient.Proxy.DeleteOneID(firstProxy.ID).Exec(ctx)
+			})
+
+			repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, nil)
+			pivot := *parent
+			pivot.Type = service.AccountTypeAPIKey
+			require.ErrorIs(t, repo.Update(ctx, &pivot), service.ErrFixedEgressCASRequired)
+
+			var persistedType string
+			var persistedProxyID sql.NullInt64
+			require.NoError(t, integrationDB.QueryRowContext(ctx,
+				"SELECT type, proxy_id FROM accounts WHERE id = $1", parent.ID).
+				Scan(&persistedType, &persistedProxyID))
+			require.Equal(t, accountType, persistedType)
+			require.True(t, persistedProxyID.Valid)
+			require.Equal(t, firstProxy.ID, persistedProxyID.Int64)
+
+			restoredWithNewProxy := *parent
+			restoredWithNewProxy.ProxyID = &secondProxy.ID
+			require.ErrorIs(t, repo.Update(ctx, &restoredWithNewProxy), service.ErrFixedEgressCASRequired)
+			require.NoError(t, integrationDB.QueryRowContext(ctx,
+				"SELECT type, proxy_id FROM accounts WHERE id = $1", parent.ID).
+				Scan(&persistedType, &persistedProxyID))
+			require.Equal(t, accountType, persistedType)
+			require.True(t, persistedProxyID.Valid)
+			require.Equal(t, firstProxy.ID, persistedProxyID.Int64)
+		})
+	}
+}
+
+func TestFixedEgressGenericUpdateRejectsParentWithShadowTypePivot(t *testing.T) {
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	proxy := fixedEgressRaceProxy(t, fmt.Sprintf("fixed-egress-shadow-type-pivot-%d", suffix))
+	parent := mustCreateAccount(t, integrationEntClient, &service.Account{
+		Name:        fmt.Sprintf("fixed-egress-shadow-type-pivot-parent-%d", suffix),
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		ProxyID:     &proxy.ID,
+	})
+	shadow := mustCreateAccount(t, integrationEntClient, &service.Account{
+		Name:            fmt.Sprintf("fixed-egress-shadow-type-pivot-shadow-%d", suffix),
+		Platform:        service.PlatformOpenAI,
+		Type:            service.AccountTypeOAuth,
+		Status:          service.StatusActive,
+		Schedulable:     true,
+		ProxyID:         &proxy.ID,
+		ParentAccountID: &parent.ID,
+		QuotaDimension:  service.QuotaDimensionSpark,
+	})
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(ctx, "DELETE FROM scheduler_outbox WHERE account_id IN ($1, $2)", parent.ID, shadow.ID)
+		_, _ = integrationDB.ExecContext(ctx, "DELETE FROM scheduler_outbox WHERE payload @> jsonb_build_object('account_ids', jsonb_build_array($1::bigint))", parent.ID)
+		_, _ = integrationDB.ExecContext(ctx, "DELETE FROM scheduler_outbox WHERE payload @> jsonb_build_object('account_ids', jsonb_build_array($1::bigint))", shadow.ID)
+		_ = integrationEntClient.Account.DeleteOneID(shadow.ID).Exec(ctx)
+		_ = integrationEntClient.Account.DeleteOneID(parent.ID).Exec(ctx)
+		_ = integrationEntClient.Proxy.DeleteOneID(proxy.ID).Exec(ctx)
+	})
+
+	repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, nil)
+	pivot := *parent
+	pivot.Type = service.AccountTypeAPIKey
+	require.ErrorIs(t, repo.Update(ctx, &pivot), service.ErrFixedEgressCASRequired)
+
+	var parentType, shadowType string
+	var parentProxyID, shadowProxyID, shadowParentID sql.NullInt64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		"SELECT type, proxy_id FROM accounts WHERE id = $1", parent.ID).
+		Scan(&parentType, &parentProxyID))
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		"SELECT type, proxy_id, parent_account_id FROM accounts WHERE id = $1", shadow.ID).
+		Scan(&shadowType, &shadowProxyID, &shadowParentID))
+	require.Equal(t, service.AccountTypeOAuth, parentType)
+	require.Equal(t, service.AccountTypeOAuth, shadowType)
+	require.True(t, parentProxyID.Valid)
+	require.True(t, shadowProxyID.Valid)
+	require.True(t, shadowParentID.Valid)
+	require.Equal(t, proxy.ID, parentProxyID.Int64)
+	require.Equal(t, proxy.ID, shadowProxyID.Int64)
+	require.Equal(t, parent.ID, shadowParentID.Int64)
+}
+
 func TestFixedEgressProxyExpiryOwnTransactionEvictsParentAndShadowSchedulerCache(t *testing.T) {
 	ctx := context.Background()
 	past := time.Now().Add(-time.Hour)

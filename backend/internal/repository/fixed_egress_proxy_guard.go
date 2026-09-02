@@ -219,6 +219,14 @@ func enforcePersistedOpenAIFixedEgressRelation(ctx context.Context, client *dben
 	if !currentProtected {
 		return nil
 	}
+	// A protected account must not leave (or switch within) the protected
+	// identity class through generic Update. Otherwise a caller could pivot it
+	// to API-key, then restore OAuth/setup-token with a different proxy after
+	// the persisted-source guard no longer applies. Identity conversion needs a
+	// dedicated operation; fixed-egress proxy changes need the CAS operation.
+	if platform != account.Platform || accountType != account.Type {
+		return service.ErrFixedEgressCASRequired
+	}
 
 	var currentParentID, currentProxyID *int64
 	if parentID.Valid {
