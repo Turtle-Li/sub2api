@@ -13,6 +13,14 @@ snapshot, not a reusable Caddyfile template.
 | Adapted startup contract fingerprint | `8a9e08798e183dc4566fb7a72bd357ca4ad54a13d84d7fb5d20fd3336d75dd4a` |
 | Live admin-API contract fingerprint | `8a9e08798e183dc4566fb7a72bd357ca4ad54a13d84d7fb5d20fd3336d75dd4a` |
 
+For Caddy v2.11.4, Admin `/config/` returns the raw active JSON configuration,
+not the provisioned in-memory HTTP app. Automatic HTTPS adds its `:80`
+redirect server only to that provisioned app, so the adapted and Admin raw
+contracts correctly contain only the explicit `:443` server. Actual redirect
+behavior is covered separately by the live HTTP `308` canary through both
+Azure and GCP; a user-supplied raw `:80` server remains outside this frozen
+contract and is rejected by the JSON verifier.
+
 The versioned JSON verifier requires exactly one `:443` server with h1/h2,
 the exact GCP `/32` PROXY wrapper before TLS, `fallback_policy skip`, exactly
 one terminal production API route, and one supported Sub2API generation. Any
@@ -23,6 +31,12 @@ production reverse proxies are required. Each must replace
 `X-Real-IP` plus `CF-Connecting-IP`; standalone header handlers are rejected.
 Caddy v2.11.4 already protects its default XFF handling, while this explicit
 policy also removes the two legacy headers that the application prioritizes.
+The application's runtime-configurable
+`security.forwarded_client_ip_headers` list is outside this Caddy snapshot and
+is evaluated before those built-ins. The authenticated pre-cutover gate must
+prove that list is empty; if an operator intentionally configures custom names,
+every name must be scrubbed or overwritten at Caddy and the renderer, JSON
+fingerprint, live evidence, and canaries must be frozen again.
 The reviewed semantics are documented in Caddy's
 [reverse_proxy header defaults](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults)
 and [global server options](https://caddyserver.com/docs/caddyfile/options#servers).

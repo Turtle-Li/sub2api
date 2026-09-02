@@ -2,14 +2,14 @@
 
 Task: `SUB2-TW-CUTOVER-20260902`
 
-Checkpoint: 2026-09-02 07:05 Asia/Shanghai
+Checkpoint: 2026-09-02 07:55 Asia/Shanghai
 
 Verdict: **transport candidate PASS; production DNS cutover BLOCKED**. The
 public A record remains `206.119.172.211` and the old origin remains the sole
 active background owner.
 
 Frozen implementation revision:
-`9585e61bcf5a958c1b6aa609efacb4d6bd2c9908`.
+`89e202866dce5ef52889ab332a51617c70cb7780`.
 
 ## Frozen topology
 
@@ -32,11 +32,11 @@ Frozen implementation revision:
 
 | Gate | Result |
 | --- | --- |
-| Exact macOS CI shell job | PASS: lifecycle, release, lock, runtime guard, blue-green, certificate, fixed-egress, node-state, Compose, Caddy, transport, and ShellCheck gates |
+| Exact macOS CI shell job | `BACKEND_CI_SHELL_JOB_P3_PASS`: lifecycle, release, lock, runtime guard, blue-green, certificate, fixed-egress, node-state, Compose, Caddy, transport, and ShellCheck gates |
 | GCP resource identity | `RUNNING`, retained Premium static IP, exact TCP `80/443` rule/tag, no service account or retained metadata |
 | HAProxy local contract | `GCP_TRANSPORT_VERIFY_PASS`; unprivileged `haproxy` worker and `/var/lib/haproxy` chroot |
 | HAProxy rollback injection | Forced post-update verifier failure emitted `GCP_UPDATE_FAIL`, restored/reloaded the exact pre-update config, and kept the public canary healthy |
-| HAProxy final update | `GCP_HAPROXY_UPDATED ... config_sha=e6891a35...` then `GCP_UPDATE_PASS` |
+| HAProxy final update | Review-hardening updater ran after a clean stop/start: `GCP_TRANSPORT_VERIFY_PASS`, `GCP_HAPROXY_UPDATED already=true ... config_sha=e6891a35...`, then `GCP_UPDATE_PASS`; all one-shot metadata was removed |
 | Public GCP health/models | HTTP 200 / 401 |
 | HTTP redirect through GCP | HTTP 308 to the HTTPS hostname |
 | TLS identity through GCP | Direct-Azure/GCP SHA-256 certificate fingerprint equality |
@@ -46,7 +46,8 @@ Frozen implementation revision:
 | Client-IP header boundary | Both production reverse proxies replace XFF from the PROXY-restored peer and delete `X-Real-IP`/`CF-Connecting-IP`; forged-header and route-shadow tests pass |
 | Azure effective Caddy runtime | Host/container device:inode `66305:265615`; adapted startup and live admin fingerprints both `8a9e08798e183dc4566fb7a72bd357ca4ad54a13d84d7fb5d20fd3336d75dd4a` |
 | Azure transactions | Taiwan listener transaction retained for exact rollback; customer-Host and blue-green transactions absent; all other Caddy mutators are fenced |
-| Durable blue-green transaction | Regression tests cover normal rollback, retained SIGKILL recovery, clean retry, and mutation fencing |
+| Azure control-script deployment | Root-owned scripts match the frozen hashes for blue-green release, drain monitor, customer-Host controller, and listener controller; no application or Caddy restart was required |
+| Durable blue-green transaction | Regression tests cover normal rollback, retained SIGKILL recovery, clean retry, mutation fencing, and persistent/final read-only remount failure |
 | Old-origin legacy hotfix | Exact source `421082e4...` transformed to `2c53593a...`; no-op `activate` preserved state inodes |
 | Old-origin bind recovery | Same image `0.1.185` switched green→blue through the audited release; active traffic/background host and container inodes match, inactive stale generation drained and stopped |
 | Old-origin live result | Health 200, models 401, active container healthy, traffic accepting, background active, release window app/Caddy 5xx counts 0 |
@@ -76,7 +77,16 @@ checks rather than functional streaming evidence.
   recovers a retained transaction on the next run.
 - Transport probes could inherit a shell proxy and accidentally bypass their
   pinned destination. Host curls now use `--noproxy '*'`, container probes
-  disable proxy use, and GCE metadata calls bypass proxies explicitly.
+  disable proxy use, and GCE metadata calls bypass proxies explicitly. The
+  final review also found and closed the same gap in the customer-Host Admin
+  check and the drain monitor's stop-decision path.
+- A manual HAProxy `update` could omit its runtime verifier. The installer now
+  defaults to its root-owned sibling verifier, while the metadata updater
+  continues to pass that verifier explicitly inside the rollback transaction.
+- Blue-green cleanup could finish a failed restore without one final attempt
+  to return the Caddy startup bind to read-only. Cleanup now performs that
+  safety sweep and retains the durable transaction if the remount remains
+  unsuccessful.
 - The old origin's legacy node-state helper used rename for existing Docker
   single-file bind mounts. A release reproduced the detached-inode failure.
   The exact-digest compatibility hotfix changed existing-file writes to
@@ -94,15 +104,19 @@ checks rather than functional streaming evidence.
    Commit the retained listener transaction, then recreate the exact retained
    image through the audited blue-green release. Azure remains background
    standby until this is deliberately completed.
-3. Run authenticated basic generation, Responses continuation/streaming, and
-   image canaries through the exact GCP address without exposing credentials.
-   No task-scoped Vault grant was available, so no credential was copied from
-   a database, browser, or host file.
+3. Through the authenticated admin API, prove the runtime custom forwarded-IP
+   header list is empty, then run basic generation, Responses
+   continuation/streaming, and image canaries through the exact GCP address
+   without exposing credentials. No task-scoped Vault grant was available, so
+   no credential was copied from a database, browser, or host file.
 4. Confirm Cloudflare control-plane proxy status and obtain action-time owner
    confirmation before changing the A record. The retired POC token remains
    out of scope.
 5. Independent final review and the requested Claude final review must accept
-   the same frozen revision and checksum manifest.
+   the same frozen revision and checksum manifest. The earlier claim that
+   automatic HTTPS should add a raw `/config/` `:80` server was retracted after
+   source-level and live-runtime verification; HTTP redirect behavior remains
+   covered by the separate canary.
 
 Until those blockers close, the safe state is: GCP and Azure transport stay
 available for isolated canaries, the Azure listener transaction remains

@@ -90,7 +90,9 @@ recovery transaction before changing the config, validates the candidate,
 uses `systemctl reload`, and runs the post-update runtime verifier inside the
 same rollback transaction. A reload or verifier failure restores/reloads the
 immutable pre-update config; a controlled live verifier failure proved that
-path before the final candidate was installed. The frozen HAProxy config
+path before the final candidate was installed. A direct manual `update` also
+defaults to the root-owned sibling verifier, so omitting an environment
+override cannot silently skip the runtime canary. The frozen HAProxy config
 retains Debian's `haproxy` user/group and chroot; `verify-transport.sh gcp`
 proves the live worker actually dropped privileges and entered
 `/var/lib/haproxy`.
@@ -126,7 +128,8 @@ The blue-green Caddy switch also owns a durable transaction file before its
 first in-place mutation. A normal error restores the exact previous host,
 container-startup, and live Caddy views. A SIGKILL leaves the transaction for
 conservative recovery on the next run; no other Caddy mutator may proceed
-while it exists.
+while it exists. Cleanup makes a final read-only remount attempt even when the
+restore path itself fails during its last container-bind remount.
 
 ## Qualification evidence
 
@@ -168,8 +171,11 @@ DNS remains blocked until all of these pass on one frozen snapshot:
    moves, make Azure the sole owner and fence the old origin to
    `traffic=accepting ... background=standby`. Verify host and active-container
    views on both machines at every ownership transition.
-3. Pass authenticated basic generation, Responses streaming/continuation, and
-   image behavior through the exact GCP address without printing credentials.
+3. Through the authenticated admin API, prove
+   `security.forwarded_client_ip_headers` is empty, then pass basic generation,
+   Responses streaming/continuation, and image behavior through the exact GCP
+   address without printing credentials. A non-empty custom-header list needs
+   a separately frozen Caddy scrub policy before cutover.
 4. Pass independent QA, repository review, and the requested read-only Claude
    review on the same file hashes and evidence snapshot.
 5. Record the complete Cloudflare record set and proxy status. The current

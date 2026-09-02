@@ -121,6 +121,21 @@ release or other planned maintenance owns the runtime at that moment.
 The drain monitor also takes this lock around its final Caddy revalidation and
 `docker stop`, so it cannot stop an old slot while the guard is promoting it.
 
+A retained `.sub2api-blue-green-caddy-transaction.env` is intentionally not a
+timer no-op: the runtime guard fails visibly on every scheduled run and makes
+no lifecycle change until the blue-green helper recovers the transaction. Run
+that helper once with the same root-owned release environment; a successful
+recovery restores the host, container-startup, and live Caddy views, clears the
+transaction, and exits non-zero to require a clean coordinator rerun. Never
+delete the transaction file by hand or suppress the repeated service failure.
+
+The certificate receiver and drain monitor are intentionally not Caddyfile
+transaction writers. The receiver validates and reloads a rendered stream
+without modifying the bound startup file; the drain monitor only revalidates
+the selected generation and stops an inactive container under the maintenance
+lock. Their lack of the three Caddy transaction fences is therefore an audited
+exemption, not an alternate mutation path.
+
 Use the guard for emergency recovery instead of guessing a Compose service or
 container color:
 
