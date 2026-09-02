@@ -402,10 +402,11 @@ func validVaultPath(path string) bool {
 			return false
 		}
 		for _, character := range segment {
-			if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
-				character >= '0' && character <= '9' || strings.ContainsRune("-._~", character)) {
-				return false
+			if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+				character >= '0' && character <= '9' || strings.ContainsRune("-._~", character) {
+				continue
 			}
+			return false
 		}
 	}
 	return true
@@ -537,7 +538,7 @@ func loadOverUnix(ctx context.Context, socket string, ref reference, secret []by
 		}
 		return errAgentUnavailable
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1024))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return errAgentUnavailable
@@ -557,7 +558,7 @@ func checkReady(ctx context.Context, publicSocket string) error {
 	if err != nil || response == nil {
 		return errAgentUnavailable
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1024))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return errAgentUnavailable

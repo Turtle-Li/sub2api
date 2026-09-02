@@ -65,7 +65,6 @@ func loadVaultEd25519PrivateKey(ctx context.Context, socketPath, rawReference st
 		return nil, ErrInvalidConfiguration
 	}
 	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
-	encoded = ""
 	if err != nil || len(decoded) != ed25519.PrivateKeySize {
 		clear(decoded)
 		return nil, ErrInvalidConfiguration

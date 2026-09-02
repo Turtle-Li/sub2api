@@ -222,7 +222,7 @@ func TestPrivateSocketPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listenPrivateUnix: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	detail, err := os.Stat(socket)
 	if err != nil {
 		t.Fatalf("stat socket: %v", err)

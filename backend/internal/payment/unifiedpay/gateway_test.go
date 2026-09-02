@@ -41,7 +41,7 @@ func TestCanonicalPayloadSignatureVector(t *testing.T) {
 	require.NoError(t, err)
 	bodyHash := sha256.Sum256(body)
 	payload := CanonicalPayload(http.MethodPost, AudienceSandbox, "/v1/payment-orders?source=backend", hex.EncodeToString(bodyHash[:]), testAppID, testRequestKeyID, "1788120000", "nonce.sdk.vector.0001", "idem.sdk.request.0001")
-	require.True(t, ed25519.Verify(privateKey.Public().(ed25519.PublicKey), payload, mustBase64(t, request.Header.Get(HeaderSignature))))
+	require.True(t, ed25519.Verify(testPublicKey(t, privateKey), payload, mustBase64(t, request.Header.Get(HeaderSignature))))
 }
 
 func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
@@ -52,7 +52,7 @@ func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 		body, err := io.ReadAll(request.Body)
 		require.NoError(t, err)
 		require.Equal(t, "/v1/payment-orders", request.RequestURI)
-		verifySignedRequest(t, request, body, privateKey.Public().(ed25519.PublicKey))
+		verifySignedRequest(t, request, body, testPublicKey(t, privateKey))
 		var input createPaymentOrderRequest
 		require.NoError(t, json.Unmarshal(body, &input))
 		require.Equal(t, "sub2:create:"+input.ProductOrderNo, request.Header.Get(HeaderIdempotencyKey))
@@ -95,7 +95,7 @@ func TestGatewayDoesNotFulfillManualReviewOrderFromActiveQuery(t *testing.T) {
 	transactionID := "alipay_trade_001"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		require.Equal(t, "/v1/payment-orders/"+testPaymentOrderID, request.RequestURI)
-		verifySignedRequest(t, request, nil, privateKey.Public().(ed25519.PublicKey))
+		verifySignedRequest(t, request, nil, testPublicKey(t, privateKey))
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(paymentOrderResponse{
 			Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID,
@@ -178,12 +178,20 @@ func testPrivateKey() ed25519.PrivateKey {
 	return ed25519.NewKeyFromSeed(seed)
 }
 
+func testPublicKey(t *testing.T, privateKey ed25519.PrivateKey) ed25519.PublicKey {
+	t.Helper()
+	publicKey, ok := privateKey.Public().(ed25519.PublicKey)
+	require.True(t, ok)
+	return publicKey
+}
+
 func testConfig(privateKey ed25519.PrivateKey, baseURL string) Config {
+	publicKey := ed25519.PublicKey(privateKey[ed25519.SeedSize:])
 	return Config{
 		Enabled: true, BaseURL: baseURL, Environment: EnvironmentSandbox,
 		OrganizationID: testOrganizationID, ProductID: testProductID, AppID: testAppID,
 		RequestKeyID: testRequestKeyID, RequestPrivateKey: privateKey,
-		WebhookPublicKeys: map[string]ed25519.PublicKey{testWebhookKeyID: privateKey.Public().(ed25519.PublicKey)},
+		WebhookPublicKeys: map[string]ed25519.PublicKey{testWebhookKeyID: publicKey},
 		ReturnURL:         "http://127.0.0.1:3000/payment/result",
 	}
 }
