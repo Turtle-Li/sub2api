@@ -9,9 +9,55 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
 )
+
+const captureOpenCodeBulkProxyUpdate = "CAPTURE_OPENCODE_BULK_PROXY_UPDATE"
+
+func runOpenCodeBulkProxyUpdateAndCaptureSQL(t *testing.T) string {
+	t.Helper()
+	var captured string
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(
+		func(expectedSQL, actualSQL string) error {
+			if expectedSQL == captureOpenCodeBulkProxyUpdate {
+				captured = actualSQL
+				return nil
+			}
+			return sqlmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+		},
+	)))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+
+	proxyID := int64(9)
+	mock.ExpectBegin()
+	expectLockedProxyForUpdate(mock, proxyID, "proxy.example", "", "")
+	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT platform, type, status, parent_account_id, proxy_id") + `.*` + regexp.QuoteMeta("FOR UPDATE")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"platform", "type", "status", "parent_account_id", "proxy_id"}).
+			AddRow(service.PlatformOpenAI, service.AccountTypeAPIKey, service.StatusActive, nil, int64(7)))
+	mock.ExpectExec(captureOpenCodeBulkProxyUpdate).
+		WithArgs(proxyID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
+		WithArgs(service.SchedulerOutboxEventAccountBulkChanged, nil, nil, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	repo := newAccountRepositoryWithSQL(client, db, nil)
+	_, err = repo.BulkUpdate(context.Background(), []int64{17}, service.AccountBulkUpdate{ProxyID: &proxyID})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+	require.NotEmpty(t, captured)
+	return normalizeSQLWhitespace(captured)
+}
 
 func openCodeGoUsageRepositoryAccount() *service.Account {
 	previousAttempt := time.Date(2026, time.August, 15, 8, 0, 0, 0, time.UTC)
@@ -327,17 +373,7 @@ func TestBulkUpdateOpenCodeGoNameChangeDoesNotAffectURLEligibility(t *testing.T)
 // 行在代理变化时会先命中 OpenCode 分支而遮蔽 Ollama 快照清理。这里断言 OpenCode 分支
 // 的 WHEN 携带 opencode 正则（与 Ollama 正则互斥），真实行为由 integration 测试覆盖。
 func TestBulkUpdateOpenCodeGoEligiblePredicateIncludesBaseURL(t *testing.T) {
-	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
-	repo := newAccountRepositoryWithSQL(nil, exec, nil)
-
-	proxyID := int64(9)
-	_, err := repo.BulkUpdate(context.Background(), []int64{17}, service.AccountBulkUpdate{
-		ProxyID: &proxyID,
-	})
-
-	require.NoError(t, err)
-	require.NotEmpty(t, exec.execQueries)
-	query := normalizeSQLWhitespace(exec.execQueries[0])
+	query := runOpenCodeBulkProxyUpdateAndCaptureSQL(t)
 	// 第一个 WHEN 分支是 OpenCode 快照失效分支（代理变化），其 eligible 判定必须
 	// 包含 opencode base URL 正则，使 OpenAI/DeepSeek+Ollama 行无法命中该分支。
 	caseStart := strings.Index(query, "CASE")
@@ -393,17 +429,7 @@ func TestOpenCodeGoBaseURLRegexSQLAcceptsDefaultPort443(t *testing.T) {
 }
 
 func TestBulkUpdateOpenCodeGoProxyChangeClearsSnapshotOnly(t *testing.T) {
-	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
-	repo := newAccountRepositoryWithSQL(nil, exec, nil)
-
-	proxyID := int64(9)
-	_, err := repo.BulkUpdate(context.Background(), []int64{17}, service.AccountBulkUpdate{
-		ProxyID: &proxyID,
-	})
-
-	require.NoError(t, err)
-	require.NotEmpty(t, exec.execQueries)
-	query := normalizeSQLWhitespace(exec.execQueries[0])
+	query := runOpenCodeBulkProxyUpdateAndCaptureSQL(t)
 	require.Contains(t, query, "- 'opencode_go_usage_snapshot'")
 	require.NotContains(t, query, "- 'opencode_go_usage_auto_refresh'")
 }

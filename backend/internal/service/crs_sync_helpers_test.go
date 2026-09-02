@@ -113,6 +113,28 @@ func TestShouldCreateAccount(t *testing.T) {
 	}
 }
 
+func TestNormalizeCRSProxyProtocolPreservesRemoteDNS(t *testing.T) {
+	tests := []struct {
+		raw       string
+		want      string
+		supported bool
+	}{
+		{raw: "http", want: "http", supported: true},
+		{raw: "HTTPS", want: "https", supported: true},
+		{raw: "socks", want: "socks5", supported: true},
+		{raw: "socks5", want: "socks5", supported: true},
+		{raw: " socks5h ", want: "socks5h", supported: true},
+		{raw: "ftp", supported: false},
+	}
+	for _, test := range tests {
+		t.Run(test.raw, func(t *testing.T) {
+			got, supported := normalizeCRSProxyProtocol(test.raw)
+			require.Equal(t, test.supported, supported)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
 func TestReconcileCRSUpstreamBillingProbeExtra(t *testing.T) {
 	remote := map[string]any{
 		"crs_account_id":                       "remote-1",

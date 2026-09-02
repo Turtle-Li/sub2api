@@ -58,3 +58,40 @@ func TestCompareAndSwapOpenAIOAuthProxyAcceptsNullCredentialsAndUpdatesShadows(t
 	require.Equal(t, proxy.ID, parentProxyID)
 	require.Equal(t, proxy.ID, shadowProxyID)
 }
+
+func TestCompareAndSwapOpenAIOAuthProxySupportsOpenAISetupTokenParent(t *testing.T) {
+	ctx := context.Background()
+	proxy := mustCreateProxy(t, integrationEntClient, &service.Proxy{
+		Name:         "fixed-egress-cas-setup-token",
+		Protocol:     "socks5h",
+		Host:         "100.81.60.44",
+		Port:         1080,
+		Status:       service.StatusActive,
+		FallbackMode: service.FallbackModeNone,
+	})
+	parent := mustCreateAccount(t, integrationEntClient, &service.Account{
+		Name:     "fixed-egress-cas-setup-token-parent",
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeSetupToken,
+		Status:   service.StatusActive,
+	})
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(ctx, `
+			DELETE FROM scheduler_outbox
+			WHERE event_type = $1
+			  AND payload @> jsonb_build_object('account_ids', jsonb_build_array($2::bigint))
+		`, service.SchedulerOutboxEventAccountBulkChanged, parent.ID)
+		_ = integrationEntClient.Account.DeleteOneID(parent.ID).Exec(ctx)
+		_ = integrationEntClient.Proxy.DeleteOneID(proxy.ID).Exec(ctx)
+	})
+
+	repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, nil)
+	updated, err := repo.CompareAndSwapOpenAIOAuthProxy(ctx, []int64{parent.ID}, 0, proxy)
+	require.NoError(t, err)
+	require.Equal(t, []int64{parent.ID}, updated)
+
+	var parentProxyID int64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		"SELECT proxy_id FROM accounts WHERE id = $1", parent.ID).Scan(&parentProxyID))
+	require.Equal(t, proxy.ID, parentProxyID)
+}

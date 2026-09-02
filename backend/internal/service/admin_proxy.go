@@ -113,37 +113,111 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 		return nil, err
 	}
 
+	updated := *proxy
 	if input.Name != "" {
-		proxy.Name = input.Name
+		updated.Name = input.Name
 	}
 	if input.Protocol != "" {
-		proxy.Protocol = input.Protocol
+		updated.Protocol = input.Protocol
 	}
 	if input.Host != "" {
-		proxy.Host = input.Host
+		updated.Host = input.Host
 	}
 	if input.Port != 0 {
-		proxy.Port = input.Port
+		updated.Port = input.Port
 	}
 	if input.Username != "" {
-		proxy.Username = input.Username
+		updated.Username = input.Username
 	}
 	if input.Password != "" {
-		proxy.Password = input.Password
+		updated.Password = input.Password
 	}
 	if input.Status != "" {
-		proxy.Status = input.Status
+		updated.Status = input.Status
 	}
 	// 透传有效期与回退字段
-	proxy.ExpiresAt = input.ExpiresAt
-	proxy.FallbackMode = mode
-	proxy.BackupProxyID = input.BackupProxyID
-	proxy.ExpiryWarnDays = input.ExpiryWarnDays
+	updated.ExpiresAt = input.ExpiresAt
+	updated.FallbackMode = mode
+	updated.BackupProxyID = input.BackupProxyID
+	updated.ExpiryWarnDays = input.ExpiryWarnDays
+
+	if FixedEgressProxyIdentityChanged(proxy, &updated) {
+		bound, err := hasOpenAIOAuthParentBoundToProxy(ctx, s.proxyRepo, id)
+		if err != nil {
+			return nil, err
+		}
+		if bound {
+			return nil, fixedEgressProxyIdentityImmutableError()
+		}
+	}
+	proxy = &updated
 
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
 	}
 	return proxy, nil
+}
+
+// FixedEgressProxyIdentityChanged reports changes that would alter an OAuth
+// parent's upstream identity or its no-fallback guarantee. It is shared with
+// the repository's row-locked guard so the service precheck cannot drift from
+// the transactional decision.
+func FixedEgressProxyIdentityChanged(current, updated *Proxy) bool {
+	if current == nil || updated == nil {
+		return current != updated
+	}
+	return current.Protocol != updated.Protocol ||
+		current.Host != updated.Host ||
+		current.Port != updated.Port ||
+		current.Username != updated.Username ||
+		current.Password != updated.Password ||
+		!sameOptionalProxyTime(current.ExpiresAt, updated.ExpiresAt) ||
+		current.FallbackMode != updated.FallbackMode ||
+		!sameOptionalProxyID(current.BackupProxyID, updated.BackupProxyID)
+}
+
+func sameOptionalProxyTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Equal(*right)
+}
+
+func sameOptionalProxyID(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func hasOpenAIOAuthParentBoundToProxy(ctx context.Context, proxyRepo ProxyRepository, proxyID int64) (bool, error) {
+	if proxyRepo == nil {
+		return false, infraerrors.New(
+			http.StatusInternalServerError,
+			"FIXED_EGRESS_BINDING_LOOKUP_UNAVAILABLE",
+			"cannot verify whether the proxy is bound to OpenAI OAuth parent accounts",
+		)
+	}
+
+	accounts, err := proxyRepo.ListAccountSummariesByProxyID(ctx, proxyID)
+	if err != nil {
+		return false, err
+	}
+	for _, account := range accounts {
+		// A parent remains bound while disabled or in error. Status therefore
+		// cannot be part of this immutability decision. Shadows are excluded
+		// because their proxy relationship is inherited from the parent.
+		if account.Platform == PlatformOpenAI &&
+			(account.Type == AccountTypeOAuth || account.Type == AccountTypeSetupToken) &&
+			account.ParentAccountID == nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func fixedEgressProxyIdentityImmutableError() error {
+	return ErrFixedEgressProxyIdentityImmutable
 }
 
 func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {

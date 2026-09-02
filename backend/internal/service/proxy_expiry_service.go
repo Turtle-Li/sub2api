@@ -65,6 +65,6 @@ func (s *ProxyExpiryService) runOnce() {
 		return
 	}
 	if changed > 0 {
-		log.Printf("[ProxyExpiry] re-routed %d accounts off expired proxies", changed)
+		log.Printf("[ProxyExpiry] invalidated routing state for %d accounts while sweeping expired proxies", changed)
 	}
 }

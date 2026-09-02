@@ -13,9 +13,33 @@ var (
 	ErrAccountNotFound         = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
 	ErrAccountNilInput         = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
 	ErrAccountNotInFallback    = infraerrors.BadRequest("ACCOUNT_NOT_IN_FALLBACK", "account is not in proxy fallback state")
+	ErrFixedEgressProxyInvalid = infraerrors.BadRequest(
+		"FIXED_EGRESS_PROXY_INVALID",
+		"proxy must be active Tailnet-only socks5h:1080 with no expiry, credentials, backup, or fallback",
+	)
+	ErrFixedEgressCASRequired = infraerrors.BadRequest(
+		"FIXED_EGRESS_CAS_REQUIRED",
+		"OpenAI Codex parent proxy changes require proxy_id plus expected_proxy_id",
+	)
+	ErrFixedEgressActivationRequiresSingleUpdate = infraerrors.BadRequest(
+		"FIXED_EGRESS_ACTIVATION_REQUIRES_SINGLE_UPDATE",
+		"proxied OpenAI Codex parent accounts must be activated with a single-account update",
+	)
+	ErrFixedEgressGuardUnavailable = infraerrors.InternalServer(
+		"FIXED_EGRESS_GUARD_UNAVAILABLE",
+		"the fixed-egress transactional guard is unavailable",
+	)
+	ErrFixedEgressProxyIdentityImmutable = infraerrors.Conflict(
+		"FIXED_EGRESS_PROXY_IDENTITY_IMMUTABLE",
+		"proxy identity is bound to OpenAI Codex parent accounts; create a compliant replacement and use bulk proxy_id plus expected_proxy_id compare-and-set",
+	)
 	ErrAccountProxyCASConflict = infraerrors.Conflict(
 		"ACCOUNT_PROXY_COMPARE_AND_SET_FAILED",
 		"account proxy binding changed before the operation completed",
+	)
+	ErrCredentialShadowProxyMismatch = infraerrors.Conflict(
+		"CREDENTIAL_SHADOW_PROXY_MISMATCH",
+		"credential shadow proxy must match its OpenAI OAuth parent account",
 	)
 )
 
@@ -137,7 +161,7 @@ type AccountDuplicateRepository interface {
 }
 
 // AccountProxyCASRepository provides the narrow transactional operation used by
-// fixed-egress binding and rollback. It updates eligible OpenAI OAuth parents
+// fixed-egress binding and rollback. It updates eligible OpenAI Codex parents
 // and their credential shadows together, and rejects stale expected proxy IDs.
 type AccountProxyCASRepository interface {
 	CompareAndSwapOpenAIOAuthProxy(
@@ -146,6 +170,19 @@ type AccountProxyCASRepository interface {
 		expectedProxyID int64,
 		newProxy *Proxy,
 	) ([]int64, error)
+}
+
+// OpenAIOAuthShadowCreateRepository atomically rechecks a parent's persisted
+// proxy relationship while creating its credential shadow. expectedProxyID is
+// the service's snapshot; a conflict asks the caller to reload and retry so a
+// shadow never commits with a superseded fixed-egress proxy.
+type OpenAIOAuthShadowCreateRepository interface {
+	CreateOpenAIOAuthShadow(
+		ctx context.Context,
+		parentID int64,
+		expectedProxyID *int64,
+		shadow *Account,
+	) error
 }
 
 // AccountBillingSettingsRepository applies an admin edit without overwriting a
@@ -362,6 +399,9 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	}
 
 	if req.ProxyID != nil {
+		if account.IsOpenAIOAuthLike() && account.ParentAccountID == nil {
+			return nil, fixedEgressCASRequiredError()
+		}
 		account.ProxyID = req.ProxyID
 	}
 

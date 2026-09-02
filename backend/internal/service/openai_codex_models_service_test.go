@@ -1592,7 +1592,7 @@ func TestFetchCodexModelsManifestShadowUsesLogicalAccountProxy(t *testing.T) {
 	parent := newCodexModelsTestAccount()
 	parent.ID = parentID
 	parent.ProxyID = &parentProxyID
-	parent.Proxy = &Proxy{ID: parentProxyID, Protocol: "socks5h", Host: "100.80.10.114", Port: 1080, Status: StatusActive}
+	parent.Proxy = &Proxy{ID: parentProxyID, Protocol: "socks5h", Host: "100.80.10.114", Port: 1080, Status: StatusActive, FallbackMode: FallbackModeNone}
 	shadow := &Account{
 		ID:              902,
 		Platform:        PlatformOpenAI,
@@ -1600,7 +1600,7 @@ func TestFetchCodexModelsManifestShadowUsesLogicalAccountProxy(t *testing.T) {
 		ParentAccountID: &parentID,
 		QuotaDimension:  QuotaDimensionSpark,
 		ProxyID:         &shadowProxyID,
-		Proxy:           &Proxy{ID: shadowProxyID, Protocol: "socks5h", Host: "100.79.114.100", Port: 1080, Status: StatusActive},
+		Proxy:           &Proxy{ID: shadowProxyID, Protocol: "socks5h", Host: "100.79.114.100", Port: 1080, Status: StatusActive, FallbackMode: FallbackModeNone},
 	}
 	proxyURL, err := resolveCodexModelsProxyURL(shadow)
 	require.NoError(t, err)

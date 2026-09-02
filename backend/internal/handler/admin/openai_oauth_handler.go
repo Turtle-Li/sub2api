@@ -343,7 +343,7 @@ func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		Type:        "oauth",
 		Credentials: credentials,
 		Extra:       nil,
-		ProxyID:     req.ProxyID,
+		ProxyID:     tokenInfo.ProxyID,
 		Concurrency: req.Concurrency,
 		Priority:    req.Priority,
 		GroupIDs:    req.GroupIDs,

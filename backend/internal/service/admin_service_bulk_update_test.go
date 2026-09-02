@@ -212,6 +212,34 @@ func TestAdminService_BulkUpdateAccounts_FixedEgressCompareAndSet(t *testing.T) 
 	require.Zero(t, repo.bulkUpdateCalls, "CAS binding must not fall through to generic bulk update")
 }
 
+func TestAdminService_BulkUpdateAccounts_FixedEgressCompareAndSetSetupToken(t *testing.T) {
+	proxyID := int64(77)
+	expectedProxyID := int64(0)
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{
+			ID: 1, Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Status: StatusActive,
+		}},
+		casUpdatedIDs: []int64{1},
+	}
+	proxy := &Proxy{
+		ID: proxyID, Protocol: "socks5h", Host: "100.81.60.44", Port: 1080,
+		Status: StatusActive, FallbackMode: FallbackModeNone,
+	}
+	proxyRepo := &proxyRepoStub{getByID: map[int64]*Proxy{proxyID: proxy}}
+	svc := &adminServiceImpl{accountRepo: repo, proxyRepo: proxyRepo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:      []int64{1},
+		ProxyID:         &proxyID,
+		ExpectedProxyID: &expectedProxyID,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, result.SuccessIDs)
+	require.Equal(t, 1, repo.casCalls)
+	require.Zero(t, repo.bulkUpdateCalls)
+}
+
 func TestAdminService_BulkUpdateAccounts_OpenAIOAuthProxyRequiresCompareAndSet(t *testing.T) {
 	proxyID := int64(77)
 	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{

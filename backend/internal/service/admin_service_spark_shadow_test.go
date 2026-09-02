@@ -20,9 +20,11 @@ import (
 // 并覆盖测试所需的核心方法。
 type sparkShadowRepoStub struct {
 	mockAccountRepoForGemini
-	nextID   int64
-	accounts map[int64]*Account
-	groupsOf map[int64][]int64 // accountID → []groupIDs
+	nextID                          int64
+	accounts                        map[int64]*Account
+	groupsOf                        map[int64][]int64 // accountID → []groupIDs
+	beforeCreateOpenAIOAuthShadow   func(*sparkShadowRepoStub)
+	createOpenAIOAuthShadowAttempts int
 }
 
 func newSparkShadowRepoStub() *sparkShadowRepoStub {
@@ -43,6 +45,26 @@ func (s *sparkShadowRepoStub) Create(_ context.Context, account *Account) error 
 	s.accounts[account.ID] = &cp
 	s.mockAccountRepoForGemini.accountsByID[account.ID] = &cp
 	return nil
+}
+
+func (s *sparkShadowRepoStub) CreateOpenAIOAuthShadow(_ context.Context, parentID int64, expectedProxyID *int64, shadow *Account) error {
+	s.createOpenAIOAuthShadowAttempts++
+	if s.beforeCreateOpenAIOAuthShadow != nil {
+		hook := s.beforeCreateOpenAIOAuthShadow
+		s.beforeCreateOpenAIOAuthShadow = nil
+		hook(s)
+	}
+	parent, ok := s.accounts[parentID]
+	if !ok || parent.ParentAccountID != nil || !parent.IsOpenAIOAuth() || !sameOptionalProxyID(parent.ProxyID, expectedProxyID) {
+		return ErrAccountProxyCASConflict
+	}
+	if parent.ProxyID == nil {
+		shadow.ProxyID = nil
+	} else {
+		proxyID := *parent.ProxyID
+		shadow.ProxyID = &proxyID
+	}
+	return s.Create(context.Background(), shadow)
 }
 
 func (s *sparkShadowRepoStub) GetByID(_ context.Context, id int64) (*Account, error) {
@@ -155,6 +177,33 @@ func TestCreateShadow(t *testing.T) {
 	// Test 2: 一母一影 — 再作成は拒否
 	_, err = svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "dup"})
 	require.Error(t, err)
+}
+
+func TestCreateShadowRetriesWithPersistedParentProxyAfterCASConflict(t *testing.T) {
+	ctx := context.Background()
+	repo := newSparkShadowRepoStub()
+	svc := &adminServiceImpl{accountRepo: repo}
+	firstProxyID := int64(7)
+	secondProxyID := int64(8)
+	parent := &Account{
+		Name:     "parent",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		ProxyID:  &firstProxyID,
+	}
+	require.NoError(t, repo.Create(ctx, parent))
+	repo.beforeCreateOpenAIOAuthShadow = func(repo *sparkShadowRepoStub) {
+		current := repo.accounts[parent.ID]
+		current.ProxyID = &secondProxyID
+	}
+
+	shadow, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "shadow"})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, repo.createOpenAIOAuthShadowAttempts)
+	require.NotNil(t, shadow.ProxyID)
+	require.Equal(t, secondProxyID, *shadow.ProxyID)
 }
 
 func TestCreateShadowInheritsParentEffectiveOpenAILongContextBillingValue(t *testing.T) {
@@ -732,6 +781,30 @@ func TestBulkUpdateAccounts_RequiresCASForOpenAIOAuthProxy(t *testing.T) {
 	require.Equal(t, oldProxy, *storedShadow.ProxyID)
 }
 
+func TestBulkUpdateAccountsRejectsReactivatingProxiedOpenAIOAuthParent(t *testing.T) {
+	ctx := context.Background()
+	repo := newSparkShadowRepoStub()
+	svc := &adminServiceImpl{accountRepo: repo}
+	proxyID := int64(7)
+	parent := &Account{
+		Name:     "bulk-reactivate-parent",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusDisabled,
+		ProxyID:  &proxyID,
+	}
+	require.NoError(t, repo.Create(ctx, parent))
+
+	_, err := svc.BulkUpdateAccounts(ctx, &BulkUpdateAccountsInput{
+		AccountIDs: []int64{parent.ID},
+		Status:     StatusActive,
+	})
+
+	require.ErrorIs(t, err, ErrFixedEgressActivationRequiresSingleUpdate)
+	require.Equal(t, "FIXED_EGRESS_ACTIVATION_REQUIRES_SINGLE_UPDATE", infraerrors.Reason(err))
+	require.Equal(t, StatusDisabled, repo.accounts[parent.ID].Status)
+}
+
 // ── 外审 P1/P2 加固:专用测试桩 ───────────────────────────────────────────
 
 // raceCreateRepoStub 模拟并发竞态:对影子的 Create 撞一母一影唯一索引(返回错误),
@@ -750,6 +823,20 @@ func (s *raceCreateRepoStub) Create(ctx context.Context, account *Account) error
 		return errors.New(`duplicate key value violates unique constraint "uq_accounts_spark_shadow_per_parent"`)
 	}
 	return s.sparkShadowRepoStub.Create(ctx, account)
+}
+
+func (s *raceCreateRepoStub) CreateOpenAIOAuthShadow(ctx context.Context, parentID int64, expectedProxyID *int64, shadow *Account) error {
+	parent, ok := s.accounts[parentID]
+	if !ok || parent.ParentAccountID != nil || !parent.IsOpenAIOAuth() || !sameOptionalProxyID(parent.ProxyID, expectedProxyID) {
+		return ErrAccountProxyCASConflict
+	}
+	if parent.ProxyID == nil {
+		shadow.ProxyID = nil
+	} else {
+		proxyID := *parent.ProxyID
+		shadow.ProxyID = &proxyID
+	}
+	return s.Create(ctx, shadow)
 }
 
 // bindFailRepoStub 让 BindGroups 失败,用于验证绑组失败时补偿删除刚建的影子(外审 C/P1)。

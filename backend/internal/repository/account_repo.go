@@ -123,6 +123,12 @@ func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedul
 }
 
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
+	if isOpenAIFixedEgressParent(account) && account.ProxyID != nil {
+		return r.createOpenAIFixedEgressParent(ctx, account)
+	}
+	if isOpenAIFixedEgressShadow(account) {
+		return r.createOpenAIFixedEgressShadow(ctx, account)
+	}
 	if err := createAccountRecord(ctx, r.client, account); err != nil {
 		return err
 	}
@@ -130,6 +136,143 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account create failed: account=%d err=%v", account.ID, err)
 	}
 	return nil
+}
+
+// createOpenAIFixedEgressShadow keeps the candidate proxy and parent locks
+// through persistence so a direct repository Create cannot race a parent CAS
+// or persist a shadow whose fixed egress differs from its parent.
+func (r *accountRepository) createOpenAIFixedEgressShadow(ctx context.Context, account *service.Account) error {
+	create := func(ctx context.Context, client *dbent.Client) error {
+		if err := enforceOpenAIOAuthShadowProxyRelation(ctx, client, account); err != nil {
+			return err
+		}
+		return r.createAccountAndEnqueue(ctx, client, account)
+	}
+	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+		return create(ctx, contextTx.Client())
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if err := create(txCtx, tx.Client()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// createOpenAIFixedEgressParent keeps the proxy lock through account
+// persistence for every status. Active parents are validated immediately;
+// disabled/error parents reserve the identity and are validated on activation.
+func (r *accountRepository) createOpenAIFixedEgressParent(ctx context.Context, account *service.Account) error {
+	lockAndValidate := func(ctx context.Context, client *dbent.Client) error {
+		proxy, err := lockOpenAIOAuthProxy(ctx, client, *account.ProxyID)
+		if err != nil {
+			return err
+		}
+		if isActiveOpenAIFixedEgressParent(account) {
+			return service.ValidateFixedEgressProxy(proxy)
+		}
+		return nil
+	}
+	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+		client := contextTx.Client()
+		if err := lockAndValidate(ctx, client); err != nil {
+			return err
+		}
+		return r.createAccountAndEnqueue(ctx, client, account)
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	if err := lockAndValidate(txCtx, client); err != nil {
+		return err
+	}
+	if err := r.createAccountAndEnqueue(txCtx, client, account); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *accountRepository) createAccountAndEnqueue(ctx context.Context, client *dbent.Client, account *service.Account) error {
+	if err := createAccountRecord(ctx, client, account); err != nil {
+		return err
+	}
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account create failed: account=%d err=%v", account.ID, err)
+	}
+	return nil
+}
+
+// CreateOpenAIOAuthShadow persists a credential shadow only while the parent
+// relation observed by the service is still current. The lock order is always
+// proxy then parent account, matching fixed-egress CAS and proxy mutation.
+func (r *accountRepository) CreateOpenAIOAuthShadow(
+	ctx context.Context,
+	parentID int64,
+	expectedProxyID *int64,
+	shadow *service.Account,
+) error {
+	if r == nil || r.client == nil || shadow == nil || shadow.ParentAccountID == nil || *shadow.ParentAccountID != parentID {
+		return service.ErrAccountProxyCASConflict
+	}
+
+	client := r.client
+	var tx *dbent.Tx
+	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+		client = contextTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+
+	if expectedProxyID != nil {
+		if _, err := lockOpenAIOAuthProxy(ctx, client, *expectedProxyID); err != nil {
+			return err
+		}
+	}
+	parent, err := lockOpenAIOAuthParentState(ctx, client, parentID)
+	if err != nil {
+		return err
+	}
+	if !shadow.IsOpenAIOAuthLike() || !parent.openAIFixedEgressParent || !sameOptionalProxyID(parent.proxyID, expectedProxyID) {
+		return service.ErrAccountProxyCASConflict
+	}
+
+	shadow.ProxyID = cloneOptionalProxyID(parent.proxyID)
+	if err := r.createAccountAndEnqueue(ctx, client, shadow); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cloneOptionalProxyID(proxyID *int64) *int64 {
+	if proxyID == nil {
+		return nil
+	}
+	value := *proxyID
+	return &value
 }
 
 func createAccountRecord(ctx context.Context, client *dbent.Client, account *service.Account) error {
@@ -208,18 +351,35 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	if account == nil {
 		return service.ErrAccountNilInput
 	}
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
+	contextTx := dbent.TxFromContext(ctx)
+	var tx *dbent.Tx
 	var txClient *dbent.Client
-	if err == nil {
+	if contextTx != nil {
+		txClient = contextTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return err
+		}
 		defer func() { _ = tx.Rollback() }()
 		txClient = tx.Client()
-	} else {
-		// Reuse a caller-owned transaction when this repository is already transactional.
-		txClient = r.client
+		ctx = dbent.NewTxContext(ctx, tx)
+	}
+
+	if isOpenAIFixedEgressParent(account) && account.ProxyID != nil {
+		lockedProxy, err := lockOpenAIOAuthProxy(ctx, txClient, *account.ProxyID)
+		if err != nil {
+			return err
+		}
+		if isActiveOpenAIFixedEgressParent(account) {
+			if err := service.ValidateFixedEgressProxy(lockedProxy); err != nil {
+				return err
+			}
+		}
+	}
+	if err := enforceOpenAIOAuthShadowProxyRelation(ctx, txClient, account); err != nil {
+		return err
 	}
 
 	if err := createAccountRecord(ctx, txClient, account); err != nil {
@@ -476,6 +636,16 @@ func (r *accountRepository) updateAccount(
 			ctx = dbent.NewTxContext(ctx, tx)
 			client = tx.Client()
 		}
+	}
+
+	if err := enforceOpenAIOAuthParentUpdate(ctx, client, account); err != nil {
+		return err
+	}
+	if err := enforceOpenAIOAuthShadowProxyRelation(ctx, client, account); err != nil {
+		return err
+	}
+	if err := enforcePersistedOpenAIFixedEgressRelation(ctx, client, account); err != nil {
+		return err
 	}
 
 	updated, err := r.updateLockedAccount(
@@ -2884,6 +3054,75 @@ func ollamaCloudUsageSnapshotClearRequested(extra map[string]any) bool {
 	return ok && value == nil
 }
 
+// lockBulkProxyMutationTargets closes the gap between the service's
+// best-effort preflight and the raw bulk UPDATE below. When a proxy relation is
+// being written, keep the proxy lock ahead of account locks so it composes with
+// CAS, account conversion, and proxy deletion without a lock-order inversion.
+func lockBulkProxyMutationTargets(
+	ctx context.Context,
+	client *dbent.Client,
+	ids []int64,
+	newProxyID *int64,
+	activating bool,
+) error {
+	if client == nil {
+		return service.ErrFixedEgressGuardUnavailable
+	}
+	if newProxyID != nil && *newProxyID > 0 {
+		if _, err := lockProxyForUpdate(ctx, client, *newProxyID); err != nil {
+			return err
+		}
+	}
+
+	rows, err := client.QueryContext(ctx, `
+		SELECT platform, type, status, parent_account_id, proxy_id
+		FROM accounts
+		WHERE id = ANY($1) AND deleted_at IS NULL
+		ORDER BY id
+		FOR UPDATE
+	`, pq.Array(ids))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			platform, accountType, status string
+			parentID, proxyID             sql.NullInt64
+		)
+		if err := rows.Scan(&platform, &accountType, &status, &parentID, &proxyID); err != nil {
+			return err
+		}
+		isOpenAIFixedEgress := platform == service.PlatformOpenAI &&
+			(accountType == service.AccountTypeOAuth || accountType == service.AccountTypeSetupToken)
+		if !isOpenAIFixedEgress {
+			continue
+		}
+		if parentID.Valid {
+			// Generic bulk writes must never mutate a credential shadow's
+			// proxy independently. Parent+shadow propagation is exclusively
+			// handled by CompareAndSwapOpenAIOAuthProxy.
+			if newProxyID != nil {
+				return service.ErrCredentialShadowProxyMismatch
+			}
+			continue
+		}
+		// Parent proxy changes, including while disabled or errored, must use
+		// the parent+shadow compare-and-set operation.
+		if newProxyID != nil {
+			return service.ErrFixedEgressCASRequired
+		}
+		// Generic bulk activation has no proxy-row validation seam. Refuse to
+		// activate a proxied parent here; the regular single-account update
+		// acquires the proxy then account row and validates the persisted shape.
+		if activating && status != service.StatusActive && proxyID.Valid {
+			return service.ErrFixedEgressActivationRequiresSingleUpdate
+		}
+	}
+	return rows.Err()
+}
+
 func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates service.AccountBulkUpdate) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -3094,9 +3333,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
 	exec := r.sql
+	client := r.client
 	var tx *dbent.Tx
 	if contextTx != nil {
 		exec = contextTx.Client()
+		client = contextTx.Client()
 	} else if r.client != nil {
 		var txErr error
 		tx, txErr = r.client.Tx(ctx)
@@ -3107,6 +3348,13 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			defer func() { _ = tx.Rollback() }()
 			ctx = dbent.NewTxContext(ctx, tx)
 			exec = tx.Client()
+			client = tx.Client()
+		}
+	}
+	if updates.ProxyID != nil || (updates.Status != nil && *updates.Status == service.StatusActive) {
+		if err := lockBulkProxyMutationTargets(ctx, client, ids, updates.ProxyID,
+			updates.Status != nil && *updates.Status == service.StatusActive); err != nil {
+			return 0, err
 		}
 	}
 
@@ -3177,51 +3425,26 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 
 	var newProxyID any
 	if newProxy != nil {
-		newProxyID = newProxy.ID
-		rows, queryErr := exec.QueryContext(txCtx, `
-			SELECT id
-			FROM proxies
-			WHERE id = $1
-			  AND status = $2
-			  AND protocol = $3
-			  AND host = $4
-			  AND port = $5
-			  AND COALESCE(username, '') = $6
-			  AND COALESCE(password, '') = $7
-			  AND deleted_at IS NULL
-			  AND expires_at IS NULL
-			  AND fallback_mode = $8
-			  AND backup_proxy_id IS NULL
-			FOR SHARE
-		`, newProxy.ID, service.StatusActive, "socks5h", newProxy.Host, 1080, "", "", service.FallbackModeNone)
-		if queryErr != nil {
-			return nil, queryErr
+		// Do not trust the caller's proxy shape. Lock and validate the persisted
+		// row before parent account rows so direct repository callers cannot bind
+		// an external or fallback-capable proxy by bypassing the admin service.
+		lockedProxy, err := lockFixedEgressProxyForOpenAIOAuth(txCtx, exec, newProxy.ID)
+		if err != nil {
+			return nil, err
 		}
-		locked := false
-		if rows.Next() {
-			var lockedID int64
-			if scanErr := rows.Scan(&lockedID); scanErr != nil {
-				_ = rows.Close()
-				return nil, scanErr
-			}
-			locked = lockedID == newProxy.ID
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			_ = rows.Close()
-			return nil, rowsErr
-		}
-		if closeErr := rows.Close(); closeErr != nil {
-			return nil, closeErr
-		}
-		if !locked {
-			return nil, service.ErrAccountProxyCASConflict
-		}
+		newProxyID = lockedProxy.ID
 	}
 
 	whereExpected := "proxy_id IS NULL"
-	args := []any{pq.Array(ids), service.PlatformOpenAI, service.AccountTypeOAuth, service.StatusActive}
+	args := []any{
+		pq.Array(ids),
+		service.PlatformOpenAI,
+		service.AccountTypeOAuth,
+		service.AccountTypeSetupToken,
+		service.StatusActive,
+	}
 	if expectedProxyID > 0 {
-		whereExpected = "proxy_id = $5"
+		whereExpected = "proxy_id = $6"
 		args = append(args, expectedProxyID)
 	}
 	rows, err := exec.QueryContext(txCtx, `
@@ -3230,8 +3453,8 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 		WHERE id = ANY($1)
 		  AND deleted_at IS NULL
 		  AND platform = $2
-		  AND type = $3
-		  AND status = $4
+		  AND type IN ($3, $4)
+		  AND status = $5
 		  AND parent_account_id IS NULL
 		  AND `+whereExpected+`
 		ORDER BY id
@@ -4071,7 +4294,45 @@ func (r *accountRepository) ResetQuotaUsedAndClearRateLimitCooldown(ctx context.
 // 仅当 proxy_fallback_origin_id IS NOT NULL 时执行更新；
 // 若影响行数为 0，则返回 ErrAccountNotInFallback（账号存在但不在 fallback 状态）。
 func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID int64) error {
-	res, err := r.sql.ExecContext(ctx, `
+	if r == nil || r.client == nil {
+		return service.ErrAccountNotInFallback
+	}
+
+	client := r.client
+	var tx *dbent.Tx
+	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+		client = contextTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+
+	state, err := lockAccountProxyFallbackState(ctx, client, accountID)
+	if err != nil {
+		if errors.Is(err, service.ErrAccountNotFound) {
+			return service.ErrAccountNotInFallback
+		}
+		return err
+	}
+	if !state.hasFallback {
+		return service.ErrAccountNotInFallback
+	}
+	// A fallback origin is necessarily a legacy relationship for OpenAI OAuth.
+	// Do not revive it with this generic raw UPDATE; parent and shadow proxy
+	// changes must remain on the transactional CAS path.
+	if state.openAIFixedEgress {
+		return service.ErrFixedEgressCASRequired
+	}
+
+	res, err := client.ExecContext(ctx, `
 		UPDATE accounts SET proxy_id=proxy_fallback_origin_id, proxy_fallback_origin_id=NULL, updated_at=NOW()
 		WHERE id=$1 AND proxy_fallback_origin_id IS NOT NULL AND deleted_at IS NULL`, accountID)
 	if err != nil {
@@ -4081,8 +4342,13 @@ func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID i
 	if n == 0 {
 		return service.ErrAccountNotInFallback
 	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &accountID, nil, nil); err != nil {
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &accountID, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] revert fallback enqueue failed: account=%d err=%v", accountID, err)
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

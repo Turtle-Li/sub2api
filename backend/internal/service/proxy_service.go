@@ -63,11 +63,10 @@ type ProxyService struct {
 	proxyRepo ProxyRepository
 }
 
-// NewProxyService 创建代理服务实例
+// NewProxyService 创建代理服务实例. The proxy repository supplies the
+// parent/shadow-aware binding lookup used by the fixed-egress guard.
 func NewProxyService(proxyRepo ProxyRepository) *ProxyService {
-	return &ProxyService{
-		proxyRepo: proxyRepo,
-	}
+	return &ProxyService{proxyRepo: proxyRepo}
 }
 
 // Create 创建代理
@@ -124,34 +123,46 @@ func (s *ProxyService) Update(ctx context.Context, id int64, req UpdateProxyRequ
 		return nil, fmt.Errorf("get proxy: %w", err)
 	}
 
+	updated := *proxy
 	// 更新字段
 	if req.Name != nil {
-		proxy.Name = *req.Name
+		updated.Name = *req.Name
 	}
 
 	if req.Protocol != nil {
-		proxy.Protocol = *req.Protocol
+		updated.Protocol = *req.Protocol
 	}
 
 	if req.Host != nil {
-		proxy.Host = *req.Host
+		updated.Host = *req.Host
 	}
 
 	if req.Port != nil {
-		proxy.Port = *req.Port
+		updated.Port = *req.Port
 	}
 
 	if req.Username != nil {
-		proxy.Username = *req.Username
+		updated.Username = *req.Username
 	}
 
 	if req.Password != nil {
-		proxy.Password = *req.Password
+		updated.Password = *req.Password
 	}
 
 	if req.Status != nil {
-		proxy.Status = *req.Status
+		updated.Status = *req.Status
 	}
+
+	if FixedEgressProxyIdentityChanged(proxy, &updated) {
+		bound, err := hasOpenAIOAuthParentBoundToProxy(ctx, s.proxyRepo, id)
+		if err != nil {
+			return nil, err
+		}
+		if bound {
+			return nil, fixedEgressProxyIdentityImmutableError()
+		}
+	}
+	proxy = &updated
 
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, fmt.Errorf("update proxy: %w", err)

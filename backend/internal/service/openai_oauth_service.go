@@ -32,7 +32,10 @@ func NewOpenAIOAuthService(proxyRepo ProxyRepository, oauthClient OpenAIOAuthCli
 // ResolveProxyURL validates an operator-selected proxy binding before any
 // OAuth/PAT network request. A nil proxy ID is the only direct-connect case.
 func (s *OpenAIOAuthService) ResolveProxyURL(ctx context.Context, proxyID *int64) (string, error) {
-	account := &Account{ProxyID: proxyID}
+	// OAuth/PAT exchange has the same fixed-egress requirement as a persisted
+	// OpenAI OAuth parent. Supplying platform/type makes the shared proxy policy
+	// enforce it before any outbound request is attempted.
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, ProxyID: proxyID}
 	return ResolveAccountProxyURLWithLookup(ctx, account, s.proxyRepo)
 }
 
@@ -87,6 +90,7 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 		State:        state,
 		CodeVerifier: codeVerifier,
 		ClientID:     clientID,
+		ProxyID:      cloneOpenAIOAuthProxyID(proxyID),
 		RedirectURI:  redirectURI,
 		ProxyURL:     proxyURL,
 		CreatedAt:    time.Now(),
@@ -128,6 +132,7 @@ type OpenAITokenInfo struct {
 	PlanType              string `json:"plan_type,omitempty"`
 	SubscriptionExpiresAt string `json:"subscription_expires_at,omitempty"`
 	PrivacyMode           string `json:"privacy_mode,omitempty"`
+	ProxyID               *int64 `json:"proxy_id,omitempty"`
 }
 
 // ExchangeCode exchanges authorization code for tokens
@@ -144,14 +149,18 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_STATE", "invalid oauth state")
 	}
 
-	// Get proxy URL: prefer input.ProxyID, fallback to session.ProxyURL
-	proxyURL := session.ProxyURL
-	if input.ProxyID != nil {
-		resolvedProxyURL, err := s.ResolveProxyURL(ctx, input.ProxyID)
-		if err != nil {
-			return nil, err
-		}
-		proxyURL = resolvedProxyURL
+	// Re-resolve the session's proxy identity at exchange time. Keeping only a
+	// raw URL would let a proxy that was disabled, expired, deleted, or mutated
+	// after GenerateAuthURL continue to carry the token exchange. A caller may
+	// supply a proxy only when the session did not bind one; once bound, the ID
+	// is immutable for the rest of the OAuth flow.
+	effectiveProxyID, err := resolveOpenAIOAuthSessionProxyID(session.ProxyID, input.ProxyID)
+	if err != nil {
+		return nil, err
+	}
+	proxyURL, err := s.ResolveProxyURL(ctx, effectiveProxyID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Use redirect URI from session or input
@@ -191,6 +200,7 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 		ExpiresIn:    int64(tokenResp.ExpiresIn),
 		ExpiresAt:    time.Now().Unix() + int64(tokenResp.ExpiresIn),
 		ClientID:     clientID,
+		ProxyID:      cloneOpenAIOAuthProxyID(effectiveProxyID),
 	}
 
 	if userInfo != nil {
@@ -204,6 +214,27 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
 
 	return tokenInfo, nil
+}
+
+func cloneOpenAIOAuthProxyID(proxyID *int64) *int64 {
+	if proxyID == nil {
+		return nil
+	}
+	value := *proxyID
+	return &value
+}
+
+func resolveOpenAIOAuthSessionProxyID(sessionProxyID, requestedProxyID *int64) (*int64, error) {
+	if sessionProxyID == nil {
+		return cloneOpenAIOAuthProxyID(requestedProxyID), nil
+	}
+	if requestedProxyID != nil && *requestedProxyID != *sessionProxyID {
+		return nil, infraerrors.BadRequest(
+			"OPENAI_OAUTH_PROXY_MISMATCH",
+			"proxy_id must match the proxy selected when the OAuth session was created",
+		)
+	}
+	return cloneOpenAIOAuthProxyID(sessionProxyID), nil
 }
 
 // RefreshToken refreshes an OpenAI OAuth token

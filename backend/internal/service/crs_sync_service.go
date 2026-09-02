@@ -84,6 +84,7 @@ type SyncFromCRSItemResult struct {
 	Kind         string `json:"kind"`
 	Name         string `json:"name"`
 	Action       string `json:"action"` // created/updated/failed/skipped
+	Warning      string `json:"warning,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
 
@@ -591,19 +592,37 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			continue
 		}
 
-		proxyID, err := s.mapOrCreateProxy(
-			ctx,
-			input.SyncProxies,
-			&proxies,
-			src.Proxy,
-			fmt.Sprintf("crs-%s", src.Name),
-		)
+		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
 		if err != nil {
 			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
+			item.Error = "db lookup failed: " + err.Error()
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
+		}
+
+		var proxyID *int64
+		preserveFixedEgressProxy := existing != nil && existing.IsOpenAIOAuthLike() && existing.ParentAccountID == nil
+		if preserveFixedEgressProxy {
+			proxyID = existing.ProxyID
+			if input.SyncProxies && src.Proxy != nil {
+				item.Warning = "source proxy ignored; fixed-egress binding must change via compare-and-set"
+			}
+		} else {
+			proxyID, err = s.mapOrCreateProxy(
+				ctx,
+				input.SyncProxies,
+				&proxies,
+				src.Proxy,
+				fmt.Sprintf("crs-%s", src.Name),
+			)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = "proxy sync failed: " + err.Error()
+				result.Failed++
+				result.Items = append(result.Items, item)
+				continue
+			}
 		}
 
 		credentials := sanitizeCredentialsMap(src.Credentials)
@@ -636,14 +655,6 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			extra["email"] = crsEmail
 		}
 
-		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
 		var existingExtra map[string]any
 		if existing != nil {
 			existingExtra = existing.Extra
@@ -1211,22 +1222,13 @@ func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cac
 	if !enabled || src == nil {
 		return nil, nil
 	}
-	protocol := strings.ToLower(strings.TrimSpace(src.Protocol))
-	switch protocol {
-	case "socks":
-		protocol = "socks5"
-	case "socks5h":
-		protocol = "socks5"
-	}
+	protocol, supportedProtocol := normalizeCRSProxyProtocol(src.Protocol)
 	host := strings.TrimSpace(src.Host)
 	port := src.Port
 	username := strings.TrimSpace(src.Username)
 	password := strings.TrimSpace(src.Password)
 
-	if protocol == "" || host == "" || port <= 0 {
-		return nil, nil
-	}
-	if protocol != "http" && protocol != "https" && protocol != "socks5" {
+	if !supportedProtocol || host == "" || port <= 0 {
 		return nil, nil
 	}
 
@@ -1244,13 +1246,14 @@ func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cac
 
 	// Create new proxy
 	proxy := &Proxy{
-		Name:     defaultProxyName(defaultName, protocol, host, port),
-		Protocol: protocol,
-		Host:     host,
-		Port:     port,
-		Username: username,
-		Password: password,
-		Status:   StatusActive,
+		Name:         defaultProxyName(defaultName, protocol, host, port),
+		Protocol:     protocol,
+		Host:         host,
+		Port:         port,
+		Username:     username,
+		Password:     password,
+		Status:       StatusActive,
+		FallbackMode: FallbackModeNone,
 	}
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
 		return nil, err
@@ -1259,6 +1262,19 @@ func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cac
 	*cached = append(*cached, *proxy)
 	id := proxy.ID
 	return &id, nil
+}
+
+func normalizeCRSProxyProtocol(raw string) (string, bool) {
+	protocol := strings.ToLower(strings.TrimSpace(raw))
+	if protocol == "socks" {
+		protocol = "socks5"
+	}
+	switch protocol {
+	case "http", "https", "socks5", "socks5h":
+		return protocol, true
+	default:
+		return "", false
+	}
 }
 
 func defaultProxyName(base, protocol, host string, port int) string {

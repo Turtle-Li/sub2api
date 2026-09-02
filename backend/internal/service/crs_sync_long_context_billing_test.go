@@ -23,6 +23,22 @@ type crsOpenAILongContextSource struct {
 	collection  string
 	credentials map[string]any
 	extra       map[string]any
+	proxy       *crsProxy
+}
+
+type crsFixedEgressProxyRepo struct {
+	ProxyRepository
+	createCalls int
+}
+
+func (r *crsFixedEgressProxyRepo) ListActive(context.Context) ([]Proxy, error) {
+	return nil, nil
+}
+
+func (r *crsFixedEgressProxyRepo) Create(_ context.Context, proxy *Proxy) error {
+	r.createCalls++
+	proxy.ID = 99
+	return nil
 }
 
 func newCRSLongContextAccountRepo(existing ...*Account) *crsLongContextAccountRepo {
@@ -128,7 +144,54 @@ func TestCRSSyncOpenAILongContextBilling(t *testing.T) {
 	}
 }
 
+func TestCRSSyncOpenAIOAuthPreservesFixedEgressProxyWhileRefreshingOtherFields(t *testing.T) {
+	const crsID = "crs-openai-1"
+	fixedProxyID := int64(77)
+	existing := &Account{
+		ID:          41,
+		Name:        "old name",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "old-token"},
+		Extra:       map[string]any{"crs_account_id": crsID},
+		ProxyID:     &fixedProxyID,
+		Status:      StatusDisabled,
+	}
+	accountRepo := newCRSLongContextAccountRepo(existing)
+	proxyRepo := &crsFixedEgressProxyRepo{}
+	result := runCRSOpenAILongContextSyncWithOptions(t, accountRepo, proxyRepo, true, crsOpenAILongContextSource{
+		collection:  "openaiOAuthAccounts",
+		credentials: map[string]any{"access_token": "new-token"},
+		proxy: &crsProxy{
+			Protocol: "socks5h",
+			Host:     "100.81.60.44",
+			Port:     1080,
+		},
+	})
+
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "updated", result.Items[0].Action)
+	require.Contains(t, result.Items[0].Warning, "fixed-egress binding")
+	require.Zero(t, proxyRepo.createCalls)
+	stored := accountRepo.accounts[crsID]
+	require.NotNil(t, stored.ProxyID)
+	require.Equal(t, fixedProxyID, *stored.ProxyID)
+	require.Equal(t, "new-token", stored.Credentials["access_token"])
+	require.Equal(t, "OpenAI CRS", stored.Name)
+	require.Equal(t, StatusActive, stored.Status)
+}
+
 func runCRSOpenAILongContextSync(t *testing.T, repo AccountRepository, source crsOpenAILongContextSource) *SyncFromCRSResult {
+	return runCRSOpenAILongContextSyncWithOptions(t, repo, nil, false, source)
+}
+
+func runCRSOpenAILongContextSyncWithOptions(
+	t *testing.T,
+	repo AccountRepository,
+	proxyRepo ProxyRepository,
+	syncProxies bool,
+	source crsOpenAILongContextSource,
+) *SyncFromCRSResult {
 	t.Helper()
 	account := map[string]any{
 		"kind":        "openai",
@@ -140,6 +203,9 @@ func runCRSOpenAILongContextSync(t *testing.T, repo AccountRepository, source cr
 	}
 	if source.extra != nil {
 		account["extra"] = source.extra
+	}
+	if source.proxy != nil {
+		account["proxy"] = source.proxy
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -158,11 +224,12 @@ func runCRSOpenAILongContextSync(t *testing.T, repo AccountRepository, source cr
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
-	service := NewCRSSyncService(repo, nil, nil, nil, nil, cfg)
+	service := NewCRSSyncService(repo, proxyRepo, nil, nil, nil, cfg)
 	result, err := service.SyncFromCRS(context.Background(), SyncFromCRSInput{
-		BaseURL:  server.URL,
-		Username: "admin",
-		Password: "password",
+		BaseURL:     server.URL,
+		Username:    "admin",
+		Password:    "password",
+		SyncProxies: syncProxies,
 	})
 	require.NoError(t, err)
 	return result

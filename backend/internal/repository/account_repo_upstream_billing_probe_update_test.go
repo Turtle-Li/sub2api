@@ -369,6 +369,10 @@ func TestUpdateWithAccountBillingSettingsRollsBackWhenOutboxFails(t *testing.T) 
 	t.Cleanup(func() { _ = client.Close() })
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT platform, type, parent_account_id, quota_dimension, proxy_id") + `.*` + regexp.QuoteMeta("FOR NO KEY UPDATE")).
+		WithArgs(int64(27)).
+		WillReturnRows(sqlmock.NewRows([]string{"platform", "type", "parent_account_id", "quota_dimension", "proxy_id"}).
+			AddRow(service.PlatformOpenAI, service.AccountTypeAPIKey, nil, service.QuotaDimensionGlobal, nil))
 	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 		WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
 		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot"}).

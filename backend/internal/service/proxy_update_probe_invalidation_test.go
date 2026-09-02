@@ -27,6 +27,10 @@ func (s *updatingProxyRepoStub) Update(_ context.Context, proxy *Proxy) error {
 	return nil
 }
 
+func (s *updatingProxyRepoStub) ListAccountSummariesByProxyID(context.Context, int64) ([]ProxyAccountSummary, error) {
+	return nil, nil
+}
+
 func TestBothProxyUpdateServicesUseRepositoryUpdateBoundary(t *testing.T) {
 	t.Run("ProxyService", func(t *testing.T) {
 		repo := &updatingProxyRepoStub{
@@ -56,7 +60,9 @@ func TestBothProxyUpdateServicesUseRepositoryUpdateBoundary(t *testing.T) {
 				ExpiryWarnDays: 7,
 			},
 		}
-		svc := &adminServiceImpl{proxyRepo: repo}
+		svc := &adminServiceImpl{
+			proxyRepo: repo,
+		}
 
 		_, err := svc.UpdateProxy(context.Background(), 9, &UpdateProxyInput{
 			Host:           "new.example",

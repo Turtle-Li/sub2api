@@ -18,7 +18,16 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 )
+
+var openAIFixedEgressTailnet = func() *net.IPNet {
+	_, network, err := net.ParseCIDR("100.64.0.0/10")
+	if err != nil {
+		panic(err)
+	}
+	return network
+}()
 
 // Account management implementations
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
@@ -512,6 +521,18 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if requiresFixedEgressProxyValidation(account) {
+		if s.proxyRepo == nil {
+			return nil, infraerrors.New(http.StatusInternalServerError, "FIXED_EGRESS_PROXY_VALIDATION_UNAVAILABLE", "cannot validate OpenAI OAuth proxy binding")
+		}
+		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
+		if err != nil {
+			return nil, err
+		}
+		if err := ValidateFixedEgressProxy(proxy); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
@@ -556,7 +577,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
-	if input.ProxyID != nil && account.IsOpenAIOAuth() && account.ParentAccountID == nil {
+	if input.ProxyID != nil && account.IsOpenAIOAuthLike() && account.ParentAccountID == nil {
 		return nil, fixedEgressCASRequiredError()
 	}
 	var normalizedExtra map[string]any
@@ -968,7 +989,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || input.Status != "" || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1019,8 +1040,20 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_PROXY_INHERITED",
 					"spark shadow account %d proxy is inherited from its parent and cannot be set in bulk; manage it on the parent account", acc.ID)
 			}
-			if acc != nil && acc.IsOpenAIOAuth() && acc.ParentAccountID == nil {
+			if acc != nil && acc.IsOpenAIOAuthLike() && acc.ParentAccountID == nil {
 				return nil, fixedEgressCASRequiredError()
+			}
+		}
+	}
+	// Re-enabling a proxied OpenAI Codex parent must take the normal locked
+	// update path, which validates the persisted proxy row. This remains a UX
+	// preflight only; accountRepository.BulkUpdate repeats the decision while
+	// holding the account relation lock.
+	if input.Status == StatusActive {
+		for _, acc := range cachedTargets {
+			if acc != nil && acc.IsOpenAIOAuthLike() && acc.ParentAccountID == nil &&
+				acc.Status != StatusActive && acc.ProxyID != nil {
+				return nil, ErrFixedEgressActivationRequiresSingleUpdate
 			}
 		}
 	}
@@ -1213,8 +1246,8 @@ func (s *adminServiceImpl) compareAndSwapFixedEgressProxy(
 		return nil, ErrAccountProxyCASConflict
 	}
 	for _, account := range targets {
-		if account == nil || !account.IsOpenAIOAuth() || account.Status != StatusActive || account.ParentAccountID != nil {
-			return nil, infraerrors.BadRequest("FIXED_EGRESS_ACCOUNT_INELIGIBLE", "fixed egress can only be bound to active OpenAI OAuth parent accounts")
+		if account == nil || !account.IsOpenAIOAuthLike() || account.Status != StatusActive || account.ParentAccountID != nil {
+			return nil, infraerrors.BadRequest("FIXED_EGRESS_ACCOUNT_INELIGIBLE", "fixed egress can only be bound to active OpenAI Codex parent accounts")
 		}
 		currentProxyID := int64(0)
 		if account.ProxyID != nil {
@@ -1255,29 +1288,68 @@ func (s *adminServiceImpl) compareAndSwapFixedEgressProxy(
 	return result, nil
 }
 
-func validateFixedEgressProxy(proxy *Proxy) error {
-	if proxy == nil || proxy.ID <= 0 || !proxy.IsActive() || proxy.ExpiresAt != nil ||
-		proxy.FallbackMode != FallbackModeNone || proxy.BackupProxyID != nil ||
-		proxy.Protocol != "socks5h" || proxy.Port != 1080 || proxy.Username != "" || proxy.Password != "" {
-		return infraerrors.BadRequest("FIXED_EGRESS_PROXY_INVALID", "proxy must be active Tailnet-only socks5h:1080 with no expiry, credentials, backup, or fallback")
+// requiresFixedEgressProxyValidation identifies the persisted relationship
+// that must be fixed before an OpenAI Codex parent becomes active. A nil proxy
+// remains the explicit direct-connect configuration.
+func requiresFixedEgressProxyValidation(account *Account) bool {
+	return account != nil && account.IsOpenAIOAuthLike() &&
+		account.Status == StatusActive && account.ParentAccountID == nil && account.ProxyID != nil
+}
+
+// ValidateFixedEgressProxy is used by both service selection and repository
+// row-locked persistence paths. Keep this predicate in one place so a proxy
+// accepted at creation cannot differ from one accepted by CAS.
+func ValidateFixedEgressProxy(proxy *Proxy) error {
+	invalid := func(detail string) error {
+		return ErrFixedEgressProxyInvalid.WithCause(errors.New(detail))
+	}
+	if proxy == nil {
+		return invalid("proxy is nil")
+	}
+	if proxy.ID <= 0 {
+		return invalid("proxy id must be positive")
+	}
+	if !proxy.IsActive() {
+		return invalid("proxy is not active")
+	}
+	if proxy.ExpiresAt != nil {
+		return invalid("proxy must not expire")
+	}
+	if proxy.FallbackMode != FallbackModeNone {
+		return invalid("proxy fallback mode must be none")
+	}
+	if proxy.BackupProxyID != nil {
+		return invalid("proxy must not have a backup")
+	}
+	if proxy.Protocol != "socks5h" {
+		return invalid("proxy protocol must be socks5h")
+	}
+	if proxy.Port != 1080 {
+		return invalid("proxy port must be 1080")
+	}
+	if proxy.Username != "" || proxy.Password != "" {
+		return invalid("proxy authentication must be empty")
 	}
 	ip := net.ParseIP(strings.TrimSpace(proxy.Host))
-	_, tailnet, _ := net.ParseCIDR("100.64.0.0/10")
-	if ip == nil || ip.To4() == nil || !tailnet.Contains(ip) {
-		return infraerrors.BadRequest("FIXED_EGRESS_PROXY_INVALID", "proxy host must be a Tailnet IPv4 address")
+	if ip == nil || ip.To4() == nil || !openAIFixedEgressTailnet.Contains(ip) {
+		return invalid("proxy host is outside Tailnet 100.64.0.0/10")
 	}
-	proxyID := proxy.ID
-	if _, err := ResolveAccountProxyURL(&Account{ID: -1, ProxyID: &proxyID, Proxy: proxy}); err != nil {
-		return infraerrors.BadRequest("FIXED_EGRESS_PROXY_INVALID", "proxy URL is invalid")
+	normalized, _, err := proxyurl.Parse(proxy.URL())
+	if err != nil {
+		return ErrFixedEgressProxyInvalid.WithCause(fmt.Errorf("proxy URL is invalid: %w", err))
+	}
+	if normalized == "" {
+		return invalid("proxy URL is empty")
 	}
 	return nil
 }
 
+func validateFixedEgressProxy(proxy *Proxy) error {
+	return ValidateFixedEgressProxy(proxy)
+}
+
 func fixedEgressCASRequiredError() error {
-	return infraerrors.BadRequest(
-		"FIXED_EGRESS_CAS_REQUIRED",
-		"OpenAI OAuth parent proxy changes require proxy_id plus expected_proxy_id",
-	)
+	return ErrFixedEgressCASRequired
 }
 
 func updatesUpstreamBillingProbeIdentity(credentials map[string]any) bool {
@@ -1418,15 +1490,25 @@ func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, 
 }
 
 func (s *adminServiceImpl) RevertAccountProxyFallback(ctx context.Context, id int64) error {
-	if err := s.accountRepo.RevertProxyFallback(ctx, id); err != nil {
-		return err
+	// OpenAI OAuth parents and shadows are rejected by the repository's locked
+	// guard, so a successful generic revert never needs post-transaction shadow
+	// propagation. Keeping this as one repository operation avoids a rebind
+	// window between the raw revert and a later shadow write.
+	return s.accountRepo.RevertProxyFallback(ctx, id)
+}
+
+func validateSparkShadowParent(parent *Account) error {
+	if parent == nil || !parent.IsOpenAIOAuth() {
+		return infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_INVALID_PARENT",
+			"spark shadow requires an OpenAI OAuth parent account")
 	}
-	// 加载回退后的账号以获取实际 ProxyID，再传播到影子账号
-	account, err := s.accountRepo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("get account after proxy revert: %w", err)
+	// G6:母账号本身不能是影子,否则会建出二级影子——resolveCredentialAccount 只解一层,
+	// 会解析到无凭据的一级影子,进入坏调度/上游失败。
+	if parent.IsCredentialShadow() {
+		return infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_PARENT_IS_SHADOW",
+			"spark shadow parent must be a real account, not another spark shadow")
 	}
-	return s.propagateProxyToShadows(ctx, id, account.ProxyID)
+	return nil
 }
 
 // CreateShadow 为指定 OpenAI OAuth 母账号创建 spark 维度影子账号（一母一影）。
@@ -1437,15 +1519,8 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	if err != nil {
 		return nil, fmt.Errorf("get parent account: %w", err)
 	}
-	if !parent.IsOpenAIOAuth() {
-		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_INVALID_PARENT",
-			"spark shadow requires an OpenAI OAuth parent account")
-	}
-	// G6:母账号本身不能是影子,否则会建出二级影子——resolveCredentialAccount 只解一层,
-	// 会解析到无凭据的一级影子,进入坏调度/上游失败。
-	if parent.IsCredentialShadow() {
-		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_PARENT_IS_SHADOW",
-			"spark shadow parent must be a real account, not another spark shadow")
+	if err := validateSparkShadowParent(parent); err != nil {
+		return nil, err
 	}
 
 	// 2. 一母一影校验
@@ -1523,14 +1598,41 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 		},
 	}
 
-	// 5. 持久化（Create 填充 shadow.ID）。并发竞态:预查(步骤2)放行后另一请求抢先建成,本次会撞
+	// 5. 持久化。锁内重新读取 parent.proxy_id；CAS 若在初读后提交，
+	// repository returns a conflict and this loop rebuilds only the proxy
+	// snapshot before retrying. That preserves the global proxy→account lock
+	// order and prevents a new shadow from reviving the old egress relation.
+	creator, ok := s.accountRepo.(OpenAIOAuthShadowCreateRepository)
+	if !ok {
+		return nil, infraerrors.New(http.StatusInternalServerError, "FIXED_EGRESS_SHADOW_CREATE_UNAVAILABLE",
+			"account repository does not support atomic OpenAI OAuth shadow creation")
+	}
+	var createErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		createErr = creator.CreateOpenAIOAuthShadow(ctx, parentID, parent.ProxyID, shadow)
+		if !errors.Is(createErr, ErrAccountProxyCASConflict) {
+			break
+		}
+		if attempt == 2 {
+			break
+		}
+		parent, err = s.accountRepo.GetByID(ctx, parentID)
+		if err != nil {
+			return nil, fmt.Errorf("reload parent account after proxy change: %w", err)
+		}
+		if err := validateSparkShadowParent(parent); err != nil {
+			return nil, err
+		}
+		shadow.ProxyID = parent.ProxyID
+	}
+	// 并发竞态:预查(步骤2)放行后另一请求抢先建成,本次会撞
 	// 一母一影唯一索引。复查确认确为"已存在"竞态时返回结构化 409 而非裸 500——外审 A/P1。
-	if err := s.accountRepo.Create(ctx, shadow); err != nil {
+	if createErr != nil {
 		if existing, qerr := s.accountRepo.ListShadowsByParent(ctx, parentID); qerr == nil && len(existing) > 0 {
 			return nil, infraerrors.New(http.StatusConflict, "SPARK_SHADOW_ALREADY_EXISTS",
 				"parent account already has a spark shadow account")
 		}
-		return nil, fmt.Errorf("create spark shadow: %w", err)
+		return nil, fmt.Errorf("create spark shadow: %w", createErr)
 	}
 
 	// 6. 绑定分组。注意:create+bind 非单一 DB 事务(通用 Create 走 r.client、outbox 走 r.sql,
