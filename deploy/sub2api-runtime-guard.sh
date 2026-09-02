@@ -213,7 +213,8 @@ external_value() {
 }
 
 load_external_runtime_env() {
-  local line key value count
+  local line key value seen_keys
+  seen_keys='|'
   validate_external_file_path SUB2API_EXTERNAL_RUNTIME_ENV_FILE "$EXTERNAL_RUNTIME_ENV_FILE"
   [ -f "$EXTERNAL_RUNTIME_ENV_FILE" ] && [ ! -L "$EXTERNAL_RUNTIME_ENV_FILE" ] \
     || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE must be a regular non-symlink file"
@@ -236,8 +237,10 @@ load_external_runtime_env() {
       PGSSLROOTCERT) die "PGSSLROOTCERT is managed from SUB2API_EXTERNAL_CA_FILE" ;;
       *) die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE contains an unsupported key" ;;
     esac
-    count="$(grep -c "^$key=" "$EXTERNAL_RUNTIME_ENV_FILE" || true)"
-    [ "$count" = 1 ] || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE contains a duplicate key"
+    case "$seen_keys" in
+      *"|${key}|"*) die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE contains a duplicate key" ;;
+    esac
+    seen_keys="${seen_keys}${key}|"
     [ -n "$value" ] || die "SUB2API_EXTERNAL_RUNTIME_ENV_FILE contains an empty required setting"
   done <"$EXTERNAL_RUNTIME_ENV_FILE"
 
@@ -1009,8 +1012,10 @@ if [ "$running_inactive_count" -gt 0 ]; then
     || die "running inactive fallback has no image reference: ${FALLBACK_CONTAINER}"
   verify_application_runtime_before_lifecycle "$FALLBACK_CONTAINER" \
     || die "running inactive fallback does not match the configured dependency and dual-node contract: ${FALLBACK_CONTAINER}"
-  container_is_healthy "$FALLBACK_CONTAINER" && app_internal_health "$FALLBACK_CONTAINER" \
-    || die "running inactive fallback is not healthy: ${FALLBACK_CONTAINER}"
+  if ! container_is_healthy "$FALLBACK_CONTAINER" \
+    || ! app_internal_health "$FALLBACK_CONTAINER"; then
+    die "running inactive fallback is not healthy: ${FALLBACK_CONTAINER}"
+  fi
   isolate_active_container \
     || die "could not isolate failed active container before promoting ${FALLBACK_CONTAINER}"
   log "promoting already-running healthy historical fallback: ${FALLBACK_CONTAINER}"

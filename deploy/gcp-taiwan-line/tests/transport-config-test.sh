@@ -217,12 +217,9 @@ for metadata_bootstrap in gcp-startup-bootstrap.sh gcp-update-bootstrap.sh; do
     grep -Fq -- "--noproxy '*'" "${line_dir}/${metadata_bootstrap}" \
         || fail "${metadata_bootstrap} can send metadata requests through an ambient proxy"
 done
-[[ "$(grep -Fc -- "--noproxy '*'" \
-    "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh")" -eq 2 ]] \
-    || fail 'customer-Host origin probes do not consistently bypass ambient proxies'
-grep -Fq -- 'wget -Y off -qO- http://127.0.0.1:2019/config/' \
-    "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh" \
-    || fail 'customer-Host Caddy admin probe can inherit an ambient proxy'
+# The Cloudflare optimized-IP POC is retired and intentionally absent from the
+# integrated release. Its historical transaction filename remains a safety
+# fence in live mutators so an unfinished transaction cannot be ignored.
 for host_control in sub2api-server-release.sh sub2api-runtime-guard.sh; do
     grep -Fq -- "--noproxy '*'" "${line_dir}/../${host_control}" \
         || fail "${host_control} public health can escape its pinned direct path"
@@ -278,12 +275,6 @@ grep -Fq '.cf-opt-totools-caddy.env' "${line_dir}/azure-caddy-listeners.sh" \
     || fail 'Azure listener staging lacks the customer-Host transaction fence'
 grep -Fq '.sub2api-blue-green-caddy-transaction.env' "${line_dir}/azure-caddy-listeners.sh" \
     || fail 'Azure listener staging lacks the blue-green transaction fence'
-grep -Fq '.gcp-tw-caddy-transaction.env' \
-    "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh" \
-    || fail 'customer-Host preparation lacks the Azure listener transaction fence'
-grep -Fq '.sub2api-blue-green-caddy-transaction.env' \
-    "${line_dir}/../cloudflare-optimized-poc/sub2api-caddy-customer-host.sh" \
-    || fail 'customer-Host preparation lacks the blue-green transaction fence'
 
 grep -Fq 'gce-security-mirror-file|/etc/apt/mirrors/debian-security.list' \
     "${line_dir}/install-gcp-haproxy.sh" \

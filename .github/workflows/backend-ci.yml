@@ -54,7 +54,6 @@ jobs:
           /bin/sh deploy/test-caddyfile-cache.sh
           /bin/bash deploy/gcp-taiwan-line/tests/transport-config-test.sh
           shellcheck \
-            deploy/cloudflare-optimized-poc/sub2api-caddy-customer-host.sh \
             deploy/gcp-taiwan-line/azure-caddy-listeners.sh \
             deploy/gcp-taiwan-line/gcp-startup-bootstrap.sh \
             deploy/gcp-taiwan-line/gcp-update-bootstrap.sh \

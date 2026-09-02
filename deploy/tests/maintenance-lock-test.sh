@@ -83,7 +83,7 @@ for consumer in \
   "${DEPLOY_DIR}/sub2api-server-release.sh" \
   "${DEPLOY_DIR}/sub2api-node-state.sh" \
   "${DEPLOY_DIR}/sub2api-cert-receiver.sh" \
-  "${DEPLOY_DIR}/cloudflare-optimized-poc/sub2api-caddy-customer-host.sh"; do
+  "${DEPLOY_DIR}/gcp-taiwan-line/azure-caddy-listeners.sh"; do
   grep -Fq -- 'sub2api_maintenance_lock_open' "$consumer" \
     || fail "shared maintenance lock helper is not used by ${consumer}"
 done

@@ -193,7 +193,7 @@ require_docker_name() {
 }
 
 validate_unified_payment_runtime() {
-  local key value webhook_prefix webhook_key
+  local key value webhook_prefix webhook_key webhook_body
   if [ "${UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64:-}" != "" ]; then
     die "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64 is forbidden; use the memory-only Vault agent"
   fi
@@ -236,10 +236,11 @@ validate_unified_payment_runtime() {
   webhook_key="${UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON#"$webhook_prefix"}"
   webhook_key="${webhook_key%\"\}}"
   [ "${#webhook_key}" -eq 44 ] || die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid"
-  case "$webhook_key" in
-    *[!A-Za-z0-9+/=]*|*=*=*|*==*) die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid" ;;
+  webhook_body="${webhook_key%?}"
+  case "$webhook_body" in
+    *[!A-Za-z0-9+/]*) die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid" ;;
   esac
-  [ "${webhook_key#???????????????????????????????????????????}" = = ] \
+  [ "${webhook_key#"$webhook_body"}" = = ] \
     || die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid"
   PAYMENT_VAULT_MOUNT_ARGS=(
     --mount "type=volume,source=$UNIFIED_PAYMENT_VAULT_VOLUME,target=$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH,readonly"
@@ -435,9 +436,11 @@ make_runtime_env_file() {
 	write_external_overrides "$output_file"
   fi
   if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
-	printf 'SUB2API_TRAFFIC_STATE_FILE=%s\n' "$CONTAINER_TRAFFIC_STATE_PATH" >>"$output_file"
-	printf 'SUB2API_BACKGROUND_STATE_FILE=%s\n' "$CONTAINER_BACKGROUND_STATE_PATH" >>"$output_file"
-	printf 'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=%s\n' "$CONTAINER_HEALTH_TOKEN_PATH" >>"$output_file"
+	{
+	  printf 'SUB2API_TRAFFIC_STATE_FILE=%s\n' "$CONTAINER_TRAFFIC_STATE_PATH"
+	  printf 'SUB2API_BACKGROUND_STATE_FILE=%s\n' "$CONTAINER_BACKGROUND_STATE_PATH"
+	  printf 'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=%s\n' "$CONTAINER_HEALTH_TOKEN_PATH"
+	} >>"$output_file"
   fi
   write_unified_payment_overrides "$output_file"
   RUNTIME_ENV_FILE="$output_file"
