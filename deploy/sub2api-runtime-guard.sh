@@ -872,9 +872,11 @@ switch_caddy_to_fallback() {
     return 1
   }
 
-  # The active container was stopped above.  The helper sees an already
-  # healthy, existing NEW_CONTAINER, so it only performs its audited Caddy
-  # host-file, bind-mount startup-file, validation, reload, and admin checks.
+  # The active container was stopped above. The helper sees an already healthy,
+  # existing NEW_CONTAINER, so it only performs its audited Caddy host-file,
+  # bind-mount startup-file, validation, reload, and admin checks. Preserve the
+  # fallback's exact compatibility entry; this also works when the selected
+  # old container is absent and there is no source env to inspect.
   if ! env \
     APP_DIR="$APP_DIR" \
     CADDY_CONTAINER="$CADDY_CONTAINER" \
@@ -889,6 +891,8 @@ switch_caddy_to_fallback() {
     PULL_IMAGE=false \
     REMOVE_EXISTING_NEW_CONTAINER=false \
     ALLOW_ISOLATED_OLD_CONTAINER=true \
+    SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=preserve \
+    SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="$FALLBACK_CONTAINER" \
     HEALTH_ATTEMPTS="$RETRY_ATTEMPTS" \
     HEALTH_INTERVAL_SECONDS="$RETRY_INTERVAL_SECONDS" \
     bash "$BLUE_GREEN_SCRIPT"; then

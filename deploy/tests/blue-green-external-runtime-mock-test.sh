@@ -974,4 +974,43 @@ assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
 assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
 assert_contains "$(state_path sub2api)/env" 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true'
 
+# Recovery can also start with the Caddy-selected container absent (for
+# example after an interrupted cleanup). With the audited isolated-old mode,
+# preserve the running fallback's exact mode as the source of expectation and
+# complete the switch without requiring the missing old container.
+absent_target_env="$TEST_ROOT/absent-target.env"
+absent_target_mounts="$TEST_ROOT/absent-target.mounts"
+{
+  cat "$RUNTIME_ENV"
+  printf '%s\n' \
+    'PGSSLROOTCERT=/etc/sub2api-db-ca/ca.crt' \
+    'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state' \
+    'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state' \
+    'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token'
+} >"$absent_target_env"
+cp "$rollback_target_mounts" "$absent_target_mounts"
+make_state sub2api sub2api:old true unless-stopped "$absent_target_env" "$absent_target_mounts"
+rm -rf "$(state_path sub2api-green)"
+printf 'reverse_proxy sub2api-green:8080\n' >"$APP_DIR/Caddyfile"
+printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_STARTUP_FILE"
+printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_ACTIVE_FILE"
+: >"$CALLS"
+if FAKE_DOCKER_CADDY_FLOW=true \
+  HELPER_OLD_CONTAINER=sub2api-green \
+  HELPER_NEW_CONTAINER=sub2api \
+  HELPER_NEW_IMAGE=sub2api:old \
+  ALLOW_ISOLATED_OLD_CONTAINER=true \
+  REMOVE_EXISTING_NEW_CONTAINER=false \
+  PRESERVE_SOURCE_CONTAINER=sub2api \
+  run_helper >"$OUTPUT" 2>&1; then
+  :
+else
+  sed -n '1,200p' "$OUTPUT" >&2
+  fail 'active-absent isolated recovery was rejected'
+fi
+assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
+assert_not_contains "$(state_path sub2api)/env" 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE='
+
 printf 'Blue-green external runtime mock tests passed.\n'

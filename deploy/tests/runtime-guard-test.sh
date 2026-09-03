@@ -394,9 +394,13 @@ new_case() {
   printf '{"upstream":"sub2api-green:8080"}\n' >"${CASE_ROOT}/active-config.json"
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/startup-Caddyfile"
 
-  cat >"${CASE_ROOT}/app/scripts/sub2api-blue-green-release.sh" <<'EOF'
+cat >"${CASE_ROOT}/app/scripts/sub2api-blue-green-release.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [ "${FAKE_REQUIRE_PRESERVE_SOURCE:-false}" = true ]; then
+  [ "${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-}" = preserve ] || exit 91
+  [ "${SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-}" = "${NEW_CONTAINER:-}" ] || exit 92
+fi
 printf 'old=%s\nnew=%s\nimage=%s\nfrom=%s\nto=%s\nbackup=%s\npull=%s\nremove=%s\nisolated_old=%s\n' \
   "$OLD_CONTAINER" "$NEW_CONTAINER" "$NEW_IMAGE" "$CADDY_UPSTREAM_FROM" "$CADDY_UPSTREAM_TO" \
   "$RUN_BACKUP" "$PULL_IMAGE" "$REMOVE_EXISTING_NEW_CONTAINER" \
@@ -446,6 +450,7 @@ run_guard() {
     FAKE_RUNTIME_ROOT="${CASE_ROOT}/runtime" \
     FAKE_NODE_STATE_CALLS="${CASE_ROOT}/node-state-calls.log" \
     FAKE_RELEASE_CALLS="${CASE_ROOT}/release-calls.log" \
+    FAKE_REQUIRE_PRESERVE_SOURCE="${FAKE_REQUIRE_PRESERVE_SOURCE:-false}" \
     FAKE_STARTUP_CONFIG_FILE="${CASE_ROOT}/startup-Caddyfile" \
     REAL_STAT="$REAL_STAT" \
     SUB2API_APP_DIR="${CASE_ROOT}/app" \
@@ -729,7 +734,12 @@ write_external_runtime_files
 write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
 write_runtime_metadata sub2api-blue unless-stopped candidate-network \
   "$(external_mounts sub2api-blue)" "$(dual_environment)"
-run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+if FAKE_REQUIRE_PRESERVE_SOURCE=true run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  :
+else
+  sed -n '1,160p' "${CASE_ROOT}/output.log" >&2
+  fail 'active-absent fallback did not receive an explicit preserve source'
+fi
 assert_contains "${CASE_ROOT}/output.log" 'active container is absent: sub2api-green'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'

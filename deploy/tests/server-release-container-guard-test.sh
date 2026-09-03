@@ -19,6 +19,7 @@ EVENT_LOG="${TEST_ROOT}/events.log"
 STARTUP_CADDY="${TEST_ROOT}/startup.Caddyfile"
 ACTIVE_CADDY="${TEST_ROOT}/active-caddy.json"
 LOCAL_TRANSACTION="${TEST_ROOT}/local-release.env"
+NEW_RUNNING_MARKER="${TEST_ROOT}/new-running.marker"
 EXTERNAL_RUNTIME_ENV_FILE="${TEST_ROOT}/external-runtime.env"
 EXTERNAL_CA_FILE="${TEST_ROOT}/external-ca.crt"
 
@@ -91,16 +92,22 @@ if [ "${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}" = true ]; then
   exit 0
 fi
 if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
-  printf 'mode=%s old=%s new=%s backup=%s fixed_egress_compatibility=%s preserve_source=%s\n' \
+  printf 'mode=%s old=%s new=%s backup=%s isolated_old=%s fixed_egress_compatibility=%s preserve_source=%s\n' \
     "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
     "${OLD_CONTAINER:-}" \
     "${NEW_CONTAINER:-}" \
     "${RUN_BACKUP:-}" \
+    "${ALLOW_ISOLATED_OLD_CONTAINER:-false}" \
     "${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-}" \
     "${SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
 fi
 if [ -n "${FAKE_EVENT_LOG:-}" ]; then
   printf 'helper old=%s new=%s\n' "${OLD_CONTAINER:-}" "${NEW_CONTAINER:-}" >>"$FAKE_EVENT_LOG"
+fi
+if [ "${FAKE_MARK_NEW_RUNNING:-0}" = 1 ] \
+  && [ "${OLD_CONTAINER:-}" = sub2api-green ] \
+  && [ "${NEW_CONTAINER:-}" = sub2api-blue ]; then
+  : >"$FAKE_NEW_RUNNING_MARKER"
 fi
 if [ "${FAKE_BLUE_GREEN_FAIL_BEFORE_CADDY:-0}" = 1 ]; then
   if [ "${OLD_CONTAINER:-}" = sub2api-blue ]; then
@@ -161,7 +168,9 @@ case "$command_name" in
       *State.Running*)
         case "$container_name" in
           sub2api-green|sub2api) printf 'true\n' ;;
-          sub2api-blue) printf 'false\n' ;;
+          sub2api-blue)
+            if [ -e "${FAKE_NEW_RUNNING_MARKER:-}" ]; then printf 'true\n'; else printf 'false\n'; fi
+            ;;
         esac
         ;;
       *State.Health*) printf 'healthy\n' ;;
@@ -285,6 +294,8 @@ run_release() {
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_MARK_NEW_RUNNING="${FAKE_MARK_NEW_RUNNING:-0}" \
+    FAKE_NEW_RUNNING_MARKER="$NEW_RUNNING_MARKER" \
     FAKE_NODE_STATE_BACKGROUND="${FAKE_NODE_STATE_BACKGROUND:-active}" \
     FAKE_FLOCK_COUNT_FILE="${FAKE_FLOCK_COUNT_FILE:-}" \
     FAKE_FLOCK_FAIL_ON_CALL="${FAKE_FLOCK_FAIL_ON_CALL:-}" \
@@ -325,6 +336,8 @@ run_github_prebuilt_release() {
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_MARK_NEW_RUNNING="${FAKE_MARK_NEW_RUNNING:-0}" \
+    FAKE_NEW_RUNNING_MARKER="$NEW_RUNNING_MARKER" \
     FAKE_NODE_STATE_BACKGROUND="${FAKE_NODE_STATE_BACKGROUND:-active}" \
     SUB2API_APP_DIR="$APP_DIR" \
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
@@ -359,6 +372,8 @@ run_external_github_prebuilt_release() {
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_MARK_NEW_RUNNING="${FAKE_MARK_NEW_RUNNING:-0}" \
+    FAKE_NEW_RUNNING_MARKER="$NEW_RUNNING_MARKER" \
     SUB2API_APP_DIR="$APP_DIR" \
     SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
     SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
@@ -385,7 +400,7 @@ run_external_github_prebuilt_release() {
 
 reset_release_case() {
   reset_caddy_views
-  rm -f -- "$LOCAL_TRANSACTION"
+  rm -f -- "$LOCAL_TRANSACTION" "$NEW_RUNNING_MARKER"
   : >"$DOCKER_CALLS"
   : >"$NODE_STATE_CALLS"
   : >"$CURL_CALLS"
@@ -562,9 +577,21 @@ assert_contains "$BLUE_GREEN_ENV_LOG" \
 assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=local old=sub2api-blue new=sub2api-green backup=false'
 assert_contains "$BLUE_GREEN_ENV_LOG" \
-  'mode=local old=sub2api-blue new=sub2api-green backup=false fixed_egress_compatibility=preserve preserve_source=sub2api-green'
+  'mode=local old=sub2api-blue new=sub2api-green backup=false isolated_old=true fixed_egress_compatibility=preserve preserve_source=sub2api-green'
 
-: >"$NODE_STATE_CALLS"
+# If the failed new generation is still running, rollback must retain the
+# normal blue-green source contract rather than forcing isolated-old mode.
+reset_release_case
+running_source_rollback_output="${TEST_ROOT}/running-source-rollback.log"
+if ALLOW_DRAINING=true FAKE_UPDATE_CADDY=1 FAKE_MARK_NEW_RUNNING=1 \
+  run_github_prebuilt_release >"$running_source_rollback_output" 2>&1; then
+  fail 'fake release unexpectedly passed a failing public health check'
+fi
+assert_contains "$running_source_rollback_output" 'Rollback completed'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'mode=local old=sub2api-blue new=sub2api-green backup=false isolated_old=false fixed_egress_compatibility=preserve preserve_source=sub2api-green'
+
+reset_release_case
 successful_release_output="${TEST_ROOT}/successful-release.log"
 if ! ALLOW_DRAINING=true FAKE_CURL_SUCCESS=1 FAKE_UPDATE_CADDY=1 \
   RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=true \

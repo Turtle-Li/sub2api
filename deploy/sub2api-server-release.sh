@@ -507,10 +507,27 @@ docker image inspect "$IMAGE" >/dev/null || die "built image is missing"
 log "Image ready: $(docker image inspect "$IMAGE" --format '{{.Id}} {{.Size}} bytes')"
 
 rollback() {
+  local rollback_source_running
+  local rollback_allow_isolated=false
+
   log "Attempting automatic rollback to ${OLD_CONTAINER}"
+  if ! rollback_source_running="$(docker inspect "$NEW_CONTAINER" --format '{{.State.Running}}')"; then
+    log "ERROR: could not inspect failed release container before rollback: ${NEW_CONTAINER}" >&2
+    return 1
+  fi
+  case "$rollback_source_running" in
+    true) ;;
+    false) rollback_allow_isolated=true ;;
+    *)
+      log "ERROR: failed release container has an invalid running state: ${NEW_CONTAINER}" >&2
+      return 1
+      ;;
+  esac
   # The helper swaps OLD/NEW for rollback. Preserve the exact compatibility
   # setting from the original active generation (including an absent key),
-  # rather than applying the mode of the failed new generation to it.
+  # rather than applying the mode of the failed new generation to it. If the
+  # failed generation has already stopped, use the helper's audited isolated-
+  # old contract; a still-running source retains the normal rollback path.
   run_blue_green \
     OLD_CONTAINER="$NEW_CONTAINER" \
     NEW_CONTAINER="$OLD_CONTAINER" \
@@ -520,6 +537,7 @@ rollback() {
     PULL_IMAGE=false \
     RUN_BACKUP=false \
     REMOVE_EXISTING_NEW_CONTAINER=false \
+    ALLOW_ISOLATED_OLD_CONTAINER="$rollback_allow_isolated" \
     SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=preserve \
     SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="$OLD_CONTAINER" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
