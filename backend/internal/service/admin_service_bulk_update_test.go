@@ -289,6 +289,26 @@ func TestAdminService_BulkUpdateAccounts_OpenAIOAuthProxyRequiresCompareAndSet(t
 	require.Zero(t, repo.casCalls)
 }
 
+func TestAdminService_BulkUpdateAccounts_FixedEgressCompatibilityModeBlocksCompareAndSet(t *testing.T) {
+	t.Setenv(FixedEgressCompatibilityModeEnv, "true")
+	proxyID := int64(77)
+	expectedProxyID := int64(0)
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
+	}}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	_, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1}, ProxyID: &proxyID, ExpectedProxyID: &expectedProxyID,
+	})
+
+	require.ErrorIs(t, err, ErrFixedEgressMigrationNotReady)
+	requireApplicationErrorReason(t, err, "FIXED_EGRESS_MIGRATION_NOT_READY")
+	require.False(t, repo.getByIDsCalled, "compatibility guard must reject before any account read")
+	require.Zero(t, repo.casCalls)
+	require.Zero(t, repo.bulkUpdateCalls)
+}
+
 func TestAdminService_UpdateAccount_OpenAIOAuthProxyRequiresCompareAndSet(t *testing.T) {
 	proxyID := int64(77)
 	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{

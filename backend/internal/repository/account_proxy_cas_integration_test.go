@@ -292,6 +292,61 @@ func TestCompareAndSwapOpenAIOAuthProxyReusesOuterTransaction(t *testing.T) {
 	require.Zero(t, outboxCount, "outer rollback must remove the CAS outbox event")
 }
 
+func TestCompareAndSwapOpenAIOAuthProxyReusesInjectedTransactionClient(t *testing.T) {
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	proxy := fixedEgressRaceProxy(t, fmt.Sprintf("fixed-egress-cas-injected-tx-proxy-%d", suffix))
+	parent := mustCreateAccount(t, integrationEntClient, &service.Account{
+		Name:        fmt.Sprintf("fixed-egress-cas-injected-tx-parent-%d", suffix),
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Schedulable: true,
+	})
+	shadow := mustCreateAccount(t, integrationEntClient, &service.Account{
+		Name:            fmt.Sprintf("fixed-egress-cas-injected-tx-shadow-%d", suffix),
+		Platform:        service.PlatformOpenAI,
+		Type:            service.AccountTypeOAuth,
+		Status:          service.StatusActive,
+		Schedulable:     true,
+		ParentAccountID: &parent.ID,
+		QuotaDimension:  service.QuotaDimensionSpark,
+	})
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `
+			DELETE FROM scheduler_outbox
+			WHERE payload @> jsonb_build_object('account_ids', jsonb_build_array($1::bigint))
+		`, parent.ID)
+		_ = integrationEntClient.Account.DeleteOneID(shadow.ID).Exec(context.Background())
+		_ = integrationEntClient.Account.DeleteOneID(parent.ID).Exec(context.Background())
+		_ = integrationEntClient.Proxy.DeleteOneID(proxy.ID).Exec(context.Background())
+	})
+
+	outerTx, err := integrationEntClient.Tx(ctx)
+	require.NoError(t, err)
+	cache := &schedulerCacheRecorder{}
+	repo := newAccountRepositoryWithSQL(outerTx.Client(), outerTx, cache)
+	updated, err := repo.CompareAndSwapOpenAIOAuthProxy(ctx, []int64{parent.ID}, 0, proxy)
+	require.NoError(t, err)
+	require.Equal(t, []int64{parent.ID}, updated)
+	require.Empty(t, cache.deleteIDs, "a caller-owned transaction client must not publish cache retirement before commit")
+	require.NoError(t, outerTx.Rollback())
+
+	for _, accountID := range []int64{parent.ID, shadow.ID} {
+		var proxyID sql.NullInt64
+		require.NoError(t, integrationDB.QueryRowContext(ctx,
+			"SELECT proxy_id FROM accounts WHERE id = $1", accountID).Scan(&proxyID))
+		require.False(t, proxyID.Valid, "outer rollback must restore the original proxy binding")
+	}
+	var outboxCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM scheduler_outbox
+		WHERE payload @> jsonb_build_object('account_ids', jsonb_build_array($1::bigint))
+	`, parent.ID).Scan(&outboxCount))
+	require.Zero(t, outboxCount, "outer rollback must remove the CAS outbox event")
+}
+
 func TestCompareAndSwapOpenAIOAuthProxyPostCommitEvictionCannotResurrectNewerDelete(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

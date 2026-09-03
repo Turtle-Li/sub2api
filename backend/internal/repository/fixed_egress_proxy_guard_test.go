@@ -370,6 +370,25 @@ func TestCompareAndSwapOpenAIOAuthProxyValidatesPersistedProxyShape(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCompareAndSwapOpenAIOAuthProxyCompatibilityModeRejectsBeforeMutation(t *testing.T) {
+	t.Setenv(service.FixedEgressCompatibilityModeEnv, "true")
+	client, mock := newFixedEgressGuardSQLClient(t)
+	cache := &proxySchedulerCacheRecorder{}
+	repo := newAccountRepositoryWithSQL(client, nil, cache)
+
+	_, err := repo.CompareAndSwapOpenAIOAuthProxy(
+		context.Background(),
+		[]int64{41},
+		0,
+		&service.Proxy{ID: 7},
+	)
+
+	require.ErrorIs(t, err, service.ErrFixedEgressMigrationNotReady)
+	require.Equal(t, "FIXED_EGRESS_MIGRATION_NOT_READY", errors.Reason(err))
+	require.Empty(t, cache.deleteIDs, "compatibility guard must not mutate scheduler cache")
+	require.NoError(t, mock.ExpectationsWereMet(), "compatibility guard must not open a transaction or enqueue outbox work")
+}
+
 func TestBulkUpdateLocksProxyBeforePersistedOAuthParentAndRejectsRebind(t *testing.T) {
 	client, mock := newFixedEgressGuardSQLClient(t)
 	newProxyID := int64(8)

@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 
 	entsql "entgo.io/ent/dialect/sql"
 )
@@ -117,7 +118,7 @@ func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) er
 		}
 	}
 
-	updated, affectedAccountIDs, err := updateProxyAndInvalidateProbeSnapshots(ctx, client, proxyIn)
+	updated, affectedAccountIDs, fixedEgressAccounts, err := updateProxyAndInvalidateProbeSnapshots(ctx, client, proxyIn)
 	if err != nil {
 		return err
 	}
@@ -132,7 +133,7 @@ func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) er
 	// committed database state instead of retaining a disabled proxy forever.
 	// The durable outbox remains the retry path if Redis is unavailable.
 	if tx != nil {
-		r.deleteSchedulerAccountSnapshots(baseContextWithoutCancel(ctx), affectedAccountIDs)
+		r.deleteSchedulerAccountSnapshots(baseContextWithoutCancel(ctx), affectedAccountIDs, fixedEgressAccounts)
 	}
 	return nil
 }
@@ -164,18 +165,18 @@ func proxyProbeIdentityFromService(proxyIn *service.Proxy) proxyProbeIdentity {
 	}
 }
 
-func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.Client, proxyIn *service.Proxy) (*dbent.Proxy, []int64, error) {
+func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.Client, proxyIn *service.Proxy) (*dbent.Proxy, []int64, map[int64]*service.Account, error) {
 	currentProxy, err := lockProxyForUpdate(ctx, client, proxyIn.ID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if service.FixedEgressProxyIdentityChanged(currentProxy, proxyIn) {
 		bound, err := hasOpenAIOAuthParentProxyBinding(ctx, client, proxyIn.ID)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if bound {
-			return nil, nil, service.ErrFixedEgressProxyIdentityImmutable
+			return nil, nil, nil, service.ErrFixedEgressProxyIdentityImmutable
 		}
 	}
 	currentIdentity := proxyProbeIdentityFromService(currentProxy)
@@ -211,30 +212,34 @@ func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.C
 
 	updated, err := builder.Save(ctx)
 	if dbent.IsNotFound(err) {
-		return nil, nil, service.ErrProxyNotFound
+		return nil, nil, nil, service.ErrProxyNotFound
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if currentIdentity == proxyProbeIdentityFromService(proxyIn) {
-		return updated, nil, nil
+		return updated, nil, nil, nil
 	}
 	accountIDs, err := invalidateProxyProbeSnapshots(ctx, client, proxyIn.ID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if statusChanged {
 		boundAccountIDs, err := listLiveAccountIDsByProxyID(ctx, client, proxyIn.ID)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		accountIDs = append(accountIDs, boundAccountIDs...)
 	}
 	accountIDs = sortedUniqueAccountIDs(accountIDs)
 	if err := enqueueProxyProbeAccountChanges(ctx, client, accountIDs); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return updated, accountIDs, nil
+	fixedEgressAccounts, err := classifyFixedEgressSchedulerAccounts(ctx, client, accountIDs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return updated, accountIDs, fixedEgressAccounts, nil
 }
 
 func listLiveAccountIDsByProxyID(ctx context.Context, exec sqlExecutor, proxyID int64) ([]int64, error) {
@@ -262,7 +267,11 @@ func listLiveAccountIDsByProxyID(ctx context.Context, exec sqlExecutor, proxyID 
 	return accountIDs, nil
 }
 
-func (r *proxyRepository) deleteSchedulerAccountSnapshots(ctx context.Context, accountIDs []int64) {
+func (r *proxyRepository) deleteSchedulerAccountSnapshots(
+	ctx context.Context,
+	accountIDs []int64,
+	fixedEgressAccounts map[int64]*service.Account,
+) {
 	if r == nil || r.schedulerCache == nil {
 		return
 	}
@@ -272,24 +281,32 @@ func (r *proxyRepository) deleteSchedulerAccountSnapshots(ctx context.Context, a
 	}
 	propagationCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	protectedAccounts, err := r.fixedEgressSchedulerAccounts(propagationCtx, accountIDs)
-	if err != nil {
-		// A proxy mutation must not leave a fixed-egress account writeable by a
-		// delayed cache publisher. If the post-commit classification read fails,
-		// retire every affected ID rather than risk resurrecting a stale proxy.
-		logger.LegacyPrintf("repository.proxy", "[Scheduler] classify fixed-egress account snapshots failed; retiring all affected snapshots: err=%v", err)
-		protectedAccounts = make(map[int64]*service.Account, len(accountIDs))
-		for _, accountID := range accountIDs {
-			protectedAccounts[accountID] = nil
+	if len(fixedEgressAccounts) > 0 {
+		protectedIDs := make([]int64, 0, len(fixedEgressAccounts))
+		for accountID := range fixedEgressAccounts {
+			protectedIDs = append(protectedIDs, accountID)
+		}
+		accounts, err := newAccountRepositoryWithSQL(r.client, r.sql, nil).GetByIDs(propagationCtx, protectedIDs)
+		if err != nil {
+			// Classification and the permanent fence authority were established
+			// inside the committed proxy transaction. A failed enrichment read may
+			// reduce temporary scheduler metadata, but must never turn that safe
+			// failure into an unfenced full-account payload.
+			logger.LegacyPrintf("repository.proxy", "[Scheduler] fixed-egress metadata enrichment failed; retaining conservative metadata: err=%v", err)
+		} else {
+			for _, account := range accounts {
+				if account != nil && account.IsOpenAIOAuthLike() {
+					if _, protected := fixedEgressAccounts[account.ID]; protected {
+						fixedEgressAccounts[account.ID] = account
+					}
+				}
+			}
 		}
 	}
 	for _, accountID := range accountIDs {
-		if account, protected := protectedAccounts[accountID]; protected {
-			if account != nil {
-				err = service.PublishSchedulerAccountSnapshot(propagationCtx, r.schedulerCache, account)
-			} else {
-				err = service.RetireSchedulerAccountSnapshot(propagationCtx, r.schedulerCache, accountID)
-			}
+		var err error
+		if account, protected := fixedEgressAccounts[accountID]; protected {
+			err = service.PublishSchedulerAccountSnapshot(propagationCtx, r.schedulerCache, account)
 		} else {
 			err = r.schedulerCache.DeleteAccount(propagationCtx, accountID)
 		}
@@ -299,21 +316,36 @@ func (r *proxyRepository) deleteSchedulerAccountSnapshots(ctx context.Context, a
 	}
 }
 
-func (r *proxyRepository) fixedEgressSchedulerAccounts(ctx context.Context, accountIDs []int64) (map[int64]*service.Account, error) {
-	protectedAccounts := make(map[int64]*service.Account)
-	if r == nil || r.client == nil || len(accountIDs) == 0 {
-		return protectedAccounts, nil
+func classifyFixedEgressSchedulerAccounts(ctx context.Context, exec sqlExecutor, accountIDs []int64) (map[int64]*service.Account, error) {
+	protected := make(map[int64]*service.Account)
+	if exec == nil || len(accountIDs) == 0 || service.FixedEgressCompatibilityModeEnabled() {
+		return protected, nil
 	}
-	accounts, err := newAccountRepositoryWithSQL(r.client, r.sql, nil).GetByIDs(ctx, accountIDs)
+	rows, err := exec.QueryContext(ctx, `
+		SELECT id, platform, type
+		FROM accounts
+		WHERE id = ANY($1)
+		  AND deleted_at IS NULL
+		  AND platform = $2
+		  AND type IN ($3, $4)
+		ORDER BY id
+		FOR UPDATE
+	`, pq.Array(accountIDs), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken)
 	if err != nil {
 		return nil, err
 	}
-	for _, account := range accounts {
-		if service.ShouldRetireFixedEgressSchedulerSnapshot(account) {
-			protectedAccounts[account.ID] = account
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		account := &service.Account{}
+		if err := rows.Scan(&account.ID, &account.Platform, &account.Type); err != nil {
+			return nil, err
 		}
+		protected[account.ID] = account
 	}
-	return protectedAccounts, nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return protected, nil
 }
 
 // lockProxyForUpdate obtains the relation lock shared with OAuth proxy binding.
@@ -863,7 +895,8 @@ func (r *proxyRepository) ListAllForFallback(ctx context.Context) ([]service.Pro
 }
 
 // SweepExpiredProxies 扫描到期 active 代理，标记 expired 并按 fallback 策略改写绑定账号的 proxy_id，
-// 最终触发 scheduler outbox 使 Redis 快照缓存失效。返回受影响的账号行数。
+// 最终触发 scheduler outbox 使 Redis 快照缓存失效。返回需要路由快照失效的账号行数；
+// 其中包括安全策略要求继续绑定到已过期代理的 fixed-egress 账号。
 // 原子性边界：每个过期代理的「确认仍到期 + 标记 expired + 改投账号 + enqueue」在各自子事务内
 // 原子执行（见 sweepOneExpiredProxy）。全部代理处理完后再追加一个汇总事件以减少消费者重建次数；
 // 汇总事件是 best-effort，单代理事务内的事件才是正确性保证。
@@ -878,8 +911,8 @@ func (r *proxyRepository) SweepExpiredProxies(ctx context.Context, now time.Time
 		byID[p.ID] = p
 	}
 
-	var totalChanged int64
-	allChangedAccountIDs := make([]int64, 0)
+	var totalAffected int64
+	allAffectedAccountIDs := make([]int64, 0)
 
 	for _, p := range all {
 		if p.Status != service.StatusActive || !p.IsExpired(now) {
@@ -892,24 +925,24 @@ func (r *proxyRepository) SweepExpiredProxies(ctx context.Context, now time.Time
 			logger.LegacyPrintf("repository.proxy", "[ProxyExpiry] proxy %d expired but fallback chain unresolved (cycle/all-expired); accounts kept", p.ID)
 		}
 
-		changedAccountIDs, sweepErr := r.sweepOneExpiredProxy(ctx, p.ID, target, change, now)
+		affectedAccountIDs, sweepErr := r.sweepOneExpiredProxy(ctx, p.ID, target, change, now)
 		if sweepErr != nil {
-			return totalChanged, sweepErr
+			return totalAffected, sweepErr
 		}
-		totalChanged += int64(len(changedAccountIDs))
-		allChangedAccountIDs = append(allChangedAccountIDs, changedAccountIDs...)
+		totalAffected += int64(len(affectedAccountIDs))
+		allAffectedAccountIDs = append(allAffectedAccountIDs, affectedAccountIDs...)
 	}
 
-	changedAccountIDs := sortedUniqueAccountIDs(allChangedAccountIDs)
-	if len(changedAccountIDs) > 0 {
-		// 各代理的改投事务已经提交；这里仅汇总真实被 UPDATE 命中的账号，
-		// 避免代理到期时用全量重建刷新所有调度分桶。
-		payload := map[string]any{"account_ids": changedAccountIDs}
+	affectedAccountIDs := sortedUniqueAccountIDs(allAffectedAccountIDs)
+	if len(affectedAccountIDs) > 0 {
+		// 各代理的原子事务已经提交；这里汇总需要失效的账号（包括保留绑定、
+		// 但嵌入代理状态已改变的 fixed-egress 快照），避免全量重建。
+		payload := map[string]any{"account_ids": affectedAccountIDs}
 		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, payload); err != nil {
 			logger.LegacyPrintf("repository.proxy", "[SchedulerOutbox] enqueue proxy expiry account changes failed: err=%v", err)
 		}
 	}
-	return totalChanged, nil
+	return totalAffected, nil
 }
 
 func sortedUniqueAccountIDs(accountIDs []int64) []int64 {
@@ -942,9 +975,12 @@ func (r *proxyRepository) sweepOneExpiredProxy(ctx context.Context, proxyID int6
 	}
 
 	// 使用新事务执行
-	var accountIDs []int64
-	var err error
-	accountIDs, err = r.sweepOneExpiredProxyOnExec(ctx, tx, proxyID, target, change, now)
+	accountIDs, err := r.sweepOneExpiredProxyOnExec(ctx, tx, proxyID, target, change, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	fixedEgressAccounts, err := classifyFixedEgressSchedulerAccounts(ctx, tx, accountIDs)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, err
@@ -956,7 +992,7 @@ func (r *proxyRepository) sweepOneExpiredProxy(ctx context.Context, proxyID int6
 	// our transaction. Evict only after that commit; an outer transaction owns
 	// its own post-commit boundary and must not expose uncommitted state through
 	// Redis. The durable outbox remains the retry path when eviction fails.
-	r.deleteSchedulerAccountSnapshots(baseContextWithoutCancel(ctx), accountIDs)
+	r.deleteSchedulerAccountSnapshots(baseContextWithoutCancel(ctx), accountIDs, fixedEgressAccounts)
 	return accountIDs, nil
 }
 

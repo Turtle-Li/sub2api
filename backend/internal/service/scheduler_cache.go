@@ -136,7 +136,7 @@ type SchedulerAccountSnapshotRetirer interface {
 // fixed-egress contract; the parent relationship does not change this cache
 // safety rule.
 func ShouldRetireFixedEgressSchedulerSnapshot(account *Account) bool {
-	return account != nil && account.IsOpenAIOAuthLike()
+	return !FixedEgressCompatibilityModeEnabled() && account != nil && account.IsOpenAIOAuthLike()
 }
 
 // PublishSchedulerAccountSnapshot updates an ordinary account snapshot, but
@@ -164,6 +164,9 @@ func RetireSchedulerAccountSnapshot(ctx context.Context, cache SchedulerCache, a
 	if cache == nil || accountID <= 0 {
 		return nil
 	}
+	if FixedEgressCompatibilityModeEnabled() {
+		return cache.DeleteAccount(ctx, accountID)
+	}
 	if retirer, ok := cache.(SchedulerAccountSnapshotRetirer); ok {
 		return retirer.RetireAccountSnapshot(ctx, &Account{ID: accountID})
 	}
@@ -176,6 +179,9 @@ func RetireSchedulerAccountSnapshot(ctx context.Context, cache SchedulerCache, a
 func RetireDeletedSchedulerAccountSnapshot(ctx context.Context, cache SchedulerCache, accountID int64) error {
 	if cache == nil || accountID <= 0 {
 		return nil
+	}
+	if FixedEgressCompatibilityModeEnabled() {
+		return cache.DeleteAccount(ctx, accountID)
 	}
 	if retirer, ok := cache.(SchedulerAccountSnapshotRetirer); ok {
 		return retirer.RetireDeletedAccountSnapshot(ctx, accountID)

@@ -84,6 +84,12 @@ load_state() {
   environment="${environment:-}"
 }
 
+runtime_drift_enabled() {
+  local direct_flag="$1" after_release_flag="$2"
+  [ "$direct_flag" = true ] \
+    || { [ "$after_release_flag" = true ] && [ -s "$FAKE_RELEASE_CALLS" ]; }
+}
+
 save_state() {
   local file
   file="$(state_file "$1")"
@@ -185,7 +191,10 @@ case "${1:-}" in
       runtime_identity="1:$(printf '%s' "$runtime_host_path" | cksum | awk '{print $1}')"
       case "$command_text" in
         *'stat -c'*)
-          if [ "${FAKE_RUNTIME_INODE_DRIFT:-false}" = true ] \
+          if runtime_drift_enabled \
+            "${FAKE_RUNTIME_INODE_DRIFT:-false}" \
+            "${FAKE_RUNTIME_INODE_DRIFT_AFTER_RELEASE:-false}" \
+            && { [ -z "${FAKE_RUNTIME_DRIFT_CONTAINER:-}" ] || [ "$FAKE_RUNTIME_DRIFT_CONTAINER" = "$container_name" ]; } \
             && [ "${FAKE_RUNTIME_DRIFT_TARGET:-traffic}" = "$runtime_kind" ]; then
             printf '1:999\n'
           else
@@ -193,7 +202,10 @@ case "${1:-}" in
           fi
           ;;
         *'tr -d'*)
-          if [ "${FAKE_RUNTIME_CONTENT_DRIFT:-false}" = true ] \
+          if runtime_drift_enabled \
+            "${FAKE_RUNTIME_CONTENT_DRIFT:-false}" \
+            "${FAKE_RUNTIME_CONTENT_DRIFT_AFTER_RELEASE:-false}" \
+            && { [ -z "${FAKE_RUNTIME_DRIFT_CONTAINER:-}" ] || [ "$FAKE_RUNTIME_DRIFT_CONTAINER" = "$container_name" ]; } \
             && [ "${FAKE_RUNTIME_DRIFT_TARGET:-traffic}" = "$runtime_kind" ]; then
             printf 'stale-container-view\n'
           else
@@ -425,8 +437,11 @@ run_guard() {
     FAKE_DOCKER_CALLS="${CASE_ROOT}/docker-calls.log" \
     FAKE_FLOCK_MODE="${FAKE_FLOCK_MODE:-success}" \
     FAKE_RUNTIME_CONTENT_DRIFT="${FAKE_RUNTIME_CONTENT_DRIFT:-false}" \
+    FAKE_RUNTIME_CONTENT_DRIFT_AFTER_RELEASE="${FAKE_RUNTIME_CONTENT_DRIFT_AFTER_RELEASE:-false}" \
+    FAKE_RUNTIME_DRIFT_CONTAINER="${FAKE_RUNTIME_DRIFT_CONTAINER:-}" \
     FAKE_RUNTIME_DRIFT_TARGET="${FAKE_RUNTIME_DRIFT_TARGET:-traffic}" \
     FAKE_RUNTIME_INODE_DRIFT="${FAKE_RUNTIME_INODE_DRIFT:-false}" \
+    FAKE_RUNTIME_INODE_DRIFT_AFTER_RELEASE="${FAKE_RUNTIME_INODE_DRIFT_AFTER_RELEASE:-false}" \
     FAKE_RUNTIME_ROOT="${CASE_ROOT}/runtime" \
     FAKE_NODE_STATE_CALLS="${CASE_ROOT}/node-state-calls.log" \
     FAKE_RELEASE_CALLS="${CASE_ROOT}/release-calls.log" \
@@ -560,7 +575,8 @@ if FAKE_RUNTIME_INODE_DRIFT=true run_external_guard >"${CASE_ROOT}/output.log" 2
 fi
 assert_contains "${CASE_ROOT}/output.log" 'traffic-state bind mount inode is stale'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
-assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=active-runtime-state-drift-no-known-good-fallback'
 
 new_case external-active-background-inode-drift
 write_standard_dependencies
@@ -573,6 +589,7 @@ if FAKE_RUNTIME_INODE_DRIFT=true FAKE_RUNTIME_DRIFT_TARGET=background \
   fail 'runtime guard accepted a stale background-state bind inode'
 fi
 assert_contains "${CASE_ROOT}/output.log" 'background-state bind mount inode is stale'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 
 new_case external-active-runtime-content-drift
 write_standard_dependencies
@@ -585,7 +602,7 @@ if FAKE_RUNTIME_CONTENT_DRIFT=true run_external_guard >"${CASE_ROOT}/output.log"
 fi
 assert_contains "${CASE_ROOT}/output.log" 'traffic-state bind mount content is stale'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
-assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 
 new_case external-active-background-content-drift
 write_standard_dependencies
@@ -598,6 +615,30 @@ if FAKE_RUNTIME_CONTENT_DRIFT=true FAKE_RUNTIME_DRIFT_TARGET=background \
   fail 'runtime guard accepted stale background-state content'
 fi
 assert_contains "${CASE_ROOT}/output.log" 'background-state bind mount content is stale'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+
+# A healthy slot with stale bind state is removed from admission, then a clean
+# historical slot may recover traffic. The original drift evidence survives
+# both that promotion and a later healthy guard run on the new Caddy target.
+new_case external-active-runtime-drift-recovers-clean-fallback
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network "$(external_mounts sub2api-blue)" "$(dual_environment)"
+FAKE_RUNTIME_INODE_DRIFT=true FAKE_RUNTIME_DRIFT_CONTAINER=sub2api-green run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'active_container=sub2api-green'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=active-runtime-state-drift'
+assert_contains "${CASE_ROOT}/output.log" 'preserving active runtime-state drift evidence'
+: >"${CASE_ROOT}/docker-calls.log"
+run_external_guard >"${CASE_ROOT}/second-run.log" 2>&1
+assert_contains "${CASE_ROOT}/second-run.log" 'active container is already healthy: sub2api-blue'
+assert_contains "${CASE_ROOT}/second-run.log" 'preserving failure evidence for previously isolated container: sub2api-green'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=active-runtime-state-drift'
 
 # A missing runtime mount fails before any application lifecycle action.
 new_case external-active-runtime-mismatch
@@ -631,6 +672,26 @@ fi
 assert_contains "${CASE_ROOT}/output.log" 'running inactive fallback does not match the configured dependency and dual-node contract: sub2api-blue'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 assert_not_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+
+# A running fallback can have structurally correct mount Sources while still
+# reading replaced single-file inodes. Fence it before the failed active is
+# stopped or Caddy is changed.
+new_case external-running-fallback-runtime-state-drift
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue true healthy false 0 sub2api:old-blue
+write_runtime_metadata sub2api-blue unless-stopped candidate-network "$(external_mounts sub2api-blue)" "$(dual_environment)"
+if FAKE_RUNTIME_INODE_DRIFT=true run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a running fallback with a stale runtime-state inode'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'running inactive fallback has stale runtime-state binds: sub2api-blue'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-blue'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-green:8080'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=running-fallback-runtime-state-drift'
 
 # A stopped fallback with missing per-container runtime state must fail softly
 # after isolation so the outer recovery transaction records a cooldown fence.
@@ -673,6 +734,24 @@ assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
 assert_contains "${CASE_ROOT}/release-calls.log" 'isolated_old=true'
 assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
+
+# A fallback that becomes stale only after the Caddy helper runs must be
+# isolated immediately, and cooldown evidence must name the now-selected slot.
+new_case external-post-switch-fallback-runtime-state-drift
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network "$(external_mounts sub2api-blue)" "$(dual_environment)"
+if FAKE_RUNTIME_INODE_DRIFT_AFTER_RELEASE=true run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a fallback whose runtime-state inode drifted after Caddy switch'
+fi
+assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+assert_contains "${CASE_ROOT}/output.log" 'fallback runtime-state bind is stale after Caddy switch: sub2api-blue'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-blue'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'active_container=sub2api-blue'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=fallback-verification-failed'
 
 # A stopped active slot is started and proven through Docker health plus its
 # internal health endpoint before any historical candidate is considered.

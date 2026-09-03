@@ -146,6 +146,36 @@ func TestAccountRepoSuite(t *testing.T) {
 	suite.Run(t, new(AccountRepoSuite))
 }
 
+func TestAccountRepositoryInjectedTransactionDefersDirectMutationCachePublish(t *testing.T) {
+	ctx := context.Background()
+	outerTx, err := integrationEntClient.Tx(ctx)
+	require.NoError(t, err)
+	rolledBack := false
+	t.Cleanup(func() {
+		if !rolledBack {
+			_ = outerTx.Rollback()
+		}
+	})
+
+	account := mustCreateAccount(t, outerTx.Client(), &service.Account{
+		Name:        "injected-tx-direct-cache-fence",
+		Status:      service.StatusActive,
+		Schedulable: true,
+	})
+	cacheRecorder := &schedulerCacheRecorder{}
+	repo := newAccountRepositoryWithSQL(outerTx.Client(), outerTx, cacheRecorder)
+
+	require.NoError(t, repo.SetError(ctx, account.ID, "rolled back"))
+	require.Empty(t, cacheRecorder.setAccounts,
+		"a direct mutator must leave Redis to the transactional outbox until the caller commits")
+	require.Empty(t, cacheRecorder.deleteIDs)
+
+	require.NoError(t, outerTx.Rollback())
+	rolledBack = true
+	_, err = newAccountRepositoryWithSQL(integrationEntClient, integrationDB, nil).GetByID(ctx, account.ID)
+	require.ErrorIs(t, err, service.ErrAccountNotFound)
+}
+
 // --- Create / GetByID / Update / Delete ---
 
 func (s *AccountRepoSuite) TestCreate() {
@@ -187,7 +217,7 @@ func (s *AccountRepoSuite) TestUpdate() {
 	s.Require().Equal("updated", got.Name)
 }
 
-func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnDisabled() {
+func (s *AccountRepoSuite) TestUpdate_DefersSchedulerSnapshotOnDisabledInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "sync-update", Status: service.StatusActive, Schedulable: true})
 	cacheRecorder := &schedulerCacheRecorder{}
 	s.repo.schedulerCache = cacheRecorder
@@ -196,12 +226,11 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnDisabled() {
 	err := s.repo.Update(s.ctx, account)
 	s.Require().NoError(err, "Update")
 
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
-	s.Require().Equal(service.StatusDisabled, cacheRecorder.setAccounts[0].Status)
+	s.Require().Empty(cacheRecorder.setAccounts,
+		"caller-owned transactions publish through the durable outbox only after commit")
 }
 
-func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange() {
+func (s *AccountRepoSuite) TestUpdate_DefersSchedulerSnapshotOnCredentialsChangeInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "sync-credentials-update",
 		Status:      service.StatusActive,
@@ -223,14 +252,11 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange()
 	err := s.repo.Update(s.ctx, account)
 	s.Require().NoError(err, "Update")
 
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
-	mapping, ok := cacheRecorder.setAccounts[0].Credentials["model_mapping"].(map[string]any)
-	s.Require().True(ok)
-	s.Require().Equal("gpt-5.2", mapping["gpt-5"])
+	s.Require().Empty(cacheRecorder.setAccounts,
+		"caller-owned transactions must not expose uncommitted credentials through Redis")
 }
 
-func (s *AccountRepoSuite) TestUpdateCredentials_SyncsSnapshotAndDurableOutbox() {
+func (s *AccountRepoSuite) TestUpdateCredentials_DefersSnapshotAndWritesDurableOutbox() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "sync-refresh-credentials",
 		Status:      service.StatusActive,
@@ -244,8 +270,8 @@ func (s *AccountRepoSuite) TestUpdateCredentials_SyncsSnapshotAndDurableOutbox()
 
 	s.Require().NoError(s.repo.UpdateCredentials(s.ctx, account.ID, map[string]any{"access_token": "new-token"}))
 
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal("new-token", cacheRecorder.setAccounts[0].GetCredential("access_token"))
+	s.Require().Empty(cacheRecorder.setAccounts,
+		"the caller-owned transaction leaves cache publication to its outbox")
 	var outboxCount int
 	err = scanSingleRow(
 		s.ctx,
@@ -268,7 +294,7 @@ func (s *AccountRepoSuite) TestDelete() {
 	s.Require().Error(err, "expected error after delete")
 }
 
-func (s *AccountRepoSuite) TestDelete_RemovesSchedulerAccountSnapshot() {
+func (s *AccountRepoSuite) TestDelete_DefersSchedulerSnapshotRemovalInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "to-delete-cache"})
 	cacheRecorder := &schedulerCacheRecorder{
 		accounts: map[int64]*service.Account{
@@ -285,8 +311,9 @@ func (s *AccountRepoSuite) TestDelete_RemovesSchedulerAccountSnapshot() {
 	err := s.repo.Delete(s.ctx, account.ID)
 	s.Require().NoError(err, "Delete")
 
-	s.Require().Equal([]int64{account.ID}, cacheRecorder.deleteIDs)
-	s.Require().NotContains(cacheRecorder.accounts, account.ID)
+	s.Require().Empty(cacheRecorder.deleteIDs,
+		"a rollback must not leave a permanent deleted fence or evict a committed snapshot")
+	s.Require().Contains(cacheRecorder.accounts, account.ID)
 }
 
 func (s *AccountRepoSuite) TestDelete_WithGroupBindings() {
@@ -803,7 +830,7 @@ func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform() {
 	s.Require().Equal(a1.ID, accounts[0].ID)
 }
 
-func (s *AccountRepoSuite) TestSetSchedulable() {
+func (s *AccountRepoSuite) TestSetSchedulableDefersCacheInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-sched", Schedulable: true})
 	cacheRecorder := &schedulerCacheRecorder{}
 	s.repo.schedulerCache = cacheRecorder
@@ -813,11 +840,10 @@ func (s *AccountRepoSuite) TestSetSchedulable() {
 	got, err := s.repo.GetByID(s.ctx, account.ID)
 	s.Require().NoError(err)
 	s.Require().False(got.Schedulable)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
-func (s *AccountRepoSuite) TestBulkUpdate_SyncSchedulerSnapshotOnDisabled() {
+func (s *AccountRepoSuite) TestBulkUpdate_DefersSchedulerSnapshotOnDisabledInCallerTransaction() {
 	account1 := mustCreateAccount(s.T(), s.client, &service.Account{Name: "bulk-1", Status: service.StatusActive, Schedulable: true})
 	account2 := mustCreateAccount(s.T(), s.client, &service.Account{Name: "bulk-2", Status: service.StatusActive, Schedulable: true})
 	cacheRecorder := &schedulerCacheRecorder{}
@@ -830,18 +856,12 @@ func (s *AccountRepoSuite) TestBulkUpdate_SyncSchedulerSnapshotOnDisabled() {
 	s.Require().NoError(err)
 	s.Require().Equal(int64(2), rows)
 
-	s.Require().Len(cacheRecorder.setAccounts, 2)
-	ids := map[int64]struct{}{}
-	for _, acc := range cacheRecorder.setAccounts {
-		ids[acc.ID] = struct{}{}
-	}
-	s.Require().Contains(ids, account1.ID)
-	s.Require().Contains(ids, account2.ID)
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
 // --- SetOverloaded / SetRateLimited / ClearRateLimit ---
 
-func (s *AccountRepoSuite) TestSetOverloaded() {
+func (s *AccountRepoSuite) TestSetOverloadedDefersCacheInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-over"})
 	until := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	cacheRecorder := &schedulerCacheRecorder{}
@@ -853,10 +873,7 @@ func (s *AccountRepoSuite) TestSetOverloaded() {
 	s.Require().NoError(err)
 	s.Require().NotNil(got.OverloadUntil)
 	s.Require().WithinDuration(until, *got.OverloadUntil, time.Second)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
-	s.Require().NotNil(cacheRecorder.setAccounts[0].OverloadUntil)
-	s.Require().WithinDuration(until, *cacheRecorder.setAccounts[0].OverloadUntil, time.Second)
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
 func (s *AccountRepoSuite) TestSetRateLimited() {
@@ -872,7 +889,7 @@ func (s *AccountRepoSuite) TestSetRateLimited() {
 	s.Require().WithinDuration(resetAt, *got.RateLimitResetAt, time.Second)
 }
 
-func (s *AccountRepoSuite) TestSetRateLimitedIfLaterDoesNotShortenReset() {
+func (s *AccountRepoSuite) TestSetRateLimitedIfLaterDoesNotShortenResetAndDefersCache() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-rl-monotonic"})
 	later := time.Now().Add(30 * time.Minute).UTC().Truncate(time.Second)
 	earlier := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
@@ -886,9 +903,7 @@ func (s *AccountRepoSuite) TestSetRateLimitedIfLaterDoesNotShortenReset() {
 	s.Require().NoError(err)
 	s.Require().NotNil(got.RateLimitResetAt)
 	s.Require().WithinDuration(later, *got.RateLimitResetAt, time.Second)
-	s.Require().Len(cacheRecorder.setAccounts, 2)
-	s.Require().NotNil(cacheRecorder.setAccounts[1].RateLimitResetAt)
-	s.Require().WithinDuration(later, *cacheRecorder.setAccounts[1].RateLimitResetAt, time.Second)
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
 func (s *AccountRepoSuite) TestClearRateLimitIfObservedProtectsRearmed429Generation() {
@@ -999,8 +1014,7 @@ func (s *AccountRepoSuite) TestResetQuotaUsedAndClearRateLimitCooldownPreservesO
 			WHERE event_type = $1 AND account_id = $2 AND dedup_key IS NOT NULL
 		)`, []any{service.SchedulerOutboxEventAccountChanged, account.ID}, &pendingEventExists))
 	s.Require().True(pendingEventExists)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
 func (s *AccountRepoSuite) TestTempUnschedulableFieldsLoadedByGetByIDAndGetByIDs() {
@@ -1036,10 +1050,7 @@ func (s *AccountRepoSuite) TestTempUnschedulableFieldsLoadedByGetByIDAndGetByIDs
 	s.Require().NoError(err)
 	s.Require().Nil(cleared.TempUnschedulableUntil)
 	s.Require().Equal("", cleared.TempUnschedulableReason)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(acc1.ID, cacheRecorder.setAccounts[0].ID)
-	s.Require().Nil(cacheRecorder.setAccounts[0].TempUnschedulableUntil)
-	s.Require().Equal("", cacheRecorder.setAccounts[0].TempUnschedulableReason)
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
 func (s *AccountRepoSuite) TestSetTempUnschedulableSkipsOutboxWhenWindowDoesNotExtend() {
@@ -1057,14 +1068,14 @@ func (s *AccountRepoSuite) TestSetTempUnschedulableSkipsOutboxWhenWindowDoesNotE
 	err = scanSingleRow(s.ctx, s.repo.sql, "SELECT COUNT(*) FROM scheduler_outbox", nil, &count)
 	s.Require().NoError(err)
 	s.Require().Equal(1, count)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
+	s.Require().Empty(cacheRecorder.setAccounts)
 
 	s.Require().NoError(s.repo.SetTempUnschedulable(s.ctx, account.ID, until.Add(-5*time.Minute), "older"))
 
 	err = scanSingleRow(s.ctx, s.repo.sql, "SELECT COUNT(*) FROM scheduler_outbox", nil, &count)
 	s.Require().NoError(err)
 	s.Require().Equal(1, count)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
+	s.Require().Empty(cacheRecorder.setAccounts)
 
 	got, err := s.repo.GetByID(s.ctx, account.ID)
 	s.Require().NoError(err)
@@ -1073,7 +1084,7 @@ func (s *AccountRepoSuite) TestSetTempUnschedulableSkipsOutboxWhenWindowDoesNotE
 	s.Require().WithinDuration(until, *got.TempUnschedulableUntil, time.Second)
 }
 
-func (s *AccountRepoSuite) TestClearModelRateLimits_SyncsSchedulerSnapshot() {
+func (s *AccountRepoSuite) TestClearModelRateLimitsDefersSchedulerSnapshotInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name: "acc-clear-model-rate",
 		Extra: map[string]any{
@@ -1092,9 +1103,7 @@ func (s *AccountRepoSuite) TestClearModelRateLimits_SyncsSchedulerSnapshot() {
 	got, err := s.repo.GetByID(s.ctx, account.ID)
 	s.Require().NoError(err)
 	s.Require().NotContains(got.Extra, "model_rate_limits")
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
-	s.Require().NotContains(cacheRecorder.setAccounts[0].Extra, "model_rate_limits")
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
 // --- UpdateLastUsed ---
@@ -1112,7 +1121,7 @@ func (s *AccountRepoSuite) TestUpdateLastUsed() {
 
 // --- SetError ---
 
-func (s *AccountRepoSuite) TestSetError() {
+func (s *AccountRepoSuite) TestSetErrorDefersCacheInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-err", Status: service.StatusActive, Schedulable: true})
 	cacheRecorder := &schedulerCacheRecorder{}
 	s.repo.schedulerCache = cacheRecorder
@@ -1126,10 +1135,7 @@ func (s *AccountRepoSuite) TestSetError() {
 	s.Require().Equal(service.StatusError, got.Status)
 	s.Require().Equal("something went wrong", got.ErrorMessage)
 	s.Require().False(got.Schedulable)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
-	s.Require().Equal(service.StatusError, cacheRecorder.setAccounts[0].Status)
-	s.Require().False(cacheRecorder.setAccounts[0].Schedulable)
+	s.Require().Empty(cacheRecorder.setAccounts)
 
 	var outboxCount int
 	err = scanSingleRow(
@@ -1143,7 +1149,7 @@ func (s *AccountRepoSuite) TestSetError() {
 	s.Require().Equal(1, outboxCount)
 }
 
-func (s *AccountRepoSuite) TestSetGrokOAuthErrorIfCredentialsUnchanged_AppliesAndSyncsSchedulerState() {
+func (s *AccountRepoSuite) TestSetGrokOAuthErrorIfCredentialsUnchanged_AppliesAndDefersSchedulerState() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "grok-conditional-error-applied",
 		Platform:    service.PlatformGrok,
@@ -1173,8 +1179,7 @@ func (s *AccountRepoSuite) TestSetGrokOAuthErrorIfCredentialsUnchanged_AppliesAn
 	s.Require().Equal(service.StatusError, got.Status)
 	s.Require().False(got.Schedulable)
 	s.Require().Equal("missing refresh token", got.ErrorMessage)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(service.StatusError, cacheRecorder.setAccounts[0].Status)
+	s.Require().Empty(cacheRecorder.setAccounts)
 
 	var outboxCount int
 	err = scanSingleRow(
@@ -1238,7 +1243,7 @@ func (s *AccountRepoSuite) TestSetGrokOAuthErrorIfCredentialsUnchanged_SkipsConc
 	s.Require().Zero(outboxCount, "a lost compare-and-set race must not enqueue a stale account change")
 }
 
-func (s *AccountRepoSuite) TestUpdateGrokOAuthCredentialsIfUnchanged_AppliesAndPublishesSchedulerState() {
+func (s *AccountRepoSuite) TestUpdateGrokOAuthCredentialsIfUnchanged_AppliesAndDefersSchedulerState() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "grok-refresh-success-cas-applied",
 		Platform:    service.PlatformGrok,
@@ -1275,9 +1280,7 @@ func (s *AccountRepoSuite) TestUpdateGrokOAuthCredentialsIfUnchanged_AppliesAndP
 	got, err := s.repo.GetByID(s.ctx, account.ID)
 	s.Require().NoError(err)
 	s.Require().Equal("rotated-refresh", got.GetGrokRefreshToken())
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal("rotated-refresh", cacheRecorder.setAccounts[0].GetGrokRefreshToken())
-	s.Require().NoError(cacheRecorder.setCtxErr)
+	s.Require().Empty(cacheRecorder.setAccounts)
 
 	var outboxCount int
 	err = scanSingleRow(
@@ -1348,7 +1351,8 @@ func (s *AccountRepoSuite) TestUpdateGrokOAuthCredentialsIfUnchanged_SkipsConcur
 }
 
 func (s *AccountRepoSuite) TestGrokOAuthConditionalMutation_DetachesBoundedSnapshotSync() {
-	account := mustCreateAccount(s.T(), s.client, &service.Account{
+	client := testEntClient(s.T())
+	account := mustCreateAccount(s.T(), client, &service.Account{
 		Name:        "grok-conditional-detached-sync",
 		Platform:    service.PlatformGrok,
 		Type:        service.AccountTypeOAuth,
@@ -1356,12 +1360,17 @@ func (s *AccountRepoSuite) TestGrokOAuthConditionalMutation_DetachesBoundedSnaps
 		Schedulable: true,
 		Credentials: map[string]any{"access_token": "observed"},
 	})
-	observed, err := s.repo.GetByID(s.ctx, account.ID)
+	s.T().Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), "DELETE FROM scheduler_outbox WHERE account_id = $1", account.ID)
+		_ = client.Account.DeleteOneID(account.ID).Exec(context.Background())
+	})
+	committedRepo := newAccountRepositoryWithSQL(client, integrationDB, nil)
+	observed, err := committedRepo.GetByID(context.Background(), account.ID)
 	s.Require().NoError(err)
 	ctx, cancel := context.WithCancel(context.Background())
 	cacheRecorder := &schedulerCacheRecorder{}
-	repo := newAccountRepositoryWithSQL(s.client, &cancelAfterAtomicMutationSQLExecutor{
-		sqlExecutor: s.repo.sql,
+	repo := newAccountRepositoryWithSQL(client, &cancelAfterAtomicMutationSQLExecutor{
+		sqlExecutor: integrationDB,
 		cancel:      cancel,
 	}, cacheRecorder)
 
@@ -1433,7 +1442,7 @@ func (s *AccountRepoSuite) TestUpdateErrorStatusUnschedulesAccount() {
 	s.Require().False(got.Schedulable)
 }
 
-func (s *AccountRepoSuite) TestClearError_SyncSchedulerSnapshotOnRecovery() {
+func (s *AccountRepoSuite) TestClearErrorDefersSchedulerSnapshotOnRecoveryInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:         "acc-clear-err",
 		Status:       service.StatusError,
@@ -1448,9 +1457,7 @@ func (s *AccountRepoSuite) TestClearError_SyncSchedulerSnapshotOnRecovery() {
 	s.Require().NoError(err)
 	s.Require().Equal(service.StatusActive, got.Status)
 	s.Require().Empty(got.ErrorMessage)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
-	s.Require().Equal(service.StatusActive, cacheRecorder.setAccounts[0].Status)
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
 // --- UpdateSessionWindow ---
@@ -1498,7 +1505,7 @@ func (s *AccountRepoSuite) TestUpdateExtra_NilExtra() {
 	s.Require().Equal("val", got.Extra["key"])
 }
 
-func (s *AccountRepoSuite) TestUpdateExtra_SchedulerNeutralSkipsOutboxAndSyncsFreshSnapshot() {
+func (s *AccountRepoSuite) TestUpdateExtra_SchedulerNeutralSkipsOutboxAndDefersSnapshotInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:     "acc-extra-neutral",
 		Platform: service.PlatformOpenAI,
@@ -1532,15 +1539,15 @@ func (s *AccountRepoSuite) TestUpdateExtra_SchedulerNeutralSkipsOutboxAndSyncsFr
 	s.Require().Equal(0.42, got.Extra["session_window_utilization"])
 
 	var outboxCount int
-	s.Require().NoError(scanSingleRow(s.ctx, s.repo.sql, "SELECT COUNT(*) FROM scheduler_outbox", nil, &outboxCount))
+	s.Require().NoError(scanSingleRow(s.ctx, s.repo.sql,
+		"SELECT COUNT(*) FROM scheduler_outbox WHERE account_id = $1", []any{account.ID}, &outboxCount))
 	s.Require().Zero(outboxCount)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().NotNil(cacheRecorder.accounts[account.ID])
-	s.Require().Equal(service.StatusActive, cacheRecorder.accounts[account.ID].Status)
-	s.Require().Equal("2026-03-11T10:00:00Z", cacheRecorder.accounts[account.ID].Extra["codex_usage_updated_at"])
+	s.Require().Empty(cacheRecorder.setAccounts)
+	s.Require().Equal(service.StatusDisabled, cacheRecorder.accounts[account.ID].Status,
+		"the uncommitted database state must not replace the existing cache entry")
 }
 
-func (s *AccountRepoSuite) TestUpdateExtra_ExhaustedCodexSnapshotSyncsSchedulerCache() {
+func (s *AccountRepoSuite) TestUpdateExtra_ExhaustedCodexSnapshotDefersCacheInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:     "acc-extra-codex-exhausted",
 		Platform: service.PlatformOpenAI,
@@ -1562,10 +1569,7 @@ func (s *AccountRepoSuite) TestUpdateExtra_ExhaustedCodexSnapshotSyncsSchedulerC
 	err = scanSingleRow(s.ctx, s.repo.sql, "SELECT COUNT(*) FROM scheduler_outbox", nil, &count)
 	s.Require().NoError(err)
 	s.Require().Equal(0, count)
-	s.Require().Len(cacheRecorder.setAccounts, 1)
-	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
-	s.Require().Equal(service.StatusActive, cacheRecorder.setAccounts[0].Status)
-	s.Require().Equal(100.0, cacheRecorder.setAccounts[0].Extra["codex_7d_used_percent"])
+	s.Require().Empty(cacheRecorder.setAccounts)
 }
 
 func (s *AccountRepoSuite) TestUpdateExtra_SchedulerRelevantStillEnqueuesOutbox() {

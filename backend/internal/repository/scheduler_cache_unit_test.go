@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -160,6 +161,110 @@ func TestSchedulerCacheDeletedAccountFenceRejectsDelayedProtectedAndOrdinaryWrit
 	require.ErrorIs(t, err, redis.Nil)
 	_, err = cache.rdb.Get(ctx, schedulerAccountMetaKey(id)).Bytes()
 	require.ErrorIs(t, err, redis.Nil, "terminal deletion must not allow a delayed protected metadata write")
+}
+
+func TestSchedulerCacheCompatibilityModeNeverCreatesRetirementFence(t *testing.T) {
+	t.Setenv(service.FixedEgressCompatibilityModeEnv, "true")
+	ctx := context.Background()
+	cache, _ := newSchedulerCacheUnitWithRedis(t)
+	account := &service.Account{
+		ID:       1134,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Status:   service.StatusActive,
+	}
+	id := strconv.FormatInt(account.ID, 10)
+
+	require.NoError(t, cache.SetAccount(ctx, account))
+	require.Equal(t, int64(2), cache.rdb.Exists(ctx, schedulerAccountKey(id), schedulerAccountMetaKey(id)).Val())
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx, schedulerAccountRetiredKey(id)).Val())
+
+	require.NoError(t, cache.RetireAccountSnapshot(ctx, account))
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx,
+		schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerAccountRetiredKey(id),
+	).Val())
+
+	require.NoError(t, cache.SetAccount(ctx, account))
+	require.NoError(t, cache.RetireDeletedAccountSnapshot(ctx, account.ID))
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx,
+		schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerAccountRetiredKey(id),
+	).Val())
+}
+
+func TestSchedulerCachePhaseAToNormalFenceRejectsDelayedCompatibilityWriters(t *testing.T) {
+	t.Setenv(service.FixedEgressCompatibilityModeEnv, "true")
+	ctx := context.Background()
+	cache, _ := newSchedulerCacheUnitWithRedis(t)
+	account := service.Account{
+		ID:          1135,
+		Name:        "phase-a-fixed-egress",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		GroupIDs:    []int64{43},
+	}
+	id := strconv.FormatInt(account.ID, 10)
+	fullKey := schedulerAccountKey(id)
+	metaKey := schedulerAccountMetaKey(id)
+	retiredKey := schedulerAccountRetiredKey(id)
+	lastUsedKey := schedulerLastUsedKey(id)
+
+	// Phase A preserves the legacy full payload and never creates an account
+	// retirement fence while old binaries may still share Redis.
+	require.NoError(t, cache.SetAccount(ctx, &account))
+	require.Equal(t, int64(2), cache.rdb.Exists(ctx, fullKey, metaKey).Val())
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx, retiredKey).Val())
+
+	// Once every pre-fence process is gone, normal-final retires the full
+	// routing payload. This transition is the point after which any delayed
+	// Phase-A writer must be harmless.
+	require.NoError(t, os.Setenv(service.FixedEgressCompatibilityModeEnv, "false"))
+	require.NoError(t, cache.RetireAccountSnapshot(ctx, &account))
+	require.Equal(t, "protected", cache.rdb.Get(ctx, retiredKey).Val())
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx, fullKey, lastUsedKey).Val())
+	metaBefore, err := cache.rdb.Get(ctx, metaKey).Bytes()
+	require.NoError(t, err)
+
+	// Model a delayed Phase-A full rebuild and direct SetAccount call. The
+	// ordinary writer's atomic fence check must reject both full and metadata
+	// replacement even though the old process still considers OAuth ordinary.
+	require.NoError(t, os.Setenv(service.FixedEgressCompatibilityModeEnv, "true"))
+	delayed := account
+	delayed.Name = "delayed-phase-a"
+	accountIDs, err := cache.writeAccountIDs(ctx, []service.Account{delayed})
+	require.NoError(t, err)
+	require.Equal(t, []int64{account.ID}, accountIDs)
+	require.NoError(t, cache.SetAccount(ctx, &delayed))
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx, fullKey).Val())
+	metaAfter, err := cache.rdb.Get(ctx, metaKey).Bytes()
+	require.NoError(t, err)
+	require.Equal(t, metaBefore, metaAfter)
+
+	// A delayed last-used update cannot create its side key when the full
+	// account payload is absent.
+	require.NoError(t, cache.UpdateLastUsed(ctx, map[int64]time.Time{
+		account.ID: time.Now().UTC(),
+	}))
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx, lastUsedKey).Val())
+
+	// Encoding failure falls back through DeleteAccount. Both that path and a
+	// direct legacy delete may clear ordinary payloads, but neither may remove
+	// the permanent retirement fence.
+	invalid := delayed
+	invalid.ExpiresAt = ptrTime(time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, cache.SetAccount(ctx, &invalid))
+	require.NoError(t, cache.DeleteAccount(ctx, account.ID))
+	require.Equal(t, "protected", cache.rdb.Get(ctx, retiredKey).Val())
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx, fullKey, metaKey, lastUsedKey).Val())
+
+	// Returning to normal-final remains fenced and can safely republish only
+	// the metadata projection.
+	require.NoError(t, os.Setenv(service.FixedEgressCompatibilityModeEnv, "false"))
+	require.NoError(t, cache.SetAccount(ctx, &account))
+	require.Equal(t, "protected", cache.rdb.Get(ctx, retiredKey).Val())
+	require.Equal(t, int64(0), cache.rdb.Exists(ctx, fullKey, lastUsedKey).Val())
+	require.Equal(t, int64(1), cache.rdb.Exists(ctx, metaKey).Val())
 }
 
 func TestSchedulerCacheProtectedMetadataMarshalFailureClearsStaleMetadata(t *testing.T) {

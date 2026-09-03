@@ -510,7 +510,7 @@ def validate_path(path, label):
 def lstat(path, label):
     try:
         return os.lstat(path)
-    except OSError:
+    except OSError as exc:
         fail(f"cannot inspect {label}: {path}: {exc.strerror}")
 
 

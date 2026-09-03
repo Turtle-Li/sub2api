@@ -122,6 +122,30 @@ func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedul
 	return &accountRepository{client: client, sql: sqlq, schedulerCache: schedulerCache}
 }
 
+// accountMutationClient returns the client that owns the current database
+// transaction and reports a transaction only when this call created it. Ent
+// transaction clients reject nested Tx calls with ErrTxStarted, but several
+// repository tests and callers intentionally inject tx.Client() directly
+// without also carrying TxContext. That is still a caller-owned transaction:
+// mutate through r.client, never commit it here, and never publish cache state
+// before its owner commits.
+func (r *accountRepository) accountMutationClient(ctx context.Context) (context.Context, *dbent.Client, *dbent.Tx, error) {
+	if r == nil || r.client == nil {
+		return ctx, nil, nil, service.ErrAccountNotFound
+	}
+	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+		return ctx, contextTx.Client(), nil, nil
+	}
+	tx, err := r.client.Tx(ctx)
+	if errors.Is(err, dbent.ErrTxStarted) {
+		return ctx, r.client, nil, nil
+	}
+	if err != nil {
+		return ctx, nil, nil, err
+	}
+	return dbent.NewTxContext(ctx, tx), tx.Client(), tx, nil
+}
+
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
 	if isOpenAIFixedEgressParent(account) && account.ProxyID != nil {
 		return r.createOpenAIFixedEgressParent(ctx, account)
@@ -148,20 +172,20 @@ func (r *accountRepository) createOpenAIFixedEgressShadow(ctx context.Context, a
 		}
 		return r.createAccountAndEnqueue(ctx, client, account)
 	}
-	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
-		return create(ctx, contextTx.Client())
-	}
-
-	tx, err := r.client.Tx(ctx)
+	txCtx, client, tx, err := r.accountMutationClient(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	txCtx := dbent.NewTxContext(ctx, tx)
-	if err := create(txCtx, tx.Client()); err != nil {
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
+	}
+	if err := create(txCtx, client); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if tx != nil {
+		return tx.Commit()
+	}
+	return nil
 }
 
 // createOpenAIFixedEgressParent keeps the proxy lock through account
@@ -178,28 +202,23 @@ func (r *accountRepository) createOpenAIFixedEgressParent(ctx context.Context, a
 		}
 		return nil
 	}
-	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
-		client := contextTx.Client()
-		if err := lockAndValidate(ctx, client); err != nil {
-			return err
-		}
-		return r.createAccountAndEnqueue(ctx, client, account)
-	}
-
-	tx, err := r.client.Tx(ctx)
+	txCtx, client, tx, err := r.accountMutationClient(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	txCtx := dbent.NewTxContext(ctx, tx)
-	client := tx.Client()
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
+	}
 	if err := lockAndValidate(txCtx, client); err != nil {
 		return err
 	}
 	if err := r.createAccountAndEnqueue(txCtx, client, account); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if tx != nil {
+		return tx.Commit()
+	}
+	return nil
 }
 
 func (r *accountRepository) createAccountAndEnqueue(ctx context.Context, client *dbent.Client, account *service.Account) error {
@@ -225,21 +244,13 @@ func (r *accountRepository) CreateOpenAIOAuthShadow(
 		return service.ErrAccountProxyCASConflict
 	}
 
-	client := r.client
-	var tx *dbent.Tx
-	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
-		client = contextTx.Client()
-	} else {
-		var err error
-		tx, err = r.client.Tx(ctx)
-		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-			return err
-		}
-		if tx != nil {
-			defer func() { _ = tx.Rollback() }()
-			ctx = dbent.NewTxContext(ctx, tx)
-			client = tx.Client()
-		}
+	var err error
+	ctx, client, tx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
 	}
 
 	if expectedProxyID != nil {
@@ -351,20 +362,13 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	if account == nil {
 		return service.ErrAccountNilInput
 	}
-	contextTx := dbent.TxFromContext(ctx)
-	var tx *dbent.Tx
-	var txClient *dbent.Client
-	if contextTx != nil {
-		txClient = contextTx.Client()
-	} else {
-		var err error
-		tx, err = r.client.Tx(ctx)
-		if err != nil {
-			return err
-		}
+	var err error
+	ctx, txClient, tx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
 		defer func() { _ = tx.Rollback() }()
-		txClient = tx.Client()
-		ctx = dbent.NewTxContext(ctx, tx)
 	}
 
 	if isOpenAIFixedEgressParent(account) && account.ProxyID != nil {
@@ -620,22 +624,13 @@ func (r *accountRepository) updateAccount(
 	}
 
 	baseCtx := ctx
-	contextTx := dbent.TxFromContext(ctx)
-	client := r.client
-	var tx *dbent.Tx
-	if contextTx != nil {
-		client = contextTx.Client()
-	} else {
-		var err error
-		tx, err = r.client.Tx(ctx)
-		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-			return err
-		}
-		if tx != nil {
-			defer func() { _ = tx.Rollback() }()
-			ctx = dbent.NewTxContext(ctx, tx)
-			client = tx.Client()
-		}
+	var err error
+	ctx, client, tx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
 	}
 
 	if err := enforceOpenAIOAuthParentUpdate(ctx, client, account); err != nil {
@@ -671,7 +666,7 @@ func (r *accountRepository) updateAccount(
 	account.UpdatedAt = updated.UpdatedAt
 	// 普通账号编辑（如 model_mapping / credentials）也需要立即刷新单账号快照，
 	// 否则网关在 outbox worker 延迟或异常时仍可能读到旧配置。
-	if contextTx == nil {
+	if tx != nil {
 		r.syncSchedulerAccountSnapshot(baseCtx, account.ID)
 	}
 	return nil
@@ -999,22 +994,12 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 		return err
 	}
 	baseCtx := ctx
-	contextTx := dbent.TxFromContext(ctx)
-	client := r.client
-	var tx *dbent.Tx
-	if contextTx != nil {
-		client = contextTx.Client()
-	} else if r.client != nil {
-		var txErr error
-		tx, txErr = r.client.Tx(ctx)
-		if txErr != nil && !errors.Is(txErr, dbent.ErrTxStarted) {
-			return txErr
-		}
-		if tx != nil {
-			defer func() { _ = tx.Rollback() }()
-			ctx = dbent.NewTxContext(ctx, tx)
-			client = tx.Client()
-		}
+	ctx, client, tx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
 	}
 	result, err := client.ExecContext(ctx, `
 		UPDATE accounts
@@ -1085,7 +1070,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 			return err
 		}
 	}
-	if contextTx == nil {
+	if tx != nil {
 		r.syncSchedulerAccountSnapshot(baseCtx, id)
 	}
 	return nil
@@ -1097,20 +1082,13 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 	}
 
 	baseCtx := ctx
-	contextTx := dbent.TxFromContext(ctx)
-	client := r.client
-	var tx *dbent.Tx
-	if contextTx != nil {
-		client = contextTx.Client()
-	} else {
-		var err error
-		tx, err = r.client.Tx(ctx)
-		if err != nil {
-			return err
-		}
+	var err error
+	ctx, client, tx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
 		defer func() { _ = tx.Rollback() }()
-		ctx = dbent.NewTxContext(ctx, tx)
-		client = tx.Client()
 	}
 
 	// Lock the parent before enumerating shadows. FOR UPDATE also conflicts with
@@ -1237,7 +1215,7 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 	// An outer transaction owns publication timing; its committed outbox rows
 	// invalidate the snapshots. Only this method's own committed transaction
 	// may evict immediately.
-	if contextTx == nil {
+	if tx != nil {
 		r.retireDeletedSchedulerAccountSnapshotsDetached(baseCtx, affectedIDs)
 	}
 	return nil
@@ -2011,7 +1989,7 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 // unschedulable, or temporarily unschedulable, ensuring scheduler and sticky session
 // logic can promptly detect the latest account state and avoid using unavailable accounts.
 func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
-	if r == nil || r.schedulerCache == nil || accountID <= 0 {
+	if r == nil || r.schedulerCache == nil || accountID <= 0 || r.schedulerCacheMutationDeferred(ctx) {
 		return
 	}
 	account, err := r.GetByID(ctx, accountID)
@@ -2025,6 +2003,12 @@ func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, ac
 }
 
 func (r *accountRepository) syncSchedulerAccountSnapshotDetached(ctx context.Context, accountID int64) {
+	// Preserve the caller-owned transaction signal before detaching cancellation.
+	// Detached propagation is only for post-commit best-effort work; publishing
+	// while an outer transaction is still open could expose state that rolls back.
+	if r.schedulerCacheMutationDeferred(ctx) {
+		return
+	}
 	base := context.Background()
 	if ctx != nil {
 		base = context.WithoutCancel(ctx)
@@ -2035,7 +2019,7 @@ func (r *accountRepository) syncSchedulerAccountSnapshotDetached(ctx context.Con
 }
 
 func (r *accountRepository) retireSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
-	if r == nil || r.schedulerCache == nil || accountID <= 0 {
+	if r == nil || r.schedulerCache == nil || accountID <= 0 || r.schedulerCacheMutationDeferred(ctx) {
 		return
 	}
 	if err := service.RetireSchedulerAccountSnapshot(ctx, r.schedulerCache, accountID); err != nil {
@@ -2044,7 +2028,7 @@ func (r *accountRepository) retireSchedulerAccountSnapshot(ctx context.Context, 
 }
 
 func (r *accountRepository) retireDeletedSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
-	if r == nil || r.schedulerCache == nil || accountID <= 0 {
+	if r == nil || r.schedulerCache == nil || accountID <= 0 || r.schedulerCacheMutationDeferred(ctx) {
 		return
 	}
 	if err := service.RetireDeletedSchedulerAccountSnapshot(ctx, r.schedulerCache, accountID); err != nil {
@@ -2053,6 +2037,9 @@ func (r *accountRepository) retireDeletedSchedulerAccountSnapshot(ctx context.Co
 }
 
 func (r *accountRepository) retireSchedulerAccountSnapshotsDetached(ctx context.Context, accountIDs []int64) {
+	if r.schedulerCacheMutationDeferred(ctx) {
+		return
+	}
 	base := context.Background()
 	if ctx != nil {
 		base = context.WithoutCancel(ctx)
@@ -2065,6 +2052,9 @@ func (r *accountRepository) retireSchedulerAccountSnapshotsDetached(ctx context.
 }
 
 func (r *accountRepository) retireDeletedSchedulerAccountSnapshotsDetached(ctx context.Context, accountIDs []int64) {
+	if r.schedulerCacheMutationDeferred(ctx) {
+		return
+	}
 	base := context.Background()
 	if ctx != nil {
 		base = context.WithoutCancel(ctx)
@@ -2077,7 +2067,7 @@ func (r *accountRepository) retireDeletedSchedulerAccountSnapshotsDetached(ctx c
 }
 
 func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, accountIDs []int64) {
-	if r == nil || r.schedulerCache == nil || len(accountIDs) == 0 {
+	if r == nil || r.schedulerCache == nil || len(accountIDs) == 0 || r.schedulerCacheMutationDeferred(ctx) {
 		return
 	}
 
@@ -2113,26 +2103,35 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 	}
 }
 
+// schedulerCacheMutationDeferred identifies both supported forms of a
+// caller-owned transaction: an Ent Tx carried in context and a repository
+// constructed directly from tx.Client()/tx. Neither form has a post-commit
+// callback here, so direct Redis publication must wait for the durable outbox
+// rather than exposing state that the caller may still roll back.
+func (r *accountRepository) schedulerCacheMutationDeferred(ctx context.Context) bool {
+	if ctx != nil && dbent.TxFromContext(ctx) != nil {
+		return true
+	}
+	if r == nil {
+		return true
+	}
+	_, injectedTransaction := r.sql.(*dbent.Tx)
+	return injectedTransaction
+}
+
 func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 	if r == nil || r.client == nil || id <= 0 {
 		return service.ErrAccountNotFound
 	}
 
 	baseCtx := ctx
-	contextTx := dbent.TxFromContext(ctx)
-	client := r.client
-	var tx *dbent.Tx
-	if contextTx != nil {
-		client = contextTx.Client()
-	} else {
-		var err error
-		tx, err = r.client.Tx(ctx)
-		if err != nil {
-			return err
-		}
+	var err error
+	ctx, client, tx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
 		defer func() { _ = tx.Rollback() }()
-		ctx = dbent.NewTxContext(ctx, tx)
-		client = tx.Client()
 	}
 
 	// Read the candidate identity without a row lock, then let the shared
@@ -2203,14 +2202,14 @@ func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 			return err
 		}
 	}
-	if contextTx == nil {
+	if tx != nil {
 		r.syncSchedulerAccountSnapshot(baseCtx, id)
 	}
 	return nil
 }
 
 func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID int64, priority int) error {
-	ctx, client, tx, err := r.accountGroupMutationClient(ctx)
+	ctx, client, tx, err := r.accountMutationClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -2239,7 +2238,7 @@ func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID i
 }
 
 func (r *accountRepository) RemoveFromGroup(ctx context.Context, accountID, groupID int64) error {
-	ctx, client, tx, err := r.accountGroupMutationClient(ctx)
+	ctx, client, tx, err := r.accountMutationClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -2286,7 +2285,7 @@ func (r *accountRepository) GetGroups(ctx context.Context, accountID int64) ([]s
 }
 
 func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
-	ctx, client, tx, err := r.accountGroupMutationClient(ctx)
+	ctx, client, tx, err := r.accountMutationClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -3031,20 +3030,12 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	clearProbeSnapshot := upstreamBillingProbeExplicitlyDisabled(updates) || upstreamBillingProbeSnapshotClearRequested(updates)
 	durableSchedulerChange := shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot
 	baseCtx := ctx
-	contextTx := dbent.TxFromContext(ctx)
-	client := clientFromContext(ctx, r.client)
-	var tx *dbent.Tx
-	if durableSchedulerChange && contextTx == nil {
-		var txErr error
-		tx, txErr = r.client.Tx(ctx)
-		if txErr != nil && !errors.Is(txErr, dbent.ErrTxStarted) {
-			return txErr
-		}
-		if tx != nil {
-			defer func() { _ = tx.Rollback() }()
-			ctx = dbent.NewTxContext(ctx, tx)
-			client = tx.Client()
-		}
+	ctx, client, tx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
 	}
 	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
 	if clearProbeSnapshot {
@@ -3074,21 +3065,16 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 			return err
 		}
-		if tx != nil {
-			if err := tx.Commit(); err != nil {
-				return err
-			}
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
 		}
-		if contextTx == nil {
-			r.syncSchedulerAccountSnapshot(baseCtx, id)
-		}
-	} else {
-		// 观测型 extra 字段不需要触发 bucket 重建，但仍同步单账号快照，
-		// 让 sticky session / GetAccount 命中缓存时也能读到最新数据，
-		// 同时避免缓存局部 patch 覆盖掉并发写入的其它账号字段。
-		if dbent.TxFromContext(ctx) == nil {
-			r.syncSchedulerAccountSnapshot(ctx, id)
-		}
+		// Durable changes have an outbox retry path. Scheduler-neutral telemetry
+		// deliberately has no bucket event, so the same post-commit refresh keeps
+		// sticky-session account hydration current without exposing an outer
+		// transaction's uncommitted state.
+		r.syncSchedulerAccountSnapshot(baseCtx, id)
 	}
 	return nil
 }
@@ -3627,7 +3613,10 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			return 0, err
 		}
 	}
-	if rows > 0 && contextTx == nil {
+	// A transaction-bound repository can have no TxContext. Only publish
+	// immediately when this method actually committed its own transaction, or
+	// when a SQL-only test executor necessarily performed an autocommit.
+	if rows > 0 && contextTx == nil && (r.client == nil || tx != nil) {
 		shouldSync := false
 		if updates.Status != nil && (*updates.Status == service.StatusError || *updates.Status == service.StatusDisabled) {
 			shouldSync = true
@@ -3648,24 +3637,24 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 	expectedProxyID int64,
 	newProxy *service.Proxy,
 ) ([]int64, error) {
+	// Compatibility mode deliberately runs without permanent scheduler fences
+	// while an older writer may still share Redis. Reject migration before
+	// opening a transaction so no direct repository caller can create an
+	// unfenced binding change during Phase A.
+	if service.FixedEgressCompatibilityModeEnabled() {
+		return nil, service.ErrFixedEgressMigrationNotReady
+	}
 	if r == nil || r.client == nil || len(ids) == 0 || expectedProxyID < 0 {
 		return nil, service.ErrAccountProxyCASConflict
 	}
 	baseCtx := ctx
-	contextTx := dbent.TxFromContext(ctx)
-	client := r.client
-	var ownedTx *dbent.Tx
-	if contextTx != nil {
-		client = contextTx.Client()
-	} else {
-		var err error
-		ownedTx, err = r.client.Tx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	var err error
+	ctx, client, ownedTx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ownedTx != nil {
 		defer func() { _ = ownedTx.Rollback() }()
-		ctx = dbent.NewTxContext(ctx, ownedTx)
-		client = ownedTx.Client()
 	}
 
 	var newProxyID any
@@ -3793,7 +3782,7 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 	// same account before this callback runs, and a delayed SetAccount could then
 	// resurrect stale scheduling state. A delayed eviction remains fail-safe; the
 	// durable outbox is the retry/rebuild path if Redis is unavailable.
-	if contextTx == nil {
+	if ownedTx != nil {
 		r.retireSchedulerAccountSnapshotsDetached(baseCtx, allChangedIDs)
 	}
 	return parentIDs, nil
@@ -4061,23 +4050,6 @@ func uniquePositiveInt64s(ids []int64) []int64 {
 		out = append(out, id)
 	}
 	return out
-}
-
-func (r *accountRepository) accountGroupMutationClient(ctx context.Context) (context.Context, *dbent.Client, *dbent.Tx, error) {
-	if r == nil || r.client == nil {
-		return ctx, nil, nil, service.ErrAccountNotFound
-	}
-	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
-		return ctx, contextTx.Client(), nil, nil
-	}
-	tx, err := r.client.Tx(ctx)
-	if errors.Is(err, dbent.ErrTxStarted) {
-		return ctx, r.client, nil, nil
-	}
-	if err != nil {
-		return ctx, nil, nil, err
-	}
-	return dbent.NewTxContext(ctx, tx), tx.Client(), tx, nil
 }
 
 // lockLiveAccountForGroupMutation serializes group-link inserts with cascade

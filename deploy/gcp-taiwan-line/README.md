@@ -161,29 +161,41 @@ documented TCP `80/443` ingress tag remains active.
 The transport candidate is live for isolated `--resolve` canaries, but public
 DNS remains blocked until all of these pass on one frozen snapshot:
 
-1. Bind every active OpenAI OAuth account to one of the two verified fixed
-   Tailnet SOCKS egress gateways through the authenticated admin API with a
-   compare-and-set expected proxy ID. No raw database update is allowed.
-2. Commit the retained Azure listener transaction, then recreate the Azure
-   application with the exact retained image through the audited blue-green
-   release so its traffic/background bind mounts have fresh inodes. The old
+1. Commit the already validated retained Azure listener transaction (or roll
+   it back and re-stage it later). The server release, blue-green helper, and
+   runtime guard intentionally refuse application lifecycle work while that
+   transaction file exists. Production DNS remains on the old origin.
+2. Complete the two-stage fixed-egress application rollout documented in
+   `../../docs/operations/SUB2_DUAL_NODE_RUNTIME_CERT_EGRESS.md`: Phase A with the
+   compatibility override true on both application hosts; proof that every
+   earlier binary is stopped and cannot restart; then normal-final with the
+   same image and the override false. Keep protected account/proxy mutations
+   frozen across this boundary. Phase A must not execute account proxy CAS.
+3. After normal-final is active, obtain action-time owner confirmation, create
+   the two verified West US Tailnet `socks5h:1080` Proxy rows, and CAS-bind
+   every live OpenAI OAuth/setup-token parent and credential shadow. Confirm
+   the protected full-cache key is absent and its permanent fence/safe metadata
+   converged. No raw database update is allowed, and no old-origin/Azure-Japan
+   public IP may be used as the fixed-egress proxy.
+4. The two-stage release must leave fresh, verified traffic/background bind
+   mounts on Azure. The old
    origin is currently the sole background owner; immediately before DNS
    moves, make Azure the sole owner and fence the old origin to
    `traffic=accepting ... background=standby`. Verify host and active-container
    views on both machines at every ownership transition.
-3. Through the authenticated admin API, prove
+5. Through the authenticated admin API, prove
    `security.forwarded_client_ip_headers` is empty, then pass basic generation,
    Responses streaming/continuation, and image behavior through the exact GCP
    address without printing credentials. A non-empty custom-header list needs
    a separately frozen Caddy scrub policy before cutover.
-4. Pass independent QA, repository review, and the requested read-only Claude
+6. Pass independent QA, repository review, and the requested read-only Claude
    review on the same file hashes and evidence snapshot.
-5. Record the complete Cloudflare record set and proxy status. The current
+7. Record the complete Cloudflare record set and proxy status. The current
    authoritative public baseline is A `206.119.172.211`, TTL 300, with no
    AAAA, CNAME, SVCB, or HTTPS record. Confirm that control-plane state and get
    action-time owner confirmation, then change only the
    `api.turtleligpt.com` A record.
-6. Keep the old origin healthy through propagation and drain. Repeat the fixed
+8. Keep the old origin healthy through propagation and drain. Repeat the fixed
    mainland carrier roster during evening peak before making a broad
    "three-carrier optimized" claim.
 

@@ -428,7 +428,7 @@ func TestProxyIdentityUpdateInvalidatesProbeAndRejectsInFlightSnapshot(t *testin
 	}
 }
 
-func TestSweepExpiredProxyWithoutFallbackInvalidatesOnlyExistingProbeSnapshot(t *testing.T) {
+func TestSweepExpiredProxyWithoutFallbackInvalidatesEveryBoundSchedulerSnapshot(t *testing.T) {
 	ctx := context.Background()
 	tx := testEntTx(t)
 	proxyRepo := newProxyRepositoryWithSQL(tx.Client(), tx)
@@ -471,7 +471,8 @@ func TestSweepExpiredProxyWithoutFallbackInvalidatesOnlyExistingProbeSnapshot(t 
 
 	changed, err := proxyRepo.SweepExpiredProxies(ctx, time.Now())
 	require.NoError(t, err)
-	require.Zero(t, changed, "probe invalidation must not inflate the rerouted account count")
+	require.EqualValues(t, 3, changed,
+		"every bound scheduler snapshot is affected when its embedded proxy becomes expired")
 
 	got, err := accountRepo.GetByID(ctx, withSnapshot.ID)
 	require.NoError(t, err)
@@ -483,7 +484,8 @@ func TestSweepExpiredProxyWithoutFallbackInvalidatesOnlyExistingProbeSnapshot(t 
 	}
 
 	payload := latestBulkAccountOutboxPayload(t, ctx, tx)
-	require.Equal(t, []int64{withSnapshot.ID}, payload)
+	require.Equal(t, []int64{withSnapshot.ID, withoutSnapshot.ID, withJSONNull.ID}, payload,
+		"proxy status is embedded in scheduler snapshots even when no probe snapshot changed")
 }
 
 func TestSweepExpiredProxyFallbackRerouteDeletesProbeSnapshot(t *testing.T) {

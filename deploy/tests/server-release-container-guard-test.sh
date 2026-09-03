@@ -91,11 +91,12 @@ if [ "${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}" = true ]; then
   exit 0
 fi
 if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
-  printf 'mode=%s old=%s new=%s backup=%s\n' \
+  printf 'mode=%s old=%s new=%s backup=%s fixed_egress_compatibility=%s\n' \
     "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
     "${OLD_CONTAINER:-}" \
     "${NEW_CONTAINER:-}" \
-    "${RUN_BACKUP:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
+    "${RUN_BACKUP:-}" \
+    "${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
 fi
 if [ -n "${FAKE_EVENT_LOG:-}" ]; then
   printf 'helper old=%s new=%s\n' "${OLD_CONTAINER:-}" "${NEW_CONTAINER:-}" >>"$FAKE_EVENT_LOG"
@@ -301,6 +302,7 @@ run_release() {
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
     SUB2API_RELEASE_BACKGROUND_MODE="${RELEASE_BACKGROUND_MODE:-activate}" \
+    SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
     /bin/bash "$SCRIPT" \
       "$SOURCE_DIR" \
       'sub2api:auto-test' \
@@ -334,6 +336,7 @@ run_github_prebuilt_release() {
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
     SUB2API_RELEASE_BACKGROUND_MODE="${RELEASE_BACKGROUND_MODE:-activate}" \
+    SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
     /bin/bash "$SCRIPT" \
       --prebuilt \
       'sub2api:auto-test' \
@@ -369,6 +372,7 @@ run_external_github_prebuilt_release() {
     SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$EXTERNAL_RUNTIME_ENV_FILE" \
     SUB2API_EXTERNAL_CA_FILE="$EXTERNAL_CA_FILE" \
     SUB2API_LOCAL_RELEASE_STATE_FILE_HOST="$LOCAL_TRANSACTION" \
+    SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
     /bin/bash "$SCRIPT" \
       --prebuilt \
       'sub2api:auto-test' \
@@ -466,6 +470,18 @@ assert_contains "$invalid_background_mode_output" \
 if [ -s "$DOCKER_CALLS" ]; then
   fail 'Docker was inspected before background-mode validation'
 fi
+
+: >"$DOCKER_CALLS"
+invalid_fixed_egress_mode_output="${TEST_ROOT}/invalid-fixed-egress-mode.log"
+if RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=unexpected \
+  run_github_prebuilt_release >"$invalid_fixed_egress_mode_output" 2>&1; then
+  fail 'server release accepted an unsupported fixed-egress compatibility mode'
+fi
+assert_contains "$invalid_fixed_egress_mode_output" \
+  'SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE must be preserve, true, or false'
+if [ -s "$DOCKER_CALLS" ]; then
+  fail 'Docker was inspected before fixed-egress compatibility-mode validation'
+fi
 assert_contains "$resolve_mismatch_output" 'host/port must match SUB2API_PUBLIC_HEALTH_URL'
 if [ -s "$DOCKER_CALLS" ]; then
   fail 'Docker was inspected before health resolve validation'
@@ -548,6 +564,7 @@ assert_contains "$BLUE_GREEN_ENV_LOG" \
 : >"$NODE_STATE_CALLS"
 successful_release_output="${TEST_ROOT}/successful-release.log"
 if ! ALLOW_DRAINING=true FAKE_CURL_SUCCESS=1 FAKE_UPDATE_CADDY=1 \
+  RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=true \
   run_github_prebuilt_release >"$successful_release_output" 2>&1; then
   sed -n '1,200p' "$successful_release_output" >&2
   fail 'fake verified release did not complete'
@@ -556,6 +573,7 @@ assert_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
 assert_contains "$NODE_STATE_CALLS" 'commit-local'
 assert_contains "$CURL_CALLS" '--resolve example.invalid:443:192.0.2.10'
 assert_contains "$CURL_CALLS" '--noproxy *'
+assert_contains "$BLUE_GREEN_ENV_LOG" 'fixed_egress_compatibility=true'
 if grep -Fq -- 'abort-local' "$NODE_STATE_CALLS"; then
   fail 'successful release invoked node-state abort'
 fi

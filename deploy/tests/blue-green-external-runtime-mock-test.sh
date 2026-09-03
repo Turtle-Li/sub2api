@@ -378,6 +378,7 @@ printf '%s\n' \
   'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state' \
   'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state' \
   'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token' \
+  'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false' \
   'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=legacy-private-key-must-be-removed' \
   'UNRELATED_SETTING=preserved' >"$old_env"
 printf '%s\n' 'volume|sub2api_sub2api_data|/app/data|true' >"$old_mounts"
@@ -424,6 +425,7 @@ run_helper() {
     SUB2API_BACKGROUND_STATE_DIR_HOST="$BACKGROUND_STATE_DIR" \
     SUB2API_INTERNAL_HEALTH_TOKEN_FILE="$HEALTH_TOKEN_FILE" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="${DUAL_NODE_RUNTIME_ENABLED:-true}" \
+    SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
     ALLOW_ISOLATED_OLD_CONTAINER="${ALLOW_ISOLATED_OLD_CONTAINER:-false}" \
     REMOVE_EXISTING_NEW_CONTAINER="${REMOVE_EXISTING_NEW_CONTAINER:-true}" \
     RUN_BACKUP=false \
@@ -500,6 +502,14 @@ assert_contains "$OUTPUT" 'VALIDATE_EXTERNAL_RUNTIME_ONLY requires external depe
 [ ! -s "$CALLS" ] || fail 'invalid runtime-only validation invoked Docker'
 
 : >"$CALLS"
+if RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=unexpected \
+  VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'invalid fixed-egress compatibility release mode was accepted'
+fi
+assert_contains "$OUTPUT" 'SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE must be preserve, true, or false'
+[ ! -s "$CALLS" ] || fail 'invalid compatibility mode invoked Docker'
+
+: >"$CALLS"
 before_caddy="$(cksum "$APP_DIR/Caddyfile")"
 PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
 after_caddy="$(cksum "$APP_DIR/Caddyfile")"
@@ -516,6 +526,7 @@ assert_contains "$(state_path sub2api-green)/env" 'PGSSLROOTCERT=/etc/sub2api-db
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state'
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state'
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token'
+assert_contains "$(state_path sub2api-green)/env" 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false'
 assert_contains "$(state_path sub2api-green)/env" 'UNRELATED_SETTING=preserved'
 assert_not_line "$(state_path sub2api-green)/env" 'DATABASE_HOST=postgres'
 assert_not_line "$(state_path sub2api-green)/env" 'REDIS_HOST=redis'
@@ -528,6 +539,62 @@ assert_not_contains "$OUTPUT" 'external-secret-not-for-logs'
 
 assert_not_contains "$OUTPUT" 'redis-secret-not-for-logs'
 assert_not_contains "$CALLS" 'external-secret-not-for-logs'
+
+# The migration override deliberately replaces the inherited application
+# value, is unique, and is itself part of prepared-target validation.
+rm -rf "$(state_path sub2api-green)"
+: >"$CALLS"
+RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=true PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+[ "$(grep -Fxc 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true' "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'Phase-A compatibility override was not written exactly once'
+: >"$CALLS"
+if RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'prepared Phase-A target was accepted for a normal-final release'
+fi
+assert_contains "$OUTPUT" 'does not match'
+assert_not_contains "$CALLS" 'rm '
+rm -rf "$(state_path sub2api-green)"
+: >"$CALLS"
+RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+[ "$(grep -Fxc 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false' "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'normal-final compatibility override was not written exactly once'
+
+# A default preserve release derives the effective setting from the active
+# generation. It must never reuse a stale Phase-A target with the opposite
+# value, even when image, mounts, dependencies, and restart policy still match.
+sed -i.bak \
+  's/^SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false$/SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true/' \
+  "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/env.bak"
+: >"$CALLS"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'preserve release reused a stale Phase-A target after active mode became false'
+fi
+assert_contains "$OUTPUT" 'does not match'
+assert_not_contains "$CALLS" 'start sub2api-green'
+assert_not_contains "$CALLS" 'update --restart'
+sed -i.bak \
+  's/^SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true$/SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false/' \
+  "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/env.bak"
+
+# Preserve is exact: an absent source variable is not interchangeable with an
+# explicit false target, and duplicate source entries are ambiguous.
+sed -i.bak '/^SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=/d' "$(state_path sub2api)/env"
+rm -f "$(state_path sub2api)/env.bak"
+: >"$CALLS"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'preserve release treated absent source mode as explicit false'
+fi
+assert_contains "$OUTPUT" 'does not match'
+cp "$old_env" "$(state_path sub2api)/env"
+printf '%s\n' 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true' >>"$(state_path sub2api)/env"
+: >"$CALLS"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'preserve release accepted duplicate source compatibility entries'
+fi
+assert_contains "$OUTPUT" 'duplicate SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE entries'
+cp "$old_env" "$(state_path sub2api)/env"
 
 # External prepared targets must be attached to exactly one network and carry
 # exactly the data volume, two read-only CA mounts, and three runtime mounts.
@@ -584,9 +651,17 @@ assert_contains "$CALLS" 'exec sub2api-green'
 rm -rf "$(state_path sub2api)"
 : >"$CALLS"
 if ALLOW_ISOLATED_OLD_CONTAINER=true REMOVE_EXISTING_NEW_CONTAINER=false run_helper >"$OUTPUT" 2>&1; then
-  fail 'focused absent-old recovery unexpectedly completed beyond health probe'
+  fail 'preserve recovery accepted an absent source generation'
 fi
 assert_not_contains "$OUTPUT" 'old container sub2api does not exist'
+assert_contains "$OUTPUT" 'cannot preserve fixed-egress compatibility mode because old container sub2api is missing'
+assert_not_contains "$CALLS" 'exec sub2api-green'
+: >"$CALLS"
+if RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=false \
+  ALLOW_ISOLATED_OLD_CONTAINER=true REMOVE_EXISTING_NEW_CONTAINER=false \
+  run_helper >"$OUTPUT" 2>&1; then
+  fail 'focused absent-old recovery unexpectedly completed beyond health probe'
+fi
 assert_contains "$CALLS" 'exec sub2api-green'
 make_state sub2api sub2api:old true unless-stopped "$old_env" "$old_mounts"
 

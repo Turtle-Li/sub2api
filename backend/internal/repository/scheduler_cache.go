@@ -651,6 +651,9 @@ func (c *schedulerCache) RetireAccountSnapshot(ctx context.Context, account *ser
 	if account == nil || account.ID <= 0 {
 		return nil
 	}
+	if service.FixedEgressCompatibilityModeEnabled() {
+		return c.DeleteAccount(ctx, account.ID)
+	}
 
 	var (
 		metaPayload []byte
@@ -685,6 +688,9 @@ func (c *schedulerCache) RetireAccountSnapshot(ctx context.Context, account *ser
 func (c *schedulerCache) RetireDeletedAccountSnapshot(ctx context.Context, accountID int64) error {
 	if accountID <= 0 {
 		return nil
+	}
+	if service.FixedEgressCompatibilityModeEnabled() {
+		return c.DeleteAccount(ctx, accountID)
 	}
 	id := strconv.FormatInt(accountID, 10)
 	_, err := retireDeletedSchedulerAccountSnapshotScript.Run(ctx, c.rdb, []string{

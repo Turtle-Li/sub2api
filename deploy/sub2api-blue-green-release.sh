@@ -47,6 +47,11 @@ VALIDATE_EXTERNAL_RUNTIME_ONLY="${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}"
 DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE-local}"
 EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
 EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
+# Migration-only application override. "preserve" copies the active
+# container's setting exactly; true/false deliberately replace it in the new
+# generation. This keeps the Phase-A -> normal-final transition inside the
+# audited blue-green transaction instead of requiring an ad-hoc docker create.
+FIXED_EGRESS_COMPATIBILITY_MODE="${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}"
 CONTAINER_PG_CA_PATH="/etc/sub2api-db-ca/ca.crt"
 CONTAINER_REDIS_CA_PATH="/etc/ssl/certs/sub2api-db-ca.pem"
 TRAFFIC_STATE_FILE="${SUB2API_TRAFFIC_STATE_FILE_HOST:-${SUB2API_TRAFFIC_STATE_FILE:-/var/lib/sub2api/runtime/traffic-state}}"
@@ -73,6 +78,8 @@ TEMP_FILES=()
 TEMP_FILE=""
 RUNTIME_ENV_FILE=""
 EXTERNAL_VALUES_FILE=""
+FIXED_EGRESS_EXPECTED_PRESENT=""
+FIXED_EGRESS_EXPECTED_VALUE=""
 CADDY_RW_PID=""
 CADDY_SWITCH_OWNED=false
 EXTERNAL_ENV_KEYS=(
@@ -406,6 +413,74 @@ container_matches_unified_payment_env() {
   done
 }
 
+container_matches_fixed_egress_compatibility_env() {
+  local inspect_env="$1"
+  local actual_count actual_value
+
+  actual_count="$(awk -v expected_key=SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE '
+    index($0, expected_key "=") == 1 {
+      count += 1
+    }
+    END { print count + 0 }
+  ' "$inspect_env")"
+  if [ "$FIXED_EGRESS_EXPECTED_PRESENT" = false ]; then
+    [ "$actual_count" -eq 0 ]
+    return
+  fi
+  [ "$FIXED_EGRESS_EXPECTED_PRESENT" = true ] || return 1
+  [ "$actual_count" -eq 1 ] || return 1
+  actual_value="$(awk -v expected_key=SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE '
+    index($0, expected_key "=") == 1 {
+      print substr($0, length(expected_key) + 2)
+    }
+  ' "$inspect_env")"
+  [ "$actual_value" = "$FIXED_EGRESS_EXPECTED_VALUE" ]
+}
+
+resolve_fixed_egress_compatibility_expectation() {
+  local old_env_file old_count
+
+  if [ "$FIXED_EGRESS_COMPATIBILITY_MODE" != preserve ]; then
+    FIXED_EGRESS_EXPECTED_PRESENT=true
+    FIXED_EGRESS_EXPECTED_VALUE="$FIXED_EGRESS_COMPATIBILITY_MODE"
+    return 0
+  fi
+  container_exists "$OLD_CONTAINER" \
+    || die "cannot preserve fixed-egress compatibility mode because old container $OLD_CONTAINER is missing"
+  new_temp_file
+  old_env_file="$TEMP_FILE"
+  docker inspect "$OLD_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$old_env_file"
+  old_count="$(awk -v expected_key=SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE '
+    index($0, expected_key "=") == 1 { count += 1 }
+    END { print count + 0 }
+  ' "$old_env_file")"
+  case "$old_count" in
+    0)
+      FIXED_EGRESS_EXPECTED_PRESENT=false
+      FIXED_EGRESS_EXPECTED_VALUE=""
+      ;;
+    1)
+      FIXED_EGRESS_EXPECTED_PRESENT=true
+      FIXED_EGRESS_EXPECTED_VALUE="$(awk -v expected_key=SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE '
+        index($0, expected_key "=") == 1 {
+          print substr($0, length(expected_key) + 2)
+        }
+      ' "$old_env_file")"
+      ;;
+    *)
+      die "old container has duplicate SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE entries; refusing preserve release"
+      ;;
+  esac
+}
+
+container_matches_fixed_egress_compatibility_container() {
+  local container="$1" inspect_env
+  new_temp_file
+  inspect_env="$TEMP_FILE"
+  docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
+  container_matches_fixed_egress_compatibility_env "$inspect_env"
+}
+
 make_runtime_env_file() {
   local old_env_file output_file line key
 
@@ -426,6 +501,9 @@ make_runtime_env_file() {
 	  SUB2API_TRAFFIC_STATE_FILE|SUB2API_BACKGROUND_STATE_FILE|SUB2API_INTERNAL_HEALTH_TOKEN_FILE)
 		continue
 		;;
+	  SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE)
+		[ "$FIXED_EGRESS_COMPATIBILITY_MODE" = preserve ] || continue
+		;;
 	  DATABASE_HOST|DATABASE_PORT|DATABASE_USER|DATABASE_PASSWORD|DATABASE_DBNAME|DATABASE_SSLMODE|REDIS_HOST|REDIS_PORT|REDIS_USERNAME|REDIS_PASSWORD|REDIS_DB|REDIS_ENABLE_TLS|PGSSLROOTCERT)
 		[ "$DEPENDENCY_MODE" = external ] && continue
 		;;
@@ -441,6 +519,9 @@ make_runtime_env_file() {
 	  printf 'SUB2API_BACKGROUND_STATE_FILE=%s\n' "$CONTAINER_BACKGROUND_STATE_PATH"
 	  printf 'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=%s\n' "$CONTAINER_HEALTH_TOKEN_PATH"
 	} >>"$output_file"
+  fi
+  if [ "$FIXED_EGRESS_COMPATIBILITY_MODE" != preserve ]; then
+	printf 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=%s\n' "$FIXED_EGRESS_COMPATIBILITY_MODE" >>"$output_file"
   fi
   write_unified_payment_overrides "$output_file"
   RUNTIME_ENV_FILE="$output_file"
@@ -489,6 +570,7 @@ container_matches_external_runtime() {
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
+  container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   for key in "${EXTERNAL_OVERRIDE_KEYS[@]}"; do
     if [ "$key" = PGSSLROOTCERT ]; then
       expected_value="$CONTAINER_PG_CA_PATH"
@@ -560,6 +642,7 @@ container_matches_local_runtime() {
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
+  container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   for key in "${RUNTIME_OVERRIDE_KEYS[@]}"; do
 	case "$key" in
 	  SUB2API_TRAFFIC_STATE_FILE) expected_value="$CONTAINER_TRAFFIC_STATE_PATH" ;;
@@ -894,6 +977,10 @@ require_bool RUN_BACKUP "$RUN_BACKUP"
 require_bool PULL_IMAGE "$PULL_IMAGE"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
 require_bool VALIDATE_EXTERNAL_RUNTIME_ONLY "$VALIDATE_EXTERNAL_RUNTIME_ONLY"
+case "$FIXED_EGRESS_COMPATIBILITY_MODE" in
+  preserve|true|false) ;;
+  *) die "SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE must be preserve, true, or false" ;;
+esac
 require_positive_integer HEALTH_ATTEMPTS "$HEALTH_ATTEMPTS"
 require_positive_integer HEALTH_INTERVAL_SECONDS "$HEALTH_INTERVAL_SECONDS"
 require_positive_integer APP_PORT "$APP_PORT"
@@ -968,6 +1055,7 @@ else
   container_exists "$OLD_CONTAINER" || die "old container $OLD_CONTAINER does not exist"
   container_running "$OLD_CONTAINER" || die "old container $OLD_CONTAINER is not running; refusing to release"
 fi
+resolve_fixed_egress_compatibility_expectation
 docker network inspect "$NETWORK" >/dev/null 2>&1 || die "Docker network $NETWORK does not exist"
 docker volume inspect "$DATA_VOLUME" >/dev/null 2>&1 || die "Docker volume $DATA_VOLUME does not exist"
 if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
@@ -1033,6 +1121,9 @@ else
 	  if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
 		container_matches_local_runtime "$NEW_CONTAINER" true \
 		  || die "running local target does not match the requested image or dual-node runtime contract"
+	  else
+		container_matches_fixed_egress_compatibility_container "$NEW_CONTAINER" \
+		  || die "running local target does not match the requested fixed-egress compatibility mode"
 	  fi
       log "$NEW_CONTAINER already exists with status $status; reusing it"
     else
@@ -1071,6 +1162,8 @@ else
 		  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
 		  --restart no "$NEW_IMAGE" >/dev/null
+		container_matches_fixed_egress_compatibility_container "$NEW_CONTAINER" \
+		  || die "local precreated target failed fixed-egress compatibility verification"
       fi
     else
       log "starting $NEW_CONTAINER from $NEW_IMAGE"
@@ -1078,6 +1171,9 @@ else
 	  if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
 		container_matches_local_runtime "$NEW_CONTAINER" true \
 		  || die "new local target failed dual-node runtime verification"
+	  else
+		container_matches_fixed_egress_compatibility_container "$NEW_CONTAINER" \
+		  || die "new local target failed fixed-egress compatibility verification"
 	  fi
     fi
   else

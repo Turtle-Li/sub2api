@@ -619,17 +619,29 @@ verify_caddy_startup_file() {
 
 write_failure_state() {
   local reason="$1"
+  local failed_container="${2:-$ACTIVE_CONTAINER}"
   local temporary_file
 
   mkdir -p "$STATE_DIR"
   umask 077
   temporary_file="$(mktemp "${STATE_DIR}/.last-failure.XXXXXX")"
   printf 'failed_at_epoch=%s\nactive_container=%s\nreason=%s\n' \
-    "$(date +%s)" "$ACTIVE_CONTAINER" "$reason" >"$temporary_file"
+    "$(date +%s)" "$failed_container" "$reason" >"$temporary_file"
   mv -f "$temporary_file" "$FAILURE_FILE"
 }
 
 clear_failure_state() {
+  local failed_container
+
+  if [ -r "$FAILURE_FILE" ]; then
+    failed_container="$(sed -n 's/^active_container=//p' "$FAILURE_FILE" | head -n 1)"
+    if [ -n "$failed_container" ] &&
+       [ -n "${ACTIVE_CONTAINER:-}" ] &&
+       [ "$failed_container" != "$ACTIVE_CONTAINER" ]; then
+      log "preserving failure evidence for previously isolated container: ${failed_container}"
+      return 0
+    fi
+  fi
   rm -f "$FAILURE_FILE"
 }
 
@@ -782,7 +794,10 @@ start_fallback() {
   log "starting historical fallback ${FALLBACK_CONTAINER}"
   docker start "$FALLBACK_CONTAINER" >/dev/null || return 1
   if wait_for_app_ready "$FALLBACK_CONTAINER"; then
-    return 0
+    if running_container_runtime_state_matches "$FALLBACK_CONTAINER"; then
+      return 0
+    fi
+    log "fallback runtime-state bind is stale after start; stopping it before any Caddy switch: ${FALLBACK_CONTAINER}" >&2
   fi
   log "fallback did not become healthy; stopping it before trying no further candidates: ${FALLBACK_CONTAINER}" >&2
   docker stop "$FALLBACK_CONTAINER" >/dev/null || true
@@ -835,6 +850,18 @@ fence_fallback_if_caddy_still_uses_failed_active() {
   fi
 }
 
+isolate_unverified_fallback() {
+  if container_exists "$FALLBACK_CONTAINER" && container_running "$FALLBACK_CONTAINER"; then
+    log "stopping unverified fallback: ${FALLBACK_CONTAINER}" >&2
+    docker stop "$FALLBACK_CONTAINER" >/dev/null || return 1
+  fi
+  if container_running "$FALLBACK_CONTAINER"; then
+    log "unverified fallback remained running after isolation attempt: ${FALLBACK_CONTAINER}" >&2
+    return 1
+  fi
+  return 0
+}
+
 verify_fallback_switch() {
   local fallback_upstream="${FALLBACK_CONTAINER}:${APP_PORT}"
 
@@ -844,6 +871,10 @@ verify_fallback_switch() {
   fi
   if ! container_is_healthy "$FALLBACK_CONTAINER"; then
     log "fallback lost health after Caddy switch: ${FALLBACK_CONTAINER}" >&2
+    return 1
+  fi
+  if ! running_container_runtime_state_matches "$FALLBACK_CONTAINER"; then
+    log "fallback runtime-state bind is stale after Caddy switch: ${FALLBACK_CONTAINER}" >&2
     return 1
   fi
   verify_caddy_matches "$fallback_upstream" || return 1
@@ -964,16 +995,21 @@ verify_caddy_matches "$ACTIVE_UPSTREAM" \
 verify_caddy_startup_file "$ACTIVE_UPSTREAM" \
   || die "host Caddyfile and Caddy startup configuration are not consistent"
 
+ACTIVE_RUNTIME_STATE_INVALID=false
 if container_is_healthy "$ACTIVE_CONTAINER"; then
   wait_for_public_health || die "public health endpoint is unavailable while the active container is healthy"
-  reconcile_local_release_state "$ACTIVE_CONTAINER" \
-    || die "could not reconcile node state for the healthy Caddy-selected container"
-  clear_failure_state
-  log "active container is already healthy: ${ACTIVE_CONTAINER}"
-  exit 0
+  if reconcile_local_release_state "$ACTIVE_CONTAINER"; then
+    clear_failure_state
+    log "active container is already healthy: ${ACTIVE_CONTAINER}"
+    exit 0
+  fi
+  write_failure_state 'active-runtime-state-drift'
+  isolate_active_container \
+    || die "could not isolate healthy container with stale runtime-state binds"
+  ACTIVE_RUNTIME_STATE_INVALID=true
 fi
 
-if cooldown_is_active; then
+if [ "$ACTIVE_RUNTIME_STATE_INVALID" != true ] && cooldown_is_active; then
   # A prior recovery attempt already proved this same selected slot bad and
   # isolated it. If an external actor restarted it but it is still unhealthy,
   # re-establish the fence without entering another restart loop.
@@ -984,17 +1020,21 @@ if cooldown_is_active; then
   exit 1
 fi
 
-if try_restore_active; then
+if [ "$ACTIVE_RUNTIME_STATE_INVALID" != true ] && try_restore_active; then
   verify_caddy_matches "$ACTIVE_UPSTREAM" \
     || die "Caddy changed while the active container was being recovered"
   verify_caddy_startup_file "$ACTIVE_UPSTREAM" \
     || die "Caddy startup file changed while the active container was being recovered"
   wait_for_public_health || die "public health endpoint is unavailable after active-container recovery"
-  reconcile_local_release_state "$ACTIVE_CONTAINER" \
-    || die "could not reconcile node state after active-container recovery"
-  clear_failure_state
-  log "active container recovered in place: ${ACTIVE_CONTAINER}"
-  exit 0
+  if reconcile_local_release_state "$ACTIVE_CONTAINER"; then
+    clear_failure_state
+    log "active container recovered in place: ${ACTIVE_CONTAINER}"
+    exit 0
+  fi
+  write_failure_state 'recovered-active-runtime-state-drift'
+  isolate_active_container \
+    || die "could not isolate recovered active container with stale runtime-state binds"
+  ACTIVE_RUNTIME_STATE_INVALID=true
 fi
 
 # A previous release may still have its old color draining.  Only after the
@@ -1016,6 +1056,12 @@ if [ "$running_inactive_count" -gt 0 ]; then
     || ! app_internal_health "$FALLBACK_CONTAINER"; then
     die "running inactive fallback is not healthy: ${FALLBACK_CONTAINER}"
   fi
+  if ! running_container_runtime_state_matches "$FALLBACK_CONTAINER"; then
+    isolate_unverified_fallback \
+      || log "WARNING: could not isolate running fallback with stale runtime state: ${FALLBACK_CONTAINER}" >&2
+    write_failure_state 'running-fallback-runtime-state-drift'
+    die "running inactive fallback has stale runtime-state binds: ${FALLBACK_CONTAINER}"
+  fi
   isolate_active_container \
     || die "could not isolate failed active container before promoting ${FALLBACK_CONTAINER}"
   log "promoting already-running healthy historical fallback: ${FALLBACK_CONTAINER}"
@@ -1025,13 +1071,22 @@ if [ "$running_inactive_count" -gt 0 ]; then
     die "could not promote running historical fallback"
   fi
   if ! verify_fallback_switch; then
-    fence_fallback_if_caddy_still_uses_failed_active
-    write_failure_state 'running-fallback-verification-failed'
+    isolate_unverified_fallback \
+      || log "WARNING: could not isolate unverified running fallback: ${FALLBACK_CONTAINER}" >&2
+    write_failure_state 'running-fallback-verification-failed' "$FALLBACK_CONTAINER"
     die "running historical fallback failed post-switch verification"
   fi
-  reconcile_local_release_state "$FALLBACK_CONTAINER" \
-    || die "could not reconcile node state after running fallback promotion"
-  clear_failure_state
+  if ! reconcile_local_release_state "$FALLBACK_CONTAINER"; then
+    isolate_unverified_fallback \
+      || log "WARNING: could not isolate unreconciled running fallback: ${FALLBACK_CONTAINER}" >&2
+    write_failure_state 'running-fallback-reconciliation-failed' "$FALLBACK_CONTAINER"
+    die "could not reconcile node state after running fallback promotion"
+  fi
+  if [ "$ACTIVE_RUNTIME_STATE_INVALID" != true ]; then
+    clear_failure_state
+  else
+    log "fallback recovered traffic while preserving active runtime-state drift evidence"
+  fi
   log "runtime fallback verified: active=${FALLBACK_CONTAINER} image=${FALLBACK_IMAGE}"
   exit 0
 fi
@@ -1042,7 +1097,11 @@ if ! isolate_active_container; then
 fi
 
 if ! select_known_good_fallback; then
-  write_failure_state 'no-known-good-fallback'
+  if [ "$ACTIVE_RUNTIME_STATE_INVALID" = true ]; then
+    write_failure_state 'active-runtime-state-drift-no-known-good-fallback'
+  else
+    write_failure_state 'no-known-good-fallback'
+  fi
   die "no stopped, non-OOM, zero-exit historical fallback is available"
 fi
 
@@ -1058,13 +1117,22 @@ if ! switch_caddy_to_fallback; then
 fi
 
 if ! verify_fallback_switch; then
-  fence_fallback_if_caddy_still_uses_failed_active
-  write_failure_state 'fallback-verification-failed'
+  isolate_unverified_fallback \
+    || log "WARNING: could not isolate unverified fallback: ${FALLBACK_CONTAINER}" >&2
+  write_failure_state 'fallback-verification-failed' "$FALLBACK_CONTAINER"
   die "fallback switch verification failed; failed active remains stopped"
 fi
 
-reconcile_local_release_state "$FALLBACK_CONTAINER" \
-  || die "could not reconcile node state after fallback promotion"
+if ! reconcile_local_release_state "$FALLBACK_CONTAINER"; then
+  isolate_unverified_fallback \
+    || log "WARNING: could not isolate unreconciled fallback: ${FALLBACK_CONTAINER}" >&2
+  write_failure_state 'fallback-reconciliation-failed' "$FALLBACK_CONTAINER"
+  die "could not reconcile node state after fallback promotion"
+fi
 
-clear_failure_state
+if [ "$ACTIVE_RUNTIME_STATE_INVALID" != true ]; then
+  clear_failure_state
+else
+  log "fallback recovered traffic while preserving active runtime-state drift evidence"
+fi
 log "runtime fallback verified: active=${FALLBACK_CONTAINER} image=${FALLBACK_IMAGE}"

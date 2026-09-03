@@ -68,6 +68,7 @@ EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
 # background-work owner. A request-serving rollback/canary node can explicitly
 # preserve its existing standby fence across the entire blue-green transaction.
 RELEASE_BACKGROUND_MODE="${SUB2API_RELEASE_BACKGROUND_MODE:-activate}"
+FIXED_EGRESS_COMPATIBILITY_MODE="${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -173,6 +174,7 @@ run_blue_green() {
     SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE="$DEPENDENCY_MODE" \
     SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$EXTERNAL_RUNTIME_ENV_FILE" \
     SUB2API_EXTERNAL_CA_FILE="$EXTERNAL_CA_FILE" \
+    SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="$FIXED_EGRESS_COMPATIBILITY_MODE" \
     "$@"
 }
 
@@ -196,6 +198,10 @@ require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
 case "$RELEASE_BACKGROUND_MODE" in
   activate|preserve-standby) ;;
   *) die "SUB2API_RELEASE_BACKGROUND_MODE must be activate or preserve-standby" ;;
+esac
+case "$FIXED_EGRESS_COMPATIBILITY_MODE" in
+  preserve|true|false) ;;
+  *) die "SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE must be preserve, true, or false" ;;
 esac
 [ "$RELEASE_BACKGROUND_MODE" != preserve-standby ] || [ "$DUAL_NODE_RUNTIME_ENABLED" = true ] \
   || die "SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby requires SUB2API_DUAL_NODE_RUNTIME_ENABLED=true"

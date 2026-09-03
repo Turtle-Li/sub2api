@@ -10,11 +10,22 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 )
+
+type proxySchedulerCacheRecorder struct {
+	service.SchedulerCache
+	deleteIDs []int64
+}
+
+func (c *proxySchedulerCacheRecorder) DeleteAccount(_ context.Context, accountID int64) error {
+	c.deleteIDs = append(c.deleteIDs, accountID)
+	return nil
+}
 
 func TestProxyUpdateInvalidatesBoundProbeSnapshotsAndEnqueuesOutboxAtomically(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -39,6 +50,9 @@ func TestProxyUpdateInvalidatesBoundProbeSnapshotsAndEnqueuesOutboxAtomically(t 
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
 		WithArgs(service.SchedulerOutboxEventAccountBulkChanged, nil, nil, accountIDsPayloadMatcher{want: []int64{17, 18}}).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT id")+`.*`+regexp.QuoteMeta("id = ANY($1)")+`.*`+regexp.QuoteMeta("type IN ($3, $4)")).
+		WithArgs(pq.Array([]int64{17, 18}), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "type"}))
 	mock.ExpectCommit()
 
 	repo := newProxyRepositoryWithSQL(client, db)
@@ -56,6 +70,50 @@ func TestProxyUpdateInvalidatesBoundProbeSnapshotsAndEnqueuesOutboxAtomically(t 
 	err = repo.Update(context.Background(), proxy)
 
 	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestProxyUpdateRollsBackBeforeCacheMutationWhenFixedEgressClassificationFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+
+	mock.ExpectBegin()
+	expectLockedProxyForUpdate(mock, 9, "old.example", "", "")
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT EXISTS")+`.*`+regexp.QuoteMeta("parent_account_id IS NULL")).
+		WithArgs(int64(9), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE "proxies" SET "backup_proxy_id" = NULL WHERE "backup_proxy_id" = \$1`).
+		WithArgs(int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectProxyUpdateReload(mock, 9, "new.example", "", "")
+	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*RETURNING id`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT id") + `.*` + regexp.QuoteMeta("id = ANY($1)")).
+		WillReturnError(errors.New("classification unavailable"))
+	mock.ExpectRollback()
+
+	cache := &proxySchedulerCacheRecorder{}
+	repo := newProxyRepositoryWithSQL(client, db, cache)
+	proxy := &service.Proxy{
+		ID:       9,
+		Name:     "proxy",
+		Protocol: "http",
+		Host:     "new.example",
+		Port:     8080,
+		Status:   service.StatusActive,
+	}
+
+	err = repo.Update(context.Background(), proxy)
+
+	require.EqualError(t, err, "classification unavailable")
+	require.Empty(t, cache.deleteIDs, "classification failure must roll back before any cache delete or permanent retirement fence")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -133,13 +191,16 @@ func TestProxyStatusChangeRefreshesEveryBoundAccount(t *testing.T) {
 	expectProxyUpdateReloadWithStatus(mock, 9, "same.example", "", "", service.StatusDisabled)
 	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*RETURNING id`).
 		WithArgs(int64(9)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "type"}))
 	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT id") + `.*` + regexp.QuoteMeta("WHERE proxy_id = $1 AND deleted_at IS NULL") + `.*` + regexp.QuoteMeta("ORDER BY id")).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)).AddRow(int64(18)))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
 		WithArgs(service.SchedulerOutboxEventAccountBulkChanged, nil, nil, accountIDsPayloadMatcher{want: []int64{17, 18}}).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT id")+`.*`+regexp.QuoteMeta("id = ANY($1)")+`.*`+regexp.QuoteMeta("type IN ($3, $4)")).
+		WithArgs(pq.Array([]int64{17, 18}), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectCommit()
 
 	repo := newProxyRepositoryWithSQL(client, db)

@@ -37,6 +37,10 @@ var (
 		"ACCOUNT_PROXY_COMPARE_AND_SET_FAILED",
 		"account proxy binding changed before the operation completed",
 	)
+	ErrFixedEgressMigrationNotReady = infraerrors.Conflict(
+		"FIXED_EGRESS_MIGRATION_NOT_READY",
+		"fixed-egress proxy migration is unavailable while compatibility mode is enabled",
+	)
 	ErrCredentialShadowProxyMismatch = infraerrors.Conflict(
 		"CREDENTIAL_SHADOW_PROXY_MISMATCH",
 		"credential shadow proxy must match its OpenAI OAuth parent account",

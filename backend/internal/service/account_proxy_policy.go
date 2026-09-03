@@ -80,7 +80,7 @@ func resolveAccountProxyURLAt(account *Account, hydrated *Proxy, now time.Time) 
 	if proxy.IsExpired(now) {
 		return "", accountProxyUnavailable(account, "proxy is expired")
 	}
-	if account.IsOpenAIOAuthLike() {
+	if account.IsOpenAIOAuthLike() && !FixedEgressCompatibilityModeEnabled() {
 		if err := validateFixedEgressProxy(proxy); err != nil {
 			return "", accountProxyUnavailable(account, fmt.Sprintf("OpenAI Codex proxy does not satisfy fixed-egress requirements: %v", err))
 		}

@@ -4,14 +4,14 @@ Status: implementation candidate only. This document does not authorize a
 Cloudflare/DNS change, certificate activation, production deployment, or traffic
 cutover.
 
-Deployment checkpoint (2026-08-30): both live Caddy origins now use the same
+Deployment checkpoint (2026-09-03): both live Caddy origins now use the same
 imported bootstrap certificate generation through read-only external mounts,
-and direct-IP TLS plus `/health` passed on both. GCP's forced-command identity
-reports the same `CURRENT` generation from each receiver; its certificate
-service/timer remain inactive/disabled. Runtime state/health-token deployment,
-fixed account egress, Azure edge-policy convergence, staging prepare/discard,
-and receiver activation/rollback remain incomplete. Public DNS still points
-only to the old production origin; no traffic allocation is authorized.
+and direct-IP TLS plus `/health` passed on both. The two dedicated Azure West US
+IPv6/Tailnet egress gateways are online and their Tailnet-only SOCKS listeners
+pass Azure-Japan-to-OpenAI requests. Application compatibility/fence rollout,
+authenticated proxy-row creation, account CAS binding, and traffic canary are
+still incomplete. Public DNS still points only to the old production origin;
+no traffic allocation is authorized.
 
 ## 1. Runtime model: identical nodes, dynamic ownership
 
@@ -99,28 +99,70 @@ does not change the GCP monitoring deployment.
 
 ## 3. Fixed account egress (T-EG-01)
 
-Each Sub2 application node is also an egress gateway for exactly one account,
-but the listener is Tailnet-only. Both application nodes may send a bound
-account through either gateway, so request placement does not change that
-account's public exit IP.
+Fixed account egress is independent from request ingress and application
+placement. Two dedicated Azure West US IPv6 nodes expose SOCKS only inside the
+Tailnet. Both the old application origin and Azure Japan application origin may
+send a bound account through either gateway, so moving request traffic between
+origins does not change that account's public exit identity. The old origin and
+Azure Japan host are not fixed-egress gateways and their public IPs must not be
+used for new Proxy rows.
 
-| Logical gateway | Listener | Proxy record | Account binding |
+| Logical gateway | Public network identity | Tailnet listener | Intended role |
 | --- | --- | --- | --- |
-| old-node egress | old node Tailnet IPv4, TCP 1080 | active `socks5h`, `expires_at=NULL`, `fallback_mode=none`, `backup_proxy_id=NULL` | Existing OpenAI OAuth account selected for the old public exit. |
-| Azure egress | `100.80.10.114:1080` | active `socks5h`, `expires_at=NULL`, `fallback_mode=none`, `backup_proxy_id=NULL` | Existing OpenAI OAuth account selected for the Azure public exit. |
+| `azure-westus2-relay` | IPv6-only Azure NIC; `2603:1030:c04:e::2e7` | `100.70.128.60:1080` | Primary fixed OAuth exit after canary. |
+| `azure-westus3-relay` | IPv6-only Azure NIC; `2603:1030:501:b::e` | `100.81.60.44:1080` | Independent backup/account-sharding exit; no automatic fallback. |
 
-The actual account IDs and Proxy IDs are deployment state and must be recorded
-by the account-state owner before cutover; this repository deliberately does
-not guess them or execute raw SQL.
+Both nodes run `tailscaled` and `sing-box`; Caddy remains stopped until a
+separate hostname/certificate path is approved. The Sub2 fixed-egress path uses
+only Tailnet TCP 1080 and does not depend on public TCP 443. The Proxy rows must
+be active `socks5h`, have no username/password, `expires_at=NULL`,
+`fallback_mode=none`, and `backup_proxy_id=NULL`. The actual account and Proxy
+IDs are deployment state and must be recorded by the account-state owner before
+cutover; this repository deliberately does not guess them or execute raw SQL.
 
 Binding and rollback use the authenticated account bulk-update endpoint as a
-compare-and-set operation. A first binding sends `proxy_id=P` and
-`expected_proxy_id=0`; rollback sends `proxy_id=0` and
-`expected_proxy_id=P`. The server locks the eligible active OpenAI OAuth parent
-rows, validates the no-credential Tailnet `socks5h:1080` Proxy row, updates all
-credential shadows in the same transaction, and rejects any partial match.
+compare-and-set operation. A first binding sends `proxy_id=P` and the actual
+observed current Proxy ID as `expected_proxy_id` (zero only when currently
+unbound); rollback sends the previously recorded pair in reverse. The server
+locks the eligible live OpenAI OAuth/setup-token parent rows, validates the
+no-credential Tailnet `socks5h:1080` Proxy row, updates all credential shadows
+in the same transaction, and rejects any partial match.
 Legacy single-account and bulk proxy edits are rejected for OpenAI OAuth parents,
 so the UI cannot bypass the fixed-egress CAS/shadow invariant.
+
+The application migration is two releases of one immutable image:
+
+1. Freeze protected account/proxy admin and import mutations. Put the old
+   binary's shared-work generation in standby, then release both application
+   hosts with `SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=true`. This
+   Phase-A mode keeps legacy proxy routing and ordinary cache deletion, but it
+   installs the transaction guards, CAS endpoint implementation, scheduler
+   gate, and the atomic ordinary-writer fence check. Both the admin service and
+   repository reject that CAS while compatibility mode is true.
+2. Prove every pre-Phase-A process is stopped and cannot auto-restart. Phase A
+   must not perform the proxy CAS: it intentionally does not create
+   `sched:acc:retired:*` fences.
+3. Inventory every live OAuth/setup-token parent and shadow. Require parent and
+   shadows to agree, and require every non-null target to match the fixed-egress
+   Proxy contract.
+4. Release the same image with
+   `SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=false`. Only this
+   normal-final generation may create retirement fences and execute account
+   CAS. A delayed Phase-A writer is safe because its ordinary Redis Lua writer
+   refuses to cross an existing fence.
+5. After action-time owner confirmation, create the two Proxy rows and CAS-bind
+   parents plus shadows. For every protected account, verify the full scheduler
+   key is absent and the permanent fence/safe metadata projection has converged
+   before unfreezing mutations or admitting canary traffic.
+
+`preserve` is the ordinary release default for the release-level override. It
+copies the active container's application setting and requires a reused target
+to match the source generation exactly (including absent versus explicit
+`false`). A preserve recovery with no source generation fails closed; use an
+explicit reviewed `true` or `false` value for that narrow recovery. Do not leave
+an implicit Phase-A fallback after the migration: inspect all active, draining,
+and stopped rollback candidates and either remove them through the normal drain
+lifecycle or recreate them with the explicit false setting.
 
 Minimum gateway controls:
 
@@ -146,7 +188,7 @@ WebSocket ingress/forwarding, and pooled WebSocket compatibility all use the
 same binding. The WS pool includes the normalized proxy URL in its compatibility
 key so a connection cannot survive an egress rebind.
 
-Before decommissioning either server, explicitly move its account to a new
+Before decommissioning either egress gateway, explicitly move its account to a new
 tested Proxy record (or explicitly approve direct egress), verify the new public
 IP, and only then stop the old gateway. Rollback is the inverse audited Proxy ID
 change. There is no automatic proxy or direct fallback.

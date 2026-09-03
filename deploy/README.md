@@ -95,6 +95,19 @@ background ownership to this node, restore `activate` and use the coordinated
 cross-node ownership runbook; do not leave `preserve-standby` as an accidental
 permanent override.
 
+For the fixed-egress cache migration only,
+`SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE` controls the application
+environment written into the new blue-green generation. Valid values are
+`preserve` (ordinary default), `true` (Phase A: old-writer-compatible, no
+account retirement fences), and `false` (normal-final: strict fixed-egress
+validation and permanent fences enabled). Prepared-target validation rejects a
+container created for the opposite explicit mode or for a mode different from
+the active source when `preserve` is used; an absent preserve source is rejected.
+The Phase-A application also rejects proxy CAS at both service and repository
+boundaries. Use the same immutable image for both stages and follow the ordered
+inventory/fence/CAS gates in
+`../docs/operations/SUB2_DUAL_NODE_RUNTIME_CERT_EGRESS.md`.
+
 ### GCP Taiwan Premium transport ingress
 
 The retained GCP Taiwan Premium address now runs the approved HAProxy

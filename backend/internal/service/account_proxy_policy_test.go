@@ -240,3 +240,25 @@ func TestResolveAccountProxyURL_OpenAISetupTokenSharesFixedEgressInvariant(t *te
 	require.Empty(t, proxyURL)
 	require.Contains(t, err.Error(), "outside Tailnet")
 }
+
+func TestResolveAccountProxyURL_CompatibilityModePreservesLegacyOAuthRouting(t *testing.T) {
+	t.Setenv(FixedEgressCompatibilityModeEnv, "true")
+	proxyID := int64(7)
+	proxyURL, err := ResolveAccountProxyURL(&Account{
+		ID:       3,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		ProxyID:  &proxyID,
+		Proxy: &Proxy{
+			ID:           proxyID,
+			Status:       StatusActive,
+			Protocol:     "http",
+			Host:         "legacy-proxy.test",
+			Port:         8080,
+			FallbackMode: FallbackModeNone,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "http://legacy-proxy.test:8080", proxyURL)
+}

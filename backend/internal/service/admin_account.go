@@ -1216,6 +1216,9 @@ func (s *adminServiceImpl) compareAndSwapFixedEgressProxy(
 	if input == nil || input.ProxyID == nil || input.ExpectedProxyID == nil {
 		return nil, infraerrors.BadRequest("FIXED_EGRESS_CAS_INPUT_INVALID", "proxy_id and expected_proxy_id are required")
 	}
+	if FixedEgressCompatibilityModeEnabled() {
+		return nil, ErrFixedEgressMigrationNotReady
+	}
 	if input.Filters != nil || input.Name != "" || input.Concurrency != nil || input.Priority != nil ||
 		input.RateMultiplier != nil || input.LoadFactor != nil || input.Status != "" || input.Schedulable != nil ||
 		input.GroupIDs != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProbeEnabled != nil {

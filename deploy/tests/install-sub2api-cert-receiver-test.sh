@@ -20,9 +20,14 @@ PUBLIC_KEY_FILE="${TEST_ROOT}/controller.pub"
 MUTATION_CALLS="${TEST_ROOT}/mutations.log"
 FAKE_WRITABLE_PARENT_CONTAINER=""
 FAKE_UNSAFE_HELPER_ANCESTOR=""
+LOCK_HOLDER_PID=""
 export FAKE_WRITABLE_PARENT_CONTAINER FAKE_UNSAFE_HELPER_ANCESTOR
 
 cleanup() {
+  if [ -n "$LOCK_HOLDER_PID" ]; then
+    kill "$LOCK_HOLDER_PID" 2>/dev/null || true
+    wait "$LOCK_HOLDER_PID" 2>/dev/null || true
+  fi
   rm -rf -- "$TEST_ROOT"
 }
 trap cleanup EXIT
@@ -70,34 +75,49 @@ chmod +x "${FAKE_BIN}/id"
 cat >"${FAKE_BIN}/stat" <<'EOF'
 #!/usr/bin/env bash
 
-format="${1:-}:${2:-}"
-path="${3:-}"
-case "$format" in
-  -c:%u) printf '0\n' ;;
-  -c:%a)
-    if [ -n "${FAKE_WRITABLE_PARENT_CONTAINER:-}" ] \
-      && [ "$path" = "$FAKE_WRITABLE_PARENT_CONTAINER" ]; then
-      printf '1777\n'
-    elif [ -n "${FAKE_UNSAFE_HELPER_ANCESTOR:-}" ] \
-      && [ "$path" = "$FAKE_UNSAFE_HELPER_ANCESTOR" ]; then
-      printf '775\n'
-    else
-      case "$path" in
-      */Caddyfile) printf '644\n' ;;
-      *) printf '755\n' ;;
-      esac
-    fi
-    ;;
-  -c:%u:%g:%a:%h:%d:%i)
-    if [ -n "${FAKE_WRITABLE_PARENT_CONTAINER:-}" ] \
-      && [ "$path" = "$FAKE_WRITABLE_PARENT_CONTAINER" ]; then
-      printf '0:0:1777:1:1:1\n'
-    else
-      printf '0:0:755:1:1:1\n'
-    fi
-    ;;
-  *) exit 1 ;;
-esac
+follow=false
+format=""
+path=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -L) follow=true ;;
+    -c|-f)
+      shift
+      format="${1:-}"
+      ;;
+    *) path="$1" ;;
+  esac
+  shift
+done
+[ -n "$format" ] && [ -n "$path" ] || exit 1
+
+FAKE_STAT_FOLLOW="$follow" FAKE_STAT_FORMAT="$format" FAKE_STAT_PATH="$path" python3 - <<'PY'
+import os
+import stat
+
+path = os.environ["FAKE_STAT_PATH"]
+metadata = os.stat(path) if os.environ["FAKE_STAT_FOLLOW"] == "true" else os.lstat(path)
+mode = stat.S_IMODE(metadata.st_mode)
+if path == os.environ.get("FAKE_WRITABLE_PARENT_CONTAINER"):
+    mode = 0o1777
+elif path == os.environ.get("FAKE_UNSAFE_HELPER_ANCESTOR"):
+    mode = 0o775
+
+values = {
+    "%u": "0",
+    "%g": "0",
+    "%a": f"{mode:o}",
+    "%Lp": f"{mode:o}",
+    "%h": str(metadata.st_nlink),
+    "%l": str(metadata.st_nlink),
+    "%d": str(metadata.st_dev),
+    "%i": str(metadata.st_ino),
+}
+output = os.environ["FAKE_STAT_FORMAT"]
+for token in ("%Lp", "%u", "%g", "%a", "%h", "%l", "%d", "%i"):
+    output = output.replace(token, values[token])
+print(output)
+PY
 EOF
 chmod +x "${FAKE_BIN}/stat"
 
@@ -158,6 +178,21 @@ exit 0
 EOF
 chmod +x "${FAKE_BIN}/ssh-keygen"
 
+cat >"${FAKE_BIN}/flock" <<'EOF'
+#!/usr/bin/env bash
+python3 - "${@: -1}" <<'PY'
+import fcntl
+import sys
+
+descriptor = int(sys.argv[1])
+try:
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit(1)
+PY
+EOF
+chmod +x "${FAKE_BIN}/flock"
+
 for command_name in getent sudo; do
   cat >"${FAKE_BIN}/${command_name}" <<'EOF'
 #!/usr/bin/env bash
@@ -193,6 +228,48 @@ assert_contains "$MISSING_HELPER_OUTPUT" 'maintenance lock helper is not a regul
 
 cp "${DEPLOY_DIR}/sub2api-maintenance-lock.sh" "${APP_DIR}/scripts/sub2api-maintenance-lock.sh"
 chmod 755 "${APP_DIR}/scripts/sub2api-maintenance-lock.sh"
+
+# A concurrent release/certificate operation owns the same inode. The
+# installer must fail before creating its user home, authorized_keys, config,
+# sudoers policy, or certificate directory.
+mkdir -m 700 "${MAINTENANCE_LOCK_FILE%/*}"
+: >"$MAINTENANCE_LOCK_FILE"
+chmod 600 "$MAINTENANCE_LOCK_FILE"
+LOCK_READY="${TEST_ROOT}/lock-ready"
+LOCK_RELEASE="${TEST_ROOT}/lock-release"
+python3 - "$MAINTENANCE_LOCK_FILE" "$LOCK_READY" "$LOCK_RELEASE" <<'PY' &
+import fcntl
+import os
+import sys
+import time
+
+descriptor = os.open(sys.argv[1], os.O_RDWR)
+fcntl.flock(descriptor, fcntl.LOCK_EX)
+with open(sys.argv[2], "w", encoding="ascii") as ready:
+    ready.write("ready\n")
+while not os.path.exists(sys.argv[3]):
+    time.sleep(0.01)
+os.close(descriptor)
+PY
+LOCK_HOLDER_PID=$!
+for _ in {1..200}; do
+  [ -e "$LOCK_READY" ] && break
+  sleep 0.01
+done
+[ -e "$LOCK_READY" ] || fail 'maintenance lock holder did not become ready'
+: >"$MUTATION_CALLS"
+if run_installer >"${TEST_ROOT}/lock-contention.log" 2>&1; then
+  fail 'standalone certificate installer ignored maintenance lock contention'
+fi
+assert_contains "${TEST_ROOT}/lock-contention.log" 'maintenance lock is held'
+[ ! -e "$DEPLOY_HOME" ] || fail 'lock contention created the deploy-user home directory'
+[ ! -e "$CONFIG_FILE" ] || fail 'lock contention wrote the receiver configuration'
+[ ! -e "${APP_DIR}/certs" ] || fail 'lock contention created a certificate directory'
+[ ! -s "$MUTATION_CALLS" ] || fail 'lock contention reached a mutating installer command'
+touch "$LOCK_RELEASE"
+wait "$LOCK_HOLDER_PID"
+LOCK_HOLDER_PID=""
+
 : >"$MUTATION_CALLS"
 run_installer >"${TEST_ROOT}/normal-install.log"
 assert_contains "$CONFIG_FILE" "SUB2API_MAINTENANCE_LOCK_FILE=${MAINTENANCE_LOCK_FILE}"

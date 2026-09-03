@@ -218,6 +218,38 @@ func TestSchedulerAccountEventMissingAccountInstallsDeletedFence(t *testing.T) {
 	require.Equal(t, []int64{id}, deletedFence, "outbox replay must recover the terminal deleted-account fence")
 }
 
+func TestSchedulerCompatibilityModeUsesLegacyCacheDeletionWithoutRetiredFences(t *testing.T) {
+	t.Setenv(FixedEgressCompatibilityModeEnv, "true")
+	cache := newBulkEventSnapshotCache()
+	repo := newBulkEventAccountRepo(&Account{
+		ID:       17,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+	})
+	svc := newBulkEventTestService(cache, repo)
+
+	require.NoError(t, svc.handleBulkAccountEvent(
+		context.Background(),
+		bulkEventPayload([]int64{17}, nil),
+		make(map[batchSeenKey]struct{}),
+	))
+	set, deleted := cache.accountWrites()
+	retired, deletedFence := cache.retirementWrites()
+	require.Equal(t, []int64{17}, set)
+	require.Empty(t, deleted)
+	require.Empty(t, retired)
+	require.Empty(t, deletedFence)
+
+	require.NoError(t, RetireSchedulerAccountSnapshot(context.Background(), cache, 17))
+	require.NoError(t, RetireDeletedSchedulerAccountSnapshot(context.Background(), cache, 18))
+	set, deleted = cache.accountWrites()
+	retired, deletedFence = cache.retirementWrites()
+	require.Equal(t, []int64{17}, set)
+	require.Equal(t, []int64{17, 18}, deleted)
+	require.Empty(t, retired)
+	require.Empty(t, deletedFence)
+}
+
 func TestSchedulerBulkAccountEventScopesCNRebuildToFreshPlatform(t *testing.T) {
 	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
 		t.Run(platform, func(t *testing.T) {

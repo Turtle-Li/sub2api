@@ -204,7 +204,7 @@ validate_absolute_path caddy_cert_root "$CADDY_CERT_ROOT"
 validate_absolute_path config_file "$CONFIG_FILE"
 validate_absolute_path maintenance_lock_file "$MAINTENANCE_LOCK_FILE"
 
-for command_name in getent id install ssh-keygen stat sudo useradd visudo; do
+for command_name in flock getent id install ssh-keygen stat sudo useradd visudo; do
   require_cmd "$command_name"
 done
 validate_root_owned_file "certificate deploy trigger" "$TRIGGER_SCRIPT" true
@@ -226,6 +226,10 @@ if ! sub2api_maintenance_lock_validate_install_target "$MAINTENANCE_LOCK_FILE"; 
   die "unsafe maintenance lock target: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
 fi
 MAINTENANCE_LOCK_DIR="$SUB2API_MAINTENANCE_LOCK_PARENT"
+if ! sub2api_maintenance_lock_open "$MAINTENANCE_LOCK_FILE"; then
+  die "unsafe maintenance lock: ${SUB2API_MAINTENANCE_LOCK_ERROR}"
+fi
+flock -n 8 || die "maintenance lock is held"
 
 key_line="$(awk 'NF && $1 !~ /^#/ {print; exit}' "$PUBLIC_KEY_FILE")"
 [ -n "$key_line" ] || die "public key file contains no key"
