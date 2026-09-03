@@ -91,12 +91,13 @@ if [ "${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}" = true ]; then
   exit 0
 fi
 if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
-  printf 'mode=%s old=%s new=%s backup=%s fixed_egress_compatibility=%s\n' \
+  printf 'mode=%s old=%s new=%s backup=%s fixed_egress_compatibility=%s preserve_source=%s\n' \
     "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
     "${OLD_CONTAINER:-}" \
     "${NEW_CONTAINER:-}" \
     "${RUN_BACKUP:-}" \
-    "${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
+    "${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-}" \
+    "${SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
 fi
 if [ -n "${FAKE_EVENT_LOG:-}" ]; then
   printf 'helper old=%s new=%s\n' "${OLD_CONTAINER:-}" "${NEW_CONTAINER:-}" >>"$FAKE_EVENT_LOG"
@@ -560,6 +561,8 @@ assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=local old=sub2api-green new=sub2api-blue backup=true'
 assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=local old=sub2api-blue new=sub2api-green backup=false'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'mode=local old=sub2api-blue new=sub2api-green backup=false fixed_egress_compatibility=preserve preserve_source=sub2api-green'
 
 : >"$NODE_STATE_CALLS"
 successful_release_output="${TEST_ROOT}/successful-release.log"

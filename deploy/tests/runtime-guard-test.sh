@@ -416,6 +416,7 @@ EOF
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$*" >>"$FAKE_NODE_STATE_CALLS"
+[ "${FAKE_NODE_STATE_RESULT:-0}" -eq 0 ] || exit "${FAKE_NODE_STATE_RESULT}"
 printf 'NO_LOCAL_RECOVERY\n'
 EOF
   chmod +x "${CASE_ROOT}/app/scripts/sub2api-node-state.sh"
@@ -735,8 +736,10 @@ assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
 assert_contains "${CASE_ROOT}/release-calls.log" 'isolated_old=true'
 assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
 
-# A fallback that becomes stale only after the Caddy helper runs must be
-# isolated immediately, and cooldown evidence must name the now-selected slot.
+# A fallback that becomes stale only after the Caddy helper runs must not be
+# stopped while Caddy still points at it.  The next timer run can re-check the
+# target (and an operator can inspect the retained failure evidence) without
+# turning a transient probe failure into a guaranteed outage.
 new_case external-post-switch-fallback-runtime-state-drift
 write_standard_dependencies
 write_external_runtime_files
@@ -749,9 +752,81 @@ if FAKE_RUNTIME_INODE_DRIFT_AFTER_RELEASE=true run_external_guard >"${CASE_ROOT}
 fi
 assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
 assert_contains "${CASE_ROOT}/output.log" 'fallback runtime-state bind is stale after Caddy switch: sub2api-blue'
-assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-blue'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-blue'
 assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'active_container=sub2api-blue'
 assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=fallback-verification-failed'
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
+
+# A transient public-health failure after a successful Caddy switch follows
+# the same rule: retain the only target Caddy can currently serve and record a
+# retryable failure instead of stopping it unconditionally.
+new_case external-post-switch-public-health-failure
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network "$(external_mounts sub2api-blue)" "$(dual_environment)"
+if FAKE_CURL_RESULT=1 run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a failed post-switch public health probe'
+fi
+assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-blue'
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=fallback-verification-failed'
+
+# A node-state reconciliation failure after the switch also retains the
+# serving fallback; isolation is only allowed after Caddy conclusively points
+# back to the failed active slot.
+new_case external-post-switch-reconcile-failure
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network "$(external_mounts sub2api-blue)" "$(dual_environment)"
+if FAKE_NODE_STATE_RESULT=1 run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a failed post-switch reconciliation'
+fi
+assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-blue'
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=fallback-reconciliation-failed'
+
+# A normal-final active generation must never fall back to a Phase-A legacy
+# writer.  The mode is checked before the active slot is isolated.
+new_case external-reject-phase-a-fallback
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:normal-final healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:phase-a healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network "$(external_mounts sub2api-blue)" $'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true\n'"$(dual_environment)"
+if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard promoted a Phase-A fallback into normal-final traffic'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'incompatible fixed-egress mode'
+assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=no-known-good-fallback'
+
+# Invalid or duplicate compatibility entries on the Caddy-selected generation
+# fail closed before any lifecycle action.
+new_case external-invalid-active-egress-mode
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:invalid healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" $'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=garbage\n'"$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted an invalid active fixed-egress mode'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'invalid fixed-egress compatibility mode'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 
 # A stopped active slot is started and proven through Docker health plus its
 # internal health endpoint before any historical candidate is considered.

@@ -508,6 +508,9 @@ log "Image ready: $(docker image inspect "$IMAGE" --format '{{.Id}} {{.Size}} by
 
 rollback() {
   log "Attempting automatic rollback to ${OLD_CONTAINER}"
+  # The helper swaps OLD/NEW for rollback. Preserve the exact compatibility
+  # setting from the original active generation (including an absent key),
+  # rather than applying the mode of the failed new generation to it.
   run_blue_green \
     OLD_CONTAINER="$NEW_CONTAINER" \
     NEW_CONTAINER="$OLD_CONTAINER" \
@@ -517,6 +520,8 @@ rollback() {
     PULL_IMAGE=false \
     RUN_BACKUP=false \
     REMOVE_EXISTING_NEW_CONTAINER=false \
+    SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=preserve \
+    SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="$OLD_CONTAINER" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
     bash "$BLUE_GREEN_SCRIPT" >>"${LOG_DIR}/rollback.log" 2>&1 || {
       tail -100 "${LOG_DIR}/rollback.log" >&2 || true

@@ -281,6 +281,11 @@ func (r *proxyRepository) deleteSchedulerAccountSnapshots(
 	}
 	propagationCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	// Classification is performed under the committed proxy mutation lock and
+	// therefore remains the authority for which IDs must stay fenced.  It only
+	// carries the minimum identifying fields, though; never use those partial
+	// rows as a scheduler payload when the post-commit enrichment read fails.
+	enrichedFixedEgressAccounts := make(map[int64]*service.Account, len(fixedEgressAccounts))
 	if len(fixedEgressAccounts) > 0 {
 		protectedIDs := make([]int64, 0, len(fixedEgressAccounts))
 		for accountID := range fixedEgressAccounts {
@@ -288,16 +293,16 @@ func (r *proxyRepository) deleteSchedulerAccountSnapshots(
 		}
 		accounts, err := newAccountRepositoryWithSQL(r.client, r.sql, nil).GetByIDs(propagationCtx, protectedIDs)
 		if err != nil {
-			// Classification and the permanent fence authority were established
-			// inside the committed proxy transaction. A failed enrichment read may
-			// reduce temporary scheduler metadata, but must never turn that safe
-			// failure into an unfenced full-account payload.
-			logger.LegacyPrintf("repository.proxy", "[Scheduler] fixed-egress metadata enrichment failed; retaining conservative metadata: err=%v", err)
+			// A failed enrichment read may reduce temporary scheduler metadata, but
+			// must never turn that safe failure into an unfenced full-account
+			// payload. The ID-only retirement path preserves any existing safe
+			// sched:meta projection while removing the full routing payload.
+			logger.LegacyPrintf("repository.proxy", "[Scheduler] fixed-egress metadata enrichment failed; retiring with ID-only fence: err=%v", err)
 		} else {
 			for _, account := range accounts {
 				if account != nil && account.IsOpenAIOAuthLike() {
 					if _, protected := fixedEgressAccounts[account.ID]; protected {
-						fixedEgressAccounts[account.ID] = account
+						enrichedFixedEgressAccounts[account.ID] = account
 					}
 				}
 			}
@@ -305,8 +310,15 @@ func (r *proxyRepository) deleteSchedulerAccountSnapshots(
 	}
 	for _, accountID := range accountIDs {
 		var err error
-		if account, protected := fixedEgressAccounts[accountID]; protected {
-			err = service.PublishSchedulerAccountSnapshot(propagationCtx, r.schedulerCache, account)
+		if _, protected := fixedEgressAccounts[accountID]; protected {
+			if enriched, ok := enrichedFixedEgressAccounts[accountID]; ok {
+				err = service.PublishSchedulerAccountSnapshot(propagationCtx, r.schedulerCache, enriched)
+			} else {
+				// The classification row is intentionally not a publishable
+				// Account. Retire by ID so a failed/partial enrichment can never
+				// overwrite sched:meta with zero-valued fields.
+				err = service.RetireSchedulerAccountSnapshot(propagationCtx, r.schedulerCache, accountID)
+			}
 		} else {
 			err = r.schedulerCache.DeleteAccount(propagationCtx, accountID)
 		}

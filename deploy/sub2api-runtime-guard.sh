@@ -66,6 +66,13 @@ ACTIVE_CONTAINER=""
 ACTIVE_UPSTREAM=""
 FALLBACK_CONTAINER=""
 FALLBACK_IMAGE=""
+# The runtime guard must never promote a historical Phase-A (legacy writer)
+# container after the normal-final fixed-egress fences are enabled.  We derive
+# the effective mode from the currently selected container rather than from
+# the release override (which is intentionally `preserve` in the shared
+# config).  An absent setting is the normal/fenced mode and is represented as
+# `false`.
+ACTIVE_FIXED_EGRESS_MODE=""
 EXTERNAL_ENV_KEYS=(
   DATABASE_HOST DATABASE_PORT DATABASE_USER DATABASE_PASSWORD DATABASE_DBNAME DATABASE_SSLMODE
   REDIS_HOST REDIS_PORT REDIS_USERNAME REDIS_PASSWORD REDIS_DB REDIS_ENABLE_TLS
@@ -306,6 +313,54 @@ environment_value_once() {
       if (count != 1) exit 1
       print value
     }'
+}
+
+fixed_egress_mode_for_container() {
+  local container_name="$1" environment mode_count mode_value
+
+  environment="$(docker inspect "$container_name" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)" \
+    || return 1
+  mode_count="$(printf '%s\n' "$environment" | awk -v expected_key=SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE '
+    index($0, expected_key "=") == 1 { count += 1 }
+    END { print count + 0 }
+  ')"
+  case "$mode_count" in
+    0)
+      printf 'false\n'
+      return 0
+      ;;
+    1)
+      mode_value="$(printf '%s\n' "$environment" | awk -v expected_key=SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE '
+        index($0, expected_key "=") == 1 { print substr($0, length(expected_key) + 2) }
+      ')"
+      case "$mode_value" in
+        true|false)
+          printf '%s\n' "$mode_value"
+          return 0
+          ;;
+        *)
+          log "container has an invalid fixed-egress compatibility mode: ${container_name}" >&2
+          return 1
+          ;;
+      esac
+      ;;
+    *)
+      log "container has duplicate fixed-egress compatibility mode entries: ${container_name}" >&2
+      return 1
+      ;;
+  esac
+}
+
+fixed_egress_mode_matches_active() {
+  local container_name="$1" container_mode
+
+  container_mode="$(fixed_egress_mode_for_container "$container_name")" || return 1
+  [ -n "$ACTIVE_FIXED_EGRESS_MODE" ] || return 1
+  if [ "$container_mode" != "$ACTIVE_FIXED_EGRESS_MODE" ]; then
+    log "rejecting fallback with a different fixed-egress compatibility mode: container=${container_name} mode=${container_mode} expected=${ACTIVE_FIXED_EGRESS_MODE}" >&2
+    return 1
+  fi
+  return 0
 }
 
 application_runtime_matches() {
@@ -781,6 +836,10 @@ select_known_good_fallback() {
       log "rejecting historical candidate without its image reference: ${candidate}"
       continue
     fi
+    if ! fixed_egress_mode_matches_active "$candidate"; then
+      log "rejecting historical fallback with an incompatible fixed-egress mode: ${candidate}"
+      continue
+    fi
     FALLBACK_CONTAINER="$candidate"
     FALLBACK_IMAGE="$image"
     log "selected last known good fallback: container=${FALLBACK_CONTAINER} image=${FALLBACK_IMAGE}"
@@ -790,6 +849,7 @@ select_known_good_fallback() {
 }
 
 start_fallback() {
+  fixed_egress_mode_matches_active "$FALLBACK_CONTAINER" || return 1
   verify_application_runtime_before_lifecycle "$FALLBACK_CONTAINER" || return 1
   log "starting historical fallback ${FALLBACK_CONTAINER}"
   docker start "$FALLBACK_CONTAINER" >/dev/null || return 1
@@ -865,6 +925,7 @@ isolate_unverified_fallback() {
 verify_fallback_switch() {
   local fallback_upstream="${FALLBACK_CONTAINER}:${APP_PORT}"
 
+  fixed_egress_mode_matches_active "$FALLBACK_CONTAINER" || return 1
   if container_running "$ACTIVE_CONTAINER"; then
     log "failed active container unexpectedly restarted during fallback: ${ACTIVE_CONTAINER}" >&2
     return 1
@@ -973,9 +1034,16 @@ case "$ACTIVE_CONTAINER" in
 esac
 
 if container_exists "$ACTIVE_CONTAINER"; then
+  ACTIVE_FIXED_EGRESS_MODE="$(fixed_egress_mode_for_container "$ACTIVE_CONTAINER")" \
+    || die "active container has an invalid fixed-egress compatibility mode"
   verify_application_runtime_before_lifecycle "$ACTIVE_CONTAINER" \
     || die "active application runtime does not match the configured dependency and dual-node contract"
 else
+  # If the Caddy-selected generation disappeared, recovery has no trustworthy
+  # source generation.  Treat the absent mode as the strict normal-final mode
+  # and reject any legacy (`true`) candidate below; an operator can explicitly
+  # recreate a Phase-A generation if that is truly intended.
+  ACTIVE_FIXED_EGRESS_MODE=false
   log "Caddy-selected active container is absent; deferring runtime contract validation to recovery candidates: ${ACTIVE_CONTAINER}"
 fi
 
@@ -1052,6 +1120,8 @@ if [ "$running_inactive_count" -gt 0 ]; then
     || die "running inactive fallback has no image reference: ${FALLBACK_CONTAINER}"
   verify_application_runtime_before_lifecycle "$FALLBACK_CONTAINER" \
     || die "running inactive fallback does not match the configured dependency and dual-node contract: ${FALLBACK_CONTAINER}"
+  fixed_egress_mode_matches_active "$FALLBACK_CONTAINER" \
+    || die "running inactive fallback has an incompatible fixed-egress mode: ${FALLBACK_CONTAINER}"
   if ! container_is_healthy "$FALLBACK_CONTAINER" \
     || ! app_internal_health "$FALLBACK_CONTAINER"; then
     die "running inactive fallback is not healthy: ${FALLBACK_CONTAINER}"
@@ -1059,7 +1129,7 @@ if [ "$running_inactive_count" -gt 0 ]; then
   if ! running_container_runtime_state_matches "$FALLBACK_CONTAINER"; then
     isolate_unverified_fallback \
       || log "WARNING: could not isolate running fallback with stale runtime state: ${FALLBACK_CONTAINER}" >&2
-    write_failure_state 'running-fallback-runtime-state-drift'
+    write_failure_state 'running-fallback-runtime-state-drift' "$FALLBACK_CONTAINER"
     die "running inactive fallback has stale runtime-state binds: ${FALLBACK_CONTAINER}"
   fi
   isolate_active_container \
@@ -1071,14 +1141,17 @@ if [ "$running_inactive_count" -gt 0 ]; then
     die "could not promote running historical fallback"
   fi
   if ! verify_fallback_switch; then
-    isolate_unverified_fallback \
-      || log "WARNING: could not isolate unverified running fallback: ${FALLBACK_CONTAINER}" >&2
+    # The fallback may already be the only container Caddy can reach.  Do not
+    # stop it merely because a post-switch probe was transiently unavailable;
+    # only fence it when every Caddy view conclusively reverted to the failed
+    # active upstream.  Leaving an ambiguous target running is safer than
+    # turning a serving (or recoverable) target into a guaranteed outage.
+    fence_fallback_if_caddy_still_uses_failed_active
     write_failure_state 'running-fallback-verification-failed' "$FALLBACK_CONTAINER"
     die "running historical fallback failed post-switch verification"
   fi
   if ! reconcile_local_release_state "$FALLBACK_CONTAINER"; then
-    isolate_unverified_fallback \
-      || log "WARNING: could not isolate unreconciled running fallback: ${FALLBACK_CONTAINER}" >&2
+    fence_fallback_if_caddy_still_uses_failed_active
     write_failure_state 'running-fallback-reconciliation-failed' "$FALLBACK_CONTAINER"
     die "could not reconcile node state after running fallback promotion"
   fi
@@ -1117,15 +1190,17 @@ if ! switch_caddy_to_fallback; then
 fi
 
 if ! verify_fallback_switch; then
-  isolate_unverified_fallback \
-    || log "WARNING: could not isolate unverified fallback: ${FALLBACK_CONTAINER}" >&2
+  # Caddy may have committed the fallback before a later health probe failed.
+  # Keep that target available unless all Caddy views prove an automatic
+  # rollback to the failed active; stopping it unconditionally can leave Caddy
+  # pointed at a stopped container.
+  fence_fallback_if_caddy_still_uses_failed_active
   write_failure_state 'fallback-verification-failed' "$FALLBACK_CONTAINER"
   die "fallback switch verification failed; failed active remains stopped"
 fi
 
 if ! reconcile_local_release_state "$FALLBACK_CONTAINER"; then
-  isolate_unverified_fallback \
-    || log "WARNING: could not isolate unreconciled fallback: ${FALLBACK_CONTAINER}" >&2
+  fence_fallback_if_caddy_still_uses_failed_active
   write_failure_state 'fallback-reconciliation-failed' "$FALLBACK_CONTAINER"
   die "could not reconcile node state after fallback promotion"
 fi

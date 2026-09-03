@@ -406,9 +406,9 @@ run_helper() {
     FAKE_CA_MODE="${FAKE_CA_MODE:-644}" \
     FAKE_REALPATH_DRIFT="${FAKE_REALPATH_DRIFT:-false}" \
     APP_DIR="$APP_DIR" \
-    OLD_CONTAINER=sub2api \
-    NEW_CONTAINER=sub2api-green \
-    NEW_IMAGE=sub2api:new \
+    OLD_CONTAINER="${HELPER_OLD_CONTAINER:-sub2api}" \
+    NEW_CONTAINER="${HELPER_NEW_CONTAINER:-sub2api-green}" \
+    NEW_IMAGE="${HELPER_NEW_IMAGE:-sub2api:new}" \
     SUB2API_RUNTIME_GUARD_NETWORK=sub2api_default \
     SUB2API_RUNTIME_GUARD_DATA_VOLUME=sub2api_sub2api_data \
     SUB2API_CADDY_CONTAINER=sub2api-caddy \
@@ -426,6 +426,7 @@ run_helper() {
     SUB2API_INTERNAL_HEALTH_TOKEN_FILE="$HEALTH_TOKEN_FILE" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="${DUAL_NODE_RUNTIME_ENABLED:-true}" \
     SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
+    SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="${PRESERVE_SOURCE_CONTAINER:-}" \
     ALLOW_ISOLATED_OLD_CONTAINER="${ALLOW_ISOLATED_OLD_CONTAINER:-false}" \
     REMOVE_EXISTING_NEW_CONTAINER="${REMOVE_EXISTING_NEW_CONTAINER:-true}" \
     RUN_BACKUP=false \
@@ -594,6 +595,15 @@ if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
   fail 'preserve release accepted duplicate source compatibility entries'
 fi
 assert_contains "$OUTPUT" 'duplicate SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE entries'
+cp "$old_env" "$(state_path sub2api)/env"
+sed -i.bak 's/^SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false$/SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=garbage/' "$(state_path sub2api)/env"
+rm -f "$(state_path sub2api)/env.bak"
+: >"$CALLS"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'preserve release accepted an invalid source compatibility value'
+fi
+assert_contains "$OUTPUT" 'source container has an invalid SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE value'
+assert_not_contains "$CALLS" 'create '
 cp "$old_env" "$(state_path sub2api)/env"
 
 # External prepared targets must be attached to exactly one network and carry
@@ -900,5 +910,68 @@ assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api-green:8080'
 assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api-green:8080'
 [ ! -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
   || fail 'successful Caddy switch retained its recovery transaction'
+
+# Rollback uses OLD/NEW in the opposite direction of a forward release. A
+# normal-final source (false) may therefore need to switch back to a Phase-A
+# target (true). The explicit preserve-source selector must validate and keep
+# the target's exact legacy setting instead of applying the failed source mode.
+rollback_source_env="$TEST_ROOT/rollback-source.env"
+rollback_target_env="$TEST_ROOT/rollback-target.env"
+rollback_source_mounts="$TEST_ROOT/rollback-source.mounts"
+rollback_target_mounts="$TEST_ROOT/rollback-target.mounts"
+{
+  cat "$RUNTIME_ENV"
+  printf '%s\n' \
+    'PGSSLROOTCERT=/etc/sub2api-db-ca/ca.crt' \
+    'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state' \
+    'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state' \
+    'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token' \
+    'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false'
+} >"$rollback_source_env"
+{
+  cat "$RUNTIME_ENV"
+  printf '%s\n' \
+    'PGSSLROOTCERT=/etc/sub2api-db-ca/ca.crt' \
+    'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state' \
+    'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state' \
+    'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token' \
+    'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true'
+} >"$rollback_target_env"
+printf '%s\n' \
+  'volume|sub2api_sub2api_data|/app/data|true' \
+  "bind|$CA_FILE|/etc/sub2api-db-ca/ca.crt|false" \
+  "bind|$CA_FILE|/etc/ssl/certs/sub2api-db-ca.pem|false" \
+  "bind|$TRAFFIC_STATE_FILE|/run/sub2api-runtime/traffic-state|false" \
+  "bind|$BACKGROUND_STATE_DIR/sub2api-green|/run/sub2api-runtime/background-state|false" \
+  "bind|$HEALTH_TOKEN_FILE|/run/sub2api-runtime/health-token|false" >"$rollback_source_mounts"
+printf '%s\n' \
+  'volume|sub2api_sub2api_data|/app/data|true' \
+  "bind|$CA_FILE|/etc/sub2api-db-ca/ca.crt|false" \
+  "bind|$CA_FILE|/etc/ssl/certs/sub2api-db-ca.pem|false" \
+  "bind|$TRAFFIC_STATE_FILE|/run/sub2api-runtime/traffic-state|false" \
+  "bind|$BACKGROUND_STATE_DIR/sub2api|/run/sub2api-runtime/background-state|false" \
+  "bind|$HEALTH_TOKEN_FILE|/run/sub2api-runtime/health-token|false" >"$rollback_target_mounts"
+printf 'standby\n' >"$BACKGROUND_STATE_DIR/sub2api"
+make_state sub2api-green sub2api:new true unless-stopped "$rollback_source_env" "$rollback_source_mounts"
+make_state sub2api sub2api:old true unless-stopped "$rollback_target_env" "$rollback_target_mounts"
+printf 'reverse_proxy sub2api-green:8080\n' >"$APP_DIR/Caddyfile"
+printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_STARTUP_FILE"
+printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_ACTIVE_FILE"
+: >"$CALLS"
+if FAKE_DOCKER_CADDY_FLOW=true \
+  HELPER_OLD_CONTAINER=sub2api-green \
+  HELPER_NEW_CONTAINER=sub2api \
+  HELPER_NEW_IMAGE=sub2api:old \
+  PRESERVE_SOURCE_CONTAINER=sub2api \
+  run_helper >"$OUTPUT" 2>&1; then
+  :
+else
+  sed -n '1,200p' "$OUTPUT" >&2
+  fail 'rollback-shaped preserve release rejected the original target mode'
+fi
+assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
+assert_contains "$(state_path sub2api)/env" 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true'
 
 printf 'Blue-green external runtime mock tests passed.\n'

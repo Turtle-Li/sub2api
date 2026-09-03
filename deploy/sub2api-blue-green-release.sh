@@ -52,6 +52,12 @@ EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
 # generation. This keeps the Phase-A -> normal-final transition inside the
 # audited blue-green transaction instead of requiring an ad-hoc docker create.
 FIXED_EGRESS_COMPATIBILITY_MODE="${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}"
+# Rollback is invoked with OLD_CONTAINER/NEW_CONTAINER swapped so the helper
+# can move Caddy back to the previous generation.  In that shape, `preserve`
+# must copy the *rollback target* (the original old generation), not the
+# currently failed source.  This internal, narrowly validated selector keeps
+# the exact absent-versus-explicit compatibility setting intact.
+FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="${SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-}"
 CONTAINER_PG_CA_PATH="/etc/sub2api-db-ca/ca.crt"
 CONTAINER_REDIS_CA_PATH="/etc/ssl/certs/sub2api-db-ca.pem"
 TRAFFIC_STATE_FILE="${SUB2API_TRAFFIC_STATE_FILE_HOST:-${SUB2API_TRAFFIC_STATE_FILE:-/var/lib/sub2api/runtime/traffic-state}}"
@@ -438,18 +444,27 @@ container_matches_fixed_egress_compatibility_env() {
 }
 
 resolve_fixed_egress_compatibility_expectation() {
-  local old_env_file old_count
+  local old_env_file old_count source_container
 
   if [ "$FIXED_EGRESS_COMPATIBILITY_MODE" != preserve ]; then
     FIXED_EGRESS_EXPECTED_PRESENT=true
     FIXED_EGRESS_EXPECTED_VALUE="$FIXED_EGRESS_COMPATIBILITY_MODE"
     return 0
   fi
-  container_exists "$OLD_CONTAINER" \
-    || die "cannot preserve fixed-egress compatibility mode because old container $OLD_CONTAINER is missing"
+  source_container="${FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-$OLD_CONTAINER}"
+  case "$source_container" in
+    "$OLD_CONTAINER"|"$NEW_CONTAINER") ;;
+    *) die "fixed-egress preserve source must be the old or new release container" ;;
+  esac
+  if ! container_exists "$source_container"; then
+    if [ -n "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER" ]; then
+      die "cannot preserve fixed-egress compatibility mode because source container $source_container is missing"
+    fi
+    die "cannot preserve fixed-egress compatibility mode because old container $OLD_CONTAINER is missing"
+  fi
   new_temp_file
   old_env_file="$TEMP_FILE"
-  docker inspect "$OLD_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$old_env_file"
+  docker inspect "$source_container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$old_env_file"
   old_count="$(awk -v expected_key=SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE '
     index($0, expected_key "=") == 1 { count += 1 }
     END { print count + 0 }
@@ -466,6 +481,10 @@ resolve_fixed_egress_compatibility_expectation() {
           print substr($0, length(expected_key) + 2)
         }
       ' "$old_env_file")"
+      case "$FIXED_EGRESS_EXPECTED_VALUE" in
+        true|false) ;;
+        *) die "source container has an invalid SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE value" ;;
+      esac
       ;;
     *)
       die "old container has duplicate SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE entries; refusing preserve release"
@@ -482,11 +501,16 @@ container_matches_fixed_egress_compatibility_container() {
 }
 
 make_runtime_env_file() {
-  local old_env_file output_file line key
+  local old_env_file output_file line key source_container
 
   new_temp_file
   old_env_file="$TEMP_FILE"
-  docker inspect "$OLD_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$old_env_file"
+  source_container="${FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-$OLD_CONTAINER}"
+  case "$source_container" in
+    "$OLD_CONTAINER"|"$NEW_CONTAINER") ;;
+    *) die "fixed-egress preserve source must be the old or new release container" ;;
+  esac
+  docker inspect "$source_container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$old_env_file"
   new_temp_file
   output_file="$TEMP_FILE"
   while IFS= read -r line || [ -n "$line" ]; do
@@ -977,6 +1001,10 @@ require_bool RUN_BACKUP "$RUN_BACKUP"
 require_bool PULL_IMAGE "$PULL_IMAGE"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
 require_bool VALIDATE_EXTERNAL_RUNTIME_ONLY "$VALIDATE_EXTERNAL_RUNTIME_ONLY"
+if [ -n "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER" ]; then
+  require_docker_name SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER \
+    "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER"
+fi
 case "$FIXED_EGRESS_COMPATIBILITY_MODE" in
   preserve|true|false) ;;
   *) die "SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE must be preserve, true, or false" ;;
