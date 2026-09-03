@@ -51,7 +51,11 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_UnsupportedProxyScheme() {
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPAPI() {
 	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 检查是否是 ip-api 请求
+		// The geo-first endpoints fail so this verifies the ip-api fallback.
+		if strings.Contains(r.RequestURI, "ipwho.is") || strings.Contains(r.RequestURI, "chatgpt.com") {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		if strings.Contains(r.RequestURI, "ip-api.com") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"status":"success","query":"1.2.3.4","city":"c","regionName":"r","country":"cc","countryCode":"CC"}`)
@@ -71,10 +75,35 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPAPI() {
 	require.Equal(s.T(), "CC", info.CountryCode)
 }
 
+func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPWhoFirst() {
+	// Use an HTTP test target so the local proxy fixture does not need to
+	// implement CONNECT tunnelling for the production HTTPS endpoint.
+	s.prober.configuredProbeURLs = []configuredProbeTarget{{
+		url:    "http://ipwho.is/",
+		parser: "ipwho",
+	}}
+	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.RequestURI, "ipwho.is") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"success":true,"ip":"5.6.7.8","city":"Phoenix","region":"Arizona","country":"United States","country_code":"US"}`)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+
+	info, _, err := s.prober.ProbeProxy(s.ctx, s.proxySrv.URL)
+	require.NoError(s.T(), err, "ProbeProxy should prefer ipwho")
+	require.Equal(s.T(), "5.6.7.8", info.IP)
+	require.Equal(s.T(), "Phoenix", info.City)
+	require.Equal(s.T(), "US", info.CountryCode)
+}
+
 func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPifyFallback() {
 	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// ip-api 失败
-		if strings.Contains(r.RequestURI, "ip-api.com") {
+		// Geo-capable endpoints fail; ipify is the final IP-only fallback.
+		if strings.Contains(r.RequestURI, "ipwho.is") ||
+			strings.Contains(r.RequestURI, "ip-api.com") ||
+			strings.Contains(r.RequestURI, "chatgpt.com") {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -147,6 +176,25 @@ func (s *ProxyProbeServiceSuite) TestParseIPAPI_Success() {
 func (s *ProxyProbeServiceSuite) TestParseIPAPI_Failure() {
 	body := []byte(`{"status":"fail","message":"rate limited"}`)
 	_, _, err := s.prober.parseIPAPI(body, 100)
+	require.Error(s.T(), err)
+	require.ErrorContains(s.T(), err, "rate limited")
+}
+
+func (s *ProxyProbeServiceSuite) TestParseIPWho_Success() {
+	body := []byte(`{"success":true,"ip":"2001:db8::1","city":"Phoenix","region":"Arizona","country":"United States","country_code":"US"}`)
+	info, latencyMs, err := s.prober.parseIPWho(body, 75)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), int64(75), latencyMs)
+	require.Equal(s.T(), "2001:db8::1", info.IP)
+	require.Equal(s.T(), "Phoenix", info.City)
+	require.Equal(s.T(), "Arizona", info.Region)
+	require.Equal(s.T(), "United States", info.Country)
+	require.Equal(s.T(), "US", info.CountryCode)
+}
+
+func (s *ProxyProbeServiceSuite) TestParseIPWho_Failure() {
+	body := []byte(`{"success":false,"message":"rate limited"}`)
+	_, _, err := s.prober.parseIPWho(body, 75)
 	require.Error(s.T(), err)
 	require.ErrorContains(s.T(), err, "rate limited")
 }

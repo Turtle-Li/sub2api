@@ -578,7 +578,18 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		return nil, err
 	}
 	if input.ProxyID != nil && account.IsOpenAIOAuthLike() && account.ParentAccountID == nil {
-		return nil, fixedEgressCASRequiredError()
+		// Older clients always sent proxy_id on a full-form update.  Treat an
+		// unchanged value as an omitted field so those edits remain compatible;
+		// an actual rebinding still must use the compare-and-set endpoint.
+		currentProxyID := int64(0)
+		if account.ProxyID != nil {
+			currentProxyID = *account.ProxyID
+		}
+		if *input.ProxyID == currentProxyID {
+			input.ProxyID = nil
+		} else {
+			return nil, fixedEgressCASRequiredError()
+		}
 	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {

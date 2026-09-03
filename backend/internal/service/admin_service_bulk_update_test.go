@@ -321,6 +321,25 @@ func TestAdminService_UpdateAccount_OpenAIOAuthProxyRequiresCompareAndSet(t *tes
 	require.Empty(t, repo.updatedAccounts)
 }
 
+func TestAdminService_UpdateAccount_OpenAIOAuthUnchangedProxyIsCompatible(t *testing.T) {
+	proxyID := int64(77)
+	account := &Account{
+		ID:       1,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		ProxyID:  &proxyID,
+	}
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{1: account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	updated, err := svc.UpdateAccount(context.Background(), 1, &UpdateAccountInput{ProxyID: &proxyID})
+	require.NoError(t, err)
+	require.Same(t, account, updated)
+	require.Len(t, repo.updatedAccounts, 1)
+	require.Equal(t, proxyID, *repo.updatedAccounts[0].ProxyID)
+}
+
 func TestAdminService_BulkUpdateAccounts_FixedEgressRejectsStaleExpectedProxy(t *testing.T) {
 	proxyID := int64(77)
 	expectedProxyID := int64(0)

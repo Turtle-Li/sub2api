@@ -63,7 +63,9 @@ var probeURLs = []struct {
 	url    string
 	parser string
 }{
+	{"https://ipwho.is/?lang=zh-CN", "ipwho"},
 	{"http://ip-api.com/json/?lang=zh-CN", "ip-api"},
+	{"https://chatgpt.com/cdn-cgi/trace", "chatgpt-trace"},
 	{"http://api64.ipify.org?format=json", "ipify"},
 }
 
@@ -147,6 +149,8 @@ func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Clien
 	}
 
 	switch parser {
+	case "ipwho":
+		return s.parseIPWho(body, latencyMs)
 	case "ip-api":
 		return s.parseIPAPI(body, latencyMs)
 	case "ipify":
@@ -156,6 +160,44 @@ func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Clien
 	default:
 		return nil, latencyMs, fmt.Errorf("unknown parser: %s", parser)
 	}
+}
+
+// parseIPWho handles the free JSON endpoint used when a fixed-egress policy
+// cannot reach the legacy HTTP-only ip-api endpoint.  It intentionally keeps
+// the endpoint optional through the normal ordered fallback chain.
+func (s *proxyProbeService) parseIPWho(body []byte, latencyMs int64) (*service.ProxyExitInfo, int64, error) {
+	var result struct {
+		IP          string `json:"ip"`
+		Success     bool   `json:"success"`
+		Message     string `json:"message"`
+		Country     string `json:"country"`
+		CountryCode string `json:"country_code"`
+		Region      string `json:"region"`
+		City        string `json:"city"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		preview := string(body)
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		return nil, latencyMs, fmt.Errorf("failed to parse ipwho response: %w (body: %s)", err, preview)
+	}
+	if !result.Success {
+		if result.Message == "" {
+			result.Message = "ipwho request failed"
+		}
+		return nil, latencyMs, fmt.Errorf("ipwho request failed: %s", result.Message)
+	}
+	if strings.TrimSpace(result.IP) == "" {
+		return nil, latencyMs, fmt.Errorf("ipwho: no IP found in response")
+	}
+	return &service.ProxyExitInfo{
+		IP:          strings.TrimSpace(result.IP),
+		Country:     strings.TrimSpace(result.Country),
+		CountryCode: strings.TrimSpace(result.CountryCode),
+		Region:      strings.TrimSpace(result.Region),
+		City:        strings.TrimSpace(result.City),
+	}, latencyMs, nil
 }
 
 func (s *proxyProbeService) parseIPAPI(body []byte, latencyMs int64) (*service.ProxyExitInfo, int64, error) {

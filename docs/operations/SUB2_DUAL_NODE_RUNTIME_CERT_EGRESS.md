@@ -99,6 +99,31 @@ does not change the GCP monitoring deployment.
 
 ## 3. Fixed account egress (T-EG-01)
 
+### 3.0 Node proxy roles and canonical representation
+
+Each relay has two deliberately separate consumer-facing roles. The public
+IPv6 address is the client line identity for VLESS + Vision + Reality on TCP
+`443`; it is not an HTTP/SOCKS endpoint and must not be pasted into a Sub2API
+account proxy field. The Sub2API application reaches a relay over Tailnet.
+
+For ordinary (non-fixed-egress) account proxies, use the relay's authenticated
+`mixed-tailnet` adapter on Tailnet `:7890`. The adapter is the same 233boy/
+sing-box service on old and new nodes and accepts HTTP CONNECT and SOCKS5. To
+keep persisted records uniform, new records should use the canonical form
+`socks5h://username:password@<tailnet-ip>:7890` with the node's own credentials;
+the server-side `mixed` listener remains compatible with existing HTTP rows
+during migration. Credentials are independent per node and must come from the
+protected runtime/Vault injection, never from a copied row or chat message.
+
+OpenAI OAuth/setup-token parent accounts are a different security role. They
+must use the dedicated Tailnet-only `socks5h:1080` fixed-egress adapter below,
+which intentionally has no application username/password because Tailnet ACLs,
+the exact listener address, and the host firewall are the authentication
+boundary. Do not reuse `:1080` for ordinary proxy rows, and do not open either
+`:7890` or `:1080` in a public IPv6 NSG. A future public authenticated
+HTTP/SOCKS service would be a new reviewed profile with its own Vault
+credential and abuse controls, not a port toggle on these adapters.
+
 Fixed account egress is independent from request ingress and application
 placement. Two dedicated Azure West US IPv6 nodes expose SOCKS only inside the
 Tailnet. Both the old application origin and Azure Japan application origin may

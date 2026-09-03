@@ -12,11 +12,13 @@ func TestNormalizeProxyProbeURLs(t *testing.T) {
 	t.Parallel()
 
 	got, err := normalizeProxyProbeURLs([]ProbeURLConfig{
+		{URL: "https://ipwho.is/?lang=zh-CN", Parser: " IPWHO "},
 		{URL: " https://chatgpt.com/cdn-cgi/trace ", Parser: " CHATGPT-TRACE "},
 		{URL: "https://api64.ipify.org?format=json", Parser: "ipify"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, []ProbeURLConfig{
+		{URL: "https://ipwho.is/?lang=zh-CN", Parser: "ipwho"},
 		{URL: "https://chatgpt.com/cdn-cgi/trace", Parser: "chatgpt-trace"},
 		{URL: "https://api64.ipify.org?format=json", Parser: "ipify"},
 	}, got)

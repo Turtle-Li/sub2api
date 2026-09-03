@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, bulkUpdateMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
+  bulkUpdateMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
@@ -28,6 +29,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
+      bulkUpdate: bulkUpdateMock,
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
@@ -138,6 +140,25 @@ const GroupSelectorStub = defineComponent({
         group
       </button>
     </div>
+  `
+})
+
+const ProxySelectorStub = defineComponent({
+  props: {
+    modelValue: {
+      type: [String, Number, null],
+      default: null
+    }
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <button
+      type="button"
+      data-testid="select-proxy"
+      @click="$emit('update:modelValue', 77)"
+    >
+      proxy
+    </button>
   `
 })
 
@@ -316,7 +337,7 @@ function mountModal(account = buildAccount()) {
         BaseDialog: BaseDialogStub,
         Select: SelectStub,
         Icon: true,
-        ProxySelector: true,
+        ProxySelector: ProxySelectorStub,
         GroupSelector: GroupSelectorStub,
         ModelWhitelistSelector: ModelWhitelistSelectorStub
       }
@@ -327,6 +348,7 @@ function mountModal(account = buildAccount()) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    bulkUpdateMock.mockReset()
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
@@ -1480,6 +1502,7 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
     updateAccountMock.mockReset()
+    bulkUpdateMock.mockReset()
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
   })
 
@@ -1496,6 +1519,45 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
       expect(wrapper.find('[data-testid="auto-reset-credit-settings"]').exists()).toBe(false)
       wrapper.unmount()
     }
+  })
+
+  it('saves an OpenAI OAuth parent proxy through fixed-egress CAS', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    updateAccountMock.mockResolvedValue(account)
+    bulkUpdateMock.mockResolvedValue({
+      success: 1,
+      failed: 0,
+      success_ids: [account.id],
+      failed_ids: [],
+      results: [{ account_id: account.id, success: true }]
+    })
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="select-proxy"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('proxy_id')
+    expect(bulkUpdateMock).toHaveBeenCalledWith([account.id], {
+      proxy_id: 77,
+      expected_proxy_id: 0
+    })
+    expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ proxy_id: 77 })
+    wrapper.unmount()
+  })
+
+  it('omits an unchanged OpenAI OAuth parent proxy from the regular update', async () => {
+    const proxyID = 77
+    const account = { ...buildOpenAIOAuthParentAccount(), proxy_id: proxyID }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('proxy_id')
+    expect(bulkUpdateMock).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('独立保存两个阈值，并禁止把运行态回写到管理请求', async () => {

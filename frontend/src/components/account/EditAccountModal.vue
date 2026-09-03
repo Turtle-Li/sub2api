@@ -3057,6 +3057,16 @@ const browserTimeZone = getBrowserTimeZone()
 // 故隐藏代理选择器。
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
 
+// OpenAI OAuth/setup-token parent proxy bindings are protected by the
+// fixed-egress compare-and-set path.  Keep the regular account update free of
+// proxy_id so unrelated edits do not trip that guard.
+const isFixedEgressParent = computed(() => {
+  const account = props.account
+  return account?.platform === 'openai' &&
+    (account.type === 'oauth' || account.type === 'setup-token') &&
+    account.parent_account_id == null
+})
+
 const hideAccountLongContextBilling = computed(() => {
   return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
 })
@@ -3789,6 +3799,16 @@ const form = reactive({
   expires_at: null as number | null
 })
 
+const originalProxyID = ref<number | null>(null)
+
+const normalizeProxyID = (value: unknown): number | null => {
+  if (value == null || value === '' || value === 0 || value === '0') {
+    return null
+  }
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
 const handleUpstreamBillingRateSyncChange = (enabled: boolean) => {
   upstreamBillingRateSyncEnabled.value = enabled
   if (enabled) {
@@ -3887,7 +3907,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningAction.value = null
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
-  form.proxy_id = newAccount.proxy_id
+  form.proxy_id = normalizeProxyID(newAccount.proxy_id)
+  originalProxyID.value = normalizeProxyID(newAccount.proxy_id)
   form.concurrency = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
@@ -4796,12 +4817,40 @@ const handleClose = () => {
   emit('close')
 }
 
-const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
+interface FixedEgressProxyChange {
+  expectedProxyID: number
+  proxyID: number
+}
+
+const submitUpdateAccount = async (
+  accountID: number,
+  updatePayload: Record<string, unknown>,
+  fixedEgressProxyChange?: FixedEgressProxyChange
+) => {
   submitting.value = true
   try {
     const updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
+    let resultAccount = updatedAccount
+
+    // Persist the protected relationship only through the existing single-CAS
+    // bulk endpoint.  The ordinary update above deliberately omits proxy_id;
+    // if CAS loses a race, the rest of the form remains saved and the proxy is
+    // left untouched for an explicit retry.
+    if (fixedEgressProxyChange) {
+      const casResult = await adminAPI.accounts.bulkUpdate([accountID], {
+        proxy_id: fixedEgressProxyChange.proxyID,
+        expected_proxy_id: fixedEgressProxyChange.expectedProxyID
+      })
+      const casSucceeded = casResult.success_ids?.includes(accountID) ||
+        (casResult.success === 1 && casResult.failed === 0 && !casResult.failed_ids?.length)
+      if (!casSucceeded) {
+        throw new Error(casResult.results?.[0]?.error || t('admin.accounts.failedToUpdate'))
+      }
+      resultAccount = { ...updatedAccount, proxy_id: fixedEgressProxyChange.proxyID || null }
+      originalProxyID.value = fixedEgressProxyChange.proxyID || null
+    }
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
-    emit('updated', updatedAccount)
+    emit('updated', resultAccount)
     handleClose()
   } catch (error: any) {
     if (error.status === 409 && error.error === 'mixed_channel_warning' && needsMixedChannelCheck()) {
@@ -4809,7 +4858,7 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
         message: error.message,
         onConfirm: async () => {
           antigravityMixedChannelConfirmed.value = true
-          await submitUpdateAccount(accountID, updatePayload)
+          await submitUpdateAccount(accountID, updatePayload, fixedEgressProxyChange)
         }
       })
       return
@@ -4837,9 +4886,20 @@ const handleSubmit = async () => {
 	}
 
   const updatePayload: Record<string, unknown> = { ...form }
+  let fixedEgressProxyChange: FixedEgressProxyChange | undefined
   try {
-    // 后端期望 proxy_id: 0 表示清除代理，而不是 null
-    if (updatePayload.proxy_id === null) {
+    if (isFixedEgressParent.value) {
+      const expectedProxyID = normalizeProxyID(originalProxyID.value) || 0
+      const proxyID = normalizeProxyID(form.proxy_id) || 0
+      // The regular PUT must not carry this protected field.  A changed value
+      // is applied after the PUT through the CAS endpoint with the snapshot
+      // captured when the modal was opened.
+      delete updatePayload.proxy_id
+      if (proxyID !== expectedProxyID) {
+        fixedEgressProxyChange = { expectedProxyID, proxyID }
+      }
+    } else if (updatePayload.proxy_id === null) {
+      // 后端期望 proxy_id: 0 表示清除代理，而不是 null
       updatePayload.proxy_id = 0
     }
     if (form.expires_at === null) {
@@ -5527,14 +5587,17 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
+    const submit = async () => {
+      await submitUpdateAccount(accountID, updatePayload, fixedEgressProxyChange)
+    }
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {
-      await submitUpdateAccount(accountID, updatePayload)
+      await submit()
     })
     if (!canContinue) {
       return
     }
 
-    await submitUpdateAccount(accountID, updatePayload)
+    await submit()
   } catch (error: any) {
     appStore.showError(error.message || t('admin.accounts.failedToUpdate'))
   }
