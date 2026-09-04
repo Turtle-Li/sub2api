@@ -322,7 +322,9 @@ func TestAdminServiceCreateAccount_RequiresFixedEgressProxyForOpenAICodexParent(
 		proxy     *Proxy
 		wantError string
 	}{
-		{name: "rejects non tailnet proxy", proxy: &Proxy{ID: proxyID, Status: StatusActive, Protocol: "socks5h", Host: "proxy.example", Port: 1080, FallbackMode: FallbackModeNone}, wantError: "FIXED_EGRESS_PROXY_INVALID"},
+		{name: "accepts authenticated hostname proxy", proxy: &Proxy{ID: proxyID, Status: StatusActive, Protocol: "http", Host: "proxy.example", Port: 8080, Username: "operator", Password: "secret", FallbackMode: FallbackModeNone}},
+		{name: "accepts IPv6 proxy", proxy: &Proxy{ID: proxyID, Status: StatusActive, Protocol: "socks5h", Host: "2001:db8::10", Port: 1080, FallbackMode: FallbackModeNone}},
+		{name: "rejects unsupported protocol", proxy: &Proxy{ID: proxyID, Status: StatusActive, Protocol: "ftp", Host: "proxy.example", Port: 21, FallbackMode: FallbackModeNone}, wantError: "FIXED_EGRESS_PROXY_INVALID"},
 		{name: "accepts valid proxy", proxy: validProxy},
 	}
 
@@ -363,7 +365,7 @@ func TestOpenAIOAuthServiceResolveProxyURL_RequiresFixedEgress(t *testing.T) {
 	proxyID := int64(7)
 	valid := newFixedEgressUpdateProxy(proxyID)
 	invalid := *valid
-	invalid.Host = "proxy.example"
+	invalid.Protocol = "ftp"
 
 	for _, tt := range []struct {
 		name      string

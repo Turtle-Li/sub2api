@@ -123,7 +123,8 @@ func TestResolveAccountProxyURLWithLookup_UsesHydratedProxy(t *testing.T) {
 	require.Equal(t, "http://proxy.test:8080", proxyURL)
 }
 
-func TestResolveAccountProxyURL_OpenAIOAuthRequiresFixedEgress(t *testing.T) {
+func TestResolveAccountProxyURL_OpenAIOAuthRequiresValidFixedEgress(t *testing.T) {
+	t.Setenv(FixedEgressCompatibilityModeEnv, "false")
 	now := time.Now()
 	proxyID := int64(7)
 	parentID := int64(1)
@@ -166,20 +167,48 @@ func TestResolveAccountProxyURL_OpenAIOAuthRequiresFixedEgress(t *testing.T) {
 
 	backupProxyID := int64(8)
 	expiresAt := now.Add(time.Hour)
-	tests := []struct {
+	accepted := []struct {
+		name   string
+		mutate func(*Proxy)
+	}{
+		{name: "hostname", mutate: func(proxy *Proxy) { proxy.Host = "proxy.example" }},
+		{name: "public IPv4", mutate: func(proxy *Proxy) { proxy.Host = "203.0.113.10" }},
+		{name: "IPv6", mutate: func(proxy *Proxy) { proxy.Host = "2001:db8::10"; proxy.Port = 443 }},
+		{name: "HTTP", mutate: func(proxy *Proxy) { proxy.Protocol = "http"; proxy.Port = 8080 }},
+		{name: "HTTPS", mutate: func(proxy *Proxy) { proxy.Protocol = "https"; proxy.Port = 8443 }},
+		{name: "SOCKS5 is normalized", mutate: func(proxy *Proxy) { proxy.Protocol = "socks5" }},
+		{name: "authenticated", mutate: func(proxy *Proxy) { proxy.Username = "operator"; proxy.Password = "secret" }},
+		{name: "stale backup metadata with no fallback", mutate: func(proxy *Proxy) { proxy.BackupProxyID = &backupProxyID }},
+	}
+	for _, tt := range accepted {
+		t.Run(tt.name, func(t *testing.T) {
+			proxy := newValidProxy()
+			tt.mutate(proxy)
+
+			proxyURL, err := resolveAccountProxyURLAt(newOAuthAccount(false), proxy, now)
+			require.NoError(t, err)
+			require.NotEmpty(t, proxyURL)
+			if proxy.Protocol == "socks5" {
+				require.Equal(t, "socks5h://100.80.10.114:1080", proxyURL)
+			}
+		})
+	}
+
+	rejected := []struct {
 		name   string
 		mutate func(*Proxy)
 	}{
 		{name: "inactive", mutate: func(proxy *Proxy) { proxy.Status = "inactive" }},
-		{name: "non tailnet host", mutate: func(proxy *Proxy) { proxy.Host = "127.0.0.1" }},
-		{name: "non socks5h protocol", mutate: func(proxy *Proxy) { proxy.Protocol = "socks5" }},
-		{name: "wrong port", mutate: func(proxy *Proxy) { proxy.Port = 1081 }},
-		{name: "authenticated", mutate: func(proxy *Proxy) { proxy.Username = "operator" }},
+		{name: "unsupported protocol", mutate: func(proxy *Proxy) { proxy.Protocol = "ftp" }},
+		{name: "zero port", mutate: func(proxy *Proxy) { proxy.Port = 0 }},
+		{name: "port too large", mutate: func(proxy *Proxy) { proxy.Port = 65536 }},
+		{name: "empty host", mutate: func(proxy *Proxy) { proxy.Host = " " }},
+		{name: "partial username", mutate: func(proxy *Proxy) { proxy.Username = "operator" }},
+		{name: "partial password", mutate: func(proxy *Proxy) { proxy.Password = "secret" }},
 		{name: "expiry", mutate: func(proxy *Proxy) { proxy.ExpiresAt = &expiresAt }},
 		{name: "fallback", mutate: func(proxy *Proxy) { proxy.FallbackMode = FallbackModeDirect }},
-		{name: "backup", mutate: func(proxy *Proxy) { proxy.BackupProxyID = &backupProxyID }},
 	}
-	for _, tt := range tests {
+	for _, tt := range rejected {
 		t.Run(tt.name, func(t *testing.T) {
 			proxy := newValidProxy()
 			tt.mutate(proxy)
@@ -200,7 +229,7 @@ func TestResolveAccountProxyURLWithLookup_OpenAIOAuthFailsClosedForInvalidFixedE
 		accountProxyLookupStub{proxy: &Proxy{
 			ID:           proxyID,
 			Status:       StatusActive,
-			Protocol:     "socks5h",
+			Protocol:     "ftp",
 			Host:         "proxy.internal",
 			Port:         1080,
 			FallbackMode: FallbackModeNone,
@@ -234,11 +263,11 @@ func TestResolveAccountProxyURL_OpenAISetupTokenSharesFixedEgressInvariant(t *te
 	require.Equal(t, "socks5h://100.81.60.44:1080", proxyURL)
 
 	invalid := *valid
-	invalid.Host = "203.0.113.10"
+	invalid.FallbackMode = FallbackModeDirect
 	proxyURL, err = resolveAccountProxyURLAt(account, &invalid, time.Now())
 	require.ErrorIs(t, err, ErrAccountProxyUnavailable)
 	require.Empty(t, proxyURL)
-	require.Contains(t, err.Error(), "outside Tailnet")
+	require.Contains(t, err.Error(), "fallback mode must be none")
 }
 
 func TestResolveAccountProxyURL_CompatibilityModePreservesLegacyOAuthRouting(t *testing.T) {

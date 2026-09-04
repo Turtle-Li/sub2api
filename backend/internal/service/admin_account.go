@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -20,14 +19,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 )
-
-var openAIFixedEgressTailnet = func() *net.IPNet {
-	_, network, err := net.ParseCIDR("100.64.0.0/10")
-	if err != nil {
-		panic(err)
-	}
-	return network
-}()
 
 // Account management implementations
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
@@ -1332,21 +1323,29 @@ func ValidateFixedEgressProxy(proxy *Proxy) error {
 	if proxy.FallbackMode != FallbackModeNone {
 		return invalid("proxy fallback mode must be none")
 	}
-	if proxy.BackupProxyID != nil {
-		return invalid("proxy must not have a backup")
+	// A backup field is harmless when fallback_mode=none (the fallback resolver
+	// never follows it), and older proxy rows may retain that stale metadata.
+	// The effective fixed-egress invariant is the absence of an active fallback,
+	// enforced above.
+	if strings.TrimSpace(proxy.Protocol) == "" {
+		return invalid("proxy protocol is empty")
 	}
-	if proxy.Protocol != "socks5h" {
-		return invalid("proxy protocol must be socks5h")
+	switch strings.ToLower(strings.TrimSpace(proxy.Protocol)) {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return invalid("proxy protocol must be http, https, socks5, or socks5h")
 	}
-	if proxy.Port != 1080 {
-		return invalid("proxy port must be 1080")
+	if proxy.Port < 1 || proxy.Port > 65535 {
+		return invalid("proxy port must be between 1 and 65535")
 	}
-	if proxy.Username != "" || proxy.Password != "" {
-		return invalid("proxy authentication must be empty")
+	if strings.TrimSpace(proxy.Host) == "" {
+		return invalid("proxy host is empty")
 	}
-	ip := net.ParseIP(strings.TrimSpace(proxy.Host))
-	if ip == nil || ip.To4() == nil || !openAIFixedEgressTailnet.Contains(ip) {
-		return invalid("proxy host is outside Tailnet 100.64.0.0/10")
+	if strings.IndexFunc(proxy.Host, func(r rune) bool { return r == '\r' || r == '\n' || r == '\t' }) >= 0 {
+		return invalid("proxy host contains control characters")
+	}
+	if (proxy.Username == "") != (proxy.Password == "") {
+		return invalid("proxy username and password must be supplied together")
 	}
 	normalized, _, err := proxyurl.Parse(proxy.URL())
 	if err != nil {

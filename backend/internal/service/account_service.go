@@ -15,7 +15,7 @@ var (
 	ErrAccountNotInFallback    = infraerrors.BadRequest("ACCOUNT_NOT_IN_FALLBACK", "account is not in proxy fallback state")
 	ErrFixedEgressProxyInvalid = infraerrors.BadRequest(
 		"FIXED_EGRESS_PROXY_INVALID",
-		"proxy must be active Tailnet-only socks5h:1080 with no expiry, credentials, backup, or fallback",
+		"proxy must be active with a valid HTTP(S)/SOCKS5(H) URL, no expiry, and no fallback",
 	)
 	ErrFixedEgressCASRequired = infraerrors.BadRequest(
 		"FIXED_EGRESS_CAS_REQUIRED",
