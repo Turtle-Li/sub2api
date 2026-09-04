@@ -64,6 +64,32 @@ For a DNS-only multi-origin API, install each node with
 and runtime-recovery health checks verify the local origin with the production
 hostname and certificate instead of following a DNS answer to a peer.
 
+The installer also places `verify_image_route_contract.py` beside the
+root-owned release and runtime scripts. Blue-green releases and the runtime
+guard run it against both the adapted startup JSON and the active Caddy Admin
+API JSON. It proves that `api.turtleligpt.com` reaches the Sub2API application
+for the supported root and `/v1` image routes before a Caddy mutation is
+committed. The transport verifier sends empty unauthenticated requests to the
+same routes and expects `401`; repeated probes can receive `429` from the
+invalid-auth abuse limiter, which is logged as rate-limited reachability
+evidence rather than treated as a route failure. This checks edge reachability
+without creating a paid image task. The external-certificate template keeps the entire gateway
+surface (including Codex, Antigravity, media, voice, and search aliases) in an
+explicit allowlist, while the web/panel `/api/v1/*` tree remains on its own web
+origin. `/v1/images/batches` is the canonical batch route, including its list
+and item operations; a root batch alias is intentionally not part of the
+contract.
+
+For production releases, set `SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=true`
+only after provisioning the dedicated probe API key through Vault into the
+root-owned, mode-`0600` file configured by
+`SUB2API_RELEASE_REAL_REQUEST_PROBE_KEY_FILE`. The blue-green helper then runs
+an authenticated `/v1/models` check and one non-streaming `/responses` request
+against the candidate container before changing Caddy. The probe executes on
+the release server itself, so it exercises that server's real upstream egress;
+any non-2xx response or malformed JSON leaves the old generation serving and
+retains the candidate for diagnosis. Rollback explicitly disables this gate.
+
 The production helper recognizes `sub2api-blue`, `sub2api-green`, and the
 legacy `sub2api` application name. Long-lived Responses WebSocket connections
 can keep an old color draining after a release, so the helper resolves the

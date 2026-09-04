@@ -17,6 +17,8 @@ CADDY_CONTAINER="${CADDY_CONTAINER:-${SUB2API_CADDY_CONTAINER:-sub2api-caddy}}"
 CADDYFILE="${CADDYFILE:-$APP_DIR/Caddyfile}"
 CADDY_CONFIG_PATH="${CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
 CADDY_STARTUP_HOST_PATH="${SUB2API_CADDY_STARTUP_HOST_PATH:-}"
+IMAGE_ROUTE_CONTRACT_VERIFIER="${SUB2API_IMAGE_ROUTE_CONTRACT_VERIFIER:-${APP_DIR}/scripts/verify_image_route_contract.py}"
+IMAGE_ROUTE_API_HOST="${SUB2API_IMAGE_ROUTE_API_HOST:-api.turtleligpt.com}"
 CADDY_TRANSACTION_PATH="${APP_DIR}/.gcp-tw-caddy-transaction.env"
 CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
 CADDY_SWITCH_TRANSACTION_PATH="${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
@@ -36,7 +38,18 @@ DRAIN_NOHUP_FILE="${DRAIN_NOHUP_FILE:-/var/log/sub2api-drain-$NEW_CONTAINER.nohu
 DRAIN_PID_FILE="${DRAIN_PID_FILE:-/var/run/sub2api-drain-$NEW_CONTAINER.pid}"
 REMOVE_EXISTING_NEW_CONTAINER="${REMOVE_EXISTING_NEW_CONTAINER:-true}"
 ALLOW_ISOLATED_OLD_CONTAINER="${ALLOW_ISOLATED_OLD_CONTAINER:-false}"
+# Internal recovery selector used by the server coordinator when Caddy has
+# already been switched and must be restored. Hard upstream/Caddy-view checks
+# remain strict; only the optional image-route evidence is downgraded.
+ROUTE_CONTRACT_WARN_ONLY="${SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY:-false}"
 DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
+# A real authenticated request is an optional release gate. Production enables
+# it after provisioning the root-only probe key; rollback calls explicitly
+# disable it so an upstream outage cannot block recovery.
+REAL_REQUEST_PROBE_ENABLED="${SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED:-false}"
+REAL_REQUEST_PROBE_SCRIPT="${SUB2API_RELEASE_REAL_REQUEST_PROBE_SCRIPT:-${APP_DIR}/scripts/sub2api-real-request-probe.sh}"
+REAL_REQUEST_PROBE_KEY_FILE="${SUB2API_RELEASE_REAL_REQUEST_PROBE_KEY_FILE:-${APP_DIR}/secrets/release-probe-api-key}"
+REAL_REQUEST_PROBE_MODEL="${SUB2API_RELEASE_REAL_REQUEST_PROBE_MODEL:-gpt-5.6-sol}"
 # This narrow mode validates the externally supplied dependency/runtime files
 # and exits before any Docker or Caddy lifecycle operation.  The server
 # coordinator uses it before discarding a stale stopped external target.
@@ -748,6 +761,82 @@ caddy_config_contains() {
     "$CADDY_CONTAINER" sh -c 'grep -qF "$CADDY_CHECK_TEXT" "$CADDY_CHECK_PATH"'
 }
 
+verify_image_route_contract_file() {
+  local config_path="$1"
+  assert_image_route_verifier \
+    || {
+      log "ERROR: image route contract verifier is missing or unsafe: $IMAGE_ROUTE_CONTRACT_VERIFIER" >&2
+      return 1
+    }
+  docker exec "$CADDY_CONTAINER" caddy adapt \
+    --config "$config_path" --adapter caddyfile \
+    | "$IMAGE_ROUTE_CONTRACT_VERIFIER" --host "$IMAGE_ROUTE_API_HOST" >/dev/null \
+    || {
+      log "ERROR: Caddy image route contract failed for $config_path" >&2
+      return 1
+    }
+}
+
+verify_image_route_contract_active() {
+  assert_image_route_verifier \
+    || {
+      log "ERROR: image route contract verifier is missing or unsafe: $IMAGE_ROUTE_CONTRACT_VERIFIER" >&2
+      return 1
+    }
+  docker exec "$CADDY_CONTAINER" sh -c \
+    'wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/' \
+    | "$IMAGE_ROUTE_CONTRACT_VERIFIER" --host "$IMAGE_ROUTE_API_HOST" >/dev/null \
+    || {
+      log "ERROR: active Caddy image route contract failed" >&2
+      return 1
+    }
+}
+
+assert_image_route_verifier() {
+  [ -f "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    && [ ! -L "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    && [ -x "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    || return 1
+  # The release helper is root-only in production. Keep the exact metadata
+  # check here so a symlink or writable verifier cannot become a release gate;
+  # non-root unit tests stop at the root check before reaching this branch.
+  [ "$(id -u)" -eq 0 ] || return 1
+  [ "$(stat -c '%u:%g:%a' "$IMAGE_ROUTE_CONTRACT_VERIFIER")" = '0:0:750' ]
+}
+
+warn_image_route_contract_file() {
+  local config_path="$1"
+  if ! verify_image_route_contract_file "$config_path"; then
+    log "WARNING: image route contract could not be verified for ${config_path}; continuing rollback/recovery" >&2
+  fi
+}
+
+warn_image_route_contract_active() {
+  if ! verify_image_route_contract_active; then
+    log "WARNING: active Caddy image route contract could not be verified; continuing rollback/recovery" >&2
+  fi
+}
+
+route_contract_check_file() {
+  local config_path="$1"
+  if [ "$ALLOW_ISOLATED_OLD_CONTAINER" = true ] || [ "$ROUTE_CONTRACT_WARN_ONLY" = true ]; then
+    # Runtime fallback is a recovery action. Preserve the hard upstream and
+    # Caddy-view checks, but do not let a newly introduced route gate prevent
+    # traffic from returning to the known working generation.
+    warn_image_route_contract_file "$config_path"
+  else
+    verify_image_route_contract_file "$config_path"
+  fi
+}
+
+route_contract_check_active() {
+  if [ "$ALLOW_ISOLATED_OLD_CONTAINER" = true ] || [ "$ROUTE_CONTRACT_WARN_ONLY" = true ]; then
+    warn_image_route_contract_active
+  else
+    verify_image_route_contract_active
+  fi
+}
+
 caddy_active_config_contains() {
   local text="$1"
   docker exec -e CADDY_CHECK_TEXT="$text" "$CADDY_CONTAINER" sh -c \
@@ -974,11 +1063,17 @@ restore_caddy_switch() {
   docker cp "$CADDYFILE" "$CADDY_CONTAINER:$rollback_config" || return 1
   docker exec "$CADDY_CONTAINER" caddy validate --config "$rollback_config" --adapter caddyfile \
     || return 1
+  # The backup is the configuration being restored. A route-contract mismatch
+  # must remain visible, but it cannot prevent Caddy from returning to the last
+  # known serving upstream or leave the transaction half-recovered.
+  warn_image_route_contract_file "$rollback_config"
   docker exec "$CADDY_CONTAINER" caddy reload --force --config "$rollback_config" --adapter caddyfile \
     || return 1
   [ "$(file_sha "$CADDYFILE")" = "$switch_before_sha" ] || return 1
   caddy_config_contains "$CADDY_CONFIG_PATH" "$switch_upstream_from" || return 1
   caddy_active_config_contains "$switch_upstream_from" || return 1
+  warn_image_route_contract_file "$CADDY_CONFIG_PATH"
+  warn_image_route_contract_active
   if caddy_config_contains "$CADDY_CONFIG_PATH" "$switch_upstream_to" \
     || caddy_active_config_contains "$switch_upstream_to"; then
     return 1
@@ -997,10 +1092,32 @@ esac
 require_bool PRECREATE_ONLY "$PRECREATE_ONLY"
 require_bool REMOVE_EXISTING_NEW_CONTAINER "$REMOVE_EXISTING_NEW_CONTAINER"
 require_bool ALLOW_ISOLATED_OLD_CONTAINER "$ALLOW_ISOLATED_OLD_CONTAINER"
+require_bool SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY "$ROUTE_CONTRACT_WARN_ONLY"
 require_bool RUN_BACKUP "$RUN_BACKUP"
 require_bool PULL_IMAGE "$PULL_IMAGE"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
+require_bool SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED "$REAL_REQUEST_PROBE_ENABLED"
 require_bool VALIDATE_EXTERNAL_RUNTIME_ONLY "$VALIDATE_EXTERNAL_RUNTIME_ONLY"
+case "$IMAGE_ROUTE_API_HOST" in
+  ''|*[!A-Za-z0-9.-]*|.*|*..*|*.) die "SUB2API_IMAGE_ROUTE_API_HOST must be a simple DNS name" ;;
+esac
+if [ "$ROUTE_CONTRACT_WARN_ONLY" = true ]; then
+  # Warning-only route evidence is an internal rollback mode. Requiring the
+  # preserved source and all non-mutating flags prevents an ambient environment
+  # variable from weakening an ordinary release.
+  [ "$ALLOW_ISOLATED_OLD_CONTAINER" = true ] || [ -n "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER" ] \
+    || die "route-contract warning mode is reserved for rollback/recovery"
+  [ "$PRECREATE_ONLY" = false ] \
+    || die "route-contract warning mode cannot precreate a target"
+  [ "$RUN_BACKUP" = false ] \
+    || die "route-contract warning mode cannot run a backup"
+  [ "$PULL_IMAGE" = false ] \
+    || die "route-contract warning mode cannot pull an image"
+  [ "$REMOVE_EXISTING_NEW_CONTAINER" = false ] \
+    || die "route-contract warning mode cannot remove a target"
+  [ "$FIXED_EGRESS_COMPATIBILITY_MODE" = preserve ] \
+    || die "route-contract warning mode must preserve the rollback source compatibility setting"
+fi
 if [ -n "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER" ]; then
   require_docker_name SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER \
     "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER"
@@ -1021,6 +1138,22 @@ for command_name in awk chmod cp date docker grep id mktemp mv nsenter perl pyth
     realpath rm sha256sum stat; do
   require_cmd "$command_name"
 done
+if [ "$REAL_REQUEST_PROBE_ENABLED" = true ]; then
+  [ -f "$REAL_REQUEST_PROBE_SCRIPT" ] && [ ! -L "$REAL_REQUEST_PROBE_SCRIPT" ] \
+    || die "real request probe script is missing or is a symlink: $REAL_REQUEST_PROBE_SCRIPT"
+  [ "$(realpath -e -- "$REAL_REQUEST_PROBE_SCRIPT")" = "$REAL_REQUEST_PROBE_SCRIPT" ] \
+    || die "real request probe script must be canonical: $REAL_REQUEST_PROBE_SCRIPT"
+  [ -x "$REAL_REQUEST_PROBE_SCRIPT" ] \
+    || die "real request probe script is not executable: $REAL_REQUEST_PROBE_SCRIPT"
+  [ "$(stat -c '%u:%g:%a' "$REAL_REQUEST_PROBE_SCRIPT")" = '0:0:750' ] \
+    || die "real request probe script must be root-owned mode 0750"
+  [ -f "$REAL_REQUEST_PROBE_KEY_FILE" ] && [ ! -L "$REAL_REQUEST_PROBE_KEY_FILE" ] \
+    || die "real request probe key file is missing or is a symlink: $REAL_REQUEST_PROBE_KEY_FILE"
+  [ "$(realpath -e -- "$REAL_REQUEST_PROBE_KEY_FILE")" = "$REAL_REQUEST_PROBE_KEY_FILE" ] \
+    || die "real request probe key file must be canonical: $REAL_REQUEST_PROBE_KEY_FILE"
+  [ "$(stat -c '%u:%g:%a' "$REAL_REQUEST_PROBE_KEY_FILE")" = '0:0:600' ] \
+    || die "real request probe key file must be root-owned mode 0600"
+fi
 validate_unified_payment_runtime
 if [ "$DEPENDENCY_MODE" = external ]; then
   load_external_runtime_env
@@ -1053,6 +1186,17 @@ cd "$APP_DIR"
   fi
   die "retained Caddy upstream switch could not be recovered automatically"
 }
+if [ "$ALLOW_ISOLATED_OLD_CONTAINER" != true ] && [ "$ROUTE_CONTRACT_WARN_ONLY" != true ]; then
+  # A retained switch transaction is handled above before this gate. That
+  # ordering is intentional: recovery must remain possible even if the new
+  # companion verifier was not installed before a process was interrupted.
+  [ -f "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    && [ ! -L "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    && [ -x "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    || die "image route contract verifier is missing or unsafe: $IMAGE_ROUTE_CONTRACT_VERIFIER"
+  [ "$(stat -c '%u:%g:%a' "$IMAGE_ROUTE_CONTRACT_VERIFIER")" = '0:0:750' ] \
+    || die "image route contract verifier must be root:root mode 0750: $IMAGE_ROUTE_CONTRACT_VERIFIER"
+fi
 [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
   || die "refusing a symlink Caddy upstream switch transaction"
 [ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
@@ -1228,6 +1372,12 @@ status="$(container_status "$NEW_CONTAINER")"
 log "checking app health inside $NEW_CONTAINER"
 docker exec "$NEW_CONTAINER" sh -c "wget -Y off -qO- http://127.0.0.1:$APP_PORT/health >/dev/null || curl --noproxy '*' -fsS http://127.0.0.1:$APP_PORT/health >/dev/null"
 
+if [ "$REAL_REQUEST_PROBE_ENABLED" = true ]; then
+  log "running authenticated real-request probe against $NEW_CONTAINER"
+  "$REAL_REQUEST_PROBE_SCRIPT" "$NEW_CONTAINER" "$REAL_REQUEST_PROBE_KEY_FILE" "$REAL_REQUEST_PROBE_MODEL" \
+    || die "authenticated real-request probe failed; Caddy was not changed"
+fi
+
 if grep -qF "$CADDY_UPSTREAM_TO" "$CADDYFILE"; then
   log "host Caddyfile already points at $CADDY_UPSTREAM_TO; requiring a fully converged prior switch"
   caddy_active_config_contains "$CADDY_UPSTREAM_TO" \
@@ -1238,6 +1388,10 @@ if grep -qF "$CADDY_UPSTREAM_TO" "$CADDYFILE"; then
     || caddy_config_contains "$CADDY_CONFIG_PATH" "$CADDY_UPSTREAM_FROM"; then
     die "Caddy contains both old and target upstreams; refusing an ambiguous release"
   fi
+  route_contract_check_file "$CADDY_CONFIG_PATH" \
+    || die "startup Caddy image route contract failed; no safe release"
+  route_contract_check_active \
+    || die "active Caddy image route contract failed; no safe release"
 else
   grep -qF "$CADDY_UPSTREAM_FROM" "$CADDYFILE" \
     || die "$CADDY_UPSTREAM_FROM not found in $CADDYFILE"
@@ -1254,6 +1408,8 @@ else
   docker cp "$caddy_candidate" "$CADDY_CONTAINER:$container_release_caddy"
   docker exec "$CADDY_CONTAINER" caddy validate --config "$container_release_caddy" --adapter caddyfile \
     || die "Caddy candidate validation failed before any live mutation"
+  route_contract_check_file "$container_release_caddy" \
+    || die "Caddy candidate image route contract failed before any live mutation"
   publish_caddy_switch_transaction \
     || die "could not publish the Caddy upstream recovery transaction"
 
@@ -1275,6 +1431,10 @@ else
     || caddy_config_contains "$CADDY_CONFIG_PATH" "$CADDY_UPSTREAM_FROM"; then
     die "Caddy retained the old upstream; automatic restoration will run"
   fi
+  route_contract_check_file "$CADDY_CONFIG_PATH" \
+    || die "startup Caddy image route contract failed; automatic restoration will run"
+  route_contract_check_active \
+    || die "active Caddy image route contract failed; automatic restoration will run"
   [ "$(file_sha "$CADDYFILE")" = "$switch_after_sha" ] \
     || die "host Caddyfile hash drifted after reload; automatic restoration will run"
   commit_caddy_switch_transaction \

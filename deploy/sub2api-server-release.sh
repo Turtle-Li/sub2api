@@ -45,6 +45,8 @@ BUILD_GO_MEMORY_LIMIT="${SUB2API_RELEASE_BUILD_GO_MEMORY_LIMIT:-768MiB}"
 # sub2api:prebuilt-<commit>) and the server never invokes docker build.
 PREBUILT_IMAGE_PREFIX="${SUB2API_RELEASE_PREBUILT_IMAGE_PREFIX:-}"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
+IMAGE_ROUTE_CONTRACT_VERIFIER="${SUB2API_IMAGE_ROUTE_CONTRACT_VERIFIER:-${APP_DIR}/scripts/verify_image_route_contract.py}"
+IMAGE_ROUTE_API_HOST="${SUB2API_IMAGE_ROUTE_API_HOST:-api.turtleligpt.com}"
 CADDY_TRANSACTION_PATH="${APP_DIR}/.gcp-tw-caddy-transaction.env"
 CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
 CADDY_SWITCH_TRANSACTION_PATH="${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
@@ -57,6 +59,13 @@ DRAIN_MAX_RUNTIME_SECONDS="${SUB2API_RELEASE_DRAIN_MAX_RUNTIME_SECONDS:-0}"
 DRAIN_CADDY_CONFIG_PATH="${SUB2API_RELEASE_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
 NODE_STATE_SCRIPT="${SUB2API_NODE_STATE_SCRIPT:-${APP_DIR}/scripts/sub2api-node-state.sh}"
 DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
+# Production can require a real authenticated request against the candidate
+# slot before the Caddy switch. Keep the key in a root-only runtime file; the
+# release helper never receives the key value itself.
+REAL_REQUEST_PROBE_ENABLED="${SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED:-false}"
+REAL_REQUEST_PROBE_SCRIPT="${SUB2API_RELEASE_REAL_REQUEST_PROBE_SCRIPT:-${APP_DIR}/scripts/sub2api-real-request-probe.sh}"
+REAL_REQUEST_PROBE_KEY_FILE="${SUB2API_RELEASE_REAL_REQUEST_PROBE_KEY_FILE:-${APP_DIR}/secrets/release-probe-api-key}"
+REAL_REQUEST_PROBE_MODEL="${SUB2API_RELEASE_REAL_REQUEST_PROBE_MODEL:-gpt-5.6-sol}"
 NODE_STATE_DIR="${SUB2API_NODE_STATE_DIR:-/var/lib/sub2api/runtime}"
 LOCAL_RELEASE_STATE_FILE_HOST="${SUB2API_LOCAL_RELEASE_STATE_FILE_HOST:-${NODE_STATE_DIR}/local-release.env}"
 # Keep an explicitly blank value invalid. An unset setting preserves the
@@ -174,8 +183,82 @@ run_blue_green() {
     SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE="$DEPENDENCY_MODE" \
     SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$EXTERNAL_RUNTIME_ENV_FILE" \
     SUB2API_EXTERNAL_CA_FILE="$EXTERNAL_CA_FILE" \
+    SUB2API_IMAGE_ROUTE_CONTRACT_VERIFIER="$IMAGE_ROUTE_CONTRACT_VERIFIER" \
+    SUB2API_IMAGE_ROUTE_API_HOST="$IMAGE_ROUTE_API_HOST" \
+    ALLOW_ISOLATED_OLD_CONTAINER=false \
+    SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY=false \
     SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="$FIXED_EGRESS_COMPATIBILITY_MODE" \
+    SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED="$REAL_REQUEST_PROBE_ENABLED" \
+    SUB2API_RELEASE_REAL_REQUEST_PROBE_SCRIPT="$REAL_REQUEST_PROBE_SCRIPT" \
+    SUB2API_RELEASE_REAL_REQUEST_PROBE_KEY_FILE="$REAL_REQUEST_PROBE_KEY_FILE" \
+    SUB2API_RELEASE_REAL_REQUEST_PROBE_MODEL="$REAL_REQUEST_PROBE_MODEL" \
     "$@"
+}
+
+image_route_verifier_is_safe() {
+  [ -f "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    && [ ! -L "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    && [ -x "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    || return 1
+  [ "$(id -u)" -ne 0 ] \
+    || [ "$(stat -c '%u:%g:%a' "$IMAGE_ROUTE_CONTRACT_VERIFIER")" = '0:0:750' ]
+}
+
+require_image_route_verifier() {
+  image_route_verifier_is_safe \
+    || {
+      log "ERROR: image route contract verifier is missing or unsafe: $IMAGE_ROUTE_CONTRACT_VERIFIER" >&2
+      return 1
+    }
+}
+
+verify_image_route_contract_json() {
+  local config_json="$1"
+  require_image_route_verifier \
+    || {
+      return 1
+    }
+  printf '%s\n' "$config_json" \
+    | "$IMAGE_ROUTE_CONTRACT_VERIFIER" --host "$IMAGE_ROUTE_API_HOST" >/dev/null \
+    || {
+      log "ERROR: Caddy image route contract failed for the supplied JSON" >&2
+      return 1
+    }
+}
+
+verify_image_route_contract_startup() {
+  require_image_route_verifier || return 1
+  docker exec "$CADDY_CONTAINER" caddy adapt \
+    --config "$DRAIN_CADDY_CONFIG_PATH" --adapter caddyfile \
+    | "$IMAGE_ROUTE_CONTRACT_VERIFIER" --host "$IMAGE_ROUTE_API_HOST" >/dev/null \
+    || {
+      log "ERROR: startup Caddy image route contract failed" >&2
+      return 1
+    }
+}
+
+verify_image_route_contract_active() {
+  require_image_route_verifier || return 1
+  docker exec "$CADDY_CONTAINER" sh -c \
+    'wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/' \
+    | "$IMAGE_ROUTE_CONTRACT_VERIFIER" --host "$IMAGE_ROUTE_API_HOST" >/dev/null \
+    || {
+      log "ERROR: active Caddy image route contract failed" >&2
+      return 1
+    }
+}
+
+verify_image_route_contract_views() {
+  verify_image_route_contract_startup && verify_image_route_contract_active
+}
+
+warn_image_route_contract_views() {
+  if ! verify_image_route_contract_views; then
+    # Rollback restores the last known serving generation. A route-contract
+    # warning must remain visible, but it cannot turn a successful restoration
+    # into a reported rollback failure.
+    log "WARNING: Caddy rolled back but the image route contract could not be verified; continuing with the restored generation" >&2
+  fi
 }
 
 for command_name in docker curl flock grep awk perl systemd-run id mkdir stat; do
@@ -195,6 +278,7 @@ case "$PREBUILT_IMAGE_PREFIX" in
 esac
 require_bool SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER "$ALLOW_PREEXISTING_DRAINING_CONTAINER"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
+require_bool SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED "$REAL_REQUEST_PROBE_ENABLED"
 case "$RELEASE_BACKGROUND_MODE" in
   activate|preserve-standby) ;;
   *) die "SUB2API_RELEASE_BACKGROUND_MODE must be activate or preserve-standby" ;;
@@ -205,6 +289,22 @@ case "$FIXED_EGRESS_COMPATIBILITY_MODE" in
 esac
 [ "$RELEASE_BACKGROUND_MODE" != preserve-standby ] || [ "$DUAL_NODE_RUNTIME_ENABLED" = true ] \
   || die "SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby requires SUB2API_DUAL_NODE_RUNTIME_ENABLED=true"
+if [ "$REAL_REQUEST_PROBE_ENABLED" = true ]; then
+  [ -f "$REAL_REQUEST_PROBE_SCRIPT" ] && [ ! -L "$REAL_REQUEST_PROBE_SCRIPT" ] \
+    || die "real request probe script is missing or is a symlink: $REAL_REQUEST_PROBE_SCRIPT"
+  [ "$(realpath -e -- "$REAL_REQUEST_PROBE_SCRIPT")" = "$REAL_REQUEST_PROBE_SCRIPT" ] \
+    || die "real request probe script must be canonical: $REAL_REQUEST_PROBE_SCRIPT"
+  [ -x "$REAL_REQUEST_PROBE_SCRIPT" ] \
+    || die "real request probe script is not executable: $REAL_REQUEST_PROBE_SCRIPT"
+  [ "$(stat -c '%u:%g:%a' "$REAL_REQUEST_PROBE_SCRIPT")" = '0:0:750' ] \
+    || die "real request probe script must be root-owned mode 0750"
+  [ -f "$REAL_REQUEST_PROBE_KEY_FILE" ] && [ ! -L "$REAL_REQUEST_PROBE_KEY_FILE" ] \
+    || die "real request probe key file is missing or is a symlink: $REAL_REQUEST_PROBE_KEY_FILE"
+  [ "$(realpath -e -- "$REAL_REQUEST_PROBE_KEY_FILE")" = "$REAL_REQUEST_PROBE_KEY_FILE" ] \
+    || die "real request probe key file must be canonical: $REAL_REQUEST_PROBE_KEY_FILE"
+  [ "$(stat -c '%u:%g:%a' "$REAL_REQUEST_PROBE_KEY_FILE")" = '0:0:600' ] \
+    || die "real request probe key file must be root-owned mode 0600"
+fi
 validate_health_resolve "$PUBLIC_HEALTH_RESOLVE" "$PUBLIC_HEALTH_URL"
 require_positive_integer SUB2API_RELEASE_DRAIN_INTERVAL_SECONDS "$DRAIN_INTERVAL_SECONDS"
 require_positive_integer SUB2API_RELEASE_DRAIN_ACTIVE_WINDOW_SECONDS "$DRAIN_ACTIVE_WINDOW_SECONDS"
@@ -258,6 +358,11 @@ if [ "$PREBUILT_MODE" != "true" ]; then
 fi
 [ -x "$BLUE_GREEN_SCRIPT" ] || die "blue-green script is missing or not executable"
 [ -x "$DRAIN_MONITOR_SCRIPT" ] || die "drain monitor is missing or not executable: $DRAIN_MONITOR_SCRIPT"
+require_image_route_verifier \
+  || die "image route contract verifier is missing or unsafe: $IMAGE_ROUTE_CONTRACT_VERIFIER"
+case "$IMAGE_ROUTE_API_HOST" in
+  ''|*[!A-Za-z0-9.-]*|.*|*..*|*.) die "SUB2API_IMAGE_ROUTE_API_HOST must be a simple DNS name" ;;
+esac
 [ "$DUAL_NODE_RUNTIME_ENABLED" != true ] || [ -x "$NODE_STATE_SCRIPT" ] \
   || die "node state helper is missing or not executable: $NODE_STATE_SCRIPT"
 
@@ -343,6 +448,9 @@ OLD_RUNNING="$(docker inspect "$OLD_CONTAINER" --format '{{.State.Running}}' 2>/
 OLD_HEALTH="$(docker inspect "$OLD_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)"
 [ "$OLD_RUNNING" = "true" ] || die "active container is not running: $OLD_CONTAINER"
 [ "$OLD_HEALTH" = "healthy" ] || die "active container is not healthy: $OLD_CONTAINER ($OLD_HEALTH)"
+if ! verify_image_route_contract_views; then
+  die "current Caddy image route contract is invalid; refusing to start a release"
+fi
 
 caddy_config_points_uniquely_to_old() {
   local caddy_config="$1"
@@ -538,8 +646,10 @@ rollback() {
     RUN_BACKUP=false \
     REMOVE_EXISTING_NEW_CONTAINER=false \
     ALLOW_ISOLATED_OLD_CONTAINER="$rollback_allow_isolated" \
+    SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY=true \
     SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=preserve \
     SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="$OLD_CONTAINER" \
+    SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=false \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
     bash "$BLUE_GREEN_SCRIPT" >>"${LOG_DIR}/rollback.log" 2>&1 || {
       tail -100 "${LOG_DIR}/rollback.log" >&2 || true
@@ -550,6 +660,7 @@ rollback() {
     log "ERROR: Caddy rolled back but node runtime state could not be restored" >&2
     return 1
   fi
+  warn_image_route_contract_views
   log "Rollback completed"
 }
 
@@ -632,6 +743,13 @@ if printf '%s' "$active_config" | grep -qF "$OLD_UPSTREAM"; then
     cleanup_failed_inactive_target
   fi
   die "active Caddy config still contains old upstream $OLD_UPSTREAM"
+fi
+if ! verify_image_route_contract_startup \
+  || ! verify_image_route_contract_json "$active_config"; then
+  if rollback; then
+    cleanup_failed_inactive_target
+  fi
+  die "Caddy image route contract failed after switch"
 fi
 
 # Both release modes keep the candidate fenced during verification. Ordinary

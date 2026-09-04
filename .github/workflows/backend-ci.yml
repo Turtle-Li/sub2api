@@ -34,6 +34,8 @@ jobs:
           /bin/bash -n deploy/install-github-deploy-trigger.sh
           /bin/bash -n deploy/sub2api-server-release.sh
           /bin/bash -n deploy/sub2api-blue-green-release.sh
+          /bin/bash -n deploy/sub2api-real-request-probe.sh
+          /bin/bash deploy/tests/real-request-probe-test.sh
           /bin/bash deploy/tests/blue-green-external-runtime-mock-test.sh
           /bin/bash -n deploy/sub2api-unified-payment-config.sh
           /bin/bash deploy/tests/unified-payment-config-test.sh
@@ -52,6 +54,8 @@ jobs:
           /bin/sh deploy/tests/docker-compose-gateway-env-test.sh
           /bin/sh deploy/tests/docker-runtime-resources-test.sh
           /bin/sh deploy/test-caddyfile-cache.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v deploy.tests.test_verify_image_route_contract
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v deploy.tests.test_gateway_caddy_route_drift
           /bin/bash deploy/gcp-taiwan-line/tests/transport-config-test.sh
           shellcheck \
             deploy/gcp-taiwan-line/azure-caddy-listeners.sh \

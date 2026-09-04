@@ -787,8 +787,10 @@ for file in \
   deploy/sub2api-autodeploy.sh \
   deploy/sub2api-github-image-release.sh \
   deploy/sub2api-server-release.sh \
+  deploy/sub2api-real-request-probe.sh \
   deploy/sub2api-drain-monitor.sh \
   deploy/sub2api-maintenance-lock.sh \
+  deploy/verify_image_route_contract.py \
   deploy/sub2api-runtime-guard.sh \
   deploy/sub2api-github-deploy-trigger.sh \
   deploy/sub2api-cert-receiver.sh \
@@ -808,6 +810,7 @@ done
 bash -n "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-real-request-probe.sh"
 [ "$INSTALL_BLUE_GREEN_HELPER" != true ] \
   || bash -n "${SOURCE_ROOT}/deploy/sub2api-blue-green-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh"
@@ -944,6 +947,10 @@ else
     printf 'SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=%s\n' 'false'
     printf 'SUB2API_RELEASE_BACKGROUND_MODE=%s\n' 'activate'
     printf 'SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=%s\n' 'preserve'
+    printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=%s\n' 'false'
+    printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_SCRIPT=%s\n' "$APP_DIR/scripts/sub2api-real-request-probe.sh"
+    printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_KEY_FILE=%s\n' "$APP_DIR/secrets/release-probe-api-key"
+    printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_MODEL=%s\n' 'gpt-5.6-sol'
     printf 'SUB2API_DUAL_NODE_RUNTIME_ENABLED=%s\n' "$DUAL_NODE_RUNTIME_ENABLED"
   } >"$config_temp"
   install -D -m 600 "$config_temp" "$CONFIG_FILE"
@@ -957,8 +964,12 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh" \
   "${SCRIPT_DIR}/sub2api-github-image-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-real-request-probe.sh" \
+  "${SCRIPT_DIR}/sub2api-real-request-probe.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-maintenance-lock.sh" \
   "${SCRIPT_DIR}/sub2api-maintenance-lock.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/verify_image_route_contract.py" \
+  "${SCRIPT_DIR}/verify_image_route_contract.py"
 if [ "$INSTALL_BLUE_GREEN_HELPER" = true ]; then
   helper_backup_dir="${APP_DIR}/backups/blue-green-helper-$(date -u +%Y%m%dT%H%M%SZ)"
   install -d -m 700 "$helper_backup_dir"
