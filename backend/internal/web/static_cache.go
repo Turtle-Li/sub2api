@@ -12,6 +12,15 @@ import (
 // immutable caching without relying on a reverse proxy to classify paths.
 const staticAssetsCacheControl = "public, max-age=31536000, immutable"
 
+// isEmbeddedFrontendAssetPath reports whether a URL belongs to the frontend
+// asset namespace. Missing files in this namespace must stay 404s instead of
+// being rewritten to the SPA entrypoint, otherwise stale chunk URLs receive
+// HTML with JavaScript cache headers.
+func isEmbeddedFrontendAssetPath(cleanPath string) bool {
+	cleanPath = strings.TrimPrefix(cleanPath, "/")
+	return cleanPath == "assets" || strings.HasPrefix(cleanPath, "assets/")
+}
+
 // isFingerprintedEmbeddedAssetPath reports whether a cleaned URL path refers to
 // a Vite asset whose filename contains the default eight-character build hash.
 func isFingerprintedEmbeddedAssetPath(cleanPath string) bool {

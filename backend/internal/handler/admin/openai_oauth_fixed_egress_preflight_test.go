@@ -64,7 +64,7 @@ func invalidFixedEgressHandlerProxy(id int64) *service.Proxy {
 		Protocol:     "socks5h",
 		Host:         "not-a-tailnet-ip.example",
 		Port:         1080,
-		FallbackMode: service.FallbackModeNone,
+		FallbackMode: service.FallbackModeDirect,
 	}
 }
 

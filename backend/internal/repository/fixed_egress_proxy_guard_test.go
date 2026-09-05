@@ -359,7 +359,7 @@ func TestCompareAndSwapOpenAIOAuthProxyValidatesPersistedProxyShape(t *testing.T
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "status", "protocol", "host", "port", "username", "password", "expires_at", "fallback_mode", "backup_proxy_id",
-		}).AddRow(7, service.StatusActive, "socks5h", "proxy.example", 1080, "", "", nil, service.FallbackModeNone, nil))
+		}).AddRow(7, service.StatusActive, "socks5h", "proxy.example", 1080, "", "", nil, service.FallbackModeDirect, nil))
 	mock.ExpectRollback()
 
 	repo := newAccountRepositoryWithSQL(client, nil, nil)

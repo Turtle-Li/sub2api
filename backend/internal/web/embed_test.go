@@ -652,11 +652,11 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		// Request for existing static file
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Contains(t, w.Header().Get("Content-Type"), "image/svg+xml")
 		assert.Empty(t, w.Header().Get("Cache-Control"))
 
 		entries, err := fs.ReadDir(server.distFS, "assets")
@@ -678,6 +678,43 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, assetWriter.Code)
 		assert.Equal(t, staticAssetsCacheControl, assetWriter.Header().Get("Cache-Control"))
 	})
+}
+
+func TestFrontendServer_MissingAssetDoesNotFallbackToHTML(t *testing.T) {
+	provider := &mockSettingsProvider{
+		settings: map[string]string{"test": "value"},
+	}
+	server, err := NewFrontendServer(provider)
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.Use(server.Middleware())
+
+	missingAsset := "/assets/__sub2api_missing_subscription_chunk__.js"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, missingAsset, nil))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
+	assert.Empty(t, w.Header().Get("Cache-Control"))
+	assert.NotContains(t, strings.ToLower(w.Body.String()), "<!doctype html>")
+
+	spaWriter := httptest.NewRecorder()
+	router.ServeHTTP(spaWriter, httptest.NewRequest(http.MethodGet, "/subscriptions", nil))
+	assert.Equal(t, http.StatusOK, spaWriter.Code)
+	assert.Contains(t, strings.ToLower(spaWriter.Header().Get("Content-Type")), "text/html")
+}
+
+func TestLegacyEmbeddedFrontend_MissingAssetDoesNotFallbackToHTML(t *testing.T) {
+	router := gin.New()
+	router.Use(ServeEmbeddedFrontend())
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/assets/__sub2api_missing_subscription_chunk__.js", nil))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
+	assert.Empty(t, w.Header().Get("Cache-Control"))
 }
 
 func TestEmbeddedFrontendBypassesBareVideoAPIRoutes(t *testing.T) {
@@ -737,11 +774,11 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 		router.Use(middleware)
 
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Contains(t, w.Header().Get("Content-Type"), "image/svg+xml")
 	})
 
 	t.Run("serves_index_html_for_root", func(t *testing.T) {

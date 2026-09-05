@@ -42,6 +42,32 @@ func TestIsFingerprintedEmbeddedAssetPath(t *testing.T) {
 	}
 }
 
+func TestIsEmbeddedFrontendAssetPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "asset_file", path: "assets/index-AbCd1234.js", want: true},
+		{name: "nested_asset_file", path: "/assets/vendor/chunk.js", want: true},
+		{name: "asset_directory", path: "assets", want: true},
+		{name: "asset_directory_with_slash", path: "/assets/", want: true},
+		{name: "spa_route", path: "subscriptions", want: false},
+		{name: "similar_prefix", path: "assets-backup/chunk.js", want: false},
+		{name: "empty", path: "", want: false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, isEmbeddedFrontendAssetPath(tc.path))
+		})
+	}
+}
+
 func TestApplyStaticAssetCacheHeaders(t *testing.T) {
 	t.Parallel()
 

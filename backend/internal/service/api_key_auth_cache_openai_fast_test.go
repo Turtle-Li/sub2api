@@ -32,5 +32,5 @@ func TestAPIKeyAuthSnapshotGroupForceOpenAIFastRoundtrip(t *testing.T) {
 	require.True(t, materialized.Group.Hydrated)
 	require.True(t, materialized.Group.ForceOpenAIFast)
 	require.True(t, materialized.Group.FreeOpenAIFast)
-	require.Equal(t, 23, cached.Snapshot.Version, "merged auth snapshots must invalidate both local v20 and upstream v22 entries")
+	require.Equal(t, apiKeyAuthSnapshotVersion, cached.Snapshot.Version, "merged auth snapshots must invalidate older local and upstream entries")
 }
