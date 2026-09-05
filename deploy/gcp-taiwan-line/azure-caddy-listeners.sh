@@ -17,6 +17,15 @@ phase="${1:-}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 renderer="${AZURE_CADDY_RENDERER:-${script_dir}/render-azure-caddy-listeners.py}"
 json_verifier="${AZURE_CADDY_JSON_VERIFIER:-${script_dir}/verify-azure-caddy-json.py}"
+if [[ -n "${AZURE_IMAGE_ROUTE_VERIFIER:-}" ]]; then
+    image_route_verifier="$AZURE_IMAGE_ROUTE_VERIFIER"
+elif [[ -x "${script_dir}/verify_image_route_contract.py" ]]; then
+    image_route_verifier="${script_dir}/verify_image_route_contract.py"
+elif [[ -x "${script_dir}/../verify_image_route_contract.py" ]]; then
+    image_route_verifier="${script_dir}/../verify_image_route_contract.py"
+else
+    image_route_verifier="${script_dir}/verify_image_route_contract.py"
+fi
 lock_helper="${SUB2API_MAINTENANCE_LOCK_HELPER:-/opt/sub2api/scripts/sub2api-maintenance-lock.sh}"
 
 die() {
@@ -71,6 +80,12 @@ assert_json_verifier() {
         || die "Caddy JSON verifier must be root:root mode 0750: $json_verifier"
 }
 
+assert_image_route_verifier() {
+    assert_regular_file "$image_route_verifier"
+    [[ "$(stat -c '%u:%g:%a' "$image_route_verifier")" == '0:0:750' ]] \
+        || die "image route verifier must be root:root mode 0750: $image_route_verifier"
+}
+
 assert_lock_helper() {
     assert_regular_file "$lock_helper"
     [[ "$(stat -c '%u:%g:%a' "$lock_helper")" == '0:0:750' ]] \
@@ -87,7 +102,13 @@ assert_lock_helper() {
 }
 
 assert_runtime_contract() {
+    local require_route_verifier="${1:-true}"
     local mount caddy_version
+    case "$require_route_verifier" in
+        true) assert_image_route_verifier ;;
+        false) ;;
+        *) die "invalid image route verifier requirement: $require_route_verifier" ;;
+    esac
     assert_regular_file "$CADDYFILE"
     assert_root_owned_mode "$CADDYFILE"
     docker inspect "$CADDY_CONTAINER" >/dev/null 2>&1 \
@@ -344,7 +365,9 @@ stage() {
 
 rollback() {
     local observed_sha
-    assert_runtime_contract
+    # Recovery must remain possible if the newly introduced companion verifier
+    # was not installed yet. Core Caddy and transaction invariants stay strict.
+    assert_runtime_contract false
     load_state
     observed_sha="$(file_sha "$CADDYFILE")"
     if [[ "$observed_sha" != "$before_sha" && "$observed_sha" != "$after_sha" ]]; then

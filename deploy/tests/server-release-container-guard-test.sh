@@ -16,6 +16,7 @@ NODE_STATE_CALLS="${TEST_ROOT}/node-state-calls.log"
 CURL_CALLS="${TEST_ROOT}/curl-calls.log"
 BLUE_GREEN_ENV_LOG="${TEST_ROOT}/blue-green-env.log"
 EVENT_LOG="${TEST_ROOT}/events.log"
+ROUTE_VERIFIER_CALLS="${TEST_ROOT}/route-verifier-calls.log"
 STARTUP_CADDY="${TEST_ROOT}/startup.Caddyfile"
 ACTIVE_CADDY="${TEST_ROOT}/active-caddy.json"
 LOCAL_TRANSACTION="${TEST_ROOT}/local-release.env"
@@ -70,6 +71,12 @@ printf 'reverse_proxy sub2api-green:8080\n' >"$STARTUP_CADDY"
 printf '{"upstream":"sub2api-green:8080"}\n' >"$ACTIVE_CADDY"
 : >"$EXTERNAL_RUNTIME_ENV_FILE"
 : >"$EXTERNAL_CA_FILE"
+cat >"${APP_DIR}/scripts/verify_image_route_contract.py" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '%s\n' "$*" >>"$FAKE_ROUTE_VERIFIER_CALLS"
+EOF
+chmod +x "${APP_DIR}/scripts/verify_image_route_contract.py"
 
 reset_caddy_views() {
   printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
@@ -92,12 +99,13 @@ if [ "${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}" = true ]; then
   exit 0
 fi
 if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
-  printf 'mode=%s old=%s new=%s backup=%s isolated_old=%s fixed_egress_compatibility=%s preserve_source=%s\n' \
+  printf 'mode=%s old=%s new=%s backup=%s isolated_old=%s route_contract_warn_only=%s fixed_egress_compatibility=%s preserve_source=%s\n' \
     "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
     "${OLD_CONTAINER:-}" \
     "${NEW_CONTAINER:-}" \
     "${RUN_BACKUP:-}" \
     "${ALLOW_ISOLATED_OLD_CONTAINER:-false}" \
+    "${SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY:-false}" \
     "${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-}" \
     "${SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
 fi
@@ -189,6 +197,9 @@ case "$command_name" in
     ;;
   exec)
     case "$*" in
+      *caddy\ adapt*)
+        printf '{}\n'
+        ;;
       *CADDY_CHECK_PATH=*)
         [ "${FAKE_STARTUP_CADDY_FAIL:-0}" != 1 ] || exit 61
         cat "$FAKE_STARTUP_CADDY"
@@ -294,6 +305,7 @@ run_release() {
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_ROUTE_VERIFIER_CALLS="$ROUTE_VERIFIER_CALLS" \
     FAKE_MARK_NEW_RUNNING="${FAKE_MARK_NEW_RUNNING:-0}" \
     FAKE_NEW_RUNNING_MARKER="$NEW_RUNNING_MARKER" \
     FAKE_NODE_STATE_BACKGROUND="${FAKE_NODE_STATE_BACKGROUND:-active}" \
@@ -336,6 +348,7 @@ run_github_prebuilt_release() {
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_ROUTE_VERIFIER_CALLS="$ROUTE_VERIFIER_CALLS" \
     FAKE_MARK_NEW_RUNNING="${FAKE_MARK_NEW_RUNNING:-0}" \
     FAKE_NEW_RUNNING_MARKER="$NEW_RUNNING_MARKER" \
     FAKE_NODE_STATE_BACKGROUND="${FAKE_NODE_STATE_BACKGROUND:-active}" \
@@ -372,6 +385,7 @@ run_external_github_prebuilt_release() {
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_ROUTE_VERIFIER_CALLS="$ROUTE_VERIFIER_CALLS" \
     FAKE_MARK_NEW_RUNNING="${FAKE_MARK_NEW_RUNNING:-0}" \
     FAKE_NEW_RUNNING_MARKER="$NEW_RUNNING_MARKER" \
     SUB2API_APP_DIR="$APP_DIR" \
@@ -406,6 +420,7 @@ reset_release_case() {
   : >"$CURL_CALLS"
   : >"$BLUE_GREEN_ENV_LOG"
   : >"$EVENT_LOG"
+  : >"$ROUTE_VERIFIER_CALLS"
 }
 
 maintenance_output="${TEST_ROOT}/maintenance-lock.log"
@@ -577,7 +592,9 @@ assert_contains "$BLUE_GREEN_ENV_LOG" \
 assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=local old=sub2api-blue new=sub2api-green backup=false'
 assert_contains "$BLUE_GREEN_ENV_LOG" \
-  'mode=local old=sub2api-blue new=sub2api-green backup=false isolated_old=true fixed_egress_compatibility=preserve preserve_source=sub2api-green'
+  'mode=local old=sub2api-blue new=sub2api-green backup=false isolated_old=true route_contract_warn_only=true fixed_egress_compatibility=preserve preserve_source=sub2api-green'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'route_contract_warn_only=true fixed_egress_compatibility=preserve preserve_source=sub2api-green'
 
 # If the failed new generation is still running, rollback must retain the
 # normal blue-green source contract rather than forcing isolated-old mode.
@@ -589,7 +606,9 @@ if ALLOW_DRAINING=true FAKE_UPDATE_CADDY=1 FAKE_MARK_NEW_RUNNING=1 \
 fi
 assert_contains "$running_source_rollback_output" 'Rollback completed'
 assert_contains "$BLUE_GREEN_ENV_LOG" \
-  'mode=local old=sub2api-blue new=sub2api-green backup=false isolated_old=false fixed_egress_compatibility=preserve preserve_source=sub2api-green'
+  'mode=local old=sub2api-blue new=sub2api-green backup=false isolated_old=false route_contract_warn_only=true fixed_egress_compatibility=preserve preserve_source=sub2api-green'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'isolated_old=false route_contract_warn_only=true fixed_egress_compatibility=preserve preserve_source=sub2api-green'
 
 reset_release_case
 successful_release_output="${TEST_ROOT}/successful-release.log"
@@ -607,6 +626,9 @@ assert_contains "$BLUE_GREEN_ENV_LOG" 'fixed_egress_compatibility=true'
 if grep -Fq -- 'abort-local' "$NODE_STATE_CALLS"; then
   fail 'successful release invoked node-state abort'
 fi
+route_verifier_calls="$(wc -l <"$ROUTE_VERIFIER_CALLS" | tr -d '[:space:]')"
+[ "$route_verifier_calls" -ge 4 ] \
+  || fail "successful release did not verify startup and active Caddy image routes (calls=$route_verifier_calls)"
 
 # The release coordinator owns the local/external backup choice, rather than
 # allowing the blue-green helper to infer it from an ambient environment.

@@ -393,6 +393,11 @@ new_case() {
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/app/Caddyfile"
   printf '{"upstream":"sub2api-green:8080"}\n' >"${CASE_ROOT}/active-config.json"
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/startup-Caddyfile"
+  cat >"${CASE_ROOT}/app/scripts/verify_image_route_contract.py" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+EOF
+  chmod +x "${CASE_ROOT}/app/scripts/verify_image_route_contract.py"
 
 cat >"${CASE_ROOT}/app/scripts/sub2api-blue-green-release.sh" <<'EOF'
 #!/usr/bin/env bash

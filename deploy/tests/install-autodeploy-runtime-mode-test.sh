@@ -324,6 +324,8 @@ assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_BACKGROUND_MODE=activate'
 assert_contains "$CONFIG_FILE" "SUB2API_MAINTENANCE_LOCK_FILE=${MAINTENANCE_LOCK_FILE}"
 [ -x "${APP_DIR}/scripts/sub2api-maintenance-lock.sh" ] \
   || fail 'script-directory maintenance lock helper was not installed'
+[ -x "${APP_DIR}/scripts/verify_image_route_contract.py" ] \
+  || fail 'image route contract verifier was not installed beside release scripts'
 [ -x "${TEST_ROOT}/libexec/sub2api-maintenance-lock.sh" ] \
   || fail 'runtime-guard sibling maintenance lock helper was not installed'
 [ -d "${MAINTENANCE_LOCK_FILE%/*}" ] \

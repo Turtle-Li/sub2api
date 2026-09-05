@@ -224,8 +224,41 @@ grep -Fqx '    timeout client-fin 1800s' "${line_dir}/haproxy.cfg" \
     || fail 'HAProxy must not truncate half-closed long streams at 30 seconds'
 grep -Fq 'pgrep -u haproxy -x haproxy' "${line_dir}/verify-transport.sh" \
     || fail 'GCP verifier does not prove the HAProxy worker dropped privileges'
-[[ "$(grep -Fc -- "--noproxy '*'" "${line_dir}/verify-transport.sh")" -eq 3 ]] \
+# The GCP VM is a TCP-only HAProxy hop and does not receive the Caddy route
+# verifier artifact; only the Azure Caddy branch may require that companion.
+gcp_verify_block="$(sed -n '/^verify_gcp()/,/^assert_azure_runtime_contract()/p' "${line_dir}/verify-transport.sh")"
+if printf '%s\n' "$gcp_verify_block" | grep -Fq 'assert_image_route_verifier'; then
+    fail 'GCP transport verification incorrectly requires the Caddy route verifier'
+fi
+[[ "$(grep -Fc -- "--noproxy '*'" "${line_dir}/verify-transport.sh")" -ge 5 ]] \
     || fail 'transport HTTP probes do not consistently bypass ambient proxy settings'
+image_probe_block="$(sed -n '/^assert_image_routes()/,/^}/p' "${line_dir}/verify-transport.sh")"
+for image_path in \
+    /images/generations \
+    /images/generations/async \
+    /images/edits \
+    /images/edits/async \
+    /v1/images/generations \
+    /v1/images/generations/async \
+    /v1/images/edits \
+    /v1/images/edits/async \
+    /v1/images/batches \
+    /images/tasks/route-contract-probe \
+    /v1/images/tasks/route-contract-probe; do
+    printf '%s\n' "$image_probe_block" | awk -v wanted="$image_path" '
+        {
+            for (field = 1; field <= NF; field++) {
+                if ($field == wanted) found = 1
+            }
+        }
+        END { exit(found ? 0 : 1) }
+    ' \
+        || fail "transport verifier is missing image route probe: $image_path"
+done
+# shellcheck disable=SC2016 # The assertion intentionally matches literal source text.
+grep -Fq 'expect_image_route_status 401 "$ip" GET /v1/images/batches' \
+    "${line_dir}/verify-transport.sh" \
+    || fail 'transport verifier is missing the versioned Batch Image list probe'
 for metadata_bootstrap in gcp-startup-bootstrap.sh gcp-update-bootstrap.sh; do
     grep -Fq -- "--noproxy '*'" "${line_dir}/${metadata_bootstrap}" \
         || fail "${metadata_bootstrap} can send metadata requests through an ambient proxy"
@@ -272,6 +305,14 @@ copy_remove_line="$(awk -v start="$copy_failure_line" \
 grep -Fq 'matches neither transaction endpoint; restoring BEFORE_SHA' \
     "${line_dir}/azure-caddy-listeners.sh" \
     || fail 'Azure rollback does not surface a live-state drift warning'
+grep -Fq 'assert_runtime_contract false' "${line_dir}/azure-caddy-listeners.sh" \
+    || fail 'Azure rollback remains blocked by the optional image route verifier'
+grep -Fq 'route-contract warning mode is reserved for rollback/recovery' \
+    "${line_dir}/../sub2api-blue-green-release.sh" \
+    || fail 'blue-green route warning mode is not fenced to recovery'
+grep -Fq 'SUB2API_IMAGE_ROUTE_API_HOST must be a simple DNS name' \
+    "${line_dir}/../sub2api-blue-green-release.sh" \
+    || fail 'blue-green image route verifier host is not validated'
 
 if grep -Fq 'os.replace(' "${line_dir}/../sub2api-blue-green-release.sh"; then
     fail 'blue-green Caddy updates must preserve the running file-bind inode'

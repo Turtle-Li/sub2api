@@ -111,3 +111,14 @@ classification_suggestion: project-local
 Detailed evidence and fail-closed defect disposition are recorded in
 `LIVE-VALIDATION-2026-09-02.md` and
 `REVIEW-DISPOSITION-2026-09-02.md`.
+
+## 2026-09-05 preparation checkpoint
+
+The current, non-authorizing readiness record is
+`PRE-CUTOVER-READINESS-2026-09-05.md`. It records the post-review hardening,
+the low-traffic canary order, and the remaining DNS gates. The 2026-09-02
+fingerprint and live rows above remain historical; because the shared image
+route verifier is now included in the effective-JSON fingerprint, T3 must be
+re-frozen from adapted and live JSON in the same maintenance window after the
+companion artifact is installed. No DNS, Caddy reload, application restart,
+or account/proxy mutation was performed for this checkpoint.

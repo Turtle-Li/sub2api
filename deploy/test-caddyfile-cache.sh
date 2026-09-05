@@ -3,7 +3,14 @@ set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 caddyfile="$repo_root/deploy/Caddyfile"
+external_caddyfile="$repo_root/deploy/Caddyfile.external-cert.example"
+route_verifier="$repo_root/deploy/verify_image_route_contract.py"
+if [ ! -x "$route_verifier" ]; then
+	echo "image route contract verifier must be an executable source artifact" >&2
+	exit 1
+fi
 active_config=$(sed 's/[[:space:]]*#.*$//' "$caddyfile")
+external_config=$(sed 's/[[:space:]]*#.*$//' "$external_caddyfile")
 normalized_config=$(printf '%s\n' "$active_config" | awk '
 	NF > 0 {
 		for (field = 1; field <= NF; field++) {
@@ -102,4 +109,54 @@ if [ "$actual_encode_block" != "$expected_encode_block" ]; then
 	exit 1
 fi
 
-echo "Caddyfile preserves backend cache policy, routing, SSE streaming, and scoped multimodal body limits"
+# The external-certificate template models the restricted production site. Keep
+# every application image alias in that explicit allowlist so a terminal edge
+# 404 cannot hide a route that the backend already registers.
+external_openai_line=$(printf '%s\n' "$external_config" | grep -E '^[[:space:]]*@openai_api[[:space:]]+path[[:space:]]' || true)
+[ -n "$external_openai_line" ] || {
+	echo "external-cert Caddy template must define an explicit OpenAI route allowlist" >&2
+	exit 1
+}
+external_has_path() {
+	path=$1
+	printf '%s\n' "$external_openai_line" | awk -v wanted="$path" '
+		{
+			for (field = 1; field <= NF; field++) {
+				if ($field == wanted) found = 1
+			}
+		}
+		END { exit(found ? 0 : 1) }
+	'
+}
+for required_path in \
+	'/v1/*' '/v1beta/*' '/responses' '/responses/*' '/alpha/search' \
+	'/models' '/messages/count_tokens' '/backend-api/codex/*' \
+	'/chat/completions' '/embeddings' \
+	'/images/generations' '/images/generations/*' \
+	'/images/edits' '/images/edits/*' '/images/tasks/*' \
+	'/videos' '/videos/*' '/tts' '/stt' \
+	'/custom-voices' '/custom-voices/*' '/realtime' \
+	'/web_search' '/x_search' '/antigravity/*' \
+	'/setup/status' '/api/event_logging/batch'; do
+	if ! external_has_path "$required_path"; then
+		echo "external-cert Caddy template is missing supported gateway path: $required_path" >&2
+		exit 1
+	fi
+done
+
+if ! printf '%s\n' "$external_config" | grep -Eq '^[[:space:]]*respond[[:space:]]+404[[:space:]]*$'; then
+	echo "external-cert Caddy template must keep a terminal unsupported-route response" >&2
+	exit 1
+fi
+
+if ! printf '%s\n' "$external_config" | grep -Eq '^[[:space:]]*@large_multimodal_request_body[[:space:]]+path[[:space:]].*/v1/images/batches([[:space:]]|$)'; then
+	echo "external-cert Caddy template must give the versioned Batch Image path the multimodal body budget" >&2
+	exit 1
+fi
+
+if ! printf '%s\n' "$external_config" | grep -Eq '^[[:space:]]*@standard_request_body[[:space:]]+not[[:space:]]+path[[:space:]].*/v1/images/batches([[:space:]]|$)'; then
+	echo "external-cert Caddy template standard-body matcher must exclude the versioned Batch Image path" >&2
+	exit 1
+fi
+
+echo "Caddyfile preserves backend cache policy, image aliases, routing, SSE streaming, and scoped multimodal body limits"

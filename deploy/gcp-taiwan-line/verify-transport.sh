@@ -17,6 +17,15 @@ mode="${1:-}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 renderer="${AZURE_CADDY_RENDERER:-${script_dir}/render-azure-caddy-listeners.py}"
 json_verifier="${AZURE_CADDY_JSON_VERIFIER:-${script_dir}/verify-azure-caddy-json.py}"
+if [[ -n "${AZURE_IMAGE_ROUTE_VERIFIER:-}" ]]; then
+    image_route_verifier="$AZURE_IMAGE_ROUTE_VERIFIER"
+elif [[ -x "${script_dir}/verify_image_route_contract.py" ]]; then
+    image_route_verifier="${script_dir}/verify_image_route_contract.py"
+elif [[ -x "${script_dir}/../verify_image_route_contract.py" ]]; then
+    image_route_verifier="${script_dir}/../verify_image_route_contract.py"
+else
+    image_route_verifier="${script_dir}/verify_image_route_contract.py"
+fi
 
 die() {
     printf 'verify-transport: %s\n' "$*" >&2
@@ -33,6 +42,13 @@ file_sha() {
 
 assert_root() {
     [[ "$(id -u)" -eq 0 ]] || die "must run as root for exact process/listener assertions"
+}
+
+assert_image_route_verifier() {
+    [[ -f "$image_route_verifier" && ! -L "$image_route_verifier" && -x "$image_route_verifier" ]] \
+        || die "missing executable image route verifier: $image_route_verifier"
+    [[ "$(stat -c '%u:%g:%a' "$image_route_verifier")" == '0:0:750' ]] \
+        || die "image route verifier must be root:root mode 0750: $image_route_verifier"
 }
 
 assert_debian_12() {
@@ -54,6 +70,60 @@ expect_status() {
         --resolve "${API_HOST}:443:${ip}" "https://${API_HOST}${path}")"
     [[ "$actual" == "$expected" ]] \
         || die "${ip}${path} returned HTTP ${actual}; expected ${expected}"
+}
+
+expect_image_route_status() {
+    local expected="$1"
+    local ip="$2"
+    local method="$3"
+    local path="$4"
+    local actual
+    if [[ "$method" == 'GET' ]]; then
+        actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --noproxy '*' \
+            --connect-timeout 10 --max-time 30 \
+            --resolve "${API_HOST}:443:${ip}" "https://${API_HOST}${path}")"
+    else
+        actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --noproxy '*' \
+            --connect-timeout 10 --max-time 30 \
+            --resolve "${API_HOST}:443:${ip}" \
+            -X "$method" -H 'Content-Type: application/json' --data-raw '{}' \
+            "https://${API_HOST}${path}")"
+    fi
+    if [[ "$actual" == "$expected" ]]; then
+        return 0
+    fi
+    # The application records missing/invalid credentials for its per-IP abuse
+    # limiter. Repeated read-only probes can therefore receive 429 after the
+    # route has already reached the application. Treat that specific response
+    # as reachability evidence, but keep it visible for the operator.
+    if [[ "$expected" == 401 && "$actual" == 429 ]]; then
+        printf 'verify-transport: %s%s (%s) returned HTTP 429; invalid-auth limiter is active, so the 401 probe is rate-limited\n' \
+            "$ip" "$path" "$method" >&2
+        return 0
+    fi
+    die "${ip}${path} (${method}) returned HTTP ${actual}; expected ${expected}"
+}
+
+assert_image_routes() {
+    local ip="$1"
+    local path
+    for path in \
+        /images/generations \
+        /images/generations/async \
+        /images/edits \
+        /images/edits/async \
+        /v1/images/generations \
+        /v1/images/generations/async \
+        /v1/images/edits \
+        /v1/images/edits/async \
+        /v1/images/batches; do
+        expect_image_route_status 401 "$ip" POST "$path"
+    done
+    expect_image_route_status 401 "$ip" GET /images/tasks/route-contract-probe
+    expect_image_route_status 401 "$ip" GET /v1/images/tasks/route-contract-probe
+    expect_image_route_status 401 "$ip" GET /v1/images/batches
 }
 
 expect_http_redirect() {
@@ -139,6 +209,9 @@ verify_gcp() {
         require_command "$command_name"
     done
     assert_root
+    # The GCP line is TCP-only and has no Caddy process or route JSON. Its
+    # end-to-end image probes below validate that HAProxy reaches the API;
+    # semantic Caddy checks belong to the Azure/old-origin Caddy owners.
     assert_debian_12
     actual_hostname="$(hostname -s)"
     [[ "$actual_hostname" == "$EXPECTED_GCP_HOSTNAME" ]] \
@@ -149,6 +222,7 @@ verify_gcp() {
     assert_gcp_listeners
     expect_status 200 127.0.0.1 /health
     expect_status 401 127.0.0.1 /v1/models
+    assert_image_routes 127.0.0.1
     printf 'GCP_TRANSPORT_VERIFY_PASS host=%s backend=%s https_proxy_v2=true http_proxy_v2=false\n' \
         "$actual_hostname" "$AZURE_IP"
 }
@@ -162,6 +236,7 @@ assert_azure_runtime_contract() {
         || die "missing renderer beside this verifier: $renderer"
     [[ -f "$json_verifier" && ! -L "$json_verifier" && -x "$json_verifier" ]] \
         || die "missing executable Caddy JSON verifier: $json_verifier"
+    assert_image_route_verifier
     docker inspect "$CADDY_CONTAINER" >/dev/null 2>&1 \
         || die "candidate Caddy container is missing: $CADDY_CONTAINER"
     [[ "$(docker inspect "$CADDY_CONTAINER" --format '{{.State.Running}}')" == 'true' ]] \
@@ -236,6 +311,7 @@ verify_azure() {
     # preserves ordinary TLS fallback while a forged PROXY preface is rejected.
     expect_status 200 "$AZURE_IP" /health
     expect_status 401 "$AZURE_IP" /v1/models
+    assert_image_routes "$AZURE_IP"
     assert_no_h3_advertisement "$AZURE_IP"
     assert_untrusted_proxy_header_rejected
     printf 'AZURE_TRANSPORT_VERIFY_PASS direct_fallback=true forged_proxy_rejected=true\n'
@@ -248,6 +324,7 @@ verify_canary() {
     done
     expect_status 200 "$GCP_IP" /health
     expect_status 401 "$GCP_IP" /v1/models
+    assert_image_routes "$GCP_IP"
     expect_http_redirect "$GCP_IP"
     assert_no_h3_advertisement "$GCP_IP"
     openssl s_client -connect "${GCP_IP}:443" -servername "$API_HOST" \

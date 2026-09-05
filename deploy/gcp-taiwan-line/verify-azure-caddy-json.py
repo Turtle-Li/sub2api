@@ -12,14 +12,27 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
-import re
+import pathlib
 import sys
 from typing import Any
+
+try:
+    from verify_image_route_contract import (
+        application_upstream_matches,
+        verify_document as verify_image_routes,
+    )
+except ModuleNotFoundError:
+    # Local source keeps the shared checker one directory above this candidate
+    # verifier. Installed candidate bundles place both files side by side.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+    from verify_image_route_contract import (
+        application_upstream_matches,
+        verify_document as verify_image_routes,
+    )
 
 
 API_HOST = "api.turtleligpt.com"
 EXPECTED_ALLOW = ["130.211.243.139/32"]
-UPSTREAM_RE = re.compile(r"^sub2api(?:-(?:blue|green))?:8080$")
 EXPECTED_REQUEST_HEADERS = {
     "delete": ["X-Real-IP", "CF-Connecting-IP"],
     "set": {"X-Forwarded-For": ["{http.request.remote.host}"]},
@@ -72,6 +85,10 @@ def route_is_proven_exclusive_of_api(route: dict[str, Any]) -> bool:
 
 
 def verify(document: dict[str, Any]) -> dict[str, Any]:
+    try:
+        image_routes = verify_image_routes(document, API_HOST, allow_localhost=False)
+    except (TypeError, ValueError) as exc:
+        fail(f"image route contract: {exc}")
     servers = (
         document.get("apps", {})
         .get("http", {})
@@ -157,7 +174,7 @@ def verify(document: dict[str, Any]) -> dict[str, Any]:
         for upstream in handler.get("upstreams", []):
             if isinstance(upstream, dict) and isinstance(upstream.get("dial"), str):
                 dial = upstream["dial"]
-                if not UPSTREAM_RE.fullmatch(dial):
+                if not application_upstream_matches(dial, allow_localhost=False):
                     fail(f"unexpected API upstream: {dial}")
                 upstreams.add(dial)
     if len(upstreams) != 1:
@@ -171,6 +188,7 @@ def verify(document: dict[str, Any]) -> dict[str, Any]:
         "api_host": API_HOST,
         "upstreams": sorted(upstreams),
         "client_ip_header_policy": "overwrite-xff-from-connection-peer-drop-xreal-cf",
+        "image_route_contract": image_routes,
     }
 
 

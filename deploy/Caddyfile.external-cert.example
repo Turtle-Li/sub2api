@@ -11,12 +11,15 @@
 # Node-local production template for centralized DNS-01 certificates. The
 # certificate directory must be mounted read-only into the Caddy container at
 # /etc/sub2api-certs. The receiver atomically updates the current symlink.
-api.turtleligpt.com {
-	tls /etc/sub2api-certs/current/fullchain.pem /etc/sub2api-certs/current/privkey.pem {
-		protocols tls1.2 tls1.3
-		ciphers TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-	}
-
+#
+# Keep this route policy explicit. This site is the API-only origin used by
+# gateway clients; the web/panel origin (including /api/v1/*) is configured in
+# its own site block and is intentionally not exposed by this transport host.
+# Codex clients configured with the Sub2API host use root aliases (for example
+# /images/generations), while OpenAI-compatible clients commonly use /v1
+# equivalents. A terminal 404 is intentional outside this allowlist; it must
+# not hide a supported gateway alias behind the edge.
+(sub2api_proxy_no_store) {
 	# Replace this example with the node's existing local upstream. Old-node
 	# blue/green names and the Azure candidate's fixed app name are expected to
 	# differ; certificate generation and edge policy must not.
@@ -24,6 +27,10 @@ api.turtleligpt.com {
 		lb_try_duration 5s
 		lb_try_interval 250ms
 		flush_interval -1
+		# This snippet is API-only: no-store intentionally covers health,
+		# internal probes, and every gateway response. Do not reuse it for UI
+		# or static assets, whose cache policy belongs to their own site block.
+		header_down Cache-Control "no-store"
 
 		header_up X-Real-IP {remote_host}
 		header_up X-Forwarded-For {remote_host}
@@ -42,6 +49,13 @@ api.turtleligpt.com {
 		fail_duration 30s
 		max_fails 3
 		unhealthy_status 500 502 503 504
+	}
+}
+
+api.turtleligpt.com {
+	tls /etc/sub2api-certs/current/fullchain.pem /etc/sub2api-certs/current/privkey.pem {
+		protocols tls1.2 tls1.3
+		ciphers TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
 	}
 
 	encode {
@@ -82,6 +96,24 @@ api.turtleligpt.com {
 		format json
 		level INFO
 	}
+
+	@health path /health
+	handle @health {
+		import sub2api_proxy_no_store
+	}
+	@internal_health path /internal/livez /internal/readyz
+	handle @internal_health {
+		import sub2api_proxy_no_store
+	}
+
+	# Keep this list aligned with RegisterGatewayRoutes. The broad versioned,
+	# Codex, Antigravity, video, and custom-voice prefixes cover their registered
+	# dynamic subroutes while the root aliases remain explicit.
+	@openai_api path /v1/* /v1beta/* /responses /responses/* /alpha/search /models /messages/count_tokens /backend-api/codex/* /chat/completions /embeddings /images/generations /images/generations/* /images/edits /images/edits/* /images/tasks/* /videos /videos/* /tts /stt /custom-voices /custom-voices/* /realtime /web_search /x_search /antigravity/* /setup/status /api/event_logging/batch
+	handle @openai_api {
+		import sub2api_proxy_no_store
+	}
+	respond 404
 
 	handle_errors {
 		respond "{err.status_code} {err.status_text}"
