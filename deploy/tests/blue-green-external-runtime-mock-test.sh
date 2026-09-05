@@ -21,6 +21,7 @@ HEALTH_TOKEN_FILE="$TEST_ROOT/health-token"
 CADDY_STARTUP_FILE="$TEST_ROOT/caddy-startup.Caddyfile"
 CADDY_ACTIVE_FILE="$TEST_ROOT/caddy-active.json"
 CADDY_CANDIDATE_FILE="$TEST_ROOT/caddy-candidate.Caddyfile"
+ROUTE_VERIFIER="$TEST_ROOT/verify-image-route-contract"
 NSENTER_FAIL_MARKER="$TEST_ROOT/nsenter-fail-once.marker"
 
 cleanup() {
@@ -84,6 +85,11 @@ printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_ACTIVE_FILE"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_DIR/scripts/backup.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_DIR/scripts/sub2api-drain-monitor.sh"
 chmod +x "$APP_DIR/scripts/backup.sh" "$APP_DIR/scripts/sub2api-drain-monitor.sh"
+cat >"$ROUTE_VERIFIER" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+EOF
+chmod +x "$ROUTE_VERIFIER"
 
 cat >"$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -241,6 +247,7 @@ case "$command_name" in
       caddy)
         case "${2:-}" in
           validate) exit 0 ;;
+          adapt) printf '{}\n' ;;
           reload)
             cp "$FAKE_CADDY_CANDIDATE_FILE" "$FAKE_CADDY_ACTIVE_FILE"
             exit 0
@@ -249,7 +256,9 @@ case "$command_name" in
         esac
         ;;
       sh)
-        if [ -n "${CADDY_CHECK_PATH:-}" ]; then
+        if [ -z "${CADDY_CHECK_TEXT:-}" ] && [[ "$*" == *2019/config* ]]; then
+          cat "$FAKE_CADDY_ACTIVE_FILE"
+        elif [ -n "${CADDY_CHECK_PATH:-}" ]; then
           grep -qF "$CADDY_CHECK_TEXT" "$FAKE_CADDY_STARTUP_FILE"
         else
           grep -qF "$CADDY_CHECK_TEXT" "$FAKE_CADDY_ACTIVE_FILE"
@@ -275,6 +284,9 @@ cat >"$FAKE_BIN/stat" <<'EOF'
 #!/usr/bin/env bash
 [ "$1" = -c ] || exit 1
 case "$2" in
+  %u:%g:%a)
+    printf '0:0:750\n'
+    ;;
   %u:%a)
     printf '%s:600\n' "$(id -u)"
     ;;
@@ -401,6 +413,7 @@ run_helper() {
     FAKE_CADDY_STARTUP_FILE="$CADDY_STARTUP_FILE" \
     FAKE_CADDY_ACTIVE_FILE="$CADDY_ACTIVE_FILE" \
     FAKE_CADDY_CANDIDATE_FILE="$CADDY_CANDIDATE_FILE" \
+    SUB2API_IMAGE_ROUTE_CONTRACT_VERIFIER="$ROUTE_VERIFIER" \
     FAKE_NSENTER_FAIL_RO_ONCE="${FAKE_NSENTER_FAIL_RO_ONCE:-false}" \
     FAKE_NSENTER_FAIL_MARKER="$NSENTER_FAIL_MARKER" \
     FAKE_CA_MODE="${FAKE_CA_MODE:-644}" \
@@ -427,6 +440,7 @@ run_helper() {
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="${DUAL_NODE_RUNTIME_ENABLED:-true}" \
     SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
     SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="${PRESERVE_SOURCE_CONTAINER:-}" \
+    SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY="${ROUTE_CONTRACT_WARN_ONLY:-false}" \
     ALLOW_ISOLATED_OLD_CONTAINER="${ALLOW_ISOLATED_OLD_CONTAINER:-false}" \
     REMOVE_EXISTING_NEW_CONTAINER="${REMOVE_EXISTING_NEW_CONTAINER:-true}" \
     RUN_BACKUP=false \
@@ -890,15 +904,26 @@ after_sha="$(sha256sum "$caddy_candidate" | awk '{print $1}')"
 } >"$APP_DIR/.sub2api-blue-green-caddy-transaction.env"
 chmod 600 "$APP_DIR/.sub2api-blue-green-caddy-transaction.env"
 : >"$CALLS"
+# Recovery must remain possible even when the newly introduced route verifier
+# was not installed before the process was interrupted. The Caddy/upstream
+# invariants still run; only the optional route evidence is downgraded.
+rm -f "$ROUTE_VERIFIER"
 if FAKE_DOCKER_CADDY_FLOW=true run_helper >"$OUTPUT" 2>&1; then
   fail 'retained Caddy switch recovery continued as a new release'
 fi
 assert_contains "$OUTPUT" 'recovered the interrupted Caddy upstream switch; rerun the release'
+assert_contains "$OUTPUT" 'image route contract could not be verified'
 assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api:8080'
 assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
 assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
 [ ! -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
   || fail 'successful retained-transaction recovery did not clear its state'
+
+cat >"$ROUTE_VERIFIER" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+EOF
+chmod +x "$ROUTE_VERIFIER"
 
 # The clean retry may now complete and must commit the transaction only after
 # all three Caddy views converge on the target generation.
@@ -995,6 +1020,9 @@ printf 'reverse_proxy sub2api-green:8080\n' >"$APP_DIR/Caddyfile"
 printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_STARTUP_FILE"
 printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_ACTIVE_FILE"
 : >"$CALLS"
+# Isolated-old fallback is also a recovery action. It must be able to restore
+# the serving generation when route evidence is unavailable.
+rm -f "$ROUTE_VERIFIER"
 if FAKE_DOCKER_CADDY_FLOW=true \
   HELPER_OLD_CONTAINER=sub2api-green \
   HELPER_NEW_CONTAINER=sub2api \
@@ -1008,9 +1036,25 @@ else
   sed -n '1,200p' "$OUTPUT" >&2
   fail 'active-absent isolated recovery was rejected'
 fi
+assert_contains "$OUTPUT" 'image route contract could not be verified'
 assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api:8080'
 assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
 assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
 assert_not_contains "$(state_path sub2api)/env" 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE='
+
+cat >"$ROUTE_VERIFIER" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+EOF
+chmod +x "$ROUTE_VERIFIER"
+
+# Warning-only route evidence is reserved for rollback/recovery. An ambient
+# flag on an ordinary release must fail before Docker or Caddy is touched.
+: >"$CALLS"
+if ROUTE_CONTRACT_WARN_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'ordinary blue-green release accepted route-contract warning mode'
+fi
+assert_contains "$OUTPUT" 'route-contract warning mode is reserved for rollback/recovery'
+[ ! -s "$CALLS" ] || fail 'warning-mode guard touched Docker before rejecting an ordinary release'
 
 printf 'Blue-green external runtime mock tests passed.\n'
