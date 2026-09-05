@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"time"
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/proxy"
@@ -116,6 +117,15 @@ var (
 	}
 )
 
+const (
+	// socks5ProxyDialTimeout bounds the proxy TCP connection and SOCKS5
+	// handshake. The request context may not carry a deadline when the
+	// transport is used directly, so this guard prevents an unresponsive
+	// proxy from holding a connection indefinitely.
+	socks5ProxyDialTimeout = 10 * time.Second
+	socks5ProxyKeepAlive   = 30 * time.Second
+)
+
 // NewDialer creates a new TLS fingerprint dialer.
 // baseDialer is used for TCP connection establishment (supports proxy scenarios).
 // If baseDialer is nil, direct TCP dial is used.
@@ -160,7 +170,11 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 		proxyAddr = net.JoinHostPort(d.proxyURL.Hostname(), "1080") // Default SOCKS5 port
 	}
 
-	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
+	forwardDialer := &net.Dialer{
+		Timeout:   socks5ProxyDialTimeout,
+		KeepAlive: socks5ProxyKeepAlive,
+	}
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, forwardDialer)
 	if err != nil {
 		slog.Debug("tls_fingerprint_socks5_dialer_failed", "error", err)
 		return nil, fmt.Errorf("create SOCKS5 dialer: %w", err)
@@ -168,15 +182,23 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 
 	// Step 2: Establish SOCKS5 tunnel to target
 	slog.Debug("tls_fingerprint_socks5_establishing_tunnel", "target", addr)
-	conn, err := socksDialer.Dial("tcp", addr)
+	dialCtx, cancel := context.WithTimeout(ctx, socks5ProxyDialTimeout)
+	defer cancel()
+	contextDialer, ok := socksDialer.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("SOCKS5 dialer does not support context cancellation")
+	}
+	conn, err := contextDialer.DialContext(dialCtx, network, addr)
 	if err != nil {
 		slog.Debug("tls_fingerprint_socks5_connect_failed", "error", err)
 		return nil, fmt.Errorf("SOCKS5 connect: %w", err)
 	}
 	slog.Debug("tls_fingerprint_socks5_tunnel_established")
 
-	// Step 3: Perform TLS handshake on the tunnel with utls fingerprint
-	return performTLSHandshake(ctx, conn, d.profile, addr)
+	// Step 3: Perform TLS handshake on the tunnel with utls fingerprint. Keep
+	// the same bounded context so a proxy that accepts SOCKS but stalls TLS
+	// cannot hold the transport indefinitely.
+	return performTLSHandshake(dialCtx, conn, d.profile, addr)
 }
 
 // DialTLSContext establishes a TLS connection through HTTP proxy with the configured fingerprint.

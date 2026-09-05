@@ -26,6 +26,8 @@ CADDY_CUSTOMER_HOST_TRANSACTION_PATH="${APP_DIR}/.cf-opt-totools-caddy.env"
 CADDY_SWITCH_TRANSACTION_PATH="${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
 CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 CADDY_CONFIG_PATH="${SUB2API_RUNTIME_GUARD_CADDY_CONFIG_PATH:-/etc/caddy/Caddyfile}"
+IMAGE_ROUTE_CONTRACT_VERIFIER="${SUB2API_IMAGE_ROUTE_CONTRACT_VERIFIER:-${APP_DIR}/scripts/verify_image_route_contract.py}"
+IMAGE_ROUTE_API_HOST="${SUB2API_IMAGE_ROUTE_API_HOST:-api.turtleligpt.com}"
 POSTGRES_CONTAINER="${SUB2API_RUNTIME_GUARD_POSTGRES_CONTAINER:-sub2api-postgres}"
 REDIS_CONTAINER="${SUB2API_RUNTIME_GUARD_REDIS_CONTAINER:-sub2api-redis}"
 # An unset mode retains the legacy local-dependency behavior. An explicitly
@@ -508,6 +510,61 @@ caddy_startup_config() {
     sh -c 'cat "$CADDY_CHECK_PATH"'
 }
 
+image_route_verifier_is_safe() {
+  [ -f "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    && [ ! -L "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    && [ -x "$IMAGE_ROUTE_CONTRACT_VERIFIER" ] \
+    || return 1
+  # Production runs this guard as root. Keep the warning-only route check from
+  # executing a writable helper, while non-root test harnesses retain their
+  # normal portability without requiring GNU stat.
+  [ "$(id -u)" -ne 0 ] \
+    || [ "$(stat -c '%u:%g:%a' "$IMAGE_ROUTE_CONTRACT_VERIFIER")" = '0:0:750' ]
+}
+
+verify_image_route_contract_active_config() {
+  local config_text="$1"
+  image_route_verifier_is_safe \
+    || {
+      log "image route contract verifier is missing or unsafe: ${IMAGE_ROUTE_CONTRACT_VERIFIER}" >&2
+      return 1
+    }
+  printf '%s\n' "$config_text" \
+    | "$IMAGE_ROUTE_CONTRACT_VERIFIER" --host "$IMAGE_ROUTE_API_HOST" >/dev/null \
+    || {
+      log "active Caddy image route contract failed" >&2
+      return 1
+    }
+}
+
+verify_image_route_contract_startup() {
+  image_route_verifier_is_safe \
+    || {
+      log "image route contract verifier is missing or unsafe: ${IMAGE_ROUTE_CONTRACT_VERIFIER}" >&2
+      return 1
+    }
+  docker exec "$CADDY_CONTAINER" caddy adapt \
+    --config "$CADDY_CONFIG_PATH" --adapter caddyfile \
+    | "$IMAGE_ROUTE_CONTRACT_VERIFIER" --host "$IMAGE_ROUTE_API_HOST" >/dev/null \
+    || {
+      log "Caddy startup image route contract failed" >&2
+      return 1
+    }
+}
+
+warn_image_route_contract_active_config() {
+  local config_text="$1"
+  if ! verify_image_route_contract_active_config "$config_text"; then
+    log "WARNING: active Caddy image route contract could not be verified; runtime recovery will continue" >&2
+  fi
+}
+
+warn_image_route_contract_startup() {
+  if ! verify_image_route_contract_startup; then
+    log "WARNING: Caddy startup image route contract could not be verified; runtime recovery will continue" >&2
+  fi
+}
+
 app_internal_health() {
   local container_name="$1"
 
@@ -649,6 +706,10 @@ verify_caddy_matches() {
     log "Caddy host/admin mismatch: host=${host_upstream} admin=${admin_upstream} expected=${expected_upstream}" >&2
     return 1
   fi
+  # Route-contract evidence is useful telemetry, but it must not block a
+  # container/Caddy self-heal. The upstream and config-view checks above remain
+  # the hard recovery invariants.
+  warn_image_route_contract_active_config "$active_config"
   return 0
 }
 
@@ -669,6 +730,7 @@ verify_caddy_startup_file() {
     log "Caddy startup file mismatch: startup=${startup_upstream} expected=${expected_upstream}" >&2
     return 1
   fi
+  warn_image_route_contract_startup
   return 0
 }
 
@@ -887,6 +949,8 @@ switch_caddy_to_fallback() {
     NEW_IMAGE="$FALLBACK_IMAGE" \
     CADDY_UPSTREAM_FROM="$ACTIVE_UPSTREAM" \
     CADDY_UPSTREAM_TO="$fallback_upstream" \
+    SUB2API_IMAGE_ROUTE_CONTRACT_VERIFIER="$IMAGE_ROUTE_CONTRACT_VERIFIER" \
+    SUB2API_IMAGE_ROUTE_API_HOST="$IMAGE_ROUTE_API_HOST" \
     RUN_BACKUP=false \
     PULL_IMAGE=false \
     REMOVE_EXISTING_NEW_CONTAINER=false \
@@ -997,6 +1061,9 @@ validate_health_resolve "$PUBLIC_HEALTH_RESOLVE" "$PUBLIC_HEALTH_URL"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
 require_positive_integer SUB2API_RUNTIME_GUARD_APP_PORT "$APP_PORT"
 [ "$APP_PORT" = "8080" ] || die "SUB2API_RUNTIME_GUARD_APP_PORT must remain 8080 for the Caddy upstream contract"
+case "$IMAGE_ROUTE_API_HOST" in
+  ''|*[!A-Za-z0-9.-]*|.*|*..*|*.) die "SUB2API_IMAGE_ROUTE_API_HOST must be a simple DNS name" ;;
+esac
 case "$CADDY_CONFIG_PATH" in
   /*) ;;
   *) die "SUB2API_RUNTIME_GUARD_CADDY_CONFIG_PATH must be an absolute path" ;;

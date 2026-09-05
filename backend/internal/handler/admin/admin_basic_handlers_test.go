@@ -282,7 +282,7 @@ func TestGroupHandlerEndpoints(t *testing.T) {
 }
 
 func TestProxyHandlerEndpoints(t *testing.T) {
-	router, _ := setupAdminRouter()
+	router, adminSvc := setupAdminRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/proxies", nil)
@@ -306,12 +306,17 @@ func TestProxyHandlerEndpoints(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	body, _ = json.Marshal(map[string]any{"name": "proxy2"})
+	body, _ = json.Marshal(map[string]any{"name": "proxy2", "username": "", "password": ""})
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/admin/proxies/4", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, adminSvc.updatedProxies, 1)
+	require.True(t, adminSvc.updatedProxies[0].UsernameSet)
+	require.True(t, adminSvc.updatedProxies[0].PasswordSet)
+	require.Empty(t, adminSvc.updatedProxies[0].Username)
+	require.Empty(t, adminSvc.updatedProxies[0].Password)
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/admin/proxies/4", nil)

@@ -171,6 +171,19 @@ match `text/event-stream` and can buffer SSE until the response ends. Keep
 streaming responses uncompressed while retaining compression for the web UI,
 JSON, and static assets.
 
+The external-certificate production template uses an explicit API allowlist
+before its terminal `respond 404`. It includes the complete gateway surface:
+the versioned `/v1/*` and `/v1beta/*` trees, the Codex and Antigravity prefixes,
+and the supported no-prefix aliases for Responses, chat, embeddings, media,
+voice, search, and images. A root-domain Codex provider builds
+`images/generations` relative to its configured base URL, so omitting a root
+alias produces an edge 404 even though the application route is registered.
+Batch Image is registered under `/v1/images/batches` (including its list and
+item subroutes) in the current application contract; a root batch alias is not
+advertised until the backend adds that route. The panel and web UI `/api/v1/*`
+tree remains on its separate web origin by design; adding it to this API-only
+transport host would widen the public management surface.
+
 For a CDN deployment, first firewall the origin so only current CDN egress
 CIDRs can connect. Then configure those exact ranges as Caddy trusted proxies
 and derive upstream headers from Caddy's parsed `{client_ip}`. For example:

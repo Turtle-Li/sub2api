@@ -13,7 +13,9 @@ package tlsfingerprint
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -231,6 +233,51 @@ func TestSOCKS5ProxyDialerBasic(t *testing.T) {
 	}
 	if dialer.proxyURL != proxyURL {
 		t.Error("expected proxyURL to be set")
+	}
+}
+
+func TestSOCKS5ProxyDialerHonorsContextCancellation(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+
+	dialer := NewSOCKS5ProxyDialer(&Profile{Name: "context-test"}, mustParseURL("socks5://"+listener.Addr().String()))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result := make(chan error, 1)
+	go func() {
+		_, dialErr := dialer.DialTLSContext(ctx, "tcp", "example.com:443")
+		result <- dialErr
+	}()
+
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("expected SOCKS5 dial to fail when context is canceled")
+		}
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("expected network timeout error, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("SOCKS5 dial did not honor context cancellation")
+	}
+
+	select {
+	case conn := <-accepted:
+		_ = conn.Close()
+	default:
 	}
 }
 

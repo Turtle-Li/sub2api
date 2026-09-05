@@ -60,11 +60,13 @@ mainland client -> GCP Taiwan HAProxy (TCP 80/443)
 | `gcp-update-bootstrap.sh` | Hash-pinned one-shot metadata updater; validates and seamlessly reloads HAProxy, restoring the immutable pre-update config if reload or runtime verification fails |
 | `render-azure-caddy-listeners.py` | Inserts the exact `servers :443` listener policy plus the reviewed client-IP header policy into the two production reverse proxies |
 | `verify-azure-caddy-json.py` | Verifies and fingerprints the effective `:443` wrappers, route ordering, upstreams, and exact client-IP header contract |
+| `../verify_image_route_contract.py` | Semantically verifies adapted and active Caddy route order for root and `/v1` image aliases |
 | `azure-caddy-listeners.sh` | Maintenance-lock-protected Azure Caddy stage/rollback/commit transaction |
 | `verify-transport.sh` | Azure, GCP-local, and public canary verification |
 | `patch-old-origin-node-state.py` | One-time exact-digest transformer used to make the old origin's legacy state writer preserve Docker single-file bind inodes |
 | `tests/transport-config-test.sh` | Offline syntax, renderer, ordering, and L4 boundary regression checks |
 | `AZURE-CADDY-RUNTIME-EVIDENCE-2026-09-02.md` | Frozen non-secret live site/listener evidence used to close the client-IP/XFF review boundary |
+| `PRE-CUTOVER-READINESS-2026-09-05.md` | Current preparation checkpoint, fresh-fingerprint rule, low-traffic canary order, and remaining DNS gates |
 
 Run the local gate before copying an artifact:
 
@@ -108,6 +110,17 @@ sudo /opt/sub2api/scripts/azure-caddy-listeners.sh commit
 sudo /opt/sub2api/scripts/verify-transport.sh azure
 ```
 
+When these candidate scripts are copied into the flattened
+`/opt/sub2api/scripts` directory, copy `../verify_image_route_contract.py` there
+as well, owned by `root:root` with mode `0750`. The listener controller and the
+Azure transport verifier intentionally fail closed if that companion artifact
+is missing; this keeps the adapted-Caddy route contract from silently reverting
+to a text-only check.
+
+The GCP startup and update bootstrap remain a separate three-artifact HAProxy
+bundle. They do not run Caddy or consume the companion route verifier; their
+local image probes validate the TCP hop's end-to-end reachability instead.
+
 Do not start a blue-green application release while the listener transaction
 is present: the server release, blue-green helper, and runtime guard all fail
 closed on both the Taiwan listener transaction and the older customer-Host
@@ -122,7 +135,15 @@ reverse proxies, replaces `X-Forwarded-For` with Caddy's PROXY-restored remote
 host, and removes `X-Real-IP` plus `CF-Connecting-IP` before the application.
 Earlier catch-all routes are rejected unless they are provably exclusive of
 the production hostname. Its HTTP probes explicitly bypass ambient proxy
-variables, so `--resolve` is an actual direct-IP canary.
+variables, so `--resolve` is an actual direct-IP canary. The shared image-route
+contract checker runs before and after listener staging; it covers
+`/images/generations`, `/images/edits`, their async/task paths, and the
+versioned `/v1` equivalents, including both submit and list checks for
+`/v1/images/batches`. The probes send an empty unauthenticated request and
+expect `401`, which verifies edge reachability without creating a paid image
+task. Repeated invalid-auth probes may instead return `429` while the
+per-IP abuse limiter is active; the verifier records that as rate-limited
+reachability evidence and keeps the response visible to the operator.
 
 The blue-green Caddy switch also owns a durable transaction file before its
 first in-place mutation. A normal error restores the exact previous host,

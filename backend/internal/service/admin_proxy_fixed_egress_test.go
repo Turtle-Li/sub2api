@@ -217,6 +217,31 @@ func TestUpdateProxy_AllowsBoundParentDisplayAndMonitoringChanges(t *testing.T) 
 	require.Zero(t, repo.summaryCalls, "non-identity updates must not need the binding lookup")
 }
 
+func TestUpdateProxy_AllowsCredentialClearNormalizationForBoundParent(t *testing.T) {
+	proxyID := int64(7)
+	repo := &fixedEgressUpdateProxyRepoStub{
+		proxyRepoStub: &proxyRepoStub{},
+		proxy: func() *Proxy {
+			proxy := newFixedEgressUpdateProxy(proxyID)
+			proxy.Username = "legacy-user"
+			proxy.Password = "legacy-password"
+			return proxy
+		}(),
+		summaries: []ProxyAccountSummary{fixedEgressOAuthParentSummary(88)},
+	}
+	svc := &adminServiceImpl{proxyRepo: repo}
+	input := newFixedEgressUpdateInput()
+	input.UsernameSet = true
+	input.PasswordSet = true
+
+	updated, err := svc.UpdateProxy(context.Background(), proxyID, input)
+
+	require.NoError(t, err)
+	require.Empty(t, updated.Username)
+	require.Empty(t, updated.Password)
+	require.Equal(t, 1, repo.updateCalls)
+}
+
 func TestUpdateProxy_FailsClosedWhenOpenAIOAuthParentLookupFails(t *testing.T) {
 	proxyID := int64(7)
 	repo := &fixedEgressUpdateProxyRepoStub{
