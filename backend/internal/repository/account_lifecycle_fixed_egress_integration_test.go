@@ -256,9 +256,11 @@ func TestClearErrorValidatesReservedFixedEgressParent(t *testing.T) {
 				Host:         "198.51.100.20",
 				Port:         8080,
 				Status:       service.StatusActive,
-				FallbackMode: service.FallbackModeNone,
+				FallbackMode: service.FallbackModeDirect,
 			})
-			repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, &schedulerCacheRecorder{})
+			require.ErrorIs(t, service.ValidateFixedEgressProxy(proxy), service.ErrFixedEgressProxyInvalid)
+			cache := &schedulerCacheRecorder{}
+			repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, cache)
 			account := &service.Account{
 				Name:         fmt.Sprintf("clear-error-invalid-account-%s-%d", accountType, suffix),
 				Platform:     service.PlatformOpenAI,
@@ -285,44 +287,76 @@ func TestClearErrorValidatesReservedFixedEgressParent(t *testing.T) {
 				Scan(&status, &errorMessage))
 			require.Equal(t, service.StatusError, status)
 			require.Equal(t, "reserved while proxy is invalid", errorMessage)
+			var outboxCount int
+			require.NoError(t, integrationDB.QueryRowContext(ctx,
+				"SELECT COUNT(*) FROM scheduler_outbox WHERE account_id = $1", account.ID).Scan(&outboxCount))
+			require.Equal(t, 1, outboxCount, "rejected activation must not add to the creation outbox event")
+			require.Empty(t, cache.setAccounts)
+			require.Empty(t, cache.deleteIDs)
 		})
 	}
 }
 
 func TestClearErrorActivatesCompliantFixedEgressParent(t *testing.T) {
 	for _, accountType := range []string{service.AccountTypeOAuth, service.AccountTypeSetupToken} {
-		t.Run(accountType, func(t *testing.T) {
-			ctx := context.Background()
-			suffix := time.Now().UnixNano()
-			proxy := fixedEgressRaceProxy(t, fmt.Sprintf("clear-error-valid-proxy-%s-%d", accountType, suffix))
-			cache := &schedulerCacheRecorder{}
-			repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, cache)
-			account := &service.Account{
-				Name:         fmt.Sprintf("clear-error-valid-account-%s-%d", accountType, suffix),
-				Platform:     service.PlatformOpenAI,
-				Type:         accountType,
-				Status:       service.StatusError,
-				ErrorMessage: "temporary error",
-				Schedulable:  true,
-				Credentials:  map[string]any{},
-				Extra:        map[string]any{},
-				ProxyID:      &proxy.ID,
-			}
-			require.NoError(t, repo.Create(ctx, account))
-			t.Cleanup(func() {
-				_, _ = integrationDB.ExecContext(ctx, "DELETE FROM scheduler_outbox WHERE account_id = $1", account.ID)
-				_ = integrationEntClient.Account.DeleteOneID(account.ID).Exec(ctx)
-				_ = integrationEntClient.Proxy.DeleteOneID(proxy.ID).Exec(ctx)
-			})
+		for _, proxyCase := range []struct {
+			name     string
+			protocol string
+			host     string
+		}{
+			{name: "tailnet", protocol: "socks5h", host: "100.80.10.114"},
+			{name: "http", protocol: "http", host: "proxy.example"},
+			{name: "https", protocol: "https", host: "proxy.example"},
+			{name: "socks5", protocol: "socks5", host: "proxy.example"},
+			{name: "socks5h", protocol: "socks5h", host: "proxy.example"},
+		} {
+			t.Run(accountType+"/"+proxyCase.name, func(t *testing.T) {
+				ctx := context.Background()
+				suffix := time.Now().UnixNano()
+				proxyInput := &service.Proxy{
+					Name:         fmt.Sprintf("clear-error-valid-proxy-%s-%d", accountType, suffix),
+					Protocol:     proxyCase.protocol,
+					Host:         proxyCase.host,
+					Port:         1080,
+					Status:       service.StatusActive,
+					FallbackMode: service.FallbackModeNone,
+				}
+				if proxyCase.name != "tailnet" {
+					proxyInput.Port = 8080
+					proxyInput.Username = "test-operator"
+					proxyInput.Password = "test-password"
+				}
+				proxy := mustCreateProxy(t, integrationEntClient, proxyInput)
+				require.NoError(t, service.ValidateFixedEgressProxy(proxy))
+				cache := &schedulerCacheRecorder{}
+				repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, cache)
+				account := &service.Account{
+					Name:         fmt.Sprintf("clear-error-valid-account-%s-%d", accountType, suffix),
+					Platform:     service.PlatformOpenAI,
+					Type:         accountType,
+					Status:       service.StatusError,
+					ErrorMessage: "temporary error",
+					Schedulable:  true,
+					Credentials:  map[string]any{},
+					Extra:        map[string]any{},
+					ProxyID:      &proxy.ID,
+				}
+				require.NoError(t, repo.Create(ctx, account))
+				t.Cleanup(func() {
+					_, _ = integrationDB.ExecContext(ctx, "DELETE FROM scheduler_outbox WHERE account_id = $1", account.ID)
+					_ = integrationEntClient.Account.DeleteOneID(account.ID).Exec(ctx)
+					_ = integrationEntClient.Proxy.DeleteOneID(proxy.ID).Exec(ctx)
+				})
 
-			require.NoError(t, repo.ClearError(ctx, account.ID))
-			var status, errorMessage string
-			require.NoError(t, integrationDB.QueryRowContext(ctx,
-				"SELECT status, error_message FROM accounts WHERE id = $1", account.ID).
-				Scan(&status, &errorMessage))
-			require.Equal(t, service.StatusActive, status)
-			require.Empty(t, errorMessage)
-		})
+				require.NoError(t, repo.ClearError(ctx, account.ID))
+				var status, errorMessage string
+				require.NoError(t, integrationDB.QueryRowContext(ctx,
+					"SELECT status, error_message FROM accounts WHERE id = $1", account.ID).
+					Scan(&status, &errorMessage))
+				require.Equal(t, service.StatusActive, status)
+				require.Empty(t, errorMessage)
+			})
+		}
 	}
 }
 

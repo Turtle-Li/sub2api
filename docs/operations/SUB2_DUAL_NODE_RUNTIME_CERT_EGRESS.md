@@ -145,12 +145,21 @@ be active `socks5h`, have no username/password, `expires_at=NULL`,
 IDs are deployment state and must be recorded by the account-state owner before
 cutover; this repository deliberately does not guess them or execute raw SQL.
 
+These Tailnet settings describe this deployment's selected gateways. Since
+`16057ec0185b8285edf562e1f225818b813847aa`, the application also accepts valid
+HTTP, HTTPS, SOCKS5, and SOCKS5H proxies with hostnames or public IPs and paired
+username/password authentication. Every bound proxy must remain active, have no
+expiry, and use `fallback_mode=none`; stale backup metadata is ignored when
+fallback is disabled. Tests for rejected activation or conflicting binding must
+use a proxy that violates this current policy, such as one with direct fallback,
+rather than treating an ordinary HTTP proxy or hostname as invalid.
+
 Binding and rollback use the authenticated account bulk-update endpoint as a
 compare-and-set operation. A first binding sends `proxy_id=P` and the actual
 observed current Proxy ID as `expected_proxy_id` (zero only when currently
 unbound); rollback sends the previously recorded pair in reverse. The server
 locks the eligible live OpenAI OAuth/setup-token parent rows, validates the
-no-credential Tailnet `socks5h:1080` Proxy row, updates all credential shadows
+selected Proxy row against the application policy above, updates all credential shadows
 in the same transaction, and rejects any partial match.
 Legacy single-account and bulk proxy edits are rejected for OpenAI OAuth parents,
 so the UI cannot bypass the fixed-egress CAS/shadow invariant.

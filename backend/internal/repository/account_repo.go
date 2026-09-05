@@ -3661,7 +3661,7 @@ func (r *accountRepository) CompareAndSwapOpenAIOAuthProxy(
 	if newProxy != nil {
 		// Do not trust the caller's proxy shape. Lock and validate the persisted
 		// row before parent account rows so direct repository callers cannot bind
-		// an external or fallback-capable proxy by bypassing the admin service.
+		// an invalid or fallback-capable proxy by bypassing the admin service.
 		lockedProxy, err := lockFixedEgressProxyForOpenAIOAuth(ctx, client, newProxy.ID)
 		if err != nil {
 			return nil, err

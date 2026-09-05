@@ -153,6 +153,15 @@ func mustCreateProxy(t *testing.T, client *dbent.Client, p *service.Proxy) *serv
 	if p.Password != "" {
 		create.SetPassword(p.Password)
 	}
+	if p.FallbackMode != "" {
+		create.SetFallbackMode(p.FallbackMode)
+	}
+	if p.ExpiresAt != nil {
+		create.SetExpiresAt(*p.ExpiresAt)
+	}
+	if p.BackupProxyID != nil {
+		create.SetBackupProxyID(*p.BackupProxyID)
+	}
 	if !p.CreatedAt.IsZero() {
 		create.SetCreatedAt(p.CreatedAt)
 	}

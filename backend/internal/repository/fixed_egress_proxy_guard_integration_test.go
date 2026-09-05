@@ -94,6 +94,10 @@ func TestFixedEgressProxyCASAndIdentityMutationSerialize(t *testing.T) {
 	proxyRepo := newProxyRepositoryWithSQL(integrationEntClient, integrationDB)
 	mutated := *proxy
 	mutated.Host = "proxy.example"
+	// Hostnames are valid fixed egress. Enable fallback so a proxy rewrite
+	// that wins the lock makes a later binding invalid under the current policy.
+	mutated.FallbackMode = service.FallbackModeDirect
+	require.ErrorIs(t, service.ValidateFixedEgressProxy(&mutated), service.ErrFixedEgressProxyInvalid)
 
 	results := runFixedEgressRace(t,
 		"cas", func(ctx context.Context) error {
@@ -151,6 +155,8 @@ func TestFixedEgressProxyCreateAndIdentityMutationSerialize(t *testing.T) {
 	proxyRepo := newProxyRepositoryWithSQL(integrationEntClient, integrationDB)
 	mutated := *proxy
 	mutated.Host = "proxy.example"
+	mutated.FallbackMode = service.FallbackModeDirect
+	require.ErrorIs(t, service.ValidateFixedEgressProxy(&mutated), service.ErrFixedEgressProxyInvalid)
 
 	results := runFixedEgressRace(t,
 		"create", func(ctx context.Context) error { return accountRepo.Create(ctx, account) },
@@ -251,6 +257,8 @@ func TestFixedEgressProxyCreateWithAccountGroupsAndIdentityMutationSerialize(t *
 	proxyRepo := newProxyRepositoryWithSQL(integrationEntClient, integrationDB)
 	mutated := *proxy
 	mutated.Host = "proxy.example"
+	mutated.FallbackMode = service.FallbackModeDirect
+	require.ErrorIs(t, service.ValidateFixedEgressProxy(&mutated), service.ErrFixedEgressProxyInvalid)
 
 	results := runFixedEgressRace(t,
 		"create-with-account-groups", func(ctx context.Context) error {
