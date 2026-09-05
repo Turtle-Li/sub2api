@@ -927,4 +927,38 @@ describe('UseKeyModal', () => {
     expect(configToml).toContain('model = "glm-5.3"')
     expect(configToml).not.toContain('model_reasoning_effort')
   })
+
+  it('explains a browser network failure instead of hiding it behind the API-key message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-composite-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'composite'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const codexTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.codexCli')
+    )
+    expect(codexTab).toBeDefined()
+    await codexTab!.trigger('click')
+    await wrapper.get('[data-testid="codex-model-catalog-fetch"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="codex-model-catalog-error"]').text())
+      .toContain('keys.useKeyModal.codexModelCatalog.networkErrorDescription')
+  })
 })

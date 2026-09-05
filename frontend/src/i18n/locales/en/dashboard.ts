@@ -213,6 +213,9 @@ export default {
         download: 'Download catalog',
         modelsCount: '{count} models ready to download',
         errorDescription: 'The catalog could not be fetched with this API key.',
+        networkErrorDescription: 'The browser could not reach the models endpoint. This usually means the API has not allowed this website origin via CORS or the network is misconfigured. Add the website origin to CORS_ALLOWED_ORIGINS or configure server.frontend_url.',
+        httpErrorDescription: 'The models endpoint returned HTTP {status}: {message}',
+        manifestErrorDescription: 'The endpoint returned an invalid Codex model catalog.'
       },
       opencode: {
         title: 'OpenCode Example',

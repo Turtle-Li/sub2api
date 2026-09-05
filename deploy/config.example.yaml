@@ -105,8 +105,9 @@ run_mode: "standard"
 # 跨域资源共享 (CORS) 配置
 # =============================================================================
 cors:
-  # Allowed origins list. Leave empty to disable cross-origin requests.
-  # 允许的来源列表。留空则禁用跨域请求。
+  # Allowed origins list. Leave empty when the configured frontend_url should
+  # be used automatically; add additional origins here for other web clients.
+  # 允许的来源列表。若使用 server.frontend_url 可留空；其他前端域名请显式添加。
   allowed_origins: []
   # Allow credentials (cookies/authorization headers). Cannot be used with "*".
   # 允许携带凭证（cookies/授权头）。不能与 "*" 通配符同时使用。

@@ -766,6 +766,17 @@ The Grok OAuth flow uses PKCE and does not require committing private secrets. T
 | `XAI_BASE_URL` | `https://api.x.ai/v1`; runtime-diagnostics override (account `base_url` controls request forwarding) |
 | `XAI_GROK_CLI_VERSION` | `0.2.114`; optional override for the client identity sent to `cli-chat-proxy.grok.com`. The pinned value is also the floor: an override below it is dropped |
 
+Claude Code compatibility uses the same validated identity override pattern:
+
+| Variable | Default |
+|----------|---------|
+| `SUB2API_CLAUDE_CLI_VERSION` | `2.1.251`; the built-in floor required by Claude Fable 5.1. Overrides must be a three-part numeric version at or above the floor |
+
+For a separately hosted web panel, set `CORS_ALLOWED_ORIGINS` to a comma-separated
+allowlist of trusted panel origins. When `server.frontend_url` (or the matching
+dashboard setting) is configured, that origin is added automatically; wildcard
+origins remain unsupported when credentials are enabled.
+
 Administrators can create Grok OAuth or API-key accounts from the dashboard. OAuth authorization and reauthorization are also available through the admin API:
 
 | Endpoint | Purpose |

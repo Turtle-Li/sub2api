@@ -43,6 +43,12 @@ func SetupRouter(
 	var cachedFrameOrigins atomic.Pointer[[]string]
 	emptyOrigins := []string{}
 	cachedFrameOrigins.Store(&emptyOrigins)
+	// The dashboard may be hosted on a separate origin from the API gateway.
+	// Keep the explicitly configured frontend origin in a small process-local
+	// cache so CORS checks never hit the database request-by-request.
+	var cachedCORSOrigins atomic.Pointer[[]string]
+	emptyCORSOrigins := []string{}
+	cachedCORSOrigins.Store(&emptyCORSOrigins)
 
 	refreshFrameOrigins := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), frameSrcRefreshTimeout)
@@ -54,7 +60,23 @@ func SetupRouter(
 		}
 		cachedFrameOrigins.Store(&origins)
 	}
-	refreshFrameOrigins() // 启动时初始化
+
+	refreshCORSOrigins := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), frameSrcRefreshTimeout)
+		defer cancel()
+		origin := middleware2.OriginFromURL(settingService.GetFrontendURL(ctx))
+		origins := []string{}
+		if origin != "" {
+			origins = append(origins, origin)
+		}
+		cachedCORSOrigins.Store(&origins)
+	}
+
+	refreshDynamicOrigins := func() {
+		refreshFrameOrigins()
+		refreshCORSOrigins()
+	}
+	refreshDynamicOrigins() // 启动时初始化
 
 	// 应用中间件
 	r.Use(middleware2.RequestLogger())
@@ -62,7 +84,12 @@ func SetupRouter(
 	// 解析模式按请求快照：兼容开关开启时信任原始转发头，关闭时使用 server.trusted_proxies。
 	r.Use(middleware2.SessionBindingContext(cfg))
 	r.Use(middleware2.Logger())
-	r.Use(middleware2.CORS(cfg.CORS))
+	r.Use(middleware2.CORSWithDynamicOrigins(cfg.CORS, func() []string {
+		if p := cachedCORSOrigins.Load(); p != nil {
+			return *p
+		}
+		return nil
+	}))
 	r.Use(middleware2.SecurityHeaders(cfg.Security.CSP, func() []string {
 		if p := cachedFrameOrigins.Load(); p != nil {
 			return *p
@@ -77,17 +104,17 @@ func SetupRouter(
 		if err != nil {                                              //nolint:staticcheck // SA4023: see above
 			log.Printf("Warning: Failed to create frontend server with settings injection: %v, using legacy mode", err)
 			r.Use(web.ServeEmbeddedFrontend())
-			settingService.SetOnUpdateCallback(refreshFrameOrigins)
+			settingService.SetOnUpdateCallback(refreshDynamicOrigins)
 		} else {
 			// Register combined callback: invalidate HTML cache + refresh frame origins
 			settingService.SetOnUpdateCallback(func() {
 				frontendServer.InvalidateCache()
-				refreshFrameOrigins()
+				refreshDynamicOrigins()
 			})
 			r.Use(frontendServer.Middleware())
 		}
 	} else {
-		settingService.SetOnUpdateCallback(refreshFrameOrigins)
+		settingService.SetOnUpdateCallback(refreshDynamicOrigins)
 	}
 
 	// 注册路由

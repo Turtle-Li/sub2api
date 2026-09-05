@@ -3,6 +3,7 @@ package middleware
 import (
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -14,6 +15,14 @@ var corsWarningOnce sync.Once
 
 // CORS 跨域中间件
 func CORS(cfg config.CORSConfig) gin.HandlerFunc {
+	return CORSWithDynamicOrigins(cfg, nil)
+}
+
+// CORSWithDynamicOrigins is CORS with an additional, runtime-maintained list
+// of trusted origins. Static config remains the source of truth for extra
+// clients; the provider is intended for an explicitly configured first-party
+// frontend URL that may be stored outside config.yaml.
+func CORSWithDynamicOrigins(cfg config.CORSConfig, dynamicOrigins func() []string) gin.HandlerFunc {
 	allowedOrigins := normalizeOrigins(cfg.AllowedOrigins)
 	allowAll := false
 	for _, origin := range allowedOrigins {
@@ -69,6 +78,14 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 		originAllowed := allowAll
 		if origin != "" && !allowAll {
 			_, originAllowed = allowedSet[origin]
+			if !originAllowed && dynamicOrigins != nil {
+				for _, candidate := range dynamicOrigins() {
+					if origin == candidate {
+						originAllowed = true
+						break
+					}
+				}
+			}
 		}
 
 		if originAllowed {
@@ -98,6 +115,22 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// OriginFromURL returns the browser Origin represented by an absolute HTTP(S)
+// URL. Paths are intentionally discarded because the Origin header never
+// contains one. Invalid or non-HTTP URLs return an empty string.
+func OriginFromURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.User != nil || parsed.Scheme == "" || parsed.Host == "" ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return ""
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	return scheme + "://" + strings.ToLower(parsed.Host)
 }
 
 func normalizeOrigins(values []string) []string {

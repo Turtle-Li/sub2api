@@ -30,6 +30,8 @@ services:
       - SERVER_MODE=debug
       - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
       - RUN_MODE=${RUN_MODE:-standard}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
+      - CORS_ALLOW_CREDENTIALS=${CORS_ALLOW_CREDENTIALS:-true}
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_USER=${POSTGRES_USER:-sub2api}
@@ -47,6 +49,7 @@ services:
       - SETUP_MIGRATION_TIMEOUT_SECONDS=${SETUP_MIGRATION_TIMEOUT_SECONDS:-0}
       - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:-}
       - TZ=${TZ:-Asia/Shanghai}
+      - SUB2API_CLAUDE_CLI_VERSION=${SUB2API_CLAUDE_CLI_VERSION:-2.1.251}
       # Local mainland-China development proxy. Containers cannot use
       # 127.0.0.1 for the host proxy, so default to Docker Desktop's host name.
       - HTTP_PROXY=${SUB2API_DEV_HTTP_PROXY:-http://host.docker.internal:7897}

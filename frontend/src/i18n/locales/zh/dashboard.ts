@@ -216,7 +216,10 @@ export default {
         retry: '重试',
         download: '下载目录',
         modelsCount: '已获取 {count} 个模型',
-        errorDescription: '无法使用当前 API Key 获取模型目录。'
+        errorDescription: '无法使用当前 API Key 获取模型目录。',
+        networkErrorDescription: '浏览器无法连接模型目录接口，通常是 API 未允许当前网站跨域（CORS）或网络配置异常。请将当前网站 Origin 加入 CORS_ALLOWED_ORIGINS，或配置 server.frontend_url。',
+        httpErrorDescription: '模型目录接口返回 HTTP {status}：{message}',
+        manifestErrorDescription: '接口返回的数据不是有效的 Codex 模型目录。'
       },
       opencode: {
         title: 'OpenCode 配置示例',

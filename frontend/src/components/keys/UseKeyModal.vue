@@ -226,8 +226,9 @@
           <p
             v-else-if="codexModelManifestState === 'error'"
             class="border-t border-red-200 px-4 py-2 text-xs text-red-700 dark:border-red-900 dark:text-red-300"
+            data-testid="codex-model-catalog-error"
           >
-            {{ t('keys.useKeyModal.codexModelCatalog.errorDescription') }}
+            {{ codexModelManifestErrorDescription }}
           </p>
         </section>
 
@@ -261,7 +262,7 @@ import { saveAs } from 'file-saver'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
-import { fetchCodexModelsManifest } from '@/api/codex'
+import { CodexModelsRequestError, fetchCodexModelsManifest } from '@/api/codex'
 import type { GroupPlatform } from '@/types'
 import {
   findCodexCatalogModel,
@@ -310,8 +311,22 @@ type CodexModelManifestState = 'idle' | 'loading' | 'ready' | 'error'
 const codexModelManifestState = ref<CodexModelManifestState>('idle')
 const codexModelManifestContent = ref('')
 const codexModelManifestModelCount = ref(0)
+const codexModelManifestError = ref<CodexModelsRequestError | null>(null)
 let codexModelManifestController: AbortController | null = null
 let codexModelManifestRequestID = 0
+
+const codexModelManifestErrorDescription = computed(() => {
+  const error = codexModelManifestError.value
+  if (!error) return t('keys.useKeyModal.codexModelCatalog.errorDescription')
+  if (error.kind === 'network') return t('keys.useKeyModal.codexModelCatalog.networkErrorDescription')
+  if (error.kind === 'http') {
+    return t('keys.useKeyModal.codexModelCatalog.httpErrorDescription', {
+      status: error.status || 0,
+      message: error.message
+    })
+  }
+  return t('keys.useKeyModal.codexModelCatalog.manifestErrorDescription')
+})
 
 const showCodexModelCatalog = computed(() =>
   props.show &&
@@ -612,6 +627,7 @@ function resetCodexModelManifest() {
   codexModelManifestState.value = 'idle'
   codexModelManifestContent.value = ''
   codexModelManifestModelCount.value = 0
+  codexModelManifestError.value = null
 }
 
 async function loadCodexModelManifest() {
@@ -622,6 +638,7 @@ async function loadCodexModelManifest() {
   const requestID = ++codexModelManifestRequestID
   codexModelManifestController = controller
   codexModelManifestState.value = 'loading'
+  codexModelManifestError.value = null
 
   try {
     const result = await fetchCodexModelsManifest(props.baseUrl, props.apiKey, controller.signal)
@@ -635,6 +652,7 @@ async function loadCodexModelManifest() {
       : ''
     if (requestID !== codexModelManifestRequestID || errorName === 'AbortError') return
     codexModelManifestState.value = 'error'
+    codexModelManifestError.value = error instanceof CodexModelsRequestError ? error : null
   } finally {
     if (requestID === codexModelManifestRequestID) {
       codexModelManifestController = null

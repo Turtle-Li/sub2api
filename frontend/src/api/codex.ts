@@ -3,6 +3,20 @@ export interface CodexModelsManifestResult {
   modelCount: number
 }
 
+export type CodexModelsRequestErrorKind = 'network' | 'http' | 'manifest'
+
+export class CodexModelsRequestError extends Error {
+  readonly kind: CodexModelsRequestErrorKind
+  readonly status?: number
+
+  constructor(kind: CodexModelsRequestErrorKind, message: string, status?: number) {
+    super(message)
+    this.name = 'CodexModelsRequestError'
+    this.kind = kind
+    this.status = status
+  }
+}
+
 const DEFAULT_CODEX_CLIENT_VERSION = '0.147.0'
 
 function normalizeCodexBaseUrl(baseUrl: string): string {
@@ -25,28 +39,62 @@ function isCodexModelsManifest(value: unknown): value is { models: unknown[] } {
   return typeof value === 'object' && value !== null && Array.isArray((value as { models?: unknown }).models)
 }
 
+async function readHTTPErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload: unknown = await response.json()
+    if (typeof payload !== 'object' || payload === null) return ''
+    const record = payload as Record<string, unknown>
+    const nestedError = record.error
+    if (typeof nestedError === 'object' && nestedError !== null) {
+      const message = (nestedError as Record<string, unknown>).message
+      if (typeof message === 'string') return message.trim().slice(0, 240)
+    }
+    if (typeof record.message === 'string') return record.message.trim().slice(0, 240)
+  } catch {
+    // The API may return an empty body or an edge-generated non-JSON response.
+  }
+  return ''
+}
+
 export async function fetchCodexModelsManifest(
   baseUrl: string,
   apiKey: string,
   signal?: AbortSignal
 ): Promise<CodexModelsManifestResult> {
-  const response = await fetch(buildCodexModelsManifestUrl(baseUrl), {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    cache: 'no-store',
-    signal
-  })
+  let response: Response
+  try {
+    response = await fetch(buildCodexModelsManifestUrl(baseUrl), {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      cache: 'no-store',
+      signal
+    })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'name' in error && (error as { name?: unknown }).name === 'AbortError') {
+      throw error
+    }
+    throw new CodexModelsRequestError(
+      'network',
+      'The browser could not reach the Codex models endpoint; this commonly indicates a CORS or network configuration error.'
+    )
+  }
 
   if (!response.ok) {
-    throw new Error(`Codex models request failed with status ${response.status}`)
+    const detail = await readHTTPErrorMessage(response)
+    const suffix = detail ? `: ${detail}` : ''
+    throw new CodexModelsRequestError(
+      'http',
+      `Codex models request failed with status ${response.status}${suffix}`,
+      response.status
+    )
   }
 
   const payload: unknown = await response.json()
   if (!isCodexModelsManifest(payload)) {
-    throw new Error('Codex models response is not a valid manifest')
+    throw new CodexModelsRequestError('manifest', 'Codex models response is not a valid manifest')
   }
 
   return {

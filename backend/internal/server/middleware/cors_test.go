@@ -116,6 +116,41 @@ func TestCORS_AllowedOrigin_HasAllowHeaders(t *testing.T) {
 	}
 }
 
+func TestCORS_DynamicOriginProviderAllowsConfiguredFrontend(t *testing.T) {
+	middleware := CORSWithDynamicOrigins(config.CORSConfig{}, func() []string {
+		return []string{"https://panel.example.com"}
+	})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodOptions, "/v1/models?client_version=0.147.0", nil)
+	c.Request.Header.Set("Origin", "https://panel.example.com")
+	c.Request.Header.Set("Access-Control-Request-Headers", "authorization")
+
+	middleware(c)
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, "https://panel.example.com", w.Header().Get("Access-Control-Allow-Origin"))
+}
+
+func TestOriginFromURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "path is removed", url: "https://Panel.Example.com/dashboard", want: "https://panel.example.com"},
+		{name: "port is preserved", url: "http://panel.example.com:8080/app", want: "http://panel.example.com:8080"},
+		{name: "query is rejected", url: "https://panel.example.com/?x=1", want: ""},
+		{name: "relative is rejected", url: "/dashboard", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, OriginFromURL(tt.url))
+		})
+	}
+}
+
 func TestCORS_PreflightDisallowedOrigin_ReturnsForbidden(t *testing.T) {
 	cfg := config.CORSConfig{
 		AllowedOrigins:   []string{"https://allowed.example.com"},

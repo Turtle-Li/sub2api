@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildCodexModelsManifestUrl,
+  CodexModelsRequestError,
   fetchCodexModelsManifest
 } from '../codex'
 
@@ -75,5 +76,31 @@ describe('Codex models API', () => {
 
     await expect(fetchCodexModelsManifest('https://example.com/v1', 'sk-user-test'))
       .rejects.toThrow('valid manifest')
+  })
+
+  it('preserves the API error status and safe message for a rejected request', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: { message: 'origin is not allowed' } })
+    }))
+
+    const request = fetchCodexModelsManifest('https://example.com/v1', 'sk-user-test')
+    await expect(request).rejects.toMatchObject({
+      name: 'CodexModelsRequestError',
+      kind: 'http',
+      status: 403,
+      message: 'Codex models request failed with status 403: origin is not allowed'
+    } satisfies Partial<CodexModelsRequestError>)
+  })
+
+  it('classifies browser/network failures so the UI can explain likely CORS errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+
+    await expect(fetchCodexModelsManifest('https://example.com/v1', 'sk-user-test'))
+      .rejects.toMatchObject({
+        name: 'CodexModelsRequestError',
+        kind: 'network'
+      } satisfies Partial<CodexModelsRequestError>)
   })
 })

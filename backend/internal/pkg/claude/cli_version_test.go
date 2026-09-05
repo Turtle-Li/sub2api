@@ -71,3 +71,9 @@ func TestCLIVersionDefaultsToBuiltinPin(t *testing.T) {
 		t.Fatalf("CLIVersion() = %q, want built-in pin %q (测试进程未设置 %s)", got, CLICurrentVersion, CLIVersionEnv)
 	}
 }
+
+func TestBuiltInCLIVersionSupportsFable51(t *testing.T) {
+	if !IsSupportedCLIVersion("2.1.251") {
+		t.Fatalf("built-in Claude CLI pin %q must not be below the Fable 5.1 minimum", CLICurrentVersion)
+	}
+}
