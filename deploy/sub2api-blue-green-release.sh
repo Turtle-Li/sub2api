@@ -127,12 +127,28 @@ die() {
   exit 1
 }
 
+caddy_namespace_remount() {
+  local container_pid="$1" access_mode="$2"
+  case "$CADDY_CONFIG_PATH" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "$access_mode" in
+    rw|ro) ;;
+    *) return 1 ;;
+  esac
+  # nsenter preserves the release service environment, whose PATH may omit
+  # /bin. Execute the mount tool from the entered Caddy namespace explicitly:
+  # a missing or non-executable target tool then fails this safety operation
+  # before a startup-file write can proceed.
+  nsenter -t "$container_pid" -m -- \
+    /bin/mount -n -o "remount,$access_mode,bind" "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH"
+}
+
 remount_caddy_startup_read_only() {
   local container_pid="${CADDY_RW_PID:-}"
   [ -n "$container_pid" ] || return 0
-  if nsenter -t "$container_pid" -m -- \
-    mount -n -o remount,ro,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" \
-    >/dev/null 2>&1; then
+  if caddy_namespace_remount "$container_pid" ro >/dev/null 2>&1; then
     CADDY_RW_PID=""
     return 0
   fi
@@ -910,9 +926,7 @@ sync_caddy_startup_file() {
     return 1
   fi
 
-  nsenter -t "$container_pid" -m -- \
-    mount -n -o remount,rw,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" \
-    || {
+  caddy_namespace_remount "$container_pid" rw || {
       log "ERROR: could not temporarily unlock Caddy startup config bind" >&2
       return 1
     }
@@ -945,14 +959,11 @@ except Exception:
     raise
 PY
   then
-    nsenter -t "$container_pid" -m -- \
-      mount -n -o remount,ro,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" >/dev/null 2>&1 || true
+    caddy_namespace_remount "$container_pid" ro >/dev/null 2>&1 || true
     log "ERROR: could not synchronize Caddy startup config" >&2
     return 1
   fi
-  nsenter -t "$container_pid" -m -- \
-    mount -n -o remount,ro,bind "$CADDY_CONFIG_PATH" "$CADDY_CONFIG_PATH" \
-    || {
+  caddy_namespace_remount "$container_pid" ro || {
       log "ERROR: could not restore read-only Caddy startup config bind" >&2
       return 1
     }

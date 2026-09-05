@@ -126,10 +126,10 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if input.Port != 0 {
 		updated.Port = input.Port
 	}
-	if input.Username != "" {
+	if input.UsernameSet || input.Username != "" {
 		updated.Username = input.Username
 	}
-	if input.Password != "" {
+	if input.PasswordSet || input.Password != "" {
 		updated.Password = input.Password
 	}
 	if input.Status != "" {
@@ -146,7 +146,7 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 		if err != nil {
 			return nil, err
 		}
-		if bound {
+		if bound && !FixedEgressCredentialClearNormalization(proxy, &updated) {
 			return nil, fixedEgressProxyIdentityImmutableError()
 		}
 	}
@@ -174,6 +174,29 @@ func FixedEgressProxyIdentityChanged(current, updated *Proxy) bool {
 		!sameOptionalProxyTime(current.ExpiresAt, updated.ExpiresAt) ||
 		current.FallbackMode != updated.FallbackMode ||
 		!sameOptionalProxyID(current.BackupProxyID, updated.BackupProxyID)
+}
+
+// FixedEgressCredentialClearNormalization permits a one-way repair from a
+// legacy credentialed proxy to the required unauthenticated fixed-egress
+// shape. The upstream address, protocol, expiry, and fallback policy remain
+// unchanged, and the resulting proxy must pass fixed-egress validation.
+func FixedEgressCredentialClearNormalization(current, updated *Proxy) bool {
+	if current == nil || updated == nil {
+		return false
+	}
+	if current.Protocol != updated.Protocol ||
+		current.Host != updated.Host ||
+		current.Port != updated.Port ||
+		!sameOptionalProxyTime(current.ExpiresAt, updated.ExpiresAt) ||
+		current.FallbackMode != updated.FallbackMode ||
+		!sameOptionalProxyID(current.BackupProxyID, updated.BackupProxyID) {
+		return false
+	}
+	if (current.Username == "" && current.Password == "") ||
+		(updated.Username != "" || updated.Password != "") {
+		return false
+	}
+	return validateFixedEgressProxy(updated) == nil
 }
 
 func sameOptionalProxyTime(left, right *time.Time) bool {

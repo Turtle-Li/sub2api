@@ -175,7 +175,7 @@ func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.C
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if bound {
+		if bound && !service.FixedEgressCredentialClearNormalization(currentProxy, proxyIn) {
 			return nil, nil, nil, service.ErrFixedEgressProxyIdentityImmutable
 		}
 	}

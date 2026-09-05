@@ -517,12 +517,17 @@ type CreateProxyInput struct {
 }
 
 type UpdateProxyInput struct {
-	Name           string
-	Protocol       string
-	Host           string
-	Port           int
-	Username       string
-	Password       string
+	Name     string
+	Protocol string
+	Host     string
+	Port     int
+	Username string
+	// UsernameSet distinguishes an explicitly submitted empty username from
+	// an omitted field. This lets the admin editor clear saved credentials.
+	UsernameSet bool
+	Password    string
+	// PasswordSet has the same presence semantics as UsernameSet.
+	PasswordSet    bool
 	Status         string
 	ExpiresAt      *time.Time
 	FallbackMode   string

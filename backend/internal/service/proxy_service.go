@@ -158,7 +158,7 @@ func (s *ProxyService) Update(ctx context.Context, id int64, req UpdateProxyRequ
 		if err != nil {
 			return nil, err
 		}
-		if bound {
+		if bound && !FixedEgressCredentialClearNormalization(proxy, &updated) {
 			return nil, fixedEgressProxyIdentityImmutableError()
 		}
 	}
