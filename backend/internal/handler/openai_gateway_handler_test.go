@@ -1978,12 +1978,6 @@ func (s *openAIWSUsageHandlerAccountRepoStub) GetByID(ctx context.Context, id in
 	return &account, nil
 }
 
-func (s *openAIWSUsageHandlerAccountRepoStub) replaceAccount(account service.Account) {
-	s.mu.Lock()
-	s.account = account
-	s.mu.Unlock()
-}
-
 type openAIWSFailoverHandlerAccountRepoStub struct {
 	service.AccountRepository
 	accounts       []service.Account

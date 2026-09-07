@@ -1018,11 +1018,11 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 			filterStats.exclude("excluded")
 			continue
 		}
-		// Preserve the first eligibility veto in legacy no-account diagnostics.
-		// resolveFreshSchedulableOpenAIAccountBeforeProfit applies the same
-		// predicate again after cache/DB refresh, but only returns nil, which
-		// used to lose an image_model_not_supported explanation here.
-		if reason := openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx, acc, platform, requestedModel, false, requiredCapability); reason != "" {
+		// Preserve only request-scoped native-image diagnostics before the fresh
+		// account lookup. Ordinary eligibility failures intentionally retain the
+		// legacy fresh->ineligible diagnostic path.
+		switch reason := OpenAIResponsesImageModelRequirementFailureReason(ctx, acc, platform); reason {
+		case "image_model_not_supported", "image_model_rate_limited":
 			filterStats.exclude(reason)
 			continue
 		}

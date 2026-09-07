@@ -52,6 +52,18 @@ Work is isolated on `codex/responses-image-account-routing`.
   preserved. No plan-name heuristic, tool removal, credential change, schema
   change, or new dependency is part of this repair.
 
+## Candidate publication boundary
+
+AC7: Preserve the old origin's current binary while validating this repair on
+Azure. The existing production workflow formerly coupled image building to an
+old-origin deployment. Its optional `build_only` mode now uses the same exact
+main/image/archive validation but skips all deployment credential setup and
+SSH steps, retaining the artifact and metadata for the audited standby
+receiver. Default production release behavior and serialization are retained.
+The default and build-only control paths require source validation; the first
+build-only run must additionally confirm that all SSH steps were skipped and
+that the downloaded archive matches its builder metadata before candidate use.
+
 ## Delivery and validation
 
 1. Read-only Bug Analysis: complete (`ANALYSIS_READY`).
