@@ -1921,15 +1921,24 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 
 type openAIResponsesWSUsageLogCase struct {
 	firstPayload              string
+	firstClientClose          *openAIResponsesWSClientCloseExpectation
 	secondPayload             string
+	secondClientClose         *openAIResponsesWSClientCloseExpectation
 	userAgent                 *string
 	ingressMode               string
 	channelMapping            map[string]string
 	billingModelSource        string
 	accountModelMapping       map[string]any
+	group                     *service.Group
 	afterFirstUpstreamRequest func(channelSvc *service.ChannelService) error
+	afterFirstAccountRequest  func(channelSvc *service.ChannelService, accountRepo *openAIWSUsageHandlerAccountRepoStub) error
 	wsMode                    string
 	attachmentGateway         *config.AttachmentGatewayConfig
+}
+
+type openAIResponsesWSClientCloseExpectation struct {
+	status coderws.StatusCode
+	reason string
 }
 
 type openAIResponsesWSUsageLogResult struct {
@@ -1942,10 +1951,13 @@ type openAIResponsesWSUsageLogResult struct {
 
 type openAIWSUsageHandlerAccountRepoStub struct {
 	service.AccountRepository
+	mu      sync.RWMutex
 	account service.Account
 }
 
 func (s *openAIWSUsageHandlerAccountRepoStub) ListSchedulableByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.account.Platform != platform {
 		return nil, nil
 	}
@@ -1957,6 +1969,8 @@ func (s *openAIWSUsageHandlerAccountRepoStub) ListSchedulableByGroupIDAndPlatfor
 }
 
 func (s *openAIWSUsageHandlerAccountRepoStub) GetByID(ctx context.Context, id int64) (*service.Account, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.account.ID != id {
 		return nil, nil
 	}
@@ -2844,17 +2858,147 @@ func TestOpenAIResponsesWebSocket_FirstOutputTimeoutWithoutDownstreamReusesClien
 	require.NotContains(t, accountRepo.rateLimitedIDs, int64(9913), "healthy failover account must not be penalized")
 }
 
+func TestOpenAIResponsesWebSocket_FirstNativeImageToolWithTextOnlyAccountClosesLocally(t *testing.T) {
+	result := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+		firstPayload: `{"type":"response.create","model":"gpt-5.5","tools":[{"type":"image_generation"}]}`,
+		accountModelMapping: map[string]any{
+			"gpt-5.5": "gpt-5.5",
+		},
+		wsMode: service.OpenAIWSIngressModePassthrough,
+		firstClientClose: &openAIResponsesWSClientCloseExpectation{
+			status: coderws.StatusTryAgainLater,
+			reason: "no available account",
+		},
+	})
+
+	require.Empty(t, result.upstreamPayloads, "the first native image request must be rejected before opening an upstream connection")
+	require.Empty(t, result.logs)
+}
+
+func TestOpenAIResponsesWebSocket_LaterNativeImageToolDeniedByGroupBeforeUpstream(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		ingressMode string
+	}{
+		{name: "passthrough", ingressMode: service.OpenAIWSIngressModePassthrough},
+		{name: "ctx pool", ingressMode: service.OpenAIWSIngressModeCtxPool},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			groupID := int64(4201)
+			result := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+				firstPayload:  `{"type":"response.create","model":"gpt-5.5","input":"text first"}`,
+				secondPayload: `{"type":"response.create","model":"gpt-5.5","tools":[{"type":"image_generation"}]}`,
+				accountModelMapping: map[string]any{
+					"gpt-5.5":     "gpt-5.5",
+					"gpt-image-2": "gpt-image-2",
+				},
+				ingressMode: tt.ingressMode,
+				group: &service.Group{
+					ID:                   groupID,
+					AllowImageGeneration: false,
+				},
+				secondClientClose: &openAIResponsesWSClientCloseExpectation{
+					status: coderws.StatusPolicyViolation,
+					reason: service.ImageGenerationPermissionMessage(),
+				},
+			})
+
+			require.Len(t, result.upstreamPayloads, 1, "the denied later image frame must not reach the upstream")
+			require.Len(t, result.logs, 1, "the denied later image frame must not record another completed turn")
+		})
+	}
+}
+
+func TestOpenAIResponsesWebSocket_PassthroughLaterImageModelRequiresReconnectAfterMappingRevocation(t *testing.T) {
+	result := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+		firstPayload:  `{"type":"response.create","model":"gpt-5.5","input":"text first"}`,
+		secondPayload: `{"type":"response.create","model":"gpt-5.5","tools":[{"type":"image_generation"}]}`,
+		accountModelMapping: map[string]any{
+			"gpt-5.5":     "gpt-5.5",
+			"gpt-image-2": "gpt-image-2",
+		},
+		wsMode: service.OpenAIWSIngressModePassthrough,
+		afterFirstAccountRequest: func(_ *service.ChannelService, accountRepo *openAIWSUsageHandlerAccountRepoStub) error {
+			accountRepo.mu.Lock()
+			updated := accountRepo.account
+			updated.Credentials = map[string]any{
+				"api_key":       updated.Credentials["api_key"],
+				"base_url":      updated.Credentials["base_url"],
+				"model_mapping": map[string]any{"gpt-5.5": "gpt-5.5"},
+			}
+			accountRepo.account = updated
+			accountRepo.mu.Unlock()
+			return nil
+		},
+		secondClientClose: &openAIResponsesWSClientCloseExpectation{
+			status: coderws.StatusTryAgainLater,
+			reason: "account is no longer eligible for this connection, please reconnect",
+		},
+	})
+
+	require.Len(t, result.upstreamPayloads, 1, "the rejected later native image frame must not reach the passthrough upstream")
+	require.Len(t, result.logs, 1, "the rejected frame must not record another completed turn")
+}
+
+func TestOpenAIResponsesWebSocket_PassthroughImageThenTextClearsImageRequirement(t *testing.T) {
+	result := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+		firstPayload:  `{"type":"response.create","model":"gpt-5.5","tools":[{"type":"image_generation"}]}`,
+		secondPayload: `{"type":"response.create","model":"gpt-5.5","input":"text after image"}`,
+		accountModelMapping: map[string]any{
+			"gpt-5.5":     "gpt-5.5",
+			"gpt-image-2": "gpt-image-2",
+		},
+		wsMode: service.OpenAIWSIngressModePassthrough,
+		afterFirstAccountRequest: func(_ *service.ChannelService, accountRepo *openAIWSUsageHandlerAccountRepoStub) error {
+			accountRepo.mu.Lock()
+			updated := accountRepo.account
+			updated.Credentials = map[string]any{
+				"api_key":       updated.Credentials["api_key"],
+				"base_url":      updated.Credentials["base_url"],
+				"model_mapping": map[string]any{"gpt-5.5": "gpt-5.5"},
+			}
+			accountRepo.account = updated
+			accountRepo.mu.Unlock()
+			return nil
+		},
+	})
+
+	require.Len(t, result.upstreamPayloads, 2, "a text-only turn must clear the first turn's image requirement")
+	require.Len(t, result.logs, 2)
+}
+
 func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSUsageLogCase) openAIResponsesWSUsageLogResult {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	turnCount := 1
+	clientTurnCount := 1
 	if strings.TrimSpace(tc.secondPayload) != "" {
-		turnCount = 2
+		clientTurnCount = 2
 	}
-	upstreamPayloadCh := make(chan []byte, turnCount)
+	upstreamTurnCount := clientTurnCount
+	if tc.firstClientClose != nil {
+		upstreamTurnCount = 0
+	} else if tc.secondClientClose != nil {
+		upstreamTurnCount = 1
+	}
+	upstreamPayloadCapacity := upstreamTurnCount
+	if upstreamPayloadCapacity < 1 {
+		upstreamPayloadCapacity = 1
+	}
+	upstreamPayloadCh := make(chan []byte, upstreamPayloadCapacity)
 	upstreamErrCh := make(chan error, 1)
+	releaseUpstream := make(chan struct{})
+	if tc.secondClientClose != nil {
+		defer func() {
+			select {
+			case <-releaseUpstream:
+			default:
+				close(releaseUpstream)
+			}
+		}()
+	}
 	var channelSvc *service.ChannelService
+	var accountRepo *openAIWSUsageHandlerAccountRepoStub
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{
 			CompressionMode: coderws.CompressionContextTakeover,
@@ -2868,7 +3012,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		}()
 		conn.SetReadLimit(4 * 1024 * 1024)
 
-		for turn := 1; turn <= turnCount; turn++ {
+		for turn := 1; turn <= upstreamTurnCount; turn++ {
 			readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
 			msgType, payload, readErr := conn.Read(readCtx)
 			cancelRead()
@@ -2887,6 +3031,16 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 					return
 				}
 			}
+			if turn == 1 && tc.afterFirstAccountRequest != nil {
+				if accountRepo == nil {
+					upstreamErrCh <- errors.New("account repo was not initialized before first upstream request")
+					return
+				}
+				if callbackErr := tc.afterFirstAccountRequest(channelSvc, accountRepo); callbackErr != nil {
+					upstreamErrCh <- callbackErr
+					return
+				}
+			}
 
 			response := fmt.Sprintf(
 				`{"type":"response.completed","response":{"id":"resp_usage_e2e_%d","model":%q,"usage":{"input_tokens":2,"output_tokens":1}}}`,
@@ -2898,6 +3052,35 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			cancelWrite()
 			if writeErr != nil {
 				upstreamErrCh <- writeErr
+				return
+			}
+		}
+		if tc.secondClientClose != nil {
+			// Keep reading after the completed first turn. A later policy/reconnect
+			// close must happen before the request reaches upstream; stopping here
+			// would let a wrongly forwarded second frame escape this fixture.
+			unexpectedFrameCtx, cancelUnexpectedFrame := context.WithCancel(r.Context())
+			go func() {
+				select {
+				case <-releaseUpstream:
+					// Give a just-written frame a bounded chance to arrive after the
+					// client observes its close, then end the intentional read wait.
+					timer := time.NewTimer(150 * time.Millisecond)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+						cancelUnexpectedFrame()
+					case <-r.Context().Done():
+						cancelUnexpectedFrame()
+					}
+				case <-r.Context().Done():
+					cancelUnexpectedFrame()
+				}
+			}()
+			msgType, payload, readErr := conn.Read(unexpectedFrameCtx)
+			cancelUnexpectedFrame()
+			if readErr == nil {
+				upstreamErrCh <- fmt.Errorf("unexpected upstream frame after client close (type=%d, bytes=%d)", msgType, len(payload))
 				return
 			}
 		}
@@ -2949,8 +3132,8 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		cfg.Gateway.AttachmentGateway = *tc.attachmentGateway
 	}
 
-	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account}
-	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, turnCount)}
+	accountRepo = &openAIWSUsageHandlerAccountRepoStub{account: account}
+	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, clientTurnCount)}
 
 	if len(tc.channelMapping) > 0 {
 		channelSvc = service.NewChannelService(&openAIWSUsageHandlerChannelRepoStub{
@@ -3013,6 +3196,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		ID:      1801,
 		GroupID: &groupID,
 		User:    &service.User{ID: 1701, Status: service.StatusActive},
+		Group:   tc.group,
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -3045,7 +3229,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	cancelWrite()
 	require.NoError(t, err)
 
-	clientEvents := make([][]byte, 0, turnCount)
+	clientEvents := make([][]byte, 0, clientTurnCount)
 	readCompleted := func() {
 		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 		_, event, readErr := clientConn.Read(readCtx)
@@ -3054,18 +3238,45 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
 		clientEvents = append(clientEvents, append([]byte(nil), event...))
 	}
-	readCompleted()
-	if turnCount == 2 {
+	if expectedClose := tc.firstClientClose; expectedClose != nil {
+		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+		_, _, readErr := clientConn.Read(readCtx)
+		cancelRead()
+		var closeErr coderws.CloseError
+		require.ErrorAs(t, readErr, &closeErr)
+		require.Equal(t, expectedClose.status, closeErr.Code)
+		require.Equal(t, expectedClose.reason, closeErr.Reason)
+	} else {
+		readCompleted()
+	}
+	if tc.firstClientClose == nil && clientTurnCount == 2 {
 		writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
 		err = clientConn.Write(writeCtx, coderws.MessageText, []byte(tc.secondPayload))
 		cancelWrite()
 		require.NoError(t, err)
-		readCompleted()
+		if expectedClose := tc.secondClientClose; expectedClose != nil {
+			readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+			_, _, readErr := clientConn.Read(readCtx)
+			cancelRead()
+			var closeErr coderws.CloseError
+			require.ErrorAs(t, readErr, &closeErr)
+			require.Equal(t, expectedClose.status, closeErr.Code)
+			require.Equal(t, expectedClose.reason, closeErr.Reason)
+			close(releaseUpstream)
+		} else {
+			readCompleted()
+		}
 	}
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
-	usageLogs := make([]*service.UsageLog, 0, turnCount)
-	for len(usageLogs) < turnCount {
+	expectedUsageLogCount := clientTurnCount
+	if tc.firstClientClose != nil {
+		expectedUsageLogCount = 0
+	} else if tc.secondClientClose != nil {
+		expectedUsageLogCount = 1
+	}
+	usageLogs := make([]*service.UsageLog, 0, expectedUsageLogCount)
+	for len(usageLogs) < expectedUsageLogCount {
 		select {
 		case usageLog := <-usageRepo.created:
 			require.NotNil(t, usageLog)
@@ -3075,8 +3286,8 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		}
 	}
 
-	upstreamPayloads := make([][]byte, 0, turnCount)
-	for len(upstreamPayloads) < turnCount {
+	upstreamPayloads := make([][]byte, 0, upstreamTurnCount)
+	for len(upstreamPayloads) < upstreamTurnCount {
 		select {
 		case payload := <-upstreamPayloadCh:
 			upstreamPayloads = append(upstreamPayloads, payload)
@@ -3085,17 +3296,27 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		}
 	}
 
-	select {
-	case upstreamErr := <-upstreamErrCh:
-		require.NoError(t, upstreamErr)
-	case <-time.After(3 * time.Second):
-		t.Fatal("等待上游 WebSocket 结束超时")
+	if tc.firstClientClose == nil {
+		select {
+		case upstreamErr := <-upstreamErrCh:
+			require.NoError(t, upstreamErr)
+		case <-time.After(3 * time.Second):
+			t.Fatal("等待上游 WebSocket 结束超时")
+		}
 	}
 
+	var upstreamFirstPayload []byte
+	if len(upstreamPayloads) > 0 {
+		upstreamFirstPayload = upstreamPayloads[0]
+	}
+	var firstUsageLog *service.UsageLog
+	if len(usageLogs) > 0 {
+		firstUsageLog = usageLogs[0]
+	}
 	return openAIResponsesWSUsageLogResult{
-		log:                  usageLogs[0],
+		log:                  firstUsageLog,
 		logs:                 usageLogs,
-		upstreamFirstPayload: upstreamPayloads[0],
+		upstreamFirstPayload: upstreamFirstPayload,
 		upstreamPayloads:     upstreamPayloads,
 		clientEvents:         clientEvents,
 	}

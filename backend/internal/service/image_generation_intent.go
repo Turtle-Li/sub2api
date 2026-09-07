@@ -9,6 +9,7 @@ import (
 const (
 	openAIResponsesEndpoint          = "/v1/responses"
 	openAIResponsesCompactEndpoint   = "/v1/responses/compact"
+	openAIResponsesDefaultImageModel = "gpt-image-2"
 	responsesLiteHeader              = "X-OpenAI-Internal-Codex-Responses-Lite"
 	responsesLiteHeaderKey           = "x-openai-internal-codex-responses-lite"
 	responsesLiteWSMetadataKey       = "ws_request_header_x_openai_internal_codex_responses_lite"
@@ -424,6 +425,38 @@ type OpenAIResponsesImageBillingConfig struct {
 	InputSize string
 }
 
+// OpenAIResponsesNativeImageGenerationToolModels returns every distinct model
+// requested by a native Responses image_generation tool. A tool without a
+// model uses the same gpt-image-2 default as image billing and forwarding.
+// Namespace and user-defined function tools are intentionally not included.
+func OpenAIResponsesNativeImageGenerationToolModels(body []byte) []string {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return nil
+	}
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return nil
+	}
+
+	models := make([]string, 0, int(tools.Get("#").Int()))
+	seen := make(map[string]struct{})
+	tools.ForEach(func(_, tool gjson.Result) bool {
+		if openAIJSONString(tool.Get("type")) != "image_generation" {
+			return true
+		}
+		model := openAIJSONString(tool.Get("model"))
+		if model == "" {
+			model = openAIResponsesDefaultImageModel
+		}
+		if _, exists := seen[model]; !exists {
+			seen[model] = struct{}{}
+			models = append(models, model)
+		}
+		return true
+	})
+	return models
+}
+
 func resolveOpenAIResponsesImageBillingConfigDetailed(reqBody map[string]any, fallbackModel string) (OpenAIResponsesImageBillingConfig, error) {
 	imageModel := ""
 	imageSize := ""
@@ -451,7 +484,7 @@ func resolveOpenAIResponsesImageBillingConfigDetailed(reqBody map[string]any, fa
 		}
 	}
 	if imageModel == "" && hasImageTool {
-		imageModel = "gpt-image-2"
+		imageModel = openAIResponsesDefaultImageModel
 	}
 	if imageModel == "" {
 		imageModel = strings.TrimSpace(fallbackModel)
@@ -500,7 +533,7 @@ func resolveOpenAIResponsesImageBillingConfigDetailedFromBody(body []byte, fallb
 		}
 	}
 	if imageModel == "" && hasImageTool {
-		imageModel = "gpt-image-2"
+		imageModel = openAIResponsesDefaultImageModel
 	}
 	if imageModel == "" {
 		imageModel = strings.TrimSpace(fallbackModel)

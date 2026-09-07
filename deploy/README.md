@@ -134,6 +134,29 @@ boundaries. Use the same immutable image for both stages and follow the ordered
 inventory/fence/CAS gates in
 `../docs/operations/SUB2_DUAL_NODE_RUNTIME_CERT_EGRESS.md`.
 
+### Build an image without updating the old origin
+
+Dispatch `.github/workflows/sub2api-production-deploy.yml` from `main` with
+`build_only=true` to build and retain a verified image artifact without
+setting up deployment SSH credentials or contacting either application host.
+The default remains the existing production blue-green release. Both modes
+use the same serialized workflow, exact source/OCI label and compressed archive
+checks, and reject a build if `main` advances before publication.
+
+Build-only output is `sub2api-image-<full-commit>` with one-day retention. It
+contains the zstd Docker archive and `sub2api-image-metadata.json` recording the
+revision, version, image tag, source, platform, archive SHA-256/byte count and
+GitHub run ID. Verify those fields against the approved commit and completed
+GitHub build, then verify the actual archive hash and size before transfer.
+
+For an authorized Azure standby release, feed that archive to the installed
+`sub2api-github-image-release.sh COMMIT VERSION ARCHIVE_DIGEST` receiver with
+`SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby`. The receiver and normal
+blue-green helper retain their identity checks, maintenance locking, local
+health probes and rollback. Recheck the candidate's current state and inactive
+slot first. This route obtains a candidate image without replacing the old
+origin's rollback version; it does not transfer background ownership or DNS.
+
 ### GCP Taiwan Premium transport ingress
 
 The retained GCP Taiwan Premium address now runs the approved HAProxy

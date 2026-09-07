@@ -2,10 +2,17 @@ name: Deploy Sub2API production
 
 on:
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: 'Build a verified image artifact without deploying any host'
+        required: false
+        type: boolean
+        default: false
 
 # A production release is always explicit. GitHub builds the exact main commit
 # into a linux/amd64 image, compresses its Docker archive, and streams it over
-# the existing restricted SSH account. Production only loads the verified image
+# the existing restricted SSH account unless build_only retains an artifact.
+# Production only loads the verified image
 # and performs the blue-green switch; it never checks out source or compiles.
 permissions:
   contents: read
@@ -16,18 +23,19 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    name: Build image and run blue-green release
+    name: Build verified image and optionally deploy
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      DEPLOY_HOST: ${{ secrets.SUB2API_DEPLOY_HOST }}
-      DEPLOY_KNOWN_HOSTS: ${{ secrets.SUB2API_DEPLOY_KNOWN_HOSTS }}
-      DEPLOY_KEY: ${{ secrets.SUB2API_DEPLOY_SSH_KEY }}
-      DEPLOY_PORT: ${{ secrets.SUB2API_DEPLOY_PORT }}
-      DEPLOY_USER: ${{ secrets.SUB2API_DEPLOY_USER }}
     steps:
       - name: Validate deployment configuration
+        if: ${{ !inputs.build_only }}
+        env:
+          DEPLOY_HOST: ${{ secrets.SUB2API_DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SUB2API_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_KEY: ${{ secrets.SUB2API_DEPLOY_SSH_KEY }}
+          DEPLOY_PORT: ${{ secrets.SUB2API_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.SUB2API_DEPLOY_USER }}
         run: |
           test -n "$DEPLOY_HOST"
           test -n "$DEPLOY_KNOWN_HOSTS"
@@ -40,6 +48,13 @@ jobs:
           command -v zstd >/dev/null
 
       - name: Configure restricted SSH client
+        if: ${{ !inputs.build_only }}
+        env:
+          DEPLOY_HOST: ${{ secrets.SUB2API_DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SUB2API_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_KEY: ${{ secrets.SUB2API_DEPLOY_SSH_KEY }}
+          DEPLOY_PORT: ${{ secrets.SUB2API_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.SUB2API_DEPLOY_USER }}
         run: |
           umask 077
           mkdir -p "$HOME/.ssh"
@@ -199,8 +214,54 @@ jobs:
             exit 1
           fi
 
-      - name: Upload image and start verified blue-green release
+      - name: Write candidate image metadata
+        if: ${{ inputs.build_only }}
         env:
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+          IMAGE_TAG: ${{ steps.metadata.outputs.image_tag }}
+          BUILD_DATE: ${{ steps.metadata.outputs.build_date }}
+          ARCHIVE_DIGEST: ${{ steps.archive.outputs.digest }}
+          ARCHIVE_BYTES: ${{ steps.archive.outputs.bytes }}
+        run: |
+          python3 - <<'PY_METADATA'
+          import json
+          import os
+          from pathlib import Path
+          metadata = {
+              "revision": os.environ["SOURCE_COMMIT"],
+              "version": os.environ["VERSION"],
+              "source": "https://github.com/" + os.environ["GITHUB_REPOSITORY"],
+              "image_tag": os.environ["IMAGE_TAG"],
+              "platform": "linux/amd64",
+              "created": os.environ["BUILD_DATE"],
+              "archive_digest": os.environ["ARCHIVE_DIGEST"],
+              "archive_bytes": int(os.environ["ARCHIVE_BYTES"]),
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+          }
+          Path(os.environ["RUNNER_TEMP"], "sub2api-image-metadata.json").write_text(
+              json.dumps(metadata, indent=2) + "\n"
+          )
+          PY_METADATA
+
+      - name: Upload verified candidate image artifact
+        if: ${{ inputs.build_only }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: sub2api-image-${{ steps.metadata.outputs.commit }}
+          path: |
+            ${{ steps.archive.outputs.path }}
+            ${{ runner.temp }}/sub2api-image-metadata.json
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload image and start verified blue-green release
+        if: ${{ !inputs.build_only }}
+        env:
+          DEPLOY_HOST: ${{ secrets.SUB2API_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.SUB2API_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.SUB2API_DEPLOY_USER }}
           ARCHIVE_DIGEST: ${{ steps.archive.outputs.digest }}
           ARCHIVE_PATH: ${{ steps.archive.outputs.path }}
           SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
@@ -222,6 +283,7 @@ jobs:
 
       - name: Record release summary
         env:
+          BUILD_ONLY: ${{ inputs.build_only }}
           ARCHIVE_BYTES: ${{ steps.archive.outputs.bytes }}
           ARCHIVE_CONFIG_ID: ${{ steps.archive.outputs.config_id }}
           ARCHIVE_DIGEST: ${{ steps.archive.outputs.digest }}
@@ -230,7 +292,7 @@ jobs:
           VERSION: ${{ steps.metadata.outputs.version }}
         run: |
           {
-            echo "### Sub2API production release"
+            echo "### Sub2API verified image"
             echo
             echo "- Commit: \`${SOURCE_COMMIT}\`"
             echo "- Version: \`${VERSION}\`"
@@ -239,5 +301,10 @@ jobs:
             echo "- Compressed archive digest: \`${ARCHIVE_DIGEST}\`"
             echo "- Compressed archive bytes: \`${ARCHIVE_BYTES}\`"
             echo "- Build: GitHub-hosted linux/amd64 runner"
-            echo "- Production: verified image load and blue-green switch only"
+            if [ "$BUILD_ONLY" = "true" ]; then
+              echo "- Mode: build only; no host deployment or SSH credential setup"
+              echo "- Artifact: sub2api-image-${SOURCE_COMMIT} (retained for one day)"
+            else
+              echo "- Production: verified image load and blue-green switch only"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

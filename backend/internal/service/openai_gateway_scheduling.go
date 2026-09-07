@@ -434,6 +434,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
 		return "model_not_supported"
 	}
+	if reason := OpenAIResponsesImageModelRequirementFailureReason(ctx, account, platform); reason != "" {
+		return reason
+	}
 	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
 		if account.IsGrok() && requiredCapability == OpenAIEndpointCapabilityGrokMediaGeneration {
 			_, reason := account.GrokMediaGenerationEligibility()
@@ -1013,6 +1016,14 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 		// Skip excluded accounts
 		if _, excluded := excludedIDs[acc.ID]; excluded {
 			filterStats.exclude("excluded")
+			continue
+		}
+		// Preserve only request-scoped native-image diagnostics before the fresh
+		// account lookup. Ordinary eligibility failures intentionally retain the
+		// legacy fresh->ineligible diagnostic path.
+		switch reason := OpenAIResponsesImageModelRequirementFailureReason(ctx, acc, platform); reason {
+		case "image_model_not_supported", "image_model_rate_limited":
+			filterStats.exclude(reason)
 			continue
 		}
 
