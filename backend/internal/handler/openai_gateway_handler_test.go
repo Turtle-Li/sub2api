@@ -1920,20 +1920,28 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 }
 
 type openAIResponsesWSUsageLogCase struct {
-	firstPayload              string
-	firstClientClose          *openAIResponsesWSClientCloseExpectation
-	secondPayload             string
-	secondClientClose         *openAIResponsesWSClientCloseExpectation
-	userAgent                 *string
-	ingressMode               string
-	channelMapping            map[string]string
-	billingModelSource        string
-	accountModelMapping       map[string]any
+	firstPayload     string
+	firstClientClose *openAIResponsesWSClientCloseExpectation
+	// midPayload 在首个 turn 完成后发送（如 session.update），上游桩会为它
+	// 回一个 response.completed，客户端按普通事件读取。
+	midPayload          string
+	secondPayload       string
+	secondClientClose   *openAIResponsesWSClientCloseExpectation
+	userAgent           *string
+	ingressMode         string
+	channelMapping      map[string]string
+	billingModelSource  string
+	accountModelMapping map[string]any
+	// group 覆盖 apiKey.Group（分组级模型白名单和图片权限测试用）；nil 保持原有无分组行为。
 	group                     *service.Group
 	afterFirstUpstreamRequest func(channelSvc *service.ChannelService) error
 	afterFirstAccountRequest  func(channelSvc *service.ChannelService, accountRepo *openAIWSUsageHandlerAccountRepoStub) error
 	wsMode                    string
 	attachmentGateway         *config.AttachmentGatewayConfig
+	// firstFrameCloseExpected：首帧即被拒（连接被 1008 关闭），不期待任何响应帧。
+	firstFrameCloseExpected bool
+	// secondTurnCloseExpected：第二个 turn 被拒（连接被 1008 关闭）。
+	secondTurnCloseExpected bool
 }
 
 type openAIResponsesWSClientCloseExpectation struct {
@@ -2972,14 +2980,20 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	gin.SetMode(gin.TestMode)
 
 	clientTurnCount := 1
-	if strings.TrimSpace(tc.secondPayload) != "" {
-		clientTurnCount = 2
+	if strings.TrimSpace(tc.midPayload) != "" {
+		clientTurnCount++
 	}
+	if strings.TrimSpace(tc.secondPayload) != "" {
+		clientTurnCount++
+	}
+	firstFrameCloseExpected := tc.firstClientClose != nil || tc.firstFrameCloseExpected
+	secondTurnCloseExpected := strings.TrimSpace(tc.secondPayload) != "" &&
+		(tc.secondClientClose != nil || tc.secondTurnCloseExpected)
 	upstreamTurnCount := clientTurnCount
-	if tc.firstClientClose != nil {
+	if firstFrameCloseExpected {
 		upstreamTurnCount = 0
-	} else if tc.secondClientClose != nil {
-		upstreamTurnCount = 1
+	} else if secondTurnCloseExpected {
+		upstreamTurnCount--
 	}
 	upstreamPayloadCapacity := upstreamTurnCount
 	if upstreamPayloadCapacity < 1 {
@@ -2988,7 +3002,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	upstreamPayloadCh := make(chan []byte, upstreamPayloadCapacity)
 	upstreamErrCh := make(chan error, 1)
 	releaseUpstream := make(chan struct{})
-	if tc.secondClientClose != nil {
+	if secondTurnCloseExpected {
 		defer func() {
 			select {
 			case <-releaseUpstream:
@@ -3055,10 +3069,10 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 				return
 			}
 		}
-		if tc.secondClientClose != nil {
-			// Keep reading after the completed first turn. A later policy/reconnect
-			// close must happen before the request reaches upstream; stopping here
-			// would let a wrongly forwarded second frame escape this fixture.
+		if secondTurnCloseExpected {
+			// Keep reading after completed prior turns. A later policy/reconnect/
+			// allowlist close must happen before the request reaches upstream;
+			// stopping here would let a wrongly forwarded frame escape this fixture.
 			unexpectedFrameCtx, cancelUnexpectedFrame := context.WithCancel(r.Context())
 			go func() {
 				select {
@@ -3196,7 +3210,9 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		ID:      1801,
 		GroupID: &groupID,
 		User:    &service.User{ID: 1701, Status: service.StatusActive},
-		Group:   tc.group,
+	}
+	if tc.group != nil {
+		apiKey.Group = tc.group
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -3242,14 +3258,31 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 		_, _, readErr := clientConn.Read(readCtx)
 		cancelRead()
+		require.Error(t, readErr, "first frame should have been rejected with a close")
 		var closeErr coderws.CloseError
 		require.ErrorAs(t, readErr, &closeErr)
 		require.Equal(t, expectedClose.status, closeErr.Code)
 		require.Equal(t, expectedClose.reason, closeErr.Reason)
+	} else if tc.firstFrameCloseExpected {
+		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+		_, _, readErr := clientConn.Read(readCtx)
+		cancelRead()
+		require.Error(t, readErr, "first frame should have been rejected with a close")
+		var closeErr coderws.CloseError
+		require.ErrorAs(t, readErr, &closeErr)
+		require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+		require.Contains(t, closeErr.Reason, "not available for this group")
 	} else {
 		readCompleted()
 	}
-	if tc.firstClientClose == nil && clientTurnCount == 2 {
+	if !firstFrameCloseExpected && tc.midPayload != "" {
+		writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
+		err = clientConn.Write(writeCtx, coderws.MessageText, []byte(tc.midPayload))
+		cancelWrite()
+		require.NoError(t, err)
+		readCompleted()
+	}
+	if !firstFrameCloseExpected && strings.TrimSpace(tc.secondPayload) != "" {
 		writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
 		err = clientConn.Write(writeCtx, coderws.MessageText, []byte(tc.secondPayload))
 		cancelWrite()
@@ -3258,10 +3291,21 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 			_, _, readErr := clientConn.Read(readCtx)
 			cancelRead()
+			require.Error(t, readErr, "second turn should have been rejected with a close")
 			var closeErr coderws.CloseError
 			require.ErrorAs(t, readErr, &closeErr)
 			require.Equal(t, expectedClose.status, closeErr.Code)
 			require.Equal(t, expectedClose.reason, closeErr.Reason)
+			close(releaseUpstream)
+		} else if tc.secondTurnCloseExpected {
+			readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+			_, _, readErr := clientConn.Read(readCtx)
+			cancelRead()
+			require.Error(t, readErr, "second turn should have been rejected with a close")
+			var closeErr coderws.CloseError
+			require.ErrorAs(t, readErr, &closeErr)
+			require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+			require.Contains(t, closeErr.Reason, "not available for this group")
 			close(releaseUpstream)
 		} else {
 			readCompleted()
@@ -3269,12 +3313,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	}
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
-	expectedUsageLogCount := clientTurnCount
-	if tc.firstClientClose != nil {
-		expectedUsageLogCount = 0
-	} else if tc.secondClientClose != nil {
-		expectedUsageLogCount = 1
-	}
+	expectedUsageLogCount := upstreamTurnCount
 	usageLogs := make([]*service.UsageLog, 0, expectedUsageLogCount)
 	for len(usageLogs) < expectedUsageLogCount {
 		select {
@@ -3296,7 +3335,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		}
 	}
 
-	if tc.firstClientClose == nil {
+	if !firstFrameCloseExpected {
 		select {
 		case upstreamErr := <-upstreamErrCh:
 			require.NoError(t, upstreamErr)

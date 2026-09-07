@@ -385,16 +385,21 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	if err := enforceOpenAIOAuthShadowProxyRelation(ctx, txClient, account); err != nil {
 		return err
 	}
+	groupIDs := make([]int64, 0, len(groups))
+	for i := range groups {
+		groupIDs = append(groupIDs, groups[i].GroupID)
+	}
+	if err := lockLiveGroups(ctx, txClient, groupIDs); err != nil {
+		return err
+	}
 
 	if err := createAccountRecord(ctx, txClient, account); err != nil {
 		return err
 	}
-	groupIDs := make([]int64, 0, len(groups))
 	if len(groups) > 0 {
 		builders := make([]*dbent.AccountGroupCreate, 0, len(groups))
 		for i := range groups {
 			groups[i].AccountID = account.ID
-			groupIDs = append(groupIDs, groups[i].GroupID)
 			builders = append(builders, txClient.AccountGroup.Create().
 				SetAccountID(account.ID).
 				SetGroupID(groups[i].GroupID).
@@ -2219,6 +2224,9 @@ func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID i
 	if err := lockLiveAccountForGroupMutation(ctx, client, accountID); err != nil {
 		return err
 	}
+	if err := lockLiveGroups(ctx, client, []int64{groupID}); err != nil {
+		return err
+	}
 	_, err = client.AccountGroup.Create().
 		SetAccountID(accountID).
 		SetGroupID(groupID).
@@ -2293,6 +2301,9 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 		defer func() { _ = tx.Rollback() }()
 	}
 	if err := lockLiveAccountForGroupMutation(ctx, client, accountID); err != nil {
+		return err
+	}
+	if err := lockLiveGroups(ctx, client, groupIDs); err != nil {
 		return err
 	}
 	existingGroupIDs, err := loadAccountGroupIDsWithClient(ctx, client, accountID)

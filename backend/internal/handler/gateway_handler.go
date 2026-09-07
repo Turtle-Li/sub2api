@@ -1134,14 +1134,24 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		platform = forcedPlatform
 	}
 
+	if platform == service.PlatformOpenAI && apiKey != nil && apiKey.Group != nil &&
+		apiKey.Group.Platform == service.PlatformOpenAI && apiKey.Group.CodexModelsManifestConfig.Enabled {
+		h.pinnedOpenAIModels(c, apiKey.Group)
+		return
+	}
+
 	if platform == service.PlatformComposite {
 		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID)
-		if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
-			availableModels = filterModelsByCustomList(availableModels, defaultModelIDsForPlatform(service.PlatformComposite), apiKey.Group.ModelsListConfig.Models)
+		if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
+			source := availableModels
+			if len(source) == 0 {
+				source = defaultModelIDsForPlatform(service.PlatformComposite)
+			}
+			availableModels = apiKey.Group.ModelAllowlist.FilterForListing(source)
 			if h.writeVerifiedProbeModelsIfRequested(c, service.PlatformComposite, groupID, availableModels, true) {
 				return
 			}
-			writeCustomModelsList(c, service.PlatformComposite, availableModels)
+			writeAllowlistedModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
 		if len(availableModels) > 0 {
@@ -1161,13 +1171,13 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 	// Get available models from account configurations for the selected group platform.
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
-	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
-		fallbackModels := defaultModelIDsForPlatform(platform)
-		availableModels = filterModelsByCustomList(customModelsListSource(platform, availableModels, fallbackModels), fallbackModels, apiKey.Group.ModelsListConfig.Models)
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
+		source := modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
+		availableModels = apiKey.Group.ModelAllowlist.FilterForListing(source)
 		if h.writeVerifiedProbeModelsIfRequested(c, platform, groupID, availableModels, true) {
 			return
 		}
-		writeCustomModelsList(c, platform, availableModels)
+		writeAllowlistedModelsList(c, platform, availableModels)
 		return
 	}
 
@@ -1259,8 +1269,12 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 	if platform == service.PlatformComposite {
 		availableModels := h.compositeAvailableModels(ctx, groupID)
 		fallbackModels := defaultCodexModelIDsForPlatform(service.PlatformComposite)
-		if group.CustomModelsListEnabled() {
-			return filterModelsByCustomList(availableModels, fallbackModels, group.ModelsListConfig.Models)
+		if group.ModelAllowlistEnabled() {
+			source := availableModels
+			if len(source) == 0 {
+				source = fallbackModels
+			}
+			return group.ModelAllowlist.FilterForListing(source)
 		}
 		if len(availableModels) > 0 {
 			return availableModels
@@ -1270,12 +1284,8 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 
 	availableModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
 	fallbackModels := defaultCodexModelIDsForPlatform(platform)
-	if group.CustomModelsListEnabled() {
-		return filterModelsByCustomList(
-			customModelsListSource(platform, availableModels, fallbackModels),
-			fallbackModels,
-			group.ModelsListConfig.Models,
-		)
+	if group.ModelAllowlistEnabled() {
+		return group.ModelAllowlist.FilterForListing(modelListingSource(platform, availableModels, fallbackModels))
 	}
 	if len(availableModels) > 0 {
 		return availableModels
@@ -1322,7 +1332,7 @@ func (h *GatewayHandler) writeVerifiedProbeModelsIfRequested(c *gin.Context, pla
 	}
 	metadata := h.gatewayService.GetVerifiedProbeModelMetadata(c.Request.Context(), groupID, platform, modelIDs)
 	if custom {
-		writeCustomModelsListWithProbeMetadata(c, platform, modelIDs, metadata)
+		writeAllowlistedModelsListWithProbeMetadata(c, platform, modelIDs, metadata)
 	} else {
 		writeModelsListWithProbeMetadata(c, platform, modelIDs, metadata)
 	}
@@ -1354,6 +1364,10 @@ func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
 }
 
 func writeModelsListWithProbeMetadata(c *gin.Context, platform string, modelIDs []string, metadata map[string]service.ProbeModelMetadata) {
+	if platform == service.PlatformOpenAI {
+		writeOpenAIModelsListWithProbeMetadata(c, modelIDs, metadata)
+		return
+	}
 	if platform == service.PlatformGrok {
 		writeGrokModelsListWithProbeMetadata(c, modelIDs, metadata)
 		return
@@ -1392,11 +1406,11 @@ func writeModelsListWithProbeMetadata(c *gin.Context, platform string, modelIDs 
 	})
 }
 
-func writeCustomModelsList(c *gin.Context, platform string, modelIDs []string) {
-	writeCustomModelsListWithProbeMetadata(c, platform, modelIDs, nil)
+func writeAllowlistedModelsList(c *gin.Context, platform string, modelIDs []string) {
+	writeAllowlistedModelsListWithProbeMetadata(c, platform, modelIDs, nil)
 }
 
-func writeCustomModelsListWithProbeMetadata(c *gin.Context, platform string, modelIDs []string, metadata map[string]service.ProbeModelMetadata) {
+func writeAllowlistedModelsListWithProbeMetadata(c *gin.Context, platform string, modelIDs []string, metadata map[string]service.ProbeModelMetadata) {
 	if platform == service.PlatformOpenAI {
 		writeOpenAIModelsListWithProbeMetadata(c, modelIDs, metadata)
 		return
@@ -1522,70 +1536,17 @@ func writeOpenAIModelsListWithProbeMetadata(c *gin.Context, modelIDs []string, m
 	})
 }
 
-func customModelsListSource(platform string, availableModels, fallbackModels []string) []string {
-	if platform == service.PlatformAnthropic && len(availableModels) > 0 {
+// modelListingSource 汇总模型列表过滤的候选来源：账号映射键（availableModels）
+// 与平台默认列表（fallbackModels）。账号映射为空时回落默认列表；Anthropic
+// 平台两者取并集，其余平台以账号映射键为准。
+func modelListingSource(platform string, availableModels, fallbackModels []string) []string {
+	if len(availableModels) == 0 {
+		return fallbackModels
+	}
+	if platform == service.PlatformAnthropic {
 		return mergeModelIDs(availableModels, fallbackModels)
 	}
 	return availableModels
-}
-
-func filterModelsByCustomList(availableModels, fallbackModels, selectedModels []string) []string {
-	if len(selectedModels) == 0 {
-		return availableModels
-	}
-	source := availableModels
-	if len(source) == 0 {
-		source = fallbackModels
-	}
-	if len(source) == 0 {
-		return nil
-	}
-
-	allowed := make([]string, 0, len(source))
-	for _, model := range source {
-		model = strings.TrimSpace(model)
-		if model != "" {
-			allowed = append(allowed, model)
-		}
-	}
-
-	seen := make(map[string]struct{}, len(selectedModels))
-	filtered := make([]string, 0, len(selectedModels))
-	for _, model := range selectedModels {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			continue
-		}
-		if !customModelsListAllowsModel(allowed, model) {
-			continue
-		}
-		if _, ok := seen[model]; ok {
-			continue
-		}
-		seen[model] = struct{}{}
-		filtered = append(filtered, model)
-	}
-	return filtered
-}
-
-func customModelsListAllowsModel(availablePatterns []string, model string) bool {
-	for _, pattern := range availablePatterns {
-		if pattern == model {
-			return true
-		}
-		if strings.HasSuffix(pattern, "*") && strings.HasPrefix(model, strings.TrimSuffix(pattern, "*")) {
-			return true
-		}
-	}
-	normalizedClaudeModel := claude.NormalizeModelID(strings.TrimSuffix(model, "-thinking"))
-	if normalizedClaudeModel != model {
-		for _, pattern := range availablePatterns {
-			if pattern == normalizedClaudeModel {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func defaultCodexModelIDsForPlatform(platform string) []string {
@@ -1661,10 +1622,21 @@ func mergeModelIDs(primary, secondary []string) []string {
 
 // AntigravityModels 返回 Antigravity 支持的全部模型
 // GET /antigravity/models
+// 分组级模型白名单开启时按白名单过滤。
 func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
+	models := antigravity.DefaultModels()
+	if apiKey, ok := middleware2.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
+		filtered := make([]antigravity.ClaudeModel, 0, len(models))
+		for _, model := range models {
+			if apiKey.Group.ModelAllowlist.Allows(model.ID) {
+				filtered = append(filtered, model)
+			}
+		}
+		models = filtered
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
-		"data":   antigravity.DefaultModels(),
+		"data":   models,
 	})
 }
 

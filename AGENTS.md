@@ -68,6 +68,11 @@
 
 ## Upstream update scope
 
+- For v0.2.2 model allowlists and rolling upgrades, read
+  `docs/operations/UPSTREAM_V022_ALLOWLIST_20260907.md`. Preserve the Ent
+  legacy storage key and disabled production allowlists; upstream migration
+  235 must not rename a column still used by draining/rollback binaries.
+
 - For native Responses image-tool account admission, read
   `docs/operations/RESPONSES_IMAGE_ACCOUNT_ROUTING_20260907.md` for the fixed
   upstream reference, local behavior contract, and regression scope.

@@ -492,6 +492,7 @@ export default {
           account: '账号级别指标'
         },
         metrics: {
+          networkBandwidthUtilization: '网络带宽使用率 (%)',
           successRate: '成功率 (%)',
           errorRate: '错误率 (%)',
           upstreamErrorRate: '上游错误率 (%)',
@@ -510,6 +511,7 @@ export default {
           overloadAccountCount: '过载账号数'
         },
         metricDescriptions: {
+          networkBandwidthUtilization: '当前网络带宽占已配置带宽上限的百分比。',
           successRate: '统计窗口内成功请求占比（0~100）。',
           errorRate: '统计窗口内失败请求占比（0~100）。',
           upstreamErrorRate: '统计窗口内上游错误占比（0~100）。',
@@ -528,6 +530,7 @@ export default {
           overloadAccountCount: '统计窗口内过载账号数量。'
         },
         hints: {
+          bandwidthLimitRequired: '使用此指标前，请先配置带宽上限。',
           recommended: '推荐：运算符 {operator}，阈值 {threshold}{unit}',
           groupRequired: '该指标为分组级别指标，必须选择分组（group_id）。',
           groupOptional: '可选：通过 group_id 将规则限定到某个分组。'
@@ -556,6 +559,7 @@ export default {
           notifyEmail: '发送邮件通知'
         },
         validation: {
+          bandwidthLimitRequired: '带宽使用率告警需要先配置带宽上限。',
           title: '请先修正以下问题',
           invalid: '规则不合法',
           nameRequired: '名称不能为空',
@@ -579,6 +583,16 @@ export default {
         alertTitle: '告警评估器',
         groupAvailabilityTitle: '分组可用性监控',
         evalIntervalSeconds: '评估间隔（秒）',
+        metricThresholds: '指标阈值配置',
+        metricThresholdsHint: '配置各项指标的告警阈值，超出阈值时将以红色显示',
+        slaMinPercent: 'SLA 最低百分比',
+        slaMinPercentHint: 'SLA 低于此值时显示为红色（默认：99.5%）',
+        ttftP99MaxMs: 'TTFT P99 最大值（毫秒）',
+        ttftP99MaxMsHint: 'TTFT P99 高于此值时显示为红色（默认：500ms）',
+        requestErrorRateMaxPercent: '请求错误率最大值（%）',
+        requestErrorRateMaxPercentHint: '请求错误率高于此值时显示为红色（默认：5%）',
+        upstreamErrorRateMaxPercent: '上游错误率最大值（%）',
+        upstreamErrorRateMaxPercentHint: '上游错误率高于此值时显示为红色（默认：5%）',
         silencing: {
           title: '告警静默（维护模式）',
           enabled: '启用静默',

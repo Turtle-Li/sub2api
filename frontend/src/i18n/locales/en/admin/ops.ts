@@ -492,6 +492,7 @@ export default {
           account: 'Account-level Metrics'
         },
         metrics: {
+          networkBandwidthUtilization: 'Network Bandwidth Utilization (%)',
           successRate: 'Success Rate (%)',
           errorRate: 'Error Rate (%)',
           upstreamErrorRate: 'Upstream Error Rate (%)',
@@ -510,6 +511,7 @@ export default {
           overloadAccountCount: 'Overloaded Accounts'
         },
         metricDescriptions: {
+          networkBandwidthUtilization: 'Current network bandwidth usage as a percentage of the configured limit.',
           successRate: 'Percentage of successful requests in the window (0-100).',
           errorRate: 'Percentage of failed requests in the window (0-100).',
           upstreamErrorRate: 'Percentage of upstream failures in the window (0-100).',
@@ -528,6 +530,7 @@ export default {
           overloadAccountCount: 'Number of overloaded accounts within the window.'
         },
         hints: {
+          bandwidthLimitRequired: 'Configure a bandwidth limit before using this metric.',
           recommended: 'Recommended: operator {operator}, threshold {threshold}{unit}',
           groupRequired: 'This is a group-level metric; selecting a group (group_id) is required.',
           groupOptional: 'Optional: limit the rule to a specific group via group_id.'
@@ -556,6 +559,7 @@ export default {
           notifyEmail: 'Send email notifications'
         },
         validation: {
+          bandwidthLimitRequired: 'A bandwidth limit is required for bandwidth utilization alerts.',
           title: 'Please fix the following issues',
           invalid: 'Invalid rule',
           nameRequired: 'Name is required',
@@ -579,6 +583,16 @@ export default {
         alertTitle: 'Alert Evaluator',
         groupAvailabilityTitle: 'Group Availability Monitor',
         evalIntervalSeconds: 'Evaluation Interval (seconds)',
+        metricThresholds: 'Metric Thresholds',
+        metricThresholdsHint: 'Configure alert thresholds for metrics, values exceeding thresholds will be displayed in red',
+        slaMinPercent: 'SLA Minimum Percentage',
+        slaMinPercentHint: 'SLA below this value will be displayed in red (default: 99.5%)',
+        ttftP99MaxMs: 'TTFT P99 Maximum (ms)',
+        ttftP99MaxMsHint: 'TTFT P99 above this value will be displayed in red (default: 500ms)',
+        requestErrorRateMaxPercent: 'Request Error Rate Maximum (%)',
+        requestErrorRateMaxPercentHint: 'Request error rate above this value will be displayed in red (default: 5%)',
+        upstreamErrorRateMaxPercent: 'Upstream Error Rate Maximum (%)',
+        upstreamErrorRateMaxPercentHint: 'Upstream error rate above this value will be displayed in red (default: 5%)',
         silencing: {
           title: 'Alert Silencing (Maintenance Mode)',
           enabled: 'Enable silencing',

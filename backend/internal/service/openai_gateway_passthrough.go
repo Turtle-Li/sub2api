@@ -1762,7 +1762,7 @@ func (s *OpenAIGatewayService) recordOpenAIStreamTerminalFailure(
 	payload []byte,
 	message string,
 ) string {
-	message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, upstreamRequestID, "request_error", payload, message)
+	message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, upstreamRequestID, "stream_failed", payload, message)
 	if c != nil && c.Request != nil {
 		s.RecordOpenAICapacityShedTerminalFailure(c.Request.Context(), account, payload, message)
 	}
