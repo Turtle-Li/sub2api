@@ -67,11 +67,14 @@ func OpenAIResponsesImageModelRequirementFailureReason(ctx context.Context, acco
 	if account == nil {
 		return "image_model_not_supported"
 	}
+	// Native tools are image operations even when their model is a relay alias.
+	// Keep the flag local so the top-level text model retains its own cooldown.
+	imageCtx := WithOpenAIImageGenerationIntent(ctx)
 	for _, model := range requirements {
 		if !account.IsModelSupported(model) {
 			return "image_model_not_supported"
 		}
-		if account.GetModelRateLimitRemainingTimeWithContext(ctx, model) > 0 {
+		if account.GetModelRateLimitRemainingTimeWithContext(imageCtx, model) > 0 {
 			return "image_model_rate_limited"
 		}
 	}

@@ -277,6 +277,7 @@ func TestOpenAIResponsesImageModelRequirement_SkipsImageRateLimitedAccounts(t *t
 	past := time.Now().Add(-time.Hour).Format(time.RFC3339)
 	tests := []struct {
 		name            string
+		imageModel      string
 		rateLimitKey    string
 		rateLimitReset  string
 		wantImageID     int64
@@ -300,6 +301,22 @@ func TestOpenAIResponsesImageModelRequirement_SkipsImageRateLimitedAccounts(t *t
 			withBackup:      true,
 		},
 		{
+			name:            "active image family cooldown with relay alias",
+			imageModel:      "image-alias",
+			rateLimitKey:    openAIImageGenerationRateLimitKey,
+			rateLimitReset:  future,
+			wantImageID:     71072,
+			wantImageReason: "image_model_rate_limited",
+			withBackup:      true,
+		},
+		{
+			name:           "expired image family cooldown with relay alias",
+			imageModel:     "image-alias",
+			rateLimitKey:   openAIImageGenerationRateLimitKey,
+			rateLimitReset: past,
+			wantImageID:    71071,
+		},
+		{
 			name:           "expired image cooldown",
 			rateLimitKey:   openAIImageGenerationRateLimitKey,
 			rateLimitReset: past,
@@ -312,7 +329,11 @@ func TestOpenAIResponsesImageModelRequirement_SkipsImageRateLimitedAccounts(t *t
 		for _, tt := range tests {
 			t.Run(mode+"/"+tt.name, func(t *testing.T) {
 				groupID := int64(71070)
-				cooled := openAIResponsesImageRoutingAccount(71071, 0, "gpt-image-2")
+				imageModel := tt.imageModel
+				if imageModel == "" {
+					imageModel = "gpt-image-2"
+				}
+				cooled := openAIResponsesImageRoutingAccount(71071, 0, imageModel)
 				cooled.Extra = map[string]any{
 					modelRateLimitsKey: map[string]any{
 						tt.rateLimitKey: map[string]any{"rate_limit_reset_at": tt.rateLimitReset},
@@ -320,11 +341,11 @@ func TestOpenAIResponsesImageModelRequirement_SkipsImageRateLimitedAccounts(t *t
 				}
 				accounts := []Account{cooled}
 				if tt.withBackup {
-					accounts = append(accounts, openAIResponsesImageRoutingAccount(71072, 10, "gpt-image-2"))
+					accounts = append(accounts, openAIResponsesImageRoutingAccount(71072, 10, imageModel))
 				}
 				svc := newOpenAIResponsesImageRoutingService(advanced, accounts, nil)
 				svc.cfg.Gateway.OpenAIWS.LBTopK = 1
-				imageCtx := WithOpenAIResponsesImageModelRequirements(context.Background(), []string{"gpt-image-2"})
+				imageCtx := WithOpenAIResponsesImageModelRequirements(context.Background(), []string{imageModel})
 
 				require.Equal(t, tt.wantImageReason, OpenAIResponsesImageModelRequirementFailureReason(imageCtx, &cooled, PlatformOpenAI))
 				imageSelection, _, err := selectOpenAIResponsesImageRoutingAccount(imageCtx, svc, &groupID, "", "image-cooldown-selection")
