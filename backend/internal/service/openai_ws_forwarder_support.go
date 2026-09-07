@@ -601,6 +601,9 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
 		return 0, nil, "", nil
 	}
+	if OpenAIResponsesImageModelRequirementFailureReason(ctx, account, account.Platform) != "" {
+		return 0, nil, "", nil
+	}
 	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
 		return 0, nil, "", nil
 	}
@@ -638,6 +641,9 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 			return 0, nil, "", nil
 		}
 		if requestedModel != "" && !latest.IsModelSupported(requestedModel) {
+			return 0, nil, "", nil
+		}
+		if OpenAIResponsesImageModelRequirementFailureReason(ctx, latest, latest.Platform) != "" {
 			return 0, nil, "", nil
 		}
 		if !latest.SupportsOpenAIEndpointCapability(requiredCapability) {

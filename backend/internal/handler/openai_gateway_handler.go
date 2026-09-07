@@ -565,6 +565,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Codex 在所有请求中被动声明 image_gen namespace，宽泛检测会导致禁了生图的
 	// 分组中所有 Codex 请求被 403（#4447），并误占生图并发槽位。
 	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, body)
+	var responseImageModels []string
+	if imageIntent {
+		responseImageModels = service.OpenAIResponsesNativeImageGenerationToolModels(body)
+	}
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
 		return
@@ -585,10 +589,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	seedOpenAIForwardImageIntentHint(c, channelMapping.Mapped, imageIntent)
 	forwardModel := openAIChannelForwardModel(channelMapping, reqModel)
-	c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(
+	requestContext := service.WithOpenAIForwardModel(
 		c.Request.Context(),
 		forwardModel,
 		legacyCompact,
+	)
+	c.Request = c.Request.WithContext(service.WithOpenAIResponsesImageModelRequirements(
+		requestContext,
+		responseImageModels,
 	))
 
 	// 提前校验 function_call_output 是否具备可关联上下文，避免上游 400。
@@ -2450,10 +2458,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 
 	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage)
+	var firstResponseImageModels []string
+	if imageIntent {
+		firstResponseImageModels = service.OpenAIResponsesNativeImageGenerationToolModels(firstMessage)
+	}
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.ImageGenerationPermissionMessage())
 		return
 	}
+	ctx = service.WithOpenAIResponsesImageModelRequirements(ctx, firstResponseImageModels)
 
 	// The first response.create frame is available here, so explicit IDs are
 	// checked directly and body-derived sessions use the coarse scope gate.
@@ -2887,6 +2900,26 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if decision := h.checkSecurityAuditStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, model, payload, "subsequent_turn"); decision != nil && !decision.AllowNextStage {
 					writeSecurityAuditWSError(ctx, wsConn, decision)
 					return service.NewOpenAIWSClientCloseError(securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision), nil)
+				}
+				turnImageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", model, payload)
+				if turnImageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
+					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, service.ImageGenerationPermissionMessage(), nil)
+				}
+				var turnResponseImageModels []string
+				if turnImageIntent {
+					turnResponseImageModels = service.OpenAIResponsesNativeImageGenerationToolModels(payload)
+				}
+				turnImageRequirements := service.WithOpenAIResponsesImageModelRequirements(
+					ctx,
+					turnResponseImageModels,
+				)
+				if reason := h.gatewayService.RevalidateOpenAIResponsesImageModelRequirements(turnImageRequirements, account, requestPlatform); reason != "" {
+					reqLog.Info("openai.websocket_turn_image_model_unsupported",
+						zap.Int("turn", turn),
+						zap.Int64("account_id", account.ID),
+						zap.String("reason", reason),
+					)
+					return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account is no longer eligible for this connection, please reconnect", nil)
 				}
 				return nil
 			},

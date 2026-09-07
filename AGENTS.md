@@ -68,6 +68,10 @@
 
 ## Upstream update scope
 
+- For native Responses image-tool account admission, read
+  `docs/operations/RESPONSES_IMAGE_ACCOUNT_ROUTING_20260907.md` for the fixed
+  upstream reference, local behavior contract, and regression scope.
+
 - Classify upstream updates against enabled production configuration, existing
   traffic, and locally owned behavior before expanding feature review. An
   upstream capability that is not enabled or used in production, and cannot

@@ -434,6 +434,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
 		return "model_not_supported"
 	}
+	if reason := OpenAIResponsesImageModelRequirementFailureReason(ctx, account, platform); reason != "" {
+		return reason
+	}
 	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
 		if account.IsGrok() && requiredCapability == OpenAIEndpointCapabilityGrokMediaGeneration {
 			_, reason := account.GrokMediaGenerationEligibility()
@@ -1013,6 +1016,14 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 		// Skip excluded accounts
 		if _, excluded := excludedIDs[acc.ID]; excluded {
 			filterStats.exclude("excluded")
+			continue
+		}
+		// Preserve the first eligibility veto in legacy no-account diagnostics.
+		// resolveFreshSchedulableOpenAIAccountBeforeProfit applies the same
+		// predicate again after cache/DB refresh, but only returns nil, which
+		// used to lose an image_model_not_supported explanation here.
+		if reason := openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx, acc, platform, requestedModel, false, requiredCapability); reason != "" {
+			filterStats.exclude(reason)
 			continue
 		}
 
