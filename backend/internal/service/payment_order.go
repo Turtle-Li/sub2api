@@ -11,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"entgo.io/ent/dialect"
+
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
@@ -37,12 +40,34 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if !cfg.Enabled {
 		return nil, infraerrors.Forbidden("PAYMENT_DISABLED", "payment system is disabled")
 	}
-	plan, err := s.validateOrderInput(ctx, req, cfg)
+	return s.createOrderWithConfig(ctx, req, cfg, nil)
+}
+
+// createOrderWithConfig is the shared, private creation core. The regular
+// customer path supplies nil options and retains its existing configuration and
+// provider-selection behavior. Narrow administrative flows can supply an
+// immutable, already-validated configuration copy and a pinned provider
+// selection without changing persisted payment settings.
+func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, opts *createOrderOptions) (*CreateOrderResponse, error) {
+	if cfg == nil {
+		return nil, infraerrors.ServiceUnavailable("PAYMENT_CONFIG_UNAVAILABLE", "payment configuration is unavailable")
+	}
+	var (
+		plan *dbent.SubscriptionPlan
+		err  error
+	)
+	if opts != nil && opts.ownerTest != nil {
+		plan, err = validateOwnerTestOrderInput(req, cfg, opts.ownerTest)
+	} else {
+		plan, err = s.validateOrderInput(ctx, req, cfg)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkCancelRateLimit(ctx, req.UserID, cfg); err != nil {
-		return nil, err
+	if opts == nil || opts.ownerTest == nil {
+		if err := s.checkCancelRateLimit(ctx, req.UserID, cfg); err != nil {
+			return nil, err
+		}
 	}
 	user, err := s.userRepo.GetByID(ctx, req.UserID)
 	if err != nil {
@@ -51,7 +76,10 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if user.Status != payment.EntityStatusActive {
 		return nil, infraerrors.Forbidden("USER_INACTIVE", "user account is disabled")
 	}
-	if s.notificationEmailService != nil {
+	if opts != nil && opts.ownerTest != nil && !user.IsAdmin() {
+		return nil, infraerrors.Forbidden("OWNER_TEST_ADMIN_REQUIRED", "an active administrator is required for an owner test order")
+	}
+	if (opts == nil || opts.ownerTest == nil) && s.notificationEmailService != nil {
 		s.notificationEmailService.RememberRecipientLocale(ctx, req.UserID, user.Email, req.Locale)
 	}
 	orderAmount := req.Amount
@@ -64,19 +92,33 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	}
 	feeRate := cfg.RechargeFeeRate
 	methodCurrency := payment.DefaultPaymentCurrency
-	if s.configService != nil {
+	if opts != nil && opts.ownerTest != nil {
+		methodCurrency = payment.DefaultPaymentCurrency
+	} else if s.configService != nil {
 		methodCurrency, err = s.configService.ValidateMethodCurrencyConsistency(ctx, req.PaymentType)
 		if err != nil {
 			return nil, err
 		}
 	}
-	payAmountStr, payAmount, err := calculateCreateOrderPayAmountForOrderType(limitAmount, feeRate, methodCurrency, req.OrderType, cfg.SubscriptionUSDToCNYRate)
-	if err != nil {
-		return nil, err
+	payAmountStr := ""
+	payAmount := float64(0)
+	if opts != nil && opts.ownerTest != nil {
+		payAmountStr = opts.ownerTest.amountDecimal
+		payAmount = opts.ownerTest.amount
+	} else {
+		payAmountStr, payAmount, err = calculateCreateOrderPayAmountForOrderType(limitAmount, feeRate, methodCurrency, req.OrderType, cfg.SubscriptionUSDToCNYRate)
+		if err != nil {
+			return nil, err
+		}
 	}
-	sel, err := s.selectCreateOrderInstance(ctx, req, cfg, payAmount)
-	if err != nil {
-		return nil, err
+	var sel *payment.InstanceSelection
+	if opts != nil && opts.ownerTest != nil {
+		sel = opts.ownerTest.selection
+	} else {
+		sel, err = s.selectCreateOrderInstance(ctx, req, cfg, payAmount)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := s.validateSelectedCreateOrderInstance(ctx, req, sel); err != nil {
 		return nil, err
@@ -86,6 +128,9 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		selectedCurrency = paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
 	}
 	if selectedCurrency != methodCurrency {
+		if opts != nil && opts.ownerTest != nil {
+			return nil, infraerrors.ServiceUnavailable("OWNER_TEST_UNIFIED_PAYMENT_UNAVAILABLE", "owner test payment must use the configured CNY unified gateway")
+		}
 		payAmountStr, payAmount, err = calculateCreateOrderPayAmountForOrderType(limitAmount, feeRate, selectedCurrency, req.OrderType, cfg.SubscriptionUSDToCNYRate)
 		if err != nil {
 			return nil, err
@@ -94,16 +139,28 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if err := validateSelectedCreateOrderAmountCurrency(payAmountStr, sel); err != nil {
 		return nil, err
 	}
-	oauthResp, err := s.maybeBuildWeChatOAuthRequiredResponseForSelection(ctx, req, limitAmount, payAmount, feeRate, sel)
+	if opts == nil || opts.ownerTest == nil {
+		oauthResp, oauthErr := s.maybeBuildWeChatOAuthRequiredResponseForSelection(ctx, req, limitAmount, payAmount, feeRate, sel)
+		if oauthErr != nil {
+			return nil, oauthErr
+		}
+		if oauthResp != nil {
+			return oauthResp, nil
+		}
+	}
+	order, created, err := s.createOrderInTxWithOptions(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, createOrderDatabaseOptionsFrom(opts))
 	if err != nil {
+		if opts != nil && opts.ownerTest != nil && isOwnerTestOrderInsertConflict(err) {
+			return s.replayOwnerTestOrder(ctx, opts.ownerTest)
+		}
 		return nil, err
 	}
-	if oauthResp != nil {
-		return oauthResp, nil
-	}
-	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel)
-	if err != nil {
-		return nil, err
+	if opts != nil && opts.ownerTest != nil {
+		if !created {
+			return s.replayOwnerTestOrderRecord(ctx, order, opts.ownerTest)
+		}
+		s.writeAuditLog(ctx, order.ID, "OWNER_TEST_ORDER_CREATED", fmt.Sprintf("admin:%d", opts.ownerTest.input.AdminUserID), ownerTestAuditDetail(opts.ownerTest))
+		return s.invokeOwnerTestProvider(ctx, order, opts.ownerTest)
 	}
 	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
 	if err != nil {
@@ -174,28 +231,81 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	return plan, nil
 }
 
+// createOrderDatabaseOptions applies only to private creation paths. It keeps
+// the normal customer order builder's data shape and transaction boundaries
+// intact while allowing an already-persisted owner-test ledger to use a
+// deterministic out_trade_no.
+type createOrderDatabaseOptions struct {
+	fixedOutTradeNo   string
+	providerSnapshot  map[string]any
+	lockOwnerTestUser bool
+}
+
 func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection) (*dbent.PaymentOrder, error) {
+	order, _, err := s.createOrderInTxWithOptions(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, nil)
+	return order, err
+}
+
+// createOrderInTxWithOptions writes all locally authoritative order data,
+// including an owner-test idempotency ledger, before any provider call. A
+// deterministic owner-test key is checked while holding the actor row lock so
+// replays bypass ordinary pending-order checks.
+func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req CreateOrderRequest, userRecord *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection, opts *createOrderDatabaseOptions) (*dbent.PaymentOrder, bool, error) {
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
+		return nil, false, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if opts != nil && opts.lockOwnerTestUser {
+		lockedUserQuery := tx.User.Query().Where(user.IDEQ(req.UserID))
+		if tx.Client().Driver().Dialect() == dialect.Postgres {
+			lockedUserQuery.ForUpdate()
+		}
+		lockedUser, lockErr := lockedUserQuery.Only(ctx)
+		if lockErr != nil {
+			return nil, false, fmt.Errorf("lock owner test user: %w", lockErr)
+		}
+		if lockedUser.Status != StatusActive {
+			return nil, false, infraerrors.Forbidden("USER_INACTIVE", "user account is disabled")
+		}
+		if lockedUser.Role != RoleAdmin {
+			return nil, false, infraerrors.Forbidden("OWNER_TEST_ADMIN_REQUIRED", "an active administrator is required for an owner test order")
+		}
+		if opts.fixedOutTradeNo == "" {
+			return nil, false, fmt.Errorf("owner test order missing deterministic out_trade_no")
+		}
+		existing, lookupErr := tx.PaymentOrder.Query().Where(paymentorder.OutTradeNoEQ(opts.fixedOutTradeNo)).Only(ctx)
+		if lookupErr == nil {
+			return existing, false, nil
+		}
+		if !dbent.IsNotFound(lookupErr) {
+			return nil, false, fmt.Errorf("lookup owner test order: %w", lookupErr)
+		}
+	}
 	if err := s.checkPendingLimit(ctx, tx, req.UserID, cfg.MaxPendingOrders); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := s.checkDailyLimit(ctx, tx, req.UserID, limitAmount, cfg.DailyLimit); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	tm := cfg.OrderTimeoutMin
 	if tm <= 0 {
 		tm = defaultOrderTimeoutMin
 	}
 	exp := time.Now().Add(time.Duration(tm) * time.Minute)
-	outTradeNo, err := s.allocateOutTradeNo(ctx, tx)
-	if err != nil {
-		return nil, err
+	outTradeNo := ""
+	if opts != nil && opts.fixedOutTradeNo != "" {
+		outTradeNo = opts.fixedOutTradeNo
+	} else {
+		outTradeNo, err = s.allocateOutTradeNo(ctx, tx)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	providerSnapshot := buildPaymentOrderProviderSnapshot(sel, req)
+	if opts != nil && opts.providerSnapshot != nil {
+		providerSnapshot = clonePaymentOrderSnapshot(opts.providerSnapshot)
+	}
 	selectedInstanceID := ""
 	selectedProviderKey := ""
 	if sel != nil {
@@ -204,9 +314,9 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	}
 	b := tx.PaymentOrder.Create().
 		SetUserID(req.UserID).
-		SetUserEmail(user.Email).
-		SetUserName(user.Username).
-		SetNillableUserNotes(psNilIfEmpty(user.Notes)).
+		SetUserEmail(userRecord.Email).
+		SetUserName(userRecord.Username).
+		SetNillableUserNotes(psNilIfEmpty(userRecord.Notes)).
 		SetAmount(orderAmount).
 		SetPayAmount(payAmount).
 		SetFeeRate(feeRate).
@@ -243,17 +353,20 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	}
 	order, err := b.Save(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("create order: %w", err)
+		if opts != nil && opts.fixedOutTradeNo != "" && dbent.IsConstraintError(err) {
+			return nil, false, errOwnerTestOrderInsertConflict
+		}
+		return nil, false, fmt.Errorf("create order: %w", err)
 	}
 	code := fmt.Sprintf("PAY-%d-%d", order.ID, time.Now().UnixNano()%100000)
 	order, err = tx.PaymentOrder.UpdateOneID(order.ID).SetRechargeCode(code).Save(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("set recharge code: %w", err)
+		return nil, false, fmt.Errorf("set recharge code: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit order transaction: %w", err)
+		return nil, false, fmt.Errorf("commit order transaction: %w", err)
 	}
-	return order, nil
+	return order, true, nil
 }
 
 func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount float64, options []RechargeOption) map[string]any {

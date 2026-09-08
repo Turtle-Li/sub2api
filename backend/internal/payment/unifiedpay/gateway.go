@@ -30,6 +30,8 @@ type Gateway struct {
 	organizationID string
 	productID      string
 	appID          string
+	baseURL        string
+	requestKeyID   string
 	supportedTypes map[string]struct{}
 }
 
@@ -139,7 +141,9 @@ func New(gatewayConfig Config) (*Gateway, error) {
 	return &Gateway{
 		enabled: true, client: apiClient, verifier: verifier, returnURL: returnURL,
 		environment: gatewayConfig.Environment, organizationID: gatewayConfig.OrganizationID,
-		productID: gatewayConfig.ProductID, appID: gatewayConfig.AppID, supportedTypes: supported,
+		productID: gatewayConfig.ProductID, appID: gatewayConfig.AppID,
+		baseURL: apiClient.baseURL.String(), requestKeyID: gatewayConfig.RequestKeyID,
+		supportedTypes: supported,
 	}, nil
 }
 
@@ -179,6 +183,7 @@ func (g *Gateway) ScopeMetadata() map[string]string {
 	return map[string]string{
 		"environment": g.environment.String(), "organization_id": g.organizationID,
 		"product_id": g.productID, "app_id": g.appID,
+		"base_url": g.baseURL, "request_key_id": g.requestKeyID,
 	}
 }
 
@@ -284,7 +289,8 @@ func (g *Gateway) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 	}
 	response := &payment.CreatePaymentResponse{
 		TradeNo: result.PaymentOrderID, PayURL: strings.TrimSpace(*result.CheckoutURL),
-		Currency: payment.DefaultPaymentCurrency, ResultType: payment.CreatePaymentResultOrderCreated,
+		ExpiresAt: result.ExpiresAt.UTC(), Currency: payment.DefaultPaymentCurrency,
+		ResultType: payment.CreatePaymentResultOrderCreated,
 	}
 	if paymentMethod == PaymentMethodWechatPay {
 		if result.CheckoutCodeURL == nil || !validCheckoutCodeURL(*result.CheckoutCodeURL) {

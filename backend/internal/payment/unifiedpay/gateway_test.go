@@ -47,6 +47,7 @@ func TestCanonicalPayloadSignatureVector(t *testing.T) {
 func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 	privateKey := testPrivateKey()
 	foreignCheckout := false
+	expiresAt := time.Date(2099, time.January, 2, 3, 4, 5, 6000, time.UTC)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, err := io.ReadAll(request.Body)
@@ -68,7 +69,7 @@ func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 			Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID,
 			AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: input.ProductOrderNo,
 			OrderType: input.OrderType, AmountFen: input.AmountFen, Currency: "CNY", PaymentMethod: PaymentMethodAlipay,
-			Status: StatusPendingPayment, CheckoutURL: &checkout, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(30 * time.Minute),
+			Status: StatusPendingPayment, CheckoutURL: &checkout, CreatedAt: time.Now(), ExpiresAt: expiresAt,
 		})
 	}))
 	defer server.Close()
@@ -81,6 +82,7 @@ func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, testPaymentOrderID, result.TradeNo)
 	require.Contains(t, result.PayURL, "/checkout/token")
+	require.True(t, result.ExpiresAt.Equal(expiresAt))
 
 	foreignCheckout = true
 	_, err = gateway.CreatePayment(context.Background(), payment.CreatePaymentRequest{

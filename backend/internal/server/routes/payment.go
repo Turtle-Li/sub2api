@@ -81,6 +81,7 @@ func RegisterPaymentRoutes(
 		// Config
 		adminGroup.GET("/config", adminPaymentHandler.GetConfig)
 		adminGroup.PUT("/config", adminPaymentHandler.UpdateConfig)
+		adminGroup.POST("/owner-test/orders", adminPaymentHandler.CreateOwnerTestOrder)
 
 		// Orders
 		adminOrders := adminGroup.Group("/orders")

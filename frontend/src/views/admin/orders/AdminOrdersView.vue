@@ -18,6 +18,8 @@
         </div>
       </div>
 
+      <AdminPaymentOwnerTest @created="loadOrders" />
+
       <!-- Table -->
       <OrderTable :orders="orders" :loading="ordersLoading" show-user>
         <template #actions="{ row }">
@@ -130,6 +132,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import AdminRefundDialog from '@/components/admin/payment/AdminRefundDialog.vue'
+import AdminPaymentOwnerTest from '@/components/admin/payment/AdminPaymentOwnerTest.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
 import { currencySymbol } from '@/components/payment/currency'

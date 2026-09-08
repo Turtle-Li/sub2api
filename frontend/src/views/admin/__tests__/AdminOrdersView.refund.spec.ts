@@ -79,6 +79,10 @@ async function mountOrders(statusOrRows: string | ReturnType<typeof order>[]) {
         Pagination: true,
         Icon: true,
         OrderStatusBadge: true,
+        AdminPaymentOwnerTest: {
+          emits: ['created'],
+          template: '<button data-test="owner-payment-created" @click="$emit(\'created\')" />',
+        },
         TotpStepUpDialog: true,
       }
     }
@@ -199,6 +203,17 @@ describe('admin refund outcome feedback', () => {
     expect(showError).not.toHaveBeenCalled()
     expect(getOrders).toHaveBeenCalledTimes(1)
     expect(wrapper.find('[data-test="refund-dialog"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reloads orders after the owner payment test creates an order', async () => {
+    const wrapper = await mountOrders('PENDING')
+    expect(getOrders).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('[data-test="owner-payment-created"]').trigger('click')
+    await flushPromises()
+
+    expect(getOrders).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 })

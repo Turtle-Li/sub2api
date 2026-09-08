@@ -697,8 +697,7 @@ const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       requiresAdmin: true,
       title: 'Order Management',
-      titleKey: 'nav.orderManagement',
-      requiresPayment: true
+      titleKey: 'nav.orderManagement'
     }
   },
   {

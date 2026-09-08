@@ -51,6 +51,20 @@ describe('AppSidebar collapsible groups', () => {
   })
 })
 
+describe('AppSidebar admin order access', () => {
+  it('keeps order management as a direct admin link when public purchasing is disabled', () => {
+    expect(componentSource).toContain('...(adminSettingsStore.paymentEnabled')
+    expect(componentSource).toContain("{ path: '/admin/orders', label: t('nav.orderManagement'), icon: OrderIcon, hideInSimpleMode: true }")
+    expect(componentSource).not.toContain('featureFlag: flagAdminPayment')
+  })
+
+  it('keeps payment dashboard and plans inside the enabled-payment branch only', () => {
+    const paymentNavigation = componentSource.slice(componentSource.indexOf('...(adminSettingsStore.paymentEnabled'))
+    expect(paymentNavigation).toContain("{ path: '/admin/orders/dashboard', label: t('nav.paymentDashboard'), icon: ChartIcon }")
+    expect(paymentNavigation).toContain("{ path: '/admin/orders/plans', label: t('nav.paymentPlans'), icon: CreditCardIcon }")
+  })
+})
+
 describe('AppSidebar header styles', () => {
   it('does not clip the version badge dropdown', () => {
     const sidebarHeaderBlockMatch = styleSource.match(/\.sidebar-header\s*\{[\s\S]*?\n {2}\}/)

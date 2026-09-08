@@ -104,3 +104,19 @@ mock coverage proves actual channel behavior.
 
 Final MFA integration compile checks: server package and complete admin handler
 package passed; frontend five-file suite passed all 58 tests.
+
+## Unified payment pre-release backup — 2026-09-09
+
+Existing `sub2api-db-backup.service` completed successfully. Archive `/opt/sub2api-db-backups/sub2api-db-backup-20260909-043139.tar.gz`, 253,570,261 bytes, SHA-256 `0ea17725c944961d5e19a6f0da7437cc6fba33a7c1821265ac0b2d6fbe4bf82a`. Installed isolated restore smoke passed both checksum layers, PostgreSQL restore/amcheck and Redis loading; schema_count=290, schema_hash=`9f6d087a5ed935550063947063c9c4b4`. No production data was restored or migration applied by this gate.
+
+Public settings were read again before release: `payment_enabled=false`. This is the customer purchase setting and must remain false during the pilot.
+
+## Administrator pilot implementation verification (release pending)
+
+The new order-management pilot remains accessible to authenticated administrators while public purchasing is off. Customer purchase, admin payment dashboard and plan gates retain their existing feature conditions. The browser check of the old production version reproduced the redirect to `/admin/dashboard`; router/sidebar regression tests cover the repair.
+
+Final frontend suite currently passes 9 files / 82 tests, typecheck and full `pnpm build` (including locale scanner and production Vite build). Local component translations use typed active-locale resolvers. Native WeChat renders the returned payload locally; no external QR generator receives it. Unresolved request keys are retained per amount/method across a selection change.
+
+The mandatory-MFA handler suite passes focused, race and complete admin tests, including API-key/no-grant rejection, duplicate/unknown JSON fields and idempotency-header rejection. Root contract tests cover integer-fen bounds, unchanged disabled public configuration, durable owner/payload/runtime conflicts and terminal QR suppression. Broader payment/create/refund service race regression passed 15.130s; payment packages and server compile tests passed. Final central/Sub2 HTTP joint test passed 3.086s. These tests use mock channel peers, not real merchant calls.
+
+Independent review cleared frontend, strict admin routing, central live Native response/recovery and the candidate Nginx template. Backend dispatch review identified and repaired expiry skew after a delayed request. The verified central deadline is now written atomically with checkout under the exact database version fence; terminal or stale results suppress checkout. Actual PostgreSQL concurrency, lost-response and delayed-expiry checks passed (normal 7.183s, race 8.862s). Independent final review found no additional P1/P2 and independently reran PostgreSQL race (8.630s), handler race, gateway and owner contract tests. These are fixture results; real merchant acceptance remains pending.

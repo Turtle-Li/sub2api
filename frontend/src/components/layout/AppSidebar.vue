@@ -695,7 +695,6 @@ const flagAffiliate = makeSidebarFlag(FeatureFlags.affiliate)
 const flagRiskControl = makeSidebarFlag(FeatureFlags.riskControl)
 const flagPluginManagement = makeSidebarFlag(FeatureFlags.pluginManagement)
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
-const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 const flagBatchImageAccess = () => canUseBatchImage.value
 
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
@@ -807,19 +806,20 @@ const adminNavItems = computed((): NavItem[] => {
         { path: '/admin/affiliates/transfers', label: t('nav.affiliateTransferRecords'), icon: CreditCardIcon },
       ],
     },
-    {
-      path: '/admin/orders',
-      label: t('nav.orderManagement'),
-      icon: OrderIcon,
-      hideInSimpleMode: true,
-      expandOnly: true,
-      featureFlag: flagAdminPayment,
-      children: [
-        { path: '/admin/orders/dashboard', label: t('nav.paymentDashboard'), icon: ChartIcon },
-        { path: '/admin/orders', label: t('nav.orderManagement'), icon: OrderIcon },
-        { path: '/admin/orders/plans', label: t('nav.paymentPlans'), icon: CreditCardIcon },
-      ],
-    },
+    ...(adminSettingsStore.paymentEnabled
+      ? [{
+          path: '/admin/orders',
+          label: t('nav.orderManagement'),
+          icon: OrderIcon,
+          hideInSimpleMode: true,
+          expandOnly: true,
+          children: [
+            { path: '/admin/orders/dashboard', label: t('nav.paymentDashboard'), icon: ChartIcon },
+            { path: '/admin/orders', label: t('nav.orderManagement'), icon: OrderIcon },
+            { path: '/admin/orders/plans', label: t('nav.paymentPlans'), icon: CreditCardIcon },
+          ],
+        }]
+      : [{ path: '/admin/orders', label: t('nav.orderManagement'), icon: OrderIcon, hideInSimpleMode: true }]),
     { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon },
     { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ShieldIcon, hideInSimpleMode: true }
   ]
