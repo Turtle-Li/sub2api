@@ -90,6 +90,74 @@ func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidResponse)
 }
 
+func TestGatewayCreatesNativeWechatOrderAndReturnsCodeURL(t *testing.T) {
+	privateKey := testPrivateKey()
+	code := "weixin://wxpay/bizpayurl?pr=native-token"
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		require.NoError(t, err)
+		verifySignedRequest(t, request, body, testPublicKey(t, privateKey))
+		var input createPaymentOrderRequest
+		require.NoError(t, json.Unmarshal(body, &input))
+		require.Equal(t, PaymentMethodWechatPay, input.PaymentMethod)
+		checkout := server.URL + "/checkout/token"
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(writer).Encode(paymentOrderResponse{
+			Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID,
+			AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: input.ProductOrderNo,
+			OrderType: input.OrderType, AmountFen: input.AmountFen, Currency: "CNY", PaymentMethod: PaymentMethodWechatPay,
+			Status: StatusPendingPayment, CheckoutURL: &checkout, CheckoutCodeURL: &code,
+			CreatedAt: time.Now(), ExpiresAt: time.Now().Add(30 * time.Minute),
+		})
+	}))
+	defer server.Close()
+	gateway, err := New(testConfig(privateKey, server.URL))
+	require.NoError(t, err)
+	result, err := gateway.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID: "sub2_20260902wechat001", Amount: "12.34", PaymentType: payment.TypeWxpay,
+		OrderType: "balance", Subject: "Sub2API 12.34 CNY", ReturnURL: gateway.ReturnURL(), ExpiresInSeconds: 1800,
+	})
+	require.NoError(t, err)
+	require.Equal(t, testPaymentOrderID, result.TradeNo)
+	require.Equal(t, code, result.QRCode)
+	require.Equal(t, "qrcode", gateway.Selection(payment.TypeWxpay).PaymentMode)
+}
+
+func TestGatewayRejectsUnsupportedConfiguredMethod(t *testing.T) {
+	privateKey := testPrivateKey()
+	config := testConfig(privateKey, "https://pay.example.test")
+	config.SupportedMethods = []string{PaymentMethodAlipay}
+	gateway, err := New(config)
+	require.NoError(t, err)
+	require.True(t, gateway.SupportsPaymentType(payment.TypeAlipay))
+	require.False(t, gateway.SupportsPaymentType(payment.TypeWxpay))
+	_, err = gateway.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID: "sub2_20260902wechat002", Amount: "12.34", PaymentType: payment.TypeWxpay,
+		OrderType: "balance", Subject: "Sub2API 12.34 CNY", ReturnURL: gateway.ReturnURL(), ExpiresInSeconds: 1800,
+	})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestValidCheckoutCodeURLMatchesWechatNativeShape(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		raw   string
+		valid bool
+	}{
+		{name: "native", raw: "weixin://wxpay/bizpayurl?pr=native-token", valid: true},
+		{name: "wrong host", raw: "weixin://attacker.example/bizpayurl?pr=token", valid: false},
+		{name: "wrong path", raw: "weixin://wxpay/pay?pr=token", valid: false},
+		{name: "fragment", raw: "weixin://wxpay/bizpayurl?pr=token#x", valid: false},
+		{name: "space", raw: "weixin://wxpay/bizpayurl?pr=token with-space", valid: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			require.Equal(t, testCase.valid, validCheckoutCodeURL(testCase.raw))
+		})
+	}
+}
+
 func TestGatewayDoesNotFulfillManualReviewOrderFromActiveQuery(t *testing.T) {
 	privateKey := testPrivateKey()
 	transactionID := "alipay_trade_001"

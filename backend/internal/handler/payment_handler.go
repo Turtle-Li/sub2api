@@ -38,7 +38,10 @@ func (h *PaymentHandler) GetPaymentConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	h.paymentService.ApplyUnifiedPaymentPresentation(cfg, nil)
+	if err := h.paymentService.ApplyUnifiedPaymentPresentation(c.Request.Context(), cfg, nil); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	response.Success(c, cfg)
 }
 
@@ -116,7 +119,10 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	h.paymentService.ApplyUnifiedPaymentPresentation(cfg, limitsResp)
+	if err := h.paymentService.ApplyUnifiedPaymentPresentation(ctx, cfg, limitsResp); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	alipayMobilePrecreateDeepLink := false
 	if cfg.AlipayMobilePrecreateDeepLink {
 		alipayMobilePrecreateDeepLink, err = h.configService.UsesOfficialAlipayVisibleMethod(ctx)
@@ -243,7 +249,10 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	h.paymentService.ApplyUnifiedPaymentPresentation(cfg, resp)
+	if err := h.paymentService.ApplyUnifiedPaymentPresentation(c.Request.Context(), cfg, resp); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	response.Success(c, resp)
 }
 

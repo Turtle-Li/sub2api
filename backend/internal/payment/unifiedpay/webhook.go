@@ -222,7 +222,7 @@ func validPaymentOrderResource(resource PaymentOrderResource) bool {
 	if !validUUID(resource.PaymentOrderID) || !validIdentifier(resource.ProductOrderNo, 6, 64) ||
 		!validLowerIdentifier(resource.OrderType, 3, 64) || resource.AmountFen < 1 || resource.PaidAmountFen < 0 ||
 		resource.RefundedAmountFen < 0 || resource.ReservedRefundAmountFen < 0 || resource.RefundableAmountFen < 0 ||
-		resource.Currency != "CNY" || resource.PaymentMethod != PaymentMethodAlipay ||
+		resource.Currency != "CNY" || !validPaymentMethod(resource.PaymentMethod) ||
 		len(resource.ChannelOutTradeNo) < 8 || len(resource.ChannelOutTradeNo) > 64 {
 		return false
 	}
@@ -237,7 +237,9 @@ func validPaymentOrderResource(resource PaymentOrderResource) bool {
 
 func validRefundResource(resource WebhookRefundResource) bool {
 	return validUUID(resource.RefundRequestID) && validIdentifier(resource.ProductRefundNo, 6, 64) &&
-		len(resource.ChannelOutRefundNo) >= 9 && len(resource.ChannelOutRefundNo) <= 64 &&
-		resource.AmountFen >= 1 && resource.PaymentMethod == PaymentMethodAlipay &&
-		(resource.Status == RefundStatusSucceeded || resource.Status == RefundStatusFailed)
+		validIdentifier(resource.ChannelOutRefundNo, 9, 64) &&
+		resource.AmountFen >= 1 && resource.AmountFen <= maximumRefundAmountFen && validPaymentMethod(resource.PaymentMethod) &&
+		(resource.Status == RefundStatusSucceeded || resource.Status == RefundStatusFailed) &&
+		validOptionalRefundText(resource.ProviderRefundID, 160) && validOptionalRefundText(resource.ProviderStatus, 80) &&
+		validOptionalFailureCode(resource.FailureCode) && validOptionalRefundTime(resource.CompletedAt)
 }

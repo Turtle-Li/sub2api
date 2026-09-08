@@ -123,8 +123,10 @@ export type PaymentVisibleMethodSource =
   | ""
   | "official_alipay"
   | "easypay_alipay"
+  | "unified_alipay"
   | "official_wxpay"
-  | "easypay_wxpay";
+  | "easypay_wxpay"
+  | "unified_wxpay";
 export type WeChatConnectMode = "open" | "mp" | "mobile";
 
 export interface PaymentVisibleMethodSourceOption {
@@ -166,6 +168,11 @@ const PAYMENT_VISIBLE_METHOD_SOURCE_OPTIONS: Record<
       labelZh: "易支付支付宝",
       labelEn: "EasyPay Alipay",
     },
+    {
+      value: "unified_alipay",
+      labelZh: "统一支付支付宝",
+      labelEn: "Unified Payment Alipay",
+    },
   ],
   wxpay: [
     { value: "", labelZh: "未配置", labelEn: "Not configured" },
@@ -178,6 +185,11 @@ const PAYMENT_VISIBLE_METHOD_SOURCE_OPTIONS: Record<
       value: "easypay_wxpay",
       labelZh: "易支付微信",
       labelEn: "EasyPay WeChat Pay",
+    },
+    {
+      value: "unified_wxpay",
+      labelZh: "统一支付微信",
+      labelEn: "Unified Payment WeChat Pay",
     },
   ],
 };
@@ -192,6 +204,10 @@ const PAYMENT_VISIBLE_METHOD_SOURCE_ALIASES: Record<
     official: "official_alipay",
     easypay_alipay: "easypay_alipay",
     easypay: "easypay_alipay",
+    unified_alipay: "unified_alipay",
+    unified: "unified_alipay",
+    unified_payment: "unified_alipay",
+    pay_v1: "unified_alipay",
   },
   wxpay: {
     official_wxpay: "official_wxpay",
@@ -201,6 +217,10 @@ const PAYMENT_VISIBLE_METHOD_SOURCE_ALIASES: Record<
     official: "official_wxpay",
     easypay_wxpay: "easypay_wxpay",
     easypay: "easypay_wxpay",
+    unified_wxpay: "unified_wxpay",
+    unified: "unified_wxpay",
+    unified_payment: "unified_wxpay",
+    pay_v1: "unified_wxpay",
   },
 };
 const WECHAT_CONNECT_MODE_OPTIONS: WeChatConnectModeOption[] = [
@@ -675,6 +695,8 @@ export interface SystemSettings {
   payment_cancel_rate_limit_window_mode: string;
   payment_alipay_force_qrcode?: boolean;
   payment_alipay_mobile_precreate_deep_link?: boolean;
+  payment_unified_enabled?: boolean;
+  payment_unified_methods?: string[];
   payment_visible_method_alipay_source?: string;
   payment_visible_method_wxpay_source?: string;
   payment_visible_method_alipay_enabled?: boolean;

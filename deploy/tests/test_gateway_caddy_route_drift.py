@@ -62,6 +62,16 @@ def path_is_covered(path: str, pattern: str) -> bool:
 
 
 class GatewayCaddyRouteDriftTest(unittest.TestCase):
+    def test_payment_webhook_is_exact_post_only_edge_route(self) -> None:
+        text = EXTERNAL_CADDYFILE.read_text(encoding="utf-8")
+        match = re.search(r"@unified_payment_webhook\s*\{([^}]+)\}", text)
+        self.assertIsNotNone(match, "payment webhook has no dedicated API edge route")
+        directives = [line.strip() for line in match.group(1).splitlines() if line.strip()]
+        self.assertEqual(["method POST", "path /api/v1/payment/webhook/unified"], directives)
+        self.assertRegex(text, r"handle @unified_payment_webhook\s*\{\s*import sub2api_proxy_no_store\s*\}")
+        self.assertFalse(any(path_is_covered("/api/v1/admin/settings", pattern) for pattern in external_allowlist()))
+        self.assertFalse(any(path_is_covered("/api/v1/payment/orders", pattern) for pattern in external_allowlist()))
+
     def test_every_registered_gateway_route_is_edge_reachable(self) -> None:
         allowlist = external_allowlist()
         missing = [

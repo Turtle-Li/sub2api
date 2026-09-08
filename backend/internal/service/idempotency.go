@@ -58,6 +58,19 @@ type IdempotencyRepository interface {
 	DeleteExpired(ctx context.Context, now time.Time, limit int) (int64, error)
 }
 
+// IdempotencyClaimFailureRepository is an optional stronger transition used
+// when a processing executor fails. The legacy IdempotencyRepository method
+// only receives a row ID, which is not enough once that lease has expired and
+// been reclaimed by another executor.
+type IdempotencyClaimFailureRepository interface {
+	MarkFailedRetryableIfClaim(
+		ctx context.Context,
+		claim IdempotencyExecutionClaim,
+		errorReason string,
+		lockedUntil, expiresAt time.Time,
+	) (bool, error)
+}
+
 type IdempotencyConfig struct {
 	DefaultTTL           time.Duration
 	SystemOperationTTL   time.Duration
@@ -87,11 +100,37 @@ type IdempotencyExecuteOptions struct {
 	Payload        any
 	TTL            time.Duration
 	RequireKey     bool
+	// Opt in only when business state and the exact claim response commit through
+	// an atomic finalizer. Legacy ID-only executors must not reclaim early.
+	RequireFencedFinalizer bool
 }
 
 type IdempotencyExecuteResult struct {
 	Data     any
 	Replayed bool
+}
+
+// IdempotencyExecutionClaim identifies one particular processing lease.  The
+// record ID alone is not sufficient: after a lease expires, another request
+// can reclaim the same row.  Atomic side-effect finalizers use the lease
+// fields as a fence so an old executor cannot complete a newer claimant.
+type IdempotencyExecutionClaim struct {
+	ID                 int64
+	RequestFingerprint string
+	LockedUntil        time.Time
+	ExpiresAt          time.Time
+}
+
+// IdempotencySuccessFinalizer is for the rare mutation which must commit its
+// own durable state and the idempotency response in the same database
+// transaction.  Normal callers keep the existing generic MarkSucceeded path.
+//
+// Finalizers must either commit both changes or neither.  In particular, they
+// must fence the supplied claim rather than treating the record ID as an
+// ownership token.
+type IdempotencySuccessFinalizer interface {
+	IdempotencyResponseData() any
+	FinalizeIdempotencySuccess(ctx context.Context, claim IdempotencyExecutionClaim, responseStatus int, responseBody string, expiresAt time.Time) error
 }
 
 type IdempotencyCoordinator struct {
@@ -211,7 +250,7 @@ func (c *IdempotencyCoordinator) Execute(
 		return nil, err
 	}
 	if key == "" {
-		if opts.RequireKey && !c.cfg.ObserveOnly {
+		if opts.RequireFencedFinalizer || (opts.RequireKey && !c.cfg.ObserveOnly) {
 			return nil, ErrIdempotencyKeyRequired
 		}
 		data, execErr := execute(ctx)
@@ -238,9 +277,12 @@ func (c *IdempotencyCoordinator) Execute(
 	if ttl <= 0 {
 		ttl = c.cfg.DefaultTTL
 	}
-	now := time.Now()
-	expiresAt := now.Add(ttl)
-	lockedUntil := now.Add(c.cfg.ProcessingTimeout)
+	// PostgreSQL stores timestamptz with microsecond precision.  Keep lease
+	// tokens at that precision so an atomic finalizer can compare its exact
+	// claimed lease without losing ownership to timestamp rounding.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	expiresAt := idempotencyDBDeadline(now, ttl)
+	lockedUntil := idempotencyDBDeadline(now, c.cfg.ProcessingTimeout)
 	keyHash := HashIdempotencyKey(key)
 
 	record := &IdempotencyRecord{
@@ -288,7 +330,11 @@ func (c *IdempotencyCoordinator) Execute(
 			return nil, ErrIdempotencyKeyConflict
 		}
 		reclaimedByExpired := false
-		if !existing.ExpiresAt.After(now) {
+		leaseExpired := opts.RequireFencedFinalizer && existing.Status == IdempotencyStatusProcessing &&
+			(existing.LockedUntil == nil || !existing.LockedUntil.After(now))
+		// Response retention and execution leases are separate. Only fenced
+		// callers can safely recover a crashed executor before response expiry.
+		if leaseExpired || !existing.ExpiresAt.After(now) {
 			taken, reclaimErr := c.repo.TryReclaim(ctx, existing.ID, existing.Status, now, lockedUntil, expiresAt)
 			if reclaimErr != nil {
 				RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "try_reclaim_expired_error")
@@ -399,7 +445,7 @@ func (c *IdempotencyCoordinator) Execute(
 
 	data, execErr := execute(ctx)
 	if execErr != nil {
-		backoffUntil := time.Now().Add(c.cfg.FailedRetryBackoff)
+		backoffUntil := idempotencyDBDeadline(time.Now().UTC().Truncate(time.Microsecond), c.cfg.FailedRetryBackoff)
 		reason := infraerrors.Reason(execErr)
 		if reason == "" {
 			reason = "EXECUTION_FAILED"
@@ -408,16 +454,39 @@ func (c *IdempotencyCoordinator) Execute(
 		logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->failed_retryable", false, map[string]string{
 			"reason": reason,
 		})
-		if markErr := c.repo.MarkFailedRetryable(ctx, record.ID, reason, backoffUntil, expiresAt); markErr != nil {
+		claim := IdempotencyExecutionClaim{
+			ID:                 record.ID,
+			RequestFingerprint: record.RequestFingerprint,
+			ExpiresAt:          expiresAt,
+		}
+		if record.LockedUntil != nil {
+			claim.LockedUntil = *record.LockedUntil
+		}
+		marked, markErr := c.markFailedRetryableForClaim(ctx, claim, reason, backoffUntil, expiresAt)
+		if markErr != nil {
 			RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "mark_failed_retryable_error")
 			logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
 				"operation": "mark_failed_retryable",
 			})
+		} else if !marked {
+			// The executor lost its lease while it was doing work. Do not let its
+			// failure overwrite the newer claimant's processing or success state.
+			recordIdempotencyConflict(opts.Route, opts.Scope, map[string]string{"reason": "failure_claim_lost"})
 		}
 		return nil, execErr
 	}
 
-	storedBody, marshalErr := c.marshalStoredResponse(data)
+	responseData := data
+	finalizer, hasFinalizer := data.(IdempotencySuccessFinalizer)
+	if opts.RequireFencedFinalizer && !hasFinalizer {
+		// Do not downgrade an opted-in operation to ID-only completion.
+		return nil, ErrIdempotencyStoreUnavail
+	}
+	if hasFinalizer {
+		responseData = finalizer.IdempotencyResponseData()
+	}
+
+	storedBody, marshalErr := c.marshalStoredResponse(responseData)
 	if marshalErr != nil {
 		RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "marshal_response_error")
 		logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
@@ -425,7 +494,34 @@ func (c *IdempotencyCoordinator) Execute(
 		})
 		return nil, ErrIdempotencyStoreUnavail.WithCause(marshalErr)
 	}
-	if markErr := c.repo.MarkSucceeded(ctx, record.ID, 200, storedBody, expiresAt); markErr != nil {
+	if hasFinalizer {
+		if record.LockedUntil == nil {
+			RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "finalize_missing_lease")
+			logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
+				"operation": "finalize_missing_lease",
+			})
+			return nil, ErrIdempotencyStoreUnavail
+		}
+		claim := IdempotencyExecutionClaim{
+			ID:                 record.ID,
+			RequestFingerprint: record.RequestFingerprint,
+			LockedUntil:        *record.LockedUntil,
+			ExpiresAt:          expiresAt,
+		}
+		if finalizeErr := finalizer.FinalizeIdempotencySuccess(ctx, claim, 200, storedBody, expiresAt); finalizeErr != nil {
+			// Do not mark this record failed here.  A commit response can be lost
+			// after the database committed; changing the row afterward could turn
+			// a durable success into a retryable operation.  A retry will replay a
+			// committed result, or safely observe/reclaim an uncommitted lease.
+			if infraerrors.Code(finalizeErr) >= 500 {
+				RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "atomic_finalize_error")
+			}
+			logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->finalize_failed", false, map[string]string{
+				"reason": infraerrors.Reason(finalizeErr),
+			})
+			return nil, finalizeErr
+		}
+	} else if markErr := c.repo.MarkSucceeded(ctx, record.ID, 200, storedBody, expiresAt); markErr != nil {
 		RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "mark_succeeded_error")
 		logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
 			"operation": "mark_succeeded",
@@ -434,7 +530,33 @@ func (c *IdempotencyCoordinator) Execute(
 	}
 	logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->succeeded", false, nil)
 
-	return &IdempotencyExecuteResult{Data: data}, nil
+	return &IdempotencyExecuteResult{Data: responseData}, nil
+}
+
+// idempotencyDBDeadline keeps every value used as a PostgreSQL equality fence
+// at the database's microsecond precision. A positive sub-microsecond duration
+// still receives a one-microsecond lease rather than silently becoming expired.
+func idempotencyDBDeadline(now time.Time, duration time.Duration) time.Time {
+	deadline := now.Add(duration).UTC().Truncate(time.Microsecond)
+	if duration > 0 && !deadline.After(now) {
+		return now.Add(time.Microsecond)
+	}
+	return deadline
+}
+
+func (c *IdempotencyCoordinator) markFailedRetryableForClaim(
+	ctx context.Context,
+	claim IdempotencyExecutionClaim,
+	errorReason string,
+	lockedUntil, expiresAt time.Time,
+) (bool, error) {
+	if guarded, ok := c.repo.(IdempotencyClaimFailureRepository); ok && !claim.LockedUntil.IsZero() {
+		return guarded.MarkFailedRetryableIfClaim(ctx, claim, errorReason, lockedUntil, expiresAt)
+	}
+	if err := c.repo.MarkFailedRetryable(ctx, claim.ID, errorReason, lockedUntil, expiresAt); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *IdempotencyCoordinator) conflictWithRetryAfter(base *infraerrors.ApplicationError, lockedUntil *time.Time, now time.Time) error {

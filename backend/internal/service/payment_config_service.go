@@ -82,6 +82,17 @@ type PaymentConfig struct {
 	// Use Alipay face-to-face precreate and an app deep link on mobile clients.
 	AlipayMobilePrecreateDeepLink bool             `json:"alipay_mobile_precreate_deep_link"`
 	RechargeOptions               []RechargeOption `json:"recharge_options"`
+	// UnifiedPayment* are a read-only projection of the runtime/Vault-backed
+	// adapter. Secrets and Vault contents are never returned to the admin API.
+	UnifiedPaymentEnabled bool     `json:"unified_payment_enabled,omitempty"`
+	UnifiedPaymentMethods []string `json:"unified_payment_methods,omitempty"`
+}
+
+// UnifiedPaymentCapability lets payment settings resolve a visible method to
+// the runtime adapter without pretending it is a database provider instance.
+type UnifiedPaymentCapability interface {
+	Enabled() bool
+	SupportedTypes() []payment.PaymentType
 }
 
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
@@ -200,9 +211,16 @@ type UpdatePlanRequest struct {
 // PaymentConfigService manages payment configuration and CRUD for
 // provider instances, channels, and subscription plans.
 type PaymentConfigService struct {
-	entClient     *dbent.Client
-	settingRepo   SettingRepository
-	encryptionKey []byte
+	entClient      *dbent.Client
+	settingRepo    SettingRepository
+	encryptionKey  []byte
+	unifiedPayment UnifiedPaymentCapability
+}
+
+func (s *PaymentConfigService) SetUnifiedPaymentCapability(capability UnifiedPaymentCapability) {
+	if s != nil {
+		s.unifiedPayment = capability
+	}
 }
 
 // NewPaymentConfigService creates a new PaymentConfigService.
@@ -239,6 +257,10 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		return nil, fmt.Errorf("get payment config settings: %w", err)
 	}
 	cfg := s.parsePaymentConfig(vals)
+	if s.unifiedPayment != nil && s.unifiedPayment.Enabled() {
+		cfg.UnifiedPaymentEnabled = true
+		cfg.UnifiedPaymentMethods = append([]string(nil), s.unifiedPayment.SupportedTypes()...)
+	}
 	// Load Stripe publishable key from the first enabled Stripe provider instance
 	cfg.StripePublishableKey = s.getStripePublishableKey(ctx)
 	return cfg, nil

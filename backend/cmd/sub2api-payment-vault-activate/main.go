@@ -1,7 +1,7 @@
 // Command sub2api-payment-vault-activate is the only supported bridge from a
-// hash-pinned infra-vault process into the Sub2 and totools-pay sandbox
-// runtimes. It validates both keypairs, clears injected environment values
-// before network access, and sends private values only on SSH standard input.
+// hash-pinned infra-vault process into the Sub2 and totools-pay runtimes. It
+// validates both keypairs, clears injected environment values before network
+// access, and sends private values only on SSH standard input.
 package main
 
 import (
@@ -10,6 +10,7 @@ import (
 	"crypto/ed25519"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -32,28 +33,81 @@ const (
 	appIDEnv          = "SUB2_PAYMENT_APP_ID"
 	environmentEnv    = "SUB2_PAYMENT_ENVIRONMENT"
 
-	requestKeyID = "sub2.request.sandbox.v1"
-	webhookKeyID = "sub2.webhook.sandbox.v1"
-	appID        = "app.sub2.sandbox"
+	sandboxRequestVaultRef = "vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64"
+	sandboxWebhookVaultRef = "vault://secret/data/sub2api/unified-payment/sandbox#webhook_private_key_base64"
+	liveRequestVaultRef    = "vault://secret/data/sub2api/unified-payment/live#request_private_key_base64"
+	liveWebhookVaultRef    = "vault://secret/data/sub2api/unified-payment/live#webhook_private_key_base64"
 
-	requestVaultRef = "vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64"
-	webhookVaultRef = "vault://secret/data/sub2api/unified-payment/sandbox#webhook_private_key_base64"
+	// These aliases are only consumed by the unchanged sandbox enrollment and
+	// runtime-config generators below.
+	requestVaultRef = sandboxRequestVaultRef
+	webhookVaultRef = sandboxWebhookVaultRef
 
-	payRemoteHost        = "111.231.164.29"
-	payRemoteUser        = "ubuntu"
-	payRemoteHostKeyLine = "111.231.164.29 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILbqLNiydqNXBr616PGsyJ1JrPkqLCcwy0VARxOqPeY9"
+	sandboxSub2Host     = "sub2api-new"
+	liveAzureSub2Host   = "sub2api-candidate"
+	liveStandbySub2Host = "sub2api-new"
+
+	organizationID = "84fc3e66-e959-4bc8-8d78-6f8c3d3483fb"
+	productID      = "00da03c5-bc5c-4edb-9d4c-c77da0e969d5"
+	paymentBaseURL = "https://pay.totools.cn"
+	returnURL      = "https://www.turtleligpt.com/payment/result"
+	webhookURL     = "https://api.turtleligpt.com/api/v1/payment/webhook/unified"
+
+	liveEnrollmentSchemaVersion = "sub2api.payment-enrollment.v1"
+	liveEnrollmentState         = "SUB2_PAYMENT_LIVE_ENROLLMENT_REQUIRED"
+
+	// The payment host is selected only through the configured project alias.
+	// The alias owns its user, host, and pinned known-host entry; the supplied
+	// identity is separately validated before it is passed to ssh.
+	payRemoteAlias = "totools-pay-sandbox"
 
 	activationTimeout = 2 * time.Minute
 )
+
+type activationProfile struct {
+	name            string
+	requestKeyID    string
+	webhookKeyID    string
+	appID           string
+	environment     string
+	requestVaultRef string
+	webhookVaultRef string
+}
+
+var sandboxActivationProfile = activationProfile{
+	name:            "sandbox",
+	requestKeyID:    "sub2.request.sandbox.v1",
+	webhookKeyID:    "sub2.webhook.sandbox.v1",
+	appID:           "app.sub2.sandbox",
+	environment:     "sandbox",
+	requestVaultRef: sandboxRequestVaultRef,
+	webhookVaultRef: sandboxWebhookVaultRef,
+}
+
+var liveActivationProfile = activationProfile{
+	name:            "live",
+	requestKeyID:    "sub2.request.live.v1",
+	webhookKeyID:    "sub2.webhook.live.v1",
+	appID:           "app.sub2.live",
+	environment:     "live",
+	requestVaultRef: liveRequestVaultRef,
+	webhookVaultRef: liveWebhookVaultRef,
+}
+
+type activationTarget struct {
+	profile     activationProfile
+	payIdentity string
+	sub2Host    string
+}
 
 type environmentLookup func(string) (string, bool)
 type environmentUnset func(string) error
 
 type activationOperations struct {
-	injectSub2Request func(context.Context, []byte) error
-	injectPayWebhook  func(context.Context, string, []byte) error
-	enrollPay         func(context.Context, string, string) error
-	configureSub2     func(context.Context, string) error
+	injectSub2Request func(context.Context, activationTarget, []byte) error
+	injectPayWebhook  func(context.Context, activationTarget, []byte) error
+	enrollPay         func(context.Context, activationTarget, string) error
+	configureSub2     func(context.Context, activationTarget, string) error
 }
 
 type activationMaterial struct {
@@ -63,20 +117,39 @@ type activationMaterial struct {
 	webhookPublic  string
 }
 
+type publicSigningKey struct {
+	KeyID           string `json:"key_id"`
+	Algorithm       string `json:"algorithm"`
+	PublicKeyBase64 string `json:"public_key_base64"`
+}
+
+type liveEnrollmentBundle struct {
+	SchemaVersion            string           `json:"schema_version"`
+	State                    string           `json:"state"`
+	Profile                  string           `json:"profile"`
+	OrganizationID           string           `json:"organization_id"`
+	ProductID                string           `json:"product_id"`
+	Environment              string           `json:"environment"`
+	AppID                    string           `json:"app_id"`
+	ProductRequestSigningKey publicSigningKey `json:"product_request_signing_key"`
+	CentralWebhookSigningKey publicSigningKey `json:"central_webhook_signing_key"`
+	PaymentBaseURL           string           `json:"payment_base_url"`
+	ReturnURL                string           `json:"return_url"`
+	WebhookURL               string           `json:"webhook_url"`
+	NextAction               string           `json:"next_action"`
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.LookupEnv, os.Unsetenv, productionOperations()))
 }
 
 func run(args []string, output io.Writer, lookup environmentLookup, unset environmentUnset, operations activationOperations) int {
-	flags := flag.NewFlagSet("sub2api-payment-vault-activate", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	payIdentity := flags.String("pay-identity", "", "totools-pay project SSH identity")
-	if flags.Parse(args) != nil || flags.NArg() != 0 || lookup == nil || unset == nil ||
-		validatePrivateIdentity(*payIdentity) != nil || !validOperations(operations) {
+	target, err := parseActivationTarget(args)
+	if err != nil || lookup == nil || unset == nil || !validOperations(operations) {
 		return classification(output, "SUB2_PAYMENT_ACTIVATION_CONFIGURATION_REJECTED", 2)
 	}
 
-	material, ok := loadMaterial(lookup, unset)
+	material, ok := loadMaterial(target.profile, lookup, unset)
 	if !ok {
 		material.clear()
 		return classification(output, "SUB2_PAYMENT_ACTIVATION_CONFIGURATION_REJECTED", 2)
@@ -85,19 +158,83 @@ func run(args []string, output io.Writer, lookup environmentLookup, unset enviro
 	ctx, cancel := context.WithTimeout(context.Background(), activationTimeout)
 	defer cancel()
 
-	if err := operations.injectSub2Request(ctx, material.requestPrivate); err != nil {
+	if err := operations.injectSub2Request(ctx, target, material.requestPrivate); err != nil {
 		return classification(output, "SUB2_PAYMENT_ACTIVATION_FAILED_CLOSED", 1)
 	}
-	if err := operations.injectPayWebhook(ctx, *payIdentity, material.webhookPrivate); err != nil {
+	if err := operations.injectPayWebhook(ctx, target, material.webhookPrivate); err != nil {
 		return classification(output, "SUB2_PAYMENT_ACTIVATION_FAILED_CLOSED", 1)
 	}
-	if err := operations.enrollPay(ctx, *payIdentity, enrollmentSQL(material.requestPublic, material.webhookPublic)); err != nil {
+	if target.profile == liveActivationProfile {
+		if err := writeLiveEnrollmentBundle(output, target.profile, material); err != nil {
+			return 1
+		}
+		return 0
+	}
+	if err := operations.enrollPay(ctx, target, enrollmentSQL(material.requestPublic, material.webhookPublic)); err != nil {
 		return classification(output, "SUB2_PAYMENT_ACTIVATION_FAILED_CLOSED", 1)
 	}
-	if err := operations.configureSub2(ctx, runtimeConfig(material.webhookPublic)); err != nil {
+	if err := operations.configureSub2(ctx, target, runtimeConfig(material.webhookPublic)); err != nil {
 		return classification(output, "SUB2_PAYMENT_ACTIVATION_FAILED_CLOSED", 1)
 	}
 	return classification(output, "SUB2_PAYMENT_SANDBOX_ACTIVATED", 0)
+}
+
+func parseActivationTarget(args []string) (activationTarget, error) {
+	flags := flag.NewFlagSet("sub2api-payment-vault-activate", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	profileName := flags.String("profile", "sandbox", "Payment profile: sandbox or live")
+	payIdentity := flags.String("pay-identity", "", "totools-pay project SSH identity")
+	sub2Host := flags.String("sub2-host", "", "Approved Sub2 host for the live profile")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return activationTarget{}, errors.New("invalid payment activation arguments")
+	}
+	profile, err := activationProfileFor(*profileName)
+	if err != nil || validatePrivateIdentity(*payIdentity) != nil {
+		return activationTarget{}, errors.New("invalid payment activation arguments")
+	}
+	target := activationTarget{profile: profile, payIdentity: *payIdentity, sub2Host: *sub2Host}
+	switch profile {
+	case sandboxActivationProfile:
+		if target.sub2Host == "" {
+			target.sub2Host = sandboxSub2Host
+		}
+		if target.sub2Host != sandboxSub2Host {
+			return activationTarget{}, errors.New("sandbox target is fixed")
+		}
+	case liveActivationProfile:
+		if !validLiveSub2Host(target.sub2Host) {
+			return activationTarget{}, errors.New("live Sub2 host must be explicit and approved")
+		}
+	default:
+		return activationTarget{}, errors.New("unsupported payment activation profile")
+	}
+	return target, nil
+}
+
+func activationProfileFor(name string) (activationProfile, error) {
+	switch name {
+	case "", "sandbox":
+		return sandboxActivationProfile, nil
+	case "live":
+		return liveActivationProfile, nil
+	default:
+		return activationProfile{}, errors.New("unsupported payment activation profile")
+	}
+}
+
+func validLiveSub2Host(host string) bool {
+	return host == liveAzureSub2Host || host == liveStandbySub2Host
+}
+
+func validSub2HostForProfile(profile activationProfile, host string) bool {
+	switch profile {
+	case sandboxActivationProfile:
+		return host == sandboxSub2Host
+	case liveActivationProfile:
+		return validLiveSub2Host(host)
+	default:
+		return false
+	}
 }
 
 func validOperations(operations activationOperations) bool {
@@ -105,7 +242,10 @@ func validOperations(operations activationOperations) bool {
 		operations.enrollPay != nil && operations.configureSub2 != nil
 }
 
-func loadMaterial(lookup environmentLookup, unset environmentUnset) (activationMaterial, bool) {
+func loadMaterial(profile activationProfile, lookup environmentLookup, unset environmentUnset) (activationMaterial, bool) {
+	if profile != sandboxActivationProfile && profile != liveActivationProfile {
+		return activationMaterial{}, false
+	}
 	names := []string{
 		requestPrivateEnv, requestPublicEnv, requestKeyIDEnv, webhookPrivateEnv,
 		webhookPublicEnv, webhookKeyIDEnv, appIDEnv, environmentEnv,
@@ -125,8 +265,9 @@ func loadMaterial(lookup environmentLookup, unset environmentUnset) (activationM
 			valid = false
 		}
 	}
-	if !valid || string(values[requestKeyIDEnv]) != requestKeyID || string(values[webhookKeyIDEnv]) != webhookKeyID ||
-		string(values[appIDEnv]) != appID || string(values[environmentEnv]) != "sandbox" {
+	if !valid || string(values[requestKeyIDEnv]) != profile.requestKeyID ||
+		string(values[webhookKeyIDEnv]) != profile.webhookKeyID ||
+		string(values[appIDEnv]) != profile.appID || string(values[environmentEnv]) != profile.environment {
 		clearMap(values)
 		return activationMaterial{}, false
 	}
@@ -187,31 +328,91 @@ func (material *activationMaterial) clear() {
 	*material = activationMaterial{}
 }
 
+func writeLiveEnrollmentBundle(output io.Writer, profile activationProfile, material activationMaterial) error {
+	if output == nil || profile != liveActivationProfile || material.requestPublic == "" || material.webhookPublic == "" {
+		return errors.New("live enrollment bundle rejected")
+	}
+	bundle := liveEnrollmentBundle{
+		SchemaVersion:  liveEnrollmentSchemaVersion,
+		State:          liveEnrollmentState,
+		Profile:        profile.name,
+		OrganizationID: organizationID,
+		ProductID:      productID,
+		Environment:    profile.environment,
+		AppID:          profile.appID,
+		ProductRequestSigningKey: publicSigningKey{
+			KeyID:           profile.requestKeyID,
+			Algorithm:       "Ed25519",
+			PublicKeyBase64: material.requestPublic,
+		},
+		CentralWebhookSigningKey: publicSigningKey{
+			KeyID:           profile.webhookKeyID,
+			Algorithm:       "Ed25519",
+			PublicKeyBase64: material.webhookPublic,
+		},
+		PaymentBaseURL: paymentBaseURL,
+		ReturnURL:      returnURL,
+		WebhookURL:     webhookURL,
+		NextAction:     "payment-binding-issue-and-proof-of-possession",
+	}
+	return json.NewEncoder(output).Encode(bundle)
+}
+
 func productionOperations() activationOperations {
 	return activationOperations{
-		injectSub2Request: func(ctx context.Context, secret []byte) error {
-			return runSub2Remote(ctx,
-				"docker exec -i sub2api-payment-vault /app/sub2api-vault-agent load --admin-socket /run/sub2api-payment-vault-admin/admin.sock --ref "+requestVaultRef,
-				secret)
+		injectSub2Request: func(ctx context.Context, target activationTarget, secret []byte) error {
+			return runSub2Remote(ctx, target.profile, target.sub2Host, sub2RequestInjectionCommand(target.profile), secret)
 		},
-		injectPayWebhook: func(ctx context.Context, identity string, secret []byte) error {
-			return runPayRemote(ctx, identity,
-				"cd /opt/totools-pay && docker compose --project-name totools-pay --file compose.sandbox.yaml exec -T payment-vault-worker /app/payment-vault-agent load --admin-socket /run/payment-vault-agent/admin.sock --ref "+webhookVaultRef,
-				secret)
+		injectPayWebhook: func(ctx context.Context, target activationTarget, secret []byte) error {
+			return runPayRemote(ctx, target.profile, target.payIdentity, payWebhookInjectionCommand(target.profile), secret)
 		},
-		enrollPay: func(ctx context.Context, identity, sql string) error {
-			return runPayRemote(ctx, identity,
-				"cd /opt/totools-pay && docker compose --project-name totools-pay --file compose.sandbox.yaml exec -T --user postgres payment-postgres psql --no-psqlrc --set ON_ERROR_STOP=1 --dbname payment",
-				[]byte(sql))
+		enrollPay: func(ctx context.Context, target activationTarget, sql string) error {
+			if target.profile != sandboxActivationProfile {
+				return errors.New("live enrollment is prohibited")
+			}
+			return runPayRemote(ctx, target.profile, target.payIdentity, sandboxEnrollmentCommand(), []byte(sql))
 		},
-		configureSub2: func(ctx context.Context, configuration string) error {
-			return runSub2Remote(ctx, "/opt/sub2api/scripts/sub2api-unified-payment-config.sh", []byte(configuration))
+		configureSub2: func(ctx context.Context, target activationTarget, configuration string) error {
+			if target.profile != sandboxActivationProfile {
+				return errors.New("live runtime configuration is prohibited")
+			}
+			return runSub2Remote(ctx, target.profile, target.sub2Host, sandboxRuntimeConfigCommand(), []byte(configuration))
 		},
 	}
 }
 
-func runSub2Remote(ctx context.Context, remoteCommand string, input []byte) error {
-	if ctx == nil || !validSub2RemoteCommand(remoteCommand) || len(input) == 0 || len(input) > 32*1024 {
+func sub2RequestInjectionCommand(profile activationProfile) string {
+	switch profile {
+	case sandboxActivationProfile:
+		return "docker exec -i sub2api-payment-vault /app/sub2api-vault-agent load --admin-socket /run/sub2api-payment-vault-admin/admin.sock --ref " + profile.requestVaultRef
+	case liveActivationProfile:
+		return "sudo -n docker exec -i sub2api-payment-vault /app/sub2api-vault-agent load --admin-socket /run/sub2api-payment-vault-admin/admin.sock --ref " + profile.requestVaultRef
+	default:
+		return ""
+	}
+}
+
+func payWebhookInjectionCommand(profile activationProfile) string {
+	switch profile {
+	case sandboxActivationProfile:
+		return "cd /opt/totools-pay && docker compose --project-name totools-pay --file compose.sandbox.yaml exec -T payment-vault-worker /app/payment-vault-agent load --admin-socket /run/payment-vault-agent/admin.sock --ref " + profile.webhookVaultRef
+	case liveActivationProfile:
+		return "sudo -n docker compose --project-name totools-pay-live --file /opt/totools-pay-live/compose.live.disabled.yaml exec -T payment-vault-worker /app/payment-vault-agent load --admin-socket /run/payment-vault-agent/admin.sock --ref " + profile.webhookVaultRef
+	default:
+		return ""
+	}
+}
+
+func sandboxEnrollmentCommand() string {
+	return "cd /opt/totools-pay && docker compose --project-name totools-pay --file compose.sandbox.yaml exec -T --user postgres payment-postgres psql --no-psqlrc --set ON_ERROR_STOP=1 --dbname payment"
+}
+
+func sandboxRuntimeConfigCommand() string {
+	return "/opt/sub2api/scripts/sub2api-unified-payment-config.sh"
+}
+
+func runSub2Remote(ctx context.Context, profile activationProfile, host, remoteCommand string, input []byte) error {
+	if ctx == nil || !validSub2HostForProfile(profile, host) || !validSub2RemoteCommand(profile, remoteCommand) || len(input) == 0 || len(input) > 32*1024 {
 		return errors.New("Sub2 remote operation rejected")
 	}
 	arguments := []string{
@@ -219,50 +420,49 @@ func runSub2Remote(ctx context.Context, remoteCommand string, input []byte) erro
 		"-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
 		"-o", "StrictHostKeyChecking=yes", "-o", "VerifyHostKeyDNS=no", "-o", "CheckHostIP=yes",
 		"-o", "ConnectTimeout=10", "-o", "ConnectionAttempts=1", "-o", "LogLevel=ERROR",
-		"sub2api-new", remoteCommand,
+		host, remoteCommand,
 	}
 	return runSSH(ctx, arguments, input)
 }
 
-func validSub2RemoteCommand(command string) bool {
-	return command == "/opt/sub2api/scripts/sub2api-unified-payment-config.sh" ||
-		command == "docker exec -i sub2api-payment-vault /app/sub2api-vault-agent load --admin-socket /run/sub2api-payment-vault-admin/admin.sock --ref "+requestVaultRef
+func validSub2RemoteCommand(profile activationProfile, command string) bool {
+	switch profile {
+	case sandboxActivationProfile:
+		return command == sandboxRuntimeConfigCommand() || command == sub2RequestInjectionCommand(sandboxActivationProfile)
+	case liveActivationProfile:
+		return command == sub2RequestInjectionCommand(liveActivationProfile)
+	default:
+		return false
+	}
 }
 
-func runPayRemote(ctx context.Context, identity, remoteCommand string, input []byte) error {
-	if ctx == nil || validatePrivateIdentity(identity) != nil || !validPayRemoteCommand(remoteCommand) || len(input) == 0 || len(input) > 64*1024 {
+func runPayRemote(ctx context.Context, profile activationProfile, identity, remoteCommand string, input []byte) error {
+	if ctx == nil || validatePrivateIdentity(identity) != nil || !validPayRemoteCommand(profile, remoteCommand) || len(input) == 0 || len(input) > 64*1024 {
 		return errors.New("payment remote operation rejected")
 	}
-	knownHosts, err := os.CreateTemp("", "totools-pay-known-hosts-*.tmp")
-	if err != nil {
-		return errors.New("payment remote operation unavailable")
-	}
-	knownHostsPath := knownHosts.Name()
-	defer func() {
-		_ = knownHosts.Close()
-		_ = os.Remove(knownHostsPath)
-	}()
-	if err := knownHosts.Chmod(0o600); err != nil {
-		return errors.New("payment remote operation unavailable")
-	}
-	if _, err := io.WriteString(knownHosts, payRemoteHostKeyLine+"\n"); err != nil || knownHosts.Sync() != nil || knownHosts.Close() != nil {
-		return errors.New("payment remote operation unavailable")
-	}
-	arguments := []string{
+	return runSSH(ctx, payRemoteSSHArguments(identity, remoteCommand), input)
+}
+
+func payRemoteSSHArguments(identity, remoteCommand string) []string {
+	return []string{
 		"-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
 		"-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
 		"-o", "StrictHostKeyChecking=yes", "-o", "VerifyHostKeyDNS=no", "-o", "CheckHostIP=yes",
 		"-o", "HostKeyAlgorithms=ssh-ed25519", "-o", "PubkeyAcceptedAlgorithms=ssh-ed25519",
-		"-o", "UserKnownHostsFile=" + knownHostsPath, "-o", "GlobalKnownHostsFile=/dev/null",
 		"-o", "ConnectTimeout=10", "-o", "ConnectionAttempts=1", "-o", "LogLevel=ERROR",
-		"-i", identity, payRemoteUser + "@" + payRemoteHost, remoteCommand,
+		"-i", identity, payRemoteAlias, remoteCommand,
 	}
-	return runSSH(ctx, arguments, input)
 }
 
-func validPayRemoteCommand(command string) bool {
-	return command == "cd /opt/totools-pay && docker compose --project-name totools-pay --file compose.sandbox.yaml exec -T payment-vault-worker /app/payment-vault-agent load --admin-socket /run/payment-vault-agent/admin.sock --ref "+webhookVaultRef ||
-		command == "cd /opt/totools-pay && docker compose --project-name totools-pay --file compose.sandbox.yaml exec -T --user postgres payment-postgres psql --no-psqlrc --set ON_ERROR_STOP=1 --dbname payment"
+func validPayRemoteCommand(profile activationProfile, command string) bool {
+	switch profile {
+	case sandboxActivationProfile:
+		return command == payWebhookInjectionCommand(sandboxActivationProfile) || command == sandboxEnrollmentCommand()
+	case liveActivationProfile:
+		return command == payWebhookInjectionCommand(liveActivationProfile)
+	default:
+		return false
+	}
 }
 
 func runSSH(ctx context.Context, arguments []string, input []byte) error {
@@ -291,7 +491,6 @@ func validatePrivateIdentity(path string) error {
 	}
 	return nil
 }
-
 func enrollmentSQL(requestPublic, webhookPublic string) string {
 	return fmt.Sprintf(`BEGIN;
 SELECT pg_advisory_xact_lock(hashtext('totools-pay-sub2-sandbox-enrollment'));

@@ -1315,6 +1315,8 @@ unified_payment:
   enabled: false
   base_url: "https://pay.example.com"
   environment: "sandbox"
+  # Comma-separated native methods exposed through the unified service.
+  payment_methods: "alipay,wechat_pay"
   organization_id: "00000000-0000-4000-8000-000000000000"
   product_id: "00000000-0000-4000-8000-000000000000"
   app_id: "app.sub2.sandbox"
@@ -1324,6 +1326,8 @@ unified_payment:
   # JSON object: webhook key id -> Base64 encoded 32-byte Ed25519 public key.
   webhook_public_keys_json: '{}'
   return_url: "https://sub2.example.com/payment/result"
+  # Public HTTPS callback registered with the unified payment service.
+  webhook_url: "https://api.turtleligpt.com/api/v1/payment/webhook/unified"
 
 # =============================================================================
 # Image Storage (异步图片任务结果对象存储)

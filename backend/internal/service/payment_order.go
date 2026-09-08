@@ -122,7 +122,11 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 }
 
 func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig) (*dbent.SubscriptionPlan, error) {
-	if s.usesUnifiedAlipay(req.PaymentType) {
+	useUnified, err := s.usesUnifiedPayment(ctx, req.PaymentType)
+	if err != nil {
+		return nil, err
+	}
+	if useUnified {
 		timeoutMinutes := cfg.OrderTimeoutMin
 		if timeoutMinutes <= 0 {
 			timeoutMinutes = defaultOrderTimeoutMin
@@ -426,14 +430,18 @@ func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, user
 }
 
 func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, payAmount float64) (*payment.InstanceSelection, error) {
-	if s.usesUnifiedAlipay(req.PaymentType) {
-		return s.unifiedPayment.Selection(), nil
+	providerKey, err := s.createOrderProviderKey(ctx, req.PaymentType)
+	if err != nil {
+		return nil, err
+	}
+	if providerKey == payment.TypeUnifiedPay {
+		return s.unifiedPayment.Selection(req.PaymentType), nil
 	}
 	selectCtx, err := s.prepareCreateOrderSelectionContext(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	sel, err := s.loadBalancer.SelectInstance(selectCtx, "", req.PaymentType, payment.Strategy(cfg.LoadBalanceStrategy), payAmount)
+	sel, err := s.loadBalancer.SelectInstance(selectCtx, providerKey, req.PaymentType, payment.Strategy(cfg.LoadBalanceStrategy), payAmount)
 	if err != nil {
 		return nil, infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", "method_not_configured").
 			WithMetadata(map[string]string{"payment_type": req.PaymentType})
@@ -482,7 +490,10 @@ func (s *PaymentService) usesOfficialWxpayVisibleMethod(ctx context.Context) boo
 func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.PaymentOrder, req CreateOrderRequest, cfg *PaymentConfig, limitAmount float64, payAmountStr string, payAmount float64, plan *dbent.SubscriptionPlan, sel *payment.InstanceSelection) (*CreateOrderResponse, error) {
 	var prov payment.Provider
 	var err error
-	if sel != nil && sel.ProviderKey == payment.TypeUnifiedPay && s.usesUnifiedAlipay(req.PaymentType) {
+	if sel != nil && sel.ProviderKey == payment.TypeUnifiedPay {
+		if s.unifiedPayment == nil || !s.unifiedPayment.Enabled() {
+			return nil, unifiedpay.ErrDisabled
+		}
 		prov = s.unifiedPayment
 	} else {
 		prov, err = provider.CreateProvider(sel.ProviderKey, sel.InstanceID, sel.Config)

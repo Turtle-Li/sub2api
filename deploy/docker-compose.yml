@@ -121,6 +121,7 @@ services:
       # Unified Payment (optional; secrets must be injected from Vault)
       # =======================================================================
       - UNIFIED_PAYMENT_ENABLED=${UNIFIED_PAYMENT_ENABLED:-false}
+      - UNIFIED_PAYMENT_PAYMENT_METHODS=${UNIFIED_PAYMENT_PAYMENT_METHODS:-alipay}
       - UNIFIED_PAYMENT_BASE_URL=${UNIFIED_PAYMENT_BASE_URL:-}
       - UNIFIED_PAYMENT_ENVIRONMENT=${UNIFIED_PAYMENT_ENVIRONMENT:-}
       - UNIFIED_PAYMENT_ORGANIZATION_ID=${UNIFIED_PAYMENT_ORGANIZATION_ID:-}
@@ -131,6 +132,7 @@ services:
       - UNIFIED_PAYMENT_VAULT_AGENT_SOCKET=${UNIFIED_PAYMENT_VAULT_AGENT_SOCKET:-}
       - UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON=${UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON:-}
       - UNIFIED_PAYMENT_RETURN_URL=${UNIFIED_PAYMENT_RETURN_URL:-}
+      - UNIFIED_PAYMENT_WEBHOOK_URL=${UNIFIED_PAYMENT_WEBHOOK_URL:-https://api.turtleligpt.com/api/v1/payment/webhook/unified}
 
       # =======================================================================
       # Timezone Configuration

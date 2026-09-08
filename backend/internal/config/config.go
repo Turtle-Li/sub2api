@@ -112,9 +112,13 @@ type Config struct {
 // memory-only Vault agent; it never enters configuration, Docker metadata, or
 // a host file.
 type UnifiedPaymentConfig struct {
-	Enabled                   bool   `mapstructure:"enabled"`
-	BaseURL                   string `mapstructure:"base_url"`
-	Environment               string `mapstructure:"environment"`
+	Enabled     bool   `mapstructure:"enabled"`
+	BaseURL     string `mapstructure:"base_url"`
+	Environment string `mapstructure:"environment"`
+	// PaymentMethods is a comma-separated allow-list of methods exposed through
+	// the unified service. It defaults to both native CNY methods so Sub2 can
+	// route Alipay and WeChat without creating local provider credential rows.
+	PaymentMethods            string `mapstructure:"payment_methods"`
 	OrganizationID            string `mapstructure:"organization_id"`
 	ProductID                 string `mapstructure:"product_id"`
 	AppID                     string `mapstructure:"app_id"`
@@ -123,6 +127,7 @@ type UnifiedPaymentConfig struct {
 	VaultAgentSocket          string `mapstructure:"vault_agent_socket"`
 	WebhookPublicKeysJSON     string `mapstructure:"webhook_public_keys_json"`
 	ReturnURL                 string `mapstructure:"return_url"`
+	WebhookURL                string `mapstructure:"webhook_url"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -2803,6 +2808,7 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("unified_payment.enabled", false)
 	viper.SetDefault("unified_payment.base_url", "")
 	viper.SetDefault("unified_payment.environment", "")
+	viper.SetDefault("unified_payment.payment_methods", "alipay,wechat_pay")
 	viper.SetDefault("unified_payment.organization_id", "")
 	viper.SetDefault("unified_payment.product_id", "")
 	viper.SetDefault("unified_payment.app_id", "")
@@ -2811,6 +2817,7 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("unified_payment.vault_agent_socket", "")
 	viper.SetDefault("unified_payment.webhook_public_keys_json", "")
 	viper.SetDefault("unified_payment.return_url", "")
+	viper.SetDefault("unified_payment.webhook_url", "")
 
 	// sticky_escape_enabled is the one exception to the zero-value rule: its
 	// effective default is true, applied post-unmarshal via a viper.IsSet guard.

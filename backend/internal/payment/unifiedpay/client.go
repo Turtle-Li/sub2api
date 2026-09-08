@@ -178,6 +178,36 @@ func (c *client) closePaymentOrder(ctx context.Context, paymentOrderID, idempote
 	return result, nil
 }
 
+func (c *client) createRefund(ctx context.Context, idempotencyKey string, input createRefundRequest) (*refundResponse, error) {
+	if !validCreateRefundRequest(input) {
+		return nil, ErrInvalidRequest
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	responseBody, err := c.do(ctx, http.MethodPost, "/v1/refund-requests", body, idempotencyKey, http.StatusAccepted)
+	if err != nil {
+		return nil, err
+	}
+	return c.decodeRefund(responseBody)
+}
+
+func (c *client) getRefund(ctx context.Context, refundRequestID string) (*refundResponse, error) {
+	if !validUUID(refundRequestID) {
+		return nil, ErrInvalidRequest
+	}
+	body, err := c.do(ctx, http.MethodGet, "/v1/refund-requests/"+refundRequestID, nil, "", http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.decodeRefund(body)
+	if err != nil || !strings.EqualFold(result.RefundRequestID, refundRequestID) {
+		return nil, ErrInvalidResponse
+	}
+	return result, nil
+}
+
 func (c *client) decodePaymentOrder(body []byte) (*paymentOrderResponse, error) {
 	var result paymentOrderResponse
 	if err := strictUnmarshalObject(body, &result, false); err != nil {
@@ -190,11 +220,23 @@ func (c *client) decodePaymentOrder(body []byte) (*paymentOrderResponse, error) 
 	return &result, nil
 }
 
+func (c *client) decodeRefund(body []byte) (*refundResponse, error) {
+	var result refundResponse
+	if err := strictUnmarshalObject(body, &result, false); err != nil {
+		return nil, ErrInvalidResponse
+	}
+	if result.Environment != c.environment || result.OrganizationID != c.organizationID ||
+		result.ProductID != c.productID || !validRefundResponse(result) {
+		return nil, ErrInvalidResponse
+	}
+	return &result, nil
+}
+
 func validPaymentOrderResponse(result paymentOrderResponse) bool {
 	if !validUUID(result.PaymentOrderID) || !validIdentifier(result.ProductOrderNo, 6, 64) ||
 		!validLowerIdentifier(result.OrderType, 3, 64) || result.AmountFen < 1 || result.PaidAmountFen < 0 ||
 		result.RefundedAmountFen < 0 || result.ReservedRefundAmountFen < 0 || result.RefundableAmountFen < 0 ||
-		result.Currency != "CNY" || result.PaymentMethod != PaymentMethodAlipay || result.CreatedAt.IsZero() || result.ExpiresAt.IsZero() {
+		result.Currency != "CNY" || !validPaymentMethod(result.PaymentMethod) || result.CreatedAt.IsZero() || result.ExpiresAt.IsZero() {
 		return false
 	}
 	if result.PaidAmountFen > result.AmountFen || result.RefundedAmountFen > result.PaidAmountFen ||
@@ -217,6 +259,10 @@ func validPaymentOrderResponse(result paymentOrderResponse) bool {
 	default:
 		return false
 	}
+}
+
+func validPaymentMethod(value string) bool {
+	return value == PaymentMethodAlipay || value == PaymentMethodWechatPay
 }
 
 func (c *client) do(ctx context.Context, method, rawTarget string, body []byte, idempotencyKey string, expectedStatus ...int) ([]byte, error) {

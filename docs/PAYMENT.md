@@ -24,9 +24,10 @@ Sub2API has a built-in payment system that enables user self-service top-up with
 | **EasyPay** | Alipay, WeChat Pay | Third-party aggregation via EasyPay protocol |
 | **Alipay (Direct)** | Desktop QR code, mobile Alipay redirect | Direct integration with Alipay Open Platform, returning desktop QR codes and mobile WAP/app launch links |
 | **WeChat Pay (Direct)** | Native QR, H5, MP/JSAPI Pay | Direct integration with WeChat Pay APIv3 with environment-aware routing |
+| **Unified Payment Service** | Alipay, WeChat Pay | Central pay-v1 service with verified product Webhook callbacks; no local provider credentials |
 | **Stripe** | Card, Alipay, WeChat Pay, Link, etc. | International payments, multi-currency support |
 
-> Alipay/WeChat Pay direct and EasyPay can both exist as backend provider instances, but the frontend always exposes only two visible buttons: `Alipay` and `WeChat Pay`. Admins choose exactly one source for each visible method: direct or EasyPay. Direct channels connect to payment APIs directly with lower fees; EasyPay aggregates through third-party platforms with easier setup.
+> Alipay/WeChat Pay direct, EasyPay, and Unified Payment can coexist, but the frontend always exposes only two visible buttons: `Alipay` and `WeChat Pay`. Admins choose the source for each visible method; Unified Payment does not require a local provider instance.
 
 > **EasyPay Provider Recommendations**: Both options below are third-party aggregators compatible with the EasyPay protocol. Pick based on the funding channel and settlement currency you need:
 >
@@ -42,7 +43,7 @@ Sub2API has a built-in payment system that enables user self-service top-up with
 1. Go to Admin Dashboard → **Settings** → **Payment Settings** tab
 2. Enable **Payment**
 3. Configure basic parameters (amount range, timeout, etc.)
-4. Add at least one provider instance in **Provider Management**
+4. For direct/EasyPay, add a provider instance in **Provider Management**; for Unified Payment, confirm the server status is configured and choose the Unified Payment route
 5. Users can now top up from the frontend
 
 ---
@@ -72,10 +73,18 @@ Recharge presets are fixed tiers; users cannot enter a custom amount. The server
 
 The current payment UX keeps the frontend method list unified and does not expose provider brands directly:
 
-- **Alipay**: when enabled, this button must be routed to either `Alipay (Direct)` or `EasyPay Alipay`
-- **WeChat Pay**: when enabled, this button must be routed to either `WeChat Pay (Direct)` or `EasyPay WeChat`
+- **Alipay**: when enabled, this button can route to `Alipay (Direct)`, `EasyPay Alipay`, or `Unified Payment Alipay`
+- **WeChat Pay**: when enabled, this button can route to `WeChat Pay (Direct)`, `EasyPay WeChat`, or `Unified Payment WeChat`
 - Each visible method can route to only one source at a time
-- If a visible method is enabled without a selected source, the frontend will not expose that method
+- Automatic selection prefers the configured unified method, then uses the existing provider selection
+- An explicit direct or EasyPay source pins the actual order to that provider; a configuration read failure stops creation
+- Legacy visible-method `enabled` fields remain compatibility fields, not routing switches
+
+Signing keys stay on the server through Vault; the settings UI exposes runtime capabilities without private-key inputs.
+Administrators can request asynchronous unified refunds for plain balance orders. Acceptance and uncertainty keep the
+refund pending; only a trusted success recovers balance once, honoring the administrator's deduction choice. Bonus,
+concurrency-upgrade and subscription entitlements require separate manual handling. This does not enable user
+self-service refunds. See [the integration contract](UNIFIED_PAYMENT_INTEGRATION.md).
 
 ### Load Balance Strategies
 

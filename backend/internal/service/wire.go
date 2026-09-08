@@ -1000,8 +1000,8 @@ func ProvidePaymentConfigService(entClient *dbent.Client, settingRepo SettingRep
 	return NewPaymentConfigService(entClient, settingRepo, []byte(key))
 }
 
-func ProvideUnifiedPaymentGateway(cfg *config.Config) (*unifiedpay.Gateway, error) {
-	return unifiedpay.NewFromAppConfig(cfg)
+func ProvideUnifiedPaymentGateway(cfg *config.Config, settings *SettingService) (*unifiedpay.Gateway, error) {
+	return settings.loadUnifiedPaymentGateway(cfg)
 }
 
 // ProvideBalanceNotifyService creates BalanceNotifyService

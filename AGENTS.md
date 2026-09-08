@@ -1,10 +1,27 @@
 # Sub2API project operations
 
+## Unified payment integration
+
+- Read `docs/UNIFIED_PAYMENT_INTEGRATION.md` before changing unified payment
+  routing, signing, callbacks or refunds; its fixed central-service source blobs
+  are the contract reference. The detailed local continuation plan is in
+  `docs/UNIFIED_PAYMENT_IMPLEMENTATION_PLAN.md`.
+- Product signing keys stay in Vault and the memory agent. The settings UI only
+  selects routes and reads server capabilities. The owner authorized controlled
+  live WeChat/Alipay 1–2 fen tests and deployment on 2026-09-09; ordinary
+  customer purchasing stays disabled. Local tests do not establish live readiness.
+- Unified refunds persist one active attempt per order and recover balance only
+  after a trusted success. Retain refund history and manual-review fences during
+  rollback; never remove financial tables to undo an application release.
+
 ## Production host
 
-- Connect only through the configured SSH alias `sub2api-new`; do not copy a
-  raw host, port, or key into project scripts.
-- This server is shared only with Turtle's GPT. Sub2API owns `/opt/sub2api`,
+- Use the configured SSH aliases only: `sub2api-candidate` is the serving Azure
+  node and background owner; `sub2api-new` is the accepting rollback origin
+  with background standby (verified 2026-09-09). Preserve these roles during
+  release and recheck them before every lifecycle change. Do not copy a raw
+  host, port, or key into project scripts.
+- The `sub2api-new` server is shared only with Turtle's GPT. Sub2API owns `/opt/sub2api`,
   its `sub2api*` containers, volumes, images, release logs, and loopback ports;
   do not inspect, modify, restart, prune, or reuse Turtle's GPT resources from
   a Sub2API task. Keep both projects' deployment directories, Compose projects,
@@ -19,7 +36,7 @@
 - Read `deploy/gcp-taiwan-line/README.md` before operating the retained Taiwan
   Premium candidate. Its exact static IP is the tested network identity.
 - The candidate runs the documented HAProxy transport-only ingress on exact
-  public TCP `80/443`, but production DNS still points to the old origin. It
+  public TCP `80/443`; production API DNS points to this transport ingress. It
   has no project SSH identity, service account, runtime credential, app, data
   service, worker, or OAuth-egress role. Do not add another line protocol,
   widen ingress, release its address, or change DNS without satisfying the

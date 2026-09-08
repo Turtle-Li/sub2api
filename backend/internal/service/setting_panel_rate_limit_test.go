@@ -50,6 +50,58 @@ func (r *panelRateLimitSettingRepo) Set(_ context.Context, key, value string) er
 	return nil
 }
 
+func (r *panelRateLimitSettingRepo) CompareAndSet(_ context.Context, key, expectedValue, value string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, exists := r.values[key]
+	if expectedValue == "" {
+		if exists {
+			return false, nil
+		}
+	} else if !exists || current != expectedValue {
+		return false, nil
+	}
+	if r.values == nil {
+		r.values = make(map[string]string)
+	}
+	r.values[key] = value
+	return true, nil
+}
+
+// CommitUnifiedPaymentBindingAndIdempotencySuccess is a unit-test stand-in for
+// the PostgreSQL transaction. Repository integration tests exercise the real
+// lease fence and rollback; this fake only gives service tests a deterministic
+// exact-value setting CAS.
+func (r *panelRateLimitSettingRepo) CommitUnifiedPaymentBindingAndIdempotencySuccess(
+	_ context.Context,
+	commit UnifiedPaymentBindingIdempotencyCommit,
+) (UnifiedPaymentBindingIdempotencyCommitOutcome, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !panelRateLimitSettingValueMatches(r.values, commit.BindingKey, commit.BindingExpectedValue) ||
+		!panelRateLimitSettingValueMatches(r.values, commit.RevisionKey, commit.RevisionExpectedValue) {
+		return UnifiedPaymentBindingIdempotencyCommitVersionConflict, nil
+	}
+	if r.values == nil {
+		r.values = make(map[string]string)
+	}
+	if commit.BindingDelete {
+		delete(r.values, commit.BindingKey)
+	} else {
+		r.values[commit.BindingKey] = commit.BindingValue
+	}
+	r.values[commit.RevisionKey] = commit.RevisionValue
+	return UnifiedPaymentBindingIdempotencyCommitSucceeded, nil
+}
+
+func panelRateLimitSettingValueMatches(values map[string]string, key, expected string) bool {
+	actual, exists := values[key]
+	if expected == "" {
+		return !exists
+	}
+	return exists && actual == expected
+}
+
 func (r *panelRateLimitSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

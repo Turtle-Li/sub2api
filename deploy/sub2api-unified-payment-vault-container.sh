@@ -5,6 +5,11 @@
 # and a private admin socket in tmpfs. The named volume exposes only public.sock
 # to application containers; a key value reaches the agent later through the
 # separately hash-pinned Vault activation consumer.
+#
+# A profile change is an explicit maintenance lifecycle: hold the shared lock,
+# stop and remove the prior sidecar after draining its consumers, verify the
+# replacement prerequisites, then invoke this script with the new --profile.
+# This script never stops, removes, or replaces an existing sidecar itself.
 
 set -Eeuo pipefail
 
@@ -12,7 +17,13 @@ CONTAINER=sub2api-payment-vault
 VOLUME=sub2api_unified_payment_vault
 PUBLIC_DIR=/run/sub2api-payment-vault
 ADMIN_DIR=/run/sub2api-payment-vault-admin
-REQUEST_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
+SANDBOX_REQUEST_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
+LIVE_REQUEST_REF='vault://secret/data/sub2api/unified-payment/live#request_private_key_base64'
+
+profile_conflict() {
+  printf '%s\n' 'SUB2API_PAYMENT_VAULT_CONTAINER_PROFILE_CONFLICT_REQUIRES_MAINTENANCE_MIGRATION' >&2
+  exit 1
+}
 
 die() {
   printf '%s\n' 'SUB2API_PAYMENT_VAULT_CONTAINER_REJECTED' >&2
@@ -45,6 +56,23 @@ require_image() {
   [ -n "$version" ] || die
 }
 
+agent_command_json() {
+  local request_ref="$1"
+  printf '%s' '["/app/sub2api-vault-agent","serve","--public-socket","/run/sub2api-payment-vault/public.sock","--admin-socket","/run/sub2api-payment-vault-admin/admin.sock","--allowed-ref","'"$request_ref"'"]'
+}
+
+container_profile() {
+  local command
+  command="$(docker container inspect "$CONTAINER" --format '{{json .Config.Cmd}}')" || return 1
+  if [ "$command" = "$(agent_command_json "$SANDBOX_REQUEST_REF")" ]; then
+    printf '%s\n' sandbox
+  elif [ "$command" = "$(agent_command_json "$LIVE_REQUEST_REF")" ]; then
+    printf '%s\n' live
+  else
+    return 1
+  fi
+}
+
 verify_container() {
   local image="$1" mounts command health security
   [ "$(docker container inspect "$CONTAINER" --format '{{.Config.Image}}')" = "$image" ] || return 1
@@ -62,7 +90,7 @@ verify_container() {
   mounts="$(docker container inspect "$CONTAINER" --format '{{range .Mounts}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{end}}')" || return 1
   [ "$mounts" = "volume|$VOLUME|$PUBLIC_DIR|true" ] || return 1
   command="$(docker container inspect "$CONTAINER" --format '{{json .Config.Cmd}}')" || return 1
-  [ "$command" = '["/app/sub2api-vault-agent","serve","--public-socket","/run/sub2api-payment-vault/public.sock","--admin-socket","/run/sub2api-payment-vault-admin/admin.sock","--allowed-ref","vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64"]' ] || return 1
+  [ "$command" = "$(agent_command_json "$REQUEST_REF")" ] || return 1
   health="$(docker container inspect "$CONTAINER" --format '{{json .Config.Healthcheck.Test}}')" || return 1
   [ "$health" = '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket /run/sub2api-payment-vault/public.sock"]' ] || return 1
 }
@@ -75,10 +103,25 @@ case "${SUB2API_PAYMENT_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS:-0}" in
   0) [ "$(id -u)" -eq 0 ] || die ;;
   *) die ;;
 esac
+
+profile=sandbox
+case "${1:-}" in
+  --profile)
+    [ "$#" -eq 4 ] || die
+    profile="$2"
+    shift 2
+    ;;
+  --profile=*) die ;;
+esac
 [ "$#" -eq 2 ] || die
 action="$1"
 image="$2"
 case "$action" in prepare|ready) ;; *) die ;; esac
+case "$profile" in
+  sandbox) REQUEST_REF="$SANDBOX_REQUEST_REF" ;;
+  live) REQUEST_REF="$LIVE_REQUEST_REF" ;;
+  *) die ;;
+esac
 if ! sub2api_maintenance_lock_validate_configured_path "$LOCK_FILE"; then
   die
 fi
@@ -90,7 +133,10 @@ if ! sub2api_maintenance_lock_open "$LOCK_FILE"; then
 fi
 flock -n "$SUB2API_MAINTENANCE_LOCK_FD" || die
 
-if ! docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+  existing_profile="$(container_profile || true)"
+  [ "$existing_profile" = "$profile" ] || profile_conflict
+else
   [ "$action" = prepare ] || die
   docker volume create "$VOLUME" >/dev/null || die
   docker run -d \

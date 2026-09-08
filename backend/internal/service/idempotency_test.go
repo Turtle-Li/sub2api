@@ -759,6 +759,71 @@ type markBehaviorRepo struct {
 	failMarkFailed    bool
 }
 
+type guardedFailureRepo struct {
+	*inMemoryIdempotencyRepo
+	guardedCalls int
+	genericCalls int
+}
+
+func (r *guardedFailureRepo) MarkFailedRetryable(ctx context.Context, id int64, errorReason string, lockedUntil, expiresAt time.Time) error {
+	r.genericCalls++
+	return r.inMemoryIdempotencyRepo.MarkFailedRetryable(ctx, id, errorReason, lockedUntil, expiresAt)
+}
+
+func (r *guardedFailureRepo) MarkFailedRetryableIfClaim(
+	_ context.Context,
+	claim IdempotencyExecutionClaim,
+	errorReason string,
+	lockedUntil, expiresAt time.Time,
+) (bool, error) {
+	r.guardedCalls++
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, record := range r.data {
+		if record.ID != claim.ID || record.Status != IdempotencyStatusProcessing || record.RequestFingerprint != claim.RequestFingerprint || record.LockedUntil == nil || !record.LockedUntil.Equal(claim.LockedUntil) || !record.ExpiresAt.Equal(claim.ExpiresAt) {
+			continue
+		}
+		record.Status = IdempotencyStatusFailedRetryable
+		record.LockedUntil = &lockedUntil
+		record.ExpiresAt = expiresAt
+		record.ErrorReason = &errorReason
+		return true, nil
+	}
+	return false, nil
+}
+
+func TestIdempotencyCoordinatorUsesFencedFailureTransitionAfterLeaseLoss(t *testing.T) {
+	repo := &guardedFailureRepo{inMemoryIdempotencyRepo: newInMemoryIdempotencyRepo()}
+	coordinator := NewIdempotencyCoordinator(repo, DefaultIdempotencyConfig())
+	opts := IdempotencyExecuteOptions{
+		Scope:          "fenced-failure-scope",
+		IdempotencyKey: "fenced-failure-key",
+		Method:         "POST",
+		Route:          "/binding",
+		ActorScope:     "admin:1",
+		Payload:        map[string]any{"revision": 1},
+		RequireKey:     true,
+	}
+
+	_, err := coordinator.Execute(context.Background(), opts, func(context.Context) (any, error) {
+		// Model another worker reclaiming and succeeding after this executor's
+		// external operation started but before its network error is handled.
+		repo.mu.Lock()
+		record := repo.data[repo.key(opts.Scope, HashIdempotencyKey(opts.IdempotencyKey))]
+		require.NotNil(t, record)
+		record.Status = IdempotencyStatusSucceeded
+		record.LockedUntil = nil
+		repo.mu.Unlock()
+		return nil, errors.New("network failed after lease loss")
+	})
+	require.EqualError(t, err, "network failed after lease loss")
+	require.Equal(t, 1, repo.guardedCalls)
+	require.Equal(t, 0, repo.genericCalls, "the ID-only failure transition must not run after a lease loss")
+	got, getErr := repo.GetByScopeAndKeyHash(context.Background(), opts.Scope, HashIdempotencyKey(opts.IdempotencyKey))
+	require.NoError(t, getErr)
+	require.Equal(t, IdempotencyStatusSucceeded, got.Status)
+}
+
 func (r *markBehaviorRepo) MarkSucceeded(ctx context.Context, id int64, responseStatus int, responseBody string, expiresAt time.Time) error {
 	if r.failMarkSucceeded {
 		return errors.New("mark succeeded failed")
@@ -849,4 +914,88 @@ func TestIdempotencyCoordinator_HelperBranches(t *testing.T) {
 	invalid := "{invalid"
 	_, err = c.decodeStoredResponse(&invalid)
 	require.Error(t, err)
+}
+
+func TestIdempotencyDBDeadlineUsesPostgresMicrosecondFence(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 12, 0, 0, 123456000, time.UTC)
+	require.Equal(t, now.Add(time.Microsecond), idempotencyDBDeadline(now, 500*time.Nanosecond))
+	require.Equal(t, now.Add(2*time.Microsecond), idempotencyDBDeadline(now, 2900*time.Nanosecond))
+	require.Equal(t, now, idempotencyDBDeadline(now, 0))
+}
+
+type leaseRecoveryFinalizer struct {
+	data   any
+	finish func(IdempotencyExecutionClaim, int, string, time.Time) error
+}
+
+func (f *leaseRecoveryFinalizer) IdempotencyResponseData() any { return f.data }
+func (f *leaseRecoveryFinalizer) FinalizeIdempotencySuccess(_ context.Context, claim IdempotencyExecutionClaim, status int, body string, expires time.Time) error {
+	return f.finish(claim, status, body, expires)
+}
+
+func TestIdempotencyCoordinatorFencedLeaseRecoveryBeforeResponseTTL(t *testing.T) {
+	for _, missingLock := range []bool{false, true} {
+		t.Run(map[bool]string{false: "expired_lock", true: "missing_lock"}[missingLock], func(t *testing.T) {
+			repo := newInMemoryIdempotencyRepo()
+			coordinator := NewIdempotencyCoordinator(repo, DefaultIdempotencyConfig())
+			opts := IdempotencyExecuteOptions{Scope: "fenced-binding", ActorScope: "admin:1", Method: "POST", Route: "/binding", IdempotencyKey: "lease-recovery-key", Payload: map[string]int{"revision": 0}, RequireKey: true, RequireFencedFinalizer: true, TTL: 24 * time.Hour}
+			calls := 0
+			execute := func(context.Context) (any, error) {
+				calls++
+				return &leaseRecoveryFinalizer{data: map[string]int{"revision": 1}, finish: func(claim IdempotencyExecutionClaim, status int, body string, expires time.Time) error {
+					if calls == 1 {
+						return ErrIdempotencyStoreUnavail
+					}
+					return repo.MarkSucceeded(context.Background(), claim.ID, status, body, expires)
+				}}, nil
+			}
+			_, err := coordinator.Execute(context.Background(), opts, execute)
+			require.Error(t, err)
+			_, err = coordinator.Execute(context.Background(), opts, execute)
+			require.ErrorIs(t, err, ErrIdempotencyInProgress)
+			require.Equal(t, 1, calls)
+			repo.mu.Lock()
+			record := repo.data[repo.key(opts.Scope, HashIdempotencyKey(opts.IdempotencyKey))]
+			require.True(t, record.ExpiresAt.After(time.Now().Add(23*time.Hour)))
+			past := time.Now().Add(-time.Second)
+			record.LockedUntil = &past
+			if missingLock {
+				record.LockedUntil = nil
+			}
+			repo.mu.Unlock()
+			result, err := coordinator.Execute(context.Background(), opts, execute)
+			require.NoError(t, err)
+			require.False(t, result.Replayed)
+			replay, err := coordinator.Execute(context.Background(), opts, execute)
+			require.NoError(t, err)
+			require.True(t, replay.Replayed)
+			require.Equal(t, 2, calls)
+		})
+	}
+}
+
+func TestIdempotencyCoordinatorFencedModeRejectsUnsafeFallbacks(t *testing.T) {
+	repo := newInMemoryIdempotencyRepo()
+	coordinator := NewIdempotencyCoordinator(repo, DefaultIdempotencyConfig())
+	opts := IdempotencyExecuteOptions{Scope: "fenced-binding", Method: "POST", Route: "/binding", ActorScope: "admin:1", RequireFencedFinalizer: true}
+	calls := 0
+	execute := func(context.Context) (any, error) { calls++; return map[string]bool{"ok": true}, nil }
+	_, err := coordinator.Execute(context.Background(), opts, execute)
+	require.ErrorIs(t, err, ErrIdempotencyKeyRequired)
+	require.Zero(t, calls)
+	opts.IdempotencyKey = "unsafe-finalizer-test"
+	_, err = coordinator.Execute(context.Background(), opts, execute)
+	require.Error(t, err)
+	record, err := repo.GetByScopeAndKeyHash(context.Background(), opts.Scope, HashIdempotencyKey(opts.IdempotencyKey))
+	require.NoError(t, err)
+	require.Equal(t, IdempotencyStatusProcessing, record.Status)
+	// Legacy executors do not opt into early reclaim: their completion is ID-only.
+	repo.mu.Lock()
+	past := time.Now().Add(-time.Second)
+	repo.data[repo.key(opts.Scope, HashIdempotencyKey(opts.IdempotencyKey))].LockedUntil = &past
+	repo.mu.Unlock()
+	opts.RequireFencedFinalizer = false
+	_, err = coordinator.Execute(context.Background(), opts, execute)
+	require.ErrorIs(t, err, ErrIdempotencyInProgress)
+	require.Equal(t, 1, calls)
 }

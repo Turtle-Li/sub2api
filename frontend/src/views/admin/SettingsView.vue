@@ -7844,6 +7844,61 @@
                 <Toggle v-model="form.payment_enabled" />
               </div>
               <template v-if="form.payment_enabled">
+                <div class="rounded-lg border border-primary-200 bg-primary-50 p-4 dark:border-primary-900/60 dark:bg-primary-950/20">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <h3 class="font-medium text-gray-900 dark:text-white">
+                          {{ t("admin.settings.payment.unifiedTitle") }}
+                        </h3>
+                        <span
+                          class="rounded-full px-2 py-0.5 text-xs font-medium"
+                          :class="form.payment_unified_enabled
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                            : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
+                        >
+                          {{ form.payment_unified_enabled
+                            ? t("admin.settings.payment.unifiedConfigured")
+                            : t("admin.settings.payment.unifiedNotConfigured") }}
+                        </span>
+                      </div>
+                      <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                        {{ t("admin.settings.payment.unifiedHint") }}
+                      </p>
+                      <p v-if="form.payment_unified_enabled" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.payment.unifiedMethods", {
+                          methods: unifiedPaymentMethods.join(", ") || t("admin.settings.payment.unifiedNone"),
+                        }) }}
+                      </p>
+                    </div>
+                    <div v-if="form.payment_unified_enabled" class="grid w-full min-w-0 grid-cols-1 gap-2 sm:w-auto sm:min-w-[18rem] sm:grid-cols-2">
+                      <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
+                        {{ t("admin.settings.payment.unifiedAlipayRoute") }}
+                        <Select
+                          v-model="form.payment_visible_method_alipay_source"
+                          :options="visibleMethodSourceOptions('alipay')"
+                          class="mt-1 w-full"
+                          aria-label="Alipay payment route"
+                          @change="form.payment_visible_method_alipay_source = normalizeVisibleSourceField('alipay', form.payment_visible_method_alipay_source)"
+                        />
+                      </label>
+                      <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
+                        {{ t("admin.settings.payment.unifiedWechatRoute") }}
+                        <Select
+                          v-model="form.payment_visible_method_wxpay_source"
+                          :options="visibleMethodSourceOptions('wxpay')"
+                          class="mt-1 w-full"
+                          aria-label="WeChat payment route"
+                          @change="form.payment_visible_method_wxpay_source = normalizeVisibleSourceField('wxpay', form.payment_visible_method_wxpay_source)"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <p v-if="form.payment_unified_enabled" class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.payment.unifiedCallbackHint") }}
+                  </p>
+                  <UnifiedPaymentBinding />
+                </div>
                 <!-- Row 1: Product name -->
                 <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div>
@@ -8867,6 +8922,8 @@ import {
   deriveWeChatConnectStoredMode,
   normalizeDefaultSubscriptionSettings,
   resolveWeChatConnectModeCapabilities,
+  getPaymentVisibleMethodSourceOptions,
+  normalizePaymentVisibleMethodSource,
 } from "@/api/admin/settings";
 import type {
   AuthSourceDefaultsState,
@@ -8880,6 +8937,8 @@ import type {
   WebSearchEmulationConfig,
   WebSearchProviderConfig,
   WebSearchTestResult,
+  PaymentVisibleMethod,
+  PaymentVisibleMethodSource,
 } from "@/api/admin/settings";
 import type {
   AdminGroup,
@@ -8897,6 +8956,7 @@ import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vu
 import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import Toggle from "@/components/common/Toggle.vue";
+import UnifiedPaymentBinding from "@/components/payment/UnifiedPaymentBinding.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
@@ -9682,6 +9742,12 @@ const form = reactive<SettingsForm>({
   payment_recharge_options: [] as Array<Record<string, unknown>>,
   payment_recharge_options_json: "[]",
   payment_enabled_types: [],
+  payment_unified_enabled: false,
+  payment_unified_methods: [],
+  payment_visible_method_alipay_source: "",
+  payment_visible_method_wxpay_source: "",
+  payment_visible_method_alipay_enabled: false,
+  payment_visible_method_wxpay_enabled: false,
   payment_help_image_url: "",
   payment_help_text: "",
   payment_product_name_prefix: "",
@@ -10874,6 +10940,7 @@ async function loadSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
+    syncUnifiedPaymentSettings(settings);
     form.payment_recharge_options_json = JSON.stringify(settings.payment_recharge_options || [], null, 2);
     syncCaptchaProviderSelection();
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
@@ -11617,6 +11684,16 @@ async function saveSettings() {
       form.account_scheduling_thresholds,
     );
     appendAuthSourceDefaultsToUpdateRequest(payload, authSourceDefaults);
+    if (form.payment_unified_enabled) {
+      payload.payment_visible_method_alipay_source = normalizeVisibleSourceField(
+        "alipay",
+        form.payment_visible_method_alipay_source,
+      );
+      payload.payment_visible_method_wxpay_source = normalizeVisibleSourceField(
+        "wxpay",
+        form.payment_visible_method_wxpay_source,
+      );
+    }
 
     const updated = await settingsStepUp.run(() =>
       adminAPI.settings.updateSettings(payload),
@@ -11627,6 +11704,7 @@ async function saveSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
+    syncUnifiedPaymentSettings(updated);
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(updated));
     form.default_platform_quotas = normalizePlatformQuotasMap(updated.default_platform_quotas);
     form.account_scheduling_thresholds = normalizeAccountSchedulingThresholdsMap(
@@ -12337,6 +12415,41 @@ const allPaymentTypes = computed(() => [
   { value: "stripe", label: t("payment.methods.stripe") },
   { value: "airwallex", label: t("payment.methods.airwallex") },
 ]);
+
+const unifiedPaymentMethods = computed(() =>
+  (form.payment_unified_methods || []).map((method) => normalizeVisibleMethod(method)).filter(Boolean),
+);
+
+function unifiedSupports(method: PaymentVisibleMethod): boolean {
+  return Boolean(form.payment_unified_enabled && unifiedPaymentMethods.value.includes(method));
+}
+
+function visibleMethodSourceOptions(method: PaymentVisibleMethod) {
+  return getPaymentVisibleMethodSourceOptions(method).map((option) => ({
+    value: option.value,
+    label: option.value === ""
+      ? t("admin.settings.payment.unifiedAutomaticRoute")
+      : locale.value.startsWith("zh") ? option.labelZh : option.labelEn,
+    disabled: option.value.startsWith("unified_") && !unifiedSupports(method),
+  }));
+}
+
+function normalizeVisibleSourceField(method: PaymentVisibleMethod, value: unknown): PaymentVisibleMethodSource {
+  return normalizePaymentVisibleMethodSource(method, value);
+}
+
+function syncUnifiedPaymentSettings(settings: SystemSettings) {
+  form.payment_unified_enabled = settings.payment_unified_enabled === true;
+  form.payment_unified_methods = form.payment_unified_enabled && Array.isArray(settings.payment_unified_methods)
+    ? settings.payment_unified_methods
+    : [];
+  form.payment_visible_method_alipay_source = normalizeVisibleSourceField(
+    "alipay", settings.payment_visible_method_alipay_source,
+  );
+  form.payment_visible_method_wxpay_source = normalizeVisibleSourceField(
+    "wxpay", settings.payment_visible_method_wxpay_source,
+  );
+}
 
 function isPaymentTypeEnabled(type: string): boolean {
   return form.payment_enabled_types.includes(type);

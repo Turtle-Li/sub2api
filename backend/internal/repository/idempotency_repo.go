@@ -214,6 +214,53 @@ func (r *idempotencyRepository) MarkFailedRetryable(ctx context.Context, id int6
 	return err
 }
 
+// MarkFailedRetryableIfClaim fences an executor's failure transition to the
+// exact processing lease it originally claimed. A record ID can be reused by
+// a later reclaim, so the legacy ID-only transition is unsafe for work that
+// may outlive its lease (such as a network request).
+func (r *idempotencyRepository) MarkFailedRetryableIfClaim(
+	ctx context.Context,
+	claim service.IdempotencyExecutionClaim,
+	errorReason string,
+	lockedUntil, expiresAt time.Time,
+) (bool, error) {
+	if claim.ID <= 0 || claim.RequestFingerprint == "" || claim.LockedUntil.IsZero() || claim.ExpiresAt.IsZero() {
+		return false, nil
+	}
+	query := `
+		UPDATE idempotency_records
+		SET status = $2,
+			error_reason = $3,
+			locked_until = $4,
+			expires_at = $5,
+			updated_at = NOW()
+		WHERE id = $1
+			AND status = $6
+			AND request_fingerprint = $7
+			AND locked_until = $8
+			AND expires_at = $9
+	`
+	res, err := r.sql.ExecContext(ctx, query,
+		claim.ID,
+		service.IdempotencyStatusFailedRetryable,
+		errorReason,
+		lockedUntil,
+		expiresAt,
+		service.IdempotencyStatusProcessing,
+		claim.RequestFingerprint,
+		claim.LockedUntil,
+		claim.ExpiresAt,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected == 1, nil
+}
+
 func (r *idempotencyRepository) DeleteExpired(ctx context.Context, now time.Time, limit int) (int64, error) {
 	if limit <= 0 {
 		limit = 500

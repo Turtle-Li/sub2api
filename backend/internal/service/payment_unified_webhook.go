@@ -157,14 +157,8 @@ func (s *PaymentService) processUnifiedPaymentEvent(ctx context.Context, verifie
 		if err := s.applyUnifiedTerminalOrderStatus(ctx, order, OrderStatusExpired, "UNIFIED_PAYMENT_EXPIRED", event); err != nil {
 			return err
 		}
-	case unifiedpay.EventRefundSucceeded:
-		// Refund execution is intentionally not enabled in this Sub2 slice. Keep
-		// the signed terminal evidence and audit it without mutating entitlements.
-		s.writeAuditLog(ctx, order.ID, "UNIFIED_PAYMENT_REFUND_EVENT", payment.TypeUnifiedPay, safeUnifiedEventAudit(event))
-	case unifiedpay.EventRefundFailed:
-		// Refund execution is intentionally not enabled in this Sub2 slice. Keep
-		// the signed terminal evidence and audit it without mutating entitlements.
-		s.writeAuditLog(ctx, order.ID, "UNIFIED_PAYMENT_REFUND_EVENT", payment.TypeUnifiedPay, safeUnifiedEventAudit(event))
+	case unifiedpay.EventRefundSucceeded, unifiedpay.EventRefundFailed:
+		return s.applyUnifiedRefundEvent(ctx, order, event)
 	default:
 		return s.rejectUnifiedPaymentEvent(ctx, order, event, "unsupported_event_type")
 	}
@@ -213,6 +207,9 @@ func validateUnifiedPaymentEventSemantics(event unifiedpay.WebhookEvent) error {
 }
 
 func (s *PaymentService) rejectUnifiedPaymentEvent(ctx context.Context, order *dbent.PaymentOrder, event unifiedpay.WebhookEvent, code string) error {
+	if order != nil && (event.EventType == unifiedpay.EventRefundSucceeded || event.EventType == unifiedpay.EventRefundFailed) {
+		return s.rejectUnifiedRefundEvent(ctx, order, event, code)
+	}
 	if order != nil {
 		s.writeAuditLog(ctx, order.ID, "UNIFIED_PAYMENT_EVENT_REJECTED", payment.TypeUnifiedPay, map[string]any{
 			"event_id": event.EventID, "event_type": event.EventType, "sequence": event.Sequence,
@@ -245,8 +242,9 @@ func (s *PaymentService) validateUnifiedPaymentEventOrder(order *dbent.PaymentOr
 			return errors.New(code)
 		}
 	}
-	if resource.OrderType != order.OrderType || resource.Currency != payment.DefaultPaymentCurrency ||
-		resource.PaymentMethod != unifiedpay.PaymentMethodAlipay {
+	expectedMethod, ok := unifiedpay.PaymentMethodForPaymentType(order.PaymentType)
+	if (order.PaymentType != "" && !ok) || (ok && resource.PaymentMethod != expectedMethod) ||
+		resource.OrderType != order.OrderType || resource.Currency != payment.DefaultPaymentCurrency {
 		return errors.New("order_contract_mismatch")
 	}
 	expectedFen, err := payment.AmountToMinorUnit(strconv.FormatFloat(order.PayAmount, 'f', -1, 64), payment.DefaultPaymentCurrency)

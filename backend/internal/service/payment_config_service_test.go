@@ -382,6 +382,40 @@ func TestGetPaymentConfigKeepsStoredEnabledTypes(t *testing.T) {
 	}
 }
 
+func TestGetPaymentConfigProjectsUnifiedPaymentCapability(t *testing.T) {
+	svc := &PaymentConfigService{
+		settingRepo: &paymentConfigSettingRepoStub{values: map[string]string{
+			SettingPaymentEnabled: "true",
+		}},
+		unifiedPayment: unifiedPaymentCapabilityStub{
+			enabled: true,
+			types:   []payment.PaymentType{payment.TypeAlipay, payment.TypeWxpay},
+		},
+	}
+
+	cfg, err := svc.GetPaymentConfig(context.Background())
+	if err != nil {
+		t.Fatalf("GetPaymentConfig returned error: %v", err)
+	}
+	if !cfg.UnifiedPaymentEnabled {
+		t.Fatal("expected unified payment capability to be projected as enabled")
+	}
+	if got, want := strings.Join(cfg.UnifiedPaymentMethods, ","), "alipay,wxpay"; got != want {
+		t.Fatalf("UnifiedPaymentMethods = %q, want %q", got, want)
+	}
+}
+
+type unifiedPaymentCapabilityStub struct {
+	enabled bool
+	types   []payment.PaymentType
+}
+
+func (c unifiedPaymentCapabilityStub) Enabled() bool { return c.enabled }
+
+func (c unifiedPaymentCapabilityStub) SupportedTypes() []payment.PaymentType {
+	return append([]payment.PaymentType(nil), c.types...)
+}
+
 func newPaymentConfigServiceTestClient(t *testing.T) *dbent.Client {
 	t.Helper()
 

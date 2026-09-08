@@ -12,6 +12,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -21,7 +22,8 @@ const (
 	EnvironmentSandbox Environment = "sandbox"
 	EnvironmentLive    Environment = "live"
 
-	PaymentMethodAlipay = "alipay"
+	PaymentMethodAlipay    = "alipay"
+	PaymentMethodWechatPay = "wechat_pay"
 
 	StatusCreated             = "CREATED"
 	StatusPendingPayment      = "PENDING_PAYMENT"
@@ -41,8 +43,11 @@ const (
 	EventRefundSucceeded            = "payment.refund.succeeded"
 	EventRefundFailed               = "payment.refund.failed"
 
-	RefundStatusSucceeded = "SUCCEEDED"
-	RefundStatusFailed    = "FAILED"
+	RefundStatusApproved   = "APPROVED"
+	RefundStatusProcessing = "PROCESSING"
+	RefundStatusSucceeded  = "SUCCEEDED"
+	RefundStatusFailed     = "FAILED"
+	RefundStatusUnknown    = "UNKNOWN"
 )
 
 const (
@@ -72,7 +77,12 @@ var (
 	// ErrCreateStateUnconfirmed means the create request may have committed at
 	// the payment service but Sub2 could not prove the resulting order state.
 	// Callers must keep the local order pending for signed-Webhook recovery.
-	ErrCreateStateUnconfirmed  = errors.New("unified payment create state is unconfirmed")
+	ErrCreateStateUnconfirmed = errors.New("unified payment create state is unconfirmed")
+	// ErrRefundStateUnconfirmed means a refund request may have reached the
+	// payment service, but Sub2 could not validate a correlated result. The
+	// caller must retain its local refund attempt and reconcile it instead of
+	// treating the error as a deterministic refund failure.
+	ErrRefundStateUnconfirmed  = errors.New("unified payment refund state is unconfirmed")
 	ErrRequestFailed           = errors.New("unified payment request failed")
 	ErrInvalidResponse         = errors.New("invalid unified payment response")
 	ErrResponseTooLarge        = errors.New("unified payment response too large")
@@ -100,9 +110,25 @@ type Config struct {
 	RequestPrivateKey ed25519.PrivateKey
 	WebhookPublicKeys map[string]ed25519.PublicKey
 	ReturnURL         string
-	HTTPClient        *http.Client
-	Clock             func() time.Time
-	NonceSource       func() (string, error)
+	// SupportedMethods is the product-side allow-list. Empty preserves the
+	// original configuration and enables both native CNY methods.
+	SupportedMethods []string
+	HTTPClient       *http.Client
+	Clock            func() time.Time
+	NonceSource      func() (string, error)
+}
+
+// PaymentMethodForPaymentType maps Sub2's visible method names to the pay-v1
+// contract values. It deliberately accepts only the two native CNY methods.
+func PaymentMethodForPaymentType(paymentType string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(paymentType)) {
+	case "alipay", "alipay_direct":
+		return PaymentMethodAlipay, true
+	case "wxpay", "wxpay_direct", "wechat_pay":
+		return PaymentMethodWechatPay, true
+	default:
+		return "", false
+	}
 }
 
 type createPaymentOrderRequest struct {
@@ -134,6 +160,7 @@ type paymentOrderResponse struct {
 	PaymentMethod           string      `json:"payment_method"`
 	Status                  string      `json:"status"`
 	CheckoutURL             *string     `json:"checkout_url"`
+	CheckoutCodeURL         *string     `json:"checkout_code_url"`
 	CheckoutExpiresAt       *time.Time  `json:"checkout_expires_at"`
 	ChannelOutTradeNo       *string     `json:"channel_out_trade_no"`
 	ChannelTransactionID    *string     `json:"channel_transaction_id"`
@@ -147,6 +174,43 @@ type paymentOrderResponse struct {
 
 type closePaymentOrderRequest struct {
 	ReasonCode string `json:"reason_code"`
+}
+
+// createRefundRequest is the exact POST /v1/refund-requests payload. The
+// caller-provided idempotency key is carried in the signed HTTP header rather
+// than this JSON object.
+type createRefundRequest struct {
+	PaymentOrderID  string  `json:"payment_order_id"`
+	ProductRefundNo string  `json:"product_refund_no"`
+	AmountFen       int64   `json:"amount_fen"`
+	ReasonCode      string  `json:"reason_code"`
+	ReasonSummary   *string `json:"reason_summary,omitempty"`
+}
+
+// refundResponse is the REST representation of an asynchronous refund. Its
+// environment, organization, and product scope is explicit; app scope is
+// enforced by the signed product request because the fixed REST contract does
+// not return app_id. WebhookRefundResource remains a terminal-event payload
+// and omits the original payment-order fields present here.
+type refundResponse struct {
+	Environment        Environment `json:"environment"`
+	OrganizationID     string      `json:"organization_id"`
+	ProductID          string      `json:"product_id"`
+	RefundRequestID    string      `json:"refund_request_id"`
+	PaymentOrderID     string      `json:"payment_order_id"`
+	ProductRefundNo    string      `json:"product_refund_no"`
+	ChannelOutRefundNo string      `json:"channel_out_refund_no"`
+	AmountFen          int64       `json:"amount_fen"`
+	Currency           string      `json:"currency"`
+	PaymentMethod      string      `json:"payment_method"`
+	Status             string      `json:"status"`
+	ProviderRefundID   *string     `json:"provider_refund_id"`
+	ProviderStatus     *string     `json:"provider_status"`
+	FailureCode        *string     `json:"failure_code"`
+	NeedsManualReview  bool        `json:"needs_manual_review"`
+	CreatedAt          time.Time   `json:"created_at"`
+	UpdatedAt          time.Time   `json:"updated_at"`
+	CompletedAt        *time.Time  `json:"completed_at"`
 }
 
 type WebhookEvent struct {

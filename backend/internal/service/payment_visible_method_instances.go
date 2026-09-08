@@ -145,7 +145,7 @@ func (s *PaymentConfigService) validateVisibleMethodEnablementConflicts(
 	supportedTypes string,
 	enabled bool,
 ) error {
-	// Visible methods are selected by configured source (official/easypay),
+	// Visible methods are selected by configured source (official/easypay/unified),
 	// so multiple enabled providers can intentionally claim the same user-facing
 	// method. Order creation and limits will route through the configured source.
 	_, _, _, _, _ = ctx, excludeID, providerKey, supportedTypes, enabled
@@ -181,7 +181,28 @@ func (s *PaymentConfigService) resolveVisibleMethodSourceProviderKey(ctx context
 			fmt.Sprintf("%s source must be one of the supported payment providers", method),
 		)
 	}
+	if providerKey == payment.TypeUnifiedPay {
+		if s == nil || s.unifiedPayment == nil || !s.unifiedPayment.Enabled() || !s.unifiedPaymentSupportsMethod(method) {
+			return "", infraerrors.ServiceUnavailable(
+				"UNIFIED_PAYMENT_NOT_CONFIGURED",
+				"unified payment is not configured for this method",
+			)
+		}
+	}
 	return providerKey, nil
+}
+
+func (s *PaymentConfigService) unifiedPaymentSupportsMethod(method string) bool {
+	if s == nil || s.unifiedPayment == nil {
+		return false
+	}
+	method = NormalizeVisibleMethod(method)
+	for _, supported := range s.unifiedPayment.SupportedTypes() {
+		if NormalizeVisibleMethod(supported) == method {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *PaymentConfigService) resolveVisibleMethodProviderKey(
@@ -189,27 +210,29 @@ func (s *PaymentConfigService) resolveVisibleMethodProviderKey(
 	method string,
 	matching []*dbent.PaymentProviderInstance,
 ) (string, error) {
+	configuredSource, err := s.resolveVisibleMethodSourceProviderKey(ctx, method)
+	if err != nil {
+		return "", err
+	}
+	if configuredSource == payment.TypeUnifiedPay {
+		return configuredSource, nil
+	}
+	if configuredSource != "" {
+		if selectVisibleMethodInstanceByProviderKey(matching, configuredSource) == nil {
+			return "", infraerrors.BadRequest(
+				"INVALID_PAYMENT_VISIBLE_METHOD_SOURCE",
+				fmt.Sprintf("%s source has no enabled provider instance", method),
+			)
+		}
+		return configuredSource, nil
+	}
 	switch providerKeys := distinctVisibleMethodProviderKeys(matching); len(providerKeys) {
 	case 0:
 		return "", nil
 	case 1:
 		return strings.TrimSpace(providerKeys[0]), nil
 	default:
-		providerKey, err := s.resolveVisibleMethodSourceProviderKey(ctx, method)
-		if err != nil {
-			return "", err
-		}
-		if providerKey == "" {
-			return "", nil
-		}
-		selected := selectVisibleMethodInstanceByProviderKey(matching, providerKey)
-		if selected == nil {
-			return "", infraerrors.BadRequest(
-				"INVALID_PAYMENT_VISIBLE_METHOD_SOURCE",
-				fmt.Sprintf("%s source has no enabled provider instance", method),
-			)
-		}
-		return strings.TrimSpace(selected.ProviderKey), nil
+		return "", nil
 	}
 }
 
@@ -244,6 +267,11 @@ func (s *PaymentConfigService) resolveEnabledVisibleMethodInstance(
 			return nil, nil
 		}
 		return &dbent.PaymentProviderInstance{ProviderKey: ""}, nil
+	}
+	if providerKey == payment.TypeUnifiedPay {
+		// Unified payment is runtime/Vault-backed, so there is intentionally no
+		// local provider row to return.
+		return nil, nil
 	}
 	return selectVisibleMethodInstanceByProviderKey(matching, providerKey), nil
 }

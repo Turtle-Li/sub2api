@@ -117,6 +117,49 @@ func TestIdempotencyRepo_TryReclaim_StatusAndLockWindow(t *testing.T) {
 	require.False(t, reclaimed, "within lock window should not reclaim")
 }
 
+func TestIdempotencyRepo_MarkFailedRetryableIfClaimFencesReclaimedLease(t *testing.T) {
+	tx := testTx(t)
+	repo := &idempotencyRepository{sql: tx}
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	oldLock := now.Add(-time.Second)
+	oldExpiry := now.Add(24 * time.Hour)
+	record := &service.IdempotencyRecord{
+		Scope:              uniqueTestValue(t, "idem-scope-fenced-failure"),
+		IdempotencyKeyHash: hashedTestValue(t, "idem-hash-fenced-failure"),
+		RequestFingerprint: hashedTestValue(t, "idem-fp-fenced-failure"),
+		Status:             service.IdempotencyStatusProcessing,
+		LockedUntil:        &oldLock,
+		ExpiresAt:          oldExpiry,
+	}
+	owner, err := repo.CreateProcessing(ctx, record)
+	require.NoError(t, err)
+	require.True(t, owner)
+	oldClaim := service.IdempotencyExecutionClaim{
+		ID:                 record.ID,
+		RequestFingerprint: record.RequestFingerprint,
+		LockedUntil:        oldLock,
+		ExpiresAt:          oldExpiry,
+	}
+
+	newLock := now.Add(30 * time.Second)
+	newExpiry := now.Add(48 * time.Hour)
+	reclaimed, err := repo.TryReclaim(ctx, record.ID, service.IdempotencyStatusProcessing, now, newLock, newExpiry)
+	require.NoError(t, err)
+	require.True(t, reclaimed)
+
+	marked, err := repo.MarkFailedRetryableIfClaim(ctx, oldClaim, "STALE_NETWORK_FAILURE", now.Add(5*time.Second), oldExpiry)
+	require.NoError(t, err)
+	require.False(t, marked, "an expired executor must not overwrite its successor's lease")
+	got, err := repo.GetByScopeAndKeyHash(ctx, record.Scope, record.IdempotencyKeyHash)
+	require.NoError(t, err)
+	require.Equal(t, service.IdempotencyStatusProcessing, got.Status)
+	require.NotNil(t, got.LockedUntil)
+	require.True(t, got.LockedUntil.Equal(newLock))
+	require.True(t, got.ExpiresAt.Equal(newExpiry))
+}
+
 func TestIdempotencyRepo_StatusTransition_ToSucceeded(t *testing.T) {
 	tx := testTx(t)
 	repo := &idempotencyRepository{sql: tx}

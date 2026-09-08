@@ -60,11 +60,14 @@ func TestUnifiedWebhookInboxClaimNewAndDuplicate(t *testing.T) {
 
 func TestUnifiedWebhookInboxRejectsSequenceCollision(t *testing.T) {
 	record := unifiedInboxTestRecord()
+	record.EventID = "cccccccc-dddd-4eee-8fff-000000000011"
+	record.Sequence = 11
+	record.EventType = "payment.refund.succeeded"
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
 	mock.ExpectBegin()
-	expectUnifiedInboxCursor(mock, record, 0, "", 0, false)
+	expectUnifiedInboxCursor(mock, record, 12, "", 0, false)
 	mock.ExpectQuery("WHERE event_id = \\$1::uuid").WithArgs(record.EventID).
 		WillReturnRows(unifiedInboxEmptyRows())
 	conflicting := record
@@ -80,13 +83,15 @@ func TestUnifiedWebhookInboxRejectsSequenceCollision(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestUnifiedWebhookInboxIgnoresObsoleteSequence(t *testing.T) {
+func TestUnifiedWebhookInboxSuppressesOlderPaymentEvent(t *testing.T) {
 	record := unifiedInboxTestRecord()
+	record.EventID = "cccccccc-dddd-4eee-8fff-000000000010"
+	record.Sequence = 10
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
 	mock.ExpectBegin()
-	expectUnifiedInboxCursor(mock, record, record.Sequence+1, "", 0, false)
+	expectUnifiedInboxCursor(mock, record, 12, "", 0, false)
 	expectUnifiedInboxLookupEmpty(mock, record)
 	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO unified_payment_webhook_inbox")).
 		WithArgs(record.EventID, record.PaymentOrderID, record.ProductOrderNo, record.Sequence,
@@ -103,14 +108,107 @@ func TestUnifiedWebhookInboxIgnoresObsoleteSequence(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUnifiedWebhookInboxAllowsLowerSequenceForRefundTerminalEvents(t *testing.T) {
+	for _, eventType := range []string{"payment.refund.succeeded", "payment.refund.failed"} {
+		t.Run(eventType, func(t *testing.T) {
+			record := unifiedInboxTestRecord()
+			record.EventID = "cccccccc-dddd-4eee-8fff-000000000011"
+			record.Sequence = 11
+			record.EventType = eventType
+
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			mock.ExpectBegin()
+			expectUnifiedInboxCursor(mock, record, 12, "", 0, false)
+			expectUnifiedInboxLookupEmpty(mock, record)
+			mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO unified_payment_webhook_inbox")).
+				WithArgs(record.EventID, record.PaymentOrderID, record.ProductOrderNo, record.Sequence,
+					record.EventType, record.BodySHA256, "PROCESSING", "", record.OccurredAt).
+				WillReturnRows(sqlmock.NewRows([]string{"event_id"}).AddRow(record.EventID))
+			mock.ExpectExec(regexp.QuoteMeta("UPDATE unified_payment_webhook_cursor")).
+				WithArgs(record.PaymentOrderID, record.EventID, record.Sequence).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+
+			store := &unifiedPaymentWebhookInbox{db: db}
+			claim, err := store.Claim(context.Background(), record, unifiedInboxTestStaleAfter)
+			require.NoError(t, err)
+			require.Equal(t, service.UnifiedWebhookClaimNew, claim)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestUnifiedWebhookInboxRetriesLowerSequenceRefundTerminalEvent(t *testing.T) {
+	record := unifiedInboxTestRecord()
+	record.EventID = "cccccccc-dddd-4eee-8fff-000000000011"
+	record.Sequence = 11
+	record.EventType = "payment.refund.succeeded"
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	mock.ExpectBegin()
+	expectUnifiedInboxCursor(mock, record, 12, record.EventID, record.Sequence, true)
+	mock.ExpectQuery("FROM unified_payment_webhook_inbox").
+		WithArgs(record.EventID).
+		WillReturnRows(unifiedInboxRows(record, "RETRYABLE_FAILED"))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE unified_payment_webhook_inbox")).
+		WithArgs(record.EventID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE unified_payment_webhook_cursor")).
+		WithArgs(record.PaymentOrderID, record.EventID, record.Sequence).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	store := &unifiedPaymentWebhookInbox{db: db}
+	claim, err := store.Claim(context.Background(), record, unifiedInboxTestStaleAfter)
+	require.NoError(t, err)
+	require.Equal(t, service.UnifiedWebhookClaimNew, claim)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUnifiedWebhookInboxMarkProcessedDoesNotRegressCursor(t *testing.T) {
+	record := unifiedInboxTestRecord()
+	record.EventID = "cccccccc-dddd-4eee-8fff-000000000011"
+	record.Sequence = 11
+	record.EventType = "payment.refund.succeeded"
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT payment_order_id::text").WithArgs(record.EventID).
+		WillReturnRows(sqlmock.NewRows([]string{"payment_order_id"}).AddRow(record.PaymentOrderID))
+	mock.ExpectQuery("FROM unified_payment_webhook_cursor").WithArgs(record.PaymentOrderID).
+		WillReturnRows(sqlmock.NewRows([]string{"active_event_id"}).AddRow(record.EventID))
+	mock.ExpectQuery("FROM unified_payment_webhook_inbox").WithArgs(record.EventID).
+		WillReturnRows(unifiedInboxRows(record, "PROCESSING"))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE unified_payment_webhook_inbox")).
+		WithArgs(record.EventID, "PROCESSED", "").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SET max_processed_sequence = GREATEST(max_processed_sequence, $2)")).
+		WithArgs(record.PaymentOrderID, record.Sequence).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	store := &unifiedPaymentWebhookInbox{db: db}
+	require.NoError(t, store.MarkProcessed(context.Background(), record.EventID))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestUnifiedWebhookInboxSerializesEventsPerPaymentOrder(t *testing.T) {
 	record := unifiedInboxTestRecord()
+	record.EventID = "cccccccc-dddd-4eee-8fff-000000000011"
+	record.Sequence = 11
+	record.EventType = "payment.refund.succeeded"
 	activeEventID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
 	mock.ExpectBegin()
-	expectUnifiedInboxCursor(mock, record, 0, activeEventID, record.Sequence-1, true)
+	expectUnifiedInboxCursor(mock, record, 12, activeEventID, 12, true)
 	expectUnifiedInboxLookupEmpty(mock, record)
 	mock.ExpectCommit()
 	store := &unifiedPaymentWebhookInbox{db: db}

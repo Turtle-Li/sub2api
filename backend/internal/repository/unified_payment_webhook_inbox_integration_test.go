@@ -76,6 +76,63 @@ func TestUnifiedWebhookInboxPostgresSequenceAndRetry(t *testing.T) {
 	require.Equal(t, "obsolete_sequence", errorCode)
 }
 
+func TestUnifiedWebhookInboxPostgresAllowsLowerSequenceRefundTerminalEvent(t *testing.T) {
+	ctx := context.Background()
+	store := &unifiedPaymentWebhookInbox{db: integrationDB}
+	higher := unifiedInboxIntegrationRecord(
+		"55555555-5555-4555-8555-555555555555",
+		"66666666-6666-4666-8666-666666666666",
+		"sub2_integration_refund_sequence_1",
+		12,
+	)
+	cleanupUnifiedInboxIntegrationRows(t, higher.PaymentOrderID)
+
+	claim, err := store.Claim(ctx, higher, time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, service.UnifiedWebhookClaimNew, claim)
+	require.NoError(t, store.MarkProcessed(ctx, higher.EventID))
+
+	refund := higher
+	refund.EventID = "77777777-7777-4777-8777-777777777777"
+	refund.Sequence = 11
+	refund.EventType = "payment.refund.succeeded"
+	refund.BodySHA256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	claim, err = store.Claim(ctx, refund, time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, service.UnifiedWebhookClaimNew, claim)
+
+	require.NoError(t, store.MarkRetryableFailure(ctx, refund.EventID, "fulfillment_retry"))
+	claim, err = store.Claim(ctx, refund, time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, service.UnifiedWebhookClaimNew, claim)
+	require.NoError(t, store.MarkProcessed(ctx, refund.EventID))
+
+	var maxSequence int64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT max_processed_sequence
+		FROM unified_payment_webhook_cursor
+		WHERE payment_order_id = $1::uuid
+	`, higher.PaymentOrderID).Scan(&maxSequence))
+	require.Equal(t, int64(12), maxSequence)
+
+	olderPayment := higher
+	olderPayment.EventID = "88888888-8888-4888-8888-888888888888"
+	olderPayment.Sequence = 10
+	olderPayment.BodySHA256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	claim, err = store.Claim(ctx, olderPayment, time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, service.UnifiedWebhookClaimDuplicate, claim)
+
+	var status, errorCode string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT status, COALESCE(last_error_code, '')
+		FROM unified_payment_webhook_inbox
+		WHERE event_id = $1::uuid
+	`, olderPayment.EventID).Scan(&status, &errorCode))
+	require.Equal(t, "PROCESSED", status)
+	require.Equal(t, "obsolete_sequence", errorCode)
+}
+
 func TestUnifiedWebhookInboxPostgresConcurrentClaimHasSingleOwner(t *testing.T) {
 	ctx := context.Background()
 	store := &unifiedPaymentWebhookInbox{db: integrationDB}

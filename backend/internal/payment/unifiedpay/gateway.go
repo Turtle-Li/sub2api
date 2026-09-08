@@ -19,7 +19,8 @@ import (
 )
 
 // Gateway adapts the pay-v1 product API to Sub2's existing payment.Provider
-// seam. The only user-visible method it claims is Alipay.
+// seam. It exposes the configured native Alipay and WeChat methods without
+// creating local provider credential rows.
 type Gateway struct {
 	enabled        bool
 	client         *client
@@ -29,6 +30,7 @@ type Gateway struct {
 	organizationID string
 	productID      string
 	appID          string
+	supportedTypes map[string]struct{}
 }
 
 func NewFromAppConfig(appConfig *config.Config) (*Gateway, error) {
@@ -52,13 +54,41 @@ func NewFromAppConfig(appConfig *config.Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	supportedMethods, err := parseSupportedMethods(raw.PaymentMethods)
+	if err != nil {
+		return nil, err
+	}
 	return New(Config{
 		Enabled: true, BaseURL: strings.TrimSpace(raw.BaseURL), Environment: Environment(strings.TrimSpace(raw.Environment)),
-		OrganizationID: strings.TrimSpace(raw.OrganizationID), ProductID: strings.TrimSpace(raw.ProductID),
+		SupportedMethods: supportedMethods,
+		OrganizationID:   strings.TrimSpace(raw.OrganizationID), ProductID: strings.TrimSpace(raw.ProductID),
 		AppID: strings.TrimSpace(raw.AppID), RequestKeyID: strings.TrimSpace(raw.RequestKeyID),
 		RequestPrivateKey: ed25519.PrivateKey(privateKeyBytes), WebhookPublicKeys: publicKeys,
 		ReturnURL: strings.TrimSpace(raw.ReturnURL),
 	})
+}
+
+func parseSupportedMethods(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []string{PaymentMethodAlipay, PaymentMethodWechatPay}, nil
+	}
+	seen := map[string]struct{}{}
+	methods := make([]string, 0, 2)
+	for _, candidate := range strings.Split(raw, ",") {
+		method, ok := PaymentMethodForPaymentType(candidate)
+		if !ok {
+			return nil, ErrInvalidConfiguration
+		}
+		if _, exists := seen[method]; exists {
+			continue
+		}
+		seen[method] = struct{}{}
+		methods = append(methods, method)
+	}
+	if len(methods) == 0 {
+		return nil, ErrInvalidConfiguration
+	}
+	return methods, nil
 }
 
 func decodePublicKeys(raw string) (map[string]ed25519.PublicKey, error) {
@@ -93,10 +123,23 @@ func New(gatewayConfig Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	supportedMethods, err := parseSupportedMethods(strings.Join(gatewayConfig.SupportedMethods, ","))
+	if err != nil {
+		return nil, err
+	}
+	supported := make(map[string]struct{}, len(supportedMethods))
+	for _, method := range supportedMethods {
+		if canonical, ok := PaymentMethodForPaymentType(method); ok {
+			supported[canonical] = struct{}{}
+		}
+	}
+	if len(supported) == 0 {
+		return nil, ErrInvalidConfiguration
+	}
 	return &Gateway{
 		enabled: true, client: apiClient, verifier: verifier, returnURL: returnURL,
 		environment: gatewayConfig.Environment, organizationID: gatewayConfig.OrganizationID,
-		productID: gatewayConfig.ProductID, appID: gatewayConfig.AppID,
+		productID: gatewayConfig.ProductID, appID: gatewayConfig.AppID, supportedTypes: supported,
 	}, nil
 }
 
@@ -141,25 +184,67 @@ func (g *Gateway) ScopeMetadata() map[string]string {
 
 func (e Environment) String() string { return string(e) }
 
-func (g *Gateway) Selection() *payment.InstanceSelection {
+func (g *Gateway) Selection(paymentType ...string) *payment.InstanceSelection {
 	if !g.Enabled() {
 		return nil
 	}
+	supportedTypes := g.SupportedTypes()
+	if len(paymentType) > 0 {
+		if visible := payment.GetBasePaymentType(strings.TrimSpace(paymentType[0])); visible != "" && g.SupportsPaymentType(visible) {
+			supportedTypes = []string{visible}
+		}
+	}
+	paymentMode := "popup"
+	if len(paymentType) > 0 {
+		method, _ := PaymentMethodForPaymentType(paymentType[0])
+		if method == PaymentMethodWechatPay {
+			// Unified WeChat Native returns a display-only weixin:// code URL. The
+			// product should render that payload as a QR code instead of attempting
+			// to navigate a browser popup to the custom scheme.
+			paymentMode = "qrcode"
+		}
+	}
 	return &payment.InstanceSelection{
-		ProviderKey: payment.TypeUnifiedPay, SupportedTypes: payment.TypeAlipay,
-		PaymentMode: "popup", Config: g.ScopeMetadata(),
+		ProviderKey: payment.TypeUnifiedPay, SupportedTypes: strings.Join(supportedTypes, ","),
+		PaymentMode: paymentMode, Config: g.ScopeMetadata(),
 	}
 }
 
-func (g *Gateway) Name() string             { return "Unified Payment" }
-func (g *Gateway) ProviderKey() string      { return payment.TypeUnifiedPay }
-func (g *Gateway) SupportedTypes() []string { return []string{payment.TypeAlipay} }
+func (g *Gateway) Name() string        { return "Unified Payment" }
+func (g *Gateway) ProviderKey() string { return payment.TypeUnifiedPay }
+func (g *Gateway) SupportedTypes() []string {
+	if g == nil || len(g.supportedTypes) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(g.supportedTypes))
+	for _, method := range []string{PaymentMethodAlipay, PaymentMethodWechatPay} {
+		if _, ok := g.supportedTypes[method]; !ok {
+			continue
+		}
+		if method == PaymentMethodAlipay {
+			result = append(result, payment.TypeAlipay)
+		} else {
+			result = append(result, payment.TypeWxpay)
+		}
+	}
+	return result
+}
+
+func (g *Gateway) SupportsPaymentType(paymentType string) bool {
+	method, ok := PaymentMethodForPaymentType(paymentType)
+	if !ok || g == nil || !g.Enabled() {
+		return false
+	}
+	_, supported := g.supportedTypes[method]
+	return supported
+}
 
 func (g *Gateway) CreatePayment(ctx context.Context, req payment.CreatePaymentRequest) (*payment.CreatePaymentResponse, error) {
 	if !g.Enabled() {
 		return nil, ErrDisabled
 	}
-	if req.PaymentType != payment.TypeAlipay || req.ReturnURL != g.returnURL ||
+	paymentMethod, supported := PaymentMethodForPaymentType(req.PaymentType)
+	if !supported || !g.SupportsPaymentType(req.PaymentType) || req.ReturnURL != g.returnURL ||
 		!validIdentifier(req.OrderID, 6, 64) || !validLowerIdentifier(strings.TrimSpace(req.OrderType), 3, 64) ||
 		req.ExpiresInSeconds < 300 || req.ExpiresInSeconds > 7200 {
 		return nil, ErrInvalidRequest
@@ -172,7 +257,7 @@ func (g *Gateway) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 	input := createPaymentOrderRequest{
 		ProductOrderNo: req.OrderID, OrderType: strings.TrimSpace(req.OrderType), AmountFen: amountFen,
 		Currency: payment.DefaultPaymentCurrency, Subject: strings.TrimSpace(req.Subject),
-		PaymentMethod: PaymentMethodAlipay, ExpiresInSeconds: req.ExpiresInSeconds,
+		PaymentMethod: paymentMethod, ExpiresInSeconds: req.ExpiresInSeconds,
 		ReturnURL: &returnURL, Metadata: map[string]string{"source": "sub2"},
 	}
 	if input.Subject == "" || !utf8.ValidString(input.Subject) || utf8.RuneCountInString(input.Subject) > 120 {
@@ -191,16 +276,37 @@ func (g *Gateway) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 	} else if createErr != nil {
 		return nil, createErr
 	}
-	if err := validateCreatedOrder(result, input); err != nil || !g.client.validCheckoutURL(strings.TrimSpace(*result.CheckoutURL)) {
+	if err := validateCreatedOrder(result, input); err != nil || result.CheckoutURL == nil || !g.client.validCheckoutURL(strings.TrimSpace(*result.CheckoutURL)) {
 		if err != nil {
 			return nil, err
 		}
 		return nil, ErrInvalidResponse
 	}
-	return &payment.CreatePaymentResponse{
+	response := &payment.CreatePaymentResponse{
 		TradeNo: result.PaymentOrderID, PayURL: strings.TrimSpace(*result.CheckoutURL),
 		Currency: payment.DefaultPaymentCurrency, ResultType: payment.CreatePaymentResultOrderCreated,
-	}, nil
+	}
+	if paymentMethod == PaymentMethodWechatPay {
+		if result.CheckoutCodeURL == nil || !validCheckoutCodeURL(*result.CheckoutCodeURL) {
+			return nil, ErrInvalidResponse
+		}
+		response.QRCode = strings.TrimSpace(*result.CheckoutCodeURL)
+	}
+	return response, nil
+}
+
+func validCheckoutCodeURL(raw string) bool {
+	if raw == "" || len(raw) > 2048 || raw != strings.TrimSpace(raw) || strings.ContainsAny(raw, "\x00\r\n\t ") || strings.ContainsRune(raw, '#') {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed == nil || parsed.Opaque != "" || parsed.User != nil ||
+		!strings.EqualFold(parsed.Scheme, "weixin") || !strings.EqualFold(parsed.Hostname(), "wxpay") ||
+		parsed.Port() != "" || parsed.EscapedPath() != "/bizpayurl" || parsed.RawQuery == "" ||
+		parsed.Fragment != "" || parsed.RawFragment != "" || parsed.RawPath != "" {
+		return false
+	}
+	return true
 }
 
 func validateCreatedOrder(result *paymentOrderResponse, input createPaymentOrderRequest) error {
@@ -257,6 +363,7 @@ func (g *Gateway) QueryOrder(ctx context.Context, paymentOrderID string) (*payme
 	metadata := map[string]string{
 		"payment_order_id":    result.PaymentOrderID,
 		"status":              result.Status,
+		"payment_method":      result.PaymentMethod,
 		"needs_manual_review": strconv.FormatBool(result.NeedsManualReview),
 	}
 	for key, value := range g.ScopeMetadata() {

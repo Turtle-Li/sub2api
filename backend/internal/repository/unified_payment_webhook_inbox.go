@@ -68,7 +68,10 @@ func (r *unifiedPaymentWebhookInbox) Claim(ctx context.Context, record service.U
 	// The payment-webhook.v1 contract requires a durable per-order maximum
 	// sequence. A late lower sequence is evidence we retain, but it must never
 	// execute product state transitions after a newer event was committed.
-	if record.Sequence <= cursor.maxProcessedSequence {
+	// Refund terminal events are the narrow exception: their asynchronous
+	// terminal result must reach refund handling even when an order event with a
+	// higher sequence has already completed.
+	if record.Sequence <= cursor.maxProcessedSequence && !allowsUnifiedInboxLowerSequence(record.EventType) {
 		if row == nil {
 			inserted, insertErr := insertUnifiedInboxRow(ctx, tx, record, "PROCESSED", "obsolete_sequence")
 			if insertErr != nil {
@@ -136,6 +139,10 @@ func (r *unifiedPaymentWebhookInbox) Claim(ctx context.Context, record service.U
 		return "", err
 	}
 	return commitUnifiedInboxClaim(tx, service.UnifiedWebhookClaimNew)
+}
+
+func allowsUnifiedInboxLowerSequence(eventType string) bool {
+	return eventType == "payment.refund.succeeded" || eventType == "payment.refund.failed"
 }
 
 func lockUnifiedInboxCursor(ctx context.Context, tx *sql.Tx, record service.UnifiedWebhookInboxRecord, staleAfter time.Duration) (*unifiedInboxCursor, error) {

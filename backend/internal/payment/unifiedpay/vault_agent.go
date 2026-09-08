@@ -37,6 +37,7 @@ func loadVaultEd25519PrivateKey(ctx context.Context, socketPath, rawReference st
 		return nil, ErrInvalidConfiguration
 	}
 	client := hardenedVaultAgentClient(socketPath, injected)
+	defer client.CloseIdleConnections()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://vault/v1/"+path, nil)
 	if err != nil {
 		return nil, ErrInvalidConfiguration

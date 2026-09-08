@@ -5,6 +5,7 @@ package payment
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrUpstreamStateUnconfirmed prevents a local pending order from being
@@ -248,6 +249,57 @@ type Provider interface {
 type RefundQueryProvider interface {
 	Provider
 	QueryRefund(ctx context.Context, req RefundQueryRequest) (*RefundResponse, error)
+}
+
+// UnifiedRefundRequest is the product-side request for the standalone
+// unified payment service's asynchronous refund API. AmountFen is always an
+// exact integer number of CNY fen; the legacy decimal RefundRequest is not
+// used for this contract.
+type UnifiedRefundRequest struct {
+	PaymentOrderID  string
+	ProductRefundNo string
+	IdempotencyKey  string
+	AmountFen       int64
+	ReasonCode      string
+	ReasonSummary   *string
+}
+
+// UnifiedRefundExpectation binds a later refund lookup to the durable local
+// refund attempt. It prevents a valid but unrelated scoped refund resource
+// from being used to settle this attempt.
+type UnifiedRefundExpectation struct {
+	PaymentOrderID  string
+	ProductRefundNo string
+	AmountFen       int64
+}
+
+// UnifiedRefundResource is the scope-validated refund representation returned
+// by the unified payment service. Its refund evidence fields intentionally
+// align with the corresponding signed Webhook resource.
+type UnifiedRefundResource struct {
+	RefundRequestID    string
+	PaymentOrderID     string
+	ProductRefundNo    string
+	ChannelOutRefundNo string
+	AmountFen          int64
+	Currency           string
+	PaymentMethod      string
+	Status             string
+	ProviderRefundID   *string
+	ProviderStatus     *string
+	FailureCode        *string
+	NeedsManualReview  bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	CompletedAt        *time.Time
+}
+
+// UnifiedRefundProvider is an optional capability for the standalone unified
+// payment service. It deliberately does not extend Provider so legacy
+// synchronous provider refunds retain their existing contract.
+type UnifiedRefundProvider interface {
+	CreateUnifiedRefund(ctx context.Context, request UnifiedRefundRequest) (*UnifiedRefundResource, error)
+	GetUnifiedRefund(ctx context.Context, refundRequestID string, expected UnifiedRefundExpectation) (*UnifiedRefundResource, error)
 }
 
 // CancelableProvider extends Provider with the ability to cancel pending payments.

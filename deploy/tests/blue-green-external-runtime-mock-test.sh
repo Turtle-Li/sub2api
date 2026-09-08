@@ -776,6 +776,7 @@ rm -rf "$(state_path sub2api-green)"
 (
   export SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME=sub2api_unified_payment_vault
   export UNIFIED_PAYMENT_ENABLED=true
+  export UNIFIED_PAYMENT_PAYMENT_METHODS=alipay,wechat_pay
   export UNIFIED_PAYMENT_BASE_URL=https://pay.totools.cn
   export UNIFIED_PAYMENT_ENVIRONMENT=sandbox
   export UNIFIED_PAYMENT_ORGANIZATION_ID=84fc3e66-e959-4bc8-8d78-6f8c3d3483fb
@@ -789,9 +790,80 @@ rm -rf "$(state_path sub2api-green)"
   PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
 )
 assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_ENABLED=true'
+assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_PAYMENT_METHODS=alipay,wechat_pay'
 assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON={"sub2.webhook.sandbox.v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_WEBHOOK_URL=https://api.turtleligpt.com/api/v1/payment/webhook/unified'
 assert_not_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64='
 assert_contains "$(state_path sub2api-green)/mounts" 'volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|false'
+
+# A complete live identity can be staged with the runtime gateway disabled.
+# It is still validated against the live app/key/Vault profile, forwarded to
+# the candidate, and does not attach the private-key socket volume or touch
+# the separate product purchase setting.
+rm -rf "$(state_path sub2api-green)"
+: >"$CALLS"
+(
+  export SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME=sub2api_unified_payment_vault
+  export UNIFIED_PAYMENT_ENABLED=false
+  export UNIFIED_PAYMENT_PAYMENT_METHODS=alipay,wechat_pay
+  export UNIFIED_PAYMENT_BASE_URL=https://pay.totools.cn
+  export UNIFIED_PAYMENT_ENVIRONMENT=live
+  export UNIFIED_PAYMENT_ORGANIZATION_ID=84fc3e66-e959-4bc8-8d78-6f8c3d3483fb
+  export UNIFIED_PAYMENT_PRODUCT_ID=00da03c5-bc5c-4edb-9d4c-c77da0e969d5
+  export UNIFIED_PAYMENT_APP_ID=app.sub2.live
+  export UNIFIED_PAYMENT_REQUEST_KEY_ID=sub2.request.live.v1
+  export UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF='vault://secret/data/sub2api/unified-payment/live#request_private_key_base64'
+  export UNIFIED_PAYMENT_VAULT_AGENT_SOCKET=/run/sub2api-payment-vault/public.sock
+  export UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON='{"sub2.webhook.live.v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+  export UNIFIED_PAYMENT_RETURN_URL=https://www.turtleligpt.com/payment/result
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+)
+assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_ENABLED=false'
+assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_APP_ID=app.sub2.live'
+assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF=vault://secret/data/sub2api/unified-payment/live#request_private_key_base64'
+assert_contains "$(state_path sub2api-green)/env" 'UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON={"sub2.webhook.live.v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+assert_not_contains "$(state_path sub2api-green)/mounts" 'sub2api_unified_payment_vault|/run/sub2api-payment-vault'
+
+: >"$CALLS"
+if (
+  export SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME=sub2api_unified_payment_vault
+  export UNIFIED_PAYMENT_ENABLED=false
+  export UNIFIED_PAYMENT_BASE_URL=https://pay.totools.cn
+  export UNIFIED_PAYMENT_ENVIRONMENT=live
+  export UNIFIED_PAYMENT_ORGANIZATION_ID=84fc3e66-e959-4bc8-8d78-6f8c3d3483fb
+  export UNIFIED_PAYMENT_PRODUCT_ID=00da03c5-bc5c-4edb-9d4c-c77da0e969d5
+  export UNIFIED_PAYMENT_APP_ID=app.sub2.live
+  export UNIFIED_PAYMENT_REQUEST_KEY_ID=sub2.request.live.v1
+  export UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
+  export UNIFIED_PAYMENT_VAULT_AGENT_SOCKET=/run/sub2api-payment-vault/public.sock
+  export UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON='{"sub2.webhook.live.v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+  export UNIFIED_PAYMENT_RETURN_URL=https://www.turtleligpt.com/payment/result
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+); then
+  fail 'sandbox Vault reference was accepted for the live payment profile'
+fi
+assert_contains "$OUTPUT" 'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF does not match the approved live Vault field'
+
+: >"$CALLS"
+if (
+  export SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME=sub2api_unified_payment_vault
+  export UNIFIED_PAYMENT_ENABLED=true
+  export UNIFIED_PAYMENT_BASE_URL=https://pay.totools.cn
+  export UNIFIED_PAYMENT_ENVIRONMENT=sandbox
+  export UNIFIED_PAYMENT_ORGANIZATION_ID=84fc3e66-e959-4bc8-8d78-6f8c3d3483fb
+  export UNIFIED_PAYMENT_PRODUCT_ID=00da03c5-bc5c-4edb-9d4c-c77da0e969d5
+  export UNIFIED_PAYMENT_APP_ID=app.sub2.sandbox
+  export UNIFIED_PAYMENT_REQUEST_KEY_ID=sub2.request.sandbox.v1
+  export UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
+  export UNIFIED_PAYMENT_VAULT_AGENT_SOCKET=/run/sub2api-payment-vault/public.sock
+  export UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON='{"sub2.webhook.sandbox.v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+  export UNIFIED_PAYMENT_RETURN_URL=https://www.turtleligpt.com/payment/result
+  export UNIFIED_PAYMENT_WEBHOOK_URL=https://wrong.example.com/api/v1/payment/webhook/unified
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+); then
+  fail 'unapproved unified payment webhook endpoint was accepted'
+fi
+assert_contains "$OUTPUT" 'UNIFIED_PAYMENT_WEBHOOK_URL does not match the approved Sub2 webhook endpoint'
 
 : >"$CALLS"
 if UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=forbidden PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then

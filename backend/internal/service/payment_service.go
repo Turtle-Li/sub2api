@@ -226,42 +226,79 @@ func (s *PaymentService) SetAuthCacheInvalidator(invalidator APIKeyAuthCacheInva
 func (s *PaymentService) SetUnifiedPayment(gateway *unifiedpay.Gateway, inbox UnifiedWebhookInboxStore) {
 	s.unifiedPayment = gateway
 	s.unifiedWebhookInbox = inbox
-}
-
-func (s *PaymentService) usesUnifiedAlipay(paymentType string) bool {
-	return s != nil && s.unifiedPayment != nil && s.unifiedPayment.Enabled() &&
-		NormalizeVisibleMethod(paymentType) == payment.TypeAlipay
-}
-
-// ApplyUnifiedPaymentPresentation exposes the configured unified Alipay route
-// through the existing checkout contract without creating a fake provider row
-// in Sub2's provider-instance table.
-func (s *PaymentService) ApplyUnifiedPaymentPresentation(cfg *PaymentConfig, limits *MethodLimitsResponse) {
-	if s == nil || s.unifiedPayment == nil || !s.unifiedPayment.Enabled() || cfg == nil || !cfg.Enabled {
-		return
+	if s.configService != nil {
+		s.configService.SetUnifiedPaymentCapability(gateway)
 	}
-	found := false
-	for _, method := range cfg.EnabledTypes {
-		if NormalizeVisibleMethod(method) == payment.TypeAlipay {
-			found = true
-			break
+}
+
+func (s *PaymentService) usesUnifiedPayment(ctx context.Context, paymentType string) (bool, error) {
+	key, err := s.createOrderProviderKey(ctx, paymentType)
+	return key == payment.TypeUnifiedPay, err
+}
+
+func (s *PaymentService) createOrderProviderKey(ctx context.Context, paymentType string) (string, error) {
+	// An explicit visible-method source can opt back into a configured legacy
+	// provider. An empty source preserves the unified default when enabled.
+	if s != nil && s.configService != nil {
+		source, err := s.configService.resolveVisibleMethodSourceProviderKey(ctx, paymentType)
+		if err != nil {
+			return "", err
+		}
+		if source != "" {
+			return source, nil
 		}
 	}
-	if !found {
-		cfg.EnabledTypes = append(cfg.EnabledTypes, payment.TypeAlipay)
+	if s != nil && s.unifiedPayment != nil && s.unifiedPayment.SupportsPaymentType(paymentType) {
+		return payment.TypeUnifiedPay, nil
+	}
+	return "", nil
+}
+
+// ApplyUnifiedPaymentPresentation exposes configured unified routes
+// through the existing checkout contract without creating a fake provider row
+// in Sub2's provider-instance table.
+func (s *PaymentService) ApplyUnifiedPaymentPresentation(ctx context.Context, cfg *PaymentConfig, limits *MethodLimitsResponse) error {
+	if s == nil || s.unifiedPayment == nil || !s.unifiedPayment.Enabled() || cfg == nil || !cfg.Enabled {
+		return nil
+	}
+	var methods []string
+	for _, method := range s.unifiedPayment.SupportedTypes() {
+		useUnified, err := s.usesUnifiedPayment(ctx, method)
+		if err != nil {
+			return err
+		}
+		if !useUnified {
+			continue
+		}
+		methods = append(methods, method)
+	}
+	for _, method := range methods {
+		found := false
+		for _, enabled := range cfg.EnabledTypes {
+			if NormalizeVisibleMethod(enabled) == method {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.EnabledTypes = append(cfg.EnabledTypes, method)
+		}
 	}
 	if limits == nil {
-		return
+		return nil
 	}
 	if limits.Methods == nil {
 		limits.Methods = make(map[string]MethodLimits)
 	}
-	limits.Methods[payment.TypeAlipay] = MethodLimits{
-		PaymentType: payment.TypeAlipay, Currency: payment.DefaultPaymentCurrency,
-		FeeRate: cfg.RechargeFeeRate, SingleMin: cfg.MinAmount,
-		SingleMax: cfg.MaxAmount, DailyLimit: cfg.DailyLimit,
+	for _, method := range methods {
+		limits.Methods[method] = MethodLimits{
+			PaymentType: method, Currency: payment.DefaultPaymentCurrency,
+			FeeRate: cfg.RechargeFeeRate, SingleMin: cfg.MinAmount,
+			SingleMax: cfg.MaxAmount, DailyLimit: cfg.DailyLimit,
+		}
 	}
 	limits.GlobalMin, limits.GlobalMax = pcComputeGlobalRange(limits.Methods)
+	return nil
 }
 
 // --- Provider Registry ---

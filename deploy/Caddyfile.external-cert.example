@@ -106,6 +106,15 @@ api.turtleligpt.com {
 		import sub2api_proxy_no_store
 	}
 
+	# The signed payment callback is the only payment endpoint on the API host.
+	@unified_payment_webhook {
+		method POST
+		path /api/v1/payment/webhook/unified
+	}
+	handle @unified_payment_webhook {
+		import sub2api_proxy_no_store
+	}
+
 	# Keep this list aligned with RegisterGatewayRoutes. The broad versioned,
 	# Codex, Antigravity, video, and custom-voice prefixes cover their registered
 	# dynamic subroutes while the root aliases remain explicit.

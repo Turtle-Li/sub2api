@@ -26,30 +26,30 @@
               <Icon name="eye" size="sm" />
               {{ t('common.view') }}
             </button>
-            <button v-if="row.status === 'PENDING'" @click="handleCancelOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
+            <button v-if="row.status === 'PENDING'" :disabled="refundMutationBusy" @click="handleCancelOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
               <Icon name="x" size="sm" />
               {{ t('payment.orders.cancel') }}
             </button>
-            <button v-if="row.status === 'FAILED'" @click="handleRetryOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
+            <button v-if="row.status === 'FAILED'" :disabled="refundMutationBusy" @click="handleRetryOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retry') }}
             </button>
             <template v-if="row.status === 'REFUND_REQUESTED'">
               <span v-if="row.refund_amount" class="rounded-full bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">{{ creditedAmountSymbol }}{{ row.refund_amount.toFixed(2) }}</span>
-              <button @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
+              <button :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
                 <Icon name="check" size="sm" />
                 {{ t('payment.admin.approveRefund') }}
               </button>
             </template>
-            <button v-else-if="row.status === 'REFUND_FAILED'" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
+            <button v-else-if="row.status === 'REFUND_FAILED'" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retryRefund') }}
             </button>
-            <button v-else-if="row.status === 'REFUND_PENDING'" :disabled="refundQueryingIds.has(row.id)" @click="handleQueryRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-60 dark:text-orange-400 dark:hover:bg-orange-900/20">
+            <button v-else-if="row.status === 'REFUND_PENDING'" :disabled="refundMutationBusy" @click="handleQueryRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-60 dark:text-orange-400 dark:hover:bg-orange-900/20">
               <Icon name="refresh" size="sm" :class="refundQueryingIds.has(row.id) ? 'animate-spin' : ''" />
               {{ t('payment.admin.queryRefundStatus') }}
             </button>
-            <button v-else-if="row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED'" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+            <button v-else-if="row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED'" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
               <Icon name="dollar" size="sm" />
               {{ t('payment.admin.refund') }}
             </button>
@@ -111,7 +111,8 @@
       </div>
     </BaseDialog>
 
-    <AdminRefundDialog :show="showRefundDialog" :order="selectedOrder" :submitting="refundSubmitting" :require-force="refundRequireForce" :warning="refundWarning" @confirm="handleRefund" @cancel="closeRefundDialog" />
+    <AdminRefundDialog :show="showRefundDialog" :order="selectedOrder" :submitting="refundMutationBusy" :require-force="refundRequireForce" :warning="refundWarning" @confirm="handleRefund" @cancel="closeRefundDialog" />
+    <TotpStepUpDialog :controller="stepUp" />
   </AppLayout>
 </template>
 
@@ -132,6 +133,8 @@ import AdminRefundDialog from '@/components/admin/payment/AdminRefundDialog.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
 import { currencySymbol } from '@/components/payment/currency'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
+import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 
 interface AuditLog {
   id: number
@@ -139,6 +142,13 @@ interface AuditLog {
   detail: string | null
   operator: string | null
   created_at: string
+}
+
+interface RefundRequest {
+  amount: number
+  reason: string
+  deduct_balance: boolean
+  force: boolean
 }
 
 const { t } = useI18n()
@@ -158,6 +168,8 @@ const refundWarning = ref('')
 const refundQueryingIds = ref(new Set<number>())
 const orderAuditLogs = ref<AuditLog[]>([])
 const creditedAmountSymbol = currencySymbol('USD')
+const stepUp = useStepUp()
+const refundMutationBusy = computed(() => refundSubmitting.value || refundQueryingIds.value.size > 0)
 
 function paymentAmountSymbol(order: PaymentOrder | null | undefined): string {
   return currencySymbol(order?.currency)
@@ -228,16 +240,19 @@ async function showOrderDetail(order: PaymentOrder) {
 }
 
 async function handleCancelOrder(order: PaymentOrder) {
+  if (refundMutationBusy.value) return
   try { await adminPaymentAPI.cancelOrder(order.id); appStore.showSuccess(t('payment.admin.orderCancelled')); loadOrders() }
   catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
 }
 
 async function handleRetryOrder(order: PaymentOrder) {
+  if (refundMutationBusy.value) return
   try { await adminPaymentAPI.retryRecharge(order.id); appStore.showSuccess(t('payment.admin.retrySuccess')); loadOrders() }
   catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
 }
 
 function openRefundDialog(order: PaymentOrder) {
+  if (refundMutationBusy.value) return
   selectedOrder.value = order
   refundRequireForce.value = false
   refundWarning.value = ''
@@ -254,20 +269,35 @@ function isRefundPendingWarning(warning: string | undefined): boolean {
   return /pending|处理中|待/.test(String(warning || '').toLowerCase())
 }
 
-async function handleRefund(data: { amount: number; reason: string; deduct_balance: boolean; force: boolean }) {
-  if (!selectedOrder.value) return
+function closeRefundDialogFor(orderID: number) {
+  if (selectedOrder.value?.id === orderID) closeRefundDialog()
+}
+
+async function handleRefund(data: RefundRequest) {
+  if (refundMutationBusy.value || !selectedOrder.value) return
+  // Keep the exact operation immutable while a step-up prompt is open. The
+  // current selection can change through the surrounding admin view, but it
+  // must never redirect the retry to a different order or altered amount.
+  const orderID = selectedOrder.value.id
+  const request: RefundRequest = {
+    amount: data.amount,
+    reason: data.reason,
+    deduct_balance: data.deduct_balance,
+    force: data.force,
+  }
   refundSubmitting.value = true
   try {
-    const res = await adminPaymentAPI.refundOrder(selectedOrder.value.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force })
+    const res = await stepUp.run(() => adminPaymentAPI.refundOrder(orderID, request))
     if (res.data.success) {
-      appStore.showSuccess(t('payment.admin.refundSuccess'))
-      closeRefundDialog()
+      if (res.data.warning) appStore.showWarning(res.data.warning)
+      else appStore.showSuccess(t('payment.admin.refundSuccess'))
+      closeRefundDialogFor(orderID)
       loadOrders()
       return
     }
     if (isRefundPendingWarning(res.data.warning)) {
       appStore.showSuccess(t('payment.admin.refundPending'))
-      closeRefundDialog()
+      closeRefundDialogFor(orderID)
       loadOrders()
       return
     }
@@ -275,21 +305,28 @@ async function handleRefund(data: { amount: number; reason: string; deduct_balan
       // Backend needs an explicit force confirmation (e.g. the user spent their
       // balance after requesting the refund). Keep the dialog open and surface
       // the force checkbox instead of dropping the admin back to the list.
-      refundRequireForce.value = true
-      refundWarning.value = res.data.warning || ''
+      if (selectedOrder.value?.id === orderID) {
+        refundRequireForce.value = true
+        refundWarning.value = res.data.warning || ''
+      }
       return
     }
     appStore.showError(res.data.warning || t('common.error'))
-  } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
+  } catch (err: unknown) {
+    if (!isStepUpCancelled(err)) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  }
   finally { refundSubmitting.value = false }
 }
 
 async function handleQueryRefund(order: PaymentOrder) {
-  refundQueryingIds.value = new Set(refundQueryingIds.value).add(order.id)
+  if (refundMutationBusy.value) return
+  const orderID = order.id
+  refundQueryingIds.value = new Set(refundQueryingIds.value).add(orderID)
   try {
-    const res = await adminPaymentAPI.queryRefund(order.id)
+    const res = await stepUp.run(() => adminPaymentAPI.queryRefund(orderID))
     if (res.data.success) {
-      appStore.showSuccess(t('payment.admin.refundSuccess'))
+      if (res.data.warning) appStore.showWarning(res.data.warning)
+      else appStore.showSuccess(t('payment.admin.refundSuccess'))
     } else if (isRefundPendingWarning(res.data.warning)) {
       appStore.showSuccess(t('payment.admin.refundPending'))
     } else {
@@ -297,10 +334,10 @@ async function handleQueryRefund(order: PaymentOrder) {
     }
     loadOrders()
   } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    if (!isStepUpCancelled(err)) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
     const next = new Set(refundQueryingIds.value)
-    next.delete(order.id)
+    next.delete(orderID)
     refundQueryingIds.value = next
   }
 }

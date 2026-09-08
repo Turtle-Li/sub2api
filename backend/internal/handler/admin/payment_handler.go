@@ -6,6 +6,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -15,13 +16,17 @@ import (
 type PaymentHandler struct {
 	paymentService *service.PaymentService
 	configService  *service.PaymentConfigService
+	totpService    *service.TotpService
+	userService    *service.UserService
 }
 
 // NewPaymentHandler creates a new admin PaymentHandler.
-func NewPaymentHandler(paymentService *service.PaymentService, configService *service.PaymentConfigService) *PaymentHandler {
+func NewPaymentHandler(paymentService *service.PaymentService, configService *service.PaymentConfigService, totpService *service.TotpService, userService *service.UserService) *PaymentHandler {
 	return &PaymentHandler{
 		paymentService: paymentService,
 		configService:  configService,
+		totpService:    totpService,
+		userService:    userService,
 	}
 }
 
@@ -228,6 +233,12 @@ type AdminProcessRefundRequest struct {
 // ProcessRefund processes a refund for an order (admin).
 // POST /api/v1/admin/payment/orders/:id/refund
 func (h *PaymentHandler) ProcessRefund(c *gin.Context) {
+	// Money mutations always require a fresh human-session step-up grant. This
+	// deliberately does not consult the optional global step-up setting.
+	if !middleware.EnforceStepUpAlways(c, h.totpService, h.userService) {
+		return
+	}
+
 	orderID, ok := parseIDParam(c, "id")
 	if !ok {
 		return
@@ -260,6 +271,12 @@ func (h *PaymentHandler) ProcessRefund(c *gin.Context) {
 // QueryAndFinalizeRefund queries the provider refund status and finalizes a pending refund.
 // POST /api/v1/admin/payment/orders/:id/refund/query
 func (h *PaymentHandler) QueryAndFinalizeRefund(c *gin.Context) {
+	// Finalizing a pending refund changes money state too, so it shares the
+	// unconditional human-session step-up requirement with ProcessRefund.
+	if !middleware.EnforceStepUpAlways(c, h.totpService, h.userService) {
+		return
+	}
+
 	orderID, ok := parseIDParam(c, "id")
 	if !ok {
 		return

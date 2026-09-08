@@ -793,6 +793,71 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).not.toContain("支付来源");
   });
 
+  it("loads unified routes with canonical values and limits methods to runtime capabilities", async () => {
+    getSettings.mockResolvedValue({
+      ...baseSettingsResponse,
+      payment_unified_enabled: true,
+      payment_unified_methods: ["alipay"],
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    const alipay = wrapper.getComponent('[aria-label="Alipay payment route"]');
+    const wechat = wrapper.getComponent('[aria-label="WeChat payment route"]');
+    expect(alipay.props("modelValue")).toBe("official_alipay");
+    expect(wechat.props("modelValue")).toBe("");
+    expect(alipay.props("options")).toContainEqual(expect.objectContaining({
+      value: "unified_alipay", disabled: false,
+    }));
+    expect(wechat.props("options")).toContainEqual(expect.objectContaining({
+      value: "unified_wxpay", disabled: true,
+    }));
+  });
+
+  it("saves unified routing without sending runtime configuration or changing legacy enablement", async () => {
+    getSettings.mockResolvedValue({
+      ...baseSettingsResponse,
+      payment_unified_enabled: true,
+      payment_unified_methods: ["alipay", "wxpay"],
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    await wrapper.get('[aria-label="Alipay payment route"]').setValue("unified_alipay");
+    await wrapper.get('[aria-label="WeChat payment route"]').setValue("official_wxpay");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload).toEqual(expect.objectContaining({
+      payment_visible_method_alipay_source: "unified_alipay",
+      payment_visible_method_wxpay_source: "official_wxpay",
+    }));
+    expect(payload).not.toHaveProperty("payment_unified_enabled");
+    expect(payload).not.toHaveProperty("payment_unified_methods");
+    expect(payload).not.toHaveProperty("payment_visible_method_alipay_enabled");
+    expect(payload).not.toHaveProperty("payment_visible_method_wxpay_enabled");
+  });
+
+  it("clears stale unified status when a settings response no longer advertises the runtime", async () => {
+    getSettings.mockResolvedValue({
+      ...baseSettingsResponse,
+      payment_unified_enabled: true,
+      payment_unified_methods: ["alipay", "wxpay"],
+    });
+    updateSettings.mockResolvedValue({ ...baseSettingsResponse });
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    expect(wrapper.find('[aria-label="Alipay payment route"]').exists()).toBe(true);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(wrapper.find('[aria-label="Alipay payment route"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("admin.settings.payment.unifiedNotConfigured");
+  });
+
   it("shows valid passkey RP configuration and persists the sign-in toggle", async () => {
     const wrapper = mountView();
 

@@ -87,6 +87,13 @@ CONTAINER_TRAFFIC_STATE_PATH="/run/sub2api-runtime/traffic-state"
 CONTAINER_BACKGROUND_STATE_PATH="/run/sub2api-runtime/background-state"
 CONTAINER_HEALTH_TOKEN_PATH="/run/sub2api-runtime/health-token"
 UNIFIED_PAYMENT_VAULT_VOLUME="${SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME:-}"
+# Existing approved enrollment is Alipay sandbox. A method expansion must be
+# explicit in the public runtime configuration, never an application default.
+UNIFIED_PAYMENT_PAYMENT_METHODS="${UNIFIED_PAYMENT_PAYMENT_METHODS:-alipay}"
+APPROVED_UNIFIED_PAYMENT_WEBHOOK_URL="https://api.turtleligpt.com/api/v1/payment/webhook/unified"
+# Older managed blocks predate this optional field. Supply the pinned public
+# destination at release time so their candidate containers still receive it.
+UNIFIED_PAYMENT_WEBHOOK_URL="${UNIFIED_PAYMENT_WEBHOOK_URL:-$APPROVED_UNIFIED_PAYMENT_WEBHOOK_URL}"
 CONTAINER_UNIFIED_PAYMENT_VAULT_PATH="/run/sub2api-payment-vault"
 UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=false
 if [ "${UNIFIED_PAYMENT_ENABLED+x}" = x ]; then
@@ -110,11 +117,11 @@ RUNTIME_OVERRIDE_KEYS=(
   SUB2API_TRAFFIC_STATE_FILE SUB2API_BACKGROUND_STATE_FILE SUB2API_INTERNAL_HEALTH_TOKEN_FILE
 )
 UNIFIED_PAYMENT_ENV_KEYS=(
-  UNIFIED_PAYMENT_ENABLED UNIFIED_PAYMENT_BASE_URL UNIFIED_PAYMENT_ENVIRONMENT
+  UNIFIED_PAYMENT_ENABLED UNIFIED_PAYMENT_PAYMENT_METHODS UNIFIED_PAYMENT_BASE_URL UNIFIED_PAYMENT_ENVIRONMENT
   UNIFIED_PAYMENT_ORGANIZATION_ID UNIFIED_PAYMENT_PRODUCT_ID UNIFIED_PAYMENT_APP_ID
   UNIFIED_PAYMENT_REQUEST_KEY_ID UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF
   UNIFIED_PAYMENT_VAULT_AGENT_SOCKET UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON
-  UNIFIED_PAYMENT_RETURN_URL
+  UNIFIED_PAYMENT_RETURN_URL UNIFIED_PAYMENT_WEBHOOK_URL
 )
 PAYMENT_VAULT_MOUNT_ARGS=()
 
@@ -235,44 +242,67 @@ require_docker_name() {
 }
 
 validate_unified_payment_runtime() {
-  local key value webhook_prefix webhook_key webhook_body
-  if [ "${UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64:-}" != "" ]; then
-    die "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64 is forbidden; use the memory-only Vault agent"
-  fi
-  [ "$UNIFIED_PAYMENT_OVERRIDE_CONFIGURED" = true ] || return 0
-  require_bool UNIFIED_PAYMENT_ENABLED "$UNIFIED_PAYMENT_ENABLED"
-  if [ "$UNIFIED_PAYMENT_ENABLED" = false ]; then
-    return 0
-  fi
-  for key in "${UNIFIED_PAYMENT_ENV_KEYS[@]}"; do
+	local key value webhook_prefix webhook_key webhook_body profile
+	if [ "${UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64:-}" != "" ]; then
+		die "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64 is forbidden; use the memory-only Vault agent"
+	fi
+	[ "$UNIFIED_PAYMENT_OVERRIDE_CONFIGURED" = true ] || return 0
+	require_bool UNIFIED_PAYMENT_ENABLED "$UNIFIED_PAYMENT_ENABLED"
+	# A complete profile may be staged with the runtime gateway disabled while
+	# the central binding is registered. An old deployment that supplies only
+	# the disabled switch remains compatible and gets no socket volume.
+	if [ "$UNIFIED_PAYMENT_ENABLED" = false ] && [ -z "${UNIFIED_PAYMENT_BASE_URL:-}" ]; then
+		return 0
+	fi
+	for key in "${UNIFIED_PAYMENT_ENV_KEYS[@]}"; do
     value="${!key-}"
     [ -n "$value" ] || die "$key is required when unified payment is enabled"
     case "$value" in *$'\n'*|*$'\r'*) die "$key contains unsupported characters" ;; esac
   done
-  [ "$UNIFIED_PAYMENT_ENVIRONMENT" = sandbox ] \
-    || die "only the unified payment sandbox is approved"
-  [ "$UNIFIED_PAYMENT_BASE_URL" = "https://pay.totools.cn" ] \
-    || die "UNIFIED_PAYMENT_BASE_URL does not match the approved sandbox service"
-  [ "$UNIFIED_PAYMENT_APP_ID" = "app.sub2.sandbox" ] \
-    || die "UNIFIED_PAYMENT_APP_ID does not match the approved Sub2 sandbox app"
-  [ "$UNIFIED_PAYMENT_ORGANIZATION_ID" = "84fc3e66-e959-4bc8-8d78-6f8c3d3483fb" ] \
-    || die "UNIFIED_PAYMENT_ORGANIZATION_ID does not match the approved Sub2 sandbox scope"
-  [ "$UNIFIED_PAYMENT_PRODUCT_ID" = "00da03c5-bc5c-4edb-9d4c-c77da0e969d5" ] \
-    || die "UNIFIED_PAYMENT_PRODUCT_ID does not match the approved Sub2 sandbox scope"
-  [ "$UNIFIED_PAYMENT_REQUEST_KEY_ID" = "sub2.request.sandbox.v1" ] \
-    || die "UNIFIED_PAYMENT_REQUEST_KEY_ID does not match the approved Sub2 sandbox key"
-  [ "$UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF" = "vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64" ] \
-    || die "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF does not match the approved Vault field"
-  [ "$UNIFIED_PAYMENT_VAULT_AGENT_SOCKET" = "$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH/public.sock" ] \
-    || die "UNIFIED_PAYMENT_VAULT_AGENT_SOCKET does not match the mounted agent socket"
+	case "$UNIFIED_PAYMENT_PAYMENT_METHODS" in
+		alipay|wechat_pay|alipay,wechat_pay|wechat_pay,alipay) ;;
+		*) die "UNIFIED_PAYMENT_PAYMENT_METHODS is invalid" ;;
+	esac
+	[ "$UNIFIED_PAYMENT_BASE_URL" = "https://pay.totools.cn" ] \
+		|| die "UNIFIED_PAYMENT_BASE_URL does not match the approved unified payment service"
+	case "$UNIFIED_PAYMENT_ENVIRONMENT" in
+		sandbox)
+			profile=sandbox
+			[ "$UNIFIED_PAYMENT_APP_ID" = "app.sub2.sandbox" ] \
+				|| die "UNIFIED_PAYMENT_APP_ID does not match the approved Sub2 sandbox app"
+			[ "$UNIFIED_PAYMENT_REQUEST_KEY_ID" = "sub2.request.sandbox.v1" ] \
+				|| die "UNIFIED_PAYMENT_REQUEST_KEY_ID does not match the approved Sub2 sandbox key"
+			[ "$UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF" = "vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64" ] \
+				|| die "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF does not match the approved sandbox Vault field"
+			webhook_prefix='{"sub2.webhook.sandbox.v1":"'
+			;;
+		live)
+			profile=live
+			[ "$UNIFIED_PAYMENT_APP_ID" = "app.sub2.live" ] \
+				|| die "UNIFIED_PAYMENT_APP_ID does not match the approved Sub2 live app"
+			[ "$UNIFIED_PAYMENT_REQUEST_KEY_ID" = "sub2.request.live.v1" ] \
+				|| die "UNIFIED_PAYMENT_REQUEST_KEY_ID does not match the approved Sub2 live key"
+			[ "$UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF" = "vault://secret/data/sub2api/unified-payment/live#request_private_key_base64" ] \
+				|| die "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF does not match the approved live Vault field"
+			webhook_prefix='{"sub2.webhook.live.v1":"'
+			;;
+		*) die "UNIFIED_PAYMENT_ENVIRONMENT must be sandbox or live" ;;
+	esac
+	[ "$UNIFIED_PAYMENT_ORGANIZATION_ID" = "84fc3e66-e959-4bc8-8d78-6f8c3d3483fb" ] \
+		|| die "UNIFIED_PAYMENT_ORGANIZATION_ID does not match the approved Sub2 $profile scope"
+	[ "$UNIFIED_PAYMENT_PRODUCT_ID" = "00da03c5-bc5c-4edb-9d4c-c77da0e969d5" ] \
+		|| die "UNIFIED_PAYMENT_PRODUCT_ID does not match the approved Sub2 $profile scope"
+	[ "$UNIFIED_PAYMENT_VAULT_AGENT_SOCKET" = "$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH/public.sock" ] \
+		|| die "UNIFIED_PAYMENT_VAULT_AGENT_SOCKET does not match the mounted agent socket"
   [ "$UNIFIED_PAYMENT_RETURN_URL" = "https://www.turtleligpt.com/payment/result" ] \
     || die "UNIFIED_PAYMENT_RETURN_URL does not match the approved Sub2 result page"
-  require_docker_name SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME "$UNIFIED_PAYMENT_VAULT_VOLUME"
-  [ "$UNIFIED_PAYMENT_VAULT_VOLUME" = sub2api_unified_payment_vault ] \
-    || die "SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME does not match the approved Sub2 volume"
-  webhook_prefix='{"sub2.webhook.sandbox.v1":"'
-  case "$UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON" in
-    "$webhook_prefix"*'"}') ;;
+  [ "$UNIFIED_PAYMENT_WEBHOOK_URL" = "$APPROVED_UNIFIED_PAYMENT_WEBHOOK_URL" ] \
+    || die "UNIFIED_PAYMENT_WEBHOOK_URL does not match the approved Sub2 webhook endpoint"
+	require_docker_name SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME "$UNIFIED_PAYMENT_VAULT_VOLUME"
+	[ "$UNIFIED_PAYMENT_VAULT_VOLUME" = sub2api_unified_payment_vault ] \
+		|| die "SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME does not match the approved Sub2 volume"
+	case "$UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON" in
+		"$webhook_prefix"*'"}') ;;
     *) die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid" ;;
   esac
   webhook_key="${UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON#"$webhook_prefix"}"
@@ -284,9 +314,11 @@ validate_unified_payment_runtime() {
   esac
   [ "${webhook_key#"$webhook_body"}" = = ] \
     || die "UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON is invalid"
-  PAYMENT_VAULT_MOUNT_ARGS=(
-    --mount "type=volume,source=$UNIFIED_PAYMENT_VAULT_VOLUME,target=$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH,readonly"
-  )
+	if [ "$UNIFIED_PAYMENT_ENABLED" = true ]; then
+		PAYMENT_VAULT_MOUNT_ARGS=(
+			--mount "type=volume,source=$UNIFIED_PAYMENT_VAULT_VOLUME,target=$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH,readonly"
+		)
+	fi
 }
 
 validate_absolute_path() {
@@ -548,7 +580,7 @@ make_runtime_env_file() {
 	  UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64)
 		continue
 		;;
-	  UNIFIED_PAYMENT_ENABLED|UNIFIED_PAYMENT_BASE_URL|UNIFIED_PAYMENT_ENVIRONMENT|UNIFIED_PAYMENT_ORGANIZATION_ID|UNIFIED_PAYMENT_PRODUCT_ID|UNIFIED_PAYMENT_APP_ID|UNIFIED_PAYMENT_REQUEST_KEY_ID|UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF|UNIFIED_PAYMENT_VAULT_AGENT_SOCKET|UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON|UNIFIED_PAYMENT_RETURN_URL)
+	  UNIFIED_PAYMENT_ENABLED|UNIFIED_PAYMENT_PAYMENT_METHODS|UNIFIED_PAYMENT_BASE_URL|UNIFIED_PAYMENT_ENVIRONMENT|UNIFIED_PAYMENT_ORGANIZATION_ID|UNIFIED_PAYMENT_PRODUCT_ID|UNIFIED_PAYMENT_APP_ID|UNIFIED_PAYMENT_REQUEST_KEY_ID|UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF|UNIFIED_PAYMENT_VAULT_AGENT_SOCKET|UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON|UNIFIED_PAYMENT_RETURN_URL|UNIFIED_PAYMENT_WEBHOOK_URL)
 		[ "$UNIFIED_PAYMENT_OVERRIDE_CONFIGURED" = true ] && continue
 		;;
 	  SUB2API_TRAFFIC_STATE_FILE|SUB2API_BACKGROUND_STATE_FILE|SUB2API_INTERNAL_HEALTH_TOKEN_FILE)

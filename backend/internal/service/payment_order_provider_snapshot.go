@@ -25,6 +25,16 @@ type paymentOrderProviderSnapshot struct {
 	AppID              string
 }
 
+func paymentOrderUsesUnifiedPay(order *dbent.PaymentOrder) bool {
+	if order == nil {
+		return false
+	}
+	if snapshot := psOrderProviderSnapshot(order); snapshot != nil && snapshot.ProviderKey == payment.TypeUnifiedPay {
+		return true
+	}
+	return strings.TrimSpace(psStringValue(order.ProviderKey)) == payment.TypeUnifiedPay
+}
+
 func psOrderProviderSnapshot(order *dbent.PaymentOrder) *paymentOrderProviderSnapshot {
 	if order == nil || len(order.ProviderSnapshot) == 0 {
 		return nil

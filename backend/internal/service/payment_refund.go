@@ -226,18 +226,25 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	if !psSliceContains(ok, o.Status) {
 		return nil, nil, infraerrors.BadRequest("INVALID_STATUS", "order status does not allow refund")
 	}
-	// Check provider instance allows admin refund
-	inst, instErr := s.getRefundOrderProviderInstance(ctx, o)
-	if instErr != nil {
-		slog.Warn("refund: provider instance lookup failed", "orderID", oid, "error", instErr)
-		return nil, nil, infraerrors.InternalServer("PROVIDER_LOOKUP_FAILED", "failed to look up payment provider for this order")
-	}
-	if inst == nil {
-		// Legacy order without provider_instance_id — block refund
-		return nil, nil, infraerrors.Forbidden("REFUND_DISABLED", "refund is not available for this order")
-	}
-	if !inst.RefundEnabled {
-		return nil, nil, infraerrors.Forbidden("REFUND_DISABLED", "refund is not enabled for this provider")
+	// Unified orders use their historical app binding and the server runtime;
+	// they never need a fabricated local provider credential row.
+	if paymentOrderUsesUnifiedPay(o) {
+		if err := s.validateUnifiedRefundOrder(o); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		inst, instErr := s.getRefundOrderProviderInstance(ctx, o)
+		if instErr != nil {
+			slog.Warn("refund: provider instance lookup failed", "orderID", oid, "error", instErr)
+			return nil, nil, infraerrors.InternalServer("PROVIDER_LOOKUP_FAILED", "failed to look up payment provider for this order")
+		}
+		if inst == nil {
+			// Legacy order without provider_instance_id — block refund
+			return nil, nil, infraerrors.Forbidden("REFUND_DISABLED", "refund is not available for this order")
+		}
+		if !inst.RefundEnabled {
+			return nil, nil, infraerrors.Forbidden("REFUND_DISABLED", "refund is not enabled for this provider")
+		}
 	}
 	if math.IsNaN(amt) || math.IsInf(amt, 0) {
 		return nil, nil, infraerrors.BadRequest("INVALID_AMOUNT", "invalid refund amount")
@@ -308,6 +315,12 @@ func (s *PaymentService) deductAvailableBalance(ctx context.Context, userID int6
 }
 
 func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
+	if p == nil || p.Order == nil {
+		return nil, infraerrors.BadRequest("INVALID_REFUND", "refund plan is missing")
+	}
+	if paymentOrderUsesUnifiedPay(p.Order) {
+		return s.executeUnifiedRefund(ctx, p)
+	}
 	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(p.OrderID), paymentorder.StatusIn(OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundPending, OrderStatusRefundFailed)).SetStatus(OrderStatusRefunding).Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("lock: %w", err)
@@ -360,6 +373,9 @@ func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*Ref
 }
 
 func (s *PaymentService) gwRefund(ctx context.Context, p *RefundPlan) (*payment.RefundResponse, error) {
+	if paymentOrderUsesUnifiedPay(p.Order) {
+		return nil, errors.New("unified refunds require the durable asynchronous refund flow")
+	}
 	if p.Order.PaymentTradeNo == "" {
 		s.writeAuditLog(ctx, p.Order.ID, "REFUND_NO_TRADE_NO", "admin", map[string]any{"detail": "skipped"})
 		return &payment.RefundResponse{Status: payment.ProviderStatusSuccess}, nil
@@ -437,6 +453,9 @@ func (s *PaymentService) QueryAndFinalizeRefund(ctx context.Context, oid int64) 
 	}
 	if o.Status != OrderStatusRefundPending {
 		return nil, infraerrors.BadRequest("INVALID_STATUS", "only refund pending orders can be finalized")
+	}
+	if paymentOrderUsesUnifiedPay(o) {
+		return s.queryUnifiedRefund(ctx, o)
 	}
 
 	prov, err := s.getRefundProvider(ctx, o)

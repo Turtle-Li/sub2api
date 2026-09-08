@@ -124,7 +124,7 @@ func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (s
 }
 
 func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
-	if o.PaymentTradeNo != "" || o.PaymentType != "" {
+	if o.PaymentTradeNo != "" || o.PaymentType != "" || paymentOrderUsesUnifiedPay(o) {
 		switch s.checkPaid(ctx, o) {
 		case checkPaidResultAlreadyPaid:
 			return checkPaidResultAlreadyPaid, nil
@@ -155,20 +155,27 @@ func (s *PaymentService) reconcilePaid(ctx context.Context, o *dbent.PaymentOrde
 }
 
 func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.PaymentOrder, opts checkPaidOptions) string {
+	unknownResult := ""
+	if paymentOrderUsesUnifiedPay(o) {
+		unknownResult = checkPaidResultUnconfirmed
+	}
 	prov, err := s.getOrderProvider(ctx, o)
 	if err != nil {
-		return ""
+		return unknownResult
 	}
 	queryRef := paymentOrderQueryReference(o, prov)
 	if queryRef == "" {
-		return ""
+		return unknownResult
 	}
 	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	resp, err := prov.QueryOrder(ctx, queryRef)
 	finishProviderCall()
 	if err != nil {
 		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
-		return ""
+		return unknownResult
+	}
+	if resp == nil || (paymentOrderUsesUnifiedPay(o) && resp.Metadata["needs_manual_review"] == "true") {
+		return unknownResult
 	}
 	if resp.Status == payment.ProviderStatusPaid {
 		if !isValidProviderAmount(resp.Amount) {
@@ -181,7 +188,7 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 			slog.Warn("query upstream returned invalid paid amount", "orderID", o.ID, "queryRef", queryRef, "paid", resp.Amount)
 			retriedResp, retryOK := requeryPaidOrderOnce(ctx, prov, queryRef)
 			if !retryOK {
-				return ""
+				return unknownResult
 			}
 			resp = retriedResp
 		}
@@ -210,7 +217,7 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 		cancelErr := cp.CancelPayment(ctx, queryRef)
 		finishProviderCall()
-		if errors.Is(cancelErr, payment.ErrUpstreamStateUnconfirmed) {
+		if errors.Is(cancelErr, payment.ErrUpstreamStateUnconfirmed) || (cancelErr != nil && paymentOrderUsesUnifiedPay(o)) {
 			return checkPaidResultUnconfirmed
 		}
 	}
