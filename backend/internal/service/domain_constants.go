@@ -383,6 +383,7 @@ const (
 	SettingKeySiteDomain                  = "site_domain"                   // 站点规范域名（页面跳转与面板 API Host 校验）
 	SettingKeyAPIBaseURL                  = "api_base_url"                  // API端点地址（用于客户端配置和导入）
 	SettingKeyContactInfo                 = "contact_info"                  // 客服联系方式
+	SettingKeyContactQRImageURL           = "contact_qr_image_url"          // 客服二维码图片（base64 或 URL）
 	SettingKeyDocURL                      = "doc_url"                       // 文档链接
 	SettingKeyHomeContent                 = "home_content"                  // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
 	SettingKeyCompactHomeEnabled          = "compact_home_enabled"          // 是否启用内置简洁首页

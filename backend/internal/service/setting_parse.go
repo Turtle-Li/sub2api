@@ -366,6 +366,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		SiteDomain:                             settings[SettingKeySiteDomain],
 		APIBaseURL:                             settings[SettingKeyAPIBaseURL],
 		ContactInfo:                            settings[SettingKeyContactInfo],
+		ContactQRImageURL:                      settings[SettingKeyContactQRImageURL],
 		DocURL:                                 settings[SettingKeyDocURL],
 		HomeContent:                            settings[SettingKeyHomeContent],
 		CompactHomeEnabled:                     settings[SettingKeyCompactHomeEnabled] == "true",

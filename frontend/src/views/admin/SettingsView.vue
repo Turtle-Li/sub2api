@@ -6579,6 +6579,21 @@
                 <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                   {{ t("admin.settings.site.contactInfoHint") }}
                 </p>
+                <div class="mt-4">
+                  <label
+                    class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.site.contactQRImage") }}
+                  </label>
+                  <ImageUpload
+                    v-model="form.contact_qr_image_url"
+                    mode="image"
+                    :upload-label="t('admin.settings.site.uploadImage')"
+                    :remove-label="t('admin.settings.site.remove')"
+                    :hint="t('admin.settings.site.contactQRImageHint')"
+                    :max-size="300 * 1024"
+                  />
+                </div>
               </div>
 
               <!-- Doc URL -->
@@ -9680,6 +9695,7 @@ const form = reactive<SettingsForm>({
   site_domain: "",
   api_base_url: "",
   contact_info: "",
+  contact_qr_image_url: "",
   doc_url: "",
   home_content: "",
   compact_home_enabled: false,
@@ -11340,6 +11356,7 @@ async function saveSettings() {
       site_domain: form.site_domain,
       api_base_url: form.api_base_url,
       contact_info: form.contact_info,
+      contact_qr_image_url: form.contact_qr_image_url,
       doc_url: form.doc_url,
       home_content: form.home_content,
       compact_home_enabled: form.compact_home_enabled,

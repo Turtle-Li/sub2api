@@ -185,7 +185,7 @@
 
               <!-- Contact Support (only show if configured) -->
               <div
-                v-if="contactInfo"
+                v-if="contactInfo || contactQrImageUrl"
                 class="border-t border-gray-100 px-4 py-2.5 dark:border-dark-700"
               >
                 <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
@@ -203,10 +203,19 @@
                     />
                   </svg>
                   <span>{{ t('common.contactSupport') }}:</span>
-                  <span class="font-medium text-gray-700 dark:text-gray-300">{{
-                    contactInfo
-                  }}</span>
+                  <span
+                    v-if="contactInfo"
+                    class="font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ contactInfo }}
+                  </span>
                 </div>
+                <img
+                  v-if="contactQrImageUrl"
+                  :src="contactQrImageUrl"
+                  :alt="t('common.contactSupport')"
+                  class="mt-2 h-auto w-auto max-w-full object-contain"
+                />
               </div>
 
               <div v-if="showOnboardingButton" class="border-t border-gray-100 py-1 dark:border-dark-700">
@@ -276,6 +285,7 @@ const user = computed(() => authStore.user)
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
 const contactInfo = computed(() => appStore.contactInfo)
+const contactQrImageUrl = computed(() => appStore.contactQrImageUrl)
 const docUrl = computed(() => sanitizeUrl(appStore.docUrl))
 const modelPlazaEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.modelPlaza))
 const avatarUrl = computed(() => user.value?.avatar_url?.trim() || '')

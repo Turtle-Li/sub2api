@@ -75,6 +75,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		SiteDomain:                          settings.SiteDomain,
 		APIBaseURL:                          settings.APIBaseURL,
 		ContactInfo:                         settings.ContactInfo,
+		ContactQRImageURL:                   settings.ContactQRImageURL,
 		DocURL:                              settings.DocURL,
 		HomeContent:                         settings.HomeContent,
 		CompactHomeEnabled:                  settings.CompactHomeEnabled,

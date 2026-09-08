@@ -16,7 +16,7 @@
       />
 
       <div
-        v-if="contactInfo"
+        v-if="contactInfo || contactQrImageUrl"
         class="card border-primary-200 bg-primary-50 p-6 dark:bg-primary-900/20"
       >
         <div class="flex items-center gap-4">
@@ -27,7 +27,13 @@
             <h3 class="font-semibold text-primary-800 dark:text-primary-200">
               {{ t('common.contactSupport') }}
             </h3>
-            <p class="text-sm font-medium">{{ contactInfo }}</p>
+            <p v-if="contactInfo" class="text-sm font-medium">{{ contactInfo }}</p>
+            <img
+              v-if="contactQrImageUrl"
+              :src="contactQrImageUrl"
+              :alt="t('common.contactSupport')"
+              class="mt-2 h-auto w-auto max-w-full object-contain"
+            />
           </div>
         </div>
       </div>
@@ -69,6 +75,7 @@ const authStore = useAuthStore()
 const user = computed(() => authStore.user)
 
 const contactInfo = ref('')
+const contactQrImageUrl = ref('')
 const balanceLowNotifyEnabled = ref(false)
 const systemDefaultThreshold = ref(0)
 const linuxdoOAuthEnabled = ref(false)
@@ -91,6 +98,7 @@ onMounted(async () => {
         return
       }
       contactInfo.value = settings.contact_info || ''
+      contactQrImageUrl.value = settings.contact_qr_image_url || ''
       balanceLowNotifyEnabled.value = settings.balance_low_notify_enabled ?? false
       systemDefaultThreshold.value = settings.balance_low_notify_threshold ?? 0
       linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled ?? false
