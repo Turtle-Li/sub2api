@@ -68,6 +68,10 @@
 
 ## Upstream update scope
 
+- For v0.2.3 migration 236, read `docs/operations/UPSTREAM_V023_20260908.md`.
+  Preserve canonical `models_list_config` data even when an alternate upstream
+  column exists; do not rename the fork physical storage during routine merges.
+
 - For v0.2.2 model allowlists and rolling upgrades, read
   `docs/operations/UPSTREAM_V022_ALLOWLIST_20260907.md`. Preserve the Ent
   legacy storage key and disabled production allowlists; upstream migration
