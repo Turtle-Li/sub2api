@@ -2,6 +2,8 @@
 
 本文仅记录 `custom` 分支相对上游 `main` 新增的功能点，供后续同步上游代码时快速检查是否已有同类实现。
 
+后续新增或调整任何相对上游的功能扩展时，必须同步更新本文，记录功能语义、主要配置或入口及上游检索关键词。
+
 ## 允许使用返利邀请码注册
 
 - 新增设置 `affiliate_code_registration_enabled`，默认关闭。
@@ -65,6 +67,15 @@
 - 其他 OAuth Provider 的验证码行为不受影响。
 - OIDC 配置校验、state、浏览器会话 Cookie、PKCE、nonce、ID Token 和 callback 校验保持不变。
 - 配置文件、数据库设置、管理设置 DTO、审计、API Contract、中英文文案及前后端类型均增加对应字段。
+
+## 客服二维码图片
+
+- 在上游已有文本联系方式 `contact_info` 之外，新增独立设置 `contact_qr_image_url`，支持图片 URL 或 Base64 数据。
+- 管理后台复用图片上传控件配置客服二维码，图片大小上限为 300 KB。
+- 公开设置、管理设置、嵌入式前端设置、前后端类型、设置审计和 API Contract 均增加对应字段。
+- 顶部用户菜单、个人资料页和兑换页均支持展示客服二维码。
+- 文本联系方式与二维码彼此独立，任一已配置时均显示联系区域；未配置文本时可只展示二维码。
+- 图片按可用宽度自适应展示，不增加点击或悬停交互。
 
 ## 上游更新时检索
 
@@ -132,4 +143,14 @@ OIDCOAuthStart
 requireActionCaptchaForOAuthLoginStart
 VerifyActionCaptchaIfEnabled
 /api/v1/auth/oauth/oidc/start
+```
+
+### 客服二维码图片
+
+```text
+contact_qr_image_url
+SettingKeyContactQRImageURL
+ContactQRImageURL
+ImageUpload
+contactQrImageUrl
 ```
