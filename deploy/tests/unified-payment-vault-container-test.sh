@@ -24,12 +24,17 @@ run_script() {
   local mock_profile="$1"
   shift
   PATH="$FAKE_BIN:$PATH" MOCK_STATE="$STATE" MOCK_HEALTH="$HEALTH" MOCK_CALLS="$CALLS" MOCK_IMAGE="$image" MOCK_PROFILE="$mock_profile" \
+    MOCK_INIT_FAIL="${MOCK_INIT_FAIL:-0}" MOCK_USER="${MOCK_USER:-1000:1000}" \
     SUB2API_PAYMENT_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS=1 \
     SUB2API_MAINTENANCE_LOCK_FILE="$LOCK_FILE" bash "$SCRIPT" "$@"
 }
 
 run_count() {
   grep -c '^run -d' "$CALLS" || true
+}
+
+init_count() {
+  grep -c '^run --rm' "$CALLS" || true
 }
 
 mkdir -p "$FAKE_BIN" "$LOCK_DIR"
@@ -87,6 +92,7 @@ case "$1:$2" in
     case "$5" in
       *'.Config.Image'*) printf '%s\n' "$MOCK_IMAGE" ;;
       *'.State.Running'*) printf 'true\n' ;;
+      *'.Config.User'*) printf '%s\n' "${MOCK_USER:-1000:1000}" ;;
       *'.State.Health.Status'*) cat "$MOCK_HEALTH" ;;
       *'.HostConfig.NetworkMode'*) printf 'none\n' ;;
       *'.HostConfig.ReadonlyRootfs'*) printf 'true\n' ;;
@@ -104,6 +110,10 @@ case "$1:$2" in
     esac
     ;;
   volume:create) printf 'sub2api_unified_payment_vault\n' ;;
+  run:--rm)
+    [ "${MOCK_INIT_FAIL:-0}" = 0 ] || exit 1
+    printf 'init-container-id\n'
+    ;;
   run:-d) touch "$MOCK_STATE" ; printf 'container-id\n' ;;
   *) exit 1 ;;
 esac
@@ -114,11 +124,19 @@ image="sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 run_script sandbox prepare "$image" >"$OUTPUT"
 grep -qx 'SUB2API_PAYMENT_VAULT_CONTAINER_WAITING_FOR_INJECTION' "$OUTPUT" || fail 'sandbox prepare classification drifted'
 grep -q -- '--network none --read-only --init --restart unless-stopped --cap-drop ALL' "$CALLS" || fail 'container hardening flags missing'
+grep -q -- 'run --rm --network none --read-only --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --security-opt no-new-privileges --pids-limit 16 --user 0:0 --mount type=volume,source=sub2api_unified_payment_vault,target=/run/sub2api-payment-vault --entrypoint /bin/sh' "$CALLS" \
+  || fail 'volume initializer hardening or mount scope drifted'
+grep -q -- 'chown 1000:1000 "$socket_dir"' "$CALLS" || fail 'volume initializer ownership repair drifted'
+grep -q -- 'chmod 0700 "$socket_dir"' "$CALLS" || fail 'volume initializer mode repair drifted'
+grep -q -- 'run -d --name sub2api-payment-vault --network none --read-only --init --restart unless-stopped --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --user 1000:1000' "$CALLS" \
+  || fail 'main agent non-root hardening drifted'
+[ "$(init_count)" = 1 ] || fail 'prepare did not run exactly one volume initializer'
 grep -q -- '--allowed-ref vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64' "$CALLS" || fail 'sandbox default request reference missing'
 
 printf 'healthy\n' >"$HEALTH"
 run_script sandbox ready "$image" >"$OUTPUT"
 grep -qx 'SUB2API_PAYMENT_VAULT_CONTAINER_READY' "$OUTPUT" || fail 'sandbox ready classification drifted'
+[ "$(init_count)" = 1 ] || fail 'ready unexpectedly reinitialized the socket volume'
 
 before_runs="$(run_count)"
 if run_script sandbox --profile live prepare "$image" >"$OUTPUT" 2>&1; then
@@ -141,6 +159,23 @@ grep -qx 'SUB2API_PAYMENT_VAULT_CONTAINER_WAITING_FOR_INJECTION' "$OUTPUT" || fa
 grep -q -- '--allowed-ref vault://secret/data/sub2api/unified-payment/live#request_private_key_base64' "$CALLS" || fail 'live request reference missing'
 run_script live --profile live ready "$image" >"$OUTPUT"
 grep -qx 'SUB2API_PAYMENT_VAULT_CONTAINER_READY' "$OUTPUT" || fail 'live ready classification drifted'
+
+if MOCK_USER=0:0 run_script live --profile live ready "$image" >"$OUTPUT" 2>&1; then
+  fail 'root-running agent passed verification'
+fi
+
+# The init container must fail closed before it can start a long-lived agent.
+python3 - "$STATE" <<'PY'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).unlink()
+PY
+before_runs="$(run_count)"
+if MOCK_INIT_FAIL=1 run_script live --profile live prepare "$image" >"$OUTPUT" 2>&1; then
+  fail 'failed volume initializer started the agent'
+fi
+[ "$before_runs" = "$(run_count)" ] || fail 'failed volume initializer started the agent'
 
 before_calls="$(wc -l <"$CALLS")"
 if run_script live --profile production prepare "$image" >"$OUTPUT" 2>&1; then

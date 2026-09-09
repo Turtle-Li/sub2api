@@ -73,10 +73,40 @@ container_profile() {
   fi
 }
 
+prepare_public_volume() {
+  local image="$1"
+  # The application image's normal entrypoint fixes mount ownership only when
+  # it starts as root. The long-lived agent deliberately runs without that
+  # privilege, so prepare the sole named socket-volume with a short-lived,
+  # capability-bounded root container before the agent exists. Keep the command
+  # literal: it may touch only the volume mount root, never its children.
+  docker run --rm \
+    --network none \
+    --read-only \
+    --cap-drop ALL \
+    --cap-add CHOWN \
+    --cap-add FOWNER \
+    --security-opt no-new-privileges \
+    --pids-limit 16 \
+    --user 0:0 \
+    --mount "type=volume,source=$VOLUME,target=$PUBLIC_DIR" \
+    --entrypoint /bin/sh \
+    "$image" \
+    -ec '
+      socket_dir=/run/sub2api-payment-vault
+      test -d "$socket_dir"
+      test ! -L "$socket_dir"
+      chown 1000:1000 "$socket_dir"
+      chmod 0700 "$socket_dir"
+    '
+}
+
 verify_container() {
-  local image="$1" mounts command health security
+  local image="$1" mounts command health security user
   [ "$(docker container inspect "$CONTAINER" --format '{{.Config.Image}}')" = "$image" ] || return 1
   [ "$(docker container inspect "$CONTAINER" --format '{{.State.Running}}')" = true ] || return 1
+  user="$(docker container inspect "$CONTAINER" --format '{{.Config.User}}')" || return 1
+  [ "$user" = 1000:1000 ] || return 1
   [ "$(docker container inspect "$CONTAINER" --format '{{.HostConfig.NetworkMode}}')" = none ] || return 1
   [ "$(docker container inspect "$CONTAINER" --format '{{.HostConfig.ReadonlyRootfs}}')" = true ] || return 1
   [ "$(docker container inspect "$CONTAINER" --format '{{.HostConfig.RestartPolicy.Name}}')" = unless-stopped ] || return 1
@@ -139,6 +169,7 @@ if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
 else
   [ "$action" = prepare ] || die
   docker volume create "$VOLUME" >/dev/null || die
+  prepare_public_volume "$image" || die
   docker run -d \
     --name "$CONTAINER" \
     --network none \
@@ -148,6 +179,7 @@ else
     --cap-drop ALL \
     --security-opt no-new-privileges \
     --pids-limit 64 \
+    --user 1000:1000 \
     --mount "type=volume,source=$VOLUME,target=$PUBLIC_DIR" \
     --tmpfs "$ADMIN_DIR:rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000" \
     --tmpfs '/tmp:rw,noexec,nosuid,nodev,size=4m,mode=0700,uid=1000,gid=1000' \
