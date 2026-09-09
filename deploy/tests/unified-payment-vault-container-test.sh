@@ -71,9 +71,13 @@ cat >"$FAKE_BIN/docker" <<'EOF_DOCKER'
 set -eu
 printf '%s\n' "$*" >>"$MOCK_CALLS"
 profile="${MOCK_PROFILE:-sandbox}"
+public_dir=/run/sub2api-payment-vault
+admin_dir=/run/sub2api-payment-vault-admin
+volume=sub2api_unified_payment_vault
 case "$profile" in
   sandbox) request_ref='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64' ;;
   live) request_ref='vault://secret/data/sub2api/unified-payment/live#request_private_key_base64' ;;
+  feishu) request_ref='vault://secret/data/ops/feishu/payment#webhook_url'; public_dir=/run/sub2api-feishu-vault; admin_dir=/run/sub2api-feishu-vault-admin; volume=sub2api_feishu_vault ;;
   *) exit 1 ;;
 esac
 case "$1:$2" in
@@ -101,11 +105,11 @@ case "$1:$2" in
       *'.HostConfig.Init'*) printf 'true\n' ;;
       *'.HostConfig.CapDrop'*) printf '["ALL"]\n' ;;
       *'.HostConfig.SecurityOpt'*) printf '["no-new-privileges"]\n' ;;
-      *'/run/sub2api-payment-vault-admin'*) printf 'rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000\n' ;;
+      *'/run/sub2api-payment-vault-admin'*|*'/run/sub2api-feishu-vault-admin'*) printf 'rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000\n' ;;
       *'.HostConfig.Tmpfs'*'/tmp'*) printf 'rw,noexec,nosuid,nodev,size=4m,mode=0700,uid=1000,gid=1000\n' ;;
-      *'range .Mounts'*) printf 'volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|true\n' ;;
-      *'.Config.Cmd'*) printf '["/app/sub2api-vault-agent","serve","--public-socket","/run/sub2api-payment-vault/public.sock","--admin-socket","/run/sub2api-payment-vault-admin/admin.sock","--allowed-ref","%s"]\n' "$request_ref" ;;
-      *'.Config.Healthcheck.Test'*) printf '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket /run/sub2api-payment-vault/public.sock"]\n' ;;
+      *'range .Mounts'*) printf 'volume|%s|%s|true\n' "$volume" "$public_dir" ;;
+      *'.Config.Cmd'*) printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s"]\n' "$public_dir" "$admin_dir" "$request_ref" ;;
+      *'.Config.Healthcheck.Test'*) printf '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket %s/public.sock"]\n' "$public_dir" ;;
       *) exit 1 ;;
     esac
     ;;
@@ -189,4 +193,15 @@ if run_script live --profile live prepare 'sub2api:latest' >"$OUTPUT" 2>&1; then
 fi
 [ "$before_calls" = "$(wc -l <"$CALLS")" ] || fail 'unpinned image reached Docker'
 grep -q 'vault://secret/data/sub2api/unified-payment/live#request_private_key_base64' "$OUTPUT" && fail 'test output exposed a Vault reference'
+# Independent notification profile must use its own container, volume and refs.
+STATE="$TEST_ROOT/feishu-created"
+: >"$CALLS"
+run_script feishu --profile feishu prepare "$image" >"$OUTPUT"
+grep -q -- 'run -d --name sub2api-feishu-vault --network none --read-only' "$CALLS" || fail 'Feishu agent lost isolation'
+grep -q -- 'source=sub2api_feishu_vault,target=/run/sub2api-feishu-vault' "$CALLS" || fail 'Feishu socket volume drifted'
+grep -q -- '--allowed-ref vault://secret/data/ops/feishu/payment#webhook_url' "$CALLS" || fail 'Feishu exact reference missing'
+if grep -q -- 'sub2api-payment-vault\|sub2api_unified_payment_vault\|request_private_key' "$CALLS"; then fail 'Feishu profile touched signing resources'; fi
+before_runs="$(run_count)"
+run_script feishu --profile feishu ready "$image" >"$OUTPUT"
+[ "$before_runs" = "$(run_count)" ] || fail 'Feishu ready replaced the memory agent'
 printf 'Unified payment Vault container tests passed.\n'

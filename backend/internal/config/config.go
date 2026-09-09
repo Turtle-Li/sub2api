@@ -105,6 +105,7 @@ type Config struct {
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
 	UnifiedPayment          UnifiedPaymentConfig          `mapstructure:"unified_payment"`
+	FeishuPaymentAlerts     FeishuPaymentAlertsConfig     `mapstructure:"feishu_payment_alerts"`
 }
 
 // UnifiedPaymentConfig connects Sub2 to the separately deployed unified
@@ -128,6 +129,13 @@ type UnifiedPaymentConfig struct {
 	WebhookPublicKeysJSON     string `mapstructure:"webhook_public_keys_json"`
 	ReturnURL                 string `mapstructure:"return_url"`
 	WebhookURL                string `mapstructure:"webhook_url"`
+}
+
+// FeishuPaymentAlertsConfig intentionally exposes only an enable switch. The
+// webhook secret is loaded at send time from a fixed, separate Vault-agent
+// socket and is never accepted through application configuration.
+type FeishuPaymentAlertsConfig struct {
+	Enabled bool `mapstructure:"enabled"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -1927,6 +1935,9 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	if err := viper.BindEnv("server.enable_server_timing", "ENABLE_SERVER_TIMING"); err != nil {
 		return nil, fmt.Errorf("bind ENABLE_SERVER_TIMING: %w", err)
 	}
+	if err := viper.BindEnv("feishu_payment_alerts.enabled", "SUB2API_FEISHU_ENABLED"); err != nil {
+		return nil, fmt.Errorf("bind SUB2API_FEISHU_ENABLED: %w", err)
+	}
 
 	// 默认值
 	setDefaults()
@@ -2820,6 +2831,7 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("unified_payment.webhook_public_keys_json", "")
 	viper.SetDefault("unified_payment.return_url", "")
 	viper.SetDefault("unified_payment.webhook_url", "")
+	viper.SetDefault("feishu_payment_alerts.enabled", false)
 
 	// sticky_escape_enabled is the one exception to the zero-value rule: its
 	// effective default is true, applied post-unmarshal via a viper.IsSet guard.

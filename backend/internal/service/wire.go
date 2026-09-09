@@ -962,6 +962,7 @@ var ProviderSet = wire.NewSet(
 	ProvideUnifiedPaymentGateway,
 	ProvidePaymentService,
 	ProvidePaymentOrderExpiryService,
+	ProvideFeishuPaymentIncidentService,
 	ProvideBalanceNotifyService,
 	ProvideChannelMonitorService,
 	ProvideChannelMonitorRunner,
@@ -1024,6 +1025,15 @@ func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, 
 func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache LeaderLockCache, db *sql.DB) *PaymentOrderExpiryService {
 	svc := NewPaymentOrderExpiryService(paymentSvc, 60*time.Second)
 	svc.SetLeaderLock(lockCache, db)
+	svc.Start()
+	return svc
+}
+
+// ProvideFeishuPaymentIncidentService starts the notification-only lifecycle
+// independently of payment expiry and fulfillment workers. Its own runtime
+// gate and leader lease preserve the existing owner/standby boundary.
+func ProvideFeishuPaymentIncidentService(store FeishuPaymentIncidentStore, cfg *config.Config, lockCache LeaderLockCache, db *sql.DB) *FeishuPaymentIncidentService {
+	svc := NewFeishuPaymentIncidentService(store, NewFeishuPaymentIncidentSender(), cfg, lockCache, db)
 	svc.Start()
 	return svc
 }

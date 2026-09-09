@@ -19,6 +19,7 @@ PUBLIC_DIR=/run/sub2api-payment-vault
 ADMIN_DIR=/run/sub2api-payment-vault-admin
 SANDBOX_REQUEST_REF='vault://secret/data/sub2api/unified-payment/sandbox#request_private_key_base64'
 LIVE_REQUEST_REF='vault://secret/data/sub2api/unified-payment/live#request_private_key_base64'
+FEISHU_REF='vault://secret/data/ops/feishu/payment#webhook_url'
 
 profile_conflict() {
   printf '%s\n' 'SUB2API_PAYMENT_VAULT_CONTAINER_PROFILE_CONFLICT_REQUIRES_MAINTENANCE_MIGRATION' >&2
@@ -58,7 +59,7 @@ require_image() {
 
 agent_command_json() {
   local request_ref="$1"
-  printf '%s' '["/app/sub2api-vault-agent","serve","--public-socket","/run/sub2api-payment-vault/public.sock","--admin-socket","/run/sub2api-payment-vault-admin/admin.sock","--allowed-ref","'"$request_ref"'"]'
+  printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s"]' "$PUBLIC_DIR" "$ADMIN_DIR" "$request_ref"
 }
 
 container_profile() {
@@ -68,6 +69,8 @@ container_profile() {
     printf '%s\n' sandbox
   elif [ "$command" = "$(agent_command_json "$LIVE_REQUEST_REF")" ]; then
     printf '%s\n' live
+  elif [ "$command" = "$(agent_command_json "$FEISHU_REF")" ]; then
+    printf '%s\n' feishu
   else
     return 1
   fi
@@ -93,12 +96,12 @@ prepare_public_volume() {
     --entrypoint /bin/sh \
     "$image" \
     -ec '
-      socket_dir=/run/sub2api-payment-vault
+      socket_dir="$1"
       test -d "$socket_dir"
       test ! -L "$socket_dir"
       chown 1000:1000 "$socket_dir"
       chmod 0700 "$socket_dir"
-    '
+    ' -- "$PUBLIC_DIR"
 }
 
 verify_container() {
@@ -122,7 +125,7 @@ verify_container() {
   command="$(docker container inspect "$CONTAINER" --format '{{json .Config.Cmd}}')" || return 1
   [ "$command" = "$(agent_command_json "$REQUEST_REF")" ] || return 1
   health="$(docker container inspect "$CONTAINER" --format '{{json .Config.Healthcheck.Test}}')" || return 1
-  [ "$health" = '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket /run/sub2api-payment-vault/public.sock"]' ] || return 1
+  [ "$health" = '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket '"$PUBLIC_DIR"'/public.sock"]' ] || return 1
 }
 
 case "${SUB2API_PAYMENT_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS:-0}" in
@@ -150,6 +153,14 @@ case "$action" in prepare|ready) ;; *) die ;; esac
 case "$profile" in
   sandbox) REQUEST_REF="$SANDBOX_REQUEST_REF" ;;
   live) REQUEST_REF="$LIVE_REQUEST_REF" ;;
+  feishu)
+    # A separate networkless container/volume leaves live signing keys intact.
+    CONTAINER=sub2api-feishu-vault
+    VOLUME=sub2api_feishu_vault
+    PUBLIC_DIR=/run/sub2api-feishu-vault
+    ADMIN_DIR=/run/sub2api-feishu-vault-admin
+    REQUEST_REF="$FEISHU_REF"
+    ;;
   *) die ;;
 esac
 if ! sub2api_maintenance_lock_validate_configured_path "$LOCK_FILE"; then

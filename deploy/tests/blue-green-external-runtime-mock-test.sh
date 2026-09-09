@@ -452,6 +452,52 @@ run_helper() {
     /bin/bash "$SCRIPT"
 }
 
+# Feishu enablement attaches only its independent read-only socket volume.
+: >"$CALLS"
+SUB2API_FEISHU_ENABLED=true PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$(state_path sub2api-green)/env" 'SUB2API_FEISHU_ENABLED=true'
+assert_contains "$(state_path sub2api-green)/mounts" 'volume|sub2api_feishu_vault|/run/sub2api-feishu-vault|false'
+assert_not_contains "$(state_path sub2api-green)/env" 'SUB2API_FEISHU_WEBHOOK_URL='
+rm -rf "$(state_path sub2api-green)"
+printf 'SUB2API_FEISHU_ENABLED=true\n' >>"$(state_path sub2api)/env"
+PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$(state_path sub2api-green)/mounts" 'volume|sub2api_feishu_vault|/run/sub2api-feishu-vault|false'
+# A stale/precreated candidate missing the bot mount cannot be reused.
+sed -i.bak '/sub2api_feishu_vault/d' "$(state_path sub2api-green)/mounts"
+rm -f "$(state_path sub2api-green)/mounts.bak"
+: >"$CALLS"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then fail 'Feishu candidate without its socket mount was reused'; fi
+assert_not_contains "$CALLS" 'start sub2api-green'
+rm -rf "$(state_path sub2api-green)"
+SUB2API_FEISHU_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$(state_path sub2api-green)/env" 'SUB2API_FEISHU_ENABLED=false'
+assert_not_contains "$(state_path sub2api-green)/mounts" 'sub2api_feishu_vault'
+rm -rf "$(state_path sub2api-green)"
+printf 'SUB2API_FEISHU_ENABLED=false\n' >>"$(state_path sub2api)/env"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then fail 'duplicate inherited Feishu switches accepted'; fi
+assert_contains "$OUTPUT" 'duplicate Feishu enable switch'
+cp "$old_env" "$(state_path sub2api)/env"
+
+# Single-node local releases must validate bot settings before reusing a
+# running target too; external/dual-node checks do not cover this path.
+for feishu_fault in missing_mount writable_mount wrong_flag duplicate_flag; do
+  SUB2API_FEISHU_ENABLED=true MODE=local DUAL_NODE_RUNTIME_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+  case "$feishu_fault" in
+    missing_mount) sed -i.bak '/sub2api_feishu_vault/d' "$(state_path sub2api-green)/mounts" ;;
+    writable_mount) sed -i.bak 's@sub2api-feishu-vault|false@sub2api-feishu-vault|true@' "$(state_path sub2api-green)/mounts" ;;
+    wrong_flag) sed -i.bak 's/SUB2API_FEISHU_ENABLED=true/SUB2API_FEISHU_ENABLED=false/' "$(state_path sub2api-green)/env" ;;
+    duplicate_flag) printf 'SUB2API_FEISHU_ENABLED=true\n' >>"$(state_path sub2api-green)/env" ;;
+  esac
+  sed -i.bak 's/^running=.*/running=true/' "$(state_path sub2api-green)/meta"
+  : >"$CALLS"
+  if SUB2API_FEISHU_ENABLED=true MODE=local DUAL_NODE_RUNTIME_ENABLED=false run_helper >"$OUTPUT" 2>&1; then
+    fail "local running target with $feishu_fault was accepted"
+  fi
+  assert_not_contains "$OUTPUT" 'reusing it'
+  assert_not_contains "$CALLS" 'start sub2api-green'
+  rm -rf "$(state_path sub2api-green)"
+done
+
 # A retained listener transaction owns the complete Caddyfile until it is
 # explicitly committed or rolled back. A release must fail before Docker or
 # either application generation is touched.

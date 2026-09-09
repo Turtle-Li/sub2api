@@ -87,6 +87,11 @@ CONTAINER_TRAFFIC_STATE_PATH="/run/sub2api-runtime/traffic-state"
 CONTAINER_BACKGROUND_STATE_PATH="/run/sub2api-runtime/background-state"
 CONTAINER_HEALTH_TOKEN_PATH="/run/sub2api-runtime/health-token"
 UNIFIED_PAYMENT_VAULT_VOLUME="${SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME:-}"
+FEISHU_MODE="${SUB2API_FEISHU_ENABLED:-preserve}"
+FEISHU_ENABLED=false
+FEISHU_VAULT_VOLUME=sub2api_feishu_vault
+CONTAINER_FEISHU_VAULT_PATH=/run/sub2api-feishu-vault
+FEISHU_VAULT_MOUNT_ARGS=()
 # Existing approved enrollment is Alipay sandbox. A method expansion must be
 # explicit in the public runtime configuration, never an application default.
 UNIFIED_PAYMENT_PAYMENT_METHODS="${UNIFIED_PAYMENT_PAYMENT_METHODS:-alipay}"
@@ -553,12 +558,71 @@ resolve_fixed_egress_compatibility_expectation() {
   esac
 }
 
-container_matches_fixed_egress_compatibility_container() {
-  local container="$1" inspect_env
+container_matches_local_compatibility_container() {
+  local container="$1" inspect_env inspect_mounts bot_mount_count
   new_temp_file
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
-  container_matches_fixed_egress_compatibility_env "$inspect_env"
+  container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
+  container_matches_feishu_env "$inspect_env" || return 1
+  new_temp_file
+  inspect_mounts="$TEMP_FILE"
+  docker inspect "$container" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}' >"$inspect_mounts"
+  bot_mount_count="$(awk -F '|' -v target="$CONTAINER_FEISHU_VAULT_PATH" '$3 == target { n++ } END { print n+0 }' "$inspect_mounts")"
+  if [ "$FEISHU_ENABLED" = true ]; then
+    [ "$bot_mount_count" -eq 1 ] || return 1
+    grep -qxF "volume|$FEISHU_VAULT_VOLUME|$CONTAINER_FEISHU_VAULT_PATH|false" "$inspect_mounts" || return 1
+  else
+    [ "$bot_mount_count" -eq 0 ] || return 1
+  fi
+}
+
+# Notification configuration contains only the public enable switch. Secret
+# webhook material is available through a separate read-only socket mount.
+resolve_feishu_expectation() {
+  local source_container inspect_env count value
+  case "$FEISHU_MODE" in true|false|preserve) ;; *) die "SUB2API_FEISHU_ENABLED must be true or false" ;; esac
+  if [ "$FEISHU_MODE" = preserve ]; then
+    source_container="${FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-$OLD_CONTAINER}"
+    case "$source_container" in "$OLD_CONTAINER"|"$NEW_CONTAINER") ;; *) die "invalid Feishu preserve source" ;; esac
+    if ! container_exists "$source_container"; then
+      # Runtime recovery may intentionally retain only the validated running
+      # target. Preserve that target's setting; never infer enabled from absence.
+      [ "$ALLOW_ISOLATED_OLD_CONTAINER" = true ] && [ -z "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER" ] \
+        || die "Feishu preserve source is missing"
+      source_container="$NEW_CONTAINER"
+      container_exists "$source_container" || die "Feishu recovery target is missing"
+    fi
+    new_temp_file
+    inspect_env="$TEMP_FILE"
+    docker inspect "$source_container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
+    count="$(awk '/^SUB2API_FEISHU_ENABLED=/ { n++ } END { print n+0 }' "$inspect_env")"
+    case "$count" in
+      0) FEISHU_ENABLED=false ;;
+      1) FEISHU_ENABLED="$(sed -n 's/^SUB2API_FEISHU_ENABLED=//p' "$inspect_env")" ;;
+      *) die "duplicate Feishu enable switch in existing runtime" ;;
+    esac
+  else
+    FEISHU_ENABLED="$FEISHU_MODE"
+  fi
+  require_bool SUB2API_FEISHU_ENABLED "$FEISHU_ENABLED"
+  if [ "$FEISHU_ENABLED" = true ]; then
+    FEISHU_VAULT_MOUNT_ARGS=(--mount "type=volume,source=$FEISHU_VAULT_VOLUME,target=$CONTAINER_FEISHU_VAULT_PATH,readonly")
+  fi
+}
+
+container_matches_feishu_env() {
+  local inspect_env="$1" count actual
+  ! grep -q '^SUB2API_FEISHU_WEBHOOK_URL=' "$inspect_env" || return 1
+  count="$(awk '/^SUB2API_FEISHU_ENABLED=/ { n++ } END { print n+0 }' "$inspect_env")"
+  case "$count" in
+    0) [ "$FEISHU_ENABLED" = false ] ;;
+    1)
+      actual="$(sed -n 's/^SUB2API_FEISHU_ENABLED=//p' "$inspect_env")"
+      [ "$actual" = "$FEISHU_ENABLED" ]
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 make_runtime_env_file() {
@@ -577,6 +641,12 @@ make_runtime_env_file() {
   while IFS= read -r line || [ -n "$line" ]; do
     key="${line%%=*}"
 	case "$key" in
+      SUB2API_FEISHU_ENABLED)
+        continue
+        ;;
+      SUB2API_FEISHU_WEBHOOK_URL)
+        die "raw Feishu webhook environment is forbidden; use the bot credential agent"
+        ;;
 	  UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64)
 		continue
 		;;
@@ -609,6 +679,7 @@ make_runtime_env_file() {
 	printf 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=%s\n' "$FIXED_EGRESS_COMPATIBILITY_MODE" >>"$output_file"
   fi
   write_unified_payment_overrides "$output_file"
+  printf 'SUB2API_FEISHU_ENABLED=%s\n' "$FEISHU_ENABLED" >>"$output_file"
   RUNTIME_ENV_FILE="$output_file"
 }
 
@@ -638,7 +709,11 @@ container_matches_external_runtime() {
   expected_mount_count=3
   [ "$DUAL_NODE_RUNTIME_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 3))
   [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$FEISHU_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$mount_count" -eq "$expected_mount_count" ] || return 1
+  if [ "$FEISHU_ENABLED" = true ]; then
+    grep -qxF "volume|$FEISHU_VAULT_VOLUME|$CONTAINER_FEISHU_VAULT_PATH|false" "$inspect_mounts" || return 1
+  fi
   grep -qxF "volume|$DATA_VOLUME|/app/data|true" "$inspect_mounts" || return 1
   grep -qxF "bind|$EXTERNAL_CA_FILE|$CONTAINER_PG_CA_PATH|false" "$inspect_mounts" || return 1
   grep -qxF "bind|$EXTERNAL_CA_FILE|$CONTAINER_REDIS_CA_PATH|false" "$inspect_mounts" || return 1
@@ -655,6 +730,7 @@ container_matches_external_runtime() {
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
+  container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   for key in "${EXTERNAL_OVERRIDE_KEYS[@]}"; do
     if [ "$key" = PGSSLROOTCERT ]; then
@@ -714,7 +790,11 @@ container_matches_local_runtime() {
   mount_count="$(awk 'NF { count += 1 } END { print count + 0 }' "$inspect_mounts")"
   expected_mount_count=4
   [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$FEISHU_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$mount_count" -eq "$expected_mount_count" ] || return 1
+  if [ "$FEISHU_ENABLED" = true ]; then
+    grep -qxF "volume|$FEISHU_VAULT_VOLUME|$CONTAINER_FEISHU_VAULT_PATH|false" "$inspect_mounts" || return 1
+  fi
   grep -qxF "volume|$DATA_VOLUME|/app/data|true" "$inspect_mounts" || return 1
   grep -qxF "bind|$TRAFFIC_STATE_FILE|$CONTAINER_TRAFFIC_STATE_PATH|false" "$inspect_mounts" || return 1
   grep -qxF "bind|$BACKGROUND_STATE_FILE|$CONTAINER_BACKGROUND_STATE_PATH|false" "$inspect_mounts" || return 1
@@ -727,6 +807,7 @@ container_matches_local_runtime() {
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
+  container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   for key in "${RUNTIME_OVERRIDE_KEYS[@]}"; do
 	case "$key" in
@@ -754,6 +835,7 @@ create_external_target() {
       --env-file "$env_file" \
       --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
       "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+    "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
       --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_PG_CA_PATH,readonly" \
 	  --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_REDIS_CA_PATH,readonly" \
 	  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
@@ -768,6 +850,7 @@ create_external_target() {
     --env-file "$env_file" \
     --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
     "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+    "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
     --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_PG_CA_PATH,readonly" \
 	--mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_REDIS_CA_PATH,readonly" \
     --restart "$restart_policy" \
@@ -786,6 +869,7 @@ create_local_target() {
       --env-file "$env_file" \
 	  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 	  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+    "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
 	  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
 	  --mount "type=bind,source=$BACKGROUND_STATE_FILE,target=$CONTAINER_BACKGROUND_STATE_PATH,readonly" \
 	  --mount "type=bind,source=$HEALTH_TOKEN_FILE,target=$CONTAINER_HEALTH_TOKEN_PATH,readonly" \
@@ -798,6 +882,7 @@ create_local_target() {
     --env-file "$env_file" \
 	--mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 	"${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+    "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
     --restart unless-stopped \
     "$NEW_IMAGE" >/dev/null
   fi
@@ -1271,6 +1356,10 @@ else
   container_running "$OLD_CONTAINER" || die "old container $OLD_CONTAINER is not running; refusing to release"
 fi
 resolve_fixed_egress_compatibility_expectation
+resolve_feishu_expectation
+if [ "$FEISHU_ENABLED" = true ]; then
+  docker volume inspect "$FEISHU_VAULT_VOLUME" >/dev/null 2>&1 || die "Feishu socket volume is missing"
+fi
 docker network inspect "$NETWORK" >/dev/null 2>&1 || die "Docker network $NETWORK does not exist"
 docker volume inspect "$DATA_VOLUME" >/dev/null 2>&1 || die "Docker volume $DATA_VOLUME does not exist"
 if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
@@ -1337,8 +1426,8 @@ else
 		container_matches_local_runtime "$NEW_CONTAINER" true \
 		  || die "running local target does not match the requested image or dual-node runtime contract"
 	  else
-		container_matches_fixed_egress_compatibility_container "$NEW_CONTAINER" \
-		  || die "running local target does not match the requested fixed-egress compatibility mode"
+		container_matches_local_compatibility_container "$NEW_CONTAINER" \
+		  || die "running local target does not match the requested fixed-egress or Feishu configuration"
 	  fi
       log "$NEW_CONTAINER already exists with status $status; reusing it"
     else
@@ -1365,6 +1454,7 @@ else
 		docker create --name "$NEW_CONTAINER" --network "$NETWORK" --env-file "$env_file" \
 		  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+    "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
 		  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
 		  --mount "type=bind,source=$BACKGROUND_STATE_FILE,target=$CONTAINER_BACKGROUND_STATE_PATH,readonly" \
 		  --mount "type=bind,source=$HEALTH_TOKEN_FILE,target=$CONTAINER_HEALTH_TOKEN_PATH,readonly" \
@@ -1376,9 +1466,10 @@ else
 		docker create --name "$NEW_CONTAINER" --network "$NETWORK" --env-file "$env_file" \
 		  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+    "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
 		  --restart no "$NEW_IMAGE" >/dev/null
-		container_matches_fixed_egress_compatibility_container "$NEW_CONTAINER" \
-		  || die "local precreated target failed fixed-egress compatibility verification"
+		container_matches_local_compatibility_container "$NEW_CONTAINER" \
+		  || die "local precreated target failed fixed-egress or Feishu configuration verification"
       fi
     else
       log "starting $NEW_CONTAINER from $NEW_IMAGE"
@@ -1387,8 +1478,8 @@ else
 		container_matches_local_runtime "$NEW_CONTAINER" true \
 		  || die "new local target failed dual-node runtime verification"
 	  else
-		container_matches_fixed_egress_compatibility_container "$NEW_CONTAINER" \
-		  || die "new local target failed fixed-egress compatibility verification"
+		container_matches_local_compatibility_container "$NEW_CONTAINER" \
+		  || die "new local target failed fixed-egress or Feishu configuration verification"
 	  fi
     fi
   else

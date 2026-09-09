@@ -115,7 +115,9 @@ RUN --mount=type=cache,id=sub2api-go-mod,target=/go/pkg/mod,sharing=locked \
     -p "${BUILD_GO_PARALLELISM}" \
     -trimpath \
     -o /app/sub2api-vault-agent \
-    ./cmd/sub2api-vault-agent
+    ./cmd/sub2api-vault-agent && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOMAXPROCS="${BUILD_GOMAXPROCS}" GOMEMLIMIT="${BUILD_GO_MEMORY_LIMIT}" nice -n 10 go build \
+    -p "${BUILD_GO_PARALLELISM}" -trimpath -o /app/sub2api-feishu-notify ./cmd/sub2api-feishu-notify
 
 # -----------------------------------------------------------------------------
 # Stage 3: PostgreSQL Client (version-matched with docker-compose)
@@ -161,6 +163,7 @@ WORKDIR /app
 # Copy binary/resources with ownership to avoid extra full-layer chown copy
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api-vault-agent /app/sub2api-vault-agent
+COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api-feishu-notify /app/sub2api-feishu-notify
 COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources
 
 # Create data directory
