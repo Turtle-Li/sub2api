@@ -922,3 +922,9 @@ gateway:
 **Cipher Suites (TLS 1.2):** `49195`, `49196`, `49199`, `49200` (ECDHE variants)
 
 **Curves:** `29` (X25519), `23` (P-256), `24` (P-384), `25` (P-521)
+
+### 2026-09-10 paid fulfillment recovery release plan
+
+Owner requested robust automatic retry after payment fulfillment failures. Release source branch codex/payment-fulfillment-reliability is isolated from fork/main7f8b274b7d5f4b67d86b701061a30f256ddffff0. Only bounded durable-order recovery, two DB-error ACK fixes and timestamp lease ownership validation change; no database migration or payment configuration change. Final independent QA/review and exact commit/image evidence will be appended before reporting completion.
+
+2026-09-09 18:02 UTC preflight: sub2api-candidate reports traffic=accepting active_container=sub2api-blue background=active; sub2api-new reports traffic=accepting active_container=sub2api-blue background=standby. Installed --check confirms fork/main7f8b274b baseline. Preserve those roles and memory agents. Build the reviewed fork/main commit using workflow_dispatch build_only=true, verify artifact metadata/digest, then use each installed lock-owning receiver with the same archive; Azure activate, old origin preserve-standby. Do not use default workflow deployment that could activate the old origin. Existing Caddy/health/real-request/drain gates remain in force. No public purchase enablement, DNS changes, new real charges/refunds or state injection. Rollback uses retained prior7f8b274b image through canonical helper, preserving current background ownership and all financial data.

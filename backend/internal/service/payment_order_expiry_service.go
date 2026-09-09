@@ -13,11 +13,12 @@ import (
 const expiryCheckTimeout = 30 * time.Second
 
 const (
-	// paymentOrderExpiryLeaderLockKey gates the periodic reconcile + expiry sweep so
-	// that only one instance issues the upstream payment-provider calls per cycle.
+	// paymentOrderExpiryLeaderLockKey gates the periodic reconcile, expiry, and
+	// fulfillment-recovery sweep so only one instance runs each cycle.
 	paymentOrderExpiryLeaderLockKey = "payment:order:expiry:leader"
-	// paymentOrderExpiryLeaderLockTTL must exceed the combined reconcile + expiry
-	// timeouts (2 * expiryCheckTimeout) so the lock never expires mid-run.
+	// paymentOrderExpiryLeaderLockTTL must exceed the combined reconcile, expiry,
+	// and fulfillment-recovery timeouts (3 * expiryCheckTimeout) so the lock
+	// never expires mid-run.
 	paymentOrderExpiryLeaderLockTTL = 3 * time.Minute
 )
 
@@ -87,9 +88,9 @@ func (s *PaymentOrderExpiryService) Stop() {
 }
 
 func (s *PaymentOrderExpiryService) runOnce() {
-	// Multi-instance guard: only the leader reconciles/expires orders per cycle,
-	// avoiding N× upstream payment-provider API calls and update races.
-	jobCtx, jobCancel := context.WithTimeout(context.Background(), 2*expiryCheckTimeout+10*time.Second)
+	// Multi-instance guard: only the leader reconciles, expires, and recovers
+	// orders per cycle, avoiding N× provider calls and fulfillment races.
+	jobCtx, jobCancel := context.WithTimeout(context.Background(), 3*expiryCheckTimeout+10*time.Second)
 	defer jobCancel()
 	leaseCtx, release, ok := tryAcquireSingletonLeaderLock(jobCtx, s.lockCache, s.db, paymentOrderExpiryLeaderLockKey, s.instanceID, paymentOrderExpiryLeaderLockTTL)
 	if !ok {
@@ -107,13 +108,20 @@ func (s *PaymentOrderExpiryService) runOnce() {
 	}
 
 	expireCtx, cancel := context.WithTimeout(leaseCtx, expiryCheckTimeout)
-	defer cancel()
 	expired, err := s.paymentSvc.ExpireTimedOutOrders(expireCtx)
+	cancel()
 	if err != nil {
 		slog.Error("[PaymentOrderExpiry] failed to expire orders", "error", err)
-		return
-	}
-	if expired > 0 {
+	} else if expired > 0 {
 		slog.Info("[PaymentOrderExpiry] expired timed-out orders", "count", expired)
+	}
+
+	recoveryCtx, cancel := context.WithTimeout(leaseCtx, expiryCheckTimeout)
+	recoveredFulfillments, err := s.paymentSvc.RecoverPendingPaymentOrderFulfillments(recoveryCtx)
+	cancel()
+	if err != nil {
+		slog.Warn("[PaymentOrderExpiry] failed to recover paid order fulfillments", "error", err)
+	} else if recoveredFulfillments > 0 {
+		slog.Info("[PaymentOrderExpiry] recovered paid order fulfillments", "count", recoveredFulfillments)
 	}
 }

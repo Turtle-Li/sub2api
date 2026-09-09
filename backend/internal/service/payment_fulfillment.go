@@ -34,6 +34,12 @@ type paymentFulfillmentLease struct {
 	version time.Time
 }
 
+// paymentFulfillmentLeaseAcquirer selects the durable order snapshot that
+// owns a fulfillment lease. Normal callback/admin paths keep the historical
+// CAS acquirer; recovery supplies an acquirer that couples the refund fence
+// read and claim in one short transaction.
+type paymentFulfillmentLeaseAcquirer func(context.Context, *dbent.PaymentOrder) (*dbent.PaymentOrder, *paymentFulfillmentLease, error)
+
 // --- Payment Notification & Fulfillment ---
 
 func (s *PaymentService) HandlePaymentNotification(ctx context.Context, n *payment.PaymentNotification, pk string) error {
@@ -78,8 +84,10 @@ func parseLegacyPaymentOrderID(orderID string, lookupErr error) (int64, bool) {
 func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo string, paid float64, pk string, metadata map[string]string) error {
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
-		slog.Error("order not found", "orderID", oid)
-		return nil
+		if dbent.IsNotFound(err) {
+			return fmt.Errorf("%w: id=%d", ErrOrderNotFound, oid)
+		}
+		return fmt.Errorf("lookup order %d for payment confirmation: %w", oid, err)
 	}
 	instanceProviderKey := ""
 	if inst, instErr := s.getOrderProviderInstance(ctx, o); instErr == nil && inst != nil {
@@ -196,7 +204,10 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentOrder) error {
 	cur, err := s.entClient.PaymentOrder.Get(ctx, o.ID)
 	if err != nil {
-		return nil
+		if dbent.IsNotFound(err) {
+			return fmt.Errorf("%w: id=%d", ErrOrderNotFound, o.ID)
+		}
+		return fmt.Errorf("reload payment order %d after payment status race: %w", o.ID, err)
 	}
 	switch cur.Status {
 	case OrderStatusCompleted, OrderStatusRefunded:
@@ -221,17 +232,29 @@ func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentO
 }
 
 func (s *PaymentService) executeFulfillment(ctx context.Context, oid int64) error {
+	return s.executeFulfillmentWithLeaseAcquirer(ctx, oid, s.acquireNormalPaymentFulfillmentLease)
+}
+
+func (s *PaymentService) executeRecoveryFulfillment(ctx context.Context, oid int64) error {
+	return s.executeFulfillmentWithLeaseAcquirer(ctx, oid, s.acquireRecoveryPaymentFulfillmentLease)
+}
+
+func (s *PaymentService) executeFulfillmentWithLeaseAcquirer(ctx context.Context, oid int64, acquire paymentFulfillmentLeaseAcquirer) error {
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
 	}
 	if o.OrderType == payment.OrderTypeSubscription {
-		return s.ExecuteSubscriptionFulfillment(ctx, oid)
+		return s.executeSubscriptionFulfillmentWithLeaseAcquirer(ctx, oid, acquire)
 	}
-	return s.ExecuteBalanceFulfillment(ctx, oid)
+	return s.executeBalanceFulfillmentWithLeaseAcquirer(ctx, oid, acquire)
 }
 
 func (s *PaymentService) ExecuteBalanceFulfillment(ctx context.Context, oid int64) error {
+	return s.executeBalanceFulfillmentWithLeaseAcquirer(ctx, oid, s.acquireNormalPaymentFulfillmentLease)
+}
+
+func (s *PaymentService) executeBalanceFulfillmentWithLeaseAcquirer(ctx context.Context, oid int64, acquire paymentFulfillmentLeaseAcquirer) error {
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return infraerrors.NotFound("NOT_FOUND", "order not found")
@@ -245,28 +268,43 @@ func (s *PaymentService) ExecuteBalanceFulfillment(ctx context.Context, oid int6
 	if o.Status != OrderStatusPaid && o.Status != OrderStatusFailed && o.Status != OrderStatusRecharging {
 		return infraerrors.BadRequest("INVALID_STATUS", "order cannot fulfill in status "+o.Status)
 	}
-	lease, err := s.acquirePaymentFulfillmentLease(ctx, o)
+	claimedOrder, lease, err := acquire(ctx, o)
 	if err != nil {
 		return err
 	}
 	if lease == nil {
 		return nil
 	}
-	if err := s.doBalance(ctx, o, lease); err != nil {
+	if claimedOrder == nil {
+		return errors.New("acquired fulfillment lease without payment order")
+	}
+	if err := s.doBalance(ctx, claimedOrder, lease); err != nil {
 		s.markFailed(ctx, oid, lease, err)
 		return err
 	}
 	return nil
 }
 
+func (s *PaymentService) acquireNormalPaymentFulfillmentLease(ctx context.Context, o *dbent.PaymentOrder) (*dbent.PaymentOrder, *paymentFulfillmentLease, error) {
+	lease, err := s.acquirePaymentFulfillmentLease(ctx, o)
+	return o, lease, err
+}
+
 func (s *PaymentService) acquirePaymentFulfillmentLease(ctx context.Context, o *dbent.PaymentOrder) (*paymentFulfillmentLease, error) {
+	return acquirePaymentFulfillmentLeaseWithClient(ctx, s.entClient, o)
+}
+
+func acquirePaymentFulfillmentLeaseWithClient(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder) (*paymentFulfillmentLease, error) {
 	if o == nil {
 		return nil, infraerrors.BadRequest("INVALID_STATUS", "nil payment order")
+	}
+	if client == nil {
+		return nil, errors.New("payment fulfillment lease requires an order store")
 	}
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	staleBefore := now.Add(-paymentFulfillmentLeaseDuration)
-	updated, err := s.entClient.PaymentOrder.Update().
+	updated, err := client.PaymentOrder.Update().
 		Where(
 			paymentorder.IDEQ(o.ID),
 			paymentorder.Or(
@@ -286,7 +324,7 @@ func (s *PaymentService) acquirePaymentFulfillmentLease(ctx context.Context, o *
 		return nil, fmt.Errorf("acquire fulfillment lease: %w", err)
 	}
 	if updated == 0 {
-		current, getErr := s.entClient.PaymentOrder.Get(ctx, o.ID)
+		current, getErr := client.PaymentOrder.Get(ctx, o.ID)
 		if getErr != nil {
 			return nil, fmt.Errorf("reload fulfillment lease: %w", getErr)
 		}
@@ -300,14 +338,14 @@ func (s *PaymentService) acquirePaymentFulfillmentLease(ctx context.Context, o *
 	}
 
 	// Reload the persisted timestamp instead of trusting application clock precision.
-	claimed, err := s.entClient.PaymentOrder.Get(ctx, o.ID)
+	claimed, err := client.PaymentOrder.Get(ctx, o.ID)
 	if err != nil {
 		return nil, fmt.Errorf("reload acquired fulfillment lease: %w", err)
 	}
-	if claimed.Status != OrderStatusRecharging {
+	if claimed.Status != OrderStatusRecharging || !claimed.UpdatedAt.Equal(now) {
 		return nil, infraerrors.Conflict("CONFLICT", "fulfillment lease was lost")
 	}
-	return &paymentFulfillmentLease{version: claimed.UpdatedAt}, nil
+	return &paymentFulfillmentLease{version: now}, nil
 }
 
 // redeemAction represents the idempotency decision for balance fulfillment.
@@ -531,6 +569,10 @@ func (s *PaymentService) sendSubscriptionPurchaseSuccessNotification(ctx context
 }
 
 func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid int64) error {
+	return s.executeSubscriptionFulfillmentWithLeaseAcquirer(ctx, oid, s.acquireNormalPaymentFulfillmentLease)
+}
+
+func (s *PaymentService) executeSubscriptionFulfillmentWithLeaseAcquirer(ctx context.Context, oid int64, acquire paymentFulfillmentLeaseAcquirer) error {
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return infraerrors.NotFound("NOT_FOUND", "order not found")
@@ -547,14 +589,17 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 	if o.SubscriptionGroupID == nil || o.SubscriptionDays == nil {
 		return infraerrors.BadRequest("INVALID_STATUS", "missing subscription info")
 	}
-	lease, err := s.acquirePaymentFulfillmentLease(ctx, o)
+	claimedOrder, lease, err := acquire(ctx, o)
 	if err != nil {
 		return err
 	}
 	if lease == nil {
 		return nil
 	}
-	if err := s.doSub(ctx, o, lease); err != nil {
+	if claimedOrder == nil {
+		return errors.New("acquired fulfillment lease without payment order")
+	}
+	if err := s.doSub(ctx, claimedOrder, lease); err != nil {
 		s.markFailed(ctx, oid, lease, err)
 		return err
 	}
