@@ -103,7 +103,7 @@ func TestOpenAIResponses_ImageToolRoutingPersistsAcrossChannelMappingAndRetry(t 
 			ModelMapping: map[string]map[string]string{service.PlatformOpenAI: {"gpt-5.5": "gpt-5.5-upstream"}},
 		}},
 		groupPlatforms: map[int64]string{groupID: service.PlatformOpenAI},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	upstream := &openAIResponsesImageRoutingHTTPUpstream{}
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billingCacheSvc.Stop)

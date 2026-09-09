@@ -14,6 +14,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -40,9 +41,19 @@ const (
 	openAIImageMaxDownloadBytes            = 20 << 20 // 20MB per image download
 	openAIImageMaxUploadPartSize           = 20 << 20 // 20MB per multipart upload part
 	openAIImagesMaxN                       = 10       // OpenAI image-generation APIs accept up to ten outputs per request.
-	openAIImagesResponsesMainModel         = "gpt-5.4-mini"
+	openAIImagesResponsesMainModel         = "gpt-5.6-luna"
 	openAIImagesVerbatimPromptInstructions = "When invoking the image_generation tool, use the user's image prompt verbatim. Do not rewrite, expand, summarize, embellish, translate, normalize punctuation, or add or remove visual details or constraints. Preserve the original language, wording, capitalization, quotes, and punctuation exactly."
 )
+
+// openAIImagesResponsesMainModelValue selects the Responses driver independently
+// of the image_generation tool model. An environment override lets operators
+// recover from upstream model retirement without rebuilding the gateway.
+func openAIImagesResponsesMainModelValue() string {
+	if model := strings.TrimSpace(os.Getenv("SUB2API_IMAGES_MAIN_MODEL")); model != "" {
+		return model
+	}
+	return openAIImagesResponsesMainModel
+}
 
 type OpenAIImagesCapability string
 

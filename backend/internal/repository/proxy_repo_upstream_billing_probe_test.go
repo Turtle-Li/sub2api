@@ -40,11 +40,8 @@ func TestProxyUpdateInvalidatesBoundProbeSnapshotsAndEnqueuesOutboxAtomically(t 
 		WithArgs(int64(9), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "proxies" SET "backup_proxy_id" = NULL WHERE "backup_proxy_id" = \$1`).
-		WithArgs(int64(9)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	expectProxyUpdateReload(mock, 9, "new.example", "user", "pass")
-	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*type = 'apikey'.*extra \? 'upstream_billing_probe'.*platform IN \('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek'\).*extra \? 'ollama_cloud_usage_snapshot'.*RETURNING id`).
+	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*type = 'apikey'.*extra \? 'upstream_billing_probe'.*platform IN \('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek', 'minimax'\).*extra \? 'ollama_cloud_usage_snapshot'.*RETURNING id`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)).AddRow(int64(18)))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
@@ -86,9 +83,8 @@ func TestProxyUpdateRollsBackBeforeCacheMutationWhenFixedEgressClassificationFai
 		WithArgs(int64(9), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "proxies" SET "backup_proxy_id" = NULL WHERE "backup_proxy_id" = \$1`).
-		WithArgs(int64(9)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	// Directed backup references belong to their primary rows. Updating this
+	// proxy must preserve any incoming references, so no reverse-edge clear runs.
 	expectProxyUpdateReload(mock, 9, "new.example", "", "")
 	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*RETURNING id`).
 		WithArgs(int64(9)).
@@ -130,11 +126,8 @@ func TestProxyUpdateRollsBackWhenProbeInvalidationOutboxFails(t *testing.T) {
 		WithArgs(int64(9), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "proxies" SET "backup_proxy_id" = NULL WHERE "backup_proxy_id" = \$1`).
-		WithArgs(int64(9)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	expectProxyUpdateReload(mock, 9, "new.example", "", "")
-	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*type = 'apikey'.*extra \? 'upstream_billing_probe'.*platform IN \('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek'\).*extra \? 'ollama_cloud_usage_snapshot'.*RETURNING id`).
+	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*type = 'apikey'.*extra \? 'upstream_billing_probe'.*platform IN \('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek', 'minimax'\).*extra \? 'ollama_cloud_usage_snapshot'.*RETURNING id`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
@@ -160,9 +153,6 @@ func TestProxyUpdateSkipsProbeInvalidationForNonIdentityChange(t *testing.T) {
 	mock.ExpectBegin()
 	expectLockedProxyForUpdate(mock, 9, "same.example", "", "")
 	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "proxies" SET "backup_proxy_id" = NULL WHERE "backup_proxy_id" = \$1`).
-		WithArgs(int64(9)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	expectProxyUpdateReload(mock, 9, "same.example", "", "")
 	mock.ExpectCommit()
 
@@ -185,9 +175,7 @@ func TestProxyStatusChangeRefreshesEveryBoundAccount(t *testing.T) {
 	mock.ExpectBegin()
 	expectLockedProxyForUpdate(mock, 9, "same.example", "", "")
 	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "proxies" SET "backup_proxy_id" = NULL WHERE "backup_proxy_id" = \$1`).
-		WithArgs(int64(9)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	// A status update also keeps incoming directed backup references intact.
 	expectProxyUpdateReloadWithStatus(mock, 9, "same.example", "", "", service.StatusDisabled)
 	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*RETURNING id`).
 		WithArgs(int64(9)).

@@ -94,13 +94,14 @@ func newFixedEgressUpdateProxy(id int64) *Proxy {
 }
 
 func newFixedEgressUpdateInput() *UpdateProxyInput {
+	warnDays := 7
 	return &UpdateProxyInput{
 		Protocol:       "socks5h",
 		Host:           "100.80.10.114",
 		Port:           1080,
 		Status:         StatusActive,
 		FallbackMode:   FallbackModeNone,
-		ExpiryWarnDays: 7,
+		ExpiryWarnDays: &warnDays,
 	}
 }
 
@@ -206,7 +207,8 @@ func TestUpdateProxy_AllowsBoundParentDisplayAndMonitoringChanges(t *testing.T) 
 	svc := &adminServiceImpl{proxyRepo: repo}
 	input := newFixedEgressUpdateInput()
 	input.Name = "fixed-egress-renamed"
-	input.ExpiryWarnDays = 14
+	warnDays := 14
+	input.ExpiryWarnDays = &warnDays
 
 	updated, err := svc.UpdateProxy(context.Background(), proxyID, input)
 
