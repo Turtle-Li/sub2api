@@ -160,6 +160,10 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	"POST /api/v1/admin/prompt-audit/events/batch-delete":       {},
 	"POST /api/v1/admin/prompt-audit/events/delete-preview":     {},
 	"POST /api/v1/admin/prompt-audit/events/delete-by-filter":   {},
+	// Invoice request bodies contain tax and contact details. The dedicated
+	// payment audit stores only the invoice identifier, revision, and state.
+	"POST /api/v1/payment/orders/:id/invoice":      {},
+	"PUT /api/v1/admin/payment/orders/:id/invoice": {},
 }
 
 // NewAuditLogMiddleware 创建审计中间件。

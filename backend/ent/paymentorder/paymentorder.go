@@ -96,6 +96,8 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// EdgeUser holds the string denoting the user edge name in mutations.
 	EdgeUser = "user"
+	// EdgeInvoiceRequest holds the string denoting the invoice_request edge name in mutations.
+	EdgeInvoiceRequest = "invoice_request"
 	// Table holds the table name of the paymentorder in the database.
 	Table = "payment_orders"
 	// UserTable is the table that holds the user relation/edge.
@@ -105,6 +107,13 @@ const (
 	UserInverseTable = "users"
 	// UserColumn is the table column denoting the user relation/edge.
 	UserColumn = "user_id"
+	// InvoiceRequestTable is the table that holds the invoice_request relation/edge.
+	InvoiceRequestTable = "payment_invoice_requests"
+	// InvoiceRequestInverseTable is the table name for the PaymentInvoiceRequest entity.
+	// It exists in this package in order to avoid circular dependency with the "paymentinvoicerequest" package.
+	InvoiceRequestInverseTable = "payment_invoice_requests"
+	// InvoiceRequestColumn is the table column denoting the invoice_request relation/edge.
+	InvoiceRequestColumn = "order_id"
 )
 
 // Columns holds all SQL columns for paymentorder fields.
@@ -413,10 +422,24 @@ func ByUserField(field string, opts ...sql.OrderTermOption) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newUserStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByInvoiceRequestField orders the results by invoice_request field.
+func ByInvoiceRequestField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newInvoiceRequestStep(), sql.OrderByField(field, opts...))
+	}
+}
 func newUserStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(UserInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, UserTable, UserColumn),
+	)
+}
+func newInvoiceRequestStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(InvoiceRequestInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2O, false, InvoiceRequestTable, InvoiceRequestColumn),
 	)
 }

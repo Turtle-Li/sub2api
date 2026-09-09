@@ -11,7 +11,9 @@ import type {
   CheckoutInfoResponse,
   CreateOrderRequest,
   CreateOrderResult,
-  PaymentOrder
+  PaymentOrder,
+  PaymentInvoiceRecord,
+  CreateInvoiceRequest
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -50,13 +52,23 @@ export const paymentAPI = {
   },
 
   /** Get current user's orders */
-  getMyOrders(params?: { page?: number; page_size?: number; status?: string }) {
+  getMyOrders(params?: { page?: number; page_size?: number; status?: string; payment_status?: string; fulfillment_status?: string; invoice_status?: string }) {
     return apiClient.get<BasePaginationResponse<PaymentOrder>>('/payment/orders/my', { params })
   },
 
   /** Get a specific order by ID */
   getOrder(id: number) {
     return apiClient.get<PaymentOrder>(`/payment/orders/${id}`)
+  },
+
+  /** Create or correct an invoice request for an eligible order. */
+  createInvoiceRequest(id: number, data: CreateInvoiceRequest) {
+    return apiClient.post<PaymentInvoiceRecord>(`/payment/orders/${id}/invoice`, data)
+  },
+
+  /** Get the authenticated user's invoice request for an order. */
+  getInvoiceRequest(id: number) {
+    return apiClient.get<PaymentInvoiceRecord>(`/payment/orders/${id}/invoice`)
   },
 
   /** Cancel a pending order */

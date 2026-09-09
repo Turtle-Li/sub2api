@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,7 +15,9 @@ import (
 	"entgo.io/ent/dialect"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicerequest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
+	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
@@ -344,7 +347,16 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	if plan != nil {
 		subscriptionDays := psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit)
 		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID).SetSubscriptionDays(subscriptionDays)
-		b.SetProductSnapshot(buildPaymentProductSnapshot(plan, orderAmount, payAmount, subscriptionDays))
+		// The plan is already the immutable product selected for this order. A
+		// small current-group read records the promised limits alongside it, so a
+		// later group edit cannot rewrite what this purchase represented.
+		var snapshotGroup *Group
+		if s.groupRepo != nil {
+			if group, groupErr := s.groupRepo.GetByID(ctx, plan.GroupID); groupErr == nil {
+				snapshotGroup = group
+			}
+		}
+		b.SetProductSnapshot(buildPaymentProductSnapshotWithGroup(plan, orderAmount, payAmount, subscriptionDays, snapshotGroup))
 	} else if req.OrderType == payment.OrderTypeBalance {
 		// Resolve balance entitlements only from the server-side configured
 		// preset. The client-provided amount can select a preset, but can never
@@ -391,14 +403,24 @@ func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount
 }
 
 func buildPaymentProductSnapshot(plan *dbent.SubscriptionPlan, orderAmount, payAmount float64, subscriptionDays int) map[string]any {
+	return buildPaymentProductSnapshotWithGroup(plan, orderAmount, payAmount, subscriptionDays, nil)
+}
+
+// buildPaymentProductSnapshotWithGroup freezes the purchasable plan and the
+// limited group evidence consulted while the order was created. It does not
+// pull mutable entitlement state at read time.
+func buildPaymentProductSnapshotWithGroup(plan *dbent.SubscriptionPlan, orderAmount, payAmount float64, subscriptionDays int, group *Group) map[string]any {
 	if plan == nil {
 		return nil
 	}
-	return map[string]any{
+	snapshot := map[string]any{
 		"kind":              "subscription",
 		"plan_id":           plan.ID,
+		"group_id":          plan.GroupID,
 		"name":              plan.Name,
 		"product_name":      plan.ProductName,
+		"description":       plan.Description,
+		"features":          paymentSnapshotFeatures(plan.Features),
 		"currency":          plan.Currency,
 		"list_price":        plan.OriginalPrice,
 		"price":             plan.Price,
@@ -410,6 +432,34 @@ func buildPaymentProductSnapshot(plan *dbent.SubscriptionPlan, orderAmount, payA
 		"subscription_days": subscriptionDays,
 		"entitlements":      plan.Entitlements,
 	}
+	if group != nil {
+		snapshot["group_name"] = group.Name
+		if group.DailyLimitUSD != nil {
+			snapshot["daily_limit_usd"] = *group.DailyLimitUSD
+		}
+		if group.WeeklyLimitUSD != nil {
+			snapshot["weekly_limit_usd"] = *group.WeeklyLimitUSD
+		}
+		if group.MonthlyLimitUSD != nil {
+			snapshot["monthly_limit_usd"] = *group.MonthlyLimitUSD
+		}
+	}
+	return snapshot
+}
+
+func paymentSnapshotFeatures(raw string) []string {
+	var features []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &features); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(features))
+	for _, feature := range features {
+		feature = strings.TrimSpace(feature)
+		if feature != "" {
+			out = append(out, feature)
+		}
+	}
+	return out
 }
 
 func (s *PaymentService) allocateOutTradeNo(ctx context.Context, tx *dbent.Tx) (string, error) {
@@ -1060,7 +1110,7 @@ func normalizePaymentRedirectPath(path string) string {
 // --- Order Queries ---
 
 func (s *PaymentService) GetOrder(ctx context.Context, orderID, userID int64) (*dbent.PaymentOrder, error) {
-	o, err := s.entClient.PaymentOrder.Get(ctx, orderID)
+	o, err := s.entClient.PaymentOrder.Query().Where(paymentorder.IDEQ(orderID)).WithInvoiceRequest().Only(ctx)
 	if err != nil {
 		return nil, infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
@@ -1071,7 +1121,7 @@ func (s *PaymentService) GetOrder(ctx context.Context, orderID, userID int64) (*
 }
 
 func (s *PaymentService) GetOrderByID(ctx context.Context, orderID int64) (*dbent.PaymentOrder, error) {
-	o, err := s.entClient.PaymentOrder.Get(ctx, orderID)
+	o, err := s.entClient.PaymentOrder.Query().Where(paymentorder.IDEQ(orderID)).WithInvoiceRequest().Only(ctx)
 	if err != nil {
 		return nil, infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
@@ -1080,21 +1130,15 @@ func (s *PaymentService) GetOrderByID(ctx context.Context, orderID int64) (*dben
 
 func (s *PaymentService) GetUserOrders(ctx context.Context, userID int64, p OrderListParams) ([]*dbent.PaymentOrder, int, error) {
 	q := s.entClient.PaymentOrder.Query().Where(paymentorder.UserIDEQ(userID))
-	if p.Status != "" {
-		q = q.Where(paymentorder.StatusEQ(p.Status))
-	}
-	if p.OrderType != "" {
-		q = q.Where(paymentorder.OrderTypeEQ(p.OrderType))
-	}
-	if p.PaymentType != "" {
-		q = q.Where(paymentorder.PaymentTypeEQ(p.PaymentType))
+	if err := applyPaymentOrderListFilters(q, p, false); err != nil {
+		return nil, 0, err
 	}
 	total, err := q.Clone().Count(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count user orders: %w", err)
 	}
 	ps, pg := applyPagination(p.PageSize, p.Page)
-	orders, err := q.Order(dbent.Desc(paymentorder.FieldCreatedAt)).Limit(ps).Offset((pg - 1) * ps).All(ctx)
+	orders, err := q.WithInvoiceRequest().Order(dbent.Desc(paymentorder.FieldCreatedAt)).Limit(ps).Offset((pg - 1) * ps).All(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query user orders: %w", err)
 	}
@@ -1107,6 +1151,29 @@ func (s *PaymentService) AdminListOrders(ctx context.Context, userID int64, p Or
 	if userID > 0 {
 		q = q.Where(paymentorder.UserIDEQ(userID))
 	}
+	if err := applyPaymentOrderListFilters(q, p, true); err != nil {
+		return nil, 0, err
+	}
+	total, err := q.Clone().Count(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count admin orders: %w", err)
+	}
+	ps, pg := applyPagination(p.PageSize, p.Page)
+	orders, err := q.WithInvoiceRequest().Order(dbent.Desc(paymentorder.FieldCreatedAt)).Limit(ps).Offset((pg - 1) * ps).All(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query admin orders: %w", err)
+	}
+	return orders, total, nil
+}
+
+// applyPaymentOrderListFilters adds all predicates before Count and pagination.
+// User routes call it with adminOnly=false, so only the user-approved invoice
+// and fulfillment filters apply there; admin routes additionally get payment
+// and customer-email delivery filters.
+func applyPaymentOrderListFilters(q *dbent.PaymentOrderQuery, p OrderListParams, adminOnly bool) error {
+	if q == nil {
+		return errors.New("nil payment order query")
+	}
 	if p.Status != "" {
 		q = q.Where(paymentorder.StatusEQ(p.Status))
 	}
@@ -1116,21 +1183,90 @@ func (s *PaymentService) AdminListOrders(ctx context.Context, userID int64, p Or
 	if p.PaymentType != "" {
 		q = q.Where(paymentorder.PaymentTypeEQ(p.PaymentType))
 	}
-	if p.Keyword != "" {
+	invoiceStatus, err := normalizeInvoiceStatusFilter(p.InvoiceStatus)
+	if err != nil {
+		return err
+	}
+	switch invoiceStatus {
+	case InvoiceStatusFilterNone:
+		q.Where(paymentorder.Not(paymentorder.HasInvoiceRequest()))
+	case InvoiceStatusFilterAny:
+		q.Where(paymentorder.HasInvoiceRequest())
+	case InvoiceStatusPending, InvoiceStatusProcessing, InvoiceStatusIssued, InvoiceStatusRejected:
+		q.Where(paymentorder.HasInvoiceRequestWith(paymentinvoicerequest.StatusEQ(invoiceStatus)))
+	}
+	fulfillmentStatus, err := normalizeInvoiceFulfillmentStatusFilter(p.FulfillmentStatus)
+	if err != nil {
+		return err
+	}
+	if fulfillmentStatus != "" {
+		q.Where(paymentOrderFulfillmentStatusPredicate(fulfillmentStatus))
+	}
+	if adminOnly {
+		paymentStatus, err := normalizeInvoicePaymentStatusFilter(p.PaymentStatus)
+		if err != nil {
+			return err
+		}
+		switch paymentStatus {
+		case InvoicePaymentStatusPaid:
+			q.Where(paymentorder.PaidAtNotNil())
+		case InvoicePaymentStatusUnpaid:
+			q.Where(paymentorder.PaidAtIsNil())
+		}
+		emailStatus, err := normalizeInvoiceEmailStatusFilter(p.InvoiceEmailStatus)
+		if err != nil {
+			return err
+		}
+		if emailStatus != "" {
+			q.Where(paymentorder.HasInvoiceRequestWith(paymentinvoicerequest.EmailDeliveryStatusEQ(emailStatus)))
+		}
+	}
+	if adminOnly && strings.TrimSpace(p.Keyword) != "" {
+		keyword := strings.TrimSpace(p.Keyword)
+		if orderID, ok := exactPaymentOrderIDKeyword(keyword); ok {
+			q.Where(paymentorder.IDEQ(orderID))
+			return nil
+		}
 		q = q.Where(paymentorder.Or(
-			paymentorder.OutTradeNoContainsFold(p.Keyword),
-			paymentorder.UserEmailContainsFold(p.Keyword),
-			paymentorder.UserNameContainsFold(p.Keyword),
+			paymentorder.OutTradeNoContainsFold(keyword),
+			paymentorder.UserEmailContainsFold(keyword),
+			paymentorder.UserNameContainsFold(keyword),
 		))
 	}
-	total, err := q.Clone().Count(ctx)
-	if err != nil {
-		return nil, 0, fmt.Errorf("count admin orders: %w", err)
+	return nil
+}
+
+func paymentOrderFulfillmentStatusPredicate(status string) predicate.PaymentOrder {
+	switch status {
+	case InvoiceFulfillmentStatusFulfilled:
+		return paymentorder.CompletedAtNotNil()
+	case InvoiceFulfillmentStatusNotStarted:
+		return paymentorder.PaidAtIsNil()
+	case InvoiceFulfillmentStatusFailed:
+		return paymentorder.And(paymentorder.PaidAtNotNil(), paymentorder.CompletedAtIsNil(), paymentorder.StatusEQ(OrderStatusFailed))
+	case InvoiceFulfillmentStatusManualReview:
+		return paymentorder.And(paymentorder.PaidAtNotNil(), paymentorder.CompletedAtIsNil(), paymentOrderHasUnifiedRefundReview())
+	case InvoiceFulfillmentStatusPending:
+		return paymentorder.And(
+			paymentorder.PaidAtNotNil(),
+			paymentorder.CompletedAtIsNil(),
+			paymentorder.StatusNEQ(OrderStatusFailed),
+			paymentorder.Not(paymentOrderHasUnifiedRefundReview()),
+		)
+	default:
+		return nil
 	}
-	ps, pg := applyPagination(p.PageSize, p.Page)
-	orders, err := q.Order(dbent.Desc(paymentorder.FieldCreatedAt)).Limit(ps).Offset((pg - 1) * ps).All(ctx)
-	if err != nil {
-		return nil, 0, fmt.Errorf("query admin orders: %w", err)
+}
+
+func exactPaymentOrderIDKeyword(keyword string) (int64, bool) {
+	if !strings.HasPrefix(keyword, "#") || len(keyword) == 1 {
+		return 0, false
 	}
-	return orders, total, nil
+	for _, r := range keyword[1:] {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	id, err := strconv.ParseInt(keyword[1:], 10, 64)
+	return id, err == nil && id > 0
 }

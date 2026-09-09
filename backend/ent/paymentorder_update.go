@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicerequest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -731,6 +732,25 @@ func (_u *PaymentOrderUpdate) SetUser(v *User) *PaymentOrderUpdate {
 	return _u.SetUserID(v.ID)
 }
 
+// SetInvoiceRequestID sets the "invoice_request" edge to the PaymentInvoiceRequest entity by ID.
+func (_u *PaymentOrderUpdate) SetInvoiceRequestID(id int64) *PaymentOrderUpdate {
+	_u.mutation.SetInvoiceRequestID(id)
+	return _u
+}
+
+// SetNillableInvoiceRequestID sets the "invoice_request" edge to the PaymentInvoiceRequest entity by ID if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableInvoiceRequestID(id *int64) *PaymentOrderUpdate {
+	if id != nil {
+		_u = _u.SetInvoiceRequestID(*id)
+	}
+	return _u
+}
+
+// SetInvoiceRequest sets the "invoice_request" edge to the PaymentInvoiceRequest entity.
+func (_u *PaymentOrderUpdate) SetInvoiceRequest(v *PaymentInvoiceRequest) *PaymentOrderUpdate {
+	return _u.SetInvoiceRequestID(v.ID)
+}
+
 // Mutation returns the PaymentOrderMutation object of the builder.
 func (_u *PaymentOrderUpdate) Mutation() *PaymentOrderMutation {
 	return _u.mutation
@@ -739,6 +759,12 @@ func (_u *PaymentOrderUpdate) Mutation() *PaymentOrderMutation {
 // ClearUser clears the "user" edge to the User entity.
 func (_u *PaymentOrderUpdate) ClearUser() *PaymentOrderUpdate {
 	_u.mutation.ClearUser()
+	return _u
+}
+
+// ClearInvoiceRequest clears the "invoice_request" edge to the PaymentInvoiceRequest entity.
+func (_u *PaymentOrderUpdate) ClearInvoiceRequest() *PaymentOrderUpdate {
+	_u.mutation.ClearInvoiceRequest()
 	return _u
 }
 
@@ -1083,6 +1109,35 @@ func (_u *PaymentOrderUpdate) sqlSave(ctx context.Context) (_node int, err error
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.InvoiceRequestCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   paymentorder.InvoiceRequestTable,
+			Columns: []string{paymentorder.InvoiceRequestColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(paymentinvoicerequest.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.InvoiceRequestIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   paymentorder.InvoiceRequestTable,
+			Columns: []string{paymentorder.InvoiceRequestColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(paymentinvoicerequest.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1812,6 +1867,25 @@ func (_u *PaymentOrderUpdateOne) SetUser(v *User) *PaymentOrderUpdateOne {
 	return _u.SetUserID(v.ID)
 }
 
+// SetInvoiceRequestID sets the "invoice_request" edge to the PaymentInvoiceRequest entity by ID.
+func (_u *PaymentOrderUpdateOne) SetInvoiceRequestID(id int64) *PaymentOrderUpdateOne {
+	_u.mutation.SetInvoiceRequestID(id)
+	return _u
+}
+
+// SetNillableInvoiceRequestID sets the "invoice_request" edge to the PaymentInvoiceRequest entity by ID if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableInvoiceRequestID(id *int64) *PaymentOrderUpdateOne {
+	if id != nil {
+		_u = _u.SetInvoiceRequestID(*id)
+	}
+	return _u
+}
+
+// SetInvoiceRequest sets the "invoice_request" edge to the PaymentInvoiceRequest entity.
+func (_u *PaymentOrderUpdateOne) SetInvoiceRequest(v *PaymentInvoiceRequest) *PaymentOrderUpdateOne {
+	return _u.SetInvoiceRequestID(v.ID)
+}
+
 // Mutation returns the PaymentOrderMutation object of the builder.
 func (_u *PaymentOrderUpdateOne) Mutation() *PaymentOrderMutation {
 	return _u.mutation
@@ -1820,6 +1894,12 @@ func (_u *PaymentOrderUpdateOne) Mutation() *PaymentOrderMutation {
 // ClearUser clears the "user" edge to the User entity.
 func (_u *PaymentOrderUpdateOne) ClearUser() *PaymentOrderUpdateOne {
 	_u.mutation.ClearUser()
+	return _u
+}
+
+// ClearInvoiceRequest clears the "invoice_request" edge to the PaymentInvoiceRequest entity.
+func (_u *PaymentOrderUpdateOne) ClearInvoiceRequest() *PaymentOrderUpdateOne {
+	_u.mutation.ClearInvoiceRequest()
 	return _u
 }
 
@@ -2194,6 +2274,35 @@ func (_u *PaymentOrderUpdateOne) sqlSave(ctx context.Context) (_node *PaymentOrd
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.InvoiceRequestCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   paymentorder.InvoiceRequestTable,
+			Columns: []string{paymentorder.InvoiceRequestColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(paymentinvoicerequest.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.InvoiceRequestIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   paymentorder.InvoiceRequestTable,
+			Columns: []string{paymentorder.InvoiceRequestColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(paymentinvoicerequest.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

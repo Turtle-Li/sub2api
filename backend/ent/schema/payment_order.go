@@ -183,6 +183,10 @@ func (PaymentOrder) Edges() []ent.Edge {
 			Field("user_id").
 			Unique().
 			Required(),
+		// Invoice workflow state deliberately remains separate from the payment
+		// lifecycle. The unique edge is backed by the invoice request's order_id
+		// constraint, so one payment order can have at most one request record.
+		edge.To("invoice_request", PaymentInvoiceRequest.Type).Unique(),
 	}
 }
 

@@ -1124,6 +1124,116 @@ var (
 			},
 		},
 	}
+	// PaymentInvoiceDocumentsColumns holds the columns for the "payment_invoice_documents" table.
+	PaymentInvoiceDocumentsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "filename", Type: field.TypeString, Size: 255},
+		{Name: "content_type", Type: field.TypeString, Size: 64, Default: "application/pdf"},
+		{Name: "size_bytes", Type: field.TypeInt64},
+		{Name: "sha256", Type: field.TypeString, Size: 64},
+		{Name: "data", Type: field.TypeBytes, SchemaType: map[string]string{"postgres": "bytea"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "invoice_request_id", Type: field.TypeInt64, Unique: true},
+	}
+	// PaymentInvoiceDocumentsTable holds the schema information for the "payment_invoice_documents" table.
+	PaymentInvoiceDocumentsTable = &schema.Table{
+		Name:       "payment_invoice_documents",
+		Columns:    PaymentInvoiceDocumentsColumns,
+		PrimaryKey: []*schema.Column{PaymentInvoiceDocumentsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "payment_invoice_documents_payment_invoice_requests_document",
+				Columns:    []*schema.Column{PaymentInvoiceDocumentsColumns[8]},
+				RefColumns: []*schema.Column{PaymentInvoiceRequestsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+	}
+	// PaymentInvoiceRequestsColumns holds the columns for the "payment_invoice_requests" table.
+	PaymentInvoiceRequestsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "title_type", Type: field.TypeString, Size: 20},
+		{Name: "title", Type: field.TypeString, Size: 200},
+		{Name: "tax_identifier", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "recipient_email", Type: field.TypeString, Size: 255},
+		{Name: "recipient_phone", Type: field.TypeString, Nullable: true, Size: 32},
+		{Name: "remark", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "currency", Type: field.TypeString, Size: 12},
+		{Name: "status", Type: field.TypeString, Size: 20, Default: "PENDING"},
+		{Name: "revision", Type: field.TypeInt, Default: 1},
+		{Name: "provider", Type: field.TypeString, Size: 50, Default: "manual"},
+		{Name: "provider_invoice_id", Type: field.TypeString, Nullable: true, Size: 128},
+		{Name: "invoice_item_name", Type: field.TypeString, Nullable: true, Size: 200},
+		{Name: "invoice_code", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "invoice_number", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "document_filename", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "document_size_bytes", Type: field.TypeInt64, Nullable: true},
+		{Name: "document_sha256", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "email_delivery_status", Type: field.TypeString, Size: 20, Default: "NOT_SENT"},
+		{Name: "email_delivery_attempts", Type: field.TypeInt, Default: 0},
+		{Name: "email_delivery_error_kind", Type: field.TypeString, Nullable: true, Size: 32},
+		{Name: "email_delivery_attempted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "email_delivered_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "email_delivery_claim_token", Type: field.TypeString, Nullable: true, Size: 36},
+		{Name: "email_delivery_claimed_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "email_delivery_next_attempt_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "feishu_notification_status", Type: field.TypeString, Size: 20, Default: "NOT_SENT"},
+		{Name: "feishu_notification_revision", Type: field.TypeInt, Default: 0},
+		{Name: "feishu_notification_attempts", Type: field.TypeInt, Default: 0},
+		{Name: "feishu_notification_error_kind", Type: field.TypeString, Nullable: true, Size: 32},
+		{Name: "feishu_notification_attempted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "feishu_notified_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "feishu_notification_claim_token", Type: field.TypeString, Nullable: true, Size: 36},
+		{Name: "feishu_notification_claimed_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "feishu_notification_next_attempt_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "rejection_reason", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "processed_by", Type: field.TypeInt64, Nullable: true},
+		{Name: "requested_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "processed_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "issued_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "order_id", Type: field.TypeInt64, Unique: true},
+	}
+	// PaymentInvoiceRequestsTable holds the schema information for the "payment_invoice_requests" table.
+	PaymentInvoiceRequestsTable = &schema.Table{
+		Name:       "payment_invoice_requests",
+		Columns:    PaymentInvoiceRequestsColumns,
+		PrimaryKey: []*schema.Column{PaymentInvoiceRequestsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "payment_invoice_requests_payment_orders_invoice_request",
+				Columns:    []*schema.Column{PaymentInvoiceRequestsColumns[44]},
+				RefColumns: []*schema.Column{PaymentOrdersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "paymentinvoicerequest_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{PaymentInvoiceRequestsColumns[1]},
+			},
+			{
+				Name:    "paymentinvoicerequest_status_requested_at",
+				Unique:  false,
+				Columns: []*schema.Column{PaymentInvoiceRequestsColumns[10], PaymentInvoiceRequestsColumns[39]},
+			},
+			{
+				Name:    "paymentinvoicerequest_email_delivery_status_email_delivery_next_attempt_at",
+				Unique:  false,
+				Columns: []*schema.Column{PaymentInvoiceRequestsColumns[20], PaymentInvoiceRequestsColumns[27]},
+			},
+			{
+				Name:    "paymentinvoicerequest_feishu_notification_status_feishu_notification_next_attempt_at",
+				Unique:  false,
+				Columns: []*schema.Column{PaymentInvoiceRequestsColumns[28], PaymentInvoiceRequestsColumns[36]},
+			},
+		},
+	}
 	// PaymentOrdersColumns holds the columns for the "payment_orders" table.
 	PaymentOrdersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -2115,6 +2225,8 @@ var (
 		IdempotencyRecordsTable,
 		IdentityAdoptionDecisionsTable,
 		PaymentAuditLogsTable,
+		PaymentInvoiceDocumentsTable,
+		PaymentInvoiceRequestsTable,
 		PaymentOrdersTable,
 		PaymentProviderInstancesTable,
 		PendingAuthSessionsTable,
@@ -2213,6 +2325,14 @@ func init() {
 	}
 	PaymentAuditLogsTable.Annotation = &entsql.Annotation{
 		Table: "payment_audit_logs",
+	}
+	PaymentInvoiceDocumentsTable.ForeignKeys[0].RefTable = PaymentInvoiceRequestsTable
+	PaymentInvoiceDocumentsTable.Annotation = &entsql.Annotation{
+		Table: "payment_invoice_documents",
+	}
+	PaymentInvoiceRequestsTable.ForeignKeys[0].RefTable = PaymentOrdersTable
+	PaymentInvoiceRequestsTable.Annotation = &entsql.Annotation{
+		Table: "payment_invoice_requests",
 	}
 	PaymentOrdersTable.ForeignKeys[0].RefTable = UsersTable
 	PaymentOrdersTable.Annotation = &entsql.Annotation{

@@ -962,6 +962,7 @@ var ProviderSet = wire.NewSet(
 	ProvideUnifiedPaymentGateway,
 	ProvidePaymentService,
 	ProvidePaymentOrderExpiryService,
+	ProvideInvoiceNotificationService,
 	ProvideFeishuPaymentIncidentService,
 	ProvideBalanceNotifyService,
 	ProvideChannelMonitorService,
@@ -1025,6 +1026,14 @@ func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, 
 func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache LeaderLockCache, db *sql.DB) *PaymentOrderExpiryService {
 	svc := NewPaymentOrderExpiryService(paymentSvc, 60*time.Second)
 	svc.SetLeaderLock(lockCache, db)
+	svc.Start()
+	return svc
+}
+
+// ProvideInvoiceNotificationService starts the isolated durable email/Feishu
+// recovery loop. It intentionally does not share the financial expiry worker.
+func ProvideInvoiceNotificationService(paymentSvc *PaymentService, lockCache LeaderLockCache, db *sql.DB) *InvoiceNotificationService {
+	svc := NewInvoiceNotificationService(paymentSvc, lockCache, db)
 	svc.Start()
 	return svc
 }

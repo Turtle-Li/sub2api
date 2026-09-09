@@ -200,6 +200,7 @@ export default {
     docs: '文档',
     myOrders: '我的订单',
     orderManagement: '订单管理',
+    invoiceRequests: '开票申请',
     paymentDashboard: '支付概览',
     paymentConfig: '支付配置',
     paymentPlans: '订阅套餐',

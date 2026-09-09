@@ -4,12 +4,15 @@
       <!-- Filters -->
       <div class="card p-4">
         <div class="flex flex-wrap items-center gap-3">
-          <div class="flex-1 sm:max-w-64">
-            <input v-model="orderSearch" type="text" :placeholder="t('payment.admin.searchOrders')" class="input" @input="debounceLoadOrders" />
+          <div class="min-w-56 flex-1 sm:max-w-80">
+            <input v-model="orderSearch" type="search" :aria-label="t('payment.admin.searchOrders')" :placeholder="t('payment.admin.searchOrders')" class="input" @input="debounceLoadOrders" />
           </div>
-          <Select v-model="orderFilters.status" :options="statusFilterOptions" class="w-36" @change="loadOrders" />
-          <Select v-model="orderFilters.payment_type" :options="paymentTypeFilterOptions" class="w-40" @change="loadOrders" />
-          <Select v-model="orderFilters.order_type" :options="orderTypeFilterOptions" class="w-36" @change="loadOrders" />
+          <Select :aria-label="t('payment.orders.status')" v-model="orderFilters.status" :options="statusFilterOptions" class="w-44" @change="handleFilterChange" />
+          <Select :aria-label="t('payment.orders.paymentMethod')" v-model="orderFilters.payment_type" :options="paymentTypeFilterOptions" class="w-40" @change="handleFilterChange" />
+          <Select :aria-label="t('payment.orders.orderType')" v-model="orderFilters.order_type" :options="orderTypeFilterOptions" class="w-44" @change="handleFilterChange" />
+          <Select v-model="orderFilters.invoice_status" :options="invoiceStatusFilterOptions" :aria-label="t('payment.invoice.admin.filterLabel')" class="w-40" @change="handleFilterChange" />
+          <Select v-model="orderFilters.payment_status" :options="paymentFactOptions" :aria-label="t('payment.orderOps.paymentLabel')" class="w-40" @change="handleFilterChange" />
+          <Select v-model="orderFilters.fulfillment_status" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentLabel')" class="w-40" @change="handleFilterChange" />
           <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
             <button @click="loadOrders" :disabled="ordersLoading" class="btn btn-secondary" :title="t('common.refresh')">
               <Icon name="refresh" size="md" :class="ordersLoading ? 'animate-spin' : ''" />
@@ -18,7 +21,8 @@
         </div>
       </div>
 
-      <AdminPaymentOwnerTest @created="loadOrders" />
+      <div class="flex justify-end"><RouterLink to="/admin/orders/invoices" class="btn btn-secondary">{{ t('payment.orderOps.invoiceQueue') }}</RouterLink></div>
+      <details class="text-sm text-gray-600 dark:text-gray-300"><summary class="mb-2 cursor-pointer py-2">{{ t('payment.orderOps.paymentTest') }}</summary><AdminPaymentOwnerTest @created="loadOrders" /></details>
 
       <!-- Table -->
       <OrderTable :orders="orders" :loading="ordersLoading" show-user>
@@ -32,7 +36,7 @@
               <Icon name="x" size="sm" />
               {{ t('payment.orders.cancel') }}
             </button>
-            <button v-if="row.status === 'FAILED'" :disabled="refundMutationBusy" @click="handleRetryOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
+            <button v-if="fulfillmentFact(row) === 'FAILED' && !row.needs_manual_review" :disabled="refundMutationBusy" @click="handleRetryOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retry') }}
             </button>
@@ -55,6 +59,10 @@
               <Icon name="dollar" size="sm" />
               {{ t('payment.admin.refund') }}
             </button>
+            <button v-if="row.invoice" @click="openInvoiceDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
+              <Icon name="document" size="sm" />
+              {{ row.invoice.status === 'ISSUED' || row.invoice.status === 'REJECTED' ? t('payment.invoice.admin.view') : t('payment.invoice.admin.process') }}
+            </button>
           </div>
         </template>
       </OrderTable>
@@ -66,7 +74,7 @@
       <div v-if="selectedOrder" class="space-y-4">
         <div class="grid grid-cols-2 gap-4">
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</p><p class="font-mono text-sm font-medium text-gray-900 dark:text-white">#{{ selectedOrder.id }}</p></div>
-          <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ selectedOrder.out_trade_no }}</p></div>
+          <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</p><p class="break-all text-sm font-medium text-gray-900 dark:text-white">{{ selectedOrder.out_trade_no }}</p><button type="button" class="mt-1 text-xs text-primary-700 dark:text-primary-300" @click="copyOrderNumber(selectedOrder.out_trade_no)">{{ t('payment.orderOps.copyOrder') }}</button></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.status') }}</p><OrderStatusBadge :status="selectedOrder.status" /></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ selectedOrder.amount.toFixed(2) }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ paymentAmountSymbol(selectedOrder) }}{{ selectedOrder.pay_amount.toFixed(2) }}</p></div>
@@ -95,7 +103,23 @@
               </div>
             </div>
           </div>
+          <div v-if="selectedOrder.invoice" class="col-span-2 border-t border-gray-200 pt-3 dark:border-dark-600">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.invoice.admin.title') }}</p>
+                <InvoiceStatusBadge :status="selectedOrder.invoice.status" />
+              </div>
+              <button class="btn btn-secondary inline-flex items-center gap-2" @click="openInvoiceDialog(selectedOrder)">
+                <Icon name="document" size="sm" />{{ t('payment.invoice.admin.openWorkflow') }}
+              </button>
+            </div>
+          </div>
         </div>
+        <div class="flex flex-wrap gap-3">
+          <OrderLifecycleBadge kind="payment" :value="paymentFact(selectedOrder)" />
+          <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(selectedOrder)" />
+        </div>
+        <OrderPurchaseSnapshot :order="selectedOrder" />
         <!-- Audit Logs -->
         <div v-if="orderAuditLogs.length > 0" class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <p class="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.admin.auditLogs') }}</p>
@@ -115,17 +139,19 @@
 
     <AdminRefundDialog :show="showRefundDialog" :order="selectedOrder" :submitting="refundMutationBusy" :require-force="refundRequireForce" :warning="refundWarning" @confirm="handleRefund" @cancel="closeRefundDialog" />
     <TotpStepUpDialog :controller="stepUp" />
+    <AdminInvoiceDialog :show="!!invoiceTarget" :order="invoiceTarget" :submitting="invoiceSubmitting" :retrying="invoiceEmailRetrying" @submit="handleInvoiceUpdate" @retry-email="handleInvoiceEmailRetry" @retry-feishu="handleInvoiceFeishuRetry" @close="invoiceTarget = null" />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RouterLink, useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
-import type { PaymentOrder } from '@/types/payment'
+import type { AdminUpdateInvoiceRequest, PaymentOrder } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -134,7 +160,12 @@ import Icon from '@/components/icons/Icon.vue'
 import AdminRefundDialog from '@/components/admin/payment/AdminRefundDialog.vue'
 import AdminPaymentOwnerTest from '@/components/admin/payment/AdminPaymentOwnerTest.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
+import InvoiceStatusBadge from '@/components/payment/InvoiceStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
+import OrderPurchaseSnapshot from '@/components/payment/OrderPurchaseSnapshot.vue'
+import OrderLifecycleBadge from '@/components/payment/OrderLifecycleBadge.vue'
+import { paymentFact, fulfillmentFact } from '@/components/payment/orderPresentation'
+import AdminInvoiceDialog from '@/components/admin/payment/AdminInvoiceDialog.vue'
 import { currencySymbol } from '@/components/payment/currency'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
@@ -156,11 +187,17 @@ interface RefundRequest {
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const route = useRoute()
+
+const invoiceStatusFromQuery = (() => {
+  const value = typeof route.query.invoice_status === 'string' ? route.query.invoice_status.toUpperCase() : ''
+  return ['NONE', 'PENDING', 'PROCESSING', 'ISSUED', 'REJECTED'].includes(value) ? value : ''
+})()
 
 const ordersLoading = ref(false)
 const orders = ref<PaymentOrder[]>([])
 const orderSearch = ref('')
-const orderFilters = reactive({ status: '', payment_type: '', order_type: '' })
+const orderFilters = reactive({ status: '', payment_type: '', order_type: '', invoice_status: invoiceStatusFromQuery, payment_status: '', fulfillment_status: '' })
 const orderPagination = reactive({ page: 1, page_size: 20, total: 0 })
 const selectedOrder = ref<PaymentOrder | null>(null)
 const showDetailDialog = ref(false)
@@ -170,6 +207,9 @@ const refundRequireForce = ref(false)
 const refundWarning = ref('')
 const refundQueryingIds = ref(new Set<number>())
 const orderAuditLogs = ref<AuditLog[]>([])
+const invoiceTarget = ref<PaymentOrder | null>(null)
+const invoiceSubmitting = ref(false)
+const invoiceEmailRetrying = ref(false)
 const creditedAmountSymbol = currencySymbol('USD')
 const stepUp = useStepUp()
 const refundMutationBusy = computed(() => refundSubmitting.value || refundQueryingIds.value.size > 0)
@@ -181,22 +221,38 @@ function paymentAmountSymbol(order: PaymentOrder | null | undefined): string {
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 function debounceLoadOrders() {
   if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => loadOrders(), 300)
+  debounceTimer = setTimeout(handleFilterChange, 300)
 }
 
+function handleFilterChange() { orderPagination.page = 1; loadOrders() }
+onUnmounted(() => { if (debounceTimer) clearTimeout(debounceTimer) })
+const paymentFactOptions = computed(() => [
+  { value: '', label: t('payment.orderOps.allPayments') },
+  ...['PAID', 'UNPAID'].map(value => ({ value, label: t(`payment.orderOps.payment.${value.toLowerCase()}`) })),
+])
+const fulfillmentOptions = computed(() => [
+  { value: '', label: t('payment.orderOps.allFulfillments') },
+  ...['PENDING', 'FAILED', 'MANUAL_REVIEW', 'FULFILLED', 'NOT_STARTED'].map(value => ({ value, label: t(`payment.orderOps.fulfillment.${value.toLowerCase()}`) })),
+])
+let listRequest = 0
 async function loadOrders() {
+  const request = ++listRequest
   ordersLoading.value = true
   try {
     const res = await adminPaymentAPI.getOrders({
       page: orderPagination.page, page_size: orderPagination.page_size,
       keyword: orderSearch.value || undefined, status: orderFilters.status || undefined,
       payment_type: orderFilters.payment_type || undefined, order_type: orderFilters.order_type || undefined,
+      invoice_status: orderFilters.invoice_status || undefined,
+      payment_status: orderFilters.payment_status || undefined,
+      fulfillment_status: orderFilters.fulfillment_status || undefined,
     })
+    if (request !== listRequest) return
     orders.value = res.data.items || []
     orderPagination.total = res.data.total || 0
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
-  } finally { ordersLoading.value = false }
+  } finally { if (request === listRequest) ordersLoading.value = false }
 }
 
 function handleOrderPageChange(page: number) { orderPagination.page = page; loadOrders() }
@@ -230,12 +286,28 @@ const orderTypeFilterOptions = computed(() => [
   { value: 'subscription', label: t('payment.admin.subscriptionOrder') },
 ])
 
+const invoiceStatusFilterOptions = computed(() => [
+  { value: '', label: t('payment.invoice.admin.allStatuses') },
+  { value: 'NONE', label: t('payment.invoice.admin.notRequested') },
+  { value: 'PENDING', label: t('payment.invoice.status.pending') },
+  { value: 'PROCESSING', label: t('payment.invoice.status.processing') },
+  { value: 'ISSUED', label: t('payment.invoice.status.issued') },
+  { value: 'REJECTED', label: t('payment.invoice.status.rejected') },
+])
+
+async function copyOrderNumber(value: string) {
+  try { await navigator.clipboard.writeText(value); appStore.showSuccess(t('common.success')) }
+  catch { appStore.showError(t('payment.orderOps.copyFailed')) }
+}
+let detailRequestSequence = 0
 async function showOrderDetail(order: PaymentOrder) {
+  const requestSequence = ++detailRequestSequence
   selectedOrder.value = order
   orderAuditLogs.value = []
   showDetailDialog.value = true
   try {
     const res = await adminPaymentAPI.getOrder(order.id)
+    if (requestSequence !== detailRequestSequence || !showDetailDialog.value || selectedOrder.value?.id !== order.id) return
     const data = res.data as unknown as Record<string, unknown>
     if (data.order) selectedOrder.value = data.order as PaymentOrder
     orderAuditLogs.value = ((data.auditLogs || data.audit_logs || []) as unknown) as AuditLog[]
@@ -258,8 +330,61 @@ function openRefundDialog(order: PaymentOrder) {
   if (refundMutationBusy.value) return
   selectedOrder.value = order
   refundRequireForce.value = false
-  refundWarning.value = ''
+  refundWarning.value = order.invoice?.status === 'ISSUED' ? t('payment.invoice.admin.refundCorrectionWarning') : ''
   showRefundDialog.value = true
+}
+
+function openInvoiceDialog(order: PaymentOrder) {
+  invoiceTarget.value = order
+  showDetailDialog.value = false
+}
+
+async function handleInvoiceUpdate(payload: AdminUpdateInvoiceRequest) {
+  const target = invoiceTarget.value
+  if (!target || invoiceSubmitting.value || invoiceEmailRetrying.value) return
+  invoiceSubmitting.value = true
+  try {
+    const res = await adminPaymentAPI.updateInvoiceRequest(target.id, payload)
+    const updated = { ...target, invoice: res.data }
+    if (invoiceTarget.value === target) invoiceTarget.value = updated
+    orders.value = orders.value.map((order) => order.id === updated.id ? updated : order)
+    appStore.showSuccess(t('payment.invoice.admin.updated'))
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  } finally {
+    invoiceSubmitting.value = false
+  }
+}
+
+async function handleInvoiceFeishuRetry() {
+  const target = invoiceTarget.value
+  if (!target || invoiceEmailRetrying.value || invoiceSubmitting.value) return
+  invoiceEmailRetrying.value = true
+  try {
+    const res = await adminPaymentAPI.retryInvoiceFeishu(target.id)
+    if (invoiceTarget.value === target) invoiceTarget.value = { ...target, invoice: res.data }
+    appStore.showSuccess(t('payment.orderOps.notificationQueued'))
+    await loadOrders()
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  } finally { invoiceEmailRetrying.value = false }
+}
+
+async function handleInvoiceEmailRetry() {
+  const target = invoiceTarget.value
+  if (!target || invoiceEmailRetrying.value || invoiceSubmitting.value) return
+  invoiceEmailRetrying.value = true
+  try {
+    const res = await adminPaymentAPI.retryInvoiceEmail(target.id)
+    const updated = { ...target, invoice: res.data }
+    if (invoiceTarget.value === target) invoiceTarget.value = updated
+    orders.value = orders.value.map((order) => order.id === updated.id ? updated : order)
+    appStore.showSuccess(t('payment.invoice.admin.emailRetryQueued'))
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  } finally {
+    invoiceEmailRetrying.value = false
+  }
 }
 
 function closeRefundDialog() {

@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 )
 
 const (
@@ -28,6 +30,8 @@ const (
 	NotificationEmailEventBalanceLow                  = "balance.low"
 	NotificationEmailEventBalanceRechargeSuccess      = "balance.recharge_success"
 	NotificationEmailEventAccountQuotaAlert           = "account.quota_alert"
+	NotificationEmailEventInvoiceIssued               = "invoice.issued"
+	NotificationEmailEventInvoiceRejected             = "invoice.rejected"
 	NotificationEmailEventContentModerationViolation  = "content_moderation.violation_notice"
 	NotificationEmailEventContentModerationDisabled   = "content_moderation.account_disabled"
 	NotificationEmailEventCyberPolicyNotice           = "content_moderation.cyber_policy_notice"
@@ -127,6 +131,7 @@ type NotificationEmailSendInput struct {
 	ReminderKey      string
 	Variables        map[string]string
 	RawHTMLVariables map[string]string
+	Attachments      []EmailAttachment
 }
 
 type NotificationEmailUnsubscribeResult struct {
@@ -424,8 +429,27 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 	if s.emailService == nil {
 		return notificationEmailConfigErr(errors.New("email service is not configured"))
 	}
-	if err := s.emailService.SendEmail(ctx, recipient, rendered.Subject, rendered.HTML); err != nil {
-		return notificationEmailDeliveryErr(err)
+	var sendErr error
+	if normalizedEvent == NotificationEmailEventInvoiceIssued || normalizedEvent == NotificationEmailEventInvoiceRejected {
+		// Invoice delivery belongs to the active background generation. Read
+		// all settings before the final fence so a handoff during template,
+		// deduplication or SMTP configuration I/O cannot start a new send.
+		config, err := s.emailService.GetSMTPConfig(ctx)
+		if err != nil {
+			return notificationEmailDeliveryErr(err)
+		}
+		if !runtimegate.SharedWorkAllowed() {
+			return context.Canceled
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sendErr = s.emailService.SendEmailWithConfigAndAttachments(config, recipient, rendered.Subject, rendered.HTML, input.Attachments)
+	} else {
+		sendErr = s.emailService.SendEmailWithAttachments(ctx, recipient, rendered.Subject, rendered.HTML, input.Attachments)
+	}
+	if sendErr != nil {
+		return notificationEmailDeliveryErr(sendErr)
 	}
 	if deliveryKey != "" {
 		if err := s.settingRepo.Set(ctx, deliveryKey, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
@@ -915,6 +939,15 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 			"recharge_url":        "https://example.com/recharge",
 			"recharge_amount":     "50.00",
 			"order_id":            "1024",
+			"invoice_title":       "示例科技有限公司",
+			"invoice_amount":      "199.00",
+			"invoice_currency":    "CNY",
+			"invoice_item_name":   "信息技术服务",
+			"invoice_code":        "044002400111",
+			"invoice_number":      "24612000000000000001",
+			"invoice_filename":    "invoice-preview.pdf",
+			"invoice_orders_url":  "https://example.com/orders",
+			"rejection_reason":    "发票抬头与税号不匹配，请核对后重新提交。",
 			"unsubscribe_url":     "https://example.com/unsubscribe",
 			"account_id":          "1001",
 			"account_name":        "openai-main",
@@ -963,6 +996,15 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 		"recharge_url":        "https://example.com/recharge",
 		"recharge_amount":     "50.00",
 		"order_id":            "1024",
+		"invoice_title":       "Example Technology Co., Ltd.",
+		"invoice_amount":      "199.00",
+		"invoice_currency":    "CNY",
+		"invoice_item_name":   "Information technology services",
+		"invoice_code":        "044002400111",
+		"invoice_number":      "24612000000000000001",
+		"invoice_filename":    "invoice-preview.pdf",
+		"invoice_orders_url":  "https://example.com/orders",
+		"rejection_reason":    "The invoice title does not match the taxpayer identifier. Please correct and resubmit.",
 		"unsubscribe_url":     "https://example.com/unsubscribe",
 		"account_id":          "1001",
 		"account_name":        "openai-main",
@@ -1031,6 +1073,8 @@ var notificationEmailEventOrder = []string{
 	NotificationEmailEventBalanceLow,
 	NotificationEmailEventBalanceRechargeSuccess,
 	NotificationEmailEventAccountQuotaAlert,
+	NotificationEmailEventInvoiceIssued,
+	NotificationEmailEventInvoiceRejected,
 	NotificationEmailEventContentModerationViolation,
 	NotificationEmailEventContentModerationDisabled,
 	NotificationEmailEventCyberPolicyNotice,
@@ -1103,6 +1147,24 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
 			"account_id", "account_name", "platform", "quota_dimension", "quota_used", "quota_limit", "quota_remaining", "quota_threshold"),
+	},
+	NotificationEmailEventInvoiceIssued: {
+		Event:       NotificationEmailEventInvoiceIssued,
+		Label:       "Invoice issued",
+		Description: "Sent to the invoice recipient after an administrator records the official invoice PDF.",
+		Category:    "billing",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"order_id", "invoice_title", "invoice_amount", "invoice_currency", "invoice_item_name", "invoice_code", "invoice_number", "invoice_filename", "invoice_orders_url"),
+	},
+	NotificationEmailEventInvoiceRejected: {
+		Event:       NotificationEmailEventInvoiceRejected,
+		Label:       "Invoice request rejected",
+		Description: "Sent to the invoice recipient when an administrator rejects a manual invoice request.",
+		Category:    "billing",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"order_id", "invoice_title", "rejection_reason", "invoice_orders_url"),
 	},
 	NotificationEmailEventContentModerationViolation: {
 		Event:       NotificationEmailEventContentModerationViolation,
@@ -1292,6 +1354,62 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p>您的余额充值 <strong>${{recharge_amount}}</strong> 已完成。</p>
 <p>当前余额：<strong>${{current_balance}}</strong></p>
 			<p>订单号：{{order_id}}</p>`),
+		},
+	},
+	NotificationEmailEventInvoiceIssued: {
+		notificationEmailLocaleEnglish: {
+			Subject: "[{{site_name}}] Your invoice has been issued - order {{order_id}}",
+			HTML: notificationEmailCard("#16a34a", "Invoice issued", `
+<p>Hello {{recipient_name}},</p>
+<p>Your invoice has been issued and recorded in the order center.</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>Order ID</td><td>{{order_id}}</td></tr>
+  <tr><td>Invoice title</td><td>{{invoice_title}}</td></tr>
+  <tr><td>Amount</td><td>{{invoice_amount}} {{invoice_currency}}</td></tr>
+  <tr><td>Item</td><td>{{invoice_item_name}}</td></tr>
+  <tr><td>Invoice code</td><td>{{invoice_code}}</td></tr>
+  <tr><td>Invoice number</td><td>{{invoice_number}}</td></tr>
+</table>
+<p>The official PDF invoice is attached to this email as <strong>{{invoice_filename}}</strong>.</p>
+<p class="muted">You can review its delivery status in <a href="{{invoice_orders_url}}">My Orders</a>.</p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 您的发票已开具 - 订单 {{order_id}}",
+			HTML: notificationEmailCard("#16a34a", "发票已开具", `
+<p>{{recipient_name}}，您好：</p>
+<p>您的发票已开具并回填到订单中心。</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>订单号</td><td>{{order_id}}</td></tr>
+  <tr><td>发票抬头</td><td>{{invoice_title}}</td></tr>
+  <tr><td>开票金额</td><td>{{invoice_amount}} {{invoice_currency}}</td></tr>
+  <tr><td>开票项目</td><td>{{invoice_item_name}}</td></tr>
+  <tr><td>发票代码</td><td>{{invoice_code}}</td></tr>
+  <tr><td>发票号码</td><td>{{invoice_number}}</td></tr>
+</table>
+<p>正式 PDF 发票已作为附件随本邮件发送：<strong>{{invoice_filename}}</strong>。</p>
+<p class="muted">您也可以前往<a href="{{invoice_orders_url}}">我的订单</a>查看邮件交付状态。</p>`),
+		},
+	},
+	NotificationEmailEventInvoiceRejected: {
+		notificationEmailLocaleEnglish: {
+			Subject: "[{{site_name}}] Invoice request needs correction - order {{order_id}}",
+			HTML: notificationEmailCard("#dc2626", "Invoice request needs correction", `
+<p>Hello {{recipient_name}},</p>
+<p>Your invoice request could not be processed for the following reason:</p>
+<p><strong>{{rejection_reason}}</strong></p>
+<p>Order ID: {{order_id}}</p>
+<p>Invoice title: {{invoice_title}}</p>
+<p><a class="button" href="{{invoice_orders_url}}">Correct and resubmit</a></p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 开票申请需要更正 - 订单 {{order_id}}",
+			HTML: notificationEmailCard("#dc2626", "开票申请需要更正", `
+<p>{{recipient_name}}，您好：</p>
+<p>您的开票申请暂时无法处理，原因如下：</p>
+<p><strong>{{rejection_reason}}</strong></p>
+<p>订单号：{{order_id}}</p>
+<p>发票抬头：{{invoice_title}}</p>
+<p><a class="button" href="{{invoice_orders_url}}">更正并重新提交</a></p>`),
 		},
 	},
 	NotificationEmailEventAccountQuotaAlert: {

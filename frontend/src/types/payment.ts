@@ -23,6 +23,12 @@ export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' 
 
 export type OrderType = 'balance' | 'subscription'
 
+export type InvoiceStatus = 'PENDING' | 'PROCESSING' | 'ISSUED' | 'REJECTED'
+
+export type InvoiceEmailDeliveryStatus = 'NOT_SENT' | 'PENDING' | 'SENDING' | 'SENT' | 'FAILED'
+
+export type InvoiceTitleType = 'personal' | 'enterprise'
+
 // ==================== Configuration ====================
 
 export interface PaymentConfig {
@@ -83,6 +89,33 @@ export interface CheckoutInfoResponse {
 
 // ==================== Orders ====================
 
+export type PaymentFactStatus = 'PAID' | 'UNPAID'
+export type FulfillmentStatus = 'NOT_STARTED' | 'PENDING' | 'FULFILLED' | 'FAILED' | 'MANUAL_REVIEW'
+
+export interface OrderProductSnapshot {
+  kind?: string
+  name?: string
+  label?: string
+  product_name?: string
+  group_name?: string
+  group_id?: number
+  daily_limit_usd?: number
+  weekly_limit_usd?: number
+  monthly_limit_usd?: number
+  rate_multiplier?: number
+  features?: string[]
+  description?: string
+  currency?: string
+  price?: number
+  list_price?: number
+  pay_amount?: number
+  credited_amount?: number
+  subscription_days?: number
+  validity_days?: number
+  validity_unit?: string
+  entitlements?: Partial<PlanEntitlements>
+}
+
 export interface PaymentOrder {
   id: number
   user_id: number
@@ -105,6 +138,75 @@ export interface PaymentOrder {
   refund_request_reason?: string
   plan_id?: number
   provider_instance_id?: string
+  invoice?: PaymentInvoiceRecord
+  invoice_eligible?: boolean
+  payment_status?: PaymentFactStatus
+  fulfillment_status?: FulfillmentStatus
+  needs_manual_review?: boolean
+  product_snapshot?: OrderProductSnapshot
+  user_email?: string
+  user_name?: string
+  user_notes?: string
+  failed_at?: string
+  failed_reason?: string
+}
+
+export interface PaymentInvoiceRecord {
+  id: number
+  order_id: number
+  user_id: number
+  title_type: InvoiceTitleType
+  title: string
+  tax_identifier?: string
+  recipient_email: string
+  recipient_phone?: string
+  remark?: string
+  amount: number
+  currency: string
+  status: InvoiceStatus
+  revision: number
+  provider: string
+  provider_invoice_id?: string
+  invoice_item_name?: string
+  invoice_code?: string
+  invoice_number?: string
+  document_filename?: string
+  document_size_bytes?: number
+  document_sha256?: string
+  feishu_notification_status?: InvoiceEmailDeliveryStatus
+  feishu_retryable?: boolean
+  email_retryable?: boolean
+  email_delivery_status: InvoiceEmailDeliveryStatus
+  email_delivery_attempts: number
+  email_delivery_error_kind?: string
+  email_delivery_attempted_at?: string
+  email_delivered_at?: string
+  rejection_reason?: string
+  requested_at: string
+  processed_at?: string
+  issued_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateInvoiceRequest {
+  title_type: InvoiceTitleType
+  title: string
+  tax_identifier?: string
+  recipient_email: string
+  recipient_phone?: string
+  remark?: string
+}
+
+export interface AdminUpdateInvoiceRequest {
+  status: Exclude<InvoiceStatus, 'PENDING'>
+  provider?: string
+  provider_invoice_id?: string
+  invoice_item_name?: string
+  invoice_code?: string
+  invoice_number?: string
+  invoice_pdf?: File
+  rejection_reason?: string
 }
 
 // ==================== Plans & Channels ====================

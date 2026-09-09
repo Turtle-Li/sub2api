@@ -104,7 +104,7 @@ describe('admin order currency display', () => {
       props: {
         orders: [
           orderFactory({ id: 1, currency: 'USD', amount: 100, pay_amount: 108 }),
-          orderFactory({ id: 2, currency: 'CNY', amount: 100, pay_amount: 108 }),
+          orderFactory({ id: 2, currency: 'CNY', amount: 100, pay_amount: 108, order_type: 'balance' }),
         ],
         loading: false,
         showUser: true,
@@ -128,7 +128,7 @@ describe('admin order currency display', () => {
       props: {
         orders: [
           orderFactory({ id: 1, currency: 'USD', amount: 100, pay_amount: 108 }),
-          orderFactory({ id: 2, currency: 'CNY', amount: 100, pay_amount: 108 }),
+          orderFactory({ id: 2, currency: 'CNY', amount: 100, pay_amount: 108, order_type: 'balance' }),
         ],
         loading: false,
         page: 1,

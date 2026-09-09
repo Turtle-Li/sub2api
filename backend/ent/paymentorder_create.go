@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicerequest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 )
@@ -484,6 +485,25 @@ func (_c *PaymentOrderCreate) SetUser(v *User) *PaymentOrderCreate {
 	return _c.SetUserID(v.ID)
 }
 
+// SetInvoiceRequestID sets the "invoice_request" edge to the PaymentInvoiceRequest entity by ID.
+func (_c *PaymentOrderCreate) SetInvoiceRequestID(id int64) *PaymentOrderCreate {
+	_c.mutation.SetInvoiceRequestID(id)
+	return _c
+}
+
+// SetNillableInvoiceRequestID sets the "invoice_request" edge to the PaymentInvoiceRequest entity by ID if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableInvoiceRequestID(id *int64) *PaymentOrderCreate {
+	if id != nil {
+		_c = _c.SetInvoiceRequestID(*id)
+	}
+	return _c
+}
+
+// SetInvoiceRequest sets the "invoice_request" edge to the PaymentInvoiceRequest entity.
+func (_c *PaymentOrderCreate) SetInvoiceRequest(v *PaymentInvoiceRequest) *PaymentOrderCreate {
+	return _c.SetInvoiceRequestID(v.ID)
+}
+
 // Mutation returns the PaymentOrderMutation object of the builder.
 func (_c *PaymentOrderCreate) Mutation() *PaymentOrderMutation {
 	return _c.mutation
@@ -878,6 +898,22 @@ func (_c *PaymentOrderCreate) createSpec() (*PaymentOrder, *sqlgraph.CreateSpec)
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.UserID = nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.InvoiceRequestIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2O,
+			Inverse: false,
+			Table:   paymentorder.InvoiceRequestTable,
+			Columns: []string{paymentorder.InvoiceRequestColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(paymentinvoicerequest.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec

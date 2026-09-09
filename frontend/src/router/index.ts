@@ -322,7 +322,7 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: false,
       title: 'My Orders',
       titleKey: 'nav.myOrders',
-      requiresPayment: true
+      requiresPayment: false
     }
   },
   {
@@ -698,6 +698,18 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: true,
       title: 'Order Management',
       titleKey: 'nav.orderManagement'
+    }
+  },
+  {
+    path: '/admin/orders/invoices',
+    name: 'AdminInvoiceRequests',
+    component: () => import('@/views/admin/orders/AdminInvoiceRequestsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Invoice Requests',
+      titleKey: 'nav.invoiceRequests',
+      requiresPayment: false
     }
   },
   {

@@ -2473,6 +2473,29 @@ func HasUserWith(preds ...predicate.User) predicate.PaymentOrder {
 	})
 }
 
+// HasInvoiceRequest applies the HasEdge predicate on the "invoice_request" edge.
+func HasInvoiceRequest() predicate.PaymentOrder {
+	return predicate.PaymentOrder(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, false, InvoiceRequestTable, InvoiceRequestColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasInvoiceRequestWith applies the HasEdge predicate on the "invoice_request" edge with a given conditions (other predicates).
+func HasInvoiceRequestWith(preds ...predicate.PaymentInvoiceRequest) predicate.PaymentOrder {
+	return predicate.PaymentOrder(func(s *sql.Selector) {
+		step := newInvoiceRequestStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.PaymentOrder) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.AndPredicates(predicates...))

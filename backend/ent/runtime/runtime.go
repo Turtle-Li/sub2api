@@ -25,6 +25,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
+	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicedocument"
+	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicerequest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -1309,6 +1311,152 @@ func init() {
 	paymentauditlogDescCreatedAt := paymentauditlogFields[4].Descriptor()
 	// paymentauditlog.DefaultCreatedAt holds the default value on creation for the created_at field.
 	paymentauditlog.DefaultCreatedAt = paymentauditlogDescCreatedAt.Default.(func() time.Time)
+	paymentinvoicedocumentFields := schema.PaymentInvoiceDocument{}.Fields()
+	_ = paymentinvoicedocumentFields
+	// paymentinvoicedocumentDescFilename is the schema descriptor for filename field.
+	paymentinvoicedocumentDescFilename := paymentinvoicedocumentFields[1].Descriptor()
+	// paymentinvoicedocument.FilenameValidator is a validator for the "filename" field. It is called by the builders before save.
+	paymentinvoicedocument.FilenameValidator = paymentinvoicedocumentDescFilename.Validators[0].(func(string) error)
+	// paymentinvoicedocumentDescContentType is the schema descriptor for content_type field.
+	paymentinvoicedocumentDescContentType := paymentinvoicedocumentFields[2].Descriptor()
+	// paymentinvoicedocument.DefaultContentType holds the default value on creation for the content_type field.
+	paymentinvoicedocument.DefaultContentType = paymentinvoicedocumentDescContentType.Default.(string)
+	// paymentinvoicedocument.ContentTypeValidator is a validator for the "content_type" field. It is called by the builders before save.
+	paymentinvoicedocument.ContentTypeValidator = paymentinvoicedocumentDescContentType.Validators[0].(func(string) error)
+	// paymentinvoicedocumentDescSha256 is the schema descriptor for sha256 field.
+	paymentinvoicedocumentDescSha256 := paymentinvoicedocumentFields[4].Descriptor()
+	// paymentinvoicedocument.Sha256Validator is a validator for the "sha256" field. It is called by the builders before save.
+	paymentinvoicedocument.Sha256Validator = paymentinvoicedocumentDescSha256.Validators[0].(func(string) error)
+	// paymentinvoicedocumentDescCreatedAt is the schema descriptor for created_at field.
+	paymentinvoicedocumentDescCreatedAt := paymentinvoicedocumentFields[6].Descriptor()
+	// paymentinvoicedocument.DefaultCreatedAt holds the default value on creation for the created_at field.
+	paymentinvoicedocument.DefaultCreatedAt = paymentinvoicedocumentDescCreatedAt.Default.(func() time.Time)
+	// paymentinvoicedocumentDescUpdatedAt is the schema descriptor for updated_at field.
+	paymentinvoicedocumentDescUpdatedAt := paymentinvoicedocumentFields[7].Descriptor()
+	// paymentinvoicedocument.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	paymentinvoicedocument.DefaultUpdatedAt = paymentinvoicedocumentDescUpdatedAt.Default.(func() time.Time)
+	// paymentinvoicedocument.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	paymentinvoicedocument.UpdateDefaultUpdatedAt = paymentinvoicedocumentDescUpdatedAt.UpdateDefault.(func() time.Time)
+	paymentinvoicerequestFields := schema.PaymentInvoiceRequest{}.Fields()
+	_ = paymentinvoicerequestFields
+	// paymentinvoicerequestDescTitleType is the schema descriptor for title_type field.
+	paymentinvoicerequestDescTitleType := paymentinvoicerequestFields[2].Descriptor()
+	// paymentinvoicerequest.TitleTypeValidator is a validator for the "title_type" field. It is called by the builders before save.
+	paymentinvoicerequest.TitleTypeValidator = paymentinvoicerequestDescTitleType.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescTitle is the schema descriptor for title field.
+	paymentinvoicerequestDescTitle := paymentinvoicerequestFields[3].Descriptor()
+	// paymentinvoicerequest.TitleValidator is a validator for the "title" field. It is called by the builders before save.
+	paymentinvoicerequest.TitleValidator = paymentinvoicerequestDescTitle.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescTaxIdentifier is the schema descriptor for tax_identifier field.
+	paymentinvoicerequestDescTaxIdentifier := paymentinvoicerequestFields[4].Descriptor()
+	// paymentinvoicerequest.TaxIdentifierValidator is a validator for the "tax_identifier" field. It is called by the builders before save.
+	paymentinvoicerequest.TaxIdentifierValidator = paymentinvoicerequestDescTaxIdentifier.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescRecipientEmail is the schema descriptor for recipient_email field.
+	paymentinvoicerequestDescRecipientEmail := paymentinvoicerequestFields[5].Descriptor()
+	// paymentinvoicerequest.RecipientEmailValidator is a validator for the "recipient_email" field. It is called by the builders before save.
+	paymentinvoicerequest.RecipientEmailValidator = paymentinvoicerequestDescRecipientEmail.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescRecipientPhone is the schema descriptor for recipient_phone field.
+	paymentinvoicerequestDescRecipientPhone := paymentinvoicerequestFields[6].Descriptor()
+	// paymentinvoicerequest.RecipientPhoneValidator is a validator for the "recipient_phone" field. It is called by the builders before save.
+	paymentinvoicerequest.RecipientPhoneValidator = paymentinvoicerequestDescRecipientPhone.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescCurrency is the schema descriptor for currency field.
+	paymentinvoicerequestDescCurrency := paymentinvoicerequestFields[9].Descriptor()
+	// paymentinvoicerequest.CurrencyValidator is a validator for the "currency" field. It is called by the builders before save.
+	paymentinvoicerequest.CurrencyValidator = paymentinvoicerequestDescCurrency.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescStatus is the schema descriptor for status field.
+	paymentinvoicerequestDescStatus := paymentinvoicerequestFields[10].Descriptor()
+	// paymentinvoicerequest.DefaultStatus holds the default value on creation for the status field.
+	paymentinvoicerequest.DefaultStatus = paymentinvoicerequestDescStatus.Default.(string)
+	// paymentinvoicerequest.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	paymentinvoicerequest.StatusValidator = paymentinvoicerequestDescStatus.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescRevision is the schema descriptor for revision field.
+	paymentinvoicerequestDescRevision := paymentinvoicerequestFields[11].Descriptor()
+	// paymentinvoicerequest.DefaultRevision holds the default value on creation for the revision field.
+	paymentinvoicerequest.DefaultRevision = paymentinvoicerequestDescRevision.Default.(int)
+	// paymentinvoicerequestDescProvider is the schema descriptor for provider field.
+	paymentinvoicerequestDescProvider := paymentinvoicerequestFields[12].Descriptor()
+	// paymentinvoicerequest.DefaultProvider holds the default value on creation for the provider field.
+	paymentinvoicerequest.DefaultProvider = paymentinvoicerequestDescProvider.Default.(string)
+	// paymentinvoicerequest.ProviderValidator is a validator for the "provider" field. It is called by the builders before save.
+	paymentinvoicerequest.ProviderValidator = paymentinvoicerequestDescProvider.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescProviderInvoiceID is the schema descriptor for provider_invoice_id field.
+	paymentinvoicerequestDescProviderInvoiceID := paymentinvoicerequestFields[13].Descriptor()
+	// paymentinvoicerequest.ProviderInvoiceIDValidator is a validator for the "provider_invoice_id" field. It is called by the builders before save.
+	paymentinvoicerequest.ProviderInvoiceIDValidator = paymentinvoicerequestDescProviderInvoiceID.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescInvoiceItemName is the schema descriptor for invoice_item_name field.
+	paymentinvoicerequestDescInvoiceItemName := paymentinvoicerequestFields[14].Descriptor()
+	// paymentinvoicerequest.InvoiceItemNameValidator is a validator for the "invoice_item_name" field. It is called by the builders before save.
+	paymentinvoicerequest.InvoiceItemNameValidator = paymentinvoicerequestDescInvoiceItemName.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescInvoiceCode is the schema descriptor for invoice_code field.
+	paymentinvoicerequestDescInvoiceCode := paymentinvoicerequestFields[15].Descriptor()
+	// paymentinvoicerequest.InvoiceCodeValidator is a validator for the "invoice_code" field. It is called by the builders before save.
+	paymentinvoicerequest.InvoiceCodeValidator = paymentinvoicerequestDescInvoiceCode.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescInvoiceNumber is the schema descriptor for invoice_number field.
+	paymentinvoicerequestDescInvoiceNumber := paymentinvoicerequestFields[16].Descriptor()
+	// paymentinvoicerequest.InvoiceNumberValidator is a validator for the "invoice_number" field. It is called by the builders before save.
+	paymentinvoicerequest.InvoiceNumberValidator = paymentinvoicerequestDescInvoiceNumber.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescDocumentFilename is the schema descriptor for document_filename field.
+	paymentinvoicerequestDescDocumentFilename := paymentinvoicerequestFields[17].Descriptor()
+	// paymentinvoicerequest.DocumentFilenameValidator is a validator for the "document_filename" field. It is called by the builders before save.
+	paymentinvoicerequest.DocumentFilenameValidator = paymentinvoicerequestDescDocumentFilename.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescDocumentSha256 is the schema descriptor for document_sha256 field.
+	paymentinvoicerequestDescDocumentSha256 := paymentinvoicerequestFields[19].Descriptor()
+	// paymentinvoicerequest.DocumentSha256Validator is a validator for the "document_sha256" field. It is called by the builders before save.
+	paymentinvoicerequest.DocumentSha256Validator = paymentinvoicerequestDescDocumentSha256.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescEmailDeliveryStatus is the schema descriptor for email_delivery_status field.
+	paymentinvoicerequestDescEmailDeliveryStatus := paymentinvoicerequestFields[20].Descriptor()
+	// paymentinvoicerequest.DefaultEmailDeliveryStatus holds the default value on creation for the email_delivery_status field.
+	paymentinvoicerequest.DefaultEmailDeliveryStatus = paymentinvoicerequestDescEmailDeliveryStatus.Default.(string)
+	// paymentinvoicerequest.EmailDeliveryStatusValidator is a validator for the "email_delivery_status" field. It is called by the builders before save.
+	paymentinvoicerequest.EmailDeliveryStatusValidator = paymentinvoicerequestDescEmailDeliveryStatus.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescEmailDeliveryAttempts is the schema descriptor for email_delivery_attempts field.
+	paymentinvoicerequestDescEmailDeliveryAttempts := paymentinvoicerequestFields[21].Descriptor()
+	// paymentinvoicerequest.DefaultEmailDeliveryAttempts holds the default value on creation for the email_delivery_attempts field.
+	paymentinvoicerequest.DefaultEmailDeliveryAttempts = paymentinvoicerequestDescEmailDeliveryAttempts.Default.(int)
+	// paymentinvoicerequestDescEmailDeliveryErrorKind is the schema descriptor for email_delivery_error_kind field.
+	paymentinvoicerequestDescEmailDeliveryErrorKind := paymentinvoicerequestFields[22].Descriptor()
+	// paymentinvoicerequest.EmailDeliveryErrorKindValidator is a validator for the "email_delivery_error_kind" field. It is called by the builders before save.
+	paymentinvoicerequest.EmailDeliveryErrorKindValidator = paymentinvoicerequestDescEmailDeliveryErrorKind.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescEmailDeliveryClaimToken is the schema descriptor for email_delivery_claim_token field.
+	paymentinvoicerequestDescEmailDeliveryClaimToken := paymentinvoicerequestFields[25].Descriptor()
+	// paymentinvoicerequest.EmailDeliveryClaimTokenValidator is a validator for the "email_delivery_claim_token" field. It is called by the builders before save.
+	paymentinvoicerequest.EmailDeliveryClaimTokenValidator = paymentinvoicerequestDescEmailDeliveryClaimToken.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescFeishuNotificationStatus is the schema descriptor for feishu_notification_status field.
+	paymentinvoicerequestDescFeishuNotificationStatus := paymentinvoicerequestFields[28].Descriptor()
+	// paymentinvoicerequest.DefaultFeishuNotificationStatus holds the default value on creation for the feishu_notification_status field.
+	paymentinvoicerequest.DefaultFeishuNotificationStatus = paymentinvoicerequestDescFeishuNotificationStatus.Default.(string)
+	// paymentinvoicerequest.FeishuNotificationStatusValidator is a validator for the "feishu_notification_status" field. It is called by the builders before save.
+	paymentinvoicerequest.FeishuNotificationStatusValidator = paymentinvoicerequestDescFeishuNotificationStatus.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescFeishuNotificationRevision is the schema descriptor for feishu_notification_revision field.
+	paymentinvoicerequestDescFeishuNotificationRevision := paymentinvoicerequestFields[29].Descriptor()
+	// paymentinvoicerequest.DefaultFeishuNotificationRevision holds the default value on creation for the feishu_notification_revision field.
+	paymentinvoicerequest.DefaultFeishuNotificationRevision = paymentinvoicerequestDescFeishuNotificationRevision.Default.(int)
+	// paymentinvoicerequestDescFeishuNotificationAttempts is the schema descriptor for feishu_notification_attempts field.
+	paymentinvoicerequestDescFeishuNotificationAttempts := paymentinvoicerequestFields[30].Descriptor()
+	// paymentinvoicerequest.DefaultFeishuNotificationAttempts holds the default value on creation for the feishu_notification_attempts field.
+	paymentinvoicerequest.DefaultFeishuNotificationAttempts = paymentinvoicerequestDescFeishuNotificationAttempts.Default.(int)
+	// paymentinvoicerequestDescFeishuNotificationErrorKind is the schema descriptor for feishu_notification_error_kind field.
+	paymentinvoicerequestDescFeishuNotificationErrorKind := paymentinvoicerequestFields[31].Descriptor()
+	// paymentinvoicerequest.FeishuNotificationErrorKindValidator is a validator for the "feishu_notification_error_kind" field. It is called by the builders before save.
+	paymentinvoicerequest.FeishuNotificationErrorKindValidator = paymentinvoicerequestDescFeishuNotificationErrorKind.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescFeishuNotificationClaimToken is the schema descriptor for feishu_notification_claim_token field.
+	paymentinvoicerequestDescFeishuNotificationClaimToken := paymentinvoicerequestFields[34].Descriptor()
+	// paymentinvoicerequest.FeishuNotificationClaimTokenValidator is a validator for the "feishu_notification_claim_token" field. It is called by the builders before save.
+	paymentinvoicerequest.FeishuNotificationClaimTokenValidator = paymentinvoicerequestDescFeishuNotificationClaimToken.Validators[0].(func(string) error)
+	// paymentinvoicerequestDescRequestedAt is the schema descriptor for requested_at field.
+	paymentinvoicerequestDescRequestedAt := paymentinvoicerequestFields[39].Descriptor()
+	// paymentinvoicerequest.DefaultRequestedAt holds the default value on creation for the requested_at field.
+	paymentinvoicerequest.DefaultRequestedAt = paymentinvoicerequestDescRequestedAt.Default.(func() time.Time)
+	// paymentinvoicerequestDescCreatedAt is the schema descriptor for created_at field.
+	paymentinvoicerequestDescCreatedAt := paymentinvoicerequestFields[42].Descriptor()
+	// paymentinvoicerequest.DefaultCreatedAt holds the default value on creation for the created_at field.
+	paymentinvoicerequest.DefaultCreatedAt = paymentinvoicerequestDescCreatedAt.Default.(func() time.Time)
+	// paymentinvoicerequestDescUpdatedAt is the schema descriptor for updated_at field.
+	paymentinvoicerequestDescUpdatedAt := paymentinvoicerequestFields[43].Descriptor()
+	// paymentinvoicerequest.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	paymentinvoicerequest.DefaultUpdatedAt = paymentinvoicerequestDescUpdatedAt.Default.(func() time.Time)
+	// paymentinvoicerequest.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	paymentinvoicerequest.UpdateDefaultUpdatedAt = paymentinvoicerequestDescUpdatedAt.UpdateDefault.(func() time.Time)
 	paymentorderFields := schema.PaymentOrder{}.Fields()
 	_ = paymentorderFields
 	// paymentorderDescUserEmail is the schema descriptor for user_email field.

@@ -37,4 +37,19 @@ describe('payment api', () => {
       resume_token: 'resume-token-123',
     })
   })
+
+  it('uses authenticated order-scoped invoice endpoints', async () => {
+    const payload = {
+      title_type: 'enterprise' as const,
+      title: 'Example Co.',
+      tax_identifier: '91310000MA12345678',
+      recipient_email: 'finance@example.com',
+    }
+
+    await paymentAPI.createInvoiceRequest(51, payload)
+    await paymentAPI.getInvoiceRequest(51)
+
+    expect(post).toHaveBeenCalledWith('/payment/orders/51/invoice', payload)
+    expect(get).toHaveBeenCalledWith('/payment/orders/51/invoice')
+  })
 })

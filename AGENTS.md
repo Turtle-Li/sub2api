@@ -1,5 +1,22 @@
 # Sub2API project operations
 
+## Order operations and invoices
+
+- For order display, purchase snapshots and manual invoice requests, read
+  `docs/ORDER_OPERATIONS_20260910.md` and `docs/INVOICING.md`. Payment and
+  entitlement delivery are independent persisted facts; never rewrite financial
+  states to change a badge. Preserve historical snapshots and invoice evidence.
+- Keep customer order history and invoice processing accessible when new
+  checkout is disabled. Reuse existing SMTP and Feishu credential injection;
+  never expose tax identifiers, email recipients or PDFs in bot notifications.
+
+## Internal credit denomination
+
+- Read `docs/CREDIT_PARITY_MIGRATION_20260910.md` before changing balances,
+  recharge ratios or model/group pricing. Owner policy is 1 CNY = 1 internal
+  credit, preserving existing purchasing power. The old 6.75 proposal is
+  superseded; live audit selected unchanged balances and effective prices.
+
 ## Unified payment integration
 
 - Read `docs/UNIFIED_PAYMENT_INTEGRATION.md` before changing unified payment
