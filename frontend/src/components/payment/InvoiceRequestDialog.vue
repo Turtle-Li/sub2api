@@ -107,7 +107,13 @@ const form = reactive<CreateInvoiceRequest>({
 
 const invoice = computed(() => props.order?.invoice)
 const orderEligible = computed(() => Boolean(
-  props.order?.invoice_eligible ?? (props.order?.status === 'COMPLETED' && !props.order?.needs_manual_review && props.order.refund_amount === 0 && props.order.pay_amount > 0)
+  props.order?.invoice_eligible ?? (
+    props.order?.status === 'COMPLETED' &&
+    !props.order?.needs_manual_review &&
+    props.order.refund_amount === 0 &&
+    (props.order.refund_requested_amount ?? 0) === 0 &&
+    props.order.pay_amount > 0
+  )
 ))
 const editable = computed(() => orderEligible.value && (!invoice.value || invoice.value.status === 'REJECTED'))
 const dialogTitle = computed(() => editable.value ? t('payment.invoice.requestTitle') : t('payment.invoice.detailTitle'))

@@ -69,3 +69,28 @@ Knowledge candidate: no — this is project-specific delivery work.
 
 Implementation status: `IMPLEMENTATION_READY`; local QA and independent review passed.
 Human acceptance and production release remain separate.
+
+## 2026-09-11 refund and fulfillment safety follow-up
+
+The order follow-up adds bounded sequential partial refunds and explicit reclaim
+evidence. `payment_orders.refund_amount` is the cumulative trusted-success amount;
+`payment_orders.refund_requested_amount` is the current in-flight request. A second
+request is rejected while an attempt is pending, cumulative refunds are capped at the
+paid/credited order amount, and the gateway receives the rounded cumulative delta so
+repeated attempts cannot over-refund through independent rounding.
+
+Balance-tier bonuses are automatically reclaimable only when the immutable snapshot
+proves that `credited_amount` matches `PaymentOrder.amount`; the normal balance
+deduction therefore removes the credited bonus as well. If the available balance is
+insufficient, the actual deduction is recorded and the order is held for manual review.
+Subscription bonus, reset-card and concurrency entitlements, plus partial subscription
+refunds, remain behind a manual entitlement-review fence because this schema has no
+safe reversible per-entitlement ledger. Reset-card grants now retain a payment-order
+reference for that review; they are not silently deleted during an uncertain refund.
+
+The local follow-up regression covers sequential 40/30/30 partial refunds, stale-plan
+race rejection, pending amount immutability, subscription partial-refund rejection,
+balance-snapshot bonus validation, fulfillment idempotence/recovery and migration
+idempotence. No live payment, refund, invoice issuance or outbound Feishu/SMTP request
+is implied by this local evidence; those checks are recorded only after the documented
+post-deploy smoke has actually run.

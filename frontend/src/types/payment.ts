@@ -132,6 +132,8 @@ export interface PaymentOrder {
   paid_at?: string
   completed_at?: string
   refund_amount: number
+  /** Amount of the currently pending/failed refund attempt, not settled money. */
+  refund_requested_amount?: number
   refund_reason?: string
   refund_requested_at?: string
   refund_requested_by?: number

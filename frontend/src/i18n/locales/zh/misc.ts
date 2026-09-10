@@ -721,6 +721,7 @@ export default {
       refundEnabled: '允许退款',
       allowUserRefund: '允许用户退款',
       alreadyRefunded: '已退款',
+      pendingRefundAmount: '待确认退款金额',
       deductBalance: '扣除余额',
       deductBalanceHint: '从用户余额中扣回充值金额',
       userBalance: '用户余额',

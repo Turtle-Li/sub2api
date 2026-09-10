@@ -81,10 +81,14 @@ The current payment UX keeps the frontend method list unified and does not expos
 - Legacy visible-method `enabled` fields remain compatibility fields, not routing switches
 
 Signing keys stay on the server through Vault; the settings UI exposes runtime capabilities without private-key inputs.
-Administrators can request asynchronous unified refunds for plain balance orders. Acceptance and uncertainty keep the
-refund pending; only a trusted success recovers balance once, honoring the administrator's deduction choice. Bonus,
-concurrency-upgrade and subscription entitlements require separate manual handling. This does not enable user
-self-service refunds. See [the integration contract](UNIFIED_PAYMENT_INTEGRATION.md).
+Administrators can request asynchronous unified refunds for plain balance orders, including bounded sequential partial
+refunds. `refund_amount` records the cumulative trusted-success amount and `refund_requested_amount` records the
+single in-flight request; the cumulative amount is capped at the order's refundable value and a pending/unknown
+attempt blocks a second request. Only trusted success recovers balance once, honoring the administrator's deduction
+choice. Balance-tier bonuses are reclaimed with the credited balance when the immutable purchase snapshot proves the
+bonus was included; shortfalls and concurrency upgrades require manual review. Subscription bonuses, reset cards and
+partial subscription refunds require manual entitlement rollback. This does not enable unrestricted user self-service
+refunds. See [the integration contract](UNIFIED_PAYMENT_INTEGRATION.md).
 
 ### Load Balance Strategies
 
@@ -276,6 +280,7 @@ User selects amount and payment method
 | `FAILED` | Balance credit failed, admin can retry |
 | `REFUND_REQUESTED` | Refund requested |
 | `REFUNDING` | Refund in progress |
+| `PARTIALLY_REFUNDED` | A partial refund has completed; the remaining amount is still refundable |
 | `REFUNDED` | Refund completed |
 
 ### Timeout and Fallback

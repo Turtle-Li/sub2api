@@ -45,6 +45,10 @@
           <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.alreadyRefunded') }}</span>
           <span class="font-medium text-red-600 dark:text-red-400">{{ creditedAmountSymbol }}{{ actuallyRefunded.toFixed(2) }}</span>
         </div>
+        <div v-if="pendingRequested > 0" class="mt-1 flex justify-between text-sm">
+          <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.pendingRefundAmount') }}</span>
+          <span class="font-medium text-amber-600 dark:text-amber-400">{{ creditedAmountSymbol }}{{ pendingRequested.toFixed(2) }}</span>
+        </div>
       </div>
 
       <!-- Deduct Balance -->
@@ -198,30 +202,56 @@ const form = reactive({
   force: false,
 })
 
-// In REFUND_REQUESTED / REFUND_PENDING status, refund_amount is requested/pending, not actually refunded.
-// Only PARTIALLY_REFUNDED / REFUNDED have real refund amounts.
+const hasRefundRequestedField = computed(() => typeof props.order?.refund_requested_amount === 'number')
+
+// refund_amount is the cumulative settled amount. Older rows may still expose
+// the in-flight amount there until migration 240 has run, so retain a narrow
+// compatibility fallback for non-terminal statuses.
 const actuallyRefunded = computed(() => {
   if (!props.order) return 0
   const s = props.order.status
-  if (s === 'PARTIALLY_REFUNDED' || s === 'REFUNDED') return props.order.refund_amount || 0
+  // After migration 240 refund_amount is cumulative in every state. A
+  // legacy in-flight row has no requested field and still stores its request
+  // in refund_amount; treat only those rows as the compatibility case so a
+  // settled partial refund is never offered twice. The API emits the new field
+  // even when it is zero, so field presence (not truthiness) distinguishes a
+  // migrated REFUND_FAILED row from an old one.
+  if (hasRefundRequestedField.value) {
+    return props.order.refund_amount || 0
+  }
+  if (s === 'REFUND_REQUESTED' || s === 'REFUND_PENDING' || s === 'REFUNDING' || s === 'REFUND_FAILED') {
+    return 0
+  }
+  return props.order.refund_amount || 0
+})
+
+const pendingRequested = computed(() => {
+  if (!props.order) return 0
+  if (hasRefundRequestedField.value) {
+    return Math.max(0, props.order.refund_requested_amount || 0)
+  }
+  const s = props.order.status
+  if (s === 'REFUND_REQUESTED' || s === 'REFUND_PENDING' || s === 'REFUND_FAILED' || s === 'REFUNDING') {
+    return props.order.refund_amount || 0
+  }
   return 0
 })
 
 const maxRefundable = computed(() => {
   if (!props.order) return 0
-  return props.order.amount - actuallyRefunded.value
+  return Math.max(0, props.order.amount - actuallyRefunded.value)
 })
 
 const balanceInsufficient = computed(() => {
   if (props.userBalance == null || !props.order) return false
-  return props.userBalance < props.order.amount
+  return props.userBalance < maxRefundable.value
 })
 
 watch(() => props.show, (val) => {
   if (val && props.order) {
-    // For REFUND_REQUESTED, pre-fill with the requested amount
-    if (props.order.status === 'REFUND_REQUESTED' && props.order.refund_amount) {
-      form.amount = props.order.refund_amount
+    // For a user request/retry, preserve the server-recorded suggested amount.
+    if ((props.order.status === 'REFUND_REQUESTED' || props.order.status === 'REFUND_FAILED') && pendingRequested.value > 0) {
+      form.amount = Math.min(pendingRequested.value, maxRefundable.value)
     } else {
       form.amount = maxRefundable.value
     }

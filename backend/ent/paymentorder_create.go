@@ -280,6 +280,20 @@ func (_c *PaymentOrderCreate) SetNillableRefundAmount(v *float64) *PaymentOrderC
 	return _c
 }
 
+// SetRefundRequestedAmount sets the "refund_requested_amount" field.
+func (_c *PaymentOrderCreate) SetRefundRequestedAmount(v float64) *PaymentOrderCreate {
+	_c.mutation.SetRefundRequestedAmount(v)
+	return _c
+}
+
+// SetNillableRefundRequestedAmount sets the "refund_requested_amount" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableRefundRequestedAmount(v *float64) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetRefundRequestedAmount(*v)
+	}
+	return _c
+}
+
 // SetRefundReason sets the "refund_reason" field.
 func (_c *PaymentOrderCreate) SetRefundReason(v string) *PaymentOrderCreate {
 	_c.mutation.SetRefundReason(v)
@@ -559,6 +573,10 @@ func (_c *PaymentOrderCreate) defaults() {
 		v := paymentorder.DefaultRefundAmount
 		_c.mutation.SetRefundAmount(v)
 	}
+	if _, ok := _c.mutation.RefundRequestedAmount(); !ok {
+		v := paymentorder.DefaultRefundRequestedAmount
+		_c.mutation.SetRefundRequestedAmount(v)
+	}
 	if _, ok := _c.mutation.ForceRefund(); !ok {
 		v := paymentorder.DefaultForceRefund
 		_c.mutation.SetForceRefund(v)
@@ -663,6 +681,9 @@ func (_c *PaymentOrderCreate) check() error {
 	}
 	if _, ok := _c.mutation.RefundAmount(); !ok {
 		return &ValidationError{Name: "refund_amount", err: errors.New(`ent: missing required field "PaymentOrder.refund_amount"`)}
+	}
+	if _, ok := _c.mutation.RefundRequestedAmount(); !ok {
+		return &ValidationError{Name: "refund_requested_amount", err: errors.New(`ent: missing required field "PaymentOrder.refund_requested_amount"`)}
 	}
 	if _, ok := _c.mutation.ForceRefund(); !ok {
 		return &ValidationError{Name: "force_refund", err: errors.New(`ent: missing required field "PaymentOrder.force_refund"`)}
@@ -818,6 +839,10 @@ func (_c *PaymentOrderCreate) createSpec() (*PaymentOrder, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.RefundAmount(); ok {
 		_spec.SetField(paymentorder.FieldRefundAmount, field.TypeFloat64, value)
 		_node.RefundAmount = value
+	}
+	if value, ok := _c.mutation.RefundRequestedAmount(); ok {
+		_spec.SetField(paymentorder.FieldRefundRequestedAmount, field.TypeFloat64, value)
+		_node.RefundRequestedAmount = value
 	}
 	if value, ok := _c.mutation.RefundReason(); ok {
 		_spec.SetField(paymentorder.FieldRefundReason, field.TypeString, value)
@@ -1361,6 +1386,24 @@ func (u *PaymentOrderUpsert) UpdateRefundAmount() *PaymentOrderUpsert {
 // AddRefundAmount adds v to the "refund_amount" field.
 func (u *PaymentOrderUpsert) AddRefundAmount(v float64) *PaymentOrderUpsert {
 	u.Add(paymentorder.FieldRefundAmount, v)
+	return u
+}
+
+// SetRefundRequestedAmount sets the "refund_requested_amount" field.
+func (u *PaymentOrderUpsert) SetRefundRequestedAmount(v float64) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldRefundRequestedAmount, v)
+	return u
+}
+
+// UpdateRefundRequestedAmount sets the "refund_requested_amount" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateRefundRequestedAmount() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldRefundRequestedAmount)
+	return u
+}
+
+// AddRefundRequestedAmount adds v to the "refund_requested_amount" field.
+func (u *PaymentOrderUpsert) AddRefundRequestedAmount(v float64) *PaymentOrderUpsert {
+	u.Add(paymentorder.FieldRefundRequestedAmount, v)
 	return u
 }
 
@@ -2108,6 +2151,27 @@ func (u *PaymentOrderUpsertOne) AddRefundAmount(v float64) *PaymentOrderUpsertOn
 func (u *PaymentOrderUpsertOne) UpdateRefundAmount() *PaymentOrderUpsertOne {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.UpdateRefundAmount()
+	})
+}
+
+// SetRefundRequestedAmount sets the "refund_requested_amount" field.
+func (u *PaymentOrderUpsertOne) SetRefundRequestedAmount(v float64) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetRefundRequestedAmount(v)
+	})
+}
+
+// AddRefundRequestedAmount adds v to the "refund_requested_amount" field.
+func (u *PaymentOrderUpsertOne) AddRefundRequestedAmount(v float64) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddRefundRequestedAmount(v)
+	})
+}
+
+// UpdateRefundRequestedAmount sets the "refund_requested_amount" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateRefundRequestedAmount() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateRefundRequestedAmount()
 	})
 }
 
@@ -3061,6 +3125,27 @@ func (u *PaymentOrderUpsertBulk) AddRefundAmount(v float64) *PaymentOrderUpsertB
 func (u *PaymentOrderUpsertBulk) UpdateRefundAmount() *PaymentOrderUpsertBulk {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.UpdateRefundAmount()
+	})
+}
+
+// SetRefundRequestedAmount sets the "refund_requested_amount" field.
+func (u *PaymentOrderUpsertBulk) SetRefundRequestedAmount(v float64) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetRefundRequestedAmount(v)
+	})
+}
+
+// AddRefundRequestedAmount adds v to the "refund_requested_amount" field.
+func (u *PaymentOrderUpsertBulk) AddRefundRequestedAmount(v float64) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddRefundRequestedAmount(v)
+	})
+}
+
+// UpdateRefundRequestedAmount sets the "refund_requested_amount" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateRefundRequestedAmount() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateRefundRequestedAmount()
 	})
 }
 

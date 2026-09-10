@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"math/big"
 	"strconv"
 	"time"
@@ -16,6 +17,9 @@ import (
 )
 
 func (s *PaymentService) validateUnifiedRefundOrder(o *dbent.PaymentOrder) error {
+	if !refundStateValid(o) {
+		return infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
+	}
 	if s.unifiedPayment == nil || !s.unifiedPayment.Enabled() {
 		return infraerrors.BadRequest("REFUND_UNAVAILABLE", "unified payment runtime is unavailable")
 	}
@@ -37,8 +41,8 @@ func (s *PaymentService) validateUnifiedRefundOrder(o *dbent.PaymentOrder) error
 	if o.OrderType != payment.OrderTypeBalance {
 		return infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "unified refunds currently support plain balance orders")
 	}
-	entitlements, err := paymentOrderEntitlementsStrict(o)
-	if err != nil || paymentEntitlementsRequireManualRefund(entitlements) {
+	manual, err := paymentOrderRequiresManualRefund(o)
+	if err != nil || manual {
 		return infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "order entitlements require manual refund review")
 	}
 	return nil
@@ -47,6 +51,17 @@ func (s *PaymentService) validateUnifiedRefundOrder(o *dbent.PaymentOrder) error
 // Convert the legacy product decimal boundary once, then calculate proportional
 // channel refunds exclusively with integers, including half-up rounding.
 func unifiedRefundAmounts(o *dbent.PaymentOrder, amount float64) (balanceMinor, gatewayFen int64, err error) {
+	return unifiedRefundAmountsAfterSettled(o, 0, amount)
+}
+
+// unifiedRefundAmountsAfterSettled converts one partial attempt to integer
+// channel units by subtracting the already-settled cumulative target.  This
+// avoids rounding each attempt independently and guarantees that the sum of
+// channel refunds never exceeds the original paid amount.
+func unifiedRefundAmountsAfterSettled(o *dbent.PaymentOrder, settled, amount float64) (balanceMinor, gatewayFen int64, err error) {
+	if o == nil {
+		return 0, 0, errors.New("invalid unified refund order")
+	}
 	toMinor := func(value float64) (int64, error) {
 		return payment.AmountToMinorUnit(strconv.FormatFloat(value, 'f', -1, 64), payment.DefaultPaymentCurrency)
 	}
@@ -62,16 +77,29 @@ func unifiedRefundAmounts(o *dbent.PaymentOrder, amount float64) (balanceMinor, 
 	if err != nil {
 		return 0, 0, err
 	}
-	if balanceMinor <= 0 || totalMinor <= 0 || paidFen <= 0 || balanceMinor > totalMinor {
+	settledMinor, err := toMinor(settled)
+	if err != nil {
+		return 0, 0, err
+	}
+	if balanceMinor <= 0 || totalMinor <= 0 || paidFen <= 0 || balanceMinor > totalMinor || settledMinor < 0 || settledMinor > totalMinor || balanceMinor+settledMinor > totalMinor {
 		return 0, 0, errors.New("invalid unified refund amount")
 	}
-	numerator := new(big.Int).Mul(big.NewInt(paidFen), big.NewInt(balanceMinor))
-	numerator.Add(numerator, big.NewInt(totalMinor/2))
-	numerator.Quo(numerator, big.NewInt(totalMinor))
-	if !numerator.IsInt64() || numerator.Sign() <= 0 || numerator.Int64() > paidFen {
+	roundedTarget := func(minor int64) int64 {
+		numerator := new(big.Int).Mul(big.NewInt(paidFen), big.NewInt(minor))
+		numerator.Add(numerator, big.NewInt(totalMinor/2))
+		numerator.Quo(numerator, big.NewInt(totalMinor))
+		if !numerator.IsInt64() {
+			return 0
+		}
+		return numerator.Int64()
+	}
+	target := roundedTarget(settledMinor + balanceMinor)
+	previous := roundedTarget(settledMinor)
+	delta := target - previous
+	if delta <= 0 || delta > paidFen || previous < 0 || target < previous {
 		return 0, 0, errors.New("invalid unified gateway refund amount")
 	}
-	return balanceMinor, numerator.Int64(), nil
+	return balanceMinor, delta, nil
 }
 
 func (s *PaymentService) executeUnifiedRefund(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
@@ -104,7 +132,22 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	if manual {
 		return nil, infraerrors.Conflict("REFUND_REQUIRES_MANUAL_REVIEW", "a refund for this order requires manual review")
 	}
-	balanceMinor, gatewayFen, err := unifiedRefundAmounts(o, p.RefundAmount)
+	settled, requested := refundOrderAmounts(o)
+	remaining := refundRemainingAmount(o, settled)
+	zeroTolerance := paymentAmountZeroTolerance(PaymentOrderCurrency(o))
+	if remaining <= zeroTolerance {
+		return nil, infraerrors.Conflict("REFUND_ALREADY_SETTLED", "the order has no refundable amount remaining")
+	}
+	if p.RefundAmount <= zeroTolerance || p.RefundAmount-remaining > zeroTolerance {
+		return nil, infraerrors.BadRequest("REFUND_AMOUNT_EXCEEDED", "refund amount exceeds the remaining refundable amount")
+	}
+	if o.Status == OrderStatusRefundPending && requested > zeroTolerance && math.Abs(p.RefundAmount-requested) >= zeroTolerance {
+		return nil, infraerrors.Conflict("REFUND_IN_PROGRESS", "another refund request is already pending")
+	}
+	if math.Abs(p.RefundAmount-remaining) < zeroTolerance {
+		p.RefundAmount = remaining
+	}
+	balanceMinor, gatewayFen, err := unifiedRefundAmountsAfterSettled(o, settled, p.RefundAmount)
 	if err != nil {
 		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "invalid unified refund amount")
 	}
@@ -122,7 +165,7 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 		}
 		return a, nil
 	}
-	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}, o.Status) {
+	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded}, o.Status) {
 		return nil, infraerrors.Conflict("CONFLICT", "order status does not allow another refund")
 	}
 	snapshot := psOrderProviderSnapshot(o)
@@ -139,7 +182,8 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 		return nil, err
 	}
 	if _, err := client.PaymentOrder.UpdateOneID(o.ID).SetStatus(OrderStatusRefundPending).
-		SetRefundAmount(p.RefundAmount).SetRefundReason(p.Reason).SetForceRefund(p.Force).
+		SetRefundAmount(settled).SetRefundRequestedAmount(p.RefundAmount).
+		SetRefundReason(p.Reason).SetForceRefund(p.Force).
 		ClearRefundAt().ClearFailedAt().ClearFailedReason().Save(txCtx); err != nil {
 		return nil, err
 	}
@@ -284,7 +328,9 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 			response = pendingUnifiedRefundResult(true)
 		} else if result.Status == unifiedpay.RefundStatusSucceeded {
 			amount := payment.MinorUnitToAmount(a.BalanceAmountMinor, payment.DefaultPaymentCurrency)
+			settled, _ := refundOrderAmounts(o)
 			plan := &RefundPlan{OrderID: o.ID, Order: o, RefundAmount: amount,
+				SettledRefundAmount: settled, RemainingRefundable: refundRemainingAmount(o, settled),
 				Reason: psStringValue(o.RefundReason), Force: a.Force, DeductBalance: a.DeductBalance,
 				DeductionType: payment.DeductionTypeNone}
 			if a.DeductBalance {

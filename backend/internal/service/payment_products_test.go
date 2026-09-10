@@ -49,6 +49,51 @@ func TestPaymentEntitlementsRequireManualRefundForEveryNonReversibleBenefit(t *t
 	require.False(t, paymentEntitlementsRequireManualRefund(PlanEntitlements{}))
 }
 
+func TestPaymentOrderRequiresManualRefundVerifiesBalanceBonusWasCredited(t *testing.T) {
+	base := func(credited any) *dbent.PaymentOrder {
+		return &dbent.PaymentOrder{
+			Amount: 100,
+			ProductSnapshot: map[string]any{
+				"kind":            paymentSnapshotKindBalance,
+				"credited_amount": credited,
+				"entitlements":    map[string]any{"balance_bonus": 5},
+			},
+		}
+	}
+
+	manual, err := paymentOrderRequiresManualRefund(base(float64(100)))
+	require.NoError(t, err)
+	require.False(t, manual, "a matching credited amount proves the bonus is reclaimable")
+
+	for name, order := range map[string]*dbent.PaymentOrder{
+		"missing credited amount":    base(nil),
+		"mismatched credited amount": base(95),
+		"one-cent credited mismatch": base(99.99),
+		"non-finite credited amount": base("NaN"),
+		"missing order amount": {
+			ProductSnapshot: map[string]any{
+				"kind":            paymentSnapshotKindBalance,
+				"credited_amount": 100,
+				"entitlements":    map[string]any{"balance_bonus": 5},
+			},
+		},
+		"legacy non-balance snapshot": {
+			Amount: 100,
+			ProductSnapshot: map[string]any{
+				"kind":            "subscription",
+				"credited_amount": 100,
+				"entitlements":    map[string]any{"balance_bonus": 5},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			manual, err := paymentOrderRequiresManualRefund(order)
+			require.NoError(t, err)
+			require.True(t, manual)
+		})
+	}
+}
+
 func TestPlanDiscountPercentAndPeriodLabel(t *testing.T) {
 	original := 120.0
 	require.Equal(t, 20.0, PlanDiscountPercent(96, &original))

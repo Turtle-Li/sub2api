@@ -62,6 +62,8 @@ const (
 	FieldStatus = "status"
 	// FieldRefundAmount holds the string denoting the refund_amount field in the database.
 	FieldRefundAmount = "refund_amount"
+	// FieldRefundRequestedAmount holds the string denoting the refund_requested_amount field in the database.
+	FieldRefundRequestedAmount = "refund_requested_amount"
 	// FieldRefundReason holds the string denoting the refund_reason field in the database.
 	FieldRefundReason = "refund_reason"
 	// FieldRefundAt holds the string denoting the refund_at field in the database.
@@ -143,6 +145,7 @@ var Columns = []string{
 	FieldProductSnapshot,
 	FieldStatus,
 	FieldRefundAmount,
+	FieldRefundRequestedAmount,
 	FieldRefundReason,
 	FieldRefundAt,
 	FieldForceRefund,
@@ -202,6 +205,8 @@ var (
 	StatusValidator func(string) error
 	// DefaultRefundAmount holds the default value on creation for the "refund_amount" field.
 	DefaultRefundAmount float64
+	// DefaultRefundRequestedAmount holds the default value on creation for the "refund_requested_amount" field.
+	DefaultRefundRequestedAmount float64
 	// DefaultForceRefund holds the default value on creation for the "force_refund" field.
 	DefaultForceRefund bool
 	// RefundRequestedByValidator is a validator for the "refund_requested_by" field. It is called by the builders before save.
@@ -334,6 +339,11 @@ func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 // ByRefundAmount orders the results by the refund_amount field.
 func ByRefundAmount(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRefundAmount, opts...).ToFunc()
+}
+
+// ByRefundRequestedAmount orders the results by the refund_requested_amount field.
+func ByRefundRequestedAmount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRefundRequestedAmount, opts...).ToFunc()
 }
 
 // ByRefundReason orders the results by the refund_reason field.

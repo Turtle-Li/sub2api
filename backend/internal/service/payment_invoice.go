@@ -809,7 +809,7 @@ func invoiceOrderEligible(order *dbent.PaymentOrder, needsReview bool) bool {
 	if order == nil || needsReview || order.PaidAt == nil || order.CompletedAt == nil || order.PayAmount <= 0 {
 		return false
 	}
-	if order.RefundAmount > 0 || psIsRefundStatus(order.Status) {
+	if order.RefundAmount > 0 || order.RefundRequestedAmount > 0 || psIsRefundStatus(order.Status) {
 		return false
 	}
 	return true

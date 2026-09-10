@@ -243,7 +243,7 @@ async function confirmRefund() {
 }
 
 function canRequestRefund(order: PaymentOrder): boolean {
-  if (order.status !== 'COMPLETED') return false
+  if (order.status !== 'COMPLETED' && order.status !== 'PARTIALLY_REFUNDED') return false
   if (!order.provider_instance_id) return false
   return refundEligibleProviders.value.has(order.provider_instance_id)
 }
@@ -260,7 +260,13 @@ function invoiceActionLabel(order: PaymentOrder): string {
 }
 
 function invoiceOrderEligible(order: PaymentOrder): boolean {
-  return order.invoice_eligible ?? (order.status === 'COMPLETED' && !order.needs_manual_review && order.refund_amount === 0 && order.pay_amount > 0)
+  return order.invoice_eligible ?? (
+    order.status === 'COMPLETED' &&
+    !order.needs_manual_review &&
+    order.refund_amount === 0 &&
+    (order.refund_requested_amount ?? 0) === 0 &&
+    order.pay_amount > 0
+  )
 }
 
 function openInvoiceDialog(order: PaymentOrder) {

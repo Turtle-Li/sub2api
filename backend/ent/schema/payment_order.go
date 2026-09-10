@@ -111,6 +111,14 @@ func (PaymentOrder) Fields() []ent.Field {
 		field.Float("refund_amount").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
 			Default(0),
+		// refund_amount is the cumulative amount that the gateway has
+		// confirmed as refunded.  A separate requested amount is required so a
+		// pending/failed attempt cannot be mistaken for money that was already
+		// returned, and so subsequent partial refunds can be bounded by the
+		// remaining refundable amount.
+		field.Float("refund_requested_amount").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			Default(0),
 		field.String("refund_reason").
 			Optional().
 			Nillable().

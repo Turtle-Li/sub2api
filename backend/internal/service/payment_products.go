@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
+
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 )
 
 // PlanEntitlements is the public, structured set of benefits delivered after
@@ -165,11 +168,113 @@ func PlanEntitlementsFromRaw(raw map[string]any) PlanEntitlements {
 	return entitlements
 }
 
+// paymentSnapshotKindBalance is the product snapshot kind written for a
+// balance top-up. Balance-tier bonuses are folded into the credited amount
+// (PaymentOrder.amount), so the ordinary balance refund deduction already
+// reclaims them. Subscription bonuses are added separately and therefore must
+// remain behind the manual-reclaim fence.
+const paymentSnapshotKindBalance = "balance"
+
 // paymentEntitlementsRequireManualRefund reports benefits that cannot yet be
 // reversed by the refund ledger. Refusing an automatic refund is safer than
 // returning the payment while leaving a bonus or account upgrade behind.
 func paymentEntitlementsRequireManualRefund(entitlements PlanEntitlements) bool {
 	return entitlements.BalanceBonus > 0 || entitlements.ResetCardCount > 0 || entitlements.Concurrency > 0
+}
+
+// paymentOrderRequiresManualRefund resolves the refund fence from the
+// immutable purchase snapshot. Live plan edits must never change whether an
+// already-paid order is refundable.
+func paymentOrderRequiresManualRefund(order *dbent.PaymentOrder) (bool, error) {
+	if order == nil {
+		// A missing order cannot be proven to have had its entitlements reclaimed.
+		return true, nil
+	}
+	entitlements, err := paymentOrderEntitlementsStrict(order)
+	if err != nil {
+		return false, err
+	}
+	if entitlements.ResetCardCount > 0 || entitlements.Concurrency > 0 {
+		return true, nil
+	}
+	if entitlements.BalanceBonus <= 0 {
+		return false, nil
+	}
+	kind := ""
+	if order.ProductSnapshot != nil {
+		kind, _ = order.ProductSnapshot["kind"].(string)
+	}
+	if kind != paymentSnapshotKindBalance {
+		return true, nil
+	}
+
+	// A balance bonus is only automatically reclaimable when the immutable
+	// snapshot proves that it was folded into the credited balance (and thus
+	// into PaymentOrder.amount).  Treat missing, malformed, or inconsistent
+	// evidence as manual review rather than risking a refund that leaves the
+	// bonus behind.
+	if !isFinitePositiveRefundAmount(order.Amount) || order.ProductSnapshot == nil {
+		return true, nil
+	}
+	credited, ok := paymentSnapshotFloat(order.ProductSnapshot["credited_amount"])
+	if !ok || !isFinitePositiveRefundAmount(credited) {
+		return true, nil
+	}
+	// Snapshot evidence is a refund-safety fence, not a provider-notification
+	// comparison. Use the currency's half-minor-unit equality here so a
+	// one-cent discrepancy cannot accidentally classify a bonus as already
+	// reclaimed.
+	tolerance := paymentAmountZeroTolerance(PaymentOrderCurrency(order))
+	return math.Abs(credited-order.Amount) > tolerance, nil
+}
+
+// paymentSnapshotFloat accepts the numeric representations used by JSON
+// snapshots before and after a database round trip. Strings are deliberately
+// accepted only when they parse as finite numbers so legacy rows can still be
+// evaluated without weakening the safety fence.
+func paymentSnapshotFloat(value any) (float64, bool) {
+	var n float64
+	switch typed := value.(type) {
+	case float64:
+		n = typed
+	case float32:
+		n = float64(typed)
+	case int:
+		n = float64(typed)
+	case int8:
+		n = float64(typed)
+	case int16:
+		n = float64(typed)
+	case int32:
+		n = float64(typed)
+	case int64:
+		n = float64(typed)
+	case uint:
+		n = float64(typed)
+	case uint8:
+		n = float64(typed)
+	case uint16:
+		n = float64(typed)
+	case uint32:
+		n = float64(typed)
+	case uint64:
+		n = float64(typed)
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return 0, false
+		}
+		n = parsed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return 0, false
+		}
+		n = parsed
+	default:
+		return 0, false
+	}
+	return n, !math.IsNaN(n) && !math.IsInf(n, 0)
 }
 
 func PlanDiscountPercent(price float64, original *float64) float64 {

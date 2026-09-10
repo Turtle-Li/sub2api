@@ -33,11 +33,17 @@ func calculateCreditedBalance(paymentAmount, multiplier float64) float64 {
 }
 
 func calculateGatewayRefundAmount(orderAmount, payAmount, refundAmount float64, currency string) float64 {
-	if orderAmount <= 0 || payAmount <= 0 || refundAmount <= 0 {
+	if !isFinitePositiveRefundAmount(orderAmount) ||
+		!isFinitePositiveRefundAmount(payAmount) ||
+		!isFinitePositiveRefundAmount(refundAmount) {
 		return 0
 	}
 	fractionDigits := int32(payment.CurrencyMaxFractionDigits(currency))
-	if math.Abs(refundAmount-orderAmount) <= paymentAmountToleranceForCurrency(currency) {
+	// Payment amounts are stored as floats for historical reasons, but the
+	// gateway operates on the currency's smallest accepted unit.  The broader
+	// provider-notification tolerance (one fen for CNY) must not turn a valid
+	// one-fen partial refund on a two-fen order into a full refund.
+	if math.Abs(refundAmount-orderAmount) < paymentAmountZeroTolerance(currency) {
 		return decimal.NewFromFloat(payAmount).Round(fractionDigits).InexactFloat64()
 	}
 	return decimal.NewFromFloat(payAmount).
@@ -45,4 +51,39 @@ func calculateGatewayRefundAmount(orderAmount, payAmount, refundAmount float64, 
 		Div(decimal.NewFromFloat(orderAmount)).
 		Round(fractionDigits).
 		InexactFloat64()
+}
+
+// calculateGatewayRefundDelta returns the channel amount for one partial
+// attempt.  Computing the difference between the rounded cumulative targets
+// prevents independent per-attempt rounding from ever exceeding the original
+// paid amount.
+func calculateGatewayRefundDelta(orderAmount, payAmount, settledAmount, attemptAmount float64, currency string) float64 {
+	if !isFinitePositiveRefundAmount(orderAmount) ||
+		!isFinitePositiveRefundAmount(payAmount) ||
+		!isFiniteNonNegativeRefundAmount(settledAmount) ||
+		!isFinitePositiveRefundAmount(attemptAmount) {
+		return 0
+	}
+	if settledAmount >= orderAmount || attemptAmount <= paymentAmountZeroTolerance(currency) {
+		return 0
+	}
+	previous := calculateGatewayRefundAmount(orderAmount, payAmount, settledAmount, currency)
+	total := calculateGatewayRefundAmount(orderAmount, payAmount, settledAmount+attemptAmount, currency)
+	delta := total - previous
+	if !isFiniteNonNegativeRefundAmount(delta) || delta > payAmount {
+		return 0
+	}
+	return delta
+}
+
+// Refund amounts historically use float columns. Keep all arithmetic helpers
+// fail-closed when a corrupted row or an in-memory caller supplies NaN/Inf;
+// allowing such a value to flow into a comparison can otherwise bypass the
+// cumulative refund cap.
+func isFinitePositiveRefundAmount(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func isFiniteNonNegativeRefundAmount(value float64) bool {
+	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }

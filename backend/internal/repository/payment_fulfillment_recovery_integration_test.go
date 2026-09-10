@@ -157,6 +157,7 @@ func (f *paymentFulfillmentRecoveryPostgresFixture) cleanup() {
 			`DELETE FROM unified_payment_refund_events WHERE order_id = $1`,
 			`DELETE FROM unified_payment_refund_attempts WHERE order_id = $1`,
 			`DELETE FROM payment_audit_logs WHERE order_id = $1`,
+			`DELETE FROM subscription_reset_grants WHERE payment_order_id = $1`,
 			`DELETE FROM payment_orders WHERE id = $1`,
 		} {
 			if _, err := integrationDB.ExecContext(ctx, query, orderID); err != nil {

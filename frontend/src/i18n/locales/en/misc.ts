@@ -697,6 +697,7 @@ export default {
       refundEnabled: 'Refund Enabled',
       allowUserRefund: 'Allow User Refund',
       alreadyRefunded: 'Already Refunded',
+      pendingRefundAmount: 'Pending Refund Amount',
       deductBalance: 'Deduct Balance',
       deductBalanceHint: 'Subtract recharged amount from user balance',
       userBalance: 'User Balance',

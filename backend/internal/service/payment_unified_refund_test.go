@@ -130,13 +130,20 @@ func TestUnifiedRefundIntegerAmounts(t *testing.T) {
 		amount, paid, refund float64
 		want                 int64
 	}{
-		{10, 10.23, 10, 1023}, {10, 10.23, 5, 512}, {.01, .01, .01, 1},
+		{10, 10.23, 10, 1023}, {10, 10.23, 5, 512}, {.01, .01, .01, 1}, {.02, .02, .01, 1},
 	} {
 		minor, fen, err := unifiedRefundAmounts(&dbent.PaymentOrder{Amount: tc.amount, PayAmount: tc.paid}, tc.refund)
 		require.NoError(t, err)
 		require.Positive(t, minor)
 		require.Equal(t, tc.want, fen)
 	}
+	balanceMinor, gatewayFen, err := unifiedRefundAmountsAfterSettled(&dbent.PaymentOrder{Amount: .02, PayAmount: .02}, 0, .01)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), balanceMinor)
+	require.Equal(t, int64(1), gatewayFen)
+	_, gatewayFen, err = unifiedRefundAmountsAfterSettled(&dbent.PaymentOrder{Amount: .02, PayAmount: .02}, .01, .01)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), gatewayFen)
 	for _, amount := range []float64{math.NaN(), math.Inf(1), .001, 0, -1, 11} {
 		_, _, err := unifiedRefundAmounts(&dbent.PaymentOrder{Amount: 10, PayAmount: 10.23}, amount)
 		require.Error(t, err)

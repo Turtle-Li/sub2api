@@ -68,7 +68,7 @@
       </div>
 
       <div
-        v-if="order.refund_amount"
+        v-if="order.refund_amount || order.refund_requested_amount"
         class="rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20"
       >
         <h4 class="mb-2 text-sm font-semibold text-red-700 dark:text-red-400">
@@ -78,6 +78,10 @@
           <div>
             <span class="text-red-600 dark:text-red-400">{{ t('payment.admin.refundAmount') }}:</span>
             <span class="ml-1 font-medium text-red-700 dark:text-red-300">{{ creditedAmountSymbol }}{{ order.refund_amount.toFixed(2) }}</span>
+          </div>
+          <div v-if="order.refund_requested_amount">
+            <span class="text-amber-600 dark:text-amber-400">{{ t('payment.admin.pendingRefundAmount') }}:</span>
+            <span class="ml-1 font-medium text-amber-700 dark:text-amber-300">{{ creditedAmountSymbol }}{{ order.refund_requested_amount.toFixed(2) }}</span>
           </div>
           <div v-if="order.refund_reason" class="col-span-2">
             <span class="text-red-600 dark:text-red-400">{{ t('payment.admin.refundReason') }}:</span>

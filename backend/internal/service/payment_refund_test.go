@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"testing"
 	"time"
@@ -220,12 +221,14 @@ func TestExecuteRefundUsesActualAvailableBalanceDeduction(t *testing.T) {
 	}}
 	plan := &RefundPlan{
 		OrderID: order.ID, Order: order, RefundAmount: 100, GatewayAmount: 100,
-		Reason: "concurrent spend", Force: true, DeductionType: payment.DeductionTypeBalance, BalanceToDeduct: 100,
+		Reason: "concurrent spend", Force: true, DeductBalance: true,
+		DeductionType: payment.DeductionTypeBalance, BalanceToDeduct: 100,
 	}
 
 	result, err := (&PaymentService{entClient: client, userRepo: repo}).ExecuteRefund(ctx, plan)
 	require.NoError(t, err)
 	require.True(t, result.Success)
+	require.Contains(t, result.Warning, "remaining balance recovery requires manual review")
 	require.Equal(t, 25.0, plan.BalanceToDeduct)
 	require.Equal(t, 25.0, result.BalanceDeducted)
 	audit, err := client.PaymentAuditLog.Query().
@@ -233,6 +236,108 @@ func TestExecuteRefundUsesActualAvailableBalanceDeduction(t *testing.T) {
 		Only(ctx)
 	require.NoError(t, err)
 	require.Contains(t, audit.Detail, `"balanceDeducted":25`)
+}
+
+func TestExecuteRefundRollbackFailureRetainsOutstandingRequest(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "rollback-failure-retain-request")
+	order, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusRefunding).
+		SetRefundAmount(40).
+		SetRefundRequestedAmount(30).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{
+		entClient: client,
+		userRepo: &mockUserRepo{updateBalanceFn: func(context.Context, int64, float64) error {
+			return errors.New("injected rollback failure")
+		}},
+	}
+	plan := &RefundPlan{
+		// Deliberately stale monetary fields: the authoritative row already has
+		// a settled 40 plus an in-flight 30 request. A gateway/rollback failure
+		// must not overwrite those values with the plan's old snapshot.
+		OrderID: order.ID, Order: order, RefundAmount: 100, SettledRefundAmount: 0,
+		DeductionType: payment.DeductionTypeBalance, BalanceToDeduct: 30,
+	}
+
+	result, err := svc.handleGwFail(ctx, plan, errors.New("gateway outcome unknown"))
+	require.Nil(t, result)
+	require.Equal(t, "REFUND_FAILED", infraerrors.Reason(err))
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusRefundFailed, reloaded.Status)
+	require.InDelta(t, 40, reloaded.RefundAmount, 0.000001)
+	require.InDelta(t, 30, reloaded.RefundRequestedAmount, 0.000001)
+}
+
+func TestQueryAndFinalizeRefundRespectsNoDeductionChoice(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "query-no-deduction")
+	_, err := client.PaymentAuditLog.Update().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_PENDING")).
+		SetDetail(`{"refundID":"rf_test","gatewayAmount":100,"deductionRollbackOK":true,"deductBalance":false}`).
+		Save(ctx)
+	require.NoError(t, err)
+
+	deductions := 0
+	svc := &PaymentService{
+		entClient:    client,
+		loadBalancer: &captureLoadBalancer{},
+		userRepo: &mockUserRepo{deductAvailableBalanceFn: func(context.Context, int64, float64) (float64, error) {
+			deductions++
+			return 100, nil
+		}},
+	}
+	restore := replacePaymentProviderFactoryForTest(t, &refundQueryProviderTestDouble{
+		refundResponse: &payment.RefundResponse{RefundID: "rf_test", Status: payment.ProviderStatusSuccess},
+	})
+	defer restore()
+
+	result, err := svc.QueryAndFinalizeRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Success)
+	require.Zero(t, deductions)
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusRefunded, reloaded.Status)
+}
+
+func TestQueryAndFinalizeRefundDoesNotReconvertPersistedGatewayAmount(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "query-gateway-amount")
+	// The order credited amount includes a bonus. The pending audit's
+	// gatewayAmount is already the provider/channel amount (100), not the
+	// credited amount (110).
+	order, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetAmount(110).
+		SetPayAmount(100).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentAuditLog.Update().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_PENDING")).
+		SetDetail(`{"refundID":"rf_gateway_amount","gatewayAmount":100,"deductionRollbackOK":true,"deductBalance":false}`).
+		Save(ctx)
+	require.NoError(t, err)
+
+	provider := &refundQueryProviderTestDouble{
+		refundResponse: &payment.RefundResponse{RefundID: "rf_gateway_amount", Status: payment.ProviderStatusPending},
+	}
+	svc := &PaymentService{entClient: client, loadBalancer: &captureLoadBalancer{}}
+	restore := replacePaymentProviderFactoryForTest(t, provider)
+	defer restore()
+
+	result, err := svc.QueryAndFinalizeRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Success)
+	require.Len(t, provider.queryRequests, 1)
+	require.Equal(t, "100.00", provider.queryRequests[0].Amount)
 }
 
 func TestGwRefundRejectsAlipayMerchantIdentitySnapshotMismatch(t *testing.T) {
@@ -307,6 +412,42 @@ func TestCalculateGatewayRefundAmountUsesCurrencyPrecision(t *testing.T) {
 	require.InDelta(t, 6.173, calculateGatewayRefundAmount(100, 12.345, 50, "KWD"), 1e-12)
 	require.InDelta(t, 12.345, calculateGatewayRefundAmount(100, 12.345, 100, "KWD"), 1e-12)
 	require.InDelta(t, 52, calculateGatewayRefundAmount(100, 103, 50, "JPY"), 1e-12)
+}
+
+func TestRefundPrecisionKeepsOneFenPartialDistinctFromFullRefund(t *testing.T) {
+	order := &dbent.PaymentOrder{Amount: 0.02, PayAmount: 0.02}
+
+	// CNY 0.01 is the smallest valid amount.  It must not be swallowed by the
+	// historical one-fen provider comparison tolerance as a full 0.02 refund.
+	require.InDelta(t, 0.01, calculateGatewayRefundAmount(0.02, 0.02, 0.01, "CNY"), 1e-12)
+	require.InDelta(t, 0.01, calculateGatewayRefundDelta(0.02, 0.02, 0, 0.01, "CNY"), 1e-12)
+	total, status, err := settledRefundTotal(order, 0, 0.01)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPartiallyRefunded, status)
+	require.InDelta(t, 0.01, total, 1e-12)
+	total, status, err = settledRefundTotal(order, total, 0.01)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusRefunded, status)
+	require.InDelta(t, 0.02, total, 1e-12)
+}
+
+func TestRefundStateValidRejectsFiniteAmountsBeyondOrderCap(t *testing.T) {
+	for name, order := range map[string]*dbent.PaymentOrder{
+		"settled exceeds order": {
+			Amount: 100, RefundAmount: 100.01,
+		},
+		"requested exceeds remaining": {
+			Amount: 100, RefundAmount: 60, RefundRequestedAmount: 40.01,
+		},
+		"non-finite requested": {
+			Amount: 100, RefundRequestedAmount: math.Inf(1),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.False(t, refundStateValid(order))
+		})
+	}
+	require.True(t, refundStateValid(&dbent.PaymentOrder{Amount: 100, RefundAmount: 60, RefundRequestedAmount: 40}))
 }
 
 func TestFormatGatewayRefundAmountUsesOrderCurrency(t *testing.T) {
@@ -390,7 +531,10 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusRefundPending, reloaded.Status)
-	require.Equal(t, 40.0, reloaded.RefundAmount)
+	// refund_amount is the cumulative settled total; the gateway response is
+	// still pending, so this attempt lives in the separate requested column.
+	require.Zero(t, reloaded.RefundAmount)
+	require.Equal(t, 40.0, reloaded.RefundRequestedAmount)
 	require.NotNil(t, reloaded.RefundReason)
 	require.Equal(t, "gateway accepted but not final", *reloaded.RefundReason)
 	require.Nil(t, reloaded.RefundAt)
@@ -474,6 +618,143 @@ func TestFinishRefundSuccessStatusesFinalize(t *testing.T) {
 			require.Zero(t, pendingAudits)
 		})
 	}
+}
+
+func TestExecuteRefundAccumulatesSequentialPartialRefundsAndCapsRemainingAmount(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("refund-partial@example.com").
+		SetPasswordHash("hash").
+		SetUsername("refund-partial-user").
+		Save(ctx)
+	require.NoError(t, err)
+	inst, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("refund-partial-provider").
+		SetConfig("{}").
+		SetSupportedTypes("stripe").
+		SetEnabled(true).
+		SetRefundEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(100).
+		SetPayAmount(100).
+		SetFeeRate(0).
+		SetRechargeCode("REFUND-PARTIAL-ORDER").
+		SetOutTradeNo("sub2_refund_partial_order").
+		SetPaymentType(payment.TypeStripe).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusCompleted).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetPaidAt(time.Now()).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("local-test").
+		SetProviderInstanceID(strconv.FormatInt(inst.ID, 10)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	refund := func(amount float64) *RefundResult {
+		plan, early, prepareErr := svc.PrepareRefund(ctx, order.ID, amount, "partial", false, false)
+		require.NoError(t, prepareErr)
+		require.Nil(t, early)
+		result, executeErr := svc.ExecuteRefund(ctx, plan)
+		require.NoError(t, executeErr)
+		require.True(t, result.Success)
+		return result
+	}
+
+	refund(40)
+	current, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPartiallyRefunded, current.Status)
+	require.InDelta(t, 40, current.RefundAmount, 0.000001)
+	require.Zero(t, current.RefundRequestedAmount)
+
+	refund(30)
+	current, err = client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPartiallyRefunded, current.Status)
+	require.InDelta(t, 70, current.RefundAmount, 0.000001)
+	require.Zero(t, current.RefundRequestedAmount)
+
+	refund(30)
+	current, err = client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusRefunded, current.Status)
+	require.InDelta(t, 100, current.RefundAmount, 0.000001)
+	require.Zero(t, current.RefundRequestedAmount)
+
+	_, _, err = svc.PrepareRefund(ctx, order.ID, 1, "too late", false, false)
+	require.Equal(t, "INVALID_STATUS", infraerrors.Reason(err))
+
+	successAudits, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionHasPrefix("REFUND_SUCCESS")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 3, successAudits)
+}
+
+func TestPrepareRefundRejectsPartialSubscriptionWithoutEntitlementLedger(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "partial-subscription")
+	_, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetOrderType(payment.OrderTypeSubscription).
+		SetSubscriptionGroupID(7).
+		SetSubscriptionDays(30).
+		SetStatus(OrderStatusCompleted).
+		SetRefundAmount(0).
+		SetRefundRequestedAmount(0).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	plan, early, err := svc.PrepareRefund(ctx, order.ID, 40, "partial subscription", false, false)
+	require.Nil(t, plan)
+	require.Nil(t, early)
+	require.Equal(t, "REFUND_PARTIAL_UNSUPPORTED", infraerrors.Reason(err))
+}
+
+func TestExecuteRefundRejectsStalePlanAfterAnotherPartialRefund(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "stale-partial")
+	_, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusCompleted).
+		SetRefundAmount(0).
+		SetRefundRequestedAmount(0).
+		SetPaymentTradeNo("").
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	stale, early, err := svc.PrepareRefund(ctx, order.ID, 100, "stale full plan", false, false)
+	require.NoError(t, err)
+	require.Nil(t, early)
+
+	first, early, err := svc.PrepareRefund(ctx, order.ID, 60, "first partial", false, false)
+	require.NoError(t, err)
+	require.Nil(t, early)
+	result, err := svc.ExecuteRefund(ctx, first)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+
+	result, err = svc.ExecuteRefund(ctx, stale)
+	require.Nil(t, result)
+	require.Equal(t, "REFUND_AMOUNT_CHANGED", infraerrors.Reason(err))
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPartiallyRefunded, reloaded.Status)
+	require.InDelta(t, 60, reloaded.RefundAmount, 0.000001)
+	require.Zero(t, reloaded.RefundRequestedAmount)
 }
 
 func TestQueryAndFinalizeRefundFinalizesProviderStatuses(t *testing.T) {
@@ -644,7 +925,8 @@ func createPendingRefundOrderForTest(t *testing.T, ctx context.Context, client *
 		SetPaymentTradeNo("pi_" + suffix).
 		SetOrderType(payment.OrderTypeBalance).
 		SetStatus(OrderStatusRefundPending).
-		SetRefundAmount(100).
+		SetRefundAmount(0).
+		SetRefundRequestedAmount(100).
 		SetRefundReason("pending refund").
 		SetExpiresAt(time.Now().Add(time.Hour)).
 		SetPaidAt(time.Now()).
@@ -698,8 +980,10 @@ func (refundProviderTestDouble) Refund(context.Context, payment.RefundRequest) (
 type refundQueryProviderTestDouble struct {
 	refundProviderTestDouble
 	refundResponse *payment.RefundResponse
+	queryRequests  []payment.RefundQueryRequest
 }
 
-func (p *refundQueryProviderTestDouble) QueryRefund(context.Context, payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+func (p *refundQueryProviderTestDouble) QueryRefund(_ context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+	p.queryRequests = append(p.queryRequests, req)
 	return p.refundResponse, nil
 }

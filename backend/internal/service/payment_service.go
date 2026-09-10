@@ -127,17 +127,23 @@ type OrderListParams struct {
 }
 
 type RefundPlan struct {
-	OrderID         int64
-	Order           *dbent.PaymentOrder
-	RefundAmount    float64
-	GatewayAmount   float64
-	Reason          string
-	Force           bool
-	DeductBalance   bool
-	DeductionType   string
-	BalanceToDeduct float64
-	SubDaysToDeduct int
-	SubscriptionID  int64
+	OrderID      int64
+	Order        *dbent.PaymentOrder
+	RefundAmount float64
+	// SettledRefundAmount is the amount already confirmed by the gateway before
+	// this attempt.  RefundAmount is always the amount for the current attempt;
+	// keeping the two values separate prevents a pending request from consuming
+	// the order's remaining refundable allowance.
+	SettledRefundAmount float64
+	RemainingRefundable float64
+	GatewayAmount       float64
+	Reason              string
+	Force               bool
+	DeductBalance       bool
+	DeductionType       string
+	BalanceToDeduct     float64
+	SubDaysToDeduct     int
+	SubscriptionID      int64
 }
 
 type RefundResult struct {
