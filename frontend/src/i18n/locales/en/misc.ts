@@ -350,6 +350,17 @@ export default {
     plusFee: 'plus {rate}% fee',
     bestValue: 'Best value',
     mostPopular: 'Most popular',
+    resetShop: {
+      "title": "Subscription reset cards",
+      "hint": "Buy with your balance for one third of the monthly plan price. Using a card resets usage without extending the subscription. Cards expire with the current subscription.",
+      "requiresSubscription": "An active subscription is required to buy a reset card.",
+      "quote": "View price",
+      "confirm": "Buy one reset card for {name} using {price} credits. Use it from My subscriptions after purchase.",
+      "buy": "Confirm balance purchase",
+      "success": "Purchased. Use your reset card from My subscriptions.",
+      "failed": "Purchase not completed. Check your balance or retry."
+},
+    recommended: 'Recommended',
     viewOffer: 'View offer',
     selectTierFirst: 'Choose a top-up tier to continue',
     selectPlanFirst: 'Choose a plan to continue',

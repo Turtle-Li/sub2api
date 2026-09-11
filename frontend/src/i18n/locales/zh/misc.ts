@@ -374,6 +374,17 @@ export default {
     plusFee: '另加 {rate}% 手续费',
     bestValue: '最超值',
     mostPopular: '最受欢迎',
+    resetShop: {
+      "title": "订阅重置卡",
+      "hint": "使用余额购买，每张为对应套餐月付价格的三分之一；使用后重置用量，不延长订阅。卡片随当前订阅到期。",
+      "requiresSubscription": "需要先开通有效订阅，才能购买重置卡。",
+      "quote": "查看价格",
+      "confirm": "为 {name} 购买 1 张重置卡，将扣除 {price} 站内额度。购买后可在“我的订阅”中使用。",
+      "buy": "确认扣除余额并购买",
+      "success": "购买成功，请前往“我的订阅”使用重置卡。",
+      "failed": "购买未完成，请检查余额或重试。"
+},
+    recommended: '推荐',
     viewOffer: '查看活动',
     selectTierFirst: '请先选择一个充值档位',
     selectPlanFirst: '请先选择一个订阅套餐',

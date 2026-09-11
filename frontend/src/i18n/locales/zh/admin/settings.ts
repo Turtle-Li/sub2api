@@ -769,7 +769,7 @@ export default {
         rechargeOptionsHint: '每项可配置 amount、original_price、label、description、balance_bonus、concurrency、estimated_rate_multiplier、estimated_tokens、sort_order、enabled。折扣由原价与售价自动计算；balance_bonus 和 concurrency 会实际发放，倍率与 Token 仅用于页面估算展示。推荐标记请在下方选择，留空使用默认档位。',
         recommendedRecharge: '推荐充值档位',
         noRecommendedRecharge: '不设置推荐档位',
-        recommendedRechargeHint: '前台只显示统一的“最超值”样式，不开放颜色或角标自定义。',
+        recommendedRechargeHint: '前台只显示统一的“推荐”样式，不开放颜色或角标自定义。',
         orderTimeout: '订单超时时间',
         orderTimeoutHint: '单位：分钟，至少 1 分钟',
         maxPendingOrders: '最大待支付订单数',

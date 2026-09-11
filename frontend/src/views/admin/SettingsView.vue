@@ -10019,6 +10019,9 @@ const form = reactive<SettingsForm>({
   allow_user_view_error_requests: false,
 });
 
+let loadedRechargeOptionsJSON = "[]";
+let loadedRecommendedRechargeAmount = 0;
+
 const parsedRechargeOptionsForEditor = computed(() => {
   try {
     const parsed = JSON.parse(form.payment_recharge_options_json || "[]") as unknown;
@@ -11003,6 +11006,8 @@ async function loadSettings() {
     form.payment_recommended_recharge_amount = Number(
       paymentRechargeOptions.find((option) => option.recommended && option.enabled !== false)?.amount || 0,
     ) || 0;
+    loadedRechargeOptionsJSON = form.payment_recharge_options_json;
+    loadedRecommendedRechargeAmount = form.payment_recommended_recharge_amount;
     form.payment_banner = {
       enabled: false,
       title: "",
@@ -11649,7 +11654,12 @@ async function saveSettings() {
       payment_subscription_usd_to_cny_rate:
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
-      payment_recharge_options: normalizedRechargeOptions,
+      // A malformed stored list is exposed as an empty/partial parsed list.
+      // Saving unrelated settings must never replace it and reopen custom top-ups.
+      ...(form.payment_recharge_options_json !== loadedRechargeOptionsJSON ||
+        Number(form.payment_recommended_recharge_amount) !== loadedRecommendedRechargeAmount
+        ? { payment_recharge_options: normalizedRechargeOptions }
+        : {}),
       payment_enabled_types: form.payment_enabled_types,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,
@@ -11782,6 +11792,8 @@ async function saveSettings() {
     const updated = await settingsStepUp.run(() =>
       adminAPI.settings.updateSettings(payload),
     );
+    loadedRechargeOptionsJSON = form.payment_recharge_options_json;
+    loadedRecommendedRechargeAmount = Number(form.payment_recommended_recharge_amount) || 0;
     for (const [key, value] of Object.entries(updated)) {
       if (key === "openai_fast_policy_settings") continue;
       if (value !== null && value !== undefined) {

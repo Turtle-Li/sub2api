@@ -66,7 +66,7 @@ Sub2API 内置支付系统，支持用户自助充值；也可以把支付宝、
 | **最大待支付订单数** | 同一用户最大并行待支付订单数 | 3 |
 | **负载均衡策略** | 多服务商实例时的选择策略 | 轮询 |
 | **充值档位** | 固定充值金额及权益（JSON 数组）；支持 `amount`、`original_price`、`label`、`description`、`balance_bonus`、`concurrency`、`estimated_rate_multiplier`、`estimated_tokens`、`sort_order`、`enabled` | 空（兼容默认档位） |
-| **推荐充值档位** | 从已配置档位中选择一个，前台显示统一的“最超值”样式 | 不设置 |
+| **推荐充值档位** | 从已配置档位中选择一个，前台显示统一的“推荐”样式 | 不设置 |
 
 充值档位不是自定义金额输入。`original_price` 与 `amount` 自动生成划线原价和折扣；`balance_bonus`（倍率计算后的额外余额）与 `concurrency`（并发上限目标）会在支付成功后实际发放；`estimated_rate_multiplier`、`estimated_tokens` 仅作按量卡片的参考估算。配置了启用档位后，服务端只接受这些固定金额。推荐档位只影响展示，不影响价格或权益。
 

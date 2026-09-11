@@ -110,6 +110,8 @@
                 </div>
               </template>
 
+              <ResetCardShop :subscriptions="activeSubscriptions" @purchased="subscriptionStore.fetchActiveSubscriptions(true)" />
+
               <div v-if="activeSubscriptions.length > 0" class="mt-8">
                 <p class="payment-product-card__eyebrow mb-2">{{ t('payment.activeSubscription') }}</p>
                 <div class="space-y-2">
@@ -237,6 +239,7 @@ import {
 } from '@/components/payment/paymentFlow'
 import { platformAccentBarClass, platformBadgeLightClass, platformLabel } from '@/utils/platformColors'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
+import ResetCardShop from '@/components/payment/ResetCardShop.vue'
 import PaymentPromoBanner from '@/components/payment/PaymentPromoBanner.vue'
 import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'

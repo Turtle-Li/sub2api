@@ -1,0 +1,43 @@
+{
+  "settings": {
+    "payment_visible_method_wxpay_enabled": "false",
+    "ENABLED_PAYMENT_TYPES": "",
+    "RECHARGE_FEE_RATE": "0.00",
+    "payment_enabled": "false",
+    "MIN_RECHARGE_AMOUNT": "1.00",
+    "BALANCE_RECHARGE_MULTIPLIER": "1.00",
+    "MAX_RECHARGE_AMOUNT": "",
+    "SUBSCRIPTION_USD_TO_CNY_RATE": "",
+    "PAYMENT_RECHARGE_OPTIONS": "[]",
+    "payment_visible_method_wxpay_source": "",
+    "payment_visible_method_alipay_enabled": "false",
+    "payment_visible_method_alipay_source": ""
+  },
+  "plans": [],
+  "groups": [
+    {
+      "id": 4,
+      "name": "GPT PLUS",
+      "status": "active",
+      "rate_multiplier": 1.0,
+      "weekly_limit_usd": 110.0,
+      "monthly_limit_usd": 440.0
+    },
+    {
+      "id": 6,
+      "name": "按量-0.03倍率",
+      "status": "active",
+      "rate_multiplier": 0.03,
+      "weekly_limit_usd": 0.0,
+      "monthly_limit_usd": 0.0
+    },
+    {
+      "id": 12,
+      "name": "GPT 5X PRO",
+      "status": "active",
+      "rate_multiplier": 1.0,
+      "weekly_limit_usd": 510.0,
+      "monthly_limit_usd": 2040.0
+    }
+  ]
+}

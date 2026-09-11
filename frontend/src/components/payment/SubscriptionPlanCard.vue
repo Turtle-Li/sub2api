@@ -15,7 +15,7 @@
   >
     <span v-if="featured" class="payment-product-card__ribbon">
       <Icon name="sparkles" size="xs" :stroke-width="2" />
-      {{ t('payment.mostPopular') }}
+      {{ t(plan.entitlements?.recommended ? 'payment.recommended' : 'payment.mostPopular') }}
     </span>
 
     <div class="payment-product-card__body">
