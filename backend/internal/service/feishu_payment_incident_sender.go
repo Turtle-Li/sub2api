@@ -116,7 +116,7 @@ func (s *feishuPaymentIncidentSender) SendText(ctx context.Context, message stri
 	if err != nil {
 		return errFeishuPaymentWebhookDelivery
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return errFeishuPaymentWebhookDelivery
 	}
@@ -326,7 +326,7 @@ func loadFeishuPaymentVaultTextWithClient(ctx context.Context, socketPath, refer
 	if err != nil {
 		return "", errFeishuPaymentWebhookDelivery
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", errFeishuPaymentWebhookDelivery
 	}

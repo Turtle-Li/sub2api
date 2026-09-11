@@ -34,7 +34,11 @@ func (c *client) bindProduct(ctx context.Context, idem, code, returnURL, webhook
 	if err != nil || len(decoded) != 32 || !validIdentifier(idem, 16, 80) {
 		return ErrInvalidRequest
 	}
-	r := bindingRequest{AppID: c.appID, Environment: c.environment, BindingCode: code, KeyID: c.keyID, PublicKey: base64.StdEncoding.EncodeToString(c.privateKey.Public().(ed25519.PublicKey)), ReturnURL: returnURL, WebhookURL: webhookURL}
+	publicKey, ok := c.privateKey.Public().(ed25519.PublicKey)
+	if !ok {
+		return ErrInvalidConfiguration
+	}
+	r := bindingRequest{AppID: c.appID, Environment: c.environment, BindingCode: code, KeyID: c.keyID, PublicKey: base64.StdEncoding.EncodeToString(publicKey), ReturnURL: returnURL, WebhookURL: webhookURL}
 	r.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(c.privateKey, bindingCanonical(r, idem)))
 	body, _ := json.Marshal(r)
 	response, err := c.do(ctx, http.MethodPost, "/v1/product-bindings", body, idem, http.StatusOK)
@@ -115,8 +119,29 @@ func bindingPublicIP(ip net.IP) bool {
 		return false
 	}
 	if v := ip.To4(); v != nil {
-		return !(v[0] == 0 || v[0] >= 224 || (v[0] == 100 && v[1] >= 64 && v[1] <= 127) || (v[0] == 192 && v[1] == 0) || (v[0] == 198 && (v[1] == 18 || v[1] == 19 || v[1] == 51)) || (v[0] == 203 && v[1] == 0 && v[2] == 113))
+		if v[0] == 0 || v[0] >= 224 {
+			return false
+		}
+		if v[0] == 100 && v[1] >= 64 && v[1] <= 127 {
+			return false
+		}
+		if v[0] == 192 && v[1] == 0 {
+			return false
+		}
+		if v[0] == 198 && (v[1] == 18 || v[1] == 19 || v[1] == 51) {
+			return false
+		}
+		if v[0] == 203 && v[1] == 0 && v[2] == 113 {
+			return false
+		}
+		return true
 	}
 	v := ip.To16()
-	return v != nil && v[0]&0xe0 == 0x20 && !(v[0] == 0x20 && v[1] == 0x01 && v[2] == 0x0d && v[3] == 0xb8)
+	if v == nil || v[0]&0xe0 != 0x20 {
+		return false
+	}
+	if v[0] == 0x20 && v[1] == 0x01 && v[2] == 0x0d && v[3] == 0xb8 {
+		return false
+	}
+	return true
 }

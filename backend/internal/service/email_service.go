@@ -198,7 +198,13 @@ func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body
 }
 
 func (s *EmailService) SendEmailWithConfigAndAttachments(config *SMTPConfig, to, subject, body string, attachments []EmailAttachment) error {
-	message, err := buildSMTPMessageWithAttachments(config, to, subject, body, attachments)
+	var message smtpMessage
+	var err error
+	if len(attachments) == 0 {
+		message, err = buildSMTPMessage(config, to, subject, body)
+	} else {
+		message, err = buildSMTPMessageWithAttachments(config, to, subject, body, attachments)
+	}
 	if err != nil {
 		return err
 	}

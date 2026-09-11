@@ -1227,7 +1227,7 @@ func applyPaymentOrderListFilters(q *dbent.PaymentOrderQuery, p OrderListParams,
 			q.Where(paymentorder.IDEQ(orderID))
 			return nil
 		}
-		q = q.Where(paymentorder.Or(
+		q.Where(paymentorder.Or(
 			paymentorder.OutTradeNoContainsFold(keyword),
 			paymentorder.UserEmailContainsFold(keyword),
 			paymentorder.UserNameContainsFold(keyword),

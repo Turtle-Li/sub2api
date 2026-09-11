@@ -57,7 +57,7 @@ func (s *feishuPaymentIncidentStore) ListRefundFenceCandidates(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanFeishuPaymentOrderIDs(rows)
 }
 
@@ -80,7 +80,7 @@ func (s *feishuPaymentIncidentStore) ListPaidIncompleteCandidates(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanFeishuPaymentOrderIDs(rows)
 }
 
@@ -278,7 +278,7 @@ func (s *feishuPaymentIncidentStore) ListOpenForRecheck(ctx context.Context, lim
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var result []service.FeishuPaymentIncident
 	for rows.Next() {
 		var incident service.FeishuPaymentIncident
@@ -380,7 +380,7 @@ func (s *feishuPaymentIncidentStore) ClaimDue(ctx context.Context, limit int, le
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var candidates []service.FeishuPaymentDelivery
 	for rows.Next() {
 		delivery, err := scanFeishuPaymentDelivery(rows)

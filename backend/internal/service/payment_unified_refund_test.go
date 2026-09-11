@@ -295,7 +295,9 @@ func TestUnifiedRefundFinalizationRollbackAndDeductionChoice(t *testing.T) {
 			a, err := svc.reserveUnifiedRefundAttempt(ctx, p)
 			require.NoError(t, err)
 			if name == "deduction failure" {
-				svc.userRepo.(*unifiedRefundTestUsers).afterDeduct = func() error { return errors.New("injected transaction failure") }
+				users, ok := svc.userRepo.(*unifiedRefundTestUsers)
+				require.True(t, ok)
+				users.afterDeduct = func() error { return errors.New("injected transaction failure") }
 			}
 			if name == "shortfall" {
 				_, err = svc.entClient.User.UpdateOneID(o.UserID).SetBalance(2).Save(ctx)
@@ -404,7 +406,7 @@ func TestUnifiedRefundEvidenceRetainsTrustedTerminalFields(t *testing.T) {
 			}
 			rows, err := svc.entClient.QueryContext(ctx, "SELECT detail FROM unified_payment_refund_events WHERE order_id=$1 AND action=$2", o.ID, action)
 			require.NoError(t, err)
-			defer rows.Close()
+			defer func() { _ = rows.Close() }()
 			require.True(t, rows.Next())
 			var raw string
 			require.NoError(t, rows.Scan(&raw))

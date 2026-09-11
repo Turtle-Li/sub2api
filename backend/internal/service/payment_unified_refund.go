@@ -115,7 +115,7 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	txCtx := dbent.NewTxContext(ctx, tx)
 	client := tx.Client()
 	o, err := lockUnifiedRefundOrder(txCtx, client, p.OrderID)
@@ -270,7 +270,7 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	txCtx := dbent.NewTxContext(ctx, tx)
 	client := tx.Client()
 	o, err := lockUnifiedRefundOrder(txCtx, client, orderID)
@@ -445,7 +445,7 @@ func (s *PaymentService) rejectUnifiedRefundEvent(ctx context.Context, o *dbent.
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	txCtx := dbent.NewTxContext(ctx, tx)
 	client := tx.Client()
 	if _, err := lockUnifiedRefundOrder(txCtx, client, o.ID); err != nil {

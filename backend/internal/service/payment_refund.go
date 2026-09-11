@@ -1293,11 +1293,12 @@ func (s *PaymentService) restoreStatus(ctx context.Context, p *RefundPlan) {
 	if p == nil || p.Order == nil {
 		return
 	}
-	if p.Order.Status == OrderStatusRefundRequested {
+	switch p.Order.Status {
+	case OrderStatusRefundRequested:
 		rs = OrderStatusRefundRequested
-	} else if p.Order.Status == OrderStatusPartiallyRefunded {
+	case OrderStatusPartiallyRefunded:
 		rs = OrderStatusPartiallyRefunded
-	} else if p.Order.Status == OrderStatusRefundFailed {
+	case OrderStatusRefundFailed:
 		rs = OrderStatusRefundFailed
 	}
 	settled, requested := refundOrderAmounts(p.Order)

@@ -15,12 +15,14 @@ import (
 func newUnifiedServiceTestGateway(t *testing.T, baseURL string) *unifiedpay.Gateway {
 	t.Helper()
 	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	publicKey, ok := key.Public().(ed25519.PublicKey)
+	require.True(t, ok)
 	gateway, err := unifiedpay.New(unifiedpay.Config{
 		Enabled: true, BaseURL: baseURL, Environment: unifiedpay.EnvironmentSandbox,
 		OrganizationID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 		ProductID:      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", AppID: "app.sub2.sandbox",
 		RequestKeyID: "sub2.request.sandbox.v1", RequestPrivateKey: key,
-		WebhookPublicKeys: map[string]ed25519.PublicKey{"sub2.webhook.sandbox.v1": key.Public().(ed25519.PublicKey)},
+		WebhookPublicKeys: map[string]ed25519.PublicKey{"sub2.webhook.sandbox.v1": publicKey},
 		ReturnURL:         "http://127.0.0.1:3000/payment/result",
 	})
 	require.NoError(t, err)

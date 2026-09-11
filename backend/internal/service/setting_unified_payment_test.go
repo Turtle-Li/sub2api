@@ -18,7 +18,9 @@ import (
 func bindingServiceFixture(t *testing.T) (*SettingService, *panelRateLimitSettingRepo, unifiedpay.StoredIntegration) {
 	t.Helper()
 	raw := config.UnifiedPaymentConfig{BaseURL: "https://pay.example.com", Environment: "sandbox", AppID: "app.sub2.sandbox", RequestKeyID: "key.sub2.sandbox", OrganizationID: "11111111-1111-4111-8111-111111111111", ProductID: "22222222-2222-4222-8222-222222222222", ReturnURL: "https://sub2.example.com/payment/result", RequestPrivateKeyVaultRef: "vault://secret/data/test#key", VaultAgentSocket: "/run/sub2api-payment-vault/public.sock"}
-	public := ed25519.NewKeyFromSeed(make([]byte, 32)).Public().(ed25519.PublicKey)
+	key := ed25519.NewKeyFromSeed(make([]byte, 32))
+	public, ok := key.Public().(ed25519.PublicKey)
+	require.True(t, ok)
 	stored := unifiedpay.StoredIntegration{Version: 1, BaseURL: raw.BaseURL, SavedAt: time.Now().UTC(), Config: unifiedpay.IntegrationConfig{SchemaVersion: "payment-integration.v1", Environment: unifiedpay.EnvironmentSandbox, OrganizationID: raw.OrganizationID, ProductID: raw.ProductID, AppID: raw.AppID, RequestKeyID: raw.RequestKeyID, PaymentMethods: []string{"alipay", "wechat_pay"}, ReturnURLs: []string{raw.ReturnURL}, WebhookEndpoints: []unifiedpay.IntegrationWebhookEndpoint{{URL: "https://sub2.example.com/api/v1/payment/webhook/unified", SigningKeyID: "webhook.test.key"}}, WebhookSigningKeys: []unifiedpay.IntegrationWebhookKey{{KeyID: "webhook.test.key", Algorithm: "Ed25519", PublicKey: base64.StdEncoding.EncodeToString(public), Status: "active"}}}}
 	repo := &panelRateLimitSettingRepo{values: map[string]string{}}
 	return &SettingService{settingRepo: repo, cfg: &config.Config{UnifiedPayment: raw}}, repo, stored

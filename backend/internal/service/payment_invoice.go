@@ -655,7 +655,8 @@ func (s *PaymentService) AdminUpdateOrderInvoiceRequest(ctx context.Context, ord
 		if updated != 1 {
 			return infraerrors.Conflict("INVOICE_STATUS_CONFLICT", "invoice request changed; reload and try again")
 		}
-		if input.Status == InvoiceStatusIssued {
+		switch input.Status {
+		case InvoiceStatusIssued:
 			documentHash := fmt.Sprintf("%x", sha256.Sum256(input.Document.Data))
 			if _, createErr := client.PaymentInvoiceDocument.Create().
 				SetInvoiceRequestID(invoice.ID).
@@ -667,7 +668,7 @@ func (s *PaymentService) AdminUpdateOrderInvoiceRequest(ctx context.Context, ord
 				Save(txCtx); createErr != nil {
 				return fmt.Errorf("store invoice PDF: %w", createErr)
 			}
-		} else if input.Status == InvoiceStatusRejected {
+		case InvoiceStatusRejected:
 			if _, deleteErr := client.PaymentInvoiceDocument.Delete().
 				Where(paymentinvoicedocument.InvoiceRequestIDEQ(invoice.ID)).Exec(txCtx); deleteErr != nil {
 				return fmt.Errorf("clear rejected invoice document: %w", deleteErr)

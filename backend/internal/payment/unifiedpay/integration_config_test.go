@@ -2,7 +2,6 @@ package unifiedpay
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -21,9 +20,9 @@ func TestIntegrationConfigAuthenticatesAndRejectsForeignScope(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body, err := io.ReadAll(r.Body)
 			require.NoError(t, err)
-			verifySignedRequest(t, r, body, private.Public().(ed25519.PublicKey))
+			verifySignedRequest(t, r, body, testPublicKey(t, private))
 			require.Equal(t, "/v1/integration-config", r.RequestURI)
-			result := IntegrationConfig{SchemaVersion: "payment-integration.v1", Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID, AppID: testAppID, RequestKeyID: testRequestKeyID, PaymentMethods: []string{"alipay"}, ReturnURLs: []string{"https://sub2.example/result"}, WebhookEndpoints: []IntegrationWebhookEndpoint{{URL: "https://sub2.example/api/v1/payment/webhook/unified", SigningKeyID: testWebhookKeyID}}, WebhookSigningKeys: []IntegrationWebhookKey{{KeyID: testWebhookKeyID, Algorithm: "Ed25519", PublicKey: base64.StdEncoding.EncodeToString(private.Public().(ed25519.PublicKey)), Status: "active"}}}
+			result := IntegrationConfig{SchemaVersion: "payment-integration.v1", Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID, AppID: testAppID, RequestKeyID: testRequestKeyID, PaymentMethods: []string{"alipay"}, ReturnURLs: []string{"https://sub2.example/result"}, WebhookEndpoints: []IntegrationWebhookEndpoint{{URL: "https://sub2.example/api/v1/payment/webhook/unified", SigningKeyID: testWebhookKeyID}}, WebhookSigningKeys: []IntegrationWebhookKey{{KeyID: testWebhookKeyID, Algorithm: "Ed25519", PublicKey: base64.StdEncoding.EncodeToString(testPublicKey(t, private)), Status: "active"}}}
 			if foreign {
 				result.ProductID = "33333333-3333-4333-8333-333333333333"
 			}
