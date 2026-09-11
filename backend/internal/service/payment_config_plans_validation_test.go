@@ -6,6 +6,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,6 +105,53 @@ func TestValidateSubOrderRejectsNonOpenAINewCheckout(t *testing.T) {
 	_, err = nonOpenAISvc.validateSubOrder(ctx, request)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "not available for new subscription checkout")
+}
+
+func TestCreateOrderInTxRevalidatesSubscriptionPlatformUnderWriteBoundary(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("locked-platform@example.test").
+		SetPasswordHash("hash").
+		SetUsername("locked-platform").
+		Save(ctx)
+	require.NoError(t, err)
+	group, err := client.Group.Create().
+		SetName("locked platform group").
+		SetPlatform(PlatformOpenAI).
+		SetStatus(StatusActive).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		Save(ctx)
+	require.NoError(t, err)
+	plan, err := client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName("locked platform plan").
+		SetPrice(120).
+		SetValidityDays(1).
+		SetValidityUnit("month").
+		SetForSale(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	request := CreateOrderRequest{UserID: user.ID, PaymentType: payment.TypeAlipay, OrderType: payment.OrderTypeSubscription}
+	actor := &User{ID: user.ID, Email: user.Email, Username: user.Username}
+	_, err = svc.createOrderInTx(ctx, request, actor, plan, &PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30}, plan.Price, plan.Price, 0, plan.Price, nil)
+	require.NoError(t, err, "the unchanged OpenAI policy is accepted under the write transaction")
+
+	// This mutation represents a concurrent administrator change after the
+	// outer checkout read. The transaction-bound reload must reject it before
+	// another PaymentOrder is persisted.
+	_, err = client.Group.UpdateOneID(group.ID).SetPlatform(PlatformAnthropic).Save(ctx)
+	require.NoError(t, err)
+	before, err := client.PaymentOrder.Query().Count(ctx)
+	require.NoError(t, err)
+	_, err = svc.createOrderInTx(ctx, request, actor, plan, &PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30}, plan.Price, plan.Price, 0, plan.Price, nil)
+	require.Error(t, err)
+	require.Equal(t, "PLAN_NOT_AVAILABLE", infraerrors.Reason(err))
+	after, err := client.PaymentOrder.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
 }
 
 func TestValidatePlanRequired_AllValid(t *testing.T) {

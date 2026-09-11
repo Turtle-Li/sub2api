@@ -116,6 +116,13 @@ func (s *SubscriptionService) GetResetCardQuote(ctx context.Context, userID, sub
 	if err != nil {
 		return nil, err
 	}
+	_, entitlements, err := normalizePlanEntitlements(plan.entitlements)
+	if err != nil {
+		return nil, ErrPurchaseRulesUnavailable
+	}
+	if err := validateResetCardPurchaseRules(ctx, s.entClient, userID, entitlements); err != nil {
+		return nil, err
+	}
 
 	return &SubscriptionResetCardQuote{
 		SubscriptionID: subscriptionID,
@@ -229,6 +236,13 @@ func (s *SubscriptionService) PurchaseResetCard(ctx context.Context, input Purch
 		}
 		if plan.id != input.ExpectedPlanID || !price.Equal(expectedPrice) {
 			return ErrResetCardQuoteChanged
+		}
+		_, entitlements, err := normalizePlanEntitlements(plan.entitlements)
+		if err != nil {
+			return ErrPurchaseRulesUnavailable
+		}
+		if err := validateResetCardPurchaseRules(txCtx, client, input.UserID, entitlements); err != nil {
+			return err
 		}
 
 		if err := debitResetCardPurchaseBalance(txCtx, client, input.UserID, price); err != nil {

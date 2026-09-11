@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/shopspring/decimal"
@@ -18,6 +19,14 @@ import (
 type PlanEntitlements struct {
 	BalanceBonus   float64 `json:"balance_bonus"`
 	ResetCardCount int     `json:"reset_card_count"`
+	// PurchaseRules controls whether a customer may see and buy a new
+	// subscription. It is administrator-only configuration and is removed from
+	// every customer projection and immutable product snapshot.
+	PurchaseRules *PurchaseRules `json:"purchase_rules,omitempty"`
+	// ResetCardPurchaseRules is evaluated independently when a customer buys a
+	// reset card for an existing subscription. The monthly plan's audience
+	// fence still applies, but its recharge threshold does not carry over.
+	ResetCardPurchaseRules *PurchaseRules `json:"reset_card_purchase_rules,omitempty"`
 	// ResetCardPurchasePrice optionally overrides the wallet price for a reset
 	// card bought against this monthly plan. It is only a price-source metadata
 	// field: it neither grants a card nor changes subscription fulfillment.
@@ -38,12 +47,21 @@ type PlanEntitlements struct {
 	// product does not change the cap.
 	Concurrency int    `json:"concurrency"`
 	Message     string `json:"message"`
+	// ResetCardTitle and ResetCardDescription let an administrator describe the
+	// optional reset-card offer without changing subscription fulfillment.
+	ResetCardTitle       string `json:"reset_card_title,omitempty"`
+	ResetCardDescription string `json:"reset_card_description,omitempty"`
 	// Recommended controls the single, admin-selected presentation highlight.
 	// It has no effect on pricing or fulfillment.
 	Recommended bool `json:"recommended,omitempty"`
 }
 
 const resetCardPurchasePriceScale int32 = 2
+
+const (
+	maxResetCardTitleLength       = 200
+	maxResetCardDescriptionLength = 1000
+)
 
 // resetCardPurchaseConfiguredPrice validates the optional plan metadata once
 // for both plan administration and the locked purchase path. A nil value means
@@ -131,6 +149,12 @@ type RechargeOption struct {
 	Recommended bool `json:"recommended,omitempty"`
 	SortOrder   int  `json:"sort_order"`
 	Enabled     bool `json:"enabled"`
+	// PurchaseRules stays in administrator configuration only. Customer API
+	// projections always clear it before serialization.
+	PurchaseRules *PurchaseRules `json:"purchase_rules,omitempty"`
+	// Eligibility is computed for the authenticated customer at read time. It
+	// is deliberately never accepted from, or retained in, admin configuration.
+	Eligibility *PurchaseEligibility `json:"eligibility,omitempty"`
 }
 
 // UnmarshalJSON treats an omitted enabled flag as enabled. This keeps a hand-
@@ -138,17 +162,18 @@ type RechargeOption struct {
 // admins to explicitly disable a preset without losing it on the next save.
 func (o *RechargeOption) UnmarshalJSON(data []byte) error {
 	type optionJSON struct {
-		Amount                  float64 `json:"amount"`
-		OriginalPrice           float64 `json:"original_price"`
-		Label                   string  `json:"label"`
-		Description             string  `json:"description"`
-		BalanceBonus            float64 `json:"balance_bonus"`
-		EstimatedRateMultiplier float64 `json:"estimated_rate_multiplier"`
-		EstimatedTokens         int64   `json:"estimated_tokens"`
-		Concurrency             int     `json:"concurrency"`
-		Recommended             bool    `json:"recommended"`
-		SortOrder               int     `json:"sort_order"`
-		Enabled                 *bool   `json:"enabled"`
+		Amount                  float64        `json:"amount"`
+		OriginalPrice           float64        `json:"original_price"`
+		Label                   string         `json:"label"`
+		Description             string         `json:"description"`
+		BalanceBonus            float64        `json:"balance_bonus"`
+		EstimatedRateMultiplier float64        `json:"estimated_rate_multiplier"`
+		EstimatedTokens         int64          `json:"estimated_tokens"`
+		Concurrency             int            `json:"concurrency"`
+		Recommended             bool           `json:"recommended"`
+		SortOrder               int            `json:"sort_order"`
+		Enabled                 *bool          `json:"enabled"`
+		PurchaseRules           *PurchaseRules `json:"purchase_rules"`
 	}
 	var raw optionJSON
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -165,6 +190,8 @@ func (o *RechargeOption) UnmarshalJSON(data []byte) error {
 	o.Recommended = raw.Recommended
 	o.SortOrder = raw.SortOrder
 	o.Enabled = raw.Enabled == nil || *raw.Enabled
+	o.PurchaseRules = raw.PurchaseRules
+	o.Eligibility = nil
 	return nil
 }
 
@@ -187,7 +214,25 @@ func validateRechargeOption(option RechargeOption) error {
 	if option.Concurrency < 0 || option.Concurrency > 10000 {
 		return fmt.Errorf("recharge option concurrency must be between 0 and 10000")
 	}
+	if _, err := normalizePurchaseRules(option.PurchaseRules); err != nil {
+		return err
+	}
 	return nil
+}
+
+func normalizeRechargeOption(option RechargeOption) (RechargeOption, error) {
+	if err := validateRechargeOption(option); err != nil {
+		return RechargeOption{}, err
+	}
+	rules, err := normalizePurchaseRules(option.PurchaseRules)
+	if err != nil {
+		return RechargeOption{}, err
+	}
+	option.Label = strings.TrimSpace(option.Label)
+	option.Description = strings.TrimSpace(option.Description)
+	option.PurchaseRules = rules
+	option.Eligibility = nil
+	return option, nil
 }
 
 func rechargeOptionForAmount(options []RechargeOption, amount float64) (RechargeOption, bool) {
@@ -242,6 +287,16 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 	if _, _, err := resetCardPurchaseConfiguredPrice(entitlements.ResetCardPurchasePrice); err != nil {
 		return nil, PlanEntitlements{}, err
 	}
+	purchaseRules, err := normalizePurchaseRules(entitlements.PurchaseRules)
+	if err != nil {
+		return nil, PlanEntitlements{}, err
+	}
+	resetCardPurchaseRules, err := normalizePurchaseRules(entitlements.ResetCardPurchaseRules)
+	if err != nil {
+		return nil, PlanEntitlements{}, err
+	}
+	entitlements.PurchaseRules = purchaseRules
+	entitlements.ResetCardPurchaseRules = resetCardPurchaseRules
 	entitlements.ResetCardExpiryUnit = normalizeResetCardExpiryUnit(entitlements.ResetCardExpiryUnit)
 	if entitlements.ResetCardCount > 0 {
 		if entitlements.ResetCardExpiryDays <= 0 {
@@ -261,6 +316,14 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 		return nil, PlanEntitlements{}, fmt.Errorf("concurrency must be between 0 and 10000")
 	}
 	entitlements.Message = strings.TrimSpace(entitlements.Message)
+	entitlements.ResetCardTitle = strings.TrimSpace(entitlements.ResetCardTitle)
+	entitlements.ResetCardDescription = strings.TrimSpace(entitlements.ResetCardDescription)
+	if utf8.RuneCountInString(entitlements.ResetCardTitle) > maxResetCardTitleLength {
+		return nil, PlanEntitlements{}, fmt.Errorf("reset_card_title must be at most %d characters", maxResetCardTitleLength)
+	}
+	if utf8.RuneCountInString(entitlements.ResetCardDescription) > maxResetCardDescriptionLength {
+		return nil, PlanEntitlements{}, fmt.Errorf("reset_card_description must be at most %d characters", maxResetCardDescriptionLength)
+	}
 	canonical, err := json.Marshal(entitlements)
 	if err != nil {
 		return nil, PlanEntitlements{}, fmt.Errorf("encode canonical plan entitlements: %w", err)
@@ -440,13 +503,12 @@ func normalizeRechargeOptions(raw string) ([]RechargeOption, bool) {
 	intact := true
 	valid := make([]RechargeOption, 0, len(options))
 	for _, option := range options {
-		if validateRechargeOption(option) != nil {
+		normalized, err := normalizeRechargeOption(option)
+		if err != nil {
 			intact = false
 			continue
 		}
-		option.Label = strings.TrimSpace(option.Label)
-		option.Description = strings.TrimSpace(option.Description)
-		valid = append(valid, option)
+		valid = append(valid, normalized)
 	}
 	sort.SliceStable(valid, func(i, j int) bool {
 		if valid[i].SortOrder == valid[j].SortOrder {
@@ -473,17 +535,20 @@ func encodeRechargeOptions(options []RechargeOption) (string, error) {
 	if options == nil {
 		options = []RechargeOption{}
 	}
+	normalizedOptions := make([]RechargeOption, 0, len(options))
 	for i, option := range options {
-		if err := validateRechargeOption(option); err != nil {
+		normalized, err := normalizeRechargeOption(option)
+		if err != nil {
 			return "", err
 		}
-		for _, previous := range options[:i] {
-			if math.Abs(previous.Amount-option.Amount) <= 0.000001 {
-				return "", fmt.Errorf("recharge option amount %g is duplicated", option.Amount)
+		for _, previous := range normalizedOptions[:i] {
+			if math.Abs(previous.Amount-normalized.Amount) <= 0.000001 {
+				return "", fmt.Errorf("recharge option amount %g is duplicated", normalized.Amount)
 			}
 		}
+		normalizedOptions = append(normalizedOptions, normalized)
 	}
-	encoded, err := json.Marshal(options)
+	encoded, err := json.Marshal(normalizedOptions)
 	if err != nil {
 		return "", fmt.Errorf("encode recharge options: %w", err)
 	}

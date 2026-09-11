@@ -35,12 +35,27 @@ func NewPaymentHandler(paymentService *service.PaymentService, configService *se
 // GetPaymentConfig returns the payment system configuration.
 // GET /api/v1/payment/config
 func (h *PaymentHandler) GetPaymentConfig(c *gin.Context) {
-	cfg, err := h.configService.GetPaymentConfig(c.Request.Context())
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	cfg, err := h.configService.GetPaymentConfig(ctx)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if err := h.paymentService.ApplyUnifiedPaymentPresentation(c.Request.Context(), cfg, nil); err != nil {
+	if cfg.RechargeOptionsInvalid {
+		response.ErrorFrom(c, service.ErrPurchaseRulesUnavailable)
+		return
+	}
+	rechargeOptions, err := h.configService.CustomerRechargeOptionsForUser(ctx, subject.UserID, cfg.RechargeOptions)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	cfg.RechargeOptions = rechargeOptions
+	if err := h.paymentService.ApplyUnifiedPaymentPresentation(ctx, cfg, nil); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -50,40 +65,52 @@ func (h *PaymentHandler) GetPaymentConfig(c *gin.Context) {
 // GetPlans returns subscription plans available for sale.
 // GET /api/v1/payment/plans
 func (h *PaymentHandler) GetPlans(c *gin.Context) {
-	plans, err := h.configService.ListPlansForSale(c.Request.Context())
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	catalog, err := h.configService.CustomerPaymentCatalogForUser(ctx, subject.UserID, nil)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	// Enrich plans with group platform for frontend color coding
 	type planWithPlatform struct {
-		ID                 int64                    `json:"id"`
-		GroupID            int64                    `json:"group_id"`
-		GroupPlatform      string                   `json:"group_platform"`
-		GroupName          string                   `json:"group_name"`
-		RateMultiplier     float64                  `json:"rate_multiplier"`
-		PeakRateEnabled    bool                     `json:"peak_rate_enabled"`
-		PeakStart          string                   `json:"peak_start"`
-		PeakEnd            string                   `json:"peak_end"`
-		PeakRateMultiplier float64                  `json:"peak_rate_multiplier"`
-		Name               string                   `json:"name"`
-		Description        string                   `json:"description"`
-		Price              float64                  `json:"price"`
-		OriginalPrice      *float64                 `json:"original_price,omitempty"`
-		Currency           string                   `json:"currency,omitempty"`
-		ValidityDays       int                      `json:"validity_days"`
-		ValidityUnit       string                   `json:"validity_unit"`
-		Features           string                   `json:"features"`
-		ProductName        string                   `json:"product_name"`
-		Entitlements       service.PlanEntitlements `json:"entitlements"`
-		DiscountPercent    float64                  `json:"discount_percent"`
-		PeriodLabel        string                   `json:"period_label"`
-		ForSale            bool                     `json:"for_sale"`
-		SortOrder          int                      `json:"sort_order"`
+		ID                   int64                        `json:"id"`
+		GroupID              int64                        `json:"group_id"`
+		GroupPlatform        string                       `json:"group_platform"`
+		GroupName            string                       `json:"group_name"`
+		RateMultiplier       float64                      `json:"rate_multiplier"`
+		PeakRateEnabled      bool                         `json:"peak_rate_enabled"`
+		PeakStart            string                       `json:"peak_start"`
+		PeakEnd              string                       `json:"peak_end"`
+		PeakRateMultiplier   float64                      `json:"peak_rate_multiplier"`
+		Name                 string                       `json:"name"`
+		Description          string                       `json:"description"`
+		Price                float64                      `json:"price"`
+		OriginalPrice        *float64                     `json:"original_price,omitempty"`
+		Currency             string                       `json:"currency,omitempty"`
+		ValidityDays         int                          `json:"validity_days"`
+		ValidityUnit         string                       `json:"validity_unit"`
+		Features             string                       `json:"features"`
+		ProductName          string                       `json:"product_name"`
+		Entitlements         service.PlanEntitlements     `json:"entitlements"`
+		DiscountPercent      float64                      `json:"discount_percent"`
+		PeriodLabel          string                       `json:"period_label"`
+		ForSale              bool                         `json:"for_sale"`
+		SortOrder            int                          `json:"sort_order"`
+		Eligibility          service.PurchaseEligibility  `json:"eligibility"`
+		ResetCardEligibility service.ResetCardEligibility `json:"reset_card_eligibility"`
 	}
-	groupInfo := h.configService.GetGroupInfoMap(c.Request.Context(), plans)
-	result := make([]planWithPlatform, 0, len(plans))
-	for _, p := range plans {
+	plans := make([]*dbent.SubscriptionPlan, 0, len(catalog.Plans))
+	for _, candidate := range catalog.Plans {
+		plans = append(plans, candidate.Plan())
+	}
+	groupInfo := h.configService.GetGroupInfoMap(ctx, plans)
+	result := make([]planWithPlatform, 0, len(catalog.Plans))
+	for _, candidate := range catalog.Plans {
+		p := candidate.Plan()
 		gi := groupInfo[p.GroupID]
 		result = append(result, planWithPlatform{
 			ID: int64(p.ID), GroupID: p.GroupID,
@@ -93,10 +120,11 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			Currency:     p.Currency,
 			ValidityDays: p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: p.Features,
-			ProductName: p.ProductName, Entitlements: service.PlanEntitlementsFromRaw(p.Entitlements),
+			ProductName: p.ProductName, Entitlements: candidate.Entitlements,
 			DiscountPercent: service.PlanDiscountPercent(p.Price, p.OriginalPrice),
 			PeriodLabel:     service.PlanPeriodLabel(p.ValidityDays, p.ValidityUnit),
 			ForSale:         p.ForSale, SortOrder: p.SortOrder,
+			Eligibility: candidate.Eligibility, ResetCardEligibility: candidate.ResetCardEligibility,
 		})
 	}
 	response.Success(c, result)
@@ -107,6 +135,10 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 // GET /api/v1/payment/checkout-info
 func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 	ctx := c.Request.Context()
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
 
 	// Fetch limits (methods + global range)
 	limitsResp, err := h.configService.GetAvailableMethodLimits(ctx)
@@ -125,6 +157,15 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if cfg.RechargeOptionsInvalid {
+		response.ErrorFrom(c, service.ErrPurchaseRulesUnavailable)
+		return
+	}
+	catalog, err := h.configService.CustomerPaymentCatalogForUser(ctx, subject.UserID, cfg.RechargeOptions)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	alipayMobilePrecreateDeepLink := false
 	if cfg.AlipayMobilePrecreateDeepLink {
 		alipayMobilePrecreateDeepLink, err = h.configService.UsesOfficialAlipayVisibleMethod(ctx)
@@ -134,11 +175,16 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		}
 	}
 
-	// Fetch plans with group info
-	plans, _ := h.configService.ListPlansForSale(ctx)
+	// Fetch customer-visible plans with group info. The catalog also evaluates
+	// recharge eligibility from the same cumulative-recharge read.
+	plans := make([]*dbent.SubscriptionPlan, 0, len(catalog.Plans))
+	for _, candidate := range catalog.Plans {
+		plans = append(plans, candidate.Plan())
+	}
 	groupInfo := h.configService.GetGroupInfoMap(ctx, plans)
-	planList := make([]checkoutPlan, 0, len(plans))
-	for _, p := range plans {
+	planList := make([]checkoutPlan, 0, len(catalog.Plans))
+	for _, candidate := range catalog.Plans {
+		p := candidate.Plan()
 		gi := groupInfo[p.GroupID]
 		planList = append(planList, checkoutPlan{
 			ID: int64(p.ID), GroupID: p.GroupID,
@@ -152,10 +198,15 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 			Name:        p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			Currency:     p.Currency,
 			ValidityDays: p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: parseFeatures(p.Features),
-			ProductName: p.ProductName, Entitlements: service.PlanEntitlementsFromRaw(p.Entitlements),
+			ProductName: p.ProductName, Entitlements: candidate.Entitlements,
 			DiscountPercent: service.PlanDiscountPercent(p.Price, p.OriginalPrice),
 			PeriodLabel:     service.PlanPeriodLabel(p.ValidityDays, p.ValidityUnit),
+			Eligibility:     candidate.Eligibility, ResetCardEligibility: candidate.ResetCardEligibility,
 		})
+	}
+	publicRechargeOptions := make([]service.RechargeOption, 0, len(catalog.RechargeOptions))
+	for _, candidate := range catalog.RechargeOptions {
+		publicRechargeOptions = append(publicRechargeOptions, candidate.Option)
 	}
 
 	response.Success(c, checkoutInfoResponse{
@@ -167,7 +218,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		BalanceRechargeMultiplier:     cfg.BalanceRechargeMultiplier,
 		SubscriptionUSDToCNYRate:      cfg.SubscriptionUSDToCNYRate,
 		RechargeFeeRate:               cfg.RechargeFeeRate,
-		RechargeOptions:               service.EnabledRechargeOptionsForCheckout(cfg.RechargeOptions),
+		RechargeOptions:               publicRechargeOptions,
 		RechargeMode:                  service.RechargeModeForConfig(cfg),
 		HelpText:                      cfg.HelpText,
 		HelpImageURL:                  cfg.HelpImageURL,
@@ -202,31 +253,33 @@ type checkoutInfoResponse struct {
 }
 
 type checkoutPlan struct {
-	ID                 int64                    `json:"id"`
-	GroupID            int64                    `json:"group_id"`
-	GroupPlatform      string                   `json:"group_platform"`
-	GroupName          string                   `json:"group_name"`
-	RateMultiplier     float64                  `json:"rate_multiplier"`
-	PeakRateEnabled    bool                     `json:"peak_rate_enabled"`
-	PeakStart          string                   `json:"peak_start"`
-	PeakEnd            string                   `json:"peak_end"`
-	PeakRateMultiplier float64                  `json:"peak_rate_multiplier"`
-	DailyLimitUSD      *float64                 `json:"daily_limit_usd"`
-	WeeklyLimitUSD     *float64                 `json:"weekly_limit_usd"`
-	MonthlyLimitUSD    *float64                 `json:"monthly_limit_usd"`
-	ModelScopes        []string                 `json:"supported_model_scopes"`
-	Name               string                   `json:"name"`
-	Description        string                   `json:"description"`
-	Price              float64                  `json:"price"`
-	OriginalPrice      *float64                 `json:"original_price,omitempty"`
-	Currency           string                   `json:"currency,omitempty"`
-	ValidityDays       int                      `json:"validity_days"`
-	ValidityUnit       string                   `json:"validity_unit"`
-	Features           []string                 `json:"features"`
-	ProductName        string                   `json:"product_name"`
-	Entitlements       service.PlanEntitlements `json:"entitlements"`
-	DiscountPercent    float64                  `json:"discount_percent"`
-	PeriodLabel        string                   `json:"period_label"`
+	ID                   int64                        `json:"id"`
+	GroupID              int64                        `json:"group_id"`
+	GroupPlatform        string                       `json:"group_platform"`
+	GroupName            string                       `json:"group_name"`
+	RateMultiplier       float64                      `json:"rate_multiplier"`
+	PeakRateEnabled      bool                         `json:"peak_rate_enabled"`
+	PeakStart            string                       `json:"peak_start"`
+	PeakEnd              string                       `json:"peak_end"`
+	PeakRateMultiplier   float64                      `json:"peak_rate_multiplier"`
+	DailyLimitUSD        *float64                     `json:"daily_limit_usd"`
+	WeeklyLimitUSD       *float64                     `json:"weekly_limit_usd"`
+	MonthlyLimitUSD      *float64                     `json:"monthly_limit_usd"`
+	ModelScopes          []string                     `json:"supported_model_scopes"`
+	Name                 string                       `json:"name"`
+	Description          string                       `json:"description"`
+	Price                float64                      `json:"price"`
+	OriginalPrice        *float64                     `json:"original_price,omitempty"`
+	Currency             string                       `json:"currency,omitempty"`
+	ValidityDays         int                          `json:"validity_days"`
+	ValidityUnit         string                       `json:"validity_unit"`
+	Features             []string                     `json:"features"`
+	ProductName          string                       `json:"product_name"`
+	Entitlements         service.PlanEntitlements     `json:"entitlements"`
+	DiscountPercent      float64                      `json:"discount_percent"`
+	PeriodLabel          string                       `json:"period_label"`
+	Eligibility          service.PurchaseEligibility  `json:"eligibility"`
+	ResetCardEligibility service.ResetCardEligibility `json:"reset_card_eligibility"`
 }
 
 // parseFeatures accepts the JSON arrays used by purchase snapshots and legacy
