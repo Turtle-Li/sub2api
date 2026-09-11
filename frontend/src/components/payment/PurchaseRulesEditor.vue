@@ -8,7 +8,7 @@
     </label>
     <label class="block">
       <span class="input-label">{{ t('payment.eligibility.minimumLabel') }}</span>
-      <input :value="modelValue?.min_total_recharge || 0" type="number" min="0" step="0.01" class="input" :aria-invalid="!amountValid" @input="updateAmount" />
+      <input :value="amountText" type="number" min="0" step="0.01" class="input" :aria-invalid="!amountValid" @input="updateAmount" />
       <span class="mt-1 block text-xs text-gray-500">{{ t('payment.eligibility.minimumHint') }}</span>
     </label>
     <p v-if="!idsValid || !amountValid" role="alert" class="text-xs text-red-600">{{ t('payment.eligibility.invalidRules') }}</p>
@@ -22,23 +22,55 @@ const props = defineProps<{ modelValue?: PurchaseRules }>()
 const emit = defineEmits<{ 'update:modelValue': [value: PurchaseRules]; validity: [value: boolean] }>()
 const { t } = useI18n()
 const userIDs = ref('')
+const amountText = ref('0')
 const idsValid = ref(true)
 const amountValid = ref(true)
-watch(() => props.modelValue?.visible_user_ids, ids => {
-  if (idsValid.value) userIDs.value = (ids || []).join(', ')
-}, { immediate: true })
-function updateIDs(event: Event) {
-  userIDs.value = (event.target as HTMLInputElement).value
+let lastEmitted = ''
+function parsedIDs(): number[] | null {
   const entries = userIDs.value.trim() ? userIDs.value.trim().split(/[\s,，]+/) : []
   const ids = [...new Set(entries.map(Number))]
-  idsValid.value = entries.every(value => /^\d+$/.test(value)) && ids.length <= 1000 && ids.every(id => Number.isSafeInteger(id) && id > 0)
-  if (idsValid.value) emit('update:modelValue', { ...props.modelValue, visible_user_ids: ids })
+  return entries.every(value => /^\d+$/.test(value)) && ids.length <= 1000 && ids.every(id => Number.isSafeInteger(id) && id > 0) ? ids : null
+}
+function validateDraft() {
+  const ids = parsedIDs()
+  const amount = Number(amountText.value)
+  idsValid.value = ids !== null
+  amountValid.value = Number.isFinite(amount) && amount >= 0 && Math.abs(Math.round(amount * 100) - amount * 100) < 0.000001
   emit('validity', idsValid.value && amountValid.value)
+  return ids !== null && amountValid.value ? { ...props.modelValue, visible_user_ids: ids, min_total_recharge: amount } : null
+}
+watch(() => props.modelValue, rules => {
+  if (JSON.stringify(rules || {}) === lastEmitted) return
+  if (rules != null && (typeof rules !== 'object' || Array.isArray(rules))) {
+    idsValid.value = false
+    amountValid.value = false
+    emit('validity', false)
+    return
+  }
+  const ids = rules?.visible_user_ids
+  userIDs.value = Array.isArray(ids) ? ids.join(', ') : ids == null ? '' : String(ids)
+  const amount = rules?.min_total_recharge
+  amountText.value = amount == null ? '0' : String(amount)
+  validateDraft()
+  // Raw JSON must retain the typed contract, even when its text looks numeric.
+  if ((ids != null && (!Array.isArray(ids) || ids.some(id => typeof id !== 'number'))) || (amount != null && typeof amount !== 'number')) {
+    idsValid.value = ids == null || (Array.isArray(ids) && ids.every(id => typeof id === 'number' && Number.isSafeInteger(id) && id > 0))
+    amountValid.value = amountValid.value && (amount == null || typeof amount === 'number')
+    emit('validity', false)
+  }
+}, { immediate: true, deep: true })
+function publishDraft() {
+  const value = validateDraft()
+  if (!value) return
+  lastEmitted = JSON.stringify(value)
+  emit('update:modelValue', value)
+}
+function updateIDs(event: Event) {
+  userIDs.value = (event.target as HTMLInputElement).value
+  publishDraft()
 }
 function updateAmount(event: Event) {
-  const value = Number((event.target as HTMLInputElement).value)
-  amountValid.value = Number.isFinite(value) && value >= 0 && Math.abs(Math.round(value * 100) - value * 100) < 0.000001
-  if (amountValid.value) emit('update:modelValue', { ...props.modelValue, min_total_recharge: value })
-  emit('validity', idsValid.value && amountValid.value)
+  amountText.value = (event.target as HTMLInputElement).value
+  publishDraft()
 }
 </script>

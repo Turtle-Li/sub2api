@@ -13,6 +13,14 @@ describe('RechargeOptionsEditor', () => {
     wrapper.findComponent(PurchaseRulesEditor).vm.$emit('validity', false)
     expect(wrapper.emitted('validity')?.at(-1)).toEqual([false])
   })
+  it('rejects invalid purchase rules entered through advanced JSON', async () => {
+    const wrapper = mount(RechargeOptionsEditor, { props: { modelValue: JSON.stringify([{ amount: 599, purchase_rules: { visible_user_ids: [-1] } }]) } })
+    expect(wrapper.emitted('validity')?.at(-1)).toEqual([false])
+    await wrapper.setProps({ modelValue: JSON.stringify([{ amount: 599, purchase_rules: { min_total_recharge: 10.001 } }]) })
+    expect(wrapper.emitted('validity')?.at(-1)).toEqual([false])
+    await wrapper.setProps({ modelValue: JSON.stringify([{ amount: 599, purchase_rules: { min_total_recharge: 1000 } }]) })
+    expect(wrapper.emitted('validity')?.at(-1)).toEqual([true])
+  })
   it('does not replace malformed raw JSON and recovers when the raw value is corrected', async () => {
     const wrapper = mount(RechargeOptionsEditor, { props: { modelValue: '{broken' } })
     expect(wrapper.find('[role="alert"]').exists()).toBe(true)

@@ -10,6 +10,12 @@ describe('PurchaseRulesEditor', () => {
     await wrapper.get('input[type="text"]').setValue('')
     expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toEqual({ min_total_recharge: 100, visible_user_ids: [] })
   })
+  it.each([{ visible_user_ids: [-1] }, { min_total_recharge: 10.001 }])('validates rules loaded from existing or raw configuration: %j', async (rules) => {
+    const wrapper = mount(PurchaseRulesEditor, { props: { modelValue: rules } })
+    expect(wrapper.emitted('validity')?.at(-1)).toEqual([false])
+    await wrapper.setProps({ modelValue: { min_total_recharge: 100, visible_user_ids: [12] } })
+    expect(wrapper.emitted('validity')?.at(-1)).toEqual([true])
+  })
   it('blocks save for invalid IDs or fractional-cent amounts without silently applying an old rule', async () => {
     const wrapper = mount(PurchaseRulesEditor, { props: { modelValue: {} } })
     await wrapper.get('input[type="text"]').setValue('12, nope')
