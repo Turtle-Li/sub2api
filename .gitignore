@@ -134,6 +134,9 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/INVOICING.md
+!docs/ORDER_OPERATIONS_20260910.md
+!docs/CREDIT_PARITY_MIGRATION_20260910.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/UNIFIED_PAYMENT_INTEGRATION.md
@@ -174,3 +177,6 @@ output/
 .vite/
 # 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
 /plugins/
+
+# Local privacy-minimized monetary audit; contains user-linked balances.
+/evidence/credit-parity/

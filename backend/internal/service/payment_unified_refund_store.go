@@ -53,7 +53,7 @@ func loadUnifiedRefundAttempt(ctx context.Context, client *dbent.Client, orderID
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
 			return nil, err
@@ -76,7 +76,7 @@ func unifiedRefundOrderNeedsReview(ctx context.Context, client *dbent.Client, or
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		return false, errors.New("refund review state unavailable")
 	}

@@ -42,7 +42,9 @@ func TestJointCentralProtocolClient(t *testing.T) {
 		t.Fatal("invalid ephemeral test key size")
 	}
 	private := ed25519.PrivateKey(input.PrivateKey)
-	g, err := New(Config{Enabled: true, BaseURL: input.BaseURL, Environment: EnvironmentSandbox, OrganizationID: input.OrganizationID, ProductID: input.ProductID, AppID: input.AppID, RequestKeyID: input.KeyID, RequestPrivateKey: private, WebhookPublicKeys: map[string]ed25519.PublicKey{input.WebhookKeyID: private.Public().(ed25519.PublicKey)}, ReturnURL: input.ReturnURL, SupportedMethods: []string{"alipay"}})
+	publicKey, ok := private.Public().(ed25519.PublicKey)
+	require.True(t, ok)
+	g, err := New(Config{Enabled: true, BaseURL: input.BaseURL, Environment: EnvironmentSandbox, OrganizationID: input.OrganizationID, ProductID: input.ProductID, AppID: input.AppID, RequestKeyID: input.KeyID, RequestPrivateKey: private, WebhookPublicKeys: map[string]ed25519.PublicKey{input.WebhookKeyID: publicKey}, ReturnURL: input.ReturnURL, SupportedMethods: []string{"alipay"}})
 	require.NoError(t, err)
 	ctx := context.Background()
 	config, err := g.client.GetIntegrationConfig(ctx)

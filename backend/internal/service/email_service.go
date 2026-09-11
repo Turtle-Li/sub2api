@@ -176,11 +176,17 @@ func (s *EmailService) GetSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
 
 // SendEmail 发送邮件（使用数据库中保存的配置）
 func (s *EmailService) SendEmail(ctx context.Context, to, subject, body string) error {
+	return s.SendEmailWithAttachments(ctx, to, subject, body, nil)
+}
+
+// SendEmailWithAttachments uses multipart MIME only when needed, preserving
+// the existing wire format for normal notification emails.
+func (s *EmailService) SendEmailWithAttachments(ctx context.Context, to, subject, body string, attachments []EmailAttachment) error {
 	config, err := s.GetSMTPConfig(ctx)
 	if err != nil {
 		return err
 	}
-	return s.SendEmailWithConfig(config, to, subject, body)
+	return s.SendEmailWithConfigAndAttachments(config, to, subject, body, attachments)
 }
 
 const smtpDialTimeout = 10 * time.Second
@@ -188,7 +194,17 @@ const smtpIOTimeout = 20 * time.Second
 
 // SendEmailWithConfig 使用指定配置发送邮件
 func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body string) error {
-	message, err := buildSMTPMessage(config, to, subject, body)
+	return s.SendEmailWithConfigAndAttachments(config, to, subject, body, nil)
+}
+
+func (s *EmailService) SendEmailWithConfigAndAttachments(config *SMTPConfig, to, subject, body string, attachments []EmailAttachment) error {
+	var message smtpMessage
+	var err error
+	if len(attachments) == 0 {
+		message, err = buildSMTPMessage(config, to, subject, body)
+	} else {
+		message, err = buildSMTPMessageWithAttachments(config, to, subject, body, attachments)
+	}
 	if err != nil {
 		return err
 	}

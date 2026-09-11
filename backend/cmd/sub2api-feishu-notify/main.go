@@ -37,7 +37,7 @@ func main() {
 		log.Print("unable to initialize notification store")
 		os.Exit(1)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	db, err := repository.ProvideSQLDB(client)
 	if err != nil {
 		log.Print("unable to initialize notification store")

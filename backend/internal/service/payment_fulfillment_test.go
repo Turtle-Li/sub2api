@@ -1186,6 +1186,7 @@ func TestSubscriptionSnapshotBenefitsAreGrantedExactlyOnceAfterRecovery(t *testi
 			used_count INTEGER NOT NULL DEFAULT 0,
 			expires_at DATETIME NOT NULL,
 			issued_by INTEGER,
+			payment_order_id INTEGER,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)`)

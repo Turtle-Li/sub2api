@@ -249,6 +249,30 @@ func (f PaymentAuditLogFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Va
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PaymentAuditLogMutation", m)
 }
 
+// The PaymentInvoiceDocumentFunc type is an adapter to allow the use of ordinary
+// function as PaymentInvoiceDocument mutator.
+type PaymentInvoiceDocumentFunc func(context.Context, *ent.PaymentInvoiceDocumentMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PaymentInvoiceDocumentFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.PaymentInvoiceDocumentMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PaymentInvoiceDocumentMutation", m)
+}
+
+// The PaymentInvoiceRequestFunc type is an adapter to allow the use of ordinary
+// function as PaymentInvoiceRequest mutator.
+type PaymentInvoiceRequestFunc func(context.Context, *ent.PaymentInvoiceRequestMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PaymentInvoiceRequestFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.PaymentInvoiceRequestMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PaymentInvoiceRequestMutation", m)
+}
+
 // The PaymentOrderFunc type is an adapter to allow the use of ordinary
 // function as PaymentOrder mutator.
 type PaymentOrderFunc func(context.Context, *ent.PaymentOrderMutation) (ent.Value, error)

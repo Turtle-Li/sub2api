@@ -54,6 +54,10 @@ type Tx struct {
 	IdentityAdoptionDecision *IdentityAdoptionDecisionClient
 	// PaymentAuditLog is the client for interacting with the PaymentAuditLog builders.
 	PaymentAuditLog *PaymentAuditLogClient
+	// PaymentInvoiceDocument is the client for interacting with the PaymentInvoiceDocument builders.
+	PaymentInvoiceDocument *PaymentInvoiceDocumentClient
+	// PaymentInvoiceRequest is the client for interacting with the PaymentInvoiceRequest builders.
+	PaymentInvoiceRequest *PaymentInvoiceRequestClient
 	// PaymentOrder is the client for interacting with the PaymentOrder builders.
 	PaymentOrder *PaymentOrderClient
 	// PaymentProviderInstance is the client for interacting with the PaymentProviderInstance builders.
@@ -243,6 +247,8 @@ func (tx *Tx) init() {
 	tx.IdempotencyRecord = NewIdempotencyRecordClient(tx.config)
 	tx.IdentityAdoptionDecision = NewIdentityAdoptionDecisionClient(tx.config)
 	tx.PaymentAuditLog = NewPaymentAuditLogClient(tx.config)
+	tx.PaymentInvoiceDocument = NewPaymentInvoiceDocumentClient(tx.config)
+	tx.PaymentInvoiceRequest = NewPaymentInvoiceRequestClient(tx.config)
 	tx.PaymentOrder = NewPaymentOrderClient(tx.config)
 	tx.PaymentProviderInstance = NewPaymentProviderInstanceClient(tx.config)
 	tx.PendingAuthSession = NewPendingAuthSessionClient(tx.config)

@@ -111,6 +111,14 @@ func (PaymentOrder) Fields() []ent.Field {
 		field.Float("refund_amount").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
 			Default(0),
+		// refund_amount is the cumulative amount that the gateway has
+		// confirmed as refunded.  A separate requested amount is required so a
+		// pending/failed attempt cannot be mistaken for money that was already
+		// returned, and so subsequent partial refunds can be bounded by the
+		// remaining refundable amount.
+		field.Float("refund_requested_amount").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			Default(0),
 		field.String("refund_reason").
 			Optional().
 			Nillable().
@@ -183,6 +191,10 @@ func (PaymentOrder) Edges() []ent.Edge {
 			Field("user_id").
 			Unique().
 			Required(),
+		// Invoice workflow state deliberately remains separate from the payment
+		// lifecycle. The unique edge is backed by the invoice request's order_id
+		// constraint, so one payment order can have at most one request record.
+		edge.To("invoice_request", PaymentInvoiceRequest.Type).Unique(),
 	}
 }
 

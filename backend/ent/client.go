@@ -35,6 +35,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
+	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicedocument"
+	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicerequest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -103,6 +105,10 @@ type Client struct {
 	IdentityAdoptionDecision *IdentityAdoptionDecisionClient
 	// PaymentAuditLog is the client for interacting with the PaymentAuditLog builders.
 	PaymentAuditLog *PaymentAuditLogClient
+	// PaymentInvoiceDocument is the client for interacting with the PaymentInvoiceDocument builders.
+	PaymentInvoiceDocument *PaymentInvoiceDocumentClient
+	// PaymentInvoiceRequest is the client for interacting with the PaymentInvoiceRequest builders.
+	PaymentInvoiceRequest *PaymentInvoiceRequestClient
 	// PaymentOrder is the client for interacting with the PaymentOrder builders.
 	PaymentOrder *PaymentOrderClient
 	// PaymentProviderInstance is the client for interacting with the PaymentProviderInstance builders.
@@ -172,6 +178,8 @@ func (c *Client) init() {
 	c.IdempotencyRecord = NewIdempotencyRecordClient(c.config)
 	c.IdentityAdoptionDecision = NewIdentityAdoptionDecisionClient(c.config)
 	c.PaymentAuditLog = NewPaymentAuditLogClient(c.config)
+	c.PaymentInvoiceDocument = NewPaymentInvoiceDocumentClient(c.config)
+	c.PaymentInvoiceRequest = NewPaymentInvoiceRequestClient(c.config)
 	c.PaymentOrder = NewPaymentOrderClient(c.config)
 	c.PaymentProviderInstance = NewPaymentProviderInstanceClient(c.config)
 	c.PendingAuthSession = NewPendingAuthSessionClient(c.config)
@@ -303,6 +311,8 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		IdempotencyRecord:             NewIdempotencyRecordClient(cfg),
 		IdentityAdoptionDecision:      NewIdentityAdoptionDecisionClient(cfg),
 		PaymentAuditLog:               NewPaymentAuditLogClient(cfg),
+		PaymentInvoiceDocument:        NewPaymentInvoiceDocumentClient(cfg),
+		PaymentInvoiceRequest:         NewPaymentInvoiceRequestClient(cfg),
 		PaymentOrder:                  NewPaymentOrderClient(cfg),
 		PaymentProviderInstance:       NewPaymentProviderInstanceClient(cfg),
 		PendingAuthSession:            NewPendingAuthSessionClient(cfg),
@@ -361,6 +371,8 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		IdempotencyRecord:             NewIdempotencyRecordClient(cfg),
 		IdentityAdoptionDecision:      NewIdentityAdoptionDecisionClient(cfg),
 		PaymentAuditLog:               NewPaymentAuditLogClient(cfg),
+		PaymentInvoiceDocument:        NewPaymentInvoiceDocumentClient(cfg),
+		PaymentInvoiceRequest:         NewPaymentInvoiceRequestClient(cfg),
 		PaymentOrder:                  NewPaymentOrderClient(cfg),
 		PaymentProviderInstance:       NewPaymentProviderInstanceClient(cfg),
 		PendingAuthSession:            NewPendingAuthSessionClient(cfg),
@@ -414,12 +426,13 @@ func (c *Client) Use(hooks ...Hook) {
 		c.BatchImageJob, c.ChannelMonitor, c.ChannelMonitorDailyRollup,
 		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate,
 		c.CompositeModelRoute, c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
-		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
-		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
-		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserPlatformQuota, c.UserSubscription,
+		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentInvoiceDocument,
+		c.PaymentInvoiceRequest, c.PaymentOrder, c.PaymentProviderInstance,
+		c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage, c.Proxy, c.RedeemCode,
+		c.SecuritySecret, c.Setting, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserPlatformQuota,
+		c.UserSubscription,
 	} {
 		n.Use(hooks...)
 	}
@@ -434,12 +447,13 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.BatchImageJob, c.ChannelMonitor, c.ChannelMonitorDailyRollup,
 		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate,
 		c.CompositeModelRoute, c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
-		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
-		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
-		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserPlatformQuota, c.UserSubscription,
+		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentInvoiceDocument,
+		c.PaymentInvoiceRequest, c.PaymentOrder, c.PaymentProviderInstance,
+		c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage, c.Proxy, c.RedeemCode,
+		c.SecuritySecret, c.Setting, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserPlatformQuota,
+		c.UserSubscription,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -488,6 +502,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.IdentityAdoptionDecision.mutate(ctx, m)
 	case *PaymentAuditLogMutation:
 		return c.PaymentAuditLog.mutate(ctx, m)
+	case *PaymentInvoiceDocumentMutation:
+		return c.PaymentInvoiceDocument.mutate(ctx, m)
+	case *PaymentInvoiceRequestMutation:
+		return c.PaymentInvoiceRequest.mutate(ctx, m)
 	case *PaymentOrderMutation:
 		return c.PaymentOrder.mutate(ctx, m)
 	case *PaymentProviderInstanceMutation:
@@ -3710,6 +3728,320 @@ func (c *PaymentAuditLogClient) mutate(ctx context.Context, m *PaymentAuditLogMu
 	}
 }
 
+// PaymentInvoiceDocumentClient is a client for the PaymentInvoiceDocument schema.
+type PaymentInvoiceDocumentClient struct {
+	config
+}
+
+// NewPaymentInvoiceDocumentClient returns a client for the PaymentInvoiceDocument from the given config.
+func NewPaymentInvoiceDocumentClient(c config) *PaymentInvoiceDocumentClient {
+	return &PaymentInvoiceDocumentClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `paymentinvoicedocument.Hooks(f(g(h())))`.
+func (c *PaymentInvoiceDocumentClient) Use(hooks ...Hook) {
+	c.hooks.PaymentInvoiceDocument = append(c.hooks.PaymentInvoiceDocument, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `paymentinvoicedocument.Intercept(f(g(h())))`.
+func (c *PaymentInvoiceDocumentClient) Intercept(interceptors ...Interceptor) {
+	c.inters.PaymentInvoiceDocument = append(c.inters.PaymentInvoiceDocument, interceptors...)
+}
+
+// Create returns a builder for creating a PaymentInvoiceDocument entity.
+func (c *PaymentInvoiceDocumentClient) Create() *PaymentInvoiceDocumentCreate {
+	mutation := newPaymentInvoiceDocumentMutation(c.config, OpCreate)
+	return &PaymentInvoiceDocumentCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of PaymentInvoiceDocument entities.
+func (c *PaymentInvoiceDocumentClient) CreateBulk(builders ...*PaymentInvoiceDocumentCreate) *PaymentInvoiceDocumentCreateBulk {
+	return &PaymentInvoiceDocumentCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *PaymentInvoiceDocumentClient) MapCreateBulk(slice any, setFunc func(*PaymentInvoiceDocumentCreate, int)) *PaymentInvoiceDocumentCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &PaymentInvoiceDocumentCreateBulk{err: fmt.Errorf("calling to PaymentInvoiceDocumentClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*PaymentInvoiceDocumentCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &PaymentInvoiceDocumentCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for PaymentInvoiceDocument.
+func (c *PaymentInvoiceDocumentClient) Update() *PaymentInvoiceDocumentUpdate {
+	mutation := newPaymentInvoiceDocumentMutation(c.config, OpUpdate)
+	return &PaymentInvoiceDocumentUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *PaymentInvoiceDocumentClient) UpdateOne(_m *PaymentInvoiceDocument) *PaymentInvoiceDocumentUpdateOne {
+	mutation := newPaymentInvoiceDocumentMutation(c.config, OpUpdateOne, withPaymentInvoiceDocument(_m))
+	return &PaymentInvoiceDocumentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *PaymentInvoiceDocumentClient) UpdateOneID(id int64) *PaymentInvoiceDocumentUpdateOne {
+	mutation := newPaymentInvoiceDocumentMutation(c.config, OpUpdateOne, withPaymentInvoiceDocumentID(id))
+	return &PaymentInvoiceDocumentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for PaymentInvoiceDocument.
+func (c *PaymentInvoiceDocumentClient) Delete() *PaymentInvoiceDocumentDelete {
+	mutation := newPaymentInvoiceDocumentMutation(c.config, OpDelete)
+	return &PaymentInvoiceDocumentDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *PaymentInvoiceDocumentClient) DeleteOne(_m *PaymentInvoiceDocument) *PaymentInvoiceDocumentDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *PaymentInvoiceDocumentClient) DeleteOneID(id int64) *PaymentInvoiceDocumentDeleteOne {
+	builder := c.Delete().Where(paymentinvoicedocument.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &PaymentInvoiceDocumentDeleteOne{builder}
+}
+
+// Query returns a query builder for PaymentInvoiceDocument.
+func (c *PaymentInvoiceDocumentClient) Query() *PaymentInvoiceDocumentQuery {
+	return &PaymentInvoiceDocumentQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypePaymentInvoiceDocument},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a PaymentInvoiceDocument entity by its id.
+func (c *PaymentInvoiceDocumentClient) Get(ctx context.Context, id int64) (*PaymentInvoiceDocument, error) {
+	return c.Query().Where(paymentinvoicedocument.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *PaymentInvoiceDocumentClient) GetX(ctx context.Context, id int64) *PaymentInvoiceDocument {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryInvoiceRequest queries the invoice_request edge of a PaymentInvoiceDocument.
+func (c *PaymentInvoiceDocumentClient) QueryInvoiceRequest(_m *PaymentInvoiceDocument) *PaymentInvoiceRequestQuery {
+	query := (&PaymentInvoiceRequestClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(paymentinvoicedocument.Table, paymentinvoicedocument.FieldID, id),
+			sqlgraph.To(paymentinvoicerequest.Table, paymentinvoicerequest.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, true, paymentinvoicedocument.InvoiceRequestTable, paymentinvoicedocument.InvoiceRequestColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *PaymentInvoiceDocumentClient) Hooks() []Hook {
+	return c.hooks.PaymentInvoiceDocument
+}
+
+// Interceptors returns the client interceptors.
+func (c *PaymentInvoiceDocumentClient) Interceptors() []Interceptor {
+	return c.inters.PaymentInvoiceDocument
+}
+
+func (c *PaymentInvoiceDocumentClient) mutate(ctx context.Context, m *PaymentInvoiceDocumentMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&PaymentInvoiceDocumentCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&PaymentInvoiceDocumentUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&PaymentInvoiceDocumentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&PaymentInvoiceDocumentDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown PaymentInvoiceDocument mutation op: %q", m.Op())
+	}
+}
+
+// PaymentInvoiceRequestClient is a client for the PaymentInvoiceRequest schema.
+type PaymentInvoiceRequestClient struct {
+	config
+}
+
+// NewPaymentInvoiceRequestClient returns a client for the PaymentInvoiceRequest from the given config.
+func NewPaymentInvoiceRequestClient(c config) *PaymentInvoiceRequestClient {
+	return &PaymentInvoiceRequestClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `paymentinvoicerequest.Hooks(f(g(h())))`.
+func (c *PaymentInvoiceRequestClient) Use(hooks ...Hook) {
+	c.hooks.PaymentInvoiceRequest = append(c.hooks.PaymentInvoiceRequest, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `paymentinvoicerequest.Intercept(f(g(h())))`.
+func (c *PaymentInvoiceRequestClient) Intercept(interceptors ...Interceptor) {
+	c.inters.PaymentInvoiceRequest = append(c.inters.PaymentInvoiceRequest, interceptors...)
+}
+
+// Create returns a builder for creating a PaymentInvoiceRequest entity.
+func (c *PaymentInvoiceRequestClient) Create() *PaymentInvoiceRequestCreate {
+	mutation := newPaymentInvoiceRequestMutation(c.config, OpCreate)
+	return &PaymentInvoiceRequestCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of PaymentInvoiceRequest entities.
+func (c *PaymentInvoiceRequestClient) CreateBulk(builders ...*PaymentInvoiceRequestCreate) *PaymentInvoiceRequestCreateBulk {
+	return &PaymentInvoiceRequestCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *PaymentInvoiceRequestClient) MapCreateBulk(slice any, setFunc func(*PaymentInvoiceRequestCreate, int)) *PaymentInvoiceRequestCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &PaymentInvoiceRequestCreateBulk{err: fmt.Errorf("calling to PaymentInvoiceRequestClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*PaymentInvoiceRequestCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &PaymentInvoiceRequestCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for PaymentInvoiceRequest.
+func (c *PaymentInvoiceRequestClient) Update() *PaymentInvoiceRequestUpdate {
+	mutation := newPaymentInvoiceRequestMutation(c.config, OpUpdate)
+	return &PaymentInvoiceRequestUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *PaymentInvoiceRequestClient) UpdateOne(_m *PaymentInvoiceRequest) *PaymentInvoiceRequestUpdateOne {
+	mutation := newPaymentInvoiceRequestMutation(c.config, OpUpdateOne, withPaymentInvoiceRequest(_m))
+	return &PaymentInvoiceRequestUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *PaymentInvoiceRequestClient) UpdateOneID(id int64) *PaymentInvoiceRequestUpdateOne {
+	mutation := newPaymentInvoiceRequestMutation(c.config, OpUpdateOne, withPaymentInvoiceRequestID(id))
+	return &PaymentInvoiceRequestUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for PaymentInvoiceRequest.
+func (c *PaymentInvoiceRequestClient) Delete() *PaymentInvoiceRequestDelete {
+	mutation := newPaymentInvoiceRequestMutation(c.config, OpDelete)
+	return &PaymentInvoiceRequestDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *PaymentInvoiceRequestClient) DeleteOne(_m *PaymentInvoiceRequest) *PaymentInvoiceRequestDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *PaymentInvoiceRequestClient) DeleteOneID(id int64) *PaymentInvoiceRequestDeleteOne {
+	builder := c.Delete().Where(paymentinvoicerequest.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &PaymentInvoiceRequestDeleteOne{builder}
+}
+
+// Query returns a query builder for PaymentInvoiceRequest.
+func (c *PaymentInvoiceRequestClient) Query() *PaymentInvoiceRequestQuery {
+	return &PaymentInvoiceRequestQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypePaymentInvoiceRequest},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a PaymentInvoiceRequest entity by its id.
+func (c *PaymentInvoiceRequestClient) Get(ctx context.Context, id int64) (*PaymentInvoiceRequest, error) {
+	return c.Query().Where(paymentinvoicerequest.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *PaymentInvoiceRequestClient) GetX(ctx context.Context, id int64) *PaymentInvoiceRequest {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryOrder queries the order edge of a PaymentInvoiceRequest.
+func (c *PaymentInvoiceRequestClient) QueryOrder(_m *PaymentInvoiceRequest) *PaymentOrderQuery {
+	query := (&PaymentOrderClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(paymentinvoicerequest.Table, paymentinvoicerequest.FieldID, id),
+			sqlgraph.To(paymentorder.Table, paymentorder.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, true, paymentinvoicerequest.OrderTable, paymentinvoicerequest.OrderColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryDocument queries the document edge of a PaymentInvoiceRequest.
+func (c *PaymentInvoiceRequestClient) QueryDocument(_m *PaymentInvoiceRequest) *PaymentInvoiceDocumentQuery {
+	query := (&PaymentInvoiceDocumentClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(paymentinvoicerequest.Table, paymentinvoicerequest.FieldID, id),
+			sqlgraph.To(paymentinvoicedocument.Table, paymentinvoicedocument.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, false, paymentinvoicerequest.DocumentTable, paymentinvoicerequest.DocumentColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *PaymentInvoiceRequestClient) Hooks() []Hook {
+	return c.hooks.PaymentInvoiceRequest
+}
+
+// Interceptors returns the client interceptors.
+func (c *PaymentInvoiceRequestClient) Interceptors() []Interceptor {
+	return c.inters.PaymentInvoiceRequest
+}
+
+func (c *PaymentInvoiceRequestClient) mutate(ctx context.Context, m *PaymentInvoiceRequestMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&PaymentInvoiceRequestCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&PaymentInvoiceRequestUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&PaymentInvoiceRequestUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&PaymentInvoiceRequestDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown PaymentInvoiceRequest mutation op: %q", m.Op())
+	}
+}
+
 // PaymentOrderClient is a client for the PaymentOrder schema.
 type PaymentOrderClient struct {
 	config
@@ -3827,6 +4159,22 @@ func (c *PaymentOrderClient) QueryUser(_m *PaymentOrder) *UserQuery {
 			sqlgraph.From(paymentorder.Table, paymentorder.FieldID, id),
 			sqlgraph.To(user.Table, user.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, true, paymentorder.UserTable, paymentorder.UserColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryInvoiceRequest queries the invoice_request edge of a PaymentOrder.
+func (c *PaymentOrderClient) QueryInvoiceRequest(_m *PaymentOrder) *PaymentInvoiceRequestQuery {
+	query := (&PaymentInvoiceRequestClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(paymentorder.Table, paymentorder.FieldID, id),
+			sqlgraph.To(paymentinvoicerequest.Table, paymentinvoicerequest.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, false, paymentorder.InvoiceRequestTable, paymentorder.InvoiceRequestColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -6846,11 +7194,11 @@ type (
 		ChannelMonitor, ChannelMonitorDailyRollup, ChannelMonitorHistory,
 		ChannelMonitorRequestTemplate, CompositeModelRoute, ErrorPassthroughRule,
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
-		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Hook
+		PaymentInvoiceDocument, PaymentInvoiceRequest, PaymentOrder,
+		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
+		RedeemCode, SecuritySecret, Setting, SubscriptionPlan, TLSFingerprintProfile,
+		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
+		UserAttributeValue, UserPlatformQuota, UserSubscription []ent.Hook
 	}
 	inters struct {
 		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
@@ -6858,11 +7206,11 @@ type (
 		ChannelMonitor, ChannelMonitorDailyRollup, ChannelMonitorHistory,
 		ChannelMonitorRequestTemplate, CompositeModelRoute, ErrorPassthroughRule,
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
-		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Interceptor
+		PaymentInvoiceDocument, PaymentInvoiceRequest, PaymentOrder,
+		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
+		RedeemCode, SecuritySecret, Setting, SubscriptionPlan, TLSFingerprintProfile,
+		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
+		UserAttributeValue, UserPlatformQuota, UserSubscription []ent.Interceptor
 	}
 )
 

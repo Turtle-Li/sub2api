@@ -380,6 +380,16 @@ const eventDisplayMeta: Record<string, EventDisplayMeta> = {
     timing: "上游账号的用量达到配置的额度告警阈值时发送给管理员通知邮箱。",
     categoryLabel: "管理告警",
   },
+  "invoice.issued": {
+    label: "发票已开具",
+    timing: "管理员回填真实发票号码、上传官方 PDF 并将状态改为已开票后，把 PDF 作为附件发送给申请中的收件邮箱。",
+    categoryLabel: "计费",
+  },
+  "invoice.rejected": {
+    label: "开票申请被驳回",
+    timing: "管理员填写驳回原因并更新状态后，发送给申请中的收件邮箱。",
+    categoryLabel: "计费",
+  },
   "content_moderation.violation_notice": {
     label: "内容审计违规提醒",
     timing: "用户请求命中内容审计或风控规则、但尚未被禁用时发送。",
@@ -442,6 +452,16 @@ const eventDisplayMetaEn: Record<string, EventDisplayMeta> = {
     label: "Account Quota Alert",
     timing: "Sent to admin notification emails when an upstream account reaches the configured quota alert threshold.",
     categoryLabel: "Admin",
+  },
+  "invoice.issued": {
+    label: "Invoice Issued",
+    timing: "Sent with the official PDF attached after an administrator records the invoice number and marks the request issued.",
+    categoryLabel: "Billing",
+  },
+  "invoice.rejected": {
+    label: "Invoice Request Rejected",
+    timing: "Sent to the requested recipient after an administrator records a rejection reason.",
+    categoryLabel: "Billing",
   },
   "content_moderation.violation_notice": {
     label: "Risk Control Violation Notice",

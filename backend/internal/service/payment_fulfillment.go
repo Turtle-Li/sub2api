@@ -132,6 +132,19 @@ func paymentAmountToleranceForCurrency(currency string) float64 {
 	return math.Pow10(-minorUnit) / 2
 }
 
+// paymentAmountZeroTolerance is used only when deciding whether a monetary
+// value is effectively zero or whether two already-rounded amounts are equal.
+// It is intentionally narrower than paymentAmountToleranceForCurrency: the
+// latter preserves the historical provider-notification slack, while this
+// helper must still allow the smallest valid unit (for example CNY 0.01).
+func paymentAmountZeroTolerance(currency string) float64 {
+	fractionDigits := payment.CurrencyMaxFractionDigits(currency)
+	if fractionDigits < 0 {
+		fractionDigits = 2
+	}
+	return math.Pow10(-fractionDigits) / 2
+}
+
 func isValidProviderAmount(amount float64) bool {
 	return amount > 0 && !math.IsNaN(amount) && !math.IsInf(amount, 0)
 }
@@ -752,14 +765,14 @@ func grantPaymentProductEntitlements(ctx context.Context, client *dbent.Client, 
 		rows, err := client.QueryContext(ctx, `
 			INSERT INTO subscription_reset_grants (
 				subscription_id, user_id, group_id, quantity, used_count,
-				expires_at, issued_by, created_at, updated_at
+				expires_at, issued_by, payment_order_id, created_at, updated_at
 			)
-			SELECT us.id, us.user_id, us.group_id, $3, 0, $4, NULL, $5, $5
+			SELECT us.id, us.user_id, us.group_id, $3, 0, $4, NULL, $6, $5, $5
 			FROM user_subscriptions us
 			WHERE us.user_id = $1 AND us.group_id = $2
 				AND us.deleted_at IS NULL AND us.status = 'active' AND us.expires_at > $5
 			RETURNING id
-		`, order.UserID, groupID, entitlements.ResetCardCount, expiresAt, now)
+		`, order.UserID, groupID, entitlements.ResetCardCount, expiresAt, now, order.ID)
 		if err != nil {
 			return fmt.Errorf("grant subscription reset cards: %w", err)
 		}

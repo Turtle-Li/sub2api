@@ -114,26 +114,36 @@ type CreateOrderResponse struct {
 }
 
 type OrderListParams struct {
-	Page        int
-	PageSize    int
-	Status      string
-	OrderType   string
-	PaymentType string
-	Keyword     string
+	Page               int
+	PageSize           int
+	Status             string
+	OrderType          string
+	PaymentType        string
+	Keyword            string
+	InvoiceStatus      string
+	InvoiceEmailStatus string
+	PaymentStatus      string
+	FulfillmentStatus  string
 }
 
 type RefundPlan struct {
-	OrderID         int64
-	Order           *dbent.PaymentOrder
-	RefundAmount    float64
-	GatewayAmount   float64
-	Reason          string
-	Force           bool
-	DeductBalance   bool
-	DeductionType   string
-	BalanceToDeduct float64
-	SubDaysToDeduct int
-	SubscriptionID  int64
+	OrderID      int64
+	Order        *dbent.PaymentOrder
+	RefundAmount float64
+	// SettledRefundAmount is the amount already confirmed by the gateway before
+	// this attempt.  RefundAmount is always the amount for the current attempt;
+	// keeping the two values separate prevents a pending request from consuming
+	// the order's remaining refundable allowance.
+	SettledRefundAmount float64
+	RemainingRefundable float64
+	GatewayAmount       float64
+	Reason              string
+	Force               bool
+	DeductBalance       bool
+	DeductionType       string
+	BalanceToDeduct     float64
+	SubDaysToDeduct     int
+	SubscriptionID      int64
 }
 
 type RefundResult struct {
@@ -202,16 +212,30 @@ type PaymentService struct {
 	authCacheInvalidator     APIKeyAuthCacheInvalidator
 	unifiedPayment           *unifiedpay.Gateway
 	unifiedWebhookInbox      UnifiedWebhookInboxStore
+	invoiceFeishuSender      FeishuPaymentTextSender
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService) *PaymentService {
 	svc := &PaymentService{entClient: entClient, registry: registry, loadBalancer: newVisibleMethodLoadBalancer(loadBalancer, configService), redeemService: redeemService, subscriptionSvc: subscriptionSvc, configService: configService, userRepo: userRepo, groupRepo: groupRepo, affiliateService: affiliateService}
 	svc.resumeService = psNewPaymentResumeService(configService)
+	// The invoice workflow owns its own durable delivery state. It reuses only
+	// the hardened Vault URL loader and transport from the payment sender.
+	svc.invoiceFeishuSender = NewFeishuPaymentTextSender()
 	return svc
 }
 
 func (s *PaymentService) SetNotificationEmailService(notificationEmailService *NotificationEmailService) {
 	s.notificationEmailService = notificationEmailService
+}
+
+// SetInvoiceFeishuSender replaces the narrow transport used by the durable
+// invoice-request notification worker. It is primarily useful for tests; the
+// sender must not classify invoice requests as payment incidents.
+func (s *PaymentService) SetInvoiceFeishuSender(sender FeishuPaymentTextSender) {
+	if s == nil {
+		return
+	}
+	s.invoiceFeishuSender = sender
 }
 
 // SetAuthCacheInvalidator wires the cross-instance auth snapshot invalidator

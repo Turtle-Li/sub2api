@@ -165,6 +165,11 @@ func RefundAmount(v float64) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundAmount, v))
 }
 
+// RefundRequestedAmount applies equality check predicate on the "refund_requested_amount" field. It's identical to RefundRequestedAmountEQ.
+func RefundRequestedAmount(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundRequestedAmount, v))
+}
+
 // RefundReason applies equality check predicate on the "refund_reason" field. It's identical to RefundReasonEQ.
 func RefundReason(v string) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundReason, v))
@@ -1565,6 +1570,46 @@ func RefundAmountLTE(v float64) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldLTE(FieldRefundAmount, v))
 }
 
+// RefundRequestedAmountEQ applies the EQ predicate on the "refund_requested_amount" field.
+func RefundRequestedAmountEQ(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundRequestedAmount, v))
+}
+
+// RefundRequestedAmountNEQ applies the NEQ predicate on the "refund_requested_amount" field.
+func RefundRequestedAmountNEQ(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNEQ(FieldRefundRequestedAmount, v))
+}
+
+// RefundRequestedAmountIn applies the In predicate on the "refund_requested_amount" field.
+func RefundRequestedAmountIn(vs ...float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIn(FieldRefundRequestedAmount, vs...))
+}
+
+// RefundRequestedAmountNotIn applies the NotIn predicate on the "refund_requested_amount" field.
+func RefundRequestedAmountNotIn(vs ...float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotIn(FieldRefundRequestedAmount, vs...))
+}
+
+// RefundRequestedAmountGT applies the GT predicate on the "refund_requested_amount" field.
+func RefundRequestedAmountGT(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGT(FieldRefundRequestedAmount, v))
+}
+
+// RefundRequestedAmountGTE applies the GTE predicate on the "refund_requested_amount" field.
+func RefundRequestedAmountGTE(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGTE(FieldRefundRequestedAmount, v))
+}
+
+// RefundRequestedAmountLT applies the LT predicate on the "refund_requested_amount" field.
+func RefundRequestedAmountLT(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLT(FieldRefundRequestedAmount, v))
+}
+
+// RefundRequestedAmountLTE applies the LTE predicate on the "refund_requested_amount" field.
+func RefundRequestedAmountLTE(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLTE(FieldRefundRequestedAmount, v))
+}
+
 // RefundReasonEQ applies the EQ predicate on the "refund_reason" field.
 func RefundReasonEQ(v string) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundReason, v))
@@ -2465,6 +2510,29 @@ func HasUser() predicate.PaymentOrder {
 func HasUserWith(preds ...predicate.User) predicate.PaymentOrder {
 	return predicate.PaymentOrder(func(s *sql.Selector) {
 		step := newUserStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasInvoiceRequest applies the HasEdge predicate on the "invoice_request" edge.
+func HasInvoiceRequest() predicate.PaymentOrder {
+	return predicate.PaymentOrder(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, false, InvoiceRequestTable, InvoiceRequestColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasInvoiceRequestWith applies the HasEdge predicate on the "invoice_request" edge with a given conditions (other predicates).
+func HasInvoiceRequestWith(preds ...predicate.PaymentInvoiceRequest) predicate.PaymentOrder {
+	return predicate.PaymentOrder(func(s *sql.Selector) {
+		step := newInvoiceRequestStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

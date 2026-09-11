@@ -10,7 +10,9 @@ import type {
   PaymentOrder,
   PaymentChannel,
   SubscriptionPlan,
-  ProviderInstance
+  ProviderInstance,
+  PaymentInvoiceRecord,
+  AdminUpdateInvoiceRequest
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -135,6 +137,10 @@ export const adminPaymentAPI = {
     start_date?: string
     end_date?: string
     order_type?: string
+    invoice_status?: string
+    invoice_email_status?: string
+    fulfillment_status?: string
+    payment_status?: string
   }) {
     return apiClient.get<BasePaginationResponse<PaymentOrder>>('/admin/payment/orders', { params })
   },
@@ -142,6 +148,31 @@ export const adminPaymentAPI = {
   /** Get a specific order by ID */
   getOrder(id: number) {
     return apiClient.get<PaymentOrder>(`/admin/payment/orders/${id}`)
+  },
+
+  /** Advance or complete the invoice workflow for an order. */
+  updateInvoiceRequest(id: number, data: AdminUpdateInvoiceRequest) {
+    if (data.invoice_pdf) {
+      const form = new FormData()
+      Object.entries(data).forEach(([key, value]) => {
+        if (key === 'invoice_pdf' || value === undefined || value === null) return
+        form.append(key, String(value))
+      })
+      form.append('invoice_pdf', data.invoice_pdf)
+      return apiClient.put<PaymentInvoiceRecord>(`/admin/payment/orders/${id}/invoice`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    }
+    return apiClient.put<PaymentInvoiceRecord>(`/admin/payment/orders/${id}/invoice`, data)
+  },
+
+  /** Retry a failed invoice result email. */
+  retryInvoiceFeishu(id: number) {
+    return apiClient.post<PaymentInvoiceRecord>(`/admin/payment/orders/${id}/invoice/feishu/retry`)
+  },
+
+  retryInvoiceEmail(id: number) {
+    return apiClient.post<PaymentInvoiceRecord>(`/admin/payment/orders/${id}/invoice/email/retry`)
   },
 
   /** Cancel an order (admin) */

@@ -157,6 +157,7 @@ func (f *paymentFulfillmentRecoveryPostgresFixture) cleanup() {
 			`DELETE FROM unified_payment_refund_events WHERE order_id = $1`,
 			`DELETE FROM unified_payment_refund_attempts WHERE order_id = $1`,
 			`DELETE FROM payment_audit_logs WHERE order_id = $1`,
+			`DELETE FROM subscription_reset_grants WHERE payment_order_id = $1`,
 			`DELETE FROM payment_orders WHERE id = $1`,
 		} {
 			if _, err := integrationDB.ExecContext(ctx, query, orderID); err != nil {
@@ -572,7 +573,10 @@ func TestPaymentFulfillmentRecoveryPostgresRefundFenceClaimBoundary(t *testing.T
 		current, err := fixture.client.PaymentOrder.Get(ctx, order.ID)
 		require.NoError(t, err)
 		require.Equal(t, service.OrderStatusPaid, current.Status)
-		require.True(t, current.UpdatedAt.Equal(originalUpdatedAt))
+		// PostgreSQL stores TIMESTAMPTZ at microsecond precision. Ent returns the
+		// caller's full-precision value from Create, so normalize both sides before
+		// asserting that the fenced recovery path did not mutate the row.
+		require.Equal(t, originalUpdatedAt.UTC().Truncate(time.Microsecond), current.UpdatedAt.UTC().Truncate(time.Microsecond))
 		require.Nil(t, current.CompletedAt)
 		currentUser, err := fixture.client.User.Get(ctx, user.ID)
 		require.NoError(t, err)

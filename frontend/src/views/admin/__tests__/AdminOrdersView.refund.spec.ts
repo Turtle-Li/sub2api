@@ -28,6 +28,7 @@ vi.mock('@/api/admin/payment', () => ({
   adminPaymentAPI: { getOrders, getOrder, refundOrder, queryRefund },
   default: { getOrders, getOrder, refundOrder, queryRefund }
 }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), RouterLink: { template: '<a><slot /></a>' } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess, showWarning, showError }) }))
 vi.mock('@/composables/useStepUp', () => ({
   useStepUp: () => ({ run: stepUpRun }),

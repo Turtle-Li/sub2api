@@ -36,10 +36,24 @@ type feishuPaymentIncidentSender struct {
 	now     func() time.Time
 }
 
+// FeishuPaymentTextSender is a deliberately narrow reusable transport. Callers
+// own their own durable state machines; this boundary only loads the already
+// configured Vault URL, validates it, and posts a bounded plain-text message.
+// It must never be used to invent an incident type for unrelated workflows.
+type FeishuPaymentTextSender interface {
+	SendText(context.Context, string) error
+}
+
 // NewFeishuPaymentIncidentSender intentionally has no credential parameter.
 // The URL is fetched only when a durable delivery is actually sent, through
 // the dedicated public Vault-agent socket configured by deployment.
 func NewFeishuPaymentIncidentSender() FeishuPaymentIncidentSender {
+	return newFeishuPaymentIncidentSender(nil, loadFeishuPaymentWebhookURL, nil)
+}
+
+// NewFeishuPaymentTextSender reuses the payment sender's strict Vault and
+// transport setup for non-incident, privacy-minimal operational messages.
+func NewFeishuPaymentTextSender() FeishuPaymentTextSender {
 	return newFeishuPaymentIncidentSender(nil, loadFeishuPaymentWebhookURL, nil)
 }
 
@@ -58,7 +72,14 @@ func newFeishuPaymentIncidentSender(client *http.Client, loadURL func(context.Co
 }
 
 func (s *feishuPaymentIncidentSender) Send(ctx context.Context, delivery FeishuPaymentDelivery) error {
+	return s.SendText(ctx, feishuPaymentIncidentMessage(delivery, s.now().UTC()))
+}
+
+func (s *feishuPaymentIncidentSender) SendText(ctx context.Context, message string) error {
 	if s == nil || s.client == nil || s.loadURL == nil {
+		return errFeishuPaymentWebhookDelivery
+	}
+	if strings.TrimSpace(message) == "" {
 		return errFeishuPaymentWebhookDelivery
 	}
 	if ctx == nil {
@@ -80,7 +101,7 @@ func (s *feishuPaymentIncidentSender) Send(ctx context.Context, delivery FeishuP
 		MessageType: "text",
 		Content: struct {
 			Text string `json:"text"`
-		}{Text: feishuPaymentIncidentMessage(delivery, s.now().UTC())},
+		}{Text: message},
 	})
 	if err != nil {
 		return errFeishuPaymentWebhookDelivery
@@ -95,7 +116,7 @@ func (s *feishuPaymentIncidentSender) Send(ctx context.Context, delivery FeishuP
 	if err != nil {
 		return errFeishuPaymentWebhookDelivery
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return errFeishuPaymentWebhookDelivery
 	}
@@ -305,7 +326,7 @@ func loadFeishuPaymentVaultTextWithClient(ctx context.Context, socketPath, refer
 	if err != nil {
 		return "", errFeishuPaymentWebhookDelivery
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", errFeishuPaymentWebhookDelivery
 	}

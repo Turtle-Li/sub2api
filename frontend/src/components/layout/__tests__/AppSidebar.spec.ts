@@ -54,7 +54,7 @@ describe('AppSidebar collapsible groups', () => {
 describe('AppSidebar admin order access', () => {
   it('keeps order management as a direct admin link when public purchasing is disabled', () => {
     expect(componentSource).toContain('...(adminSettingsStore.paymentEnabled')
-    expect(componentSource).toContain("{ path: '/admin/orders', label: t('nav.orderManagement'), icon: OrderIcon, hideInSimpleMode: true }")
+    expect(componentSource).toMatch(/path: '\/admin\/orders',\s*label: t\('nav\.orderManagement'\),\s*icon: OrderIcon,\s*hideInSimpleMode: true,\s*expandOnly: true,\s*children:/)
     expect(componentSource).not.toContain('featureFlag: flagAdminPayment')
   })
 

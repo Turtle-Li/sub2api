@@ -200,6 +200,7 @@ export default {
     docs: 'Docs',
     myOrders: 'My Orders',
     orderManagement: 'Orders',
+    invoiceRequests: 'Invoice Requests',
     paymentDashboard: 'Payment Dashboard',
     paymentConfig: 'Payment Config',
     paymentPlans: 'Plans',

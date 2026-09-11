@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicerequest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 )
@@ -67,6 +68,8 @@ type PaymentOrder struct {
 	Status string `json:"status,omitempty"`
 	// RefundAmount holds the value of the "refund_amount" field.
 	RefundAmount float64 `json:"refund_amount,omitempty"`
+	// RefundRequestedAmount holds the value of the "refund_requested_amount" field.
+	RefundRequestedAmount float64 `json:"refund_requested_amount,omitempty"`
 	// RefundReason holds the value of the "refund_reason" field.
 	RefundReason *string `json:"refund_reason,omitempty"`
 	// RefundAt holds the value of the "refund_at" field.
@@ -109,9 +112,11 @@ type PaymentOrder struct {
 type PaymentOrderEdges struct {
 	// User holds the value of the user edge.
 	User *User `json:"user,omitempty"`
+	// InvoiceRequest holds the value of the invoice_request edge.
+	InvoiceRequest *PaymentInvoiceRequest `json:"invoice_request,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [1]bool
+	loadedTypes [2]bool
 }
 
 // UserOrErr returns the User value or an error if the edge
@@ -125,6 +130,17 @@ func (e PaymentOrderEdges) UserOrErr() (*User, error) {
 	return nil, &NotLoadedError{edge: "user"}
 }
 
+// InvoiceRequestOrErr returns the InvoiceRequest value or an error if the edge
+// was not loaded in eager-loading, or loaded but was not found.
+func (e PaymentOrderEdges) InvoiceRequestOrErr() (*PaymentInvoiceRequest, error) {
+	if e.InvoiceRequest != nil {
+		return e.InvoiceRequest, nil
+	} else if e.loadedTypes[1] {
+		return nil, &NotFoundError{label: paymentinvoicerequest.Label}
+	}
+	return nil, &NotLoadedError{edge: "invoice_request"}
+}
+
 // scanValues returns the types for scanning values from sql.Rows.
 func (*PaymentOrder) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
@@ -134,7 +150,7 @@ func (*PaymentOrder) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case paymentorder.FieldForceRefund:
 			values[i] = new(sql.NullBool)
-		case paymentorder.FieldAmount, paymentorder.FieldPayAmount, paymentorder.FieldFeeRate, paymentorder.FieldRefundAmount:
+		case paymentorder.FieldAmount, paymentorder.FieldPayAmount, paymentorder.FieldFeeRate, paymentorder.FieldRefundAmount, paymentorder.FieldRefundRequestedAmount:
 			values[i] = new(sql.NullFloat64)
 		case paymentorder.FieldID, paymentorder.FieldUserID, paymentorder.FieldPlanID, paymentorder.FieldSubscriptionGroupID, paymentorder.FieldSubscriptionDays:
 			values[i] = new(sql.NullInt64)
@@ -320,6 +336,12 @@ func (_m *PaymentOrder) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.RefundAmount = value.Float64
 			}
+		case paymentorder.FieldRefundRequestedAmount:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field refund_requested_amount", values[i])
+			} else if value.Valid {
+				_m.RefundRequestedAmount = value.Float64
+			}
 		case paymentorder.FieldRefundReason:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field refund_reason", values[i])
@@ -444,6 +466,11 @@ func (_m *PaymentOrder) QueryUser() *UserQuery {
 	return NewPaymentOrderClient(_m.config).QueryUser(_m)
 }
 
+// QueryInvoiceRequest queries the "invoice_request" edge of the PaymentOrder entity.
+func (_m *PaymentOrder) QueryInvoiceRequest() *PaymentInvoiceRequestQuery {
+	return NewPaymentOrderClient(_m.config).QueryInvoiceRequest(_m)
+}
+
 // Update returns a builder for updating this PaymentOrder.
 // Note that you need to call PaymentOrder.Unwrap() before calling this method if this PaymentOrder
 // was returned from a transaction, and the transaction was committed or rolled back.
@@ -556,6 +583,9 @@ func (_m *PaymentOrder) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("refund_amount=")
 	builder.WriteString(fmt.Sprintf("%v", _m.RefundAmount))
+	builder.WriteString(", ")
+	builder.WriteString("refund_requested_amount=")
+	builder.WriteString(fmt.Sprintf("%v", _m.RefundRequestedAmount))
 	builder.WriteString(", ")
 	if v := _m.RefundReason; v != nil {
 		builder.WriteString("refund_reason=")

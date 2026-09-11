@@ -66,6 +66,12 @@ type IdentityAdoptionDecision func(*sql.Selector)
 // PaymentAuditLog is the predicate function for paymentauditlog builders.
 type PaymentAuditLog func(*sql.Selector)
 
+// PaymentInvoiceDocument is the predicate function for paymentinvoicedocument builders.
+type PaymentInvoiceDocument func(*sql.Selector)
+
+// PaymentInvoiceRequest is the predicate function for paymentinvoicerequest builders.
+type PaymentInvoiceRequest func(*sql.Selector)
+
 // PaymentOrder is the predicate function for paymentorder builders.
 type PaymentOrder func(*sql.Selector)
 
