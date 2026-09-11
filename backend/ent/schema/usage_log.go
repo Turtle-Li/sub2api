@@ -2,6 +2,7 @@
 package schema
 
 import (
+	"fmt"
 	"time"
 
 	"entgo.io/ent"
@@ -108,6 +109,16 @@ func (UsageLog) Fields() []ent.Field {
 		field.Float("actual_cost").
 			Default(0).
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}),
+		field.String("currency").
+			MaxLen(3).
+			Default("USD").
+			Validate(func(value string) error {
+				if value != "USD" && value != "CNY" {
+					return fmt.Errorf("currency must be USD or CNY")
+				}
+				return nil
+			}).
+			Comment("Settlement currency for this usage log's monetary amounts"),
 		field.Float("rate_multiplier").
 			Default(1).
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}),

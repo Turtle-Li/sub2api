@@ -14,6 +14,7 @@ func TestUsageLogFromService_IncludesOpenAIWSMode(t *testing.T) {
 	wsLog := &service.UsageLog{
 		RequestID:    "req_1",
 		Model:        "gpt-5.3-codex",
+		Currency:     "cny",
 		OpenAIWSMode: true,
 	}
 	httpLog := &service.UsageLog{
@@ -26,6 +27,8 @@ func TestUsageLogFromService_IncludesOpenAIWSMode(t *testing.T) {
 	require.False(t, UsageLogFromService(httpLog).OpenAIWSMode)
 	require.True(t, UsageLogFromServiceAdmin(wsLog).OpenAIWSMode)
 	require.False(t, UsageLogFromServiceAdmin(httpLog).OpenAIWSMode)
+	require.Equal(t, service.PricingCurrencyCNY, UsageLogFromService(wsLog).Currency)
+	require.Equal(t, service.PricingCurrencyUSD, UsageLogFromService(httpLog).Currency)
 }
 
 func TestUsageLogFromService_PreservesNativeCompactionAndStream(t *testing.T) {

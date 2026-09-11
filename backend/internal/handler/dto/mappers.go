@@ -689,6 +689,10 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 	if requestedModel == "" {
 		requestedModel = l.Model
 	}
+	currency := l.Currency
+	if normalized, err := service.NormalizePricingCurrency(currency); err == nil {
+		currency = normalized
+	}
 	return UsageLog{
 		ID:                        l.ID,
 		UserID:                    l.UserID,
@@ -713,6 +717,7 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		CacheReadCost:             l.CacheReadCost,
 		TotalCost:                 l.TotalCost,
 		ActualCost:                l.ActualCost,
+		Currency:                  currency,
 		RateMultiplier:            l.RateMultiplier,
 		LongContextBillingApplied: l.LongContextBillingApplied,
 		BillingType:               l.BillingType,
