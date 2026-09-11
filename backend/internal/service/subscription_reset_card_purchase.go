@@ -148,6 +148,23 @@ func (s *SubscriptionService) PurchaseResetCard(ctx context.Context, input Purch
 
 	var result *PurchaseSubscriptionResetCardResult
 	err = s.withResetCardPurchaseTx(ctx, func(txCtx context.Context, client *dbent.Client) error {
+		// Preserve the conflict response even when a reused key names an absent
+		// subscription. Purchase records are immutable; the locked lookup below
+		// still arbitrates requests whose original purchase has not committed yet.
+		prior, priorFound, err := loadResetCardPurchaseRecord(txCtx, client, input.UserID, purchaseKey)
+		if err != nil {
+			return err
+		}
+		if priorFound && (prior.subscriptionID != input.SubscriptionID || prior.planID != input.ExpectedPlanID || !prior.price.Equal(expectedPrice)) {
+			return ErrResetCardPurchaseKeyConflict
+		}
+		// Subscription fulfillment renews the subscription before granting user
+		// benefits. Match its subscription -> user order to avoid a lock cycle.
+		// Lock identity without eligibility filters so historical replays remain
+		// possible after expiry, suspension or soft deletion.
+		if err := lockResetCardPurchaseSubscriptionIdentity(txCtx, client, input.UserID, input.SubscriptionID); err != nil {
+			return err
+		}
 		// The user row serializes every balance debit for this user. It is locked
 		// before the purchase-key lookup so two same-key requests cannot create a
 		// second grant even if one caller retries while the other is committing.
@@ -434,6 +451,21 @@ func loadSingleMonthlyResetCardPlan(ctx context.Context, client *dbent.Client, g
 	return plans[0], nil
 }
 
+func lockResetCardPurchaseSubscriptionIdentity(ctx context.Context, client *dbent.Client, userID, subscriptionID int64) error {
+	rows, err := client.QueryContext(ctx, `SELECT id FROM user_subscriptions WHERE id = $1 AND user_id = $2 FOR UPDATE`, subscriptionID, userID)
+	if err != nil {
+		return fmt.Errorf("lock reset card subscription identity: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return ErrSubscriptionNotFound
+	}
+	return nil
+}
+
 func lockResetCardPurchaseUser(ctx context.Context, client *dbent.Client, userID int64) (string, error) {
 	rows, err := client.QueryContext(ctx, `
 		SELECT status
@@ -493,7 +525,6 @@ func loadResetCardPurchaseRecord(ctx context.Context, client *dbent.Client, user
 		SELECT id, subscription_id, plan_id, price::text, expires_at
 		FROM subscription_reset_card_purchases
 		WHERE user_id = $1 AND purchase_key = $2::uuid
-		FOR UPDATE
 	`, userID, purchaseKey)
 	if err != nil {
 		return resetCardPurchaseRecord{}, false, fmt.Errorf("load reset card purchase replay: %w", err)

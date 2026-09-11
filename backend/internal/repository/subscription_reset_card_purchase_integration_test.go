@@ -451,3 +451,60 @@ func TestSubscriptionResetCardPurchaseConcurrentRequests(t *testing.T) {
 		require.Equal(t, 1, grants)
 	})
 }
+
+// Exercise the renewal -> user-benefit lock order used by payment fulfillment
+// while a reset-card purchase targets the same subscription and wallet.
+func TestSubscriptionResetCardPurchaseDoesNotInvertRenewalLocks(t *testing.T) {
+	f := newResetCardPurchaseFixture(t, 100)
+	createResetCardPurchasePlan(t, f, 120, 1, "month")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	quote, err := f.service.GetResetCardQuote(ctx, f.user.ID, f.subscription.ID)
+	require.NoError(t, err)
+	renewalTx, err := f.client.Tx(ctx)
+	require.NoError(t, err)
+	defer func() { _ = renewalTx.Rollback() }()
+	renewalCtx := dbent.NewTxContext(ctx, renewalTx)
+	renewalService := service.NewSubscriptionService(NewGroupRepository(f.client, integrationDB), NewUserSubscriptionRepository(f.client), nil, f.client, nil)
+	renewed, extended, err := renewalService.AssignOrExtendSubscription(renewalCtx, &service.AssignSubscriptionInput{UserID: f.user.ID, GroupID: f.group.ID, ValidityDays: 30})
+	require.NoError(t, err)
+	require.True(t, extended)
+	purchaseTx, err := f.client.Tx(ctx)
+	require.NoError(t, err)
+	defer func() { _ = purchaseTx.Rollback() }()
+	rows, err := purchaseTx.Client().QueryContext(ctx, "SELECT pg_backend_pid()")
+	require.NoError(t, err)
+	require.True(t, rows.Next())
+	var purchasePID int
+	require.NoError(t, rows.Scan(&purchasePID))
+	require.NoError(t, rows.Close())
+	done := make(chan error, 1)
+	go func() {
+		result, purchaseErr := f.service.PurchaseResetCard(dbent.NewTxContext(ctx, purchaseTx), service.PurchaseSubscriptionResetCardInput{UserID: f.user.ID, SubscriptionID: f.subscription.ID, ExpectedPlanID: quote.PlanID, ExpectedPrice: quote.Price, PurchaseKey: uuid.NewString()})
+		if purchaseErr == nil && !result.ExpiresAt.Equal(renewed.ExpiresAt) {
+			purchaseErr = fmt.Errorf("grant did not use renewed expiry")
+		}
+		if purchaseErr == nil {
+			purchaseErr = purchaseTx.Commit()
+		}
+		done <- purchaseErr
+	}()
+	require.Eventually(t, func() bool {
+		var waiting bool
+		queryErr := integrationDB.QueryRowContext(ctx, "SELECT COALESCE(wait_event_type = 'Lock',false) FROM pg_stat_activity WHERE pid=$1", purchasePID).Scan(&waiting)
+		return queryErr == nil && waiting
+	}, 3*time.Second, 10*time.Millisecond, "purchase must reach the subscription lock held by renewal")
+	// NOWAIT turns the previous lock cycle into a deterministic test failure,
+	// rather than relying on PostgreSQL's deadlock victim choice.
+	lockRows, err := renewalTx.Client().QueryContext(renewalCtx, "SELECT id FROM users WHERE id=$1 FOR UPDATE NOWAIT", f.user.ID)
+	require.NoError(t, err, "purchase must not hold wallet while waiting for renewal")
+	require.NoError(t, lockRows.Close())
+	require.NoError(t, renewalTx.Client().User.UpdateOneID(f.user.ID).AddBalance(10).Exec(renewalCtx))
+	require.NoError(t, renewalTx.Commit())
+	require.NoError(t, <-done)
+	balance, _ := resetCardPurchaseBalance(t, f.user.ID)
+	require.Equal(t, 70.0, balance)
+	purchases, grants := resetCardPurchaseCounts(t, f.user.ID)
+	require.Equal(t, 1, purchases)
+	require.Equal(t, 1, grants)
+}
