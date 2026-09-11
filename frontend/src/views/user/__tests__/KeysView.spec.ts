@@ -53,6 +53,7 @@ const messages: Record<string, string> = {
   'keys.status.inactive': 'Inactive',
   'keys.status.quota_exhausted': 'Quota exhausted',
   'keys.usage': 'Usage',
+  'keys.mixedCurrencyUsage': 'Mixed historical currencies',
 }
 
 vi.mock('@/api', () => ({
@@ -172,6 +173,9 @@ const DataTableStub = {
         <slot name="cell-name" :value="row.name" :row="row" />
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
+        </div>
+        <div :data-test="\`key-usage-\${row.id}\`">
+          <slot name="cell-usage" :row="row" />
         </div>
         <div
           v-if="columns.some((col) => col.key === 'last_used_ip')"
@@ -392,6 +396,51 @@ describe('user KeysView column settings', () => {
     const wrapper = await mountView()
 
     expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
+  })
+
+  it('keeps subscription-key quotas in USD while standard keys use the wallet settlement currency', async () => {
+    const subscriptionGroup = {
+      id: 2,
+      subscription_type: 'subscription',
+    } as ApiKey['group']
+    const standardGroup = {
+      id: 3,
+      subscription_type: 'standard',
+    } as ApiKey['group']
+    listKeys.mockResolvedValueOnce({
+      items: [
+        {
+          ...createApiKey(),
+          id: 2,
+          group_id: 2,
+          group: subscriptionGroup,
+          quota: 10,
+          quota_used: 1,
+        },
+        {
+          ...createApiKey(),
+          id: 3,
+          group_id: 3,
+          group: standardGroup,
+          quota: 67.5,
+          quota_used: 6.75,
+        },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    getPublicSettings.mockResolvedValueOnce({
+      pricing_currency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 },
+    })
+    getAvailableGroups.mockResolvedValueOnce([subscriptionGroup, standardGroup])
+
+    const wrapper = await mountView()
+
+    expect(wrapper.get('[data-test="key-usage-2"]').text()).toContain('$1.00 / $10.00')
+    expect(wrapper.get('[data-test="key-usage-3"]').text()).toContain('¥6.75 / ¥67.50')
+    expect(wrapper.get('[data-test="key-usage-3"]').text()).toContain('Mixed historical currencies')
   })
 
   it('marks current concurrency as sortable', async () => {
