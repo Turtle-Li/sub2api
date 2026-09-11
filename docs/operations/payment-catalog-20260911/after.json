@@ -1,0 +1,106 @@
+{
+  "plans": [
+    {
+      "id": 1,
+      "group_id": 4,
+      "name": "Plus 月付",
+      "price": 120.0,
+      "original_price": null,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "month",
+      "for_sale": true
+    },
+    {
+      "id": 2,
+      "group_id": 4,
+      "name": "Plus 季付",
+      "price": 324.0,
+      "original_price": 360.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "quarter",
+      "for_sale": true
+    },
+    {
+      "id": 3,
+      "group_id": 4,
+      "name": "Plus 年付",
+      "price": 1152.0,
+      "original_price": 1440.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "year",
+      "for_sale": true
+    },
+    {
+      "id": 4,
+      "group_id": 12,
+      "name": "5X Pro 月付",
+      "price": 550.0,
+      "original_price": null,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "month",
+      "for_sale": true
+    },
+    {
+      "id": 5,
+      "group_id": 12,
+      "name": "5X Pro 季付",
+      "price": 1485.0,
+      "original_price": 1650.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "quarter",
+      "for_sale": true
+    },
+    {
+      "id": 6,
+      "group_id": 12,
+      "name": "5X Pro 年付",
+      "price": 5280.0,
+      "original_price": 6600.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "year",
+      "for_sale": true
+    }
+  ],
+  "settings": {
+    "payment_visible_method_wxpay_enabled": "true",
+    "MIN_RECHARGE_AMOUNT": "5",
+    "MAX_RECHARGE_AMOUNT": "0",
+    "BALANCE_RECHARGE_MULTIPLIER": "1",
+    "SUBSCRIPTION_USD_TO_CNY_RATE": "0",
+    "RECHARGE_FEE_RATE": "0",
+    "PAYMENT_RECHARGE_OPTIONS": "[{\"amount\":5,\"balance_bonus\":0,\"label\":\"小额体验\",\"description\":\"按充值金额到账\",\"sort_order\":0,\"enabled\":true,\"recommended\":false},{\"amount\":49,\"balance_bonus\":0,\"label\":\"轻量充值\",\"description\":\"按充值金额到账\",\"sort_order\":1,\"enabled\":true,\"recommended\":false},{\"amount\":99,\"balance_bonus\":4,\"label\":\"日常使用\",\"description\":\"额外赠送 4 额度\",\"sort_order\":2,\"enabled\":true,\"recommended\":false},{\"amount\":199,\"balance_bonus\":19,\"label\":\"进阶充值\",\"description\":\"额外赠送 19 额度\",\"sort_order\":3,\"enabled\":true,\"recommended\":false},{\"amount\":399,\"balance_bonus\":75,\"label\":\"高频使用\",\"description\":\"额外赠送 75 额度\",\"sort_order\":4,\"enabled\":true,\"recommended\":false},{\"amount\":599,\"balance_bonus\":145,\"label\":\"畅享充值\",\"description\":\"额外赠送 145 额度\",\"sort_order\":5,\"enabled\":true,\"recommended\":true}]",
+    "PAYMENT_BANNER": "{\"enabled\":true,\"title\":\"订阅与余额充值\",\"description\":\"Plus / 5X Pro 月付、季付、年付可选；余额充值最高赠送 145 额度。\",\"link_url\":\"/subscriptions\",\"button_text\":\"查看我的订阅\"}",
+    "payment_visible_method_wxpay_source": "unified_wxpay",
+    "ENABLED_PAYMENT_TYPES": "alipay,wxpay",
+    "payment_enabled": "true",
+    "payment_visible_method_alipay_source": "unified_alipay",
+    "payment_visible_method_alipay_enabled": "true"
+  },
+  "groups": [
+    {
+      "id": 4,
+      "name": "GPT PLUS",
+      "rate_multiplier": 1.0,
+      "status": "active"
+    },
+    {
+      "id": 6,
+      "name": "按量-0.03倍率",
+      "rate_multiplier": 0.03,
+      "status": "active"
+    },
+    {
+      "id": 12,
+      "name": "GPT 5X PRO",
+      "rate_multiplier": 1.0,
+      "status": "active"
+    }
+  ],
+  "reset_purchase_table": true
+}
