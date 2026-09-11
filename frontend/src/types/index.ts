@@ -282,6 +282,11 @@ export interface PublicSettings {
   service_quota_enabled: boolean
   affiliate_enabled: boolean
   allow_user_view_error_requests?: boolean
+  /** Wallet settlement unit. Older injected configurations omit this and use USD. */
+  pricing_currency?: {
+    settlement_currency: 'USD' | 'CNY' | string
+    usd_to_cny_rate: number
+  }
 }
 
 export interface AuthResponse {
