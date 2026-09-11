@@ -19,14 +19,13 @@
       >
         <span v-if="isFeatured(option)" class="payment-product-card__ribbon">
           <Icon name="sparkles" size="xs" :stroke-width="2" />
-          {{ t('payment.bestValue') }}
+          {{ t(option.recommended ? 'payment.recommended' : 'payment.bestValue') }}
         </span>
 
         <div class="payment-product-card__body">
           <!-- Identity -->
           <div class="min-w-0">
-            <p class="payment-product-card__eyebrow">{{ t('payment.meteredTier') }}</p>
-            <h3 :title="tierName(option)" class="payment-product-card__title mt-1.5">{{ tierName(option) }}</h3>
+            <h3 :title="tierName(option)" class="payment-product-card__title">{{ tierName(option) }}</h3>
             <p v-if="option.description" class="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-dark-400">
               {{ option.description }}
             </p>
@@ -46,10 +45,19 @@
             </p>
           </div>
 
-          <!-- What lands in the account -->
-          <div class="payment-product-card__credit">
-            <span>{{ t('payment.creditedBalance') }}</span>
-            <span class="font-semibold text-gray-900 dark:text-white">{{ formatCredit(creditedFor(option)) }}</span>
+          <!-- The total balance is the primary purchase outcome. -->
+          <div class="payment-recharge-card__credit">
+            <span class="payment-recharge-card__credit-label">{{ t('payment.creditedBalance') }}</span>
+            <strong class="payment-recharge-card__credit-value">{{ formatAmountValue(creditedFor(option)) }} <span class="text-sm font-medium tracking-normal">{{ t('payment.creditUnit') }}</span></strong>
+          </div>
+
+          <!-- A configured bonus is visible once, alongside the total it raises. -->
+          <div v-if="hasBalanceBonus(option)" class="payment-recharge-card__bonus">
+            <span class="payment-recharge-card__bonus-label">
+              <Icon name="sparkles" size="xs" :stroke-width="2.2" />
+              {{ t('payment.rechargeBonus') }}
+            </span>
+            <strong class="payment-recharge-card__bonus-value">+{{ formatAmountValue(option.balance_bonus || 0) }} <span class="text-sm font-medium">{{ t('payment.creditUnit') }}</span></strong>
           </div>
 
           <!-- Benefits and estimates. Absent data renders nothing at all. -->
@@ -185,16 +193,16 @@ function formatAmount(value: number): string {
 
 // Balance is platform credit, not a gateway charge. Labelling it with a
 // currency symbol conflates the two units.
-function formatCredit(value: number): string {
-  return `${Number.isInteger(value) ? value : value.toFixed(2)} ${t('payment.creditUnit')}`
-}
-
 function formatAmountValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2)
 }
 
 function creditedFor(option: RechargeOption): number {
   return creditedBalanceAmount(option.amount, props.balanceMultiplier, option.balance_bonus || 0)
+}
+
+function hasBalanceBonus(option: RechargeOption): boolean {
+  return Boolean(option.balance_bonus && option.balance_bonus > 0)
 }
 
 function discountPercent(option: RechargeOption): number {
@@ -224,9 +232,6 @@ interface TierListItem {
 // the shorter card.
 function listItems(option: RechargeOption): TierListItem[] {
   const items: TierListItem[] = []
-  if (option.balance_bonus && option.balance_bonus > 0) {
-    items.push({ text: `${t('payment.entitlements.balanceBonus')} +${formatCredit(option.balance_bonus)}`, benefit: true })
-  }
   if (option.concurrency && option.concurrency > 0) {
     items.push({ text: t('payment.entitlements.concurrency', { count: option.concurrency }), benefit: true })
   }
@@ -239,3 +244,29 @@ function listItems(option: RechargeOption): TierListItem[] {
   return items
 }
 </script>
+
+<style scoped>
+.payment-recharge-card__credit {
+  @apply rounded-xl bg-primary-50 px-3.5 py-3 dark:bg-primary-900/30;
+}
+
+.payment-recharge-card__credit-label {
+  @apply block text-xs font-semibold text-primary-700 dark:text-primary-300;
+}
+
+.payment-recharge-card__credit-value {
+  @apply mt-1 block text-[2.25rem] font-bold leading-none tracking-tight tabular-nums text-primary-800 dark:text-primary-200;
+}
+
+.payment-recharge-card__bonus {
+  @apply flex flex-wrap items-center justify-between gap-2 rounded-xl bg-primary-700 px-3.5 py-3 text-white dark:bg-primary-800;
+}
+
+.payment-recharge-card__bonus-label {
+  @apply inline-flex min-w-0 items-center gap-1.5 text-sm font-semibold;
+}
+
+.payment-recharge-card__bonus-value {
+  @apply shrink-0 text-2xl font-bold leading-none tabular-nums;
+}
+</style>

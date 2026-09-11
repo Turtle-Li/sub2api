@@ -43,14 +43,16 @@ describe('AmountInput', () => {
     expect(wrapper.findAll('article')).toHaveLength(2)
     expect(wrapper.find('article').classes()).toContain('payment-product-card')
     expect(wrapper.find('.payment-product-card__body').exists()).toBe(true)
-    expect(wrapper.find('.payment-product-card__credit').exists()).toBe(true)
+    expect(wrapper.find('.payment-recharge-card__credit').exists()).toBe(true)
     expect(wrapper.find('button').classes()).toContain('payment-product-card__action')
     expect(wrapper.text()).toContain('Growth')
     expect(wrapper.text()).toContain('-17%')
     expect(wrapper.text()).toContain('×0.9')
     expect(wrapper.text()).toContain('≈ 12M')
     // Bonus balance is platform credit, so it carries no currency symbol.
-    expect(wrapper.text()).toContain('payment.entitlements.balanceBonus +8 payment.creditUnit')
+    expect(wrapper.find('.payment-recharge-card__bonus').text()).toContain('payment.rechargeBonus')
+    expect(wrapper.find('.payment-recharge-card__bonus').text()).toContain('+8 payment.creditUnit')
+    expect(wrapper.findAll('.payment-product-card__list-item').map(item => item.text())).not.toContain('payment.entitlements.balanceBonus +8 payment.creditUnit')
     expect(wrapper.text()).toContain('Concurrency raised to 5')
     expect(wrapper.find('input').exists()).toBe(false)
   })
@@ -141,7 +143,28 @@ describe('AmountInput', () => {
       props: { modelValue: 100, options, balanceMultiplier: 2 },
     })
 
-    expect(wrapper.findAll('article')[0].text()).toContain('208 payment.creditUnit')
-    expect(wrapper.findAll('article')[1].text()).toContain('40 payment.creditUnit')
+    expect(wrapper.findAll('.payment-recharge-card__credit-value')[0].text()).toBe('208 payment.creditUnit')
+    expect(wrapper.findAll('.payment-recharge-card__credit-value')[1].text()).toBe('40 payment.creditUnit')
+  })
+
+  it('emphasizes the actual credited total once and omits an empty bonus', () => {
+    const wrapper = mount(AmountInput, {
+      props: {
+        modelValue: 599,
+        options: [
+          { amount: 599, balance_bonus: 145, sort_order: 1, enabled: true },
+          { amount: 49, balance_bonus: 0, sort_order: 2, enabled: true },
+        ],
+      },
+    })
+
+    const premium = wrapper.findAll('article')[0]
+    expect(premium.find('.payment-recharge-card__credit-value').text()).toBe('744 payment.creditUnit')
+    expect(premium.find('.payment-recharge-card__bonus').text()).toContain('+145 payment.creditUnit')
+    expect(premium.findAll('.payment-product-card__list-item')).toHaveLength(0)
+
+    const standard = wrapper.findAll('article')[1]
+    expect(standard.find('.payment-recharge-card__credit-value').text()).toBe('49 payment.creditUnit')
+    expect(standard.find('.payment-recharge-card__bonus').exists()).toBe(false)
   })
 })
