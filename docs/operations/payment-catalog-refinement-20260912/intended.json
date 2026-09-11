@@ -25,7 +25,8 @@
       "sort_order": 2,
       "description": "额外赠送 5 额度",
       "recommended": false,
-      "balance_bonus": 5
+      "balance_bonus": 5,
+      "concurrency": 3
     },
     {
       "label": "进阶充值",
@@ -34,7 +35,8 @@
       "sort_order": 3,
       "description": "额外赠送 20 额度",
       "recommended": false,
-      "balance_bonus": 20
+      "balance_bonus": 20,
+      "concurrency": 4
     },
     {
       "label": "高频使用",
@@ -43,7 +45,8 @@
       "sort_order": 4,
       "description": "额外赠送 75 额度",
       "recommended": false,
-      "balance_bonus": 75
+      "balance_bonus": 75,
+      "concurrency": 5
     },
     {
       "label": "畅享充值",
@@ -52,7 +55,8 @@
       "sort_order": 5,
       "description": "额外赠送 145 额度",
       "recommended": true,
-      "balance_bonus": 145
+      "balance_bonus": 145,
+      "concurrency": 6
     }
   ],
   "plans": [
@@ -101,7 +105,8 @@
       "validity_unit": "month",
       "for_sale": true,
       "entitlements": {
-        "reset_card_purchase_price": 180
+        "reset_card_purchase_price": 180,
+        "concurrency": 6
       }
     },
     {
@@ -113,7 +118,9 @@
       "validity_days": 1,
       "validity_unit": "quarter",
       "for_sale": true,
-      "entitlements": {}
+      "entitlements": {
+        "concurrency": 6
+      }
     },
     {
       "id": 6,
@@ -124,7 +131,9 @@
       "validity_days": 1,
       "validity_unit": "year",
       "for_sale": true,
-      "entitlements": {}
+      "entitlements": {
+        "concurrency": 6
+      }
     }
   ]
 }
