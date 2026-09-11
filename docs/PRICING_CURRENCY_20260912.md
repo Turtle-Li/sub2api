@@ -7,7 +7,7 @@
 - R3: One settlement currency per installation (USD or CNY); a fixed USD→CNY rate. No live FX or separate provider-cost ledger.
 - R4: Publishing additive code/schema alone preserves legacy USD behavior. Wallet and quota conversion is a separate coordinated cutover, never an incidental settings side effect.
 - R5: Preserve balances/request purchasing power. Convert monetary limits and accumulated usage together, for wallet-funded API keys and platform limits. Subscription entitlements, their API-key quota windows, and upstream account quotas retain USD. Payment orders, actual CNY receipts, refunds and invoices are historical facts and must not be multiplied.
-- R6: New wallet consumption is recorded in settlement units; subscription consumption remains USD. Every new usage row records its currency; legacy rows default to USD. Existing mixed-period totals must not be presented as a single-currency total without a verified conversion.
+- R6: New wallet consumption is recorded in settlement units; subscription consumption remains USD. Every new usage row records its currency; legacy rows default to USD. Primary wallet/usage dashboards hide mixed-period monetary totals and show row-level currencies. Remaining rough legacy analytics are not acceptance evidence for wallet reconciliation; a full multi-currency analytics overhaul is outside the owner-requested scope.
 
 ## Task dependencies and ownership
 
@@ -36,3 +36,7 @@ Rollback before reopening traffic restores the exact saved monetary/configuratio
 The read-only production audit found only subscription traffic in the last hour, no frozen balances, no active batch jobs, and no unfinished balance orders. These are preflight observations, not a fence: registrations, first-bind gifts, redeem/promo codes, affiliate jobs, payment fulfillment and admin edits also write wallets. Recheck under a writer fence immediately before applying the transaction. Prefer a short coordinated admission pause with in-flight requests drained over adding a new permanent wallet-maintenance subsystem solely for this migration. Never mutate an old in-flight USD debit against a converted CNY wallet.
 
 The canonical lifecycle lock is `/run/sub2api-maintenance/sub2api-maintenance.lock` (see `deploy/README.md`); the legacy `/run/lock` path is obsolete. Snapshot and restore-smoke verification use the existing `sub2api-db-backup` and `sub2api-db-restore-smoke` tools on `sub2api-db`. Backups and per-row financial manifests stay on the protected server, outside Git.
+
+## Pending retail decision
+
+The live `BALANCE_RECHARGE_MULTIPLIER` is 1: a ¥100 payment currently yields 100 USD-denominated credits. The owner must choose whether future ¥100 pays for ¥675 wallet credits (preserving old retail purchasing power) or ¥100 wallet credits (nominal CNY retail). Existing wallet conversion ×6.75 is already confirmed. SQL requires an explicit `recharge_factor` and snapshots both the multiplier and preset bonus JSON. No production cutover is approved by the rehearsal default. Receipt amounts and purchase eligibility thresholds remain actual paid CNY.

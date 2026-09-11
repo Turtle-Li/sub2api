@@ -1,20 +1,34 @@
 -- Run only after the reviewed release, writer drain/stop, and fresh backup.
--- psql -X -v ON_ERROR_STOP=1 -v apply=false -f wallet-to-cny.sql rehearses and rolls back.
+-- psql -X -v ON_ERROR_STOP=1 -v recharge_factor=6.75 -v apply=false -f wallet-to-cny.sql rehearses and rolls back.
 -- Setting apply=true is the explicit cutover. Do not use as a startup migration.
 \set ON_ERROR_STOP on
 \if :{?apply}
 \else
 \set apply false
 \endif
+\if :{?recharge_factor}
+\else
+\set recharge_factor 0
+\endif
 BEGIN;
+CREATE TEMP TABLE cutover_parameters AS SELECT :'recharge_factor'::numeric AS recharge_factor;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 SELECT pg_advisory_xact_lock(20260912, 675);
 LOCK TABLE users, api_keys, user_platform_quotas, user_affiliates,
   user_affiliate_ledger, redeem_codes, promo_codes, settings,
-  payment_orders, batch_image_jobs IN SHARE ROW EXCLUSIVE MODE;
+  payment_orders, batch_image_jobs, subscription_plans IN SHARE ROW EXCLUSIVE MODE;
 DO $$
 BEGIN
+  IF (SELECT recharge_factor FROM cutover_parameters) NOT IN (1,6.75) THEN
+    RAISE EXCEPTION 'Explicit recharge_factor=1 or 6.75 requires owner decision';
+  END IF;
+  IF EXISTS (SELECT 1 FROM user_affiliate_ledger) THEN
+    RAISE EXCEPTION 'Historical affiliate ledger needs separate currency treatment';
+  END IF;
+  IF EXISTS (SELECT 1 FROM subscription_plans WHERE COALESCE((entitlements->>'balance_bonus')::numeric,0) <> 0) THEN
+    RAISE EXCEPTION 'Plan bonus requires an explicit migration decision';
+  END IF;
   IF COALESCE((SELECT value::jsonb->>'settlement_currency' FROM settings WHERE key='pricing_currency_settings'), 'USD') <> 'USD' THEN
     RAISE EXCEPTION 'Source wallet currency must be USD; migration may already have run';
   END IF;
@@ -49,7 +63,7 @@ CREATE TABLE currency_cutover_20260912.amounts (
 );
 CREATE TABLE currency_cutover_20260912.settings_before AS
 SELECT key,value FROM settings WHERE key IN (
-  'pricing_currency_settings','default_balance','balance_low_notify_threshold',
+  'pricing_currency_settings','PAYMENT_RECHARGE_OPTIONS','BALANCE_RECHARGE_MULTIPLIER','default_balance','balance_low_notify_threshold',
   'auth_source_default_email_balance','auth_source_default_linuxdo_balance',
   'auth_source_default_oidc_balance','auth_source_default_wechat_balance',
   'auth_source_default_github_balance','auth_source_default_google_balance',
@@ -77,7 +91,14 @@ SELECT pg_temp.convert_money('user_affiliates','user_id',ARRAY['aff_quota','aff_
 SELECT pg_temp.convert_money('redeem_codes','id',ARRAY['value'],'type=''balance'' AND status=''unused''');
 SELECT pg_temp.convert_money('promo_codes','id',ARRAY['bonus_amount']);
 UPDATE settings SET value=round(value::numeric*6.75,8)::text, updated_at=now()
-WHERE key IN (SELECT key FROM currency_cutover_20260912.settings_before WHERE key <> 'pricing_currency_settings');
+WHERE key IN (SELECT key FROM currency_cutover_20260912.settings_before WHERE key NOT IN ('pricing_currency_settings','PAYMENT_RECHARGE_OPTIONS','BALANCE_RECHARGE_MULTIPLIER'));
+-- Retail principal/bonus policy is explicit, separate from existing wallets.
+UPDATE settings SET value=round(value::numeric*(SELECT recharge_factor FROM cutover_parameters),8)::text,updated_at=now()
+WHERE key='BALANCE_RECHARGE_MULTIPLIER';
+UPDATE settings s SET value=(
+ SELECT COALESCE(jsonb_agg(jsonb_set(item,'{balance_bonus}',to_jsonb(round(COALESCE((item->>'balance_bonus')::numeric,0)*(SELECT recharge_factor FROM cutover_parameters),8)),true) ORDER BY ordinal),'[]'::jsonb)::text
+ FROM jsonb_array_elements(s.value::jsonb) WITH ORDINALITY AS entry(item,ordinal)
+),updated_at=now() WHERE key='PAYMENT_RECHARGE_OPTIONS';
 INSERT INTO settings (key,value,updated_at)
 VALUES ('pricing_currency_settings','{"settlement_currency":"CNY","usd_to_cny_rate":6.75}',now())
 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at;

@@ -20,3 +20,6 @@ INSERT INTO promo_codes VALUES(1,5);
 INSERT INTO settings(key,value) VALUES('default_balance','2'),('balance_low_notify_threshold','10');
 INSERT INTO payment_orders VALUES(1,'balance','REFUNDED',NULL,10,10),(2,'subscription','COMPLETED',NULL,100,100);
 INSERT INTO batch_image_jobs VALUES(1,'completed','USD',2);
+
+CREATE TABLE subscription_plans(id bigint,entitlements jsonb);
+INSERT INTO settings(key,value) VALUES('BALANCE_RECHARGE_MULTIPLIER','1'),('PAYMENT_RECHARGE_OPTIONS','[{"amount":99,"balance_bonus":4,"label":"synthetic"}]');

@@ -20,7 +20,7 @@ Approved rate: **6.75**. Default code rollout remains USD until the transaction.
 - `user_platform_quotas`: wallet-only monetary limits and usage, together. Field suffix `_usd` is retained for compatibility.
 - Unused balance redeem codes and promo bonus configuration; exclude historical used records and non-money code types.
 - Affiliate current available/frozen/history totals; require no outstanding frozen ledger entries. Historical ledger amounts retain their original unit.
-- Existing registration/first-bind/default balance settings and fixed notification defaults. Dimensionless recharge/discount multipliers are not converted.
+- Existing registration/first-bind/default balance settings and fixed notification defaults. Group/model discount multipliers are not converted. `BALANCE_RECHARGE_MULTIPLIER` is wallet credits per paid CNY, not a discount: its conversion and preset bonuses depend on the pending owner decision for new recharges (`recharge_factor=6.75` preserves old retail purchasing power; `1` retains CNY nominal retail amounts). The script refuses an unspecified factor. Update any preset descriptions that embed old bonus numbers after reviewing the exact catalog. Rehearsals use 6.75; this is not approval for production retail policy.
 
 Do not change payment order amounts, actual receipts/refunds/invoices, subscription plan prices, subscription entitlement limits/usage, upstream account quotas, historical usage rows, completed batch snapshots, or group/user/model multipliers.
 
@@ -29,3 +29,5 @@ Do not change payment order amounts, actual receipts/refunds/invoices, subscript
 Before accepting any new writes, restore exact snapshotted monetary/settings values and matching cache state while still fenced. After accepting CNY writes, never restore an old full database over new requests/payments; use a forward correction or reconcile the new writes first. Keep the tested backup, image digest, transaction identifier and smoke evidence together in protected operational storage.
 
 The admission fence reuses `SUB2API_TRAFFIC_STATE_FILE`; no new wallet-maintenance setting or Caddy transaction is needed. It does not stop background work or admitted WebSocket sessions. A nonzero in-flight count is a stop condition: wait for completion, or explicitly plan any required session interruption before proceeding. Both nodes must retain their maintenance lock until the approved generation and traffic/background state are restored.
+
+Before stopping the final background owner, drain the platform-quota flusher and assert Redis `SCARD billing:upq:dirty = 0`. After all writers stop, assert it again. Never discard nonempty dirty snapshots: flush/reconcile them first. Under the fence, clear `billing:upq:dirty` together with `billing:user_platform_quota:*` after SQL, so stale USD snapshots cannot overwrite CNY usage. Test a platform-quota debit and DB/cache parity before reopening.

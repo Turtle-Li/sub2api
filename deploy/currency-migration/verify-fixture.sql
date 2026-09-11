@@ -1,5 +1,7 @@
 DO $$
 BEGIN
+ IF (SELECT value FROM settings WHERE key='BALANCE_RECHARGE_MULTIPLIER')::numeric <> 6.75 THEN RAISE EXCEPTION 'recharge multiplier'; END IF;
+ IF (SELECT value::jsonb->0->>'balance_bonus' FROM settings WHERE key='PAYMENT_RECHARGE_OPTIONS')::numeric <> 27 THEN RAISE EXCEPTION 'recharge bonus'; END IF;
  IF (SELECT balance FROM users WHERE id=1) <> 675 THEN RAISE EXCEPTION 'wallet'; END IF;
  IF (SELECT balance FROM users WHERE id=2) <> 0.83333327 THEN RAISE EXCEPTION 'rounding'; END IF;
  IF (SELECT balance_notify_threshold FROM users WHERE id=2) <> 20 THEN RAISE EXCEPTION 'percentage changed'; END IF;

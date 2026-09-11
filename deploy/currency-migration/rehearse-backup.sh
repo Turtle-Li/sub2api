@@ -29,10 +29,10 @@ sql() { docker exec -i "$container" psql -X -U sub2api -d sub2api -v ON_ERROR_ST
 # Hash only monetary fields and IDs. Output hash, not individual records.
 check_sql="SELECT md5(string_agg(id::text||':'||balance::text||':'||total_recharged::text,',' ORDER BY id)) FROM users"
 before=$(sql -Atc "$check_sql")
-sql -v apply=false < "$bundle/wallet-to-cny.sql" > "$workdir/dry-run.log"
+sql -v recharge_factor=6.75 -v apply=false < "$bundle/wallet-to-cny.sql" > "$workdir/dry-run.log"
 [[ $(sql -Atc "$check_sql") == "$before" ]]
-sql -v apply=true < "$bundle/wallet-to-cny.sql" > "$workdir/apply.log"
-if sql -v apply=true < "$bundle/wallet-to-cny.sql" >/dev/null 2>&1; then echo 'Repeated migration was incorrectly accepted'; exit 1; fi
+sql -v recharge_factor=6.75 -v apply=true < "$bundle/wallet-to-cny.sql" > "$workdir/apply.log"
+if sql -v recharge_factor=6.75 -v apply=true < "$bundle/wallet-to-cny.sql" >/dev/null 2>&1; then echo 'Repeated migration was incorrectly accepted'; exit 1; fi
 sql < "$bundle/rollback-before-reopen.sql" > "$workdir/rollback.log"
 [[ $(sql -Atc "$check_sql") == "$before" ]]
 echo 'PASS: actual backup schema/data rehearsal, dry-run, conversion, repeat rejection and exact wallet rollback'
