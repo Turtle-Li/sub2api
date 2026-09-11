@@ -60,6 +60,7 @@ type channelModelPricingRequest struct {
 	Platform                     string                     `json:"platform" binding:"omitempty,max=50"`
 	Models                       []string                   `json:"models" binding:"required,min=1,max=100"`
 	BillingMode                  string                     `json:"billing_mode" binding:"omitempty,oneof=token per_request image"`
+	Currency                     string                     `json:"currency"`
 	InputPrice                   *float64                   `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice                  *float64                   `json:"output_price" binding:"omitempty,min=0"`
 	CacheWritePrice              *float64                   `json:"cache_write_price" binding:"omitempty,min=0"`
@@ -134,6 +135,7 @@ type channelModelPricingResponse struct {
 	Platform                     string                      `json:"platform"`
 	Models                       []string                    `json:"models"`
 	BillingMode                  string                      `json:"billing_mode"`
+	Currency                     string                      `json:"currency"`
 	InputPrice                   *float64                    `json:"input_price"`
 	OutputPrice                  *float64                    `json:"output_price"`
 	CacheWritePrice              *float64                    `json:"cache_write_price"`
@@ -255,6 +257,10 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 	if platform == "" {
 		platform = service.PlatformAnthropic
 	}
+	currency := p.Currency
+	if normalized, err := service.NormalizePricingCurrency(currency); err == nil {
+		currency = normalized
+	}
 	intervals := make([]pricingIntervalResponse, 0, len(p.Intervals))
 	for _, iv := range p.Intervals {
 		intervals = append(intervals, intervalToResponse(iv))
@@ -264,6 +270,7 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 		Platform:                     platform,
 		Models:                       models,
 		BillingMode:                  billingMode,
+		Currency:                     currency,
 		InputPrice:                   p.InputPrice,
 		OutputPrice:                  p.OutputPrice,
 		CacheWritePrice:              p.CacheWritePrice,
@@ -363,6 +370,7 @@ func pricingRequestToService(reqs []channelModelPricingRequest, allowChannelMult
 			Platform:                     platform,
 			Models:                       r.Models,
 			BillingMode:                  billingMode,
+			Currency:                     r.Currency,
 			InputPrice:                   r.InputPrice,
 			OutputPrice:                  r.OutputPrice,
 			CacheWritePrice:              r.CacheWritePrice,
