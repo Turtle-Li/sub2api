@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -228,13 +229,18 @@ type checkoutPlan struct {
 	PeriodLabel        string                   `json:"period_label"`
 }
 
-// parseFeatures splits a newline-separated features string into a string slice.
+// parseFeatures accepts the JSON arrays used by purchase snapshots and legacy
+// newline-separated descriptions.
 func parseFeatures(raw string) []string {
 	if raw == "" {
 		return []string{}
 	}
+	var lines []string
+	if err := json.Unmarshal([]byte(raw), &lines); err != nil {
+		lines = strings.Split(raw, "\n")
+	}
 	var out []string
-	for _, line := range strings.Split(raw, "\n") {
+	for _, line := range lines {
 		if s := strings.TrimSpace(line); s != "" {
 			out = append(out, s)
 		}
