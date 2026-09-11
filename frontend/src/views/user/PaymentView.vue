@@ -40,6 +40,8 @@
           </div>
         </header>
 
+        <PaymentPromoBanner :banner="checkout.banner" />
+
         <div v-if="tabs.length > 1" role="tablist" class="payment-segment mb-6">
           <button v-for="tab in tabs" :key="tab.key"
             role="tab"
@@ -235,6 +237,7 @@ import {
 } from '@/components/payment/paymentFlow'
 import { platformAccentBarClass, platformBadgeLightClass, platformLabel } from '@/utils/platformColors'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
+import PaymentPromoBanner from '@/components/payment/PaymentPromoBanner.vue'
 import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -456,7 +459,7 @@ function onPaymentSettled() {
 // All checkout data from single API call
 const checkout = ref<CheckoutInfoResponse>({
   methods: {}, global_min: 0, global_max: 0,
-  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, recharge_options: [], recharge_mode: undefined, help_text: '', help_image_url: '', stripe_publishable_key: '',
+  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, recharge_options: [], recharge_mode: undefined, help_text: '', help_image_url: '', banner: undefined, stripe_publishable_key: '',
 })
 
 const renderedHelpText = computed(() => DOMPurify.sanitize(
@@ -538,10 +541,12 @@ const planGridClass = computed(() => {
   return 'grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3'
 })
 
-// Recommend at most one plan in the visible group, and only when its discount
-// actually distinguishes it. Marking several says nothing; marking one with no
-// discount behind it is a claim the configured data does not support.
+// Prefer the admin-selected recommendation. The discount fallback keeps older
+// configurations useful until an admin explicitly selects a plan.
 const featuredPlanId = computed<number | null>(() => {
+  const recommended = visibleSubscriptionPlans.value.find(plan => plan.entitlements?.recommended)
+  if (recommended) return recommended.id
+
   let best: SubscriptionPlan | null = null
   for (const plan of visibleSubscriptionPlans.value) {
     const percent = planDiscountPercent(plan)
@@ -783,7 +788,7 @@ const railProductName = computed(() => {
 const railProductMeta = computed(() => {
   if (isRecharge.value) return selectedRechargeOption.value?.description || ''
   if (!selectedPlan.value) return ''
-  return `${platformLabel(selectedPlan.value.group_platform || '')} · ${planValiditySuffix}`
+  return `${platformLabel(selectedPlan.value.group_platform || '')} · ${planValiditySuffix.value}`
 })
 
 const railMethods = computed(() => (isRecharge.value ? methodOptions.value : subMethodOptions.value))

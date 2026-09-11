@@ -15,6 +15,7 @@ func TestNormalizePlanEntitlements(t *testing.T) {
 		"reset_card_expiry_days": 30,
 		"concurrency":            5,
 		"message":                "  Welcome bonus  ",
+		"recommended":            true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, 12.5, entitlements.BalanceBonus)
@@ -22,7 +23,9 @@ func TestNormalizePlanEntitlements(t *testing.T) {
 	require.Equal(t, 30, entitlements.ResetCardExpiryDays)
 	require.Equal(t, 5, entitlements.Concurrency)
 	require.Equal(t, "Welcome bonus", entitlements.Message)
+	require.True(t, entitlements.Recommended)
 	require.Equal(t, float64(2), normalized["reset_card_count"])
+	require.Equal(t, true, normalized["recommended"])
 }
 
 func TestNormalizePlanEntitlementsRejectsInvalidResetCardExpiry(t *testing.T) {
@@ -107,7 +110,7 @@ func TestPlanDiscountPercentAndPeriodLabel(t *testing.T) {
 
 func TestNormalizeRechargeOptionsFiltersAndSorts(t *testing.T) {
 	options, intact := normalizeRechargeOptions(`[
-		{"amount": 100, "original_price": 120, "label": "  Popular ", "balance_bonus": 8, "estimated_rate_multiplier": 0.9, "estimated_tokens": 12000000, "concurrency": 5, "sort_order": 20, "enabled": true},
+		{"amount": 100, "original_price": 120, "label": "  Popular ", "balance_bonus": 8, "estimated_rate_multiplier": 0.9, "estimated_tokens": 12000000, "concurrency": 5, "recommended": true, "sort_order": 20, "enabled": true},
 		{"amount": 10, "sort_order": 10, "enabled": true},
 		{"amount": 50, "sort_order": 30, "enabled": false},
 		{"amount": 0, "enabled": true},
@@ -122,6 +125,7 @@ func TestNormalizeRechargeOptionsFiltersAndSorts(t *testing.T) {
 	require.Equal(t, 0.9, options[1].EstimatedRateMultiplier)
 	require.Equal(t, int64(12000000), options[1].EstimatedTokens)
 	require.Equal(t, 5, options[1].Concurrency)
+	require.True(t, options[1].Recommended)
 	require.Equal(t, 16.67, rechargeOptionDiscountPercent(options[1]))
 	require.Len(t, EnabledRechargeOptionsForCheckout(options), 2)
 

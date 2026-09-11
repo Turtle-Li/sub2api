@@ -145,10 +145,12 @@ const filteredOptions = computed(() =>
   )
 )
 
-// Highlight at most one tier, and only when the discount actually distinguishes
-// it. Marking several "best value" says nothing; marking one with no discount
-// to back it up is a claim we cannot support from the configured data.
+// Prefer the admin-selected recommendation. The discount fallback keeps older
+// configurations useful until an admin explicitly selects a tier.
 const featuredAmount = computed<number | null>(() => {
+  const recommended = filteredOptions.value.find(option => option.recommended)
+  if (recommended) return recommended.amount
+
   let best: RechargeOption | null = null
   for (const option of filteredOptions.value) {
     const percent = discountPercent(option)

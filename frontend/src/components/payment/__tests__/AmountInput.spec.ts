@@ -119,6 +119,21 @@ describe('AmountInput', () => {
     expect(noDiscount.findAll('.payment-product-card__ribbon')).toHaveLength(0)
   })
 
+  it('honors the explicit admin recommendation before discount fallback', () => {
+    const wrapper = mount(AmountInput, {
+      props: {
+        modelValue: 20,
+        options: options.map((option) => ({
+          ...option,
+          recommended: option.amount === 20,
+        })),
+      },
+    })
+
+    expect(wrapper.findAll('article')[0].find('.payment-product-card__ribbon').exists()).toBe(false)
+    expect(wrapper.findAll('article')[1].find('.payment-product-card__ribbon').exists()).toBe(true)
+  })
+
   // The card states what actually lands in the balance, which is the tier
   // amount through the global multiplier plus any configured bonus.
   it('shows the credited balance for each tier', () => {

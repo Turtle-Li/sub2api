@@ -15,6 +15,15 @@ export function sanitizeUrl(value: string, options: SanitizeOptions = {}): strin
     return ''
   }
 
+  // Backslashes are treated as path separators by the browser URL parser. A
+  // value such as "/\\\\attacker.example" would otherwise look relative here
+  // but navigate to an external host in a browser. Control/whitespace
+  // characters are not meaningful in a user-facing URL and are rejected so
+  // the relative-path fast path cannot bypass the parser below.
+  if (/[\\\s]/.test(trimmed) || Array.from(trimmed).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
+    return ''
+  }
+
   if (options.allowRelative && trimmed.startsWith('/') && !trimmed.startsWith('//')) {
     return trimmed
   }

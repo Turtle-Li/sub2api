@@ -33,6 +33,9 @@ type PlanEntitlements struct {
 	// product does not change the cap.
 	Concurrency int    `json:"concurrency"`
 	Message     string `json:"message"`
+	// Recommended controls the single, admin-selected presentation highlight.
+	// It has no effect on pricing or fulfillment.
+	Recommended bool `json:"recommended,omitempty"`
 }
 
 // Reset card expiry units. Deliberately a narrower set than subscription
@@ -90,7 +93,10 @@ type RechargeOption struct {
 	EstimatedTokens         int64   `json:"estimated_tokens,omitempty"`
 	// Concurrency is the minimum target applied after a successful order for this
 	// exact configured amount. Zero means no concurrency entitlement.
-	Concurrency int  `json:"concurrency,omitempty"`
+	Concurrency int `json:"concurrency,omitempty"`
+	// Recommended controls the single, admin-selected presentation highlight.
+	// It has no effect on pricing or fulfillment.
+	Recommended bool `json:"recommended,omitempty"`
 	SortOrder   int  `json:"sort_order"`
 	Enabled     bool `json:"enabled"`
 }
@@ -108,6 +114,7 @@ func (o *RechargeOption) UnmarshalJSON(data []byte) error {
 		EstimatedRateMultiplier float64 `json:"estimated_rate_multiplier"`
 		EstimatedTokens         int64   `json:"estimated_tokens"`
 		Concurrency             int     `json:"concurrency"`
+		Recommended             bool    `json:"recommended"`
 		SortOrder               int     `json:"sort_order"`
 		Enabled                 *bool   `json:"enabled"`
 	}
@@ -123,6 +130,7 @@ func (o *RechargeOption) UnmarshalJSON(data []byte) error {
 	o.EstimatedRateMultiplier = raw.EstimatedRateMultiplier
 	o.EstimatedTokens = raw.EstimatedTokens
 	o.Concurrency = raw.Concurrency
+	o.Recommended = raw.Recommended
 	o.SortOrder = raw.SortOrder
 	o.Enabled = raw.Enabled == nil || *raw.Enabled
 	return nil

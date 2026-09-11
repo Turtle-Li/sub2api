@@ -44,7 +44,18 @@ export interface PaymentConfig {
   enabled_payment_types: PaymentType[]
   help_image_url: string
   help_text: string
+  banner?: PaymentBanner | null
   stripe_publishable_key: string
+}
+
+/** Small, fixed presentation surface for the payment page promotion banner. */
+export interface PaymentBanner {
+  enabled: boolean
+  title?: string
+  description?: string
+  image_url?: string
+  link_url?: string
+  button_text?: string
 }
 
 export interface MethodLimit {
@@ -89,6 +100,7 @@ export interface CheckoutInfoResponse {
   recharge_mode?: 'fixed' | 'custom'
   help_text: string
   help_image_url: string
+  banner?: PaymentBanner | null
   stripe_publishable_key: string
   /** When true, Alipay payments on mobile always show the QR code instead of redirecting */
   alipay_force_qrcode?: boolean
@@ -269,6 +281,8 @@ export interface PlanEntitlements {
   /** Minimum user concurrency target; 0 means unchanged. */
   concurrency: number
   message?: string
+  /** Admin-selected presentation highlight; does not affect fulfillment. */
+  recommended?: boolean
 }
 
 export interface RechargeOption {
@@ -285,6 +299,8 @@ export interface RechargeOption {
   estimated_rate_multiplier?: number
   /** Display-only approximate token quantity for this tier. */
   estimated_tokens?: number
+  /** Admin-selected presentation highlight; does not affect pricing. */
+  recommended?: boolean
   sort_order: number
   enabled: boolean
 }
