@@ -22,10 +22,12 @@
 
 ## Internal credit denomination
 
-- Read `docs/CREDIT_PARITY_MIGRATION_20260910.md` before changing balances,
-  recharge ratios or model/group pricing. Owner policy is 1 CNY = 1 internal
-  credit, preserving existing purchasing power. The old 6.75 proposal is
-  superseded; live audit selected unchanged balances and effective prices.
+- Read `docs/PRICING_CURRENCY_20260912.md` before changing wallet denomination
+  or model/group pricing. Owner confirmed existing USD wallets convert to CNY
+  at 6.75, with matching debit conversion and unchanged discount multipliers.
+  Subscription entitlements remain USD. This supersedes the no-conversion
+  decision in `docs/CREDIT_PARITY_MIGRATION_20260910.md`. A settings save does
+  not migrate data; cutover requires writer fencing and a verified backup.
 
 ## Unified payment integration
 

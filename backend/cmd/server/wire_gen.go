@@ -112,7 +112,10 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
-	billingService := service.NewBillingService(configConfig, pricingService)
+	billingService, err := service.ProvideCurrencyAwareBillingService(configConfig, pricingService, settingService)
+	if err != nil {
+		return nil, err
+	}
 	geminiQuotaService := service.NewGeminiQuotaService(configConfig, settingRepository)
 	tempUnschedCache := repository.NewTempUnschedCache(redisClient)
 	timeoutCounterCache := repository.NewTimeoutCounterCache(redisClient)

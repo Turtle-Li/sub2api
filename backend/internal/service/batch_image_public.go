@@ -107,6 +107,7 @@ type BatchImagePublicService struct {
 }
 
 type BatchImagePricingSnapshot struct {
+	Currency                string
 	BaseUnitPrice           float64
 	GroupRateMultiplier     float64
 	AccountRateMultiplier   float64
@@ -339,7 +340,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		BillableUnitPrice:       pricingSnapshot.BillableUnitPrice,
 		HoldUnitPrice:           pricingSnapshot.HoldUnitPrice,
 		PricingSnapshotVersion:  1,
-		Currency:                "USD",
+		Currency:                pricingSnapshot.Currency,
 		HoldID:                  &holdID,
 		IdempotencyKey:          batchImageOptionalStringPtr(idempotencyKey),
 		RequestHash:             batchImageStringPtr(requestHash),
@@ -1609,6 +1610,15 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if configuredUnit := group.GetImagePrice(req.ImageSize); configuredUnit != nil && *configuredUnit >= 0 {
 			unit = *configuredUnit
 		}
+		// Explicit per-model cards have the same precedence as synchronous image
+		// billing. The resolver normalizes authored CNY cards to the USD basis.
+		if resolver, ok := s.Pricing.(*BatchImageModelPricingResolver); ok && resolver.Resolver != nil {
+			resolved := resolver.Resolver.Resolve(ctx, PricingInput{Model: req.Model, GroupID: &group.ID, Group: group})
+			if resolved != nil && (resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel) &&
+				(resolved.Mode == BillingModeImage || resolved.Mode == BillingModePerRequest) {
+				unit = resolver.Resolver.GetRequestTierPrice(resolved, req.ImageSize)
+			}
+		}
 	}
 	if unit < 0 {
 		if s.Pricing == nil {
@@ -1637,10 +1647,19 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 	if accountMultiplier < 0 {
 		accountMultiplier = 0
 	}
+	currency := "USD"
+	if resolver, ok := s.Pricing.(*BatchImageModelPricingResolver); ok && resolver.Resolver != nil {
+		policy := resolver.Resolver.billingService.currentCurrencyPolicy()
+		currency = policy.SettlementCurrency
+		if currency == "CNY" {
+			unit *= policy.USDToCNYRate
+		}
+	}
 	standardUnitPrice := unit * groupMultiplier * accountMultiplier
 	billableUnitPrice := standardUnitPrice * discountMultiplier
 	holdUnitPrice := standardUnitPrice * holdMultiplier
 	return &BatchImagePricingSnapshot{
+		Currency:                currency,
 		BaseUnitPrice:           unit,
 		GroupRateMultiplier:     groupMultiplier,
 		AccountRateMultiplier:   accountMultiplier,
