@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -126,4 +127,21 @@ func TestBillingCurrencyPriorityPricingConvertedOnce(t *testing.T) {
 			require.InDelta(t, before.ActualCost, after.ActualCost, 1e-10)
 		})
 	}
+}
+
+func TestBillingCurrencyDisplayScheduleStaysUSD(t *testing.T) {
+	input, image := 6.75e-6, 13.5e-6
+	group := &Group{ID: 1, ModelPricing: []ChannelModelPricing{{Models: []string{"claude-sonnet-4"}, Currency: "CNY", InputPrice: &input, ImageInputPrice: &image}}}
+	bs := currencyTestBilling("CNY")
+	resolver := NewModelPricingResolver(nil, bs)
+	schedule, err := bs.ResolveContextPricingSchedule(context.Background(), resolver, ContextPricingScheduleInput{Model: "claude-sonnet-4", Group: group})
+	require.NoError(t, err)
+	require.NotEmpty(t, schedule.Tiers)
+	require.InDelta(t, 1e-6, *schedule.Tiers[0].Input, 1e-12)
+	model := &PlazaModel{Name: "claude-sonnet-4", Pricing: &group.ModelPricing[0]}
+	plaza := &ModelPlazaService{billingService: bs, resolver: resolver}
+	plaza.fillDisplayPricing(context.Background(), model, group)
+	require.InDelta(t, 1e-6, *model.Pricing.InputPrice, 1e-12)
+	require.InDelta(t, 2e-6, *model.Pricing.ImageInputPrice, 1e-12)
+	require.Equal(t, image, *group.ModelPricing[0].ImageInputPrice)
 }

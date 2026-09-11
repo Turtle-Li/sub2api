@@ -25,6 +25,7 @@ vi.mock('vue-i18n', async () => {
     ...actual,
     useI18n: () => ({
       t: (key: string) => messages[key] ?? key,
+      locale: { value: 'en' },
     }),
   }
 })
@@ -86,4 +87,11 @@ describe('UsageStatsCards', () => {
     expect(tooltip?.classes()).toContain('hidden')
     expect(tooltip?.classes()).not.toContain('opacity-0')
   })
+})
+
+it('does not add together usage amounts with different currencies', () => {
+ const wrapper=mount(UsageStatsCards,{props:{stats,hideMixedCurrencyTotals:true},global:{stubs:{Icon:true}}})
+ expect(wrapper.text()).toContain('Amounts in different currencies are not totaled.')
+ expect(wrapper.text()).not.toContain('$0.0010')
+ expect(wrapper.text()).toContain('184')
 })

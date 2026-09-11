@@ -1,7 +1,7 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <UsageStatsCards :stats="usageStats" :show-account-cost="false" :strike-standard-cost="true" />
+      <UsageStatsCards :hide-mixed-currency-totals="appStore.cachedPublicSettings?.pricing_currency?.settlement_currency === 'CNY'" :stats="usageStats" :show-account-cost="false" :strike-standard-cost="true" />
 
       <div class="space-y-4">
         <div class="card p-4">
@@ -649,6 +649,7 @@ const exportToCSV = async () => {
     }
     const headers = [
       'Time',
+      'Currency',
       'API Key Name',
       'Model',
       'Reasoning Effort',
@@ -668,6 +669,7 @@ const exportToCSV = async () => {
     ]
     const rows = allLogs.map((log) => [
       log.created_at,
+      log.currency || 'USD',
       log.api_key?.name || '',
       log.model,
       formatReasoningEffort(log.reasoning_effort),

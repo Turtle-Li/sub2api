@@ -112,7 +112,11 @@ func (s *BillingService) ResolveContextPricingSchedule(ctx context.Context, reso
 	probe := func(tokens UsageTokens) (*CostBreakdown, error) {
 		r := req
 		r.Tokens = tokens
-		return s.CalculateTokenCostForRequest(r)
+		cost, err := s.CalculateTokenCostForRequest(r)
+		// Display schedules retain the catalog USD unit, including when wallet
+		// billing is CNY. Use the captured rate before the frontend converts.
+		subscriptionCost(cost)
+		return cost, err
 	}
 
 	plan := s.contextPricingBreakpoints(resolver, resolved, in.Model)

@@ -29,6 +29,7 @@ type HealthService struct {
 	trafficStateFile  string
 	dependencyTimeout time.Duration
 	processAccepting  atomic.Bool
+	inFlightRequests  atomic.Int64
 }
 
 // ProvideHealthService wires the already-existing PostgreSQL and Redis pools

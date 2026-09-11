@@ -1730,6 +1730,7 @@ export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 
 export interface UsageLog {
+  currency?: 'USD' | 'CNY'
   id: number
   user_id: number
   api_key_id: number
