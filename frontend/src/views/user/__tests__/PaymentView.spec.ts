@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
-import AmountInput from '@/components/payment/AmountInput.vue'
 import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
+import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
+import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
 
 const routeState = vi.hoisted(() => ({
@@ -356,7 +357,7 @@ describe('PaymentView subscription plan grid', () => {
       'grid',
       'grid-cols-1',
       'sm:grid-cols-2',
-      'lg:grid-cols-3',
+      'xl:grid-cols-3',
     ]))
   })
 
@@ -445,16 +446,17 @@ describe('PaymentView subscription confirmation amounts', () => {
       },
     })
 
-    const text = wrapper.text()
-    const convertedPrice = formatPaymentAmount(71.43, 'CNY')
-    const convertedOriginalPrice = formatPaymentAmount(92.88, 'CNY')
-
-    expect(text).toContain(convertedPrice)
-    expect(text).toContain(convertedOriginalPrice)
-    expect(text).not.toContain(formatPaymentAmount(9.99, 'CNY'))
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('baseAmount')).toBe(71.43)
+    expect(rail.props('totalAmount')).toBe(71.43)
     // 换算必须使用订阅汇率（×7.15），而不是余额倍率（÷0.14 = 71.36）
-    expect(text).not.toContain(formatPaymentAmount(71.36, 'CNY'))
-    expect(wrapper.findAll('button').some(button => button.text().includes(convertedPrice))).toBe(true)
+    expect(rail.props('totalAmount')).not.toBe(71.36)
+    expect(rail.props('actionLabel')).toContain(formatPaymentAmount(71.43, 'CNY'))
+
+    // The plan cards price the same plan through the same rule.
+    const card = wrapper.findAllComponents(SubscriptionPlanCard)[0]
+    expect(card.props('displayCurrency')).toBe('CNY')
+    expect(card.props('usdToCnyRate')).toBe(7.15)
   })
 
   it('keeps plan price when the subscription rate is not configured or payment currency is not CNY', async () => {
@@ -472,9 +474,8 @@ describe('PaymentView subscription confirmation amounts', () => {
       },
     })
 
-    expect(cnyWrapper.text()).toContain(formatPaymentAmount(7.99, 'CNY'))
-    expect(cnyWrapper.text()).not.toContain(formatPaymentAmount(57.07, 'CNY'))
-    expect(cnyWrapper.text()).not.toContain(formatPaymentAmount(57.13, 'CNY'))
+    expect(cnyWrapper.findComponent(PaymentOrderRail).props('totalAmount')).toBe(7.99)
+    expect(cnyWrapper.findAllComponents(SubscriptionPlanCard)[0].props('usdToCnyRate')).toBe(0)
 
     const usdWrapper = await mountSubscriptionConfirm({
       checkout: {
@@ -489,8 +490,11 @@ describe('PaymentView subscription confirmation amounts', () => {
       },
     })
 
-    expect(usdWrapper.text()).toContain(formatPaymentAmount(7.99, 'USD'))
-    expect(usdWrapper.text()).toContain(formatPaymentAmount(9.99, 'USD'))
+    // A USD gateway is charged the plan price as-is even though a rate exists.
+    expect(usdWrapper.findComponent(PaymentOrderRail).props('totalAmount')).toBe(7.99)
+    const usdCard = usdWrapper.findAllComponents(SubscriptionPlanCard)[0]
+    expect(usdCard.props('displayCurrency')).toBe('USD')
+    expect(usdCard.props('usdToCnyRate')).toBe(7.15)
   })
 
   it('adds fee rate after CNY rate conversion to match backend pay_amount', async () => {
@@ -507,15 +511,11 @@ describe('PaymentView subscription confirmation amounts', () => {
       },
     })
 
-    const text = wrapper.text()
-    const convertedPrice = formatPaymentAmount(71.43, 'CNY')
-    const fee = formatPaymentAmount(1.79, 'CNY')
-    const total = formatPaymentAmount(73.22, 'CNY')
-
-    expect(text).toContain(convertedPrice)
-    expect(text).toContain(fee)
-    expect(text).toContain(total)
-    expect(wrapper.findAll('button').some(button => button.text().includes(total))).toBe(true)
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('baseAmount')).toBe(71.43)
+    expect(rail.props('feeAmount')).toBe(1.79)
+    expect(rail.props('totalAmount')).toBe(73.22)
+    expect(rail.props('actionLabel')).toContain(formatPaymentAmount(73.22, 'CNY'))
   })
 })
 
@@ -561,7 +561,7 @@ describe('PaymentView desktop deep links', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Starter')
+    expect(wrapper.findComponent(PaymentOrderRail).props('productName')).toBe('Starter')
   })
 
   it('restores the recharge amount selected by the desktop app', async () => {
@@ -646,6 +646,83 @@ describe('PaymentView desktop deep links', () => {
 
     expect(wrapper.findComponent(AmountInput).props('modelValue')).toBe(30)
   })
+
+  // An empty tier list has two very different causes. Previously both fell back
+  // to the hardcoded [20, 50, 100, 200, 500], so when the server had tiers that
+  // all sat outside the visible method limits the page offered five amounts the
+  // server was guaranteed to reject with INVALID_RECHARGE_OPTION.
+  it('offers the built-in amounts only when the server accepts custom amounts', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_mode: 'custom',
+      recharge_options: [],
+    }))
+
+    const custom = shallowMount(PaymentView, {
+      global: {
+        stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    expect(custom.findComponent(AmountInput).props('amounts')).toEqual([20, 50, 100, 200, 500])
+  })
+
+  it('offers no amounts when the server enforces tiers but none are selectable', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_mode: 'fixed',
+      // Every configured tier is filtered out by the visible method limits.
+      recharge_options: [],
+    }))
+
+    const fixed = shallowMount(PaymentView, {
+      global: {
+        stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    expect(fixed.findComponent(AmountInput).props('amounts')).toEqual([])
+  })
+
+  // The order rail collapses its method picker below `lg` — the bottom bar has
+  // room for a total and an action, not a picker. The page must therefore
+  // render its own selector, or phone users cannot choose how to pay at all.
+  it('renders a method selector outside the rail for narrow viewports', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      recharge_options: [{ amount: 30, label: 'Starter', sort_order: 10, enabled: true }],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('methodsCollapsedOnMobile')).toBe(true)
+
+    const selectors = wrapper.findAllComponents(PaymentMethodSelector)
+    expect(selectors.length).toBeGreaterThan(0)
+    const mobile = selectors[selectors.length - 1]
+    expect(mobile.props('methods')).toEqual(rail.props('methods'))
+    expect(mobile.element.closest('.lg\\:hidden')).not.toBeNull()
+  })
+
+  // Older servers do not send recharge_mode; keep the previous inference there.
+  it('falls back to inferring the mode when the server does not report one', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({ recharge_options: [] }))
+
+    const legacy = shallowMount(PaymentView, {
+      global: {
+        stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    expect(legacy.findComponent(AmountInput).props('amounts')).toEqual([20, 50, 100, 200, 500])
+  })
 })
 
 describe('PaymentView payment recovery', () => {
@@ -712,10 +789,6 @@ describe('PaymentView payment recovery', () => {
           PaymentStatusPanel: {
             template: '<button data-test="payment-done" @click="$emit(\'done\')" />',
           },
-          PaymentMethodSelector: {
-            props: ['selected'],
-            template: '<div data-test="method-selector">{{ selected }}</div>',
-          },
           Teleport: true,
           Transition: false,
         },
@@ -726,7 +799,7 @@ describe('PaymentView payment recovery', () => {
     await wrapper.find('[data-test="payment-done"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="method-selector"]').text()).toBe('ldc')
+    expect(wrapper.findComponent(PaymentOrderRail).props('selectedMethod')).toBe('ldc')
   })
 })
 

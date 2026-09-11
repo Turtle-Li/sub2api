@@ -8143,6 +8143,20 @@
                   <label class="input-label">{{ t("admin.settings.payment.rechargeOptions") }}</label>
                   <textarea v-model="form.payment_recharge_options_json" rows="6" class="input font-mono text-xs" placeholder='[{"amount":20,"original_price":20,"label":"体验档","description":"适合轻量试用","balance_bonus":0,"concurrency":2,"estimated_rate_multiplier":1,"estimated_tokens":2000000,"sort_order":10,"enabled":true}]'></textarea>
                   <p class="mt-1 text-xs text-gray-400">{{ t("admin.settings.payment.rechargeOptionsHint") }}</p>
+                  <div class="mt-3 max-w-sm">
+                    <label class="input-label">{{ t("admin.settings.payment.recommendedRecharge") }}</label>
+                    <select v-model.number="form.payment_recommended_recharge_amount" class="input">
+                      <option :value="0">{{ t("admin.settings.payment.noRecommendedRecharge") }}</option>
+                      <option
+                        v-for="option in parsedRechargeOptionsForEditor"
+                        :key="`${option.amount}-${option.label || ''}`"
+                        :value="Number(option.amount)"
+                      >
+                        {{ option.label || option.amount }}
+                      </option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-400">{{ t("admin.settings.payment.recommendedRechargeHint") }}</p>
+                  </div>
                 </div>
                 <!-- Row 3: Pending orders + load balance + cancel rate limit (all in one row) -->
                 <div class="flex flex-wrap items-end gap-4">
@@ -8397,6 +8411,7 @@
                     ></textarea>
                   </div>
                 </div>
+                <PaymentBannerEditor v-model="form.payment_banner" />
               </template>
             </div>
           </div>
@@ -8972,6 +8987,7 @@ import Toggle from "@/components/common/Toggle.vue";
 import UnifiedPaymentBinding from "@/components/payment/UnifiedPaymentBinding.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
+import PaymentBannerEditor from "@/components/payment/PaymentBannerEditor.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
@@ -9690,6 +9706,8 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_weight_previous_response: string;
   openai_advanced_scheduler_weight_session_sticky: string;
   payment_recharge_options_json: string;
+  payment_recommended_recharge_amount: number;
+  payment_banner: import("@/types/payment").PaymentBanner;
   // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
   account_scheduling_thresholds: ReturnType<typeof normalizeAccountSchedulingThresholdsMap>;
@@ -9755,6 +9773,15 @@ const form = reactive<SettingsForm>({
   payment_recharge_fee_rate: 0,
   payment_recharge_options: [] as Array<Record<string, unknown>>,
   payment_recharge_options_json: "[]",
+  payment_recommended_recharge_amount: 0,
+  payment_banner: {
+    enabled: false,
+    title: "",
+    description: "",
+    image_url: "",
+    link_url: "",
+    button_text: "",
+  },
   payment_enabled_types: [],
   payment_unified_enabled: false,
   payment_unified_methods: [],
@@ -9990,6 +10017,24 @@ const form = reactive<SettingsForm>({
   affiliate_enabled: false,
   // Allow user view error requests
   allow_user_view_error_requests: false,
+});
+
+let loadedRechargeOptionsJSON = "[]";
+let loadedRecommendedRechargeAmount = 0;
+
+const parsedRechargeOptionsForEditor = computed(() => {
+  try {
+    const parsed = JSON.parse(form.payment_recharge_options_json || "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((option): option is Record<string, unknown> => {
+      if (!option || typeof option !== "object") return false;
+      const record = option as Record<string, unknown>;
+      const amount = Number(record.amount);
+      return Number.isFinite(amount) && amount > 0 && record.enabled !== false;
+    });
+  } catch {
+    return [];
+  }
 });
 
 // 人机验证 UI 状态：单卡片「总开关 + 服务商单选」，落库仍是三个独立
@@ -10956,7 +11001,22 @@ async function loadSettings() {
       }
     }
     syncUnifiedPaymentSettings(settings);
-    form.payment_recharge_options_json = JSON.stringify(settings.payment_recharge_options || [], null, 2);
+    const paymentRechargeOptions = settings.payment_recharge_options || [];
+    form.payment_recharge_options_json = JSON.stringify(paymentRechargeOptions, null, 2);
+    form.payment_recommended_recharge_amount = Number(
+      paymentRechargeOptions.find((option) => option.recommended && option.enabled !== false)?.amount || 0,
+    ) || 0;
+    loadedRechargeOptionsJSON = form.payment_recharge_options_json;
+    loadedRecommendedRechargeAmount = form.payment_recommended_recharge_amount;
+    form.payment_banner = {
+      enabled: false,
+      title: "",
+      description: "",
+      image_url: "",
+      link_url: "",
+      button_text: "",
+      ...(settings.payment_banner || {}),
+    };
     syncCaptchaProviderSelection();
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
       form.claude_oauth_system_prompt_blocks =
@@ -11196,7 +11256,16 @@ async function saveSettings() {
     try {
       const parsed = JSON.parse(form.payment_recharge_options_json || "[]");
       if (!Array.isArray(parsed)) throw new Error("not an array");
-      normalizedRechargeOptions = parsed;
+      const recommendedAmount = Number(form.payment_recommended_recharge_amount) || 0;
+      normalizedRechargeOptions = parsed.map((option) => {
+        if (!option || typeof option !== "object") return option;
+        const normalized = { ...(option as Record<string, unknown>) };
+        delete normalized.recommended;
+        if (recommendedAmount > 0 && normalized.enabled !== false && Number(normalized.amount) === recommendedAmount) {
+          normalized.recommended = true;
+        }
+        return normalized;
+      });
     } catch {
       appStore.showError("充值档位必须是 JSON 数组。 Recharge presets must be a JSON array.");
       return;
@@ -11585,13 +11654,19 @@ async function saveSettings() {
       payment_subscription_usd_to_cny_rate:
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
-      payment_recharge_options: normalizedRechargeOptions,
+      // A malformed stored list is exposed as an empty/partial parsed list.
+      // Saving unrelated settings must never replace it and reopen custom top-ups.
+      ...(form.payment_recharge_options_json !== loadedRechargeOptionsJSON ||
+        Number(form.payment_recommended_recharge_amount) !== loadedRecommendedRechargeAmount
+        ? { payment_recharge_options: normalizedRechargeOptions }
+        : {}),
       payment_enabled_types: form.payment_enabled_types,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,
       payment_product_name_suffix: form.payment_product_name_suffix,
       payment_help_image_url: form.payment_help_image_url,
       payment_help_text: form.payment_help_text,
+      payment_banner: form.payment_banner,
       payment_cancel_rate_limit_enabled: form.payment_cancel_rate_limit_enabled,
       payment_cancel_rate_limit_max:
         Number(form.payment_cancel_rate_limit_max) || 10,
@@ -11717,6 +11792,8 @@ async function saveSettings() {
     const updated = await settingsStepUp.run(() =>
       adminAPI.settings.updateSettings(payload),
     );
+    loadedRechargeOptionsJSON = form.payment_recharge_options_json;
+    loadedRecommendedRechargeAmount = Number(form.payment_recommended_recharge_amount) || 0;
     for (const [key, value] of Object.entries(updated)) {
       if (key === "openai_fast_policy_settings") continue;
       if (value !== null && value !== undefined) {

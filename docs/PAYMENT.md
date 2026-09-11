@@ -66,8 +66,13 @@ Configure the following in Admin Dashboard **Settings → Payment Settings**:
 | **Max Pending Orders** | Maximum concurrent pending orders per user | 3 |
 | **Load Balance Strategy** | Strategy for selecting provider instances | Round Robin |
 | **Recharge Presets** | Fixed recharge amounts and entitlements (JSON array): `amount`, `original_price`, `label`, `description`, `balance_bonus`, `concurrency`, `estimated_rate_multiplier`, `estimated_tokens`, `sort_order`, `enabled` | Empty (compatible fallback presets) |
+| **Recommended Recharge Tier** | Select one configured tier; the frontend shows the fixed “best value” treatment | None |
 
-Recharge presets are fixed tiers; users cannot enter a custom amount. The server derives the discount from `original_price` and `amount`. `balance_bonus` (extra balance after the global multiplier) and `concurrency` (user concurrency target) are real fulfillment entitlements. `estimated_rate_multiplier` and `estimated_tokens` are display-only estimates. When enabled tiers exist, the server accepts only their exact amounts.
+Recharge presets are fixed tiers; users cannot enter a custom amount. The server derives the discount from `original_price` and `amount`. `balance_bonus` (extra balance after the global multiplier) and `concurrency` (user concurrency target) are real fulfillment entitlements. `estimated_rate_multiplier` and `estimated_tokens` are display-only estimates. When enabled tiers exist, the server accepts only their exact amounts. The recommended tier changes presentation only; it does not change price or fulfillment.
+
+### Payment-page promotion banner
+
+The **Payment page promotion banner** section configures one activity or advertising click-through. Enter a title and destination (an `http(s)` URL or a site-relative path); description, button text, and image are optional. The frontend owns the visual treatment, so there are no admin controls for theme colors, icons, badges, or carousels. An enabled banner must have both a title and a destination, which the server validates.
 
 ### Frontend Visible Method Routing
 
@@ -120,8 +125,10 @@ Prevents users from repeatedly creating and canceling orders:
 
 In **Payment Management → Subscription Plans**, administrators can create multiple saleable plans and
 configure list/final price (strikethrough price and discount), day/week/month/quarter/year validity,
-features, bonus balance, and reset-card grants. Quarters and years are currently fulfilled as fixed
-90/365-day periods; automatic renewal is not included.
+features, bonus balance, and reset-card grants. A plan can also be marked as the recommended plan;
+the frontend shows one fixed recommendation treatment per visible period, without changing price,
+sort order, or fulfillment. Quarters and years are currently fulfilled as fixed 90/365-day periods;
+automatic renewal is not included.
 
 An order captures an immutable product, price, period, and entitlement snapshot. After payment, the
 server activates the subscription and grants each configured benefit in the same fulfillment transaction
@@ -314,3 +321,5 @@ If you previously used [Sub2ApiPay](https://github.com/touwaeriol/sub2apipay) as
 4. Decommission the Sub2ApiPay service
 
 > **Note**: Historical order data from Sub2ApiPay will not be automatically migrated. Keep Sub2ApiPay running for a while to access historical records.
+
+Manual recommendation is a presentation preference: when multiple plans are marked in a visible period, only the first in display order is highlighted. Without a manual recommendation, the existing discount-based fallback remains active.

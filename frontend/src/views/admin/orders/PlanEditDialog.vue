@@ -64,20 +64,20 @@
         <textarea v-model="planFeaturesText" rows="3" class="input" :placeholder="t('payment.admin.featuresPlaceholder')"></textarea>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.featuresHint') }}</p>
       </div>
+      <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-800">
+        <p class="mb-2 text-sm font-semibold text-gray-800 dark:text-gray-200">{{ t('payment.admin.displaySettings') }}</p>
+        <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input v-model="planForm.recommended" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500" />
+          <span>{{ t('payment.admin.recommended') }}</span>
+          <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.recommendedHint') }}</span>
+        </label>
+      </div>
       <div class="rounded-lg border border-primary-100 bg-primary-50/40 p-3 dark:border-primary-900/40 dark:bg-primary-950/20">
         <p class="mb-2 text-sm font-semibold text-gray-800 dark:text-gray-200">{{ t('payment.admin.entitlements') }}</p>
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-4">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label class="input-label">{{ t('payment.admin.balanceBonus') }}</label>
             <input v-model.number="planForm.balance_bonus" type="number" min="0" step="0.01" class="input" />
-          </div>
-          <div>
-            <label class="input-label">{{ t('payment.admin.resetCardCount') }}</label>
-            <input v-model.number="planForm.reset_card_count" type="number" min="0" max="1000" step="1" class="input" />
-          </div>
-          <div>
-            <label class="input-label">{{ t('payment.admin.resetCardExpiryDays') }}</label>
-            <input v-model.number="planForm.reset_card_expiry_days" type="number" min="1" max="3650" step="1" class="input" :disabled="!planForm.reset_card_count" />
           </div>
           <div>
             <label class="input-label">{{ t('payment.admin.concurrencyTarget') }}</label>
@@ -85,6 +85,21 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.concurrencyTargetHint') }}</p>
           </div>
         </div>
+        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div>
+            <label class="input-label">{{ t('payment.admin.resetCardCount') }}</label>
+            <input v-model.number="planForm.reset_card_count" type="number" min="0" max="1000" step="1" class="input" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('payment.admin.resetCardExpiryDays') }}</label>
+            <input v-model.number="planForm.reset_card_expiry_days" type="number" min="1" :max="resetCardExpiryMax" step="1" class="input" :disabled="!planForm.reset_card_count" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('payment.admin.resetCardExpiryUnit') }}</label>
+            <Select v-model="planForm.reset_card_expiry_unit" :options="resetCardExpiryUnitOptions" :disabled="!planForm.reset_card_count" />
+          </div>
+        </div>
+        <p v-if="resetCardValidityHint" class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">{{ resetCardValidityHint }}</p>
         <input v-model="planForm.entitlement_message" type="text" class="input mt-3" :placeholder="t('payment.admin.entitlementMessagePlaceholder')" />
       </div>
       <div class="flex items-center gap-3">
@@ -121,7 +136,7 @@ import { adminPaymentAPI } from '@/api/admin/payment'
 import type { AdminPaymentConfig } from '@/api/admin/payment'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatPaymentAmount } from '@/components/payment/currency'
-import type { SubscriptionPlan } from '@/types/payment'
+import type { ResetCardExpiryUnit, SubscriptionPlan } from '@/types/payment'
 import type { AdminGroup } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -145,8 +160,32 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const saving = ref(false)
-const planForm = reactive({ name: '', group_id: null as number | null, description: '', price: 0, original_price: 0, currency: '', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true, balance_bonus: 0, reset_card_count: 0, reset_card_expiry_days: 90, concurrency: 0, entitlement_message: '' })
+const planForm = reactive({ name: '', group_id: null as number | null, description: '', price: 0, original_price: 0, currency: '', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true, recommended: false, balance_bonus: 0, reset_card_count: 0, reset_card_expiry_days: 90, reset_card_expiry_unit: 'day' as ResetCardExpiryUnit, concurrency: 0, entitlement_message: '' })
 const planFeaturesText = ref('')
+
+// Deliberately narrower than plan validity: a reset card that outlives its
+// subscription is meaningless, so quarters and years are not offered.
+const resetCardExpiryUnitOptions = computed(() => [
+  { value: 'day', label: t('payment.admin.days') },
+  { value: 'week', label: t('payment.admin.weeks') },
+  { value: 'month', label: t('payment.admin.months') },
+])
+
+const RESET_CARD_MAX_VALIDITY_DAYS = 3650
+const RESET_CARD_UNIT_DAYS: Record<ResetCardExpiryUnit, number> = { day: 1, week: 7, month: 30 }
+
+// The server bounds the resolved duration, not the raw count, so the input's
+// ceiling has to move with the unit or the form would accept values the API
+// rejects.
+const resetCardExpiryMax = computed(() =>
+  Math.floor(RESET_CARD_MAX_VALIDITY_DAYS / RESET_CARD_UNIT_DAYS[planForm.reset_card_expiry_unit]),
+)
+
+const resetCardValidityHint = computed(() => {
+  if (!planForm.reset_card_count || !planForm.reset_card_expiry_days) return ''
+  const days = planForm.reset_card_expiry_days * RESET_CARD_UNIT_DAYS[planForm.reset_card_expiry_unit]
+  return t('payment.admin.resetCardValidityHint', { count: planForm.reset_card_count, days })
+})
 
 const validityUnitOptions = computed(() => [
   { value: 'days', label: t('payment.admin.days') },
@@ -203,10 +242,10 @@ const subscriptionCnyPreview = computed(() => {
 watch(() => props.show, (visible) => {
   if (!visible) return
   if (props.plan) {
-    Object.assign(planForm, { name: props.plan.name, group_id: props.plan.group_id, description: props.plan.description, price: props.plan.price, original_price: props.plan.original_price || 0, currency: props.plan.currency || '', validity_days: props.plan.validity_days, validity_unit: props.plan.validity_unit || 'days', sort_order: props.plan.sort_order || 0, for_sale: props.plan.for_sale, balance_bonus: props.plan.entitlements?.balance_bonus || 0, reset_card_count: props.plan.entitlements?.reset_card_count || 0, reset_card_expiry_days: props.plan.entitlements?.reset_card_expiry_days || 90, concurrency: props.plan.entitlements?.concurrency || 0, entitlement_message: props.plan.entitlements?.message || '' })
+    Object.assign(planForm, { name: props.plan.name, group_id: props.plan.group_id, description: props.plan.description, price: props.plan.price, original_price: props.plan.original_price || 0, currency: props.plan.currency || '', validity_days: props.plan.validity_days, validity_unit: props.plan.validity_unit || 'days', sort_order: props.plan.sort_order || 0, for_sale: props.plan.for_sale, recommended: props.plan.entitlements?.recommended === true, balance_bonus: props.plan.entitlements?.balance_bonus || 0, reset_card_count: props.plan.entitlements?.reset_card_count || 0, reset_card_expiry_days: props.plan.entitlements?.reset_card_expiry_days || 90, reset_card_expiry_unit: props.plan.entitlements?.reset_card_expiry_unit || 'day', concurrency: props.plan.entitlements?.concurrency || 0, entitlement_message: props.plan.entitlements?.message || '' })
     planFeaturesText.value = (props.plan.features || []).join('\n')
   } else {
-    Object.assign(planForm, { name: '', group_id: null, description: '', price: 0, original_price: 0, currency: '', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true, balance_bonus: 0, reset_card_count: 0, reset_card_expiry_days: 90, concurrency: 0, entitlement_message: '' })
+    Object.assign(planForm, { name: '', group_id: null, description: '', price: 0, original_price: 0, currency: '', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true, recommended: false, balance_bonus: 0, reset_card_count: 0, reset_card_expiry_days: 90, reset_card_expiry_unit: 'day', concurrency: 0, entitlement_message: '' })
     planFeaturesText.value = ''
   }
 })
@@ -227,9 +266,11 @@ function buildPlanPayload() {
     for_sale: planForm.for_sale,
     features,
     entitlements: {
+      recommended: planForm.recommended,
       balance_bonus: Math.max(0, Number(planForm.balance_bonus) || 0),
       reset_card_count: Math.max(0, Math.min(1000, Math.floor(Number(planForm.reset_card_count) || 0))),
-      reset_card_expiry_days: Math.max(1, Math.min(3650, Math.floor(Number(planForm.reset_card_expiry_days) || 90))),
+      reset_card_expiry_days: Math.max(1, Math.min(resetCardExpiryMax.value, Math.floor(Number(planForm.reset_card_expiry_days) || 90))),
+      reset_card_expiry_unit: planForm.reset_card_expiry_unit,
       concurrency: Math.max(0, Math.min(10000, Math.floor(Number(planForm.concurrency) || 0))),
       message: planForm.entitlement_message.trim(),
     },

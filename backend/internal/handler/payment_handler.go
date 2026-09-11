@@ -167,8 +167,10 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		SubscriptionUSDToCNYRate:      cfg.SubscriptionUSDToCNYRate,
 		RechargeFeeRate:               cfg.RechargeFeeRate,
 		RechargeOptions:               service.EnabledRechargeOptionsForCheckout(cfg.RechargeOptions),
+		RechargeMode:                  service.RechargeModeForConfig(cfg),
 		HelpText:                      cfg.HelpText,
 		HelpImageURL:                  cfg.HelpImageURL,
+		Banner:                        cfg.Banner,
 		StripePublishableKey:          cfg.StripePublishableKey,
 		AlipayForceQRCode:             cfg.AlipayForceQRCode,
 		AlipayMobilePrecreateDeepLink: alipayMobilePrecreateDeepLink,
@@ -176,20 +178,26 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 }
 
 type checkoutInfoResponse struct {
-	Methods                       map[string]service.MethodLimits `json:"methods"`
-	GlobalMin                     float64                         `json:"global_min"`
-	GlobalMax                     float64                         `json:"global_max"`
-	Plans                         []checkoutPlan                  `json:"plans"`
-	BalanceDisabled               bool                            `json:"balance_disabled"`
-	BalanceRechargeMultiplier     float64                         `json:"balance_recharge_multiplier"`
-	SubscriptionUSDToCNYRate      float64                         `json:"subscription_usd_to_cny_rate"`
-	RechargeFeeRate               float64                         `json:"recharge_fee_rate"`
-	RechargeOptions               []service.RechargeOption        `json:"recharge_options"`
-	HelpText                      string                          `json:"help_text"`
-	HelpImageURL                  string                          `json:"help_image_url"`
-	StripePublishableKey          string                          `json:"stripe_publishable_key"`
-	AlipayForceQRCode             bool                            `json:"alipay_force_qrcode"`
-	AlipayMobilePrecreateDeepLink bool                            `json:"alipay_mobile_precreate_deep_link"`
+	Methods                   map[string]service.MethodLimits `json:"methods"`
+	GlobalMin                 float64                         `json:"global_min"`
+	GlobalMax                 float64                         `json:"global_max"`
+	Plans                     []checkoutPlan                  `json:"plans"`
+	BalanceDisabled           bool                            `json:"balance_disabled"`
+	BalanceRechargeMultiplier float64                         `json:"balance_recharge_multiplier"`
+	SubscriptionUSDToCNYRate  float64                         `json:"subscription_usd_to_cny_rate"`
+	RechargeFeeRate           float64                         `json:"recharge_fee_rate"`
+	RechargeOptions           []service.RechargeOption        `json:"recharge_options"`
+	// RechargeMode is "fixed" when the server only accepts the tiers above, and
+	// "custom" when any amount inside the min/max range is accepted. Clients
+	// must not infer this from an empty tier list — a tier list can also be
+	// empty because every tier fell outside the visible payment method limits.
+	RechargeMode                  string                 `json:"recharge_mode"`
+	HelpText                      string                 `json:"help_text"`
+	HelpImageURL                  string                 `json:"help_image_url"`
+	Banner                        *service.PaymentBanner `json:"banner,omitempty"`
+	StripePublishableKey          string                 `json:"stripe_publishable_key"`
+	AlipayForceQRCode             bool                   `json:"alipay_force_qrcode"`
+	AlipayMobilePrecreateDeepLink bool                   `json:"alipay_mobile_precreate_deep_link"`
 }
 
 type checkoutPlan struct {

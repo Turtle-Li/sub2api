@@ -12,7 +12,8 @@ import type {
   SubscriptionPlan,
   ProviderInstance,
   PaymentInvoiceRecord,
-  AdminUpdateInvoiceRequest
+  AdminUpdateInvoiceRequest,
+  PaymentBanner,
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -34,6 +35,7 @@ export interface AdminPaymentConfig {
   product_name_suffix: string
   help_image_url: string
   help_text: string
+  banner?: PaymentBanner | null
   recharge_options: import('@/types/payment').RechargeOption[]
 }
 
@@ -55,6 +57,7 @@ export interface UpdatePaymentConfigRequest {
   product_name_suffix?: string
   help_image_url?: string
   help_text?: string
+  banner?: PaymentBanner
   recharge_options?: import('@/types/payment').RechargeOption[]
 }
 

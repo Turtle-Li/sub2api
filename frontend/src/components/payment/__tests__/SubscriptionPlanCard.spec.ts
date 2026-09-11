@@ -29,9 +29,21 @@ const i18n = createI18n({
   },
 });
 
-const mountPlanCard = (groupPlatform: string, overrides: Partial<SubscriptionPlan> = {}) =>
+type PricingProps = {
+  displayCurrency?: string;
+  usdToCnyRate?: number;
+  selected?: boolean;
+  featured?: boolean;
+};
+
+const mountPlanCard = (
+  groupPlatform: string,
+  overrides: Partial<SubscriptionPlan> = {},
+  pricing: PricingProps = {},
+) =>
   mount(SubscriptionPlanCard, {
     props: {
+      ...pricing,
       plan: {
         id: 1,
         group_id: 10,
@@ -58,7 +70,7 @@ describe("SubscriptionPlanCard", () => {
 
     expect(wrapper.classes()).toContain("payment-product-card")
     expect(wrapper.find(".payment-product-card__body").exists()).toBe(true)
-    expect(wrapper.find(".payment-product-card__meta").exists()).toBe(true)
+    expect(wrapper.find(".payment-product-card__list").exists()).toBe(true)
     expect(wrapper.find("button").classes()).toContain("payment-product-card__action")
 
     expect(text).not.toContain("Claude");
@@ -84,74 +96,104 @@ describe("SubscriptionPlanCard", () => {
     expect(mountPlanCard("openai", { validity_days: 30, validity_unit: "day" }).text()).toContain("/ 30payment.days");
   });
 
-  it("uses the configured currency symbol while preserving USD for legacy plans", () => {
-    const cnyPlan = mountPlanCard("openai", { currency: "CNY", original_price: 20 }).text();
+  // The card used to print plan.price behind a symbol derived from plan.currency
+  // (defaulting to USD), while the confirm step converted the same plan into the
+  // gateway currency — one plan, two prices. Both now follow the server rule.
+  it("prices the plan in the gateway currency, not the plan's nominal currency", () => {
+    const text = mountPlanCard("openai", { currency: "USD", original_price: 20 }, {
+      displayCurrency: "CNY",
+    }).text();
 
-    expect(cnyPlan).toContain("¥10CNY");
-    expect(cnyPlan).toContain("¥20CNY");
-    expect(mountPlanCard("openai", { currency: "USD" }).text()).toContain("$10USD");
-    expect(mountPlanCard("openai", { currency: "" }).text()).toContain("$10");
+    expect(text).toContain("¥10.00");
+    expect(text).toContain("¥20.00");
+    expect(text).not.toContain("$10");
   });
 
+  // Mirrors calculateSubscriptionGatewayBaseAmount: the rate is applied only for
+  // the default gateway currency. A USD gateway charges the plan price as-is.
+  it("applies the subscription rate only for the default gateway currency", () => {
+    expect(mountPlanCard("openai", {}, { displayCurrency: "CNY", usdToCnyRate: 6.75 }).text())
+      .toContain("¥67.50");
+    expect(mountPlanCard("openai", {}, { displayCurrency: "USD", usdToCnyRate: 6.75 }).text())
+      .toContain("$10.00");
+  });
+
+  // Long names wrap and stay fully readable. The card no longer clamps them to
+  // a fixed two-line box — heights come from content, and the grid supplies the
+  // shared baseline — so the title must not be truncated or line-clamped.
   it.each([
     ["long Chinese", "企业全球加速专业订阅套餐（含高级模型与优先支持）"],
     ["long English", "Enterprise Global Acceleration Subscription with Priority Support"],
     ["unbroken token", "EnterpriseGlobalAccelerationSubscriptionWithPrioritySupport1234567890"],
-  ])("keeps the full %s plan title accessible in a bounded two-line area", (_label, name) => {
-    const wrapper = mountPlanCard("openai", { name });
-    const title = wrapper.get("h3");
+  ])("keeps the full %s plan title readable", (_label, name) => {
+    const title = mountPlanCard("openai", { name }).get("h3");
 
     expect(title.text()).toBe(name);
     expect(title.attributes("title")).toBe(name);
-    expect(title.classes()).toEqual(expect.arrayContaining([
-      "min-w-0",
-      "h-12",
-      "break-words",
-      "line-clamp-2",
-      "[overflow-wrap:anywhere]",
-    ]));
+    expect(title.classes()).toContain("payment-product-card__title");
     expect(title.classes()).not.toContain("truncate");
+    expect(title.classes()).not.toContain("line-clamp-2");
   });
 
-  it("keeps title, badge, price, description, and purchase action in separate bounded regions", () => {
-    const wrapper = mountPlanCard("openai", {
-      name: "Enterprise Global Acceleration Subscription with Priority Support",
-      price: 123.45,
-      currency: "USD",
-      description: "Includes advanced models and priority support.",
+  // Reset cards are a headline entitlement, so they state both how many and for
+  // how long. The period is a count plus a unit on the server; days is only the
+  // default for plans saved before units existed.
+  it("spells out reset card count and validity period", () => {
+    const monthly = mountPlanCard("openai", {
+      entitlements: {
+        balance_bonus: 0,
+        reset_card_count: 3,
+        reset_card_expiry_days: 2,
+        reset_card_expiry_unit: "month",
+        concurrency: 0,
+      },
+    }).text();
+    expect(monthly).toContain("3 payment.entitlements.resetCards");
+
+    const legacy = mountPlanCard("openai", {
+      entitlements: {
+        balance_bonus: 0,
+        reset_card_count: 1,
+        reset_card_expiry_days: 14,
+        concurrency: 0,
+      },
     });
-    const title = wrapper.get("h3");
-    const badge = wrapper.findAll("span").find((node) => node.text() === "OpenAI");
-    const price = wrapper.findAll("span").find((node) => node.text() === "123.45");
-
-    expect(title.element.parentElement?.classList).toContain("min-w-0");
-    expect(title.element.parentElement?.classList).toContain("flex-1");
-    expect(badge?.classes()).toContain("shrink-0");
-    expect([...(badge?.element.parentElement?.classList ?? [])]).toEqual(expect.arrayContaining([
-      "flex",
-      "items-center",
-      "justify-end",
-    ]));
-    expect(badge?.element.parentElement?.textContent).toContain("/ 30payment.days");
-    expect(badge?.element.parentElement?.parentElement?.classList).toContain("shrink-0");
-    expect(price?.element.parentElement?.parentElement?.classList).toContain("shrink-0");
-    expect(wrapper.get("p").text()).toBe("Includes advanced models and priority support.");
-    expect(wrapper.get("button").text()).toBe("payment.subscribeNow");
+    const resetItem = legacy.findAll("li").find((node) => node.text().includes("resetCards"));
+    expect(resetItem?.classes()).toContain("payment-product-card__list-item--benefit");
   });
 
-  it("keeps short plan titles compact and aligned", () => {
-    const wrapper = mountPlanCard("openai", { name: "Pro", description: "" });
-    const title = wrapper.get("h3");
-    const badge = wrapper.findAll("span").find((node) => node.text() === "OpenAI");
+  it("marks paid entitlements apart from plain quota facts", () => {
+    const wrapper = mountPlanCard("openai", {
+      entitlements: { balance_bonus: 20, reset_card_count: 0, reset_card_expiry_days: 0, concurrency: 8 },
+    });
+    const benefits = wrapper.findAll(".payment-product-card__list-item--benefit");
 
-    expect(title.text()).toBe("Pro");
-    expect(title.attributes("title")).toBe("Pro");
-    expect(title.classes()).toEqual(expect.arrayContaining(["text-base", "font-bold", "h-12"]));
-    expect([...(badge?.element.parentElement?.classList ?? [])]).toEqual(expect.arrayContaining([
-      "flex",
-      "items-center",
-      "justify-end",
-    ]));
-    expect(badge?.element.parentElement?.textContent).toContain("/ 30payment.days");
+    expect(benefits).toHaveLength(2);
+    expect(wrapper.text()).toContain("payment.entitlements.balanceBonus +20 payment.creditUnit");
+    expect(wrapper.text()).toContain("payment.entitlements.concurrency");
+  });
+
+  // The whole card is the control. A card that looks selectable but only reacts
+  // on a small button at its bottom edge reads as broken.
+  it("emits select from the card body, not just the action button", async () => {
+    const wrapper = mountPlanCard("openai");
+
+    await wrapper.trigger("click");
+    await wrapper.get("button").trigger("click");
+
+    expect(wrapper.emitted("select")).toHaveLength(2);
+    expect(wrapper.attributes("aria-pressed")).toBe("false");
+  });
+
+  it("shows the selected and recommended states without conflating them", () => {
+    const selected = mountPlanCard("openai", {}, { selected: true });
+    expect(selected.classes()).toContain("payment-product-card--selected");
+    expect(selected.attributes("aria-pressed")).toBe("true");
+    expect(selected.find(".payment-product-card__ribbon").exists()).toBe(false);
+
+    const featured = mountPlanCard("openai", {}, { featured: true });
+    expect(featured.classes()).toContain("payment-product-card--featured");
+    expect(featured.classes()).not.toContain("payment-product-card--selected");
+    expect(featured.find(".payment-product-card__ribbon").exists()).toBe(true);
   });
 });

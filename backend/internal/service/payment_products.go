@@ -9,20 +9,85 @@ import (
 	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/shopspring/decimal"
 )
 
 // PlanEntitlements is the public, structured set of benefits delivered after
 // a subscription order is confirmed. Unknown JSON fields are intentionally
 // ignored so the schema can grow without breaking older clients.
 type PlanEntitlements struct {
-	BalanceBonus        float64 `json:"balance_bonus"`
-	ResetCardCount      int     `json:"reset_card_count"`
-	ResetCardExpiryDays int     `json:"reset_card_expiry_days"`
+	BalanceBonus   float64 `json:"balance_bonus"`
+	ResetCardCount int     `json:"reset_card_count"`
+	// ResetCardExpiryDays is a count in ResetCardExpiryUnit, not necessarily a
+	// number of days — the field keeps its name for compatibility with plans
+	// stored before units existed, which were all in days. This mirrors the
+	// subscription plan's own validity_days/validity_unit pair.
+	// Use ResetCardValidityDays for the real duration.
+	ResetCardExpiryDays int `json:"reset_card_expiry_days"`
+	// ResetCardExpiryUnit is day, week, or month (singular or plural, matching
+	// what the admin form has always saved for plan validity). Empty means day,
+	// which is what every pre-unit plan meant.
+	ResetCardExpiryUnit string `json:"reset_card_expiry_unit"`
 	// Concurrency is the minimum target for the user's concurrent request cap.
 	// Payment fulfillment will never lower an already higher cap. Zero means this
 	// product does not change the cap.
 	Concurrency int    `json:"concurrency"`
 	Message     string `json:"message"`
+	// Recommended controls the single, admin-selected presentation highlight.
+	// It has no effect on pricing or fulfillment.
+	Recommended bool `json:"recommended,omitempty"`
+}
+
+// Reset card expiry units. Deliberately a narrower set than subscription
+// validity: a reset card that outlives its subscription has no meaning, so
+// quarters and years are not offered.
+const (
+	resetCardExpiryUnitDay   = "day"
+	resetCardExpiryUnitWeek  = "week"
+	resetCardExpiryUnitMonth = "month"
+)
+
+// maxResetCardValidityDays bounds the computed duration rather than the raw
+// count, so "36 months" is rejected for the same reason "1100 days" is.
+const maxResetCardValidityDays = 3650
+
+// invalidResetCardValidityDays is returned when a raw count cannot be safely
+// converted to days. It is deliberately negative so fulfillment cannot turn a
+// malformed snapshot into an immediately usable card if validation is bypassed.
+const invalidResetCardValidityDays = -1
+
+// normalizeResetCardExpiryUnit accepts singular and plural spellings because
+// the admin form saves plural for plan validity and the database default for
+// that field is singular. Anything unrecognized falls back to days, matching
+// psComputeValidityDays.
+func normalizeResetCardExpiryUnit(unit string) string {
+	base := strings.ToLower(strings.TrimSpace(unit))
+	base = strings.TrimSuffix(base, "s")
+	switch base {
+	case resetCardExpiryUnitWeek:
+		return resetCardExpiryUnitWeek
+	case resetCardExpiryUnitMonth:
+		return resetCardExpiryUnitMonth
+	default:
+		return resetCardExpiryUnitDay
+	}
+}
+
+// ResetCardValidityDays converts the count/unit pair into the real number of
+// days a granted reset card stays usable. A month is 30 days, matching
+// psComputeValidityDays so subscription and reset-card periods do not drift.
+func (e PlanEntitlements) ResetCardValidityDays() int {
+	multiplier := 1
+	switch normalizeResetCardExpiryUnit(e.ResetCardExpiryUnit) {
+	case resetCardExpiryUnitWeek:
+		multiplier = 7
+	case resetCardExpiryUnitMonth:
+		multiplier = 30
+	}
+	if e.ResetCardExpiryDays < 0 || e.ResetCardExpiryDays > maxResetCardValidityDays/multiplier {
+		return invalidResetCardValidityDays
+	}
+	return e.ResetCardExpiryDays * multiplier
 }
 
 // RechargeOption is a server-configured balance purchase preset.
@@ -36,7 +101,10 @@ type RechargeOption struct {
 	EstimatedTokens         int64   `json:"estimated_tokens,omitempty"`
 	// Concurrency is the minimum target applied after a successful order for this
 	// exact configured amount. Zero means no concurrency entitlement.
-	Concurrency int  `json:"concurrency,omitempty"`
+	Concurrency int `json:"concurrency,omitempty"`
+	// Recommended controls the single, admin-selected presentation highlight.
+	// It has no effect on pricing or fulfillment.
+	Recommended bool `json:"recommended,omitempty"`
 	SortOrder   int  `json:"sort_order"`
 	Enabled     bool `json:"enabled"`
 }
@@ -54,6 +122,7 @@ func (o *RechargeOption) UnmarshalJSON(data []byte) error {
 		EstimatedRateMultiplier float64 `json:"estimated_rate_multiplier"`
 		EstimatedTokens         int64   `json:"estimated_tokens"`
 		Concurrency             int     `json:"concurrency"`
+		Recommended             bool    `json:"recommended"`
 		SortOrder               int     `json:"sort_order"`
 		Enabled                 *bool   `json:"enabled"`
 	}
@@ -69,6 +138,7 @@ func (o *RechargeOption) UnmarshalJSON(data []byte) error {
 	o.EstimatedRateMultiplier = raw.EstimatedRateMultiplier
 	o.EstimatedTokens = raw.EstimatedTokens
 	o.Concurrency = raw.Concurrency
+	o.Recommended = raw.Recommended
 	o.SortOrder = raw.SortOrder
 	o.Enabled = raw.Enabled == nil || *raw.Enabled
 	return nil
@@ -118,7 +188,13 @@ func calculateRechargeCreditedAmount(paymentAmount, multiplier float64, options 
 	if !ok || option.BalanceBonus <= 0 {
 		return credited
 	}
-	return math.Round((credited+option.BalanceBonus)*100) / 100
+	// Stay on decimal for the bonus step too. Every other amount in this package
+	// is computed with shopspring/decimal; a float round here would drift from
+	// the rest of the ledger once bonuses stop being whole numbers.
+	return decimal.NewFromFloat(credited).
+		Add(decimal.NewFromFloat(option.BalanceBonus)).
+		Round(2).
+		InexactFloat64()
 }
 
 func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlements, error) {
@@ -139,11 +215,20 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 	if entitlements.ResetCardCount < 0 || entitlements.ResetCardCount > MaxResetCardsPerGrant {
 		return nil, PlanEntitlements{}, fmt.Errorf("reset_card_count must be between 0 and %d", MaxResetCardsPerGrant)
 	}
-	if entitlements.ResetCardCount > 0 && entitlements.ResetCardExpiryDays <= 0 {
-		return nil, PlanEntitlements{}, fmt.Errorf("reset_card_expiry_days must be positive when reset cards are granted")
+	entitlements.ResetCardExpiryUnit = normalizeResetCardExpiryUnit(entitlements.ResetCardExpiryUnit)
+	if entitlements.ResetCardCount > 0 {
+		if entitlements.ResetCardExpiryDays <= 0 {
+			return nil, PlanEntitlements{}, fmt.Errorf("reset_card_expiry_days must be positive when reset cards are granted")
+		}
+		// Bound the resolved duration, not the raw count: 36 months and 1100
+		// days are the same mistake and must fail the same way.
+		if validity := entitlements.ResetCardValidityDays(); validity <= 0 || validity > maxResetCardValidityDays {
+			return nil, PlanEntitlements{}, fmt.Errorf("reset card validity must not exceed %d days", maxResetCardValidityDays)
+		}
 	}
 	if entitlements.ResetCardCount == 0 {
 		entitlements.ResetCardExpiryDays = 0
+		entitlements.ResetCardExpiryUnit = resetCardExpiryUnitDay
 	}
 	if entitlements.Concurrency < 0 || entitlements.Concurrency > 10000 {
 		return nil, PlanEntitlements{}, fmt.Errorf("concurrency must be between 0 and 10000")
@@ -309,17 +394,27 @@ func PlanPeriodLabel(days int, unit string) string {
 	}
 }
 
-func normalizeRechargeOptions(raw string) []RechargeOption {
+// normalizeRechargeOptions parses the stored preset list. The bool reports
+// whether the stored value was fully understood.
+//
+// This distinction matters for safety, not just diagnostics: order validation
+// only enforces fixed tiers when at least one enabled tier survives parsing. A
+// corrupted setting that silently parsed to an empty list would therefore
+// disable the whole product layer and quietly reopen free-amount top-ups. The
+// caller turns a false here into a hard rejection instead.
+func normalizeRechargeOptions(raw string) ([]RechargeOption, bool) {
 	if strings.TrimSpace(raw) == "" {
-		return []RechargeOption{}
+		return []RechargeOption{}, true
 	}
 	var options []RechargeOption
 	if err := json.Unmarshal([]byte(raw), &options); err != nil {
-		return []RechargeOption{}
+		return []RechargeOption{}, false
 	}
+	intact := true
 	valid := make([]RechargeOption, 0, len(options))
 	for _, option := range options {
 		if validateRechargeOption(option) != nil {
+			intact = false
 			continue
 		}
 		option.Label = strings.TrimSpace(option.Label)
@@ -332,7 +427,7 @@ func normalizeRechargeOptions(raw string) []RechargeOption {
 		}
 		return valid[i].SortOrder < valid[j].SortOrder
 	})
-	return valid
+	return valid, intact
 }
 
 // EnabledRechargeOptionsForCheckout keeps disabled admin presets out of the

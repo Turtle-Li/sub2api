@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -15,6 +16,7 @@ func TestNormalizePlanEntitlements(t *testing.T) {
 		"reset_card_expiry_days": 30,
 		"concurrency":            5,
 		"message":                "  Welcome bonus  ",
+		"recommended":            true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, 12.5, entitlements.BalanceBonus)
@@ -22,7 +24,9 @@ func TestNormalizePlanEntitlements(t *testing.T) {
 	require.Equal(t, 30, entitlements.ResetCardExpiryDays)
 	require.Equal(t, 5, entitlements.Concurrency)
 	require.Equal(t, "Welcome bonus", entitlements.Message)
+	require.True(t, entitlements.Recommended)
 	require.Equal(t, float64(2), normalized["reset_card_count"])
+	require.Equal(t, true, normalized["recommended"])
 }
 
 func TestNormalizePlanEntitlementsRejectsInvalidResetCardExpiry(t *testing.T) {
@@ -106,13 +110,14 @@ func TestPlanDiscountPercentAndPeriodLabel(t *testing.T) {
 }
 
 func TestNormalizeRechargeOptionsFiltersAndSorts(t *testing.T) {
-	options := normalizeRechargeOptions(`[
-		{"amount": 100, "original_price": 120, "label": "  Popular ", "balance_bonus": 8, "estimated_rate_multiplier": 0.9, "estimated_tokens": 12000000, "concurrency": 5, "sort_order": 20, "enabled": true},
+	options, intact := normalizeRechargeOptions(`[
+		{"amount": 100, "original_price": 120, "label": "  Popular ", "balance_bonus": 8, "estimated_rate_multiplier": 0.9, "estimated_tokens": 12000000, "concurrency": 5, "recommended": true, "sort_order": 20, "enabled": true},
 		{"amount": 10, "sort_order": 10, "enabled": true},
 		{"amount": 50, "sort_order": 30, "enabled": false},
 		{"amount": 0, "enabled": true},
 		{"amount": 200, "balance_bonus": -1, "enabled": true}
 	]`)
+	require.False(t, intact, "two entries were dropped as invalid")
 	require.Len(t, options, 3)
 	require.Equal(t, 10.0, options[0].Amount)
 	require.Equal(t, "Popular", options[1].Label)
@@ -121,9 +126,39 @@ func TestNormalizeRechargeOptionsFiltersAndSorts(t *testing.T) {
 	require.Equal(t, 0.9, options[1].EstimatedRateMultiplier)
 	require.Equal(t, int64(12000000), options[1].EstimatedTokens)
 	require.Equal(t, 5, options[1].Concurrency)
+	require.True(t, options[1].Recommended)
 	require.Equal(t, 16.67, rechargeOptionDiscountPercent(options[1]))
 	require.Len(t, EnabledRechargeOptionsForCheckout(options), 2)
-	require.Len(t, normalizeRechargeOptions(`[{"amount": 25}]`), 1)
+
+	legacy, legacyIntact := normalizeRechargeOptions(`[{"amount": 25}]`)
+	require.True(t, legacyIntact)
+	require.Len(t, legacy, 1)
+}
+
+// A corrupted setting must be reported, not silently normalized to "no tiers
+// configured" — that would drop the fixed-tier requirement in order validation
+// and reopen arbitrary top-up amounts.
+func TestNormalizeRechargeOptionsReportsUnparseableSetting(t *testing.T) {
+	options, intact := normalizeRechargeOptions(`{"amount": 25}`)
+	require.False(t, intact)
+	require.Empty(t, options)
+
+	empty, emptyIntact := normalizeRechargeOptions("   ")
+	require.True(t, emptyIntact, "an unset value is a valid custom-amount configuration")
+	require.Empty(t, empty)
+}
+
+func TestRechargeModeForConfig(t *testing.T) {
+	require.Equal(t, RechargeModeCustom, RechargeModeForConfig(&PaymentConfig{}))
+	require.Equal(t, RechargeModeFixed, RechargeModeForConfig(&PaymentConfig{
+		RechargeOptions: []RechargeOption{{Amount: 100, Enabled: true}},
+	}))
+	// Tiers exist but are all disabled: the server accepts free amounts again.
+	require.Equal(t, RechargeModeCustom, RechargeModeForConfig(&PaymentConfig{
+		RechargeOptions: []RechargeOption{{Amount: 100, Enabled: false}},
+	}))
+	// Corrupted config fails closed, so clients must not offer free amounts.
+	require.Equal(t, RechargeModeFixed, RechargeModeForConfig(&PaymentConfig{RechargeOptionsInvalid: true}))
 }
 
 func TestCalculateRechargeCreditedAmountAddsConfiguredBonusAfterGlobalMultiplier(t *testing.T) {
@@ -290,4 +325,84 @@ func TestSubscriptionConcurrencyEntitlementIsMonotonicAndIdempotent(t *testing.T
 	user, err = client.User.Get(ctx, user.ID)
 	require.NoError(t, err)
 	require.Equal(t, 5, user.Concurrency)
+}
+
+// Reset card expiry is a count plus a unit, mirroring the plan's own
+// validity_days/validity_unit pair. Plans stored before units existed carry no
+// unit and must keep meaning days.
+func TestResetCardValidityDaysResolvesUnits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		unit string
+		want int
+	}{
+		{name: "legacy plans have no unit", unit: "", want: 14},
+		{name: "singular day", unit: "day", want: 14},
+		{name: "plural days", unit: "days", want: 14},
+		{name: "singular week", unit: "week", want: 98},
+		{name: "plural weeks", unit: "weeks", want: 98},
+		{name: "singular month", unit: "month", want: 420},
+		{name: "plural months", unit: "months", want: 420},
+		{name: "unknown units bill as days", unit: "fortnight", want: 14},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entitlements := PlanEntitlements{ResetCardCount: 1, ResetCardExpiryDays: 14, ResetCardExpiryUnit: tc.unit}
+			require.Equal(t, tc.want, entitlements.ResetCardValidityDays())
+		})
+	}
+}
+
+func TestNormalizePlanEntitlementsBoundsResolvedResetCardValidity(t *testing.T) {
+	_, entitlements, err := normalizePlanEntitlements(map[string]any{
+		"reset_card_count":       2,
+		"reset_card_expiry_days": 3,
+		"reset_card_expiry_unit": "months",
+	})
+	require.NoError(t, err)
+	require.Equal(t, resetCardExpiryUnitMonth, entitlements.ResetCardExpiryUnit)
+	require.Equal(t, 90, entitlements.ResetCardValidityDays())
+
+	// The cap applies to the resolved duration, so a large count in a large
+	// unit is rejected just like the same duration expressed in days.
+	_, _, err = normalizePlanEntitlements(map[string]any{
+		"reset_card_count":       1,
+		"reset_card_expiry_days": 200,
+		"reset_card_expiry_unit": "months",
+	})
+	require.ErrorContains(t, err, "reset card validity must not exceed")
+
+	// Without reset cards the period is meaningless and is cleared.
+	_, cleared, err := normalizePlanEntitlements(map[string]any{
+		"reset_card_count":       0,
+		"reset_card_expiry_days": 30,
+		"reset_card_expiry_unit": "weeks",
+	})
+	require.NoError(t, err)
+	require.Zero(t, cleared.ResetCardExpiryDays)
+	require.Equal(t, resetCardExpiryUnitDay, cleared.ResetCardExpiryUnit)
+}
+
+func TestResetCardValidityDaysRejectsOverflowingCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		unit string
+	}{
+		{name: "weeks", unit: "week"},
+		{name: "months", unit: "month"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entitlements := PlanEntitlements{
+				ResetCardCount:      1,
+				ResetCardExpiryDays: math.MaxInt,
+				ResetCardExpiryUnit: tc.unit,
+			}
+			require.Equal(t, invalidResetCardValidityDays, entitlements.ResetCardValidityDays())
+			_, _, err := normalizePlanEntitlements(map[string]any{
+				"reset_card_count":       1,
+				"reset_card_expiry_days": math.MaxInt,
+				"reset_card_expiry_unit": tc.unit,
+			})
+			require.ErrorContains(t, err, "reset card validity must not exceed")
+		})
+	}
 }

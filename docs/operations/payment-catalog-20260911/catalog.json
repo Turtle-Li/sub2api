@@ -1,0 +1,183 @@
+{
+  "plans": [
+    {
+      "group_id": 4,
+      "name": "Plus 月付",
+      "description": "新购与同组续费均可；续费保留剩余有效期",
+      "price": 120,
+      "original_price": null,
+      "validity_days": 1,
+      "validity_unit": "month",
+      "currency": "CNY",
+      "features": [
+        "有效订阅可另购重置卡",
+        "重置卡不延长订阅有效期"
+      ],
+      "product_name": "Plus 月付",
+      "for_sale": true,
+      "sort_order": 0,
+      "entitlements": {}
+    },
+    {
+      "group_id": 4,
+      "name": "Plus 季付",
+      "description": "新购与同组续费均可；续费保留剩余有效期",
+      "price": 324.0,
+      "original_price": 360,
+      "validity_days": 1,
+      "validity_unit": "quarter",
+      "currency": "CNY",
+      "features": [
+        "有效订阅可另购重置卡",
+        "重置卡不延长订阅有效期"
+      ],
+      "product_name": "Plus 季付",
+      "for_sale": true,
+      "sort_order": 1,
+      "entitlements": {}
+    },
+    {
+      "group_id": 4,
+      "name": "Plus 年付",
+      "description": "新购与同组续费均可；续费保留剩余有效期",
+      "price": 1152.0,
+      "original_price": 1440,
+      "validity_days": 1,
+      "validity_unit": "year",
+      "currency": "CNY",
+      "features": [
+        "有效订阅可另购重置卡",
+        "重置卡不延长订阅有效期"
+      ],
+      "product_name": "Plus 年付",
+      "for_sale": true,
+      "sort_order": 2,
+      "entitlements": {}
+    },
+    {
+      "group_id": 12,
+      "name": "5X Pro 月付",
+      "description": "新购与同组续费均可；续费保留剩余有效期",
+      "price": 550,
+      "original_price": null,
+      "validity_days": 1,
+      "validity_unit": "month",
+      "currency": "CNY",
+      "features": [
+        "有效订阅可另购重置卡",
+        "重置卡不延长订阅有效期"
+      ],
+      "product_name": "5X Pro 月付",
+      "for_sale": true,
+      "sort_order": 10,
+      "entitlements": {}
+    },
+    {
+      "group_id": 12,
+      "name": "5X Pro 季付",
+      "description": "新购与同组续费均可；续费保留剩余有效期",
+      "price": 1485.0,
+      "original_price": 1650,
+      "validity_days": 1,
+      "validity_unit": "quarter",
+      "currency": "CNY",
+      "features": [
+        "有效订阅可另购重置卡",
+        "重置卡不延长订阅有效期"
+      ],
+      "product_name": "5X Pro 季付",
+      "for_sale": true,
+      "sort_order": 11,
+      "entitlements": {}
+    },
+    {
+      "group_id": 12,
+      "name": "5X Pro 年付",
+      "description": "新购与同组续费均可；续费保留剩余有效期",
+      "price": 5280.0,
+      "original_price": 6600,
+      "validity_days": 1,
+      "validity_unit": "year",
+      "currency": "CNY",
+      "features": [
+        "有效订阅可另购重置卡",
+        "重置卡不延长订阅有效期"
+      ],
+      "product_name": "5X Pro 年付",
+      "for_sale": true,
+      "sort_order": 12,
+      "entitlements": {}
+    }
+  ],
+  "recharge_options": [
+    {
+      "amount": 5,
+      "balance_bonus": 0,
+      "label": "小额体验",
+      "description": "按充值金额到账",
+      "sort_order": 0,
+      "enabled": true,
+      "recommended": false
+    },
+    {
+      "amount": 49,
+      "balance_bonus": 0,
+      "label": "轻量充值",
+      "description": "按充值金额到账",
+      "sort_order": 1,
+      "enabled": true,
+      "recommended": false
+    },
+    {
+      "amount": 99,
+      "balance_bonus": 4,
+      "label": "日常使用",
+      "description": "额外赠送 4 额度",
+      "sort_order": 2,
+      "enabled": true,
+      "recommended": false
+    },
+    {
+      "amount": 199,
+      "balance_bonus": 19,
+      "label": "进阶充值",
+      "description": "额外赠送 19 额度",
+      "sort_order": 3,
+      "enabled": true,
+      "recommended": false
+    },
+    {
+      "amount": 399,
+      "balance_bonus": 75,
+      "label": "高频使用",
+      "description": "额外赠送 75 额度",
+      "sort_order": 4,
+      "enabled": true,
+      "recommended": false
+    },
+    {
+      "amount": 599,
+      "balance_bonus": 145,
+      "label": "畅享充值",
+      "description": "额外赠送 145 额度",
+      "sort_order": 5,
+      "enabled": true,
+      "recommended": true
+    }
+  ],
+  "settings": {
+    "MIN_RECHARGE_AMOUNT": "5",
+    "MAX_RECHARGE_AMOUNT": "0",
+    "BALANCE_RECHARGE_MULTIPLIER": "1",
+    "SUBSCRIPTION_USD_TO_CNY_RATE": "0",
+    "RECHARGE_FEE_RATE": "0",
+    "PAYMENT_RECHARGE_OPTIONS": "[{\"amount\":5,\"balance_bonus\":0,\"label\":\"小额体验\",\"description\":\"按充值金额到账\",\"sort_order\":0,\"enabled\":true,\"recommended\":false},{\"amount\":49,\"balance_bonus\":0,\"label\":\"轻量充值\",\"description\":\"按充值金额到账\",\"sort_order\":1,\"enabled\":true,\"recommended\":false},{\"amount\":99,\"balance_bonus\":4,\"label\":\"日常使用\",\"description\":\"额外赠送 4 额度\",\"sort_order\":2,\"enabled\":true,\"recommended\":false},{\"amount\":199,\"balance_bonus\":19,\"label\":\"进阶充值\",\"description\":\"额外赠送 19 额度\",\"sort_order\":3,\"enabled\":true,\"recommended\":false},{\"amount\":399,\"balance_bonus\":75,\"label\":\"高频使用\",\"description\":\"额外赠送 75 额度\",\"sort_order\":4,\"enabled\":true,\"recommended\":false},{\"amount\":599,\"balance_bonus\":145,\"label\":\"畅享充值\",\"description\":\"额外赠送 145 额度\",\"sort_order\":5,\"enabled\":true,\"recommended\":true}]",
+    "PAYMENT_BANNER": "{\"enabled\":true,\"title\":\"订阅与余额充值\",\"description\":\"Plus / 5X Pro 月付、季付、年付可选；余额充值最高赠送 145 额度。\",\"link_url\":\"/subscriptions\",\"button_text\":\"查看我的订阅\"}",
+    "payment_visible_method_alipay_source": "unified_alipay",
+    "payment_visible_method_wxpay_source": "unified_wxpay",
+    "payment_visible_method_alipay_enabled": "true",
+    "payment_visible_method_wxpay_enabled": "true",
+    "ENABLED_PAYMENT_TYPES": "alipay,wxpay",
+    "payment_enabled": "true"
+  }
+}

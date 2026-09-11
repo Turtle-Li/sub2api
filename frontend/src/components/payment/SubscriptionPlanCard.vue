@@ -1,117 +1,79 @@
 <template>
-  <div
+  <article
+    role="button"
+    tabindex="0"
+    :aria-pressed="selected"
+    :aria-label="`${plan.name} · ${displayPrice}`"
     :class="[
       'payment-product-card',
-      borderClass,
+      selected && 'payment-product-card--selected',
+      featured && 'payment-product-card--featured',
     ]"
+    @click="emit('select', plan)"
+    @keydown.enter.prevent="emit('select', plan)"
+    @keydown.space.prevent="emit('select', plan)"
   >
-    <!-- Colored top accent bar -->
-    <div :class="['h-1.5', accentClass]" />
+    <span v-if="featured" class="payment-product-card__ribbon">
+      <Icon name="sparkles" size="xs" :stroke-width="2" />
+      {{ t(plan.entitlements?.recommended ? 'payment.recommended' : 'payment.mostPopular') }}
+    </span>
 
     <div class="payment-product-card__body">
-      <!-- Header: name + badge + price -->
-      <div class="mb-3 flex items-start justify-between gap-2">
-        <div class="min-w-0 flex-1">
-          <div class="mb-2 flex flex-wrap items-center gap-1.5">
-            <span class="text-[11px] font-medium text-gray-400 dark:text-dark-500">{{ t('payment.tabSubscribe') }}</span>
-            <span v-if="periodDisplay" class="text-[11px] font-medium text-gray-400 dark:text-dark-500">{{ periodDisplay }}</span>
-          </div>
-          <h3
-            :title="plan.name"
-            class="h-12 min-w-0 break-words [overflow-wrap:anywhere] text-base font-bold leading-6 text-gray-900 dark:text-white line-clamp-2"
-          >
-            {{ plan.name }}
-          </h3>
-          <p v-if="plan.description" class="mt-1 min-h-10 text-xs leading-relaxed text-gray-500 dark:text-dark-400 line-clamp-2">
-            {{ plan.description }}
-          </p>
-          <div v-else class="mt-1 min-h-10" aria-hidden="true" />
+      <!-- Identity -->
+      <div class="min-w-0">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span :class="['inline-flex shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium', badgeLightClass]">{{ pLabel }}</span>
+          <span v-if="periodDisplay" class="payment-product-card__eyebrow">{{ periodDisplay }}</span>
         </div>
-        <div class="shrink-0 text-right">
-          <div class="flex items-baseline gap-1">
-            <span class="text-xs text-gray-400 dark:text-dark-500">{{ planCurrencySymbol }}</span>
-            <span :class="['text-2xl font-extrabold tracking-tight', textClass]">{{ plan.price }}</span>
-            <span v-if="plan.currency" class="text-xs font-medium text-gray-400 dark:text-dark-500">{{ plan.currency }}</span>
-          </div>
-          <div class="flex items-center justify-end gap-1">
-            <span :class="['inline-flex shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', badgeLightClass]">
-              {{ pLabel }}
-            </span>
-            <span class="text-[11px] text-gray-400 dark:text-dark-500">/ {{ validitySuffix }}</span>
-          </div>
-          <div v-if="plan.original_price" class="mt-0.5 flex items-center justify-end gap-1.5">
-            <span class="text-xs text-gray-400 line-through dark:text-dark-500">{{ planCurrencySymbol }}{{ plan.original_price }}<template v-if="plan.currency"> {{ plan.currency }}</template></span>
-            <span :class="['rounded-full px-1.5 py-0.5 text-[10px] font-bold', discountClass]">{{ discountText }}</span>
-          </div>
+        <h3 :title="plan.name" class="payment-product-card__title mt-2">{{ plan.name }}</h3>
+        <p v-if="plan.description" class="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-dark-400">
+          {{ plan.description }}
+        </p>
+      </div>
+
+      <!-- Price -->
+      <div class="min-w-0">
+        <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span class="payment-product-card__price">{{ displayPrice }}</span>
+          <span class="text-sm text-gray-400 dark:text-dark-500">/ {{ validitySuffix }}</span>
+        </div>
+        <div v-if="displayOriginalPrice" class="mt-1.5 flex flex-wrap items-center gap-2">
+          <span class="payment-product-card__strike">{{ displayOriginalPrice }}</span>
+          <span v-if="discountText" class="payment-product-card__discount">{{ discountText }}</span>
         </div>
       </div>
 
-      <!-- Group quota info (compact) -->
-      <div class="payment-product-card__meta gap-y-1">
-        <div class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.rate') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">{{ rateDisplay }}</span>
-        </div>
-        <div v-if="hasPeakRate" class="col-span-2 flex items-center justify-between gap-2">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.peakRate') }}</span>
-          <span class="text-right font-medium text-amber-700 dark:text-amber-300">{{ peakRateDisplay }}</span>
-        </div>
-        <div v-if="plan.daily_limit_usd != null" class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.dailyLimit') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.daily_limit_usd }}</span>
-        </div>
-        <div v-if="plan.weekly_limit_usd != null" class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.weeklyLimit') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.weekly_limit_usd }}</span>
-        </div>
-        <div v-if="plan.monthly_limit_usd != null" class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.monthlyLimit') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.monthly_limit_usd }}</span>
-        </div>
-        <div v-if="plan.daily_limit_usd == null && plan.weekly_limit_usd == null && plan.monthly_limit_usd == null" class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.quota') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.planCard.unlimited') }}</span>
-        </div>
-        <div v-if="modelScopeLabels.length > 0" class="col-span-2 flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.models') }}</span>
-          <div class="flex flex-wrap justify-end gap-1">
-            <span v-for="scope in modelScopeLabels" :key="scope"
-              class="rounded bg-gray-200/80 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-dark-600 dark:text-gray-300">
-              {{ scope }}
-            </span>
-          </div>
-        </div>
-      </div>
+      <!-- Everything the plan includes: paid entitlements first, then quota facts. -->
+      <ul class="payment-product-card__list">
+        <li
+          v-for="item in includedItems"
+          :key="item.text"
+          :class="['payment-product-card__list-item', item.benefit && 'payment-product-card__list-item--benefit']"
+        >
+          <Icon
+            :name="item.benefit ? 'sparkles' : 'check'"
+            size="xs"
+            :stroke-width="2.2"
+            :class="['mt-[3px] shrink-0', item.benefit ? 'text-primary-500 dark:text-primary-400' : 'text-gray-300 dark:text-dark-600']"
+          />
+          <span class="min-w-0">{{ item.text }}</span>
+        </li>
+      </ul>
 
-      <!-- Features list (compact) -->
-      <div v-if="plan.features.length > 0" class="mb-3 space-y-1">
-        <div v-for="feature in plan.features" :key="feature" class="flex items-start gap-1.5">
-          <svg :class="['mt-0.5 h-3.5 w-3.5 flex-shrink-0', iconClass]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-          </svg>
-          <span class="text-xs text-gray-600 dark:text-gray-300">{{ feature }}</span>
-        </div>
-      </div>
+      <p v-if="plan.entitlements?.message" class="text-xs leading-relaxed text-primary-700/80 dark:text-primary-300/80">
+        {{ plan.entitlements.message }}
+      </p>
 
-      <div v-if="hasEntitlements" class="payment-product-card__benefits space-y-1 border border-emerald-100 bg-emerald-50/60 dark:border-emerald-900/40 dark:bg-emerald-950/20">
-        <p v-if="plan.entitlements?.balance_bonus" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ plan.entitlements.balance_bonus.toFixed(2) }} {{ t('payment.entitlements.balanceBonus') }}</p>
-        <p v-if="plan.entitlements?.reset_card_count" class="font-medium text-emerald-700 dark:text-emerald-300">+ {{ plan.entitlements.reset_card_count }} {{ t('payment.entitlements.resetCards', { days: plan.entitlements.reset_card_expiry_days }) }}</p>
-        <p v-if="plan.entitlements?.concurrency" class="font-medium text-emerald-700 dark:text-emerald-300">{{ t('payment.entitlements.concurrency', { count: plan.entitlements.concurrency }) }}</p>
-        <p v-if="plan.entitlements?.message" class="text-emerald-700/80 dark:text-emerald-300/80">{{ plan.entitlements.message }}</p>
-      </div>
-
-      <div class="flex-1" />
-
-      <!-- Subscribe Button -->
       <button
         type="button"
-        :class="['payment-product-card__action', btnClass]"
-        @click="emit('select', plan)"
+        tabindex="-1"
+        :class="['payment-product-card__action', selected ? btnClass : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-200 dark:hover:bg-dark-600']"
+        @click.stop="emit('select', plan)"
       >
-        {{ isRenewal ? t('payment.renewNow') : t('payment.subscribeNow') }}
+        {{ selected ? t('payment.selectedRechargeTier') : isRenewal ? t('payment.renewNow') : t('payment.subscribeNow') }}
       </button>
     </div>
-  </div>
+  </article>
 </template>
 
 <script setup lang="ts">
@@ -121,20 +83,35 @@ import type { SubscriptionPlan } from '@/types/payment'
 import type { UserSubscription } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { hasPeakRate as groupHasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
-import { planValiditySuffix } from './validity'
-import { currencySymbol } from '@/components/payment/currency'
+import { planValiditySuffix, resetCardValidityLabel } from './validity'
+import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from '@/components/payment/currency'
+import { subscriptionGatewayAmount } from '@/components/payment/pricing'
+import Icon from '@/components/icons/Icon.vue'
 import {
-  platformAccentBarClass,
   platformBadgeLightClass,
-  platformBorderClass,
-  platformTextClass,
-  platformIconClass,
   platformButtonClass,
-  platformDiscountClass,
   platformLabel,
 } from '@/utils/platformColors'
 
-const props = defineProps<{ plan: SubscriptionPlan; activeSubscriptions?: UserSubscription[] }>()
+const props = withDefaults(defineProps<{
+  plan: SubscriptionPlan
+  activeSubscriptions?: UserSubscription[]
+  /** Gateway currency the plan will actually be charged in. */
+  displayCurrency?: string
+  locale?: string
+  /** Subscription CNY conversion rate; only applied for the default currency, as on the server. */
+  usdToCnyRate?: number
+  selected?: boolean
+  /** Set by the parent for the single recommended plan in the visible group. */
+  featured?: boolean
+}>(), {
+  activeSubscriptions: undefined,
+  displayCurrency: DEFAULT_PAYMENT_CURRENCY,
+  locale: undefined,
+  usdToCnyRate: 0,
+  selected: false,
+  featured: false,
+})
 const emit = defineEmits<{ select: [plan: SubscriptionPlan] }>()
 const { t } = useI18n()
 
@@ -143,14 +120,8 @@ const isRenewal = computed(() =>
   props.activeSubscriptions?.some(s => s.group_id === props.plan.group_id && s.status === 'active') ?? false
 )
 
-// Derived color classes from central config
-const accentClass = computed(() => platformAccentBarClass(platform.value))
-const borderClass = computed(() => platformBorderClass(platform.value))
 const badgeLightClass = computed(() => platformBadgeLightClass(platform.value))
-const textClass = computed(() => platformTextClass(platform.value))
-const iconClass = computed(() => platformIconClass(platform.value))
 const btnClass = computed(() => platformButtonClass(platform.value))
-const discountClass = computed(() => platformDiscountClass(platform.value))
 const pLabel = computed(() => platformLabel(platform.value))
 
 const periodDisplay = computed(() => {
@@ -168,24 +139,31 @@ const discountText = computed(() => {
   return pct > 0 ? `-${pct}%` : ''
 })
 
-const hasEntitlements = computed(() => {
-  const entitlements = props.plan.entitlements
-  return Boolean(entitlements && (entitlements.balance_bonus > 0 || entitlements.reset_card_count > 0 || entitlements.concurrency > 0 || entitlements.message))
-})
-
-const rateDisplay = computed(() => {
-  const rate = props.plan.rate_multiplier ?? 1
-  return `×${Number(rate.toPrecision(10))}`
-})
-
 const appStore = useAppStore()
-const planCurrencySymbol = computed(() => currencySymbol(props.plan.currency || 'USD'))
+
+// The list card used to print plan.price behind a hardcoded USD symbol while
+// the confirm step converted the same plan into the gateway currency, so one
+// plan showed two different prices. Both now go through the server's rule.
+function formatGatewayPrice(value: number): string {
+  return formatPaymentAmount(
+    subscriptionGatewayAmount(value, props.usdToCnyRate, props.displayCurrency),
+    props.displayCurrency,
+    props.locale,
+  )
+}
+
+const displayPrice = computed(() => formatGatewayPrice(props.plan.price))
+const displayOriginalPrice = computed(() =>
+  props.plan.original_price ? formatGatewayPrice(props.plan.original_price) : ''
+)
+
+// Bonus balance is platform credit, not a gateway charge.
+function formatCredit(value: number): string {
+  return `${Number.isInteger(value) ? value : value.toFixed(2)} ${t('payment.creditUnit')}`
+}
 
 const hasPeakRate = computed(() => groupHasPeakRate(props.plan))
-
-const peakRateDisplay = computed(() => {
-  return formatPeakRateWindow(props.plan, serverTimezoneLabel(appStore.cachedPublicSettings?.server_utc_offset))
-})
+const validitySuffix = computed(() => planValiditySuffix(props.plan, t))
 
 const MODEL_SCOPE_LABELS: Record<string, string> = {
   claude: 'Claude',
@@ -200,5 +178,64 @@ const modelScopeLabels = computed(() => {
   return scopes.map(s => MODEL_SCOPE_LABELS[s] || s)
 })
 
-const validitySuffix = computed(() => planValiditySuffix(props.plan, t))
+interface IncludedItem {
+  text: string
+  /** Paid entitlements carry the accent; quota facts are plain checks. */
+  benefit: boolean
+}
+
+/**
+ * One list for everything the plan includes, ordered by what a buyer decides
+ * on: the entitlements they are paying extra for, then the quota facts, then
+ * the admin's own feature copy.
+ *
+ * Reset cards spell out both the count and the validity period. That period is
+ * a count plus a unit (day/week/month) on the server, so it goes through
+ * resetCardValidityLabel instead of being assumed to be days.
+ */
+const includedItems = computed<IncludedItem[]>(() => {
+  const items: IncludedItem[] = []
+  const entitlements = props.plan.entitlements
+
+  if (entitlements?.balance_bonus && entitlements.balance_bonus > 0) {
+    items.push({ text: `${t('payment.entitlements.balanceBonus')} +${formatCredit(entitlements.balance_bonus)}`, benefit: true })
+  }
+  if (entitlements?.reset_card_count && entitlements.reset_card_count > 0) {
+    const validity = resetCardValidityLabel(entitlements, t)
+    items.push({
+      text: `${entitlements.reset_card_count} ${t('payment.entitlements.resetCards', { validity })}`,
+      benefit: true,
+    })
+  }
+  if (entitlements?.concurrency && entitlements.concurrency > 0) {
+    items.push({ text: t('payment.entitlements.concurrency', { count: entitlements.concurrency }), benefit: true })
+  }
+
+  items.push({ text: `${t('payment.planCard.rate')} ×${Number((props.plan.rate_multiplier ?? 1).toPrecision(10))}`, benefit: false })
+  if (hasPeakRate.value) {
+    items.push({
+      text: `${t('payment.planCard.peakRate')} ${formatPeakRateWindow(props.plan, serverTimezoneLabel(appStore.cachedPublicSettings?.server_utc_offset))}`,
+      benefit: false,
+    })
+  }
+  if (props.plan.daily_limit_usd != null) {
+    items.push({ text: `${t('payment.planCard.dailyLimit')} $${props.plan.daily_limit_usd}`, benefit: false })
+  }
+  if (props.plan.weekly_limit_usd != null) {
+    items.push({ text: `${t('payment.planCard.weeklyLimit')} $${props.plan.weekly_limit_usd}`, benefit: false })
+  }
+  if (props.plan.monthly_limit_usd != null) {
+    items.push({ text: `${t('payment.planCard.monthlyLimit')} $${props.plan.monthly_limit_usd}`, benefit: false })
+  }
+  if (props.plan.daily_limit_usd == null && props.plan.weekly_limit_usd == null && props.plan.monthly_limit_usd == null) {
+    items.push({ text: `${t('payment.planCard.quota')} ${t('payment.planCard.unlimited')}`, benefit: false })
+  }
+  if (modelScopeLabels.value.length > 0) {
+    items.push({ text: `${t('payment.planCard.models')} ${modelScopeLabels.value.join(' / ')}`, benefit: false })
+  }
+  for (const feature of props.plan.features || []) {
+    items.push({ text: feature, benefit: false })
+  }
+  return items
+})
 </script>

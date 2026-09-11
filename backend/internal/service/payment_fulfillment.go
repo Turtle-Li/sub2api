@@ -761,7 +761,9 @@ func grantPaymentProductEntitlements(ctx context.Context, client *dbent.Client, 
 	}
 	if entitlements.ResetCardCount > 0 {
 		now := time.Now()
-		expiresAt := now.Add(time.Duration(entitlements.ResetCardExpiryDays) * 24 * time.Hour)
+		// The snapshot stores a count plus a unit; resolve it here so a plan
+		// configured in weeks or months grants the period the buyer was shown.
+		expiresAt := now.Add(time.Duration(entitlements.ResetCardValidityDays()) * 24 * time.Hour)
 		rows, err := client.QueryContext(ctx, `
 			INSERT INTO subscription_reset_grants (
 				subscription_id, user_id, group_id, quantity, used_count,

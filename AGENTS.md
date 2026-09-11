@@ -1,5 +1,15 @@
 # Sub2API project operations
 
+## Payment catalog and reset-card purchases
+
+- Read `docs/operations/PAYMENT_CATALOG_RELEASE_20260911.md` for the owner-approved
+  Plus/5X Pro products, integer recharge bonuses, reset-card wallet purchases,
+  and the September 11–12 customer-checkout release. Its explicit enablement
+  replaces the older test-only checkout restriction below after release gates.
+- Recharge stays fixed to six catalog amounts; do not impose its 599 ceiling
+  on subscription method limits. Preserve purchase idempotency and financial
+  records; group multipliers remain owner-managed.
+
 ## Order operations and invoices
 
 - For order display, purchase snapshots and manual invoice requests, read

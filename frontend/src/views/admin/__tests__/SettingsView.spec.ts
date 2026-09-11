@@ -1149,6 +1149,27 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(payload).not.toHaveProperty("payment_visible_method_wxpay_enabled");
   });
 
+  it("preserves unedited recharge presets when saving unrelated settings", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, payment_recharge_options: [] });
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings.mock.calls[0][0]).not.toHaveProperty("payment_recharge_options");
+  });
+
+  it("submits explicitly edited recharge presets", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    const editor = wrapper.findAll("textarea").find(el => el.attributes("placeholder")?.startsWith('[{"amount":20'))!;
+    await editor.setValue('[{"amount":49,"enabled":true}]');
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls[0][0].payment_recharge_options).toEqual([{ amount: 49, enabled: true }]);
+  });
+
   it("submits the admin recharge affiliate rebate setting", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

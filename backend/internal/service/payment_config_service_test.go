@@ -237,6 +237,62 @@ func TestParsePaymentConfig(t *testing.T) {
 	})
 }
 
+func TestPaymentBannerValidationAndRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	banner := PaymentBanner{
+		Enabled:     true,
+		Title:       "  Spring offer  ",
+		Description: "  Extra balance for new users  ",
+		LinkURL:     "/announcements/spring",
+		ButtonText:  "  View now  ",
+	}
+	encoded, err := encodePaymentBanner(banner)
+	if err != nil {
+		t.Fatalf("encodePaymentBanner returned error: %v", err)
+	}
+	parsed := parsePaymentBanner(encoded)
+	if parsed == nil {
+		t.Fatal("expected encoded banner to parse")
+	}
+	if parsed.Title != "Spring offer" || parsed.Description != "Extra balance for new users" || parsed.ButtonText != "View now" {
+		t.Fatalf("unexpected normalized banner: %+v", parsed)
+	}
+	if parsed.LinkURL != "/announcements/spring" || !parsed.Enabled {
+		t.Fatalf("unexpected banner destination/state: %+v", parsed)
+	}
+
+	if _, err := normalizePaymentBanner(PaymentBanner{Enabled: true, Title: "Missing link"}); err == nil {
+		t.Fatal("expected enabled banner without a link to be rejected")
+	}
+	if _, err := normalizePaymentBanner(PaymentBanner{Enabled: true, Title: "Unsafe", LinkURL: "javascript:alert(1)"}); err == nil {
+		t.Fatal("expected unsafe banner link to be rejected")
+	}
+	if got := parsePaymentBanner(`{"enabled":true,"title":"Broken","link_url":"javascript:alert(1)"}`); got != nil {
+		t.Fatalf("expected invalid stored banner to be ignored, got %+v", got)
+	}
+
+	for _, test := range []struct {
+		name     string
+		value    string
+		allowImg bool
+	}{
+		{name: "relative backslash escape", value: `/\\attacker.example`},
+		{name: "credentialed absolute URL", value: `https://user:pass@example.com/activity`},
+		{name: "inline svg", value: `data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=`, allowImg: true},
+		{name: "empty data image", value: `data:image/png;base64,`, allowImg: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validatePaymentBannerURL(test.value, test.allowImg); err == nil {
+				t.Fatalf("validatePaymentBannerURL(%q) unexpectedly succeeded", test.value)
+			}
+		})
+	}
+	if err := validatePaymentBannerURL(`data:image/png;base64,QUJD`, true); err != nil {
+		t.Fatalf("valid raster data image rejected: %v", err)
+	}
+}
+
 func TestGetBasePaymentType(t *testing.T) {
 	t.Parallel()
 

@@ -2,11 +2,17 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
+	"mime"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
@@ -33,6 +39,7 @@ const (
 	SettingProductNameSuffix             = "PRODUCT_NAME_SUFFIX"
 	SettingHelpImageURL                  = "PAYMENT_HELP_IMAGE_URL"
 	SettingHelpText                      = "PAYMENT_HELP_TEXT"
+	SettingPaymentBanner                 = "PAYMENT_BANNER"
 	SettingCancelRateLimitOn             = "CANCEL_RATE_LIMIT_ENABLED"
 	SettingCancelRateLimitMax            = "CANCEL_RATE_LIMIT_MAX"
 	SettingCancelWindowSize              = "CANCEL_RATE_LIMIT_WINDOW"
@@ -42,6 +49,28 @@ const (
 	SettingAlipayMobilePrecreateDeepLink = "ALIPAY_MOBILE_PRECREATE_DEEP_LINK"
 	SettingRechargeOptions               = "PAYMENT_RECHARGE_OPTIONS"
 )
+
+const (
+	paymentBannerMaxTitleLength       = 120
+	paymentBannerMaxDescriptionLength = 240
+	paymentBannerMaxButtonLength      = 40
+	paymentBannerMaxURLLength         = 4096
+	paymentBannerMaxImageDataURLSize  = 512 * 1024
+)
+
+var paymentBannerBase64PayloadPattern = regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`)
+
+// PaymentBanner is the intentionally small set of presentation controls
+// exposed for the payment page. The visual treatment stays in the frontend;
+// admins only control the content, destination, and whether it is visible.
+type PaymentBanner struct {
+	Enabled     bool   `json:"enabled"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	ImageURL    string `json:"image_url,omitempty"`
+	LinkURL     string `json:"link_url,omitempty"`
+	ButtonText  string `json:"button_text,omitempty"`
+}
 
 // Default values for payment configuration settings.
 const (
@@ -61,14 +90,15 @@ type PaymentConfig struct {
 	BalanceDisabled           bool     `json:"balance_disabled"`
 	BalanceRechargeMultiplier float64  `json:"balance_recharge_multiplier"`
 	// SubscriptionUSDToCNYRate 为 0 时订阅换算关闭（兼容存量行为）。
-	SubscriptionUSDToCNYRate float64 `json:"subscription_usd_to_cny_rate"`
-	RechargeFeeRate          float64 `json:"recharge_fee_rate"`
-	LoadBalanceStrategy      string  `json:"load_balance_strategy"`
-	ProductNamePrefix        string  `json:"product_name_prefix"`
-	ProductNameSuffix        string  `json:"product_name_suffix"`
-	HelpImageURL             string  `json:"help_image_url"`
-	HelpText                 string  `json:"help_text"`
-	StripePublishableKey     string  `json:"stripe_publishable_key,omitempty"`
+	SubscriptionUSDToCNYRate float64        `json:"subscription_usd_to_cny_rate"`
+	RechargeFeeRate          float64        `json:"recharge_fee_rate"`
+	LoadBalanceStrategy      string         `json:"load_balance_strategy"`
+	ProductNamePrefix        string         `json:"product_name_prefix"`
+	ProductNameSuffix        string         `json:"product_name_suffix"`
+	HelpImageURL             string         `json:"help_image_url"`
+	HelpText                 string         `json:"help_text"`
+	Banner                   *PaymentBanner `json:"banner,omitempty"`
+	StripePublishableKey     string         `json:"stripe_publishable_key,omitempty"`
 
 	// Cancel rate limit settings
 	CancelRateLimitEnabled bool   `json:"cancel_rate_limit_enabled"`
@@ -82,6 +112,10 @@ type PaymentConfig struct {
 	// Use Alipay face-to-face precreate and an app deep link on mobile clients.
 	AlipayMobilePrecreateDeepLink bool             `json:"alipay_mobile_precreate_deep_link"`
 	RechargeOptions               []RechargeOption `json:"recharge_options"`
+	// RechargeOptionsInvalid marks a stored preset list we could not fully
+	// parse. Order creation refuses balance top-ups while this is set rather
+	// than falling back to free amounts with no entitlements.
+	RechargeOptionsInvalid bool `json:"recharge_options_invalid"`
 	// UnifiedPayment* are a read-only projection of the runtime/Vault-backed
 	// adapter. Secrets and Vault contents are never returned to the admin API.
 	UnifiedPaymentEnabled bool     `json:"unified_payment_enabled,omitempty"`
@@ -97,22 +131,23 @@ type UnifiedPaymentCapability interface {
 
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
 type UpdatePaymentConfigRequest struct {
-	Enabled                   *bool    `json:"enabled"`
-	MinAmount                 *float64 `json:"min_amount"`
-	MaxAmount                 *float64 `json:"max_amount"`
-	DailyLimit                *float64 `json:"daily_limit"`
-	OrderTimeoutMin           *int     `json:"order_timeout_minutes"`
-	MaxPendingOrders          *int     `json:"max_pending_orders"`
-	EnabledTypes              []string `json:"enabled_payment_types"`
-	BalanceDisabled           *bool    `json:"balance_disabled"`
-	BalanceRechargeMultiplier *float64 `json:"balance_recharge_multiplier"`
-	SubscriptionUSDToCNYRate  *float64 `json:"subscription_usd_to_cny_rate"`
-	RechargeFeeRate           *float64 `json:"recharge_fee_rate"`
-	LoadBalanceStrategy       *string  `json:"load_balance_strategy"`
-	ProductNamePrefix         *string  `json:"product_name_prefix"`
-	ProductNameSuffix         *string  `json:"product_name_suffix"`
-	HelpImageURL              *string  `json:"help_image_url"`
-	HelpText                  *string  `json:"help_text"`
+	Enabled                   *bool          `json:"enabled"`
+	MinAmount                 *float64       `json:"min_amount"`
+	MaxAmount                 *float64       `json:"max_amount"`
+	DailyLimit                *float64       `json:"daily_limit"`
+	OrderTimeoutMin           *int           `json:"order_timeout_minutes"`
+	MaxPendingOrders          *int           `json:"max_pending_orders"`
+	EnabledTypes              []string       `json:"enabled_payment_types"`
+	BalanceDisabled           *bool          `json:"balance_disabled"`
+	BalanceRechargeMultiplier *float64       `json:"balance_recharge_multiplier"`
+	SubscriptionUSDToCNYRate  *float64       `json:"subscription_usd_to_cny_rate"`
+	RechargeFeeRate           *float64       `json:"recharge_fee_rate"`
+	LoadBalanceStrategy       *string        `json:"load_balance_strategy"`
+	ProductNamePrefix         *string        `json:"product_name_prefix"`
+	ProductNameSuffix         *string        `json:"product_name_suffix"`
+	HelpImageURL              *string        `json:"help_image_url"`
+	HelpText                  *string        `json:"help_text"`
+	Banner                    *PaymentBanner `json:"banner"`
 
 	// Cancel rate limit settings
 	CancelRateLimitEnabled *bool   `json:"cancel_rate_limit_enabled"`
@@ -244,7 +279,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
 		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingLoadBalanceStrategy,
 		SettingProductNamePrefix, SettingProductNameSuffix,
-		SettingHelpImageURL, SettingHelpText,
+		SettingHelpImageURL, SettingHelpText, SettingPaymentBanner,
 		SettingCancelRateLimitOn, SettingCancelRateLimitMax,
 		SettingCancelWindowSize, SettingCancelWindowUnit, SettingCancelWindowMode,
 		SettingAlipayForceQRCode, SettingAlipayMobilePrecreateDeepLink,
@@ -283,6 +318,7 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		ProductNameSuffix:         vals[SettingProductNameSuffix],
 		HelpImageURL:              vals[SettingHelpImageURL],
 		HelpText:                  vals[SettingHelpText],
+		Banner:                    parsePaymentBanner(vals[SettingPaymentBanner]),
 
 		CancelRateLimitEnabled: vals[SettingCancelRateLimitOn] == "true",
 		CancelRateLimitMax:     pcParseInt(vals[SettingCancelRateLimitMax], 10),
@@ -292,7 +328,15 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 
 		AlipayForceQRCode:             vals[SettingAlipayForceQRCode] == "true",
 		AlipayMobilePrecreateDeepLink: vals[SettingAlipayMobilePrecreateDeepLink] == "true",
-		RechargeOptions:               normalizeRechargeOptions(vals[SettingRechargeOptions]),
+	}
+	rechargeOptions, rechargeOptionsIntact := normalizeRechargeOptions(vals[SettingRechargeOptions])
+	cfg.RechargeOptions = rechargeOptions
+	cfg.RechargeOptionsInvalid = !rechargeOptionsIntact
+	if !rechargeOptionsIntact {
+		slog.Error("payment recharge options setting could not be fully parsed; balance top-ups are blocked until it is fixed",
+			"setting", SettingRechargeOptions,
+			"parsed_options", len(rechargeOptions),
+		)
 	}
 	cfg.AlipayMobilePrecreateDeepLink = pcEnvBoolOverride(
 		SettingAlipayMobilePrecreateDeepLink,
@@ -324,6 +368,170 @@ func pcEnvBoolOverride(key string, fallback bool) bool {
 		return fallback
 	}
 	return value
+}
+
+func parsePaymentBanner(raw string) *PaymentBanner {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var banner PaymentBanner
+	if err := json.Unmarshal([]byte(raw), &banner); err != nil {
+		slog.Warn("payment banner setting is not valid JSON; ignoring it", "setting", SettingPaymentBanner, "error", err)
+		return nil
+	}
+	normalized, err := normalizePaymentBanner(banner)
+	if err != nil {
+		slog.Warn("payment banner setting is invalid; ignoring it", "setting", SettingPaymentBanner, "error", err)
+		return nil
+	}
+	if paymentBannerEmpty(normalized) {
+		return nil
+	}
+	return &normalized
+}
+
+func encodePaymentBanner(banner PaymentBanner) (string, error) {
+	normalized, err := normalizePaymentBanner(banner)
+	if err != nil {
+		return "", err
+	}
+	if paymentBannerEmpty(normalized) {
+		return "", nil
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("encode payment banner: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func normalizePaymentBanner(input PaymentBanner) (PaymentBanner, error) {
+	banner := input
+	banner.Title = strings.TrimSpace(banner.Title)
+	banner.Description = strings.TrimSpace(banner.Description)
+	banner.ImageURL = strings.TrimSpace(banner.ImageURL)
+	banner.LinkURL = strings.TrimSpace(banner.LinkURL)
+	banner.ButtonText = strings.TrimSpace(banner.ButtonText)
+
+	if len([]rune(banner.Title)) > paymentBannerMaxTitleLength {
+		return PaymentBanner{}, fmt.Errorf("banner title must be at most %d characters", paymentBannerMaxTitleLength)
+	}
+	if len([]rune(banner.Description)) > paymentBannerMaxDescriptionLength {
+		return PaymentBanner{}, fmt.Errorf("banner description must be at most %d characters", paymentBannerMaxDescriptionLength)
+	}
+	if len([]rune(banner.ButtonText)) > paymentBannerMaxButtonLength {
+		return PaymentBanner{}, fmt.Errorf("banner button text must be at most %d characters", paymentBannerMaxButtonLength)
+	}
+	if len(banner.LinkURL) > paymentBannerMaxURLLength {
+		return PaymentBanner{}, fmt.Errorf("banner link URL is too long")
+	}
+	if len(banner.ImageURL) > paymentBannerMaxURLLength && !strings.HasPrefix(strings.ToLower(banner.ImageURL), "data:image/") {
+		return PaymentBanner{}, fmt.Errorf("banner image URL is too long")
+	}
+
+	if banner.Title == "" && banner.Description == "" && banner.ImageURL == "" && banner.LinkURL == "" && banner.ButtonText == "" {
+		banner.Enabled = false
+	}
+	if banner.Enabled && banner.Title == "" {
+		return PaymentBanner{}, fmt.Errorf("banner title is required when the banner is enabled")
+	}
+	if banner.Enabled && banner.LinkURL == "" {
+		return PaymentBanner{}, fmt.Errorf("banner link URL is required when the banner is enabled")
+	}
+	if banner.LinkURL != "" {
+		if err := validatePaymentBannerURL(banner.LinkURL, false); err != nil {
+			return PaymentBanner{}, fmt.Errorf("banner link URL: %w", err)
+		}
+	}
+	if banner.ImageURL != "" {
+		if err := validatePaymentBannerURL(banner.ImageURL, true); err != nil {
+			return PaymentBanner{}, fmt.Errorf("banner image URL: %w", err)
+		}
+	}
+	return banner, nil
+}
+
+func paymentBannerEmpty(banner PaymentBanner) bool {
+	return !banner.Enabled && banner.Title == "" && banner.Description == "" && banner.ImageURL == "" && banner.LinkURL == "" && banner.ButtonText == ""
+}
+
+func validatePaymentBannerURL(value string, allowDataImage bool) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.IndexFunc(trimmed, func(r rune) bool {
+		return r == '\\' || unicode.IsControl(r) || unicode.IsSpace(r)
+	}) >= 0 {
+		return fmt.Errorf("must not contain whitespace, control characters, or backslashes")
+	}
+	if strings.HasPrefix(trimmed, "/") {
+		if strings.HasPrefix(trimmed, "//") {
+			return fmt.Errorf("site-relative paths must not start with //")
+		}
+		parsed, err := url.Parse(trimmed)
+		if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.Opaque != "" {
+			return fmt.Errorf("must be a valid site-relative path")
+		}
+		return nil
+	}
+	if allowDataImage && strings.HasPrefix(strings.ToLower(trimmed), "data:") {
+		if len(trimmed) > paymentBannerMaxImageDataURLSize {
+			return fmt.Errorf("data image must be at most %d bytes", paymentBannerMaxImageDataURLSize)
+		}
+		if !validPaymentBannerDataImageURL(trimmed) {
+			return fmt.Errorf("must be a non-empty base64 raster image data URL")
+		}
+		return nil
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("must be an absolute http(s) URL or a site-relative path")
+	}
+	protocol := strings.ToLower(parsed.Scheme)
+	if protocol != "http" && protocol != "https" {
+		return fmt.Errorf("must use http or https")
+	}
+	if parsed.User != nil || parsed.Hostname() == "" {
+		return fmt.Errorf("must not include credentials and must include a host")
+	}
+	return nil
+}
+
+// validPaymentBannerDataImageURL accepts data URLs emitted by the existing
+// image uploader while excluding SVG/XML payloads. Inline SVG is executable
+// markup in some embedding contexts; a payment promotion only needs raster
+// artwork, so this boundary keeps an admin content field from becoming an
+// HTML execution surface.
+func validPaymentBannerDataImageURL(value string) bool {
+	if !strings.HasPrefix(strings.ToLower(value), "data:") {
+		return false
+	}
+	headerAndPayload := value[len("data:"):]
+	header, payload, ok := strings.Cut(headerAndPayload, ",")
+	if !ok || payload == "" {
+		return false
+	}
+	parts := strings.Split(header, ";")
+	if len(parts) < 2 || !strings.EqualFold(strings.TrimSpace(parts[len(parts)-1]), "base64") {
+		return false
+	}
+	for _, part := range parts[1 : len(parts)-1] {
+		if strings.EqualFold(strings.TrimSpace(part), "base64") {
+			return false
+		}
+	}
+	mediaType, _, err := mime.ParseMediaType(strings.Join(parts[:len(parts)-1], ";"))
+	if err != nil {
+		return false
+	}
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if !strings.HasPrefix(mediaType, "image/") || strings.Contains(mediaType, "svg") || strings.HasSuffix(mediaType, "+xml") {
+		return false
+	}
+	return paymentBannerBase64PayloadPattern.MatchString(payload)
 }
 
 // getStripePublishableKey finds the publishable key from the first enabled Stripe provider instance.
@@ -420,6 +628,13 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	}
 	if req.HelpText != nil {
 		m[SettingHelpText] = derefStr(req.HelpText)
+	}
+	if req.Banner != nil {
+		encoded, err := encodePaymentBanner(*req.Banner)
+		if err != nil {
+			return infraerrors.BadRequest("INVALID_PAYMENT_BANNER", err.Error())
+		}
+		m[SettingPaymentBanner] = encoded
 	}
 	if req.CancelRateLimitEnabled != nil {
 		m[SettingCancelRateLimitOn] = formatBoolOrEmpty(req.CancelRateLimitEnabled)

@@ -44,7 +44,18 @@ export interface PaymentConfig {
   enabled_payment_types: PaymentType[]
   help_image_url: string
   help_text: string
+  banner?: PaymentBanner | null
   stripe_publishable_key: string
+}
+
+/** Small, fixed presentation surface for the payment page promotion banner. */
+export interface PaymentBanner {
+  enabled: boolean
+  title?: string
+  description?: string
+  image_url?: string
+  link_url?: string
+  button_text?: string
 }
 
 export interface MethodLimit {
@@ -78,8 +89,18 @@ export interface CheckoutInfoResponse {
   subscription_usd_to_cny_rate: number
   recharge_fee_rate: number
   recharge_options: RechargeOption[]
+  /**
+   * "fixed" = the server accepts only the tiers in recharge_options.
+   * "custom" = any amount inside global_min/global_max is accepted.
+   * Never infer this from an empty tier list: the list is also empty when every
+   * configured tier fell outside the visible payment method limits, and in that
+   * case the server still rejects everything that is not a configured tier.
+   * Absent on older servers, which is why the union includes undefined.
+   */
+  recharge_mode?: 'fixed' | 'custom'
   help_text: string
   help_image_url: string
+  banner?: PaymentBanner | null
   stripe_publishable_key: string
   /** When true, Alipay payments on mobile always show the QR code instead of redirecting */
   alipay_force_qrcode?: boolean
@@ -244,13 +265,24 @@ export interface SubscriptionPlan {
   period_label?: string
 }
 
+export type ResetCardExpiryUnit = 'day' | 'week' | 'month'
+
 export interface PlanEntitlements {
   balance_bonus: number
   reset_card_count: number
+  /**
+   * A count in reset_card_expiry_unit, not necessarily days — the name is kept
+   * for plans stored before units existed, which were all in days. Mirrors the
+   * plan's own validity_days/validity_unit pair.
+   */
   reset_card_expiry_days: number
+  /** Absent on plans saved before units existed, where it means days. */
+  reset_card_expiry_unit?: ResetCardExpiryUnit
   /** Minimum user concurrency target; 0 means unchanged. */
   concurrency: number
   message?: string
+  /** Admin-selected presentation highlight; does not affect fulfillment. */
+  recommended?: boolean
 }
 
 export interface RechargeOption {
@@ -267,6 +299,8 @@ export interface RechargeOption {
   estimated_rate_multiplier?: number
   /** Display-only approximate token quantity for this tier. */
   estimated_tokens?: number
+  /** Admin-selected presentation highlight; does not affect pricing. */
+  recommended?: boolean
   sort_order: number
   enabled: boolean
 }
