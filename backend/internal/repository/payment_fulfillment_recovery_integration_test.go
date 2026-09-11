@@ -573,7 +573,10 @@ func TestPaymentFulfillmentRecoveryPostgresRefundFenceClaimBoundary(t *testing.T
 		current, err := fixture.client.PaymentOrder.Get(ctx, order.ID)
 		require.NoError(t, err)
 		require.Equal(t, service.OrderStatusPaid, current.Status)
-		require.True(t, current.UpdatedAt.Equal(originalUpdatedAt))
+		// PostgreSQL stores TIMESTAMPTZ at microsecond precision. Ent returns the
+		// caller's full-precision value from Create, so normalize both sides before
+		// asserting that the fenced recovery path did not mutate the row.
+		require.Equal(t, originalUpdatedAt.UTC().Truncate(time.Microsecond), current.UpdatedAt.UTC().Truncate(time.Microsecond))
 		require.Nil(t, current.CompletedAt)
 		currentUser, err := fixture.client.User.Get(ctx, user.ID)
 		require.NoError(t, err)
