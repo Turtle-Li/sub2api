@@ -13,7 +13,7 @@ Application candidate: `c6e125abb9ec1dddd223a1b470e01d1d64ce8ec9`, based on fork
 
 ## Review and execution gates still open
 
-Claude completed two review rounds. The subscription-key fallback conversion defect was fixed; recharge multiplier and preset bonus handling are explicit in SQL; the runbook requires platform-quota dirty snapshots to be flushed before conversion. User-approved rough analytics remain outside wallet reconciliation evidence. The final frozen-code review encountered upstream HTTP 503 (no available accounts); no final approval has been received.
+Claude completed two review rounds. The subscription-key fallback conversion defect was fixed; recharge multiplier and preset bonus handling are explicit in SQL; the runbook requires platform-quota dirty snapshots to be flushed before conversion. User-approved rough analytics remain outside wallet reconciliation evidence. The final frozen-code review exhausted its retries and terminated with upstream HTTP 503 (no available accounts); no final approval has been received. The CAO status was corroborated against the actual terminal error, not treated as a successful completed review.
 
 The owner has confirmed **existing wallet balances ×6.75 into CNY**. Future recharge retail policy remains pending: a ¥100 payment can grant ¥675 credits to preserve old recharge purchasing power, or ¥100 credits for nominal CNY retail. The migration refuses an unspecified factor. If preserving old retail purchasing power, update any preset descriptions embedding old bonus amounts consistently with their converted numeric bonus.
 
