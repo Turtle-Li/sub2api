@@ -197,3 +197,21 @@ describe("SubscriptionPlanCard", () => {
     expect(featured.find(".payment-product-card__ribbon").exists()).toBe(true);
   });
 });
+
+ describe("live catalog quota presentation", () => {
+  it("omits disabled zero quotas and shows positive limits as credits", () => {
+    const text = mountPlanCard("openai", { daily_limit_usd: 0, weekly_limit_usd: 110, monthly_limit_usd: 440 }).text();
+    expect(text).not.toContain("payment.planCard.dailyLimit");
+    expect(text).toContain("110 payment.creditUnit");
+    expect(text).toContain("440 payment.creditUnit");
+    expect(text).not.toContain("$110");
+  });
+  it("shows unlimited for zero or missing limits", () => {
+    expect(mountPlanCard("openai", { daily_limit_usd: 0, weekly_limit_usd: 0 }).text()).toContain("payment.planCard.unlimited");
+  });
+  it("uses a recommendation without claiming measured popularity", () => {
+    const text = mountPlanCard("openai", {}, { featured: true }).text();
+    expect(text).toContain("payment.recommended");
+    expect(text).not.toContain("payment.mostPopular");
+  });
+});

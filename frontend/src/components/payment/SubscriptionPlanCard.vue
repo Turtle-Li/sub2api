@@ -15,7 +15,7 @@
   >
     <span v-if="featured" class="payment-product-card__ribbon">
       <Icon name="sparkles" size="xs" :stroke-width="2" />
-      {{ t(plan.entitlements?.recommended ? 'payment.recommended' : 'payment.mostPopular') }}
+      {{ t('payment.recommended') }}
     </span>
 
     <div class="payment-product-card__body">
@@ -218,16 +218,16 @@ const includedItems = computed<IncludedItem[]>(() => {
       benefit: false,
     })
   }
-  if (props.plan.daily_limit_usd != null) {
-    items.push({ text: `${t('payment.planCard.dailyLimit')} $${props.plan.daily_limit_usd}`, benefit: false })
+  if ((props.plan.daily_limit_usd ?? 0) > 0) {
+    items.push({ text: `${t('payment.planCard.dailyLimit')} ${formatCredit(props.plan.daily_limit_usd!)}`, benefit: false })
   }
-  if (props.plan.weekly_limit_usd != null) {
-    items.push({ text: `${t('payment.planCard.weeklyLimit')} $${props.plan.weekly_limit_usd}`, benefit: false })
+  if ((props.plan.weekly_limit_usd ?? 0) > 0) {
+    items.push({ text: `${t('payment.planCard.weeklyLimit')} ${formatCredit(props.plan.weekly_limit_usd!)}`, benefit: false })
   }
-  if (props.plan.monthly_limit_usd != null) {
-    items.push({ text: `${t('payment.planCard.monthlyLimit')} $${props.plan.monthly_limit_usd}`, benefit: false })
+  if ((props.plan.monthly_limit_usd ?? 0) > 0) {
+    items.push({ text: `${t('payment.planCard.monthlyLimit')} ${formatCredit(props.plan.monthly_limit_usd!)}`, benefit: false })
   }
-  if (props.plan.daily_limit_usd == null && props.plan.weekly_limit_usd == null && props.plan.monthly_limit_usd == null) {
+  if ([props.plan.daily_limit_usd, props.plan.weekly_limit_usd, props.plan.monthly_limit_usd].every(limit => (limit ?? 0) <= 0)) {
     items.push({ text: `${t('payment.planCard.quota')} ${t('payment.planCard.unlimited')}`, benefit: false })
   }
   if (modelScopeLabels.value.length > 0) {
