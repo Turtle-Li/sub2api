@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  convertPriceCurrency,
   convertUSDPriceForSettlement,
   formatSettlementAmount,
   pricingCurrencyFromPublicSettings,
@@ -22,5 +23,19 @@ describe('settlementCurrency', () => {
       pricing_currency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 },
     })
     expect(convertUSDPriceForSettlement(10, settings)).toBe(67.5)
+  })
+
+  it('converts model cards from their authored currency and treats a missing currency as USD', () => {
+    const cny = pricingCurrencyFromPublicSettings({
+      pricing_currency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 },
+    })
+    const usd = pricingCurrencyFromPublicSettings({
+      pricing_currency: { settlement_currency: 'USD', usd_to_cny_rate: 6.75 },
+    })
+
+    expect(convertPriceCurrency(10, 'USD', cny)).toBe(67.5)
+    expect(convertPriceCurrency(67.5, 'CNY', cny)).toBe(67.5)
+    expect(convertPriceCurrency(67.5, 'CNY', usd)).toBe(10)
+    expect(convertPriceCurrency(10, undefined, cny)).toBe(67.5)
   })
 })

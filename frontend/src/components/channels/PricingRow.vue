@@ -9,7 +9,7 @@
 import { computed } from 'vue'
 import { formatScaled } from '@/utils/pricing'
 import {
-  convertUSDPriceForSettlement,
+  convertPriceCurrency,
   pricingCurrencyFromPublicSettings,
   settlementCurrencySymbol
 } from '@/utils/settlementCurrency'
@@ -21,20 +21,23 @@ const props = withDefaults(
     value: number | null
     unit: string
     scale: number
+    sourceCurrency?: 'USD' | 'CNY'
   }>(),
-  { value: null }
+  { value: null, sourceCurrency: 'USD' }
 )
 
 const appStore = useAppStore()
 const pricingCurrency = computed(() => pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings))
 
 const display = computed(() => {
-  const converted = convertUSDPriceForSettlement(props.value, pricingCurrency.value)
+  const converted = convertPriceCurrency(props.value, props.sourceCurrency, pricingCurrency.value)
   if (converted == null) return '-'
   const formatted = formatScaled(converted, props.scale).replace(
     /^\$/,
     settlementCurrencySymbol(pricingCurrency.value.settlementCurrency)
   )
-  return `${formatted} ${props.unit}`
+  const symbol = settlementCurrencySymbol(pricingCurrency.value.settlementCurrency)
+  const unit = symbol === '$' ? props.unit : props.unit.replace(/\$/g, symbol)
+  return `${formatted} ${unit}`
 })
 </script>

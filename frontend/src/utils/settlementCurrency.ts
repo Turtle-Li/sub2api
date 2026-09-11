@@ -50,14 +50,26 @@ export function formatSettlementAmount(
 }
 
 /**
- * Resolver/catalog price payloads remain USD arithmetic values. This converts
- * only those display-only prices into the public settlement unit; it must not
- * be used for balances, quotas, payments, or historical usage values.
+ * Converts a display-only model price from its card currency to the public
+ * settlement currency. Missing or invalid legacy card currencies are USD.
+ * It must not be used for balances, quotas, payments, or historical usage
+ * values.
  */
+export function convertPriceCurrency(
+  value: number | null | undefined,
+  sourceCurrency: unknown,
+  settings: PricingCurrencyDisplaySettings,
+): number | null | undefined {
+  if (value == null || !Number.isFinite(value)) return value
+  const source = normalizeSettlementCurrency(sourceCurrency)
+  if (source === settings.settlementCurrency) return value
+  return source === 'USD' ? value * settings.usdToCNYRate : value / settings.usdToCNYRate
+}
+
+/** Resolver/catalog prices without a card currency are legacy USD values. */
 export function convertUSDPriceForSettlement(
   value: number | null | undefined,
   settings: PricingCurrencyDisplaySettings,
 ): number | null | undefined {
-  if (value == null || !Number.isFinite(value)) return value
-  return settings.settlementCurrency === 'CNY' ? value * settings.usdToCNYRate : value
+  return convertPriceCurrency(value, 'USD', settings)
 }

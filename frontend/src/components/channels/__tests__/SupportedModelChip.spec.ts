@@ -15,7 +15,10 @@ vi.mock('vue-i18n', async () => {
 })
 
 describe('SupportedModelChip', () => {
-  function mountChip(pricingCurrency?: PublicSettings['pricing_currency']) {
+  function mountChip(
+    pricingCurrency?: PublicSettings['pricing_currency'],
+    sourceCurrency?: 'USD' | 'CNY'
+  ) {
     const pinia = createPinia()
     const appStore = useAppStore(pinia)
     appStore.cachedPublicSettings = pricingCurrency
@@ -30,6 +33,7 @@ describe('SupportedModelChip', () => {
           platform: '',
           pricing: {
             billing_mode: 'token',
+            currency: sourceCurrency,
             input_price: 10e-6,
             output_price: 50e-6,
             cache_write_price: null,
@@ -76,6 +80,21 @@ describe('SupportedModelChip', () => {
     expect(document.body.textContent).toContain('¥67.5')
     expect(document.body.textContent).toContain('¥135 / ¥506.25')
     expect(document.body.textContent).not.toContain('$20 / $75')
+    wrapper.unmount()
+  })
+
+  it('keeps a CNY-authored card in CNY without applying the USD rate again', async () => {
+    const wrapper = mountChip(
+      { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 },
+      'CNY'
+    )
+
+    await wrapper.find('[tabindex="0"]').trigger('mouseenter')
+    await nextTick()
+
+    expect(document.body.textContent).toContain('¥10')
+    expect(document.body.textContent).toContain('¥20 / ¥75')
+    expect(document.body.textContent).not.toContain('¥67.5')
     wrapper.unmount()
   })
 })
