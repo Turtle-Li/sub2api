@@ -32,7 +32,9 @@ func TestGetPricingCurrencySettingsDefaultsAndCaches(t *testing.T) {
 }
 
 func TestUpdatePricingCurrencySettingsRoundTripAndValidation(t *testing.T) {
-	repo := &panelRateLimitSettingRepo{}
+	repo := &panelRateLimitSettingRepo{values: map[string]string{
+		SettingKeyPricingCurrencySettings: `{"settlement_currency":"CNY","usd_to_cny_rate":6.75}`,
+	}}
 	svc := newPricingCurrencySettingsTestService(repo)
 
 	invalid := []PricingCurrencySettings{
@@ -47,7 +49,7 @@ func TestUpdatePricingCurrencySettingsRoundTripAndValidation(t *testing.T) {
 
 	want := PricingCurrencySettings{
 		SettlementCurrency: PricingSettlementCurrencyCNY,
-		USDToCNYRate:       6.75,
+		USDToCNYRate:       7.18,
 	}
 	require.NoError(t, svc.UpdatePricingCurrencySettings(context.Background(), want))
 
@@ -58,7 +60,24 @@ func TestUpdatePricingCurrencySettingsRoundTripAndValidation(t *testing.T) {
 	repo.mu.Lock()
 	stored := repo.values[SettingKeyPricingCurrencySettings]
 	repo.mu.Unlock()
-	require.JSONEq(t, `{"settlement_currency":"CNY","usd_to_cny_rate":6.75}`, stored)
+	require.JSONEq(t, `{"settlement_currency":"CNY","usd_to_cny_rate":7.18}`, stored)
+}
+
+func TestUpdatePricingCurrencySettingsRejectsCurrencyTransition(t *testing.T) {
+	repo := &panelRateLimitSettingRepo{}
+	svc := newPricingCurrencySettingsTestService(repo)
+
+	err := svc.UpdatePricingCurrencySettings(context.Background(), PricingCurrencySettings{
+		SettlementCurrency: PricingSettlementCurrencyCNY,
+		USDToCNYRate:       6.75,
+	})
+	require.ErrorIs(t, err, ErrPricingCurrencyMigrationRequired)
+	require.ErrorContains(t, err, "wallet migration transaction")
+
+	repo.mu.Lock()
+	_, exists := repo.values[SettingKeyPricingCurrencySettings]
+	repo.mu.Unlock()
+	require.False(t, exists, "a rejected currency transition must not write settings")
 }
 
 func TestGetPricingCurrencySettingsPreservesLastGoodConfigOnDBFailure(t *testing.T) {

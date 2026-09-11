@@ -259,15 +259,16 @@ func (h *SettingHandler) GetPricingCurrencySettings(c *gin.Context) {
 	})
 }
 
-// UpdatePricingCurrencySettingsRequest updates the settlement unit. Switching
-// units only records the reviewed migration configuration; it never changes
-// balances or historical records through this endpoint.
+// UpdatePricingCurrencySettingsRequest updates the approved migration rate for
+// the active settlement unit. Settlement currency transitions require the
+// wallet migration transaction and are rejected by this endpoint.
 type UpdatePricingCurrencySettingsRequest struct {
 	SettlementCurrency string  `json:"settlement_currency"`
 	USDToCNYRate       float64 `json:"usd_to_cny_rate"`
 }
 
-// UpdatePricingCurrencySettings updates the current wallet settlement unit.
+// UpdatePricingCurrencySettings updates settings for the current wallet
+// settlement unit.
 // PUT /api/v1/admin/settings/pricing-currency
 func (h *SettingHandler) UpdatePricingCurrencySettings(c *gin.Context) {
 	var req UpdatePricingCurrencySettingsRequest

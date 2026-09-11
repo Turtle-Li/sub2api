@@ -19,6 +19,11 @@ const (
 	pricingCurrencySettingsSFKey     = "pricing_currency_settings"
 )
 
+// ErrPricingCurrencyMigrationRequired prevents an ordinary settings write from
+// relabeling wallet balances. Settlement currency changes are only valid as
+// part of the owner-controlled wallet and quota migration transaction.
+var ErrPricingCurrencyMigrationRequired = errors.New("settlement currency changes require the wallet migration transaction")
+
 // PricingCurrencySettings defines the internal settlement unit used for new
 // wallet and usage values. USDToCNYRate records the approved one-time
 // migration rate; it is not a live exchange-rate feed.
@@ -131,10 +136,11 @@ func (s *SettingService) GetPricingCurrencySettings(ctx context.Context) (Pricin
 	return PricingCurrencySettings{}, fmt.Errorf("load pricing currency settings: unavailable result")
 }
 
-// UpdatePricingCurrencySettings validates and stores the settlement settings.
-// It deliberately does not mutate user balances, quotas, payment orders, or
-// historical usage. The surrounding owner-approved migration is responsible
-// for those data changes.
+// UpdatePricingCurrencySettings validates and stores settings for the current
+// settlement currency. It deliberately refuses a currency transition: changing
+// USD/CNY outside the wallet migration transaction would relabel existing
+// balances without converting them. The transaction that migrates balances and
+// quotas writes the new currency configuration itself.
 func (s *SettingService) UpdatePricingCurrencySettings(ctx context.Context, settings PricingCurrencySettings) error {
 	if s == nil || s.settingRepo == nil {
 		return fmt.Errorf("pricing currency settings service is unavailable")
@@ -142,6 +148,18 @@ func (s *SettingService) UpdatePricingCurrencySettings(ctx context.Context, sett
 	normalized, err := normalizePricingCurrencySettings(settings)
 	if err != nil {
 		return err
+	}
+	current, err := s.readPricingCurrencySettings(ctx)
+	if err != nil {
+		return fmt.Errorf("read current pricing currency settings: %w", err)
+	}
+	if normalized.SettlementCurrency != current.SettlementCurrency {
+		return fmt.Errorf(
+			"%w: %s to %s",
+			ErrPricingCurrencyMigrationRequired,
+			current.SettlementCurrency,
+			normalized.SettlementCurrency,
+		)
 	}
 	data, err := json.Marshal(normalized)
 	if err != nil {
