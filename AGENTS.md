@@ -2,6 +2,13 @@
 
 ## Payment catalog and reset-card purchases
 
+- Read `docs/operations/PAYMENT_CARD_ELIGIBILITY_20260912.md` for configurable
+  card audiences, net paid recharge prerequisites and monotonic concurrency
+  benefits. Public DTOs must omit private rules; order admission is server-owned.
+
+- Read `docs/operations/PAYMENT_CATALOG_REFINEMENT_20260912.md` for the later
+  GPT-only checkout/reset policy, configurable reset prices and revised bonuses.
+
 - Read `docs/operations/PAYMENT_CATALOG_RELEASE_20260911.md` for the owner-approved
   Plus/5X Pro products, integer recharge bonuses, reset-card wallet purchases,
   and the September 11–12 customer-checkout release. Its explicit enablement

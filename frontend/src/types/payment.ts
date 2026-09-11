@@ -235,6 +235,8 @@ export interface AdminUpdateInvoiceRequest {
 // ==================== Plans & Channels ====================
 
 export interface SubscriptionPlan {
+  eligibility?: PurchaseEligibility
+  reset_card_eligibility?: PurchaseEligibility
   id: number
   group_id: number
   group_platform?: string
@@ -268,6 +270,12 @@ export interface SubscriptionPlan {
 export type ResetCardExpiryUnit = 'day' | 'week' | 'month'
 
 export interface PlanEntitlements {
+  purchase_rules?: PurchaseRules
+  reset_card_purchase_rules?: PurchaseRules
+  reset_card_title?: string
+  reset_card_description?: string
+  /** Optional standalone reset-card price from the active monthly plan, in credits. */
+  reset_card_purchase_price?: number
   balance_bonus: number
   reset_card_count: number
   /**
@@ -285,7 +293,23 @@ export interface PlanEntitlements {
   recommended?: boolean
 }
 
+/** Private admin-only policy. Customer APIs return only evaluated eligibility. */
+export interface PurchaseRules {
+  visible_user_ids?: number[]
+  min_total_recharge?: number
+}
+
+export interface PurchaseEligibility {
+  can_purchase: boolean
+  visible?: boolean
+  required_total_recharge?: number
+  current_total_recharge?: number
+  reason?: string
+}
+
 export interface RechargeOption {
+  purchase_rules?: PurchaseRules
+  eligibility?: PurchaseEligibility
   amount: number
   /** Display-only list price. The UI derives the discount from this and amount. */
   original_price?: number

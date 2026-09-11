@@ -1160,6 +1160,26 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings.mock.calls[0][0]).not.toHaveProperty("payment_recharge_options");
   });
 
+  it("blocks invalid raw purchase rules and saves after correction", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    const editor = wrapper.findAll("textarea").find(el => el.attributes("placeholder")?.startsWith('[{"amount":20'))!;
+    await editor.setValue('[{"amount":599,"enabled":true,"purchase_rules":{"visible_user_ids":[-1]}}]');
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    await editor.setValue('[{"amount":599,"enabled":true,"purchase_rules":{"min_total_recharge":10.001}}]');
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    await editor.setValue('[{"amount":599,"enabled":true,"purchase_rules":{"min_total_recharge":1000,"visible_user_ids":[42]}}]');
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings.mock.calls[0][0].payment_recharge_options[0].purchase_rules).toEqual({ min_total_recharge: 1000, visible_user_ids: [42] });
+  });
+
   it("submits explicitly edited recharge presets", async () => {
     const wrapper = mountView();
     await flushPromises();

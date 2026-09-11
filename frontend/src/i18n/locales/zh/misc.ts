@@ -317,6 +317,25 @@ export default {
 
   // Payment System
   payment: {
+    eligibility: {
+      minimum: '需累计净充值 ¥{required}，当前 ¥{current}',
+      unavailable: '暂不符合购买条件',
+      adminTitle: '可见范围与购买条件',
+      audience: '可见用户 ID',
+      audiencePlaceholder: '例如 12, 35, 68',
+      audienceHint: '留空则所有用户可见；填写后仅这些用户可见并可购买。',
+      minimumLabel: '累计净充值门槛（元）',
+      minimumHint: '0 表示不限。仅计算已到账的人民币余额充值实付，扣除确认退款，不计赠送或订阅付款。未达门槛时卡片置灰并显示条件。',
+      invalidRules: '请填写有效的用户 ID 和非负金额（最多两位小数）。',
+      invalidCatalog: '当前充值配置无法解析，请在高级 JSON 中修正；原配置已保留。',
+      tier: '充值档位 {number}',
+      addTier: '添加充值档位',
+      advancedJson: '高级 JSON 配置',
+      concurrencyHint: '并发填写 0 表示不调整；购买后只提升到目标值，不降低更高的已有并发。',
+      resetContent: '重置卡内容与购买条件',
+      resetContentHint: '使用同组可见月付套餐的配置。名称和说明留空时使用默认内容；重置卡充值门槛单独设置。',
+    },
+
     orderOps: {
       dailyQuota: '每日额度',
       weeklyQuota: '每周额度',
@@ -375,9 +394,10 @@ export default {
     bestValue: '最超值',
     mostPopular: '最受欢迎',
     resetShop: {
-      "title": "订阅重置卡",
-      "hint": "使用余额购买，每张为对应套餐月付价格的三分之一；使用后重置用量，不延长订阅。卡片随当前订阅到期。",
-      "requiresSubscription": "需要先开通有效订阅，才能购买重置卡。",
+      singleCard: '1 张 · 使用后重置用量',
+      "title": "GPT 订阅重置卡",
+      "hint": "适用于有效 GPT 订阅。使用余额购买，重置用量，不延长订阅；卡片随当前订阅到期。",
+      "requiresSubscription": "需要先开通对应的有效 GPT 订阅，才能购买重置卡。",
       "quote": "查看价格",
       "confirm": "为 {name} 购买 1 张重置卡，将扣除 {price} 站内额度。购买后可在“我的订阅”中使用。",
       "buy": "确认扣除余额并购买",
@@ -397,6 +417,7 @@ export default {
     notConfigured: '未配置',
     selectRechargeTier: '选择此档位',
     selectedRechargeTier: '已选择',
+    rechargeBonusShort: '赠',
     rechargeBonus: '档位赠送',
     presetBenefit: '档位权益',
     balanceCredit: '余额到账',
@@ -795,6 +816,8 @@ export default {
       recommended: '推荐套餐',
       recommendedHint: '前台显示统一的推荐样式，其他视觉样式由前台固定控制。',
       balanceBonus: '赠送余额',
+      resetCardPurchasePrice: '重置卡单独售价（额度）',
+      resetCardPurchasePriceHint: '仅对应月付套餐用于重置卡定价；留空时使用月付价格的三分之一。',
       resetCardCount: '赠送重置次数',
       resetCardExpiryDays: '重置次数有效期',
       resetCardExpiryUnit: '有效期单位',

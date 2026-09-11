@@ -55,10 +55,22 @@
           <p class="text-gray-500 dark:text-gray-400">{{ t('payment.notAvailable') }}</p>
         </div>
 
+        <div v-if="activeTab === 'subscription' && enabledMethods.length > 0 && subscriptionPeriodOptions.length > 1" class="mb-5 flex justify-start">
+          <div class="payment-segment max-w-full overflow-x-auto">
+            <button v-for="period in subscriptionPeriodOptions" :key="period.key" type="button"
+              :aria-pressed="selectedSubscriptionPeriod === period.key"
+              :class="['payment-segment__item shrink-0', selectedSubscriptionPeriod === period.key && 'payment-segment__item--active']"
+              @click="selectSubscriptionPeriod(period.key)">
+              {{ period.label }}
+              <span v-if="period.discountText" class="ml-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">{{ period.discountText }}</span>
+            </button>
+          </div>
+        </div>
+
         <!-- Products on the left, the running total on the right. Below `lg`
              the rail detaches to the bottom of the viewport, so the extra
              padding keeps the last card clear of it. -->
-        <div v-else class="grid grid-cols-1 items-start gap-6 pb-40 lg:grid-cols-[minmax(0,1fr)_320px] lg:pb-0">
+        <div v-if="enabledMethods.length > 0" class="grid grid-cols-1 items-start gap-6 pb-40 lg:grid-cols-[minmax(0,1fr)_320px] lg:pb-0">
           <div class="min-w-0">
             <!-- Top-up -->
             <template v-if="activeTab === 'recharge'">
@@ -86,17 +98,6 @@
                 <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noPlans') }}</p>
               </div>
               <template v-else>
-                <div v-if="subscriptionPeriodOptions.length > 1" class="mb-5 flex justify-start">
-                  <div class="payment-segment max-w-full overflow-x-auto">
-                    <button v-for="period in subscriptionPeriodOptions" :key="period.key" type="button"
-                      :aria-pressed="selectedSubscriptionPeriod === period.key"
-                      :class="['payment-segment__item shrink-0', selectedSubscriptionPeriod === period.key && 'payment-segment__item--active']"
-                      @click="selectedSubscriptionPeriod = period.key">
-                      {{ period.label }}
-                      <span v-if="period.discountText" class="ml-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">{{ period.discountText }}</span>
-                    </button>
-                  </div>
-                </div>
                 <div :class="planGridClass">
                   <SubscriptionPlanCard v-for="plan in visibleSubscriptionPlans" :key="plan.id"
                     :plan="plan"
@@ -110,7 +111,7 @@
                 </div>
               </template>
 
-              <ResetCardShop :subscriptions="activeSubscriptions" @purchased="subscriptionStore.fetchActiveSubscriptions(true)" />
+              <ResetCardShop :subscriptions="activeSubscriptions" :plans="checkout.plans" @purchased="subscriptionStore.fetchActiveSubscriptions(true)" />
 
               <div v-if="activeSubscriptions.length > 0" class="mt-8">
                 <p class="payment-product-card__eyebrow mb-2">{{ t('payment.activeSubscription') }}</p>
@@ -531,6 +532,14 @@ const visibleSubscriptionPlans = computed(() => {
   return checkout.value.plans.filter(plan => subscriptionPeriodOf(plan) === selectedSubscriptionPeriod.value)
 })
 
+function selectSubscriptionPeriod(period: SubscriptionPeriod) {
+  selectedSubscriptionPeriod.value = period
+  if (!selectedPlan.value || visibleSubscriptionPlans.value.some(plan => plan.id === selectedPlan.value?.id)) return
+  const matching = visibleSubscriptionPlans.value.filter(plan => plan.group_id === selectedPlan.value?.group_id)
+  selectedPlan.value = matching.length === 1 && matching[0].eligibility?.can_purchase !== false ? matching[0] : null
+  errorMessage.value = ''
+}
+
 watch(subscriptionPeriodOptions, (options) => {
   if (!options.some(option => option.key === selectedSubscriptionPeriod.value)) {
     selectedSubscriptionPeriod.value = options[0]?.key || ''
@@ -714,6 +723,7 @@ const amountError = computed(() => {
 const canSubmit = computed(() =>
   validAmount.value > 0
     && selectedRechargeOption.value !== null
+    && selectedRechargeOption.value.eligibility?.can_purchase !== false
     && amountFitsMethod(validAmount.value, selectedMethod.value)
     && selectedLimit.value?.available !== false
 )
@@ -757,6 +767,7 @@ const subMethodOptions = computed<PaymentMethodOption[]>(() => {
 
 const canSubmitSubscription = computed(() =>
   selectedPlan.value !== null
+    && selectedPlan.value.eligibility?.can_purchase !== false
     && amountFitsMethod(subTotalAmount.value, selectedMethod.value)
     && selectedLimit.value?.available !== false
 )
@@ -807,6 +818,8 @@ const railCreditLine = computed(() => {
 // The rail is where a blocked purchase has to explain itself; the alternative
 // is a disabled button with no reason attached.
 const railNotice = computed(() => {
+  const eligibility = isRecharge.value ? selectedRechargeOption.value?.eligibility : selectedPlan.value?.eligibility
+  if (eligibility?.can_purchase === false) return t('payment.eligibility.minimum', { required: eligibility.required_total_recharge || 0, current: eligibility.current_total_recharge || 0 })
   if (isRecharge.value) {
     if (validAmount.value <= 0) return t('payment.selectTierFirst')
     return amountError.value
@@ -858,6 +871,8 @@ const planValiditySuffix = computed(() => {
 
 
 function selectPlan(plan: SubscriptionPlan) {
+  if (plan.eligibility?.can_purchase === false) return
+  selectedSubscriptionPeriod.value = subscriptionPeriodOf(plan)
   selectedPlan.value = plan
   errorMessage.value = ''
 }
@@ -865,8 +880,7 @@ function selectPlan(plan: SubscriptionPlan) {
 function selectPlanFromModal(plan: SubscriptionPlan) {
   showRenewalModal.value = false
   renewGroupId.value = null
-  selectedPlan.value = plan
-  errorMessage.value = ''
+  selectPlan(plan)
 }
 
 function closeRenewalModal() {
@@ -1221,7 +1235,7 @@ onMounted(async () => {
     const res = await paymentAPI.getCheckoutInfo()
     checkout.value = res.data
     if (amount.value == null && rechargePresetAmounts.value.length > 0) {
-      amount.value = rechargePresetAmounts.value[0]
+      amount.value = rechargePresetOptions.value.find(option => option.eligibility?.can_purchase !== false)?.amount ?? null
     }
     if (enabledMethods.value.length) {
       const order: readonly string[] = METHOD_ORDER
@@ -1277,12 +1291,12 @@ onMounted(async () => {
         ? checkout.value.plans.find(plan => plan.id === requestedPlanID)
         : undefined
       if (requestedPlan) {
-        selectedPlan.value = requestedPlan
+        selectPlan(requestedPlan)
       } else if (route.query.group) {
         const groupId = Number(route.query.group)
         const groupPlans = checkout.value.plans.filter(p => p.group_id === groupId)
         if (groupPlans.length === 1) {
-          selectedPlan.value = groupPlans[0]
+          selectPlan(groupPlans[0])
         } else if (groupPlans.length > 1) {
           renewGroupId.value = groupId
           showRenewalModal.value = true

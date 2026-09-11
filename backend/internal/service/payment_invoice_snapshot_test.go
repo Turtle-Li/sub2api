@@ -13,7 +13,12 @@ func TestInvoiceProductSnapshotWorksWithoutOptionalGroupRepository(t *testing.T)
 	client := newPaymentConfigServiceTestClient(t)
 	user, err := client.User.Create().SetEmail("snapshot-invoice@example.test").SetPasswordHash("hash").SetUsername("snapshot-buyer").Save(ctx)
 	require.NoError(t, err)
-	group, err := client.Group.Create().SetName("Original group").SetPlatform("openai").Save(ctx)
+	group, err := client.Group.Create().
+		SetName("Original group").
+		SetPlatform("openai").
+		SetStatus(StatusActive).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		Save(ctx)
 	require.NoError(t, err)
 	plan, err := client.SubscriptionPlan.Create().SetGroupID(group.ID).SetName("Purchased plan").SetPrice(50).SetCurrency("USD").SetDescription("Original description").SetFeatures(`["Original feature"]`).SetValidityDays(30).SetValidityUnit("day").Save(ctx)
 	require.NoError(t, err)

@@ -8143,7 +8143,11 @@
                 </div>
                 <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-800">
                   <label class="input-label">{{ t("admin.settings.payment.rechargeOptions") }}</label>
+                  <RechargeOptionsEditor v-model="form.payment_recharge_options_json" @validity="rechargeRulesValid = $event" />
+                  <details class="mt-3">
+                    <summary class="cursor-pointer text-xs text-gray-500">{{ t('payment.eligibility.advancedJson') }}</summary>
                   <textarea v-model="form.payment_recharge_options_json" rows="6" class="input font-mono text-xs" placeholder='[{"amount":20,"original_price":20,"label":"体验档","description":"适合轻量试用","balance_bonus":0,"concurrency":2,"estimated_rate_multiplier":1,"estimated_tokens":2000000,"sort_order":10,"enabled":true}]'></textarea>
+                  </details>
                   <p class="mt-1 text-xs text-gray-400">{{ t("admin.settings.payment.rechargeOptionsHint") }}</p>
                   <div class="mt-3 max-w-sm">
                     <label class="input-label">{{ t("admin.settings.payment.recommendedRecharge") }}</label>
@@ -8937,6 +8941,7 @@
 </template>
 
 <script setup lang="ts">
+import RechargeOptionsEditor from '@/components/payment/RechargeOptionsEditor.vue';
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api";
@@ -11252,7 +11257,10 @@ function findDuplicateDefaultSubscription(
   });
 }
 
+const rechargeRulesValid = ref(true);
+
 async function saveSettings() {
+  if (!rechargeRulesValid.value) { appStore.showError(t('payment.eligibility.invalidRules')); return; }
   saving.value = true;
   try {
     let normalizedRechargeOptions: Array<Record<string, unknown>>;

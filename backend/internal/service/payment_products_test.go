@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -35,6 +36,55 @@ func TestNormalizePlanEntitlementsRejectsInvalidResetCardExpiry(t *testing.T) {
 		"reset_card_expiry_days": 0,
 	})
 	require.ErrorContains(t, err, "reset_card_expiry_days")
+}
+
+func TestNormalizePlanEntitlementsResetCardPurchasePrice(t *testing.T) {
+	normalized, entitlements, err := normalizePlanEntitlements(map[string]any{
+		"reset_card_purchase_price": 180.00,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, entitlements.ResetCardPurchasePrice)
+	require.Equal(t, 180.00, *entitlements.ResetCardPurchasePrice)
+	require.Equal(t, 180.00, normalized["reset_card_purchase_price"])
+
+	_, withoutOverride, err := normalizePlanEntitlements(map[string]any{})
+	require.NoError(t, err)
+	require.Nil(t, withoutOverride.ResetCardPurchasePrice)
+
+	for _, price := range []float64{0, -1, 180.001, math.Inf(1), math.NaN()} {
+		_, _, err := normalizePlanEntitlements(map[string]any{
+			"reset_card_purchase_price": price,
+		})
+		require.Error(t, err, "price %v must fail closed", price)
+	}
+}
+
+func TestNormalizePlanEntitlementsPreservesPurchaseRulesAndResetMetadata(t *testing.T) {
+	minimum := 120.50
+	normalized, entitlements, err := normalizePlanEntitlements(map[string]any{
+		"purchase_rules": map[string]any{
+			"visible_user_ids":   []int64{7, 7, 9},
+			"min_total_recharge": minimum,
+		},
+		"reset_card_purchase_rules": map[string]any{
+			"visible_user_ids": []int64{9},
+		},
+		"reset_card_title":       "  Buy another reset  ",
+		"reset_card_description": "  Keep your card available  ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{7, 9}, entitlements.PurchaseRules.VisibleUserIDs)
+	require.Equal(t, minimum, *entitlements.PurchaseRules.MinTotalRecharge)
+	require.Equal(t, []int64{9}, entitlements.ResetCardPurchaseRules.VisibleUserIDs)
+	require.Equal(t, "Buy another reset", entitlements.ResetCardTitle)
+	require.Equal(t, "Keep your card available", entitlements.ResetCardDescription)
+	require.Contains(t, normalized, "purchase_rules")
+	require.Contains(t, normalized, "reset_card_purchase_rules")
+
+	_, _, err = normalizePlanEntitlements(map[string]any{"reset_card_title": strings.Repeat("好", maxResetCardTitleLength+1)})
+	require.Error(t, err)
+	_, _, err = normalizePlanEntitlements(map[string]any{"reset_card_description": strings.Repeat("好", maxResetCardDescriptionLength+1)})
+	require.Error(t, err)
 }
 
 func TestPaymentEntitlementsRequireManualRefundForEveryNonReversibleBenefit(t *testing.T) {
@@ -133,6 +183,49 @@ func TestNormalizeRechargeOptionsFiltersAndSorts(t *testing.T) {
 	legacy, legacyIntact := normalizeRechargeOptions(`[{"amount": 25}]`)
 	require.True(t, legacyIntact)
 	require.Len(t, legacy, 1)
+}
+
+func TestRechargeOptionPurchaseRulesRoundTripAndPublicEligibilityIsNotStored(t *testing.T) {
+	minimum := 99.0
+	encoded, err := encodeRechargeOptions([]RechargeOption{{
+		Amount:        99,
+		Enabled:       true,
+		PurchaseRules: &PurchaseRules{VisibleUserIDs: []int64{7, 7, 9}, MinTotalRecharge: &minimum},
+		Eligibility:   &PurchaseEligibility{CanPurchase: false, Reason: "minimum_recharge"},
+	}})
+	require.NoError(t, err)
+	require.NotContains(t, encoded, "eligibility")
+
+	options, intact := normalizeRechargeOptions(encoded)
+	require.True(t, intact)
+	require.Len(t, options, 1)
+	require.Equal(t, []int64{7, 9}, options[0].PurchaseRules.VisibleUserIDs)
+	require.Equal(t, minimum, *options[0].PurchaseRules.MinTotalRecharge)
+	require.Nil(t, options[0].Eligibility)
+}
+
+func TestPaymentProductSnapshotOmitsPrivatePurchaseRules(t *testing.T) {
+	plan := &dbent.SubscriptionPlan{
+		ID:      11,
+		GroupID: 22,
+		Name:    "private-rule-plan",
+		Price:   120,
+		Entitlements: map[string]any{
+			"balance_bonus": 1.0,
+			"purchase_rules": map[string]any{
+				"visible_user_ids": []int64{7, 9},
+			},
+			"reset_card_purchase_rules": map[string]any{
+				"visible_user_ids": []int64{11},
+			},
+		},
+	}
+	snapshot := buildPaymentProductSnapshot(plan, 120, 120, 30)
+	entitlements, ok := snapshot["entitlements"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, 1.0, entitlements["balance_bonus"])
+	require.NotContains(t, entitlements, "purchase_rules")
+	require.NotContains(t, entitlements, "reset_card_purchase_rules")
 }
 
 // A corrupted setting must be reported, not silently normalized to "no tiers
