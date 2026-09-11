@@ -38,11 +38,16 @@
           </span>
         </div>
 
-        <!-- Billing mode badge -->
+        <!-- Billing mode and authored-unit badges -->
         <span
           class="flex-shrink-0 rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
         >
           {{ billingModeLabel }}
+        </span>
+        <span
+          class="flex-shrink-0 rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-dark-200"
+        >
+          {{ pricingCurrency }}
         </span>
       </div>
 
@@ -67,7 +72,7 @@
       :class="{ 'collapsible-content--collapsed': collapsed }"
     >
       <div class="collapsible-inner">
-        <!-- Header: Models + Billing Mode -->
+        <!-- Header: Models + billing mode + authored pricing unit -->
         <div class="mt-3 flex items-start gap-2">
           <div class="flex-1">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
@@ -97,14 +102,29 @@
               class="mt-1"
             />
           </div>
+          <div class="w-28">
+            <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
+              {{ t('admin.channels.form.currency') }}
+            </label>
+            <Select
+              data-testid="pricing-entry-currency"
+              :modelValue="pricingCurrency"
+              @update:modelValue="emit('update', { ...entry, currency: normalizePricingCurrency($event) })"
+              :options="currencyOptions"
+              class="mt-1"
+            />
+          </div>
         </div>
+        <p class="mt-2 text-xs text-amber-700 dark:text-amber-300">
+          {{ t('admin.channels.form.currencyUnitHint') }}
+        </p>
 
         <!-- Token mode -->
         <div v-if="entry.billing_mode === 'token'">
           <!-- Default prices (fallback when no interval matches) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
             {{ t('admin.channels.form.defaultPrices') }}
-            <span class="ml-1 font-normal text-gray-400">$/MTok</span>
+            <span class="ml-1 font-normal text-gray-400">{{ pricingCurrency }}/MTok</span>
           </label>
           <div class="pricing-default-grid mt-1 grid gap-2">
             <div>
@@ -179,6 +199,7 @@
                 :key="idx"
                 :interval="iv"
                 :mode="entry.billing_mode"
+                :currency="pricingCurrency"
                 :enable-multipliers="enableTierMultipliers"
                 @update="updateInterval(idx, $event)"
                 @remove="removeInterval(idx)"
@@ -198,7 +219,7 @@
           <!-- Default per-request price -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
             {{ t('admin.channels.form.defaultPerRequestPrice') }}
-            <span class="ml-1 font-normal text-gray-400">$</span>
+            <span class="ml-1 font-normal text-gray-400">{{ pricingCurrency }}</span>
           </label>
           <div class="mt-1 w-48">
             <input :value="entry.per_request_price" @input="emitField('per_request_price', ($event.target as HTMLInputElement).value)"
@@ -218,8 +239,9 @@
             <IntervalRow
               v-for="(iv, idx) in entry.intervals"
               :key="idx"
-              :interval="iv"
-              :mode="entry.billing_mode"
+                :interval="iv"
+                :mode="entry.billing_mode"
+                :currency="pricingCurrency"
               @update="updateInterval(idx, $event)"
               @remove="removeInterval(idx)"
             />
@@ -234,7 +256,7 @@
           <!-- Default image price (per-request, same as per_request mode) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
             {{ entry.billing_mode === 'video' ? t('admin.channels.form.defaultVideoPrice') : t('admin.channels.form.defaultImagePrice') }}
-            <span class="ml-1 font-normal text-gray-400">$</span>
+            <span class="ml-1 font-normal text-gray-400">{{ pricingCurrency }}</span>
           </label>
           <div class="mt-1 w-48">
             <input :value="entry.per_request_price" @input="emitField('per_request_price', ($event.target as HTMLInputElement).value)"
@@ -254,8 +276,9 @@
             <IntervalRow
               v-for="(iv, idx) in entry.intervals"
               :key="idx"
-              :interval="iv"
-              :mode="entry.billing_mode"
+                :interval="iv"
+                :mode="entry.billing_mode"
+                :currency="pricingCurrency"
               @update="updateInterval(idx, $event)"
               @remove="removeInterval(idx)"
             />
@@ -275,7 +298,7 @@ import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'
 import TimePricingSection from './TimePricingSection.vue'
 import type { PricingFormEntry, IntervalFormEntry } from './types'
-import { perTokenToMTok, getPlatformTagClass } from './types'
+import { normalizePricingCurrency, perTokenToMTok, getPlatformTagClass } from './types'
 import type { BillingMode } from '@/api/admin/channels'
 import channelsAPI from '@/api/admin/channels'
 
@@ -307,6 +330,13 @@ const billingModeOptions = computed(() => [
   { value: 'image', label: t('admin.channels.billingMode.image') },
   { value: 'video', label: t('admin.channels.billingMode.video') }
 ])
+
+const currencyOptions = [
+  { value: 'USD', label: 'USD ($)' },
+  { value: 'CNY', label: 'CNY (¥)' },
+]
+
+const pricingCurrency = computed(() => normalizePricingCurrency(props.entry.currency))
 
 const billingModeLabel = computed(() => {
   const opt = billingModeOptions.value.find(o => o.value === props.entry.billing_mode)
@@ -373,6 +403,10 @@ async function onModelsUpdate(newModels: string[]) {
   // 只在新增模型且当前无价格时自动填充
   const addedModels = newModels.filter(m => !oldModels.includes(m))
   if (addedModels.length === 0) return
+
+  // The catalog endpoint is USD-only. Do not silently put its USD numbers
+  // into an entry authored in CNY.
+  if (pricingCurrency.value !== 'USD') return
 
   // 检查是否所有价格字段都为空
   const e = props.entry

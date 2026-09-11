@@ -2,6 +2,15 @@ import type { BillingMode, ChannelTimePricing, PricingInterval } from '@/api/adm
 
 type TranslateFn = (key: string, params?: Record<string, unknown>) => string
 
+export type PricingCurrency = 'USD' | 'CNY'
+
+/** Legacy pricing rows did not carry a unit and are USD by definition. */
+export function normalizePricingCurrency(value: unknown): PricingCurrency {
+  return typeof value === 'string' && value.trim().toUpperCase() === 'CNY'
+    ? 'CNY'
+    : 'USD'
+}
+
 export interface IntervalFormEntry {
   min_tokens: number
   max_tokens: number | null
@@ -22,6 +31,7 @@ export interface IntervalFormEntry {
 export interface PricingFormEntry {
   models: string[]
   billing_mode: BillingMode
+  currency?: PricingCurrency
   input_price: number | string | null
   output_price: number | string | null
   cache_write_price: number | string | null

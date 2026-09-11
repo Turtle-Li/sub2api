@@ -936,7 +936,7 @@
           </div>
           <div class="grid grid-cols-3 gap-3">
             <div>
-              <label class="input-label">1K ($)</label>
+              <label class="input-label">1K (USD source)</label>
               <input
                 v-model.number="createForm.image_price_1k"
                 type="number"
@@ -947,7 +947,7 @@
               />
             </div>
             <div>
-              <label class="input-label">2K ($)</label>
+              <label class="input-label">2K (USD source)</label>
               <input
                 v-model.number="createForm.image_price_2k"
                 type="number"
@@ -958,7 +958,7 @@
               />
             </div>
             <div>
-              <label class="input-label">4K ($)</label>
+              <label class="input-label">4K (USD source)</label>
               <input
                 v-model.number="createForm.image_price_4k"
                 type="number"
@@ -1080,7 +1080,7 @@
           </div>
           <div class="grid grid-cols-3 gap-3">
             <div>
-              <label class="input-label">480p ($/s)</label>
+              <label class="input-label">480p (USD/s source)</label>
               <input
                 v-model.number="createForm.video_price_480p"
                 type="number"
@@ -1091,7 +1091,7 @@
               />
             </div>
             <div>
-              <label class="input-label">720p ($/s)</label>
+              <label class="input-label">720p (USD/s source)</label>
               <input
                 v-model.number="createForm.video_price_720p"
                 type="number"
@@ -1102,7 +1102,7 @@
               />
             </div>
             <div>
-              <label class="input-label">1080p ($/s)</label>
+              <label class="input-label">1080p (USD/s source)</label>
               <input
                 v-model.number="createForm.video_price_1080p"
                 type="number"
@@ -1138,7 +1138,7 @@
                   class="block"
                 >
                   <span class="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                    {{ resolution.label }} ($/s)
+                    {{ resolution.label }} (USD/s source)
                   </span>
                   <input
                     v-model.number="createForm.video_model_prices[family.key][resolution.key]"
@@ -2576,7 +2576,7 @@
           </div>
           <div class="grid grid-cols-3 gap-3">
             <div>
-              <label class="input-label">1K ($)</label>
+              <label class="input-label">1K (USD source)</label>
               <input
                 v-model.number="editForm.image_price_1k"
                 type="number"
@@ -2587,7 +2587,7 @@
               />
             </div>
             <div>
-              <label class="input-label">2K ($)</label>
+              <label class="input-label">2K (USD source)</label>
               <input
                 v-model.number="editForm.image_price_2k"
                 type="number"
@@ -2598,7 +2598,7 @@
               />
             </div>
             <div>
-              <label class="input-label">4K ($)</label>
+              <label class="input-label">4K (USD source)</label>
               <input
                 v-model.number="editForm.image_price_4k"
                 type="number"
@@ -2720,7 +2720,7 @@
           </div>
           <div class="grid grid-cols-3 gap-3">
             <div>
-              <label class="input-label">480p ($/s)</label>
+              <label class="input-label">480p (USD/s source)</label>
               <input
                 v-model.number="editForm.video_price_480p"
                 type="number"
@@ -2731,7 +2731,7 @@
               />
             </div>
             <div>
-              <label class="input-label">720p ($/s)</label>
+              <label class="input-label">720p (USD/s source)</label>
               <input
                 v-model.number="editForm.video_price_720p"
                 type="number"
@@ -2742,7 +2742,7 @@
               />
             </div>
             <div>
-              <label class="input-label">1080p ($/s)</label>
+              <label class="input-label">1080p (USD/s source)</label>
               <input
                 v-model.number="editForm.video_price_1080p"
                 type="number"
@@ -2778,7 +2778,7 @@
                   class="block"
                 >
                   <span class="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                    {{ resolution.label }} ($/s)
+                    {{ resolution.label }} (USD/s source)
                   </span>
                   <input
                     v-model.number="editForm.video_model_prices[family.key][resolution.key]"
@@ -4306,6 +4306,7 @@ import {
   createDefaultTimePricingForm,
   formIntervalsToAPI,
   mTokToPerToken,
+  normalizePricingCurrency,
   perTokenToMTok,
   toNullableNumber,
 } from "@/components/admin/channel/types";
@@ -4377,6 +4378,7 @@ const supportsLivePlatform = (platform: string): boolean =>
 const emptyGroupPricing = (): PricingFormEntry => ({
   models: [],
   billing_mode: "token",
+  currency: "USD",
   input_price: null,
   output_price: null,
   cache_write_price: null,
@@ -4398,6 +4400,7 @@ const groupPricingFromAPI = (
   (pricing || []).map((entry) => ({
     models: entry.models || [],
     billing_mode: entry.billing_mode || "token",
+    currency: normalizePricingCurrency(entry.currency),
     input_price: perTokenToMTok(entry.input_price),
     output_price: perTokenToMTok(entry.output_price),
     cache_write_price: perTokenToMTok(entry.cache_write_price),
@@ -4420,6 +4423,7 @@ const groupPricingToAPI = (
       platform,
       models: entry.models,
       billing_mode: entry.billing_mode,
+      currency: normalizePricingCurrency(entry.currency),
       input_price: mTokToPerToken(entry.input_price),
       output_price: mTokToPerToken(entry.output_price),
       cache_write_price: mTokToPerToken(entry.cache_write_price),
@@ -5429,7 +5433,7 @@ const formatImagePricePreview = (value: number | string | null | undefined) => {
   if (!Number.isFinite(price) || price < 0) {
     return t("admin.groups.imagePricing.notConfigured");
   }
-  return `$${price.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
+  return `USD $${price.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
 };
 
 const formatVideoPricePreview = (value: number | string | null | undefined) => {
@@ -5440,7 +5444,7 @@ const formatVideoPricePreview = (value: number | string | null | undefined) => {
   if (!Number.isFinite(price) || price < 0) {
     return t("admin.groups.videoPricing.notConfigured");
   }
-  return `$${price.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
+  return `USD $${price.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
 };
 
 const buildImageFinalPricePreview = (form: ImagePricingFormState) => {
@@ -5491,7 +5495,7 @@ const editVideoFinalPricePreview = computed(() =>
   buildVideoFinalPricePreview(editForm),
 );
 
-// Codex 网页搜索单次默认价（与后端 defaultWebSearchPricePerCall 一致，官方 $10/1000 次）
+// Codex 网页搜索单次默认价（USD source，与后端 defaultWebSearchPricePerCall 一致，官方 $10/1000 次）
 const DEFAULT_WEB_SEARCH_PRICE_PER_CALL = 0.01;
 
 const buildWebSearchFinalPricePreview = (form: {

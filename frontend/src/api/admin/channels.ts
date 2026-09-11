@@ -43,6 +43,8 @@ export interface ChannelModelPricing {
   platform: string
   models: string[]
   billing_mode: BillingMode
+  /** Authored pricing unit. Legacy rows omit it and are interpreted as USD. */
+  currency?: string
   input_price: number | null
   output_price: number | null
   cache_write_price: number | null

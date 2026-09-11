@@ -995,7 +995,7 @@ export default {
       },
       imagePricing: {
         title: '图片生成计费',
-        description: '配置图片生成能力和图片基础单价，留空则使用默认价格',
+        description: '配置图片生成能力和 USD 源价格，留空则使用默认价格',
         allowImageGeneration: '允许当前分组生图',
         allowBatchImageGeneration: '允许当前分组批量生图',
         independentMultiplier: '生图倍率独立',
@@ -1012,7 +1012,7 @@ export default {
       videoPricing: {
         title: '视频生成计费',
         description:
-          '配置 Grok 视频生成的每秒单价（USD/秒），留空则使用默认每秒价（grok-imagine-video：480p $0.05/s、720p $0.07/s；video-1.5：480p $0.08/s、720p $0.14/s、1080p $0.25/s）',
+          '配置 Grok 视频生成的 USD 源每秒单价，留空则使用默认每秒价（grok-imagine-video：480p $0.05/s、720p $0.07/s；video-1.5：480p $0.08/s、720p $0.14/s、1080p $0.25/s）',
         modelOverridesTitle: '按模型覆盖视频价格',
         modelOverridesDescription: '已填写的单元格会覆盖该模型族的平面分辨率价格。video-1.5 的 preview 与 legacy 别名共用同一模型族；留空则回退到平面分辨率价格。',
         independentMultiplier: '视频倍率独立',
@@ -1024,8 +1024,8 @@ export default {
       },
       explicitPricing: {
         title: 'Grok 搜索与 Voice 定价',
-        description: '分组级 web_search（每千次）与 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
-        searchPricePer1k: '搜索每千次价格（USD）',
+        description: '分组级 web_search（每千次）与 Voice realtime / TTS / STT 的 USD 源价格。留空表示未配置。',
+        searchPricePer1k: '搜索每千次价格（USD 源）',
         pricePlaceholder: '可选'
       },
       modelPricing: {
@@ -1037,15 +1037,15 @@ export default {
       },
       voicePricing: {
         title: 'Grok Voice 定价',
-        description: '分组级 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
-        audioRealtimePerMin: 'Realtime 每分钟价格（USD）',
-        audioTtsPerMillionChars: 'TTS 每百万字符价格（USD）',
-        audioSttPerHour: 'STT 每小时价格（USD）',
+        description: '分组级 Voice realtime / TTS / STT 的 USD 源价格。留空表示未配置。',
+        audioRealtimePerMin: 'Realtime 每分钟价格（USD 源）',
+        audioTtsPerMillionChars: 'TTS 每百万字符价格（USD 源）',
+        audioSttPerHour: 'STT 每小时价格（USD 源）',
         pricePlaceholder: '可选'
       },
       webSearchPricing: {
         title: 'Codex 网页搜索计费',
-        pricePerCall: '搜索单次价格（USD/次）',
+        pricePerCall: '搜索单次价格（USD 源/次）',
         pricePerCallHint:
           '留空使用默认价 $0.01/次（官方定价 $10/1000 次）；填 0 表示免费。实际扣费会叠加分组费率倍数。',
         finalPricePreview: '应用当前倍率后的单次价格：{price}'
