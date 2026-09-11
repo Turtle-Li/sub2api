@@ -24,7 +24,7 @@
           <th colspan="3" class="pz-bg pt-2 text-center">
             <div class="pz-title border-b pb-2 font-semibold">
               {{ t('modelPlaza.table.paidPrice') }}
-              <span class="pz-unit ml-1 normal-case font-normal">{{ t('modelPlaza.table.unitPerMillion') }}</span>
+              <span class="pz-unit ml-1 normal-case font-normal">{{ currencyUnit(t('modelPlaza.table.unitPerMillion')) }}</span>
             </div>
           </th>
           <th
@@ -33,7 +33,7 @@
           >
             <div class="border-b border-gray-200 pb-2 text-gray-400 dark:border-dark-600 dark:text-dark-500">
               {{ t('modelPlaza.table.officialPrice') }}
-              <span class="ml-1 normal-case font-normal text-gray-400 dark:text-dark-500">{{ t('modelPlaza.table.unitPerMillion') }}</span>
+              <span class="ml-1 normal-case font-normal text-gray-400 dark:text-dark-500">{{ currencyUnit(t('modelPlaza.table.unitPerMillion')) }}</span>
             </div>
           </th>
           <th
@@ -307,6 +307,11 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatScaled, resolveIntervalPrices } from '@/utils/pricing'
+import {
+  convertUSDPriceForSettlement,
+  pricingCurrencyFromPublicSettings,
+  settlementCurrencySymbol
+} from '@/utils/settlementCurrency'
 import { platformAccentColor, platformBadgeLightClass, platformLabel } from '@/utils/platformColors'
 import {
   BILLING_MODE_TOKEN,
@@ -315,6 +320,7 @@ import {
 } from '@/constants/channel'
 import type { PlazaModel, PlazaTimePricingPeriod } from '@/api/modelPlaza'
 import type { UserPricingInterval } from '@/api/channels'
+import { useAppStore } from '@/stores/app'
 
 const props = defineProps<{
   models: PlazaModel[]
@@ -337,6 +343,8 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const appStore = useAppStore()
+const pricingCurrency = computed(() => pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings))
 
 /** 实付分区只从平台拿一个主色,浅底/标题/下划线全部由 scoped CSS 用 color-mix 派生。 */
 const accentStyle = computed(() => ({ '--plaza-accent': platformAccentColor(props.platform ?? '') }))
@@ -405,11 +413,30 @@ function periodRate(period: PlazaTimePricingPeriod): number {
   return Math.round(effectiveRate.value * period.multiplier * 1000) / 1000
 }
 
-/** 实付价 = 渠道单价 × 生效倍率(时段行再乘时段倍率),按 $/1M token 展示。 */
+/** Resolver/catalog USD prices are converted only for settlement-currency display. */
+function displayCatalogUSDPrice(
+  value: number | null | undefined,
+  scale: number,
+  minFractionDigits = 0
+): string {
+  const converted = convertUSDPriceForSettlement(value, pricingCurrency.value)
+  if (converted == null) return '-'
+  return formatScaled(converted, scale, minFractionDigits).replace(
+    /^\$/,
+    settlementCurrencySymbol(pricingCurrency.value.settlementCurrency)
+  )
+}
+
+function currencyUnit(unit: string): string {
+  const symbol = settlementCurrencySymbol(pricingCurrency.value.settlementCurrency)
+  return symbol === '$' ? unit : unit.replace(/\$/g, symbol)
+}
+
+/** 实付价 = 渠道单价 × 生效倍率(时段行再乘时段倍率),按结算币种的每 1M token 展示。 */
 function paidPerMillion(value: number | null | undefined, period: PlazaTimePricingPeriod | null = null): string {
   if (value == null) return '-'
   const rate = period ? periodRate(period) : effectiveRate.value
-  return formatScaled(value * rate, PER_MILLION, MIN_DECIMALS)
+  return displayCatalogUSDPrice(value * rate, PER_MILLION, MIN_DECIMALS)
 }
 
 /** 图片计费模型且分组开启生图独立倍率:实付倍率取独立倍率,与计费口径一致。 */
@@ -425,13 +452,13 @@ function requestRate(m: PlazaModel): number {
 /** 按次 / 按图片单价(乘该行生效倍率,不换算 1M)。 */
 function paidRequestPrice(m: PlazaModel, value: number | null | undefined): string {
   if (value == null) return '-'
-  return formatScaled(value * requestRate(m), 1, MIN_DECIMALS)
+  return displayCatalogUSDPrice(value * requestRate(m), 1, MIN_DECIMALS)
 }
 
 /** 官方参考价不乘倍率。 */
 function official(value: number | null | undefined): string {
   if (value == null) return '-'
-  return formatScaled(value, PER_MILLION, MIN_DECIMALS)
+  return displayCatalogUSDPrice(value, PER_MILLION, MIN_DECIMALS)
 }
 
 /** 非 token 计费的单位后缀:按图片 → “/ 张”,按次 → “/ 次”。 */

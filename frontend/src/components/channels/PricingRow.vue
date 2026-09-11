@@ -8,6 +8,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { formatScaled } from '@/utils/pricing'
+import {
+  convertUSDPriceForSettlement,
+  pricingCurrencyFromPublicSettings,
+  settlementCurrencySymbol
+} from '@/utils/settlementCurrency'
+import { useAppStore } from '@/stores/app'
 
 const props = withDefaults(
   defineProps<{
@@ -19,7 +25,16 @@ const props = withDefaults(
   { value: null }
 )
 
-const display = computed(() =>
-  props.value == null ? '-' : `${formatScaled(props.value, props.scale)} ${props.unit}`
-)
+const appStore = useAppStore()
+const pricingCurrency = computed(() => pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings))
+
+const display = computed(() => {
+  const converted = convertUSDPriceForSettlement(props.value, pricingCurrency.value)
+  if (converted == null) return '-'
+  const formatted = formatScaled(converted, props.scale).replace(
+    /^\$/,
+    settlementCurrencySymbol(pricingCurrency.value.settlementCurrency)
+  )
+  return `${formatted} ${props.unit}`
+})
 </script>

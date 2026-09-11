@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import PlazaModelPricingTable from '../PlazaModelPricingTable.vue'
 import type { PlazaModel } from '@/api/modelPlaza'
+import { useAppStore } from '@/stores/app'
+import type { PublicSettings } from '@/types'
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string) => key === 'modelPlaza.table.unitPerMillion' ? '$ / 1M tokens' : key
     })
   }
 })
@@ -48,10 +51,19 @@ function mountTable(
     imageRateMultiplier?: number | null
     peakWindow?: string
     peakRateMultiplier?: number | null
+    pricingCurrency?: PublicSettings['pricing_currency']
   }
 ) {
+  const pinia = createPinia()
+  const appStore = useAppStore(pinia)
+  const { pricingCurrency, ...tableProps } = extraProps ?? {}
+  appStore.cachedPublicSettings = pricingCurrency
+    ? ({ pricing_currency: pricingCurrency } as PublicSettings)
+    : null
+
   return mount(PlazaModelPricingTable, {
-    props: { models, rateMultiplier, userRateMultiplier: userRateMultiplier ?? null, ...extraProps }
+    props: { models, rateMultiplier, userRateMultiplier: userRateMultiplier ?? null, ...tableProps },
+    global: { plugins: [pinia] }
   })
 }
 
@@ -66,6 +78,20 @@ describe('PlazaModelPricingTable', () => {
     expect(text).toContain('$0.30')
     // 倍率列
     expect(text).toContain('1x')
+  })
+
+  it('将 resolver/catalog 的 USD 价格按公开结算配置换算为 CNY，并替换所有价格符号', () => {
+    const wrapper = mountTable([tokenModel()], 1, null, {
+      pricingCurrency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 }
+    })
+    const text = wrapper.text()
+
+    // 实付和官方参考价均为 resolver/catalog USD 数值，显示时一次性换算。
+    expect(text).toContain('¥20.25')
+    expect(text).toContain('¥101.25')
+    expect(text).toContain('¥25.3125')
+    expect(text).toContain('¥ / 1M tokens')
+    expect(text).not.toContain('$3.00')
   })
 
   it('shows the Max reasoning billing multiplier', () => {
@@ -463,7 +489,8 @@ describe('PlazaModelPricingTable', () => {
         models: [anthropic, openai],
         platform: 'composite',
         rateMultiplier: 1
-      }
+      },
+      global: { plugins: [createPinia()] }
     })
 
     const rows = wrapper.findAll('tbody tr')

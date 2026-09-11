@@ -170,6 +170,11 @@ import { useI18n } from 'vue-i18n'
 import PricingRow from './PricingRow.vue'
 import { formatScaled, resolveIntervalPrices } from '@/utils/pricing'
 import {
+  convertUSDPriceForSettlement,
+  pricingCurrencyFromPublicSettings,
+  settlementCurrencySymbol
+} from '@/utils/settlementCurrency'
+import {
   BILLING_MODE_TOKEN,
   BILLING_MODE_PER_REQUEST,
   BILLING_MODE_IMAGE
@@ -180,6 +185,7 @@ import type { UserPricingInterval, UserSupportedModel, UserSupportedModelPricing
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import type { GroupPlatform } from '@/types'
 import { platformBadgeClass, platformBorderClass, platformBadgeLightClass } from '@/utils/platformColors'
+import { useAppStore } from '@/stores/app'
 
 const props = withDefaults(
   defineProps<{
@@ -205,6 +211,8 @@ const props = withDefaults(
 const effectivePlatform = computed<string>(() => props.model.platform || props.platformHint || '')
 
 const { t } = useI18n()
+const appStore = useAppStore()
+const pricingCurrency = computed(() => pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings))
 
 /** 按 token 定价展示时的换算单位：每百万 token。 */
 const perMillionScale = 1_000_000
@@ -245,13 +253,22 @@ function formatRange(min: number, max: number | null): string {
   return `(${min}, ${maxLabel}]`
 }
 
+function formatCatalogUSDPrice(value: number | null | undefined, scale: number): string {
+  const converted = convertUSDPriceForSettlement(value, pricingCurrency.value)
+  if (converted == null) return '-'
+  return formatScaled(converted, scale).replace(
+    /^\$/,
+    settlementCurrencySymbol(pricingCurrency.value.settlementCurrency)
+  )
+}
+
 function formatInterval(iv: UserPricingInterval, pricing: UserSupportedModelPricing): string {
   if (pricing.billing_mode === BILLING_MODE_PER_REQUEST || pricing.billing_mode === BILLING_MODE_IMAGE) {
-    return formatScaled(iv.per_request_price, 1)
+    return formatCatalogUSDPrice(iv.per_request_price, 1)
   }
   const resolved = resolveIntervalPrices(iv, pricing)
-  const input = formatScaled(resolved.input_price, perMillionScale)
-  const output = formatScaled(resolved.output_price, perMillionScale)
+  const input = formatCatalogUSDPrice(resolved.input_price, perMillionScale)
+  const output = formatCatalogUSDPrice(resolved.output_price, perMillionScale)
   return `${input} / ${output}`
 }
 
