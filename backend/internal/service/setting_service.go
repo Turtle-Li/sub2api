@@ -142,6 +142,12 @@ type SettingService struct {
 	panelRateLimitCache atomic.Value
 	panelRateLimitSF    singleflight.Group
 
+	// pricingCurrencySettingsCache holds the active settlement-currency
+	// configuration. Billing reads it on every request, so it is bounded and
+	// cached independently from the broad system-settings document.
+	pricingCurrencySettingsCache atomic.Value // *cachedPricingCurrencySettings
+	pricingCurrencySettingsSF    singleflight.Group
+
 	// openAIQuotaAutoPauseSettingsCache holds the most recently observed quota auto-pause
 	// settings. GetOpenAIQuotaAutoPauseSettings reads this atomic.Value on the request hot
 	// path without ever blocking on the DB; when the cached entry expires, a background
