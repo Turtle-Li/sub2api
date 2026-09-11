@@ -51,6 +51,11 @@ const (
 // count, so "36 months" is rejected for the same reason "1100 days" is.
 const maxResetCardValidityDays = 3650
 
+// invalidResetCardValidityDays is returned when a raw count cannot be safely
+// converted to days. It is deliberately negative so fulfillment cannot turn a
+// malformed snapshot into an immediately usable card if validation is bypassed.
+const invalidResetCardValidityDays = -1
+
 // normalizeResetCardExpiryUnit accepts singular and plural spellings because
 // the admin form saves plural for plan validity and the database default for
 // that field is singular. Anything unrecognized falls back to days, matching
@@ -72,14 +77,17 @@ func normalizeResetCardExpiryUnit(unit string) string {
 // days a granted reset card stays usable. A month is 30 days, matching
 // psComputeValidityDays so subscription and reset-card periods do not drift.
 func (e PlanEntitlements) ResetCardValidityDays() int {
+	multiplier := 1
 	switch normalizeResetCardExpiryUnit(e.ResetCardExpiryUnit) {
 	case resetCardExpiryUnitWeek:
-		return e.ResetCardExpiryDays * 7
+		multiplier = 7
 	case resetCardExpiryUnitMonth:
-		return e.ResetCardExpiryDays * 30
-	default:
-		return e.ResetCardExpiryDays
+		multiplier = 30
 	}
+	if e.ResetCardExpiryDays < 0 || e.ResetCardExpiryDays > maxResetCardValidityDays/multiplier {
+		return invalidResetCardValidityDays
+	}
+	return e.ResetCardExpiryDays * multiplier
 }
 
 // RechargeOption is a server-configured balance purchase preset.
@@ -214,7 +222,7 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 		}
 		// Bound the resolved duration, not the raw count: 36 months and 1100
 		// days are the same mistake and must fail the same way.
-		if validity := entitlements.ResetCardValidityDays(); validity > maxResetCardValidityDays {
+		if validity := entitlements.ResetCardValidityDays(); validity <= 0 || validity > maxResetCardValidityDays {
 			return nil, PlanEntitlements{}, fmt.Errorf("reset card validity must not exceed %d days", maxResetCardValidityDays)
 		}
 	}

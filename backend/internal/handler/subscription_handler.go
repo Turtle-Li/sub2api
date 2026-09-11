@@ -3,11 +3,13 @@ package handler
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 
 	"github.com/gin-gonic/gin"
 )
@@ -219,4 +221,74 @@ func (h *SubscriptionHandler) UseResetCard(c *gin.Context) {
 		}
 		return dto.UserSubscriptionFromService(subscription), nil
 	})
+}
+
+// GetResetCardQuote returns the current server-derived price for exactly one
+// reset card on the caller's active subscription.
+// GET /api/v1/subscriptions/:id/reset-card-quote
+func (h *SubscriptionHandler) GetResetCardQuote(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
+	subscriptionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || subscriptionID <= 0 {
+		response.BadRequest(c, "Invalid subscription ID")
+		return
+	}
+
+	quote, err := h.subscriptionService.GetResetCardQuote(c.Request.Context(), subject.UserID, subscriptionID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, quote)
+}
+
+type purchaseResetCardRequest struct {
+	ExpectedPlanID int64   `json:"expected_plan_id"`
+	ExpectedPrice  float64 `json:"expected_price"`
+	PurchaseKey    string  `json:"purchase_key"`
+}
+
+// PurchaseResetCard buys exactly one reset card using internal balance. The
+// request body carries its durable UUID key because a client may retry after a
+// connection failure that happens after the database commit.
+// POST /api/v1/subscriptions/:id/purchase-reset-card
+func (h *SubscriptionHandler) PurchaseResetCard(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
+	subscriptionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || subscriptionID <= 0 {
+		response.BadRequest(c, "Invalid subscription ID")
+		return
+	}
+
+	var req purchaseResetCardRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	parsedKey, err := uuid.Parse(strings.TrimSpace(req.PurchaseKey))
+	if err != nil || parsedKey == uuid.Nil {
+		response.ErrorFrom(c, service.ErrResetCardPurchaseKeyInvalid)
+		return
+	}
+
+	result, err := h.subscriptionService.PurchaseResetCard(c.Request.Context(), service.PurchaseSubscriptionResetCardInput{
+		UserID:         subject.UserID,
+		SubscriptionID: subscriptionID,
+		ExpectedPlanID: req.ExpectedPlanID,
+		ExpectedPrice:  req.ExpectedPrice,
+		PurchaseKey:    parsedKey.String(),
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }

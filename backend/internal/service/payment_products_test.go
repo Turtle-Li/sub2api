@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -379,4 +380,29 @@ func TestNormalizePlanEntitlementsBoundsResolvedResetCardValidity(t *testing.T) 
 	require.NoError(t, err)
 	require.Zero(t, cleared.ResetCardExpiryDays)
 	require.Equal(t, resetCardExpiryUnitDay, cleared.ResetCardExpiryUnit)
+}
+
+func TestResetCardValidityDaysRejectsOverflowingCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		unit string
+	}{
+		{name: "weeks", unit: "week"},
+		{name: "months", unit: "month"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entitlements := PlanEntitlements{
+				ResetCardCount:      1,
+				ResetCardExpiryDays: math.MaxInt,
+				ResetCardExpiryUnit: tc.unit,
+			}
+			require.Equal(t, invalidResetCardValidityDays, entitlements.ResetCardValidityDays())
+			_, _, err := normalizePlanEntitlements(map[string]any{
+				"reset_card_count":       1,
+				"reset_card_expiry_days": math.MaxInt,
+				"reset_card_expiry_unit": tc.unit,
+			})
+			require.ErrorContains(t, err, "reset card validity must not exceed")
+		})
+	}
 }

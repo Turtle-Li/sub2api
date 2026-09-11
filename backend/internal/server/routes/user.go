@@ -133,6 +133,8 @@ func RegisterUserRoutes(
 			subscriptions.GET("/active", h.Subscription.GetActive)
 			subscriptions.GET("/progress", h.Subscription.GetProgress)
 			subscriptions.GET("/summary", h.Subscription.GetSummary)
+			subscriptions.GET("/:id/reset-card-quote", h.Subscription.GetResetCardQuote)
+			subscriptions.POST("/:id/purchase-reset-card", h.Subscription.PurchaseResetCard)
 			subscriptions.POST("/:id/use-reset-card", h.Subscription.UseResetCard)
 		}
 
