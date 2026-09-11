@@ -361,6 +361,28 @@ describe('PaymentView subscription plan grid', () => {
     ]))
   })
 
+  it.each([true, false])('keeps the order summary consistent after a period switch (same group: %s)', async (sameGroup) => {
+    routeState.query = { tab: 'subscription' }
+    const base = checkoutInfoWithPlansFixture().data.plans[0]
+    const quarterly = { ...base, id: 31, period_label: 'quarter', price: 324 }
+    const annual = { ...base, id: 32, group_id: sameGroup ? base.group_id : 999, period_label: 'year', price: 1152 }
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({ plans: [quarterly, annual] }))
+    const wrapper = shallowMount(PaymentView, { global: { stubs: {
+      AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false,
+    } } })
+    await flushPromises()
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('disabled')).toBe(true)
+    wrapper.findComponent(SubscriptionPlanCard).vm.$emit('select', quarterly)
+    await flushPromises()
+    expect(rail.props('totalAmount')).toBe(324)
+    const year = wrapper.findAll('button').find(button => button.text().includes('payment.periods.year'))!
+    await year.trigger('click')
+    expect(rail.props('disabled')).toBe(!sameGroup)
+    expect(rail.props('totalAmount')).toBe(sameGroup ? 1152 : 0)
+    expect(wrapper.findComponent(SubscriptionPlanCard).props('selected')).toBe(sameGroup)
+  })
+
   it('defaults to quarterly plans and switches the visible set to annual plans', async () => {
     routeState.path = '/purchase'
     routeState.query = { tab: 'subscription' }

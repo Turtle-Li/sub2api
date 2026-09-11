@@ -268,6 +268,8 @@ export interface SubscriptionPlan {
 export type ResetCardExpiryUnit = 'day' | 'week' | 'month'
 
 export interface PlanEntitlements {
+  /** Optional standalone reset-card price from the active monthly plan, in credits. */
+  reset_card_purchase_price?: number
   balance_bonus: number
   reset_card_count: number
   /**

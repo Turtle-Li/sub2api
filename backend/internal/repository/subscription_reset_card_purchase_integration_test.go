@@ -36,6 +36,7 @@ func newResetCardPurchaseFixture(t *testing.T, balance float64) *resetCardPurcha
 	})
 	group := mustCreateGroup(t, client, &service.Group{
 		Name:             fmt.Sprintf("reset-purchase-group-%d", stamp),
+		Platform:         service.PlatformOpenAI,
 		Status:           service.StatusActive,
 		SubscriptionType: service.SubscriptionTypeSubscription,
 	})
@@ -97,16 +98,23 @@ func setResetCardPurchasePaymentEnabled(t *testing.T, enabled bool) {
 }
 
 func createResetCardPurchasePlan(t *testing.T, f *resetCardPurchaseFixture, price float64, validityDays int, validityUnit string) *dbent.SubscriptionPlan {
+	return createResetCardPurchasePlanWithEntitlements(t, f, price, validityDays, validityUnit, nil)
+}
+
+func createResetCardPurchasePlanWithEntitlements(t *testing.T, f *resetCardPurchaseFixture, price float64, validityDays int, validityUnit string, entitlements map[string]any) *dbent.SubscriptionPlan {
 	t.Helper()
-	plan, err := f.client.SubscriptionPlan.Create().
+	b := f.client.SubscriptionPlan.Create().
 		SetGroupID(f.group.ID).
 		SetName(fmt.Sprintf("reset-purchase-plan-%d", time.Now().UnixNano())).
 		SetPrice(price).
 		SetCurrency("CNY").
 		SetValidityDays(validityDays).
 		SetValidityUnit(validityUnit).
-		SetForSale(true).
-		Save(context.Background())
+		SetForSale(true)
+	if entitlements != nil {
+		b.SetEntitlements(entitlements)
+	}
+	plan, err := b.Save(context.Background())
 	require.NoError(t, err)
 	return plan
 }
@@ -163,6 +171,8 @@ func TestSubscriptionResetCardPurchaseQuoteAndDurableReplay(t *testing.T) {
 	// without consulting the now-mutable plan or charging balance again.
 	_, err = f.client.SubscriptionPlan.UpdateOneID(plan.ID).SetPrice(150).Save(context.Background())
 	require.NoError(t, err)
+	_, err = f.client.Group.UpdateOneID(f.group.ID).SetPlatform(service.PlatformAnthropic).Save(context.Background())
+	require.NoError(t, err)
 	replayed := purchaseResetCard(t, f, quote, key)
 	require.Equal(t, first, replayed)
 	balance, frozen := resetCardPurchaseBalance(t, f.user.ID)
@@ -189,7 +199,7 @@ func TestSubscriptionResetCardQuoteMonthlyPriceSelectionAndRounding(t *testing.T
 		want  float64
 	}{
 		{name: "plus monthly", price: 120, want: 40},
-		{name: "five x monthly", price: 550, want: 183.33},
+		{name: "legacy monthly fallback", price: 550, want: 183.33},
 		{name: "round cents", price: 10.01, want: 3.34},
 	}
 	for _, tc := range tests {
@@ -221,6 +231,14 @@ func TestSubscriptionResetCardQuoteFailsClosedForMonthlyPlanSource(t *testing.T)
 	t.Run("zero price", func(t *testing.T) {
 		f := newResetCardPurchaseFixture(t, 100)
 		createResetCardPurchasePlan(t, f, 0, 1, "month")
+		_, err := f.service.GetResetCardQuote(context.Background(), f.user.ID, f.subscription.ID)
+		require.ErrorIs(t, err, service.ErrResetCardPriceInvalid)
+	})
+	t.Run("invalid configured price", func(t *testing.T) {
+		f := newResetCardPurchaseFixture(t, 100)
+		createResetCardPurchasePlanWithEntitlements(t, f, 550, 1, "month", map[string]any{
+			"reset_card_purchase_price": 180.001,
+		})
 		_, err := f.service.GetResetCardQuote(context.Background(), f.user.ID, f.subscription.ID)
 		require.ErrorIs(t, err, service.ErrResetCardPriceInvalid)
 	})
@@ -369,6 +387,61 @@ func TestSubscriptionResetCardPurchaseRejectsChangedQuoteAndRollsBack(t *testing
 		require.Zero(t, purchases)
 		require.Zero(t, grants)
 	})
+}
+
+func TestSubscriptionResetCardPurchaseUsesConfiguredMonthlyPriceAndRevalidatesIt(t *testing.T) {
+	f := newResetCardPurchaseFixture(t, 500)
+	plan := createResetCardPurchasePlanWithEntitlements(t, f, 550, 1, "month", map[string]any{
+		"reset_card_purchase_price": 180.00,
+	})
+
+	quote, err := f.service.GetResetCardQuote(context.Background(), f.user.ID, f.subscription.ID)
+	require.NoError(t, err)
+	require.Equal(t, plan.ID, quote.PlanID)
+	require.Equal(t, 550.0, quote.MonthlyPrice)
+	require.Equal(t, 180.0, quote.Price)
+
+	key := uuid.NewString()
+	first := purchaseResetCard(t, f, quote, key)
+	require.Equal(t, 180.0, first.Price)
+	balance, _ := resetCardPurchaseBalance(t, f.user.ID)
+	require.Equal(t, 320.0, balance)
+
+	_, err = f.client.SubscriptionPlan.UpdateOneID(plan.ID).SetEntitlements(map[string]any{
+		"reset_card_purchase_price": 181.00,
+	}).Save(context.Background())
+	require.NoError(t, err)
+	_, err = f.service.PurchaseResetCard(context.Background(), service.PurchaseSubscriptionResetCardInput{
+		UserID: f.user.ID, SubscriptionID: f.subscription.ID, ExpectedPlanID: quote.PlanID, ExpectedPrice: quote.Price, PurchaseKey: uuid.NewString(),
+	})
+	require.ErrorIs(t, err, service.ErrResetCardQuoteChanged)
+	balance, _ = resetCardPurchaseBalance(t, f.user.ID)
+	require.Equal(t, 320.0, balance, "a changed configured price must not debit again")
+	purchases, grants := resetCardPurchaseCounts(t, f.user.ID)
+	require.Equal(t, 1, purchases)
+	require.Equal(t, 1, grants)
+
+	replayed := purchaseResetCard(t, f, quote, key)
+	require.Equal(t, first, replayed)
+}
+
+func TestSubscriptionResetCardPurchaseRejectsNewNonOpenAIPurchaseWithoutDebit(t *testing.T) {
+	f := newResetCardPurchaseFixture(t, 100)
+	plan := createResetCardPurchasePlan(t, f, 120, 1, "month")
+	_, err := f.client.Group.UpdateOneID(f.group.ID).SetPlatform(service.PlatformAnthropic).Save(context.Background())
+	require.NoError(t, err)
+
+	_, err = f.service.GetResetCardQuote(context.Background(), f.user.ID, f.subscription.ID)
+	require.ErrorIs(t, err, service.ErrResetCardPurchaseUnavailable)
+	_, err = f.service.PurchaseResetCard(context.Background(), service.PurchaseSubscriptionResetCardInput{
+		UserID: f.user.ID, SubscriptionID: f.subscription.ID, ExpectedPlanID: plan.ID, ExpectedPrice: 40, PurchaseKey: uuid.NewString(),
+	})
+	require.ErrorIs(t, err, service.ErrResetCardPurchaseUnavailable)
+	balance, _ := resetCardPurchaseBalance(t, f.user.ID)
+	require.Equal(t, 100.0, balance)
+	purchases, grants := resetCardPurchaseCounts(t, f.user.ID)
+	require.Zero(t, purchases)
+	require.Zero(t, grants)
 }
 
 func TestSubscriptionResetCardPurchaseConcurrentRequests(t *testing.T) {

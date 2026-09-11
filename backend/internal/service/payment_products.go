@@ -18,6 +18,11 @@ import (
 type PlanEntitlements struct {
 	BalanceBonus   float64 `json:"balance_bonus"`
 	ResetCardCount int     `json:"reset_card_count"`
+	// ResetCardPurchasePrice optionally overrides the wallet price for a reset
+	// card bought against this monthly plan. It is only a price-source metadata
+	// field: it neither grants a card nor changes subscription fulfillment.
+	// Omission preserves the established monthly-price fallback.
+	ResetCardPurchasePrice *float64 `json:"reset_card_purchase_price,omitempty"`
 	// ResetCardExpiryDays is a count in ResetCardExpiryUnit, not necessarily a
 	// number of days — the field keeps its name for compatibility with plans
 	// stored before units existed, which were all in days. This mirrors the
@@ -36,6 +41,25 @@ type PlanEntitlements struct {
 	// Recommended controls the single, admin-selected presentation highlight.
 	// It has no effect on pricing or fulfillment.
 	Recommended bool `json:"recommended,omitempty"`
+}
+
+const resetCardPurchasePriceScale int32 = 2
+
+// resetCardPurchaseConfiguredPrice validates the optional plan metadata once
+// for both plan administration and the locked purchase path. A nil value means
+// the plan deliberately uses the legacy monthly-price calculation.
+func resetCardPurchaseConfiguredPrice(value *float64) (decimal.Decimal, bool, error) {
+	if value == nil {
+		return decimal.Zero, false, nil
+	}
+	if math.IsNaN(*value) || math.IsInf(*value, 0) || *value <= 0 {
+		return decimal.Zero, false, fmt.Errorf("reset_card_purchase_price must be a positive finite amount")
+	}
+	price := decimal.NewFromFloat(*value)
+	if !price.Equal(price.Round(resetCardPurchasePriceScale)) {
+		return decimal.Zero, false, fmt.Errorf("reset_card_purchase_price must have at most %d decimal places", resetCardPurchasePriceScale)
+	}
+	return price, true, nil
 }
 
 // Reset card expiry units. Deliberately a narrower set than subscription
@@ -214,6 +238,9 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 	}
 	if entitlements.ResetCardCount < 0 || entitlements.ResetCardCount > MaxResetCardsPerGrant {
 		return nil, PlanEntitlements{}, fmt.Errorf("reset_card_count must be between 0 and %d", MaxResetCardsPerGrant)
+	}
+	if _, _, err := resetCardPurchaseConfiguredPrice(entitlements.ResetCardPurchasePrice); err != nil {
+		return nil, PlanEntitlements{}, err
 	}
 	entitlements.ResetCardExpiryUnit = normalizeResetCardExpiryUnit(entitlements.ResetCardExpiryUnit)
 	if entitlements.ResetCardCount > 0 {

@@ -18,12 +18,16 @@
       {{ t('payment.recommended') }}
     </span>
 
+    <span v-if="selected" class="payment-product-card__check" aria-hidden="true">
+      <Icon name="check" size="xs" :stroke-width="3" />
+    </span>
     <div class="payment-product-card__body">
       <!-- Identity -->
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-1.5">
           <span :class="['inline-flex shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium', badgeLightClass]">{{ pLabel }}</span>
           <span v-if="periodDisplay" class="payment-product-card__eyebrow">{{ periodDisplay }}</span>
+          <span v-if="isRenewal" class="text-xs font-medium text-primary-600 dark:text-primary-300">{{ t('payment.renewNow') }}</span>
         </div>
         <h3 :title="plan.name" class="payment-product-card__title mt-2">{{ plan.name }}</h3>
         <p v-if="plan.description" class="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-dark-400">
@@ -64,14 +68,7 @@
         {{ plan.entitlements.message }}
       </p>
 
-      <button
-        type="button"
-        tabindex="-1"
-        :class="['payment-product-card__action', selected ? btnClass : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-200 dark:hover:bg-dark-600']"
-        @click.stop="emit('select', plan)"
-      >
-        {{ selected ? t('payment.selectedRechargeTier') : isRenewal ? t('payment.renewNow') : t('payment.subscribeNow') }}
-      </button>
+
     </div>
   </article>
 </template>
@@ -89,7 +86,6 @@ import { subscriptionGatewayAmount } from '@/components/payment/pricing'
 import Icon from '@/components/icons/Icon.vue'
 import {
   platformBadgeLightClass,
-  platformButtonClass,
   platformLabel,
 } from '@/utils/platformColors'
 
@@ -121,7 +117,6 @@ const isRenewal = computed(() =>
 )
 
 const badgeLightClass = computed(() => platformBadgeLightClass(platform.value))
-const btnClass = computed(() => platformButtonClass(platform.value))
 const pLabel = computed(() => platformLabel(platform.value))
 
 const periodDisplay = computed(() => {

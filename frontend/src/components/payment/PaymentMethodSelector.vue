@@ -5,16 +5,17 @@
     </label>
     <div
       data-testid="payment-method-grid"
-      class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+      class="grid grid-cols-2 gap-3"
     >
       <button
         v-for="method in sortedMethods"
         :key="method.type"
         type="button"
         :title="methodLabel(method)"
+        :aria-pressed="selected === method.type"
         :disabled="!method.available"
         :class="[
-          'relative flex h-[60px] min-w-0 flex-col items-center justify-center rounded-lg border px-3 transition-all',
+          'relative flex min-h-[76px] min-w-0 flex-col items-center justify-center rounded-xl border px-2 py-3 transition-all',
           !method.available
             ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-50 dark:border-dark-700 dark:bg-dark-800/50'
             : selected === method.type
@@ -23,10 +24,10 @@
         ]"
         @click="method.available && emit('select', method.type)"
       >
-        <span class="flex w-full min-w-0 items-center justify-center gap-2">
+        <span class="flex w-full min-w-0 flex-col items-center justify-center gap-1.5">
           <img :src="methodIcon(method.type)" :alt="methodLabel(method)" class="h-7 w-7 shrink-0 object-contain" />
-          <span class="flex min-w-0 flex-col items-start leading-none">
-            <span data-testid="payment-method-label" class="block w-full truncate text-base font-semibold">
+          <span class="flex w-full min-w-0 flex-col items-center text-center leading-none">
+            <span data-testid="payment-method-label" class="block w-full truncate text-xs font-semibold">
               {{ methodLabel(method) }}
             </span>
             <span

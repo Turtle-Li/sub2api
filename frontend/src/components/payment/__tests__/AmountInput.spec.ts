@@ -44,14 +44,14 @@ describe('AmountInput', () => {
     expect(wrapper.find('article').classes()).toContain('payment-product-card')
     expect(wrapper.find('.payment-product-card__body').exists()).toBe(true)
     expect(wrapper.find('.payment-recharge-card__credit').exists()).toBe(true)
-    expect(wrapper.find('button').classes()).toContain('payment-product-card__action')
+    expect(wrapper.find('button').exists()).toBe(false)
     expect(wrapper.text()).toContain('Growth')
     expect(wrapper.text()).toContain('-17%')
     expect(wrapper.text()).toContain('×0.9')
     expect(wrapper.text()).toContain('≈ 12M')
     // Bonus balance is platform credit, so it carries no currency symbol.
-    expect(wrapper.find('.payment-recharge-card__bonus').text()).toContain('payment.rechargeBonus')
-    expect(wrapper.find('.payment-recharge-card__bonus').text()).toContain('+8 payment.creditUnit')
+    expect(wrapper.find('.payment-recharge-card__bonus').text()).toContain('payment.rechargeBonusShort')
+    expect(wrapper.find('.payment-recharge-card__bonus').text()).toContain('+8')
     expect(wrapper.findAll('.payment-product-card__list-item').map(item => item.text())).not.toContain('payment.entitlements.balanceBonus +8 payment.creditUnit')
     expect(wrapper.text()).toContain('Concurrency raised to 5')
     expect(wrapper.find('input').exists()).toBe(false)
@@ -81,14 +81,14 @@ describe('AmountInput', () => {
     })
 
     const starterCard = wrapper.findAll('article')[1]
-    await starterCard.find('button').trigger('click')
+    await starterCard.trigger('keydown', { key: 'Enter' })
 
     expect(wrapper.emitted('update:modelValue')).toEqual([[20]])
     expect(starterCard.attributes('aria-pressed')).toBe('false')
   })
 
   // The whole card is the control, so a click anywhere on it selects the tier.
-  it('selects a tier from the card body as well as its action button', async () => {
+  it('selects a tier from the card body', async () => {
     const wrapper = mount(AmountInput, { props: { modelValue: 100, options } })
 
     await wrapper.findAll('article')[1].trigger('click')
@@ -160,11 +160,14 @@ describe('AmountInput', () => {
 
     const premium = wrapper.findAll('article')[0]
     expect(premium.find('.payment-recharge-card__credit-value').text()).toBe('744 payment.creditUnit')
-    expect(premium.find('.payment-recharge-card__bonus').text()).toContain('+145 payment.creditUnit')
+    expect(premium.find('.payment-recharge-card__bonus').text()).toContain('+145')
     expect(premium.findAll('.payment-product-card__list-item')).toHaveLength(0)
 
     const standard = wrapper.findAll('article')[1]
     expect(standard.find('.payment-recharge-card__credit-value').text()).toBe('49 payment.creditUnit')
     expect(standard.find('.payment-recharge-card__bonus').exists()).toBe(false)
+    expect(premium.get('.payment-recharge-card__credit-heading').find('.payment-recharge-card__bonus').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('payment.selectedRechargeTier')
+    expect(wrapper.text()).not.toContain('payment.selectRechargeTier')
   })
 })

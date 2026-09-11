@@ -1,0 +1,130 @@
+{
+  "recharge_options": [
+    {
+      "label": "小额体验",
+      "amount": 5,
+      "enabled": true,
+      "sort_order": 0,
+      "description": "按充值金额到账",
+      "recommended": false,
+      "balance_bonus": 0
+    },
+    {
+      "label": "轻量充值",
+      "amount": 49,
+      "enabled": true,
+      "sort_order": 1,
+      "description": "按充值金额到账",
+      "recommended": false,
+      "balance_bonus": 0
+    },
+    {
+      "label": "日常使用",
+      "amount": 99,
+      "enabled": true,
+      "sort_order": 2,
+      "description": "额外赠送 5 额度",
+      "recommended": false,
+      "balance_bonus": 5
+    },
+    {
+      "label": "进阶充值",
+      "amount": 199,
+      "enabled": true,
+      "sort_order": 3,
+      "description": "额外赠送 20 额度",
+      "recommended": false,
+      "balance_bonus": 20
+    },
+    {
+      "label": "高频使用",
+      "amount": 399,
+      "enabled": true,
+      "sort_order": 4,
+      "description": "额外赠送 75 额度",
+      "recommended": false,
+      "balance_bonus": 75
+    },
+    {
+      "label": "畅享充值",
+      "amount": 599,
+      "enabled": true,
+      "sort_order": 5,
+      "description": "额外赠送 145 额度",
+      "recommended": true,
+      "balance_bonus": 145
+    }
+  ],
+  "plans": [
+    {
+      "id": 1,
+      "group_id": 4,
+      "name": "Plus 月付",
+      "price": 120.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "month",
+      "for_sale": true,
+      "entitlements": {
+        "reset_card_purchase_price": 40
+      }
+    },
+    {
+      "id": 2,
+      "group_id": 4,
+      "name": "Plus 季付",
+      "price": 324.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "quarter",
+      "for_sale": true,
+      "entitlements": {}
+    },
+    {
+      "id": 3,
+      "group_id": 4,
+      "name": "Plus 年付",
+      "price": 1152.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "year",
+      "for_sale": true,
+      "entitlements": {}
+    },
+    {
+      "id": 4,
+      "group_id": 12,
+      "name": "5X Pro 月付",
+      "price": 550.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "month",
+      "for_sale": true,
+      "entitlements": {
+        "reset_card_purchase_price": 180
+      }
+    },
+    {
+      "id": 5,
+      "group_id": 12,
+      "name": "5X Pro 季付",
+      "price": 1485.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "quarter",
+      "for_sale": true,
+      "entitlements": {}
+    },
+    {
+      "id": 6,
+      "group_id": 12,
+      "name": "5X Pro 年付",
+      "price": 5280.0,
+      "currency": "CNY",
+      "validity_days": 1,
+      "validity_unit": "year",
+      "for_sale": true,
+      "entitlements": {}
+    }
+  ]
+}

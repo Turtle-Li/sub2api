@@ -249,9 +249,8 @@
    * User-facing payment products (recharge tiers and subscription plans).
    *
    * The whole card is the control — a card that looks selectable but only
-   * responds on a small button at its bottom edge reads as broken. The button
-   * inside stays for keyboard users and for the explicit action label, but the
-   * card carries the click target, the hover state and the selected ring.
+   * responds on a small button at its bottom edge reads as broken. The card
+   * carries the keyboard target, hover state and selected ring.
    *
    * Heights are intentionally not fixed. The previous version pinned the shell
    * and three inner blocks to minimum heights so every card matched, which left
@@ -282,6 +281,10 @@
   .payment-product-card__ribbon {
     @apply absolute -top-2.5 left-5 z-10 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5;
     @apply bg-primary-600 text-[11px] font-semibold text-white shadow-sm dark:bg-primary-500;
+  }
+
+  .payment-product-card__check {
+    @apply absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-primary-600 text-white dark:bg-primary-500;
   }
 
   .payment-product-card__body {

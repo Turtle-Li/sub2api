@@ -3,10 +3,107 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+type subscriptionCheckoutGroupRepoStub struct {
+	GroupRepository
+	group *Group
+}
+
+func (s subscriptionCheckoutGroupRepoStub) GetByID(context.Context, int64) (*Group, error) {
+	return s.group, nil
+}
+
+func TestListPlansForSaleUsesNewSubscriptionCheckoutPolicy(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	createGroup := func(name, platform, status, subscriptionType string) int64 {
+		candidate, err := client.Group.Create().
+			SetName(name).
+			SetPlatform(platform).
+			SetStatus(status).
+			SetSubscriptionType(subscriptionType).
+			Save(ctx)
+		require.NoError(t, err)
+		return int64(candidate.ID)
+	}
+	createPlan := func(name string, groupID int64, forSale bool) int64 {
+		plan, err := client.SubscriptionPlan.Create().
+			SetName(name).
+			SetGroupID(groupID).
+			SetPrice(120).
+			SetValidityDays(1).
+			SetValidityUnit("month").
+			SetForSale(forSale).
+			Save(ctx)
+		require.NoError(t, err)
+		return int64(plan.ID)
+	}
+
+	openAIPlanID := createPlan("openai", createGroup("openai", PlatformOpenAI, StatusActive, SubscriptionTypeSubscription), true)
+	createPlan("anthropic", createGroup("anthropic", PlatformAnthropic, StatusActive, SubscriptionTypeSubscription), true)
+	createPlan("disabled", createGroup("disabled", PlatformOpenAI, StatusDisabled, SubscriptionTypeSubscription), true)
+	createPlan("standard", createGroup("standard", PlatformOpenAI, StatusActive, SubscriptionTypeStandard), true)
+	createPlan("not-for-sale", createGroup("not-for-sale", PlatformOpenAI, StatusActive, SubscriptionTypeSubscription), false)
+
+	plans, err := svc.ListPlansForSale(ctx)
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	require.Equal(t, openAIPlanID, int64(plans[0].ID))
+
+	allPlans, err := svc.ListPlans(ctx)
+	require.NoError(t, err)
+	require.Len(t, allPlans, 5, "admin plan management must retain the full catalog")
+}
+
+func TestValidateSubOrderRejectsNonOpenAINewCheckout(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	plan, err := client.SubscriptionPlan.Create().
+		SetName("test plan").
+		SetGroupID(11).
+		SetPrice(120).
+		SetValidityDays(1).
+		SetValidityUnit("month").
+		SetForSale(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	configService := &PaymentConfigService{entClient: client}
+	request := CreateOrderRequest{PlanID: int64(plan.ID)}
+
+	openAISvc := &PaymentService{
+		configService: configService,
+		groupRepo: subscriptionCheckoutGroupRepoStub{group: &Group{
+			ID:               11,
+			Platform:         PlatformOpenAI,
+			Status:           StatusActive,
+			SubscriptionType: SubscriptionTypeSubscription,
+		}},
+	}
+	resolved, err := openAISvc.validateSubOrder(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, plan.ID, resolved.ID)
+
+	nonOpenAISvc := &PaymentService{
+		configService: configService,
+		groupRepo: subscriptionCheckoutGroupRepoStub{group: &Group{
+			ID:               11,
+			Platform:         PlatformAnthropic,
+			Status:           StatusActive,
+			SubscriptionType: SubscriptionTypeSubscription,
+		}},
+	}
+	_, err = nonOpenAISvc.validateSubOrder(ctx, request)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "not available for new subscription checkout")
+}
 
 func TestValidatePlanRequired_AllValid(t *testing.T) {
 	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", nil)

@@ -37,6 +37,27 @@ func TestNormalizePlanEntitlementsRejectsInvalidResetCardExpiry(t *testing.T) {
 	require.ErrorContains(t, err, "reset_card_expiry_days")
 }
 
+func TestNormalizePlanEntitlementsResetCardPurchasePrice(t *testing.T) {
+	normalized, entitlements, err := normalizePlanEntitlements(map[string]any{
+		"reset_card_purchase_price": 180.00,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, entitlements.ResetCardPurchasePrice)
+	require.Equal(t, 180.00, *entitlements.ResetCardPurchasePrice)
+	require.Equal(t, 180.00, normalized["reset_card_purchase_price"])
+
+	_, withoutOverride, err := normalizePlanEntitlements(map[string]any{})
+	require.NoError(t, err)
+	require.Nil(t, withoutOverride.ResetCardPurchasePrice)
+
+	for _, price := range []float64{0, -1, 180.001, math.Inf(1), math.NaN()} {
+		_, _, err := normalizePlanEntitlements(map[string]any{
+			"reset_card_purchase_price": price,
+		})
+		require.Error(t, err, "price %v must fail closed", price)
+	}
+}
+
 func TestPaymentEntitlementsRequireManualRefundForEveryNonReversibleBenefit(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
