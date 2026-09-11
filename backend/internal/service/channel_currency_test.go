@@ -60,7 +60,7 @@ func TestValidatePricingEntriesRejectsUnknownCardCurrency(t *testing.T) {
 	require.Contains(t, err.Error(), "INVALID_PRICING_CURRENCY")
 }
 
-func TestChannelModelPricingCloneDefaultsLegacyCurrency(t *testing.T) {
+func TestChannelModelPricingClonePreservesLegacyCurrency(t *testing.T) {
 	cloned := (ChannelModelPricing{Currency: ""}).Clone()
-	require.Equal(t, PricingCurrencyUSD, cloned.Currency)
+	require.Empty(t, cloned.Currency)
 }

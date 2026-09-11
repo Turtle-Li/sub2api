@@ -259,9 +259,6 @@ func (p *ChannelModelPricing) GetTierByLabel(label string) *PricingInterval {
 // Clone 返回 ChannelModelPricing 的拷贝（切片独立，指针字段共享，调用方只读安全）
 func (p ChannelModelPricing) Clone() ChannelModelPricing {
 	cp := p
-	if currency, err := NormalizePricingCurrency(p.Currency); err == nil {
-		cp.Currency = currency
-	}
 	if p.Models != nil {
 		cp.Models = make([]string, len(p.Models))
 		copy(cp.Models, p.Models)
