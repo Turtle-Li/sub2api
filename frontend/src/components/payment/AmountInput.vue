@@ -7,9 +7,11 @@
         role="button"
         tabindex="0"
         :aria-pressed="isSelected(option)"
+        :aria-disabled="option.eligibility?.can_purchase === false"
         :aria-label="`${formatAmount(option.amount)} · ${tierName(option)}`"
         :class="[
           'payment-product-card payment-recharge-card',
+          option.eligibility?.can_purchase === false && 'payment-product-card--unavailable',
           isSelected(option) && 'payment-product-card--selected payment-recharge-card--selected',
           isFeatured(option) && 'payment-product-card--featured',
         ]"
@@ -55,6 +57,8 @@
             <strong class="payment-recharge-card__credit-value">{{ formatAmountValue(creditedFor(option)) }} <span class="text-xs font-medium tracking-normal">{{ t('payment.creditUnit') }}</span></strong>
           </div>
 
+          <PurchaseEligibilityHint :eligibility="option.eligibility" />
+
           <!-- Benefits and estimates. Absent data renders nothing at all. -->
           <ul v-if="listItems(option).length > 0" class="payment-product-card__list">
             <li
@@ -89,6 +93,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RechargeOption } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
+import PurchaseEligibilityHint from './PurchaseEligibilityHint.vue'
 import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from './currency'
 import { creditedBalanceAmount } from './pricing'
 
@@ -160,6 +165,7 @@ function isSelected(option: RechargeOption): boolean {
 }
 
 function selectAmount(amount: number) {
+  if (filteredOptions.value.find(option => option.amount === amount)?.eligibility?.can_purchase === false) return
   emit('update:modelValue', amount)
 }
 

@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { adminPaymentAPI } from '@/api/admin/payment'
 
 import PlanEditDialog from '../PlanEditDialog.vue'
+import PurchaseRulesEditor from '@/components/payment/PurchaseRulesEditor.vue'
 import type { AdminGroup } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 
@@ -255,7 +256,7 @@ describe('PlanEditDialog', () => {
     await wrapper.setProps({ show: false, plan: {
       id: 9, group_id: 1, name: '5X Pro', description: 'Monthly', price: 550,
       currency: 'CNY', validity_days: 1, validity_unit: 'months', features: [],
-      for_sale: true, sort_order: 0, entitlements: { reset_card_purchase_price: 180, concurrency: 5 },
+      for_sale: true, sort_order: 0, entitlements: { reset_card_purchase_price: 180, concurrency: 5, purchase_rules: { visible_user_ids: [42], min_total_recharge: 1000 }, reset_card_title: 'GPT reset' },
     } as SubscriptionPlan })
     await wrapper.setProps({ show: true })
     const input = wrapper.findAll('input[type="number"]').find(node =>
@@ -279,6 +280,13 @@ describe('PlanEditDialog', () => {
     const payload = vi.mocked(adminPaymentAPI.updatePlan).mock.calls.at(-1)![1]
     expect(payload.entitlements).not.toHaveProperty('reset_card_purchase_price')
     expect(payload.entitlements?.concurrency).toBe(5)
+    expect(payload.entitlements?.purchase_rules).toEqual({ visible_user_ids: [42], min_total_recharge: 1000 })
+    expect(payload.entitlements?.reset_card_title).toBe('GPT reset')
+    const saves = vi.mocked(adminPaymentAPI.updatePlan).mock.calls.length
+    wrapper.findComponent(PurchaseRulesEditor).vm.$emit('validity', false)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(vi.mocked(adminPaymentAPI.updatePlan).mock.calls.length).toBe(saves)
   })
 
   it('keeps an inactive subscription group visible while editing its existing plan', async () => {

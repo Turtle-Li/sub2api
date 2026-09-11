@@ -3,15 +3,17 @@
     role="button"
     tabindex="0"
     :aria-pressed="selected"
+    :aria-disabled="plan.eligibility?.can_purchase === false"
     :aria-label="`${plan.name} · ${displayPrice}`"
     :class="[
       'payment-product-card',
+      plan.eligibility?.can_purchase === false && 'payment-product-card--unavailable',
       selected && 'payment-product-card--selected',
       featured && 'payment-product-card--featured',
     ]"
-    @click="emit('select', plan)"
-    @keydown.enter.prevent="emit('select', plan)"
-    @keydown.space.prevent="emit('select', plan)"
+    @click="plan.eligibility?.can_purchase !== false && emit('select', plan)"
+    @keydown.enter.prevent="plan.eligibility?.can_purchase !== false && emit('select', plan)"
+    @keydown.space.prevent="plan.eligibility?.can_purchase !== false && emit('select', plan)"
   >
     <span v-if="featured" class="payment-product-card__ribbon">
       <Icon name="sparkles" size="xs" :stroke-width="2" />
@@ -46,6 +48,8 @@
           <span v-if="discountText" class="payment-product-card__discount">{{ discountText }}</span>
         </div>
       </div>
+
+      <PurchaseEligibilityHint :eligibility="plan.eligibility" />
 
       <!-- Everything the plan includes: paid entitlements first, then quota facts. -->
       <ul class="payment-product-card__list">
@@ -84,6 +88,7 @@ import { planValiditySuffix, resetCardValidityLabel } from './validity'
 import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from '@/components/payment/currency'
 import { subscriptionGatewayAmount } from '@/components/payment/pricing'
 import Icon from '@/components/icons/Icon.vue'
+import PurchaseEligibilityHint from './PurchaseEligibilityHint.vue'
 import {
   platformBadgeLightClass,
   platformLabel,

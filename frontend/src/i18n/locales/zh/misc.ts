@@ -317,6 +317,25 @@ export default {
 
   // Payment System
   payment: {
+    eligibility: {
+      minimum: '需累计净充值 ¥{required}，当前 ¥{current}',
+      unavailable: '暂不符合购买条件',
+      adminTitle: '可见范围与购买条件',
+      audience: '可见用户 ID',
+      audiencePlaceholder: '例如 12, 35, 68',
+      audienceHint: '留空则所有用户可见；填写后仅这些用户可见并可购买。',
+      minimumLabel: '累计净充值门槛（元）',
+      minimumHint: '0 表示不限。仅计算已到账的人民币余额充值实付，扣除确认退款，不计赠送或订阅付款。未达门槛时卡片置灰并显示条件。',
+      invalidRules: '请填写有效的用户 ID 和非负金额（最多两位小数）。',
+      invalidCatalog: '当前充值配置无法解析，请在高级 JSON 中修正；原配置已保留。',
+      tier: '充值档位 {number}',
+      addTier: '添加充值档位',
+      advancedJson: '高级 JSON 配置',
+      concurrencyHint: '并发填写 0 表示不调整；购买后只提升到目标值，不降低更高的已有并发。',
+      resetContent: '重置卡内容与购买条件',
+      resetContentHint: '使用同组可见月付套餐的配置。名称和说明留空时使用默认内容；重置卡充值门槛单独设置。',
+    },
+
     orderOps: {
       dailyQuota: '每日额度',
       weeklyQuota: '每周额度',

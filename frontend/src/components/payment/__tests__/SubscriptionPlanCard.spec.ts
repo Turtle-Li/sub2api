@@ -64,6 +64,15 @@ const mountPlanCard = (
   });
 
 describe("SubscriptionPlanCard", () => {
+  it('keeps purchase conditions readable without allowing locked selection', async () => {
+    const wrapper = mountPlanCard('openai', { eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 49 } })
+    expect(wrapper.attributes('aria-disabled')).toBe('true')
+    await wrapper.trigger('click')
+    await wrapper.trigger('keydown.enter')
+    await wrapper.trigger('keydown.space')
+    expect(wrapper.emitted('select')).toBeUndefined()
+  })
+
   it("does not show Antigravity model scopes for OpenAI plans", () => {
     const wrapper = mountPlanCard("openai")
     const text = wrapper.text();

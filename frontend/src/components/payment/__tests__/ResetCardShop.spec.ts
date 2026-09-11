@@ -19,6 +19,17 @@ const render = (subscriptions = [sub]) => mount(ResetCardShop, {
 beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); vi.mocked(getResetCardQuote).mockResolvedValue(quote) })
 
 describe('ResetCardShop', () => {
+  it('shows configured reset content and conditions without fetching a locked quote', async () => {
+    const wrapper = mount(ResetCardShop, { props: { subscriptions: [sub], plans: [{ ...plans[0], entitlements: { reset_card_title: 'GPT refill', reset_card_description: 'One reset', reset_card_purchase_price: 40 }, reset_card_eligibility: { visible: true, can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 100 } }] }, global: { stubs: { ConfirmDialog: true } } })
+    expect(wrapper.text()).toContain('GPT refill')
+    expect(wrapper.text()).toContain('One reset')
+    expect(wrapper.get('button').attributes('disabled')).toBeDefined()
+    await wrapper.get('button').trigger('click')
+    expect(getResetCardQuote).not.toHaveBeenCalled()
+    await wrapper.setProps({ plans: [{ ...plans[0], reset_card_eligibility: { visible: false, can_purchase: false } }] })
+    expect(wrapper.find('button').exists()).toBe(false)
+  })
+
   it('does not offer Claude or groups without a matching sale plan', () => {
     const claude = { ...sub, group: { ...sub.group, platform: 'anthropic' } } as UserSubscription
     expect(render([claude]).find('button').exists()).toBe(false)

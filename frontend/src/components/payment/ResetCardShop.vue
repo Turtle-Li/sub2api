@@ -8,12 +8,13 @@
     <p v-if="!offers.length" class="mt-3 text-sm text-gray-500">{{ t('payment.resetShop.requiresSubscription') }}</p>
     <div v-else class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <button v-for="offer in offers" :key="offer.subscription.id" type="button"
-        class="group flex min-w-0 items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3.5 text-left transition hover:border-primary-400 hover:bg-primary-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-wait disabled:opacity-60 dark:border-dark-700 dark:bg-dark-800 dark:hover:border-primary-600 dark:hover:bg-primary-950/30"
-        :disabled="loading || buying" @click="select(offer.subscription)">
+        class="group flex min-w-0 items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3.5 text-left transition hover:border-primary-400 hover:bg-primary-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-70 dark:border-dark-700 dark:bg-dark-800 dark:hover:border-primary-600 dark:hover:bg-primary-950/30"
+        :disabled="loading || buying || offer.eligibility?.can_purchase === false" @click="select(offer.subscription)">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-300"><Icon name="refresh" size="sm" /></span>
         <span class="min-w-0 flex-1">
-          <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">{{ offer.subscription.group?.name }}</span>
-          <span class="mt-0.5 block text-xs text-gray-500 dark:text-dark-400">{{ t('payment.resetShop.singleCard') }}</span>
+          <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">{{ offer.title }}</span>
+          <span class="mt-0.5 block text-xs text-gray-500 dark:text-dark-400">{{ offer.description || t('payment.resetShop.singleCard') }}
+            <PurchaseEligibilityHint :eligibility="offer.eligibility" /></span>
         </span>
         <span class="shrink-0 text-right">
           <strong class="block text-lg font-semibold tabular-nums text-gray-900 dark:text-white">{{ offer.price }}</strong>
@@ -42,17 +43,19 @@ import { useAuthStore } from '@/stores/auth'
 import type { UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
+import PurchaseEligibilityHint from './PurchaseEligibilityHint.vue'
 
 const props = withDefaults(defineProps<{ subscriptions: UserSubscription[]; plans?: SubscriptionPlan[] }>(), { plans: () => [] })
 const offers = computed(() => props.subscriptions.flatMap(subscription => {
-  if (subscription.group?.platform !== 'openai') return []
+  if (subscription.group?.platform !== 'openai' || subscription.status !== 'active' || (subscription.expires_at && Date.parse(subscription.expires_at) <= Date.now())) return []
   const monthlyPlans = props.plans.filter(plan => plan.group_id === subscription.group_id && plan.group_platform === 'openai' &&
     plan.currency?.toUpperCase() === 'CNY' && ((['month', 'months'].includes(plan.validity_unit || '') && plan.validity_days === 1) ||
       (['day', 'days', ''].includes(plan.validity_unit || '') && plan.validity_days === 30)))
   if (monthlyPlans.length !== 1) return []
   const plan = monthlyPlans[0]
+  if (plan.reset_card_eligibility?.visible === false) return []
   const price = plan.entitlements?.reset_card_purchase_price ?? Math.round(plan.price / 3 * 100) / 100
-  return Number.isFinite(price) && price > 0 ? [{ subscription, price }] : []
+  return Number.isFinite(price) && price > 0 ? [{ subscription, price, eligibility: plan.reset_card_eligibility, title: plan.entitlements?.reset_card_title || subscription.group?.name, description: plan.entitlements?.reset_card_description }] : []
 }))
 const emit = defineEmits<{ purchased: [] }>()
 const { t } = useI18n()

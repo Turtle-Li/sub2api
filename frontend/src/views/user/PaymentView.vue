@@ -536,7 +536,7 @@ function selectSubscriptionPeriod(period: SubscriptionPeriod) {
   selectedSubscriptionPeriod.value = period
   if (!selectedPlan.value || visibleSubscriptionPlans.value.some(plan => plan.id === selectedPlan.value?.id)) return
   const matching = visibleSubscriptionPlans.value.filter(plan => plan.group_id === selectedPlan.value?.group_id)
-  selectedPlan.value = matching.length === 1 ? matching[0] : null
+  selectedPlan.value = matching.length === 1 && matching[0].eligibility?.can_purchase !== false ? matching[0] : null
   errorMessage.value = ''
 }
 
@@ -723,6 +723,7 @@ const amountError = computed(() => {
 const canSubmit = computed(() =>
   validAmount.value > 0
     && selectedRechargeOption.value !== null
+    && selectedRechargeOption.value.eligibility?.can_purchase !== false
     && amountFitsMethod(validAmount.value, selectedMethod.value)
     && selectedLimit.value?.available !== false
 )
@@ -766,6 +767,7 @@ const subMethodOptions = computed<PaymentMethodOption[]>(() => {
 
 const canSubmitSubscription = computed(() =>
   selectedPlan.value !== null
+    && selectedPlan.value.eligibility?.can_purchase !== false
     && amountFitsMethod(subTotalAmount.value, selectedMethod.value)
     && selectedLimit.value?.available !== false
 )
@@ -816,6 +818,8 @@ const railCreditLine = computed(() => {
 // The rail is where a blocked purchase has to explain itself; the alternative
 // is a disabled button with no reason attached.
 const railNotice = computed(() => {
+  const eligibility = isRecharge.value ? selectedRechargeOption.value?.eligibility : selectedPlan.value?.eligibility
+  if (eligibility?.can_purchase === false) return t('payment.eligibility.minimum', { required: eligibility.required_total_recharge || 0, current: eligibility.current_total_recharge || 0 })
   if (isRecharge.value) {
     if (validAmount.value <= 0) return t('payment.selectTierFirst')
     return amountError.value
@@ -867,6 +871,7 @@ const planValiditySuffix = computed(() => {
 
 
 function selectPlan(plan: SubscriptionPlan) {
+  if (plan.eligibility?.can_purchase === false) return
   selectedSubscriptionPeriod.value = subscriptionPeriodOf(plan)
   selectedPlan.value = plan
   errorMessage.value = ''
@@ -1230,7 +1235,7 @@ onMounted(async () => {
     const res = await paymentAPI.getCheckoutInfo()
     checkout.value = res.data
     if (amount.value == null && rechargePresetAmounts.value.length > 0) {
-      amount.value = rechargePresetAmounts.value[0]
+      amount.value = rechargePresetOptions.value.find(option => option.eligibility?.can_purchase !== false)?.amount ?? null
     }
     if (enabledMethods.value.length) {
       const order: readonly string[] = METHOD_ORDER

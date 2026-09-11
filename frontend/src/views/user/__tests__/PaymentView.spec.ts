@@ -348,6 +348,16 @@ describe('PaymentView help text', () => {
 })
 
 describe('PaymentView subscription plan grid', () => {
+  it('refuses a gated recharge deep link and does not enable payment', async () => {
+    routeState.query = { tab: 'recharge', amount: '599' }
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({ recharge_mode: 'fixed', recharge_options: [{ amount: 599, enabled: true, sort_order: 0, eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 0 } }] }))
+    const wrapper = shallowMount(PaymentView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } } })
+    await flushPromises()
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('disabled')).toBe(true)
+    expect(rail.props('notice')).toBe('payment.eligibility.minimum')
+  })
+
   it.each([3, 4, 6])('keeps %i plans on the existing mobile/tablet/desktop grid', async (planCount) => {
     const wrapper = await mountSubscriptionPlanList(planCount)
     const cards = wrapper.findAllComponents(SubscriptionPlanCard)

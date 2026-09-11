@@ -912,3 +912,13 @@
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+/* Locked cards keep readable conditions while refusing selection. */
+.payment-product-card--unavailable,
+.payment-product-card--unavailable:hover {
+  @apply cursor-not-allowed border-gray-200 bg-gray-100 shadow-none dark:border-dark-700 dark:bg-dark-900;
+  transform: none;
+}
+.payment-product-card--unavailable .payment-product-card__price {
+  @apply text-gray-500 dark:text-dark-400;
+}

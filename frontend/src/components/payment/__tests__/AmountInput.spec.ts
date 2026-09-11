@@ -14,6 +14,17 @@ vi.mock('vue-i18n', () => ({
 }))
 
 describe('AmountInput', () => {
+  it('keeps a gated tier visible with its condition but rejects mouse and keyboard selection', async () => {
+    const wrapper = mount(AmountInput, { props: { modelValue: null, options: [{ amount: 599, enabled: true, sort_order: 0, eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 49 } }] } })
+    const card = wrapper.get('article')
+    expect(card.attributes('aria-disabled')).toBe('true')
+    expect(wrapper.text()).toContain('payment.eligibility.minimum')
+    await card.trigger('click')
+    await card.trigger('keydown.enter')
+    await card.trigger('keydown.space')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
   const options = [
     {
       amount: 100,
