@@ -148,6 +148,89 @@ func TestValidatePurchaseRulesRejectsHiddenDirectCheckout(t *testing.T) {
 	require.Equal(t, "PURCHASE_NOT_ALLOWED", infraerrors.Reason(err))
 }
 
+func TestCreateOrderInTxRejectsCustomToRestrictedFixedRechargeModeChange(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("custom-to-fixed@example.test").
+		SetPasswordHash("hash").
+		SetUsername("custom-to-fixed").
+		Save(ctx)
+	require.NoError(t, err)
+
+	restrictedOptions, err := encodeRechargeOptions([]RechargeOption{{
+		Amount:  88,
+		Enabled: true,
+		PurchaseRules: &PurchaseRules{
+			VisibleUserIDs: []int64{user.ID + 99},
+		},
+	}})
+	require.NoError(t, err)
+	_, err = client.Setting.Create().SetKey(SettingRechargeOptions).SetValue(restrictedOptions).Save(ctx)
+	require.NoError(t, err)
+
+	// The request was validated against the old custom-mode configuration. By
+	// the time its write transaction starts, an administrator has published a
+	// fixed, audience-restricted card. It must not be treated as a free-form
+	// custom recharge just because the old configuration had no fixed tier.
+	svc := &PaymentService{entClient: client}
+	_, err = svc.createOrderInTx(
+		ctx,
+		CreateOrderRequest{UserID: user.ID, PaymentType: payment.TypeAlipay, OrderType: payment.OrderTypeBalance},
+		&User{ID: user.ID, Email: user.Email, Username: user.Username},
+		nil,
+		&PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30},
+		88,
+		88,
+		0,
+		88,
+		nil,
+	)
+	require.Error(t, err)
+	require.Equal(t, "RECHARGE_OPTION_CHANGED", infraerrors.Reason(err))
+	count, countErr := client.PaymentOrder.Query().Count(ctx)
+	require.NoError(t, countErr)
+	require.Zero(t, count)
+}
+
+func TestCreateOrderInTxRejectsPartiallyInvalidCurrentRechargeOptions(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("invalid-current-options@example.test").
+		SetPasswordHash("hash").
+		SetUsername("invalid-current-options").
+		Save(ctx)
+	require.NoError(t, err)
+
+	// One valid card is not enough to make a partially invalid persisted list
+	// safe. The current row must fail closed before its mode can be used.
+	_, err = client.Setting.Create().
+		SetKey(SettingRechargeOptions).
+		SetValue(`[{"amount":88,"enabled":true},{"amount":99,"enabled":true,"purchase_rules":{"visible_user_ids":[0]}}]`).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	_, err = svc.createOrderInTx(
+		ctx,
+		CreateOrderRequest{UserID: user.ID, PaymentType: payment.TypeAlipay, OrderType: payment.OrderTypeBalance},
+		&User{ID: user.ID, Email: user.Email, Username: user.Username},
+		nil,
+		&PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30},
+		88,
+		88,
+		0,
+		88,
+		nil,
+	)
+	require.Error(t, err)
+	require.Equal(t, "PURCHASE_RULES_UNAVAILABLE", infraerrors.Reason(err))
+	count, countErr := client.PaymentOrder.Query().Count(ctx)
+	require.NoError(t, countErr)
+	require.Zero(t, count)
+}
+
 func createEligibilityPaymentOrder(t *testing.T, client *dbent.Client, userID int64, amount, payAmount, refundAmount float64, currency string, completed bool, status string) {
 	t.Helper()
 	now := time.Now().UTC()

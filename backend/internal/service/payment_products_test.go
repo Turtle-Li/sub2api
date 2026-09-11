@@ -221,7 +221,8 @@ func TestPaymentProductSnapshotOmitsPrivatePurchaseRules(t *testing.T) {
 		},
 	}
 	snapshot := buildPaymentProductSnapshot(plan, 120, 120, 30)
-	entitlements := snapshot["entitlements"].(map[string]any)
+	entitlements, ok := snapshot["entitlements"].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, 1.0, entitlements["balance_bonus"])
 	require.NotContains(t, entitlements, "purchase_rules")
 	require.NotContains(t, entitlements, "reset_card_purchase_rules")

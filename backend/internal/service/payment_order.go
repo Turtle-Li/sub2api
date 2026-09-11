@@ -400,18 +400,31 @@ func paymentOrderSnapshotGroup(current *dbent.Group) *Group {
 	}
 }
 
-// revalidateRechargeOrderInTx locks the persisted preset row for every fixed
-// tier checkout, including tiers that previously had no rules. This prevents
-// an administrator adding an audience fence in the small gap before order
-// creation. Product fields remain immutable for this attempt; only changed
-// rules are adopted and rechecked under the same lock.
+// revalidateRechargeOrderInTx locks and rereads the persisted preset row for
+// every ordinary balance checkout. The outer configuration may have been in
+// custom mode when the request was validated, then switched to fixed mode
+// before this transaction began. Compare modes first so that change cannot
+// fall through as an unrestricted custom top-up; fixed tiers then revalidate
+// their current product and purchase rules under the same lock.
 func (s *PaymentService) revalidateRechargeOrderInTx(ctx context.Context, tx *dbent.Tx, req CreateOrderRequest, cfg *PaymentConfig) error {
 	if tx == nil || cfg == nil {
 		return ErrPurchaseRulesUnavailable
 	}
-	expected, fixedTier := rechargeOptionForAmount(cfg.RechargeOptions, req.Amount)
-	if !fixedTier {
-		return nil
+	if cfg.RechargeOptionsInvalid {
+		return ErrPurchaseRulesUnavailable
+	}
+
+	// An absent row is the legacy custom-amount default. Materialize that exact
+	// default inside this transaction before locking it: PostgreSQL cannot lock a
+	// missing row, while this INSERT ... ON CONFLICT DO NOTHING holds the unique
+	// key against a concurrent first admin insert until the checkout commits.
+	if err := tx.Setting.Create().
+		SetKey(SettingRechargeOptions).
+		SetValue("[]").
+		OnConflictColumns(setting.FieldKey).
+		DoNothing().
+		Exec(ctx); err != nil && !isSQLNoRowsError(err) {
+		return fmt.Errorf("ensure recharge options setting: %w", err)
 	}
 
 	settingQuery := tx.Setting.Query().Where(setting.KeyEQ(SettingRechargeOptions))
@@ -420,18 +433,28 @@ func (s *PaymentService) revalidateRechargeOrderInTx(ctx context.Context, tx *db
 	}
 	stored, err := settingQuery.Only(ctx)
 	if err != nil {
-		if dbent.IsNotFound(err) {
-			return infraerrors.BadRequest("RECHARGE_OPTIONS_UNAVAILABLE", "recharge tiers are misconfigured; balance top-up is temporarily unavailable")
-		}
 		return fmt.Errorf("lock recharge options: %w", err)
 	}
 	currentOptions, intact := normalizeRechargeOptions(stored.Value)
 	if !intact {
 		return ErrPurchaseRulesUnavailable
 	}
+	outerMode := RechargeModeForConfig(cfg)
+	currentMode := RechargeModeForConfig(&PaymentConfig{RechargeOptions: currentOptions})
+	if outerMode != currentMode {
+		return infraerrors.Conflict("RECHARGE_OPTION_CHANGED", "recharge option changed; request current checkout information")
+	}
+	if currentMode != RechargeModeFixed {
+		return nil
+	}
+
+	expected, expectedFixedTier := rechargeOptionForAmount(cfg.RechargeOptions, req.Amount)
+	if !expectedFixedTier {
+		return infraerrors.Conflict("RECHARGE_OPTION_CHANGED", "recharge option changed; request current checkout information")
+	}
 	current, found := rechargeOptionForAmount(currentOptions, req.Amount)
 	if !found {
-		return infraerrors.BadRequest("INVALID_RECHARGE_OPTION", "amount must match an enabled recharge option")
+		return infraerrors.Conflict("RECHARGE_OPTION_CHANGED", "recharge option changed; request current checkout information")
 	}
 	if !rechargeOptionProductEqual(expected, current) {
 		return infraerrors.Conflict("RECHARGE_OPTION_CHANGED", "recharge option changed; request current checkout information")
