@@ -508,7 +508,9 @@ func TestPaymentFulfillmentRecoveryPostgresRefundFenceClaimBoundary(t *testing.T
 		fixture := newPaymentFulfillmentRecoveryPostgresFixture(t)
 		user := fixture.createUser(0)
 		order := fixture.createPaidBalanceOrder(user, 12, service.OrderStatusPaid, time.Now().UTC().Add(-2*time.Minute))
-		originalUpdatedAt := order.UpdatedAt
+		persisted, err := fixture.client.PaymentOrder.Get(ctx, order.ID)
+		require.NoError(t, err)
+		originalUpdatedAt := persisted.UpdatedAt.UTC()
 
 		// Query 1 is the bounded candidate selection. Query 2 is the recovery
 		// executor's first reload. Historically the nonlocking refund-fence read
@@ -573,10 +575,10 @@ func TestPaymentFulfillmentRecoveryPostgresRefundFenceClaimBoundary(t *testing.T
 		current, err := fixture.client.PaymentOrder.Get(ctx, order.ID)
 		require.NoError(t, err)
 		require.Equal(t, service.OrderStatusPaid, current.Status)
-		// PostgreSQL stores TIMESTAMPTZ at microsecond precision. Ent returns the
-		// caller's full-precision value from Create, so normalize both sides before
-		// asserting that the fenced recovery path did not mutate the row.
-		require.Equal(t, originalUpdatedAt.UTC().Truncate(time.Microsecond), current.UpdatedAt.UTC().Truncate(time.Microsecond))
+		// Compare two persisted values: the initial read above is after PostgreSQL
+		// has applied its TIMESTAMPTZ precision, so an exact equality still proves
+		// the fenced recovery path did not mutate the row.
+		require.Equal(t, originalUpdatedAt, current.UpdatedAt.UTC())
 		require.Nil(t, current.CompletedAt)
 		currentUser, err := fixture.client.User.Get(ctx, user.ID)
 		require.NoError(t, err)

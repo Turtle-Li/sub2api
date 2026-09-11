@@ -25,6 +25,13 @@ func normalizePlanCurrency(raw string) (string, error) {
 	return currency, nil
 }
 
+// isNewSubscriptionCheckoutPlatform is the shared policy for products a
+// customer can newly purchase. It deliberately does not govern existing
+// subscriptions, their benefits, renewal state, or fulfillment records.
+func isNewSubscriptionCheckoutPlatform(platform string) bool {
+	return strings.EqualFold(platform, PlatformOpenAI)
+}
+
 // validatePlanRequired checks that all required fields for a plan are provided.
 func validatePlanRequired(name string, groupID int64, price float64, validityDays int, validityUnit string, originalPrice *float64) error {
 	if strings.TrimSpace(name) == "" {
@@ -129,7 +136,28 @@ func (s *PaymentConfigService) ListPlans(ctx context.Context) ([]*dbent.Subscrip
 }
 
 func (s *PaymentConfigService) ListPlansForSale(ctx context.Context) ([]*dbent.SubscriptionPlan, error) {
-	return s.entClient.SubscriptionPlan.Query().Where(subscriptionplan.ForSaleEQ(true)).Order(subscriptionplan.BySortOrder()).All(ctx)
+	groups, err := s.entClient.Group.Query().
+		Where(
+			group.DeletedAtIsNil(),
+			group.StatusEQ(StatusActive),
+			group.SubscriptionTypeEQ(SubscriptionTypeSubscription),
+			group.PlatformEqualFold(PlatformOpenAI),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(groups) == 0 {
+		return []*dbent.SubscriptionPlan{}, nil
+	}
+	groupIDs := make([]int64, 0, len(groups))
+	for _, candidate := range groups {
+		groupIDs = append(groupIDs, int64(candidate.ID))
+	}
+	return s.entClient.SubscriptionPlan.Query().
+		Where(subscriptionplan.ForSaleEQ(true), subscriptionplan.GroupIDIn(groupIDs...)).
+		Order(subscriptionplan.BySortOrder()).
+		All(ctx)
 }
 
 func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanRequest) (*dbent.SubscriptionPlan, error) {

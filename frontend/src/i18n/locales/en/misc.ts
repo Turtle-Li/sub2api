@@ -293,6 +293,25 @@ export default {
 
   // Payment System
   payment: {
+    eligibility: {
+      minimum: 'Requires ¥{required} net recharge; current ¥{current}',
+      unavailable: 'Purchase conditions not met',
+      adminTitle: 'Audience and purchase conditions',
+      audience: 'Visible user IDs',
+      audiencePlaceholder: 'For example: 12, 35, 68',
+      audienceHint: 'Empty means everyone. Otherwise only these users can see and purchase this card.',
+      minimumLabel: 'Minimum net recharge (CNY)',
+      minimumHint: '0 means no minimum. Counts delivered CNY balance payments less confirmed refunds, excluding bonuses and subscriptions. Cards below the threshold show the condition and cannot be selected.',
+      invalidRules: 'Enter valid user IDs and a nonnegative amount with at most two decimal places.',
+      invalidCatalog: 'The recharge configuration could not be parsed. Correct it in advanced JSON; the original configuration is preserved.',
+      tier: 'Recharge tier {number}',
+      addTier: 'Add recharge tier',
+      advancedJson: 'Advanced JSON configuration',
+      concurrencyHint: '0 keeps concurrency unchanged. Purchase only raises it to the target, preserving any higher existing limit.',
+      resetContent: 'Reset card content and conditions',
+      resetContentHint: 'Uses a visible monthly plan in the same group. Blank title or description uses the default; reset-card recharge thresholds are configured separately.',
+    },
+
     orderOps: {
       dailyQuota: 'Daily allowance',
       weeklyQuota: 'Weekly allowance',
@@ -351,9 +370,10 @@ export default {
     bestValue: 'Best value',
     mostPopular: 'Most popular',
     resetShop: {
-      "title": "Subscription reset cards",
-      "hint": "Buy with your balance for one third of the monthly plan price. Using a card resets usage without extending the subscription. Cards expire with the current subscription.",
-      "requiresSubscription": "An active subscription is required to buy a reset card.",
+      singleCard: '1 card · Reset usage',
+      "title": "GPT subscription reset cards",
+      "hint": "For active GPT subscriptions. Buy with your balance to reset usage without extending your subscription. Cards expire with the current subscription.",
+      "requiresSubscription": "An active matching GPT subscription is required to buy a reset card.",
       "quote": "View price",
       "confirm": "Buy one reset card for {name} using {price} credits. Use it from My subscriptions after purchase.",
       "buy": "Confirm balance purchase",
@@ -373,6 +393,7 @@ export default {
     notConfigured: 'Not configured',
     selectRechargeTier: 'Choose this tier',
     selectedRechargeTier: 'Selected',
+    rechargeBonusShort: 'Bonus',
     rechargeBonus: 'Tier bonus',
     presetBenefit: 'Tier benefit',
     balanceCredit: 'Balance credit',
@@ -771,6 +792,8 @@ export default {
       recommended: 'Recommended plan',
       recommendedHint: 'Shows the fixed recommended style on the payment page; leave other visual styling to the frontend.',
       balanceBonus: 'Bonus Balance',
+      resetCardPurchasePrice: 'Standalone reset-card price (credits)',
+      resetCardPurchasePriceHint: 'Used by the matching monthly plan. Leave blank to use one third of its price.',
       resetCardCount: 'Reset Cards',
       resetCardExpiryDays: 'Reset Card Validity',
       resetCardExpiryUnit: 'Validity Unit',

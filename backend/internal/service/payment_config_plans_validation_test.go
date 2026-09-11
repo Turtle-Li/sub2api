@@ -3,10 +3,156 @@
 package service
 
 import (
+	"context"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
+
+type subscriptionCheckoutGroupRepoStub struct {
+	GroupRepository
+	group *Group
+}
+
+func (s subscriptionCheckoutGroupRepoStub) GetByID(context.Context, int64) (*Group, error) {
+	return s.group, nil
+}
+
+func TestListPlansForSaleUsesNewSubscriptionCheckoutPolicy(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	createGroup := func(name, platform, status, subscriptionType string) int64 {
+		candidate, err := client.Group.Create().
+			SetName(name).
+			SetPlatform(platform).
+			SetStatus(status).
+			SetSubscriptionType(subscriptionType).
+			Save(ctx)
+		require.NoError(t, err)
+		return int64(candidate.ID)
+	}
+	createPlan := func(name string, groupID int64, forSale bool) int64 {
+		plan, err := client.SubscriptionPlan.Create().
+			SetName(name).
+			SetGroupID(groupID).
+			SetPrice(120).
+			SetValidityDays(1).
+			SetValidityUnit("month").
+			SetForSale(forSale).
+			Save(ctx)
+		require.NoError(t, err)
+		return int64(plan.ID)
+	}
+
+	openAIPlanID := createPlan("openai", createGroup("openai", PlatformOpenAI, StatusActive, SubscriptionTypeSubscription), true)
+	createPlan("anthropic", createGroup("anthropic", PlatformAnthropic, StatusActive, SubscriptionTypeSubscription), true)
+	createPlan("disabled", createGroup("disabled", PlatformOpenAI, StatusDisabled, SubscriptionTypeSubscription), true)
+	createPlan("standard", createGroup("standard", PlatformOpenAI, StatusActive, SubscriptionTypeStandard), true)
+	createPlan("not-for-sale", createGroup("not-for-sale", PlatformOpenAI, StatusActive, SubscriptionTypeSubscription), false)
+
+	plans, err := svc.ListPlansForSale(ctx)
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	require.Equal(t, openAIPlanID, int64(plans[0].ID))
+
+	allPlans, err := svc.ListPlans(ctx)
+	require.NoError(t, err)
+	require.Len(t, allPlans, 5, "admin plan management must retain the full catalog")
+}
+
+func TestValidateSubOrderRejectsNonOpenAINewCheckout(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	plan, err := client.SubscriptionPlan.Create().
+		SetName("test plan").
+		SetGroupID(11).
+		SetPrice(120).
+		SetValidityDays(1).
+		SetValidityUnit("month").
+		SetForSale(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	configService := &PaymentConfigService{entClient: client}
+	request := CreateOrderRequest{PlanID: int64(plan.ID)}
+
+	openAISvc := &PaymentService{
+		configService: configService,
+		groupRepo: subscriptionCheckoutGroupRepoStub{group: &Group{
+			ID:               11,
+			Platform:         PlatformOpenAI,
+			Status:           StatusActive,
+			SubscriptionType: SubscriptionTypeSubscription,
+		}},
+	}
+	resolved, err := openAISvc.validateSubOrder(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, plan.ID, resolved.ID)
+
+	nonOpenAISvc := &PaymentService{
+		configService: configService,
+		groupRepo: subscriptionCheckoutGroupRepoStub{group: &Group{
+			ID:               11,
+			Platform:         PlatformAnthropic,
+			Status:           StatusActive,
+			SubscriptionType: SubscriptionTypeSubscription,
+		}},
+	}
+	_, err = nonOpenAISvc.validateSubOrder(ctx, request)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "not available for new subscription checkout")
+}
+
+func TestCreateOrderInTxRevalidatesSubscriptionPlatformUnderWriteBoundary(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("locked-platform@example.test").
+		SetPasswordHash("hash").
+		SetUsername("locked-platform").
+		Save(ctx)
+	require.NoError(t, err)
+	group, err := client.Group.Create().
+		SetName("locked platform group").
+		SetPlatform(PlatformOpenAI).
+		SetStatus(StatusActive).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		Save(ctx)
+	require.NoError(t, err)
+	plan, err := client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName("locked platform plan").
+		SetPrice(120).
+		SetValidityDays(1).
+		SetValidityUnit("month").
+		SetForSale(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	request := CreateOrderRequest{UserID: user.ID, PaymentType: payment.TypeAlipay, OrderType: payment.OrderTypeSubscription}
+	actor := &User{ID: user.ID, Email: user.Email, Username: user.Username}
+	_, err = svc.createOrderInTx(ctx, request, actor, plan, &PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30}, plan.Price, plan.Price, 0, plan.Price, nil)
+	require.NoError(t, err, "the unchanged OpenAI policy is accepted under the write transaction")
+
+	// This mutation represents a concurrent administrator change after the
+	// outer checkout read. The transaction-bound reload must reject it before
+	// another PaymentOrder is persisted.
+	_, err = client.Group.UpdateOneID(group.ID).SetPlatform(PlatformAnthropic).Save(ctx)
+	require.NoError(t, err)
+	before, err := client.PaymentOrder.Query().Count(ctx)
+	require.NoError(t, err)
+	_, err = svc.createOrderInTx(ctx, request, actor, plan, &PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30}, plan.Price, plan.Price, 0, plan.Price, nil)
+	require.Error(t, err)
+	require.Equal(t, "PLAN_NOT_AVAILABLE", infraerrors.Reason(err))
+	after, err := client.PaymentOrder.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
 
 func TestValidatePlanRequired_AllValid(t *testing.T) {
 	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", nil)

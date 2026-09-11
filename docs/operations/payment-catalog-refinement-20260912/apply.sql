@@ -1,0 +1,20 @@
+-- Run only after both nodes deploy the reviewed override-aware build.
+-- Changes future catalog purchases only; never touches balances or historical orders.
+\set ON_ERROR_STOP on
+BEGIN;
+SET LOCAL lock_timeout='5s';
+SET LOCAL statement_timeout='30s';
+LOCK TABLE groups IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE settings, subscription_plans IN SHARE ROW EXCLUSIVE MODE;
+DO $guard$
+BEGIN
+ IF (SELECT value::jsonb FROM settings WHERE key='PAYMENT_RECHARGE_OPTIONS') IS DISTINCT FROM '[{"label":"小额体验","amount":5,"enabled":true,"sort_order":0,"description":"按充值金额到账","recommended":false,"balance_bonus":0},{"label":"轻量充值","amount":49,"enabled":true,"sort_order":1,"description":"按充值金额到账","recommended":false,"balance_bonus":0},{"label":"日常使用","amount":99,"enabled":true,"sort_order":2,"description":"额外赠送 4 额度","recommended":false,"balance_bonus":4},{"label":"进阶充值","amount":199,"enabled":true,"sort_order":3,"description":"额外赠送 19 额度","recommended":false,"balance_bonus":19},{"label":"高频使用","amount":399,"enabled":true,"sort_order":4,"description":"额外赠送 75 额度","recommended":false,"balance_bonus":75},{"label":"畅享充值","amount":599,"enabled":true,"sort_order":5,"description":"额外赠送 145 额度","recommended":true,"balance_bonus":145}]'::jsonb THEN RAISE EXCEPTION 'Recharge catalog changed: re-audit'; END IF;
+ IF (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM (SELECT id,group_id,name,price,currency,validity_days,validity_unit,for_sale,entitlements FROM subscription_plans) p) IS DISTINCT FROM '[{"id":1,"group_id":4,"name":"Plus 月付","price":120.0,"currency":"CNY","validity_days":1,"validity_unit":"month","for_sale":true,"entitlements":{}},{"id":2,"group_id":4,"name":"Plus 季付","price":324.0,"currency":"CNY","validity_days":1,"validity_unit":"quarter","for_sale":true,"entitlements":{}},{"id":3,"group_id":4,"name":"Plus 年付","price":1152.0,"currency":"CNY","validity_days":1,"validity_unit":"year","for_sale":true,"entitlements":{}},{"id":4,"group_id":12,"name":"5X Pro 月付","price":550.0,"currency":"CNY","validity_days":1,"validity_unit":"month","for_sale":true,"entitlements":{}},{"id":5,"group_id":12,"name":"5X Pro 季付","price":1485.0,"currency":"CNY","validity_days":1,"validity_unit":"quarter","for_sale":true,"entitlements":{}},{"id":6,"group_id":12,"name":"5X Pro 年付","price":5280.0,"currency":"CNY","validity_days":1,"validity_unit":"year","for_sale":true,"entitlements":{}}]'::jsonb THEN RAISE EXCEPTION 'Subscription catalog changed: re-audit'; END IF;
+ IF (SELECT count(*) FROM groups WHERE id IN (4,12) AND platform='openai' AND status='active' AND subscription_type='subscription' AND deleted_at IS NULL) <> 2 THEN RAISE EXCEPTION 'GPT groups unavailable'; END IF;
+END $guard$;
+UPDATE settings SET value=('[{"label":"小额体验","amount":5,"enabled":true,"sort_order":0,"description":"按充值金额到账","recommended":false,"balance_bonus":0},{"label":"轻量充值","amount":49,"enabled":true,"sort_order":1,"description":"按充值金额到账","recommended":false,"balance_bonus":0},{"label":"日常使用","amount":99,"enabled":true,"sort_order":2,"description":"额外赠送 5 额度","recommended":false,"balance_bonus":5,"concurrency":3},{"label":"进阶充值","amount":199,"enabled":true,"sort_order":3,"description":"额外赠送 20 额度","recommended":false,"balance_bonus":20,"concurrency":4},{"label":"高频使用","amount":399,"enabled":true,"sort_order":4,"description":"额外赠送 75 额度","recommended":false,"balance_bonus":75,"concurrency":5},{"label":"畅享充值","amount":599,"enabled":true,"sort_order":5,"description":"额外赠送 145 额度","recommended":true,"balance_bonus":145,"concurrency":6}]'::jsonb)::text,updated_at=NOW() WHERE key='PAYMENT_RECHARGE_OPTIONS';
+UPDATE subscription_plans SET entitlements='{"reset_card_purchase_price":40}'::jsonb,updated_at=NOW() WHERE id=1;
+UPDATE subscription_plans SET entitlements='{"reset_card_purchase_price":180,"concurrency":6}'::jsonb,updated_at=NOW() WHERE id=4;
+UPDATE subscription_plans SET entitlements='{"concurrency":6}'::jsonb,updated_at=NOW() WHERE id=5;
+UPDATE subscription_plans SET entitlements='{"concurrency":6}'::jsonb,updated_at=NOW() WHERE id=6;
+COMMIT;

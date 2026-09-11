@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -15,9 +16,12 @@ import (
 	"entgo.io/ent/dialect"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicerequest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
+	"github.com/Wei-Shaw/sub2api/ent/setting"
+	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
@@ -215,8 +219,12 @@ func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrder
 		return nil, infraerrors.BadRequest("RECHARGE_OPTIONS_UNAVAILABLE", "recharge tiers are misconfigured; balance top-up is temporarily unavailable")
 	}
 	if len(EnabledRechargeOptionsForCheckout(cfg.RechargeOptions)) > 0 {
-		if _, ok := rechargeOptionForAmount(cfg.RechargeOptions, req.Amount); !ok {
+		option, ok := rechargeOptionForAmount(cfg.RechargeOptions, req.Amount)
+		if !ok {
 			return nil, infraerrors.BadRequest("INVALID_RECHARGE_OPTION", "amount must match an enabled recharge option")
+		}
+		if err := validatePurchaseRulesForUser(ctx, s.paymentEligibilityClient(), req.UserID, option.PurchaseRules); err != nil {
+			return nil, err
 		}
 	}
 	return nil, nil
@@ -254,10 +262,218 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	if err != nil || group.Status != payment.EntityStatusActive {
 		return nil, infraerrors.NotFound("GROUP_NOT_FOUND", "subscription group is no longer available")
 	}
+	if !isNewSubscriptionCheckoutPlatform(group.Platform) {
+		return nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "plan is not available for new subscription checkout")
+	}
 	if !group.IsSubscriptionType() {
 		return nil, infraerrors.BadRequest("GROUP_TYPE_MISMATCH", "group is not a subscription type")
 	}
+	_, entitlements, err := normalizePlanEntitlements(plan.Entitlements)
+	if err != nil {
+		return nil, ErrPurchaseRulesUnavailable
+	}
+	if err := validatePurchaseRulesForUser(ctx, s.paymentEligibilityClient(), req.UserID, entitlements.PurchaseRules); err != nil {
+		return nil, err
+	}
 	return plan, nil
+}
+
+func (s *PaymentService) paymentEligibilityClient() *dbent.Client {
+	if s != nil && s.entClient != nil {
+		return s.entClient
+	}
+	if s != nil && s.configService != nil {
+		return s.configService.entClient
+	}
+	return nil
+}
+
+// revalidateSubscriptionOrderInTx closes the interval between the optimistic
+// catalog read and durable order creation. Locking group then plan matches the
+// reset-card flow's policy lock order. The initial group ID is intentionally
+// used for the first lock: if the plan moved, the second locked read detects
+// it and rejects the stale checkout instead of pairing a new plan group with
+// an old price or snapshot.
+func (s *PaymentService) revalidateSubscriptionOrderInTx(ctx context.Context, tx *dbent.Tx, req CreateOrderRequest, expected *dbent.SubscriptionPlan) (*dbent.SubscriptionPlan, *Group, error) {
+	if tx == nil || expected == nil {
+		return nil, nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "plan not found or not for sale")
+	}
+
+	groupQuery := tx.Group.Query().Where(group.IDEQ(expected.GroupID), group.DeletedAtIsNil())
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		groupQuery.ForUpdate()
+	}
+	currentGroup, err := groupQuery.Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, nil, infraerrors.NotFound("GROUP_NOT_FOUND", "subscription group is no longer available")
+		}
+		return nil, nil, fmt.Errorf("lock subscription checkout group: %w", err)
+	}
+
+	planQuery := tx.SubscriptionPlan.Query().Where(subscriptionplan.IDEQ(expected.ID))
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		planQuery.ForUpdate()
+	}
+	currentPlan, err := planQuery.Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "plan not found or not for sale")
+		}
+		return nil, nil, fmt.Errorf("lock subscription checkout plan: %w", err)
+	}
+	if currentPlan.GroupID != expected.GroupID || !currentPlan.ForSale {
+		return nil, nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "plan not found or not for sale")
+	}
+	if currentGroup.Status != payment.EntityStatusActive {
+		return nil, nil, infraerrors.NotFound("GROUP_NOT_FOUND", "subscription group is no longer available")
+	}
+	if !isNewSubscriptionCheckoutPlatform(currentGroup.Platform) {
+		return nil, nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "plan is not available for new subscription checkout")
+	}
+	if currentGroup.SubscriptionType != SubscriptionTypeSubscription {
+		return nil, nil, infraerrors.BadRequest("GROUP_TYPE_MISMATCH", "group is not a subscription type")
+	}
+	if !subscriptionPlanCheckoutSourceEqual(expected, currentPlan) {
+		return nil, nil, infraerrors.Conflict("PLAN_CHANGED", "plan changed; request current checkout information")
+	}
+
+	_, entitlements, err := normalizePlanEntitlements(currentPlan.Entitlements)
+	if err != nil {
+		return nil, nil, ErrPurchaseRulesUnavailable
+	}
+	if err := validatePurchaseRulesForUser(ctx, tx.Client(), req.UserID, entitlements.PurchaseRules); err != nil {
+		return nil, nil, err
+	}
+	return currentPlan, paymentOrderSnapshotGroup(currentGroup), nil
+}
+
+// subscriptionPlanCheckoutSourceEqual covers every plan field frozen into an
+// order snapshot or used to calculate the charged amount. A configuration
+// edit therefore produces a fresh catalog/order attempt instead of silently
+// charging against one version and recording another.
+func subscriptionPlanCheckoutSourceEqual(expected, current *dbent.SubscriptionPlan) bool {
+	if expected == nil || current == nil {
+		return false
+	}
+	return expected.ID == current.ID &&
+		expected.GroupID == current.GroupID &&
+		expected.Name == current.Name &&
+		expected.Description == current.Description &&
+		expected.Price == current.Price &&
+		sameOptionalCheckoutPrice(expected.OriginalPrice, current.OriginalPrice) &&
+		expected.Currency == current.Currency &&
+		expected.ValidityDays == current.ValidityDays &&
+		expected.ValidityUnit == current.ValidityUnit &&
+		expected.Features == current.Features &&
+		subscriptionPlanSnapshotEntitlementsEqual(expected.Entitlements, current.Entitlements) &&
+		expected.ProductName == current.ProductName &&
+		expected.ForSale == current.ForSale &&
+		expected.SortOrder == current.SortOrder
+}
+
+// Audience and threshold rules are admission policy, not purchased benefits.
+// Their current values are deliberately revalidated below rather than treated
+// as a stale-product conflict. Everything frozen in the product snapshot must
+// still match before an order can be created.
+func subscriptionPlanSnapshotEntitlementsEqual(left, right map[string]any) bool {
+	return reflect.DeepEqual(paymentSnapshotEntitlements(left), paymentSnapshotEntitlements(right))
+}
+
+func sameOptionalCheckoutPrice(left, right *float64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func paymentOrderSnapshotGroup(current *dbent.Group) *Group {
+	if current == nil {
+		return nil
+	}
+	return &Group{
+		ID:              current.ID,
+		Name:            current.Name,
+		DailyLimitUSD:   current.DailyLimitUsd,
+		WeeklyLimitUSD:  current.WeeklyLimitUsd,
+		MonthlyLimitUSD: current.MonthlyLimitUsd,
+	}
+}
+
+// revalidateRechargeOrderInTx locks and rereads the persisted preset row for
+// every ordinary balance checkout. The outer configuration may have been in
+// custom mode when the request was validated, then switched to fixed mode
+// before this transaction began. Compare modes first so that change cannot
+// fall through as an unrestricted custom top-up; fixed tiers then revalidate
+// their current product and purchase rules under the same lock.
+func (s *PaymentService) revalidateRechargeOrderInTx(ctx context.Context, tx *dbent.Tx, req CreateOrderRequest, cfg *PaymentConfig) error {
+	if tx == nil || cfg == nil {
+		return ErrPurchaseRulesUnavailable
+	}
+	if cfg.RechargeOptionsInvalid {
+		return ErrPurchaseRulesUnavailable
+	}
+
+	// An absent row is the legacy custom-amount default. Materialize that exact
+	// default inside this transaction before locking it: PostgreSQL cannot lock a
+	// missing row, while this INSERT ... ON CONFLICT DO NOTHING holds the unique
+	// key against a concurrent first admin insert until the checkout commits.
+	if err := tx.Setting.Create().
+		SetKey(SettingRechargeOptions).
+		SetValue("[]").
+		OnConflictColumns(setting.FieldKey).
+		DoNothing().
+		Exec(ctx); err != nil && !isSQLNoRowsError(err) {
+		return fmt.Errorf("ensure recharge options setting: %w", err)
+	}
+
+	settingQuery := tx.Setting.Query().Where(setting.KeyEQ(SettingRechargeOptions))
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		settingQuery.ForUpdate()
+	}
+	stored, err := settingQuery.Only(ctx)
+	if err != nil {
+		return fmt.Errorf("lock recharge options: %w", err)
+	}
+	currentOptions, intact := normalizeRechargeOptions(stored.Value)
+	if !intact {
+		return ErrPurchaseRulesUnavailable
+	}
+	outerMode := RechargeModeForConfig(cfg)
+	currentMode := RechargeModeForConfig(&PaymentConfig{RechargeOptions: currentOptions})
+	if outerMode != currentMode {
+		return infraerrors.Conflict("RECHARGE_OPTION_CHANGED", "recharge option changed; request current checkout information")
+	}
+	if currentMode != RechargeModeFixed {
+		return nil
+	}
+
+	expected, expectedFixedTier := rechargeOptionForAmount(cfg.RechargeOptions, req.Amount)
+	if !expectedFixedTier {
+		return infraerrors.Conflict("RECHARGE_OPTION_CHANGED", "recharge option changed; request current checkout information")
+	}
+	current, found := rechargeOptionForAmount(currentOptions, req.Amount)
+	if !found {
+		return infraerrors.Conflict("RECHARGE_OPTION_CHANGED", "recharge option changed; request current checkout information")
+	}
+	if !rechargeOptionProductEqual(expected, current) {
+		return infraerrors.Conflict("RECHARGE_OPTION_CHANGED", "recharge option changed; request current checkout information")
+	}
+	return validatePurchaseRulesForUser(ctx, tx.Client(), req.UserID, current.PurchaseRules)
+}
+
+func rechargeOptionProductEqual(expected, current RechargeOption) bool {
+	return expected.Amount == current.Amount &&
+		expected.OriginalPrice == current.OriginalPrice &&
+		expected.Label == current.Label &&
+		expected.Description == current.Description &&
+		expected.BalanceBonus == current.BalanceBonus &&
+		expected.EstimatedRateMultiplier == current.EstimatedRateMultiplier &&
+		expected.EstimatedTokens == current.EstimatedTokens &&
+		expected.Concurrency == current.Concurrency &&
+		expected.Recommended == current.Recommended &&
+		expected.SortOrder == current.SortOrder &&
+		expected.Enabled == current.Enabled
 }
 
 // createOrderDatabaseOptions applies only to private creation paths. It keeps
@@ -309,6 +525,29 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		}
 		if !dbent.IsNotFound(lookupErr) {
 			return nil, false, fmt.Errorf("lookup owner test order: %w", lookupErr)
+		}
+	}
+	var lockedSnapshotGroup *Group
+	if opts == nil || !opts.lockOwnerTestUser {
+		if plan != nil && req.OrderType == payment.OrderTypeSubscription {
+			lockedPlan, lockedGroup, lockErr := s.revalidateSubscriptionOrderInTx(ctx, tx, req, plan)
+			if lockErr != nil {
+				return nil, false, lockErr
+			}
+			if orderAmount != lockedPlan.Price || limitAmount != lockedPlan.Price {
+				return nil, false, infraerrors.Conflict("PLAN_CHANGED", "plan changed; request current checkout information")
+			}
+			// Keep the existing snapshot contract for narrow internal callers that
+			// deliberately omit GroupRepository: policy still revalidates against
+			// the locked Ent row, but those callers did not previously promise group
+			// display evidence in their immutable product snapshots.
+			if s.groupRepo != nil {
+				lockedSnapshotGroup = lockedGroup
+			}
+		} else if plan == nil && req.OrderType == payment.OrderTypeBalance {
+			if lockErr := s.revalidateRechargeOrderInTx(ctx, tx, req, cfg); lockErr != nil {
+				return nil, false, lockErr
+			}
 		}
 	}
 	if err := s.checkPendingLimit(ctx, tx, req.UserID, cfg.MaxPendingOrders); err != nil {
@@ -376,8 +615,8 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		// The plan is already the immutable product selected for this order. A
 		// small current-group read records the promised limits alongside it, so a
 		// later group edit cannot rewrite what this purchase represented.
-		var snapshotGroup *Group
-		if s.groupRepo != nil {
+		snapshotGroup := lockedSnapshotGroup
+		if snapshotGroup == nil && s.groupRepo != nil {
 			if group, groupErr := s.groupRepo.GetByID(ctx, plan.GroupID); groupErr == nil {
 				snapshotGroup = group
 			}
@@ -456,7 +695,7 @@ func buildPaymentProductSnapshotWithGroup(plan *dbent.SubscriptionPlan, orderAmo
 		"validity_days":     plan.ValidityDays,
 		"validity_unit":     plan.ValidityUnit,
 		"subscription_days": subscriptionDays,
-		"entitlements":      plan.Entitlements,
+		"entitlements":      paymentSnapshotEntitlements(plan.Entitlements),
 	}
 	if group != nil {
 		snapshot["group_name"] = group.Name
@@ -471,6 +710,22 @@ func buildPaymentProductSnapshotWithGroup(plan *dbent.SubscriptionPlan, orderAmo
 		}
 	}
 	return snapshot
+}
+
+// paymentSnapshotEntitlements preserves fulfillment benefits while omitting
+// administrator-only audience metadata. A historical order needs its benefit
+// snapshot, never a list of users who could have purchased it at the time.
+func paymentSnapshotEntitlements(raw map[string]any) map[string]any {
+	if raw == nil {
+		return nil
+	}
+	copy := make(map[string]any, len(raw))
+	for key, value := range raw {
+		copy[key] = value
+	}
+	delete(copy, "purchase_rules")
+	delete(copy, "reset_card_purchase_rules")
+	return copy
 }
 
 func paymentSnapshotFeatures(raw string) []string {

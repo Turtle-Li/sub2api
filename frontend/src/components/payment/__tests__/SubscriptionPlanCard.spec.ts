@@ -64,6 +64,15 @@ const mountPlanCard = (
   });
 
 describe("SubscriptionPlanCard", () => {
+  it('keeps purchase conditions readable without allowing locked selection', async () => {
+    const wrapper = mountPlanCard('openai', { eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 49 } })
+    expect(wrapper.attributes('aria-disabled')).toBe('true')
+    await wrapper.trigger('click')
+    await wrapper.trigger('keydown.enter')
+    await wrapper.trigger('keydown.space')
+    expect(wrapper.emitted('select')).toBeUndefined()
+  })
+
   it("does not show Antigravity model scopes for OpenAI plans", () => {
     const wrapper = mountPlanCard("openai")
     const text = wrapper.text();
@@ -71,7 +80,7 @@ describe("SubscriptionPlanCard", () => {
     expect(wrapper.classes()).toContain("payment-product-card")
     expect(wrapper.find(".payment-product-card__body").exists()).toBe(true)
     expect(wrapper.find(".payment-product-card__list").exists()).toBe(true)
-    expect(wrapper.find("button").classes()).toContain("payment-product-card__action")
+    expect(wrapper.find("button").exists()).toBe(false)
 
     expect(text).not.toContain("Claude");
     expect(text).not.toContain("Gemini");
@@ -175,11 +184,11 @@ describe("SubscriptionPlanCard", () => {
 
   // The whole card is the control. A card that looks selectable but only reacts
   // on a small button at its bottom edge reads as broken.
-  it("emits select from the card body, not just the action button", async () => {
+  it("emits select from the card body and keyboard", async () => {
     const wrapper = mountPlanCard("openai");
 
     await wrapper.trigger("click");
-    await wrapper.get("button").trigger("click");
+    await wrapper.trigger("keydown", { key: "Enter" });
 
     expect(wrapper.emitted("select")).toHaveLength(2);
     expect(wrapper.attributes("aria-pressed")).toBe("false");

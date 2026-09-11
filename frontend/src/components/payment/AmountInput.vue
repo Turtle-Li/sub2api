@@ -1,16 +1,18 @@
 <template>
   <div>
-    <div v-if="filteredOptions.length > 0" class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <div v-if="filteredOptions.length > 0" class="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
       <article
         v-for="option in filteredOptions"
         :key="option.amount"
         role="button"
         tabindex="0"
         :aria-pressed="isSelected(option)"
+        :aria-disabled="option.eligibility?.can_purchase === false"
         :aria-label="`${formatAmount(option.amount)} · ${tierName(option)}`"
         :class="[
-          'payment-product-card',
-          isSelected(option) && 'payment-product-card--selected',
+          'payment-product-card payment-recharge-card',
+          option.eligibility?.can_purchase === false && 'payment-product-card--unavailable',
+          isSelected(option) && 'payment-product-card--selected payment-recharge-card--selected',
           isFeatured(option) && 'payment-product-card--featured',
         ]"
         @click="selectAmount(option.amount)"
@@ -22,13 +24,13 @@
           {{ t(option.recommended ? 'payment.recommended' : 'payment.bestValue') }}
         </span>
 
+        <span v-if="isSelected(option)" class="payment-product-card__check" aria-hidden="true">
+          <Icon name="check" size="xs" :stroke-width="3" />
+        </span>
         <div class="payment-product-card__body">
           <!-- Identity -->
           <div class="min-w-0">
             <h3 :title="tierName(option)" class="payment-product-card__title">{{ tierName(option) }}</h3>
-            <p v-if="option.description" class="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-dark-400">
-              {{ option.description }}
-            </p>
           </div>
 
           <!-- Price. The list price and discount get their own row rather than
@@ -45,20 +47,17 @@
             </p>
           </div>
 
-          <!-- The total balance is the primary purchase outcome. -->
           <div class="payment-recharge-card__credit">
-            <span class="payment-recharge-card__credit-label">{{ t('payment.creditedBalance') }}</span>
-            <strong class="payment-recharge-card__credit-value">{{ formatAmountValue(creditedFor(option)) }} <span class="text-sm font-medium tracking-normal">{{ t('payment.creditUnit') }}</span></strong>
+            <div class="payment-recharge-card__credit-heading">
+              <span class="payment-recharge-card__credit-label">{{ t('payment.creditedBalance') }}</span>
+              <span v-if="hasBalanceBonus(option)" class="payment-recharge-card__bonus">
+                {{ t('payment.rechargeBonusShort') }} +{{ formatAmountValue(option.balance_bonus || 0) }}
+              </span>
+            </div>
+            <strong class="payment-recharge-card__credit-value">{{ formatAmountValue(creditedFor(option)) }} <span class="text-xs font-medium tracking-normal">{{ t('payment.creditUnit') }}</span></strong>
           </div>
 
-          <!-- A configured bonus is visible once, alongside the total it raises. -->
-          <div v-if="hasBalanceBonus(option)" class="payment-recharge-card__bonus">
-            <span class="payment-recharge-card__bonus-label">
-              <Icon name="sparkles" size="xs" :stroke-width="2.2" />
-              {{ t('payment.rechargeBonus') }}
-            </span>
-            <strong class="payment-recharge-card__bonus-value">+{{ formatAmountValue(option.balance_bonus || 0) }} <span class="text-sm font-medium">{{ t('payment.creditUnit') }}</span></strong>
-          </div>
+          <PurchaseEligibilityHint :eligibility="option.eligibility" />
 
           <!-- Benefits and estimates. Absent data renders nothing at all. -->
           <ul v-if="listItems(option).length > 0" class="payment-product-card__list">
@@ -77,19 +76,7 @@
             </li>
           </ul>
 
-          <button
-            type="button"
-            tabindex="-1"
-            :class="[
-              'payment-product-card__action',
-              isSelected(option)
-                ? 'bg-primary-600 text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-400'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-200 dark:hover:bg-dark-600',
-            ]"
-            @click.stop="selectAmount(option.amount)"
-          >
-            {{ isSelected(option) ? t('payment.selectedRechargeTier') : t('payment.selectRechargeTier') }}
-          </button>
+
         </div>
       </article>
     </div>
@@ -106,6 +93,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RechargeOption } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
+import PurchaseEligibilityHint from './PurchaseEligibilityHint.vue'
 import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from './currency'
 import { creditedBalanceAmount } from './pricing'
 
@@ -177,6 +165,7 @@ function isSelected(option: RechargeOption): boolean {
 }
 
 function selectAmount(amount: number) {
+  if (filteredOptions.value.find(option => option.amount === amount)?.eligibility?.can_purchase === false) return
   emit('update:modelValue', amount)
 }
 
@@ -246,27 +235,32 @@ function listItems(option: RechargeOption): TierListItem[] {
 </script>
 
 <style scoped>
+.payment-recharge-card--selected {
+  @apply bg-primary-50/60 dark:bg-primary-950/40;
+}
+.payment-recharge-card .payment-product-card__body {
+  @apply gap-4 p-4 sm:p-5;
+}
+.payment-recharge-card .payment-product-card__title {
+  @apply pr-5 text-sm;
+}
+.payment-recharge-card .payment-product-card__price {
+  @apply text-[1.75rem] sm:text-[2rem];
+}
 .payment-recharge-card__credit {
-  @apply rounded-xl bg-primary-50 px-3.5 py-3 dark:bg-primary-900/30;
+  @apply border-t border-gray-100 pt-3 dark:border-dark-700;
 }
-
+.payment-recharge-card__credit-heading {
+  @apply flex min-h-5 items-center justify-between gap-1;
+}
 .payment-recharge-card__credit-label {
-  @apply block text-xs font-semibold text-primary-700 dark:text-primary-300;
+  @apply text-[11px] font-medium text-gray-500 dark:text-dark-400;
 }
-
 .payment-recharge-card__credit-value {
-  @apply mt-1 block text-[2.25rem] font-bold leading-none tracking-tight tabular-nums text-primary-800 dark:text-primary-200;
+  @apply mt-1.5 block text-3xl font-semibold leading-none tracking-tight tabular-nums text-primary-700 dark:text-primary-300;
 }
-
 .payment-recharge-card__bonus {
-  @apply flex flex-wrap items-center justify-between gap-2 rounded-xl bg-primary-700 px-3.5 py-3 text-white dark:bg-primary-800;
-}
-
-.payment-recharge-card__bonus-label {
-  @apply inline-flex min-w-0 items-center gap-1.5 text-sm font-semibold;
-}
-
-.payment-recharge-card__bonus-value {
-  @apply shrink-0 text-2xl font-bold leading-none tabular-nums;
+  @apply inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-bold leading-4 tabular-nums;
+  @apply bg-primary-100 text-primary-800 dark:bg-primary-400/15 dark:text-primary-200;
 }
 </style>

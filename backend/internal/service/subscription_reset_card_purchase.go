@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -26,8 +27,6 @@ var (
 	ErrResetCardPaymentDisabled     = infraerrors.Forbidden("PAYMENT_DISABLED", "payment system is disabled")
 	ErrResetCardUserInactive        = infraerrors.Forbidden("USER_INACTIVE", "user account is disabled")
 )
-
-const resetCardPurchasePriceScale int32 = 2
 
 // SubscriptionResetCardQuote is the server-derived, short-lived price for one
 // reset card. The monthly plan remains the source of truth at purchase time.
@@ -64,13 +63,15 @@ type resetCardPurchaseSubscription struct {
 	subscriptionStat string
 	groupStatus      string
 	subscriptionType string
+	platform         string
 	userStatus       string
 }
 
 type resetCardPurchasePlan struct {
-	id       int64
-	price    decimal.Decimal
-	currency string
+	id           int64
+	price        decimal.Decimal
+	currency     string
+	entitlements map[string]any
 }
 
 type resetCardPurchaseRecord struct {
@@ -111,8 +112,15 @@ func (s *SubscriptionService) GetResetCardQuote(ctx context.Context, userID, sub
 	if err := validateResetCardPurchasePlanCurrency(plan.currency); err != nil {
 		return nil, err
 	}
-	price, err := resetCardPriceForMonthlyPlan(plan.price)
+	price, err := resetCardPurchasePriceForPlan(plan)
 	if err != nil {
+		return nil, err
+	}
+	_, entitlements, err := normalizePlanEntitlements(plan.entitlements)
+	if err != nil {
+		return nil, ErrPurchaseRulesUnavailable
+	}
+	if err := validateResetCardPurchaseRules(ctx, s.entClient, userID, entitlements); err != nil {
 		return nil, err
 	}
 
@@ -222,12 +230,19 @@ func (s *SubscriptionService) PurchaseResetCard(ctx context.Context, input Purch
 		if err := validateResetCardPurchasePlanCurrency(plan.currency); err != nil {
 			return err
 		}
-		price, err := resetCardPriceForMonthlyPlan(plan.price)
+		price, err := resetCardPurchasePriceForPlan(plan)
 		if err != nil {
 			return err
 		}
 		if plan.id != input.ExpectedPlanID || !price.Equal(expectedPrice) {
 			return ErrResetCardQuoteChanged
+		}
+		_, entitlements, err := normalizePlanEntitlements(plan.entitlements)
+		if err != nil {
+			return ErrPurchaseRulesUnavailable
+		}
+		if err := validateResetCardPurchaseRules(txCtx, client, input.UserID, entitlements); err != nil {
+			return err
 		}
 
 		if err := debitResetCardPurchaseBalance(txCtx, client, input.UserID, price); err != nil {
@@ -344,6 +359,24 @@ func resetCardPriceForMonthlyPlan(monthlyPrice decimal.Decimal) (decimal.Decimal
 	return price, nil
 }
 
+// resetCardPurchasePriceForPlan keeps the current for-sale monthly plan as
+// the authoritative source. A valid explicit metadata value wins; plans
+// stored before that metadata retain the historical monthly-price fallback.
+func resetCardPurchasePriceForPlan(plan resetCardPurchasePlan) (decimal.Decimal, error) {
+	_, entitlements, err := normalizePlanEntitlements(plan.entitlements)
+	if err != nil {
+		return decimal.Decimal{}, ErrResetCardPriceInvalid
+	}
+	configuredPrice, configured, err := resetCardPurchaseConfiguredPrice(entitlements.ResetCardPurchasePrice)
+	if err != nil {
+		return decimal.Decimal{}, ErrResetCardPriceInvalid
+	}
+	if configured {
+		return configuredPrice, nil
+	}
+	return resetCardPriceForMonthlyPlan(plan.price)
+}
+
 // The wallet's fixed parity is 1 CNY = 1 internal credit. A plan currency is
 // display-only in ordinary checkout, so an unlabeled or foreign-currency plan
 // cannot safely be converted into a wallet debit here. Require explicit CNY.
@@ -356,7 +389,7 @@ func validateResetCardPurchasePlanCurrency(currency string) error {
 
 func loadResetCardPurchaseSubscription(ctx context.Context, client *dbent.Client, userID, subscriptionID int64, forUpdate bool) (resetCardPurchaseSubscription, bool, error) {
 	query := `
-		SELECT us.group_id, us.expires_at, us.status, g.status, g.subscription_type, u.status
+		SELECT us.group_id, us.expires_at, us.status, g.status, g.subscription_type, g.platform, u.status
 		FROM user_subscriptions us
 		JOIN users u ON u.id = us.user_id AND u.deleted_at IS NULL
 		JOIN groups g ON g.id = us.group_id AND g.deleted_at IS NULL
@@ -377,7 +410,7 @@ func loadResetCardPurchaseSubscription(ctx context.Context, client *dbent.Client
 		return resetCardPurchaseSubscription{}, false, nil
 	}
 	var subscription resetCardPurchaseSubscription
-	if err := rows.Scan(&subscription.groupID, &subscription.expiresAt, &subscription.subscriptionStat, &subscription.groupStatus, &subscription.subscriptionType, &subscription.userStatus); err != nil {
+	if err := rows.Scan(&subscription.groupID, &subscription.expiresAt, &subscription.subscriptionStat, &subscription.groupStatus, &subscription.subscriptionType, &subscription.platform, &subscription.userStatus); err != nil {
 		return resetCardPurchaseSubscription{}, false, fmt.Errorf("scan reset card purchase subscription: %w", err)
 	}
 	if err := rows.Err(); err != nil {
@@ -399,6 +432,9 @@ func validateResetCardPurchaseSubscription(subscription resetCardPurchaseSubscri
 	if subscription.subscriptionType != SubscriptionTypeSubscription {
 		return ErrGroupNotSubscriptionType
 	}
+	if !isNewSubscriptionCheckoutPlatform(subscription.platform) {
+		return ErrResetCardPurchaseUnavailable
+	}
 	if subscription.groupStatus != StatusActive {
 		return ErrResetCardGroupInactive
 	}
@@ -407,7 +443,7 @@ func validateResetCardPurchaseSubscription(subscription resetCardPurchaseSubscri
 
 func loadSingleMonthlyResetCardPlan(ctx context.Context, client *dbent.Client, groupID int64, forUpdate bool) (resetCardPurchasePlan, error) {
 	query := `
-		SELECT id, price::text, currency
+		SELECT id, price::text, currency, COALESCE(entitlements, '{}'::jsonb)::text
 		FROM subscription_plans
 		WHERE group_id = $1
 			AND for_sale = TRUE
@@ -429,10 +465,11 @@ func loadSingleMonthlyResetCardPlan(ctx context.Context, client *dbent.Client, g
 	var plans []resetCardPurchasePlan
 	for rows.Next() {
 		var (
-			plan  resetCardPurchasePlan
-			price string
+			plan         resetCardPurchasePlan
+			price        string
+			entitlements string
 		)
-		if err := rows.Scan(&plan.id, &price, &plan.currency); err != nil {
+		if err := rows.Scan(&plan.id, &price, &plan.currency, &entitlements); err != nil {
 			return resetCardPurchasePlan{}, fmt.Errorf("scan reset card monthly plan: %w", err)
 		}
 		parsed, err := decimal.NewFromString(price)
@@ -440,6 +477,9 @@ func loadSingleMonthlyResetCardPlan(ctx context.Context, client *dbent.Client, g
 			return resetCardPurchasePlan{}, fmt.Errorf("parse reset card monthly plan price: %w", err)
 		}
 		plan.price = parsed
+		if err := json.Unmarshal([]byte(entitlements), &plan.entitlements); err != nil {
+			return resetCardPurchasePlan{}, ErrResetCardPriceInvalid
+		}
 		plans = append(plans, plan)
 	}
 	if err := rows.Err(); err != nil {
