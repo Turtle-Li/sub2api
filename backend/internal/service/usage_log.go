@@ -166,7 +166,7 @@ type UsageLog struct {
 	CacheReadCost     float64
 	TotalCost         float64
 	ActualCost        float64
-	// Currency is the settlement currency for the monetary amounts on this row.
+	// Currency labels customer cost fields; AccountStatsCost remains USD.
 	// Empty legacy values mean USD.
 	Currency                  string `json:"currency"`
 	RateMultiplier            float64

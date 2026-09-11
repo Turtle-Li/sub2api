@@ -1610,15 +1610,7 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if configuredUnit := group.GetImagePrice(req.ImageSize); configuredUnit != nil && *configuredUnit >= 0 {
 			unit = *configuredUnit
 		}
-		// Explicit per-model cards have the same precedence as synchronous image
-		// billing. The resolver normalizes authored CNY cards to the USD basis.
-		if resolver, ok := s.Pricing.(*BatchImageModelPricingResolver); ok && resolver.Resolver != nil {
-			resolved := resolver.Resolver.Resolve(ctx, PricingInput{Model: req.Model, GroupID: &group.ID, Group: group})
-			if resolved != nil && (resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel) &&
-				(resolved.Mode == BillingModeImage || resolved.Mode == BillingModePerRequest) {
-				unit = resolver.Resolver.GetRequestTierPrice(resolved, req.ImageSize)
-			}
-		}
+
 	}
 	if unit < 0 {
 		if s.Pricing == nil {

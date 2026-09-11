@@ -159,13 +159,13 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	}
 
 	if p.shouldDeductAPIKeyQuota() {
-		if err := p.APIKeyService.UpdateQuotaUsed(billingCtx, p.APIKey.ID, cost.ActualCost); err != nil {
+		if err := p.APIKeyService.UpdateQuotaUsed(billingCtx, p.APIKey.ID, keyQuotaCost(cost, p.APIKey)); err != nil {
 			slog.Error("update api key quota failed", "api_key_id", p.APIKey.ID, "error", err)
 		}
 	}
 
 	if p.shouldUpdateRateLimits() {
-		if err := p.APIKeyService.UpdateRateLimitUsage(billingCtx, p.APIKey.ID, cost.ActualCost); err != nil {
+		if err := p.APIKeyService.UpdateRateLimitUsage(billingCtx, p.APIKey.ID, keyQuotaCost(cost, p.APIKey)); err != nil {
 			slog.Error("update api key rate limit usage failed", "api_key_id", p.APIKey.ID, "error", err)
 		}
 	}
@@ -318,10 +318,10 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	}
 
 	if p.shouldDeductAPIKeyQuota() {
-		cmd.APIKeyQuotaCost = p.Cost.ActualCost
+		cmd.APIKeyQuotaCost = keyQuotaCost(p.Cost, p.APIKey)
 	}
 	if p.shouldUpdateRateLimits() {
-		cmd.APIKeyRateLimitCost = p.Cost.ActualCost
+		cmd.APIKeyRateLimitCost = keyQuotaCost(p.Cost, p.APIKey)
 	}
 	if p.shouldUpdateAccountQuota() {
 		cmd.AccountQuotaCost = accountQuotaBasis(p.Cost) * p.AccountRateMultiplier
@@ -333,8 +333,10 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	if p.Cost.settlementCurrency == "CNY" && p.Cost.settlementRate > 0 {
 		canonical := *cmd
 		canonical.BalanceCost /= p.Cost.settlementRate
-		canonical.APIKeyQuotaCost /= p.Cost.settlementRate
-		canonical.APIKeyRateLimitCost /= p.Cost.settlementRate
+		if p.APIKey.Group == nil || !p.APIKey.Group.IsSubscriptionType() {
+			canonical.APIKeyQuotaCost /= p.Cost.settlementRate
+			canonical.APIKeyRateLimitCost /= p.Cost.settlementRate
+		}
 		cmd.RequestFingerprint = buildUsageBillingFingerprint(&canonical)
 	}
 	cmd.Normalize()
@@ -389,7 +391,7 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 	}
 
 	if p.Cost.ActualCost > 0 && p.APIKey != nil && p.APIKey.HasRateLimits() {
-		deps.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(p.APIKey.ID, p.Cost.ActualCost)
+		deps.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(p.APIKey.ID, keyQuotaCost(p.Cost, p.APIKey))
 	}
 
 	deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)

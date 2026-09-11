@@ -38,14 +38,6 @@ func (s *BillingService) SettlementCurrency() string {
 	return s.currentCurrencyPolicy().SettlementCurrency
 }
 
-func (s *BillingService) settleUSDPrice(value float64) float64 {
-	policy := s.currentCurrencyPolicy()
-	if policy.SettlementCurrency == "CNY" {
-		return value * policy.USDToCNYRate
-	}
-	return value
-}
-
 func (s *BillingService) settleCost(cost *CostBreakdown) {
 	if cost == nil || cost.settlementCurrency != "" {
 		return
@@ -113,4 +105,16 @@ func (s *BillingService) pricingCardInUSD(card *ChannelModelPricing) *ChannelMod
 	}
 	normalized.Currency = "USD"
 	return &normalized
+}
+
+// Key quota denomination follows the bound group, even if a subscription-group
+// request falls back to wallet billing because no entitlement is active.
+func keyQuotaCost(cost *CostBreakdown, key *APIKey) float64 {
+	if cost == nil {
+		return 0
+	}
+	if key != nil && key.Group != nil && key.Group.IsSubscriptionType() && cost.settlementCurrency == "CNY" && cost.settlementRate > 0 {
+		return cost.ActualCost / cost.settlementRate
+	}
+	return cost.ActualCost
 }

@@ -1,4 +1,4 @@
--- Every usage-log amount carries the settlement currency that was active when
+-- Customer usage-log amounts carry the settlement currency that was active when
 -- the row was written. The additive default preserves the legacy USD meaning
 -- without rewriting any historical amount.
 ALTER TABLE usage_logs
@@ -17,4 +17,4 @@ DO $$ BEGIN
 END $$;
 
 COMMENT ON COLUMN usage_logs.currency IS
-    'Settlement currency for the monetary amounts on this usage row; USD or CNY';
+    'Customer cost currency (USD or CNY); account_stats_cost remains USD';

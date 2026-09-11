@@ -145,3 +145,21 @@ func TestBillingCurrencyDisplayScheduleStaysUSD(t *testing.T) {
 	require.InDelta(t, 2e-6, *model.Pricing.ImageInputPrice, 1e-12)
 	require.Equal(t, image, *group.ModelPricing[0].ImageInputPrice)
 }
+
+func TestBillingCurrencySubscriptionGroupWalletFallbackKeepsKeyQuotaUSD(t *testing.T) {
+	key := &APIKey{ID: 2, Quota: 100, RateLimit5h: 10, Group: &Group{SubscriptionType: SubscriptionTypeSubscription}}
+	before, err := currencyTestBilling("USD").CalculateCost("claude-sonnet-4", UsageTokens{InputTokens: 1000000}, .8)
+	require.NoError(t, err)
+	after, err := currencyTestBilling("CNY").CalculateCost("claude-sonnet-4", UsageTokens{InputTokens: 1000000}, .8)
+	require.NoError(t, err)
+	p := &postUsageBillingParams{Cost: before, APIKey: key, APIKeyService: &APIKeyService{}, User: &User{ID: 1}, Account: &Account{ID: 3, Type: AccountTypeOAuth}}
+	log := &UsageLog{Model: "claude-sonnet-4", InputTokens: 1000000}
+	old := buildUsageBillingCommand("fallback", log, p)
+	p.Cost = after
+	got := buildUsageBillingCommand("fallback", log, p)
+	require.InDelta(t, old.BalanceCost*6.75, got.BalanceCost, 1e-12)
+	require.Equal(t, old.APIKeyQuotaCost, got.APIKeyQuotaCost)
+	require.Equal(t, old.APIKeyRateLimitCost, got.APIKeyRateLimitCost)
+	require.Equal(t, old.RequestFingerprint, got.RequestFingerprint)
+	require.InDelta(t, before.ActualCost, keyQuotaCost(after, key), 1e-12)
+}
