@@ -12,7 +12,7 @@
 
 只读架构咨询选择复用现有商品授权与目录配置，而不增加 test-only API 或总开关例外。非指定账号的重置报价/购买也受唯一在售月计划及其受众限制；指定账号原有重置功能不由本任务关闭，本轮不执行。
 
-初始基线 `d756ab3ea7c88ea3ab0a42db154cfe776afcecff`；最终代码整合到 `3f61330af2a11580e74191d1cf1cd7f74357886b`，23 个支付变更文件 SHA 保持一致。正式支付契约继续采用 `docs/UNIFIED_PAYMENT_INTEGRATION.md` 的固定 SDK/types blob `9a4829f36b202a9904cfc38b752d31c7f1c63063` 与 OpenAPI blob `0bcfa34ee58bcd8f346a4bac86db9e2d89829c48`（整数分最小 1）；未修改第三方签名、回调、退款或凭据契约。
+初始基线 `d756ab3ea7c88ea3ab0a42db154cfe776afcecff`；最终代码纳入 `eb6fe30e0bfdeb1081360307c688fb54a8122674`（包含 `3f61330af` 计费代码及其发布记录）。正式支付契约继续采用 `docs/UNIFIED_PAYMENT_INTEGRATION.md` 的固定 SDK/types blob `9a4829f36b202a9904cfc38b752d31c7f1c63063` 与 OpenAPI blob `0bcfa34ee58bcd8f346a4bac86db9e2d89829c48`（整数分最小 1）；未修改第三方签名、回调、退款或凭据契约。
 
 ## 执行与验证计划
 
@@ -28,7 +28,7 @@
 
 目录 staging 使用短事务（锁等待 3 秒、语句 15 秒），先锁定 Plus 组及计划/设置表，再比较完整计划和选定设置前值。设置表锁覆盖尚不存在的导航设置键。所有执行使用 `psql -X -qAt -v ON_ERROR_STOP=1`，由源站同一执行链持有 canonical maintenance fd8 至 psql 结束；源站既有运行时仅在短期子进程内提供 DB 凭据。中途失败/回执未知必须先只读核对，禁止盲重试。
 
-staging、独立 readback、enable、close 与 restore 均显式使用 `Asia/Shanghai` 会话时区，保证完整 JSON 前值比较不会被时间戳格式差异误判。最终 enable 只改 `payment_enabled=false→true`，要求读回唯一受限月计划/固定充值档位、实际收款 0.10、余额赠送 99.90、无额外汇率或费用，并确认入口为 false。关闭和还原是两个独立步骤：close 只将支付/入口置 false；从新的关闭读回生成 restore，计划/设置如有变化则中止还原。保留测试计划为停售，以保存历史订单引用；不删除财务记录。
+staging、独立 readback、enable、close 与 restore 均显式使用 `Asia/Shanghai` 会话时区，保证完整 JSON 前值比较不会被时间戳格式差异误判。最终 enable 只改 `payment_enabled=false→true`，要求读回唯一受限月计划/固定充值档位、实际收款 0.10、余额赠送 99.90、无额外汇率或费用，并确认入口为 false。运维 Python 明确拒绝优化模式，防止前置校验被禁用；enable/restore 只接受成功的独立 readback 回执。关闭和还原是两个独立步骤：close 只将支付/入口置 false；从新的关闭读回生成 restore，计划/设置如有变化则中止还原。保留测试计划为停售，以保存历史订单引用；不删除财务记录。
 
 生产前状态、最终 source/artifact 身份、发布与配置读回结果将在执行后补充。回滚使用总开关优先关闭、配置前值校验和兼容 CNY 的旧镜像；不覆盖历史订单、余额、订阅或退款。
 

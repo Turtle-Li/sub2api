@@ -322,7 +322,7 @@ import {
   type RemainingDurationParts
 } from '@/utils/subscriptionQuota'
 import { createIdempotencyKey } from '@/utils/idempotency'
-import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
+import { isPaymentEntryVisible } from '@/utils/featureFlags'
 
 function platformAccentDotClass(p: string): string {
   switch (p) {
@@ -340,7 +340,7 @@ const appStore = useAppStore()
 
 // Presentation-only entry switch hides the renew (purchase) CTA while this
 // own-subscriptions page stays fully reachable.
-const canShowPaymentEntry = computed(() => isFeatureFlagEnabled(FeatureFlags.paymentEntry))
+const canShowPaymentEntry = computed(() => isPaymentEntryVisible())
 
 const subscriptions = ref<UserSubscription[]>([])
 const loading = ref(true)
