@@ -42,6 +42,9 @@
   uninterrupted API use with temporary undercharging allowed. Follow
   `deploy/currency-migration/ONLINE_CUTOVER_20260912.md` for cache bypass,
   obsolete-writer exclusion, verified backups and the online transaction.
+  The live conversion completed on September 12; read
+  `docs/operations/CNY_WALLET_CUTOVER_20260912.md` for the manifest, probes and
+  compatible fallback. Do not rerun migration SQL or restore the old USD DB.
 
 ## Unified payment integration
 

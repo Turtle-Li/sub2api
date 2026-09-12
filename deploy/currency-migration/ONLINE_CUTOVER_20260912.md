@@ -2,6 +2,11 @@
 
 Owner decision: existing USD wallets ×6.75; future paid recharge 1:1 in CNY; nominal recharge bonuses unchanged. Keep APIs accepting. Old USD requests that complete after conversion may deduct their original numeric amount (temporary undercharge); no compensating extra debit. Group/model discounts and subscription USD entitlements remain unchanged.
 
+The production transaction committed at **2026-09-12 13:40:29 CST**. See
+`docs/operations/CNY_WALLET_CUTOVER_20260912.md` for the actual release,
+backup, reconciliation and final operating state. Do not rerun this packet
+against the already-converted database.
+
 This packet supersedes the earlier admission-pause plan for this specific run. A PostgreSQL transaction still briefly serializes writes; do not promise zero latency. No payment, refund, invoice, order snapshot or used redeem record is rewritten. The live preset bonuses are now 0/0/5/20/75/145 from the separately released payment catalog; preserve that catalog.
 
 ## Verified preflight, September 12 daytime
@@ -22,6 +27,34 @@ This packet supersedes the earlier admission-pause plan for this specific run. A
 6. Use the existing protected release-probe credential for real wallet calls. Identify its numeric user/key IDs securely and take DB snapshots immediately before/after. The CNY wallet decrease must match the unique usage row's `actual_cost` within stored decimal precision; standard platform usage must increase consistently. Zero-configured key quota/rate limits remain unlimited and are not falsely claimed as exercised limits. Verify a real subscription request still records USD and consumes its subscription window, with wallet unchanged. All calls remain subject to ordinary authentication and use a nonzero-price model. Preserve only privacy-safe evidence and IDs.
 7. Compare every wallet against its saved converted value plus legitimate post-transaction debits/credits; confirm recharge multiplier 1, CNY policy/rate 6.75, unchanged group multipliers and subscription limits. Monitor API 5xx, insufficient-balance/quota errors and usage for at least 15 minutes. A unique live test request must not be accepted as proof of whole-site availability.
 8. Keep cache bypass enabled until every pre-cutover application generation and its queued writers have stopped under the canonical drain monitor. Clear scoped caches once more, remove the marker, and run a final real debit/DB-cache parity probe. Do not force-stop user WebSockets to accelerate this step. If old sessions remain, document the temporary bypass state rather than silently re-enabling stale caches. Restore ordinary cache operation as soon as that condition is satisfied.
+
+### Corrections established by the live execution
+
+- The image entrypoint recursively changes `/app/data` ownership. A root-owned
+  marker alone is therefore insufficient: on this ext4 named volume the empty
+  marker was set root:root, mode 0600 and `chattr +i` on the host. Container-root
+  `chown` was verified to fail, and real requests did not recreate monetary/auth
+  caches. The entrypoint tolerates the failed ownership change. At cleanup use
+  host `chattr -i` before removing this exact marker. Recheck these properties
+  after every container start while bypass is needed.
+- Both blue and green were replaced by the same compatible image before SQL.
+  The stopped legacy `sub2api` container was renamed to
+  `sub2api-pre-cny-legacy-20260912` under the maintenance lock, preserving its
+  data while excluding it from the runtime guard's hard-coded fallback names.
+  Never allow automatic recovery to start an incompatible USD binary.
+- The actual protected release probe is **key 46 / user 1 / group 16**.
+  While bypass is active, `HasUserPlatformQuotaLimit` conservatively returns
+  true on cache miss, so even unlimited platform counters accumulate in DB.
+  Expired windows can legitimately reset on their first request. After normal
+  caches are restored, a cache hit with all limits NULL skips that counter
+  write. Verify the expected branch; neither branch imposes a new cap.
+- Close stdin (`</dev/null`) when invoking the cache helper from a parent SSH
+  heredoc. Its `docker exec -i` SQL calls otherwise consume the remaining
+  parent script. Production records distinguish the committed transaction
+  from subsequent readback and cache-refresh commands.
+- Installed UFW accepts `ufw allow ...` and `ufw delete allow ...`, without
+  `--force` on these subcommands. The retirement helper and its command-level
+  regression check now use the tested syntax.
 
 ## Recovery
 
