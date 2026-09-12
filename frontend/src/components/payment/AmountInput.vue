@@ -30,15 +30,12 @@
           <!-- Identity -->
           <div class="min-w-0">
             <h3 :title="tierName(option)" class="payment-product-card__title pr-5">{{ tierName(option) }}</h3>
-            <p v-if="option.description" class="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-dark-400 [overflow-wrap:anywhere]">
-              {{ option.description }}
-            </p>
           </div>
 
           <!-- Price. The list price and discount get their own row rather than
                wrapping out of the headline, so every card breaks in the same
                place regardless of how long its numbers are. -->
-          <div class="min-w-0">
+          <div class="mt-4 min-w-0">
             <span class="payment-product-card__price">{{ formatAmount(option.amount) }}</span>
             <div v-if="discountPercent(option) > 0" class="mt-1.5 flex flex-wrap items-center gap-2">
               <span class="payment-product-card__strike">{{ formatAmount(option.original_price || 0) }}</span>
@@ -49,35 +46,49 @@
             </p>
           </div>
 
+          <!-- What actually lands. The credited balance and any bonus share one
+               panel, so a tier without a bonus has no empty box beside its
+               number. -->
           <div class="payment-recharge-card__credit">
-            <span class="payment-recharge-card__credit-label">{{ t('payment.creditedBalance') }}</span>
             <div class="payment-recharge-card__credit-heading">
-              <strong class="payment-recharge-card__credit-value">{{ formatAmountValue(creditedFor(option)) }} <span class="text-sm font-medium tracking-normal">{{ t('payment.creditUnit') }}</span></strong>
-              <span v-if="hasBalanceBonus(option)" class="payment-recharge-card__bonus">
-                <Icon name="gift" size="sm" :stroke-width="1.8" />
-                {{ t('payment.rechargeBonusShort') }} +{{ formatAmountValue(option.balance_bonus || 0) }} {{ t('payment.creditUnit') }}
-              </span>
+              <div class="min-w-0">
+                <span class="payment-recharge-card__credit-label">{{ t('payment.creditedBalance') }}</span>
+                <strong class="payment-recharge-card__credit-value">{{ formatAmountValue(creditedFor(option)) }} <span class="payment-recharge-card__credit-unit">{{ t('payment.creditUnit') }}</span></strong>
+              </div>
+              <div v-if="hasBalanceBonus(option)" class="payment-recharge-card__bonus-side">
+                <span class="payment-recharge-card__bonus-label">{{ t('payment.bonusIncluded') }}</span>
+                <span class="payment-recharge-card__bonus">
+                  <Icon name="gift" size="sm" :stroke-width="1.8" />
+                  +{{ formatAmountValue(option.balance_bonus || 0) }} <span class="payment-recharge-card__bonus-unit">{{ t('payment.creditUnit') }}</span>
+                </span>
+              </div>
             </div>
           </div>
 
-          <PurchaseEligibilityHint :eligibility="option.eligibility" />
+          <PurchaseEligibilityHint :eligibility="option.eligibility" class="mt-3" />
 
-          <!-- Benefits and estimates. Absent data renders nothing at all. -->
-          <ul v-if="listItems(option).length > 0" class="payment-product-card__list">
-            <li
-              v-for="item in listItems(option)"
-              :key="item.text"
-              :class="['payment-product-card__list-item', item.benefit && 'payment-product-card__list-item--benefit']"
-            >
-              <Icon
-                :name="item.benefit ? 'sparkles' : 'check'"
-                size="xs"
-                :stroke-width="2.2"
-                :class="['mt-[3px] shrink-0', item.benefit ? 'text-primary-500 dark:text-primary-400' : 'text-gray-300 dark:text-dark-600']"
-              />
-              <span class="min-w-0">{{ item.text }}</span>
-            </li>
-          </ul>
+          <!-- Benefits, estimates and the admin's own copy. Absent data renders
+               nothing at all. -->
+          <div v-if="listItems(option).length > 0 || visibleDescription(option)" class="payment-recharge-card__footer">
+            <ul v-if="listItems(option).length > 0" class="payment-product-card__list">
+              <li
+                v-for="item in listItems(option)"
+                :key="item.text"
+                :class="['payment-product-card__list-item', item.benefit && 'payment-product-card__list-item--benefit']"
+              >
+                <Icon
+                  name="check"
+                  size="xs"
+                  :stroke-width="2.2"
+                  :class="['mt-[4px] shrink-0', item.benefit ? 'text-primary-500 dark:text-primary-400' : 'text-gray-300 dark:text-dark-600']"
+                />
+                <span class="min-w-0">{{ item.text }}</span>
+              </li>
+            </ul>
+            <p v-if="visibleDescription(option)" class="payment-recharge-card__description">
+              {{ visibleDescription(option) }}
+            </p>
+          </div>
         </div>
       </article>
     </div>
@@ -157,12 +168,16 @@ const featuredAmount = computed<number | null>(() => {
   return best ? best.amount : null
 })
 
+// A locked tier keeps its admin-chosen recommendation priority but shows no
+// marketing emphasis: a card that cannot be bought carries no ribbon.
 function isFeatured(option: RechargeOption): boolean {
-  return featuredAmount.value === option.amount
+  return featuredAmount.value === option.amount && option.eligibility?.can_purchase !== false
 }
 
+// A previously selected tier that is now gated drops the selected appearance
+// (ring, check, aria-pressed). The model value itself is left untouched.
 function isSelected(option: RechargeOption): boolean {
-  return props.modelValue === option.amount
+  return props.modelValue === option.amount && option.eligibility?.can_purchase !== false
 }
 
 function selectAmount(amount: number) {
@@ -193,6 +208,17 @@ function creditedFor(option: RechargeOption): number {
 
 function hasBalanceBonus(option: RechargeOption): boolean {
   return Boolean(option.balance_bonus && option.balance_bonus > 0)
+}
+
+// Some configurations carry an auto-generated description that only restates
+// the bonus the credited panel already shows. Exactly that generated sentence
+// ("额外赠送 N 额度", N being this tier's formatted bonus) is dropped; any
+// other wording, including custom copy that mentions bonuses, stays whole.
+function visibleDescription(option: RechargeOption): string {
+  const description = (option.description || '').trim().replace(/\s+/g, ' ')
+  if (!description) return ''
+  if (hasBalanceBonus(option) && description === `额外赠送 ${formatAmountValue(option.balance_bonus || 0)} 额度`) return ''
+  return description
 }
 
 function discountPercent(option: RechargeOption): number {
@@ -249,19 +275,98 @@ function listItems(option: RechargeOption): TierListItem[] {
     @apply grid-cols-2;
   }
 }
+
+/* Each card measures itself, so tight two-column tracks relax the padding and
+   the price size before anything wraps awkwardly. */
+.payment-recharge-card {
+  container-type: inline-size;
+}
+
+/* The shared card body uses a uniform 16px rhythm; recharge cards widen the
+   padding and give each block its own cadence (16px into the price, 24px into
+   the credited panel, 18px into the footer) via the margins below. */
+.payment-recharge-card .payment-product-card__body {
+  @apply gap-0 p-6;
+}
+.payment-recharge-card .payment-product-card__title {
+  @apply text-lg leading-[26px];
+}
+.payment-recharge-card .payment-product-card__price {
+  @apply text-[40px] leading-[1.1] tracking-[-0.025em] tabular-nums text-primary-700 [overflow-wrap:anywhere] dark:text-primary-300;
+}
+@container (max-width: 360px) {
+  .payment-recharge-card .payment-product-card__body {
+    @apply p-5;
+  }
+  .payment-recharge-card .payment-product-card__price {
+    @apply text-[36px];
+  }
+}
+
+/* Credited platform balance sits directly under the gateway price, one step
+   down in weight, so "what I pay" and "what I get" never read as one number. */
 .payment-recharge-card__credit {
-  @apply border-t border-gray-100 pt-4 dark:border-dark-700;
+  @apply mt-6 rounded-xl border border-primary-100/70 bg-primary-50/60 p-4;
+  @apply dark:border-primary-800/40 dark:bg-primary-900/15;
+}
+/* Selection deepens only this panel; the ring and check stay the signal. */
+.payment-recharge-card.payment-product-card--selected .payment-recharge-card__credit {
+  @apply border-primary-200 bg-primary-50 dark:border-primary-700/50 dark:bg-primary-900/25;
 }
 .payment-recharge-card__credit-heading {
-  @apply mt-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2;
+  @apply flex flex-wrap items-end justify-between gap-x-4 gap-y-3;
 }
 .payment-recharge-card__credit-label {
-  @apply text-[13px] text-gray-500 dark:text-dark-400;
+  @apply block text-[13px] leading-5 text-gray-600 dark:text-dark-300;
 }
 .payment-recharge-card__credit-value {
-  @apply block text-3xl font-semibold leading-none tracking-tight tabular-nums text-primary-700 dark:text-primary-300;
+  @apply mt-1 block text-[32px] font-semibold leading-none tracking-tight tabular-nums text-primary-700 dark:text-primary-200;
+}
+.payment-recharge-card__credit-unit {
+  @apply text-sm font-medium tracking-normal;
+}
+.payment-recharge-card__bonus-side {
+  @apply ms-auto flex min-w-0 flex-col items-end gap-1 text-right;
+}
+.payment-recharge-card__bonus-label {
+  @apply text-[13px] leading-5 text-gray-600 dark:text-dark-300;
 }
 .payment-recharge-card__bonus {
-  @apply inline-flex items-center gap-1.5 text-sm font-semibold tabular-nums text-primary-700 dark:text-primary-300;
+  @apply inline-flex items-baseline gap-1.5 text-xl font-semibold tabular-nums text-primary-700 dark:text-primary-200;
+}
+.payment-recharge-card__bonus-unit {
+  @apply text-[13px] font-medium;
+}
+/* A narrow card lets the bonus drop to its own left-aligned row instead of
+   overflowing the credited number. */
+@container (max-width: 280px) {
+  .payment-recharge-card__bonus-side {
+    @apply ms-0 w-full items-start text-left;
+  }
+}
+
+.payment-recharge-card__footer {
+  @apply mt-[18px] flex flex-col gap-3;
+}
+.payment-recharge-card .payment-product-card__list {
+  @apply gap-2 text-sm leading-[22px];
+}
+.payment-recharge-card .payment-product-card__list-item,
+.payment-recharge-card .payment-product-card__list-item--benefit {
+  @apply font-normal text-gray-700 dark:text-dark-200;
+}
+.payment-recharge-card__description {
+  @apply text-[13px] leading-relaxed text-gray-500 [overflow-wrap:anywhere] dark:text-dark-400;
+}
+
+/* Locked tiers drop the marketing accents but stay fully readable, including
+   the eligibility condition rendered by the hint. */
+.payment-recharge-card.payment-product-card--unavailable .payment-product-card__price,
+.payment-recharge-card.payment-product-card--unavailable .payment-recharge-card__credit-value,
+.payment-recharge-card.payment-product-card--unavailable .payment-recharge-card__bonus {
+  @apply text-gray-500 dark:text-dark-400;
+}
+.payment-recharge-card.payment-product-card--unavailable .payment-recharge-card__credit {
+  @apply border-gray-200/80 bg-gray-50 dark:border-dark-700 dark:bg-dark-800/60;
 }
 </style>

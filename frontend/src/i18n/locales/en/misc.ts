@@ -362,6 +362,7 @@ export default {
     amountLabel: 'Amount',
     paymentAmount: 'Payment Amount',
     creditedBalance: 'Credited Balance',
+    bonusIncluded: 'Includes bonus',
     quickAmounts: 'Quick Amounts',
     rechargeOptionsTitle: 'Available recharge tiers',
     meteredTier: 'Metered',
