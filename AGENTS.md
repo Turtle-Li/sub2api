@@ -63,6 +63,8 @@
   and other platforms retain the initial rules. Deploy compatible code and
   drain old binaries before raising the group rate; rollback must preserve this
   code/rate pairing. Never convert existing wallets again.
+  Live activation, exact debit proof and compatible fallback are recorded in
+  `docs/operations/CODEX_DIRECT_RATE_20260912.md`.
 
 ## Unified payment integration
 
