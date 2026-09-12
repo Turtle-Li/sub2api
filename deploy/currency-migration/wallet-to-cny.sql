@@ -1,5 +1,5 @@
--- Run only after the reviewed release, writer drain/stop, and fresh backup.
--- psql -X -v ON_ERROR_STOP=1 -v recharge_factor=6.75 -v apply=false -f wallet-to-cny.sql rehearses and rolls back.
+-- Run only after the reviewed release and verified backup, following ONLINE_CUTOVER_20260912.md.
+-- psql -X -v ON_ERROR_STOP=1 -v recharge_factor=1 -v apply=false -f wallet-to-cny.sql rehearses and rolls back.
 -- Setting apply=true is the explicit cutover. Do not use as a startup migration.
 \set ON_ERROR_STOP on
 \if :{?apply}
