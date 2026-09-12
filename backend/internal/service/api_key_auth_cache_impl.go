@@ -196,7 +196,40 @@ func (s *APIKeyService) authCacheKey(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// setCurrencyCutoverCacheBypass injects the deployment-owned runtime marker
+// that temporarily forces API-key authentication to reload from the database.
+func (s *APIKeyService) setCurrencyCutoverCacheBypass(bypass interface{ Enabled() bool }) {
+	if s == nil {
+		return
+	}
+	s.currencyCutoverCacheBypass = bypass
+}
+
+func (s *APIKeyService) bypassCurrencyCutoverCache() bool {
+	if s == nil || s.currencyCutoverCacheBypass == nil {
+		return false
+	}
+	if !s.currencyCutoverCacheBypass.Enabled() {
+		s.currencyCutoverBypassActive.Store(false)
+		return false
+	}
+	if !s.currencyCutoverBypassActive.Swap(true) {
+		// Entries created before the marker can otherwise become visible again as
+		// soon as it is removed, even after Redis has been cleared for cutover.
+		if s.authCacheL1 != nil {
+			s.authCacheL1.Clear()
+		}
+		if s.authNegativeCacheL1 != nil {
+			s.authNegativeCacheL1.Clear()
+		}
+	}
+	return true
+}
+
 func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) (*APIKeyAuthCacheEntry, bool) {
+	if s.bypassCurrencyCutoverCache() {
+		return nil, false
+	}
 	if s.authCacheL1 != nil {
 		if val, ok := s.authCacheL1.Get(cacheKey); ok {
 			if entry, ok := val.(*APIKeyAuthCacheEntry); ok {
@@ -223,7 +256,7 @@ func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) 
 }
 
 func (s *APIKeyService) setAuthCacheL1(cacheKey string, entry *APIKeyAuthCacheEntry) {
-	if entry == nil {
+	if entry == nil || s.bypassCurrencyCutoverCache() {
 		return
 	}
 	if entry.NotFound {
@@ -241,7 +274,7 @@ func (s *APIKeyService) setAuthCacheL1(cacheKey string, entry *APIKeyAuthCacheEn
 }
 
 func (s *APIKeyService) setAuthCacheEntry(ctx context.Context, cacheKey string, entry *APIKeyAuthCacheEntry, ttl time.Duration) {
-	if entry == nil {
+	if entry == nil || s.bypassCurrencyCutoverCache() {
 		return
 	}
 	s.setAuthCacheL1(cacheKey, entry)

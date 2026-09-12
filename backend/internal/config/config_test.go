@@ -30,6 +30,34 @@ func TestLoadDefaultModelsListReadMaxBytes(t *testing.T) {
 	require.Equal(t, DefaultModelsListReadMaxBytes, cfg.Gateway.ModelsListReadMaxBytes)
 }
 
+func TestCurrencyCutoverCacheBypassConfigDefaultsDisabledAndTrimsPath(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Empty(t, cfg.Billing.CurrencyCutoverCacheBypassFile)
+
+	resetViperWithJWTSecret(t)
+	t.Setenv("BILLING_CURRENCY_CUTOVER_CACHE_BYPASS_FILE", "  /runtime/currency-cutover-cache-bypass  ")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, "/runtime/currency-cutover-cache-bypass", cfg.Billing.CurrencyCutoverCacheBypassFile)
+}
+
+func TestCurrencyCutoverCacheBypassRejectsQuotaFlusherAtStartup(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("BILLING_CURRENCY_CUTOVER_CACHE_BYPASS_FILE", "/runtime/currency-cutover-cache-bypass")
+	t.Setenv("DATABASE_USER_PLATFORM_QUOTA_FLUSHER_ENABLED", "true")
+	_, err := Load()
+	require.ErrorContains(t, err, "billing.currency_cutover_cache_bypass_file")
+
+	resetViperWithJWTSecret(t)
+	t.Setenv("BILLING_CURRENCY_CUTOVER_CACHE_BYPASS_FILE", "/runtime/currency-cutover-cache-bypass")
+	t.Setenv("DATABASE_USER_PLATFORM_QUOTA_FLUSHER_ENABLED", "false")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "/runtime/currency-cutover-cache-bypass", cfg.Billing.CurrencyCutoverCacheBypassFile)
+}
+
 func TestLoadTimezonePrecedence(t *testing.T) {
 	tests := []struct {
 		name         string

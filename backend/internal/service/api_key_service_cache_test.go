@@ -126,6 +126,7 @@ func (s *authRepoStub) GetRateLimitData(ctx context.Context, id int64) (*APIKeyR
 
 type authCacheStub struct {
 	getAuthCache   func(ctx context.Context, key string) (*APIKeyAuthCacheEntry, error)
+	getAuthCalls   int
 	setAuthKeys    []string
 	deleteAuthKeys []string
 }
@@ -151,6 +152,7 @@ func (s *authCacheStub) SetDailyUsageExpiry(ctx context.Context, apiKey string, 
 }
 
 func (s *authCacheStub) GetAuthCache(ctx context.Context, key string) (*APIKeyAuthCacheEntry, error) {
+	s.getAuthCalls++
 	if s.getAuthCache == nil {
 		return nil, redis.Nil
 	}
