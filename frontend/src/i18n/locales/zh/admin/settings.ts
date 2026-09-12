@@ -753,6 +753,8 @@ export default {
         configGuide: '支付配置指南',
         enabled: '启用支付',
         enabledHint: '启用或禁用支付系统',
+        entryEnabled: '显示购买入口',
+        entryEnabledHint: '关闭后隐藏侧边栏购买入口与充值/续费按钮；用户仍可通过直接链接访问购买页，卡片受众规则仍决定谁可以购买。',
         unifiedTitle: '统一支付服务',
         unifiedConfigured: '已配置',
         unifiedNotConfigured: '未接入',

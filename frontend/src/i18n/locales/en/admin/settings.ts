@@ -758,6 +758,8 @@ export default {
         configGuide: 'Configuration Guide',
         enabled: 'Enable Payment',
         enabledHint: 'Enable or disable the payment system',
+        entryEnabled: 'Show Purchase Entry',
+        entryEnabledHint: 'When off, the purchase menu and recharge/renew buttons are hidden; direct purchase links still work, and card audience rules still control who can buy.',
         unifiedTitle: 'Unified Payment Service',
         unifiedConfigured: 'Configured',
         unifiedNotConfigured: 'Not connected',

@@ -11,7 +11,7 @@
             <button @click="fetchOrders" :disabled="loading" class="btn btn-secondary" :title="t('common.refresh')">
               <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
             </button>
-            <button v-if="appStore.cachedPublicSettings?.payment_enabled" class="btn btn-primary" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
+            <button v-if="canShowPaymentEntry" class="btn btn-primary" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
           </div>
         </div>
       </div>
@@ -126,12 +126,19 @@ import InvoiceRequestDialog from '@/components/payment/InvoiceRequestDialog.vue'
 import OrderPurchaseSnapshot from '@/components/payment/OrderPurchaseSnapshot.vue'
 import OrderLifecycleBadge from '@/components/payment/OrderLifecycleBadge.vue'
 import { fulfillmentFact, paymentFact } from '@/components/payment/orderPresentation'
+import { isPaymentEntryVisible } from '@/utils/featureFlags'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import { currencySymbol } from '@/components/payment/currency'
 
 const { t } = useI18n()
 const router = useRouter()
 const appStore = useAppStore()
+
+// Recharge CTA stays gated on the loaded payment switch; the presentation-only
+// entry switch additionally hides it while keeping this history page reachable.
+const canShowPaymentEntry = computed(
+  () => Boolean(appStore.cachedPublicSettings?.payment_enabled) && isPaymentEntryVisible(),
+)
 
 const loading = ref(false)
 const actionLoading = ref(false)

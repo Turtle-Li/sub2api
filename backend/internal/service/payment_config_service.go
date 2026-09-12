@@ -22,6 +22,7 @@ import (
 
 const (
 	SettingPaymentEnabled      = "payment_enabled"
+	SettingPaymentEntryEnabled = "payment_entry_enabled"
 	SettingMinRechargeAmount   = "MIN_RECHARGE_AMOUNT"
 	SettingMaxRechargeAmount   = "MAX_RECHARGE_AMOUNT"
 	SettingDailyRechargeLimit  = "DAILY_RECHARGE_LIMIT"
@@ -80,7 +81,9 @@ const (
 
 // PaymentConfig holds the payment system configuration.
 type PaymentConfig struct {
-	Enabled                   bool     `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// EntryEnabled controls discovery links only; it is not order authorization.
+	EntryEnabled              bool     `json:"entry_enabled"`
 	MinAmount                 float64  `json:"min_amount"`
 	MaxAmount                 float64  `json:"max_amount"`
 	DailyLimit                float64  `json:"daily_limit"`
@@ -132,6 +135,7 @@ type UnifiedPaymentCapability interface {
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
 type UpdatePaymentConfigRequest struct {
 	Enabled                   *bool          `json:"enabled"`
+	EntryEnabled              *bool          `json:"entry_enabled"`
 	MinAmount                 *float64       `json:"min_amount"`
 	MaxAmount                 *float64       `json:"max_amount"`
 	DailyLimit                *float64       `json:"daily_limit"`
@@ -275,7 +279,7 @@ func (s *PaymentConfigService) IsPaymentEnabled(ctx context.Context) bool {
 // GetPaymentConfig returns the full payment configuration.
 func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentConfig, error) {
 	keys := []string{
-		SettingPaymentEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
+		SettingPaymentEnabled, SettingPaymentEntryEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
 		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingLoadBalanceStrategy,
 		SettingProductNamePrefix, SettingProductNameSuffix,
@@ -304,6 +308,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *PaymentConfig {
 	cfg := &PaymentConfig{
 		Enabled:                   vals[SettingPaymentEnabled] == "true",
+		EntryEnabled:              paymentEntryEnabledFromValue(vals[SettingPaymentEntryEnabled]),
 		MinAmount:                 pcParseFloat(vals[SettingMinRechargeAmount], 1),
 		MaxAmount:                 pcParseFloat(vals[SettingMaxRechargeAmount], 0),
 		DailyLimit:                pcParseFloat(vals[SettingDailyRechargeLimit], 0),
@@ -356,6 +361,12 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		cfg.EnabledTypes = NormalizeVisibleMethods(types)
 	}
 	return cfg
+}
+
+// An absent setting preserves the existing visible entry. Invalid persisted
+// values hide discovery links; the independent payment switch is unchanged.
+func paymentEntryEnabledFromValue(raw string) bool {
+	return raw == "" || raw == "true"
 }
 
 func pcEnvBoolOverride(key string, fallback bool) bool {
@@ -583,6 +594,9 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	m := make(map[string]string)
 	if req.Enabled != nil {
 		m[SettingPaymentEnabled] = formatBoolOrEmpty(req.Enabled)
+	}
+	if req.EntryEnabled != nil {
+		m[SettingPaymentEntryEnabled] = formatBoolOrEmpty(req.EntryEnabled)
 	}
 	if req.MinAmount != nil {
 		m[SettingMinRechargeAmount] = formatPositiveFloat(req.MinAmount)

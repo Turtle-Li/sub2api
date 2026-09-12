@@ -215,6 +215,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyWeChatConnectFrontendRedirectURL,
 		SettingKeyBackendModeEnabled,
 		SettingPaymentEnabled,
+		SettingPaymentEntryEnabled,
 		SettingKeyOIDCConnectEnabled,
 		SettingKeyOIDCConnectProviderName,
 		SettingKeyGitHubOAuthEnabled,
@@ -355,6 +356,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		WeChatOAuthMobileEnabled:            weChatMobileEnabled,
 		BackendModeEnabled:                  settings[SettingKeyBackendModeEnabled] == "true",
 		PaymentEnabled:                      settings[SettingPaymentEnabled] == "true",
+		PaymentEntryEnabled:                 paymentEntryEnabledFromValue(settings[SettingPaymentEntryEnabled]),
 		PricingCurrency:                     pricingCurrency,
 		OIDCOAuthEnabled:                    oidcEnabled,
 		OIDCOAuthProviderName:               oidcProviderName,
@@ -616,6 +618,7 @@ type PublicSettingsInjectionPayload struct {
 	GoogleOAuthEnabled                  bool                     `json:"google_oauth_enabled"`
 	BackendModeEnabled                  bool                     `json:"backend_mode_enabled"`
 	PaymentEnabled                      bool                     `json:"payment_enabled"`
+	PaymentEntryEnabled                 bool                     `json:"payment_entry_enabled"`
 	PricingCurrency                     PricingCurrencySettings  `json:"pricing_currency"`
 	Version                             string                   `json:"version"`
 	// 服务器全局时区（IANA 名称与当前 UTC 偏移），高峰时段等服务端本地时间窗口的展示标注用
@@ -709,6 +712,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		GoogleOAuthEnabled:                  settings.GoogleOAuthEnabled,
 		BackendModeEnabled:                  settings.BackendModeEnabled,
 		PaymentEnabled:                      settings.PaymentEnabled,
+		PaymentEntryEnabled:                 settings.PaymentEntryEnabled,
 		PricingCurrency:                     settings.PricingCurrency,
 		Version:                             s.version,
 		ServerTimezone:                      timezone.Name(),

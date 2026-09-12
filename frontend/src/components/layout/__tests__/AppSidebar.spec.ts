@@ -65,6 +65,16 @@ describe('AppSidebar admin order access', () => {
   })
 })
 
+describe('AppSidebar purchase entry visibility', () => {
+  it('gates the /purchase nav item on the entry-aware flag', () => {
+    expect(componentSource).toContain('const flagPaymentEntry = () => isPaymentEntryVisible()')
+    expect(componentSource).toContain("{ path: '/purchase', label: t('nav.buySubscription'), icon: RechargeSubscriptionIcon, hideInSimpleMode: true, featureFlag: flagPaymentEntry }")
+    // The plain payment flag must not gate the purchase nav anymore.
+    expect(componentSource).not.toContain("featureFlag: flagPayment,")
+    expect(componentSource).not.toContain('featureFlag: flagPayment\n')
+  })
+})
+
 describe('AppSidebar header styles', () => {
   it('does not clip the version badge dropdown', () => {
     const sidebarHeaderBlockMatch = styleSource.match(/\.sidebar-header\s*\{[\s\S]*?\n {2}\}/)

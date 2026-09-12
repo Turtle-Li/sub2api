@@ -7858,6 +7858,21 @@
                 </div>
                 <Toggle v-model="form.payment_enabled" />
               </div>
+              <!-- Show purchase entry toggle -->
+              <div class="mt-4 flex items-center justify-between">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">{{
+                    t("admin.settings.payment.entryEnabled")
+                  }}</label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.payment.entryEnabledHint") }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.payment_entry_enabled"
+                  data-testid="payment-entry-toggle"
+                />
+              </div>
               <template v-if="form.payment_enabled">
                 <div class="rounded-lg border border-primary-200 bg-primary-50 p-4 dark:border-primary-900/60 dark:bg-primary-950/20">
                   <div class="flex flex-wrap items-start justify-between gap-3">
@@ -9678,6 +9693,8 @@ type SettingsForm = Omit<
   channel_monitor_hide_throughput: boolean;
   channel_monitor_show_quota: boolean;
   channel_monitor_hide_user_ranking: boolean;
+  /** Form always binds a concrete boolean (SystemSettings marks this optional; missing means shown). */
+  payment_entry_enabled: boolean;
   smtp_password: string;
   turnstile_secret_key: string;
   tencent_captcha_app_secret_key: string;
@@ -9767,6 +9784,7 @@ const form = reactive<SettingsForm>({
   backend_mode_enabled: false,
   hide_ccs_import_button: false,
   payment_enabled: false,
+  payment_entry_enabled: true,
   risk_control_enabled: false,
   cyber_session_block_enabled: false,
   cyber_session_block_ttl_seconds: 3600,
@@ -11649,6 +11667,7 @@ async function saveSettings() {
       ),
       // Payment configuration
       payment_enabled: form.payment_enabled,
+      payment_entry_enabled: form.payment_entry_enabled,
       risk_control_enabled: form.risk_control_enabled,
       cyber_session_block_enabled: form.cyber_session_block_enabled,
       cyber_session_block_ttl_seconds:
