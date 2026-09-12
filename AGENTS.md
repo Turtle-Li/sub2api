@@ -2,6 +2,10 @@
 
 ## Payment catalog and reset-card purchases
 
+- Latest recharge-card refinement and closed-checkout release: read
+  `docs/operations/RECHARGE_UI_LOCAL_REVIEW_20260912.md`. Keep ordinary
+  purchasing closed until the owner completes real-flow testing.
+
 - Recharge UI follows the subscription-card visual system; read
   `docs/operations/RECHARGE_CARD_STYLE_20260912.md` for the current layout,
   accessible content and completed single-origin release.

@@ -61,9 +61,10 @@ describe('AmountInput', () => {
     expect(wrapper.text()).toContain('-17%')
     expect(wrapper.text()).toContain('×0.9')
     expect(wrapper.text()).toContain('≈ 12M')
-    // Bonus balance is platform credit, so it carries no currency symbol.
-    expect(wrapper.find('.payment-recharge-card__bonus').text()).toContain('payment.rechargeBonusShort')
+    // Bonus balance is platform credit, so it carries no currency symbol; the
+    // "Includes bonus" label above it names it, the line itself stays icon +N.
     expect(wrapper.find('.payment-recharge-card__bonus').text()).toContain('+8')
+    expect(wrapper.find('.payment-recharge-card__bonus').text()).not.toContain('payment.rechargeBonusShort')
     expect(wrapper.findAll('.payment-product-card__list-item').map(item => item.text())).not.toContain('payment.entitlements.balanceBonus +8 payment.creditUnit')
     expect(wrapper.text()).toContain('Concurrency raised to 5')
     expect(wrapper.find('input').exists()).toBe(false)
@@ -195,5 +196,71 @@ describe('AmountInput', () => {
     expect(premium.get('.payment-recharge-card__credit-heading').find('.payment-recharge-card__bonus').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('payment.selectedRechargeTier')
     expect(wrapper.text()).not.toContain('payment.selectRechargeTier')
+  })
+
+  // Configurations can carry an auto-generated description that merely restates
+  // the bonus already shown in the credited panel. Only that exact generated
+  // sentence is dropped; custom copy — even copy that mentions a bonus — stays.
+  it('drops only the exact auto-generated bonus sentence and keeps every other description', () => {
+    const wrapper = mount(AmountInput, {
+      props: {
+        modelValue: 99,
+        options: [
+          { amount: 99, balance_bonus: 5, description: '额外赠送 5 额度', sort_order: 1, enabled: true },
+          { amount: 199, balance_bonus: 20, description: '额外赠送 20 额度，限本月活动', sort_order: 2, enabled: true },
+          { amount: 49, description: '按充值金额到账', sort_order: 3, enabled: true },
+        ],
+      },
+    })
+
+    const cards = wrapper.findAll('article')
+    expect(cards[0].text()).toContain('+5')
+    expect(cards[0].text()).not.toContain('额外赠送')
+    expect(cards[1].text()).toContain('额外赠送 20 额度，限本月活动')
+    expect(cards[2].text()).toContain('按充值金额到账')
+  })
+
+  // A locked tier cannot be bought, so it never carries the recommendation
+  // ribbon even when an admin marked it. Its priority is kept, though: the
+  // discount fallback must not crown another tier in its place.
+  it('never features a tier whose purchase is gated', () => {
+    const wrapper = mount(AmountInput, {
+      props: {
+        modelValue: null,
+        options: [
+          { amount: 599, recommended: true, sort_order: 1, enabled: true, eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 49 } },
+          { amount: 99, sort_order: 2, enabled: true },
+          { amount: 199, original_price: 299, sort_order: 3, enabled: true },
+        ],
+      },
+    })
+
+    expect(wrapper.findAll('.payment-product-card__ribbon')).toHaveLength(0)
+    const cards = wrapper.findAll('article')
+    expect(cards[0].classes()).not.toContain('payment-product-card--featured')
+    expect(cards[2].classes()).not.toContain('payment-product-card--featured')
+  })
+
+  // A tier selected before it became gated drops the selected appearance —
+  // ring, check and aria-pressed — without touching the model value, and still
+  // refuses mouse and keyboard selection.
+  it('drops the selected state when the chosen tier becomes gated', async () => {
+    const wrapper = mount(AmountInput, {
+      props: {
+        modelValue: 599,
+        options: [
+          { amount: 599, sort_order: 1, enabled: true, eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 49 } },
+        ],
+      },
+    })
+
+    const card = wrapper.get('article')
+    expect(card.attributes('aria-pressed')).toBe('false')
+    expect(card.classes()).not.toContain('payment-product-card--selected')
+    expect(card.find('.payment-product-card__check').exists()).toBe(false)
+    await card.trigger('click')
+    await card.trigger('keydown.enter')
+    await card.trigger('keydown.space')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 })

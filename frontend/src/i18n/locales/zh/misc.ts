@@ -386,6 +386,7 @@ export default {
     amountLabel: '充值金额',
     paymentAmount: '支付金额',
     creditedBalance: '到账余额',
+    bonusIncluded: '已含赠送',
     quickAmounts: '快捷金额',
     rechargeOptionsTitle: '可选充值档位',
     meteredTier: '按量',
