@@ -961,6 +961,11 @@ func normalizeProxyProbeURLs(targets []ProbeURLConfig) ([]ProbeURLConfig, error)
 
 type BillingConfig struct {
 	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
+	// CurrencyCutoverCacheBypassFile is a deployment-owned, root-only marker.
+	// While the marker exists, wallet and wallet-backed quota caches are bypassed
+	// so a denomination cutover can safely use database values for each request.
+	// An empty path keeps the legacy cache behavior.
+	CurrencyCutoverCacheBypassFile string `mapstructure:"currency_cutover_cache_bypass_file"`
 	// MinimumBalanceReserve is the conservative preflight floor for balance billing.
 	// Requests in balance mode are rejected when the cached balance is below this
 	// amount, even if it is still positive. Set to 0 to keep the legacy balance > 0 gate.
@@ -1984,6 +1989,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 	applyReleaseConcurrencyDefaults(&cfg)
 	cfg.Server.FrontendURL = strings.TrimSpace(cfg.Server.FrontendURL)
+	cfg.Billing.CurrencyCutoverCacheBypassFile = strings.TrimSpace(cfg.Billing.CurrencyCutoverCacheBypassFile)
 	cfg.JWT.Secret = strings.TrimSpace(cfg.JWT.Secret)
 	cfg.LinuxDo.ClientID = strings.TrimSpace(cfg.LinuxDo.ClientID)
 	cfg.LinuxDo.ClientSecret = strings.TrimSpace(cfg.LinuxDo.ClientSecret)
@@ -2250,6 +2256,7 @@ func setDefaults() {
 	viper.SetDefault("billing.minimum_balance_reserve", 0.000001)
 	viper.SetDefault("billing.user_platform_quota_cache_ttl_seconds", 86400)
 	viper.SetDefault("billing.user_platform_quota_sentinel_ttl_seconds", 3600)
+	viper.SetDefault("billing.currency_cutover_cache_bypass_file", "")
 
 	// Turnstile
 	viper.SetDefault("turnstile.required", false)
@@ -3291,6 +3298,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Billing.MinimumBalanceReserve < 0 {
 		return fmt.Errorf("billing.minimum_balance_reserve must be non-negative")
+	}
+	if strings.TrimSpace(c.Billing.CurrencyCutoverCacheBypassFile) != "" && c.Database.UserPlatformQuotaFlusherEnabled {
+		return fmt.Errorf("billing.currency_cutover_cache_bypass_file cannot be configured while database.user_platform_quota_flusher_enabled=true")
 	}
 	if c.Database.MaxOpenConns <= 0 {
 		return fmt.Errorf("database.max_open_conns must be positive")

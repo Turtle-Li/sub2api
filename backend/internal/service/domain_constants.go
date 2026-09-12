@@ -271,6 +271,10 @@ const (
 	// 面板 API 限流设置（JSON：PanelRateLimitSettings）
 	SettingKeyPanelRateLimitSettings = "panel_rate_limit_settings"
 
+	// 结算货币设置（JSON：PricingCurrencySettings）。它只描述系统的
+	// 结算单位和已批准的迁移汇率；不会自行改写余额或历史财务记录。
+	SettingKeyPricingCurrencySettings = "pricing_currency_settings"
+
 	// 操作审计日志设置
 	SettingKeyAuditLogRetentionDays = "audit_log_retention_days" // 审计日志保留天数（<=0 永久保留），默认 180
 

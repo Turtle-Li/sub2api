@@ -1774,7 +1774,13 @@ func (h *GatewayHandler) buildAPIKeyDailyUsage(c *gin.Context, userID, apiKeyID 
 
 // usageQuotaLimited 处理 quota_limited 模式的响应
 func (h *GatewayHandler) usageQuotaLimited(c *gin.Context, ctx context.Context, apiKey *service.APIKey, usageData gin.H, dailyUsage any, modelStats any) {
+	currency, err := h.keyUsageCurrency(ctx, apiKey)
+	if err != nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Currency settings are temporarily unavailable")
+		return
+	}
 	resp := gin.H{
+		"unit":    currency,
 		"mode":    "quota_limited",
 		"isValid": apiKey.Status == service.StatusAPIKeyActive || apiKey.Status == service.StatusAPIKeyQuotaExhausted || apiKey.Status == service.StatusAPIKeyExpired,
 		"status":  apiKey.Status,
@@ -1787,10 +1793,10 @@ func (h *GatewayHandler) usageQuotaLimited(c *gin.Context, ctx context.Context, 
 			"limit":     apiKey.Quota,
 			"used":      apiKey.QuotaUsed,
 			"remaining": remaining,
-			"unit":      "USD",
+			"unit":      currency,
 		}
 		resp["remaining"] = remaining
-		resp["unit"] = "USD"
+		resp["unit"] = currency
 	}
 
 	// 速率限制信息（从 DB 获取实时用量）
@@ -1913,12 +1919,17 @@ func (h *GatewayHandler) usageUnrestricted(c *gin.Context, ctx context.Context, 
 		return
 	}
 
+	currency, err := h.keyUsageCurrency(ctx, apiKey)
+	if err != nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Currency settings are temporarily unavailable")
+		return
+	}
 	resp := gin.H{
 		"mode":      "unrestricted",
 		"isValid":   true,
 		"planName":  "钱包余额",
 		"remaining": latestUser.Balance,
-		"unit":      "USD",
+		"unit":      currency,
 		"balance":   latestUser.Balance,
 	}
 	if usageData != nil {
@@ -2723,4 +2734,19 @@ func (h *GatewayHandler) getUserMsgQueueMode(account *service.Account, parsed *s
 		mode = h.cfg.Gateway.UserMessageQueue.GetEffectiveMode()
 	}
 	return mode
+}
+
+// Key and wallet quota values share their actual billing denomination.
+func (h *GatewayHandler) keyUsageCurrency(ctx context.Context, key *service.APIKey) (string, error) {
+	if key.Group != nil && key.Group.IsSubscriptionType() {
+		return "USD", nil
+	}
+	if h.settingService == nil {
+		return "USD", nil
+	}
+	policy, err := h.settingService.GetPricingCurrencySettings(ctx)
+	if err != nil {
+		return "", err
+	}
+	return policy.SettlementCurrency, nil
 }

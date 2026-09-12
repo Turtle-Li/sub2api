@@ -1046,6 +1046,10 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 			slog.Warn("group model_pricing unmarshal failed; falling back to channel/builtin pricing",
 				"group_id", g.ID, "error", err)
 			modelPricing = nil
+		} else if err := service.NormalizeModelPricingCurrencies(modelPricing); err != nil {
+			slog.Warn("group model_pricing currency invalid; falling back to channel/builtin pricing",
+				"group_id", g.ID, "error", err)
+			modelPricing = nil
 		}
 	}
 	return &service.Group{

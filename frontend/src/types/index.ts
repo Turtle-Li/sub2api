@@ -282,6 +282,11 @@ export interface PublicSettings {
   service_quota_enabled: boolean
   affiliate_enabled: boolean
   allow_user_view_error_requests?: boolean
+  /** Wallet settlement unit. Older injected configurations omit this and use USD. */
+  pricing_currency?: {
+    settlement_currency: 'USD' | 'CNY' | string
+    usd_to_cny_rate: number
+  }
 }
 
 export interface AuthResponse {
@@ -732,8 +737,10 @@ export interface ApiKey {
   ip_blacklist: string[]
   last_used_at: string | null
   last_used_ip: string | null
-  quota: number // Quota limit in USD (0 = unlimited)
-  quota_used: number // Used quota amount in USD
+  // Standard keys use the active wallet settlement currency; subscription
+  // group keys remain USD.
+  quota: number // Quota limit (0 = unlimited)
+  quota_used: number // Used quota amount
   expires_at: string | null // Expiration time (null = never expires)
   created_at: string
   updated_at: string
@@ -759,7 +766,7 @@ export interface CreateApiKeyRequest {
   custom_key?: string // Optional custom API Key
   ip_whitelist?: string[]
   ip_blacklist?: string[]
-  quota?: number // Quota limit in USD (0 = unlimited)
+  quota?: number // Quota limit (0 = unlimited)
   expires_in_days?: number // Days until expiry (null = never expires)
   rate_limit_5h?: number
   rate_limit_1d?: number
@@ -772,7 +779,7 @@ export interface UpdateApiKeyRequest {
   status?: 'active' | 'inactive'
   ip_whitelist?: string[]
   ip_blacklist?: string[]
-  quota?: number // Quota limit in USD (null = no change, 0 = unlimited)
+  quota?: number // Quota limit (null = no change, 0 = unlimited)
   expires_at?: string | null // Expiration time (null = no change)
   reset_quota?: boolean // Reset quota_used to 0
   rate_limit_5h?: number
@@ -1725,6 +1732,7 @@ export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 
 export interface UsageLog {
+  currency?: 'USD' | 'CNY'
   id: number
   user_id: number
   api_key_id: number

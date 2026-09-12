@@ -559,6 +559,7 @@ function mountView() {
         ProxySelector: true,
         ImageUpload: ImageUploadStub,
         BackupSettings: true,
+        PricingCurrencySettingsCard: true,
       },
     },
   });

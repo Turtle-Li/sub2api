@@ -807,3 +807,10 @@ describe('admin UsageTable deleted-user badge', () => {
     expect(wrapper.text()).toContain('active@test.com')
   })
 })
+
+it('shows persisted usage currency without re-converting old or new amounts', () => {
+ const wrapper=mount(UsageTable,{props:{data:[{...baseImageRow,request_id:'usd',currency:'USD'},{...baseImageRow,request_id:'cny',currency:'CNY'}],loading:false,columns:[]},global:{stubs:{DataTable:DataTableStub,EmptyState:true,Icon:true,Teleport:true}}})
+ expect(wrapper.text()).toContain('$0.400000')
+ expect(wrapper.text()).toContain('¥0.400000')
+ expect(wrapper.text()).not.toContain('¥2.700000')
+})

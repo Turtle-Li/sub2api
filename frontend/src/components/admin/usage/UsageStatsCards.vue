@@ -7,7 +7,7 @@
       <div>
         <p class="text-xs font-medium text-gray-500">{{ t('usage.totalRequests') }}</p>
         <p class="text-xl font-bold">{{ stats?.total_requests?.toLocaleString() || '0' }}</p>
-        <p class="text-xs text-gray-400">{{ t('usage.inSelectedRange') }}</p>
+        <p v-if="!hideMixedCurrencyTotals" class="text-xs text-gray-400">{{ t('usage.inSelectedRange') }}</p>
       </div>
     </div>
     <div class="card p-4 flex items-center gap-3">
@@ -64,10 +64,11 @@
       </div>
       <div class="min-w-0 flex-1">
         <p class="text-xs font-medium text-gray-500">{{ t('usage.totalCost') }}</p>
-        <p class="text-xl font-bold text-green-600">
+        <p v-if="hideMixedCurrencyTotals" class="text-xs text-gray-500">{{ mixedCurrencyMessage }}</p>
+        <p v-else class="text-xl font-bold text-green-600">
           ${{ (stats?.total_actual_cost || 0).toFixed(4) }}
         </p>
-        <p class="text-xs text-gray-400">
+        <p v-if="!hideMixedCurrencyTotals" class="text-xs text-gray-400">
           <template v-if="showAccountCost && totalAccountCost != null">
             <span class="text-orange-500">{{ t('usage.accountCost') }} ${{ totalAccountCost.toFixed(4) }}</span>
             <span> · </span>
@@ -99,12 +100,14 @@ const props = withDefaults(defineProps<{
   stats: (AdminUsageStatsResponse | UsageStatsResponse) | null
   showAccountCost?: boolean
   strikeStandardCost?: boolean
+  hideMixedCurrencyTotals?: boolean
 }>(), {
   showAccountCost: true,
   strikeStandardCost: false,
 })
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const mixedCurrencyMessage = computed(() => locale.value.startsWith('zh') ? '历史记录含不同币种，暂不汇总金额' : 'Amounts in different currencies are not totaled.')
 
 const totalAccountCost = computed(() => {
   const stats = props.stats as (AdminUsageStatsResponse & { total_account_cost?: number }) | null

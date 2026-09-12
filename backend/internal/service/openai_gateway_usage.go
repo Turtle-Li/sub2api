@@ -343,6 +343,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	// Determine billing type
 	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+	if isSubscriptionBilling {
+		subscriptionCost(cost)
+	}
 	billingType := BillingTypeBalance
 	if isSubscriptionBilling {
 		billingType = BillingTypeSubscription
@@ -492,8 +495,15 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if apiKey.GroupID != nil {
 		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, result.Model,
-			actualTokens, cost.TotalCost, pricingAt,
+			actualTokens, accountQuotaBasis(cost), pricingAt,
 		)
+	}
+
+	usageLog.Currency = costCurrency(cost)
+
+	if costCurrency(cost) == "CNY" && usageLog.AccountStatsCost == nil {
+		usdBasis := accountQuotaBasis(cost)
+		usageLog.AccountStatsCost = &usdBasis
 	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {

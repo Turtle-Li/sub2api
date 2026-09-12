@@ -9,6 +9,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGroupEntityToServiceNormalizesModelPricingCurrency(t *testing.T) {
+	group := &dbent.Group{
+		ID:             1,
+		Name:           "pricing-currency",
+		Platform:       service.PlatformOpenAI,
+		Status:         service.StatusActive,
+		RateMultiplier: 1,
+		ModelPricing: []byte(`[
+			{"platform":"openai","models":["gpt-5"],"billing_mode":"token"},
+			{"platform":"openai","models":["gpt-5-mini"],"billing_mode":"token","currency":"cny"}
+		]`),
+	}
+
+	got := groupEntityToService(group)
+	require.Len(t, got.ModelPricing, 2)
+	require.Equal(t, service.PricingCurrencyUSD, got.ModelPricing[0].Currency)
+	require.Equal(t, service.PricingCurrencyCNY, got.ModelPricing[1].Currency)
+}
+
 func TestGroupEntityToService_PreservesMessagesDispatchModelConfig(t *testing.T) {
 	group := &dbent.Group{
 		ID:                    1,

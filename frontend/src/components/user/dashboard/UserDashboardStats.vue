@@ -11,7 +11,7 @@
         </div>
         <div>
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.balance') }}</p>
-          <p class="text-xl font-bold text-emerald-600 dark:text-emerald-400">${{ formatBalance(balance) }}</p>
+          <p class="text-xl font-bold text-emerald-600 dark:text-emerald-400">{{ formatBalance(balance) }}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('common.available') }}</p>
         </div>
       </div>
@@ -53,11 +53,15 @@
         </div>
         <div>
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.todayCost') }}</p>
-          <p class="text-xl font-bold text-gray-900 dark:text-white">
+          <p v-if="hideAggregatedCosts" class="text-xl font-bold text-gray-500 dark:text-gray-400">—</p>
+          <p v-else class="text-xl font-bold text-gray-900 dark:text-white">
             <span class="text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">${{ formatCost(stats?.today_actual_cost || 0) }}</span>
             <span class="text-sm font-normal text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.today_cost || 0) }}</span>
           </p>
-          <p class="text-xs">
+          <p v-if="hideAggregatedCosts" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('dashboard.mixedCurrencyUsage') }}
+          </p>
+          <p v-else class="text-xs">
             <span class="text-gray-500 dark:text-gray-400">{{ t('common.total') }}: </span>
             <span class="text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">${{ formatCost(stats?.total_actual_cost || 0) }}</span>
             <span class="text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.total_cost || 0) }}</span>
@@ -140,6 +144,9 @@
         {{ t('dashboard.platformCount', { count: sortedPlatforms.length }) }}
       </span>
     </div>
+    <p v-if="hideAggregatedCosts" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+      {{ t('dashboard.mixedCurrencyUsage') }}
+    </p>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <div
         v-for="item in platformCards"
@@ -155,14 +162,16 @@
           <span class="text-sm font-semibold text-gray-900 dark:text-white">
             {{ item.isOther ? t('dashboard.platformOther') : platformLabel(item.platform) }}
           </span>
-          <span class="font-mono text-sm text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">
+          <span v-if="hideAggregatedCosts" class="font-mono text-sm text-gray-500 dark:text-gray-400">—</span>
+          <span v-else class="font-mono text-sm text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">
             ${{ formatCost(item.total_actual_cost) }}
           </span>
         </div>
         <div class="mt-2 space-y-1 text-xs">
           <div class="flex items-center justify-between">
             <span class="text-gray-500 dark:text-gray-400">{{ t('dashboard.todayCost') }}</span>
-            <span class="font-mono text-gray-900 dark:text-white">${{ formatCost(item.today_actual_cost) }}</span>
+            <span v-if="hideAggregatedCosts" class="font-mono text-gray-500 dark:text-gray-400">—</span>
+            <span v-else class="font-mono text-gray-900 dark:text-white">${{ formatCost(item.today_actual_cost) }}</span>
           </div>
           <div class="flex items-center justify-between">
             <span class="text-gray-500 dark:text-gray-400">{{ t('dashboard.requests') }}</span>
@@ -226,8 +235,10 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import { useAppStore } from '@/stores/app'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
 import type { PlatformQuotaItem } from '@/types'
+import { formatSettlementAmount, pricingCurrencyFromPublicSettings } from '@/utils/settlementCurrency'
 
 interface FusedPlatformCard {
   platform: string
@@ -246,6 +257,11 @@ const props = defineProps<{
   platformQuotas?: PlatformQuotaItem[] | null
 }>()
 const { t } = useI18n()
+const appStore = useAppStore()
+const settlementCurrency = computed(() =>
+  pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings).settlementCurrency
+)
+const hideAggregatedCosts = computed(() => settlementCurrency.value === 'CNY')
 
 const PLATFORM_LABELS: Record<string, string> = {
   anthropic: 'Claude',
@@ -263,7 +279,10 @@ const platformLabel = (p: string) => PLATFORM_LABELS[p] ?? p
 
 const sortedPlatforms = computed(() => {
   const list = props.stats?.by_platform ?? []
-  return [...list].sort((a, b) => b.total_actual_cost - a.total_actual_cost)
+  return [...list].sort((a, b) => hideAggregatedCosts.value
+    ? a.platform.localeCompare(b.platform)
+    : b.total_actual_cost - a.total_actual_cost
+  )
 })
 
 // 处理"各平台之和 < 总值"的差值：后端按平台聚合时过滤了无法归属平台的行
@@ -307,6 +326,8 @@ const platformCards = computed<FusedPlatformCard[]>(() => {
     if (bi === -1) return -1
     return ai - bi
   })
+
+  if (hideAggregatedCosts.value) return cards
 
   // __other__ 补差逻辑：只对 by_platform 有 usage 数据的总和计算
   const total = props.stats?.total_actual_cost ?? 0
@@ -379,11 +400,7 @@ function formatResetTime(iso: string | null | undefined): string {
   })
 }
 
-const formatBalance = (b: number) =>
-  new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(b)
+const formatBalance = (b: number) => formatSettlementAmount(b, settlementCurrency.value)
 
 const formatNumber = (n: number) => n.toLocaleString()
 const formatCost = (c: number) => c.toFixed(4)

@@ -17,6 +17,28 @@ const (
 	BillingModeVideo      BillingMode = "video"       // 视频生成计费（按视频生成次数）
 )
 
+const (
+	// PricingCurrencyUSD is the legacy/default currency for model price cards.
+	PricingCurrencyUSD = "USD"
+	// PricingCurrencyCNY is the other explicitly supported model price-card currency.
+	PricingCurrencyCNY = "CNY"
+)
+
+// NormalizePricingCurrency canonicalizes a model price-card currency. Empty
+// legacy values are USD; only USD and CNY are accepted for newly persisted
+// cards and settlement records.
+func NormalizePricingCurrency(currency string) (string, error) {
+	normalized := strings.ToUpper(strings.TrimSpace(currency))
+	switch normalized {
+	case "", PricingCurrencyUSD:
+		return PricingCurrencyUSD, nil
+	case PricingCurrencyCNY:
+		return PricingCurrencyCNY, nil
+	default:
+		return "", fmt.Errorf("currency must be USD or CNY, got %q", currency)
+	}
+}
+
 // IsValid 检查 BillingMode 是否为合法值
 func (m BillingMode) IsValid() bool {
 	switch m {
@@ -92,6 +114,7 @@ type ChannelModelPricing struct {
 	Platform                     string              `json:"platform"` // 所属平台（anthropic/openai/gemini/...）
 	Models                       []string            `json:"models"`
 	BillingMode                  BillingMode         `json:"billing_mode"`
+	Currency                     string              `json:"currency"`
 	InputPrice                   *float64            `json:"input_price"`
 	OutputPrice                  *float64            `json:"output_price"`
 	CacheWritePrice              *float64            `json:"cache_write_price"`
@@ -107,6 +130,31 @@ type ChannelModelPricing struct {
 	TimePricing                  *ChannelTimePricing `json:"time_pricing,omitempty"`
 	CreatedAt                    time.Time           `json:"created_at,omitempty"`
 	UpdatedAt                    time.Time           `json:"updated_at,omitempty"`
+}
+
+// NormalizeCurrency canonicalizes the currency for this complete price card.
+// Intervals deliberately inherit this card-level currency rather than carrying
+// independent currency values.
+func (p *ChannelModelPricing) NormalizeCurrency() error {
+	if p == nil {
+		return nil
+	}
+	currency, err := NormalizePricingCurrency(p.Currency)
+	if err != nil {
+		return err
+	}
+	p.Currency = currency
+	return nil
+}
+
+// NormalizeModelPricingCurrencies normalizes each card in a pricing list.
+func NormalizeModelPricingCurrencies(pricing []ChannelModelPricing) error {
+	for i := range pricing {
+		if err := pricing[i].NormalizeCurrency(); err != nil {
+			return fmt.Errorf("pricing entry #%d: %w", i+1, err)
+		}
+	}
+	return nil
 }
 
 // ChannelTimePricing 渠道模型定价的分时倍率配置。

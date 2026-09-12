@@ -47,6 +47,15 @@ func resolveAccountStatsCost(
 	}
 
 	platform := channelService.GetGroupPlatform(ctx, groupID)
+	if billingService != nil {
+		channel = channel.Clone()
+		for i := range channel.AccountStatsPricingRules {
+			for j := range channel.AccountStatsPricingRules[i].Pricing {
+				p := &channel.AccountStatsPricingRules[i].Pricing[j]
+				*p = *billingService.pricingCardInUSD(p)
+			}
+		}
+	}
 
 	// 优先级 1：自定义规则（始终尝试）
 	if cost := tryCustomRules(channel, accountID, groupID, platform, upstreamModel, tokens, requestCount, reasoningEffort); cost != nil {
@@ -92,7 +101,8 @@ func tryModelFilePricing(billingService *BillingService, model string, tokens Us
 	if err != nil || breakdown == nil || breakdown.TotalCost <= 0 {
 		return nil
 	}
-	return &breakdown.TotalCost
+	usdCost := accountQuotaBasis(breakdown)
+	return &usdCost
 }
 
 // tryCustomRules 遍历自定义规则，按数组顺序先命中为准。

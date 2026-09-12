@@ -1375,6 +1375,36 @@ export async function updatePanelRateLimitSettings(
   return data;
 }
 
+// ==================== Pricing Currency Settings ====================
+
+export type SettlementCurrency = 'USD' | 'CNY'
+
+export interface PricingCurrencySettings {
+  settlement_currency: SettlementCurrency
+  usd_to_cny_rate: number
+}
+
+export async function getPricingCurrencySettings(): Promise<PricingCurrencySettings> {
+  const { data } = await apiClient.get<PricingCurrencySettings>(
+    '/admin/settings/pricing-currency',
+  )
+  return data
+}
+
+/**
+ * The backend accepts same-currency rate updates only. A USD/CNY transition
+ * must be made by the owner-controlled wallet migration transaction.
+ */
+export async function updatePricingCurrencySettings(
+  settings: PricingCurrencySettings,
+): Promise<PricingCurrencySettings> {
+  const { data } = await apiClient.put<PricingCurrencySettings>(
+    '/admin/settings/pricing-currency',
+    settings,
+  )
+  return data
+}
+
 // ==================== Stream Timeout Settings ====================
 
 /**
@@ -1604,6 +1634,8 @@ export const settingsAPI = {
   updateRateLimit429CooldownSettings,
   getPanelRateLimitSettings,
   updatePanelRateLimitSettings,
+  getPricingCurrencySettings,
+  updatePricingCurrencySettings,
   getStreamTimeoutSettings,
   updateStreamTimeoutSettings,
   getRectifierSettings,

@@ -264,6 +264,7 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		AccountID:             *job.AccountID,
 		RequestID:             strings.TrimSpace(requestID),
 		Model:                 job.Model,
+		Currency:              job.Currency,
 		RequestedModel:        job.Model,
 		InboundEndpoint:       &inboundEndpoint,
 		UpstreamEndpoint:      &upstreamEndpoint,
@@ -290,6 +291,15 @@ func (s *BatchImageSettlementService) invalidateAuthCache(ctx context.Context, u
 }
 
 func (s *BatchImageSettlementService) settlementUnitPrice(ctx context.Context, job *BatchImageJob) (float64, error) {
+	if resolver, ok := s.Pricing.(*BatchImageModelPricingResolver); ok && resolver.Resolver != nil && job != nil {
+		currency := strings.ToUpper(strings.TrimSpace(job.Currency))
+		if currency == "" {
+			currency = "USD"
+		}
+		if currency != resolver.Resolver.billingService.SettlementCurrency() {
+			return 0, fmt.Errorf("batch image currency %s differs from wallet currency: reconcile the pre-cutover reservation before capture", currency)
+		}
+	}
 	if job != nil && job.PricingSnapshotVersion >= 1 {
 		if job.BillableUnitPrice < 0 {
 			return 0, ErrBatchImageSettlementPricingMissing

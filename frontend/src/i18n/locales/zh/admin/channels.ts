@@ -123,6 +123,8 @@ export default {
         modelsPlaceholder: '输入完整模型名后按回车添加',
         modelInputHint: '按回车添加，支持粘贴批量导入',
         billingMode: '计费模式',
+        currency: '价格单位',
+        currencyUnitHint: '切换单位不会自动换算已有价格数值。',
         defaultPrices: '默认价格（未命中区间时使用）',
         inputPrice: '输入',
         outputPrice: '输出',

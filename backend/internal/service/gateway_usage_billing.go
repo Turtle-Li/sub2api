@@ -159,19 +159,19 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	}
 
 	if p.shouldDeductAPIKeyQuota() {
-		if err := p.APIKeyService.UpdateQuotaUsed(billingCtx, p.APIKey.ID, cost.ActualCost); err != nil {
+		if err := p.APIKeyService.UpdateQuotaUsed(billingCtx, p.APIKey.ID, keyQuotaCost(cost, p.APIKey)); err != nil {
 			slog.Error("update api key quota failed", "api_key_id", p.APIKey.ID, "error", err)
 		}
 	}
 
 	if p.shouldUpdateRateLimits() {
-		if err := p.APIKeyService.UpdateRateLimitUsage(billingCtx, p.APIKey.ID, cost.ActualCost); err != nil {
+		if err := p.APIKeyService.UpdateRateLimitUsage(billingCtx, p.APIKey.ID, keyQuotaCost(cost, p.APIKey)); err != nil {
 			slog.Error("update api key rate limit usage failed", "api_key_id", p.APIKey.ID, "error", err)
 		}
 	}
 
 	if p.shouldUpdateAccountQuota() {
-		accountCost := cost.TotalCost * p.AccountRateMultiplier
+		accountCost := accountQuotaBasis(cost) * p.AccountRateMultiplier
 		if err := deps.accountRepo.IncrementQuotaUsed(billingCtx, p.Account.ID, accountCost); err != nil {
 			slog.Error("increment account quota used failed", "account_id", p.Account.ID, "cost", accountCost, "error", err)
 		}
@@ -318,15 +318,27 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	}
 
 	if p.shouldDeductAPIKeyQuota() {
-		cmd.APIKeyQuotaCost = p.Cost.ActualCost
+		cmd.APIKeyQuotaCost = keyQuotaCost(p.Cost, p.APIKey)
 	}
 	if p.shouldUpdateRateLimits() {
-		cmd.APIKeyRateLimitCost = p.Cost.ActualCost
+		cmd.APIKeyRateLimitCost = keyQuotaCost(p.Cost, p.APIKey)
 	}
 	if p.shouldUpdateAccountQuota() {
-		cmd.AccountQuotaCost = p.Cost.TotalCost * p.AccountRateMultiplier
+		cmd.AccountQuotaCost = accountQuotaBasis(p.Cost) * p.AccountRateMultiplier
 	}
 
+	// Preserve the existing monetary fingerprint across a denomination change.
+	// Only customer-wallet/key amounts changed unit; subscription and upstream
+	// account quota remain USD. Do not remove money from conflict detection.
+	if p.Cost.settlementCurrency == "CNY" && p.Cost.settlementRate > 0 {
+		canonical := *cmd
+		canonical.BalanceCost /= p.Cost.settlementRate
+		if p.APIKey.Group == nil || !p.APIKey.Group.IsSubscriptionType() {
+			canonical.APIKeyQuotaCost /= p.Cost.settlementRate
+			canonical.APIKeyRateLimitCost /= p.Cost.settlementRate
+		}
+		cmd.RequestFingerprint = buildUsageBillingFingerprint(&canonical)
+	}
 	cmd.Normalize()
 	return cmd
 }
@@ -379,7 +391,7 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 	}
 
 	if p.Cost.ActualCost > 0 && p.APIKey != nil && p.APIKey.HasRateLimits() {
-		deps.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(p.APIKey.ID, p.Cost.ActualCost)
+		deps.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(p.APIKey.ID, keyQuotaCost(p.Cost, p.APIKey))
 	}
 
 	deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
@@ -501,7 +513,7 @@ func notifyAccountQuota(p *postUsageBillingParams, deps *billingDeps, result *Us
 		)
 		return
 	}
-	accountCost := p.Cost.TotalCost * p.AccountRateMultiplier
+	accountCost := accountQuotaBasis(p.Cost) * p.AccountRateMultiplier
 	var quotaState *AccountQuotaState
 	if result != nil {
 		quotaState = result.QuotaState
@@ -808,6 +820,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 判断计费方式：订阅模式 vs 余额模式
 	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+	if isSubscriptionBilling {
+		subscriptionCost(cost)
+	}
 	billingType := BillingTypeBalance
 	if isSubscriptionBilling {
 		billingType = BillingTypeSubscription
@@ -831,8 +846,15 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 				CacheReadTokens:     result.Usage.CacheReadInputTokens,
 				ImageOutputTokens:   result.Usage.ImageOutputTokens,
 			},
-			cost.TotalCost, pricingAt,
+			accountQuotaBasis(cost), pricingAt,
 		)
+	}
+
+	usageLog.Currency = costCurrency(cost)
+
+	if costCurrency(cost) == "CNY" && usageLog.AccountStatsCost == nil {
+		usdBasis := accountQuotaBasis(cost)
+		usageLog.AccountStatsCost = &usdBasis
 	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {

@@ -323,6 +323,7 @@ func TestPricingRequestToService_WithAllFields(t *testing.T) {
 			Platform:          "openai",
 			Models:            []string{"gpt-4", "gpt-4o"},
 			BillingMode:       "per_request",
+			Currency:          "cny",
 			InputPrice:        float64Ptr(0.01),
 			OutputPrice:       float64Ptr(0.03),
 			CacheWritePrice:   float64Ptr(0.005),
@@ -339,6 +340,7 @@ func TestPricingRequestToService_WithAllFields(t *testing.T) {
 	require.Equal(t, "openai", r.Platform)
 	require.Equal(t, []string{"gpt-4", "gpt-4o"}, r.Models)
 	require.Equal(t, service.BillingModePerRequest, r.BillingMode)
+	require.Equal(t, "cny", r.Currency)
 	require.Equal(t, float64Ptr(0.01), r.InputPrice)
 	require.Equal(t, float64Ptr(0.03), r.OutputPrice)
 	require.Equal(t, float64Ptr(0.005), r.CacheWritePrice)
@@ -509,6 +511,11 @@ func TestPricingToResponse_TimePricing(t *testing.T) {
 func TestPricingToResponse_TimePricingNil(t *testing.T) {
 	got := pricingToResponse(&service.ChannelModelPricing{})
 	require.Nil(t, got.TimePricing)
+}
+
+func TestPricingToResponse_NormalizesCurrency(t *testing.T) {
+	require.Equal(t, service.PricingCurrencyUSD, pricingToResponse(&service.ChannelModelPricing{}).Currency)
+	require.Equal(t, service.PricingCurrencyCNY, pricingToResponse(&service.ChannelModelPricing{Currency: "cny"}).Currency)
 }
 
 // ---------------------------------------------------------------------------

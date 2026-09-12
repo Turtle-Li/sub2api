@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -189,6 +190,8 @@ type UsageTokens struct {
 
 // CostBreakdown 费用明细
 type CostBreakdown struct {
+	settlementRate            float64 // rate captured for this breakdown
+	settlementCurrency        string  // prevents repeated conversion through legacy/unified wrappers
 	InputCost                 float64 // 文本输入费用（不含图片输入，图片输入单独记入 ImageInputCost）
 	ImageInputCost            float64 // 图片输入 token 费用（如 gpt-image-2 图片编辑）
 	OutputCost                float64
@@ -304,9 +307,11 @@ func deepseekPeakMultiplierAt(now time.Time) float64 {
 
 // BillingService 计费服务
 type BillingService struct {
-	cfg            *config.Config
-	pricingService *PricingService
-	fallbackPrices map[string]*ModelPricing // 硬编码回退价格
+	currencyPolicy         atomic.Value // PricingCurrencySettings, last known good
+	currencyPolicyProvider func(context.Context) (PricingCurrencySettings, error)
+	cfg                    *config.Config
+	pricingService         *PricingService
+	fallbackPrices         map[string]*ModelPricing // 硬编码回退价格
 
 	// fallbackWarnSeen 记录已打过 fallback 警告日志的(已小写化)模型名,
 	// 让 "[Billing] Using fallback pricing" 每个模型每进程最多打一条,
@@ -1228,6 +1233,7 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 // GetModelPricingWithChannel 获取模型定价，渠道配置的价格覆盖默认值
 // 渠道存在时，未配置的图片输出价格归零（不回退到 LiteLLM）
 func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing *ChannelModelPricing) (*ModelPricing, error) {
+	channelPricing = s.pricingCardInUSD(channelPricing)
 	pricing, err := s.GetModelPricing(model)
 	if err != nil {
 		return nil, err
@@ -1324,7 +1330,12 @@ type CostInput struct {
 
 // CalculateCostUnified 统一计费入口，支持三种计费模式。
 // 使用 ModelPricingResolver 解析定价，然后根据 BillingMode 分发计算。
-func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, error) {
+func (s *BillingService) CalculateCostUnified(input CostInput) (result *CostBreakdown, resultErr error) {
+	defer func() {
+		if resultErr == nil {
+			s.settleCost(result)
+		}
+	}()
 	if input.Resolver == nil {
 		// 无 Resolver，回退到旧路径
 		applyLongContextBilling := true
@@ -1651,7 +1662,12 @@ func (s *BillingService) calculateCostInternalWithPolicy(
 	serviceTier string,
 	channelPricing *ChannelModelPricing,
 	longContextBillingEnabled bool,
-) (*CostBreakdown, error) {
+) (result *CostBreakdown, resultErr error) {
+	defer func() {
+		if resultErr == nil {
+			s.settleCost(result)
+		}
+	}()
 	var pricing *ModelPricing
 	var err error
 	if channelPricing != nil {
@@ -1906,7 +1922,8 @@ const (
 // callCount: 搜索调用次数（每次请求为 1）
 // groupPrice: 分组配置的单次价格（nil 表示使用默认价 0.01；0 表示免费）
 // rateMultiplier: 分组费率倍数
-func (s *BillingService) CalculateWebSearchCost(callCount int, groupPrice *float64, rateMultiplier float64) *CostBreakdown {
+func (s *BillingService) CalculateWebSearchCost(callCount int, groupPrice *float64, rateMultiplier float64) (result *CostBreakdown) {
+	defer func() { s.settleCost(result) }()
 	if callCount <= 0 {
 		return &CostBreakdown{}
 	}
@@ -1929,7 +1946,8 @@ func (s *BillingService) CalculateWebSearchCost(callCount int, groupPrice *float
 
 // CalculateSearchCost bills search/tool invocations (e.g. web_search) per 1k calls.
 // groupPricePer1k: nil → defaultSearchPricePer1k; explicit 0 → free; >0 → that rate.
-func (s *BillingService) CalculateSearchCost(numCalls int, groupPricePer1k *float64, rateMultiplier float64) *CostBreakdown {
+func (s *BillingService) CalculateSearchCost(numCalls int, groupPricePer1k *float64, rateMultiplier float64) (result *CostBreakdown) {
+	defer func() { s.settleCost(result) }()
 	if numCalls <= 0 {
 		return &CostBreakdown{}
 	}
@@ -1963,7 +1981,8 @@ type audioPriceConfig struct {
 
 // CalculateAudioCost supports realtime (per min), tts (per M chars), stt (per hr).
 // Missing group prices use defaults; explicit 0 means free for that mode.
-func (s *BillingService) CalculateAudioCost(mode string, durationOrUnits float64, groupConfig *audioPriceConfig, rateMultiplier float64) *CostBreakdown {
+func (s *BillingService) CalculateAudioCost(mode string, durationOrUnits float64, groupConfig *audioPriceConfig, rateMultiplier float64) (result *CostBreakdown) {
+	defer func() { s.settleCost(result) }()
 	if durationOrUnits <= 0 {
 		return &CostBreakdown{}
 	}
@@ -2007,7 +2026,8 @@ func (s *BillingService) CalculateAudioCost(mode string, durationOrUnits float64
 // imageCount: 生成的图片数量
 // groupConfig: 分组配置的价格（可能为 nil，表示使用默认值）
 // rateMultiplier: 费率倍数
-func (s *BillingService) CalculateImageCost(model string, imageSize string, imageCount int, groupConfig *ImagePriceConfig, rateMultiplier float64) *CostBreakdown {
+func (s *BillingService) CalculateImageCost(model string, imageSize string, imageCount int, groupConfig *ImagePriceConfig, rateMultiplier float64) (result *CostBreakdown) {
+	defer func() { s.settleCost(result) }()
 	if imageCount <= 0 {
 		return &CostBreakdown{}
 	}
@@ -2039,7 +2059,8 @@ func (s *BillingService) CalculateImageCost(model string, imageSize string, imag
 // durationSeconds: 单个视频时长（秒），<=0 时按上游默认时长计
 // groupConfig: 分组配置的每秒价格（可能为 nil，表示使用默认值）
 // rateMultiplier: 费率倍数
-func (s *BillingService) CalculateVideoCost(model string, resolution string, videoCount int, durationSeconds int, groupConfig *VideoPriceConfig, rateMultiplier float64) *CostBreakdown {
+func (s *BillingService) CalculateVideoCost(model string, resolution string, videoCount int, durationSeconds int, groupConfig *VideoPriceConfig, rateMultiplier float64) (result *CostBreakdown) {
+	defer func() { s.settleCost(result) }()
 	if videoCount <= 0 {
 		return &CostBreakdown{}
 	}

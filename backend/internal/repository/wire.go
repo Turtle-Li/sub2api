@@ -8,6 +8,7 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
@@ -63,6 +64,22 @@ func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.Schedu
 	return newSchedulerCacheWithChunkSizes(rdb, mgetChunkSize, writeChunkSize)
 }
 
+// ProvideCurrencyCutoverCacheBypass creates the shared runtime marker used by
+// wallet-backed cache readers and writers. Configuration validation rejects a
+// marker path when the quota flusher is enabled, before this provider runs.
+func ProvideCurrencyCutoverCacheBypass(cfg *config.Config) *runtimegate.CurrencyCutoverCacheBypass {
+	if cfg == nil {
+		return runtimegate.NewCurrencyCutoverCacheBypass("")
+	}
+	return runtimegate.NewCurrencyCutoverCacheBypass(cfg.Billing.CurrencyCutoverCacheBypassFile)
+}
+
+// ProvideCurrencyAwareBillingCache injects the cutover marker without changing
+// NewBillingCache's one-argument compatibility contract used by tests.
+func ProvideCurrencyAwareBillingCache(rdb *redis.Client, bypass *runtimegate.CurrencyCutoverCacheBypass) service.BillingCache {
+	return newBillingCacheWithCurrencyCutoverBypass(rdb, bypass)
+}
+
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
 	NewUserRepository,
@@ -111,7 +128,8 @@ var ProviderSet = wire.NewSet(
 
 	// Cache implementations
 	NewGatewayCache,
-	NewBillingCache,
+	ProvideCurrencyCutoverCacheBypass,
+	ProvideCurrencyAwareBillingCache,
 	NewAPIKeyCache,
 	NewTempUnschedCache,
 	NewTimeoutCounterCache,

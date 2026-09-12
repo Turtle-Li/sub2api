@@ -123,6 +123,8 @@ export default {
         modelsPlaceholder: 'Type full model name and press Enter',
         modelInputHint: 'Press Enter to add, supports paste for batch import.',
         billingMode: 'Billing Mode',
+        currency: 'Price Unit',
+        currencyUnitHint: 'Changing the unit does not convert existing numeric prices.',
         defaultPrices: 'Default prices (fallback when no interval matches)',
         inputPrice: 'Input',
         outputPrice: 'Output',

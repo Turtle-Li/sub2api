@@ -71,6 +71,22 @@ describe('PricingEntryCard time pricing visibility', () => {
     })
     expect(entry.time_pricing.periods).toHaveLength(1)
   })
+
+  it('round-trips the selected authored pricing currency without changing prices', () => {
+    const entry = createEntry()
+    const wrapper = shallowMount(PricingEntryCard, {
+      props: { entry },
+    })
+
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    selects[1].vm.$emit('update:modelValue', 'CNY')
+
+    expect(wrapper.emitted('update')?.[0]?.[0]).toEqual({
+      ...entry,
+      currency: 'CNY',
+    })
+    expect(entry.currency).toBeUndefined()
+  })
 })
 
 describe('PricingEntryCard request multipliers', () => {

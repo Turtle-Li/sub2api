@@ -90,6 +90,9 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 	if groupIn == nil {
 		return errors.New("group is nil")
 	}
+	if err := service.NormalizeModelPricingCurrencies(groupIn.ModelPricing); err != nil {
+		return fmt.Errorf("normalize group model pricing currency: %w", err)
+	}
 	modelPricing, err := json.Marshal(groupIn.ModelPricing)
 	if err != nil {
 		return fmt.Errorf("marshal group model pricing: %w", err)
@@ -278,6 +281,9 @@ func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.G
 }
 
 func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) error {
+	if err := service.NormalizeModelPricingCurrencies(groupIn.ModelPricing); err != nil {
+		return fmt.Errorf("normalize group model pricing currency: %w", err)
+	}
 	modelPricing, err := json.Marshal(groupIn.ModelPricing)
 	if err != nil {
 		return fmt.Errorf("marshal group model pricing: %w", err)

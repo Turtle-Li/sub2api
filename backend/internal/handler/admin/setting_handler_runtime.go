@@ -245,6 +245,57 @@ func (h *SettingHandler) UpdatePanelRateLimitSettings(c *gin.Context) {
 	})
 }
 
+// GetPricingCurrencySettings returns the current wallet settlement unit.
+// GET /api/v1/admin/settings/pricing-currency
+func (h *SettingHandler) GetPricingCurrencySettings(c *gin.Context) {
+	settings, err := h.settingService.GetPricingCurrencySettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.PricingCurrencySettings{
+		SettlementCurrency: settings.SettlementCurrency,
+		USDToCNYRate:       settings.USDToCNYRate,
+	})
+}
+
+// UpdatePricingCurrencySettingsRequest updates the approved migration rate for
+// the active settlement unit. Settlement currency transitions require the
+// wallet migration transaction and are rejected by this endpoint.
+type UpdatePricingCurrencySettingsRequest struct {
+	SettlementCurrency string  `json:"settlement_currency"`
+	USDToCNYRate       float64 `json:"usd_to_cny_rate"`
+}
+
+// UpdatePricingCurrencySettings updates settings for the current wallet
+// settlement unit.
+// PUT /api/v1/admin/settings/pricing-currency
+func (h *SettingHandler) UpdatePricingCurrencySettings(c *gin.Context) {
+	var req UpdatePricingCurrencySettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	if err := h.settingService.UpdatePricingCurrencySettings(c.Request.Context(), service.PricingCurrencySettings{
+		SettlementCurrency: req.SettlementCurrency,
+		USDToCNYRate:       req.USDToCNYRate,
+	}); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	settings, err := h.settingService.GetPricingCurrencySettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.PricingCurrencySettings{
+		SettlementCurrency: settings.SettlementCurrency,
+		USDToCNYRate:       settings.USDToCNYRate,
+	})
+}
+
 // GetStreamTimeoutSettings 获取流超时处理配置
 // GET /api/v1/admin/settings/stream-timeout
 func (h *SettingHandler) GetStreamTimeoutSettings(c *gin.Context) {

@@ -33,10 +33,15 @@
 
 ## Internal credit denomination
 
-- Read `docs/CREDIT_PARITY_MIGRATION_20260910.md` before changing balances,
-  recharge ratios or model/group pricing. Owner policy is 1 CNY = 1 internal
-  credit, preserving existing purchasing power. The old 6.75 proposal is
-  superseded; live audit selected unchanged balances and effective prices.
+- Read `docs/PRICING_CURRENCY_20260912.md` before changing wallet denomination
+  or model/group pricing. Owner confirmed existing USD wallets convert to CNY
+  at 6.75, with matching debit conversion and unchanged discount multipliers.
+  Subscription entitlements remain USD. This supersedes the no-conversion
+  decision in `docs/CREDIT_PARITY_MIGRATION_20260910.md`. A settings save does
+  not migrate data. The owner later confirmed 1:1 future CNY recharge and
+  uninterrupted API use with temporary undercharging allowed. Follow
+  `deploy/currency-migration/ONLINE_CUTOVER_20260912.md` for cache bypass,
+  obsolete-writer exclusion, verified backups and the online transaction.
 
 ## Unified payment integration
 
@@ -56,7 +61,9 @@
 
 - Use the configured SSH alias `sub2api-candidate` for current web/API releases;
   it is the serving Azure node and background owner. `sub2api-new` expired on
-  2026-09-12 and is no longer a release target or fallback. Recheck node state.
+  2026-09-12 and is no longer a release target or fallback. Recheck node state
+  before lifecycle changes, and exclude remaining obsolete database connections
+  before currency cutover. Do not copy a raw host, port, or key into scripts.
 - Read `docs/operations/WWW_ORIGIN_RECOVERY_20260912.md` before release or Caddy
   work. Preserve the live www site, automatic HTTP-01 certificate and static
   files; never replace the live Caddyfile with the API-only example template.

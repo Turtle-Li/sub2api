@@ -137,14 +137,29 @@ var (
 )
 
 type billingCache struct {
-	rdb *redis.Client
+	rdb                        *redis.Client
+	currencyCutoverCacheBypass interface{ Enabled() bool }
 }
 
 func NewBillingCache(rdb *redis.Client) service.BillingCache {
 	return &billingCache{rdb: rdb}
 }
 
+// newBillingCacheWithCurrencyCutoverBypass keeps the legacy constructor for
+// tests and lightweight callers while allowing the application to inject its
+// deployment-owned cutover marker.
+func newBillingCacheWithCurrencyCutoverBypass(rdb *redis.Client, bypass interface{ Enabled() bool }) service.BillingCache {
+	return &billingCache{rdb: rdb, currencyCutoverCacheBypass: bypass}
+}
+
+func (c *billingCache) bypassCurrencyCache() bool {
+	return c != nil && c.currencyCutoverCacheBypass != nil && c.currencyCutoverCacheBypass.Enabled()
+}
+
 func (c *billingCache) GetUserBalance(ctx context.Context, userID int64) (float64, error) {
+	if c.bypassCurrencyCache() {
+		return 0, redis.Nil
+	}
 	key := billingBalanceKey(userID)
 	val, err := c.rdb.Get(ctx, key).Result()
 	if err != nil {
@@ -154,11 +169,17 @@ func (c *billingCache) GetUserBalance(ctx context.Context, userID int64) (float6
 }
 
 func (c *billingCache) SetUserBalance(ctx context.Context, userID int64, balance float64) error {
+	if c.bypassCurrencyCache() {
+		return nil
+	}
 	key := billingBalanceKey(userID)
 	return c.rdb.Set(ctx, key, balance, jitteredTTL()).Err()
 }
 
 func (c *billingCache) DeductUserBalance(ctx context.Context, userID int64, amount float64) error {
+	if c.bypassCurrencyCache() {
+		return nil
+	}
 	key := billingBalanceKey(userID)
 	_, err := deductBalanceScript.Run(ctx, c.rdb, []string{key}, amount, int(jitteredTTL().Seconds())).Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
@@ -297,6 +318,9 @@ func (c *billingCache) SubscribeSubscriptionCacheInvalidation(ctx context.Contex
 }
 
 func (c *billingCache) GetAPIKeyRateLimit(ctx context.Context, keyID int64) (*service.APIKeyRateLimitCacheData, error) {
+	if c.bypassCurrencyCache() {
+		return nil, redis.Nil
+	}
 	key := billingRateLimitKey(keyID)
 	result, err := c.rdb.HGetAll(ctx, key).Result()
 	if err != nil {
@@ -328,6 +352,9 @@ func (c *billingCache) GetAPIKeyRateLimit(ctx context.Context, keyID int64) (*se
 }
 
 func (c *billingCache) SetAPIKeyRateLimit(ctx context.Context, keyID int64, data *service.APIKeyRateLimitCacheData) error {
+	if c.bypassCurrencyCache() {
+		return nil
+	}
 	if data == nil {
 		return nil
 	}
@@ -348,6 +375,9 @@ func (c *billingCache) SetAPIKeyRateLimit(ctx context.Context, keyID int64, data
 }
 
 func (c *billingCache) UpdateAPIKeyRateLimitUsage(ctx context.Context, keyID int64, cost float64) error {
+	if c.bypassCurrencyCache() {
+		return nil
+	}
 	key := billingRateLimitKey(keyID)
 	now := time.Now().Unix()
 	_, err := updateRateLimitUsageScript.Run(ctx, c.rdb, []string{key},
@@ -438,6 +468,9 @@ func parseUserPlatformQuotaHash(m map[string]string) *service.UserPlatformQuotaC
 }
 
 func (c *billingCache) GetUserPlatformQuotaCache(ctx context.Context, userID int64, platform string) (*service.UserPlatformQuotaCacheEntry, bool, error) {
+	if c.bypassCurrencyCache() {
+		return nil, false, nil
+	}
 	key := userPlatformQuotaCacheKey(userID, platform)
 	m, err := c.rdb.HGetAll(ctx, key).Result()
 	if err != nil {
@@ -452,6 +485,9 @@ func (c *billingCache) GetUserPlatformQuotaCache(ctx context.Context, userID int
 }
 
 func (c *billingCache) SetUserPlatformQuotaCache(ctx context.Context, userID int64, platform string, entry *service.UserPlatformQuotaCacheEntry, ttl time.Duration) error {
+	if c.bypassCurrencyCache() {
+		return nil
+	}
 	if entry == nil {
 		return nil
 	}
@@ -540,6 +576,9 @@ func userPlatformQuotaDirtyMember(userID int64, platform string) string {
 }
 
 func (c *billingCache) IncrUserPlatformQuotaUsageCache(ctx context.Context, userID int64, platform string, cost float64, ttl time.Duration, markDirty bool) error {
+	if c.bypassCurrencyCache() {
+		return nil
+	}
 	member := ""
 	if markDirty {
 		member = userPlatformQuotaDirtyMember(userID, platform)

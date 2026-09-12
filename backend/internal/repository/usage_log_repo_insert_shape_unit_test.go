@@ -129,7 +129,7 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	})
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
-	idx := len(prepared.args) - 4
+	idx := len(prepared.args) - 5
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)
@@ -142,4 +142,21 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	require.False(t, nullArg.Valid, "absent upstream request id must be NULL")
 
 	require.Contains(t, usageLogSelectColumns, "upstream_request_id")
+}
+
+func TestPrepareUsageLogInsert_SettlementCurrencyWiring(t *testing.T) {
+	prepared := prepareUsageLogInsert(&service.UsageLog{
+		UserID: 1, APIKeyID: 2, RequestID: "client:currency", Model: "gpt-5",
+		Currency: "cny", CreatedAt: time.Now().UTC(),
+	})
+
+	currencyIdx := len(prepared.args) - 2
+	require.Equal(t, "text", usageLogInsertArgTypes[currencyIdx])
+	require.Equal(t, service.PricingCurrencyCNY, prepared.args[currencyIdx])
+
+	legacy := &service.UsageLog{UserID: 1, APIKeyID: 2, RequestID: "client:legacy-currency", Model: "gpt-5", CreatedAt: time.Now().UTC()}
+	legacyPrepared := prepareUsageLogInsert(legacy)
+	require.Equal(t, service.PricingCurrencyUSD, legacyPrepared.args[currencyIdx])
+	require.Equal(t, service.PricingCurrencyUSD, legacy.Currency)
+	require.Contains(t, usageLogSelectColumns, "currency")
 }

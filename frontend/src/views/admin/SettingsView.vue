@@ -7810,6 +7810,8 @@
         <!-- Tab: Email -->
         <!-- Tab: Payment -->
         <div v-show="activeTab === 'payment'" class="space-y-6">
+          <PricingCurrencySettingsCard />
+
           <!-- Payment System Settings -->
           <div class="card">
             <div
@@ -8996,6 +8998,7 @@ import PaymentBannerEditor from "@/components/payment/PaymentBannerEditor.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
+import PricingCurrencySettingsCard from "@/views/admin/settings/PricingCurrencySettingsCard.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   useStepUp,

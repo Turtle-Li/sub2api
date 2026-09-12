@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProfileInfoCard from '@/components/user/profile/ProfileInfoCard.vue'
 import type { User } from '@/types'
 
@@ -15,11 +15,14 @@ vi.mock('@/stores/auth', () => ({
   })
 }))
 
+const appStore = vi.hoisted(() => ({
+  cachedPublicSettings: null as { pricing_currency?: { settlement_currency: string; usd_to_cny_rate: number } } | null,
+  showError: vi.fn(),
+  showSuccess: vi.fn()
+}))
+
 vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({
-    showError: vi.fn(),
-    showSuccess: vi.fn()
-  })
+  useAppStore: () => appStore
 }))
 
 vi.mock('vue-i18n', async (importOriginal) => {
@@ -70,6 +73,10 @@ function createUser(overrides: Partial<User> = {}): User {
 }
 
 describe('ProfileInfoCard', () => {
+  beforeEach(() => {
+    appStore.cachedPublicSettings = null
+  })
+
   it('renders basic account information inside the new overview shell', () => {
     const wrapper = mount(ProfileInfoCard, {
       props: {
@@ -193,5 +200,17 @@ describe('ProfileInfoCard', () => {
     expect(wrapper.get('[data-testid="profile-side-column"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="profile-basics-panel"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="profile-auth-bindings-panel"]').exists()).toBe(true)
+  })
+
+  it('uses the public settlement unit when displaying an already-migrated wallet balance', () => {
+    appStore.cachedPublicSettings = {
+      pricing_currency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 }
+    }
+    const wrapper = mount(ProfileInfoCard, {
+      props: { user: createUser({ balance: 67.5 }) },
+      global: { stubs: { Icon: true } }
+    })
+
+    expect(wrapper.get('[data-testid="profile-overview-metric-balance"]').text()).toContain('¥67.50')
   })
 })

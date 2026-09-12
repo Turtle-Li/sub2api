@@ -186,7 +186,9 @@ import Icon from '@/components/icons/Icon.vue'
 import ProfileAvatarCard from '@/components/user/profile/ProfileAvatarCard.vue'
 import ProfileEditForm from '@/components/user/profile/ProfileEditForm.vue'
 import ProfileIdentityBindingsSection from '@/components/user/profile/ProfileIdentityBindingsSection.vue'
+import { useAppStore } from '@/stores/app'
 import type { User, UserAuthBindingStatus, UserAuthProvider, UserProfileSourceContext } from '@/types'
+import { formatSettlementAmount, pricingCurrencyFromPublicSettings } from '@/utils/settlementCurrency'
 
 const props = withDefaults(defineProps<{
   user: User | null
@@ -208,6 +210,10 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
+const appStore = useAppStore()
+const settlementCurrency = computed(() =>
+  pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings).settlementCurrency
+)
 
 function normalizeBindingStatus(binding: boolean | UserAuthBindingStatus | undefined): boolean | null {
   if (typeof binding === 'boolean') {
@@ -273,7 +279,7 @@ const providerLabels = computed<Record<UserAuthProvider, string>>(() => ({
 }))
 
 function formatCurrency(value: number): string {
-  return `$${value.toFixed(2)}`
+  return formatSettlementAmount(value, settlementCurrency.value)
 }
 
 function normalizeProvider(value: string): UserAuthProvider | null {

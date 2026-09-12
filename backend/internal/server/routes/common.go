@@ -32,7 +32,11 @@ func RegisterCommonRoutes(r *gin.Engine, internalHealth InternalHealth) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"live": false})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"live": true})
+		payload := gin.H{"live": true}
+		if traffic, ok := internalHealth.(interface{ InFlightRequests() int64 }); ok {
+			payload["in_flight_requests"] = traffic.InFlightRequests()
+		}
+		c.JSON(http.StatusOK, payload)
 	})
 
 	r.GET("/internal/readyz", func(c *gin.Context) {

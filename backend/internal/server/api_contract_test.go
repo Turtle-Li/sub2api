@@ -609,6 +609,7 @@ func TestAPIContracts(t *testing.T) {
 							"cache_read_cost": 0,
 						"total_cost": 0.5,
 						"actual_cost": 0.5,
+						"currency": "USD",
 						"rate_multiplier": 1,
 						"long_context_billing_applied": false,
 						"billing_type": 0,

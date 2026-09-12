@@ -390,6 +390,28 @@ func TestNormalizeGroupModelPricing_NormalizesEmptyTimePricing(t *testing.T) {
 	require.Nil(t, pricing[0].TimePricing)
 }
 
+func TestNormalizeGroupModelPricing_NormalizesAndRejectsCurrency(t *testing.T) {
+	price := 1.0
+	pricing, err := normalizeGroupModelPricing(PlatformOpenAI, []ChannelModelPricing{{
+		Models:      []string{"gpt-5"},
+		BillingMode: BillingModeToken,
+		Currency:    "cny",
+		InputPrice:  &price,
+	}})
+	require.NoError(t, err)
+	require.Len(t, pricing, 1)
+	require.Equal(t, PricingCurrencyCNY, pricing[0].Currency)
+
+	_, err = normalizeGroupModelPricing(PlatformOpenAI, []ChannelModelPricing{{
+		Models:      []string{"gpt-5"},
+		BillingMode: BillingModeToken,
+		Currency:    "EUR",
+		InputPrice:  &price,
+	}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "INVALID_PRICING_CURRENCY")
+}
+
 type compositeRouteRepoStubForAdmin struct {
 	routes    []CompositeModelRoute
 	created   *CompositeModelRoute

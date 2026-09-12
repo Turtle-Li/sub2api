@@ -998,7 +998,7 @@ export default {
       },
       imagePricing: {
         title: 'Image Generation Pricing',
-        description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
+        description: 'Configure image generation access and USD source base prices. Leave empty to use default prices.',
         allowImageGeneration: 'Allow image generation for this group',
         allowBatchImageGeneration: 'Allow batch image generation for this group',
         independentMultiplier: 'Use independent image multiplier',
@@ -1015,7 +1015,7 @@ export default {
       videoPricing: {
         title: 'Video Generation Pricing',
         description:
-          'Configure Grok video generation prices in USD per second of output video. Leave empty to use the default per-second rates (grok-imagine-video: $0.05/s 480p, $0.07/s 720p; video-1.5: $0.08/s 480p, $0.14/s 720p, $0.25/s 1080p).',
+          'Configure USD source Grok video prices per second of output video. Leave empty to use the default per-second rates (grok-imagine-video: $0.05/s 480p, $0.07/s 720p; video-1.5: $0.08/s 480p, $0.14/s 720p, $0.25/s 1080p).',
         modelOverridesTitle: 'Per-model video price overrides',
         modelOverridesDescription: 'Each populated cell overrides the flat resolution price for that model family. Preview and legacy aliases for video-1.5 use the same family; empty cells fall back to the flat resolution price.',
         independentMultiplier: 'Use independent video multiplier',
@@ -1027,8 +1027,8 @@ export default {
       },
       explicitPricing: {
         title: 'Grok Search & Voice Pricing',
-        description: 'Optional per-group prices for web_search (per 1k calls) and Voice realtime / TTS / STT (USD). Leave empty if unused.',
-        searchPricePer1k: 'Search price per 1k calls (USD)',
+        description: 'Optional USD source prices for web_search (per 1k calls) and Voice realtime / TTS / STT. Leave empty if unused.',
+        searchPricePer1k: 'Search price per 1k calls (USD source)',
         pricePlaceholder: 'optional'
       },
       modelPricing: {
@@ -1040,15 +1040,15 @@ export default {
       },
       voicePricing: {
         title: 'Grok Voice Pricing',
-        description: 'Optional per-group prices for Voice realtime / TTS / STT (USD). Leave empty to leave unpriced.',
-        audioRealtimePerMin: 'Realtime price per minute (USD)',
-        audioTtsPerMillionChars: 'TTS price per million chars (USD)',
-        audioSttPerHour: 'STT price per hour (USD)',
+        description: 'Optional USD source prices for Voice realtime / TTS / STT. Leave empty to leave unpriced.',
+        audioRealtimePerMin: 'Realtime price per minute (USD source)',
+        audioTtsPerMillionChars: 'TTS price per million chars (USD source)',
+        audioSttPerHour: 'STT price per hour (USD source)',
         pricePlaceholder: 'optional'
       },
       webSearchPricing: {
         title: 'Codex Web Search Pricing',
-        pricePerCall: 'Price per search call (USD)',
+        pricePerCall: 'Price per search call (USD source)',
         pricePerCallHint:
           'Leave empty to use the default $0.01 per call (official pricing: $10 per 1,000 calls); 0 means free. The group rate multiplier is applied on top.',
         finalPricePreview: 'Per-call price after current multiplier: {price}'

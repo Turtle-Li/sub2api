@@ -246,6 +246,16 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	if err != nil {
 		return nil, fmt.Errorf("get public settings: %w", err)
 	}
+	pricingCurrency, pricingCurrencyErr := s.GetPricingCurrencySettings(ctx)
+	if pricingCurrencyErr != nil {
+		// A previous valid setting remains safe to publish while its refresh is
+		// failing. Do not manufacture a USD fallback here: that would relabel a
+		// migrated CNY wallet during a transient database outage.
+		cached, ok := s.pricingCurrencySettingsCache.Load().(*cachedPricingCurrencySettings)
+		if !ok || cached == nil || !cached.hasGood {
+			return nil, fmt.Errorf("get public pricing currency settings: %w", pricingCurrencyErr)
+		}
+	}
 
 	linuxDoEnabled := false
 	if raw, ok := settings[SettingKeyLinuxDoConnectEnabled]; ok {
@@ -345,6 +355,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		WeChatOAuthMobileEnabled:            weChatMobileEnabled,
 		BackendModeEnabled:                  settings[SettingKeyBackendModeEnabled] == "true",
 		PaymentEnabled:                      settings[SettingPaymentEnabled] == "true",
+		PricingCurrency:                     pricingCurrency,
 		OIDCOAuthEnabled:                    oidcEnabled,
 		OIDCOAuthProviderName:               oidcProviderName,
 		GitHubOAuthEnabled:                  gitHubEnabled,
@@ -605,6 +616,7 @@ type PublicSettingsInjectionPayload struct {
 	GoogleOAuthEnabled                  bool                     `json:"google_oauth_enabled"`
 	BackendModeEnabled                  bool                     `json:"backend_mode_enabled"`
 	PaymentEnabled                      bool                     `json:"payment_enabled"`
+	PricingCurrency                     PricingCurrencySettings  `json:"pricing_currency"`
 	Version                             string                   `json:"version"`
 	// 服务器全局时区（IANA 名称与当前 UTC 偏移），高峰时段等服务端本地时间窗口的展示标注用
 	ServerTimezone              string  `json:"server_timezone"`
@@ -697,6 +709,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		GoogleOAuthEnabled:                  settings.GoogleOAuthEnabled,
 		BackendModeEnabled:                  settings.BackendModeEnabled,
 		PaymentEnabled:                      settings.PaymentEnabled,
+		PricingCurrency:                     settings.PricingCurrency,
 		Version:                             s.version,
 		ServerTimezone:                      timezone.Name(),
 		ServerUTCOffset:                     timezone.UTCOffset(),
