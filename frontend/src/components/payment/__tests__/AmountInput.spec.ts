@@ -69,6 +69,20 @@ describe('AmountInput', () => {
     expect(wrapper.find('input').exists()).toBe(false)
   })
 
+  it('exposes the full tier content to assistive technology instead of overriding it with only price and title', () => {
+    const wrapper = mount(AmountInput, { props: { modelValue: 100, options } })
+    const card = wrapper.get('[role="button"]')
+    // A button gets its accessible name from its contents. An aria-label here
+    // would replace the description, credited balance, bonus and benefits.
+    expect(card.attributes('aria-label')).toBeUndefined()
+    expect(card.text()).toContain('Growth')
+    expect(card.text()).toContain('For regular usage')
+    expect(card.text()).toContain('¥100.00')
+    expect(card.text()).toContain('108 payment.creditUnit')
+    expect(card.text()).toContain('+8 payment.creditUnit')
+    expect(card.text()).toContain('Concurrency raised to 5')
+  })
+
   // Tier amounts are charged in the gateway currency. The card hardcoded "$"
   // while the order summary right below it used the gateway currency, so the
   // same money appeared twice with two different symbols.

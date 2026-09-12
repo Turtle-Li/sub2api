@@ -8,7 +8,6 @@
         tabindex="0"
         :aria-pressed="isSelected(option)"
         :aria-disabled="option.eligibility?.can_purchase === false"
-        :aria-label="`${formatAmount(option.amount)} · ${tierName(option)}`"
         :class="[
           'payment-product-card payment-recharge-card',
           option.eligibility?.can_purchase === false && 'payment-product-card--unavailable',
