@@ -50,6 +50,14 @@
   `docs/operations/CNY_WALLET_CUTOVER_20260912.md` for the manifest, probes and
   compatible fallback. Do not rerun migration SQL or restore the old USD DB.
 
+- Later owner correction: standard OpenAI/Codex CNY wallet billing uses the
+  original USD reference price directly times the existing group multiplier;
+  rate 0.25 means ¥500 buys $2000 reference usage. No extra FX or new setting.
+  Read the correction in `docs/PRICING_CURRENCY_20260912.md`; subscription groups
+  and other platforms retain the initial rules. Deploy compatible code and
+  drain old binaries before raising the group rate; rollback must preserve this
+  code/rate pairing. Never convert existing wallets again.
+
 ## Unified payment integration
 
 - Read `docs/UNIFIED_PAYMENT_INTEGRATION.md` before changing unified payment
