@@ -7,7 +7,7 @@
 - R3: One settlement currency per installation (USD or CNY); a fixed USD→CNY rate. No live FX or separate provider-cost ledger.
 - R4: Publishing additive code/schema alone preserves legacy USD behavior. Wallet and quota conversion is a separate coordinated cutover, never an incidental settings side effect.
 - R5: Preserve balances/request purchasing power. Convert monetary limits and accumulated usage together, for wallet-funded API keys and platform limits. Subscription entitlements, their API-key quota windows, and upstream account quotas retain USD. Payment orders, actual CNY receipts, refunds and invoices are historical facts and must not be multiplied.
-- R6: New wallet consumption is recorded in settlement units; subscription consumption remains USD. Every new usage row records its currency; legacy rows default to USD. Primary wallet/usage dashboards hide mixed-period monetary totals and show row-level currencies. Remaining rough legacy analytics are not acceptance evidence for wallet reconciliation; a full multi-currency analytics overhaul is outside the owner-requested scope.
+- R6: New wallet consumption is recorded in settlement units; subscription consumption remains USD. Every new usage row records its currency; legacy rows default to USD. The later owner display correction below restores raw reference totals and the historical dollar marker on consumption screens. Remaining rough legacy analytics are not acceptance evidence for wallet reconciliation; a full multi-currency analytics overhaul is outside the owner-requested scope.
 
 ## Task dependencies and ownership
 
@@ -70,3 +70,19 @@ refresh scoped auth caches and allow the existing group-rate cache to expire.
 Do not start an older FX-applying binary against the 0.25 group: restore the old
 group rate before such a rollback, or use the new compatible binary. Keep the
 API accepting throughout; temporary undercharging is owner-authorized.
+
+## Owner display correction: reference usage labels
+
+The September 12 screenshot clarification explicitly prioritizes existing numeric
+usage values over settlement-unit labels. Consumption tables, their token-price
+and cost tooltips, and recent-use cards use the historical `$` marker without
+converting any number. For the confirmed Codex example, input/output unit prices
+are $5/$30 per million, original cost is $0.102952 and rate .25 yields displayed
+$0.025738. The wallet debit remains 0.025738 CNY. Usage dashboards and their top
+summaries again show existing raw aggregates as a rough API usage reference;
+these historical mixed-period figures are not a unified USD cost ledger.
+
+This is presentation only: persisted row currency, exports, pricing cards,
+settlement, group multipliers and CNY balances are unchanged. No data migration,
+new setting or extra FX calculation is introduced. This supersedes the initial
+mixed-currency hiding decision in R6.

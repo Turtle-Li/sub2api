@@ -64,7 +64,7 @@ describe('UserDashboardStats', () => {
     appStore.cachedPublicSettings = null
   })
 
-  it('does not present mixed USD/CNY cost aggregates as dollar totals after the wallet migration', () => {
+  it('restores reference usage numbers while keeping the actual wallet in CNY', () => {
     appStore.cachedPublicSettings = {
       pricing_currency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 },
     }
@@ -77,11 +77,12 @@ describe('UserDashboardStats', () => {
       global: { stubs: { Icon: true } },
     })
 
-    expect(wrapper.text()).toContain('Historical usage contains multiple currencies and is not totaled.')
+    expect(wrapper.text()).not.toContain('Historical usage contains multiple currencies and is not totaled.')
+    expect(wrapper.text()).toContain('¥67.50')
     expect(wrapper.text()).toContain('42')
     expect(wrapper.text()).toContain('30')
-    expect(wrapper.text()).not.toContain('$123.4567')
-    expect(wrapper.text()).not.toContain('$98.7654')
-    expect(wrapper.text()).not.toContain('$9.8765')
+    expect(wrapper.text()).toContain('$123.4567')
+    expect(wrapper.text()).toContain('$98.7654')
+    expect(wrapper.text()).toContain('$9.8765')
   })
 })
