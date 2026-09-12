@@ -65,6 +65,9 @@
   code/rate pairing. Never convert existing wallets again.
   Live activation, exact debit proof and compatible fallback are recorded in
   `docs/operations/CODEX_DIRECT_RATE_20260912.md`.
+- Consumption displays retain the historical dollar marker and raw numeric
+  amounts; restore rough reference totals per the later screenshot clarification
+  in `docs/PRICING_CURRENCY_20260912.md`. This does not change CNY settlement.
 
 ## Unified payment integration
 

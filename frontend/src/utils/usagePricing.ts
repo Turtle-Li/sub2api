@@ -49,6 +49,8 @@ export function formatTokenPricePerMillion(
   return options.withCurrencySymbol == false ? formatted : `${options.currency === 'CNY' ? '¥' : '$'}${formatted}`
 }
 
-export function usageCurrencySymbol(row: { currency?: string | null } | null | undefined): string {
-  return row?.currency === 'CNY' ? '¥' : '$'
+// Owner-requested reference display: keep the historical dollar marker and raw
+// usage numbers. Persisted currency remains authoritative for wallet settlement.
+export function usageCurrencySymbol(_row: { currency?: string | null } | null | undefined): string {
+  return '$'
 }

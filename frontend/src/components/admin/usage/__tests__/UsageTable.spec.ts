@@ -808,9 +808,43 @@ describe('admin UsageTable deleted-user badge', () => {
   })
 })
 
-it('shows persisted usage currency without re-converting old or new amounts', () => {
- const wrapper=mount(UsageTable,{props:{data:[{...baseImageRow,request_id:'usd',currency:'USD'},{...baseImageRow,request_id:'cny',currency:'CNY'}],loading:false,columns:[]},global:{stubs:{DataTable:DataTableStub,EmptyState:true,Icon:true,Teleport:true}}})
- expect(wrapper.text()).toContain('$0.400000')
- expect(wrapper.text()).toContain('¥0.400000')
- expect(wrapper.text()).not.toContain('¥2.700000')
+it('uses the same reference symbol without converting stored USD or CNY numbers', () => {
+  const wrapper = mount(UsageTable, {
+    props: {
+      data: [
+        { ...baseImageRow, request_id: 'usd', currency: 'USD' },
+        { ...baseImageRow, request_id: 'cny', currency: 'CNY' },
+      ], loading: false, columns: [],
+    },
+    global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+  })
+  expect(wrapper.text().match(/\$0\.400000/g)).toHaveLength(4)
+  expect(wrapper.text()).not.toContain('¥')
+  expect(wrapper.text()).not.toContain('2.700000')
+})
+
+it('shows the owner Codex .25 example as original dollar reference numbers', async () => {
+  const row = {
+    ...baseImageRow, request_id: 'codex-cny', model: 'gpt-5.6-sol', currency: 'CNY',
+    billing_mode: 'token', image_count: 0,
+    input_tokens: 1850, output_tokens: 237, cache_read_tokens: 173184,
+    input_cost: .00925, output_cost: .00711, cache_read_cost: .086592,
+    total_cost: .102952, actual_cost: .025738, rate_multiplier: .25,
+    account_stats_cost: .102952,
+  }
+  const before = JSON.stringify(row)
+  const wrapper = mount(UsageTable, {
+    props: { data: [row], loading: false, columns: [] },
+    global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+  })
+  const triggers = wrapper.findAll('.group.relative')
+  await triggers[triggers.length - 1].trigger('mouseenter')
+  await nextTick()
+  expect(wrapper.text()).toContain('$5.0000 / 1M tokens')
+  expect(wrapper.text()).toContain('$30.0000 / 1M tokens')
+  expect(wrapper.text()).toContain('$0.102952')
+  expect(wrapper.text()).toContain('$0.025738')
+  expect(wrapper.text()).toContain('0.25x')
+  expect(wrapper.text()).not.toContain('¥')
+  expect(JSON.stringify(row)).toBe(before)
 })
