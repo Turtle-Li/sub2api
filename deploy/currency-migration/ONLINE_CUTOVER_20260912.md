@@ -9,6 +9,7 @@ This packet supersedes the earlier admission-pause plan for this specific run. A
 - Active origin is `sub2api-candidate`, accepting/background active, healthy green at `cd8932c5c`. Public health and authenticated `gpt-5.6-sol` models/responses probes return 200. Claude resumed and independently approved the existing currency code and the online approach subject to cache and flusher conditions.
 - Registry and `WWW_ORIGIN_RECOVERY_20260912.md` identify `sub2api-new` as expired, unavailable over SSH and unsuitable for rollback. Its six old PostgreSQL sessions are idle, but must still be excluded before denomination changes. Preserve the newly recovered www site/static assets and certificate in every release; do not replace Caddy with the API-only template.
 - Current PostgreSQL writers are observed by source; Redis clients are Azure/local only. Application configuration has no platform flusher override (default false), dirty set is empty, and no user has a positive platform-quota limit. Reconfirm these facts before execution, including the actual replacement container's config/env.
+- Batch image public admission is already disabled by `BATCH_IMAGE_ENABLED=false` (also Vertex/delivery false). Preserve that effective override during this run: a new cached-USD reservation racing the online transaction is outside this packet. The queue switch alone does not enable public admission. All existing batches must remain terminal at the SQL gate.
 - Payment setting is enabled, despite the owner's recollection of a closed entrance. Do not assume no wallet writers. Only two historical balance orders exist, both REFUNDED; no active/frozen wallet or batch state may pass unnoticed. The SQL's preconditions remain mandatory.
 
 ## Execution sequence
@@ -27,3 +28,9 @@ This packet supersedes the earlier admission-pause plan for this specific run. A
 Online traffic creates new financial facts immediately. Do not use `rollback-before-reopen.sql` or restore an old full database after cutover. Preserve the per-row manifest, backups, usage and billing dedup evidence; correct forward while keeping CNY-compatible code. On a cache-related error, retain bypass and use the database as authority. On a pre-commit failure, the SQL transaction rolls back and USD remains active; investigate without relabeling data or retrying blindly.
 
 New test credentials are unnecessary for the existing release probe. Do not delete ordinary users, financial/audit rows or usage history to make before/after figures look clean. Record exact code/image/archive identities and the tested source allowlist change in project operations and the private registry when execution completes.
+
+## Latest rehearsal evidence
+
+`sub2api-db-backup-20260912-121620.tar.gz` (262641006 bytes, SHA-256 `5e0388caf0a386436744e8c7e73313298d7fac04fd50fac9e294beba5e04f6db`) passed archive/dump/Redis checksums and isolated restore, dry run, `recharge_factor=1` conversion, duplicate refusal and exact wallet rollback. A root-only copy and checksum are retained outside rotating backups at `/opt/sub2api-migration/currency-20260912/backups/`. This is rehearsal evidence; the live SQL manifest will capture the exact later transaction boundary.
+
+All registration/first-bind default gifts and plan balance bonuses are zero. One pre-existing promo code carries 5 USD credits; it is an outstanding existing credit promise and follows the existing redeem/promo conversion ×6.75. Future paid recharge and its preset bonuses retain nominal CNY amounts.
