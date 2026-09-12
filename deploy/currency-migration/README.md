@@ -3,6 +3,8 @@
 This is an explicit operator migration, not an application startup migration.
 Approved rate: **6.75**. Default code rollout remains USD until the transaction.
 
+**Current owner-approved execution:** future recharge is **1 CNY paid → 1 CNY credited**, so use `recharge_factor=1`. On September 12 the owner explicitly prioritized uninterrupted API use and accepted temporary undercharging. Follow [the online execution packet](ONLINE_CUTOVER_20260912.md) for this run; the stopped-writer steps below are the earlier alternative, not the current execution authorization. Never activate the HTTP admission fence for this online run.
+
 ## Required gates
 
 1. Review the exact application commit with Claude, run backend unit tests and frontend checks, and deploy the same reviewed image to both production application nodes with existing role-preserving release receivers. Keep the default USD policy during rollout.

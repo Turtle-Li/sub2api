@@ -37,6 +37,6 @@ The read-only production audit found only subscription traffic in the last hour,
 
 The canonical lifecycle lock is `/run/sub2api-maintenance/sub2api-maintenance.lock` (see `deploy/README.md`); the legacy `/run/lock` path is obsolete. Snapshot and restore-smoke verification use the existing `sub2api-db-backup` and `sub2api-db-restore-smoke` tools on `sub2api-db`. Backups and per-row financial manifests stay on the protected server, outside Git.
 
-## Pending retail decision
+## Confirmed retail decision
 
-The live `BALANCE_RECHARGE_MULTIPLIER` is 1: a ¥100 payment currently yields 100 USD-denominated credits. The owner must choose whether future ¥100 pays for ¥675 wallet credits (preserving old retail purchasing power) or ¥100 wallet credits (nominal CNY retail). Existing wallet conversion ×6.75 is already confirmed. SQL requires an explicit `recharge_factor` and snapshots both the multiplier and preset bonus JSON. No production cutover is approved by the rehearsal default. Receipt amounts and purchase eligibility thresholds remain actual paid CNY.
+The owner confirmed future recharges are **1 CNY paid → 1 CNY wallet credit** on 2026-09-12. Use `recharge_factor=1`; retain nominal preset bonuses and their descriptions. Existing wallet balances still convert ×6.75. Receipt amounts and purchase eligibility thresholds remain actual paid CNY. The owner also explicitly prioritizes uninterrupted API use and accepts temporary undercharging during transition; the earlier global admission-pause plan is superseded subject to verification of an online transaction, cache refresh and exclusion of obsolete writers.
