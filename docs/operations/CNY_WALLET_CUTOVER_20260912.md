@@ -143,10 +143,14 @@ and all 29 manifest wallets still reconciled within stored precision.
 From 13:23:51 through 13:55:33 CST, 224 combined API/www health samples all
 returned 200, including 106 samples over more than 15 minutes after the SQL.
 These health checks are not a claim that every model request succeeded:
-application logs also showed gpt-5.4 `/responses` failures in group 6, tied to
-`prompt_guard_unavailable`, with no balance-rejection or panic evidence.
-This distinct service dependency is being investigated; keep its final
-resolution separate from the successful currency acceptance evidence.
+application logs also showed gpt-5.4 `/responses` failures in group 6, with
+no balance-rejection or panic evidence. Separate later asynchronous audit
+events reported `prompt_guard_unavailable`. Read-only investigation found the
+Prompt Guard relay still targets the expired old peer; its timeouts predate
+the currency change. However `blocking_enabled=false` and those audit failures
+followed the HTTP 503 responses, so they do not establish the cause of the
+customer request failures. Keep that dependency fault and the synchronous
+request diagnosis separate from successful currency acceptance evidence.
 
 ## Forward recovery
 
