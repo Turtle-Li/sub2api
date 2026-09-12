@@ -2,6 +2,10 @@
 
 ## Payment catalog and reset-card purchases
 
+- Recharge UI follows the subscription-card visual system; read
+  `docs/operations/RECHARGE_CARD_STYLE_20260912.md` for the current layout,
+  accessible content and completed single-origin release.
+
 - Read `docs/operations/PAYMENT_CARD_ELIGIBILITY_20260912.md` for configurable
   card audiences, net paid recharge prerequisites and monotonic concurrency
   benefits. Public DTOs must omit private rules; order admission is server-owned.
