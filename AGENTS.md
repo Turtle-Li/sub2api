@@ -34,7 +34,10 @@
   at 6.75, with matching debit conversion and unchanged discount multipliers.
   Subscription entitlements remain USD. This supersedes the no-conversion
   decision in `docs/CREDIT_PARITY_MIGRATION_20260910.md`. A settings save does
-  not migrate data; cutover requires writer fencing and a verified backup.
+  not migrate data. The owner later confirmed 1:1 future CNY recharge and
+  uninterrupted API use with temporary undercharging allowed. Follow
+  `deploy/currency-migration/ONLINE_CUTOVER_20260912.md` for cache bypass,
+  obsolete-writer exclusion, verified backups and the online transaction.
 
 ## Unified payment integration
 
@@ -53,9 +56,12 @@
 ## Production host
 
 - Use the configured SSH aliases only: `sub2api-candidate` is the serving Azure
-  node and background owner; `sub2api-new` is the accepting rollback origin
-  with background standby (verified 2026-09-09). Preserve these roles during
-  release and recheck them before every lifecycle change. Do not copy a raw
+  node and background owner. `sub2api-new` expired on September 12 and must
+  not be used as a release/DNS rollback target. Read
+  `docs/operations/WWW_ORIGIN_RECOVERY_20260912.md`; preserve the recovered
+  www site, static assets and certificate during release. Recheck the live
+  container/role before every lifecycle change, and exclude any remaining
+  obsolete database connections before currency cutover. Do not copy a raw
   host, port, or key into project scripts.
 - The `sub2api-new` server is shared only with Turtle's GPT. Sub2API owns `/opt/sub2api`,
   its `sub2api*` containers, volumes, images, release logs, and loopback ports;
