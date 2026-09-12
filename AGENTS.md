@@ -2,6 +2,12 @@
 
 ## Payment catalog and reset-card purchases
 
+- For the owner-only direct-link payment test, read
+  `docs/operations/PAYMENT_DIRECT_TEST_ENTRY_20260912.md`. The independent
+  `payment_entry_enabled` hides discovery only; server-side card audiences
+  enforce purchase access. Enable payment last after restricted cards are ready,
+  and disable payment before removing the last enabled recharge preset.
+
 - Latest recharge-card refinement and closed-checkout release: read
   `docs/operations/RECHARGE_UI_LOCAL_REVIEW_20260912.md`. Keep ordinary
   purchasing closed until the owner completes real-flow testing.

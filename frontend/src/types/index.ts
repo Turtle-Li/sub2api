@@ -241,6 +241,12 @@ export interface PublicSettings {
   compact_home_enabled: boolean
   hide_ccs_import_button: boolean
   payment_enabled: boolean
+  /**
+   * Presentation-only purchase-entry switch. Optional: injected
+   * `__APP_CONFIG__` from older backends may omit it — missing means shown.
+   * `payment_enabled` remains the real payment/route switch.
+   */
+  payment_entry_enabled?: boolean
   risk_control_enabled: boolean
   table_default_page_size: number
   table_page_size_options: number[]

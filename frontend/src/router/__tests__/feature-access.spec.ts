@@ -25,6 +25,7 @@ const appStore = vi.hoisted(() => ({
   publicSettingsLoaded: false,
   cachedPublicSettings: null as null | {
     payment_enabled?: boolean
+    payment_entry_enabled?: boolean
     risk_control_enabled?: boolean
     custom_menu_items?: []
   },
@@ -215,5 +216,31 @@ describe('feature route guard', () => {
 
     expect(next).toHaveBeenCalledOnce()
     expect(next).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('still allows a direct purchase visit when only the entry switch is off', async () => {
+    appStore.cachedPublicSettings = { payment_enabled: true, payment_entry_enabled: false }
+    appStore.publicSettingsLoaded = true
+    const purchaseRoute = routeFor('/purchase')
+
+    // The presentation-only entry switch must not tighten the route guard.
+    expect(purchaseRoute.meta?.requiresPayment).toBe(true)
+    const { navigation, next } = runGuard({ requiresPayment: true }, purchaseRoute.path)
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('keeps order history reachable while the purchase entry is hidden', async () => {
+    appStore.cachedPublicSettings = { payment_enabled: true, payment_entry_enabled: false }
+    appStore.publicSettingsLoaded = true
+    const ordersRoute = routeFor('/orders')
+
+    expect(ordersRoute.meta?.requiresPayment).toBe(false)
+    const { navigation, next } = runGuard({}, ordersRoute.path)
+    await navigation
+
+    expect(next).toHaveBeenCalledWith()
   })
 })

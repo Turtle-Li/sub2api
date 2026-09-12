@@ -859,6 +859,43 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).toContain("admin.settings.payment.unifiedNotConfigured");
   });
 
+  it("loads a disabled purchase-entry switch and persists it", async () => {
+    getSettings.mockResolvedValue({
+      ...baseSettingsResponse,
+      payment_entry_enabled: false,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    const toggle = wrapper.get('[data-testid="payment-entry-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_entry_enabled: false }),
+    );
+  });
+
+  it("defaults the purchase-entry switch on when the backend omits it", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    const toggle = wrapper.get('[data-testid="payment-entry-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+
+    await toggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_entry_enabled: false }),
+    );
+  });
+
   it("shows valid passkey RP configuration and persists the sign-in toggle", async () => {
     const wrapper = mountView();
 

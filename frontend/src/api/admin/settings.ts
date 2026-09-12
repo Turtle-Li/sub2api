@@ -669,6 +669,11 @@ export interface SystemSettings {
 
   // Payment configuration
   payment_enabled: boolean;
+  /**
+   * Presentation-only switch: hides built-in purchase navigation/CTA links.
+   * Optional — older backends omit it; treat missing as enabled (true).
+   */
+  payment_entry_enabled?: boolean;
   risk_control_enabled: boolean;
 
   // Cyber session block
@@ -987,6 +992,8 @@ export interface UpdateSettingsRequest {
   codex_cli_only_engine_fingerprint_signals?: string;
   // Payment configuration
   payment_enabled?: boolean;
+  /** Presentation-only purchase-entry switch; see SystemSettings. */
+  payment_entry_enabled?: boolean;
   risk_control_enabled?: boolean;
 
   // Cyber session block

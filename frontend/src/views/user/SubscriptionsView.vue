@@ -71,7 +71,7 @@
                 {{ t(`userSubscriptions.status.${subscription.status}`) }}
               </span>
               <button
-                v-if="subscription.status === 'active'"
+                v-if="subscription.status === 'active' && canShowPaymentEntry"
                 :class="['rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors', platformButtonClass(subscription.group?.platform || '')]"
                 @click="router.push({ path: '/purchase', query: { tab: 'subscription', group: String(subscription.group_id) } })"
               >
@@ -302,7 +302,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
@@ -322,6 +322,7 @@ import {
   type RemainingDurationParts
 } from '@/utils/subscriptionQuota'
 import { createIdempotencyKey } from '@/utils/idempotency'
+import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 
 function platformAccentDotClass(p: string): string {
   switch (p) {
@@ -336,6 +337,10 @@ function platformAccentDotClass(p: string): string {
 const { t } = useI18n()
 const router = useRouter()
 const appStore = useAppStore()
+
+// Presentation-only entry switch hides the renew (purchase) CTA while this
+// own-subscriptions page stays fully reachable.
+const canShowPaymentEntry = computed(() => isFeatureFlagEnabled(FeatureFlags.paymentEntry))
 
 const subscriptions = ref<UserSubscription[]>([])
 const loading = ref(true)

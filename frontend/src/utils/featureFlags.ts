@@ -119,6 +119,17 @@ export const FeatureFlags = {
     mode: 'opt-out',
     label: 'Payment',
   }),
+  /**
+   * Presentation-only purchase-entry switch (payment_entry_enabled).
+   * Hides built-in purchase navigation/CTA/discovery links only; it does NOT
+   * change the global payment switch, block the direct /purchase route, or
+   * hide orders/invoices/own-subscriptions.
+   */
+  paymentEntry: defineFlag({
+    key: 'payment_entry_enabled',
+    mode: 'opt-out',
+    label: 'Payment Entry',
+  }),
   riskControl: defineFlag({
     key: 'risk_control_enabled',
     mode: 'opt-in',
@@ -161,6 +172,20 @@ export function makeSidebarFlag(flag: FeatureFlagDefinition): () => boolean {
 /** True when channel monitor feature flag is enabled. */
 export function isChannelMonitorRouteEnabled(): boolean {
   return isFeatureFlagEnabled(FeatureFlags.channelMonitor)
+}
+
+/**
+ * True when built-in purchase entry points (sidebar nav, recharge/renew CTAs)
+ * should be shown. Requires both the global payment switch and the
+ * presentation-only entry switch. Route guards and order logic must keep
+ * using `payment_enabled` directly — a hidden entry never blocks a direct
+ * /purchase visit or payment result/recovery pages.
+ */
+export function isPaymentEntryVisible(): boolean {
+  return (
+    isFeatureFlagEnabled(FeatureFlags.payment) &&
+    isFeatureFlagEnabled(FeatureFlags.paymentEntry)
+  )
 }
 
 export type ChannelMonitorMode = 'v1' | 'v2'
