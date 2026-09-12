@@ -1,6 +1,6 @@
-# 充值卡片本地改版与审核 — 2026-09-12
+# 充值卡片改版、审核与入口关闭发布 — 2026-09-12
 
-状态：用户已认可本版，授权提交发布，并明确保持普通用户购买入口关闭，真实流程测试后再另行开放。以下是发布前本地审核记录；最终发布结果另行补充。
+状态：用户认可并授权的版本已于 2026-09-12 15:43:46 CST 发布到唯一在用源站，普通用户购买入口保持关闭。真实流程测试后再另行开放。生产版本为 `81e22dc1f413496a528e61e11a9f85b194e1b1f6`；本记录后续的文档提交不代表再次发布。
 
 ## 设计与实现
 
@@ -40,7 +40,7 @@
 - Codex：`pnpm run build` 通过，包含 i18n 校验、Vue/TypeScript 检查和 Vite 生产构建。现存包体积提示不是构建失败。
 - 外部 Google Chrome：桌面浅色/深色，430px 英文，320px 中文、长标题/自定义说明、受限 599 档均已检查；窄屏赠送区能自然换行，门槛可读，无金额或内容截断。
 - 桌面键盘：Tab 聚焦、Enter 选择 199 档后摘要显示 199 / 219；空格选择 399 档后摘要显示 399 / 474。最终保留普通中文浅色 599 档（599 / 744）。
-- 本地组件预览没有执行真实下单、付款、重置或余额扣除。上述结论不是生产发布验收，也不代表用户已认可视觉方案。
+- 本地组件预览没有执行真实下单、付款、重置或余额扣除。上述为发布前本地审核；用户随后认可本版并授权发布，生产验证范围见下文。
 
 临时完整证据：`/tmp/recharge-claude-design-20260912/`，包括 `design.md`、`reviewed-change.patch`、`local-qa.md`、`final-build.log`、Kimi 可见实现/修整日志。
 
@@ -67,3 +67,35 @@ pnpm --dir frontend exec vite --host 127.0.0.1 --port 3008 --strictPort
 ## 后续发布边界
 
 用户随后已明确授权本版提交发布，要求入口保持关闭。发布前已同步 fork/main `451bbb9ec`，源码四文件哈希未改变，并读取人民币钱包迁移权威记录 `docs/operations/CNY_WALLET_CUTOVER_20260912.md`，在最终合并代码与制品上完成所需检查后执行已授权发布。不得回滚到不兼容人民币钱包的旧代码或旧数据。
+
+## 最终提交、制品与发布结果
+
+- [PR #17](https://github.com/Turtle-Li/sub2api/pull/17) 已合并。独立 QA / Review 通过的源码提交为 `00422b185099690a44cf53e4260d9bce866e75ed`；合并和生产提交为 `81e22dc1f413496a528e61e11a9f85b194e1b1f6`，二者完整 Git tree 均为 `caea2c8f6a8592992c66ad7652f416d06dd81032`。
+- [CI 34679631845](https://github.com/Turtle-Li/sub2api/actions/runs/34679631845) 的 5 个任务和 [Security 34679633041](https://github.com/Turtle-Li/sub2api/actions/runs/34679633041) 的 2 个任务全部成功，均对应源码提交。此前本地 168 项聚焦测试、ESLint、i18n、类型检查及生产构建通过。
+- [GitHub build-only 34680189310](https://github.com/Turtle-Li/sub2api/actions/runs/34680189310) 在合并提交上成功，产出 artifact `10294012963`。生产只校验和加载该镜像，没有在生产编译。
+
+| 制品 | 身份 |
+| --- | --- |
+| GitHub ZIP | 83,848,860 bytes；SHA-256 `695737c4c3bc78fccf8d140af9ae4317c710147b0c7e0f2de49a7e191ce28313` |
+| Docker tar.zst | 83,848,041 bytes；SHA-256 `de4c1d06aaf12eaa3258681a0486afb2f0c62dcb4684ec1cae0d986a58b0752c` |
+| 平台与版本 | `linux/amd64`，`0.2.4`，source `https://github.com/Turtle-Li/sub2api` |
+| 生产镜像 | `sub2api:auto-20260912-154259-81e22dc1`；`sha256:641795d7cb0f60f0e865b57dbee22f72e05fa8381d24102541b63433cc45ffb3` |
+
+独立制品审核 `ARTIFACT_QA_PASS`：28 个 OCI blob 的内容哈希、13 个 layer 的描述符/大小/rootfs diff ID 均一致，实际应用二进制包含五个新版前端标记；1,770 个文件系统条目和二进制均未混入本地 `payment-style-preview`。网络传输改为目标机读取同一 GitHub 制品，ZIP 和压缩镜像仍按 GitHub / 构建元数据验证；未更改网络代理、安全验证或凭据配置。
+
+唯一部署目标为 SSH alias `sub2api-candidate`。使用已安装的 root receiver、共享维护锁和蓝绿发布 helper：从兼容人民币钱包的 blue `ba290a474` 切换到 green `81e22dc1f`，Caddy upstream 于 15:43:45 CST 提交，15:43:46 CST 发布验证通过。候选容器的认证 API 探针 `/v1/models`、非流式 Responses 均返回 200；这不是支付流程测试。
+
+服务端日志目录：`/var/log/sub2api-release/gha-20260912-154259-81e22dc1-1425090`。制品的受限暂存目录为 `/var/log/sub2api-release/recharge-refinement-20260912-artifact`。本地完整证据位于部署工作区 `evidence/recharge-refinement-release-20260912/`，包括源码审核、制品审核、GitHub 结果、发布日志、public/postflight 和健康探测记录。
+
+## 入口关闭与线上复核
+
+- 发布前通过外部 Google Chrome 的管理员支付设置关闭支付；发布后 public settings 仍为 `payment_enabled=false`、`purchase_subscription_enabled=false`。钱包结算仍为 CNY，美元换算率仍为 6.75，充值 1:1 的既定规则未更改。
+- 外部 Chrome 全新访问 `/purchase` 被重定向离开购买页；当前管理员会话跳回 `/admin/dashboard`。侧栏不显示充值/订阅入口，`/orders` 历史订单页及刷新操作正常。
+- 后端对新的充值/订阅订单和重置卡购买执行关闭检查。历史订单查询、发票处理及可信支付回调保留；已有重置购买的幂等重放仍保留。受限管理员 owner-test 路径留待后续获准的真实流程测试，本轮未使用。
+- 新 green 容器 healthy、restart 0、无 OOM；节点 `traffic=accepting active_container=sub2api-green background=active`，node preflight 通过。Caddy 主机配置、容器启动配置和运行配置均仅指向 green，事务标记已清除。
+- 发布 helper 的审计计数为 `app_5xx=0 / app_fatal=0 / caddy_5xx=0`。独立公网健康监视覆盖 15:35:39–15:50:36 CST，www/API 共 248 次、失败 0；其中发布后 15:43:51–15:50:36 的 116 次全部成功。
+- 首页和帮助中心分别保持原 SHA-256 `c5b06aa5d590e978aeb883944ba8c40cd4755362cc573e66e8b6f6d13c42fe1a`、`943ee8b0d50f73a479df543ef887fa89d6981f737e7c64b47bf3b15425355f4a`。Caddy 与支付/飞书 Vault sidecar 没有重建或重启，后两者 healthy。
+- 旧 blue 于 15:44:47 CST 正常退出，exit 0、无 OOM，应用记录 graceful shutdown。独立排空 unit 随后的连接计数与停止状态竞争，记录 `container is not running` 并退出；因此不将该 unit 记为排空成功。旧容器已停止、新容器与三份路由配置均正常，不为此重启应用或再次发布。
+- Runtime-guard timer 延续此前人民币迁移记录中的 inactive 状态；本轮未启用，也不宣称定时自动恢复已经生效。保留兼容 CNY 的上一版镜像及 helper 生成的 Caddy 回滚备份；不得恢复旧 USD 数据库或失效源站。
+
+本轮未新建真实订单、付款、退款、重置或扣除余额。普通用户购买继续关闭，待实际支付、到账和权益发放流程验收后另行开放。
