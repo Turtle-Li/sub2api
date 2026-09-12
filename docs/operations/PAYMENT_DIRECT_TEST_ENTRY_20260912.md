@@ -30,6 +30,54 @@
 
 staging、独立 readback、enable、close 与 restore 均显式使用 `Asia/Shanghai` 会话时区，保证完整 JSON 前值比较不会被时间戳格式差异误判。最终 enable 只改 `payment_enabled=false→true`，要求读回唯一受限月计划/固定充值档位、实际收款 0.10、余额赠送 99.90、无额外汇率或费用，并确认入口为 false。运维 Python 明确拒绝优化模式，防止前置校验被禁用；enable/restore 只接受成功的独立 readback 回执。关闭和还原是两个独立步骤：close 只将支付/入口置 false；从新的关闭读回生成 restore，计划/设置如有变化则中止还原。保留测试计划为停售，以保存历史订单引用；不删除财务记录。
 
-生产前状态、最终 source/artifact 身份、发布与配置读回结果将在执行后补充。回滚使用总开关优先关闭、配置前值校验和兼容 CNY 的旧镜像；不覆盖历史订单、余额、订阅或退款。
+生产前状态、source/artifact 身份、发布与配置读回结果见下方完成记录。回滚使用总开关优先关闭、配置前值校验和兼容 CNY 的旧镜像；不覆盖历史订单、余额、订阅或退款。
 
 knowledge_candidate: no — 本项目测试目录与支付导航控制，不是跨项目通用结论。
+
+## 已完成发布与受控启用
+
+- 已审源码 `93f3f20c0a524a42faf969fa2547bd24505a0529`，PR20 合并/运行版本
+  `7ffd65d66a961db6a0fc26b048e064fe7b6ce124`，完整 tree
+  `e38f1e107f1f76ba79ab5be40159fc04680ad87c` 相同。独立源码 QA/Review、
+  配置 SQL 与完整 stage/readback/enable/close/readback/restore 本地 PG18
+  排练、release wrapper 与 artifact QA 均通过（advisory）。
+- CI `34684992822`、Security `34684994713` 全部成功；GitHub build-only
+  `34685534229` 成功。归档 83,848,257 bytes，SHA-256
+  `022591ebeb5bd128570feab1ee6499e726abfb14b6d68daa4da05b98ddfbfea3`；ZIP
+  83,849,076 bytes，SHA-256
+  `2e7531e2e9f895a4310fb562b85bbe7968f6f767d0d96e9859746768537ed24b`。
+  28 个 blob、13 个 layer、Docker/OCI 身份及实际 binary 开关标记均验证。
+- canonical receiver 于 17:45:17 CST 完成。active `sub2api-blue`，运行镜像
+  `sha256:7b348f9c98fef18b23de127485e45b5e4b1dd2258cdff9ae8a46d117ec5510b5`，
+  healthy/accepting/background active。app_5xx/app_fatal/caddy_5xx 均 0。
+  旧 green `3f61330af` 于 17:46:17 正常退出，exit0；未强停在途连接。
+  Caddy 仅 upstream color 变化；www 首页/帮助页 SHA、TLS 与健康检查保持。
+- 在旧槽停止后，持 canonical maintenance lock 先 stage，独立 readback，再
+  单独启用支付并再次独立读回。最终 `payment_enabled=true`、
+  `payment_entry_enabled=false`、legacy `purchase_subscription_enabled=false`。
+  public API 与 HTML 注入一致；CNY/6.75 及刚上线的 Codex .25 规则保留。
+- 实际新增 **plan7**（Plus 月付·支付测试），price0.10/original120 CNY，
+  group4/month1/正常 Plus 权益，reset override40，受众仅 regular user2。
+  原 plans1–6 仅 `for_sale=false`；原六档充值仅 `enabled=false`。
+  唯一启用充值档位 amount0.10/bonus99.90，到账100 CNY，受众同 user2。
+  最小充值0.10、multiplier1、fee0、subscription conversion0，无并发赠送。
+- Chrome 已登录的非受众管理员会话直达充值页时无可用档位、确认支付禁用，
+  侧栏无购买入口。未伪造 user2 会话、撤销其订阅、代付或执行资金发放。
+  真实支付、回调和到账验收由用户后续操作，不能把配置验收当作支付成功。
+
+直达链接：
+- `https://www.turtleligpt.com/purchase?tab=subscription&plan_id=7`
+- `https://www.turtleligpt.com/purchase?tab=recharge&amount=0.1`
+
+受保护制品：`/var/log/sub2api-release/payment-test-entry-20260912-artifact/`；
+receiver 日志：`/var/log/sub2api-release/gha-20260912-174452-7ffd65d6-1506838/`。
+任务证据目录名 `evidence/payment-test-entry-20260912` 保存原目录、逐次 SQL
+hash/回执、独立读回与关闭脚本；不保存运行时凭据。
+
+关闭脚本 SHA-256 `4d9823125494ce5b078a8387fb104bf610ac67c27fb80f4a257ec1e6b3008ebc`，
+已准备但未执行。关闭测试和回退旧应用都必须先关闭支付；旧兼容计费版本
+`3f61330af` 尚不识别独立入口开关，不能在支付打开时回退并声称导航仍隐藏。
+还原目录前重新独立读取并校验前值，保留 test plan7 为停售，不删除订单引用。
+指定账号的原重置功能没有因本任务禁用，不应宣称全站重置 API 已关闭。
+后续前端发布应保留上述专属测试配置；不应沿用旧 `payment_enabled=false`
+作为线上状态断言，或在支付仍开时移除唯一受限充值档位。
