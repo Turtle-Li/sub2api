@@ -111,8 +111,8 @@ The first CNY row has USD reference cost 0.012985, CNY total cost 0.08764875
 (exactly ×6.75), and actual cost 0.0008764875 (exactly ×0.01). All 29 current
 wallets reconciled against their converted manifest values less legitimate
 post-boundary usage; group multipliers matched the pre-transaction snapshot.
-DB balance 623.28400520 matched Redis 623.2840051974999 within 1e-8 after the
-second debit. A fresh authenticated read recreated the auth cache and
+DB and Redis balances matched within 1e-8 after the second debit. Exact
+owner-account balances are retained in the private numeric acceptance evidence. A fresh authenticated read recreated the auth cache and
 `/v1/usage` returned `unit=CNY`; public settings returned CNY/rate 6.75.
 
 While bypass was active, unlimited platform counters accumulated the same
@@ -151,6 +151,25 @@ the currency change. However `blocking_enabled=false` and those audit failures
 followed the HTTP 503 responses, so they do not establish the cause of the
 customer request failures. Keep that dependency fault and the synchronous
 request diagnosis separate from successful currency acceptance evidence.
+
+Final synchronous-log correlation identified all 30 gpt-5.4 failures as
+`no available OpenAI accounts supporting model: gpt-5.4`: group 6's three
+candidate accounts were all filtered as `model_not_supported`. There was no
+upstream HTTP status or error body; rejection happened during account
+selection. This is a model-support/configuration issue, not a wallet failure,
+provider-returned 503 or Prompt Guard rejection. The observed pre-cutover
+window had no matching gpt-5.4 traffic, so it cannot establish when this
+model-support condition first arose. Account/model mappings were not changed.
+
+The completed health monitor ran until 14:14:53 CST: all 360 API/www samples
+returned 200, including 242 samples after the monetary transaction. The
+current blue container is healthy with zero restarts and no OOM. Independent
+read-only QA also rechecked the subscription evidence and cleanup against DB.
+
+The runtime-guard timer was already inactive. Its service's failed status is
+dated September 2 and describes an old slot's state-file inode, not this
+release. This operation preserved that timer state; compatible retained slots
+do not imply that a recovery timer is enabled.
 
 ## Forward recovery
 
