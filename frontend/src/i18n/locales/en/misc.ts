@@ -594,7 +594,7 @@ export default {
     entitlements: {
       balanceBonus: 'bonus balance',
       resetCards: 'quota reset(s), valid {validity}',
-      concurrency: 'Concurrency permanently raised to {count} (kept if already higher)',
+      concurrency: 'Run {count} requests at the same time',
     },
     refundReason: 'Refund Reason',
     refundReasonPlaceholder: 'Please describe your refund reason',

@@ -55,14 +55,14 @@
 
 ## Production host
 
-- Use the configured SSH aliases only: `sub2api-candidate` is the serving Azure
-  node and background owner. `sub2api-new` expired on September 12 and must
-  not be used as a release/DNS rollback target. Read
-  `docs/operations/WWW_ORIGIN_RECOVERY_20260912.md`; preserve the recovered
-  www site, static assets and certificate during release. Recheck the live
-  container/role before every lifecycle change, and exclude any remaining
-  obsolete database connections before currency cutover. Do not copy a raw
-  host, port, or key into project scripts.
+- Use the configured SSH alias `sub2api-candidate` for current web/API releases;
+  it is the serving Azure node and background owner. `sub2api-new` expired on
+  2026-09-12 and is no longer a release target or fallback. Recheck node state
+  before lifecycle changes, and exclude remaining obsolete database connections
+  before currency cutover. Do not copy a raw host, port, or key into scripts.
+- Read `docs/operations/WWW_ORIGIN_RECOVERY_20260912.md` before release or Caddy
+  work. Preserve the live www site, automatic HTTP-01 certificate and static
+  files; never replace the live Caddyfile with the API-only example template.
 - The `sub2api-new` server is shared only with Turtle's GPT. Sub2API owns `/opt/sub2api`,
   its `sub2api*` containers, volumes, images, release logs, and loopback ports;
   do not inspect, modify, restart, prune, or reuse Turtle's GPT resources from
