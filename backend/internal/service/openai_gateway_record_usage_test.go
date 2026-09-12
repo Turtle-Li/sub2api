@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -3321,4 +3322,47 @@ func TestOpenAIGatewayServiceRecordUsage_ServiceTierNeverRaisedByUpstreamRespons
 	baseCost, calcErr := svc.billingService.CalculateCost("gpt-5.4", UsageTokens{InputTokens: 100, OutputTokens: 50}, 1.0)
 	require.NoError(t, calcErr)
 	require.InDelta(t, baseCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-10)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_CNYStandardUsesDirectGroupRate(t *testing.T) {
+	for _, ws := range []bool{false, true} {
+		for _, atomic := range []bool{false, true} {
+			name := fmt.Sprintf("ws=%t/atomic=%t", ws, atomic)
+			t.Run(name, func(t *testing.T) {
+				logs := &openAIRecordUsageLogRepoStub{inserted: true}
+				wallet := &openAIRecordUsageUserRepoStub{}
+				quota := &openAIRecordUsageAPIKeyQuotaStub{}
+				billing := &openAIRecordUsageBillingRepoStub{}
+				svc := newOpenAIRecordUsageServiceForTest(logs, wallet, &openAIRecordUsageSubRepoStub{}, nil)
+				svc.billingService = currencyTestBilling("CNY")
+				if atomic {
+					svc.usageBillingRepo = billing
+				}
+				usage := OpenAIUsage{InputTokens: 1200000, OutputTokens: 200000, CacheReadInputTokens: 200000}
+				usdSvc := newOpenAIRecordUsageServiceForTest(nil, nil, nil, nil)
+				expected := expectedOpenAICost(t, usdSvc, "gpt-5.1", usage, .25)
+				err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+					Result: &OpenAIForwardResult{RequestID: "direct-rate", Model: "gpt-5.1", Usage: usage, OpenAIWSMode: ws},
+					APIKey: &APIKey{ID: 2, GroupID: i64p(6), Quota: 100, RateLimit5h: 100,
+						Group: &Group{ID: 6, Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: .25}},
+					User: &User{ID: 1}, Account: &Account{ID: 3}, APIKeyService: quota,
+				})
+				require.NoError(t, err)
+				require.Equal(t, "CNY", logs.lastLog.Currency)
+				require.InDelta(t, expected.TotalCost, logs.lastLog.TotalCost, 1e-10)
+				require.InDelta(t, expected.ActualCost, logs.lastLog.ActualCost, 1e-10)
+				require.InDelta(t, expected.InputCost, logs.lastLog.InputCost, 1e-10)
+				require.InDelta(t, expected.CacheReadCost, logs.lastLog.CacheReadCost, 1e-10)
+				require.Equal(t, .25, logs.lastLog.RateMultiplier)
+				if atomic {
+					require.InDelta(t, expected.ActualCost, billing.lastCmd.BalanceCost, 1e-8)
+					require.InDelta(t, expected.ActualCost, billing.lastCmd.APIKeyQuotaCost, 1e-8)
+					require.InDelta(t, expected.ActualCost, billing.lastCmd.APIKeyRateLimitCost, 1e-8)
+				} else {
+					require.InDelta(t, expected.ActualCost, wallet.lastAmount, 1e-10)
+					require.InDelta(t, expected.ActualCost, quota.lastAmount, 1e-10)
+				}
+			})
+		}
+	}
 }

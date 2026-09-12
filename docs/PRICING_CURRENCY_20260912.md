@@ -3,7 +3,7 @@
 ## Confirmed scope
 
 - R1: Existing wallet amounts are USD; the owner confirmed conversion to CNY at 6.75 on 2026-09-12. Do not apply the superseded no-conversion CREDIT_PARITY decision.
-- R2: Model cards explicitly select USD or CNY. Existing cards/catalog entries default to USD. Group/user/image discount multipliers retain their meaning and values.
+- R2: Model cards explicitly select USD or CNY. Existing cards/catalog entries default to USD. Group/user/image discount multipliers retained their meaning and values for the initial cutover; the later standard OpenAI correction below supersedes this for that group type.
 - R3: One settlement currency per installation (USD or CNY); a fixed USD→CNY rate. No live FX or separate provider-cost ledger.
 - R4: Publishing additive code/schema alone preserves legacy USD behavior. Wallet and quota conversion is a separate coordinated cutover, never an incidental settings side effect.
 - R5: Preserve balances/request purchasing power. Convert monetary limits and accumulated usage together, for wallet-funded API keys and platform limits. Subscription entitlements, their API-key quota windows, and upstream account quotas retain USD. Payment orders, actual CNY receipts, refunds and invoices are historical facts and must not be multiplied.
@@ -42,3 +42,31 @@ The canonical lifecycle lock is `/run/sub2api-maintenance/sub2api-maintenance.lo
 ## Confirmed retail decision
 
 The owner confirmed future recharges are **1 CNY paid → 1 CNY wallet credit** on 2026-09-12. Use `recharge_factor=1`; retain nominal preset bonuses and their descriptions. Existing wallet balances still convert ×6.75. Receipt amounts and purchase eligibility thresholds remain actual paid CNY. The owner also explicitly prioritizes uninterrupted API use and accepts temporary undercharging during transition; the earlier global admission-pause plan is superseded subject to verification of an online transaction, cache refresh and exclusion of obsolete writers.
+
+## Owner correction: standard OpenAI wallet rate
+
+On September 12 the owner explicitly confirmed that standard OpenAI/Codex groups
+keep their original USD reference prices, and their existing multiplier directly
+produces CNY wallet debits. There is no additional FX multiplication, new setting,
+schema or price-card control. With rate 0.25, reference $1 consumes ¥0.25; ¥500
+therefore buys $2000 of reference usage (before optional recharge bonuses).
+
+The common usage finalization rebases the complete cost breakdown using its
+captured settlement rate before logging and atomic/legacy billing. Wallet,
+wallet-key and platform usage use CNY; account quota/statistics retain the USD
+reference basis. HTTP, WebSocket and the generic gateway share the same rule.
+Existing user-specific and independent media rates retain precedence. Free Fast
+retains its existing standard-tier customer charge and priority-tier reference.
+CNY-authored overrides are still normalized to the USD reference basis first.
+
+This applies only to explicitly standard OpenAI groups with CNY settlement.
+Subscription groups, including wallet fallback, and other provider platforms
+retain their current currency rules. Catalog prices are not rewritten. Existing
+wallets have already been converted and must never be multiplied again.
+
+Production activation changes group 6 from 0.03 to 0.25 after deploying this
+compatible code and naturally draining old binaries. Preserve its before-image,
+refresh scoped auth caches and allow the existing group-rate cache to expire.
+Do not start an older FX-applying binary against the 0.25 group: restore the old
+group rate before such a rollback, or use the new compatible binary. Keep the
+API accepting throughout; temporary undercharging is owner-authorized.

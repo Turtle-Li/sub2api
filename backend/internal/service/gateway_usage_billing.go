@@ -820,9 +820,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 判断计费方式：订阅模式 vs 余额模式
 	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
-	if isSubscriptionBilling {
-		subscriptionCost(cost)
-	}
+	finalizeUsageCurrency(cost, apiKey, isSubscriptionBilling)
 	billingType := BillingTypeBalance
 	if isSubscriptionBilling {
 		billingType = BillingTypeSubscription

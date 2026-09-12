@@ -163,3 +163,36 @@ func TestBillingCurrencySubscriptionGroupWalletFallbackKeepsKeyQuotaUSD(t *testi
 	require.Equal(t, old.RequestFingerprint, got.RequestFingerprint)
 	require.InDelta(t, before.ActualCost, keyQuotaCost(after, key), 1e-12)
 }
+
+func TestBillingCurrencyDirectOpenAIRateBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, platform, groupType, wallet, currency string
+		subscription                                bool
+		factor                                      float64
+	}{
+		{"openai-wallet", PlatformOpenAI, SubscriptionTypeStandard, "CNY", "CNY", false, 1},
+		{"openai-usd-wallet", PlatformOpenAI, SubscriptionTypeStandard, "USD", "USD", false, 1},
+		{"openai-subscription", PlatformOpenAI, SubscriptionTypeSubscription, "CNY", "USD", true, 1},
+		{"subscription-wallet-fallback", PlatformOpenAI, SubscriptionTypeSubscription, "CNY", "CNY", false, 6.75},
+		{"gemini", PlatformGemini, SubscriptionTypeStandard, "CNY", "CNY", false, 6.75},
+		{"kimi", PlatformAnthropic, SubscriptionTypeStandard, "CNY", "CNY", false, 6.75},
+		{"missing-type", PlatformOpenAI, "", "CNY", "CNY", false, 6.75},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := currencyTestBilling(tc.wallet)
+			cost := &CostBreakdown{InputCost: .1, ImageInputCost: .1, OutputCost: .2, ImageOutputCost: .2, CacheCreationCost: .2, CacheReadCost: .2, TotalCost: 1, ActualCost: .25}
+			s.settleCost(cost)
+			key := &APIKey{Group: &Group{Platform: tc.platform, SubscriptionType: tc.groupType}}
+			// Use the captured rate even when settings change during a request.
+			s.currencyPolicy.Store(PricingCurrencySettings{SettlementCurrency: "CNY", USDToCNYRate: 7})
+			for i := 0; i < 2; i++ {
+				finalizeUsageCurrency(cost, key, tc.subscription)
+				require.Equal(t, tc.currency, costCurrency(cost))
+				require.InDelta(t, tc.factor, cost.TotalCost, 1e-12)
+				require.InDelta(t, .25*tc.factor, cost.ActualCost, 1e-12)
+				require.InDelta(t, cost.TotalCost, cost.InputCost+cost.ImageInputCost+cost.OutputCost+cost.ImageOutputCost+cost.CacheCreationCost+cost.CacheReadCost, 1e-12)
+				require.InDelta(t, 1, accountQuotaBasis(cost), 1e-12)
+			}
+		})
+	}
+}

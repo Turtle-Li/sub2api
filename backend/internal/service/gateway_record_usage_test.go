@@ -825,3 +825,23 @@ func TestGatewayServiceRecordUsage_FastSpeedHonouredKeepsPremium(t *testing.T) {
 	require.NoError(t, err)
 	require.InDelta(t, fastCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-10)
 }
+
+func TestGatewayServiceRecordUsage_CNYStandardUsesDirectOpenAIRate(t *testing.T) {
+	logs := &openAIRecordUsageLogRepoStub{inserted: true}
+	billing := &openAIRecordUsageBillingRepoStub{}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(logs, billing, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+	svc.billingService = currencyTestBilling("CNY")
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{RequestID: "generic-direct-rate", Model: "gpt-5.1", Usage: ClaudeUsage{InputTokens: 1000000}},
+		APIKey: &APIKey{ID: 2, GroupID: i64p(6), Quota: 100, Group: &Group{ID: 6, Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: .25}},
+		User:   &User{ID: 1}, Account: &Account{ID: 3}, APIKeyService: &openAIRecordUsageAPIKeyQuotaStub{},
+	})
+	require.NoError(t, err)
+	reference, err := currencyTestBilling("USD").CalculateCost("gpt-5.1", UsageTokens{InputTokens: 1000000}, .25)
+	require.NoError(t, err)
+	require.Equal(t, "CNY", logs.lastLog.Currency)
+	require.InDelta(t, reference.TotalCost, logs.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, reference.ActualCost, logs.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, reference.ActualCost, billing.lastCmd.BalanceCost, 1e-8)
+	require.InDelta(t, reference.ActualCost, billing.lastCmd.APIKeyQuotaCost, 1e-8)
+}
