@@ -76,3 +76,34 @@
   如确需旧代码，必须先仅将该组 CAS 回 0.03 并刷新缓存。禁止恢复旧 USD
   数据库或重跑余额迁移。Runtime-guard timer 延续 inactive 状态，没有在
   本任务中启用；不宣称定时自动恢复已生效。
+
+## 18:04 消费显示修正
+
+用户随后给出实际消费明细截图，确认仅统一消费显示的 `$` 参考符号，保持
+原始数值，不按标签再换算。总消费恢复已有粗略汇总。模型价卡、实际 CNY
+钱包/扣费、持久化 currency、导出、倍率和支付配置都不修改。
+
+- PR22 源码 `df5101c691f1196217b1038645bb22d1e0e6f31e`，运行合并版本
+  `f9f9615a92c4fffb619a2a5955dba24bb6b64a42`。仅前端/文档；后端及 deploy
+  与支付版本 `7ffd65d66` 完全相同。独立 Review、50 项聚焦测试、typecheck、
+  ESLint、完整前端 build、实际组件浏览器检查通过；CI34686230132 全部通过。
+- build-only34687016892，归档83,897,308bytes，SHA-256
+  `8da0c816da9a7ff30aa090323966f271d51c4baf805a07b506eed55e86e28fa7`，
+  ZIP及28blob/13layer与版本标记验证通过。canonical receiver 于18:04:10
+  验证成功，active green，镜像
+  `sha256:9173b00a903a31002e056b7174e6a506cfc5549333f9fba7eea77a6f45f14ada`，
+  healthy/accepting/background active，restart0/noOOM，三类发布错误计数均0。
+- 回退保留支付兼容的 blue `7ffd65d66`，由独立 drain monitor 等待现有连接
+  自然结束。18:06读取时仍在正常 drain，不强停连接。不可用旧 `3f61330af`
+  回退而保持支付打开，因为它不认识隐藏支付入口设置。
+- 浏览器实际组件验证与截图相同数字：输入/输出$5/$30，原始$0.102952，
+  0.25倍后$0.025738。线上消费/仪表盘/金额工具资源与本地已验证 build
+  逐字节一致。Chrome在线会话自动化超时，未把本地浏览器截图宣称为线上截图。
+- 18:06只读核对 group6=.25，pay=true/entry=false/purchase_subscription=false
+  与发布前一致，用户2受限支付目录由原支付任务维护。最新 usage624349：
+  0.093346×.25=0.0233365，CNY持久化不变。未手动发起额外付费测试或余额写入。
+- 受保护归档/receiver日志分别在
+  `/var/log/sub2api-release/usage-display-20260912-f9f9615a/` 和
+  `/var/log/sub2api-release/gha-20260912-180339-f9f9615a-1521940/`。
+  本地验收证据 `evidence/native-pricing/`。只需刷新页面获取新资源，无数据迁移、
+  无计费缓存清理，钱包余额继续显示人民币。
