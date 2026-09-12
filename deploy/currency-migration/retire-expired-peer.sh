@@ -179,7 +179,9 @@ require_ufw_rule_count() {
 }
 
 apply_ufw() {
-  ufw --force "$@" >>"$backup_dir/ufw-actions.log" 2>&1 || die 'UFW exact-rule update failed'
+  # Complete allow/delete rules are non-interactive. Some installed UFW
+  # versions reject --force before an ordinary rule mutation.
+  ufw "$@" >>"$backup_dir/ufw-actions.log" 2>&1 || die 'UFW exact-rule update failed'
 }
 
 replace_firewall_config() {
