@@ -618,7 +618,7 @@ export default {
     entitlements: {
       balanceBonus: '余额赠送',
       resetCards: '次额度重置（{validity}有效）',
-      concurrency: '并发上限永久提升至 {count}（当前更高则保持）',
+      concurrency: '可同时处理 {count} 个请求',
     },
     refundReason: '退款原因',
     refundReasonPlaceholder: '请描述您的退款原因',

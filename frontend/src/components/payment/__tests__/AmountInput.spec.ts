@@ -57,6 +57,7 @@ describe('AmountInput', () => {
     expect(wrapper.find('.payment-recharge-card__credit').exists()).toBe(true)
     expect(wrapper.find('button').exists()).toBe(false)
     expect(wrapper.text()).toContain('Growth')
+    expect(wrapper.text()).toContain('For regular usage')
     expect(wrapper.text()).toContain('-17%')
     expect(wrapper.text()).toContain('×0.9')
     expect(wrapper.text()).toContain('≈ 12M')

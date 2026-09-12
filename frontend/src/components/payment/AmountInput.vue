@@ -1,6 +1,6 @@
 <template>
-  <div>
-    <div v-if="filteredOptions.length > 0" class="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
+  <div class="payment-recharge-options">
+    <div v-if="filteredOptions.length > 0" class="payment-recharge-grid">
       <article
         v-for="option in filteredOptions"
         :key="option.amount"
@@ -12,7 +12,7 @@
         :class="[
           'payment-product-card payment-recharge-card',
           option.eligibility?.can_purchase === false && 'payment-product-card--unavailable',
-          isSelected(option) && 'payment-product-card--selected payment-recharge-card--selected',
+          isSelected(option) && 'payment-product-card--selected',
           isFeatured(option) && 'payment-product-card--featured',
         ]"
         @click="selectAmount(option.amount)"
@@ -30,7 +30,10 @@
         <div class="payment-product-card__body">
           <!-- Identity -->
           <div class="min-w-0">
-            <h3 :title="tierName(option)" class="payment-product-card__title">{{ tierName(option) }}</h3>
+            <h3 :title="tierName(option)" class="payment-product-card__title pr-5">{{ tierName(option) }}</h3>
+            <p v-if="option.description" class="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-dark-400 [overflow-wrap:anywhere]">
+              {{ option.description }}
+            </p>
           </div>
 
           <!-- Price. The list price and discount get their own row rather than
@@ -48,13 +51,14 @@
           </div>
 
           <div class="payment-recharge-card__credit">
+            <span class="payment-recharge-card__credit-label">{{ t('payment.creditedBalance') }}</span>
             <div class="payment-recharge-card__credit-heading">
-              <span class="payment-recharge-card__credit-label">{{ t('payment.creditedBalance') }}</span>
+              <strong class="payment-recharge-card__credit-value">{{ formatAmountValue(creditedFor(option)) }} <span class="text-sm font-medium tracking-normal">{{ t('payment.creditUnit') }}</span></strong>
               <span v-if="hasBalanceBonus(option)" class="payment-recharge-card__bonus">
-                {{ t('payment.rechargeBonusShort') }} +{{ formatAmountValue(option.balance_bonus || 0) }}
+                <Icon name="gift" size="sm" :stroke-width="1.8" />
+                {{ t('payment.rechargeBonusShort') }} +{{ formatAmountValue(option.balance_bonus || 0) }} {{ t('payment.creditUnit') }}
               </span>
             </div>
-            <strong class="payment-recharge-card__credit-value">{{ formatAmountValue(creditedFor(option)) }} <span class="text-xs font-medium tracking-normal">{{ t('payment.creditUnit') }}</span></strong>
           </div>
 
           <PurchaseEligibilityHint :eligibility="option.eligibility" />
@@ -75,8 +79,6 @@
               <span class="min-w-0">{{ item.text }}</span>
             </li>
           </ul>
-
-
         </div>
       </article>
     </div>
@@ -235,32 +237,32 @@ function listItems(option: RechargeOption): TierListItem[] {
 </script>
 
 <style scoped>
-.payment-recharge-card--selected {
-  @apply bg-primary-50/60 dark:bg-primary-950/40;
+.payment-recharge-options {
+  container-type: inline-size;
 }
-.payment-recharge-card .payment-product-card__body {
-  @apply gap-4 p-4 sm:p-5;
+.payment-recharge-grid {
+  @apply grid grid-cols-1 gap-5;
 }
-.payment-recharge-card .payment-product-card__title {
-  @apply pr-5 text-sm;
-}
-.payment-recharge-card .payment-product-card__price {
-  @apply text-[1.75rem] sm:text-[2rem];
+/* The sidebar and order summary share the viewport; use the space actually
+   available to the cards before introducing a second column. */
+@container (min-width: 34rem) {
+  .payment-recharge-grid {
+    @apply grid-cols-2;
+  }
 }
 .payment-recharge-card__credit {
-  @apply border-t border-gray-100 pt-3 dark:border-dark-700;
+  @apply border-t border-gray-100 pt-4 dark:border-dark-700;
 }
 .payment-recharge-card__credit-heading {
-  @apply flex min-h-5 items-center justify-between gap-1;
+  @apply mt-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2;
 }
 .payment-recharge-card__credit-label {
-  @apply text-[11px] font-medium text-gray-500 dark:text-dark-400;
+  @apply text-[13px] text-gray-500 dark:text-dark-400;
 }
 .payment-recharge-card__credit-value {
-  @apply mt-1.5 block text-3xl font-semibold leading-none tracking-tight tabular-nums text-primary-700 dark:text-primary-300;
+  @apply block text-3xl font-semibold leading-none tracking-tight tabular-nums text-primary-700 dark:text-primary-300;
 }
 .payment-recharge-card__bonus {
-  @apply inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-bold leading-4 tabular-nums;
-  @apply bg-primary-100 text-primary-800 dark:bg-primary-400/15 dark:text-primary-200;
+  @apply inline-flex items-center gap-1.5 text-sm font-semibold tabular-nums text-primary-700 dark:text-primary-300;
 }
 </style>
