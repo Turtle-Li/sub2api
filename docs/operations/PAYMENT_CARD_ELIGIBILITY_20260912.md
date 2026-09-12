@@ -1,6 +1,6 @@
 # Configurable payment cards and purchase eligibility
 
-Task PAY-ELIG-20260912, feature extension to payment catalog refinement. Source: owner's September 12 request. Existing UI/reset refinement is locally frozen at b2b62fe67 and not yet published.
+Task PAY-ELIG-20260912, feature extension to payment catalog refinement. Source: owner's September 12 request. The initial UI/reset source was b2b62fe67; final combined release evidence follows below.
 
 ## Requirements
 
@@ -36,3 +36,31 @@ Current front-end source `2b09868e5` passed independent QA/Review: rule/admin sa
 Before returning either accepting node to a binary that does not understand card rules or reset-price overrides, disable new customer checkout through the existing global checkout switch. Keep order history, existing payment recovery, balances and grants intact. Do not remove rules to make an older binary appear compatible. Restore checkout only when all accepting nodes enforce the configured rules and prices.
 
 Front-end production build on frozen `2b09868e5` passed (including locale validation); no dependency changes. The current catalog keeps thresholds and audiences absent. 5X Pro concurrency and recharge cap grants apply on future successful purchases/renewals; no mass update of existing users is performed.
+
+## Release evidence — 2026-09-12
+
+Fresh canonical DB backup `/opt/sub2api-db-backups/sub2api-db-backup-20260912-033634.tar.gz`, SHA-256 `4abec972a60d7109f7386c788167095a48705a4018ae268e421a076a36ad79a8`, service success/exit 0. Installed isolated restore-smoke passed outer/inner checksums, PostgreSQL restore/amcheck and Redis loading; schema_count 296, schema_hash `eed7afd4c89cb72c02191645b75e0daa`, Redis live keys 2633. Production was not restored.
+
+Initial candidate `eac83f3fe9e155f4a4cb86e405182222bc2234af` frontend integration (178 tests) and backend focused tests passed; Security Scan `34639532003` passed. Independent backend review identified custom-to-fixed recharge mode mutation at order insertion; release paused for the bounded repair. CI `34639528199` also identified a test-only unchecked type assertion. These initial results do not constitute a final source gate.
+
+Architecture clarification from independent review: group daily/weekly/monthly limits remain runtime group policy, read by `subscription_service.go` for existing subscribers as well. They are not granted immutable per-order quota by payment fulfillment. The order records the current locked group as creation-time evidence; later reads never rewrite that snapshot. This change rejects mismatched plan price/currency/period/entitlements and rechecks group admission, but does not introduce a client quote-lock protocol for dynamic group quotas.
+
+Recharge admission also serializes the formerly absent setting row: the order transaction materializes the existing custom-mode default `[]` with conflict-safe insertion, then locks/reloads the persisted value. This follows the existing settings unique-key sentinel pattern and prevents the first restricted fixed-tier insert from racing an unrestricted order. It does not change an existing setting, introduce a schema migration or alter the general settings writer.
+
+Final repair source `f0677f26be715e4dac98ced00e6c5ae34592efaf`, tree `983bf17545117748b2c8733efddcb09dd474a6be`, is frozen and pushed as PR 12. Developer true-PG first-write serialization test passed (4.638s); targeted transaction/snapshot unit checks passed (1.609s); strict persisted-timestamp refund-fence test passed three runs (10.430s, 14.400s, 6.520s). Final CI `34642172008` and Security Scan `34642175557` dispatched for this exact source.
+
+Independent QA/Review PASS on `f0677f26b`: 12 critical service unit tests (1.57s), true PostgreSQL first-write ordering test (5.224s), reset PostgreSQL 5-test scope (6.649s) and eligibility 2-test scope (8.774s). Public privacy, configuration isolation, fail-closed rules, transaction-bound plan/price/rule checks, GPT-only resets and durable replay passed. No P0/P1/P2 blocking finding remains. Final Security Scan `34642175557` passed both jobs.
+
+Final CI `34642172008` passed all jobs (frontend, full unit/integration, golangci-lint and deployment shell/container checks). PR 12 merged as `cd8932c5cea3d64b5aee3ef735ef692edf97e5d8`; its Git tree exactly matches the independently reviewed/tested source tree `983bf17545117748b2c8733efddcb09dd474a6be`. Build-only workflow `34643212755` dispatched from main; this workflow does not deploy either host.
+
+Build-only `34643212755` succeeded for `cd8932c5cea3d64b5aee3ef735ef692edf97e5d8`, version 0.2.4. Downloaded archive is 83,878,110 bytes, SHA-256 `94c3ba3939dc54a55da6ad142d9c0e6db1f3031a7b929cbcd9fb462210cad7e3`; metadata revision, version, source, platform, image tag and run ID all matched. Main remained at the same revision after download. Actual archived image inspection is the independent post-build gate.
+
+Independent post-build artifact QA/readiness PASS: the actual manifest-selected config yields config digest `sha256:86ce81ebdd6ceca52c210524e1c581717d23fcc0f87b5b4b7e86197382890706`, linux/amd64, 13 layers, matching OCI revision/source/version and tag. Both installed release helpers and blue-green helper match frozen source hashes. Fresh role/health/credential-agent preflight passed. Root proceeds under the owner's existing deployment authorization using canonical lock-owning receivers, candidate activate and old origin preserve-standby.
+
+The archive OCI index manifest digest is `sha256:1c3b35d45a09d61ac865e14e34e8527eb770a57d444a7c48b3e426d64b0fbfb6`; independent reinspection verified that it references the same `86ce81…` config and 13 layers. The production containerd image store reports this manifest digest as its image ID. These are two levels of the same artifact. Candidate canonical receiver exited 0, switched to healthy green/background active, and reported app5xx/fatal/Caddy5xx 0. Log: `/var/log/sub2api-release/gha-20260912-043115-cd8932c5-1017767`. Old-origin direct execution of the temporary `/run` wrapper returned permission denied before starting the receiver; invoking that same reviewed text via Bash proceeds without changing mount or permission policy.
+
+Both nodes are now healthy green at `cd8932c5cea3d64b5aee3ef735ef692edf97e5d8`, reporting the identical OCI image `1c3b35…0fbfb6`. Candidate remains accepting/background active; old origin remains accepting/background standby. Old-origin release log `/var/log/sub2api-release/gha-20260912-043408-cd8932c5-3730237`; both receivers exited 0, real-request/health gates passed, and app5xx/fatal/Caddy5xx counts are 0. Final postflight confirmed restart 0/no OOM and unchanged healthy payment/Feishu agent container identities. Persistent drain monitors own old-blue cleanup; no manual application stop or DNS change was performed. Temporary role configs and wrapper files were removed.
+
+The guarded catalog transaction committed only after both runtime nodes passed verification. Live readback exactly matches `payment-catalog-refinement-20260912/intended.json`; the captured result is `after.json` in that folder. Recharge amounts 5/49/99/199/399/599 carry bonus 0/0/5/20/75/145 and credited totals 5/49/104/219/474/744. Concurrency: 5/49 unchanged, then 3/4/5/6; all 5X Pro terms 6, Plus unchanged. Monthly reset prices are 40/180. Existing higher user caps are never reduced. Current cards have no audience or cumulative-recharge restriction enabled. No group multiplier, existing wallet, historical order or grant was directly edited.
+
+Public `/health` returned status ok. No real payment, refund, reset-card wallet debit, invoice or notification was initiated by acceptance. The final external Chrome attempt returned that the Mac is locked and cannot be automatically unlocked. The owner has been asked to unlock it; final live visual acceptance remains pending, while the source, database, artifact and deployment checks above are complete.
