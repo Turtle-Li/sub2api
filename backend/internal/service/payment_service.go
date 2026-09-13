@@ -228,6 +228,7 @@ type PaymentService struct {
 	unifiedWebhookInbox      UnifiedWebhookInboxStore
 	invoiceFeishuSender      FeishuPaymentTextSender
 	resetCardNow             func() time.Time
+	refundReviewNow          func() time.Time
 }
 
 func (s *PaymentService) resetCardCurrentTime() time.Time {

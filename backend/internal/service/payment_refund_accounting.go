@@ -23,6 +23,10 @@ import (
 const (
 	refundReviewKindBalance      = "balance"
 	refundReviewKindSubscription = "subscription"
+	// Subscription effects are frozen within a short review window so the
+	// administrator can submit exactly the seconds and expiry they inspected.
+	// Crossing the boundary changes the revision and requires a fresh review.
+	refundReviewValuationWindow = time.Minute
 )
 
 // RefundReview is the server-authoritative view rendered before an admin can
@@ -276,7 +280,7 @@ func paymentOrderHasAppliedAffiliateRebate(ctx context.Context, client *dbent.Cl
 }
 
 func (s *PaymentService) ReviewRefund(ctx context.Context, orderID int64) (*RefundReview, error) {
-	return s.reviewRefundWithClient(ctx, s.entClient, orderID, refundValuationTime(), false)
+	return s.reviewRefundWithClient(ctx, s.entClient, orderID, s.refundValuationTime(), false)
 }
 
 // invalidateReviewedSubscriptionRefundCaches makes a reserved or restored
@@ -303,8 +307,12 @@ func (s *PaymentService) invalidateReviewedSubscriptionRefundCaches(ctx context.
 	s.invalidatePaymentAuthCache(cacheCtx, grant.UserID)
 }
 
-func refundValuationTime() time.Time {
-	return time.Now().UTC().Truncate(time.Second)
+func (s *PaymentService) refundValuationTime() time.Time {
+	now := time.Now()
+	if s != nil && s.refundReviewNow != nil {
+		now = s.refundReviewNow()
+	}
+	return now.UTC().Truncate(refundReviewValuationWindow)
 }
 
 func (s *PaymentService) reviewRefundWithClient(ctx context.Context, client *dbent.Client, orderID int64, now time.Time, lock bool) (*RefundReview, error) {
@@ -437,6 +445,8 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 		order.UpdatedAt.UTC().Format(time.RFC3339Nano), strconv.FormatInt(grant.Version, 10),
 		sub.ExpiresAt.UTC().Format(time.RFC3339Nano), sub.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		strconv.FormatInt(quote.CashMinor, 10), quote.ProductAmount.StringFixed(2),
+		strconv.FormatInt(quote.Seconds, 10), quote.NewExpiry.UTC().Format(time.RFC3339Nano),
+		now.UTC().Format(time.RFC3339Nano),
 	)
 	review := &RefundReview{
 		OrderID: order.ID, OrderType: order.OrderType, Currency: PaymentOrderCurrency(order),

@@ -223,7 +223,7 @@ func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Conte
 	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded}, order.Status) {
 		return nil, infraerrors.Conflict("CONFLICT", "order status does not allow another refund")
 	}
-	now := refundValuationTime()
+	now := s.refundValuationTime()
 	review, err := s.reserveReviewedRefundEntitlement(ctx, client, order, plan, now)
 	if err != nil {
 		return nil, err

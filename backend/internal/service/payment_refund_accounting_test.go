@@ -209,6 +209,37 @@ func TestReviewedSubscriptionRefundInvalidatesAuthCacheAfterReserveAndRelease(t 
 	require.Equal(t, []int64{order.UserID, order.UserID}, invalidator.userIDs)
 }
 
+func TestReviewedSubscriptionRefundRejectsElapsedReviewWindowWhenCashIsUnchanged(t *testing.T) {
+	ctx := context.Background()
+	svc, order, _, start, _ := newReviewedSubscriptionRefundFixture(t)
+	current := start.Add(45*24*time.Hour + 5*time.Minute).UTC().Truncate(time.Minute)
+	svc.refundReviewNow = func() time.Time { return current }
+
+	first, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.True(t, first.CanRefund)
+	require.NotNil(t, first.Subscription)
+
+	current = current.Add(refundReviewValuationWindow)
+	second, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, first.DefaultRefundAmount, second.DefaultRefundAmount,
+		"the regression must stay inside the same cash-rounding interval")
+	require.Equal(t, first.EntitlementAmount, second.EntitlementAmount,
+		"the regression must stay inside the same product-rounding interval")
+	require.NotEqual(t, first.Subscription.RemainingSeconds, second.Subscription.RemainingSeconds)
+	require.NotEqual(t, first.Subscription.NewExpiresAt, second.Subscription.NewExpiresAt)
+	require.NotEqual(t, first.QuoteRevision, second.QuoteRevision)
+
+	_, err = svc.PrepareReviewedRefund(ctx, order.ID, first.QuoteRevision, "elapsed review window")
+	require.Error(t, err)
+	require.Equal(t, "REFUND_QUOTE_STALE", infraerrors.Reason(err))
+
+	persisted, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, persisted.Status)
+}
+
 func TestReviewedBalanceRefundReviewReturnsZeroAfterPaidPrincipalIsConsumed(t *testing.T) {
 	svc, order := newReviewedBalanceRefundFixture(t, 99.9, 0)
 	review, err := svc.ReviewRefund(context.Background(), order.ID)

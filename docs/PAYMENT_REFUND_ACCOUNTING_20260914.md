@@ -98,6 +98,11 @@ balance or subscription review with a state revision, cash maximum, default
 amount, and the exact entitlement effects. Manual-review responses include the
 reason and disable submission.
 
+Subscription valuation is frozen to a one-minute review window. The revision
+binds the valuation time, exact refundable seconds and resulting expiry; once
+the window changes, submission is rejected as stale and the dialog reloads the
+review before the administrator can retry.
+
 `POST /api/v1/admin/payment/orders/:id/refund` submits only the reason and
 review revision. Under one database transaction the service locks the order
 and relevant wallet/subscription rows, recalculates the review, rejects a stale
