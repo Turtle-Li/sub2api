@@ -43,31 +43,50 @@
 
 ## Internal credit denomination
 
-- Read `docs/PRICING_CURRENCY_20260912.md` before changing wallet denomination
-  or model/group pricing. Owner confirmed existing USD wallets convert to CNY
-  at 6.75, with matching debit conversion and unchanged discount multipliers.
-  Subscription entitlements remain USD. This supersedes the no-conversion
-  decision in `docs/CREDIT_PARITY_MIGRATION_20260910.md`. A settings save does
-  not migrate data. The owner later confirmed 1:1 future CNY recharge and
-  uninterrupted API use with temporary undercharging allowed. Follow
+- Internal balances, quotas, subscription entitlements and usage charges are
+  generic credit units; the product domain does not assign them a USD or CNY
+  denomination. The `$` shown on usage screens is a uniform reference-price
+  marker, not a wallet currency.
+  Numerically, `$1` of reference price starts from 1 internal base unit, while
+  `¥1` actually paid credits 1 wallet unit before configured recharge bonuses.
+  Group, user and media multipliers adjust the resulting debit and purchasing
+  power.
+- Read `docs/PRICING_CURRENCY_20260912.md` before changing this numeric basis or
+  model/group pricing. The September 12 cutover mechanically rescaled existing
+  wallet values by 6.75 with matching debit conversion. Billing-side persisted
+  `USD`/`CNY` values, including `settlement_currency` and usage currency, are
+  compatibility, migration or source-price basis markers; they are not customer
+  wallet or subscription denominations. Keep them for existing code, audit and
+  rollback compatibility.
+  This completed rescaling supersedes the zero-change decision in
+  `docs/CREDIT_PARITY_MIGRATION_20260910.md`. A settings save does not migrate
+  data. Follow
   `deploy/currency-migration/ONLINE_CUTOVER_20260912.md` for cache bypass,
   obsolete-writer exclusion, verified backups and the online transaction.
-  The live conversion completed on September 12; read
+  The live numeric rescaling completed on September 12; read
   `docs/operations/CNY_WALLET_CUTOVER_20260912.md` for the manifest, probes and
-  compatible fallback. Do not rerun migration SQL or restore the old USD DB.
+  compatible fallback. Do not rerun migration SQL or restore the pre-migration
+  database.
 
-- Later owner correction: standard OpenAI/Codex CNY wallet billing uses the
-  original USD reference price directly times the existing group multiplier;
-  rate 0.25 means ¥500 buys $2000 reference usage. No extra FX or new setting.
+- Real currency semantics remain at external boundaries: paid order amounts,
+  payment-provider transactions, refunds, invoices, authored source prices and
+  upstream provider-cost records retain their declared currency. Once normalized
+  into internal billing, they must not denominate balances or entitlements.
+- Later owner correction: standard OpenAI/Codex metered billing uses the
+  original USD reference-price number directly times the existing multiplier;
+  rate 0.25 means 1 reference unit debits 0.25 internal units, so a `¥500`
+  recharge credits 500 units and buys 2000 reference units before bonuses. No
+  extra FX or new setting.
   Read the correction in `docs/PRICING_CURRENCY_20260912.md`; subscription groups
   and other platforms retain the initial rules. Deploy compatible code and
   drain old binaries before raising the group rate; rollback must preserve this
-  code/rate pairing. Never convert existing wallets again.
+  code/rate pairing. Never rescale existing wallet values again.
   Live activation, exact debit proof and compatible fallback are recorded in
   `docs/operations/CODEX_DIRECT_RATE_20260912.md`.
 - Consumption displays retain the historical dollar marker and raw numeric
   amounts; restore rough reference totals per the later screenshot clarification
-  in `docs/PRICING_CURRENCY_20260912.md`. This does not change CNY settlement.
+  in `docs/PRICING_CURRENCY_20260912.md`. This does not change internal debits,
+  compatibility markers or real payment records.
 
 ## Unified payment integration
 

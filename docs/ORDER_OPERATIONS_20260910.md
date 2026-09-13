@@ -28,7 +28,14 @@ Only one writer per worktree; independent research/QA may run concurrently. Invo
 
 ## Follow-up monetary change
 
-After order work, review the existing currency research for owner-requested `1 CNY = 1 internal USD credit`. Actual channel amounts remain CNY; internal credits are not a foreign-exchange promise. Inventory balances, subscription quotas, group multipliers and model tariffs together before a migration. Historical paid amounts/invoices are immutable. Owner confirmed preserving existing users’ purchasing power. Produce a concrete before/after proposal before any production mutation.
+After order work, review the existing pricing-basis research for the
+owner-requested `1 CNY actually paid = 1 internal credit unit`. Actual channel
+amounts remain CNY; internal credits have no fiat denomination and are not a
+foreign-exchange promise. Inventory balances, subscription quotas, group
+multipliers and model tariffs together before a migration. Historical paid
+amounts/invoices are immutable. Owner confirmed preserving existing users’
+purchasing power. Produce a concrete before/after proposal before any production
+mutation.
 
 Knowledge candidate: no — this is project-specific delivery work.
 
@@ -44,8 +51,10 @@ Knowledge candidate: no — this is project-specific delivery work.
   one request per order, deletion restriction on invoice-linked financial orders, amount/
   status/tax-identifier constraints, one private PDF per invoice and transactional rollback.
   It passed locally. No production migration or real SMTP/Feishu send was performed.
-- Currency follow-up: `docs/CREDIT_PARITY_MIGRATION_20260910.md` records the verified existing
-  1:1 recharge policy and zero-change decision for balances and effective consumption prices.
+- Pricing-basis follow-up: `docs/CREDIT_PARITY_MIGRATION_20260910.md` records the
+  historical audit and 1:1 recharge policy. Its zero-change migration decision
+  was superseded by the completed September 12 rescaling; current semantics are
+  in `docs/PRICING_CURRENCY_20260912.md`.
 
 - Service integration: actual PostgreSQL verifies an invoice transaction holds its order lock
   against refund start, and a refund committed first prevents issuance after lock acquisition.

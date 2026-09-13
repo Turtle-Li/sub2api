@@ -1,13 +1,21 @@
-# Production CNY wallet cutover — 2026-09-12
+# Production internal-credit rescaling cutover — 2026-09-12
 
-The owner-approved USD→CNY transaction committed at **13:40:29.509217 CST**
-while the API remained accepting. All 29 wallets were converted at 6.75;
-their boundary sum changed from 259.30467517 USD to 1750.30655742 CNY.
-Each wallet was rounded separately to its existing eight-decimal precision.
-Future paid recharge is 1 CNY paid → 1 CNY credit, with the existing nominal
-bonuses 0/0/5/20/75/145. Group, user and model discount multipliers are preserved.
-Model cards may select USD or CNY; existing cards remain USD. Subscription
-entitlements and subscription consumption remain USD. Historical payment,
+> Terminology clarification, 2026-09-13: this is a historical execution record.
+> Balances, quotas, subscriptions and usage are generic internal units. The
+> `USD`/`CNY` terms below identify source-price, persisted compatibility and
+> migration bases; they do not denominate customer wallets or entitlements.
+> Payment, refund, invoice and upstream provider-cost currencies remain real
+> external facts. Preserve all recorded values and do not rerun the migration.
+
+The owner-approved numeric-rescaling transaction, historically labeled
+USD→CNY, committed at **13:40:29.509217 CST** while the API remained accepting.
+All 29 wallet values were rescaled by 6.75; their boundary sum changed from
+259.30467517 to 1750.30655742 internal units. Each wallet was rounded separately
+to its existing eight-decimal precision. Future paid recharge is 1 CNY actually
+paid → 1 internal unit, with the existing nominal bonuses 0/0/5/20/75/145.
+Group, user and model discount multipliers are preserved. Model cards retain
+their USD or CNY source-price markers. Subscription entitlements and usage were
+not rescaled and retain their `USD` compatibility marker. Historical payment,
 refund, invoice and usage records were not relabeled or multiplied.
 
 ## Release and independent review
@@ -37,7 +45,7 @@ refund, invoice and usage records were not relabeled or multiplied.
   same compatible application and stopped naturally through the drain monitor.
   The ancient stopped `sub2api` container was archived by renaming it to
   `sub2api-pre-cny-legacy-20260912`, outside the guard's fallback names.
-  Do not start an old USD-only binary against the CNY database.
+  Do not start a pre-migration binary against the post-migration database.
 
 ## Backups and writer exclusion
 
@@ -101,19 +109,22 @@ under the maintenance lock. Normal caching is restored; no restart was needed.
 The pre-existing protected release credential was securely matched to key 46,
 user 1, standard group 16 (multiplier 0.01), without printing its value.
 
-| Probe | Currency | Wallet decrease | Usage actual cost | Result |
+| Probe | Persisted marker | Wallet decrease | Usage actual cost | Result |
 | --- | --- | --- | --- | --- |
 | New blue with bypass, before SQL | USD | 0.00016225 | 0.0001622500 | Exact match |
 | After SQL, bypass active | CNY | 0.00087649 | 0.0008764875 | Matches stored precision |
 | Normal caches restored | CNY | 0.00091496 | 0.0009149625 | Matches stored precision |
 
-The first CNY row has USD reference cost 0.012985, CNY total cost 0.08764875
-(exactly ×6.75), and actual cost 0.0008764875 (exactly ×0.01). All 29 current
-wallets reconciled against their converted manifest values less legitimate
-post-boundary usage; group multipliers matched the pre-transaction snapshot.
+The first `CNY`-marked row has USD reference cost 0.012985, a `CNY`-basis total
+cost of 0.08764875 (exactly ×6.75), and an internal-unit actual cost of
+0.0008764875 (exactly ×0.01). All 29 current wallets reconciled against their
+rescaled manifest values less legitimate post-boundary usage; group multipliers
+matched the pre-transaction snapshot.
 DB and Redis balances matched within 1e-8 after the second debit. Exact
-owner-account balances are retained in the private numeric acceptance evidence. A fresh authenticated read recreated the auth cache and
-`/v1/usage` returned `unit=CNY`; public settings returned CNY/rate 6.75.
+owner-account balances are retained in the private numeric acceptance evidence.
+A fresh authenticated read recreated the auth cache and `/v1/usage` returned
+the legacy `unit=CNY` compatibility marker; public settings returned the `CNY`
+marker and rate 6.75.
 
 While bypass was active, unlimited platform counters accumulated the same
 actual cost because a cache miss deliberately selects the conservative write
@@ -127,18 +138,20 @@ was created only for the owner's user 1 in existing GPT group 13, with zero
 initial usage, the normal group limits and an explicit acceptance note. The
 existing key 46 was temporarily rebound with immediate auth/subscription
 cache invalidation. Real `gpt-5.6-sol` models/Responses returned 200; usage
-622287 recorded **0.018115 USD**, with identical increments in all three
-subscription windows and **zero wallet debit**. Observed component prices
-matched the pre-cutover USD probe: input 5, output 30 and cached input 0.5 per
-million tokens. The optional account-stat override is correctly NULL for this
-ordinary USD subscription row; it is not an independent cost oracle.
+622287 recorded **0.018115 internal units** with the `USD` reference marker,
+with identical increments in all three subscription windows and **zero wallet
+debit**. Observed component prices matched the pre-cutover USD-reference probe:
+input 5, output 30 and cached input 0.5 per million tokens. The optional
+account-stat override is correctly NULL for this ordinary `USD`-marked
+subscription row; it is not an independent cost oracle.
 Finally key 46 was restored to group 16 and the fixture explicitly expired;
 the entitlement and real usage remain for audit. No reset grant, payment,
 wallet credit or ordinary subscriber entitlement was changed by this test.
 
 A later all-wallet readback included 30 post-cutover wallet usage rows and
-76 subscription rows: every wallet row was CNY, every subscription row USD,
-and all 29 manifest wallets still reconciled within stored precision.
+76 subscription rows: every wallet row retained the `CNY` compatibility marker,
+every subscription row retained the `USD` reference marker, and all 29 manifest
+wallets still reconciled within stored precision.
 
 From 13:23:51 through 13:55:33 CST, 224 combined API/www health samples all
 returned 200, including 106 samples over more than 15 minutes after the SQL.
@@ -173,9 +186,10 @@ do not imply that a recovery timer is enabled.
 
 ## Forward recovery
 
-Production has accepted new CNY financial facts. Do not restore the old full
-database or execute `rollback-before-reopen.sql`. Preserve the manifest,
+Production has accepted new post-migration financial facts. Do not restore the
+old full database or execute `rollback-before-reopen.sql`. Preserve the manifest,
 usage/dedup rows and protected backups, keep compatible code, and correct
 forward if needed. Do not reauthorize the expired source or revive archived
-USD-only containers. Future releases must preserve the CNY setting and rate,
-the 1:1 recharge decision and a CNY-compatible automatic fallback.
+pre-migration containers. Future releases must preserve the `CNY` compatibility
+setting and rate, the 1:1 recharge decision and a post-migration-compatible
+automatic fallback.

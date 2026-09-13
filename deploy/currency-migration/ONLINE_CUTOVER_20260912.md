@@ -1,6 +1,18 @@
-# Online USD wallet to CNY execution packet
+# Online internal-credit rescaling execution packet
 
-Owner decision: existing USD wallets ×6.75; future paid recharge 1:1 in CNY; nominal recharge bonuses unchanged. Keep APIs accepting. Old USD requests that complete after conversion may deduct their original numeric amount (temporary undercharge); no compensating extra debit. Group/model discounts and subscription USD entitlements remain unchanged.
+> Historical terminology: this packet uses `USD`/`CNY` as the implementation's
+> source-price, persistence and migration markers. Under the current owner
+> clarification, wallet balances, quotas, subscriptions and usage are generic
+> internal units, not fiat-denominated assets. Payment, refund, invoice and
+> upstream provider-cost facts retain their external currency. The procedure
+> names and SQL identifiers remain unchanged for audit compatibility.
+
+Owner decision: rescale existing wallet values ×6.75; future CNY paid recharge
+credits internal units 1:1; nominal recharge bonuses unchanged. Keep APIs
+accepting. Requests admitted before conversion that finish afterward may deduct
+their original numeric amount (temporary undercharge); no compensating extra
+debit. Group/model discounts and subscription entitlement numerics remain
+unchanged.
 
 The production transaction committed at **2026-09-12 13:40:29 CST**. See
 `docs/operations/CNY_WALLET_CUTOVER_20260912.md` for the actual release,
@@ -23,9 +35,9 @@ This packet supersedes the earlier admission-pause plan for this specific run. A
 2. Exclude the expired peer from the database host's existing exact-source public firewall allowlist; retain the verified Azure source. Back up firewall/HBA state first. Remove obsolete HBA allow entries as applicable and terminate only the observed expired-peer PostgreSQL sessions. Verify no old Redis clients, no old PG sessions and continued Azure authenticated probes. Do not touch unrelated SSH, ingress or backup connectivity. If an old Tailnet path belongs to that peer, exclude it too after identifying its owner; do not guess address ownership.
 3. Acquire and hold the current origin's canonical `/run/sub2api-maintenance/sub2api-maintenance.lock` across the monetary change. The old peer is excluded at the data boundary, not treated as a functioning second app node. Keep traffic accepting and do not stop the active app. Check all preconditions again. Take and retain a fresh canonical PostgreSQL/Redis backup with checksums; use `rehearse-backup.sh ARCHIVE 1` for an isolated restore and migration/rollback rehearsal. Run `test-online-migration.sh` locally for debit/conversion ordering evidence.
 4. Confirm cache bypass is active in every compatible serving generation, flusher false, dirty set zero, and no unknown database writer. Run `wallet-to-cny.sql` with `recharge_factor=1` and `apply=true`. Its row manifest records exact monetary values at the transaction boundary, even though the earlier backup was taken with live requests. Never automatically repeat a successful migration. A lock timeout means no conversion committed; inspect before retrying.
-5. Immediately run `refresh-wallet-caches.sh --bypass-confirmed` on the DB host. It requires CNY policy and empty dirty set, purges only monetary/auth cache namespaces, and publishes every active API-key hash to the existing L1 invalidation channel without exposing credentials. Leave subscription cache untouched. Wait for the 15-second policy caches to converge, repeat cache refresh after 60 seconds, and keep bypass enabled throughout verification. The repeat catches older MVCC readers that can finish and refill Redis after the transaction; compatible processes bypass those stale values.
-6. Use the existing protected release-probe credential for real wallet calls. Identify its numeric user/key IDs securely and take DB snapshots immediately before/after. The CNY wallet decrease must match the unique usage row's `actual_cost` within stored decimal precision; standard platform usage must increase consistently. Zero-configured key quota/rate limits remain unlimited and are not falsely claimed as exercised limits. Verify a real subscription request still records USD and consumes its subscription window, with wallet unchanged. All calls remain subject to ordinary authentication and use a nonzero-price model. Preserve only privacy-safe evidence and IDs.
-7. Compare every wallet against its saved converted value plus legitimate post-transaction debits/credits; confirm recharge multiplier 1, CNY policy/rate 6.75, unchanged group multipliers and subscription limits. Monitor API 5xx, insufficient-balance/quota errors and usage for at least 15 minutes. A unique live test request must not be accepted as proof of whole-site availability.
+5. Immediately run `refresh-wallet-caches.sh --bypass-confirmed` on the DB host. It requires the `CNY` compatibility policy and empty dirty set, purges only monetary/auth cache namespaces, and publishes every active API-key hash to the existing L1 invalidation channel without exposing credentials. Leave subscription cache untouched. Wait for the 15-second policy caches to converge, repeat cache refresh after 60 seconds, and keep bypass enabled throughout verification. The repeat catches older MVCC readers that can finish and refill Redis after the transaction; compatible processes bypass those stale values.
+6. Use the existing protected release-probe credential for real wallet calls. Identify its numeric user/key IDs securely and take DB snapshots immediately before/after. The internal-unit wallet decrease on a `CNY`-marked usage row must match its `actual_cost` within stored decimal precision; standard platform usage must increase consistently. Zero-configured key quota/rate limits remain unlimited and are not falsely claimed as exercised limits. Verify a real subscription request still records the `USD` reference marker and consumes its subscription window, with wallet unchanged. All calls remain subject to ordinary authentication and use a nonzero-price model. Preserve only privacy-safe evidence and IDs.
+7. Compare every wallet against its saved rescaled value plus legitimate post-transaction debits/credits; confirm recharge multiplier 1, `CNY` compatibility policy/rate 6.75, unchanged group multipliers and subscription limits. Monitor API 5xx, insufficient-balance/quota errors and usage for at least 15 minutes. A unique live test request must not be accepted as proof of whole-site availability.
 8. Keep cache bypass enabled until every pre-cutover application generation and its queued writers have stopped under the canonical drain monitor. Clear scoped caches once more, remove the marker, and run a final real debit/DB-cache parity probe. Do not force-stop user WebSockets to accelerate this step. If old sessions remain, document the temporary bypass state rather than silently re-enabling stale caches. Restore ordinary cache operation as soon as that condition is satisfied.
 
 ### Corrections established by the live execution
@@ -58,7 +70,7 @@ This packet supersedes the earlier admission-pause plan for this specific run. A
 
 ## Recovery
 
-Online traffic creates new financial facts immediately. Do not use `rollback-before-reopen.sql` or restore an old full database after cutover. Preserve the per-row manifest, backups, usage and billing dedup evidence; correct forward while keeping CNY-compatible code. On a cache-related error, retain bypass and use the database as authority. On a pre-commit failure, the SQL transaction rolls back and USD remains active; investigate without relabeling data or retrying blindly.
+Online traffic creates new financial facts immediately. Do not use `rollback-before-reopen.sql` or restore an old full database after cutover. Preserve the per-row manifest, backups, usage and billing dedup evidence; correct forward while keeping post-migration-compatible code. On a cache-related error, retain bypass and use the database as authority. On a pre-commit failure, the SQL transaction rolls back and the pre-migration `USD` compatibility basis remains active; investigate without relabeling data or retrying blindly.
 
 New test credentials are unnecessary for the existing release probe. Do not delete ordinary users, financial/audit rows or usage history to make before/after figures look clean. Record exact code/image/archive identities and the tested source allowlist change in project operations and the private registry when execution completes.
 

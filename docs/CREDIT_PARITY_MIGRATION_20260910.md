@@ -1,6 +1,13 @@
 # Fixed internal-credit parity — audited decision
 
-Owner decision, 2026-09-10: `1 CNY = 1 internal USD credit`, without live foreign-exchange conversion.
+> Historical status: the zero-change migration decision in this document was
+> superseded by the completed September 12 numeric rescaling. Under the current
+> owner clarification, balances, quotas and usage are generic internal units;
+> `USD`/`CNY` labels are compatibility or source-price markers, not wallet or
+> subscription denominations. Do not use this document as a current runbook.
+
+Owner decision, 2026-09-10: `1 CNY paid = 1 internal credit unit`, without live
+foreign-exchange conversion.
 Existing users must retain purchasing power. Order/invoice delivery is the preceding task.
 The read-only live audit below selects a zero-change migration for existing balances and effective consumption prices. No production data was rewritten.
 
@@ -104,5 +111,6 @@ business rates, not exchange rates. The legacy configurable exchange field is no
 
 Future pricing changes or purchase activation must use this fixed internal-unit policy rather than
 revive the 6.75 proposal. If runtime settings have changed since this audit, repeat the inventory
-before acting; never replay these observed balances. Internal `$` displays denote platform credit,
-while channel/invoice ISO currencies and upstream provider cost reporting keep their meanings.
+before acting; never replay these observed balances. Internal `$` displays use a uniform reference
+marker rather than a wallet denomination, while channel/invoice ISO currencies and upstream
+provider cost reporting keep their meanings.
