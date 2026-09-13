@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -38,8 +39,8 @@ func (s *PaymentService) validateUnifiedRefundOrder(o *dbent.PaymentOrder) error
 	if _, ok := unifiedpay.PaymentMethodForPaymentType(o.PaymentType); !ok || PaymentOrderCurrency(o) != payment.DefaultPaymentCurrency {
 		return infraerrors.BadRequest("REFUND_UNAVAILABLE", "unified payment order method or currency is invalid")
 	}
-	if o.OrderType != payment.OrderTypeBalance {
-		return infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "unified refunds currently support plain balance orders")
+	if o.OrderType != payment.OrderTypeBalance && o.OrderType != payment.OrderTypeSubscription {
+		return infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "this unified-payment order type requires manual review")
 	}
 	manual, err := paymentOrderRequiresManualRefund(o)
 	if err != nil || manual {
@@ -132,6 +133,25 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	if manual {
 		return nil, infraerrors.Conflict("REFUND_REQUIRES_MANUAL_REVIEW", "a refund for this order requires manual review")
 	}
+	if o.OrderType == payment.OrderTypeSubscription && strings.TrimSpace(p.QuoteRevision) == "" {
+		return nil, infraerrors.Conflict("REFUND_REVIEW_REQUIRED", "subscription refunds require a fresh server review")
+	}
+	if strings.TrimSpace(p.QuoteRevision) != "" {
+		a, err := s.reserveReviewedUnifiedRefundAttemptTx(txCtx, client, o, p)
+		if err != nil {
+			if errors.Is(err, errRefundQuoteStale) {
+				return nil, infraerrors.Conflict("REFUND_QUOTE_STALE", "refund review changed; refresh before submitting")
+			}
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		if a.RefundKind == refundReviewKindSubscription {
+			s.invalidateReviewedSubscriptionRefundCaches(ctx, a.OrderID)
+		}
+		return a, nil
+	}
 	settled, requested := refundOrderAmounts(o)
 	remaining := refundRemainingAmount(o, settled)
 	zeroTolerance := paymentAmountZeroTolerance(PaymentOrderCurrency(o))
@@ -199,6 +219,64 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	return a, nil
 }
 
+func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, plan *RefundPlan) (*unifiedRefundAttempt, error) {
+	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded}, order.Status) {
+		return nil, infraerrors.Conflict("CONFLICT", "order status does not allow another refund")
+	}
+	now := refundValuationTime()
+	review, err := s.reserveReviewedRefundEntitlement(ctx, client, order, plan, now)
+	if err != nil {
+		return nil, err
+	}
+	amountFen, err := payment.AmountToMinorUnit(strconv.FormatFloat(review.DefaultRefundAmount, 'f', 2, 64), review.Currency)
+	if err != nil || amountFen <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "reviewed cash refund amount is invalid")
+	}
+	entitlementMinor, err := payment.AmountToMinorUnit(strconv.FormatFloat(review.EntitlementAmount, 'f', 2, 64), payment.DefaultPaymentCurrency)
+	if err != nil || entitlementMinor <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "reviewed entitlement refund amount is invalid")
+	}
+	snapshot := psOrderProviderSnapshot(order)
+	method, _ := unifiedpay.PaymentMethodForPaymentType(order.PaymentType)
+	id := uuid.NewString()
+	valuationAt := now
+	grantOrderID := int64(0)
+	if review.Subscription != nil {
+		valuationAt = review.Subscription.NewExpiresAt.UTC().Truncate(time.Second)
+		grantOrderID = order.ID
+	}
+	a := &unifiedRefundAttempt{
+		ProductRefundNo: "sub2-refund-" + id, IdempotencyKey: "sub2:refund:" + id,
+		OrderID: order.ID, PaymentOrderID: snapshot.PaymentOrderID, Environment: snapshot.Environment,
+		OrganizationID: snapshot.OrganizationID, ProductID: snapshot.ProductID, AppID: snapshot.AppID,
+		PaymentMethod: method, AmountFen: amountFen, BalanceAmountMinor: entitlementMinor,
+		DeductBalance: review.Balance != nil, Force: false, ReasonSummary: "Sub2 administrator refund",
+		Status: unifiedRefundPending, RefundKind: review.OrderType, QuoteRevision: review.QuoteRevision,
+		WalletPaidAmount: plan.WalletPaidToReserve, WalletGiftAmount: plan.WalletGiftToReserve,
+		SubscriptionSeconds:      plan.SubscriptionSecondsToReserve,
+		SubscriptionGrantOrderID: grantOrderID, EntitlementReserved: true, ValuationAt: &valuationAt,
+	}
+	if err := insertUnifiedRefundAttempt(ctx, client, a); err != nil {
+		return nil, err
+	}
+	settled, _ := refundOrderAmounts(order)
+	if _, err := client.PaymentOrder.UpdateOneID(order.ID).SetStatus(OrderStatusRefundPending).
+		SetRefundAmount(settled).SetRefundRequestedAmount(review.EntitlementAmount).
+		SetRefundReason(plan.Reason).SetForceRefund(false).
+		ClearRefundAt().ClearFailedAt().ClearFailedReason().Save(ctx); err != nil {
+		return nil, err
+	}
+	if err := writeUnifiedRefundAudit(ctx, client, order.ID, "UNIFIED_REFUND_REQUESTED", map[string]any{
+		"product_refund_no": a.ProductRefundNo, "amount_fen": a.AmountFen,
+		"entitlement_amount_minor": a.BalanceAmountMinor, "refund_kind": a.RefundKind,
+		"wallet_paid_amount": a.WalletPaidAmount, "wallet_gift_amount": a.WalletGiftAmount,
+		"subscription_seconds": a.SubscriptionSeconds, "quote_revision": a.QuoteRevision,
+	}); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
 func pendingUnifiedRefundResult(manual bool) *RefundResult {
 	warning := "unified payment refund is pending confirmation"
 	if manual {
@@ -216,6 +294,13 @@ func (s *PaymentService) queryUnifiedRefund(ctx context.Context, o *dbent.Paymen
 }
 
 func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRefundAttempt) (*RefundResult, error) {
+	// The reservation is already durable when this function starts. Repeating
+	// cache invalidation here repairs the narrow crash window after commit and
+	// before the first provider request, and also repairs a missed terminal
+	// invalidation when an administrator queries the attempt again.
+	if a != nil && a.RefundKind == refundReviewKindSubscription {
+		s.invalidateReviewedSubscriptionRefundCaches(ctx, a.OrderID)
+	}
 	// Recheck the durable review fence immediately before a network operation.
 	manual, err := unifiedRefundOrderNeedsReview(ctx, s.entClient, a.OrderID)
 	if err != nil {
@@ -333,11 +418,20 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 				SettledRefundAmount: settled, RemainingRefundable: refundRemainingAmount(o, settled),
 				Reason: psStringValue(o.RefundReason), Force: a.Force, DeductBalance: a.DeductBalance,
 				DeductionType: payment.DeductionTypeNone}
-			if a.DeductBalance {
+			if a.EntitlementReserved {
+				plan.ReviewKind = a.RefundKind
+				plan.WalletPaidToReserve = a.WalletPaidAmount
+				plan.WalletGiftToReserve = a.WalletGiftAmount
+				plan.SubscriptionSecondsToReserve = a.SubscriptionSeconds
+				plan.BalanceToDeduct = a.WalletPaidAmount + a.WalletGiftAmount
+				if err := finalizeReviewedRefundEntitlement(txCtx, client, o, a); err != nil {
+					return nil, err
+				}
+			} else if a.DeductBalance {
 				plan.DeductionType, plan.BalanceToDeduct = payment.DeductionTypeBalance, amount
-			}
-			if err := s.applyRefundFinalDeduction(txCtx, plan); err != nil {
-				return nil, err
+				if err := s.applyRefundFinalDeduction(txCtx, plan); err != nil {
+					return nil, err
+				}
 			}
 			response, err = s.markRefundOkTx(txCtx, client, plan)
 			if err != nil {
@@ -348,11 +442,28 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 				response.Warning = "refund succeeded; remaining balance recovery requires manual review"
 			}
 		} else {
-			if _, err := client.PaymentOrder.UpdateOneID(orderID).SetStatus(OrderStatusRefundFailed).
-				SetFailedAt(time.Now()).SetFailedReason("unified payment refund failed").Save(txCtx); err != nil {
-				return nil, err
+			if a.EntitlementReserved {
+				if releaseErr := releaseReviewedRefundEntitlement(txCtx, client, o, a); releaseErr != nil {
+					a.NeedsManualReview = true
+					response = pendingUnifiedRefundResult(true)
+					if err := writeUnifiedRefundAudit(txCtx, client, orderID, "UNIFIED_REFUND_RELEASE_FAILED", map[string]any{
+						"product_refund_no": a.ProductRefundNo, "reason": releaseErr.Error(),
+					}); err != nil {
+						return nil, err
+					}
+				} else if _, err := client.PaymentOrder.UpdateOneID(orderID).SetStatus(OrderStatusRefundFailed).
+					SetFailedAt(time.Now()).SetFailedReason("unified payment refund failed").Save(txCtx); err != nil {
+					return nil, err
+				} else {
+					response = &RefundResult{Success: false, Warning: "unified payment refund failed"}
+				}
+			} else {
+				if _, err := client.PaymentOrder.UpdateOneID(orderID).SetStatus(OrderStatusRefundFailed).
+					SetFailedAt(time.Now()).SetFailedReason("unified payment refund failed").Save(txCtx); err != nil {
+					return nil, err
+				}
+				response = &RefundResult{Success: false, Warning: "unified payment refund failed"}
 			}
-			response = &RefundResult{Success: false, Warning: "unified payment refund failed"}
 		}
 	} else if a.Status == unifiedpay.RefundStatusSucceeded && !a.NeedsManualReview {
 		response = &RefundResult{Success: true}
@@ -367,6 +478,9 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	if a.RefundKind == refundReviewKindSubscription {
+		s.invalidateReviewedSubscriptionRefundCaches(ctx, a.OrderID)
 	}
 	return response, nil
 }

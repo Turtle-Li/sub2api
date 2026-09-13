@@ -33,6 +33,12 @@ type User struct {
 	Balance float64 `json:"balance,omitempty"`
 	// FrozenBalance holds the value of the "frozen_balance" field.
 	FrozenBalance float64 `json:"frozen_balance,omitempty"`
+	// WalletAvailablePaid holds the value of the "wallet_available_paid" field.
+	WalletAvailablePaid float64 `json:"wallet_available_paid,omitempty"`
+	// WalletFrozenPaid holds the value of the "wallet_frozen_paid" field.
+	WalletFrozenPaid float64 `json:"wallet_frozen_paid,omitempty"`
+	// WalletComponentVersion holds the value of the "wallet_component_version" field.
+	WalletComponentVersion int64 `json:"wallet_component_version,omitempty"`
 	// Concurrency holds the value of the "concurrency" field.
 	Concurrency int `json:"concurrency,omitempty"`
 	// Status holds the value of the "status" field.
@@ -241,9 +247,9 @@ func (*User) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case user.FieldTotpEnabled, user.FieldRestrictPublicGroups, user.FieldBalanceNotifyEnabled:
 			values[i] = new(sql.NullBool)
-		case user.FieldBalance, user.FieldFrozenBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
+		case user.FieldBalance, user.FieldFrozenBalance, user.FieldWalletAvailablePaid, user.FieldWalletFrozenPaid, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
 			values[i] = new(sql.NullFloat64)
-		case user.FieldID, user.FieldConcurrency, user.FieldRpmLimit:
+		case user.FieldID, user.FieldWalletComponentVersion, user.FieldConcurrency, user.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
 		case user.FieldEmail, user.FieldPasswordHash, user.FieldRole, user.FieldStatus, user.FieldUsername, user.FieldNotes, user.FieldTotpSecretEncrypted, user.FieldSignupSource, user.FieldBalanceNotifyThresholdType, user.FieldBalanceNotifyExtraEmails:
 			values[i] = new(sql.NullString)
@@ -318,6 +324,24 @@ func (_m *User) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field frozen_balance", values[i])
 			} else if value.Valid {
 				_m.FrozenBalance = value.Float64
+			}
+		case user.FieldWalletAvailablePaid:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field wallet_available_paid", values[i])
+			} else if value.Valid {
+				_m.WalletAvailablePaid = value.Float64
+			}
+		case user.FieldWalletFrozenPaid:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field wallet_frozen_paid", values[i])
+			} else if value.Valid {
+				_m.WalletFrozenPaid = value.Float64
+			}
+		case user.FieldWalletComponentVersion:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field wallet_component_version", values[i])
+			} else if value.Valid {
+				_m.WalletComponentVersion = value.Int64
 			}
 		case user.FieldConcurrency:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -557,6 +581,15 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("frozen_balance=")
 	builder.WriteString(fmt.Sprintf("%v", _m.FrozenBalance))
+	builder.WriteString(", ")
+	builder.WriteString("wallet_available_paid=")
+	builder.WriteString(fmt.Sprintf("%v", _m.WalletAvailablePaid))
+	builder.WriteString(", ")
+	builder.WriteString("wallet_frozen_paid=")
+	builder.WriteString(fmt.Sprintf("%v", _m.WalletFrozenPaid))
+	builder.WriteString(", ")
+	builder.WriteString("wallet_component_version=")
+	builder.WriteString(fmt.Sprintf("%v", _m.WalletComponentVersion))
 	builder.WriteString(", ")
 	builder.WriteString("concurrency=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Concurrency))

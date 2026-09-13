@@ -31,6 +31,12 @@ const (
 	FieldBalance = "balance"
 	// FieldFrozenBalance holds the string denoting the frozen_balance field in the database.
 	FieldFrozenBalance = "frozen_balance"
+	// FieldWalletAvailablePaid holds the string denoting the wallet_available_paid field in the database.
+	FieldWalletAvailablePaid = "wallet_available_paid"
+	// FieldWalletFrozenPaid holds the string denoting the wallet_frozen_paid field in the database.
+	FieldWalletFrozenPaid = "wallet_frozen_paid"
+	// FieldWalletComponentVersion holds the string denoting the wallet_component_version field in the database.
+	FieldWalletComponentVersion = "wallet_component_version"
 	// FieldConcurrency holds the string denoting the concurrency field in the database.
 	FieldConcurrency = "concurrency"
 	// FieldStatus holds the string denoting the status field in the database.
@@ -204,6 +210,9 @@ var Columns = []string{
 	FieldRole,
 	FieldBalance,
 	FieldFrozenBalance,
+	FieldWalletAvailablePaid,
+	FieldWalletFrozenPaid,
+	FieldWalletComponentVersion,
 	FieldConcurrency,
 	FieldStatus,
 	FieldUsername,
@@ -265,6 +274,12 @@ var (
 	DefaultBalance float64
 	// DefaultFrozenBalance holds the default value on creation for the "frozen_balance" field.
 	DefaultFrozenBalance float64
+	// DefaultWalletAvailablePaid holds the default value on creation for the "wallet_available_paid" field.
+	DefaultWalletAvailablePaid float64
+	// DefaultWalletFrozenPaid holds the default value on creation for the "wallet_frozen_paid" field.
+	DefaultWalletFrozenPaid float64
+	// DefaultWalletComponentVersion holds the default value on creation for the "wallet_component_version" field.
+	DefaultWalletComponentVersion int64
 	// DefaultConcurrency holds the default value on creation for the "concurrency" field.
 	DefaultConcurrency int
 	// DefaultStatus holds the default value on creation for the "status" field.
@@ -343,6 +358,21 @@ func ByBalance(opts ...sql.OrderTermOption) OrderOption {
 // ByFrozenBalance orders the results by the frozen_balance field.
 func ByFrozenBalance(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldFrozenBalance, opts...).ToFunc()
+}
+
+// ByWalletAvailablePaid orders the results by the wallet_available_paid field.
+func ByWalletAvailablePaid(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWalletAvailablePaid, opts...).ToFunc()
+}
+
+// ByWalletFrozenPaid orders the results by the wallet_frozen_paid field.
+func ByWalletFrozenPaid(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWalletFrozenPaid, opts...).ToFunc()
+}
+
+// ByWalletComponentVersion orders the results by the wallet_component_version field.
+func ByWalletComponentVersion(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWalletComponentVersion, opts...).ToFunc()
 }
 
 // ByConcurrency orders the results by the concurrency field.

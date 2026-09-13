@@ -5,21 +5,20 @@
     width="normal"
     @close="emit('cancel')"
   >
-    <form id="refund-form" @submit.prevent="handleSubmit" class="space-y-4">
-      <!-- Refund Request Info -->
+    <form id="refund-form" class="space-y-4" @submit.prevent="handleSubmit">
       <div
         v-if="order?.refund_requested_at || order?.refund_request_reason"
         class="rounded-lg border border-violet-200 bg-violet-50 p-3 dark:border-violet-800 dark:bg-violet-900/20"
       >
         <div class="flex items-center gap-2 text-sm font-medium text-violet-700 dark:text-violet-300">
-          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           {{ t('payment.admin.refundRequestInfo') }}
         </div>
-        <div v-if="order?.refund_requested_at" class="mt-2 flex justify-between text-sm">
+        <div v-if="order?.refund_requested_at" class="mt-2 flex justify-between gap-3 text-sm">
           <span class="text-violet-600 dark:text-violet-400">{{ t('payment.admin.refundRequestedAt') }}</span>
-          <span class="text-violet-800 dark:text-violet-200">{{ formatDateTime(order.refund_requested_at) }}</span>
+          <span class="text-right text-violet-800 dark:text-violet-200">{{ formatDateTime(order.refund_requested_at) }}</span>
         </div>
         <div v-if="order?.refund_request_reason" class="mt-1 text-sm">
           <span class="text-violet-600 dark:text-violet-400">{{ t('payment.admin.refundRequestReason') }}:</span>
@@ -27,137 +26,141 @@
         </div>
       </div>
 
-      <!-- Order Info -->
       <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-700">
-        <div class="flex justify-between text-sm">
+        <div class="flex justify-between gap-3 text-sm">
           <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
           <span class="font-mono text-gray-900 dark:text-white">#{{ order?.id }}</span>
         </div>
-        <div class="mt-1 flex justify-between text-sm">
-          <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.creditedAmount') }}</span>
-          <span class="font-medium text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ order?.amount?.toFixed(2) }}</span>
-        </div>
-        <div class="mt-1 flex justify-between text-sm">
+        <div class="mt-1 flex justify-between gap-3 text-sm">
           <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
-          <span class="font-medium text-gray-900 dark:text-white">{{ paymentAmountSymbol }}{{ order?.pay_amount?.toFixed(2) }}</span>
-        </div>
-        <div v-if="actuallyRefunded > 0" class="mt-1 flex justify-between text-sm">
-          <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.alreadyRefunded') }}</span>
-          <span class="font-medium text-red-600 dark:text-red-400">{{ creditedAmountSymbol }}{{ actuallyRefunded.toFixed(2) }}</span>
-        </div>
-        <div v-if="pendingRequested > 0" class="mt-1 flex justify-between text-sm">
-          <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.pendingRefundAmount') }}</span>
-          <span class="font-medium text-amber-600 dark:text-amber-400">{{ creditedAmountSymbol }}{{ pendingRequested.toFixed(2) }}</span>
+          <span class="font-medium text-gray-900 dark:text-white">{{ formatCash(order?.pay_amount, order?.currency) }}</span>
         </div>
       </div>
 
-      <!-- Deduct Balance -->
-      <div>
-        <div class="flex items-center gap-2">
-          <input
-            id="deduct-balance"
-            v-model="form.deduct_balance"
-            type="checkbox"
-            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-          />
-          <label for="deduct-balance" class="text-sm text-gray-700 dark:text-gray-300">
-            {{ t('payment.admin.deductBalance') }}
-          </label>
-          <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.deductBalanceHint') }}</span>
-        </div>
+      <div
+        v-if="loading"
+        role="status"
+        class="rounded-lg bg-gray-50 p-4 text-sm text-gray-600 dark:bg-dark-700 dark:text-gray-300"
+      >
+        {{ t('payment.admin.refundReviewLoading') }}
+      </div>
 
-        <!-- User Balance Info (when deduct_balance is checked) -->
-        <div v-if="form.deduct_balance && userBalance != null" class="mt-3 grid grid-cols-2 gap-3">
-          <div class="rounded-lg bg-gray-50 p-3 text-sm dark:bg-dark-700">
-            <div class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.userBalance') }}</div>
-            <div class="mt-1 font-semibold text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ userBalance.toFixed(2) }}</div>
-          </div>
-          <div class="rounded-lg bg-gray-50 p-3 text-sm dark:bg-dark-700">
-            <div class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.orderAmount') }}</div>
-            <div class="mt-1 font-semibold text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ order?.amount?.toFixed(2) }}</div>
-          </div>
-        </div>
+      <div
+        v-else-if="error"
+        role="alert"
+        class="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300"
+      >
+        {{ error }}
+      </div>
 
-        <!-- Insufficient balance warning -->
-        <div
-          v-if="form.deduct_balance && balanceInsufficient"
-          class="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+      <template v-else-if="review">
+        <section
+          v-if="review.balance"
+          class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
+          :aria-label="t('payment.admin.balanceRefundImpact')"
         >
-          {{ t('payment.admin.insufficientBalance') }}
-        </div>
+          <h3 class="text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.admin.balanceRefundImpact') }}</h3>
+          <dl class="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.paidPrincipalRefundable') }}</dt>
+              <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatCredit(review.balance.paid_credit_to_reclaim) }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.giftedCreditRecovery') }}</dt>
+              <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatCredit(review.balance.gift_credit_to_reclaim) }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.currentAvailableCredit') }}</dt>
+              <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatCredit(review.balance.available_balance) }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundCash') }}</dt>
+              <dd class="mt-1 font-medium text-red-600 dark:text-red-400">{{ formatCash(review.default_refund_amount, review.currency) }}</dd>
+            </div>
+          </dl>
+        </section>
 
-        <!-- No deduction info -->
-        <div
-          v-if="!form.deduct_balance"
-          class="mt-2 rounded-lg bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
+        <section
+          v-else-if="review.subscription"
+          class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
+          :aria-label="t('payment.admin.subscriptionRefundImpact')"
         >
-          {{ t('payment.admin.noDeduction') }}
-        </div>
-      </div>
+          <h3 class="text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.admin.subscriptionRefundImpact') }}</h3>
+          <dl class="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.usedTime') }}</dt>
+              <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatDuration(review.subscription.used_seconds) }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.remainingTime') }}</dt>
+              <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatDuration(review.subscription.remaining_seconds) }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.proratedRefund') }}</dt>
+              <dd class="mt-1 font-medium text-red-600 dark:text-red-400">{{ formatCash(review.default_refund_amount, review.currency) }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.newExpiry') }}</dt>
+              <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatDateTime(review.subscription.new_expires_at) }}</dd>
+            </div>
+          </dl>
+        </section>
 
-      <!-- Refund Amount -->
-      <div>
-        <label class="input-label">{{ t('payment.admin.refundAmount') }}</label>
-        <div class="relative">
-          <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">{{ creditedAmountSymbol }}</span>
-          <input
-            v-model.number="form.amount"
-            type="number"
-            step="0.01"
-            min="0.01"
-            :max="maxRefundable"
-            class="input pl-7"
-            required
-          />
-        </div>
-        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          {{ t('payment.admin.maxRefundable') }}: {{ creditedAmountSymbol }}{{ maxRefundable.toFixed(2) }}
-        </p>
-      </div>
+        <section v-else class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+          <div class="flex justify-between gap-3 text-sm">
+            <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundCash') }}</span>
+            <span class="font-medium text-red-600 dark:text-red-400">{{ formatCash(review.default_refund_amount, review.currency) }}</span>
+          </div>
+        </section>
 
-      <!-- Reason -->
+        <div
+          v-if="review.requires_manual_review"
+          role="alert"
+          class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200"
+        >
+          <p class="font-medium">{{ t('payment.admin.refundManualReviewRequired') }}</p>
+          <p v-if="reviewReason" class="mt-1">{{ reviewReason }}</p>
+        </div>
+        <div
+          v-else-if="!review.can_refund"
+          role="alert"
+          class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200"
+        >
+          <p class="font-medium">{{ t('payment.admin.refundUnavailable') }}</p>
+          <p v-if="reviewReason" class="mt-1">{{ reviewReason }}</p>
+        </div>
+      </template>
+
       <div>
-        <label class="input-label">{{ t('payment.admin.refundReason') }}</label>
+        <label for="refund-reason" class="input-label">{{ t('payment.admin.refundReason') }}</label>
         <textarea
+          id="refund-reason"
           v-model="form.reason"
           rows="3"
           class="input"
           :placeholder="t('payment.admin.refundReasonPlaceholder')"
+          :disabled="loading || submitting"
           required
         ></textarea>
       </div>
 
-      <!-- Warning -->
       <div
         v-if="warning"
         class="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-300"
       >
         {{ warning }}
       </div>
-
-      <!-- Force Refund -->
-      <div v-if="requireForce" class="flex items-center gap-2">
-        <input
-          id="force-refund"
-          v-model="form.force"
-          type="checkbox"
-          class="h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
-        />
-        <label for="force-refund" class="text-sm font-medium text-red-600 dark:text-red-400">
-          {{ t('payment.admin.forceRefund') }}
-        </label>
-      </div>
     </form>
 
     <template #footer>
       <div class="flex justify-end gap-3">
-        <button type="button" @click="emit('cancel')" class="btn btn-secondary">
+        <button type="button" class="btn btn-secondary" @click="emit('cancel')">
           {{ t('common.cancel') }}
         </button>
         <button
           type="submit"
           form="refund-form"
-          :disabled="submitting || form.amount <= 0 || (requireForce && !form.force)"
+          :disabled="!canConfirm"
           class="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 dark:focus:ring-offset-dark-800"
         >
           {{ submitting ? t('common.processing') : t('payment.admin.confirmRefund') }}
@@ -168,9 +171,10 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, computed, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import type { RefundReview } from '@/api/admin/payment'
 import type { PaymentOrder } from '@/types/payment'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import { currencySymbol } from '@/components/payment/currency'
@@ -180,94 +184,95 @@ const { t } = useI18n()
 const props = defineProps<{
   show: boolean
   order: PaymentOrder | null
+  review: RefundReview | null
+  loading?: boolean
+  error?: string
   submitting?: boolean
-  userBalance?: number | null
-  requireForce?: boolean
   warning?: string
 }>()
 
 const emit = defineEmits<{
-  (e: 'confirm', data: { amount: number; reason: string; deduct_balance: boolean; force: boolean }): void
+  (e: 'confirm', data: { reason: string }): void
   (e: 'cancel'): void
 }>()
 
 const creditedAmountSymbol = currencySymbol('USD')
+const form = reactive({ reason: '' })
 
-const paymentAmountSymbol = computed(() => currencySymbol(props.order?.currency))
-
-const form = reactive({
-  amount: 0,
-  reason: '',
-  deduct_balance: true,
-  force: false,
-})
-
-const hasRefundRequestedField = computed(() => typeof props.order?.refund_requested_amount === 'number')
-
-// refund_amount is the cumulative settled amount. Older rows may still expose
-// the in-flight amount there until migration 240 has run, so retain a narrow
-// compatibility fallback for non-terminal statuses.
-const actuallyRefunded = computed(() => {
-  if (!props.order) return 0
-  const s = props.order.status
-  // After migration 240 refund_amount is cumulative in every state. A
-  // legacy in-flight row has no requested field and still stores its request
-  // in refund_amount; treat only those rows as the compatibility case so a
-  // settled partial refund is never offered twice. The API emits the new field
-  // even when it is zero, so field presence (not truthiness) distinguishes a
-  // migrated REFUND_FAILED row from an old one.
-  if (hasRefundRequestedField.value) {
-    return props.order.refund_amount || 0
+const reviewReason = computed(() => {
+  const review = props.review
+  if (!review) return ''
+  if (review.reason_code) {
+    const key = `payment.admin.refundReviewReasons.${review.reason_code}`
+    const translated = t(key)
+    if (translated !== key) return translated
   }
-  if (s === 'REFUND_REQUESTED' || s === 'REFUND_PENDING' || s === 'REFUNDING' || s === 'REFUND_FAILED') {
-    return 0
-  }
-  return props.order.refund_amount || 0
+  return review.reason || ''
 })
 
-const pendingRequested = computed(() => {
-  if (!props.order) return 0
-  if (hasRefundRequestedField.value) {
-    return Math.max(0, props.order.refund_requested_amount || 0)
-  }
-  const s = props.order.status
-  if (s === 'REFUND_REQUESTED' || s === 'REFUND_PENDING' || s === 'REFUND_FAILED' || s === 'REFUNDING') {
-    return props.order.refund_amount || 0
-  }
-  return 0
+const canConfirm = computed(() => {
+  const review = props.review
+  return Boolean(
+    props.show &&
+    !props.loading &&
+    !props.error &&
+    !props.submitting &&
+    review?.can_refund &&
+    !review.requires_manual_review &&
+    review.quote_revision &&
+    form.reason.trim(),
+  )
 })
 
-const maxRefundable = computed(() => {
-  if (!props.order) return 0
-  return Math.max(0, props.order.amount - actuallyRefunded.value)
+function resetReason() {
+  form.reason = props.order?.refund_request_reason || ''
+}
+
+watch(() => props.show, (show) => {
+  if (show) resetReason()
 })
 
-const balanceInsufficient = computed(() => {
-  if (props.userBalance == null || !props.order) return false
-  return props.userBalance < maxRefundable.value
+watch(() => props.order?.id, () => {
+  if (props.show) resetReason()
 })
 
-watch(() => props.show, (val) => {
-  if (val && props.order) {
-    // For a user request/retry, preserve the server-recorded suggested amount.
-    if ((props.order.status === 'REFUND_REQUESTED' || props.order.status === 'REFUND_FAILED') && pendingRequested.value > 0) {
-      form.amount = Math.min(pendingRequested.value, maxRefundable.value)
-    } else {
-      form.amount = maxRefundable.value
+function formatCredit(value: number | undefined): string {
+  const amount = Number.isFinite(value) ? Number(value) : 0
+  return `${creditedAmountSymbol}${amount.toFixed(2)}`
+}
+
+function formatCash(value: number | undefined, currency: string | undefined): string {
+  const amount = Number.isFinite(value) ? Number(value) : 0
+  return `${currencySymbol(currency)}${amount.toFixed(2)}`
+}
+
+function formatDuration(value: number | undefined): string {
+  let seconds = Math.max(0, Math.floor(Number.isFinite(value) ? Number(value) : 0))
+  if (seconds === 0) return t('payment.admin.refundTimeZero')
+
+  const units: Array<[number, string]> = [
+    [86_400, 'payment.admin.refundTimeDays'],
+    [3_600, 'payment.admin.refundTimeHours'],
+    [60, 'payment.admin.refundTimeMinutes'],
+    [1, 'payment.admin.refundTimeSeconds'],
+  ]
+  const parts: string[] = []
+  for (const [size, key] of units) {
+    const count = Math.floor(seconds / size)
+    if (count > 0) {
+      parts.push(t(key, { count }))
+      seconds -= count * size
     }
-    form.reason = props.order.refund_request_reason || ''
-    form.deduct_balance = true
-    form.force = false
   }
-})
+  return parts.join(' ')
+}
 
 function formatDateTime(dateStr: string): string {
   return formatOrderDateTime(dateStr)
 }
 
 function handleSubmit() {
-  if (form.amount <= 0 || form.amount > maxRefundable.value) return
-  if (props.requireForce && !form.force) return
-  emit('confirm', { ...form })
+  if (!canConfirm.value) return
+  emit('confirm', { reason: form.reason.trim() })
 }
 </script>

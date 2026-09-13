@@ -150,6 +150,48 @@ func (_u *UserUpdate) AddFrozenBalance(v float64) *UserUpdate {
 	return _u
 }
 
+// SetWalletAvailablePaid sets the "wallet_available_paid" field.
+func (_u *UserUpdate) SetWalletAvailablePaid(v float64) *UserUpdate {
+	_u.mutation.ResetWalletAvailablePaid()
+	_u.mutation.SetWalletAvailablePaid(v)
+	return _u
+}
+
+// SetNillableWalletAvailablePaid sets the "wallet_available_paid" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableWalletAvailablePaid(v *float64) *UserUpdate {
+	if v != nil {
+		_u.SetWalletAvailablePaid(*v)
+	}
+	return _u
+}
+
+// AddWalletAvailablePaid adds value to the "wallet_available_paid" field.
+func (_u *UserUpdate) AddWalletAvailablePaid(v float64) *UserUpdate {
+	_u.mutation.AddWalletAvailablePaid(v)
+	return _u
+}
+
+// SetWalletFrozenPaid sets the "wallet_frozen_paid" field.
+func (_u *UserUpdate) SetWalletFrozenPaid(v float64) *UserUpdate {
+	_u.mutation.ResetWalletFrozenPaid()
+	_u.mutation.SetWalletFrozenPaid(v)
+	return _u
+}
+
+// SetNillableWalletFrozenPaid sets the "wallet_frozen_paid" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableWalletFrozenPaid(v *float64) *UserUpdate {
+	if v != nil {
+		_u.SetWalletFrozenPaid(*v)
+	}
+	return _u
+}
+
+// AddWalletFrozenPaid adds value to the "wallet_frozen_paid" field.
+func (_u *UserUpdate) AddWalletFrozenPaid(v float64) *UserUpdate {
+	_u.mutation.AddWalletFrozenPaid(v)
+	return _u
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (_u *UserUpdate) SetConcurrency(v int) *UserUpdate {
 	_u.mutation.ResetConcurrency()
@@ -1038,6 +1080,18 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedFrozenBalance(); ok {
 		_spec.AddField(user.FieldFrozenBalance, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.WalletAvailablePaid(); ok {
+		_spec.SetField(user.FieldWalletAvailablePaid, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedWalletAvailablePaid(); ok {
+		_spec.AddField(user.FieldWalletAvailablePaid, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.WalletFrozenPaid(); ok {
+		_spec.SetField(user.FieldWalletFrozenPaid, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedWalletFrozenPaid(); ok {
+		_spec.AddField(user.FieldWalletFrozenPaid, field.TypeFloat64, value)
+	}
 	if value, ok := _u.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)
 	}
@@ -1840,6 +1894,48 @@ func (_u *UserUpdateOne) SetNillableFrozenBalance(v *float64) *UserUpdateOne {
 // AddFrozenBalance adds value to the "frozen_balance" field.
 func (_u *UserUpdateOne) AddFrozenBalance(v float64) *UserUpdateOne {
 	_u.mutation.AddFrozenBalance(v)
+	return _u
+}
+
+// SetWalletAvailablePaid sets the "wallet_available_paid" field.
+func (_u *UserUpdateOne) SetWalletAvailablePaid(v float64) *UserUpdateOne {
+	_u.mutation.ResetWalletAvailablePaid()
+	_u.mutation.SetWalletAvailablePaid(v)
+	return _u
+}
+
+// SetNillableWalletAvailablePaid sets the "wallet_available_paid" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableWalletAvailablePaid(v *float64) *UserUpdateOne {
+	if v != nil {
+		_u.SetWalletAvailablePaid(*v)
+	}
+	return _u
+}
+
+// AddWalletAvailablePaid adds value to the "wallet_available_paid" field.
+func (_u *UserUpdateOne) AddWalletAvailablePaid(v float64) *UserUpdateOne {
+	_u.mutation.AddWalletAvailablePaid(v)
+	return _u
+}
+
+// SetWalletFrozenPaid sets the "wallet_frozen_paid" field.
+func (_u *UserUpdateOne) SetWalletFrozenPaid(v float64) *UserUpdateOne {
+	_u.mutation.ResetWalletFrozenPaid()
+	_u.mutation.SetWalletFrozenPaid(v)
+	return _u
+}
+
+// SetNillableWalletFrozenPaid sets the "wallet_frozen_paid" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableWalletFrozenPaid(v *float64) *UserUpdateOne {
+	if v != nil {
+		_u.SetWalletFrozenPaid(*v)
+	}
+	return _u
+}
+
+// AddWalletFrozenPaid adds value to the "wallet_frozen_paid" field.
+func (_u *UserUpdateOne) AddWalletFrozenPaid(v float64) *UserUpdateOne {
+	_u.mutation.AddWalletFrozenPaid(v)
 	return _u
 }
 
@@ -2760,6 +2856,18 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if value, ok := _u.mutation.AddedFrozenBalance(); ok {
 		_spec.AddField(user.FieldFrozenBalance, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.WalletAvailablePaid(); ok {
+		_spec.SetField(user.FieldWalletAvailablePaid, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedWalletAvailablePaid(); ok {
+		_spec.AddField(user.FieldWalletAvailablePaid, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.WalletFrozenPaid(); ok {
+		_spec.SetField(user.FieldWalletFrozenPaid, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedWalletFrozenPaid(); ok {
+		_spec.AddField(user.FieldWalletFrozenPaid, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)

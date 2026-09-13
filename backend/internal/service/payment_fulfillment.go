@@ -713,6 +713,22 @@ func validatePaymentRedeemCode(o *dbent.PaymentOrder, code *RedeemCode) error {
 }
 
 func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, lease *paymentFulfillmentLease) error {
+	redeemCtx := ctx
+	funding, err := PaymentWalletFundingForOrder(o)
+	if err != nil {
+		if paymentWalletFundingRequired(o) {
+			return fmt.Errorf("prepare payment wallet funding: %w", err)
+		}
+		// Historical orders without an immutable product snapshot must still
+		// fulfill, but their credit remains unattributed and therefore manual-only
+		// for refunds.
+		slog.Warn("balance payment fulfilled without refund provenance", "orderID", o.ID, "error", err)
+	} else {
+		// Keep the provenance marker scoped to the balance-credit transaction.
+		// Later fulfillment work can credit an affiliate or another user and must
+		// never inherit this order's paid-principal classification.
+		redeemCtx = ContextWithPaymentWalletFunding(ctx, funding)
+	}
 	// Idempotency: check if redeem code already exists (from a previous partial run)
 	existing, lookupErr := s.redeemService.GetByCode(ctx, o.RechargeCode)
 	action, err := resolveRedeemAction(existing, lookupErr)
@@ -744,7 +760,7 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 	case redeemActionRedeem:
 		// Code exists but unused — skip creation, proceed to redeem
 	}
-	if _, err := s.redeemService.redeemForPaymentFulfillment(ctx, o.UserID, o.RechargeCode); err != nil {
+	if _, err := s.redeemService.redeemForPaymentFulfillment(redeemCtx, o.UserID, o.RechargeCode); err != nil {
 		return fmt.Errorf("redeem balance: %w", err)
 	}
 	if err := grantPaymentOrderConcurrency(ctx, s.entClient, o); err != nil {
@@ -947,6 +963,7 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	}
 
 	recoveredFromNote := false
+	var assignedSubscription *UserSubscription
 	if !alreadyAssigned {
 		orderNote := paymentSubscriptionOrderNote(o.ID)
 		existing, lookupErr := s.subscriptionSvc.userSubRepo.GetByUserIDAndGroupID(txCtx, o.UserID, groupID)
@@ -956,14 +973,22 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 		case lookupErr != nil && !errors.Is(lookupErr, ErrSubscriptionNotFound):
 			return fmt.Errorf("check existing subscription assignment: %w", lookupErr)
 		default:
-			if _, _, err := s.subscriptionSvc.assignOrExtendSubscription(txCtx, &AssignSubscriptionInput{
+			// The assignment operation returns the term start observed while holding
+			// the subscription row lock. A preliminary lookup can become stale when
+			// another payment creates or renews the same subscription concurrently.
+			var termStart time.Time
+			assignedSubscription, _, termStart, err = s.subscriptionSvc.assignOrExtendSubscription(txCtx, &AssignSubscriptionInput{
 				UserID:       o.UserID,
 				GroupID:      groupID,
 				ValidityDays: days,
 				AssignedBy:   0,
 				Notes:        orderNote,
-			}, true); err != nil {
+			}, true)
+			if err != nil {
 				return fmt.Errorf("assign subscription: %w", err)
+			}
+			if err := insertPaymentSubscriptionGrant(txCtx, txClient, o, assignedSubscription, termStart); err != nil {
+				return fmt.Errorf("record subscription term grant: %w", err)
 			}
 		}
 

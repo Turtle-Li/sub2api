@@ -130,6 +130,48 @@ func (_c *UserCreate) SetNillableFrozenBalance(v *float64) *UserCreate {
 	return _c
 }
 
+// SetWalletAvailablePaid sets the "wallet_available_paid" field.
+func (_c *UserCreate) SetWalletAvailablePaid(v float64) *UserCreate {
+	_c.mutation.SetWalletAvailablePaid(v)
+	return _c
+}
+
+// SetNillableWalletAvailablePaid sets the "wallet_available_paid" field if the given value is not nil.
+func (_c *UserCreate) SetNillableWalletAvailablePaid(v *float64) *UserCreate {
+	if v != nil {
+		_c.SetWalletAvailablePaid(*v)
+	}
+	return _c
+}
+
+// SetWalletFrozenPaid sets the "wallet_frozen_paid" field.
+func (_c *UserCreate) SetWalletFrozenPaid(v float64) *UserCreate {
+	_c.mutation.SetWalletFrozenPaid(v)
+	return _c
+}
+
+// SetNillableWalletFrozenPaid sets the "wallet_frozen_paid" field if the given value is not nil.
+func (_c *UserCreate) SetNillableWalletFrozenPaid(v *float64) *UserCreate {
+	if v != nil {
+		_c.SetWalletFrozenPaid(*v)
+	}
+	return _c
+}
+
+// SetWalletComponentVersion sets the "wallet_component_version" field.
+func (_c *UserCreate) SetWalletComponentVersion(v int64) *UserCreate {
+	_c.mutation.SetWalletComponentVersion(v)
+	return _c
+}
+
+// SetNillableWalletComponentVersion sets the "wallet_component_version" field if the given value is not nil.
+func (_c *UserCreate) SetNillableWalletComponentVersion(v *int64) *UserCreate {
+	if v != nil {
+		_c.SetWalletComponentVersion(*v)
+	}
+	return _c
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (_c *UserCreate) SetConcurrency(v int) *UserCreate {
 	_c.mutation.SetConcurrency(v)
@@ -626,6 +668,18 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultFrozenBalance
 		_c.mutation.SetFrozenBalance(v)
 	}
+	if _, ok := _c.mutation.WalletAvailablePaid(); !ok {
+		v := user.DefaultWalletAvailablePaid
+		_c.mutation.SetWalletAvailablePaid(v)
+	}
+	if _, ok := _c.mutation.WalletFrozenPaid(); !ok {
+		v := user.DefaultWalletFrozenPaid
+		_c.mutation.SetWalletFrozenPaid(v)
+	}
+	if _, ok := _c.mutation.WalletComponentVersion(); !ok {
+		v := user.DefaultWalletComponentVersion
+		_c.mutation.SetWalletComponentVersion(v)
+	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		v := user.DefaultConcurrency
 		_c.mutation.SetConcurrency(v)
@@ -714,6 +768,15 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.FrozenBalance(); !ok {
 		return &ValidationError{Name: "frozen_balance", err: errors.New(`ent: missing required field "User.frozen_balance"`)}
+	}
+	if _, ok := _c.mutation.WalletAvailablePaid(); !ok {
+		return &ValidationError{Name: "wallet_available_paid", err: errors.New(`ent: missing required field "User.wallet_available_paid"`)}
+	}
+	if _, ok := _c.mutation.WalletFrozenPaid(); !ok {
+		return &ValidationError{Name: "wallet_frozen_paid", err: errors.New(`ent: missing required field "User.wallet_frozen_paid"`)}
+	}
+	if _, ok := _c.mutation.WalletComponentVersion(); !ok {
+		return &ValidationError{Name: "wallet_component_version", err: errors.New(`ent: missing required field "User.wallet_component_version"`)}
 	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		return &ValidationError{Name: "concurrency", err: errors.New(`ent: missing required field "User.concurrency"`)}
@@ -824,6 +887,18 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.FrozenBalance(); ok {
 		_spec.SetField(user.FieldFrozenBalance, field.TypeFloat64, value)
 		_node.FrozenBalance = value
+	}
+	if value, ok := _c.mutation.WalletAvailablePaid(); ok {
+		_spec.SetField(user.FieldWalletAvailablePaid, field.TypeFloat64, value)
+		_node.WalletAvailablePaid = value
+	}
+	if value, ok := _c.mutation.WalletFrozenPaid(); ok {
+		_spec.SetField(user.FieldWalletFrozenPaid, field.TypeFloat64, value)
+		_node.WalletFrozenPaid = value
+	}
+	if value, ok := _c.mutation.WalletComponentVersion(); ok {
+		_spec.SetField(user.FieldWalletComponentVersion, field.TypeInt64, value)
+		_node.WalletComponentVersion = value
 	}
 	if value, ok := _c.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)
@@ -1259,6 +1334,42 @@ func (u *UserUpsert) AddFrozenBalance(v float64) *UserUpsert {
 	return u
 }
 
+// SetWalletAvailablePaid sets the "wallet_available_paid" field.
+func (u *UserUpsert) SetWalletAvailablePaid(v float64) *UserUpsert {
+	u.Set(user.FieldWalletAvailablePaid, v)
+	return u
+}
+
+// UpdateWalletAvailablePaid sets the "wallet_available_paid" field to the value that was provided on create.
+func (u *UserUpsert) UpdateWalletAvailablePaid() *UserUpsert {
+	u.SetExcluded(user.FieldWalletAvailablePaid)
+	return u
+}
+
+// AddWalletAvailablePaid adds v to the "wallet_available_paid" field.
+func (u *UserUpsert) AddWalletAvailablePaid(v float64) *UserUpsert {
+	u.Add(user.FieldWalletAvailablePaid, v)
+	return u
+}
+
+// SetWalletFrozenPaid sets the "wallet_frozen_paid" field.
+func (u *UserUpsert) SetWalletFrozenPaid(v float64) *UserUpsert {
+	u.Set(user.FieldWalletFrozenPaid, v)
+	return u
+}
+
+// UpdateWalletFrozenPaid sets the "wallet_frozen_paid" field to the value that was provided on create.
+func (u *UserUpsert) UpdateWalletFrozenPaid() *UserUpsert {
+	u.SetExcluded(user.FieldWalletFrozenPaid)
+	return u
+}
+
+// AddWalletFrozenPaid adds v to the "wallet_frozen_paid" field.
+func (u *UserUpsert) AddWalletFrozenPaid(v float64) *UserUpsert {
+	u.Add(user.FieldWalletFrozenPaid, v)
+	return u
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (u *UserUpsert) SetConcurrency(v int) *UserUpsert {
 	u.Set(user.FieldConcurrency, v)
@@ -1531,6 +1642,9 @@ func (u *UserUpsertOne) UpdateNewValues() *UserUpsertOne {
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(user.FieldCreatedAt)
 		}
+		if _, exists := u.create.mutation.WalletComponentVersion(); exists {
+			s.SetIgnore(user.FieldWalletComponentVersion)
+		}
 	}))
 	return u
 }
@@ -1678,6 +1792,48 @@ func (u *UserUpsertOne) AddFrozenBalance(v float64) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateFrozenBalance() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateFrozenBalance()
+	})
+}
+
+// SetWalletAvailablePaid sets the "wallet_available_paid" field.
+func (u *UserUpsertOne) SetWalletAvailablePaid(v float64) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetWalletAvailablePaid(v)
+	})
+}
+
+// AddWalletAvailablePaid adds v to the "wallet_available_paid" field.
+func (u *UserUpsertOne) AddWalletAvailablePaid(v float64) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.AddWalletAvailablePaid(v)
+	})
+}
+
+// UpdateWalletAvailablePaid sets the "wallet_available_paid" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateWalletAvailablePaid() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateWalletAvailablePaid()
+	})
+}
+
+// SetWalletFrozenPaid sets the "wallet_frozen_paid" field.
+func (u *UserUpsertOne) SetWalletFrozenPaid(v float64) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetWalletFrozenPaid(v)
+	})
+}
+
+// AddWalletFrozenPaid adds v to the "wallet_frozen_paid" field.
+func (u *UserUpsertOne) AddWalletFrozenPaid(v float64) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.AddWalletFrozenPaid(v)
+	})
+}
+
+// UpdateWalletFrozenPaid sets the "wallet_frozen_paid" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateWalletFrozenPaid() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateWalletFrozenPaid()
 	})
 }
 
@@ -2161,6 +2317,9 @@ func (u *UserUpsertBulk) UpdateNewValues() *UserUpsertBulk {
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(user.FieldCreatedAt)
 			}
+			if _, exists := b.mutation.WalletComponentVersion(); exists {
+				s.SetIgnore(user.FieldWalletComponentVersion)
+			}
 		}
 	}))
 	return u
@@ -2309,6 +2468,48 @@ func (u *UserUpsertBulk) AddFrozenBalance(v float64) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateFrozenBalance() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateFrozenBalance()
+	})
+}
+
+// SetWalletAvailablePaid sets the "wallet_available_paid" field.
+func (u *UserUpsertBulk) SetWalletAvailablePaid(v float64) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetWalletAvailablePaid(v)
+	})
+}
+
+// AddWalletAvailablePaid adds v to the "wallet_available_paid" field.
+func (u *UserUpsertBulk) AddWalletAvailablePaid(v float64) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.AddWalletAvailablePaid(v)
+	})
+}
+
+// UpdateWalletAvailablePaid sets the "wallet_available_paid" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateWalletAvailablePaid() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateWalletAvailablePaid()
+	})
+}
+
+// SetWalletFrozenPaid sets the "wallet_frozen_paid" field.
+func (u *UserUpsertBulk) SetWalletFrozenPaid(v float64) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetWalletFrozenPaid(v)
+	})
+}
+
+// AddWalletFrozenPaid adds v to the "wallet_frozen_paid" field.
+func (u *UserUpsertBulk) AddWalletFrozenPaid(v float64) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.AddWalletFrozenPaid(v)
+	})
+}
+
+// UpdateWalletFrozenPaid sets the "wallet_frozen_paid" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateWalletFrozenPaid() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateWalletFrozenPaid()
 	})
 }
 

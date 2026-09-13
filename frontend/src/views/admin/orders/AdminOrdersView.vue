@@ -138,7 +138,17 @@
       </div>
     </BaseDialog>
 
-    <AdminRefundDialog :show="showRefundDialog" :order="selectedOrder" :submitting="refundMutationBusy" :require-force="refundRequireForce" :warning="refundWarning" @confirm="handleRefund" @cancel="closeRefundDialog" />
+    <AdminRefundDialog
+      :show="showRefundDialog"
+      :order="refundTarget"
+      :review="refundReview"
+      :loading="refundReviewLoading"
+      :error="refundReviewError"
+      :submitting="refundSubmitting"
+      :warning="refundWarning"
+      @confirm="handleRefund"
+      @cancel="closeRefundDialog"
+    />
     <TotpStepUpDialog :controller="stepUp" />
     <AdminInvoiceDialog :show="!!invoiceTarget" :order="invoiceTarget" :submitting="invoiceSubmitting" :retrying="invoiceEmailRetrying" @submit="handleInvoiceUpdate" @retry-email="handleInvoiceEmailRetry" @retry-feishu="handleInvoiceFeishuRetry" @close="invoiceTarget = null" />
   </AppLayout>
@@ -150,7 +160,8 @@ import { useI18n } from 'vue-i18n'
 import { RouterLink, useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
-import { extractI18nErrorMessage } from '@/utils/apiError'
+import type { RefundOrderRequest, RefundReview } from '@/api/admin/payment'
+import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import type { AdminUpdateInvoiceRequest, PaymentOrder } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -180,10 +191,7 @@ interface AuditLog {
 }
 
 interface RefundRequest {
-  amount: number
   reason: string
-  deduct_balance: boolean
-  force: boolean
 }
 
 const { t } = useI18n()
@@ -203,8 +211,11 @@ const orderPagination = reactive({ page: 1, page_size: 20, total: 0 })
 const selectedOrder = ref<PaymentOrder | null>(null)
 const showDetailDialog = ref(false)
 const showRefundDialog = ref(false)
+const refundTarget = ref<PaymentOrder | null>(null)
+const refundReview = ref<RefundReview | null>(null)
+const refundReviewLoading = ref(false)
+const refundReviewError = ref('')
 const refundSubmitting = ref(false)
-const refundRequireForce = ref(false)
 const refundWarning = ref('')
 const refundQueryingIds = ref(new Set<number>())
 const orderAuditLogs = ref<AuditLog[]>([])
@@ -328,12 +339,45 @@ async function handleRetryOrder(order: PaymentOrder) {
   catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
 }
 
+let refundDialogSession = 0
+let refundReviewRequest = 0
+
+function isCurrentRefundDialog(orderID: number, session: number): boolean {
+  return refundDialogSession === session && showRefundDialog.value && refundTarget.value?.id === orderID
+}
+
+async function loadRefundReview(order: PaymentOrder, session: number): Promise<void> {
+  const orderID = order.id
+  const request = ++refundReviewRequest
+  if (isCurrentRefundDialog(orderID, session)) {
+    refundReviewLoading.value = true
+    refundReviewError.value = ''
+    refundReview.value = null
+  }
+
+  try {
+    const res = await adminPaymentAPI.getRefundReview(orderID)
+    if (!isCurrentRefundDialog(orderID, session) || request !== refundReviewRequest) return
+    refundReview.value = res.data
+  } catch (err: unknown) {
+    if (!isCurrentRefundDialog(orderID, session) || request !== refundReviewRequest) return
+    refundReviewError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))
+  } finally {
+    if (isCurrentRefundDialog(orderID, session) && request === refundReviewRequest) {
+      refundReviewLoading.value = false
+    }
+  }
+}
+
 function openRefundDialog(order: PaymentOrder) {
   if (refundMutationBusy.value) return
-  selectedOrder.value = order
-  refundRequireForce.value = false
+  const session = ++refundDialogSession
+  refundTarget.value = order
+  refundReview.value = null
+  refundReviewError.value = ''
   refundWarning.value = order.invoice?.status === 'ISSUED' ? t('payment.invoice.admin.refundCorrectionWarning') : ''
   showRefundDialog.value = true
+  void loadRefundReview(order, session)
 }
 
 function openInvoiceDialog(order: PaymentOrder) {
@@ -390,8 +434,13 @@ async function handleInvoiceEmailRetry() {
 }
 
 function closeRefundDialog() {
+  refundDialogSession += 1
+  refundReviewRequest += 1
   showRefundDialog.value = false
-  refundRequireForce.value = false
+  refundTarget.value = null
+  refundReview.value = null
+  refundReviewLoading.value = false
+  refundReviewError.value = ''
   refundWarning.value = ''
 }
 
@@ -399,21 +448,23 @@ function isRefundPendingWarning(warning: string | undefined): boolean {
   return /pending|处理中|待/.test(String(warning || '').toLowerCase())
 }
 
-function closeRefundDialogFor(orderID: number) {
-  if (selectedOrder.value?.id === orderID) closeRefundDialog()
+function closeRefundDialogFor(orderID: number, session: number) {
+  if (isCurrentRefundDialog(orderID, session)) closeRefundDialog()
 }
 
 async function handleRefund(data: RefundRequest) {
-  if (refundMutationBusy.value || !selectedOrder.value) return
-  // Keep the exact operation immutable while a step-up prompt is open. The
-  // current selection can change through the surrounding admin view, but it
-  // must never redirect the retry to a different order or altered amount.
-  const orderID = selectedOrder.value.id
-  const request: RefundRequest = {
-    amount: data.amount,
+  const target = refundTarget.value
+  const review = refundReview.value
+  if (refundMutationBusy.value || !target || !review || !review.can_refund || review.requires_manual_review || !review.quote_revision) return
+
+  // Capture the exact server quote before the MFA prompt can suspend this
+  // operation. A later selection, quote refresh, close/reopen, or response
+  // must never redirect the retry to a different order or stale quote.
+  const orderID = target.id
+  const session = refundDialogSession
+  const request: RefundOrderRequest = {
+    quote_revision: review.quote_revision,
     reason: data.reason,
-    deduct_balance: data.deduct_balance,
-    force: data.force,
   }
   refundSubmitting.value = true
   try {
@@ -421,29 +472,27 @@ async function handleRefund(data: RefundRequest) {
     if (res.data.success) {
       if (res.data.warning) appStore.showWarning(res.data.warning)
       else appStore.showSuccess(t('payment.admin.refundSuccess'))
-      closeRefundDialogFor(orderID)
+      closeRefundDialogFor(orderID, session)
       loadOrders()
       return
     }
     if (isRefundPendingWarning(res.data.warning)) {
       appStore.showSuccess(t('payment.admin.refundPending'))
-      closeRefundDialogFor(orderID)
+      closeRefundDialogFor(orderID, session)
       loadOrders()
-      return
-    }
-    if (res.data.require_force) {
-      // Backend needs an explicit force confirmation (e.g. the user spent their
-      // balance after requesting the refund). Keep the dialog open and surface
-      // the force checkbox instead of dropping the admin back to the list.
-      if (selectedOrder.value?.id === orderID) {
-        refundRequireForce.value = true
-        refundWarning.value = res.data.warning || ''
-      }
       return
     }
     appStore.showError(res.data.warning || t('common.error'))
   } catch (err: unknown) {
-    if (!isStepUpCancelled(err)) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    if (isStepUpCancelled(err)) return
+    if (extractApiErrorCode(err) === 'REFUND_QUOTE_STALE') {
+      if (isCurrentRefundDialog(orderID, session)) {
+        appStore.showWarning(t('payment.admin.refundQuoteStale'))
+        await loadRefundReview(target, session)
+      }
+      return
+    }
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   }
   finally { refundSubmitting.value = false }
 }

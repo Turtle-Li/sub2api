@@ -1235,7 +1235,13 @@ func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, 
 
 func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount float64, options []RechargeOption) map[string]any {
 	option, _ := rechargeOptionForAmount(options, requestAmount)
+	giftCreditAmount := decimal.NewFromFloat(option.BalanceBonus).Round(2).InexactFloat64()
+	paidCreditAmount := decimal.NewFromFloat(creditedAmount).
+		Sub(decimal.NewFromFloat(giftCreditAmount)).
+		Round(2).
+		InexactFloat64()
 	return map[string]any{
+		"schema_version":            2,
 		"kind":                      "balance",
 		"label":                     option.Label,
 		"description":               option.Description,
@@ -1244,6 +1250,8 @@ func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount
 		"price":                     requestAmount,
 		"discount_percent":          rechargeOptionDiscountPercent(option),
 		"credited_amount":           creditedAmount,
+		"paid_credit_amount":        paidCreditAmount,
+		"gift_credit_amount":        giftCreditAmount,
 		"pay_amount":                payAmount,
 		"estimated_rate_multiplier": option.EstimatedRateMultiplier,
 		"estimated_tokens":          option.EstimatedTokens,

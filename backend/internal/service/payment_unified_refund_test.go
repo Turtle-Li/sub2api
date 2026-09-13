@@ -71,6 +71,8 @@ func newUnifiedRefundSQLiteClient(t *testing.T) *dbent.Client {
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(entsql.OpenDB(dialect.SQLite, db))))
 	t.Cleanup(func() { _ = client.Close() })
 	installUnifiedRefundTestMigration(t, client, true)
+	installRefundAccountingSQLiteTables(t, client)
+	installUnifiedRefundAccountingSQLiteColumns(t, client)
 	return client
 }
 

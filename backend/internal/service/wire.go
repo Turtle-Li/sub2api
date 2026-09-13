@@ -739,6 +739,7 @@ func ProvideOpsService(
 	systemLogSink *OpsSystemLogSink,
 	settingService *SettingService,
 	authCacheInvalidationWorker *AuthCacheInvalidationWorker,
+	subscriptionCacheInvalidationWorker *SubscriptionCacheInvalidationWorker,
 	apiKeyService *APIKeyService,
 ) *OpsService {
 	svc := NewOpsService(
@@ -761,6 +762,7 @@ func ProvideOpsService(
 		settingService.WarmOpenAIQuotaAutoPauseSettings(context.Background())
 	}
 	svc.authCacheInvalidationWorker = authCacheInvalidationWorker
+	svc.subscriptionCacheInvalidationWorker = subscriptionCacheInvalidationWorker
 	svc.apiKeyService = apiKeyService
 	svc.StartRuntimeSettingsRefresh(context.Background())
 	svc.StartNetworkBandwidthSampler()
@@ -849,6 +851,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	ProvideAuthCacheInvalidationWorker,
+	ProvideSubscriptionCacheInvalidationWorker,
 	NewGroupService,
 	NewCompositeRouteResolver,
 	NewAccountService,

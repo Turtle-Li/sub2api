@@ -53,15 +53,16 @@ type OpsService struct {
 	// getAccountAvailability is a unit-test hook for overriding account availability lookup.
 	getAccountAvailability func(ctx context.Context, platformFilter string, groupIDFilter *int64) (*OpsAccountAvailability, error)
 
-	concurrencyService          *ConcurrencyService
-	gatewayService              *GatewayService
-	openAIGatewayService        *OpenAIGatewayService
-	geminiCompatService         *GeminiMessagesCompatService
-	antigravityGatewayService   *AntigravityGatewayService
-	systemLogSink               *OpsSystemLogSink
-	ingressRejectAggregator     *OpsIngressRejectAggregator
-	authCacheInvalidationWorker *AuthCacheInvalidationWorker
-	apiKeyService               *APIKeyService
+	concurrencyService                  *ConcurrencyService
+	gatewayService                      *GatewayService
+	openAIGatewayService                *OpenAIGatewayService
+	geminiCompatService                 *GeminiMessagesCompatService
+	antigravityGatewayService           *AntigravityGatewayService
+	systemLogSink                       *OpsSystemLogSink
+	ingressRejectAggregator             *OpsIngressRejectAggregator
+	authCacheInvalidationWorker         *AuthCacheInvalidationWorker
+	subscriptionCacheInvalidationWorker *SubscriptionCacheInvalidationWorker
+	apiKeyService                       *APIKeyService
 
 	// cleanupReloader 由 wire 在 OpsCleanupService 构造完成后通过 SetCleanupReloader 注入。
 	// 解耦避免 OpsService -> OpsCleanupService 的硬依赖（cleanup 也读 settings，会循环）。

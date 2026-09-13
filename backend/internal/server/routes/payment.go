@@ -95,6 +95,7 @@ func RegisterPaymentRoutes(
 			adminOrders.POST("/:id/invoice/feishu/retry", adminPaymentHandler.RetryInvoiceFeishuNotification)
 			adminOrders.POST("/:id/cancel", adminPaymentHandler.CancelOrder)
 			adminOrders.POST("/:id/retry", adminPaymentHandler.RetryFulfillment)
+			adminOrders.GET("/:id/refund-review", adminPaymentHandler.GetRefundReview)
 			adminOrders.POST("/:id/refund", adminPaymentHandler.ProcessRefund)
 			adminOrders.POST("/:id/refund/query", adminPaymentHandler.QueryAndFinalizeRefund)
 		}

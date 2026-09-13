@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import type { RefundReview } from '@/api/admin/payment'
 import type { PaymentOrder } from '@/types/payment'
 import AdminOrderDetail from '../AdminOrderDetail.vue'
 import AdminOrderTable from '../AdminOrderTable.vue'
@@ -73,16 +74,39 @@ describe('admin order currency display', () => {
     expect(text).toContain('$25.00')
   })
 
-  it('uses order currency for pay_amount and USD for refundable balance amounts', () => {
+  it('uses order currency for cash and USD for balance-credit effects', () => {
+    const review: RefundReview = {
+      order_id: 1,
+      order_type: 'balance',
+      currency: 'CNY',
+      can_refund: true,
+      requires_manual_review: false,
+      quote_revision: 'refund-review-1',
+      generated_at: '2026-06-25T10:05:00Z',
+      default_refund_amount: 80,
+      max_refund_amount: 80,
+      entitlement_amount: 100,
+      balance: {
+        original_paid_credit: 80,
+        original_gift_credit: 20,
+        remaining_paid_credit: 80,
+        available_balance: 100,
+        available_paid_credit: 80,
+        available_gift_credit: 20,
+        paid_credit_to_reclaim: 80,
+        gift_credit_to_reclaim: 20,
+      },
+    }
     const wrapper = mount(AdminRefundDialog, {
       props: {
         show: true,
         order: orderFactory({
-          currency: 'USD',
+          currency: 'CNY',
+          order_type: 'balance',
           status: 'PARTIALLY_REFUNDED',
           refund_amount: 20,
         }),
-        userBalance: 200,
+        review,
       },
       global: {
         stubs: {
@@ -92,11 +116,11 @@ describe('admin order currency display', () => {
     })
 
     const text = wrapper.text()
-    expect(text).toContain('$108.00')
+    expect(text).toContain('¥108.00')
     expect(text).toContain('$100.00')
     expect(text).toContain('$20.00')
     expect(text).toContain('$80.00')
-    expect(text).toContain('$200.00')
+    expect(text).toContain('¥80.00')
   })
 
   it('renders payment currency consistently in the shared order table', () => {

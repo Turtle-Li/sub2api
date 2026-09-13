@@ -150,6 +150,14 @@ type RefundPlan struct {
 	BalanceToDeduct     float64
 	SubDaysToDeduct     int
 	SubscriptionID      int64
+	// Reviewed refunds carry an immutable server state revision and reserve
+	// entitlement effects before any provider network request.
+	QuoteRevision                string
+	ReviewKind                   string
+	WalletPaidToReserve          float64
+	WalletGiftToReserve          float64
+	SubscriptionSecondsToReserve int64
+	SubscriptionNewExpiry        time.Time
 }
 
 type RefundResult struct {

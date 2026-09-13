@@ -91,7 +91,7 @@ func TestAdminRefundMutationsRequireStepUpBeforeCallingPaymentService(t *testing
 		path string
 		body string
 	}{
-		{name: "process", path: "/api/v1/admin/payment/orders/1/refund", body: `{"amount":1,"reason":"test"}`},
+		{name: "process", path: "/api/v1/admin/payment/orders/1/refund", body: `{"quote_revision":"test-revision","reason":"test"}`},
 		{name: "query", path: "/api/v1/admin/payment/orders/1/refund/query", body: ""},
 	}
 
@@ -141,7 +141,7 @@ func TestAdminRefundMutationsReachPaymentServiceWithStepUpGrant(t *testing.T) {
 		path string
 		body string
 	}{
-		{name: "process", path: "/api/v1/admin/payment/orders/999/refund", body: `{"amount":1,"reason":"test"}`},
+		{name: "process", path: "/api/v1/admin/payment/orders/999/refund", body: `{"quote_revision":"test-revision","reason":"test"}`},
 		{name: "query", path: "/api/v1/admin/payment/orders/999/refund/query", body: ""},
 	} {
 		t.Run(endpoint.name, func(t *testing.T) {

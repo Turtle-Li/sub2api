@@ -95,6 +95,21 @@ func FrozenBalance(v float64) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldFrozenBalance, v))
 }
 
+// WalletAvailablePaid applies equality check predicate on the "wallet_available_paid" field. It's identical to WalletAvailablePaidEQ.
+func WalletAvailablePaid(v float64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldWalletAvailablePaid, v))
+}
+
+// WalletFrozenPaid applies equality check predicate on the "wallet_frozen_paid" field. It's identical to WalletFrozenPaidEQ.
+func WalletFrozenPaid(v float64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldWalletFrozenPaid, v))
+}
+
+// WalletComponentVersion applies equality check predicate on the "wallet_component_version" field. It's identical to WalletComponentVersionEQ.
+func WalletComponentVersion(v int64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldWalletComponentVersion, v))
+}
+
 // Concurrency applies equality check predicate on the "concurrency" field. It's identical to ConcurrencyEQ.
 func Concurrency(v int) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldConcurrency, v))
@@ -583,6 +598,126 @@ func FrozenBalanceLT(v float64) predicate.User {
 // FrozenBalanceLTE applies the LTE predicate on the "frozen_balance" field.
 func FrozenBalanceLTE(v float64) predicate.User {
 	return predicate.User(sql.FieldLTE(FieldFrozenBalance, v))
+}
+
+// WalletAvailablePaidEQ applies the EQ predicate on the "wallet_available_paid" field.
+func WalletAvailablePaidEQ(v float64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldWalletAvailablePaid, v))
+}
+
+// WalletAvailablePaidNEQ applies the NEQ predicate on the "wallet_available_paid" field.
+func WalletAvailablePaidNEQ(v float64) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldWalletAvailablePaid, v))
+}
+
+// WalletAvailablePaidIn applies the In predicate on the "wallet_available_paid" field.
+func WalletAvailablePaidIn(vs ...float64) predicate.User {
+	return predicate.User(sql.FieldIn(FieldWalletAvailablePaid, vs...))
+}
+
+// WalletAvailablePaidNotIn applies the NotIn predicate on the "wallet_available_paid" field.
+func WalletAvailablePaidNotIn(vs ...float64) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldWalletAvailablePaid, vs...))
+}
+
+// WalletAvailablePaidGT applies the GT predicate on the "wallet_available_paid" field.
+func WalletAvailablePaidGT(v float64) predicate.User {
+	return predicate.User(sql.FieldGT(FieldWalletAvailablePaid, v))
+}
+
+// WalletAvailablePaidGTE applies the GTE predicate on the "wallet_available_paid" field.
+func WalletAvailablePaidGTE(v float64) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldWalletAvailablePaid, v))
+}
+
+// WalletAvailablePaidLT applies the LT predicate on the "wallet_available_paid" field.
+func WalletAvailablePaidLT(v float64) predicate.User {
+	return predicate.User(sql.FieldLT(FieldWalletAvailablePaid, v))
+}
+
+// WalletAvailablePaidLTE applies the LTE predicate on the "wallet_available_paid" field.
+func WalletAvailablePaidLTE(v float64) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldWalletAvailablePaid, v))
+}
+
+// WalletFrozenPaidEQ applies the EQ predicate on the "wallet_frozen_paid" field.
+func WalletFrozenPaidEQ(v float64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldWalletFrozenPaid, v))
+}
+
+// WalletFrozenPaidNEQ applies the NEQ predicate on the "wallet_frozen_paid" field.
+func WalletFrozenPaidNEQ(v float64) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldWalletFrozenPaid, v))
+}
+
+// WalletFrozenPaidIn applies the In predicate on the "wallet_frozen_paid" field.
+func WalletFrozenPaidIn(vs ...float64) predicate.User {
+	return predicate.User(sql.FieldIn(FieldWalletFrozenPaid, vs...))
+}
+
+// WalletFrozenPaidNotIn applies the NotIn predicate on the "wallet_frozen_paid" field.
+func WalletFrozenPaidNotIn(vs ...float64) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldWalletFrozenPaid, vs...))
+}
+
+// WalletFrozenPaidGT applies the GT predicate on the "wallet_frozen_paid" field.
+func WalletFrozenPaidGT(v float64) predicate.User {
+	return predicate.User(sql.FieldGT(FieldWalletFrozenPaid, v))
+}
+
+// WalletFrozenPaidGTE applies the GTE predicate on the "wallet_frozen_paid" field.
+func WalletFrozenPaidGTE(v float64) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldWalletFrozenPaid, v))
+}
+
+// WalletFrozenPaidLT applies the LT predicate on the "wallet_frozen_paid" field.
+func WalletFrozenPaidLT(v float64) predicate.User {
+	return predicate.User(sql.FieldLT(FieldWalletFrozenPaid, v))
+}
+
+// WalletFrozenPaidLTE applies the LTE predicate on the "wallet_frozen_paid" field.
+func WalletFrozenPaidLTE(v float64) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldWalletFrozenPaid, v))
+}
+
+// WalletComponentVersionEQ applies the EQ predicate on the "wallet_component_version" field.
+func WalletComponentVersionEQ(v int64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldWalletComponentVersion, v))
+}
+
+// WalletComponentVersionNEQ applies the NEQ predicate on the "wallet_component_version" field.
+func WalletComponentVersionNEQ(v int64) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldWalletComponentVersion, v))
+}
+
+// WalletComponentVersionIn applies the In predicate on the "wallet_component_version" field.
+func WalletComponentVersionIn(vs ...int64) predicate.User {
+	return predicate.User(sql.FieldIn(FieldWalletComponentVersion, vs...))
+}
+
+// WalletComponentVersionNotIn applies the NotIn predicate on the "wallet_component_version" field.
+func WalletComponentVersionNotIn(vs ...int64) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldWalletComponentVersion, vs...))
+}
+
+// WalletComponentVersionGT applies the GT predicate on the "wallet_component_version" field.
+func WalletComponentVersionGT(v int64) predicate.User {
+	return predicate.User(sql.FieldGT(FieldWalletComponentVersion, v))
+}
+
+// WalletComponentVersionGTE applies the GTE predicate on the "wallet_component_version" field.
+func WalletComponentVersionGTE(v int64) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldWalletComponentVersion, v))
+}
+
+// WalletComponentVersionLT applies the LT predicate on the "wallet_component_version" field.
+func WalletComponentVersionLT(v int64) predicate.User {
+	return predicate.User(sql.FieldLT(FieldWalletComponentVersion, v))
+}
+
+// WalletComponentVersionLTE applies the LTE predicate on the "wallet_component_version" field.
+func WalletComponentVersionLTE(v int64) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldWalletComponentVersion, v))
 }
 
 // ConcurrencyEQ applies the EQ predicate on the "concurrency" field.

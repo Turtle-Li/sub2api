@@ -175,12 +175,19 @@ func (s *SubscriptionService) StartSubCacheInvalidationSubscriber(ctx context.Co
 }
 
 func (s *SubscriptionService) invalidateSubscriptionCaches(userID, groupID int64) error {
+	return s.InvalidateSubscriptionCaches(context.Background(), userID, groupID)
+}
+
+// InvalidateSubscriptionCaches removes the local entry, deletes the shared
+// billing cache, and publishes cross-instance L1 invalidation. Callers that
+// already own retry semantics can supply their own bounded context.
+func (s *SubscriptionService) InvalidateSubscriptionCaches(ctx context.Context, userID, groupID int64) error {
 	s.InvalidateSubCacheSync(userID, groupID)
 	if s.billingCacheService == nil {
 		return nil
 	}
 
-	cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID); err != nil {
 		return fmt.Errorf("invalidate billing subscription cache: %w", err)
@@ -216,17 +223,23 @@ func (s *SubscriptionService) AssignSubscription(ctx context.Context, input *Ass
 //
 // 如果没有订阅：创建新订阅
 func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, bool, error) {
-	return s.assignOrExtendSubscription(ctx, input, false)
+	sub, extended, _, err := s.assignOrExtendSubscription(ctx, input, false)
+	return sub, extended, err
 }
 
-func (s *SubscriptionService) assignOrExtendSubscription(ctx context.Context, input *AssignSubscriptionInput, deferCacheInvalidation bool) (*UserSubscription, bool, error) {
+// assignOrExtendSubscription also returns the exact start of the term granted by
+// this call. For renewals the value is captured from the locked subscription row,
+// so payment fulfillment can persist correct refund provenance even when another
+// order creates or extends the same subscription between its preliminary lookup
+// and this operation.
+func (s *SubscriptionService) assignOrExtendSubscription(ctx context.Context, input *AssignSubscriptionInput, deferCacheInvalidation bool) (*UserSubscription, bool, time.Time, error) {
 	// 检查分组是否存在且为订阅类型
 	group, err := s.groupRepo.GetByID(ctx, input.GroupID)
 	if err != nil {
-		return nil, false, fmt.Errorf("group not found: %w", err)
+		return nil, false, time.Time{}, fmt.Errorf("group not found: %w", err)
 	}
 	if !group.IsSubscriptionType() {
-		return nil, false, ErrGroupNotSubscriptionType
+		return nil, false, time.Time{}, ErrGroupNotSubscriptionType
 	}
 
 	// 查询是否已有订阅
@@ -246,8 +259,9 @@ func (s *SubscriptionService) assignOrExtendSubscription(ctx context.Context, in
 
 	// 已有订阅，执行续期（在事务中完成所有更新）
 	if existingSub != nil {
-		if err := s.updateExistingSubscriptionTerm(ctx, existingSub.ID, validityDays, input.Notes, false); err != nil {
-			return nil, false, err
+		termStart, err := s.updateExistingSubscriptionTerm(ctx, existingSub.ID, validityDays, input.Notes, false)
+		if err != nil {
+			return nil, false, time.Time{}, err
 		}
 
 		// 失效订阅缓存
@@ -255,19 +269,19 @@ func (s *SubscriptionService) assignOrExtendSubscription(ctx context.Context, in
 
 		// 返回更新后的订阅
 		sub, err := s.userSubRepo.GetByID(ctx, existingSub.ID)
-		return sub, true, err // true 表示是续期
+		return sub, true, termStart, err // true 表示是续期
 	}
 
 	// 没有订阅，创建新订阅
 	sub, err := s.createSubscription(ctx, input)
 	if err != nil {
-		return nil, false, err
+		return nil, false, time.Time{}, err
 	}
 
 	// 失效订阅缓存
 	s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, deferCacheInvalidation)
 
-	return sub, false, nil // false 表示是新建
+	return sub, false, sub.StartsAt, nil // false 表示是新建
 }
 
 func (s *SubscriptionService) maybeInvalidateAssignmentCaches(userID, groupID int64, deferred bool) {
@@ -294,13 +308,15 @@ func (s *SubscriptionService) updateExistingSubscriptionTerm(
 	validityDays int,
 	notes string,
 	assignmentSemantics bool,
-) error {
-	return s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
+) (time.Time, error) {
+	var termStart time.Time
+	err := s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
 		existingSub, err := s.userSubRepo.GetByIDForUpdate(txCtx, subscriptionID)
 		if err != nil {
 			return fmt.Errorf("lock subscription for renewal: %w", err)
 		}
 		if assignmentSemantics && existingSub.Status == SubscriptionStatusSuspended {
+			termStart = existingSub.ExpiresAt
 			return nil
 		}
 
@@ -315,7 +331,10 @@ func (s *SubscriptionService) updateExistingSubscriptionTerm(
 		}
 		newExpiresAt := existingSub.ExpiresAt.AddDate(0, 0, validityDays)
 		if isExpired {
+			termStart = now
 			newExpiresAt = now.AddDate(0, 0, validityDays)
+		} else {
+			termStart = existingSub.ExpiresAt
 		}
 		if newExpiresAt.After(MaxExpiresAt) {
 			newExpiresAt = MaxExpiresAt
@@ -353,6 +372,7 @@ func (s *SubscriptionService) updateExistingSubscriptionTerm(
 
 		return nil
 	})
+	return termStart, err
 }
 
 func (s *SubscriptionService) withSubscriptionUpdateTx(ctx context.Context, fn func(context.Context) error) error {
@@ -528,7 +548,7 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 		if sub.Status == SubscriptionStatusExpired ||
 			(sub.Status != SubscriptionStatusSuspended && !sub.ExpiresAt.After(now)) {
 			validityDays := normalizeAssignValidityDays(input.ValidityDays)
-			if err := s.updateExistingSubscriptionTerm(ctx, sub.ID, validityDays, input.Notes, true); err != nil {
+			if _, err := s.updateExistingSubscriptionTerm(ctx, sub.ID, validityDays, input.Notes, true); err != nil {
 				return nil, false, err
 			}
 			s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, false)

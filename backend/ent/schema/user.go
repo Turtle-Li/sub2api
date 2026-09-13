@@ -52,6 +52,20 @@ func (User) Fields() []ent.Field {
 		field.Float("frozen_balance").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Default(0),
+		// wallet_available_paid and wallet_frozen_paid are the refundable paid
+		// principal contained in the two aggregate balance buckets. Gifted and
+		// legacy-unattributed credit is the remainder. PostgreSQL migration 245
+		// keeps these fields synchronized for every balance mutation so refund
+		// review never has to infer principal from total_recharged.
+		field.Float("wallet_available_paid").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Default(0),
+		field.Float("wallet_frozen_paid").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Default(0),
+		field.Int64("wallet_component_version").
+			Default(0).
+			Immutable(),
 		field.Int("concurrency").
 			Default(5),
 		field.String("status").

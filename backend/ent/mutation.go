@@ -53381,6 +53381,12 @@ type UserMutation struct {
 	addbalance                    *float64
 	frozen_balance                *float64
 	addfrozen_balance             *float64
+	wallet_available_paid         *float64
+	addwallet_available_paid      *float64
+	wallet_frozen_paid            *float64
+	addwallet_frozen_paid         *float64
+	wallet_component_version      *int64
+	addwallet_component_version   *int64
 	concurrency                   *int
 	addconcurrency                *int
 	status                        *string
@@ -53884,6 +53890,174 @@ func (m *UserMutation) AddedFrozenBalance() (r float64, exists bool) {
 func (m *UserMutation) ResetFrozenBalance() {
 	m.frozen_balance = nil
 	m.addfrozen_balance = nil
+}
+
+// SetWalletAvailablePaid sets the "wallet_available_paid" field.
+func (m *UserMutation) SetWalletAvailablePaid(f float64) {
+	m.wallet_available_paid = &f
+	m.addwallet_available_paid = nil
+}
+
+// WalletAvailablePaid returns the value of the "wallet_available_paid" field in the mutation.
+func (m *UserMutation) WalletAvailablePaid() (r float64, exists bool) {
+	v := m.wallet_available_paid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWalletAvailablePaid returns the old "wallet_available_paid" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldWalletAvailablePaid(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWalletAvailablePaid is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWalletAvailablePaid requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWalletAvailablePaid: %w", err)
+	}
+	return oldValue.WalletAvailablePaid, nil
+}
+
+// AddWalletAvailablePaid adds f to the "wallet_available_paid" field.
+func (m *UserMutation) AddWalletAvailablePaid(f float64) {
+	if m.addwallet_available_paid != nil {
+		*m.addwallet_available_paid += f
+	} else {
+		m.addwallet_available_paid = &f
+	}
+}
+
+// AddedWalletAvailablePaid returns the value that was added to the "wallet_available_paid" field in this mutation.
+func (m *UserMutation) AddedWalletAvailablePaid() (r float64, exists bool) {
+	v := m.addwallet_available_paid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetWalletAvailablePaid resets all changes to the "wallet_available_paid" field.
+func (m *UserMutation) ResetWalletAvailablePaid() {
+	m.wallet_available_paid = nil
+	m.addwallet_available_paid = nil
+}
+
+// SetWalletFrozenPaid sets the "wallet_frozen_paid" field.
+func (m *UserMutation) SetWalletFrozenPaid(f float64) {
+	m.wallet_frozen_paid = &f
+	m.addwallet_frozen_paid = nil
+}
+
+// WalletFrozenPaid returns the value of the "wallet_frozen_paid" field in the mutation.
+func (m *UserMutation) WalletFrozenPaid() (r float64, exists bool) {
+	v := m.wallet_frozen_paid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWalletFrozenPaid returns the old "wallet_frozen_paid" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldWalletFrozenPaid(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWalletFrozenPaid is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWalletFrozenPaid requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWalletFrozenPaid: %w", err)
+	}
+	return oldValue.WalletFrozenPaid, nil
+}
+
+// AddWalletFrozenPaid adds f to the "wallet_frozen_paid" field.
+func (m *UserMutation) AddWalletFrozenPaid(f float64) {
+	if m.addwallet_frozen_paid != nil {
+		*m.addwallet_frozen_paid += f
+	} else {
+		m.addwallet_frozen_paid = &f
+	}
+}
+
+// AddedWalletFrozenPaid returns the value that was added to the "wallet_frozen_paid" field in this mutation.
+func (m *UserMutation) AddedWalletFrozenPaid() (r float64, exists bool) {
+	v := m.addwallet_frozen_paid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetWalletFrozenPaid resets all changes to the "wallet_frozen_paid" field.
+func (m *UserMutation) ResetWalletFrozenPaid() {
+	m.wallet_frozen_paid = nil
+	m.addwallet_frozen_paid = nil
+}
+
+// SetWalletComponentVersion sets the "wallet_component_version" field.
+func (m *UserMutation) SetWalletComponentVersion(i int64) {
+	m.wallet_component_version = &i
+	m.addwallet_component_version = nil
+}
+
+// WalletComponentVersion returns the value of the "wallet_component_version" field in the mutation.
+func (m *UserMutation) WalletComponentVersion() (r int64, exists bool) {
+	v := m.wallet_component_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWalletComponentVersion returns the old "wallet_component_version" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldWalletComponentVersion(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWalletComponentVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWalletComponentVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWalletComponentVersion: %w", err)
+	}
+	return oldValue.WalletComponentVersion, nil
+}
+
+// AddWalletComponentVersion adds i to the "wallet_component_version" field.
+func (m *UserMutation) AddWalletComponentVersion(i int64) {
+	if m.addwallet_component_version != nil {
+		*m.addwallet_component_version += i
+	} else {
+		m.addwallet_component_version = &i
+	}
+}
+
+// AddedWalletComponentVersion returns the value that was added to the "wallet_component_version" field in this mutation.
+func (m *UserMutation) AddedWalletComponentVersion() (r int64, exists bool) {
+	v := m.addwallet_component_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetWalletComponentVersion resets all changes to the "wallet_component_version" field.
+func (m *UserMutation) ResetWalletComponentVersion() {
+	m.wallet_component_version = nil
+	m.addwallet_component_version = nil
 }
 
 // SetConcurrency sets the "concurrency" field.
@@ -55380,7 +55554,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 25)
+	fields := make([]string, 0, 28)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -55404,6 +55578,15 @@ func (m *UserMutation) Fields() []string {
 	}
 	if m.frozen_balance != nil {
 		fields = append(fields, user.FieldFrozenBalance)
+	}
+	if m.wallet_available_paid != nil {
+		fields = append(fields, user.FieldWalletAvailablePaid)
+	}
+	if m.wallet_frozen_paid != nil {
+		fields = append(fields, user.FieldWalletFrozenPaid)
+	}
+	if m.wallet_component_version != nil {
+		fields = append(fields, user.FieldWalletComponentVersion)
 	}
 	if m.concurrency != nil {
 		fields = append(fields, user.FieldConcurrency)
@@ -55480,6 +55663,12 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.Balance()
 	case user.FieldFrozenBalance:
 		return m.FrozenBalance()
+	case user.FieldWalletAvailablePaid:
+		return m.WalletAvailablePaid()
+	case user.FieldWalletFrozenPaid:
+		return m.WalletFrozenPaid()
+	case user.FieldWalletComponentVersion:
+		return m.WalletComponentVersion()
 	case user.FieldConcurrency:
 		return m.Concurrency()
 	case user.FieldStatus:
@@ -55539,6 +55728,12 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldBalance(ctx)
 	case user.FieldFrozenBalance:
 		return m.OldFrozenBalance(ctx)
+	case user.FieldWalletAvailablePaid:
+		return m.OldWalletAvailablePaid(ctx)
+	case user.FieldWalletFrozenPaid:
+		return m.OldWalletFrozenPaid(ctx)
+	case user.FieldWalletComponentVersion:
+		return m.OldWalletComponentVersion(ctx)
 	case user.FieldConcurrency:
 		return m.OldConcurrency(ctx)
 	case user.FieldStatus:
@@ -55637,6 +55832,27 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetFrozenBalance(v)
+		return nil
+	case user.FieldWalletAvailablePaid:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWalletAvailablePaid(v)
+		return nil
+	case user.FieldWalletFrozenPaid:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWalletFrozenPaid(v)
+		return nil
+	case user.FieldWalletComponentVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWalletComponentVersion(v)
 		return nil
 	case user.FieldConcurrency:
 		v, ok := value.(int)
@@ -55771,6 +55987,15 @@ func (m *UserMutation) AddedFields() []string {
 	if m.addfrozen_balance != nil {
 		fields = append(fields, user.FieldFrozenBalance)
 	}
+	if m.addwallet_available_paid != nil {
+		fields = append(fields, user.FieldWalletAvailablePaid)
+	}
+	if m.addwallet_frozen_paid != nil {
+		fields = append(fields, user.FieldWalletFrozenPaid)
+	}
+	if m.addwallet_component_version != nil {
+		fields = append(fields, user.FieldWalletComponentVersion)
+	}
 	if m.addconcurrency != nil {
 		fields = append(fields, user.FieldConcurrency)
 	}
@@ -55795,6 +56020,12 @@ func (m *UserMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedBalance()
 	case user.FieldFrozenBalance:
 		return m.AddedFrozenBalance()
+	case user.FieldWalletAvailablePaid:
+		return m.AddedWalletAvailablePaid()
+	case user.FieldWalletFrozenPaid:
+		return m.AddedWalletFrozenPaid()
+	case user.FieldWalletComponentVersion:
+		return m.AddedWalletComponentVersion()
 	case user.FieldConcurrency:
 		return m.AddedConcurrency()
 	case user.FieldBalanceNotifyThreshold:
@@ -55825,6 +56056,27 @@ func (m *UserMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddFrozenBalance(v)
+		return nil
+	case user.FieldWalletAvailablePaid:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWalletAvailablePaid(v)
+		return nil
+	case user.FieldWalletFrozenPaid:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWalletFrozenPaid(v)
+		return nil
+	case user.FieldWalletComponentVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWalletComponentVersion(v)
 		return nil
 	case user.FieldConcurrency:
 		v, ok := value.(int)
@@ -55943,6 +56195,15 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldFrozenBalance:
 		m.ResetFrozenBalance()
+		return nil
+	case user.FieldWalletAvailablePaid:
+		m.ResetWalletAvailablePaid()
+		return nil
+	case user.FieldWalletFrozenPaid:
+		m.ResetWalletFrozenPaid()
+		return nil
+	case user.FieldWalletComponentVersion:
+		m.ResetWalletComponentVersion()
 		return nil
 	case user.FieldConcurrency:
 		m.ResetConcurrency()

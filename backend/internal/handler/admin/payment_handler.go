@@ -355,10 +355,25 @@ func defaultAdminPaymentOrderInvoicePresentation(order *dbent.PaymentOrder) serv
 
 // AdminProcessRefundRequest is the request body for admin refund processing.
 type AdminProcessRefundRequest struct {
-	Amount        float64 `json:"amount"`
-	Reason        string  `json:"reason"`
-	Force         bool    `json:"force"`
-	DeductBalance bool    `json:"deduct_balance"`
+	QuoteRevision string `json:"quote_revision" binding:"required"`
+	Reason        string `json:"reason"`
+}
+
+// GetRefundReview returns the current server-calculated cash amount and the
+// entitlement effect that will be reserved. It is read-only; ProcessRefund
+// revalidates the revision under financial row locks.
+// GET /api/v1/admin/payment/orders/:id/refund-review
+func (h *PaymentHandler) GetRefundReview(c *gin.Context) {
+	orderID, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+	review, err := h.paymentService.ReviewRefund(c.Request.Context(), orderID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, review)
 }
 
 // ProcessRefund processes a refund for an order (admin).
@@ -381,13 +396,9 @@ func (h *PaymentHandler) ProcessRefund(c *gin.Context) {
 		return
 	}
 
-	plan, earlyResult, err := h.paymentService.PrepareRefund(c.Request.Context(), orderID, req.Amount, req.Reason, req.Force, req.DeductBalance)
+	plan, err := h.paymentService.PrepareReviewedRefund(c.Request.Context(), orderID, req.QuoteRevision, req.Reason)
 	if err != nil {
 		response.ErrorFrom(c, err)
-		return
-	}
-	if earlyResult != nil {
-		response.Success(c, earlyResult)
 		return
 	}
 

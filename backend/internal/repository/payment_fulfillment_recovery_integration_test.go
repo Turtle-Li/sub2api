@@ -128,11 +128,16 @@ func (f *paymentFulfillmentRecoveryPostgresFixture) createPaidSubscriptionOrder(
 
 func (f *paymentFulfillmentRecoveryPostgresFixture) paymentService() *service.PaymentService {
 	f.t.Helper()
+	return f.paymentServiceWithSubscriptionRepo(NewUserSubscriptionRepository(f.client))
+}
+
+func (f *paymentFulfillmentRecoveryPostgresFixture) paymentServiceWithSubscriptionRepo(userSubRepo service.UserSubscriptionRepository) *service.PaymentService {
+	f.t.Helper()
 	userRepo := NewUserRepository(f.client, integrationDB)
 	groupRepo := NewGroupRepository(f.client, integrationDB)
 	subscriptionSvc := service.NewSubscriptionService(
 		groupRepo,
-		NewUserSubscriptionRepository(f.client),
+		userSubRepo,
 		nil,
 		f.client,
 		nil,
@@ -150,6 +155,40 @@ func (f *paymentFulfillmentRecoveryPostgresFixture) paymentService() *service.Pa
 	return service.NewPaymentService(f.client, nil, nil, redeemSvc, subscriptionSvc, nil, userRepo, groupRepo, nil)
 }
 
+// injectSubscriptionBetweenLookupsRepo deterministically reproduces the window
+// where payment fulfillment's first lookup sees no subscription, but another
+// committed order creates one before AssignOrExtendSubscription checks again.
+type injectSubscriptionBetweenLookupsRepo struct {
+	service.UserSubscriptionRepository
+	userID, groupID int64
+	calls           atomic.Int32
+	injectedStart   time.Time
+	injectedEnd     time.Time
+}
+
+func (r *injectSubscriptionBetweenLookupsRepo) GetByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+	if userID != r.userID || groupID != r.groupID {
+		return r.UserSubscriptionRepository.GetByUserIDAndGroupID(ctx, userID, groupID)
+	}
+	switch r.calls.Add(1) {
+	case 1:
+		return nil, service.ErrSubscriptionNotFound
+	case 2:
+		r.injectedStart = time.Now().UTC().Truncate(time.Microsecond)
+		r.injectedEnd = r.injectedStart.AddDate(0, 0, 30)
+		concurrent := &service.UserSubscription{
+			UserID: r.userID, GroupID: r.groupID,
+			StartsAt: r.injectedStart, ExpiresAt: r.injectedEnd,
+			Status: service.SubscriptionStatusActive, AssignedAt: r.injectedStart,
+			Notes: "created by concurrent payment",
+		}
+		if err := r.UserSubscriptionRepository.Create(context.Background(), concurrent); err != nil {
+			return nil, err
+		}
+	}
+	return r.UserSubscriptionRepository.GetByUserIDAndGroupID(ctx, userID, groupID)
+}
+
 func (f *paymentFulfillmentRecoveryPostgresFixture) cleanup() {
 	ctx := context.Background()
 	for _, orderID := range f.orderIDs {
@@ -158,6 +197,8 @@ func (f *paymentFulfillmentRecoveryPostgresFixture) cleanup() {
 			`DELETE FROM unified_payment_refund_attempts WHERE order_id = $1`,
 			`DELETE FROM payment_audit_logs WHERE order_id = $1`,
 			`DELETE FROM subscription_reset_grants WHERE payment_order_id = $1`,
+			`DELETE FROM payment_wallet_fundings WHERE payment_order_id = $1`,
+			`DELETE FROM payment_subscription_grants WHERE payment_order_id = $1`,
 			`DELETE FROM payment_orders WHERE id = $1`,
 		} {
 			if _, err := integrationDB.ExecContext(ctx, query, orderID); err != nil {
@@ -174,6 +215,7 @@ func (f *paymentFulfillmentRecoveryPostgresFixture) cleanup() {
 		for _, query := range []string{
 			`DELETE FROM subscription_reset_grants WHERE user_id = $1`,
 			`DELETE FROM user_subscriptions WHERE user_id = $1`,
+			`DELETE FROM subscription_cache_invalidation_outbox WHERE user_id = $1`,
 			`DELETE FROM user_allowed_groups WHERE user_id = $1`,
 			`DELETE FROM users WHERE id = $1`,
 		} {
@@ -328,6 +370,92 @@ func TestPaymentFulfillmentRecoveryPostgresRestartedSweeperAndBalanceConcurrency
 	})
 }
 
+func TestPaymentFulfillmentPostgresNegativeBalanceConsumesNewPaidPrincipalFirst(t *testing.T) {
+	ctx := context.Background()
+	setOwnerTestSnapshot := func(t *testing.T, fixture *paymentFulfillmentRecoveryPostgresFixture, order *dbent.PaymentOrder) *dbent.PaymentOrder {
+		t.Helper()
+		updated, err := fixture.client.PaymentOrder.UpdateOneID(order.ID).
+			SetPayAmount(0.1).
+			SetUpdatedAt(time.Now().UTC().Add(-2 * time.Minute)).
+			SetProductSnapshot(map[string]any{
+				"schema_version":     2,
+				"kind":               "balance",
+				"credited_amount":    100.0,
+				"paid_credit_amount": 0.1,
+				"gift_credit_amount": 99.9,
+				"entitlements":       map[string]any{"balance_bonus": 99.9},
+			}).
+			Save(ctx)
+		require.NoError(t, err)
+		return updated
+	}
+	for _, tc := range []struct {
+		name              string
+		initialBalance    float64
+		wantBalance       float64
+		wantAvailablePaid float64
+	}{
+		{name: "part of paid principal survives debt", initialBalance: -0.05, wantBalance: 99.95, wantAvailablePaid: 0.05},
+		{name: "paid principal is exhausted before gift", initialBalance: -1, wantBalance: 99, wantAvailablePaid: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newPaymentFulfillmentRecoveryPostgresFixture(t)
+			user := fixture.createUser(tc.initialBalance)
+			order := fixture.createPaidBalanceOrder(user, 100, service.OrderStatusPaid, time.Now().UTC().Add(-2*time.Minute))
+			order = setOwnerTestSnapshot(t, fixture, order)
+
+			recovered, err := fixture.paymentService().RecoverPendingPaymentOrderFulfillments(ctx)
+			require.NoError(t, err)
+			require.Equal(t, 1, recovered)
+
+			current, err := fixture.client.User.Get(ctx, user.ID)
+			require.NoError(t, err)
+			require.InDelta(t, tc.wantBalance, current.Balance, 0.00000001)
+			require.InDelta(t, tc.wantAvailablePaid, current.WalletAvailablePaid, 0.00000001)
+
+			var originalPaid, originalGift float64
+			require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT paid_credit_amount, gift_credit_amount
+				FROM payment_wallet_fundings WHERE payment_order_id = $1`, order.ID).
+				Scan(&originalPaid, &originalGift))
+			require.InDelta(t, 0.1, originalPaid, 0.00000001, "order provenance must retain the original paid split")
+			require.InDelta(t, 99.9, originalGift, 0.00000001, "order provenance must retain the original gift split")
+			var fundingEvents int
+			require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*)
+				FROM wallet_principal_events WHERE user_id = $1 AND event_kind = 'payment_funding'`, user.ID).
+				Scan(&fundingEvents))
+			require.Equal(t, 1, fundingEvents)
+		})
+	}
+
+	t.Run("concurrent fundings serialize debt classification", func(t *testing.T) {
+		fixture := newPaymentFulfillmentRecoveryPostgresFixture(t)
+		user := fixture.createUser(-0.05)
+		first := setOwnerTestSnapshot(t, fixture, fixture.createPaidBalanceOrder(
+			user, 100, service.OrderStatusPaid, time.Now().UTC().Add(-3*time.Minute)))
+		second := setOwnerTestSnapshot(t, fixture, fixture.createPaidBalanceOrder(
+			user, 100, service.OrderStatusPaid, time.Now().UTC().Add(-2*time.Minute)))
+
+		recovered, err := fixture.paymentService().RecoverPendingPaymentOrderFulfillments(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 2, recovered)
+		current, err := fixture.client.User.Get(ctx, user.ID)
+		require.NoError(t, err)
+		require.InDelta(t, 199.95, current.Balance, 0.00000001)
+		require.InDelta(t, 0.15, current.WalletAvailablePaid, 0.00000001)
+
+		var fundingCount int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*)
+			FROM payment_wallet_fundings WHERE payment_order_id IN ($1, $2)`, first.ID, second.ID).
+			Scan(&fundingCount))
+		require.Equal(t, 2, fundingCount)
+		var fundingEvents int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*)
+			FROM wallet_principal_events WHERE user_id = $1 AND event_kind = 'payment_funding'`, user.ID).
+			Scan(&fundingEvents))
+		require.Equal(t, 2, fundingEvents)
+	})
+}
+
 func TestPaymentFulfillmentRecoveryPostgresSubscriptionConvergenceAndCommitBoundaries(t *testing.T) {
 	ctx := context.Background()
 
@@ -397,6 +525,51 @@ func TestPaymentFulfillmentRecoveryPostgresSubscriptionConvergenceAndCommitBound
 		require.NoError(t, err)
 		require.True(t, subscription.ExpiresAt.After(started.Add(59*24*time.Hour)))
 		require.True(t, subscription.ExpiresAt.Before(started.Add(61*24*time.Hour)), "each paid order must grant exactly one 30-day term")
+
+		rows, err := integrationDB.QueryContext(ctx, `SELECT term_start_at, original_term_end_at
+			FROM payment_subscription_grants
+			WHERE payment_order_id IN ($1, $2)
+			ORDER BY term_start_at`, first.ID, second.ID)
+		require.NoError(t, err)
+		defer func() { _ = rows.Close() }()
+		var grants [][2]time.Time
+		for rows.Next() {
+			var grant [2]time.Time
+			require.NoError(t, rows.Scan(&grant[0], &grant[1]))
+			grants = append(grants, grant)
+		}
+		require.NoError(t, rows.Err())
+		require.Len(t, grants, 2)
+		require.WithinDuration(t, grants[0][1], grants[1][0], time.Microsecond,
+			"concurrent paid terms must be adjacent and independently refundable")
+		require.Equal(t, 30*24*time.Hour, grants[0][1].Sub(grants[0][0]))
+		require.Equal(t, 30*24*time.Hour, grants[1][1].Sub(grants[1][0]))
+	})
+
+	t.Run("subscription created between payment lookups uses locked renewal boundary", func(t *testing.T) {
+		fixture := newPaymentFulfillmentRecoveryPostgresFixture(t)
+		user := fixture.createUser(0)
+		group := fixture.createSubscriptionGroup()
+		order := fixture.createPaidSubscriptionOrder(user, group.ID, 30, service.OrderStatusPaid, time.Now().UTC().Add(-2*time.Minute))
+		baseRepo := NewUserSubscriptionRepository(fixture.client)
+		injectedRepo := &injectSubscriptionBetweenLookupsRepo{
+			UserSubscriptionRepository: baseRepo,
+			userID:                     user.ID,
+			groupID:                    group.ID,
+		}
+
+		recovered, err := fixture.paymentServiceWithSubscriptionRepo(injectedRepo).
+			RecoverPendingPaymentOrderFulfillments(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, recovered)
+		require.Equal(t, int32(2), injectedRepo.calls.Load())
+
+		var termStart, termEnd time.Time
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT term_start_at, original_term_end_at
+			FROM payment_subscription_grants WHERE payment_order_id = $1`, order.ID).
+			Scan(&termStart, &termEnd))
+		require.WithinDuration(t, injectedRepo.injectedEnd, termStart, time.Microsecond)
+		require.WithinDuration(t, injectedRepo.injectedEnd.AddDate(0, 0, 30), termEnd, time.Microsecond)
 	})
 
 	t.Run("failure before entitlement commit remains retryable", func(t *testing.T) {

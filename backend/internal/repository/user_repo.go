@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
 
+	"entgo.io/ent/dialect"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
@@ -830,6 +832,37 @@ func (r *userRepository) filterUsersByAttributes(ctx context.Context, attrs map[
 func (r *userRepository) UpdateBalance(ctx context.Context, id int64, amount float64) error {
 	client := clientFromContext(ctx, r.client)
 	update := client.User.Update().Where(dbuser.IDEQ(id)).AddBalance(amount)
+	funding, hasFunding := service.PaymentWalletFundingFromContext(ctx)
+	if hasFunding {
+		if funding.UserID != id || amount <= 0 || math.Abs(amount-(funding.PaidCredit+funding.GiftCredit)) > 0.00000001 {
+			return errors.New("payment wallet funding does not match balance credit")
+		}
+		// Payment funding and its immutable order record must commit in the same
+		// transaction. Lock the account so a concurrent spend cannot change the
+		// principal classification between this calculation and the update.
+		if client.Driver().Dialect() == dialect.Postgres && dbent.TxFromContext(ctx) == nil {
+			return errors.New("payment wallet funding requires a database transaction")
+		}
+		currentQuery := client.User.Query().Where(dbuser.IDEQ(id), dbuser.DeletedAtIsNil())
+		if client.Driver().Dialect() == dialect.Postgres {
+			currentQuery.ForUpdate()
+		}
+		current, err := currentQuery.Only(ctx)
+		if err != nil {
+			return translatePersistenceError(err, service.ErrUserNotFound, nil)
+		}
+
+		// Historical accounts may carry a negative balance. New credit first
+		// repays that debt from paid principal; only the surviving paid part is
+		// refundable. The funding row still records the order's original split.
+		debt := math.Max(-current.Balance, 0)
+		survivingPaid := math.Max(funding.PaidCredit-debt, 0)
+		newAvailable := math.Max(current.Balance+amount, 0)
+		principalCapacity := math.Max(newAvailable-current.WalletAvailablePaid, 0)
+		survivingPaid = math.Min(survivingPaid, principalCapacity)
+		service.MarkPaymentWalletFundingMutation(ctx, client)
+		update = update.AddWalletAvailablePaid(survivingPaid)
+	}
 	// Track cumulative recharge amount for percentage-based notifications
 	if amount > 0 {
 		update = update.AddTotalRecharged(amount)
@@ -840,6 +873,11 @@ func (r *userRepository) UpdateBalance(ctx context.Context, id int64, amount flo
 	}
 	if n == 0 {
 		return service.ErrUserNotFound
+	}
+	if hasFunding {
+		if err := service.RecordPaymentWalletFunding(ctx, client, funding); err != nil {
+			return fmt.Errorf("record payment wallet funding: %w", err)
+		}
 	}
 	return nil
 }

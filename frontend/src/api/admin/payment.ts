@@ -65,9 +65,54 @@ export interface UpdatePaymentConfigRequest {
 export interface RefundResult {
   success: boolean
   warning?: string
-  require_force?: boolean
-  balance_deducted?: number
-  subscription_days_deducted?: number
+}
+
+/**
+ * Server-calculated refund effects. Administrators must review this fresh
+ * quote before submitting its revision back to the refund endpoint.
+ */
+export interface RefundReview {
+  order_id: number
+  order_type: string
+  currency: string
+  can_refund: boolean
+  requires_manual_review: boolean
+  reason_code?: string
+  reason?: string
+  quote_revision?: string
+  generated_at: string
+  default_refund_amount: number
+  max_refund_amount: number
+  entitlement_amount: number
+  balance?: BalanceRefundReview
+  subscription?: SubscriptionRefundReview
+}
+
+export interface BalanceRefundReview {
+  original_paid_credit: number
+  original_gift_credit: number
+  remaining_paid_credit: number
+  available_balance: number
+  available_paid_credit: number
+  available_gift_credit: number
+  paid_credit_to_reclaim: number
+  gift_credit_to_reclaim: number
+}
+
+export interface SubscriptionRefundReview {
+  subscription_id: number
+  term_start_at: string
+  term_end_at: string
+  current_expires_at: string
+  new_expires_at: string
+  purchased_seconds: number
+  used_seconds: number
+  remaining_seconds: number
+}
+
+export interface RefundOrderRequest {
+  quote_revision: string
+  reason: string
 }
 
 export type OwnerTestPaymentType = 'alipay' | 'wxpay'
@@ -189,8 +234,13 @@ export const adminPaymentAPI = {
     return apiClient.post(`/admin/payment/orders/${id}/retry`)
   },
 
-  /** Process a refund */
-  refundOrder(id: number, data: { amount: number; reason: string; deduct_balance?: boolean; force?: boolean }) {
+  /** Load the fresh server-authoritative quote before an admin confirms a refund. */
+  getRefundReview(id: number) {
+    return apiClient.get<RefundReview>(`/admin/payment/orders/${id}/refund-review`)
+  },
+
+  /** Process the previously reviewed refund using its exact quote revision. */
+  refundOrder(id: number, data: RefundOrderRequest) {
     return apiClient.post<RefundResult>(`/admin/payment/orders/${id}/refund`, data)
   },
 
