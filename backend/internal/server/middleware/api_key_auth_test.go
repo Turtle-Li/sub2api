@@ -262,7 +262,9 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		}
 		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
 		subscriptionService.SetResetCardRepository(subscriptionLimitResetCardRepoStub{
-			available: map[int64]service.SubscriptionResetCardSummary{},
+			available: map[int64]service.SubscriptionResetCardSummary{
+				55: {AvailableCount: 2},
+			},
 		})
 		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
 
@@ -274,8 +276,23 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		require.Equal(t, http.StatusTooManyRequests, w.Code)
 		require.Contains(t, w.Body.String(), "USAGE_LIMIT_EXCEEDED")
 		require.Contains(t, w.Body.String(), "订阅每日额度已用完")
-		require.Contains(t, w.Body.String(), "当前没有可用重置次数")
-		require.Contains(t, w.Body.String(), "请升级套餐或购买额外额度")
+		require.Contains(t, w.Body.String(), "你当前还有 2 次可用重置次数")
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		req.Header.Set("x-api-key", apiKey.Key)
+		req.Header.Set("User-Agent", "codex_cli_rs/0.145.0")
+		req.Header.Set("originator", "codex_cli_rs")
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		require.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
+		require.Equal(t, "USAGE_LIMIT_EXCEEDED", w.Header().Get("X-Sub2-Error-Code"))
+		require.Empty(t, w.Header().Get("X-Codex-Promo-Message"))
+		require.Equal(t,
+			"订阅每日额度已用完。你当前还有 2 次可用重置次数，请前往「订阅」页面使用后再试。",
+			w.Body.String(),
+		)
 	})
 }
 
@@ -1435,8 +1452,7 @@ func TestAPIKeyAuthRejectsExhaustedBalance(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code)
 	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 
-	// Codex Responses receives the same top-level business code with a user-facing
-	// recharge hint instead of the generic English compatibility message.
+	// Non-Codex Responses preserves the existing top-level business response.
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	req.Header.Set("x-api-key", apiKey.Key)
@@ -1444,6 +1460,21 @@ func TestAPIKeyAuthRejectsExhaustedBalance(t *testing.T) {
 
 	require.Equal(t, http.StatusForbidden, w.Code)
 	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "账户余额不足，请充值后再试。")
+
+	// Official Codex receives the localized message as a terminal plain-text 400.
+	// Codex displays that body verbatim and does not retry it.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.Header.Set("x-api-key", apiKey.Key)
+	req.Header.Set("User-Agent", "codex_cli_rs/0.145.0")
+	req.Header.Set("originator", "codex_cli_rs")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
+	require.Equal(t, "INSUFFICIENT_BALANCE", w.Header().Get("X-Sub2-Error-Code"))
+	require.Empty(t, w.Header().Get("X-Codex-Promo-Message"))
+	require.Equal(t, "账户余额不足，请充值后再试。", w.Body.String())
 }
 
 func TestAPIKeyAuthOpenAIQuotaErrorFormat(t *testing.T) {

@@ -349,6 +349,43 @@ func TestOpenAIHandleStreamingAwareError_ResponsesBillingUsesTopLevelBusinessSha
 	}
 }
 
+func TestOpenAIHandleStreamingAwareError_ResponsesBillingUsesLocalizedCodexText(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		code    string
+		message string
+	}{
+		{
+			name:    "subscription",
+			status:  http.StatusTooManyRequests,
+			code:    "USAGE_LIMIT_EXCEEDED",
+			message: "订阅每周额度已用完。你当前还有 2 次可用重置次数，请前往「订阅」页面使用后再试。",
+		},
+		{
+			name:    "payg balance",
+			status:  http.StatusForbidden,
+			code:    "INSUFFICIENT_BALANCE",
+			message: "账户余额不足，请充值后再试。",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, w := newGinContextForEndpoint(t, EndpointResponses)
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.145.0")
+			c.Request.Header.Set("originator", "codex_cli_rs")
+			h := &OpenAIGatewayHandler{}
+			h.handleStreamingAwareError(c, tc.status, tc.code, tc.message, false)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
+			assert.Equal(t, tc.code, w.Header().Get("X-Sub2-Error-Code"))
+			assert.Empty(t, w.Header().Get("X-Codex-Promo-Message"))
+			assert.Equal(t, tc.message, w.Body.String())
+		})
+	}
+}
+
 // Synthesized response.failed id falls back to uuid when no request_id is present.
 // issue #5601：严格的 Responses 客户端把 created_at 当必填字段，缺失即
 // `missing field 'created_at'`。合成的终止事件若解析不了，本文件存在的意义

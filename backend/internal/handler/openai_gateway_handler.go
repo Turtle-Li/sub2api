@@ -37,6 +37,7 @@ import (
 type OpenAIGatewayHandler struct {
 	gatewayService             *service.OpenAIGatewayService
 	billingCacheService        *service.BillingCacheService
+	subscriptionService        *service.SubscriptionService
 	apiKeyService              *service.APIKeyService
 	usageRecordWorkerPool      *service.UsageRecordWorkerPool
 	errorPassthroughService    *service.ErrorPassthroughService
@@ -463,8 +464,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// body-signal compact：上游 unary 等待期间向下游发 SSE 注释行心跳，防止
 	// 反向代理空闲超时掐断长压缩连接（#3887）。首拍延迟一个心跳间隔，快速
 	// 失败仍走 JSON+状态码链路；未标记客户端流式或间隔为 0 时是 no-op。
-	stopCompactKeepalive := service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
-	defer stopCompactKeepalive()
+	deferCodexBillingResponse := isCodexBillingCompatibilityRequest(c)
+	stopCompactKeepalive := func() {}
+	if !deferCodexBillingResponse {
+		stopCompactKeepalive = service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
+	}
+	defer func() { stopCompactKeepalive() }()
 
 	// 校验请求体 JSON 合法性
 	if !gjson.ValidBytes(body) {
@@ -617,7 +622,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
 
-	userReleaseFunc, acquired := h.acquireResponsesUserSlot(c, subject.UserID, subject.Concurrency, reqStream, &streamStarted, reqLog)
+	queueStream := responsesQueueStreamEnabled(c, reqStream)
+	userReleaseFunc, acquired := h.acquireResponsesUserSlot(c, subject.UserID, subject.Concurrency, queueStream, &streamStarted, reqLog)
 	if !acquired {
 		return
 	}
@@ -629,12 +635,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 2. Re-check billing eligibility after wait
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 		reqLog.Info("openai.billing_eligibility_check_failed", zap.Error(err))
-		status, code, message, retryAfter := billingErrorDetails(err)
+		status, code, message, retryAfter := billingErrorDetailsWithSubscriptionGuidance(
+			c.Request.Context(),
+			h.subscriptionService,
+			subscription,
+			err,
+		)
 		if retryAfter > 0 {
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
 		}
 		h.handleStreamingAwareError(c, status, code, message, streamStarted)
 		return
+	}
+	if deferCodexBillingResponse {
+		stopCompactKeepalive = service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
 	}
 
 	// Attachment Gateway Phase 1 runs once per logical request, after auth,
@@ -2356,6 +2370,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
+	subscription, _ := middleware2.GetSubscriptionFromContext(c)
+	codexBillingCompat := isCodexBillingCompatibilityRequest(c)
+	if codexBillingCompat && h.rejectCodexWebSocketFundingError(c, reqLog, apiKey, subscription) {
+		return
+	}
 	reqLog.Info("openai.websocket_ingress_started")
 	clientIP := ip.GetClientIP(c)
 	userAgent := strings.TrimSpace(c.GetHeader("User-Agent"))
@@ -2381,6 +2400,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		defer ingressLease.Release()
 		ctx = ingressLease.Context()
 		c.Request = c.Request.WithContext(ctx)
+	}
+	if codexBillingCompat && h.rejectCodexWebSocketFundingError(c, reqLog, apiKey, subscription) {
+		return
 	}
 
 	wsConn, err := coderws.Accept(c.Writer, c.Request, &coderws.AcceptOptions{
@@ -2571,14 +2593,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return true
 	}
 
-	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	requestPlatform := openAICompatibleRequestPlatform(ctx, apiKey)
 	requiredTransport := service.OpenAIUpstreamTransportResponsesWebsocketV2Ingress
 	if requestPlatform == service.PlatformGrok {
 		requiredTransport = service.OpenAIUpstreamTransportHTTPSSE
 	}
-	if err := h.billingCacheService.CheckBillingEligibility(ctx, apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
-		reqLog.Info("openai.websocket_billing_eligibility_check_failed", zap.Error(err))
+	var billingErr error
+	if codexBillingCompat {
+		billingErr = h.billingCacheService.CheckRequestLimitsAfterFunding(ctx, apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey))
+	} else {
+		billingErr = h.billingCacheService.CheckBillingEligibility(ctx, apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey))
+	}
+	if billingErr != nil {
+		reqLog.Info("openai.websocket_billing_eligibility_check_failed", zap.Error(billingErr))
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
 		return
 	}
@@ -3753,6 +3780,9 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 		clientBillingCode = strings.TrimSpace(errType)
 	}
 	if inboundIsResponses(c) && isClientBillingErrorCode(clientBillingCode) {
+		if writeCodexBillingErrorResponse(c, clientBillingCode, message) {
+			return
+		}
 		c.JSON(status, gin.H{"code": clientBillingCode, "message": message})
 		return
 	}
@@ -3954,6 +3984,32 @@ func openAIWSIngressFallbackSessionSeed(userID, apiKeyID int64, groupID *int64) 
 		gid = *groupID
 	}
 	return fmt.Sprintf("openai_ws_ingress:%d:%d:%d", gid, userID, apiKeyID)
+}
+
+func (h *OpenAIGatewayHandler) rejectCodexWebSocketFundingError(
+	c *gin.Context,
+	reqLog *zap.Logger,
+	apiKey *service.APIKey,
+	subscription *service.UserSubscription,
+) bool {
+	if c == nil || c.Request == nil || apiKey == nil || apiKey.User == nil {
+		return false
+	}
+	err := h.billingCacheService.CheckFundingEligibility(c.Request.Context(), apiKey.User, apiKey.Group, subscription)
+	if err == nil {
+		return false
+	}
+	status, code, message, _ := billingErrorDetailsWithSubscriptionGuidance(
+		c.Request.Context(),
+		h.subscriptionService,
+		subscription,
+		err,
+	)
+	if reqLog != nil {
+		reqLog.Info("openai.websocket_funding_eligibility_check_failed", zap.Error(err))
+	}
+	h.handleStreamingAwareError(c, status, code, message, false)
+	return true
 }
 
 func isOpenAIWSUpgradeRequest(r *http.Request) bool {

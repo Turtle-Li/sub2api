@@ -194,7 +194,7 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 					errors.Is(err, service.ErrWeeklyLimitExceeded) ||
 					errors.Is(err, service.ErrMonthlyLimitExceeded) {
 					status = 429
-					message = subscriptionUsageLimitMessage(
+					message = SubscriptionUsageLimitMessage(
 						c.Request.Context(),
 						subscriptionService,
 						subscription,

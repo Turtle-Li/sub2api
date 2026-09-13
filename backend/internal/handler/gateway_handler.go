@@ -45,6 +45,7 @@ type GatewayHandler struct {
 	antigravityGatewayService *service.AntigravityGatewayService
 	userService               *service.UserService
 	billingCacheService       *service.BillingCacheService
+	subscriptionService       *service.SubscriptionService
 	usageService              *service.UsageService
 	apiKeyService             *service.APIKeyService
 	usageRecordWorkerPool     *service.UsageRecordWorkerPool
@@ -2620,6 +2621,19 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 		msg = "Billing error"
 	}
 	return http.StatusForbidden, "billing_error", msg, 0
+}
+
+func billingErrorDetailsWithSubscriptionGuidance(
+	ctx context.Context,
+	subscriptionService *service.SubscriptionService,
+	subscription *service.UserSubscription,
+	err error,
+) (status int, code, message string, retryAfter int) {
+	status, code, message, retryAfter = billingErrorDetails(err)
+	if code == "USAGE_LIMIT_EXCEEDED" {
+		message = middleware2.SubscriptionUsageLimitMessage(ctx, subscriptionService, subscription, err)
+	}
+	return status, code, message, retryAfter
 }
 
 func subscriptionLimitExceededMessage(err error) string {

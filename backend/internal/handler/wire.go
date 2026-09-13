@@ -104,6 +104,7 @@ func ProvideGatewayHandler(
 	userService *service.UserService,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
+	subscriptionService *service.SubscriptionService,
 	usageService *service.UsageService,
 	apiKeyService *service.APIKeyService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
@@ -118,6 +119,7 @@ func ProvideGatewayHandler(
 		userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool,
 		errorPassthroughService, contentModerationService, userMsgQueueService, cfg, settingService)
 	h.securityAuditCoordinator = coordinator
+	h.subscriptionService = subscriptionService
 	return h
 }
 
@@ -126,6 +128,7 @@ func ProvideOpenAIGatewayHandler(
 	pluginManager *service.PluginManager,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
+	subscriptionService *service.SubscriptionService,
 	apiKeyService *service.APIKeyService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	errorPassthroughService *service.ErrorPassthroughService,
@@ -141,6 +144,7 @@ func ProvideOpenAIGatewayHandler(
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.securityAuditCoordinator = coordinator
+	h.subscriptionService = subscriptionService
 	h.grokMediaEligibilityProber = grokQuotaService
 	h.retryProtectionRegistrar = retryProtectionRegistrar
 	h.attachmentURLExternalizer = newResponsesAttachmentURLExternalizer(cfg, attachmentR2Service)

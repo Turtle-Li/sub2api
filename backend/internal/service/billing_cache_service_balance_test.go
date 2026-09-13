@@ -19,15 +19,28 @@ type balanceEligibilityCacheStub struct {
 	balance                  float64
 	cacheMissAfterInvalidate bool
 	invalidated              atomic.Bool
+	getCalls                 atomic.Int64
 	deductCalls              atomic.Int64
 	invalidateCalls          atomic.Int64
 }
 
 func (s *balanceEligibilityCacheStub) GetUserBalance(context.Context, int64) (float64, error) {
+	s.getCalls.Add(1)
 	if s.cacheMissAfterInvalidate && s.invalidated.Load() {
 		return 0, errors.New("cache miss")
 	}
 	return s.balance, nil
+}
+
+func TestCheckRequestLimitsAfterFundingDoesNotReadBalanceAgain(t *testing.T) {
+	cache := &balanceEligibilityCacheStub{balance: 0}
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, &config.Config{}, nil)
+	t.Cleanup(svc.Stop)
+
+	err := svc.CheckRequestLimitsAfterFunding(context.Background(), &User{ID: 1}, nil, nil, nil, "")
+
+	require.NoError(t, err)
+	require.Zero(t, cache.getCalls.Load())
 }
 
 func (s *balanceEligibilityCacheStub) DeductUserBalance(context.Context, int64, float64) error {

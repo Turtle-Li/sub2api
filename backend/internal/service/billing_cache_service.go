@@ -728,11 +728,16 @@ func (s *BillingCacheService) IncrementUserPlatformQuotaUsage(userID int64, plat
 // 统一检查方法
 // ============================================
 
-// CheckBillingEligibility 检查用户是否有资格发起请求
-// 余额模式：检查缓存余额 > 0
-// 订阅模式：检查缓存用量未超过限额（Group限额从参数传入）
-// platform 为请求的目标平台（如 "anthropic"），传空串 "" 时跳过 user × platform quota 检查。
-func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user *User, apiKey *APIKey, group *Group, subscription *UserSubscription, platform string) error {
+// CheckFundingEligibility checks only the subscription window or wallet
+// balance. It intentionally excludes platform quotas, API-key rate windows,
+// and RPM counters so protocol handshakes can reject terminal billing states
+// before committing a streaming response without counting the request twice.
+func (s *BillingCacheService) CheckFundingEligibility(
+	ctx context.Context,
+	user *User,
+	group *Group,
+	subscription *UserSubscription,
+) error {
 	// 简易模式：跳过所有计费检查
 	if s.cfg.RunMode == config.RunModeSimple {
 		return nil
@@ -741,18 +746,42 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 		return ErrBillingServiceUnavailable
 	}
 
+	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
+	if isSubscriptionMode {
+		return s.checkSubscriptionEligibility(ctx, user.ID, group, subscription)
+	}
+	return s.checkBalanceEligibility(ctx, user.ID)
+}
+
+// CheckBillingEligibility 检查用户是否有资格发起请求
+// 余额模式：检查缓存余额 > 0
+// 订阅模式：检查缓存用量未超过限额（Group限额从参数传入）
+// platform 为请求的目标平台（如 "anthropic"），传空串 "" 时跳过 user × platform quota 检查。
+func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user *User, apiKey *APIKey, group *Group, subscription *UserSubscription, platform string) error {
+	if err := s.CheckFundingEligibility(ctx, user, group, subscription); err != nil {
+		return err
+	}
+	return s.CheckRequestLimitsAfterFunding(ctx, user, apiKey, group, subscription, platform)
+}
+
+// CheckRequestLimitsAfterFunding checks the remaining request-scoped limits
+// after CheckFundingEligibility has succeeded. It does not read subscription
+// usage or wallet balance, which lets a WebSocket handshake make its one final
+// funding decision before the protocol upgrade.
+func (s *BillingCacheService) CheckRequestLimitsAfterFunding(
+	ctx context.Context,
+	user *User,
+	apiKey *APIKey,
+	group *Group,
+	subscription *UserSubscription,
+	platform string,
+) error {
+	if s.cfg.RunMode == config.RunModeSimple {
+		return nil
+	}
+
 	// 判断计费模式
 	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
-
-	if isSubscriptionMode {
-		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
-			return err
-		}
-	} else {
-		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
-			return err
-		}
-	}
 
 	// user × platform quota 仅在 standard（余额）模式生效；订阅模式豁免
 	if !isSubscriptionMode {

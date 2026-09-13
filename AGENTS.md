@@ -176,6 +176,12 @@
 
 ## Upstream update scope
 
+- For Codex-visible subscription and wallet billing errors, read
+  `docs/operations/CODEX_BILLING_ERROR_COMPAT_20260913.md` before changing
+  Responses status codes, response bodies, or compatibility headers. An
+  ordinary HTTP 429 causes Codex to discard the Sub2 message and report its own
+  retry-limit error.
+
 - For v0.2.3 migration 236, read `docs/operations/UPSTREAM_V023_20260908.md`.
   Preserve canonical `models_list_config` data even when an alternate upstream
   column exists; do not rename the fork physical storage during routine merges.
