@@ -512,6 +512,40 @@ func TestPaymentWalletFundingForOrderUsesImmutablePaidGiftSplit(t *testing.T) {
 	require.True(t, paymentWalletFundingRequired(&dbent.PaymentOrder{ProductSnapshot: map[string]any{"schema_version": 2}}))
 }
 
+func TestPaymentWalletFundingForOrderRejectsMalformedOrIncompleteVersionedSplit(t *testing.T) {
+	base := func() *dbent.PaymentOrder {
+		return &dbent.PaymentOrder{
+			ID: 11, UserID: 22, OrderType: payment.OrderTypeBalance,
+			Amount: 100, PayAmount: 0.1,
+			ProductSnapshot: map[string]any{
+				"schema_version":     2,
+				"credited_amount":    100.0,
+				"paid_credit_amount": 0.1,
+				"gift_credit_amount": 99.9,
+			},
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "malformed version", mutate: func(snapshot map[string]any) { snapshot["schema_version"] = "two" }},
+		{name: "missing paid", mutate: func(snapshot map[string]any) { delete(snapshot, "paid_credit_amount") }},
+		{name: "malformed paid", mutate: func(snapshot map[string]any) { snapshot["paid_credit_amount"] = "not-a-number" }},
+		{name: "missing gift", mutate: func(snapshot map[string]any) { delete(snapshot, "gift_credit_amount") }},
+		{name: "malformed gift", mutate: func(snapshot map[string]any) { snapshot["gift_credit_amount"] = "not-a-number" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			order := base()
+			tc.mutate(order.ProductSnapshot)
+			require.True(t, paymentWalletFundingRequired(order))
+			_, err := PaymentWalletFundingForOrder(order)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestReviewedRefundRequiresManualAffiliateRebateRecovery(t *testing.T) {
 	ctx := context.Background()
 	svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)

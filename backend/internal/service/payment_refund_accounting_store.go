@@ -168,17 +168,37 @@ func PaymentWalletFundingForOrder(order *dbent.PaymentOrder) (PaymentWalletFundi
 	if order == nil || order.OrderType != payment.OrderTypeBalance || order.ProductSnapshot == nil {
 		return PaymentWalletFundingInput{}, errors.New("balance payment funding snapshot is missing")
 	}
+	requiresExplicitSplit := false
+	if rawVersion, hasVersion := order.ProductSnapshot["schema_version"]; hasVersion {
+		version, ok := paymentSnapshotFloat(rawVersion)
+		if !ok || !finiteRefundReviewAmount(version) || version < 0 {
+			return PaymentWalletFundingInput{}, errors.New("balance payment snapshot version is invalid")
+		}
+		requiresExplicitSplit = version >= 2
+	}
 	credited, ok := paymentSnapshotFloat(order.ProductSnapshot["credited_amount"])
 	if !ok || !finiteRefundReviewAmount(credited) || credited <= 0 || math.Abs(credited-order.Amount) > paymentAmountZeroTolerance(PaymentOrderCurrency(order)) {
 		return PaymentWalletFundingInput{}, errors.New("balance payment credited amount is invalid")
 	}
 	bonus := paymentOrderEntitlements(order).BalanceBonus
-	if explicit, ok := paymentSnapshotFloat(order.ProductSnapshot["gift_credit_amount"]); ok {
+	if rawGift, exists := order.ProductSnapshot["gift_credit_amount"]; exists {
+		explicit, ok := paymentSnapshotFloat(rawGift)
+		if !ok {
+			return PaymentWalletFundingInput{}, errors.New("balance payment gift credit amount is invalid")
+		}
 		bonus = explicit
+	} else if requiresExplicitSplit {
+		return PaymentWalletFundingInput{}, errors.New("balance payment gift credit amount is missing")
 	}
 	paid := credited - bonus
-	if explicit, ok := paymentSnapshotFloat(order.ProductSnapshot["paid_credit_amount"]); ok {
+	if rawPaid, exists := order.ProductSnapshot["paid_credit_amount"]; exists {
+		explicit, ok := paymentSnapshotFloat(rawPaid)
+		if !ok {
+			return PaymentWalletFundingInput{}, errors.New("balance payment paid credit amount is invalid")
+		}
 		paid = explicit
+	} else if requiresExplicitSplit {
+		return PaymentWalletFundingInput{}, errors.New("balance payment paid credit amount is missing")
 	}
 	if !finiteRefundReviewAmount(paid) || !finiteRefundReviewAmount(bonus) || paid <= 0 || bonus < 0 || math.Abs(paid+bonus-credited) > paymentAmountZeroTolerance(PaymentOrderCurrency(order)) {
 		return PaymentWalletFundingInput{}, errors.New("balance payment paid/gift split is invalid")
@@ -201,8 +221,11 @@ func paymentWalletFundingRequired(order *dbent.PaymentOrder) bool {
 	if order == nil || order.ProductSnapshot == nil {
 		return false
 	}
-	if version, ok := paymentSnapshotFloat(order.ProductSnapshot["schema_version"]); ok && version >= 2 {
-		return true
+	if rawVersion, exists := order.ProductSnapshot["schema_version"]; exists {
+		version, ok := paymentSnapshotFloat(rawVersion)
+		// A malformed version is not historical evidence. Route it through the
+		// strict path so fulfillment stops instead of inventing principal.
+		return !ok || !finiteRefundReviewAmount(version) || version < 0 || version >= 2
 	}
 	_, hasPaid := order.ProductSnapshot["paid_credit_amount"]
 	_, hasGift := order.ProductSnapshot["gift_credit_amount"]
