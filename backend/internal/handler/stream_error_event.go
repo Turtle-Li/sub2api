@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -126,12 +127,35 @@ func inboundIsResponses(c *gin.Context) bool {
 }
 
 func isClientBillingErrorCode(code string) bool {
-	switch strings.TrimSpace(code) {
-	case "USAGE_LIMIT_EXCEEDED", "INSUFFICIENT_BALANCE":
-		return true
-	default:
+	_, ok := openai.NormalizeCodexBillingErrorCode(code)
+	return ok
+}
+
+func isCodexBillingCompatibilityRequest(c *gin.Context) bool {
+	return c != nil && c.Request != nil && inboundIsResponses(c) &&
+		openai.IsCodexBillingErrorClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
+}
+
+func responsesQueueStreamEnabled(c *gin.Context, requested bool) bool {
+	return requested && !isCodexBillingCompatibilityRequest(c)
+}
+
+// writeCodexBillingErrorResponse uses the Codex HTTP error path that displays a
+// UTF-8 response body verbatim and does not retry. Codex discards ordinary 429
+// bodies, while its usage-limit promo header only accepts ASCII text.
+func writeCodexBillingErrorResponse(c *gin.Context, code, message string) bool {
+	if !isCodexBillingCompatibilityRequest(c) {
 		return false
 	}
+
+	normalizedCode, ok := openai.NormalizeCodexBillingErrorCode(code)
+	if !ok {
+		return false
+	}
+
+	c.Header(openai.CodexBillingErrorCodeHeader, normalizedCode)
+	c.Data(http.StatusBadRequest, "text/plain; charset=utf-8", []byte(message))
+	return true
 }
 
 // synthesizeResponseID 为合成的 response.failed 事件生成一个稳定的 id。

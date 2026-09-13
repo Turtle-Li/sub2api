@@ -862,6 +862,21 @@ func TestNormalizeOpsErrorType(t *testing.T) {
 	}
 }
 
+func TestApplyOpsResponseErrorCodeHeader(t *testing.T) {
+	header := make(http.Header)
+	header.Set("X-Sub2-Error-Code", "USAGE_LIMIT_EXCEEDED")
+
+	parsed := applyOpsResponseErrorCodeHeader(
+		parseOpsErrorResponse([]byte("订阅每周额度已用完。你当前还有 2 次可用重置次数。")),
+		header,
+	)
+	require.Equal(t, "USAGE_LIMIT_EXCEEDED", parsed.Code)
+	require.Equal(t, "subscription_error", normalizeOpsErrorType(parsed.ErrorType, parsed.Code))
+
+	parsed = applyOpsResponseErrorCodeHeader(parsedOpsError{Code: "STRUCTURED_CODE"}, header)
+	require.Equal(t, "STRUCTURED_CODE", parsed.Code, "structured body code must take precedence")
+}
+
 func TestClassifyOpsNoAvailableAccountsExcludedFromSLA(t *testing.T) {
 	const message = "No available accounts"
 	gin.SetMode(gin.TestMode)

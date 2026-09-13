@@ -20,6 +20,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -1143,6 +1144,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				parsed = terminal
 			}
 		}
+		parsed = applyOpsResponseErrorCodeHeader(parsed, c.Writer.Header())
 		if status < 400 {
 			if parsed.StreamFailure {
 				status = inferStreamFailureStatus(c, parsed)
@@ -1853,6 +1855,19 @@ func parseOpsErrorResponse(body []byte) parsedOpsError {
 	}
 
 	return parsedOpsError{Message: truncateString(string(body), 1024)}
+}
+
+// applyOpsResponseErrorCodeHeader restores the local business classification
+// for Codex-specific plain-text errors. Only the two recognized billing codes
+// are accepted, and a structured body code always wins.
+func applyOpsResponseErrorCodeHeader(parsed parsedOpsError, header http.Header) parsedOpsError {
+	if strings.TrimSpace(parsed.Code) != "" || header == nil {
+		return parsed
+	}
+	if code, ok := openai.NormalizeCodexBillingErrorCode(header.Get(openai.CodexBillingErrorCodeHeader)); ok {
+		parsed.Code = code
+	}
+	return parsed
 }
 
 func opsJSONScalarString(value any) string {

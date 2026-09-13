@@ -40,7 +40,7 @@ func TestSubscriptionUsageLimitMessage(t *testing.T) {
 			},
 		})
 
-		message := subscriptionUsageLimitMessage(
+		message := SubscriptionUsageLimitMessage(
 			context.Background(),
 			svc,
 			&service.UserSubscription{ID: 42},
@@ -56,7 +56,7 @@ func TestSubscriptionUsageLimitMessage(t *testing.T) {
 			available: map[int64]service.SubscriptionResetCardSummary{},
 		})
 
-		message := subscriptionUsageLimitMessage(
+		message := SubscriptionUsageLimitMessage(
 			context.Background(),
 			svc,
 			&service.UserSubscription{ID: 42},
@@ -70,7 +70,7 @@ func TestSubscriptionUsageLimitMessage(t *testing.T) {
 		svc := service.NewSubscriptionService(nil, nil, nil, nil, nil)
 		svc.SetResetCardRepository(subscriptionLimitResetCardRepoStub{err: errors.New("database unavailable")})
 
-		message := subscriptionUsageLimitMessage(
+		message := SubscriptionUsageLimitMessage(
 			context.Background(),
 			svc,
 			&service.UserSubscription{ID: 42},

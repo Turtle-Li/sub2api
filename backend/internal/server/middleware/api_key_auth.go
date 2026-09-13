@@ -256,14 +256,14 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 						errors.Is(validateErr, service.ErrMonthlyLimitExceeded) {
 						code = "USAGE_LIMIT_EXCEEDED"
 						status = 429
-						message = subscriptionUsageLimitMessage(
+						message = SubscriptionUsageLimitMessage(
 							c.Request.Context(),
 							subscriptionService,
 							subscription,
 							validateErr,
 						)
 					}
-					AbortWithError(c, status, code, message)
+					abortWithClientBillingError(c, status, code, message)
 					return
 				}
 			} else {
@@ -273,7 +273,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 					if isOpenAICompatibleAPIKeyRequest(c) {
 						message = "账户余额不足，请充值后再试。"
 					}
-					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", message)
+					abortWithClientBillingError(c, 403, "INSUFFICIENT_BALANCE", message)
 					return
 				}
 			}
@@ -299,7 +299,9 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 	}
 }
 
-func subscriptionUsageLimitMessage(
+// SubscriptionUsageLimitMessage returns the established localized recovery
+// guidance, including the live reset-card count when it can be read.
+func SubscriptionUsageLimitMessage(
 	ctx context.Context,
 	subscriptionService *service.SubscriptionService,
 	subscription *service.UserSubscription,

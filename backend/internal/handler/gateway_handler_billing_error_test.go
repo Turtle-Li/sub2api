@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,23 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type billingGuidanceResetCardRepoStub struct {
+	service.SubscriptionResetCardRepository
+	count int
+}
+
+func (r billingGuidanceResetCardRepoStub) ListAvailable(
+	_ context.Context,
+	subscriptionIDs []int64,
+	_ time.Time,
+) (map[int64]service.SubscriptionResetCardSummary, error) {
+	out := make(map[int64]service.SubscriptionResetCardSummary, len(subscriptionIDs))
+	for _, subscriptionID := range subscriptionIDs {
+		out[subscriptionID] = service.SubscriptionResetCardSummary{AvailableCount: r.count}
+	}
+	return out, nil
+}
 
 func TestBillingErrorDetails_MapsGroupRPMExceededToTooManyRequests(t *testing.T) {
 	status, code, msg, retryAfter := billingErrorDetails(service.ErrGroupRPMExceeded)
@@ -78,10 +96,29 @@ func TestBillingErrorDetails_MapsSubscriptionLimitToBusinessError(t *testing.T) 
 	}
 }
 
+func TestBillingErrorDetailsWithSubscriptionGuidanceUsesLiveResetCardCount(t *testing.T) {
+	subscriptionService := service.NewSubscriptionService(nil, nil, nil, nil, nil)
+	subscriptionService.SetResetCardRepository(billingGuidanceResetCardRepoStub{count: 2})
+
+	status, code, message, retryAfter := billingErrorDetailsWithSubscriptionGuidance(
+		context.Background(),
+		subscriptionService,
+		&service.UserSubscription{ID: 42},
+		service.ErrWeeklyLimitExceeded,
+	)
+
+	require.Equal(t, http.StatusTooManyRequests, status)
+	require.Equal(t, "USAGE_LIMIT_EXCEEDED", code)
+	require.Equal(t, "订阅每周额度已用完。你当前还有 2 次可用重置次数，请前往「订阅」页面使用后再试。", message)
+	require.Zero(t, retryAfter)
+}
+
 func TestResponsesErrorResponseUsesTopLevelBusinessBillingShape(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "curl/8.0")
 
 	(&GatewayHandler{}).responsesErrorResponse(
 		c,
@@ -90,6 +127,66 @@ func TestResponsesErrorResponseUsesTopLevelBusinessBillingShape(t *testing.T) {
 		"订阅每周额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。",
 	)
 
+	require.JSONEq(t, `{"code":"USAGE_LIMIT_EXCEEDED","message":"订阅每周额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。"}`, w.Body.String())
+}
+
+func TestResponsesErrorResponseUsesLocalizedCodexBillingText(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		code    string
+		message string
+	}{
+		{
+			name:    "subscription",
+			status:  http.StatusTooManyRequests,
+			code:    "USAGE_LIMIT_EXCEEDED",
+			message: "订阅每周额度已用完。你当前还有 2 次可用重置次数，请前往「订阅」页面使用后再试。",
+		},
+		{
+			name:    "balance",
+			status:  http.StatusForbidden,
+			code:    "INSUFFICIENT_BALANCE",
+			message: "账户余额不足，请充值后再试。",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.145.0")
+			c.Request.Header.Set("originator", "codex_cli_rs")
+
+			(&GatewayHandler{}).responsesErrorResponse(c, tc.status, tc.code, tc.message)
+
+			require.Equal(t, http.StatusBadRequest, w.Code)
+			require.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
+			require.Equal(t, tc.code, w.Header().Get("X-Sub2-Error-Code"))
+			require.Empty(t, w.Header().Get("X-Codex-Promo-Message"))
+			require.Equal(t, tc.message, w.Body.String())
+		})
+	}
+}
+
+func TestResponsesErrorResponseDoesNotUseCodexBillingShapeForEmbeddedUserAgentToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "Mozilla/5.0 codex_cli_rs/0.145.0")
+
+	(&GatewayHandler{}).responsesErrorResponse(
+		c,
+		http.StatusTooManyRequests,
+		"USAGE_LIMIT_EXCEEDED",
+		"订阅每周额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。",
+	)
+
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+	require.Empty(t, w.Header().Get("X-Sub2-Error-Code"))
 	require.JSONEq(t, `{"code":"USAGE_LIMIT_EXCEEDED","message":"订阅每周额度已用完。当前没有可用重置次数，请升级套餐或购买额外额度后再试。"}`, w.Body.String())
 }
 

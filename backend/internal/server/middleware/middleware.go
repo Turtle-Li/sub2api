@@ -6,6 +6,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -78,6 +79,24 @@ func NewErrorResponse(code, message string) ErrorResponse {
 func AbortWithError(c *gin.Context, statusCode int, code, message string) {
 	c.JSON(statusCode, NewErrorResponse(code, message))
 	c.Abort()
+}
+
+// abortWithClientBillingError preserves the existing Sub2 business response for
+// ordinary clients. Official Codex Responses requests receive a non-retryable
+// plain-text 400 because Codex displays that body verbatim; ordinary 429 bodies
+// are discarded, and its usage-limit promo header cannot carry Chinese text.
+func abortWithClientBillingError(c *gin.Context, statusCode int, code, message string) {
+	if c != nil && c.Request != nil && isOpenAICompatibleAPIKeyRequest(c) &&
+		openai.IsCodexBillingErrorClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) {
+		if normalizedCode, ok := openai.NormalizeCodexBillingErrorCode(code); ok {
+			c.Header(openai.CodexBillingErrorCodeHeader, normalizedCode)
+			c.Data(http.StatusBadRequest, "text/plain; charset=utf-8", []byte(message))
+			c.Abort()
+			return
+		}
+	}
+
+	AbortWithError(c, statusCode, code, message)
 }
 
 // abortWithOpenAIQuotaError writes the OpenAI-compatible insufficient quota response.
