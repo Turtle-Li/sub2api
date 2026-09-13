@@ -153,6 +153,8 @@ func newReviewedSubscriptionRefundFixture(t *testing.T) (*PaymentService, *dbent
 	svc, order, _ := newUnifiedRefundFixture(t, client, payment.TypeWxpay)
 	start := time.Now().UTC().Truncate(time.Second).Add(-45 * 24 * time.Hour)
 	end := start.Add(120 * 24 * time.Hour)
+	valuationAt := start.Add(45*24*time.Hour + 5*time.Minute).UTC().Truncate(time.Minute)
+	svc.refundReviewNow = func() time.Time { return valuationAt }
 	group, err := client.Group.Create().SetName("refund-accounting-subscription-group").Save(ctx)
 	require.NoError(t, err)
 	subscription, err := client.UserSubscription.Create().
