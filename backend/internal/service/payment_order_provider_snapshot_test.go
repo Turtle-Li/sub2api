@@ -32,6 +32,7 @@ func TestBuildPaymentOrderProviderSnapshot_ExcludesSensitiveConfig(t *testing.T)
 		"provider_instance_id": "12",
 		"provider_key":         payment.TypeWxpay,
 		"payment_mode":         "popup",
+		"checkout_mode":        "native",
 		"merchant_app_id":      "wx-app-id",
 		"currency":             "CNY",
 	}, snapshot)
@@ -64,7 +65,7 @@ func TestCreateOrderInTx_WritesProviderSnapshot(t *testing.T) {
 		Save(ctx)
 	require.NoError(t, err)
 
-	svc := &PaymentService{entClient: client}
+	svc := &PaymentService{entClient: client, configService: &PaymentConfigService{entClient: client}}
 	order, err := svc.createOrderInTx(
 		ctx,
 		CreateOrderRequest{
@@ -105,6 +106,7 @@ func TestCreateOrderInTx_WritesProviderSnapshot(t *testing.T) {
 	require.Equal(t, strconv.FormatInt(instance.ID, 10), order.ProviderSnapshot["provider_instance_id"])
 	require.Equal(t, payment.TypeAlipay, order.ProviderSnapshot["provider_key"])
 	require.Equal(t, "redirect", order.ProviderSnapshot["payment_mode"])
+	require.Equal(t, payment.DefaultPaymentCurrency, order.ProviderSnapshot["currency"])
 	require.NotContains(t, order.ProviderSnapshot, "config")
 	require.NotContains(t, order.ProviderSnapshot, "secretKey")
 	require.NotContains(t, order.ProviderSnapshot, "supported_types")
@@ -126,8 +128,26 @@ func TestBuildPaymentOrderProviderSnapshot_UsesWxpayJSAPIAppIDForOpenIDOrders(t 
 	}, CreateOrderRequest{OpenID: "openid-123"})
 
 	require.Equal(t, "wx-mp-app", snapshot["merchant_app_id"])
+	require.Equal(t, "jsapi", snapshot["checkout_mode"])
 	require.Equal(t, "mch-88", snapshot["merchant_id"])
 	require.Equal(t, "CNY", snapshot["currency"])
+}
+
+func TestBuildPaymentOrderProviderSnapshot_PreservesWxpayCheckoutMode(t *testing.T) {
+	t.Parallel()
+
+	selection := &payment.InstanceSelection{
+		InstanceID:  "88",
+		ProviderKey: payment.TypeWxpay,
+		Config: map[string]string{
+			"appId": "wx-app",
+			"mchId": "mch-88",
+		},
+	}
+
+	require.Equal(t, "native", buildPaymentOrderProviderSnapshot(selection, CreateOrderRequest{})["checkout_mode"])
+	require.Equal(t, "h5", buildPaymentOrderProviderSnapshot(selection, CreateOrderRequest{IsMobile: true})["checkout_mode"])
+	require.Equal(t, "jsapi", buildPaymentOrderProviderSnapshot(selection, CreateOrderRequest{OpenID: "openid-88", IsMobile: true})["checkout_mode"])
 }
 
 func TestBuildPaymentOrderProviderSnapshot_IncludesAlipayMerchantIdentity(t *testing.T) {
@@ -144,6 +164,7 @@ func TestBuildPaymentOrderProviderSnapshot_IncludesAlipayMerchantIdentity(t *tes
 	}, CreateOrderRequest{})
 
 	require.Equal(t, "alipay-app-21", snapshot["merchant_app_id"])
+	require.Equal(t, payment.DefaultPaymentCurrency, snapshot["currency"])
 	require.NotContains(t, snapshot, "privateKey")
 }
 
@@ -161,6 +182,7 @@ func TestBuildPaymentOrderProviderSnapshot_IncludesEasyPayMerchantIdentity(t *te
 	}, CreateOrderRequest{PaymentType: payment.TypeAlipay})
 
 	require.Equal(t, "easypay-merchant-66", snapshot["merchant_id"])
+	require.Equal(t, payment.DefaultPaymentCurrency, snapshot["currency"])
 	require.NotContains(t, snapshot, "pkey")
 }
 

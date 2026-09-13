@@ -59,6 +59,16 @@ const orderFactory = (status: string) => ({
   refund_amount: 0,
 })
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 describe('PaymentStatusPanel', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -73,7 +83,7 @@ describe('PaymentStatusPanel', () => {
     vi.useRealTimers()
   })
 
-  it('treats RECHARGING as a successful terminal state', async () => {
+  it('keeps RECHARGING in the payment processing state', async () => {
     pollOrderStatus.mockResolvedValue(orderFactory('RECHARGING'))
 
     const wrapper = mount(PaymentStatusPanel, {
@@ -96,8 +106,111 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(pollOrderStatus).toHaveBeenCalledWith(42)
-    expect(wrapper.text()).toContain('payment.result.success')
+    expect(wrapper.text()).not.toContain('payment.result.success')
+    expect(wrapper.emitted('success')).toBeUndefined()
+  })
+
+  it('immediately settles a trusted status-only replay without QR or hosted launch material', async () => {
+    pollOrderStatus.mockResolvedValue({
+      ...orderFactory('COMPLETED'),
+      id: 902,
+      order_type: 'reset_card',
+    })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 902,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'wxpay',
+        orderType: 'reset_card',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledWith(902)
     expect(wrapper.emitted('success')).toHaveLength(1)
+    expect(wrapper.emitted('settled')).toEqual([['success']])
+    expect(wrapper.text()).toContain('payment.result.success')
+  })
+
+  it('does not turn a paid fulfillment failure into an unpaid expiry', async () => {
+    pollOrderStatus.mockResolvedValue({
+      ...orderFactory('FAILED'),
+      paid_at: '2026-04-20T12:01:00Z',
+      payment_status: 'PAID',
+      fulfillment_status: 'FAILED',
+    })
+    const wrapper = mount(PaymentStatusPanel, {
+      props: { orderId: 42, qrCode: 'https://pay.example.com/qr/42', expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay', orderType: 'balance' },
+      global: { stubs: { Icon: true } },
+    })
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('payment.qr.expired')
+    expect(wrapper.emitted('settled')).toBeUndefined()
+  })
+
+  it('queries once more at countdown zero and keeps a paid order recoverable', async () => {
+    vi.setSystemTime(new Date('2026-09-13T00:00:00.000Z'))
+    pollOrderStatus
+      .mockResolvedValueOnce(orderFactory('PENDING'))
+      .mockResolvedValueOnce({
+        ...orderFactory('PAID'),
+        paid_at: '2026-09-13T00:00:01.000Z',
+        payment_status: 'PAID',
+        fulfillment_status: 'PENDING',
+      })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://pay.example.com/qr/42',
+        expiresAt: '2026-09-13T00:00:01.000Z',
+        paymentType: 'card',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledTimes(2)
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.emitted('success')).toBeUndefined()
+    expect(wrapper.text()).toContain('payment.result.paymentReceivedProcessing')
+  })
+
+  it('settles expired only after the final server query explicitly reports EXPIRED', async () => {
+    vi.setSystemTime(new Date('2026-09-13T00:00:00.000Z'))
+    pollOrderStatus
+      .mockResolvedValueOnce(orderFactory('PENDING'))
+      .mockResolvedValueOnce(orderFactory('EXPIRED'))
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://pay.example.com/qr/42',
+        expiresAt: '2026-09-13T00:00:01.000Z',
+        paymentType: 'card',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    expect(wrapper.emitted('settled')).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledTimes(2)
+    expect(wrapper.emitted('settled')).toEqual([['expired']])
+    expect(wrapper.text()).toContain('payment.qr.expired')
   })
 
   it('shows reopen button in QR mode when payUrl is also available', async () => {
@@ -339,5 +452,82 @@ describe('PaymentStatusPanel', () => {
     wrapper.unmount()
     Object.defineProperty(window, 'location', { configurable: true, value: originalLocation })
     if (originalHidden) Object.defineProperty(document, 'hidden', originalHidden)
+  })
+
+  it('resets a keep-mounted JSAPI shell into its QR fallback without allowing the old poll to settle it', async () => {
+    const stalePoll = deferred<ReturnType<typeof orderFactory>>()
+    pollOrderStatus.mockImplementation((orderId: number) => {
+      if (orderId === 101) return stalePoll.promise
+      return Promise.resolve({ ...orderFactory('PENDING'), id: orderId, out_trade_no: 'sub2_qr_102' })
+    })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 101,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'wxpay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+
+    await wrapper.setProps({
+      orderId: 102,
+      qrCode: 'weixin://wxpay/bizpayurl?pr=qr-fallback',
+      outTradeNo: 'sub2_qr_102',
+    })
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledWith(102)
+    expect(wrapper.text()).toContain('payment.qr.scanWxpay')
+
+    stalePoll.resolve({ ...orderFactory('COMPLETED'), id: 101, out_trade_no: 'sub2_jsapi_101' })
+    await flushPromises()
+
+    expect(wrapper.emitted('success')).toBeUndefined()
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.text()).toContain('payment.qr.scanWxpay')
+  })
+
+  it('ignores a deferred provider verification after the panel changes checkout sessions', async () => {
+    const staleVerify = deferred<{ data: ReturnType<typeof orderFactory> }>()
+    pollOrderStatus.mockImplementation((orderId: number) => Promise.resolve({
+      ...orderFactory('PENDING'),
+      id: orderId,
+      out_trade_no: orderId === 42 ? 'sub2_old_42' : 'sub2_new_43',
+    }))
+    verifyOrder.mockImplementation((outTradeNo: string) => {
+      if (outTradeNo === 'sub2_old_42') return staleVerify.promise
+      return Promise.resolve({ data: { ...orderFactory('PENDING'), id: 43, out_trade_no: 'sub2_new_43' } })
+    })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'weixin://wxpay/bizpayurl?pr=old',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'wxpay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+    expect(verifyOrder).toHaveBeenCalledWith('sub2_old_42')
+
+    await wrapper.setProps({
+      orderId: 43,
+      qrCode: 'weixin://wxpay/bizpayurl?pr=new',
+      outTradeNo: 'sub2_new_43',
+    })
+    await flushPromises()
+
+    staleVerify.resolve({ data: { ...orderFactory('COMPLETED'), id: 42, out_trade_no: 'sub2_old_42' } })
+    await flushPromises()
+
+    expect(wrapper.emitted('success')).toBeUndefined()
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.text()).toContain('payment.qr.scanWxpay')
   })
 })

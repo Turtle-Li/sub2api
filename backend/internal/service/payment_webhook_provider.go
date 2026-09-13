@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -52,7 +53,7 @@ func (s *PaymentService) GetWebhookProviders(ctx context.Context, providerKey, o
 				return []payment.Provider{prov}, nil
 			}
 			if strings.TrimSpace(providerKey) == payment.TypeWxpay {
-				return s.getEnabledWebhookProvidersByKey(ctx, providerKey)
+				return s.getWebhookProvidersByKey(ctx, providerKey)
 			}
 			if !s.webhookRegistryFallbackAllowed(ctx, providerKey) {
 				return nil, fmt.Errorf("webhook provider fallback is ambiguous for %s", providerKey)
@@ -63,11 +64,13 @@ func (s *PaymentService) GetWebhookProviders(ctx context.Context, providerKey, o
 				return nil, err
 			}
 			return []payment.Provider{prov}, nil
+		} else if !dbent.IsNotFound(err) {
+			return nil, fmt.Errorf("lookup webhook order: %w", err)
 		}
 	}
 
 	if strings.TrimSpace(providerKey) == payment.TypeWxpay {
-		return s.getEnabledWebhookProvidersByKey(ctx, providerKey)
+		return s.getWebhookProvidersByKey(ctx, providerKey)
 	}
 
 	if !s.webhookRegistryFallbackAllowed(ctx, providerKey) {
@@ -116,13 +119,14 @@ func psHasPinnedProviderInstance(order *dbent.PaymentOrder) bool {
 	return order != nil && (psOrderProviderSnapshot(order) != nil || (order.ProviderInstanceID != nil && strings.TrimSpace(*order.ProviderInstanceID) != ""))
 }
 
-func (s *PaymentService) getEnabledWebhookProvidersByKey(ctx context.Context, providerKey string) ([]payment.Provider, error) {
+// getWebhookProvidersByKey returns enabled instances first, followed by disabled
+// instances that have order history. WeChat callbacks do not expose the merchant
+// order number until after decryption, so retained historical credentials must
+// remain available to verify late callbacks after credential rotation.
+func (s *PaymentService) getWebhookProvidersByKey(ctx context.Context, providerKey string) ([]payment.Provider, error) {
 	providerKey = strings.TrimSpace(providerKey)
 	instances, err := s.entClient.PaymentProviderInstance.Query().
-		Where(
-			paymentproviderinstance.ProviderKeyEQ(providerKey),
-			paymentproviderinstance.EnabledEQ(true),
-		).
+		Where(paymentproviderinstance.ProviderKeyEQ(providerKey)).
 		Order(dbent.Asc(paymentproviderinstance.FieldSortOrder)).
 		All(ctx)
 	if err != nil {
@@ -132,8 +136,21 @@ func (s *PaymentService) getEnabledWebhookProvidersByKey(ctx context.Context, pr
 		return nil, payment.ErrProviderNotFound
 	}
 
+	sort.SliceStable(instances, func(i, j int) bool {
+		return instances[i].Enabled && !instances[j].Enabled
+	})
+
 	providers := make([]payment.Provider, 0, len(instances))
 	for _, inst := range instances {
+		if !inst.Enabled {
+			inUse, historyErr := paymentProviderInstanceHasOrders(ctx, s.entClient, inst.ID)
+			if historyErr != nil {
+				return nil, fmt.Errorf("check webhook provider order history: %w", historyErr)
+			}
+			if !inUse {
+				continue
+			}
+		}
 		prov, provErr := s.createProviderFromInstance(ctx, inst)
 		if provErr != nil {
 			slog.Warn("skip webhook provider instance", "provider", providerKey, "instanceID", inst.ID, "error", provErr)

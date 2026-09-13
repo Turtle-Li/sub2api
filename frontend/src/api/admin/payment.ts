@@ -14,6 +14,7 @@ import type {
   PaymentInvoiceRecord,
   AdminUpdateInvoiceRequest,
   PaymentBanner,
+  OrderStatus,
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -78,7 +79,7 @@ export interface OwnerTestOrderRequest {
 
 /** The owner-test endpoint returns the normal order creation payload plus its current status. */
 export interface OwnerTestOrderResponse extends CreateOrderResult {
-  status: string
+  status: OrderStatus
 }
 
 export function isOwnerTestOrderRequest(value: unknown): value is OwnerTestOrderRequest {

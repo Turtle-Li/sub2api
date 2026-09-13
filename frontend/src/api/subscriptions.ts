@@ -97,15 +97,6 @@ export async function getResetCardQuote(subscriptionId: number): Promise<ResetCa
   return response.data
 }
 
-export async function purchaseResetCard(quote: ResetCardQuote, purchaseKey: string): Promise<{ purchase_id: number; subscription_id: number; price: number; expires_at: string }> {
-  const response = await apiClient.post(`/subscriptions/${quote.subscription_id}/purchase-reset-card`, {
-    expected_plan_id: quote.plan_id,
-    expected_price: quote.price,
-    purchase_key: purchaseKey,
-  })
-  return response.data
-}
-
 export default {
   getMySubscriptions,
   getActiveSubscriptions,

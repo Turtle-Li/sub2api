@@ -685,6 +685,110 @@ func TestPaymentAmountToleranceForThreeDecimalCurrency(t *testing.T) {
 	assert.InDelta(t, 0.0005, paymentAmountToleranceForCurrency("KWD"), 1e-12)
 }
 
+func TestExpiredResetCardGrantSnapshotPersistsManualReviewAndKeepsAdminRetryReachable(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	order := createPaymentFulfillmentExpiredResetCardOrder(t, ctx, client)
+	svc := &PaymentService{entClient: client}
+
+	err := svc.executeFulfillment(ctx, order.ID)
+	require.ErrorIs(t, err, errResetCardGrantExpirySnapshotElapsed)
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusFailed, reloaded.Status)
+	require.NotNil(t, reloaded.PaidAt, "trusted payment evidence must remain durable")
+	require.Nil(t, reloaded.CompletedAt)
+	require.NotNil(t, reloaded.FailedAt)
+	require.NotNil(t, reloaded.FailedReason)
+	require.Equal(t, resetCardGrantExpiryManualReviewReason, *reloaded.FailedReason)
+
+	manualAuditCount, err := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+		paymentauditlog.ActionEQ(resetCardGrantExpiryManualReviewAudit),
+	).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, manualAuditCount)
+
+	// A duplicate provider callback now acknowledges the durable hold instead of
+	// recreating a lease. The administrator endpoint still invokes the ordinary
+	// retry path explicitly, so it remains available after manual intervention.
+	beforeDuplicate := reloaded.UpdatedAt
+	require.NoError(t, svc.alreadyProcessed(ctx, reloaded))
+	afterDuplicate, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.True(t, afterDuplicate.UpdatedAt.Equal(beforeDuplicate))
+
+	err = svc.RetryFulfillment(ctx, order.ID)
+	require.ErrorIs(t, err, errResetCardGrantExpirySnapshotElapsed)
+	retryAuditCount, err := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+		paymentauditlog.ActionEQ("RECHARGE_RETRY"),
+	).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, retryAuditCount)
+}
+
+func TestResetCardGrantExpiryIsRecheckedAfterSubscriptionLock(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	ensureResetCardPaymentGrantTable(t, ctx, client)
+	order := createPaymentFulfillmentExpiredResetCardOrder(t, ctx, client)
+
+	beforeLock := time.Now().UTC().Truncate(time.Microsecond)
+	afterLock := beforeLock.Add(2 * time.Minute)
+	grantExpiry := beforeLock.Add(time.Minute)
+	group, err := client.Group.Create().SetName("reset-card-expiry-lock-group").Save(ctx)
+	require.NoError(t, err)
+	subscription, err := client.UserSubscription.Create().
+		SetUserID(order.UserID).
+		SetGroupID(group.ID).
+		SetStartsAt(beforeLock.Add(-time.Hour)).
+		SetExpiresAt(grantExpiry).
+		SetStatus(SubscriptionStatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	snapshot := clonePaymentOrderSnapshot(order.ProductSnapshot)
+	snapshot["subscription_expires_at"] = grantExpiry.Format(time.RFC3339Nano)
+	snapshot["subscription_id"] = subscription.ID
+	snapshot["group_id"] = group.ID
+	order, err = client.PaymentOrder.UpdateOneID(order.ID).
+		SetSubscriptionGroupID(group.ID).
+		SetProductSnapshot(snapshot).
+		Save(ctx)
+	require.NoError(t, err)
+
+	clockCalls := 0
+	svc := &PaymentService{
+		entClient: client,
+		resetCardNow: func() time.Time {
+			clockCalls++
+			if clockCalls == 1 {
+				return beforeLock
+			}
+			return afterLock
+		},
+	}
+	err = svc.executeFulfillment(ctx, order.ID)
+	require.ErrorIs(t, err, errResetCardGrantExpirySnapshotElapsed)
+	require.GreaterOrEqual(t, clockCalls, 2, "expiry must be checked again after the subscription row is locked")
+
+	var grantCount int
+	grantRows, queryErr := client.QueryContext(ctx, `SELECT COUNT(*) FROM subscription_reset_grants WHERE payment_order_id=$1`, order.ID)
+	require.NoError(t, queryErr)
+	require.True(t, grantRows.Next())
+	require.NoError(t, grantRows.Scan(&grantCount))
+	require.NoError(t, grantRows.Close())
+	require.Zero(t, grantCount, "an already-expired grant must never be inserted")
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusFailed, reloaded.Status)
+	require.NotNil(t, reloaded.FailedReason)
+	require.Equal(t, resetCardGrantExpiryManualReviewReason, *reloaded.FailedReason)
+}
+
 func TestRetryFulfillmentRejectsFreshRechargingLease(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
@@ -962,6 +1066,53 @@ func TestPaymentNotificationRejectsAmountMismatchBeforeFulfillment(t *testing.T)
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusPending, reloaded.Status)
+}
+
+func TestTrustedBalancePaymentRecoversFailedRowAfterStalePendingRead(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPending, time.Now())
+	stalePending, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetOrderType(payment.OrderTypeBalance).
+		ClearPlanID().
+		ClearSubscriptionGroupID().
+		ClearSubscriptionDays().
+		ClearPaidAt().
+		SetPaymentTradeNo("").
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusFailed).
+		SetFailedAt(time.Now()).
+		SetFailedReason("provider create response was lost").
+		Save(ctx)
+	require.NoError(t, err)
+
+	credited := 0.0
+	userRepo := &mockUserRepo{getByIDUser: &User{ID: order.UserID}}
+	userRepo.updateBalanceFn = func(_ context.Context, userID int64, amount float64) error {
+		require.Equal(t, order.UserID, userID)
+		credited += amount
+		return nil
+	}
+	redeemRepo := &paymentFulfillmentRedeemRepo{}
+	svc := &PaymentService{
+		entClient:     client,
+		userRepo:      userRepo,
+		redeemService: NewRedeemService(redeemRepo, userRepo, nil, nil, nil, client, nil, nil),
+	}
+
+	require.NoError(t, svc.toPaid(ctx, stalePending, "alipay-stale-balance-paid", order.PayAmount, payment.TypeAlipay))
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+	require.NotNil(t, reloaded.PaidAt)
+	require.Equal(t, "alipay-stale-balance-paid", reloaded.PaymentTradeNo)
+	require.InDelta(t, order.Amount, credited, 1e-8)
+	require.Equal(t, 1, redeemRepo.createCalls)
+	require.Len(t, redeemRepo.useCalls, 1)
 }
 
 func TestConcurrentDuplicateAlipayNotificationsCreditLocalUserExactlyOnce(t *testing.T) {
@@ -1403,6 +1554,88 @@ func createPaymentFulfillmentSubscriptionOrder(
 	return order
 }
 
+func createPaymentFulfillmentExpiredResetCardOrder(t *testing.T, ctx context.Context, client *dbent.Client) *dbent.PaymentOrder {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	createdAt := now.Add(-2 * time.Hour)
+	grantExpiry := now.Add(-time.Hour)
+	keyHash := HashIdempotencyKey("expired-reset-card-grant-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	user, err := client.User.Create().
+		SetEmail("expired-reset-card-" + strconv.FormatInt(time.Now().UnixNano(), 10) + "@example.com").
+		SetPasswordHash("hash").
+		SetUsername("expired-reset-card-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	const (
+		planID  int64 = 7
+		groupID int64 = 4
+		amount        = 40.0
+	)
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(amount).
+		SetPayAmount(amount).
+		SetFeeRate(0).
+		SetRechargeCode("EXPIRED-RESET-" + strconv.FormatInt(time.Now().UnixNano(), 10)).
+		SetOutTradeNo(resetCardOrderOutTradeNo(user.ID, keyHash)).
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("paid-expired-reset-card").
+		SetOrderType(payment.OrderTypeResetCard).
+		SetPlanID(planID).
+		SetSubscriptionGroupID(groupID).
+		SetStatus(OrderStatusPaid).
+		SetPaidAt(createdAt.Add(time.Minute)).
+		SetExpiresAt(now.Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.test").
+		SetProviderSnapshot(map[string]any{
+			"schema_version": 2,
+			"provider_key":   payment.TypeAlipay,
+			"currency":       payment.DefaultPaymentCurrency,
+		}).
+		SetProductSnapshot(map[string]any{
+			"kind":                    "reset_card",
+			"subscription_id":         int64(42),
+			"plan_id":                 planID,
+			"group_id":                groupID,
+			"currency":                payment.DefaultPaymentCurrency,
+			"price":                   amount,
+			"order_amount":            amount,
+			"pay_amount":              amount,
+			"quantity":                1,
+			"grant_expiry_policy":     "subscription",
+			"subscription_expires_at": grantExpiry.Format(time.RFC3339Nano),
+			"idempotency_key_sha256":  keyHash,
+		}).
+		SetCreatedAt(createdAt).
+		SetUpdatedAt(createdAt).
+		Save(ctx)
+	require.NoError(t, err)
+	return order
+}
+
+func ensureResetCardPaymentGrantTable(t *testing.T, ctx context.Context, client *dbent.Client) {
+	t.Helper()
+	_, err := client.ExecContext(ctx, `
+		CREATE TABLE subscription_reset_grants (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			subscription_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			group_id INTEGER NOT NULL,
+			quantity INTEGER NOT NULL,
+			used_count INTEGER NOT NULL DEFAULT 0,
+			expires_at DATETIME NOT NULL,
+			issued_by INTEGER,
+			payment_order_id INTEGER,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`)
+	require.NoError(t, err)
+}
+
 func assertPaymentSubscriptionExpiry(t *testing.T, repo *subscriptionUserSubRepoStub, order *dbent.PaymentOrder, expected time.Time) {
 	t.Helper()
 	sub, err := repo.GetByUserIDAndGroupID(context.Background(), order.UserID, *order.SubscriptionGroupID)
@@ -1438,6 +1671,7 @@ func TestExecuteSubscriptionFulfillmentAppliesAffiliateRebate(t *testing.T) {
 		SetSubscriptionGroupID(7).
 		SetSubscriptionDays(30).
 		SetStatus(OrderStatusPaid).
+		SetPaidAt(time.Now()).
 		SetExpiresAt(time.Now().Add(time.Hour)).
 		SetClientIP("127.0.0.1").
 		SetSrcHost("api.example.com").
@@ -1524,6 +1758,7 @@ func TestExecuteSubscriptionFulfillmentDoesNotDuplicateWorkAfterLegacySuccessAud
 		SetSubscriptionGroupID(7).
 		SetSubscriptionDays(30).
 		SetStatus(OrderStatusPaid).
+		SetPaidAt(time.Now()).
 		SetExpiresAt(time.Now().Add(time.Hour)).
 		SetClientIP("127.0.0.1").
 		SetSrcHost("api.example.com").

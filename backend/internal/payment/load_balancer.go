@@ -316,9 +316,8 @@ func (lb *DefaultLoadBalancer) buildSelection(selected *dbent.PaymentProviderIns
 
 // decryptConfig parses a stored provider config.
 // New records are plaintext JSON; legacy records are AES-256-GCM ciphertext.
-// Unreadable values (legacy ciphertext without a valid key, or malformed data)
-// are treated as empty so the service keeps running while the admin re-enters
-// the config via the UI.
+// Runtime selection must fail closed when a value is unreadable. The admin
+// configuration service retains its separate empty-for-reentry behavior.
 //
 // TODO(deprecated-legacy-ciphertext): The AES fallback branch below is a
 // transitional compatibility shim for pre-plaintext records. Remove it (and
@@ -326,7 +325,7 @@ func (lb *DefaultLoadBalancer) buildSelection(selected *dbent.PaymentProviderIns
 // live deployments have re-saved their provider configs through the UI.
 func (lb *DefaultLoadBalancer) decryptConfig(stored string) (map[string]string, error) {
 	if stored == "" {
-		return nil, nil
+		return nil, fmt.Errorf("payment provider config is empty")
 	}
 	var config map[string]string
 	if err := json.Unmarshal([]byte(stored), &config); err == nil {
@@ -341,9 +340,9 @@ func (lb *DefaultLoadBalancer) decryptConfig(stored string) (map[string]string, 
 			}
 		}
 	}
-	slog.Warn("payment provider config unreadable, treating as empty for re-entry",
+	slog.Warn("payment provider config unreadable",
 		"stored_len", len(stored))
-	return nil, nil
+	return nil, fmt.Errorf("payment provider config is unreadable")
 }
 
 // GetInstanceDailyAmount returns the total completed order amount for an instance today.

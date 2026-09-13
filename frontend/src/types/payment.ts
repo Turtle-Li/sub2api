@@ -21,7 +21,7 @@ export type OrderStatus =
 
 export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex'
 
-export type OrderType = 'balance' | 'subscription'
+export type OrderType = 'balance' | 'subscription' | 'reset_card'
 
 export type InvoiceStatus = 'PENDING' | 'PROCESSING' | 'ISSUED' | 'REJECTED'
 
@@ -160,6 +160,7 @@ export interface PaymentOrder {
   refund_requested_by?: number
   refund_request_reason?: string
   plan_id?: number
+  subscription_id?: number
   provider_instance_id?: string
   invoice?: PaymentInvoiceRecord
   invoice_eligible?: boolean
@@ -364,6 +365,7 @@ export interface CreateOrderRequest {
   payment_type: string
   order_type: string
   plan_id?: number
+  subscription_id?: number
   return_url?: string
   payment_source?: string
   openid?: string
@@ -393,6 +395,7 @@ export interface WechatJSAPIPayload {
 
 export interface CreateOrderResult {
   order_id: number
+  status?: OrderStatus
   amount: number
   pay_url?: string
   qr_code?: string

@@ -136,14 +136,36 @@ func TestNewAlipay(t *testing.T) {
 	}
 }
 
+func TestAlipayTimeoutExpressUsesSafeWholeMinutes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		seconds int
+		want    string
+	}{
+		{seconds: 0, want: ""},
+		{seconds: 59, want: ""},
+		{seconds: 60, want: "1m"},
+		{seconds: 359, want: "5m"},
+		{seconds: 15 * 24 * 60 * 60, want: "21600m"},
+		{seconds: 15*24*60*60 + 60, want: ""},
+	}
+	for _, tt := range tests {
+		if got := alipayTimeoutExpress(tt.seconds); got != tt.want {
+			t.Fatalf("alipayTimeoutExpress(%d) = %q, want %q", tt.seconds, got, tt.want)
+		}
+	}
+}
+
 func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {
 	origPreCreate := alipayTradePreCreate
 	origPagePay := alipayTradePagePay
 	origWapPay := alipayTradeWapPay
+	origTradeQuery := alipayTradeQuery
 	t.Cleanup(func() {
 		alipayTradePreCreate = origPreCreate
 		alipayTradePagePay = origPagePay
 		alipayTradeWapPay = origWapPay
+		alipayTradeQuery = origTradeQuery
 	})
 
 	preCreateCalls := 0
@@ -151,7 +173,13 @@ func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {
 	wapPayCalls := 0
 	alipayTradePreCreate = func(ctx context.Context, client *alipay.Client, param alipay.TradePreCreate) (*alipay.TradePreCreateRsp, error) {
 		preCreateCalls++
+		if param.TimeoutExpress != "10m" {
+			t.Fatalf("precreate timeout_express = %q, want 10m", param.TimeoutExpress)
+		}
 		return nil, errors.New("merchant does not have FACE_TO_FACE_PAYMENT")
+	}
+	alipayTradeQuery = func(context.Context, *alipay.Client, alipay.TradeQuery) (*alipay.TradeQueryRsp, error) {
+		return nil, errors.New(alipayErrTradeNotExist)
 	}
 	alipayTradePagePay = func(client *alipay.Client, param alipay.TradePagePay) (*url.URL, error) {
 		pagePayCalls++
@@ -160,6 +188,9 @@ func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {
 		}
 		if param.NotifyURL != "https://merchant.example.com/api/v1/payment/webhook/alipay" {
 			t.Fatalf("notify_url = %q", param.NotifyURL)
+		}
+		if param.TimeoutExpress != "10m" {
+			t.Fatalf("page pay timeout_express = %q, want 10m", param.TimeoutExpress)
 		}
 		return url.Parse("https://openapi.alipay.com/gateway.do?page-pay")
 	}
@@ -170,9 +201,10 @@ func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {
 
 	provider := &Alipay{}
 	resp, err := provider.createDesktopTrade(context.Background(), &alipay.Client{}, payment.CreatePaymentRequest{
-		OrderID: "sub2_100",
-		Amount:  "88.00",
-		Subject: "Balance recharge",
+		OrderID:          "sub2_100",
+		Amount:           "88.00",
+		Subject:          "Balance recharge",
+		ExpiresInSeconds: 600,
 	}, "https://merchant.example.com/api/v1/payment/webhook/alipay", "https://merchant.example.com/payment/result")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -194,6 +226,42 @@ func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {
 	// unscannable image from it).
 	if resp.QRCode != "" {
 		t.Fatalf("qr_code = %q, want empty for page pay", resp.QRCode)
+	}
+}
+
+func TestCreateTradeDoesNotFallbackWhenPrecreateStateIsUnconfirmed(t *testing.T) {
+	origPreCreate := alipayTradePreCreate
+	origPagePay := alipayTradePagePay
+	origTradeQuery := alipayTradeQuery
+	t.Cleanup(func() {
+		alipayTradePreCreate = origPreCreate
+		alipayTradePagePay = origPagePay
+		alipayTradeQuery = origTradeQuery
+	})
+
+	alipayTradePreCreate = func(context.Context, *alipay.Client, alipay.TradePreCreate) (*alipay.TradePreCreateRsp, error) {
+		return nil, context.DeadlineExceeded
+	}
+	alipayTradeQuery = func(context.Context, *alipay.Client, alipay.TradeQuery) (*alipay.TradeQueryRsp, error) {
+		return nil, context.DeadlineExceeded
+	}
+	pagePayCalls := 0
+	alipayTradePagePay = func(*alipay.Client, alipay.TradePagePay) (*url.URL, error) {
+		pagePayCalls++
+		return url.Parse("https://openapi.alipay.com/gateway.do?page-pay")
+	}
+
+	provider := &Alipay{}
+	_, err := provider.createDesktopTrade(context.Background(), &alipay.Client{}, payment.CreatePaymentRequest{
+		OrderID: "sub2_uncertain_precreate",
+		Amount:  "40.00",
+		Subject: "Subscription reset card",
+	}, "https://merchant.example.com/api/v1/payment/webhook/alipay", "https://merchant.example.com/payment/result")
+	if err == nil || !strings.Contains(err.Error(), "state unconfirmed") {
+		t.Fatalf("error = %v, want state unconfirmed", err)
+	}
+	if pagePayCalls != 0 {
+		t.Fatalf("page pay calls = %d, want 0", pagePayCalls)
 	}
 }
 
@@ -261,15 +329,19 @@ func TestCreateTradeUsesWapPayForMobile(t *testing.T) {
 		if param.ReturnURL != "https://merchant.example.com/payment/result" {
 			t.Fatalf("return_url = %q", param.ReturnURL)
 		}
+		if param.TimeoutExpress != "9m" {
+			t.Fatalf("timeout_express = %q, want 9m", param.TimeoutExpress)
+		}
 		return url.Parse("https://openapi.alipay.com/gateway.do?wap-pay")
 	}
 
 	provider := &Alipay{}
 	resp, err := provider.createWapTrade(&alipay.Client{}, payment.CreatePaymentRequest{
-		OrderID:  "sub2_101",
-		Amount:   "18.00",
-		Subject:  "Balance recharge",
-		IsMobile: true,
+		OrderID:          "sub2_101",
+		Amount:           "18.00",
+		Subject:          "Balance recharge",
+		IsMobile:         true,
+		ExpiresInSeconds: 599,
 	}, "https://merchant.example.com/api/v1/payment/webhook/alipay", "https://merchant.example.com/payment/result")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

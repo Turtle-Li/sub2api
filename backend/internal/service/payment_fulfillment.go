@@ -26,9 +26,22 @@ import (
 // respond with a 2xx success to the provider — otherwise the provider will keep
 // retrying forever (e.g. when a foreign environment's webhook endpoint is
 // misconfigured to point at us, or when our orders table has been wiped).
-var ErrOrderNotFound = errors.New("payment order not found")
+var (
+	ErrOrderNotFound = errors.New("payment order not found")
 
-const paymentFulfillmentLeaseDuration = 5 * time.Minute
+	errResetCardGrantExpirySnapshotElapsed = errors.New(resetCardGrantExpiryManualReviewReason)
+)
+
+const (
+	paymentFulfillmentLeaseDuration = 5 * time.Minute
+
+	// resetCardGrantExpiryManualReviewReason is durable operator-facing state
+	// for a paid reset-card order whose immutable grant deadline elapsed before
+	// fulfillment could create its entitlement. It must remain exact because
+	// recovery uses it to keep the order out of automatic retries.
+	resetCardGrantExpiryManualReviewReason = "manual review required: reset-card grant expiry snapshot has elapsed"
+	resetCardGrantExpiryManualReviewAudit  = "RESET_CARD_GRANT_EXPIRY_MANUAL_REVIEW_REQUIRED"
+)
 
 type paymentFulfillmentLease struct {
 	version time.Time
@@ -186,6 +199,18 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 		// enter this path, so delivery delay must not make Sub2 lose fulfillment.
 		eligibleStatus = paymentorder.StatusIn(OrderStatusPending, OrderStatusCancelled, OrderStatusExpired)
 	}
+	// A provider-create call can fail locally after the gateway has already
+	// accepted the order. The callback may also have loaded PENDING just before
+	// that failure finalizer changed the current row to FAILED. Once the
+	// notification has passed provider, merchant, currency, and amount checks,
+	// it is authoritative payment evidence and may recover any still-unpaid
+	// FAILED order. Fulfillment failures keep paid_at and are not matched here.
+	if o.PaidAt == nil {
+		eligibleStatus = paymentorder.Or(
+			eligibleStatus,
+			paymentorder.And(paymentorder.StatusEQ(OrderStatusFailed), paymentorder.PaidAtIsNil()),
+		)
+	}
 	c, err := s.entClient.PaymentOrder.Update().Where(
 		paymentorder.IDEQ(o.ID),
 		eligibleStatus,
@@ -196,7 +221,7 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 	if c == 0 {
 		return s.alreadyProcessed(ctx, o)
 	}
-	if previousStatus == OrderStatusCancelled || previousStatus == OrderStatusExpired {
+	if previousStatus == OrderStatusCancelled || previousStatus == OrderStatusExpired || previousStatus == OrderStatusFailed {
 		slog.Info("order recovered from webhook payment success",
 			"orderID", o.ID,
 			"previousStatus", previousStatus,
@@ -226,6 +251,13 @@ func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentO
 	case OrderStatusCompleted, OrderStatusRefunded:
 		return nil
 	case OrderStatusFailed, OrderStatusPaid, OrderStatusRecharging:
+		// A durable manual hold has already recorded trusted payment and its
+		// operator-facing reason. A duplicate provider callback must acknowledge
+		// that fact rather than re-enter fulfillment; an administrator can still
+		// explicitly invoke RetryFulfillment after resolving the order.
+		if isResetCardGrantExpiryManualReview(cur) {
+			return nil
+		}
 		return s.executeFulfillment(ctx, o.ID)
 	case OrderStatusExpired:
 		slog.Warn("webhook payment success for expired order beyond grace period",
@@ -257,10 +289,270 @@ func (s *PaymentService) executeFulfillmentWithLeaseAcquirer(ctx context.Context
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
 	}
-	if o.OrderType == payment.OrderTypeSubscription {
+	switch o.OrderType {
+	case payment.OrderTypeSubscription:
 		return s.executeSubscriptionFulfillmentWithLeaseAcquirer(ctx, oid, acquire)
+	case payment.OrderTypeResetCard:
+		return s.executeResetCardFulfillmentWithLeaseAcquirer(ctx, oid, acquire)
+	case payment.OrderTypeBalance:
+		return s.executeBalanceFulfillmentWithLeaseAcquirer(ctx, oid, acquire)
+	default:
+		return infraerrors.BadRequest("INVALID_ORDER_TYPE", "unsupported payment order type cannot be fulfilled")
 	}
-	return s.executeBalanceFulfillmentWithLeaseAcquirer(ctx, oid, acquire)
+}
+
+func (s *PaymentService) executeResetCardFulfillmentWithLeaseAcquirer(ctx context.Context, oid int64, acquire paymentFulfillmentLeaseAcquirer) error {
+	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
+	if err != nil {
+		return infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if o.Status == OrderStatusCompleted {
+		return nil
+	}
+	if psIsRefundStatus(o.Status) {
+		return infraerrors.BadRequest("INVALID_STATUS", "refund-related order cannot fulfill")
+	}
+	if o.PaidAt == nil || !isValidProviderAmount(o.PayAmount) {
+		return infraerrors.BadRequest("PAYMENT_NOT_CONFIRMED", "reset card order has no trusted payment confirmation")
+	}
+	if o.Status != OrderStatusPaid && o.Status != OrderStatusFailed && o.Status != OrderStatusRecharging {
+		return infraerrors.BadRequest("INVALID_STATUS", "order cannot fulfill in status "+o.Status)
+	}
+	claimedOrder, lease, err := acquire(ctx, o)
+	if err != nil {
+		return err
+	}
+	if lease == nil {
+		return nil
+	}
+	if err := s.doResetCard(ctx, claimedOrder, lease); err != nil {
+		if errors.Is(err, errResetCardGrantExpirySnapshotElapsed) {
+			s.markResetCardGrantExpiryManualReview(ctx, oid, lease)
+			return err
+		}
+		s.markFailed(ctx, oid, lease, err)
+		return err
+	}
+	return nil
+}
+
+func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder, lease *paymentFulfillmentLease) error {
+	targetID, groupID, err := validateResetCardPaymentOrderSnapshot(o)
+	if err != nil {
+		return err
+	}
+	if _, err := resetCardPaymentOrderGrantExpiry(o, s.resetCardCurrentTime()); err != nil {
+		return err
+	}
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin reset card fulfillment tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	lockedOrderQuery := tx.Client().PaymentOrder.Query().Where(
+		paymentorder.IDEQ(o.ID),
+		paymentorder.StatusEQ(OrderStatusRecharging),
+		paymentorder.PaidAtNotNil(),
+		paymentorder.UpdatedAtEQ(lease.version),
+	)
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		lockedOrderQuery.ForUpdate()
+	}
+	lockedOrder, err := lockedOrderQuery.Only(txCtx)
+	if err != nil {
+		return fmt.Errorf("lock paid reset card order: %w", err)
+	}
+	o = lockedOrder
+	lockedTargetID, lockedGroupID, err := validateResetCardPaymentOrderSnapshot(o)
+	if err != nil {
+		return err
+	}
+	if lockedTargetID != targetID || lockedGroupID != groupID {
+		return errors.New("reset card order snapshot changed while fulfillment was being claimed")
+	}
+	claimed, err := tx.Client().PaymentAuditLog.Query().Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(o.ID, 10)), paymentauditlog.ActionEQ("RESET_CARD_GRANTED")).Exist(txCtx)
+	if err != nil {
+		return fmt.Errorf("check reset card audit: %w", err)
+	}
+	var (
+		existingGrantID    int64
+		existingSubID      int64
+		existingUserID     int64
+		existingGroupID    int64
+		existingQuantity   int
+		existingGrantFound bool
+	)
+	grantQuery := `SELECT id,subscription_id,user_id,group_id,quantity FROM subscription_reset_grants WHERE payment_order_id=$1`
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		grantQuery += " FOR UPDATE"
+	}
+	grantRows, err := tx.Client().QueryContext(txCtx, grantQuery, o.ID)
+	if err != nil {
+		return fmt.Errorf("load reset card payment grant: %w", err)
+	}
+	for grantRows.Next() {
+		if existingGrantFound {
+			_ = grantRows.Close()
+			return errors.New("reset card payment order has multiple grants")
+		}
+		if err := grantRows.Scan(&existingGrantID, &existingSubID, &existingUserID, &existingGroupID, &existingQuantity); err != nil {
+			_ = grantRows.Close()
+			return fmt.Errorf("scan reset card payment grant: %w", err)
+		}
+		existingGrantFound = true
+	}
+	if err := grantRows.Err(); err != nil {
+		_ = grantRows.Close()
+		return fmt.Errorf("iterate reset card payment grant: %w", err)
+	}
+	_ = grantRows.Close()
+	if claimed != existingGrantFound {
+		return errors.New("reset card payment grant evidence is incomplete")
+	}
+	if existingGrantFound && (existingSubID != targetID || existingUserID != o.UserID || existingGroupID != groupID || existingQuantity != 1) {
+		return errors.New("reset card payment grant evidence does not match the order")
+	}
+	if !claimed {
+		var lockedGroupID int64
+		// Eligibility is authoritative at checkout. Fulfillment locks only the
+		// immutable subscription identity, so a later suspension, soft delete,
+		// catalogue edit, or natural expiry cannot invalidate an already-paid
+		// order. The grant keeps the checkout-time subscription expiry snapshot.
+		subscriptionLockQuery := `SELECT group_id FROM user_subscriptions WHERE id=$1 AND user_id=$2`
+		if tx.Client().Driver().Dialect() == dialect.Postgres {
+			subscriptionLockQuery += " FOR UPDATE"
+		}
+		lockRows, err := tx.Client().QueryContext(txCtx, subscriptionLockQuery, targetID, o.UserID)
+		if err != nil {
+			return fmt.Errorf("lock reset card subscription: %w", err)
+		}
+		if !lockRows.Next() {
+			_ = lockRows.Close()
+			return errors.New("reset card subscription is unavailable")
+		}
+		if err := lockRows.Scan(&lockedGroupID); err != nil {
+			_ = lockRows.Close()
+			return fmt.Errorf("scan reset card subscription: %w", err)
+		}
+		_ = lockRows.Close()
+		if groupID != lockedGroupID {
+			return errors.New("reset card order group changed")
+		}
+		// The subscription lock may have blocked until the checkout-time expiry
+		// snapshot elapsed. Recheck after acquiring it so a grant can never be
+		// created already expired.
+		issuedAt := s.resetCardCurrentTime()
+		grantExpiresAt, err := resetCardPaymentOrderGrantExpiry(o, issuedAt)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.Client().QueryContext(txCtx, `INSERT INTO subscription_reset_grants (subscription_id,user_id,group_id,quantity,used_count,expires_at,issued_by,payment_order_id,created_at,updated_at) VALUES ($1,$2,$3,1,0,$4,NULL,$5,$6,$6) RETURNING id`, targetID, o.UserID, groupID, grantExpiresAt, o.ID, issuedAt)
+		if err != nil {
+			return fmt.Errorf("grant reset card: %w", err)
+		}
+		var grantID int64
+		if !rows.Next() || rows.Scan(&grantID) != nil {
+			_ = rows.Close()
+			return errors.New("grant reset card returned no id")
+		}
+		_ = rows.Close()
+		detail, _ := json.Marshal(map[string]any{"subscription_id": targetID, "grant_id": grantID, "payment_order_id": o.ID})
+		if _, err := tx.Client().PaymentAuditLog.Create().SetOrderID(strconv.FormatInt(o.ID, 10)).SetAction("RESET_CARD_GRANTED").SetDetail(string(detail)).SetOperator("system").Save(txCtx); err != nil {
+			return fmt.Errorf("record reset card audit: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reset card fulfillment tx: %w", err)
+	}
+	if s.subscriptionSvc != nil && groupID > 0 {
+		_ = s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID)
+	}
+	return s.markCompleted(ctx, o, lease, "RESET_CARD_SUCCESS")
+}
+
+func resetCardPaymentOrderGrantExpiry(o *dbent.PaymentOrder, now time.Time) (time.Time, error) {
+	if o == nil || o.ProductSnapshot == nil {
+		return time.Time{}, errors.New("reset card order is missing product snapshot")
+	}
+	raw, _ := o.ProductSnapshot["subscription_expires_at"].(string)
+	expiresAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+	if err != nil || !expiresAt.After(o.CreatedAt) {
+		return time.Time{}, errors.New("reset card order has an invalid subscription expiry snapshot")
+	}
+	if !expiresAt.After(now) {
+		return time.Time{}, errResetCardGrantExpirySnapshotElapsed
+	}
+	return expiresAt, nil
+}
+
+func isResetCardGrantExpiryManualReview(order *dbent.PaymentOrder) bool {
+	return order != nil &&
+		order.Status == OrderStatusFailed &&
+		order.FailedReason != nil &&
+		*order.FailedReason == resetCardGrantExpiryManualReviewReason
+}
+
+func validateResetCardPaymentOrderSnapshot(o *dbent.PaymentOrder) (int64, int64, error) {
+	if o == nil || o.ProductSnapshot == nil {
+		return 0, 0, errors.New("reset card order is missing product snapshot")
+	}
+	providerSnapshot := psOrderProviderSnapshot(o)
+	if o.OrderType != payment.OrderTypeResetCard ||
+		(o.PaymentType != payment.TypeAlipay && o.PaymentType != payment.TypeWxpay) ||
+		providerSnapshot == nil ||
+		!strings.EqualFold(strings.TrimSpace(providerSnapshot.Currency), payment.DefaultPaymentCurrency) {
+		return 0, 0, errors.New("reset card order has an invalid payment identity")
+	}
+	kind, _ := o.ProductSnapshot["kind"].(string)
+	quantity, quantityOK := paymentSnapshotInt64(o.ProductSnapshot["quantity"])
+	price, priceOK := paymentSnapshotFloat(o.ProductSnapshot["price"])
+	orderAmount, orderAmountOK := paymentSnapshotFloat(o.ProductSnapshot["order_amount"])
+	snapshotPayAmount, payAmountOK := paymentSnapshotFloat(o.ProductSnapshot["pay_amount"])
+	currency, _ := o.ProductSnapshot["currency"].(string)
+	expiryPolicy, _ := o.ProductSnapshot["grant_expiry_policy"].(string)
+	expiresAtText, _ := o.ProductSnapshot["subscription_expires_at"].(string)
+	expiresAt, expiresAtErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(expiresAtText))
+	idempotencyHash, _ := o.ProductSnapshot["idempotency_key_sha256"].(string)
+	if kind != "reset_card" || !quantityOK || quantity != 1 || !priceOK || !orderAmountOK || !payAmountOK ||
+		!strings.EqualFold(strings.TrimSpace(currency), payment.DefaultPaymentCurrency) ||
+		strings.TrimSpace(expiryPolicy) != "subscription" || expiresAtErr != nil || !expiresAt.After(o.CreatedAt) ||
+		math.Abs(price-o.Amount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) ||
+		math.Abs(orderAmount-o.Amount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) ||
+		math.Abs(snapshotPayAmount-o.PayAmount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
+		return 0, 0, errors.New("reset card order has an invalid product snapshot")
+	}
+	normalizedHash, err := normalizeResetCardIdempotencyKeyHash(idempotencyHash)
+	if err != nil || o.OutTradeNo != resetCardOrderOutTradeNo(o.UserID, normalizedHash) {
+		return 0, 0, errors.New("reset card order has an invalid idempotency snapshot")
+	}
+	targetID, ok := paymentSnapshotInt64(o.ProductSnapshot["subscription_id"])
+	if !ok || targetID <= 0 {
+		return 0, 0, errors.New("reset card order is missing target subscription")
+	}
+	groupID, groupOK := paymentSnapshotInt64(o.ProductSnapshot["group_id"])
+	planID, planOK := paymentSnapshotInt64(o.ProductSnapshot["plan_id"])
+	if !groupOK || groupID <= 0 || !planOK || planID <= 0 || o.PlanID == nil || *o.PlanID != planID ||
+		o.SubscriptionGroupID == nil || *o.SubscriptionGroupID != groupID {
+		return 0, 0, errors.New("reset card order has an invalid target identity")
+	}
+	return targetID, groupID, nil
+}
+
+func paymentSnapshotInt64(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), v == float64(int64(v))
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func (s *PaymentService) ExecuteBalanceFulfillment(ctx context.Context, oid int64) error {
@@ -320,6 +612,7 @@ func acquirePaymentFulfillmentLeaseWithClient(ctx context.Context, client *dbent
 	updated, err := client.PaymentOrder.Update().
 		Where(
 			paymentorder.IDEQ(o.ID),
+			paymentorder.PaidAtNotNil(),
 			paymentorder.Or(
 				paymentorder.StatusIn(OrderStatusPaid, OrderStatusFailed),
 				paymentorder.And(
@@ -1145,6 +1438,35 @@ func (s *PaymentService) markFailed(ctx context.Context, oid int64, lease *payme
 	}
 	if c > 0 {
 		s.writeAuditLog(ctx, oid, "FULFILLMENT_FAILED", "system", map[string]any{"reason": r})
+	}
+}
+
+// markResetCardGrantExpiryManualReview keeps the paid fact durable while
+// making an already-expired immutable grant deadline visible to operators.
+// It deliberately retains FAILED because the existing admin retry endpoint
+// accepts paid fulfillment failures; automatic recovery has its own exclusion.
+func (s *PaymentService) markResetCardGrantExpiryManualReview(ctx context.Context, oid int64, lease *paymentFulfillmentLease) {
+	if lease == nil {
+		slog.Error("mark reset-card grant expiry manual review without fulfillment lease", "orderID", oid)
+		return
+	}
+	now := time.Now()
+	updated, err := s.entClient.PaymentOrder.Update().Where(
+		paymentorder.IDEQ(oid),
+		paymentorder.StatusEQ(OrderStatusRecharging),
+		paymentorder.UpdatedAtEQ(lease.version),
+	).SetStatus(OrderStatusFailed).
+		SetFailedAt(now).
+		SetFailedReason(resetCardGrantExpiryManualReviewReason).
+		Save(ctx)
+	if err != nil {
+		slog.Error("mark reset-card grant expiry manual review", "orderID", oid, "error", err)
+		return
+	}
+	if updated > 0 && !s.hasAuditLog(ctx, oid, resetCardGrantExpiryManualReviewAudit) {
+		s.writeAuditLog(ctx, oid, resetCardGrantExpiryManualReviewAudit, "system", map[string]any{
+			"reason": resetCardGrantExpiryManualReviewReason,
+		})
 	}
 }
 

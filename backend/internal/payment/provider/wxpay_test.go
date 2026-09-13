@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/wechatpay-apiv3/wechatpay-go/core"
@@ -467,6 +468,22 @@ func TestResolveWxpayCreateMode(t *testing.T) {
 	}
 }
 
+func TestWxpayTimeExpireUsesPersistedTTL(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.September, 13, 12, 0, 0, 987654321, time.FixedZone("CST", 8*60*60))
+	requireExpiry := wxpayTimeExpire(now, 599)
+	if requireExpiry == nil {
+		t.Fatal("expected time_expire")
+	}
+	want := now.UTC().Add(599 * time.Second).Truncate(time.Second)
+	if !requireExpiry.Equal(want) {
+		t.Fatalf("time_expire = %s, want %s", requireExpiry, want)
+	}
+	if got := wxpayTimeExpire(now, 0); got != nil {
+		t.Fatalf("zero TTL time_expire = %s, want nil", got)
+	}
+}
+
 func TestCreatePaymentWithOpenIDReturnsJSAPIResult(t *testing.T) {
 	origJSAPIPrepay := wxpayJSAPIPrepayWithRequestPayment
 	origNativePrepay := wxpayNativePrepay
@@ -487,6 +504,9 @@ func TestCreatePaymentWithOpenIDReturnsJSAPIResult(t *testing.T) {
 		}
 		if req.SceneInfo == nil || wxSV(req.SceneInfo.PayerClientIp) != "203.0.113.10" {
 			t.Fatalf("scene_info payer_client_ip = %q, want %q", wxSV(req.SceneInfo.PayerClientIp), "203.0.113.10")
+		}
+		if req.TimeExpire == nil || time.Until(*req.TimeExpire) < 9*time.Minute || time.Until(*req.TimeExpire) > 11*time.Minute {
+			t.Fatalf("time_expire = %v, want approximately 10 minutes", req.TimeExpire)
 		}
 		return &jsapi.PrepayWithRequestPaymentResponse{
 			Appid:     core.String("wx123"),
@@ -515,12 +535,13 @@ func TestCreatePaymentWithOpenIDReturnsJSAPIResult(t *testing.T) {
 	}
 
 	resp, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
-		OrderID:     "sub2_88",
-		Amount:      "66.88",
-		PaymentType: payment.TypeWxpay,
-		NotifyURL:   "https://merchant.example/payment/notify",
-		OpenID:      "openid-123",
-		ClientIP:    "203.0.113.10",
+		OrderID:          "sub2_88",
+		Amount:           "66.88",
+		PaymentType:      payment.TypeWxpay,
+		NotifyURL:        "https://merchant.example/payment/notify",
+		OpenID:           "openid-123",
+		ClientIP:         "203.0.113.10",
+		ExpiresInSeconds: 600,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

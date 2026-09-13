@@ -84,10 +84,10 @@ describe('AirwallexPaymentView', () => {
     window.localStorage.clear()
   })
 
-  it('从本地恢复快照读取支付参数，避免在 URL 中暴露 client_secret', async () => {
+  it('从本地恢复快照读取支付参数，并忽略第三方流水号', async () => {
     routeState.query = {
       order_id: '101',
-      out_trade_no: 'sub2_awx_101',
+      out_trade_no: 'provider-channel-101',
       resume_token: 'resume-awx',
     }
     window.localStorage.setItem(
@@ -114,8 +114,9 @@ describe('AirwallexPaymentView', () => {
     const checkoutOptions = redirectToCheckout.mock.calls[0][0]
     const successUrl = new URL(checkoutOptions.successUrl)
     expect(successUrl.searchParams.get('order_id')).toBe('101')
-    expect(successUrl.searchParams.get('out_trade_no')).toBe('sub2_awx_101')
+    expect(successUrl.searchParams.get('out_trade_no')).toBeNull()
     expect(successUrl.searchParams.get('resume_token')).toBe('resume-awx')
+    expect(successUrl.searchParams.get('status')).toBe('success')
   })
 
   it('拒绝只从 URL query 读取 Airwallex 支付密钥', async () => {

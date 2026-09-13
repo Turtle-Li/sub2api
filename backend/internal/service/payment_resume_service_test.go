@@ -305,6 +305,42 @@ func TestWeChatPaymentResumeTokenRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWeChatPaymentResumeTokenRoundTripResetCardContext(t *testing.T) {
+	t.Parallel()
+
+	svc := NewPaymentResumeService([]byte("0123456789abcdef0123456789abcdef"))
+	keyHash := HashIdempotencyKey("reset-card-wechat-oauth")
+	token, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:             "openid-reset-card",
+		PaymentType:        payment.TypeWxpay,
+		Amount:             "40.00",
+		OrderType:          payment.OrderTypeResetCard,
+		PlanID:             7,
+		SubscriptionID:     42,
+		IdempotencyKeyHash: keyHash,
+	})
+	if err != nil {
+		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
+	}
+
+	claims, err := svc.ParseWeChatPaymentResumeToken(token)
+	if err != nil {
+		t.Fatalf("ParseWeChatPaymentResumeToken returned error: %v", err)
+	}
+	if claims.OrderType != payment.OrderTypeResetCard || claims.PlanID != 7 || claims.SubscriptionID != 42 || claims.IdempotencyKeyHash != keyHash {
+		t.Fatalf("reset card claims mismatch: %+v", claims)
+	}
+
+	_, err = svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:      "openid-reset-card",
+		PaymentType: payment.TypeWxpay,
+		OrderType:   payment.OrderTypeResetCard,
+	})
+	if err == nil {
+		t.Fatal("reset card resume token should require an idempotency hash")
+	}
+}
+
 func TestCreateWeChatPaymentResumeTokenRejectsMissingSigningKey(t *testing.T) {
 	t.Parallel()
 

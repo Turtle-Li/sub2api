@@ -9,6 +9,10 @@ import (
 	"strconv"
 	"strings"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	"entgo.io/ent/dialect/sql/sqljson"
+
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
@@ -161,12 +165,42 @@ func providerConfigFieldValue(config map[string]string, fieldName string) string
 	return ""
 }
 
-func (s *PaymentConfigService) countPendingOrders(ctx context.Context, providerInstanceID int64) (int, error) {
-	return s.entClient.PaymentOrder.Query().
+func paymentProviderInstancePendingOrderCount(ctx context.Context, entClient *dbent.Client, providerInstanceID int64) (int, error) {
+	return entClient.PaymentOrder.Query().
 		Where(
 			paymentorder.ProviderInstanceIDEQ(strconv.FormatInt(providerInstanceID, 10)),
 			paymentorder.StatusIn(pendingOrderStatuses...),
 		).Count(ctx)
+}
+
+// hasProviderOrders protects the immutable payment identity behind an instance.
+// Once an instance has been used, changing its credentials in place would make
+// late callbacks, order reconciliation, and refunds unverifiable. Operators can
+// rotate credentials by creating a new instance and disabling the old one.
+func paymentProviderInstanceHasOrders(ctx context.Context, entClient *dbent.Client, providerInstanceID int64) (bool, error) {
+	instanceID := strconv.FormatInt(providerInstanceID, 10)
+	return entClient.PaymentOrder.Query().
+		Where(func(selector *entsql.Selector) {
+			selector.Where(entsql.Or(
+				entsql.EQ(selector.C(paymentorder.FieldProviderInstanceID), instanceID),
+				sqljson.ValueEQ(selector.C(paymentorder.FieldProviderSnapshot), instanceID, sqljson.Path("provider_instance_id")),
+			))
+		}).
+		Exist(ctx)
+}
+
+// loadPaymentProviderInstanceForUpdate serializes instance rotation with an
+// order insert that binds to the instance. SQLite's test driver has no FOR
+// UPDATE syntax; PostgreSQL acquires the row lock used in production.
+func loadPaymentProviderInstanceForUpdate(ctx context.Context, tx *dbent.Tx, providerInstanceID int64) (*dbent.PaymentProviderInstance, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("provider instance transaction is required")
+	}
+	query := tx.PaymentProviderInstance.Query().Where(paymentproviderinstance.IDEQ(providerInstanceID))
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		query.ForUpdate()
+	}
+	return query.Only(ctx)
 }
 
 func (s *PaymentConfigService) countPendingOrdersByPlan(ctx context.Context, planID int64) (int, error) {
@@ -288,16 +322,22 @@ func easyPayCustomMethodTypeConflictsWithBuiltin(methodType string) bool {
 // NOTE: This function exceeds 30 lines due to per-field nil-check patch update
 // boilerplate and pending-order safety checks.
 func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id int64, req UpdateProviderInstanceRequest) (*dbent.PaymentProviderInstance, error) {
-	current, err := s.entClient.PaymentProviderInstance.Get(ctx, id)
+	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load provider instance: %w", err)
+		return nil, fmt.Errorf("begin provider instance update transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := loadPaymentProviderInstanceForUpdate(ctx, tx, id)
+	if err != nil {
+		return nil, fmt.Errorf("lock provider instance: %w", err)
 	}
 	var pendingOrderCount *int
 	getPendingOrderCount := func() (int, error) {
 		if pendingOrderCount != nil {
 			return *pendingOrderCount, nil
 		}
-		count, err := s.countPendingOrders(ctx, id)
+		count, err := paymentProviderInstancePendingOrderCount(ctx, tx.Client(), id)
 		if err != nil {
 			return 0, fmt.Errorf("check pending orders: %w", err)
 		}
@@ -321,18 +361,17 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 		if err != nil {
 			return nil, fmt.Errorf("decrypt existing config: %w", err)
 		}
-		mergedConfig, err = s.mergeConfig(ctx, id, req.Config)
+		mergedConfig, err = s.mergeProviderInstanceConfig(current, req.Config)
 		if err != nil {
 			return nil, err
 		}
 		if hasPendingOrderProtectedConfigChange(current.ProviderKey, currentConfig, mergedConfig) {
-			count, err := getPendingOrderCount()
+			inUse, err := paymentProviderInstanceHasOrders(ctx, tx.Client(), id)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("check provider order history: %w", err)
 			}
-			if count > 0 {
-				return nil, infraerrors.Conflict("PENDING_ORDERS", "instance has pending orders").
-					WithMetadata(map[string]string{"count": strconv.Itoa(count)})
+			if inUse {
+				return nil, infraerrors.Conflict("PROVIDER_INSTANCE_IN_USE", "provider credentials and merchant identity cannot be changed after the instance has processed an order; create a new instance to rotate credentials")
 			}
 		}
 	}
@@ -370,7 +409,7 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 			return nil, err
 		}
 	}
-	u := s.entClient.PaymentProviderInstance.UpdateOneID(id)
+	u := tx.PaymentProviderInstance.UpdateOneID(id)
 	if req.Name != nil {
 		u.SetName(*req.Name)
 	}
@@ -446,7 +485,14 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 	if req.PaymentMode != nil {
 		u.SetPaymentMode(*req.PaymentMode)
 	}
-	return u.Save(ctx)
+	updated, err := u.Save(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit provider instance update: %w", err)
+	}
+	return updated.Unwrap(), nil
 }
 
 // GetUserRefundEligibleInstanceIDs returns provider instance IDs that allow user refund.
@@ -466,14 +512,13 @@ func (s *PaymentConfigService) GetUserRefundEligibleInstanceIDs(ctx context.Cont
 	return ids, nil
 }
 
-func (s *PaymentConfigService) mergeConfig(ctx context.Context, id int64, newConfig map[string]string) (map[string]string, error) {
-	inst, err := s.entClient.PaymentProviderInstance.Get(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("load existing provider: %w", err)
+func (s *PaymentConfigService) mergeProviderInstanceConfig(inst *dbent.PaymentProviderInstance, newConfig map[string]string) (map[string]string, error) {
+	if inst == nil {
+		return nil, fmt.Errorf("provider instance is required")
 	}
 	existing, err := s.decryptConfig(inst.Config)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt existing config for instance %d: %w", id, err)
+		return nil, fmt.Errorf("decrypt existing config for instance %d: %w", inst.ID, err)
 	}
 	if existing == nil {
 		existing = map[string]string{}
@@ -521,15 +566,28 @@ func (s *PaymentConfigService) decryptConfig(stored string) (map[string]string, 
 }
 
 func (s *PaymentConfigService) DeleteProviderInstance(ctx context.Context, id int64) error {
-	count, err := s.countPendingOrders(ctx, id)
+	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
-		return fmt.Errorf("check pending orders: %w", err)
+		return fmt.Errorf("begin provider instance delete transaction: %w", err)
 	}
-	if count > 0 {
-		return infraerrors.Conflict("PENDING_ORDERS",
-			fmt.Sprintf("this instance has %d in-progress orders and cannot be deleted — wait for orders to complete or disable the instance first", count))
+	defer func() { _ = tx.Rollback() }()
+	if _, err := loadPaymentProviderInstanceForUpdate(ctx, tx, id); err != nil {
+		return fmt.Errorf("lock provider instance: %w", err)
 	}
-	return s.entClient.PaymentProviderInstance.DeleteOneID(id).Exec(ctx)
+	inUse, err := paymentProviderInstanceHasOrders(ctx, tx.Client(), id)
+	if err != nil {
+		return fmt.Errorf("check provider order history: %w", err)
+	}
+	if inUse {
+		return infraerrors.Conflict("PROVIDER_INSTANCE_IN_USE", "provider instances that have processed orders must be retained for callbacks, reconciliation, and refunds; disable this instance instead")
+	}
+	if err := tx.PaymentProviderInstance.DeleteOneID(id).Exec(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit provider instance delete: %w", err)
+	}
+	return nil
 }
 
 // encryptConfig serialises a provider config for storage.

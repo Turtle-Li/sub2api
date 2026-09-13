@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -212,6 +214,7 @@ func (w *Wxpay) prepayJSAPI(ctx context.Context, c *core.Client, req payment.Cre
 		Description: core.String(req.Subject),
 		OutTradeNo:  core.String(req.OrderID),
 		NotifyUrl:   core.String(notifyURL),
+		TimeExpire:  wxpayTimeExpire(time.Now(), req.ExpiresInSeconds),
 		Amount:      &jsapi.Amount{Total: core.Int64(totalFen), Currency: &cur},
 		Payer:       &jsapi.Payer{Openid: core.String(strings.TrimSpace(req.OpenID))},
 	}
@@ -242,8 +245,9 @@ func (w *Wxpay) prepayNative(ctx context.Context, c *core.Client, req payment.Cr
 	resp, _, err := wxpayNativePrepay(ctx, svc, native.PrepayRequest{
 		Appid: core.String(w.config["appId"]), Mchid: core.String(w.config["mchId"]),
 		Description: core.String(req.Subject), OutTradeNo: core.String(req.OrderID),
-		NotifyUrl: core.String(notifyURL),
-		Amount:    &native.Amount{Total: core.Int64(totalFen), Currency: &cur},
+		NotifyUrl:  core.String(notifyURL),
+		TimeExpire: wxpayTimeExpire(time.Now(), req.ExpiresInSeconds),
+		Amount:     &native.Amount{Total: core.Int64(totalFen), Currency: &cur},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("wxpay native prepay: %w", err)
@@ -261,9 +265,10 @@ func (w *Wxpay) prepayH5(ctx context.Context, c *core.Client, req payment.Create
 	resp, _, err := wxpayH5Prepay(ctx, svc, h5.PrepayRequest{
 		Appid: core.String(w.config["appId"]), Mchid: core.String(w.config["mchId"]),
 		Description: core.String(req.Subject), OutTradeNo: core.String(req.OrderID),
-		NotifyUrl: core.String(notifyURL),
-		Amount:    &h5.Amount{Total: core.Int64(totalFen), Currency: &cur},
-		SceneInfo: &h5.SceneInfo{PayerClientIp: core.String(req.ClientIP), H5Info: buildWxpayH5Info(w.config)},
+		NotifyUrl:  core.String(notifyURL),
+		TimeExpire: wxpayTimeExpire(time.Now(), req.ExpiresInSeconds),
+		Amount:     &h5.Amount{Total: core.Int64(totalFen), Currency: &cur},
+		SceneInfo:  &h5.SceneInfo{PayerClientIp: core.String(req.ClientIP), H5Info: buildWxpayH5Info(w.config)},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("wxpay h5 prepay: %w", err)
@@ -277,6 +282,16 @@ func (w *Wxpay) prepayH5(ctx context.Context, c *core.Client, req payment.Create
 		return nil, err
 	}
 	return &payment.CreatePaymentResponse{TradeNo: req.OrderID, PayURL: h5URL}, nil
+}
+
+func wxpayTimeExpire(now time.Time, expiresInSeconds int) *time.Time {
+	if expiresInSeconds <= 0 {
+		return nil
+	}
+	// WeChat serializes this value to RFC3339 seconds. Truncation keeps the
+	// upstream checkout from extending beyond the service's integer-second TTL.
+	expiresAt := now.UTC().Add(time.Duration(expiresInSeconds) * time.Second).Truncate(time.Second)
+	return &expiresAt
 }
 
 func buildWxpayH5Info(config map[string]string) *h5.H5Info {
@@ -399,7 +414,20 @@ func (w *Wxpay) QueryOrder(ctx context.Context, tradeNo string) (*payment.QueryO
 		OutTradeNo: core.String(tradeNo), Mchid: core.String(w.config["mchId"]),
 	})
 	if err != nil {
+		var apiErr *core.APIError
+		if errors.As(err, &apiErr) && strings.EqualFold(strings.TrimSpace(apiErr.Code), "ORDER_NOT_EXIST") {
+			return &payment.QueryOrderResponse{
+				TradeNo: tradeNo,
+				Status:  payment.ProviderStatusPending,
+				Metadata: map[string]string{
+					payment.QueryMetadataOrderNotFound: "true",
+				},
+			}, nil
+		}
 		return nil, fmt.Errorf("wxpay query order: %w", err)
+	}
+	if tx == nil {
+		return nil, fmt.Errorf("wxpay query order: empty response")
 	}
 	var amt float64
 	if tx.Amount != nil && tx.Amount.Total != nil {

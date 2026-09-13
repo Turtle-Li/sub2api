@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +41,40 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	}
 	if normalized := NormalizeVisibleMethod(req.PaymentType); normalized != "" {
 		req.PaymentType = normalized
+	}
+	switch req.OrderType {
+	case payment.OrderTypeBalance, payment.OrderTypeSubscription, payment.OrderTypeResetCard:
+	default:
+		return nil, infraerrors.BadRequest("INVALID_ORDER_TYPE", "unsupported payment order type")
+	}
+	if req.OrderType == payment.OrderTypeResetCard {
+		if !isValidProviderAmount(req.Amount) {
+			return nil, infraerrors.BadRequest("INVALID_AMOUNT", "amount must be a positive finite number")
+		}
+		if err := normalizeResetCardOrderIdempotency(&req); err != nil {
+			return nil, err
+		}
+		if existing, found, replayErr := s.findResetCardOrderRecord(ctx, req); replayErr != nil {
+			return nil, replayErr
+		} else if found {
+			return s.replayResetCardOrderRecord(ctx, existing, req)
+		}
+		// The reset-card quote is the server-side source of truth. The client
+		// only repeats the quoted amount so stale prices can be rejected below.
+		if s.subscriptionSvc == nil {
+			return nil, infraerrors.ServiceUnavailable("RESET_CARD_UNAVAILABLE", "reset card purchase is unavailable")
+		}
+		quote, quoteErr := s.subscriptionSvc.GetResetCardQuote(ctx, req.UserID, req.SubscriptionID)
+		if quoteErr != nil {
+			return nil, quoteErr
+		}
+		if req.PlanID == 0 {
+			req.PlanID = quote.PlanID
+		}
+		if math.Abs(req.Amount-quote.Price) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
+			return nil, infraerrors.Conflict("RESET_CARD_QUOTE_CHANGED", "reset card quote changed; request a new quote")
+		}
+		req.Amount = quote.Price
 	}
 	cfg, err := s.configService.GetPaymentConfig(ctx)
 	if err != nil {
@@ -91,7 +127,10 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 	}
 	orderAmount := req.Amount
 	limitAmount := req.Amount
-	if plan != nil {
+	if req.OrderType == payment.OrderTypeResetCard {
+		orderAmount = req.Amount
+		limitAmount = req.Amount
+	} else if plan != nil {
 		orderAmount = plan.Price
 		limitAmount = plan.Price
 	} else if req.OrderType == payment.OrderTypeBalance {
@@ -130,9 +169,17 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 	if err := s.validateSelectedCreateOrderInstance(ctx, req, sel); err != nil {
 		return nil, err
 	}
+	if req.OrderType == payment.OrderTypeResetCard {
+		if err := validateResetCardSelectedProvider(sel); err != nil {
+			return nil, err
+		}
+	}
 	selectedCurrency := payment.DefaultPaymentCurrency
 	if sel != nil {
 		selectedCurrency = paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
+	}
+	if req.OrderType == payment.OrderTypeResetCard && selectedCurrency != payment.DefaultPaymentCurrency {
+		return nil, ErrResetCardCurrencyUnsupported
 	}
 	if selectedCurrency != methodCurrency {
 		if opts != nil && opts.ownerTest != nil {
@@ -155,10 +202,20 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 			return oauthResp, nil
 		}
 	}
-	order, created, err := s.createOrderInTxWithOptions(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, createOrderDatabaseOptionsFrom(opts))
+	dbOpts := createOrderDatabaseOptionsFrom(opts)
+	if req.OrderType == payment.OrderTypeResetCard {
+		dbOpts = &createOrderDatabaseOptions{
+			fixedOutTradeNo:     resetCardOrderOutTradeNo(req.UserID, req.IdempotencyKeyHash),
+			resetCardIdempotent: true,
+		}
+	}
+	order, created, err := s.createOrderInTxWithOptions(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, dbOpts)
 	if err != nil {
 		if opts != nil && opts.ownerTest != nil && isOwnerTestOrderInsertConflict(err) {
 			return s.replayOwnerTestOrder(ctx, opts.ownerTest)
+		}
+		if req.OrderType == payment.OrderTypeResetCard && errors.Is(err, errResetCardOrderInsertConflict) {
+			return s.replayResetCardOrder(ctx, req)
 		}
 		return nil, err
 	}
@@ -168,6 +225,12 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		}
 		s.writeAuditLog(ctx, order.ID, "OWNER_TEST_ORDER_CREATED", fmt.Sprintf("admin:%d", opts.ownerTest.input.AdminUserID), ownerTestAuditDetail(opts.ownerTest))
 		return s.invokeOwnerTestProvider(ctx, order, opts.ownerTest)
+	}
+	if req.OrderType == payment.OrderTypeResetCard && !created {
+		return s.replayResetCardOrderRecord(ctx, order, req)
+	}
+	if req.OrderType == payment.OrderTypeResetCard {
+		return s.invokeResetCardProvider(ctx, order, req, cfg)
 	}
 	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
 	if err != nil {
@@ -205,6 +268,9 @@ func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrder
 	if req.OrderType == payment.OrderTypeSubscription {
 		return s.validateSubOrder(ctx, req)
 	}
+	if req.OrderType == payment.OrderTypeResetCard {
+		return s.validateResetCardOrder(ctx, req)
+	}
 	if math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0) || req.Amount <= 0 {
 		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "amount must be a positive number")
 	}
@@ -228,6 +294,320 @@ func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrder
 		}
 	}
 	return nil, nil
+}
+
+func (s *PaymentService) validateResetCardOrder(ctx context.Context, req CreateOrderRequest) (*dbent.SubscriptionPlan, error) {
+	if req.SubscriptionID <= 0 || s.subscriptionSvc == nil {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "reset card order requires a subscription")
+	}
+	if req.PaymentType != payment.TypeAlipay && req.PaymentType != payment.TypeWxpay {
+		return nil, infraerrors.BadRequest("RESET_CARD_PAYMENT_METHOD_UNSUPPORTED", "reset cards require Alipay or WeChat Pay")
+	}
+	quote, err := s.subscriptionSvc.GetResetCardQuote(ctx, req.UserID, req.SubscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	if req.PlanID != 0 && req.PlanID != quote.PlanID {
+		return nil, infraerrors.Conflict("RESET_CARD_QUOTE_CHANGED", "reset card quote changed; request a new quote")
+	}
+	plan, err := s.configService.GetPlan(ctx, quote.PlanID)
+	if err != nil {
+		return nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "reset card source plan is no longer available")
+	}
+	return plan, nil
+}
+
+func validateResetCardSelectedProvider(sel *payment.InstanceSelection) error {
+	if sel == nil {
+		return infraerrors.ServiceUnavailable("RESET_CARD_PAYMENT_PROVIDER_UNSUPPORTED", "reset card payment provider is unavailable")
+	}
+	providerKey := strings.TrimSpace(sel.ProviderKey)
+	if providerKey == payment.TypeAlipay || providerKey == payment.TypeWxpay || providerKey == payment.TypeUnifiedPay {
+		return nil
+	}
+	return infraerrors.ServiceUnavailable(
+		"RESET_CARD_PAYMENT_PROVIDER_UNSUPPORTED",
+		"reset cards require an official or unified Alipay or WeChat payment provider",
+	)
+}
+
+func normalizeResetCardOrderIdempotency(req *CreateOrderRequest) error {
+	if req == nil || req.OrderType != payment.OrderTypeResetCard {
+		return nil
+	}
+	hash := strings.TrimSpace(req.IdempotencyKeyHash)
+	if raw := strings.TrimSpace(req.IdempotencyKey); raw != "" {
+		key, err := NormalizeIdempotencyKey(raw)
+		if err != nil {
+			return err
+		}
+		derived := HashIdempotencyKey(key)
+		if hash != "" && !strings.EqualFold(hash, derived) {
+			return ErrIdempotencyKeyConflict
+		}
+		hash = derived
+	}
+	normalizedHash, err := normalizeResetCardIdempotencyKeyHash(hash)
+	if err != nil {
+		return err
+	}
+	req.IdempotencyKey = ""
+	req.IdempotencyKeyHash = normalizedHash
+	return nil
+}
+
+func normalizeResetCardIdempotencyKeyHash(raw string) (string, error) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return "", ErrIdempotencyKeyRequired
+	}
+	if len(raw) != sha256.Size*2 {
+		return "", ErrIdempotencyKeyInvalid
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", ErrIdempotencyKeyInvalid
+	}
+	return raw, nil
+}
+
+func resetCardOrderOutTradeNo(userID int64, idempotencyKeyHash string) string {
+	digest := sha256.Sum256([]byte("sub2-reset-card-v1\n" + strconv.FormatInt(userID, 10) + "\n" + idempotencyKeyHash))
+	return "sub2_reset_" + hex.EncodeToString(digest[:24])
+}
+
+func (s *PaymentService) findResetCardOrderRecord(ctx context.Context, req CreateOrderRequest) (*dbent.PaymentOrder, bool, error) {
+	if s == nil || s.entClient == nil {
+		return nil, false, infraerrors.ServiceUnavailable("RESET_CARD_UNAVAILABLE", "reset card purchase is unavailable")
+	}
+	outTradeNo := resetCardOrderOutTradeNo(req.UserID, req.IdempotencyKeyHash)
+	order, err := s.entClient.PaymentOrder.Query().Where(paymentorder.OutTradeNoEQ(outTradeNo)).Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("lookup reset card payment replay: %w", err)
+	}
+	if err := validateResetCardOrderRecord(order, req, nil); err != nil {
+		return nil, false, err
+	}
+	return order, true, nil
+}
+
+func (s *PaymentService) replayResetCardOrder(ctx context.Context, req CreateOrderRequest) (*CreateOrderResponse, error) {
+	if s == nil || s.entClient == nil {
+		return nil, infraerrors.ServiceUnavailable("RESET_CARD_UNAVAILABLE", "reset card purchase is unavailable")
+	}
+	order, err := s.entClient.PaymentOrder.Query().Where(paymentorder.OutTradeNoEQ(resetCardOrderOutTradeNo(req.UserID, req.IdempotencyKeyHash))).Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, infraerrors.ServiceUnavailable("RESET_CARD_ORDER_RETRY", "reset card order is still being recorded; retry with the same Idempotency-Key")
+		}
+		return nil, fmt.Errorf("reload reset card payment replay: %w", err)
+	}
+	return s.replayResetCardOrderRecord(ctx, order, req)
+}
+
+func (s *PaymentService) replayResetCardOrderRecord(ctx context.Context, order *dbent.PaymentOrder, req CreateOrderRequest) (*CreateOrderResponse, error) {
+	if err := validateResetCardOrderRecord(order, req, nil); err != nil {
+		return nil, err
+	}
+	if order.PaidAt == nil && (order.Status == OrderStatusFailed || order.Status == OrderStatusExpired) {
+		_ = s.reconcilePaid(ctx, order)
+		reloaded, err := s.entClient.PaymentOrder.Get(ctx, order.ID)
+		if err != nil {
+			return nil, fmt.Errorf("reload reset card payment replay: %w", err)
+		}
+		order = reloaded
+		if order.Status == OrderStatusFailed && order.PaidAt == nil {
+			order, err = s.reopenUnconfirmedResetCardOrder(ctx, order)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if resetCardOrderHasReusableResponse(order) {
+		return buildResetCardOrderResponse(order), nil
+	}
+	if s.configService == nil {
+		return nil, infraerrors.ServiceUnavailable("PAYMENT_CONFIG_UNAVAILABLE", "payment configuration is unavailable")
+	}
+	cfg, err := s.configService.GetPaymentConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get payment config for reset card replay: %w", err)
+	}
+	return s.invokeResetCardProvider(ctx, order, req, cfg)
+}
+
+func validateResetCardOrderRecord(order *dbent.PaymentOrder, req CreateOrderRequest, sel *payment.InstanceSelection) error {
+	if order == nil || order.UserID != req.UserID || order.OrderType != payment.OrderTypeResetCard ||
+		order.OutTradeNo != resetCardOrderOutTradeNo(req.UserID, req.IdempotencyKeyHash) ||
+		NormalizeVisibleMethod(order.PaymentType) != NormalizeVisibleMethod(req.PaymentType) ||
+		math.Abs(order.Amount-req.Amount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) ||
+		order.ProductSnapshot == nil {
+		return ErrIdempotencyKeyConflict
+	}
+	snapshot := order.ProductSnapshot
+	kind, _ := snapshot["kind"].(string)
+	storedHash, _ := snapshot["idempotency_key_sha256"].(string)
+	subscriptionID, subscriptionOK := paymentSnapshotInt64(snapshot["subscription_id"])
+	planID, planOK := paymentSnapshotInt64(snapshot["plan_id"])
+	price, priceOK := paymentSnapshotFloat(snapshot["price"])
+	if kind != "reset_card" || !strings.EqualFold(strings.TrimSpace(storedHash), req.IdempotencyKeyHash) ||
+		!subscriptionOK || subscriptionID != req.SubscriptionID || !planOK ||
+		(req.PlanID > 0 && planID != req.PlanID) || !priceOK ||
+		math.Abs(price-req.Amount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
+		return ErrIdempotencyKeyConflict
+	}
+	if sel != nil {
+		providerSnapshot := psOrderProviderSnapshot(order)
+		if providerSnapshot == nil ||
+			!strings.EqualFold(providerSnapshot.ProviderKey, strings.TrimSpace(sel.ProviderKey)) ||
+			!strings.EqualFold(providerSnapshot.ProviderInstanceID, strings.TrimSpace(sel.InstanceID)) {
+			return infraerrors.Conflict("RESET_CARD_PAYMENT_BINDING_CHANGED", "the existing reset card order belongs to a different payment route")
+		}
+	}
+	return nil
+}
+
+func resetCardOrderHasReusableResponse(order *dbent.PaymentOrder) bool {
+	if order == nil {
+		return false
+	}
+	if order.Status != OrderStatusPending || !order.ExpiresAt.After(time.Now()) {
+		return true
+	}
+	if strings.TrimSpace(psStringValue(order.PayURL)) != "" || strings.TrimSpace(psStringValue(order.QrCode)) != "" {
+		return true
+	}
+	// A JSAPI launch has no URL/QR column. Its snapshot must fence another
+	// provider create even if storage corruption prevents reconstructing it.
+	_, present, _ := resetCardCheckoutFromOrder(order)
+	return present
+}
+
+func buildResetCardOrderResponse(order *dbent.PaymentOrder) *CreateOrderResponse {
+	if order == nil {
+		return nil
+	}
+	paymentMode := ""
+	if snapshot := psOrderProviderSnapshot(order); snapshot != nil {
+		paymentMode = snapshot.PaymentMode
+	}
+	payURL, qrCode := "", ""
+	resultType := payment.CreatePaymentResultOrderCreated
+	var jsapi *payment.WechatJSAPIPayload
+	if order.Status == OrderStatusPending && order.ExpiresAt.After(time.Now()) {
+		payURL = psStringValue(order.PayURL)
+		qrCode = psStringValue(order.QrCode)
+		if checkout, _, err := resetCardCheckoutFromOrder(order); err == nil && checkout != nil {
+			resultType = checkout.ResultType
+			jsapi = checkout.JSAPI
+		}
+	}
+	return &CreateOrderResponse{
+		OrderID:      order.ID,
+		Amount:       order.Amount,
+		PayAmount:    order.PayAmount,
+		FeeRate:      order.FeeRate,
+		Status:       order.Status,
+		ResultType:   resultType,
+		PaymentType:  order.PaymentType,
+		OutTradeNo:   order.OutTradeNo,
+		PayURL:       payURL,
+		QRCode:       qrCode,
+		JSAPI:        jsapi,
+		JSAPIPayload: jsapi,
+		Currency:     PaymentOrderCurrency(order),
+		ExpiresAt:    order.ExpiresAt,
+		PaymentMode:  paymentMode,
+	}
+}
+
+// revalidateResetCardOrderInTx locks the purchased subscription and the exact
+// monthly plan before an externally payable order becomes durable. The
+// provider call happens only after this transaction commits.
+func (s *PaymentService) revalidateResetCardOrderInTx(ctx context.Context, tx *dbent.Tx, req CreateOrderRequest, expectedPlan *dbent.SubscriptionPlan) (*resetCardOrderSnapshotSource, error) {
+	if tx == nil || expectedPlan == nil || req.SubscriptionID <= 0 {
+		return nil, ErrResetCardPurchaseUnavailable
+	}
+	txCtx := dbent.NewTxContext(ctx, tx)
+	subscription, found, err := loadResetCardPurchaseSubscription(txCtx, tx.Client(), req.UserID, req.SubscriptionID, true)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrSubscriptionNotFound
+	}
+	now := time.Now()
+	if s.subscriptionSvc != nil {
+		now = s.subscriptionSvc.resetCardPurchaseNow()
+	}
+	if err := validateResetCardPurchaseSubscription(subscription, now); err != nil {
+		return nil, err
+	}
+
+	// Prevent a concurrent insert/removal from changing the exact-one monthly
+	// source-plan invariant while this order is being recorded.
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		if _, err := tx.Client().ExecContext(txCtx, "LOCK TABLE subscription_plans IN SHARE MODE"); err != nil {
+			return nil, fmt.Errorf("lock reset card plan source: %w", err)
+		}
+	}
+	lockedSourcePlan, err := loadSingleMonthlyResetCardPlan(txCtx, tx.Client(), subscription.groupID, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateResetCardPurchasePlanCurrency(lockedSourcePlan.currency); err != nil {
+		return nil, err
+	}
+	lockedPrice, err := resetCardPurchasePriceForPlan(lockedSourcePlan)
+	if err != nil {
+		return nil, err
+	}
+	if lockedSourcePlan.id != req.PlanID || lockedSourcePlan.id != expectedPlan.ID ||
+		!lockedPrice.Equal(decimal.NewFromFloat(req.Amount)) {
+		return nil, ErrResetCardQuoteChanged
+	}
+	_, lockedEntitlements, err := normalizePlanEntitlements(lockedSourcePlan.entitlements)
+	if err != nil {
+		return nil, ErrPurchaseRulesUnavailable
+	}
+	if err := validateResetCardPurchaseRules(txCtx, tx.Client(), req.UserID, lockedEntitlements); err != nil {
+		return nil, err
+	}
+
+	planQuery := tx.SubscriptionPlan.Query().Where(subscriptionplan.IDEQ(lockedSourcePlan.id))
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		planQuery.ForUpdate()
+	}
+	lockedPlan, err := planQuery.Only(txCtx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, ErrResetCardPurchaseUnavailable
+		}
+		return nil, fmt.Errorf("lock reset card monthly plan: %w", err)
+	}
+	expectedNormalized, _, expectedErr := normalizePlanEntitlements(expectedPlan.Entitlements)
+	lockedNormalized, _, lockedErr := normalizePlanEntitlements(lockedPlan.Entitlements)
+	if expectedErr != nil || lockedErr != nil ||
+		lockedPlan.ID != expectedPlan.ID || lockedPlan.GroupID != expectedPlan.GroupID ||
+		lockedPlan.GroupID != subscription.groupID || !lockedPlan.ForSale ||
+		!strings.EqualFold(strings.TrimSpace(lockedPlan.Currency), payment.DefaultPaymentCurrency) ||
+		!decimal.NewFromFloat(lockedPlan.Price).Equal(lockedSourcePlan.price) ||
+		!reflect.DeepEqual(expectedNormalized, lockedNormalized) {
+		return nil, ErrResetCardQuoteChanged
+	}
+
+	return &resetCardOrderSnapshotSource{
+		plan:                lockedPlan,
+		subscriptionID:      req.SubscriptionID,
+		groupID:             subscription.groupID,
+		monthlyPrice:        lockedSourcePlan.price.InexactFloat64(),
+		price:               lockedPrice.InexactFloat64(),
+		subscriptionExpires: subscription.expiresAt,
+		idempotencyKeyHash:  req.IdempotencyKeyHash,
+	}, nil
 }
 
 // Recharge pricing modes reported to clients so they stop inferring the mode
@@ -481,14 +861,135 @@ func rechargeOptionProductEqual(expected, current RechargeOption) bool {
 // intact while allowing an already-persisted owner-test ledger to use a
 // deterministic out_trade_no.
 type createOrderDatabaseOptions struct {
-	fixedOutTradeNo   string
-	providerSnapshot  map[string]any
-	lockOwnerTestUser bool
+	fixedOutTradeNo     string
+	providerSnapshot    map[string]any
+	lockOwnerTestUser   bool
+	resetCardIdempotent bool
+}
+
+var errResetCardOrderInsertConflict = errors.New("reset card order insert conflict")
+
+type resetCardOrderSnapshotSource struct {
+	plan                *dbent.SubscriptionPlan
+	subscriptionID      int64
+	groupID             int64
+	monthlyPrice        float64
+	price               float64
+	subscriptionExpires time.Time
+	idempotencyKeyHash  string
 }
 
 func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection) (*dbent.PaymentOrder, error) {
 	order, _, err := s.createOrderInTxWithOptions(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, nil)
 	return order, err
+}
+
+// resetCardOrderEffectiveDeadline preserves the configured payment timeout
+// when it is already safe, but reset-card replays may need to wait out one
+// dispatch lease before opening their upstream checkout. The effective local
+// deadline therefore leaves the provider's minimum lifetime plus one minute
+// for flooring and local execution after that lease.
+func resetCardOrderEffectiveDeadline(now time.Time, timeoutMinutes int, subscriptionExpires time.Time) (time.Time, error) {
+	if timeoutMinutes <= 0 {
+		timeoutMinutes = defaultOrderTimeoutMin
+	}
+	minimumDeadline := now.Add(resetCardMinimumExternalCheckoutLifetime)
+	if !subscriptionExpires.After(minimumDeadline) {
+		return time.Time{}, ErrResetCardPurchaseUnavailable
+	}
+	effectiveDeadline := now.Add(time.Duration(timeoutMinutes) * time.Minute)
+	if effectiveDeadline.Before(minimumDeadline) {
+		effectiveDeadline = minimumDeadline
+	}
+	if subscriptionExpires.Before(effectiveDeadline) {
+		effectiveDeadline = subscriptionExpires
+	}
+	return effectiveDeadline, nil
+}
+
+// revalidateProviderSelectionInTx serializes every new provider-backed order
+// with provider-instance rotation. The load balancer selection is made before
+// the order transaction, so its credential and route identity must be checked
+// again under the same provider-row lock that configuration updates use.
+func (s *PaymentService) revalidateProviderSelectionInTx(ctx context.Context, tx *dbent.Tx, req CreateOrderRequest, selected *payment.InstanceSelection) (*payment.InstanceSelection, error) {
+	if selected == nil {
+		if req.OrderType == payment.OrderTypeResetCard {
+			return nil, paymentProviderSelectionChangedError(req, "the selected reset card payment route is no longer available")
+		}
+		// Narrow internal order-building helpers may intentionally omit a provider
+		// selection. Public CreateOrder always supplies one before reaching here.
+		return nil, nil
+	}
+	providerKey := strings.TrimSpace(selected.ProviderKey)
+	if providerKey == payment.TypeUnifiedPay {
+		// UnifiedPay is not represented by a payment_provider_instances row.
+		return selected, nil
+	}
+	instanceID := strings.TrimSpace(selected.InstanceID)
+	parsedInstanceID, err := strconv.ParseInt(instanceID, 10, 64)
+	if err != nil || parsedInstanceID <= 0 || strconv.FormatInt(parsedInstanceID, 10) != instanceID {
+		return nil, paymentProviderSelectionChangedError(req, "the selected payment route is no longer available")
+	}
+	locked, err := loadPaymentProviderInstanceForUpdate(ctx, tx, parsedInstanceID)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, paymentProviderSelectionChangedError(req, "the selected payment route is no longer available")
+		}
+		return nil, fmt.Errorf("lock payment provider instance: %w", err)
+	}
+	if s.configService == nil {
+		return nil, paymentProviderSelectionUnavailableError(req)
+	}
+	lockedConfig, err := s.configService.decryptConfig(locked.Config)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt locked payment provider config: %w", err)
+	}
+	if lockedConfig == nil {
+		return nil, paymentProviderSelectionUnavailableError(req)
+	}
+	if !locked.Enabled ||
+		!strings.EqualFold(strings.TrimSpace(locked.ProviderKey), providerKey) ||
+		strconv.FormatInt(locked.ID, 10) != instanceID ||
+		hasPendingOrderProtectedConfigChange(locked.ProviderKey, selected.Config, lockedConfig) ||
+		strings.TrimSpace(locked.SupportedTypes) != strings.TrimSpace(selected.SupportedTypes) ||
+		!strings.EqualFold(strings.TrimSpace(locked.PaymentMode), strings.TrimSpace(selected.PaymentMode)) ||
+		!payment.InstanceSupportsType(locked.SupportedTypes, payment.PaymentType(req.PaymentType)) {
+		return nil, paymentProviderSelectionChangedError(req, "the selected payment route changed; request a new checkout")
+	}
+
+	// Use the locked copy even after the comparison succeeds. This prevents a
+	// stale load-balancer configuration from becoming the immutable snapshot or
+	// the provider credentials for the newly persisted order.
+	freshConfig := make(map[string]string, len(lockedConfig)+1)
+	for key, value := range lockedConfig {
+		freshConfig[key] = value
+	}
+	if locked.PaymentMode != "" {
+		freshConfig["paymentMode"] = locked.PaymentMode
+	} else {
+		delete(freshConfig, "paymentMode")
+	}
+	return &payment.InstanceSelection{
+		InstanceID:     strconv.FormatInt(locked.ID, 10),
+		ProviderKey:    locked.ProviderKey,
+		Config:         freshConfig,
+		SupportedTypes: locked.SupportedTypes,
+		PaymentMode:    locked.PaymentMode,
+	}, nil
+}
+
+func paymentProviderSelectionChangedError(req CreateOrderRequest, message string) error {
+	if req.OrderType == payment.OrderTypeResetCard {
+		return infraerrors.Conflict("RESET_CARD_PAYMENT_BINDING_CHANGED", message)
+	}
+	return infraerrors.Conflict("PAYMENT_PROVIDER_BINDING_CHANGED", message)
+}
+
+func paymentProviderSelectionUnavailableError(req CreateOrderRequest) error {
+	if req.OrderType == payment.OrderTypeResetCard {
+		return infraerrors.ServiceUnavailable("RESET_CARD_PAYMENT_ROUTE_UNAVAILABLE", "the selected reset card payment route is unavailable")
+	}
+	return infraerrors.ServiceUnavailable("PAYMENT_PROVIDER_CONFIG_UNAVAILABLE", "payment provider configuration is unavailable")
 }
 
 // createOrderInTxWithOptions writes all locally authoritative order data,
@@ -501,6 +1002,18 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		return nil, false, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if opts != nil && opts.resetCardIdempotent {
+		if opts.fixedOutTradeNo == "" {
+			return nil, false, ErrIdempotencyKeyRequired
+		}
+		existing, lookupErr := tx.PaymentOrder.Query().Where(paymentorder.OutTradeNoEQ(opts.fixedOutTradeNo)).Only(ctx)
+		if lookupErr == nil {
+			return existing, false, nil
+		}
+		if !dbent.IsNotFound(lookupErr) {
+			return nil, false, fmt.Errorf("lookup reset card payment replay: %w", lookupErr)
+		}
+	}
 	if opts != nil && opts.lockOwnerTestUser {
 		lockedUserQuery := tx.User.Query().Where(user.IDEQ(req.UserID))
 		if tx.Client().Driver().Dialect() == dialect.Postgres {
@@ -527,7 +1040,10 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 			return nil, false, fmt.Errorf("lookup owner test order: %w", lookupErr)
 		}
 	}
-	var lockedSnapshotGroup *Group
+	var (
+		lockedSnapshotGroup *Group
+		resetCardSource     *resetCardOrderSnapshotSource
+	)
 	if opts == nil || !opts.lockOwnerTestUser {
 		if plan != nil && req.OrderType == payment.OrderTypeSubscription {
 			lockedPlan, lockedGroup, lockErr := s.revalidateSubscriptionOrderInTx(ctx, tx, req, plan)
@@ -544,11 +1060,34 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 			if s.groupRepo != nil {
 				lockedSnapshotGroup = lockedGroup
 			}
+		} else if plan != nil && req.OrderType == payment.OrderTypeResetCard {
+			lockedSource, lockErr := s.revalidateResetCardOrderInTx(ctx, tx, req, plan)
+			if lockErr != nil {
+				return nil, false, lockErr
+			}
+			if math.Abs(orderAmount-lockedSource.price) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) ||
+				math.Abs(limitAmount-lockedSource.price) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
+				return nil, false, ErrResetCardQuoteChanged
+			}
+			plan = lockedSource.plan
+			resetCardSource = lockedSource
 		} else if plan == nil && req.OrderType == payment.OrderTypeBalance {
 			if lockErr := s.revalidateRechargeOrderInTx(ctx, tx, req, cfg); lockErr != nil {
 				return nil, false, lockErr
 			}
 		}
+	}
+	if sel != nil || req.OrderType == payment.OrderTypeResetCard {
+		lockedSelection, lockErr := s.revalidateProviderSelectionInTx(ctx, tx, req, sel)
+		if lockErr != nil {
+			return nil, false, lockErr
+		}
+		if sel != nil && lockedSelection != nil {
+			// The caller invokes the provider after this transaction commits. Update
+			// its request-local selection to the same locked copy persisted below.
+			*sel = *lockedSelection
+		}
+		sel = lockedSelection
 	}
 	if err := s.checkPendingLimit(ctx, tx, req.UserID, cfg.MaxPendingOrders); err != nil {
 		return nil, false, err
@@ -560,7 +1099,15 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	if tm <= 0 {
 		tm = defaultOrderTimeoutMin
 	}
-	exp := time.Now().Add(time.Duration(tm) * time.Minute)
+	now := time.Now()
+	exp := now.Add(time.Duration(tm) * time.Minute)
+	if resetCardSource != nil {
+		var deadlineErr error
+		exp, deadlineErr = resetCardOrderEffectiveDeadline(now, tm, resetCardSource.subscriptionExpires)
+		if deadlineErr != nil {
+			return nil, false, deadlineErr
+		}
+	}
 	outTradeNo := ""
 	if opts != nil && opts.fixedOutTradeNo != "" {
 		outTradeNo = opts.fixedOutTradeNo
@@ -571,6 +1118,9 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		}
 	}
 	providerSnapshot := buildPaymentOrderProviderSnapshot(sel, req)
+	if req.OrderType == payment.OrderTypeResetCard {
+		providerSnapshot = withInitialResetCardDispatch(providerSnapshot)
+	}
 	if opts != nil && opts.providerSnapshot != nil {
 		providerSnapshot = clonePaymentOrderSnapshot(opts.providerSnapshot)
 	}
@@ -611,7 +1161,10 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	}
 	if plan != nil {
 		subscriptionDays := psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit)
-		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID).SetSubscriptionDays(subscriptionDays)
+		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID)
+		if req.OrderType == payment.OrderTypeSubscription {
+			b.SetSubscriptionDays(subscriptionDays)
+		}
 		// The plan is already the immutable product selected for this order. A
 		// small current-group read records the promised limits alongside it, so a
 		// later group edit cannot rewrite what this purchase represented.
@@ -621,7 +1174,14 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 				snapshotGroup = group
 			}
 		}
-		b.SetProductSnapshot(buildPaymentProductSnapshotWithGroup(plan, orderAmount, payAmount, subscriptionDays, snapshotGroup))
+		if req.OrderType == payment.OrderTypeResetCard {
+			if resetCardSource == nil {
+				return nil, false, errors.New("reset card order snapshot source is missing")
+			}
+			b.SetProductSnapshot(buildPaymentResetCardProductSnapshot(resetCardSource, payAmount))
+		} else {
+			b.SetProductSnapshot(buildPaymentProductSnapshotWithGroup(plan, orderAmount, payAmount, subscriptionDays, snapshotGroup))
+		}
 	} else if req.OrderType == payment.OrderTypeBalance {
 		// Resolve balance entitlements only from the server-side configured
 		// preset. The client-provided amount can select a preset, but can never
@@ -631,6 +1191,9 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	order, err := b.Save(ctx)
 	if err != nil {
 		if opts != nil && opts.fixedOutTradeNo != "" && dbent.IsConstraintError(err) {
+			if opts.resetCardIdempotent {
+				return nil, false, errResetCardOrderInsertConflict
+			}
 			return nil, false, errOwnerTestOrderInsertConflict
 		}
 		return nil, false, fmt.Errorf("create order: %w", err)
@@ -644,6 +1207,30 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		return nil, false, fmt.Errorf("commit order transaction: %w", err)
 	}
 	return order, true, nil
+}
+
+func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, payAmount float64) map[string]any {
+	if source == nil || source.plan == nil {
+		return nil
+	}
+	return map[string]any{
+		"schema_version":          1,
+		"kind":                    "reset_card",
+		"subscription_id":         source.subscriptionID,
+		"plan_id":                 source.plan.ID,
+		"group_id":                source.groupID,
+		"name":                    "Subscription reset card",
+		"description":             "One GPT subscription quota reset card",
+		"currency":                payment.DefaultPaymentCurrency,
+		"monthly_price":           source.monthlyPrice,
+		"price":                   source.price,
+		"order_amount":            source.price,
+		"pay_amount":              payAmount,
+		"quantity":                1,
+		"grant_expiry_policy":     "subscription",
+		"subscription_expires_at": source.subscriptionExpires.UTC().Format(time.RFC3339Nano),
+		"idempotency_key_sha256":  source.idempotencyKeyHash,
+	}
 }
 
 func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount float64, options []RechargeOption) map[string]any {
@@ -797,6 +1384,7 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 	}
 
 	if providerKey == payment.TypeWxpay {
+		snapshot["checkout_mode"] = paymentOrderWxpayCheckoutMode(req)
 		if merchantAppID := paymentOrderSnapshotWxpayAppID(sel, req); merchantAppID != "" {
 			snapshot["merchant_app_id"] = merchantAppID
 		}
@@ -809,11 +1397,13 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 		if merchantAppID := strings.TrimSpace(sel.Config["appId"]); merchantAppID != "" {
 			snapshot["merchant_app_id"] = merchantAppID
 		}
+		snapshot["currency"] = payment.DefaultPaymentCurrency
 	}
 	if providerKey == payment.TypeEasyPay {
 		if merchantID := strings.TrimSpace(sel.Config["pid"]); merchantID != "" {
 			snapshot["merchant_id"] = merchantID
 		}
+		snapshot["currency"] = payment.DefaultPaymentCurrency
 	}
 	if providerKey == payment.TypeStripe {
 		snapshot["currency"] = paymentProviderConfigCurrency(providerKey, sel.Config)
@@ -839,6 +1429,16 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 	return snapshot
 }
 
+func paymentOrderWxpayCheckoutMode(req CreateOrderRequest) string {
+	if strings.TrimSpace(req.OpenID) != "" {
+		return "jsapi"
+	}
+	if req.IsMobile {
+		return "h5"
+	}
+	return "native"
+}
+
 func paymentOrderSnapshotWxpayAppID(sel *payment.InstanceSelection, req CreateOrderRequest) string {
 	if sel == nil || strings.TrimSpace(sel.ProviderKey) != payment.TypeWxpay {
 		return ""
@@ -854,7 +1454,11 @@ func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, user
 		return nil
 	}
 	ts := psStartOfDayUTC(time.Now())
-	orders, err := tx.PaymentOrder.Query().Where(paymentorder.UserIDEQ(userID), paymentorder.StatusIn(OrderStatusPaid, OrderStatusRecharging, OrderStatusCompleted), paymentorder.PaidAtGTE(ts)).All(ctx)
+	orders, err := tx.PaymentOrder.Query().Where(
+		paymentorder.UserIDEQ(userID),
+		paymentorder.StatusIn(OrderStatusPaid, OrderStatusRecharging, OrderStatusCompleted, OrderStatusFailed),
+		paymentorder.PaidAtGTE(ts),
+	).All(ctx)
 	if err != nil {
 		return fmt.Errorf("query daily usage: %w", err)
 	}
@@ -957,6 +1561,9 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 			WithMetadata(map[string]string{"provider": sel.ProviderKey, "instance_id": sel.InstanceID})
 	}
 	subject := s.buildPaymentSubject(plan, limitAmount, cfg, sel)
+	if req.OrderType == payment.OrderTypeResetCard {
+		subject = applyPaymentProductNameAffix("Subscription reset card", cfg)
+	}
 	outTradeNo := order.OutTradeNo
 	canonicalReturnURL, err := CanonicalizeReturnURL(req.ReturnURL, req.SrcHost, req.SrcURL)
 	if err != nil {
@@ -997,7 +1604,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 		IsMobile:    req.IsMobile,
 		ReturnURL:   providerReturnURL,
 	}, sel, outTradeNo, payAmountStr, subject)
-	providerReq.ExpiresInSeconds = int(math.Ceil(order.ExpiresAt.Sub(order.CreatedAt).Seconds()))
+	providerReq.ExpiresInSeconds = paymentOrderExpiresInSeconds(order.ExpiresAt, time.Now())
 	providerReq.AlipayMobilePrecreate = shouldUseAlipayMobilePrecreate(req, cfg, sel)
 	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	pr, err := prov.CreatePayment(ctx, providerReq)
@@ -1054,6 +1661,16 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	return resp, nil
 }
 
+func paymentOrderExpiresInSeconds(expiresAt, now time.Time) int {
+	if !expiresAt.After(now) {
+		return 0
+	}
+	// Providers interpret this as a lifetime starting when they receive the
+	// request. Floor the remaining local deadline so their checkout can never
+	// be advertised as valid after Sub2 has already expired the order.
+	return int(math.Floor(expiresAt.Sub(now).Seconds()))
+}
+
 func shouldUseAlipayMobilePrecreate(req CreateOrderRequest, cfg *PaymentConfig, sel *payment.InstanceSelection) bool {
 	return cfg != nil &&
 		cfg.AlipayMobilePrecreateDeepLink &&
@@ -1069,6 +1686,14 @@ func sanitizeCreatePaymentResponseDetails(pr *payment.CreatePaymentResponse) {
 	pr.TradeNo = removePostgresTextNUL(pr.TradeNo)
 	pr.PayURL = removePostgresTextNUL(pr.PayURL)
 	pr.QRCode = removePostgresTextNUL(pr.QRCode)
+	if pr.JSAPI != nil {
+		pr.JSAPI.AppID = removePostgresTextNUL(pr.JSAPI.AppID)
+		pr.JSAPI.TimeStamp = removePostgresTextNUL(pr.JSAPI.TimeStamp)
+		pr.JSAPI.NonceStr = removePostgresTextNUL(pr.JSAPI.NonceStr)
+		pr.JSAPI.Package = removePostgresTextNUL(pr.JSAPI.Package)
+		pr.JSAPI.SignType = removePostgresTextNUL(pr.JSAPI.SignType)
+		pr.JSAPI.PaySign = removePostgresTextNUL(pr.JSAPI.PaySign)
+	}
 }
 
 func removePostgresTextNUL(value string) string {
@@ -1338,6 +1963,12 @@ func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (stri
 	}
 	if req.PlanID > 0 {
 		q.Set("plan_id", strconv.FormatInt(req.PlanID, 10))
+	}
+	if req.SubscriptionID > 0 {
+		q.Set("subscription_id", strconv.FormatInt(req.SubscriptionID, 10))
+	}
+	if req.OrderType == payment.OrderTypeResetCard && req.IdempotencyKeyHash != "" {
+		q.Set("idempotency_key_hash", req.IdempotencyKeyHash)
 	}
 	if scope = strings.TrimSpace(scope); scope != "" {
 		q.Set("scope", scope)

@@ -4,6 +4,7 @@
  */
 
 import { apiClient } from './client'
+import type { AxiosRequestConfig } from 'axios'
 import type {
   PaymentConfig,
   SubscriptionPlan,
@@ -18,12 +19,27 @@ import type {
 import type { BasePaginationResponse } from '@/types'
 
 export interface PublicOrderVerifyResult {
+  id?: number
   out_trade_no: string
   status: string
-  paid: boolean
-  created_at: string
-  expires_at: string
+  paid?: boolean
+  amount?: number
+  pay_amount?: number
+  fee_rate?: number
+  currency?: string
+  payment_type?: string
+  order_type?: string
+  created_at?: string
+  expires_at?: string
+  paid_at?: string
+  completed_at?: string
+  payment_status?: 'PAID' | 'UNPAID'
+  fulfillment_status?: 'NOT_STARTED' | 'PENDING' | 'FULFILLED' | 'FAILED' | 'MANUAL_REVIEW'
+  needs_manual_review?: boolean
+  plan_id?: number
 }
+
+export type PublicOrderResult = PublicOrderVerifyResult
 
 export const paymentAPI = {
   /** Get payment configuration (enabled types, limits, etc.) */
@@ -47,8 +63,8 @@ export const paymentAPI = {
   },
 
   /** Create a new payment order */
-  createOrder(data: CreateOrderRequest) {
-    return apiClient.post<CreateOrderResult>('/payment/orders', data)
+  createOrder(data: CreateOrderRequest, config?: AxiosRequestConfig) {
+    return apiClient.post<CreateOrderResult>('/payment/orders', data, config)
   },
 
   /** Get current user's orders */

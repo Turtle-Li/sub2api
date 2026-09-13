@@ -56,6 +56,7 @@ func (s *PaymentService) RecoverPendingPaymentOrderFulfillments(ctx context.Cont
 		Where(
 			paymentorder.PaidAtNotNil(),
 			paymentFulfillmentRecoveryNoRefundReview(),
+			paymentFulfillmentRecoveryNoResetCardGrantExpiryManualReview(),
 			paymentorder.Or(
 				paymentorder.And(
 					paymentorder.StatusIn(OrderStatusPaid, OrderStatusFailed),
@@ -119,6 +120,13 @@ launchLoop:
 			defer func() { <-sem }()
 
 			if err := s.executeRecoveryFulfillment(ctx, orderID); err != nil {
+				if errors.Is(err, errResetCardGrantExpirySnapshotElapsed) {
+					// The executor has persisted a paid FAILED row with an explicit
+					// operator-facing reason. It is intentionally absent from every
+					// later automatic sweep, while admin retry remains available.
+					slog.Warn("payment fulfillment recovery held reset-card grant expiry for manual review", "orderID", orderID)
+					return
+				}
 				if errors.Is(err, errPaymentFulfillmentRecoveryRefundFenced) {
 					// The transactional claim path re-read the authoritative fence
 					// while holding the same order lock as the refund writer.
@@ -210,7 +218,7 @@ func (s *PaymentService) acquireRecoveryPaymentFulfillmentLease(ctx context.Cont
 }
 
 func isPaymentFulfillmentRecoveryClaimable(order *dbent.PaymentOrder, now time.Time) bool {
-	if order == nil || order.PaidAt == nil || psIsRefundStatus(order.Status) {
+	if order == nil || order.PaidAt == nil || psIsRefundStatus(order.Status) || isResetCardGrantExpiryManualReview(order) {
 		return false
 	}
 	switch order.Status {
@@ -221,6 +229,18 @@ func isPaymentFulfillmentRecoveryClaimable(order *dbent.PaymentOrder, now time.T
 	default:
 		return false
 	}
+}
+
+// paymentFulfillmentRecoveryNoResetCardGrantExpiryManualReview excludes the
+// durable manual hold before LIMIT. Without this SQL predicate, a backlog of
+// expired reset-card snapshots would keep consuming the bounded candidate
+// window even though the transaction-level claim re-check rejects them.
+func paymentFulfillmentRecoveryNoResetCardGrantExpiryManualReview() predicate.PaymentOrder {
+	return paymentorder.Or(
+		paymentorder.StatusNEQ(OrderStatusFailed),
+		paymentorder.FailedReasonIsNil(),
+		paymentorder.FailedReasonNEQ(resetCardGrantExpiryManualReviewReason),
+	)
 }
 
 // paymentFulfillmentRecoveryNoRefundReview keeps refund-fenced rows out of

@@ -332,6 +332,78 @@ func TestGetWebhookProviderRejectsAmbiguousRegistryFallback(t *testing.T) {
 	require.Len(t, providers, 2)
 }
 
+func TestGetWebhookProvidersKeepsUsedDisabledWxpayCredentialsForLateCallbacks(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	active, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeWxpay).
+		SetName("wxpay-active").
+		SetConfig(encryptValidWebhookWxpayConfig(t, "active")).
+		SetSupportedTypes("wxpay").
+		SetEnabled(true).
+		SetSortOrder(20).
+		Save(ctx)
+	require.NoError(t, err)
+	retired, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeWxpay).
+		SetName("wxpay-retired").
+		SetConfig(encryptValidWebhookWxpayConfig(t, "retired")).
+		SetSupportedTypes("wxpay").
+		SetEnabled(false).
+		SetSortOrder(10).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeWxpay).
+		SetName("wxpay-unused-draft").
+		SetConfig(encryptValidWebhookWxpayConfig(t, "unused")).
+		SetSupportedTypes("wxpay").
+		SetEnabled(false).
+		SetSortOrder(5).
+		Save(ctx)
+	require.NoError(t, err)
+
+	user, err := client.User.Create().
+		SetEmail("retired-wxpay@example.com").
+		SetPasswordHash("hash").
+		SetUsername("retired-wxpay").
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(1).
+		SetPayAmount(1).
+		SetFeeRate(0).
+		SetRechargeCode("RETIRED-WXPAY").
+		SetOutTradeNo("sub2_retired_wxpay").
+		SetPaymentType(payment.TypeWxpay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeResetCard).
+		SetStatus(OrderStatusFailed).
+		SetExpiresAt(time.Now().Add(-time.Minute)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		SetProviderInstanceID(strconv.FormatInt(retired.ID, 10)).
+		SetProviderKey(payment.TypeWxpay).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{
+		entClient:       client,
+		loadBalancer:    newWebhookProviderTestLoadBalancer(client),
+		registry:        payment.NewRegistry(),
+		providersLoaded: true,
+	}
+	providers, err := svc.GetWebhookProviders(ctx, payment.TypeWxpay, "")
+	require.NoError(t, err)
+	require.Len(t, providers, 2, "enabled and used retired credentials must be candidates; unused disabled drafts must stay excluded")
+	require.Equal(t, payment.TypeWxpay, providers[0].ProviderKey())
+	require.Equal(t, payment.TypeWxpay, providers[1].ProviderKey())
+	require.NotEqual(t, active.ID, retired.ID)
+}
+
 func TestGetWebhookProvidersRejectAmbiguousFallbackForNonWxpay(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
@@ -440,6 +512,73 @@ func TestGetWebhookProviderRejectsRegistryFallbackForPinnedOrder(t *testing.T) {
 	_, err = svc.GetWebhookProviders(ctx, payment.TypeWxpay, "sub2_test_pinned_order")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "provider instance")
+}
+
+func TestGetWebhookProvidersReturnsOrderLookupFailureInsteadOfFallingBack(t *testing.T) {
+	client := newPaymentConfigServiceTestClient(t)
+	registry := payment.NewRegistry()
+	registry.Register(webhookProviderTestDouble{key: payment.TypeAlipay, types: []payment.PaymentType{payment.TypeAlipay}})
+	svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	providers, err := svc.GetWebhookProviders(ctx, payment.TypeAlipay, "sub2_lookup_failure")
+	require.Nil(t, providers)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestGetWebhookProvidersFailsClosedForUnreadablePinnedConfig(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	instance, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeAlipay).
+		SetName("unreadable-retired-alipay").
+		SetConfig("legacy-ciphertext-without-current-key").
+		SetSupportedTypes(payment.TypeAlipay).
+		SetPaymentMode("popup").
+		SetEnabled(false).
+		Save(ctx)
+	require.NoError(t, err)
+	user, err := client.User.Create().
+		SetEmail("unreadable-webhook@example.test").
+		SetPasswordHash("hash").
+		SetUsername("unreadable-webhook").
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(40).
+		SetPayAmount(40).
+		SetFeeRate(0).
+		SetRechargeCode("UNREADABLE-PINNED-CONFIG").
+		SetOutTradeNo("sub2_unreadable_pinned_config").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeResetCard).
+		SetStatus(OrderStatusPending).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.test").
+		SetProviderInstanceID(strconv.FormatInt(instance.ID, 10)).
+		SetProviderKey(payment.TypeAlipay).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{
+		entClient:       client,
+		loadBalancer:    payment.NewDefaultLoadBalancer(client, nil),
+		registry:        payment.NewRegistry(),
+		providersLoaded: true,
+	}
+	var lookupErr error
+	require.NotPanics(t, func() {
+		_, lookupErr = svc.GetWebhookProviders(ctx, payment.TypeAlipay, "sub2_unreadable_pinned_config")
+	})
+	require.Error(t, lookupErr)
+	require.Contains(t, lookupErr.Error(), "config")
 }
 
 func TestGetWebhookProviderUsesProviderSnapshotBeforeWxpayFallback(t *testing.T) {

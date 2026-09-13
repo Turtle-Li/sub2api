@@ -100,6 +100,17 @@ func TestWriteSuccessResponse(t *testing.T) {
 	}
 }
 
+func TestWriteRetryableProviderLookupFailureDoesNotAcknowledgeCallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	writeRetryableProviderLookupFailure(c)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Equal(t, "retry", w.Body.String())
+}
+
 // TestUnknownOrderWebhookAcksWithSuccess exercises the response contract that
 // handleNotify relies on when HandlePaymentNotification returns ErrOrderNotFound:
 // we still need to emit the provider-specific 2xx so the provider stops

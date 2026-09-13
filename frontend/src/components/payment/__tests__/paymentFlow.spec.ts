@@ -2,10 +2,18 @@ import { describe, expect, it } from 'vitest'
 import type { CreateOrderResult, MethodLimit } from '@/types/payment'
 import {
   buildCreateOrderPayload,
+  clearResetCardCheckoutAttempt,
+  clearPaymentRecoverySnapshot,
+  createResetCardCheckoutFingerprint,
   decidePaymentLaunch,
+  getOrCreateResetCardCheckoutAttempt,
   getVisibleMethods,
+  matchResetCardCheckoutAttemptForResume,
   readPaymentRecoverySnapshot,
+  recordResetCardCheckoutOrder,
+  RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY,
   type PaymentRecoverySnapshot,
+  writePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
 
 function methodLimit(overrides: Partial<MethodLimit> = {}): MethodLimit {
@@ -74,7 +82,7 @@ describe('getVisibleMethods', () => {
 })
 
 describe('decidePaymentLaunch', () => {
-  it('uses Stripe popup waiting flow for desktop Alipay client secret', () => {
+  it('does not route an Alipay response through Stripe merely because it contains a client secret', () => {
     const decision = decidePaymentLaunch(createOrderResult({
       client_secret: 'cs_test',
       resume_token: 'resume-1',
@@ -84,27 +92,28 @@ describe('decidePaymentLaunch', () => {
       isMobile: false,
     })
 
-    expect(decision.kind).toBe('stripe_popup')
+    expect(decision.kind).toBe('unhandled')
     expect(decision.paymentState.paymentType).toBe('alipay')
-    expect(decision.stripeMethod).toBe('alipay')
     expect(decision.recovery.resumeToken).toBe('resume-1')
     expect(decision.recovery.outTradeNo).toBe('')
   })
 
-  it('routes Stripe button click to the full Payment Element without a preselected sub-method', () => {
+  it('routes a Stripe button click to its dedicated checkout without a preselected sub-method', () => {
     const decision = decidePaymentLaunch(createOrderResult({
       client_secret: 'cs_test',
     }), {
       visibleMethod: 'stripe',
       orderType: 'balance',
       isMobile: false,
+      stripePopupUrl: '/payment/stripe?order_id=101',
+      stripeRouteUrl: '/payment/stripe?order_id=101',
     })
 
-    expect(decision.kind).toBe('stripe_route')
+    expect(decision.kind).toBe('stripe_popup')
     expect(decision.stripeMethod).toBeUndefined()
   })
 
-  it('uses Stripe route flow for mobile WeChat client secret', () => {
+  it('does not route a WeChat response through Stripe merely because it contains a client secret', () => {
     const decision = decidePaymentLaunch(createOrderResult({
       client_secret: 'cs_test',
     }), {
@@ -113,8 +122,7 @@ describe('decidePaymentLaunch', () => {
       isMobile: true,
     })
 
-    expect(decision.kind).toBe('stripe_route')
-    expect(decision.stripeMethod).toBe('wechat_pay')
+    expect(decision.kind).toBe('unhandled')
     expect(decision.paymentState.orderType).toBe('subscription')
   })
 
@@ -160,7 +168,7 @@ describe('decidePaymentLaunch', () => {
     expect(decision.recovery.resumeToken).toBe('resume-2')
   })
 
-  it('prefers redirect on mobile when both pay_url and qr_code are present', () => {
+  it('uses an actual QR payload on mobile when the provider supplies both QR and hosted URLs', () => {
     const decision = decidePaymentLaunch(createOrderResult({
       pay_url: 'https://pay.example.com/mobile/session',
       qr_code: 'https://pay.example.com/qr/session',
@@ -170,7 +178,7 @@ describe('decidePaymentLaunch', () => {
       isMobile: true,
     })
 
-    expect(decision.kind).toBe('redirect_waiting')
+    expect(decision.kind).toBe('qr_waiting')
     expect(decision.paymentState.payUrl).toBe('https://pay.example.com/mobile/session')
     expect(decision.paymentState.qrCode).toBe('https://pay.example.com/qr/session')
   })
@@ -187,6 +195,21 @@ describe('decidePaymentLaunch', () => {
 
     expect(decision.kind).toBe('qr_waiting')
     expect(decision.paymentState.qrCode).toBe('https://pay.example.com/qr/session')
+  })
+
+  it('keeps a hosted URL as a redirect and never treats it as QR data', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      pay_url: 'https://pay.example.com/hosted/session',
+      payment_mode: 'redirect',
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: false,
+    })
+
+    expect(decision.kind).toBe('redirect_waiting')
+    expect(decision.paymentState.payUrl).toBe('https://pay.example.com/hosted/session')
+    expect(decision.paymentState.qrCode).toBe('')
   })
 
   it('returns wechat oauth launch when backend requires in-app authorization', () => {
@@ -276,7 +299,7 @@ describe('decidePaymentLaunch', () => {
     expect(decision.kind).toBe('qr_waiting')
   })
 
-  it('does not affect non-alipay methods when forceQRCode is enabled', () => {
+  it('keeps a real QR payload usable for non-Alipay methods when forceQRCode is enabled', () => {
     const decision = decidePaymentLaunch(createOrderResult({
       pay_url: 'https://pay.example.com/mobile/session',
       qr_code: 'https://pay.example.com/qr/session',
@@ -287,8 +310,26 @@ describe('decidePaymentLaunch', () => {
       forceQRCode: true,
     })
 
-    // wxpay mobile with pay_url still redirects
-    expect(decision.kind).toBe('redirect_waiting')
+    expect(decision.kind).toBe('qr_waiting')
+  })
+
+  it('keeps a terminal reset-card replay in a status-only shell when no launch material remains', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      order_id: 902,
+      status: 'COMPLETED',
+      payment_type: 'wxpay',
+      out_trade_no: 'sub2_reset_902',
+      qr_code: '',
+      pay_url: '',
+    }), {
+      visibleMethod: 'wxpay',
+      orderType: 'reset_card',
+      isMobile: true,
+    })
+
+    expect(decision.kind).toBe('status_waiting')
+    expect(decision.paymentState.orderId).toBe(902)
+    expect(decision.paymentState.qrCode).toBe('')
   })
 })
 
@@ -405,7 +446,7 @@ describe('readPaymentRecoverySnapshot', () => {
     expect(restored?.orderId).toBe(33)
   })
 
-  it('drops expired or mismatched recovery snapshots', () => {
+  it('retains a recent snapshot after its browser deadline so the server can settle it', () => {
     const expiredSnapshot: PaymentRecoverySnapshot = {
       orderId: 55,
       amount: 18,
@@ -428,6 +469,11 @@ describe('readPaymentRecoverySnapshot', () => {
 
     expect(readPaymentRecoverySnapshot(JSON.stringify(expiredSnapshot), {
       now: Date.UTC(2024, 0, 1, 0, 20, 0),
+      resumeToken: 'resume-55',
+    })?.orderId).toBe(55)
+
+    expect(readPaymentRecoverySnapshot(JSON.stringify(expiredSnapshot), {
+      now: Date.UTC(2024, 0, 1, 3, 0, 0),
       resumeToken: 'resume-55',
     })).toBeNull()
 
@@ -489,5 +535,129 @@ describe('readPaymentRecoverySnapshot', () => {
     expect(restored?.currency).toBe('')
     expect(restored?.countryCode).toBe('')
     expect(restored?.paymentEnv).toBe('')
+  })
+
+  it('keeps recoverable orders independently and clears only the matched terminal order', () => {
+    const entries = new Map<string, string>()
+    const now = Date.now()
+    const storage = {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => entries.set(key, value),
+      removeItem: (key: string) => entries.delete(key),
+    }
+    const first: PaymentRecoverySnapshot = {
+      orderId: 11,
+      amount: 18,
+      qrCode: '',
+      expiresAt: '2026-09-13T01:00:00.000Z',
+      paymentType: 'alipay',
+      payUrl: 'https://pay.example.com/11',
+      outTradeNo: 'sub2_11',
+      clientSecret: '',
+      intentId: '',
+      currency: '',
+      countryCode: '',
+      paymentEnv: '',
+      payAmount: 18,
+      orderType: 'balance',
+      paymentMode: 'redirect',
+      resumeToken: 'resume-11',
+      createdAt: now,
+    }
+    const second = { ...first, orderId: 12, outTradeNo: 'sub2_12', resumeToken: 'resume-12', createdAt: now + 60_000 }
+
+    writePaymentRecoverySnapshot(storage, first)
+    writePaymentRecoverySnapshot(storage, second)
+    expect(readPaymentRecoverySnapshot(storage.getItem('payment.recovery.current'), {
+      now: now + 120_000,
+    })?.orderId).toBe(12)
+
+    clearPaymentRecoverySnapshot(storage, 'payment.recovery.current', { orderId: 12 })
+    expect(readPaymentRecoverySnapshot(storage.getItem('payment.recovery.current'), {
+      now: now + 120_000,
+    })?.orderId).toBe(11)
+  })
+})
+
+describe('reset-card checkout attempts', () => {
+  const attemptInput = {
+    userId: 9,
+    subscriptionId: 21,
+    groupId: 4,
+    planId: 7,
+    amount: 40,
+    monthlyPrice: 120,
+    expiresAt: '2099-01-01T00:00:00Z',
+    paymentType: 'wxpay',
+  }
+
+  function memoryStorage() {
+    const values = new Map<string, string>()
+    return {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    }
+  }
+
+  it('writes before the request, reuses after response loss, and clears only its recorded terminal order', () => {
+    const storage = memoryStorage()
+    let generated = 0
+    const createKey = () => `reset-card-payment-${++generated}`
+
+    const first = getOrCreateResetCardCheckoutAttempt(storage, attemptInput, createKey)
+    expect(storage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toContain(first.idempotencyKey)
+
+    const retry = getOrCreateResetCardCheckoutAttempt(storage, attemptInput, createKey)
+    expect(retry).toEqual(first)
+    expect(generated).toBe(1)
+
+    recordResetCardCheckoutOrder(storage, first, 88)
+    clearResetCardCheckoutAttempt(storage, { orderId: 89 })
+    expect(storage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toContain('"orderId":88')
+
+    clearResetCardCheckoutAttempt(storage, { orderId: 88 })
+    expect(storage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toBeNull()
+  })
+
+  it('replaces the key when any quote-bound checkout input changes', () => {
+    const storage = memoryStorage()
+    let generated = 0
+    const createKey = () => `reset-card-payment-${++generated}`
+    const first = getOrCreateResetCardCheckoutAttempt(storage, attemptInput, createKey)
+    const changedQuote = getOrCreateResetCardCheckoutAttempt(storage, {
+      ...attemptInput,
+      amount: 41,
+      expiresAt: '2099-02-01T00:00:00Z',
+    }, createKey)
+
+    expect(changedQuote.idempotencyKey).not.toBe(first.idempotencyKey)
+    expect(changedQuote.fingerprint).not.toBe(first.fingerprint)
+    expect(createResetCardCheckoutFingerprint({ ...attemptInput, paymentType: 'alipay' }))
+      .not.toBe(first.fingerprint)
+  })
+
+  it('matches an OAuth resume only to the browser attempt named by its signed hash payload', async () => {
+    const storage = memoryStorage()
+    const key = 'reset-card-payment-oauth-attempt'
+    const attempt = getOrCreateResetCardCheckoutAttempt(storage, attemptInput, () => key)
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key))
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+    const payload = btoa(JSON.stringify({
+      tk: 'wechat_payment_resume',
+      ot: 'reset_card',
+      ikh: hash,
+    })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+
+    await expect(matchResetCardCheckoutAttemptForResume(storage, `${payload}.signature`))
+      .resolves.toEqual(attempt)
+
+    const otherPayload = btoa(JSON.stringify({
+      tk: 'wechat_payment_resume',
+      ot: 'reset_card',
+      ikh: 'f'.repeat(64),
+    })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    await expect(matchResetCardCheckoutAttemptForResume(storage, `${otherPayload}.signature`))
+      .resolves.toBeNull()
   })
 })

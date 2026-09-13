@@ -46,6 +46,22 @@ func TestNormalizeResetCardExpectedPriceRequiresExactCents(t *testing.T) {
 	require.ErrorIs(t, err, ErrResetCardPriceInvalid)
 }
 
+func TestValidateResetCardPurchaseSubscriptionRequiresProviderLifetimeHeadroom(t *testing.T) {
+	now := time.Date(2026, time.September, 13, 12, 0, 0, 0, time.UTC)
+	subscription := resetCardPurchaseSubscription{
+		expiresAt:        now.Add(resetCardMinimumRemainingValidity),
+		subscriptionStat: SubscriptionStatusActive,
+		groupStatus:      StatusActive,
+		subscriptionType: SubscriptionTypeSubscription,
+		platform:         PlatformOpenAI,
+		userStatus:       StatusActive,
+	}
+	require.ErrorIs(t, validateResetCardPurchaseSubscription(subscription, now), ErrResetCardPurchaseUnavailable)
+
+	subscription.expiresAt = subscription.expiresAt.Add(time.Second)
+	require.NoError(t, validateResetCardPurchaseSubscription(subscription, now))
+}
+
 type resetCardPurchaseCacheStub struct {
 	billingCacheWorkerStub
 	invalidations atomic.Int64

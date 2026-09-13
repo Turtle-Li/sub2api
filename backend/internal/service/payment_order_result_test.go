@@ -40,6 +40,28 @@ func TestShouldUseAlipayMobilePrecreate(t *testing.T) {
 	}
 }
 
+func TestBuildPaymentResetCardProductSnapshot(t *testing.T) {
+	plan := &dbent.SubscriptionPlan{ID: 7, GroupID: 4, Name: "Plus monthly", Currency: "CNY"}
+	snapshot := buildPaymentResetCardProductSnapshot(&resetCardOrderSnapshotSource{
+		plan:                plan,
+		subscriptionID:      42,
+		groupID:             4,
+		monthlyPrice:        120,
+		price:               40,
+		subscriptionExpires: time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC),
+		idempotencyKeyHash:  strings.Repeat("a", 64),
+	}, 40)
+	if snapshot["kind"] != "reset_card" || snapshot["subscription_id"] != int64(42) {
+		t.Fatalf("unexpected reset-card snapshot identity: %#v", snapshot)
+	}
+	if snapshot["plan_id"] != int64(7) || snapshot["group_id"] != int64(4) || snapshot["price"] != float64(40) {
+		t.Fatalf("unexpected reset-card snapshot pricing: %#v", snapshot)
+	}
+	if snapshot["monthly_price"] != float64(120) || snapshot["idempotency_key_sha256"] != strings.Repeat("a", 64) {
+		t.Fatalf("unexpected reset-card snapshot evidence: %#v", snapshot)
+	}
+}
+
 func TestIsOfficialAlipayProviderInstance(t *testing.T) {
 	t.Parallel()
 
@@ -152,6 +174,14 @@ func TestSanitizeCreatePaymentResponseDetailsRemovesNULBytes(t *testing.T) {
 		PayURL:       "https://pay.example.com/\x00checkout",
 		QRCode:       "wxp://payment-token\x00",
 		ClientSecret: "secret\x00unchanged",
+		JSAPI: &payment.WechatJSAPIPayload{
+			AppID:     "wx\x00app",
+			TimeStamp: "17\x0089",
+			NonceStr:  "nonce\x00value",
+			Package:   "prepay_id=wx\x00order",
+			SignType:  "R\x00SA",
+			PaySign:   "signed\x00payload",
+		},
 	}
 
 	sanitizeCreatePaymentResponseDetails(resp)
@@ -173,6 +203,11 @@ func TestSanitizeCreatePaymentResponseDetailsRemovesNULBytes(t *testing.T) {
 	}
 	if resp.QRCode != "wxp://payment-token" {
 		t.Fatalf("qr_code = %q, want sanitized QR code", resp.QRCode)
+	}
+	if resp.JSAPI == nil || resp.JSAPI.AppID != "wxapp" || resp.JSAPI.TimeStamp != "1789" ||
+		resp.JSAPI.NonceStr != "noncevalue" || resp.JSAPI.Package != "prepay_id=wxorder" ||
+		resp.JSAPI.SignType != "RSA" || resp.JSAPI.PaySign != "signedpayload" {
+		t.Fatalf("jsapi payload was not sanitized: %#v", resp.JSAPI)
 	}
 	if resp.ClientSecret != "secret\x00unchanged" {
 		t.Fatalf("client_secret = %q, should not be touched by payment detail sanitization", resp.ClientSecret)

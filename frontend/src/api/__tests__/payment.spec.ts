@@ -38,6 +38,20 @@ describe('payment api', () => {
     })
   })
 
+  it('forwards a caller-provided idempotency header when creating an order', async () => {
+    const payload = {
+      amount: 40,
+      payment_type: 'wxpay',
+      order_type: 'reset_card',
+      subscription_id: 91,
+    }
+    const config = { headers: { 'Idempotency-Key': 'reset-card-payment-91' } }
+
+    await paymentAPI.createOrder(payload, config)
+
+    expect(post).toHaveBeenCalledWith('/payment/orders', payload, config)
+  })
+
   it('uses authenticated order-scoped invoice endpoints', async () => {
     const payload = {
       title_type: 'enterprise' as const,

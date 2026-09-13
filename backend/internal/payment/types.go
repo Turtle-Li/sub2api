@@ -54,6 +54,7 @@ const (
 const (
 	OrderTypeBalance      = "balance"
 	OrderTypeSubscription = "subscription"
+	OrderTypeResetCard    = "reset_card"
 )
 
 // Entity statuses shared across users, groups, etc.
@@ -83,6 +84,8 @@ const (
 	ProviderStatusFailed   = "failed"
 	ProviderStatusRefunded = "refunded"
 )
+
+const QueryMetadataOrderNotFound = "order_not_found"
 
 // DefaultLoadBalanceStrategy is the default load-balancing strategy
 // used when no strategy is configured.

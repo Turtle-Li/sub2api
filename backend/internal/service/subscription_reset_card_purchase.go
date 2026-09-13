@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/http"
 	"strings"
 	"time"
 
@@ -17,16 +18,22 @@ import (
 )
 
 var (
-	ErrResetCardPurchaseUnavailable = infraerrors.Conflict("RESET_CARD_PURCHASE_UNAVAILABLE", "reset card purchase is unavailable for this subscription")
-	ErrResetCardPriceInvalid        = infraerrors.Conflict("RESET_CARD_PRICE_INVALID", "reset card price is unavailable")
-	ErrResetCardCurrencyUnsupported = infraerrors.Conflict("RESET_CARD_UNSUPPORTED_CURRENCY", "reset card purchase requires a CNY monthly plan")
-	ErrResetCardQuoteChanged        = infraerrors.Conflict("RESET_CARD_QUOTE_CHANGED", "reset card quote changed; request a new quote")
-	ErrResetCardPurchaseKeyInvalid  = infraerrors.BadRequest("RESET_CARD_PURCHASE_KEY_INVALID", "purchase_key must be a non-nil UUID")
-	ErrResetCardPurchaseKeyConflict = infraerrors.Conflict("RESET_CARD_PURCHASE_KEY_CONFLICT", "purchase_key was already used for a different reset card purchase")
-	ErrResetCardInsufficientBalance = infraerrors.Conflict("RESET_CARD_INSUFFICIENT_BALANCE", "insufficient available balance for reset card purchase")
-	ErrResetCardPaymentDisabled     = infraerrors.Forbidden("PAYMENT_DISABLED", "payment system is disabled")
-	ErrResetCardUserInactive        = infraerrors.Forbidden("USER_INACTIVE", "user account is disabled")
+	ErrResetCardPurchaseUnavailable     = infraerrors.Conflict("RESET_CARD_PURCHASE_UNAVAILABLE", "reset card purchase is unavailable for this subscription")
+	ErrResetCardPriceInvalid            = infraerrors.Conflict("RESET_CARD_PRICE_INVALID", "reset card price is unavailable")
+	ErrResetCardCurrencyUnsupported     = infraerrors.Conflict("RESET_CARD_UNSUPPORTED_CURRENCY", "reset card purchase requires a CNY monthly plan")
+	ErrResetCardQuoteChanged            = infraerrors.Conflict("RESET_CARD_QUOTE_CHANGED", "reset card quote changed; request a new quote")
+	ErrResetCardPurchaseKeyInvalid      = infraerrors.BadRequest("RESET_CARD_PURCHASE_KEY_INVALID", "purchase_key must be a non-nil UUID")
+	ErrResetCardPurchaseKeyConflict     = infraerrors.Conflict("RESET_CARD_PURCHASE_KEY_CONFLICT", "purchase_key was already used for a different reset card purchase")
+	ErrResetCardInsufficientBalance     = infraerrors.Conflict("RESET_CARD_INSUFFICIENT_BALANCE", "insufficient available balance for reset card purchase")
+	ErrResetCardExternalPaymentRequired = infraerrors.New(http.StatusGone, "RESET_CARD_EXTERNAL_PAYMENT_REQUIRED", "reset cards must be purchased through Alipay or WeChat payment")
+	ErrResetCardPaymentDisabled         = infraerrors.Forbidden("PAYMENT_DISABLED", "payment system is disabled")
+	ErrResetCardUserInactive            = infraerrors.Forbidden("USER_INACTIVE", "user account is disabled")
 )
+
+// Keep quote eligibility aligned with the order deadline: provider lifetime,
+// one dispatch lease, and the local flooring/execution safety margin must all
+// fit before the target subscription expires.
+const resetCardMinimumRemainingValidity = resetCardMinimumExternalCheckoutLifetime
 
 // SubscriptionResetCardQuote is the server-derived, short-lived price for one
 // reset card. The monthly plan remains the source of truth at purchase time.
@@ -425,6 +432,9 @@ func validateResetCardPurchaseSubscription(subscription resetCardPurchaseSubscri
 	}
 	if !subscription.expiresAt.After(now) || subscription.subscriptionStat == SubscriptionStatusExpired {
 		return ErrSubscriptionExpired
+	}
+	if !subscription.expiresAt.After(now.Add(resetCardMinimumRemainingValidity)) {
+		return ErrResetCardPurchaseUnavailable
 	}
 	if subscription.subscriptionStat != SubscriptionStatusActive {
 		return ErrSubscriptionSuspended

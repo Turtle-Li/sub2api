@@ -5,26 +5,17 @@
         <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
       </div>
 
-      <template v-else-if="paymentPhase === 'paying'">
-        <PaymentStatusPanel
-          :order-id="paymentState.orderId"
-          :amount="paymentState.amount"
-          :pay-amount="paymentState.payAmount"
-          :qr-code="paymentState.qrCode"
-          :expires-at="paymentState.expiresAt"
-          :payment-type="paymentState.paymentType"
-          :pay-url="paymentState.payUrl"
-          :order-type="paymentState.orderType"
-          :currency="paymentState.currency || selectedCurrency"
-          :out-trade-no="paymentState.outTradeNo"
-          :mobile-alipay-deep-link="paymentState.alipayMobilePrecreateDeepLink"
-          @done="onPaymentDone"
-          @success="onPaymentSuccess"
-          @settled="onPaymentSettled"
-        />
-      </template>
-
       <template v-else>
+        <div v-if="paymentPhase === 'paying' && !paymentModalVisible" class="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary-200 bg-primary-50 px-4 py-3 dark:border-primary-800 dark:bg-primary-950/30">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-primary-900 dark:text-primary-100">{{ t('payment.resume.title') }}</p>
+            <p class="mt-0.5 truncate text-xs text-primary-700 dark:text-primary-300">{{ paymentState.outTradeNo || `#${paymentState.orderId}` }}</p>
+          </div>
+          <button type="button" class="btn btn-primary shrink-0" data-test="resume-payment" @click="paymentModalVisible = true">
+            {{ t('payment.resume.open') }}
+          </button>
+        </div>
+
         <!-- Masthead: who is buying, and what they hold today. -->
         <header class="flex flex-wrap items-end justify-between gap-4 pb-6">
           <div class="min-w-0">
@@ -111,7 +102,12 @@
                 </div>
               </template>
 
-              <ResetCardShop :subscriptions="activeSubscriptions" :plans="checkout.plans" @purchased="subscriptionStore.fetchActiveSubscriptions(true)" />
+              <ResetCardShop
+                :subscriptions="activeSubscriptions"
+                :plans="checkout.plans"
+                :disabled="submitting || paymentPhase === 'paying'"
+                @checkout="startResetCardCheckout"
+              />
 
               <div v-if="activeSubscriptions.length > 0" class="mt-8">
                 <p class="payment-product-card__eyebrow mb-2">{{ t('payment.activeSubscription') }}</p>
@@ -178,6 +174,34 @@
       </template>
     </div>
 
+    <BaseDialog
+      v-if="paymentPhase === 'paying'"
+      :show="paymentModalVisible"
+      :title="paymentDialogTitle"
+      width="normal"
+      mobile-sheet
+      keep-mounted
+      :close-on-click-outside="false"
+      @close="hidePaymentModal"
+    >
+      <PaymentStatusPanel
+        :order-id="paymentState.orderId"
+        :amount="paymentState.amount"
+        :pay-amount="paymentState.payAmount"
+        :qr-code="paymentState.qrCode"
+        :expires-at="paymentState.expiresAt"
+        :payment-type="paymentState.paymentType"
+        :pay-url="paymentState.payUrl"
+        :order-type="paymentState.orderType"
+        :currency="paymentState.currency || selectedCurrency"
+        :out-trade-no="paymentState.outTradeNo"
+        :mobile-alipay-deep-link="paymentState.alipayMobilePrecreateDeepLink"
+        @done="onPaymentDone"
+        @success="onPaymentSuccess"
+        @settled="onPaymentSettled"
+      />
+    </BaseDialog>
+
     <!-- Renewal Plan Selection Modal -->
     <Teleport to="body">
       <Transition name="modal">
@@ -223,6 +247,7 @@ import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiErro
 import { isMobileDevice } from '@/utils/device'
 import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel, type PeakRateFields } from '@/utils/peak-rate'
 import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType, RechargeOption } from '@/types/payment'
+import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
@@ -230,27 +255,35 @@ import { METHOD_ORDER, getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltIn
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   buildCreateOrderPayload,
+  clearResetCardCheckoutAttempt,
   clearPaymentRecoverySnapshot,
   decidePaymentLaunch,
+  getOrCreateResetCardCheckoutAttempt,
   getVisibleMethods,
+  matchResetCardCheckoutAttemptForResume,
   normalizeVisibleMethod,
   readPaymentRecoverySnapshot,
+  recordResetCardCheckoutOrder,
+  type ResetCardCheckoutAttempt,
   type PaymentRecoverySnapshot,
   writePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
+import type { ResetCardQuote } from '@/api/subscriptions'
 import { platformAccentBarClass, platformBadgeLightClass, platformLabel } from '@/utils/platformColors'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import ResetCardShop from '@/components/payment/ResetCardShop.vue'
 import PaymentPromoBanner from '@/components/payment/PaymentPromoBanner.vue'
 import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
 import { creditedBalanceAmount, subscriptionGatewayAmount } from '@/components/payment/pricing'
 import { planValiditySuffix as validitySuffixOf } from '@/components/payment/validity'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
 import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
-import { hasWechatResumeQuery, parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
+import { parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
+import { createIdempotencyKey } from '@/utils/idempotency'
 
 const i18n = useI18n()
 const { t } = i18n
@@ -290,6 +323,7 @@ const selectedSubscriptionPeriod = ref<SubscriptionPeriod | ''>('')
 const previewImage = ref('')
 
 const paymentPhase = ref<'select' | 'paying'>('select')
+const paymentModalVisible = ref(false)
 
 interface CreateOrderOptions {
   openid?: string
@@ -297,6 +331,13 @@ interface CreateOrderOptions {
   paymentType?: string
   isResume?: boolean
   mobileQrFallbackAttempted?: boolean
+  subscriptionId?: number
+  /** Reserve a popup synchronously inside an explicit desktop checkout click. */
+  preopenHostedPopup?: boolean
+  /** Reuse this key for one local reset-card checkout attempt and its QR fallback. */
+  idempotencyKey?: string
+  /** Persisted before the reset-card create-order POST and bound after its response. */
+  resetCardAttempt?: ResetCardCheckoutAttempt
 }
 
 interface WeixinJSBridgeLike {
@@ -372,37 +413,29 @@ function persistRecoverySnapshot(snapshot: PaymentRecoverySnapshot) {
   writePaymentRecoverySnapshot(window.localStorage, snapshot, PAYMENT_RECOVERY_STORAGE_KEY)
 }
 
-function removeRecoverySnapshot() {
+function removeRecoverySnapshot(snapshot: PaymentRecoverySnapshot = paymentState.value) {
   if (typeof window === 'undefined') return
+  if (snapshot.orderId > 0) {
+    clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, {
+      orderId: snapshot.orderId,
+      resumeToken: snapshot.resumeToken || undefined,
+    })
+    return
+  }
   clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
 }
 
 function resetPayment() {
+  const previous = paymentState.value
   paymentPhase.value = 'select'
+  paymentModalVisible.value = false
   paymentState.value = emptyPaymentState()
-  removeRecoverySnapshot()
-}
-
-async function redirectToPaymentResult(state: PaymentRecoverySnapshot): Promise<void> {
-  const query: Record<string, string | undefined> = {}
-  if (state.orderId > 0) {
-    query.order_id = String(state.orderId)
-  }
-  if (state.outTradeNo) {
-    query.out_trade_no = state.outTradeNo
-  }
-  if (state.resumeToken) {
-    query.resume_token = state.resumeToken
-  }
-  await router.push({
-    path: '/payment/result',
-    query,
-  })
+  removeRecoverySnapshot(previous)
 }
 
 function buildWechatOAuthAuthorizeUrl(
   authorizeUrl: string,
-  context: { paymentType: string; orderType: OrderType; planId?: number; orderAmount: number },
+  context: { paymentType: string; orderType: OrderType; planId?: number; subscriptionId?: number; orderAmount: number },
 ): string {
   const normalizedUrl = authorizeUrl.trim()
   if (!normalizedUrl || typeof window === 'undefined') {
@@ -423,12 +456,22 @@ function buildWechatOAuthAuthorizeUrl(
     } else {
       redirectUrl.searchParams.delete('plan_id')
     }
+    if (context.subscriptionId) {
+      redirectUrl.searchParams.set('subscription_id', String(context.subscriptionId))
+    } else {
+      redirectUrl.searchParams.delete('subscription_id')
+    }
 
     if (context.orderAmount > 0) {
       redirectUrl.searchParams.set('amount', String(context.orderAmount))
     } else {
       redirectUrl.searchParams.delete('amount')
     }
+    // A reset-card OAuth resume token carries a signed idempotency-key hash.
+    // Never put the raw browser key into a redirect URL, browser history, or
+    // OAuth cookie; remove an old query copy if a legacy URL supplied one.
+    redirectUrl.searchParams.delete('payment_idempotency_key')
+    targetUrl.searchParams.delete('payment_idempotency_key')
 
     targetUrl.searchParams.set('redirect', `${redirectUrl.pathname}${redirectUrl.search}`)
     return targetUrl.toString()
@@ -439,26 +482,44 @@ function buildWechatOAuthAuthorizeUrl(
 
 function onPaymentDone() {
   const wasSubscription = paymentState.value.orderType === 'subscription'
+  const wasResetCard = paymentState.value.orderType === 'reset_card'
   resetPayment()
   selectedPlan.value = null
-  if (wasSubscription) {
+  if (wasSubscription || wasResetCard) {
     subscriptionStore.fetchActiveSubscriptions(true).catch(() => {})
   }
+}
+
+function hidePaymentModal() {
+  // Closing the shell does not cancel the order. The compact resume card keeps
+  // the same order/session available until the user explicitly cancels it.
+  paymentModalVisible.value = false
 }
 
 async function onPaymentSuccess() {
-  const completedPayment = { ...paymentState.value }
-  removeRecoverySnapshot()
-  authStore.refreshUser()
-  if (paymentState.value.orderType === 'subscription') {
+  // The panel emits this only for a server-recorded COMPLETED order. Keep the
+  // terminal panel mounted until the user dismisses it; a browser callback is
+  // never treated as an entitlement result.
+  authStore.refreshUser().catch(() => {})
+  if (paymentState.value.orderType === 'subscription' || paymentState.value.orderType === 'reset_card') {
     subscriptionStore.fetchActiveSubscriptions(true).catch(() => {})
   }
-  await redirectToPaymentResult(completedPayment)
 }
 
-function onPaymentSettled() {
+function onPaymentSettled(outcome: 'success' | 'cancelled' | 'expired') {
+  const settled = paymentState.value
+  if (settled.orderType === 'reset_card' && settled.orderId > 0 && typeof window !== 'undefined') {
+    clearResetCardCheckoutAttempt(window.localStorage, { orderId: settled.orderId })
+  }
+  if (outcome === 'success') return
   removeRecoverySnapshot()
 }
+
+const paymentDialogTitle = computed(() => {
+  if (paymentState.value.paymentType === 'alipay') return t('payment.methods.alipay')
+  if (paymentState.value.paymentType === 'wxpay') return t('payment.methods.wxpay')
+  return t('payment.checkoutTitle')
+})
 
 // All checkout data from single API call
 const checkout = ref<CheckoutInfoResponse>({
@@ -888,14 +949,95 @@ function closeRenewalModal() {
   renewGroupId.value = null
 }
 
+const RESET_CARD_GATEWAY_METHODS = ['alipay', 'wxpay'] as const
+
+function resetCardGatewayAmount(quote: ResetCardQuote, paymentType: string): number {
+  const currency = normalizePaymentCurrency(visibleMethods.value[paymentType]?.currency)
+  const baseAmount = roundPaymentAmount(quote.price, currency)
+  if (baseAmount <= 0 || feeRate.value <= 0) return baseAmount
+  const fee = ceilPaymentAmount((baseAmount * feeRate.value) / 100, currency)
+  return roundPaymentAmount(baseAmount + fee, currency)
+}
+
+function resetCardPaymentMethodForQuote(quote: ResetCardQuote): string {
+  const eligible = RESET_CARD_GATEWAY_METHODS.filter((paymentType) => {
+    const limit = visibleMethods.value[paymentType]
+    if (!limit || limit.available === false || normalizePaymentCurrency(limit.currency) !== 'CNY') {
+      return false
+    }
+    const gatewayAmount = resetCardGatewayAmount(quote, paymentType)
+    return gatewayAmount > 0 && amountFitsMethod(gatewayAmount, paymentType)
+  })
+  const selected = normalizeVisibleMethod(selectedMethod.value)
+  return selected && eligible.includes(selected as typeof RESET_CARD_GATEWAY_METHODS[number])
+    ? selected
+    : (eligible[0] || '')
+}
+
+function shouldPreopenHostedPopup(requestType: string, options: CreateOrderOptions): boolean {
+  if (
+    !options.preopenHostedPopup
+    || options.isResume
+    || typeof window === 'undefined'
+    || isMobileDevice()
+  ) {
+    return false
+  }
+
+  const visibleMethod = normalizeVisibleMethod(requestType) || requestType
+  if (visibleMethod === 'stripe') {
+    return true
+  }
+
+  // Alipay is the only direct gateway whose desktop hosted checkout can use
+  // the reserved popup. The mobile-precreate flag has no effect on a desktop
+  // request, so only the explicit force-QR setting rules out this window.
+  return visibleMethod === 'alipay'
+    && !checkout.value.alipay_force_qrcode
+}
+
 async function handleSubmitRecharge() {
   if (!canSubmit.value || submitting.value) return
-  await createOrder(validAmount.value, 'balance')
+  await createOrder(validAmount.value, 'balance', undefined, { preopenHostedPopup: true })
 }
 
 async function confirmSubscribe() {
   if (!selectedPlan.value || submitting.value) return
-  await createOrder(selectedPlan.value.price, 'subscription', selectedPlan.value.id)
+  await createOrder(selectedPlan.value.price, 'subscription', selectedPlan.value.id, { preopenHostedPopup: true })
+}
+
+async function startResetCardCheckout(payload: { subscription: UserSubscription; quote: ResetCardQuote }) {
+  if (submitting.value) return
+  const userId = user.value?.id
+  if (!Number.isSafeInteger(userId) || !userId || typeof window === 'undefined') {
+    errorMessage.value = t('payment.result.failed')
+    return
+  }
+  const paymentType = resetCardPaymentMethodForQuote(payload.quote)
+  if (!paymentType) {
+    errorMessage.value = t('payment.resetShop.paymentUnavailable')
+    errorHintMessage.value = ''
+    appStore.showError(errorMessage.value)
+    return
+  }
+  selectedMethod.value = paymentType
+  const attempt = getOrCreateResetCardCheckoutAttempt(window.localStorage, {
+    userId,
+    subscriptionId: payload.subscription.id,
+    groupId: payload.quote.group_id,
+    planId: payload.quote.plan_id,
+    amount: payload.quote.price,
+    monthlyPrice: payload.quote.monthly_price,
+    expiresAt: payload.quote.expires_at,
+    paymentType,
+  }, () => createIdempotencyKey('reset-card-payment'))
+  await createOrder(payload.quote.price, 'reset_card', payload.quote.plan_id, {
+    subscriptionId: payload.subscription.id,
+    paymentType,
+    idempotencyKey: attempt.idempotencyKey,
+    resetCardAttempt: attempt,
+    preopenHostedPopup: true,
+  })
 }
 
 async function createOrder(orderAmount: number, orderType: OrderType, planId?: number, options: CreateOrderOptions = {}) {
@@ -903,6 +1045,15 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
   errorMessage.value = ''
   errorHintMessage.value = ''
   const requestType = normalizeVisibleMethod(options.paymentType || selectedMethod.value) || options.paymentType || selectedMethod.value
+  const preopenedPopup = shouldPreopenHostedPopup(requestType, options)
+    ? window.open('', 'paymentPopup', getPaymentPopupFeatures())
+    : null
+  let preopenedPopupNavigated = false
+  const closePreopenedPopup = () => {
+    if (preopenedPopup && !preopenedPopup.closed && !preopenedPopupNavigated) {
+      preopenedPopup.close()
+    }
+  }
   try {
     const payload = buildCreateOrderPayload({
       amount: orderAmount,
@@ -914,6 +1065,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       isWechatBrowser: typeof window !== 'undefined' && /MicroMessenger/i.test(window.navigator.userAgent),
       forceQRCode: !!(checkout.value.alipay_force_qrcode && normalizeVisibleMethod(requestType) === 'alipay'),
       mobilePrecreateDeepLink: checkout.value.alipay_mobile_precreate_deep_link === true,
+      subscriptionId: options.subscriptionId,
     })
     if (options.openid) {
       payload.openid = options.openid
@@ -922,8 +1074,24 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       payload.wechat_resume_token = options.wechatResumeToken
     }
 
-    const result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
+    const result = await paymentStore.createOrder(
+      payload,
+      options.idempotencyKey ? { headers: { 'Idempotency-Key': options.idempotencyKey } } : undefined,
+    ) as CreateOrderResult & { resume_token?: string }
+    if (orderType === 'reset_card' && options.resetCardAttempt && typeof window !== 'undefined') {
+      recordResetCardCheckoutOrder(window.localStorage, options.resetCardAttempt, result.order_id)
+    }
     const openWindow = (url: string) => {
+      if (preopenedPopup && !preopenedPopup.closed) {
+        try {
+          preopenedPopup.location.href = url
+          preopenedPopupNavigated = true
+          return
+        } catch {
+          // Continue with the ordinary popup attempt below. A browser can
+          // discard or deny access to a preopened browsing context.
+        }
+      }
       const win = window.open(url, 'paymentPopup', getPaymentPopupFeatures())
       if (!win || win.closed) {
         window.location.href = url
@@ -935,7 +1103,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     const stripeMethod = visibleMethod === 'stripe'
       ? ''
       : visibleMethod === 'wxpay' ? 'wechat_pay' : 'alipay'
-    const stripeRouteUrl = result.client_secret && visibleMethod !== 'airwallex'
+    const stripeRouteUrl = result.client_secret && visibleMethod === 'stripe'
       ? router.resolve({
         path: '/payment/stripe',
         query: {
@@ -973,6 +1141,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         paymentType: visibleMethod,
         orderType,
         planId,
+        subscriptionId: options.subscriptionId,
         orderAmount,
       })
       return
@@ -986,6 +1155,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     paymentState.value = decision.paymentState
     paymentPhase.value = 'paying'
     persistRecoverySnapshot(decision.recovery)
+    paymentModalVisible.value = true
 
     if (decision.kind === 'stripe_popup') {
       openWindow(decision.paymentState.payUrl)
@@ -1005,9 +1175,11 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         const errMsg = String(jsapiResult.err_msg || '').toLowerCase()
         if (errMsg.includes('cancel')) {
           appStore.showInfo(t('payment.qr.cancelled'))
-          resetPayment()
+          // JSAPI only reports that the app sheet was dismissed. The local
+          // order can still be paid or awaiting callback, so retain its
+          // order-scoped recovery context and continue polling in the shell.
+          hidePaymentModal()
         } else if (errMsg && !errMsg.includes('ok')) {
-          resetPayment()
           const fallbackApplied = await attemptMobileQrFallback(
             { reason: 'WECHAT_JSAPI_FAILED', message: errMsg },
             {
@@ -1016,24 +1188,29 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
               planId,
               paymentType: visibleMethod,
               attempted: options.mobileQrFallbackAttempted === true,
+              subscriptionId: options.subscriptionId,
+              idempotencyKey: options.idempotencyKey,
+              resetCardAttempt: options.resetCardAttempt,
             },
           )
           if (!fallbackApplied) {
             applyScenarioError({ reason: 'WECHAT_JSAPI_FAILED', message: errMsg }, visibleMethod)
           }
         } else {
-          const resultState = { ...decision.paymentState }
-          resetPayment()
-          await redirectToPaymentResult(resultState)
+          // The bridge callback is not a fulfillment proof. Keep polling the
+          // same order until the server records COMPLETED.
+          // PaymentStatusPanel will refresh user state only after COMPLETED.
         }
       } catch (err: unknown) {
-        resetPayment()
         const fallbackApplied = await attemptMobileQrFallback(err, {
           orderAmount,
           orderType,
           planId,
           paymentType: visibleMethod,
           attempted: options.mobileQrFallbackAttempted === true,
+          subscriptionId: options.subscriptionId,
+          idempotencyKey: options.idempotencyKey,
+          resetCardAttempt: options.resetCardAttempt,
         })
         if (!fallbackApplied) {
           throw err
@@ -1063,6 +1240,9 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       planId,
       paymentType: requestType,
       attempted: options.mobileQrFallbackAttempted === true,
+      subscriptionId: options.subscriptionId,
+      idempotencyKey: options.idempotencyKey,
+      resetCardAttempt: options.resetCardAttempt,
     })) {
       return
     } else {
@@ -1080,6 +1260,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     }
     appStore.showError(buildPaymentErrorToastMessage(errorMessage.value, errorHintMessage.value))
   } finally {
+    closePreopenedPopup()
     submitting.value = false
   }
 }
@@ -1090,6 +1271,9 @@ interface MobileQrFallbackContext {
   planId?: number
   paymentType: string
   attempted: boolean
+  subscriptionId?: number
+  idempotencyKey?: string
+  resetCardAttempt?: ResetCardCheckoutAttempt
 }
 
 function shouldFallbackToDesktopQr(err: unknown, paymentMethod: string, attempted: boolean): boolean {
@@ -1137,13 +1321,20 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
       paymentType: visibleMethod,
       orderType: context.orderType,
       planId: context.planId,
+      subscriptionId: context.subscriptionId,
       origin: typeof window !== 'undefined' ? window.location.origin : '',
       isMobile: false,
       isWechatBrowser: false,
     })
-    const result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
+    const result = await paymentStore.createOrder(
+      payload,
+      context.idempotencyKey ? { headers: { 'Idempotency-Key': context.idempotencyKey } } : undefined,
+    ) as CreateOrderResult & { resume_token?: string }
+    if (context.orderType === 'reset_card' && context.resetCardAttempt && typeof window !== 'undefined') {
+      recordResetCardCheckoutOrder(window.localStorage, context.resetCardAttempt, result.order_id)
+    }
     const stripeMethod = visibleMethod === 'wxpay' ? 'wechat_pay' : 'alipay'
-    const stripeRouteUrl = result.client_secret
+    const stripeRouteUrl = visibleMethod === 'stripe' && result.client_secret
       ? router.resolve({
         path: '/payment/stripe',
         query: {
@@ -1171,6 +1362,7 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
     errorHintMessage.value = ''
     paymentState.value = decision.paymentState
     paymentPhase.value = 'paying'
+    paymentModalVisible.value = true
     persistRecoverySnapshot(decision.recovery)
     appStore.showWarning(t('payment.errors.mobilePaymentFallbackToQr'))
     return true
@@ -1201,12 +1393,18 @@ async function resumeWechatPaymentFromQuery() {
   if (!resume) {
     return
   }
+  const resetCardAttempt = resume.orderType === 'reset_card'
+    && resume.wechatResumeToken
+    && typeof window !== 'undefined'
+    ? await matchResetCardCheckoutAttemptForResume(window.localStorage, resume.wechatResumeToken)
+    : null
 
   selectedMethod.value = resume.paymentType
   if (resume.orderType === 'balance' && resume.orderAmount > 0) {
     amount.value = resume.orderAmount
   }
-  if (resume.orderType === 'subscription' && resume.planId) {
+  if ((resume.orderType === 'subscription' || resume.orderType === 'reset_card') && resume.planId) {
+    activeTab.value = 'subscription'
     selectedPlan.value = checkout.value.plans.find(plan => plan.id === resume.planId) ?? null
   }
 
@@ -1217,6 +1415,12 @@ async function resumeWechatPaymentFromQuery() {
       wechatResumeToken: resume.wechatResumeToken,
       paymentType: resume.paymentType,
       isResume: true,
+      subscriptionId: resume.subscriptionId,
+      // The signed token matched this local attempt by hash. Retain the raw
+      // key only in request headers so an H5/JSAPI failure and its QR retry
+      // replay the same server-side reset-card checkout.
+      idempotencyKey: resetCardAttempt?.idempotencyKey,
+      resetCardAttempt: resetCardAttempt || undefined,
     })
     return
   }
@@ -1226,6 +1430,7 @@ async function resumeWechatPaymentFromQuery() {
       openid: resume.openid,
       paymentType: resume.paymentType,
       isResume: true,
+      subscriptionId: resume.subscriptionId,
     })
   }
 }
@@ -1247,9 +1452,6 @@ onMounted(async () => {
       selectedMethod.value = sorted[0]
     }
     if (typeof window !== 'undefined') {
-      if (hasWechatResumeQuery(route.query)) {
-        removeRecoverySnapshot()
-      }
       const routeResumeToken = typeof route.query.resume_token === 'string'
         ? route.query.resume_token
         : typeof route.query.wechat_resume_token === 'string'
@@ -1262,13 +1464,12 @@ onMounted(async () => {
       if (restored) {
         paymentState.value = restored
         paymentPhase.value = 'paying'
+        paymentModalVisible.value = true
         const restoredMethod = normalizeVisibleMethod(restored.paymentType)
           || (visibleMethods.value[restored.paymentType] ? restored.paymentType : '')
         if (restoredMethod) {
           selectedMethod.value = restoredMethod
         }
-      } else {
-        removeRecoverySnapshot()
       }
     }
     await resumeWechatPaymentFromQuery()

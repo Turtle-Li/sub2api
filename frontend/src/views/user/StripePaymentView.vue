@@ -205,7 +205,8 @@ function formatGatewayAmount(value: number): string {
 
 async function confirmAlipay(stripe: Stripe, clientSecret: string, orderId: number) {
   redirecting.value = true
-  const returnUrl = window.location.origin + '/payment/result?order_id=' + orderId + '&status=success'
+  const resumeToken = typeof route.query.resume_token === 'string' ? route.query.resume_token : ''
+  const returnUrl = buildPaymentResultReturnUrl(orderId, resumeToken)
   const { error } = await stripe.confirmAlipayPayment(clientSecret, { return_url: returnUrl })
   if (error) {
     redirecting.value = false
@@ -233,8 +234,9 @@ async function confirmWechatPay(stripe: Stripe, clientSecret: string) {
     // 轮询支付完成状态
     startPolling()
   } else if (paymentIntent?.status === 'succeeded') {
-    stripeSuccess.value = true
-    scheduleClose()
+    // Stripe's provider acknowledgement is not fulfillment. Let the unified
+    // result page keep querying the server until it records COMPLETED.
+    navigateToPaymentResult()
   } else {
     stripeError.value = t('payment.result.failed')
   }
@@ -263,21 +265,42 @@ async function handleGenericPay() {
     const { error } = await stripeInstance.confirmPayment({
       elements: elementsInstance,
       confirmParams: {
-        return_url: window.location.origin + '/payment/result?order_id=' + route.query.order_id + '&status=success',
+        return_url: buildPaymentResultReturnUrl(Number(route.query.order_id), typeof route.query.resume_token === 'string' ? route.query.resume_token : ''),
       },
       redirect: 'if_required',
     })
     if (error) {
       stripeError.value = error.message || t('payment.result.failed')
     } else {
-      stripeSuccess.value = true
-      scheduleClose()
+      // A successful client confirmation can still race webhook delivery.
+      // The result page owns the server-backed COMPLETED state.
+      navigateToPaymentResult()
     }
   } catch (err: unknown) {
     stripeError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('payment.result.failed'))
   } finally {
     stripeSubmitting.value = false
   }
+}
+
+function buildPaymentResultReturnUrl(orderId: number, resumeToken = ''): string {
+  const url = new URL('/payment/result', window.location.origin)
+  if (orderId > 0) url.searchParams.set('order_id', String(orderId))
+  if (resumeToken) url.searchParams.set('resume_token', resumeToken)
+  url.searchParams.set('status', 'success')
+  return url.toString()
+}
+
+function navigateToPaymentResult(): void {
+  const resumeToken = typeof route.query.resume_token === 'string' ? route.query.resume_token : ''
+  void router.push({
+    path: '/payment/result',
+    query: {
+      order_id: String(route.query.order_id || ''),
+      resume_token: resumeToken || undefined,
+      status: 'success',
+    },
+  })
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -288,7 +311,7 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     const o = await paymentStore.pollOrderStatus(orderId)
     if (!o) return
-    if (o.status === 'COMPLETED' || o.status === 'PAID') {
+    if (o.status === 'COMPLETED') {
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
       stripeSuccess.value = true
       wechatQrUrl.value = ''
@@ -302,7 +325,7 @@ function scheduleClose() {
     redirectTimer = setTimeout(() => { window.close() }, 2000)
   } else {
     redirectTimer = setTimeout(() => {
-      router.push({ path: '/payment/result', query: { order_id: String(route.query.order_id || ''), status: 'success' } })
+      navigateToPaymentResult()
     }, 2000)
   }
 }

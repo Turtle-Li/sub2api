@@ -131,4 +131,57 @@ describe('StripePaymentView', () => {
     expect(loadStripe).toHaveBeenCalledWith('pk_test')
     expect(wrapper.text()).toContain(formatPaymentAmount(103, 'HKD', 'zh-CN'))
   })
+
+  it('routes a provider-confirmed WeChat payment to server-backed result confirmation', async () => {
+    routeState.query = {
+      order_id: '42',
+      client_secret: 'pi_secret_42',
+      method: 'wechat_pay',
+      resume_token: 'resume-stripe-42',
+    }
+    getOrder.mockResolvedValue({ data: orderFactory() })
+    stripeInstance.confirmWechatPayPayment.mockResolvedValue({
+      paymentIntent: { status: 'succeeded' },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await flushPromises()
+
+    expect(routerPush).toHaveBeenCalledWith({
+      path: '/payment/result',
+      query: {
+        order_id: '42',
+        resume_token: 'resume-stripe-42',
+        status: 'success',
+      },
+    })
+    expect(wrapper.text()).not.toContain('payment.result.success')
+  })
+
+  it('does not mark a synchronous Stripe confirmation as fulfilled', async () => {
+    routeState.query = {
+      order_id: '42',
+      client_secret: 'pi_secret_42',
+      resume_token: 'resume-stripe-generic-42',
+    }
+    getOrder.mockResolvedValue({ data: orderFactory() })
+    stripeInstance.confirmPayment.mockResolvedValue({})
+
+    const wrapper = mountView()
+    await flushPromises()
+    await flushPromises()
+    await wrapper.get('button.btn-stripe').trigger('click')
+    await flushPromises()
+
+    expect(routerPush).toHaveBeenCalledWith({
+      path: '/payment/result',
+      query: {
+        order_id: '42',
+        resume_token: 'resume-stripe-generic-42',
+        status: 'success',
+      },
+    })
+    expect(wrapper.text()).not.toContain('payment.result.success')
+  })
 })

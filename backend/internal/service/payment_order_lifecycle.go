@@ -309,8 +309,11 @@ func (s *PaymentService) VerifyOrderByOutTradeNo(ctx context.Context, outTradeNo
 	if o.UserID != userID {
 		return nil, infraerrors.Forbidden("FORBIDDEN", "no permission for this order")
 	}
-	// Only verify orders that are still pending or recently expired
-	if o.Status == OrderStatusPending || o.Status == OrderStatusExpired {
+	// Reset-card create failures from an earlier binary can still represent a
+	// provider-accepted payment. Query those unpaid FAILED rows through their
+	// original provider binding before treating the local state as terminal.
+	if o.Status == OrderStatusPending || o.Status == OrderStatusExpired ||
+		(o.OrderType == payment.OrderTypeResetCard && o.Status == OrderStatusFailed && o.PaidAt == nil) {
 		result := s.reconcilePaid(ctx, o)
 		if result == checkPaidResultAlreadyPaid {
 			// Reload order to get updated status
@@ -329,8 +332,15 @@ func (s *PaymentService) ReconcilePendingPaymentOrders(ctx context.Context) (int
 	now := time.Now()
 	orders, err := s.entClient.PaymentOrder.Query().
 		Where(
-			paymentorder.StatusEQ(OrderStatusPending),
-			paymentorder.ExpiresAtGT(now),
+			paymentorder.Or(
+				paymentorder.And(paymentorder.StatusEQ(OrderStatusPending), paymentorder.ExpiresAtGT(now)),
+				paymentorder.And(
+					paymentorder.OrderTypeEQ(payment.OrderTypeResetCard),
+					paymentorder.StatusEQ(OrderStatusFailed),
+					paymentorder.PaidAtIsNil(),
+					paymentorder.ExpiresAtGT(now.Add(-paymentResumeTokenTTL)),
+				),
+			),
 			paymentorder.Or(
 				paymentorder.PaymentTypeEQ(payment.TypeWxpay),
 				paymentorder.PaymentTypeHasPrefix(payment.TypeWxpay+"_"),
@@ -484,6 +494,9 @@ func (s *PaymentService) createProviderFromInstance(ctx context.Context, inst *d
 	cfg, err := s.loadBalancer.GetInstanceConfig(ctx, int64(inst.ID))
 	if err != nil {
 		return nil, fmt.Errorf("load provider instance config: %w", err)
+	}
+	if cfg == nil {
+		return nil, infraerrors.ServiceUnavailable("PAYMENT_PROVIDER_CONFIG_UNAVAILABLE", "payment provider configuration is unavailable")
 	}
 	if inst.PaymentMode != "" {
 		cfg["paymentMode"] = inst.PaymentMode

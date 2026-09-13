@@ -6,6 +6,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { paymentAPI } from '@/api/payment'
+import type { AxiosRequestConfig } from 'axios'
 import type { PaymentConfig, PaymentOrder, SubscriptionPlan, CreateOrderRequest } from '@/types/payment'
 
 export const usePaymentStore = defineStore('payment', () => {
@@ -61,8 +62,8 @@ export const usePaymentStore = defineStore('payment', () => {
   }
 
   /** Create a new order and set it as current */
-  async function createOrder(params: CreateOrderRequest) {
-    const response = await paymentAPI.createOrder(params)
+  async function createOrder(params: CreateOrderRequest, config?: AxiosRequestConfig) {
+    const response = await paymentAPI.createOrder(params, config)
     return response.data
   }
 

@@ -76,6 +76,7 @@ const route = useRoute()
 const orderId = String(route.query.order_id || '')
 const method = String(route.query.method || 'alipay')
 const amount = String(route.query.amount || '')
+const resumeToken = typeof route.query.resume_token === 'string' ? route.query.resume_token : ''
 
 const methodColor = computed(() => METHOD_COLORS[method] || DEFAULT_METHOD_COLOR)
 
@@ -141,7 +142,7 @@ async function initStripe(clientSecret: string, publishableKey: string) {
     const stripe = await loadStripe(publishableKey)
     if (!stripe) { error.value = t('payment.stripeLoadFailed'); return }
 
-    const returnUrl = window.location.origin + '/payment/result?order_id=' + orderId + '&status=success'
+    const returnUrl = buildPaymentResultReturnUrl(orderId, resumeToken)
 
     if (method === 'alipay') {
       // Alipay: redirect this popup to Alipay payment page
@@ -156,8 +157,9 @@ async function initStripe(clientSecret: string, publishableKey: string) {
       if (result.error) {
         error.value = result.error.message || t('payment.result.failed')
       } else if (result.paymentIntent?.status === 'succeeded') {
-        success.value = true
-        setTimeout(closeWindow, 2000)
+        // Provider acknowledgement can precede the server's fulfillment
+        // transaction. Continue on the result page, which waits for COMPLETED.
+        window.location.assign(returnUrl)
       } else {
         // Payment not completed (user closed QR dialog)
         startPolling()
@@ -166,6 +168,14 @@ async function initStripe(clientSecret: string, publishableKey: string) {
   } catch (err: unknown) {
     error.value = extractI18nErrorMessage(err, t, 'payment.errors', t('payment.stripeLoadFailed'))
   }
+}
+
+function buildPaymentResultReturnUrl(orderId: string, resumeToken = ''): string {
+  const url = new URL('/payment/result', window.location.origin)
+  if (orderId) url.searchParams.set('order_id', orderId)
+  if (resumeToken) url.searchParams.set('resume_token', resumeToken)
+  url.searchParams.set('status', 'success')
+  return url.toString()
 }
 
 function startPolling() {
@@ -185,7 +195,7 @@ function startPolling() {
       if (!res.ok) return
       const data = await res.json()
       const status = data?.data?.status
-      if (status === 'COMPLETED' || status === 'PAID') {
+      if (status === 'COMPLETED') {
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
         success.value = true
         setTimeout(closeWindow, 2000)

@@ -563,7 +563,7 @@ func TestUpdateProviderInstanceRejectsProtectedConfigChangesWhilePendingOrders(t
 			})
 			require.Nil(t, updated)
 			require.Error(t, err)
-			require.Equal(t, "PENDING_ORDERS", infraerrors.Reason(err))
+			require.Equal(t, "PROVIDER_INSTANCE_IN_USE", infraerrors.Reason(err))
 
 			saved, err := client.PaymentProviderInstance.Get(ctx, instance.ID)
 			require.NoError(t, err)
@@ -572,6 +572,107 @@ func TestUpdateProviderInstanceRejectsProtectedConfigChangesWhilePendingOrders(t
 			require.Equal(t, tc.wantValue, cfg[tc.fieldName])
 		})
 	}
+}
+
+func TestProviderInstanceIdentityAndCredentialsRemainImmutableAfterOrderUse(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{OrderStatusFailed, OrderStatusExpired, OrderStatusCancelled, OrderStatusCompleted} {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			client := newPaymentConfigServiceTestClient(t)
+			svc := &PaymentConfigService{
+				entClient:     client,
+				encryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+			}
+
+			instance, err := svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
+				ProviderKey:    payment.TypeAlipay,
+				Name:           "historical-alipay",
+				Config:         validAlipayProviderConfig(t),
+				SupportedTypes: []string{payment.TypeAlipay},
+				Enabled:        true,
+			})
+			require.NoError(t, err)
+			createProviderConfigOrder(t, ctx, client, instance, status)
+
+			updated, err := svc.UpdateProviderInstance(ctx, instance.ID, UpdateProviderInstanceRequest{
+				Config: map[string]string{"appId": "rotated-app-id"},
+			})
+			require.Nil(t, updated)
+			require.Equal(t, "PROVIDER_INSTANCE_IN_USE", infraerrors.Reason(err))
+
+			err = svc.DeleteProviderInstance(ctx, instance.ID)
+			require.Equal(t, "PROVIDER_INSTANCE_IN_USE", infraerrors.Reason(err))
+		})
+	}
+}
+
+func TestProviderInstanceHistoryIncludesSnapshotOnlyOrders(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{
+		entClient:     client,
+		encryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+	}
+	instance, err := svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
+		ProviderKey:    payment.TypeAlipay,
+		Name:           "snapshot-only-history",
+		Config:         validAlipayProviderConfig(t),
+		SupportedTypes: []string{payment.TypeAlipay},
+		Enabled:        true,
+	})
+	require.NoError(t, err)
+
+	user, err := client.User.Create().
+		SetEmail("snapshot-only-provider-history@example.com").
+		SetPasswordHash("hash").
+		SetUsername("snapshot-only-provider-history").
+		Save(ctx)
+	require.NoError(t, err)
+	instanceID := strconv.FormatInt(instance.ID, 10)
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(88).
+		SetPayAmount(88).
+		SetFeeRate(0).
+		SetRechargeCode("SNAPSHOT-ONLY-PROVIDER-" + instanceID).
+		SetOutTradeNo("sub2_snapshot_only_provider_" + instanceID).
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusCompleted).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		SetProviderSnapshot(map[string]any{
+			"schema_version":       2,
+			"provider_instance_id": instanceID,
+			"provider_key":         instance.ProviderKey,
+		}).
+		Save(ctx)
+	require.NoError(t, err)
+	require.Nil(t, order.ProviderInstanceID)
+
+	inUse, err := paymentProviderInstanceHasOrders(ctx, client, instance.ID)
+	require.NoError(t, err)
+	require.True(t, inUse)
+
+	updated, err := svc.UpdateProviderInstance(ctx, instance.ID, UpdateProviderInstanceRequest{
+		Config: map[string]string{"appId": "rotated-app-id"},
+	})
+	require.Nil(t, updated)
+	require.Equal(t, "PROVIDER_INSTANCE_IN_USE", infraerrors.Reason(err))
+
+	err = svc.DeleteProviderInstance(ctx, instance.ID)
+	require.Equal(t, "PROVIDER_INSTANCE_IN_USE", infraerrors.Reason(err))
 }
 
 func TestUpdateProviderInstanceAllowsSafeConfigChangesWhilePendingOrders(t *testing.T) {
@@ -678,6 +779,10 @@ func TestUpdateProviderInstanceClearsAirwallexAccountID(t *testing.T) {
 }
 
 func createPendingProviderConfigOrder(t *testing.T, ctx context.Context, client *dbent.Client, instance *dbent.PaymentProviderInstance) {
+	createProviderConfigOrder(t, ctx, client, instance, OrderStatusPending)
+}
+
+func createProviderConfigOrder(t *testing.T, ctx context.Context, client *dbent.Client, instance *dbent.PaymentProviderInstance, status string) {
 	t.Helper()
 
 	user, err := client.User.Create().
@@ -700,7 +805,7 @@ func createPendingProviderConfigOrder(t *testing.T, ctx context.Context, client 
 		SetPaymentType(providerPendingOrderPaymentType(instance.ProviderKey)).
 		SetPaymentTradeNo("").
 		SetOrderType(payment.OrderTypeBalance).
-		SetStatus(OrderStatusPending).
+		SetStatus(status).
 		SetExpiresAt(time.Now().Add(time.Hour)).
 		SetClientIP("127.0.0.1").
 		SetSrcHost("api.example.com").

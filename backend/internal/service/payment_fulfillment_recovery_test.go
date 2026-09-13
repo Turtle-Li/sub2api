@@ -80,6 +80,35 @@ func TestRecoverPendingPaymentOrderFulfillmentsCompletesDurablePaidBalanceOrder(
 	require.Equal(t, 1, count)
 }
 
+func TestRecoverPendingPaymentOrderFulfillmentsHoldsExpiredResetCardGrantSnapshotForManualReview(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	order := createPaymentFulfillmentExpiredResetCardOrder(t, ctx, client)
+	svc := &PaymentService{entClient: client}
+	createPaymentFulfillmentRecoveryFenceTables(t, ctx, svc)
+
+	recovered, err := svc.RecoverPendingPaymentOrderFulfillments(ctx)
+	require.NoError(t, err)
+	require.Zero(t, recovered)
+
+	held, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusFailed, held.Status)
+	require.NotNil(t, held.PaidAt)
+	require.NotNil(t, held.FailedReason)
+	require.Equal(t, resetCardGrantExpiryManualReviewReason, *held.FailedReason)
+	firstHoldVersion := held.UpdatedAt
+
+	// The next worker pass must not reclaim the durable manual hold.
+	recovered, err = svc.RecoverPendingPaymentOrderFulfillments(ctx)
+	require.NoError(t, err)
+	require.Zero(t, recovered)
+	held, err = client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.True(t, held.UpdatedAt.Equal(firstHoldVersion))
+}
+
 func createPaymentFulfillmentRecoveryBalanceOrder(
 	t *testing.T,
 	ctx context.Context,
@@ -182,6 +211,49 @@ func TestRecoverPendingPaymentOrderFulfillmentsSkipsRefundFencesBeforeLimit(t *t
 	reloaded, err := client.PaymentOrder.Get(ctx, eligible.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+}
+
+func TestRecoverPendingPaymentOrderFulfillmentsSkipsResetCardGrantExpiryManualReviewBeforeLimit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+
+	// A paid reset-card order whose grant-expiry snapshot has elapsed is held
+	// for an operator. Keep those durable hold rows out of the candidate query
+	// before LIMIT, otherwise they would consume every recovery slot forever.
+	for i := 0; i < paymentFulfillmentRecoveryLimit; i++ {
+		held := createPaymentFulfillmentRecoveryBalanceOrder(
+			t,
+			ctx,
+			client,
+			OrderStatusFailed,
+			time.Now().UTC().Add(-3*time.Minute-time.Duration(i)*time.Microsecond),
+		)
+		_, err := client.PaymentOrder.UpdateOneID(held.ID).
+			SetFailedAt(time.Now().UTC()).
+			SetFailedReason(resetCardGrantExpiryManualReviewReason).
+			Save(ctx)
+		require.NoError(t, err)
+	}
+
+	eligible := createPaymentFulfillmentRecoveryBalanceOrder(t, ctx, client, OrderStatusPaid, time.Now().UTC().Add(-2*time.Minute))
+	credited := 0.0
+	svc := newPaymentFulfillmentRecoveryBalanceService(t, client, eligible, &credited)
+	createPaymentFulfillmentRecoveryFenceTables(t, ctx, svc)
+
+	recovered, err := svc.RecoverPendingPaymentOrderFulfillments(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, recovered)
+	require.Equal(t, eligible.Amount, credited)
+
+	// The holds precede the eligible row by construction. A direct status count
+	// proves the worker did not claim any of them while scanning.
+	count, err := client.PaymentOrder.Query().Where(
+		paymentorder.StatusEQ(OrderStatusFailed),
+		paymentorder.FailedReasonEQ(resetCardGrantExpiryManualReviewReason),
+	).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, paymentFulfillmentRecoveryLimit, count)
 }
 
 func TestRecoverPendingPaymentOrderFulfillmentsExcludesRefundFencesAndRefundStates(t *testing.T) {

@@ -52,7 +52,10 @@ vi.mock('@/api/payment', () => ({
 }))
 
 import PaymentResultView from '../PaymentResultView.vue'
-import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
+import {
+  PAYMENT_RECOVERY_STORAGE_KEY,
+  RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY,
+} from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
 
 enableAutoUnmount(afterEach)
@@ -71,6 +74,16 @@ const orderFactory = (status: string) => ({
   expires_at: '2026-04-20T12:30:00Z',
   refund_amount: 0,
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 const recoverySnapshotFactory = (resumeToken: string) => ({
   orderId: 42,
@@ -155,7 +168,7 @@ describe('PaymentResultView', () => {
     expect(wrapper.text()).toContain('payment.result.processing')
   })
 
-  it('rejects an Alipay browser-return order number that does not match the local snapshot', async () => {
+  it('ignores a provider out_trade_no and resumes the active local checkout', async () => {
     routeState.query = {
       method: 'alipay.trade.page.pay.return',
       out_trade_no: 'sub2_other_order',
@@ -166,6 +179,7 @@ describe('PaymentResultView', () => {
       PAYMENT_RECOVERY_STORAGE_KEY,
       JSON.stringify(recoverySnapshotFactory('resume-alipay-mismatch')),
     )
+    pollOrderStatus.mockResolvedValueOnce(orderFactory('PENDING'))
 
     const wrapper = mount(PaymentResultView, {
       global: { stubs: { OrderStatusBadge: true } },
@@ -173,9 +187,9 @@ describe('PaymentResultView', () => {
 
     await flushPromises()
 
-    expect(pollOrderStatus).not.toHaveBeenCalled()
+    expect(pollOrderStatus).toHaveBeenCalledWith(42)
     expect(verifyOrderPublic).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('payment.result.failed')
+    expect(wrapper.text()).toContain('payment.result.processing')
   })
 
   it('renders a pending state instead of a failure state when the restored order is still pending', async () => {
@@ -222,6 +236,138 @@ describe('PaymentResultView', () => {
     expect(wrapper.text()).toContain('payment.result.processing')
     expect(wrapper.text()).not.toContain('payment.result.success')
     expect(wrapper.text()).not.toContain('payment.result.failed')
+  })
+
+  it('keeps a provider success return in confirmation state when the first order lookup is transiently unavailable', async () => {
+    routeState.query = {
+      order_id: '42',
+      status: 'success',
+    }
+    pollOrderStatus.mockRejectedValueOnce(new Error('temporary network failure'))
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledWith(42)
+    expect(wrapper.text()).toContain('payment.result.processing')
+    expect(wrapper.text()).not.toContain('payment.result.failed')
+  })
+
+  it('retries a known route order after an initial empty lookup', async () => {
+    vi.useFakeTimers()
+    routeState.query = { order_id: '42' }
+    pollOrderStatus
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(orderFactory('COMPLETED'))
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+
+    await flushPromises()
+    expect(pollOrderStatus).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('payment.result.processing')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('payment.result.success')
+  })
+
+  it('retries a signed resume token after a transient lookup failure', async () => {
+    vi.useFakeTimers()
+    routeState.query = { resume_token: 'resume-retry' }
+    resolveOrderPublicByResumeToken
+      .mockRejectedValueOnce(new Error('temporary network failure'))
+      .mockResolvedValueOnce({ data: orderFactory('COMPLETED') })
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+
+    await flushPromises()
+    expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('payment.result.processing')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+
+    expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('payment.result.success')
+  })
+
+  it('distinguishes confirmed payment from failed fulfillment', async () => {
+    routeState.query = { resume_token: 'resume-fulfillment-failed' }
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify(recoverySnapshotFactory('resume-fulfillment-failed')),
+    )
+    resolveOrderPublicByResumeToken.mockResolvedValue({
+      data: {
+        ...orderFactory('FAILED'),
+        paid_at: '2026-04-20T12:01:00Z',
+        payment_status: 'PAID',
+        fulfillment_status: 'FAILED',
+      },
+    })
+    const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('payment.result.paidButFulfillmentFailed')
+    expect(wrapper.text()).not.toContain('payment.result.failed')
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).not.toBeNull()
+  })
+
+  it('keeps PAID in payment processing until the server reports COMPLETED', async () => {
+    routeState.query = { resume_token: 'resume-paid' }
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify(recoverySnapshotFactory('resume-paid')),
+    )
+    resolveOrderPublicByResumeToken.mockResolvedValue({
+      data: {
+        ...orderFactory('PAID'),
+        paid_at: '2026-04-20T12:01:00Z',
+        payment_status: 'PAID',
+        fulfillment_status: 'FULFILLED',
+      },
+    })
+
+    const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.result.processing')
+    expect(wrapper.text()).not.toContain('payment.result.success')
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).not.toBeNull()
+  })
+
+  it('does not turn a confirmed payment into failure when its automatic refresh budget is exhausted', async () => {
+    vi.useFakeTimers()
+    routeState.query = { resume_token: 'resume-paid-retry-budget' }
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify(recoverySnapshotFactory('resume-paid-retry-budget')),
+    )
+    resolveOrderPublicByResumeToken.mockResolvedValue({
+      data: {
+        ...orderFactory('RECHARGING'),
+        paid_at: '2026-04-20T12:01:00Z',
+        payment_status: 'PAID',
+        fulfillment_status: 'PENDING',
+      },
+    })
+
+    const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true } } })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(15 * 2000)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.result.processing')
+    expect(wrapper.text()).not.toContain('payment.result.failed')
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).not.toBeNull()
   })
 
   it('prefers the public resume-token result over a stale restored DB snapshot', async () => {
@@ -319,6 +465,23 @@ describe('PaymentResultView', () => {
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
   })
 
+  it('clears a reset-card checkout attempt only after the server reports its terminal order', async () => {
+    routeState.query = { resume_token: 'resume-reset-card' }
+    window.localStorage.setItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY, JSON.stringify({
+      fingerprint: 'reset-card-fingerprint',
+      idempotencyKey: 'reset-card-payment-1',
+      orderId: 42,
+    }))
+    resolveOrderPublicByResumeToken.mockResolvedValue({
+      data: { ...orderFactory('COMPLETED'), order_type: 'reset_card' },
+    })
+
+    mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true } } })
+    await flushPromises()
+
+    expect(window.localStorage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toBeNull()
+  })
+
   it('keeps the successful result when refreshing the user balance fails', async () => {
     routeState.query = {
       resume_token: 'resume-refresh-failure',
@@ -343,7 +506,7 @@ describe('PaymentResultView', () => {
     expect(wrapper.text()).not.toContain('payment.result.failed')
   })
 
-  it('falls back to order_id polling when resume-token recovery fails', async () => {
+  it('falls back to order_id polling when resume-token recovery fails without clearing a different active order', async () => {
     routeState.query = {
       resume_token: 'resume-fail',
       order_id: '77',
@@ -357,7 +520,7 @@ describe('PaymentResultView', () => {
     )
     resolveOrderPublicByResumeToken.mockRejectedValueOnce(new Error('resume failed'))
     pollOrderStatus.mockResolvedValueOnce({
-      ...orderFactory('PAID'),
+      ...orderFactory('COMPLETED'),
       id: 77,
     })
 
@@ -375,7 +538,7 @@ describe('PaymentResultView', () => {
     expect(pollOrderStatus).toHaveBeenCalledWith(77)
     expect(verifyOrderPublic).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('payment.result.success')
-    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).not.toBeNull()
   })
 
   it('falls back to public out_trade_no verification when resume_token recovery fails in legacy return flows', async () => {
@@ -387,7 +550,7 @@ describe('PaymentResultView', () => {
     resolveOrderPublicByResumeToken.mockRejectedValueOnce(new Error('resume failed'))
     verifyOrderPublic.mockResolvedValueOnce({
       data: {
-        ...orderFactory('PAID'),
+        ...orderFactory('COMPLETED'),
         out_trade_no: 'legacy-should-not-run',
       },
     })
@@ -408,7 +571,7 @@ describe('PaymentResultView', () => {
     expect(wrapper.text()).toContain('payment.result.success')
   })
 
-  it('ignores a stale global recovery snapshot when legacy return markers do not identify the order', async () => {
+  it('uses the active local recovery snapshot for a fixed return with provider metadata only', async () => {
     routeState.query = {
       trade_status: 'TRADE_SUCCESS',
     }
@@ -416,6 +579,7 @@ describe('PaymentResultView', () => {
       PAYMENT_RECOVERY_STORAGE_KEY,
       JSON.stringify(recoverySnapshotFactory('resume-stale')),
     )
+    pollOrderStatus.mockResolvedValueOnce(orderFactory('PENDING'))
 
     const wrapper = mount(PaymentResultView, {
       global: {
@@ -429,9 +593,9 @@ describe('PaymentResultView', () => {
 
     expect(resolveOrderPublicByResumeToken).not.toHaveBeenCalled()
     expect(verifyOrderPublic).not.toHaveBeenCalled()
-    expect(pollOrderStatus).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('payment.result.failed')
-    expect(wrapper.text()).not.toContain('sub2_20260420abcd1234')
+    expect(pollOrderStatus).toHaveBeenCalledWith(42)
+    expect(wrapper.text()).toContain('payment.result.processing')
+    expect(wrapper.text()).toContain('sub2_20260420abcd1234')
   })
 
   it('uses public out_trade_no verification when no signed resume context is available', async () => {
@@ -441,7 +605,7 @@ describe('PaymentResultView', () => {
     }
     verifyOrder.mockRejectedValue(new Error('auth required'))
     verifyOrderPublic.mockResolvedValue({
-      data: orderFactory('PAID'),
+      data: orderFactory('COMPLETED'),
     })
 
     const wrapper = mount(PaymentResultView, {
@@ -486,7 +650,7 @@ describe('PaymentResultView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('payment.result.success')
+    expect(wrapper.text()).toContain('payment.result.processing')
     expect(wrapper.text()).toContain('legacy-minimal')
     expect(wrapper.text()).not.toContain('payment.orders.paymentMethod')
   })
@@ -533,12 +697,74 @@ describe('PaymentResultView', () => {
     expect(verifyOrderPublic).not.toHaveBeenCalled()
   })
 
+  it('shows unknown and never looks up a raw central-provider out_trade_no without trusted local recovery', async () => {
+    routeState.query = {
+      method: 'alipay.trade.page.pay.return',
+      app_id: 'provider-app',
+      out_trade_no: 'provider-channel-order',
+      trade_status: 'TRADE_SUCCESS',
+    }
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+    await flushPromises()
+
+    expect(resolveOrderPublicByResumeToken).not.toHaveBeenCalled()
+    expect(pollOrderStatus).not.toHaveBeenCalled()
+    expect(verifyOrder).not.toHaveBeenCalled()
+    expect(verifyOrderPublic).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.result.unknown')
+  })
+
+  it('drops a deferred initialization result after unmount', async () => {
+    const pending = deferred<{ data: ReturnType<typeof orderFactory> }>()
+    routeState.query = { resume_token: 'resume-disposed' }
+    resolveOrderPublicByResumeToken.mockReturnValueOnce(pending.promise)
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+    await flushPromises()
+    wrapper.unmount()
+
+    pending.resolve({ data: orderFactory('COMPLETED') })
+    await flushPromises()
+
+    expect(refreshUser).not.toHaveBeenCalled()
+  })
+
+  it('drops a deferred manual refresh after unmount', async () => {
+    const pending = deferred<ReturnType<typeof orderFactory>>()
+    routeState.query = { order_id: '42' }
+    pollOrderStatus
+      .mockResolvedValueOnce(orderFactory('PENDING'))
+      .mockReturnValueOnce(pending.promise)
+
+    const wrapper = mount(PaymentResultView, {
+      global: { stubs: { OrderStatusBadge: true } },
+    })
+    await flushPromises()
+
+    const refreshButton = wrapper.findAll('button')
+      .find(button => button.text() === 'payment.qr.refreshStatus')
+    expect(refreshButton).toBeDefined()
+    await refreshButton!.trigger('click')
+    await flushPromises()
+
+    wrapper.unmount()
+    pending.resolve(orderFactory('COMPLETED'))
+    await flushPromises()
+
+    expect(refreshUser).not.toHaveBeenCalled()
+  })
+
   it('resolves order by resume token when local recovery snapshot is missing', async () => {
     routeState.query = {
       resume_token: 'resume-77',
     }
     resolveOrderPublicByResumeToken.mockResolvedValue({
-      data: orderFactory('PAID'),
+      data: orderFactory('COMPLETED'),
     })
 
     const wrapper = mount(PaymentResultView, {

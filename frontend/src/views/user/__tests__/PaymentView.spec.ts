@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
-import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
+import {
+  PAYMENT_RECOVERY_STORAGE_KEY,
+  RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY,
+} from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
@@ -9,6 +12,8 @@ import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
+import ResetCardShop from '@/components/payment/ResetCardShop.vue'
+import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
 
 const routeState = vi.hoisted(() => ({
@@ -28,6 +33,7 @@ const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
 const translate = vi.hoisted(() => vi.fn((key: string) => key))
+const isMobileDevice = vi.hoisted(() => vi.fn(() => true))
 
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
@@ -55,6 +61,7 @@ vi.mock('vue-i18n', async () => {
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
     user: {
+      id: 9,
       username: 'demo-user',
       balance: 0,
     },
@@ -90,8 +97,12 @@ vi.mock('@/api/payment', () => ({
 }))
 
 vi.mock('@/utils/device', () => ({
-  isMobileDevice: () => true,
+  isMobileDevice,
 }))
+
+afterEach(() => {
+  isMobileDevice.mockReset().mockReturnValue(true)
+})
 
 function checkoutInfoFixture(overrides: Partial<CheckoutInfoResponse> = {}) {
   const wxpayMethod: MethodLimit = {
@@ -205,6 +216,17 @@ function oauthOrderFixture() {
       redirect_url: '/auth/wechat/payment/callback',
     },
   }
+}
+
+async function resetCardWechatResumeToken(idempotencyKey: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(idempotencyKey))
+  const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+  const tokenPayload = btoa(JSON.stringify({
+    tk: 'wechat_payment_resume',
+    ot: 'reset_card',
+    ikh: hash,
+  })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `${tokenPayload}.signature`
 }
 
 async function mountSubscriptionConfirm(options: Parameters<typeof checkoutInfoWithPlansFixture>[0] = {}) {
@@ -821,6 +843,9 @@ describe('PaymentView payment recovery', () => {
           PaymentStatusPanel: {
             template: '<button data-test="payment-done" @click="$emit(\'done\')" />',
           },
+          BaseDialog: {
+            template: '<div><slot /></div>',
+          },
           Teleport: true,
           Transition: false,
         },
@@ -833,10 +858,438 @@ describe('PaymentView payment recovery', () => {
 
     expect(wrapper.findComponent(PaymentOrderRail).props('selectedMethod')).toBe('ldc')
   })
+
+  it('hides the checkout dialog without unmounting its resumable payment panel', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture())
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
+      orderId: 321,
+      amount: 66,
+      qrCode: 'provider-qr',
+      expiresAt: '2099-01-01T00:10:00.000Z',
+      paymentType: 'wxpay',
+      payUrl: '',
+      outTradeNo: 'sub2_resume_321',
+      clientSecret: '',
+      intentId: '',
+      currency: '',
+      countryCode: '',
+      paymentEnv: '',
+      payAmount: 66,
+      orderType: 'balance',
+      paymentMode: 'native',
+      resumeToken: 'resume-321',
+      createdAt: Date.now(),
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: {
+            template: '<div><button data-test="hide-dialog" @click="$emit(\'close\')" /><slot /></div>',
+          },
+          PaymentStatusPanel: { template: '<div data-test="payment-panel" />' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="payment-panel"]').exists()).toBe(true)
+    await wrapper.get('[data-test="hide-dialog"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="resume-payment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="payment-panel"]').exists()).toBe(true)
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('sub2_resume_321')
+  })
+
+  it('creates reset-card checkout with its subscription id and idempotency header', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder.mockResolvedValue({
+      order_id: 901,
+      amount: 40,
+      pay_amount: 40,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=reset-card',
+      out_trade_no: 'sub2_reset_901',
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+      subscription: { id: 91 },
+      quote: {
+        subscription_id: 91,
+        group_id: 3,
+        plan_id: 7,
+        monthly_price: 120,
+        price: 40,
+        expires_at: '2099-01-01T00:00:00Z',
+      },
+    })
+    await flushPromises()
+
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      amount: 40,
+      order_type: 'reset_card',
+      plan_id: 7,
+      subscription_id: 91,
+    }), {
+      headers: {
+        'Idempotency-Key': expect.stringMatching(/^reset-card-payment-/),
+      },
+    })
+  })
+
+  it('reuses the persisted reset-card checkout key after a create-order response is lost', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder
+      .mockRejectedValueOnce(new Error('response lost'))
+      .mockResolvedValueOnce({
+        order_id: 902,
+        amount: 40,
+        pay_amount: 40,
+        fee_rate: 0,
+        expires_at: '2099-01-01T00:10:00.000Z',
+        payment_type: 'wxpay',
+        qr_code: 'weixin://wxpay/bizpayurl?pr=reset-card-retry',
+        out_trade_no: 'sub2_reset_902',
+      })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const checkout = {
+      subscription: { id: 91 },
+      quote: {
+        subscription_id: 91,
+        group_id: 3,
+        plan_id: 7,
+        monthly_price: 120,
+        price: 40,
+        expires_at: '2099-01-01T00:00:00Z',
+      },
+    }
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', checkout)
+    await flushPromises()
+
+    const firstKey = createOrder.mock.calls[0]?.[1]?.headers?.['Idempotency-Key']
+    expect(firstKey).toMatch(/^reset-card-payment-/)
+    expect(window.localStorage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toContain(firstKey)
+
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', checkout)
+    await flushPromises()
+
+    expect(createOrder).toHaveBeenCalledTimes(2)
+    expect(createOrder.mock.calls[1]?.[1]?.headers?.['Idempotency-Key']).toBe(firstKey)
+    expect(window.localStorage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toContain('"orderId":902')
+  })
+
+  it('uses the first eligible wallet method when the global selector is on Stripe', async () => {
+    routeState.query = { tab: 'subscription' }
+    const method = (singleMax: number): MethodLimit => ({
+      daily_limit: 0,
+      daily_used: 0,
+      daily_remaining: 0,
+      single_min: 0,
+      single_max: singleMax,
+      fee_rate: 0,
+      available: true,
+      currency: 'CNY',
+    })
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture({
+      checkout: {
+        recharge_fee_rate: 10,
+        methods: {
+          stripe: method(1000),
+          alipay: method(43),
+          wxpay: method(44),
+        },
+      },
+    }))
+    createOrder.mockResolvedValue({
+      order_id: 903,
+      amount: 40,
+      pay_amount: 44,
+      fee_rate: 10,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=reset-card-wallet',
+      out_trade_no: 'sub2_reset_903',
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, BaseDialog: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+    })
+    await flushPromises()
+    await flushPromises()
+    wrapper.findComponent(PaymentOrderRail).vm.$emit('select-method', 'stripe')
+    await flushPromises()
+
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    await flushPromises()
+
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({ payment_type: 'wxpay', order_type: 'reset_card' }), expect.anything())
+    expect(wrapper.findComponent(PaymentOrderRail).props('selectedMethod')).toBe('wxpay')
+  })
+
+  it('does not create a reset-card order when no eligible wallet method can charge its quoted amount', async () => {
+    routeState.query = { tab: 'subscription' }
+    const method = (singleMax: number): MethodLimit => ({
+      daily_limit: 0,
+      daily_used: 0,
+      daily_remaining: 0,
+      single_min: 0,
+      single_max: singleMax,
+      fee_rate: 0,
+      available: true,
+      currency: 'CNY',
+    })
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture({
+      checkout: {
+        recharge_fee_rate: 10,
+        methods: {
+          stripe: method(1000),
+          alipay: method(43),
+          wxpay: method(43),
+        },
+      },
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+    })
+    await flushPromises()
+    await flushPromises()
+    wrapper.findComponent(PaymentOrderRail).vm.$emit('select-method', 'stripe')
+
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    await flushPromises()
+
+    expect(createOrder).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('payment.resetShop.paymentUnavailable')
+  })
+
+  it('keeps a terminal reset-card replay in the local status shell instead of reporting an unhandled launch', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder.mockResolvedValue({
+      order_id: 904,
+      status: 'COMPLETED',
+      amount: 40,
+      pay_amount: 40,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      out_trade_no: 'sub2_reset_904',
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    await flushPromises()
+
+    const panel = wrapper.findComponent(PaymentStatusPanel)
+    expect(showError).not.toHaveBeenCalled()
+    expect(panel.exists()).toBe(true)
+    expect(panel.props('orderId')).toBe(904)
+    expect(panel.props('qrCode')).toBe('')
+    expect(createOrder).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the raw reset-card idempotency key out of the OAuth redirect URL', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder.mockResolvedValue({ ...oauthOrderFixture(), order_id: 905, amount: 40, pay_amount: 40 })
+    const originalLocation = window.location
+    const locationState = { href: 'http://localhost/purchase', origin: 'http://localhost' }
+    Object.defineProperty(window, 'location', { configurable: true, value: locationState })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+    })
+    await flushPromises()
+    await flushPromises()
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    await flushPromises()
+
+    const localKey = createOrder.mock.calls[0]?.[1]?.headers?.['Idempotency-Key']
+    const redirect = new URL(locationState.href, 'http://localhost').searchParams.get('redirect') || ''
+    expect(localKey).toMatch(/^reset-card-payment-/)
+    expect(redirect).not.toContain('payment_idempotency_key')
+    expect(redirect).not.toContain(localKey)
+
+    Object.defineProperty(window, 'location', { configurable: true, value: originalLocation })
+  })
+
+  it('does not reserve a desktop popup for a native WeChat QR checkout', async () => {
+    routeState.query = { tab: 'subscription' }
+    isMobileDevice.mockReturnValue(false)
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder.mockResolvedValue({
+      order_id: 906,
+      amount: 40,
+      pay_amount: 40,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=reset-card-qr',
+      out_trade_no: 'sub2_reset_906',
+    })
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+    })
+    await flushPromises()
+    await flushPromises()
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    await flushPromises()
+
+    expect(openSpy).not.toHaveBeenCalled()
+    openSpy.mockRestore()
+  })
+
+  it('navigates a synchronously reserved desktop popup for hosted Alipay', async () => {
+    routeState.query = { tab: 'subscription' }
+    isMobileDevice.mockReturnValue(false)
+    const checkout = checkoutInfoWithPlansFixture()
+    checkout.data.methods = {
+      alipay: { ...checkout.data.methods.wxpay, currency: 'CNY' },
+    }
+    getCheckoutInfo.mockResolvedValue(checkout)
+    createOrder.mockResolvedValue({
+      order_id: 907,
+      amount: 40,
+      pay_amount: 40,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'alipay',
+      pay_url: 'https://pay.example.com/reset-card/907',
+      payment_mode: 'popup',
+      out_trade_no: 'sub2_reset_907',
+    })
+    const popup = { closed: false, close: vi.fn(), location: { href: '' } } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+    })
+    await flushPromises()
+    await flushPromises()
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    await flushPromises()
+
+    expect(openSpy).toHaveBeenCalledOnce()
+    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(popup.location.href).toBe('https://pay.example.com/reset-card/907')
+    expect(popup.close).not.toHaveBeenCalled()
+    openSpy.mockRestore()
+  })
+
+  it('falls back to a full-page hosted redirect when the reserved desktop popup is blocked', async () => {
+    routeState.query = { tab: 'subscription' }
+    isMobileDevice.mockReturnValue(false)
+    const checkout = checkoutInfoWithPlansFixture()
+    checkout.data.methods = {
+      alipay: { ...checkout.data.methods.wxpay, currency: 'CNY' },
+    }
+    getCheckoutInfo.mockResolvedValue(checkout)
+    createOrder.mockResolvedValue({
+      order_id: 908,
+      amount: 40,
+      pay_amount: 40,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'alipay',
+      pay_url: 'https://pay.example.com/reset-card/908',
+      payment_mode: 'popup',
+      out_trade_no: 'sub2_reset_908',
+    })
+    const originalLocation = window.location
+    const locationState = { href: 'http://localhost/purchase', origin: 'http://localhost' }
+    Object.defineProperty(window, 'location', { configurable: true, value: locationState })
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+    })
+    await flushPromises()
+    await flushPromises()
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    await flushPromises()
+
+    expect(openSpy).toHaveBeenNthCalledWith(1, '', 'paymentPopup', expect.any(String))
+    expect(openSpy).toHaveBeenNthCalledWith(2, 'https://pay.example.com/reset-card/908', 'paymentPopup', expect.any(String))
+    expect(locationState.href).toBe('https://pay.example.com/reset-card/908')
+
+    openSpy.mockRestore()
+    Object.defineProperty(window, 'location', { configurable: true, value: originalLocation })
+  })
 })
 
 describe('PaymentView WeChat JSAPI flow', () => {
   beforeEach(() => {
+    vi.useRealTimers()
     routeState.path = '/purchase'
     routeState.query = {
       wechat_resume: '1',
@@ -859,13 +1312,13 @@ describe('PaymentView WeChat JSAPI flow', () => {
     }
   })
 
-  it('resets payment state and redirects to /payment/result after JSAPI reports success', async () => {
+  it('keeps the recoverable order open for server confirmation after JSAPI reports success', async () => {
     createOrder.mockResolvedValue(jsapiOrderFixture('resume-token-123'))
     bridgeInvoke.mockImplementation((_action, _payload, callback) => {
       callback({ err_msg: 'get_brand_wcpay_request:ok' })
     })
 
-    shallowMount(PaymentView, {
+    const wrapper = shallowMount(PaymentView, {
       global: {
         stubs: {
           Teleport: true,
@@ -877,18 +1330,12 @@ describe('PaymentView WeChat JSAPI flow', () => {
     await flushPromises()
 
     expect(routerReplace).toHaveBeenCalledWith({ path: '/purchase', query: {} })
-    expect(routerPush).toHaveBeenCalledWith({
-      path: '/payment/result',
-      query: {
-        order_id: '123',
-        out_trade_no: 'sub2_jsapi_123',
-        resume_token: 'resume-token-123',
-      },
-    })
-    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    expect(routerPush).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('resume-token-123')
+    wrapper.unmount()
   })
 
-  it('resets payment state when JSAPI reports cancellation', async () => {
+  it('preserves the resumable order when JSAPI reports cancellation', async () => {
     createOrder.mockResolvedValue(jsapiOrderFixture('resume-token-cancel'))
     bridgeInvoke.mockImplementation((_action, _payload, callback) => {
       callback({ err_msg: 'get_brand_wcpay_request:cancel' })
@@ -907,10 +1354,10 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     expect(showInfo).toHaveBeenCalledWith('payment.qr.cancelled')
     expect(routerPush).not.toHaveBeenCalled()
-    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('resume-token-cancel')
   })
 
-  it('clears stale recovery state when JSAPI never becomes available', async () => {
+  it('keeps recovery state when JSAPI never becomes available', async () => {
     vi.useFakeTimers()
     createOrder.mockResolvedValue(jsapiOrderFixture('resume-token-missing-bridge'))
     ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = undefined
@@ -933,11 +1380,11 @@ describe('PaymentView WeChat JSAPI flow', () => {
       'payment.errors.wechatJsapiUnavailable payment.errors.wechatOpenInWeChatHint',
     )
     expect(routerPush).not.toHaveBeenCalled()
-    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('resume-token-missing-bridge')
     expect(wrapper.html()).not.toContain('payment-status-panel-stub')
   })
 
-  it('clears a stale recovery snapshot before handling wechat resume callback params', async () => {
+  it('does not silently clear a different recovery snapshot before handling WeChat resume params', async () => {
     createOrder.mockRejectedValueOnce(new Error('resume failed'))
     window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
       orderId: 999,
@@ -972,8 +1419,8 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
       wechat_resume_token: 'resume-token-123',
-    }))
-    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    }), undefined)
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('stale-out-trade-no')
   })
 
   it('keeps subscription resume context for token-only WeChat callbacks', async () => {
@@ -1014,7 +1461,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
       order_type: 'subscription',
       plan_id: 7,
       wechat_resume_token: 'resume-subscription-7',
-    }))
+    }), undefined)
     expect(locationState.href).toContain('/api/v1/auth/oauth/wechat/payment/start?')
     expect(new URL(locationState.href, 'http://localhost').searchParams.get('redirect')).toBe(
       '/purchase?from=wechat&payment_type=wxpay&order_type=subscription&plan_id=7',
@@ -1026,11 +1473,133 @@ describe('PaymentView WeChat JSAPI flow', () => {
     })
   })
 
-  it('falls back to QR flow when mobile WeChat payment is unavailable', async () => {
+  it('binds a reset-card OAuth resume order to the matching browser attempt', async () => {
+    const idempotencyKey = 'reset-card-payment-oauth-attempt'
+    const resumeToken = await resetCardWechatResumeToken(idempotencyKey)
+    routeState.query = {
+      wechat_resume: '1',
+      wechat_resume_token: resumeToken,
+      payment_type: 'wxpay_direct',
+      order_type: 'reset_card',
+      plan_id: '7',
+      subscription_id: '91',
+    }
+    window.localStorage.setItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY, JSON.stringify({
+      fingerprint: 'reset-card-quote-fingerprint',
+      idempotencyKey,
+    }))
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder.mockResolvedValue({
+      order_id: 909,
+      amount: 40,
+      pay_amount: 40,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=reset-card-oauth-resume',
+      out_trade_no: 'sub2_reset_909',
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await vi.waitFor(() => expect(routerReplace).toHaveBeenCalledWith({ path: '/purchase', query: {} }))
+    await vi.waitFor(() => expect(createOrder).toHaveBeenCalledTimes(1))
+
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      payment_type: 'wxpay',
+      order_type: 'reset_card',
+      plan_id: 7,
+      subscription_id: 91,
+      wechat_resume_token: resumeToken,
+    }), {
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+      },
+    })
+    expect(window.localStorage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY))
+      .toContain('"orderId":909')
+    wrapper.unmount()
+  })
+
+  it('reuses the matched reset-card attempt key when OAuth-resumed JSAPI falls back to QR', async () => {
+    const idempotencyKey = 'reset-card-payment-oauth-jsapi-retry'
+    const resumeToken = await resetCardWechatResumeToken(idempotencyKey)
+    routeState.query = {
+      wechat_resume: '1',
+      wechat_resume_token: resumeToken,
+      payment_type: 'wxpay_direct',
+      order_type: 'reset_card',
+      plan_id: '7',
+      subscription_id: '91',
+    }
+    window.localStorage.setItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY, JSON.stringify({
+      fingerprint: 'reset-card-quote-fingerprint',
+      idempotencyKey,
+    }))
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder
+      .mockResolvedValueOnce({ ...jsapiOrderFixture(resumeToken), order_id: 910 })
+      .mockResolvedValueOnce({
+        order_id: 910,
+        amount: 40,
+        pay_amount: 40,
+        fee_rate: 0,
+        expires_at: '2099-01-01T00:10:00.000Z',
+        payment_type: 'wxpay',
+        qr_code: 'weixin://wxpay/bizpayurl?pr=reset-card-oauth-fallback',
+        out_trade_no: 'sub2_reset_910',
+      })
+    bridgeInvoke.mockImplementation((_action, _payload, callback) => {
+      callback({ err_msg: 'get_brand_wcpay_request:fail' })
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await vi.waitFor(() => expect(createOrder).toHaveBeenCalledTimes(2))
+
+    const idempotencyHeaders = {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }
+    expect(createOrder).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      payment_type: 'wxpay',
+      order_type: 'reset_card',
+      plan_id: 7,
+      subscription_id: 91,
+      wechat_resume_token: resumeToken,
+    }), idempotencyHeaders)
+    expect(createOrder).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      payment_type: 'wxpay',
+      order_type: 'reset_card',
+      plan_id: 7,
+      subscription_id: 91,
+      is_mobile: false,
+      payment_source: 'hosted_redirect',
+    }), idempotencyHeaders)
+    expect(JSON.parse(window.localStorage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY) || '{}')).toMatchObject({
+      idempotencyKey,
+      orderId: 910,
+    })
+    wrapper.unmount()
+  })
+
+  it('relies on the signed token instead of forwarding a raw URL idempotency key during WeChat resume', async () => {
     routeState.query = {
       wechat_resume: '1',
       wechat_resume_token: 'resume-token-h5',
       payment_type: 'wxpay_direct',
+      payment_idempotency_key: 'wechat-fallback-key',
     }
     createOrder
       .mockRejectedValueOnce({ reason: 'WECHAT_H5_NOT_AUTHORIZED' })
@@ -1060,12 +1629,13 @@ describe('PaymentView WeChat JSAPI flow', () => {
       payment_type: 'wxpay',
       is_mobile: true,
       wechat_resume_token: 'resume-token-h5',
-    }))
+    }), undefined)
     expect(createOrder).toHaveBeenNthCalledWith(2, expect.objectContaining({
       payment_type: 'wxpay',
       is_mobile: false,
       payment_source: 'hosted_redirect',
-    }))
+    }), undefined)
+    expect(routerReplace).toHaveBeenCalledWith({ path: '/purchase', query: {} })
     expect(showWarning).toHaveBeenCalledWith('payment.errors.mobilePaymentFallbackToQr')
     expect(showError).not.toHaveBeenCalled()
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('weixin://wxpay/bizpayurl?pr=fallback-native')

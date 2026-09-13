@@ -15,9 +15,10 @@ import (
 
 // Alipay product codes.
 const (
-	alipayProductCodePreCreate = "FACE_TO_FACE_PAYMENT"
-	alipayProductCodeWapPay    = "QUICK_WAP_WAY"
-	alipayProductCodePagePay   = "FAST_INSTANT_TRADE_PAY"
+	alipayProductCodePreCreate  = "FACE_TO_FACE_PAYMENT"
+	alipayProductCodeWapPay     = "QUICK_WAP_WAY"
+	alipayProductCodePagePay    = "FAST_INSTANT_TRADE_PAY"
+	alipayMaximumTimeoutMinutes = 15 * 24 * 60
 )
 
 // Alipay response constants.
@@ -33,6 +34,9 @@ var (
 	}
 	alipayTradePreCreate = func(ctx context.Context, client *alipay.Client, param alipay.TradePreCreate) (*alipay.TradePreCreateRsp, error) {
 		return client.TradePreCreate(ctx, param)
+	}
+	alipayTradeQuery = func(ctx context.Context, client *alipay.Client, param alipay.TradeQuery) (*alipay.TradeQueryRsp, error) {
+		return client.TradeQuery(ctx, param)
 	}
 	alipayTradePagePay = func(client *alipay.Client, param alipay.TradePagePay) (*url.URL, error) {
 		return client.TradePagePay(param)
@@ -149,6 +153,7 @@ func (a *Alipay) createWapTrade(client *alipay.Client, req payment.CreatePayment
 	param.ProductCode = alipayProductCodeWapPay
 	param.NotifyURL = notifyURL
 	param.ReturnURL = returnURL
+	param.TimeoutExpress = alipayTimeoutExpress(req.ExpiresInSeconds)
 
 	payURL, err := alipayTradeWapPay(client, param)
 	if err != nil {
@@ -172,6 +177,13 @@ func (a *Alipay) createDesktopTrade(ctx context.Context, client *alipay.Client, 
 	if precreateErr == nil {
 		return resp, nil
 	}
+	// A transport or response error may occur after precreate committed. Query
+	// the same merchant order before falling back to page.pay; only a verified
+	// TRADE_NOT_EXIST result permits a second product flow for this order ID.
+	queried, queryErr := a.queryOrderWithClient(ctx, client, req.OrderID)
+	if queryErr != nil || queried == nil || queried.Metadata[payment.QueryMetadataOrderNotFound] != "true" {
+		return nil, fmt.Errorf("alipay desktop precreate state unconfirmed: %w", precreateErr)
+	}
 
 	resp, pagePayErr := a.createPagePayTrade(client, req, notifyURL, returnURL)
 	if pagePayErr == nil {
@@ -188,6 +200,7 @@ func (a *Alipay) createPrecreateTrade(ctx context.Context, client *alipay.Client
 	param.Subject = req.Subject
 	param.ProductCode = alipayProductCodePreCreate
 	param.NotifyURL = notifyURL
+	param.TimeoutExpress = alipayTimeoutExpress(req.ExpiresInSeconds)
 
 	rsp, err := alipayTradePreCreate(ctx, client, param)
 	if err != nil {
@@ -217,6 +230,7 @@ func (a *Alipay) createPagePayTrade(client *alipay.Client, req payment.CreatePay
 	param.ProductCode = alipayProductCodePagePay
 	param.NotifyURL = notifyURL
 	param.ReturnURL = returnURL
+	param.TimeoutExpress = alipayTimeoutExpress(req.ExpiresInSeconds)
 
 	payURL, err := alipayTradePagePay(client, param)
 	if err != nil {
@@ -231,22 +245,41 @@ func (a *Alipay) createPagePayTrade(client *alipay.Client, req payment.CreatePay
 	}, nil
 }
 
+func alipayTimeoutExpress(expiresInSeconds int) string {
+	// Alipay accepts whole minutes from 1m through 15d. Rounding down keeps the
+	// provider checkout at or inside the already-persisted local deadline.
+	minutes := expiresInSeconds / int(time.Minute/time.Second)
+	if minutes < 1 || minutes > alipayMaximumTimeoutMinutes {
+		return ""
+	}
+	return strconv.Itoa(minutes) + "m"
+}
+
 // QueryOrder queries the trade status via Alipay.
 func (a *Alipay) QueryOrder(ctx context.Context, tradeNo string) (*payment.QueryOrderResponse, error) {
 	client, err := a.getClient()
 	if err != nil {
 		return nil, err
 	}
+	return a.queryOrderWithClient(ctx, client, tradeNo)
+}
 
-	result, err := client.TradeQuery(ctx, alipay.TradeQuery{OutTradeNo: tradeNo})
+func (a *Alipay) queryOrderWithClient(ctx context.Context, client *alipay.Client, tradeNo string) (*payment.QueryOrderResponse, error) {
+	result, err := alipayTradeQuery(ctx, client, alipay.TradeQuery{OutTradeNo: tradeNo})
 	if err != nil {
 		if isTradeNotExist(err) {
 			return &payment.QueryOrderResponse{
 				TradeNo: tradeNo,
 				Status:  payment.ProviderStatusPending,
+				Metadata: map[string]string{
+					payment.QueryMetadataOrderNotFound: "true",
+				},
 			}, nil
 		}
 		return nil, fmt.Errorf("alipay TradeQuery: %w", err)
+	}
+	if result == nil {
+		return nil, fmt.Errorf("alipay TradeQuery: empty response")
 	}
 
 	status := payment.ProviderStatusPending

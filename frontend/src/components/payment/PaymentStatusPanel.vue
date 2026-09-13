@@ -102,7 +102,7 @@
         <div class="card p-4 text-center">
           <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.qr.expiresIn') }}</p>
           <p class="mt-1 text-2xl font-bold tabular-nums text-gray-900 dark:text-white">{{ countdownDisplay }}</p>
-          <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t('payment.qr.waitingPayment') }}</p>
+          <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ waitingHint }}</p>
         </div>
       </template>
       <template v-else>
@@ -129,7 +129,7 @@
               </div>
             </div>
             <div :class="['relative rounded-lg border-2 p-4', qrBorderClass]">
-              <canvas ref="qrCanvas" class="mx-auto"></canvas>
+              <canvas :key="sessionVersion" ref="qrCanvas" class="mx-auto"></canvas>
               <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <span :class="['rounded-full p-2 shadow ring-2 ring-white', qrLogoBgClass]">
                   <img :src="qrLogoIcon" alt="" class="h-5 w-5 brightness-0 invert" />
@@ -170,8 +170,9 @@
       <div class="card p-6">
         <div class="flex flex-col items-center space-y-4">
           <p class="text-lg font-semibold text-gray-900 dark:text-white">{{ scanTitle }}</p>
+          <p v-if="paymentReceivedHint" class="text-center text-sm text-amber-600 dark:text-amber-300">{{ paymentReceivedHint }}</p>
           <div :class="['relative rounded-lg border-2 p-4', qrBorderClass]">
-            <canvas ref="qrCanvas" class="mx-auto"></canvas>
+            <canvas :key="sessionVersion" ref="qrCanvas" class="mx-auto"></canvas>
             <!-- Brand logo overlay -->
             <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
               <span :class="['rounded-full p-2 shadow ring-2 ring-white', qrLogoBgClass]">
@@ -188,8 +189,11 @@
       <div class="card p-4 text-center">
         <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.qr.expiresIn') }}</p>
         <p class="mt-1 text-2xl font-bold tabular-nums text-gray-900 dark:text-white">{{ countdownDisplay }}</p>
-        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t('payment.qr.waitingPayment') }}</p>
+        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ waitingHint }}</p>
       </div>
+      <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
+        {{ t('payment.qr.refreshStatus') }}
+      </button>
       <button class="btn btn-secondary w-full" :disabled="cancelling" @click="handleCancel">
         {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
       </button>
@@ -200,7 +204,7 @@
       <div class="card p-6">
         <div class="flex flex-col items-center space-y-4 py-4">
           <div class="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
-          <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.qr.payInNewWindowHint') }}</p>
+          <p class="text-center text-sm text-gray-500 dark:text-gray-400">{{ waitingHint }}</p>
           <button v-if="payUrl" class="btn btn-secondary text-sm" @click="reopenPopup">
             {{ t('payment.qr.openPayWindow') }}
           </button>
@@ -208,8 +212,11 @@
       </div>
       <div class="card p-4 text-center">
         <p class="mt-1 text-2xl font-bold tabular-nums text-gray-900 dark:text-white">{{ countdownDisplay }}</p>
-        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t('payment.qr.waitingPayment') }}</p>
+        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ waitingHint }}</p>
       </div>
+      <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
+        {{ t('payment.qr.refreshStatus') }}
+      </button>
       <button class="btn btn-secondary w-full" :disabled="cancelling" @click="handleCancel">
         {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
       </button>
@@ -232,6 +239,7 @@ import QRCode from 'qrcode'
 import alipayIcon from '@/assets/icons/alipay.svg'
 import wxpayIcon from '@/assets/icons/wxpay.svg'
 import paymentIcon from '@/assets/icons/payment.svg'
+import { fulfillmentFact, paymentFact } from '@/components/payment/orderPresentation'
 import {
   createAlipayDeepLinkLauncher,
   type AlipayDeepLinkLauncher,
@@ -263,9 +271,11 @@ const appStore = useAppStore()
 
 const qrCanvas = ref<HTMLCanvasElement | null>(null)
 const qrUrl = ref('')
+const sessionVersion = ref(0)
 const remainingSeconds = ref(0)
 const cancelling = ref(false)
 const paidOrder = ref<PaymentOrder | null>(null)
+const latestOrder = ref<PaymentOrder | null>(null)
 const deepLinkState = ref<AlipayDeepLinkState>('idle')
 const deepLinkFallbackVisible = ref(false)
 const paymentCurrency = computed(() => normalizePaymentCurrency(props.currency))
@@ -287,9 +297,19 @@ let countdownTimer: ReturnType<typeof setInterval> | null = null
 let verifyAttempts = 0
 let lastVerifyAt = 0
 let alipayLauncher: AlipayDeepLinkLauncher | null = null
+let pollAttempts = 0
+const pollExhausted = ref(false)
+let lifecycleGeneration = 0
+let disposed = false
+let mounted = false
+let deadlineReached = false
+let deadlineCheckRequestedGeneration: number | null = null
+const pollInFlightGenerations = new Set<number>()
 
 const VERIFY_RETRY_INTERVAL_MS = 15000
 const VERIFY_RETRY_MAX_ATTEMPTS = 6
+const POLL_INTERVAL_MS = 3000
+const POLL_MAX_ATTEMPTS = 120
 
 const isAlipay = computed(() => isBuiltInAlipayMethod(props.paymentType))
 const isWxpay = computed(() => isBuiltInWxpayMethod(props.paymentType))
@@ -335,12 +355,27 @@ const countdownDisplay = computed(() => {
 const displayPaymentAmount = computed(() => formatGatewayAmount(props.payAmount || props.amount || 0))
 const displayOrderNumber = computed(() => props.outTradeNo || `#${props.orderId}`)
 
+const paymentReceivedHint = computed(() => {
+  const current = latestOrder.value
+  if (!current || paymentFact(current) !== 'PAID' || normalizeStatus(current.status) === 'COMPLETED') return ''
+  if (fulfillmentFact(current) === 'MANUAL_REVIEW' || fulfillmentFact(current) === 'FAILED') {
+    return t('payment.result.paidButFulfillmentFailed')
+  }
+  return t('payment.result.paymentReceivedProcessing')
+})
+
+const waitingHint = computed(() => paymentReceivedHint.value || t('payment.qr.waitingPayment'))
+
 function formatGatewayAmount(value: number, currency?: string | null): string {
   return formatPaymentAmount(value, currency || paymentCurrency.value, localeCode.value)
 }
 
 function isSuccessStatus(status: string | null | undefined): boolean {
-  return status === 'COMPLETED' || status === 'PAID' || status === 'RECHARGING'
+  return normalizeStatus(status) === 'COMPLETED'
+}
+
+function normalizeStatus(status: string | null | undefined): string {
+  return String(status || '').trim().toUpperCase()
 }
 
 function reopenPopup() {
@@ -358,20 +393,52 @@ function setOutcome(next: PaymentOutcome) {
   emit('settled', next)
 }
 
-async function renderQR() {
+function currentSessionFingerprint(): string {
+  return JSON.stringify([
+    props.orderId,
+    props.amount,
+    props.payAmount,
+    props.qrCode,
+    props.expiresAt,
+    props.paymentType,
+    props.payUrl,
+    props.orderType,
+    props.currency,
+    props.outTradeNo,
+    props.mobileAlipayDeepLink,
+  ])
+}
+
+function isCurrentLifecycle(generation: number, fingerprint?: string): boolean {
+  return !disposed
+    && generation === lifecycleGeneration
+    && (fingerprint === undefined || fingerprint === currentSessionFingerprint())
+}
+
+async function renderQR(generation = lifecycleGeneration, fingerprint = currentSessionFingerprint()) {
   await nextTick()
-  if (!showQRCode.value || !qrCanvas.value || !qrUrl.value) return
-  await QRCode.toCanvas(qrCanvas.value, qrUrl.value, {
+  if (!isCurrentLifecycle(generation, fingerprint) || !showQRCode.value || !qrCanvas.value || !qrUrl.value) return
+  const canvas = qrCanvas.value
+  const value = qrUrl.value
+  await QRCode.toCanvas(canvas, value, {
     width: 220, margin: 2,
     errorCorrectionLevel: 'M',
   })
+  // Each checkout receives a keyed canvas. This also prevents a deferred QR
+  // renderer from drawing an old checkout into a newly selected session.
+  if (!isCurrentLifecycle(generation, fingerprint) || qrCanvas.value !== canvas || qrUrl.value !== value) return
 }
 
-function updateDeepLinkState(state: AlipayDeepLinkState) {
+function updateDeepLinkState(
+  state: AlipayDeepLinkState,
+  generation = lifecycleGeneration,
+  fingerprint = currentSessionFingerprint(),
+) {
+  if (!isCurrentLifecycle(generation, fingerprint)) return
   deepLinkState.value = state
   if (state === 'fallback') {
     deepLinkFallbackVisible.value = true
-    renderQR()
+    void renderQR(generation, fingerprint)
   } else if (state === 'backgrounded') {
     deepLinkFallbackVisible.value = false
   }
@@ -392,8 +459,11 @@ function saveQRCode() {
   link.remove()
 }
 
-async function tryRecoverPendingOrder(order: PaymentOrder): Promise<PaymentOrder> {
-  if (!isWxpay.value && !isAlipay.value) return order
+async function tryRecoverPendingOrder(
+  order: PaymentOrder,
+  context: { generation: number; fingerprint: string; paymentType: string },
+): Promise<PaymentOrder> {
+  if (!isBuiltInWxpayMethod(context.paymentType) && !isBuiltInAlipayMethod(context.paymentType)) return order
   const outTradeNo = String(order.out_trade_no || '').trim()
   if (!outTradeNo) return order
   const normalizedStatus = String(order.status || '').trim().toUpperCase()
@@ -407,88 +477,188 @@ async function tryRecoverPendingOrder(order: PaymentOrder): Promise<PaymentOrder
   verifyAttempts += 1
   try {
     const result = await paymentAPI.verifyOrder(outTradeNo)
+    if (!isCurrentLifecycle(context.generation, context.fingerprint)) return order
     return result.data ?? order
   } catch {
     return order
   }
 }
 
-let pollInFlight = false
-async function pollStatus() {
-  if (!props.orderId || outcome.value) return
-  // 防重入：接口（含 verifyOrder 二次确认）响应慢于 3 秒轮询间隔时避免并发重叠请求。
-  if (pollInFlight) return
-  pollInFlight = true
+async function pollStatus(
+  options: { force?: boolean } = {},
+  generation = lifecycleGeneration,
+  fingerprint = currentSessionFingerprint(),
+) {
+  if (!isCurrentLifecycle(generation, fingerprint) || !props.orderId || outcome.value || (pollExhausted.value && !options.force)) return
+  // A slow lookup for a replaced checkout must not prevent the new checkout
+  // from polling. Only de-duplicate requests from the same lifecycle.
+  if (pollInFlightGenerations.has(generation)) {
+    if (options.force) deadlineCheckRequestedGeneration = generation
+    return
+  }
+
+  const orderId = props.orderId
+  const paymentType = props.paymentType
+  pollInFlightGenerations.add(generation)
   try {
-    let order = await paymentStore.pollOrderStatus(props.orderId)
+    if (deadlineCheckRequestedGeneration === generation) {
+      deadlineCheckRequestedGeneration = null
+    }
+    pollAttempts += 1
+    let order: PaymentOrder | null = null
+    try {
+      order = await paymentStore.pollOrderStatus(orderId)
+    } catch {
+      // A temporary transport failure is indistinguishable from a lookup race
+      // to the checkout shell. Keep a bounded recovery loop instead of
+      // converting it into an expiry or an immediate terminal state.
+      order = null
+    }
+    if (!isCurrentLifecycle(generation, fingerprint) || outcome.value) return
+    if (pollAttempts >= POLL_MAX_ATTEMPTS && !order) {
+      pollExhausted.value = true
+      cleanupPollTimer()
+    }
     if (!order) return
-    // 已进入终态则不再处理迟到的响应。
-    if (outcome.value) return
-    order = await tryRecoverPendingOrder(order)
-    if (outcome.value) return
+    latestOrder.value = order
+    order = await tryRecoverPendingOrder(order, { generation, fingerprint, paymentType })
+    if (!isCurrentLifecycle(generation, fingerprint) || outcome.value) return
+    latestOrder.value = order
     if (isSuccessStatus(order.status)) {
-      cleanup()
+      cleanupSession()
       paidOrder.value = order
       setOutcome('success')
       emit('success')
-    } else if (order.status === 'CANCELLED') {
-      cleanup()
+    } else if (normalizeStatus(order.status) === 'CANCELLED') {
+      cleanupSession()
       setOutcome('cancelled')
-    } else if (order.status === 'EXPIRED' || order.status === 'FAILED') {
-      cleanup()
+    } else if (normalizeStatus(order.status) === 'EXPIRED' || (normalizeStatus(order.status) === 'FAILED' && paymentFact(order) === 'UNPAID')) {
+      // An expired browser countdown is only a prompt to ask the server. A
+      // terminal expiry is authoritative only after the server records it.
+      cleanupSession()
       setOutcome('expired')
     }
   } finally {
-    pollInFlight = false
+    pollInFlightGenerations.delete(generation)
+    if (
+      isCurrentLifecycle(generation, fingerprint)
+      && deadlineCheckRequestedGeneration === generation
+      && !outcome.value
+    ) {
+      deadlineCheckRequestedGeneration = null
+      void pollStatus({ force: true }, generation, fingerprint)
+    }
   }
 }
 
-function startCountdown(seconds: number) {
+function cleanupPollTimer() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function refreshNow() {
+  const generation = lifecycleGeneration
+  const fingerprint = currentSessionFingerprint()
+  if (!isCurrentLifecycle(generation, fingerprint) || outcome.value) return
+  pollExhausted.value = false
+  pollAttempts = 0
+  cleanupPollTimer()
+  await pollStatus({ force: true }, generation, fingerprint)
+  if (isCurrentLifecycle(generation, fingerprint) && !outcome.value && !pollExhausted.value) {
+    pollTimer = setInterval(() => { void pollStatus({}, generation, fingerprint) }, POLL_INTERVAL_MS)
+  }
+}
+
+function startCountdown(seconds: number, generation: number, fingerprint: string) {
+  if (!isCurrentLifecycle(generation, fingerprint)) return
   remainingSeconds.value = Math.max(0, seconds)
-  if (remainingSeconds.value <= 0) { setOutcome('expired'); return }
+  if (remainingSeconds.value <= 0) {
+    requestDeadlineCheck(generation, fingerprint)
+    return
+  }
   countdownTimer = setInterval(() => {
+    if (!isCurrentLifecycle(generation, fingerprint)) return
     remainingSeconds.value--
-    if (remainingSeconds.value <= 0) { setOutcome('expired'); cleanup() }
+    if (remainingSeconds.value <= 0) requestDeadlineCheck(generation, fingerprint)
   }, 1000)
 }
 
+function requestDeadlineCheck(generation = lifecycleGeneration, fingerprint = currentSessionFingerprint()) {
+  if (!isCurrentLifecycle(generation, fingerprint) || deadlineReached || outcome.value) return
+  deadlineReached = true
+  remainingSeconds.value = 0
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  deadlineCheckRequestedGeneration = generation
+  void pollStatus({ force: true }, generation, fingerprint)
+}
+
 async function handleCancel() {
-  if (!props.orderId || cancelling.value) return
+  const generation = lifecycleGeneration
+  const fingerprint = currentSessionFingerprint()
+  const orderId = props.orderId
+  if (!isCurrentLifecycle(generation, fingerprint) || !orderId || cancelling.value) return
   cancelling.value = true
   try {
-    await paymentAPI.cancelOrder(props.orderId)
-    cleanup()
-    setOutcome('cancelled')
+    await paymentAPI.cancelOrder(orderId)
+    if (!isCurrentLifecycle(generation, fingerprint)) return
+    // The cancellation endpoint can race a payment callback. Query the local
+    // order afterwards and only clear recovery once the server records its
+    // terminal state.
+    await pollStatus({ force: true }, generation, fingerprint)
   } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    if (isCurrentLifecycle(generation, fingerprint)) {
+      appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    }
   } finally {
-    cancelling.value = false
+    if (isCurrentLifecycle(generation, fingerprint)) {
+      cancelling.value = false
+    }
   }
 }
 
-function handleDone() { cleanup(); emit('done') }
+function handleDone() { cleanupSession(); emit('done') }
 
-function cleanup() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+function cleanupSession() {
+  lifecycleGeneration += 1
+  cleanupPollTimer()
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
   alipayLauncher?.dispose()
   alipayLauncher = null
 }
 
-// Initialize on mount
-qrUrl.value = props.qrCode
-verifyAttempts = 0
-lastVerifyAt = 0
-let seconds = 30 * 60
-if (props.expiresAt) {
-  seconds = Math.floor((new Date(props.expiresAt).getTime() - Date.now()) / 1000)
-}
-startCountdown(seconds)
-pollTimer = setInterval(pollStatus, 3000)
-renderQR()
+function startSession() {
+  cleanupSession()
+  const generation = lifecycleGeneration
+  const fingerprint = currentSessionFingerprint()
+  qrUrl.value = props.qrCode
+  sessionVersion.value += 1
+  remainingSeconds.value = 0
+  cancelling.value = false
+  paidOrder.value = null
+  latestOrder.value = null
+  outcome.value = null
+  deepLinkState.value = 'idle'
+  deepLinkFallbackVisible.value = false
+  verifyAttempts = 0
+  lastVerifyAt = 0
+  pollAttempts = 0
+  pollExhausted.value = false
+  deadlineReached = false
+  deadlineCheckRequestedGeneration = null
+  let seconds = 30 * 60
+  if (props.expiresAt) {
+    seconds = Math.floor((new Date(props.expiresAt).getTime() - Date.now()) / 1000)
+  }
+  startCountdown(seconds, generation, fingerprint)
+  pollTimer = setInterval(() => { void pollStatus({}, generation, fingerprint) }, POLL_INTERVAL_MS)
+  void pollStatus({}, generation, fingerprint)
+  void renderQR(generation, fingerprint)
 
-watch([() => qrUrl.value, showQRCode], () => renderQR())
-onMounted(() => {
   if (!isMobileAlipayDeepLink.value) return
   alipayLauncher = createAlipayDeepLinkLauncher({
     qrCode: qrUrl.value,
@@ -496,9 +666,39 @@ onMounted(() => {
     lifecycleTarget: window,
     userAgent: window.navigator.userAgent,
     assignLocation: (url) => window.location.assign(url),
-    onStateChange: updateDeepLinkState,
+    onStateChange: (state) => updateDeepLinkState(state, generation, fingerprint),
   })
   alipayLauncher.launch()
+}
+
+watch(
+  () => [
+    props.orderId,
+    props.amount,
+    props.payAmount,
+    props.qrCode,
+    props.expiresAt,
+    props.paymentType,
+    props.payUrl,
+    props.orderType,
+    props.currency,
+    props.outTradeNo,
+    props.mobileAlipayDeepLink,
+  ],
+  () => {
+    if (mounted && !disposed) startSession()
+  },
+  { flush: 'post' },
+)
+watch([() => qrUrl.value, showQRCode, sessionVersion], () => { void renderQR() })
+onMounted(() => {
+  mounted = true
+  disposed = false
+  startSession()
 })
-onUnmounted(() => cleanup())
+onUnmounted(() => {
+  disposed = true
+  mounted = false
+  cleanupSession()
+})
 </script>

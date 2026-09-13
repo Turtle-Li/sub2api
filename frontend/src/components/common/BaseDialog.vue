@@ -2,8 +2,9 @@
   <Teleport to="body">
     <Transition name="modal">
       <div
-        v-if="show"
-        class="modal-overlay"
+        v-if="show || keepMounted"
+        v-show="show"
+        :class="['modal-overlay', mobileSheet && 'modal-overlay--mobile-sheet']"
         :style="zIndexStyle"
         :aria-labelledby="dialogId"
         role="dialog"
@@ -11,7 +12,12 @@
         @click.self="handleClose"
       >
         <!-- Modal panel -->
-        <div ref="dialogRef" :class="['modal-content', widthClasses]" @click.stop>
+        <div
+          ref="dialogRef"
+          :class="['modal-content', widthClasses, mobileSheet && 'modal-content--mobile-sheet']"
+          tabindex="-1"
+          @click.stop
+        >
           <!-- Header -->
           <div class="modal-header">
             <h3 :id="dialogId" class="modal-title">
@@ -42,18 +48,24 @@
   </Teleport>
 </template>
 
+<script lang="ts">
+// Normal script scope is shared by every dialog instance.
+let dialogIdCounter = 0
+let bodyLockCount = 0
+</script>
+
 <script setup lang="ts">
 import { computed, watch, onMounted, onUnmounted, ref, nextTick } from 'vue'
 import Icon from '@/components/icons/Icon.vue'
 
 // 生成唯一ID以避免多个对话框时ID冲突
-let dialogIdCounter = 0
 const dialogId = `modal-title-${++dialogIdCounter}`
 
 // 焦点管理
 const dialogRef = ref<HTMLElement | null>(null)
 const modalBodyRef = ref<HTMLElement | null>(null)
 let previousActiveElement: HTMLElement | null = null
+let holdsBodyLock = false
 
 type DialogWidth = 'narrow' | 'normal' | 'wide' | 'extra-wide' | 'full'
 
@@ -65,6 +77,10 @@ interface Props {
   closeOnClickOutside?: boolean
   showCloseButton?: boolean
   zIndex?: number
+  /** Keep slot content mounted while a resumable flow is temporarily hidden. */
+  keepMounted?: boolean
+  /** Use a bottom sheet on narrow viewports while preserving the desktop dialog. */
+  mobileSheet?: boolean
 }
 
 interface Emits {
@@ -76,7 +92,9 @@ const props = withDefaults(defineProps<Props>(), {
   closeOnEscape: true,
   closeOnClickOutside: false,
   showCloseButton: true,
-  zIndex: 50
+  zIndex: 50,
+  keepMounted: false,
+  mobileSheet: false,
 })
 
 const emit = defineEmits<Emits>()
@@ -106,9 +124,81 @@ const handleClose = () => {
   }
 }
 
-const handleEscape = (event: KeyboardEvent) => {
-  if (props.show && props.closeOnEscape && event.key === 'Escape') {
+function acquireBodyLock(): void {
+  if (holdsBodyLock) return
+  holdsBodyLock = true
+  bodyLockCount += 1
+  document.body.classList.add('modal-open')
+}
+
+function releaseBodyLock(): void {
+  if (!holdsBodyLock) return
+  holdsBodyLock = false
+  bodyLockCount = Math.max(0, bodyLockCount - 1)
+  if (bodyLockCount === 0) {
+    document.body.classList.remove('modal-open')
+  }
+}
+
+const focusableSelector = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
+function focusableElements(): HTMLElement[] {
+  if (!dialogRef.value) return []
+  return Array.from(dialogRef.value.querySelectorAll<HTMLElement>(focusableSelector))
+    .filter(element => element.getAttribute('aria-hidden') !== 'true')
+}
+
+function focusInitialElement(): void {
+  const [first] = focusableElements()
+  ;(first || dialogRef.value)?.focus()
+}
+
+function restorePreviousFocus(): void {
+  const opener = previousActiveElement
+  previousActiveElement = null
+  if (opener?.isConnected && typeof opener.focus === 'function') {
+    opener.focus()
+  }
+}
+
+function trapFocus(event: KeyboardEvent): void {
+  const focusable = focusableElements()
+  if (focusable.length === 0) {
+    event.preventDefault()
+    dialogRef.value?.focus()
+    return
+  }
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  const activeElement = document.activeElement
+  if (event.shiftKey) {
+    if (activeElement === first || !dialogRef.value?.contains(activeElement)) {
+      event.preventDefault()
+      last.focus()
+    }
+  } else if (activeElement === last || !dialogRef.value?.contains(activeElement)) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+const handleKeydown = (event: KeyboardEvent) => {
+  if (!props.show) return
+  if (event.key === 'Escape' && props.closeOnEscape) {
+    event.preventDefault()
     emit('close')
+    return
+  }
+  if (event.key === 'Tab') {
+    trapFocus(event)
   }
 }
 
@@ -118,40 +208,36 @@ watch(
   async (isOpen) => {
     if (isOpen) {
       // 保存当前焦点元素
-      previousActiveElement = document.activeElement as HTMLElement
-      // 使用CSS类而不是直接操作style,更易于管理多个对话框
-      document.body.classList.add('modal-open')
+      previousActiveElement = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
+      // Keep the page locked until every stacked dialog has closed.
+      acquireBodyLock()
 
       // 等待DOM更新后设置焦点到对话框
       await nextTick()
       if (modalBodyRef.value) {
         modalBodyRef.value.scrollTop = 0
       }
-      if (dialogRef.value) {
-        const firstFocusable = dialogRef.value.querySelector<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-        )
-        firstFocusable?.focus()
-      }
+      if (props.show) focusInitialElement()
     } else {
-      document.body.classList.remove('modal-open')
+      releaseBodyLock()
       // 恢复之前的焦点
-      if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
-        previousActiveElement.focus()
-      }
-      previousActiveElement = null
+      restorePreviousFocus()
     }
   },
   { immediate: true }
 )
 
 onMounted(() => {
-  document.addEventListener('keydown', handleEscape)
+  document.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
-  document.removeEventListener('keydown', handleEscape)
-  // 确保组件卸载时移除滚动锁定
-  document.body.classList.remove('modal-open')
+  document.removeEventListener('keydown', handleKeydown)
+  releaseBodyLock()
+  // A parent may remove an open dialog without first setting `show` false.
+  // Restore the connected opener in that path as well.
+  restorePreviousFocus()
 })
 </script>

@@ -57,6 +57,27 @@ func TestApplyWeChatPaymentResumeClaims(t *testing.T) {
 	}
 }
 
+func TestApplyWeChatPaymentResumeClaimsPreservesResetCardTargetAndIdempotency(t *testing.T) {
+	t.Parallel()
+
+	keyHash := service.HashIdempotencyKey("reset-card-wechat-oauth")
+	req := CreateOrderRequest{PaymentType: payment.TypeWxpay}
+	err := applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{
+		OpenID:             "openid-reset-card",
+		PaymentType:        payment.TypeWxpay,
+		Amount:             "40.00",
+		OrderType:          payment.OrderTypeResetCard,
+		PlanID:             7,
+		SubscriptionID:     42,
+		IdempotencyKeyHash: keyHash,
+	})
+	require.NoError(t, err)
+	require.Equal(t, payment.OrderTypeResetCard, req.OrderType)
+	require.EqualValues(t, 7, req.PlanID)
+	require.EqualValues(t, 42, req.SubscriptionID)
+	require.Equal(t, keyHash, req.IdempotencyKeyHash)
+}
+
 func TestApplyWeChatPaymentResumeClaimsRejectsPaymentTypeMismatch(t *testing.T) {
 	t.Parallel()
 

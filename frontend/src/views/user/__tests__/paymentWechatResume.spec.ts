@@ -35,6 +35,25 @@ describe('parseWechatResumeRoute', () => {
       planId: undefined,
     })
   })
+
+  it('keeps reset-card subscription context while ignoring a raw idempotency key on signed OAuth resume', () => {
+    expect(parseWechatResumeRoute({
+      wechat_resume: '1',
+      wechat_resume_token: 'resume-reset-card-99',
+      payment_type: 'wxpay_direct',
+      order_type: 'reset_card',
+      plan_id: '7',
+      subscription_id: '99',
+      payment_idempotency_key: 'reset-card-payment-opaque-key',
+    }, [], 88)).toEqual({
+      wechatResumeToken: 'resume-reset-card-99',
+      paymentType: 'wxpay',
+      orderType: 'reset_card',
+      orderAmount: 0,
+      planId: 7,
+      subscriptionId: 99,
+    })
+  })
 })
 
 describe('stripWechatResumeQuery', () => {
@@ -48,6 +67,8 @@ describe('stripWechatResumeQuery', () => {
       amount: '12.5',
       order_type: 'subscription',
       plan_id: '7',
+      subscription_id: '99',
+      payment_idempotency_key: 'reset-card-payment-opaque-key',
       state: 'state-123',
       scope: 'snsapi_base',
     })).toEqual({

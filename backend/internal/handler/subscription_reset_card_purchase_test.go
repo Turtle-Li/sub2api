@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -13,25 +12,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPurchaseResetCardRejectsInvalidPurchaseKeyBeforeService(t *testing.T) {
+func TestPurchaseResetCardLegacyWalletRouteIsGone(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Params = gin.Params{{Key: "id", Value: "7"}}
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions/7/purchase-reset-card", strings.NewReader(`{
-		"expected_plan_id": 4,
-		"expected_price": 40,
-		"purchase_key": "not-a-uuid"
-	}`))
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions/7/purchase-reset-card", nil)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 11})
 
 	(&SubscriptionHandler{}).PurchaseResetCard(c)
 
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, http.StatusGone, recorder.Code)
 	var body response.Response
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
-	require.Equal(t, "RESET_CARD_PURCHASE_KEY_INVALID", body.Reason)
+	require.Equal(t, "RESET_CARD_EXTERNAL_PAYMENT_REQUIRED", body.Reason)
 }
 
 func TestResetCardHandlersRejectMissingAuthAndInvalidSubscriptionID(t *testing.T) {

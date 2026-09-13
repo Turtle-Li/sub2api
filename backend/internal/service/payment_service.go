@@ -85,7 +85,13 @@ type CreateOrderRequest struct {
 	PaymentSource   string
 	OrderType       string
 	PlanID          int64
-	Locale          string
+	SubscriptionID  int64
+	// IdempotencyKey is accepted only for the initial authenticated request.
+	// WeChat OAuth resumes carry the derived hash instead so the raw key never
+	// needs to cross the browser redirect boundary.
+	IdempotencyKey     string
+	IdempotencyKeyHash string
+	Locale             string
 }
 
 type CreateOrderResponse struct {
@@ -213,6 +219,14 @@ type PaymentService struct {
 	unifiedPayment           *unifiedpay.Gateway
 	unifiedWebhookInbox      UnifiedWebhookInboxStore
 	invoiceFeishuSender      FeishuPaymentTextSender
+	resetCardNow             func() time.Time
+}
+
+func (s *PaymentService) resetCardCurrentTime() time.Time {
+	if s != nil && s.resetCardNow != nil {
+		return s.resetCardNow()
+	}
+	return time.Now()
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService) *PaymentService {
@@ -358,6 +372,10 @@ func (s *PaymentService) loadProviders(ctx context.Context) {
 		cfg, err := s.loadBalancer.GetInstanceConfig(ctx, int64(inst.ID))
 		if err != nil {
 			slog.Warn("[PaymentService] failed to decrypt config for instance", "instanceID", inst.ID, "error", err)
+			continue
+		}
+		if cfg == nil {
+			slog.Warn("[PaymentService] provider instance has no readable runtime config", "instanceID", inst.ID)
 			continue
 		}
 		if inst.PaymentMode != "" {

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/shopspring/decimal"
 )
 
@@ -364,6 +365,17 @@ func paymentOrderRequiresManualRefund(order *dbent.PaymentOrder) (bool, error) {
 	if order == nil {
 		// A missing order cannot be proven to have had its entitlements reclaimed.
 		return true, nil
+	}
+	// A paid reset card is issued as a separate grant and is not represented by
+	// the balance/subscription rollback ledgers. Always stop automatic provider
+	// refunds before any generic balance deduction can run.
+	if order.OrderType == payment.OrderTypeResetCard {
+		return true, nil
+	}
+	if order.ProductSnapshot != nil {
+		if kind, _ := order.ProductSnapshot["kind"].(string); kind == "reset_card" {
+			return true, nil
+		}
 	}
 	entitlements, err := paymentOrderEntitlementsStrict(order)
 	if err != nil {
