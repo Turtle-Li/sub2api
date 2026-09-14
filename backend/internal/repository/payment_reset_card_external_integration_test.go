@@ -263,13 +263,30 @@ func TestResetCardExternalOrderPostgresConcurrentCreateUsesOneLocalOrder(t *test
 	close(results)
 
 	var orderID int64
+	conflicts := 0
+	successes := 0
 	for result := range results {
-		require.NoError(t, result.err)
+		if result.err != nil {
+			require.Equal(t, "RESET_CARD_ORDER_IN_PROGRESS", infraerrors.Reason(result.err))
+			conflicts++
+			continue
+		}
 		require.NotNil(t, result.response)
+		successes++
 		if orderID == 0 {
 			orderID = result.response.OrderID
 		}
 		require.Equal(t, orderID, result.response.OrderID)
+	}
+	require.Positive(t, successes)
+	// An overlapping request may receive the documented bounded 409 instead of
+	// waiting on an upstream network call. Once the winning call has persisted
+	// its response, retrying the same idempotency key must replay that order.
+	for range conflicts {
+		replayed, err := fixture.service.CreateOrder(ctx, request)
+		require.NoError(t, err)
+		require.NotNil(t, replayed)
+		require.Equal(t, orderID, replayed.OrderID)
 	}
 	count, err := integrationEntClient.PaymentOrder.Query().Where(
 		paymentorder.UserIDEQ(fixture.user.ID),

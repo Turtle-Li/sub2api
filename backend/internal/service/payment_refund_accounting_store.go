@@ -122,6 +122,12 @@ func loadPaymentSubscriptionRefundState(ctx context.Context, client *dbent.Clien
 		&grant.ResetCardCount, &grant.ConcurrencyTarget, &grant.Version); err != nil {
 		return nil, nil, err
 	}
+	// A transaction uses one physical PostgreSQL connection. Finish consuming
+	// this result before Ent issues the subscription query below; lib/pq cannot
+	// start another statement while the prior result still owns the connection.
+	if err := rows.Close(); err != nil {
+		return nil, nil, err
+	}
 	grant.BalanceBonus, err = parseRefundDecimal(bonus)
 	if err != nil {
 		return nil, nil, err
