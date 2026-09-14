@@ -787,6 +787,7 @@ for file in \
   deploy/sub2api-autodeploy.sh \
   deploy/sub2api-github-image-release.sh \
   deploy/sub2api-server-release.sh \
+  deploy/sub2api-reviewed-refunds-rollout.sh \
   deploy/sub2api-real-request-probe.sh \
   deploy/sub2api-drain-monitor.sh \
   deploy/sub2api-maintenance-lock.sh \
@@ -810,6 +811,7 @@ done
 bash -n "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-reviewed-refunds-rollout.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-real-request-probe.sh"
 [ "$INSTALL_BLUE_GREEN_HELPER" != true ] \
   || bash -n "${SOURCE_ROOT}/deploy/sub2api-blue-green-release.sh"
@@ -964,6 +966,8 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh" \
   "${SCRIPT_DIR}/sub2api-github-image-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-reviewed-refunds-rollout.sh" \
+  "${SCRIPT_DIR}/sub2api-reviewed-refunds-rollout.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-real-request-probe.sh" \
   "${SCRIPT_DIR}/sub2api-real-request-probe.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-maintenance-lock.sh" \

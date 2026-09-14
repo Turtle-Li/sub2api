@@ -33,6 +33,8 @@ jobs:
           /bin/bash -n deploy/sub2api-github-deploy-trigger.sh
           /bin/bash -n deploy/install-github-deploy-trigger.sh
           /bin/bash -n deploy/sub2api-server-release.sh
+          /bin/bash -n deploy/sub2api-reviewed-refunds-rollout.sh
+          /bin/bash deploy/tests/reviewed-refunds-rollout-test.sh
           /bin/bash -n deploy/sub2api-blue-green-release.sh
           /bin/bash -n deploy/sub2api-real-request-probe.sh
           /bin/bash deploy/tests/real-request-probe-test.sh
