@@ -90,6 +90,12 @@
 
 ## Unified payment integration
 
+- Reviewed refunds are enabled on the September 14 release; read
+  `docs/operations/PAYMENT_REVIEWED_REFUNDS_RELEASE_20260914.md` and
+  `docs/PAYMENT_REFUND_ACCOUNTING_20260914.md` before refund or rollback work.
+  Purchase entry remains closed. Preserve grant/audit records and use the
+  guarded drain/readiness/CAS sequence for an incompatible rollback.
+
 - Read `docs/UNIFIED_PAYMENT_INTEGRATION.md` before changing unified payment
   routing, signing, callbacks or refunds; its fixed central-service source blobs
   are the contract reference. The detailed local continuation plan is in
