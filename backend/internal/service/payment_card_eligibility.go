@@ -327,10 +327,11 @@ func (s *PaymentConfigService) CustomerPaymentCatalogForUser(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	// The rollout setting is private, but its effect is not: while delivery is
-	// disabled, a customer must not be shown a product that checkout will refuse
-	// and fulfillment will intentionally pause. The catalog simply omits those
-	// plans rather than exposing a capability switch to the browser.
+	// The rollout setting is private, but its effect on new purchases is not:
+	// while admission is disabled, a customer must not be shown a product that
+	// checkout will refuse. The catalog simply omits those plans rather than
+	// exposing a capability switch to the browser. Existing paid schedules keep
+	// running independently of this admission gate.
 	if !s.IsMonthlyResetCardsEnabled(ctx) {
 		available := make([]*dbent.SubscriptionPlan, 0, len(plans))
 		for _, plan := range plans {

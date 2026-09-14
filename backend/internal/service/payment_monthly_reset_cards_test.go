@@ -227,6 +227,7 @@ func TestPaymentMonthlyResetCardDeliveryRunOnceNormalizesNilContextAndStopCancel
 		values: map[string]string{SettingPaymentMonthlyResetCardsEnabled: "false"},
 	}}
 	worker := NewPaymentMonthlyResetCardDeliveryService(client, &PaymentConfigService{settingRepo: repo}, time.Hour)
+	//nolint:staticcheck // Exercise the worker's intentional nil-context normalization.
 	require.NoError(t, worker.RunOnce(nil))
 	require.Nil(t, repo.seen, "the delivery worker must not consult the new-order admission gate")
 
