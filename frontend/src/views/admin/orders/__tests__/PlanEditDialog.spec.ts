@@ -51,6 +51,7 @@ const SelectStub = defineComponent({
       default: () => [],
     },
     placeholder: String,
+    disabled: Boolean,
   },
   emits: ['update:modelValue'],
   setup(_props, { emit }) {
@@ -67,7 +68,9 @@ const SelectStub = defineComponent({
   },
   template: `
     <select
+      v-bind="$attrs"
       :value="modelValue ?? ''"
+      :disabled="disabled"
       @change="onChange"
     >
       <option value="">{{ placeholder }}</option>
@@ -75,6 +78,7 @@ const SelectStub = defineComponent({
         v-for="option in options"
         :key="option.value"
         :value="option.value"
+        :disabled="option.disabled"
         :data-platform="option.platform"
       >
         {{ option.label }}
@@ -188,12 +192,12 @@ describe('PlanEditDialog', () => {
         (node) => node.element.parentElement?.textContent?.includes(label),
       )
 
-    await numberInput('payment.admin.resetCardCount')!.setValue('2')
+    await wrapper.get('[data-testid="reset-card-count"]').setValue('2')
 
     const expiry = numberInput('payment.admin.resetCardExpiryDays')!
     expect(expiry.attributes('max')).toBe('3650')
 
-    const unitSelect = wrapper.findAll('select').at(-1)!
+    const unitSelect = wrapper.get('[data-testid="reset-card-expiry-unit"]')
     await unitSelect.setValue('month')
     expect(numberInput('payment.admin.resetCardExpiryDays')!.attributes('max')).toBe('121')
 
@@ -208,6 +212,50 @@ describe('PlanEditDialog', () => {
     )
 
     expect(expiry!.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="reset-card-delivery-mode"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('payment.admin.resetCardCountImmediate')
+    expect(wrapper.text()).not.toContain('payment.admin.monthlyResetCardsEnableRequired')
+  })
+
+  it('requires the rollout switch before monthly delivery can be selected', async () => {
+    const wrapper = mountDialog({ groups: [groupFixture({ id: 1 })] })
+    await wrapper.get('[data-testid="reset-card-count"]').setValue('2')
+    const monthly = wrapper.get('[data-testid="reset-card-delivery-mode"] option[value="monthly"]')
+
+    expect(monthly.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('payment.admin.monthlyResetCardsEnableRequired')
+  })
+
+  it('derives the monthly issue count from a calendar term and sends the frozen commitment', async () => {
+    vi.mocked(adminPaymentAPI.createPlan).mockClear()
+    const wrapper = mountDialog({
+      groups: [groupFixture({ id: 1 })],
+      paymentConfig: { monthly_reset_cards_enabled: true },
+    })
+
+    await wrapper.get('[data-testid="plan-group"]').setValue('1')
+    await wrapper.get('[data-testid="plan-price"]').setValue('9.99')
+    await wrapper.get('[data-testid="plan-validity-days"]').setValue('2')
+    await wrapper.get('[data-testid="plan-validity-unit"]').setValue('quarters')
+    await wrapper.get('[data-testid="reset-card-count"]').setValue('3')
+    await wrapper.get('[data-testid="reset-card-delivery-mode"]').setValue('monthly')
+
+    const periods = wrapper.get('[data-testid="reset-card-issue-count"]')
+    expect((periods.element as HTMLInputElement).value).toBe('6')
+    expect(periods.attributes('readonly')).toBeDefined()
+    expect(wrapper.text()).toContain('payment.admin.resetCardCountPerPeriod')
+    expect(wrapper.text()).toContain('payment.admin.monthlyResetCardValidityHint')
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(adminPaymentAPI.createPlan).toHaveBeenLastCalledWith(expect.objectContaining({
+      entitlements: expect.objectContaining({
+        reset_card_count: 3,
+        reset_card_delivery_mode: 'monthly',
+        reset_card_issue_count: 6,
+      }),
+    }))
   })
 
   it('allows composite subscription groups for payment plans', () => {

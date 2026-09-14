@@ -38,20 +38,23 @@ const resetCardMinimumRemainingValidity = resetCardMinimumExternalCheckoutLifeti
 // SubscriptionResetCardQuote is the server-derived, short-lived price for one
 // reset card. The monthly plan remains the source of truth at purchase time.
 type SubscriptionResetCardQuote struct {
-	SubscriptionID int64     `json:"subscription_id"`
-	GroupID        int64     `json:"group_id"`
-	PlanID         int64     `json:"plan_id"`
-	MonthlyPrice   float64   `json:"monthly_price"`
-	Price          float64   `json:"price"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	SubscriptionID        int64                            `json:"subscription_id"`
+	GroupID               int64                            `json:"group_id"`
+	PlanID                int64                            `json:"plan_id"`
+	MonthlyPrice          float64                          `json:"monthly_price"`
+	Price                 float64                          `json:"price"`
+	ExpiresAt             time.Time                        `json:"expires_at"`
+	ResetCardTier         *SubscriptionResetCardTierPolicy `json:"reset_card_tier,omitempty"`
+	ResetCardTierRevision string                           `json:"reset_card_tier_revision,omitempty"`
 }
 
 type PurchaseSubscriptionResetCardInput struct {
-	UserID         int64
-	SubscriptionID int64
-	ExpectedPlanID int64
-	ExpectedPrice  float64
-	PurchaseKey    string
+	UserID               int64
+	SubscriptionID       int64
+	ExpectedPlanID       int64
+	ExpectedPrice        float64
+	ExpectedTierRevision string
+	PurchaseKey          string
 }
 
 // PurchaseSubscriptionResetCardResult is deliberately independent from a
@@ -130,14 +133,20 @@ func (s *SubscriptionService) GetResetCardQuote(ctx context.Context, userID, sub
 	if err := validateResetCardPurchaseRules(ctx, s.entClient, userID, entitlements); err != nil {
 		return nil, err
 	}
+	tierPolicy, err := loadSubscriptionResetCardTierPolicy(ctx, s.entClient, subscription.groupID, false)
+	if err != nil {
+		return nil, err
+	}
 
 	return &SubscriptionResetCardQuote{
-		SubscriptionID: subscriptionID,
-		GroupID:        subscription.groupID,
-		PlanID:         plan.id,
-		MonthlyPrice:   plan.price.InexactFloat64(),
-		Price:          price.InexactFloat64(),
-		ExpiresAt:      subscription.expiresAt,
+		SubscriptionID:        subscriptionID,
+		GroupID:               subscription.groupID,
+		PlanID:                plan.id,
+		MonthlyPrice:          plan.price.InexactFloat64(),
+		Price:                 price.InexactFloat64(),
+		ExpiresAt:             subscription.expiresAt,
+		ResetCardTier:         tierPolicy,
+		ResetCardTierRevision: resetCardTierPolicyRevision(tierPolicy),
 	}, nil
 }
 
@@ -251,11 +260,20 @@ func (s *SubscriptionService) PurchaseResetCard(ctx context.Context, input Purch
 		if err := validateResetCardPurchaseRules(txCtx, client, input.UserID, entitlements); err != nil {
 			return err
 		}
+		tierPolicy, err := loadSubscriptionResetCardTierPolicy(txCtx, client, subscription.groupID, true)
+		if err != nil {
+			return err
+		}
+		if err := validateResetCardTierQuoteRevision(input.ExpectedTierRevision, tierPolicy); err != nil {
+			return err
+		}
+		sourcePlanID := plan.id
+		tierSnapshot := resetCardTierSnapshotFromPolicy(tierPolicy, &sourcePlanID)
 
 		if err := debitResetCardPurchaseBalance(txCtx, client, input.UserID, price); err != nil {
 			return err
 		}
-		grantID, err := insertPurchasedResetCardGrant(txCtx, client, input.UserID, input.SubscriptionID, subscription.groupID, subscription.expiresAt, now)
+		grantID, err := insertPurchasedResetCardGrant(txCtx, client, input.UserID, input.SubscriptionID, subscription.groupID, subscription.expiresAt, now, tierSnapshot)
 		if err != nil {
 			return err
 		}
@@ -632,15 +650,17 @@ func debitResetCardPurchaseBalance(ctx context.Context, client *dbent.Client, us
 	return ErrResetCardInsufficientBalance
 }
 
-func insertPurchasedResetCardGrant(ctx context.Context, client *dbent.Client, userID, subscriptionID, groupID int64, expiresAt, now time.Time) (int64, error) {
+func insertPurchasedResetCardGrant(ctx context.Context, client *dbent.Client, userID, subscriptionID, groupID int64, expiresAt, now time.Time, tierSnapshot *SubscriptionResetCardTierSnapshot) (int64, error) {
+	familyKey, tierRank, sourcePlanID := resetCardTierSnapshotValues(tierSnapshot)
 	rows, err := client.QueryContext(ctx, `
 		INSERT INTO subscription_reset_grants (
 			subscription_id, user_id, group_id, quantity, used_count,
-			expires_at, issued_by, created_at, updated_at
+			expires_at, issued_by, card_family_key, source_tier_rank, source_plan_id,
+			tier_snapshot_resolved, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, 1, 0, $4, NULL, $5, $5)
+		VALUES ($1, $2, $3, 1, 0, $4, NULL, $5, $6, $7, TRUE, $8, $8)
 		RETURNING id
-	`, subscriptionID, userID, groupID, expiresAt, now)
+	`, subscriptionID, userID, groupID, expiresAt, familyKey, tierRank, sourcePlanID, now)
 	if err != nil {
 		return 0, fmt.Errorf("insert purchased reset card grant: %w", err)
 	}

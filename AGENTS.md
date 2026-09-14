@@ -2,6 +2,13 @@
 
 ## Payment catalog and reset-card purchases
 
+- Read `docs/PAYMENT_ORDER_CATALOG_RESET_CARD_DESIGN_20260914.md` before
+  changing order/invoice entry points, refund reasons, the unified admin
+  product façade, reset-card tier compatibility, or monthly reset-card
+  delivery. It records the fixed upstream revisions, local differences,
+  fail-closed historical refund rule, immutable tier snapshots, and rollout
+  gates.
+
 - For the owner-only direct-link payment test, read
   `docs/operations/PAYMENT_DIRECT_TEST_ENTRY_20260912.md`. The independent
   `payment_entry_enabled` hides discovery only; server-side card audiences

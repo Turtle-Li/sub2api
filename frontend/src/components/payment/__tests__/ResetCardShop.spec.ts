@@ -1,11 +1,16 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ResetCardShop from '../ResetCardShop.vue'
-import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import type { UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({
+    t: (key: string) => key === 'payment.errors.RESET_CARD_TIER_INSUFFICIENT'
+      ? 'localized tier mismatch'
+      : key,
+  }),
+}))
 vi.mock('@/api/subscriptions', () => ({ getResetCardQuote: vi.fn() }))
 
 import { getResetCardQuote } from '@/api/subscriptions'
@@ -13,10 +18,15 @@ import { getResetCardQuote } from '@/api/subscriptions'
 const sub = { id: 7, group_id: 4, status: 'active', expires_at: '2027-01-01', group: { name: 'Plus', platform: 'openai' } } as UserSubscription
 const quote = { subscription_id: 7, group_id: 4, plan_id: 10, monthly_price: 120, price: 40, expires_at: '2027-01-01' }
 const plans = [{ id: 10, group_id: 4, group_platform: 'openai', currency: 'CNY', price: 120, validity_unit: 'month', validity_days: 1 }] as SubscriptionPlan[]
+const ConfirmDialogStub = {
+  props: ['show', 'message'],
+  emits: ['confirm', 'cancel'],
+  template: '<div v-if="show"><p>{{ message }}</p><slot /><button data-testid="confirm-reset-card" @click="$emit(\'confirm\')" /></div>',
+}
 
 const render = (subscriptions = [sub], planOverrides: Record<string, unknown> = {}) => mount(ResetCardShop, {
   props: { subscriptions, plans: [{ ...plans[0], ...planOverrides }] },
-  global: { stubs: { ConfirmDialog: true } },
+  global: { stubs: { ConfirmDialog: ConfirmDialogStub } },
 })
 
 beforeEach(() => {
@@ -38,20 +48,65 @@ describe('ResetCardShop', () => {
     expect(render([{ ...sub, group_id: 99 }]).find('button').exists()).toBe(false)
   })
 
+  it('localizes a tier mismatch returned after the storefront state changes', async () => {
+    vi.mocked(getResetCardQuote).mockRejectedValueOnce({
+      reason: 'RESET_CARD_TIER_INSUFFICIENT',
+      message: 'available reset cards in this family are from a lower subscription tier',
+    })
+    const wrapper = render()
+
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('localized tier mismatch')
+    expect(wrapper.text()).not.toContain('available reset cards in this family')
+  })
+
   it('quotes before confirmation and emits a shared external checkout request', async () => {
     const wrapper = render()
     await wrapper.get('button').trigger('click')
     await flushPromises()
     expect(getResetCardQuote).toHaveBeenCalledWith(7)
-    wrapper.getComponent(ConfirmDialog).vm.$emit('confirm')
+    await wrapper.get('[data-testid="confirm-reset-card"]').trigger('click')
     await flushPromises()
     expect(wrapper.emitted('checkout')).toEqual([[{ subscription: sub, quote }]])
+  })
+
+  it('explains the purchase-bound tier rule and exposes only the numeric tier to customers', async () => {
+    vi.mocked(getResetCardQuote).mockResolvedValue({
+      ...quote,
+      reset_card_tier: { group_id: 4, family_key: 'gpt_standard', tier_rank: 2 },
+    })
+    const wrapper = render([sub], {
+      reset_card_tier: { group_id: 4, family_key: 'gpt_standard', tier_rank: 2 },
+    })
+
+    expect(wrapper.text()).toContain('payment.resetShop.tierBindingHint')
+    expect(wrapper.text()).toContain('payment.resetShop.tierRank')
+    expect(wrapper.text()).not.toContain('gpt_standard')
+
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.resetShop.tierBindingConfirm')
+    expect(wrapper.text()).toContain('payment.resetShop.tierRank')
+    expect(wrapper.text()).not.toContain('gpt_standard')
+  })
+
+  it('warns that a plan without a tier remains bound to the exact subscription', async () => {
+    const wrapper = render()
+
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.resetShop.exactBindingConfirm')
+    expect(wrapper.text()).not.toContain('payment.resetShop.tierBindingConfirm')
   })
 
   it('does not start another reset-card checkout while its parent is submitting', async () => {
     const wrapper = mount(ResetCardShop, {
       props: { subscriptions: [sub], plans, disabled: true },
-      global: { stubs: { ConfirmDialog: true } },
+      global: { stubs: { ConfirmDialog: ConfirmDialogStub } },
     })
 
     await wrapper.get('button').trigger('click')

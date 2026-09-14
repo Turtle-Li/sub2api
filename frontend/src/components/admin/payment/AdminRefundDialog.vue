@@ -106,6 +106,16 @@
           </dl>
         </section>
 
+        <section
+          v-else-if="review.requires_manual_review"
+          class="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20"
+        >
+          <div class="flex justify-between gap-3 text-sm">
+            <span class="text-amber-800 dark:text-amber-200">{{ t('payment.admin.refundCash') }}</span>
+            <span class="font-medium text-amber-900 dark:text-amber-100">{{ t('payment.admin.refundAmountPendingManualReview') }}</span>
+          </div>
+        </section>
+
         <section v-else class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
           <div class="flex justify-between gap-3 text-sm">
             <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundCash') }}</span>
@@ -131,17 +141,38 @@
         </div>
       </template>
 
-      <div>
-        <label for="refund-reason" class="input-label">{{ t('payment.admin.refundReason') }}</label>
-        <textarea
-          id="refund-reason"
-          v-model="form.reason"
-          rows="3"
-          class="input"
-          :placeholder="t('payment.admin.refundReasonPlaceholder')"
-          :disabled="loading || submitting"
-          required
-        ></textarea>
+      <div class="space-y-3">
+        <div>
+          <label for="refund-reason-code" class="input-label">{{ t('payment.admin.refundReasonCode') }}</label>
+          <select
+            id="refund-reason-code"
+            v-model="form.reasonCode"
+            class="input"
+            :disabled="loading || submitting"
+          >
+            <option v-for="code in refundReasonCodes" :key="code" :value="code">
+              {{ t(`payment.admin.refundReasonCodes.${code}`) }}
+            </option>
+          </select>
+        </div>
+        <div>
+          <label for="refund-reason-detail" class="input-label">
+            {{ form.reasonCode === 'other' ? t('payment.admin.refundReasonDetailRequired') : t('payment.admin.refundReasonDetail') }}
+          </label>
+          <textarea
+            id="refund-reason-detail"
+            v-model="form.reasonDetail"
+            rows="3"
+            class="input"
+            :placeholder="t('payment.admin.refundReasonDetailPlaceholder')"
+            :disabled="loading || submitting"
+            :required="form.reasonCode === 'other'"
+            maxlength="240"
+          ></textarea>
+          <p v-if="form.reasonCode === 'other'" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('payment.admin.refundReasonDetailOtherHint') }}
+          </p>
+        </div>
       </div>
 
       <div
@@ -174,7 +205,7 @@
 import { computed, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
-import type { RefundReview } from '@/api/admin/payment'
+import type { RefundReasonCode, RefundReview } from '@/api/admin/payment'
 import type { PaymentOrder } from '@/types/payment'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import { currencySymbol } from '@/components/payment/currency'
@@ -192,12 +223,22 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'confirm', data: { reason: string }): void
+  (e: 'confirm', data: { reason_code: RefundReasonCode; reason_detail?: string }): void
   (e: 'cancel'): void
 }>()
 
 const creditedAmountSymbol = currencySymbol('USD')
-const form = reactive({ reason: '' })
+const refundReasonCodes: RefundReasonCode[] = [
+  'customer_request',
+  'duplicate_charge',
+  'service_not_delivered',
+  'service_error',
+  'other',
+]
+const form = reactive<{ reasonCode: RefundReasonCode; reasonDetail: string }>({
+  reasonCode: 'customer_request',
+  reasonDetail: '',
+})
 
 const reviewReason = computed(() => {
   const review = props.review
@@ -220,12 +261,13 @@ const canConfirm = computed(() => {
     review?.can_refund &&
     !review.requires_manual_review &&
     review.quote_revision &&
-    form.reason.trim(),
+    (form.reasonCode !== 'other' || form.reasonDetail.trim()),
   )
 })
 
 function resetReason() {
-  form.reason = props.order?.refund_request_reason || ''
+  form.reasonCode = 'customer_request'
+  form.reasonDetail = props.order?.refund_request_reason || ''
 }
 
 watch(() => props.show, (show) => {
@@ -273,6 +315,10 @@ function formatDateTime(dateStr: string): string {
 
 function handleSubmit() {
   if (!canConfirm.value) return
-  emit('confirm', { reason: form.reason.trim() })
+  const detail = form.reasonDetail.trim()
+  emit('confirm', {
+    reason_code: form.reasonCode,
+    ...(detail ? { reason_detail: detail } : {}),
+  })
 }
 </script>

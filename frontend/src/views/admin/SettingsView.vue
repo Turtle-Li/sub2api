@@ -8156,29 +8156,6 @@
                     </p>
                   </div>
                 </div>
-                <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-800">
-                  <label class="input-label">{{ t("admin.settings.payment.rechargeOptions") }}</label>
-                  <RechargeOptionsEditor v-model="form.payment_recharge_options_json" @validity="rechargeRulesValid = $event" />
-                  <details class="mt-3">
-                    <summary class="cursor-pointer text-xs text-gray-500">{{ t('payment.eligibility.advancedJson') }}</summary>
-                  <textarea v-model="form.payment_recharge_options_json" rows="6" class="input font-mono text-xs" placeholder='[{"amount":20,"original_price":20,"label":"体验档","description":"适合轻量试用","balance_bonus":0,"concurrency":2,"estimated_rate_multiplier":1,"estimated_tokens":2000000,"sort_order":10,"enabled":true}]'></textarea>
-                  </details>
-                  <p class="mt-1 text-xs text-gray-400">{{ t("admin.settings.payment.rechargeOptionsHint") }}</p>
-                  <div class="mt-3 max-w-sm">
-                    <label class="input-label">{{ t("admin.settings.payment.recommendedRecharge") }}</label>
-                    <select v-model.number="form.payment_recommended_recharge_amount" class="input">
-                      <option :value="0">{{ t("admin.settings.payment.noRecommendedRecharge") }}</option>
-                      <option
-                        v-for="option in parsedRechargeOptionsForEditor"
-                        :key="`${option.amount}-${option.label || ''}`"
-                        :value="Number(option.amount)"
-                      >
-                        {{ option.label || option.amount }}
-                      </option>
-                    </select>
-                    <p class="mt-1 text-xs text-gray-400">{{ t("admin.settings.payment.recommendedRechargeHint") }}</p>
-                  </div>
-                </div>
                 <!-- Row 3: Pending orders + load balance + cancel rate limit (all in one row) -->
                 <div class="flex flex-wrap items-end gap-4">
                   <div class="w-28">
@@ -8956,7 +8933,6 @@
 </template>
 
 <script setup lang="ts">
-import RechargeOptionsEditor from '@/components/payment/RechargeOptionsEditor.vue';
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api";
@@ -10047,21 +10023,6 @@ const form = reactive<SettingsForm>({
 
 let loadedRechargeOptionsJSON = "[]";
 let loadedRecommendedRechargeAmount = 0;
-
-const parsedRechargeOptionsForEditor = computed(() => {
-  try {
-    const parsed = JSON.parse(form.payment_recharge_options_json || "[]") as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((option): option is Record<string, unknown> => {
-      if (!option || typeof option !== "object") return false;
-      const record = option as Record<string, unknown>;
-      const amount = Number(record.amount);
-      return Number.isFinite(amount) && amount > 0 && record.enabled !== false;
-    });
-  } catch {
-    return [];
-  }
-});
 
 // 人机验证 UI 状态：单卡片「总开关 + 服务商单选」，落库仍是三个独立
 // enabled 键（与上游一致），由下面的映射保证同一时间至多一家启用。
@@ -11275,10 +11236,7 @@ function findDuplicateDefaultSubscription(
   });
 }
 
-const rechargeRulesValid = ref(true);
-
 async function saveSettings() {
-  if (!rechargeRulesValid.value) { appStore.showError(t('payment.eligibility.invalidRules')); return; }
   saving.value = true;
   try {
     let normalizedRechargeOptions: Array<Record<string, unknown>>;

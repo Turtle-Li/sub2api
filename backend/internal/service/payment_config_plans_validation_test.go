@@ -133,11 +133,21 @@ func TestCreateOrderInTxRevalidatesSubscriptionPlatformUnderWriteBoundary(t *tes
 		Save(ctx)
 	require.NoError(t, err)
 
+	configService := &PaymentConfigService{entClient: client}
+	_, err = configService.UpsertResetCardTierPolicy(ctx, UpsertSubscriptionResetCardTierPolicyInput{
+		GroupID: int64(group.ID), FamilyKey: "gpt", TierRank: 2,
+	})
+	require.NoError(t, err)
 	svc := &PaymentService{entClient: client}
 	request := CreateOrderRequest{UserID: user.ID, PaymentType: payment.TypeAlipay, OrderType: payment.OrderTypeSubscription}
 	actor := &User{ID: user.ID, Email: user.Email, Username: user.Username}
-	_, err = svc.createOrderInTx(ctx, request, actor, plan, &PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30}, plan.Price, plan.Price, 0, plan.Price, nil)
+	createdOrder, err := svc.createOrderInTx(ctx, request, actor, plan, &PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30}, plan.Price, plan.Price, 0, plan.Price, nil)
 	require.NoError(t, err, "the unchanged OpenAI policy is accepted under the write transaction")
+	tierSnapshot, err := resetCardTierSnapshotFromProductSnapshot(createdOrder.ProductSnapshot, plan.ID)
+	require.NoError(t, err)
+	require.Equal(t, &SubscriptionResetCardTierSnapshot{
+		FamilyKey: "gpt", TierRank: 2, SourcePlanID: &plan.ID,
+	}, tierSnapshot)
 
 	// This mutation represents a concurrent administrator change after the
 	// outer checkout read. The transaction-bound reload must reject it before

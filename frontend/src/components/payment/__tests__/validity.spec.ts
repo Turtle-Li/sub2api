@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planValiditySuffix } from '../validity'
+import { monthlyResetCardDeliveryLabel, monthlyResetCardIssueCount, planValidityLabel, planValiditySuffix } from '../validity'
 
 const t = (key: string): string =>
   ({
@@ -11,6 +11,16 @@ const t = (key: string): string =>
     'payment.quarters': '季度',
     'payment.perYear': '年',
     'payment.years': '年',
+    'payment.validityUnits.dayOne': '天',
+    'payment.validityUnits.dayMany': '天',
+    'payment.validityUnits.weekOne': '周',
+    'payment.validityUnits.weekMany': '周',
+    'payment.validityUnits.monthOne': '个月',
+    'payment.validityUnits.monthMany': '个月',
+    'payment.validityUnits.quarterOne': '个季度',
+    'payment.validityUnits.quarterMany': '个季度',
+    'payment.validityUnits.yearOne': '年',
+    'payment.validityUnits.yearMany': '年',
   })[key] ?? key
 
 const suffix = (validity_days: number, validity_unit: string) =>
@@ -56,5 +66,53 @@ describe('planValiditySuffix', () => {
   it('normalizes casing and whitespace', () => {
     expect(suffix(1, ' Months ')).toBe('月')
     expect(suffix(2, 'WEEKS')).toBe('2周')
+  })
+})
+
+describe('planValidityLabel', () => {
+  it('renders full localized labels for the admin catalogue', () => {
+    expect(planValidityLabel({ validity_days: 1, validity_unit: 'months' }, t)).toBe('1 个月')
+    expect(planValidityLabel({ validity_days: 3, validity_unit: 'month' }, t)).toBe('3 个月')
+    expect(planValidityLabel({ validity_days: 1, validity_unit: 'quarter' }, t)).toBe('1 个季度')
+    expect(planValidityLabel({ validity_days: 1, validity_unit: 'year' }, t)).toBe('1 年')
+  })
+
+  it('matches backend day fallback for legacy or unknown units', () => {
+    expect(planValidityLabel({ validity_days: 30, validity_unit: '' }, t)).toBe('30 天')
+    expect(planValidityLabel({ validity_days: 365, validity_unit: 'unknown' }, t)).toBe('365 天')
+  })
+})
+
+describe('monthly reset-card delivery', () => {
+  it('derives the committed periods only from calendar month, quarter, and year terms', () => {
+    expect(monthlyResetCardIssueCount({ validity_days: 2, validity_unit: 'months' },)).toBe(2)
+    expect(monthlyResetCardIssueCount({ validity_days: 2, validity_unit: 'quarters' },)).toBe(6)
+    expect(monthlyResetCardIssueCount({ validity_days: 10, validity_unit: 'years' },)).toBe(120)
+    expect(monthlyResetCardIssueCount({ validity_days: 1, validity_unit: 'month' },)).toBeNull()
+    expect(monthlyResetCardIssueCount({ validity_days: 121, validity_unit: 'month' },)).toBeNull()
+    expect(monthlyResetCardIssueCount({ validity_days: 90, validity_unit: 'days' },)).toBeNull()
+  })
+
+  it('keeps one-time grants on their existing label and describes monthly cards by period', () => {
+    const monthlyT = (key: string, params?: Record<string, unknown>): string =>
+      key === 'payment.entitlements.monthlyResetCards'
+        ? `每月 ${params?.count} 张，共 ${params?.issues} 期，每张有效 ${params?.validity}`
+        : t(key)
+    const monthly = monthlyResetCardDeliveryLabel({
+      reset_card_count: 2,
+      reset_card_delivery_mode: 'monthly',
+      reset_card_issue_count: 6,
+      reset_card_expiry_days: 14,
+      reset_card_expiry_unit: 'day',
+    }, monthlyT)
+    expect(monthly).toBe('每月 2 张，共 6 期，每张有效 14天')
+
+    expect(monthlyResetCardDeliveryLabel({
+      reset_card_count: 2,
+      reset_card_delivery_mode: 'immediate',
+      reset_card_issue_count: 1,
+      reset_card_expiry_days: 14,
+      reset_card_expiry_unit: 'day',
+    }, t)).toBe('')
   })
 })

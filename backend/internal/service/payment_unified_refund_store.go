@@ -20,18 +20,18 @@ const unifiedRefundPending = "PENDING"
 // every other attempt. Raw SQL avoids making the financial correlation table a
 // publicly editable provider/order DTO. The additive migration owns its schema.
 type unifiedRefundAttempt struct {
-	ProductRefundNo, PaymentOrderID, IdempotencyKey                              string
-	OrderID                                                                      int64
-	Environment, OrganizationID, ProductID, AppID, PaymentMethod                 string
-	AmountFen, BalanceAmountMinor                                                int64
-	DeductBalance, Force                                                         bool
-	ReasonSummary, Status, RefundRequestID, ChannelOutRefundNo, ProviderRefundID string
-	NeedsManualReview                                                            bool
-	RefundKind, QuoteRevision                                                    string
-	WalletPaidAmount, WalletGiftAmount                                           float64
-	SubscriptionSeconds, SubscriptionGrantOrderID                                int64
-	EntitlementReserved                                                          bool
-	ValuationAt                                                                  *time.Time
+	ProductRefundNo, PaymentOrderID, IdempotencyKey                                          string
+	OrderID                                                                                  int64
+	Environment, OrganizationID, ProductID, AppID, PaymentMethod                             string
+	AmountFen, BalanceAmountMinor                                                            int64
+	DeductBalance, Force                                                                     bool
+	ReasonCode, ReasonSummary, Status, RefundRequestID, ChannelOutRefundNo, ProviderRefundID string
+	NeedsManualReview                                                                        bool
+	RefundKind, QuoteRevision                                                                string
+	WalletPaidAmount, WalletGiftAmount                                                       float64
+	SubscriptionSeconds, SubscriptionGrantOrderID                                            int64
+	EntitlementReserved                                                                      bool
+	ValuationAt                                                                              *time.Time
 }
 
 func lockUnifiedRefundOrder(ctx context.Context, client *dbent.Client, id int64) (*dbent.PaymentOrder, error) {
@@ -45,7 +45,7 @@ func lockUnifiedRefundOrder(ctx context.Context, client *dbent.Client, id int64)
 func loadUnifiedRefundAttempt(ctx context.Context, client *dbent.Client, orderID int64, refundNo string) (*unifiedRefundAttempt, error) {
 	query := `SELECT product_refund_no, order_id, payment_order_id, idempotency_key,
 	 environment, organization_id, product_id, app_id, payment_method, amount_fen,
-	 balance_amount_minor, deduct_balance, force_refund, reason_summary, status,
+	 balance_amount_minor, deduct_balance, force_refund, reason_code, reason_summary, status,
 	 COALESCE(CAST(refund_request_id AS TEXT), ''), COALESCE(channel_out_refund_no, ''),
 		 COALESCE(provider_refund_id, ''), needs_manual_review,
 		 refund_kind, quote_revision, CAST(wallet_paid_amount AS TEXT),
@@ -76,7 +76,7 @@ func loadUnifiedRefundAttempt(ctx context.Context, client *dbent.Client, orderID
 	var valuation sql.NullTime
 	err = rows.Scan(&a.ProductRefundNo, &a.OrderID, &a.PaymentOrderID, &a.IdempotencyKey,
 		&a.Environment, &a.OrganizationID, &a.ProductID, &a.AppID, &a.PaymentMethod,
-		&a.AmountFen, &a.BalanceAmountMinor, &a.DeductBalance, &a.Force, &a.ReasonSummary,
+		&a.AmountFen, &a.BalanceAmountMinor, &a.DeductBalance, &a.Force, &a.ReasonCode, &a.ReasonSummary,
 		&a.Status, &a.RefundRequestID, &a.ChannelOutRefundNo, &a.ProviderRefundID, &a.NeedsManualReview,
 		&a.RefundKind, &a.QuoteRevision, &paidRaw, &giftRaw, &a.SubscriptionSeconds,
 		&a.SubscriptionGrantOrderID, &a.EntitlementReserved, &valuation)
@@ -119,13 +119,13 @@ func insertUnifiedRefundAttempt(ctx context.Context, client *dbent.Client, a *un
 	_, err := client.ExecContext(ctx, `INSERT INTO unified_payment_refund_attempts
 	 (product_refund_no, order_id, payment_order_id, idempotency_key, environment,
 	 organization_id, product_id, app_id, payment_method, amount_fen, balance_amount_minor,
-	 deduct_balance, force_refund, reason_summary, status, refund_kind,
+	 deduct_balance, force_refund, reason_code, reason_summary, status, refund_kind,
 	 quote_revision, wallet_paid_amount, wallet_gift_amount, subscription_seconds,
 	 subscription_grant_order_id, entitlement_reserved, valuation_at)
-	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
 		a.ProductRefundNo, a.OrderID, a.PaymentOrderID, a.IdempotencyKey, a.Environment,
 		a.OrganizationID, a.ProductID, a.AppID, a.PaymentMethod, a.AmountFen, a.BalanceAmountMinor,
-		a.DeductBalance, a.Force, a.ReasonSummary, a.Status, a.RefundKind,
+		a.DeductBalance, a.Force, a.ReasonCode, a.ReasonSummary, a.Status, a.RefundKind,
 		a.QuoteRevision, a.WalletPaidAmount, a.WalletGiftAmount, a.SubscriptionSeconds,
 		nullableUnifiedRefundGrantOrder(a.SubscriptionGrantOrderID), a.EntitlementReserved, a.ValuationAt)
 	return err

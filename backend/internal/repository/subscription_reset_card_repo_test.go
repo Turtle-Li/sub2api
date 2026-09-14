@@ -15,13 +15,18 @@ import (
 )
 
 const (
-	grantResetCardsPattern                = `(?s)INSERT INTO subscription_reset_grants.*FROM user_subscriptions us.*RETURNING group_id`
-	grantResetCardsToSubscriptionsPattern = `(?s)INSERT INTO subscription_reset_grants.*FROM user_subscriptions us.*WHERE us.id = ANY.*RETURNING subscription_id`
-	listResetCardsPattern                 = `(?s)SELECT rg.subscription_id, rg.expires_at, SUM.*FROM subscription_reset_grants rg.*ORDER BY rg.subscription_id ASC, rg.expires_at ASC`
-	lockSubscriptionPattern               = `(?s)SELECT group_id, status, expires_at.*FROM user_subscriptions.*WHERE id = \$1 AND user_id = \$2.*FOR UPDATE`
-	lockResetCardPattern                  = `(?s)SELECT id.*FROM subscription_reset_grants.*ORDER BY expires_at ASC, id ASC.*LIMIT 1.*FOR UPDATE`
-	consumeResetCardPattern               = `(?s)UPDATE subscription_reset_grants.*SET used_count = used_count \+ 1`
-	resetSubscriptionPattern              = `(?s)UPDATE user_subscriptions.*SET daily_usage_usd = 0.*monthly_usage_usd = 0`
+	grantResetCardsPattern                    = `(?s)INSERT INTO subscription_reset_grants.*source_plan_id, tier_snapshot_resolved.*SELECT.*tier\.family_key, tier\.tier_rank, NULL, TRUE.*FROM user_subscriptions us.*LEFT JOIN subscription_reset_card_tiers tier.*RETURNING group_id`
+	grantResetCardsToSubscriptionsPattern     = `(?s)INSERT INTO subscription_reset_grants.*source_plan_id, tier_snapshot_resolved.*SELECT.*tier\.family_key, tier\.tier_rank, NULL, TRUE.*FROM user_subscriptions us.*LEFT JOIN subscription_reset_card_tiers tier.*WHERE us.id = ANY.*RETURNING subscription_id`
+	lockTierSnapshotGroupsPattern             = `(?s)SELECT id.*FROM groups.*WHERE id = ANY.*ORDER BY id ASC.*FOR SHARE`
+	lockTierSnapshotSubscriptionGroupsPattern = `(?s)SELECT g.id.*FROM groups AS g.*JOIN user_subscriptions AS us.*WHERE us.id = ANY.*ORDER BY g.id ASC.*FOR SHARE OF g`
+	lockTierPoliciesForGroupsPattern          = `(?s)SELECT group_id.*FROM subscription_reset_card_tiers.*WHERE group_id = ANY.*FOR SHARE`
+	lockTierPoliciesForSubscriptionsPattern   = `(?s)SELECT tier.group_id.*FROM user_subscriptions us.*JOIN subscription_reset_card_tiers tier.*WHERE us.id = ANY.*FOR SHARE OF tier`
+	listResetCardsPattern                     = `(?s)WITH target AS.*SELECT target.subscription_id, rg.expires_at, SUM.*FROM target.*subscription_reset_grants rg.*ORDER BY target.subscription_id ASC, rg.expires_at ASC`
+	lockSubscriptionPattern                   = `(?s)SELECT us.group_id, us.status, us.expires_at, tier.family_key, tier.tier_rank.*FROM user_subscriptions us.*WHERE us.id = \$1 AND us.user_id = \$2.*FOR UPDATE OF us`
+	lockResetCardPattern                      = `(?s)WITH target AS.*SELECT rg.id.*FROM subscription_reset_grants rg.*ORDER BY rg.expires_at ASC, rg.source_tier_rank ASC NULLS FIRST, rg.id ASC.*LIMIT 1.*FOR UPDATE`
+	lowerResetCardTierPattern                 = `(?s)SELECT EXISTS.*FROM subscription_reset_grants rg.*rg.card_family_key = target.family_key.*rg.source_tier_rank < target.tier_rank`
+	consumeResetCardPattern                   = `(?s)UPDATE subscription_reset_grants.*SET used_count = used_count \+ 1`
+	resetSubscriptionPattern                  = `(?s)UPDATE user_subscriptions.*SET daily_usage_usd = 0.*monthly_usage_usd = 0`
 )
 
 func newResetCardSQLMock(t *testing.T) (service.SubscriptionResetCardRepository, sqlmock.Sqlmock) {
@@ -40,12 +45,20 @@ func TestSubscriptionResetCardRepository_GrantCountsRecipientsByGroup(t *testing
 	now := time.Now().UTC()
 	expiresAt := now.Add(24 * time.Hour)
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(lockTierSnapshotGroupsPattern).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(2)).AddRow(int64(5)))
+	mock.ExpectQuery(lockTierPoliciesForGroupsPattern).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 	mock.ExpectQuery(grantResetCardsPattern).
 		WithArgs(sqlmock.AnyArg(), 3, expiresAt, int64(99), now).
 		WillReturnRows(sqlmock.NewRows([]string{"group_id"}).
 			AddRow(int64(2)).
 			AddRow(int64(5)).
 			AddRow(int64(5)))
+	mock.ExpectCommit()
 
 	result, err := repo.GrantToGroups(context.Background(), []int64{2, 5}, 3, expiresAt, 99, now)
 
@@ -59,9 +72,17 @@ func TestSubscriptionResetCardRepository_GrantTargetsSpecificSubscriptions(t *te
 	now := time.Now().UTC()
 	expiresAt := now.Add(24 * time.Hour)
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(lockTierSnapshotSubscriptionGroupsPattern).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(2)))
+	mock.ExpectQuery(lockTierPoliciesForSubscriptionsPattern).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 	mock.ExpectQuery(grantResetCardsToSubscriptionsPattern).
 		WithArgs(sqlmock.AnyArg(), 2, expiresAt, int64(99), now).
 		WillReturnRows(sqlmock.NewRows([]string{"subscription_id"}).AddRow(int64(7)))
+	mock.ExpectCommit()
 
 	result, err := repo.GrantToSubscriptions(context.Background(), []int64{7}, 2, expiresAt, 99, now)
 
@@ -102,7 +123,7 @@ func TestSubscriptionResetCardRepository_ConsumeRejectsWrongOwnerWithoutUsingCar
 	mock.ExpectBegin()
 	mock.ExpectQuery(lockSubscriptionPattern).
 		WithArgs(int64(7), int64(10)).
-		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at", "family_key", "tier_rank"}))
 	mock.ExpectRollback()
 
 	_, err := repo.ConsumeAndReset(context.Background(), 10, 7, now, now)
@@ -138,8 +159,8 @@ func TestSubscriptionResetCardRepository_ConsumeRejectsInactiveSubscriptionWitho
 			mock.ExpectBegin()
 			mock.ExpectQuery(lockSubscriptionPattern).
 				WithArgs(int64(7), int64(10)).
-				WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at"}).
-					AddRow(int64(20), testCase.status, testCase.expiresAt(now)))
+				WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at", "family_key", "tier_rank"}).
+					AddRow(int64(20), testCase.status, testCase.expiresAt(now), nil, nil))
 			mock.ExpectRollback()
 
 			_, err := repo.ConsumeAndReset(context.Background(), 10, 7, now, now)
@@ -157,10 +178,10 @@ func TestSubscriptionResetCardRepository_ConsumeRejectsWhenCountIsExhausted(t *t
 	mock.ExpectBegin()
 	mock.ExpectQuery(lockSubscriptionPattern).
 		WithArgs(int64(7), int64(10)).
-		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at"}).
-			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour)))
+		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at", "family_key", "tier_rank"}).
+			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour), nil, nil))
 	mock.ExpectQuery(lockResetCardPattern).
-		WithArgs(int64(7), int64(10), now).
+		WithArgs(int64(7), int64(10), nil, nil, now).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectRollback()
 
@@ -178,10 +199,10 @@ func TestSubscriptionResetCardRepository_ConsumeAndResetCommitsTogether(t *testi
 	mock.ExpectBegin()
 	mock.ExpectQuery(lockSubscriptionPattern).
 		WithArgs(int64(7), int64(10)).
-		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at"}).
-			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour)))
+		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at", "family_key", "tier_rank"}).
+			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour), nil, nil))
 	mock.ExpectQuery(lockResetCardPattern).
-		WithArgs(int64(7), int64(10), now).
+		WithArgs(int64(7), int64(10), nil, nil, now).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(55)))
 	mock.ExpectExec(consumeResetCardPattern).
 		WithArgs(int64(55), now).
@@ -206,10 +227,10 @@ func TestSubscriptionResetCardRepository_ConsumeRollbackPreservesCardOnResetFail
 	mock.ExpectBegin()
 	mock.ExpectQuery(lockSubscriptionPattern).
 		WithArgs(int64(7), int64(10)).
-		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at"}).
-			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour)))
+		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at", "family_key", "tier_rank"}).
+			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour), nil, nil))
 	mock.ExpectQuery(lockResetCardPattern).
-		WithArgs(int64(7), int64(10), now).
+		WithArgs(int64(7), int64(10), nil, nil, now).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(55)))
 	mock.ExpectExec(consumeResetCardPattern).
 		WithArgs(int64(55), now).
@@ -223,4 +244,92 @@ func TestSubscriptionResetCardRepository_ConsumeRollbackPreservesCardOnResetFail
 
 	require.ErrorIs(t, err, dbErr)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSubscriptionResetCardRepository_ConsumeAllowsHigherTierCardForLowerTarget(t *testing.T) {
+	repo, mock := newResetCardSQLMock(t)
+	now := time.Now().UTC()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(lockSubscriptionPattern).
+		WithArgs(int64(7), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at", "family_key", "tier_rank"}).
+			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour), "gpt", int64(1)))
+	mock.ExpectQuery(lockResetCardPattern).
+		WithArgs(int64(7), int64(10), "gpt", int64(1), now).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(55)))
+	mock.ExpectExec(consumeResetCardPattern).
+		WithArgs(int64(55), now).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(resetSubscriptionPattern).
+		WithArgs(int64(7), now, now, int64(10)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	_, err := repo.ConsumeAndReset(context.Background(), 10, 7, now, now)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+	require.Contains(t, resetCardTierEligibilityPredicateSQL, "rg.source_tier_rank >= target.tier_rank")
+}
+
+func TestSubscriptionResetCardRepository_ConsumeRejectsLowerSameFamilyCardWithTierError(t *testing.T) {
+	repo, mock := newResetCardSQLMock(t)
+	now := time.Now().UTC()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(lockSubscriptionPattern).
+		WithArgs(int64(7), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at", "family_key", "tier_rank"}).
+			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour), "gpt", int64(2)))
+	mock.ExpectQuery(lockResetCardPattern).
+		WithArgs(int64(7), int64(10), "gpt", int64(2), now).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(lowerResetCardTierPattern).
+		WithArgs(int64(10), "gpt", int64(2), now).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	_, err := repo.ConsumeAndReset(context.Background(), 10, 7, now, now)
+	require.ErrorIs(t, err, service.ErrResetCardTierInsufficient)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSubscriptionResetCardRepository_ConsumeCrossFamilyCardReturnsUnavailable(t *testing.T) {
+	repo, mock := newResetCardSQLMock(t)
+	now := time.Now().UTC()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(lockSubscriptionPattern).
+		WithArgs(int64(7), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id", "status", "expires_at", "family_key", "tier_rank"}).
+			AddRow(int64(20), service.SubscriptionStatusActive, now.Add(time.Hour), "gpt", int64(1)))
+	mock.ExpectQuery(lockResetCardPattern).
+		WithArgs(int64(7), int64(10), "gpt", int64(1), now).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(lowerResetCardTierPattern).
+		WithArgs(int64(10), "gpt", int64(1), now).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectRollback()
+
+	_, err := repo.ConsumeAndReset(context.Background(), 10, 7, now, now)
+	require.ErrorIs(t, err, service.ErrResetCardUnavailable)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSubscriptionResetCardRepository_TierPredicateKeepsLegacyExactOnly(t *testing.T) {
+	require.Contains(t, resetCardTierEligibilityPredicateSQL, "rg.card_family_key IS NULL")
+	require.Contains(t, resetCardTierEligibilityPredicateSQL, "rg.source_tier_rank IS NULL")
+	require.NotContains(t, resetCardTierEligibilityPredicateSQL, "rg.source_plan_id IS NULL")
+	require.Contains(t, resetCardTierEligibilityPredicateSQL, "rg.subscription_id = target.subscription_id")
+	require.NotContains(t, resetCardTierEligibilityPredicateSQL, "JOIN user_subscriptions")
+}
+
+func TestSubscriptionResetCardRepository_TierPredicateKeepsUntypedScheduleCardsExactOnly(t *testing.T) {
+	// Monthly issuance retains source_plan_id for auditability. Without an
+	// explicit family/rank policy it must still use the owning subscription's
+	// exact-only card path.
+	require.Contains(t, resetCardTierEligibilityPredicateSQL, "rg.card_family_key IS NULL")
+	require.Contains(t, resetCardTierEligibilityPredicateSQL, "rg.source_tier_rank IS NULL")
+	require.Contains(t, resetCardTierEligibilityPredicateSQL, "rg.subscription_id = target.subscription_id")
+	require.NotContains(t, resetCardTierEligibilityPredicateSQL, "AND rg.source_plan_id IS NULL")
 }

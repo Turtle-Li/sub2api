@@ -356,7 +356,11 @@ func defaultAdminPaymentOrderInvoicePresentation(order *dbent.PaymentOrder) serv
 // AdminProcessRefundRequest is the request body for admin refund processing.
 type AdminProcessRefundRequest struct {
 	QuoteRevision string `json:"quote_revision" binding:"required"`
-	Reason        string `json:"reason"`
+	ReasonCode    string `json:"reason_code"`
+	ReasonDetail  string `json:"reason_detail"`
+	// Reason remains accepted for older admin clients. The service normalizes it
+	// as an "other" reason with the supplied text as its detail.
+	Reason string `json:"reason"`
 }
 
 // GetRefundReview returns the current server-calculated cash amount and the
@@ -396,7 +400,11 @@ func (h *PaymentHandler) ProcessRefund(c *gin.Context) {
 		return
 	}
 
-	plan, err := h.paymentService.PrepareReviewedRefund(c.Request.Context(), orderID, req.QuoteRevision, req.Reason)
+	plan, err := h.paymentService.PrepareReviewedRefundRequest(c.Request.Context(), orderID, req.QuoteRevision, service.RefundReasonInput{
+		Code:         req.ReasonCode,
+		Detail:       req.ReasonDetail,
+		LegacyReason: req.Reason,
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -442,45 +450,62 @@ func (h *PaymentHandler) ListPlans(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	groupIDs := make([]int64, 0, len(plans))
+	for _, plan := range plans {
+		if plan != nil {
+			groupIDs = append(groupIDs, plan.GroupID)
+		}
+	}
+	tierPolicies, err := h.configService.ResetCardTierPoliciesByGroup(c.Request.Context(), groupIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	groupInfo := h.configService.GetGroupInfoMap(c.Request.Context(), plans)
-	response.Success(c, adminSubscriptionPlansForResponse(plans, groupInfo))
+	response.Success(c, adminSubscriptionPlansForResponse(plans, groupInfo, tierPolicies))
 }
 
 type AdminSubscriptionPlanResult struct {
-	ID              int64                    `json:"id"`
-	GroupID         int64                    `json:"group_id"`
-	GroupPlatform   string                   `json:"group_platform,omitempty"`
-	GroupName       string                   `json:"group_name,omitempty"`
-	RateMultiplier  float64                  `json:"rate_multiplier,omitempty"`
-	DailyLimitUSD   *float64                 `json:"daily_limit_usd,omitempty"`
-	WeeklyLimitUSD  *float64                 `json:"weekly_limit_usd,omitempty"`
-	MonthlyLimitUSD *float64                 `json:"monthly_limit_usd,omitempty"`
-	ModelScopes     []string                 `json:"supported_model_scopes,omitempty"`
-	Name            string                   `json:"name"`
-	Description     string                   `json:"description"`
-	Price           float64                  `json:"price"`
-	OriginalPrice   *float64                 `json:"original_price,omitempty"`
-	Currency        string                   `json:"currency,omitempty"`
-	ValidityDays    int                      `json:"validity_days"`
-	ValidityUnit    string                   `json:"validity_unit"`
-	Features        string                   `json:"features"`
-	ProductName     string                   `json:"product_name"`
-	Entitlements    service.PlanEntitlements `json:"entitlements"`
-	DiscountPercent float64                  `json:"discount_percent"`
-	PeriodLabel     string                   `json:"period_label"`
-	ForSale         bool                     `json:"for_sale"`
-	SortOrder       int                      `json:"sort_order"`
-	CreatedAt       time.Time                `json:"created_at,omitempty"`
-	UpdatedAt       time.Time                `json:"updated_at,omitempty"`
+	ID              int64                                    `json:"id"`
+	GroupID         int64                                    `json:"group_id"`
+	GroupPlatform   string                                   `json:"group_platform,omitempty"`
+	GroupName       string                                   `json:"group_name,omitempty"`
+	RateMultiplier  float64                                  `json:"rate_multiplier,omitempty"`
+	DailyLimitUSD   *float64                                 `json:"daily_limit_usd,omitempty"`
+	WeeklyLimitUSD  *float64                                 `json:"weekly_limit_usd,omitempty"`
+	MonthlyLimitUSD *float64                                 `json:"monthly_limit_usd,omitempty"`
+	ModelScopes     []string                                 `json:"supported_model_scopes,omitempty"`
+	Name            string                                   `json:"name"`
+	Description     string                                   `json:"description"`
+	Price           float64                                  `json:"price"`
+	OriginalPrice   *float64                                 `json:"original_price,omitempty"`
+	Currency        string                                   `json:"currency,omitempty"`
+	ValidityDays    int                                      `json:"validity_days"`
+	ValidityUnit    string                                   `json:"validity_unit"`
+	Features        string                                   `json:"features"`
+	ProductName     string                                   `json:"product_name"`
+	Entitlements    service.PlanEntitlements                 `json:"entitlements"`
+	DiscountPercent float64                                  `json:"discount_percent"`
+	PeriodLabel     string                                   `json:"period_label"`
+	ForSale         bool                                     `json:"for_sale"`
+	SortOrder       int                                      `json:"sort_order"`
+	CreatedAt       time.Time                                `json:"created_at,omitempty"`
+	UpdatedAt       time.Time                                `json:"updated_at,omitempty"`
+	ResetCardTier   *service.SubscriptionResetCardTierPolicy `json:"reset_card_tier,omitempty"`
 }
 
-func adminSubscriptionPlansForResponse(plans []*dbent.SubscriptionPlan, groupInfo map[int64]service.PlanGroupInfo) []AdminSubscriptionPlanResult {
+func adminSubscriptionPlansForResponse(plans []*dbent.SubscriptionPlan, groupInfo map[int64]service.PlanGroupInfo, tierPolicies map[int64]service.SubscriptionResetCardTierPolicy) []AdminSubscriptionPlanResult {
 	result := make([]AdminSubscriptionPlanResult, 0, len(plans))
 	for _, p := range plans {
 		if p == nil {
 			continue
 		}
 		gi := groupInfo[p.GroupID]
+		var tierPolicy *service.SubscriptionResetCardTierPolicy
+		if policy, ok := tierPolicies[p.GroupID]; ok {
+			copyPolicy := policy
+			tierPolicy = &copyPolicy
+		}
 		result = append(result, AdminSubscriptionPlanResult{
 			ID:              int64(p.ID),
 			GroupID:         p.GroupID,
@@ -507,9 +532,52 @@ func adminSubscriptionPlansForResponse(plans []*dbent.SubscriptionPlan, groupInf
 			SortOrder:       p.SortOrder,
 			CreatedAt:       p.CreatedAt,
 			UpdatedAt:       p.UpdatedAt,
+			ResetCardTier:   tierPolicy,
 		})
 	}
 	return result
+}
+
+// ListResetCardTierPolicies returns the explicit group-to-tier policy used by
+// reset-card eligibility. Purchase rules remain private to the checkout path.
+// GET /api/v1/admin/payment/reset-card-tiers
+func (h *PaymentHandler) ListResetCardTierPolicies(c *gin.Context) {
+	policies, err := h.configService.ListResetCardTierPolicies(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, policies)
+}
+
+type UpsertResetCardTierPolicyRequest struct {
+	FamilyKey string `json:"family_key" binding:"required"`
+	TierRank  int    `json:"tier_rank" binding:"required,min=1"`
+}
+
+// UpsertResetCardTierPolicy configures one subscription group's stable card
+// family and rank. The service verifies the group type before persistence.
+// PUT /api/v1/admin/payment/reset-card-tiers/:group_id
+func (h *PaymentHandler) UpsertResetCardTierPolicy(c *gin.Context) {
+	groupID, ok := parseIDParam(c, "group_id")
+	if !ok {
+		return
+	}
+	var req UpsertResetCardTierPolicyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	policy, err := h.configService.UpsertResetCardTierPolicy(c.Request.Context(), service.UpsertSubscriptionResetCardTierPolicyInput{
+		GroupID:   groupID,
+		FamilyKey: req.FamilyKey,
+		TierRank:  req.TierRank,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, policy)
 }
 
 // CreatePlan creates a new subscription plan.

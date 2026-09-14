@@ -14,8 +14,12 @@ describe('admin payment refund API', () => {
     post.mockResolvedValue({ data: {} })
   })
 
-  it('loads a refund review and submits only its quote revision and reason', async () => {
-    const request = { quote_revision: 'review-51', reason: 'Customer cancellation' }
+  it('loads a refund review and submits its quote revision and structured reason', async () => {
+    const request = {
+      quote_revision: 'review-51',
+      reason_code: 'customer_request' as const,
+      reason_detail: 'Customer cancellation',
+    }
 
     await adminPaymentAPI.getRefundReview(51)
     await adminPaymentAPI.refundOrder(51, request)

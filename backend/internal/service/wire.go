@@ -969,6 +969,7 @@ var ProviderSet = wire.NewSet(
 	ProvidePaymentService,
 	ProvidePaymentRefundReconciliationService,
 	ProvidePaymentOrderExpiryService,
+	ProvidePaymentMonthlyResetCardDeliveryService,
 	ProvideInvoiceNotificationService,
 	ProvideFeishuPaymentIncidentService,
 	ProvideBalanceNotifyService,
@@ -1033,6 +1034,16 @@ func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, 
 // ProvidePaymentOrderExpiryService creates and starts PaymentOrderExpiryService.
 func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache LeaderLockCache, db *sql.DB) *PaymentOrderExpiryService {
 	svc := NewPaymentOrderExpiryService(paymentSvc, 60*time.Second)
+	svc.SetLeaderLock(lockCache, db)
+	svc.Start()
+	return svc
+}
+
+// ProvidePaymentMonthlyResetCardDeliveryService starts the independently
+// leased schedule issuer. Its private rollout switch is checked on every run,
+// so constructing it is safe before an operator enables the feature.
+func ProvidePaymentMonthlyResetCardDeliveryService(entClient *dbent.Client, configService *PaymentConfigService, lockCache LeaderLockCache, db *sql.DB) *PaymentMonthlyResetCardDeliveryService {
+	svc := NewPaymentMonthlyResetCardDeliveryService(entClient, configService, paymentMonthlyResetCardDeliveryInterval)
 	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc

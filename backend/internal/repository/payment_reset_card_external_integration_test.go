@@ -337,8 +337,8 @@ func TestResetCardPaymentGrantUniqueIndexRejectsDuplicateOrderGrant(t *testing.T
 	require.NoError(t, err)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	insert := `INSERT INTO subscription_reset_grants
-		(subscription_id,user_id,group_id,quantity,used_count,expires_at,payment_order_id,created_at,updated_at)
-		VALUES ($1,$2,$3,1,0,$4,$5,$6,$6)`
+		(subscription_id,user_id,group_id,quantity,used_count,expires_at,payment_order_id,tier_snapshot_resolved,created_at,updated_at)
+		VALUES ($1,$2,$3,1,0,$4,$5,TRUE,$6,$6)`
 	_, err = integrationDB.ExecContext(ctx, insert, fixture.subscription.ID, fixture.user.ID, fixture.group.ID, fixture.subscription.ExpiresAt, response.OrderID, now)
 	require.NoError(t, err)
 	_, err = integrationDB.ExecContext(ctx, insert, fixture.subscription.ID, fixture.user.ID, fixture.group.ID, fixture.subscription.ExpiresAt, response.OrderID, now.Add(time.Microsecond))

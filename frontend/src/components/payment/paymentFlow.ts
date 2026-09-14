@@ -80,6 +80,7 @@ export interface ResetCardCheckoutAttemptInput {
   monthlyPrice: number
   expiresAt: string
   paymentType: string
+  tierRevision?: string
 }
 
 export interface ResetCardCheckoutAttempt {
@@ -118,6 +119,7 @@ export interface BuildCreateOrderPayloadInput {
   orderType: OrderType
   planId?: number
   subscriptionId?: number
+  resetCardTierRevision?: string
   origin?: string
   isMobile: boolean
   isWechatBrowser: boolean
@@ -189,6 +191,10 @@ export function buildCreateOrderPayload(input: BuildCreateOrderPayloadInput): Cr
   }
   if (input.subscriptionId) {
     payload.subscription_id = input.subscriptionId
+  }
+  const tierRevision = String(input.resetCardTierRevision || '').trim()
+  if (tierRevision) {
+    payload.reset_card_tier_revision = tierRevision
   }
   if (normalizedOrigin) {
     payload.return_url = `${normalizedOrigin}/payment/result`
@@ -493,6 +499,7 @@ export function createResetCardCheckoutFingerprint(input: ResetCardCheckoutAttem
     monthlyPrice: fingerprintMoney(input.monthlyPrice),
     expiresAt: String(input.expiresAt || ''),
     paymentType: String(input.paymentType || '').trim(),
+    tierRevision: String(input.tierRevision || '').trim(),
   })
 }
 

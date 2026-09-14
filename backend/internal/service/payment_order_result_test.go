@@ -9,6 +9,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShouldUseAlipayMobilePrecreate(t *testing.T) {
@@ -42,6 +43,7 @@ func TestShouldUseAlipayMobilePrecreate(t *testing.T) {
 
 func TestBuildPaymentResetCardProductSnapshot(t *testing.T) {
 	plan := &dbent.SubscriptionPlan{ID: 7, GroupID: 4, Name: "Plus monthly", Currency: "CNY"}
+	sourcePlanID := int64(7)
 	snapshot := buildPaymentResetCardProductSnapshot(&resetCardOrderSnapshotSource{
 		plan:                plan,
 		subscriptionID:      42,
@@ -50,6 +52,11 @@ func TestBuildPaymentResetCardProductSnapshot(t *testing.T) {
 		price:               40,
 		subscriptionExpires: time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC),
 		idempotencyKeyHash:  strings.Repeat("a", 64),
+		tierSnapshot: &SubscriptionResetCardTierSnapshot{
+			FamilyKey:    "gpt",
+			TierRank:     2,
+			SourcePlanID: &sourcePlanID,
+		},
 	}, 40)
 	if snapshot["kind"] != "reset_card" || snapshot["subscription_id"] != int64(42) {
 		t.Fatalf("unexpected reset-card snapshot identity: %#v", snapshot)
@@ -60,6 +67,7 @@ func TestBuildPaymentResetCardProductSnapshot(t *testing.T) {
 	if snapshot["monthly_price"] != float64(120) || snapshot["idempotency_key_sha256"] != strings.Repeat("a", 64) {
 		t.Fatalf("unexpected reset-card snapshot evidence: %#v", snapshot)
 	}
+	require.Equal(t, map[string]any{"family_key": "gpt", "tier_rank": 2, "source_plan_id": int64(7)}, snapshot["reset_card_tier"])
 }
 
 func TestIsOfficialAlipayProviderInstance(t *testing.T) {

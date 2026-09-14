@@ -942,6 +942,7 @@ describe('PaymentView payment recovery', () => {
         monthly_price: 120,
         price: 40,
         expires_at: '2099-01-01T00:00:00Z',
+        reset_card_tier_revision: 'v1:3:gpt:2:123',
       },
     })
     await flushPromises()
@@ -951,6 +952,7 @@ describe('PaymentView payment recovery', () => {
       order_type: 'reset_card',
       plan_id: 7,
       subscription_id: 91,
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
     }), {
       headers: {
         'Idempotency-Key': expect.stringMatching(/^reset-card-payment-/),
@@ -1483,6 +1485,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
       order_type: 'reset_card',
       plan_id: '7',
       subscription_id: '91',
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
     }
     window.localStorage.setItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY, JSON.stringify({
       fingerprint: 'reset-card-quote-fingerprint',
@@ -1516,6 +1519,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
       order_type: 'reset_card',
       plan_id: 7,
       subscription_id: 91,
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
       wechat_resume_token: resumeToken,
     }), {
       headers: {
@@ -1537,6 +1541,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
       order_type: 'reset_card',
       plan_id: '7',
       subscription_id: '91',
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
     }
     window.localStorage.setItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY, JSON.stringify({
       fingerprint: 'reset-card-quote-fingerprint',
@@ -1577,6 +1582,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
       order_type: 'reset_card',
       plan_id: 7,
       subscription_id: 91,
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
       wechat_resume_token: resumeToken,
     }), idempotencyHeaders)
     expect(createOrder).toHaveBeenNthCalledWith(2, expect.objectContaining({
@@ -1584,6 +1590,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
       order_type: 'reset_card',
       plan_id: 7,
       subscription_id: 91,
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
       is_mobile: false,
       payment_source: 'hosted_redirect',
     }), idempotencyHeaders)

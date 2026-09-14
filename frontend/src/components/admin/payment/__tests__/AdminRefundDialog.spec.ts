@@ -79,9 +79,28 @@ describe('AdminRefundDialog', () => {
     expect(wrapper.find('#deduct-balance').exists()).toBe(false)
     expect(wrapper.find('#force-refund').exists()).toBe(false)
 
-    await wrapper.find('#refund-reason').setValue('Customer cancellation')
+    await wrapper.find('#refund-reason-detail').setValue('Customer cancellation')
     await wrapper.find('form').trigger('submit')
-    expect(wrapper.emitted('confirm')?.[0]).toEqual([{ reason: 'Customer cancellation' }])
+    expect(wrapper.emitted('confirm')?.[0]).toEqual([{
+      reason_code: 'customer_request',
+      reason_detail: 'Customer cancellation',
+    }])
+  })
+
+  it('requires details when the administrator selects Other', async () => {
+    const wrapper = mountDialog(balanceReview())
+
+    await wrapper.find('#refund-reason-code').setValue('other')
+    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('confirm')).toBeUndefined()
+
+    await wrapper.find('#refund-reason-detail').setValue('  account\nverification issue  ')
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('confirm')?.[0]).toEqual([{
+      reason_code: 'other',
+      reason_detail: 'account\nverification issue',
+    }])
   })
 
   it('renders subscription time and the new expiry from the authoritative quote', () => {
@@ -113,15 +132,22 @@ describe('AdminRefundDialog', () => {
       can_refund: false,
       requires_manual_review: true,
       quote_revision: undefined,
+      balance: undefined,
+      subscription: undefined,
+      default_refund_amount: 0,
+      max_refund_amount: 0,
+      entitlement_amount: 0,
       reason_code: 'NON_REVERSIBLE_ENTITLEMENT',
       reason: 'Manual entitlement rollback is required.',
     }))
 
     expect(wrapper.text()).toContain('payment.admin.refundManualReviewRequired')
     expect(wrapper.text()).toContain('Manual entitlement rollback is required.')
+    expect(wrapper.text()).toContain('payment.admin.refundAmountPendingManualReview')
+    expect(wrapper.text()).not.toContain('¥0.00')
     expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
 
-    await wrapper.find('#refund-reason').setValue('Customer cancellation')
+    await wrapper.find('#refund-reason-detail').setValue('Customer cancellation')
     await wrapper.find('form').trigger('submit')
     expect(wrapper.emitted('confirm')).toBeUndefined()
   })

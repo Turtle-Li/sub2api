@@ -160,6 +160,9 @@ func TestUnifiedRefundIntegerAmounts(t *testing.T) {
 
 func TestUnifiedRefundRetriesPersistedRequestAfterLostResponse(t *testing.T) {
 	svc, o, p := newUnifiedRefundFixture(t, newUnifiedRefundSQLiteClient(t), payment.TypeWxpay)
+	p.ReasonCode = refundReasonCodeServiceError
+	p.ReasonSummary = "gateway timeout"
+	p.Reason = "service_error: gateway timeout"
 	var requests []string
 	var keys []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -197,9 +200,24 @@ func TestUnifiedRefundRetriesPersistedRequestAfterLostResponse(t *testing.T) {
 	require.Len(t, requests, 2)
 	require.Equal(t, requests[0], requests[1])
 	require.Equal(t, keys[0], keys[1])
+	for _, raw := range requests {
+		var request struct {
+			ReasonCode    string `json:"reason_code"`
+			ReasonSummary string `json:"reason_summary"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(raw), &request))
+		require.Equal(t, refundReasonCodeServiceError, request.ReasonCode)
+		require.Equal(t, "gateway timeout", request.ReasonSummary)
+	}
 	a, err := loadUnifiedRefundAttempt(context.Background(), svc.entClient, o.ID, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, a.RefundRequestID)
+	require.Equal(t, refundReasonCodeServiceError, a.ReasonCode)
+	require.Equal(t, "gateway timeout", a.ReasonSummary)
+	persistedOrder, err := svc.entClient.PaymentOrder.Get(context.Background(), o.ID)
+	require.NoError(t, err)
+	require.NotNil(t, persistedOrder.RefundReason)
+	require.Equal(t, "service_error: gateway timeout", *persistedOrder.RefundReason)
 	assertUnifiedRefundBalance(t, svc, o, OrderStatusRefundPending, 10)
 }
 

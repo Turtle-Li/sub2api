@@ -203,7 +203,7 @@ export default {
     invoiceRequests: '开票申请',
     paymentDashboard: '支付概览',
     paymentConfig: '支付配置',
-    paymentPlans: '订阅套餐',
+    paymentPlans: '商品配置',
     channelManagement: '渠道管理',
     channelPricing: '渠道定价',
     channelMonitor: '渠道监控',

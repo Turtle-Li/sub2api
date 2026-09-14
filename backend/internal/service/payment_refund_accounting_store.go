@@ -296,14 +296,18 @@ func insertPaymentSubscriptionGrant(ctx context.Context, client *dbent.Client, o
 	if err != nil {
 		return err
 	}
+	resetCardCommitment, err := entitlements.ResetCardTotalCommitment()
+	if err != nil {
+		return err
+	}
 	_, err = client.ExecContext(ctx, `INSERT INTO payment_subscription_grants
 		(payment_order_id, subscription_id, user_id, group_id, term_start_at,
 		 original_term_end_at, current_term_end_at, balance_bonus,
 		 reset_card_count, concurrency_target)
 		VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9)
-		ON CONFLICT (payment_order_id) DO NOTHING`, order.ID, sub.ID, order.UserID,
+	ON CONFLICT (payment_order_id) DO NOTHING`, order.ID, sub.ID, order.UserID,
 		sub.GroupID, termStart, termEnd, entitlements.BalanceBonus,
-		entitlements.ResetCardCount, entitlements.Concurrency)
+		resetCardCommitment, entitlements.Concurrency)
 	return err
 }
 

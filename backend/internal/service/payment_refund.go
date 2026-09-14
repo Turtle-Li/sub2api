@@ -545,9 +545,14 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	if rr == "" {
 		rr = fmt.Sprintf("refund order:%d", o.ID)
 	}
+	normalizedReason, err := normalizeRefundReason(RefundReasonInput{LegacyReason: rr})
+	if err != nil {
+		return nil, nil, err
+	}
 	p := &RefundPlan{
 		OrderID: oid, Order: o, RefundAmount: amt, SettledRefundAmount: settled,
-		RemainingRefundable: remaining, GatewayAmount: ga, Reason: rr, Force: force,
+		RemainingRefundable: remaining, GatewayAmount: ga, Reason: normalizedReason.AuditText,
+		ReasonCode: normalizedReason.Code, ReasonSummary: normalizedReason.Summary, Force: force,
 		DeductBalance: deduct, DeductionType: payment.DeductionTypeNone,
 	}
 	if deduct {

@@ -372,6 +372,24 @@ describe('buildCreateOrderPayload', () => {
     })
   })
 
+  it('carries an opaque reset-card tier revision into order creation', () => {
+    expect(buildCreateOrderPayload({
+      amount: 40,
+      paymentType: 'wxpay',
+      orderType: 'reset_card',
+      planId: 7,
+      subscriptionId: 91,
+      resetCardTierRevision: 'v1:3:gpt:2:123',
+      isMobile: false,
+      isWechatBrowser: false,
+    })).toMatchObject({
+      order_type: 'reset_card',
+      plan_id: 7,
+      subscription_id: 91,
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
+    })
+  })
+
   it('passes is_mobile: false when forceQRCode is enabled for alipay', () => {
     expect(buildCreateOrderPayload({
       amount: 50,
@@ -634,6 +652,8 @@ describe('reset-card checkout attempts', () => {
     expect(changedQuote.idempotencyKey).not.toBe(first.idempotencyKey)
     expect(changedQuote.fingerprint).not.toBe(first.fingerprint)
     expect(createResetCardCheckoutFingerprint({ ...attemptInput, paymentType: 'alipay' }))
+      .not.toBe(first.fingerprint)
+    expect(createResetCardCheckoutFingerprint({ ...attemptInput, tierRevision: 'v1:3:gpt:2:124' }))
       .not.toBe(first.fingerprint)
   })
 
