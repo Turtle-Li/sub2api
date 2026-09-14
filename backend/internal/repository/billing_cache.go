@@ -15,8 +15,15 @@ import (
 )
 
 const (
-	billingBalanceKeyPrefix   = "billing:balance:"
-	billingSubKeyPrefix       = "billing:sub:"
+	billingBalanceKeyPrefix = "billing:balance:"
+	// v2 isolates fenced subscription authorization entries from an older
+	// binary's unconditional HSET writes during a rolling release. The
+	// invalidator still deletes the legacy key so a draining process loses its
+	// cached authorization promptly, while new readers never accept a stale
+	// pre-fence value from that key.
+	billingSubKeyPrefix       = "billing:sub:v2:"
+	billingSubLegacyKeyPrefix = "billing:sub:"
+	billingSubFenceKeyPrefix  = "billing:sub:fence:v2:"
 	billingRateLimitKeyPrefix = "apikey:rate:"
 	subCacheInvalidateChannel = "subscription:cache:invalidate"
 	billingCacheTTL           = 5 * time.Minute
@@ -47,6 +54,14 @@ func billingBalanceKey(userID int64) string {
 // billingSubKey generates the Redis key for subscription cache.
 func billingSubKey(userID, groupID int64) string {
 	return fmt.Sprintf("%s%d:%d", billingSubKeyPrefix, userID, groupID)
+}
+
+func legacyBillingSubKey(userID, groupID int64) string {
+	return fmt.Sprintf("%s%d:%d", billingSubLegacyKeyPrefix, userID, groupID)
+}
+
+func billingSubFenceKey(userID, groupID int64) string {
+	return fmt.Sprintf("%s%d:%d", billingSubFenceKeyPrefix, userID, groupID)
 }
 
 const (
@@ -94,6 +109,40 @@ var (
 		redis.call('HINCRBYFLOAT', KEYS[1], 'weekly_usage', cost)
 		redis.call('HINCRBYFLOAT', KEYS[1], 'monthly_usage', cost)
 		redis.call('EXPIRE', KEYS[1], ARGV[2])
+		return 1
+	`)
+
+	// subscriptionCacheInvalidateScript advances a durable Redis generation and
+	// removes both current and legacy cache entries in one command. A cache miss
+	// writer can only populate the v2 key when the generation it observed before
+	// its DB read still matches, fencing out the old-read -> refund -> refill
+	// race.
+	subscriptionCacheInvalidateScript = redis.NewScript(`
+		redis.call('INCR', KEYS[1])
+		redis.call('DEL', KEYS[2], KEYS[3])
+		return 1
+	`)
+
+	// subscriptionCacheSetIfFenceScript atomically checks the observed
+	// generation and writes a complete cache entry. Plain HSET cannot be used
+	// here because an invalidation may otherwise delete first and a delayed DB
+	// reader may re-create an old authorization afterward.
+	subscriptionCacheSetIfFenceScript = redis.NewScript(`
+		local current = redis.call('GET', KEYS[1])
+		if current == false then
+			current = '0'
+		end
+		if current ~= ARGV[1] then
+			return 0
+		end
+		redis.call('HSET', KEYS[2],
+			'status', ARGV[2],
+			'expires_at', ARGV[3],
+			'daily_usage', ARGV[4],
+			'weekly_usage', ARGV[5],
+			'monthly_usage', ARGV[6],
+			'version', ARGV[7])
+		redis.call('EXPIRE', KEYS[2], ARGV[8])
 		return 1
 	`)
 
@@ -244,23 +293,66 @@ func (c *billingCache) SetSubscriptionCache(ctx context.Context, userID, groupID
 	if data == nil {
 		return nil
 	}
-
-	key := billingSubKey(userID, groupID)
-
-	fields := map[string]any{
-		subFieldStatus:       data.Status,
-		subFieldExpiresAt:    data.ExpiresAt.Unix(),
-		subFieldDailyUsage:   data.DailyUsage,
-		subFieldWeeklyUsage:  data.WeeklyUsage,
-		subFieldMonthlyUsage: data.MonthlyUsage,
-		subFieldVersion:      data.Version,
+	fence, err := c.CaptureSubscriptionCacheFence(ctx, userID, groupID)
+	if err != nil {
+		return err
 	}
-
-	pipe := c.rdb.Pipeline()
-	pipe.HSet(ctx, key, fields)
-	pipe.Expire(ctx, key, jitteredTTL())
-	_, err := pipe.Exec(ctx)
+	_, err = c.SetSubscriptionCacheIfFence(ctx, userID, groupID, data, fence)
 	return err
+}
+
+// CaptureSubscriptionCacheFence returns the current generation for a single
+// subscription authorization key. A missing fence is generation zero.
+func (c *billingCache) CaptureSubscriptionCacheFence(ctx context.Context, userID, groupID int64) (int64, error) {
+	raw, err := c.rdb.Get(ctx, billingSubFenceKey(userID, groupID)).Result()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	fence, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || fence < 0 {
+		return 0, fmt.Errorf("invalid subscription cache fence: %q", raw)
+	}
+	return fence, nil
+}
+
+func (c *billingCache) SubscriptionCacheFenceCurrent(ctx context.Context, userID, groupID, fence int64) (bool, error) {
+	current, err := c.CaptureSubscriptionCacheFence(ctx, userID, groupID)
+	if err != nil {
+		return false, err
+	}
+	return current == fence, nil
+}
+
+// SetSubscriptionCacheIfFence conditionally writes the v2 cache entry. A
+// false result means an invalidation won the race; callers must reload from
+// the authoritative subscription row instead of writing their old snapshot.
+func (c *billingCache) SetSubscriptionCacheIfFence(
+	ctx context.Context,
+	userID, groupID int64,
+	data *service.SubscriptionCacheData,
+	fence int64,
+) (bool, error) {
+	if data == nil || fence < 0 {
+		return false, nil
+	}
+	result, err := subscriptionCacheSetIfFenceScript.Run(ctx, c.rdb,
+		[]string{billingSubFenceKey(userID, groupID), billingSubKey(userID, groupID)},
+		fence,
+		data.Status,
+		data.ExpiresAt.Unix(),
+		data.DailyUsage,
+		data.WeeklyUsage,
+		data.MonthlyUsage,
+		data.Version,
+		int(jitteredTTL().Seconds()),
+	).Int64()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
 }
 
 func (c *billingCache) UpdateSubscriptionUsage(ctx context.Context, userID, groupID int64, cost float64) error {
@@ -274,8 +366,10 @@ func (c *billingCache) UpdateSubscriptionUsage(ctx context.Context, userID, grou
 }
 
 func (c *billingCache) InvalidateSubscriptionCache(ctx context.Context, userID, groupID int64) error {
-	key := billingSubKey(userID, groupID)
-	return c.rdb.Del(ctx, key).Err()
+	_, err := subscriptionCacheInvalidateScript.Run(ctx, c.rdb,
+		[]string{billingSubFenceKey(userID, groupID), billingSubKey(userID, groupID), legacyBillingSubKey(userID, groupID)},
+	).Result()
+	return err
 }
 
 func (c *billingCache) PublishSubscriptionCacheInvalidation(ctx context.Context, cacheKey string) error {

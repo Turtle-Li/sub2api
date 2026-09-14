@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"errors"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -23,24 +25,26 @@ const (
 // HealthService owns process-local traffic admission and dependency probes for
 // the authenticated internal health contract. It never calls model providers.
 type HealthService struct {
-	db                *sql.DB
-	redis             *redis.Client
-	tokenFile         string
-	trafficStateFile  string
-	dependencyTimeout time.Duration
-	processAccepting  atomic.Bool
-	inFlightRequests  atomic.Int64
+	db                   *sql.DB
+	redis                *redis.Client
+	tokenFile            string
+	trafficStateFile     string
+	dependencyTimeout    time.Duration
+	refundReconciliation *service.PaymentRefundReconciliationService
+	processAccepting     atomic.Bool
+	inFlightRequests     atomic.Int64
 }
 
 // ProvideHealthService wires the already-existing PostgreSQL and Redis pools
 // into health checks. Token and traffic files are injected by deployment.
-func ProvideHealthService(db *sql.DB, redisClient *redis.Client) *HealthService {
+func ProvideHealthService(db *sql.DB, redisClient *redis.Client, refundReconciliation *service.PaymentRefundReconciliationService) *HealthService {
 	service := newHealthService(
 		db,
 		redisClient,
 		strings.TrimSpace(os.Getenv(internalHealthTokenFileEnv)),
 		strings.TrimSpace(os.Getenv(trafficStateFileEnv)),
 		defaultDependencyTimeout,
+		refundReconciliation,
 	)
 	service.processAccepting.Store(true)
 	return service
@@ -52,16 +56,31 @@ func newHealthService(
 	tokenFile string,
 	trafficStateFile string,
 	dependencyTimeout time.Duration,
+	refundReconciliation ...*service.PaymentRefundReconciliationService,
 ) *HealthService {
+	var reconciliation *service.PaymentRefundReconciliationService
+	if len(refundReconciliation) > 0 {
+		reconciliation = refundReconciliation[0]
+	}
 	service := &HealthService{
-		db:                db,
-		redis:             redisClient,
-		tokenFile:         tokenFile,
-		trafficStateFile:  trafficStateFile,
-		dependencyTimeout: dependencyTimeout,
+		db:                   db,
+		redis:                redisClient,
+		tokenFile:            tokenFile,
+		trafficStateFile:     trafficStateFile,
+		dependencyTimeout:    dependencyTimeout,
+		refundReconciliation: reconciliation,
 	}
 	service.processAccepting.Store(true)
 	return service
+}
+
+// RefundRollbackReadiness supplies the monitor-token-only release gate. A
+// missing worker or unavailable accounting store fails closed.
+func (s *HealthService) RefundRollbackReadiness(ctx context.Context) (service.PaymentRefundRollbackReadiness, error) {
+	if s == nil || s.refundReconciliation == nil {
+		return service.PaymentRefundRollbackReadiness{EntitlementReservedReviewedPendingCount: -1}, errors.New("payment refund reconciliation unavailable")
+	}
+	return s.refundReconciliation.RefundRollbackReadiness(ctx)
 }
 
 // SetAccepting changes only this process generation. A configured deployment

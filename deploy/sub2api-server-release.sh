@@ -68,6 +68,17 @@ REAL_REQUEST_PROBE_KEY_FILE="${SUB2API_RELEASE_REAL_REQUEST_PROBE_KEY_FILE:-${AP
 REAL_REQUEST_PROBE_MODEL="${SUB2API_RELEASE_REAL_REQUEST_PROBE_MODEL:-gpt-5.6-sol}"
 NODE_STATE_DIR="${SUB2API_NODE_STATE_DIR:-/var/lib/sub2api/runtime}"
 LOCAL_RELEASE_STATE_FILE_HOST="${SUB2API_LOCAL_RELEASE_STATE_FILE_HOST:-${NODE_STATE_DIR}/local-release.env}"
+# The traffic-state file is a single-file bind mount. During a post-switch
+# rollback it is updated in place while the shared maintenance lock is held so
+# the candidate stops admitting requests before its refund reservation state is
+# inspected. Never replace it with rename(2): already-running containers would
+# remain bound to the old inode.
+RUNTIME_TRAFFIC_STATE_FILE="${SUB2API_TRAFFIC_STATE_FILE_HOST:-${NODE_STATE_DIR}/traffic-state}"
+REFUND_ROLLBACK_READINESS_PATH="/internal/refund-rollback-readiness"
+# Set only after the authenticated candidate gate passes. It lets later
+# rollback failures restore the admission state only while Caddy still proves
+# that the candidate remains the serving generation.
+ROLLBACK_GATE_PRIOR_TRAFFIC_STATE=""
 # Keep an explicitly blank value invalid. An unset setting preserves the
 # deployed local-dependency release behavior.
 DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE-local}"
@@ -261,7 +272,7 @@ warn_image_route_contract_views() {
   fi
 }
 
-for command_name in docker curl flock grep awk perl systemd-run id mkdir stat; do
+for command_name in docker curl flock grep awk perl systemd-run id mkdir stat sleep tr chmod; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RELEASE_MIN_FREE_BYTES "$MIN_FREE_BYTES"
@@ -452,40 +463,240 @@ if ! verify_image_route_contract_views; then
   die "current Caddy image route contract is invalid; refusing to start a release"
 fi
 
-caddy_config_points_uniquely_to_old() {
+caddy_config_points_uniquely_to_upstream() {
   local caddy_config="$1"
+  local expected_upstream="$2"
   local upstreams
   local upstream_count
 
   upstreams="$(printf '%s\n' "$caddy_config" | grep -oE 'sub2api(-(blue|green))?:8080' | sort -u || true)"
   upstream_count="$(printf '%s\n' "$upstreams" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-  [ "$upstream_count" -eq 1 ] && [ "$upstreams" = "$OLD_UPSTREAM" ]
+  [ "$upstream_count" -eq 1 ] && [ "$upstreams" = "$expected_upstream" ]
 }
 
-caddy_views_point_uniquely_to_old() {
+caddy_views_point_uniquely_to_upstream() {
+  local expected_upstream="$1"
   local active_config
   local caddy_config
   local host_config
   local startup_config
 
   if ! host_config="$(cat "${APP_DIR}/Caddyfile")"; then
-    log "WARNING: could not read host Caddyfile while checking ${OLD_UPSTREAM}" >&2
+    log "WARNING: could not read host Caddyfile while checking ${expected_upstream}" >&2
     return 1
   fi
   if ! startup_config="$(docker exec \
     -e "CADDY_CHECK_PATH=${DRAIN_CADDY_CONFIG_PATH}" \
     "$CADDY_CONTAINER" sh -c 'cat "$CADDY_CHECK_PATH"')"; then
-    log "WARNING: could not read Caddy startup configuration while checking ${OLD_UPSTREAM}" >&2
+    log "WARNING: could not read Caddy startup configuration while checking ${expected_upstream}" >&2
     return 1
   fi
   if ! active_config="$(docker exec "$CADDY_CONTAINER" sh -c 'wget -Y off -qO- http://127.0.0.1:2019/config/ 2>/dev/null || curl --noproxy "*" -fsS http://127.0.0.1:2019/config/')"; then
-    log "WARNING: could not read active Caddy configuration while checking ${OLD_UPSTREAM}" >&2
+    log "WARNING: could not read active Caddy configuration while checking ${expected_upstream}" >&2
     return 1
   fi
 
   for caddy_config in "$host_config" "$startup_config" "$active_config"; do
-    caddy_config_points_uniquely_to_old "$caddy_config" || return 1
+    caddy_config_points_uniquely_to_upstream "$caddy_config" "$expected_upstream" || return 1
   done
+  return 0
+}
+
+caddy_views_point_uniquely_to_old() {
+  caddy_views_point_uniquely_to_upstream "$OLD_UPSTREAM"
+}
+
+runtime_traffic_state_file_metadata() {
+  stat -c '%u:%g:%a' "$RUNTIME_TRAFFIC_STATE_FILE" 2>/dev/null \
+    || stat -f '%u:%g:%Lp' "$RUNTIME_TRAFFIC_STATE_FILE"
+}
+
+runtime_traffic_state_file_is_safe() {
+  local metadata
+
+  [ "$DUAL_NODE_RUNTIME_ENABLED" = true ] || {
+    log "ERROR: post-switch rollback requires dual-node runtime traffic admission" >&2
+    return 1
+  }
+  case "$RUNTIME_TRAFFIC_STATE_FILE" in
+    /*) ;;
+    *)
+      log "ERROR: runtime traffic-state path must be absolute" >&2
+      return 1
+      ;;
+  esac
+  [ -f "$RUNTIME_TRAFFIC_STATE_FILE" ] && [ ! -L "$RUNTIME_TRAFFIC_STATE_FILE" ] || {
+    log "ERROR: runtime traffic-state file is missing or unsafe: ${RUNTIME_TRAFFIC_STATE_FILE}" >&2
+    return 1
+  }
+  metadata="$(runtime_traffic_state_file_metadata)" || {
+    log "ERROR: could not inspect runtime traffic-state file: ${RUNTIME_TRAFFIC_STATE_FILE}" >&2
+    return 1
+  }
+  if [ "$(id -u)" -eq 0 ]; then
+    [ "$metadata" = '0:0:644' ] || {
+      log "ERROR: runtime traffic-state file has unexpected metadata: ${RUNTIME_TRAFFIC_STATE_FILE}" >&2
+      return 1
+    }
+  else
+    # Hermetic deployment tests run as the developer user. Production reaches
+    # this branch only through the root-owned release receiver.
+    [ "${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" = 1 ] \
+      && [ "${metadata##*:}" = 644 ] || {
+      log "ERROR: runtime traffic-state file is not available to the release boundary" >&2
+      return 1
+    }
+  fi
+  return 0
+}
+
+read_runtime_traffic_state() {
+  local state
+
+  runtime_traffic_state_file_is_safe || return 1
+  state="$(tr -d '\r\n' <"$RUNTIME_TRAFFIC_STATE_FILE")" || return 1
+  case "$state" in
+    accepting|draining)
+      printf '%s\n' "$state"
+      ;;
+    *)
+      log "ERROR: runtime traffic-state file has an invalid value" >&2
+      return 1
+      ;;
+  esac
+}
+
+write_runtime_traffic_state() {
+  local state="$1"
+
+  case "$state" in
+    accepting|draining) ;;
+    *)
+      log "ERROR: refusing unsupported runtime traffic state: ${state}" >&2
+      return 1
+      ;;
+  esac
+  runtime_traffic_state_file_is_safe || return 1
+  # Keep the inode stable for the bind-mounted candidate. The maintenance lock
+  # held by this coordinator serializes this with node-state transitions.
+  printf '%s\n' "$state" >"$RUNTIME_TRAFFIC_STATE_FILE" \
+    && chmod 644 "$RUNTIME_TRAFFIC_STATE_FILE"
+}
+
+candidate_internal_get_2xx() {
+  local path="$1"
+  local response
+
+  case "$path" in
+    /internal/livez|"$REFUND_ROLLBACK_READINESS_PATH") ;;
+    *)
+      log "ERROR: refusing unsupported candidate internal probe path" >&2
+      return 1
+      ;;
+  esac
+  # The canonical production image is Alpine/BusyBox and does not install
+  # curl. BusyBox wget returns non-zero for an HTTP non-2xx response, so this
+  # request fails closed for both an unavailable candidate and a blocked
+  # readiness check. The token remains inside the candidate namespace.
+  if ! response="$(docker exec \
+    -e "SUB2API_ROLLBACK_GATE_PATH=${path}" \
+    "$NEW_CONTAINER" \
+    sh -ceu '
+      token="$(cat /run/sub2api-runtime/health-token)"
+      [ -n "$token" ]
+      wget -Y off -q -T 10 -O - \
+        --header="X-Monitor-Token: ${token}" \
+        "http://127.0.0.1:8080${SUB2API_ROLLBACK_GATE_PATH}"
+    ')"; then
+    log "ERROR: candidate internal rollback probe is unreachable or rejected: ${path}" >&2
+    return 1
+  fi
+  printf '%s' "$response"
+}
+
+candidate_in_flight_requests() {
+  local response
+  local in_flight
+
+  response="$(candidate_internal_get_2xx /internal/livez)" || return 1
+  in_flight="$(printf '%s' "$response" | perl -ne 'if (/"in_flight_requests"\s*:\s*([0-9]+)/) { print "$1\n"; exit }')"
+  case "$in_flight" in
+    ''|*[!0-9]*)
+      log "ERROR: candidate liveness response omitted a valid in-flight request count" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$in_flight"
+}
+
+wait_for_candidate_requests_to_drain() {
+  local started="$SECONDS"
+  local in_flight
+
+  while :; do
+    in_flight="$(candidate_in_flight_requests)" || return 1
+    if [ "$in_flight" -eq 0 ]; then
+      return 0
+    fi
+    if [ $((SECONDS - started)) -ge "$DRAIN_ACTIVE_WINDOW_SECONDS" ]; then
+      log "ERROR: candidate requests did not drain before rollback: in_flight=${in_flight}" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+restore_runtime_traffic_after_failed_refund_rollback_gate() {
+  local prior_state="$1"
+
+  if write_runtime_traffic_state "$prior_state"; then
+    log "Refund rollback gate left Caddy on ${NEW_CONTAINER}; restored traffic admission to ${prior_state} while retaining the local release transaction"
+    return 0
+  fi
+  log "ERROR: refund rollback gate failed and traffic admission could not be restored; ${NEW_CONTAINER} remains fenced for manual recovery" >&2
+  return 1
+}
+
+restore_runtime_traffic_after_post_gate_rollback_failure() {
+  local failure_context="$1"
+  local prior_state="${ROLLBACK_GATE_PRIOR_TRAFFIC_STATE:-}"
+
+  [ -n "$prior_state" ] || return 0
+  # The rollback helper can fail after it has already switched Caddy back to
+  # the old generation. Reopen admission only when every Caddy view still
+  # proves that the candidate is serving; otherwise preserve the fence for the
+  # same canonical recovery transaction.
+  if ! caddy_views_point_uniquely_to_upstream "$NEW_UPSTREAM"; then
+    log "WARNING: ${failure_context}; Caddy no longer conclusively points only at ${NEW_UPSTREAM}, leaving traffic admission draining for canonical recovery" >&2
+    return 0
+  fi
+  if write_runtime_traffic_state "$prior_state"; then
+    log "${failure_context}; Caddy remains on ${NEW_CONTAINER}, restored traffic admission to ${prior_state} while retaining the local release transaction"
+    return 0
+  fi
+  log "ERROR: ${failure_context}; Caddy remains on ${NEW_CONTAINER} but traffic admission could not be restored" >&2
+  return 1
+}
+
+gate_post_switch_rollback_on_refund_readiness() {
+  local prior_traffic_state
+
+  ROLLBACK_GATE_PRIOR_TRAFFIC_STATE=""
+  prior_traffic_state="$(read_runtime_traffic_state)" || return 1
+  if ! write_runtime_traffic_state draining; then
+    return 1
+  fi
+  log "Drained new requests from ${NEW_CONTAINER} before checking reviewed refund reservations"
+  if ! wait_for_candidate_requests_to_drain; then
+    restore_runtime_traffic_after_failed_refund_rollback_gate "$prior_traffic_state" || true
+    return 1
+  fi
+  if ! candidate_internal_get_2xx "$REFUND_ROLLBACK_READINESS_PATH" >/dev/null; then
+    restore_runtime_traffic_after_failed_refund_rollback_gate "$prior_traffic_state" || true
+    return 1
+  fi
+  ROLLBACK_GATE_PRIOR_TRAFFIC_STATE="$prior_traffic_state"
+  log "Refund rollback readiness passed for ${NEW_CONTAINER}; continuing with the old-generation takeover"
   return 0
 }
 
@@ -618,8 +829,19 @@ rollback() {
   local rollback_source_running
   local rollback_allow_isolated=false
 
+  ROLLBACK_GATE_PRIOR_TRAFFIC_STATE=""
   log "Attempting automatic rollback to ${OLD_CONTAINER}"
+  # The candidate may already have persisted a reviewed refund reservation.
+  # Older binaries cannot safely reconcile that state, so keep Caddy on the
+  # candidate unless its authenticated readiness endpoint confirms that no
+  # entitlement reservation remains after request admission has drained.
+  if ! gate_post_switch_rollback_on_refund_readiness; then
+    log "ERROR: automatic rollback is blocked by candidate refund readiness; Caddy, ${NEW_CONTAINER}, and the local release transaction are retained. Let the candidate finish refund reconciliation, then resume the same canonical release/recovery transaction; do not use direct Caddy or container changes" >&2
+    return 1
+  fi
   if ! rollback_source_running="$(docker inspect "$NEW_CONTAINER" --format '{{.State.Running}}')"; then
+    restore_runtime_traffic_after_post_gate_rollback_failure \
+      "could not inspect failed release container before rollback" || true
     log "ERROR: could not inspect failed release container before rollback: ${NEW_CONTAINER}" >&2
     return 1
   fi
@@ -627,6 +849,8 @@ rollback() {
     true) ;;
     false) rollback_allow_isolated=true ;;
     *)
+      restore_runtime_traffic_after_post_gate_rollback_failure \
+        "failed release container has an invalid running state" || true
       log "ERROR: failed release container has an invalid running state: ${NEW_CONTAINER}" >&2
       return 1
       ;;
@@ -653,6 +877,8 @@ rollback() {
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
     bash "$BLUE_GREEN_SCRIPT" >>"${LOG_DIR}/rollback.log" 2>&1 || {
       tail -100 "${LOG_DIR}/rollback.log" >&2 || true
+      restore_runtime_traffic_after_post_gate_rollback_failure \
+        "automatic rollback helper failed" || true
       log "ERROR: automatic rollback failed; manual intervention is required" >&2
       return 1
     }
@@ -660,6 +886,7 @@ rollback() {
     log "ERROR: Caddy rolled back but node runtime state could not be restored" >&2
     return 1
   fi
+  ROLLBACK_GATE_PRIOR_TRAFFIC_STATE=""
   warn_image_route_contract_views
   log "Rollback completed"
 }

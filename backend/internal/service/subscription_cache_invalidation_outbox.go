@@ -30,7 +30,7 @@ type SubscriptionCacheInvalidationOutboxRepository interface {
 }
 
 type subscriptionAuthorizationCacheInvalidator interface {
-	InvalidateSubscriptionCaches(ctx context.Context, userID, groupID int64) error
+	EnsureSubscriptionAuthorizationCachesInvalidated(ctx context.Context, userID, groupID int64) error
 }
 
 // SubscriptionCacheInvalidationWorker consumes a dedicated outbox instead of
@@ -142,7 +142,7 @@ func (w *SubscriptionCacheInvalidationWorker) processEvent(parent context.Contex
 		err = fmt.Errorf("invalid subscription cache target user=%d group=%d", event.UserID, event.GroupID)
 	} else {
 		ctx, cancel := context.WithTimeout(parent, authInvalidationRedisTimeout)
-		err = w.invalidator.InvalidateSubscriptionCaches(ctx, event.UserID, event.GroupID)
+		err = w.invalidator.EnsureSubscriptionAuthorizationCachesInvalidated(ctx, event.UserID, event.GroupID)
 		cancel()
 	}
 	if err != nil {

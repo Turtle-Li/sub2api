@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -13,6 +14,10 @@ type InternalHealth interface {
 	Authorized(string) bool
 	Live() bool
 	Ready(context.Context) bool
+}
+
+type internalPaymentRefundRollbackReadiness interface {
+	RefundRollbackReadiness(context.Context) (service.PaymentRefundRollbackReadiness, error)
 }
 
 // RegisterCommonRoutes 注册通用路由（健康检查、状态等）
@@ -50,6 +55,40 @@ func RegisterCommonRoutes(r *gin.Engine, internalHealth InternalHealth) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ready": true})
+	})
+
+	// This is intentionally separate from generic readiness. A non-zero count
+	// means a rollback could strand an already-reserved subscription or wallet
+	// entitlement; callers must wait for reconciliation or resolve it manually.
+	r.GET("/internal/refund-rollback-readiness", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		if internalHealth == nil || !internalHealth.Authorized(c.GetHeader("X-Monitor-Token")) {
+			c.JSON(http.StatusUnauthorized, gin.H{"ready": false})
+			return
+		}
+		readiness, ok := internalHealth.(internalPaymentRefundRollbackReadiness)
+		if !ok {
+			c.JSON(http.StatusServiceUnavailable, service.PaymentRefundRollbackReadiness{
+				EntitlementReservedReviewedPendingCount: -1,
+			})
+			return
+		}
+		result, err := readiness.RefundRollbackReadiness(c.Request.Context())
+		if err != nil {
+			// Do not expose database or provider failure details through a route
+			// designed for release automation. -1 is the documented fail-closed
+			// count sentinel.
+			c.JSON(http.StatusServiceUnavailable, service.PaymentRefundRollbackReadiness{
+				EntitlementReservedReviewedPendingCount: -1,
+			})
+			return
+		}
+		if !result.Ready || result.EntitlementReservedReviewedPendingCount != 0 {
+			result.Ready = false
+			c.JSON(http.StatusServiceUnavailable, result)
+			return
+		}
+		c.JSON(http.StatusOK, result)
 	})
 
 	// Claude Code 遥测日志（忽略，直接返回200）

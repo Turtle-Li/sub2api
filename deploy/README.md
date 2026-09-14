@@ -90,6 +90,26 @@ the release server itself, so it exercises that server's real upstream egress;
 any non-2xx response or malformed JSON leaves the old generation serving and
 retains the candidate for diagnosis. Rollback explicitly disables this gate.
 
+If a rollback is needed after Caddy may have reached the candidate, the
+canonical server release first changes the shared traffic-state file to
+`draining` in place, waits for candidate in-flight requests to reach zero, and
+calls the candidate's monitor-token-protected
+`GET /internal/refund-rollback-readiness` endpoint. Only a `2xx` response
+allows the previous generation to take over. An unavailable or non-`2xx`
+endpoint restores the prior traffic state (normally `accepting`) in the same
+bind-mounted inode, retains the candidate, Caddy direction, and durable local
+release transaction, then exits failed. Let the candidate finish automatic
+refund reconciliation, then run `sudo systemctl start sub2api-runtime-guard.service`.
+That root-owned service acquires the same maintenance lock and invokes
+`sub2api-node-state.sh recover-local` only after it has verified the
+Caddy-selected generation; do not rerun the release script,
+delete the local transaction, or make direct Caddy/container changes. If the
+readiness check succeeds but the subsequent source inspection or rollback
+helper fails, the release restores that prior state only when every Caddy view
+still points to the candidate. A completed or ambiguous Caddy transition stays
+fenced for the same recovery transaction; the release does not reopen it as
+candidate traffic.
+
 The production helper recognizes `sub2api-blue`, `sub2api-green`, and the
 legacy `sub2api` application name. Long-lived Responses WebSocket connections
 can keep an old color draining after a release, so the helper resolves the
@@ -183,8 +203,12 @@ releases, then:
    host file, Caddy startup file, and live Admin API to agree;
 3. starts or restarts that active container and verifies its internal and
    public health endpoints;
-4. if the active slot cannot recover, stops it before starting a stopped
-   historical slot, or promotes the single healthy old slot already draining;
+4. before an active candidate can be replaced by a stopped historical slot, or
+   by the single healthy old slot already draining, requires the dual-node
+   runtime admission contract, drains new requests in the shared traffic-state
+   inode, waits for zero candidate in-flight requests, and calls the
+   monitor-token-protected `GET /internal/refund-rollback-readiness` endpoint;
+   only a `2xx` result permits the active slot to be stopped;
 5. delegates the traffic change to the audited blue-green helper, then verifies
    Docker health, the three Caddy views, and the public health endpoint.
 
@@ -193,7 +217,17 @@ as two healthy queue consumers. Ambiguous Caddy state, multiple running old
 slots, a missing historical container, OOM/non-zero historical exits, or lock
 contention all fail closed. Lock contention is a successful no-op because a
 release or other planned maintenance owns the runtime at that moment.
-The drain monitor also takes this lock around its final Caddy revalidation and
+An unavailable or non-`2xx` refund-readiness endpoint restores the pre-gate
+traffic state in place (normally `accepting`), leaves Caddy on the candidate,
+and does not start or promote the historical binary. A runtime guard cannot
+make this historical fallback in a legacy runtime that lacks the dual-node
+traffic file and health-token mounts. After the candidate has reconciled its
+reservations, use `sudo systemctl start sub2api-runtime-guard.service`; the
+service owns the maintenance lock and invokes `sub2api-node-state.sh recover-local`
+to finalize a retained local-release transaction against the verified
+Caddy-selected generation. Do not rerun the server release script,
+delete the transaction, or alter Caddy/container state by hand. The drain
+monitor also takes this lock around its final Caddy revalidation and
 `docker stop`, so it cannot stop an old slot while the guard is promoting it.
 
 A retained `.sub2api-blue-green-caddy-transaction.env` is intentionally not a

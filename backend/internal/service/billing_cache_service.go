@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -21,6 +22,16 @@ import (
 // errBillingCacheUnavailable 内部哨兵：用于 quota 校验路径在 cache==nil 时
 // 与"Redis 故障"走同一条 fail-open + DB 一次性检查的分支。
 var errBillingCacheUnavailable = fmt.Errorf("billing cache unavailable")
+
+// ErrSubscriptionCacheInvalidationUnavailable is deliberately distinct from a
+// normal cache miss. A reviewed subscription refund changes an authorization
+// boundary before it asks the payment provider to move money, so that path
+// must prove the shared cache fence advanced and Redis accepted the peer-L1
+// invalidation publication. Fenced L1 readers verify that generation on a
+// hit; publication alone is not treated as remote-delivery proof.
+// Callers keep the already-reserved entitlement pending and retry when this is
+// returned; they must not send the provider request.
+var ErrSubscriptionCacheInvalidationUnavailable = errors.New("subscription authorization cache invalidation unavailable")
 
 var (
 	ErrSubscriptionInvalid       = infraerrors.Forbidden("SUBSCRIPTION_INVALID", "subscription is invalid or expired")
@@ -53,7 +64,6 @@ type cacheWriteKind int
 
 const (
 	cacheWriteSetBalance cacheWriteKind = iota
-	cacheWriteSetSubscription
 	cacheWriteUpdateSubscriptionUsage
 	cacheWriteDeductBalance
 	cacheWriteUpdateRateLimitUsage
@@ -82,13 +92,12 @@ const (
 
 // cacheWriteTask 缓存写入任务
 type cacheWriteTask struct {
-	kind             cacheWriteKind
-	userID           int64
-	groupID          int64
-	apiKeyID         int64
-	balance          float64
-	amount           float64
-	subscriptionData *subscriptionCacheData
+	kind     cacheWriteKind
+	userID   int64
+	groupID  int64
+	apiKeyID int64
+	balance  float64
+	amount   float64
 }
 
 // apiKeyRateLimitLoader defines the interface for loading rate limit data from DB.
@@ -99,6 +108,18 @@ type apiKeyRateLimitLoader interface {
 type subscriptionCacheInvalidationPubSub interface {
 	PublishSubscriptionCacheInvalidation(ctx context.Context, cacheKey string) error
 	SubscribeSubscriptionCacheInvalidation(ctx context.Context, handler func(cacheKey string)) error
+}
+
+// subscriptionCacheFenceStore is intentionally an optional extension to the
+// long-lived BillingCache port. New Redis-backed cache writers use the fence
+// to make a cache miss fill conditional on the invalidation generation that
+// was observed before its DB read. Older or test-only cache adapters simply
+// skip subscription cache population rather than reintroducing a stale
+// authorization entry after a refund invalidation.
+type subscriptionCacheFenceStore interface {
+	CaptureSubscriptionCacheFence(ctx context.Context, userID, groupID int64) (int64, error)
+	SubscriptionCacheFenceCurrent(ctx context.Context, userID, groupID, fence int64) (bool, error)
+	SetSubscriptionCacheIfFence(ctx context.Context, userID, groupID int64, data *SubscriptionCacheData, fence int64) (bool, error)
 }
 
 // BillingCacheService 计费缓存服务
@@ -120,6 +141,7 @@ type BillingCacheService struct {
 	cacheWriteMu       sync.RWMutex
 	stopped            atomic.Bool
 	balanceLoadSF      singleflight.Group
+	subscriptionLoadSF singleflight.Group
 	quotaLoadSF        singleflight.Group
 	// 丢弃日志节流计数器（减少高负载下日志噪音）
 	cacheWriteDropFullCount     uint64
@@ -220,8 +242,6 @@ func (s *BillingCacheService) cacheWriteWorker(ch <-chan cacheWriteTask) {
 		switch task.kind {
 		case cacheWriteSetBalance:
 			s.setBalanceCache(ctx, task.userID, task.balance)
-		case cacheWriteSetSubscription:
-			s.setSubscriptionCache(ctx, task.userID, task.groupID, task.subscriptionData)
 		case cacheWriteUpdateSubscriptionUsage:
 			if s.cache != nil {
 				if err := s.cache.UpdateSubscriptionUsage(ctx, task.userID, task.groupID, task.amount); err != nil {
@@ -250,8 +270,6 @@ func cacheWriteKindName(kind cacheWriteKind) string {
 	switch kind {
 	case cacheWriteSetBalance:
 		return "set_balance"
-	case cacheWriteSetSubscription:
-		return "set_subscription"
 	case cacheWriteUpdateSubscriptionUsage:
 		return "update_subscription_usage"
 	case cacheWriteDeductBalance:
@@ -411,33 +429,106 @@ func (s *BillingCacheService) InvalidateUserBalance(ctx context.Context, userID 
 // 订阅缓存方法
 // ============================================
 
-// GetSubscriptionStatus 获取订阅状态（优先从缓存读取）
+// GetSubscriptionStatus gets subscription state from the shared cache when it
+// is present. A miss is loaded under a generation fence: the DB snapshot is
+// re-read before population and Redis writes it only if no invalidation raced
+// with the read. This preserves cache-hit performance while preventing a
+// pre-refund DB read from repopulating an authorization cache after its DEL.
 func (s *BillingCacheService) GetSubscriptionStatus(ctx context.Context, userID, groupID int64) (*subscriptionCacheData, error) {
 	if s.cache == nil {
 		return s.getSubscriptionFromDB(ctx, userID, groupID)
 	}
 
-	// 尝试从缓存读取
 	cacheData, err := s.cache.GetSubscriptionCache(ctx, userID, groupID)
 	if err == nil && cacheData != nil {
 		return s.convertFromPortsData(cacheData), nil
 	}
 
-	// 缓存未命中，从数据库读取
-	data, err := s.getSubscriptionFromDB(ctx, userID, groupID)
+	cacheKey := subCacheKey(userID, groupID)
+	value, err, _ := s.subscriptionLoadSF.Do(cacheKey, func() (any, error) {
+		// Another request may have populated the shared cache while this one
+		// waited for the singleflight leader.
+		if cacheData, cacheErr := s.cache.GetSubscriptionCache(ctx, userID, groupID); cacheErr == nil && cacheData != nil {
+			return s.convertFromPortsData(cacheData), nil
+		}
+		return s.loadSubscriptionStatusForCache(ctx, userID, groupID)
+	})
 	if err != nil {
 		return nil, err
 	}
+	data, ok := value.(*subscriptionCacheData)
+	if !ok || data == nil {
+		return nil, ErrSubscriptionNotFound
+	}
+	copy := *data
+	return &copy, nil
+}
 
-	// 异步建立缓存
-	_ = s.enqueueCacheWrite(cacheWriteTask{
-		kind:             cacheWriteSetSubscription,
-		userID:           userID,
-		groupID:          groupID,
-		subscriptionData: data,
-	})
+const subscriptionCacheFillAttempts = 3
 
-	return data, nil
+func (s *BillingCacheService) loadSubscriptionStatusForCache(ctx context.Context, userID, groupID int64) (*subscriptionCacheData, error) {
+	fence, fenced, fenceErr := s.CaptureSubscriptionCacheFence(ctx, userID, groupID)
+	if fenceErr != nil {
+		// A cache outage must not make an otherwise-valid subscription fail. It
+		// does mean this request is DB-only: never use an unfenced cache write.
+		fenced = false
+	}
+
+	for attempt := 0; attempt < subscriptionCacheFillAttempts; attempt++ {
+		loaded, err := s.getSubscriptionFromDB(ctx, userID, groupID)
+		if err != nil {
+			return nil, err
+		}
+		confirmed, err := s.getSubscriptionFromDB(ctx, userID, groupID)
+		if err != nil {
+			return nil, err
+		}
+		if !sameSubscriptionCacheSnapshot(loaded, confirmed) {
+			// A mutation committed between the snapshot and its authoritative
+			// recheck. Retry from the latest state rather than returning or
+			// caching a snapshot that could authorize the old entitlement.
+			continue
+		}
+
+		if !fenced {
+			return confirmed, nil
+		}
+		writer, ok := s.subscriptionCacheFenceStore()
+		if !ok {
+			return confirmed, nil
+		}
+		wrote, err := writer.SetSubscriptionCacheIfFence(ctx, userID, groupID, s.convertToPortsData(confirmed), fence)
+		if err != nil {
+			return confirmed, nil
+		}
+		if wrote {
+			return confirmed, nil
+		}
+
+		// The Redis generation changed after the DB reads. Refresh both the
+		// fence and the authoritative snapshot; an old writer is never allowed
+		// to overwrite the cache at the new generation.
+		fence, fenced, fenceErr = s.CaptureSubscriptionCacheFence(ctx, userID, groupID)
+		if fenceErr != nil {
+			fenced = false
+		}
+	}
+
+	// A continuously-mutating subscription is safer to serve directly than to
+	// cache. The final read happens after all failed fill attempts.
+	return s.getSubscriptionFromDB(ctx, userID, groupID)
+}
+
+func sameSubscriptionCacheSnapshot(left, right *subscriptionCacheData) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Version == right.Version &&
+		left.Status == right.Status &&
+		left.ExpiresAt.Equal(right.ExpiresAt) &&
+		left.DailyUsage == right.DailyUsage &&
+		left.WeeklyUsage == right.WeeklyUsage &&
+		left.MonthlyUsage == right.MonthlyUsage
 }
 
 func (s *BillingCacheService) convertFromPortsData(data *SubscriptionCacheData) *subscriptionCacheData {
@@ -475,18 +566,11 @@ func (s *BillingCacheService) getSubscriptionFromDB(ctx context.Context, userID,
 		DailyUsage:   sub.DailyUsageUSD,
 		WeeklyUsage:  sub.WeeklyUsageUSD,
 		MonthlyUsage: sub.MonthlyUsageUSD,
-		Version:      sub.UpdatedAt.Unix(),
+		// UpdatedAt is maintained by the Ent time mixin for every relevant
+		// subscription mutation, including the refund hold. Nanoseconds avoid
+		// collapsing two authoritative updates that occur in the same second.
+		Version: sub.UpdatedAt.UTC().UnixNano(),
 	}, nil
-}
-
-// setSubscriptionCache 设置订阅缓存
-func (s *BillingCacheService) setSubscriptionCache(ctx context.Context, userID, groupID int64, data *subscriptionCacheData) {
-	if s.cache == nil || data == nil {
-		return
-	}
-	if err := s.cache.SetSubscriptionCache(ctx, userID, groupID, s.convertToPortsData(data)); err != nil {
-		logger.LegacyPrintf("service.billing_cache", "Warning: set subscription cache failed for user %d group %d: %v", userID, groupID, err)
-	}
 }
 
 // UpdateSubscriptionUsage 更新订阅用量缓存（同步调用）
@@ -526,6 +610,69 @@ func (s *BillingCacheService) InvalidateSubscription(ctx context.Context, userID
 	if err := s.cache.InvalidateSubscriptionCache(ctx, userID, groupID); err != nil {
 		logger.LegacyPrintf("service.billing_cache", "Warning: invalidate subscription cache failed for user %d group %d: %v", userID, groupID, err)
 		return err
+	}
+	return nil
+}
+
+func (s *BillingCacheService) subscriptionCacheFenceStore() (subscriptionCacheFenceStore, bool) {
+	if s == nil || s.cache == nil {
+		return nil, false
+	}
+	store, ok := s.cache.(subscriptionCacheFenceStore)
+	return store, ok
+}
+
+// CaptureSubscriptionCacheFence returns the shared cache generation observed
+// before a DB-backed subscription load. The boolean is false for lightweight
+// cache adapters that do not support conditional writes; callers then serve
+// the verified DB value without populating a potentially racy cache.
+func (s *BillingCacheService) CaptureSubscriptionCacheFence(ctx context.Context, userID, groupID int64) (int64, bool, error) {
+	store, ok := s.subscriptionCacheFenceStore()
+	if !ok {
+		return 0, false, nil
+	}
+	fence, err := store.CaptureSubscriptionCacheFence(ctx, userID, groupID)
+	if err != nil {
+		return 0, true, err
+	}
+	return fence, true, nil
+}
+
+// SubscriptionCacheFenceCurrent checks a fence without consulting the
+// database. Cache-miss refills use it before writing, and fenced L1
+// authorization entries use it on a hit to close a missed Pub/Sub delivery.
+func (s *BillingCacheService) SubscriptionCacheFenceCurrent(ctx context.Context, userID, groupID, fence int64) (bool, error) {
+	store, ok := s.subscriptionCacheFenceStore()
+	if !ok {
+		return false, ErrSubscriptionCacheInvalidationUnavailable
+	}
+	return store.SubscriptionCacheFenceCurrent(ctx, userID, groupID, fence)
+}
+
+// EnsureSubscriptionAuthorizationCacheInvalidated is the strict variant for
+// a payment-refund provider boundary. It succeeds only after the local caller
+// has atomically advanced the shared-cache fence and deleted the subscription
+// entries through the fencing adapter, and Redis accepted the cross-instance
+// L1 invalidation publication. The fence, rather than a publish acknowledgement,
+// is what lets compatible remote L1 readers reject a missed message. A caller
+// that receives an error must leave its already-reserved refund pending for the
+// reconciliation worker instead of sending money to the provider.
+func (s *BillingCacheService) EnsureSubscriptionAuthorizationCacheInvalidated(ctx context.Context, userID, groupID int64) error {
+	if s == nil || s.cache == nil {
+		return ErrSubscriptionCacheInvalidationUnavailable
+	}
+	if _, ok := s.subscriptionCacheFenceStore(); !ok {
+		return fmt.Errorf("%w: cache does not support subscription fences", ErrSubscriptionCacheInvalidationUnavailable)
+	}
+	pubsub, ok := s.cache.(subscriptionCacheInvalidationPubSub)
+	if !ok {
+		return fmt.Errorf("%w: cache does not support subscription invalidation publish", ErrSubscriptionCacheInvalidationUnavailable)
+	}
+	if err := s.InvalidateSubscription(ctx, userID, groupID); err != nil {
+		return err
+	}
+	if err := pubsub.PublishSubscriptionCacheInvalidation(ctx, subCacheKey(userID, groupID)); err != nil {
+		return fmt.Errorf("publish subscription cache invalidation: %w", err)
 	}
 	return nil
 }

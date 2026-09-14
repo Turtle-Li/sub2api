@@ -967,6 +967,7 @@ var ProviderSet = wire.NewSet(
 	ProvidePaymentConfigService,
 	ProvideUnifiedPaymentGateway,
 	ProvidePaymentService,
+	ProvidePaymentRefundReconciliationService,
 	ProvidePaymentOrderExpiryService,
 	ProvideInvoiceNotificationService,
 	ProvideFeishuPaymentIncidentService,

@@ -23,6 +23,7 @@ LOCAL_TRANSACTION="${TEST_ROOT}/local-release.env"
 NEW_RUNNING_MARKER="${TEST_ROOT}/new-running.marker"
 EXTERNAL_RUNTIME_ENV_FILE="${TEST_ROOT}/external-runtime.env"
 EXTERNAL_CA_FILE="${TEST_ROOT}/external-ca.crt"
+TRAFFIC_STATE_FILE="${TEST_ROOT}/traffic-state"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -64,6 +65,19 @@ assert_event_order() {
     || fail "expected '${first}' before '${second}' in ${EVENT_LOG}"
 }
 
+file_inode() {
+  stat -c '%i' "$1" 2>/dev/null || stat -f '%i' "$1"
+}
+
+assert_traffic_state() {
+  local expected="$1"
+  local actual
+
+  actual="$(tr -d '\r\n' <"$TRAFFIC_STATE_FILE")"
+  [ "$actual" = "$expected" ] \
+    || fail "expected traffic state ${expected}, got ${actual}"
+}
+
 mkdir -p "$FAKE_BIN" "$APP_DIR/scripts" "$SOURCE_DIR"
 printf 'FROM scratch\n' >"${SOURCE_DIR}/Dockerfile"
 printf 'reverse_proxy sub2api-green:8080\n' >"${APP_DIR}/Caddyfile"
@@ -71,6 +85,8 @@ printf 'reverse_proxy sub2api-green:8080\n' >"$STARTUP_CADDY"
 printf '{"upstream":"sub2api-green:8080"}\n' >"$ACTIVE_CADDY"
 : >"$EXTERNAL_RUNTIME_ENV_FILE"
 : >"$EXTERNAL_CA_FILE"
+printf 'accepting\n' >"$TRAFFIC_STATE_FILE"
+chmod 644 "$TRAFFIC_STATE_FILE"
 cat >"${APP_DIR}/scripts/verify_image_route_contract.py" <<'EOF'
 #!/usr/bin/env bash
 cat >/dev/null
@@ -123,6 +139,19 @@ if [ "${FAKE_BLUE_GREEN_FAIL_BEFORE_CADDY:-0}" = 1 ]; then
   fi
   exit 23
 fi
+if [ "${FAKE_ROLLBACK_HELPER_FAIL_WITH_CANDIDATE:-0}" = 1 ] \
+  && [ "${OLD_CONTAINER:-}" = sub2api-blue ] \
+  && [ "${NEW_CONTAINER:-}" = sub2api-green ]; then
+  exit 26
+fi
+if [ "${FAKE_ROLLBACK_HELPER_FAIL_AFTER_CADDY:-0}" = 1 ] \
+  && [ "${OLD_CONTAINER:-}" = sub2api-blue ] \
+  && [ "${NEW_CONTAINER:-}" = sub2api-green ]; then
+  printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$FAKE_APP_CADDY"
+  printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$FAKE_STARTUP_CADDY"
+  printf '{"upstream":"%s"}\n' "$CADDY_UPSTREAM_TO" >"$FAKE_ACTIVE_CADDY"
+  exit 27
+fi
 if [ "${FAKE_UPDATE_CADDY:-0}" = 1 ] \
   || [ "${FAKE_BLUE_GREEN_FAIL_AFTER_CADDY:-0}" = 1 ]; then
   printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_TO" >"$FAKE_APP_CADDY"
@@ -141,15 +170,18 @@ set -eu
 printf '%s\n' "$*" >>"$FAKE_NODE_STATE_CALLS"
 case "${1:-}" in
   status)
-    printf 'traffic=accepting active_container=sub2api-green background=%s\n' \
-      "${FAKE_NODE_STATE_BACKGROUND:-active}"
+    printf 'traffic=%s active_container=sub2api-green background=%s\n' \
+      "$(tr -d '\r\n' <"$FAKE_TRAFFIC_STATE")" "${FAKE_NODE_STATE_BACKGROUND:-active}"
     ;;
   preflight)
     [ ! -e "$FAKE_LOCAL_TRANSACTION" ] \
       || { printf 'ERROR: an unfinished local release transaction exists\n' >&2; exit 64; }
     ;;
   local-standby|local-preserve-standby) : >"$FAKE_LOCAL_TRANSACTION" ;;
-  abort-local) rm -f -- "$FAKE_LOCAL_TRANSACTION" ;;
+  commit-local|abort-local)
+    rm -f -- "$FAKE_LOCAL_TRANSACTION"
+    printf 'accepting\n' >"$FAKE_TRAFFIC_STATE"
+    ;;
 esac
 EOF
 chmod +x \
@@ -174,6 +206,12 @@ case "$command_name" in
     esac
     case "$format" in
       *State.Running*)
+        if [ "$container_name" = sub2api-blue ] \
+          && [ "${FAKE_ROLLBACK_SOURCE_INSPECT_FAIL:-0}" = 1 ] \
+          && [ -n "${FAKE_EVENT_LOG:-}" ] \
+          && grep -Fq 'refund-rollback-readiness status=200' "$FAKE_EVENT_LOG"; then
+          exit 67
+        fi
         case "$container_name" in
           sub2api-green|sub2api) printf 'true\n' ;;
           sub2api-blue)
@@ -197,6 +235,46 @@ case "$command_name" in
     ;;
   exec)
     case "$*" in
+      *SUB2API_ROLLBACK_GATE_PATH=/internal/livez*)
+        case "$*" in
+          *curl*) exit 65 ;;
+          *wget*) ;;
+          *) exit 65 ;;
+        esac
+        case "$*" in
+          *X-Monitor-Token:*) ;;
+          *) exit 66 ;;
+        esac
+        [ -z "${FAKE_EVENT_LOG:-}" ] || printf 'refund-rollback-livez in_flight=%s\n' \
+          "${FAKE_REFUND_ROLLBACK_IN_FLIGHT:-0}" >>"$FAKE_EVENT_LOG"
+        [ "${FAKE_REFUND_ROLLBACK_LIVEZ_UNREACHABLE:-0}" != 1 ] || exit 63
+        printf '{"live":true,"in_flight_requests":%s}\n' \
+          "${FAKE_REFUND_ROLLBACK_IN_FLIGHT:-0}"
+        ;;
+      *SUB2API_ROLLBACK_GATE_PATH=/internal/refund-rollback-readiness*)
+        case "$*" in
+          *curl*) exit 65 ;;
+          *wget*) ;;
+          *) exit 65 ;;
+        esac
+        case "$*" in
+          *X-Monitor-Token:*) ;;
+          *) exit 66 ;;
+        esac
+        if [ "${FAKE_REFUND_ROLLBACK_READINESS_UNREACHABLE:-0}" = 1 ]; then
+          [ -z "${FAKE_EVENT_LOG:-}" ] || printf 'refund-rollback-readiness status=unreachable\n' \
+            >>"$FAKE_EVENT_LOG"
+          exit 64
+        fi
+        [ -z "${FAKE_EVENT_LOG:-}" ] || printf 'refund-rollback-readiness status=%s\n' \
+          "${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" >>"$FAKE_EVENT_LOG"
+        case "${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" in
+          2??)
+            printf '{"ready":%s}\n' "${FAKE_REFUND_ROLLBACK_READY:-true}"
+            ;;
+          *) exit 64 ;;
+        esac
+        ;;
       *caddy\ adapt*)
         printf '{}\n'
         ;;
@@ -303,6 +381,7 @@ run_release() {
     FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
     FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_TRAFFIC_STATE="$TRAFFIC_STATE_FILE" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
     FAKE_ROUTE_VERIFIER_CALLS="$ROUTE_VERIFIER_CALLS" \
@@ -317,6 +396,7 @@ run_release() {
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
     SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-1}" \
     SUB2API_MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-${TEST_ROOT}/maintenance.lock}" \
+    SUB2API_TRAFFIC_STATE_FILE_HOST="$TRAFFIC_STATE_FILE" \
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS=30 \
@@ -346,6 +426,7 @@ run_github_prebuilt_release() {
     FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
     FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_TRAFFIC_STATE="$TRAFFIC_STATE_FILE" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
     FAKE_ROUTE_VERIFIER_CALLS="$ROUTE_VERIFIER_CALLS" \
@@ -358,6 +439,7 @@ run_github_prebuilt_release() {
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
     SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-1}" \
     SUB2API_MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-${TEST_ROOT}/maintenance.lock}" \
+    SUB2API_TRAFFIC_STATE_FILE_HOST="$TRAFFIC_STATE_FILE" \
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
@@ -383,6 +465,7 @@ run_external_github_prebuilt_release() {
     FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
     FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_TRAFFIC_STATE="$TRAFFIC_STATE_FILE" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
     FAKE_ROUTE_VERIFIER_CALLS="$ROUTE_VERIFIER_CALLS" \
@@ -394,6 +477,7 @@ run_external_github_prebuilt_release() {
     SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
     SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1 \
     SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
+    SUB2API_TRAFFIC_STATE_FILE_HOST="$TRAFFIC_STATE_FILE" \
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
@@ -415,6 +499,7 @@ run_external_github_prebuilt_release() {
 reset_release_case() {
   reset_caddy_views
   rm -f -- "$LOCAL_TRANSACTION" "$NEW_RUNNING_MARKER"
+  printf 'accepting\n' >"$TRAFFIC_STATE_FILE"
   : >"$DOCKER_CALLS"
   : >"$NODE_STATE_CALLS"
   : >"$CURL_CALLS"
@@ -810,9 +895,147 @@ assert_contains "$NODE_STATE_CALLS" 'abort-local'
 [ "$(wc -l <"$BLUE_GREEN_ENV_LOG" | tr -d '[:space:]')" = 1 ] \
   || fail 'pre-Caddy failure attempted a rollback helper invocation'
 assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+assert_not_contains "$EVENT_LOG" 'refund-rollback-'
+assert_traffic_state accepting
 
-# If the helper reports failure after it has changed Caddy, the old-only proof
-# is unavailable and the existing rollback path remains mandatory.
+# Once Caddy may have sent traffic to the candidate, a reviewed pending refund
+# reservation blocks old-generation takeover. The candidate, Caddy direction,
+# and durable local transaction must remain available for reconciliation; the
+# traffic-state file returns to its original inode and value rather than leaving
+# a deterministic draining outage.
+reset_release_case
+pending_refund_rollback_output="${TEST_ROOT}/pending-refund-rollback.log"
+pending_traffic_inode="$(file_inode "$TRAFFIC_STATE_FILE")"
+if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_AFTER_CADDY=1 \
+  FAKE_REFUND_ROLLBACK_READINESS_STATUS=409 \
+  run_external_github_prebuilt_release >"$pending_refund_rollback_output" 2>&1; then
+  fail 'pending refund readiness allowed old-generation rollback'
+fi
+assert_contains "$pending_refund_rollback_output" \
+  'candidate internal rollback probe is unreachable or rejected: /internal/refund-rollback-readiness'
+assert_contains "$pending_refund_rollback_output" \
+  'automatic rollback is blocked by candidate refund readiness'
+assert_contains "$pending_refund_rollback_output" \
+  'Let the candidate finish refund reconciliation, then resume the same canonical release/recovery transaction'
+assert_contains "$EVENT_LOG" 'refund-rollback-livez in_flight=0'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=409'
+assert_not_contains "$EVENT_LOG" 'helper old=sub2api-blue new=sub2api-green'
+assert_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+[ -e "$LOCAL_TRANSACTION" ] || fail 'pending refund rollback removed the local release transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-blue:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-blue:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-blue:8080'
+assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+[ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$pending_traffic_inode" ] \
+  || fail 'pending refund rollback replaced the traffic-state bind-mount inode'
+assert_traffic_state accepting
+
+# An unavailable readiness endpoint has the same fail-closed recovery shape.
+reset_release_case
+unreachable_refund_rollback_output="${TEST_ROOT}/unreachable-refund-rollback.log"
+unreachable_traffic_inode="$(file_inode "$TRAFFIC_STATE_FILE")"
+if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_AFTER_CADDY=1 \
+  FAKE_REFUND_ROLLBACK_READINESS_UNREACHABLE=1 \
+  run_external_github_prebuilt_release >"$unreachable_refund_rollback_output" 2>&1; then
+  fail 'unreachable refund readiness allowed old-generation rollback'
+fi
+assert_contains "$unreachable_refund_rollback_output" \
+  'candidate internal rollback probe is unreachable or rejected: /internal/refund-rollback-readiness'
+assert_contains "$unreachable_refund_rollback_output" \
+  'automatic rollback is blocked by candidate refund readiness'
+assert_contains "$unreachable_refund_rollback_output" \
+  'Let the candidate finish refund reconciliation, then resume the same canonical release/recovery transaction'
+assert_contains "$EVENT_LOG" 'refund-rollback-livez in_flight=0'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=unreachable'
+assert_not_contains "$EVENT_LOG" 'helper old=sub2api-blue new=sub2api-green'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+[ -e "$LOCAL_TRANSACTION" ] || fail 'unreachable refund rollback removed the local release transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-blue:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-blue:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-blue:8080'
+assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+[ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$unreachable_traffic_inode" ] \
+  || fail 'unreachable refund rollback replaced the traffic-state bind-mount inode'
+assert_traffic_state accepting
+
+# The readiness gate leaves traffic draining until the old generation really
+# takes over. If source inspection fails before that helper starts, restore the
+# original state only because every Caddy view remains on the candidate.
+reset_release_case
+post_gate_inspect_failure_output="${TEST_ROOT}/post-gate-inspect-failure.log"
+post_gate_inspect_traffic_inode="$(file_inode "$TRAFFIC_STATE_FILE")"
+if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_AFTER_CADDY=1 \
+  FAKE_ROLLBACK_SOURCE_INSPECT_FAIL=1 \
+  run_external_github_prebuilt_release >"$post_gate_inspect_failure_output" 2>&1; then
+  fail 'post-gate source inspection failure was accepted'
+fi
+assert_contains "$post_gate_inspect_failure_output" \
+  'Refund rollback readiness passed for sub2api-blue'
+assert_contains "$post_gate_inspect_failure_output" \
+  'could not inspect failed release container before rollback; Caddy remains on sub2api-blue, restored traffic admission to accepting'
+assert_contains "$post_gate_inspect_failure_output" \
+  'ERROR: could not inspect failed release container before rollback: sub2api-blue'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=200'
+assert_not_contains "$EVENT_LOG" 'helper old=sub2api-blue new=sub2api-green'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+[ -e "$LOCAL_TRANSACTION" ] || fail 'post-gate source inspection failure removed the local release transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-blue:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-blue:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-blue:8080'
+[ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$post_gate_inspect_traffic_inode" ] \
+  || fail 'post-gate source inspection failure replaced the traffic-state bind-mount inode'
+assert_traffic_state accepting
+
+# A rollback-helper failure before its Caddy mutation has the same candidate
+# recovery shape, including the original traffic admission state.
+reset_release_case
+rollback_helper_candidate_failure_output="${TEST_ROOT}/rollback-helper-candidate-failure.log"
+rollback_helper_candidate_traffic_inode="$(file_inode "$TRAFFIC_STATE_FILE")"
+if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_AFTER_CADDY=1 \
+  FAKE_ROLLBACK_HELPER_FAIL_WITH_CANDIDATE=1 \
+  run_external_github_prebuilt_release >"$rollback_helper_candidate_failure_output" 2>&1; then
+  fail 'candidate-side rollback-helper failure was accepted'
+fi
+assert_contains "$rollback_helper_candidate_failure_output" \
+  'automatic rollback helper failed; Caddy remains on sub2api-blue, restored traffic admission to accepting'
+assert_contains "$rollback_helper_candidate_failure_output" \
+  'ERROR: automatic rollback failed; manual intervention is required'
+assert_contains "$EVENT_LOG" 'helper old=sub2api-blue new=sub2api-green'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+[ -e "$LOCAL_TRANSACTION" ] || fail 'candidate-side rollback-helper failure removed the local release transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-blue:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-blue:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-blue:8080'
+[ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$rollback_helper_candidate_traffic_inode" ] \
+  || fail 'candidate-side rollback-helper failure replaced the traffic-state bind-mount inode'
+assert_traffic_state accepting
+
+# A rollback helper may fail after it has switched Caddy to the old generation.
+# Do not overwrite that successful Caddy direction by reopening admission from
+# the candidate-side recovery path.
+reset_release_case
+rollback_helper_old_failure_output="${TEST_ROOT}/rollback-helper-old-failure.log"
+rollback_helper_old_traffic_inode="$(file_inode "$TRAFFIC_STATE_FILE")"
+if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_AFTER_CADDY=1 \
+  FAKE_ROLLBACK_HELPER_FAIL_AFTER_CADDY=1 \
+  run_external_github_prebuilt_release >"$rollback_helper_old_failure_output" 2>&1; then
+  fail 'old-side rollback-helper failure was accepted'
+fi
+assert_contains "$rollback_helper_old_failure_output" \
+  'automatic rollback helper failed; Caddy no longer conclusively points only at sub2api-blue:8080, leaving traffic admission draining for canonical recovery'
+assert_contains "$rollback_helper_old_failure_output" \
+  'ERROR: automatic rollback failed; manual intervention is required'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+[ -e "$LOCAL_TRANSACTION" ] || fail 'old-side rollback-helper failure removed the local release transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-green:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-green:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-green:8080'
+[ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$rollback_helper_old_traffic_inode" ] \
+  || fail 'old-side rollback-helper failure replaced the traffic-state bind-mount inode'
+assert_traffic_state draining
+
+# A zero-pending readiness response permits the existing post-switch rollback.
 reset_release_case
 post_caddy_helper_failure_output="${TEST_ROOT}/post-caddy-helper-failure.log"
 if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_AFTER_CADDY=1 \
@@ -822,12 +1045,19 @@ fi
 assert_contains "$post_caddy_helper_failure_output" \
   'Attempting automatic rollback to sub2api-green'
 assert_contains "$post_caddy_helper_failure_output" 'Rollback completed'
+assert_contains "$post_caddy_helper_failure_output" \
+  'Refund rollback readiness passed for sub2api-blue'
+assert_contains "$EVENT_LOG" 'refund-rollback-livez in_flight=0'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=200'
+assert_event_order 'refund-rollback-livez in_flight=0' 'refund-rollback-readiness status=200'
+assert_event_order 'refund-rollback-readiness status=200' 'helper old=sub2api-blue new=sub2api-green'
 assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=external old=sub2api-green new=sub2api-blue backup=false'
 assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=external old=sub2api-blue new=sub2api-green backup=false'
 assert_contains "$NODE_STATE_CALLS" 'abort-local'
 [ ! -e "$LOCAL_TRANSACTION" ] || fail 'post-Caddy helper failure left a local release transaction'
+assert_traffic_state accepting
 
 # A request-serving rollback node must stay background-fenced before, during,
 # and after its local blue-green recreation.

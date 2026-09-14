@@ -283,11 +283,32 @@ func (s *PaymentService) ReviewRefund(ctx context.Context, orderID int64) (*Refu
 	return s.reviewRefundWithClient(ctx, s.entClient, orderID, s.refundValuationTime(), false)
 }
 
-// invalidateReviewedSubscriptionRefundCaches makes a reserved or restored
-// subscription boundary visible to every authorization path after the database
-// transaction commits. Cache failures must not undo a durable entitlement
-// reservation or suppress the provider request, so they are logged while the
-// transactionally-enqueued subscription outbox guarantees later retries.
+// ensureReviewedSubscriptionRefundAuthorizationCaches invalidates the shared
+// subscription authorization snapshot before a reviewed refund may ask the
+// payment provider to move money. The entitlement reservation is already
+// durable at this point, so any error must leave the attempt pending for the
+// reconciliation worker to retry.
+func (s *PaymentService) ensureReviewedSubscriptionRefundAuthorizationCaches(ctx context.Context, orderID int64) error {
+	if s == nil || s.entClient == nil || s.subscriptionSvc == nil || orderID <= 0 {
+		return ErrSubscriptionCacheInvalidationUnavailable
+	}
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, s.entClient, orderID, false)
+	if err != nil {
+		return fmt.Errorf("load subscription refund cache target: %w", err)
+	}
+	if err := s.subscriptionSvc.EnsureSubscriptionAuthorizationCachesInvalidated(ctx, grant.UserID, grant.GroupID); err != nil {
+		return err
+	}
+	// API-key auth snapshots do not contain the subscription term, but clearing
+	// them after the strict subscription fence also refreshes related account
+	// presentation such as concurrency without weakening the provider boundary.
+	s.invalidatePaymentAuthCache(ctx, grant.UserID)
+	return nil
+}
+
+// invalidateReviewedSubscriptionRefundCaches is the best-effort terminal
+// repair path after a provider observation has been committed. The strict
+// pre-provider boundary above owns the money-moving safety decision.
 func (s *PaymentService) invalidateReviewedSubscriptionRefundCaches(ctx context.Context, orderID int64) {
 	if s == nil || s.entClient == nil || orderID <= 0 {
 		return

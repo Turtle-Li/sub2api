@@ -294,12 +294,8 @@ func (s *PaymentService) queryUnifiedRefund(ctx context.Context, o *dbent.Paymen
 }
 
 func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRefundAttempt) (*RefundResult, error) {
-	// The reservation is already durable when this function starts. Repeating
-	// cache invalidation here repairs the narrow crash window after commit and
-	// before the first provider request, and also repairs a missed terminal
-	// invalidation when an administrator queries the attempt again.
-	if a != nil && a.RefundKind == refundReviewKindSubscription {
-		s.invalidateReviewedSubscriptionRefundCaches(ctx, a.OrderID)
+	if a == nil {
+		return nil, errors.New("unified refund attempt is missing")
 	}
 	// Recheck the durable review fence immediately before a network operation.
 	manual, err := unifiedRefundOrderNeedsReview(ctx, s.entClient, a.OrderID)
@@ -318,6 +314,26 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 	}
 	if a.Status != unifiedRefundPending {
 		return &RefundResult{Success: a.Status == unifiedpay.RefundStatusSucceeded}, nil
+	}
+	if a.RefundKind == refundReviewKindSubscription {
+		cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		cacheErr := s.ensureReviewedSubscriptionRefundAuthorizationCaches(cacheCtx, a.OrderID)
+		cancel()
+		if cacheErr != nil {
+			// Keep both the provider request and the reserved subscription term
+			// pending. Durable reconciliation will retry this same boundary. The
+			// audit deliberately records only a stable code, never a Redis error.
+			auditCtx, auditCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			auditErr := writeUnifiedRefundAudit(auditCtx, s.entClient, a.OrderID, "UNIFIED_REFUND_CACHE_INVALIDATION_PENDING", map[string]any{
+				"product_refund_no": a.ProductRefundNo,
+				"code":              "cache_invalidation_unconfirmed",
+			})
+			auditCancel()
+			if auditErr != nil {
+				return nil, auditErr
+			}
+			return pendingUnifiedRefundResult(false), nil
+		}
 	}
 	var result *payment.UnifiedRefundResource
 	if a.RefundRequestID == "" {

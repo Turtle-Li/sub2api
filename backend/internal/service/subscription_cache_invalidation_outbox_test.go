@@ -60,7 +60,7 @@ type subscriptionAuthorizationInvalidatorStub struct {
 	err   error
 }
 
-func (s *subscriptionAuthorizationInvalidatorStub) InvalidateSubscriptionCaches(_ context.Context, userID, groupID int64) error {
+func (s *subscriptionAuthorizationInvalidatorStub) EnsureSubscriptionAuthorizationCachesInvalidated(_ context.Context, userID, groupID int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, [2]int64{userID, groupID})

@@ -12,6 +12,7 @@ import (
 const (
 	StateFileEnv = "SUB2API_BACKGROUND_STATE_FILE"
 	StateActive  = "active"
+	StateStandby = "standby"
 )
 
 var processActive atomic.Bool
@@ -46,4 +47,40 @@ func SharedWorkAllowed() bool {
 		return false
 	}
 	return strings.TrimSpace(string(data)) == StateActive
+}
+
+// DurableRecoveryWorkAllowed permits a deliberately narrow class of recovery
+// jobs to finish work that was prepared durably before a process crash. It
+// still stops during process shutdown, but it intentionally does not
+// distinguish the valid active and standby states: a Caddy-active candidate is
+// held in standby until a rollback-capable release commits, and must be able
+// to clear a compatibility gate without manual provider queries. A configured
+// missing, unsafe, or invalid state file remains fail-closed.
+//
+// Callers must own a database-authoritative multi-instance lease and a
+// persisted external idempotency key. It is not a replacement for
+// SharedWorkAllowed and must never be used for work that creates new business
+// operations.
+func DurableRecoveryWorkAllowed() bool {
+	if !processActive.Load() {
+		return false
+	}
+	path := strings.TrimSpace(os.Getenv(StateFileEnv))
+	if path == "" {
+		return true
+	}
+	info, err := os.Lstat(path) //nolint:gosec // G703: deployment injects this fixed runtime mount; it is not request input.
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64 {
+		return false
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // G703: deployment injects this fixed runtime mount; it is not request input.
+	if err != nil {
+		return false
+	}
+	switch strings.TrimSpace(string(data)) {
+	case StateActive, StateStandby:
+		return true
+	default:
+		return false
+	}
 }

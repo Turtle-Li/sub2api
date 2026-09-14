@@ -63,6 +63,7 @@ CONTAINER_REDIS_CA_PATH="/etc/ssl/certs/sub2api-db-ca.pem"
 CONTAINER_TRAFFIC_STATE_PATH="/run/sub2api-runtime/traffic-state"
 CONTAINER_BACKGROUND_STATE_PATH="/run/sub2api-runtime/background-state"
 CONTAINER_HEALTH_TOKEN_PATH="/run/sub2api-runtime/health-token"
+REFUND_ROLLBACK_READINESS_PATH="/internal/refund-rollback-readiness"
 
 ACTIVE_CONTAINER=""
 ACTIVE_UPSTREAM=""
@@ -75,6 +76,11 @@ FALLBACK_IMAGE=""
 # config).  An absent setting is the normal/fenced mode and is represented as
 # `false`.
 ACTIVE_FIXED_EGRESS_MODE=""
+# A successful fallback readiness gate leaves shared admission drained until
+# the historical generation has passed every post-switch verification. Keep
+# the prior value in memory so only that verified handoff can re-admit it.
+REFUND_FALLBACK_GATE_PRIOR_TRAFFIC_STATE=""
+LOCAL_RECONCILIATION_RESULT=""
 EXTERNAL_ENV_KEYS=(
   DATABASE_HOST DATABASE_PORT DATABASE_USER DATABASE_PASSWORD DATABASE_DBNAME DATABASE_SSLMODE
   REDIS_HOST REDIS_PORT REDIS_USERNAME REDIS_PASSWORD REDIS_DB REDIS_ENABLE_TLS
@@ -575,6 +581,240 @@ app_internal_health() {
     >/dev/null
 }
 
+runtime_traffic_state_file_metadata() {
+  stat -c '%u:%g:%a' "$TRAFFIC_STATE_FILE" 2>/dev/null \
+    || stat -f '%u:%g:%Lp' "$TRAFFIC_STATE_FILE"
+}
+
+runtime_traffic_state_file_is_safe() {
+  local metadata
+
+  [ "$DUAL_NODE_RUNTIME_ENABLED" = true ] || {
+    log "historical fallback requires dual-node runtime traffic admission for refund rollback safety" >&2
+    return 1
+  }
+  case "$TRAFFIC_STATE_FILE" in
+    /*) ;;
+    *)
+      log "runtime traffic-state path must be absolute: ${TRAFFIC_STATE_FILE}" >&2
+      return 1
+      ;;
+  esac
+  [ -f "$TRAFFIC_STATE_FILE" ] && [ ! -L "$TRAFFIC_STATE_FILE" ] || {
+    log "runtime traffic-state file is missing or unsafe: ${TRAFFIC_STATE_FILE}" >&2
+    return 1
+  }
+  metadata="$(runtime_traffic_state_file_metadata)" || {
+    log "could not inspect runtime traffic-state file: ${TRAFFIC_STATE_FILE}" >&2
+    return 1
+  }
+  if [ "$(id -u)" -eq 0 ]; then
+    [ "$metadata" = '0:0:644' ] || {
+      log "runtime traffic-state file has unexpected metadata: ${TRAFFIC_STATE_FILE}" >&2
+      return 1
+    }
+  else
+    # Hermetic tests run as the developer user. Production reaches this path
+    # only through the root-owned runtime-guard service.
+    [ "${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" = 1 ] \
+      && [ "${metadata##*:}" = 644 ] || {
+      log "runtime traffic-state file is not available to the runtime guard" >&2
+      return 1
+    }
+  fi
+  return 0
+}
+
+read_runtime_traffic_state() {
+  local state
+
+  runtime_traffic_state_file_is_safe || return 1
+  state="$(tr -d '\r\n' <"$TRAFFIC_STATE_FILE")" || return 1
+  case "$state" in
+    accepting|draining) printf '%s\n' "$state" ;;
+    *)
+      log "runtime traffic-state file has an invalid value" >&2
+      return 1
+      ;;
+  esac
+}
+
+write_runtime_traffic_state() {
+  local state="$1"
+
+  case "$state" in
+    accepting|draining) ;;
+    *)
+      log "refusing unsupported runtime traffic state: ${state}" >&2
+      return 1
+      ;;
+  esac
+  runtime_traffic_state_file_is_safe || return 1
+  # The candidate's single-file bind mount pins this inode. The maintenance
+  # lock held by the guard serializes this in-place update with node-state.
+  printf '%s\n' "$state" >"$TRAFFIC_STATE_FILE" \
+    && chmod 644 "$TRAFFIC_STATE_FILE"
+}
+
+active_internal_get_2xx() {
+  local path="$1"
+  local response
+
+  case "$path" in
+    /internal/livez|"$REFUND_ROLLBACK_READINESS_PATH") ;;
+    *)
+      log "refusing unsupported active internal refund probe path" >&2
+      return 1
+      ;;
+  esac
+  # The canonical production image is Alpine/BusyBox and does not install
+  # curl. BusyBox wget fails on a non-2xx response, so both an unavailable
+  # active candidate and a pending entitlement reservation fail closed. The
+  # health token stays inside the application namespace.
+  if ! response="$(docker exec \
+    -e "SUB2API_RUNTIME_GUARD_REFUND_GATE_PATH=${path}" \
+    -e "SUB2API_RUNTIME_GUARD_REFUND_GATE_PORT=${APP_PORT}" \
+    -e "SUB2API_RUNTIME_GUARD_REFUND_GATE_TOKEN_PATH=${CONTAINER_HEALTH_TOKEN_PATH}" \
+    "$ACTIVE_CONTAINER" \
+    sh -ceu '
+      token="$(cat "$SUB2API_RUNTIME_GUARD_REFUND_GATE_TOKEN_PATH")"
+      [ -n "$token" ]
+      wget -Y off -q -T 10 -O - \
+        --header="X-Monitor-Token: ${token}" \
+        "http://127.0.0.1:${SUB2API_RUNTIME_GUARD_REFUND_GATE_PORT}${SUB2API_RUNTIME_GUARD_REFUND_GATE_PATH}"
+    ')"; then
+    log "active candidate internal refund probe is unreachable or rejected: ${path}" >&2
+    return 1
+  fi
+  printf '%s' "$response"
+}
+
+active_in_flight_requests() {
+  local response in_flight
+
+  response="$(active_internal_get_2xx /internal/livez)" || return 1
+  in_flight="$(printf '%s\n' "$response" | awk '
+    match($0, /"in_flight_requests"[[:space:]]*:[[:space:]]*[0-9][0-9]*/) {
+      value = substr($0, RSTART, RLENGTH)
+      sub(/^.*:[[:space:]]*/, "", value)
+      print value
+      exit
+    }
+  ')"
+  case "$in_flight" in
+    ''|*[!0-9]*)
+      log "active liveness response omitted a valid in-flight request count" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$in_flight"
+}
+
+wait_for_active_requests_to_drain() {
+  local attempt=1 in_flight
+
+  while [ "$attempt" -le "$RETRY_ATTEMPTS" ]; do
+    in_flight="$(active_in_flight_requests)" || return 1
+    if [ "$in_flight" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$attempt" -lt "$RETRY_ATTEMPTS" ]; then
+      sleep "$RETRY_INTERVAL_SECONDS"
+    fi
+    attempt=$((attempt + 1))
+  done
+  log "active candidate requests did not drain before historical fallback: in_flight=${in_flight}" >&2
+  return 1
+}
+
+restore_traffic_after_failed_refund_fallback_gate() {
+  local prior_state="$1"
+
+  if write_runtime_traffic_state "$prior_state"; then
+    log "refund rollback gate retained Caddy on ${ACTIVE_CONTAINER}; restored traffic admission to ${prior_state}"
+    return 0
+  fi
+  log "ERROR: refund rollback gate failed and traffic admission could not be restored; ${ACTIVE_CONTAINER} remains fenced for manual recovery" >&2
+  return 1
+}
+
+restore_traffic_after_failed_active_isolation() {
+  local prior_state="${REFUND_FALLBACK_GATE_PRIOR_TRAFFIC_STATE:-}"
+
+  [ -n "$prior_state" ] || return 0
+  # Do not reopen traffic if a failed stop left the selected generation or
+  # Caddy direction uncertain. A live candidate with all three Caddy views
+  # still selected is safe to return to its pre-gate admission state.
+  if ! container_running "$ACTIVE_CONTAINER" \
+    || ! verify_caddy_matches "$ACTIVE_UPSTREAM" \
+    || ! verify_caddy_startup_file "$ACTIVE_UPSTREAM"; then
+    log "WARNING: active isolation failed after refund readiness; leaving traffic admission draining for manual recovery" >&2
+    return 0
+  fi
+  if write_runtime_traffic_state "$prior_state"; then
+    REFUND_FALLBACK_GATE_PRIOR_TRAFFIC_STATE=""
+    log "active isolation failed while Caddy remains on ${ACTIVE_CONTAINER}; restored traffic admission to ${prior_state}"
+    return 0
+  fi
+  log "ERROR: active isolation failed and traffic admission could not be restored; ${ACTIVE_CONTAINER} remains fenced for manual recovery" >&2
+  return 1
+}
+
+admit_traffic_after_verified_refund_fallback() {
+  local prior_state="${REFUND_FALLBACK_GATE_PRIOR_TRAFFIC_STATE:-}"
+
+  [ -n "$prior_state" ] || return 0
+  # A retained local release transaction is authoritative for final traffic
+  # admission. `recover-local` has already made its selected old generation
+  # active and accepted; do not overwrite that durable finalization with the
+  # state that preceded this transient fallback gate.
+  if [ "$LOCAL_RECONCILIATION_RESULT" != NO_LOCAL_RECOVERY ]; then
+    REFUND_FALLBACK_GATE_PRIOR_TRAFFIC_STATE=""
+    log "historical fallback ${FALLBACK_CONTAINER} finalized retained local release state: ${LOCAL_RECONCILIATION_RESULT}"
+    return 0
+  fi
+  if ! write_runtime_traffic_state "$prior_state"; then
+    log "ERROR: historical fallback was verified but traffic admission could not be restored; ${FALLBACK_CONTAINER} remains fenced for manual recovery" >&2
+    return 1
+  fi
+  REFUND_FALLBACK_GATE_PRIOR_TRAFFIC_STATE=""
+  log "historical fallback ${FALLBACK_CONTAINER} is verified; restored traffic admission to ${prior_state}"
+  return 0
+}
+
+gate_active_refund_rollback_before_fallback() {
+  local prior_state
+
+  REFUND_FALLBACK_GATE_PRIOR_TRAFFIC_STATE=""
+  if ! runtime_traffic_state_file_is_safe; then
+    return 1
+  fi
+  if ! container_running "$ACTIVE_CONTAINER"; then
+    log "active candidate is not running for refund rollback readiness: ${ACTIVE_CONTAINER}" >&2
+    return 1
+  fi
+  if ! running_container_runtime_state_matches "$ACTIVE_CONTAINER"; then
+    log "active candidate runtime-state bind is stale; refusing historical fallback: ${ACTIVE_CONTAINER}" >&2
+    return 1
+  fi
+  prior_state="$(read_runtime_traffic_state)" || return 1
+  if ! write_runtime_traffic_state draining; then
+    return 1
+  fi
+  log "drained new requests from ${ACTIVE_CONTAINER} before checking reviewed refund reservations"
+  if ! wait_for_active_requests_to_drain; then
+    restore_traffic_after_failed_refund_fallback_gate "$prior_state" || true
+    return 1
+  fi
+  if ! active_internal_get_2xx "$REFUND_ROLLBACK_READINESS_PATH" >/dev/null; then
+    restore_traffic_after_failed_refund_fallback_gate "$prior_state" || true
+    return 1
+  fi
+  REFUND_FALLBACK_GATE_PRIOR_TRAFFIC_STATE="$prior_state"
+  log "refund rollback readiness passed for ${ACTIVE_CONTAINER}; continuing with historical fallback"
+  return 0
+}
+
 wait_for_container_health() {
   local container_name="$1"
   local description="$2"
@@ -1014,12 +1254,14 @@ verify_fallback_switch() {
 
 reconcile_local_release_state() {
   local container_name="$1" result
+  LOCAL_RECONCILIATION_RESULT=""
   [ -x "$NODE_STATE_SCRIPT" ] || {
     log "node state helper is missing or not executable: ${NODE_STATE_SCRIPT}" >&2
     return 1
   }
   result="$(env SUB2API_NODE_STATE_LOCK_HELD=1 "$NODE_STATE_SCRIPT" recover-local)" \
     || return 1
+  LOCAL_RECONCILIATION_RESULT="$result"
   if [ "$result" != NO_LOCAL_RECOVERY ]; then
     log "node runtime state reconciled after interrupted local release: ${result}"
   fi
@@ -1048,7 +1290,7 @@ case "$DEPENDENCY_MODE" in
   *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external (got: ${DEPENDENCY_MODE})" ;;
 esac
 
-for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date tr id stat; do
+for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date tr id stat chmod; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RUNTIME_GUARD_RETRY_ATTEMPTS "$RETRY_ATTEMPTS"
@@ -1203,8 +1445,13 @@ if [ "$running_inactive_count" -gt 0 ]; then
     write_failure_state 'running-fallback-runtime-state-drift' "$FALLBACK_CONTAINER"
     die "running inactive fallback has stale runtime-state binds: ${FALLBACK_CONTAINER}"
   fi
-  isolate_active_container \
-    || die "could not isolate failed active container before promoting ${FALLBACK_CONTAINER}"
+  if ! gate_active_refund_rollback_before_fallback; then
+    die "historical fallback is blocked by active refund readiness; retaining the active Caddy direction for reconciliation"
+  fi
+  if ! isolate_active_container; then
+    restore_traffic_after_failed_active_isolation || true
+    die "could not isolate failed active container before promoting ${FALLBACK_CONTAINER}"
+  fi
   log "promoting already-running healthy historical fallback: ${FALLBACK_CONTAINER}"
   if ! switch_caddy_to_fallback; then
     fence_fallback_if_caddy_still_uses_failed_active
@@ -1226,6 +1473,10 @@ if [ "$running_inactive_count" -gt 0 ]; then
     write_failure_state 'running-fallback-reconciliation-failed' "$FALLBACK_CONTAINER"
     die "could not reconcile node state after running fallback promotion"
   fi
+  if ! admit_traffic_after_verified_refund_fallback; then
+    write_failure_state 'running-fallback-traffic-admission-restore-failed' "$FALLBACK_CONTAINER"
+    die "could not restore traffic admission after running fallback promotion"
+  fi
   if [ "$ACTIVE_RUNTIME_STATE_INVALID" != true ]; then
     clear_failure_state
   else
@@ -1235,11 +1486,6 @@ if [ "$running_inactive_count" -gt 0 ]; then
   exit 0
 fi
 
-if ! isolate_active_container; then
-  write_failure_state 'could-not-isolate-active'
-  die "could not isolate failed active container; fallback was not started"
-fi
-
 if ! select_known_good_fallback; then
   if [ "$ACTIVE_RUNTIME_STATE_INVALID" = true ]; then
     write_failure_state 'active-runtime-state-drift-no-known-good-fallback'
@@ -1247,6 +1493,16 @@ if ! select_known_good_fallback; then
     write_failure_state 'no-known-good-fallback'
   fi
   die "no stopped, non-OOM, zero-exit historical fallback is available"
+fi
+
+if ! gate_active_refund_rollback_before_fallback; then
+  die "historical fallback is blocked by active refund readiness; retaining the active Caddy direction for reconciliation"
+fi
+
+if ! isolate_active_container; then
+  restore_traffic_after_failed_active_isolation || true
+  write_failure_state 'could-not-isolate-active'
+  die "could not isolate failed active container; fallback was not started"
 fi
 
 if ! start_fallback; then
@@ -1274,6 +1530,11 @@ if ! reconcile_local_release_state "$FALLBACK_CONTAINER"; then
   fence_fallback_if_caddy_still_uses_failed_active
   write_failure_state 'fallback-reconciliation-failed' "$FALLBACK_CONTAINER"
   die "could not reconcile node state after fallback promotion"
+fi
+
+if ! admit_traffic_after_verified_refund_fallback; then
+  write_failure_state 'fallback-traffic-admission-restore-failed' "$FALLBACK_CONTAINER"
+  die "could not restore traffic admission after fallback promotion"
 fi
 
 if [ "$ACTIVE_RUNTIME_STATE_INVALID" != true ]; then

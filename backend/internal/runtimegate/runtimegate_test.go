@@ -41,6 +41,20 @@ func TestSharedWorkAllowedLegacyAndConfiguredStates(t *testing.T) {
 	require.False(t, SharedWorkAllowed())
 }
 
+func TestDurableRecoveryWorkAllowedKeepsStandbyCandidateRecoverable(t *testing.T) {
+	SetProcessActive(true)
+	t.Cleanup(func() { SetProcessActive(true) })
+	statePath := filepath.Join(t.TempDir(), "background-state")
+	t.Setenv(StateFileEnv, statePath)
+	require.False(t, DurableRecoveryWorkAllowed(), "a configured missing state file remains fail-closed")
+	require.NoError(t, os.WriteFile(statePath, []byte("standby\n"), 0o600))
+	require.False(t, SharedWorkAllowed())
+	require.True(t, DurableRecoveryWorkAllowed(), "a standby candidate may finish leased, idempotent recovery")
+
+	SetProcessActive(false)
+	require.False(t, DurableRecoveryWorkAllowed(), "shutdown still stops new recovery claims")
+}
+
 func TestCurrencyCutoverCacheBypassRequiresRootOnlyRegularMarker(t *testing.T) {
 	root := &syscall.Stat_t{Uid: 0}
 	nonRoot := &syscall.Stat_t{Uid: 1}

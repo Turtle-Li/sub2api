@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -55,6 +56,11 @@ type SubscriptionService struct {
 	subCacheGroup  singleflight.Group
 	subCacheTTL    time.Duration
 	subCacheJitter int // 抖动百分比
+	// subCacheEpochs fences a DB miss from re-inserting a pre-mutation
+	// snapshot after a local or Pub/Sub invalidation. It is consulted only
+	// around cache misses and mutations; L1 cache hits remain lock-free.
+	subCacheMu     sync.Mutex
+	subCacheEpochs map[string]uint64
 
 	maintenanceQueue *SubscriptionMaintenanceQueue
 	now              func() time.Time
@@ -117,6 +123,7 @@ func (s *SubscriptionService) initSubCache(cfg *config.Config) {
 	s.subCacheL1 = cache
 	s.subCacheTTL = time.Duration(sc.L1TTLSeconds) * time.Second
 	s.subCacheJitter = sc.JitterPercent
+	s.subCacheEpochs = make(map[string]uint64)
 }
 
 // subCacheKey 生成订阅缓存 key（热路径，避免 fmt.Sprintf 开销）
@@ -143,10 +150,7 @@ func (s *SubscriptionService) jitteredTTL(ttl time.Duration) time.Duration {
 
 // InvalidateSubCache 失效指定用户+分组的订阅 L1 缓存
 func (s *SubscriptionService) InvalidateSubCache(userID, groupID int64) {
-	if s.subCacheL1 == nil {
-		return
-	}
-	s.subCacheL1.Del(subCacheKey(userID, groupID))
+	s.invalidateSubCacheKey(subCacheKey(userID, groupID), false)
 }
 
 // InvalidateSubCacheSync 失效订阅 L1 缓存并等待 Ristretto 删除操作生效。
@@ -155,11 +159,38 @@ func (s *SubscriptionService) InvalidateSubCacheSync(userID, groupID int64) {
 }
 
 func (s *SubscriptionService) invalidateSubCacheKeySync(key string) {
+	s.invalidateSubCacheKey(key, true)
+}
+
+func (s *SubscriptionService) invalidateSubCacheKey(key string, wait bool) {
+	if s == nil || key == "" {
+		return
+	}
+	s.subCacheMu.Lock()
+	defer s.subCacheMu.Unlock()
+	if s.subCacheEpochs == nil {
+		s.subCacheEpochs = make(map[string]uint64)
+	}
+	s.subCacheEpochs[key]++
 	if s.subCacheL1 == nil {
 		return
 	}
 	s.subCacheL1.Del(key)
-	s.subCacheL1.Wait()
+	if wait {
+		s.subCacheL1.Wait()
+	}
+}
+
+func (s *SubscriptionService) subscriptionCacheEpoch(key string) uint64 {
+	if s == nil || key == "" {
+		return 0
+	}
+	s.subCacheMu.Lock()
+	defer s.subCacheMu.Unlock()
+	if s.subCacheEpochs == nil {
+		s.subCacheEpochs = make(map[string]uint64)
+	}
+	return s.subCacheEpochs[key]
 }
 
 // StartSubCacheInvalidationSubscriber 启动跨实例订阅 L1 缓存失效订阅。
@@ -196,6 +227,23 @@ func (s *SubscriptionService) InvalidateSubscriptionCaches(ctx context.Context, 
 		return fmt.Errorf("publish subscription cache invalidation: %w", err)
 	}
 	return nil
+}
+
+// EnsureSubscriptionAuthorizationCachesInvalidated is the strict refund
+// boundary. It removes the local L1 entry synchronously, then requires a
+// fenced shared-cache delete and a Redis-accepted cross-instance invalidation
+// publication. Compatible remote L1 entries verify the fence on a hit, so a
+// delayed message cannot make them authorize stale data. On error the caller
+// must retain the pending entitlement hold and let reconciliation retry before
+// contacting the payment provider.
+func (s *SubscriptionService) EnsureSubscriptionAuthorizationCachesInvalidated(ctx context.Context, userID, groupID int64) error {
+	if s == nil || s.billingCacheService == nil {
+		return ErrSubscriptionCacheInvalidationUnavailable
+	}
+	s.InvalidateSubCacheSync(userID, groupID)
+	cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return s.billingCacheService.EnsureSubscriptionAuthorizationCacheInvalidated(cacheCtx, userID, groupID)
 }
 
 // AssignSubscriptionInput 分配订阅输入
@@ -751,44 +799,212 @@ func (s *SubscriptionService) GetByID(ctx context.Context, id int64) (*UserSubsc
 	return &items[0], nil
 }
 
-// GetActiveSubscription 获取用户对特定分组的有效订阅
-// 使用 L1 缓存 + singleflight 加速中间件热路径。
-// 返回缓存对象的浅拷贝，调用方可安全修改字段而不会污染缓存或触发 data race。
+// GetActiveSubscription gets the authorization snapshot used by the request
+// path. L1 hits remain DB-free; when a shared fence exists they perform one
+// Redis generation read before use. On a miss, the snapshot is re-read from
+// the authoritative repository before it can populate L1, and a local epoch
+// plus the shared fence prevents an old reader from writing back after a
+// refund invalidation.
 func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
 	key := subCacheKey(userID, groupID)
 
-	// L1 缓存命中：返回浅拷贝
 	if s.subCacheL1 != nil {
 		if v, ok := s.subCacheL1.Get(key); ok {
-			if sub, ok := v.(*UserSubscription); ok {
-				cp := *sub
-				return &cp, nil
+			switch cached := v.(type) {
+			case *subscriptionL1CacheEntry:
+				if cached != nil && s.subscriptionL1EntryCurrent(ctx, userID, groupID, cached) {
+					cp := cached.subscription
+					return &cp, nil
+				}
+				// A changed (or unavailable) shared fence means this L1 snapshot
+				// cannot prove its authorization revision. Drop it before the
+				// DB-backed, fenced miss path runs.
+				s.InvalidateSubCacheSync(userID, groupID)
+			case *UserSubscription:
+				// A raw entry can only originate from an in-process legacy caller
+				// or test. Once a shared fencer exists it is not safe to accept it
+				// because it has no generation to validate on this authorization
+				// hit.
+				if s.billingCacheService == nil {
+					cp := *cached
+					return &cp, nil
+				}
+				s.InvalidateSubCacheSync(userID, groupID)
 			}
 		}
 	}
 
-	// singleflight 防止并发击穿
+	// Without L1 there is nothing to repopulate locally. The shared billing
+	// cache has its own fenced miss path in BillingCacheService.
+	if s.subCacheL1 == nil {
+		return s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
+	}
+
 	value, err, _ := s.subCacheGroup.Do(key, func() (any, error) {
-		sub, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
-		if err != nil {
-			return nil, err // 直接透传 repo 已翻译的错误（NotFound → ErrSubscriptionNotFound，其他错误原样返回）
-		}
-		// 写入 L1 缓存
-		if s.subCacheL1 != nil {
-			_ = s.subCacheL1.SetWithTTL(key, sub, 1, s.jitteredTTL(s.subCacheTTL))
-		}
-		return sub, nil
+		return s.loadActiveSubscriptionForL1(ctx, userID, groupID, key)
 	})
 	if err != nil {
 		return nil, err
 	}
-	// singleflight 返回的也是缓存指针，需要浅拷贝
 	sub, ok := value.(*UserSubscription)
 	if !ok || sub == nil {
 		return nil, ErrSubscriptionNotFound
 	}
 	cp := *sub
 	return &cp, nil
+}
+
+const subscriptionL1FillAttempts = 3
+
+func (s *SubscriptionService) loadActiveSubscriptionForL1(ctx context.Context, userID, groupID int64, key string) (*UserSubscription, error) {
+	sharedFence, sharedFenceSupported, sharedFenceErr := s.captureSubscriptionCacheFence(ctx, userID, groupID)
+
+	for attempt := 0; attempt < subscriptionL1FillAttempts; attempt++ {
+		localEpoch := s.subscriptionCacheEpoch(key)
+		loaded, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
+		if err != nil {
+			return nil, err
+		}
+		confirmed, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
+		if err != nil {
+			return nil, err
+		}
+		if !sameActiveSubscriptionAuthorizationSnapshot(loaded, confirmed) {
+			continue
+		}
+
+		// "No fence adapter" is a compatibility case for lightweight cache
+		// implementations. A *failed* fence read is different: it could be a
+		// temporary Redis outage, so writing an unfenced L1 entry would let it
+		// authorize after Redis recovers and a remote refund advances the
+		// generation. In that case serve this verified DB snapshot only.
+		if sharedFenceErr != nil {
+			return confirmed, nil
+		}
+
+		outcome := s.storeActiveSubscriptionL1IfCurrent(ctx, key, localEpoch, userID, groupID, sharedFence, sharedFenceSupported, confirmed)
+		switch outcome {
+		case subscriptionL1Stored, subscriptionL1Bypassed:
+			return confirmed, nil
+		case subscriptionL1Retry:
+			sharedFence, sharedFenceSupported, sharedFenceErr = s.captureSubscriptionCacheFence(ctx, userID, groupID)
+		}
+	}
+
+	// Repeated concurrent mutations are unusual but must not turn into a stale
+	// authorization cache entry. Serve one final authoritative snapshot without
+	// populating L1; the next request may cache a stable revision.
+	return s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
+}
+
+type subscriptionL1StoreOutcome uint8
+
+const (
+	subscriptionL1Stored subscriptionL1StoreOutcome = iota
+	subscriptionL1Bypassed
+	subscriptionL1Retry
+)
+
+type subscriptionL1CacheEntry struct {
+	subscription UserSubscription
+	sharedFence  int64
+	sharedFenced bool
+}
+
+func (s *SubscriptionService) captureSubscriptionCacheFence(ctx context.Context, userID, groupID int64) (int64, bool, error) {
+	if s == nil || s.billingCacheService == nil {
+		return 0, false, nil
+	}
+	return s.billingCacheService.CaptureSubscriptionCacheFence(ctx, userID, groupID)
+}
+
+// subscriptionL1EntryCurrent makes an L1 authorization hit conditional on the
+// shared Redis generation when one is available. This is intentionally a
+// Redis check rather than a DB check: it closes the cross-instance Pub/Sub
+// delivery gap without putting a database query on every request. Pub/Sub
+// remains the eager eviction path; the fence is the correctness barrier.
+func (s *SubscriptionService) subscriptionL1EntryCurrent(ctx context.Context, userID, groupID int64, entry *subscriptionL1CacheEntry) bool {
+	if entry == nil || !entry.sharedFenced {
+		return entry != nil
+	}
+	if s == nil || s.billingCacheService == nil {
+		return false
+	}
+	current, err := s.billingCacheService.SubscriptionCacheFenceCurrent(ctx, userID, groupID, entry.sharedFence)
+	return err == nil && current
+}
+
+func (s *SubscriptionService) storeActiveSubscriptionL1IfCurrent(
+	ctx context.Context,
+	key string,
+	localEpoch uint64,
+	userID, groupID, sharedFence int64,
+	sharedFenced bool,
+	sub *UserSubscription,
+) subscriptionL1StoreOutcome {
+	if s == nil || sub == nil || s.subCacheL1 == nil {
+		return subscriptionL1Bypassed
+	}
+	s.subCacheMu.Lock()
+	defer s.subCacheMu.Unlock()
+	if s.subCacheEpochs == nil {
+		s.subCacheEpochs = make(map[string]uint64)
+	}
+	if s.subCacheEpochs[key] != localEpoch {
+		return subscriptionL1Retry
+	}
+	if sharedFenced {
+		current, err := s.billingCacheService.SubscriptionCacheFenceCurrent(ctx, userID, groupID, sharedFence)
+		if err != nil {
+			return subscriptionL1Bypassed
+		}
+		if !current {
+			return subscriptionL1Retry
+		}
+	}
+
+	cacheSub := *sub
+	entry := &subscriptionL1CacheEntry{
+		subscription: cacheSub,
+		sharedFence:  sharedFence,
+		sharedFenced: sharedFenced,
+	}
+	if !s.subCacheL1.SetWithTTL(key, entry, 1, s.jitteredTTL(s.subCacheTTL)) {
+		// A dropped Ristretto admission leaves no entry, which is safe. The
+		// current DB snapshot can still serve this request.
+		return subscriptionL1Bypassed
+	}
+	// Keep Set and a subsequent synchronous invalidation ordered. This runs on
+	// a miss only; cache hits retain their original lock-free fast path.
+	s.subCacheL1.Wait()
+	if sharedFenced {
+		current, err := s.billingCacheService.SubscriptionCacheFenceCurrent(ctx, userID, groupID, sharedFence)
+		if err == nil && !current {
+			s.subCacheL1.Del(key)
+			s.subCacheL1.Wait()
+			return subscriptionL1Retry
+		}
+		if err != nil {
+			s.subCacheL1.Del(key)
+			s.subCacheL1.Wait()
+			return subscriptionL1Bypassed
+		}
+	}
+	return subscriptionL1Stored
+}
+
+func sameActiveSubscriptionAuthorizationSnapshot(left, right *UserSubscription) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.ID == right.ID &&
+		left.UserID == right.UserID &&
+		left.GroupID == right.GroupID &&
+		left.Status == right.Status &&
+		left.StartsAt.Equal(right.StartsAt) &&
+		left.ExpiresAt.Equal(right.ExpiresAt) &&
+		left.UpdatedAt.Equal(right.UpdatedAt) &&
+		left.DeletedAt == nil && right.DeletedAt == nil
 }
 
 // ListUserSubscriptions 获取用户的所有订阅

@@ -42,9 +42,12 @@ created by each subscription order.
 7. A pending provider refund reserves its wallet components or subscription
    duration before the network request. Usage and renewals cannot consume the
    reserved entitlement. The same transaction enqueues durable subscription and
-   API-key cache invalidation, with immediate best-effort eviction after commit.
-   A trusted failure releases it; an unknown result keeps it reserved until
-   reconciliation; success captures it exactly once.
+   API-key cache invalidation. Before a subscription refund reaches the provider,
+   the service must also advance the shared Redis authorization fence, delete
+   current and legacy subscription cache entries, and publish peer-L1 eviction;
+   failure leaves the reservation pending with zero provider calls. A trusted
+   provider failure releases it, an unknown result keeps it reserved for leased
+   reconciliation, and success captures it exactly once.
 8. Historical state is never guessed. Existing balances enter the component
    model as unclassified/non-refundable gift. Orders without a proven grant are
    shown as manual review.
@@ -79,7 +82,9 @@ the existing order refund fields for compatibility.
 - `unified_payment_refund_attempts`: extended with refund kind, quote revision,
   wallet paid/gift reservation, subscription duration reservation, valuation
   time, and payment-currency amount. The existing provider identifiers and
-  idempotency key remain authoritative.
+  idempotency key remain authoritative. A second additive migration adds the
+  lease, retry time, attempt count and bounded error state used by the automatic
+  reconciler; it does not create a second financial state machine.
 
 The wallet component invariants are:
 
@@ -107,7 +112,10 @@ review before the administrator can retry.
 review revision. Under one database transaction the service locks the order
 and relevant wallet/subscription rows, recalculates the review, rejects a stale
 revision, creates the durable attempt, reserves the entitlement, and marks the
-order pending. Only then does it call the payment provider.
+order pending. A subscription attempt must then pass the shared authorization
+cache fence before it can call the payment provider. Any pending reviewed
+attempt is resumed by a bounded, leased worker with the exact persisted
+provider idempotency key.
 
 Lock order:
 
@@ -156,9 +164,25 @@ attempts created by the new code must be reconciled before rolling back the
 application: their reservations cannot be understood by the previous binary.
 The deployment runbook therefore pauses new refunds, queries pending attempts,
 and requires a zero-pending result before binary rollback. Ledger and grant rows
-remain as audit evidence and are not deleted. An older binary safely ignores
-the dedicated subscription cache outbox while the existing API-key invalidation
-outbox retains its original schema and worker contract.
+remain as audit evidence and are not deleted. For a post-switch rollback, the
+canonical server release drains candidate request admission in place and calls
+its monitor-token-protected `GET /internal/refund-rollback-readiness` endpoint.
+Only a `2xx` result permits old-generation takeover. A non-`2xx` or unreachable
+endpoint restores the traffic state that preceded the check (normally
+`accepting`) without replacing its bind-mounted inode, and retains the
+candidate, Caddy direction, and local release transaction. The candidate must
+finish automatic reconciliation before an operator runs
+`sudo systemctl start sub2api-runtime-guard.service`. That service takes the
+canonical maintenance lock and calls `sub2api-node-state.sh recover-local`
+against the verified Caddy-selected generation; do not rerun the release script,
+delete the local transaction, or make a direct Caddy/container rollback. The runtime guard also
+applies the same readiness gate before any automatic historical fallback. If
+readiness has passed but a later source check or rollback-helper step fails,
+admission is restored only while every Caddy view still points to the candidate;
+an old or ambiguous Caddy direction remains fenced for the same recovery
+transaction. An older binary safely ignores the dedicated subscription cache
+outbox while the existing API-key invalidation outbox retains its original
+schema and worker contract.
 
 ## Verification
 

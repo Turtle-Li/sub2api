@@ -65,14 +65,14 @@ func TestRevokeSubscription_InvalidatesL1CacheSynchronously(t *testing.T) {
 	_, err := svc.GetActiveSubscription(context.Background(), 10, 20)
 	require.NoError(t, err)
 	svc.subCacheL1.Wait()
-	require.Equal(t, 1, repo.getActiveCalls)
+	require.Equal(t, 2, repo.getActiveCalls, "L1 miss rechecks the authoritative subscription snapshot before caching")
 
 	err = svc.RevokeSubscription(context.Background(), 1)
 	require.NoError(t, err)
 
 	_, err = svc.GetActiveSubscription(context.Background(), 10, 20)
 	require.ErrorIs(t, err, ErrSubscriptionNotFound)
-	require.Equal(t, 2, repo.getActiveCalls, "撤销后应回源确认订阅已不存在，不能命中旧 L1")
+	require.Equal(t, 3, repo.getActiveCalls, "撤销后应回源确认订阅已不存在，不能命中旧 L1")
 }
 
 type restoreUserSubRepoStub struct {

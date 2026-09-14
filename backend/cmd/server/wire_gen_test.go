@@ -89,6 +89,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // scheduledTestRunner
 		nil, // backupSvc
 		nil, // paymentOrderExpiry
+		nil, // paymentRefundReconciliation
 		nil, // invoiceNotifications
 		nil, // feishuPaymentIncidents
 		nil, // channelMonitorRunner

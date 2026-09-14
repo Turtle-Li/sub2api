@@ -55,6 +55,19 @@ assert_before() {
     || fail "expected '${first}' before '${second}' in ${file}"
 }
 
+file_inode() {
+  stat -c '%i' "$1" 2>/dev/null || stat -f '%i' "$1"
+}
+
+assert_traffic_state() {
+  local expected="$1"
+  local actual
+
+  actual="$(tr -d '\r\n' <"${CASE_ROOT}/runtime/traffic-state")"
+  [ "$actual" = "$expected" ] \
+    || fail "expected traffic state ${expected}, got ${actual}"
+}
+
 SERVICE_UNIT="${DEPLOY_DIR}/sub2api-runtime-guard.service"
 assert_contains "$SERVICE_UNIT" 'ConditionFileIsExecutable=/usr/local/libexec/sub2api-runtime-guard.sh'
 assert_not_contains "$SERVICE_UNIT" 'ConditionPathIsExecutable='
@@ -144,11 +157,13 @@ case "${1:-}" in
     shift
     container_name=""
     runtime_state_path=""
+    refund_gate_path=""
     while [ "$#" -gt 0 ]; do
       case "$1" in
         -e)
           case "${2:-}" in
             SUB2API_RUNTIME_STATE_PATH=*) runtime_state_path="${2#*=}" ;;
+            SUB2API_RUNTIME_GUARD_REFUND_GATE_PATH=*) refund_gate_path="${2#*=}" ;;
           esac
           shift 2
           ;;
@@ -175,7 +190,39 @@ case "${1:-}" in
       exit 0
     fi
     load_state "$container_name" || exit 1
-    [ "$running" = true ] && [ "$health" = healthy ] || exit 1
+    [ "$running" = true ] || exit 1
+    if [ -n "$refund_gate_path" ]; then
+      case "$command_text" in
+        *wget*--header*X-Monitor-Token*) ;;
+        *) exit 1 ;;
+      esac
+      case "$refund_gate_path" in
+        /internal/livez)
+          if [ "${FAKE_REFUND_ROLLBACK_LIVEZ_UNREACHABLE:-false}" = true ]; then
+            [ -z "${FAKE_REFUND_GATE_EVENTS:-}" ] || printf 'livez=unreachable\n' >>"$FAKE_REFUND_GATE_EVENTS"
+            exit 1
+          fi
+          [ -z "${FAKE_REFUND_GATE_EVENTS:-}" ] || printf 'livez=in_flight:%s\n' \
+            "${FAKE_REFUND_ROLLBACK_IN_FLIGHT:-0}" >>"$FAKE_REFUND_GATE_EVENTS"
+          printf '{"live":true,"in_flight_requests":%s}\n' "${FAKE_REFUND_ROLLBACK_IN_FLIGHT:-0}"
+          exit 0
+          ;;
+        /internal/refund-rollback-readiness)
+          if [ "${FAKE_REFUND_ROLLBACK_READINESS_UNREACHABLE:-false}" = true ]; then
+            [ -z "${FAKE_REFUND_GATE_EVENTS:-}" ] || printf 'readiness=unreachable\n' >>"$FAKE_REFUND_GATE_EVENTS"
+            exit 1
+          fi
+          [ -z "${FAKE_REFUND_GATE_EVENTS:-}" ] || printf 'readiness=status:%s\n' \
+            "${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" >>"$FAKE_REFUND_GATE_EVENTS"
+          case "${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" in
+            2??) printf '{"ready":true}\n'; exit 0 ;;
+            *) exit 1 ;;
+          esac
+          ;;
+        *) exit 1 ;;
+      esac
+    fi
+    [ -n "$runtime_state_path" ] || [ "$health" = healthy ] || exit 1
     if [ -n "$runtime_state_path" ]; then
       case "$runtime_state_path" in
         /run/sub2api-runtime/traffic-state)
@@ -390,6 +437,7 @@ new_case() {
   : >"${CASE_ROOT}/release-calls.log"
   : >"${CASE_ROOT}/curl-calls.log"
   : >"${CASE_ROOT}/node-state-calls.log"
+  : >"${CASE_ROOT}/refund-gate-events.log"
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/app/Caddyfile"
   printf '{"upstream":"sub2api-green:8080"}\n' >"${CASE_ROOT}/active-config.json"
   printf 'reverse_proxy sub2api-green:8080\n' >"${CASE_ROOT}/startup-Caddyfile"
@@ -421,12 +469,15 @@ fi
 exit "${FAKE_RELEASE_RESULT:-0}"
 EOF
   chmod +x "${CASE_ROOT}/app/scripts/sub2api-blue-green-release.sh"
-  cat >"${CASE_ROOT}/app/scripts/sub2api-node-state.sh" <<'EOF'
+cat >"${CASE_ROOT}/app/scripts/sub2api-node-state.sh" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$*" >>"$FAKE_NODE_STATE_CALLS"
 [ "${FAKE_NODE_STATE_RESULT:-0}" -eq 0 ] || exit "${FAKE_NODE_STATE_RESULT}"
-printf 'NO_LOCAL_RECOVERY\n'
+if [ "${FAKE_NODE_STATE_RESPONSE:-NO_LOCAL_RECOVERY}" != NO_LOCAL_RECOVERY ]; then
+  printf 'accepting\n' >"${FAKE_RUNTIME_ROOT}/traffic-state"
+fi
+printf '%s\n' "${FAKE_NODE_STATE_RESPONSE:-NO_LOCAL_RECOVERY}"
 EOF
   chmod +x "${CASE_ROOT}/app/scripts/sub2api-node-state.sh"
 }
@@ -454,6 +505,12 @@ run_guard() {
     FAKE_RUNTIME_INODE_DRIFT_AFTER_RELEASE="${FAKE_RUNTIME_INODE_DRIFT_AFTER_RELEASE:-false}" \
     FAKE_RUNTIME_ROOT="${CASE_ROOT}/runtime" \
     FAKE_NODE_STATE_CALLS="${CASE_ROOT}/node-state-calls.log" \
+    FAKE_NODE_STATE_RESPONSE="${FAKE_NODE_STATE_RESPONSE:-NO_LOCAL_RECOVERY}" \
+    FAKE_REFUND_GATE_EVENTS="${CASE_ROOT}/refund-gate-events.log" \
+    FAKE_REFUND_ROLLBACK_IN_FLIGHT="${FAKE_REFUND_ROLLBACK_IN_FLIGHT:-0}" \
+    FAKE_REFUND_ROLLBACK_LIVEZ_UNREACHABLE="${FAKE_REFUND_ROLLBACK_LIVEZ_UNREACHABLE:-false}" \
+    FAKE_REFUND_ROLLBACK_READINESS_STATUS="${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" \
+    FAKE_REFUND_ROLLBACK_READINESS_UNREACHABLE="${FAKE_REFUND_ROLLBACK_READINESS_UNREACHABLE:-false}" \
     FAKE_RELEASE_CALLS="${CASE_ROOT}/release-calls.log" \
     FAKE_REQUIRE_PRESERVE_SOURCE="${FAKE_REQUIRE_PRESERVE_SOURCE:-false}" \
     FAKE_STARTUP_CONFIG_FILE="${CASE_ROOT}/startup-Caddyfile" \
@@ -628,9 +685,10 @@ fi
 assert_contains "${CASE_ROOT}/output.log" 'background-state bind mount content is stale'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 
-# A healthy slot with stale bind state is removed from admission, then a clean
-# historical slot may recover traffic. The original drift evidence survives
-# both that promotion and a later healthy guard run on the new Caddy target.
+# A stale active bind cannot be drained through the current host inode, so a
+# runtime guard must not use a historical fallback to bypass refund readiness.
+# The pre-existing active-drift fence remains visible, but Caddy cannot move
+# to the old binary until a current candidate can answer the guarded endpoint.
 new_case external-active-runtime-drift-recovers-clean-fallback
 write_standard_dependencies
 write_external_runtime_files
@@ -638,18 +696,17 @@ write_container sub2api-green true healthy false 0 sub2api:current
 write_runtime_metadata sub2api-green unless-stopped candidate-network "$(external_mounts sub2api-green)" "$(dual_environment)"
 write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
 write_runtime_metadata sub2api-blue unless-stopped candidate-network "$(external_mounts sub2api-blue)" "$(dual_environment)"
-FAKE_RUNTIME_INODE_DRIFT=true FAKE_RUNTIME_DRIFT_CONTAINER=sub2api-green run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+if FAKE_RUNTIME_INODE_DRIFT=true FAKE_RUNTIME_DRIFT_CONTAINER=sub2api-green \
+  run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard bypassed readiness after active runtime-state drift'
+fi
 assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
-assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
-assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+[ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'historical fallback ran after active runtime-state drift'
 assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'active_container=sub2api-green'
 assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=active-runtime-state-drift'
-assert_contains "${CASE_ROOT}/output.log" 'preserving active runtime-state drift evidence'
-: >"${CASE_ROOT}/docker-calls.log"
-run_external_guard >"${CASE_ROOT}/second-run.log" 2>&1
-assert_contains "${CASE_ROOT}/second-run.log" 'active container is already healthy: sub2api-blue'
-assert_contains "${CASE_ROOT}/second-run.log" 'preserving failure evidence for previously isolated container: sub2api-green'
-assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=active-runtime-state-drift'
+assert_contains "${CASE_ROOT}/output.log" 'active candidate is not running for refund rollback readiness: sub2api-green'
+assert_traffic_state accepting
 
 # A missing runtime mount fails before any application lifecycle action.
 new_case external-active-runtime-mismatch
@@ -731,8 +788,8 @@ assert_contains "${CASE_ROOT}/cooldown.log" 'runtime recovery is cooling down'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 
-# A Caddy-selected active container can be absent after an interrupted cleanup.
-# External/dual recovery must still validate and promote a conforming fallback.
+# A missing Caddy-selected candidate cannot attest to its refund reservations,
+# so even a conforming historical slot must remain stopped.
 new_case external-active-absent-fallback
 write_standard_dependencies
 write_external_runtime_files
@@ -740,16 +797,70 @@ write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healt
 write_runtime_metadata sub2api-blue unless-stopped candidate-network \
   "$(external_mounts sub2api-blue)" "$(dual_environment)"
 if FAKE_REQUIRE_PRESERVE_SOURCE=true run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
-  :
-else
-  sed -n '1,160p' "${CASE_ROOT}/output.log" >&2
-  fail 'active-absent fallback did not receive an explicit preserve source'
+  fail 'runtime guard bypassed refund readiness when the active candidate was absent'
 fi
 assert_contains "${CASE_ROOT}/output.log" 'active container is absent: sub2api-green'
-assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
-assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
-assert_contains "${CASE_ROOT}/release-calls.log" 'isolated_old=true'
-assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
+assert_contains "${CASE_ROOT}/output.log" 'active candidate is not running for refund rollback readiness: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+[ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'historical fallback ran without a readiness attestation'
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-green:8080'
+assert_traffic_state accepting
+
+# A reviewed pending refund makes the protected endpoint non-2xx. The active
+# candidate remains selected, traffic returns to its original inode/value, and
+# the historical generation is never started.
+new_case external-refund-readiness-pending
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+traffic_inode="$(file_inode "${CASE_ROOT}/runtime/traffic-state")"
+if FAKE_REFUND_ROLLBACK_READINESS_STATUS=409 \
+  run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'pending refund readiness allowed historical fallback'
+fi
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'livez=in_flight:0'
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'readiness=status:409'
+assert_contains "${CASE_ROOT}/output.log" \
+  'active candidate internal refund probe is unreachable or rejected: /internal/refund-rollback-readiness'
+assert_contains "${CASE_ROOT}/output.log" 'historical fallback is blocked by active refund readiness'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+[ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'historical fallback ran with a pending refund'
+[ "$(file_inode "${CASE_ROOT}/runtime/traffic-state")" = "$traffic_inode" ] \
+  || fail 'refund gate replaced the traffic-state inode'
+assert_traffic_state accepting
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-green:8080'
+
+# Endpoint reachability is part of the same fail-closed boundary. A transient
+# transport error cannot turn the old binary into the refund reconciler.
+new_case external-refund-readiness-unreachable
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+traffic_inode="$(file_inode "${CASE_ROOT}/runtime/traffic-state")"
+if FAKE_REFUND_ROLLBACK_READINESS_UNREACHABLE=true \
+  run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'unreachable refund readiness allowed historical fallback'
+fi
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'livez=in_flight:0'
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'readiness=unreachable'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+[ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'historical fallback ran without readiness reachability'
+[ "$(file_inode "${CASE_ROOT}/runtime/traffic-state")" = "$traffic_inode" ] \
+  || fail 'unreachable refund gate replaced the traffic-state inode'
+assert_traffic_state accepting
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-green:8080'
 
 # A fallback that becomes stale only after the Caddy helper runs must not be
 # stopped while Caddy still points at it.  The next timer run can re-check the
@@ -821,7 +932,7 @@ if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
   fail 'runtime guard promoted a Phase-A fallback into normal-final traffic'
 fi
 assert_contains "${CASE_ROOT}/output.log" 'incompatible fixed-egress mode'
-assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 assert_contains "${CASE_ROOT}/runtime-state/last-failure.env" 'reason=no-known-good-fallback'
 
@@ -853,28 +964,59 @@ assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-green'
 assert_contains "${CASE_ROOT}/output.log" 'active container recovered in place: sub2api-green'
 [ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'blue-green helper ran after same-slot recovery'
 
-# If a prior release still has one healthy old color draining, a failed active
-# slot is isolated and traffic is returned to that already-running history.
-new_case running-historic-fallback
+# A legacy runtime without the token-protected shared admission contract has
+# no way to prove refund rollback safety. Historical fallback must stop before
+# any lifecycle or Caddy mutation rather than using the old binary by default.
+new_case historic-fallback-requires-dual-admission
 write_standard_dependencies
 write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'legacy runtime guard bypassed the refund readiness admission contract'
+fi
+assert_contains "${CASE_ROOT}/output.log" \
+  'historical fallback requires dual-node runtime traffic admission for refund rollback safety'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+[ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'legacy runtime guard changed Caddy without readiness'
+
+# If a prior release still has one healthy old color draining, a failed active
+# slot is isolated only after the guarded active candidate reports no pending
+# refund reservation. This exercises the already-running fallback branch.
+new_case running-historic-fallback
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
 write_container sub2api-blue true healthy false 0 sub2api:old-blue healthy healthy
-run_guard >"${CASE_ROOT}/output.log" 2>&1
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+run_external_guard >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 assert_before "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green' 'stop sub2api-green'
 assert_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
 assert_contains "${CASE_ROOT}/output.log" 'promoting already-running healthy historical fallback: sub2api-blue'
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'livez=in_flight:0'
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'readiness=status:200'
+assert_traffic_state accepting
 
 # If the active image cannot recover, it is stopped before the last known good
-# historic slot starts.  The helper receives the exact image/upstream and its
-# post-switch host/Admin/startup/public checks must all complete.
+# historic slot starts, after the same readiness gate permits it. The helper
+# receives the exact image/upstream and its post-switch checks must complete.
 new_case historic-fallback
 write_standard_dependencies
+write_external_runtime_files
 write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
 write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
-run_guard >"${CASE_ROOT}/output.log" 2>&1
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+FAKE_NODE_STATE_RESPONSE='ABORTED_LOCAL sub2api-blue' \
+  run_external_guard >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
@@ -892,20 +1034,34 @@ assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-blue:8080'
 assert_contains "${CASE_ROOT}/active-config.json" 'sub2api-blue:8080'
 assert_contains "${CASE_ROOT}/startup-Caddyfile" 'sub2api-blue:8080'
 [ -s "${CASE_ROOT}/curl-calls.log" ] || fail 'public health was not checked after fallback switch'
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'livez=in_flight:0'
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'readiness=status:200'
+assert_contains "${CASE_ROOT}/node-state-calls.log" 'recover-local'
+assert_contains "${CASE_ROOT}/output.log" \
+  'historical fallback sub2api-blue finalized retained local release state: ABORTED_LOCAL sub2api-blue'
+assert_traffic_state accepting
 
 # If the switch helper reports failure after conclusively restoring all Caddy
 # views to the failed active upstream, the started fallback is fenced again so
 # a later timer run cannot create two application consumers.
 new_case failed-switch-fences-fallback
 write_standard_dependencies
+write_external_runtime_files
 write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
 write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
-if FAKE_RELEASE_RESULT=1 FAKE_RELEASE_ROLLBACK=true run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+if FAKE_RELEASE_RESULT=1 FAKE_RELEASE_ROLLBACK=true \
+  run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
   fail 'runtime guard accepted a failed Caddy switch'
 fi
 assert_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-blue'
 assert_contains "${CASE_ROOT}/output.log" 'stopping inactive fallback sub2api-blue'
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'readiness=status:200'
+assert_traffic_state draining
 
 # No viable old slot is a hard failure; the bad active remains stopped and no
 # release helper is allowed to synthesize or pull a new application image.
@@ -916,7 +1072,7 @@ if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
   fail 'runtime guard accepted an unavailable historical fallback'
 fi
 assert_contains "${CASE_ROOT}/output.log" 'no stopped, non-OOM, zero-exit historical fallback is available'
-assert_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 [ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'blue-green helper ran without a viable fallback'
 
 # A recorded failure for the same active slot prevents the 30-second timer

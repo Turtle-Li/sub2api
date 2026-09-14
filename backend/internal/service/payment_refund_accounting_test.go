@@ -4,6 +4,9 @@ package service
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -175,6 +178,12 @@ func newReviewedSubscriptionRefundFixture(t *testing.T) (*PaymentService, *dbent
 		(payment_order_id, subscription_id, user_id, group_id, term_start_at, original_term_end_at, current_term_end_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$6)`, order.ID, subscription.ID, order.UserID, group.ID, start, end)
 	require.NoError(t, err)
+	// Reviewed subscription refunds have a strict pre-provider cache fence.
+	// Model the Redis fence and invalidation Pub/Sub contract in every fixture
+	// so accounting tests exercise the same boundary as production.
+	svc.subscriptionSvc = &SubscriptionService{
+		billingCacheService: &BillingCacheService{cache: &fencedSubscriptionCacheStub{}},
+	}
 	return svc, order, subscription, start, end
 }
 
@@ -209,6 +218,56 @@ func TestReviewedSubscriptionRefundInvalidatesAuthCacheAfterReserveAndRelease(t 
 	_, err = svc.applyUnifiedRefundResource(ctx, order.ID, unifiedRefundFixtureResource(attempt, unifiedpay.RefundStatusFailed), "test")
 	require.NoError(t, err)
 	require.Equal(t, []int64{order.UserID, order.UserID}, invalidator.userIDs)
+}
+
+func TestReviewedSubscriptionRefundWaitsForAuthorizationCacheInvalidationBeforeProvider(t *testing.T) {
+	ctx := context.Background()
+	svc, order, _, _, _ := newReviewedSubscriptionRefundFixture(t)
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "strict cache boundary")
+	require.NoError(t, err)
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+
+	cache, ok := svc.subscriptionSvc.billingCacheService.cache.(*fencedSubscriptionCacheStub)
+	require.True(t, ok)
+	cache.mu.Lock()
+	cache.publishErr = errors.New("redis publish unavailable")
+	cache.mu.Unlock()
+
+	providerCalls := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls++
+		writePaymentRefundReconciliationResponse(t, w, r, attempt, unifiedpay.RefundStatusApproved, false)
+	}))
+	defer provider.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, provider.URL), nil)
+
+	result, err := svc.advanceUnifiedRefund(ctx, attempt)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Zero(t, providerCalls, "money must not move until subscription authorization caches are fenced")
+	pending, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedRefundPending, pending.Status)
+	require.True(t, pending.EntitlementReserved)
+	rows, err := svc.entClient.QueryContext(ctx, `SELECT COUNT(*) FROM unified_payment_refund_events
+		WHERE order_id=$1 AND action='UNIFIED_REFUND_CACHE_INVALIDATION_PENDING'`, order.ID)
+	require.NoError(t, err)
+	require.True(t, rows.Next())
+	var blockedAudits int
+	require.NoError(t, rows.Scan(&blockedAudits))
+	require.NoError(t, rows.Close())
+	require.Equal(t, 1, blockedAudits)
+
+	cache.mu.Lock()
+	cache.publishErr = nil
+	cache.mu.Unlock()
+	result, err = svc.advanceUnifiedRefund(ctx, attempt)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Equal(t, 1, providerCalls, "the same durable attempt may proceed after cache convergence")
 }
 
 func TestReviewedSubscriptionRefundRejectsElapsedReviewWindowWhenCashIsUnchanged(t *testing.T) {
