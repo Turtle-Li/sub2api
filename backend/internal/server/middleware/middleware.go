@@ -82,9 +82,10 @@ func AbortWithError(c *gin.Context, statusCode int, code, message string) {
 }
 
 // abortWithClientBillingError preserves the existing Sub2 business response for
-// ordinary clients. Official Codex Responses requests receive a non-retryable
-// plain-text 400 because Codex displays that body verbatim; ordinary 429 bodies
-// are discarded, and its usage-limit promo header cannot carry Chinese text.
+// ordinary clients. Recognized Codex-engine Responses requests receive a
+// non-retryable plain-text 400 because those clients display that body verbatim;
+// ordinary 429 bodies are discarded, and the Codex usage-limit promo header
+// cannot carry Chinese text.
 func abortWithClientBillingError(c *gin.Context, statusCode int, code, message string) {
 	if c != nil && c.Request != nil && isOpenAICompatibleAPIKeyRequest(c) &&
 		openai.IsCodexBillingErrorClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) {

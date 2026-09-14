@@ -5,14 +5,16 @@
 Sub2 rejects a request before forwarding when a subscription window is
 exhausted (`USAGE_LIMIT_EXCEEDED`) or a pay-as-you-go wallet has insufficient
 balance (`INSUFFICIENT_BALANCE`). The localized Sub2 message must remain in the
-response body, and official Codex clients must show an actionable Sub2 prompt
-instead of `exceeded retry limit, last status: 429 Too Many Requests`.
+response body, and recognized Codex-engine clients must show an actionable
+Sub2 prompt instead of
+`exceeded retry limit, last status: 429 Too Many Requests`.
 
-For a strictly recognized official Codex client on a Responses route, both
+For a strictly recognized official Codex client, or an exact
+production-observed compatible client listed below, on a Responses route, both
 business rejections use HTTP 400 with a UTF-8 `text/plain` body containing the
-existing Chinese message verbatim. Subscription exhaustion must use the
-message produced by `SubscriptionUsageLimitMessage`, including the current
-reset-card count when that lookup succeeds. For example:
+existing Chinese message verbatim. Subscription exhaustion must use the message
+produced by `SubscriptionUsageLimitMessage`, including the current reset-card
+count when that lookup succeeds. For example:
 
 ```text
 订阅每周额度已用完。你当前还有 2 次可用重置次数，请前往「订阅」页面使用后再试。
@@ -25,6 +27,23 @@ classification from this header because the client-facing body is plain text.
 Non-Codex clients keep the existing Sub2 response status and top-level
 `code`/`message` shape. RPM, concurrency, upstream capacity, API-key quota, and
 other 429 paths are outside this adapter.
+
+### Production-observed compatible clients
+
+On 2026-09-14 at 16:30 CST, production rejected an exhausted subscription on
+`/responses` with the correct Chinese message and one available reset, but the
+request identified itself with the User-Agent prefix `claudian/`. Claudian uses
+the Codex retry behavior that discards an ordinary 429 body, so the user still
+saw the generic retry-limit error even though the server body was correct.
+
+The billing-only matcher therefore requires the full observed Codex-style
+identity shape: a leading `claudian/` product token with a valid three-part
+version, a final `(claudian; version)` trailer, and either no `originator` or the
+exact value `claudian`. It does not add Claudian to the official Codex identity
+set and does not change OAuth, passthrough, client allowlist, or any non-billing
+behavior. Embedded tokens such as `Mozilla/5.0 claudian/0.153.4`, lookalikes
+such as `claudian_evil/`, malformed versions, missing/mismatched trailers, and
+conflicting originators remain excluded.
 
 Codex streaming requests must not commit an SSE heartbeat before the
 post-queue billing check. Compact keepalive starts only after that check. The
@@ -80,6 +99,7 @@ Keep coverage for the pre-forward billing writers and protocol boundaries:
 Each must cover subscription exhaustion and insufficient balance, preserve the
 non-Codex contract, and assert the Codex status, UTF-8 content type, exact
 Chinese body, and `X-Sub2-Error-Code` header. Client recognition must use the
-strict User-Agent prefix matcher or an exact official `originator`; an embedded
-Codex token in a browser User-Agent must not activate the adapter. Ops coverage
-must ensure the header restores the original billing classification.
+strict official matcher or a documented exact billing-only client prefix or
+originator. Embedded tokens in a browser User-Agent must not activate the
+adapter. Ops coverage must ensure the header restores the original billing
+classification.
