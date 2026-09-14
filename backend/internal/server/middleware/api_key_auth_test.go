@@ -293,6 +293,41 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 			"订阅每日额度已用完。你当前还有 2 次可用重置次数，请前往「订阅」页面使用后再试。",
 			w.Body.String(),
 		)
+
+		// Claudian uses the Codex engine and the same retry behavior while
+		// identifying itself with a non-official product token. The exact
+		// production-observed prefix still receives the terminal Chinese body.
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		req.Header.Set("x-api-key", apiKey.Key)
+		req.Header.Set("User-Agent", "claudian/0.153.4 (Windows 10.0.26200; x86_64) unknown (claudian; 1.0.0)")
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		require.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
+		require.Equal(t, "USAGE_LIMIT_EXCEEDED", w.Header().Get("X-Sub2-Error-Code"))
+		require.Empty(t, w.Header().Get("X-Codex-Promo-Message"))
+		require.Empty(t, w.Header().Get("Retry-After"))
+		require.Equal(t,
+			"订阅每日额度已用完。你当前还有 2 次可用重置次数，请前往「订阅」页面使用后再试。",
+			w.Body.String(),
+		)
+
+		// A conflicting originator fails closed and preserves the ordinary
+		// non-Codex status/body contract.
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		req.Header.Set("x-api-key", apiKey.Key)
+		req.Header.Set("User-Agent", "claudian/0.153.4 (Windows 10.0.26200; x86_64) unknown (claudian; 1.0.0)")
+		req.Header.Set("originator", "other")
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusTooManyRequests, w.Code)
+		require.Empty(t, w.Header().Get("X-Sub2-Error-Code"))
+		require.JSONEq(t,
+			`{"code":"USAGE_LIMIT_EXCEEDED","message":"订阅每日额度已用完。你当前还有 2 次可用重置次数，请前往「订阅」页面使用后再试。"}`,
+			w.Body.String(),
+		)
 	})
 }
 
@@ -1474,6 +1509,21 @@ func TestAPIKeyAuthRejectsExhaustedBalance(t *testing.T) {
 	require.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
 	require.Equal(t, "INSUFFICIENT_BALANCE", w.Header().Get("X-Sub2-Error-Code"))
 	require.Empty(t, w.Header().Get("X-Codex-Promo-Message"))
+	require.Equal(t, "账户余额不足，请充值后再试。", w.Body.String())
+
+	// The same billing-only compatibility applies to the production-observed
+	// Claudian identity without changing unrelated client behavior.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.Header.Set("x-api-key", apiKey.Key)
+	req.Header.Set("User-Agent", "claudian/0.153.4 (Windows 10.0.26200; x86_64) unknown (claudian; 1.0.0)")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
+	require.Equal(t, "INSUFFICIENT_BALANCE", w.Header().Get("X-Sub2-Error-Code"))
+	require.Empty(t, w.Header().Get("X-Codex-Promo-Message"))
+	require.Empty(t, w.Header().Get("Retry-After"))
 	require.Equal(t, "账户余额不足，请充值后再试。", w.Body.String())
 }
 
