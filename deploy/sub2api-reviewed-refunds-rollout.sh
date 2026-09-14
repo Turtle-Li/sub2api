@@ -293,6 +293,53 @@ verify_caddy_views() {
   done
 }
 
+isolated_vault_sidecar_is_safe() {
+  local container_id="$1" container_name="$2" volume public_dir admin_dir allowed_ref
+  local command health mounts tmpfs expected_tmpfs
+
+  # These two credential agents carry the application source label but have no
+  # network, writable root filesystem, or application command.  Exempt them
+  # only when their complete installed-container profile is intact.
+  case "$container_name" in
+    /sub2api-payment-vault)
+      volume='sub2api_unified_payment_vault'
+      public_dir='/run/sub2api-payment-vault'
+      admin_dir='/run/sub2api-payment-vault-admin'
+      allowed_ref='vault://secret/data/sub2api/unified-payment/live#request_private_key_base64'
+      ;;
+    /sub2api-feishu-vault)
+      volume='sub2api_feishu_vault'
+      public_dir='/run/sub2api-feishu-vault'
+      admin_dir='/run/sub2api-feishu-vault-admin'
+      allowed_ref='vault://secret/data/ops/feishu/payment#webhook_url'
+      ;;
+    *) return 1 ;;
+  esac
+
+  command="$(printf '[\"/app/sub2api-vault-agent\",\"serve\",\"--public-socket\",\"%s/public.sock\",\"--admin-socket\",\"%s/admin.sock\",\"--allowed-ref\",\"%s\"]' "$public_dir" "$admin_dir" "$allowed_ref")"
+  expected_tmpfs="$(printf '%s|rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000\n/tmp|rw,noexec,nosuid,nodev,size=4m,mode=0700,uid=1000,gid=1000' "$admin_dir")"
+
+  [ "$(docker inspect "$container_id" --format '{{json .Config.Entrypoint}}' 2>/dev/null)" = '["/app/docker-entrypoint.sh"]' ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{.Config.User}}' 2>/dev/null)" = '1000:1000' ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null)" = none ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{.HostConfig.ReadonlyRootfs}}' 2>/dev/null)" = true ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)" = unless-stopped ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{.HostConfig.PidsLimit}}' 2>/dev/null)" = 64 ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{.HostConfig.Init}}' 2>/dev/null)" = true ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{json .HostConfig.CapDrop}}' 2>/dev/null)" = '["ALL"]' ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{json .HostConfig.CapAdd}}' 2>/dev/null)" = null ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{.HostConfig.Privileged}}' 2>/dev/null)" = false ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{json .HostConfig.SecurityOpt}}' 2>/dev/null)" = '["no-new-privileges"]' ] || return 1
+
+  tmpfs="$(docker inspect "$container_id" --format '{{range $path, $options := .HostConfig.Tmpfs}}{{printf "%s|%s\n" $path $options}}{{end}}' 2>/dev/null)" || return 1
+  [ "$tmpfs" = "$expected_tmpfs" ] || return 1
+  mounts="$(docker inspect "$container_id" --format '{{range .Mounts}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{end}}' 2>/dev/null)" || return 1
+  [ "$mounts" = "volume|${volume}|${public_dir}|true" ] || return 1
+  [ "$(docker inspect "$container_id" --format '{{json .Config.Cmd}}' 2>/dev/null)" = "$command" ] || return 1
+  health="$(docker inspect "$container_id" --format '{{json .Config.Healthcheck.Test}}' 2>/dev/null)" || return 1
+  [ "$health" = "[\"CMD-SHELL\",\"/app/sub2api-vault-agent check --public-socket ${public_dir}/public.sock\"]" ] || return 1
+}
+
 verify_no_other_app_writers() {
   local candidate state container_id container_name source matching_containers
 
@@ -322,6 +369,7 @@ verify_no_other_app_writers() {
     if [ "$source" = "$EXPECTED_SOURCE" ] \
       && [ "$container_name" != "/${TARGET_CONTAINER}" ] \
       && [ "$state" = true ]; then
+      isolated_vault_sidecar_is_safe "$container_id" "$container_name" && continue
       die "another Sub2API writer is running: ${container_name#/}"
     fi
   done <<<"$matching_containers"

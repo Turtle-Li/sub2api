@@ -61,9 +61,10 @@ set -Eeuo pipefail
 
 printf '%s\n' "$*" >>"${FAKE_DOCKER_CALLS:?}"
 image_id="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+sidecar_image_id="sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 
 container_value() {
-  local object="$1" format="$2" name running health source
+  local object="$1" format="$2" name running health source profile public_dir admin_dir volume allowed_ref
 
   case "$object" in
     sub2api-green|target-id)
@@ -90,15 +91,85 @@ container_value() {
       health=healthy
       source='https://github.com/Turtle-Li/sub2api'
       ;;
+    payment-vault-id)
+      name='/sub2api-payment-vault'
+      running=true
+      health=healthy
+      source='https://github.com/Turtle-Li/sub2api'
+      profile=payment
+      public_dir='/run/sub2api-payment-vault'
+      admin_dir='/run/sub2api-payment-vault-admin'
+      volume='sub2api_unified_payment_vault'
+      allowed_ref='vault://secret/data/sub2api/unified-payment/live#request_private_key_base64'
+      ;;
+    feishu-vault-id)
+      name='/sub2api-feishu-vault'
+      running=true
+      health=healthy
+      source='https://github.com/Turtle-Li/sub2api'
+      profile=feishu
+      public_dir='/run/sub2api-feishu-vault'
+      admin_dir='/run/sub2api-feishu-vault-admin'
+      volume='sub2api_feishu_vault'
+      allowed_ref='vault://secret/data/ops/feishu/payment#webhook_url'
+      ;;
     *) exit 1 ;;
   esac
 
   case "$format" in
     *'.State.Running'*) printf '%s\n' "$running" ;;
     *'.State.Health'*) printf '%s\n' "$health" ;;
-    *'{{.Image}}'*) printf '%s\n' "$image_id" ;;
+    *'{{.Image}}'*)
+      if [ -n "$profile" ]; then
+        printf '%s\n' "$sidecar_image_id"
+      else
+        printf '%s\n' "$image_id"
+      fi
+      ;;
     *'{{.Name}}'*) printf '%s\n' "$name" ;;
     *'org.opencontainers.image.source'*) printf '%s\n' "$source" ;;
+    *'{{json .Config.Entrypoint}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' '["/app/docker-entrypoint.sh"]' ;;
+    *'{{.Config.User}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' '1000:1000' ;;
+    *'{{.HostConfig.NetworkMode}}'*)
+      [ -n "$profile" ] || exit 1
+      if [ "$profile" = payment ] && [ "${FAKE_PAYMENT_NETWORK_DRIFT:-false}" = true ]; then
+        printf '%s\n' bridge
+      else
+        printf '%s\n' none
+      fi
+      ;;
+    *'{{.HostConfig.ReadonlyRootfs}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' true ;;
+    *'{{.HostConfig.RestartPolicy.Name}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' unless-stopped ;;
+    *'{{.HostConfig.PidsLimit}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' 64 ;;
+    *'{{.HostConfig.Init}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' true ;;
+    *'{{json .HostConfig.CapDrop}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' '["ALL"]' ;;
+    *'{{json .HostConfig.CapAdd}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' null ;;
+    *'{{.HostConfig.Privileged}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' false ;;
+    *'{{json .HostConfig.SecurityOpt}}'*) [ -n "$profile" ] || exit 1; printf '%s\n' '["no-new-privileges"]' ;;
+    *'range $path, $options := .HostConfig.Tmpfs'*)
+      [ -n "$profile" ] || exit 1
+      printf '%s|rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000\n' "$admin_dir"
+      printf '%s\n' '/tmp|rw,noexec,nosuid,nodev,size=4m,mode=0700,uid=1000,gid=1000'
+      ;;
+    *'range .Mounts'*)
+      [ -n "$profile" ] || exit 1
+      printf 'volume|%s|%s|true\n' "$volume" "$public_dir"
+      if [ "$profile" = payment ] && [ "${FAKE_PAYMENT_MOUNT_DRIFT:-false}" = true ]; then
+        printf '%s\n' 'volume|unexpected-sidecar-mount|/run/unexpected|true'
+      fi
+      ;;
+    *'{{json .Config.Cmd}}'*)
+      [ -n "$profile" ] || exit 1
+      if [ "$profile" = payment ] && [ "${FAKE_PAYMENT_COMMAND_DRIFT:-false}" = true ]; then
+        printf '%s\n' '["/app/sub2api"]'
+      else
+        printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s"]\n' "$public_dir" "$admin_dir" "$allowed_ref"
+      fi
+      ;;
+    *'{{json .Config.Healthcheck.Test}}'*)
+      [ -n "$profile" ] || exit 1
+      printf '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket %s/public.sock"]\n' "$public_dir"
+      ;;
     *) exit 1 ;;
   esac
 }
@@ -125,6 +196,12 @@ case "${1:-}" in
     printf '%s\n' target-id caddy-id
     if [ "${FAKE_RENAMED_WRITER:-false}" = true ]; then
       printf '%s\n' renamed-id
+    fi
+    if [ "${FAKE_PAYMENT_SIDECAR:-false}" = true ]; then
+      printf '%s\n' payment-vault-id
+    fi
+    if [ "${FAKE_FEISHU_SIDECAR:-false}" = true ]; then
+      printf '%s\n' feishu-vault-id
     fi
     ;;
   exec)
@@ -227,6 +304,11 @@ EOF
   FAKE_OLD_RUNNING=false
   FAKE_RENAMED_WRITER=false
   FAKE_RENAMED_RUNNING=true
+  FAKE_PAYMENT_SIDECAR=false
+  FAKE_FEISHU_SIDECAR=false
+  FAKE_PAYMENT_COMMAND_DRIFT=false
+  FAKE_PAYMENT_NETWORK_DRIFT=false
+  FAKE_PAYMENT_MOUNT_DRIFT=false
   FAKE_LOCK_BUSY=false
   FAKE_CAS_CONFLICT=false
   FAKE_IN_FLIGHT=0
@@ -253,6 +335,11 @@ run_helper() {
     FAKE_OLD_RUNNING="$FAKE_OLD_RUNNING" \
     FAKE_RENAMED_WRITER="$FAKE_RENAMED_WRITER" \
     FAKE_RENAMED_RUNNING="$FAKE_RENAMED_RUNNING" \
+    FAKE_PAYMENT_SIDECAR="$FAKE_PAYMENT_SIDECAR" \
+    FAKE_FEISHU_SIDECAR="$FAKE_FEISHU_SIDECAR" \
+    FAKE_PAYMENT_COMMAND_DRIFT="$FAKE_PAYMENT_COMMAND_DRIFT" \
+    FAKE_PAYMENT_NETWORK_DRIFT="$FAKE_PAYMENT_NETWORK_DRIFT" \
+    FAKE_PAYMENT_MOUNT_DRIFT="$FAKE_PAYMENT_MOUNT_DRIFT" \
     FAKE_LOCK_BUSY="$FAKE_LOCK_BUSY" \
     FAKE_CAS_CONFLICT="$FAKE_CAS_CONFLICT" \
     FAKE_IN_FLIGHT="$FAKE_IN_FLIGHT" \
@@ -318,6 +405,26 @@ expect_failure false old-writer 'another canonical app writer is running: sub2ap
 new_case
 FAKE_RENAMED_WRITER=true
 expect_failure false renamed-writer 'another Sub2API writer is running: sub2api-pre-cny-legacy-20260912'
+
+new_case
+FAKE_PAYMENT_SIDECAR=true
+FAKE_FEISHU_SIDECAR=true
+expect_success false isolated-vault-sidecars
+
+new_case
+FAKE_PAYMENT_SIDECAR=true
+FAKE_PAYMENT_COMMAND_DRIFT=true
+expect_failure false sidecar-command-drift 'another Sub2API writer is running: sub2api-payment-vault'
+
+new_case
+FAKE_PAYMENT_SIDECAR=true
+FAKE_PAYMENT_NETWORK_DRIFT=true
+expect_failure false sidecar-network-drift 'another Sub2API writer is running: sub2api-payment-vault'
+
+new_case
+FAKE_PAYMENT_SIDECAR=true
+FAKE_PAYMENT_MOUNT_DRIFT=true
+expect_failure false sidecar-mount-drift 'another Sub2API writer is running: sub2api-payment-vault'
 
 new_case
 FAKE_TARGET_COMMIT="$OTHER_COMMIT"

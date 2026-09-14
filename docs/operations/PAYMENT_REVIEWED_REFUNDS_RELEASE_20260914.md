@@ -88,3 +88,23 @@ changed-path race tests. No test assertion was removed, relaxed or skipped to
 conceal them. Future fixes should give test fixtures explicit concurrency and
 worker-lifetime boundaries; avoid rewriting unrelated runtime systems during
 this financial rollout.
+
+### Resumed release preflight
+
+- CI run 34809614036 and Security Scan 34809625153 passed on
+  `819daa0163193c1cb691617901cf93f87eea699a`.
+- Live preflight found the existing network-isolated payment/Feishu Vault
+  agents share the app source label. Independent helper review correctly
+  rejected a writer inventory that would misclassify these required sidecars.
+  The repair adds a narrowly verified sidecar exception and negative cases
+  for a disguised app command, enabled network and extra mount. Root repeated
+  the checks and the exact read-only verifier passed for both actual agents.
+  Independent follow-up review and final CI remain required before merge.
+- Backup SHA-256:
+  `772635bbad2fbb1d0849e4cd7ff92c636345c50499f62611800ddf92c20c8284`.
+- Order #4-only backfill also passed against that isolated restored backup
+  after 245/246: exactly one provenance row, order #3 untouched, original
+  wallet/order/expiry hash unchanged, duplicate execution rejected.
+  Production backfill has not yet run.
+- The production runtime-guard timer remains disabled; installer must preserve
+  that existing state. No application or agent lifecycle change has occurred.

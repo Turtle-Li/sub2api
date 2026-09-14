@@ -163,8 +163,10 @@ value: `absent` or `false` enables, and `true` disables. A stale CAS fails.
 The helper acquires the canonical maintenance lock, rejects retained release
 transactions, validates the immutable image/source/revision and target health,
 requires host/startup/Admin Caddy JSON to select only that target, and rejects
-other canonical or source-labeled Sub2API application writers. It repeats
-those proofs immediately before the in-container monitor-authenticated CAS.
+other canonical or source-labeled Sub2API application writers. The two
+known Vault agents are exempt only after their command, isolated network,
+filesystem, privileges and socket mounts match the documented sidecar contract;
+a container name alone is not an exemption. It repeats those proofs immediately before the in-container monitor-authenticated CAS.
 The token remains inside the target namespace. No database credential is
 required on the application host.
 
