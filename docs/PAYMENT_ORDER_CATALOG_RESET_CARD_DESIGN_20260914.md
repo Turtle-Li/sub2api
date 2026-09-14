@@ -118,3 +118,13 @@ T1、T2、T3 可在同一版本中独立验证。T4 涉及资格模型和历史�
 2. 确认所有实例已完成迁移并排空旧版本后，再为在售订阅配置和核对 `family_key`、`tier_rank`，随后开放带等级快照的新重置卡商品。数据库触发器在滚动窗口内兼容旧 SQL，但不能替代发布完成确认。已经产生等级快照、月度计划或商品订单后，相关等级策略冻结，不能原地改写历史语义。
 3. `monthly_reset_cards_enabled` 默认关闭。确认 worker leader lease、到期扫描和失败重试正常后再开启；关闭开关会阻止新月度商品展示和购买，但已付款并已建立的计划仍继续履约。
 4. 历史退款订单只通过带证据和操作者记录的审计回填恢复报价；本版本不提供跳过权益回收的现金退款旁路。
+
+## 生产发布记录（2026-09-15）
+
+- 生产运行源码为 `ca5aad3a3510818e0aa66f80c73ec99e828f20e9`，版本 `0.2.4`，镜像标签为 `sub2api:auto-20260915-035845-ca5aad3a`。当前活动容器为 `sub2api-green`，规范发布日志为 `/var/log/sub2api-release/gha-20260915-035845-ca5aad3a-3499875`。
+- CI `34888094426`、Security Scan `34888100577` 和 build-only `34888104362` 均在同一源码 revision 上成功。发布归档共 `84,120,859` 字节，SHA-256 为 `c52c48f04470fdc4c0b8d37fc3796a803e1df5361bc6ce09d5e92d8e10a51687`；归档、平台、镜像标签、源码标签、Docker config 和 OCI manifest 均通过独立制品核验。
+- 发布前备份 `/opt/sub2api-db-backups/sub2api-db-backup-20260915-022637.tar.gz` 共 `267,653,508` 字节，SHA-256 为 `c843045e507de0af90a84619596a2374786224e96d1b9d218f34a45e05bb6b5e`。隔离恢复与迁移 247、248、249 演练通过，业务事实保持不变，`pg_amcheck` 和触发器检查通过。
+- 发布门禁修复了三个边界：关闭月度商品准入时，已付款计划仍继续履约；退款读取在同一事务执行后续查询前显式关闭 PostgreSQL rows；重置卡并发购买允许未落库请求返回稳定的 `RESET_CARD_ORDER_IN_PROGRESS`，胜出请求落库后相同幂等键必须重放同一订单。完整集成测试、针对性重复与 race 测试、独立 QA 和代码审查均通过。
+- 发布后公网 `/health`、管理端 `/admin/orders`、`/admin/orders/plans`、`/admin/orders/invoices`、内部 live/readiness 和退款回滚 readiness 均通过。活动容器 restart count 为 0、OOM 为 false，应用和 Caddy 的 5xx/fatal 计数为 0。
+- `monthly_reset_cards_enabled` 保持关闭，月度计划、期次和等级策略表均为空；`reviewed_refunds_enabled` 保持开启，普通支付购买入口保持关闭。等级快照不存在未解析记录，迁移表中 247、248、249 均已登记，无无效索引。
+- 回滚必须继续使用规范蓝绿发布路径并检查 drain 与退款回滚 readiness。迁移和已经形成的订单、权益、幂等与审计数据属于追加事实，回滚应用版本时保留。月度商品配置与开关启用是后续独立操作，不属于本次发布。
