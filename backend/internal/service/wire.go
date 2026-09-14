@@ -1040,8 +1040,8 @@ func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache Lead
 }
 
 // ProvidePaymentMonthlyResetCardDeliveryService starts the independently
-// leased schedule issuer. Its private rollout switch is checked on every run,
-// so constructing it is safe before an operator enables the feature.
+// leased schedule issuer. The private rollout switch gates creation and
+// checkout, while this issuer continues every already-paid schedule.
 func ProvidePaymentMonthlyResetCardDeliveryService(entClient *dbent.Client, configService *PaymentConfigService, lockCache LeaderLockCache, db *sql.DB) *PaymentMonthlyResetCardDeliveryService {
 	svc := NewPaymentMonthlyResetCardDeliveryService(entClient, configService, paymentMonthlyResetCardDeliveryInterval)
 	svc.SetLeaderLock(lockCache, db)

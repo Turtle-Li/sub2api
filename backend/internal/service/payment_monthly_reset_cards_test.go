@@ -222,12 +222,13 @@ func (r *monthlyResetCardContextSettingRepo) GetValue(ctx context.Context, key s
 
 func TestPaymentMonthlyResetCardDeliveryRunOnceNormalizesNilContextAndStopCancels(t *testing.T) {
 	client := newPaymentConfigServiceTestClient(t)
+	installMonthlyResetCardSQLiteTables(t, client)
 	repo := &monthlyResetCardContextSettingRepo{paymentConfigSettingRepoStub: paymentConfigSettingRepoStub{
 		values: map[string]string{SettingPaymentMonthlyResetCardsEnabled: "false"},
 	}}
 	worker := NewPaymentMonthlyResetCardDeliveryService(client, &PaymentConfigService{settingRepo: repo}, time.Hour)
 	require.NoError(t, worker.RunOnce(nil))
-	require.NotNil(t, repo.seen)
+	require.Nil(t, repo.seen, "the delivery worker must not consult the new-order admission gate")
 
 	worker.Start()
 	worker.Start()
@@ -238,6 +239,26 @@ func TestPaymentMonthlyResetCardDeliveryRunOnceNormalizesNilContextAndStopCancel
 	default:
 		t.Fatal("Stop must cancel the worker context before waiting")
 	}
+}
+
+func TestPaymentMonthlyResetCardDeliveryContinuesPaidScheduleWhenAdmissionGateIsDisabled(t *testing.T) {
+	anchor := time.Date(2025, time.January, 15, 9, 0, 0, 0, monthlyResetCardAnchorLocation)
+	now := anchor.Add(2 * time.Hour).UTC()
+	fixture := newMonthlyResetCardFixture(t, anchor, monthlyResetCardDueAt(anchor, 15, 3), monthlyResetCardDueAt(anchor, 15, 3), 3)
+	fixture.ensureSchedule(t)
+
+	settings := &paymentConfigSettingRepoStub{values: map[string]string{
+		SettingPaymentMonthlyResetCardsEnabled: "false",
+	}}
+	worker := NewPaymentMonthlyResetCardDeliveryService(
+		fixture.client,
+		&PaymentConfigService{settingRepo: settings},
+		time.Hour,
+	)
+	worker.now = func() time.Time { return now }
+
+	require.NoError(t, worker.RunOnce(fixture.ctx))
+	assertMonthlyResetCardCounts(t, fixture, 1, 1)
 }
 
 func TestMonthlyResetCardScheduleIssuesExactlyOnceWithFrozenProvenance(t *testing.T) {

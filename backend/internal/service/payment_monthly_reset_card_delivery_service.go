@@ -105,13 +105,15 @@ func (s *PaymentMonthlyResetCardDeliveryService) Stop() {
 	s.wg.Wait()
 }
 
-// RunOnce is exported for focused operational and integration tests. Missing
-// settings, local standby mode, or a peer lease all yield a harmless no-op.
+// RunOnce is exported for focused operational and integration tests. Local
+// standby mode or a peer lease yields a harmless no-op. The private monthly
+// rollout switch gates new plan/order admission only: a paid schedule must keep
+// running after an operator closes that gate.
 func (s *PaymentMonthlyResetCardDeliveryService) RunOnce(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s == nil || s.entClient == nil || s.configService == nil || !runtimegate.SharedWorkAllowed() || !s.configService.IsMonthlyResetCardsEnabled(ctx) {
+	if s == nil || s.entClient == nil || s.configService == nil || !runtimegate.SharedWorkAllowed() {
 		return nil
 	}
 	jobCtx, cancel := context.WithTimeout(ctx, paymentMonthlyResetCardDeliveryLeaderLockTTL)
