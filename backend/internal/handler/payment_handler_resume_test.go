@@ -63,18 +63,20 @@ func TestApplyWeChatPaymentResumeClaimsPreservesResetCardTargetAndIdempotency(t 
 	keyHash := service.HashIdempotencyKey("reset-card-wechat-oauth")
 	req := CreateOrderRequest{PaymentType: payment.TypeWxpay}
 	err := applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{
-		OpenID:             "openid-reset-card",
-		PaymentType:        payment.TypeWxpay,
-		Amount:             "40.00",
-		OrderType:          payment.OrderTypeResetCard,
-		PlanID:             7,
-		SubscriptionID:     42,
-		IdempotencyKeyHash: keyHash,
+		OpenID:                "openid-reset-card",
+		PaymentType:           payment.TypeWxpay,
+		Amount:                "40.00",
+		OrderType:             payment.OrderTypeResetCard,
+		PlanID:                7,
+		SubscriptionID:        42,
+		ResetCardTierRevision: "v1:9:gpt:2:123",
+		IdempotencyKeyHash:    keyHash,
 	})
 	require.NoError(t, err)
 	require.Equal(t, payment.OrderTypeResetCard, req.OrderType)
 	require.EqualValues(t, 7, req.PlanID)
 	require.EqualValues(t, 42, req.SubscriptionID)
+	require.Equal(t, "v1:9:gpt:2:123", req.ResetCardTierRevision)
 	require.Equal(t, keyHash, req.IdempotencyKeyHash)
 }
 

@@ -5,6 +5,7 @@
 
 import { apiClient } from './client'
 import type { UserSubscription, SubscriptionProgress } from '@/types'
+import type { ResetCardTierPolicy } from '@/types/payment'
 
 /**
  * Subscription summary for user dashboard
@@ -90,6 +91,9 @@ export interface ResetCardQuote {
   monthly_price: number
   price: number
   expires_at: string
+  reset_card_tier?: ResetCardTierPolicy
+  /** Opaque binding for the exact compatibility policy observed by this quote. */
+  reset_card_tier_revision?: string
 }
 
 export async function getResetCardQuote(subscriptionId: number): Promise<ResetCardQuote> {

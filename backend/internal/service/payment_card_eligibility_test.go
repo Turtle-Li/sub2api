@@ -148,6 +148,51 @@ func TestValidatePurchaseRulesRejectsHiddenDirectCheckout(t *testing.T) {
 	require.Equal(t, "PURCHASE_NOT_ALLOWED", infraerrors.Reason(err))
 }
 
+func TestCustomerPaymentCatalogProjectsReadOnlyResetCardTier(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	viewer, err := client.User.Create().
+		SetEmail("tier-catalog@example.test").
+		SetPasswordHash("hash").
+		SetUsername("tier-catalog").
+		Save(ctx)
+	require.NoError(t, err)
+	group, err := client.Group.Create().
+		SetName("tier catalog group").
+		SetPlatform(PlatformOpenAI).
+		SetStatus(StatusActive).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		Save(ctx)
+	require.NoError(t, err)
+	plan, err := client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName("tier catalog plan").
+		SetPrice(99).
+		SetValidityDays(1).
+		SetValidityUnit("month").
+		SetForSale(true).
+		SetEntitlements(map[string]any{"purchase_rules": map[string]any{"visible_user_ids": []int64{viewer.ID}}}).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = (&PaymentConfigService{entClient: client}).UpsertResetCardTierPolicy(ctx, UpsertSubscriptionResetCardTierPolicyInput{
+		GroupID: group.ID, FamilyKey: "gpt", TierRank: 1,
+	})
+	require.NoError(t, err)
+
+	catalog, err := projectCustomerPaymentCatalog(ctx, client, viewer.ID, []*dbent.SubscriptionPlan{plan}, nil)
+	require.NoError(t, err)
+	require.Len(t, catalog.Plans, 1)
+	tier := catalog.Plans[0].ResetCardTier
+	require.NotNil(t, tier)
+	require.Equal(t, "gpt", tier.FamilyKey)
+	require.Equal(t, 1, tier.TierRank)
+
+	serialized, err := json.Marshal(tier)
+	require.NoError(t, err)
+	require.NotContains(t, string(serialized), "purchase_rules")
+	require.NotContains(t, string(serialized), "visible_user_ids")
+}
+
 func TestCreateOrderInTxRejectsCustomToRestrictedFixedRechargeModeChange(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)

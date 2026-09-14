@@ -420,6 +420,21 @@ func TestSubscriptionConcurrencyEntitlementIsMonotonicAndIdempotent(t *testing.T
 	require.Equal(t, 5, user.Concurrency)
 }
 
+func TestSubscriptionProductSnapshotKeepsResetCardTierEvidence(t *testing.T) {
+	plan := &dbent.SubscriptionPlan{ID: 17, GroupID: 9, Name: "5X", Price: 199}
+	sourcePlanID := int64(17)
+	snapshot := buildPaymentProductSnapshotWithGroupAndResetCardTier(plan, 199, 199, 30, nil, &SubscriptionResetCardTierSnapshot{
+		FamilyKey:    "gpt",
+		TierRank:     2,
+		SourcePlanID: &sourcePlanID,
+	})
+	require.Equal(t, map[string]any{
+		"family_key":     "gpt",
+		"tier_rank":      2,
+		"source_plan_id": int64(17),
+	}, snapshot["reset_card_tier"])
+}
+
 // Reset card expiry is a count plus a unit, mirroring the plan's own
 // validity_days/validity_unit pair. Plans stored before units existed carry no
 // unit and must keep meaning days.

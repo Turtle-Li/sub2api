@@ -74,6 +74,9 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		if math.Abs(req.Amount-quote.Price) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
 			return nil, infraerrors.Conflict("RESET_CARD_QUOTE_CHANGED", "reset card quote changed; request a new quote")
 		}
+		if err := validateResetCardTierQuoteRevision(req.ResetCardTierRevision, quote.ResetCardTier); err != nil {
+			return nil, err
+		}
 		req.Amount = quote.Price
 	}
 	cfg, err := s.configService.GetPaymentConfig(ctx)
@@ -309,6 +312,9 @@ func (s *PaymentService) validateResetCardOrder(ctx context.Context, req CreateO
 	}
 	if req.PlanID != 0 && req.PlanID != quote.PlanID {
 		return nil, infraerrors.Conflict("RESET_CARD_QUOTE_CHANGED", "reset card quote changed; request a new quote")
+	}
+	if err := validateResetCardTierQuoteRevision(req.ResetCardTierRevision, quote.ResetCardTier); err != nil {
+		return nil, err
 	}
 	plan, err := s.configService.GetPlan(ctx, quote.PlanID)
 	if err != nil {
@@ -598,6 +604,15 @@ func (s *PaymentService) revalidateResetCardOrderInTx(ctx context.Context, tx *d
 		!reflect.DeepEqual(expectedNormalized, lockedNormalized) {
 		return nil, ErrResetCardQuoteChanged
 	}
+	tierPolicy, err := loadSubscriptionResetCardTierPolicy(txCtx, tx.Client(), subscription.groupID, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateResetCardTierQuoteRevision(req.ResetCardTierRevision, tierPolicy); err != nil {
+		return nil, err
+	}
+	sourcePlanID := lockedPlan.ID
+	tierSnapshot := resetCardTierSnapshotFromPolicy(tierPolicy, &sourcePlanID)
 
 	return &resetCardOrderSnapshotSource{
 		plan:                lockedPlan,
@@ -607,6 +622,7 @@ func (s *PaymentService) revalidateResetCardOrderInTx(ctx context.Context, tx *d
 		price:               lockedPrice.InexactFloat64(),
 		subscriptionExpires: subscription.expiresAt,
 		idempotencyKeyHash:  req.IdempotencyKeyHash,
+		tierSnapshot:        tierSnapshot,
 	}, nil
 }
 
@@ -651,6 +667,9 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	_, entitlements, err := normalizePlanEntitlements(plan.Entitlements)
 	if err != nil {
 		return nil, ErrPurchaseRulesUnavailable
+	}
+	if err := s.validateMonthlyResetCardPlanAdmission(ctx, entitlements); err != nil {
+		return nil, err
 	}
 	if err := validatePurchaseRulesForUser(ctx, s.paymentEligibilityClient(), req.UserID, entitlements.PurchaseRules); err != nil {
 		return nil, err
@@ -722,10 +741,27 @@ func (s *PaymentService) revalidateSubscriptionOrderInTx(ctx context.Context, tx
 	if err != nil {
 		return nil, nil, ErrPurchaseRulesUnavailable
 	}
+	if err := s.validateMonthlyResetCardPlanAdmission(ctx, entitlements); err != nil {
+		return nil, nil, err
+	}
 	if err := validatePurchaseRulesForUser(ctx, tx.Client(), req.UserID, entitlements.PurchaseRules); err != nil {
 		return nil, nil, err
 	}
 	return currentPlan, paymentOrderSnapshotGroup(currentGroup), nil
+}
+
+// validateMonthlyResetCardPlanAdmission keeps the rollout switch private while
+// making its safety boundary authoritative at checkout. A disabled switch uses
+// the ordinary product-unavailable error rather than advertising an internal
+// deployment state to callers that bypass the catalog.
+func (s *PaymentService) validateMonthlyResetCardPlanAdmission(ctx context.Context, entitlements PlanEntitlements) error {
+	if entitlements.ResetCardDeliveryMode != resetCardDeliveryModeMonthly {
+		return nil
+	}
+	if s == nil || s.configService == nil || !s.configService.IsMonthlyResetCardsEnabled(ctx) {
+		return ErrPurchaseNotAllowed
+	}
+	return nil
 }
 
 // subscriptionPlanCheckoutSourceEqual covers every plan field frozen into an
@@ -877,6 +913,7 @@ type resetCardOrderSnapshotSource struct {
 	price               float64
 	subscriptionExpires time.Time
 	idempotencyKeyHash  string
+	tierSnapshot        *SubscriptionResetCardTierSnapshot
 }
 
 func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection) (*dbent.PaymentOrder, error) {
@@ -1002,6 +1039,7 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		return nil, false, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
 	if opts != nil && opts.resetCardIdempotent {
 		if opts.fixedOutTradeNo == "" {
 			return nil, false, ErrIdempotencyKeyRequired
@@ -1041,8 +1079,9 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		}
 	}
 	var (
-		lockedSnapshotGroup *Group
-		resetCardSource     *resetCardOrderSnapshotSource
+		lockedSnapshotGroup      *Group
+		resetCardSource          *resetCardOrderSnapshotSource
+		subscriptionTierSnapshot *SubscriptionResetCardTierSnapshot
 	)
 	if opts == nil || !opts.lockOwnerTestUser {
 		if plan != nil && req.OrderType == payment.OrderTypeSubscription {
@@ -1075,6 +1114,13 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 			if lockErr := s.revalidateRechargeOrderInTx(ctx, tx, req, cfg); lockErr != nil {
 				return nil, false, lockErr
 			}
+		}
+	}
+	if plan != nil && req.OrderType == payment.OrderTypeSubscription {
+		sourcePlanID := plan.ID
+		subscriptionTierSnapshot, err = resetCardTierSnapshotForGroup(txCtx, tx.Client(), plan.GroupID, &sourcePlanID, true)
+		if err != nil {
+			return nil, false, err
 		}
 	}
 	if sel != nil || req.OrderType == payment.OrderTypeResetCard {
@@ -1180,7 +1226,7 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 			}
 			b.SetProductSnapshot(buildPaymentResetCardProductSnapshot(resetCardSource, payAmount))
 		} else {
-			b.SetProductSnapshot(buildPaymentProductSnapshotWithGroup(plan, orderAmount, payAmount, subscriptionDays, snapshotGroup))
+			b.SetProductSnapshot(buildPaymentProductSnapshotWithGroupAndResetCardTier(plan, orderAmount, payAmount, subscriptionDays, snapshotGroup, subscriptionTierSnapshot))
 		}
 	} else if req.OrderType == payment.OrderTypeBalance {
 		// Resolve balance entitlements only from the server-side configured
@@ -1213,7 +1259,7 @@ func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, 
 	if source == nil || source.plan == nil {
 		return nil
 	}
-	return map[string]any{
+	snapshot := map[string]any{
 		"schema_version":          1,
 		"kind":                    "reset_card",
 		"subscription_id":         source.subscriptionID,
@@ -1231,6 +1277,10 @@ func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, 
 		"subscription_expires_at": source.subscriptionExpires.UTC().Format(time.RFC3339Nano),
 		"idempotency_key_sha256":  source.idempotencyKeyHash,
 	}
+	if tier := resetCardTierSnapshotForProductSnapshot(source.tierSnapshot); tier != nil {
+		snapshot["reset_card_tier"] = tier
+	}
+	return snapshot
 }
 
 func buildPaymentBalanceProductSnapshot(requestAmount, creditedAmount, payAmount float64, options []RechargeOption) map[string]any {
@@ -1270,6 +1320,10 @@ func buildPaymentProductSnapshot(plan *dbent.SubscriptionPlan, orderAmount, payA
 // limited group evidence consulted while the order was created. It does not
 // pull mutable entitlement state at read time.
 func buildPaymentProductSnapshotWithGroup(plan *dbent.SubscriptionPlan, orderAmount, payAmount float64, subscriptionDays int, group *Group) map[string]any {
+	return buildPaymentProductSnapshotWithGroupAndResetCardTier(plan, orderAmount, payAmount, subscriptionDays, group, nil)
+}
+
+func buildPaymentProductSnapshotWithGroupAndResetCardTier(plan *dbent.SubscriptionPlan, orderAmount, payAmount float64, subscriptionDays int, group *Group, tierSnapshot *SubscriptionResetCardTierSnapshot) map[string]any {
 	if plan == nil {
 		return nil
 	}
@@ -1303,6 +1357,9 @@ func buildPaymentProductSnapshotWithGroup(plan *dbent.SubscriptionPlan, orderAmo
 		if group.MonthlyLimitUSD != nil {
 			snapshot["monthly_limit_usd"] = *group.MonthlyLimitUSD
 		}
+	}
+	if tier := resetCardTierSnapshotForProductSnapshot(tierSnapshot); tier != nil {
+		snapshot["reset_card_tier"] = tier
 	}
 	return snapshot
 }
@@ -1974,6 +2031,9 @@ func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (stri
 	}
 	if req.SubscriptionID > 0 {
 		q.Set("subscription_id", strconv.FormatInt(req.SubscriptionID, 10))
+	}
+	if revision := strings.TrimSpace(req.ResetCardTierRevision); revision != "" {
+		q.Set("reset_card_tier_revision", revision)
 	}
 	if req.OrderType == payment.OrderTypeResetCard && req.IdempotencyKeyHash != "" {
 		q.Set("idempotency_key_hash", req.IdempotencyKeyHash)

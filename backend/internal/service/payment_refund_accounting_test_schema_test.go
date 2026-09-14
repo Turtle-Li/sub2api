@@ -54,6 +54,7 @@ func installRefundAccountingSQLiteTables(t *testing.T, client *dbent.Client) {
 func installUnifiedRefundAccountingSQLiteColumns(t *testing.T, client *dbent.Client) {
 	t.Helper()
 	for _, statement := range []string{
+		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN reason_code TEXT NOT NULL DEFAULT 'other'`,
 		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN refund_kind TEXT NOT NULL DEFAULT 'legacy_balance'`,
 		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN quote_revision TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN wallet_paid_amount NUMERIC NOT NULL DEFAULT 0`,

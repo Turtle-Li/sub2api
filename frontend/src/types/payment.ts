@@ -238,6 +238,8 @@ export interface AdminUpdateInvoiceRequest {
 export interface SubscriptionPlan {
   eligibility?: PurchaseEligibility
   reset_card_eligibility?: PurchaseEligibility
+  /** Read-only reset-card compatibility tier for this plan's subscription group. */
+  reset_card_tier?: ResetCardTierPolicy
   id: number
   group_id: number
   group_platform?: string
@@ -268,7 +270,22 @@ export interface SubscriptionPlan {
   period_label?: string
 }
 
+/** A stable, group-scoped reset-card compatibility rule. */
+export interface ResetCardTierPolicy {
+  group_id: number
+  family_key: string
+  tier_rank: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ResetCardTierPolicyInput {
+  family_key: string
+  tier_rank: number
+}
+
 export type ResetCardExpiryUnit = 'day' | 'week' | 'month'
+export type ResetCardDeliveryMode = 'immediate' | 'monthly'
 
 export interface PlanEntitlements {
   purchase_rules?: PurchaseRules
@@ -278,7 +295,12 @@ export interface PlanEntitlements {
   /** Optional standalone reset-card price from the active monthly plan, in credits. */
   reset_card_purchase_price?: number
   balance_bonus: number
+  /** Cards granted in each delivery period; for monthly plans this is per calendar month. */
   reset_card_count: number
+  /** Omitted legacy values are one-time grants. */
+  reset_card_delivery_mode?: ResetCardDeliveryMode
+  /** One for immediate grants, or the frozen count of calendar-month deliveries. */
+  reset_card_issue_count?: number
   /**
    * A count in reset_card_expiry_unit, not necessarily days — the name is kept
    * for plans stored before units existed, which were all in days. Mirrors the
@@ -366,6 +388,7 @@ export interface CreateOrderRequest {
   order_type: string
   plan_id?: number
   subscription_id?: number
+  reset_card_tier_revision?: string
   return_url?: string
   payment_source?: string
   openid?: string

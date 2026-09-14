@@ -719,7 +719,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiresAdmin: true,
-      title: 'Subscription Plans',
+      title: 'Product Catalog',
       titleKey: 'nav.paymentPlans',
       requiresPayment: true
     }

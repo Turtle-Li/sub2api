@@ -109,6 +109,12 @@ func RegisterPaymentRoutes(
 			plans.DELETE("/:id", adminPaymentHandler.DeletePlan)
 		}
 
+		resetCardTiers := adminGroup.Group("/reset-card-tiers")
+		{
+			resetCardTiers.GET("", adminPaymentHandler.ListResetCardTierPolicies)
+			resetCardTiers.PUT("/:group_id", adminPaymentHandler.UpsertResetCardTierPolicy)
+		}
+
 		// Provider Instances
 		providers := adminGroup.Group("/providers")
 		{

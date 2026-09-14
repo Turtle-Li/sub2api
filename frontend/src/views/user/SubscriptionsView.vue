@@ -323,6 +323,7 @@ import {
 } from '@/utils/subscriptionQuota'
 import { createIdempotencyKey } from '@/utils/idempotency'
 import { isPaymentEntryVisible } from '@/utils/featureFlags'
+import { extractI18nErrorMessage } from '@/utils/apiError'
 
 function platformAccentDotClass(p: string): string {
   switch (p) {
@@ -401,11 +402,12 @@ async function confirmUseResetCard() {
     useResetCardOperationKey = null
     await loadSubscriptions()
   } catch (error: any) {
-    appStore.showError(error?.message || t('userSubscriptions.failedToUseResetCard'))
+    appStore.showError(extractI18nErrorMessage(error, t, 'payment.errors', t('userSubscriptions.failedToUseResetCard')))
     console.error('Failed to use reset card:', error)
+    const errorCode = error?.reason || error?.code
     if (
-      ['RESET_CARD_UNAVAILABLE', 'SUBSCRIPTION_NOT_FOUND', 'SUBSCRIPTION_EXPIRED', 'SUBSCRIPTION_SUSPENDED'].includes(
-        error?.code
+      ['RESET_CARD_UNAVAILABLE', 'RESET_CARD_TIER_INSUFFICIENT', 'SUBSCRIPTION_NOT_FOUND', 'SUBSCRIPTION_EXPIRED', 'SUBSCRIPTION_SUSPENDED'].includes(
+        errorCode
       )
     ) {
       showUseResetCardConfirm.value = false

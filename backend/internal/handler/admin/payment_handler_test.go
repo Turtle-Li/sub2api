@@ -79,7 +79,9 @@ func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfo(t *testing.
 		},
 	}
 
-	got := adminSubscriptionPlansForResponse(plans, groupInfo)
+	got := adminSubscriptionPlansForResponse(plans, groupInfo, map[int64]service.SubscriptionResetCardTierPolicy{
+		7: {GroupID: 7, FamilyKey: "gpt", TierRank: 2},
+	})
 
 	if len(got) != 1 {
 		t.Fatalf("expected one plan, got %d", len(got))
@@ -103,5 +105,8 @@ func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfo(t *testing.
 	}
 	if !got[0].CreatedAt.Equal(now) || !got[0].UpdatedAt.Equal(now) {
 		t.Fatalf("expected created_at/updated_at to be preserved, got %v / %v", got[0].CreatedAt, got[0].UpdatedAt)
+	}
+	if got[0].ResetCardTier == nil || got[0].ResetCardTier.FamilyKey != "gpt" || got[0].ResetCardTier.TierRank != 2 {
+		t.Fatalf("expected reset-card tier to be included, got %#v", got[0].ResetCardTier)
 	}
 }

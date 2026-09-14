@@ -789,6 +789,71 @@ func TestResetCardGrantExpiryIsRecheckedAfterSubscriptionLock(t *testing.T) {
 	require.Equal(t, resetCardGrantExpiryManualReviewReason, *reloaded.FailedReason)
 }
 
+func TestResetCardExternalFulfillmentWritesFrozenTierSnapshot(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	ensureResetCardPaymentGrantTable(t, ctx, client)
+	order := createPaymentFulfillmentExpiredResetCardOrder(t, ctx, client)
+
+	group, err := client.Group.Create().
+		SetName("reset-card-tier-fulfillment-group").
+		SetPlatform(PlatformOpenAI).
+		SetStatus(StatusActive).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		Save(ctx)
+	require.NoError(t, err)
+	expiresAt := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	target, err := client.UserSubscription.Create().
+		SetUserID(order.UserID).
+		SetGroupID(group.ID).
+		SetStartsAt(time.Now().UTC().Add(-time.Hour)).
+		SetExpiresAt(expiresAt).
+		SetStatus(SubscriptionStatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	snapshot := clonePaymentOrderSnapshot(order.ProductSnapshot)
+	snapshot["subscription_id"] = target.ID
+	snapshot["group_id"] = group.ID
+	snapshot["subscription_expires_at"] = expiresAt.Format(time.RFC3339Nano)
+	snapshot["reset_card_tier"] = map[string]any{
+		"family_key":     "gpt",
+		"tier_rank":      2,
+		"source_plan_id": int64(7),
+	}
+	order, err = client.PaymentOrder.UpdateOneID(order.ID).
+		SetSubscriptionGroupID(group.ID).
+		SetProductSnapshot(snapshot).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	require.NoError(t, svc.executeFulfillment(ctx, order.ID))
+
+	rows, err := client.QueryContext(ctx, `
+		SELECT subscription_id, card_family_key, source_tier_rank, source_plan_id, tier_snapshot_resolved
+		FROM subscription_reset_grants
+		WHERE payment_order_id = $1
+	`, order.ID)
+	require.NoError(t, err)
+	require.True(t, rows.Next())
+	var (
+		grantSubscriptionID  int64
+		familyKey            string
+		tierRank             int
+		sourcePlanID         int64
+		tierSnapshotResolved bool
+	)
+	require.NoError(t, rows.Scan(&grantSubscriptionID, &familyKey, &tierRank, &sourcePlanID, &tierSnapshotResolved))
+	require.NoError(t, rows.Close())
+	require.Equal(t, target.ID, grantSubscriptionID)
+	require.Equal(t, "gpt", familyKey)
+	require.Equal(t, 2, tierRank)
+	require.Equal(t, int64(7), sourcePlanID)
+	require.True(t, tierSnapshotResolved)
+}
+
 func TestRetryFulfillmentRejectsFreshRechargingLease(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
@@ -1338,6 +1403,10 @@ func TestSubscriptionSnapshotBenefitsAreGrantedExactlyOnceAfterRecovery(t *testi
 			expires_at DATETIME NOT NULL,
 			issued_by INTEGER,
 			payment_order_id INTEGER,
+			card_family_key TEXT,
+			source_tier_rank INTEGER,
+			source_plan_id INTEGER,
+			tier_snapshot_resolved BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)`)
@@ -1360,6 +1429,12 @@ func TestSubscriptionSnapshotBenefitsAreGrantedExactlyOnceAfterRecovery(t *testi
 	order, err = client.PaymentOrder.UpdateOneID(order.ID).
 		SetSubscriptionGroupID(group.ID).
 		SetProductSnapshot(map[string]any{
+			"plan_id": int64(100),
+			"reset_card_tier": map[string]any{
+				"family_key":     "gpt",
+				"tier_rank":      2,
+				"source_plan_id": int64(100),
+			},
 			"entitlements": map[string]any{
 				"balance_bonus":          5.25,
 				"reset_card_count":       2,
@@ -1386,6 +1461,25 @@ func TestSubscriptionSnapshotBenefitsAreGrantedExactlyOnceAfterRecovery(t *testi
 
 	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
 	assertSubscriptionSnapshotBenefits(t, ctx, client, order, 5.25, 2)
+	var (
+		familyKey            string
+		tierRank             int
+		sourcePlanID         int64
+		tierSnapshotResolved bool
+	)
+	grantRows, err := client.QueryContext(ctx, `
+		SELECT card_family_key, source_tier_rank, source_plan_id, tier_snapshot_resolved
+		FROM subscription_reset_grants
+		WHERE payment_order_id = $1
+	`, order.ID)
+	require.NoError(t, err)
+	require.True(t, grantRows.Next())
+	require.NoError(t, grantRows.Scan(&familyKey, &tierRank, &sourcePlanID, &tierSnapshotResolved))
+	require.NoError(t, grantRows.Close())
+	require.Equal(t, "gpt", familyKey)
+	require.Equal(t, 2, tierRank)
+	require.Equal(t, int64(100), sourcePlanID)
+	require.True(t, tierSnapshotResolved)
 	userAfterFirstFulfillment, err := client.User.Get(ctx, order.UserID)
 	require.NoError(t, err)
 	require.Equal(t, 5, userAfterFirstFulfillment.Concurrency)
@@ -1415,6 +1509,119 @@ func TestSubscriptionSnapshotBenefitsAreGrantedExactlyOnceAfterRecovery(t *testi
 	userAfterRecovery, err := client.User.Get(ctx, order.UserID)
 	require.NoError(t, err)
 	require.Equal(t, 5, userAfterRecovery.Concurrency)
+}
+
+func TestRetryFulfillmentResumesMonthlyResetCardScheduleAfterAffiliateFailure(t *testing.T) {
+	ctx := context.Background()
+	// The first occurrence has elapsed by the time the worker observes the
+	// affiliate failure; the second is the current calendar window.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	localNow := now.In(monthlyResetCardAnchorLocation)
+	currentMonth := time.Date(
+		localNow.Year(),
+		localNow.Month(),
+		1, 0, 0, 0, 0, monthlyResetCardAnchorLocation,
+	)
+	anchor := currentMonth.AddDate(0, -1, 0).UTC()
+	anchorDay := 1
+	termEnd := monthlyResetCardDueAt(anchor, anchorDay, 3)
+	fixture := newMonthlyResetCardFixture(t, anchor, termEnd, termEnd, 3)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, fixture.client)
+	schedule := fixture.ensureSchedule(t)
+
+	var err error
+	fixture.order, err = fixture.client.PaymentOrder.UpdateOneID(fixture.order.ID).
+		SetStatus(OrderStatusFailed).
+		ClearCompletedAt().
+		SetFailedAt(now).
+		SetFailedReason("affiliate quota store is temporarily unavailable").
+		Save(ctx)
+	require.NoError(t, err)
+	for _, action := range []string{"SUBSCRIPTION_ASSIGNED", "SUBSCRIPTION_BENEFITS_GRANTED"} {
+		_, err = fixture.client.PaymentAuditLog.Create().
+			SetOrderID(strconv.FormatInt(fixture.order.ID, 10)).
+			SetAction(action).
+			SetDetail(`{"recovered":true}`).
+			SetOperator("system").
+			Save(ctx)
+		require.NoError(t, err)
+	}
+	_, err = fixture.client.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(fixture.order.ID, 10)).
+		SetAction("FULFILLMENT_FAILED").
+		SetDetail(`{"reason":"affiliate quota store is temporarily unavailable"}`).
+		SetOperator("system").
+		Save(ctx)
+	require.NoError(t, err)
+
+	// This is the durable state left by a recoverable affiliate failure: the
+	// subscription assignment, benefits audit, and schedule have committed, but
+	// the order itself is FAILED pending an administrator retry.
+	groupRepo := &subscriptionGroupRepoStub{group: &Group{
+		ID: fixture.grant.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription,
+	}}
+	svc := &PaymentService{
+		entClient:       fixture.client,
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, newSubscriptionUserSubRepoStub(), nil, nil, nil),
+	}
+	failedOrder, err := fixture.client.PaymentOrder.Get(ctx, fixture.order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusFailed, failedOrder.Status)
+
+	// A due worker must hold the schedule steady while the paid fulfillment is
+	// retryable. It must neither cancel nor consume the current window.
+	crossedDue := time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, workerProcessMonthlyResetCardCandidate(fixture, schedule, crossedDue))
+	pausedSchedule, err := loadMonthlyResetCardSchedule(ctx, fixture.client, schedule.ID, false)
+	require.NoError(t, err)
+	require.Equal(t, "active", pausedSchedule.Status)
+	require.Zero(t, pausedSchedule.NextOccurrence)
+	assertMonthlyResetCardCounts(t, fixture, 0, 0)
+
+	// A schedule cancelled by an older worker must also recover after the code
+	// rolls out. This is the pre-fix durable state that made the existing
+	// benefits audit block an administrator retry from restoring delivery.
+	require.NoError(t, cancelMonthlyResetCardSchedule(ctx, fixture.client, pausedSchedule, crossedDue))
+	legacyCancelled, err := loadMonthlyResetCardSchedule(ctx, fixture.client, schedule.ID, false)
+	require.NoError(t, err)
+	require.Equal(t, "cancelled", legacyCancelled.Status)
+
+	// Retry keeps the one existing benefits audit, but must still reconcile and
+	// restore the calendar schedule. The elapsed first window becomes a skip;
+	// only the current window is issued.
+	require.NoError(t, svc.RetryFulfillment(ctx, fixture.order.ID))
+	completedOrder, err := fixture.client.PaymentOrder.Get(ctx, fixture.order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, completedOrder.Status)
+	resumedSchedule, err := loadMonthlyResetCardSchedule(ctx, fixture.client, schedule.ID, false)
+	require.NoError(t, err)
+	require.Equal(t, "active", resumedSchedule.Status)
+	require.Equal(t, 2, resumedSchedule.NextOccurrence)
+	assertMonthlyResetCardCounts(t, fixture, 2, 1)
+
+	var skipped, issued int
+	scanMonthlyResetCardRow(t, fixture.client, ctx, `SELECT COUNT(*) FROM subscription_reset_card_issuances WHERE schedule_id = $1 AND status = 'skipped' AND skip_reason = 'window_elapsed'`, []any{schedule.ID}, &skipped)
+	scanMonthlyResetCardRow(t, fixture.client, ctx, `SELECT COUNT(*) FROM subscription_reset_card_issuances WHERE schedule_id = $1 AND status = 'issued'`, []any{schedule.ID}, &issued)
+	require.Equal(t, 1, skipped)
+	require.Equal(t, 1, issued)
+	benefitAudits, err := fixture.client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(strconv.FormatInt(fixture.order.ID, 10)),
+		paymentauditlog.ActionEQ("SUBSCRIPTION_BENEFITS_GRANTED"),
+	).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, benefitAudits, "retry must not re-grant non-monthly order benefits")
+
+	// The remaining future occurrence is issued once. Replaying that worker
+	// candidate cannot build a backlog or duplicate the already issued card.
+	futureDue := monthlyResetCardDueAt(anchor, anchorDay, 2).Add(time.Hour).UTC()
+	require.NoError(t, workerProcessMonthlyResetCardCandidate(fixture, resumedSchedule, futureDue))
+	require.NoError(t, workerProcessMonthlyResetCardCandidate(fixture, resumedSchedule, futureDue))
+	assertMonthlyResetCardCounts(t, fixture, 3, 2)
+	finalSchedule, err := loadMonthlyResetCardSchedule(ctx, fixture.client, schedule.ID, false)
+	require.NoError(t, err)
+	require.Equal(t, "completed", finalSchedule.Status)
+	require.Equal(t, 3, finalSchedule.NextOccurrence)
 }
 
 func assertSubscriptionSnapshotBenefits(t *testing.T, ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, wantBonus float64, wantResetCards int) {
@@ -1630,6 +1837,10 @@ func ensureResetCardPaymentGrantTable(t *testing.T, ctx context.Context, client 
 			expires_at DATETIME NOT NULL,
 			issued_by INTEGER,
 			payment_order_id INTEGER,
+			card_family_key TEXT,
+			source_tier_rank INTEGER,
+			source_plan_id INTEGER,
+			tier_snapshot_resolved BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)`)

@@ -84,7 +84,7 @@ import type { SubscriptionPlan } from '@/types/payment'
 import type { UserSubscription } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { hasPeakRate as groupHasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
-import { planValiditySuffix, resetCardValidityLabel } from './validity'
+import { monthlyResetCardDeliveryLabel, planValiditySuffix, resetCardValidityLabel } from './validity'
 import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from '@/components/payment/currency'
 import { subscriptionGatewayAmount } from '@/components/payment/pricing'
 import Icon from '@/components/icons/Icon.vue'
@@ -201,9 +201,10 @@ const includedItems = computed<IncludedItem[]>(() => {
     items.push({ text: `${t('payment.entitlements.balanceBonus')} +${formatCredit(entitlements.balance_bonus)}`, benefit: true })
   }
   if (entitlements?.reset_card_count && entitlements.reset_card_count > 0) {
+    const monthlyDelivery = monthlyResetCardDeliveryLabel(entitlements, t)
     const validity = resetCardValidityLabel(entitlements, t)
     items.push({
-      text: `${entitlements.reset_card_count} ${t('payment.entitlements.resetCards', { validity })}`,
+      text: monthlyDelivery || `${entitlements.reset_card_count} ${t('payment.entitlements.resetCards', { validity })}`,
       benefit: true,
     })
   }

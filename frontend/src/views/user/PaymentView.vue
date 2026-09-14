@@ -332,6 +332,8 @@ interface CreateOrderOptions {
   isResume?: boolean
   mobileQrFallbackAttempted?: boolean
   subscriptionId?: number
+  /** Opaque reset-card quote binding; never derive a tier from client state. */
+  resetCardTierRevision?: string
   /** Reserve a popup synchronously inside an explicit desktop checkout click. */
   preopenHostedPopup?: boolean
   /** Reuse this key for one local reset-card checkout attempt and its QR fallback. */
@@ -435,7 +437,7 @@ function resetPayment() {
 
 function buildWechatOAuthAuthorizeUrl(
   authorizeUrl: string,
-  context: { paymentType: string; orderType: OrderType; planId?: number; subscriptionId?: number; orderAmount: number },
+  context: { paymentType: string; orderType: OrderType; planId?: number; subscriptionId?: number; resetCardTierRevision?: string; orderAmount: number },
 ): string {
   const normalizedUrl = authorizeUrl.trim()
   if (!normalizedUrl || typeof window === 'undefined') {
@@ -460,6 +462,12 @@ function buildWechatOAuthAuthorizeUrl(
       redirectUrl.searchParams.set('subscription_id', String(context.subscriptionId))
     } else {
       redirectUrl.searchParams.delete('subscription_id')
+    }
+    const tierRevision = String(context.resetCardTierRevision || '').trim()
+    if (tierRevision) {
+      redirectUrl.searchParams.set('reset_card_tier_revision', tierRevision)
+    } else {
+      redirectUrl.searchParams.delete('reset_card_tier_revision')
     }
 
     if (context.orderAmount > 0) {
@@ -1030,9 +1038,11 @@ async function startResetCardCheckout(payload: { subscription: UserSubscription;
     monthlyPrice: payload.quote.monthly_price,
     expiresAt: payload.quote.expires_at,
     paymentType,
+    tierRevision: payload.quote.reset_card_tier_revision,
   }, () => createIdempotencyKey('reset-card-payment'))
   await createOrder(payload.quote.price, 'reset_card', payload.quote.plan_id, {
     subscriptionId: payload.subscription.id,
+    resetCardTierRevision: payload.quote.reset_card_tier_revision,
     paymentType,
     idempotencyKey: attempt.idempotencyKey,
     resetCardAttempt: attempt,
@@ -1066,6 +1076,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       forceQRCode: !!(checkout.value.alipay_force_qrcode && normalizeVisibleMethod(requestType) === 'alipay'),
       mobilePrecreateDeepLink: checkout.value.alipay_mobile_precreate_deep_link === true,
       subscriptionId: options.subscriptionId,
+      resetCardTierRevision: options.resetCardTierRevision,
     })
     if (options.openid) {
       payload.openid = options.openid
@@ -1142,6 +1153,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         orderType,
         planId,
         subscriptionId: options.subscriptionId,
+        resetCardTierRevision: options.resetCardTierRevision,
         orderAmount,
       })
       return
@@ -1189,6 +1201,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
               paymentType: visibleMethod,
               attempted: options.mobileQrFallbackAttempted === true,
               subscriptionId: options.subscriptionId,
+              resetCardTierRevision: options.resetCardTierRevision,
+              wechatResumeToken: options.wechatResumeToken,
               idempotencyKey: options.idempotencyKey,
               resetCardAttempt: options.resetCardAttempt,
             },
@@ -1209,6 +1223,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
           paymentType: visibleMethod,
           attempted: options.mobileQrFallbackAttempted === true,
           subscriptionId: options.subscriptionId,
+          resetCardTierRevision: options.resetCardTierRevision,
+          wechatResumeToken: options.wechatResumeToken,
           idempotencyKey: options.idempotencyKey,
           resetCardAttempt: options.resetCardAttempt,
         })
@@ -1241,6 +1257,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       paymentType: requestType,
       attempted: options.mobileQrFallbackAttempted === true,
       subscriptionId: options.subscriptionId,
+      resetCardTierRevision: options.resetCardTierRevision,
+      wechatResumeToken: options.wechatResumeToken,
       idempotencyKey: options.idempotencyKey,
       resetCardAttempt: options.resetCardAttempt,
     })) {
@@ -1272,6 +1290,8 @@ interface MobileQrFallbackContext {
   paymentType: string
   attempted: boolean
   subscriptionId?: number
+  resetCardTierRevision?: string
+  wechatResumeToken?: string
   idempotencyKey?: string
   resetCardAttempt?: ResetCardCheckoutAttempt
 }
@@ -1322,10 +1342,14 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
       orderType: context.orderType,
       planId: context.planId,
       subscriptionId: context.subscriptionId,
+      resetCardTierRevision: context.resetCardTierRevision,
       origin: typeof window !== 'undefined' ? window.location.origin : '',
       isMobile: false,
       isWechatBrowser: false,
     })
+    if (context.wechatResumeToken) {
+      payload.wechat_resume_token = context.wechatResumeToken
+    }
     const result = await paymentStore.createOrder(
       payload,
       context.idempotencyKey ? { headers: { 'Idempotency-Key': context.idempotencyKey } } : undefined,
@@ -1416,6 +1440,7 @@ async function resumeWechatPaymentFromQuery() {
       paymentType: resume.paymentType,
       isResume: true,
       subscriptionId: resume.subscriptionId,
+      resetCardTierRevision: resume.resetCardTierRevision,
       // The signed token matched this local attempt by hash. Retain the raw
       // key only in request headers so an H5/JSAPI failure and its QR retry
       // replay the same server-side reset-card checkout.
@@ -1431,6 +1456,7 @@ async function resumeWechatPaymentFromQuery() {
       paymentType: resume.paymentType,
       isResume: true,
       subscriptionId: resume.subscriptionId,
+      resetCardTierRevision: resume.resetCardTierRevision,
     })
   }
 }

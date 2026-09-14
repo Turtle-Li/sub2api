@@ -14,4 +14,32 @@ describe('OrderPurchaseSnapshot quota semantics', () => {
     expect(wrapper.text()).not.toContain('$0')
     expect(wrapper.text()).not.toContain('payment.orderOps.monthlyQuota')
   })
+
+  it('shows the frozen monthly reset-card commitment while preserving one-time snapshots', () => {
+    const monthlyOrder = {
+      order_type: 'subscription',
+      product_snapshot: {
+        name: 'Quarterly',
+        entitlements: {
+          reset_card_count: 2,
+          reset_card_delivery_mode: 'monthly',
+          reset_card_issue_count: 3,
+          reset_card_expiry_days: 14,
+          reset_card_expiry_unit: 'day',
+        },
+      },
+    } as PaymentOrder
+    expect(mount(OrderPurchaseSnapshot, { props: { order: monthlyOrder } }).text())
+      .toContain('payment.entitlements.monthlyResetCards')
+
+    const immediateOrder = {
+      order_type: 'subscription',
+      product_snapshot: {
+        name: 'Monthly',
+        entitlements: { reset_card_count: 2, reset_card_expiry_days: 14 },
+      },
+    } as PaymentOrder
+    expect(mount(OrderPurchaseSnapshot, { props: { order: immediateOrder } }).text())
+      .toContain('2 · payment.orderOps.days')
+  })
 })

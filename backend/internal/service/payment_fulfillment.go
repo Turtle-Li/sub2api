@@ -341,6 +341,10 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 	if err != nil {
 		return err
 	}
+	tierSnapshot, err := resetCardTierSnapshotForPaymentOrder(o)
+	if err != nil {
+		return err
+	}
 	if _, err := resetCardPaymentOrderGrantExpiry(o, s.resetCardCurrentTime()); err != nil {
 		return err
 	}
@@ -370,6 +374,13 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 	}
 	if lockedTargetID != targetID || lockedGroupID != groupID {
 		return errors.New("reset card order snapshot changed while fulfillment was being claimed")
+	}
+	lockedTierSnapshot, err := resetCardTierSnapshotForPaymentOrder(o)
+	if err != nil {
+		return err
+	}
+	if !resetCardTierSnapshotsEqual(tierSnapshot, lockedTierSnapshot) {
+		return errors.New("reset card tier snapshot changed while fulfillment was being claimed")
 	}
 	claimed, err := tx.Client().PaymentAuditLog.Query().Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(o.ID, 10)), paymentauditlog.ActionEQ("RESET_CARD_GRANTED")).Exist(txCtx)
 	if err != nil {
@@ -447,7 +458,8 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 		if err != nil {
 			return err
 		}
-		rows, err := tx.Client().QueryContext(txCtx, `INSERT INTO subscription_reset_grants (subscription_id,user_id,group_id,quantity,used_count,expires_at,issued_by,payment_order_id,created_at,updated_at) VALUES ($1,$2,$3,1,0,$4,NULL,$5,$6,$6) RETURNING id`, targetID, o.UserID, groupID, grantExpiresAt, o.ID, issuedAt)
+		familyKey, tierRank, sourcePlanID := resetCardTierSnapshotValues(tierSnapshot)
+		rows, err := tx.Client().QueryContext(txCtx, `INSERT INTO subscription_reset_grants (subscription_id,user_id,group_id,quantity,used_count,expires_at,issued_by,payment_order_id,card_family_key,source_tier_rank,source_plan_id,tier_snapshot_resolved,created_at,updated_at) VALUES ($1,$2,$3,1,0,$4,NULL,$5,$6,$7,$8,TRUE,$9,$9) RETURNING id`, targetID, o.UserID, groupID, grantExpiresAt, o.ID, familyKey, tierRank, sourcePlanID, issuedAt)
 		if err != nil {
 			return fmt.Errorf("grant reset card: %w", err)
 		}
@@ -536,7 +548,17 @@ func validateResetCardPaymentOrderSnapshot(o *dbent.PaymentOrder) (int64, int64,
 		o.SubscriptionGroupID == nil || *o.SubscriptionGroupID != groupID {
 		return 0, 0, errors.New("reset card order has an invalid target identity")
 	}
+	if _, err := resetCardTierSnapshotFromProductSnapshot(o.ProductSnapshot, planID); err != nil {
+		return 0, 0, err
+	}
 	return targetID, groupID, nil
+}
+
+func resetCardTierSnapshotForPaymentOrder(order *dbent.PaymentOrder) (*SubscriptionResetCardTierSnapshot, error) {
+	if order == nil || order.PlanID == nil || *order.PlanID <= 0 {
+		return nil, errors.New("reset card order is missing plan identity")
+	}
+	return resetCardTierSnapshotFromProductSnapshot(order.ProductSnapshot, *order.PlanID)
 }
 
 func paymentSnapshotInt64(value any) (int64, bool) {
@@ -948,7 +970,6 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	if s.subscriptionSvc == nil {
 		return errors.New("subscription service is unavailable")
 	}
-
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin subscription fulfillment tx: %w", err)
@@ -1015,7 +1036,18 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	} else {
 		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", groupID)
 	}
-	if err := grantPaymentProductEntitlements(txCtx, txClient, o, groupID); err != nil {
+	grant, grantedSubscription, grantErr := loadPaymentSubscriptionRefundState(txCtx, txClient, o.ID, false)
+	if grantErr != nil && !errors.Is(grantErr, errRefundAccountingMissing) {
+		return fmt.Errorf("load exact payment subscription grant: %w", grantErr)
+	}
+	if err := grantPaymentProductEntitlementsForSubscriptionGrant(
+		txCtx,
+		txClient,
+		o,
+		groupID,
+		grant,
+		grantedSubscription,
+	); err != nil {
 		return err
 	}
 
@@ -1041,8 +1073,27 @@ func (s *PaymentService) invalidatePaymentAuthCache(ctx context.Context, userID 
 }
 
 func grantPaymentProductEntitlements(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, groupID int64) error {
+	return grantPaymentProductEntitlementsForSubscriptionGrant(ctx, client, order, groupID, nil, nil)
+}
+
+// grantPaymentProductEntitlementsForSubscriptionGrant applies an order's
+// immutable benefits. Payment fulfillment always supplies the exact refund
+// provenance row; the compatibility wrapper above remains only for historical
+// direct callers and old focused tests.
+func grantPaymentProductEntitlementsForSubscriptionGrant(
+	ctx context.Context,
+	client *dbent.Client,
+	order *dbent.PaymentOrder,
+	groupID int64,
+	exactGrant *paymentSubscriptionGrant,
+	exactSubscription *dbent.UserSubscription,
+) error {
 	if order == nil || client == nil {
 		return nil
+	}
+	entitlements, err := paymentOrderEntitlementsStrict(order)
+	if err != nil {
+		return err
 	}
 	claimed, err := client.PaymentAuditLog.Query().
 		Where(
@@ -1054,12 +1105,22 @@ func grantPaymentProductEntitlements(ctx context.Context, client *dbent.Client, 
 		return fmt.Errorf("check subscription benefits audit: %w", err)
 	}
 	if claimed {
+		// The audit keeps balance, concurrency, and immediate benefits
+		// idempotent. Monthly reset cards are a separate durable calendar
+		// ledger, so a retried fulfillment must still reconcile its current
+		// window without replaying the order-level benefits.
+		if err := reconcileMonthlyResetCardScheduleForFulfillment(
+			ctx,
+			client,
+			order,
+			exactGrant,
+			exactSubscription,
+			entitlements,
+			time.Now().UTC(),
+		); err != nil {
+			return fmt.Errorf("reconcile monthly reset-card entitlement after prior benefits audit: %w", err)
+		}
 		return nil
-	}
-
-	entitlements, err := paymentOrderEntitlementsStrict(order)
-	if err != nil {
-		return err
 	}
 	if entitlements.BalanceBonus <= 0 && entitlements.ResetCardCount <= 0 && entitlements.Concurrency <= 0 {
 		return nil
@@ -1078,40 +1139,85 @@ func grantPaymentProductEntitlements(ctx context.Context, client *dbent.Client, 
 		}
 	}
 	if entitlements.ResetCardCount > 0 {
-		now := time.Now()
-		// The snapshot stores a count plus a unit; resolve it here so a plan
-		// configured in weeks or months grants the period the buyer was shown.
-		expiresAt := now.Add(time.Duration(entitlements.ResetCardValidityDays()) * 24 * time.Hour)
-		rows, err := client.QueryContext(ctx, `
-			INSERT INTO subscription_reset_grants (
-				subscription_id, user_id, group_id, quantity, used_count,
-				expires_at, issued_by, payment_order_id, created_at, updated_at
-			)
-			SELECT us.id, us.user_id, us.group_id, $3, 0, $4, NULL, $6, $5, $5
-			FROM user_subscriptions us
-			WHERE us.user_id = $1 AND us.group_id = $2
-				AND us.deleted_at IS NULL AND us.status = 'active' AND us.expires_at > $5
-			RETURNING id
-		`, order.UserID, groupID, entitlements.ResetCardCount, expiresAt, now, order.ID)
-		if err != nil {
-			return fmt.Errorf("grant subscription reset cards: %w", err)
-		}
-		var grantID int64
-		if rows.Next() {
-			if err := rows.Scan(&grantID); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("scan subscription reset card grant: %w", err)
+		now := time.Now().UTC()
+		if entitlements.ResetCardDeliveryMode == resetCardDeliveryModeMonthly {
+			// A renewal term starts in the future. Its first card must wait for its
+			// own anchor even though the encompassing subscription is active now.
+			// Conversely, a paid order with a started term already contains an
+			// immutable entitlement promise. The rollout gate controls new orders
+			// and the future worker, not this first fulfillment occurrence.
+			if err := reconcileMonthlyResetCardScheduleForFulfillment(
+				ctx,
+				client,
+				order,
+				exactGrant,
+				exactSubscription,
+				entitlements,
+				now,
+			); err != nil {
+				return fmt.Errorf("issue monthly reset-card entitlement: %w", err)
 			}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("iterate subscription reset card grant: %w", err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("close subscription reset card grant: %w", err)
-		}
-		if grantID == 0 {
-			return fmt.Errorf("subscription reset card recipient is unavailable")
+		} else {
+			tierSnapshot, err := resetCardTierSnapshotForSubscriptionEntitlementOrder(order)
+			if err != nil {
+				return err
+			}
+			familyKey, tierRank, sourcePlanID := resetCardTierSnapshotValues(tierSnapshot)
+			if exactGrant != nil && exactSubscription != nil {
+				if exactGrant.SubscriptionID != exactSubscription.ID || exactGrant.UserID != order.UserID || exactGrant.GroupID != groupID ||
+					exactSubscription.Status != SubscriptionStatusActive || !exactSubscription.ExpiresAt.After(now) {
+					return fmt.Errorf("exact subscription reset-card recipient is unavailable")
+				}
+				expiresAt := now.Add(time.Duration(entitlements.ResetCardValidityDays()) * 24 * time.Hour)
+				_, err = client.ExecContext(ctx, `INSERT INTO subscription_reset_grants (
+				subscription_id, user_id, group_id, quantity, used_count,
+				expires_at, issued_by, payment_order_id, card_family_key,
+				source_tier_rank, source_plan_id, tier_snapshot_resolved, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,0,$5,NULL,$6,$7,$8,$9,TRUE,$10,$10)`,
+					exactGrant.SubscriptionID, exactGrant.UserID, exactGrant.GroupID,
+					entitlements.ResetCardCount, expiresAt, order.ID, familyKey, tierRank,
+					sourcePlanID, now)
+				if err != nil {
+					return fmt.Errorf("grant exact subscription reset cards: %w", err)
+				}
+			} else {
+				// Older completed orders can predate payment_subscription_grants. Keep
+				// their established recovery behavior, but all newly fulfilled orders
+				// use the exact path above.
+				expiresAt := now.Add(time.Duration(entitlements.ResetCardValidityDays()) * 24 * time.Hour)
+				rows, err := client.QueryContext(ctx, `
+				INSERT INTO subscription_reset_grants (
+					subscription_id, user_id, group_id, quantity, used_count,
+					expires_at, issued_by, payment_order_id, card_family_key,
+					source_tier_rank, source_plan_id, tier_snapshot_resolved, created_at, updated_at
+				)
+				SELECT us.id, us.user_id, us.group_id, $3, 0, $4, NULL, $5, $6, $7, $8, TRUE, $9, $9
+				FROM user_subscriptions us
+				WHERE us.user_id = $1 AND us.group_id = $2
+					AND us.deleted_at IS NULL AND us.status = 'active' AND us.expires_at > $9
+				RETURNING id
+			`, order.UserID, groupID, entitlements.ResetCardCount, expiresAt, order.ID, familyKey, tierRank, sourcePlanID, now)
+				if err != nil {
+					return fmt.Errorf("grant subscription reset cards: %w", err)
+				}
+				var grantID int64
+				if rows.Next() {
+					if err := rows.Scan(&grantID); err != nil {
+						_ = rows.Close()
+						return fmt.Errorf("scan subscription reset card grant: %w", err)
+					}
+				}
+				if err := rows.Err(); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf("iterate subscription reset card grant: %w", err)
+				}
+				if err := rows.Close(); err != nil {
+					return fmt.Errorf("close subscription reset card grant: %w", err)
+				}
+				if grantID == 0 {
+					return fmt.Errorf("subscription reset card recipient is unavailable")
+				}
+			}
 		}
 	}
 	detail, _ := json.Marshal(map[string]any{
@@ -1128,6 +1234,13 @@ func grantPaymentProductEntitlements(ctx context.Context, client *dbent.Client, 
 		return fmt.Errorf("record subscription benefits audit: %w", err)
 	}
 	return nil
+}
+
+func resetCardTierSnapshotForSubscriptionEntitlementOrder(order *dbent.PaymentOrder) (*SubscriptionResetCardTierSnapshot, error) {
+	if order == nil || order.PlanID == nil || *order.PlanID <= 0 {
+		return nil, errors.New("subscription entitlement order is missing plan identity")
+	}
+	return resetCardTierSnapshotFromProductSnapshot(order.ProductSnapshot, *order.PlanID)
 }
 
 // grantPaymentOrderConcurrency applies a balance-order concurrency target in

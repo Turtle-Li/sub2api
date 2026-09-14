@@ -44,6 +44,7 @@ describe('parseWechatResumeRoute', () => {
       order_type: 'reset_card',
       plan_id: '7',
       subscription_id: '99',
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
       payment_idempotency_key: 'reset-card-payment-opaque-key',
     }, [], 88)).toEqual({
       wechatResumeToken: 'resume-reset-card-99',
@@ -52,6 +53,28 @@ describe('parseWechatResumeRoute', () => {
       orderAmount: 0,
       planId: 7,
       subscriptionId: 99,
+      resetCardTierRevision: 'v1:3:gpt:2:123',
+    })
+  })
+
+  it('preserves a reset-card tier revision for legacy openid resume', () => {
+    expect(parseWechatResumeRoute({
+      wechat_resume: '1',
+      openid: 'openid-reset-card',
+      payment_type: 'wxpay',
+      amount: '40',
+      order_type: 'reset_card',
+      plan_id: '7',
+      subscription_id: '99',
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
+    }, [], 88)).toEqual({
+      openid: 'openid-reset-card',
+      paymentType: 'wxpay',
+      orderType: 'reset_card',
+      orderAmount: 40,
+      planId: 7,
+      subscriptionId: 99,
+      resetCardTierRevision: 'v1:3:gpt:2:123',
     })
   })
 })
@@ -68,6 +91,7 @@ describe('stripWechatResumeQuery', () => {
       order_type: 'subscription',
       plan_id: '7',
       subscription_id: '99',
+      reset_card_tier_revision: 'v1:3:gpt:2:123',
       payment_idempotency_key: 'reset-card-payment-opaque-key',
       state: 'state-123',
       scope: 'snsapi_base',

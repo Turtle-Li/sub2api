@@ -127,6 +127,16 @@ func (s *PaymentService) executeUnifiedRefund(ctx context.Context, p *RefundPlan
 }
 
 func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *RefundPlan) (*unifiedRefundAttempt, error) {
+	reason, err := normalizedRefundReasonForPlan(p)
+	if err != nil {
+		return nil, err
+	}
+	// Keep the payment-order audit text and every later provider call derived
+	// from the same normalized contract, including plans assembled by older
+	// internal callers rather than the reviewed admin endpoint.
+	p.ReasonCode = reason.Code
+	p.ReasonSummary = reason.Summary
+	p.Reason = reason.AuditText
 	reviewed := p != nil && strings.TrimSpace(p.QuoteRevision) != ""
 	if reviewed {
 		if err := s.requireReviewedRefundAdmission(ctx); err != nil {
@@ -169,7 +179,7 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 		if err := s.requireReviewedRefundAdmission(txCtx); err != nil {
 			return nil, err
 		}
-		a, err := s.reserveReviewedUnifiedRefundAttemptTx(txCtx, client, o, p)
+		a, err := s.reserveReviewedUnifiedRefundAttemptTx(txCtx, client, o, p, reason)
 		if err != nil {
 			if errors.Is(err, errRefundQuoteStale) {
 				return nil, infraerrors.Conflict("REFUND_QUOTE_STALE", "refund review changed; refresh before submitting")
@@ -231,7 +241,7 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 		OrderID: o.ID, PaymentOrderID: snapshot.PaymentOrderID, Environment: snapshot.Environment,
 		OrganizationID: snapshot.OrganizationID, ProductID: snapshot.ProductID, AppID: snapshot.AppID,
 		PaymentMethod: method, AmountFen: gatewayFen, BalanceAmountMinor: balanceMinor,
-		DeductBalance: p.DeductBalance, Force: p.Force, ReasonSummary: "Sub2 administrator refund", Status: unifiedRefundPending,
+		DeductBalance: p.DeductBalance, Force: p.Force, ReasonCode: reason.Code, ReasonSummary: reason.Summary, Status: unifiedRefundPending,
 	}
 	if err := insertUnifiedRefundAttempt(txCtx, client, a); err != nil {
 		return nil, err
@@ -245,6 +255,7 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	if err := writeUnifiedRefundAudit(txCtx, client, o.ID, "UNIFIED_REFUND_REQUESTED", map[string]any{
 		"product_refund_no": a.ProductRefundNo, "amount_fen": a.AmountFen,
 		"balance_amount_minor": a.BalanceAmountMinor, "deduct_balance": a.DeductBalance,
+		"reason_code": a.ReasonCode, "reason_summary": a.ReasonSummary,
 	}); err != nil {
 		return nil, err
 	}
@@ -254,7 +265,7 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	return a, nil
 }
 
-func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, plan *RefundPlan) (*unifiedRefundAttempt, error) {
+func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, plan *RefundPlan, reason normalizedRefundReason) (*unifiedRefundAttempt, error) {
 	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded}, order.Status) {
 		return nil, infraerrors.Conflict("CONFLICT", "order status does not allow another refund")
 	}
@@ -285,7 +296,7 @@ func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Conte
 		OrderID: order.ID, PaymentOrderID: snapshot.PaymentOrderID, Environment: snapshot.Environment,
 		OrganizationID: snapshot.OrganizationID, ProductID: snapshot.ProductID, AppID: snapshot.AppID,
 		PaymentMethod: method, AmountFen: amountFen, BalanceAmountMinor: entitlementMinor,
-		DeductBalance: review.Balance != nil, Force: false, ReasonSummary: "Sub2 administrator refund",
+		DeductBalance: review.Balance != nil, Force: false, ReasonCode: reason.Code, ReasonSummary: reason.Summary,
 		Status: unifiedRefundPending, RefundKind: review.OrderType, QuoteRevision: review.QuoteRevision,
 		WalletPaidAmount: plan.WalletPaidToReserve, WalletGiftAmount: plan.WalletGiftToReserve,
 		SubscriptionSeconds:      plan.SubscriptionSecondsToReserve,
@@ -306,6 +317,7 @@ func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Conte
 		"entitlement_amount_minor": a.BalanceAmountMinor, "refund_kind": a.RefundKind,
 		"wallet_paid_amount": a.WalletPaidAmount, "wallet_gift_amount": a.WalletGiftAmount,
 		"subscription_seconds": a.SubscriptionSeconds, "quote_revision": a.QuoteRevision,
+		"reason_code": a.ReasonCode, "reason_summary": a.ReasonSummary,
 	}); err != nil {
 		return nil, err
 	}
@@ -403,7 +415,7 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 	if a.RefundRequestID == "" {
 		result, err = s.unifiedPayment.CreateUnifiedRefund(ctx, payment.UnifiedRefundRequest{
 			PaymentOrderID: a.PaymentOrderID, ProductRefundNo: a.ProductRefundNo, IdempotencyKey: a.IdempotencyKey,
-			AmountFen: a.AmountFen, ReasonCode: "other", ReasonSummary: &a.ReasonSummary,
+			AmountFen: a.AmountFen, ReasonCode: a.ReasonCode, ReasonSummary: &a.ReasonSummary,
 		})
 	} else {
 		result, err = s.unifiedPayment.GetUnifiedRefund(ctx, a.RefundRequestID, payment.UnifiedRefundExpectation{
@@ -421,6 +433,16 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 		return pendingUnifiedRefundResult(false), nil
 	}
 	return s.applyUnifiedRefundResource(ctx, a.OrderID, result, "query")
+}
+
+func normalizedRefundReasonForPlan(plan *RefundPlan) (normalizedRefundReason, error) {
+	if plan == nil {
+		return normalizedRefundReason{}, infraerrors.BadRequest("INVALID_REFUND", "refund plan is missing")
+	}
+	if strings.TrimSpace(plan.ReasonCode) != "" || strings.TrimSpace(plan.ReasonSummary) != "" {
+		return normalizeRefundReason(RefundReasonInput{Code: plan.ReasonCode, Detail: plan.ReasonSummary})
+	}
+	return normalizeRefundReason(RefundReasonInput{LegacyReason: plan.Reason})
 }
 
 func (s *PaymentService) applyUnifiedRefundResource(ctx context.Context, orderID int64, result *payment.UnifiedRefundResource, source string) (*RefundResult, error) {

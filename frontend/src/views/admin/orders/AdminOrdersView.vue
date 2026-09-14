@@ -21,7 +21,6 @@
         </div>
       </div>
 
-      <div class="flex justify-end"><RouterLink to="/admin/orders/invoices" class="btn btn-secondary">{{ t('payment.orderOps.invoiceQueue') }}</RouterLink></div>
       <details class="text-sm text-gray-600 dark:text-gray-300"><summary class="mb-2 cursor-pointer py-2">{{ t('payment.orderOps.paymentTest') }}</summary><AdminPaymentOwnerTest @created="loadOrders" /></details>
 
       <!-- Table -->
@@ -58,10 +57,6 @@
             <button v-else-if="row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED'" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
               <Icon name="dollar" size="sm" />
               {{ t('payment.admin.refund') }}
-            </button>
-            <button v-if="row.invoice" @click="openInvoiceDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
-              <Icon name="document" size="sm" />
-              {{ row.invoice.status === 'ISSUED' || row.invoice.status === 'REJECTED' ? t('payment.invoice.admin.view') : t('payment.invoice.admin.process') }}
             </button>
           </div>
         </template>
@@ -105,14 +100,9 @@
             </div>
           </div>
           <div v-if="selectedOrder.invoice" class="col-span-2 border-t border-gray-200 pt-3 dark:border-dark-600">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.invoice.admin.title') }}</p>
-                <InvoiceStatusBadge :status="selectedOrder.invoice.status" />
-              </div>
-              <button class="btn btn-secondary inline-flex items-center gap-2" @click="openInvoiceDialog(selectedOrder)">
-                <Icon name="document" size="sm" />{{ t('payment.invoice.admin.openWorkflow') }}
-              </button>
+            <div>
+              <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.invoice.admin.title') }}</p>
+              <InvoiceStatusBadge :status="selectedOrder.invoice.status" />
             </div>
           </div>
         </div>
@@ -150,20 +140,19 @@
       @cancel="closeRefundDialog"
     />
     <TotpStepUpDialog :controller="stepUp" />
-    <AdminInvoiceDialog :show="!!invoiceTarget" :order="invoiceTarget" :submitting="invoiceSubmitting" :retrying="invoiceEmailRetrying" @submit="handleInvoiceUpdate" @retry-email="handleInvoiceEmailRetry" @retry-feishu="handleInvoiceFeishuRetry" @close="invoiceTarget = null" />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RouterLink, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
-import type { RefundOrderRequest, RefundReview } from '@/api/admin/payment'
+import type { RefundOrderRequest, RefundReasonCode, RefundReview } from '@/api/admin/payment'
 import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
-import type { AdminUpdateInvoiceRequest, PaymentOrder } from '@/types/payment'
+import type { PaymentOrder } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -177,7 +166,6 @@ import OrderTable from '@/components/payment/OrderTable.vue'
 import OrderPurchaseSnapshot from '@/components/payment/OrderPurchaseSnapshot.vue'
 import OrderLifecycleBadge from '@/components/payment/OrderLifecycleBadge.vue'
 import { paymentFact, fulfillmentFact } from '@/components/payment/orderPresentation'
-import AdminInvoiceDialog from '@/components/admin/payment/AdminInvoiceDialog.vue'
 import { currencySymbol } from '@/components/payment/currency'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
@@ -191,7 +179,8 @@ interface AuditLog {
 }
 
 interface RefundRequest {
-  reason: string
+  reason_code: RefundReasonCode
+  reason_detail?: string
 }
 
 const { t } = useI18n()
@@ -219,9 +208,6 @@ const refundSubmitting = ref(false)
 const refundWarning = ref('')
 const refundQueryingIds = ref(new Set<number>())
 const orderAuditLogs = ref<AuditLog[]>([])
-const invoiceTarget = ref<PaymentOrder | null>(null)
-const invoiceSubmitting = ref(false)
-const invoiceEmailRetrying = ref(false)
 const creditedAmountSymbol = currencySymbol('USD')
 const stepUp = useStepUp()
 const refundMutationBusy = computed(() => refundSubmitting.value || refundQueryingIds.value.size > 0)
@@ -380,59 +366,6 @@ function openRefundDialog(order: PaymentOrder) {
   void loadRefundReview(order, session)
 }
 
-function openInvoiceDialog(order: PaymentOrder) {
-  invoiceTarget.value = order
-  showDetailDialog.value = false
-}
-
-async function handleInvoiceUpdate(payload: AdminUpdateInvoiceRequest) {
-  const target = invoiceTarget.value
-  if (!target || invoiceSubmitting.value || invoiceEmailRetrying.value) return
-  invoiceSubmitting.value = true
-  try {
-    const res = await adminPaymentAPI.updateInvoiceRequest(target.id, payload)
-    const updated = { ...target, invoice: res.data }
-    if (invoiceTarget.value === target) invoiceTarget.value = updated
-    orders.value = orders.value.map((order) => order.id === updated.id ? updated : order)
-    appStore.showSuccess(t('payment.invoice.admin.updated'))
-  } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
-  } finally {
-    invoiceSubmitting.value = false
-  }
-}
-
-async function handleInvoiceFeishuRetry() {
-  const target = invoiceTarget.value
-  if (!target || invoiceEmailRetrying.value || invoiceSubmitting.value) return
-  invoiceEmailRetrying.value = true
-  try {
-    const res = await adminPaymentAPI.retryInvoiceFeishu(target.id)
-    if (invoiceTarget.value === target) invoiceTarget.value = { ...target, invoice: res.data }
-    appStore.showSuccess(t('payment.orderOps.notificationQueued'))
-    await loadOrders()
-  } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
-  } finally { invoiceEmailRetrying.value = false }
-}
-
-async function handleInvoiceEmailRetry() {
-  const target = invoiceTarget.value
-  if (!target || invoiceEmailRetrying.value || invoiceSubmitting.value) return
-  invoiceEmailRetrying.value = true
-  try {
-    const res = await adminPaymentAPI.retryInvoiceEmail(target.id)
-    const updated = { ...target, invoice: res.data }
-    if (invoiceTarget.value === target) invoiceTarget.value = updated
-    orders.value = orders.value.map((order) => order.id === updated.id ? updated : order)
-    appStore.showSuccess(t('payment.invoice.admin.emailRetryQueued'))
-  } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
-  } finally {
-    invoiceEmailRetrying.value = false
-  }
-}
-
 function closeRefundDialog() {
   refundDialogSession += 1
   refundReviewRequest += 1
@@ -464,7 +397,8 @@ async function handleRefund(data: RefundRequest) {
   const session = refundDialogSession
   const request: RefundOrderRequest = {
     quote_revision: review.quote_revision,
-    reason: data.reason,
+    reason_code: data.reason_code,
+    ...(data.reason_detail ? { reason_detail: data.reason_detail } : {}),
   }
   refundSubmitting.value = true
   try {

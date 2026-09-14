@@ -15,6 +15,8 @@ import type {
   AdminUpdateInvoiceRequest,
   PaymentBanner,
   OrderStatus,
+  ResetCardTierPolicy,
+  ResetCardTierPolicyInput,
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -38,6 +40,9 @@ export interface AdminPaymentConfig {
   help_text: string
   banner?: PaymentBanner | null
   recharge_options: import('@/types/payment').RechargeOption[]
+  recharge_options_invalid?: boolean
+  /** Admin-only rollout switch for calendar-month reset-card delivery. */
+  monthly_reset_cards_enabled: boolean
 }
 
 /** Fields accepted by PUT /admin/payment/config (all optional via pointer semantics) */
@@ -60,6 +65,8 @@ export interface UpdatePaymentConfigRequest {
   help_text?: string
   banner?: PaymentBanner
   recharge_options?: import('@/types/payment').RechargeOption[]
+  /** Admin-only rollout switch for calendar-month reset-card delivery. */
+  monthly_reset_cards_enabled?: boolean
 }
 
 export interface RefundResult {
@@ -110,9 +117,17 @@ export interface SubscriptionRefundReview {
   remaining_seconds: number
 }
 
+export type RefundReasonCode =
+  | 'customer_request'
+  | 'duplicate_charge'
+  | 'service_not_delivered'
+  | 'service_error'
+  | 'other'
+
 export interface RefundOrderRequest {
   quote_revision: string
-  reason: string
+  reason_code: RefundReasonCode
+  reason_detail?: string
 }
 
 export type OwnerTestPaymentType = 'alipay' | 'wxpay'
@@ -291,6 +306,16 @@ export const adminPaymentAPI = {
   /** Delete a subscription plan */
   deletePlan(id: number) {
     return apiClient.delete(`/admin/payment/plans/${id}`)
+  },
+
+  /** List group-scoped reset-card compatibility tiers. */
+  getResetCardTierPolicies() {
+    return apiClient.get<ResetCardTierPolicy[]>('/admin/payment/reset-card-tiers')
+  },
+
+  /** Create or update one subscription group's reset-card compatibility tier. */
+  updateResetCardTierPolicy(groupID: number, data: ResetCardTierPolicyInput) {
+    return apiClient.put<ResetCardTierPolicy>(`/admin/payment/reset-card-tiers/${groupID}`, data)
   },
 
   // ==================== Provider Instances ====================

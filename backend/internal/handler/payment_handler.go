@@ -59,7 +59,27 @@ func (h *PaymentHandler) GetPaymentConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, cfg)
+	response.Success(c, publicPaymentConfigProjection(cfg))
+}
+
+// publicPaymentConfigProjection preserves the established customer config
+// shape while preventing private rollout controls from becoming an API
+// capability signal. Keep this separate from PaymentConfig so admins can still
+// read and write the private setting through their authenticated endpoint.
+func publicPaymentConfigProjection(cfg *service.PaymentConfig) map[string]any {
+	if cfg == nil {
+		return map[string]any{}
+	}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return map[string]any{}
+	}
+	var projected map[string]any
+	if err := json.Unmarshal(encoded, &projected); err != nil {
+		return map[string]any{}
+	}
+	delete(projected, "monthly_reset_cards_enabled")
+	return projected
 }
 
 // GetPlans returns subscription plans available for sale.
@@ -77,31 +97,32 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 	}
 	// Enrich plans with group platform for frontend color coding
 	type planWithPlatform struct {
-		ID                   int64                        `json:"id"`
-		GroupID              int64                        `json:"group_id"`
-		GroupPlatform        string                       `json:"group_platform"`
-		GroupName            string                       `json:"group_name"`
-		RateMultiplier       float64                      `json:"rate_multiplier"`
-		PeakRateEnabled      bool                         `json:"peak_rate_enabled"`
-		PeakStart            string                       `json:"peak_start"`
-		PeakEnd              string                       `json:"peak_end"`
-		PeakRateMultiplier   float64                      `json:"peak_rate_multiplier"`
-		Name                 string                       `json:"name"`
-		Description          string                       `json:"description"`
-		Price                float64                      `json:"price"`
-		OriginalPrice        *float64                     `json:"original_price,omitempty"`
-		Currency             string                       `json:"currency,omitempty"`
-		ValidityDays         int                          `json:"validity_days"`
-		ValidityUnit         string                       `json:"validity_unit"`
-		Features             string                       `json:"features"`
-		ProductName          string                       `json:"product_name"`
-		Entitlements         service.PlanEntitlements     `json:"entitlements"`
-		DiscountPercent      float64                      `json:"discount_percent"`
-		PeriodLabel          string                       `json:"period_label"`
-		ForSale              bool                         `json:"for_sale"`
-		SortOrder            int                          `json:"sort_order"`
-		Eligibility          service.PurchaseEligibility  `json:"eligibility"`
-		ResetCardEligibility service.ResetCardEligibility `json:"reset_card_eligibility"`
+		ID                   int64                                    `json:"id"`
+		GroupID              int64                                    `json:"group_id"`
+		GroupPlatform        string                                   `json:"group_platform"`
+		GroupName            string                                   `json:"group_name"`
+		RateMultiplier       float64                                  `json:"rate_multiplier"`
+		PeakRateEnabled      bool                                     `json:"peak_rate_enabled"`
+		PeakStart            string                                   `json:"peak_start"`
+		PeakEnd              string                                   `json:"peak_end"`
+		PeakRateMultiplier   float64                                  `json:"peak_rate_multiplier"`
+		Name                 string                                   `json:"name"`
+		Description          string                                   `json:"description"`
+		Price                float64                                  `json:"price"`
+		OriginalPrice        *float64                                 `json:"original_price,omitempty"`
+		Currency             string                                   `json:"currency,omitempty"`
+		ValidityDays         int                                      `json:"validity_days"`
+		ValidityUnit         string                                   `json:"validity_unit"`
+		Features             string                                   `json:"features"`
+		ProductName          string                                   `json:"product_name"`
+		Entitlements         service.PlanEntitlements                 `json:"entitlements"`
+		DiscountPercent      float64                                  `json:"discount_percent"`
+		PeriodLabel          string                                   `json:"period_label"`
+		ForSale              bool                                     `json:"for_sale"`
+		SortOrder            int                                      `json:"sort_order"`
+		Eligibility          service.PurchaseEligibility              `json:"eligibility"`
+		ResetCardEligibility service.ResetCardEligibility             `json:"reset_card_eligibility"`
+		ResetCardTier        *service.SubscriptionResetCardTierPolicy `json:"reset_card_tier,omitempty"`
 	}
 	plans := make([]*dbent.SubscriptionPlan, 0, len(catalog.Plans))
 	for _, candidate := range catalog.Plans {
@@ -125,6 +146,7 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 			PeriodLabel:     service.PlanPeriodLabel(p.ValidityDays, p.ValidityUnit),
 			ForSale:         p.ForSale, SortOrder: p.SortOrder,
 			Eligibility: candidate.Eligibility, ResetCardEligibility: candidate.ResetCardEligibility,
+			ResetCardTier: candidate.ResetCardTier,
 		})
 	}
 	response.Success(c, result)
@@ -202,6 +224,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 			DiscountPercent: service.PlanDiscountPercent(p.Price, p.OriginalPrice),
 			PeriodLabel:     service.PlanPeriodLabel(p.ValidityDays, p.ValidityUnit),
 			Eligibility:     candidate.Eligibility, ResetCardEligibility: candidate.ResetCardEligibility,
+			ResetCardTier: candidate.ResetCardTier,
 		})
 	}
 	publicRechargeOptions := make([]service.RechargeOption, 0, len(catalog.RechargeOptions))
@@ -253,33 +276,34 @@ type checkoutInfoResponse struct {
 }
 
 type checkoutPlan struct {
-	ID                   int64                        `json:"id"`
-	GroupID              int64                        `json:"group_id"`
-	GroupPlatform        string                       `json:"group_platform"`
-	GroupName            string                       `json:"group_name"`
-	RateMultiplier       float64                      `json:"rate_multiplier"`
-	PeakRateEnabled      bool                         `json:"peak_rate_enabled"`
-	PeakStart            string                       `json:"peak_start"`
-	PeakEnd              string                       `json:"peak_end"`
-	PeakRateMultiplier   float64                      `json:"peak_rate_multiplier"`
-	DailyLimitUSD        *float64                     `json:"daily_limit_usd"`
-	WeeklyLimitUSD       *float64                     `json:"weekly_limit_usd"`
-	MonthlyLimitUSD      *float64                     `json:"monthly_limit_usd"`
-	ModelScopes          []string                     `json:"supported_model_scopes"`
-	Name                 string                       `json:"name"`
-	Description          string                       `json:"description"`
-	Price                float64                      `json:"price"`
-	OriginalPrice        *float64                     `json:"original_price,omitempty"`
-	Currency             string                       `json:"currency,omitempty"`
-	ValidityDays         int                          `json:"validity_days"`
-	ValidityUnit         string                       `json:"validity_unit"`
-	Features             []string                     `json:"features"`
-	ProductName          string                       `json:"product_name"`
-	Entitlements         service.PlanEntitlements     `json:"entitlements"`
-	DiscountPercent      float64                      `json:"discount_percent"`
-	PeriodLabel          string                       `json:"period_label"`
-	Eligibility          service.PurchaseEligibility  `json:"eligibility"`
-	ResetCardEligibility service.ResetCardEligibility `json:"reset_card_eligibility"`
+	ID                   int64                                    `json:"id"`
+	GroupID              int64                                    `json:"group_id"`
+	GroupPlatform        string                                   `json:"group_platform"`
+	GroupName            string                                   `json:"group_name"`
+	RateMultiplier       float64                                  `json:"rate_multiplier"`
+	PeakRateEnabled      bool                                     `json:"peak_rate_enabled"`
+	PeakStart            string                                   `json:"peak_start"`
+	PeakEnd              string                                   `json:"peak_end"`
+	PeakRateMultiplier   float64                                  `json:"peak_rate_multiplier"`
+	DailyLimitUSD        *float64                                 `json:"daily_limit_usd"`
+	WeeklyLimitUSD       *float64                                 `json:"weekly_limit_usd"`
+	MonthlyLimitUSD      *float64                                 `json:"monthly_limit_usd"`
+	ModelScopes          []string                                 `json:"supported_model_scopes"`
+	Name                 string                                   `json:"name"`
+	Description          string                                   `json:"description"`
+	Price                float64                                  `json:"price"`
+	OriginalPrice        *float64                                 `json:"original_price,omitempty"`
+	Currency             string                                   `json:"currency,omitempty"`
+	ValidityDays         int                                      `json:"validity_days"`
+	ValidityUnit         string                                   `json:"validity_unit"`
+	Features             []string                                 `json:"features"`
+	ProductName          string                                   `json:"product_name"`
+	Entitlements         service.PlanEntitlements                 `json:"entitlements"`
+	DiscountPercent      float64                                  `json:"discount_percent"`
+	PeriodLabel          string                                   `json:"period_label"`
+	Eligibility          service.PurchaseEligibility              `json:"eligibility"`
+	ResetCardEligibility service.ResetCardEligibility             `json:"reset_card_eligibility"`
+	ResetCardTier        *service.SubscriptionResetCardTierPolicy `json:"reset_card_tier,omitempty"`
 }
 
 // parseFeatures accepts the JSON arrays used by purchase snapshots and legacy
@@ -326,16 +350,17 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 
 // CreateOrderRequest is the request body for creating a payment order.
 type CreateOrderRequest struct {
-	Amount             float64 `json:"amount"`
-	PaymentType        string  `json:"payment_type" binding:"required"`
-	OpenID             string  `json:"openid"`
-	WechatResumeToken  string  `json:"wechat_resume_token"`
-	ReturnURL          string  `json:"return_url"`
-	PaymentSource      string  `json:"payment_source"`
-	OrderType          string  `json:"order_type"`
-	PlanID             int64   `json:"plan_id"`
-	SubscriptionID     int64   `json:"subscription_id"`
-	IdempotencyKeyHash string  `json:"-"`
+	Amount                float64 `json:"amount"`
+	PaymentType           string  `json:"payment_type" binding:"required"`
+	OpenID                string  `json:"openid"`
+	WechatResumeToken     string  `json:"wechat_resume_token"`
+	ReturnURL             string  `json:"return_url"`
+	PaymentSource         string  `json:"payment_source"`
+	OrderType             string  `json:"order_type"`
+	PlanID                int64   `json:"plan_id"`
+	SubscriptionID        int64   `json:"subscription_id"`
+	ResetCardTierRevision string  `json:"reset_card_tier_revision"`
+	IdempotencyKeyHash    string  `json:"-"`
 	// IsMobile lets the frontend declare its mobile status directly. When
 	// nil we fall back to User-Agent heuristics (which miss iPadOS / some
 	// embedded browsers that strip the "Mobile" keyword).
@@ -372,23 +397,24 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 		mobile = *req.IsMobile
 	}
 	result, err := h.paymentService.CreateOrder(c.Request.Context(), service.CreateOrderRequest{
-		UserID:             subject.UserID,
-		Amount:             req.Amount,
-		PaymentType:        req.PaymentType,
-		OpenID:             req.OpenID,
-		ClientIP:           c.ClientIP(),
-		IsMobile:           mobile,
-		IsWeChatBrowser:    isWeChatBrowser(c),
-		SrcHost:            c.Request.Host,
-		SrcURL:             c.Request.Referer(),
-		ReturnURL:          req.ReturnURL,
-		PaymentSource:      req.PaymentSource,
-		OrderType:          req.OrderType,
-		PlanID:             req.PlanID,
-		SubscriptionID:     req.SubscriptionID,
-		IdempotencyKey:     c.GetHeader("Idempotency-Key"),
-		IdempotencyKeyHash: req.IdempotencyKeyHash,
-		Locale:             c.GetHeader("Accept-Language"),
+		UserID:                subject.UserID,
+		Amount:                req.Amount,
+		PaymentType:           req.PaymentType,
+		OpenID:                req.OpenID,
+		ClientIP:              c.ClientIP(),
+		IsMobile:              mobile,
+		IsWeChatBrowser:       isWeChatBrowser(c),
+		SrcHost:               c.Request.Host,
+		SrcURL:                c.Request.Referer(),
+		ReturnURL:             req.ReturnURL,
+		PaymentSource:         req.PaymentSource,
+		OrderType:             req.OrderType,
+		PlanID:                req.PlanID,
+		SubscriptionID:        req.SubscriptionID,
+		ResetCardTierRevision: req.ResetCardTierRevision,
+		IdempotencyKey:        c.GetHeader("Idempotency-Key"),
+		IdempotencyKeyHash:    req.IdempotencyKeyHash,
+		Locale:                c.GetHeader("Accept-Language"),
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -434,6 +460,9 @@ func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeC
 	}
 	if claims.SubscriptionID > 0 {
 		req.SubscriptionID = claims.SubscriptionID
+	}
+	if strings.TrimSpace(claims.ResetCardTierRevision) != "" {
+		req.ResetCardTierRevision = strings.TrimSpace(claims.ResetCardTierRevision)
 	}
 	if strings.TrimSpace(claims.IdempotencyKeyHash) != "" {
 		req.IdempotencyKeyHash = strings.TrimSpace(claims.IdempotencyKeyHash)

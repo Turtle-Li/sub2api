@@ -8,6 +8,7 @@ export interface ParsedWechatResumeRoute {
   paymentType: string
   planId?: number
   subscriptionId?: number
+  resetCardTierRevision?: string
   openid?: string
   wechatResumeToken?: string
 }
@@ -43,6 +44,7 @@ export function parseWechatResumeRoute(
   const hasPlanId = Number.isFinite(planId) && planId > 0
   const subscriptionId = Number.parseInt(readQueryString(query, 'subscription_id'), 10)
   const hasSubscriptionId = Number.isFinite(subscriptionId) && subscriptionId > 0
+  const resetCardTierRevision = readQueryString(query, 'reset_card_tier_revision').trim()
   const requestedType = readQueryString(query, 'order_type')
   const orderType = requestedType === 'reset_card'
     ? 'reset_card'
@@ -55,6 +57,7 @@ export function parseWechatResumeRoute(
       orderAmount: 0,
       planId: hasPlanId ? planId : undefined,
       subscriptionId: hasSubscriptionId ? subscriptionId : undefined,
+      resetCardTierRevision: resetCardTierRevision || undefined,
     }
   }
 
@@ -77,6 +80,7 @@ export function parseWechatResumeRoute(
     orderAmount,
     planId: hasPlanId ? planId : undefined,
     subscriptionId: hasSubscriptionId ? subscriptionId : undefined,
+    resetCardTierRevision: resetCardTierRevision || undefined,
   }
 }
 
@@ -92,6 +96,7 @@ export function stripWechatResumeQuery(query: LocationQuery): LocationQueryRaw {
   delete nextQuery.order_type
   delete nextQuery.plan_id
   delete nextQuery.subscription_id
+  delete nextQuery.reset_card_tier_revision
   delete nextQuery.payment_idempotency_key
   return nextQuery
 }

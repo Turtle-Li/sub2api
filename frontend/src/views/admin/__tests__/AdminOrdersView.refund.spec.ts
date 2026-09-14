@@ -30,7 +30,7 @@ vi.mock('@/api/admin/payment', () => ({
   adminPaymentAPI: { getOrders, getOrder, getRefundReview, refundOrder, queryRefund },
   default: { getOrders, getOrder, getRefundReview, refundOrder, queryRefund }
 }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), RouterLink: { template: '<a><slot /></a>' } }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess, showWarning, showError }) }))
 vi.mock('@/composables/useStepUp', () => ({
   useStepUp: () => ({ run: stepUpRun }),
@@ -41,7 +41,7 @@ vi.mock('vue-i18n', async () => ({
   useI18n: () => ({ t: (key: string) => key })
 }))
 
-const refundPayload = { reason: 'Requested refund' }
+const refundPayload = { reason_code: 'customer_request', reason_detail: 'Requested refund' }
 const manualWarning = 'refund succeeded; remaining balance recovery requires manual review'
 
 function order(id: number, status: string) {
@@ -103,10 +103,19 @@ async function mountOrders(statusOrRows: string | ReturnType<typeof order>[]) {
           template: '<div v-if="show" data-test="refund-dialog" :data-order-id="order?.id" :data-review="review?.quote_revision || \'\'">{{ warning }}{{ error }}</div>'
         },
         BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /></div>' },
-        Select: true,
+        Select: {
+          name: 'Select',
+          emits: ['update:modelValue', 'change'],
+          template: '<div data-test="select" />',
+        },
         Pagination: true,
         Icon: true,
         OrderStatusBadge: true,
+        InvoiceStatusBadge: {
+          name: 'InvoiceStatusBadge',
+          props: ['status'],
+          template: '<span data-test="invoice-status">{{ status }}</span>',
+        },
         AdminPaymentOwnerTest: {
           emits: ['created'],
           template: '<button data-test="owner-payment-created" @click="$emit(\'created\')" />',
@@ -129,7 +138,7 @@ async function openRefundDialog(wrapper: ReturnType<typeof mount>, orderID = 42)
   await flushPromises()
 }
 
-describe('admin refund outcome feedback', () => {
+describe('admin order management', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     stepUpRun.mockImplementation((action: () => Promise<unknown>) => action())
@@ -165,7 +174,11 @@ describe('admin refund outcome feedback', () => {
     wrapper.findComponent({ name: 'AdminRefundDialog' }).vm.$emit('confirm', refundPayload)
     await flushPromises()
 
-    expect(refundOrder).toHaveBeenCalledWith(42, { quote_revision: 'quote-42', reason: 'Requested refund' })
+    expect(refundOrder).toHaveBeenCalledWith(42, {
+      quote_revision: 'quote-42',
+      reason_code: 'customer_request',
+      reason_detail: 'Requested refund',
+    })
     expect(showSuccess).toHaveBeenCalledWith('payment.admin.refundPending')
     expect(showWarning).not.toHaveBeenCalled()
     expect(wrapper.find('[data-test="refund-dialog"]').exists()).toBe(false)
@@ -174,7 +187,11 @@ describe('admin refund outcome feedback', () => {
 
   it('retries the original refund snapshot after MFA while blocking concurrent refund actions', async () => {
     const rows = [order(42, 'COMPLETED'), order(99, 'REFUND_PENDING')]
-    const initialPayload = { quote_revision: 'quote-42', reason: 'Requested refund' }
+    const initialPayload = {
+      quote_revision: 'quote-42',
+      reason_code: 'customer_request',
+      reason_detail: 'Requested refund',
+    }
     let resumeMFA: (() => void) | undefined
     stepUpRun.mockImplementation(async (action: () => Promise<unknown>) => {
       try {
@@ -201,7 +218,7 @@ describe('admin refund outcome feedback', () => {
 
     await buttonForOrder(wrapper, 99, 'common.view').trigger('click')
     await flushPromises()
-    suppliedPayload.reason = 'different order selection must not alter retry'
+    suppliedPayload.reason_detail = 'different order selection must not alter retry'
     resumeMFA!()
     await flushPromises()
 
@@ -290,7 +307,11 @@ describe('admin refund outcome feedback', () => {
     wrapper.findComponent({ name: 'AdminRefundDialog' }).vm.$emit('confirm', refundPayload)
     await flushPromises()
 
-    expect(refundOrder).toHaveBeenCalledWith(42, { quote_revision: 'quote-old', reason: 'Requested refund' })
+    expect(refundOrder).toHaveBeenCalledWith(42, {
+      quote_revision: 'quote-old',
+      reason_code: 'customer_request',
+      reason_detail: 'Requested refund',
+    })
     expect(getRefundReview).toHaveBeenCalledTimes(2)
     expect(showWarning).toHaveBeenCalledWith('payment.admin.refundQuoteStale')
 
@@ -312,6 +333,29 @@ describe('admin refund outcome feedback', () => {
     await flushPromises()
 
     expect(getOrders).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('keeps invoice status and filtering read-only on the order page', async () => {
+    const invoiceOrder = { ...order(42, 'COMPLETED'), invoice: { status: 'PENDING' } }
+    const wrapper = await mountOrders([invoiceOrder])
+    const invoiceFilter = wrapper.findAllComponents({ name: 'Select' }).find(
+      (select) => select.attributes('aria-label') === 'payment.invoice.admin.filterLabel'
+    )
+
+    expect(invoiceFilter).toBeDefined()
+    await invoiceFilter!.vm.$emit('update:modelValue', 'ISSUED')
+    await invoiceFilter!.vm.$emit('change')
+    await flushPromises()
+    expect(getOrders).toHaveBeenLastCalledWith(expect.objectContaining({ invoice_status: 'ISSUED' }))
+
+    expect(wrapper.find('a[href="/admin/orders/invoices"]').exists()).toBe(false)
+    expect(wrapper.find('[data-order-id="42"]').text()).not.toContain('payment.invoice.admin.process')
+
+    await buttonForOrder(wrapper, 42, 'common.view').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="invoice-status"]').text()).toBe('PENDING')
+    expect(wrapper.text()).not.toContain('payment.invoice.admin.openWorkflow')
     wrapper.unmount()
   })
 })

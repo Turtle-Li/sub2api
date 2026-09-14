@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
@@ -21,13 +22,105 @@ import (
 )
 
 const (
-	refundReviewKindBalance      = "balance"
-	refundReviewKindSubscription = "subscription"
+	refundReviewKindBalance             = "balance"
+	refundReviewKindSubscription        = "subscription"
+	refundReasonCodeCustomerRequest     = "customer_request"
+	refundReasonCodeDuplicateCharge     = "duplicate_charge"
+	refundReasonCodeServiceNotDelivered = "service_not_delivered"
+	refundReasonCodeServiceError        = "service_error"
+	refundReasonCodeOther               = "other"
+	refundReasonSummaryMaximumRunes     = 240
 	// Subscription effects are frozen within a short review window so the
 	// administrator can submit exactly the seconds and expiry they inspected.
 	// Crossing the boundary changes the revision and requires a fresh review.
 	refundReviewValuationWindow = time.Minute
 )
+
+// RefundReasonInput keeps the public admin request compatible with older
+// clients while giving new clients the gateway's structured reason contract.
+// LegacyReason is used only when a reason_code is not supplied.
+type RefundReasonInput struct {
+	Code         string
+	Detail       string
+	LegacyReason string
+}
+
+type normalizedRefundReason struct {
+	Code      string
+	Summary   string
+	AuditText string
+}
+
+func normalizeRefundReason(input RefundReasonInput) (normalizedRefundReason, error) {
+	code := strings.TrimSpace(input.Code)
+	detailSource := input.Detail
+	if strings.TrimSpace(detailSource) == "" && strings.TrimSpace(input.LegacyReason) != "" {
+		detailSource = input.LegacyReason
+	}
+	if code == "" {
+		if strings.TrimSpace(detailSource) == "" {
+			return normalizedRefundReason{}, infraerrors.BadRequest("INVALID_REFUND_REASON_CODE", "refund reason code is required")
+		}
+		code = refundReasonCodeOther
+	}
+	if !isRefundReasonCode(code) {
+		return normalizedRefundReason{}, infraerrors.BadRequest("INVALID_REFUND_REASON_CODE", "refund reason code is invalid")
+	}
+	detail, err := normalizeRefundReasonDetail(detailSource)
+	if err != nil {
+		return normalizedRefundReason{}, err
+	}
+	if code == refundReasonCodeOther && detail == "" {
+		return normalizedRefundReason{}, infraerrors.BadRequest("REFUND_REASON_DETAIL_REQUIRED", "a refund reason detail is required when reason code is other")
+	}
+
+	summary := refundReasonDefaultSummary(code)
+	if detail != "" {
+		summary = detail
+	}
+	return normalizedRefundReason{
+		Code:      code,
+		Summary:   summary,
+		AuditText: code + ": " + summary,
+	}, nil
+}
+
+func isRefundReasonCode(code string) bool {
+	switch code {
+	case refundReasonCodeCustomerRequest, refundReasonCodeDuplicateCharge,
+		refundReasonCodeServiceNotDelivered, refundReasonCodeServiceError,
+		refundReasonCodeOther:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeRefundReasonDetail(value string) (string, error) {
+	if !utf8.ValidString(value) || strings.Contains(value, "\x00") {
+		return "", infraerrors.BadRequest("INVALID_REFUND_REASON_DETAIL", "refund reason detail is invalid")
+	}
+	normalized := strings.Join(strings.Fields(value), " ")
+	if utf8.RuneCountInString(normalized) > refundReasonSummaryMaximumRunes {
+		return "", infraerrors.BadRequest("INVALID_REFUND_REASON_DETAIL", "refund reason detail exceeds the gateway limit")
+	}
+	return normalized, nil
+}
+
+func refundReasonDefaultSummary(code string) string {
+	switch code {
+	case refundReasonCodeCustomerRequest:
+		return "Customer requested a refund"
+	case refundReasonCodeDuplicateCharge:
+		return "Duplicate charge"
+	case refundReasonCodeServiceNotDelivered:
+		return "Service not delivered"
+	case refundReasonCodeServiceError:
+		return "Service error"
+	default:
+		return ""
+	}
+}
 
 // RefundReview is the server-authoritative view rendered before an admin can
 // initiate a refund. Amounts at the payment boundary are in the receipt
@@ -520,7 +613,13 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 	return review, nil
 }
 
-func (s *PaymentService) PrepareReviewedRefund(ctx context.Context, orderID int64, quoteRevision, reason string) (*RefundPlan, error) {
+// PrepareReviewedRefund preserves the existing service seam for callers that
+// still send only the legacy reason field.
+func (s *PaymentService) PrepareReviewedRefund(ctx context.Context, orderID int64, quoteRevision, legacyReason string) (*RefundPlan, error) {
+	return s.PrepareReviewedRefundRequest(ctx, orderID, quoteRevision, RefundReasonInput{LegacyReason: legacyReason})
+}
+
+func (s *PaymentService) PrepareReviewedRefundRequest(ctx context.Context, orderID int64, quoteRevision string, reasonInput RefundReasonInput) (*RefundPlan, error) {
 	review, err := s.ReviewRefund(ctx, orderID)
 	if err != nil {
 		return nil, err
@@ -538,13 +637,14 @@ func (s *PaymentService) PrepareReviewedRefund(ctx context.Context, orderID int6
 	if err != nil {
 		return nil, err
 	}
-	rr := strings.TrimSpace(reason)
-	if rr == "" {
-		rr = fmt.Sprintf("refund order:%d", orderID)
+	reason, err := normalizeRefundReason(reasonInput)
+	if err != nil {
+		return nil, err
 	}
 	plan := &RefundPlan{
 		OrderID: orderID, Order: order, RefundAmount: review.EntitlementAmount,
-		GatewayAmount: review.DefaultRefundAmount, Reason: rr,
+		GatewayAmount: review.DefaultRefundAmount, Reason: reason.AuditText,
+		ReasonCode: reason.Code, ReasonSummary: reason.Summary,
 		DeductBalance: order.OrderType == payment.OrderTypeBalance,
 		QuoteRevision: review.QuoteRevision, ReviewKind: review.OrderType,
 	}

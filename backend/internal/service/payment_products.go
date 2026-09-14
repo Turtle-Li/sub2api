@@ -20,6 +20,14 @@ import (
 type PlanEntitlements struct {
 	BalanceBonus   float64 `json:"balance_bonus"`
 	ResetCardCount int     `json:"reset_card_count"`
+	// ResetCardDeliveryMode controls whether reset_card_count is granted once at
+	// fulfillment or once for each frozen calendar occurrence.  It is explicit
+	// instead of being inferred from a plan name, price, or duration.
+	ResetCardDeliveryMode string `json:"reset_card_delivery_mode"`
+	// ResetCardIssueCount is the number of deliveries committed by this plan.
+	// It is zero when no cards are included, one for immediate delivery, and is
+	// tied to the plan's calendar term for monthly delivery.
+	ResetCardIssueCount int `json:"reset_card_issue_count"`
 	// PurchaseRules controls whether a customer may see and buy a new
 	// subscription. It is administrator-only configuration and is removed from
 	// every customer projection and immutable product snapshot.
@@ -58,6 +66,13 @@ type PlanEntitlements struct {
 }
 
 const resetCardPurchasePriceScale int32 = 2
+
+const (
+	resetCardDeliveryModeImmediate = "immediate"
+	resetCardDeliveryModeMonthly   = "monthly"
+	minMonthlyResetCardIssues      = 2
+	maxMonthlyResetCardIssues      = 120
+)
 
 const (
 	maxResetCardTitleLength       = 200
@@ -114,6 +129,82 @@ func normalizeResetCardExpiryUnit(unit string) string {
 	default:
 		return resetCardExpiryUnitDay
 	}
+}
+
+func normalizeResetCardDeliveryMode(mode string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	if normalized == "" {
+		return resetCardDeliveryModeImmediate, nil
+	}
+	switch normalized {
+	case resetCardDeliveryModeImmediate, resetCardDeliveryModeMonthly:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("reset_card_delivery_mode must be immediate or monthly")
+	}
+}
+
+// monthlyResetCardIssueCount returns the exact number of calendar deliveries
+// promised by a plan term.  Deliberately do not use psComputeValidityDays here:
+// a 90-day or 365-day plan is not evidence of a calendar quarter or year.
+func monthlyResetCardIssueCount(validityDays int, validityUnit string) (int, bool) {
+	if validityDays <= 0 {
+		return 0, false
+	}
+	unit := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(validityUnit)), "s")
+	multiplier := 0
+	switch unit {
+	case validityUnitMonth:
+		multiplier = 1
+	case validityUnitQuarter:
+		multiplier = 3
+	case validityUnitYear:
+		multiplier = 12
+	default:
+		return 0, false
+	}
+	if validityDays > maxMonthlyResetCardIssues/multiplier {
+		return 0, false
+	}
+	return validityDays * multiplier, true
+}
+
+// validatePlanResetCardDelivery binds the canonical entitlement to the plan
+// term at the administration boundary. Immutable order snapshots are already
+// validated when the plan is saved, so they do not need to guess a cadence from
+// scalar validity days later in fulfillment.
+func validatePlanResetCardDelivery(entitlements PlanEntitlements, validityDays int, validityUnit string) error {
+	if entitlements.ResetCardCount == 0 {
+		return nil
+	}
+	if entitlements.ResetCardDeliveryMode != resetCardDeliveryModeMonthly {
+		return nil
+	}
+	want, ok := monthlyResetCardIssueCount(validityDays, validityUnit)
+	if !ok {
+		return fmt.Errorf("monthly reset cards require validity_unit month, quarter, or year")
+	}
+	if entitlements.ResetCardIssueCount != want {
+		return fmt.Errorf("reset_card_issue_count must equal the calendar months in the plan term (%d)", want)
+	}
+	return nil
+}
+
+// ResetCardTotalCommitment is the durable entitlement count used by refund
+// accounting. A monthly plan promises every frozen occurrence up front even
+// though the card grants themselves are created over time.
+func (e PlanEntitlements) ResetCardTotalCommitment() (int, error) {
+	if e.ResetCardCount == 0 {
+		return 0, nil
+	}
+	issues := e.ResetCardIssueCount
+	if issues <= 0 {
+		return 0, fmt.Errorf("reset_card_issue_count is invalid")
+	}
+	if e.ResetCardCount > math.MaxInt/issues {
+		return 0, fmt.Errorf("reset card commitment overflows")
+	}
+	return e.ResetCardCount * issues, nil
 }
 
 // ResetCardValidityDays converts the count/unit pair into the real number of
@@ -299,6 +390,11 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 	entitlements.PurchaseRules = purchaseRules
 	entitlements.ResetCardPurchaseRules = resetCardPurchaseRules
 	entitlements.ResetCardExpiryUnit = normalizeResetCardExpiryUnit(entitlements.ResetCardExpiryUnit)
+	deliveryMode, err := normalizeResetCardDeliveryMode(entitlements.ResetCardDeliveryMode)
+	if err != nil {
+		return nil, PlanEntitlements{}, err
+	}
+	entitlements.ResetCardDeliveryMode = deliveryMode
 	if entitlements.ResetCardCount > 0 {
 		if entitlements.ResetCardExpiryDays <= 0 {
 			return nil, PlanEntitlements{}, fmt.Errorf("reset_card_expiry_days must be positive when reset cards are granted")
@@ -308,10 +404,22 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 		if validity := entitlements.ResetCardValidityDays(); validity <= 0 || validity > maxResetCardValidityDays {
 			return nil, PlanEntitlements{}, fmt.Errorf("reset card validity must not exceed %d days", maxResetCardValidityDays)
 		}
+		switch entitlements.ResetCardDeliveryMode {
+		case resetCardDeliveryModeImmediate:
+			// Legacy plans had no cadence. Preserve their one-time behavior and
+			// canonicalize any stale issue count to one.
+			entitlements.ResetCardIssueCount = 1
+		case resetCardDeliveryModeMonthly:
+			if entitlements.ResetCardIssueCount < minMonthlyResetCardIssues || entitlements.ResetCardIssueCount > maxMonthlyResetCardIssues {
+				return nil, PlanEntitlements{}, fmt.Errorf("reset_card_issue_count must be between %d and %d for monthly reset cards", minMonthlyResetCardIssues, maxMonthlyResetCardIssues)
+			}
+		}
 	}
 	if entitlements.ResetCardCount == 0 {
 		entitlements.ResetCardExpiryDays = 0
 		entitlements.ResetCardExpiryUnit = resetCardExpiryUnitDay
+		entitlements.ResetCardDeliveryMode = resetCardDeliveryModeImmediate
+		entitlements.ResetCardIssueCount = 0
 	}
 	if entitlements.Concurrency < 0 || entitlements.Concurrency > 10000 {
 		return nil, PlanEntitlements{}, fmt.Errorf("concurrency must be between 0 and 10000")

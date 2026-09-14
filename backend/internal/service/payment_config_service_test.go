@@ -493,7 +493,25 @@ func newPaymentConfigServiceTestClient(t *testing.T) *dbent.Client {
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
 	t.Cleanup(func() { _ = client.Close() })
 	installRefundAccountingSQLiteTables(t, client)
+	installResetCardTierSQLiteTable(t, client)
 	return client
+}
+
+func installResetCardTierSQLiteTable(t *testing.T, client *dbent.Client) {
+	t.Helper()
+	_, err := client.ExecContext(context.Background(), `
+		CREATE TABLE IF NOT EXISTS subscription_reset_card_tiers (
+			group_id INTEGER PRIMARY KEY,
+			family_key TEXT NOT NULL,
+			tier_rank INTEGER NOT NULL,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+		UNIQUE (family_key, tier_rank)
+	)
+	`)
+	if err != nil {
+		t.Fatalf("create reset card tier sqlite table: %v", err)
+	}
 }
 
 type paymentConfigSettingRepoStub struct {

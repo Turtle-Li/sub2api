@@ -203,7 +203,7 @@ export default {
     invoiceRequests: 'Invoice Requests',
     paymentDashboard: 'Payment Dashboard',
     paymentConfig: 'Payment Config',
-    paymentPlans: 'Plans',
+    paymentPlans: 'Product Catalog',
     channelManagement: 'Channels',
     channelPricing: 'Channel Pricing',
     channelMonitor: 'Channel Monitor',

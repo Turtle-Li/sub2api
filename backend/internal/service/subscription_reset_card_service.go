@@ -17,6 +17,7 @@ var (
 	ErrResetCardGroupInactive         = infraerrors.BadRequest("RESET_CARD_GROUP_INACTIVE", "reset cards can only be granted to active subscription groups")
 	ErrResetCardRecipientUnavailable  = infraerrors.Conflict("RESET_CARD_RECIPIENT_UNAVAILABLE", "the subscription is no longer active or eligible for reset cards")
 	ErrResetCardUnavailable           = infraerrors.Conflict("RESET_CARD_UNAVAILABLE", "no unexpired reset card is available for this subscription")
+	ErrResetCardTierInsufficient      = infraerrors.Conflict("RESET_CARD_TIER_INSUFFICIENT", "available reset cards in this family are from a lower subscription tier")
 )
 
 func (s *SubscriptionService) SetResetCardRepository(repo SubscriptionResetCardRepository) {

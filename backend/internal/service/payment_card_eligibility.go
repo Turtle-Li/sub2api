@@ -70,6 +70,7 @@ type CustomerSubscriptionPlan struct {
 	Entitlements         PlanEntitlements
 	Eligibility          PurchaseEligibility
 	ResetCardEligibility ResetCardEligibility
+	ResetCardTier        *SubscriptionResetCardTierPolicy
 }
 
 // Plan returns the source entity for server-side response mapping. It is kept
@@ -326,6 +327,27 @@ func (s *PaymentConfigService) CustomerPaymentCatalogForUser(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
+	// The rollout setting is private, but its effect is not: while delivery is
+	// disabled, a customer must not be shown a product that checkout will refuse
+	// and fulfillment will intentionally pause. The catalog simply omits those
+	// plans rather than exposing a capability switch to the browser.
+	if !s.IsMonthlyResetCardsEnabled(ctx) {
+		available := make([]*dbent.SubscriptionPlan, 0, len(plans))
+		for _, plan := range plans {
+			if plan == nil {
+				return nil, ErrPurchaseRulesUnavailable
+			}
+			_, entitlements, normalizeErr := normalizePlanEntitlements(plan.Entitlements)
+			if normalizeErr != nil {
+				return nil, ErrPurchaseRulesUnavailable
+			}
+			if entitlements.ResetCardDeliveryMode == resetCardDeliveryModeMonthly {
+				continue
+			}
+			available = append(available, plan)
+		}
+		plans = available
+	}
 	return projectCustomerPaymentCatalog(ctx, s.entClient, userID, plans, rechargeOptions)
 }
 
@@ -394,6 +416,19 @@ func projectCustomerPaymentCatalog(ctx context.Context, client *dbent.Client, us
 		}
 	}
 
+	tierPolicies := map[int64]SubscriptionResetCardTierPolicy{}
+	if len(planCandidates) > 0 {
+		groupIDs := make([]int64, 0, len(planCandidates))
+		for _, candidate := range planCandidates {
+			groupIDs = append(groupIDs, candidate.plan.GroupID)
+		}
+		var err error
+		tierPolicies, err = subscriptionResetCardTierPoliciesByGroup(ctx, client, groupIDs)
+		if err != nil {
+			return nil, ErrPurchaseRulesUnavailable
+		}
+	}
+
 	var total *decimal.Decimal
 	if needsTotal {
 		calculated, err := completedCNYBalanceRechargeTotal(ctx, client, userID)
@@ -422,11 +457,17 @@ func projectCustomerPaymentCatalog(ctx context.Context, client *dbent.Client, us
 		publicEntitlements := candidate.entitlements
 		publicEntitlements.PurchaseRules = nil
 		publicEntitlements.ResetCardPurchaseRules = nil
+		var tierPolicy *SubscriptionResetCardTierPolicy
+		if policy, ok := tierPolicies[candidate.plan.GroupID]; ok {
+			copyPolicy := policy
+			tierPolicy = &copyPolicy
+		}
 		catalog.Plans = append(catalog.Plans, CustomerSubscriptionPlan{
 			plan:                 candidate.plan,
 			Entitlements:         publicEntitlements,
 			Eligibility:          eligibility,
 			ResetCardEligibility: resetEligibility,
+			ResetCardTier:        tierPolicy,
 		})
 	}
 	for _, candidate := range rechargeCandidates {

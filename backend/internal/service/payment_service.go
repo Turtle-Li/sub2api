@@ -86,6 +86,10 @@ type CreateOrderRequest struct {
 	OrderType       string
 	PlanID          int64
 	SubscriptionID  int64
+	// ResetCardTierRevision repeats the tier revision returned by the reset
+	// card quote. It is required for new purchases when the source group has a
+	// configured tier policy.
+	ResetCardTierRevision string
 	// IdempotencyKey is accepted only for the initial authenticated request.
 	// WeChat OAuth resumes carry the derived hash instead so the raw key never
 	// needs to cross the browser redirect boundary.
@@ -144,12 +148,16 @@ type RefundPlan struct {
 	RemainingRefundable float64
 	GatewayAmount       float64
 	Reason              string
-	Force               bool
-	DeductBalance       bool
-	DeductionType       string
-	BalanceToDeduct     float64
-	SubDaysToDeduct     int
-	SubscriptionID      int64
+	// ReasonCode and ReasonSummary use the fixed unified-payment refund
+	// contract. Reason remains the readable audit/provider text.
+	ReasonCode      string
+	ReasonSummary   string
+	Force           bool
+	DeductBalance   bool
+	DeductionType   string
+	BalanceToDeduct float64
+	SubDaysToDeduct int
+	SubscriptionID  int64
 	// Reviewed refunds carry an immutable server state revision and reserve
 	// entitlement effects before any provider network request.
 	QuoteRevision                string

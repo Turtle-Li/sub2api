@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,83 @@ func (s *refundAuthCacheInvalidatorSpy) InvalidateAuthCacheByGroupID(context.Con
 type refundBalanceAuthorizationCacheSpy struct {
 	err     error
 	userIDs []int64
+}
+
+func TestNormalizeRefundReasonUsesGatewayContractAndLegacyCompatibility(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       RefundReasonInput
+		wantCode    string
+		wantSummary string
+		wantAudit   string
+		wantReason  string
+	}{
+		{
+			name: "customer request has a stable default summary", input: RefundReasonInput{Code: refundReasonCodeCustomerRequest},
+			wantCode: refundReasonCodeCustomerRequest, wantSummary: "Customer requested a refund", wantAudit: "customer_request: Customer requested a refund",
+		},
+		{
+			name: "preset with default summary", input: RefundReasonInput{Code: refundReasonCodeDuplicateCharge},
+			wantCode: refundReasonCodeDuplicateCharge, wantSummary: "Duplicate charge", wantAudit: "duplicate_charge: Duplicate charge",
+		},
+		{
+			name: "preset folds supplemental whitespace", input: RefundReasonInput{Code: refundReasonCodeServiceError, Detail: "  upstream\n gateway\t timeout  "},
+			wantCode: refundReasonCodeServiceError, wantSummary: "upstream gateway timeout", wantAudit: "service_error: upstream gateway timeout",
+		},
+		{
+			name: "legacy reason becomes other", input: RefundReasonInput{LegacyReason: "  customer\nrequest  "},
+			wantCode: refundReasonCodeOther, wantSummary: "customer request", wantAudit: "other: customer request",
+		},
+		{
+			name: "other requires detail", input: RefundReasonInput{Code: refundReasonCodeOther}, wantReason: "REFUND_REASON_DETAIL_REQUIRED",
+		},
+		{
+			name: "rejects unknown code", input: RefundReasonInput{Code: "operator_override", Detail: "manual"}, wantReason: "INVALID_REFUND_REASON_CODE",
+		},
+		{
+			name: "rejects summary over gateway boundary", input: RefundReasonInput{Code: refundReasonCodeOther, Detail: strings.Repeat("x", refundReasonSummaryMaximumRunes+1)}, wantReason: "INVALID_REFUND_REASON_DETAIL",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, err := normalizeRefundReason(tc.input)
+			if tc.wantReason != "" {
+				require.Error(t, err)
+				require.Equal(t, tc.wantReason, infraerrors.Reason(err))
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantCode, reason.Code)
+			require.Equal(t, tc.wantSummary, reason.Summary)
+			require.Equal(t, tc.wantAudit, reason.AuditText)
+		})
+	}
+}
+
+func TestPrepareReviewedRefundRequestCarriesStructuredReasonIntoDurableAttempt(t *testing.T) {
+	ctx := context.Background()
+	svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+
+	plan, err := svc.PrepareReviewedRefundRequest(ctx, order.ID, review.QuoteRevision, RefundReasonInput{
+		Code:   refundReasonCodeServiceNotDelivered,
+		Detail: "  account was never\nprovisioned ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, refundReasonCodeServiceNotDelivered, plan.ReasonCode)
+	require.Equal(t, "account was never provisioned", plan.ReasonSummary)
+	require.Equal(t, "service_not_delivered: account was never provisioned", plan.Reason)
+
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+	require.Equal(t, refundReasonCodeServiceNotDelivered, attempt.ReasonCode)
+	require.Equal(t, "account was never provisioned", attempt.ReasonSummary)
+	persistedOrder, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, persistedOrder.RefundReason)
+	require.Equal(t, "service_not_delivered: account was never provisioned", *persistedOrder.RefundReason)
 }
 
 func (s *refundBalanceAuthorizationCacheSpy) EnsureBalanceAuthorizationCacheInvalidated(_ context.Context, userID int64) error {

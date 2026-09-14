@@ -171,6 +171,22 @@ describe("SubscriptionPlanCard", () => {
     expect(resetItem?.classes()).toContain("payment-product-card__list-item--benefit");
   });
 
+  it('uses the monthly delivery wording only for scheduled reset cards', () => {
+    const text = mountPlanCard('openai', {
+      entitlements: {
+        balance_bonus: 0,
+        reset_card_count: 2,
+        reset_card_delivery_mode: 'monthly',
+        reset_card_issue_count: 6,
+        reset_card_expiry_days: 14,
+        reset_card_expiry_unit: 'day',
+        concurrency: 0,
+      },
+    }).text()
+
+    expect(text).toContain('payment.entitlements.monthlyResetCards')
+  })
+
   it("marks paid entitlements apart from plain quota facts", () => {
     const wrapper = mountPlanCard("openai", {
       entitlements: { balance_bonus: 20, reset_card_count: 0, reset_card_expiry_days: 0, concurrency: 8 },

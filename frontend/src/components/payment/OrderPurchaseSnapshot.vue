@@ -28,7 +28,8 @@
         </div>
         <div v-if="benefits?.reset_card_count">
           <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.resetCards') }}</dt>
-          <dd>{{ benefits.reset_card_count }}<span v-if="benefits.reset_card_expiry_days"> · {{ t('payment.orderOps.days', { count: benefits.reset_card_expiry_days }) }}</span></dd>
+          <dd v-if="monthlyResetCardDelivery">{{ monthlyResetCardDelivery }}</dd>
+          <dd v-else>{{ benefits.reset_card_count }}<span v-if="benefits.reset_card_expiry_days"> · {{ t('payment.orderOps.days', { count: benefits.reset_card_expiry_days }) }}</span></dd>
         </div>
       </dl>
       <p v-if="benefits?.message" class="break-words text-sm text-gray-600 dark:text-gray-300">{{ benefits.message }}</p>
@@ -42,7 +43,11 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PaymentOrder } from '@/types/payment'
 import { purchaseName } from './orderPresentation'
+import { monthlyResetCardDeliveryLabel } from './validity'
 const props = defineProps<{ order: PaymentOrder }>()
 const { t } = useI18n()
 const benefits = computed(() => props.order.product_snapshot?.entitlements)
+const monthlyResetCardDelivery = computed(() => benefits.value
+  ? monthlyResetCardDeliveryLabel(benefits.value, t)
+  : '')
 </script>
