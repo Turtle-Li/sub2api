@@ -145,6 +145,48 @@ new reservation can enter between those steps. Do not expose this switch in
 public application configuration or treat Caddy traffic selection alone as
 permission to enable it.
 
+### Guarded reviewed-refund enable/disable
+
+The installer places `sub2api-reviewed-refunds-rollout.sh` alongside the other
+root-owned helpers. Invoke it only with the exact reviewed full commit and
+Caddy-selected application container:
+
+```bash
+# First activation: expected setting is absent. Use false if it was disabled.
+sudo /opt/sub2api/scripts/sub2api-reviewed-refunds-rollout.sh FULL_COMMIT sub2api-green absent
+# Planned incompatible rollback: expected setting is true.
+sudo /opt/sub2api/scripts/sub2api-reviewed-refunds-rollout.sh FULL_COMMIT sub2api-green true
+```
+
+The third argument is the **expected current state**, never a blind desired
+value: `absent` or `false` enables, and `true` disables. A stale CAS fails.
+The helper acquires the canonical maintenance lock, rejects retained release
+transactions, validates the immutable image/source/revision and target health,
+requires host/startup/Admin Caddy JSON to select only that target, and rejects
+other canonical or source-labeled Sub2API application writers. It repeats
+those proofs immediately before the in-container monitor-authenticated CAS.
+The token remains inside the target namespace. No database credential is
+required on the application host.
+
+Enable requires accepting/active state and zero reserved reviewed refunds.
+Disable uses the existing node-state drain (preserving the traffic file's
+bind-mounted inode and putting background claims in standby), waits for zero
+in-flight requests and zero reserved refunds, then invokes the CAS. Generic
+readyz deliberately fails during draining and is not a disable prerequisite.
+Durable refund reconciliation remains allowed in standby. A failure or CAS
+conflict leaves the node drained; resolve the reported financial/operational
+state before retrying. Successful disable also leaves it drained for the
+planned rollback. Do not reopen admission between disable and old-code
+restoration.
+
+This helper proves the documented single-origin Docker topology. Retired
+remote writers must remain excluded by the existing database/Redis allowlist;
+a multi-origin change needs an explicit cross-host inventory/fence first.
+An intentionally removed candidate in a retained-Caddy transaction cannot be
+replaced by an old-generation readiness guess: preserve the transaction and
+reconstruct the exact compatible candidate under the maintenance boundary
+before retrying guarded recovery.
+
 The production helper recognizes `sub2api-blue`, `sub2api-green`, and the
 legacy `sub2api` application name. Long-lived Responses WebSocket connections
 can keep an old color draining after a release, so the helper resolves the
