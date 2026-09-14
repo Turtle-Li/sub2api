@@ -215,7 +215,14 @@ case "${1:-}" in
           [ -z "${FAKE_REFUND_GATE_EVENTS:-}" ] || printf 'readiness=status:%s\n' \
             "${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" >>"$FAKE_REFUND_GATE_EVENTS"
           case "${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" in
-            2??) printf '{"ready":true}\n'; exit 0 ;;
+            2??)
+              if [ "${FAKE_REFUND_ROLLBACK_READINESS_BODY_SET:-false}" = true ]; then
+                printf '%s' "${FAKE_REFUND_ROLLBACK_READINESS_BODY:-}"
+              else
+                printf '%s\n' '{"ready":true,"entitlement_reserved_reviewed_pending_count":0}'
+              fi
+              exit 0
+              ;;
             *) exit 1 ;;
           esac
           ;;
@@ -833,6 +840,36 @@ assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
 [ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'historical fallback ran with a pending refund'
 [ "$(file_inode "${CASE_ROOT}/runtime/traffic-state")" = "$traffic_inode" ] \
   || fail 'refund gate replaced the traffic-state inode'
+assert_traffic_state accepting
+assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-green:8080'
+
+# A route mismatch can yield HTTP 200 with a malformed body. Historical
+# fallback stays fenced until the active candidate supplies the full contract.
+new_case external-refund-readiness-malformed
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true unhealthy false 1 sub2api:broken healthy unhealthy
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)" "$(dual_environment)"
+write_container sub2api-blue false exited false 0 sub2api:old-blue healthy healthy
+write_runtime_metadata sub2api-blue unless-stopped candidate-network \
+  "$(external_mounts sub2api-blue)" "$(dual_environment)"
+traffic_inode="$(file_inode "${CASE_ROOT}/runtime/traffic-state")"
+if FAKE_REFUND_ROLLBACK_READINESS_BODY_SET=true \
+  FAKE_REFUND_ROLLBACK_READINESS_BODY='{"ready":true' \
+  run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'malformed JSON refund readiness allowed historical fallback'
+fi
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'livez=in_flight:0'
+assert_contains "${CASE_ROOT}/refund-gate-events.log" 'readiness=status:200'
+assert_contains "${CASE_ROOT}/output.log" \
+  'active candidate refund rollback readiness response is not valid zero-pending JSON: /internal/refund-rollback-readiness'
+assert_contains "${CASE_ROOT}/output.log" 'historical fallback is blocked by active refund readiness'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-blue'
+[ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'historical fallback ran with malformed readiness JSON'
+[ "$(file_inode "${CASE_ROOT}/runtime/traffic-state")" = "$traffic_inode" ] \
+  || fail 'malformed refund gate replaced the traffic-state inode'
 assert_traffic_state accepting
 assert_contains "${CASE_ROOT}/app/Caddyfile" 'sub2api-green:8080'
 

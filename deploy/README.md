@@ -94,8 +94,10 @@ If a rollback is needed after Caddy may have reached the candidate, the
 canonical server release first changes the shared traffic-state file to
 `draining` in place, waits for candidate in-flight requests to reach zero, and
 calls the candidate's monitor-token-protected
-`GET /internal/refund-rollback-readiness` endpoint. Only a `2xx` response
-allows the previous generation to take over. Immediately before its live
+`GET /internal/refund-rollback-readiness` endpoint. Only a `2xx` response containing a JSON object with `ready: true` and integer
+`entitlement_reserved_reviewed_pending_count: 0` allows the previous generation
+to take over. HTML, empty/malformed JSON, missing fields and nonzero counts
+fail closed even when the HTTP status is 200. Immediately before its live
 `caddy reload`, a server-coordinated helper atomically records
 `RECOVERY_OWNER=server-wrapper` and `LIVE_RELOAD_ATTEMPTED=true` in the
 Caddy transaction. This covers a reload that applies and still returns an
@@ -106,7 +108,7 @@ Caddy itself.
 For that retained transaction, the wrapper matches its recorded old/candidate
 upstreams before trusting any Caddy view. It always runs the drain and
 readiness gate, including when host, startup, and Admin views already point to
-old. A non-`2xx` or unreachable response retains all evidence; old or
+old. An invalid, non-`2xx` or unreachable readiness response retains all evidence; old or
 ambiguous views remain `draining`, while a conclusively candidate-only view can
 return to its prior admission state. Do not run the blue-green helper directly,
 delete either transaction, or make direct Caddy/container changes. After the
@@ -287,7 +289,7 @@ releases, then:
    runtime admission contract, drains new requests in the shared traffic-state
    inode, waits for zero candidate in-flight requests, and calls the
    monitor-token-protected `GET /internal/refund-rollback-readiness` endpoint;
-   only a `2xx` result permits the active slot to be stopped;
+   only a `2xx` result with valid ready/zero-pending JSON permits the active slot to be stopped;
 5. delegates the traffic change to the audited blue-green helper, then verifies
    Docker health, the three Caddy views, and the public health endpoint.
 
@@ -296,7 +298,7 @@ as two healthy queue consumers. Ambiguous Caddy state, multiple running old
 slots, a missing historical container, OOM/non-zero historical exits, or lock
 contention all fail closed. Lock contention is a successful no-op because a
 release or other planned maintenance owns the runtime at that moment.
-An unavailable or non-`2xx` refund-readiness endpoint restores the pre-gate
+An unavailable, non-`2xx` or invalid-JSON refund-readiness endpoint restores the pre-gate
 traffic state in place (normally `accepting`), leaves Caddy on the candidate,
 and does not start or promote the historical binary. A runtime guard cannot
 make this historical fallback in a legacy runtime that lacks the dual-node

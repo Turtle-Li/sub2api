@@ -710,6 +710,26 @@ active_in_flight_requests() {
   printf '%s\n' "$in_flight"
 }
 
+active_refund_rollback_ready() {
+  local response
+
+  response="$(active_internal_get_2xx "$REFUND_ROLLBACK_READINESS_PATH")" || return 1
+  if ! printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+if type(value) is not dict or value.get("ready") is not True:
+    raise SystemExit(1)
+pending = value.get("entitlement_reserved_reviewed_pending_count")
+if type(pending) is not int or pending != 0:
+    raise SystemExit(1)
+'; then
+    log "active candidate refund rollback readiness response is not valid zero-pending JSON: ${REFUND_ROLLBACK_READINESS_PATH}" >&2
+    return 1
+  fi
+}
+
 wait_for_active_requests_to_drain() {
   local attempt=1 in_flight
 
@@ -806,7 +826,7 @@ gate_active_refund_rollback_before_fallback() {
     restore_traffic_after_failed_refund_fallback_gate "$prior_state" || true
     return 1
   fi
-  if ! active_internal_get_2xx "$REFUND_ROLLBACK_READINESS_PATH" >/dev/null; then
+  if ! active_refund_rollback_ready; then
     restore_traffic_after_failed_refund_fallback_gate "$prior_state" || true
     return 1
   fi
@@ -1290,7 +1310,7 @@ case "$DEPENDENCY_MODE" in
   *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external (got: ${DEPENDENCY_MODE})" ;;
 esac
 
-for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date tr id stat chmod; do
+for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date tr id stat chmod python3; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RUNTIME_GUARD_RETRY_ATTEMPTS "$RETRY_ATTEMPTS"

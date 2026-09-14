@@ -121,6 +121,24 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Frontend typecheck and critical vitest
         run: make test-frontend
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: pnpm run build
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify embedded frontend preserves backend routes
+        working-directory: backend
+        run: go test -tags=embed ./internal/web ./internal/server/routes -count=1
+      - name: Lint embedded HTTP surface
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13
+          args: --build-tags=embed --timeout=30m ./internal/web/... ./internal/server/routes/...
+          working-directory: backend
 
   golangci-lint:
     runs-on: ubuntu-latest

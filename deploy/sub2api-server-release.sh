@@ -293,7 +293,7 @@ warn_image_route_contract_views() {
   fi
 }
 
-for command_name in docker curl flock grep awk perl systemd-run id mkdir stat sleep tr chmod; do
+for command_name in docker curl flock grep awk perl python3 systemd-run id mkdir stat sleep tr chmod; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RELEASE_MIN_FREE_BYTES "$MIN_FREE_BYTES"
@@ -663,6 +663,26 @@ candidate_in_flight_requests() {
   printf '%s\n' "$in_flight"
 }
 
+candidate_refund_rollback_ready() {
+  local response
+
+  response="$(candidate_internal_get_2xx "$REFUND_ROLLBACK_READINESS_PATH")" || return 1
+  if ! printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+if type(value) is not dict or value.get("ready") is not True:
+    raise SystemExit(1)
+pending = value.get("entitlement_reserved_reviewed_pending_count")
+if type(pending) is not int or pending != 0:
+    raise SystemExit(1)
+'; then
+    log "ERROR: candidate refund rollback readiness response is not valid zero-pending JSON: ${REFUND_ROLLBACK_READINESS_PATH}" >&2
+    return 1
+  fi
+}
+
 wait_for_candidate_requests_to_drain() {
   local started="$SECONDS"
   local in_flight
@@ -736,7 +756,7 @@ gate_post_switch_rollback_on_refund_readiness() {
     restore_runtime_traffic_after_failed_refund_rollback_gate "$prior_traffic_state" || true
     return 1
   fi
-  if ! candidate_internal_get_2xx "$REFUND_ROLLBACK_READINESS_PATH" >/dev/null; then
+  if ! candidate_refund_rollback_ready; then
     restore_runtime_traffic_after_failed_refund_rollback_gate "$prior_traffic_state" || true
     return 1
   fi

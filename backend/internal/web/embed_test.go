@@ -530,6 +530,8 @@ func TestFrontendServer_Middleware(t *testing.T) {
 			"/health",
 			"/internal/livez",
 			"/internal/readyz",
+			"/internal/refund-rollback-readiness",
+			"/internal/reviewed-refunds-rollout",
 			"/responses",
 			"/responses/compact",
 		}
@@ -678,6 +680,66 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, assetWriter.Code)
 		assert.Equal(t, staticAssetsCacheControl, assetWriter.Header().Get("Cache-Control"))
 	})
+}
+
+func TestEmbeddedFrontend_ForwardsRefundInternalRoutes(t *testing.T) {
+	provider := &mockSettingsProvider{
+		settings: map[string]string{"test": "value"},
+	}
+	server, err := NewFrontendServer(provider)
+	require.NoError(t, err)
+
+	for _, mode := range []struct {
+		name    string
+		handler gin.HandlerFunc
+	}{
+		{name: "frontend_server", handler: server.Middleware()},
+		{name: "legacy", handler: ServeEmbeddedFrontend()},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(mode.handler)
+			readinessCalls := 0
+			rolloutCalls := 0
+			readinessWithoutToken := false
+			rolloutWithoutToken := false
+			router.GET("/internal/refund-rollback-readiness", func(c *gin.Context) {
+				readinessCalls++
+				readinessWithoutToken = c.GetHeader("X-Monitor-Token") == ""
+				c.JSON(http.StatusUnauthorized, gin.H{"ready": false})
+			})
+			router.POST("/internal/reviewed-refunds-rollout", func(c *gin.Context) {
+				rolloutCalls++
+				rolloutWithoutToken = c.GetHeader("X-Monitor-Token") == ""
+				c.JSON(http.StatusConflict, gin.H{"changed": false})
+			})
+
+			readinessWriter := httptest.NewRecorder()
+			readinessRequest := httptest.NewRequest(http.MethodGet, "/internal/refund-rollback-readiness", nil)
+			router.ServeHTTP(readinessWriter, readinessRequest)
+
+			assert.Equal(t, 1, readinessCalls)
+			assert.True(t, readinessWithoutToken)
+			assert.Equal(t, http.StatusUnauthorized, readinessWriter.Code)
+			assert.Contains(t, readinessWriter.Header().Get("Content-Type"), "application/json")
+			assert.NotContains(t, strings.ToLower(readinessWriter.Header().Get("Content-Type")), "text/html")
+			assert.JSONEq(t, `{"ready":false}`, readinessWriter.Body.String())
+
+			rolloutWriter := httptest.NewRecorder()
+			rolloutRequest := httptest.NewRequest(http.MethodPost, "/internal/reviewed-refunds-rollout", strings.NewReader(`{"expected":"true","enabled":false}`))
+			rolloutRequest.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(rolloutWriter, rolloutRequest)
+
+			assert.Equal(t, 1, rolloutCalls)
+			assert.True(t, rolloutWithoutToken)
+			assert.Equal(t, http.StatusConflict, rolloutWriter.Code)
+			assert.Contains(t, rolloutWriter.Header().Get("Content-Type"), "application/json")
+			assert.NotContains(t, strings.ToLower(rolloutWriter.Header().Get("Content-Type")), "text/html")
+			assert.JSONEq(t, `{"changed":false}`, rolloutWriter.Body.String())
+		})
+	}
+
+	assert.Zero(t, provider.called, "bypassed internal routes must not render the SPA")
 }
 
 func TestFrontendServer_MissingAssetDoesNotFallbackToHTML(t *testing.T) {
@@ -831,6 +893,8 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 			"/health",
 			"/internal/livez",
 			"/internal/readyz",
+			"/internal/refund-rollback-readiness",
+			"/internal/reviewed-refunds-rollout",
 			"/responses",
 			"/responses/compact",
 		}

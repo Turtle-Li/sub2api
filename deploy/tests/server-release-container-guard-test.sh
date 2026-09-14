@@ -303,7 +303,11 @@ case "$command_name" in
           "${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" >>"$FAKE_EVENT_LOG"
         case "${FAKE_REFUND_ROLLBACK_READINESS_STATUS:-200}" in
           2??)
-            printf '{"ready":%s}\n' "${FAKE_REFUND_ROLLBACK_READY:-true}"
+            if [ "${FAKE_REFUND_ROLLBACK_READINESS_BODY_SET:-false}" = true ]; then
+              printf '%s' "${FAKE_REFUND_ROLLBACK_READINESS_BODY:-}"
+            else
+              printf '%s\n' '{"ready":true,"entitlement_reserved_reviewed_pending_count":0}'
+            fi
             ;;
           *) exit 64 ;;
         esac
@@ -1001,6 +1005,35 @@ assert_contains "$ACTIVE_CADDY" 'sub2api-green:8080'
   || fail '409 retained old-view exposure replaced the traffic-state bind-mount inode'
 assert_traffic_state draining
 
+# A route-miss SPA can still return HTTP 200. A retained exposure must not
+# mistake that HTML response for a zero-pending refund readiness attestation.
+reset_release_case
+retained_old_views_html_output="${TEST_ROOT}/retained-old-views-html.log"
+retained_old_views_html_inode="$(file_inode "$TRAFFIC_STATE_FILE")"
+if ALLOW_DRAINING=true FAKE_RETAINED_CADDY_EXPOSURE_WITH_OLD_VIEWS=1 \
+  FAKE_REFUND_ROLLBACK_READINESS_BODY_SET=true \
+  FAKE_REFUND_ROLLBACK_READINESS_BODY='<!doctype html><html><body>SPA fallback</body></html>' \
+  run_external_github_prebuilt_release >"$retained_old_views_html_output" 2>&1; then
+  fail 'retained old-view exposure accepted an HTTP 200 HTML readiness response'
+fi
+assert_contains "$retained_old_views_html_output" \
+  'candidate refund rollback readiness response is not valid zero-pending JSON: /internal/refund-rollback-readiness'
+assert_contains "$retained_old_views_html_output" \
+  'guarded Caddy recovery is blocked by candidate refund readiness'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=200'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+[ -e "$RETAINED_CADDY_TRANSACTION" ] \
+  || fail 'HTML retained old-view exposure discarded the Caddy transaction'
+[ -e "$LOCAL_TRANSACTION" ] \
+  || fail 'HTML retained old-view exposure discarded the local transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-green:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-green:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-green:8080'
+[ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$retained_old_views_html_inode" ] \
+  || fail 'HTML retained old-view exposure replaced the traffic-state bind-mount inode'
+assert_traffic_state draining
+
 # A process interruption after the failed helper exits must use the same
 # coordinator gate on retry. Once readiness becomes 2xx it restores verified
 # old Caddy, finalizes the local transaction, re-admits traffic, and removes
@@ -1100,6 +1133,35 @@ assert_contains "$ACTIVE_CADDY" 'sub2api-blue:8080'
 assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
 [ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$pending_traffic_inode" ] \
   || fail 'pending refund rollback replaced the traffic-state bind-mount inode'
+assert_traffic_state accepting
+
+# A successful status still cannot permit old-generation takeover when the
+# candidate reports a nonzero reviewed reservation count.
+reset_release_case
+nonzero_refund_rollback_output="${TEST_ROOT}/nonzero-refund-rollback.log"
+nonzero_traffic_inode="$(file_inode "$TRAFFIC_STATE_FILE")"
+if ALLOW_DRAINING=true FAKE_BLUE_GREEN_FAIL_AFTER_CADDY=1 \
+  FAKE_REFUND_ROLLBACK_READINESS_BODY_SET=true \
+  FAKE_REFUND_ROLLBACK_READINESS_BODY='{"ready":true,"entitlement_reserved_reviewed_pending_count":1}' \
+  run_external_github_prebuilt_release >"$nonzero_refund_rollback_output" 2>&1; then
+  fail 'nonzero JSON refund readiness allowed old-generation rollback'
+fi
+assert_contains "$nonzero_refund_rollback_output" \
+  'candidate refund rollback readiness response is not valid zero-pending JSON: /internal/refund-rollback-readiness'
+assert_contains "$nonzero_refund_rollback_output" \
+  'automatic rollback is blocked by candidate refund readiness'
+assert_contains "$EVENT_LOG" 'refund-rollback-livez in_flight=0'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=200'
+assert_not_contains "$EVENT_LOG" 'helper old=sub2api-blue new=sub2api-green'
+assert_contains "$NODE_STATE_CALLS" 'local-standby sub2api-blue'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+[ -e "$LOCAL_TRANSACTION" ] || fail 'nonzero refund rollback removed the local release transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-blue:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-blue:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-blue:8080'
+assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+[ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$nonzero_traffic_inode" ] \
+  || fail 'nonzero refund rollback replaced the traffic-state bind-mount inode'
 assert_traffic_state accepting
 
 # An unavailable readiness endpoint has the same fail-closed recovery shape.

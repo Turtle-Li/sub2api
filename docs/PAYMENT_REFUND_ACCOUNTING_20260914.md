@@ -170,7 +170,9 @@ and requires a zero-pending result before binary rollback. Ledger and grant rows
 remain as audit evidence and are not deleted. For a post-switch rollback, the
 canonical server release drains candidate request admission in place and calls
 its monitor-token-protected `GET /internal/refund-rollback-readiness` endpoint.
-Only a `2xx` result permits old-generation takeover. A non-`2xx` or unreachable
+Only a `2xx` JSON object with `ready: true` and an integer
+`entitlement_reserved_reviewed_pending_count: 0` permits old-generation takeover.
+An invalid JSON body, non-`2xx` or unreachable
 endpoint normally restores the traffic state that preceded the check without
 replacing its bind-mounted inode, and retains the candidate, Caddy direction,
 and local release transaction. A server-coordinated Caddy reload additionally
@@ -179,7 +181,7 @@ persists `RECOVERY_OWNER=server-wrapper` and
 the coordinator treats that retained transaction as a possible candidate
 exposure even if all three Caddy views have returned to old: it drains, waits
 for zero candidate in-flight requests, and checks readiness before any old
-generation restoration. For a non-`2xx` or unreachable result with old or
+generation restoration. For an invalid JSON body, non-`2xx` or unreachable result with old or
 ambiguous Caddy views, admission remains `draining` and both transactions plus
 the candidate remain intact.
 
@@ -279,3 +281,13 @@ classification. No retry or financial-error suppression was added.
 
 The readiness partial index covers every reserved reviewed attempt, including
 manual/terminal anomalies, rather than only the worker's retryable subset.
+
+### Embedded production routing
+
+Both embedded frontend middleware variants bypass the two exact internal
+refund readiness/rollout paths. These monitor-token-protected handlers must
+retain their JSON status/body contract in an actual `embed` build; a SPA
+fallback must never turn a rejected internal probe into HTTP 200 HTML. CI
+builds frontend assets and runs embedded web/common-route integration tests.
+Canonical release and runtime rollback consumers independently reject invalid
+readiness bodies, including HTTP 200 HTML and nonzero counts.

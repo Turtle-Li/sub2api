@@ -248,9 +248,9 @@ func injectSiteFavicon(html, settingsJSON []byte) []byte {
 	replacement := []byte(`<link rel="icon" href="` + htmlpkg.EscapeString(logoURL) + `" />`)
 
 	var buf bytes.Buffer
-	buf.Write(html[:linkStart])
-	buf.Write(replacement)
-	buf.Write(html[linkEnd:])
+	_, _ = buf.Write(html[:linkStart])
+	_, _ = buf.Write(replacement)
+	_, _ = buf.Write(html[linkEnd:])
 	return buf.Bytes()
 }
 
@@ -292,9 +292,9 @@ func injectSiteTitle(html, settingsJSON []byte) []byte {
 
 	newTitle := []byte("<title>" + htmlpkg.EscapeString(cfg.SiteName) + " - AI API Gateway</title>")
 	var buf bytes.Buffer
-	buf.Write(html[:titleStart])
-	buf.Write(newTitle)
-	buf.Write(html[titleEnd+len("</title>"):])
+	_, _ = buf.Write(html[:titleStart])
+	_, _ = buf.Write(newTitle)
+	_, _ = buf.Write(html[titleEnd+len("</title>"):])
 	return buf.Bytes()
 }
 
@@ -374,6 +374,8 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 		trimmed == "/health" ||
 		trimmed == "/internal/livez" ||
 		trimmed == "/internal/readyz" ||
+		trimmed == "/internal/refund-rollback-readiness" ||
+		trimmed == "/internal/reviewed-refunds-rollout" ||
 		trimmed == "/models" ||
 		trimmed == "/responses" ||
 		strings.HasPrefix(trimmed, "/responses/") ||
