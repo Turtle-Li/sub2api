@@ -501,6 +501,27 @@ type paymentConfigSettingRepoStub struct {
 	updates map[string]string
 }
 
+func TestPaymentConfigReviewedRefundsDefaultClosed(t *testing.T) {
+	t.Parallel()
+
+	if (&PaymentConfigService{}).IsReviewedRefundsEnabled(context.Background()) {
+		t.Fatal("nil setting repository must keep reviewed refunds disabled")
+	}
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo}
+	if svc.IsReviewedRefundsEnabled(context.Background()) {
+		t.Fatal("missing rollout setting must keep reviewed refunds disabled")
+	}
+	repo.values[SettingPaymentReviewedRefundsEnabled] = "false"
+	if svc.IsReviewedRefundsEnabled(context.Background()) {
+		t.Fatal("false rollout setting must keep reviewed refunds disabled")
+	}
+	repo.values[SettingPaymentReviewedRefundsEnabled] = " TRUE "
+	if !svc.IsReviewedRefundsEnabled(context.Background()) {
+		t.Fatal("explicit true rollout setting must enable reviewed refunds")
+	}
+}
+
 func (s *paymentConfigSettingRepoStub) Get(context.Context, string) (*Setting, error) {
 	return nil, nil
 }

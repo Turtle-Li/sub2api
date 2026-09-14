@@ -828,3 +828,50 @@ func TestPaymentFulfillmentRecoveryPostgresRefundFenceClaimBoundary(t *testing.T
 		require.InDelta(t, 5, currentUser.Balance, 0.000001)
 	})
 }
+
+// RedeemCode.Use's used_by FK takes a KEY SHARE lock on users. Both payment
+// transactions can hold that lock before they classify the same wallet.
+func TestPaymentWalletFundingPostgresConcurrentForeignKeyLocks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fixture := newPaymentFulfillmentRecoveryPostgresFixture(t)
+	user := fixture.createUser(-0.05)
+	orders := []*dbent.PaymentOrder{
+		fixture.createPaidBalanceOrder(user, 3, service.OrderStatusPaid, time.Now().UTC()),
+		fixture.createPaidBalanceOrder(user, 8, service.OrderStatusPaid, time.Now().UTC()),
+	}
+	contexts := make([]context.Context, 2)
+	txs := make([]*dbent.Tx, 2)
+	for i, order := range orders {
+		order.ProductSnapshot = map[string]any{"credited_amount": order.Amount, "paid_credit_amount": order.Amount, "gift_credit_amount": 0.0, "schema_version": 2}
+		funding, err := service.PaymentWalletFundingForOrder(order)
+		require.NoError(t, err)
+		tx, err := fixture.client.Tx(ctx)
+		require.NoError(t, err)
+		txs[i] = tx
+		defer func() { _ = tx.Rollback() }()
+		contexts[i] = dbent.NewTxContext(service.ContextWithPaymentWalletFunding(ctx, funding), tx)
+		rows, err := tx.Client().QueryContext(contexts[i], "SELECT id FROM users WHERE id=$1 FOR KEY SHARE", user.ID)
+		require.NoError(t, err)
+		require.NoError(t, rows.Close())
+	}
+	results := make(chan error, 2)
+	for i, order := range orders {
+		go func(i int, order *dbent.PaymentOrder) {
+			repo := NewUserRepository(fixture.client, integrationDB)
+			if err := repo.UpdateBalance(contexts[i], user.ID, order.Amount); err != nil {
+				_ = txs[i].Rollback()
+				results <- err
+				return
+			}
+			results <- txs[i].Commit()
+		}(i, order)
+	}
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+	current, err := fixture.client.User.Get(ctx, user.ID)
+	require.NoError(t, err)
+	require.InDelta(t, 10.95, current.Balance, 0.00000001)
+	require.InDelta(t, 10.95, current.WalletAvailablePaid, 0.00000001)
+}

@@ -20,6 +20,7 @@ ROUTE_VERIFIER_CALLS="${TEST_ROOT}/route-verifier-calls.log"
 STARTUP_CADDY="${TEST_ROOT}/startup.Caddyfile"
 ACTIVE_CADDY="${TEST_ROOT}/active-caddy.json"
 LOCAL_TRANSACTION="${TEST_ROOT}/local-release.env"
+RETAINED_CADDY_TRANSACTION="${APP_DIR}/.sub2api-blue-green-caddy-transaction.env"
 NEW_RUNNING_MARKER="${TEST_ROOT}/new-running.marker"
 EXTERNAL_RUNTIME_ENV_FILE="${TEST_ROOT}/external-runtime.env"
 EXTERNAL_CA_FILE="${TEST_ROOT}/external-ca.crt"
@@ -115,7 +116,7 @@ if [ "${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}" = true ]; then
   exit 0
 fi
 if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
-  printf 'mode=%s old=%s new=%s backup=%s isolated_old=%s route_contract_warn_only=%s fixed_egress_compatibility=%s preserve_source=%s\n' \
+  printf 'mode=%s old=%s new=%s backup=%s isolated_old=%s route_contract_warn_only=%s fixed_egress_compatibility=%s preserve_source=%s wrapper_owns_caddy_recovery=%s caddy_recovery_action=%s\n' \
     "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
     "${OLD_CONTAINER:-}" \
     "${NEW_CONTAINER:-}" \
@@ -123,10 +124,22 @@ if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
     "${ALLOW_ISOLATED_OLD_CONTAINER:-false}" \
     "${SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY:-false}" \
     "${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-}" \
-    "${SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
+    "${SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-}" \
+    "${SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY:-false}" \
+    "${SUB2API_CADDY_SWITCH_RECOVERY_ACTION:-normal}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
 fi
 if [ -n "${FAKE_EVENT_LOG:-}" ]; then
-  printf 'helper old=%s new=%s\n' "${OLD_CONTAINER:-}" "${NEW_CONTAINER:-}" >>"$FAKE_EVENT_LOG"
+  printf 'helper old=%s new=%s action=%s\n' "${OLD_CONTAINER:-}" "${NEW_CONTAINER:-}" \
+    "${SUB2API_CADDY_SWITCH_RECOVERY_ACTION:-normal}" >>"$FAKE_EVENT_LOG"
+fi
+if [ "${SUB2API_CADDY_SWITCH_RECOVERY_ACTION:-normal}" = restore-after-refund-gate ]; then
+  [ "${SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY:-false}" = true ] || exit 41
+  [ -f "${FAKE_CADDY_SWITCH_TRANSACTION:-}" ] || exit 42
+  printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_FROM" >"$FAKE_APP_CADDY"
+  printf 'reverse_proxy %s\n' "$CADDY_UPSTREAM_FROM" >"$FAKE_STARTUP_CADDY"
+  printf '{"upstream":"%s"}\n' "$CADDY_UPSTREAM_FROM" >"$FAKE_ACTIVE_CADDY"
+  rm -f -- "$FAKE_CADDY_SWITCH_TRANSACTION"
+  exit 0
 fi
 if [ "${FAKE_MARK_NEW_RUNNING:-0}" = 1 ] \
   && [ "${OLD_CONTAINER:-}" = sub2api-green ] \
@@ -162,6 +175,18 @@ if [ "${FAKE_BLUE_GREEN_FAIL_AFTER_CADDY:-0}" = 1 ] \
   && [ "${OLD_CONTAINER:-}" = sub2api-green ]; then
   exit 24
 fi
+if [ "${FAKE_RETAINED_CADDY_EXPOSURE_WITH_OLD_VIEWS:-0}" = 1 ] \
+  && [ "${OLD_CONTAINER:-}" = sub2api-green ] \
+  && [ "${NEW_CONTAINER:-}" = sub2api-blue ]; then
+  {
+    printf 'RECOVERY_OWNER=server-wrapper\n'
+    printf 'LIVE_RELOAD_ATTEMPTED=true\n'
+    printf 'UPSTREAM_FROM=%s\n' "$CADDY_UPSTREAM_FROM"
+    printf 'UPSTREAM_TO=%s\n' "$CADDY_UPSTREAM_TO"
+  } >"$FAKE_CADDY_SWITCH_TRANSACTION"
+  chmod 600 "$FAKE_CADDY_SWITCH_TRANSACTION"
+  exit 28
+fi
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"${APP_DIR}/scripts/sub2api-drain-monitor.sh"
 cat >"${APP_DIR}/scripts/sub2api-node-state.sh" <<'EOF'
@@ -177,7 +202,15 @@ case "${1:-}" in
     [ ! -e "$FAKE_LOCAL_TRANSACTION" ] \
       || { printf 'ERROR: an unfinished local release transaction exists\n' >&2; exit 64; }
     ;;
-  local-standby|local-preserve-standby) : >"$FAKE_LOCAL_TRANSACTION" ;;
+  local-standby|local-preserve-standby)
+    {
+      printf 'state=local-switching\n'
+      printf 'previous=sub2api-green\n'
+      printf 'candidate=%s\n' "$2"
+      printf 'final_background=%s\n' active
+    } >"$FAKE_LOCAL_TRANSACTION"
+    chmod 600 "$FAKE_LOCAL_TRANSACTION"
+    ;;
   commit-local|abort-local)
     rm -f -- "$FAKE_LOCAL_TRANSACTION"
     printf 'accepting\n' >"$FAKE_TRAFFIC_STATE"
@@ -381,6 +414,7 @@ run_release() {
     FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
     FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_CADDY_SWITCH_TRANSACTION="$RETAINED_CADDY_TRANSACTION" \
     FAKE_TRAFFIC_STATE="$TRAFFIC_STATE_FILE" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
@@ -397,6 +431,7 @@ run_release() {
     SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-1}" \
     SUB2API_MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-${TEST_ROOT}/maintenance.lock}" \
     SUB2API_TRAFFIC_STATE_FILE_HOST="$TRAFFIC_STATE_FILE" \
+    SUB2API_LOCAL_RELEASE_STATE_FILE_HOST="$LOCAL_TRANSACTION" \
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_BUILD_TIMEOUT_SECONDS=30 \
@@ -426,6 +461,7 @@ run_github_prebuilt_release() {
     FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
     FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_CADDY_SWITCH_TRANSACTION="$RETAINED_CADDY_TRANSACTION" \
     FAKE_TRAFFIC_STATE="$TRAFFIC_STATE_FILE" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
@@ -440,6 +476,7 @@ run_github_prebuilt_release() {
     SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-1}" \
     SUB2API_MAINTENANCE_LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-${TEST_ROOT}/maintenance.lock}" \
     SUB2API_TRAFFIC_STATE_FILE_HOST="$TRAFFIC_STATE_FILE" \
+    SUB2API_LOCAL_RELEASE_STATE_FILE_HOST="$LOCAL_TRANSACTION" \
     SUB2API_PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-example.invalid:443:192.0.2.10}" \
     SUB2API_RELEASE_MIN_FREE_BYTES=1 \
     SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER="${ALLOW_DRAINING:-false}" \
@@ -465,6 +502,7 @@ run_external_github_prebuilt_release() {
     FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
     FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
     FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_CADDY_SWITCH_TRANSACTION="$RETAINED_CADDY_TRANSACTION" \
     FAKE_TRAFFIC_STATE="$TRAFFIC_STATE_FILE" \
     FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
     FAKE_EVENT_LOG="$EVENT_LOG" \
@@ -496,9 +534,42 @@ run_external_github_prebuilt_release() {
       'external-runtime-test'
 }
 
+run_retained_caddy_recovery() {
+  env \
+    PATH="${FAKE_BIN}:${PATH}" \
+    FAKE_DOCKER_CALLS="$DOCKER_CALLS" \
+    FAKE_NODE_STATE_CALLS="$NODE_STATE_CALLS" \
+    FAKE_CURL_CALLS="$CURL_CALLS" \
+    FAKE_APP_CADDY="${APP_DIR}/Caddyfile" \
+    FAKE_STARTUP_CADDY="$STARTUP_CADDY" \
+    FAKE_ACTIVE_CADDY="$ACTIVE_CADDY" \
+    FAKE_LOCAL_TRANSACTION="$LOCAL_TRANSACTION" \
+    FAKE_CADDY_SWITCH_TRANSACTION="$RETAINED_CADDY_TRANSACTION" \
+    FAKE_TRAFFIC_STATE="$TRAFFIC_STATE_FILE" \
+    FAKE_BLUE_GREEN_ENV_LOG="$BLUE_GREEN_ENV_LOG" \
+    FAKE_EVENT_LOG="$EVENT_LOG" \
+    FAKE_ROUTE_VERIFIER_CALLS="$ROUTE_VERIFIER_CALLS" \
+    FAKE_MARK_NEW_RUNNING="${FAKE_MARK_NEW_RUNNING:-0}" \
+    FAKE_NEW_RUNNING_MARKER="$NEW_RUNNING_MARKER" \
+    SUB2API_APP_DIR="$APP_DIR" \
+    SUB2API_AUTODEPLOY_WORK_ROOT="$WORK_ROOT" \
+    SUB2API_RELEASE_LOG_DIR="${TEST_ROOT}/logs" \
+    SUB2API_RELEASE_LOCK_FILE="${TEST_ROOT}/release.lock" \
+    SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS=1 \
+    SUB2API_MAINTENANCE_LOCK_FILE="${TEST_ROOT}/maintenance.lock" \
+    SUB2API_TRAFFIC_STATE_FILE_HOST="$TRAFFIC_STATE_FILE" \
+    SUB2API_LOCAL_RELEASE_STATE_FILE_HOST="$LOCAL_TRANSACTION" \
+    SUB2API_RELEASE_MIN_FREE_BYTES=1 \
+    SUB2API_DUAL_NODE_RUNTIME_ENABLED=true \
+    SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
+    SUB2API_EXTERNAL_RUNTIME_ENV_FILE="$EXTERNAL_RUNTIME_ENV_FILE" \
+    SUB2API_EXTERNAL_CA_FILE="$EXTERNAL_CA_FILE" \
+    /bin/bash "$SCRIPT" --recover-retained-caddy-exposure
+}
+
 reset_release_case() {
   reset_caddy_views
-  rm -f -- "$LOCAL_TRANSACTION" "$NEW_RUNNING_MARKER"
+  rm -f -- "$LOCAL_TRANSACTION" "$RETAINED_CADDY_TRANSACTION" "$NEW_RUNNING_MARKER"
   printf 'accepting\n' >"$TRAFFIC_STATE_FILE"
   : >"$DOCKER_CALLS"
   : >"$NODE_STATE_CALLS"
@@ -896,6 +967,106 @@ assert_contains "$NODE_STATE_CALLS" 'abort-local'
   || fail 'pre-Caddy failure attempted a rollback helper invocation'
 assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
 assert_not_contains "$EVENT_LOG" 'refund-rollback-'
+assert_traffic_state accepting
+
+# A Caddy reload can have applied the candidate and still failed. The helper
+# retains an owner+live-reload transaction, so the wrapper must gate the
+# candidate even when every Caddy view has already returned to old. A 409
+# leaves both durable transactions and admission draining; the explicit resume
+# command repeats the gate and is the only path that can restore old state.
+reset_release_case
+retained_old_views_409_output="${TEST_ROOT}/retained-old-views-409.log"
+retained_old_views_409_inode="$(file_inode "$TRAFFIC_STATE_FILE")"
+if ALLOW_DRAINING=true FAKE_RETAINED_CADDY_EXPOSURE_WITH_OLD_VIEWS=1 \
+  FAKE_REFUND_ROLLBACK_READINESS_STATUS=409 \
+  run_external_github_prebuilt_release >"$retained_old_views_409_output" 2>&1; then
+  fail 'retained old-view exposure accepted a pending refund readiness response'
+fi
+assert_contains "$retained_old_views_409_output" \
+  'Retained Caddy transaction matches sub2api-green:8080 -> sub2api-blue:8080; draining and checking refund rollback readiness'
+assert_contains "$retained_old_views_409_output" \
+  'guarded Caddy recovery is blocked by candidate refund readiness'
+assert_contains "$EVENT_LOG" 'refund-rollback-livez in_flight=0'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=409'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+[ -e "$RETAINED_CADDY_TRANSACTION" ] \
+  || fail '409 retained old-view exposure discarded the Caddy transaction'
+[ -e "$LOCAL_TRANSACTION" ] \
+  || fail '409 retained old-view exposure discarded the local transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-green:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-green:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-green:8080'
+[ "$(file_inode "$TRAFFIC_STATE_FILE")" = "$retained_old_views_409_inode" ] \
+  || fail '409 retained old-view exposure replaced the traffic-state bind-mount inode'
+assert_traffic_state draining
+
+# A process interruption after the failed helper exits must use the same
+# coordinator gate on retry. Once readiness becomes 2xx it restores verified
+# old Caddy, finalizes the local transaction, re-admits traffic, and removes
+# the retained candidate.
+: >"$DOCKER_CALLS"
+: >"$NODE_STATE_CALLS"
+if ! FAKE_REFUND_ROLLBACK_READINESS_STATUS=200 \
+  run_retained_caddy_recovery >"${TEST_ROOT}/retained-canonical-recovery.log" 2>&1; then
+  sed -n '1,200p' "${TEST_ROOT}/retained-canonical-recovery.log" >&2
+  fail 'canonical retained-Caddy recovery was rejected after readiness passed'
+fi
+assert_contains "${TEST_ROOT}/retained-canonical-recovery.log" 'Guarded retained-Caddy recovery completed'
+assert_event_order 'refund-rollback-readiness status=200' \
+  'helper old=sub2api-green new=sub2api-blue action=restore-after-refund-gate'
+assert_contains "$NODE_STATE_CALLS" 'abort-local'
+assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+[ ! -e "$RETAINED_CADDY_TRANSACTION" ] \
+  || fail 'canonical retained-Caddy recovery retained its completed transaction'
+[ ! -e "$LOCAL_TRANSACTION" ] \
+  || fail 'canonical retained-Caddy recovery retained its completed local state'
+assert_traffic_state accepting
+
+# An unreachable readiness endpoint has the same retained, draining recovery
+# shape. No helper restoration, local abort, or candidate removal is allowed.
+reset_release_case
+retained_old_views_unreachable_output="${TEST_ROOT}/retained-old-views-unreachable.log"
+if ALLOW_DRAINING=true FAKE_RETAINED_CADDY_EXPOSURE_WITH_OLD_VIEWS=1 \
+  FAKE_REFUND_ROLLBACK_READINESS_UNREACHABLE=1 \
+  run_external_github_prebuilt_release >"$retained_old_views_unreachable_output" 2>&1; then
+  fail 'retained old-view exposure accepted an unreachable readiness endpoint'
+fi
+assert_contains "$retained_old_views_unreachable_output" \
+  'candidate internal rollback probe is unreachable or rejected: /internal/refund-rollback-readiness'
+assert_contains "$retained_old_views_unreachable_output" \
+  'guarded Caddy recovery is blocked by candidate refund readiness'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=unreachable'
+assert_not_contains "$NODE_STATE_CALLS" 'abort-local'
+assert_not_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+[ -e "$RETAINED_CADDY_TRANSACTION" ] \
+  || fail 'unreachable retained old-view exposure discarded the Caddy transaction'
+[ -e "$LOCAL_TRANSACTION" ] \
+  || fail 'unreachable retained old-view exposure discarded the local transaction'
+assert_traffic_state draining
+
+# A 2xx readiness result on the initial wrapper failure must take the explicit
+# retained-transaction restoration path even though all Caddy views were old
+# before the gate ran.
+reset_release_case
+retained_old_views_200_output="${TEST_ROOT}/retained-old-views-200.log"
+if ALLOW_DRAINING=true FAKE_RETAINED_CADDY_EXPOSURE_WITH_OLD_VIEWS=1 \
+  run_external_github_prebuilt_release >"$retained_old_views_200_output" 2>&1; then
+  fail 'retained old-view helper failure unexpectedly completed the release'
+fi
+assert_contains "$retained_old_views_200_output" 'Guarded retained-Caddy recovery completed'
+assert_contains "$EVENT_LOG" 'refund-rollback-readiness status=200'
+assert_event_order 'refund-rollback-readiness status=200' \
+  'helper old=sub2api-green new=sub2api-blue action=restore-after-refund-gate'
+assert_contains "$NODE_STATE_CALLS" 'abort-local'
+assert_contains "$DOCKER_CALLS" 'rm -f sub2api-blue'
+[ ! -e "$RETAINED_CADDY_TRANSACTION" ] \
+  || fail '2xx retained old-view recovery retained the Caddy transaction'
+[ ! -e "$LOCAL_TRANSACTION" ] \
+  || fail '2xx retained old-view recovery retained the local transaction'
+assert_contains "${APP_DIR}/Caddyfile" 'sub2api-green:8080'
+assert_contains "$STARTUP_CADDY" 'sub2api-green:8080'
+assert_contains "$ACTIVE_CADDY" 'sub2api-green:8080'
 assert_traffic_state accepting
 
 # Once Caddy may have sent traffic to the candidate, a reviewed pending refund

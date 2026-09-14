@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	paymentRefundReconciliationBatchSize      = 16
-	paymentRefundReconciliationConcurrency    = 4
+	paymentRefundReconciliationConcurrency = 4
+	// Claim at most one immediately executable wave. Claiming work that sits
+	// behind the semaphore can let its lease expire before the provider call
+	// starts, allowing another process to reclaim the same external operation.
+	paymentRefundReconciliationBatchSize      = paymentRefundReconciliationConcurrency
 	paymentRefundReconciliationPollInterval   = 15 * time.Second
 	paymentRefundReconciliationLease          = time.Minute
 	paymentRefundReconciliationAttemptTimeout = 20 * time.Second

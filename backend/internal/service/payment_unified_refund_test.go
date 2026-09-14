@@ -103,7 +103,13 @@ func newUnifiedRefundFixture(t *testing.T, client *dbent.Client, method string) 
 		SetOrderType(payment.OrderTypeBalance).SetStatus(OrderStatusCompleted).SetPaidAt(time.Now()).SetCompletedAt(time.Now()).
 		SetExpiresAt(time.Now().Add(time.Hour)).SetClientIP("127.0.0.1").SetSrcHost("localhost").Save(ctx)
 	require.NoError(t, err)
-	svc := &PaymentService{entClient: client, userRepo: &unifiedRefundTestUsers{client: client}}
+	svc := &PaymentService{
+		entClient: client,
+		userRepo:  &unifiedRefundTestUsers{client: client},
+		configService: &PaymentConfigService{settingRepo: &paymentConfigSettingRepoStub{values: map[string]string{
+			SettingPaymentReviewedRefundsEnabled: "true",
+		}}},
+	}
 	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, "https://pay.example.test"), nil)
 	p, early, err := svc.PrepareRefund(ctx, o.ID, 10, "local test refund", false, true)
 	require.NoError(t, err)

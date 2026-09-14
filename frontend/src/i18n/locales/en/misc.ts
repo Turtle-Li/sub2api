@@ -665,6 +665,8 @@ export default {
       REFUND_QUOTE_STALE: 'The refund review changed. Refresh the quote before submitting.',
       REFUND_REQUIRES_MANUAL_REVIEW: 'This order requires manual refund review.',
       REFUND_REVIEW_UNAVAILABLE: 'The refund review is temporarily unavailable. Please try again.',
+      REVIEWED_REFUNDS_DISABLED: 'System-calculated refunds are temporarily paused. Please try again shortly.',
+      REFUND_ADMISSION_DRAINING: 'Refund processing is paused during a service update. Please try again shortly.',
       REFUND_UNAVAILABLE: 'A refund is not available for this order.',
       PAID_BALANCE_CONSUMED: 'The paid balance has already been consumed.',
       SUBSCRIPTION_FULLY_USED: 'The subscription term has no refundable unused time.',

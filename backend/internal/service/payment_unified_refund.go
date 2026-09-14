@@ -14,8 +14,23 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/google/uuid"
 )
+
+// ReviewedRefundRolloutLockID serializes rollout CAS with reviewed reservations.
+// Acquire before order/entitlement locks in every reviewed reservation transaction.
+const ReviewedRefundRolloutLockID int64 = 0x535542325246
+
+func (s *PaymentService) requireReviewedRefundAdmission(ctx context.Context) error {
+	if !runtimegate.SharedWorkAllowed() {
+		return infraerrors.ServiceUnavailable("REFUND_ADMISSION_DRAINING", "reviewed refunds are paused while this application generation is draining")
+	}
+	if s == nil || s.configService == nil || !s.configService.IsReviewedRefundsEnabled(ctx) {
+		return infraerrors.ServiceUnavailable("REVIEWED_REFUNDS_DISABLED", "reviewed refunds are not enabled for this application generation")
+	}
+	return nil
+}
 
 func (s *PaymentService) validateUnifiedRefundOrder(o *dbent.PaymentOrder) error {
 	if !refundStateValid(o) {
@@ -112,6 +127,12 @@ func (s *PaymentService) executeUnifiedRefund(ctx context.Context, p *RefundPlan
 }
 
 func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *RefundPlan) (*unifiedRefundAttempt, error) {
+	reviewed := p != nil && strings.TrimSpace(p.QuoteRevision) != ""
+	if reviewed {
+		if err := s.requireReviewedRefundAdmission(ctx); err != nil {
+			return nil, err
+		}
+	}
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return nil, err
@@ -119,6 +140,11 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	defer func() { _ = tx.Rollback() }()
 	txCtx := dbent.NewTxContext(ctx, tx)
 	client := tx.Client()
+	if reviewed && paymentAuditDialect(client) == "postgres" {
+		if _, err := client.ExecContext(txCtx, "SELECT pg_advisory_xact_lock_shared($1)", ReviewedRefundRolloutLockID); err != nil {
+			return nil, err
+		}
+	}
 	o, err := lockUnifiedRefundOrder(txCtx, client, p.OrderID)
 	if err != nil {
 		return nil, err
@@ -136,7 +162,13 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	if o.OrderType == payment.OrderTypeSubscription && strings.TrimSpace(p.QuoteRevision) == "" {
 		return nil, infraerrors.Conflict("REFUND_REVIEW_REQUIRED", "subscription refunds require a fresh server review")
 	}
-	if strings.TrimSpace(p.QuoteRevision) != "" {
+	if reviewed {
+		// Re-read both rollout gates under the financial lock immediately before
+		// entitlement reservation. A generation that starts draining between the
+		// request and this boundary must not create new provider work.
+		if err := s.requireReviewedRefundAdmission(txCtx); err != nil {
+			return nil, err
+		}
 		a, err := s.reserveReviewedUnifiedRefundAttemptTx(txCtx, client, o, p)
 		if err != nil {
 			if errors.Is(err, errRefundQuoteStale) {
@@ -147,8 +179,11 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-		if a.RefundKind == refundReviewKindSubscription {
+		switch a.RefundKind {
+		case refundReviewKindSubscription:
 			s.invalidateReviewedSubscriptionRefundCaches(ctx, a.OrderID)
+		case refundReviewKindBalance:
+			s.invalidateReviewedBalanceRefundAuthorizationCache(ctx, a.OrderID, o.UserID)
 		}
 		return a, nil
 	}
@@ -285,6 +320,22 @@ func pendingUnifiedRefundResult(manual bool) *RefundResult {
 	return &RefundResult{Success: false, Warning: warning}
 }
 
+// pendingReviewedRefundForCacheBoundary records a stable audit marker without
+// leaking Redis details. The reservation is durable, so callers retry this
+// same attempt after the authorization fence converges.
+func (s *PaymentService) pendingReviewedRefundForCacheBoundary(ctx context.Context, a *unifiedRefundAttempt) (*RefundResult, error) {
+	auditCtx, auditCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	auditErr := writeUnifiedRefundAudit(auditCtx, s.entClient, a.OrderID, "UNIFIED_REFUND_CACHE_INVALIDATION_PENDING", map[string]any{
+		"product_refund_no": a.ProductRefundNo,
+		"code":              "cache_invalidation_unconfirmed",
+	})
+	auditCancel()
+	if auditErr != nil {
+		return nil, auditErr
+	}
+	return pendingUnifiedRefundResult(false), nil
+}
+
 func (s *PaymentService) queryUnifiedRefund(ctx context.Context, o *dbent.PaymentOrder) (*RefundResult, error) {
 	a, err := loadUnifiedRefundAttempt(ctx, s.entClient, o.ID, "")
 	if err != nil {
@@ -315,6 +366,17 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 	if a.Status != unifiedRefundPending {
 		return &RefundResult{Success: a.Status == unifiedpay.RefundStatusSucceeded}, nil
 	}
+	// The private compatibility gate protects provider creation as well as the
+	// earlier reservation boundary. A standby recovery worker may run while an
+	// older request-serving generation still exists, so a missing remote refund
+	// ID must remain pending until the rollout is explicitly enabled. Once a
+	// remote ID is known, read-only provider queries stay allowed while disabled
+	// so already-moved money can converge to a durable terminal state.
+	if a.RefundRequestID == "" && (a.EntitlementReserved || strings.TrimSpace(a.QuoteRevision) != "" || strings.TrimSpace(a.RefundKind) != "") {
+		if s == nil || s.configService == nil || !s.configService.IsReviewedRefundsEnabled(ctx) {
+			return nil, infraerrors.ServiceUnavailable("REVIEWED_REFUNDS_DISABLED", "reviewed refunds are not enabled for this application generation")
+		}
+	}
 	if a.RefundKind == refundReviewKindSubscription {
 		cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		cacheErr := s.ensureReviewedSubscriptionRefundAuthorizationCaches(cacheCtx, a.OrderID)
@@ -323,16 +385,18 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 			// Keep both the provider request and the reserved subscription term
 			// pending. Durable reconciliation will retry this same boundary. The
 			// audit deliberately records only a stable code, never a Redis error.
-			auditCtx, auditCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			auditErr := writeUnifiedRefundAudit(auditCtx, s.entClient, a.OrderID, "UNIFIED_REFUND_CACHE_INVALIDATION_PENDING", map[string]any{
-				"product_refund_no": a.ProductRefundNo,
-				"code":              "cache_invalidation_unconfirmed",
-			})
-			auditCancel()
-			if auditErr != nil {
-				return nil, auditErr
-			}
-			return pendingUnifiedRefundResult(false), nil
+			return s.pendingReviewedRefundForCacheBoundary(ctx, a)
+		}
+	}
+	if a.RefundKind == refundReviewKindBalance {
+		cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		cacheErr := s.ensureReviewedBalanceRefundAuthorizationCache(cacheCtx, o.UserID)
+		cancel()
+		if cacheErr != nil {
+			// The wallet entitlement is already frozen. Do not create or query
+			// a provider refund until the shared balance generation invalidates
+			// every compatible cache value that could still authorize it.
+			return s.pendingReviewedRefundForCacheBoundary(ctx, a)
 		}
 	}
 	var result *payment.UnifiedRefundResource
@@ -495,8 +559,11 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	if a.RefundKind == refundReviewKindSubscription {
+	switch a.RefundKind {
+	case refundReviewKindSubscription:
 		s.invalidateReviewedSubscriptionRefundCaches(ctx, a.OrderID)
+	case refundReviewKindBalance:
+		s.invalidateReviewedBalanceRefundAuthorizationCache(ctx, a.OrderID, o.UserID)
 	}
 	return response, nil
 }

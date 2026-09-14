@@ -42,12 +42,13 @@ created by each subscription order.
 7. A pending provider refund reserves its wallet components or subscription
    duration before the network request. Usage and renewals cannot consume the
    reserved entitlement. The same transaction enqueues durable subscription and
-   API-key cache invalidation. Before a subscription refund reaches the provider,
-   the service must also advance the shared Redis authorization fence, delete
-   current and legacy subscription cache entries, and publish peer-L1 eviction;
-   failure leaves the reservation pending with zero provider calls. A trusted
-   provider failure releases it, an unknown result keeps it reserved for leased
-   reconciliation, and success captures it exactly once.
+   API-key cache invalidation. Before a refund reaches the provider, the service
+   must also replace the applicable shared Redis authorization fence and delete
+   current and legacy cache entries. Subscription changes additionally publish
+   peer-L1 eviction. Any fence failure leaves the reservation pending with zero
+   provider calls. A trusted provider failure releases it, an unknown result
+   keeps it reserved for leased reconciliation, and success captures it exactly
+   once.
 8. Historical state is never guessed. Existing balances enter the component
    model as unclassified/non-refundable gift. Orders without a proven grant are
    shown as manual review.
@@ -112,10 +113,12 @@ review before the administrator can retry.
 review revision. Under one database transaction the service locks the order
 and relevant wallet/subscription rows, recalculates the review, rejects a stale
 revision, creates the durable attempt, reserves the entitlement, and marks the
-order pending. A subscription attempt must then pass the shared authorization
-cache fence before it can call the payment provider. Any pending reviewed
-attempt is resumed by a bounded, leased worker with the exact persisted
-provider idempotency key.
+order pending. Both balance and subscription attempts must then pass their
+shared authorization cache fences before they can call the payment provider.
+The balance fence uses an expiring, unique token: expiry cannot reset to a
+previous value, so a delayed cache reader can never refill an old balance after
+the token has expired or been replaced. Any pending reviewed attempt is resumed
+by a bounded, leased worker with the exact persisted provider idempotency key.
 
 Lock order:
 
@@ -168,21 +171,51 @@ remain as audit evidence and are not deleted. For a post-switch rollback, the
 canonical server release drains candidate request admission in place and calls
 its monitor-token-protected `GET /internal/refund-rollback-readiness` endpoint.
 Only a `2xx` result permits old-generation takeover. A non-`2xx` or unreachable
-endpoint restores the traffic state that preceded the check (normally
-`accepting`) without replacing its bind-mounted inode, and retains the
-candidate, Caddy direction, and local release transaction. The candidate must
-finish automatic reconciliation before an operator runs
-`sudo systemctl start sub2api-runtime-guard.service`. That service takes the
-canonical maintenance lock and calls `sub2api-node-state.sh recover-local`
-against the verified Caddy-selected generation; do not rerun the release script,
-delete the local transaction, or make a direct Caddy/container rollback. The runtime guard also
-applies the same readiness gate before any automatic historical fallback. If
-readiness has passed but a later source check or rollback-helper step fails,
-admission is restored only while every Caddy view still points to the candidate;
-an old or ambiguous Caddy direction remains fenced for the same recovery
-transaction. An older binary safely ignores the dedicated subscription cache
-outbox while the existing API-key invalidation outbox retains its original
-schema and worker contract.
+endpoint normally restores the traffic state that preceded the check without
+replacing its bind-mounted inode, and retains the candidate, Caddy direction,
+and local release transaction. A server-coordinated Caddy reload additionally
+persists `RECOVERY_OWNER=server-wrapper` and
+`LIVE_RELOAD_ATTEMPTED=true` atomically before its live reload call. Therefore
+the coordinator treats that retained transaction as a possible candidate
+exposure even if all three Caddy views have returned to old: it drains, waits
+for zero candidate in-flight requests, and checks readiness before any old
+generation restoration. For a non-`2xx` or unreachable result with old or
+ambiguous Caddy views, admission remains `draining` and both transactions plus
+the candidate remain intact.
+
+After automatic reconciliation, recover this state only through
+`sudo /opt/sub2api/scripts/sub2api-server-release.sh --recover-retained-caddy-exposure`.
+It repeats the gate, explicitly restores and verifies the host, startup, and
+Admin Caddy views to old, runs `abort-local` to restore admission, and removes
+the retained target. Do not rerun the blue-green helper directly, delete either
+transaction, or make a direct Caddy/container rollback: a normal helper
+invocation refuses this wrapper-owned live-reload transaction. If restoration
+has already completed but local finalization was interrupted, use
+`sudo systemctl start sub2api-runtime-guard.service` only to run the existing
+`recover-local` finalizer against the verified Caddy-selected generation. The
+runtime guard also applies the same readiness gate before any automatic
+historical fallback. If readiness has passed but a later source check or
+rollback-helper step fails, admission is restored only while every Caddy view
+still points to the candidate; an old or ambiguous Caddy direction remains
+fenced for the same recovery transaction. An older binary safely ignores the
+dedicated subscription cache outbox while the existing API-key invalidation
+outbox retains its original schema and worker contract.
+
+`PAYMENT_REVIEWED_REFUNDS_ENABLED` is private deployment state, not a public
+application setting. Keep it absent or `false` for the first compatibility
+release from `ec7`. Enable it only through its compare-and-swap transition
+after the candidate has committed and every old `ec7` request process has
+stopped. The gate covers reservation and provider creation; a refund with a
+known provider ID remains queryable while disabled so uncertain external money
+can converge.
+
+For a planned rollback to an incompatible binary, drain request admission and
+wait for request in-flight count zero before changing the gate. Leave the gate
+enabled while durable pending attempts finish, require refund rollback
+readiness zero, then compare-and-swap it to `false` immediately before the old
+binary is restored. Admission remains drained across that sequence, preventing
+a new reservation after the readiness check. Caddy selection or a healthy
+candidate alone does not authorize a direct enable.
 
 ## Verification
 
@@ -194,3 +227,55 @@ schema and worker contract.
   term provenance, and durable subscription cache event creation.
 - Frontend coverage verifies review loading and failure states, read-only
   balance/subscription effects, MFA request freezing, and stale-quote refresh.
+
+
+## Rollout transition contract (September 14 continuation)
+
+The monitor-token-protected `POST /internal/reviewed-refunds-rollout` is a
+narrow CAS operation, not a generic settings API. Enable accepts expected
+absence (`""`) or exact `"false"`; disable accepts exact `"true"`. A stale
+expectation returns 409 and never overwrites another transition. Invalid or
+missing fields, unknown fields and trailing JSON are rejected. Operational
+failures return only a safe failure shape, never database details.
+
+Both transitions acquire PostgreSQL advisory transaction lock
+`ReviewedRefundRolloutLockID`, revalidate explicit runtime state, require zero
+reserved reviewed attempts, and change the setting in that transaction.
+Reviewed reservations acquire the shared form of the same lock **before**
+order and entitlement locks. Thus a concurrent reservation commits before the
+rollout counts it, or reads the disabled flag after the CAS commits. The lock
+is deliberately scoped only to these low-frequency financial operations.
+
+Enable requires an active process, accepting request admission and healthy
+PostgreSQL/Redis. Disable permits active or standby background state in a live process, explicitly draining
+admission and zero in-flight requests; it remains reachable while draining and
+does not count its own request. Host topology remains the responsibility of
+the root-only maintenance-lock-owning helper. The single-origin deployment
+assumes retired remote writers remain excluded by the existing database and
+Redis source allowlist. A future multi-origin deployment must add a complete
+writer inventory/fence before reusing enable; ownership is the deployment
+maintainer.
+
+Continuation gates: T1 backend CAS and reservation serialization (root) ->
+T2 host topology helper/installer (isolated worker, root integration) ->
+T3 exact-source unit/race/PostgreSQL/frontend/deployment validation and
+independent review/QA -> T4 merge into `main`, CI/security, verified build,
+isolated backup restoration/migration -> T5 canonical receiver, natural old
+process drain, guarded enable and read-only order #4 review. A failed gate
+blocks its dependents. Preserve purchase-entry closure and all financial
+history throughout; no real refund is part of acceptance.
+
+
+### Concurrent funding regression
+
+Full PostgreSQL race validation reproduced a lock-upgrade deadlock when two
+redeemed recharge codes referenced the same user. Each `used_by` foreign key
+held KEY SHARE before principal classification requested FOR UPDATE. The
+classification now takes NO KEY UPDATE: user ID is unchanged, both references
+remain valid, and balance/principal updates still serialize. A deterministic
+two-transaction regression holds both FK-equivalent locks before invoking the
+actual funding repository, then verifies both credits and paid-first debt
+classification. No retry or financial-error suppression was added.
+
+The readiness partial index covers every reserved reviewed attempt, including
+manual/terminal anomalies, rather than only the worker's retryable subset.

@@ -92,9 +92,9 @@ func TestPaymentRefundReconciliationReplaysReservedAttemptAndFinalizesOnce(t *te
 	runtimegate.SetProcessActive(true)
 	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
 	backgroundState := filepath.Join(t.TempDir(), "background-state")
-	require.NoError(t, os.WriteFile(backgroundState, []byte("standby\n"), 0o600))
+	require.NoError(t, os.WriteFile(backgroundState, []byte("active\n"), 0o600))
 	t.Setenv(runtimegate.StateFileEnv, backgroundState)
-	require.False(t, runtimegate.SharedWorkAllowed())
+	require.True(t, runtimegate.SharedWorkAllowed())
 	require.True(t, runtimegate.DurableRecoveryWorkAllowed())
 	ctx := context.Background()
 	svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
@@ -104,6 +104,12 @@ func TestPaymentRefundReconciliationReplaysReservedAttemptAndFinalizesOnce(t *te
 	require.NoError(t, err)
 	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
 	require.NoError(t, err)
+	// A release may move this generation to standby after the reviewed attempt
+	// is durable. New reservations are then rejected, while the lease-owned
+	// recovery path must finish this exact idempotent provider operation.
+	require.NoError(t, os.WriteFile(backgroundState, []byte("standby\n"), 0o600))
+	require.False(t, runtimegate.SharedWorkAllowed())
+	require.True(t, runtimegate.DurableRecoveryWorkAllowed())
 
 	var posts int
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +224,8 @@ func TestPaymentRefundRollbackReadinessFailsClosed(t *testing.T) {
 }
 
 func TestPaymentRefundReconciliationRetryDelayIsBounded(t *testing.T) {
+	require.LessOrEqual(t, paymentRefundReconciliationBatchSize, paymentRefundReconciliationConcurrency,
+		"a reconciliation lease must not be claimed before a worker can start it")
 	require.Equal(t, paymentRefundReconciliationInitialBackoff, paymentRefundReconciliationRetryDelay(0))
 	require.Equal(t, paymentRefundReconciliationInitialBackoff, paymentRefundReconciliationRetryDelay(1))
 	for _, attempt := range []int{2, 3, 8, 100} {

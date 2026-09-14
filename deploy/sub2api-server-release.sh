@@ -7,25 +7,41 @@
 
 set -Eeuo pipefail
 
-if [ "$#" -ne 6 ]; then
-  echo "Usage: sub2api-server-release.sh SOURCE_DIR IMAGE COMMIT VERSION HEALTH_URL RUN_ID" >&2
-  echo "   or: sub2api-server-release.sh --prebuilt IMAGE COMMIT VERSION HEALTH_URL RUN_ID" >&2
-  exit 2
-fi
-
-PREBUILT_MODE=false
-if [ "$1" = "--prebuilt" ]; then
+RECOVER_RETAINED_CADDY_EXPOSURE=false
+if [ "$#" -eq 1 ] && [ "$1" = "--recover-retained-caddy-exposure" ]; then
+  # This is the only restart-safe path for a wrapper-owned transaction after a
+  # live Caddy reload was attempted. It deliberately has no image/build input:
+  # the durable local and Caddy transactions supply the exact old/candidate
+  # pair, then this coordinator runs the same refund rollback gate.
+  RECOVER_RETAINED_CADDY_EXPOSURE=true
   PREBUILT_MODE=true
   SOURCE_DIR=""
+  IMAGE=""
+  COMMIT="retained-caddy-recovery"
+  VERSION="retained-caddy-recovery"
+  PUBLIC_HEALTH_URL=""
+  PUBLIC_HEALTH_RESOLVE=""
+  RUN_ID="retained-caddy-recovery-$(date -u '+%Y%m%d-%H%M%S')-$$"
+elif [ "$#" -ne 6 ]; then
+  echo "Usage: sub2api-server-release.sh SOURCE_DIR IMAGE COMMIT VERSION HEALTH_URL RUN_ID" >&2
+  echo "   or: sub2api-server-release.sh --prebuilt IMAGE COMMIT VERSION HEALTH_URL RUN_ID" >&2
+  echo "   or: sub2api-server-release.sh --recover-retained-caddy-exposure" >&2
+  exit 2
 else
-  SOURCE_DIR="$1"
+  PREBUILT_MODE=false
+  if [ "$1" = "--prebuilt" ]; then
+    PREBUILT_MODE=true
+    SOURCE_DIR=""
+  else
+    SOURCE_DIR="$1"
+  fi
+  IMAGE="$2"
+  COMMIT="$3"
+  VERSION="$4"
+  PUBLIC_HEALTH_URL="$5"
+  PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-}"
+  RUN_ID="$6"
 fi
-IMAGE="$2"
-COMMIT="$3"
-VERSION="$4"
-PUBLIC_HEALTH_URL="$5"
-PUBLIC_HEALTH_RESOLVE="${SUB2API_PUBLIC_HEALTH_RESOLVE:-}"
-RUN_ID="$6"
 
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 WORK_ROOT="${SUB2API_AUTODEPLOY_WORK_ROOT:-/var/lib/sub2api-autodeploy/worktrees}"
@@ -79,6 +95,11 @@ REFUND_ROLLBACK_READINESS_PATH="/internal/refund-rollback-readiness"
 # rollback failures restore the admission state only while Caddy still proves
 # that the candidate remains the serving generation.
 ROLLBACK_GATE_PRIOR_TRAFFIC_STATE=""
+# Set only while a wrapper-owned Caddy transaction proves that a live reload
+# was attempted. A failed readiness probe must keep admission drained whenever
+# Caddy is old or ambiguous, because a brief candidate exposure may already
+# have created a reviewed refund reservation.
+RETAINED_CADDY_EXPOSURE_RECOVERY=false
 # Keep an explicitly blank value invalid. An unset setting preserves the
 # deployed local-dependency release behavior.
 DEPENDENCY_MODE="${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE-local}"
@@ -332,19 +353,21 @@ if [ "$DEPENDENCY_MODE" = external ]; then
   SWITCH_RUN_BACKUP=false
 fi
 
-if [ "$PREBUILT_MODE" != "true" ]; then
-  case "$SOURCE_DIR" in
-    "${WORK_ROOT%/}"/*) ;;
-    *) die "refusing source outside automatic-release work root: $SOURCE_DIR" ;;
+if [ "$RECOVER_RETAINED_CADDY_EXPOSURE" != true ]; then
+  if [ "$PREBUILT_MODE" != "true" ]; then
+    case "$SOURCE_DIR" in
+      "${WORK_ROOT%/}"/*) ;;
+      *) die "refusing source outside automatic-release work root: $SOURCE_DIR" ;;
+    esac
+  fi
+  case "$IMAGE" in
+    sub2api:auto-*) ;;
+    *) die "refusing unexpected image tag: $IMAGE" ;;
+  esac
+  case "$COMMIT" in
+    *[!0-9a-f]*|'') die "invalid commit: $COMMIT" ;;
   esac
 fi
-case "$IMAGE" in
-  sub2api:auto-*) ;;
-  *) die "refusing unexpected image tag: $IMAGE" ;;
-esac
-case "$COMMIT" in
-  *[!0-9a-f]*|'') die "invalid commit: $COMMIT" ;;
-esac
 case "$RUN_ID" in
   *[!A-Za-z0-9._-]*|'') die "invalid release run id" ;;
 esac
@@ -360,22 +383,31 @@ flock -n 8 || die "production maintenance or runtime recovery is already running
   || die "unfinished GCP Taiwan Caddy listener transaction exists; commit or rollback it before a production release"
 [ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
   || die "unfinished customer Host Caddy transaction exists; commit or rollback it before a production release"
-[ ! -e "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
-  || die "unfinished blue-green Caddy upstream transaction exists; recover it before a production release"
+if [ "$RECOVER_RETAINED_CADDY_EXPOSURE" = true ]; then
+  [ -e "$CADDY_SWITCH_TRANSACTION_PATH" ] || [ -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
+    || die "no retained blue-green Caddy upstream transaction exists for guarded recovery"
+else
+  [ ! -e "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
+    || die "unfinished blue-green Caddy upstream transaction exists; recover it before a production release with sub2api-server-release.sh --recover-retained-caddy-exposure"
+fi
 
 if [ "$PREBUILT_MODE" != "true" ]; then
   [ -d "$SOURCE_DIR" ] || die "source directory does not exist: $SOURCE_DIR"
   [ -f "$SOURCE_DIR/Dockerfile" ] || die "repository Dockerfile is missing"
 fi
 [ -x "$BLUE_GREEN_SCRIPT" ] || die "blue-green script is missing or not executable"
-[ -x "$DRAIN_MONITOR_SCRIPT" ] || die "drain monitor is missing or not executable: $DRAIN_MONITOR_SCRIPT"
-require_image_route_verifier \
-  || die "image route contract verifier is missing or unsafe: $IMAGE_ROUTE_CONTRACT_VERIFIER"
+if [ "$RECOVER_RETAINED_CADDY_EXPOSURE" != true ]; then
+  [ -x "$DRAIN_MONITOR_SCRIPT" ] || die "drain monitor is missing or not executable: $DRAIN_MONITOR_SCRIPT"
+  require_image_route_verifier \
+    || die "image route contract verifier is missing or unsafe: $IMAGE_ROUTE_CONTRACT_VERIFIER"
+fi
 case "$IMAGE_ROUTE_API_HOST" in
   ''|*[!A-Za-z0-9.-]*|.*|*..*|*.) die "SUB2API_IMAGE_ROUTE_API_HOST must be a simple DNS name" ;;
 esac
 [ "$DUAL_NODE_RUNTIME_ENABLED" != true ] || [ -x "$NODE_STATE_SCRIPT" ] \
   || die "node state helper is missing or not executable: $NODE_STATE_SCRIPT"
+[ "$RECOVER_RETAINED_CADDY_EXPOSURE" != true ] || [ "$DUAL_NODE_RUNTIME_ENABLED" = true ] \
+  || die "guarded retained-Caddy recovery requires SUB2API_DUAL_NODE_RUNTIME_ENABLED=true"
 
 run_node_state() {
   if [ "$DUAL_NODE_RUNTIME_ENABLED" != true ]; then
@@ -402,14 +434,15 @@ require_no_unfinished_local_transaction_before_stale_target_removal() {
   fi
 }
 
-available_bytes="$(df --output=avail -B1 / | tail -1 | tr -d '[:space:]')"
-[ "$available_bytes" -ge "$MIN_FREE_BYTES" ] || die "less than 8 GiB is free on the server"
+if [ "$RECOVER_RETAINED_CADDY_EXPOSURE" != true ]; then
+  available_bytes="$(df --output=avail -B1 / | tail -1 | tr -d '[:space:]')"
+  [ "$available_bytes" -ge "$MIN_FREE_BYTES" ] || die "less than 8 GiB is free on the server"
 
-active_upstream="$(grep -oE 'sub2api(-(blue|green))?:8080' "${APP_DIR}/Caddyfile" | sort -u)"
-upstream_count="$(printf '%s\n' "$active_upstream" | sed '/^$/d' | wc -l)"
-[ "$upstream_count" -eq 1 ] || die "Caddy upstream is ambiguous: $active_upstream"
+  active_upstream="$(grep -oE 'sub2api(-(blue|green))?:8080' "${APP_DIR}/Caddyfile" | sort -u)"
+  upstream_count="$(printf '%s\n' "$active_upstream" | sed '/^$/d' | wc -l)"
+  [ "$upstream_count" -eq 1 ] || die "Caddy upstream is ambiguous: $active_upstream"
 
-OLD_CONTAINER="${active_upstream%:8080}"
+  OLD_CONTAINER="${active_upstream%:8080}"
 # Three names remain available so a deliberately approved long-lived drain can
 # be retained. By default, however, a release refuses to start while any
 # inactive application container is still running: every application container
@@ -459,8 +492,9 @@ OLD_RUNNING="$(docker inspect "$OLD_CONTAINER" --format '{{.State.Running}}' 2>/
 OLD_HEALTH="$(docker inspect "$OLD_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)"
 [ "$OLD_RUNNING" = "true" ] || die "active container is not running: $OLD_CONTAINER"
 [ "$OLD_HEALTH" = "healthy" ] || die "active container is not healthy: $OLD_CONTAINER ($OLD_HEALTH)"
-if ! verify_image_route_contract_views; then
-  die "current Caddy image route contract is invalid; refusing to start a release"
+  if ! verify_image_route_contract_views; then
+    die "current Caddy image route contract is invalid; refusing to start a release"
+  fi
 fi
 
 caddy_config_points_uniquely_to_upstream() {
@@ -649,6 +683,17 @@ wait_for_candidate_requests_to_drain() {
 restore_runtime_traffic_after_failed_refund_rollback_gate() {
   local prior_state="$1"
 
+  # A retained wrapper-owned transaction means a live Caddy reload was
+  # attempted, even when every current Caddy view has since returned to old.
+  # Do not re-admit the old generation on a blocked/unreachable readiness
+  # probe: the candidate may have persisted a reviewed refund reservation
+  # during that exposure. Candidate-only views retain the existing behavior,
+  # because the fenced candidate remains the only verified serving generation.
+  if [ "$RETAINED_CADDY_EXPOSURE_RECOVERY" = true ] \
+    && ! caddy_views_point_uniquely_to_upstream "$NEW_UPSTREAM"; then
+    log "Refund rollback gate retained a possible candidate exposure and Caddy no longer conclusively points only at ${NEW_UPSTREAM}; leaving traffic admission draining for canonical recovery" >&2
+    return 0
+  fi
   if write_runtime_traffic_state "$prior_state"; then
     log "Refund rollback gate left Caddy on ${NEW_CONTAINER}; restored traffic admission to ${prior_state} while retaining the local release transaction"
     return 0
@@ -697,6 +742,167 @@ gate_post_switch_rollback_on_refund_readiness() {
   fi
   ROLLBACK_GATE_PRIOR_TRAFFIC_STATE="$prior_traffic_state"
   log "Refund rollback readiness passed for ${NEW_CONTAINER}; continuing with the old-generation takeover"
+  return 0
+}
+
+retained_transaction_value() {
+  local transaction_file="$1"
+  local key="$2"
+
+  awk -F= -v key="$key" '
+    $1 == key { count += 1; value = substr($0, length(key) + 2) }
+    END {
+      if (count != 1 || value == "") exit 1
+      print value
+    }
+  ' "$transaction_file"
+}
+
+retained_transaction_file_is_safe() {
+  local transaction_file="$1"
+  local label="$2"
+  local metadata expected_uid
+
+  [ -f "$transaction_file" ] && [ ! -L "$transaction_file" ] || {
+    log "ERROR: ${label} is missing or unsafe: ${transaction_file}" >&2
+    return 1
+  }
+  expected_uid="$(id -u)" || return 1
+  metadata="$(stat -c '%u:%a' "$transaction_file" 2>/dev/null \
+    || stat -f '%u:%Lp' "$transaction_file")" || return 1
+  [ "$metadata" = "${expected_uid}:600" ] || {
+    log "ERROR: ${label} has unsafe metadata: ${metadata}" >&2
+    return 1
+  }
+}
+
+require_retained_container_name() {
+  case "$2" in
+    sub2api|sub2api-blue|sub2api-green) ;;
+    *)
+      log "ERROR: ${1} is not a supported application container" >&2
+      return 1
+      ;;
+  esac
+}
+
+load_retained_caddy_switch_identity() {
+  retained_transaction_file_is_safe "$CADDY_SWITCH_TRANSACTION_PATH" \
+    "retained blue-green Caddy transaction" || return 1
+  RETAINED_CADDY_RECOVERY_OWNER="$(retained_transaction_value "$CADDY_SWITCH_TRANSACTION_PATH" RECOVERY_OWNER)" \
+    || return 1
+  RETAINED_CADDY_LIVE_RELOAD_ATTEMPTED="$(retained_transaction_value "$CADDY_SWITCH_TRANSACTION_PATH" LIVE_RELOAD_ATTEMPTED)" \
+    || return 1
+  RETAINED_CADDY_UPSTREAM_FROM="$(retained_transaction_value "$CADDY_SWITCH_TRANSACTION_PATH" UPSTREAM_FROM)" \
+    || return 1
+  RETAINED_CADDY_UPSTREAM_TO="$(retained_transaction_value "$CADDY_SWITCH_TRANSACTION_PATH" UPSTREAM_TO)" \
+    || return 1
+  [ "$RETAINED_CADDY_RECOVERY_OWNER" = server-wrapper ] \
+    && [ "$RETAINED_CADDY_LIVE_RELOAD_ATTEMPTED" = true ] \
+    || return 1
+  case "$RETAINED_CADDY_UPSTREAM_FROM:$RETAINED_CADDY_UPSTREAM_TO" in
+    sub2api:8080:sub2api-green:8080|sub2api:8080:sub2api-blue:8080|\
+    sub2api-green:8080:sub2api:8080|sub2api-green:8080:sub2api-blue:8080|\
+    sub2api-blue:8080:sub2api:8080|sub2api-blue:8080:sub2api-green:8080) ;;
+    *) return 1 ;;
+  esac
+}
+
+load_retained_local_release_identity() {
+  retained_transaction_file_is_safe "$LOCAL_RELEASE_STATE_FILE_HOST" \
+    "retained local release transaction" || return 1
+  RETAINED_LOCAL_STATE="$(retained_transaction_value "$LOCAL_RELEASE_STATE_FILE_HOST" state)" \
+    || return 1
+  RETAINED_LOCAL_PREVIOUS="$(retained_transaction_value "$LOCAL_RELEASE_STATE_FILE_HOST" previous)" \
+    || return 1
+  RETAINED_LOCAL_CANDIDATE="$(retained_transaction_value "$LOCAL_RELEASE_STATE_FILE_HOST" candidate)" \
+    || return 1
+  [ "$RETAINED_LOCAL_STATE" = local-switching ] || return 1
+  require_retained_container_name previous "$RETAINED_LOCAL_PREVIOUS" || return 1
+  require_retained_container_name candidate "$RETAINED_LOCAL_CANDIDATE" || return 1
+  [ "$RETAINED_LOCAL_PREVIOUS" != "$RETAINED_LOCAL_CANDIDATE" ] || return 1
+}
+
+retained_caddy_switch_matches_current_release() {
+  load_retained_caddy_switch_identity || return 1
+  [ "$RETAINED_CADDY_UPSTREAM_FROM" = "$OLD_UPSTREAM" ] \
+    && [ "$RETAINED_CADDY_UPSTREAM_TO" = "$NEW_UPSTREAM" ]
+}
+
+load_retained_caddy_exposure_for_recovery() {
+  load_retained_caddy_switch_identity || return 1
+  load_retained_local_release_identity || return 1
+  [ "$RETAINED_CADDY_UPSTREAM_FROM" = "${RETAINED_LOCAL_PREVIOUS}:8080" ] \
+    && [ "$RETAINED_CADDY_UPSTREAM_TO" = "${RETAINED_LOCAL_CANDIDATE}:8080" ] \
+    || return 1
+  OLD_CONTAINER="$RETAINED_LOCAL_PREVIOUS"
+  NEW_CONTAINER="$RETAINED_LOCAL_CANDIDATE"
+  OLD_UPSTREAM="$RETAINED_CADDY_UPSTREAM_FROM"
+  NEW_UPSTREAM="$RETAINED_CADDY_UPSTREAM_TO"
+  OLD_IMAGE=""
+}
+
+cleanup_retained_caddy_candidate() {
+  if ! docker inspect "$NEW_CONTAINER" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! caddy_views_point_uniquely_to_old; then
+    log "ERROR: retained recovery restored admission state but Caddy does not conclusively point at ${OLD_UPSTREAM}; retaining ${NEW_CONTAINER}" >&2
+    return 1
+  fi
+  log "Removing retained candidate ${NEW_CONTAINER} after guarded Caddy restoration"
+  docker rm -f "$NEW_CONTAINER" >>"${LOG_DIR}/retained-candidate-cleanup.log" 2>&1
+}
+
+recover_retained_caddy_exposure() {
+  local recovery_log="${LOG_DIR}/retained-caddy-recovery.log"
+
+  RETAINED_CADDY_EXPOSURE_RECOVERY=true
+  log "Retained Caddy transaction matches ${OLD_UPSTREAM} -> ${NEW_UPSTREAM}; draining and checking refund rollback readiness before any old-generation restoration"
+  if ! gate_post_switch_rollback_on_refund_readiness; then
+    RETAINED_CADDY_EXPOSURE_RECOVERY=false
+    log "ERROR: guarded Caddy recovery is blocked by candidate refund readiness; retaining Caddy transaction, ${NEW_CONTAINER}, and the local release transaction" >&2
+    return 1
+  fi
+  if ! run_blue_green \
+    SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY=true \
+    SUB2API_CADDY_SWITCH_RECOVERY_ACTION=restore-after-refund-gate \
+    OLD_CONTAINER="$OLD_CONTAINER" \
+    NEW_CONTAINER="$NEW_CONTAINER" \
+    NEW_IMAGE='' \
+    CADDY_UPSTREAM_FROM="$OLD_UPSTREAM" \
+    CADDY_UPSTREAM_TO="$NEW_UPSTREAM" \
+    PULL_IMAGE=false \
+    RUN_BACKUP=false \
+    PRECREATE_ONLY=false \
+    REMOVE_EXISTING_NEW_CONTAINER=false \
+    SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
+    bash "$BLUE_GREEN_SCRIPT" >"$recovery_log" 2>&1; then
+    tail -120 "$recovery_log" >&2 || true
+    restore_runtime_traffic_after_post_gate_rollback_failure \
+      "guarded Caddy restoration helper failed" || true
+    RETAINED_CADDY_EXPOSURE_RECOVERY=false
+    log "ERROR: guarded Caddy restoration failed; transaction and target remain for canonical recovery" >&2
+    return 1
+  fi
+  if ! caddy_views_point_uniquely_to_old; then
+    RETAINED_CADDY_EXPOSURE_RECOVERY=false
+    log "ERROR: guarded Caddy restoration returned but Caddy does not conclusively point at ${OLD_UPSTREAM}; leaving traffic admission draining" >&2
+    return 1
+  fi
+  if [ -e "$CADDY_SWITCH_TRANSACTION_PATH" ] || [ -L "$CADDY_SWITCH_TRANSACTION_PATH" ]; then
+    RETAINED_CADDY_EXPOSURE_RECOVERY=false
+    log "ERROR: guarded Caddy restoration did not clear its transaction; leaving traffic admission draining" >&2
+    return 1
+  fi
+  if ! run_node_state abort-local >>"${LOG_DIR}/node-state.log" 2>&1; then
+    RETAINED_CADDY_EXPOSURE_RECOVERY=false
+    log "ERROR: Caddy was restored but node runtime state could not be finalized; runtime guard recover-local is the only remaining canonical finalization path" >&2
+    return 1
+  fi
+  RETAINED_CADDY_EXPOSURE_RECOVERY=false
+  cleanup_retained_caddy_candidate || return 1
+  log "Guarded retained-Caddy recovery completed"
   return 0
 }
 
@@ -755,6 +961,16 @@ remove_stopped_external_inactive_target() {
   docker rm "$NEW_CONTAINER" >>"${LOG_DIR}/stale-target-cleanup.log" 2>&1 \
     || die "could not remove stale stopped inactive target ${NEW_CONTAINER}"
 }
+
+if [ "$RECOVER_RETAINED_CADDY_EXPOSURE" = true ]; then
+  load_retained_caddy_exposure_for_recovery \
+    || die "retained Caddy/local transactions are invalid or do not describe the same old/candidate pair"
+  if ! recover_retained_caddy_exposure; then
+    die "guarded retained-Caddy recovery did not complete"
+  fi
+  log "Retained Caddy exposure recovered: old=${OLD_CONTAINER} candidate=${NEW_CONTAINER}"
+  exit 0
+fi
 
 run_node_state bootstrap >>"${LOG_DIR}/node-state.log" \
   || die "could not bootstrap node runtime state"
@@ -916,10 +1132,19 @@ if ! run_blue_green \
   CADDY_UPSTREAM_TO="$NEW_UPSTREAM" \
   PULL_IMAGE=false \
   RUN_BACKUP="$SWITCH_RUN_BACKUP" \
+  SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY=true \
   SUB2API_DUAL_NODE_RUNTIME_ENABLED="$DUAL_NODE_RUNTIME_ENABLED" \
   bash "$BLUE_GREEN_SCRIPT" >"$SWITCH_LOG" 2>&1; then
   tail -120 "$SWITCH_LOG" >&2 || true
-  if caddy_views_point_uniquely_to_old; then
+  if [ -e "$CADDY_SWITCH_TRANSACTION_PATH" ] || [ -L "$CADDY_SWITCH_TRANSACTION_PATH" ]; then
+    if retained_caddy_switch_matches_current_release; then
+      if ! recover_retained_caddy_exposure; then
+        log "ERROR: retained Caddy exposure recovery did not complete; do not abort local state or remove ${NEW_CONTAINER}" >&2
+      fi
+    else
+      log "ERROR: helper left an invalid, legacy, or mismatched Caddy transaction; retaining ${NEW_CONTAINER} and local release state for canonical recovery" >&2
+    fi
+  elif caddy_views_point_uniquely_to_old; then
     log "Blue-green release failed before the Caddy switch; aborting local node state without rollback"
     if run_node_state abort-local >>"${LOG_DIR}/node-state.log" 2>&1; then
       cleanup_failed_inactive_target

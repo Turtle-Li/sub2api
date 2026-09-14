@@ -1021,10 +1021,11 @@ func ProvideBalanceNotifyService(emailService *EmailService, settingRepo Setting
 }
 
 // ProvidePaymentService creates PaymentService and attaches notification email delivery.
-func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService, notificationEmailService *NotificationEmailService, authCacheInvalidator APIKeyAuthCacheInvalidator, unifiedGateway *unifiedpay.Gateway, unifiedInbox UnifiedWebhookInboxStore) *PaymentService {
+func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService, notificationEmailService *NotificationEmailService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService, unifiedGateway *unifiedpay.Gateway, unifiedInbox UnifiedWebhookInboxStore) *PaymentService {
 	svc := NewPaymentService(entClient, registry, loadBalancer, redeemService, subscriptionSvc, configService, userRepo, groupRepo, affiliateService)
 	svc.SetNotificationEmailService(notificationEmailService)
 	svc.SetAuthCacheInvalidator(authCacheInvalidator)
+	svc.SetBalanceAuthorizationCacheInvalidator(billingCacheService)
 	svc.SetUnifiedPayment(unifiedGateway, unifiedInbox)
 	return svc
 }

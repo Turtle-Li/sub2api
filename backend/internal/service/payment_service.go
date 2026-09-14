@@ -209,26 +209,34 @@ type TopUsersByCurrency map[string][]TopUserStat
 
 // --- Service ---
 
+// BalanceAuthorizationCacheInvalidator is the narrow payment-refund boundary
+// for a wallet authorization cache. It deliberately does not expose ordinary
+// cache reads or writes to PaymentService.
+type BalanceAuthorizationCacheInvalidator interface {
+	EnsureBalanceAuthorizationCacheInvalidated(context.Context, int64) error
+}
+
 type PaymentService struct {
-	providerMu               sync.Mutex
-	providersLoaded          bool
-	entClient                *dbent.Client
-	registry                 *payment.Registry
-	loadBalancer             payment.LoadBalancer
-	redeemService            *RedeemService
-	subscriptionSvc          *SubscriptionService
-	configService            *PaymentConfigService
-	userRepo                 UserRepository
-	groupRepo                GroupRepository
-	resumeService            *PaymentResumeService
-	affiliateService         *AffiliateService
-	notificationEmailService *NotificationEmailService
-	authCacheInvalidator     APIKeyAuthCacheInvalidator
-	unifiedPayment           *unifiedpay.Gateway
-	unifiedWebhookInbox      UnifiedWebhookInboxStore
-	invoiceFeishuSender      FeishuPaymentTextSender
-	resetCardNow             func() time.Time
-	refundReviewNow          func() time.Time
+	providerMu                sync.Mutex
+	providersLoaded           bool
+	entClient                 *dbent.Client
+	registry                  *payment.Registry
+	loadBalancer              payment.LoadBalancer
+	redeemService             *RedeemService
+	subscriptionSvc           *SubscriptionService
+	configService             *PaymentConfigService
+	userRepo                  UserRepository
+	groupRepo                 GroupRepository
+	resumeService             *PaymentResumeService
+	affiliateService          *AffiliateService
+	notificationEmailService  *NotificationEmailService
+	authCacheInvalidator      APIKeyAuthCacheInvalidator
+	balanceAuthorizationCache BalanceAuthorizationCacheInvalidator
+	unifiedPayment            *unifiedpay.Gateway
+	unifiedWebhookInbox       UnifiedWebhookInboxStore
+	invoiceFeishuSender       FeishuPaymentTextSender
+	resetCardNow              func() time.Time
+	refundReviewNow           func() time.Time
 }
 
 func (s *PaymentService) resetCardCurrentTime() time.Time {
@@ -266,6 +274,16 @@ func (s *PaymentService) SetInvoiceFeishuSender(sender FeishuPaymentTextSender) 
 // transaction; this hook makes the new value visible without waiting for TTL.
 func (s *PaymentService) SetAuthCacheInvalidator(invalidator APIKeyAuthCacheInvalidator) {
 	s.authCacheInvalidator = invalidator
+}
+
+// SetBalanceAuthorizationCacheInvalidator wires the strict shared balance
+// generation fence used by reviewed wallet refunds without widening the
+// constructor used throughout legacy tests and integrations.
+func (s *PaymentService) SetBalanceAuthorizationCacheInvalidator(invalidator BalanceAuthorizationCacheInvalidator) {
+	if s == nil {
+		return
+	}
+	s.balanceAuthorizationCache = invalidator
 }
 
 // SetUnifiedPayment wires the optional pay-v1 adapter and its durable Webhook

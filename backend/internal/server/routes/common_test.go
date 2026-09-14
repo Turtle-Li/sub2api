@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -123,4 +124,43 @@ func TestPublicHealthRemainsBackwardCompatible(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health", nil))
 	require.Equal(t, http.StatusOK, response.Code)
 	require.JSONEq(t, `{"status":"ok"}`, response.Body.String())
+}
+
+func (health *fakeInternalHealth) CompareAndSetReviewedRefunds(context.Context, string, bool) (bool, error) {
+	health.rollbackCalls++
+	return health.ready, health.rollbackErr
+}
+
+func TestReviewedRefundRolloutRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, token string
+		ready             bool
+		err               error
+		code, calls       int
+	}{
+		{name: "unauthorized", body: `{"expected":"","enabled":true}`, code: 401},
+		{name: "missing expected", body: `{"enabled":true}`, token: "monitor-token", code: 400},
+		{name: "missing enabled", body: `{"expected":""}`, token: "monitor-token", code: 400},
+		{name: "arbitrary setting", body: `{"expected":"","enabled":true,"key":"anything"}`, token: "monitor-token", code: 400},
+		{name: "invalid transition", body: `{"expected":"true","enabled":true}`, token: "monitor-token", code: 400},
+		{name: "trailing json", body: `{"expected":"","enabled":true}{}`, token: "monitor-token", code: 400},
+		{name: "enable", body: `{"expected":"","enabled":true}`, token: "monitor-token", ready: true, code: 200, calls: 1},
+		{name: "disable", body: `{"expected":"true","enabled":false}`, token: "monitor-token", ready: true, code: 200, calls: 1},
+		{name: "stale", body: `{"expected":"false","enabled":true}`, token: "monitor-token", code: 409, calls: 1},
+		{name: "unsafe", body: `{"expected":"false","enabled":true}`, token: "monitor-token", err: errors.New("secret db detail"), code: 503, calls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			health := &fakeInternalHealth{authorized: true, ready: tc.ready, rollbackErr: tc.err}
+			router := gin.New()
+			RegisterCommonRoutes(router, health)
+			request := httptest.NewRequest(http.MethodPost, "/internal/reviewed-refunds-rollout", strings.NewReader(tc.body))
+			request.Header.Set("X-Monitor-Token", tc.token)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			require.Equal(t, tc.code, response.Code)
+			require.Equal(t, tc.calls, health.rollbackCalls)
+			require.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+			require.NotContains(t, response.Body.String(), "secret db detail")
+		})
+	}
 }

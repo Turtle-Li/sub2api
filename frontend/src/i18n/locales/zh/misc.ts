@@ -689,6 +689,8 @@ export default {
       REFUND_QUOTE_STALE: '退款审核已变化，请刷新报价后再提交',
       REFUND_REQUIRES_MANUAL_REVIEW: '该订单需要人工退款审核',
       REFUND_REVIEW_UNAVAILABLE: '退款审核暂时不可用，请稍后重试',
+      REVIEWED_REFUNDS_DISABLED: '系统计算退款暂时停用，请稍后重试',
+      REFUND_ADMISSION_DRAINING: '服务更新期间退款处理暂时停用，请稍后重试',
       REFUND_UNAVAILABLE: '该订单当前无法退款',
       PAID_BALANCE_CONSUMED: '实付余额已被使用',
       SUBSCRIPTION_FULLY_USED: '订阅期限已无可退款的剩余时长',

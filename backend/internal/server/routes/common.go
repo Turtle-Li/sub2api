@@ -2,6 +2,8 @@ package routes
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -89,6 +91,48 @@ func RegisterCommonRoutes(r *gin.Engine, internalHealth InternalHealth) {
 			return
 		}
 		c.JSON(http.StatusOK, result)
+	})
+
+	// Only the root-owned host helper should invoke this monitor-authenticated
+	// endpoint after proving topology. Never accept arbitrary setting keys/values.
+	r.POST("/internal/reviewed-refunds-rollout", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		if internalHealth == nil || !internalHealth.Authorized(c.GetHeader("X-Monitor-Token")) {
+			c.JSON(http.StatusUnauthorized, gin.H{"changed": false})
+			return
+		}
+		var request struct {
+			Expected *string `json:"expected"`
+			Enabled  *bool   `json:"enabled"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 1024))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Expected == nil || request.Enabled == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"changed": false})
+			return
+		}
+		var extra any
+		if decoder.Decode(&extra) != io.EOF || (*request.Enabled && *request.Expected != "" && *request.Expected != "false") || (!*request.Enabled && *request.Expected != "true") {
+			c.JSON(http.StatusBadRequest, gin.H{"changed": false})
+			return
+		}
+		rollout, ok := internalHealth.(interface {
+			CompareAndSetReviewedRefunds(context.Context, string, bool) (bool, error)
+		})
+		if !ok {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"changed": false})
+			return
+		}
+		changed, err := rollout.CompareAndSetReviewedRefunds(c.Request.Context(), *request.Expected, *request.Enabled)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"changed": false})
+			return
+		}
+		if !changed {
+			c.JSON(http.StatusConflict, gin.H{"changed": false})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"changed": true, "enabled": *request.Enabled})
 	})
 
 	// Claude Code 遥测日志（忽略，直接返回200）

@@ -250,6 +250,7 @@ case "$command_name" in
           adapt) printf '{}\n' ;;
           reload)
             cp "$FAKE_CADDY_CANDIDATE_FILE" "$FAKE_CADDY_ACTIVE_FILE"
+            [ "${FAKE_CADDY_RELOAD_FAIL_AFTER_APPLY:-false}" != true ] || exit 74
             exit 0
             ;;
           *) exit 69 ;;
@@ -410,6 +411,7 @@ run_helper() {
     TEST_ROOT_MOCK="$TEST_ROOT" \
     FAKE_DOCKER_FAIL_CREATE="${FAKE_DOCKER_FAIL_CREATE:-false}" \
     FAKE_DOCKER_CADDY_FLOW="${FAKE_DOCKER_CADDY_FLOW:-false}" \
+    FAKE_CADDY_RELOAD_FAIL_AFTER_APPLY="${FAKE_CADDY_RELOAD_FAIL_AFTER_APPLY:-false}" \
     FAKE_CADDY_STARTUP_FILE="$CADDY_STARTUP_FILE" \
     FAKE_CADDY_ACTIVE_FILE="$CADDY_ACTIVE_FILE" \
     FAKE_CADDY_CANDIDATE_FILE="$CADDY_CANDIDATE_FILE" \
@@ -441,6 +443,8 @@ run_helper() {
     SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
     SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="${PRESERVE_SOURCE_CONTAINER:-}" \
     SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY="${ROUTE_CONTRACT_WARN_ONLY:-false}" \
+    SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY="${SERVER_WRAPPER_OWNS_CADDY_RECOVERY:-false}" \
+    SUB2API_CADDY_SWITCH_RECOVERY_ACTION="${CADDY_SWITCH_RECOVERY_ACTION:-normal}" \
     ALLOW_ISOLATED_OLD_CONTAINER="${ALLOW_ISOLATED_OLD_CONTAINER:-false}" \
     REMOVE_EXISTING_NEW_CONTAINER="${REMOVE_EXISTING_NEW_CONTAINER:-true}" \
     RUN_BACKUP=false \
@@ -1165,6 +1169,46 @@ cat >"$ROUTE_VERIFIER" <<'EOF'
 cat >/dev/null
 EOF
 chmod +x "$ROUTE_VERIFIER"
+
+# Caddy can apply a reload before returning a failure. A helper launched by the
+# server coordinator must mark that durable boundary before the call, retain
+# the transaction on failure, and refuse a later generic helper invocation.
+# Only the coordinator's explicit post-readiness action can restore old Caddy.
+rm -rf "$(state_path sub2api-green)"
+printf 'reverse_proxy sub2api:8080\n' >"$APP_DIR/Caddyfile"
+printf 'reverse_proxy sub2api:8080\n' >"$CADDY_STARTUP_FILE"
+printf 'reverse_proxy sub2api:8080\n' >"$CADDY_ACTIVE_FILE"
+rm -f "$APP_DIR/.sub2api-blue-green-caddy-transaction.env"
+: >"$CALLS"
+if FAKE_DOCKER_CADDY_FLOW=true FAKE_CADDY_RELOAD_FAIL_AFTER_APPLY=true \
+  SERVER_WRAPPER_OWNS_CADDY_RECOVERY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'ambiguous live Caddy reload failure was accepted'
+fi
+assert_contains "$OUTPUT" 'retained Caddy upstream switch after a live reload attempt'
+assert_contains "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" 'RECOVERY_OWNER=server-wrapper'
+assert_contains "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" 'LIVE_RELOAD_ATTEMPTED=true'
+assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api-green:8080'
+assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api-green:8080'
+assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api-green:8080'
+if FAKE_DOCKER_CADDY_FLOW=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'generic helper recovered a wrapper-owned exposed Caddy transaction'
+fi
+assert_contains "$OUTPUT" 'may have exposed the candidate'
+[ -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
+  || fail 'generic helper discarded the retained exposure transaction'
+assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api-green:8080'
+if ! FAKE_DOCKER_CADDY_FLOW=true SERVER_WRAPPER_OWNS_CADDY_RECOVERY=true \
+  CADDY_SWITCH_RECOVERY_ACTION=restore-after-refund-gate \
+  REMOVE_EXISTING_NEW_CONTAINER=false run_helper >"$OUTPUT" 2>&1; then
+  sed -n '1,200p' "$OUTPUT" >&2
+  fail 'coordinator-gated Caddy restoration was rejected'
+fi
+assert_contains "$OUTPUT" 'guarded Caddy upstream restoration completed'
+assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
+assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
+[ ! -e "$APP_DIR/.sub2api-blue-green-caddy-transaction.env" ] \
+  || fail 'guarded Caddy restoration retained its completed transaction'
 
 # Warning-only route evidence is reserved for rollback/recovery. An ambient
 # flag on an ordinary release must fail before Docker or Caddy is touched.

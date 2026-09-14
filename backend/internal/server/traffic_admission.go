@@ -13,7 +13,7 @@ import (
 // before a database denomination change. Health probes remain reachable.
 func (s *HealthService) TrafficAdmission() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if s == nil || c.Request.URL.Path == "/health" || c.Request.URL.Path == "/internal/livez" || c.Request.URL.Path == "/internal/readyz" || c.Request.URL.Path == "/internal/refund-rollback-readiness" {
+		if s == nil || c.Request.URL.Path == "/health" || c.Request.URL.Path == "/internal/livez" || c.Request.URL.Path == "/internal/readyz" || c.Request.URL.Path == "/internal/refund-rollback-readiness" || c.Request.URL.Path == "/internal/reviewed-refunds-rollout" {
 			c.Next()
 			return
 		}

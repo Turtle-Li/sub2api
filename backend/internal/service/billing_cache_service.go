@@ -33,6 +33,13 @@ var errBillingCacheUnavailable = fmt.Errorf("billing cache unavailable")
 // returned; they must not send the provider request.
 var ErrSubscriptionCacheInvalidationUnavailable = errors.New("subscription authorization cache invalidation unavailable")
 
+// ErrBalanceCacheInvalidationUnavailable is distinct from a normal balance
+// cache miss. A reviewed balance refund has already frozen entitlement before
+// this error can be returned, so callers must retain its pending attempt and
+// not ask the payment provider to move money until the shared generation fence
+// has advanced.
+var ErrBalanceCacheInvalidationUnavailable = errors.New("balance authorization cache invalidation unavailable")
+
 var (
 	ErrSubscriptionInvalid       = infraerrors.Forbidden("SUBSCRIPTION_INVALID", "subscription is invalid or expired")
 	ErrBillingServiceUnavailable = infraerrors.ServiceUnavailable("BILLING_SERVICE_ERROR", "Billing service temporarily unavailable. Please retry later.")
@@ -92,12 +99,14 @@ const (
 
 // cacheWriteTask 缓存写入任务
 type cacheWriteTask struct {
-	kind     cacheWriteKind
-	userID   int64
-	groupID  int64
-	apiKeyID int64
-	balance  float64
-	amount   float64
+	kind          cacheWriteKind
+	userID        int64
+	groupID       int64
+	apiKeyID      int64
+	balance       float64
+	balanceFence  string
+	balanceFenced bool
+	amount        float64
 }
 
 // apiKeyRateLimitLoader defines the interface for loading rate limit data from DB.
@@ -120,6 +129,17 @@ type subscriptionCacheFenceStore interface {
 	CaptureSubscriptionCacheFence(ctx context.Context, userID, groupID int64) (int64, error)
 	SubscriptionCacheFenceCurrent(ctx context.Context, userID, groupID, fence int64) (bool, error)
 	SetSubscriptionCacheIfFence(ctx context.Context, userID, groupID int64, data *SubscriptionCacheData, fence int64) (bool, error)
+}
+
+// balanceCacheFenceStore is an optional extension of the long-lived
+// BillingCache port. It makes an asynchronous balance refill conditional on
+// the generation observed before the DB read. Adapters without this capability
+// remain DB-only for balance misses rather than using a bare SetUserBalance
+// that could restore stale authorization after a reviewed refund reservation.
+type balanceCacheFenceStore interface {
+	CaptureBalanceCacheFence(ctx context.Context, userID int64) (string, error)
+	SetUserBalanceIfFence(ctx context.Context, userID int64, balance float64, fence string) (bool, error)
+	InvalidateUserBalanceWithFence(ctx context.Context, userID int64) error
 }
 
 // BillingCacheService 计费缓存服务
@@ -241,7 +261,7 @@ func (s *BillingCacheService) cacheWriteWorker(ch <-chan cacheWriteTask) {
 		ctx, cancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
 		switch task.kind {
 		case cacheWriteSetBalance:
-			s.setBalanceCache(ctx, task.userID, task.balance)
+			s.setBalanceCache(ctx, task.userID, task.balance, task.balanceFence, task.balanceFenced)
 		case cacheWriteUpdateSubscriptionUsage:
 			if s.cache != nil {
 				if err := s.cache.UpdateSubscriptionUsage(ctx, task.userID, task.groupID, task.amount); err != nil {
@@ -343,17 +363,29 @@ func (s *BillingCacheService) GetUserBalance(ctx context.Context, userID int64) 
 		loadCtx, cancel := context.WithTimeout(context.Background(), balanceLoadTimeout)
 		defer cancel()
 
+		fence, fenced, fenceErr := s.CaptureBalanceCacheFence(loadCtx, userID)
+		if fenceErr != nil {
+			// Redis cannot prove the generation, so serving a current DB value is
+			// safe but populating a new authorization cache entry is not.
+			fenced = false
+		}
 		balance, err := s.getUserBalanceFromDB(loadCtx, userID)
 		if err != nil {
 			return nil, err
 		}
 
-		// 异步建立缓存
-		_ = s.enqueueCacheWrite(cacheWriteTask{
-			kind:    cacheWriteSetBalance,
-			userID:  userID,
-			balance: balance,
-		})
+		// A balance miss may be stale by the time its async worker runs. Only a
+		// conditional write under the captured generation is allowed; adapters
+		// that do not implement the fence intentionally remain DB-only.
+		if fenced {
+			_ = s.enqueueCacheWrite(cacheWriteTask{
+				kind:          cacheWriteSetBalance,
+				userID:        userID,
+				balance:       balance,
+				balanceFence:  fence,
+				balanceFenced: true,
+			})
+		}
 		return balance, nil
 	})
 	if err != nil {
@@ -375,13 +407,23 @@ func (s *BillingCacheService) getUserBalanceFromDB(ctx context.Context, userID i
 	return user.Balance, nil
 }
 
-// setBalanceCache 设置余额缓存
-func (s *BillingCacheService) setBalanceCache(ctx context.Context, userID int64, balance float64) {
-	if s.cache == nil {
+// setBalanceCache conditionally sets a balance cache entry. A bare write is
+// forbidden because the DB snapshot may predate a reviewed refund reservation.
+func (s *BillingCacheService) setBalanceCache(ctx context.Context, userID int64, balance float64, fence string, fenced bool) {
+	if s.cache == nil || !fenced {
 		return
 	}
-	if err := s.cache.SetUserBalance(ctx, userID, balance); err != nil {
+	store, ok := s.balanceCacheFenceStore()
+	if !ok {
+		return
+	}
+	wrote, err := store.SetUserBalanceIfFence(ctx, userID, balance, fence)
+	if err != nil {
 		logger.LegacyPrintf("service.billing_cache", "Warning: set balance cache failed for user %d: %v", userID, err)
+		return
+	}
+	if !wrote {
+		logger.LegacyPrintf("service.billing_cache", "Info: skipped stale balance cache refill for user %d", userID)
 	}
 }
 
@@ -420,6 +462,48 @@ func (s *BillingCacheService) InvalidateUserBalance(ctx context.Context, userID 
 	}
 	if err := s.cache.InvalidateUserBalance(ctx, userID); err != nil {
 		logger.LegacyPrintf("service.billing_cache", "Warning: invalidate balance cache failed for user %d: %v", userID, err)
+		return err
+	}
+	return nil
+}
+
+func (s *BillingCacheService) balanceCacheFenceStore() (balanceCacheFenceStore, bool) {
+	if s == nil || s.cache == nil {
+		return nil, false
+	}
+	store, ok := s.cache.(balanceCacheFenceStore)
+	return store, ok
+}
+
+// CaptureBalanceCacheFence returns the shared balance token observed before a
+// DB-backed cache fill. A missing optional adapter is safe only when callers
+// skip cache population.
+func (s *BillingCacheService) CaptureBalanceCacheFence(ctx context.Context, userID int64) (string, bool, error) {
+	store, ok := s.balanceCacheFenceStore()
+	if !ok {
+		return "", false, nil
+	}
+	fence, err := store.CaptureBalanceCacheFence(ctx, userID)
+	if err != nil {
+		return "", true, err
+	}
+	return fence, true, nil
+}
+
+// EnsureBalanceAuthorizationCacheInvalidated is the strict reviewed-refund
+// provider boundary. It succeeds only after Redis atomically advances the
+// balance generation and removes compatible and legacy entries. A caller that
+// receives an error must keep its existing reservation pending and retry
+// without sending a provider request.
+func (s *BillingCacheService) EnsureBalanceAuthorizationCacheInvalidated(ctx context.Context, userID int64) error {
+	if s == nil || s.cache == nil {
+		return ErrBalanceCacheInvalidationUnavailable
+	}
+	store, ok := s.balanceCacheFenceStore()
+	if !ok {
+		return fmt.Errorf("%w: cache does not support balance fences", ErrBalanceCacheInvalidationUnavailable)
+	}
+	if err := store.InvalidateUserBalanceWithFence(ctx, userID); err != nil {
 		return err
 	}
 	return nil

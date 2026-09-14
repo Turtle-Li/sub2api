@@ -67,3 +67,78 @@ func TestSubscriptionCacheInvalidationDeletesFencedAndLegacyKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), fence)
 }
+
+func TestBalanceCacheFenceRejectsLatePreInvalidationRefill(t *testing.T) {
+	cache, _ := newMiniRedisCache(t)
+	ctx := context.Background()
+
+	// A cache miss observed one unique token and read the old balance before a
+	// reviewed refund committed its reservation.
+	oldFence, err := cache.CaptureBalanceCacheFence(ctx, 23)
+	require.NoError(t, err)
+	require.NotEmpty(t, oldFence)
+
+	require.NoError(t, cache.InvalidateUserBalance(ctx, 23))
+	wrote, err := cache.SetUserBalanceIfFence(ctx, 23, 100, oldFence)
+	require.NoError(t, err)
+	require.False(t, wrote, "a late balance fill must not recreate pre-refund authorization")
+	_, err = cache.GetUserBalance(ctx, 23)
+	require.ErrorIs(t, err, redis.Nil)
+
+	currentFence, err := cache.CaptureBalanceCacheFence(ctx, 23)
+	require.NoError(t, err)
+	require.NotEmpty(t, currentFence)
+	require.NotEqual(t, oldFence, currentFence)
+	wrote, err = cache.SetUserBalanceIfFence(ctx, 23, 0, currentFence)
+	require.NoError(t, err)
+	require.True(t, wrote)
+	balance, err := cache.GetUserBalance(ctx, 23)
+	require.NoError(t, err)
+	require.Zero(t, balance)
+}
+
+func TestBalanceCacheInvalidationDeletesFencedAndLegacyKeys(t *testing.T) {
+	cache, _ := newMiniRedisCache(t)
+	ctx := context.Background()
+
+	require.NoError(t, cache.SetUserBalance(ctx, 29, 100))
+	require.NoError(t, cache.rdb.Set(ctx, legacyBillingBalanceKey(29), 100, time.Hour).Err())
+	balance, err := cache.GetUserBalance(ctx, 29)
+	require.NoError(t, err)
+	require.Equal(t, float64(100), balance)
+
+	require.NoError(t, cache.InvalidateUserBalance(ctx, 29))
+	_, err = cache.GetUserBalance(ctx, 29)
+	require.ErrorIs(t, err, redis.Nil)
+	_, err = cache.rdb.Get(ctx, legacyBillingBalanceKey(29)).Result()
+	require.ErrorIs(t, err, redis.Nil)
+	fence, err := cache.CaptureBalanceCacheFence(ctx, 29)
+	require.NoError(t, err)
+	require.NotEmpty(t, fence)
+	ttl, err := cache.rdb.TTL(ctx, billingBalanceFenceKey(29)).Result()
+	require.NoError(t, err)
+	require.Positive(t, ttl)
+}
+
+func TestBalanceCacheFenceExpiryCannotAdmitAnOldToken(t *testing.T) {
+	cache, _ := newMiniRedisCache(t)
+	ctx := context.Background()
+
+	oldFence, err := cache.CaptureBalanceCacheFence(ctx, 31)
+	require.NoError(t, err)
+	require.NoError(t, cache.InvalidateUserBalance(ctx, 31))
+	// Model TTL expiry explicitly. A stale reader still holds oldFence; missing
+	// must not mean generation zero or otherwise match that prior observation.
+	require.NoError(t, cache.rdb.Del(ctx, billingBalanceFenceKey(31)).Err())
+	wrote, err := cache.SetUserBalanceIfFence(ctx, 31, 100, oldFence)
+	require.NoError(t, err)
+	require.False(t, wrote)
+
+	freshFence, err := cache.CaptureBalanceCacheFence(ctx, 31)
+	require.NoError(t, err)
+	require.NotEmpty(t, freshFence)
+	require.NotEqual(t, oldFence, freshFence)
+	wrote, err = cache.SetUserBalanceIfFence(ctx, 31, 0, freshFence)
+	require.NoError(t, err)
+	require.True(t, wrote)
+}

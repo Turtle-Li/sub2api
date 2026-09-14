@@ -306,6 +306,36 @@ func (s *PaymentService) ensureReviewedSubscriptionRefundAuthorizationCaches(ctx
 	return nil
 }
 
+// ensureReviewedBalanceRefundAuthorizationCache advances the shared wallet
+// generation before a reviewed balance refund may create or query a provider
+// refund. The durable reservation already moved the entitlement into frozen
+// balance, so an unavailable fence must leave the same attempt pending for
+// reconciliation rather than moving money with a stale authorization cache.
+func (s *PaymentService) ensureReviewedBalanceRefundAuthorizationCache(ctx context.Context, userID int64) error {
+	if s == nil || s.balanceAuthorizationCache == nil || userID <= 0 {
+		return ErrBalanceCacheInvalidationUnavailable
+	}
+	return s.balanceAuthorizationCache.EnsureBalanceAuthorizationCacheInvalidated(ctx, userID)
+}
+
+// invalidateReviewedBalanceRefundAuthorizationCache synchronously tries the
+// shared fence after a reservation, capture, or release commits. It is best
+// effort because the durable state change has already committed; advance still
+// requires the strict provider boundary before it can move money. Once a
+// provider request has reached a terminal observation, that strict boundary
+// means a Redis outage here cannot retain a pre-reservation high balance; at
+// worst it leaves the post-reservation low value until a later refresh.
+func (s *PaymentService) invalidateReviewedBalanceRefundAuthorizationCache(ctx context.Context, orderID, userID int64) {
+	if s == nil || userID <= 0 {
+		return
+	}
+	cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := s.ensureReviewedBalanceRefundAuthorizationCache(cacheCtx, userID); err != nil {
+		slog.Warn("invalidate reviewed balance refund authorization cache failed", "orderID", orderID, "userID", userID, "err", err)
+	}
+}
+
 // invalidateReviewedSubscriptionRefundCaches is the best-effort terminal
 // repair path after a provider observation has been committed. The strict
 // pre-provider boundary above owns the money-moving safety decision.

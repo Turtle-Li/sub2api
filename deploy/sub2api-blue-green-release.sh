@@ -54,6 +54,12 @@ REAL_REQUEST_PROBE_MODEL="${SUB2API_RELEASE_REAL_REQUEST_PROBE_MODEL:-gpt-5.6-so
 # and exits before any Docker or Caddy lifecycle operation.  The server
 # coordinator uses it before discarding a stale stopped external target.
 VALIDATE_EXTERNAL_RUNTIME_ONLY="${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}"
+# A server-release coordinator keeps a durable local transaction alongside the
+# Caddy transaction.  Once the live reload has been attempted, only that
+# coordinator may decide whether the old generation can take back traffic: it
+# first drains request admission and checks refund rollback readiness.
+SERVER_WRAPPER_OWNS_CADDY_RECOVERY="${SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY:-false}"
+CADDY_SWITCH_RECOVERY_ACTION="${SUB2API_CADDY_SWITCH_RECOVERY_ACTION:-normal}"
 
 # An unset mode retains legacy local behavior.  An explicitly blank or unknown
 # mode is invalid rather than silently allowing local dependency use.
@@ -176,14 +182,18 @@ cleanup() {
     restore_status=1
   fi
   if [ "$CADDY_SWITCH_OWNED" = true ] && [ -e "$CADDY_SWITCH_TRANSACTION_PATH" ]; then
-    recovery_attempted=true
-    restore_caddy_switch
-    recovery_status=$?
-    if [ "$recovery_status" -eq 0 ]; then
-      log "restored interrupted Caddy upstream switch before exit"
+    if caddy_switch_requires_server_wrapper_recovery; then
+      log "retained Caddy upstream switch after a live reload attempt; server-release coordinator must run the guarded refund recovery before restoration" >&2
     else
-      restore_status="$recovery_status"
-      log "ERROR: automatic Caddy restoration failed; transaction retained at $CADDY_SWITCH_TRANSACTION_PATH" >&2
+      recovery_attempted=true
+      restore_caddy_switch
+      recovery_status=$?
+      if [ "$recovery_status" -eq 0 ]; then
+        log "restored interrupted Caddy upstream switch before exit"
+      else
+        restore_status="$recovery_status"
+        log "ERROR: automatic Caddy restoration failed; transaction retained at $CADDY_SWITCH_TRANSACTION_PATH" >&2
+      fi
     fi
   fi
   # restore_caddy_switch re-enters sync_caddy_startup_file. If that nested
@@ -1102,6 +1112,17 @@ caddy_switch_state_value() {
   ' "$CADDY_SWITCH_TRANSACTION_PATH"
 }
 
+caddy_switch_optional_state_value() {
+  local key="$1"
+  awk -F= -v key="$key" '
+    $1 == key { count += 1; value = substr($0, length(key) + 2) }
+    END {
+      if (count > 1) exit 1
+      if (count == 1) print value
+    }
+  ' "$CADDY_SWITCH_TRANSACTION_PATH"
+}
+
 load_caddy_switch_transaction() {
   local metadata expected_uid
   [ -f "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
@@ -1124,6 +1145,13 @@ load_caddy_switch_transaction() {
   switch_after_sha="$(caddy_switch_state_value AFTER_SHA)" || return 1
   switch_upstream_from="$(caddy_switch_state_value UPSTREAM_FROM)" || return 1
   switch_upstream_to="$(caddy_switch_state_value UPSTREAM_TO)" || return 1
+  # Transactions written before the coordinator-owned exposure protocol do
+  # not have these fields. They retain the historical helper-owned recovery
+  # behavior so an upgrade cannot strand a pre-existing safe transaction.
+  switch_recovery_owner="$(caddy_switch_optional_state_value RECOVERY_OWNER)" || return 1
+  switch_live_reload_attempted="$(caddy_switch_optional_state_value LIVE_RELOAD_ATTEMPTED)" || return 1
+  [ -n "$switch_recovery_owner" ] || switch_recovery_owner=helper
+  [ -n "$switch_live_reload_attempted" ] || switch_live_reload_attempted=false
 
   [ "$switch_caddyfile" = "$CADDYFILE" ] || return 1
   case "$switch_backup" in
@@ -1141,27 +1169,43 @@ load_caddy_switch_transaction() {
     && "$switch_upstream_to" =~ ^[A-Za-z0-9_.-]+:[0-9]+$ ]] || return 1
   [[ "$switch_before_sha" =~ ^[0-9a-f]{64}$ \
     && "$switch_after_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  case "$switch_recovery_owner" in
+    helper|server-wrapper) ;;
+    *) return 1 ;;
+  esac
+  case "$switch_live_reload_attempted" in
+    true|false) ;;
+    *) return 1 ;;
+  esac
   [ -f "$switch_backup" ] && [ ! -L "$switch_backup" ] \
     && [ -f "$switch_candidate" ] && [ ! -L "$switch_candidate" ] || return 1
   [ "$(file_sha "$switch_backup")" = "$switch_before_sha" \
     ] && [ "$(file_sha "$switch_candidate")" = "$switch_after_sha" ] || return 1
 }
 
-publish_caddy_switch_transaction() {
-  local temporary before_sha after_sha
-  [ ! -e "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
-    || return 1
-  before_sha="$(file_sha "$caddy_backup")" || return 1
-  after_sha="$(file_sha "$caddy_candidate")" || return 1
+persist_caddy_switch_transaction() {
+  local transaction_caddyfile="$1"
+  local transaction_backup="$2"
+  local transaction_candidate="$3"
+  local transaction_before_sha="$4"
+  local transaction_after_sha="$5"
+  local transaction_upstream_from="$6"
+  local transaction_upstream_to="$7"
+  local transaction_recovery_owner="$8"
+  local transaction_live_reload_attempted="$9"
+  local temporary
+
   temporary="$(mktemp "${CADDY_SWITCH_TRANSACTION_PATH}.XXXXXX")" || return 1
   {
-    printf 'CADDYFILE=%s\n' "$CADDYFILE"
-    printf 'BACKUP_PATH=%s\n' "$caddy_backup"
-    printf 'CANDIDATE_PATH=%s\n' "$caddy_candidate"
-    printf 'BEFORE_SHA=%s\n' "$before_sha"
-    printf 'AFTER_SHA=%s\n' "$after_sha"
-    printf 'UPSTREAM_FROM=%s\n' "$CADDY_UPSTREAM_FROM"
-    printf 'UPSTREAM_TO=%s\n' "$CADDY_UPSTREAM_TO"
+    printf 'CADDYFILE=%s\n' "$transaction_caddyfile"
+    printf 'BACKUP_PATH=%s\n' "$transaction_backup"
+    printf 'CANDIDATE_PATH=%s\n' "$transaction_candidate"
+    printf 'BEFORE_SHA=%s\n' "$transaction_before_sha"
+    printf 'AFTER_SHA=%s\n' "$transaction_after_sha"
+    printf 'UPSTREAM_FROM=%s\n' "$transaction_upstream_from"
+    printf 'UPSTREAM_TO=%s\n' "$transaction_upstream_to"
+    printf 'RECOVERY_OWNER=%s\n' "$transaction_recovery_owner"
+    printf 'LIVE_RELOAD_ATTEMPTED=%s\n' "$transaction_live_reload_attempted"
   } >"$temporary"
   chmod 0600 "$temporary" || {
     rm -f -- "$temporary"
@@ -1171,8 +1215,40 @@ publish_caddy_switch_transaction() {
     rm -f -- "$temporary"
     return 1
   }
+}
+
+publish_caddy_switch_transaction() {
+  local before_sha after_sha recovery_owner
+  [ ! -e "$CADDY_SWITCH_TRANSACTION_PATH" ] && [ ! -L "$CADDY_SWITCH_TRANSACTION_PATH" ] \
+    || return 1
+  before_sha="$(file_sha "$caddy_backup")" || return 1
+  after_sha="$(file_sha "$caddy_candidate")" || return 1
+  recovery_owner=helper
+  if [ "$SERVER_WRAPPER_OWNS_CADDY_RECOVERY" = true ]; then
+    recovery_owner=server-wrapper
+  fi
+  persist_caddy_switch_transaction \
+    "$CADDYFILE" "$caddy_backup" "$caddy_candidate" \
+    "$before_sha" "$after_sha" "$CADDY_UPSTREAM_FROM" "$CADDY_UPSTREAM_TO" \
+    "$recovery_owner" false || return 1
   CADDY_SWITCH_OWNED=true
   load_caddy_switch_transaction
+}
+
+mark_caddy_switch_live_reload_attempted() {
+  load_caddy_switch_transaction || return 1
+  [ "$switch_live_reload_attempted" = false ] || return 1
+  persist_caddy_switch_transaction \
+    "$switch_caddyfile" "$switch_backup" "$switch_candidate" \
+    "$switch_before_sha" "$switch_after_sha" "$switch_upstream_from" "$switch_upstream_to" \
+    "$switch_recovery_owner" true || return 1
+  load_caddy_switch_transaction
+}
+
+caddy_switch_requires_server_wrapper_recovery() {
+  load_caddy_switch_transaction || return 1
+  [ "$switch_recovery_owner" = server-wrapper ] \
+    && [ "$switch_live_reload_attempted" = true ]
 }
 
 commit_caddy_switch_transaction() {
@@ -1212,7 +1288,9 @@ restore_caddy_switch() {
   return 0
 }
 
-[ -n "$NEW_IMAGE" ] || die "set NEW_IMAGE, for example NEW_IMAGE=weishaw/sub2api:0.1.138"
+[ "$CADDY_SWITCH_RECOVERY_ACTION" = restore-after-refund-gate ] \
+  || [ -n "$NEW_IMAGE" ] \
+  || die "set NEW_IMAGE, for example NEW_IMAGE=weishaw/sub2api:0.1.138"
 case "$DEPENDENCY_MODE" in
   local|external) ;;
   *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external" ;;
@@ -1226,6 +1304,11 @@ require_bool PULL_IMAGE "$PULL_IMAGE"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
 require_bool SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED "$REAL_REQUEST_PROBE_ENABLED"
 require_bool VALIDATE_EXTERNAL_RUNTIME_ONLY "$VALIDATE_EXTERNAL_RUNTIME_ONLY"
+require_bool SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY "$SERVER_WRAPPER_OWNS_CADDY_RECOVERY"
+case "$CADDY_SWITCH_RECOVERY_ACTION" in
+  normal|restore-after-refund-gate) ;;
+  *) die "SUB2API_CADDY_SWITCH_RECOVERY_ACTION must be normal or restore-after-refund-gate" ;;
+esac
 case "$IMAGE_ROUTE_API_HOST" in
   ''|*[!A-Za-z0-9.-]*|.*|*..*|*.) die "SUB2API_IMAGE_ROUTE_API_HOST must be a simple DNS name" ;;
 esac
@@ -1266,6 +1349,38 @@ for command_name in awk chmod cp date docker grep id mktemp mv nsenter perl pyth
     realpath rm sha256sum stat; do
   require_cmd "$command_name"
 done
+if [ "$CADDY_SWITCH_RECOVERY_ACTION" = restore-after-refund-gate ]; then
+  [ "$SERVER_WRAPPER_OWNS_CADDY_RECOVERY" = true ] \
+    || die "guarded Caddy restoration requires the server-release coordinator"
+  [ "$PRECREATE_ONLY" = false ] \
+    && [ "$RUN_BACKUP" = false ] \
+    && [ "$PULL_IMAGE" = false ] \
+    && [ "$REMOVE_EXISTING_NEW_CONTAINER" = false ] \
+    || die "guarded Caddy restoration cannot create, pull, back up, or remove a target"
+  [ "$(id -u)" -eq 0 ] || die "blue-green release must run as root"
+  cd "$APP_DIR"
+  [ ! -e "$CADDY_TRANSACTION_PATH" ] && [ ! -L "$CADDY_TRANSACTION_PATH" ] \
+    && [ ! -e "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
+    && [ ! -L "$CADDY_CUSTOMER_HOST_TRANSACTION_PATH" ] \
+    || die "Caddy transactions overlap; refusing guarded restoration"
+  container_exists "$CADDY_CONTAINER" \
+    || die "cannot restore the Caddy upstream switch: container $CADDY_CONTAINER is missing"
+  [ -f "$CADDYFILE" ] && [ ! -L "$CADDYFILE" ] \
+    || die "cannot restore the Caddy upstream switch: invalid Caddyfile"
+  load_caddy_switch_transaction \
+    || die "guarded Caddy restoration found an invalid transaction"
+  [ "$switch_recovery_owner" = server-wrapper ] \
+    && [ "$switch_live_reload_attempted" = true ] \
+    || die "guarded Caddy restoration requires a wrapper-owned live-reload transaction"
+  [ "$switch_upstream_from" = "$CADDY_UPSTREAM_FROM" ] \
+    && [ "$switch_upstream_to" = "$CADDY_UPSTREAM_TO" ] \
+    || die "guarded Caddy restoration transaction does not match the requested old/new upstreams"
+  log "restoring retained Caddy upstream switch after server refund-readiness gate"
+  restore_caddy_switch \
+    || die "guarded Caddy restoration failed; transaction is retained for canonical recovery"
+  log "guarded Caddy upstream restoration completed"
+  exit 0
+fi
 if [ "$REAL_REQUEST_PROBE_ENABLED" = true ]; then
   [ -f "$REAL_REQUEST_PROBE_SCRIPT" ] && [ ! -L "$REAL_REQUEST_PROBE_SCRIPT" ] \
     || die "real request probe script is missing or is a symlink: $REAL_REQUEST_PROBE_SCRIPT"
@@ -1308,6 +1423,11 @@ cd "$APP_DIR"
     || die "cannot recover the Caddy upstream switch: container $CADDY_CONTAINER is missing"
   [ -f "$CADDYFILE" ] && [ ! -L "$CADDYFILE" ] \
     || die "cannot recover the Caddy upstream switch: invalid Caddyfile"
+  load_caddy_switch_transaction \
+    || die "retained Caddy upstream switch transaction is invalid"
+  if caddy_switch_requires_server_wrapper_recovery; then
+    die "retained Caddy upstream switch may have exposed the candidate; run sub2api-server-release.sh --recover-retained-caddy-exposure so refund readiness is checked before Caddy restoration"
+  fi
   log "recovering retained Caddy upstream switch transaction"
   if restore_caddy_switch; then
     die "recovered the interrupted Caddy upstream switch; rerun the release from a clean state"
@@ -1553,8 +1673,14 @@ else
   log "synchronizing Caddy startup file seen inside container"
   sync_caddy_startup_file \
     || die "could not synchronize Caddy startup file; automatic restoration will run"
+  # Persist this phase before invoking the live reload. Caddy can apply the
+  # configuration and still return a failing status (or the process can be
+  # interrupted immediately after the call), so a wrapper-owned transaction
+  # must retain evidence for the refund-readiness coordinator from this point.
+  mark_caddy_switch_live_reload_attempted \
+    || die "could not persist the live Caddy reload attempt; automatic restoration will run"
   docker exec "$CADDY_CONTAINER" caddy reload --config "$container_release_caddy" --adapter caddyfile \
-    || die "Caddy reload failed; automatic restoration will run"
+    || die "Caddy reload failed; recovery transaction retained"
 
   log "verifying active and startup Caddy point only at $CADDY_UPSTREAM_TO"
   caddy_active_config_contains "$CADDY_UPSTREAM_TO" \

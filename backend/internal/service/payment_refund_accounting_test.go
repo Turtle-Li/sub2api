@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
@@ -30,6 +32,16 @@ func (s *refundAuthCacheInvalidatorSpy) InvalidateAuthCacheByUserID(_ context.Co
 func (s *refundAuthCacheInvalidatorSpy) InvalidateAuthCacheByKey(context.Context, string) {}
 
 func (s *refundAuthCacheInvalidatorSpy) InvalidateAuthCacheByGroupID(context.Context, int64) {}
+
+type refundBalanceAuthorizationCacheSpy struct {
+	err     error
+	userIDs []int64
+}
+
+func (s *refundBalanceAuthorizationCacheSpy) EnsureBalanceAuthorizationCacheInvalidated(_ context.Context, userID int64) error {
+	s.userIDs = append(s.userIDs, userID)
+	return s.err
+}
 
 func TestCalculateWalletRefundQuoteSeparatesPrincipalAndGift(t *testing.T) {
 	tests := []struct {
@@ -139,6 +151,7 @@ func newReviewedBalanceRefundFixture(t *testing.T, balance, availablePaid float6
 		(payment_order_id, user_id, paid_credit_amount, gift_credit_amount, cash_paid_minor, currency)
 		VALUES ($1,$2,$3,$4,$5,$6)`, order.ID, order.UserID, "0.10", "99.90", 10, payment.DefaultPaymentCurrency)
 	require.NoError(t, err)
+	svc.SetBalanceAuthorizationCacheInvalidator(&refundBalanceAuthorizationCacheSpy{})
 	return svc, order
 }
 
@@ -200,6 +213,121 @@ func TestReviewedBalanceRefundReviewSeparatesPaidAndGift(t *testing.T) {
 	require.InDelta(t, 99.9, review.Balance.OriginalGiftCredit, 1e-9)
 	require.InDelta(t, 0.1, review.Balance.PaidCreditToReclaim, 1e-9)
 	require.InDelta(t, 99.9, review.Balance.GiftCreditToReclaim, 1e-9)
+}
+
+func TestReviewedRefundRolloutGatesFailBeforeReservationOrProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		enabled    bool
+		state      string
+		wantReason string
+	}{
+		{name: "disabled by default", enabled: false, state: runtimegate.StateActive, wantReason: "REVIEWED_REFUNDS_DISABLED"},
+		{name: "draining generation", enabled: true, state: runtimegate.StateStandby, wantReason: "REFUND_ADMISSION_DRAINING"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtimegate.SetProcessActive(true)
+			t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+			stateFile := t.TempDir() + "/background-state"
+			require.NoError(t, os.WriteFile(stateFile, []byte(tc.state+"\n"), 0o600))
+			t.Setenv(runtimegate.StateFileEnv, stateFile)
+
+			ctx := context.Background()
+			svc, order, subscription, _, originalEnd := newReviewedSubscriptionRefundFixture(t)
+			if !tc.enabled {
+				svc.configService = nil
+			}
+			review, err := svc.ReviewRefund(ctx, order.ID)
+			require.NoError(t, err)
+			plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "rollout gate test")
+			require.NoError(t, err)
+
+			providerCalls := 0
+			provider := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				providerCalls++
+			}))
+			defer provider.Close()
+			svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, provider.URL), nil)
+
+			result, err := svc.ExecuteRefund(ctx, plan)
+			require.Error(t, err)
+			require.Nil(t, result)
+			require.Equal(t, tc.wantReason, infraerrors.Reason(err))
+			require.Zero(t, providerCalls)
+
+			persistedOrder, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+			require.NoError(t, err)
+			require.Equal(t, OrderStatusCompleted, persistedOrder.Status)
+			persistedSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+			require.NoError(t, err)
+			require.True(t, persistedSubscription.ExpiresAt.Equal(originalEnd))
+			rows, err := svc.entClient.QueryContext(ctx, `SELECT COUNT(*) FROM unified_payment_refund_attempts WHERE order_id=$1`, order.ID)
+			require.NoError(t, err)
+			require.True(t, rows.Next())
+			var attempts int
+			require.NoError(t, rows.Scan(&attempts))
+			require.NoError(t, rows.Close())
+			require.Zero(t, attempts)
+		})
+	}
+}
+
+func TestReviewedRefundProviderCreateHonorsRolloutGateButKnownRemoteQueryConverges(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	t.Setenv(runtimegate.StateFileEnv, "")
+
+	ctx := context.Background()
+	svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "provider rollout gate test")
+	require.NoError(t, err)
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+
+	var methods []string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		status := unifiedpay.RefundStatusUnknown
+		if r.Method == http.MethodGet {
+			status = unifiedpay.RefundStatusSucceeded
+		}
+		writePaymentRefundReconciliationResponse(t, w, r, attempt, status, false)
+	}))
+	defer provider.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, provider.URL), nil)
+
+	enabledConfig := svc.configService
+	svc.configService = nil
+	result, err := svc.advanceUnifiedRefund(ctx, attempt)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, "REVIEWED_REFUNDS_DISABLED", infraerrors.Reason(err))
+	require.Empty(t, methods, "a disabled rollout must not create a provider refund")
+	pending, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedRefundPending, pending.Status)
+	require.Empty(t, pending.RefundRequestID)
+	require.True(t, pending.EntitlementReserved)
+
+	// Explicit activation may create the durable remote request. An UNKNOWN
+	// response persists its ID, after which disabling creation must still allow
+	// GET-only convergence for money that may already have moved.
+	svc.configService = enabledConfig
+	result, err = svc.advanceUnifiedRefund(ctx, pending)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Equal(t, []string{http.MethodPost}, methods)
+	pending, err = loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.NotEmpty(t, pending.RefundRequestID)
+
+	svc.configService = nil
+	result, err = svc.advanceUnifiedRefund(ctx, pending)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.Equal(t, []string{http.MethodPost, http.MethodGet}, methods)
 }
 
 func TestReviewedSubscriptionRefundInvalidatesAuthCacheAfterReserveAndRelease(t *testing.T) {
@@ -268,6 +396,81 @@ func TestReviewedSubscriptionRefundWaitsForAuthorizationCacheInvalidationBeforeP
 	require.NoError(t, err)
 	require.False(t, result.Success)
 	require.Equal(t, 1, providerCalls, "the same durable attempt may proceed after cache convergence")
+}
+
+func TestReviewedBalanceRefundWaitsForAuthorizationCacheInvalidationBeforeProvider(t *testing.T) {
+	ctx := context.Background()
+	svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
+	cache := &refundBalanceAuthorizationCacheSpy{}
+	svc.SetBalanceAuthorizationCacheInvalidator(cache)
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "strict balance cache boundary")
+	require.NoError(t, err)
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+	require.Equal(t, []int64{order.UserID}, cache.userIDs, "reserve should promptly invalidate the previous balance authorization")
+
+	cache.err = errors.New("redis balance fence unavailable")
+	providerCalls := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls++
+		writePaymentRefundReconciliationResponse(t, w, r, attempt, unifiedpay.RefundStatusApproved, false)
+	}))
+	defer provider.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, provider.URL), nil)
+
+	result, err := svc.advanceUnifiedRefund(ctx, attempt)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Zero(t, providerCalls, "money must not move until the balance authorization cache fence advances")
+	pending, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedRefundPending, pending.Status)
+	require.True(t, pending.EntitlementReserved)
+
+	cache.err = nil
+	result, err = svc.advanceUnifiedRefund(ctx, attempt)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Equal(t, 1, providerCalls, "the same durable attempt may retry after balance cache convergence")
+	require.Equal(t, []int64{order.UserID, order.UserID, order.UserID, order.UserID}, cache.userIDs,
+		"reserve, each provider boundary, and the persisted provider observation advance the balance fence")
+}
+
+func TestReviewedBalanceRefundInvalidatesAuthorizationAfterProviderFailure(t *testing.T) {
+	ctx := context.Background()
+	svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
+	cache := &refundBalanceAuthorizationCacheSpy{}
+	svc.SetBalanceAuthorizationCacheInvalidator(cache)
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "release balance cache boundary")
+	require.NoError(t, err)
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+
+	providerCalls := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls++
+		writePaymentRefundReconciliationResponse(t, w, r, attempt, unifiedpay.RefundStatusFailed, false)
+	}))
+	defer provider.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, provider.URL), nil)
+
+	result, err := svc.advanceUnifiedRefund(ctx, attempt)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Equal(t, 1, providerCalls)
+	pending, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedpay.RefundStatusFailed, pending.Status)
+	require.False(t, pending.EntitlementReserved)
+	_, user := loadReviewedBalanceRefundState(t, svc, order)
+	require.InDelta(t, 100, user.Balance, 1e-9)
+	require.InDelta(t, 0, user.FrozenBalance, 1e-9)
+	require.Equal(t, []int64{order.UserID, order.UserID, order.UserID}, cache.userIDs,
+		"reserve, provider boundary, and terminal release must each invalidate balance authorization")
 }
 
 func TestReviewedSubscriptionRefundRejectsElapsedReviewWindowWhenCashIsUnchanged(t *testing.T) {

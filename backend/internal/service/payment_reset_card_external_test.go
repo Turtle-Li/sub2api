@@ -536,7 +536,7 @@ func TestResetCardProviderSelectionRevalidationUsesLockedInstance(t *testing.T) 
 	t.Run("adopts the locked configuration instead of a stale safe field", func(t *testing.T) {
 		tx, txErr := client.Tx(ctx)
 		require.NoError(t, txErr)
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		locked, lockErr := service.revalidateProviderSelectionInTx(ctx, tx, req, selection)
 		require.NoError(t, lockErr)
@@ -557,7 +557,7 @@ func TestResetCardProviderSelectionRevalidationUsesLockedInstance(t *testing.T) 
 
 		tx, txErr := client.Tx(ctx)
 		require.NoError(t, txErr)
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 		_, lockErr := service.revalidateProviderSelectionInTx(ctx, tx, req, selection)
 		require.Equal(t, "RESET_CARD_PAYMENT_BINDING_CHANGED", infraerrors.Reason(lockErr))
 	})
@@ -600,7 +600,7 @@ func TestOrdinaryPaymentProviderSelectionIsRevalidatedBeforeOrderInsert(t *testi
 	}
 	tx, err := client.Tx(ctx)
 	require.NoError(t, err)
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = (&PaymentService{entClient: client, configService: configService}).revalidateProviderSelectionInTx(
 		ctx,

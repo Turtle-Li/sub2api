@@ -23,15 +23,20 @@ import (
 const (
 	SettingPaymentEnabled      = "payment_enabled"
 	SettingPaymentEntryEnabled = "payment_entry_enabled"
-	SettingMinRechargeAmount   = "MIN_RECHARGE_AMOUNT"
-	SettingMaxRechargeAmount   = "MAX_RECHARGE_AMOUNT"
-	SettingDailyRechargeLimit  = "DAILY_RECHARGE_LIMIT"
-	SettingOrderTimeoutMinutes = "ORDER_TIMEOUT_MINUTES"
-	SettingMaxPendingOrders    = "MAX_PENDING_ORDERS"
-	SettingEnabledPaymentTypes = "ENABLED_PAYMENT_TYPES"
-	SettingLoadBalanceStrategy = "LOAD_BALANCE_STRATEGY"
-	SettingBalancePayDisabled  = "BALANCE_PAYMENT_DISABLED"
-	SettingBalanceRechargeMult = "BALANCE_RECHARGE_MULTIPLIER"
+	// SettingPaymentReviewedRefundsEnabled is an operator-controlled rollout
+	// gate. It stays private and defaults to disabled so reviewed entitlement
+	// refunds cannot start until every request-serving generation understands
+	// the reservation and cache-fence contracts.
+	SettingPaymentReviewedRefundsEnabled = "PAYMENT_REVIEWED_REFUNDS_ENABLED"
+	SettingMinRechargeAmount             = "MIN_RECHARGE_AMOUNT"
+	SettingMaxRechargeAmount             = "MAX_RECHARGE_AMOUNT"
+	SettingDailyRechargeLimit            = "DAILY_RECHARGE_LIMIT"
+	SettingOrderTimeoutMinutes           = "ORDER_TIMEOUT_MINUTES"
+	SettingMaxPendingOrders              = "MAX_PENDING_ORDERS"
+	SettingEnabledPaymentTypes           = "ENABLED_PAYMENT_TYPES"
+	SettingLoadBalanceStrategy           = "LOAD_BALANCE_STRATEGY"
+	SettingBalancePayDisabled            = "BALANCE_PAYMENT_DISABLED"
+	SettingBalanceRechargeMult           = "BALANCE_RECHARGE_MULTIPLIER"
 	// SettingSubscriptionUSDToCNYRate 是订阅 CNY 换算汇率（1 USD = X CNY）。
 	// 0/未配置 = 关闭换算（订阅按 price 数值直付），显式配置后 CNY 通道订阅按 price × rate 收款。
 	SettingSubscriptionUSDToCNYRate      = "SUBSCRIPTION_USD_TO_CNY_RATE"
@@ -274,6 +279,20 @@ func (s *PaymentConfigService) IsPaymentEnabled(ctx context.Context) bool {
 		return false
 	}
 	return val == "true"
+}
+
+// IsReviewedRefundsEnabled returns the private rollout state for reviewed
+// balance and subscription refunds. Missing configuration and repository
+// failures deliberately fail closed.
+func (s *PaymentConfigService) IsReviewedRefundsEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	val, err := s.settingRepo.GetValue(ctx, SettingPaymentReviewedRefundsEnabled)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(val), "true")
 }
 
 // GetPaymentConfig returns the full payment configuration.

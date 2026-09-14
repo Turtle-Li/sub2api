@@ -95,20 +95,55 @@ canonical server release first changes the shared traffic-state file to
 `draining` in place, waits for candidate in-flight requests to reach zero, and
 calls the candidate's monitor-token-protected
 `GET /internal/refund-rollback-readiness` endpoint. Only a `2xx` response
-allows the previous generation to take over. An unavailable or non-`2xx`
-endpoint restores the prior traffic state (normally `accepting`) in the same
-bind-mounted inode, retains the candidate, Caddy direction, and durable local
-release transaction, then exits failed. Let the candidate finish automatic
-refund reconciliation, then run `sudo systemctl start sub2api-runtime-guard.service`.
-That root-owned service acquires the same maintenance lock and invokes
-`sub2api-node-state.sh recover-local` only after it has verified the
-Caddy-selected generation; do not rerun the release script,
-delete the local transaction, or make direct Caddy/container changes. If the
-readiness check succeeds but the subsequent source inspection or rollback
-helper fails, the release restores that prior state only when every Caddy view
-still points to the candidate. A completed or ambiguous Caddy transition stays
-fenced for the same recovery transaction; the release does not reopen it as
-candidate traffic.
+allows the previous generation to take over. Immediately before its live
+`caddy reload`, a server-coordinated helper atomically records
+`RECOVERY_OWNER=server-wrapper` and `LIVE_RELOAD_ATTEMPTED=true` in the
+Caddy transaction. This covers a reload that applies and still returns an
+error, or a process interruption immediately after the call. The helper then
+retains the transaction, target, and local release state instead of restoring
+Caddy itself.
+
+For that retained transaction, the wrapper matches its recorded old/candidate
+upstreams before trusting any Caddy view. It always runs the drain and
+readiness gate, including when host, startup, and Admin views already point to
+old. A non-`2xx` or unreachable response retains all evidence; old or
+ambiguous views remain `draining`, while a conclusively candidate-only view can
+return to its prior admission state. Do not run the blue-green helper directly,
+delete either transaction, or make direct Caddy/container changes. After the
+candidate has reconciled, resume only through:
+
+```bash
+sudo /opt/sub2api/scripts/sub2api-server-release.sh --recover-retained-caddy-exposure
+```
+
+That command reacquires the canonical maintenance lock, repeats the gate, then
+explicitly restores and verifies all three Caddy views to old, finalizes
+`abort-local` (which restores admission), and removes the retained target. A
+normal helper invocation refuses a wrapper-owned live-reload transaction, so it
+cannot bypass this gate. If the guarded restoration completed but the process
+ended before local finalization, leave Caddy untouched and use
+`sudo systemctl start sub2api-runtime-guard.service` to run the existing
+`recover-local` finalizer against the verified Caddy-selected generation.
+If readiness has passed but a later restoration step fails, admission is
+restored only while every Caddy view still points to the candidate; an old or
+ambiguous Caddy direction remains fenced for the same recovery transaction.
+
+`PAYMENT_REVIEWED_REFUNDS_ENABLED` is private rollout state for reviewed refund
+reservations and provider creation. It must be absent or `false` during this
+first compatibility release from `ec7`. Only after the candidate release is
+committed and every old `ec7` request process has stopped may the authorized
+operator use the gate's compare-and-swap transition to set it to `true`. A
+known provider refund ID remains queryable while the gate is off, so money that
+may already have moved can still converge safely.
+
+Before a planned rollback to a binary without this refund contract, first set
+request admission to draining and wait for request in-flight count zero. Keep
+the refund gate enabled while existing durable refund attempts finish; require
+refund rollback readiness zero, then compare-and-swap the gate to `false`
+immediately before restoring the old binary. With admission still drained, no
+new reservation can enter between those steps. Do not expose this switch in
+public application configuration or treat Caddy traffic selection alone as
+permission to enable it.
 
 The production helper recognizes `sub2api-blue`, `sub2api-green`, and the
 legacy `sub2api` application name. Long-lived Responses WebSocket connections
@@ -232,11 +267,13 @@ monitor also takes this lock around its final Caddy revalidation and
 
 A retained `.sub2api-blue-green-caddy-transaction.env` is intentionally not a
 timer no-op: the runtime guard fails visibly on every scheduled run and makes
-no lifecycle change until the blue-green helper recovers the transaction. Run
-that helper once with the same root-owned release environment; a successful
-recovery restores the host, container-startup, and live Caddy views, clears the
-transaction, and exits non-zero to require a clean coordinator rerun. Never
-delete the transaction file by hand or suppress the repeated service failure.
+no lifecycle change until the transaction is resolved. A legacy/helper-owned
+transaction can use its existing helper recovery procedure. If it contains
+`RECOVERY_OWNER=server-wrapper` and `LIVE_RELOAD_ATTEMPTED=true`, do **not**
+run the helper directly: use
+`sudo /opt/sub2api/scripts/sub2api-server-release.sh --recover-retained-caddy-exposure`
+so the refund-readiness gate runs before Caddy changes. Never delete the
+transaction file by hand or suppress the repeated service failure.
 
 The certificate receiver and drain monitor are intentionally not Caddyfile
 transaction writers. The receiver validates and reloads a rendered stream

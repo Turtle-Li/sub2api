@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,22 @@ func (s *billingCacheMissStub) DeductUserBalance(ctx context.Context, userID int
 }
 
 func (s *billingCacheMissStub) InvalidateUserBalance(ctx context.Context, userID int64) error {
+	return nil
+}
+
+func (s *billingCacheMissStub) CaptureBalanceCacheFence(context.Context, int64) (string, error) {
+	return "fixture-fence", nil
+}
+
+func (s *billingCacheMissStub) SetUserBalanceIfFence(ctx context.Context, userID int64, balance float64, fence string) (bool, error) {
+	if fence != "fixture-fence" {
+		return false, nil
+	}
+	s.setBalanceCalls.Add(1)
+	return true, nil
+}
+
+func (s *billingCacheMissStub) InvalidateUserBalanceWithFence(context.Context, int64) error {
 	return nil
 }
 
@@ -102,6 +119,65 @@ type balanceLoadUserRepoStub struct {
 	balance float64
 }
 
+type blockingBalanceLoadUserRepo struct {
+	balanceLoadUserRepoStub
+
+	started   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
+}
+
+func (s *blockingBalanceLoadUserRepo) GetByID(ctx context.Context, id int64) (*User, error) {
+	s.calls.Add(1)
+	s.startOnce.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &User{ID: id, Balance: s.balance}, nil
+}
+
+type fencedBalanceCacheStub struct {
+	billingCacheMissStub
+
+	fenceMu     sync.Mutex
+	fence       string
+	fenceSerial int64
+	setAttempts atomic.Int64
+	stored      atomic.Bool
+}
+
+func (s *fencedBalanceCacheStub) CaptureBalanceCacheFence(context.Context, int64) (string, error) {
+	s.fenceMu.Lock()
+	defer s.fenceMu.Unlock()
+	if s.fence == "" {
+		s.fenceSerial++
+		s.fence = fmt.Sprintf("fence-%d", s.fenceSerial)
+	}
+	return s.fence, nil
+}
+
+func (s *fencedBalanceCacheStub) SetUserBalanceIfFence(_ context.Context, _ int64, _ float64, fence string) (bool, error) {
+	s.setAttempts.Add(1)
+	s.fenceMu.Lock()
+	defer s.fenceMu.Unlock()
+	if s.fence != fence {
+		return false, nil
+	}
+	s.stored.Store(true)
+	return true, nil
+}
+
+func (s *fencedBalanceCacheStub) InvalidateUserBalanceWithFence(context.Context, int64) error {
+	s.fenceMu.Lock()
+	s.fenceSerial++
+	s.fence = fmt.Sprintf("fence-%d", s.fenceSerial)
+	s.fenceMu.Unlock()
+	s.stored.Store(false)
+	return nil
+}
+
 func (s *balanceLoadUserRepoStub) GetByID(ctx context.Context, id int64) (*User, error) {
 	s.calls.Add(1)
 	if s.delay > 0 {
@@ -164,4 +240,34 @@ func TestBillingCacheServiceGetUserBalance_Singleflight(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return cache.setBalanceCalls.Load() >= 1
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestBillingCacheServiceBalanceFenceRejectsLateAsyncFill(t *testing.T) {
+	cache := &fencedBalanceCacheStub{}
+	userRepo := &blockingBalanceLoadUserRepo{
+		balanceLoadUserRepoStub: balanceLoadUserRepoStub{balance: 100},
+		started:                 make(chan struct{}),
+		release:                 make(chan struct{}),
+	}
+	svc := NewBillingCacheService(cache, userRepo, nil, nil, nil, nil, &config.Config{}, nil)
+	t.Cleanup(svc.Stop)
+
+	result := make(chan error, 1)
+	go func() {
+		balance, err := svc.GetUserBalance(context.Background(), 99)
+		if err == nil && balance != 100 {
+			err = errors.New("unexpected loaded balance")
+		}
+		result <- err
+	}()
+
+	<-userRepo.started
+	require.NoError(t, svc.EnsureBalanceAuthorizationCacheInvalidated(context.Background(), 99))
+	close(userRepo.release)
+	require.NoError(t, <-result)
+
+	require.Eventually(t, func() bool {
+		return cache.setAttempts.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	require.False(t, cache.stored.Load(), "the pre-invalidation DB value must not refill the balance cache")
 }

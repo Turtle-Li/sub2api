@@ -11,11 +11,18 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
 const (
-	billingBalanceKeyPrefix = "billing:balance:"
+	// Balance cache entries use a v2 key so a draining pre-fence binary cannot
+	// repopulate the authorization value that a compatible reader will accept.
+	// The strict invalidator removes both keys so the old process also loses its
+	// cached value promptly while it drains.
+	billingBalanceKeyPrefix       = "billing:balance:v2:"
+	billingBalanceLegacyKeyPrefix = "billing:balance:"
+	billingBalanceFenceKeyPrefix  = "billing:balance:fence:v2:"
 	// v2 isolates fenced subscription authorization entries from an older
 	// binary's unconditional HSET writes during a rolling release. The
 	// invalidator still deletes the legacy key so a draining process loses its
@@ -27,8 +34,12 @@ const (
 	billingRateLimitKeyPrefix = "apikey:rate:"
 	subCacheInvalidateChannel = "subscription:cache:invalidate"
 	billingCacheTTL           = 5 * time.Minute
-	billingCacheJitter        = 30 * time.Second
-	rateLimitCacheTTL         = 7 * 24 * time.Hour // 7 days matches the longest window
+	// Balance fences use unique tokens and may therefore expire without an ABA
+	// reset. A reader holding an expired token can never match either a missing
+	// key or a newly generated token.
+	billingBalanceFenceTTL = 30 * time.Minute
+	billingCacheJitter     = 30 * time.Second
+	rateLimitCacheTTL      = 7 * 24 * time.Hour // 7 days matches the longest window
 
 	// Rate limit window durations — must match service.RateLimitWindow* constants.
 	rateLimitWindow5h = 5 * time.Hour
@@ -49,6 +60,14 @@ func jitteredTTL() time.Duration {
 // billingBalanceKey generates the Redis key for user balance cache.
 func billingBalanceKey(userID int64) string {
 	return fmt.Sprintf("%s%d", billingBalanceKeyPrefix, userID)
+}
+
+func legacyBillingBalanceKey(userID int64) string {
+	return fmt.Sprintf("%s%d", billingBalanceLegacyKeyPrefix, userID)
+}
+
+func billingBalanceFenceKey(userID int64) string {
+	return fmt.Sprintf("%s%d", billingBalanceFenceKeyPrefix, userID)
 }
 
 // billingSubKey generates the Redis key for subscription cache.
@@ -146,6 +165,45 @@ var (
 		return 1
 	`)
 
+	// balanceCacheCaptureFenceScript establishes a unique, expiring token when
+	// the user has no active fence. It also refreshes an existing token so it
+	// cannot disappear between an ordinary cache miss and its bounded refill.
+	balanceCacheCaptureFenceScript = redis.NewScript(`
+		local current = redis.call('GET', KEYS[1])
+		if current ~= false then
+			redis.call('EXPIRE', KEYS[1], ARGV[2])
+			return current
+		end
+		redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+		return ARGV[1]
+	`)
+
+	// balanceCacheInvalidateScript replaces the shared token and removes both
+	// compatible and legacy balance entries atomically. Tokens are unique, so
+	// expiry cannot recreate generation zero and admit a delayed pre-refund
+	// writer (the ABA failure of an expiring integer counter).
+	balanceCacheInvalidateScript = redis.NewScript(`
+		redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+		redis.call('DEL', KEYS[2], KEYS[3])
+		return 1
+	`)
+
+	// balanceCacheSetIfFenceScript rejects a late DB snapshot when a balance
+	// invalidation won after the reader captured its generation. Plain SET is
+	// unsafe here because an async cache writer could otherwise recreate a
+	// pre-refund authorization balance after DEL.
+	balanceCacheSetIfFenceScript = redis.NewScript(`
+		local current = redis.call('GET', KEYS[1])
+		if current == false then
+			return 0
+		end
+		if current ~= ARGV[1] then
+			return 0
+		end
+		redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+		return 1
+	`)
+
 	// updateRateLimitUsageScript atomically increments all three rate limit usage counters
 	// with window expiration checking. If a window has expired, its usage is reset to cost
 	// (instead of accumulated) and the window timestamp is updated, matching the DB-side
@@ -221,8 +279,49 @@ func (c *billingCache) SetUserBalance(ctx context.Context, userID int64, balance
 	if c.bypassCurrencyCache() {
 		return nil
 	}
-	key := billingBalanceKey(userID)
-	return c.rdb.Set(ctx, key, balance, jitteredTTL()).Err()
+	fence, err := c.CaptureBalanceCacheFence(ctx, userID)
+	if err != nil {
+		return err
+	}
+	_, err = c.SetUserBalanceIfFence(ctx, userID, balance, fence)
+	return err
+}
+
+// CaptureBalanceCacheFence returns a unique token for a user's wallet
+// authorization cache. Missing tokens are created atomically with a TTL.
+func (c *billingCache) CaptureBalanceCacheFence(ctx context.Context, userID int64) (string, error) {
+	candidate := uuid.NewString()
+	raw, err := balanceCacheCaptureFenceScript.Run(ctx, c.rdb,
+		[]string{billingBalanceFenceKey(userID)},
+		candidate,
+		int(billingBalanceFenceTTL.Seconds()),
+	).Text()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("invalid empty balance cache fence")
+	}
+	return raw, nil
+}
+
+// SetUserBalanceIfFence conditionally writes a balance cache entry. A false
+// result means a concurrent invalidation won, so a caller holding a prior DB
+// snapshot must not recreate the authorization value.
+func (c *billingCache) SetUserBalanceIfFence(ctx context.Context, userID int64, balance float64, fence string) (bool, error) {
+	if c.bypassCurrencyCache() || strings.TrimSpace(fence) == "" {
+		return false, nil
+	}
+	result, err := balanceCacheSetIfFenceScript.Run(ctx, c.rdb,
+		[]string{billingBalanceFenceKey(userID), billingBalanceKey(userID)},
+		fence,
+		strconv.FormatFloat(balance, 'f', -1, 64),
+		int(jitteredTTL().Seconds()),
+	).Int64()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
 }
 
 func (c *billingCache) DeductUserBalance(ctx context.Context, userID int64, amount float64) error {
@@ -239,8 +338,20 @@ func (c *billingCache) DeductUserBalance(ctx context.Context, userID int64, amou
 }
 
 func (c *billingCache) InvalidateUserBalance(ctx context.Context, userID int64) error {
-	key := billingBalanceKey(userID)
-	return c.rdb.Del(ctx, key).Err()
+	return c.InvalidateUserBalanceWithFence(ctx, userID)
+}
+
+// InvalidateUserBalanceWithFence advances the generation and clears both the
+// compatible and legacy keys atomically. The exported BillingCache operation
+// remains available to existing callers; the extra method is an optional
+// extension used by strict reviewed-refund authorization boundaries.
+func (c *billingCache) InvalidateUserBalanceWithFence(ctx context.Context, userID int64) error {
+	_, err := balanceCacheInvalidateScript.Run(ctx, c.rdb,
+		[]string{billingBalanceFenceKey(userID), billingBalanceKey(userID), legacyBillingBalanceKey(userID)},
+		uuid.NewString(),
+		int(billingBalanceFenceTTL.Seconds()),
+	).Result()
+	return err
 }
 
 func (c *billingCache) GetSubscriptionCache(ctx context.Context, userID, groupID int64) (*service.SubscriptionCacheData, error) {

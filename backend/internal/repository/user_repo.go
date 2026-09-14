@@ -845,7 +845,13 @@ func (r *userRepository) UpdateBalance(ctx context.Context, id int64, amount flo
 		}
 		currentQuery := client.User.Query().Where(dbuser.IDEQ(id), dbuser.DeletedAtIsNil())
 		if client.Driver().Dialect() == dialect.Postgres {
-			currentQuery.ForUpdate()
+			// RedeemCode.Use already holds KEY SHARE through its used_by FK.
+			// Two fundings may hold that compatible lock concurrently. Upgrading
+			// both to UPDATE deadlocks; NO KEY UPDATE serializes balance changes
+			// without conflicting with foreign-key references to the unchanged ID.
+			currentQuery.ForUpdate(func(options *entsql.LockOptions) {
+				options.Strength = entsql.LockNoKeyUpdate
+			})
 		}
 		current, err := currentQuery.Only(ctx)
 		if err != nil {

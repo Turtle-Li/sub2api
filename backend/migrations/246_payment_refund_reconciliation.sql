@@ -31,3 +31,11 @@ CREATE INDEX IF NOT EXISTS idx_unified_refund_reviewed_reconciliation_lease
 
 COMMENT ON COLUMN unified_payment_refund_attempts.reconciliation_claimed_by IS
     'Ephemeral worker lease owner for reviewed entitlement-refund reconciliation; never a provider identity.';
+
+-- Readiness includes manual/terminal reservations as well as retryable work.
+-- Keep the zero-reservation gate bounded as completed refund history grows.
+CREATE INDEX IF NOT EXISTS idx_unified_refund_reviewed_reserved
+    ON unified_payment_refund_attempts (product_refund_no)
+    WHERE entitlement_reserved = TRUE
+      AND quote_revision <> ''
+      AND refund_kind IN ('balance', 'subscription');
