@@ -188,14 +188,6 @@ func resolvePlanResetCardDelivery(entitlements PlanEntitlements, validityDays in
 	return entitlements, nil
 }
 
-// validatePlanResetCardDelivery remains a narrow validation helper for
-// callers that only need the validity result. Plan CRUD uses
-// normalizePlanEntitlementsForPlan so the server-derived count is persisted.
-func validatePlanResetCardDelivery(entitlements PlanEntitlements, validityDays int, validityUnit string) error {
-	_, err := resolvePlanResetCardDelivery(entitlements, validityDays, validityUnit)
-	return err
-}
-
 // ResetCardTotalCommitment is the durable entitlement count used by refund
 // accounting. A monthly plan promises every frozen occurrence up front even
 // though the card grants themselves are created over time.
