@@ -86,6 +86,13 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if !cfg.Enabled {
 		return nil, infraerrors.Forbidden("PAYMENT_DISABLED", "payment system is disabled")
 	}
+	// The signed WeChat resume token is applied by the handler before this
+	// boundary. Authorize the resulting trusted order type here so a client
+	// cannot disguise a subscription resume as a balance query parameter, and
+	// so direct API calls obey the same site billing mode as the UI.
+	if req.OrderType == payment.OrderTypeSubscription && !cfg.SubscriptionEnabled {
+		return nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "subscription purchasing is disabled")
+	}
 	return s.createOrderWithConfig(ctx, req, cfg, nil)
 }
 

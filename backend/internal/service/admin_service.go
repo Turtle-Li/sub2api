@@ -540,17 +540,12 @@ type CreateProxyInput struct {
 // UpdateProxyInput preserves omitted expiry/backup values; Clear flags explicitly
 // remove them. A nil ExpiryWarnDays preserves the current warning period.
 type UpdateProxyInput struct {
-	Name     string
-	Protocol string
-	Host     string
-	Port     int
-	Username string
-	// UsernameSet distinguishes an explicitly submitted empty username from
-	// an omitted field. This lets the admin editor clear saved credentials.
-	UsernameSet bool
-	Password    string
-	// PasswordSet has the same presence semantics as UsernameSet.
-	PasswordSet    bool
+	Name           string
+	Protocol       string
+	Host           string
+	Port           int
+	Username       *string
+	Password       *string
 	Status         string
 	ExpiresAt      *time.Time
 	ClearExpiresAt bool

@@ -134,11 +134,11 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if input.Port != 0 {
 		updated.Port = input.Port
 	}
-	if input.UsernameSet || input.Username != "" {
-		updated.Username = input.Username
+	if input.Username != nil {
+		updated.Username = *input.Username
 	}
-	if input.PasswordSet || input.Password != "" {
-		updated.Password = input.Password
+	if input.Password != nil {
+		updated.Password = *input.Password
 	}
 	if input.Status != "" {
 		updated.Status = input.Status

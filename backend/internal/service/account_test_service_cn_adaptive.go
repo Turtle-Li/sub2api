@@ -85,6 +85,7 @@ func (s *AccountTestService) testCNProviderAdaptiveAnthropicConnection(c *gin.Co
 	// base_url 强制 Bearer，其余保持 extra/default 行为。
 	setAnthropicAPIKeyAuthHeader(req.Header, account, authToken, account.GetCNProtocolBaseURL(APIProtocolAnthropic))
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	resp, err := s.doCNProviderAdaptiveRequest(req, account)
 	if err != nil {
@@ -178,6 +179,7 @@ func (s *AccountTestService) testCNProviderAdaptiveResponsesConnection(c *gin.Co
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	applyOpenAICodexProbeHeaders(req.Header)
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	resp, err := s.doCNProviderAdaptiveRequest(req, account)
 	if err != nil {
@@ -266,6 +268,7 @@ func (s *AccountTestService) testCNProviderAnthropicConnection(c *gin.Context, a
 	// extra/default 行为。
 	setAnthropicAPIKeyAuthHeader(req.Header, account, authToken, account.GetAnthropicProtocolBaseURL())
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	resp, err := s.doCNProviderAdaptiveRequest(req, account)
 	if err != nil {
@@ -292,9 +295,12 @@ func (s *AccountTestService) testCNProviderAnthropicConnection(c *gin.Context, a
 func cnAnthropicBaseURLMisconfigHint(account *Account, baseURL string) string {
 	// OpenCode Go deliberately shares a versioned base across OpenAI-compatible
 	// and Anthropic protocols. The OpenCode-aware endpoint builder appends only
-	// /messages when the saved base already ends in /v1. Only DeepSeek accounts
-	// support this endpoint; do not send another provider's key to OpenCode.
-	if account != nil && account.Platform == PlatformDeepseek && isOpenCodeGoBaseURL(baseURL) {
+	// /messages when the saved base already ends in /v1. The dedicated OpenCode
+	// platform and the legacy DeepSeek representation support this endpoint; do
+	// not send another provider's key to OpenCode.
+	if account != nil &&
+		(account.Platform == PlatformOpenCodeGo || account.Platform == PlatformDeepseek) &&
+		isOpenCodeGoBaseURL(baseURL) {
 		return ""
 	}
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))

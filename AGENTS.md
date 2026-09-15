@@ -189,6 +189,12 @@
 
 ## Upstream update scope
 
+- For the v0.2.5 OpenCode, site billing-mode, subscription bulk-action,
+  proxy-credential, Images, WebSocket, and migration merge, read
+  `docs/operations/UPSTREAM_V025_20260915.md`. Preserve the fork's independent
+  purchase-entry gate, refund-hold invariants, fixed egress, and exact-N image
+  behavior at their shared boundaries.
+
 - For Codex-visible subscription and wallet billing errors, read
   `docs/operations/CODEX_BILLING_ERROR_COMPAT_20260913.md` before changing
   Responses status codes, response bodies, or compatibility headers. An

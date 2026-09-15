@@ -41,46 +41,50 @@
             :class="['payment-segment__item', activeTab === tab.key && 'payment-segment__item--active']"
             @click="activeTab = tab.key">{{ tab.label }}</button>
         </div>
-
-        <div v-if="enabledMethods.length === 0" class="card py-16 text-center">
-          <p class="text-gray-500 dark:text-gray-400">{{ t('payment.notAvailable') }}</p>
+        <div v-if="tabs.length === 0" class="card py-16 text-center">
+          <p class="text-gray-500 dark:text-gray-400">{{ t('payment.billingUnavailable') }}</p>
         </div>
 
-        <div v-if="activeTab === 'subscription' && enabledMethods.length > 0 && subscriptionPeriodOptions.length > 1" class="mb-5 flex justify-start">
-          <div class="payment-segment max-w-full overflow-x-auto">
-            <button v-for="period in subscriptionPeriodOptions" :key="period.key" type="button"
-              :aria-pressed="selectedSubscriptionPeriod === period.key"
-              :class="['payment-segment__item shrink-0', selectedSubscriptionPeriod === period.key && 'payment-segment__item--active']"
-              @click="selectSubscriptionPeriod(period.key)">
-              {{ period.label }}
-              <span v-if="period.discountText" class="ml-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">{{ period.discountText }}</span>
-            </button>
+        <template v-else>
+          <div v-if="enabledMethods.length === 0" class="card py-16 text-center">
+            <p class="text-gray-500 dark:text-gray-400">{{ t('payment.notAvailable') }}</p>
           </div>
-        </div>
 
-        <!-- Products on the left, the running total on the right. Below `lg`
-             the rail detaches to the bottom of the viewport, so the extra
-             padding keeps the last card clear of it. -->
-        <div v-if="enabledMethods.length > 0" class="grid grid-cols-1 items-start gap-6 pb-40 lg:grid-cols-[minmax(0,1fr)_320px] lg:pb-0">
-          <div class="min-w-0">
-            <!-- Top-up -->
-            <template v-if="activeTab === 'recharge'">
-              <AmountInput
-                v-model="amount"
-                :amounts="rechargePresetAmounts"
-                :options="rechargePresetOptions"
-                :min="globalMinAmount"
-                :max="globalMaxAmount"
-                :currency="selectedCurrency"
-                :locale="localeCode"
-                :fee-rate="feeRate"
-                :balance-multiplier="balanceRechargeMultiplier"
-              />
-              <p v-if="amountError" class="mt-2 text-xs text-amber-600 dark:text-amber-300">{{ amountError }}</p>
-              <p v-if="balanceRechargeMultiplier !== 1" class="mt-4 text-xs text-gray-500 dark:text-dark-400">
-                {{ t('payment.rechargeRatePreview', { currency: selectedCurrency, usd: balanceRechargeMultiplier.toFixed(2) }) }}
-              </p>
-            </template>
+          <div v-if="activeTab === 'subscription' && enabledMethods.length > 0 && subscriptionPeriodOptions.length > 1" class="mb-5 flex justify-start">
+            <div class="payment-segment max-w-full overflow-x-auto">
+              <button v-for="period in subscriptionPeriodOptions" :key="period.key" type="button"
+                :aria-pressed="selectedSubscriptionPeriod === period.key"
+                :class="['payment-segment__item shrink-0', selectedSubscriptionPeriod === period.key && 'payment-segment__item--active']"
+                @click="selectSubscriptionPeriod(period.key)">
+                {{ period.label }}
+                <span v-if="period.discountText" class="ml-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">{{ period.discountText }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Products on the left, the running total on the right. Below `lg`
+               the rail detaches to the bottom of the viewport, so the extra
+               padding keeps the last card clear of it. -->
+          <div v-if="enabledMethods.length > 0" class="grid grid-cols-1 items-start gap-6 pb-40 lg:grid-cols-[minmax(0,1fr)_320px] lg:pb-0">
+            <div class="min-w-0">
+              <!-- Top-up -->
+              <template v-if="activeTab === 'recharge'">
+                <AmountInput
+                  v-model="amount"
+                  :amounts="rechargePresetAmounts"
+                  :options="rechargePresetOptions"
+                  :min="globalMinAmount"
+                  :max="globalMaxAmount"
+                  :currency="selectedCurrency"
+                  :locale="localeCode"
+                  :fee-rate="feeRate"
+                  :balance-multiplier="balanceRechargeMultiplier"
+                />
+                <p v-if="amountError" class="mt-2 text-xs text-amber-600 dark:text-amber-300">{{ amountError }}</p>
+                <p v-if="balanceRechargeMultiplier !== 1" class="mt-4 text-xs text-gray-500 dark:text-dark-400">
+                  {{ t('payment.rechargeRatePreview', { currency: selectedCurrency, usd: balanceRechargeMultiplier.toFixed(2) }) }}
+                </p>
+              </template>
 
             <!-- Subscribe -->
             <template v-else-if="activeTab === 'subscription'">
@@ -170,7 +174,8 @@
             @select-method="selectedMethod = $event"
             @submit="handleRailSubmit"
           />
-        </div>
+          </div>
+        </template>
       </template>
     </div>
 
@@ -206,12 +211,12 @@
     <Teleport to="body">
       <Transition name="modal">
         <div v-if="showRenewalModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" @click.self="closeRenewalModal">
-          <div class="relative w-full max-w-lg rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl dark:border-dark-700 dark:bg-dark-900">
+          <div class="relative flex max-h-full w-full max-w-lg flex-col rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl dark:border-dark-700 dark:bg-dark-900">
             <button class="absolute right-4 top-4 rounded-lg p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-200" @click="closeRenewalModal">
               <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
-            <h3 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.selectPlan') }}</h3>
-            <div class="space-y-4">
+            <h3 class="mb-4 shrink-0 text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.selectPlan') }}</h3>
+            <div class="min-h-0 space-y-4 overflow-y-auto">
               <SubscriptionPlanCard v-for="plan in renewalPlans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions"
                 :display-currency="selectedCurrency" :locale="localeCode" :usd-to-cny-rate="subscriptionUsdToCnyRate" @select="selectPlanFromModal" />
             </div>
@@ -242,6 +247,7 @@ import { useAuthStore } from '@/stores/auth'
 import { usePaymentStore } from '@/stores/payment'
 import { useSubscriptionStore } from '@/stores/subscriptions'
 import { useAppStore } from '@/stores'
+import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
 import { paymentAPI } from '@/api/payment'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
@@ -539,11 +545,24 @@ const renderedHelpText = computed(() => DOMPurify.sanitize(
   marked.parse(checkout.value.help_text || '', { async: false, gfm: true, breaks: false }),
 ))
 
+// 订阅功能开关（public settings 的 subscription_enabled，opt-out）。关闭后购买页只保留充值：
+// 不再渲染「订阅」tab，只剩单个 tab 时顶部切换器也随之隐藏。
+const subscriptionEnabled = computed(() => resolveFeatureFlag(appStore.cachedPublicSettings, FeatureFlags.subscription))
+
 const tabs = computed(() => {
   const result: { key: 'recharge' | 'subscription'; label: string }[] = []
   if (!checkout.value.balance_disabled) result.push({ key: 'recharge', label: t('payment.tabTopUp') })
-  result.push({ key: 'subscription', label: t('payment.tabSubscribe') })
+  if (subscriptionEnabled.value) result.push({ key: 'subscription', label: t('payment.tabSubscribe') })
   return result
+})
+
+// tab 列表随 checkout（balance_disabled）与订阅开关变化。当前 tab 不在列表里时收敛到第一个可用 tab，
+// 两个方向都覆盖：关闭订阅 → 回到充值；仅订阅站点重新打开订阅 → 进入订阅。列表为空时模板展示不可用提示。
+watch(tabs, (available) => {
+  if (available.some((tab) => tab.key === activeTab.value)) return
+  const leavingSubscription = activeTab.value === 'subscription'
+  activeTab.value = available[0]?.key ?? 'recharge'
+  if (leavingSubscription) selectedPlan.value = null
 })
 
 const visibleMethods = computed(() => getVisibleMethods(checkout.value.methods))
@@ -1417,6 +1436,19 @@ async function resumeWechatPaymentFromQuery() {
   if (!resume) {
     return
   }
+
+  // OAuth callbacks can arrive after the site mode changes. Do not turn a
+  // token-bearing subscription callback into a new order after subscriptions
+  // have been disabled; discard the one-time resume context just as an
+  // invalid token callback is cleaned from the route.
+  if (resume.orderType === 'subscription' && !subscriptionEnabled.value) {
+    await router.replace({ path: route.path, query: stripWechatResumeQuery(route.query) })
+    errorMessage.value = t('payment.errors.PLAN_NOT_AVAILABLE')
+    errorHintMessage.value = ''
+    appStore.showError(errorMessage.value)
+    return
+  }
+
   const resetCardAttempt = resume.orderType === 'reset_card'
     && resume.wechatResumeToken
     && typeof window !== 'undefined'
@@ -1499,19 +1531,18 @@ onMounted(async () => {
       }
     }
     await resumeWechatPaymentFromQuery()
-    if (checkout.value.balance_disabled) {
-      activeTab.value = 'subscription'
-    }
     // Handle desktop and renewal deep links. The hosted payment page remains
     // responsible for order creation, but preserves the user's desktop choice.
-    if (route.query.tab === 'recharge' && !checkout.value.balance_disabled) {
+    if (route.query.tab === 'recharge' && tabs.value.some(tab => tab.key === 'recharge')) {
       activeTab.value = 'recharge'
       const requestedAmount = Number(route.query.amount)
       if (Number.isFinite(requestedAmount) && rechargePresetOptions.value.some(option => option.amount === requestedAmount)) {
         amount.value = requestedAmount
       }
     }
-    if (route.query.tab === 'subscription') {
+    // The tabs watcher selects the only valid tab after configuration changes.
+    // Renewal deep links are ignored while subscriptions are disabled.
+    if (route.query.tab === 'subscription' && subscriptionEnabled.value) {
       activeTab.value = 'subscription'
       const requestedPlanID = Number(route.query.plan_id)
       const requestedPlan = Number.isFinite(requestedPlanID)
@@ -1532,7 +1563,9 @@ onMounted(async () => {
     }
   } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
   finally { loading.value = false }
-  // Fetch active subscriptions (uses cache, non-blocking)
-  subscriptionStore.fetchActiveSubscriptions().catch(() => {})
+  // Fetch active subscriptions (uses cache, non-blocking); skipped when the subscription feature is off
+  if (subscriptionEnabled.value) {
+    subscriptionStore.fetchActiveSubscriptions().catch(() => {})
+  }
 })
 </script>

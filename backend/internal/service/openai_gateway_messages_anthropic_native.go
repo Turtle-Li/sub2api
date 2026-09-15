@@ -136,6 +136,12 @@ func (s *OpenAIGatewayService) nativeAnthropicTargetURL(account *Account) (strin
 	return buildAnthropicMessagesEndpointURL(validatedURL), nil
 }
 
+func resolveOpenCodeGoMappedModel(account *Account, body []byte, defaultMappedModel string) string {
+	original := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	billing := resolveOpenAIForwardModel(account, original, defaultMappedModel)
+	return normalizeOpenAIModelForUpstream(account, billing)
+}
+
 func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	ctx context.Context,
 	c *gin.Context,
@@ -143,6 +149,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	body []byte,
 	apiKey string,
 	targetURL string,
+	sessionBodies ...[]byte,
 ) (*http.Request, []byte, error) {
 	// 能力维度 body sanitize：与 Anthropic 平台 passthrough 相同，按 beta
 	// header 决定是否保留 body 中的 beta 能力字段，避免客户端"body 带字段但
@@ -199,6 +206,8 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	payloads := append([][]byte{body}, sessionBodies...)
+	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, payloads...)
 
 	return req, body, nil
 }

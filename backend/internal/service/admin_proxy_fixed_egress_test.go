@@ -117,8 +117,8 @@ func TestUpdateProxy_RejectsProtectedChangesForActiveOpenAIOAuthParentBinding(t 
 		{name: "host", mutate: func(input *UpdateProxyInput) { input.Host = "100.80.10.115" }},
 		{name: "protocol", mutate: func(input *UpdateProxyInput) { input.Protocol = "http" }},
 		{name: "port", mutate: func(input *UpdateProxyInput) { input.Port = 1081 }},
-		{name: "username", mutate: func(input *UpdateProxyInput) { input.Username = "operator" }},
-		{name: "password", mutate: func(input *UpdateProxyInput) { input.Password = "secret" }},
+		{name: "username", mutate: func(input *UpdateProxyInput) { input.Username = stringPtr("operator") }},
+		{name: "password", mutate: func(input *UpdateProxyInput) { input.Password = stringPtr("secret") }},
 		{name: "expiry", mutate: func(input *UpdateProxyInput) { input.ExpiresAt = &expiresAt }},
 		{name: "fallback mode", mutate: func(input *UpdateProxyInput) { input.FallbackMode = FallbackModeDirect }},
 		{name: "backup proxy", mutate: func(input *UpdateProxyInput) {
@@ -233,8 +233,8 @@ func TestUpdateProxy_AllowsCredentialClearNormalizationForBoundParent(t *testing
 	}
 	svc := &adminServiceImpl{proxyRepo: repo}
 	input := newFixedEgressUpdateInput()
-	input.UsernameSet = true
-	input.PasswordSet = true
+	input.Username = stringPtr("")
+	input.Password = stringPtr("")
 
 	updated, err := svc.UpdateProxy(context.Background(), proxyID, input)
 

@@ -88,7 +88,11 @@ const (
 type PaymentConfig struct {
 	Enabled bool `json:"enabled"`
 	// EntryEnabled controls discovery links only; it is not order authorization.
-	EntryEnabled              bool     `json:"entry_enabled"`
+	EntryEnabled bool `json:"entry_enabled"`
+	// SubscriptionEnabled is the server-side order authorization projection of
+	// the site billing mode. It is intentionally omitted from the payment config
+	// response because public settings already expose the presentation flag.
+	SubscriptionEnabled       bool     `json:"-"`
 	MinAmount                 float64  `json:"min_amount"`
 	MaxAmount                 float64  `json:"max_amount"`
 	DailyLimit                float64  `json:"daily_limit"`
@@ -298,7 +302,7 @@ func (s *PaymentConfigService) IsReviewedRefundsEnabled(ctx context.Context) boo
 // GetPaymentConfig returns the full payment configuration.
 func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentConfig, error) {
 	keys := []string{
-		SettingPaymentEnabled, SettingPaymentEntryEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
+		SettingPaymentEnabled, SettingPaymentEntryEnabled, SettingKeySubscriptionEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
 		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingLoadBalanceStrategy,
 		SettingProductNamePrefix, SettingProductNameSuffix,
@@ -328,6 +332,7 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 	cfg := &PaymentConfig{
 		Enabled:                   vals[SettingPaymentEnabled] == "true",
 		EntryEnabled:              paymentEntryEnabledFromValue(vals[SettingPaymentEntryEnabled]),
+		SubscriptionEnabled:       !isFalseSettingValue(vals[SettingKeySubscriptionEnabled]),
 		MinAmount:                 pcParseFloat(vals[SettingMinRechargeAmount], 1),
 		MaxAmount:                 pcParseFloat(vals[SettingMaxRechargeAmount], 0),
 		DailyLimit:                pcParseFloat(vals[SettingDailyRechargeLimit], 0),

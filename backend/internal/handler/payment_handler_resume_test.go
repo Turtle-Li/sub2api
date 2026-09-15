@@ -15,6 +15,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -24,7 +25,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestApplyWeChatPaymentResumeClaims(t *testing.T) {
+func TestApplyWeChatPaymentResumeClaimsOverridesUntrustedOrderFields(t *testing.T) {
 	t.Parallel()
 
 	req := CreateOrderRequest{
@@ -55,6 +56,85 @@ func TestApplyWeChatPaymentResumeClaims(t *testing.T) {
 	if req.PlanID != 7 {
 		t.Fatalf("plan_id = %d, want 7", req.PlanID)
 	}
+}
+
+type paymentResumeGateSettingRepo struct {
+	values map[string]string
+}
+
+func (r *paymentResumeGateSettingRepo) Get(context.Context, string) (*service.Setting, error) {
+	return nil, nil
+}
+
+func (r *paymentResumeGateSettingRepo) GetValue(_ context.Context, key string) (string, error) {
+	return r.values[key], nil
+}
+
+func (r *paymentResumeGateSettingRepo) Set(context.Context, string, string) error { return nil }
+
+func (r *paymentResumeGateSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
+		values[key] = r.values[key]
+	}
+	return values, nil
+}
+
+func (r *paymentResumeGateSettingRepo) SetMultiple(context.Context, map[string]string) error {
+	return nil
+}
+
+func (r *paymentResumeGateSettingRepo) GetAll(context.Context) (map[string]string, error) {
+	return r.values, nil
+}
+
+func (r *paymentResumeGateSettingRepo) Delete(context.Context, string) error { return nil }
+
+func TestCreateOrderRejectsSignedSubscriptionResumeWhenQueryClaimsBalance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const signingKey = "0123456789abcdef0123456789abcdef"
+	t.Setenv("PAYMENT_RESUME_SIGNING_KEY", signingKey)
+
+	resumeSvc := service.NewPaymentResumeService([]byte(signingKey))
+	token, err := resumeSvc.CreateWeChatPaymentResumeToken(service.WeChatPaymentResumeClaims{
+		OpenID:      "openid-subscription-resume",
+		PaymentType: payment.TypeWxpay,
+		Amount:      "0.01",
+		OrderType:   payment.OrderTypeSubscription,
+		PlanID:      3,
+	})
+	require.NoError(t, err)
+
+	configSvc := service.NewPaymentConfigService(nil, &paymentResumeGateSettingRepo{values: map[string]string{
+		service.SettingPaymentEnabled:         "true",
+		service.SettingKeySubscriptionEnabled: "false",
+	}}, nil)
+	paymentSvc := service.NewPaymentService(nil, payment.NewRegistry(), nil, nil, nil, configSvc, nil, nil, nil)
+	h := NewPaymentHandler(paymentSvc, configSvc)
+
+	body, err := json.Marshal(map[string]any{
+		"amount":              0.01,
+		"payment_type":        payment.TypeWxpay,
+		"order_type":          payment.OrderTypeBalance,
+		"wechat_resume_token": token,
+	})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 7})
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/payment/orders", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	h.CreateOrder(ctx)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+	var resp struct {
+		Reason string `json:"reason"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.Equal(t, "PLAN_NOT_AVAILABLE", resp.Reason)
 }
 
 func TestApplyWeChatPaymentResumeClaimsPreservesResetCardTargetAndIdempotency(t *testing.T) {

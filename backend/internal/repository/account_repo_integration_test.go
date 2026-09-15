@@ -1547,6 +1547,47 @@ func (s *AccountRepoSuite) TestUpdateExtra_SchedulerNeutralSkipsOutboxAndDefersS
 		"the uncommitted database state must not replace the existing cache entry")
 }
 
+// Exercise the complete UpdateExtra -> PostgreSQL -> Redis metadata -> admission
+// path. A recorder-only cache would miss fields discarded by the slim projection.
+func (s *AccountRepoSuite) TestUpdateExtra_AnthropicThresholdRefreshesCandidateSnapshot() {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	end := now.Add(time.Hour)
+	account := mustCreateAccount(s.T(), integrationEntClient, &service.Account{
+		Name: "threshold-refresh", Platform: service.PlatformAnthropic, Type: service.AccountTypeOAuth,
+		Credentials: map[string]any{"account_scheduling_threshold": 60},
+		Extra:       map[string]any{"passive_usage_7d_utilization": .59, "passive_usage_7d_reset": end.Unix()},
+	})
+	cache := NewSchedulerCache(testRedis(s.T()))
+	s.T().Cleanup(func() {
+		_ = cache.DeleteAccount(context.Background(), account.ID)
+		_, _ = integrationDB.ExecContext(context.Background(), "DELETE FROM scheduler_outbox WHERE account_id = $1", account.ID)
+		_ = integrationEntClient.Account.DeleteOneID(account.ID).Exec(context.Background())
+	})
+	repo := newAccountRepositoryWithSQL(integrationEntClient, integrationDB, cache)
+	bucket := service.SchedulerBucket{GroupID: account.ID, Platform: service.PlatformAnthropic, Mode: service.SchedulerModeSingle}
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	s.Require().NoError(err)
+	s.Require().NoError(cache.SetSnapshot(ctx, bucket, token, []service.Account{*account}))
+	for _, step := range []struct {
+		used   float64
+		reset  time.Time
+		paused bool
+	}{
+		{.59, end, false}, {.66, end, true}, {.66, now.Add(-time.Hour), false}, {.10, end, false},
+	} {
+		s.Require().NoError(repo.UpdateExtra(ctx, account.ID, map[string]any{
+			"passive_usage_7d_utilization": step.used, "passive_usage_7d_reset": step.reset.Unix(),
+		}))
+		candidates, hit, err := cache.GetSnapshot(ctx, bucket)
+		s.Require().NoError(err)
+		s.Require().True(hit)
+		s.Require().Len(candidates, 1)
+		decision := service.EvaluateAccountSchedulingThreshold(candidates[0], map[string]int{service.PlatformAnthropic: 100}, now)
+		s.Require().Equal(step.paused, decision.ShouldPause)
+	}
+}
+
 func (s *AccountRepoSuite) TestUpdateExtra_ExhaustedCodexSnapshotDefersCacheInCallerTransaction() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:     "acc-extra-codex-exhausted",
