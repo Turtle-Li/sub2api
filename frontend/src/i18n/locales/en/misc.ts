@@ -924,6 +924,7 @@ export default {
         LEGACY_SUBSCRIPTION_UNATTRIBUTED: 'This historical order has no provable subscription term.',
         SUBSCRIPTION_CHANGED: 'The subscription no longer matches the purchased term.',
         SUBSCRIPTION_NOT_TAIL: 'The purchased term is no longer the current refundable tail.',
+        SUBSCRIPTION_REFUND_IN_FLIGHT: 'Another refund on this subscription is still in progress. Complete it first.',
         SUBSCRIPTION_FULLY_USED: 'The subscription term has no refundable unused time.',
       },
       auditLogs: 'Audit Logs',

@@ -145,7 +145,7 @@ func TestAdminRefundMutationsReachPaymentServiceWithStepUpGrant(t *testing.T) {
 	}{
 		{name: "process", path: "/api/v1/admin/payment/orders/999/refund", body: `{"quote_revision":"test-revision","reason":"test"}`},
 		{name: "query", path: "/api/v1/admin/payment/orders/999/refund/query", body: ""},
-		{name: "subscription grant backfill", path: "/api/v1/admin/payment/orders/999/refund/subscription-grant-backfill", body: `{"audit_revision":"test-revision","subscription_id":1,"term_start_at":"2026-09-01T00:00:00Z","term_end_at":"2026-10-01T00:00:00Z"}`},
+		{name: "subscription grant backfill", path: "/api/v1/admin/payment/orders/999/refund/subscription-grant-backfill", body: `{"audit_revision":"test-revision","subscription_id":1,"term_start_at":"2026-09-01T00:00:00Z","term_end_at":"2026-10-01T00:00:00Z","evidence_detail":"matched the historical order and subscription audit"}`},
 	} {
 		t.Run(endpoint.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()

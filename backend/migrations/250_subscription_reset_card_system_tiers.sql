@@ -177,5 +177,78 @@ BEGIN
     END IF;
 END $$;
 
+-- The preceding rows are versioned product policy, not runtime configuration.
+-- Old application instances can still expose the pre-250 tier mutation route
+-- during a rolling release, so enforce the boundary in PostgreSQL as soon as
+-- the system identities exist. A future versioned migration must deliberately
+-- replace these triggers before changing the built-in mapping.
+CREATE OR REPLACE FUNCTION public.prevent_subscription_product_code_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.subscription_product_code IS NOT NULL THEN
+            RAISE EXCEPTION 'subscription product codes are managed by versioned migrations'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.subscription_product_code IS NOT NULL THEN
+            RAISE EXCEPTION 'system subscription products cannot be deleted at runtime'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+    END IF;
+
+    IF OLD.subscription_product_code IS DISTINCT FROM NEW.subscription_product_code THEN
+        RAISE EXCEPTION 'subscription product codes are immutable'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS groups_prevent_subscription_product_code_mutation ON groups;
+CREATE TRIGGER groups_prevent_subscription_product_code_mutation
+BEFORE INSERT OR UPDATE OF subscription_product_code OR DELETE
+ON groups
+FOR EACH ROW
+EXECUTE FUNCTION public.prevent_subscription_product_code_mutation();
+
+CREATE OR REPLACE FUNCTION public.prevent_system_subscription_reset_card_tier_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    affected_group_id BIGINT;
+    product_code VARCHAR(64);
+BEGIN
+    affected_group_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.group_id ELSE NEW.group_id END;
+    SELECT subscription_product_code
+    INTO product_code
+    FROM groups
+    WHERE id = affected_group_id;
+
+    IF product_code IS NOT NULL THEN
+        RAISE EXCEPTION 'system subscription reset-card tiers are managed by versioned migrations'
+            USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS subscription_reset_card_tiers_prevent_system_mutation ON subscription_reset_card_tiers;
+CREATE TRIGGER subscription_reset_card_tiers_prevent_system_mutation
+BEFORE INSERT OR UPDATE OR DELETE
+ON subscription_reset_card_tiers
+FOR EACH ROW
+EXECUTE FUNCTION public.prevent_system_subscription_reset_card_tier_mutation();
+
 -- Historical grants remain intentionally untouched. NULL family/rank
 -- snapshots retain their exact-subscription-only behavior.

@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const backfillTestEvidenceDetail = "matched the immutable order snapshot, assignment audit, and subscription timeline"
+
 func TestBackfillSubscriptionGrantCreatesImmutableProvenanceAndRefreshesReview(t *testing.T) {
 	ctx := context.Background()
 	svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
@@ -39,8 +41,10 @@ func TestBackfillSubscriptionGrantCreatesImmutableProvenanceAndRefreshesReview(t
 		SubscriptionID: subscription.ID,
 		TermStartAt:    termStart,
 		TermEndAt:      termEnd,
+		EvidenceDetail: backfillTestEvidenceDetail,
 		OperatorID:     71,
-		// Empty evidence_source deliberately selects the trusted default.
+		// Empty evidence_source deliberately selects the trusted default; the
+		// human audit explanation remains mandatory for every source.
 	}
 	after, err := svc.BackfillSubscriptionGrant(ctx, order.ID, input)
 	require.NoError(t, err)
@@ -91,13 +95,101 @@ func TestBackfillSubscriptionGrantCreatesImmutableProvenanceAndRefreshesReview(t
 	require.Equal(t, 1, count)
 }
 
+func TestSubscriptionGrantBackfillSuggestionUsesUnoccupiedHistoricalTerm(t *testing.T) {
+	ctx := context.Background()
+	svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
+	extendedEnd := termEnd.AddDate(0, 0, 30)
+	_, err := svc.entClient.UserSubscription.UpdateOneID(subscription.ID).SetExpiresAt(extendedEnd).Save(ctx)
+	require.NoError(t, err)
+
+	_, newerOrder, _ := newUnifiedRefundFixture(t, svc.entClient, payment.TypeWxpay)
+	newerOrder, err = svc.entClient.PaymentOrder.UpdateOneID(newerOrder.ID).SetUserID(subscription.UserID).Save(ctx)
+	require.NoError(t, err)
+	_, err = svc.entClient.ExecContext(ctx, `INSERT INTO payment_subscription_grants
+		(payment_order_id, subscription_id, user_id, group_id, term_start_at, original_term_end_at, current_term_end_at, reserved_seconds)
+		VALUES ($1,$2,$3,$4,$5,$6,$6,$7)`,
+		newerOrder.ID, subscription.ID, subscription.UserID, subscription.GroupID, termEnd, extendedEnd, int64(30*24*60*60))
+	require.NoError(t, err)
+	_, err = svc.entClient.UserSubscription.UpdateOneID(subscription.ID).SetExpiresAt(termEnd).Save(ctx)
+	require.NoError(t, err)
+
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, review.SubscriptionBackfill)
+	require.Equal(t, subscription.ID, review.SubscriptionBackfill.SuggestedSubscriptionID)
+	require.True(t, review.SubscriptionBackfill.SuggestedTermStartAt.Equal(termStart))
+	require.True(t, review.SubscriptionBackfill.SuggestedTermEndAt.Equal(termEnd))
+
+	after, err := svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
+		AuditRevision:  review.SubscriptionBackfill.AuditRevision,
+		SubscriptionID: subscription.ID,
+		TermStartAt:    review.SubscriptionBackfill.SuggestedTermStartAt,
+		TermEndAt:      review.SubscriptionBackfill.SuggestedTermEndAt,
+		EvidenceDetail: backfillTestEvidenceDetail,
+		OperatorID:     71,
+	})
+	require.NoError(t, err)
+	require.False(t, after.CanRefund)
+	require.Equal(t, "SUBSCRIPTION_REFUND_IN_FLIGHT", after.ReasonCode)
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.True(t, grant.TermStart.Equal(termStart))
+	require.True(t, grant.OriginalEnd.Equal(termEnd))
+
+	// Once the newer order's refund is captured, its term is no longer a live
+	// reservation and the historical order becomes the current refundable tail.
+	_, err = svc.entClient.ExecContext(ctx, `UPDATE payment_subscription_grants
+		SET current_term_end_at = term_start_at, reserved_seconds = 0
+		WHERE payment_order_id = $1`, newerOrder.ID)
+	require.NoError(t, err)
+	after, err = svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.True(t, after.CanRefund)
+}
+
+func TestSubscriptionGrantBackfillRevisionTracksOccupiedTerms(t *testing.T) {
+	ctx := context.Background()
+	svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
+	extendedEnd := termEnd.AddDate(0, 0, 30)
+	_, err := svc.entClient.UserSubscription.UpdateOneID(subscription.ID).SetExpiresAt(extendedEnd).Save(ctx)
+	require.NoError(t, err)
+
+	before, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, before.SubscriptionBackfill)
+
+	_, newerOrder, _ := newUnifiedRefundFixture(t, svc.entClient, payment.TypeWxpay)
+	_, err = svc.entClient.ExecContext(ctx, `INSERT INTO payment_subscription_grants
+		(payment_order_id, subscription_id, user_id, group_id, term_start_at, original_term_end_at, current_term_end_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$6)`,
+		newerOrder.ID, subscription.ID, subscription.UserID, subscription.GroupID, termEnd, extendedEnd)
+	require.NoError(t, err)
+
+	after, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after.SubscriptionBackfill)
+	require.NotEqual(t, before.SubscriptionBackfill.AuditRevision, after.SubscriptionBackfill.AuditRevision)
+
+	_, err = svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
+		AuditRevision:  before.SubscriptionBackfill.AuditRevision,
+		SubscriptionID: subscription.ID,
+		TermStartAt:    termStart,
+		TermEndAt:      termEnd,
+		EvidenceDetail: backfillTestEvidenceDetail,
+		OperatorID:     71,
+	})
+	require.Error(t, err)
+	require.Equal(t, "SUBSCRIPTION_BACKFILL_AUDIT_STALE", infraerrors.Reason(err))
+}
+
 func TestBackfillSubscriptionGrantRejectsUnprovenOrStaleAssertions(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("stale audit revision", func(t *testing.T) {
 		svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
 		_, err := svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
-			AuditRevision: "stale", SubscriptionID: subscription.ID, TermStartAt: termStart, TermEndAt: termEnd, OperatorID: 71,
+			AuditRevision: "stale", SubscriptionID: subscription.ID, TermStartAt: termStart, TermEndAt: termEnd,
+			EvidenceDetail: backfillTestEvidenceDetail, OperatorID: 71,
 		})
 		require.Error(t, err)
 		require.Equal(t, "SUBSCRIPTION_BACKFILL_AUDIT_STALE", infraerrors.Reason(err))
@@ -110,7 +202,7 @@ func TestBackfillSubscriptionGrantRejectsUnprovenOrStaleAssertions(t *testing.T)
 		require.NoError(t, err)
 		_, err = svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
 			AuditRevision: review.SubscriptionBackfill.AuditRevision, SubscriptionID: subscription.ID,
-			TermStartAt: termStart, TermEndAt: termEnd.AddDate(0, 0, -1), OperatorID: 71,
+			TermStartAt: termStart, TermEndAt: termEnd.AddDate(0, 0, -1), EvidenceDetail: backfillTestEvidenceDetail, OperatorID: 71,
 		})
 		require.Error(t, err)
 		require.Equal(t, "SUBSCRIPTION_BACKFILL_TERM_DURATION_MISMATCH", infraerrors.Reason(err))
@@ -123,7 +215,7 @@ func TestBackfillSubscriptionGrantRejectsUnprovenOrStaleAssertions(t *testing.T)
 		require.NoError(t, err)
 		_, err = svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
 			AuditRevision: review.SubscriptionBackfill.AuditRevision, SubscriptionID: subscription.ID,
-			TermStartAt: termStart, TermEndAt: termEnd, OperatorID: 71,
+			TermStartAt: termStart, TermEndAt: termEnd, EvidenceDetail: backfillTestEvidenceDetail, OperatorID: 71,
 		})
 		require.Error(t, err)
 		require.Equal(t, "SUBSCRIPTION_BACKFILL_AUDIT_EVIDENCE_MISSING", infraerrors.Reason(err))
@@ -143,6 +235,19 @@ func TestBackfillSubscriptionGrantRejectsUnprovenOrStaleAssertions(t *testing.T)
 		requireNoSubscriptionGrant(t, ctx, svc, order.ID)
 	})
 
+	t.Run("default evidence also requires a human detail", func(t *testing.T) {
+		svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
+		review, err := svc.ReviewRefund(ctx, order.ID)
+		require.NoError(t, err)
+		_, err = svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
+			AuditRevision: review.SubscriptionBackfill.AuditRevision, SubscriptionID: subscription.ID,
+			TermStartAt: termStart, TermEndAt: termEnd, OperatorID: 71,
+		})
+		require.Error(t, err)
+		require.Equal(t, "SUBSCRIPTION_BACKFILL_EVIDENCE_DETAIL_REQUIRED", infraerrors.Reason(err))
+		requireNoSubscriptionGrant(t, ctx, svc, order.ID)
+	})
+
 	t.Run("pending refund keeps provenance immutable", func(t *testing.T) {
 		svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
 		review, err := svc.ReviewRefund(ctx, order.ID)
@@ -150,7 +255,7 @@ func TestBackfillSubscriptionGrantRejectsUnprovenOrStaleAssertions(t *testing.T)
 		insertPendingSubscriptionBackfillRefundAttempt(t, ctx, svc, order)
 		_, err = svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
 			AuditRevision: review.SubscriptionBackfill.AuditRevision, SubscriptionID: subscription.ID,
-			TermStartAt: termStart, TermEndAt: termEnd, OperatorID: 71,
+			TermStartAt: termStart, TermEndAt: termEnd, EvidenceDetail: backfillTestEvidenceDetail, OperatorID: 71,
 		})
 		require.Error(t, err)
 		require.Equal(t, "SUBSCRIPTION_BACKFILL_REFUND_IN_FLIGHT", infraerrors.Reason(err))
@@ -159,23 +264,33 @@ func TestBackfillSubscriptionGrantRejectsUnprovenOrStaleAssertions(t *testing.T)
 
 	t.Run("another order term cannot overlap", func(t *testing.T) {
 		svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
-		review, err := svc.ReviewRefund(ctx, order.ID)
-		require.NoError(t, err)
 		_, otherOrder, _ := newUnifiedRefundFixture(t, svc.entClient, payment.TypeWxpay)
-		_, err = svc.entClient.ExecContext(ctx, `INSERT INTO payment_subscription_grants
+		_, err := svc.entClient.ExecContext(ctx, `INSERT INTO payment_subscription_grants
 			(payment_order_id, subscription_id, user_id, group_id, term_start_at, original_term_end_at, current_term_end_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$6)`,
 			otherOrder.ID, subscription.ID, subscription.UserID, subscription.GroupID,
-			termStart.AddDate(0, 0, -5), termEnd.AddDate(0, 0, -5))
+			termStart, termStart.AddDate(0, 0, 5))
 		require.NoError(t, err)
+		review, err := svc.ReviewRefund(ctx, order.ID)
+		require.NoError(t, err)
+		require.NotNil(t, review.SubscriptionBackfill)
 		_, err = svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
 			AuditRevision: review.SubscriptionBackfill.AuditRevision, SubscriptionID: subscription.ID,
-			TermStartAt: termStart, TermEndAt: termEnd, OperatorID: 71,
+			TermStartAt: termStart, TermEndAt: termEnd, EvidenceDetail: backfillTestEvidenceDetail, OperatorID: 71,
 		})
 		require.Error(t, err)
 		require.Equal(t, "SUBSCRIPTION_BACKFILL_TERM_OVERLAP", infraerrors.Reason(err))
 		requireNoSubscriptionGrant(t, ctx, svc, order.ID)
 	})
+}
+
+func TestSubscriptionBackfillAuditDetailRequiresStructuredGroupAndDuration(t *testing.T) {
+	require.False(t, subscriptionBackfillAuditDetailMatches("", 4, 30, 1))
+	require.False(t, subscriptionBackfillAuditDetailMatches("legacy text", 4, 30, 1))
+	require.False(t, subscriptionBackfillAuditDetailMatches(`{"groupID":4}`, 4, 30, 1))
+	require.False(t, subscriptionBackfillAuditDetailMatches(`{"validityDays":30}`, 4, 30, 1))
+	require.False(t, subscriptionBackfillAuditDetailMatches(`{"groupID":4,"validityDays":30,"subscriptionID":2}`, 4, 30, 1))
+	require.True(t, subscriptionBackfillAuditDetailMatches(`{"groupID":4,"validityDays":30}`, 4, 30, 1))
 }
 
 func newLegacySubscriptionGrantBackfillFixture(t *testing.T, includeAssignmentAudit bool) (*PaymentService, *dbent.PaymentOrder, *dbent.UserSubscription, time.Time, time.Time) {

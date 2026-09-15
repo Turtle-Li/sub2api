@@ -948,6 +948,7 @@ export default {
         LEGACY_SUBSCRIPTION_UNATTRIBUTED: '该历史订单没有可证明的订阅期限。',
         SUBSCRIPTION_CHANGED: '当前订阅已不再与购买的期限相符。',
         SUBSCRIPTION_NOT_TAIL: '购买的订阅期限已不是当前可退款的尾段。',
+        SUBSCRIPTION_REFUND_IN_FLIGHT: '同一订阅还有另一笔退款正在处理，请先完成该退款。',
         SUBSCRIPTION_FULLY_USED: '订阅期限已无可退款的剩余时长。',
       },
       auditLogs: '操作日志',

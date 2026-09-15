@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -52,6 +53,17 @@ type SubscriptionGrantBackfillCandidate struct {
 	StartsAt       time.Time `json:"starts_at"`
 	ExpiresAt      time.Time `json:"expires_at"`
 	Status         string    `json:"status"`
+}
+
+// subscriptionGrantBackfillOccupiedTerm is existing immutable provenance on a
+// candidate subscription. It is kept private because the administrator only
+// needs the resulting free-term suggestion, while the complete set still
+// participates in the audit revision.
+type subscriptionGrantBackfillOccupiedTerm struct {
+	PaymentOrderID int64
+	SubscriptionID int64
+	TermStartAt    time.Time
+	TermEndAt      time.Time
 }
 
 // SubscriptionGrantBackfillInput is an audit assertion, not a refund request.
@@ -109,7 +121,7 @@ func paymentSubscriptionBackfillSnapshot(order *dbent.PaymentOrder) (subscriptio
 	return subscriptionGrantBackfillSnapshot{GroupID: groupID, PurchasedDays: int(days)}, true
 }
 
-func subscriptionGrantBackfillAuditRevision(order *dbent.PaymentOrder, snapshot subscriptionGrantBackfillSnapshot, candidates []SubscriptionGrantBackfillCandidate) string {
+func subscriptionGrantBackfillAuditRevision(order *dbent.PaymentOrder, snapshot subscriptionGrantBackfillSnapshot, candidates []SubscriptionGrantBackfillCandidate, occupied []subscriptionGrantBackfillOccupiedTerm) string {
 	if order == nil || snapshot.GroupID <= 0 || snapshot.PurchasedDays <= 0 {
 		return ""
 	}
@@ -141,6 +153,14 @@ func subscriptionGrantBackfillAuditRevision(order *dbent.PaymentOrder, snapshot 
 			candidate.StartsAt.UTC().Format(time.RFC3339Nano),
 			candidate.ExpiresAt.UTC().Format(time.RFC3339Nano),
 			candidate.Status,
+		)
+	}
+	for _, term := range occupied {
+		parts = append(parts,
+			strconv.FormatInt(term.PaymentOrderID, 10),
+			strconv.FormatInt(term.SubscriptionID, 10),
+			term.TermStartAt.UTC().Format(time.RFC3339Nano),
+			term.TermEndAt.UTC().Format(time.RFC3339Nano),
 		)
 	}
 	return refundReviewRevision(parts...)
@@ -176,7 +196,11 @@ func (s *PaymentService) subscriptionGrantBackfillHint(ctx context.Context, clie
 			Status:         candidate.Status,
 		})
 	}
-	suggested, termStart, termEnd, found := subscriptionGrantBackfillSuggestion(snapshot.PurchasedDays, hint.Candidates)
+	occupied, err := subscriptionGrantBackfillOccupiedTerms(ctx, client, order.ID, hint.Candidates)
+	if err != nil {
+		return nil, fmt.Errorf("load occupied subscription grant terms: %w", err)
+	}
+	suggested, termStart, termEnd, found := subscriptionGrantBackfillSuggestion(snapshot.PurchasedDays, hint.Candidates, occupied)
 	if !found {
 		return nil, nil
 	}
@@ -184,35 +208,143 @@ func (s *PaymentService) subscriptionGrantBackfillHint(ctx context.Context, clie
 	hint.SuggestedTermStartAt = termStart
 	hint.SuggestedTermEndAt = termEnd
 	hint.EvidenceSource = refundBackfillEvidencePaymentAuditAndSubscription
-	hint.AuditRevision = subscriptionGrantBackfillAuditRevision(order, snapshot, hint.Candidates)
+	hint.AuditRevision = subscriptionGrantBackfillAuditRevision(order, snapshot, hint.Candidates, occupied)
 	return hint, nil
 }
 
-// subscriptionGrantBackfillSuggestion pre-fills only an existing tail interval
-// that fits entirely in the candidate lifecycle. It is not provenance: the
-// administrator still submits the asserted dates and evidence, then the
-// transaction locks and rechecks them before a grant can be inserted.
-func subscriptionGrantBackfillSuggestion(purchasedDays int, candidates []SubscriptionGrantBackfillCandidate) (SubscriptionGrantBackfillCandidate, time.Time, time.Time, bool) {
+func subscriptionGrantBackfillOccupiedTerms(ctx context.Context, client *dbent.Client, orderID int64, candidates []SubscriptionGrantBackfillCandidate) ([]subscriptionGrantBackfillOccupiedTerm, error) {
+	if client == nil || len(candidates) == 0 {
+		return nil, nil
+	}
+	args := []any{orderID}
+	placeholders := make([]string, 0, len(candidates))
+	seen := make(map[int64]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.SubscriptionID <= 0 {
+			continue
+		}
+		if _, exists := seen[candidate.SubscriptionID]; exists {
+			continue
+		}
+		seen[candidate.SubscriptionID] = struct{}{}
+		args = append(args, candidate.SubscriptionID)
+		placeholders = append(placeholders, "$"+strconv.Itoa(len(args)))
+	}
+	if len(placeholders) == 0 {
+		return nil, nil
+	}
+	rows, err := client.QueryContext(ctx, `SELECT payment_order_id, subscription_id, term_start_at, original_term_end_at
+		FROM payment_subscription_grants
+		WHERE payment_order_id <> $1 AND subscription_id IN (`+strings.Join(placeholders, ",")+`)
+		ORDER BY subscription_id ASC, term_start_at ASC, original_term_end_at ASC, payment_order_id ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	occupied := make([]subscriptionGrantBackfillOccupiedTerm, 0)
+	for rows.Next() {
+		var term subscriptionGrantBackfillOccupiedTerm
+		if err := rows.Scan(&term.PaymentOrderID, &term.SubscriptionID, &term.TermStartAt, &term.TermEndAt); err != nil {
+			return nil, err
+		}
+		occupied = append(occupied, term)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return occupied, nil
+}
+
+// subscriptionGrantBackfillSuggestion pre-fills only a term that fits in a
+// candidate lifecycle and does not intersect another order's immutable grant.
+// It is not provenance: the administrator still submits the asserted dates and
+// evidence, then the transaction locks and rechecks them before insertion.
+func subscriptionGrantBackfillSuggestion(purchasedDays int, candidates []SubscriptionGrantBackfillCandidate, occupied []subscriptionGrantBackfillOccupiedTerm) (SubscriptionGrantBackfillCandidate, time.Time, time.Time, bool) {
 	if purchasedDays <= 0 {
 		return SubscriptionGrantBackfillCandidate{}, time.Time{}, time.Time{}, false
 	}
 	var selected SubscriptionGrantBackfillCandidate
 	var selectedStart time.Time
+	var selectedEnd time.Time
 	for _, candidate := range candidates {
-		end := candidate.ExpiresAt.UTC()
-		start := end.AddDate(0, 0, -purchasedDays)
-		if start.Before(candidate.StartsAt.UTC()) {
+		lifecycleStart := candidate.StartsAt.UTC()
+		lifecycleEnd := candidate.ExpiresAt.UTC()
+		if !lifecycleEnd.After(lifecycleStart) {
 			continue
 		}
-		if selected.SubscriptionID == 0 || end.After(selected.ExpiresAt) ||
-			(end.Equal(selected.ExpiresAt) && candidate.SubscriptionID > selected.SubscriptionID) {
-			selected, selectedStart = candidate, start
+		terms := make([]subscriptionGrantBackfillOccupiedTerm, 0)
+		for _, term := range occupied {
+			if term.SubscriptionID != candidate.SubscriptionID || !term.TermEndAt.After(lifecycleStart) || !term.TermStartAt.Before(lifecycleEnd) {
+				continue
+			}
+			term.TermStartAt = maxBackfillTime(term.TermStartAt.UTC(), lifecycleStart)
+			term.TermEndAt = minBackfillTime(term.TermEndAt.UTC(), lifecycleEnd)
+			if term.TermEndAt.After(term.TermStartAt) {
+				terms = append(terms, term)
+			}
+		}
+		sort.Slice(terms, func(i, j int) bool {
+			if terms[i].TermStartAt.Equal(terms[j].TermStartAt) {
+				return terms[i].TermEndAt.Before(terms[j].TermEndAt)
+			}
+			return terms[i].TermStartAt.Before(terms[j].TermStartAt)
+		})
+
+		cursor := lifecycleStart
+		for _, term := range append(terms, subscriptionGrantBackfillOccupiedTerm{TermStartAt: lifecycleEnd, TermEndAt: lifecycleEnd}) {
+			if term.TermStartAt.After(cursor) {
+				end := term.TermStartAt
+				start := end.AddDate(0, 0, -purchasedDays)
+				if !start.Before(cursor) && betterSubscriptionGrantBackfillSuggestion(candidate, start, end, selected, selectedStart, selectedEnd) {
+					selected, selectedStart, selectedEnd = candidate, start, end
+				}
+			}
+			if term.TermEndAt.After(cursor) {
+				cursor = term.TermEndAt
+			}
 		}
 	}
 	if selected.SubscriptionID == 0 {
 		return SubscriptionGrantBackfillCandidate{}, time.Time{}, time.Time{}, false
 	}
-	return selected, selectedStart, selected.ExpiresAt.UTC(), true
+	return selected, selectedStart, selectedEnd, true
+}
+
+func betterSubscriptionGrantBackfillSuggestion(candidate SubscriptionGrantBackfillCandidate, start, end time.Time, selected SubscriptionGrantBackfillCandidate, selectedStart, selectedEnd time.Time) bool {
+	if selected.SubscriptionID == 0 {
+		return true
+	}
+	// Prefer the most recent unoccupied term, preserving the prior behavior
+	// when several active subscription records are available. Within one
+	// lifecycle, the latest complete gap preserves the historical tail-based
+	// suggestion while still stopping at the next proven grant boundary.
+	if candidate.ExpiresAt.After(selected.ExpiresAt) {
+		return true
+	}
+	if candidate.ExpiresAt.Before(selected.ExpiresAt) {
+		return false
+	}
+	if candidate.SubscriptionID != selected.SubscriptionID {
+		return candidate.SubscriptionID > selected.SubscriptionID
+	}
+	if start.Equal(selectedStart) {
+		return end.Before(selectedEnd)
+	}
+	return start.After(selectedStart)
+}
+
+func maxBackfillTime(left, right time.Time) time.Time {
+	if left.After(right) {
+		return left
+	}
+	return right
+}
+
+func minBackfillTime(left, right time.Time) time.Time {
+	if left.Before(right) {
+		return left
+	}
+	return right
 }
 
 func (s *PaymentService) manualSubscriptionGrantBackfillReview(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, now time.Time) (*RefundReview, error) {
@@ -260,8 +392,8 @@ func normalizeSubscriptionGrantBackfillInput(input SubscriptionGrantBackfillInpu
 	if utf8.RuneCountInString(input.EvidenceDetail) > refundBackfillEvidenceDetailMaxRunes {
 		return input, infraerrors.BadRequest("SUBSCRIPTION_BACKFILL_EVIDENCE_DETAIL_INVALID", "evidence detail is too long")
 	}
-	if input.EvidenceSource != refundBackfillEvidencePaymentAuditAndSubscription && input.EvidenceDetail == "" {
-		return input, infraerrors.BadRequest("SUBSCRIPTION_BACKFILL_EVIDENCE_DETAIL_REQUIRED", "evidence detail is required for this source")
+	if input.EvidenceDetail == "" {
+		return input, infraerrors.BadRequest("SUBSCRIPTION_BACKFILL_EVIDENCE_DETAIL_REQUIRED", "evidence detail is required")
 	}
 	return input, nil
 }
@@ -511,20 +643,21 @@ func hasSubscriptionBackfillPaymentAudit(ctx context.Context, client *dbent.Clie
 
 func subscriptionBackfillAuditDetailMatches(raw string, groupID int64, days int, subscriptionID int64) bool {
 	if strings.TrimSpace(raw) == "" {
-		return true
+		return false
 	}
 	var detail map[string]any
 	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
-		// Older fulfillment audits can be text-only. The action itself is the
-		// durable evidence; no contradictory structured field was supplied.
-		return true
+		return false
 	}
+	groupMatched := false
+	daysMatched := false
 	for _, check := range []struct {
-		keys []string
-		want int64
+		keys     []string
+		want     int64
+		required *bool
 	}{
-		{keys: []string{"groupID", "group_id"}, want: groupID},
-		{keys: []string{"validityDays", "subscription_days"}, want: int64(days)},
+		{keys: []string{"groupID", "group_id"}, want: groupID, required: &groupMatched},
+		{keys: []string{"validityDays", "subscription_days"}, want: int64(days), required: &daysMatched},
 		{keys: []string{"subscriptionID", "subscription_id"}, want: subscriptionID},
 	} {
 		for _, key := range check.keys {
@@ -536,9 +669,12 @@ func subscriptionBackfillAuditDetailMatches(raw string, groupID int64, days int,
 			if !ok || value != check.want {
 				return false
 			}
+			if check.required != nil {
+				*check.required = true
+			}
 		}
 	}
-	return true
+	return groupMatched && daysMatched
 }
 
 func subscriptionGrantBackfillAuditDetail(order *dbent.PaymentOrder, subscription *dbent.UserSubscription, input SubscriptionGrantBackfillInput, balanceBonus float64, resetCardCount, concurrencyTarget int) (string, error) {

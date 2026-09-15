@@ -30,6 +30,11 @@ func TestSubscriptionResetCardSystemTiersMigrationBindsOnlyReviewedProducts(t *t
 	require.Contains(t, sql, "subscription_product_code = 'openai_5x'")
 	require.Contains(t, sql, "SELECT 12, 'openai_subscription', 2")
 	require.Contains(t, sql, "system tier conflict")
+	require.Contains(t, sql, "prevent_subscription_product_code_mutation")
+	require.Contains(t, sql, "groups_prevent_subscription_product_code_mutation")
+	require.Contains(t, sql, "prevent_system_subscription_reset_card_tier_mutation")
+	require.Contains(t, sql, "subscription_reset_card_tiers_prevent_system_mutation")
+	require.Contains(t, sql, "managed by versioned migrations")
 	require.Contains(t, sql, "Historical grants remain intentionally untouched")
 	require.NotContains(t, sql, "UPDATE subscription_reset_grants")
 }

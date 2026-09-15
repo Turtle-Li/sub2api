@@ -570,6 +570,13 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 	if sub.DeletedAt != nil || sub.Status != SubscriptionStatusActive || sub.GroupID != grant.GroupID || sub.UserID != grant.UserID {
 		return manualRefundReview(order, now, "SUBSCRIPTION_CHANGED", "the subscription no longer matches the purchased term"), nil
 	}
+	otherReservation, err := subscriptionHasOtherRefundReservation(ctx, client, grant.SubscriptionID, order.ID)
+	if err != nil {
+		return nil, err
+	}
+	if otherReservation {
+		return manualRefundReview(order, now, "SUBSCRIPTION_REFUND_IN_FLIGHT", "another order on this subscription has a refund in progress"), nil
+	}
 	if !sub.ExpiresAt.Equal(grant.CurrentEnd) || grant.ReservedSeconds > 0 {
 		return manualRefundReview(order, now, "SUBSCRIPTION_NOT_TAIL", "the purchased term is no longer the current refundable tail"), nil
 	}
@@ -612,6 +619,23 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 	}
 	review.CanRefund = true
 	return review, nil
+}
+
+func subscriptionHasOtherRefundReservation(ctx context.Context, client *dbent.Client, subscriptionID, orderID int64) (bool, error) {
+	rows, err := client.QueryContext(ctx, `SELECT COUNT(*) FROM payment_subscription_grants
+		WHERE subscription_id = $1 AND payment_order_id <> $2 AND reserved_seconds > 0`, subscriptionID, orderID)
+	if err != nil {
+		return false, fmt.Errorf("check other subscription refund reservation: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return false, rows.Err()
+	}
+	var count int
+	if err := rows.Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, rows.Err()
 }
 
 // PrepareReviewedRefund preserves the existing service seam for callers that
