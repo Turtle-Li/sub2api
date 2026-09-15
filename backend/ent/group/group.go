@@ -46,6 +46,8 @@ const (
 	FieldPlatform = "platform"
 	// FieldSubscriptionType holds the string denoting the subscription_type field in the database.
 	FieldSubscriptionType = "subscription_type"
+	// FieldSubscriptionProductCode holds the string denoting the subscription_product_code field in the database.
+	FieldSubscriptionProductCode = "subscription_product_code"
 	// FieldDailyLimitUsd holds the string denoting the daily_limit_usd field in the database.
 	FieldDailyLimitUsd = "daily_limit_usd"
 	// FieldWeeklyLimitUsd holds the string denoting the weekly_limit_usd field in the database.
@@ -238,6 +240,7 @@ var Columns = []string{
 	FieldDuplicateOperationID,
 	FieldPlatform,
 	FieldSubscriptionType,
+	FieldSubscriptionProductCode,
 	FieldDailyLimitUsd,
 	FieldWeeklyLimitUsd,
 	FieldMonthlyLimitUsd,
@@ -356,6 +359,8 @@ var (
 	DefaultSubscriptionType string
 	// SubscriptionTypeValidator is a validator for the "subscription_type" field. It is called by the builders before save.
 	SubscriptionTypeValidator func(string) error
+	// SubscriptionProductCodeValidator is a validator for the "subscription_product_code" field. It is called by the builders before save.
+	SubscriptionProductCodeValidator func(string) error
 	// DefaultDefaultValidityDays holds the default value on creation for the "default_validity_days" field.
 	DefaultDefaultValidityDays int
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.
@@ -517,6 +522,11 @@ func ByPlatform(opts ...sql.OrderTermOption) OrderOption {
 // BySubscriptionType orders the results by the subscription_type field.
 func BySubscriptionType(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSubscriptionType, opts...).ToFunc()
+}
+
+// BySubscriptionProductCode orders the results by the subscription_product_code field.
+func BySubscriptionProductCode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSubscriptionProductCode, opts...).ToFunc()
 }
 
 // ByDailyLimitUsd orders the results by the daily_limit_usd field.

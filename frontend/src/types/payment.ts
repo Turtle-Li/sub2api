@@ -112,6 +112,13 @@ export interface CheckoutInfoResponse {
 
 export type PaymentFactStatus = 'PAID' | 'UNPAID'
 export type FulfillmentStatus = 'NOT_STARTED' | 'PENDING' | 'FULFILLED' | 'FAILED' | 'MANUAL_REVIEW'
+export type RefundEntitlementStatus =
+  | 'NOT_APPLICABLE'
+  | 'RECLAIMING'
+  | 'RECLAIMED'
+  | 'RESTORED'
+  | 'MANUAL_REVIEW'
+  | 'HISTORICAL_UNVERIFIED'
 
 export interface OrderProductSnapshot {
   kind?: string
@@ -166,6 +173,8 @@ export interface PaymentOrder {
   invoice_eligible?: boolean
   payment_status?: PaymentFactStatus
   fulfillment_status?: FulfillmentStatus
+  /** Current disposition of benefits after a refund; fulfillment_status remains the historical delivery fact. */
+  refund_entitlement_status?: RefundEntitlementStatus
   needs_manual_review?: boolean
   product_snapshot?: OrderProductSnapshot
   user_email?: string
@@ -277,11 +286,6 @@ export interface ResetCardTierPolicy {
   tier_rank: number
   created_at?: string
   updated_at?: string
-}
-
-export interface ResetCardTierPolicyInput {
-  family_key: string
-  tier_rank: number
 }
 
 export type ResetCardExpiryUnit = 'day' | 'week' | 'month'

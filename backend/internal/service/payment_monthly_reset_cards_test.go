@@ -9,45 +9,44 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizePlanEntitlementsMonthlyResetCardDelivery(t *testing.T) {
-	_, monthly, err := normalizePlanEntitlements(map[string]any{
+	_, monthly, err := normalizePlanEntitlementsForPlan(map[string]any{
 		"reset_card_count":         2,
 		"reset_card_delivery_mode": " MONTHLY ",
-		"reset_card_issue_count":   3,
+		"reset_card_issue_count":   "client-forged",
 		"reset_card_expiry_days":   14,
-	})
+	}, 1, "quarter")
 	require.NoError(t, err)
 	require.Equal(t, resetCardDeliveryModeMonthly, monthly.ResetCardDeliveryMode)
 	require.Equal(t, 3, monthly.ResetCardIssueCount)
 	require.Equal(t, 6, mustResetCardCommitment(t, monthly))
 
-	_, immediate, err := normalizePlanEntitlements(map[string]any{
+	_, immediate, err := normalizePlanEntitlementsForPlan(map[string]any{
 		"reset_card_count":         2,
 		"reset_card_delivery_mode": "immediate",
 		"reset_card_issue_count":   99,
 		"reset_card_expiry_days":   14,
-	})
+	}, 12, "month")
 	require.NoError(t, err)
 	require.Equal(t, resetCardDeliveryModeImmediate, immediate.ResetCardDeliveryMode)
 	require.Equal(t, 1, immediate.ResetCardIssueCount)
 
-	_, noCards, err := normalizePlanEntitlements(map[string]any{
+	_, noCards, err := normalizePlanEntitlementsForPlan(map[string]any{
 		"reset_card_delivery_mode": "monthly",
 		"reset_card_issue_count":   3,
-	})
+	}, 1, "month")
 	require.NoError(t, err)
 	require.Equal(t, resetCardDeliveryModeImmediate, noCards.ResetCardDeliveryMode)
 	require.Zero(t, noCards.ResetCardIssueCount)
 
-	_, _, err = normalizePlanEntitlements(map[string]any{
+	_, _, err = normalizePlanEntitlementsForPlan(map[string]any{
 		"reset_card_count":         1,
 		"reset_card_delivery_mode": "weekly",
 		"reset_card_expiry_days":   14,
-	})
+	}, 1, "month")
 	require.ErrorContains(t, err, "reset_card_delivery_mode")
 }
 
@@ -65,33 +64,28 @@ func TestMonthlyResetCardPlanTermValidationUsesCalendarUnits(t *testing.T) {
 		validityUnit string
 		issues       int
 	}{
+		{name: "one month", validityDays: 1, validityUnit: "month", issues: 1},
 		{name: "months", validityDays: 2, validityUnit: "months", issues: 2},
 		{name: "quarters", validityDays: 1, validityUnit: "quarter", issues: 3},
 		{name: "years", validityDays: 1, validityUnit: "years", issues: 12},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validatePlanResetCardDelivery(PlanEntitlements{
+			resolved, err := resolvePlanResetCardDelivery(PlanEntitlements{
 				ResetCardCount:        1,
 				ResetCardDeliveryMode: resetCardDeliveryModeMonthly,
-				ResetCardIssueCount:   tc.issues,
+				ResetCardIssueCount:   999,
 			}, tc.validityDays, tc.validityUnit)
 			require.NoError(t, err)
+			require.Equal(t, tc.issues, resolved.ResetCardIssueCount)
 		})
 	}
 
-	err := validatePlanResetCardDelivery(PlanEntitlements{
+	_, err := resolvePlanResetCardDelivery(PlanEntitlements{
 		ResetCardCount:        1,
 		ResetCardDeliveryMode: resetCardDeliveryModeMonthly,
 		ResetCardIssueCount:   3,
 	}, 90, "days")
 	require.ErrorContains(t, err, "monthly reset cards require")
-
-	err = validatePlanResetCardDelivery(PlanEntitlements{
-		ResetCardCount:        1,
-		ResetCardDeliveryMode: resetCardDeliveryModeMonthly,
-		ResetCardIssueCount:   2,
-	}, 1, "quarter")
-	require.ErrorContains(t, err, "reset_card_issue_count")
 }
 
 func TestMonthlyResetCardCalendarAnchorsMonthEndAndLeapYear(t *testing.T) {
@@ -105,11 +99,10 @@ func TestMonthlyResetCardCalendarAnchorsMonthEndAndLeapYear(t *testing.T) {
 	require.Equal(t, "2025-03-31", monthlyResetCardDueAt(nonLeap, 31, 2).In(monthlyResetCardAnchorLocation).Format("2006-01-02"))
 }
 
-func TestPaymentConfigMonthlyResetCardPlanGuardFailsClosed(t *testing.T) {
+func TestPaymentConfigMonthlyResetCardPlanNeedsNoRolloutSettingAndDerivesIssues(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
-	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
-	svc := &PaymentConfigService{entClient: client, settingRepo: repo}
+	svc := &PaymentConfigService{entClient: client}
 	group, err := client.Group.Create().
 		SetName("monthly-plan-guard").
 		SetPlatform(PlatformOpenAI).
@@ -126,32 +119,28 @@ func TestPaymentConfigMonthlyResetCardPlanGuardFailsClosed(t *testing.T) {
 		Entitlements: map[string]any{
 			"reset_card_count":         2,
 			"reset_card_delivery_mode": "monthly",
-			"reset_card_issue_count":   3,
+			"reset_card_issue_count":   999,
 			"reset_card_expiry_days":   14,
 		},
 	}
-	_, err = svc.CreatePlan(ctx, request)
-	require.Equal(t, "MONTHLY_RESET_CARDS_DISABLED", infraerrors.Reason(err))
-
-	repo.values[SettingPaymentMonthlyResetCardsEnabled] = "true"
 	plan, err := svc.CreatePlan(ctx, request)
 	require.NoError(t, err)
+	require.Equal(t, 3, PlanEntitlementsFromRaw(plan.Entitlements).ResetCardIssueCount)
 
-	repo.values[SettingPaymentMonthlyResetCardsEnabled] = "false"
 	name := "quarterly cards renamed"
-	_, err = svc.UpdatePlan(ctx, plan.ID, UpdatePlanRequest{Name: &name})
-	require.Equal(t, "MONTHLY_RESET_CARDS_DISABLED", infraerrors.Reason(err), "an unrelated patch cannot keep a monthly plan enabled")
-	forSale := false
-	updated, err := svc.UpdatePlan(ctx, plan.ID, UpdatePlanRequest{ForSale: &forSale})
-	require.NoError(t, err, "operators must be able to take a monthly plan off sale while the worker is disabled")
-	require.False(t, updated.ForSale)
+	validityUnit := "month"
+	updated, err := svc.UpdatePlan(ctx, plan.ID, UpdatePlanRequest{
+		Name:         &name,
+		ValidityUnit: &validityUnit,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, PlanEntitlementsFromRaw(updated.Entitlements).ResetCardIssueCount)
 }
 
-func TestMonthlyResetCardDisabledHidesCatalogAndRejectsCheckoutAtBothBoundaries(t *testing.T) {
+func TestMonthlyResetCardPlanIsVisibleAndCheckoutAdmitsWithoutRolloutSetting(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
-	settings := &paymentConfigSettingRepoStub{values: map[string]string{SettingPaymentMonthlyResetCardsEnabled: "true"}}
-	configService := &PaymentConfigService{entClient: client, settingRepo: settings}
+	configService := &PaymentConfigService{entClient: client}
 	user, err := client.User.Create().
 		SetEmail("monthly-admission@example.com").
 		SetUsername("monthly-admission").
@@ -177,10 +166,9 @@ func TestMonthlyResetCardDisabledHidesCatalogAndRejectsCheckoutAtBothBoundaries(
 	})
 	require.NoError(t, err)
 
-	settings.values[SettingPaymentMonthlyResetCardsEnabled] = "false"
 	catalog, err := configService.CustomerPaymentCatalogForUser(ctx, user.ID, nil)
 	require.NoError(t, err)
-	require.Empty(t, catalog.Plans, "the private rollout state must not be exposed as a purchasable card")
+	require.Len(t, catalog.Plans, 1)
 
 	paymentService := &PaymentService{
 		entClient:     client,
@@ -191,13 +179,13 @@ func TestMonthlyResetCardDisabledHidesCatalogAndRejectsCheckoutAtBothBoundaries(
 	}
 	request := CreateOrderRequest{UserID: user.ID, PlanID: plan.ID, OrderType: payment.OrderTypeSubscription}
 	_, err = paymentService.validateSubOrder(ctx, request)
-	require.ErrorIs(t, err, ErrPurchaseNotAllowed)
+	require.NoError(t, err)
 
 	tx, err := client.Tx(ctx)
 	require.NoError(t, err)
 	txCtx := dbent.NewTxContext(ctx, tx)
 	_, _, err = paymentService.revalidateSubscriptionOrderInTx(txCtx, tx, request, plan)
-	require.ErrorIs(t, err, ErrPurchaseNotAllowed, "a switch change after catalog validation must still prevent a durable order")
+	require.NoError(t, err)
 	require.NoError(t, tx.Rollback())
 }
 
@@ -210,26 +198,12 @@ func (r monthlyResetCardCheckoutGroupRepo) GetByID(context.Context, int64) (*Gro
 	return r.group, nil
 }
 
-type monthlyResetCardContextSettingRepo struct {
-	paymentConfigSettingRepoStub
-	seen context.Context
-}
-
-func (r *monthlyResetCardContextSettingRepo) GetValue(ctx context.Context, key string) (string, error) {
-	r.seen = ctx
-	return r.paymentConfigSettingRepoStub.GetValue(ctx, key)
-}
-
 func TestPaymentMonthlyResetCardDeliveryRunOnceNormalizesNilContextAndStopCancels(t *testing.T) {
 	client := newPaymentConfigServiceTestClient(t)
 	installMonthlyResetCardSQLiteTables(t, client)
-	repo := &monthlyResetCardContextSettingRepo{paymentConfigSettingRepoStub: paymentConfigSettingRepoStub{
-		values: map[string]string{SettingPaymentMonthlyResetCardsEnabled: "false"},
-	}}
-	worker := NewPaymentMonthlyResetCardDeliveryService(client, &PaymentConfigService{settingRepo: repo}, time.Hour)
-	//nolint:staticcheck // Exercise the worker's intentional nil-context normalization.
+	worker := NewPaymentMonthlyResetCardDeliveryService(client, time.Hour)
+	//nolint:staticcheck // Exercise the worker’s intentional nil-context normalization.
 	require.NoError(t, worker.RunOnce(nil))
-	require.Nil(t, repo.seen, "the delivery worker must not consult the new-order admission gate")
 
 	worker.Start()
 	worker.Start()
@@ -242,23 +216,27 @@ func TestPaymentMonthlyResetCardDeliveryRunOnceNormalizesNilContextAndStopCancel
 	}
 }
 
-func TestPaymentMonthlyResetCardDeliveryContinuesPaidScheduleWhenAdmissionGateIsDisabled(t *testing.T) {
+func TestPaymentMonthlyResetCardDeliveryProcessesPaidScheduleWithoutConfiguration(t *testing.T) {
 	anchor := time.Date(2025, time.January, 15, 9, 0, 0, 0, monthlyResetCardAnchorLocation)
 	now := anchor.Add(2 * time.Hour).UTC()
 	fixture := newMonthlyResetCardFixture(t, anchor, monthlyResetCardDueAt(anchor, 15, 3), monthlyResetCardDueAt(anchor, 15, 3), 3)
 	fixture.ensureSchedule(t)
 
-	settings := &paymentConfigSettingRepoStub{values: map[string]string{
-		SettingPaymentMonthlyResetCardsEnabled: "false",
-	}}
-	worker := NewPaymentMonthlyResetCardDeliveryService(
-		fixture.client,
-		&PaymentConfigService{settingRepo: settings},
-		time.Hour,
-	)
+	worker := NewPaymentMonthlyResetCardDeliveryService(fixture.client, time.Hour)
 	worker.now = func() time.Time { return now }
 
 	require.NoError(t, worker.RunOnce(fixture.ctx))
+	assertMonthlyResetCardCounts(t, fixture, 1, 1)
+}
+
+func TestMonthlyResetCardScheduleAllowsOneCalendarOccurrence(t *testing.T) {
+	anchor := time.Date(2025, time.January, 15, 9, 0, 0, 0, monthlyResetCardAnchorLocation)
+	termEnd := monthlyResetCardDueAt(anchor, 15, 1)
+	fixture := newMonthlyResetCardFixture(t, anchor, termEnd, termEnd, 1)
+	schedule := fixture.ensureSchedule(t)
+	require.Equal(t, 1, schedule.OccurrenceCount)
+
+	require.NoError(t, workerProcessMonthlyResetCardCandidate(fixture, schedule, anchor.Add(time.Hour).UTC()))
 	assertMonthlyResetCardCounts(t, fixture, 1, 1)
 }
 

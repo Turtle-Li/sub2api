@@ -1617,6 +1617,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
 	}
+	if _u.mutation.SubscriptionProductCodeCleared() {
+		_spec.ClearField(group.FieldSubscriptionProductCode, field.TypeString)
+	}
 	if value, ok := _u.mutation.DailyLimitUsd(); ok {
 		_spec.SetField(group.FieldDailyLimitUsd, field.TypeFloat64, value)
 	}
@@ -3840,6 +3843,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
+	}
+	if _u.mutation.SubscriptionProductCodeCleared() {
+		_spec.ClearField(group.FieldSubscriptionProductCode, field.TypeString)
 	}
 	if value, ok := _u.mutation.DailyLimitUsd(); ok {
 		_spec.SetField(group.FieldDailyLimitUsd, field.TypeFloat64, value)

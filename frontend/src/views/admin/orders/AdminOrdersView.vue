@@ -109,6 +109,11 @@
         <div class="flex flex-wrap gap-3">
           <OrderLifecycleBadge kind="payment" :value="paymentFact(selectedOrder)" />
           <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(selectedOrder)" />
+          <OrderLifecycleBadge
+            v-if="selectedOrder.refund_entitlement_status && selectedOrder.refund_entitlement_status !== 'NOT_APPLICABLE'"
+            kind="refundEntitlement"
+            :value="selectedOrder.refund_entitlement_status"
+          />
         </div>
         <OrderPurchaseSnapshot :order="selectedOrder" />
         <!-- Audit Logs -->
@@ -135,8 +140,10 @@
       :loading="refundReviewLoading"
       :error="refundReviewError"
       :submitting="refundSubmitting"
+      :backfilling="refundBackfilling"
       :warning="refundWarning"
       @confirm="handleRefund"
+      @backfill="handleSubscriptionGrantBackfill"
       @cancel="closeRefundDialog"
     />
     <TotpStepUpDialog :controller="stepUp" />
@@ -149,7 +156,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
-import type { RefundOrderRequest, RefundReasonCode, RefundReview } from '@/api/admin/payment'
+import type { RefundOrderRequest, RefundReasonCode, RefundReview, SubscriptionGrantBackfillRequest } from '@/api/admin/payment'
 import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import type { PaymentOrder } from '@/types/payment'
@@ -205,12 +212,13 @@ const refundReview = ref<RefundReview | null>(null)
 const refundReviewLoading = ref(false)
 const refundReviewError = ref('')
 const refundSubmitting = ref(false)
+const refundBackfilling = ref(false)
 const refundWarning = ref('')
 const refundQueryingIds = ref(new Set<number>())
 const orderAuditLogs = ref<AuditLog[]>([])
 const creditedAmountSymbol = currencySymbol('USD')
 const stepUp = useStepUp()
-const refundMutationBusy = computed(() => refundSubmitting.value || refundQueryingIds.value.size > 0)
+const refundMutationBusy = computed(() => refundSubmitting.value || refundBackfilling.value || refundQueryingIds.value.size > 0)
 
 function paymentAmountSymbol(order: PaymentOrder | null | undefined): string {
   return currencySymbol(order?.currency)
@@ -375,6 +383,36 @@ function closeRefundDialog() {
   refundReviewLoading.value = false
   refundReviewError.value = ''
   refundWarning.value = ''
+}
+
+async function handleSubscriptionGrantBackfill(request: SubscriptionGrantBackfillRequest) {
+  const target = refundTarget.value
+  if (refundMutationBusy.value || !target) return
+
+  const orderID = target.id
+  const session = refundDialogSession
+  refundBackfilling.value = true
+  try {
+    const res = await stepUp.run(() => adminPaymentAPI.backfillSubscriptionGrant(orderID, request))
+    if (!isCurrentRefundDialog(orderID, session)) return
+    refundReview.value = res.data
+    refundReviewError.value = ''
+    appStore.showSuccess(t('payment.admin.subscriptionGrantBackfillSuccess'))
+    void loadOrders()
+  } catch (err: unknown) {
+    if (isStepUpCancelled(err)) return
+    const code = extractApiErrorCode(err)
+    if (code === 'SUBSCRIPTION_BACKFILL_AUDIT_STALE' || code === 'REFUND_QUOTE_STALE') {
+      if (isCurrentRefundDialog(orderID, session)) {
+        appStore.showWarning(t('payment.admin.subscriptionGrantBackfillStale'))
+        await loadRefundReview(target, session)
+      }
+      return
+    }
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  } finally {
+    refundBackfilling.value = false
+  }
 }
 
 function isRefundPendingWarning(warning: string | undefined): boolean {

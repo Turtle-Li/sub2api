@@ -5,13 +5,16 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { FulfillmentStatus, PaymentFactStatus } from '@/types/payment'
-const props = defineProps<{ kind: 'payment' | 'fulfillment'; value: PaymentFactStatus | FulfillmentStatus }>()
+import type { FulfillmentStatus, PaymentFactStatus, RefundEntitlementStatus } from '@/types/payment'
+const props = defineProps<{
+  kind: 'payment' | 'fulfillment' | 'refundEntitlement'
+  value: PaymentFactStatus | FulfillmentStatus | RefundEntitlementStatus
+}>()
 const { t } = useI18n()
 const tone = computed(() => {
-  if (['PAID', 'FULFILLED'].includes(props.value)) return 'badge-success'
-  if (['FAILED', 'MANUAL_REVIEW'].includes(props.value)) return 'badge-danger'
-  if (props.value === 'PENDING') return 'badge-warning'
+  if (['PAID', 'FULFILLED', 'RECLAIMED'].includes(props.value)) return 'badge-success'
+  if (['FAILED', 'MANUAL_REVIEW', 'HISTORICAL_UNVERIFIED'].includes(props.value)) return 'badge-danger'
+  if (['PENDING', 'RECLAIMING'].includes(props.value)) return 'badge-warning'
   return 'badge-secondary'
 })
 </script>

@@ -217,21 +217,20 @@ describe('PlanEditDialog', () => {
     expect(wrapper.text()).not.toContain('payment.admin.monthlyResetCardsEnableRequired')
   })
 
-  it('requires the rollout switch before monthly delivery can be selected', async () => {
+  it('offers monthly delivery directly for a calendar-month plan', async () => {
     const wrapper = mountDialog({ groups: [groupFixture({ id: 1 })] })
+    await wrapper.get('[data-testid="plan-validity-days"]').setValue('1')
+    await wrapper.get('[data-testid="plan-validity-unit"]').setValue('months')
     await wrapper.get('[data-testid="reset-card-count"]').setValue('2')
     const monthly = wrapper.get('[data-testid="reset-card-delivery-mode"] option[value="monthly"]')
 
-    expect(monthly.attributes('disabled')).toBeDefined()
-    expect(wrapper.text()).toContain('payment.admin.monthlyResetCardsEnableRequired')
+    expect((monthly.element as HTMLOptionElement).disabled).toBe(false)
+    expect(wrapper.text()).not.toContain('payment.admin.monthlyResetCardsEnableRequired')
   })
 
   it('derives the monthly issue count from a calendar term and sends the frozen commitment', async () => {
     vi.mocked(adminPaymentAPI.createPlan).mockClear()
-    const wrapper = mountDialog({
-      groups: [groupFixture({ id: 1 })],
-      paymentConfig: { monthly_reset_cards_enabled: true },
-    })
+    const wrapper = mountDialog({ groups: [groupFixture({ id: 1 })] })
 
     await wrapper.get('[data-testid="plan-group"]').setValue('1')
     await wrapper.get('[data-testid="plan-price"]').setValue('9.99')
@@ -253,9 +252,10 @@ describe('PlanEditDialog', () => {
       entitlements: expect.objectContaining({
         reset_card_count: 3,
         reset_card_delivery_mode: 'monthly',
-        reset_card_issue_count: 6,
       }),
     }))
+    const payload = vi.mocked(adminPaymentAPI.createPlan).mock.calls.at(-1)![0]
+    expect(payload.entitlements).not.toHaveProperty('reset_card_issue_count')
   })
 
   it('allows composite subscription groups for payment plans', () => {

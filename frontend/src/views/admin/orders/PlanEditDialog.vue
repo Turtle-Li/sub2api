@@ -228,7 +228,6 @@ const resetCardValidityHint = computed(() => {
   return t('payment.admin.resetCardValidityHint', { count: planForm.reset_card_count, days })
 })
 
-const monthlyResetCardsEnabled = computed(() => props.paymentConfig?.monthly_reset_cards_enabled === true)
 const normalizedResetCardCount = computed(() => Math.max(0, Math.min(1000, Math.floor(Number(planForm.reset_card_count) || 0))))
 const hasResetCards = computed(() => normalizedResetCardCount.value > 0)
 const isMonthlyResetCardDelivery = computed(() => hasResetCards.value && planForm.reset_card_delivery_mode === 'monthly')
@@ -244,11 +243,10 @@ const resetCardDeliveryModeOptions = computed(() => [
   {
     value: 'monthly',
     label: t('payment.admin.resetCardDeliveryMonthly'),
-    disabled: !monthlyResetCardsEnabled.value || monthlyResetCardIssueCount.value === null,
+    disabled: monthlyResetCardIssueCount.value === null,
   },
 ])
 const monthlyResetCardDeliveryHint = computed(() => {
-  if (!monthlyResetCardsEnabled.value) return t('payment.admin.monthlyResetCardsEnableRequired')
   if (monthlyResetCardIssueCount.value === null) return t('payment.admin.monthlyResetCardsTermInvalid')
   return t('payment.admin.monthlyResetCardsTermPreview', { count: monthlyResetCardIssueCount.value })
 })
@@ -346,7 +344,6 @@ function buildPlanPayload() {
       balance_bonus: Math.max(0, Number(planForm.balance_bonus) || 0),
       reset_card_count: resetCardCount,
       reset_card_delivery_mode: monthlyDelivery ? 'monthly' : 'immediate',
-      reset_card_issue_count: resetCardCount === 0 ? 0 : monthlyDelivery ? monthlyResetCardIssueCount.value! : 1,
       reset_card_expiry_days: Math.max(1, Math.min(resetCardExpiryMax.value, Math.floor(Number(planForm.reset_card_expiry_days) || 90))),
       reset_card_expiry_unit: planForm.reset_card_expiry_unit,
       concurrency: Math.max(0, Math.min(10000, Math.floor(Number(planForm.concurrency) || 0))),
@@ -370,10 +367,6 @@ async function handleSavePlan() {
     return
   }
   if (isMonthlyResetCardDelivery.value) {
-    if (!monthlyResetCardsEnabled.value) {
-      appStore.showError(t('payment.admin.monthlyResetCardsEnableRequired'))
-      return
-    }
     if (monthlyResetCardIssueCount.value === null) {
       appStore.showError(t('payment.admin.monthlyResetCardsTermInvalid'))
       return

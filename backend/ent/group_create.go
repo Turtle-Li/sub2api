@@ -232,6 +232,20 @@ func (_c *GroupCreate) SetNillableSubscriptionType(v *string) *GroupCreate {
 	return _c
 }
 
+// SetSubscriptionProductCode sets the "subscription_product_code" field.
+func (_c *GroupCreate) SetSubscriptionProductCode(v string) *GroupCreate {
+	_c.mutation.SetSubscriptionProductCode(v)
+	return _c
+}
+
+// SetNillableSubscriptionProductCode sets the "subscription_product_code" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableSubscriptionProductCode(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetSubscriptionProductCode(*v)
+	}
+	return _c
+}
+
 // SetDailyLimitUsd sets the "daily_limit_usd" field.
 func (_c *GroupCreate) SetDailyLimitUsd(v float64) *GroupCreate {
 	_c.mutation.SetDailyLimitUsd(v)
@@ -1287,6 +1301,11 @@ func (_c *GroupCreate) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.SubscriptionProductCode(); ok {
+		if err := group.SubscriptionProductCodeValidator(v); err != nil {
+			return &ValidationError{Name: "subscription_product_code", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_product_code": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		return &ValidationError{Name: "default_validity_days", err: errors.New(`ent: missing required field "Group.default_validity_days"`)}
 	}
@@ -1504,6 +1523,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
 		_node.SubscriptionType = value
+	}
+	if value, ok := _c.mutation.SubscriptionProductCode(); ok {
+		_spec.SetField(group.FieldSubscriptionProductCode, field.TypeString, value)
+		_node.SubscriptionProductCode = &value
 	}
 	if value, ok := _c.mutation.DailyLimitUsd(); ok {
 		_spec.SetField(group.FieldDailyLimitUsd, field.TypeFloat64, value)
@@ -2937,6 +2960,9 @@ func (u *GroupUpsertOne) UpdateNewValues() *GroupUpsertOne {
 		}
 		if _, exists := u.create.mutation.DuplicateOperationID(); exists {
 			s.SetIgnore(group.FieldDuplicateOperationID)
+		}
+		if _, exists := u.create.mutation.SubscriptionProductCode(); exists {
+			s.SetIgnore(group.FieldSubscriptionProductCode)
 		}
 	}))
 	return u
@@ -4382,6 +4408,9 @@ func (u *GroupUpsertBulk) UpdateNewValues() *GroupUpsertBulk {
 			}
 			if _, exists := b.mutation.DuplicateOperationID(); exists {
 				s.SetIgnore(group.FieldDuplicateOperationID)
+			}
+			if _, exists := b.mutation.SubscriptionProductCode(); exists {
+				s.SetIgnore(group.FieldSubscriptionProductCode)
 			}
 		}
 	}))

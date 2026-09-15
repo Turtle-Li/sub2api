@@ -64,6 +64,13 @@ const (
 	InvoiceFulfillmentStatusNotStarted   = "NOT_STARTED"
 	InvoiceFulfillmentStatusManualReview = "MANUAL_REVIEW"
 
+	RefundEntitlementStatusNotApplicable        = "NOT_APPLICABLE"
+	RefundEntitlementStatusReclaiming           = "RECLAIMING"
+	RefundEntitlementStatusReclaimed            = "RECLAIMED"
+	RefundEntitlementStatusRestored             = "RESTORED"
+	RefundEntitlementStatusManualReview         = "MANUAL_REVIEW"
+	RefundEntitlementStatusHistoricalUnverified = "HISTORICAL_UNVERIFIED"
+
 	MaxInvoicePDFBytes = 10 << 20
 
 	invoiceDeliveryClaimTTL       = 5 * time.Minute
@@ -156,12 +163,13 @@ type PaymentInvoiceRecord struct {
 // response. Payment and fulfillment truth remain on PaymentOrder; this merely
 // presents trusted timestamps plus the durable refund-review fence.
 type PaymentOrderInvoicePresentation struct {
-	Invoice           *PaymentInvoiceRecord
-	ProductSnapshot   map[string]any
-	PaymentStatus     string
-	FulfillmentStatus string
-	NeedsManualReview bool
-	InvoiceEligible   bool
+	Invoice                 *PaymentInvoiceRecord
+	ProductSnapshot         map[string]any
+	PaymentStatus           string
+	FulfillmentStatus       string
+	RefundEntitlementStatus string
+	NeedsManualReview       bool
+	InvoiceEligible         bool
 }
 
 func PaymentInvoiceRecordFromEntity(invoice *dbent.PaymentInvoiceRequest) *PaymentInvoiceRecord {
@@ -236,21 +244,133 @@ func (s *PaymentService) InvoiceOrderPresentations(ctx context.Context, orders [
 	if err != nil {
 		return nil, err
 	}
+	latestAttempts, err := s.latestUnifiedRefundAttemptsForOrders(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for _, order := range orders {
 		if order == nil {
 			continue
 		}
 		needsReview := reviewIDs[order.ID]
+		attempt := latestAttempts[order.ID]
 		presentations[order.ID] = PaymentOrderInvoicePresentation{
-			Invoice:           PaymentOrderInvoiceRecord(order),
-			ProductSnapshot:   SanitizedPaymentOrderProductSnapshot(order),
-			PaymentStatus:     PaymentOrderPaymentStatus(order),
-			FulfillmentStatus: PaymentOrderFulfillmentStatus(order, needsReview),
-			NeedsManualReview: needsReview,
-			InvoiceEligible:   invoiceOrderEligible(order, needsReview),
+			Invoice:                 PaymentOrderInvoiceRecord(order),
+			ProductSnapshot:         SanitizedPaymentOrderProductSnapshot(order),
+			PaymentStatus:           PaymentOrderPaymentStatus(order),
+			FulfillmentStatus:       PaymentOrderFulfillmentStatus(order, needsReview),
+			RefundEntitlementStatus: paymentOrderRefundEntitlementStatus(order, attempt, needsReview),
+			NeedsManualReview:       needsReview,
+			InvoiceEligible:         invoiceOrderEligible(order, needsReview),
 		}
 	}
 	return presentations, nil
+}
+
+// paymentOrderUnifiedRefundAttempt is the narrow projection needed for order
+// presentation. It intentionally avoids exposing provider identifiers or
+// internal reconciliation metadata through either admin or owner DTOs.
+type paymentOrderUnifiedRefundAttempt struct {
+	Status              string
+	RefundKind          string
+	DeductBalance       bool
+	EntitlementReserved bool
+	NeedsManualReview   bool
+}
+
+// latestUnifiedRefundAttemptsForOrders uses one page-scoped query. Reading an
+// attempt for each order would turn normal order history into an N+1 path.
+func (s *PaymentService) latestUnifiedRefundAttemptsForOrders(ctx context.Context, ids []int64) (map[int64]*paymentOrderUnifiedRefundAttempt, error) {
+	result := make(map[int64]*paymentOrderUnifiedRefundAttempt)
+	if len(ids) == 0 {
+		return result, nil
+	}
+	if s == nil || s.entClient == nil {
+		return nil, errors.New("invoice order projection requires an order store")
+	}
+	unique := make(map[int64]struct{}, len(ids))
+	args := make([]any, 0, len(ids))
+	placeholders := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, exists := unique[id]; exists {
+			continue
+		}
+		unique[id] = struct{}{}
+		args = append(args, id)
+		placeholders = append(placeholders, "$"+strconv.Itoa(len(args)))
+	}
+	if len(args) == 0 {
+		return result, nil
+	}
+	query := `SELECT order_id, status, refund_kind, deduct_balance, entitlement_reserved, needs_manual_review
+		FROM unified_payment_refund_attempts
+		WHERE order_id IN (` + strings.Join(placeholders, ",") + `)
+		ORDER BY order_id ASC, created_at DESC, product_refund_no DESC`
+	rows, err := s.entClient.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load latest invoice refund attempts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var orderID int64
+		attempt := &paymentOrderUnifiedRefundAttempt{}
+		if err := rows.Scan(&orderID, &attempt.Status, &attempt.RefundKind, &attempt.DeductBalance, &attempt.EntitlementReserved, &attempt.NeedsManualReview); err != nil {
+			return nil, err
+		}
+		if _, exists := result[orderID]; !exists {
+			result[orderID] = attempt
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// DefaultPaymentOrderRefundEntitlementStatus provides the safe zero-query
+// projection used by direct single-order serializers. Page handlers use
+// InvoiceOrderPresentations, which supplies the latest attempt in one batch.
+func DefaultPaymentOrderRefundEntitlementStatus(order *dbent.PaymentOrder) string {
+	return paymentOrderRefundEntitlementStatus(order, nil, false)
+}
+
+// paymentOrderRefundEntitlementStatus keeps historical fulfillment immutable
+// while exposing the current refund-side handling of that entitlement.
+func paymentOrderRefundEntitlementStatus(order *dbent.PaymentOrder, attempt *paymentOrderUnifiedRefundAttempt, needsManualReview bool) string {
+	if needsManualReview || (attempt != nil && attempt.NeedsManualReview) {
+		return RefundEntitlementStatusManualReview
+	}
+	if attempt != nil {
+		if attempt.Status == unifiedRefundPending && attempt.EntitlementReserved {
+			return RefundEntitlementStatusReclaiming
+		}
+		switch attempt.Status {
+		case "SUCCEEDED":
+			switch attempt.RefundKind {
+			case refundReviewKindBalance, refundReviewKindSubscription:
+				return RefundEntitlementStatusReclaimed
+			case "legacy_balance":
+				if attempt.DeductBalance {
+					return RefundEntitlementStatusReclaimed
+				}
+			}
+			return RefundEntitlementStatusHistoricalUnverified
+		case "FAILED":
+			if attempt.EntitlementReserved {
+				return RefundEntitlementStatusManualReview
+			}
+			if attempt.RefundKind == refundReviewKindBalance || attempt.RefundKind == refundReviewKindSubscription {
+				return RefundEntitlementStatusRestored
+			}
+		}
+	}
+	if order != nil && (order.RefundAmount > 0 || order.RefundAt != nil || order.Status == OrderStatusRefunded || order.Status == OrderStatusPartiallyRefunded) {
+		return RefundEntitlementStatusHistoricalUnverified
+	}
+	return RefundEntitlementStatusNotApplicable
 }
 
 func (s *PaymentService) paymentOrderRefundReviewIDs(ctx context.Context, ids []int64) (map[int64]bool, error) {

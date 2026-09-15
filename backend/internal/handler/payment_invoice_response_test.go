@@ -37,6 +37,7 @@ func TestOwnedOrderResponseIncludesInvoiceButPublicProjectionExcludesInvoicePII(
 	require.Equal(t, taxID, *owned.Invoice.TaxIdentifier)
 	require.Equal(t, service.InvoicePaymentStatusPaid, owned.PaymentStatus)
 	require.Equal(t, service.InvoiceFulfillmentStatusFulfilled, owned.FulfillmentStatus)
+	require.Equal(t, service.RefundEntitlementStatusNotApplicable, owned.RefundEntitlementStatus)
 	require.Equal(t, "Purchased plan", owned.ProductSnapshot["name"])
 
 	publicBody, err := json.Marshal(buildPublicOrderResult(order))

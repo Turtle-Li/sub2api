@@ -88,7 +88,7 @@ describe('monthly reset-card delivery', () => {
     expect(monthlyResetCardIssueCount({ validity_days: 2, validity_unit: 'months' },)).toBe(2)
     expect(monthlyResetCardIssueCount({ validity_days: 2, validity_unit: 'quarters' },)).toBe(6)
     expect(monthlyResetCardIssueCount({ validity_days: 10, validity_unit: 'years' },)).toBe(120)
-    expect(monthlyResetCardIssueCount({ validity_days: 1, validity_unit: 'month' },)).toBeNull()
+    expect(monthlyResetCardIssueCount({ validity_days: 1, validity_unit: 'month' },)).toBe(1)
     expect(monthlyResetCardIssueCount({ validity_days: 121, validity_unit: 'month' },)).toBeNull()
     expect(monthlyResetCardIssueCount({ validity_days: 90, validity_unit: 'days' },)).toBeNull()
   })

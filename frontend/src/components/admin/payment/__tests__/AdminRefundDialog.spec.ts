@@ -151,4 +151,54 @@ describe('AdminRefundDialog', () => {
     await wrapper.find('form').trigger('submit')
     expect(wrapper.emitted('confirm')).toBeUndefined()
   })
+
+  it('collects audited subscription provenance without exposing a refund amount input', async () => {
+    const wrapper = mountDialog(balanceReview({
+      order_type: 'subscription',
+      can_refund: false,
+      requires_manual_review: true,
+      quote_revision: undefined,
+      balance: undefined,
+      subscription: undefined,
+      default_refund_amount: 0,
+      max_refund_amount: 0,
+      entitlement_amount: 0,
+      reason_code: 'LEGACY_SUBSCRIPTION_UNATTRIBUTED',
+      subscription_backfill: {
+        audit_revision: 'audit-51',
+        suggested_subscription_id: 8,
+        suggested_term_start_at: '2026-09-12T15:13:43Z',
+        suggested_term_end_at: '2026-10-12T15:13:43Z',
+        evidence_source: 'payment_audit_and_subscription',
+        subscription_group_id: 4,
+        purchased_days: 30,
+        candidates: [{
+          subscription_id: 8,
+          starts_at: '2026-09-12T15:13:43Z',
+          expires_at: '2026-10-12T15:13:43Z',
+          status: 'active',
+        }],
+      },
+    }))
+
+    expect((wrapper.get('[data-testid="backfill-subscription-id"]').element as HTMLSelectElement).value).toBe('8')
+    expect(wrapper.text()).toContain('payment.admin.subscriptionGrantBackfillSnapshot')
+    expect(wrapper.text()).toContain('payment.admin.subscriptionGrantBackfillAmountHint')
+    expect(wrapper.find('input[name="refund_amount"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="subscription-grant-backfill"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="backfill-evidence-detail"]').setValue('Verified order audit and subscription dates')
+    await wrapper.get('[data-testid="subscription-grant-backfill"]').trigger('click')
+
+    expect(wrapper.emitted('backfill')?.[0]?.[0]).toEqual(expect.objectContaining({
+      audit_revision: 'audit-51',
+      subscription_id: 8,
+      evidence_source: 'payment_audit_and_subscription',
+      evidence_detail: 'Verified order audit and subscription dates',
+    }))
+    expect(wrapper.emitted('backfill')?.[0]?.[0]).toEqual(expect.objectContaining({
+      term_start_at: expect.stringMatching(/^2026-09-12T15:13:43\.000Z$/),
+      term_end_at: expect.stringMatching(/^2026-10-12T15:13:43\.000Z$/),
+    }))
+  })
 })

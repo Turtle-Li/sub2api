@@ -70,7 +70,7 @@ const resetCardPurchasePriceScale int32 = 2
 const (
 	resetCardDeliveryModeImmediate = "immediate"
 	resetCardDeliveryModeMonthly   = "monthly"
-	minMonthlyResetCardIssues      = 2
+	minMonthlyResetCardIssues      = 1
 	maxMonthlyResetCardIssues      = 120
 )
 
@@ -169,25 +169,31 @@ func monthlyResetCardIssueCount(validityDays int, validityUnit string) (int, boo
 	return validityDays * multiplier, true
 }
 
-// validatePlanResetCardDelivery binds the canonical entitlement to the plan
-// term at the administration boundary. Immutable order snapshots are already
-// validated when the plan is saved, so they do not need to guess a cadence from
-// scalar validity days later in fulfillment.
-func validatePlanResetCardDelivery(entitlements PlanEntitlements, validityDays int, validityUnit string) error {
+// resolvePlanResetCardDelivery derives the durable issue count from the plan
+// term. reset_card_issue_count is response/snapshot evidence only; callers
+// cannot choose it independently of the plan validity.
+func resolvePlanResetCardDelivery(entitlements PlanEntitlements, validityDays int, validityUnit string) (PlanEntitlements, error) {
 	if entitlements.ResetCardCount == 0 {
-		return nil
+		return entitlements, nil
 	}
 	if entitlements.ResetCardDeliveryMode != resetCardDeliveryModeMonthly {
-		return nil
+		entitlements.ResetCardIssueCount = 1
+		return entitlements, nil
 	}
 	want, ok := monthlyResetCardIssueCount(validityDays, validityUnit)
 	if !ok {
-		return fmt.Errorf("monthly reset cards require validity_unit month, quarter, or year")
+		return PlanEntitlements{}, fmt.Errorf("monthly reset cards require validity_unit month, quarter, or year")
 	}
-	if entitlements.ResetCardIssueCount != want {
-		return fmt.Errorf("reset_card_issue_count must equal the calendar months in the plan term (%d)", want)
-	}
-	return nil
+	entitlements.ResetCardIssueCount = want
+	return entitlements, nil
+}
+
+// validatePlanResetCardDelivery remains a narrow validation helper for
+// callers that only need the validity result. Plan CRUD uses
+// normalizePlanEntitlementsForPlan so the server-derived count is persisted.
+func validatePlanResetCardDelivery(entitlements PlanEntitlements, validityDays int, validityUnit string) error {
+	_, err := resolvePlanResetCardDelivery(entitlements, validityDays, validityUnit)
+	return err
 }
 
 // ResetCardTotalCommitment is the durable entitlement count used by refund
@@ -410,9 +416,10 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 			// canonicalize any stale issue count to one.
 			entitlements.ResetCardIssueCount = 1
 		case resetCardDeliveryModeMonthly:
-			if entitlements.ResetCardIssueCount < minMonthlyResetCardIssues || entitlements.ResetCardIssueCount > maxMonthlyResetCardIssues {
-				return nil, PlanEntitlements{}, fmt.Errorf("reset_card_issue_count must be between %d and %d for monthly reset cards", minMonthlyResetCardIssues, maxMonthlyResetCardIssues)
-			}
+			// The plan validity is not part of this raw entitlement blob. Plan
+			// CRUD derives and overwrites this value after it combines the blob
+			// with validity_days/validity_unit, so a client-supplied count is
+			// never accepted as the source of truth.
 		}
 	}
 	if entitlements.ResetCardCount == 0 {
@@ -432,6 +439,37 @@ func normalizePlanEntitlements(raw map[string]any) (map[string]any, PlanEntitlem
 	}
 	if utf8.RuneCountInString(entitlements.ResetCardDescription) > maxResetCardDescriptionLength {
 		return nil, PlanEntitlements{}, fmt.Errorf("reset_card_description must be at most %d characters", maxResetCardDescriptionLength)
+	}
+	canonical, err := json.Marshal(entitlements)
+	if err != nil {
+		return nil, PlanEntitlements{}, fmt.Errorf("encode canonical plan entitlements: %w", err)
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(canonical, &normalized); err != nil {
+		return nil, PlanEntitlements{}, fmt.Errorf("decode canonical plan entitlements: %w", err)
+	}
+	return normalized, entitlements, nil
+}
+
+// normalizePlanEntitlementsForPlan is the only plan persistence boundary for
+// reset-card cadence. It retains the general entitlement normalizer for
+// snapshots and legacy reads, then rewrites the delivery count from the plan
+// term before returning the canonical JSON saved on the plan.
+func normalizePlanEntitlementsForPlan(raw map[string]any, validityDays int, validityUnit string) (map[string]any, PlanEntitlements, error) {
+	input := make(map[string]any, len(raw))
+	for key, value := range raw {
+		if key == "reset_card_issue_count" {
+			continue
+		}
+		input[key] = value
+	}
+	_, entitlements, err := normalizePlanEntitlements(input)
+	if err != nil {
+		return nil, PlanEntitlements{}, err
+	}
+	entitlements, err = resolvePlanResetCardDelivery(entitlements, validityDays, validityUnit)
+	if err != nil {
+		return nil, PlanEntitlements{}, err
 	}
 	canonical, err := json.Marshal(entitlements)
 	if err != nil {

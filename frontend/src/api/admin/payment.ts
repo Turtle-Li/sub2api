@@ -15,8 +15,6 @@ import type {
   AdminUpdateInvoiceRequest,
   PaymentBanner,
   OrderStatus,
-  ResetCardTierPolicy,
-  ResetCardTierPolicyInput,
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -41,8 +39,6 @@ export interface AdminPaymentConfig {
   banner?: PaymentBanner | null
   recharge_options: import('@/types/payment').RechargeOption[]
   recharge_options_invalid?: boolean
-  /** Admin-only rollout switch for calendar-month reset-card delivery. */
-  monthly_reset_cards_enabled: boolean
 }
 
 /** Fields accepted by PUT /admin/payment/config (all optional via pointer semantics) */
@@ -65,8 +61,6 @@ export interface UpdatePaymentConfigRequest {
   help_text?: string
   banner?: PaymentBanner
   recharge_options?: import('@/types/payment').RechargeOption[]
-  /** Admin-only rollout switch for calendar-month reset-card delivery. */
-  monthly_reset_cards_enabled?: boolean
 }
 
 export interface RefundResult {
@@ -93,6 +87,40 @@ export interface RefundReview {
   entitlement_amount: number
   balance?: BalanceRefundReview
   subscription?: SubscriptionRefundReview
+  subscription_backfill?: SubscriptionGrantBackfillSuggestion
+}
+
+export type SubscriptionGrantBackfillEvidenceSource =
+  | 'payment_audit_and_subscription'
+  | 'provider_receipt'
+  | 'database_backup'
+  | 'other'
+
+export interface SubscriptionGrantBackfillSuggestion {
+  audit_revision: string
+  suggested_subscription_id: number
+  suggested_term_start_at: string
+  suggested_term_end_at: string
+  evidence_source?: SubscriptionGrantBackfillEvidenceSource
+  subscription_group_id: number
+  purchased_days: number
+  candidates: SubscriptionGrantBackfillCandidate[]
+}
+
+export interface SubscriptionGrantBackfillCandidate {
+  subscription_id: number
+  starts_at: string
+  expires_at: string
+  status: string
+}
+
+export interface SubscriptionGrantBackfillRequest {
+  audit_revision: string
+  subscription_id: number
+  term_start_at: string
+  term_end_at: string
+  evidence_source: SubscriptionGrantBackfillEvidenceSource
+  evidence_detail: string
 }
 
 export interface BalanceRefundReview {
@@ -254,6 +282,11 @@ export const adminPaymentAPI = {
     return apiClient.get<RefundReview>(`/admin/payment/orders/${id}/refund-review`)
   },
 
+  /** Restore missing historical subscription provenance, then return a fresh server quote. */
+  backfillSubscriptionGrant(id: number, data: SubscriptionGrantBackfillRequest) {
+    return apiClient.post<RefundReview>(`/admin/payment/orders/${id}/refund/subscription-grant-backfill`, data)
+  },
+
   /** Process the previously reviewed refund using its exact quote revision. */
   refundOrder(id: number, data: RefundOrderRequest) {
     return apiClient.post<RefundResult>(`/admin/payment/orders/${id}/refund`, data)
@@ -306,16 +339,6 @@ export const adminPaymentAPI = {
   /** Delete a subscription plan */
   deletePlan(id: number) {
     return apiClient.delete(`/admin/payment/plans/${id}`)
-  },
-
-  /** List group-scoped reset-card compatibility tiers. */
-  getResetCardTierPolicies() {
-    return apiClient.get<ResetCardTierPolicy[]>('/admin/payment/reset-card-tiers')
-  },
-
-  /** Create or update one subscription group's reset-card compatibility tier. */
-  updateResetCardTierPolicy(groupID: number, data: ResetCardTierPolicyInput) {
-    return apiClient.put<ResetCardTierPolicy>(`/admin/payment/reset-card-tiers/${groupID}`, data)
   },
 
   // ==================== Provider Instances ====================

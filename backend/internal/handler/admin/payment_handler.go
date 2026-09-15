@@ -218,53 +218,54 @@ func (h *PaymentHandler) RetryFulfillment(c *gin.Context) {
 }
 
 type AdminPaymentOrderResult struct {
-	ID                    int64                         `json:"id"`
-	UserID                int64                         `json:"user_id"`
-	UserEmail             string                        `json:"user_email,omitempty"`
-	UserName              string                        `json:"user_name,omitempty"`
-	UserNotes             *string                       `json:"user_notes,omitempty"`
-	Amount                float64                       `json:"amount"`
-	PayAmount             float64                       `json:"pay_amount"`
-	FeeRate               float64                       `json:"fee_rate"`
-	Currency              string                        `json:"currency"`
-	RechargeCode          string                        `json:"recharge_code,omitempty"`
-	OutTradeNo            string                        `json:"out_trade_no"`
-	PaymentType           string                        `json:"payment_type"`
-	PaymentTradeNo        string                        `json:"payment_trade_no,omitempty"`
-	PayURL                *string                       `json:"pay_url,omitempty"`
-	QRCode                *string                       `json:"qr_code,omitempty"`
-	QRCodeImg             *string                       `json:"qr_code_img,omitempty"`
-	OrderType             string                        `json:"order_type"`
-	PlanID                *int64                        `json:"plan_id,omitempty"`
-	SubscriptionGroupID   *int64                        `json:"subscription_group_id,omitempty"`
-	SubscriptionDays      *int                          `json:"subscription_days,omitempty"`
-	ProviderInstanceID    *string                       `json:"provider_instance_id,omitempty"`
-	ProviderKey           *string                       `json:"provider_key,omitempty"`
-	Status                string                        `json:"status"`
-	RefundAmount          float64                       `json:"refund_amount"`
-	RefundRequestedAmount float64                       `json:"refund_requested_amount"`
-	RefundReason          *string                       `json:"refund_reason,omitempty"`
-	RefundAt              *time.Time                    `json:"refund_at,omitempty"`
-	ForceRefund           bool                          `json:"force_refund,omitempty"`
-	RefundRequestedAt     *time.Time                    `json:"refund_requested_at,omitempty"`
-	RefundRequestReason   *string                       `json:"refund_request_reason,omitempty"`
-	RefundRequestedBy     *string                       `json:"refund_requested_by,omitempty"`
-	ExpiresAt             time.Time                     `json:"expires_at"`
-	PaidAt                *time.Time                    `json:"paid_at,omitempty"`
-	CompletedAt           *time.Time                    `json:"completed_at,omitempty"`
-	FailedAt              *time.Time                    `json:"failed_at,omitempty"`
-	FailedReason          *string                       `json:"failed_reason,omitempty"`
-	ClientIP              string                        `json:"client_ip,omitempty"`
-	SrcHost               string                        `json:"src_host,omitempty"`
-	SrcURL                *string                       `json:"src_url,omitempty"`
-	CreatedAt             time.Time                     `json:"created_at"`
-	UpdatedAt             time.Time                     `json:"updated_at"`
-	ProductSnapshot       map[string]any                `json:"product_snapshot,omitempty"`
-	PaymentStatus         string                        `json:"payment_status"`
-	FulfillmentStatus     string                        `json:"fulfillment_status"`
-	NeedsManualReview     bool                          `json:"needs_manual_review"`
-	InvoiceEligible       bool                          `json:"invoice_eligible"`
-	Invoice               *service.PaymentInvoiceRecord `json:"invoice,omitempty"`
+	ID                      int64                         `json:"id"`
+	UserID                  int64                         `json:"user_id"`
+	UserEmail               string                        `json:"user_email,omitempty"`
+	UserName                string                        `json:"user_name,omitempty"`
+	UserNotes               *string                       `json:"user_notes,omitempty"`
+	Amount                  float64                       `json:"amount"`
+	PayAmount               float64                       `json:"pay_amount"`
+	FeeRate                 float64                       `json:"fee_rate"`
+	Currency                string                        `json:"currency"`
+	RechargeCode            string                        `json:"recharge_code,omitempty"`
+	OutTradeNo              string                        `json:"out_trade_no"`
+	PaymentType             string                        `json:"payment_type"`
+	PaymentTradeNo          string                        `json:"payment_trade_no,omitempty"`
+	PayURL                  *string                       `json:"pay_url,omitempty"`
+	QRCode                  *string                       `json:"qr_code,omitempty"`
+	QRCodeImg               *string                       `json:"qr_code_img,omitempty"`
+	OrderType               string                        `json:"order_type"`
+	PlanID                  *int64                        `json:"plan_id,omitempty"`
+	SubscriptionGroupID     *int64                        `json:"subscription_group_id,omitempty"`
+	SubscriptionDays        *int                          `json:"subscription_days,omitempty"`
+	ProviderInstanceID      *string                       `json:"provider_instance_id,omitempty"`
+	ProviderKey             *string                       `json:"provider_key,omitempty"`
+	Status                  string                        `json:"status"`
+	RefundAmount            float64                       `json:"refund_amount"`
+	RefundRequestedAmount   float64                       `json:"refund_requested_amount"`
+	RefundReason            *string                       `json:"refund_reason,omitempty"`
+	RefundAt                *time.Time                    `json:"refund_at,omitempty"`
+	ForceRefund             bool                          `json:"force_refund,omitempty"`
+	RefundRequestedAt       *time.Time                    `json:"refund_requested_at,omitempty"`
+	RefundRequestReason     *string                       `json:"refund_request_reason,omitempty"`
+	RefundRequestedBy       *string                       `json:"refund_requested_by,omitempty"`
+	ExpiresAt               time.Time                     `json:"expires_at"`
+	PaidAt                  *time.Time                    `json:"paid_at,omitempty"`
+	CompletedAt             *time.Time                    `json:"completed_at,omitempty"`
+	FailedAt                *time.Time                    `json:"failed_at,omitempty"`
+	FailedReason            *string                       `json:"failed_reason,omitempty"`
+	ClientIP                string                        `json:"client_ip,omitempty"`
+	SrcHost                 string                        `json:"src_host,omitempty"`
+	SrcURL                  *string                       `json:"src_url,omitempty"`
+	CreatedAt               time.Time                     `json:"created_at"`
+	UpdatedAt               time.Time                     `json:"updated_at"`
+	ProductSnapshot         map[string]any                `json:"product_snapshot,omitempty"`
+	PaymentStatus           string                        `json:"payment_status"`
+	FulfillmentStatus       string                        `json:"fulfillment_status"`
+	RefundEntitlementStatus string                        `json:"refund_entitlement_status"`
+	NeedsManualReview       bool                          `json:"needs_manual_review"`
+	InvoiceEligible         bool                          `json:"invoice_eligible"`
+	Invoice                 *service.PaymentInvoiceRecord `json:"invoice,omitempty"`
 }
 
 func sanitizeAdminPaymentOrdersForResponse(orders []*dbent.PaymentOrder, presentations map[int64]service.PaymentOrderInvoicePresentation) []*AdminPaymentOrderResult {
@@ -286,53 +287,54 @@ func sanitizeAdminPaymentOrderForResponse(order *dbent.PaymentOrder, projected .
 		presentation = projected[0]
 	}
 	return &AdminPaymentOrderResult{
-		ID:                    order.ID,
-		UserID:                order.UserID,
-		UserEmail:             order.UserEmail,
-		UserName:              order.UserName,
-		UserNotes:             order.UserNotes,
-		Amount:                order.Amount,
-		PayAmount:             order.PayAmount,
-		FeeRate:               order.FeeRate,
-		Currency:              service.PaymentOrderCurrency(order),
-		RechargeCode:          order.RechargeCode,
-		OutTradeNo:            order.OutTradeNo,
-		PaymentType:           order.PaymentType,
-		PaymentTradeNo:        order.PaymentTradeNo,
-		PayURL:                order.PayURL,
-		QRCode:                order.QrCode,
-		QRCodeImg:             order.QrCodeImg,
-		OrderType:             order.OrderType,
-		PlanID:                order.PlanID,
-		SubscriptionGroupID:   order.SubscriptionGroupID,
-		SubscriptionDays:      order.SubscriptionDays,
-		ProviderInstanceID:    order.ProviderInstanceID,
-		ProviderKey:           order.ProviderKey,
-		Status:                order.Status,
-		RefundAmount:          order.RefundAmount,
-		RefundRequestedAmount: order.RefundRequestedAmount,
-		RefundReason:          order.RefundReason,
-		RefundAt:              order.RefundAt,
-		ForceRefund:           order.ForceRefund,
-		RefundRequestedAt:     order.RefundRequestedAt,
-		RefundRequestReason:   order.RefundRequestReason,
-		RefundRequestedBy:     order.RefundRequestedBy,
-		ExpiresAt:             order.ExpiresAt,
-		PaidAt:                order.PaidAt,
-		CompletedAt:           order.CompletedAt,
-		FailedAt:              order.FailedAt,
-		FailedReason:          order.FailedReason,
-		ClientIP:              order.ClientIP,
-		SrcHost:               order.SrcHost,
-		SrcURL:                order.SrcURL,
-		CreatedAt:             order.CreatedAt,
-		UpdatedAt:             order.UpdatedAt,
-		ProductSnapshot:       presentation.ProductSnapshot,
-		PaymentStatus:         presentation.PaymentStatus,
-		FulfillmentStatus:     presentation.FulfillmentStatus,
-		NeedsManualReview:     presentation.NeedsManualReview,
-		InvoiceEligible:       presentation.InvoiceEligible,
-		Invoice:               presentation.Invoice,
+		ID:                      order.ID,
+		UserID:                  order.UserID,
+		UserEmail:               order.UserEmail,
+		UserName:                order.UserName,
+		UserNotes:               order.UserNotes,
+		Amount:                  order.Amount,
+		PayAmount:               order.PayAmount,
+		FeeRate:                 order.FeeRate,
+		Currency:                service.PaymentOrderCurrency(order),
+		RechargeCode:            order.RechargeCode,
+		OutTradeNo:              order.OutTradeNo,
+		PaymentType:             order.PaymentType,
+		PaymentTradeNo:          order.PaymentTradeNo,
+		PayURL:                  order.PayURL,
+		QRCode:                  order.QrCode,
+		QRCodeImg:               order.QrCodeImg,
+		OrderType:               order.OrderType,
+		PlanID:                  order.PlanID,
+		SubscriptionGroupID:     order.SubscriptionGroupID,
+		SubscriptionDays:        order.SubscriptionDays,
+		ProviderInstanceID:      order.ProviderInstanceID,
+		ProviderKey:             order.ProviderKey,
+		Status:                  order.Status,
+		RefundAmount:            order.RefundAmount,
+		RefundRequestedAmount:   order.RefundRequestedAmount,
+		RefundReason:            order.RefundReason,
+		RefundAt:                order.RefundAt,
+		ForceRefund:             order.ForceRefund,
+		RefundRequestedAt:       order.RefundRequestedAt,
+		RefundRequestReason:     order.RefundRequestReason,
+		RefundRequestedBy:       order.RefundRequestedBy,
+		ExpiresAt:               order.ExpiresAt,
+		PaidAt:                  order.PaidAt,
+		CompletedAt:             order.CompletedAt,
+		FailedAt:                order.FailedAt,
+		FailedReason:            order.FailedReason,
+		ClientIP:                order.ClientIP,
+		SrcHost:                 order.SrcHost,
+		SrcURL:                  order.SrcURL,
+		CreatedAt:               order.CreatedAt,
+		UpdatedAt:               order.UpdatedAt,
+		ProductSnapshot:         presentation.ProductSnapshot,
+		PaymentStatus:           presentation.PaymentStatus,
+		FulfillmentStatus:       presentation.FulfillmentStatus,
+		RefundEntitlementStatus: presentation.RefundEntitlementStatus,
+		NeedsManualReview:       presentation.NeedsManualReview,
+		InvoiceEligible:         presentation.InvoiceEligible,
+		Invoice:                 presentation.Invoice,
 	}
 }
 
@@ -346,10 +348,11 @@ func (h *PaymentHandler) paymentOrderInvoicePresentation(ctx context.Context, or
 
 func defaultAdminPaymentOrderInvoicePresentation(order *dbent.PaymentOrder) service.PaymentOrderInvoicePresentation {
 	return service.PaymentOrderInvoicePresentation{
-		Invoice:           service.PaymentOrderInvoiceRecord(order),
-		ProductSnapshot:   service.SanitizedPaymentOrderProductSnapshot(order),
-		PaymentStatus:     service.PaymentOrderPaymentStatus(order),
-		FulfillmentStatus: service.PaymentOrderFulfillmentStatus(order, false),
+		Invoice:                 service.PaymentOrderInvoiceRecord(order),
+		ProductSnapshot:         service.SanitizedPaymentOrderProductSnapshot(order),
+		PaymentStatus:           service.PaymentOrderPaymentStatus(order),
+		FulfillmentStatus:       service.PaymentOrderFulfillmentStatus(order, false),
+		RefundEntitlementStatus: service.DefaultPaymentOrderRefundEntitlementStatus(order),
 	}
 }
 
@@ -363,6 +366,18 @@ type AdminProcessRefundRequest struct {
 	Reason string `json:"reason"`
 }
 
+// AdminSubscriptionGrantBackfillRequest contains audit evidence for a legacy
+// subscription order. There is deliberately no amount field: the server
+// recalculates the refund review after it stores provenance.
+type AdminSubscriptionGrantBackfillRequest struct {
+	AuditRevision  string    `json:"audit_revision" binding:"required"`
+	SubscriptionID int64     `json:"subscription_id" binding:"required"`
+	TermStartAt    time.Time `json:"term_start_at" binding:"required"`
+	TermEndAt      time.Time `json:"term_end_at" binding:"required"`
+	EvidenceSource string    `json:"evidence_source"`
+	EvidenceDetail string    `json:"evidence_detail"`
+}
+
 // GetRefundReview returns the current server-calculated cash amount and the
 // entitlement effect that will be reserved. It is read-only; ProcessRefund
 // revalidates the revision under financial row locks.
@@ -373,6 +388,41 @@ func (h *PaymentHandler) GetRefundReview(c *gin.Context) {
 		return
 	}
 	review, err := h.paymentService.ReviewRefund(c.Request.Context(), orderID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, review)
+}
+
+// BackfillSubscriptionGrant records audited subscription provenance for a
+// historical order and returns a fresh server-calculated refund review.
+// POST /api/v1/admin/payment/orders/:id/refund/subscription-grant-backfill
+func (h *PaymentHandler) BackfillSubscriptionGrant(c *gin.Context) {
+	// Provenance controls a future money mutation, so it has the same
+	// unconditional human-session step-up boundary as refund execution.
+	if !middleware.EnforceStepUpAlways(c, h.totpService, h.userService) {
+		return
+	}
+
+	orderID, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req AdminSubscriptionGrantBackfillRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	review, err := h.paymentService.BackfillSubscriptionGrant(c.Request.Context(), orderID, service.SubscriptionGrantBackfillInput{
+		AuditRevision:  req.AuditRevision,
+		SubscriptionID: req.SubscriptionID,
+		TermStartAt:    req.TermStartAt,
+		TermEndAt:      req.TermEndAt,
+		EvidenceSource: req.EvidenceSource,
+		EvidenceDetail: req.EvidenceDetail,
+		OperatorID:     getAdminIDFromContext(c),
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -450,62 +500,45 @@ func (h *PaymentHandler) ListPlans(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	groupIDs := make([]int64, 0, len(plans))
-	for _, plan := range plans {
-		if plan != nil {
-			groupIDs = append(groupIDs, plan.GroupID)
-		}
-	}
-	tierPolicies, err := h.configService.ResetCardTierPoliciesByGroup(c.Request.Context(), groupIDs)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
 	groupInfo := h.configService.GetGroupInfoMap(c.Request.Context(), plans)
-	response.Success(c, adminSubscriptionPlansForResponse(plans, groupInfo, tierPolicies))
+	response.Success(c, adminSubscriptionPlansForResponse(plans, groupInfo))
 }
 
 type AdminSubscriptionPlanResult struct {
-	ID              int64                                    `json:"id"`
-	GroupID         int64                                    `json:"group_id"`
-	GroupPlatform   string                                   `json:"group_platform,omitempty"`
-	GroupName       string                                   `json:"group_name,omitempty"`
-	RateMultiplier  float64                                  `json:"rate_multiplier,omitempty"`
-	DailyLimitUSD   *float64                                 `json:"daily_limit_usd,omitempty"`
-	WeeklyLimitUSD  *float64                                 `json:"weekly_limit_usd,omitempty"`
-	MonthlyLimitUSD *float64                                 `json:"monthly_limit_usd,omitempty"`
-	ModelScopes     []string                                 `json:"supported_model_scopes,omitempty"`
-	Name            string                                   `json:"name"`
-	Description     string                                   `json:"description"`
-	Price           float64                                  `json:"price"`
-	OriginalPrice   *float64                                 `json:"original_price,omitempty"`
-	Currency        string                                   `json:"currency,omitempty"`
-	ValidityDays    int                                      `json:"validity_days"`
-	ValidityUnit    string                                   `json:"validity_unit"`
-	Features        string                                   `json:"features"`
-	ProductName     string                                   `json:"product_name"`
-	Entitlements    service.PlanEntitlements                 `json:"entitlements"`
-	DiscountPercent float64                                  `json:"discount_percent"`
-	PeriodLabel     string                                   `json:"period_label"`
-	ForSale         bool                                     `json:"for_sale"`
-	SortOrder       int                                      `json:"sort_order"`
-	CreatedAt       time.Time                                `json:"created_at,omitempty"`
-	UpdatedAt       time.Time                                `json:"updated_at,omitempty"`
-	ResetCardTier   *service.SubscriptionResetCardTierPolicy `json:"reset_card_tier,omitempty"`
+	ID              int64                    `json:"id"`
+	GroupID         int64                    `json:"group_id"`
+	GroupPlatform   string                   `json:"group_platform,omitempty"`
+	GroupName       string                   `json:"group_name,omitempty"`
+	RateMultiplier  float64                  `json:"rate_multiplier,omitempty"`
+	DailyLimitUSD   *float64                 `json:"daily_limit_usd,omitempty"`
+	WeeklyLimitUSD  *float64                 `json:"weekly_limit_usd,omitempty"`
+	MonthlyLimitUSD *float64                 `json:"monthly_limit_usd,omitempty"`
+	ModelScopes     []string                 `json:"supported_model_scopes,omitempty"`
+	Name            string                   `json:"name"`
+	Description     string                   `json:"description"`
+	Price           float64                  `json:"price"`
+	OriginalPrice   *float64                 `json:"original_price,omitempty"`
+	Currency        string                   `json:"currency,omitempty"`
+	ValidityDays    int                      `json:"validity_days"`
+	ValidityUnit    string                   `json:"validity_unit"`
+	Features        string                   `json:"features"`
+	ProductName     string                   `json:"product_name"`
+	Entitlements    service.PlanEntitlements `json:"entitlements"`
+	DiscountPercent float64                  `json:"discount_percent"`
+	PeriodLabel     string                   `json:"period_label"`
+	ForSale         bool                     `json:"for_sale"`
+	SortOrder       int                      `json:"sort_order"`
+	CreatedAt       time.Time                `json:"created_at,omitempty"`
+	UpdatedAt       time.Time                `json:"updated_at,omitempty"`
 }
 
-func adminSubscriptionPlansForResponse(plans []*dbent.SubscriptionPlan, groupInfo map[int64]service.PlanGroupInfo, tierPolicies map[int64]service.SubscriptionResetCardTierPolicy) []AdminSubscriptionPlanResult {
+func adminSubscriptionPlansForResponse(plans []*dbent.SubscriptionPlan, groupInfo map[int64]service.PlanGroupInfo) []AdminSubscriptionPlanResult {
 	result := make([]AdminSubscriptionPlanResult, 0, len(plans))
 	for _, p := range plans {
 		if p == nil {
 			continue
 		}
 		gi := groupInfo[p.GroupID]
-		var tierPolicy *service.SubscriptionResetCardTierPolicy
-		if policy, ok := tierPolicies[p.GroupID]; ok {
-			copyPolicy := policy
-			tierPolicy = &copyPolicy
-		}
 		result = append(result, AdminSubscriptionPlanResult{
 			ID:              int64(p.ID),
 			GroupID:         p.GroupID,
@@ -532,52 +565,9 @@ func adminSubscriptionPlansForResponse(plans []*dbent.SubscriptionPlan, groupInf
 			SortOrder:       p.SortOrder,
 			CreatedAt:       p.CreatedAt,
 			UpdatedAt:       p.UpdatedAt,
-			ResetCardTier:   tierPolicy,
 		})
 	}
 	return result
-}
-
-// ListResetCardTierPolicies returns the explicit group-to-tier policy used by
-// reset-card eligibility. Purchase rules remain private to the checkout path.
-// GET /api/v1/admin/payment/reset-card-tiers
-func (h *PaymentHandler) ListResetCardTierPolicies(c *gin.Context) {
-	policies, err := h.configService.ListResetCardTierPolicies(c.Request.Context())
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, policies)
-}
-
-type UpsertResetCardTierPolicyRequest struct {
-	FamilyKey string `json:"family_key" binding:"required"`
-	TierRank  int    `json:"tier_rank" binding:"required,min=1"`
-}
-
-// UpsertResetCardTierPolicy configures one subscription group's stable card
-// family and rank. The service verifies the group type before persistence.
-// PUT /api/v1/admin/payment/reset-card-tiers/:group_id
-func (h *PaymentHandler) UpsertResetCardTierPolicy(c *gin.Context) {
-	groupID, ok := parseIDParam(c, "group_id")
-	if !ok {
-		return
-	}
-	var req UpsertResetCardTierPolicyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	policy, err := h.configService.UpsertResetCardTierPolicy(c.Request.Context(), service.UpsertSubscriptionResetCardTierPolicyInput{
-		GroupID:   groupID,
-		FamilyKey: req.FamilyKey,
-		TierRank:  req.TierRank,
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, policy)
 }
 
 // CreatePlan creates a new subscription plan.

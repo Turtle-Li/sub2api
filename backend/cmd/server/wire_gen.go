@@ -366,7 +366,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	batchImageWorkerRuntime := service.ProvideBatchImageWorkerRuntime(batchImageRepository, accountRepository, batchImageQueue, usageBillingRepository, usageLogRepository, batchImageModelPricingResolver, apiKeyAuthCacheInvalidator, batchImageDeliveryObjectStore, configConfig)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig, leaderLockCache, db)
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
-	paymentMonthlyResetCardDeliveryService := service.ProvidePaymentMonthlyResetCardDeliveryService(client, paymentConfigService, leaderLockCache, db)
+	paymentMonthlyResetCardDeliveryService := service.ProvidePaymentMonthlyResetCardDeliveryService(client, leaderLockCache, db)
 	invoiceNotificationService := service.ProvideInvoiceNotificationService(paymentService, leaderLockCache, db)
 	feishuPaymentIncidentStore := repository.NewFeishuPaymentIncidentStore(db)
 	feishuPaymentIncidentService := service.ProvideFeishuPaymentIncidentService(feishuPaymentIncidentStore, configConfig, leaderLockCache, db)

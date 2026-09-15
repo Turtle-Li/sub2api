@@ -130,6 +130,11 @@ func SubscriptionType(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldSubscriptionType, v))
 }
 
+// SubscriptionProductCode applies equality check predicate on the "subscription_product_code" field. It's identical to SubscriptionProductCodeEQ.
+func SubscriptionProductCode(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldSubscriptionProductCode, v))
+}
+
 // DailyLimitUsd applies equality check predicate on the "daily_limit_usd" field. It's identical to DailyLimitUsdEQ.
 func DailyLimitUsd(v float64) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDailyLimitUsd, v))
@@ -1113,6 +1118,81 @@ func SubscriptionTypeEqualFold(v string) predicate.Group {
 // SubscriptionTypeContainsFold applies the ContainsFold predicate on the "subscription_type" field.
 func SubscriptionTypeContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldSubscriptionType, v))
+}
+
+// SubscriptionProductCodeEQ applies the EQ predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeNEQ applies the NEQ predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeNEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeIn applies the In predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldSubscriptionProductCode, vs...))
+}
+
+// SubscriptionProductCodeNotIn applies the NotIn predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeNotIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldSubscriptionProductCode, vs...))
+}
+
+// SubscriptionProductCodeGT applies the GT predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeGT(v string) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeGTE applies the GTE predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeGTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeLT applies the LT predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeLT(v string) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeLTE applies the LTE predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeLTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeContains applies the Contains predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeContains(v string) predicate.Group {
+	return predicate.Group(sql.FieldContains(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeHasPrefix applies the HasPrefix predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeHasPrefix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasPrefix(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeHasSuffix applies the HasSuffix predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeHasSuffix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasSuffix(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeIsNil applies the IsNil predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldSubscriptionProductCode))
+}
+
+// SubscriptionProductCodeNotNil applies the NotNil predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldSubscriptionProductCode))
+}
+
+// SubscriptionProductCodeEqualFold applies the EqualFold predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeEqualFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldEqualFold(FieldSubscriptionProductCode, v))
+}
+
+// SubscriptionProductCodeContainsFold applies the ContainsFold predicate on the "subscription_product_code" field.
+func SubscriptionProductCodeContainsFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldContainsFold(FieldSubscriptionProductCode, v))
 }
 
 // DailyLimitUsdEQ applies the EQ predicate on the "daily_limit_usd" field.

@@ -205,6 +205,40 @@ func TestInvoiceSnapshotSanitizerAndFulfillmentPresentationAreTyped(t *testing.T
 	require.Equal(t, InvoiceFulfillmentStatusNotStarted, PaymentOrderFulfillmentStatus(&dbent.PaymentOrder{Status: OrderStatusFailed}, false))
 }
 
+func TestInvoiceOrderPresentationsProjectLatestRefundEntitlementStateInOnePage(t *testing.T) {
+	ctx := context.Background()
+	svc, client := newInvoiceUnitService(t, ctx)
+	createInvoiceUnitRefundFenceTables(t, ctx, client)
+	owner := createInvoiceUnitUser(t, ctx, client, "invoice-entitlement@example.com")
+
+	reclaimed := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
+	reclaiming := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
+	restored := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
+	manual := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
+	historical := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusRefunded, true, true)
+	notApplicable := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
+	now := time.Now().UTC()
+
+	// The older pending attempt must not win over the newest terminal result.
+	insertInvoiceUnitRefundAttempt(t, ctx, client, reclaimed.ID, "attempt-reclaimed-old", unifiedRefundPending, "legacy_balance", false, true, false, now.Add(-time.Minute))
+	insertInvoiceUnitRefundAttempt(t, ctx, client, reclaimed.ID, "attempt-reclaimed", "SUCCEEDED", "legacy_balance", true, false, false, now)
+	insertInvoiceUnitRefundAttempt(t, ctx, client, reclaiming.ID, "attempt-reclaiming", unifiedRefundPending, refundReviewKindBalance, true, true, false, now)
+	insertInvoiceUnitRefundAttempt(t, ctx, client, restored.ID, "attempt-restored", "FAILED", refundReviewKindBalance, true, false, false, now)
+	insertInvoiceUnitRefundAttempt(t, ctx, client, manual.ID, "attempt-manual", "FAILED", refundReviewKindSubscription, false, true, false, now)
+
+	presentations, err := svc.InvoiceOrderPresentations(ctx, []*dbent.PaymentOrder{
+		reclaimed, reclaiming, restored, manual, historical, notApplicable,
+	})
+	require.NoError(t, err)
+	require.Equal(t, RefundEntitlementStatusReclaimed, presentations[reclaimed.ID].RefundEntitlementStatus)
+	require.Equal(t, InvoiceFulfillmentStatusFulfilled, presentations[reclaimed.ID].FulfillmentStatus, "fulfilled remains the historical delivery fact")
+	require.Equal(t, RefundEntitlementStatusReclaiming, presentations[reclaiming.ID].RefundEntitlementStatus)
+	require.Equal(t, RefundEntitlementStatusRestored, presentations[restored.ID].RefundEntitlementStatus)
+	require.Equal(t, RefundEntitlementStatusManualReview, presentations[manual.ID].RefundEntitlementStatus)
+	require.Equal(t, RefundEntitlementStatusHistoricalUnverified, presentations[historical.ID].RefundEntitlementStatus)
+	require.Equal(t, RefundEntitlementStatusNotApplicable, presentations[notApplicable.ID].RefundEntitlementStatus)
+}
+
 func TestPaymentProductSnapshotFreezesKnownPlanAndGroupEvidence(t *testing.T) {
 	daily, weekly, monthly := 12.5, 70.0, 250.0
 	plan := &dbent.SubscriptionPlan{
@@ -311,12 +345,28 @@ func newInvoiceUnitService(t *testing.T, ctx context.Context) (*PaymentService, 
 func createInvoiceUnitRefundFenceTables(t *testing.T, ctx context.Context, client *dbent.Client) {
 	t.Helper()
 	_, err := client.ExecContext(ctx, `CREATE TABLE unified_payment_refund_attempts (
-		order_id INTEGER NOT NULL, needs_manual_review BOOLEAN NOT NULL DEFAULT FALSE
+		order_id INTEGER NOT NULL,
+		product_refund_no TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'PENDING',
+		refund_kind TEXT NOT NULL DEFAULT 'legacy_balance',
+		deduct_balance BOOLEAN NOT NULL DEFAULT FALSE,
+		entitlement_reserved BOOLEAN NOT NULL DEFAULT FALSE,
+		needs_manual_review BOOLEAN NOT NULL DEFAULT FALSE,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`)
 	require.NoError(t, err)
 	_, err = client.ExecContext(ctx, `CREATE TABLE unified_payment_refund_events (
 		order_id INTEGER NOT NULL, action TEXT NOT NULL
 	)`)
+	require.NoError(t, err)
+}
+
+func insertInvoiceUnitRefundAttempt(t *testing.T, ctx context.Context, client *dbent.Client, orderID int64, refundNo, status, kind string, deductBalance, entitlementReserved, needsReview bool, createdAt time.Time) {
+	t.Helper()
+	_, err := client.ExecContext(ctx, `INSERT INTO unified_payment_refund_attempts
+		(order_id, product_refund_no, status, refund_kind, deduct_balance, entitlement_reserved, needs_manual_review, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		orderID, refundNo, status, kind, deductBalance, entitlementReserved, needsReview, createdAt)
 	require.NoError(t, err)
 }
 

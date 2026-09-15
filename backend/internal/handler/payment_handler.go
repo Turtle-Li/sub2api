@@ -63,9 +63,8 @@ func (h *PaymentHandler) GetPaymentConfig(c *gin.Context) {
 }
 
 // publicPaymentConfigProjection preserves the established customer config
-// shape while preventing private rollout controls from becoming an API
-// capability signal. Keep this separate from PaymentConfig so admins can still
-// read and write the private setting through their authenticated endpoint.
+// shape while keeping payment configuration serialization in one explicit
+// user-facing boundary.
 func publicPaymentConfigProjection(cfg *service.PaymentConfig) map[string]any {
 	if cfg == nil {
 		return map[string]any{}
@@ -78,7 +77,6 @@ func publicPaymentConfigProjection(cfg *service.PaymentConfig) map[string]any {
 	if err := json.Unmarshal(encoded, &projected); err != nil {
 		return map[string]any{}
 	}
-	delete(projected, "monthly_reset_cards_enabled")
 	return projected
 }
 
@@ -824,34 +822,35 @@ func isMobile(c *gin.Context) bool {
 }
 
 type PaymentOrderResult struct {
-	ID                    int64                         `json:"id"`
-	UserID                int64                         `json:"user_id"`
-	Amount                float64                       `json:"amount"`
-	PayAmount             float64                       `json:"pay_amount"`
-	FeeRate               float64                       `json:"fee_rate"`
-	Currency              string                        `json:"currency"`
-	PaymentType           string                        `json:"payment_type"`
-	OutTradeNo            string                        `json:"out_trade_no"`
-	Status                string                        `json:"status"`
-	OrderType             string                        `json:"order_type"`
-	CreatedAt             time.Time                     `json:"created_at"`
-	ExpiresAt             time.Time                     `json:"expires_at"`
-	PaidAt                *time.Time                    `json:"paid_at,omitempty"`
-	CompletedAt           *time.Time                    `json:"completed_at,omitempty"`
-	RefundAmount          float64                       `json:"refund_amount"`
-	RefundRequestedAmount float64                       `json:"refund_requested_amount"`
-	RefundReason          *string                       `json:"refund_reason,omitempty"`
-	RefundRequestedAt     *time.Time                    `json:"refund_requested_at,omitempty"`
-	RefundRequestedBy     *string                       `json:"refund_requested_by,omitempty"`
-	RefundRequestReason   *string                       `json:"refund_request_reason,omitempty"`
-	PlanID                *int64                        `json:"plan_id,omitempty"`
-	ProviderInstanceID    *string                       `json:"provider_instance_id,omitempty"`
-	ProductSnapshot       map[string]any                `json:"product_snapshot,omitempty"`
-	PaymentStatus         string                        `json:"payment_status"`
-	FulfillmentStatus     string                        `json:"fulfillment_status"`
-	NeedsManualReview     bool                          `json:"needs_manual_review"`
-	InvoiceEligible       bool                          `json:"invoice_eligible"`
-	Invoice               *service.PaymentInvoiceRecord `json:"invoice,omitempty"`
+	ID                      int64                         `json:"id"`
+	UserID                  int64                         `json:"user_id"`
+	Amount                  float64                       `json:"amount"`
+	PayAmount               float64                       `json:"pay_amount"`
+	FeeRate                 float64                       `json:"fee_rate"`
+	Currency                string                        `json:"currency"`
+	PaymentType             string                        `json:"payment_type"`
+	OutTradeNo              string                        `json:"out_trade_no"`
+	Status                  string                        `json:"status"`
+	OrderType               string                        `json:"order_type"`
+	CreatedAt               time.Time                     `json:"created_at"`
+	ExpiresAt               time.Time                     `json:"expires_at"`
+	PaidAt                  *time.Time                    `json:"paid_at,omitempty"`
+	CompletedAt             *time.Time                    `json:"completed_at,omitempty"`
+	RefundAmount            float64                       `json:"refund_amount"`
+	RefundRequestedAmount   float64                       `json:"refund_requested_amount"`
+	RefundReason            *string                       `json:"refund_reason,omitempty"`
+	RefundRequestedAt       *time.Time                    `json:"refund_requested_at,omitempty"`
+	RefundRequestedBy       *string                       `json:"refund_requested_by,omitempty"`
+	RefundRequestReason     *string                       `json:"refund_request_reason,omitempty"`
+	PlanID                  *int64                        `json:"plan_id,omitempty"`
+	ProviderInstanceID      *string                       `json:"provider_instance_id,omitempty"`
+	ProductSnapshot         map[string]any                `json:"product_snapshot,omitempty"`
+	PaymentStatus           string                        `json:"payment_status"`
+	FulfillmentStatus       string                        `json:"fulfillment_status"`
+	RefundEntitlementStatus string                        `json:"refund_entitlement_status"`
+	NeedsManualReview       bool                          `json:"needs_manual_review"`
+	InvoiceEligible         bool                          `json:"invoice_eligible"`
+	Invoice                 *service.PaymentInvoiceRecord `json:"invoice,omitempty"`
 }
 
 func sanitizePaymentOrdersForResponse(orders []*dbent.PaymentOrder, presentations map[int64]service.PaymentOrderInvoicePresentation) []PaymentOrderResult {
@@ -873,34 +872,35 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder, projected ...ser
 		presentation = projected[0]
 	}
 	return &PaymentOrderResult{
-		ID:                    order.ID,
-		UserID:                order.UserID,
-		Amount:                order.Amount,
-		PayAmount:             order.PayAmount,
-		FeeRate:               order.FeeRate,
-		Currency:              service.PaymentOrderCurrency(order),
-		PaymentType:           order.PaymentType,
-		OutTradeNo:            order.OutTradeNo,
-		Status:                order.Status,
-		OrderType:             order.OrderType,
-		CreatedAt:             order.CreatedAt,
-		ExpiresAt:             order.ExpiresAt,
-		PaidAt:                order.PaidAt,
-		CompletedAt:           order.CompletedAt,
-		RefundAmount:          order.RefundAmount,
-		RefundRequestedAmount: order.RefundRequestedAmount,
-		RefundReason:          order.RefundReason,
-		RefundRequestedAt:     order.RefundRequestedAt,
-		RefundRequestedBy:     order.RefundRequestedBy,
-		RefundRequestReason:   order.RefundRequestReason,
-		PlanID:                order.PlanID,
-		ProviderInstanceID:    order.ProviderInstanceID,
-		ProductSnapshot:       presentation.ProductSnapshot,
-		PaymentStatus:         presentation.PaymentStatus,
-		FulfillmentStatus:     presentation.FulfillmentStatus,
-		NeedsManualReview:     presentation.NeedsManualReview,
-		InvoiceEligible:       presentation.InvoiceEligible,
-		Invoice:               presentation.Invoice,
+		ID:                      order.ID,
+		UserID:                  order.UserID,
+		Amount:                  order.Amount,
+		PayAmount:               order.PayAmount,
+		FeeRate:                 order.FeeRate,
+		Currency:                service.PaymentOrderCurrency(order),
+		PaymentType:             order.PaymentType,
+		OutTradeNo:              order.OutTradeNo,
+		Status:                  order.Status,
+		OrderType:               order.OrderType,
+		CreatedAt:               order.CreatedAt,
+		ExpiresAt:               order.ExpiresAt,
+		PaidAt:                  order.PaidAt,
+		CompletedAt:             order.CompletedAt,
+		RefundAmount:            order.RefundAmount,
+		RefundRequestedAmount:   order.RefundRequestedAmount,
+		RefundReason:            order.RefundReason,
+		RefundRequestedAt:       order.RefundRequestedAt,
+		RefundRequestedBy:       order.RefundRequestedBy,
+		RefundRequestReason:     order.RefundRequestReason,
+		PlanID:                  order.PlanID,
+		ProviderInstanceID:      order.ProviderInstanceID,
+		ProductSnapshot:         presentation.ProductSnapshot,
+		PaymentStatus:           presentation.PaymentStatus,
+		FulfillmentStatus:       presentation.FulfillmentStatus,
+		RefundEntitlementStatus: presentation.RefundEntitlementStatus,
+		NeedsManualReview:       presentation.NeedsManualReview,
+		InvoiceEligible:         presentation.InvoiceEligible,
+		Invoice:                 presentation.Invoice,
 	}
 }
 
@@ -914,11 +914,12 @@ func (h *PaymentHandler) paymentOrderInvoicePresentation(ctx context.Context, or
 
 func defaultPaymentOrderInvoicePresentation(order *dbent.PaymentOrder) service.PaymentOrderInvoicePresentation {
 	return service.PaymentOrderInvoicePresentation{
-		Invoice:           service.PaymentOrderInvoiceRecord(order),
-		ProductSnapshot:   service.SanitizedPaymentOrderProductSnapshot(order),
-		PaymentStatus:     service.PaymentOrderPaymentStatus(order),
-		FulfillmentStatus: service.PaymentOrderFulfillmentStatus(order, false),
-		InvoiceEligible:   false,
+		Invoice:                 service.PaymentOrderInvoiceRecord(order),
+		ProductSnapshot:         service.SanitizedPaymentOrderProductSnapshot(order),
+		PaymentStatus:           service.PaymentOrderPaymentStatus(order),
+		FulfillmentStatus:       service.PaymentOrderFulfillmentStatus(order, false),
+		RefundEntitlementStatus: service.DefaultPaymentOrderRefundEntitlementStatus(order),
+		InvoiceEligible:         false,
 	}
 }
 

@@ -82,6 +82,17 @@ func (Group) Fields() []ent.Field {
 		field.String("subscription_type").
 			MaxLen(20).
 			Default(domain.SubscriptionTypeStandard),
+		// SubscriptionProductCode is a migration-owned product identity for
+		// system-maintained subscription features. It is deliberately absent
+		// from group JSON so administrators cannot bind or rewrite a product
+		// identity through the ordinary group APIs.
+		field.String("subscription_product_code").
+			MaxLen(64).
+			Optional().
+			Nillable().
+			Immutable().
+			Unique().
+			StructTag(`json:"-"`),
 		field.Float("daily_limit_usd").
 			Optional().
 			Nillable().

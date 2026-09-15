@@ -126,20 +126,21 @@ func refundReasonDefaultSummary(code string) string {
 // initiate a refund. Amounts at the payment boundary are in the receipt
 // currency; wallet credit and subscription time are reported separately.
 type RefundReview struct {
-	OrderID              int64                     `json:"order_id"`
-	OrderType            string                    `json:"order_type"`
-	Currency             string                    `json:"currency"`
-	CanRefund            bool                      `json:"can_refund"`
-	RequiresManualReview bool                      `json:"requires_manual_review"`
-	ReasonCode           string                    `json:"reason_code,omitempty"`
-	Reason               string                    `json:"reason,omitempty"`
-	QuoteRevision        string                    `json:"quote_revision,omitempty"`
-	GeneratedAt          time.Time                 `json:"generated_at"`
-	DefaultRefundAmount  float64                   `json:"default_refund_amount"`
-	MaxRefundAmount      float64                   `json:"max_refund_amount"`
-	EntitlementAmount    float64                   `json:"entitlement_amount"`
-	Balance              *BalanceRefundReview      `json:"balance,omitempty"`
-	Subscription         *SubscriptionRefundReview `json:"subscription,omitempty"`
+	OrderID              int64                          `json:"order_id"`
+	OrderType            string                         `json:"order_type"`
+	Currency             string                         `json:"currency"`
+	CanRefund            bool                           `json:"can_refund"`
+	RequiresManualReview bool                           `json:"requires_manual_review"`
+	ReasonCode           string                         `json:"reason_code,omitempty"`
+	Reason               string                         `json:"reason,omitempty"`
+	QuoteRevision        string                         `json:"quote_revision,omitempty"`
+	GeneratedAt          time.Time                      `json:"generated_at"`
+	DefaultRefundAmount  float64                        `json:"default_refund_amount"`
+	MaxRefundAmount      float64                        `json:"max_refund_amount"`
+	EntitlementAmount    float64                        `json:"entitlement_amount"`
+	Balance              *BalanceRefundReview           `json:"balance,omitempty"`
+	Subscription         *SubscriptionRefundReview      `json:"subscription,omitempty"`
+	SubscriptionBackfill *SubscriptionGrantBackfillHint `json:"subscription_backfill,omitempty"`
 }
 
 type BalanceRefundReview struct {
@@ -558,7 +559,7 @@ func (s *PaymentService) reviewBalanceRefund(ctx context.Context, client *dbent.
 func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, now time.Time, lock bool) (*RefundReview, error) {
 	grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, lock)
 	if errors.Is(err, errRefundAccountingMissing) {
-		return manualRefundReview(order, now, "LEGACY_SUBSCRIPTION_UNATTRIBUTED", "this historical order has no provable subscription term"), nil
+		return s.manualSubscriptionGrantBackfillReview(ctx, client, order, now)
 	}
 	if err != nil {
 		return nil, err

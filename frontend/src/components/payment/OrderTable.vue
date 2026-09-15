@@ -30,6 +30,11 @@
     <template #cell-fulfillment_status="{ row }">
       <div class="space-y-1">
         <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(row)" />
+        <OrderLifecycleBadge
+          v-if="row.refund_entitlement_status && row.refund_entitlement_status !== 'NOT_APPLICABLE'"
+          kind="refundEntitlement"
+          :value="row.refund_entitlement_status"
+        />
         <p v-if="row.needs_manual_review && fulfillmentFact(row) !== 'MANUAL_REVIEW'" class="text-xs text-red-700 dark:text-red-300">{{ t('payment.orderOps.reviewRequired') }}</p>
       </div>
     </template>

@@ -168,15 +168,9 @@ func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanReq
 	if err != nil {
 		return nil, err
 	}
-	entitlements, normalizedEntitlements, err := normalizePlanEntitlements(req.Entitlements)
+	entitlements, _, err := normalizePlanEntitlementsForPlan(req.Entitlements, req.ValidityDays, req.ValidityUnit)
 	if err != nil {
 		return nil, infraerrors.BadRequest("PLAN_ENTITLEMENTS_INVALID", err.Error())
-	}
-	if err := validatePlanResetCardDelivery(normalizedEntitlements, req.ValidityDays, req.ValidityUnit); err != nil {
-		return nil, infraerrors.BadRequest("PLAN_ENTITLEMENTS_INVALID", err.Error())
-	}
-	if normalizedEntitlements.ResetCardDeliveryMode == resetCardDeliveryModeMonthly && !s.IsMonthlyResetCardsEnabled(ctx) {
-		return nil, infraerrors.Forbidden("MONTHLY_RESET_CARDS_DISABLED", "monthly reset cards are disabled")
 	}
 	b := s.entClient.SubscriptionPlan.Create().
 		SetGroupID(req.GroupID).SetName(req.Name).SetDescription(req.Description).
@@ -196,9 +190,9 @@ func (s *PaymentConfigService) UpdatePlan(ctx context.Context, id int64, req Upd
 	if err := validatePlanPatch(req); err != nil {
 		return nil, err
 	}
-	// Validate the effective, not merely patched, plan. Otherwise an existing
-	// monthly plan could become a day plan through an unrelated partial update,
-	// or continue to be saved while the rollout switch is off.
+	// Validate the effective, not merely patched, plan. This keeps a monthly
+	// reset-card plan from becoming a day plan through an unrelated partial
+	// update and rewrites its derived issue count whenever validity changes.
 	existing, err := s.entClient.SubscriptionPlan.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -215,15 +209,9 @@ func (s *PaymentConfigService) UpdatePlan(ctx context.Context, id int64, req Upd
 	if req.Entitlements != nil {
 		effectiveEntitlements = req.Entitlements
 	}
-	normalizedEntitlements, entitlementValues, err := normalizePlanEntitlements(effectiveEntitlements)
+	normalizedEntitlements, _, err := normalizePlanEntitlementsForPlan(effectiveEntitlements, effectiveValidityDays, effectiveValidityUnit)
 	if err != nil {
 		return nil, infraerrors.BadRequest("PLAN_ENTITLEMENTS_INVALID", err.Error())
-	}
-	if err := validatePlanResetCardDelivery(entitlementValues, effectiveValidityDays, effectiveValidityUnit); err != nil {
-		return nil, infraerrors.BadRequest("PLAN_ENTITLEMENTS_INVALID", err.Error())
-	}
-	if entitlementValues.ResetCardDeliveryMode == resetCardDeliveryModeMonthly && !s.IsMonthlyResetCardsEnabled(ctx) && !monthlyResetCardPlanEmergencyDisable(req) {
-		return nil, infraerrors.Forbidden("MONTHLY_RESET_CARDS_DISABLED", "monthly reset cards are disabled")
 	}
 	u := s.entClient.SubscriptionPlan.UpdateOneID(id)
 	if req.GroupID != nil {
@@ -266,19 +254,10 @@ func (s *PaymentConfigService) UpdatePlan(ctx context.Context, id int64, req Upd
 	if req.SortOrder != nil {
 		u.SetSortOrder(*req.SortOrder)
 	}
-	if req.Entitlements != nil {
+	if req.Entitlements != nil || req.ValidityDays != nil || req.ValidityUnit != nil {
 		u.SetEntitlements(normalizedEntitlements)
 	}
 	return u.Save(ctx)
-}
-
-// monthlyResetCardPlanEmergencyDisable lets an operator remove an existing
-// plan from sale during a rollout incident even when the private delivery gate
-// is off. It deliberately does not allow a cadence or entitlement edit under
-// that gate; changing those values must wait until the worker is enabled.
-func monthlyResetCardPlanEmergencyDisable(req UpdatePlanRequest) bool {
-	return req.ForSale != nil && !*req.ForSale &&
-		req.Entitlements == nil && req.ValidityDays == nil && req.ValidityUnit == nil
 }
 
 func (s *PaymentConfigService) DeletePlan(ctx context.Context, id int64) error {

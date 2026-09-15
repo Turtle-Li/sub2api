@@ -6,6 +6,7 @@ const {
   getOrders,
   getOrder,
   getRefundReview,
+  backfillSubscriptionGrant,
   refundOrder,
   queryRefund,
   showSuccess,
@@ -17,6 +18,7 @@ const {
   getOrders: vi.fn(),
   getOrder: vi.fn(),
   getRefundReview: vi.fn(),
+  backfillSubscriptionGrant: vi.fn(),
   refundOrder: vi.fn(),
   queryRefund: vi.fn(),
   showSuccess: vi.fn(),
@@ -27,8 +29,8 @@ const {
 }))
 
 vi.mock('@/api/admin/payment', () => ({
-  adminPaymentAPI: { getOrders, getOrder, getRefundReview, refundOrder, queryRefund },
-  default: { getOrders, getOrder, getRefundReview, refundOrder, queryRefund }
+  adminPaymentAPI: { getOrders, getOrder, getRefundReview, backfillSubscriptionGrant, refundOrder, queryRefund },
+  default: { getOrders, getOrder, getRefundReview, backfillSubscriptionGrant, refundOrder, queryRefund }
 }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess, showWarning, showError }) }))
@@ -98,8 +100,8 @@ async function mountOrders(statusOrRows: string | ReturnType<typeof order>[]) {
         },
         AdminRefundDialog: {
           name: 'AdminRefundDialog',
-          props: ['show', 'order', 'review', 'loading', 'error', 'warning', 'submitting'],
-          emits: ['confirm', 'cancel'],
+          props: ['show', 'order', 'review', 'loading', 'error', 'warning', 'submitting', 'backfilling'],
+          emits: ['confirm', 'backfill', 'cancel'],
           template: '<div v-if="show" data-test="refund-dialog" :data-order-id="order?.id" :data-review="review?.quote_revision || \'\'">{{ warning }}{{ error }}</div>'
         },
         BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /></div>' },
@@ -322,6 +324,70 @@ describe('admin order management', () => {
     resolveRefresh!({ data: review(42, 'quote-fresh') })
     await flushPromises()
     expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-review')).toBe('quote-fresh')
+    wrapper.unmount()
+  })
+
+  it('runs historical subscription provenance backfill behind step-up and keeps the fresh quote open', async () => {
+    const manualReview = {
+      ...review(42),
+      order_type: 'subscription',
+      can_refund: false,
+      requires_manual_review: true,
+      quote_revision: undefined,
+      balance: undefined,
+      reason_code: 'LEGACY_SUBSCRIPTION_UNATTRIBUTED',
+      subscription_backfill: {
+        audit_revision: 'audit-42',
+        suggested_subscription_id: 8,
+        suggested_term_start_at: '2026-09-12T15:13:43Z',
+        suggested_term_end_at: '2026-10-12T15:13:43Z',
+        subscription_group_id: 4,
+        purchased_days: 30,
+        candidates: [{
+          subscription_id: 8,
+          starts_at: '2026-09-12T15:13:43Z',
+          expires_at: '2026-10-12T15:13:43Z',
+          status: 'active',
+        }],
+      },
+    }
+    const freshReview = {
+      ...review(42, 'quote-after-backfill'),
+      order_type: 'subscription',
+      balance: undefined,
+      subscription: {
+        subscription_id: 8,
+        term_start_at: '2026-09-12T15:13:43Z',
+        term_end_at: '2026-10-12T15:13:43Z',
+        current_expires_at: '2026-10-12T15:13:43Z',
+        new_expires_at: '2026-09-15T00:00:00Z',
+        purchased_seconds: 2_592_000,
+        used_seconds: 200_000,
+        remaining_seconds: 2_392_000,
+      },
+    }
+    getRefundReview.mockResolvedValueOnce({ data: manualReview })
+    backfillSubscriptionGrant.mockResolvedValueOnce({ data: freshReview })
+    const wrapper = await mountOrders('COMPLETED')
+    await openRefundDialog(wrapper)
+
+    const request = {
+      audit_revision: 'audit-42',
+      subscription_id: 8,
+      term_start_at: '2026-09-12T15:13:43.000Z',
+      term_end_at: '2026-10-12T15:13:43.000Z',
+      evidence_source: 'payment_audit_and_subscription',
+      evidence_detail: 'Verified payment audit and current subscription',
+    }
+    wrapper.findComponent({ name: 'AdminRefundDialog' }).vm.$emit('backfill', request)
+    await flushPromises()
+
+    expect(stepUpRun).toHaveBeenCalledTimes(1)
+    expect(backfillSubscriptionGrant).toHaveBeenCalledWith(42, request)
+    expect(showSuccess).toHaveBeenCalledWith('payment.admin.subscriptionGrantBackfillSuccess')
+    expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-review')).toBe('quote-after-backfill')
+    expect(wrapper.find('[data-test="refund-dialog"]').exists()).toBe(true)
+    expect(getOrders).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 

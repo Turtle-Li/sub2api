@@ -77,7 +77,7 @@ export function monthlyResetCardIssueCount(
   if (multiplier === 0 || value > 120 / multiplier) return null
 
   const issues = value * multiplier
-  return issues >= 2 && issues <= 120 ? issues : null
+  return issues >= 1 && issues <= 120 ? issues : null
 }
 
 /**
@@ -112,6 +112,6 @@ export function monthlyResetCardDeliveryLabel(
   const count = Number(entitlements.reset_card_count)
   const issues = Number(entitlements.reset_card_issue_count)
   const validity = resetCardValidityLabel(entitlements, t)
-  if (!Number.isSafeInteger(count) || count <= 0 || !Number.isSafeInteger(issues) || issues < 2 || !validity) return ''
+  if (!Number.isSafeInteger(count) || count <= 0 || !Number.isSafeInteger(issues) || issues < 1 || !validity) return ''
   return t('payment.entitlements.monthlyResetCards', { count, issues, validity })
 }

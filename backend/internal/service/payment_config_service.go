@@ -28,18 +28,15 @@ const (
 	// refunds cannot start until every request-serving generation understands
 	// the reservation and cache-fence contracts.
 	SettingPaymentReviewedRefundsEnabled = "PAYMENT_REVIEWED_REFUNDS_ENABLED"
-	// SettingPaymentMonthlyResetCardsEnabled is intentionally private. Missing
-	// values and storage failures keep calendar issuance disabled.
-	SettingPaymentMonthlyResetCardsEnabled = "PAYMENT_MONTHLY_RESET_CARDS_ENABLED"
-	SettingMinRechargeAmount               = "MIN_RECHARGE_AMOUNT"
-	SettingMaxRechargeAmount               = "MAX_RECHARGE_AMOUNT"
-	SettingDailyRechargeLimit              = "DAILY_RECHARGE_LIMIT"
-	SettingOrderTimeoutMinutes             = "ORDER_TIMEOUT_MINUTES"
-	SettingMaxPendingOrders                = "MAX_PENDING_ORDERS"
-	SettingEnabledPaymentTypes             = "ENABLED_PAYMENT_TYPES"
-	SettingLoadBalanceStrategy             = "LOAD_BALANCE_STRATEGY"
-	SettingBalancePayDisabled              = "BALANCE_PAYMENT_DISABLED"
-	SettingBalanceRechargeMult             = "BALANCE_RECHARGE_MULTIPLIER"
+	SettingMinRechargeAmount             = "MIN_RECHARGE_AMOUNT"
+	SettingMaxRechargeAmount             = "MAX_RECHARGE_AMOUNT"
+	SettingDailyRechargeLimit            = "DAILY_RECHARGE_LIMIT"
+	SettingOrderTimeoutMinutes           = "ORDER_TIMEOUT_MINUTES"
+	SettingMaxPendingOrders              = "MAX_PENDING_ORDERS"
+	SettingEnabledPaymentTypes           = "ENABLED_PAYMENT_TYPES"
+	SettingLoadBalanceStrategy           = "LOAD_BALANCE_STRATEGY"
+	SettingBalancePayDisabled            = "BALANCE_PAYMENT_DISABLED"
+	SettingBalanceRechargeMult           = "BALANCE_RECHARGE_MULTIPLIER"
 	// SettingSubscriptionUSDToCNYRate 是订阅 CNY 换算汇率（1 USD = X CNY）。
 	// 0/未配置 = 关闭换算（订阅按 price 数值直付），显式配置后 CNY 通道订阅按 price × rate 收款。
 	SettingSubscriptionUSDToCNYRate      = "SUBSCRIPTION_USD_TO_CNY_RATE"
@@ -131,9 +128,6 @@ type PaymentConfig struct {
 	// adapter. Secrets and Vault contents are never returned to the admin API.
 	UnifiedPaymentEnabled bool     `json:"unified_payment_enabled,omitempty"`
 	UnifiedPaymentMethods []string `json:"unified_payment_methods,omitempty"`
-	// MonthlyResetCardsEnabled is an administrator-only rollout switch. Public
-	// payment handlers project their response explicitly and never expose it.
-	MonthlyResetCardsEnabled bool `json:"monthly_reset_cards_enabled"`
 }
 
 // UnifiedPaymentCapability lets payment settings resolve a visible method to
@@ -181,7 +175,6 @@ type UpdatePaymentConfigRequest struct {
 	VisibleMethodAlipayEnabled *bool            `json:"payment_visible_method_alipay_enabled"`
 	VisibleMethodWxpayEnabled  *bool            `json:"payment_visible_method_wxpay_enabled"`
 	RechargeOptions            []RechargeOption `json:"recharge_options"`
-	MonthlyResetCardsEnabled   *bool            `json:"monthly_reset_cards_enabled"`
 }
 
 // MethodLimits holds per-payment-type limits.
@@ -302,19 +295,6 @@ func (s *PaymentConfigService) IsReviewedRefundsEnabled(ctx context.Context) boo
 	return strings.EqualFold(strings.TrimSpace(val), "true")
 }
 
-// IsMonthlyResetCardsEnabled is fail-closed because a stale or unavailable
-// configuration must never create new periodic monetary entitlements.
-func (s *PaymentConfigService) IsMonthlyResetCardsEnabled(ctx context.Context) bool {
-	if s == nil || s.settingRepo == nil {
-		return false
-	}
-	value, err := s.settingRepo.GetValue(ctx, SettingPaymentMonthlyResetCardsEnabled)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(value), "true")
-}
-
 // GetPaymentConfig returns the full payment configuration.
 func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentConfig, error) {
 	keys := []string{
@@ -329,7 +309,6 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		SettingRechargeOptions,
 		SettingPaymentVisibleMethodAlipayEnabled, SettingPaymentVisibleMethodAlipaySource,
 		SettingPaymentVisibleMethodWxpayEnabled, SettingPaymentVisibleMethodWxpaySource,
-		SettingPaymentMonthlyResetCardsEnabled,
 	}
 	vals, err := s.settingRepo.GetMultiple(ctx, keys)
 	if err != nil {
@@ -373,7 +352,6 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 
 		AlipayForceQRCode:             vals[SettingAlipayForceQRCode] == "true",
 		AlipayMobilePrecreateDeepLink: vals[SettingAlipayMobilePrecreateDeepLink] == "true",
-		MonthlyResetCardsEnabled:      strings.EqualFold(strings.TrimSpace(vals[SettingPaymentMonthlyResetCardsEnabled]), "true"),
 	}
 	rechargeOptions, rechargeOptionsIntact := normalizeRechargeOptions(vals[SettingRechargeOptions])
 	cfg.RechargeOptions = rechargeOptions
@@ -730,9 +708,6 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 			return infraerrors.BadRequest("INVALID_RECHARGE_OPTIONS", err.Error())
 		}
 		m[SettingRechargeOptions] = encoded
-	}
-	if req.MonthlyResetCardsEnabled != nil {
-		m[SettingPaymentMonthlyResetCardsEnabled] = formatBoolOrEmpty(req.MonthlyResetCardsEnabled)
 	}
 	return s.settingRepo.SetMultiple(ctx, m)
 }

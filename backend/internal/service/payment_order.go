@@ -668,9 +668,6 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	if err != nil {
 		return nil, ErrPurchaseRulesUnavailable
 	}
-	if err := s.validateMonthlyResetCardPlanAdmission(ctx, entitlements); err != nil {
-		return nil, err
-	}
 	if err := validatePurchaseRulesForUser(ctx, s.paymentEligibilityClient(), req.UserID, entitlements.PurchaseRules); err != nil {
 		return nil, err
 	}
@@ -741,27 +738,10 @@ func (s *PaymentService) revalidateSubscriptionOrderInTx(ctx context.Context, tx
 	if err != nil {
 		return nil, nil, ErrPurchaseRulesUnavailable
 	}
-	if err := s.validateMonthlyResetCardPlanAdmission(ctx, entitlements); err != nil {
-		return nil, nil, err
-	}
 	if err := validatePurchaseRulesForUser(ctx, tx.Client(), req.UserID, entitlements.PurchaseRules); err != nil {
 		return nil, nil, err
 	}
 	return currentPlan, paymentOrderSnapshotGroup(currentGroup), nil
-}
-
-// validateMonthlyResetCardPlanAdmission keeps the rollout switch private while
-// making its safety boundary authoritative at checkout. A disabled switch uses
-// the ordinary product-unavailable error rather than advertising an internal
-// deployment state to callers that bypass the catalog.
-func (s *PaymentService) validateMonthlyResetCardPlanAdmission(ctx context.Context, entitlements PlanEntitlements) error {
-	if entitlements.ResetCardDeliveryMode != resetCardDeliveryModeMonthly {
-		return nil
-	}
-	if s == nil || s.configService == nil || !s.configService.IsMonthlyResetCardsEnabled(ctx) {
-		return ErrPurchaseNotAllowed
-	}
-	return nil
 }
 
 // subscriptionPlanCheckoutSourceEqual covers every plan field frozen into an

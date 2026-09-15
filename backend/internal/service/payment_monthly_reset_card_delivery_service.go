@@ -30,32 +30,30 @@ type paymentMonthlyResetCardDeliveryCandidate struct {
 // never contacts a payment provider and does not use cache operations inside a
 // transaction; every issue is fenced by the schedule/issuance ledger instead.
 type PaymentMonthlyResetCardDeliveryService struct {
-	entClient     *dbent.Client
-	configService *PaymentConfigService
-	interval      time.Duration
-	lockCache     LeaderLockCache
-	db            *sql.DB
-	instanceID    string
-	now           func() time.Time
-	ctx           context.Context
-	cancel        context.CancelFunc
-	stopCh        chan struct{}
-	startOnce     sync.Once
-	stopOnce      sync.Once
-	wg            sync.WaitGroup
+	entClient  *dbent.Client
+	interval   time.Duration
+	lockCache  LeaderLockCache
+	db         *sql.DB
+	instanceID string
+	now        func() time.Time
+	ctx        context.Context
+	cancel     context.CancelFunc
+	stopCh     chan struct{}
+	startOnce  sync.Once
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
 }
 
-func NewPaymentMonthlyResetCardDeliveryService(entClient *dbent.Client, configService *PaymentConfigService, interval time.Duration) *PaymentMonthlyResetCardDeliveryService {
+func NewPaymentMonthlyResetCardDeliveryService(entClient *dbent.Client, interval time.Duration) *PaymentMonthlyResetCardDeliveryService {
 	workerCtx, cancel := context.WithCancel(context.Background())
 	return &PaymentMonthlyResetCardDeliveryService{
-		entClient:     entClient,
-		configService: configService,
-		interval:      interval,
-		instanceID:    uuid.NewString(),
-		now:           time.Now,
-		ctx:           workerCtx,
-		cancel:        cancel,
-		stopCh:        make(chan struct{}),
+		entClient:  entClient,
+		interval:   interval,
+		instanceID: uuid.NewString(),
+		now:        time.Now,
+		ctx:        workerCtx,
+		cancel:     cancel,
+		stopCh:     make(chan struct{}),
 	}
 }
 
@@ -68,7 +66,7 @@ func (s *PaymentMonthlyResetCardDeliveryService) SetLeaderLock(lockCache LeaderL
 }
 
 func (s *PaymentMonthlyResetCardDeliveryService) Start() {
-	if s == nil || s.entClient == nil || s.configService == nil || s.interval <= 0 {
+	if s == nil || s.entClient == nil || s.interval <= 0 {
 		return
 	}
 	s.startOnce.Do(func() {
@@ -106,14 +104,13 @@ func (s *PaymentMonthlyResetCardDeliveryService) Stop() {
 }
 
 // RunOnce is exported for focused operational and integration tests. Local
-// standby mode or a peer lease yields a harmless no-op. The private monthly
-// rollout switch gates new plan/order admission only: a paid schedule must keep
-// running after an operator closes that gate.
+// standby mode or a peer lease yields a harmless no-op. It reads only the
+// indexed due schedule ledger; there is no product configuration gate.
 func (s *PaymentMonthlyResetCardDeliveryService) RunOnce(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s == nil || s.entClient == nil || s.configService == nil || !runtimegate.SharedWorkAllowed() {
+	if s == nil || s.entClient == nil || !runtimegate.SharedWorkAllowed() {
 		return nil
 	}
 	jobCtx, cancel := context.WithTimeout(ctx, paymentMonthlyResetCardDeliveryLeaderLockTTL)

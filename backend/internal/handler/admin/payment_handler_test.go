@@ -38,6 +38,9 @@ func TestSanitizeAdminPaymentOrderForResponseAddsCurrency(t *testing.T) {
 	if got.Currency != "USD" {
 		t.Fatalf("expected currency USD, got %q", got.Currency)
 	}
+	if got.RefundEntitlementStatus != service.RefundEntitlementStatusNotApplicable {
+		t.Fatalf("expected default refund entitlement status, got %q", got.RefundEntitlementStatus)
+	}
 
 	body, err := json.Marshal(got)
 	if err != nil {
@@ -48,7 +51,7 @@ func TestSanitizeAdminPaymentOrderForResponseAddsCurrency(t *testing.T) {
 	}
 }
 
-func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfo(t *testing.T) {
+func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfoWithoutResetCardTier(t *testing.T) {
 	weekly := 25.0
 	now := time.Now()
 	plans := []*dbent.SubscriptionPlan{
@@ -79,9 +82,7 @@ func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfo(t *testing.
 		},
 	}
 
-	got := adminSubscriptionPlansForResponse(plans, groupInfo, map[int64]service.SubscriptionResetCardTierPolicy{
-		7: {GroupID: 7, FamilyKey: "gpt", TierRank: 2},
-	})
+	got := adminSubscriptionPlansForResponse(plans, groupInfo)
 
 	if len(got) != 1 {
 		t.Fatalf("expected one plan, got %d", len(got))
@@ -106,7 +107,11 @@ func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfo(t *testing.
 	if !got[0].CreatedAt.Equal(now) || !got[0].UpdatedAt.Equal(now) {
 		t.Fatalf("expected created_at/updated_at to be preserved, got %v / %v", got[0].CreatedAt, got[0].UpdatedAt)
 	}
-	if got[0].ResetCardTier == nil || got[0].ResetCardTier.FamilyKey != "gpt" || got[0].ResetCardTier.TierRank != 2 {
-		t.Fatalf("expected reset-card tier to be included, got %#v", got[0].ResetCardTier)
+	body, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("marshal admin subscription plan: %v", err)
+	}
+	if strings.Contains(string(body), "reset_card_tier") {
+		t.Fatalf("admin subscription plan exposed reset-card tier: %s", string(body))
 	}
 }

@@ -4,10 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AdminPaymentPlansView from '../AdminPaymentPlansView.vue'
 
-const { getPlans, getConfig, updateConfig, getGroups } = vi.hoisted(() => ({
+const { getPlans, getConfig, getGroups } = vi.hoisted(() => ({
   getPlans: vi.fn(),
   getConfig: vi.fn(),
-  updateConfig: vi.fn(),
   getGroups: vi.fn(),
 }))
 
@@ -15,7 +14,6 @@ vi.mock('@/api/admin/payment', () => ({
   adminPaymentAPI: {
     getPlans,
     getConfig,
-    updateConfig,
   },
 }))
 
@@ -44,7 +42,6 @@ const DataTableStub = {
       <div v-for="row in data" :key="row.id">
         <slot name="cell-price" :value="row.price" :row="row" />
         <slot name="cell-validity_days" :value="row.validity_days" :row="row" />
-        <slot name="cell-reset_card_tier" :row="row" />
         <slot name="cell-reset_card_delivery" :row="row" />
       </div>
     </div>
@@ -54,8 +51,7 @@ const DataTableStub = {
 describe('AdminPaymentPlansView', () => {
   beforeEach(() => {
     getGroups.mockResolvedValue([])
-    getConfig.mockResolvedValue({ data: { monthly_reset_cards_enabled: false } })
-    updateConfig.mockResolvedValue({ data: {} })
+    getConfig.mockResolvedValue({ data: {} })
     getPlans.mockResolvedValue({
       data: [
         {
@@ -70,7 +66,6 @@ describe('AdminPaymentPlansView', () => {
           sort_order: 0,
           for_sale: true,
           features: [],
-          reset_card_tier: { group_id: 1, family_key: 'gpt_standard', tier_rank: 2 },
           entitlements: {
             balance_bonus: 0,
             reset_card_count: 2,
@@ -110,7 +105,6 @@ describe('AdminPaymentPlansView', () => {
           Icon: true,
           PlanEditDialog: true,
           AdminRechargeCatalogPanel: { template: '<div data-testid="recharge-catalog" />' },
-          ResetCardTierPolicyPanel: { template: '<div data-testid="reset-card-tier-policy" />' },
         },
       },
     })
@@ -121,10 +115,8 @@ describe('AdminPaymentPlansView', () => {
     expect(wrapper.text()).toContain('¥599.00')
     expect(wrapper.text()).toContain('$10.00')
     expect(wrapper.text()).toContain('30 payment.validityUnits.dayMany')
-    expect(wrapper.text()).toContain('payment.admin.resetCardTierConfigured')
-    expect(wrapper.text()).toContain('payment.admin.resetCardTierUnconfigured')
     expect(wrapper.text()).toContain('payment.entitlements.monthlyResetCards')
-    expect(wrapper.find('[data-testid="reset-card-tier-policy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="monthly-reset-cards-toggle"]').exists()).toBe(false)
   })
 
   it('keeps subscription and balance products in one catalogue entry', async () => {
@@ -139,7 +131,6 @@ describe('AdminPaymentPlansView', () => {
           Icon: true,
           PlanEditDialog: true,
           AdminRechargeCatalogPanel: { template: '<div data-testid="recharge-catalog" />' },
-          ResetCardTierPolicyPanel: { template: '<div data-testid="reset-card-tier-policy" />' },
         },
       },
     })
@@ -154,7 +145,7 @@ describe('AdminPaymentPlansView', () => {
     expect(wrapper.find('[data-testid="recharge-catalog"]').exists()).toBe(true)
   })
 
-  it('saves only the monthly reset-card rollout flag and immediately passes it to the plan editor', async () => {
+  it('keeps monthly delivery and compatibility as built-in product behavior', async () => {
     const wrapper = mount(AdminPaymentPlansView, {
       global: {
         plugins: [createPinia()],
@@ -166,18 +157,12 @@ describe('AdminPaymentPlansView', () => {
           Icon: true,
           PlanEditDialog: true,
           AdminRechargeCatalogPanel: true,
-          ResetCardTierPolicyPanel: true,
         },
       },
     })
     await flushPromises()
 
-    const toggle = wrapper.get('[data-testid="monthly-reset-cards-toggle"]')
-    expect(toggle.attributes('aria-checked')).toBe('false')
-    await toggle.trigger('click')
-    await flushPromises()
-
-    expect(updateConfig).toHaveBeenCalledWith({ monthly_reset_cards_enabled: true })
-    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('[data-testid="monthly-reset-cards-toggle"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('payment.admin.resetCardTierPolicy')
   })
 })

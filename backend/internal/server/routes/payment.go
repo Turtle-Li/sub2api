@@ -96,6 +96,7 @@ func RegisterPaymentRoutes(
 			adminOrders.POST("/:id/cancel", adminPaymentHandler.CancelOrder)
 			adminOrders.POST("/:id/retry", adminPaymentHandler.RetryFulfillment)
 			adminOrders.GET("/:id/refund-review", adminPaymentHandler.GetRefundReview)
+			adminOrders.POST("/:id/refund/subscription-grant-backfill", adminPaymentHandler.BackfillSubscriptionGrant)
 			adminOrders.POST("/:id/refund", adminPaymentHandler.ProcessRefund)
 			adminOrders.POST("/:id/refund/query", adminPaymentHandler.QueryAndFinalizeRefund)
 		}
@@ -107,12 +108,6 @@ func RegisterPaymentRoutes(
 			plans.POST("", adminPaymentHandler.CreatePlan)
 			plans.PUT("/:id", adminPaymentHandler.UpdatePlan)
 			plans.DELETE("/:id", adminPaymentHandler.DeletePlan)
-		}
-
-		resetCardTiers := adminGroup.Group("/reset-card-tiers")
-		{
-			resetCardTiers.GET("", adminPaymentHandler.ListResetCardTierPolicies)
-			resetCardTiers.PUT("/:group_id", adminPaymentHandler.UpsertResetCardTierPolicy)
 		}
 
 		// Provider Instances

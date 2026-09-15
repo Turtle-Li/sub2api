@@ -22102,6 +22102,7 @@ type GroupMutation struct {
 	duplicate_operation_id                  *string
 	platform                                *string
 	subscription_type                       *string
+	subscription_product_code               *string
 	daily_limit_usd                         *float64
 	adddaily_limit_usd                      *float64
 	weekly_limit_usd                        *float64
@@ -22920,6 +22921,55 @@ func (m *GroupMutation) OldSubscriptionType(ctx context.Context) (v string, err 
 // ResetSubscriptionType resets all changes to the "subscription_type" field.
 func (m *GroupMutation) ResetSubscriptionType() {
 	m.subscription_type = nil
+}
+
+// SetSubscriptionProductCode sets the "subscription_product_code" field.
+func (m *GroupMutation) SetSubscriptionProductCode(s string) {
+	m.subscription_product_code = &s
+}
+
+// SubscriptionProductCode returns the value of the "subscription_product_code" field in the mutation.
+func (m *GroupMutation) SubscriptionProductCode() (r string, exists bool) {
+	v := m.subscription_product_code
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSubscriptionProductCode returns the old "subscription_product_code" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldSubscriptionProductCode(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSubscriptionProductCode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSubscriptionProductCode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSubscriptionProductCode: %w", err)
+	}
+	return oldValue.SubscriptionProductCode, nil
+}
+
+// ClearSubscriptionProductCode clears the value of the "subscription_product_code" field.
+func (m *GroupMutation) ClearSubscriptionProductCode() {
+	m.subscription_product_code = nil
+	m.clearedFields[group.FieldSubscriptionProductCode] = struct{}{}
+}
+
+// SubscriptionProductCodeCleared returns if the "subscription_product_code" field was cleared in this mutation.
+func (m *GroupMutation) SubscriptionProductCodeCleared() bool {
+	_, ok := m.clearedFields[group.FieldSubscriptionProductCode]
+	return ok
+}
+
+// ResetSubscriptionProductCode resets all changes to the "subscription_product_code" field.
+func (m *GroupMutation) ResetSubscriptionProductCode() {
+	m.subscription_product_code = nil
+	delete(m.clearedFields, group.FieldSubscriptionProductCode)
 }
 
 // SetDailyLimitUsd sets the "daily_limit_usd" field.
@@ -25925,7 +25975,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 66)
+	fields := make([]string, 0, 67)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -25970,6 +26020,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.subscription_type != nil {
 		fields = append(fields, group.FieldSubscriptionType)
+	}
+	if m.subscription_product_code != nil {
+		fields = append(fields, group.FieldSubscriptionProductCode)
 	}
 	if m.daily_limit_usd != nil {
 		fields = append(fields, group.FieldDailyLimitUsd)
@@ -26162,6 +26215,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Platform()
 	case group.FieldSubscriptionType:
 		return m.SubscriptionType()
+	case group.FieldSubscriptionProductCode:
+		return m.SubscriptionProductCode()
 	case group.FieldDailyLimitUsd:
 		return m.DailyLimitUsd()
 	case group.FieldWeeklyLimitUsd:
@@ -26303,6 +26358,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldPlatform(ctx)
 	case group.FieldSubscriptionType:
 		return m.OldSubscriptionType(ctx)
+	case group.FieldSubscriptionProductCode:
+		return m.OldSubscriptionProductCode(ctx)
 	case group.FieldDailyLimitUsd:
 		return m.OldDailyLimitUsd(ctx)
 	case group.FieldWeeklyLimitUsd:
@@ -26518,6 +26575,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSubscriptionType(v)
+		return nil
+	case group.FieldSubscriptionProductCode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSubscriptionProductCode(v)
 		return nil
 	case group.FieldDailyLimitUsd:
 		v, ok := value.(float64)
@@ -27242,6 +27306,9 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldDuplicateOperationID) {
 		fields = append(fields, group.FieldDuplicateOperationID)
 	}
+	if m.FieldCleared(group.FieldSubscriptionProductCode) {
+		fields = append(fields, group.FieldSubscriptionProductCode)
+	}
 	if m.FieldCleared(group.FieldDailyLimitUsd) {
 		fields = append(fields, group.FieldDailyLimitUsd)
 	}
@@ -27321,6 +27388,9 @@ func (m *GroupMutation) ClearField(name string) error {
 		return nil
 	case group.FieldDuplicateOperationID:
 		m.ClearDuplicateOperationID()
+		return nil
+	case group.FieldSubscriptionProductCode:
+		m.ClearSubscriptionProductCode()
 		return nil
 	case group.FieldDailyLimitUsd:
 		m.ClearDailyLimitUsd()
@@ -27431,6 +27501,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldSubscriptionType:
 		m.ResetSubscriptionType()
+		return nil
+	case group.FieldSubscriptionProductCode:
+		m.ResetSubscriptionProductCode()
 		return nil
 	case group.FieldDailyLimitUsd:
 		m.ResetDailyLimitUsd()
