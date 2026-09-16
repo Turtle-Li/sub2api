@@ -72,6 +72,11 @@ SERVICE_UNIT="${DEPLOY_DIR}/sub2api-runtime-guard.service"
 assert_contains "$SERVICE_UNIT" 'ConditionFileIsExecutable=/usr/local/libexec/sub2api-runtime-guard.sh'
 assert_not_contains "$SERVICE_UNIT" 'ConditionPathIsExecutable='
 
+TIMER_UNIT="${DEPLOY_DIR}/sub2api-runtime-guard.timer"
+assert_contains "$TIMER_UNIT" 'OnActiveSec=30s'
+assert_contains "$TIMER_UNIT" 'OnUnitInactiveSec=30s'
+assert_not_contains "$TIMER_UNIT" 'OnBootSec='
+
 mkdir -p "$FAKE_BIN"
 
 cat >"${FAKE_BIN}/docker" <<'EOF'

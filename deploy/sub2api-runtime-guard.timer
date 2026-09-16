@@ -2,7 +2,7 @@
 Description=Periodic Sub2API active-runtime recovery guard
 
 [Timer]
-OnBootSec=30s
+OnActiveSec=30s
 OnUnitInactiveSec=30s
 AccuracySec=1s
 RandomizedDelaySec=5s

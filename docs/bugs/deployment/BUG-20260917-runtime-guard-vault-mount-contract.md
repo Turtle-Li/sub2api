@@ -67,6 +67,22 @@ local Compose payment mount with both false and absent switches, rejected
 wrong/read-write/duplicate dormant mounts, local single-node feature and
 unknown-mount cases, and the existing state inode/content drift cases.
 
+## Timer reactivation contract
+
+The production rehearsal exposed one additional systemd edge case after the
+guard itself passed. The timer used `OnBootSec=30s`; when it was re-enabled
+long after boot, systemd retained the already-consumed boot-relative trigger
+and left the unit `active (elapsed)` with no next activation. This made a
+successfully enabled timer look healthy while it would never run again during
+that boot.
+
+The timer now uses `OnActiveSec=30s`, so every enable/start arms the first run
+relative to that activation. `OnUnitInactiveSec=30s` continues to schedule
+subsequent runs after the oneshot service becomes inactive. A static unit
+contract test requires both directives and rejects a return to `OnBootSec`.
+The rollout must observe a timer-triggered service run and a finite next
+activation before it reports the guard enabled.
+
 The frozen source checks include `deploy/tests/runtime-guard-test.sh`,
 `deploy/tests/node-state-test.sh`,
 `deploy/tests/install-autodeploy-runtime-mode-test.sh`, Bash syntax validation,
