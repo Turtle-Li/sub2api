@@ -15,6 +15,11 @@ policy from this value.
   attempt uses that attempt's account and proxy. It covers Responses HTTP,
   Chat Completions compatibility, Messages compatibility, and Responses
   WebSocket first and later turns.
+- WebSocket HTTP-bridge replay keeps a pre-timezone baseline after the normal
+  request transformer. A current-turn account failover rebuilds history from
+  that baseline before the replacement account applies its own timezone. An
+  `off` or metadata-less replacement therefore receives the client's original
+  value rather than the failed account's value.
 - Only `instructions`, top-level `system`, and `developer`/`system` role text
   are eligible. User-role content is never rewritten, even when it contains
   identical XML. Missing tags are not inserted.
@@ -89,10 +94,13 @@ entry points into a recording upstream. They assert that a Japan proxy changes
 the developer tag to `Asia/Tokyo`, an account override changes it to
 `America/Los_Angeles`, and the same XML inside user text stays
 `Asia/Shanghai`. WebSocket tests apply the same assertion to the first frame
-and the composed later-turn transformer. Repository integration tests apply the
-migration on PostgreSQL, persist a detected timezone, enqueue bound-account
-snapshot invalidation, clear metadata after a proxy transport edit, and reject
-a late result from the old endpoint.
+and the composed later-turn transformer. HTTP-bridge failover tests also cover
+replacement accounts configured with `off`, with no effective timezone, and
+with an explicit different timezone; they verify the normal request transform
+runs once and the failed account's timezone is absent from the complete retry
+body. Repository integration tests apply the migration on PostgreSQL, persist a
+detected timezone, enqueue bound-account snapshot invalidation, clear metadata
+after a proxy transport edit, and reject a late result from the old endpoint.
 
 After deployment, verify that the startup log reports the timezone backfill
 counts and inspect `detected_timezone` in the admin proxy response. Run the

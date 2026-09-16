@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func TestBuildOpenAIWSCurrentTurnRetryPayloadRejectsOrphanToolOutput(t *testing.T) {
@@ -104,6 +105,47 @@ func TestProxyOpenAIWSHTTPBridgeTurnLaterTurnDoesNotFailOverAfterDownstreamOutpu
 }
 
 func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		nextExtra        map[string]any
+		nextProxy        *Proxy
+		expectedTimezone string
+	}{
+		{
+			name: "replacement_override_off",
+			nextExtra: map[string]any{
+				"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge,
+				OpenAIRequestTimezoneExtraKey:               "off",
+			},
+			nextProxy:        &Proxy{DetectedTimezone: "Asia/Tokyo"},
+			expectedTimezone: "Asia/Shanghai",
+		},
+		{
+			name: "replacement_timezone_unset",
+			nextExtra: map[string]any{
+				"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge,
+			},
+			nextProxy:        &Proxy{},
+			expectedTimezone: "Asia/Shanghai",
+		},
+		{
+			name: "replacement_timezone_override",
+			nextExtra: map[string]any{
+				"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge,
+				OpenAIRequestTimezoneExtraKey:               "Asia/Tokyo",
+			},
+			nextProxy:        &Proxy{DetectedTimezone: "Europe/London"},
+			expectedTimezone: "Asia/Tokyo",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t, tc.nextExtra, tc.nextProxy, tc.expectedTimezone)
+		})
+	}
+}
+
+func testOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t *testing.T, nextExtra map[string]any, nextProxy *Proxy, expectedTimezone string) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -152,11 +194,24 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		Status: StatusActive, Schedulable: true, Concurrency: 1,
 		Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
 		Credentials: map[string]any{"chatgpt_account_id": "account-a", "chatgpt_user_id": "user-a"},
+		Proxy:       &Proxy{DetectedTimezone: "America/Los_Angeles"},
 	}
 	nextAccount := *account
 	nextAccount.ID = 130
 	nextAccount.Name = "replacement"
 	nextAccount.Credentials = map[string]any{"chatgpt_account_id": "account-b", "chatgpt_user_id": "user-b"}
+	nextAccount.Extra = nextExtra
+	nextAccount.Proxy = nextProxy
+	transformCalls := 0
+	hooks := &OpenAIWSIngressHooks{
+		TransformRequest: func(turn int, payload []byte, _ string) ([]byte, error) {
+			if turn != 2 {
+				return nil, errors.New("unexpected websocket transform turn")
+			}
+			transformCalls++
+			return sjson.SetBytes(payload, "input.0.transform_marker", "attachment-ready")
+		},
+	}
 
 	serverErrCh := make(chan error, 1)
 	failoverCh := make(chan []byte, 1)
@@ -178,7 +233,7 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 			serverErrCh <- readErr
 			return
 		}
-		proxyErr := svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "access-token-a", firstMessage, nil)
+		proxyErr := svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "access-token-a", firstMessage, hooks)
 		var failoverErr *UpstreamFailoverError
 		if !errors.As(proxyErr, &failoverErr) {
 			serverErrCh <- proxyErr
@@ -191,7 +246,7 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		}
 		failoverCh <- retryPayload
 		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(
-			r.Context(), ginCtx, conn, &nextAccount, "access-token-b", retryPayload, nil,
+			r.Context(), ginCtx, conn, &nextAccount, "access-token-b", retryPayload, hooks,
 		)
 	}))
 	defer wsServer.Close()
@@ -203,7 +258,7 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 	defer func() { _ = clientConn.CloseNow() }()
 
 	writeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-5.6-sol","input":[{"role":"user","content":"first"}]}`))
+	err = clientConn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-5.6-sol","input":[{"role":"developer","content":"<environment_context><timezone>Asia/Shanghai</timezone></environment_context>"},{"role":"user","content":"first"}]}`))
 	cancel()
 	require.NoError(t, err)
 
@@ -214,7 +269,7 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 	require.Equal(t, "response.completed", gjson.GetBytes(completed, "type").String())
 
 	writeCtx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-5.6-sol","previous_response_id":"resp_first","prompt_cache_key":"client-session","client_metadata":{"session_id":"client-session","thread_id":"client-thread"},"input":[{"type":"function_call_output","call_id":"call_1","output":"second"}]}`))
+	err = clientConn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-5.6-sol","previous_response_id":"resp_first","prompt_cache_key":"client-session","client_metadata":{"session_id":"client-session","thread_id":"client-thread"},"input":[{"role":"developer","content":"<environment_context><timezone>Asia/Shanghai</timezone></environment_context>"},{"type":"function_call_output","call_id":"call_1","output":"second"}]}`))
 	cancel()
 	require.NoError(t, err)
 
@@ -233,7 +288,7 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(retryPayload, "model").String())
 		input := gjson.GetBytes(retryPayload, "input")
 		require.True(t, input.IsArray())
-		require.Len(t, input.Array(), 4)
+		require.Len(t, input.Array(), 6)
 		require.Contains(t, input.Raw, "first")
 		require.Contains(t, input.Raw, "first-ok")
 		require.Contains(t, input.Raw, "second")
@@ -252,11 +307,21 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		t.Fatal("timed out waiting for replacement-account completion")
 	}
 	require.Len(t, upstream.bodies, 3)
+	require.Equal(t, 1, transformCalls, "current-turn transform must run exactly once before account failover")
 	require.Contains(t, string(upstream.bodies[0]), "first")
+	require.Contains(t, gjson.GetBytes(upstream.bodies[0], "input.0.content").String(), "<timezone>America/Los_Angeles</timezone>")
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "session", "client-session"), gjson.GetBytes(upstream.bodies[1], "client_metadata.session_id").String())
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "thread", "client-thread"), gjson.GetBytes(upstream.bodies[1], "client_metadata.thread_id").String())
+	require.Contains(t, gjson.GetBytes(upstream.bodies[1], "input.0.content").String(), "<timezone>America/Los_Angeles</timezone>")
 	require.NotContains(t, string(upstream.bodies[2]), "previous_response_id")
 	require.Contains(t, string(upstream.bodies[2]), "second")
+	require.NotContains(t, string(upstream.bodies[2]), "America/Los_Angeles", "replacement payload must not retain the prior account timezone")
+	replacementInput := gjson.GetBytes(upstream.bodies[2], "input")
+	require.Len(t, replacementInput.Array(), 6)
+	expectedTimezoneTag := "<timezone>" + expectedTimezone + "</timezone>"
+	require.Contains(t, gjson.GetBytes(upstream.bodies[2], "input.0.content").String(), expectedTimezoneTag)
+	require.Contains(t, gjson.GetBytes(upstream.bodies[2], "input.4.content").String(), expectedTimezoneTag)
+	require.Equal(t, "attachment-ready", gjson.GetBytes(upstream.bodies[2], "input.4.transform_marker").String())
 	require.Equal(t, scopeCodexAccountIdentityValue(&nextAccount, 0, "session", "client-session"), gjson.GetBytes(upstream.bodies[2], "client_metadata.session_id").String())
 	require.Equal(t, scopeCodexAccountIdentityValue(&nextAccount, 0, "thread", "client-thread"), gjson.GetBytes(upstream.bodies[2], "client_metadata.thread_id").String())
 	require.Empty(t, upstream.requests[2].Header.Get(openAIWSTurnStateHeader))

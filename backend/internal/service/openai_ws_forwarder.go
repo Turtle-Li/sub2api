@@ -295,6 +295,11 @@ type OpenAIWSIngressHooks struct {
 	// handler; callers can return it unchanged for turn 1. Implementations must
 	// never log or retain request contents.
 	TransformRequest func(turn int, payload []byte, originalModel string) ([]byte, error)
+	// transformRequestTimezoneReplayBaseline is installed internally by the
+	// account timezone wrapper. It retains the payload after the caller's
+	// transform but before the account-specific timezone replacement, so a
+	// current-turn account failover can rebuild from client context.
+	transformRequestTimezoneReplayBaseline func(turn int, payload []byte, originalModel string) (baseline []byte, transformed []byte, err error)
 	// ObserveForwardRequest receives the final HTTP-bridge payload after replay
 	// assembly. It is intended for privacy-safe aggregate size/count metrics.
 	ObserveForwardRequest func(turn int, payload []byte, originalModel string)

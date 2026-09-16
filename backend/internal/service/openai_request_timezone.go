@@ -271,15 +271,32 @@ func withOpenAIWSRequestTimezone(account *Account, firstMessage []byte, hooks *O
 		*composed = *hooks
 	}
 	originalTransform := composed.TransformRequest
-	composed.TransformRequest = func(turn int, payload []byte, originalModel string) ([]byte, error) {
-		if originalTransform != nil {
-			payload, err = originalTransform(turn, payload, originalModel)
+	originalTransformWithReplayBaseline := composed.transformRequestTimezoneReplayBaseline
+	transformWithReplayBaseline := func(turn int, payload []byte, originalModel string) ([]byte, []byte, error) {
+		baseline := payload
+		if originalTransformWithReplayBaseline != nil {
+			var err error
+			baseline, _, err = originalTransformWithReplayBaseline(turn, payload, originalModel)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
+			}
+		} else if originalTransform != nil {
+			var err error
+			baseline, err = originalTransform(turn, payload, originalModel)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
-		payload, _, err = rewriteOpenAIRequestTimezone(payload, timezone)
-		return payload, err
+		transformed, _, err := rewriteOpenAIRequestTimezone(baseline, timezone)
+		if err != nil {
+			return nil, nil, err
+		}
+		return baseline, transformed, nil
+	}
+	composed.transformRequestTimezoneReplayBaseline = transformWithReplayBaseline
+	composed.TransformRequest = func(turn int, payload []byte, originalModel string) ([]byte, error) {
+		_, transformed, err := transformWithReplayBaseline(turn, payload, originalModel)
+		return transformed, err
 	}
 	return firstMessage, composed, nil
 }

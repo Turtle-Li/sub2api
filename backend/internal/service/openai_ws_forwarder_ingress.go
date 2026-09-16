@@ -115,6 +115,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}()
 	}
+	// Keep the handler-prepared client frame as the account-failover replay
+	// baseline. withOpenAIWSRequestTimezone only returns a replacement body, but
+	// a later HTTP-bridge retry must not inherit that account's replacement.
+	firstClientReplayBaseline := firstClientMessage
 	var timezoneErr error
 	firstClientMessage, hooks, timezoneErr = withOpenAIWSRequestTimezone(account, firstClientMessage, hooks)
 	if timezoneErr != nil {
@@ -602,6 +606,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		var bridgeAccountFailoverInput []json.RawMessage
 		bridgeAccountFailoverInputExists := false
 		for turn := 1; ; turn++ {
+			// Normal bridge replay is intentionally account-specific because it is
+			// sent on this attempt. Account failover replay instead starts from the
+			// client/handler payload before this account's timezone replacement.
+			accountFailoverPayloadRaw := currentBridgePayload.payloadRaw
+			if turn == 1 {
+				accountFailoverPayloadRaw = firstClientReplayBaseline
+			}
 			if turn > 1 && hooks != nil && hooks.BeforeRequest != nil {
 				if err := hooks.BeforeRequest(turn, currentBridgePayload.payloadRaw, currentBridgePayload.originalModel); err != nil {
 					return err
@@ -613,7 +624,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			if turn > 1 && hooks != nil && hooks.TransformRequest != nil {
-				transformed, transformErr := hooks.TransformRequest(turn, currentBridgePayload.payloadRaw, currentBridgePayload.originalModel)
+				transformed := []byte(nil)
+				var transformErr error
+				if hooks.transformRequestTimezoneReplayBaseline != nil {
+					accountFailoverPayloadRaw, transformed, transformErr = hooks.transformRequestTimezoneReplayBaseline(
+						turn,
+						currentBridgePayload.payloadRaw,
+						currentBridgePayload.originalModel,
+					)
+				} else {
+					transformed, transformErr = hooks.TransformRequest(turn, currentBridgePayload.payloadRaw, currentBridgePayload.originalModel)
+					accountFailoverPayloadRaw = transformed
+				}
 				if transformErr != nil {
 					return transformErr
 				}
@@ -643,6 +665,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					currentBridgePayload.payloadRaw = strippedPayload
 					currentBridgePayload.payloadBytes = len(strippedPayload)
 				}
+				if bytes.Equal(accountFailoverPayloadRaw, currentBridgePayload.payloadRaw) {
+					accountFailoverPayloadRaw = currentBridgePayload.payloadRaw
+				} else if strippedFailoverPayload, strippedFailoverCount := s.stripSessionInvalidEncryptedContentLogged(
+					accountFailoverPayloadRaw,
+					invalidDigests,
+					"ingress_ws_http_bridge_failover_replay_invalid_encrypted_lineage_strip",
+					account.ID,
+					turn,
+				); strippedFailoverCount > 0 {
+					accountFailoverPayloadRaw = strippedFailoverPayload
+				}
 				if bridgeReplayInputExists {
 					bridgeReplayInput, _ = stripOpenAIInvalidEncryptedContentFromReplayItems(bridgeReplayInput, invalidDigests)
 				}
@@ -655,12 +688,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			toolOutputCoverage := AnalyzeToolCallOutputContextCoverageBytes(currentBridgePayload.payloadRaw)
 			needsBridgeReplay := currentBridgePayload.previousResponseID != "" ||
 				(toolOutputCoverage.HasFunctionCallOutput && !toolOutputCoverage.ContextCoversAllCallIDs)
-			// 一次解析当前 input，正常 replay 与 account-failover 两份序列共享同一批正文。
+			// 正常 replay 与 account-failover replay 分别从本账号 payload 和
+			// 无账号时区改写的客户端基线提取正文。
 			bridgeCurrentItems, bridgeCurrentItemsExist, extractErr := openAIWSExtractNormalizedInputSequence(
 				currentBridgePayload.payloadRaw,
 			)
 			if extractErr != nil {
 				return fmt.Errorf("build websocket http bridge replay input: %w", extractErr)
+			}
+			bridgeAccountFailoverCurrentItems, bridgeAccountFailoverCurrentItemsExist, failoverExtractErr := openAIWSExtractNormalizedInputSequence(
+				accountFailoverPayloadRaw,
+			)
+			if failoverExtractErr != nil {
+				return fmt.Errorf("build websocket http bridge account-failover replay input: %w", failoverExtractErr)
 			}
 			turnReplayInput, turnReplayInputExists := buildOpenAIWSReplayInputSequenceFromItems(
 				bridgeReplayInput,
@@ -672,8 +712,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			turnAccountFailoverInput, turnAccountFailoverInputExists := buildOpenAIWSReplayInputSequenceFromItems(
 				bridgeAccountFailoverInput,
 				bridgeAccountFailoverInputExists,
-				bridgeCurrentItems,
-				bridgeCurrentItemsExist,
+				bridgeAccountFailoverCurrentItems,
+				bridgeAccountFailoverCurrentItemsExist,
 				needsBridgeReplay,
 			)
 			if needsBridgeReplay && turnReplayInputExists {
