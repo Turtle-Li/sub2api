@@ -273,10 +273,13 @@ traffic/DNS as part of an ordinary application release.
 ### Runtime recovery and historical fallback
 
 `install-autodeploy.sh` enables `sub2api-runtime-guard.timer` by default. The
-timer runs 30 seconds after boot and 30 seconds after each completed check. It
-does not build, pull, or create application containers. Every run acquires the
-same `/run/sub2api-maintenance/sub2api-maintenance.lock` used by production
-releases, then:
+timer arms its first check when the timer is activated and schedules later
+checks 30 seconds after each completed run; systemd may add up to five seconds
+of randomized delay. Installation explicitly restarts an already-active timer
+so an elapsed unit receives a fresh schedule. It does not build, pull, or
+create application containers. Every run acquires the same
+`/run/sub2api-maintenance/sub2api-maintenance.lock` used by production releases,
+then:
 
 1. starts and verifies PostgreSQL, Redis, and Caddy, restarting a dependency
    once if it remains unhealthy;
