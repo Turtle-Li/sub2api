@@ -47,9 +47,16 @@ and starts a fresh asynchronous probe. Persisting a changed timezone also
 invalidates scheduler snapshots for all accounts bound to the proxy, including
 fixed-egress OAuth accounts.
 
-New proxies are already probed after creation. On application startup, one
-leader instance also runs a one-shot backfill for active proxies whose stored
-timezone is missing or invalid. The backfill uses at most three concurrent
+New proxies are already probed after creation. On application startup, the
+one-shot backfill waits until that blue/green generation owns active background
+work, then one leader instance probes active proxies whose stored timezone is
+missing or invalid. This prevents a candidate started in `standby` from
+silently consuming its only backfill attempt before the release activates it.
+The wait polls the small deployment-owned state file once per second. Each
+active startup instance then makes one leader-lock attempt; the winner retains
+that renewable lease until shutdown and peers exit after losing their attempt.
+This keeps failed or IP-only candidates from being probed again by a late peer
+in the same running generation. The backfill uses at most three concurrent
 probes and a 20-second per-proxy deadline, does not block HTTP startup, and is
 canceled during application shutdown. A failed or IP-only probe leaves the
 field null; an administrator can retry it with the normal connection test or

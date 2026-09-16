@@ -6,11 +6,14 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 )
 
 const (
-	proxyTimezoneBackfillConcurrency = 3
-	proxyTimezoneProbeTimeout        = 20 * time.Second
+	proxyTimezoneBackfillConcurrency    = 3
+	proxyTimezoneProbeTimeout           = 20 * time.Second
+	proxyTimezoneBackfillActivationPoll = time.Second
 )
 
 // ProxyTimezoneBackfillService performs one bounded startup pass over active
@@ -19,14 +22,15 @@ const (
 // so proxies created before the timezone columns were introduced do not need a
 // manual test click after deployment.
 type ProxyTimezoneBackfillService struct {
-	proxyRepo  ProxyRepository
-	writer     ProxyDetectedTimezoneRepository
-	prober     ProxyExitInfoProber
-	leaderLock *singletonJobLock
-	stopCh     chan struct{}
-	startOnce  sync.Once
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
+	proxyRepo              ProxyRepository
+	writer                 ProxyDetectedTimezoneRepository
+	prober                 ProxyExitInfoProber
+	leaderLock             *singletonJobLock
+	stopCh                 chan struct{}
+	startOnce              sync.Once
+	stopOnce               sync.Once
+	wg                     sync.WaitGroup
+	activationPollInterval time.Duration
 }
 
 type proxyTimezoneBackfillStats struct {
@@ -46,15 +50,19 @@ type proxyTimezoneBackfillResult struct {
 func NewProxyTimezoneBackfillService(proxyRepo ProxyRepository, prober ProxyExitInfoProber) *ProxyTimezoneBackfillService {
 	writer, _ := proxyRepo.(ProxyDetectedTimezoneRepository)
 	return &ProxyTimezoneBackfillService{
-		proxyRepo: proxyRepo,
-		writer:    writer,
-		prober:    prober,
-		stopCh:    make(chan struct{}),
+		proxyRepo:              proxyRepo,
+		writer:                 writer,
+		prober:                 prober,
+		stopCh:                 make(chan struct{}),
+		activationPollInterval: proxyTimezoneBackfillActivationPoll,
 	}
 }
 
 // Start launches a single asynchronous pass. The pass is deliberately
-// detached from HTTP startup and is cancellable through Stop.
+// detached from HTTP startup and is cancellable through Stop. A standby
+// generation waits for activation before making its one lock attempt. The
+// winner keeps the lease until Stop so peers that start slightly later cannot
+// repeat probes that the first pass intentionally left unresolved.
 func (s *ProxyTimezoneBackfillService) Start() {
 	if s == nil || s.proxyRepo == nil || s.writer == nil || s.prober == nil {
 		return
@@ -73,21 +81,46 @@ func (s *ProxyTimezoneBackfillService) Start() {
 				}
 			}()
 
-			stats, acquired, err := s.runOnce(ctx)
-			if err != nil {
-				log.Printf("[ProxyTimezoneBackfill] startup pass failed: %v", err)
-				return
+			interval := s.activationPollInterval
+			if interval <= 0 {
+				interval = proxyTimezoneBackfillActivationPoll
 			}
-			if !acquired {
-				return
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				if runtimegate.SharedWorkAllowed() {
+					stats, leaseCtx, release, acquired, err := s.runOnceHoldingLease(ctx)
+					if err != nil {
+						if release != nil {
+							release()
+						}
+						log.Printf("[ProxyTimezoneBackfill] startup pass failed: %v", err)
+						return
+					}
+					if !acquired {
+						return
+					}
+					defer release()
+					log.Printf(
+						"[ProxyTimezoneBackfill] startup pass complete: candidates=%d updated=%d failed=%d stale=%d",
+						stats.Candidates,
+						stats.Updated,
+						stats.Failed,
+						stats.Stale,
+					)
+					select {
+					case <-ctx.Done():
+					case <-leaseCtx.Done():
+					}
+					return
+				}
+
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
 			}
-			log.Printf(
-				"[ProxyTimezoneBackfill] startup pass complete: candidates=%d updated=%d failed=%d stale=%d",
-				stats.Candidates,
-				stats.Updated,
-				stats.Failed,
-				stats.Stale,
-			)
 		}()
 	})
 }
@@ -101,20 +134,27 @@ func (s *ProxyTimezoneBackfillService) Stop() {
 }
 
 func (s *ProxyTimezoneBackfillService) runOnce(ctx context.Context) (proxyTimezoneBackfillStats, bool, error) {
+	stats, _, release, acquired, err := s.runOnceHoldingLease(ctx)
+	if release != nil {
+		release()
+	}
+	return stats, acquired, err
+}
+
+func (s *ProxyTimezoneBackfillService) runOnceHoldingLease(ctx context.Context) (proxyTimezoneBackfillStats, context.Context, func(), bool, error) {
 	var stats proxyTimezoneBackfillStats
 	if s == nil || s.proxyRepo == nil || s.writer == nil || s.prober == nil {
-		return stats, false, nil
+		return stats, ctx, nil, false, nil
 	}
 
 	leaseCtx, release, acquired := s.leaderLock.try(ctx)
 	if !acquired {
-		return stats, false, nil
+		return stats, ctx, nil, false, nil
 	}
-	defer release()
 
 	proxies, err := s.proxyRepo.ListActive(leaseCtx)
 	if err != nil {
-		return stats, true, fmt.Errorf("list active proxies: %w", err)
+		return stats, leaseCtx, release, true, fmt.Errorf("list active proxies: %w", err)
 	}
 	candidates := make([]Proxy, 0, len(proxies))
 	for i := range proxies {
@@ -125,7 +165,7 @@ func (s *ProxyTimezoneBackfillService) runOnce(ctx context.Context) (proxyTimezo
 	}
 	stats.Candidates = len(candidates)
 	if len(candidates) == 0 {
-		return stats, true, nil
+		return stats, leaseCtx, release, true, nil
 	}
 
 	workerCount := proxyTimezoneBackfillConcurrency
@@ -171,7 +211,7 @@ func (s *ProxyTimezoneBackfillService) runOnce(ctx context.Context) (proxyTimezo
 			}
 		}
 	}
-	return stats, true, nil
+	return stats, leaseCtx, release, true, nil
 }
 
 func (s *ProxyTimezoneBackfillService) probeAndPersist(ctx context.Context, proxy *Proxy) proxyTimezoneBackfillResult {

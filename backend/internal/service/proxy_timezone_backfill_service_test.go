@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -137,4 +138,57 @@ func TestProxyTimezoneBackfillStopCancelsInFlightProbe(t *testing.T) {
 		t.Fatal("Stop did not cancel the in-flight timezone probe")
 	}
 	require.Empty(t, repo.savedWrites())
+}
+
+func TestProxyTimezoneBackfillStartWaitsForActiveGeneration(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	stateFile := t.TempDir() + "/background-state"
+	require.NoError(t, os.WriteFile(stateFile, []byte(runtimegate.StateStandby+"\n"), 0o600))
+	t.Setenv(runtimegate.StateFileEnv, stateFile)
+
+	repo := &proxyTimezoneBackfillRepoStub{proxies: []Proxy{
+		{ID: 1, Protocol: "http", Host: "jp.test", Port: 8080},
+	}}
+	prober := &proxyTimezoneBackfillProberStub{}
+	svc := NewProxyTimezoneBackfillService(repo, prober)
+	svc.activationPollInterval = 5 * time.Millisecond
+	t.Cleanup(svc.Stop)
+
+	svc.Start()
+	time.Sleep(30 * time.Millisecond)
+	require.Zero(t, prober.calls.Load(), "standby generation must not start the backfill")
+	require.NoError(t, os.WriteFile(stateFile, []byte(runtimegate.StateActive+"\n"), 0o600))
+	require.Eventually(t, func() bool { return prober.calls.Load() == 1 }, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return len(repo.savedWrites()) == 1 }, time.Second, 5*time.Millisecond)
+}
+
+func TestProxyTimezoneBackfillStartHoldsLeaseAfterFailedCandidate(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	t.Setenv(runtimegate.StateFileEnv, "")
+
+	const lockKey = "proxy-timezone-backfill:test"
+	cache := &fakeLeaderLockCache{}
+	repo := &proxyTimezoneBackfillRepoStub{proxies: []Proxy{
+		{ID: 1, Protocol: "http", Host: "error.test", Port: 8080},
+	}}
+	prober := &proxyTimezoneBackfillProberStub{}
+	first := NewProxyTimezoneBackfillService(repo, prober)
+	first.leaderLock = newSingletonJobLock(cache, nil, lockKey, time.Minute)
+	second := NewProxyTimezoneBackfillService(repo, prober)
+	second.leaderLock = newSingletonJobLock(cache, nil, lockKey, time.Minute)
+
+	first.Start()
+	require.Eventually(t, func() bool { return prober.calls.Load() == 1 }, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return cache.heldBy(lockKey) != "" }, time.Second, 5*time.Millisecond)
+	second.Start()
+	time.Sleep(50 * time.Millisecond)
+	require.EqualValues(t, 1, prober.calls.Load(), "a peer must not retry unresolved candidates after the leader finishes")
+
+	second.Stop()
+	first.Stop()
+	require.Empty(t, cache.heldBy(lockKey))
+	time.Sleep(20 * time.Millisecond)
+	require.EqualValues(t, 1, prober.calls.Load(), "the losing startup instance must exit instead of waiting to rerun")
 }
