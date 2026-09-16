@@ -28,6 +28,10 @@ type Proxy struct {
 	FallbackMode   string
 	BackupProxyID  *int64
 	ExpiryWarnDays int
+	// DetectedTimezone is the IANA timezone reported for this proxy's exit IP.
+	// It is probe-derived metadata, not an operator-authored routing setting.
+	DetectedTimezone   string
+	TimezoneDetectedAt *time.Time
 }
 
 func (p *Proxy) IsActive() bool {

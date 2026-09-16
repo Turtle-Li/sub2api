@@ -33,6 +33,11 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
+	timezoneBody, timezoneErr := rewriteOpenAIRequestTimezoneForAccount(account, body)
+	if timezoneErr != nil {
+		return nil, fmt.Errorf("rewrite OpenAI alpha search request timezone: %w", timezoneErr)
+	}
+	body = timezoneBody
 	modelResult := gjson.GetBytes(body, "model")
 	requestedModel := strings.TrimSpace(modelResult.String())
 	if modelResult.Type != gjson.String || requestedModel == "" {

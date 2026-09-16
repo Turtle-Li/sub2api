@@ -37,6 +37,13 @@ type ProxyRepository interface {
 	CountExpiringSoon(ctx context.Context, now time.Time) (int64, error)
 }
 
+// ProxyDetectedTimezoneRepository is an optional capability implemented by
+// the SQL proxy repository. Keeping it separate avoids forcing lightweight
+// service/test repositories to persist probe metadata they do not use.
+type ProxyDetectedTimezoneRepository interface {
+	UpdateDetectedTimezone(ctx context.Context, probedProxy *Proxy, timezone string, detectedAt time.Time) (accepted bool, err error)
+}
+
 // CreateProxyRequest 创建代理请求
 type CreateProxyRequest struct {
 	Name     string `json:"name"`

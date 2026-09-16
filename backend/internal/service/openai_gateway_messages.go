@@ -43,6 +43,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
+	timezoneBody, timezoneErr := rewriteOpenAIRequestTimezoneForAccount(account, body)
+	if timezoneErr != nil {
+		return nil, fmt.Errorf("rewrite OpenAI messages request timezone: %w", timezoneErr)
+	}
+	body = timezoneBody
 
 	// OpenCode Go：按模型原生协议分流。规则未命中兜底 Chat Completions。
 	if account.IsOpenCodeGo() {

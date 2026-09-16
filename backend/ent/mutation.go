@@ -42001,6 +42001,8 @@ type ProxyMutation struct {
 	fallback_mode          *string
 	expiry_warn_days       *int
 	addexpiry_warn_days    *int
+	detected_timezone      *string
+	timezone_detected_at   *time.Time
 	clearedFields          map[string]struct{}
 	accounts               map[int64]struct{}
 	removedaccounts        map[int64]struct{}
@@ -42722,6 +42724,104 @@ func (m *ProxyMutation) ResetExpiryWarnDays() {
 	m.addexpiry_warn_days = nil
 }
 
+// SetDetectedTimezone sets the "detected_timezone" field.
+func (m *ProxyMutation) SetDetectedTimezone(s string) {
+	m.detected_timezone = &s
+}
+
+// DetectedTimezone returns the value of the "detected_timezone" field in the mutation.
+func (m *ProxyMutation) DetectedTimezone() (r string, exists bool) {
+	v := m.detected_timezone
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDetectedTimezone returns the old "detected_timezone" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldDetectedTimezone(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDetectedTimezone is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDetectedTimezone requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDetectedTimezone: %w", err)
+	}
+	return oldValue.DetectedTimezone, nil
+}
+
+// ClearDetectedTimezone clears the value of the "detected_timezone" field.
+func (m *ProxyMutation) ClearDetectedTimezone() {
+	m.detected_timezone = nil
+	m.clearedFields[proxy.FieldDetectedTimezone] = struct{}{}
+}
+
+// DetectedTimezoneCleared returns if the "detected_timezone" field was cleared in this mutation.
+func (m *ProxyMutation) DetectedTimezoneCleared() bool {
+	_, ok := m.clearedFields[proxy.FieldDetectedTimezone]
+	return ok
+}
+
+// ResetDetectedTimezone resets all changes to the "detected_timezone" field.
+func (m *ProxyMutation) ResetDetectedTimezone() {
+	m.detected_timezone = nil
+	delete(m.clearedFields, proxy.FieldDetectedTimezone)
+}
+
+// SetTimezoneDetectedAt sets the "timezone_detected_at" field.
+func (m *ProxyMutation) SetTimezoneDetectedAt(t time.Time) {
+	m.timezone_detected_at = &t
+}
+
+// TimezoneDetectedAt returns the value of the "timezone_detected_at" field in the mutation.
+func (m *ProxyMutation) TimezoneDetectedAt() (r time.Time, exists bool) {
+	v := m.timezone_detected_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTimezoneDetectedAt returns the old "timezone_detected_at" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldTimezoneDetectedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTimezoneDetectedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTimezoneDetectedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTimezoneDetectedAt: %w", err)
+	}
+	return oldValue.TimezoneDetectedAt, nil
+}
+
+// ClearTimezoneDetectedAt clears the value of the "timezone_detected_at" field.
+func (m *ProxyMutation) ClearTimezoneDetectedAt() {
+	m.timezone_detected_at = nil
+	m.clearedFields[proxy.FieldTimezoneDetectedAt] = struct{}{}
+}
+
+// TimezoneDetectedAtCleared returns if the "timezone_detected_at" field was cleared in this mutation.
+func (m *ProxyMutation) TimezoneDetectedAtCleared() bool {
+	_, ok := m.clearedFields[proxy.FieldTimezoneDetectedAt]
+	return ok
+}
+
+// ResetTimezoneDetectedAt resets all changes to the "timezone_detected_at" field.
+func (m *ProxyMutation) ResetTimezoneDetectedAt() {
+	m.timezone_detected_at = nil
+	delete(m.clearedFields, proxy.FieldTimezoneDetectedAt)
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by ids.
 func (m *ProxyMutation) AddAccountIDs(ids ...int64) {
 	if m.accounts == nil {
@@ -42891,7 +42991,7 @@ func (m *ProxyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxyMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 16)
 	if m.created_at != nil {
 		fields = append(fields, proxy.FieldCreatedAt)
 	}
@@ -42934,6 +43034,12 @@ func (m *ProxyMutation) Fields() []string {
 	if m.expiry_warn_days != nil {
 		fields = append(fields, proxy.FieldExpiryWarnDays)
 	}
+	if m.detected_timezone != nil {
+		fields = append(fields, proxy.FieldDetectedTimezone)
+	}
+	if m.timezone_detected_at != nil {
+		fields = append(fields, proxy.FieldTimezoneDetectedAt)
+	}
 	return fields
 }
 
@@ -42970,6 +43076,10 @@ func (m *ProxyMutation) Field(name string) (ent.Value, bool) {
 		return m.BackupProxyID()
 	case proxy.FieldExpiryWarnDays:
 		return m.ExpiryWarnDays()
+	case proxy.FieldDetectedTimezone:
+		return m.DetectedTimezone()
+	case proxy.FieldTimezoneDetectedAt:
+		return m.TimezoneDetectedAt()
 	}
 	return nil, false
 }
@@ -43007,6 +43117,10 @@ func (m *ProxyMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldBackupProxyID(ctx)
 	case proxy.FieldExpiryWarnDays:
 		return m.OldExpiryWarnDays(ctx)
+	case proxy.FieldDetectedTimezone:
+		return m.OldDetectedTimezone(ctx)
+	case proxy.FieldTimezoneDetectedAt:
+		return m.OldTimezoneDetectedAt(ctx)
 	}
 	return nil, fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -43114,6 +43228,20 @@ func (m *ProxyMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetExpiryWarnDays(v)
 		return nil
+	case proxy.FieldDetectedTimezone:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDetectedTimezone(v)
+		return nil
+	case proxy.FieldTimezoneDetectedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTimezoneDetectedAt(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -43186,6 +43314,12 @@ func (m *ProxyMutation) ClearedFields() []string {
 	if m.FieldCleared(proxy.FieldBackupProxyID) {
 		fields = append(fields, proxy.FieldBackupProxyID)
 	}
+	if m.FieldCleared(proxy.FieldDetectedTimezone) {
+		fields = append(fields, proxy.FieldDetectedTimezone)
+	}
+	if m.FieldCleared(proxy.FieldTimezoneDetectedAt) {
+		fields = append(fields, proxy.FieldTimezoneDetectedAt)
+	}
 	return fields
 }
 
@@ -43214,6 +43348,12 @@ func (m *ProxyMutation) ClearField(name string) error {
 		return nil
 	case proxy.FieldBackupProxyID:
 		m.ClearBackupProxyID()
+		return nil
+	case proxy.FieldDetectedTimezone:
+		m.ClearDetectedTimezone()
+		return nil
+	case proxy.FieldTimezoneDetectedAt:
+		m.ClearTimezoneDetectedAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy nullable field %s", name)
@@ -43264,6 +43404,12 @@ func (m *ProxyMutation) ResetField(name string) error {
 		return nil
 	case proxy.FieldExpiryWarnDays:
 		m.ResetExpiryWarnDays()
+		return nil
+	case proxy.FieldDetectedTimezone:
+		m.ResetDetectedTimezone()
+		return nil
+	case proxy.FieldTimezoneDetectedAt:
+		m.ResetTimezoneDetectedAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)

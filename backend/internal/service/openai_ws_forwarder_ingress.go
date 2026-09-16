@@ -115,6 +115,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}()
 	}
+	var timezoneErr error
+	firstClientMessage, hooks, timezoneErr = withOpenAIWSRequestTimezone(account, firstClientMessage, hooks)
+	if timezoneErr != nil {
+		return fmt.Errorf("rewrite OpenAI websocket request timezone: %w", timezoneErr)
+	}
 
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	forceHTTPBridge := account.Platform == PlatformGrok ||

@@ -151,6 +151,7 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if input.ExpiryWarnDays != nil {
 		updated.ExpiryWarnDays = *input.ExpiryWarnDays
 	}
+	shouldProbeTimezone := !sameProxyTransportEndpoint(proxy, &updated) || updated.DetectedTimezone == ""
 
 	if FixedEgressProxyIdentityChanged(proxy, &updated) {
 		bound, err := hasOpenAIOAuthParentBoundToProxy(ctx, s.proxyRepo, id)
@@ -166,7 +167,21 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
 	}
+	if shouldProbeTimezone {
+		go s.probeProxyLatency(context.Background(), proxy)
+	}
 	return proxy, nil
+}
+
+func sameProxyTransportEndpoint(left, right *Proxy) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Protocol == right.Protocol &&
+		left.Host == right.Host &&
+		left.Port == right.Port &&
+		left.Username == right.Username &&
+		left.Password == right.Password
 }
 
 // FixedEgressProxyIdentityChanged reports changes that would alter an OAuth
@@ -327,6 +342,7 @@ func (s *adminServiceImpl) TestProxy(ctx context.Context, id int64) (*ProxyTestR
 			Message: err.Error(),
 		}, nil
 	}
+	detectedTimezone := s.saveProxyDetectedTimezone(ctx, proxy, exitInfo.Timezone)
 
 	latency := latencyMs
 	s.saveProxyLatency(ctx, id, &ProxyLatencyInfo{
@@ -338,6 +354,7 @@ func (s *adminServiceImpl) TestProxy(ctx context.Context, id int64) (*ProxyTestR
 		CountryCode: exitInfo.CountryCode,
 		Region:      exitInfo.Region,
 		City:        exitInfo.City,
+		Timezone:    detectedTimezone,
 		UpdatedAt:   time.Now(),
 	})
 	return &ProxyTestResult{
@@ -349,6 +366,7 @@ func (s *adminServiceImpl) TestProxy(ctx context.Context, id int64) (*ProxyTestR
 		Region:      exitInfo.Region,
 		Country:     exitInfo.Country,
 		CountryCode: exitInfo.CountryCode,
+		Timezone:    detectedTimezone,
 	}, nil
 }
 
@@ -396,6 +414,7 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 	result.ExitIP = exitInfo.IP
 	result.Country = exitInfo.Country
 	result.CountryCode = exitInfo.CountryCode
+	result.Timezone = s.saveProxyDetectedTimezone(ctx, proxy, exitInfo.Timezone)
 	result.BaseLatencyMs = latencyMs
 	result.Items = append(result.Items, ProxyQualityCheckItem{
 		Target:    "base_connectivity",
@@ -613,6 +632,9 @@ func (s *adminServiceImpl) saveProxyQualitySnapshot(ctx context.Context, proxyID
 		info.CountryCode = exitInfo.CountryCode
 		info.Region = exitInfo.Region
 		info.City = exitInfo.City
+		if timezone, err := normalizeOpenAIRequestTimezone(exitInfo.Timezone); err == nil {
+			info.Timezone = timezone
+		}
 	}
 	s.saveProxyLatency(ctx, proxyID, info)
 }
@@ -630,6 +652,7 @@ func (s *adminServiceImpl) probeProxyLatency(ctx context.Context, proxy *Proxy) 
 		})
 		return
 	}
+	detectedTimezone := s.saveProxyDetectedTimezone(ctx, proxy, exitInfo.Timezone)
 
 	latency := latencyMs
 	s.saveProxyLatency(ctx, proxy.ID, &ProxyLatencyInfo{
@@ -641,6 +664,7 @@ func (s *adminServiceImpl) probeProxyLatency(ctx context.Context, proxy *Proxy) 
 		CountryCode: exitInfo.CountryCode,
 		Region:      exitInfo.Region,
 		City:        exitInfo.City,
+		Timezone:    detectedTimezone,
 		UpdatedAt:   time.Now(),
 	})
 }
@@ -694,6 +718,9 @@ func (s *adminServiceImpl) saveProxyLatency(ctx context.Context, proxyID int64, 
 	merged := *info
 	if latencies, err := s.proxyLatencyCache.GetProxyLatencies(ctx, []int64{proxyID}); err == nil {
 		if existing := latencies[proxyID]; existing != nil {
+			if merged.Timezone == "" {
+				merged.Timezone = existing.Timezone
+			}
 			if merged.QualityCheckedAt == nil &&
 				merged.QualityScore == nil &&
 				merged.QualityGrade == "" &&
@@ -713,4 +740,24 @@ func (s *adminServiceImpl) saveProxyLatency(ctx context.Context, proxyID int64, 
 	if err := s.proxyLatencyCache.SetProxyLatency(ctx, proxyID, &merged); err != nil {
 		logger.LegacyPrintf("service.admin", "Warning: store proxy latency cache failed: %v", err)
 	}
+}
+
+func (s *adminServiceImpl) saveProxyDetectedTimezone(ctx context.Context, proxy *Proxy, rawTimezone string) string {
+	timezone, err := normalizeOpenAIRequestTimezone(rawTimezone)
+	if err != nil || proxy == nil {
+		return ""
+	}
+	writer, ok := s.proxyRepo.(ProxyDetectedTimezoneRepository)
+	if !ok {
+		return timezone
+	}
+	accepted, err := writer.UpdateDetectedTimezone(ctx, proxy, timezone, time.Now().UTC())
+	if err != nil {
+		logger.LegacyPrintf("service.admin", "Warning: store proxy detected timezone failed: proxy=%d err=%v", proxy.ID, err)
+		return ""
+	}
+	if !accepted {
+		return ""
+	}
+	return timezone
 }

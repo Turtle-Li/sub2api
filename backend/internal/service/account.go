@@ -108,6 +108,11 @@ const (
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
 
+// OpenAIRequestTimezoneExtraKey optionally overrides the timezone derived from
+// the account's bound proxy. Set it to "off" to disable request-body rewriting
+// for one account while retaining the proxy's detected location metadata.
+const OpenAIRequestTimezoneExtraKey = "openai_request_timezone"
+
 // GrokMediaEligibleExtraKey is an optional per-account override stored in
 // accounts.extra. true forces media routing on, false disables it, and an
 // absent/null value uses provider observations.
@@ -1294,6 +1299,34 @@ func (a *Account) IsAPIKeyOrBedrock() bool {
 
 func (a *Account) IsOpenAI() bool {
 	return a.Platform == PlatformOpenAI
+}
+
+// EffectiveOpenAIRequestTimezone returns the IANA timezone to place in an
+// existing Codex <environment_context><timezone> tag. Account overrides take
+// precedence over probe-derived proxy metadata. Invalid overrides fall back to
+// the proxy; "off" explicitly disables rewriting for the account.
+func (a *Account) EffectiveOpenAIRequestTimezone() string {
+	if a == nil || !a.IsOpenAI() {
+		return ""
+	}
+	if override := strings.TrimSpace(a.GetExtraString(OpenAIRequestTimezoneExtraKey)); override != "" {
+		switch strings.ToLower(override) {
+		case "off", "disabled", "none":
+			return ""
+		default:
+			if normalized, err := normalizeOpenAIRequestTimezone(override); err == nil {
+				return normalized
+			}
+		}
+	}
+	if a.Proxy == nil {
+		return ""
+	}
+	normalized, err := normalizeOpenAIRequestTimezone(a.Proxy.DetectedTimezone)
+	if err != nil {
+		return ""
+	}
+	return normalized
 }
 
 func (a *Account) IsOpenAILongContextBillingEnabled() bool {

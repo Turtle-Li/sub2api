@@ -58,7 +58,7 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPAPI() {
 		}
 		if strings.Contains(r.RequestURI, "ip-api.com") {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"status":"success","query":"1.2.3.4","city":"c","regionName":"r","country":"cc","countryCode":"CC"}`)
+			_, _ = io.WriteString(w, `{"status":"success","query":"1.2.3.4","city":"c","regionName":"r","country":"cc","countryCode":"CC","timezone":"Asia/Tokyo"}`)
 			return
 		}
 		// 其他请求返回错误
@@ -73,6 +73,7 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPAPI() {
 	require.Equal(s.T(), "r", info.Region)
 	require.Equal(s.T(), "cc", info.Country)
 	require.Equal(s.T(), "CC", info.CountryCode)
+	require.Equal(s.T(), "Asia/Tokyo", info.Timezone)
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPWhoFirst() {
@@ -85,7 +86,7 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPWhoFirst() {
 	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.RequestURI, "ipwho.is") {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"success":true,"ip":"5.6.7.8","city":"Phoenix","region":"Arizona","country":"United States","country_code":"US"}`)
+			_, _ = io.WriteString(w, `{"success":true,"ip":"5.6.7.8","city":"Phoenix","region":"Arizona","country":"United States","country_code":"US","timezone":{"id":"America/Phoenix"}}`)
 			return
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -96,6 +97,7 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPWhoFirst() {
 	require.Equal(s.T(), "5.6.7.8", info.IP)
 	require.Equal(s.T(), "Phoenix", info.City)
 	require.Equal(s.T(), "US", info.CountryCode)
+	require.Equal(s.T(), "America/Phoenix", info.Timezone)
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPifyFallback() {
@@ -162,7 +164,7 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_ProxyServerClosed() {
 }
 
 func (s *ProxyProbeServiceSuite) TestParseIPAPI_Success() {
-	body := []byte(`{"status":"success","query":"1.2.3.4","city":"Beijing","regionName":"Beijing","country":"China","countryCode":"CN"}`)
+	body := []byte(`{"status":"success","query":"1.2.3.4","city":"Beijing","regionName":"Beijing","country":"China","countryCode":"CN","timezone":"Asia/Shanghai"}`)
 	info, latencyMs, err := s.prober.parseIPAPI(body, 100)
 	require.NoError(s.T(), err)
 	require.Equal(s.T(), int64(100), latencyMs)
@@ -171,6 +173,7 @@ func (s *ProxyProbeServiceSuite) TestParseIPAPI_Success() {
 	require.Equal(s.T(), "Beijing", info.Region)
 	require.Equal(s.T(), "China", info.Country)
 	require.Equal(s.T(), "CN", info.CountryCode)
+	require.Equal(s.T(), "Asia/Shanghai", info.Timezone)
 }
 
 func (s *ProxyProbeServiceSuite) TestParseIPAPI_Failure() {
@@ -181,7 +184,7 @@ func (s *ProxyProbeServiceSuite) TestParseIPAPI_Failure() {
 }
 
 func (s *ProxyProbeServiceSuite) TestParseIPWho_Success() {
-	body := []byte(`{"success":true,"ip":"2001:db8::1","city":"Phoenix","region":"Arizona","country":"United States","country_code":"US"}`)
+	body := []byte(`{"success":true,"ip":"2001:db8::1","city":"Phoenix","region":"Arizona","country":"United States","country_code":"US","timezone":{"id":"America/Phoenix"}}`)
 	info, latencyMs, err := s.prober.parseIPWho(body, 75)
 	require.NoError(s.T(), err)
 	require.Equal(s.T(), int64(75), latencyMs)
@@ -190,6 +193,7 @@ func (s *ProxyProbeServiceSuite) TestParseIPWho_Success() {
 	require.Equal(s.T(), "Arizona", info.Region)
 	require.Equal(s.T(), "United States", info.Country)
 	require.Equal(s.T(), "US", info.CountryCode)
+	require.Equal(s.T(), "America/Phoenix", info.Timezone)
 }
 
 func (s *ProxyProbeServiceSuite) TestParseIPWho_Failure() {
@@ -221,6 +225,7 @@ func (s *ProxyProbeServiceSuite) TestParseChatGPTTrace_Success() {
 	require.Equal(s.T(), int64(320), latencyMs)
 	require.Equal(s.T(), "203.0.113.5", info.IP)
 	require.Equal(s.T(), "US", info.CountryCode)
+	require.Equal(s.T(), "UTC", info.Timezone)
 }
 
 func (s *ProxyProbeServiceSuite) TestParseChatGPTTrace_NoIP() {

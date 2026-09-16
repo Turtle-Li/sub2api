@@ -64,6 +64,15 @@ func (Proxy) Fields() []ent.Field {
 		field.Int("expiry_warn_days").
 			Default(7).
 			Comment("Days before expiry to flag as expiring-soon (per proxy)."),
+		field.String("detected_timezone").
+			MaxLen(64).
+			Optional().
+			Nillable().
+			Comment("IANA timezone detected for the proxy exit IP."),
+		field.Time("timezone_detected_at").
+			Optional().
+			Nillable().
+			Comment("Last successful exit-IP timezone detection time."),
 	}
 }
 

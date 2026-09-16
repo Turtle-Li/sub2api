@@ -184,17 +184,22 @@
           </template>
 
           <template #cell-location="{ row }">
-            <div class="flex items-center gap-2">
-              <img
-                v-if="row.country_code"
-                :src="flagUrl(row.country_code)"
-                :alt="row.country || row.country_code"
-                class="h-4 w-6 rounded-sm"
-              />
-              <span v-if="formatLocation(row)" class="text-sm text-gray-700 dark:text-gray-200">
-                {{ formatLocation(row) }}
+            <div class="flex flex-col gap-0.5">
+              <div class="flex items-center gap-2">
+                <img
+                  v-if="row.country_code"
+                  :src="flagUrl(row.country_code)"
+                  :alt="row.country || row.country_code"
+                  class="h-4 w-6 rounded-sm"
+                />
+                <span v-if="formatLocation(row)" class="text-sm text-gray-700 dark:text-gray-200">
+                  {{ formatLocation(row) }}
+                </span>
+                <span v-else class="text-sm text-gray-400">-</span>
+              </div>
+              <span v-if="row.detected_timezone" class="font-mono text-xs text-gray-500 dark:text-gray-400">
+                {{ row.detected_timezone }}
               </span>
-              <span v-else class="text-sm text-gray-400">-</span>
             </div>
           </template>
 
@@ -1497,6 +1502,7 @@ const applyLatencyResult = (
     country_code?: string
     region?: string
     city?: string
+    timezone?: string
   }
 ) => {
   const target = proxies.value.find((proxy) => proxy.id === proxyId)
@@ -1509,6 +1515,7 @@ const applyLatencyResult = (
     target.country_code = result.country_code
     target.region = result.region
     target.city = result.city
+    if (result.timezone) target.detected_timezone = result.timezone
   } else {
     target.latency_status = 'failed'
     target.latency_ms = undefined
@@ -1615,7 +1622,8 @@ const handleQualityCheck = async (proxy: Proxy) => {
         message: result.summary,
         ip_address: result.exit_ip,
         country: result.country,
-        country_code: result.country_code
+        country_code: result.country_code,
+        timezone: result.timezone
       })
     }
     applyQualityResult(proxy.id, result)
@@ -1659,7 +1667,8 @@ const runBatchProxyQualityChecks = async (ids: number[]) => {
               message: result.summary,
               ip_address: result.exit_ip,
               country: result.country,
-              country_code: result.country_code
+              country_code: result.country_code,
+              timezone: result.timezone
             })
           }
         }

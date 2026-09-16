@@ -187,6 +187,34 @@ func (_c *ProxyCreate) SetNillableExpiryWarnDays(v *int) *ProxyCreate {
 	return _c
 }
 
+// SetDetectedTimezone sets the "detected_timezone" field.
+func (_c *ProxyCreate) SetDetectedTimezone(v string) *ProxyCreate {
+	_c.mutation.SetDetectedTimezone(v)
+	return _c
+}
+
+// SetNillableDetectedTimezone sets the "detected_timezone" field if the given value is not nil.
+func (_c *ProxyCreate) SetNillableDetectedTimezone(v *string) *ProxyCreate {
+	if v != nil {
+		_c.SetDetectedTimezone(*v)
+	}
+	return _c
+}
+
+// SetTimezoneDetectedAt sets the "timezone_detected_at" field.
+func (_c *ProxyCreate) SetTimezoneDetectedAt(v time.Time) *ProxyCreate {
+	_c.mutation.SetTimezoneDetectedAt(v)
+	return _c
+}
+
+// SetNillableTimezoneDetectedAt sets the "timezone_detected_at" field if the given value is not nil.
+func (_c *ProxyCreate) SetNillableTimezoneDetectedAt(v *time.Time) *ProxyCreate {
+	if v != nil {
+		_c.SetTimezoneDetectedAt(*v)
+	}
+	return _c
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_c *ProxyCreate) AddAccountIDs(ids ...int64) *ProxyCreate {
 	_c.mutation.AddAccountIDs(ids...)
@@ -352,6 +380,11 @@ func (_c *ProxyCreate) check() error {
 	if _, ok := _c.mutation.ExpiryWarnDays(); !ok {
 		return &ValidationError{Name: "expiry_warn_days", err: errors.New(`ent: missing required field "Proxy.expiry_warn_days"`)}
 	}
+	if v, ok := _c.mutation.DetectedTimezone(); ok {
+		if err := proxy.DetectedTimezoneValidator(v); err != nil {
+			return &ValidationError{Name: "detected_timezone", err: fmt.Errorf(`ent: validator failed for field "Proxy.detected_timezone": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -430,6 +463,14 @@ func (_c *ProxyCreate) createSpec() (*Proxy, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ExpiryWarnDays(); ok {
 		_spec.SetField(proxy.FieldExpiryWarnDays, field.TypeInt, value)
 		_node.ExpiryWarnDays = value
+	}
+	if value, ok := _c.mutation.DetectedTimezone(); ok {
+		_spec.SetField(proxy.FieldDetectedTimezone, field.TypeString, value)
+		_node.DetectedTimezone = &value
+	}
+	if value, ok := _c.mutation.TimezoneDetectedAt(); ok {
+		_spec.SetField(proxy.FieldTimezoneDetectedAt, field.TypeTime, value)
+		_node.TimezoneDetectedAt = &value
 	}
 	if nodes := _c.mutation.AccountsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -730,6 +771,42 @@ func (u *ProxyUpsert) AddExpiryWarnDays(v int) *ProxyUpsert {
 	return u
 }
 
+// SetDetectedTimezone sets the "detected_timezone" field.
+func (u *ProxyUpsert) SetDetectedTimezone(v string) *ProxyUpsert {
+	u.Set(proxy.FieldDetectedTimezone, v)
+	return u
+}
+
+// UpdateDetectedTimezone sets the "detected_timezone" field to the value that was provided on create.
+func (u *ProxyUpsert) UpdateDetectedTimezone() *ProxyUpsert {
+	u.SetExcluded(proxy.FieldDetectedTimezone)
+	return u
+}
+
+// ClearDetectedTimezone clears the value of the "detected_timezone" field.
+func (u *ProxyUpsert) ClearDetectedTimezone() *ProxyUpsert {
+	u.SetNull(proxy.FieldDetectedTimezone)
+	return u
+}
+
+// SetTimezoneDetectedAt sets the "timezone_detected_at" field.
+func (u *ProxyUpsert) SetTimezoneDetectedAt(v time.Time) *ProxyUpsert {
+	u.Set(proxy.FieldTimezoneDetectedAt, v)
+	return u
+}
+
+// UpdateTimezoneDetectedAt sets the "timezone_detected_at" field to the value that was provided on create.
+func (u *ProxyUpsert) UpdateTimezoneDetectedAt() *ProxyUpsert {
+	u.SetExcluded(proxy.FieldTimezoneDetectedAt)
+	return u
+}
+
+// ClearTimezoneDetectedAt clears the value of the "timezone_detected_at" field.
+func (u *ProxyUpsert) ClearTimezoneDetectedAt() *ProxyUpsert {
+	u.SetNull(proxy.FieldTimezoneDetectedAt)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -1003,6 +1080,48 @@ func (u *ProxyUpsertOne) AddExpiryWarnDays(v int) *ProxyUpsertOne {
 func (u *ProxyUpsertOne) UpdateExpiryWarnDays() *ProxyUpsertOne {
 	return u.Update(func(s *ProxyUpsert) {
 		s.UpdateExpiryWarnDays()
+	})
+}
+
+// SetDetectedTimezone sets the "detected_timezone" field.
+func (u *ProxyUpsertOne) SetDetectedTimezone(v string) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetDetectedTimezone(v)
+	})
+}
+
+// UpdateDetectedTimezone sets the "detected_timezone" field to the value that was provided on create.
+func (u *ProxyUpsertOne) UpdateDetectedTimezone() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateDetectedTimezone()
+	})
+}
+
+// ClearDetectedTimezone clears the value of the "detected_timezone" field.
+func (u *ProxyUpsertOne) ClearDetectedTimezone() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearDetectedTimezone()
+	})
+}
+
+// SetTimezoneDetectedAt sets the "timezone_detected_at" field.
+func (u *ProxyUpsertOne) SetTimezoneDetectedAt(v time.Time) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetTimezoneDetectedAt(v)
+	})
+}
+
+// UpdateTimezoneDetectedAt sets the "timezone_detected_at" field to the value that was provided on create.
+func (u *ProxyUpsertOne) UpdateTimezoneDetectedAt() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateTimezoneDetectedAt()
+	})
+}
+
+// ClearTimezoneDetectedAt clears the value of the "timezone_detected_at" field.
+func (u *ProxyUpsertOne) ClearTimezoneDetectedAt() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearTimezoneDetectedAt()
 	})
 }
 
@@ -1445,6 +1564,48 @@ func (u *ProxyUpsertBulk) AddExpiryWarnDays(v int) *ProxyUpsertBulk {
 func (u *ProxyUpsertBulk) UpdateExpiryWarnDays() *ProxyUpsertBulk {
 	return u.Update(func(s *ProxyUpsert) {
 		s.UpdateExpiryWarnDays()
+	})
+}
+
+// SetDetectedTimezone sets the "detected_timezone" field.
+func (u *ProxyUpsertBulk) SetDetectedTimezone(v string) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetDetectedTimezone(v)
+	})
+}
+
+// UpdateDetectedTimezone sets the "detected_timezone" field to the value that was provided on create.
+func (u *ProxyUpsertBulk) UpdateDetectedTimezone() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateDetectedTimezone()
+	})
+}
+
+// ClearDetectedTimezone clears the value of the "detected_timezone" field.
+func (u *ProxyUpsertBulk) ClearDetectedTimezone() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearDetectedTimezone()
+	})
+}
+
+// SetTimezoneDetectedAt sets the "timezone_detected_at" field.
+func (u *ProxyUpsertBulk) SetTimezoneDetectedAt(v time.Time) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetTimezoneDetectedAt(v)
+	})
+}
+
+// UpdateTimezoneDetectedAt sets the "timezone_detected_at" field to the value that was provided on create.
+func (u *ProxyUpsertBulk) UpdateTimezoneDetectedAt() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateTimezoneDetectedAt()
+	})
+}
+
+// ClearTimezoneDetectedAt clears the value of the "timezone_detected_at" field.
+func (u *ProxyUpsertBulk) ClearTimezoneDetectedAt() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearTimezoneDetectedAt()
 	})
 }
 

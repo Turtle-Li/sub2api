@@ -584,6 +584,7 @@ type ProxyTestResult struct {
 	Region      string `json:"region,omitempty"`
 	Country     string `json:"country,omitempty"`
 	CountryCode string `json:"country_code,omitempty"`
+	Timezone    string `json:"timezone,omitempty"`
 }
 
 type ProxyQualityCheckResult struct {
@@ -594,6 +595,7 @@ type ProxyQualityCheckResult struct {
 	ExitIP         string                  `json:"exit_ip,omitempty"`
 	Country        string                  `json:"country,omitempty"`
 	CountryCode    string                  `json:"country_code,omitempty"`
+	Timezone       string                  `json:"timezone,omitempty"`
 	BaseLatencyMs  int64                   `json:"base_latency_ms,omitempty"`
 	PassedCount    int                     `json:"passed_count"`
 	WarnCount      int                     `json:"warn_count"`
@@ -619,6 +621,7 @@ type ProxyExitInfo struct {
 	Region      string
 	Country     string
 	CountryCode string
+	Timezone    string
 }
 
 // ProxyExitInfoProber tests proxy connectivity and retrieves exit information

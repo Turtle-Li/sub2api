@@ -247,6 +247,46 @@ func (_u *ProxyUpdate) AddExpiryWarnDays(v int) *ProxyUpdate {
 	return _u
 }
 
+// SetDetectedTimezone sets the "detected_timezone" field.
+func (_u *ProxyUpdate) SetDetectedTimezone(v string) *ProxyUpdate {
+	_u.mutation.SetDetectedTimezone(v)
+	return _u
+}
+
+// SetNillableDetectedTimezone sets the "detected_timezone" field if the given value is not nil.
+func (_u *ProxyUpdate) SetNillableDetectedTimezone(v *string) *ProxyUpdate {
+	if v != nil {
+		_u.SetDetectedTimezone(*v)
+	}
+	return _u
+}
+
+// ClearDetectedTimezone clears the value of the "detected_timezone" field.
+func (_u *ProxyUpdate) ClearDetectedTimezone() *ProxyUpdate {
+	_u.mutation.ClearDetectedTimezone()
+	return _u
+}
+
+// SetTimezoneDetectedAt sets the "timezone_detected_at" field.
+func (_u *ProxyUpdate) SetTimezoneDetectedAt(v time.Time) *ProxyUpdate {
+	_u.mutation.SetTimezoneDetectedAt(v)
+	return _u
+}
+
+// SetNillableTimezoneDetectedAt sets the "timezone_detected_at" field if the given value is not nil.
+func (_u *ProxyUpdate) SetNillableTimezoneDetectedAt(v *time.Time) *ProxyUpdate {
+	if v != nil {
+		_u.SetTimezoneDetectedAt(*v)
+	}
+	return _u
+}
+
+// ClearTimezoneDetectedAt clears the value of the "timezone_detected_at" field.
+func (_u *ProxyUpdate) ClearTimezoneDetectedAt() *ProxyUpdate {
+	_u.mutation.ClearTimezoneDetectedAt()
+	return _u
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *ProxyUpdate) AddAccountIDs(ids ...int64) *ProxyUpdate {
 	_u.mutation.AddAccountIDs(ids...)
@@ -414,6 +454,11 @@ func (_u *ProxyUpdate) check() error {
 			return &ValidationError{Name: "fallback_mode", err: fmt.Errorf(`ent: validator failed for field "Proxy.fallback_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.DetectedTimezone(); ok {
+		if err := proxy.DetectedTimezoneValidator(v); err != nil {
+			return &ValidationError{Name: "detected_timezone", err: fmt.Errorf(`ent: validator failed for field "Proxy.detected_timezone": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -482,6 +527,18 @@ func (_u *ProxyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedExpiryWarnDays(); ok {
 		_spec.AddField(proxy.FieldExpiryWarnDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.DetectedTimezone(); ok {
+		_spec.SetField(proxy.FieldDetectedTimezone, field.TypeString, value)
+	}
+	if _u.mutation.DetectedTimezoneCleared() {
+		_spec.ClearField(proxy.FieldDetectedTimezone, field.TypeString)
+	}
+	if value, ok := _u.mutation.TimezoneDetectedAt(); ok {
+		_spec.SetField(proxy.FieldTimezoneDetectedAt, field.TypeTime, value)
+	}
+	if _u.mutation.TimezoneDetectedAtCleared() {
+		_spec.ClearField(proxy.FieldTimezoneDetectedAt, field.TypeTime)
 	}
 	if _u.mutation.AccountsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -840,6 +897,46 @@ func (_u *ProxyUpdateOne) AddExpiryWarnDays(v int) *ProxyUpdateOne {
 	return _u
 }
 
+// SetDetectedTimezone sets the "detected_timezone" field.
+func (_u *ProxyUpdateOne) SetDetectedTimezone(v string) *ProxyUpdateOne {
+	_u.mutation.SetDetectedTimezone(v)
+	return _u
+}
+
+// SetNillableDetectedTimezone sets the "detected_timezone" field if the given value is not nil.
+func (_u *ProxyUpdateOne) SetNillableDetectedTimezone(v *string) *ProxyUpdateOne {
+	if v != nil {
+		_u.SetDetectedTimezone(*v)
+	}
+	return _u
+}
+
+// ClearDetectedTimezone clears the value of the "detected_timezone" field.
+func (_u *ProxyUpdateOne) ClearDetectedTimezone() *ProxyUpdateOne {
+	_u.mutation.ClearDetectedTimezone()
+	return _u
+}
+
+// SetTimezoneDetectedAt sets the "timezone_detected_at" field.
+func (_u *ProxyUpdateOne) SetTimezoneDetectedAt(v time.Time) *ProxyUpdateOne {
+	_u.mutation.SetTimezoneDetectedAt(v)
+	return _u
+}
+
+// SetNillableTimezoneDetectedAt sets the "timezone_detected_at" field if the given value is not nil.
+func (_u *ProxyUpdateOne) SetNillableTimezoneDetectedAt(v *time.Time) *ProxyUpdateOne {
+	if v != nil {
+		_u.SetTimezoneDetectedAt(*v)
+	}
+	return _u
+}
+
+// ClearTimezoneDetectedAt clears the value of the "timezone_detected_at" field.
+func (_u *ProxyUpdateOne) ClearTimezoneDetectedAt() *ProxyUpdateOne {
+	_u.mutation.ClearTimezoneDetectedAt()
+	return _u
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *ProxyUpdateOne) AddAccountIDs(ids ...int64) *ProxyUpdateOne {
 	_u.mutation.AddAccountIDs(ids...)
@@ -1020,6 +1117,11 @@ func (_u *ProxyUpdateOne) check() error {
 			return &ValidationError{Name: "fallback_mode", err: fmt.Errorf(`ent: validator failed for field "Proxy.fallback_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.DetectedTimezone(); ok {
+		if err := proxy.DetectedTimezoneValidator(v); err != nil {
+			return &ValidationError{Name: "detected_timezone", err: fmt.Errorf(`ent: validator failed for field "Proxy.detected_timezone": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -1105,6 +1207,18 @@ func (_u *ProxyUpdateOne) sqlSave(ctx context.Context) (_node *Proxy, err error)
 	}
 	if value, ok := _u.mutation.AddedExpiryWarnDays(); ok {
 		_spec.AddField(proxy.FieldExpiryWarnDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.DetectedTimezone(); ok {
+		_spec.SetField(proxy.FieldDetectedTimezone, field.TypeString, value)
+	}
+	if _u.mutation.DetectedTimezoneCleared() {
+		_spec.ClearField(proxy.FieldDetectedTimezone, field.TypeString)
+	}
+	if value, ok := _u.mutation.TimezoneDetectedAt(); ok {
+		_spec.SetField(proxy.FieldTimezoneDetectedAt, field.TypeTime, value)
+	}
+	if _u.mutation.TimezoneDetectedAtCleared() {
+		_spec.ClearField(proxy.FieldTimezoneDetectedAt, field.TypeTime)
 	}
 	if _u.mutation.AccountsCleared() {
 		edge := &sqlgraph.EdgeSpec{

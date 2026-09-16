@@ -962,6 +962,8 @@ export interface Proxy {
   country_code?: string
   region?: string
   city?: string
+  detected_timezone?: string
+  timezone_detected_at?: string
   quality_status?: 'healthy' | 'warn' | 'challenge' | 'failed'
   quality_score?: number
   quality_grade?: string
@@ -1000,6 +1002,7 @@ export interface ProxyQualityCheckResult {
   exit_ip?: string
   country?: string
   country_code?: string
+  timezone?: string
   base_latency_ms?: number
   passed_count: number
   warn_count: number

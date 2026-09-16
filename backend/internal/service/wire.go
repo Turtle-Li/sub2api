@@ -424,6 +424,15 @@ func ProvideProxyExpiryService(proxyRepo ProxyRepository, lockCache LeaderLockCa
 	return svc
 }
 
+// ProvideProxyTimezoneBackfillService starts the one-shot migration backfill
+// for active proxies created before exit timezone metadata was persisted.
+func ProvideProxyTimezoneBackfillService(proxyRepo ProxyRepository, prober ProxyExitInfoProber, lockCache LeaderLockCache, db *sql.DB) *ProxyTimezoneBackfillService {
+	svc := NewProxyTimezoneBackfillService(proxyRepo, prober)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "proxy-timezone-backfill", 2*time.Minute)
+	svc.Start()
+	return svc
+}
+
 // ProvideSubscriptionExpiryService creates and starts SubscriptionExpiryService.
 func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, settingRepo SettingRepository, notificationEmailService *NotificationEmailService, lockCache LeaderLockCache, db *sql.DB) *SubscriptionExpiryService {
 	svc := NewSubscriptionExpiryService(userSubRepo, time.Minute)
@@ -940,6 +949,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountExpiryService,
 	ProvideOpenAICodexVersionSyncService,
 	ProvideProxyExpiryService,
+	ProvideProxyTimezoneBackfillService,
 	ProvideSubscriptionExpiryService,
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,

@@ -76,6 +76,62 @@ func (s *ProxyExpirySuite) accountProxyID(id int64) *int64 {
 	return pid
 }
 
+func (s *ProxyExpirySuite) TestUpdateDetectedTimezonePersistsAndInvalidatesBoundAccount() {
+	proxyID := s.mkProxy("timezone-proxy", service.FallbackModeNone, nil, nil)
+	accountID := s.mkAccountWithProxy(proxyID)
+	probed, err := s.repo.GetByID(s.ctx, proxyID)
+	s.Require().NoError(err)
+	detectedAt := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+
+	accepted, err := s.repo.UpdateDetectedTimezone(s.ctx, probed, "Asia/Tokyo", detectedAt)
+	s.Require().NoError(err)
+	s.Require().True(accepted)
+	got, err := s.repo.GetByID(s.ctx, proxyID)
+	s.Require().NoError(err)
+	s.Require().Equal("Asia/Tokyo", got.DetectedTimezone)
+	s.Require().NotNil(got.TimezoneDetectedAt)
+	s.Require().True(got.TimezoneDetectedAt.Equal(detectedAt))
+
+	var payloadRaw []byte
+	err = scanSingleRow(s.ctx, s.tx, `
+		SELECT payload
+		FROM scheduler_outbox
+		WHERE event_type=$1
+		ORDER BY id DESC
+		LIMIT 1`, []any{service.SchedulerOutboxEventAccountBulkChanged}, &payloadRaw)
+	s.Require().NoError(err)
+	var payload struct {
+		AccountIDs []int64 `json:"account_ids"`
+	}
+	s.Require().NoError(json.Unmarshal(payloadRaw, &payload))
+	s.Require().Equal([]int64{accountID}, payload.AccountIDs)
+}
+
+func (s *ProxyExpirySuite) TestUpdateDetectedTimezoneDiscardsStaleProbeAndTransportEditClearsMetadata() {
+	proxyID := s.mkProxy("timezone-stale-proxy", service.FallbackModeNone, nil, nil)
+	probed, err := s.repo.GetByID(s.ctx, proxyID)
+	s.Require().NoError(err)
+	accepted, err := s.repo.UpdateDetectedTimezone(s.ctx, probed, "America/Los_Angeles", time.Now())
+	s.Require().NoError(err)
+	s.Require().True(accepted)
+
+	current, err := s.repo.GetByID(s.ctx, proxyID)
+	s.Require().NoError(err)
+	current.Host = "127.0.0.2"
+	s.Require().NoError(s.repo.Update(s.ctx, current))
+	afterEdit, err := s.repo.GetByID(s.ctx, proxyID)
+	s.Require().NoError(err)
+	s.Require().Empty(afterEdit.DetectedTimezone)
+	s.Require().Nil(afterEdit.TimezoneDetectedAt)
+
+	accepted, err = s.repo.UpdateDetectedTimezone(s.ctx, probed, "Asia/Tokyo", time.Now())
+	s.Require().NoError(err)
+	s.Require().False(accepted)
+	afterStaleProbe, err := s.repo.GetByID(s.ctx, proxyID)
+	s.Require().NoError(err)
+	s.Require().Empty(afterStaleProbe.DetectedTimezone)
+}
+
 func (s *ProxyExpirySuite) TestSweep_DirectMode() {
 	past := time.Now().Add(-time.Hour)
 	pid := s.mkProxy("p-direct", service.FallbackModeDirect, &past, nil)

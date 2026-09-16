@@ -57,6 +57,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		})
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
+	timezoneBody, timezoneErr := rewriteOpenAIRequestTimezoneForAccount(account, body)
+	if timezoneErr != nil {
+		return nil, fmt.Errorf("rewrite OpenAI request timezone: %w", timezoneErr)
+	}
+	body = timezoneBody
 
 	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)
 	if err != nil {

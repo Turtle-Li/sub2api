@@ -94,6 +94,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		})
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
+	timezoneBody, timezoneErr := rewriteOpenAIRequestTimezoneForAccount(account, body)
+	if timezoneErr != nil {
+		return nil, fmt.Errorf("rewrite OpenAI chat request timezone: %w", timezoneErr)
+	}
+	body = timezoneBody
 
 	if account.Platform == PlatformGrok {
 		if account.IsGrokOAuth() {

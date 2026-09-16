@@ -138,6 +138,95 @@ func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) er
 	return nil
 }
 
+// UpdateDetectedTimezone persists probe-derived exit metadata only when the
+// proxy transport identity still matches the endpoint that was probed. This
+// prevents a slow probe for an old host from overwriting a newly edited proxy.
+func (r *proxyRepository) UpdateDetectedTimezone(ctx context.Context, probedProxy *service.Proxy, timezone string, detectedAt time.Time) (bool, error) {
+	if probedProxy == nil {
+		return false, errors.New("probed proxy is nil")
+	}
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" {
+		return false, errors.New("detected timezone is empty")
+	}
+
+	client := r.client
+	var tx *dbent.Tx
+	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+		client = contextTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && err != dbent.ErrTxStarted {
+			return false, err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+
+	current, err := lockProxyForUpdate(ctx, client, probedProxy.ID)
+	if err != nil {
+		return false, err
+	}
+	if !sameProxyProbeTransportIdentity(current, probedProxy) {
+		// The result belongs to a previous endpoint configuration. Discard it
+		// without surfacing an operational error to the successful probe call.
+		return false, nil
+	}
+	currentEntity, err := client.Proxy.Get(ctx, probedProxy.ID)
+	if dbent.IsNotFound(err) {
+		return false, service.ErrProxyNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	currentTimezone := ""
+	if currentEntity.DetectedTimezone != nil {
+		currentTimezone = *currentEntity.DetectedTimezone
+	}
+
+	timezoneChanged := currentTimezone != timezone
+	_, err = client.Proxy.UpdateOneID(probedProxy.ID).
+		SetDetectedTimezone(timezone).
+		SetTimezoneDetectedAt(detectedAt.UTC()).
+		Save(ctx)
+	if dbent.IsNotFound(err) {
+		return false, service.ErrProxyNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+
+	var accountIDs []int64
+	var fixedEgressAccounts map[int64]*service.Account
+	if timezoneChanged {
+		accountIDs, err = listLiveAccountIDsByProxyID(ctx, client, probedProxy.ID)
+		if err != nil {
+			return false, err
+		}
+		if err := enqueueProxyProbeAccountChanges(ctx, client, accountIDs); err != nil {
+			return false, err
+		}
+		fixedEgressAccounts, err = classifyFixedEgressSchedulerAccounts(ctx, client, accountIDs)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+	}
+	if tx != nil && timezoneChanged {
+		r.deleteSchedulerAccountSnapshots(baseContextWithoutCancel(ctx), accountIDs, fixedEgressAccounts)
+	}
+	return true, nil
+}
+
 func baseContextWithoutCancel(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
@@ -165,6 +254,17 @@ func proxyProbeIdentityFromService(proxyIn *service.Proxy) proxyProbeIdentity {
 	}
 }
 
+func sameProxyProbeTransportIdentity(left, right *service.Proxy) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Protocol == right.Protocol &&
+		left.Host == right.Host &&
+		left.Port == right.Port &&
+		left.Username == right.Username &&
+		left.Password == right.Password
+}
+
 func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.Client, proxyIn *service.Proxy) (*dbent.Proxy, []int64, map[int64]*service.Account, error) {
 	currentProxy, err := lockProxyForUpdate(ctx, client, proxyIn.ID)
 	if err != nil {
@@ -180,6 +280,7 @@ func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.C
 		}
 	}
 	currentIdentity := proxyProbeIdentityFromService(currentProxy)
+	transportIdentityChanged := !sameProxyProbeTransportIdentity(currentProxy, proxyIn)
 	statusChanged := currentProxy.Status != proxyIn.Status
 	builder := client.Proxy.UpdateOneID(proxyIn.ID).
 		SetName(proxyIn.Name).
@@ -208,6 +309,9 @@ func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.C
 		builder.SetBackupProxyID(*proxyIn.BackupProxyID)
 	} else {
 		builder.ClearBackupProxyID()
+	}
+	if transportIdentityChanged {
+		builder.ClearDetectedTimezone().ClearTimezoneDetectedAt()
 	}
 
 	updated, err := builder.Save(ctx)
@@ -862,24 +966,28 @@ func proxyEntityToService(m *dbent.Proxy) *service.Proxy {
 		return nil
 	}
 	out := &service.Proxy{
-		ID:             m.ID,
-		Name:           m.Name,
-		Protocol:       m.Protocol,
-		Host:           m.Host,
-		Port:           m.Port,
-		Status:         m.Status,
-		CreatedAt:      m.CreatedAt,
-		UpdatedAt:      m.UpdatedAt,
-		ExpiresAt:      m.ExpiresAt,
-		FallbackMode:   m.FallbackMode,
-		BackupProxyID:  m.BackupProxyID,
-		ExpiryWarnDays: m.ExpiryWarnDays,
+		ID:                 m.ID,
+		Name:               m.Name,
+		Protocol:           m.Protocol,
+		Host:               m.Host,
+		Port:               m.Port,
+		Status:             m.Status,
+		CreatedAt:          m.CreatedAt,
+		UpdatedAt:          m.UpdatedAt,
+		ExpiresAt:          m.ExpiresAt,
+		FallbackMode:       m.FallbackMode,
+		BackupProxyID:      m.BackupProxyID,
+		ExpiryWarnDays:     m.ExpiryWarnDays,
+		TimezoneDetectedAt: m.TimezoneDetectedAt,
 	}
 	if m.Username != nil {
 		out.Username = *m.Username
 	}
 	if m.Password != nil {
 		out.Password = *m.Password
+	}
+	if m.DetectedTimezone != nil {
+		out.DetectedTimezone = *m.DetectedTimezone
 	}
 	return out
 }
@@ -891,6 +999,12 @@ func applyProxyEntityToService(dst *service.Proxy, src *dbent.Proxy) {
 	dst.ID = src.ID
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
+	dst.TimezoneDetectedAt = src.TimezoneDetectedAt
+	if src.DetectedTimezone != nil {
+		dst.DetectedTimezone = *src.DetectedTimezone
+	} else {
+		dst.DetectedTimezone = ""
+	}
 }
 
 // ListAllForFallback 返回所有代理（含过期/非活跃），供改投逻辑使用。

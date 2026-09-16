@@ -174,6 +174,9 @@ func (s *proxyProbeService) parseIPWho(body []byte, latencyMs int64) (*service.P
 		CountryCode string `json:"country_code"`
 		Region      string `json:"region"`
 		City        string `json:"city"`
+		Timezone    struct {
+			ID string `json:"id"`
+		} `json:"timezone"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		preview := string(body)
@@ -197,6 +200,7 @@ func (s *proxyProbeService) parseIPWho(body []byte, latencyMs int64) (*service.P
 		CountryCode: strings.TrimSpace(result.CountryCode),
 		Region:      strings.TrimSpace(result.Region),
 		City:        strings.TrimSpace(result.City),
+		Timezone:    strings.TrimSpace(result.Timezone.ID),
 	}, latencyMs, nil
 }
 
@@ -210,6 +214,7 @@ func (s *proxyProbeService) parseIPAPI(body []byte, latencyMs int64) (*service.P
 		RegionName  string `json:"regionName"`
 		Country     string `json:"country"`
 		CountryCode string `json:"countryCode"`
+		Timezone    string `json:"timezone"`
 	}
 
 	if err := json.Unmarshal(body, &ipInfo); err != nil {
@@ -236,6 +241,7 @@ func (s *proxyProbeService) parseIPAPI(body []byte, latencyMs int64) (*service.P
 		Region:      region,
 		Country:     ipInfo.Country,
 		CountryCode: ipInfo.CountryCode,
+		Timezone:    strings.TrimSpace(ipInfo.Timezone),
 	}, latencyMs, nil
 }
 
@@ -257,7 +263,7 @@ func (s *proxyProbeService) parseIPify(body []byte, latencyMs int64) (*service.P
 // parseChatGPTTrace 解析 Cloudflare trace 端点（如 chatgpt.com/cdn-cgi/trace）的纯文本响应。
 // 响应按行给出键值对，其中 ip= 为出口 IP，loc= 为国家代码。
 func (s *proxyProbeService) parseChatGPTTrace(body []byte, latencyMs int64) (*service.ProxyExitInfo, int64, error) {
-	var ip, loc string
+	var ip, loc, timezone string
 	for _, line := range strings.Split(string(body), "\n") {
 		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
 		if !found {
@@ -268,6 +274,8 @@ func (s *proxyProbeService) parseChatGPTTrace(body []byte, latencyMs int64) (*se
 			ip = strings.TrimSpace(value)
 		case "loc":
 			loc = strings.TrimSpace(value)
+		case "tz":
+			timezone = strings.TrimSpace(value)
 		}
 	}
 	if ip == "" {
@@ -278,7 +286,8 @@ func (s *proxyProbeService) parseChatGPTTrace(body []byte, latencyMs int64) (*se
 		return nil, latencyMs, fmt.Errorf("chatgpt-trace: no ip= found in response (body: %s)", preview)
 	}
 	info := &service.ProxyExitInfo{
-		IP: ip,
+		IP:       ip,
+		Timezone: timezone,
 	}
 	if loc != "" {
 		info.CountryCode = loc

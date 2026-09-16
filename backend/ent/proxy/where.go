@@ -125,6 +125,16 @@ func ExpiryWarnDays(v int) predicate.Proxy {
 	return predicate.Proxy(sql.FieldEQ(FieldExpiryWarnDays, v))
 }
 
+// DetectedTimezone applies equality check predicate on the "detected_timezone" field. It's identical to DetectedTimezoneEQ.
+func DetectedTimezone(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldDetectedTimezone, v))
+}
+
+// TimezoneDetectedAt applies equality check predicate on the "timezone_detected_at" field. It's identical to TimezoneDetectedAtEQ.
+func TimezoneDetectedAt(v time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldTimezoneDetectedAt, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Proxy {
 	return predicate.Proxy(sql.FieldEQ(FieldCreatedAt, v))
@@ -888,6 +898,131 @@ func ExpiryWarnDaysLT(v int) predicate.Proxy {
 // ExpiryWarnDaysLTE applies the LTE predicate on the "expiry_warn_days" field.
 func ExpiryWarnDaysLTE(v int) predicate.Proxy {
 	return predicate.Proxy(sql.FieldLTE(FieldExpiryWarnDays, v))
+}
+
+// DetectedTimezoneEQ applies the EQ predicate on the "detected_timezone" field.
+func DetectedTimezoneEQ(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneNEQ applies the NEQ predicate on the "detected_timezone" field.
+func DetectedTimezoneNEQ(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNEQ(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneIn applies the In predicate on the "detected_timezone" field.
+func DetectedTimezoneIn(vs ...string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldIn(FieldDetectedTimezone, vs...))
+}
+
+// DetectedTimezoneNotIn applies the NotIn predicate on the "detected_timezone" field.
+func DetectedTimezoneNotIn(vs ...string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotIn(FieldDetectedTimezone, vs...))
+}
+
+// DetectedTimezoneGT applies the GT predicate on the "detected_timezone" field.
+func DetectedTimezoneGT(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGT(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneGTE applies the GTE predicate on the "detected_timezone" field.
+func DetectedTimezoneGTE(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGTE(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneLT applies the LT predicate on the "detected_timezone" field.
+func DetectedTimezoneLT(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLT(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneLTE applies the LTE predicate on the "detected_timezone" field.
+func DetectedTimezoneLTE(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLTE(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneContains applies the Contains predicate on the "detected_timezone" field.
+func DetectedTimezoneContains(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldContains(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneHasPrefix applies the HasPrefix predicate on the "detected_timezone" field.
+func DetectedTimezoneHasPrefix(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldHasPrefix(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneHasSuffix applies the HasSuffix predicate on the "detected_timezone" field.
+func DetectedTimezoneHasSuffix(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldHasSuffix(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneIsNil applies the IsNil predicate on the "detected_timezone" field.
+func DetectedTimezoneIsNil() predicate.Proxy {
+	return predicate.Proxy(sql.FieldIsNull(FieldDetectedTimezone))
+}
+
+// DetectedTimezoneNotNil applies the NotNil predicate on the "detected_timezone" field.
+func DetectedTimezoneNotNil() predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotNull(FieldDetectedTimezone))
+}
+
+// DetectedTimezoneEqualFold applies the EqualFold predicate on the "detected_timezone" field.
+func DetectedTimezoneEqualFold(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEqualFold(FieldDetectedTimezone, v))
+}
+
+// DetectedTimezoneContainsFold applies the ContainsFold predicate on the "detected_timezone" field.
+func DetectedTimezoneContainsFold(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldContainsFold(FieldDetectedTimezone, v))
+}
+
+// TimezoneDetectedAtEQ applies the EQ predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtEQ(v time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldTimezoneDetectedAt, v))
+}
+
+// TimezoneDetectedAtNEQ applies the NEQ predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtNEQ(v time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNEQ(FieldTimezoneDetectedAt, v))
+}
+
+// TimezoneDetectedAtIn applies the In predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtIn(vs ...time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldIn(FieldTimezoneDetectedAt, vs...))
+}
+
+// TimezoneDetectedAtNotIn applies the NotIn predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtNotIn(vs ...time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotIn(FieldTimezoneDetectedAt, vs...))
+}
+
+// TimezoneDetectedAtGT applies the GT predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtGT(v time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGT(FieldTimezoneDetectedAt, v))
+}
+
+// TimezoneDetectedAtGTE applies the GTE predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtGTE(v time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGTE(FieldTimezoneDetectedAt, v))
+}
+
+// TimezoneDetectedAtLT applies the LT predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtLT(v time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLT(FieldTimezoneDetectedAt, v))
+}
+
+// TimezoneDetectedAtLTE applies the LTE predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtLTE(v time.Time) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLTE(FieldTimezoneDetectedAt, v))
+}
+
+// TimezoneDetectedAtIsNil applies the IsNil predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtIsNil() predicate.Proxy {
+	return predicate.Proxy(sql.FieldIsNull(FieldTimezoneDetectedAt))
+}
+
+// TimezoneDetectedAtNotNil applies the NotNil predicate on the "timezone_detected_at" field.
+func TimezoneDetectedAtNotNil() predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotNull(FieldTimezoneDetectedAt))
 }
 
 // HasAccounts applies the HasEdge predicate on the "accounts" edge.

@@ -43,6 +43,10 @@ const (
 	FieldBackupProxyID = "backup_proxy_id"
 	// FieldExpiryWarnDays holds the string denoting the expiry_warn_days field in the database.
 	FieldExpiryWarnDays = "expiry_warn_days"
+	// FieldDetectedTimezone holds the string denoting the detected_timezone field in the database.
+	FieldDetectedTimezone = "detected_timezone"
+	// FieldTimezoneDetectedAt holds the string denoting the timezone_detected_at field in the database.
+	FieldTimezoneDetectedAt = "timezone_detected_at"
 	// EdgeAccounts holds the string denoting the accounts edge name in mutations.
 	EdgeAccounts = "accounts"
 	// EdgePrimaryProxies holds the string denoting the primary_proxies edge name in mutations.
@@ -85,6 +89,8 @@ var Columns = []string{
 	FieldFallbackMode,
 	FieldBackupProxyID,
 	FieldExpiryWarnDays,
+	FieldDetectedTimezone,
+	FieldTimezoneDetectedAt,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -131,6 +137,8 @@ var (
 	FallbackModeValidator func(string) error
 	// DefaultExpiryWarnDays holds the default value on creation for the "expiry_warn_days" field.
 	DefaultExpiryWarnDays int
+	// DetectedTimezoneValidator is a validator for the "detected_timezone" field. It is called by the builders before save.
+	DetectedTimezoneValidator func(string) error
 )
 
 // OrderOption defines the ordering options for the Proxy queries.
@@ -209,6 +217,16 @@ func ByBackupProxyID(opts ...sql.OrderTermOption) OrderOption {
 // ByExpiryWarnDays orders the results by the expiry_warn_days field.
 func ByExpiryWarnDays(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldExpiryWarnDays, opts...).ToFunc()
+}
+
+// ByDetectedTimezone orders the results by the detected_timezone field.
+func ByDetectedTimezone(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDetectedTimezone, opts...).ToFunc()
+}
+
+// ByTimezoneDetectedAt orders the results by the timezone_detected_at field.
+func ByTimezoneDetectedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTimezoneDetectedAt, opts...).ToFunc()
 }
 
 // ByAccountsCount orders the results by accounts count.
