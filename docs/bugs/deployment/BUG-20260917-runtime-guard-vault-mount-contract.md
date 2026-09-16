@@ -45,11 +45,14 @@ invalid values, and reject legacy raw secret/webhook environment variables.
 For each enabled feature it must require the exact approved read-only volume,
 source, and target. A disabled or absent feature must have no mount at that
 target. Exact total mount counting remains in force so unknown mounts still
-fail closed.
+fail closed. This contract applies in local and external dependency modes and
+with or without the dual-node runtime state mounts; no otherwise healthy
+single-node container may bypass it.
 
 Tests cover both approved volumes together, missing/wrong volumes, disabled
-features with residual volumes, duplicate/invalid switches, and the existing
-state inode/content drift cases.
+features with residual volumes, duplicate/invalid switches, local single-node
+feature and unknown-mount cases, and the existing state inode/content drift
+cases.
 
 The frozen source checks include `deploy/tests/runtime-guard-test.sh`,
 `deploy/tests/node-state-test.sh`,

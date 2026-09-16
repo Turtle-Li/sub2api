@@ -553,12 +553,10 @@ verify_application_runtime_before_lifecycle() (
     validate_external_ca_file
   fi
   validate_runtime_files_for_container "$container_name"
-  if [ "$DEPENDENCY_MODE" = external ] || [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
-    application_runtime_matches "$container_name" || {
-      log "application runtime verification failed before lifecycle action: ${container_name}" >&2
-      return 1
-    }
-  fi
+  application_runtime_matches "$container_name" || {
+    log "application runtime verification failed before lifecycle action: ${container_name}" >&2
+    return 1
+  }
   return 0
 )
 
@@ -1451,7 +1449,7 @@ if container_exists "$ACTIVE_CONTAINER"; then
   ACTIVE_FIXED_EGRESS_MODE="$(fixed_egress_mode_for_container "$ACTIVE_CONTAINER")" \
     || die "active container has an invalid fixed-egress compatibility mode"
   verify_application_runtime_before_lifecycle "$ACTIVE_CONTAINER" \
-    || die "active application runtime does not match the configured dependency and dual-node contract"
+    || die "active application runtime does not match the configured runtime contract"
 else
   # If the Caddy-selected generation disappeared, recovery has no trustworthy
   # source generation.  Treat the absent mode as the strict normal-final mode
@@ -1533,7 +1531,7 @@ if [ "$running_inactive_count" -gt 0 ]; then
   [ -n "$FALLBACK_IMAGE" ] \
     || die "running inactive fallback has no image reference: ${FALLBACK_CONTAINER}"
   verify_application_runtime_before_lifecycle "$FALLBACK_CONTAINER" \
-    || die "running inactive fallback does not match the configured dependency and dual-node contract: ${FALLBACK_CONTAINER}"
+    || die "running inactive fallback does not match the configured runtime contract: ${FALLBACK_CONTAINER}"
   fixed_egress_mode_matches_active "$FALLBACK_CONTAINER" \
     || die "running inactive fallback has an incompatible fixed-egress mode: ${FALLBACK_CONTAINER}"
   if ! container_is_healthy "$FALLBACK_CONTAINER" \

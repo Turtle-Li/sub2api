@@ -365,6 +365,13 @@ write_container() {
   printf 'running=%s\nhealth=%s\noom=%s\nexit_code=%s\nimage=%s\nstart_health=%s\nrestart_health=%s\n' \
     "$running" "$health" "$oom" "$exit_code" "$image" "$start_health" "$restart_health" \
     >"${CASE_ROOT}/containers/${name}.env"
+  case "$name" in
+    sub2api|sub2api-blue|sub2api-green)
+      printf 'restart_policy=%q\nnetworks=%q\nmounts=%q\nenvironment=%q\n' \
+        unless-stopped sub2api_default 'volume|sub2api_sub2api_data|/app/data|true' '' \
+        >>"${CASE_ROOT}/containers/${name}.env"
+      ;;
+  esac
 }
 
 write_runtime_metadata() {
@@ -642,6 +649,61 @@ assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 [ ! -s "${CASE_ROOT}/release-calls.log" ] || fail 'blue-green helper ran for a healthy active slot'
 assert_contains "${CASE_ROOT}/node-state-calls.log" 'recover-local'
 
+# Local, non-dual deployments use the same container-owned feature contract:
+# only approved Vault mounts accompany enabled switches, and all other mounts
+# and raw credential/webhook environment entries fail before lifecycle work.
+new_case local-active-payment-and-feishu-vaults
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+  "volume|sub2api_sub2api_data|/app/data|true"$'\n'"$(enabled_vault_mounts)" \
+  "$(enabled_vault_environment)"
+run_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+new_case local-active-payment-vault-missing
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+  'volume|sub2api_sub2api_data|/app/data|true' \
+  'UNIFIED_PAYMENT_ENABLED=true'
+if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'local runtime guard accepted enabled unified payment without its Vault volume'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+new_case local-active-unknown-mount
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+  $'volume|sub2api_sub2api_data|/app/data|true\nvolume|unexpected-local-volume|/run/unexpected|false' \
+  ''
+if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'local runtime guard accepted an unknown extra mount'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+for local_forbidden_environment_case in payment-private-key feishu-raw-webhook; do
+  new_case "local-active-${local_forbidden_environment_case}-environment"
+  write_standard_dependencies
+  write_container sub2api-green true healthy false 0 sub2api:current
+  case "$local_forbidden_environment_case" in
+    payment-private-key) local_forbidden_environment='UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=' ;;
+    feishu-raw-webhook) local_forbidden_environment='SUB2API_FEISHU_WEBHOOK_URL=https://example.invalid/webhook' ;;
+  esac
+  write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+    "volume|sub2api_sub2api_data|/app/data|true"$'\n'"$(enabled_vault_mounts)" \
+    "$(enabled_vault_environment)"$'\n'"$local_forbidden_environment"
+  if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+    fail "local runtime guard accepted ${local_forbidden_environment_case} environment"
+  fi
+  assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+  assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+done
+
 # External shared dependencies are never treated as local Docker containers.
 # A healthy active slot is accepted only when its exact external credentials,
 # CA, network, data volume, and dual-node runtime mounts/env match.
@@ -897,7 +959,7 @@ write_runtime_metadata sub2api-green unless-stopped candidate-network \
 if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
   fail 'runtime guard accepted an external active container with a missing runtime mount'
 fi
-assert_contains "${CASE_ROOT}/output.log" 'active application runtime does not match the configured dependency and dual-node contract'
+assert_contains "${CASE_ROOT}/output.log" 'active application runtime does not match the configured runtime contract'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-green'
 
 # An already-running historical slot is also checked before the failed active
@@ -915,7 +977,7 @@ write_runtime_metadata sub2api-blue unless-stopped candidate-network \
 if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
   fail 'runtime guard accepted a running fallback with a missing runtime mount'
 fi
-assert_contains "${CASE_ROOT}/output.log" 'running inactive fallback does not match the configured dependency and dual-node contract: sub2api-blue'
+assert_contains "${CASE_ROOT}/output.log" 'running inactive fallback does not match the configured runtime contract: sub2api-blue'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'stop sub2api-green'
 assert_not_contains "${CASE_ROOT}/release-calls.log" 'new=sub2api-blue'
 
