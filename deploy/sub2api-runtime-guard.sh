@@ -383,6 +383,14 @@ mount_target_is_absent() {
   '
 }
 
+mount_target_count() {
+  local mounts="$1" target="$2"
+  printf '%s\n' "$mounts" | awk -F '|' -v expected_target="$target" '
+    $3 == expected_target { count += 1 }
+    END { print count + 0 }
+  '
+}
+
 fixed_egress_mode_for_container() {
   local container_name="$1" environment mode_count mode_value
 
@@ -433,7 +441,8 @@ fixed_egress_mode_matches_active() {
 
 application_runtime_matches() {
   local container_name="$1" networks mounts environment environment_json feature_flags
-  local network_count mount_count expected_mount_count unified_payment_enabled feishu_enabled extra_feature_value
+  local network_count mount_count expected_mount_count unified_payment_enabled feishu_enabled
+  local extra_feature_value unified_payment_mount_count
   local key expected_value actual_value
   container_exists "$container_name" || return 1
   [ "$(container_field "$container_name" '{{.HostConfig.RestartPolicy.Name}}')" = unless-stopped ] || return 1
@@ -470,6 +479,20 @@ application_runtime_matches() {
     expected_mount_count=$((expected_mount_count + 1))
     printf '%s\n' "$mounts" | grep -qxF \
       "volume|$APPROVED_UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" || return 1
+  elif [ "$DEPENDENCY_MODE" = local ] && [ "$DUAL_NODE_RUNTIME_ENABLED" = false ]; then
+    # The default local/non-dual Compose topology keeps the public socket
+    # volume mounted while payment is disabled. Permit only that exact dormant
+    # mount; the feature flag remains authoritative and no socket is consumed.
+    unified_payment_mount_count="$(mount_target_count "$mounts" "$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH")"
+    case "$unified_payment_mount_count" in
+      0) ;;
+      1)
+        expected_mount_count=$((expected_mount_count + 1))
+        printf '%s\n' "$mounts" | grep -qxF \
+          "volume|$APPROVED_UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" || return 1
+        ;;
+      *) return 1 ;;
+    esac
   else
     mount_target_is_absent "$mounts" "$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH" || return 1
   fi

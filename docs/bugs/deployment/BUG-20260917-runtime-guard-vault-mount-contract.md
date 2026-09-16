@@ -43,16 +43,29 @@ The guard must derive `UNIFIED_PAYMENT_ENABLED` and
 `SUB2API_FEISHU_ENABLED` from the inspected container, reject duplicate or
 invalid values, and reject legacy raw secret/webhook environment variables.
 For each enabled feature it must require the exact approved read-only volume,
-source, and target. A disabled or absent feature must have no mount at that
-target. Exact total mount counting remains in force so unknown mounts still
-fail closed. This contract applies in local and external dependency modes and
-with or without the dual-node runtime state mounts; no otherwise healthy
-single-node container may bypass it.
+source, and target. A disabled or absent feature normally must have no mount at
+that target. The sole compatibility exception is the repository's default
+local, non-dual Compose topology: because that Compose file always declares
+the public payment socket volume, it may retain zero or one exact
+`sub2api_unified_payment_vault` to `/run/sub2api-payment-vault` read-only mount
+while payment is disabled. The feature flag remains authoritative, so the
+dormant mount does not enable payment or expose a raw key to the application.
+External or dual-node deployments receive no such exception, and a disabled
+Feishu feature never permits a residual mount.
+
+Exact total mount counting remains in force so duplicate targets and unknown
+mounts fail closed. Wrong sources, targets, or access modes fail closed in the
+local exception as well. Raw private-key and webhook environment values remain
+forbidden in every topology. Apart from the narrowly documented dormant
+payment mount, the same feature contract applies in local and external
+dependency modes and with or without the dual-node runtime state mounts; no
+otherwise healthy single-node container may bypass it.
 
 Tests cover both approved volumes together, missing/wrong volumes, disabled
-features with residual volumes, duplicate/invalid switches, local single-node
-feature and unknown-mount cases, and the existing state inode/content drift
-cases.
+features with residual volumes, duplicate/invalid switches, the exact dormant
+local Compose payment mount with both false and absent switches, rejected
+wrong/read-write/duplicate dormant mounts, local single-node feature and
+unknown-mount cases, and the existing state inode/content drift cases.
 
 The frozen source checks include `deploy/tests/runtime-guard-test.sh`,
 `deploy/tests/node-state-test.sh`,

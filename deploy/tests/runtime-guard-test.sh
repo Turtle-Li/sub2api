@@ -662,6 +662,50 @@ run_guard >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 
+# Local Compose keeps the public payment socket volume present while its
+# default feature switch is false. The dormant exception remains exact.
+new_case local-active-dormant-payment-vault
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+  "volume|sub2api_sub2api_data|/app/data|true"$'\n'"volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|false" \
+  'UNIFIED_PAYMENT_ENABLED=false'
+run_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+# An absent switch has the same disabled meaning in the default Compose
+# topology and may retain only the same exact dormant mount.
+new_case local-active-dormant-payment-vault-absent-switch
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+  "volume|sub2api_sub2api_data|/app/data|true"$'\n'"volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|false" \
+  ''
+run_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+for dormant_payment_mount_case in wrong-source wrong-target read-write duplicate-target; do
+  new_case "local-active-dormant-payment-${dormant_payment_mount_case}"
+  write_standard_dependencies
+  write_container sub2api-green true healthy false 0 sub2api:current
+  case "$dormant_payment_mount_case" in
+    wrong-source) dormant_payment_mount='volume|wrong-payment-vault|/run/sub2api-payment-vault|false' ;;
+    wrong-target) dormant_payment_mount='volume|sub2api_unified_payment_vault|/run/not-payment-vault|false' ;;
+    read-write) dormant_payment_mount='volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|true' ;;
+    duplicate-target) dormant_payment_mount=$'volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|false\nvolume|second-payment-vault|/run/sub2api-payment-vault|false' ;;
+  esac
+  write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+    "volume|sub2api_sub2api_data|/app/data|true"$'\n'"$dormant_payment_mount" \
+    'UNIFIED_PAYMENT_ENABLED=false'
+  if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+    fail "local runtime guard accepted ${dormant_payment_mount_case} dormant payment Vault mount"
+  fi
+  assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+  assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+done
+
 new_case local-active-payment-vault-missing
 write_standard_dependencies
 write_container sub2api-green true healthy false 0 sub2api:current
