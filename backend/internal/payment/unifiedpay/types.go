@@ -187,6 +187,18 @@ type createRefundRequest struct {
 	ReasonSummary   *string `json:"reason_summary,omitempty"`
 }
 
+type resumeRefundRequest struct {
+	OperatorRef string `json:"operator_ref"`
+}
+
+type confirmExternalRefundRequest struct {
+	OperatorRef       string    `json:"operator_ref"`
+	MethodCode        string    `json:"method_code"`
+	ExternalReference string    `json:"external_reference"`
+	RefundedAt        time.Time `json:"refunded_at"`
+	EvidenceDetail    string    `json:"evidence_detail"`
+}
+
 // refundResponse is the REST representation of an asynchronous refund. Its
 // environment, organization, and product scope is explicit; app scope is
 // enforced by the signed product request because the fixed REST contract does

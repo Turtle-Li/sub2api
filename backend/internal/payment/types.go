@@ -279,6 +279,29 @@ type UnifiedRefundExpectation struct {
 	AmountFen       int64
 }
 
+// UnifiedRefundResumeRequest authorizes the central service to release only a
+// proven provider-balance manual fence. It never creates a second refund.
+type UnifiedRefundResumeRequest struct {
+	RefundRequestID string
+	IdempotencyKey  string
+	OperatorRef     string
+	Expected        UnifiedRefundExpectation
+}
+
+// UnifiedExternalRefundConfirmation records that an operator completed the
+// exact refund outside the provider API. The central service remains the money
+// authority and emits the normal signed success event after recording it.
+type UnifiedExternalRefundConfirmation struct {
+	RefundRequestID   string
+	IdempotencyKey    string
+	OperatorRef       string
+	MethodCode        string
+	ExternalReference string
+	RefundedAt        time.Time
+	EvidenceDetail    string
+	Expected          UnifiedRefundExpectation
+}
+
 // UnifiedRefundResource is the scope-validated refund representation returned
 // by the unified payment service. Its refund evidence fields intentionally
 // align with the corresponding signed Webhook resource.
@@ -306,6 +329,8 @@ type UnifiedRefundResource struct {
 type UnifiedRefundProvider interface {
 	CreateUnifiedRefund(ctx context.Context, request UnifiedRefundRequest) (*UnifiedRefundResource, error)
 	GetUnifiedRefund(ctx context.Context, refundRequestID string, expected UnifiedRefundExpectation) (*UnifiedRefundResource, error)
+	ResumeUnifiedRefund(ctx context.Context, request UnifiedRefundResumeRequest) (*UnifiedRefundResource, error)
+	ConfirmExternalUnifiedRefund(ctx context.Context, request UnifiedExternalRefundConfirmation) (*UnifiedRefundResource, error)
 }
 
 // CancelableProvider extends Provider with the ability to cancel pending payments.

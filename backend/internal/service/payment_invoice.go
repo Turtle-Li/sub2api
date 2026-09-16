@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicerequest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
+	"github.com/Wei-Shaw/sub2api/internal/payment"
+	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
 	"github.com/google/uuid"
@@ -169,7 +172,24 @@ type PaymentOrderInvoicePresentation struct {
 	FulfillmentStatus       string
 	RefundEntitlementStatus string
 	NeedsManualReview       bool
+	RefundRecovery          *PaymentRefundRecoveryPresentation
 	InvoiceEligible         bool
+}
+
+// PaymentRefundRecoveryPresentation exposes only stable, safe classifications
+// needed by an administrator to recover a paused refund. Provider response
+// bodies and messages never cross this boundary.
+type PaymentRefundRecoveryPresentation struct {
+	State              string     `json:"state"`
+	ReasonCode         string     `json:"reason_code,omitempty"`
+	ProviderStatus     string     `json:"provider_status,omitempty"`
+	FailureCode        string     `json:"failure_code,omitempty"`
+	RefundRequestID    string     `json:"refund_request_id,omitempty"`
+	AmountFen          int64      `json:"amount_fen"`
+	Currency           string     `json:"currency"`
+	CanRetry           bool       `json:"can_retry"`
+	CanConfirmExternal bool       `json:"can_confirm_external"`
+	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
 }
 
 func PaymentInvoiceRecordFromEntity(invoice *dbent.PaymentInvoiceRequest) *PaymentInvoiceRecord {
@@ -261,6 +281,7 @@ func (s *PaymentService) InvoiceOrderPresentations(ctx context.Context, orders [
 			FulfillmentStatus:       PaymentOrderFulfillmentStatus(order, needsReview),
 			RefundEntitlementStatus: paymentOrderRefundEntitlementStatus(order, attempt, needsReview),
 			NeedsManualReview:       needsReview,
+			RefundRecovery:          paymentOrderRefundRecoveryPresentation(attempt),
 			InvoiceEligible:         invoiceOrderEligible(order, needsReview),
 		}
 	}
@@ -271,11 +292,20 @@ func (s *PaymentService) InvoiceOrderPresentations(ctx context.Context, orders [
 // presentation. It intentionally avoids exposing provider identifiers or
 // internal reconciliation metadata through either admin or owner DTOs.
 type paymentOrderUnifiedRefundAttempt struct {
-	Status              string
-	RefundKind          string
-	DeductBalance       bool
-	EntitlementReserved bool
-	NeedsManualReview   bool
+	Status               string
+	RefundKind           string
+	DeductBalance        bool
+	EntitlementReserved  bool
+	NeedsManualReview    bool
+	ProviderStatus       string
+	FailureCode          string
+	PaymentMethod        string
+	RefundRequestID      string
+	ProviderRefundID     string
+	AmountFen            int64
+	UpdatedAt            *time.Time
+	ProviderUpdatedAt    *time.Time
+	HasConflictingReview bool
 }
 
 // latestUnifiedRefundAttemptsForOrders uses one page-scoped query. Reading an
@@ -305,7 +335,13 @@ func (s *PaymentService) latestUnifiedRefundAttemptsForOrders(ctx context.Contex
 	if len(args) == 0 {
 		return result, nil
 	}
-	query := `SELECT order_id, status, refund_kind, deduct_balance, entitlement_reserved, needs_manual_review
+	query := `SELECT order_id, status, refund_kind, deduct_balance, entitlement_reserved, needs_manual_review,
+		COALESCE(provider_status, ''), COALESCE(failure_code, ''), payment_method,
+		COALESCE(CAST(refund_request_id AS TEXT), ''), COALESCE(provider_refund_id, ''), amount_fen,
+		provider_updated_at, updated_at,
+		EXISTS (SELECT 1 FROM unified_payment_refund_events e
+			WHERE e.order_id = unified_payment_refund_attempts.order_id
+			  AND e.action IN ('UNIFIED_REFUND_UNCORRELATED', 'UNIFIED_PAYMENT_EVENT_REJECTED'))
 		FROM unified_payment_refund_attempts
 		WHERE order_id IN (` + strings.Join(placeholders, ",") + `)
 		ORDER BY order_id ASC, created_at DESC, product_refund_no DESC`
@@ -317,10 +353,28 @@ func (s *PaymentService) latestUnifiedRefundAttemptsForOrders(ctx context.Contex
 	for rows.Next() {
 		var orderID int64
 		attempt := &paymentOrderUnifiedRefundAttempt{}
-		if err := rows.Scan(&orderID, &attempt.Status, &attempt.RefundKind, &attempt.DeductBalance, &attempt.EntitlementReserved, &attempt.NeedsManualReview); err != nil {
+		var providerUpdatedAt, attemptUpdatedAt sql.NullTime
+		if err := rows.Scan(&orderID, &attempt.Status, &attempt.RefundKind, &attempt.DeductBalance,
+			&attempt.EntitlementReserved, &attempt.NeedsManualReview, &attempt.ProviderStatus,
+			&attempt.FailureCode, &attempt.PaymentMethod, &attempt.RefundRequestID, &attempt.ProviderRefundID,
+			&attempt.AmountFen, &providerUpdatedAt, &attemptUpdatedAt, &attempt.HasConflictingReview); err != nil {
 			return nil, err
 		}
-		if _, exists := result[orderID]; !exists {
+		updatedAt := attemptUpdatedAt
+		if providerUpdatedAt.Valid {
+			value := providerUpdatedAt.Time.UTC()
+			attempt.ProviderUpdatedAt = &value
+			updatedAt = providerUpdatedAt
+		}
+		if updatedAt.Valid {
+			value := updatedAt.Time.UTC()
+			attempt.UpdatedAt = &value
+		}
+		if existing, exists := result[orderID]; exists {
+			if attempt.NeedsManualReview {
+				existing.HasConflictingReview = true
+			}
+		} else {
 			result[orderID] = attempt
 		}
 	}
@@ -328,6 +382,49 @@ func (s *PaymentService) latestUnifiedRefundAttemptsForOrders(ctx context.Contex
 		return nil, err
 	}
 	return result, nil
+}
+
+func paymentOrderRefundRecoveryPresentation(attempt *paymentOrderUnifiedRefundAttempt) *PaymentRefundRecoveryPresentation {
+	if attempt == nil {
+		return nil
+	}
+	presentation := &PaymentRefundRecoveryPresentation{
+		ProviderStatus:  attempt.ProviderStatus,
+		FailureCode:     attempt.FailureCode,
+		RefundRequestID: attempt.RefundRequestID,
+		AmountFen:       attempt.AmountFen,
+		Currency:        payment.DefaultPaymentCurrency,
+		UpdatedAt:       attempt.UpdatedAt,
+	}
+	balanceShortage := attempt.ProviderStatus == unifiedRefundBalanceInsufficientProviderStatus &&
+		attempt.FailureCode == unifiedRefundProviderRejectedFailureCode && attempt.RefundRequestID != "" &&
+		attempt.ProviderRefundID == "" && attempt.EntitlementReserved && attempt.ProviderUpdatedAt != nil &&
+		attempt.PaymentMethod == unifiedpay.PaymentMethodWechatPay
+	switch attempt.Status {
+	case unifiedRefundPending:
+		if balanceShortage && attempt.NeedsManualReview && !attempt.HasConflictingReview {
+			presentation.State = "WAITING_PROVIDER_BALANCE"
+			presentation.ReasonCode = "WECHAT_MERCHANT_BALANCE_INSUFFICIENT"
+			presentation.CanRetry = true
+			presentation.CanConfirmExternal = true
+		} else if attempt.NeedsManualReview || attempt.HasConflictingReview {
+			presentation.State = "MANUAL_REVIEW"
+			presentation.ReasonCode = "REFUND_MANUAL_REVIEW_REQUIRED"
+		} else if balanceShortage {
+			presentation.State = "RETRY_QUEUED"
+			presentation.ReasonCode = "WECHAT_MERCHANT_BALANCE_INSUFFICIENT"
+		} else {
+			presentation.State = "PROCESSING"
+		}
+	case unifiedpay.RefundStatusSucceeded:
+		presentation.State = "SUCCEEDED"
+	case unifiedpay.RefundStatusFailed:
+		presentation.State = "FAILED"
+	default:
+		presentation.State = "MANUAL_REVIEW"
+		presentation.ReasonCode = "REFUND_STATE_UNRECOGNIZED"
+	}
+	return presentation
 }
 
 // DefaultPaymentOrderRefundEntitlementStatus provides the safe zero-query

@@ -218,54 +218,55 @@ func (h *PaymentHandler) RetryFulfillment(c *gin.Context) {
 }
 
 type AdminPaymentOrderResult struct {
-	ID                      int64                         `json:"id"`
-	UserID                  int64                         `json:"user_id"`
-	UserEmail               string                        `json:"user_email,omitempty"`
-	UserName                string                        `json:"user_name,omitempty"`
-	UserNotes               *string                       `json:"user_notes,omitempty"`
-	Amount                  float64                       `json:"amount"`
-	PayAmount               float64                       `json:"pay_amount"`
-	FeeRate                 float64                       `json:"fee_rate"`
-	Currency                string                        `json:"currency"`
-	RechargeCode            string                        `json:"recharge_code,omitempty"`
-	OutTradeNo              string                        `json:"out_trade_no"`
-	PaymentType             string                        `json:"payment_type"`
-	PaymentTradeNo          string                        `json:"payment_trade_no,omitempty"`
-	PayURL                  *string                       `json:"pay_url,omitempty"`
-	QRCode                  *string                       `json:"qr_code,omitempty"`
-	QRCodeImg               *string                       `json:"qr_code_img,omitempty"`
-	OrderType               string                        `json:"order_type"`
-	PlanID                  *int64                        `json:"plan_id,omitempty"`
-	SubscriptionGroupID     *int64                        `json:"subscription_group_id,omitempty"`
-	SubscriptionDays        *int                          `json:"subscription_days,omitempty"`
-	ProviderInstanceID      *string                       `json:"provider_instance_id,omitempty"`
-	ProviderKey             *string                       `json:"provider_key,omitempty"`
-	Status                  string                        `json:"status"`
-	RefundAmount            float64                       `json:"refund_amount"`
-	RefundRequestedAmount   float64                       `json:"refund_requested_amount"`
-	RefundReason            *string                       `json:"refund_reason,omitempty"`
-	RefundAt                *time.Time                    `json:"refund_at,omitempty"`
-	ForceRefund             bool                          `json:"force_refund,omitempty"`
-	RefundRequestedAt       *time.Time                    `json:"refund_requested_at,omitempty"`
-	RefundRequestReason     *string                       `json:"refund_request_reason,omitempty"`
-	RefundRequestedBy       *string                       `json:"refund_requested_by,omitempty"`
-	ExpiresAt               time.Time                     `json:"expires_at"`
-	PaidAt                  *time.Time                    `json:"paid_at,omitempty"`
-	CompletedAt             *time.Time                    `json:"completed_at,omitempty"`
-	FailedAt                *time.Time                    `json:"failed_at,omitempty"`
-	FailedReason            *string                       `json:"failed_reason,omitempty"`
-	ClientIP                string                        `json:"client_ip,omitempty"`
-	SrcHost                 string                        `json:"src_host,omitempty"`
-	SrcURL                  *string                       `json:"src_url,omitempty"`
-	CreatedAt               time.Time                     `json:"created_at"`
-	UpdatedAt               time.Time                     `json:"updated_at"`
-	ProductSnapshot         map[string]any                `json:"product_snapshot,omitempty"`
-	PaymentStatus           string                        `json:"payment_status"`
-	FulfillmentStatus       string                        `json:"fulfillment_status"`
-	RefundEntitlementStatus string                        `json:"refund_entitlement_status"`
-	NeedsManualReview       bool                          `json:"needs_manual_review"`
-	InvoiceEligible         bool                          `json:"invoice_eligible"`
-	Invoice                 *service.PaymentInvoiceRecord `json:"invoice,omitempty"`
+	ID                      int64                                      `json:"id"`
+	UserID                  int64                                      `json:"user_id"`
+	UserEmail               string                                     `json:"user_email,omitempty"`
+	UserName                string                                     `json:"user_name,omitempty"`
+	UserNotes               *string                                    `json:"user_notes,omitempty"`
+	Amount                  float64                                    `json:"amount"`
+	PayAmount               float64                                    `json:"pay_amount"`
+	FeeRate                 float64                                    `json:"fee_rate"`
+	Currency                string                                     `json:"currency"`
+	RechargeCode            string                                     `json:"recharge_code,omitempty"`
+	OutTradeNo              string                                     `json:"out_trade_no"`
+	PaymentType             string                                     `json:"payment_type"`
+	PaymentTradeNo          string                                     `json:"payment_trade_no,omitempty"`
+	PayURL                  *string                                    `json:"pay_url,omitempty"`
+	QRCode                  *string                                    `json:"qr_code,omitempty"`
+	QRCodeImg               *string                                    `json:"qr_code_img,omitempty"`
+	OrderType               string                                     `json:"order_type"`
+	PlanID                  *int64                                     `json:"plan_id,omitempty"`
+	SubscriptionGroupID     *int64                                     `json:"subscription_group_id,omitempty"`
+	SubscriptionDays        *int                                       `json:"subscription_days,omitempty"`
+	ProviderInstanceID      *string                                    `json:"provider_instance_id,omitempty"`
+	ProviderKey             *string                                    `json:"provider_key,omitempty"`
+	Status                  string                                     `json:"status"`
+	RefundAmount            float64                                    `json:"refund_amount"`
+	RefundRequestedAmount   float64                                    `json:"refund_requested_amount"`
+	RefundReason            *string                                    `json:"refund_reason,omitempty"`
+	RefundAt                *time.Time                                 `json:"refund_at,omitempty"`
+	ForceRefund             bool                                       `json:"force_refund,omitempty"`
+	RefundRequestedAt       *time.Time                                 `json:"refund_requested_at,omitempty"`
+	RefundRequestReason     *string                                    `json:"refund_request_reason,omitempty"`
+	RefundRequestedBy       *string                                    `json:"refund_requested_by,omitempty"`
+	ExpiresAt               time.Time                                  `json:"expires_at"`
+	PaidAt                  *time.Time                                 `json:"paid_at,omitempty"`
+	CompletedAt             *time.Time                                 `json:"completed_at,omitempty"`
+	FailedAt                *time.Time                                 `json:"failed_at,omitempty"`
+	FailedReason            *string                                    `json:"failed_reason,omitempty"`
+	ClientIP                string                                     `json:"client_ip,omitempty"`
+	SrcHost                 string                                     `json:"src_host,omitempty"`
+	SrcURL                  *string                                    `json:"src_url,omitempty"`
+	CreatedAt               time.Time                                  `json:"created_at"`
+	UpdatedAt               time.Time                                  `json:"updated_at"`
+	ProductSnapshot         map[string]any                             `json:"product_snapshot,omitempty"`
+	PaymentStatus           string                                     `json:"payment_status"`
+	FulfillmentStatus       string                                     `json:"fulfillment_status"`
+	RefundEntitlementStatus string                                     `json:"refund_entitlement_status"`
+	NeedsManualReview       bool                                       `json:"needs_manual_review"`
+	RefundRecovery          *service.PaymentRefundRecoveryPresentation `json:"refund_recovery,omitempty"`
+	InvoiceEligible         bool                                       `json:"invoice_eligible"`
+	Invoice                 *service.PaymentInvoiceRecord              `json:"invoice,omitempty"`
 }
 
 func sanitizeAdminPaymentOrdersForResponse(orders []*dbent.PaymentOrder, presentations map[int64]service.PaymentOrderInvoicePresentation) []*AdminPaymentOrderResult {
@@ -333,6 +334,7 @@ func sanitizeAdminPaymentOrderForResponse(order *dbent.PaymentOrder, projected .
 		FulfillmentStatus:       presentation.FulfillmentStatus,
 		RefundEntitlementStatus: presentation.RefundEntitlementStatus,
 		NeedsManualReview:       presentation.NeedsManualReview,
+		RefundRecovery:          presentation.RefundRecovery,
 		InvoiceEligible:         presentation.InvoiceEligible,
 		Invoice:                 presentation.Invoice,
 	}
@@ -376,6 +378,15 @@ type AdminSubscriptionGrantBackfillRequest struct {
 	TermEndAt      time.Time `json:"term_end_at" binding:"required"`
 	EvidenceSource string    `json:"evidence_source"`
 	EvidenceDetail string    `json:"evidence_detail"`
+}
+
+// AdminExternalRefundConfirmationRequest records evidence for money returned
+// outside the provider API. Refund identity and amount remain server-owned.
+type AdminExternalRefundConfirmationRequest struct {
+	MethodCode        string    `json:"method_code" binding:"required"`
+	ExternalReference string    `json:"external_reference" binding:"required"`
+	RefundedAt        time.Time `json:"refunded_at" binding:"required"`
+	EvidenceDetail    string    `json:"evidence_detail" binding:"required"`
 }
 
 // GetRefundReview returns the current server-calculated cash amount and the
@@ -483,6 +494,52 @@ func (h *PaymentHandler) QueryAndFinalizeRefund(c *gin.Context) {
 	}
 
 	result, err := h.paymentService.QueryAndFinalizeRefund(c.Request.Context(), orderID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+// ResumeUnifiedRefund releases a proven WeChat merchant-balance pause while
+// retaining the original central refund request and provider refund number.
+// POST /api/v1/admin/payment/orders/:id/refund/retry
+func (h *PaymentHandler) ResumeUnifiedRefund(c *gin.Context) {
+	if !middleware.EnforceStepUpAlways(c, h.totpService, h.userService) {
+		return
+	}
+	orderID, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+	result, err := h.paymentService.ResumeUnifiedRefund(c.Request.Context(), orderID, getAdminIDFromContext(c))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+// ConfirmExternalUnifiedRefund confirms that the exact pending refund was
+// completed outside the provider API and then reclaims its reserved benefit.
+// POST /api/v1/admin/payment/orders/:id/refund/confirm-external
+func (h *PaymentHandler) ConfirmExternalUnifiedRefund(c *gin.Context) {
+	if !middleware.EnforceStepUpAlways(c, h.totpService, h.userService) {
+		return
+	}
+	orderID, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req AdminExternalRefundConfirmationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.paymentService.ConfirmExternalUnifiedRefund(c.Request.Context(), orderID, getAdminIDFromContext(c), service.ExternalRefundConfirmationInput{
+		MethodCode: req.MethodCode, ExternalReference: req.ExternalReference,
+		RefundedAt: req.RefundedAt, EvidenceDetail: req.EvidenceDetail,
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

@@ -158,6 +158,19 @@ export interface RefundOrderRequest {
   reason_detail?: string
 }
 
+export type ExternalRefundMethodCode =
+  | 'wechat_transfer'
+  | 'original_channel_manual'
+  | 'bank_transfer'
+  | 'other'
+
+export interface ExternalRefundConfirmationRequest {
+  method_code: ExternalRefundMethodCode
+  external_reference: string
+  refunded_at: string
+  evidence_detail: string
+}
+
 export type OwnerTestPaymentType = 'alipay' | 'wxpay'
 
 export interface OwnerTestOrderRequest {
@@ -295,6 +308,16 @@ export const adminPaymentAPI = {
   /** Query and finalize a pending refund */
   queryRefund(id: number) {
     return apiClient.post<RefundResult>(`/admin/payment/orders/${id}/refund/query`)
+  },
+
+  /** Resume the exact paused central refund after the merchant balance is replenished. */
+  retryRefund(id: number) {
+    return apiClient.post<RefundResult>(`/admin/payment/orders/${id}/refund/retry`)
+  },
+
+  /** Confirm an externally completed refund, then reclaim its reserved entitlement. */
+  confirmExternalRefund(id: number, data: ExternalRefundConfirmationRequest) {
+    return apiClient.post<RefundResult>(`/admin/payment/orders/${id}/refund/confirm-external`, data)
   },
 
   // ==================== Channels ====================

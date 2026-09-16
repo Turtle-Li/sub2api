@@ -120,6 +120,27 @@ export type RefundEntitlementStatus =
   | 'MANUAL_REVIEW'
   | 'HISTORICAL_UNVERIFIED'
 
+export type RefundRecoveryState =
+  | 'WAITING_PROVIDER_BALANCE'
+  | 'RETRY_QUEUED'
+  | 'PROCESSING'
+  | 'MANUAL_REVIEW'
+  | 'SUCCEEDED'
+  | 'FAILED'
+
+export interface PaymentRefundRecovery {
+  state: RefundRecoveryState
+  reason_code?: string
+  provider_status?: string
+  failure_code?: string
+  refund_request_id?: string
+  amount_fen: number
+  currency: string
+  can_retry: boolean
+  can_confirm_external: boolean
+  updated_at?: string
+}
+
 export interface OrderProductSnapshot {
   kind?: string
   name?: string
@@ -176,6 +197,8 @@ export interface PaymentOrder {
   /** Current disposition of benefits after a refund; fulfillment_status remains the historical delivery fact. */
   refund_entitlement_status?: RefundEntitlementStatus
   needs_manual_review?: boolean
+  /** Safe, admin-facing recovery state for the latest unified refund attempt. */
+  refund_recovery?: PaymentRefundRecovery
   product_snapshot?: OrderProductSnapshot
   user_email?: string
   user_name?: string

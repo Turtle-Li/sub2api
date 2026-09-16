@@ -147,6 +147,53 @@ func TestSubscriptionGrantBackfillSuggestionUsesUnoccupiedHistoricalTerm(t *test
 	require.True(t, after.CanRefund)
 }
 
+func TestSubscriptionGrantBackfillAcceptsHistoricalSubsecondLifecycleDrift(t *testing.T) {
+	ctx := context.Background()
+	svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
+
+	// Production order #3 has this legacy shape: the expiry was stored at an
+	// exact second while the subscription start retained a few milliseconds.
+	// The immutable snapshot and assignment audit still prove an exact 30-day
+	// purchase, so the audited backfill should use the whole-second term.
+	_, err := svc.entClient.UserSubscription.UpdateOneID(subscription.ID).
+		SetStartsAt(termStart.Add(42 * time.Millisecond)).
+		SetExpiresAt(termEnd).
+		Save(ctx)
+	require.NoError(t, err)
+
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, review.SubscriptionBackfill)
+	require.True(t, review.SubscriptionBackfill.SuggestedTermStartAt.Equal(termStart))
+	require.True(t, review.SubscriptionBackfill.SuggestedTermEndAt.Equal(termEnd))
+
+	after, err := svc.BackfillSubscriptionGrant(ctx, order.ID, SubscriptionGrantBackfillInput{
+		AuditRevision:  review.SubscriptionBackfill.AuditRevision,
+		SubscriptionID: subscription.ID,
+		TermStartAt:    review.SubscriptionBackfill.SuggestedTermStartAt,
+		TermEndAt:      review.SubscriptionBackfill.SuggestedTermEndAt,
+		EvidenceDetail: backfillTestEvidenceDetail,
+		OperatorID:     71,
+	})
+	require.NoError(t, err)
+	require.True(t, after.CanRefund)
+}
+
+func TestSubscriptionGrantBackfillRejectsLifecycleDriftBeyondCompatibilityWindow(t *testing.T) {
+	ctx := context.Background()
+	svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)
+
+	_, err := svc.entClient.UserSubscription.UpdateOneID(subscription.ID).
+		SetStartsAt(termStart.Add(refundBackfillLifecyclePrecisionTolerance + time.Millisecond)).
+		SetExpiresAt(termEnd).
+		Save(ctx)
+	require.NoError(t, err)
+
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.Nil(t, review.SubscriptionBackfill)
+}
+
 func TestSubscriptionGrantBackfillRevisionTracksOccupiedTerms(t *testing.T) {
 	ctx := context.Background()
 	svc, order, subscription, termStart, termEnd := newLegacySubscriptionGrantBackfillFixture(t, true)

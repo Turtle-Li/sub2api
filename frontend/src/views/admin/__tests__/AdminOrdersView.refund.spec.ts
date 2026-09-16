@@ -9,6 +9,8 @@ const {
   backfillSubscriptionGrant,
   refundOrder,
   queryRefund,
+  retryRefund,
+  confirmExternalRefund,
   showSuccess,
   showWarning,
   showError,
@@ -21,6 +23,8 @@ const {
   backfillSubscriptionGrant: vi.fn(),
   refundOrder: vi.fn(),
   queryRefund: vi.fn(),
+  retryRefund: vi.fn(),
+  confirmExternalRefund: vi.fn(),
   showSuccess: vi.fn(),
   showWarning: vi.fn(),
   showError: vi.fn(),
@@ -29,8 +33,8 @@ const {
 }))
 
 vi.mock('@/api/admin/payment', () => ({
-  adminPaymentAPI: { getOrders, getOrder, getRefundReview, backfillSubscriptionGrant, refundOrder, queryRefund },
-  default: { getOrders, getOrder, getRefundReview, backfillSubscriptionGrant, refundOrder, queryRefund }
+  adminPaymentAPI: { getOrders, getOrder, getRefundReview, backfillSubscriptionGrant, refundOrder, queryRefund, retryRefund, confirmExternalRefund },
+  default: { getOrders, getOrder, getRefundReview, backfillSubscriptionGrant, refundOrder, queryRefund, retryRefund, confirmExternalRefund }
 }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess, showWarning, showError }) }))
@@ -387,6 +391,73 @@ describe('admin order management', () => {
     expect(showSuccess).toHaveBeenCalledWith('payment.admin.subscriptionGrantBackfillSuccess')
     expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-review')).toBe('quote-after-backfill')
     expect(wrapper.find('[data-test="refund-dialog"]').exists()).toBe(true)
+    expect(getOrders).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('resumes the exact balance-paused refund behind step-up', async () => {
+    const paused = {
+      ...order(4, 'REFUND_PENDING'),
+      refund_recovery: {
+        state: 'WAITING_PROVIDER_BALANCE',
+        reason_code: 'WECHAT_MERCHANT_BALANCE_INSUFFICIENT',
+        provider_status: 'HTTP_403_NOT_ENOUGH',
+        failure_code: 'refund_submit_provider_rejected',
+        refund_request_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        amount_fen: 10,
+        currency: 'CNY',
+        can_retry: true,
+        can_confirm_external: true,
+      },
+    }
+    retryRefund.mockResolvedValue({ data: { success: false, warning: 'pending' } })
+    const wrapper = await mountOrders([paused])
+
+    await buttonForOrder(wrapper, 4, 'payment.admin.retryPausedRefund').trigger('click')
+    await flushPromises()
+
+    expect(stepUpRun).toHaveBeenCalledTimes(1)
+    expect(retryRefund).toHaveBeenCalledWith(4)
+    expect(showSuccess).toHaveBeenCalledWith('payment.admin.refundRetryQueued')
+    expect(getOrders).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('confirms an external refund without allowing the administrator to change its amount', async () => {
+    const paused = {
+      ...order(4, 'REFUND_PENDING'),
+      refund_recovery: {
+        state: 'WAITING_PROVIDER_BALANCE',
+        reason_code: 'WECHAT_MERCHANT_BALANCE_INSUFFICIENT',
+        provider_status: 'HTTP_403_NOT_ENOUGH',
+        failure_code: 'refund_submit_provider_rejected',
+        refund_request_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        amount_fen: 10,
+        currency: 'CNY',
+        can_retry: true,
+        can_confirm_external: true,
+      },
+    }
+    confirmExternalRefund.mockResolvedValue({ data: { success: true } })
+    const wrapper = await mountOrders([paused])
+
+    await buttonForOrder(wrapper, 4, 'payment.admin.externalRefundAction').trigger('click')
+    await wrapper.get('#external-refund-reference').setValue('wx-transfer-20260916-1')
+    await wrapper.get('#external-refund-time').setValue('2026-09-15T12:30')
+    await wrapper.get('#external-refund-evidence').setValue('Verified recipient and exact transfer amount')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(stepUpRun).toHaveBeenCalledTimes(1)
+    expect(confirmExternalRefund).toHaveBeenCalledWith(4, expect.objectContaining({
+      method_code: 'wechat_transfer',
+      external_reference: 'wx-transfer-20260916-1',
+      refunded_at: expect.any(String),
+      evidence_detail: 'Verified recipient and exact transfer amount',
+    }))
+    expect(confirmExternalRefund.mock.calls[0][1]).not.toHaveProperty('amount')
+    expect(confirmExternalRefund.mock.calls[0][1]).not.toHaveProperty('amount_fen')
+    expect(showSuccess).toHaveBeenCalledWith('payment.admin.externalRefundSuccess')
     expect(getOrders).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })

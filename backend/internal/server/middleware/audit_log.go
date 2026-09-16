@@ -164,6 +164,10 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	// payment audit stores only the invoice identifier, revision, and state.
 	"POST /api/v1/payment/orders/:id/invoice":      {},
 	"PUT /api/v1/admin/payment/orders/:id/invoice": {},
+	// External refund evidence may describe a recipient or transfer. The
+	// dedicated immutable refund audit keeps the bounded, validated evidence;
+	// the generic request audit must not duplicate the raw body.
+	"POST /api/v1/admin/payment/orders/:id/refund/confirm-external": {},
 }
 
 // NewAuditLogMiddleware 创建审计中间件。

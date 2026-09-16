@@ -27,4 +27,21 @@ describe('admin payment refund API', () => {
     expect(get).toHaveBeenCalledWith('/admin/payment/orders/51/refund-review')
     expect(post).toHaveBeenCalledWith('/admin/payment/orders/51/refund', request)
   })
+
+  it('uses dedicated recovery endpoints without accepting a client refund amount', async () => {
+    const confirmation = {
+      method_code: 'wechat_transfer' as const,
+      external_reference: 'wx-transfer-20260916-1',
+      refunded_at: '2026-09-16T04:00:00.000Z',
+      evidence_detail: 'Verified recipient and exact transfer amount',
+    }
+
+    await adminPaymentAPI.retryRefund(4)
+    await adminPaymentAPI.confirmExternalRefund(4, confirmation)
+
+    expect(post).toHaveBeenNthCalledWith(1, '/admin/payment/orders/4/refund/retry')
+    expect(post).toHaveBeenNthCalledWith(2, '/admin/payment/orders/4/refund/confirm-external', confirmation)
+    expect(confirmation).not.toHaveProperty('amount')
+    expect(confirmation).not.toHaveProperty('amount_fen')
+  })
 })

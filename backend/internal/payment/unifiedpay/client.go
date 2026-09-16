@@ -208,6 +208,46 @@ func (c *client) getRefund(ctx context.Context, refundRequestID string) (*refund
 	return result, nil
 }
 
+func (c *client) resumeRefund(ctx context.Context, refundRequestID, idempotencyKey string, input resumeRefundRequest) (*refundResponse, error) {
+	if !validUUID(refundRequestID) || !validIdentifier(idempotencyKey, 16, 128) || !validOperatorRef(input.OperatorRef) {
+		return nil, ErrInvalidRequest
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	target := "/v1/refund-requests/" + refundRequestID + "/resume"
+	responseBody, err := c.do(ctx, http.MethodPost, target, body, idempotencyKey, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.decodeRefund(responseBody)
+	if err != nil || !strings.EqualFold(result.RefundRequestID, refundRequestID) {
+		return nil, ErrInvalidResponse
+	}
+	return result, nil
+}
+
+func (c *client) confirmExternalRefund(ctx context.Context, refundRequestID, idempotencyKey string, input confirmExternalRefundRequest) (*refundResponse, error) {
+	if !validUUID(refundRequestID) || !validIdentifier(idempotencyKey, 16, 128) || !validConfirmExternalRefundRequest(input) {
+		return nil, ErrInvalidRequest
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	target := "/v1/refund-requests/" + refundRequestID + "/confirm-external"
+	responseBody, err := c.do(ctx, http.MethodPost, target, body, idempotencyKey, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.decodeRefund(responseBody)
+	if err != nil || !strings.EqualFold(result.RefundRequestID, refundRequestID) {
+		return nil, ErrInvalidResponse
+	}
+	return result, nil
+}
+
 func (c *client) decodePaymentOrder(body []byte) (*paymentOrderResponse, error) {
 	var result paymentOrderResponse
 	if err := strictUnmarshalObject(body, &result, false); err != nil {

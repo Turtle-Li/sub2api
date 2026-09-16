@@ -438,7 +438,11 @@ func (s *PaymentService) reserveReviewedRefundEntitlement(ctx context.Context, c
 		if err != nil {
 			return nil, err
 		}
-		newExpiry := review.Subscription.NewExpiresAt.UTC().Truncate(time.Second)
+		// Preserve the exact grant boundary. Future terms can begin with
+		// sub-second precision; truncating here makes the aggregate subscription
+		// end slightly precede the preceding grant and later breaks provenance
+		// checks for otherwise exact purchased durations.
+		newExpiry := review.Subscription.NewExpiresAt.UTC()
 		cashMinor := int64(math.Round(review.DefaultRefundAmount * 100))
 		res, err := client.ExecContext(ctx, `UPDATE payment_subscription_grants SET
 			reserved_seconds = $2, reserved_cash_minor = $3,

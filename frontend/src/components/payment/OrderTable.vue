@@ -35,6 +35,18 @@
           kind="refundEntitlement"
           :value="row.refund_entitlement_status"
         />
+        <p
+          v-if="row.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'"
+          class="max-w-52 text-xs leading-5 text-amber-700 dark:text-amber-300"
+        >
+          {{ t('payment.admin.refundMerchantBalanceInsufficientShort') }}
+        </p>
+        <p
+          v-else-if="row.refund_recovery?.state === 'RETRY_QUEUED'"
+          class="max-w-52 text-xs leading-5 text-blue-700 dark:text-blue-300"
+        >
+          {{ t('payment.admin.refundRetryQueuedShort') }}
+        </p>
         <p v-if="row.needs_manual_review && fulfillmentFact(row) !== 'MANUAL_REVIEW'" class="text-xs text-red-700 dark:text-red-300">{{ t('payment.orderOps.reviewRequired') }}</p>
       </div>
     </template>

@@ -197,7 +197,7 @@
           <p class="text-xs leading-5 text-blue-800 dark:text-blue-200">{{ t('payment.admin.subscriptionGrantBackfillAmountHint') }}</p>
         </section>
         <div
-          v-else-if="!review.can_refund"
+          v-else-if="!review.can_refund && !review.requires_manual_review"
           role="alert"
           class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200"
         >

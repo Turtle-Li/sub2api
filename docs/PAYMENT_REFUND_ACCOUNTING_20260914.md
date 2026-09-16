@@ -291,3 +291,64 @@ fallback must never turn a rejected internal probe into HTTP 200 HTML. CI
 builds frontend assets and runs embedded web/common-route integration tests.
 Canonical release and runtime rollback consumers independently reject invalid
 readiness bodies, including HTTP 200 HTML and nonzero counts.
+
+## Provider-balance pause and operator recovery
+
+A WeChat `HTTP_403_NOT_ENOUGH` response means the merchant refund account did
+not have enough available funds. It is not a pricing or proration result. The
+central refund remains `UNKNOWN`, retains its original request and provider
+refund numbers, and keeps the product entitlement reserved. Sub2 projects only
+the bounded `provider_status`, `failure_code`, and central update time; raw
+provider messages and bodies never enter the product database.
+
+Migration 251 can hydrate those safe fields for an existing attempt from the
+latest strictly correlated `UNIFIED_REFUND_RESULT` event. Both the product
+refund number and central refund request ID must match. This lets a known
+balance shortage appear as a paused recovery state after deployment without a
+provider query or a new money operation.
+
+The admin order view distinguishes the following states: waiting for merchant
+balance, retry queued, processing, manual review, succeeded, and failed. A
+waiting-balance order explicitly says that cash has not been confirmed and its
+benefit is still reserved. Two fresh-TOTP actions are available only for the
+exact balance-shortage fence and only while no separate correlation or signed
+event conflict exists:
+
+- **Balance replenished, retry** calls the central `resume` action with a stable
+  idempotency key for the current balance-shortage generation. If WeChat
+  rejects the resumed request for insufficient balance again, the later
+  trusted central update creates a new generation and therefore a new key;
+  network retries inside either generation keep the same key. The action never
+  creates a second Sub2 attempt or central refund.
+  The central worker first queries the original provider refund number and may
+  resubmit only when the provider proves that exact number does not exist.
+- **Refunded externally** records evidence for money already returned outside
+  the provider API. The browser supplies method, external reference, refund
+  time, and a bounded evidence summary. It cannot supply or change the amount.
+  Its idempotency key is stable for the same proven shortage generation and
+  the same normalized evidence. It changes after either a later trusted
+  provider update or an administrator correction to the method, reference,
+  time, or evidence, so a cached stale-fence rejection cannot poison a later
+  valid confirmation while an exact network retry remains safe.
+  The central money authority atomically records the manual settlement,
+  creates the refund transaction and debit fund event, releases the monetary
+  reservation, advances the order/refund state, and enqueues the ordinary
+  signed success webhook. Sub2 reclaims the reserved entitlement only after
+  that trusted central success is observed.
+
+An uncertain HTTP response leaves the local reservation and manual fence in
+place. Refreshing or repeating the same action is safe through central
+idempotency and the signed webhook path. Operators must not use external
+confirmation until the customer has actually received the money.
+
+## Historical subscription grant repair
+
+Historical subscription orders still require audited grant backfill before
+automatic refund review. The repair uses the immutable product snapshot,
+`SUBSCRIPTION_ASSIGNED` audit, exact purchased duration, user/group identity,
+and the current subscription timeline. A tolerance of at most one second is
+allowed only when comparing legacy timestamp precision; the recorded grant
+uses the exact purchased duration and must not overlap any later grant. Larger
+drift, missing evidence, or overlapping entitlement remains blocked. New
+refund reservations retain subsecond precision so the historical mismatch does
+not recur.

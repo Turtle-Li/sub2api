@@ -50,10 +50,22 @@
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retryRefund') }}
             </button>
-            <button v-else-if="row.status === 'REFUND_PENDING'" :disabled="refundMutationBusy" @click="handleQueryRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-60 dark:text-orange-400 dark:hover:bg-orange-900/20">
-              <Icon name="refresh" size="sm" :class="refundQueryingIds.has(row.id) ? 'animate-spin' : ''" />
-              {{ t('payment.admin.queryRefundStatus') }}
-            </button>
+            <template v-else-if="row.status === 'REFUND_PENDING'">
+              <template v-if="row.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'">
+                <button :disabled="refundMutationBusy" @click="handleRetryPausedRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-60 dark:text-blue-300 dark:hover:bg-blue-900/20">
+                  <Icon name="refresh" size="sm" :class="refundRetryingIds.has(row.id) ? 'animate-spin' : ''" />
+                  {{ t('payment.admin.retryPausedRefund') }}
+                </button>
+                <button :disabled="refundMutationBusy" @click="openExternalRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-60 dark:text-amber-300 dark:hover:bg-amber-900/20">
+                  <Icon name="check" size="sm" />
+                  {{ t('payment.admin.externalRefundAction') }}
+                </button>
+              </template>
+              <button v-else :disabled="refundMutationBusy" @click="handleQueryRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-60 dark:text-orange-400 dark:hover:bg-orange-900/20">
+                <Icon name="refresh" size="sm" :class="refundQueryingIds.has(row.id) ? 'animate-spin' : ''" />
+                {{ t('payment.admin.queryRefundStatus') }}
+              </button>
+            </template>
             <button v-else-if="row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED'" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
               <Icon name="dollar" size="sm" />
               {{ t('payment.admin.refund') }}
@@ -81,6 +93,11 @@
           <div v-if="selectedOrder.refund_amount"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundAmount') }}</p><p class="text-sm font-medium text-red-600 dark:text-red-400">{{ creditedAmountSymbol }}{{ selectedOrder.refund_amount.toFixed(2) }}</p></div>
           <div v-if="selectedOrder.refund_requested_amount"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.pendingRefundAmount') }}</p><p class="text-sm font-medium text-amber-600 dark:text-amber-400">{{ creditedAmountSymbol }}{{ selectedOrder.refund_requested_amount.toFixed(2) }}</p></div>
           <div v-if="selectedOrder.refund_reason" class="col-span-2"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundReason') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ selectedOrder.refund_reason }}</p></div>
+          <div v-if="selectedOrder.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'" class="col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+            <p class="text-xs font-semibold text-amber-900 dark:text-amber-100">{{ t('payment.admin.refundRecoveryStatus') }}</p>
+            <p class="mt-1 text-sm leading-6 text-amber-800 dark:text-amber-200">{{ t('payment.admin.refundMerchantBalanceInsufficientDetail') }}</p>
+            <p v-if="selectedOrder.refund_recovery.updated_at" class="mt-1 text-xs text-amber-700 dark:text-amber-300">{{ formatDateTime(selectedOrder.refund_recovery.updated_at) }}</p>
+          </div>
           <!-- Refund request info -->
           <div v-if="selectedOrder.refund_requested_at" class="col-span-2 border-t border-gray-200 pt-3 dark:border-dark-600">
             <p class="mb-2 text-xs font-medium text-purple-600 dark:text-purple-400">{{ t('payment.admin.refundRequestInfo') }}</p>
@@ -146,6 +163,46 @@
       @backfill="handleSubscriptionGrantBackfill"
       @cancel="closeRefundDialog"
     />
+    <BaseDialog :show="!!externalRefundTarget" :title="t('payment.admin.externalRefundTitle')" @close="closeExternalRefundDialog">
+      <form v-if="externalRefundTarget" class="space-y-4" @submit.prevent="handleConfirmExternalRefund">
+        <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          <p class="font-semibold">{{ t('payment.admin.externalRefundWarningTitle') }}</p>
+          <p class="mt-1">{{ t('payment.admin.externalRefundWarning') }}</p>
+        </div>
+        <div class="rounded-lg bg-gray-50 p-3 text-sm dark:bg-dark-700">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
+            <span class="font-mono text-gray-900 dark:text-white">#{{ externalRefundTarget.id }}</span>
+          </div>
+          <div class="mt-2 flex items-center justify-between gap-3">
+            <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.externalRefundExactAmount') }}</span>
+            <span class="font-semibold text-gray-900 dark:text-white">{{ recoveryAmount(externalRefundTarget) }}</span>
+          </div>
+        </div>
+        <div>
+          <label class="input-label" for="external-refund-method">{{ t('payment.admin.externalRefundMethod') }}</label>
+          <Select id="external-refund-method" v-model="externalRefundForm.method_code" :options="externalRefundMethodOptions" class="mt-1 w-full" />
+        </div>
+        <div>
+          <label class="input-label" for="external-refund-reference">{{ t('payment.admin.externalRefundReference') }}</label>
+          <input id="external-refund-reference" v-model="externalRefundForm.external_reference" class="input mt-1 w-full" maxlength="160" :placeholder="t('payment.admin.externalRefundReferencePlaceholder')" />
+        </div>
+        <div>
+          <label class="input-label" for="external-refund-time">{{ t('payment.admin.externalRefundTime') }}</label>
+          <input id="external-refund-time" v-model="externalRefundForm.refunded_at" type="datetime-local" class="input mt-1 w-full" />
+        </div>
+        <div>
+          <label class="input-label" for="external-refund-evidence">{{ t('payment.admin.externalRefundEvidence') }}</label>
+          <textarea id="external-refund-evidence" v-model="externalRefundForm.evidence_detail" rows="3" maxlength="240" class="input mt-1 w-full" :placeholder="t('payment.admin.externalRefundEvidencePlaceholder')" />
+        </div>
+        <div class="flex justify-end gap-3 border-t border-gray-200 pt-4 dark:border-dark-600">
+          <button type="button" class="btn btn-secondary" :disabled="externalRefundSubmitting" @click="closeExternalRefundDialog">{{ t('common.cancel') }}</button>
+          <button type="submit" class="btn btn-danger" :disabled="!externalRefundFormValid || externalRefundSubmitting">
+            {{ externalRefundSubmitting ? t('common.processing') : t('payment.admin.externalRefundConfirm') }}
+          </button>
+        </div>
+      </form>
+    </BaseDialog>
     <TotpStepUpDialog :controller="stepUp" />
   </AppLayout>
 </template>
@@ -156,7 +213,14 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
-import type { RefundOrderRequest, RefundReasonCode, RefundReview, SubscriptionGrantBackfillRequest } from '@/api/admin/payment'
+import type {
+  ExternalRefundConfirmationRequest,
+  ExternalRefundMethodCode,
+  RefundOrderRequest,
+  RefundReasonCode,
+  RefundReview,
+  SubscriptionGrantBackfillRequest,
+} from '@/api/admin/payment'
 import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import type { PaymentOrder } from '@/types/payment'
@@ -215,10 +279,30 @@ const refundSubmitting = ref(false)
 const refundBackfilling = ref(false)
 const refundWarning = ref('')
 const refundQueryingIds = ref(new Set<number>())
+const refundRetryingIds = ref(new Set<number>())
+const externalRefundTarget = ref<PaymentOrder | null>(null)
+const externalRefundSubmitting = ref(false)
+const externalRefundForm = reactive({
+  method_code: 'wechat_transfer' as ExternalRefundMethodCode,
+  external_reference: '',
+  refunded_at: '',
+  evidence_detail: '',
+})
 const orderAuditLogs = ref<AuditLog[]>([])
 const creditedAmountSymbol = currencySymbol('USD')
 const stepUp = useStepUp()
-const refundMutationBusy = computed(() => refundSubmitting.value || refundBackfilling.value || refundQueryingIds.value.size > 0)
+const refundMutationBusy = computed(() => refundSubmitting.value || refundBackfilling.value || externalRefundSubmitting.value || refundQueryingIds.value.size > 0 || refundRetryingIds.value.size > 0)
+const externalRefundMethodOptions = computed(() => [
+  { value: 'wechat_transfer', label: t('payment.admin.externalRefundMethods.wechat_transfer') },
+  { value: 'original_channel_manual', label: t('payment.admin.externalRefundMethods.original_channel_manual') },
+  { value: 'bank_transfer', label: t('payment.admin.externalRefundMethods.bank_transfer') },
+  { value: 'other', label: t('payment.admin.externalRefundMethods.other') },
+])
+const externalRefundFormValid = computed(() => {
+  const timestamp = new Date(externalRefundForm.refunded_at).getTime()
+  return !!externalRefundTarget.value && !!externalRefundForm.external_reference.trim() &&
+    !!externalRefundForm.evidence_detail.trim() && Number.isFinite(timestamp) && timestamp <= Date.now() + 5 * 60 * 1000
+})
 
 function paymentAmountSymbol(order: PaymentOrder | null | undefined): string {
   return currencySymbol(order?.currency)
@@ -490,6 +574,77 @@ async function handleQueryRefund(order: PaymentOrder) {
     const next = new Set(refundQueryingIds.value)
     next.delete(orderID)
     refundQueryingIds.value = next
+  }
+}
+
+async function handleRetryPausedRefund(order: PaymentOrder) {
+  if (refundMutationBusy.value || !order.refund_recovery?.can_retry) return
+  const orderID = order.id
+  refundRetryingIds.value = new Set(refundRetryingIds.value).add(orderID)
+  try {
+    const res = await stepUp.run(() => adminPaymentAPI.retryRefund(orderID))
+    if (res.data.success) appStore.showSuccess(t('payment.admin.refundSuccess'))
+    else if (/unconfirmed|未确认/.test(String(res.data.warning || '').toLowerCase())) {
+      appStore.showWarning(res.data.warning || t('payment.admin.externalRefundUnconfirmed'))
+    } else appStore.showSuccess(t('payment.admin.refundRetryQueued'))
+    await loadOrders()
+  } catch (err: unknown) {
+    if (!isStepUpCancelled(err)) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  } finally {
+    const next = new Set(refundRetryingIds.value)
+    next.delete(orderID)
+    refundRetryingIds.value = next
+  }
+}
+
+function localDateTimeInputValue(date = new Date()): string {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
+
+function openExternalRefundDialog(order: PaymentOrder) {
+  if (refundMutationBusy.value || !order.refund_recovery?.can_confirm_external) return
+  externalRefundTarget.value = order
+  externalRefundForm.method_code = 'wechat_transfer'
+  externalRefundForm.external_reference = ''
+  externalRefundForm.refunded_at = localDateTimeInputValue()
+  externalRefundForm.evidence_detail = ''
+}
+
+function closeExternalRefundDialog() {
+  if (externalRefundSubmitting.value) return
+  externalRefundTarget.value = null
+}
+
+function recoveryAmount(order: PaymentOrder): string {
+  const recovery = order.refund_recovery
+  if (!recovery) return ''
+  return `${currencySymbol(recovery.currency)}${(recovery.amount_fen / 100).toFixed(2)}`
+}
+
+async function handleConfirmExternalRefund() {
+  const target = externalRefundTarget.value
+  if (!target || !externalRefundFormValid.value || externalRefundSubmitting.value || !target.refund_recovery?.can_confirm_external) return
+  const orderID = target.id
+  const request: ExternalRefundConfirmationRequest = {
+    method_code: externalRefundForm.method_code,
+    external_reference: externalRefundForm.external_reference.trim(),
+    refunded_at: new Date(externalRefundForm.refunded_at).toISOString(),
+    evidence_detail: externalRefundForm.evidence_detail.trim(),
+  }
+  externalRefundSubmitting.value = true
+  try {
+    const res = await stepUp.run(() => adminPaymentAPI.confirmExternalRefund(orderID, request))
+    if (res.data.success) {
+      appStore.showSuccess(t('payment.admin.externalRefundSuccess'))
+      externalRefundTarget.value = null
+    } else {
+      appStore.showWarning(res.data.warning || t('payment.admin.externalRefundUnconfirmed'))
+    }
+    await loadOrders()
+  } catch (err: unknown) {
+    if (!isStepUpCancelled(err)) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  } finally {
+    externalRefundSubmitting.value = false
   }
 }
 

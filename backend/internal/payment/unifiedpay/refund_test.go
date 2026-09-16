@@ -85,6 +85,76 @@ func TestGatewayGetUnifiedRefundSignsAndCorrelatesWechatResource(t *testing.T) {
 	require.True(t, result.NeedsManualReview)
 }
 
+func TestGatewayResumeUnifiedRefundUsesOriginalResourceAndOperator(t *testing.T) {
+	privateKey := testPrivateKey()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		require.Equal(t, http.MethodPost, request.Method)
+		require.Equal(t, "/v1/refund-requests/"+testRefundRequestID+"/resume", request.RequestURI)
+		body, err := io.ReadAll(request.Body)
+		require.NoError(t, err)
+		verifySignedRequest(t, request, body, testPublicKey(t, privateKey))
+		require.Equal(t, "sub2:refund:resume:000001", request.Header.Get(HeaderIdempotencyKey))
+		var input resumeRefundRequest
+		require.NoError(t, json.Unmarshal(body, &input))
+		require.Equal(t, "admin:71", input.OperatorRef)
+		result := refundTestResponse(PaymentMethodWechatPay, RefundStatusUnknown, false)
+		writer.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(writer).Encode(result))
+	}))
+	defer server.Close()
+
+	gateway, err := New(testConfig(privateKey, server.URL))
+	require.NoError(t, err)
+	result, err := gateway.ResumeUnifiedRefund(context.Background(), payment.UnifiedRefundResumeRequest{
+		RefundRequestID: testRefundRequestID,
+		IdempotencyKey:  "sub2:refund:resume:000001",
+		OperatorRef:     "admin:71",
+		Expected: payment.UnifiedRefundExpectation{
+			PaymentOrderID: testPaymentOrderID, ProductRefundNo: testProductRefundNo, AmountFen: 1234,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, RefundStatusUnknown, result.Status)
+	require.False(t, result.NeedsManualReview)
+}
+
+func TestGatewayConfirmExternalUnifiedRefundRequiresTrustedSuccessMarker(t *testing.T) {
+	privateKey := testPrivateKey()
+	refundedAt := time.Date(2026, time.September, 15, 5, 30, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		require.Equal(t, http.MethodPost, request.Method)
+		require.Equal(t, "/v1/refund-requests/"+testRefundRequestID+"/confirm-external", request.RequestURI)
+		body, err := io.ReadAll(request.Body)
+		require.NoError(t, err)
+		verifySignedRequest(t, request, body, testPublicKey(t, privateKey))
+		var input confirmExternalRefundRequest
+		require.NoError(t, json.Unmarshal(body, &input))
+		require.Equal(t, "admin:71", input.OperatorRef)
+		require.Equal(t, "wechat_transfer", input.MethodCode)
+		require.Equal(t, "wx-transfer-1", input.ExternalReference)
+		require.Equal(t, refundedAt, input.RefundedAt)
+		result := refundTestResponse(PaymentMethodWechatPay, RefundStatusSucceeded, false)
+		providerStatus := "MANUAL_EXTERNAL_CONFIRMED"
+		result.ProviderStatus = &providerStatus
+		writer.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(writer).Encode(result))
+	}))
+	defer server.Close()
+
+	gateway, err := New(testConfig(privateKey, server.URL))
+	require.NoError(t, err)
+	result, err := gateway.ConfirmExternalUnifiedRefund(context.Background(), payment.UnifiedExternalRefundConfirmation{
+		RefundRequestID: testRefundRequestID, IdempotencyKey: "sub2:refund:external:000001", OperatorRef: "admin:71",
+		MethodCode: "wechat_transfer", ExternalReference: "wx-transfer-1", RefundedAt: refundedAt,
+		EvidenceDetail: "verified recipient and amount",
+		Expected: payment.UnifiedRefundExpectation{
+			PaymentOrderID: testPaymentOrderID, ProductRefundNo: testProductRefundNo, AmountFen: 1234,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "MANUAL_EXTERNAL_CONFIRMED", *result.ProviderStatus)
+}
+
 func TestGatewayCreateUnifiedRefundRetainsUnconfirmedStateForInvalidResponses(t *testing.T) {
 	testCases := []struct {
 		name   string

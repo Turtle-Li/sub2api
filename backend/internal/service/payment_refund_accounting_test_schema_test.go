@@ -63,6 +63,9 @@ func installUnifiedRefundAccountingSQLiteColumns(t *testing.T, client *dbent.Cli
 		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN subscription_grant_order_id INTEGER NULL`,
 		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN entitlement_reserved BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN valuation_at TIMESTAMP NULL`,
+		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN provider_status TEXT NULL`,
+		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN failure_code TEXT NULL`,
+		`ALTER TABLE unified_payment_refund_attempts ADD COLUMN provider_updated_at TIMESTAMP NULL`,
 	} {
 		_, err := client.ExecContext(context.Background(), statement)
 		require.NoError(t, err)

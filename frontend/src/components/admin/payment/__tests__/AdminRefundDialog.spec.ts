@@ -144,6 +144,8 @@ describe('AdminRefundDialog', () => {
     expect(wrapper.text()).toContain('payment.admin.refundManualReviewRequired')
     expect(wrapper.text()).toContain('Manual entitlement rollback is required.')
     expect(wrapper.text()).toContain('payment.admin.refundAmountPendingManualReview')
+		expect(wrapper.text().match(/Manual entitlement rollback is required\./g)).toHaveLength(1)
+		expect(wrapper.text()).not.toContain('payment.admin.refundUnavailable')
     expect(wrapper.text()).not.toContain('¥0.00')
     expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
 

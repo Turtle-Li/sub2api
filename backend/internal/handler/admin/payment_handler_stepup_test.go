@@ -76,6 +76,8 @@ func newRefundStepUpRouter(handler *PaymentHandler, subject bool, apiKey bool) *
 	router.POST("/api/v1/admin/payment/orders/:id/refund", handler.ProcessRefund)
 	router.POST("/api/v1/admin/payment/orders/:id/refund/query", handler.QueryAndFinalizeRefund)
 	router.POST("/api/v1/admin/payment/orders/:id/refund/subscription-grant-backfill", handler.BackfillSubscriptionGrant)
+	router.POST("/api/v1/admin/payment/orders/:id/refund/retry", handler.ResumeUnifiedRefund)
+	router.POST("/api/v1/admin/payment/orders/:id/refund/confirm-external", handler.ConfirmExternalUnifiedRefund)
 	return router
 }
 
@@ -95,6 +97,8 @@ func TestAdminRefundMutationsRequireStepUpBeforeCallingPaymentService(t *testing
 		{name: "process", path: "/api/v1/admin/payment/orders/1/refund", body: `{"quote_revision":"test-revision","reason":"test"}`},
 		{name: "query", path: "/api/v1/admin/payment/orders/1/refund/query", body: ""},
 		{name: "subscription grant backfill", path: "/api/v1/admin/payment/orders/1/refund/subscription-grant-backfill", body: `{"audit_revision":"test-revision","subscription_id":1,"term_start_at":"2026-09-01T00:00:00Z","term_end_at":"2026-10-01T00:00:00Z"}`},
+		{name: "resume paused refund", path: "/api/v1/admin/payment/orders/1/refund/retry", body: ""},
+		{name: "confirm external refund", path: "/api/v1/admin/payment/orders/1/refund/confirm-external", body: `{"method_code":"wechat_transfer","external_reference":"wx-transfer-1","refunded_at":"2026-09-01T00:00:00Z","evidence_detail":"verified recipient and amount"}`},
 	}
 
 	for _, endpoint := range endpoints {
@@ -146,6 +150,8 @@ func TestAdminRefundMutationsReachPaymentServiceWithStepUpGrant(t *testing.T) {
 		{name: "process", path: "/api/v1/admin/payment/orders/999/refund", body: `{"quote_revision":"test-revision","reason":"test"}`},
 		{name: "query", path: "/api/v1/admin/payment/orders/999/refund/query", body: ""},
 		{name: "subscription grant backfill", path: "/api/v1/admin/payment/orders/999/refund/subscription-grant-backfill", body: `{"audit_revision":"test-revision","subscription_id":1,"term_start_at":"2026-09-01T00:00:00Z","term_end_at":"2026-10-01T00:00:00Z","evidence_detail":"matched the historical order and subscription audit"}`},
+		{name: "resume paused refund", path: "/api/v1/admin/payment/orders/999/refund/retry", body: ""},
+		{name: "confirm external refund", path: "/api/v1/admin/payment/orders/999/refund/confirm-external", body: `{"method_code":"wechat_transfer","external_reference":"wx-transfer-1","refunded_at":"2026-09-01T00:00:00Z","evidence_detail":"verified recipient and amount"}`},
 	} {
 		t.Run(endpoint.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -157,6 +163,6 @@ func TestAdminRefundMutationsReachPaymentServiceWithStepUpGrant(t *testing.T) {
 			require.Contains(t, recorder.Body.String(), "NOT_FOUND")
 		})
 	}
-	require.Equal(t, 3, cache.checks)
+	require.Equal(t, 5, cache.checks)
 	require.Equal(t, "refund-step-up-session", cache.sessionKey)
 }

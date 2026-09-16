@@ -26,6 +26,11 @@ const (
 	refundBackfillEvidenceOther                       = "other"
 	refundBackfillEvidenceDetailMaxRunes              = 2000
 	refundProvenanceBackfillAuditAction               = "REFUND_PROVENANCE_BACKFILL"
+	// Historical subscription expiry timestamps were persisted at whole-second
+	// precision while starts could retain sub-second precision. Keep this
+	// tolerance narrow: it only repairs that serialization boundary and never
+	// changes the immutable purchased duration or overlap checks.
+	refundBackfillLifecyclePrecisionTolerance = time.Second
 )
 
 // SubscriptionGrantBackfillHint is supplied only for a historical subscription
@@ -290,7 +295,11 @@ func subscriptionGrantBackfillSuggestion(purchasedDays int, candidates []Subscri
 			return terms[i].TermStartAt.Before(terms[j].TermStartAt)
 		})
 
-		cursor := lifecycleStart
+		// An exact purchased-day term may begin a few milliseconds before the
+		// stored lifecycle when the historical expiry lost fractional seconds.
+		// Search only within the bounded compatibility window; the transaction
+		// repeats the same lifecycle check after locking the subscription.
+		cursor := lifecycleStart.Add(-refundBackfillLifecyclePrecisionTolerance)
 		for _, term := range append(terms, subscriptionGrantBackfillOccupiedTerm{TermStartAt: lifecycleEnd, TermEndAt: lifecycleEnd}) {
 			if term.TermStartAt.After(cursor) {
 				end := term.TermStartAt
@@ -498,7 +507,8 @@ func (s *PaymentService) backfillSubscriptionGrantTx(ctx context.Context, client
 		subscription.DeletedAt != nil || subscription.Status != SubscriptionStatusActive {
 		return infraerrors.Conflict("SUBSCRIPTION_BACKFILL_SUBSCRIPTION_MISMATCH", "subscription does not match the order user and group")
 	}
-	if input.TermStartAt.Before(subscription.StartsAt) || input.TermEndAt.After(subscription.ExpiresAt) {
+	if input.TermStartAt.Before(subscription.StartsAt.Add(-refundBackfillLifecyclePrecisionTolerance)) ||
+		input.TermEndAt.After(subscription.ExpiresAt.Add(refundBackfillLifecyclePrecisionTolerance)) {
 		return infraerrors.Conflict("SUBSCRIPTION_BACKFILL_TERM_OUTSIDE_LIFECYCLE", "term must stay within the selected subscription lifecycle")
 	}
 	if input.EvidenceSource == refundBackfillEvidencePaymentAuditAndSubscription {

@@ -99,6 +99,8 @@ func RegisterPaymentRoutes(
 			adminOrders.POST("/:id/refund/subscription-grant-backfill", adminPaymentHandler.BackfillSubscriptionGrant)
 			adminOrders.POST("/:id/refund", adminPaymentHandler.ProcessRefund)
 			adminOrders.POST("/:id/refund/query", adminPaymentHandler.QueryAndFinalizeRefund)
+			adminOrders.POST("/:id/refund/retry", adminPaymentHandler.ResumeUnifiedRefund)
+			adminOrders.POST("/:id/refund/confirm-external", adminPaymentHandler.ConfirmExternalUnifiedRefund)
 		}
 
 		// Subscription Plans

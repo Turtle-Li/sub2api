@@ -2,13 +2,17 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"math"
 	"math/big"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
@@ -21,6 +25,27 @@ import (
 // ReviewedRefundRolloutLockID serializes rollout CAS with reviewed reservations.
 // Acquire before order/entitlement locks in every reviewed reservation transaction.
 const ReviewedRefundRolloutLockID int64 = 0x535542325246
+
+const (
+	unifiedRefundBalanceInsufficientProviderStatus = "HTTP_403_NOT_ENOUGH"
+	unifiedRefundProviderRejectedFailureCode       = "refund_submit_provider_rejected"
+	unifiedRefundManualExternalConfirmedStatus     = "MANUAL_EXTERNAL_CONFIRMED"
+)
+
+var externalRefundReferencePattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,160}$`)
+var externalRefundPhonePattern = regexp.MustCompile(`(?:^|[^0-9])1[3-9][0-9]{9}(?:$|[^0-9])`)
+var externalRefundResidentIDPattern = regexp.MustCompile(`(?:^|[^0-9])(?:[0-9]{15}|[0-9]{17}[0-9Xx])(?:$|[^0-9])`)
+var externalRefundSensitiveDigitRunPattern = regexp.MustCompile(`(^|[^0-9])[0-9]{15,18}([0-9Xx])?([^0-9]|$)`)
+
+// ExternalRefundConfirmationInput is the administrator-supplied evidence for
+// a refund completed outside the provider API. Amount and refund identity are
+// deliberately absent: they are loaded from the durable pending attempt.
+type ExternalRefundConfirmationInput struct {
+	MethodCode        string
+	ExternalReference string
+	RefundedAt        time.Time
+	EvidenceDetail    string
+}
 
 func (s *PaymentService) requireReviewedRefundAdmission(ctx context.Context) error {
 	if !runtimegate.SharedWorkAllowed() {
@@ -288,7 +313,7 @@ func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Conte
 	valuationAt := now
 	grantOrderID := int64(0)
 	if review.Subscription != nil {
-		valuationAt = review.Subscription.NewExpiresAt.UTC().Truncate(time.Second)
+		valuationAt = review.Subscription.NewExpiresAt.UTC()
 		grantOrderID = order.ID
 	}
 	a := &unifiedRefundAttempt{
@@ -354,6 +379,316 @@ func (s *PaymentService) queryUnifiedRefund(ctx context.Context, o *dbent.Paymen
 		return nil, err
 	}
 	return s.advanceUnifiedRefund(ctx, a)
+}
+
+// ResumeUnifiedRefund releases a provider-balance pause in the central money
+// authority. The original refund request, provider number, amount, and
+// entitlement reservation are reused; this method never creates a new refund.
+func (s *PaymentService) ResumeUnifiedRefund(ctx context.Context, orderID, operatorID int64) (*RefundResult, error) {
+	if !runtimegate.SharedWorkAllowed() {
+		return nil, infraerrors.ServiceUnavailable("REFUND_ADMISSION_DRAINING", "refund recovery is paused while this application generation is draining")
+	}
+	if operatorID <= 0 {
+		return nil, infraerrors.Forbidden("REFUND_RECOVERY_OPERATOR_REQUIRED", "a human administrator is required")
+	}
+	a, err := s.loadBalancePausedRefund(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeUnifiedRefundAudit(ctx, s.entClient, orderID, "UNIFIED_REFUND_RETRY_REQUESTED", map[string]any{
+		"product_refund_no": a.ProductRefundNo,
+		"refund_request_id": a.RefundRequestID,
+		"operator_id":       operatorID,
+		"reason_code":       "provider_balance_insufficient",
+	}); err != nil {
+		return nil, err
+	}
+	result, err := s.unifiedPayment.ResumeUnifiedRefund(ctx, payment.UnifiedRefundResumeRequest{
+		RefundRequestID: a.RefundRequestID,
+		IdempotencyKey:  unifiedRefundRecoveryIdempotencyKey("resume", a),
+		OperatorRef:     "admin:" + strconv.FormatInt(operatorID, 10),
+		Expected:        unifiedRefundExpectation(a),
+	})
+	if err != nil {
+		if recovered, converged, recoveryErr := s.recoverBalancePausedUnifiedRefundAfterUnconfirmedCommand(ctx, a, "admin_resume_recovery_query"); recoveryErr != nil {
+			return nil, recoveryErr
+		} else if converged {
+			return recovered, nil
+		}
+		if auditErr := writeUnifiedRefundAudit(ctx, s.entClient, orderID, "UNIFIED_REFUND_RETRY_UNCONFIRMED", map[string]any{
+			"product_refund_no": a.ProductRefundNo,
+			"refund_request_id": a.RefundRequestID,
+			"operator_id":       operatorID,
+			"code":              "central_result_unconfirmed",
+		}); auditErr != nil {
+			return nil, auditErr
+		}
+		return &RefundResult{Success: false, Warning: "refund retry request is unconfirmed; refresh the order before trying again"}, nil
+	}
+	return s.applyUnifiedRefundResource(ctx, orderID, result, "admin_resume")
+}
+
+// ConfirmExternalUnifiedRefund records an externally completed refund in the
+// central money authority, then consumes its normal trusted success resource
+// to reclaim the already-reserved entitlement exactly once.
+func (s *PaymentService) ConfirmExternalUnifiedRefund(ctx context.Context, orderID, operatorID int64, input ExternalRefundConfirmationInput) (*RefundResult, error) {
+	if !runtimegate.SharedWorkAllowed() {
+		return nil, infraerrors.ServiceUnavailable("REFUND_ADMISSION_DRAINING", "refund recovery is paused while this application generation is draining")
+	}
+	if operatorID <= 0 {
+		return nil, infraerrors.Forbidden("REFUND_RECOVERY_OPERATOR_REQUIRED", "a human administrator is required")
+	}
+	normalized, err := normalizeExternalRefundConfirmation(input)
+	if err != nil {
+		return nil, err
+	}
+	a, err := s.loadBalancePausedRefund(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeUnifiedRefundAudit(ctx, s.entClient, orderID, "UNIFIED_REFUND_EXTERNAL_CONFIRMATION_REQUESTED", map[string]any{
+		"product_refund_no":  a.ProductRefundNo,
+		"refund_request_id":  a.RefundRequestID,
+		"operator_id":        operatorID,
+		"method_code":        normalized.MethodCode,
+		"external_reference": normalized.ExternalReference,
+		"refunded_at":        normalized.RefundedAt,
+		"evidence_detail":    normalized.EvidenceDetail,
+	}); err != nil {
+		return nil, err
+	}
+	result, err := s.unifiedPayment.ConfirmExternalUnifiedRefund(ctx, payment.UnifiedExternalRefundConfirmation{
+		RefundRequestID:   a.RefundRequestID,
+		IdempotencyKey:    unifiedRefundExternalConfirmationIdempotencyKey(a, normalized),
+		OperatorRef:       "admin:" + strconv.FormatInt(operatorID, 10),
+		MethodCode:        normalized.MethodCode,
+		ExternalReference: normalized.ExternalReference,
+		RefundedAt:        normalized.RefundedAt,
+		EvidenceDetail:    normalized.EvidenceDetail,
+		Expected:          unifiedRefundExpectation(a),
+	})
+	if err != nil {
+		if recovered, converged, recoveryErr := s.recoverBalancePausedUnifiedRefundAfterUnconfirmedCommand(ctx, a, "admin_external_confirmation_recovery_query"); recoveryErr != nil {
+			return nil, recoveryErr
+		} else if converged {
+			return recovered, nil
+		}
+		if auditErr := writeUnifiedRefundAudit(ctx, s.entClient, orderID, "UNIFIED_REFUND_EXTERNAL_CONFIRMATION_UNCONFIRMED", map[string]any{
+			"product_refund_no": a.ProductRefundNo,
+			"refund_request_id": a.RefundRequestID,
+			"operator_id":       operatorID,
+			"code":              "central_result_unconfirmed",
+		}); auditErr != nil {
+			return nil, auditErr
+		}
+		return &RefundResult{Success: false, Warning: "external refund confirmation is unconfirmed; refresh the order before trying again"}, nil
+	}
+	return s.applyUnifiedRefundResource(ctx, orderID, result, "admin_external_confirmation")
+}
+
+func (s *PaymentService) loadBalancePausedRefund(ctx context.Context, orderID int64) (*unifiedRefundAttempt, error) {
+	if s == nil || s.entClient == nil {
+		return nil, infraerrors.ServiceUnavailable("REFUND_RECOVERY_UNAVAILABLE", "refund recovery is unavailable")
+	}
+	o, err := s.entClient.PaymentOrder.Get(ctx, orderID)
+	if dbent.IsNotFound(err) {
+		return nil, infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if s.unifiedPayment == nil || !s.unifiedPayment.Enabled() {
+		return nil, infraerrors.ServiceUnavailable("REFUND_RECOVERY_UNAVAILABLE", "refund recovery is unavailable")
+	}
+	if o.Status != OrderStatusRefundPending {
+		return nil, infraerrors.Conflict("REFUND_RECOVERY_STATE_INVALID", "only a pending refund can be recovered")
+	}
+	a, err := loadUnifiedRefundAttempt(ctx, s.entClient, orderID, "")
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, infraerrors.NotFound("REFUND_RECOVERY_NOT_FOUND", "pending unified refund attempt not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !unifiedRefundBalanceRecoveryEligible(a) {
+		return nil, infraerrors.Conflict("REFUND_RECOVERY_NOT_ALLOWED", "this refund is not paused for a proven provider balance shortage")
+	}
+	otherManual, err := unifiedRefundOrderHasOtherReview(ctx, s.entClient, orderID, a.ProductRefundNo)
+	if err != nil {
+		return nil, err
+	}
+	if otherManual {
+		return nil, infraerrors.Conflict("REFUND_RECOVERY_CONFLICT", "another refund reconciliation conflict must be resolved first")
+	}
+	conflicted, err := unifiedRefundOrderHasRecoveryConflict(ctx, s.entClient, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if conflicted {
+		return nil, infraerrors.Conflict("REFUND_RECOVERY_CONFLICT", "a refund terminal conflict must be resolved first")
+	}
+	return a, nil
+}
+
+func unifiedRefundBalanceRecoveryEligible(a *unifiedRefundAttempt) bool {
+	return a != nil && a.Status == unifiedRefundPending && a.NeedsManualReview && a.EntitlementReserved &&
+		a.RefundRequestID != "" && a.ProviderRefundID == "" &&
+		a.PaymentMethod == unifiedpay.PaymentMethodWechatPay && a.ProviderUpdatedAt != nil &&
+		a.ProviderStatus == unifiedRefundBalanceInsufficientProviderStatus &&
+		a.FailureCode == unifiedRefundProviderRejectedFailureCode
+}
+
+// recoverBalancePausedUnifiedRefundAfterUnconfirmedCommand is intentionally a
+// read-after-write recovery seam for the two operator recovery commands only.
+// A response loss or another operator's idempotency conflict cannot prove that
+// central did not commit, but ordinary manual-review attempts must never become
+// queryable just because a caller saw an error. Re-read the exact persisted
+// attempt and its central request ID before issuing one scoped GET, then let
+// the normal correlated observation/fence path decide whether it can settle.
+func (s *PaymentService) recoverBalancePausedUnifiedRefundAfterUnconfirmedCommand(ctx context.Context, original *unifiedRefundAttempt, source string) (*RefundResult, bool, error) {
+	if s == nil || s.entClient == nil || s.unifiedPayment == nil || !s.unifiedPayment.Enabled() ||
+		original == nil || !unifiedRefundBalanceRecoveryEligible(original) {
+		return nil, false, nil
+	}
+	// The recovery must still converge after the original handler context has
+	// been cancelled by a lost response. It is bounded and performs no provider
+	// mutation: the central request ID was persisted before either command.
+	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	o, err := s.entClient.PaymentOrder.Get(recoveryCtx, original.OrderID)
+	if err != nil {
+		return nil, false, err
+	}
+	if o.Status != OrderStatusRefundPending {
+		return nil, false, nil
+	}
+	a, err := loadUnifiedRefundAttempt(recoveryCtx, s.entClient, original.OrderID, original.ProductRefundNo)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil || !unifiedRefundBalanceRecoveryEligible(a) || a.RefundRequestID != original.RefundRequestID {
+		return nil, false, err
+	}
+	otherManual, err := unifiedRefundOrderHasOtherReview(recoveryCtx, s.entClient, a.OrderID, a.ProductRefundNo)
+	if err != nil {
+		return nil, false, err
+	}
+	if otherManual {
+		return nil, false, nil
+	}
+	conflicted, err := unifiedRefundOrderHasRecoveryConflict(recoveryCtx, s.entClient, a.OrderID)
+	if err != nil {
+		return nil, false, err
+	}
+	if conflicted {
+		return nil, false, nil
+	}
+	resource, err := s.unifiedPayment.GetUnifiedRefund(recoveryCtx, a.RefundRequestID, unifiedRefundExpectation(a))
+	if err != nil {
+		// A failed GET is still unconfirmed. The caller retains the exact local
+		// pause, audit, and reservation rather than interpreting it as a failed
+		// central command.
+		return nil, false, nil
+	}
+	result, err := s.applyUnifiedRefundResource(recoveryCtx, a.OrderID, resource, source)
+	if err != nil {
+		return nil, false, err
+	}
+	return result, true, nil
+}
+
+// A contradictory terminal resource remains a durable order-level fence. It
+// cannot be safely distinguished from a later operator recovery by parsing
+// append-only JSON evidence, so recovery remains fail-closed until that
+// conflict is resolved through the existing review process.
+func unifiedRefundOrderHasRecoveryConflict(ctx context.Context, client *dbent.Client, orderID int64) (bool, error) {
+	rows, err := client.QueryContext(ctx, `SELECT COUNT(*) FROM unified_payment_refund_events
+		WHERE order_id = $1 AND action = 'UNIFIED_REFUND_CONFLICT'`, orderID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return false, errors.New("refund recovery conflict state unavailable")
+	}
+	var count int
+	if err := rows.Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, rows.Err()
+}
+
+func unifiedRefundExpectation(a *unifiedRefundAttempt) payment.UnifiedRefundExpectation {
+	return payment.UnifiedRefundExpectation{
+		PaymentOrderID:  a.PaymentOrderID,
+		ProductRefundNo: a.ProductRefundNo,
+		AmountFen:       a.AmountFen,
+	}
+}
+
+func unifiedRefundRecoveryIdempotencyKey(action string, a *unifiedRefundAttempt) string {
+	key := "sub2:refund:" + action + ":" + strings.TrimPrefix(a.ProductRefundNo, "sub2-refund-")
+	// Each recovery action is one command for one proven balance-shortage
+	// generation. If the request reaches another pause generation, the central
+	// resource receives a later provider_updated_at and a new human action must
+	// get a new key. Network retries for the same generation retain the key.
+	if a.ProviderUpdatedAt != nil {
+		key += ":" + strconv.FormatInt(a.ProviderUpdatedAt.UTC().UnixNano(), 36)
+	}
+	return key
+}
+
+func unifiedRefundExternalConfirmationIdempotencyKey(a *unifiedRefundAttempt, input ExternalRefundConfirmationInput) string {
+	base := unifiedRefundRecoveryIdempotencyKey("external", a)
+	canonical := input.MethodCode + "\x00" + input.ExternalReference + "\x00" +
+		input.RefundedAt.UTC().Format(time.RFC3339Nano) + "\x00" + input.EvidenceDetail
+	digest := sha256.Sum256([]byte(canonical))
+	// A 128-bit suffix keeps the signed header below the central 128-character
+	// limit while distinguishing a corrected confirmation from a cached 409.
+	return base + ":" + hex.EncodeToString(digest[:16])
+}
+
+func normalizeExternalRefundConfirmation(input ExternalRefundConfirmationInput) (ExternalRefundConfirmationInput, error) {
+	input.MethodCode = strings.TrimSpace(input.MethodCode)
+	input.ExternalReference = strings.TrimSpace(input.ExternalReference)
+	input.EvidenceDetail = strings.TrimSpace(input.EvidenceDetail)
+	switch input.MethodCode {
+	case "wechat_transfer", "original_channel_manual", "bank_transfer", "other":
+	default:
+		return input, infraerrors.BadRequest("EXTERNAL_REFUND_METHOD_INVALID", "external refund method is invalid")
+	}
+	if !externalRefundReferencePattern.MatchString(input.ExternalReference) {
+		return input, infraerrors.BadRequest("EXTERNAL_REFUND_REFERENCE_INVALID", "external refund reference is invalid")
+	}
+	if !validExternalRefundEvidenceDetail(input.EvidenceDetail) {
+		return input, infraerrors.BadRequest("EXTERNAL_REFUND_EVIDENCE_INVALID", "external refund evidence is invalid")
+	}
+	if input.RefundedAt.IsZero() || input.RefundedAt.Before(time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)) ||
+		input.RefundedAt.After(time.Now().UTC().Add(5*time.Minute)) {
+		return input, infraerrors.BadRequest("EXTERNAL_REFUND_TIME_INVALID", "external refund time is invalid")
+	}
+	input.RefundedAt = input.RefundedAt.UTC()
+	return input, nil
+}
+
+func validExternalRefundEvidenceDetail(value string) bool {
+	if !utf8.ValidString(value) || value == "" || utf8.RuneCountInString(value) > 240 ||
+		strings.ContainsAny(value, "\x00\r\n{}[]\"<>") {
+		return false
+	}
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"authorization", "cookie", "password", "passwd", "private_key", "private key",
+		"secret", "access_token", "access token", "api_key", "api key", "bearer ", "-----begin",
+		"身份证", "手机号", "密码", "私钥", "token",
+	} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return !externalRefundPhonePattern.MatchString(value) &&
+		!externalRefundResidentIDPattern.MatchString(value) &&
+		!externalRefundSensitiveDigitRunPattern.MatchString(value)
 }
 
 func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRefundAttempt) (*RefundResult, error) {
@@ -477,11 +812,24 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 	if err != nil {
 		return nil, err
 	}
-	manual, err := unifiedRefundOrderNeedsReview(txCtx, client, orderID)
+	otherManual, err := unifiedRefundOrderHasOtherReview(txCtx, client, orderID, a.ProductRefundNo)
 	if err != nil {
 		return nil, err
 	}
-	a.NeedsManualReview = a.NeedsManualReview || manual
+	conflicted, err := unifiedRefundOrderHasRecoveryConflict(txCtx, client, orderID)
+	if err != nil {
+		return nil, err
+	}
+	trustedManualCompletion := result.Status == unifiedpay.RefundStatusSucceeded &&
+		result.ProviderStatus != nil && *result.ProviderStatus == unifiedRefundManualExternalConfirmedStatus &&
+		!result.NeedsManualReview
+	trustedBalanceResume := a.NeedsManualReview && a.ProviderStatus == unifiedRefundBalanceInsufficientProviderStatus &&
+		a.FailureCode == unifiedRefundProviderRejectedFailureCode && !result.NeedsManualReview
+	if (trustedManualCompletion || trustedBalanceResume) && !otherManual && !conflicted {
+		a.NeedsManualReview = false
+	} else {
+		a.NeedsManualReview = a.NeedsManualReview || otherManual || conflicted
+	}
 	conflict := unifiedRefundResultConflict(a, result)
 	if conflict != "" {
 		a.NeedsManualReview = true
@@ -502,6 +850,20 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 	if result.ProviderRefundID != nil {
 		a.ProviderRefundID = *result.ProviderRefundID
 	}
+	if result.ProviderStatus != nil {
+		a.ProviderStatus = *result.ProviderStatus
+	} else {
+		a.ProviderStatus = ""
+	}
+	if result.FailureCode != nil {
+		a.FailureCode = *result.FailureCode
+	} else {
+		a.FailureCode = ""
+	}
+	if !result.UpdatedAt.IsZero() {
+		updatedAt := result.UpdatedAt.UTC()
+		a.ProviderUpdatedAt = &updatedAt
+	}
 	a.NeedsManualReview = a.NeedsManualReview || result.NeedsManualReview
 	terminal := result.Status == unifiedpay.RefundStatusSucceeded || result.Status == unifiedpay.RefundStatusFailed
 	previousStatus := a.Status
@@ -509,7 +871,8 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 		a.Status = result.Status
 	}
 	response := pendingUnifiedRefundResult(a.NeedsManualReview)
-	if terminal && previousStatus == unifiedRefundPending && !a.NeedsManualReview {
+	if terminal && !a.NeedsManualReview && (previousStatus == unifiedRefundPending ||
+		(result.Status == unifiedpay.RefundStatusSucceeded && a.EntitlementReserved)) {
 		if o.Status != OrderStatusRefundPending {
 			a.NeedsManualReview = true
 			response = pendingUnifiedRefundResult(true)

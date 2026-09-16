@@ -61,6 +61,59 @@ func (g *Gateway) GetUnifiedRefund(ctx context.Context, refundRequestID string, 
 	return unifiedRefundResource(result), nil
 }
 
+// ResumeUnifiedRefund releases the central manual fence for the same durable
+// refund request. The central Worker keeps the original provider number and
+// queries before its guarded same-number WeChat resubmission path.
+func (g *Gateway) ResumeUnifiedRefund(ctx context.Context, request payment.UnifiedRefundResumeRequest) (*payment.UnifiedRefundResource, error) {
+	if !g.Enabled() {
+		return nil, ErrDisabled
+	}
+	if g.client == nil || !validUUID(request.RefundRequestID) ||
+		!validIdentifier(request.IdempotencyKey, 16, 128) || !validOperatorRef(request.OperatorRef) ||
+		!validUnifiedRefundExpectation(request.Expected) {
+		return nil, ErrInvalidRequest
+	}
+	result, err := g.client.resumeRefund(ctx, request.RefundRequestID, request.IdempotencyKey, resumeRefundRequest{
+		OperatorRef: request.OperatorRef,
+	})
+	if err != nil {
+		return nil, refundStateUnconfirmed(err)
+	}
+	if !strings.EqualFold(result.RefundRequestID, request.RefundRequestID) || !matchesRefundExpectation(result, request.Expected) {
+		return nil, refundStateUnconfirmed(ErrInvalidResponse)
+	}
+	return unifiedRefundResource(result), nil
+}
+
+// ConfirmExternalUnifiedRefund asks the central money authority to record an
+// operator-completed external refund and emit the ordinary signed success
+// event. It never invokes a payment provider.
+func (g *Gateway) ConfirmExternalUnifiedRefund(ctx context.Context, request payment.UnifiedExternalRefundConfirmation) (*payment.UnifiedRefundResource, error) {
+	if !g.Enabled() {
+		return nil, ErrDisabled
+	}
+	input := confirmExternalRefundRequest{
+		OperatorRef: request.OperatorRef, MethodCode: request.MethodCode,
+		ExternalReference: request.ExternalReference, RefundedAt: request.RefundedAt,
+		EvidenceDetail: request.EvidenceDetail,
+	}
+	if g.client == nil || !validUUID(request.RefundRequestID) ||
+		!validIdentifier(request.IdempotencyKey, 16, 128) || !validUnifiedRefundExpectation(request.Expected) ||
+		!validConfirmExternalRefundRequest(input) {
+		return nil, ErrInvalidRequest
+	}
+	result, err := g.client.confirmExternalRefund(ctx, request.RefundRequestID, request.IdempotencyKey, input)
+	if err != nil {
+		return nil, refundStateUnconfirmed(err)
+	}
+	if !strings.EqualFold(result.RefundRequestID, request.RefundRequestID) || !matchesRefundExpectation(result, request.Expected) ||
+		result.Status != RefundStatusSucceeded || result.ProviderStatus == nil ||
+		*result.ProviderStatus != "MANUAL_EXTERNAL_CONFIRMED" || result.NeedsManualReview {
+		return nil, refundStateUnconfirmed(ErrInvalidResponse)
+	}
+	return unifiedRefundResource(result), nil
+}
+
 func newCreateRefundRequest(request payment.UnifiedRefundRequest) (createRefundRequest, error) {
 	if !validIdentifier(request.IdempotencyKey, 16, 128) {
 		return createRefundRequest{}, ErrInvalidRequest
@@ -105,6 +158,38 @@ func validRefundReasonSummary(value *string) bool {
 	}
 	return *value != "" && *value == strings.TrimSpace(*value) && utf8.ValidString(*value) &&
 		utf8.RuneCountInString(*value) <= 240 && !strings.ContainsAny(*value, "\x00\r\n")
+}
+
+func validOperatorRef(value string) bool {
+	if !strings.HasPrefix(value, "admin:") || len(value) <= len("admin:") || len(value) > 80 {
+		return false
+	}
+	for _, c := range value[len("admin:"):] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validConfirmExternalRefundRequest(request confirmExternalRefundRequest) bool {
+	if !validOperatorRef(request.OperatorRef) || request.RefundedAt.IsZero() ||
+		!validBoundedRefundText(request.ExternalReference, 1, 160) ||
+		!validBoundedRefundText(request.EvidenceDetail, 1, 240) {
+		return false
+	}
+	switch request.MethodCode {
+	case "wechat_transfer", "original_channel_manual", "bank_transfer", "other":
+		return true
+	default:
+		return false
+	}
+}
+
+func validBoundedRefundText(value string, minimum, maximum int) bool {
+	return value == strings.TrimSpace(value) && utf8.ValidString(value) &&
+		utf8.RuneCountInString(value) >= minimum && utf8.RuneCountInString(value) <= maximum &&
+		!strings.ContainsAny(value, "\x00\r\n")
 }
 
 func validRefundResponse(result refundResponse) bool {

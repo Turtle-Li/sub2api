@@ -14,6 +14,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicedocument"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -215,6 +216,7 @@ func TestInvoiceOrderPresentationsProjectLatestRefundEntitlementStateInOnePage(t
 	reclaiming := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
 	restored := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
 	manual := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
+	balancePaused := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusRefundPending, true, true)
 	historical := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusRefunded, true, true)
 	notApplicable := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusCompleted, true, true)
 	now := time.Now().UTC()
@@ -225,9 +227,15 @@ func TestInvoiceOrderPresentationsProjectLatestRefundEntitlementStateInOnePage(t
 	insertInvoiceUnitRefundAttempt(t, ctx, client, reclaiming.ID, "attempt-reclaiming", unifiedRefundPending, refundReviewKindBalance, true, true, false, now)
 	insertInvoiceUnitRefundAttempt(t, ctx, client, restored.ID, "attempt-restored", "FAILED", refundReviewKindBalance, true, false, false, now)
 	insertInvoiceUnitRefundAttempt(t, ctx, client, manual.ID, "attempt-manual", "FAILED", refundReviewKindSubscription, false, true, false, now)
+	insertInvoiceUnitRefundAttempt(t, ctx, client, balancePaused.ID, "attempt-balance-paused", unifiedRefundPending, refundReviewKindSubscription, false, true, true, now)
+	_, err := client.ExecContext(ctx, `UPDATE unified_payment_refund_attempts SET
+		provider_status=?, failure_code=?, refund_request_id=?, amount_fen=?, payment_method=?, provider_updated_at=? WHERE order_id=?`,
+		unifiedRefundBalanceInsufficientProviderStatus, unifiedRefundProviderRejectedFailureCode,
+		"cccccccc-cccc-4ccc-8ccc-cccccccccccc", 10, unifiedpay.PaymentMethodWechatPay, now, balancePaused.ID)
+	require.NoError(t, err)
 
 	presentations, err := svc.InvoiceOrderPresentations(ctx, []*dbent.PaymentOrder{
-		reclaimed, reclaiming, restored, manual, historical, notApplicable,
+		reclaimed, reclaiming, restored, manual, balancePaused, historical, notApplicable,
 	})
 	require.NoError(t, err)
 	require.Equal(t, RefundEntitlementStatusReclaimed, presentations[reclaimed.ID].RefundEntitlementStatus)
@@ -235,6 +243,12 @@ func TestInvoiceOrderPresentationsProjectLatestRefundEntitlementStateInOnePage(t
 	require.Equal(t, RefundEntitlementStatusReclaiming, presentations[reclaiming.ID].RefundEntitlementStatus)
 	require.Equal(t, RefundEntitlementStatusRestored, presentations[restored.ID].RefundEntitlementStatus)
 	require.Equal(t, RefundEntitlementStatusManualReview, presentations[manual.ID].RefundEntitlementStatus)
+	recovery := presentations[balancePaused.ID].RefundRecovery
+	require.NotNil(t, recovery)
+	require.Equal(t, "WAITING_PROVIDER_BALANCE", recovery.State)
+	require.Equal(t, "WECHAT_MERCHANT_BALANCE_INSUFFICIENT", recovery.ReasonCode)
+	require.True(t, recovery.CanRetry)
+	require.True(t, recovery.CanConfirmExternal)
 	require.Equal(t, RefundEntitlementStatusHistoricalUnverified, presentations[historical.ID].RefundEntitlementStatus)
 	require.Equal(t, RefundEntitlementStatusNotApplicable, presentations[notApplicable.ID].RefundEntitlementStatus)
 }
@@ -352,7 +366,15 @@ func createInvoiceUnitRefundFenceTables(t *testing.T, ctx context.Context, clien
 		deduct_balance BOOLEAN NOT NULL DEFAULT FALSE,
 		entitlement_reserved BOOLEAN NOT NULL DEFAULT FALSE,
 		needs_manual_review BOOLEAN NOT NULL DEFAULT FALSE,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		provider_status TEXT,
+		failure_code TEXT,
+		payment_method TEXT NOT NULL DEFAULT 'alipay',
+		refund_request_id TEXT,
+		provider_refund_id TEXT,
+		amount_fen INTEGER NOT NULL DEFAULT 0,
+		provider_updated_at TIMESTAMP,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`)
 	require.NoError(t, err)
 	_, err = client.ExecContext(ctx, `CREATE TABLE unified_payment_refund_events (

@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -276,6 +278,452 @@ func newReviewedSubscriptionRefundFixture(t *testing.T) (*PaymentService, *dbent
 		billingCacheService: &BillingCacheService{cache: &fencedSubscriptionCacheStub{}},
 	}
 	return svc, order, subscription, start, end
+}
+
+func prepareBalancePausedSubscriptionRefund(t *testing.T) (*PaymentService, *dbent.PaymentOrder, *dbent.UserSubscription, *unifiedRefundAttempt) {
+	t.Helper()
+	ctx := context.Background()
+	svc, order, subscription, _, _ := newReviewedSubscriptionRefundFixture(t)
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "provider balance recovery test")
+	require.NoError(t, err)
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+	attempt.RefundRequestID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	attempt.ChannelOutRefundNo = "sandbox_sub2_refund_recovery_001"
+	attempt.ProviderStatus = unifiedRefundBalanceInsufficientProviderStatus
+	attempt.FailureCode = unifiedRefundProviderRejectedFailureCode
+	providerUpdatedAt := time.Date(2026, time.September, 16, 3, 9, 0, 123_000_000, time.UTC)
+	attempt.ProviderUpdatedAt = &providerUpdatedAt
+	attempt.NeedsManualReview = true
+	require.NoError(t, saveUnifiedRefundAttempt(ctx, svc.entClient, attempt))
+	return svc, order, subscription, attempt
+}
+
+func TestUnifiedRefundRecoveryIdempotencyKeysRotateOnlyForANewPauseGeneration(t *testing.T) {
+	firstGeneration := time.Date(2026, time.September, 16, 3, 9, 0, 123_000_000, time.UTC)
+	secondGeneration := firstGeneration.Add(time.Second)
+	attempt := &unifiedRefundAttempt{
+		ProductRefundNo:   "sub2-refund-80d5f249-1a39-4b87-b86e-95fb3d46a90e",
+		ProviderUpdatedAt: &firstGeneration,
+	}
+
+	resumeFirst := unifiedRefundRecoveryIdempotencyKey("resume", attempt)
+	confirmation := ExternalRefundConfirmationInput{
+		MethodCode:        "wechat_transfer",
+		ExternalReference: "wx-transfer_20260916:01",
+		RefundedAt:        firstGeneration,
+		EvidenceDetail:    "已核对收款人和退款金额",
+	}
+	externalFirst := unifiedRefundExternalConfirmationIdempotencyKey(attempt, confirmation)
+	require.Equal(t, resumeFirst, unifiedRefundRecoveryIdempotencyKey("resume", attempt))
+	require.Equal(t, externalFirst, unifiedRefundExternalConfirmationIdempotencyKey(attempt, confirmation))
+	attempt.ProviderUpdatedAt = &secondGeneration
+	require.NotEqual(t, resumeFirst, unifiedRefundRecoveryIdempotencyKey("resume", attempt))
+	require.NotEqual(t, externalFirst, unifiedRefundExternalConfirmationIdempotencyKey(attempt, confirmation))
+
+	// The central authority durably caches a deterministic 409. Correcting the
+	// attested time or evidence must not replay that stale response, while an
+	// exact transport retry must retain the same key.
+	attempt.ProviderUpdatedAt = &firstGeneration
+	corrected := confirmation
+	corrected.RefundedAt = corrected.RefundedAt.Add(time.Second)
+	require.NotEqual(t, externalFirst, unifiedRefundExternalConfirmationIdempotencyKey(attempt, corrected))
+	corrected = confirmation
+	corrected.EvidenceDetail = "已再次核对收款人和退款金额"
+	require.NotEqual(t, externalFirst, unifiedRefundExternalConfirmationIdempotencyKey(attempt, corrected))
+	require.LessOrEqual(t, len(externalFirst), 128)
+}
+
+func TestNormalizeExternalRefundConfirmationRejectsEvidenceThatCentralCannotPersist(t *testing.T) {
+	base := ExternalRefundConfirmationInput{
+		MethodCode:        "wechat_transfer",
+		ExternalReference: "wx-transfer_20260916:01",
+		RefundedAt:        time.Now().UTC(),
+		EvidenceDetail:    "已核对收款人和退款金额",
+	}
+	_, err := normalizeExternalRefundConfirmation(base)
+	require.NoError(t, err)
+
+	for name, mutate := range map[string]func(*ExternalRefundConfirmationInput){
+		"reference whitespace": func(input *ExternalRefundConfirmationInput) { input.ExternalReference = "wx transfer 1" },
+		"json punctuation":     func(input *ExternalRefundConfirmationInput) { input.EvidenceDetail = `核对记录{"raw":"value"}` },
+		"authorization":        func(input *ExternalRefundConfirmationInput) { input.EvidenceDetail = "Authorization bearer credential" },
+		"phone number":         func(input *ExternalRefundConfirmationInput) { input.EvidenceDetail = "已核对收款人 13800138000" },
+		"phone or id run":      func(input *ExternalRefundConfirmationInput) { input.EvidenceDetail = "已核对 138001380001234" },
+		"implausibly old time": func(input *ExternalRefundConfirmationInput) { input.RefundedAt = time.Unix(0, 0).UTC() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := base
+			mutate(&input)
+			_, err := normalizeExternalRefundConfirmation(input)
+			require.Error(t, err)
+		})
+	}
+}
+
+func writeRefundRecoveryResponse(t *testing.T, writer http.ResponseWriter, attempt *unifiedRefundAttempt, status string, manual bool, providerStatus, failureCode string) {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Second)
+	response := map[string]any{
+		"environment": attempt.Environment, "organization_id": attempt.OrganizationID, "product_id": attempt.ProductID,
+		"refund_request_id": attempt.RefundRequestID, "payment_order_id": attempt.PaymentOrderID,
+		"product_refund_no": attempt.ProductRefundNo, "channel_out_refund_no": attempt.ChannelOutRefundNo,
+		"amount_fen": attempt.AmountFen, "currency": payment.DefaultPaymentCurrency, "payment_method": attempt.PaymentMethod,
+		"status": status, "needs_manual_review": manual, "created_at": now.Add(-time.Minute), "updated_at": now,
+	}
+	if providerStatus != "" {
+		response["provider_status"] = providerStatus
+	}
+	if failureCode != "" {
+		response["failure_code"] = failureCode
+	}
+	if status == unifiedpay.RefundStatusSucceeded || status == unifiedpay.RefundStatusFailed {
+		response["completed_at"] = now
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	require.NoError(t, json.NewEncoder(writer).Encode(response))
+}
+
+func TestResumeUnifiedRefundClearsOnlyProvenBalancePauseAndKeepsReservation(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	ctx := context.Background()
+	svc, order, _, attempt := prepareBalancePausedSubscriptionRefund(t)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		require.Equal(t, http.MethodPost, request.Method)
+		require.Equal(t, "/v1/refund-requests/"+attempt.RefundRequestID+"/resume", request.URL.Path)
+		writeRefundRecoveryResponse(t, writer, attempt, unifiedpay.RefundStatusUnknown, false,
+			unifiedRefundBalanceInsufficientProviderStatus, unifiedRefundProviderRejectedFailureCode)
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	result, err := svc.ResumeUnifiedRefund(ctx, order.ID, 71)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Equal(t, 1, requests)
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.False(t, stored.NeedsManualReview)
+	require.True(t, stored.EntitlementReserved)
+	require.Equal(t, unifiedRefundPending, stored.Status)
+	persisted, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusRefundPending, persisted.Status)
+}
+
+func TestConfirmExternalUnifiedRefundRecordsCentralSuccessBeforeCapturingEntitlement(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	ctx := context.Background()
+	svc, order, subscription, attempt := prepareBalancePausedSubscriptionRefund(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		require.Equal(t, http.MethodPost, request.Method)
+		require.Equal(t, "/v1/refund-requests/"+attempt.RefundRequestID+"/confirm-external", request.URL.Path)
+		writeRefundRecoveryResponse(t, writer, attempt, unifiedpay.RefundStatusSucceeded, false,
+			unifiedRefundManualExternalConfirmedStatus, "")
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	result, err := svc.ConfirmExternalUnifiedRefund(ctx, order.ID, 71, ExternalRefundConfirmationInput{
+		MethodCode: "wechat_transfer", ExternalReference: "wx-transfer-20260916-1",
+		RefundedAt: time.Now().UTC().Add(-time.Minute), EvidenceDetail: "verified recipient and exact transfer amount",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedpay.RefundStatusSucceeded, stored.Status)
+	require.False(t, stored.NeedsManualReview)
+	require.False(t, stored.EntitlementReserved)
+	persisted, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPartiallyRefunded, persisted.Status)
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.Zero(t, grant.ReservedSeconds)
+	require.Positive(t, grant.RefundedSeconds)
+	currentSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	require.True(t, currentSubscription.ExpiresAt.Before(grant.OriginalEnd))
+}
+
+func TestResumeUnifiedRefundRecoversCentralSuccessAfterLostResponse(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	ctx := context.Background()
+	svc, order, subscription, attempt := prepareBalancePausedSubscriptionRefund(t)
+	originalExpiry := subscription.ExpiresAt
+	postCalls, getCalls := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID+"/resume":
+			// The central command has committed, but its response was lost before
+			// Sub2 could apply it or receive a terminal webhook.
+			postCalls++
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID:
+			getCalls++
+			writeRefundRecoveryResponse(t, writer, attempt, unifiedpay.RefundStatusSucceeded, false, "SUCCESS", "")
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	result, err := svc.ResumeUnifiedRefund(ctx, order.ID, 71)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.Equal(t, 1, postCalls)
+	require.Equal(t, 1, getCalls)
+
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedpay.RefundStatusSucceeded, stored.Status)
+	require.False(t, stored.NeedsManualReview)
+	require.False(t, stored.EntitlementReserved)
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.Zero(t, grant.ReservedSeconds)
+	require.Positive(t, grant.RefundedSeconds)
+	updatedSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	require.True(t, updatedSubscription.ExpiresAt.Before(originalExpiry))
+	successes, err := svc.entClient.PaymentAuditLog.Query().Where(paymentauditlog.ActionEQ("REFUND_SUCCESS")).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, successes)
+}
+
+func TestResumeUnifiedRefundConvergesAfterDifferentAdminIdempotencyConflict(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	ctx := context.Background()
+	svc, order, subscription, attempt := prepareBalancePausedSubscriptionRefund(t)
+	reservedSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	postCalls, getCalls := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID+"/resume":
+			// A different administrator reached the central command first. The
+			// current request must read the authoritative resource, not create a
+			// second refund or leave the local manual fence forever.
+			postCalls++
+			writer.WriteHeader(http.StatusConflict)
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID:
+			getCalls++
+			writeRefundRecoveryResponse(t, writer, attempt, unifiedpay.RefundStatusProcessing, false, "PROCESSING", "")
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	result, err := svc.ResumeUnifiedRefund(ctx, order.ID, 72)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Equal(t, 1, postCalls)
+	require.Equal(t, 1, getCalls)
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedRefundPending, stored.Status)
+	require.False(t, stored.NeedsManualReview)
+	require.True(t, stored.EntitlementReserved)
+	persisted, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusRefundPending, persisted.Status)
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.Positive(t, grant.ReservedSeconds)
+	require.Zero(t, grant.RefundedSeconds)
+	currentSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	require.Equal(t, reservedSubscription.ExpiresAt, currentSubscription.ExpiresAt)
+}
+
+func TestResumeUnifiedRefundKeepsBalanceFenceWhenCentralIsStillManual(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	ctx := context.Background()
+	svc, order, subscription, attempt := prepareBalancePausedSubscriptionRefund(t)
+	reservedSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID+"/resume":
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID:
+			writeRefundRecoveryResponse(t, writer, attempt, unifiedpay.RefundStatusUnknown, true,
+				unifiedRefundBalanceInsufficientProviderStatus, unifiedRefundProviderRejectedFailureCode)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	result, err := svc.ResumeUnifiedRefund(ctx, order.ID, 71)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Contains(t, result.Warning, "manual review")
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedRefundPending, stored.Status)
+	require.True(t, stored.NeedsManualReview)
+	require.True(t, stored.EntitlementReserved)
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.Positive(t, grant.ReservedSeconds)
+	require.Zero(t, grant.RefundedSeconds)
+	currentSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	require.Equal(t, reservedSubscription.ExpiresAt, currentSubscription.ExpiresAt)
+}
+
+func TestResumeUnifiedRefundKeepsBalanceFenceWhenCentralCommandWasNotCommitted(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	ctx := context.Background()
+	svc, order, subscription, attempt := prepareBalancePausedSubscriptionRefund(t)
+	reservedSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	postCalls, getCalls := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID+"/resume":
+			postCalls++
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID:
+			getCalls++
+			// The request is unavailable at central, so no trusted resource
+			// proves that the local provider-balance fence may be released.
+			writer.WriteHeader(http.StatusNotFound)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	result, err := svc.ResumeUnifiedRefund(ctx, order.ID, 71)
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Contains(t, result.Warning, "unconfirmed")
+	require.Equal(t, 1, postCalls)
+	require.Equal(t, 1, getCalls)
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.True(t, stored.NeedsManualReview)
+	require.True(t, stored.EntitlementReserved)
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.Positive(t, grant.ReservedSeconds)
+	require.Zero(t, grant.RefundedSeconds)
+	currentSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	require.Equal(t, reservedSubscription.ExpiresAt, currentSubscription.ExpiresAt)
+}
+
+func TestRefundRecoveryDoesNotBypassExistingTerminalConflictFence(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	ctx := context.Background()
+	svc, order, _, attempt := prepareBalancePausedSubscriptionRefund(t)
+	require.NoError(t, writeUnifiedRefundAudit(ctx, svc.entClient, order.ID, "UNIFIED_REFUND_CONFLICT", map[string]any{
+		"product_refund_no": attempt.ProductRefundNo,
+		"reason":            "refund_terminal_conflict",
+	}))
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	_, err := svc.ResumeUnifiedRefund(ctx, order.ID, 71)
+	require.Error(t, err)
+	require.Equal(t, "REFUND_RECOVERY_CONFLICT", infraerrors.Reason(err))
+	require.Zero(t, calls)
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.True(t, stored.NeedsManualReview)
+	require.True(t, stored.EntitlementReserved)
+
+	providerStatus := unifiedRefundManualExternalConfirmedStatus
+	resource := unifiedRefundFixtureResource(attempt, unifiedpay.RefundStatusSucceeded)
+	resource.ChannelOutRefundNo = attempt.ChannelOutRefundNo
+	resource.ProviderStatus = &providerStatus
+	result, err := svc.applyUnifiedRefundResource(ctx, order.ID, resource, "webhook")
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	stored, err = loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.True(t, stored.NeedsManualReview)
+	require.True(t, stored.EntitlementReserved)
+}
+
+func TestConfirmExternalUnifiedRefundRecoversLostSuccessResponseExactlyOnce(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	ctx := context.Background()
+	svc, order, subscription, attempt := prepareBalancePausedSubscriptionRefund(t)
+	postCalls, getCalls := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID+"/confirm-external":
+			postCalls++
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/refund-requests/"+attempt.RefundRequestID:
+			getCalls++
+			writeRefundRecoveryResponse(t, writer, attempt, unifiedpay.RefundStatusSucceeded, false,
+				unifiedRefundManualExternalConfirmedStatus, "")
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	result, err := svc.ConfirmExternalUnifiedRefund(ctx, order.ID, 71, ExternalRefundConfirmationInput{
+		MethodCode: "wechat_transfer", ExternalReference: "wx-transfer-20260916-2",
+		RefundedAt: time.Now().UTC().Add(-time.Minute), EvidenceDetail: "verified recipient and exact transfer amount",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.Equal(t, 1, postCalls)
+	require.Equal(t, 1, getCalls)
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedpay.RefundStatusSucceeded, stored.Status)
+	require.False(t, stored.EntitlementReserved)
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.Zero(t, grant.ReservedSeconds)
+	require.Positive(t, grant.RefundedSeconds)
+	firstRefundedSeconds := grant.RefundedSeconds
+
+	providerStatus := unifiedRefundManualExternalConfirmedStatus
+	replay := unifiedRefundFixtureResource(attempt, unifiedpay.RefundStatusSucceeded)
+	replay.ChannelOutRefundNo = attempt.ChannelOutRefundNo
+	replay.ProviderStatus = &providerStatus
+	result, err = svc.applyUnifiedRefundResource(ctx, order.ID, replay, "webhook")
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	grant, _, err = loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.Equal(t, firstRefundedSeconds, grant.RefundedSeconds)
+	successes, err := svc.entClient.PaymentAuditLog.Query().Where(paymentauditlog.ActionEQ("REFUND_SUCCESS")).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, successes)
+	currentSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	require.True(t, currentSubscription.ExpiresAt.Before(grant.OriginalEnd))
 }
 
 func TestReviewedBalanceRefundReviewSeparatesPaidAndGift(t *testing.T) {
@@ -782,6 +1230,41 @@ func TestReviewedSubscriptionRefundUsesSecondsAndRestoresFailedReservation(t *te
 			}
 		})
 	}
+}
+
+func TestReviewedFutureSubscriptionRefundPreservesSubsecondGrantBoundary(t *testing.T) {
+	ctx := context.Background()
+	svc, order, subscription, _, _ := newReviewedSubscriptionRefundFixture(t)
+	termStart := time.Date(2026, time.October, 12, 15, 13, 43, 41_622_000, time.UTC)
+	termEnd := termStart.AddDate(0, 0, 30)
+	svc.refundReviewNow = func() time.Time { return termStart.Add(-24 * time.Hour) }
+
+	_, err := svc.entClient.ExecContext(ctx, `UPDATE payment_subscription_grants SET
+		term_start_at=$2, original_term_end_at=$3, current_term_end_at=$3
+		WHERE payment_order_id=$1`, order.ID, termStart, termEnd)
+	require.NoError(t, err)
+	_, err = svc.entClient.UserSubscription.UpdateOneID(subscription.ID).
+		SetStartsAt(termStart.AddDate(0, 0, -30)).
+		SetExpiresAt(termEnd).
+		Save(ctx)
+	require.NoError(t, err)
+
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.True(t, review.CanRefund)
+	require.NotNil(t, review.Subscription)
+	require.True(t, review.Subscription.NewExpiresAt.Equal(termStart))
+
+	plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "future term refund")
+	require.NoError(t, err)
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+	require.NotNil(t, attempt.ValuationAt)
+	require.True(t, attempt.ValuationAt.Equal(termStart))
+
+	reserved, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	require.True(t, reserved.ExpiresAt.Equal(termStart))
 }
 
 func TestReviewedRefundRequiresManualReviewWhenHistoricalProvenanceIsMissing(t *testing.T) {
