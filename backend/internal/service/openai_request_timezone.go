@@ -206,16 +206,16 @@ func rewriteOpenAIEnvironmentTimezoneText(text, timezone string) (string, bool) 
 		}
 		contentEnd := contentStart + closeRelative
 		rewritten, contextChanged := rewriteOpenAITimezoneTags(text[contentStart:contentEnd], timezone)
-		out.WriteString(text[cursor:contentStart])
-		out.WriteString(rewritten)
-		out.WriteString(openAIEnvironmentContextClose)
+		_, _ = out.WriteString(text[cursor:contentStart])
+		_, _ = out.WriteString(rewritten)
+		_, _ = out.WriteString(openAIEnvironmentContextClose)
 		cursor = contentEnd + len(openAIEnvironmentContextClose)
 		changed = changed || contextChanged
 	}
 	if !changed {
 		return text, false
 	}
-	out.WriteString(text[cursor:])
+	_, _ = out.WriteString(text[cursor:])
 	return out.String(), true
 }
 
@@ -236,20 +236,20 @@ func rewriteOpenAITimezoneTags(content, timezone string) (string, bool) {
 		}
 		valueEnd := valueStart + closeRelative
 		if strings.TrimSpace(content[valueStart:valueEnd]) == timezone {
-			out.WriteString(content[cursor : valueEnd+len(openAITimezoneClose)])
+			_, _ = out.WriteString(content[cursor : valueEnd+len(openAITimezoneClose)])
 			cursor = valueEnd + len(openAITimezoneClose)
 			continue
 		}
-		out.WriteString(content[cursor:valueStart])
-		out.WriteString(timezone)
-		out.WriteString(openAITimezoneClose)
+		_, _ = out.WriteString(content[cursor:valueStart])
+		_, _ = out.WriteString(timezone)
+		_, _ = out.WriteString(openAITimezoneClose)
 		cursor = valueEnd + len(openAITimezoneClose)
 		changed = true
 	}
 	if !changed {
 		return content, false
 	}
-	out.WriteString(content[cursor:])
+	_, _ = out.WriteString(content[cursor:])
 	return out.String(), true
 }
 
