@@ -338,14 +338,14 @@ func boolPtr(value bool) *bool {
 
 func TestProxyIdentityUpdateInvalidatesProbeAndRejectsInFlightSnapshot(t *testing.T) {
 	tests := []struct {
-		name             string
-		includeProbeKey  bool
-		probeValue       any
-		wantInvalidation bool
+		name                  string
+		includeProbeKey       bool
+		probeValue            any
+		wantProbeInvalidation bool
 	}{
 		{name: "missing_snapshot"},
 		{name: "json_null_snapshot", includeProbeKey: true},
-		{name: "existing_snapshot", includeProbeKey: true, probeValue: map[string]any{"status": service.UpstreamBillingProbeStatusOK}, wantInvalidation: true},
+		{name: "existing_snapshot", includeProbeKey: true, probeValue: map[string]any{"status": service.UpstreamBillingProbeStatusOK}, wantProbeInvalidation: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -386,13 +386,13 @@ func TestProxyIdentityUpdateInvalidatesProbeAndRejectsInFlightSnapshot(t *testin
 
 			got, err := accountRepo.GetByID(ctx, account.ID)
 			require.NoError(t, err)
-			if tt.wantInvalidation || !tt.includeProbeKey {
+			if tt.wantProbeInvalidation || !tt.includeProbeKey {
 				require.NotContains(t, got.Extra, service.UpstreamBillingProbeExtraKey)
 			} else {
 				require.Contains(t, got.Extra, service.UpstreamBillingProbeExtraKey)
 				require.Nil(t, got.Extra[service.UpstreamBillingProbeExtraKey])
 			}
-			if !tt.wantInvalidation {
+			if !tt.wantProbeInvalidation {
 				require.Equal(t, inFlight.UpdatedAt, got.UpdatedAt, "missing/null snapshots must not cause an account row write")
 			}
 			err = accountRepo.UpdateUpstreamBillingProbeSnapshot(ctx, inFlight, &service.UpstreamBillingProbeSnapshot{
@@ -414,16 +414,15 @@ func TestProxyIdentityUpdateInvalidatesProbeAndRejectsInFlightSnapshot(t *testin
 			)
 			require.NoError(t, rows.Scan(&outboxCount, &payloadJSON))
 			require.NoError(t, rows.Close())
-			if tt.wantInvalidation {
-				require.Equal(t, 1, outboxCount)
-				var payload struct {
-					AccountIDs []int64 `json:"account_ids"`
-				}
-				require.NoError(t, json.Unmarshal([]byte(payloadJSON), &payload))
-				require.Equal(t, []int64{account.ID}, payload.AccountIDs)
-			} else {
-				require.Zero(t, outboxCount, "no snapshot change means no PR2 cache invalidation event")
+			// A transport edit changes the embedded proxy identity and clears its
+			// detected timezone. Every bound full-account scheduler snapshot must
+			// therefore be refreshed, even when no billing snapshot row changed.
+			require.Equal(t, 1, outboxCount)
+			var payload struct {
+				AccountIDs []int64 `json:"account_ids"`
 			}
+			require.NoError(t, json.Unmarshal([]byte(payloadJSON), &payload))
+			require.Equal(t, []int64{account.ID}, payload.AccountIDs)
 		})
 	}
 }
