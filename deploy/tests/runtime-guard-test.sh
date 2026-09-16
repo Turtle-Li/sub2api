@@ -77,6 +77,10 @@ assert_contains "$TIMER_UNIT" 'OnActiveSec=30s'
 assert_contains "$TIMER_UNIT" 'OnUnitInactiveSec=30s'
 assert_not_contains "$TIMER_UNIT" 'OnBootSec='
 
+INSTALLER="${DEPLOY_DIR}/install-autodeploy.sh"
+assert_contains "$INSTALLER" '  systemctl enable --now sub2api-runtime-guard.timer'
+assert_contains "$INSTALLER" '  systemctl restart sub2api-runtime-guard.timer'
+
 mkdir -p "$FAKE_BIN"
 
 cat >"${FAKE_BIN}/docker" <<'EOF'

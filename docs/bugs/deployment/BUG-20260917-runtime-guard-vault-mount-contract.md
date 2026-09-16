@@ -70,18 +70,23 @@ unknown-mount cases, and the existing state inode/content drift cases.
 ## Timer reactivation contract
 
 The production rehearsal exposed one additional systemd edge case after the
-guard itself passed. The timer used `OnBootSec=30s`; when it was re-enabled
-long after boot, systemd retained the already-consumed boot-relative trigger
-and left the unit `active (elapsed)` with no next activation. This made a
-successfully enabled timer look healthy while it would never run again during
-that boot.
+guard itself passed. The timer used `OnBootSec=30s` and had already fired
+earlier during the same long-running boot. When it was disabled and later
+re-enabled, systemd retained that consumed boot-relative trigger and the
+elapsed state, leaving the unit `active (elapsed)` with no next activation.
+This made a successfully enabled timer look healthy while it would never run
+again during that boot.
 
 The timer now uses `OnActiveSec=30s`, so every enable/start arms the first run
 relative to that activation. `OnUnitInactiveSec=30s` continues to schedule
 subsequent runs after the oneshot service becomes inactive. A static unit
 contract test requires both directives and rejects a return to `OnBootSec`.
-The rollout must observe a timer-triggered service run and a finite next
-activation before it reports the guard enabled.
+Because `systemctl enable --now` does not restart an already-active elapsed
+timer, the installer explicitly restarts the timer after enabling it. The
+installer test models that retained elapsed state and requires the restart to
+produce a finite next activation. The rollout must also observe an actual
+timer-triggered service run and a finite next activation before it reports the
+guard enabled.
 
 The frozen source checks include `deploy/tests/runtime-guard-test.sh`,
 `deploy/tests/node-state-test.sh`,

@@ -1017,6 +1017,10 @@ install -D -m 644 "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.timer" \
 systemctl daemon-reload
 if [ "$ENABLE_RUNTIME_GUARD" = "true" ]; then
   systemctl enable --now sub2api-runtime-guard.timer
+  # `enable --now` does not restart an already-active timer. An older
+  # OnBootSec-based unit can remain active (elapsed) across daemon-reload, so
+  # force a fresh activation to arm the new OnActiveSec schedule.
+  systemctl restart sub2api-runtime-guard.timer
   echo "Enabled sub2api-runtime-guard.timer (repairs the active production slot)."
 else
   systemctl disable --now sub2api-runtime-guard.timer >/dev/null 2>&1 || true

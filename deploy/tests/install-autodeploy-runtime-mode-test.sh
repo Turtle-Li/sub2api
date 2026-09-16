@@ -14,6 +14,7 @@ CONFIG_FILE="${TEST_ROOT}/etc/sub2api-autodeploy.env"
 UNIT_DIR="${TEST_ROOT}/units"
 SYSTEMCTL_CALLS="${TEST_ROOT}/systemctl-calls.log"
 INSTALL_CALLS="${TEST_ROOT}/install-calls.log"
+RUNTIME_GUARD_TIMER_STATE="${TEST_ROOT}/runtime-guard-timer.state"
 MAINTENANCE_LOCK_FILE="${TEST_ROOT}/runtime/sub2api-maintenance.lock"
 REAL_STAT="$(command -v stat)"
 FAKE_HELPER_STAGE_PREFIX="${TEST_ROOT}/sub2api-maintenance-helper."
@@ -143,6 +144,17 @@ chmod +x "${FAKE_BIN}/sha256sum"
 cat >"${FAKE_BIN}/systemctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_SYSTEMCTL_CALLS"
+if [ -n "${FAKE_RUNTIME_GUARD_TIMER_STATE_FILE:-}" ]; then
+  case "$*" in
+    'enable --now sub2api-runtime-guard.timer')
+      # Match systemd's behavior for an already-active elapsed timer: start is
+      # a no-op and does not create a future activation.
+      ;;
+    'restart sub2api-runtime-guard.timer')
+      printf 'finite-next\n' >"$FAKE_RUNTIME_GUARD_TIMER_STATE_FILE"
+      ;;
+  esac
+fi
 if [ "${FAKE_SYSTEMCTL_SPAWN_LOCK_DESCENDANT:-0}" = 1 ] \
   && [ ! -e "${FAKE_LOCK_DESCENDANT_READY:?}" ]; then
   # This deliberately long-lived external descendant models a systemctl
@@ -340,6 +352,37 @@ grep -Fqx -- 'disable --now sub2api-autodeploy.timer' "$SYSTEMCTL_CALLS" \
 if find "$TEST_ROOT" -maxdepth 1 -name 'sub2api-maintenance-helper.*' -print -quit | grep -q .; then
   fail 'root-only staged maintenance helper was not removed after source'
 fi
+
+# An upgrade can encounter a timer that is still active but has already
+# elapsed during this boot. `enable --now` alone is a no-op in that state, so
+# the installer must explicitly restart it to establish a finite next run.
+: >"$SYSTEMCTL_CALLS"
+printf 'elapsed\n' >"$RUNTIME_GUARD_TIMER_STATE"
+(
+  cd "$SOURCE_ROOT"
+  env \
+    PATH="${FAKE_BIN}:${PATH}" \
+    FAKE_SYSTEMCTL_CALLS="$SYSTEMCTL_CALLS" \
+    FAKE_INSTALL_CALLS="$INSTALL_CALLS" \
+    FAKE_RUNTIME_GUARD_TIMER_STATE_FILE="$RUNTIME_GUARD_TIMER_STATE" \
+    SUB2API_APP_DIR="$APP_DIR" \
+    SUB2API_AUTODEPLOY_CONFIG_FILE="$CONFIG_FILE" \
+    SUB2API_AUTODEPLOY_UNIT_DIR="$UNIT_DIR" \
+    SUB2API_MAINTENANCE_LOCK_FILE="$MAINTENANCE_LOCK_FILE" \
+    SUB2API_RUNTIME_GUARD_EXECUTABLE="${TEST_ROOT}/libexec/sub2api-runtime-guard.sh" \
+    /bin/bash deploy/install-autodeploy.sh \
+      --production-branch main \
+      --production-repo https://github.com/Turtle-Li/sub2api.git \
+      --no-enable
+) >"${TEST_ROOT}/elapsed-timer-upgrade.out"
+assert_contains "$SYSTEMCTL_CALLS" 'enable --now sub2api-runtime-guard.timer'
+assert_contains "$SYSTEMCTL_CALLS" 'restart sub2api-runtime-guard.timer'
+enable_line="$(grep -nFx -- 'enable --now sub2api-runtime-guard.timer' "$SYSTEMCTL_CALLS" | cut -d: -f1)"
+restart_line="$(grep -nFx -- 'restart sub2api-runtime-guard.timer' "$SYSTEMCTL_CALLS" | cut -d: -f1)"
+[ "$enable_line" -lt "$restart_line" ] \
+  || fail 'runtime guard timer was restarted before it was enabled'
+[ "$(cat "$RUNTIME_GUARD_TIMER_STATE")" = finite-next ] \
+  || fail 'active elapsed runtime guard timer was not re-armed by installation'
 
 # Explicit runtime-mode options must never be silently ignored when a config
 # already exists. The operator must opt into a full, auditable replacement.
