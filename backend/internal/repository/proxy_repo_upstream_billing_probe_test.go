@@ -44,6 +44,9 @@ func TestProxyUpdateInvalidatesBoundProbeSnapshotsAndEnqueuesOutboxAtomically(t 
 	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*type = 'apikey'.*extra \? 'upstream_billing_probe'.*platform IN \('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek', 'minimax'\).*extra \? 'ollama_cloud_usage_snapshot'.*RETURNING id`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)).AddRow(int64(18)))
+	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT id") + `.*` + regexp.QuoteMeta("WHERE proxy_id = $1 AND deleted_at IS NULL") + `.*` + regexp.QuoteMeta("ORDER BY id")).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)).AddRow(int64(18)))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
 		WithArgs(service.SchedulerOutboxEventAccountBulkChanged, nil, nil, accountIDsPayloadMatcher{want: []int64{17, 18}}).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -70,6 +73,55 @@ func TestProxyUpdateInvalidatesBoundProbeSnapshotsAndEnqueuesOutboxAtomically(t 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestProxyTransportChangeRefreshesEveryBoundAccountTimezoneSnapshot(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+
+	mock.ExpectBegin()
+	expectLockedProxyForUpdate(mock, 9, "old.example", "", "")
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT EXISTS")+`.*`+regexp.QuoteMeta("parent_account_id IS NULL")).
+		WithArgs(int64(9), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectProxyUpdateReload(mock, 9, "new.example", "", "")
+	// Neither account carries a billing probe snapshot. They still embed the
+	// proxy timezone in their full scheduler payload and must both be evicted.
+	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*RETURNING id`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT id") + `.*` + regexp.QuoteMeta("WHERE proxy_id = $1 AND deleted_at IS NULL") + `.*` + regexp.QuoteMeta("ORDER BY id")).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)).AddRow(int64(18)))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
+		WithArgs(service.SchedulerOutboxEventAccountBulkChanged, nil, nil, accountIDsPayloadMatcher{want: []int64{17, 18}}).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT id")+`.*`+regexp.QuoteMeta("id = ANY($1)")+`.*`+regexp.QuoteMeta("type IN ($3, $4)")).
+		WithArgs(pq.Array([]int64{17, 18}), service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountTypeSetupToken).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "type"}))
+	mock.ExpectCommit()
+
+	cache := &proxySchedulerCacheRecorder{}
+	repo := newProxyRepositoryWithSQL(client, db, cache)
+	updated := &service.Proxy{
+		ID:           9,
+		Name:         "proxy",
+		Protocol:     "http",
+		Host:         "new.example",
+		Port:         8080,
+		Status:       service.StatusActive,
+		FallbackMode: service.FallbackModeNone,
+	}
+
+	err = repo.Update(context.Background(), updated)
+
+	require.NoError(t, err)
+	require.ElementsMatch(t, []int64{17, 18}, cache.deleteIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestProxyUpdateRollsBackBeforeCacheMutationWhenFixedEgressClassificationFails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -87,6 +139,9 @@ func TestProxyUpdateRollsBackBeforeCacheMutationWhenFixedEgressClassificationFai
 	// proxy must preserve any incoming references, so no reverse-edge clear runs.
 	expectProxyUpdateReload(mock, 9, "new.example", "", "")
 	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*RETURNING id`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)))
+	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT id") + `.*` + regexp.QuoteMeta("WHERE proxy_id = $1 AND deleted_at IS NULL") + `.*` + regexp.QuoteMeta("ORDER BY id")).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
@@ -128,6 +183,9 @@ func TestProxyUpdateRollsBackWhenProbeInvalidationOutboxFails(t *testing.T) {
 	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectProxyUpdateReload(mock, 9, "new.example", "", "")
 	mock.ExpectQuery(`(?s)UPDATE accounts.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'.*type = 'apikey'.*extra \? 'upstream_billing_probe'.*platform IN \('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek', 'minimax'\).*extra \? 'ollama_cloud_usage_snapshot'.*RETURNING id`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)))
+	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT id") + `.*` + regexp.QuoteMeta("WHERE proxy_id = $1 AND deleted_at IS NULL") + `.*` + regexp.QuoteMeta("ORDER BY id")).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).

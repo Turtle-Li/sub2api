@@ -328,7 +328,12 @@ func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.C
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if statusChanged {
+	// Every cached account embeds the proxy row, including probe-derived
+	// timezone metadata. A transport edit clears that metadata above, so evict
+	// every live binding even when the account had no billing probe snapshot.
+	// Otherwise the scheduler can keep routing with the previous exit timezone
+	// until a later account event happens to refresh its full snapshot.
+	if transportIdentityChanged || statusChanged {
 		boundAccountIDs, err := listLiveAccountIDsByProxyID(ctx, client, proxyIn.ID)
 		if err != nil {
 			return nil, nil, nil, err

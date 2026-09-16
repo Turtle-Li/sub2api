@@ -42,9 +42,10 @@ snapshot. IP-only fallback probes leave the prior valid value intact.
 Probe persistence includes the exact protocol, host, port, username, and
 password identity that was tested. A result is discarded if that identity
 changed while the request was in flight. Editing any of those transport fields
-clears the old timezone and starts a fresh asynchronous probe. A changed
-timezone invalidates scheduler snapshots for all accounts bound to the proxy,
-including fixed-egress OAuth accounts.
+clears the old timezone, invalidates every bound account's scheduler snapshot,
+and starts a fresh asynchronous probe. Persisting a changed timezone also
+invalidates scheduler snapshots for all accounts bound to the proxy, including
+fixed-egress OAuth accounts.
 
 New proxies are already probed after creation. On application startup, one
 leader instance also runs a one-shot backfill for active proxies whose stored
@@ -100,7 +101,9 @@ with an explicit different timezone; they verify the normal request transform
 runs once and the failed account's timezone is absent from the complete retry
 body. Repository integration tests apply the migration on PostgreSQL, persist a
 detected timezone, enqueue bound-account snapshot invalidation, clear metadata
-after a proxy transport edit, and reject a late result from the old endpoint.
+after a proxy transport edit, evict ordinary API-key snapshots even when they
+carry no billing probe metadata, and reject a late result from the old
+endpoint.
 
 After deployment, verify that the startup log reports the timezone backfill
 counts and inspect `detected_timezone` in the admin proxy response. Run the
