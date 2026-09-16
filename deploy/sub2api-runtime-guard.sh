@@ -63,6 +63,13 @@ CONTAINER_REDIS_CA_PATH="/etc/ssl/certs/sub2api-db-ca.pem"
 CONTAINER_TRAFFIC_STATE_PATH="/run/sub2api-runtime/traffic-state"
 CONTAINER_BACKGROUND_STATE_PATH="/run/sub2api-runtime/background-state"
 CONTAINER_HEALTH_TOKEN_PATH="/run/sub2api-runtime/health-token"
+# These names and targets are the fixed blue-green release contract. They are
+# intentionally not configurable here: accepting another Vault volume or
+# target would let an unreviewed container satisfy recovery verification.
+APPROVED_UNIFIED_PAYMENT_VAULT_VOLUME="sub2api_unified_payment_vault"
+CONTAINER_UNIFIED_PAYMENT_VAULT_PATH="/run/sub2api-payment-vault"
+APPROVED_FEISHU_VAULT_VOLUME="sub2api_feishu_vault"
+CONTAINER_FEISHU_VAULT_PATH="/run/sub2api-feishu-vault"
 REFUND_ROLLBACK_READINESS_PATH="/internal/refund-rollback-readiness"
 
 ACTIVE_CONTAINER=""
@@ -323,6 +330,59 @@ environment_value_once() {
     }'
 }
 
+# Docker's line-oriented template output cannot distinguish an environment
+# value containing a newline from a second environment entry. Read the raw
+# JSON array for feature controls so a malformed value cannot create a false
+# enabled feature or evade the one-entry rule.
+runtime_feature_flags_from_environment() {
+  local environment_json="$1"
+
+  printf '%s' "$environment_json" | python3 -c '
+import json
+import sys
+
+try:
+    environment = json.load(sys.stdin)
+except (TypeError, ValueError):
+    raise SystemExit(1)
+
+if not isinstance(environment, list) or any(not isinstance(item, str) for item in environment):
+    raise SystemExit(1)
+
+for forbidden in (
+    "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64",
+    "SUB2API_FEISHU_WEBHOOK_URL",
+):
+    if any(item == forbidden or item.startswith(forbidden + "=") for item in environment):
+        raise SystemExit(1)
+
+def enabled(name):
+    matches = []
+    for item in environment:
+        if item == name:
+            raise SystemExit(1)
+        if item.startswith(name + "="):
+            matches.append(item[len(name) + 1:])
+    if not matches:
+        return "false"
+    if len(matches) != 1 or matches[0] not in ("true", "false"):
+        raise SystemExit(1)
+    return matches[0]
+
+payment = enabled("UNIFIED_PAYMENT_ENABLED")
+feishu = enabled("SUB2API_FEISHU_ENABLED")
+print(f"{payment}|{feishu}")
+'
+}
+
+mount_target_is_absent() {
+  local mounts="$1" target="$2"
+  printf '%s\n' "$mounts" | awk -F '|' -v expected_target="$target" '
+    $3 == expected_target { found = 1 }
+    END { exit found }
+  '
+}
+
 fixed_egress_mode_for_container() {
   local container_name="$1" environment mode_count mode_value
 
@@ -372,13 +432,20 @@ fixed_egress_mode_matches_active() {
 }
 
 application_runtime_matches() {
-  local container_name="$1" networks mounts environment network_count mount_count expected_mount_count
+  local container_name="$1" networks mounts environment environment_json feature_flags
+  local network_count mount_count expected_mount_count unified_payment_enabled feishu_enabled extra_feature_value
   local key expected_value actual_value
   container_exists "$container_name" || return 1
   [ "$(container_field "$container_name" '{{.HostConfig.RestartPolicy.Name}}')" = unless-stopped ] || return 1
   networks="$(docker inspect "$container_name" --format '{{range $network, $_ := .NetworkSettings.Networks}}{{println $network}}{{end}}')" || return 1
   mounts="$(docker inspect "$container_name" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}')" || return 1
   environment="$(docker inspect "$container_name" --format '{{range .Config.Env}}{{println .}}{{end}}')" || return 1
+  environment_json="$(docker inspect "$container_name" --format '{{json .Config.Env}}')" || return 1
+  feature_flags="$(runtime_feature_flags_from_environment "$environment_json")" || return 1
+  IFS='|' read -r unified_payment_enabled feishu_enabled extra_feature_value <<<"$feature_flags"
+  [ -z "${extra_feature_value:-}" ] || return 1
+  case "$unified_payment_enabled" in true|false) ;; *) return 1 ;; esac
+  case "$feishu_enabled" in true|false) ;; *) return 1 ;; esac
 
   network_count="$(printf '%s\n' "$networks" | awk 'NF { count += 1 } END { print count + 0 }')"
   [ "$network_count" -eq 1 ] && printf '%s\n' "$networks" | grep -qxF "$RUNTIME_GUARD_NETWORK" || return 1
@@ -398,6 +465,20 @@ application_runtime_matches() {
       actual_value="$(environment_value_once "$environment" "$key")" || return 1
       [ "$actual_value" = "$expected_value" ] || return 1
     done
+  fi
+  if [ "$unified_payment_enabled" = true ]; then
+    expected_mount_count=$((expected_mount_count + 1))
+    printf '%s\n' "$mounts" | grep -qxF \
+      "volume|$APPROVED_UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" || return 1
+  else
+    mount_target_is_absent "$mounts" "$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH" || return 1
+  fi
+  if [ "$feishu_enabled" = true ]; then
+    expected_mount_count=$((expected_mount_count + 1))
+    printf '%s\n' "$mounts" | grep -qxF \
+      "volume|$APPROVED_FEISHU_VAULT_VOLUME|$CONTAINER_FEISHU_VAULT_PATH|false" || return 1
+  else
+    mount_target_is_absent "$mounts" "$CONTAINER_FEISHU_VAULT_PATH" || return 1
   fi
   if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
     expected_mount_count=$((expected_mount_count + 3))

@@ -128,6 +128,14 @@ case "${1:-}" in
       *HostConfig.RestartPolicy*) printf '%s\n' "$restart_policy" ;;
       *NetworkSettings.Networks*) printf '%s\n' "$networks" ;;
       *Mounts*) printf '%s\n' "$mounts" ;;
+      *'json .Config.Env'*)
+        FAKE_CONTAINER_ENVIRONMENT="$environment" python3 -c '
+import json
+import os
+
+print(json.dumps(os.environ["FAKE_CONTAINER_ENVIRONMENT"].splitlines()))
+'
+        ;;
       *Config.Env*) printf '%s\n' "$environment" ;;
       *) : ;;
     esac
@@ -434,6 +442,20 @@ bind|${CASE_ROOT}/app/secrets/internal-health-token|/run/sub2api-runtime/health-
 EOF
 }
 
+enabled_vault_mounts() {
+  cat <<'EOF'
+volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|false
+volume|sub2api_feishu_vault|/run/sub2api-feishu-vault|false
+EOF
+}
+
+enabled_vault_environment() {
+  cat <<'EOF'
+UNIFIED_PAYMENT_ENABLED=true
+SUB2API_FEISHU_ENABLED=true
+EOF
+}
+
 new_case() {
   local name="$1"
 
@@ -636,6 +658,155 @@ assert_not_contains "${CASE_ROOT}/docker-calls.log" 'inspect sub2api-postgres'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'inspect sub2api-redis'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-postgres'
 assert_not_contains "${CASE_ROOT}/docker-calls.log" 'start sub2api-redis'
+
+# The blue-green helper adds these two read-only Vault volumes only when the
+# corresponding container-owned feature switches are true. A production
+# container with both features enabled must pass the same external/dual-node
+# runtime verification as a base container.
+new_case external-active-payment-and-feishu-vaults
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)"$'\n'"$(enabled_vault_mounts)" \
+  "$(dual_environment)"$'\n'"$(enabled_vault_environment)"
+run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+# Each Vault feature is optional independently. Payment-only accepts its
+# approved volume while an absent Feishu switch defaults to false; Feishu-only
+# accepts its volume while payment is explicitly false.
+new_case external-active-payment-only-vault
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)"$'\n'"volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|false" \
+  "$(dual_environment)"$'\n'"UNIFIED_PAYMENT_ENABLED=true"
+run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+new_case external-active-feishu-only-vault
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)"$'\n'"volume|sub2api_feishu_vault|/run/sub2api-feishu-vault|false" \
+  "$(dual_environment)"$'\n'"UNIFIED_PAYMENT_ENABLED=false"$'\n'"SUB2API_FEISHU_ENABLED=true"
+run_external_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+# Both enabled switches require their exact approved volumes. Missing or
+# substituted sources must fail before the guard can restart or isolate the
+# Caddy-selected runtime.
+new_case external-active-payment-vault-missing
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)"$'\n'"volume|sub2api_feishu_vault|/run/sub2api-feishu-vault|false" \
+  "$(dual_environment)"$'\n'"$(enabled_vault_environment)"
+if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted enabled unified payment without its Vault volume'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+new_case external-active-feishu-vault-wrong-source
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)"$'\n'"volume|sub2api_unified_payment_vault|/run/sub2api-payment-vault|false"$'\n'"volume|wrong-feishu-vault|/run/sub2api-feishu-vault|false" \
+  "$(dual_environment)"$'\n'"$(enabled_vault_environment)"
+if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a substituted Feishu Vault volume'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+
+# An absent switch defaults to false, and an explicitly false switch has the
+# same no-Vault contract. A target volume must not make either state appear
+# valid through the total mount count alone.
+new_case external-active-default-feature-with-vault
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)"$'\n'"$(enabled_vault_mounts)" \
+  "$(dual_environment)"
+if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted Vault volumes with absent feature switches'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+
+new_case external-active-disabled-payment-with-vault
+write_standard_dependencies
+write_external_runtime_files
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped candidate-network \
+  "$(external_mounts sub2api-green)"$'\n'"$(enabled_vault_mounts)" \
+  "$(dual_environment)"$'\n'"UNIFIED_PAYMENT_ENABLED=false"$'\n'"SUB2API_FEISHU_ENABLED=true"
+if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted a unified-payment Vault volume while disabled'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+
+# Switches are parsed from Docker's Config.Env array, not the host deployment
+# environment. Invalid and duplicate entries for either feature fail closed.
+for feature_switch_case in invalid-payment duplicate-payment invalid-feishu duplicate-feishu; do
+  new_case "external-active-${feature_switch_case}-switch"
+  write_standard_dependencies
+  write_external_runtime_files
+  write_container sub2api-green true healthy false 0 sub2api:current
+  case "$feature_switch_case" in
+    invalid-payment)
+      feature_environment=$'UNIFIED_PAYMENT_ENABLED=enabled\nSUB2API_FEISHU_ENABLED=true'
+      ;;
+    duplicate-payment)
+      feature_environment=$'UNIFIED_PAYMENT_ENABLED=true\nUNIFIED_PAYMENT_ENABLED=false\nSUB2API_FEISHU_ENABLED=true'
+      ;;
+    invalid-feishu)
+      feature_environment=$'UNIFIED_PAYMENT_ENABLED=true\nSUB2API_FEISHU_ENABLED=enabled'
+      ;;
+    duplicate-feishu)
+      feature_environment=$'UNIFIED_PAYMENT_ENABLED=true\nSUB2API_FEISHU_ENABLED=true\nSUB2API_FEISHU_ENABLED=false'
+      ;;
+  esac
+  write_runtime_metadata sub2api-green unless-stopped candidate-network \
+    "$(external_mounts sub2api-green)"$'\n'"$(enabled_vault_mounts)" \
+    "$(dual_environment)"$'\n'"$feature_environment"
+  if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+    fail "runtime guard accepted ${feature_switch_case} feature switch"
+  fi
+  assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+  assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+done
+
+# The blue-green release contract keeps the payment private key and Feishu raw
+# webhook outside Config.Env. Their appearance in an otherwise valid runtime
+# is a hard rejection, including an empty secret value.
+for forbidden_environment_case in payment-private-key feishu-raw-webhook; do
+  new_case "external-active-${forbidden_environment_case}-environment"
+  write_standard_dependencies
+  write_external_runtime_files
+  write_container sub2api-green true healthy false 0 sub2api:current
+  case "$forbidden_environment_case" in
+    payment-private-key) forbidden_environment='UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=' ;;
+    feishu-raw-webhook) forbidden_environment='SUB2API_FEISHU_WEBHOOK_URL=https://example.invalid/webhook' ;;
+  esac
+  write_runtime_metadata sub2api-green unless-stopped candidate-network \
+    "$(external_mounts sub2api-green)"$'\n'"$(enabled_vault_mounts)" \
+    "$(dual_environment)"$'\n'"$(enabled_vault_environment)"$'\n'"$forbidden_environment"
+  if run_external_guard >"${CASE_ROOT}/output.log" 2>&1; then
+    fail "runtime guard accepted ${forbidden_environment_case} environment"
+  fi
+  assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+  assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
+done
 
 # A correct Mount.Source path is insufficient: a single-file bind mount can
 # remain pinned to an inode that node-state already replaced.

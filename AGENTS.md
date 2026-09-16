@@ -159,6 +159,11 @@
 
 ## Release boundary
 
+- Before changing or re-enabling the production runtime guard, read
+  `docs/bugs/deployment/BUG-20260917-runtime-guard-vault-mount-contract.md`.
+  Keep approved Vault mount validation aligned with the canonical blue-green
+  helper and keep unknown mounts fail-closed.
+
 - The documented production path is the explicitly dispatched blue-green
   release in `deploy/README.md`; ordinary pushes and tags must not start
   GitHub Actions. GitHub Actions builds and packages the exact `main` commit;
@@ -188,6 +193,11 @@
   change.
 
 ## Upstream update scope
+
+- Read `docs/operations/OPENAI_PROXY_TIMEZONE_REWRITE_20260916.md` before
+  changing proxy exit geolocation, OpenAI/Codex developer context rewriting,
+  or the HTTP/WS account-selected forwarding seams. Preserve the user-role
+  exclusion and stale-probe identity guard.
 
 - For the v0.2.5 OpenCode, site billing-mode, subscription bulk-action,
   proxy-credential, Images, WebSocket, and migration merge, read
