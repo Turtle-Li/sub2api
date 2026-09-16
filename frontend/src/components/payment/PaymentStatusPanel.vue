@@ -358,7 +358,7 @@ const displayOrderNumber = computed(() => props.outTradeNo || `#${props.orderId}
 const paymentReceivedHint = computed(() => {
   const current = latestOrder.value
   if (!current || paymentFact(current) !== 'PAID' || normalizeStatus(current.status) === 'COMPLETED') return ''
-  if (fulfillmentFact(current) === 'MANUAL_REVIEW' || fulfillmentFact(current) === 'FAILED') {
+  if (current.needs_manual_review || fulfillmentFact(current) === 'FAILED') {
     return t('payment.result.paidButFulfillmentFailed')
   }
   return t('payment.result.paymentReceivedProcessing')

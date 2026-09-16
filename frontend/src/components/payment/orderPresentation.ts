@@ -24,7 +24,7 @@ function normalizedPaymentFact(value: string | null | undefined): PaymentFactSta
 
 function normalizedFulfillmentFact(value: string | null | undefined): FulfillmentStatus | null {
   const normalized = normalizedStatus(value)
-  if (normalized === 'NOT_STARTED' || normalized === 'PENDING' || normalized === 'FULFILLED' || normalized === 'FAILED' || normalized === 'MANUAL_REVIEW') {
+  if (normalized === 'NOT_STARTED' || normalized === 'PENDING' || normalized === 'FULFILLED' || normalized === 'FAILED') {
     return normalized as FulfillmentStatus
   }
   return null
@@ -50,7 +50,6 @@ export function fulfillmentFact(order: PaymentPresentationOrder | Partial<Paymen
   const explicit = normalizedFulfillmentFact(order.fulfillment_status)
   if (explicit) return explicit
   if (order.completed_at) return 'FULFILLED'
-  if (order.needs_manual_review) return 'MANUAL_REVIEW'
 
   const status = normalizedStatus(order.status)
   if (status === 'COMPLETED') return 'FULFILLED'

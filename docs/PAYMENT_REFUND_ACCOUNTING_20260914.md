@@ -341,6 +341,17 @@ place. Refreshing or repeating the same action is safe through central
 idempotency and the signed webhook path. Operators must not use external
 confirmation until the customer has actually received the money.
 
+### Legacy whole-second subscription reservations
+
+Builds before the sub-second preservation repair could leave an already-held
+future subscription refund with both its live expiry and `valuation_at`
+truncated to the start second, while the grant itself starts later in that
+same second. A trusted terminal capture normalizes only this provable legacy
+shape to the grant's exact `term_start_at`, and atomically repairs the live
+subscription and grant together. A larger or different drift remains blocked
+as an integrity error; capture never guesses a term boundary. New reservations
+retain their exact sub-second boundary and do not enter this compatibility path.
+
 ## Historical subscription grant repair
 
 Historical subscription orders still require audited grant backfill before

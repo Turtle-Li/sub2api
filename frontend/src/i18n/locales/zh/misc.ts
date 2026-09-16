@@ -350,7 +350,10 @@ export default {
       notificationQueued: '通知已重新排队',
       "purchase": "购买内容",
       "paymentLabel": "支付状态",
-      "fulfillmentLabel": "权益发放",
+      "fulfillmentLabel": "权益状态",
+      "fulfillmentFilterLabel": "发放记录",
+      "issuanceRecord": "发放记录",
+      "refundHandling": "退款后处理",
       "snapshot": "购买时的套餐快照",
       "legacySnapshot": "这笔历史订单没有保存套餐快照，无法还原当时的套餐内容。",
       "snapshotHelp": "保留购买当时的内容，后续套餐调整不会改变此记录。",
@@ -360,8 +363,9 @@ export default {
       "concurrency": "并发额度",
       "resetCards": "重置卡",
       "reviewRequired": "需要人工复核",
+      "refundReviewRequired": "退款处理需要人工复核",
       "allPayments": "全部支付状态",
-      "allFulfillments": "全部发放状态",
+      "allFulfillments": "全部发放记录",
       "allEmails": "全部邮件状态",
       "payment": {
             "paid": "已支付",
@@ -375,12 +379,12 @@ export default {
             "manual_review": "人工复核"
       },
       "refundEntitlement": {
-            "not_applicable": "无需退款权益处理",
-            "reclaiming": "退款权益：回收中",
-            "reclaimed": "退款权益：已回收",
-            "restored": "退款权益：已恢复",
-            "manual_review": "退款权益：需人工处理",
-            "historical_unverified": "退款权益：历史记录未验证"
+            "not_applicable": "无需处理",
+            "reclaiming": "回收中",
+            "reclaimed": "已回收",
+            "restored": "已恢复",
+            "manual_review": "需人工处理",
+            "historical_unverified": "历史记录未验证"
       },
       "copyOrder": "复制完整订单号",
       "copyFailed": "复制失败，请选中订单号复制",

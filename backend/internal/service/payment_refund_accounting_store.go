@@ -341,6 +341,29 @@ func timeEqualToSecond(a, b time.Time) bool {
 	return a.UTC().Truncate(time.Second).Equal(b.UTC().Truncate(time.Second))
 }
 
+// capturedSubscriptionRefundExpiry returns the exact boundary that may be
+// persisted when a reserved subscription refund succeeds. Older binaries
+// truncated a future-term reservation to whole seconds. A term can start with
+// sub-second precision, so that historical value can be just before its own
+// grant boundary even though it represents the same recorded second.
+//
+// Only that narrowly provable legacy shape is repaired. Larger drift remains
+// an integrity error rather than silently changing a subscription timeline.
+func capturedSubscriptionRefundExpiry(grant *paymentSubscriptionGrant, expiresAt time.Time) (time.Time, bool, error) {
+	if grant == nil {
+		return time.Time{}, false, errors.New("subscription refund grant is missing")
+	}
+	effective := expiresAt.UTC()
+	termStart := grant.TermStart.UTC()
+	if !effective.Before(termStart) {
+		return effective, false, nil
+	}
+	if !timeEqualToSecond(effective, termStart) {
+		return time.Time{}, false, errors.New("reserved subscription expiry precedes its grant boundary")
+	}
+	return termStart, true, nil
+}
+
 func requireSingleAffected(res stdsql.Result, action string) error {
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -528,6 +551,10 @@ func finalizeReviewedRefundEntitlement(ctx context.Context, client *dbent.Client
 			attempt.ValuationAt == nil || !timeEqualToSecond(sub.ExpiresAt, *attempt.ValuationAt) {
 			return errors.New("reserved subscription entitlement changed")
 		}
+		effectiveExpiry, repairedLegacyBoundary, err := capturedSubscriptionRefundExpiry(grant, sub.ExpiresAt)
+		if err != nil {
+			return err
+		}
 		res, err := client.ExecContext(ctx, `UPDATE payment_subscription_grants SET
 			current_term_end_at = $2,
 			reserved_seconds = 0, reserved_cash_minor = 0,
@@ -535,12 +562,28 @@ func finalizeReviewedRefundEntitlement(ctx context.Context, client *dbent.Client
 			refunded_cash_minor = refunded_cash_minor + $4,
 			version = version + 1, updated_at = CURRENT_TIMESTAMP
 			WHERE payment_order_id = $1 AND reserved_seconds = $3`,
-			order.ID, sub.ExpiresAt, attempt.SubscriptionSeconds, attempt.AmountFen)
+			order.ID, effectiveExpiry, attempt.SubscriptionSeconds, attempt.AmountFen)
 		if err != nil {
 			return err
 		}
 		if err := requireSingleAffected(res, "capture subscription refund"); err != nil {
 			return err
+		}
+		if repairedLegacyBoundary {
+			// The grant hold has just been atomically captured, so the database
+			// guard permits this matching correction to the live subscription. If
+			// it races a different writer, the enclosing transaction rolls back
+			// rather than committing a mismatched grant/subscription pair.
+			updated, err := client.UserSubscription.Update().Where(
+				usersubscription.IDEQ(sub.ID), usersubscription.DeletedAtIsNil(),
+				usersubscription.ExpiresAtEQ(sub.ExpiresAt),
+			).SetExpiresAt(effectiveExpiry).SetUpdatedAt(time.Now()).Save(ctx)
+			if err != nil {
+				return err
+			}
+			if updated != 1 {
+				return errors.New("reserved subscription expiry changed while repairing its grant boundary")
+			}
 		}
 	default:
 		return errors.New("unsupported refund reservation kind")

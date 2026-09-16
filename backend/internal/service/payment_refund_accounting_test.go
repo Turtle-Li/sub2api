@@ -451,6 +451,87 @@ func TestConfirmExternalUnifiedRefundRecordsCentralSuccessBeforeCapturingEntitle
 	require.True(t, currentSubscription.ExpiresAt.Before(grant.OriginalEnd))
 }
 
+func TestConfirmExternalUnifiedRefundRepairsLegacyWholeSecondFutureTermReservation(t *testing.T) {
+	runtimegate.SetProcessActive(true)
+	t.Cleanup(func() { runtimegate.SetProcessActive(true) })
+	ctx := context.Background()
+	svc, order, subscription, _, _ := newReviewedSubscriptionRefundFixture(t)
+	termStart := time.Date(2026, time.October, 12, 15, 13, 43, 41_622_000, time.UTC)
+	termEnd := termStart.AddDate(0, 0, 30)
+	svc.refundReviewNow = func() time.Time { return termStart.Add(-24 * time.Hour) }
+
+	_, err := svc.entClient.ExecContext(ctx, `UPDATE payment_subscription_grants SET
+		term_start_at=$2, original_term_end_at=$3, current_term_end_at=$3
+		WHERE payment_order_id=$1`, order.ID, termStart, termEnd)
+	require.NoError(t, err)
+	_, err = svc.entClient.UserSubscription.UpdateOneID(subscription.ID).
+		SetStartsAt(termStart.AddDate(0, 0, -30)).
+		SetExpiresAt(termEnd).
+		Save(ctx)
+	require.NoError(t, err)
+
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.True(t, review.CanRefund)
+	require.NotNil(t, review.Subscription)
+	require.Equal(t, termStart, review.Subscription.NewExpiresAt)
+	plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "legacy whole-second reservation")
+	require.NoError(t, err)
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+
+	// e98 preserves the sub-second boundary for new reservations. This models
+	// the sole older shape we can prove: an already-held future term that was
+	// truncated to the same whole second before its exact grant start.
+	legacyExpiry := termStart.Truncate(time.Second)
+	require.True(t, legacyExpiry.Before(termStart))
+	require.True(t, timeEqualToSecond(legacyExpiry, termStart))
+	_, err = svc.entClient.UserSubscription.UpdateOneID(subscription.ID).SetExpiresAt(legacyExpiry).Save(ctx)
+	require.NoError(t, err)
+	attempt.ValuationAt = &legacyExpiry
+	attempt.RefundRequestID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	attempt.ChannelOutRefundNo = "sandbox_sub2_refund_recovery_legacy_boundary"
+	attempt.ProviderStatus = unifiedRefundBalanceInsufficientProviderStatus
+	attempt.FailureCode = unifiedRefundProviderRejectedFailureCode
+	providerUpdatedAt := time.Date(2026, time.September, 16, 3, 9, 0, 123_000_000, time.UTC)
+	attempt.ProviderUpdatedAt = &providerUpdatedAt
+	attempt.NeedsManualReview = true
+	require.NoError(t, saveUnifiedRefundAttempt(ctx, svc.entClient, attempt))
+	_, err = svc.entClient.ExecContext(ctx, `UPDATE unified_payment_refund_attempts
+		SET valuation_at=$2 WHERE product_refund_no=$1`, attempt.ProductRefundNo, legacyExpiry)
+	require.NoError(t, err)
+	installSubscriptionGrantCurrentEndGuard(t, svc.entClient)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		require.Equal(t, http.MethodPost, request.Method)
+		require.Equal(t, "/v1/refund-requests/"+attempt.RefundRequestID+"/confirm-external", request.URL.Path)
+		writeRefundRecoveryResponse(t, writer, attempt, unifiedpay.RefundStatusSucceeded, false,
+			unifiedRefundManualExternalConfirmedStatus, "")
+	}))
+	defer server.Close()
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+
+	result, err := svc.ConfirmExternalUnifiedRefund(ctx, order.ID, 71, ExternalRefundConfirmationInput{
+		MethodCode: "wechat_transfer", ExternalReference: "wx-transfer-20260916-legacy-boundary",
+		RefundedAt: time.Now().UTC().Add(-time.Minute), EvidenceDetail: "verified recipient and exact transfer amount",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Success)
+
+	grant, _, err := loadPaymentSubscriptionRefundState(ctx, svc.entClient, order.ID, false)
+	require.NoError(t, err)
+	require.Equal(t, termStart, grant.CurrentEnd)
+	require.Zero(t, grant.ReservedSeconds)
+	require.Positive(t, grant.RefundedSeconds)
+	finalSubscription, err := svc.entClient.UserSubscription.Get(ctx, subscription.ID)
+	require.NoError(t, err)
+	require.Equal(t, termStart, finalSubscription.ExpiresAt)
+	stored, err := loadUnifiedRefundAttempt(ctx, svc.entClient, order.ID, attempt.ProductRefundNo)
+	require.NoError(t, err)
+	require.Equal(t, unifiedpay.RefundStatusSucceeded, stored.Status)
+	require.False(t, stored.EntitlementReserved)
+}
+
 func TestResumeUnifiedRefundRecoversCentralSuccessAfterLostResponse(t *testing.T) {
 	runtimegate.SetProcessActive(true)
 	t.Cleanup(func() { runtimegate.SetProcessActive(true) })

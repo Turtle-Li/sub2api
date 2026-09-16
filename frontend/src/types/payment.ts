@@ -111,7 +111,7 @@ export interface CheckoutInfoResponse {
 // ==================== Orders ====================
 
 export type PaymentFactStatus = 'PAID' | 'UNPAID'
-export type FulfillmentStatus = 'NOT_STARTED' | 'PENDING' | 'FULFILLED' | 'FAILED' | 'MANUAL_REVIEW'
+export type FulfillmentStatus = 'NOT_STARTED' | 'PENDING' | 'FULFILLED' | 'FAILED'
 export type RefundEntitlementStatus =
   | 'NOT_APPLICABLE'
   | 'RECLAIMING'

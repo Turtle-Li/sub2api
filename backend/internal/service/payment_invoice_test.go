@@ -116,7 +116,7 @@ func TestInvoiceWorkflowChecksUnifiedRefundReviewAtEveryEligibleTransition(t *te
 	require.Equal(t, "INVOICE_ORDER_NOT_ELIGIBLE", infraerrors.Reason(err))
 }
 
-func TestInvoiceFulfillmentFilterDoesNotLeakAnUnrelatedRefundEvent(t *testing.T) {
+func TestInvoiceFulfillmentFilterKeepsRefundReviewSeparateFromDelivery(t *testing.T) {
 	ctx := context.Background()
 	svc, client := newInvoiceUnitService(t, ctx)
 	createInvoiceUnitRefundFenceTables(t, ctx, client)
@@ -128,13 +128,6 @@ func TestInvoiceFulfillmentFilterDoesNotLeakAnUnrelatedRefundEvent(t *testing.T)
 	_, err := client.ExecContext(ctx,
 		"INSERT INTO unified_payment_refund_events (order_id, action) VALUES (?, 'UNIFIED_PAYMENT_EVENT_REJECTED')", unrelated.ID)
 	require.NoError(t, err)
-
-	manual, total, err := svc.GetUserOrders(ctx, owner.ID, OrderListParams{
-		Page: 1, PageSize: 20, FulfillmentStatus: InvoiceFulfillmentStatusManualReview,
-	})
-	require.NoError(t, err)
-	require.Zero(t, total)
-	require.Empty(t, manual, "the other user's event must not escape owner/fulfillment predicates")
 
 	pendingRows, pendingTotal, err := svc.GetUserOrders(ctx, owner.ID, OrderListParams{
 		Page: 1, PageSize: 20, FulfillmentStatus: InvoiceFulfillmentStatusPending,
@@ -155,13 +148,20 @@ func TestInvoiceFulfillmentFilterDoesNotLeakAnUnrelatedRefundEvent(t *testing.T)
 	_, err = client.ExecContext(ctx,
 		"INSERT INTO unified_payment_refund_events (order_id, action) VALUES (?, 'UNIFIED_PAYMENT_EVENT_REJECTED')", pending.ID)
 	require.NoError(t, err)
-	manual, total, err = svc.GetUserOrders(ctx, owner.ID, OrderListParams{
-		Page: 1, PageSize: 20, FulfillmentStatus: InvoiceFulfillmentStatusManualReview,
+	pendingRows, pendingTotal, err = svc.GetUserOrders(ctx, owner.ID, OrderListParams{
+		Page: 1, PageSize: 20, FulfillmentStatus: InvoiceFulfillmentStatusPending,
 	})
 	require.NoError(t, err)
-	require.Equal(t, 1, total)
-	require.Len(t, manual, 1)
-	require.Equal(t, pending.ID, manual[0].ID)
+	require.Equal(t, 1, pendingTotal)
+	require.Len(t, pendingRows, 1)
+	require.Equal(t, pending.ID, pendingRows[0].ID, "a refund review must not replace the delivery fact")
+
+	manualRows, _, err := svc.GetUserOrders(ctx, owner.ID, OrderListParams{
+		Page: 1, PageSize: 20, FulfillmentStatus: "MANUAL_REVIEW",
+	})
+	require.NoError(t, err)
+	require.Len(t, manualRows, 1)
+	require.Equal(t, pending.ID, manualRows[0].ID, "the legacy filter remains a refund-review compatibility alias")
 }
 
 func TestInvoiceSnapshotSanitizerAndFulfillmentPresentationAreTyped(t *testing.T) {
@@ -200,10 +200,11 @@ func TestInvoiceSnapshotSanitizerAndFulfillmentPresentationAreTyped(t *testing.T
 
 	now := time.Now().UTC()
 	paidFailed := &dbent.PaymentOrder{Status: OrderStatusFailed, PaidAt: &now}
-	require.Equal(t, InvoiceFulfillmentStatusFailed, PaymentOrderFulfillmentStatus(paidFailed, false))
+	require.Equal(t, InvoiceFulfillmentStatusFailed, PaymentOrderFulfillmentStatus(paidFailed))
 	completedWithReview := &dbent.PaymentOrder{Status: OrderStatusCompleted, PaidAt: &now, CompletedAt: &now}
-	require.Equal(t, InvoiceFulfillmentStatusFulfilled, PaymentOrderFulfillmentStatus(completedWithReview, true))
-	require.Equal(t, InvoiceFulfillmentStatusNotStarted, PaymentOrderFulfillmentStatus(&dbent.PaymentOrder{Status: OrderStatusFailed}, false))
+	require.Equal(t, InvoiceFulfillmentStatusFulfilled, PaymentOrderFulfillmentStatus(completedWithReview))
+	require.Equal(t, InvoiceFulfillmentStatusPending, PaymentOrderFulfillmentStatus(&dbent.PaymentOrder{Status: OrderStatusPaid, PaidAt: &now}))
+	require.Equal(t, InvoiceFulfillmentStatusNotStarted, PaymentOrderFulfillmentStatus(&dbent.PaymentOrder{Status: OrderStatusFailed}))
 }
 
 func TestInvoiceOrderPresentationsProjectLatestRefundEntitlementStateInOnePage(t *testing.T) {

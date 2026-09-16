@@ -5,7 +5,7 @@
       <div class="card p-4">
         <div class="flex flex-wrap items-center gap-3">
           <Select :aria-label="t('payment.orders.status')" v-model="currentFilter" :options="statusFilters" class="w-36" @change="handleFilterChange" />
-          <Select v-model="fulfillmentFilter" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentLabel')" class="w-44" @change="handleFilterChange" />
+          <Select v-model="fulfillmentFilter" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentFilterLabel')" class="w-44" @change="handleFilterChange" />
           <Select v-model="invoiceFilter" :options="invoiceOptions" :aria-label="t('payment.invoice.currentStatus')" class="w-44" @change="handleFilterChange" />
           <div class="flex flex-1 items-center justify-end gap-2">
             <button @click="fetchOrders" :disabled="loading" class="btn btn-secondary" :title="t('common.refresh')">
@@ -150,7 +150,7 @@ const invoiceFilter = ref('')
 const detailOrder = ref<PaymentOrder | null>(null)
 const fulfillmentOptions = computed(() => [
   { value: '', label: t('payment.orderOps.allFulfillments') },
-  ...['PENDING', 'FAILED', 'MANUAL_REVIEW', 'FULFILLED', 'NOT_STARTED'].map(value => ({ value, label: t(`payment.orderOps.fulfillment.${value.toLowerCase()}`) })),
+  ...['PENDING', 'FAILED', 'FULFILLED', 'NOT_STARTED'].map(value => ({ value, label: t(`payment.orderOps.fulfillment.${value.toLowerCase()}`) })),
 ])
 const invoiceOptions = computed(() => [
   { value: '', label: t('payment.invoice.admin.allStatuses') },

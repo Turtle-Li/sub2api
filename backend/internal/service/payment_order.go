@@ -2211,14 +2211,15 @@ func paymentOrderFulfillmentStatusPredicate(status string) predicate.PaymentOrde
 		return paymentorder.PaidAtIsNil()
 	case InvoiceFulfillmentStatusFailed:
 		return paymentorder.And(paymentorder.PaidAtNotNil(), paymentorder.CompletedAtIsNil(), paymentorder.StatusEQ(OrderStatusFailed))
-	case InvoiceFulfillmentStatusManualReview:
+	case RefundEntitlementStatusManualReview:
+		// Keep the former fulfillment query value as a read-only compatibility
+		// alias. New presentations expose this state separately from delivery.
 		return paymentorder.And(paymentorder.PaidAtNotNil(), paymentorder.CompletedAtIsNil(), paymentOrderHasUnifiedRefundReview())
 	case InvoiceFulfillmentStatusPending:
 		return paymentorder.And(
 			paymentorder.PaidAtNotNil(),
 			paymentorder.CompletedAtIsNil(),
 			paymentorder.StatusNEQ(OrderStatusFailed),
-			paymentorder.Not(paymentOrderHasUnifiedRefundReview()),
 		)
 	default:
 		return nil

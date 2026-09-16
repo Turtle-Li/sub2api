@@ -12,7 +12,7 @@
           <Select :aria-label="t('payment.orders.orderType')" v-model="orderFilters.order_type" :options="orderTypeFilterOptions" class="w-44" @change="handleFilterChange" />
           <Select v-model="orderFilters.invoice_status" :options="invoiceStatusFilterOptions" :aria-label="t('payment.invoice.admin.filterLabel')" class="w-40" @change="handleFilterChange" />
           <Select v-model="orderFilters.payment_status" :options="paymentFactOptions" :aria-label="t('payment.orderOps.paymentLabel')" class="w-40" @change="handleFilterChange" />
-          <Select v-model="orderFilters.fulfillment_status" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentLabel')" class="w-40" @change="handleFilterChange" />
+          <Select v-model="orderFilters.fulfillment_status" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentFilterLabel')" class="w-40" @change="handleFilterChange" />
           <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
             <button @click="loadOrders" :disabled="ordersLoading" class="btn btn-secondary" :title="t('common.refresh')">
               <Icon name="refresh" size="md" :class="ordersLoading ? 'animate-spin' : ''" />
@@ -123,14 +123,28 @@
             </div>
           </div>
         </div>
-        <div class="flex flex-wrap gap-3">
-          <OrderLifecycleBadge kind="payment" :value="paymentFact(selectedOrder)" />
-          <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(selectedOrder)" />
-          <OrderLifecycleBadge
-            v-if="selectedOrder.refund_entitlement_status && selectedOrder.refund_entitlement_status !== 'NOT_APPLICABLE'"
-            kind="refundEntitlement"
-            :value="selectedOrder.refund_entitlement_status"
-          />
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
+            <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.paymentLabel') }}</p>
+            <OrderLifecycleBadge kind="payment" :value="paymentFact(selectedOrder)" />
+          </div>
+          <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
+            <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.issuanceRecord') }}</p>
+            <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(selectedOrder)" />
+          </div>
+          <div v-if="hasRefundHandling(selectedOrder)" class="rounded-lg border border-amber-200 bg-amber-50 p-3 sm:col-span-2 dark:border-amber-900/70 dark:bg-amber-950/20">
+            <p class="mb-1 text-xs font-medium text-amber-900 dark:text-amber-100">{{ t('payment.orderOps.refundHandling') }}</p>
+            <div class="flex flex-wrap items-center gap-2">
+              <OrderLifecycleBadge
+                v-if="hasRefundEntitlementStatus(selectedOrder)"
+                kind="refundEntitlement"
+                :value="selectedOrder.refund_entitlement_status || 'NOT_APPLICABLE'"
+              />
+              <span v-if="selectedOrder.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'" class="text-xs text-amber-800 dark:text-amber-200">{{ t('payment.admin.refundMerchantBalanceInsufficientShort') }}</span>
+              <span v-else-if="selectedOrder.refund_recovery?.state === 'RETRY_QUEUED'" class="text-xs text-blue-700 dark:text-blue-300">{{ t('payment.admin.refundRetryQueuedShort') }}</span>
+              <span v-if="selectedOrder.needs_manual_review" class="text-xs text-red-700 dark:text-red-300">{{ t('payment.orderOps.refundReviewRequired') }}</span>
+            </div>
+          </div>
         </div>
         <OrderPurchaseSnapshot :order="selectedOrder" />
         <!-- Audit Logs -->
@@ -308,6 +322,14 @@ function paymentAmountSymbol(order: PaymentOrder | null | undefined): string {
   return currencySymbol(order?.currency)
 }
 
+function hasRefundEntitlementStatus(order: PaymentOrder): boolean {
+  return Boolean(order.refund_entitlement_status && order.refund_entitlement_status !== 'NOT_APPLICABLE')
+}
+
+function hasRefundHandling(order: PaymentOrder): boolean {
+  return hasRefundEntitlementStatus(order) || Boolean(order.refund_recovery?.state) || Boolean(order.needs_manual_review)
+}
+
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 function debounceLoadOrders() {
   if (debounceTimer) clearTimeout(debounceTimer)
@@ -322,7 +344,7 @@ const paymentFactOptions = computed(() => [
 ])
 const fulfillmentOptions = computed(() => [
   { value: '', label: t('payment.orderOps.allFulfillments') },
-  ...['PENDING', 'FAILED', 'MANUAL_REVIEW', 'FULFILLED', 'NOT_STARTED'].map(value => ({ value, label: t(`payment.orderOps.fulfillment.${value.toLowerCase()}`) })),
+  ...['PENDING', 'FAILED', 'FULFILLED', 'NOT_STARTED'].map(value => ({ value, label: t(`payment.orderOps.fulfillment.${value.toLowerCase()}`) })),
 ])
 let listRequest = 0
 async function loadOrders() {

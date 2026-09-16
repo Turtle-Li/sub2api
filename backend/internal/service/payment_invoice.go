@@ -61,11 +61,10 @@ const (
 	InvoicePaymentStatusPaid   = "PAID"
 	InvoicePaymentStatusUnpaid = "UNPAID"
 
-	InvoiceFulfillmentStatusFulfilled    = "FULFILLED"
-	InvoiceFulfillmentStatusFailed       = "FAILED"
-	InvoiceFulfillmentStatusPending      = "PENDING"
-	InvoiceFulfillmentStatusNotStarted   = "NOT_STARTED"
-	InvoiceFulfillmentStatusManualReview = "MANUAL_REVIEW"
+	InvoiceFulfillmentStatusFulfilled  = "FULFILLED"
+	InvoiceFulfillmentStatusFailed     = "FAILED"
+	InvoiceFulfillmentStatusPending    = "PENDING"
+	InvoiceFulfillmentStatusNotStarted = "NOT_STARTED"
 
 	RefundEntitlementStatusNotApplicable        = "NOT_APPLICABLE"
 	RefundEntitlementStatusReclaiming           = "RECLAIMING"
@@ -278,7 +277,7 @@ func (s *PaymentService) InvoiceOrderPresentations(ctx context.Context, orders [
 			Invoice:                 PaymentOrderInvoiceRecord(order),
 			ProductSnapshot:         SanitizedPaymentOrderProductSnapshot(order),
 			PaymentStatus:           PaymentOrderPaymentStatus(order),
-			FulfillmentStatus:       PaymentOrderFulfillmentStatus(order, needsReview),
+			FulfillmentStatus:       PaymentOrderFulfillmentStatus(order),
 			RefundEntitlementStatus: paymentOrderRefundEntitlementStatus(order, attempt, needsReview),
 			NeedsManualReview:       needsReview,
 			RefundRecovery:          paymentOrderRefundRecoveryPresentation(attempt),
@@ -497,7 +496,10 @@ func PaymentOrderPaymentStatus(order *dbent.PaymentOrder) string {
 	return InvoicePaymentStatusUnpaid
 }
 
-func PaymentOrderFulfillmentStatus(order *dbent.PaymentOrder, needsManualReview bool) string {
+// PaymentOrderFulfillmentStatus reports only the durable delivery fact. Refund
+// review is a distinct post-delivery concern and is exposed through
+// RefundEntitlementStatus / NeedsManualReview, never by replacing this value.
+func PaymentOrderFulfillmentStatus(order *dbent.PaymentOrder) string {
 	if order == nil || order.PaidAt == nil {
 		return InvoiceFulfillmentStatusNotStarted
 	}
@@ -505,9 +507,6 @@ func PaymentOrderFulfillmentStatus(order *dbent.PaymentOrder, needsManualReview 
 	// if a later refund-review warning is raised.
 	if order.CompletedAt != nil {
 		return InvoiceFulfillmentStatusFulfilled
-	}
-	if needsManualReview {
-		return InvoiceFulfillmentStatusManualReview
 	}
 	if order.Status == OrderStatusFailed {
 		return InvoiceFulfillmentStatusFailed
@@ -1258,7 +1257,8 @@ func normalizeInvoicePaymentStatusFilter(raw string) (string, error) {
 func normalizeInvoiceFulfillmentStatusFilter(raw string) (string, error) {
 	status := strings.ToUpper(strings.TrimSpace(raw))
 	switch status {
-	case "", InvoiceFulfillmentStatusFulfilled, InvoiceFulfillmentStatusFailed, InvoiceFulfillmentStatusPending, InvoiceFulfillmentStatusNotStarted, InvoiceFulfillmentStatusManualReview:
+	case "", InvoiceFulfillmentStatusFulfilled, InvoiceFulfillmentStatusFailed, InvoiceFulfillmentStatusPending, InvoiceFulfillmentStatusNotStarted,
+		RefundEntitlementStatusManualReview:
 		return status, nil
 	default:
 		return "", invoiceValidationError("fulfillment_status", "fulfillment status filter is invalid")
@@ -1266,8 +1266,9 @@ func normalizeInvoiceFulfillmentStatusFilter(raw string) (string, error) {
 }
 
 // paymentOrderHasUnifiedRefundReview is deliberately the same durable source
-// as unifiedRefundOrderNeedsReview. It is used only to form list predicates;
-// each lifecycle mutation re-reads the authoritative state under a row lock.
+// as unifiedRefundOrderNeedsReview. It drives the read model, the legacy list
+// filter alias, and invoice gate; each lifecycle mutation re-reads the
+// authoritative state under a row lock.
 func paymentOrderHasUnifiedRefundReview() predicate.PaymentOrder {
 	return predicate.PaymentOrder(func(selector *entsql.Selector) {
 		selector.Where(entsql.P(func(builder *entsql.Builder) {

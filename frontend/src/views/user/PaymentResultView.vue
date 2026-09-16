@@ -191,7 +191,7 @@ const isPaidFulfillmentFailure = computed(() => {
 })
 
 const isManualReview = computed(() => {
-  return !!order.value && paymentFact(order.value) === 'PAID' && fulfillmentFact(order.value) === 'MANUAL_REVIEW'
+  return !!order.value && paymentFact(order.value) === 'PAID' && Boolean(order.value.needs_manual_review)
 })
 
 const isProviderSuccessReturn = computed(() => {

@@ -917,7 +917,7 @@ func defaultPaymentOrderInvoicePresentation(order *dbent.PaymentOrder) service.P
 		Invoice:                 service.PaymentOrderInvoiceRecord(order),
 		ProductSnapshot:         service.SanitizedPaymentOrderProductSnapshot(order),
 		PaymentStatus:           service.PaymentOrderPaymentStatus(order),
-		FulfillmentStatus:       service.PaymentOrderFulfillmentStatus(order, false),
+		FulfillmentStatus:       service.PaymentOrderFulfillmentStatus(order),
 		RefundEntitlementStatus: service.DefaultPaymentOrderRefundEntitlementStatus(order),
 		InvoiceEligible:         false,
 	}

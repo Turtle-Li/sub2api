@@ -28,26 +28,34 @@
       </div>
     </template>
     <template #cell-fulfillment_status="{ row }">
-      <div class="space-y-1">
-        <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(row)" />
-        <OrderLifecycleBadge
-          v-if="row.refund_entitlement_status && row.refund_entitlement_status !== 'NOT_APPLICABLE'"
-          kind="refundEntitlement"
-          :value="row.refund_entitlement_status"
-        />
-        <p
-          v-if="row.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'"
-          class="max-w-52 text-xs leading-5 text-amber-700 dark:text-amber-300"
-        >
-          {{ t('payment.admin.refundMerchantBalanceInsufficientShort') }}
-        </p>
-        <p
-          v-else-if="row.refund_recovery?.state === 'RETRY_QUEUED'"
-          class="max-w-52 text-xs leading-5 text-blue-700 dark:text-blue-300"
-        >
-          {{ t('payment.admin.refundRetryQueuedShort') }}
-        </p>
-        <p v-if="row.needs_manual_review && fulfillmentFact(row) !== 'MANUAL_REVIEW'" class="text-xs text-red-700 dark:text-red-300">{{ t('payment.orderOps.reviewRequired') }}</p>
+      <div :class="hasRefundHandling(row) ? 'space-y-2' : 'space-y-1'">
+        <div>
+          <p v-if="hasRefundHandling(row)" class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.issuanceRecord') }}</p>
+          <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(row)" />
+        </div>
+        <div v-if="hasRefundHandling(row)" class="border-t border-gray-100 pt-2 dark:border-dark-600">
+          <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.refundHandling') }}</p>
+          <div class="space-y-1">
+            <OrderLifecycleBadge
+              v-if="hasRefundEntitlementStatus(row)"
+              kind="refundEntitlement"
+              :value="row.refund_entitlement_status || 'NOT_APPLICABLE'"
+            />
+            <p
+              v-if="row.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'"
+              class="max-w-52 text-xs leading-5 text-amber-700 dark:text-amber-300"
+            >
+              {{ t('payment.admin.refundMerchantBalanceInsufficientShort') }}
+            </p>
+            <p
+              v-else-if="row.refund_recovery?.state === 'RETRY_QUEUED'"
+              class="max-w-52 text-xs leading-5 text-blue-700 dark:text-blue-300"
+            >
+              {{ t('payment.admin.refundRetryQueuedShort') }}
+            </p>
+            <p v-if="row.needs_manual_review" class="text-xs text-red-700 dark:text-red-300">{{ t('payment.orderOps.refundReviewRequired') }}</p>
+          </div>
+        </div>
       </div>
     </template>
     <template #cell-invoice="{ row }">
@@ -79,6 +87,12 @@ import { formatOrderDateTime } from './orderUtils'
 import { compactOrderNumber, purchaseName, paymentFact, fulfillmentFact } from './orderPresentation'
 const { t } = useI18n()
 const props = defineProps<{ orders: PaymentOrder[]; loading: boolean; showUser?: boolean }>()
+function hasRefundEntitlementStatus(order: PaymentOrder): boolean {
+  return Boolean(order.refund_entitlement_status && order.refund_entitlement_status !== 'NOT_APPLICABLE')
+}
+function hasRefundHandling(order: PaymentOrder): boolean {
+  return hasRefundEntitlementStatus(order) || Boolean(order.refund_recovery?.state) || Boolean(order.needs_manual_review)
+}
 const columns = computed((): Column[] => [
   { key: 'purchase', label: t('payment.orderOps.purchase') },
   ...(props.showUser ? [{ key: 'user_email', label: t('payment.admin.colUser') }] : []),

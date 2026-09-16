@@ -34,7 +34,7 @@ export interface PublicOrderVerifyResult {
   paid_at?: string
   completed_at?: string
   payment_status?: 'PAID' | 'UNPAID'
-  fulfillment_status?: 'NOT_STARTED' | 'PENDING' | 'FULFILLED' | 'FAILED' | 'MANUAL_REVIEW'
+  fulfillment_status?: 'NOT_STARTED' | 'PENDING' | 'FULFILLED' | 'FAILED'
   needs_manual_review?: boolean
   plan_id?: number
 }

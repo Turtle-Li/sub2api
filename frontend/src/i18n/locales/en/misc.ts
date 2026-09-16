@@ -326,7 +326,10 @@ export default {
       notificationQueued: 'Notification queued again',
       "purchase": "Purchase",
       "paymentLabel": "Payment",
-      "fulfillmentLabel": "Fulfillment",
+      "fulfillmentLabel": "Benefits",
+      "fulfillmentFilterLabel": "Issuance record",
+      "issuanceRecord": "Issuance record",
+      "refundHandling": "Post-refund handling",
       "snapshot": "Purchase snapshot",
       "legacySnapshot": "This historical order has no saved product snapshot. Its original plan details are unavailable.",
       "snapshotHelp": "Captured at purchase time. Later plan changes do not alter this record.",
@@ -336,8 +339,9 @@ export default {
       "concurrency": "Concurrency",
       "resetCards": "Reset cards",
       "reviewRequired": "Manual review required",
+      "refundReviewRequired": "Refund handling requires manual review",
       "allPayments": "All payment states",
-      "allFulfillments": "All fulfillment states",
+      "allFulfillments": "All issuance records",
       "allEmails": "All email states",
       "payment": {
             "paid": "Paid",
@@ -351,12 +355,12 @@ export default {
             "manual_review": "Manual review"
       },
       "refundEntitlement": {
-            "not_applicable": "No refund benefit action",
-            "reclaiming": "Refund benefits: reclaiming",
-            "reclaimed": "Refund benefits: reclaimed",
-            "restored": "Refund benefits: restored",
-            "manual_review": "Refund benefits: manual action",
-            "historical_unverified": "Refund benefits: historical record unverified"
+            "not_applicable": "No action needed",
+            "reclaiming": "Reclaiming",
+            "reclaimed": "Reclaimed",
+            "restored": "Restored",
+            "manual_review": "Manual action required",
+            "historical_unverified": "Historical record unverified"
       },
       "copyOrder": "Copy full order number",
       "copyFailed": "Could not copy. Select and copy the order number.",
