@@ -24,6 +24,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// installSubscriptionGrantCurrentEndGuard mirrors just the production boundary
+// needed by a legacy recovery test. The shared SQLite fixture intentionally
+// permits shortened historical terms for reset-card coverage, so making that
+// broad fixture stricter would turn an unrelated, valid test scenario into an
+// impossible setup.
+func installSubscriptionGrantCurrentEndGuard(t *testing.T, client *dbent.Client) {
+	t.Helper()
+	_, err := client.ExecContext(context.Background(), `
+		CREATE TRIGGER subscription_grant_current_end_guard
+		BEFORE UPDATE OF current_term_end_at ON payment_subscription_grants
+		FOR EACH ROW
+		WHEN julianday(NEW.current_term_end_at) < julianday(NEW.term_start_at)
+		BEGIN
+			SELECT RAISE(ABORT, 'current_term_end_at must not precede term_start_at');
+		END;
+	`)
+	require.NoError(t, err)
+}
+
 type refundAuthCacheInvalidatorSpy struct {
 	userIDs []int64
 }
