@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"golang.org/x/net/http/httpguts"
 )
 
 const PinnedCodexTurnStatesExtraKey = "pinned_codex_turn_states"
@@ -63,7 +65,7 @@ func (a *Account) GetPinnedCodexTurnState(model string) string {
 		return ""
 	}
 
-	// 1. 精确匹配
+	// 1. 精确匹配（最高优先级）
 	if entry, ok := states[normModel]; ok {
 		if isPinnedStateActive(entry) {
 			return entry.State
@@ -71,13 +73,29 @@ func (a *Account) GetPinnedCodexTurnState(model string) string {
 		return ""
 	}
 
-	// 2. 前缀/别名匹配（例如请求模型为 gpt-6-astra-20260301，匹配配置的 gpt-6-astra）
+	// 2. 严格的带版本/日期快照别名匹配（按 pattern 长度降序，最长确定性命中）
+	// 例如：配置了 gpt-6-astra，请求模型为 gpt-6-astra-20260301（后缀为数字日期）可以安全命中；
+	// 但配置 gpt-6 绝不能命中 gpt-6-astra，配置 gpt-5 绝不能命中 gpt-5-codex。
+	type candidate struct {
+		pattern string
+		entry   PinnedCodexTurnStateEntry
+	}
+	var matches []candidate
 	for key, entry := range states {
 		if matchesPinnedModelPattern(normModel, key) {
-			if isPinnedStateActive(entry) {
-				return entry.State
-			}
-			return ""
+			matches = append(matches, candidate{pattern: key, entry: entry})
+		}
+	}
+	if len(matches) == 0 {
+		return ""
+	}
+	// 按 pattern 长度降序排序（最长最精确的优先）
+	sort.Slice(matches, func(i, j int) bool {
+		return len(matches[i].pattern) > len(matches[j].pattern)
+	})
+	for _, m := range matches {
+		if isPinnedStateActive(m.entry) {
+			return m.entry.State
 		}
 	}
 	return ""
@@ -87,8 +105,17 @@ func matchesPinnedModelPattern(model, pattern string) bool {
 	if strings.EqualFold(model, pattern) {
 		return true
 	}
-	if strings.HasPrefix(model, pattern+"-") || strings.HasPrefix(model, pattern+":") {
+	// 标签匹配：model 为 pattern:tag（例如 gpt-6-astra:latest）
+	if strings.HasPrefix(model, pattern+":") {
 		return true
+	}
+	// 日期/版本快照匹配：model 必须以 pattern + "-" 开头，且紧随其后的字符必须是数字（如 -20260301）
+	// 严格杜绝 gpt-6 匹配 gpt-6-astra，或 gpt-5 匹配 gpt-5-codex 的跨模型泄漏！
+	if strings.HasPrefix(model, pattern+"-") {
+		rem := strings.TrimPrefix(model, pattern+"-")
+		if rem != "" && rem[0] >= '0' && rem[0] <= '9' {
+			return true
+		}
 	}
 	return false
 }
@@ -181,6 +208,10 @@ func applyPinnedCodexTurnState(headers http.Header, account *Account, model stri
 	if pinnedState == "" {
 		return false
 	}
+	// 防御性检查：确保 header 值不含非法字符（如换行符），杜绝任何导致上游请求硬失败的自伤风险
+	if !httpguts.ValidHeaderFieldValue(pinnedState) {
+		return false
+	}
 	headers.Set(openAICodexTurnStateHeader, pinnedState)
 	return true
 }
@@ -194,24 +225,35 @@ func (s *adminServiceImpl) GetPinnedCodexTurnStates(ctx context.Context, account
 }
 
 func (s *adminServiceImpl) SetPinnedCodexTurnState(ctx context.Context, accountID int64, model string, entry PinnedCodexTurnStateEntry) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if !account.IsOpenAIOAuthLike() {
+		return nil, infraerrors.BadRequest("ACCOUNT_NOT_OPENAI_OAUTH", "pinned codex turn state is only supported for OpenAI OAuth accounts")
+	}
+
 	normModel := strings.ToLower(strings.TrimSpace(model))
 	if normModel == "" {
-		return nil, infraerrors.New(http.StatusBadRequest, "INVALID_MODEL", "model must not be empty")
+		return nil, infraerrors.BadRequest("INVALID_MODEL", "model must not be empty")
 	}
-	if strings.TrimSpace(entry.State) == "" {
-		return nil, infraerrors.New(http.StatusBadRequest, "INVALID_STATE", "turn state must not be empty")
+	state := strings.TrimSpace(entry.State)
+	if state == "" {
+		return nil, infraerrors.BadRequest("INVALID_STATE", "turn state must not be empty")
 	}
-	entry.State = strings.TrimSpace(entry.State)
+	if len(state) > 8192 {
+		return nil, infraerrors.BadRequest("STATE_TOO_LONG", "turn state must not exceed 8192 characters")
+	}
+	if !httpguts.ValidHeaderFieldValue(state) {
+		return nil, infraerrors.BadRequest("INVALID_STATE_HEADER", "turn state contains invalid characters for HTTP header")
+	}
+	entry.State = state
 	if entry.StateLen == 0 {
 		entry.StateLen = len(entry.State)
 	}
 	now := time.Now().UTC()
 	entry.UpdatedAt = &now
 
-	account, err := s.accountRepo.GetByID(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
 	currentStates := account.GetPinnedCodexTurnStates()
 	if currentStates == nil {
 		currentStates = make(map[string]PinnedCodexTurnStateEntry)
@@ -243,12 +285,33 @@ func (s *adminServiceImpl) SetPinnedCodexTurnState(ctx context.Context, accountI
 
 func (s *adminServiceImpl) SetPinnedCodexTurnStates(ctx context.Context, accountID int64, entries map[string]PinnedCodexTurnStateEntry) (*Account, error) {
 	if len(entries) == 0 {
-		return nil, infraerrors.New(http.StatusBadRequest, "INVALID_INPUT", "states must not be empty")
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "states must not be empty")
 	}
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
+	if !account.IsOpenAIOAuthLike() {
+		return nil, infraerrors.BadRequest("ACCOUNT_NOT_OPENAI_OAUTH", "pinned codex turn state is only supported for OpenAI OAuth accounts")
+	}
+
+	for k, entry := range entries {
+		normModel := strings.ToLower(strings.TrimSpace(k))
+		if normModel == "" {
+			return nil, infraerrors.BadRequest("INVALID_MODEL", "model must not be empty")
+		}
+		state := strings.TrimSpace(entry.State)
+		if state == "" {
+			return nil, infraerrors.BadRequest("INVALID_STATE", "turn state must not be empty")
+		}
+		if len(state) > 8192 {
+			return nil, infraerrors.BadRequest("STATE_TOO_LONG", "turn state must not exceed 8192 characters")
+		}
+		if !httpguts.ValidHeaderFieldValue(state) {
+			return nil, infraerrors.BadRequest("INVALID_STATE_HEADER", "turn state contains invalid characters for HTTP header")
+		}
+	}
+
 	currentStates := account.GetPinnedCodexTurnStates()
 	if currentStates == nil {
 		currentStates = make(map[string]PinnedCodexTurnStateEntry)
@@ -256,9 +319,6 @@ func (s *adminServiceImpl) SetPinnedCodexTurnStates(ctx context.Context, account
 	now := time.Now().UTC()
 	for k, entry := range entries {
 		normModel := strings.ToLower(strings.TrimSpace(k))
-		if normModel == "" || strings.TrimSpace(entry.State) == "" {
-			continue
-		}
 		entry.State = strings.TrimSpace(entry.State)
 		if entry.StateLen == 0 {
 			entry.StateLen = len(entry.State)

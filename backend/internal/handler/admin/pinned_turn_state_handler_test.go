@@ -29,7 +29,9 @@ func TestPinnedCodexTurnStateHandlers(t *testing.T) {
 	stub := newStubAdminService()
 	stub.accounts = []service.Account{
 		{
-			ID: 11,
+			ID:       11,
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeOAuth,
 			Extra: map[string]any{
 				service.PinnedCodexTurnStatesExtraKey: map[string]any{
 					"gpt-6-astra": map[string]any{

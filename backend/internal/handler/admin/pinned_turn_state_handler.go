@@ -13,11 +13,11 @@ import (
 )
 
 type setPinnedCodexTurnStateRequest struct {
-	Model     string                                         `json:"model"`
-	State     string                                         `json:"state"`
-	ExpiresAt *string                                        `json:"expires_at"`
-	StateLen  int                                            `json:"state_len"`
-	States    map[string]service.PinnedCodexTurnStateEntry   `json:"states"`
+	Model     string                                       `json:"model"`
+	State     string                                       `json:"state"`
+	ExpiresAt *string                                      `json:"expires_at"`
+	StateLen  int                                          `json:"state_len"`
+	States    map[string]service.PinnedCodexTurnStateEntry `json:"states"`
 }
 
 // GetPinnedCodexTurnStates GET /api/v1/admin/accounts/:id/pinned-turn-states

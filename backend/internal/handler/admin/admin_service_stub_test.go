@@ -846,14 +846,19 @@ func (s *stubAdminService) GetPinnedCodexTurnStates(ctx context.Context, account
 }
 
 func (s *stubAdminService) SetPinnedCodexTurnState(ctx context.Context, accountID int64, model string, entry service.PinnedCodexTurnStateEntry) (*service.Account, error) {
-	acc := &service.Account{ID: accountID, Extra: map[string]any{
-		service.PinnedCodexTurnStatesExtraKey: map[string]any{
-			model: map[string]any{
-				"state":     entry.State,
-				"state_len": entry.StateLen,
+	acc := &service.Account{
+		ID:       accountID,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Extra: map[string]any{
+			service.PinnedCodexTurnStatesExtraKey: map[string]any{
+				model: map[string]any{
+					"state":     entry.State,
+					"state_len": entry.StateLen,
+				},
 			},
 		},
-	}}
+	}
 	return acc, nil
 }
 
@@ -865,14 +870,24 @@ func (s *stubAdminService) SetPinnedCodexTurnStates(ctx context.Context, account
 			"state_len": v.StateLen,
 		}
 	}
-	acc := &service.Account{ID: accountID, Extra: map[string]any{
-		service.PinnedCodexTurnStatesExtraKey: m,
-	}}
+	acc := &service.Account{
+		ID:       accountID,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Extra: map[string]any{
+			service.PinnedCodexTurnStatesExtraKey: m,
+		},
+	}
 	return acc, nil
 }
 
 func (s *stubAdminService) DeletePinnedCodexTurnState(ctx context.Context, accountID int64, model string) (*service.Account, error) {
-	return &service.Account{ID: accountID, Extra: map[string]any{}}, nil
+	return &service.Account{
+		ID:       accountID,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Extra:    map[string]any{},
+	}, nil
 }
 
 // Ensure stub implements interface.
