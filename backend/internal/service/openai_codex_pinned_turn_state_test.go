@@ -15,7 +15,9 @@ func TestAccountGetPinnedCodexTurnState(t *testing.T) {
 	past := now.Add(-10 * time.Minute)
 
 	acc := &Account{
-		ID: 11,
+		ID:       11,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
 		Extra: map[string]any{
 			PinnedCodexTurnStatesExtraKey: map[string]any{
 				"gpt-6-astra": map[string]any{
@@ -61,8 +63,42 @@ func TestAccountGetPinnedCodexTurnState(t *testing.T) {
 		require.Empty(t, acc.GetPinnedCodexTurnState("claude-3-5-sonnet"))
 	})
 
-	t.Run("simple string entry without expiration", func(t *testing.T) {
-		require.Equal(t, "gAAAAAB_simple_state", acc.GetPinnedCodexTurnState("simple-model"))
+	t.Run("non-OAuth account returns empty and does not inject", func(t *testing.T) {
+		apiKeyAcc := &Account{
+			ID:       12,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeAPIKey,
+			Extra: map[string]any{
+				PinnedCodexTurnStatesExtraKey: map[string]any{
+					"gpt-6-astra": "gAAAAAB_astra_292",
+				},
+			},
+		}
+		require.Empty(t, apiKeyAcc.GetPinnedCodexTurnState("gpt-6-astra"))
+
+		h := make(http.Header)
+		h.Set("x-existing-header", "keep-me")
+		applied := applyPinnedCodexTurnState(h, apiKeyAcc, "gpt-6-astra")
+		require.False(t, applied)
+		require.Empty(t, h.Get(openAICodexTurnStateHeader))
+		require.Equal(t, "keep-me", h.Get("x-existing-header"))
+	})
+
+	t.Run("unconfigured account does not modify headers", func(t *testing.T) {
+		unconfiguredAcc := &Account{
+			ID:       13,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra:    map[string]any{},
+		}
+		require.Empty(t, unconfiguredAcc.GetPinnedCodexTurnState("gpt-6-astra"))
+
+		h := make(http.Header)
+		h.Set("x-codex-turn-state", "original-client-state")
+		applied := applyPinnedCodexTurnState(h, unconfiguredAcc, "gpt-6-astra")
+		require.False(t, applied)
+		// Headers remain completely untouched!
+		require.Equal(t, "original-client-state", h.Get(openAICodexTurnStateHeader))
 	})
 
 	t.Run("applyPinnedCodexTurnState injects header", func(t *testing.T) {
@@ -107,8 +143,10 @@ func (m *mockPinnedTurnStateAccountRepo) UpdateExtra(_ context.Context, id int64
 
 func TestAdminServicePinnedCodexTurnState(t *testing.T) {
 	acc := &Account{
-		ID:    11,
-		Extra: make(map[string]any),
+		ID:       11,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra:    make(map[string]any),
 	}
 	repo := &mockPinnedTurnStateAccountRepo{account: acc}
 	svc := &adminServiceImpl{accountRepo: repo}

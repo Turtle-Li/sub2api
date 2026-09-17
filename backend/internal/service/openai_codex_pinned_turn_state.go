@@ -20,7 +20,7 @@ type PinnedCodexTurnStateEntry struct {
 
 // GetPinnedCodexTurnStates 返回该账号配置的所有 pinned turn-state 映射表。
 func (a *Account) GetPinnedCodexTurnStates() map[string]PinnedCodexTurnStateEntry {
-	if a == nil || a.Extra == nil {
+	if a == nil || !a.IsOpenAIOAuthLike() || a.Extra == nil {
 		return nil
 	}
 	raw, ok := a.Extra[PinnedCodexTurnStatesExtraKey]
@@ -49,9 +49,9 @@ func (a *Account) GetPinnedCodexTurnStates() map[string]PinnedCodexTurnStateEntr
 }
 
 // GetPinnedCodexTurnState 返回匹配指定 model 的未过期 pinned state。
-// 若无配置、已过期或不匹配则返回空字符串。
+// 若无配置、已过期、非 OpenAI OAuth 账号或不匹配则返回空字符串。
 func (a *Account) GetPinnedCodexTurnState(model string) string {
-	if a == nil || a.Extra == nil {
+	if a == nil || !a.IsOpenAIOAuthLike() || a.Extra == nil {
 		return ""
 	}
 	normModel := strings.ToLower(strings.TrimSpace(model))
