@@ -113,6 +113,11 @@ type AdminService interface {
 	// CreateShadow 为指定 OpenAI OAuth 母账号创建 spark 维度影子账号（一母一影）。
 	// 影子账号不持凭据（Credentials 恒为空），透传母账号凭据；继承母账号的 ProxyID。
 	CreateShadow(ctx context.Context, parentID int64, opts ShadowOptions) (*Account, error)
+	// Pinned Codex turn-state management
+	GetPinnedCodexTurnStates(ctx context.Context, accountID int64) (map[string]PinnedCodexTurnStateEntry, error)
+	SetPinnedCodexTurnState(ctx context.Context, accountID int64, model string, entry PinnedCodexTurnStateEntry) (*Account, error)
+	SetPinnedCodexTurnStates(ctx context.Context, accountID int64, entries map[string]PinnedCodexTurnStateEntry) (*Account, error)
+	DeletePinnedCodexTurnState(ctx context.Context, accountID int64, model string) (*Account, error)
 
 	// Proxy management
 	ListProxies(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]Proxy, int64, error)

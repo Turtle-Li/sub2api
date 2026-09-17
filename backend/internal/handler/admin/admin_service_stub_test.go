@@ -833,5 +833,47 @@ func (s *stubAdminService) CreateShadow(ctx context.Context, parentID int64, opt
 	}, nil
 }
 
+func (s *stubAdminService) GetPinnedCodexTurnStates(ctx context.Context, accountID int64) (map[string]service.PinnedCodexTurnStateEntry, error) {
+	for _, acc := range s.accounts {
+		if acc.ID == accountID {
+			return acc.GetPinnedCodexTurnStates(), nil
+		}
+	}
+	if s.getAccountResult != nil && s.getAccountResult.ID == accountID {
+		return s.getAccountResult.GetPinnedCodexTurnStates(), nil
+	}
+	return nil, nil
+}
+
+func (s *stubAdminService) SetPinnedCodexTurnState(ctx context.Context, accountID int64, model string, entry service.PinnedCodexTurnStateEntry) (*service.Account, error) {
+	acc := &service.Account{ID: accountID, Extra: map[string]any{
+		service.PinnedCodexTurnStatesExtraKey: map[string]any{
+			model: map[string]any{
+				"state":     entry.State,
+				"state_len": entry.StateLen,
+			},
+		},
+	}}
+	return acc, nil
+}
+
+func (s *stubAdminService) SetPinnedCodexTurnStates(ctx context.Context, accountID int64, entries map[string]service.PinnedCodexTurnStateEntry) (*service.Account, error) {
+	m := make(map[string]any, len(entries))
+	for k, v := range entries {
+		m[k] = map[string]any{
+			"state":     v.State,
+			"state_len": v.StateLen,
+		}
+	}
+	acc := &service.Account{ID: accountID, Extra: map[string]any{
+		service.PinnedCodexTurnStatesExtraKey: m,
+	}}
+	return acc, nil
+}
+
+func (s *stubAdminService) DeletePinnedCodexTurnState(ctx context.Context, accountID int64, model string) (*service.Account, error) {
+	return &service.Account{ID: accountID, Extra: map[string]any{}}, nil
+}
+
 // Ensure stub implements interface.
 var _ service.AdminService = (*stubAdminService)(nil)
