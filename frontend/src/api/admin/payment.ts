@@ -82,6 +82,7 @@ export interface RefundReview {
   reason?: string
   quote_revision?: string
   generated_at: string
+  min_refund_amount?: number
   default_refund_amount: number
   max_refund_amount: number
   entitlement_amount: number
@@ -143,6 +144,7 @@ export interface SubscriptionRefundReview {
   purchased_seconds: number
   used_seconds: number
   remaining_seconds: number
+  seconds_to_reclaim: number
 }
 
 export type RefundReasonCode =
@@ -156,6 +158,8 @@ export interface RefundOrderRequest {
   quote_revision: string
   reason_code: RefundReasonCode
   reason_detail?: string
+  /** Present only when the administrator explicitly selected a subscription cash amount. */
+  refund_amount?: number
 }
 
 export type ExternalRefundMethodCode =
@@ -291,8 +295,11 @@ export const adminPaymentAPI = {
   },
 
   /** Load the fresh server-authoritative quote before an admin confirms a refund. */
-  getRefundReview(id: number) {
-    return apiClient.get<RefundReview>(`/admin/payment/orders/${id}/refund-review`)
+  getRefundReview(id: number, refundAmount?: number) {
+    const url = `/admin/payment/orders/${id}/refund-review`
+    return refundAmount === undefined
+      ? apiClient.get<RefundReview>(url)
+      : apiClient.get<RefundReview>(url, { params: { refund_amount: refundAmount } })
   },
 
   /** Restore missing historical subscription provenance, then return a fresh server quote. */

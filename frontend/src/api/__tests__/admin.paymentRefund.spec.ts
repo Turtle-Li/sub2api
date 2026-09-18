@@ -14,7 +14,7 @@ describe('admin payment refund API', () => {
     post.mockResolvedValue({ data: {} })
   })
 
-  it('loads a refund review and submits its quote revision and structured reason', async () => {
+  it('loads an omitted or explicit refund review and submits its quote revision and structured reason', async () => {
     const request = {
       quote_revision: 'review-51',
       reason_code: 'customer_request' as const,
@@ -22,9 +22,11 @@ describe('admin payment refund API', () => {
     }
 
     await adminPaymentAPI.getRefundReview(51)
+    await adminPaymentAPI.getRefundReview(51, 0.03)
     await adminPaymentAPI.refundOrder(51, request)
 
     expect(get).toHaveBeenCalledWith('/admin/payment/orders/51/refund-review')
+    expect(get).toHaveBeenCalledWith('/admin/payment/orders/51/refund-review', { params: { refund_amount: 0.03 } })
     expect(post).toHaveBeenCalledWith('/admin/payment/orders/51/refund', request)
   })
 

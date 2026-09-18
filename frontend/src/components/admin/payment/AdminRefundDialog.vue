@@ -6,26 +6,6 @@
     @close="emit('cancel')"
   >
     <form id="refund-form" class="space-y-4" @submit.prevent="handleSubmit">
-      <div
-        v-if="order?.refund_requested_at || order?.refund_request_reason"
-        class="rounded-lg border border-violet-200 bg-violet-50 p-3 dark:border-violet-800 dark:bg-violet-900/20"
-      >
-        <div class="flex items-center gap-2 text-sm font-medium text-violet-700 dark:text-violet-300">
-          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          {{ t('payment.admin.refundRequestInfo') }}
-        </div>
-        <div v-if="order?.refund_requested_at" class="mt-2 flex justify-between gap-3 text-sm">
-          <span class="text-violet-600 dark:text-violet-400">{{ t('payment.admin.refundRequestedAt') }}</span>
-          <span class="text-right text-violet-800 dark:text-violet-200">{{ formatDateTime(order.refund_requested_at) }}</span>
-        </div>
-        <div v-if="order?.refund_request_reason" class="mt-1 text-sm">
-          <span class="text-violet-600 dark:text-violet-400">{{ t('payment.admin.refundRequestReason') }}:</span>
-          <span class="ml-1 text-violet-800 dark:text-violet-200">{{ order.refund_request_reason }}</span>
-        </div>
-      </div>
-
       <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-700">
         <div class="flex justify-between gap-3 text-sm">
           <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
@@ -34,6 +14,10 @@
         <div class="mt-1 flex justify-between gap-3 text-sm">
           <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
           <span class="font-medium text-gray-900 dark:text-white">{{ formatCash(order?.pay_amount, order?.currency) }}</span>
+        </div>
+        <div v-if="order?.refund_request_reason" class="mt-2 border-t border-gray-200 pt-2 text-sm dark:border-dark-600">
+          <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundRequestReason') }}:</span>
+          <span class="ml-1 text-gray-900 dark:text-white">{{ order.refund_request_reason }}</span>
         </div>
       </div>
 
@@ -46,14 +30,21 @@
       </div>
 
       <div
-        v-else-if="error"
+        v-else-if="error && !review"
         role="alert"
         class="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300"
       >
         {{ error }}
       </div>
 
-      <template v-else-if="review">
+      <template v-if="review">
+        <div
+          v-if="error"
+          role="alert"
+          class="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300"
+        >
+          {{ error }}
+        </div>
         <section
           v-if="review.balance"
           class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
@@ -81,12 +72,37 @@
         </section>
 
         <section
-          v-else-if="review.subscription"
-          class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
+          v-else-if="review.subscription && review.can_refund && !review.requires_manual_review && review.quote_revision"
+          class="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-dark-600"
           :aria-label="t('payment.admin.subscriptionRefundImpact')"
         >
           <h3 class="text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.admin.subscriptionRefundImpact') }}</h3>
-          <dl class="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <label for="refund-amount" class="input-label">{{ t('payment.admin.refundAmount') }}</label>
+            <input
+              id="refund-amount"
+              :value="refundAmount"
+              name="refund_amount"
+              inputmode="decimal"
+              autocomplete="off"
+              class="input mt-1"
+              :aria-invalid="Boolean(refundAmountError)"
+              :aria-describedby="refundAmountError ? 'refund-amount-error' : 'refund-amount-range'"
+              :disabled="submitting || backfilling"
+              @input="setRefundAmount"
+            />
+            <p id="refund-amount-range" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('payment.admin.refundAmountMaximum', { amount: formatCash(review.max_refund_amount, review.currency) }) }}
+              <template v-if="minimumRefundAmount > 0.01"> · {{ t('payment.admin.refundAmountMinimum', { amount: formatCash(minimumRefundAmount, review.currency) }) }}</template>
+            </p>
+            <p v-if="refundAmountError" id="refund-amount-error" role="alert" class="mt-1 text-xs text-red-700 dark:text-red-300">
+              {{ refundAmountError }}
+            </p>
+            <p v-else-if="previewing" role="status" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('payment.admin.refundAmountPreviewing') }}
+            </p>
+          </div>
+          <dl class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
             <div>
               <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.usedTime') }}</dt>
               <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatDuration(review.subscription.used_seconds) }}</dd>
@@ -96,8 +112,8 @@
               <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatDuration(review.subscription.remaining_seconds) }}</dd>
             </div>
             <div>
-              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.proratedRefund') }}</dt>
-              <dd class="mt-1 font-medium text-red-600 dark:text-red-400">{{ formatCash(review.default_refund_amount, review.currency) }}</dd>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundEntitlementTime') }}</dt>
+              <dd class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatDuration(review.subscription.seconds_to_reclaim) }}</dd>
             </div>
             <div>
               <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.newExpiry') }}</dt>
@@ -106,17 +122,7 @@
           </dl>
         </section>
 
-        <section
-          v-else-if="review.requires_manual_review"
-          class="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20"
-        >
-          <div class="flex justify-between gap-3 text-sm">
-            <span class="text-amber-800 dark:text-amber-200">{{ t('payment.admin.refundCash') }}</span>
-            <span class="font-medium text-amber-900 dark:text-amber-100">{{ t('payment.admin.refundAmountPendingManualReview') }}</span>
-          </div>
-        </section>
-
-        <section v-else class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+        <section v-else-if="!review.requires_manual_review" class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
           <div class="flex justify-between gap-3 text-sm">
             <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundCash') }}</span>
             <span class="font-medium text-red-600 dark:text-red-400">{{ formatCash(review.default_refund_amount, review.currency) }}</span>
@@ -128,7 +134,7 @@
           role="alert"
           class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200"
         >
-          <p class="font-medium">{{ t('payment.admin.refundManualReviewRequired') }}</p>
+          <p class="font-medium">{{ canBackfillSubscription ? t('payment.admin.subscriptionGrantBackfillTitle') : t('payment.admin.refundManualReviewRequired') }}</p>
           <p v-if="reviewReason" class="mt-1">{{ reviewReason }}</p>
         </div>
         <section
@@ -174,11 +180,11 @@
             </label>
             <label class="block">
               <span class="input-label">{{ t('payment.admin.subscriptionGrantBackfillTermStart') }}</span>
-              <input v-model="backfillForm.termStartAt" data-testid="backfill-term-start" type="datetime-local" step="1" class="input" :disabled="backfilling" required />
+              <input v-model="backfillForm.termStartAt" data-testid="backfill-term-start" type="datetime-local" step="0.001" class="input" :disabled="backfilling" required />
             </label>
             <label class="block">
               <span class="input-label">{{ t('payment.admin.subscriptionGrantBackfillTermEnd') }}</span>
-              <input v-model="backfillForm.termEndAt" data-testid="backfill-term-end" type="datetime-local" step="1" class="input" :disabled="backfilling" required />
+              <input v-model="backfillForm.termEndAt" data-testid="backfill-term-end" type="datetime-local" step="0.001" class="input" :disabled="backfilling" required />
             </label>
           </div>
           <label class="block">
@@ -206,7 +212,7 @@
         </div>
       </template>
 
-      <div class="space-y-3">
+      <div v-if="review?.can_refund && !review.requires_manual_review" class="space-y-3">
         <div>
           <label for="refund-reason-code" class="input-label">{{ t('payment.admin.refundReasonCode') }}</label>
           <select
@@ -264,6 +270,7 @@
           {{ backfilling ? t('common.processing') : t('payment.admin.subscriptionGrantBackfillAction') }}
         </button>
         <button
+          v-if="review?.can_refund && !review?.requires_manual_review"
           type="submit"
           form="refund-form"
           :disabled="!canConfirm"
@@ -277,7 +284,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import type {
@@ -297,6 +304,8 @@ const props = defineProps<{
   order: PaymentOrder | null
   review: RefundReview | null
   loading?: boolean
+  previewing?: boolean
+  reviewedRefundAmount?: number
   error?: string
   submitting?: boolean
   backfilling?: boolean
@@ -304,7 +313,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'confirm', data: { reason_code: RefundReasonCode; reason_detail?: string }): void
+  (e: 'confirm', data: { reason_code: RefundReasonCode; reason_detail?: string; refund_amount?: number }): void
+  (e: 'preview', refundAmount: number | null): void
   (e: 'backfill', data: SubscriptionGrantBackfillRequest): void
   (e: 'cancel'): void
 }>()
@@ -321,6 +331,8 @@ const form = reactive<{ reasonCode: RefundReasonCode; reasonDetail: string }>({
   reasonCode: 'customer_request',
   reasonDetail: '',
 })
+const refundAmount = ref('')
+const refundAmountTouched = ref(false)
 const backfillEvidenceSources: SubscriptionGrantBackfillEvidenceSource[] = [
   'payment_audit_and_subscription',
   'provider_receipt',
@@ -340,6 +352,12 @@ const backfillForm = reactive<{
   evidenceSource: 'payment_audit_and_subscription',
   evidenceDetail: '',
 })
+const backfillOriginal = reactive({
+  termStartAt: '',
+  termEndAt: '',
+  termStartLocal: '',
+  termEndLocal: '',
+})
 
 const reviewReason = computed(() => {
   const review = props.review
@@ -352,17 +370,55 @@ const reviewReason = computed(() => {
   return review.reason || ''
 })
 
+const isSubscriptionReview = computed(() => Boolean(
+  props.review?.subscription &&
+  props.review.can_refund &&
+  !props.review.requires_manual_review &&
+  props.review.quote_revision,
+))
+
+const minimumRefundAmount = computed(() => {
+  const value = props.review?.min_refund_amount
+  return Number.isFinite(value) ? Number(value) : 0.01
+})
+
+const selectedRefundAmount = computed<number | null>(() => {
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(refundAmount.value)) return null
+  const value = Number(refundAmount.value)
+  return Number.isFinite(value) ? value : null
+})
+
+function sameCashAmount(left: number | undefined, right: number | null): boolean {
+  return left !== undefined && right !== null && Math.round(left * 100) === Math.round(right * 100)
+}
+
+const refundAmountError = computed(() => {
+  if (!isSubscriptionReview.value || !refundAmountTouched.value) return ''
+  const amount = selectedRefundAmount.value
+  if (amount === null) return t('payment.admin.refundAmountInvalid')
+  if (amount < minimumRefundAmount.value) return t('payment.admin.refundAmountTooSmall')
+  if (amount > Number(props.review?.max_refund_amount || 0)) return t('payment.admin.refundAmountExceeded')
+  return ''
+})
+
+const hasFreshRefundAmountReview = computed(() => {
+  if (!isSubscriptionReview.value || !refundAmountTouched.value) return true
+  return !refundAmountError.value && !props.previewing && sameCashAmount(props.reviewedRefundAmount, selectedRefundAmount.value)
+})
+
 const canConfirm = computed(() => {
   const review = props.review
   return Boolean(
     props.show &&
     !props.loading &&
+    !props.previewing &&
     !props.error &&
     !props.submitting &&
     !props.backfilling &&
     review?.can_refund &&
     !review.requires_manual_review &&
     review.quote_revision &&
+    hasFreshRefundAmountReview.value &&
     (form.reasonCode !== 'other' || form.reasonDetail.trim()),
   )
 })
@@ -389,6 +445,21 @@ function resetReason() {
   form.reasonDetail = props.order?.refund_request_reason || ''
 }
 
+function resetRefundAmount() {
+  refundAmount.value = ''
+  refundAmountTouched.value = false
+}
+
+function formatEditableCash(value: number | undefined): string {
+  return Number.isFinite(value) ? Number(value).toFixed(2) : ''
+}
+
+function setRefundAmount(event: Event) {
+  refundAmountTouched.value = true
+  refundAmount.value = (event.target as HTMLInputElement).value
+  emit('preview', refundAmountError.value ? null : selectedRefundAmount.value)
+}
+
 function toLocalDateTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
@@ -396,11 +467,32 @@ function toLocalDateTime(value: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+function setSuggestedBackfillTerms(termStartAt: string, termEndAt: string) {
+  backfillOriginal.termStartAt = termStartAt
+  backfillOriginal.termEndAt = termEndAt
+  backfillOriginal.termStartLocal = toLocalDateTime(termStartAt)
+  backfillOriginal.termEndLocal = toLocalDateTime(termEndAt)
+  backfillForm.termStartAt = backfillOriginal.termStartLocal
+  backfillForm.termEndAt = backfillOriginal.termEndLocal
+}
+
+function clearBackfillTerms() {
+  backfillOriginal.termStartAt = ''
+  backfillOriginal.termEndAt = ''
+  backfillOriginal.termStartLocal = ''
+  backfillOriginal.termEndLocal = ''
+  backfillForm.termStartAt = ''
+  backfillForm.termEndAt = ''
+}
+
 function resetBackfill() {
   const suggestion = props.review?.subscription_backfill
   backfillForm.subscriptionId = suggestion?.suggested_subscription_id || null
-  backfillForm.termStartAt = suggestion?.suggested_term_start_at ? toLocalDateTime(suggestion.suggested_term_start_at) : ''
-  backfillForm.termEndAt = suggestion?.suggested_term_end_at ? toLocalDateTime(suggestion.suggested_term_end_at) : ''
+  if (suggestion?.suggested_term_start_at && suggestion.suggested_term_end_at) {
+    setSuggestedBackfillTerms(suggestion.suggested_term_start_at, suggestion.suggested_term_end_at)
+  } else {
+    clearBackfillTerms()
+  }
   backfillForm.evidenceSource = suggestion?.evidence_source || 'payment_audit_and_subscription'
   backfillForm.evidenceDetail = ''
 }
@@ -408,27 +500,39 @@ function resetBackfill() {
 function applySelectedBackfillCandidate() {
   const suggestion = props.review?.subscription_backfill
   const candidate = suggestion?.candidates.find(item => item.subscription_id === backfillForm.subscriptionId)
-  if (!candidate || !suggestion?.purchased_days) return
-  const end = new Date(candidate.expires_at)
-  const start = new Date(end)
-  start.setUTCDate(start.getUTCDate() - suggestion.purchased_days)
-  const lifecycleStart = new Date(candidate.starts_at)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start < lifecycleStart) return
-  backfillForm.termStartAt = toLocalDateTime(start.toISOString())
-  backfillForm.termEndAt = toLocalDateTime(end.toISOString())
+  if (!candidate || !suggestion) return
+  if (candidate.subscription_id === suggestion.suggested_subscription_id) {
+    setSuggestedBackfillTerms(suggestion.suggested_term_start_at, suggestion.suggested_term_end_at)
+    return
+  }
+  // A candidate lifecycle can already contain grants. Only the server can prove
+  // a safe term interval, so require the administrator to enter reviewed evidence.
+  clearBackfillTerms()
 }
 
 watch(() => props.show, (show) => {
-  if (show) resetReason()
+  if (show) {
+    resetReason()
+    resetRefundAmount()
+  }
 })
 
 watch(() => props.order?.id, () => {
-  if (props.show) resetReason()
+  if (props.show) {
+    resetReason()
+    resetRefundAmount()
+  }
 })
 
-watch(() => props.review?.subscription_backfill, () => {
+watch(() => props.review?.subscription_backfill?.audit_revision, () => {
   if (props.show) resetBackfill()
-}, { deep: true, immediate: true })
+}, { immediate: true })
+
+watch(() => props.review?.quote_revision, () => {
+  if (props.show && isSubscriptionReview.value && !refundAmountTouched.value) {
+    refundAmount.value = formatEditableCash(props.review?.default_refund_amount)
+  }
+}, { immediate: true })
 
 function formatCredit(value: number | undefined): string {
   const amount = Number.isFinite(value) ? Number(value) : 0
@@ -468,23 +572,31 @@ function formatDateTime(dateStr: string): string {
 function handleSubmit() {
   if (!canConfirm.value) return
   const detail = form.reasonDetail.trim()
+  const selectedAmount = refundAmountTouched.value ? selectedRefundAmount.value : null
   emit('confirm', {
     reason_code: form.reasonCode,
     ...(detail ? { reason_detail: detail } : {}),
+    ...(selectedAmount !== null ? { refund_amount: selectedAmount } : {}),
   })
+}
+
+function serializeBackfillTimestamp(value: string, originalValue: string, originalLocalValue: string): string {
+  if (originalValue && value === originalLocalValue) return originalValue
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString()
 }
 
 function handleBackfill() {
   const suggestion = props.review?.subscription_backfill
   if (!canSubmitBackfill.value || !suggestion || !backfillForm.subscriptionId) return
-  const termStartAt = new Date(backfillForm.termStartAt)
-  const termEndAt = new Date(backfillForm.termEndAt)
-  if (Number.isNaN(termStartAt.getTime()) || Number.isNaN(termEndAt.getTime())) return
+  const termStartAt = serializeBackfillTimestamp(backfillForm.termStartAt, backfillOriginal.termStartAt, backfillOriginal.termStartLocal)
+  const termEndAt = serializeBackfillTimestamp(backfillForm.termEndAt, backfillOriginal.termEndAt, backfillOriginal.termEndLocal)
+  if (!termStartAt || !termEndAt) return
   emit('backfill', {
     audit_revision: suggestion.audit_revision,
     subscription_id: backfillForm.subscriptionId,
-    term_start_at: termStartAt.toISOString(),
-    term_end_at: termEndAt.toISOString(),
+    term_start_at: termStartAt,
+    term_end_at: termEndAt,
     evidence_source: backfillForm.evidenceSource,
     evidence_detail: backfillForm.evidenceDetail.trim(),
   })

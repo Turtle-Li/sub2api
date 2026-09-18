@@ -20,15 +20,30 @@
       </div>
     </template>
     <template #cell-payment_status="{ row }">
-      <div class="space-y-1">
+      <div v-if="showUser">
+        <OrderStatusBadge v-if="hasCurrentPaymentOutcome(row)" :status="row.status" />
+        <OrderLifecycleBadge v-else kind="payment" :value="paymentFact(row)" />
+      </div>
+      <div v-else class="space-y-1">
         <OrderLifecycleBadge kind="payment" :value="paymentFact(row)" />
-        <div v-if="row.status.startsWith('REFUND') || row.status === 'PARTIALLY_REFUNDED' || ['EXPIRED', 'CANCELLED'].includes(row.status)">
+        <div v-if="hasCurrentPaymentOutcome(row)">
           <OrderStatusBadge :status="row.status" />
         </div>
       </div>
     </template>
     <template #cell-fulfillment_status="{ row }">
-      <div :class="hasRefundHandling(row) ? 'space-y-2' : 'space-y-1'">
+      <div v-if="showUser" class="space-y-1">
+        <OrderLifecycleBadge
+          v-if="hasRefundEntitlementStatus(row)"
+          kind="refundEntitlement"
+          :value="row.refund_entitlement_status || 'NOT_APPLICABLE'"
+        />
+        <OrderLifecycleBadge v-else kind="fulfillment" :value="fulfillmentFact(row)" />
+        <p v-if="refundBlockerKey(row)" class="max-w-52 text-xs leading-5" :class="refundBlockerClass(row)">
+          {{ t(refundBlockerKey(row)) }}
+        </p>
+      </div>
+      <div v-else :class="hasRefundHandling(row) ? 'space-y-2' : 'space-y-1'">
         <div>
           <p v-if="hasRefundHandling(row)" class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.issuanceRecord') }}</p>
           <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(row)" />
@@ -90,8 +105,22 @@ const props = defineProps<{ orders: PaymentOrder[]; loading: boolean; showUser?:
 function hasRefundEntitlementStatus(order: PaymentOrder): boolean {
   return Boolean(order.refund_entitlement_status && order.refund_entitlement_status !== 'NOT_APPLICABLE')
 }
+function hasCurrentPaymentOutcome(order: PaymentOrder): boolean {
+  return order.status.startsWith('REFUND') || order.status === 'PARTIALLY_REFUNDED' || ['EXPIRED', 'CANCELLED'].includes(order.status)
+}
 function hasRefundHandling(order: PaymentOrder): boolean {
   return hasRefundEntitlementStatus(order) || Boolean(order.refund_recovery?.state) || Boolean(order.needs_manual_review)
+}
+function refundBlockerKey(order: PaymentOrder): string {
+  if (order.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE') return 'payment.admin.refundMerchantBalanceInsufficientCompact'
+  if (order.refund_recovery?.state === 'RETRY_QUEUED') return 'payment.admin.refundRetryQueuedCompact'
+  if (order.needs_manual_review) return 'payment.admin.refundManualReviewCompact'
+  return ''
+}
+function refundBlockerClass(order: PaymentOrder): string {
+  if (order.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE') return 'text-amber-700 dark:text-amber-300'
+  if (order.refund_recovery?.state === 'RETRY_QUEUED') return 'text-blue-700 dark:text-blue-300'
+  return 'text-red-700 dark:text-red-300'
 }
 const columns = computed((): Column[] => [
   { key: 'purchase', label: t('payment.orderOps.purchase') },

@@ -391,10 +391,13 @@ func (s *PaymentService) reserveReviewedRefundEntitlement(ctx context.Context, c
 	if !review.CanRefund {
 		return nil, fmt.Errorf("%w: refund is no longer available (%s)", errRefundQuoteStale, review.ReasonCode)
 	}
-	if review.QuoteRevision != plan.QuoteRevision {
+	if selectedRefundRevision(review.QuoteRevision, plan.RequestedCashMinor) != plan.QuoteRevision {
 		return nil, fmt.Errorf("%w: revision changed from %s to %s", errRefundQuoteStale, plan.QuoteRevision, review.QuoteRevision)
 	}
 
+	if err := selectRefundReviewAmount(review, plan.RequestedCashMinor); err != nil {
+		return nil, err
+	}
 	plan.Order = order
 	plan.RefundAmount = review.EntitlementAmount
 	plan.GatewayAmount = review.DefaultRefundAmount
@@ -457,7 +460,7 @@ func (s *PaymentService) reserveReviewedRefundEntitlement(ctx context.Context, c
 		if review.Subscription == nil {
 			return nil, errors.New("subscription refund review is incomplete")
 		}
-		grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, true)
+		grant, sub, err := loadReviewedSubscriptionRefundState(ctx, client, order.ID, true)
 		if err != nil {
 			return nil, err
 		}
@@ -470,8 +473,8 @@ func (s *PaymentService) reserveReviewedRefundEntitlement(ctx context.Context, c
 		res, err := client.ExecContext(ctx, `UPDATE payment_subscription_grants SET
 			reserved_seconds = $2, reserved_cash_minor = $3,
 			version = version + 1, updated_at = CURRENT_TIMESTAMP
-			WHERE payment_order_id = $1 AND version = $4 AND reserved_seconds = 0`,
-			order.ID, review.Subscription.RemainingSeconds, cashMinor, grant.Version)
+			WHERE payment_order_id = $1 AND version = $4 AND reserved_seconds = 0 AND reserved_cash_minor = 0`,
+			order.ID, review.Subscription.SecondsToReclaim, cashMinor, grant.Version)
 		if err != nil {
 			return nil, err
 		}
@@ -495,7 +498,7 @@ func (s *PaymentService) reserveReviewedRefundEntitlement(ctx context.Context, c
 		plan.DeductBalance = false
 		plan.DeductionType = payment.DeductionTypeSubscription
 		plan.SubscriptionID = sub.ID
-		plan.SubscriptionSecondsToReserve = review.Subscription.RemainingSeconds
+		plan.SubscriptionSecondsToReserve = review.Subscription.SecondsToReclaim
 		plan.SubscriptionNewExpiry = newExpiry
 	default:
 		return nil, errors.New("unsupported reviewed refund kind")
@@ -543,11 +546,11 @@ func finalizeReviewedRefundEntitlement(ctx context.Context, client *dbent.Client
 			return err
 		}
 	case refundReviewKindSubscription:
-		grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, true)
+		grant, sub, err := loadReviewedSubscriptionRefundState(ctx, client, order.ID, true)
 		if err != nil {
 			return err
 		}
-		if grant.ReservedSeconds != attempt.SubscriptionSeconds ||
+		if grant.ReservedSeconds != attempt.SubscriptionSeconds || grant.ReservedCashMinor != attempt.AmountFen ||
 			attempt.ValuationAt == nil || !timeEqualToSecond(sub.ExpiresAt, *attempt.ValuationAt) {
 			return errors.New("reserved subscription entitlement changed")
 		}
@@ -631,11 +634,11 @@ func releaseReviewedRefundEntitlement(ctx context.Context, client *dbent.Client,
 			return err
 		}
 	case refundReviewKindSubscription:
-		grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, true)
+		grant, sub, err := loadReviewedSubscriptionRefundState(ctx, client, order.ID, true)
 		if err != nil {
 			return err
 		}
-		if grant.ReservedSeconds != attempt.SubscriptionSeconds || attempt.ValuationAt == nil ||
+		if grant.ReservedSeconds != attempt.SubscriptionSeconds || grant.ReservedCashMinor != attempt.AmountFen || attempt.ValuationAt == nil ||
 			!timeEqualToSecond(sub.ExpiresAt, *attempt.ValuationAt) {
 			return errors.New("reserved subscription entitlement cannot be restored automatically")
 		}

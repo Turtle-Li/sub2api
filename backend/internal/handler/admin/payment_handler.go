@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -360,9 +361,10 @@ func defaultAdminPaymentOrderInvoicePresentation(order *dbent.PaymentOrder) serv
 
 // AdminProcessRefundRequest is the request body for admin refund processing.
 type AdminProcessRefundRequest struct {
-	QuoteRevision string `json:"quote_revision" binding:"required"`
-	ReasonCode    string `json:"reason_code"`
-	ReasonDetail  string `json:"reason_detail"`
+	RefundAmount  json.RawMessage `json:"refund_amount"`
+	QuoteRevision string          `json:"quote_revision" binding:"required"`
+	ReasonCode    string          `json:"reason_code"`
+	ReasonDetail  string          `json:"reason_detail"`
 	// Reason remains accepted for older admin clients. The service normalizes it
 	// as an "other" reason with the supplied text as its detail.
 	Reason string `json:"reason"`
@@ -398,7 +400,14 @@ func (h *PaymentHandler) GetRefundReview(c *gin.Context) {
 	if !ok {
 		return
 	}
-	review, err := h.paymentService.ReviewRefund(c.Request.Context(), orderID)
+	var amount *string
+	if raw, present := c.GetQuery("refund_amount"); present {
+		amount = &raw
+	} else if _, present := c.Request.URL.Query()["refund_amount"]; present {
+		raw := ""
+		amount = &raw
+	}
+	review, err := h.paymentService.ReviewRefundWithAmount(c.Request.Context(), orderID, amount)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -461,11 +470,16 @@ func (h *PaymentHandler) ProcessRefund(c *gin.Context) {
 		return
 	}
 
-	plan, err := h.paymentService.PrepareReviewedRefundRequest(c.Request.Context(), orderID, req.QuoteRevision, service.RefundReasonInput{
+	var amount *string
+	if len(req.RefundAmount) != 0 {
+		raw := string(req.RefundAmount)
+		amount = &raw
+	}
+	plan, err := h.paymentService.PrepareReviewedRefundRequestWithAmount(c.Request.Context(), orderID, req.QuoteRevision, service.RefundReasonInput{
 		Code:         req.ReasonCode,
 		Detail:       req.ReasonDetail,
 		LegacyReason: req.Reason,
-	})
+	}, amount)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

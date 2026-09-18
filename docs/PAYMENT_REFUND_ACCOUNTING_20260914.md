@@ -30,8 +30,12 @@ created by each subscription order.
 
    `floor_to_currency(original paid amount * unused seconds / purchased seconds)`
 
-   The submitted refund uses that server-calculated amount. The corresponding
-   tail duration is removed; the browser cannot replace it with a chosen value.
+   The administrator may select a positive cash amount up to that server-calculated
+   maximum. The server computes and previews the corresponding tail duration and
+   product recovery; the browser cannot supply either entitlement effect. Amounts
+   below the smallest representable positive product-cent recovery are rejected
+   with the current minimum, never rounded up. Omitting the amount retains the
+   complete unused-time refund.
 6. Subscription rollback is automatic only when the order's recorded term is
    the current tail of the same subscription. A merged historical term, later
    renewal, manual extension, deleted group, missing grant, or non-reversible
@@ -109,8 +113,20 @@ binds the valuation time, exact refundable seconds and resulting expiry; once
 the window changes, submission is rejected as stale and the dialog reloads the
 review before the administrator can retry.
 
-`POST /api/v1/admin/payment/orders/:id/refund` submits only the reason and
-review revision. Under one database transaction the service locks the order
+`GET /api/v1/admin/payment/orders/:id/refund-review?refund_amount=0.03` previews
+a selected subscription cash refund. `default_refund_amount` is the selected
+cash amount, `max_refund_amount` remains the full unused-time ceiling, and
+`min_refund_amount` exposes the minimum representable cash refund. Subscription
+`remaining_seconds` remains the full unused duration; `seconds_to_reclaim` and
+`new_expires_at` describe the selected effect. Explicit selection, even the
+maximum, binds its minor-unit amount into the quote revision.
+
+`POST /api/v1/admin/payment/orders/:id/refund` submits the reason, review revision
+and optional numeric `refund_amount`. Legacy clients that omit it keep the
+original full-quote contract. Balance refunds retain the complete quote; a
+different selected balance amount is rejected. Amounts must be positive, within
+the current ceiling, and representable with at most two decimal places.
+Under one database transaction the service locks the order
 and relevant wallet/subscription rows, recalculates the review, rejects a stale
 revision, creates the durable attempt, reserves the entitlement, and marks the
 order pending. Both balance and subscription attempts must then pass their
@@ -119,6 +135,38 @@ The balance fence uses an expiring, unique token: expiry cannot reset to a
 previous value, so a delayed cache reader can never refill an old balance after
 the token has expired or been replaced. Any pending reviewed attempt is resumed
 by a bounded, leased worker with the exact persisted provider idempotency key.
+
+Selected subscription accounting uses cumulative integer targets. Let `P` be
+original cash fen, `A` original product cents, `T` purchased seconds, `R` already
+reclaimed seconds, `C` confirmed refunded cash fen and `E` settled product cents.
+For a proper partial selection `q`, cumulative reclaimed seconds become
+`N = ceil((C + q) * T / P)`; this attempt reclaims `N - R` seconds and
+`floor(A * N / T) - E` product cents. The selected expiry subtracts those seconds
+from the current grant expiry, preserving its fractional second. All ratios use
+integer arithmetic. A proper partial amount is also rejected unless
+`floor(P * N / T) - C == q`: short, high-priced terms can skip cash-fen values
+at whole-second precision, and the service must not recover time worth more
+than the selected cash. The minimum is a lower bound, not a guarantee that
+every higher amount is representable; the full maximum remains available.
+This prevents repeated partial requests from accumulating
+per-attempt rounding loss. Choosing the current maximum uses the original full
+quote and exact tail boundary, absorbing its final rounding remainder.
+
+A positive cash refund must recover at least one product cent and one second,
+as required by the existing durable attempt and reservation contracts. With
+`Nmin = max(R + 1, ceil((E + 1) * T / A))`, the proper-partial minimum is
+`max(1, floor((Nmin - 1) * P / T) + 1 - C)`, capped by the valid full maximum.
+This matters when the receipt includes fees (`P > A`): one cash fen may not
+represent a positive product-cent recovery. No schema migration or zero-product
+refund bypass is introduced. Increasing entitlement precision would require a
+separate accounting and persistence decision.
+
+The service preserves the requested cash separately from calculated effects,
+checks quote freshness before selecting effects under the financial locks, and
+persists exactly that selected cash, duration, product delta and expiry through
+the existing attempt, provider request and audit path. Terminal handling binds
+both reserved seconds and cash, captures success once, restores the original
+expiry on trusted failure, and retains the same attempt on uncertain results.
 
 Lock order:
 
@@ -138,8 +186,8 @@ effect:
 
 - balance: paid credit remaining, gift excluded from cash, gift reclaimed, and
   cash refundable now;
-- subscription: purchased term, time used, time remaining, expiry adjustment,
-  and prorated cash refund.
+- subscription: purchased term, time used, time remaining, selectable cash refund
+  within the server range, and the server-previewed reclaimed time and expiry.
 
 The balance-deduction checkbox and force-refund override are removed from the
 reviewed flow. A stale quote refreshes the review instead of retrying an old

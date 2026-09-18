@@ -58,9 +58,9 @@ function balanceReview(overrides: Partial<RefundReview> = {}): RefundReview {
   }
 }
 
-function mountDialog(review: RefundReview) {
+function mountDialog(review: RefundReview, props: Record<string, unknown> = {}) {
   return mount(AdminRefundDialog, {
-    props: { show: true, order: order(), review },
+    props: { show: true, order: order(), review, ...props },
     global: { stubs: { BaseDialog: BaseDialogStub } },
   })
 }
@@ -103,7 +103,7 @@ describe('AdminRefundDialog', () => {
     }])
   })
 
-  it('renders subscription time and the new expiry from the authoritative quote', () => {
+  it('renders selected subscription effects from the authoritative quote', () => {
     const wrapper = mountDialog(balanceReview({
       order_type: 'subscription',
       balance: undefined,
@@ -116,15 +116,18 @@ describe('AdminRefundDialog', () => {
         purchased_seconds: 7_776_000,
         used_seconds: 2_592_000,
         remaining_seconds: 5_184_000,
+        seconds_to_reclaim: 3_456_000,
       },
-    }))
+    }), { reviewedRefundAmount: 12.34 })
 
     expect(wrapper.text()).toContain('payment.admin.usedTime')
     expect(wrapper.text()).toContain('payment.admin.remainingTime')
-    expect(wrapper.text()).toContain('payment.admin.proratedRefund')
+    expect(wrapper.text()).toContain('payment.admin.refundEntitlementTime')
     expect(wrapper.text()).toContain('payment.admin.newExpiry')
     expect(wrapper.text()).toContain('payment.admin.refundTimeDays:30')
     expect(wrapper.text()).toContain('payment.admin.refundTimeDays:60')
+    expect(wrapper.text()).toContain('payment.admin.refundTimeDays:40')
+    expect((wrapper.get('#refund-amount').element as HTMLInputElement).value).toBe('12.34')
   })
 
   it('shows the manual-review reason and disables confirmation', async () => {
@@ -143,14 +146,10 @@ describe('AdminRefundDialog', () => {
 
     expect(wrapper.text()).toContain('payment.admin.refundManualReviewRequired')
     expect(wrapper.text()).toContain('Manual entitlement rollback is required.')
-    expect(wrapper.text()).toContain('payment.admin.refundAmountPendingManualReview')
 		expect(wrapper.text().match(/Manual entitlement rollback is required\./g)).toHaveLength(1)
 		expect(wrapper.text()).not.toContain('payment.admin.refundUnavailable')
     expect(wrapper.text()).not.toContain('¥0.00')
-    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
-
-    await wrapper.find('#refund-reason-detail').setValue('Customer cancellation')
-    await wrapper.find('form').trigger('submit')
+    expect(wrapper.find('button[type="submit"]').exists()).toBe(false)
     expect(wrapper.emitted('confirm')).toBeUndefined()
   })
 
@@ -199,8 +198,75 @@ describe('AdminRefundDialog', () => {
       evidence_detail: 'Verified order audit and subscription dates',
     }))
     expect(wrapper.emitted('backfill')?.[0]?.[0]).toEqual(expect.objectContaining({
-      term_start_at: expect.stringMatching(/^2026-09-12T15:13:43\.000Z$/),
-      term_end_at: expect.stringMatching(/^2026-10-12T15:13:43\.000Z$/),
+      term_start_at: '2026-09-12T15:13:43Z',
+      term_end_at: '2026-10-12T15:13:43Z',
     }))
+  })
+
+  it('validates a subscription amount locally and emits only a selected amount with a matching preview', async () => {
+    const review = balanceReview({
+      order_type: 'subscription',
+      balance: undefined,
+      min_refund_amount: 0.03,
+      default_refund_amount: 0.08,
+      max_refund_amount: 0.08,
+      subscription: {
+        subscription_id: 8,
+        term_start_at: '2026-08-14T00:00:00Z',
+        term_end_at: '2026-11-14T00:00:00Z',
+        current_expires_at: '2026-11-14T00:00:00Z',
+        new_expires_at: '2026-10-14T00:00:00Z',
+        purchased_seconds: 7_776_000,
+        used_seconds: 2_592_000,
+        remaining_seconds: 5_184_000,
+        seconds_to_reclaim: 3_456_000,
+      },
+    })
+    const wrapper = mountDialog(review)
+
+    await wrapper.get('#refund-amount').setValue('0.031')
+    expect(wrapper.text()).toContain('payment.admin.refundAmountInvalid')
+    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('#refund-amount').setValue('0.02')
+    expect(wrapper.text()).toContain('payment.admin.refundAmountTooSmall')
+
+    await wrapper.get('#refund-amount').setValue('0.09')
+    expect(wrapper.text()).toContain('payment.admin.refundAmountExceeded')
+
+    await wrapper.get('#refund-amount').setValue('0.03')
+    expect(wrapper.emitted('preview')?.at(-1)).toEqual([0.03])
+    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.setProps({ reviewedRefundAmount: 0.03 })
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('confirm')?.at(-1)).toEqual([{
+      reason_code: 'customer_request',
+      refund_amount: 0.03,
+    }])
+  })
+
+  it('keeps the active amount field available beside an explicit preview error', () => {
+    const wrapper = mountDialog(balanceReview({
+      order_type: 'subscription',
+      balance: undefined,
+      min_refund_amount: 0.03,
+      default_refund_amount: 0.03,
+      max_refund_amount: 0.08,
+      subscription: {
+        subscription_id: 8,
+        term_start_at: '2026-08-14T00:00:00Z',
+        term_end_at: '2026-11-14T00:00:00Z',
+        current_expires_at: '2026-11-14T00:00:00Z',
+        new_expires_at: '2026-10-14T00:00:00Z',
+        purchased_seconds: 7_776_000,
+        used_seconds: 2_592_000,
+        remaining_seconds: 5_184_000,
+        seconds_to_reclaim: 3_456_000,
+      },
+    }), { reviewedRefundAmount: 0.03, error: 'The current amount cannot be represented.' })
+
+    expect(wrapper.text()).toContain('The current amount cannot be represented.')
+    expect(wrapper.find('#refund-amount').exists()).toBe(true)
   })
 })
