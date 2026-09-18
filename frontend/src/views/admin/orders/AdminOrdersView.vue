@@ -736,6 +736,10 @@ async function handleRefund(data: RefundRequest) {
     appStore.showError(res.data.warning || t('common.error'))
   } catch (err: unknown) {
     if (isStepUpCancelled(err)) return
+    if (extractApiErrorCode(err) === 'REFUND_ALREADY_SETTLED') {
+      closeRefundDialogFor(orderID, session)
+      startRefundRefresh(orderID, listVersion)
+    }
     if (extractApiErrorCode(err) === 'REFUND_QUOTE_STALE') {
       if (isCurrentRefundDialog(orderID, session)) {
         appStore.showWarning(t('payment.admin.refundQuoteStale'))

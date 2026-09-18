@@ -240,6 +240,24 @@ describe('admin order management', () => {
     wrapper.unmount()
   })
 
+  it('closes a stale quote and refreshes only its row when another refund already settled', async () => {
+    vi.useFakeTimers()
+    refundOrder.mockRejectedValue({ status: 409, reason: 'REFUND_ALREADY_SETTLED', message: 'already refunded' })
+    const wrapper = await mountOrders([order(42, 'COMPLETED'), order(43, 'COMPLETED')])
+    getOrder.mockResolvedValue({ data: { order: { ...order(42, 'PARTIALLY_REFUNDED'), refund_amount: 1 } } })
+    await openRefundDialog(wrapper)
+    wrapper.findComponent({ name: 'AdminRefundDialog' }).vm.$emit('confirm', refundPayload)
+    await flushPromises()
+    expect(wrapper.find('[data-test="refund-dialog"]').exists()).toBe(false)
+    expect(wrapper.get('[data-order-id="42"]').text()).not.toContain('payment.admin.refund')
+    expect(wrapper.get('[data-order-id="43"]').text()).toContain('payment.admin.refund')
+    expect(getOrders).toHaveBeenCalledTimes(1)
+    expect(getOrder).toHaveBeenCalledWith(42, expect.any(AbortSignal))
+    await vi.advanceTimersByTimeAsync(300000)
+    expect(getOrder).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
   it('does not poll unrelated pending rows on page load', async () => {
     vi.useFakeTimers()
     const wrapper = await mountOrders('REFUND_PENDING')
