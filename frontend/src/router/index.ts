@@ -526,6 +526,12 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/codex-turn-state',
+    name: 'AdminCodexTurnState',
+    component: () => import('@/views/admin/CodexTurnStateView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Codex State Maintenance', titleKey: 'admin.codexTurnState.title', descriptionKey: 'admin.codexTurnState.description' }
+  },
+  {
     path: '/admin/plugins',
     name: 'AdminPlugins',
     component: () => import('@/views/admin/PluginsView.vue'),

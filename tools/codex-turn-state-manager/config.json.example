@@ -1,0 +1,12 @@
+{
+  "state_dir": "/var/lib/sub2api-zvonimirsun-codex-state",
+  "sub2api": {
+    "container": "SET_THIS_PROJECT_BACKEND_CONTAINER",
+    "use_sudo": false
+  },
+  "accounts": [],
+  "proxies": { "sources": [] },
+  "panel": { "enabled": true, "bind": "127.0.0.1", "port": 8787, "read_only": false },
+  "degraded": { "enabled": false },
+  "alerts": { "enabled": false }
+}

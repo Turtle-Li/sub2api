@@ -384,6 +384,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		upstreamReq.Header.Set("x-codex-turn-state", compatTurnState)
 	}
 
+	applyPinnedCodexTurnState(upstreamReq.Header, account, upstreamModel)
+
 	// 7. Send request
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

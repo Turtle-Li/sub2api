@@ -157,3 +157,12 @@ output/
 .vite/
 # 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
 /plugins/
+
+# Independent Codex monitor project continuity
+!AGENTS.md
+!docs/features/
+!docs/features/codex-turn-state-monitor.md
+!docs/features/codex-turn-state-audit.md
+
+# Local agent bookkeeping is not part of the product change
+.agent-worktree.toml

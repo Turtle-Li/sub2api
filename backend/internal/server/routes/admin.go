@@ -34,6 +34,11 @@ func RegisterAdminRoutes(
 		// 部署与运营合规确认
 		registerAdminComplianceRoutes(admin, h)
 
+		// Existing Codex manager, exposed only behind admin authentication/audit.
+		admin.GET("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
+		admin.POST("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
+		admin.DELETE("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
+
 		// 仪表盘
 		registerDashboardRoutes(admin, h)
 

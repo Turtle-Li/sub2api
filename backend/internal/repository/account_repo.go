@@ -646,7 +646,10 @@ func lockAndMergeAccountProbeExtra(
 			extra -> 'upstream_billing_probe',
 			extra -> 'ollama_cloud_usage_session',
 			extra -> 'ollama_cloud_usage_auto_refresh',
-			extra -> 'ollama_cloud_usage_snapshot'
+			extra -> 'ollama_cloud_usage_snapshot',
+			extra -> 'pinned_codex_turn_states',
+			platform = $2 AND type = $3
+			AND credentials -> 'chatgpt_account_id' IS NOT DISTINCT FROM $4::jsonb -> 'chatgpt_account_id'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -672,6 +675,8 @@ func lockAndMergeAccountProbeExtra(
 		currentOllamaSession         []byte
 		currentOllamaAutoRefresh     []byte
 		currentOllamaSnapshot        []byte
+		currentCodexPins             []byte
+		codexIdentityUnchanged       bool
 	)
 	if err := rows.Scan(
 		&identityUnchanged,
@@ -683,6 +688,8 @@ func lockAndMergeAccountProbeExtra(
 		&currentOllamaSession,
 		&currentOllamaAutoRefresh,
 		&currentOllamaSnapshot,
+		&currentCodexPins,
+		&codexIdentityUnchanged,
 	); err != nil {
 		return nil, err
 	}
@@ -691,6 +698,16 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
+	// The renewal worker writes pins independently. Preserve the row-locked
+	// database value, never a stale map loaded earlier by the admin service.
+	// Pins belong to the upstream identity; token refresh or proxy edits alone
+	// must not discard them, but changing the ChatGPT account must.
+	delete(extra, service.PinnedCodexTurnStatesExtraKey)
+	if pins, present, err := decodeAccountExtraJSON(currentCodexPins); err != nil {
+		return nil, err
+	} else if present && codexIdentityUnchanged {
+		extra[service.PinnedCodexTurnStatesExtraKey] = pins
+	}
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,

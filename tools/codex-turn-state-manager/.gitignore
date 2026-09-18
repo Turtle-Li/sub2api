@@ -1,0 +1,8 @@
+__pycache__/
+config.json
+*.db
+*.sqlite*
+state/
+accounts.json
+proxy-sources.json
+proxies.txt

@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Codex 续期监控</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b35; --fg: #e6e9ef;
+    --dim: #8b93a3; --ok: #3fb950; --warn: #d29922; --bad: #f85149; --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .meta { color: var(--dim); font-size: 12px; }
+  main { padding: 20px; display: grid; gap: 20px; }
+  section { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  section > h2 { font-size: 13px; margin: 0; padding: 10px 14px;
+                 border-bottom: 1px solid var(--line); color: var(--dim);
+                 font-weight: 600; letter-spacing: .04em; }
+  [hidden] { display: none !important; }
+  .table-scroll { overflow-x: auto; }
+  .model-status-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+  .model-status-table { min-width: 1180px; table-layout: auto; }
+  .model-status-table th, .model-status-table td { white-space: nowrap; }
+  .model-status-table th:nth-child(1), .model-status-table td:nth-child(1) { min-width: 150px; }
+  .model-status-table th:nth-child(2), .model-status-table td:nth-child(2) { min-width: 170px; }
+  .model-status-table th:nth-child(9), .model-status-table td:nth-child(9) { min-width: 130px; }
+  .model-status-table th:nth-child(10), .model-status-table td:nth-child(10) { min-width: 170px; }
+  table { min-width: 680px; width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--line);
+           font-size: 13px; vertical-align: middle; }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 10px;
+         font-size: 11px; border: 1px solid currentColor; white-space: nowrap; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); }
+  .bad { color: var(--bad); } .dim { color: var(--dim); }
+  button { background: #21262d; color: var(--fg); border: 1px solid var(--line);
+           border-radius: 6px; padding: 4px 11px; cursor: pointer; font: inherit;
+           font-size: 12px; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  input { background: #0d1117; color: var(--fg); border: 1px solid var(--line);
+          border-radius: 6px; padding: 5px 9px; font: inherit; font-size: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 14px; }
+  .err { color: var(--bad); font-size: 12px; padding: 8px 14px; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 600px) { main { padding: 10px; gap: 12px; } header { padding: 12px; } .row input { max-width: 100%; } }
+  .spark { color: var(--dim); font-size: 11px; letter-spacing: .5px; }
+textarea,select { background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit;max-width:100%; } textarea {width:100%;min-height:100px;resize:vertical;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Codex 续期监控</h1>
+  <span class="meta" id="meta">加载中…</span>
+  <span style="flex:1"></span>
+  <button id="refresh">刷新</button>
+</header>
+
+<main>
+  <div id="notice" role="status" aria-live="polite" hidden></div>
+  <section>
+    <h2>账号模型续期状态</h2>
+    <div id="renewalSummary" class="row meta" role="status">正在读取续期状态…</div>
+    <div class="model-status-scroll"><table class="model-status-table">
+      <thead><tr>
+        <th>账号</th><th>模型</th><th>续期状态</th><th>长度</th><th>剩余</th>
+        <th>下次探针</th><th>最近成功钉入</th><th id="degradationHeading">钉入后的模型记录</th><th>最近探针</th><th id="actionsHeading"></th>
+      </tr></thead>
+      <tbody id="models"><tr><td colspan="8" class="dim">加载中…</td></tr></tbody>
+    </table></div>
+  </section>
+
+  <section id="degradationSection">
+    <h2>模型不匹配账号（后端最近 <span id="window">30m</span> 记录）</h2>
+    <div class="err" id="degradedErr" hidden></div>
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>账号</th><th>请求模型</th><th>实际返回</th><th>次数</th>
+        <th>最近一次（UTC）</th><th>平均首字</th><th></th>
+      </tr></thead>
+      <tbody id="degraded"><tr><td colspan="7" class="dim">加载中…</td></tr></tbody>
+    </table></div>
+  </section>
+
+  <section id="managementSection">
+    <h2>清单管理与手动任务</h2>
+    <p class="meta" style="padding:0 14px">暂停仅停止后续探测，已钉入的状态保留至到期。手动探测遵守现有退避。</p>
+    <div class="row">
+      <button id="chooseAccount">选择 OpenAI OAuth 账号</button>
+      <span id="selectedAccount" class="meta" role="status">尚未选择账号</span>
+      <input aria-label="模型" id="addModel" placeholder="模型" style="width:150px" value="gpt-6-astra">
+      <input aria-label="目标长度" id="addLen" min="1" max="8192" step="1" type="number" placeholder="目标长度" style="width:100px" value="292">
+      <button id="add">加入探针清单</button>
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>任务</th><th>目标</th><th>状态</th><th>耗时</th><th>结果</th></tr></thead>
+      <tbody id="jobs"><tr><td colspan="5" class="dim">暂无</td></tr></tbody>
+    </table></div>
+  </section>
+  <section id="proxyImportSection">
+    <h2>导入探针代理</h2>
+    <div class="row">
+      <label>来源名称 <input id="proxyName" placeholder="例如 static-pool" maxlength="64" pattern="[a-z][a-z0-9_-]{0,63}"></label>
+      <label>类型 <select id="proxyType"><option value="static">静态 IP · 批量</option><option value="rotating">动态 IP · 固定网关</option><option value="extract">动态 IP · 提取 API</option></select></label>
+    </div>
+    <div style="padding:0 14px 12px">
+      <label for="proxyContent">代理地址 / 提取 API</label>
+      <textarea id="proxyContent" spellcheck="false" autocomplete="off" placeholder="静态：IP:端口:用户名:密码，每行一条
+固定网关：http://用户名:密码@网关:端口
+提取 API：https://供应商地址/提取接口"></textarea>
+      <p class="meta">静态格式与原工具一致；固定网关由供应商轮换出口。提取 API 支持纯文本地址列表或 JSON。内容仅写入服务端受保护配置，列表不回显凭据。</p>
+    </div>
+    <div class="row">
+      <label>提取结果默认用户名 <input id="proxyUsername" autocomplete="off"></label>
+      <label>提取结果默认密码 <input id="proxyPassword" type="password" autocomplete="new-password"></label>
+      <button id="importProxy">导入来源</button>
+    </div>
+    <div id="proxySources" class="row meta" role="status">正在加载来源…</div>
+  </section>
+  <section>
+    <h2>代理来源统计</h2>
+    <div class="row">
+      <label>UTC 起日 <input id="statsStart" type="date"></label>
+      <label>UTC 止日 <input id="statsEnd" type="date"></label>
+      <button id="filterStats">查询统计</button>
+      <span id="statsMeta" class="meta"></span>
+    </div>
+    <p class="meta" style="padding:0 14px">静态优先、动态接续，样本不是随机对照。目标长度命中不等于模型质量；已钉入仅统计验证成功的写入。</p>
+    <div id="statsError" class="err" role="status" hidden></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>来源</th><th>尝试</th><th>HTTP 200</th><th>目标命中</th><th>已钉入</th><th>钉入 / 尝试</th><th>错误</th><th>平均响应头</th></tr></thead>
+      <tbody id="sources"><tr><td colspan="8" class="dim">加载中…</td></tr></tbody>
+    </table></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let busy = false;
+// Administrator bridge: preserve the existing panel renderers and APIs.
+const pendingBridge = new Map();
+const pendingAccountPickers = new Map();
+window.addEventListener('message', event => {
+  if (event.source !== parent) return;
+  if (event.data?.type === 'ctsm-result') {
+    const pending = pendingBridge.get(event.data.id);
+    if (!pending) return;
+    pendingBridge.delete(event.data.id); clearTimeout(pending.timer);
+    if (event.data.ok) pending.resolve(event.data.data);
+    else pending.reject(new Error(event.data.error || '面板请求失败'));
+    return;
+  }
+  if (event.data?.type !== 'ctsm-account-picked') return;
+  const pending = pendingAccountPickers.get(event.data.id);
+  if (!pending) return;
+  pendingAccountPickers.delete(event.data.id);
+  const account = event.data.account;
+  if (account && Number.isInteger(account.id) && account.id > 0 && typeof account.name === 'string') {
+    pending.resolve({id: account.id, name: account.name});
+  } else {
+    pending.resolve(null);
+  }
+});
+function bridge(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    const timer = setTimeout(() => { pendingBridge.delete(id); reject(new Error('请求超时，请检查探针服务')); }, 21000);
+    pendingBridge.set(id, {resolve, reject, timer});
+    parent.postMessage({type:'ctsm-request', id, method, path, body}, '*');
+  });
+}
+function pickAccount() {
+  return new Promise(resolve => {
+    const id = crypto.randomUUID();
+    pendingAccountPickers.set(id, {resolve});
+    parent.postMessage({type:'ctsm-account-picker', id}, '*');
+  });
+}
+async function getJSON(path) { return bridge('GET', path); }
+function notice(message, failed = false) {
+  $('notice').hidden = false;
+  $('notice').className = failed ? 'err' : 'meta';
+  $('notice').textContent = message;
+}
+
+// Mutations use the authenticated parent bridge. The sandboxed iframe has no
+// admin token or direct access to the admin API.
+async function mutate(method, url, body) { return bridge(method, url, body); }
+
+let selectedAccount = null;
+function renderSelectedAccount() {
+  $('selectedAccount').textContent = selectedAccount ? selectedAccount.name : '尚未选择账号';
+}
+
+const secs = (n) => {
+  if (n === null || n === undefined) return '—';
+  if (n <= 0) return '下一轮即探';
+  const m = Math.floor(n / 60);
+  return m >= 1 ? `${m} 分 ${n % 60} 秒` : `${n} 秒`;
+};
+
+const VERDICT = {
+  no_record: ['dim', '窗口内无记录'],
+  unknown: ['warn', '数据不足'],
+  handled: ['dim', '钉入前有记录'],
+  degraded: ['bad', '钉入后仍不匹配'],
+};
+
+function renewal(m) {
+  if (m.expired) return ['bad', '已过期'];
+  if (!m.valid) return ['bad', '等待首次有效状态'];
+  if (m.length_degraded) return ['warn', '长度不符，待续期'];
+  if (m.backoff_seconds > 0) return ['warn', '当前有效 · 退避重试'];
+  if (m.next_probe_seconds <= 0) return ['warn', '当前有效 · 等待续期'];
+  return ['ok', '当前有效'];
+}
+
+function renderModels(state) {
+  $('managementSection').hidden = state.read_only;
+  $('proxyImportSection').hidden = state.read_only;
+  $('actionsHeading').hidden = state.read_only;
+  $('degradationSection').hidden = !state.degraded_enabled;
+  $('degradationHeading').hidden = !state.degraded_enabled;
+  const models = state.accounts.flatMap(a => a.error ? [] : a.models);
+  const healthy = models.filter(m => m.valid && !m.expired && !m.length_degraded).length;
+  const expired = models.filter(m => m.expired).length;
+  const backoff = models.filter(m => m.backoff_seconds > 0).length;
+  const failures = state.accounts.filter(a => a.error).length;
+  $('renewalSummary').textContent = `${state.accounts.length} 个账号 · ${models.length} 个模型 · ${healthy} 个当前有效 · ${expired} 个已过期 · ${backoff} 个退避中` +
+    (failures ? ` · ${failures} 个账号读取失败` : '') +
+    (state.read_only ? ' · 只读模式，自动续期持续运行' : '');
+  const rows = [];
+  for (const acct of state.accounts) {
+    if (acct.error) {
+      rows.push(`<tr><td>${esc(acct.name)}</td><td colspan="9" class="bad">${esc(acct.error)}</td></tr>`);
+      continue;
+    }
+    for (const m of acct.models) {
+      const [cls, label] = VERDICT[m.degradation] || ['dim', m.degradation];
+      const lenCls = m.expired || m.length_degraded ? 'bad' : (m.valid ? 'ok' : 'dim');
+      const pending = (state.jobs || []).some(j => j.account_id === acct.id && (!j.model || j.model === m.model) && ['queued','running','waiting'].includes(j.status));
+      const next = m.backoff_seconds > 0
+        ? `<span class="warn">退避 ${secs(m.backoff_seconds)}</span>`
+        : secs(m.next_probe_seconds);
+      rows.push(`<tr>
+        <td>${esc(acct.name)}<span class="dim"> #${acct.id}</span></td>
+        <td>${esc(m.model)}</td>
+        <td><span class="tag ${renewal(m)[0]}">${renewal(m)[1]}</span></td>
+        <td class="${lenCls}">${m.state_len || '—'}<span class="dim"> / ${m.target_len}</span></td>
+        <td>${m.expired ? '<span class="bad">已过期</span>' : (m.valid ? Math.max(0,m.remaining_minutes) + ' 分' : '<span class="bad">无</span>')}</td>
+        <td>${next}</td>
+        <td>${m.pinned_updated_at ? esc(new Date(m.pinned_updated_at).toLocaleString()) : '—'}</td>
+        ${state.degraded_enabled ? `<td><span class="tag ${cls}">${esc(label)}</span></td>` : ''}
+        <td class="spark" id="h-${acct.id}-${cssId(m.model)}">—</td>
+        <td ${state.read_only ? 'hidden' : ''}><button data-probe="${acct.id}" data-model="${esc(m.model)}" ${pending ? 'disabled' : ''}>${pending ? '任务进行中' : '立即探测'}</button> <button data-remove="${acct.id}" data-model="${esc(m.model)}">暂停探测</button></td>
+      </tr>`);
+    }
+  }
+  $('models').innerHTML = rows.join('') || '<tr><td colspan="10" class="dim">探针清单为空</td></tr>';
+}
+
+function renderDegraded(state) {
+  $('window').textContent = state.degraded_window || '30m';
+  const err = $('degradedErr');
+  if (state.degraded_error) {
+    err.textContent = '后端查询失败：' + state.degraded_error;
+    err.hidden = false;
+  } else {
+    err.hidden = true;
+  }
+  const rows = state.degraded.map((d) => `<tr>
+    <td>${esc(d.account_name)}<span class="dim"> #${d.account_id}</span></td>
+    <td>${esc(d.sent_model)}</td>
+    <td class="bad">${esc(d.response_model)}</td>
+    <td>${d.count}</td>
+    <td class="dim">${esc((d.last_seen || '').replace('T', ' ').slice(0, 19))}</td>
+    <td>${d.ttft_avg_ms ? Math.round(d.ttft_avg_ms) + ' ms' : '—'}</td>
+    <td><button data-add="${d.account_id}" data-name="${esc(d.account_name)}"
+         data-model="${esc(d.sent_model)}">加入清单</button></td>
+  </tr>`);
+  $('degraded').innerHTML = rows.join('')
+    || '<tr><td colspan="7" class="dim">窗口内没有模型不匹配记录（不代表已验证质量）</td></tr>';
+}
+
+function renderJobs(state) {
+  const rows = (state.jobs || []).slice(0, 12).map((j) => {
+    const cls = j.status === 'error' ? 'bad' : (j.status === 'done' && j.updated > 0 ? 'ok' : 'warn');
+    const statusLabel = ({queued:'已排队', running:'探测中', waiting:'等待接续 / 退避', done:'本轮结束', cancelled:'已取消', error:'失败'})[j.status] || j.status;
+    const took = j.finished_at && j.started_at ? (j.finished_at - j.started_at) + ' 秒' : '—';
+    return `<tr>
+      <td class="dim">${esc(j.id)}</td>
+      <td>#${j.account_id} ${esc(j.model || '全部模型')}</td>
+      <td class="${cls}">${esc(statusLabel)}</td>
+      <td>${took}</td>
+      <td>${j.error ? `<span class="bad">${esc(j.error)}</span>` : (j.updated + ' 个已更新')}</td>
+    </tr>`;
+  });
+  $('jobs').innerHTML = rows.join('') || '<tr><td colspan="5" class="dim">暂无</td></tr>';
+}
+
+async function renderHistory() {
+  const history = await getJSON('api/history');
+  for (const [slot, entries] of Object.entries(history)) {
+    const [id, ...rest] = slot.split(':');
+    const cell = $(`h-${id}-${cssId(rest.join(':'))}`);
+    if (!cell) continue;
+    // Newest last, so the trend reads left to right like the log does.
+    cell.textContent = entries.slice(-10).map((e) => (e.outcome === 'saved' ? '✓' : e.ok ? '◎' : '·')).join(' ');
+    const last = entries[entries.length - 1];
+    if (last) cell.title = `✓ 已钉入 · ◎ 目标命中 · · 未命中；最近：${last.outcome}，长度 ${last.state_len}，来源 ${last.source}`;
+  }
+}
+
+async function load() {
+  if (busy) return;
+  busy = true;
+  try {
+    const state = await getJSON('api/state');
+    renderModels(state);
+    renderDegraded(state);
+    renderJobs(state);
+    await Promise.all([renderHistory().catch(() => notice('最近探针历史暂不可用', true)), loadStats()]);
+    $('meta').textContent =
+      `${state.static_proxy_count} 个静态代理 / ${state.dynamic_provider_count} 个动态来源 · 轮询 ${state.poll_interval_seconds}s · ` +
+      new Date(state.generated_at * 1000).toLocaleTimeString();
+  } catch (e) {
+    $('meta').textContent = '加载失败：' + e.message;
+  } finally {
+    busy = false;
+  }
+}
+
+document.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button');
+  if (!btn) return;
+
+  if (btn.id === 'refresh') return load();
+  if (btn.id === 'filterStats') return loadStats();
+  if (btn.id === 'chooseAccount') {
+    btn.disabled = true;
+    try {
+      const account = await pickAccount();
+      if (account) {
+        selectedAccount = account;
+        renderSelectedAccount();
+      }
+    } catch (e) { notice(e.message, true); }
+    finally { btn.disabled = false; }
+    return;
+  }
+  if (btn.dataset.remove) {
+    btn.disabled = true;
+    try {
+      await mutate('DELETE', `api/accounts/${btn.dataset.remove}/${encodeURIComponent(btn.dataset.model)}`);
+      notice('已暂停该模型探测；已钉入状态仍保留至到期。');
+      await load();
+    } catch(e) { notice(e.message, true); btn.disabled = false; }
+    return;
+  }
+
+  if (btn.dataset.probe) {
+    btn.disabled = true;
+    btn.textContent = '已排队';
+    try {
+      await mutate('POST', 'api/probe', {
+        account_id: Number(btn.dataset.probe),
+        model: btn.dataset.model,
+        force: true,
+      });
+      // The probe runs on the daemon thread, so it starts only after whatever
+      // pass is currently running finishes. Poll rather than expect a result.
+      notice('探测已排队；正在退避的模型会在允许时间后接续。');
+      await load();
+    } catch (e) {
+      btn.textContent = '失败';
+      notice(e.message, true);
+      btn.disabled = false;
+      btn.textContent = '重试';
+    }
+    return;
+  }
+
+  if (btn.dataset.add) {
+    try {
+      await mutate('POST', 'api/accounts', {
+        account_id: Number(btn.dataset.add),
+        name: btn.dataset.name,
+        model: btn.dataset.model,
+        target_state_len: 292,
+      });
+      notice('已加入探针清单。');
+      await load();
+    } catch (e) { notice(e.message, true); }
+    return;
+  }
+
+  if (btn.id === 'add') {
+    try {
+      if (!selectedAccount) throw new Error('请先选择 OpenAI OAuth 账号');
+      const model = $('addModel').value.trim();
+      if (!model) throw new Error('请填写模型');
+      await mutate('POST', 'api/accounts', {
+        account_id: selectedAccount.id,
+        name: selectedAccount.name,
+        model,
+        target_state_len: Number($('addLen').value),
+      });
+      notice('已加入探针清单。');
+      selectedAccount = null;
+      renderSelectedAccount();
+      await load();
+    } catch (e) { notice(e.message, true); }
+  }
+});
+
+async function loadStats() {
+  const query = new URLSearchParams();
+  if ($('statsStart').value) query.set('start_day', $('statsStart').value);
+  if ($('statsEnd').value) query.set('end_day', $('statsEnd').value);
+  try {
+    if ($('statsStart').value && $('statsEnd').value && $('statsStart').value > $('statsEnd').value) throw new Error('起日不能晚于止日');
+    const stats = await getJSON('api/stats?' + query);
+    $('statsError').hidden = true;
+    $('statsMeta').textContent = `${stats.totals.attempts} 次尝试 · ${stats.totals.persisted} 次验证写入`;
+    $('sources').innerHTML = Object.entries(stats.by_source).map(([source, counts]) => ({source, ...counts})).map(row => `<tr>
+      <td>${esc(row.source)}</td><td>${row.attempts}</td><td>${row.http_200}</td>
+      <td>${row.target_hits}</td><td>${row.persisted}</td>
+      <td>${row.attempts ? (100 * row.persisted_rate).toFixed(1) + '%' : '样本不足'}</td>
+      <td>${row.errors}</td><td>${row.attempts ? Math.round(row.header_ms_average) + ' ms' : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="8" class="dim">该时间范围样本不足</td></tr>';
+  } catch (e) {
+    $('statsError').hidden = false;
+    $('statsError').textContent = '统计读取失败：' + e.message;
+    $('statsMeta').textContent = '统计暂不可用';
+    $('sources').innerHTML = '<tr><td colspan="8" class="dim">当前查询未得到有效统计</td></tr>';
+  }
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function cssId(s) { return String(s).replace(/[^A-Za-z0-9_-]/g, '_'); }
+
+load();
+setInterval(load, 15000);
+
+async function refreshProxySources() {
+  try {
+    const data = await getJSON('api/proxy-sources');
+    const rows = Array.isArray(data) ? data : data.sources || [];
+    const container = $('proxySources'); container.replaceChildren();
+    if (!rows.length) { container.textContent = '暂无导入来源；仍会使用原有服务配置的代理。'; return; }
+    rows.forEach(source => {
+      const span = document.createElement('span');
+      span.textContent = `${source.name} · ${source.type} · ${source.count ?? '—'} 条 `;
+      const button = document.createElement('button'); button.textContent = '移除';
+      let confirmationTimer = null;
+      button.onclick = async () => {
+        if (button.dataset.confirm !== 'armed') {
+          button.dataset.confirm = 'armed';
+          button.textContent = '再次点击确认';
+          confirmationTimer = setTimeout(() => {
+            if (button.dataset.confirm === 'armed') {
+              button.dataset.confirm = '';
+              button.textContent = '移除';
+            }
+          }, 5000);
+          return;
+        }
+        if (confirmationTimer) clearTimeout(confirmationTimer);
+        button.disabled = true;
+        try { await mutate('DELETE', 'api/proxy-sources/' + encodeURIComponent(source.id)); await refreshProxySources(); }
+        catch(e) { notice(e.message, true); button.disabled = false; }
+      };
+      span.append(button); container.append(span);
+    });
+  } catch(e) { $('proxySources').textContent = '代理导入接口暂不可用，请检查集成入口是否启动。'; }
+}
+$('importProxy').onclick = async () => {
+  const button = $('importProxy'); button.disabled = true;
+  try {
+    await mutate('POST','api/proxy-sources',{name:$('proxyName').value.trim(),type:$('proxyType').value,content:$('proxyContent').value,username:$('proxyUsername').value,password:$('proxyPassword').value});
+    $('proxyContent').value=''; $('proxyPassword').value=''; $('proxyUsername').value='';
+    notice('代理来源已导入，下一轮探针自动加载。'); await refreshProxySources();
+  } catch(e) { notice(e.message, true); }
+  finally { button.disabled = false; }
+};
+refreshProxySources();
+
+</script>
+</body>
+</html>

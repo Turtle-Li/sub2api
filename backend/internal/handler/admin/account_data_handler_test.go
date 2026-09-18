@@ -78,6 +78,9 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
 
 	proxyID := int64(11)
+	pinnedStates := map[string]any{
+		"gpt-6-astra": map[string]any{"captured": true},
+	}
 	adminSvc.proxies = []service.Proxy{
 		{
 			ID:       proxyID,
@@ -107,7 +110,10 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeOAuth,
 			Credentials: map[string]any{"token": "secret"},
-			Extra:       map[string]any{"note": "x"},
+			Extra: map[string]any{
+				"note":                                "x",
+				service.PinnedCodexTurnStatesExtraKey: pinnedStates,
+			},
 			ProxyID:     &proxyID,
 			Concurrency: 3,
 			Priority:    50,
@@ -129,6 +135,9 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 	require.Equal(t, "pass", resp.Data.Proxies[0].Password)
 	require.Len(t, resp.Data.Accounts, 1)
 	require.Equal(t, "secret", resp.Data.Accounts[0].Credentials["token"])
+	require.Equal(t, "x", resp.Data.Accounts[0].Extra["note"])
+	require.NotContains(t, resp.Data.Accounts[0].Extra, service.PinnedCodexTurnStatesExtraKey)
+	require.Equal(t, pinnedStates, adminSvc.accounts[0].Extra[service.PinnedCodexTurnStatesExtraKey])
 }
 
 func TestExportDataWithoutProxies(t *testing.T) {
