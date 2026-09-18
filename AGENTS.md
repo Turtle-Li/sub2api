@@ -17,7 +17,9 @@
 
 - Latest recharge-card refinement and closed-checkout release: read
   `docs/operations/RECHARGE_UI_LOCAL_REVIEW_20260912.md`. Keep ordinary
-  purchasing closed until the owner completes real-flow testing.
+  purchasing closed until owner authorization; the September 19 request now
+  authorizes restoring the normal catalog and visible purchase entry. See
+  `docs/operations/PAYMENT_OPENING_20260919.md` for the current release state.
 
 - Recharge UI follows the subscription-card visual system; read
   `docs/operations/RECHARGE_CARD_STYLE_20260912.md` for the current layout,
@@ -97,10 +99,16 @@
 
 ## Unified payment integration
 
+- One order permits at most one successful refund, including a partial refund.
+  Preserve pending-attempt recovery and callback idempotency. See the September 19
+  policy in `docs/PAYMENT_REFUND_ACCOUNTING_20260914.md`; admin auto-refresh must
+  read only explicitly operated orders, never periodically reload all orders.
+
 - Reviewed refunds are enabled on the September 14 release; read
   `docs/operations/PAYMENT_REVIEWED_REFUNDS_RELEASE_20260914.md` and
   `docs/PAYMENT_REFUND_ACCOUNTING_20260914.md` before refund or rollback work.
-  Purchase entry remains closed. Preserve grant/audit records and use the
+  Purchase-entry state is recorded in the September 19 opening report. Preserve
+  grant/audit records and use the
   guarded drain/readiness/CAS sequence for an incompatible rollback.
 
 - Read `docs/UNIFIED_PAYMENT_INTEGRATION.md` before changing unified payment
@@ -110,7 +118,8 @@
 - Product signing keys stay in Vault and the memory agent. The settings UI only
   selects routes and reads server capabilities. The owner authorized controlled
   live WeChat/Alipay 1–2 fen tests and deployment on 2026-09-09; ordinary
-  customer purchasing stays disabled. Local tests do not establish live readiness.
+  customer purchasing was initially disabled; the September 19 opening request
+  supersedes that restriction. Local tests do not establish live readiness.
 - Unified refunds persist one active attempt per order and recover balance only
   after a trusted success. Retain refund history and manual-review fences during
   rollback; never remove financial tables to undo an application release.

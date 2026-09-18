@@ -21,7 +21,6 @@
         </div>
       </div>
 
-      <details class="text-sm text-gray-600 dark:text-gray-300"><summary class="mb-2 cursor-pointer py-2">{{ t('payment.orderOps.paymentTest') }}</summary><AdminPaymentOwnerTest @created="loadOrders" /></details>
 
       <!-- Table -->
       <OrderTable :orders="orders" :loading="ordersLoading" show-user>
@@ -39,13 +38,13 @@
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retry') }}
             </button>
-            <template v-if="row.status === 'REFUND_REQUESTED'">
+            <template v-if="row.status === 'REFUND_REQUESTED' && canOpenRefundReview(row)">
               <button :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
                 <Icon name="check" size="sm" />
                 {{ t('payment.admin.approveRefund') }}
               </button>
             </template>
-            <button v-else-if="row.status === 'REFUND_FAILED'" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
+            <button v-else-if="row.status === 'REFUND_FAILED' && canOpenRefundReview(row)" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retryRefund') }}
             </button>
@@ -65,7 +64,7 @@
                 {{ t('payment.admin.queryRefundStatus') }}
               </button>
             </template>
-            <button v-else-if="row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED'" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+            <button v-else-if="canOpenRefundReview(row)" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
               <Icon name="dollar" size="sm" />
               {{ row.needs_manual_review ? t('payment.admin.reviewRefund') : t('payment.admin.refund') }}
             </button>
@@ -252,7 +251,7 @@ import type {
   SubscriptionGrantBackfillRequest,
 } from '@/api/admin/payment'
 import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
-import { formatOrderDateTime } from '@/components/payment/orderUtils'
+import { canRefund as canOpenRefundReview, formatOrderDateTime } from '@/components/payment/orderUtils'
 import type { PaymentOrder } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
@@ -260,7 +259,6 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import AdminRefundDialog from '@/components/admin/payment/AdminRefundDialog.vue'
-import AdminPaymentOwnerTest from '@/components/admin/payment/AdminPaymentOwnerTest.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import InvoiceStatusBadge from '@/components/payment/InvoiceStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
@@ -357,10 +355,6 @@ function refundBlockerClass(order: PaymentOrder): string {
   return 'text-red-700 dark:text-red-300'
 }
 
-function canOpenRefundReview(order: PaymentOrder): boolean {
-  return ['COMPLETED', 'PARTIALLY_REFUNDED', 'REFUND_REQUESTED', 'REFUND_FAILED'].includes(order.status)
-}
-
 function refundActionLabel(order: PaymentOrder): string {
   if (order.status === 'REFUND_REQUESTED') return t('payment.admin.approveRefund')
   if (order.status === 'REFUND_FAILED') return t('payment.admin.retryRefund')
@@ -377,6 +371,9 @@ function handleFilterChange() { orderPagination.page = 1; loadOrders() }
 onUnmounted(() => {
   if (debounceTimer) clearTimeout(debounceTimer)
   clearRefundPreviewTimer()
+  listRequest += 1
+  stopRefundRefreshes()
+  document.removeEventListener('visibilitychange', resumeRefundRefreshes)
 })
 const paymentFactOptions = computed(() => [
   { value: '', label: t('payment.orderOps.allPayments') },
@@ -388,6 +385,7 @@ const fulfillmentOptions = computed(() => [
 ])
 let listRequest = 0
 async function loadOrders() {
+  stopRefundRefreshes()
   const request = ++listRequest
   ordersLoading.value = true
   try {
@@ -405,6 +403,83 @@ async function loadOrders() {
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally { if (request === listRequest) ordersLoading.value = false }
+}
+
+// Only explicit refund operations enroll a row. Reads are local; provider
+// reconciliation remains owned by the existing backend worker.
+type RefundRefresh = {
+  controller: AbortController
+  timer?: ReturnType<typeof setTimeout>
+  expiresAt: number
+  attempts: number
+  busy: boolean
+}
+const refundRefreshes = new Map<number, RefundRefresh>()
+function stopRefundRefresh(orderID: number) {
+  const refresh = refundRefreshes.get(orderID)
+  if (!refresh) return
+  clearTimeout(refresh.timer)
+  refresh.controller.abort()
+  refundRefreshes.delete(orderID)
+}
+function stopRefundRefreshes() {
+  for (const id of refundRefreshes.keys()) stopRefundRefresh(id)
+}
+function resumeRefundRefreshes() {
+  if (document.hidden) return
+  for (const [id, refresh] of refundRefreshes) {
+    clearTimeout(refresh.timer)
+    void refreshRefundRow(id, refresh)
+  }
+}
+function startRefundRefresh(orderID: number, listVersion: number) {
+  // A mutation finishing after navigation must not enroll a different page.
+  if (listVersion !== listRequest || !orders.value.some(row => row.id === orderID)) return
+  stopRefundRefresh(orderID)
+  const refresh: RefundRefresh = { controller: new AbortController(), expiresAt: Date.now() + 300_000, attempts: 0, busy: false }
+  refundRefreshes.set(orderID, refresh)
+  void refreshRefundRow(orderID, refresh)
+}
+async function refreshRefundRow(orderID: number, refresh: RefundRefresh) {
+  if (refundRefreshes.get(orderID) !== refresh || refresh.busy) return
+  if (Date.now() >= refresh.expiresAt || !orders.value.some(row => row.id === orderID)) {
+    stopRefundRefresh(orderID)
+    return
+  }
+  if (document.hidden) return
+  refresh.busy = true
+  try {
+    const res = await adminPaymentAPI.getOrder(orderID, refresh.controller.signal)
+    if (refundRefreshes.get(orderID) !== refresh) return
+    const data = res.data as unknown as { order: PaymentOrder; auditLogs?: AuditLog[]; audit_logs?: AuditLog[] }
+    const updated = data.order
+    if (!updated || updated.id !== orderID) {
+      stopRefundRefresh(orderID)
+      return
+    }
+    const index = orders.value.findIndex(row => row.id === orderID)
+    if (index !== -1) orders.value[index] = updated
+    if (showDetailDialog.value && selectedOrder.value?.id === orderID) {
+      // Prevent an older detail request from restoring the pre-refund state.
+      detailRequestSequence += 1
+      selectedOrder.value = updated
+      orderAuditLogs.value = data.auditLogs || data.audit_logs || []
+    }
+    if (updated.status !== 'REFUND_PENDING' || updated.needs_manual_review ||
+        ['WAITING_PROVIDER_BALANCE', 'MANUAL_REVIEW', 'SUCCEEDED', 'FAILED'].includes(updated.refund_recovery?.state || '')) {
+      stopRefundRefresh(orderID)
+    }
+  } catch (err: unknown) {
+    const status = (err as { status?: number })?.status
+    if (status === 401 || status === 403 || status === 404) stopRefundRefresh(orderID)
+    // Transient reads retry silently within the same bounded budget.
+  } finally {
+    refresh.busy = false
+    if (refundRefreshes.get(orderID) === refresh) {
+      const delay = Math.min(2000 * 2 ** Math.min(refresh.attempts++, 3), 15000)
+      refresh.timer = setTimeout(() => void refreshRefundRow(orderID, refresh), Math.min(delay, Math.max(0, refresh.expiresAt - Date.now())))
+    }
+  }
 }
 
 function handleOrderPageChange(page: number) { orderPagination.page = page; loadOrders() }
@@ -547,7 +622,7 @@ function scheduleRefundPreview(refundAmount: number | null) {
 }
 
 function openRefundDialog(order: PaymentOrder) {
-  if (refundMutationBusy.value) return
+  if (refundMutationBusy.value || !canOpenRefundReview(order)) return
   showDetailDialog.value = false
   const session = ++refundDialogSession
   refundTarget.value = order
@@ -629,7 +704,9 @@ async function handleRefund(data: RefundRequest) {
   // Capture the exact server quote before the MFA prompt can suspend this
   // operation. A later selection, quote refresh, close/reopen, or response
   // must never redirect the retry to a different order or stale quote.
+  const listVersion = listRequest
   const orderID = target.id
+  stopRefundRefresh(orderID)
   const session = refundDialogSession
   const request: RefundOrderRequest = {
     quote_revision: review.quote_revision,
@@ -644,18 +721,23 @@ async function handleRefund(data: RefundRequest) {
       if (res.data.warning) appStore.showWarning(res.data.warning)
       else appStore.showSuccess(t('payment.admin.refundSuccess'))
       closeRefundDialogFor(orderID, session)
-      loadOrders()
+      startRefundRefresh(orderID, listVersion)
       return
     }
     if (isRefundPendingWarning(res.data.warning)) {
       appStore.showSuccess(t('payment.admin.refundPending'))
       closeRefundDialogFor(orderID, session)
-      loadOrders()
+      startRefundRefresh(orderID, listVersion)
       return
     }
+    startRefundRefresh(orderID, listVersion)
     appStore.showError(res.data.warning || t('common.error'))
   } catch (err: unknown) {
     if (isStepUpCancelled(err)) return
+    if (extractApiErrorCode(err) === 'REFUND_ALREADY_SETTLED') {
+      closeRefundDialogFor(orderID, session)
+      startRefundRefresh(orderID, listVersion)
+    }
     if (extractApiErrorCode(err) === 'REFUND_QUOTE_STALE') {
       if (isCurrentRefundDialog(orderID, session)) {
         appStore.showWarning(t('payment.admin.refundQuoteStale'))
@@ -670,7 +752,9 @@ async function handleRefund(data: RefundRequest) {
 
 async function handleQueryRefund(order: PaymentOrder) {
   if (refundMutationBusy.value) return
+  const listVersion = listRequest
   const orderID = order.id
+  stopRefundRefresh(orderID)
   refundQueryingIds.value = new Set(refundQueryingIds.value).add(orderID)
   try {
     const res = await stepUp.run(() => adminPaymentAPI.queryRefund(orderID))
@@ -682,7 +766,7 @@ async function handleQueryRefund(order: PaymentOrder) {
     } else {
       appStore.showError(res.data.warning || t('common.error'))
     }
-    loadOrders()
+    startRefundRefresh(orderID, listVersion)
   } catch (err: unknown) {
     if (!isStepUpCancelled(err)) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
@@ -694,7 +778,9 @@ async function handleQueryRefund(order: PaymentOrder) {
 
 async function handleRetryPausedRefund(order: PaymentOrder) {
   if (refundMutationBusy.value || !order.refund_recovery?.can_retry) return
+  const listVersion = listRequest
   const orderID = order.id
+  stopRefundRefresh(orderID)
   refundRetryingIds.value = new Set(refundRetryingIds.value).add(orderID)
   try {
     const res = await stepUp.run(() => adminPaymentAPI.retryRefund(orderID))
@@ -702,7 +788,7 @@ async function handleRetryPausedRefund(order: PaymentOrder) {
     else if (/unconfirmed|未确认/.test(String(res.data.warning || '').toLowerCase())) {
       appStore.showWarning(res.data.warning || t('payment.admin.externalRefundUnconfirmed'))
     } else appStore.showSuccess(t('payment.admin.refundRetryQueued'))
-    await loadOrders()
+    startRefundRefresh(orderID, listVersion)
   } catch (err: unknown) {
     if (!isStepUpCancelled(err)) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
@@ -740,7 +826,9 @@ function recoveryAmount(order: PaymentOrder): string {
 async function handleConfirmExternalRefund() {
   const target = externalRefundTarget.value
   if (!target || !externalRefundFormValid.value || externalRefundSubmitting.value || !target.refund_recovery?.can_confirm_external) return
+  const listVersion = listRequest
   const orderID = target.id
+  stopRefundRefresh(orderID)
   const request: ExternalRefundConfirmationRequest = {
     method_code: externalRefundForm.method_code,
     external_reference: externalRefundForm.external_reference.trim(),
@@ -756,7 +844,7 @@ async function handleConfirmExternalRefund() {
     } else {
       appStore.showWarning(res.data.warning || t('payment.admin.externalRefundUnconfirmed'))
     }
-    await loadOrders()
+    startRefundRefresh(orderID, listVersion)
   } catch (err: unknown) {
     if (!isStepUpCancelled(err)) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
@@ -766,5 +854,8 @@ async function handleConfirmExternalRefund() {
 
 function formatDateTime(dateStr: string): string { return formatOrderDateTime(dateStr) }
 
-onMounted(() => loadOrders())
+onMounted(() => {
+  document.addEventListener('visibilitychange', resumeRefundRefreshes)
+  void loadOrders()
+})
 </script>

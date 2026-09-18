@@ -250,7 +250,7 @@ async function confirmRefund() {
 }
 
 function canRequestRefund(order: PaymentOrder): boolean {
-  if (order.status !== 'COMPLETED' && order.status !== 'PARTIALLY_REFUNDED') return false
+  if (order.status !== 'COMPLETED' || order.refund_amount > 0) return false
   if (!order.provider_instance_id) return false
   return refundEligibleProviders.value.has(order.provider_instance_id)
 }

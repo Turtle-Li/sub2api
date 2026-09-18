@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -256,6 +257,26 @@ func TestUnifiedRefundTerminalProcessing(t *testing.T) {
 			assertUnifiedRefundBalance(t, svc, o, OrderStatusRefunded, 0)
 		})
 	}
+}
+
+func TestUnifiedRefundReservationRejectsSecondAttemptAfterPartialSuccess(t *testing.T) {
+	svc, order, plan := newUnifiedRefundFixture(t, newUnifiedRefundSQLiteClient(t), payment.TypeAlipay)
+	ctx := context.Background()
+	plan.RefundAmount = 4
+
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+	result, err := svc.applyUnifiedRefundResource(ctx, order.ID, unifiedRefundFixtureResource(attempt, unifiedpay.RefundStatusSucceeded), "test")
+	require.NoError(t, err)
+	require.True(t, result.Success)
+
+	_, err = svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.Equal(t, "REFUND_ALREADY_SETTLED", infraerrors.Reason(err))
+
+	persisted, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPartiallyRefunded, persisted.Status)
+	require.InDelta(t, 4, persisted.RefundAmount, 0.000001)
 }
 
 func TestUnifiedRefundFailureHistoryAndLateConflict(t *testing.T) {
