@@ -21,7 +21,6 @@
         </div>
       </div>
 
-      <details class="text-sm text-gray-600 dark:text-gray-300"><summary class="mb-2 cursor-pointer py-2">{{ t('payment.orderOps.paymentTest') }}</summary><AdminPaymentOwnerTest @created="loadOrders" /></details>
 
       <!-- Table -->
       <OrderTable :orders="orders" :loading="ordersLoading" show-user>
@@ -260,7 +259,6 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import AdminRefundDialog from '@/components/admin/payment/AdminRefundDialog.vue'
-import AdminPaymentOwnerTest from '@/components/admin/payment/AdminPaymentOwnerTest.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import InvoiceStatusBadge from '@/components/payment/InvoiceStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'

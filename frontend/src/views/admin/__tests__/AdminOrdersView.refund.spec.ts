@@ -144,10 +144,6 @@ async function mountOrders(statusOrRows: string | ReturnType<typeof order>[]) {
           props: ['status'],
           template: '<span data-test="invoice-status">{{ status }}</span>',
         },
-        AdminPaymentOwnerTest: {
-          emits: ['created'],
-          template: '<button data-test="owner-payment-created" @click="$emit(\'created\')" />',
-        },
         TotpStepUpDialog: true,
       }
     }
@@ -815,14 +811,11 @@ describe('admin order management', () => {
     externalWrapper.unmount()
   })
 
-  it('reloads orders after the owner payment test creates an order', async () => {
+  it('does not expose the retired administrator payment test panel', async () => {
     const wrapper = await mountOrders('PENDING')
+    expect(wrapper.text()).not.toContain('payment.orderOps.paymentTest')
+    expect(wrapper.find('details').exists()).toBe(false)
     expect(getOrders).toHaveBeenCalledTimes(1)
-
-    await wrapper.get('[data-test="owner-payment-created"]').trigger('click')
-    await flushPromises()
-
-    expect(getOrders).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 
