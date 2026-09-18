@@ -143,7 +143,12 @@ For a proper partial selection `q`, cumulative reclaimed seconds become
 `N = ceil((C + q) * T / P)`; this attempt reclaims `N - R` seconds and
 `floor(A * N / T) - E` product cents. The selected expiry subtracts those seconds
 from the current grant expiry, preserving its fractional second. All ratios use
-integer arithmetic. This prevents repeated partial requests from accumulating
+integer arithmetic. A proper partial amount is also rejected unless
+`floor(P * N / T) - C == q`: short, high-priced terms can skip cash-fen values
+at whole-second precision, and the service must not recover time worth more
+than the selected cash. The minimum is a lower bound, not a guarantee that
+every higher amount is representable; the full maximum remains available.
+This prevents repeated partial requests from accumulating
 per-attempt rounding loss. Choosing the current maximum uses the original full
 quote and exact tail boundary, absorbing its final rounding remainder.
 

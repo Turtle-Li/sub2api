@@ -68,6 +68,11 @@ func selectSubscriptionRefundQuote(in subscriptionRefundInputs, full subscriptio
 		return full, minimum, nil
 	}
 	cumulative := refundRatio(in.RefundedCashMinor+cash, total, p, true)
+	// Whole-second entitlements cannot represent every fen on short, expensive
+	// terms. Never reclaim a more valuable interval than the selected cash.
+	if refundRatio(p, cumulative, total, false)-in.RefundedCashMinor != cash {
+		return subscriptionRefundQuote{}, minimum, infraerrors.BadRequest("REFUND_AMOUNT_UNREPRESENTABLE", "refund amount cannot be represented by whole subscription seconds; select another amount or the full maximum")
+	}
 	seconds := cumulative - in.RefundedSeconds
 	product := refundRatio(a, cumulative, total, false) - settled
 	if seconds <= 0 || seconds > full.Seconds || product <= 0 {

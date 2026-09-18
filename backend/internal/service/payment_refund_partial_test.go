@@ -171,3 +171,18 @@ func TestBalanceSelectedPartialIsExplicitlyRejected(t *testing.T) {
 	_, err := svc.ReviewRefundWithAmount(context.Background(), order.ID, &amount)
 	require.Error(t, err)
 }
+
+func TestSubscriptionPartialRejectsUnrepresentableCashAtWholeSecondPrecision(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	in := subscriptionRefundInputs{OrderAmount: decimal.NewFromInt(1), PayAmount: decimal.NewFromInt(1), TermStart: start, OriginalEnd: start.Add(3 * time.Second), CurrentEnd: start.Add(3 * time.Second), ValuationAt: start}
+	full := calculateSubscriptionRefundQuote(in)
+	_, _, err := selectSubscriptionRefundQuote(in, full, 1)
+	require.Error(t, err, "one second recovers 33 fen, so one fen is not representable")
+	selected, _, err := selectSubscriptionRefundQuote(in, full, 33)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), selected.Seconds)
+	require.Equal(t, int64(33), selected.CashMinor)
+	selected, _, err = selectSubscriptionRefundQuote(in, full, 100)
+	require.NoError(t, err)
+	require.Equal(t, full, selected)
+}

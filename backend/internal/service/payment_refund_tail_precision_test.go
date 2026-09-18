@@ -71,7 +71,7 @@ func TestReviewedRefundAuditedWholeSecondTail(t *testing.T) {
 }
 
 func TestReviewedRefundTailPrecisionDoesNotRelaxIntegrity(t *testing.T) {
-	for _, scenario := range []string{"no audit", "extension", "different anchor", "malformed audit", "new precise grant"} {
+	for _, scenario := range []string{"no audit", "extension", "different anchor", "malformed audit", "new precise grant", "whole-second audit expiry without successor"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			svc, order, sub, start, end := newReviewedSubscriptionRefundFixture(t)
@@ -79,7 +79,11 @@ func TestReviewedRefundTailPrecisionDoesNotRelaxIntegrity(t *testing.T) {
 			sub, err := svc.entClient.UserSubscription.UpdateOneID(sub.ID).
 				SetStartsAt(start.Add(offset)).SetExpiresAt(end.Add(offset)).Save(ctx)
 			require.NoError(t, err)
-			detail, err := subscriptionGrantBackfillAuditDetail(order, sub, SubscriptionGrantBackfillInput{
+			auditSub := *sub
+			if scenario == "whole-second audit expiry without successor" {
+				auditSub.ExpiresAt = end
+			}
+			detail, err := subscriptionGrantBackfillAuditDetail(order, &auditSub, SubscriptionGrantBackfillInput{
 				TermStartAt: start, TermEndAt: end, OperatorID: 1,
 			}, 0, 0, 0)
 			require.NoError(t, err)
