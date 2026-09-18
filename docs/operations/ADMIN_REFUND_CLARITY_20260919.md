@@ -78,8 +78,8 @@ payment/Feishu agents and private refund settings were preserved.
 - Loaded image: `19e735dfd60c1abc348fc7a44e7852083b1caa6cfbabfdee4841b5f610997df6`.
 - Server record: `/var/log/sub2api-release/gha-20260919-020003-3ad4a97a-1269036`.
 - Active blue: exact revision, healthy, accepting/background active, restart0/noOOM.
-  Canonical checks reported app5xx/fatal/Caddy5xx all zero. Green is retained under
-  the persistent canonical drain monitor; never force-stop it to free a slot.
+  Canonical checks reported app5xx/fatal/Caddy5xx all zero. The canonical drain
+  monitor confirmed old green stopped at 02:02:27 CST; no forced stop was used.
 - Public www/API health returned ok; `/admin/orders` and its new
   `AdminOrdersView-CjUD2Lb8.js` asset loaded successfully, including selected-amount
   API support. Browser automation was unavailable, so no authenticated live
