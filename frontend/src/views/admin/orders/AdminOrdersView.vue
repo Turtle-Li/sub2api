@@ -26,7 +26,7 @@
       <!-- Table -->
       <OrderTable :orders="orders" :loading="ordersLoading" show-user>
         <template #actions="{ row }">
-          <div class="flex items-center gap-1">
+          <div class="flex flex-wrap items-center gap-1">
             <button @click="showOrderDetail(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-dark-600">
               <Icon name="eye" size="sm" />
               {{ t('common.view') }}
@@ -40,7 +40,6 @@
               {{ t('payment.admin.retry') }}
             </button>
             <template v-if="row.status === 'REFUND_REQUESTED'">
-              <span v-if="row.refund_requested_amount || row.refund_amount" class="rounded-full bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">{{ creditedAmountSymbol }}{{ (row.refund_requested_amount || row.refund_amount).toFixed(2) }}</span>
               <button :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
                 <Icon name="check" size="sm" />
                 {{ t('payment.admin.approveRefund') }}
@@ -68,7 +67,7 @@
             </template>
             <button v-else-if="row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED'" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
               <Icon name="dollar" size="sm" />
-              {{ t('payment.admin.refund') }}
+              {{ row.needs_manual_review ? t('payment.admin.reviewRefund') : t('payment.admin.refund') }}
             </button>
           </div>
         </template>
@@ -125,28 +124,42 @@
         </div>
         <div class="grid gap-3 sm:grid-cols-2">
           <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
-            <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.paymentLabel') }}</p>
-            <OrderLifecycleBadge kind="payment" :value="paymentFact(selectedOrder)" />
-          </div>
-          <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
             <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.issuanceRecord') }}</p>
             <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(selectedOrder)" />
           </div>
-          <div v-if="hasRefundHandling(selectedOrder)" class="rounded-lg border border-amber-200 bg-amber-50 p-3 sm:col-span-2 dark:border-amber-900/70 dark:bg-amber-950/20">
-            <p class="mb-1 text-xs font-medium text-amber-900 dark:text-amber-100">{{ t('payment.orderOps.refundHandling') }}</p>
-            <div class="flex flex-wrap items-center gap-2">
-              <OrderLifecycleBadge
-                v-if="hasRefundEntitlementStatus(selectedOrder)"
-                kind="refundEntitlement"
-                :value="selectedOrder.refund_entitlement_status || 'NOT_APPLICABLE'"
-              />
-              <span v-if="selectedOrder.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'" class="text-xs text-amber-800 dark:text-amber-200">{{ t('payment.admin.refundMerchantBalanceInsufficientShort') }}</span>
-              <span v-else-if="selectedOrder.refund_recovery?.state === 'RETRY_QUEUED'" class="text-xs text-blue-700 dark:text-blue-300">{{ t('payment.admin.refundRetryQueuedShort') }}</span>
-              <span v-if="selectedOrder.needs_manual_review" class="text-xs text-red-700 dark:text-red-300">{{ t('payment.orderOps.refundReviewRequired') }}</span>
-            </div>
+          <div v-if="hasRefundEntitlementStatus(selectedOrder)" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
+            <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.currentEntitlement') }}</p>
+            <OrderLifecycleBadge kind="refundEntitlement" :value="selectedOrder.refund_entitlement_status || 'NOT_APPLICABLE'" />
           </div>
         </div>
+        <p v-if="refundBlockerKey(selectedOrder)" class="text-sm" :class="refundBlockerClass(selectedOrder)">
+          {{ t(refundBlockerKey(selectedOrder)) }}
+        </p>
         <OrderPurchaseSnapshot :order="selectedOrder" />
+        <div class="flex flex-wrap justify-end gap-2 border-t border-gray-200 pt-4 dark:border-dark-600">
+          <button v-if="selectedOrder.status === 'PENDING'" :disabled="refundMutationBusy" class="btn btn-secondary" @click="handleCancelOrder(selectedOrder)">
+            {{ t('payment.orders.cancel') }}
+          </button>
+          <button v-if="fulfillmentFact(selectedOrder) === 'FAILED' && !selectedOrder.needs_manual_review" :disabled="refundMutationBusy" class="btn btn-secondary" @click="handleRetryOrder(selectedOrder)">
+            {{ t('payment.admin.retry') }}
+          </button>
+          <button v-if="canOpenRefundReview(selectedOrder)" :disabled="refundMutationBusy" class="btn btn-danger" @click="openRefundDialog(selectedOrder)">
+            {{ selectedOrder.needs_manual_review ? t('payment.admin.reviewRefund') : refundActionLabel(selectedOrder) }}
+          </button>
+          <template v-else-if="selectedOrder.status === 'REFUND_PENDING'">
+            <template v-if="selectedOrder.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'">
+              <button :disabled="refundMutationBusy" class="btn btn-secondary" @click="handleRetryPausedRefund(selectedOrder)">
+                {{ t('payment.admin.retryPausedRefund') }}
+              </button>
+              <button :disabled="refundMutationBusy" class="btn btn-secondary" @click="openExternalRefundDialog(selectedOrder)">
+                {{ t('payment.admin.externalRefundAction') }}
+              </button>
+            </template>
+            <button v-else :disabled="refundMutationBusy" class="btn btn-secondary" @click="handleQueryRefund(selectedOrder)">
+              {{ t('payment.admin.queryRefundStatus') }}
+            </button>
+          </template>
+        </div>
         <!-- Audit Logs -->
         <div v-if="orderAuditLogs.length > 0" class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <p class="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.admin.auditLogs') }}</p>
@@ -169,11 +182,14 @@
       :order="refundTarget"
       :review="refundReview"
       :loading="refundReviewLoading"
+      :previewing="refundPreviewing"
+      :reviewed-refund-amount="reviewedRefundAmount"
       :error="refundReviewError"
       :submitting="refundSubmitting"
       :backfilling="refundBackfilling"
       :warning="refundWarning"
       @confirm="handleRefund"
+      @preview="scheduleRefundPreview"
       @backfill="handleSubscriptionGrantBackfill"
       @cancel="closeRefundDialog"
     />
@@ -250,7 +266,7 @@ import InvoiceStatusBadge from '@/components/payment/InvoiceStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
 import OrderPurchaseSnapshot from '@/components/payment/OrderPurchaseSnapshot.vue'
 import OrderLifecycleBadge from '@/components/payment/OrderLifecycleBadge.vue'
-import { paymentFact, fulfillmentFact } from '@/components/payment/orderPresentation'
+import { fulfillmentFact } from '@/components/payment/orderPresentation'
 import { currencySymbol } from '@/components/payment/currency'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
@@ -266,6 +282,7 @@ interface AuditLog {
 interface RefundRequest {
   reason_code: RefundReasonCode
   reason_detail?: string
+  refund_amount?: number
 }
 
 const { t } = useI18n()
@@ -288,6 +305,8 @@ const showRefundDialog = ref(false)
 const refundTarget = ref<PaymentOrder | null>(null)
 const refundReview = ref<RefundReview | null>(null)
 const refundReviewLoading = ref(false)
+const refundPreviewing = ref(false)
+const reviewedRefundAmount = ref<number | undefined>(undefined)
 const refundReviewError = ref('')
 const refundSubmitting = ref(false)
 const refundBackfilling = ref(false)
@@ -326,8 +345,26 @@ function hasRefundEntitlementStatus(order: PaymentOrder): boolean {
   return Boolean(order.refund_entitlement_status && order.refund_entitlement_status !== 'NOT_APPLICABLE')
 }
 
-function hasRefundHandling(order: PaymentOrder): boolean {
-  return hasRefundEntitlementStatus(order) || Boolean(order.refund_recovery?.state) || Boolean(order.needs_manual_review)
+function refundBlockerKey(order: PaymentOrder): string {
+  if (order.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE') return 'payment.admin.refundMerchantBalanceInsufficientShort'
+  if (order.refund_recovery?.state === 'RETRY_QUEUED') return 'payment.admin.refundRetryQueuedShort'
+  return ''
+}
+
+function refundBlockerClass(order: PaymentOrder): string {
+  if (order.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE') return 'text-amber-800 dark:text-amber-200'
+  if (order.refund_recovery?.state === 'RETRY_QUEUED') return 'text-blue-700 dark:text-blue-300'
+  return 'text-red-700 dark:text-red-300'
+}
+
+function canOpenRefundReview(order: PaymentOrder): boolean {
+  return ['COMPLETED', 'PARTIALLY_REFUNDED', 'REFUND_REQUESTED', 'REFUND_FAILED'].includes(order.status)
+}
+
+function refundActionLabel(order: PaymentOrder): string {
+  if (order.status === 'REFUND_REQUESTED') return t('payment.admin.approveRefund')
+  if (order.status === 'REFUND_FAILED') return t('payment.admin.retryRefund')
+  return t('payment.admin.refund')
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -337,7 +374,10 @@ function debounceLoadOrders() {
 }
 
 function handleFilterChange() { orderPagination.page = 1; loadOrders() }
-onUnmounted(() => { if (debounceTimer) clearTimeout(debounceTimer) })
+onUnmounted(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  clearRefundPreviewTimer()
+})
 const paymentFactOptions = computed(() => [
   { value: '', label: t('payment.orderOps.allPayments') },
   ...['PAID', 'UNPAID'].map(value => ({ value, label: t(`payment.orderOps.payment.${value.toLowerCase()}`) })),
@@ -441,52 +481,95 @@ async function handleRetryOrder(order: PaymentOrder) {
 
 let refundDialogSession = 0
 let refundReviewRequest = 0
+let refundPreviewTimer: ReturnType<typeof setTimeout> | null = null
 
 function isCurrentRefundDialog(orderID: number, session: number): boolean {
   return refundDialogSession === session && showRefundDialog.value && refundTarget.value?.id === orderID
 }
 
-async function loadRefundReview(order: PaymentOrder, session: number): Promise<void> {
+function clearRefundPreviewTimer() {
+  if (!refundPreviewTimer) return
+  clearTimeout(refundPreviewTimer)
+  refundPreviewTimer = null
+}
+
+async function loadRefundReview(order: PaymentOrder, session: number, refundAmount?: number, request = ++refundReviewRequest): Promise<void> {
   const orderID = order.id
-  const request = ++refundReviewRequest
+  const isExplicitAmount = refundAmount !== undefined
   if (isCurrentRefundDialog(orderID, session)) {
-    refundReviewLoading.value = true
+    if (isExplicitAmount) {
+      refundPreviewing.value = true
+    } else {
+      refundReviewLoading.value = true
+      refundReview.value = null
+    }
+    reviewedRefundAmount.value = undefined
     refundReviewError.value = ''
-    refundReview.value = null
   }
 
   try {
-    const res = await adminPaymentAPI.getRefundReview(orderID)
+    const res = await adminPaymentAPI.getRefundReview(orderID, refundAmount)
     if (!isCurrentRefundDialog(orderID, session) || request !== refundReviewRequest) return
     refundReview.value = res.data
+    reviewedRefundAmount.value = refundAmount
   } catch (err: unknown) {
     if (!isCurrentRefundDialog(orderID, session) || request !== refundReviewRequest) return
     refundReviewError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))
   } finally {
     if (isCurrentRefundDialog(orderID, session) && request === refundReviewRequest) {
-      refundReviewLoading.value = false
+      if (isExplicitAmount) refundPreviewing.value = false
+      else refundReviewLoading.value = false
     }
   }
 }
 
+function scheduleRefundPreview(refundAmount: number | null) {
+  const target = refundTarget.value
+  if (!target || !showRefundDialog.value || refundSubmitting.value || refundBackfilling.value) return
+
+  const session = refundDialogSession
+  clearRefundPreviewTimer()
+  const request = ++refundReviewRequest
+  reviewedRefundAmount.value = undefined
+  refundReviewLoading.value = false
+  refundReviewError.value = ''
+
+  if (refundAmount === null) {
+    refundPreviewing.value = false
+    return
+  }
+
+  refundPreviewing.value = true
+  refundPreviewTimer = setTimeout(() => {
+    refundPreviewTimer = null
+    void loadRefundReview(target, session, refundAmount, request)
+  }, 250)
+}
+
 function openRefundDialog(order: PaymentOrder) {
   if (refundMutationBusy.value) return
+  showDetailDialog.value = false
   const session = ++refundDialogSession
   refundTarget.value = order
   refundReview.value = null
+  reviewedRefundAmount.value = undefined
   refundReviewError.value = ''
+  refundPreviewing.value = false
   refundWarning.value = order.invoice?.status === 'ISSUED' ? t('payment.invoice.admin.refundCorrectionWarning') : ''
   showRefundDialog.value = true
   void loadRefundReview(order, session)
 }
 
 function closeRefundDialog() {
+  clearRefundPreviewTimer()
   refundDialogSession += 1
   refundReviewRequest += 1
   showRefundDialog.value = false
   refundTarget.value = null
   refundReview.value = null
   refundReviewLoading.value = false
+  refundPreviewing.value = false
+  reviewedRefundAmount.value = undefined
   refundReviewError.value = ''
   refundWarning.value = ''
 }
@@ -497,11 +580,16 @@ async function handleSubscriptionGrantBackfill(request: SubscriptionGrantBackfil
 
   const orderID = target.id
   const session = refundDialogSession
+  clearRefundPreviewTimer()
+  refundReviewRequest += 1
+  refundPreviewing.value = false
+  reviewedRefundAmount.value = undefined
   refundBackfilling.value = true
   try {
     const res = await stepUp.run(() => adminPaymentAPI.backfillSubscriptionGrant(orderID, request))
     if (!isCurrentRefundDialog(orderID, session)) return
     refundReview.value = res.data
+    reviewedRefundAmount.value = undefined
     refundReviewError.value = ''
     appStore.showSuccess(t('payment.admin.subscriptionGrantBackfillSuccess'))
     void loadOrders()
@@ -532,7 +620,11 @@ function closeRefundDialogFor(orderID: number, session: number) {
 async function handleRefund(data: RefundRequest) {
   const target = refundTarget.value
   const review = refundReview.value
-  if (refundMutationBusy.value || !target || !review || !review.can_refund || review.requires_manual_review || !review.quote_revision) return
+  const hasCurrentSelection = data.refund_amount === undefined || (
+    reviewedRefundAmount.value !== undefined &&
+    Math.round(reviewedRefundAmount.value * 100) === Math.round(data.refund_amount * 100)
+  )
+  if (refundMutationBusy.value || refundReviewLoading.value || refundPreviewing.value || !!refundReviewError.value || !hasCurrentSelection || !target || !review || !review.can_refund || review.requires_manual_review || !review.quote_revision) return
 
   // Capture the exact server quote before the MFA prompt can suspend this
   // operation. A later selection, quote refresh, close/reopen, or response
@@ -543,6 +635,7 @@ async function handleRefund(data: RefundRequest) {
     quote_revision: review.quote_revision,
     reason_code: data.reason_code,
     ...(data.reason_detail ? { reason_detail: data.reason_detail } : {}),
+    ...(data.refund_amount !== undefined ? { refund_amount: data.refund_amount } : {}),
   }
   refundSubmitting.value = true
   try {
@@ -566,7 +659,7 @@ async function handleRefund(data: RefundRequest) {
     if (extractApiErrorCode(err) === 'REFUND_QUOTE_STALE') {
       if (isCurrentRefundDialog(orderID, session)) {
         appStore.showWarning(t('payment.admin.refundQuoteStale'))
-        await loadRefundReview(target, session)
+        await loadRefundReview(target, session, data.refund_amount)
       }
       return
     }
@@ -625,6 +718,7 @@ function localDateTimeInputValue(date = new Date()): string {
 
 function openExternalRefundDialog(order: PaymentOrder) {
   if (refundMutationBusy.value || !order.refund_recovery?.can_confirm_external) return
+  showDetailDialog.value = false
   externalRefundTarget.value = order
   externalRefundForm.method_code = 'wechat_transfer'
   externalRefundForm.external_reference = ''

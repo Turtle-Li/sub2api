@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import AdminOrdersView from '../orders/AdminOrdersView.vue'
 
@@ -90,6 +90,28 @@ function review(id: number, quoteRevision = `quote-${id}`) {
   }
 }
 
+function subscriptionReview(id: number, quoteRevision = `quote-${id}`, amount = 0.08) {
+  return {
+    ...review(id, quoteRevision),
+    order_type: 'subscription',
+    min_refund_amount: 0.03,
+    default_refund_amount: amount,
+    max_refund_amount: 0.08,
+    balance: undefined,
+    subscription: {
+      subscription_id: 8,
+      term_start_at: '2026-09-12T15:13:43.041622Z',
+      term_end_at: '2026-10-12T15:13:43.041622Z',
+      current_expires_at: '2026-10-12T15:13:43.041622Z',
+      new_expires_at: '2026-09-20T15:13:43.041622Z',
+      purchased_seconds: 2_592_000,
+      used_seconds: 200_000,
+      remaining_seconds: 2_392_000,
+      seconds_to_reclaim: 1_196_000,
+    },
+  }
+}
+
 async function mountOrders(statusOrRows: string | ReturnType<typeof order>[]) {
   const rows = typeof statusOrRows === 'string' ? [order(42, statusOrRows)] : statusOrRows
   getOrders.mockResolvedValue({ data: { items: rows, total: rows.length } })
@@ -104,11 +126,11 @@ async function mountOrders(statusOrRows: string | ReturnType<typeof order>[]) {
         },
         AdminRefundDialog: {
           name: 'AdminRefundDialog',
-          props: ['show', 'order', 'review', 'loading', 'error', 'warning', 'submitting', 'backfilling'],
-          emits: ['confirm', 'backfill', 'cancel'],
-          template: '<div v-if="show" data-test="refund-dialog" :data-order-id="order?.id" :data-review="review?.quote_revision || \'\'">{{ warning }}{{ error }}</div>'
+          props: ['show', 'order', 'review', 'loading', 'previewing', 'reviewedRefundAmount', 'error', 'warning', 'submitting', 'backfilling'],
+          emits: ['confirm', 'preview', 'backfill', 'cancel'],
+          template: '<div v-if="show" data-test="refund-dialog" :data-order-id="order?.id" :data-review="review?.quote_revision || \'\'" :data-previewing="previewing ? \'true\' : \'false\'" :data-reviewed-amount="reviewedRefundAmount ?? \'\'">{{ warning }}{{ error }}</div>'
         },
-        BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /></div>' },
+        BaseDialog: { props: ['show', 'title'], template: '<div v-if="show" data-test="base-dialog" :data-title="title"><slot /></div>' },
         Select: {
           name: 'Select',
           emits: ['update:modelValue', 'change'],
@@ -139,12 +161,18 @@ function buttonForOrder(wrapper: ReturnType<typeof mount>, orderID: number, labe
   return row.findAll('button').find((button) => button.text() === label)!
 }
 
+function detailButton(wrapper: ReturnType<typeof mount>, label: string) {
+  return wrapper.find('[data-test="base-dialog"][data-title="payment.admin.orderDetail"]').findAll('button').find((button) => button.text() === label)!
+}
+
 async function openRefundDialog(wrapper: ReturnType<typeof mount>, orderID = 42) {
   await buttonForOrder(wrapper, orderID, 'payment.admin.refund').trigger('click')
   await flushPromises()
 }
 
 describe('admin order management', () => {
+  afterEach(() => vi.useRealTimers())
+
   beforeEach(() => {
     vi.resetAllMocks()
     stepUpRun.mockImplementation((action: () => Promise<unknown>) => action())
@@ -300,6 +328,26 @@ describe('admin order management', () => {
     wrapper.unmount()
   })
 
+  it('blocks a refund submission while an explicit amount preview error is visible', async () => {
+    vi.useFakeTimers()
+    getRefundReview
+      .mockResolvedValueOnce({ data: subscriptionReview(42, 'quote-initial', 0.08) })
+      .mockRejectedValueOnce({ code: 'REFUND_REVIEW_UNAVAILABLE', message: 'preview unavailable' })
+    const wrapper = await mountOrders('COMPLETED')
+    await openRefundDialog(wrapper)
+    const dialog = wrapper.findComponent({ name: 'AdminRefundDialog' })
+
+    dialog.vm.$emit('preview', 0.04)
+    await vi.advanceTimersByTimeAsync(250)
+    await flushPromises()
+    expect(wrapper.find('[data-test="refund-dialog"]').text()).toContain('preview unavailable')
+
+    dialog.vm.$emit('confirm', refundPayload)
+    await flushPromises()
+    expect(refundOrder).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('refreshes a stale quote and will not retry the previous revision', async () => {
     let resolveRefresh: ((value: { data: ReturnType<typeof review> }) => void) | undefined
     const refreshed = new Promise<{ data: ReturnType<typeof review> }>((resolve) => { resolveRefresh = resolve })
@@ -328,6 +376,85 @@ describe('admin order management', () => {
     resolveRefresh!({ data: review(42, 'quote-fresh') })
     await flushPromises()
     expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-review')).toBe('quote-fresh')
+    wrapper.unmount()
+  })
+
+  it('ignores a late amount preview after an invalid edit and blocks the stale selected amount', async () => {
+    vi.useFakeTimers()
+    let resolvePreview: ((value: { data: ReturnType<typeof subscriptionReview> }) => void) | undefined
+    const pendingPreview = new Promise<{ data: ReturnType<typeof subscriptionReview> }>((resolve) => { resolvePreview = resolve })
+    getRefundReview
+      .mockResolvedValueOnce({ data: subscriptionReview(42, 'quote-initial', 0.08) })
+      .mockImplementationOnce(() => pendingPreview)
+
+    const wrapper = await mountOrders('COMPLETED')
+    await openRefundDialog(wrapper)
+    const dialog = wrapper.findComponent({ name: 'AdminRefundDialog' })
+
+    dialog.vm.$emit('preview', 0.04)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(getRefundReview).toHaveBeenLastCalledWith(42, 0.04)
+    expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-previewing')).toBe('true')
+
+    dialog.vm.$emit('preview', null)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-previewing')).toBe('false')
+    expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-reviewed-amount')).toBe('')
+
+    resolvePreview!({ data: subscriptionReview(42, 'quote-late', 0.04) })
+    await flushPromises()
+    expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-review')).toBe('quote-initial')
+    expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-reviewed-amount')).toBe('')
+
+    dialog.vm.$emit('confirm', { reason_code: 'customer_request', refund_amount: 0.04 })
+    await flushPromises()
+    expect(refundOrder).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('freezes an explicitly previewed amount and revision through MFA', async () => {
+    vi.useFakeTimers()
+    let resumeMFA: (() => void) | undefined
+    stepUpRun.mockImplementation(async (action: () => Promise<unknown>) => {
+      try {
+        return await action()
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'STEP_UP_REQUIRED') throw error
+        await new Promise<void>((resolve) => { resumeMFA = resolve })
+        return action()
+      }
+    })
+    getRefundReview
+      .mockResolvedValueOnce({ data: subscriptionReview(42, 'quote-initial', 0.08) })
+      .mockResolvedValueOnce({ data: subscriptionReview(42, 'quote-selected-003', 0.03) })
+    refundOrder
+      .mockRejectedValueOnce({ status: 403, code: 'STEP_UP_REQUIRED' })
+      .mockResolvedValueOnce({ data: { success: true, warning: manualWarning } })
+
+    const wrapper = await mountOrders('COMPLETED')
+    await openRefundDialog(wrapper)
+    const dialog = wrapper.findComponent({ name: 'AdminRefundDialog' })
+    dialog.vm.$emit('preview', 0.03)
+    await vi.advanceTimersByTimeAsync(250)
+    await flushPromises()
+    expect(wrapper.find('[data-test="refund-dialog"]').attributes('data-review')).toBe('quote-selected-003')
+
+    const supplied = { reason_code: 'customer_request', reason_detail: 'Requested refund', refund_amount: 0.03 }
+    dialog.vm.$emit('confirm', supplied)
+    await flushPromises()
+    dialog.vm.$emit('preview', 0.04)
+    resumeMFA!()
+    await flushPromises()
+
+    const frozen = {
+      quote_revision: 'quote-selected-003',
+      reason_code: 'customer_request',
+      reason_detail: 'Requested refund',
+      refund_amount: 0.03,
+    }
+    expect(refundOrder).toHaveBeenNthCalledWith(1, 42, frozen)
+    expect(refundOrder).toHaveBeenNthCalledWith(2, 42, frozen)
+    expect(getRefundReview).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 
@@ -368,6 +495,7 @@ describe('admin order management', () => {
         purchased_seconds: 2_592_000,
         used_seconds: 200_000,
         remaining_seconds: 2_392_000,
+        seconds_to_reclaim: 2_392_000,
       },
     }
     getRefundReview.mockResolvedValueOnce({ data: manualReview })
@@ -460,6 +588,39 @@ describe('admin order management', () => {
     expect(showSuccess).toHaveBeenCalledWith('payment.admin.externalRefundSuccess')
     expect(getOrders).toHaveBeenCalledTimes(2)
     wrapper.unmount()
+  })
+
+  it('closes order details before opening refund or external-refund dialogs', async () => {
+    const refundWrapper = await mountOrders('COMPLETED')
+    await buttonForOrder(refundWrapper, 42, 'common.view').trigger('click')
+    await flushPromises()
+    expect(refundWrapper.find('[data-test="base-dialog"][data-title="payment.admin.orderDetail"]').exists()).toBe(true)
+
+    await detailButton(refundWrapper, 'payment.admin.refund').trigger('click')
+    await flushPromises()
+    expect(refundWrapper.find('[data-test="base-dialog"][data-title="payment.admin.orderDetail"]').exists()).toBe(false)
+    expect(refundWrapper.find('[data-test="refund-dialog"]').exists()).toBe(true)
+    refundWrapper.unmount()
+
+    const paused = {
+      ...order(4, 'REFUND_PENDING'),
+      refund_recovery: {
+        state: 'WAITING_PROVIDER_BALANCE',
+        amount_fen: 10,
+        currency: 'CNY',
+        can_confirm_external: true,
+      },
+    }
+    const externalWrapper = await mountOrders([paused])
+    await buttonForOrder(externalWrapper, 4, 'common.view').trigger('click')
+    await flushPromises()
+    expect(externalWrapper.find('[data-test="base-dialog"][data-title="payment.admin.orderDetail"]').exists()).toBe(true)
+
+    await detailButton(externalWrapper, 'payment.admin.externalRefundAction').trigger('click')
+    await flushPromises()
+    expect(externalWrapper.find('[data-test="base-dialog"][data-title="payment.admin.orderDetail"]').exists()).toBe(false)
+    expect(externalWrapper.find('#external-refund-reference').exists()).toBe(true)
+    externalWrapper.unmount()
   })
 
   it('reloads orders after the owner payment test creates an order', async () => {
