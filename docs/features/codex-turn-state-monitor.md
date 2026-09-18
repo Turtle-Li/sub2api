@@ -168,3 +168,31 @@ binary SHA-256 is `850511c9877564cc0651da497e1fce93a7bce2a9b95cccf3155f2899021ba
 No customer credentials, raw states, proxy endpoints or private deployment
 records are included in this repository. Only compiled runtime artifacts were
 transferred to the host. Legacy notifications remain disabled by the adapter.
+
+## Production panel recovery (2026-09-18)
+
+The original panel worked without CSP in mock validation but stalled on the
+production page: srcdoc inherits its parent's nonce-based script-src, so its
+un-nonced inline script never ran. Isolated Chromium reproduced zero bridge
+requests and an inline-script CSP violation. The Vue adapter now copies the
+existing host script's `.nonce` property onto bundled panel scripts, retaining
+the opaque sandbox and existing CSP. A startup watchdog displays a recoverable
+error if scripts cannot initialize; API failures no longer leave initial tables
+saying Loading. The frame reports readiness/content height and follows the
+parent's light/dark theme without receiving authentication data.
+
+The redundant nested titles, monospace body style and fixed-height inner scroll
+were removed. Colors follow the existing teal/slate tokens; tables retain local
+horizontal scrolling. Bounded Chromium tests under strict CSP cover status
+rendering, API errors and desktop-dark/mobile-light layouts; nonce/watchdog/
+message-source regressions extend the Vue tests.
+
+Operational correction: both selected accounts monitor astra, sol and terra,
+each with its own account/model pin. Existing luna monitoring remains separate.
+Read-only live diagnostics confirmed normal scheduled renewal had continued;
+CSP failure affected visibility, not the daemon. Do not equate a valid 292 pin
+or matching response-model label with a guarantee of model quality.
+
+If host settings injection fails and the fallback HTML has no nonce-bearing
+script, the existing CSP still blocks initialization; the new watchdog exposes
+a retryable error. This does not weaken CSP or bypass the settings failure.

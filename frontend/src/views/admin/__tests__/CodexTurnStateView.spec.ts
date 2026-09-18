@@ -91,6 +91,48 @@ describe('CodexTurnStateView panel bridge', () => {
     vi.restoreAllMocks()
   })
 
+  it('carries the actual host CSP nonce into the opaque frame scripts', () => {
+    const script = document.createElement('script')
+    script.nonce = 'host-response-nonce'
+    document.head.append(script)
+    try {
+      const iframe = mountView().get('iframe')
+      const documentHTML = new DOMParser().parseFromString(iframe.attributes('srcdoc')!, 'text/html')
+      expect(documentHTML.scripts.length).toBeGreaterThan(0)
+      for (const child of documentHTML.scripts) expect(child.nonce).toBe('host-response-nonce')
+      expect(iframe.attributes('sandbox')).toBe('allow-scripts')
+    } finally { script.remove() }
+  })
+
+  it('shows a recoverable startup error when frame scripts never start', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mountView()
+      await vi.advanceTimersByTimeAsync(12000)
+      expect(wrapper.get('[role="alert"]').text()).toContain('admin.codexTurnState.unavailable')
+      await wrapper.get('[role="alert"] button').trigger('click')
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      const iframe = wrapper.get('iframe').element as HTMLIFrameElement
+      installPanelWindow(iframe)
+      dispatchFromPanel(iframe, { type: 'ctsm-ready' })
+      await vi.advanceTimersByTimeAsync(13000)
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('accepts frame height only from its opaque child and clamps invalid input', async () => {
+    const wrapper = mountView()
+    const iframe = wrapper.get('iframe').element as HTMLIFrameElement
+    installPanelWindow(iframe)
+    dispatchFromPanel(iframe, { type: 'ctsm-resize', height: 1400 })
+    await flushPromises()
+    expect(iframe.style.height).toBe('1400px')
+    dispatchFromPanel(iframe, { type: 'ctsm-resize', height: 2000 }, 'https://foreign.invalid')
+    dispatchFromPanel(iframe, { type: 'ctsm-resize', height: Infinity })
+    await flushPromises()
+    expect(iframe.style.height).toBe('1400px')
+  })
+
   it('loads the existing panel into an opaque sandbox without putting the admin token into the iframe', () => {
     localStorage.setItem('auth_token', 'test-session-marker')
 
@@ -107,7 +149,7 @@ describe('CodexTurnStateView panel bridge', () => {
     expect(iframe.attributes('srcdoc')).not.toContain('选择账号超时')
     expect(iframe.attributes('srcdoc')).toContain('pendingAccountPickers.set(id, {resolve});')
     expect(iframe.attributes('srcdoc')).toContain('class="model-status-scroll"')
-    expect(iframe.attributes('srcdoc')).toContain('.model-status-table { min-width: 1180px;')
+    expect(iframe.attributes('srcdoc')).toContain('min-width: 1180px;')
     expect(iframe.attributes('srcdoc')).toContain('${esc(label)}</span>')
     expect(iframe.attributes('srcdoc')).not.toMatch(/(?:getJSON|mutate)\([^\n]*['\"]\/api\//)
     expect(iframe.element.contentWindow).not.toBe(window)

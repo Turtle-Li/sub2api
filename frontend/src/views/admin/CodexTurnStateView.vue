@@ -1,14 +1,14 @@
 <template>
   <AppLayout>
     <div class="space-y-4">
-      <header class="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 class="text-xl font-semibold text-gray-900 dark:text-white">{{ t('admin.codexTurnState.title') }}</h1>
-          <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">{{ t('admin.codexTurnState.description') }}</p>
-        </div>
+      <div class="flex justify-end">
         <RouterLink to="/admin/accounts" class="btn btn-secondary">{{ t('admin.codexTurnState.accounts') }}</RouterLink>
-      </header>
-      <iframe ref="panel" :srcdoc="panelHTML" sandbox="allow-scripts" :title="t('admin.codexTurnState.title')" class="w-full rounded-lg border border-gray-200 dark:border-dark-700" style="height: calc(100vh - 180px); min-height: 650px" />
+      </div>
+      <div v-if="panelStartupError" role="alert" class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+        <span>{{ t('admin.codexTurnState.unavailable') }}</span>
+        <button type="button" class="btn btn-secondary" @click="reloadPanel">{{ t('common.refresh') }}</button>
+      </div>
+      <iframe :key="panelGeneration" ref="panel" :srcdoc="panelDocument" sandbox="allow-scripts" :title="t('admin.codexTurnState.title')" class="block w-full border-0" :style="{ height: `${panelHeight}px` }" @load="syncPanelTheme" />
 
       <BaseDialog
         :show="accountPickerOpen"
@@ -74,6 +74,34 @@ const eligibleAccountTypes = ['oauth', 'setup-token'] as const
 
 const { t } = useI18n()
 const panel = ref<HTMLIFrameElement | null>(null)
+// srcdoc inherits the host CSP. Reuse its per-response nonce instead of
+// weakening script-src or granting same-origin access to the frame.
+const hostNonce = document.querySelector<HTMLScriptElement>('script[nonce]')?.nonce || ''
+const escapedNonce = hostNonce.replace(/[&"<>]/g, value => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' })[value]!)
+const initialTheme = document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+const panelDocument = panelHTML.replace('<html lang="zh-CN">', `<html lang="zh-CN" data-theme="${initialTheme}">`)
+  .replace(/<script>/g, `<script nonce="${escapedNonce}">`)
+const panelHeight = ref(900)
+const panelGeneration = ref(0)
+const panelStartupError = ref(false)
+let startupTimer: ReturnType<typeof setTimeout> | undefined
+let themeObserver: MutationObserver | undefined
+function markPanelReady() {
+  clearTimeout(startupTimer)
+  panelStartupError.value = false
+}
+function armStartupTimeout() {
+  clearTimeout(startupTimer)
+  startupTimer = setTimeout(() => { panelStartupError.value = true }, 12000)
+}
+function syncPanelTheme() {
+  postToPanel({ type: 'ctsm-theme', theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light' })
+}
+function reloadPanel() {
+  panelStartupError.value = false
+  panelGeneration.value += 1
+  armStartupTimeout()
+}
 const active = new Set<string>()
 const accountPickerOpen = ref(false)
 const accountPickerRequestID = ref<string | null>(null)
@@ -193,7 +221,17 @@ async function handlePanelRequest(event: MessageEvent) {
   // The opaque iframe receives no admin token or same-origin access.
   if (event.source !== panel.value?.contentWindow || event.origin !== 'null') return
   const message = event.data
-  if (!message || !isValidMessageID(message.id)) return
+  if (!message) return
+  if (message.type === 'ctsm-ready') {
+    markPanelReady()
+    syncPanelTheme()
+    return
+  }
+  if (message.type === 'ctsm-resize') {
+    if (typeof message.height === 'number' && Number.isFinite(message.height)) panelHeight.value = Math.min(16000, Math.max(480, Math.ceil(message.height)))
+    return
+  }
+  if (!isValidMessageID(message.id)) return
   if (message.type === 'ctsm-account-picker') {
     openAccountPicker(message.id)
     return
@@ -207,9 +245,16 @@ async function handlePanelRequest(event: MessageEvent) {
     postToPanel({ type: 'ctsm-result', id: message.id, ok: false, error: t('admin.codexTurnState.unavailable') })
   } finally { active.delete(message.id) }
 }
-onMounted(() => window.addEventListener('message', handlePanelRequest))
+onMounted(() => {
+  window.addEventListener('message', handlePanelRequest)
+  armStartupTimeout()
+  themeObserver = new MutationObserver(syncPanelTheme)
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+})
 onUnmounted(() => {
   accountSearchAbort?.abort()
+  clearTimeout(startupTimer)
+  themeObserver?.disconnect()
   window.removeEventListener('message', handlePanelRequest)
 })
 </script>
