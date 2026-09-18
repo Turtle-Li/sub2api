@@ -43,7 +43,7 @@ func loadReviewedSubscriptionRefundState(ctx context.Context, client *dbent.Clie
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	proven := false
 	for rows.Next() {
 		var start, end time.Time
