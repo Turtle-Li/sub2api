@@ -149,6 +149,27 @@ func TestRefundRejectsOrdersWithNonReversibleEntitlements(t *testing.T) {
 	require.Equal(t, "REFUND_REQUIRES_MANUAL_REVIEW", infraerrors.Reason(err))
 }
 
+func TestRequestRefundRejectsAlreadySettledPartial(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "user-partial-settled")
+	_, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusPartiallyRefunded).
+		SetRefundAmount(40).
+		SetRefundRequestedAmount(0).
+		Save(ctx)
+	require.NoError(t, err)
+
+	err = (&PaymentService{entClient: client}).RequestRefund(ctx, order.ID, order.UserID, "second request")
+	require.Equal(t, "REFUND_ALREADY_SETTLED", infraerrors.Reason(err))
+
+	persisted, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPartiallyRefunded, persisted.Status)
+	require.InDelta(t, 40, persisted.RefundAmount, 0.000001)
+	require.Zero(t, persisted.RefundRequestedAmount)
+}
+
 func TestPrepDeductBalanceRequiresForceWhenBalanceIsInsufficient(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -450,6 +471,28 @@ func TestRefundStateValidRejectsFiniteAmountsBeyondOrderCap(t *testing.T) {
 	require.True(t, refundStateValid(&dbent.PaymentOrder{Amount: 100, RefundAmount: 60, RefundRequestedAmount: 40}))
 }
 
+func TestRefundAlreadySettledKeepsLegacyPendingRequestRecoverable(t *testing.T) {
+	now := time.Now()
+	for _, status := range []string{OrderStatusRefundRequested, OrderStatusRefundPending, OrderStatusRefundFailed} {
+		t.Run(status, func(t *testing.T) {
+			order := &dbent.PaymentOrder{
+				Amount:            100,
+				Status:            status,
+				RefundAmount:      40,
+				RefundRequestedAt: &now,
+			}
+			settled, requested := refundOrderAmounts(order)
+			require.Zero(t, settled)
+			require.InDelta(t, 40, requested, 0.000001)
+			require.False(t, refundAlreadySettled(order))
+		})
+	}
+
+	require.True(t, refundAlreadySettled(&dbent.PaymentOrder{
+		Amount: 100, Status: OrderStatusPartiallyRefunded, RefundAmount: 40,
+	}))
+}
+
 func TestFormatGatewayRefundAmountUsesOrderCurrency(t *testing.T) {
 	order := &dbent.PaymentOrder{
 		ProviderSnapshot: map[string]any{
@@ -620,7 +663,7 @@ func TestFinishRefundSuccessStatusesFinalize(t *testing.T) {
 	}
 }
 
-func TestExecuteRefundAccumulatesSequentialPartialRefundsAndCapsRemainingAmount(t *testing.T) {
+func TestExecuteRefundAllowsOnlyOneSuccessfulPartialRefund(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 	user, err := client.User.Create().
@@ -677,28 +720,21 @@ func TestExecuteRefundAccumulatesSequentialPartialRefundsAndCapsRemainingAmount(
 	require.InDelta(t, 40, current.RefundAmount, 0.000001)
 	require.Zero(t, current.RefundRequestedAmount)
 
-	refund(30)
+	second, early, err := svc.PrepareRefund(ctx, order.ID, 30, "second partial", false, false)
+	require.Nil(t, second)
+	require.Nil(t, early)
+	require.Equal(t, "REFUND_ALREADY_SETTLED", infraerrors.Reason(err))
 	current, err = client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusPartiallyRefunded, current.Status)
-	require.InDelta(t, 70, current.RefundAmount, 0.000001)
+	require.InDelta(t, 40, current.RefundAmount, 0.000001)
 	require.Zero(t, current.RefundRequestedAmount)
-
-	refund(30)
-	current, err = client.PaymentOrder.Get(ctx, order.ID)
-	require.NoError(t, err)
-	require.Equal(t, OrderStatusRefunded, current.Status)
-	require.InDelta(t, 100, current.RefundAmount, 0.000001)
-	require.Zero(t, current.RefundRequestedAmount)
-
-	_, _, err = svc.PrepareRefund(ctx, order.ID, 1, "too late", false, false)
-	require.Equal(t, "INVALID_STATUS", infraerrors.Reason(err))
 
 	successAudits, err := client.PaymentAuditLog.Query().
 		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionHasPrefix("REFUND_SUCCESS")).
 		Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 3, successAudits)
+	require.Equal(t, 1, successAudits)
 }
 
 func TestPrepareRefundRejectsPartialSubscriptionWithoutEntitlementLedger(t *testing.T) {
@@ -748,7 +784,7 @@ func TestExecuteRefundRejectsStalePlanAfterAnotherPartialRefund(t *testing.T) {
 
 	result, err = svc.ExecuteRefund(ctx, stale)
 	require.Nil(t, result)
-	require.Equal(t, "REFUND_AMOUNT_CHANGED", infraerrors.Reason(err))
+	require.Equal(t, "REFUND_ALREADY_SETTLED", infraerrors.Reason(err))
 
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)

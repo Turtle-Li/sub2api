@@ -255,7 +255,10 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 		}
 		return a, nil
 	}
-	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded}, o.Status) {
+	if refundAlreadySettled(o) {
+		return nil, refundAlreadySettledError()
+	}
+	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}, o.Status) {
 		return nil, infraerrors.Conflict("CONFLICT", "order status does not allow another refund")
 	}
 	snapshot := psOrderProviderSnapshot(o)
@@ -291,7 +294,10 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 }
 
 func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, plan *RefundPlan, reason normalizedRefundReason) (*unifiedRefundAttempt, error) {
-	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded}, order.Status) {
+	if refundAlreadySettled(order) {
+		return nil, refundAlreadySettledError()
+	}
+	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}, order.Status) {
 		return nil, infraerrors.Conflict("CONFLICT", "order status does not allow another refund")
 	}
 	now := s.refundValuationTime()

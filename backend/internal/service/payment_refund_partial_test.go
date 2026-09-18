@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 	"strconv"
@@ -100,11 +101,19 @@ func TestSelectedSubscriptionTerminalLifecycle(t *testing.T) {
 			ctx := context.Background()
 			svc, order, sub, _, end := newReviewedSubscriptionRefundFixture(t)
 			amount := "0.03"
-			for i := 0; i < 2; i++ {
+			var stalePlan *RefundPlan
+			attempts := 2
+			if success {
+				attempts = 1
+			}
+			for i := 0; i < attempts; i++ {
 				review, err := svc.ReviewRefundWithAmount(ctx, order.ID, &amount)
 				require.NoError(t, err)
 				plan, err := svc.PrepareReviewedRefundRequestWithAmount(ctx, order.ID, review.QuoteRevision, RefundReasonInput{LegacyReason: "partial lifecycle"}, &amount)
 				require.NoError(t, err)
+				if success {
+					stalePlan = plan
+				}
 				attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
 				require.NoError(t, err)
 				status := unifiedpay.RefundStatusFailed
@@ -126,12 +135,30 @@ func TestSelectedSubscriptionTerminalLifecycle(t *testing.T) {
 				current, err := svc.entClient.UserSubscription.Get(ctx, sub.ID)
 				require.NoError(t, err)
 				if success {
-					require.Equal(t, int64((i+1)*3), grant.RefundedCashMinor)
+					require.Equal(t, int64(3), grant.RefundedCashMinor)
 					require.True(t, current.ExpiresAt.Equal(review.Subscription.NewExpiresAt))
 				} else {
 					require.True(t, current.ExpiresAt.Equal(end))
 					require.Zero(t, grant.RefundedCashMinor)
 				}
+			}
+			if success {
+				review, err := svc.ReviewRefund(ctx, order.ID)
+				require.NoError(t, err)
+				require.False(t, review.CanRefund)
+				require.False(t, review.RequiresManualReview)
+				require.Equal(t, "REFUND_ALREADY_SETTLED", review.ReasonCode)
+
+				_, err = svc.PrepareReviewedRefundRequestWithAmount(ctx, order.ID, review.QuoteRevision, RefundReasonInput{LegacyReason: "second partial"}, &amount)
+				require.Error(t, err)
+				require.Equal(t, "REFUND_ALREADY_SETTLED", infraerrors.Reason(err))
+
+				// A plan prepared before the first successful partial refund cannot
+				// create a second unified attempt after the order lock is acquired.
+				require.NotNil(t, stalePlan)
+				_, err = svc.reserveUnifiedRefundAttempt(ctx, stalePlan)
+				require.Error(t, err)
+				require.Equal(t, "REFUND_ALREADY_SETTLED", infraerrors.Reason(err))
 			}
 		})
 	}

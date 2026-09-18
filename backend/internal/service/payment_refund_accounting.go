@@ -351,6 +351,20 @@ func manualRefundReview(order *dbent.PaymentOrder, now time.Time, code, reason s
 	return review
 }
 
+func refundAlreadySettledReview(order *dbent.PaymentOrder, now time.Time) *RefundReview {
+	review := &RefundReview{
+		GeneratedAt: now,
+		ReasonCode:  "REFUND_ALREADY_SETTLED",
+		Reason:      "the order already has a successful refund",
+	}
+	if order != nil {
+		review.OrderID = order.ID
+		review.OrderType = order.OrderType
+		review.Currency = PaymentOrderCurrency(order)
+	}
+	return review
+}
+
 func refundReviewRevision(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
 	return hex.EncodeToString(sum[:])
@@ -362,7 +376,7 @@ func decimalString(value float64) string {
 
 func refundReviewStateAllowed(order *dbent.PaymentOrder) bool {
 	return order != nil && psSliceContains([]string{
-		OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded,
+		OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed,
 	}, order.Status)
 }
 
@@ -480,6 +494,9 @@ func (s *PaymentService) reviewRefundWithClient(ctx context.Context, client *dbe
 	}
 	if !refundStateValid(order) {
 		return manualRefundReview(order, now, "INVALID_REFUND_STATE", "stored refund accounting is invalid"), nil
+	}
+	if refundAlreadySettled(order) {
+		return refundAlreadySettledReview(order, now), nil
 	}
 	if !refundReviewStateAllowed(order) {
 		return manualRefundReview(order, now, "INVALID_STATUS", "order status does not allow a new refund"), nil
