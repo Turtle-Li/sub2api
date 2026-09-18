@@ -30,6 +30,8 @@ not rewritten. See `../bugs/backend/BUG-20260919-refund-audited-tail-precision.m
 - Independent backend QA/review: full service/admin refund tests on `163076454`,
   corrective representation/tail tests on `c6375b2da`; scoped QA_PASS/REVIEW_PASS.
 - Frontend: four focused files, 27 tests; TypeScript and i18n checks passed.
+  Independent frontend QA reran all 27 tests successfully against `b4cb4d2ba`;
+  its frontend source matches the integrated candidate exactly.
   Independent frontend review found and closed stacked-dialog focus ownership;
   final reviewed diff SHA-256
   `2fe641b4333ccc4db842a9b4ccb0df231fda60348b750dba2e22fd5875b1033b`.
