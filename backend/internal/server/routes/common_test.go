@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,10 @@ type fakeInternalHealth struct {
 	rollbackReadiness service.PaymentRefundRollbackReadiness
 	rollbackErr       error
 	rollbackCalls     int
+	degraded          []service.DegradedAccount
+	degradedErr       error
+	degradedCalls     int
+	degradedWindow    time.Duration
 }
 
 func (health *fakeInternalHealth) Authorized(token string) bool {
@@ -43,13 +48,19 @@ func (health *fakeInternalHealth) RefundRollbackReadiness(context.Context) (serv
 	return health.rollbackReadiness, health.rollbackErr
 }
 
+func (health *fakeInternalHealth) DegradedAccounts(_ context.Context, window time.Duration) ([]service.DegradedAccount, error) {
+	health.degradedCalls++
+	health.degradedWindow = window
+	return health.degraded, health.degradedErr
+}
+
 func TestInternalHealthRoutesRequireMonitorTokenBeforeProbing(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	health := &fakeInternalHealth{authorized: true, live: true, ready: true}
 	router := gin.New()
 	RegisterCommonRoutes(router, health)
 
-	for _, path := range []string{"/internal/livez", "/internal/readyz", "/internal/refund-rollback-readiness"} {
+	for _, path := range []string{"/internal/livez", "/internal/readyz", "/internal/refund-rollback-readiness", "/internal/degraded-accounts"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
@@ -60,6 +71,7 @@ func TestInternalHealthRoutesRequireMonitorTokenBeforeProbing(t *testing.T) {
 	require.Zero(t, health.liveCalls)
 	require.Zero(t, health.readyCalls)
 	require.Zero(t, health.rollbackCalls)
+	require.Zero(t, health.degradedCalls, "the token check must fail closed before any database work")
 }
 
 func TestPaymentRefundRollbackReadinessRouteFailsClosedWithSafeCount(t *testing.T) {
@@ -163,4 +175,82 @@ func TestReviewedRefundRolloutRoute(t *testing.T) {
 			require.NotContains(t, response.Body.String(), "secret db detail")
 		})
 	}
+}
+
+func TestDegradedAccountsRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sample := service.DegradedAccount{
+		AccountID:      11,
+		AccountName:    "noah",
+		RequestedModel: "gpt-6-astra",
+		SentModel:      "gpt-6-astra",
+		ResponseModel:  "gpt-5.6-luna",
+		Count:          14,
+		FirstSeen:      time.Date(2026, 9, 18, 1, 0, 0, 0, time.UTC),
+		LastSeen:       time.Date(2026, 9, 18, 1, 20, 0, 0, time.UTC),
+	}
+
+	t.Run("invalid window is rejected before the query", func(t *testing.T) {
+		health := &fakeInternalHealth{authorized: true}
+		router := gin.New()
+		RegisterCommonRoutes(router, health)
+		request := httptest.NewRequest(http.MethodGet, "/internal/degraded-accounts?window=abc", nil)
+		request.Header.Set("X-Monitor-Token", "monitor-token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		require.Equal(t, http.StatusBadRequest, response.Code)
+		require.Zero(t, health.degradedCalls)
+		require.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+	})
+
+	t.Run("query failure does not leak detail", func(t *testing.T) {
+		health := &fakeInternalHealth{authorized: true, degradedErr: errors.New("pq: relation usage_logs does not exist")}
+		router := gin.New()
+		RegisterCommonRoutes(router, health)
+		request := httptest.NewRequest(http.MethodGet, "/internal/degraded-accounts", nil)
+		request.Header.Set("X-Monitor-Token", "monitor-token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		require.Equal(t, http.StatusServiceUnavailable, response.Code)
+		require.NotContains(t, response.Body.String(), "usage_logs")
+		require.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+	})
+
+	t.Run("no result is an empty array, not null", func(t *testing.T) {
+		health := &fakeInternalHealth{authorized: true, degraded: []service.DegradedAccount{}}
+		router := gin.New()
+		RegisterCommonRoutes(router, health)
+		request := httptest.NewRequest(http.MethodGet, "/internal/degraded-accounts", nil)
+		request.Header.Set("X-Monitor-Token", "monitor-token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		require.Equal(t, http.StatusOK, response.Code)
+		require.JSONEq(t, `[]`, response.Body.String())
+		require.Equal(t, service.DegradedAccountsDefaultWindow, health.degradedWindow)
+	})
+
+	t.Run("success carries the full contract shape", func(t *testing.T) {
+		health := &fakeInternalHealth{authorized: true, degraded: []service.DegradedAccount{sample}}
+		router := gin.New()
+		RegisterCommonRoutes(router, health)
+		request := httptest.NewRequest(http.MethodGet, "/internal/degraded-accounts?window=1h", nil)
+		request.Header.Set("X-Monitor-Token", "monitor-token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		require.Equal(t, http.StatusOK, response.Code)
+		require.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+		require.Equal(t, time.Hour, health.degradedWindow)
+		// The Python probe daemon decodes this verbatim; pin every key.
+		require.JSONEq(t, `[{
+			"account_id": 11,
+			"account_name": "noah",
+			"requested_model": "gpt-6-astra",
+			"sent_model": "gpt-6-astra",
+			"response_model": "gpt-5.6-luna",
+			"count": 14,
+			"first_seen": "2026-09-18T01:00:00Z",
+			"last_seen": "2026-09-18T01:20:00Z",
+			"ttft_avg_ms": null
+		}]`, response.Body.String())
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -20,6 +21,10 @@ type InternalHealth interface {
 
 type internalPaymentRefundRollbackReadiness interface {
 	RefundRollbackReadiness(context.Context) (service.PaymentRefundRollbackReadiness, error)
+}
+
+type internalDegradedAccounts interface {
+	DegradedAccounts(context.Context, time.Duration) ([]service.DegradedAccount, error)
 }
 
 // RegisterCommonRoutes 注册通用路由（健康检查、状态等）
@@ -91,6 +96,36 @@ func RegisterCommonRoutes(r *gin.Engine, internalHealth InternalHealth) {
 			return
 		}
 		c.JSON(http.StatusOK, result)
+	})
+
+	// Model-degradation (降智) audit feed for the host-local probe daemon. Read
+	// only: it reports on the persisted upstream_model_mismatch column and never
+	// rewrites it. On success the body is a bare JSON array; every error status
+	// is a JSON object, so callers must branch on the status code before
+	// decoding.
+	r.GET("/internal/degraded-accounts", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		if internalHealth == nil || !internalHealth.Authorized(c.GetHeader("X-Monitor-Token")) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		window, ok := service.ParseDegradedAccountsWindow(c.Query("window"))
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid window"})
+			return
+		}
+		reporter, ok := internalHealth.(internalDegradedAccounts)
+		if !ok {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "unavailable"})
+			return
+		}
+		degraded, err := reporter.DegradedAccounts(c.Request.Context(), window)
+		if err != nil {
+			// Never surface database failure detail on a monitor-token route.
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "unavailable"})
+			return
+		}
+		c.JSON(http.StatusOK, degraded)
 	})
 
 	// Only the root-owned host helper should invoke this monitor-authenticated

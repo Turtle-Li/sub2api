@@ -1,6 +1,7 @@
 package service
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +11,16 @@ import (
 const (
 	upstreamResponseModelObserverContextKey = "upstream_response_model_observer"
 	upstreamResponseModelMaxLength          = 200
+)
+
+// Model-variant suffixes stripped at query time only. Ported from
+// frontend/src/components/admin/usage/UsageTable.vue (normalizeModelVariant);
+// the order and the patterns are kept byte-comparable with that file so the
+// two can be diffed by eye until the frontend switches to calling this.
+var (
+	modelVariantLatestSuffix      = regexp.MustCompile(`-latest$`)
+	modelVariantISODateSuffix     = regexp.MustCompile(`-\d{4}-\d{2}-\d{2}$`)
+	modelVariantCompactDateSuffix = regexp.MustCompile(`-\d{8}$`)
 )
 
 // upstreamResponseModelObserver tracks one forwarding attempt (or one WS turn).
@@ -302,6 +313,49 @@ func canonicalGrokBuildRuntimeModel(model string) string {
 	default:
 		return ""
 	}
+}
+
+// NormalizeModelVariant strips the naming-variant suffixes that make one model
+// look like two: a date stamp or "-latest". It exists for query-time reporting
+// only.
+//
+// Never wire this into upstreamModelMismatch or upstreamModelsMatchForAudit.
+// usage_logs.upstream_model_mismatch is raw audit data and is billing-adjacent
+// (see openai_gateway_usage.go), so its persisted meaning must not shift under
+// a reporting change. TestNormalizeModelVariantDoesNotChangePersistedMismatch
+// fences that.
+func NormalizeModelVariant(model string) string {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	// Chained, not exclusive: "gpt-6-astra-latest" must lose "-latest" before
+	// the date patterns get a chance to look at what is left.
+	normalized = modelVariantLatestSuffix.ReplaceAllString(normalized, "")
+	normalized = modelVariantISODateSuffix.ReplaceAllString(normalized, "")
+	normalized = modelVariantCompactDateSuffix.ReplaceAllString(normalized, "")
+	return normalized
+}
+
+// UpstreamSentModel exposes upstreamSentModel so callers outside this package
+// resolve the sent model the same way the forwarding path does.
+func UpstreamSentModel(requestedModel, upstreamModel string) string {
+	return upstreamSentModel(requestedModel, upstreamModel)
+}
+
+// ModelDegradationSuspected reports whether a persisted mismatch is a genuine
+// downgrade (gpt-6-astra answered by gpt-5.6-luna) rather than a naming variant
+// of the same model (gpt-6-astra answered by gpt-6-astra-2026-03-01).
+func ModelDegradationSuspected(sentModel, responseModel string) bool {
+	sentModel = strings.TrimSpace(sentModel)
+	responseModel = strings.TrimSpace(responseModel)
+	if sentModel == "" || responseModel == "" {
+		return false
+	}
+	// Re-applying the audit comparison here also clears rows persisted before
+	// canonicalGrokBuildRuntimeModel landed, which still carry a stale
+	// mismatch = true for grok-4.6 vs grok-4.6-build.
+	if upstreamModelsMatchForAudit(sentModel, responseModel) {
+		return false
+	}
+	return NormalizeModelVariant(sentModel) != NormalizeModelVariant(responseModel)
 }
 
 func upstreamSentModel(requestedModel, upstreamModel string) string {

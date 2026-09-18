@@ -376,6 +376,7 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 		trimmed == "/internal/readyz" ||
 		trimmed == "/internal/refund-rollback-readiness" ||
 		trimmed == "/internal/reviewed-refunds-rollout" ||
+		trimmed == "/internal/degraded-accounts" ||
 		trimmed == "/models" ||
 		trimmed == "/responses" ||
 		strings.HasPrefix(trimmed, "/responses/") ||

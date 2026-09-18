@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+config.json
+accounts.json
+proxies.txt
+*.sqlite3*
+.env*

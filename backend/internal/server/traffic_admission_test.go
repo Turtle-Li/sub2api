@@ -79,3 +79,30 @@ func TestTrafficAdmissionCanaryRequiresSocketLoopbackAndMonitorToken(t *testing.
 		require.Equal(t, tt.status, out.Code)
 	}
 }
+
+// The probe daemon polls /internal/degraded-accounts continuously. It must be
+// served while the node drains, and — the subtler half — it must never be
+// counted in-flight: CompareAndSetReviewedRefunds gates on
+// InFlightRequests() == 0, so a counted poll would intermittently block the
+// reviewed-refunds rollout for reasons no operator could explain.
+func TestTrafficAdmissionExemptsDegradedAccountsProbe(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "traffic-state")
+	require.NoError(t, os.WriteFile(state, []byte("draining\n"), 0600))
+	s := newHealthService(nil, nil, "", state, time.Second)
+	r := gin.New()
+	r.Use(s.TrafficAdmission())
+
+	observedInFlight := int64(-1)
+	r.GET("/internal/degraded-accounts", func(c *gin.Context) {
+		observedInFlight = s.InFlightRequests()
+		c.Status(http.StatusOK)
+	})
+
+	for i := 0; i < 20; i++ {
+		response := httptest.NewRecorder()
+		r.ServeHTTP(response, httptest.NewRequest("GET", "/internal/degraded-accounts", nil))
+		require.Equal(t, http.StatusOK, response.Code, "a draining node still answers the probe")
+	}
+	require.EqualValues(t, 0, observedInFlight, "the probe must not register as in-flight work")
+	require.Zero(t, s.InFlightRequests())
+}
