@@ -160,6 +160,7 @@ type RefundPlan struct {
 	SubscriptionID  int64
 	// Reviewed refunds carry an immutable server state revision and reserve
 	// entitlement effects before any provider network request.
+	RequestedCashMinor           *int64
 	QuoteRevision                string
 	ReviewKind                   string
 	WalletPaidToReserve          float64
