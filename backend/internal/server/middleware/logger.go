@@ -23,7 +23,7 @@ func Logger() gin.HandlerFunc {
 		c.Next()
 
 		// 跳过健康检查等高频探针路径的日志
-		if path == "/health" || path == "/internal/livez" || path == "/internal/readyz" || path == "/internal/refund-rollback-readiness" || path == "/setup/status" {
+		if path == "/health" || path == "/internal/livez" || path == "/internal/readyz" || path == "/internal/refund-rollback-readiness" || path == "/internal/degraded-accounts" || path == "/setup/status" {
 			return
 		}
 

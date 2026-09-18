@@ -234,3 +234,7 @@
   or a locally owned optimization, or when repository evidence shows that an
   otherwise unused feature changes existing behavior through a shared boundary.
   Record the existing path that justifies the added work.
+
+## Personal turn-state renewal panel
+
+- Read `tools/codex-turn-state-manager/README.md` for the standalone probe and private panel. Follow project deployment records before operating a live instance. Read-only renewal mode does not require the optional degraded-account API.

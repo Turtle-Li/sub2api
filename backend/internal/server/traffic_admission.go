@@ -13,7 +13,12 @@ import (
 // before a database denomination change. Health probes remain reachable.
 func (s *HealthService) TrafficAdmission() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if s == nil || c.Request.URL.Path == "/health" || c.Request.URL.Path == "/internal/livez" || c.Request.URL.Path == "/internal/readyz" || c.Request.URL.Path == "/internal/refund-rollback-readiness" || c.Request.URL.Path == "/internal/reviewed-refunds-rollout" {
+		// /internal/degraded-accounts is polled continuously by the host probe
+		// daemon. It must bypass for two reasons: a draining node still has to
+		// answer it, and counting it in-flight would make a polling daemon
+		// intermittently block CompareAndSetReviewedRefunds, which gates on
+		// InFlightRequests() == 0.
+		if s == nil || c.Request.URL.Path == "/health" || c.Request.URL.Path == "/internal/livez" || c.Request.URL.Path == "/internal/readyz" || c.Request.URL.Path == "/internal/refund-rollback-readiness" || c.Request.URL.Path == "/internal/reviewed-refunds-rollout" || c.Request.URL.Path == "/internal/degraded-accounts" {
 			c.Next()
 			return
 		}

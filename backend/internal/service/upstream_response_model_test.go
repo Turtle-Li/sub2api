@@ -270,3 +270,69 @@ func TestObservedUpstreamResponseServiceTierFromContext(t *testing.T) {
 	observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.6-sol","service_tier":"default"}}`), "response.completed")
 	require.Equal(t, "default", observedUpstreamResponseServiceTier(c))
 }
+
+func TestModelDegradationSuspectedFiltersNamingVariants(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sent          string
+		response      string
+		wantSuspected bool
+	}{
+		{"iso date suffix", "gpt-6-astra", "gpt-6-astra-2026-03-01", false},
+		{"compact date suffix", "gpt-6-astra", "gpt-6-astra-20260301", false},
+		{"latest suffix", "gpt-6-astra", "gpt-6-astra-latest", false},
+		{"latest then date, both sides normalize", "gpt-6-astra-latest", "gpt-6-astra-2026-03-01", false},
+		// Two dated builds of one model collapse to the same name. That is an
+		// intentional consequence of stripping dates, asserted so it stays a
+		// decision rather than an accident.
+		{"two dated builds", "gpt-6-astra-2026-03-01", "gpt-6-astra-2026-04-01", false},
+		{"case fold", "GPT-6-ASTRA", "gpt-6-astra", false},
+		// Rows persisted before canonicalGrokBuildRuntimeModel landed still
+		// carry mismatch = true; the audit comparison clears them at query time.
+		{"historical grok build alias", "grok-4.6", "grok-4.6-build", false},
+		{"empty response", "gpt-6-astra", "", false},
+		{"empty sent", "", "gpt-6-astra", false},
+		{"compact suffix is positional, not a date", "gpt-4-12345678", "gpt-4", false},
+
+		{"real degradation", "gpt-6-astra", "gpt-5.6-luna", true},
+		// The regex-overreach guard: an alphabetic suffix is a different model,
+		// not a naming variant. Both directions.
+		{"alphabetic suffix is a different model", "gpt-6", "gpt-6-astra", true},
+		{"alphabetic suffix reversed", "gpt-6-astra", "gpt-6", true},
+		// Documents the parity gap with the frontend regex: an unpadded date is
+		// not stripped by either side.
+		{"unpadded date is not stripped", "gpt-6-2026-3-1", "gpt-6", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.wantSuspected, ModelDegradationSuspected(tc.sent, tc.response))
+		})
+	}
+}
+
+func TestNormalizeModelVariantStripsSuffixesInOrder(t *testing.T) {
+	require.Equal(t, "gpt-6-astra", NormalizeModelVariant("  GPT-6-Astra-Latest  "))
+	require.Equal(t, "gpt-6-astra", NormalizeModelVariant("gpt-6-astra-2026-03-01"))
+	require.Equal(t, "gpt-6-astra", NormalizeModelVariant("gpt-6-astra-20260301"))
+	// Chained, not exclusive: "-latest" has to go before the date pattern can
+	// see the date underneath it.
+	require.Equal(t, "gpt-6-astra", NormalizeModelVariant("gpt-6-astra-2026-03-01-latest"))
+	require.Equal(t, "", NormalizeModelVariant("   "))
+}
+
+// TestNormalizeModelVariantDoesNotChangePersistedMismatch fences the audit
+// column. upstream_model_mismatch is billing-adjacent raw data; a future
+// refactor that wires the reporting normalizer into upstreamModelsMatchForAudit
+// would silently rewrite what every historical row means. It fails here first.
+func TestNormalizeModelVariantDoesNotChangePersistedMismatch(t *testing.T) {
+	variant := upstreamModelMismatch("gpt-6-astra", "gpt-6-astra-2026-03-01")
+	require.NotNil(t, variant)
+	require.True(t, *variant, "a naming variant must still persist as a mismatch")
+	require.False(t, ModelDegradationSuspected("gpt-6-astra", "gpt-6-astra-2026-03-01"),
+		"the same pair must be filtered out at query time")
+
+	grok := upstreamModelMismatch("grok-4.6", "grok-4.6-build")
+	require.NotNil(t, grok)
+	require.False(t, *grok)
+
+	require.Nil(t, upstreamModelMismatch("gpt-6-astra", ""), "no declared model stays tri-state NULL")
+}

@@ -532,6 +532,7 @@ func TestFrontendServer_Middleware(t *testing.T) {
 			"/internal/readyz",
 			"/internal/refund-rollback-readiness",
 			"/internal/reviewed-refunds-rollout",
+			"/internal/degraded-accounts",
 			"/responses",
 			"/responses/compact",
 		}
@@ -895,6 +896,7 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 			"/internal/readyz",
 			"/internal/refund-rollback-readiness",
 			"/internal/reviewed-refunds-rollout",
+			"/internal/degraded-accounts",
 			"/responses",
 			"/responses/compact",
 		}
