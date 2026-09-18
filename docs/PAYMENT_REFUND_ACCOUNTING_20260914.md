@@ -57,6 +57,26 @@ created by each subscription order.
    model as unclassified/non-refundable gift. Orders without a proven grant are
    shown as manual review.
 
+### One-success policy — September 19, 2026
+
+An order may have **one successful refund**, even when its cash refund is partial.
+This supersedes the former consecutive-partial-refund admission policy. A failed
+attempt can be retried; an existing pending attempt retains its original provider
+identity and may be reconciled or recovered. Repeated success callbacks stay
+idempotent. Historical amounts and partial-refund status remain accurate.
+
+Admin review, submission, locked reservation, legacy optimistic claims and user
+requests enforce the same rule. A settled order is denied with
+`REFUND_ALREADY_SETTLED`; it does not become a new manual-refund task.
+
+After an explicit refund submission/query/recovery, the admin page reads only
+that order and replaces its row and open detail. Local reads back off from 2 to
+4 to 8 to 15 seconds, stop within five minutes, pause while the page is hidden,
+and stop on navigation, final result, manual review or merchant-balance pause.
+The page does not periodically reload the list or call the provider query API.
+Orders merely displayed as pending are not enrolled. An administrator can use
+the existing query/refresh actions after the bounded follow-up ends.
+
 ## Data model
 
 The migration is additive and keeps `users.balance`, `users.frozen_balance`, and

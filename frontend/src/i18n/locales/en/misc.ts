@@ -698,6 +698,7 @@ export default {
       INVALID_REFUND_REASON_CODE: 'Choose a valid refund reason.',
       INVALID_REFUND_REASON_DETAIL: 'Refund reason details are invalid or too long.',
       REFUND_REASON_DETAIL_REQUIRED: 'Add details when choosing Other as the refund reason.',
+      REFUND_ALREADY_SETTLED: 'This order has already been refunded. Each order allows only one successful refund, including a partial refund.',
       REFUND_QUOTE_STALE: 'The refund review changed. Refresh the quote before submitting.',
       REFUND_RECOVERY_OPERATOR_REQUIRED: 'A signed-in human administrator must perform this recovery action.',
       REFUND_RECOVERY_UNAVAILABLE: 'Refund recovery is temporarily unavailable. Try again later.',
@@ -968,6 +969,7 @@ export default {
       refundTimeMinutes: '{count}m',
       refundTimeSeconds: '{count}s',
       refundReviewReasons: {
+        REFUND_ALREADY_SETTLED: 'This order has already been refunded. Each order allows only one successful refund, including a partial refund.',
         INVALID_REFUND_STATE: 'The stored refund accounting is invalid and needs manual review.',
         INVALID_STATUS: 'The current order status does not allow a new refund.',
         INVALID_PRODUCT_SNAPSHOT: 'The stored purchase entitlement snapshot is invalid and needs manual review.',

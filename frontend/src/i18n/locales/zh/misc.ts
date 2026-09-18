@@ -722,6 +722,7 @@ export default {
       INVALID_REFUND_REASON_CODE: '请选择有效的退款原因',
       INVALID_REFUND_REASON_DETAIL: '退款补充说明无效或过长',
       REFUND_REASON_DETAIL_REQUIRED: '选择“其他”作为退款原因时必须填写补充说明',
+      REFUND_ALREADY_SETTLED: '该订单已成功退款，每个订单仅允许退款一次，部分退款后也不能再次退款。',
       REFUND_QUOTE_STALE: '退款审核已变化，请刷新报价后再提交',
       REFUND_RECOVERY_OPERATOR_REQUIRED: '该退款恢复操作必须由已登录的人工管理员完成。',
       REFUND_RECOVERY_UNAVAILABLE: '退款恢复服务暂时不可用，请稍后重试。',
@@ -992,6 +993,7 @@ export default {
       refundTimeMinutes: '{count}分钟',
       refundTimeSeconds: '{count}秒',
       refundReviewReasons: {
+        REFUND_ALREADY_SETTLED: '该订单已成功退款，每个订单仅允许退款一次，部分退款后也不能再次退款。',
         INVALID_REFUND_STATE: '订单退款核算记录无效，需要人工审核。',
         INVALID_STATUS: '当前订单状态不允许发起新的退款。',
         INVALID_PRODUCT_SNAPSHOT: '订单购买权益快照无效，需要人工审核。',

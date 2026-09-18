@@ -97,6 +97,11 @@
 
 ## Unified payment integration
 
+- One order permits at most one successful refund, including a partial refund.
+  Preserve pending-attempt recovery and callback idempotency. See the September 19
+  policy in `docs/PAYMENT_REFUND_ACCOUNTING_20260914.md`; admin auto-refresh must
+  read only explicitly operated orders, never periodically reload all orders.
+
 - Reviewed refunds are enabled on the September 14 release; read
   `docs/operations/PAYMENT_REVIEWED_REFUNDS_RELEASE_20260914.md` and
   `docs/PAYMENT_REFUND_ACCOUNTING_20260914.md` before refund or rollback work.
