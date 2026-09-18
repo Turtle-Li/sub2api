@@ -560,7 +560,7 @@ func (s *PaymentService) reviewBalanceRefund(ctx context.Context, client *dbent.
 }
 
 func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, now time.Time, lock bool) (*RefundReview, error) {
-	grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, lock)
+	grant, sub, err := loadReviewedSubscriptionRefundState(ctx, client, order.ID, lock)
 	if errors.Is(err, errRefundAccountingMissing) {
 		return s.manualSubscriptionGrantBackfillReview(ctx, client, order, now)
 	}

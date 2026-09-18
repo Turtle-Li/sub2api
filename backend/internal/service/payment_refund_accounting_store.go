@@ -460,7 +460,7 @@ func (s *PaymentService) reserveReviewedRefundEntitlement(ctx context.Context, c
 		if review.Subscription == nil {
 			return nil, errors.New("subscription refund review is incomplete")
 		}
-		grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, true)
+		grant, sub, err := loadReviewedSubscriptionRefundState(ctx, client, order.ID, true)
 		if err != nil {
 			return nil, err
 		}
@@ -546,7 +546,7 @@ func finalizeReviewedRefundEntitlement(ctx context.Context, client *dbent.Client
 			return err
 		}
 	case refundReviewKindSubscription:
-		grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, true)
+		grant, sub, err := loadReviewedSubscriptionRefundState(ctx, client, order.ID, true)
 		if err != nil {
 			return err
 		}
@@ -634,7 +634,7 @@ func releaseReviewedRefundEntitlement(ctx context.Context, client *dbent.Client,
 			return err
 		}
 	case refundReviewKindSubscription:
-		grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, true)
+		grant, sub, err := loadReviewedSubscriptionRefundState(ctx, client, order.ID, true)
 		if err != nil {
 			return err
 		}
