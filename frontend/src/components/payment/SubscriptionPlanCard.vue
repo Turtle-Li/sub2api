@@ -4,7 +4,6 @@
     tabindex="0"
     :aria-pressed="selected"
     :aria-disabled="plan.eligibility?.can_purchase === false"
-    :aria-label="`${plan.name} · ${displayPrice}`"
     :class="[
       'payment-product-card',
       plan.eligibility?.can_purchase === false && 'payment-product-card--unavailable',
@@ -82,8 +81,6 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SubscriptionPlan } from '@/types/payment'
 import type { UserSubscription } from '@/types'
-import { useAppStore } from '@/stores/app'
-import { hasPeakRate as groupHasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
 import { monthlyResetCardDeliveryLabel, planValiditySuffix, resetCardValidityLabel } from './validity'
 import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from '@/components/payment/currency'
 import { subscriptionGatewayAmount } from '@/components/payment/pricing'
@@ -139,7 +136,6 @@ const discountText = computed(() => {
   return pct > 0 ? `-${pct}%` : ''
 })
 
-const appStore = useAppStore()
 
 // The list card used to print plan.price behind a hardcoded USD symbol while
 // the confirm step converted the same plan into the gateway currency, so one
@@ -162,7 +158,11 @@ function formatCredit(value: number): string {
   return `${Number.isInteger(value) ? value : value.toFixed(2)} ${t('payment.creditUnit')}`
 }
 
-const hasPeakRate = computed(() => groupHasPeakRate(props.plan))
+// Usage limits show dollar reference amounts; wallet bonuses remain credits.
+function formatQuota(value: number): string {
+  return formatPaymentAmount(value, 'USD', props.locale)
+}
+
 const validitySuffix = computed(() => planValiditySuffix(props.plan, t))
 
 const MODEL_SCOPE_LABELS: Record<string, string> = {
@@ -208,25 +208,18 @@ const includedItems = computed<IncludedItem[]>(() => {
       benefit: true,
     })
   }
-  if (entitlements?.concurrency && entitlements.concurrency > 0) {
+  if (entitlements?.concurrency && entitlements.concurrency > 3) {
     items.push({ text: t('payment.entitlements.concurrency', { count: entitlements.concurrency }), benefit: true })
   }
 
-  items.push({ text: `${t('payment.planCard.rate')} ×${Number((props.plan.rate_multiplier ?? 1).toPrecision(10))}`, benefit: false })
-  if (hasPeakRate.value) {
-    items.push({
-      text: `${t('payment.planCard.peakRate')} ${formatPeakRateWindow(props.plan, serverTimezoneLabel(appStore.cachedPublicSettings?.server_utc_offset))}`,
-      benefit: false,
-    })
-  }
   if ((props.plan.daily_limit_usd ?? 0) > 0) {
-    items.push({ text: `${t('payment.planCard.dailyLimit')} ${formatCredit(props.plan.daily_limit_usd!)}`, benefit: false })
+    items.push({ text: `${t('payment.planCard.dailyLimit')} ${formatQuota(props.plan.daily_limit_usd!)}`, benefit: false })
   }
   if ((props.plan.weekly_limit_usd ?? 0) > 0) {
-    items.push({ text: `${t('payment.planCard.weeklyLimit')} ${formatCredit(props.plan.weekly_limit_usd!)}`, benefit: false })
+    items.push({ text: `${t('payment.planCard.weeklyLimit')} ${formatQuota(props.plan.weekly_limit_usd!)}`, benefit: false })
   }
   if ((props.plan.monthly_limit_usd ?? 0) > 0) {
-    items.push({ text: `${t('payment.planCard.monthlyLimit')} ${formatCredit(props.plan.monthly_limit_usd!)}`, benefit: false })
+    items.push({ text: `${t('payment.planCard.monthlyLimit')} ${formatQuota(props.plan.monthly_limit_usd!)}`, benefit: false })
   }
   if ([props.plan.daily_limit_usd, props.plan.weekly_limit_usd, props.plan.monthly_limit_usd].every(limit => (limit ?? 0) <= 0)) {
     items.push({ text: `${t('payment.planCard.quota')} ${t('payment.planCard.unlimited')}`, benefit: false })

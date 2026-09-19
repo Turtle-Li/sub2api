@@ -47,6 +47,17 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	default:
 		return nil, infraerrors.BadRequest("INVALID_ORDER_TYPE", "unsupported payment order type")
 	}
+	if err := normalizePaymentDiscountRequest(&req); err != nil {
+		return nil, err
+	}
+	if req.CouponCode != "" {
+		if err := checkPaymentDiscountRate(ctx, s.entClient, req.UserID); err != nil {
+			return nil, err
+		}
+		if replay, found, err := s.replayPaymentDiscount(ctx, req); err != nil || found {
+			return replay, err
+		}
+	}
 	if req.OrderType == payment.OrderTypeResetCard {
 		if !isValidProviderAmount(req.Amount) {
 			return nil, infraerrors.BadRequest("INVALID_AMOUNT", "amount must be a positive finite number")
@@ -167,6 +178,26 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 			return nil, err
 		}
 	}
+	if req.CouponCode != "" {
+		if opts != nil && opts.ownerTest != nil {
+			return nil, infraerrors.BadRequest("COUPON_INVALID", "owner tests cannot use coupons")
+		}
+		original, parseErr := decimal.NewFromString(payAmountStr)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		quote, quoteErr := quotePaymentDiscount(ctx, s.entClient, req.UserID, req.CouponCode, original, methodCurrency, req.OrderType, req.PlanID, paymentDiscountRequestBinding(req), false)
+		if quoteErr != nil {
+			return nil, quoteErr
+		}
+		if quote.Revision != req.CouponRevision {
+			return nil, infraerrors.Conflict("COUPON_QUOTE_CHANGED", "coupon quote changed; apply it again")
+		}
+		req.couponQuote = quote
+		payAmountStr = quote.PayAmount
+		final, _ := decimal.NewFromString(quote.PayAmount)
+		payAmount = final.InexactFloat64()
+	}
 	var sel *payment.InstanceSelection
 	if opts != nil && opts.ownerTest != nil {
 		sel = opts.ownerTest.selection
@@ -192,6 +223,9 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		return nil, ErrResetCardCurrencyUnsupported
 	}
 	if selectedCurrency != methodCurrency {
+		if req.CouponCode != "" {
+			return nil, infraerrors.Conflict("COUPON_QUOTE_CHANGED", "payment currency changed; apply the coupon again")
+		}
 		if opts != nil && opts.ownerTest != nil {
 			return nil, infraerrors.ServiceUnavailable("OWNER_TEST_UNIFIED_PAYMENT_UNAVAILABLE", "owner test payment must use the configured CNY unified gateway")
 		}
@@ -221,6 +255,11 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 	}
 	order, created, err := s.createOrderInTxWithOptions(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, dbOpts)
 	if err != nil {
+		if req.CouponCode != "" {
+			if replay, found, replayErr := s.replayPaymentDiscount(ctx, req); found {
+				return replay, replayErr
+			}
+		}
 		if opts != nil && opts.ownerTest != nil && isOwnerTestOrderInsertConflict(err) {
 			return s.replayOwnerTestOrder(ctx, opts.ownerTest)
 		}
@@ -240,7 +279,13 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		return s.replayResetCardOrderRecord(ctx, order, req)
 	}
 	if req.OrderType == payment.OrderTypeResetCard {
-		return s.invokeResetCardProvider(ctx, order, req, cfg)
+		resp, invokeErr := s.invokeResetCardProvider(ctx, order, req, cfg)
+		if invokeErr == nil && req.CouponCode != "" {
+			if saveErr := savePaymentDiscountResponse(ctx, s.entClient, order.ID, resp); saveErr != nil {
+				return nil, saveErr
+			}
+		}
+		return resp, invokeErr
 	}
 	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
 	if err != nil {
@@ -250,10 +295,20 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 			})
 			return nil, err
 		}
-		_, _ = s.entClient.PaymentOrder.UpdateOneID(order.ID).
+		// A failed HTTP request is not proof the provider rejected a discounted order.
+		// Retain its reservation until reconciliation confirms payment or closure.
+		if req.CouponCode != "" {
+			return nil, err
+		}
+		_, _ = s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(order.ID), paymentorder.StatusEQ(OrderStatusPending), paymentorder.PaidAtIsNil()).
 			SetStatus(OrderStatusFailed).
 			Save(ctx)
 		return nil, err
+	}
+	if req.CouponCode != "" {
+		if err := savePaymentDiscountResponse(ctx, s.entClient, order.ID, resp); err != nil {
+			return nil, err
+		}
 	}
 	return resp, nil
 }
@@ -460,6 +515,13 @@ func validateResetCardOrderRecord(order *dbent.PaymentOrder, req CreateOrderRequ
 		order.ProductSnapshot == nil {
 		return ErrIdempotencyKeyConflict
 	}
+	if raw, ok := order.ProductSnapshot["payment_discount"].(map[string]any); ok {
+		if code, _ := raw["code"].(string); code != strings.ToUpper(strings.TrimSpace(req.CouponCode)) {
+			return ErrIdempotencyKeyConflict
+		}
+	} else if req.CouponCode != "" {
+		return ErrIdempotencyKeyConflict
+	}
 	snapshot := order.ProductSnapshot
 	kind, _ := snapshot["kind"].(string)
 	storedHash, _ := snapshot["idempotency_key_sha256"].(string)
@@ -519,21 +581,22 @@ func buildResetCardOrderResponse(order *dbent.PaymentOrder) *CreateOrderResponse
 		}
 	}
 	return &CreateOrderResponse{
-		OrderID:      order.ID,
-		Amount:       order.Amount,
-		PayAmount:    order.PayAmount,
-		FeeRate:      order.FeeRate,
-		Status:       order.Status,
-		ResultType:   resultType,
-		PaymentType:  order.PaymentType,
-		OutTradeNo:   order.OutTradeNo,
-		PayURL:       payURL,
-		QRCode:       qrCode,
-		JSAPI:        jsapi,
-		JSAPIPayload: jsapi,
-		Currency:     PaymentOrderCurrency(order),
-		ExpiresAt:    order.ExpiresAt,
-		PaymentMode:  paymentMode,
+		OrderID:         order.ID,
+		Amount:          order.Amount,
+		PayAmount:       order.PayAmount,
+		FeeRate:         order.FeeRate,
+		Status:          order.Status,
+		ResultType:      resultType,
+		PaymentType:     order.PaymentType,
+		OutTradeNo:      order.OutTradeNo,
+		PayURL:          payURL,
+		QRCode:          qrCode,
+		JSAPI:           jsapi,
+		JSAPIPayload:    jsapi,
+		Currency:        PaymentOrderCurrency(order),
+		ExpiresAt:       order.ExpiresAt,
+		PaymentMode:     paymentMode,
+		PaymentDiscount: paymentOrderResponsePaymentDiscount(order),
 	}
 }
 
@@ -1021,6 +1084,9 @@ func paymentProviderSelectionUnavailableError(req CreateOrderRequest) error {
 // deterministic owner-test key is checked while holding the actor row lock so
 // replays bypass ordinary pending-order checks.
 func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req CreateOrderRequest, userRecord *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection, opts *createOrderDatabaseOptions) (*dbent.PaymentOrder, bool, error) {
+	if req.OrderType == payment.OrderTypeResetCard && strings.TrimSpace(req.CouponCode) != "" {
+		return nil, false, ErrPaymentDiscountInvalid
+	}
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("begin transaction: %w", err)
@@ -1221,6 +1287,23 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		// provide the concurrency target itself.
 		b.SetProductSnapshot(buildPaymentBalanceProductSnapshot(req.Amount, orderAmount, payAmount, cfg.RechargeOptions))
 	}
+	if req.CouponCode != "" {
+		if req.couponQuote == nil {
+			return nil, false, infraerrors.BadRequest("COUPON_QUOTE_REQUIRED", "coupon quote required")
+		}
+		original, parseErr := decimal.NewFromString(req.couponQuote.OriginalAmount)
+		if parseErr != nil {
+			return nil, false, parseErr
+		}
+		locked, quoteErr := quotePaymentDiscount(txCtx, tx.Client(), req.UserID, req.CouponCode, original, req.couponQuote.Currency, req.OrderType, req.PlanID, paymentDiscountRequestBinding(req), true)
+		if quoteErr != nil {
+			return nil, false, quoteErr
+		}
+		if locked.Revision != req.CouponRevision {
+			return nil, false, infraerrors.Conflict("COUPON_QUOTE_CHANGED", "coupon quote changed; apply it again")
+		}
+		req.couponQuote = locked
+	}
 	order, err := b.Save(ctx)
 	if err != nil {
 		if opts != nil && opts.fixedOutTradeNo != "" && dbent.IsConstraintError(err) {
@@ -1235,6 +1318,18 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 	order, err = tx.PaymentOrder.UpdateOneID(order.ID).SetRechargeCode(code).Save(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("set recharge code: %w", err)
+	}
+	if req.CouponCode != "" {
+		if err := applyPaymentDiscountSnapshot(order, req.couponQuote); err != nil {
+			return nil, false, err
+		}
+		order, err = tx.PaymentOrder.UpdateOneID(order.ID).SetProductSnapshot(order.ProductSnapshot).Save(txCtx)
+		if err != nil {
+			return nil, false, err
+		}
+		if err := reservePaymentDiscount(txCtx, tx.Client(), order.ID, req.UserID, req.couponQuote, paymentDiscountRequestBinding(req), req.IdempotencyKeyHash); err != nil {
+			return nil, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("commit order transaction: %w", err)
@@ -1977,27 +2072,43 @@ func classifyCreatePaymentError(req CreateOrderRequest, providerKey string, err 
 
 func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest, payAmount float64, sel *payment.InstanceSelection, pr *payment.CreatePaymentResponse, resultType payment.CreatePaymentResultType) *CreateOrderResponse {
 	return &CreateOrderResponse{
-		OrderID:      order.ID,
-		Amount:       order.Amount,
-		PayAmount:    payAmount,
-		FeeRate:      order.FeeRate,
-		Status:       OrderStatusPending,
-		ResultType:   resultType,
-		PaymentType:  req.PaymentType,
-		OutTradeNo:   order.OutTradeNo,
-		PayURL:       pr.PayURL,
-		QRCode:       pr.QRCode,
-		ClientSecret: pr.ClientSecret,
-		IntentID:     pr.IntentID,
-		Currency:     pr.Currency,
-		CountryCode:  pr.CountryCode,
-		PaymentEnv:   pr.PaymentEnv,
-		OAuth:        pr.OAuth,
-		JSAPI:        pr.JSAPI,
-		JSAPIPayload: pr.JSAPI,
-		ExpiresAt:    order.ExpiresAt,
-		PaymentMode:  sel.PaymentMode,
+		OrderID:         order.ID,
+		Amount:          order.Amount,
+		PayAmount:       payAmount,
+		FeeRate:         order.FeeRate,
+		Status:          OrderStatusPending,
+		ResultType:      resultType,
+		PaymentType:     req.PaymentType,
+		OutTradeNo:      order.OutTradeNo,
+		PayURL:          pr.PayURL,
+		QRCode:          pr.QRCode,
+		ClientSecret:    pr.ClientSecret,
+		IntentID:        pr.IntentID,
+		Currency:        pr.Currency,
+		CountryCode:     pr.CountryCode,
+		PaymentEnv:      pr.PaymentEnv,
+		OAuth:           pr.OAuth,
+		JSAPI:           pr.JSAPI,
+		JSAPIPayload:    pr.JSAPI,
+		ExpiresAt:       order.ExpiresAt,
+		PaymentMode:     sel.PaymentMode,
+		PaymentDiscount: paymentOrderResponsePaymentDiscount(order),
 	}
+}
+
+// paymentOrderResponsePaymentDiscount exposes only the public immutable
+// settlement facts already persisted on the order. It deliberately derives
+// from the same sanitizer used by order history rather than a request quote.
+func paymentOrderResponsePaymentDiscount(order *dbent.PaymentOrder) map[string]any {
+	snapshot := SanitizedPaymentOrderProductSnapshot(order)
+	if snapshot == nil {
+		return nil
+	}
+	discount, ok := snapshot["payment_discount"].(map[string]any)
+	if !ok || len(discount) == 0 {
+		return nil
+	}
+	return discount
 }
 
 func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (string, error) {
@@ -2007,6 +2118,10 @@ func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (stri
 	}
 	q := u.Query()
 	q.Set("payment_type", strings.TrimSpace(req.PaymentType))
+	if req.CouponCode != "" {
+		q.Set("coupon_code", req.CouponCode)
+		q.Set("coupon_revision", req.CouponRevision)
+	}
 	if req.Amount > 0 {
 		q.Set("amount", strconv.FormatFloat(req.Amount, 'f', -1, 64))
 	}
@@ -2022,7 +2137,7 @@ func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (stri
 	if revision := strings.TrimSpace(req.ResetCardTierRevision); revision != "" {
 		q.Set("reset_card_tier_revision", revision)
 	}
-	if req.OrderType == payment.OrderTypeResetCard && req.IdempotencyKeyHash != "" {
+	if (req.OrderType == payment.OrderTypeResetCard || req.CouponCode != "") && req.IdempotencyKeyHash != "" {
 		q.Set("idempotency_key_hash", req.IdempotencyKeyHash)
 	}
 	if scope = strings.TrimSpace(scope); scope != "" {

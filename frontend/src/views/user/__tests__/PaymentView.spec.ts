@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, shallowMount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
@@ -14,6 +14,7 @@ import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import ResetCardShop from '@/components/payment/ResetCardShop.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
+import PaymentDiscountCodeInput from '@/components/payment/PaymentDiscountCodeInput.vue'
 import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
 
 const routeState = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ const showError = vi.hoisted(() => vi.fn())
 const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
+const getCouponQuote = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
 const translate = vi.hoisted(() => vi.fn((key: string) => key))
 const isMobileDevice = vi.hoisted(() => vi.fn(() => true))
@@ -108,12 +110,15 @@ vi.mock('@/stores', async () => {
 vi.mock('@/api/payment', () => ({
   paymentAPI: {
     getCheckoutInfo,
+    getCouponQuote,
   },
 }))
 
 vi.mock('@/utils/device', () => ({
   isMobileDevice,
 }))
+
+enableAutoUnmount(afterEach)
 
 afterEach(() => {
   isMobileDevice.mockReset().mockReturnValue(true)
@@ -321,6 +326,41 @@ async function mountSubscriptionPlanList(planCount: number) {
   return wrapper
 }
 
+async function mountSubscriptionPlans(
+  plans: SubscriptionPlan[],
+  query: Record<string, unknown> = { tab: 'subscription' },
+) {
+  vi.useRealTimers()
+  routeState.path = '/purchase'
+  routeState.query = query
+  routerReplace.mockReset().mockResolvedValue(undefined)
+  routerPush.mockReset().mockResolvedValue(undefined)
+  routerResolve.mockClear()
+  createOrder.mockReset()
+  refreshUser.mockReset()
+  fetchActiveSubscriptions.mockReset().mockResolvedValue(undefined)
+  showError.mockReset()
+  showInfo.mockReset()
+  showWarning.mockReset()
+  getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({ plans }))
+  bridgeInvoke.mockReset()
+  window.localStorage.clear()
+  ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = undefined
+
+  const wrapper = shallowMount(PaymentView, {
+    global: {
+      stubs: {
+        AppLayout: { template: '<div><slot /></div>' },
+        Teleport: true,
+        Transition: false,
+      },
+    },
+  })
+  await flushPromises()
+  await flushPromises()
+  return wrapper
+}
+
 describe('PaymentView help text', () => {
   beforeEach(() => {
     vi.useRealTimers()
@@ -385,6 +425,49 @@ describe('PaymentView help text', () => {
 })
 
 describe('PaymentView subscription plan grid', () => {
+  it('refreshes linked-group catalog data on focus while preserving the selected plan', async () => {
+    const plan = { ...checkoutInfoWithPlansFixture().data.plans[0], name: 'Plus', validity_days: 1, validity_unit: 'months', period_label: 'month', weekly_limit_usd: 110 }
+    const wrapper = await mountSubscriptionPlans([plan])
+    let finish: ((value: unknown) => void) | undefined
+    getCheckoutInfo.mockReset().mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    window.dispatchEvent(new Event('focus'))
+    window.dispatchEvent(new Event('focus'))
+    expect(getCheckoutInfo).toHaveBeenCalledTimes(1)
+    finish?.(checkoutInfoFixture({ plans: [{ ...plan, weekly_limit_usd: 220, monthly_limit_usd: 880, rate_multiplier: 0.5, description: 'Updated group' }] }))
+    await flushPromises()
+    const card = wrapper.findComponent(SubscriptionPlanCard)
+    expect(card.props('plan')).toMatchObject({ id: plan.id, weekly_limit_usd: 220, rate_multiplier: 0.5, description: 'Updated group' })
+    expect(card.props('selected')).toBe(true)
+    wrapper.unmount()
+    window.dispatchEvent(new Event('focus'))
+    expect(getCheckoutInfo).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the selected plan visible when its period changes during catalog refresh', async () => {
+    const base = checkoutInfoWithPlansFixture().data.plans[0]
+    const plus = { ...base, id: 1, name: 'Plus', period_label: 'month' }
+    const pro = { ...base, id: 2, name: '5X Pro', period_label: 'month' }
+    const wrapper = await mountSubscriptionPlans([plus, pro])
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({ plans: [{ ...plus, period_label: 'quarter' }, pro] }))
+    window.dispatchEvent(new Event('focus'))
+    await flushPromises()
+    const cards = wrapper.findAllComponents(SubscriptionPlanCard)
+    expect(cards).toHaveLength(1)
+    expect(cards[0].props('plan').id).toBe(plus.id)
+    expect(cards[0].props('selected')).toBe(true)
+    expect(wrapper.findAll('button').find(button => button.text().includes('payment.periods.quarter'))?.attributes('aria-pressed')).toBe('true')
+  })
+
+  it('clears an unavailable selected plan after catalog refresh', async () => {
+    const plan = { ...checkoutInfoWithPlansFixture().data.plans[0], name: 'Plus', validity_days: 1, validity_unit: 'months', period_label: 'month' }
+    const wrapper = await mountSubscriptionPlans([plan])
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({ plans: [] }))
+    window.dispatchEvent(new Event('focus'))
+    await flushPromises()
+    expect(wrapper.findComponent(PaymentOrderRail).props('disabled')).toBe(true)
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(0)
+  })
+
   it('refuses a gated recharge deep link and does not enable payment', async () => {
     routeState.query = { tab: 'recharge', amount: '599' }
     getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({ recharge_mode: 'fixed', recharge_options: [{ amount: 599, enabled: true, sort_order: 0, eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 0 } }] }))
@@ -430,35 +513,86 @@ describe('PaymentView subscription plan grid', () => {
     expect(wrapper.findComponent(SubscriptionPlanCard).props('selected')).toBe(sameGroup)
   })
 
-  it('defaults to quarterly plans and switches the visible set to annual plans', async () => {
-    routeState.path = '/purchase'
-    routeState.query = { tab: 'subscription' }
+  it('shows monthly plans first and switches the visible set to annual plans', async () => {
     const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
-    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({
-      plans: [
-        { ...basePlan, id: 1, name: '季度基础', period_label: 'quarter', discount_percent: 12 },
-        { ...basePlan, id: 2, name: '季度专业', period_label: 'quarter', discount_percent: 18 },
-        { ...basePlan, id: 3, name: '年度基础', period_label: 'year', discount_percent: 24 },
-      ],
-    }))
-
-    const wrapper = shallowMount(PaymentView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          Teleport: true,
-          Transition: false,
-        },
-      },
-    })
-    await flushPromises()
-    await flushPromises()
+    const wrapper = await mountSubscriptionPlans([
+      { ...basePlan, id: 1, name: 'Plus', period_label: 'month' },
+      { ...basePlan, id: 2, name: '5X Pro', period_label: 'month' },
+      { ...basePlan, id: 3, name: '季度 Plus', period_label: 'quarter' },
+      { ...basePlan, id: 4, name: '年度 Plus', period_label: 'year' },
+    ])
 
     expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(2)
+    expect(wrapper.findAll('button')
+      .map(button => button.text())
+      .filter(label => label.startsWith('payment.periods.')))
+      .toEqual(['payment.periods.month', 'payment.periods.quarter', 'payment.periods.year'])
     const annualTab = wrapper.findAll('button').find(button => button.text().includes('payment.periods.year'))
     expect(annualTab).toBeDefined()
     await annualTab!.trigger('click')
     expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(1)
+  })
+
+  it('classifies three and twelve calendar months as quarterly and annual plans', async () => {
+    const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
+    const wrapper = await mountSubscriptionPlans([
+      { ...basePlan, id: 5, name: 'Three months', validity_days: 3, validity_unit: 'months' },
+      { ...basePlan, id: 6, name: 'Twelve months', validity_days: 12, validity_unit: 'months' },
+    ])
+
+    expect(wrapper.findAll('button')
+      .map(button => button.text())
+      .filter(label => label.startsWith('payment.periods.')))
+      .toEqual(['payment.periods.quarter', 'payment.periods.year'])
+    expect(wrapper.findComponent(SubscriptionPlanCard).props('plan')).toMatchObject({ id: 5 })
+
+    const annualTab = wrapper.findAll('button').find(button => button.text().includes('payment.periods.year'))
+    await annualTab!.trigger('click')
+    expect(wrapper.findComponent(SubscriptionPlanCard).props('plan')).toMatchObject({ id: 6 })
+  })
+
+  it('automatically selects the eligible monthly Plus plan regardless of catalog order', async () => {
+    const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
+    const monthlyPlus = { ...basePlan, id: 11, name: 'Plus', period_label: 'month', price: 128 }
+    const monthlyPro = { ...basePlan, id: 12, name: '5X Pro', period_label: 'month', price: 328 }
+    const quarterlyPlus = { ...basePlan, id: 13, name: 'Plus', period_label: 'quarter', price: 348 }
+
+    for (const plans of [
+      [monthlyPro, quarterlyPlus, monthlyPlus],
+      [quarterlyPlus, monthlyPlus, monthlyPro],
+    ]) {
+      const wrapper = await mountSubscriptionPlans(plans)
+      const cards = wrapper.findAllComponents(SubscriptionPlanCard)
+      const selectedCard = cards.find(card => card.props('selected'))
+
+      expect(wrapper.findComponent(PaymentOrderRail).props('productName')).toBe('Plus')
+      expect(selectedCard?.props('plan')).toMatchObject({ id: monthlyPlus.id, period_label: 'month' })
+      expect(wrapper.findAll('button').find(button => button.text().includes('payment.periods.month'))?.attributes('aria-pressed')).toBe('true')
+      wrapper.unmount()
+    }
+  })
+
+  it('does not auto-select an unavailable monthly Plus plan', async () => {
+    const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
+    const wrapper = await mountSubscriptionPlans([
+      { ...basePlan, id: 21, name: '5X Pro', period_label: 'month', price: 328 },
+      {
+        ...basePlan,
+        id: 22,
+        name: 'Plus',
+        period_label: 'month',
+        price: 128,
+        eligibility: {
+          can_purchase: false,
+          reason: 'minimum_recharge',
+          required_total_recharge: 1000,
+          current_total_recharge: 0,
+        },
+      },
+    ])
+
+    expect(wrapper.findComponent(PaymentOrderRail).props('disabled')).toBe(true)
+    expect(wrapper.findAllComponents(SubscriptionPlanCard).every(card => !card.props('selected'))).toBe(true)
   })
 })
 
@@ -588,6 +722,320 @@ describe('PaymentView subscription confirmation amounts', () => {
   })
 })
 
+describe('PaymentView payment discount coupons', () => {
+  function couponQuote(code = 'SAVE2026', payAmount = '80.00') {
+    return {
+      code_id: 2026,
+      code,
+      version: 3,
+      original_amount: '100.00',
+      discount_amount: '20.00',
+      pay_amount: payAmount,
+      currency: 'CNY',
+      revision: `revision-${code}`,
+    }
+  }
+
+  function paymentOrder(discount = couponQuote()) {
+    return {
+      order_id: 701,
+      amount: 100,
+      pay_amount: Number(discount.pay_amount),
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=coupon-order',
+      out_trade_no: 'sub2_coupon_701',
+      payment_discount: discount,
+    }
+  }
+
+  async function mountCouponCheckout() {
+    vi.useRealTimers()
+    routeState.path = '/purchase'
+    routeState.query = {}
+    routerReplace.mockReset().mockResolvedValue(undefined)
+    routerPush.mockReset().mockResolvedValue(undefined)
+    routerResolve.mockClear()
+    createOrder.mockReset()
+    getCouponQuote.mockReset()
+    refreshUser.mockReset()
+    fetchActiveSubscriptions.mockReset().mockResolvedValue(undefined)
+    showError.mockReset()
+    showInfo.mockReset()
+    showWarning.mockReset()
+    bridgeInvoke.mockReset()
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({
+      recharge_mode: 'fixed',
+      recharge_options: [{ amount: 100, label: 'Coupon tier', sort_order: 1, enabled: true }],
+    }))
+    window.localStorage.clear()
+    ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = undefined
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    return wrapper
+  }
+
+  async function applyCoupon(wrapper: ReturnType<typeof shallowMount>, code = 'save2026') {
+    const input = wrapper.findComponent(PaymentDiscountCodeInput)
+    input.vm.$emit('update:modelValue', code)
+    await flushPromises()
+    input.vm.$emit('apply')
+    await flushPromises()
+  }
+
+  it('uses a matching quote as the final price and sends its code, revision, and stable key', async () => {
+    const wrapper = await mountCouponCheckout()
+    getCouponQuote.mockResolvedValue({ data: couponQuote() })
+    createOrder.mockResolvedValue(paymentOrder())
+
+    await applyCoupon(wrapper)
+
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(getCouponQuote).toHaveBeenCalledWith({
+      coupon_code: 'SAVE2026',
+      amount: 100,
+      payment_type: 'wxpay',
+      order_type: 'balance',
+    })
+    expect(rail.props('totalAmount')).toBe('80.00')
+    expect(rail.props('discount')).toMatchObject({ code: 'SAVE2026', pay_amount: '80.00' })
+    expect(rail.props('disabled')).toBe(false)
+
+    rail.vm.$emit('submit')
+    await flushPromises()
+
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      coupon_code: 'SAVE2026',
+      coupon_revision: 'revision-SAVE2026',
+    }), {
+      headers: {
+        'Idempotency-Key': expect.stringMatching(/^payment-coupon-/),
+      },
+    })
+    getCheckoutInfo.mockClear()
+    window.dispatchEvent(new Event('focus'))
+    await flushPromises()
+    expect(getCheckoutInfo).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(PaymentStatusPanel).props('paymentDiscount')).toMatchObject({
+      code: 'SAVE2026',
+      pay_amount: '80.00',
+    })
+  })
+
+  it('requires a fresh coupon quote after refreshing the catalog', async () => {
+    const wrapper = await mountCouponCheckout()
+    getCouponQuote.mockResolvedValue({ data: couponQuote() })
+    await applyCoupon(wrapper)
+    window.dispatchEvent(new Event('focus'))
+    await flushPromises()
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('discount')).toBeNull()
+    expect(rail.props('disabled')).toBe(true)
+    expect(rail.props('notice')).toBe('payment.coupon.reapply')
+  })
+
+  it('clears a server-rejected stale quote and lets the user apply the same code again', async () => {
+    const wrapper = await mountCouponCheckout()
+    getCouponQuote.mockResolvedValue({ data: couponQuote() })
+    createOrder.mockRejectedValue({ reason: 'COUPON_QUOTE_CHANGED' })
+    await applyCoupon(wrapper)
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    rail.vm.$emit('submit')
+    await flushPromises()
+    expect(rail.props('discount')).toBeNull()
+    expect(rail.props('disabled')).toBe(true)
+    expect(wrapper.findComponent(PaymentDiscountCodeInput).props('modelValue')).toBe('save2026')
+    expect(rail.props('notice')).toBe('payment.coupon.reapply')
+    getCouponQuote.mockResolvedValue({ data: couponQuote('SAVE2026', '75.00') })
+    wrapper.findComponent(PaymentDiscountCodeInput).vm.$emit('apply')
+    await flushPromises()
+    expect(rail.props('totalAmount')).toBe('75.00')
+    expect(rail.props('disabled')).toBe(false)
+  })
+
+  it('discards a late quote after the code changes', async () => {
+    let resolveFirst: ((value: { data: ReturnType<typeof couponQuote> }) => void) | undefined
+    let resolveSecond: ((value: { data: ReturnType<typeof couponQuote> }) => void) | undefined
+    const first = new Promise<{ data: ReturnType<typeof couponQuote> }>(resolve => { resolveFirst = resolve })
+    const second = new Promise<{ data: ReturnType<typeof couponQuote> }>(resolve => { resolveSecond = resolve })
+    const wrapper = await mountCouponCheckout()
+    getCouponQuote.mockImplementationOnce(() => first).mockImplementationOnce(() => second)
+
+    await applyCoupon(wrapper, 'first2026')
+    await applyCoupon(wrapper, 'second2026')
+    resolveSecond?.({ data: couponQuote('SECOND2026', '70.00') })
+    await flushPromises()
+    resolveFirst?.({ data: couponQuote('FIRST2026', '60.00') })
+    await flushPromises()
+
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('totalAmount')).toBe('70.00')
+    expect(rail.props('discount')).toMatchObject({ code: 'SECOND2026', pay_amount: '70.00' })
+  })
+
+  it('invalidates an applied quote when the selected payment method changes', async () => {
+    const wrapper = await mountCouponCheckout()
+    getCouponQuote.mockResolvedValue({ data: couponQuote() })
+
+    await applyCoupon(wrapper)
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('disabled')).toBe(false)
+    rail.vm.$emit('select-method', 'alipay')
+    await flushPromises()
+
+    expect(rail.props('discount')).toBeNull()
+    expect(rail.props('disabled')).toBe(true)
+    expect(rail.props('notice')).toBe('payment.coupon.reapply')
+  })
+
+  it('removes the quote before a normal order is created', async () => {
+    const wrapper = await mountCouponCheckout()
+    getCouponQuote.mockResolvedValue({ data: couponQuote() })
+    createOrder.mockResolvedValue(paymentOrder({
+      ...couponQuote(),
+      code: 'SERVER-ONLY',
+      discount_amount: '0.00',
+      pay_amount: '100.00',
+    }))
+
+    await applyCoupon(wrapper)
+    wrapper.findComponent(PaymentDiscountCodeInput).vm.$emit('remove')
+    await flushPromises()
+
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    expect(rail.props('discount')).toBeNull()
+    expect(rail.props('totalAmount')).toBe(100)
+    rail.vm.$emit('submit')
+    await flushPromises()
+    expect(createOrder).toHaveBeenCalledWith(expect.not.objectContaining({
+      coupon_code: expect.anything(),
+      coupon_revision: expect.anything(),
+    }), undefined)
+  })
+
+  it('restores the authoritative discount after OAuth starts without an order or recovery snapshot', async () => {
+    const firstVisit = await mountCouponCheckout()
+    getCouponQuote.mockResolvedValue({ data: couponQuote() })
+    createOrder.mockResolvedValue({ ...oauthOrderFixture(), order_id: 0, amount: 100, pay_amount: 80 })
+    await applyCoupon(firstVisit)
+    firstVisit.findComponent(PaymentOrderRail).vm.$emit('submit')
+    await flushPromises()
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    firstVisit.unmount()
+
+    routeState.query = {
+      wechat_resume: '1',
+      wechat_resume_token: 'signed-coupon-no-prior-order',
+      payment_type: 'wxpay',
+      order_type: 'balance',
+    }
+    createOrder.mockReset().mockResolvedValue(paymentOrder())
+    const resumed = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    const request = createOrder.mock.calls[0]?.[0]
+    expect(request).toMatchObject({ wechat_resume_token: 'signed-coupon-no-prior-order' })
+    expect(request).not.toHaveProperty('coupon_code')
+    expect(request).not.toHaveProperty('coupon_revision')
+    expect(resumed.findComponent(PaymentStatusPanel).props('paymentDiscount')).toMatchObject({
+      code: 'SAVE2026', original_amount: '100.00', discount_amount: '20.00', pay_amount: '80.00',
+    })
+    const stored = JSON.parse(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY) || '{}')
+    expect(stored.orders['701'].paymentDiscount).toMatchObject({ code: 'SAVE2026', pay_amount: '80.00' })
+    resumed.unmount()
+  })
+
+  it('keeps a signed WeChat resume coupon as display state without replaying coupon fields', async () => {
+    const resumeToken = 'signed-coupon-resume'
+    routeState.path = '/purchase'
+    routeState.query = {
+      wechat_resume: '1',
+      wechat_resume_token: resumeToken,
+      payment_type: 'wxpay',
+      order_type: 'balance',
+    }
+    routerReplace.mockReset().mockResolvedValue(undefined)
+    createOrder.mockReset().mockResolvedValue({
+      order_id: 702,
+      amount: 100,
+      pay_amount: 80,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=signed-coupon-resume',
+      out_trade_no: 'sub2_coupon_702',
+    })
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({
+      recharge_mode: 'fixed',
+      recharge_options: [{ amount: 100, label: 'Coupon tier', sort_order: 1, enabled: true }],
+    }))
+    window.localStorage.clear()
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
+      orderId: 701,
+      amount: 100,
+      qrCode: '',
+      expiresAt: '2099-01-01T00:10:00.000Z',
+      paymentType: 'wxpay',
+      payUrl: '',
+      outTradeNo: 'sub2_coupon_701',
+      clientSecret: '',
+      intentId: '',
+      currency: 'CNY',
+      countryCode: '',
+      paymentEnv: '',
+      payAmount: 80,
+      orderType: 'balance',
+      paymentMode: 'native',
+      resumeToken,
+      paymentDiscount: couponQuote(),
+      createdAt: Date.now(),
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const request = createOrder.mock.calls[0]?.[0]
+    expect(request).toMatchObject({ wechat_resume_token: resumeToken, order_type: 'balance' })
+    expect(request).not.toHaveProperty('coupon_code')
+    expect(request).not.toHaveProperty('coupon_revision')
+    expect(wrapper.findComponent(PaymentStatusPanel).props('paymentDiscount')).toMatchObject({
+      code: 'SAVE2026',
+      pay_amount: '80.00',
+    })
+  })
+})
+
 describe('PaymentView desktop deep links', () => {
   beforeEach(() => {
     vi.useRealTimers()
@@ -611,10 +1059,16 @@ describe('PaymentView desktop deep links', () => {
     routeState.query = {
       source: 'desktop',
       tab: 'subscription',
-      plan_id: '7',
+      plan_id: '8',
       group: '3',
     }
-    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      plans: [
+        { ...basePlan, id: 7, name: 'Plus', period_label: 'month' },
+        { ...basePlan, id: 8, group_id: 4, name: '5X Pro', period_label: 'quarter' },
+      ],
+    }))
 
     const wrapper = shallowMount(PaymentView, {
       global: {
@@ -630,7 +1084,10 @@ describe('PaymentView desktop deep links', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(wrapper.findComponent(PaymentOrderRail).props('productName')).toBe('Starter')
+    expect(wrapper.findComponent(PaymentOrderRail).props('productName')).toBe('5X Pro')
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(1)
+    expect(wrapper.findComponent(SubscriptionPlanCard).props('selected')).toBe(true)
+    expect(wrapper.findComponent(SubscriptionPlanCard).props('plan')).toMatchObject({ id: 8 })
   })
 
   it('restores the recharge amount selected by the desktop app', async () => {
@@ -948,6 +1405,9 @@ describe('PaymentView payment recovery', () => {
     await flushPromises()
     await flushPromises()
 
+    wrapper.findComponent(PaymentDiscountCodeInput).vm.$emit('update:modelValue', 'SUBONLY2026')
+    await flushPromises()
+    getCouponQuote.mockClear()
     wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
       subscription: { id: 91 },
       quote: {
@@ -962,6 +1422,9 @@ describe('PaymentView payment recovery', () => {
     })
     await flushPromises()
 
+    expect(getCouponQuote).not.toHaveBeenCalled()
+    expect(createOrder.mock.calls[0]?.[0]).not.toHaveProperty('coupon_code')
+    expect(createOrder.mock.calls[0]?.[0]).not.toHaveProperty('coupon_revision')
     expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
       amount: 40,
       order_type: 'reset_card',

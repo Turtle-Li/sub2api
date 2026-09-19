@@ -64,6 +64,13 @@ const mountPlanCard = (
   });
 
 describe("SubscriptionPlanCard", () => {
+  it("does not advertise group or peak multipliers", () => {
+    const wrapper = mountPlanCard('openai', { rate_multiplier: 0.25, peak_rate_multiplier: 0.5 })
+    expect(wrapper.text()).not.toContain('×')
+    expect(wrapper.text()).not.toContain('Rate')
+    expect(wrapper.text()).not.toContain('peakRate')
+  })
+
   it('keeps purchase conditions readable without allowing locked selection', async () => {
     const wrapper = mountPlanCard('openai', { eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 49 } })
     expect(wrapper.attributes('aria-disabled')).toBe('true')
@@ -198,6 +205,18 @@ describe("SubscriptionPlanCard", () => {
     expect(wrapper.text()).toContain("payment.entitlements.concurrency");
   });
 
+  it('does not repeat the default concurrency allocation as a paid benefit', () => {
+    const defaultConcurrency = mountPlanCard('openai', {
+      entitlements: { balance_bonus: 0, reset_card_count: 0, reset_card_expiry_days: 0, concurrency: 3 },
+    })
+    expect(defaultConcurrency.text()).not.toContain('payment.entitlements.concurrency')
+
+    const increasedConcurrency = mountPlanCard('openai', {
+      entitlements: { balance_bonus: 0, reset_card_count: 0, reset_card_expiry_days: 0, concurrency: 8 },
+    })
+    expect(increasedConcurrency.text()).toContain('payment.entitlements.concurrency')
+  })
+
   // The whole card is the control. A card that looks selectable but only reacts
   // on a small button at its bottom edge reads as broken.
   it("emits select from the card body and keyboard", async () => {
@@ -224,12 +243,12 @@ describe("SubscriptionPlanCard", () => {
 });
 
  describe("live catalog quota presentation", () => {
-  it("omits disabled zero quotas and shows positive limits as credits", () => {
+  it("omits disabled zero quotas and shows positive limits in dollars", () => {
     const text = mountPlanCard("openai", { daily_limit_usd: 0, weekly_limit_usd: 110, monthly_limit_usd: 440 }).text();
     expect(text).not.toContain("payment.planCard.dailyLimit");
-    expect(text).toContain("110 payment.creditUnit");
-    expect(text).toContain("440 payment.creditUnit");
-    expect(text).not.toContain("$110");
+    expect(text).toContain("$110.00");
+    expect(text).toContain("$440.00");
+    expect(text).not.toContain("payment.creditUnit");
   });
   it("shows unlimited for zero or missing limits", () => {
     expect(mountPlanCard("openai", { daily_limit_usd: 0, weekly_limit_usd: 0 }).text()).toContain("payment.planCard.unlimited");

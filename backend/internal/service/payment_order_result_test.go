@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +173,76 @@ func TestBuildCreateOrderResponseCopiesJSAPIPayload(t *testing.T) {
 	if resp.JSAPI != jsapiPayload || resp.JSAPIPayload != jsapiPayload {
 		t.Fatal("expected jsapi aliases to preserve the original pointer")
 	}
+}
+
+func TestCreateOrderResponsesUseOnlyPersistedSanitizedPaymentDiscount(t *testing.T) {
+	t.Parallel()
+
+	order := &dbent.PaymentOrder{
+		ID:          701,
+		Amount:      100,
+		PayAmount:   80,
+		FeeRate:     0,
+		ExpiresAt:   time.Date(2026, 9, 19, 12, 30, 0, 0, time.UTC),
+		OutTradeNo:  "sub2_coupon_701",
+		PaymentType: payment.TypeWxpay,
+		ProductSnapshot: map[string]any{
+			"payment_discount": map[string]any{
+				"code_id":                     int64(42),
+				"code":                        "SAVED2026",
+				"original_amount":             "100.00",
+				"discount_amount":             "20.00",
+				"pay_amount":                  "80.00",
+				"currency":                    "CNY",
+				"revision":                    strings.Repeat("a", 64),
+				"original_paid_credit_amount": "100.00",
+			},
+		},
+	}
+	created := buildCreateOrderResponse(order, CreateOrderRequest{
+		PaymentType: payment.TypeWxpay,
+		CouponCode:  "CLIENT-QUOTE-ONLY",
+		couponQuote: &PaymentDiscountQuote{
+			Code:           "CLIENT-QUOTE-ONLY",
+			OriginalAmount: "9999.99",
+			DiscountAmount: "1.00",
+			PayAmount:      "9998.99",
+		},
+	}, 80, &payment.InstanceSelection{PaymentMode: "qrcode"}, &payment.CreatePaymentResponse{}, payment.CreatePaymentResultOrderCreated)
+	require.Equal(t, map[string]any{
+		"code_id":         int64(42),
+		"code":            "SAVED2026",
+		"original_amount": "100.00",
+		"discount_amount": "20.00",
+		"pay_amount":      "80.00",
+		"currency":        "CNY",
+	}, created.PaymentDiscount)
+	require.NotContains(t, created.PaymentDiscount, "revision")
+	require.NotContains(t, created.PaymentDiscount, "original_paid_credit_amount")
+
+	// The shared reset-card response builder is also used for persisted order
+	// replays, including a terminal coupon order replay.
+	replayed := buildResetCardOrderResponse(order)
+	require.Equal(t, created.PaymentDiscount, replayed.PaymentDiscount)
+
+	encoded, err := json.Marshal(created)
+	require.NoError(t, err)
+	var response map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &response))
+	rawDiscount, exists := response["payment_discount"]
+	require.True(t, exists)
+	var discount map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rawDiscount, &discount))
+	require.JSONEq(t, `"100.00"`, string(discount["original_amount"]))
+	require.JSONEq(t, `"20.00"`, string(discount["discount_amount"]))
+	require.JSONEq(t, `"80.00"`, string(discount["pay_amount"]))
+	require.NotContains(t, discount, "revision")
+
+	nonCoupon := buildCreateOrderResponse(&dbent.PaymentOrder{ID: 702, ExpiresAt: order.ExpiresAt}, CreateOrderRequest{PaymentType: payment.TypeWxpay}, 100, &payment.InstanceSelection{}, &payment.CreatePaymentResponse{}, payment.CreatePaymentResultOrderCreated)
+	require.Nil(t, nonCoupon.PaymentDiscount)
+	encoded, err = json.Marshal(nonCoupon)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), `"payment_discount"`)
 }
 
 func TestSanitizeCreatePaymentResponseDetailsRemovesNULBytes(t *testing.T) {

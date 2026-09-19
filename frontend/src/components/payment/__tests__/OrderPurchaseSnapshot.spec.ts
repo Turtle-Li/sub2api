@@ -42,4 +42,27 @@ describe('OrderPurchaseSnapshot quota semantics', () => {
     expect(mount(OrderPurchaseSnapshot, { props: { order: immediateOrder } }).text())
       .toContain('2 · payment.orderOps.days')
   })
+
+  it('shows the server-issued coupon settlement independently from plan entitlements', () => {
+    const order = {
+      order_type: 'subscription',
+      product_snapshot: {
+        name: 'Original plan',
+        payment_discount: {
+          code_id: 9,
+          code: 'SAVE2026',
+          original_amount: '100.00',
+          discount_amount: '20.00',
+          pay_amount: '80.00',
+          currency: 'CNY',
+        },
+      },
+    } as PaymentOrder
+    const text = mount(OrderPurchaseSnapshot, { props: { order } }).text()
+
+    expect(text).toContain('SAVE2026')
+    expect(text).toContain('100.00')
+    expect(text).toContain('20.00')
+    expect(text).toContain('80.00')
+  })
 })

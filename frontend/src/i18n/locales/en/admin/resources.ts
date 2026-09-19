@@ -452,7 +452,12 @@ export default {
     // Promo Codes
     promo: {
       title: 'Promo Code Management',
-      description: 'Create and manage registration promo codes',
+      description: 'Create and manage registration-gift and payment-discount coupons',
+      tabs: {
+        ariaLabel: 'Coupon category',
+        registration: 'Registration Gift',
+        paymentDiscount: 'Payment Discount'
+      },
       createCode: 'Create Promo Code',
       editCode: 'Edit Promo Code',
       deleteCode: 'Delete Promo Code',
@@ -506,6 +511,108 @@ export default {
       failedToUpdate: 'Failed to update promo code',
       failedToDelete: 'Failed to delete promo code',
       failedToLoadUsages: 'Failed to load usage records'
+    },
+
+    paymentCoupons: {
+      search: 'Search payment discount codes...',
+      create: 'Create Payment Discount',
+      edit: 'Edit Payment Discount',
+      history: 'Usage & Audit',
+      historyTitle: 'History for {code}',
+      code: 'Discount Code',
+      codePlaceholder: 'Leave blank for secure server generation',
+      codeHint: 'Leave blank to generate; custom codes use 8-32 uppercase letters, numbers, _ or -.',
+      codeImmutable: 'A code cannot be changed after creation.',
+      invalidCode: 'Use 8-32 letters, numbers, _ or - for a custom code.',
+      discountType: 'Discount Type',
+      discountTypes: {
+        percent: 'Percent Off',
+        fixed: 'Fixed Amount Off'
+      },
+      discountValue: 'Discount Value',
+      discountValueHint: 'Percent is the amount off (20 means 20% off), up to 100%; money supports up to two decimals. The payable amount rounds up to a whole currency unit after discount, has a minimum of 1, and follows the final settlement result; 99 at 20% off pays 80.',
+      currency: 'Currency',
+      maxUses: 'Global Max Uses',
+      perUserMaxUses: 'Per-user Max Uses',
+      zeroUnlimited: '0 = unlimited',
+      defaultOne: 'Default 1',
+      perUserHint: 'Leave blank for one use per user; use 0 for unlimited.',
+      targetUser: 'Target User ID',
+      allUsers: 'All users',
+      enabled: 'Enable coupon',
+      disableHint: 'Disabled coupons cannot be used for new orders.',
+      startsAt: 'Starts At',
+      expiresAt: 'Expires At',
+      applicableProducts: 'Applicable Products',
+      productScopes: {
+        both: 'Balance Recharge and Subscription Plans',
+        balance: 'Balance Recharge',
+        subscription: 'Subscription Plans'
+      },
+      resetCardExcluded: 'Reset-card purchases never accept payment discount coupons.',
+      subscriptionScope: 'Subscription Plan Scope',
+      allSubscriptionPlans: 'All Subscription Plans',
+      selectedSubscriptionPlans: 'Specific Plans',
+      allSubscriptionPlansHint: 'Applies to every subscription plan.',
+      selectedSubscriptionPlansHint: 'Applies only to the selected subscription plans.',
+      allSubscriptionPlansShort: 'All subscription plans',
+      selectedPlanCount: '{count} selected plans',
+      noSubscriptionPlans: 'No subscription plans are currently available to display.',
+      plansLoadFailed: 'Failed to load subscription plans. Retry before saving.',
+      retryPlans: 'Retry loading',
+      planUnavailable: 'No longer for sale',
+      missingPlansHint: 'These historical plan IDs are no longer in the current catalog. They remain selected so saving cannot silently broaden the scope.',
+      missingPlan: 'Deleted plan #{id}',
+      selectAtLeastOnePlan: 'Select at least one plan when using specific plans.',
+      notes: 'Notes',
+      invalidForm: 'Check the coupon configuration.',
+      created: 'Payment discount created.',
+      updated: 'Payment discount updated.',
+      loadFailed: 'Failed to load payment discounts.',
+      saveFailed: 'Failed to save payment discount.',
+      historyFailed: 'Failed to load coupon history.',
+      columns: {
+        code: 'Code',
+        discount: 'Discount',
+        scope: 'Scope',
+        usage: 'Usage',
+        status: 'Status',
+        expiresAt: 'Expires At',
+        actions: 'Actions'
+      },
+      statuses: {
+        enabled: 'Enabled',
+        disabled: 'Disabled',
+        expired: 'Expired',
+        exhausted: 'Exhausted'
+      },
+      usageHistory: 'Usage History',
+      auditHistory: 'Admin Audit',
+      order: 'Order',
+      user: 'User',
+      status: 'Status',
+      original: 'Original',
+      discount: 'Discount',
+      finalAmount: 'Paid',
+      updatedAt: 'Updated At',
+      action: 'Action',
+      admin: 'Admin',
+      detail: 'Details',
+      createdAt: 'Recorded At',
+      noUsage: 'No usage records yet.',
+      noAudit: 'No audit records yet.',
+      auditBefore: 'Before',
+      auditAfter: 'After',
+      auditFields: {
+        orderTypes: 'Applicable products',
+        planIds: 'Specific plans'
+      },
+      usageStatuses: {
+        reserved: 'Reserved',
+        consumed: 'Consumed',
+        released: 'Released',
+        paid_review: 'Paid - review required'
+      }
     },
 
     // Usage Records

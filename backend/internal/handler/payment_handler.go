@@ -348,6 +348,8 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 
 // CreateOrderRequest is the request body for creating a payment order.
 type CreateOrderRequest struct {
+	CouponCode            string  `json:"coupon_code" binding:"max=32"`
+	CouponRevision        string  `json:"coupon_revision" binding:"max=64"`
 	Amount                float64 `json:"amount"`
 	PaymentType           string  `json:"payment_type" binding:"required"`
 	OpenID                string  `json:"openid"`
@@ -396,6 +398,8 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 	}
 	result, err := h.paymentService.CreateOrder(c.Request.Context(), service.CreateOrderRequest{
 		UserID:                subject.UserID,
+		CouponCode:            req.CouponCode,
+		CouponRevision:        req.CouponRevision,
 		Amount:                req.Amount,
 		PaymentType:           req.PaymentType,
 		OpenID:                req.OpenID,
@@ -442,6 +446,8 @@ func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeC
 	}
 	req.PaymentType = paymentType
 	req.OpenID = openid
+	req.CouponCode = claims.CouponCode
+	req.CouponRevision = claims.CouponRevision
 
 	if strings.TrimSpace(claims.Amount) != "" {
 		amount, err := strconv.ParseFloat(strings.TrimSpace(claims.Amount), 64)

@@ -35,7 +35,7 @@
           <!-- Price. The list price and discount get their own row rather than
                wrapping out of the headline, so every card breaks in the same
                place regardless of how long its numbers are. -->
-          <div class="mt-4 min-w-0">
+          <div class="min-w-0">
             <span class="payment-product-card__price">{{ formatAmount(option.amount) }}</span>
             <div v-if="discountPercent(option) > 0" class="mt-1.5 flex flex-wrap items-center gap-2">
               <span class="payment-product-card__strike">{{ formatAmount(option.original_price || 0) }}</span>
@@ -65,7 +65,7 @@
             </div>
           </div>
 
-          <PurchaseEligibilityHint :eligibility="option.eligibility" class="mt-3" />
+          <PurchaseEligibilityHint :eligibility="option.eligibility"  />
 
           <!-- Benefits, estimates and the admin's own copy. Absent data renders
                nothing at all. -->
@@ -248,7 +248,8 @@ interface TierListItem {
 // the shorter card.
 function listItems(option: RechargeOption): TierListItem[] {
   const items: TierListItem[] = []
-  if (option.concurrency && option.concurrency > 0) {
+  // Three concurrent requests are the default, not a tier-specific benefit.
+  if (option.concurrency && option.concurrency > 3) {
     items.push({ text: t('payment.entitlements.concurrency', { count: option.concurrency }), benefit: true })
   }
   if (option.estimated_rate_multiplier && option.estimated_rate_multiplier > 0) {
@@ -266,97 +267,64 @@ function listItems(option: RechargeOption): TierListItem[] {
   container-type: inline-size;
 }
 .payment-recharge-grid {
-  @apply grid grid-cols-1 gap-5;
+  @apply grid grid-cols-1 gap-4;
 }
 /* The sidebar and order summary share the viewport; use the space actually
    available to the cards before introducing a second column. */
-@container (min-width: 34rem) {
+@container (min-width: 20rem) {
   .payment-recharge-grid {
     @apply grid-cols-2;
   }
 }
-
-/* Each card measures itself, so tight two-column tracks relax the padding and
-   the price size before anything wraps awkwardly. */
-.payment-recharge-card {
-  container-type: inline-size;
+@container (min-width: 48rem) {
+  .payment-recharge-grid {
+    @apply grid-cols-3;
+  }
 }
 
-/* The shared card body uses a uniform 16px rhythm; recharge cards widen the
-   padding and give each block its own cadence (16px into the price, 24px into
-   the credited panel, 18px into the footer) via the margins below. */
+/* Compact choices keep price and credited balance distinct without a nested panel. */
 .payment-recharge-card .payment-product-card__body {
-  @apply gap-0 p-6;
+  @apply gap-3 p-4;
 }
 .payment-recharge-card .payment-product-card__title {
-  @apply text-lg leading-[26px];
+  @apply text-sm leading-5;
 }
 .payment-recharge-card .payment-product-card__price {
-  @apply text-[40px] leading-[1.1] tracking-[-0.025em] tabular-nums text-primary-700 [overflow-wrap:anywhere] dark:text-primary-300;
+  @apply text-[30px] leading-none tracking-tight tabular-nums [overflow-wrap:anywhere];
 }
-@container (max-width: 360px) {
-  .payment-recharge-card .payment-product-card__body {
-    @apply p-5;
-  }
-  .payment-recharge-card .payment-product-card__price {
-    @apply text-[36px];
-  }
-}
-
-/* Credited platform balance sits directly under the gateway price, one step
-   down in weight, so "what I pay" and "what I get" never read as one number. */
 .payment-recharge-card__credit {
-  @apply mt-6 rounded-xl border border-primary-100/70 bg-primary-50/60 p-4;
-  @apply dark:border-primary-800/40 dark:bg-primary-900/15;
-}
-/* Selection deepens only this panel; the ring and check stay the signal. */
-.payment-recharge-card.payment-product-card--selected .payment-recharge-card__credit {
-  @apply border-primary-200 bg-primary-50 dark:border-primary-700/50 dark:bg-primary-900/25;
+  @apply border-t border-gray-100 pt-3 dark:border-dark-700;
 }
 .payment-recharge-card__credit-heading {
-  @apply flex flex-wrap items-end justify-between gap-x-4 gap-y-3;
+  @apply flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5;
+}
+.payment-recharge-card__credit-heading > .min-w-0 {
+  @apply flex flex-wrap items-baseline gap-x-2 gap-y-1;
 }
 .payment-recharge-card__credit-label {
-  @apply block text-[13px] leading-5 text-gray-600 dark:text-dark-300;
+  @apply text-xs text-gray-500 dark:text-dark-400;
 }
 .payment-recharge-card__credit-value {
-  @apply mt-1 block text-[32px] font-semibold leading-none tracking-tight tabular-nums text-primary-700 dark:text-primary-200;
+  @apply text-base font-semibold tabular-nums text-gray-900 dark:text-white;
 }
 .payment-recharge-card__credit-unit {
-  @apply text-sm font-medium tracking-normal;
+  @apply text-xs font-normal text-gray-500 dark:text-dark-400;
 }
 .payment-recharge-card__bonus-side {
-  @apply ms-auto flex min-w-0 flex-col items-end gap-1 text-right;
+  @apply inline-flex flex-wrap items-center gap-1 rounded-md bg-primary-50 px-2 py-1 text-primary-700 dark:bg-primary-900/25 dark:text-primary-300;
 }
-.payment-recharge-card__bonus-label {
-  @apply text-[13px] leading-5 text-gray-600 dark:text-dark-300;
+.payment-recharge-card__bonus-label,
+.payment-recharge-card__bonus-unit {
+  @apply text-[11px];
 }
 .payment-recharge-card__bonus {
-  @apply inline-flex items-baseline gap-1.5 text-xl font-semibold tabular-nums text-primary-700 dark:text-primary-200;
+  @apply inline-flex items-center gap-1 text-xs font-semibold tabular-nums;
 }
-.payment-recharge-card__bonus-unit {
-  @apply text-[13px] font-medium;
-}
-/* A narrow card lets the bonus drop to its own left-aligned row instead of
-   overflowing the credited number. */
-@container (max-width: 280px) {
-  .payment-recharge-card__bonus-side {
-    @apply ms-0 w-full items-start text-left;
-  }
-}
-
 .payment-recharge-card__footer {
-  @apply mt-[18px] flex flex-col gap-3;
-}
-.payment-recharge-card .payment-product-card__list {
-  @apply gap-2 text-sm leading-[22px];
-}
-.payment-recharge-card .payment-product-card__list-item,
-.payment-recharge-card .payment-product-card__list-item--benefit {
-  @apply font-normal text-gray-700 dark:text-dark-200;
+  @apply flex flex-col gap-1.5;
 }
 .payment-recharge-card__description {
-  @apply text-[13px] leading-relaxed text-gray-500 [overflow-wrap:anywhere] dark:text-dark-400;
+  @apply text-xs leading-relaxed text-gray-500 [overflow-wrap:anywhere] dark:text-dark-400;
 }
 
 /* Locked tiers drop the marketing accents but stay fully readable, including

@@ -26,6 +26,24 @@
           <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.concurrency') }}</dt>
           <dd>{{ benefits.concurrency }}</dd>
         </div>
+        <template v-if="paymentDiscount">
+          <div>
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.paymentCoupon') }}</dt>
+            <dd><code class="font-mono">{{ paymentDiscount.code }}</code></dd>
+          </div>
+          <div>
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.originalPayment') }}</dt>
+            <dd>{{ formatDiscountAmount(paymentDiscount.original_amount, paymentDiscount.currency) }}</dd>
+          </div>
+          <div>
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.paymentDiscount') }}</dt>
+            <dd class="text-emerald-700 dark:text-emerald-300">-{{ formatDiscountAmount(paymentDiscount.discount_amount, paymentDiscount.currency) }}</dd>
+          </div>
+          <div>
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.finalPayment') }}</dt>
+            <dd class="font-medium">{{ formatDiscountAmount(paymentDiscount.pay_amount, paymentDiscount.currency) }}</dd>
+          </div>
+        </template>
         <div v-if="benefits?.reset_card_count">
           <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.resetCards') }}</dt>
           <dd v-if="monthlyResetCardDelivery">{{ monthlyResetCardDelivery }}</dd>
@@ -44,10 +62,16 @@ import { useI18n } from 'vue-i18n'
 import type { PaymentOrder } from '@/types/payment'
 import { purchaseName } from './orderPresentation'
 import { monthlyResetCardDeliveryLabel } from './validity'
+import { formatPaymentAmount } from './currency'
 const props = defineProps<{ order: PaymentOrder }>()
 const { t } = useI18n()
 const benefits = computed(() => props.order.product_snapshot?.entitlements)
+const paymentDiscount = computed(() => props.order.product_snapshot?.payment_discount)
 const monthlyResetCardDelivery = computed(() => benefits.value
   ? monthlyResetCardDeliveryLabel(benefits.value, t)
   : '')
+
+function formatDiscountAmount(value: string, currency: string): string {
+  return formatPaymentAmount(Number(value), currency)
+}
 </script>

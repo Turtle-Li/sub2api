@@ -6,6 +6,7 @@
     </div>
     <p class="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('payment.resetShop.hint') }}</p>
     <p class="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('payment.resetShop.tierBindingHint') }}</p>
+    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.resetShop.noCoupons') }}</p>
     <p v-if="!offers.length" class="mt-3 text-sm text-gray-500">{{ t('payment.resetShop.requiresSubscription') }}</p>
     <div v-else class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <button v-for="offer in offers" :key="offer.subscription.id" type="button"

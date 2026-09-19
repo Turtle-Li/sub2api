@@ -57,6 +57,8 @@ type ResumeTokenClaims struct {
 }
 
 type WeChatPaymentResumeClaims struct {
+	CouponCode            string `json:"cc,omitempty"`
+	CouponRevision        string `json:"cr,omitempty"`
 	TokenType             string `json:"tk,omitempty"`
 	OpenID                string `json:"openid"`
 	PaymentType           string `json:"pt,omitempty"`
@@ -409,7 +411,7 @@ func (s *PaymentResumeService) CreateWeChatPaymentResumeToken(claims WeChatPayme
 	if claims.OrderType == "" {
 		claims.OrderType = payment.OrderTypeBalance
 	}
-	if claims.OrderType == payment.OrderTypeResetCard {
+	if claims.OrderType == payment.OrderTypeResetCard || claims.CouponCode != "" {
 		if _, err := normalizeResetCardIdempotencyKeyHash(claims.IdempotencyKeyHash); err != nil {
 			return "", err
 		}
@@ -445,7 +447,7 @@ func (s *PaymentResumeService) ParseWeChatPaymentResumeToken(token string) (*WeC
 	if claims.OrderType == "" {
 		claims.OrderType = payment.OrderTypeBalance
 	}
-	if claims.OrderType == payment.OrderTypeResetCard {
+	if claims.OrderType == payment.OrderTypeResetCard || claims.CouponCode != "" {
 		normalizedHash, err := normalizeResetCardIdempotencyKeyHash(claims.IdempotencyKeyHash)
 		if err != nil {
 			return nil, infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token idempotency context is invalid")

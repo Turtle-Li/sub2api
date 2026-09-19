@@ -14,6 +14,17 @@ vi.mock('vue-i18n', () => ({
 }))
 
 describe('AmountInput', () => {
+  it('only advertises concurrency above the default three requests', () => {
+    const wrapper = mount(AmountInput, { props: { modelValue: 99, options: [
+      { amount: 49, enabled: true, sort_order: 0 },
+      { amount: 99, enabled: true, sort_order: 1, concurrency: 3 },
+      { amount: 199, enabled: true, sort_order: 2, concurrency: 4 },
+    ] } })
+    expect(wrapper.findAll('article')[0].text()).not.toContain('Concurrency')
+    expect(wrapper.findAll('article')[1].text()).not.toContain('Concurrency')
+    expect(wrapper.findAll('article')[2].text()).toContain('Concurrency raised to 4')
+  })
+
   it('keeps a gated tier visible with its condition but rejects mouse and keyboard selection', async () => {
     const wrapper = mount(AmountInput, { props: { modelValue: null, options: [{ amount: 599, enabled: true, sort_order: 0, eligibility: { can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 49 } }] } })
     const card = wrapper.get('article')

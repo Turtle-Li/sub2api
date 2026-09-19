@@ -56,6 +56,7 @@ describe('AppSidebar admin order access', () => {
     expect(componentSource).toContain('...(adminSettingsStore.paymentEnabled')
     expect(componentSource).toMatch(/path: '\/admin\/orders',\s*label: t\('nav\.orderManagement'\),\s*icon: OrderIcon,\s*hideInSimpleMode: true,\s*expandOnly: true,\s*children:/)
     expect(componentSource).not.toContain('featureFlag: flagAdminPayment')
+    expect(componentSource).toContain("{ path: '/admin/orders/coupons', label: t('nav.paymentCoupons'), icon: GiftIcon }")
   })
 
   it('keeps payment dashboard and plans inside the enabled-payment branch only', () => {

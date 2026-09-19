@@ -163,6 +163,36 @@ export interface OrderProductSnapshot {
   validity_days?: number
   validity_unit?: string
   entitlements?: Partial<PlanEntitlements>
+  /** Immutable, public-safe payment coupon settlement facts for this order. */
+  payment_discount?: PaymentDiscountSnapshot
+}
+
+/**
+ * The money fields stay as server-issued decimal strings. The browser can
+ * format them for display, but must never recalculate the discount.
+ */
+export interface PaymentDiscountSnapshot {
+  code_id: number
+  code: string
+  original_amount: string
+  discount_amount: string
+  pay_amount: string
+  currency: string
+}
+
+export interface PaymentDiscountQuote extends PaymentDiscountSnapshot {
+  version: number
+  revision: string
+}
+
+export interface PaymentCouponQuoteRequest {
+  coupon_code: string
+  amount: number
+  payment_type: string
+  order_type: OrderType
+  plan_id?: number
+  subscription_id?: number
+  reset_card_tier_revision?: string
 }
 
 export interface PaymentOrder {
@@ -421,6 +451,9 @@ export interface CreateOrderRequest {
   openid?: string
   wechat_resume_token?: string
   is_mobile?: boolean
+  /** Only sent for a fresh, locally quoted checkout; resume tokens own this state. */
+  coupon_code?: string
+  coupon_revision?: string
 }
 
 export type CreateOrderResultType = 'order_created' | 'oauth_required' | 'jsapi_ready'
@@ -466,6 +499,8 @@ export interface CreateOrderResult {
   oauth?: WechatOAuthInfo
   jsapi?: WechatJSAPIPayload
   jsapi_payload?: WechatJSAPIPayload
+  /** Present on newer servers; the quote remains display-only client state. */
+  payment_discount?: PaymentDiscountSnapshot
 }
 
 export type CurrencyAmounts = Record<string, number>

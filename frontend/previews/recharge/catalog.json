@@ -1,0 +1,228 @@
+{
+  "plans": [
+    {
+      "id": 1,
+      "group_id": 1,
+      "name": "Plus",
+      "description": "日常编程与轻量任务",
+      "price": 120,
+      "original_price": 0,
+      "validity_days": 1,
+      "validity_unit": "months",
+      "period_label": "month",
+      "group_platform": "openai",
+      "features": [
+        "同步官方赠送重置卡"
+      ],
+      "entitlements": {
+        "balance_bonus": 0,
+        "concurrency": 0,
+        "reset_card_count": 0,
+        "reset_card_expiry_days": 1,
+        "reset_card_expiry_unit": "month"
+      },
+      "is_active": true,
+      "for_sale": true
+    },
+    {
+      "id": 2,
+      "group_id": 2,
+      "name": "5X Pro",
+      "description": "更高用量，适合高频开发",
+      "price": 550,
+      "original_price": 0,
+      "validity_days": 1,
+      "validity_unit": "months",
+      "period_label": "month",
+      "group_platform": "openai",
+      "features": [
+        "同步官方赠送重置卡"
+      ],
+      "entitlements": {
+        "balance_bonus": 0,
+        "concurrency": 6,
+        "reset_card_count": 0,
+        "reset_card_expiry_days": 1,
+        "reset_card_expiry_unit": "month"
+      },
+      "is_active": true,
+      "for_sale": true
+    },
+    {
+      "id": 3,
+      "group_id": 1,
+      "name": "Plus",
+      "description": "日常编程与轻量任务",
+      "price": 324,
+      "original_price": 360,
+      "validity_days": 3,
+      "validity_unit": "months",
+      "period_label": "quarter",
+      "group_platform": "openai",
+      "features": [
+        "同步官方赠送重置卡"
+      ],
+      "entitlements": {
+        "balance_bonus": 0,
+        "concurrency": 0,
+        "reset_card_count": 2,
+        "reset_card_expiry_days": 3,
+        "reset_card_expiry_unit": "month",
+        "reset_card_delivery_mode": "immediate"
+      },
+      "is_active": true,
+      "for_sale": true
+    },
+    {
+      "id": 4,
+      "group_id": 2,
+      "name": "5X Pro",
+      "description": "更高用量，适合高频开发",
+      "price": 1485,
+      "original_price": 1650,
+      "validity_days": 3,
+      "validity_unit": "months",
+      "period_label": "quarter",
+      "group_platform": "openai",
+      "features": [
+        "同步官方赠送重置卡"
+      ],
+      "entitlements": {
+        "balance_bonus": 0,
+        "concurrency": 6,
+        "reset_card_count": 2,
+        "reset_card_expiry_days": 3,
+        "reset_card_expiry_unit": "month",
+        "reset_card_delivery_mode": "immediate"
+      },
+      "is_active": true,
+      "for_sale": true
+    },
+    {
+      "id": 5,
+      "group_id": 1,
+      "name": "Plus",
+      "description": "日常编程与轻量任务",
+      "price": 1152,
+      "original_price": 1440,
+      "validity_days": 12,
+      "validity_unit": "months",
+      "period_label": "year",
+      "group_platform": "openai",
+      "features": [
+        "同步官方赠送重置卡"
+      ],
+      "entitlements": {
+        "balance_bonus": 0,
+        "concurrency": 0,
+        "reset_card_count": 1,
+        "reset_card_expiry_days": 1,
+        "reset_card_expiry_unit": "month",
+        "reset_card_delivery_mode": "monthly",
+        "reset_card_issue_count": 12
+      },
+      "is_active": true,
+      "for_sale": true
+    },
+    {
+      "id": 6,
+      "group_id": 2,
+      "name": "5X Pro",
+      "description": "更高用量，适合高频开发",
+      "price": 5280,
+      "original_price": 6600,
+      "validity_days": 12,
+      "validity_unit": "months",
+      "period_label": "year",
+      "group_platform": "openai",
+      "features": [
+        "同步官方赠送重置卡"
+      ],
+      "entitlements": {
+        "balance_bonus": 0,
+        "concurrency": 6,
+        "reset_card_count": 1,
+        "reset_card_expiry_days": 1,
+        "reset_card_expiry_unit": "month",
+        "reset_card_delivery_mode": "monthly",
+        "reset_card_issue_count": 12
+      },
+      "is_active": true,
+      "for_sale": true
+    }
+  ],
+  "recharge_options": [
+    {
+      "amount": 5,
+      "enabled": true,
+      "balance_bonus": 0,
+      "concurrency": 0,
+      "sort_order": 0,
+      "description": "",
+      "recommended": false,
+      "label": "轻量体验"
+    },
+    {
+      "amount": 49,
+      "enabled": true,
+      "balance_bonus": 0,
+      "concurrency": 0,
+      "sort_order": 1,
+      "description": "",
+      "recommended": false,
+      "label": "日常补充"
+    },
+    {
+      "amount": 99,
+      "enabled": true,
+      "balance_bonus": 5,
+      "concurrency": 3,
+      "sort_order": 2,
+      "description": "",
+      "recommended": false,
+      "label": "进阶使用"
+    },
+    {
+      "amount": 199,
+      "enabled": true,
+      "balance_bonus": 20,
+      "concurrency": 4,
+      "sort_order": 3,
+      "description": "",
+      "recommended": true,
+      "label": "高频开发"
+    },
+    {
+      "amount": 399,
+      "enabled": true,
+      "balance_bonus": 75,
+      "concurrency": 5,
+      "sort_order": 4,
+      "description": "",
+      "recommended": false,
+      "label": "专业工作"
+    },
+    {
+      "amount": 599,
+      "enabled": true,
+      "balance_bonus": 145,
+      "concurrency": 6,
+      "sort_order": 5,
+      "description": "",
+      "recommended": false,
+      "label": "团队储备"
+    }
+  ],
+  "groups": {
+    "1": {
+      "rate_multiplier": 1,
+      "weekly_limit_usd": 110,
+      "monthly_limit_usd": 440
+    },
+    "2": {
+      "rate_multiplier": 1,
+      "weekly_limit_usd": 550,
+      "monthly_limit_usd": 2200
+    }
+  }
+}

@@ -33,13 +33,27 @@
 
         <PaymentPromoBanner :banner="checkout.banner" />
 
-        <div v-if="tabs.length > 1" role="tablist" class="payment-segment mb-6">
-          <button v-for="tab in tabs" :key="tab.key"
-            role="tab"
-            type="button"
-            :aria-selected="activeTab === tab.key"
-            :class="['payment-segment__item', activeTab === tab.key && 'payment-segment__item--active']"
-            @click="activeTab = tab.key">{{ tab.label }}</button>
+        <div v-if="tabs.length" class="mb-6 flex flex-wrap items-center justify-between gap-3" data-test="purchase-toolbar">
+          <div v-if="tabs.length > 1" role="tablist" class="payment-segment shrink-0">
+            <button v-for="tab in tabs" :key="tab.key"
+              role="tab"
+              type="button"
+              :aria-selected="activeTab === tab.key"
+              :class="['payment-segment__item', activeTab === tab.key && 'payment-segment__item--active']"
+              @click="activeTab = tab.key">{{ tab.label }}</button>
+          </div>
+          <div v-if="enabledMethods.length > 0 && subscriptionPeriodOptions.length > 1" :class="['min-w-0', activeTab !== 'subscription' && 'invisible pointer-events-none']" :inert="activeTab !== 'subscription' || undefined" :aria-hidden="activeTab !== 'subscription'">
+            <div class="payment-segment max-w-full overflow-x-auto" role="group" :aria-label="t('payment.subscriptionSectionTitle')">
+              <button v-for="period in subscriptionPeriodOptions" :key="period.key" type="button"
+                :aria-pressed="selectedSubscriptionPeriod === period.key"
+                :class="['payment-segment__item shrink-0', selectedSubscriptionPeriod === period.key && 'payment-segment__item--active']"
+                @click="selectSubscriptionPeriod(period.key)">
+                {{ period.label }}
+                <span v-if="period.discountText" class="ml-1 hidden text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 sm:inline">{{ period.discountText }}</span>
+              </button>
+            </div>
+          </div>
+
         </div>
         <div v-if="tabs.length === 0" class="card py-16 text-center">
           <p class="text-gray-500 dark:text-gray-400">{{ t('payment.billingUnavailable') }}</p>
@@ -48,18 +62,6 @@
         <template v-else>
           <div v-if="enabledMethods.length === 0" class="card py-16 text-center">
             <p class="text-gray-500 dark:text-gray-400">{{ t('payment.notAvailable') }}</p>
-          </div>
-
-          <div v-if="activeTab === 'subscription' && enabledMethods.length > 0 && subscriptionPeriodOptions.length > 1" class="mb-5 flex justify-start">
-            <div class="payment-segment max-w-full overflow-x-auto">
-              <button v-for="period in subscriptionPeriodOptions" :key="period.key" type="button"
-                :aria-pressed="selectedSubscriptionPeriod === period.key"
-                :class="['payment-segment__item shrink-0', selectedSubscriptionPeriod === period.key && 'payment-segment__item--active']"
-                @click="selectSubscriptionPeriod(period.key)">
-                {{ period.label }}
-                <span v-if="period.discountText" class="ml-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">{{ period.discountText }}</span>
-              </button>
-            </div>
           </div>
 
           <!-- Products on the left, the running total on the right. Below `lg`
@@ -125,8 +127,6 @@
                         <span :class="['shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium', platformBadgeLightClass(sub.group?.platform || '')]">{{ platformLabel(sub.group?.platform || '') }}</span>
                       </div>
                       <div class="flex flex-wrap gap-x-3 text-[11px] text-gray-400 dark:text-gray-500">
-                        <span>{{ t('payment.planCard.rate') }}: ×{{ sub.group?.rate_multiplier ?? 1 }}</span>
-                        <span v-if="subscriptionHasPeakRate(sub)">{{ t('payment.planCard.peakRate') }}: {{ subscriptionPeakRateLabel(sub) }}</span>
                         <span v-if="sub.expires_at">{{ t('userSubscriptions.daysRemaining', { days: getDaysRemaining(sub.expires_at) }) }}</span>
                         <span v-else>{{ t('userSubscriptions.noExpiration') }}</span>
                       </div>
@@ -140,6 +140,20 @@
             <section v-if="railMethods.length > 0" class="mt-6 lg:hidden">
               <PaymentMethodSelector :methods="railMethods" :selected="selectedMethod" @select="selectedMethod = $event" />
             </section>
+
+            <PaymentDiscountCodeInput
+              class="mt-4 lg:hidden"
+              input-id="payment-discount-code-mobile"
+              :model-value="couponCode"
+              :applied="selectedCoupon?.quote"
+              :applying="couponQuoting"
+              :disabled="!railBaseCanSubmit"
+              :status="couponStatus"
+              :error="!!couponError"
+              @update:model-value="couponCode = $event"
+              @apply="applyCoupon"
+              @remove="removeCoupon"
+            />
 
             <div v-if="checkout.help_text || checkout.help_image_url" class="card mt-6 p-4">
               <div class="flex flex-col items-center gap-3">
@@ -159,11 +173,11 @@
             :base-amount="railBaseAmount"
             :fee-rate="feeRate"
             :fee-amount="railFeeAmount"
-            :total-amount="railTotalAmount"
+            :total-amount="railDisplayTotalAmount"
+            :discount="selectedCoupon?.quote"
             :credit-line="railCreditLine"
             :credit-label="t('payment.creditedBalance')"
             :notice="railNotice"
-            :footnote="t('payment.serverControlled')"
             :action-label="railActionLabel"
             :button-class="paymentButtonClass"
             :disabled="!railCanSubmit"
@@ -173,7 +187,23 @@
             methods-collapsed-on-mobile
             @select-method="selectedMethod = $event"
             @submit="handleRailSubmit"
-          />
+          >
+            <template #coupon>
+              <PaymentDiscountCodeInput
+                class="hidden lg:block"
+                input-id="payment-discount-code-rail"
+                :model-value="couponCode"
+                :applied="selectedCoupon?.quote"
+                :applying="couponQuoting"
+                :disabled="!railBaseCanSubmit"
+                :status="couponStatus"
+                :error="!!couponError"
+                @update:model-value="couponCode = $event"
+                @apply="applyCoupon"
+                @remove="removeCoupon"
+              />
+            </template>
+          </PaymentOrderRail>
           </div>
         </template>
       </template>
@@ -201,6 +231,7 @@
         :currency="paymentState.currency || selectedCurrency"
         :out-trade-no="paymentState.outTradeNo"
         :mobile-alipay-deep-link="paymentState.alipayMobilePrecreateDeepLink"
+        :payment-discount="paymentState.paymentDiscount"
         @done="onPaymentDone"
         @success="onPaymentSuccess"
         @settled="onPaymentSettled"
@@ -237,7 +268,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -251,8 +282,16 @@ import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
 import { paymentAPI } from '@/api/payment'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
-import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel, type PeakRateFields } from '@/utils/peak-rate'
-import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType, RechargeOption } from '@/types/payment'
+import type {
+  CheckoutInfoResponse,
+  CreateOrderResult,
+  OrderType,
+  PaymentCouponQuoteRequest,
+  PaymentDiscountQuote,
+  PaymentDiscountSnapshot,
+  RechargeOption,
+  SubscriptionPlan,
+} from '@/types/payment'
 import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
@@ -280,6 +319,7 @@ import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import ResetCardShop from '@/components/payment/ResetCardShop.vue'
 import PaymentPromoBanner from '@/components/payment/PaymentPromoBanner.vue'
 import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
+import PaymentDiscountCodeInput from '@/components/payment/PaymentDiscountCodeInput.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -308,13 +348,7 @@ function getDaysRemaining(expiresAt: string): number {
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
 }
 
-function subscriptionHasPeakRate(sub: { group?: PeakRateFields | null }): boolean {
-  return hasPeakRate(sub.group)
-}
 
-function subscriptionPeakRateLabel(sub: { group?: PeakRateFields | null }): string {
-  return formatPeakRateWindow(sub.group, serverTimezoneLabel(appStore.cachedPublicSettings?.server_utc_offset))
-}
 
 const loading = ref(true)
 const submitting = ref(false)
@@ -327,6 +361,30 @@ const selectedPlan = ref<SubscriptionPlan | null>(null)
 type SubscriptionPeriod = 'month' | 'quarter' | 'year' | 'custom'
 const selectedSubscriptionPeriod = ref<SubscriptionPeriod | ''>('')
 const previewImage = ref('')
+
+interface CouponQuoteContext {
+  couponCode: string
+  amount: number
+  paymentType: string
+  orderType: OrderType
+  planId?: number
+  subscriptionId?: number
+  resetCardTierRevision?: string
+  key: string
+}
+
+interface AppliedCoupon {
+  quote: PaymentDiscountQuote
+  context: CouponQuoteContext
+  /** Replayed after a response-loss retry only while this exact quote remains selected. */
+  idempotencyKey: string
+}
+
+const couponCode = ref('')
+const couponQuoting = ref(false)
+const couponError = ref('')
+const appliedCoupon = ref<AppliedCoupon | null>(null)
+let couponQuoteRequest = 0
 
 const paymentPhase = ref<'select' | 'paying'>('select')
 const paymentModalVisible = ref(false)
@@ -346,6 +404,10 @@ interface CreateOrderOptions {
   idempotencyKey?: string
   /** Persisted before the reset-card create-order POST and bound after its response. */
   resetCardAttempt?: ResetCardCheckoutAttempt
+  /** Fresh quoted coupon for this exact order; never copied into an OAuth resume. */
+  coupon?: AppliedCoupon
+  /** Display-only quote restored from a signed WeChat resume flow. */
+  paymentDiscountDisplay?: PaymentDiscountSnapshot
 }
 
 interface WeixinJSBridgeLike {
@@ -585,8 +647,14 @@ function subscriptionPeriodOf(plan: SubscriptionPlan): SubscriptionPeriod {
   if (unit.includes('quarter')) return 'quarter'
   if (unit.includes('year')) return 'year'
   if (unit.includes('month')) {
-    if (plan.validity_days >= 80) return 'quarter'
+    if (plan.validity_days >= 12) return 'year'
+    if (plan.validity_days >= 3) return 'quarter'
     return 'month'
+  }
+  if (unit.includes('week')) {
+    if (plan.validity_days >= 43) return 'year'
+    if (plan.validity_days >= 12) return 'quarter'
+    return 'custom'
   }
   if (plan.validity_days >= 300) return 'year'
   if (plan.validity_days >= 80) return 'quarter'
@@ -600,7 +668,7 @@ function planDiscountPercent(plan: SubscriptionPlan): number {
 }
 
 const subscriptionPeriodOptions = computed(() => {
-  const order: SubscriptionPeriod[] = ['quarter', 'year', 'month', 'custom']
+  const order: SubscriptionPeriod[] = ['month', 'quarter', 'year', 'custom']
   const grouped = new Map<SubscriptionPeriod, number>()
   checkout.value.plans.forEach((plan) => {
     const key = subscriptionPeriodOf(plan)
@@ -764,8 +832,8 @@ function subscriptionPaymentAmountForCurrency(value: number, currency: string): 
   return roundPaymentAmount(subscriptionGatewayAmount(value, subscriptionUsdToCnyRate.value, currency), currency)
 }
 
-function formatSelectedPaymentAmount(value: number): string {
-  return formatPaymentAmount(value, selectedCurrency.value, localeCode.value)
+function formatSelectedPaymentAmount(value: number | string): string {
+  return formatPaymentAmount(Number(value), selectedCurrency.value, localeCode.value)
 }
 
 
@@ -898,6 +966,143 @@ const railBaseAmount = computed(() => (isRecharge.value ? validAmount.value : su
 const railFeeAmount = computed(() => (isRecharge.value ? feeAmount.value : subFeeAmount.value))
 const railTotalAmount = computed(() => (isRecharge.value ? totalAmount.value : subTotalAmount.value))
 
+const railBaseCanSubmit = computed(() => (isRecharge.value ? canSubmit.value : canSubmitSubscription.value))
+
+function normalizeCouponCode(value: string): string {
+  return value.trim().toUpperCase()
+}
+
+function createCouponQuoteContext(input: Omit<CouponQuoteContext, 'key' | 'couponCode'> & { couponCode: string }): CouponQuoteContext {
+  const coupon = normalizeCouponCode(input.couponCode)
+  const paymentType = normalizeVisibleMethod(input.paymentType) || input.paymentType.trim()
+  const context = {
+    amount: input.amount,
+    paymentType,
+    orderType: input.orderType,
+    planId: input.planId,
+    subscriptionId: input.subscriptionId,
+    resetCardTierRevision: String(input.resetCardTierRevision || '').trim() || undefined,
+    couponCode: coupon,
+  }
+  return {
+    ...context,
+    key: JSON.stringify(context),
+  }
+}
+
+function selectedCouponQuoteContext(): CouponQuoteContext | null {
+  const coupon = normalizeCouponCode(couponCode.value)
+  const orderAmount = isRecharge.value ? validAmount.value : selectedPlan.value?.price ?? 0
+  if (!coupon || !railBaseCanSubmit.value || !selectedMethod.value || orderAmount <= 0) return null
+  return createCouponQuoteContext({
+    couponCode: coupon,
+    amount: orderAmount,
+    paymentType: selectedMethod.value,
+    orderType: isRecharge.value ? 'balance' : 'subscription',
+    planId: isRecharge.value ? undefined : selectedPlan.value?.id,
+  })
+}
+
+function couponForContext(context: CouponQuoteContext | null): AppliedCoupon | null {
+  if (!context || !appliedCoupon.value || appliedCoupon.value.context.key !== context.key) return null
+  return appliedCoupon.value
+}
+
+const selectedCoupon = computed(() => couponForContext(selectedCouponQuoteContext()))
+const couponReady = computed(() => {
+  const code = normalizeCouponCode(couponCode.value)
+  return !code || selectedCoupon.value !== null
+})
+const couponStatus = computed(() => {
+  if (couponError.value) return couponError.value
+  if (couponQuoting.value) return t('payment.coupon.quoting')
+  if (selectedCoupon.value) return t('payment.coupon.appliedCode', { code: selectedCoupon.value.quote.code })
+  if (normalizeCouponCode(couponCode.value)) return t('payment.coupon.reapply')
+  return ''
+})
+const railDisplayTotalAmount = computed<number | string>(() => selectedCoupon.value?.quote.pay_amount ?? railTotalAmount.value)
+
+function invalidateCouponQuote(): void {
+  couponQuoteRequest += 1
+  couponQuoting.value = false
+  couponError.value = ''
+  appliedCoupon.value = null
+}
+
+async function quoteCouponContext(context: CouponQuoteContext, requireSelectedContext: boolean): Promise<AppliedCoupon | null> {
+  const request = ++couponQuoteRequest
+  couponQuoting.value = true
+  couponError.value = ''
+  appliedCoupon.value = null
+  const payload: PaymentCouponQuoteRequest = {
+    coupon_code: context.couponCode,
+    amount: context.amount,
+    payment_type: context.paymentType,
+    order_type: context.orderType,
+    ...(context.planId ? { plan_id: context.planId } : {}),
+    ...(context.subscriptionId ? { subscription_id: context.subscriptionId } : {}),
+    ...(context.resetCardTierRevision ? { reset_card_tier_revision: context.resetCardTierRevision } : {}),
+  }
+
+  try {
+    const response = await paymentAPI.getCouponQuote(payload)
+    const quote = response.data
+    if (
+      request !== couponQuoteRequest
+      || normalizeCouponCode(couponCode.value) !== context.couponCode
+      || (requireSelectedContext && selectedCouponQuoteContext()?.key !== context.key)
+    ) {
+      return null
+    }
+    if (!quote || !quote.revision || !quote.code || !quote.pay_amount) throw new Error('invalid coupon quote')
+    const applied = {
+      context,
+      quote,
+      idempotencyKey: createIdempotencyKey('payment-coupon'),
+    }
+    appliedCoupon.value = applied
+    return applied
+  } catch {
+    if (
+      request !== couponQuoteRequest
+      || normalizeCouponCode(couponCode.value) !== context.couponCode
+      || (requireSelectedContext && selectedCouponQuoteContext()?.key !== context.key)
+    ) {
+      return null
+    }
+    couponError.value = t('payment.coupon.invalid')
+  } finally {
+    if (request === couponQuoteRequest) couponQuoting.value = false
+  }
+  return null
+}
+
+async function applyCoupon(): Promise<void> {
+  // Input and selection watchers invalidate a prior quote. Let that queued
+  // invalidation finish before this new request gets its response.
+  await nextTick()
+  const context = selectedCouponQuoteContext()
+  if (!context) {
+    couponError.value = normalizeCouponCode(couponCode.value)
+      ? t('payment.coupon.selectOrderFirst')
+      : t('payment.coupon.enterCode')
+    return
+  }
+  await quoteCouponContext(context, true)
+}
+
+function removeCoupon(): void {
+  couponCode.value = ''
+  invalidateCouponQuote()
+}
+
+watch(couponCode, () => invalidateCouponQuote(), { flush: 'sync' })
+watch(
+  () => [activeTab.value, validAmount.value, selectedMethod.value, selectedPlan.value?.id, selectedPlan.value?.price] as const,
+  () => invalidateCouponQuote(),
+  { flush: 'sync' },
+)
+
 const railCreditLine = computed(() => {
   if (!isRecharge.value || validAmount.value <= 0) return ''
   return formatCreditAmount(creditedAmount.value)
@@ -908,6 +1113,8 @@ const railCreditLine = computed(() => {
 const railNotice = computed(() => {
   const eligibility = isRecharge.value ? selectedRechargeOption.value?.eligibility : selectedPlan.value?.eligibility
   if (eligibility?.can_purchase === false) return t('payment.eligibility.minimum', { required: eligibility.required_total_recharge || 0, current: eligibility.current_total_recharge || 0 })
+  if (couponError.value) return couponError.value
+  if (!couponReady.value) return t('payment.coupon.reapply')
   if (isRecharge.value) {
     if (validAmount.value <= 0) return t('payment.selectTierFirst')
     return amountError.value
@@ -916,11 +1123,11 @@ const railNotice = computed(() => {
   return ''
 })
 
-const railCanSubmit = computed(() => (isRecharge.value ? canSubmit.value : canSubmitSubscription.value))
+const railCanSubmit = computed(() => railBaseCanSubmit.value && couponReady.value && !couponQuoting.value)
 
 const railActionLabel = computed(() => {
-  if (railTotalAmount.value <= 0) return t('payment.createOrder')
-  return `${t('payment.createOrder')} ${formatSelectedPaymentAmount(railTotalAmount.value)}`
+  if (Number(railDisplayTotalAmount.value) <= 0) return t('payment.createOrder')
+  return `${t('payment.createOrder')} ${formatSelectedPaymentAmount(railDisplayTotalAmount.value)}`
 })
 
 function handleRailSubmit() {
@@ -1024,13 +1231,19 @@ function shouldPreopenHostedPopup(requestType: string, options: CreateOrderOptio
 }
 
 async function handleSubmitRecharge() {
-  if (!canSubmit.value || submitting.value) return
-  await createOrder(validAmount.value, 'balance', undefined, { preopenHostedPopup: true })
+  if (!railCanSubmit.value || submitting.value) return
+  await createOrder(validAmount.value, 'balance', undefined, {
+    coupon: selectedCoupon.value ?? undefined,
+    preopenHostedPopup: true,
+  })
 }
 
 async function confirmSubscribe() {
-  if (!selectedPlan.value || submitting.value) return
-  await createOrder(selectedPlan.value.price, 'subscription', selectedPlan.value.id, { preopenHostedPopup: true })
+  if (!selectedPlan.value || !railCanSubmit.value || submitting.value) return
+  await createOrder(selectedPlan.value.price, 'subscription', selectedPlan.value.id, {
+    coupon: selectedCoupon.value ?? undefined,
+    preopenHostedPopup: true,
+  })
 }
 
 async function startResetCardCheckout(payload: { subscription: UserSubscription; quote: ResetCardQuote }) {
@@ -1048,6 +1261,8 @@ async function startResetCardCheckout(payload: { subscription: UserSubscription;
     return
   }
   selectedMethod.value = paymentType
+  invalidateCouponQuote()
+  await nextTick()
   const attempt = getOrCreateResetCardCheckoutAttempt(window.localStorage, {
     userId,
     subscriptionId: payload.subscription.id,
@@ -1070,6 +1285,10 @@ async function startResetCardCheckout(payload: { subscription: UserSubscription;
 }
 
 async function createOrder(orderAmount: number, orderType: OrderType, planId?: number, options: CreateOrderOptions = {}) {
+  if (orderType !== 'reset_card' && !options.isResume && normalizeCouponCode(couponCode.value) && !options.coupon) {
+    couponError.value = t('payment.coupon.reapply')
+    return
+  }
   submitting.value = true
   errorMessage.value = ''
   errorHintMessage.value = ''
@@ -1103,10 +1322,16 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     if (options.wechatResumeToken) {
       payload.wechat_resume_token = options.wechatResumeToken
     }
+    if (options.coupon && !options.isResume && !options.wechatResumeToken) {
+      payload.coupon_code = options.coupon.quote.code
+      payload.coupon_revision = options.coupon.quote.revision
+    }
 
     const result = await paymentStore.createOrder(
       payload,
-      options.idempotencyKey ? { headers: { 'Idempotency-Key': options.idempotencyKey } } : undefined,
+      options.idempotencyKey || options.coupon?.idempotencyKey
+        ? { headers: { 'Idempotency-Key': options.idempotencyKey || options.coupon?.idempotencyKey } }
+        : undefined,
     ) as CreateOrderResult & { resume_token?: string }
     if (orderType === 'reset_card' && options.resetCardAttempt && typeof window !== 'undefined') {
       recordResetCardCheckoutOrder(window.localStorage, options.resetCardAttempt, result.order_id)
@@ -1164,9 +1389,14 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       stripePopupUrl: stripeRouteUrl,
       stripeRouteUrl,
       airwallexRouteUrl,
+      paymentDiscount: result.payment_discount ?? options.paymentDiscountDisplay ?? options.coupon?.quote,
     })
 
     if (decision.kind === 'wechat_oauth' && decision.oauth?.authorize_url) {
+      // The signed token authenticates the next request. OAuth may precede
+      // order creation (orderId=0); after resume the server response supplies
+      // the persisted discount snapshot for confirmation display.
+      persistRecoverySnapshot(decision.recovery)
       window.location.href = buildWechatOAuthAuthorizeUrl(decision.oauth.authorize_url, {
         paymentType: visibleMethod,
         orderType,
@@ -1224,6 +1454,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
               wechatResumeToken: options.wechatResumeToken,
               idempotencyKey: options.idempotencyKey,
               resetCardAttempt: options.resetCardAttempt,
+              coupon: options.coupon,
+              paymentDiscountDisplay: options.paymentDiscountDisplay,
             },
           )
           if (!fallbackApplied) {
@@ -1246,6 +1478,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
           wechatResumeToken: options.wechatResumeToken,
           idempotencyKey: options.idempotencyKey,
           resetCardAttempt: options.resetCardAttempt,
+          coupon: options.coupon,
+          paymentDiscountDisplay: options.paymentDiscountDisplay,
         })
         if (!fallbackApplied) {
           throw err
@@ -1262,7 +1496,12 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     }
   } catch (err: unknown) {
     const apiErr = err as Record<string, unknown>
-    if (apiErr.reason === 'TOO_MANY_PENDING') {
+    if (['COUPON_QUOTE_CHANGED', 'COUPON_QUOTE_REQUIRED', 'COUPON_INVALID'].includes(String(apiErr.reason))) {
+      invalidateCouponQuote()
+      couponError.value = t(apiErr.reason === 'COUPON_INVALID' ? 'payment.coupon.invalid' : 'payment.coupon.reapply')
+      errorMessage.value = couponError.value
+      errorHintMessage.value = ''
+    } else if (apiErr.reason === 'TOO_MANY_PENDING') {
       const metadata = apiErr.metadata as Record<string, unknown> | undefined
       errorMessage.value = t('payment.errors.tooManyPending', { max: metadata?.max || '' })
       errorHintMessage.value = ''
@@ -1280,6 +1519,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       wechatResumeToken: options.wechatResumeToken,
       idempotencyKey: options.idempotencyKey,
       resetCardAttempt: options.resetCardAttempt,
+      coupon: options.coupon,
+      paymentDiscountDisplay: options.paymentDiscountDisplay,
     })) {
       return
     } else {
@@ -1313,6 +1554,8 @@ interface MobileQrFallbackContext {
   wechatResumeToken?: string
   idempotencyKey?: string
   resetCardAttempt?: ResetCardCheckoutAttempt
+  coupon?: AppliedCoupon
+  paymentDiscountDisplay?: PaymentDiscountSnapshot
 }
 
 function shouldFallbackToDesktopQr(err: unknown, paymentMethod: string, attempted: boolean): boolean {
@@ -1369,9 +1612,15 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
     if (context.wechatResumeToken) {
       payload.wechat_resume_token = context.wechatResumeToken
     }
+    if (context.coupon && !context.wechatResumeToken) {
+      payload.coupon_code = context.coupon.quote.code
+      payload.coupon_revision = context.coupon.quote.revision
+    }
     const result = await paymentStore.createOrder(
       payload,
-      context.idempotencyKey ? { headers: { 'Idempotency-Key': context.idempotencyKey } } : undefined,
+      context.idempotencyKey || context.coupon?.idempotencyKey
+        ? { headers: { 'Idempotency-Key': context.idempotencyKey || context.coupon?.idempotencyKey } }
+        : undefined,
     ) as CreateOrderResult & { resume_token?: string }
     if (context.orderType === 'reset_card' && context.resetCardAttempt && typeof window !== 'undefined') {
       recordResetCardCheckoutOrder(window.localStorage, context.resetCardAttempt, result.order_id)
@@ -1395,6 +1644,7 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
       isWechatBrowser: false,
       stripePopupUrl: stripeRouteUrl,
       stripeRouteUrl,
+      paymentDiscount: result.payment_discount ?? context.paymentDiscountDisplay ?? context.coupon?.quote,
     })
 
     if (decision.kind !== 'qr_waiting' || !decision.paymentState.qrCode) {
@@ -1454,6 +1704,10 @@ async function resumeWechatPaymentFromQuery() {
     && typeof window !== 'undefined'
     ? await matchResetCardCheckoutAttemptForResume(window.localStorage, resume.wechatResumeToken)
     : null
+  const resumePaymentDiscount = resume.wechatResumeToken
+    && paymentState.value.resumeToken === resume.wechatResumeToken
+    ? paymentState.value.paymentDiscount
+    : undefined
 
   selectedMethod.value = resume.paymentType
   if (resume.orderType === 'balance' && resume.orderAmount > 0) {
@@ -1478,6 +1732,7 @@ async function resumeWechatPaymentFromQuery() {
       // replay the same server-side reset-card checkout.
       idempotencyKey: resetCardAttempt?.idempotencyKey,
       resetCardAttempt: resetCardAttempt || undefined,
+      paymentDiscountDisplay: resumePaymentDiscount,
     })
     return
   }
@@ -1493,10 +1748,60 @@ async function resumeWechatPaymentFromQuery() {
   }
 }
 
+let checkoutRefreshPending = false
+let checkoutDisposed = false
+const checkoutIsPaying = () => paymentPhase.value === 'paying'
+
+// Checkout data is an ephemeral view of the linked groups, not an entitlement
+// snapshot. Refetch when returning from group editing without losing selection.
+async function refreshCheckoutCatalog() {
+  if (loading.value || submitting.value || paymentPhase.value === 'paying' || checkoutRefreshPending || checkoutDisposed) return
+  checkoutRefreshPending = true
+  try {
+    const response = await paymentAPI.getCheckoutInfo()
+    if (checkoutDisposed || submitting.value || checkoutIsPaying()) return
+    const selectedID = selectedPlan.value?.id
+    checkout.value = response.data
+    selectedPlan.value = selectedID ? response.data.plans.find(plan => plan.id === selectedID) ?? null : null
+    if (selectedPlan.value) selectedSubscriptionPeriod.value = subscriptionPeriodOf(selectedPlan.value)
+    invalidateCouponQuote()
+  } catch (err: unknown) {
+    if (!checkoutDisposed) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  } finally {
+    checkoutRefreshPending = false
+  }
+}
+
+function refreshVisibleCheckout() {
+  if (document.visibilityState !== 'hidden') void refreshCheckoutCatalog()
+}
+
+watch(activeTab, (tab) => {
+  if (tab === 'subscription') void refreshCheckoutCatalog()
+})
+
+onBeforeUnmount(() => {
+  checkoutDisposed = true
+  window.removeEventListener('focus', refreshVisibleCheckout)
+  document.removeEventListener('visibilitychange', refreshVisibleCheckout)
+})
+
 onMounted(async () => {
+  window.addEventListener('focus', refreshVisibleCheckout)
+  document.addEventListener('visibilitychange', refreshVisibleCheckout)
   try {
     const res = await paymentAPI.getCheckoutInfo()
     checkout.value = res.data
+    // Seed the initial choice; explicit deep links and payment recovery below win.
+    const monthlyPlus = checkout.value.plans.find(plan =>
+      subscriptionPeriodOf(plan) === 'month'
+      && /\bplus\b/i.test(plan.name)
+      && plan.eligibility?.can_purchase !== false,
+    )
+    if (monthlyPlus) {
+      selectedSubscriptionPeriod.value = 'month'
+      selectedPlan.value = monthlyPlus
+    }
     if (amount.value == null && rechargePresetAmounts.value.length > 0) {
       amount.value = rechargePresetOptions.value.find(option => option.eligibility?.can_purchase !== false)?.amount ?? null
     }

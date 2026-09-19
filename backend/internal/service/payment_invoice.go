@@ -271,17 +271,17 @@ func (s *PaymentService) InvoiceOrderPresentations(ctx context.Context, orders [
 		if order == nil {
 			continue
 		}
-		needsReview := reviewIDs[order.ID]
+		refundNeedsReview := reviewIDs[order.ID]
 		attempt := latestAttempts[order.ID]
 		presentations[order.ID] = PaymentOrderInvoicePresentation{
 			Invoice:                 PaymentOrderInvoiceRecord(order),
 			ProductSnapshot:         SanitizedPaymentOrderProductSnapshot(order),
 			PaymentStatus:           PaymentOrderPaymentStatus(order),
 			FulfillmentStatus:       PaymentOrderFulfillmentStatus(order),
-			RefundEntitlementStatus: paymentOrderRefundEntitlementStatus(order, attempt, needsReview),
-			NeedsManualReview:       needsReview,
+			RefundEntitlementStatus: paymentOrderRefundEntitlementStatus(order, attempt, refundNeedsReview),
+			NeedsManualReview:       refundNeedsReview || isPaymentDiscountManualReview(order),
 			RefundRecovery:          paymentOrderRefundRecoveryPresentation(attempt),
-			InvoiceEligible:         invoiceOrderEligible(order, needsReview),
+			InvoiceEligible:         invoiceOrderEligible(order, refundNeedsReview),
 		}
 	}
 	return presentations, nil
@@ -538,6 +538,18 @@ func SanitizedPaymentOrderProductSnapshot(order *dbent.PaymentOrder) map[string]
 		if value, ok := sanitizedInvoiceSnapshotNumber(order.ProductSnapshot[key]); ok {
 			out[key] = value
 		}
+	}
+	if raw, ok := order.ProductSnapshot["payment_discount"].(map[string]any); ok {
+		discount := map[string]any{}
+		for _, key := range []string{"code", "original_amount", "discount_amount", "pay_amount", "currency"} {
+			if value, ok := sanitizedInvoiceSnapshotString(raw[key]); ok {
+				discount[key] = value
+			}
+		}
+		if value, ok := sanitizedInvoiceSnapshotNumber(raw["code_id"]); ok {
+			discount["code_id"] = value
+		}
+		out["payment_discount"] = discount
 	}
 	if raw, ok := order.ProductSnapshot["entitlements"].(map[string]any); ok {
 		entitlements := make(map[string]any)

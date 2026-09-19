@@ -6,6 +6,8 @@ import (
 	"context"
 	"testing"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
+
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -392,4 +394,26 @@ func TestNormalizePlanCurrency_NonLetter(t *testing.T) {
 	_, err := normalizePlanCurrency("N2D")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "currency")
+}
+
+func TestCheckoutGroupInfoReflectsEditedGroupsAcrossPlanPeriods(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+	plus, err := client.Group.Create().SetName("Plus").SetPlatform(PlatformOpenAI).SetRateMultiplier(1).SetWeeklyLimitUsd(110).SetMonthlyLimitUsd(440).Save(ctx)
+	require.NoError(t, err)
+	pro, err := client.Group.Create().SetName("5X Pro").SetPlatform(PlatformOpenAI).SetRateMultiplier(1).SetWeeklyLimitUsd(550).SetMonthlyLimitUsd(2200).Save(ctx)
+	require.NoError(t, err)
+	plans := []*dbent.SubscriptionPlan{{ID: 1, GroupID: int64(plus.ID)}, {ID: 2, GroupID: int64(plus.ID)}, {ID: 3, GroupID: int64(pro.ID)}}
+	before := svc.GetGroupInfoMap(ctx, plans)
+	require.Len(t, before, 2)
+	require.Equal(t, 110.0, *before[int64(plus.ID)].WeeklyLimitUSD)
+	_, err = client.Group.UpdateOneID(plus.ID).SetRateMultiplier(0.5).SetWeeklyLimitUsd(220).SetMonthlyLimitUsd(880).Save(ctx)
+	require.NoError(t, err)
+	after := svc.GetGroupInfoMap(ctx, plans)
+	require.Equal(t, 0.5, after[int64(plus.ID)].RateMultiplier)
+	require.Equal(t, 220.0, *after[int64(plus.ID)].WeeklyLimitUSD)
+	require.Equal(t, 880.0, *after[int64(plus.ID)].MonthlyLimitUSD)
+	require.Equal(t, 550.0, *after[int64(pro.ID)].WeeklyLimitUSD)
+	require.Equal(t, 2200.0, *after[int64(pro.ID)].MonthlyLimitUSD)
 }

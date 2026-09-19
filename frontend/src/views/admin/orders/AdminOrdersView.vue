@@ -132,6 +132,10 @@
             <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.issuanceRecord') }}</p>
             <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(selectedOrder)" />
           </div>
+          <div v-if="selectedOrder.needs_manual_review && !hasRefundHandling(selectedOrder)" class="rounded-lg border border-amber-200 bg-amber-50 p-3 sm:col-span-2 dark:border-amber-900/70 dark:bg-amber-950/20">
+            <p class="text-xs font-medium text-amber-900 dark:text-amber-100">{{ t('payment.orderOps.reviewRequired') }}</p>
+            <p v-if="paymentFact(selectedOrder) === 'PAID'" class="mt-1 text-sm text-amber-800 dark:text-amber-200">{{ t('payment.result.paidManualReview') }}</p>
+          </div>
           <div v-if="hasRefundHandling(selectedOrder)" class="rounded-lg border border-amber-200 bg-amber-50 p-3 sm:col-span-2 dark:border-amber-900/70 dark:bg-amber-950/20">
             <p class="mb-1 text-xs font-medium text-amber-900 dark:text-amber-100">{{ t('payment.orderOps.refundHandling') }}</p>
             <div class="flex flex-wrap items-center gap-2">
@@ -222,7 +226,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
@@ -327,7 +331,7 @@ function hasRefundEntitlementStatus(order: PaymentOrder): boolean {
 }
 
 function hasRefundHandling(order: PaymentOrder): boolean {
-  return hasRefundEntitlementStatus(order) || Boolean(order.refund_recovery?.state) || Boolean(order.needs_manual_review)
+  return hasRefundEntitlementStatus(order) || Boolean(order.refund_recovery?.state)
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -412,20 +416,97 @@ async function copyOrderNumber(value: string) {
   try { await navigator.clipboard.writeText(value); appStore.showSuccess(t('common.success')) }
   catch { appStore.showError(t('payment.orderOps.copyFailed')) }
 }
-let detailRequestSequence = 0
-async function showOrderDetail(order: PaymentOrder) {
-  const requestSequence = ++detailRequestSequence
-  selectedOrder.value = order
-  orderAuditLogs.value = []
-  showDetailDialog.value = true
-  try {
-    const res = await adminPaymentAPI.getOrder(order.id)
-    if (requestSequence !== detailRequestSequence || !showDetailDialog.value || selectedOrder.value?.id !== order.id) return
-    const data = res.data as unknown as Record<string, unknown>
-    if (data.order) selectedOrder.value = data.order as PaymentOrder
-    orderAuditLogs.value = ((data.auditLogs || data.audit_logs || []) as unknown) as AuditLog[]
-  } catch (_err: unknown) { /* keep cached order data */ }
+
+function parseOrderIDQuery(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return null
+  const orderID = Number(value)
+  return Number.isSafeInteger(orderID) ? orderID : null
 }
+
+function getRouteOrderID(): number | null {
+  return parseOrderIDQuery(route.query.order_id)
+}
+
+function extractOrderDetail(data: unknown, orderID: number): { order: PaymentOrder; auditLogs: AuditLog[] } | null {
+  if (!data || typeof data !== 'object') return null
+  const response = data as Record<string, unknown>
+  const candidate = response.order && typeof response.order === 'object' ? response.order as Record<string, unknown> : response
+  if (typeof candidate.id !== 'number' || candidate.id !== orderID) return null
+
+  const auditLogValue = response.auditLogs || response.audit_logs
+  return {
+    order: candidate as unknown as PaymentOrder,
+    auditLogs: Array.isArray(auditLogValue) ? auditLogValue as AuditLog[] : [],
+  }
+}
+
+interface OrderDetailLoadOptions {
+  fallbackOrder?: PaymentOrder
+  isCurrent?: () => boolean
+}
+
+let detailRequestSequence = 0
+async function loadOrderDetail(orderID: number, options: OrderDetailLoadOptions = {}) {
+  const requestSequence = ++detailRequestSequence
+  const isCurrent = options.isCurrent || (() => true)
+
+  if (options.fallbackOrder) {
+    selectedOrder.value = options.fallbackOrder
+    orderAuditLogs.value = []
+    showDetailDialog.value = true
+  } else {
+    selectedOrder.value = null
+    orderAuditLogs.value = []
+    showDetailDialog.value = false
+  }
+
+  try {
+    const res = await adminPaymentAPI.getOrder(orderID)
+    if (requestSequence !== detailRequestSequence || !isCurrent()) return
+    const detail = extractOrderDetail(res.data, orderID)
+    if (detail) {
+      selectedOrder.value = detail.order
+      orderAuditLogs.value = detail.auditLogs
+      showDetailDialog.value = true
+      return
+    }
+
+    if (!options.fallbackOrder) {
+      selectedOrder.value = null
+      orderAuditLogs.value = []
+      showDetailDialog.value = false
+      appStore.showError(t('common.error'))
+    }
+  } catch (err: unknown) {
+    if (requestSequence !== detailRequestSequence || !isCurrent()) return
+    if (options.fallbackOrder) return
+
+    selectedOrder.value = null
+    orderAuditLogs.value = []
+    showDetailDialog.value = false
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  }
+}
+
+async function showOrderDetail(order: PaymentOrder) {
+  await loadOrderDetail(order.id, {
+    fallbackOrder: order,
+    isCurrent: () => showDetailDialog.value && selectedOrder.value?.id === order.id,
+  })
+}
+
+let routeDetailRequest = 0
+function loadOrderDetailFromRoute() {
+  const request = ++routeDetailRequest
+  const orderID = getRouteOrderID()
+  if (orderID === null) return
+
+  void loadOrderDetail(orderID, {
+    isCurrent: () => request === routeDetailRequest && getRouteOrderID() === orderID,
+  })
+}
+
+watch(() => route.query.order_id, loadOrderDetailFromRoute, { immediate: true })
 
 async function handleCancelOrder(order: PaymentOrder) {
   if (refundMutationBusy.value) return

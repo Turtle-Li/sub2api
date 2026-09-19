@@ -218,7 +218,7 @@ func (s *PaymentService) acquireRecoveryPaymentFulfillmentLease(ctx context.Cont
 }
 
 func isPaymentFulfillmentRecoveryClaimable(order *dbent.PaymentOrder, now time.Time) bool {
-	if order == nil || order.PaidAt == nil || psIsRefundStatus(order.Status) || isResetCardGrantExpiryManualReview(order) {
+	if order == nil || order.PaidAt == nil || psIsRefundStatus(order.Status) || isResetCardGrantExpiryManualReview(order) || isPaymentDiscountManualReview(order) {
 		return false
 	}
 	switch order.Status {
@@ -239,7 +239,7 @@ func paymentFulfillmentRecoveryNoResetCardGrantExpiryManualReview() predicate.Pa
 	return paymentorder.Or(
 		paymentorder.StatusNEQ(OrderStatusFailed),
 		paymentorder.FailedReasonIsNil(),
-		paymentorder.FailedReasonNEQ(resetCardGrantExpiryManualReviewReason),
+		paymentorder.And(paymentorder.FailedReasonNEQ(resetCardGrantExpiryManualReviewReason), paymentorder.FailedReasonNEQ(paymentDiscountManualReviewReason)),
 	)
 }
 

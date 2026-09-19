@@ -205,6 +205,7 @@ export default {
     invoiceRequests: 'Invoice Requests',
     paymentDashboard: 'Payment Dashboard',
     paymentConfig: 'Payment Config',
+    paymentCoupons: 'Payment Coupons',
     paymentPlans: 'Product Catalog',
     channelManagement: 'Channels',
     channelPricing: 'Channel Pricing',

@@ -473,3 +473,21 @@ func TestVerifyOrderPublicRejectsBlankOutTradeNo(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.Code)
 	require.Equal(t, "INVALID_OUT_TRADE_NO", resp.Reason)
 }
+
+func TestApplyWeChatPaymentResumeClaimsBindsDiscountAndClearsUnsignedDiscount(t *testing.T) {
+	req := CreateOrderRequest{PaymentType: "wxpay", CouponCode: "FORGED2026", CouponRevision: "forged"}
+	err := applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{OpenID: "openid", PaymentType: "wxpay", CouponCode: "SIGNED2026", CouponRevision: "signed-revision"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.CouponCode != "SIGNED2026" || req.CouponRevision != "signed-revision" {
+		t.Fatal("unsigned coupon replaced signed context")
+	}
+	err = applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{OpenID: "openid", PaymentType: "wxpay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.CouponCode != "" || req.CouponRevision != "" {
+		t.Fatal("legacy signed context must not inherit an unsigned coupon")
+	}
+}

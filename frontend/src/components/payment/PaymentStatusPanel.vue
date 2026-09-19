@@ -1,5 +1,21 @@
 <template>
   <div class="space-y-4">
+    <section v-if="paymentDiscount" class="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-sm dark:border-emerald-900/70 dark:bg-emerald-950/20" data-test="payment-discount-confirmation">
+      <div class="flex items-center justify-between gap-3">
+        <span class="min-w-0 break-all font-medium text-emerald-900 dark:text-emerald-100">{{ t('payment.coupon.appliedCode', { code: paymentDiscount.code }) }}</span>
+        <span class="shrink-0 font-semibold text-emerald-900 dark:text-emerald-100"><span class="mr-1 text-xs font-normal">{{ t('payment.actualPay') }}</span>{{ formatGatewayAmount(paymentDiscount.pay_amount, paymentDiscount.currency) }}</span>
+      </div>
+      <dl class="mt-2 space-y-1 text-xs text-emerald-800 dark:text-emerald-200">
+        <div class="flex justify-between gap-4">
+          <dt>{{ t('payment.coupon.originalAmount') }}</dt>
+          <dd>{{ formatGatewayAmount(paymentDiscount.original_amount, paymentDiscount.currency) }}</dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt>{{ t('payment.coupon.discount') }}</dt>
+          <dd>-{{ formatGatewayAmount(paymentDiscount.discount_amount, paymentDiscount.currency) }}</dd>
+        </div>
+      </dl>
+    </section>
     <!-- ═══ Terminal States: show result, user clicks to return ═══ -->
 
     <!-- Success -->
@@ -233,7 +249,7 @@ import { paymentAPI } from '@/api/payment'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
 import { currencySymbol, formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
-import type { PaymentOrder } from '@/types/payment'
+import type { PaymentDiscountSnapshot, PaymentOrder } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
 import QRCode from 'qrcode'
 import alipayIcon from '@/assets/icons/alipay.svg'
@@ -258,6 +274,7 @@ const props = defineProps<{
   currency?: string
   outTradeNo?: string
   mobileAlipayDeepLink?: boolean
+  paymentDiscount?: PaymentDiscountSnapshot
 }>()
 
 type PaymentOutcome = 'success' | 'cancelled' | 'expired'
@@ -366,8 +383,8 @@ const paymentReceivedHint = computed(() => {
 
 const waitingHint = computed(() => paymentReceivedHint.value || t('payment.qr.waitingPayment'))
 
-function formatGatewayAmount(value: number, currency?: string | null): string {
-  return formatPaymentAmount(value, currency || paymentCurrency.value, localeCode.value)
+function formatGatewayAmount(value: number | string, currency?: string | null): string {
+  return formatPaymentAmount(Number(value), currency || paymentCurrency.value, localeCode.value)
 }
 
 function isSuccessStatus(status: string | null | undefined): boolean {

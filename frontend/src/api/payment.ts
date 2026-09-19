@@ -12,6 +12,8 @@ import type {
   CheckoutInfoResponse,
   CreateOrderRequest,
   CreateOrderResult,
+  PaymentCouponQuoteRequest,
+  PaymentDiscountQuote,
   PaymentOrder,
   PaymentInvoiceRecord,
   CreateInvoiceRequest
@@ -60,6 +62,11 @@ export const paymentAPI = {
   /** Get payment method limits and fee rates */
   getLimits() {
     return apiClient.get<MethodLimitsResponse>('/payment/limits')
+  },
+
+  /** Get a fresh server-authoritative discount quote for the selected order. */
+  getCouponQuote(data: PaymentCouponQuoteRequest) {
+    return apiClient.post<PaymentDiscountQuote>('/payment/coupon-quote', data)
   },
 
   /** Create a new payment order */

@@ -18,6 +18,75 @@ import type {
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
+export type PaymentDiscountType = 'fixed' | 'percent'
+export type PaymentDiscountOrderType = 'balance' | 'subscription'
+
+export interface PaymentDiscountCoupon {
+  id: number
+  code: string
+  discount_type: PaymentDiscountType
+  discount_value: string
+  currency: 'CNY' | 'USD'
+  max_uses: number
+  per_user_max_uses: number
+  target_user_id: number | null
+  starts_at: string
+  expires_at: string
+  enabled: boolean
+  notes?: string
+  version: number
+  reserved_uses: number
+  consumed_uses: number
+  /** Missing on records created before product applicability was introduced. */
+  order_types?: PaymentDiscountOrderType[]
+  /** An empty list applies to every subscription plan. */
+  plan_ids?: number[]
+  created_at: string
+  updated_at?: string
+}
+
+export interface SavePaymentDiscountCouponRequest {
+  /** Omit on create to let the server generate a cryptographically random code. */
+  code?: string
+  discount_type: PaymentDiscountType
+  discount_value: string
+  currency: 'CNY' | 'USD'
+  max_uses: number
+  /** Omit to use the server default of one; pass zero for unlimited. */
+  per_user_max_uses?: number
+  target_user_id: number | null
+  starts_at: string
+  expires_at: string
+  enabled: boolean
+  notes: string
+  order_types: PaymentDiscountOrderType[]
+  plan_ids: number[]
+  /** Required by update; unused on create. */
+  version?: number
+}
+
+export interface PaymentDiscountCouponUsage {
+  id?: number
+  order_id: number
+  user_id: number
+  status: 'reserved' | 'consumed' | 'released' | 'paid_review'
+  original_amount: string
+  discount_amount: string
+  pay_amount: string
+  currency: string
+  created_at: string
+  updated_at: string
+  user_email?: string
+}
+
+export interface PaymentDiscountCouponAudit {
+  id?: number
+  admin_user_id?: number
+  action: string
+  detail?: unknown
+  created_at: string
+}
+
 /** Admin-facing payment config returned by GET /admin/payment/config */
 export interface AdminPaymentConfig {
   enabled: boolean
@@ -218,6 +287,28 @@ export const adminPaymentAPI = {
   /** Update payment configuration */
   updateConfig(data: UpdatePaymentConfigRequest) {
     return apiClient.put('/admin/payment/config', data)
+  },
+
+  // ==================== Payment discount coupons ====================
+
+  getPaymentDiscountCoupons(params?: { page?: number; page_size?: number; search?: string }) {
+    return apiClient.get<BasePaginationResponse<PaymentDiscountCoupon>>('/admin/payment/coupons', { params })
+  },
+
+  createPaymentDiscountCoupon(data: SavePaymentDiscountCouponRequest) {
+    return apiClient.post<PaymentDiscountCoupon>('/admin/payment/coupons', data)
+  },
+
+  updatePaymentDiscountCoupon(id: number, data: SavePaymentDiscountCouponRequest) {
+    return apiClient.put<PaymentDiscountCoupon>(`/admin/payment/coupons/${id}`, data)
+  },
+
+  getPaymentDiscountCouponUsages(id: number, params?: { page?: number; page_size?: number }) {
+    return apiClient.get<BasePaginationResponse<PaymentDiscountCouponUsage>>(`/admin/payment/coupons/${id}/usages`, { params })
+  },
+
+  getPaymentDiscountCouponAudits(id: number, params?: { page?: number; page_size?: number }) {
+    return apiClient.get<BasePaginationResponse<PaymentDiscountCouponAudit>>(`/admin/payment/coupons/${id}/audits`, { params })
   },
 
   // ==================== Dashboard ====================

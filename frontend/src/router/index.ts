@@ -714,6 +714,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/orders/coupons',
+    name: 'AdminPaymentCoupons',
+    component: () => import('@/views/admin/orders/AdminPaymentCouponsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Payment Coupons',
+      titleKey: 'nav.paymentCoupons',
+      requiresPayment: false
+    }
+  },
+  {
     path: '/admin/orders/plans',
     name: 'AdminPaymentPlans',
     component: () => import('@/views/admin/orders/AdminPaymentPlansView.vue'),

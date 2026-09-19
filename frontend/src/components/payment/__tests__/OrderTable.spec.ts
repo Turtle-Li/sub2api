@@ -39,6 +39,20 @@ function order(values: Partial<PaymentOrder> = {}): PaymentOrder {
 }
 
 describe('OrderTable benefit presentation', () => {
+  it('shows a paid coupon hold as manual review without implying a refund', () => {
+    const wrapper = mount(OrderTable, {
+      props: {
+        orders: [order({ status: 'FAILED', payment_status: 'PAID', fulfillment_status: 'FAILED', needs_manual_review: true, refund_entitlement_status: 'NOT_APPLICABLE' })],
+        loading: false,
+      },
+      global: { stubs: { DataTable: DataTableStub } },
+    })
+    expect(wrapper.text()).toContain('payment.orderOps.reviewRequired')
+    expect(wrapper.text()).toContain('payment.result.paidManualReview')
+    expect(wrapper.text()).not.toContain('payment.orderOps.refundHandling')
+    expect(wrapper.text()).not.toContain('payment.orderOps.refundReviewRequired')
+  })
+
   it('separates the historical issuance fact from refund handling only when needed', () => {
     const wrapper = mount(OrderTable, {
       props: {

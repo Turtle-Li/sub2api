@@ -33,6 +33,10 @@
           <p v-if="hasRefundHandling(row)" class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.issuanceRecord') }}</p>
           <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(row)" />
         </div>
+        <div v-if="row.needs_manual_review && !hasRefundHandling(row)" class="max-w-52 text-xs leading-5 text-amber-700 dark:text-amber-300">
+          <p>{{ t('payment.orderOps.reviewRequired') }}</p>
+          <p v-if="paymentFact(row) === 'PAID'">{{ t('payment.result.paidManualReview') }}</p>
+        </div>
         <div v-if="hasRefundHandling(row)" class="border-t border-gray-100 pt-2 dark:border-dark-600">
           <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.refundHandling') }}</p>
           <div class="space-y-1">
@@ -91,7 +95,7 @@ function hasRefundEntitlementStatus(order: PaymentOrder): boolean {
   return Boolean(order.refund_entitlement_status && order.refund_entitlement_status !== 'NOT_APPLICABLE')
 }
 function hasRefundHandling(order: PaymentOrder): boolean {
-  return hasRefundEntitlementStatus(order) || Boolean(order.refund_recovery?.state) || Boolean(order.needs_manual_review)
+  return hasRefundEntitlementStatus(order) || Boolean(order.refund_recovery?.state)
 }
 const columns = computed((): Column[] => [
   { key: 'purchase', label: t('payment.orderOps.purchase') },

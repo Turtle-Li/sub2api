@@ -449,7 +449,12 @@ export default {
     // Promo Codes
     promo: {
       title: '优惠码管理',
-      description: '创建和管理注册优惠码',
+      description: '创建和管理注册赠送与支付抵扣优惠码',
+      tabs: {
+        ariaLabel: '优惠码类别',
+        registration: '注册赠送',
+        paymentDiscount: '支付抵扣'
+      },
       createCode: '创建优惠码',
       editCode: '编辑优惠码',
       deleteCode: '删除优惠码',
@@ -503,6 +508,108 @@ export default {
       failedToUpdate: '更新优惠码失败',
       failedToDelete: '删除优惠码失败',
       failedToLoadUsages: '加载使用记录失败'
+    },
+
+    paymentCoupons: {
+      search: '搜索支付抵扣码...',
+      create: '创建支付抵扣码',
+      edit: '编辑支付抵扣码',
+      history: '使用与审计',
+      historyTitle: '优惠码 {code} 的记录',
+      code: '抵扣码',
+      codePlaceholder: '留空由服务器安全生成',
+      codeHint: '留空自动生成；自定义码为 8-32 位大写字母、数字、_ 或 -。',
+      codeImmutable: '创建后不可修改优惠码。',
+      invalidCode: '自定义码须为 8-32 位字母、数字、_ 或 -。',
+      discountType: '抵扣类型',
+      discountTypes: {
+        percent: '按比例减免',
+        fixed: '固定金额减免'
+      },
+      discountValue: '抵扣值',
+      discountValueHint: '百分比表示减免比例（20 即减免 20%），最多 100%；金额最多两位小数。抵扣后实付金额向上取整到整货币单位，最低为 1，以最终结算结果为准；例如 99 减免 20% 后实付 80。',
+      currency: '币种',
+      maxUses: '全局最大次数',
+      perUserMaxUses: '每位用户最大次数',
+      zeroUnlimited: '0 = 无限制',
+      defaultOne: '默认 1',
+      perUserHint: '留空时默认每位用户仅限 1 次；0 为无限制。',
+      targetUser: '指定用户 ID',
+      allUsers: '所有用户',
+      enabled: '启用优惠码',
+      disableHint: '关闭后不可再用于新订单。',
+      startsAt: '生效时间',
+      expiresAt: '到期时间',
+      applicableProducts: '适用商品',
+      productScopes: {
+        both: '余额充值和订阅套餐',
+        balance: '余额充值',
+        subscription: '订阅套餐'
+      },
+      resetCardExcluded: '重置卡始终不可使用支付抵扣码。',
+      subscriptionScope: '订阅套餐范围',
+      allSubscriptionPlans: '全部订阅套餐',
+      selectedSubscriptionPlans: '指定套餐',
+      allSubscriptionPlansHint: '适用于所有订阅套餐。',
+      selectedSubscriptionPlansHint: '仅适用于勾选的订阅套餐。',
+      allSubscriptionPlansShort: '全部订阅套餐',
+      selectedPlanCount: '指定 {count} 个套餐',
+      noSubscriptionPlans: '当前没有可显示的订阅套餐。',
+      plansLoadFailed: '加载订阅套餐失败，请重试后再保存。',
+      retryPlans: '重试加载',
+      planUnavailable: '已停售',
+      missingPlansHint: '以下历史套餐 ID 已不存在于当前目录，已保留以避免保存时扩大适用范围。',
+      missingPlan: '已删除套餐 #{id}',
+      selectAtLeastOnePlan: '指定套餐时至少选择一个套餐。',
+      notes: '备注',
+      invalidForm: '请检查优惠码配置。',
+      created: '支付抵扣码已创建。',
+      updated: '支付抵扣码已更新。',
+      loadFailed: '加载支付抵扣码失败。',
+      saveFailed: '保存支付抵扣码失败。',
+      historyFailed: '加载优惠码历史失败。',
+      columns: {
+        code: '优惠码',
+        discount: '抵扣',
+        scope: '适用范围',
+        usage: '使用量',
+        status: '状态',
+        expiresAt: '到期时间',
+        actions: '操作'
+      },
+      statuses: {
+        enabled: '启用',
+        disabled: '已停用',
+        expired: '已过期',
+        exhausted: '已用完'
+      },
+      usageHistory: '使用记录',
+      auditHistory: '管理审计',
+      order: '订单',
+      user: '用户',
+      status: '状态',
+      original: '原始金额',
+      discount: '优惠金额',
+      finalAmount: '实付金额',
+      updatedAt: '更新时间',
+      action: '操作',
+      admin: '管理员',
+      detail: '详情',
+      createdAt: '记录时间',
+      noUsage: '暂无使用记录。',
+      noAudit: '暂无审计记录。',
+      auditBefore: '修改前',
+      auditAfter: '修改后',
+      auditFields: {
+        orderTypes: '适用商品',
+        planIds: '指定套餐'
+      },
+      usageStatuses: {
+        reserved: '已预留',
+        consumed: '已使用',
+        released: '已释放',
+        paid_review: '待人工复核'
+      }
     },
 
     // Usage Records

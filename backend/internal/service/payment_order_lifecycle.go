@@ -132,7 +132,13 @@ func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, 
 			return "", infraerrors.ServiceUnavailable("PAYMENT_CONFIRMATION_PENDING", "payment state is still being confirmed")
 		}
 	}
-	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).SetStatus(fs).Save(ctx)
+	var c int
+	var err error
+	if paymentOrderHasDiscount(o) {
+		c, err = s.cancelDiscountOrder(ctx, o, fs)
+	} else {
+		c, err = s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).SetStatus(fs).Save(ctx)
+	}
 	if err != nil {
 		return "", fmt.Errorf("update order status: %w", err)
 	}
@@ -156,7 +162,7 @@ func (s *PaymentService) reconcilePaid(ctx context.Context, o *dbent.PaymentOrde
 
 func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.PaymentOrder, opts checkPaidOptions) string {
 	unknownResult := ""
-	if paymentOrderUsesUnifiedPay(o) {
+	if paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o) {
 		unknownResult = checkPaidResultUnconfirmed
 	}
 	prov, err := s.getOrderProvider(ctx, o)
@@ -174,7 +180,7 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
 		return unknownResult
 	}
-	if resp == nil || (paymentOrderUsesUnifiedPay(o) && resp.Metadata["needs_manual_review"] == "true") {
+	if resp == nil || ((paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o)) && resp.Metadata["needs_manual_review"] == "true") {
 		return unknownResult
 	}
 	if resp.Status == payment.ProviderStatusPaid {
@@ -217,9 +223,11 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 		cancelErr := cp.CancelPayment(ctx, queryRef)
 		finishProviderCall()
-		if errors.Is(cancelErr, payment.ErrUpstreamStateUnconfirmed) || (cancelErr != nil && paymentOrderUsesUnifiedPay(o)) {
+		if errors.Is(cancelErr, payment.ErrUpstreamStateUnconfirmed) || (cancelErr != nil && (paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o))) {
 			return checkPaidResultUnconfirmed
 		}
+	} else if paymentOrderHasDiscount(o) {
+		return checkPaidResultUnconfirmed
 	}
 	return ""
 }

@@ -87,6 +87,8 @@ type wechatOAuthUserInfoResponse struct {
 }
 
 type wechatPaymentOAuthContext struct {
+	CouponCode            string `json:"coupon_code,omitempty"`
+	CouponRevision        string `json:"coupon_revision,omitempty"`
 	PaymentType           string `json:"payment_type"`
 	Amount                string `json:"amount,omitempty"`
 	OrderType             string `json:"order_type,omitempty"`
@@ -360,6 +362,8 @@ func (h *AuthHandler) WeChatPaymentOAuthStart(c *gin.Context) {
 	}
 	rawContext, err := encodeWeChatPaymentOAuthContext(wechatPaymentOAuthContext{
 		PaymentType:           paymentType,
+		CouponCode:            strings.TrimSpace(c.Query("coupon_code")),
+		CouponRevision:        strings.TrimSpace(c.Query("coupon_revision")),
 		Amount:                strings.TrimSpace(c.Query("amount")),
 		OrderType:             strings.TrimSpace(c.Query("order_type")),
 		PlanID:                parseWeChatPaymentPlanID(c.Query("plan_id")),
@@ -463,6 +467,8 @@ func (h *AuthHandler) WeChatPaymentOAuthCallback(c *gin.Context) {
 
 	resumeToken, err := h.wechatPaymentResumeService().CreateWeChatPaymentResumeToken(service.WeChatPaymentResumeClaims{
 		OpenID:                openid,
+		CouponCode:            paymentContext.CouponCode,
+		CouponRevision:        paymentContext.CouponRevision,
 		PaymentType:           paymentContext.PaymentType,
 		Amount:                paymentContext.Amount,
 		OrderType:             paymentContext.OrderType,

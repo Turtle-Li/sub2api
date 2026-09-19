@@ -33,6 +33,7 @@ func RegisterPaymentRoutes(
 		authenticated.GET("/checkout-info", paymentHandler.GetCheckoutInfo)
 		authenticated.GET("/plans", paymentHandler.GetPlans)
 		authenticated.GET("/limits", paymentHandler.GetLimits)
+		authenticated.POST("/coupon-quote", paymentHandler.QuoteCoupon)
 
 		orders := authenticated.Group("/orders")
 		{
@@ -84,6 +85,13 @@ func RegisterPaymentRoutes(
 		adminGroup.GET("/config", adminPaymentHandler.GetConfig)
 		adminGroup.PUT("/config", adminPaymentHandler.UpdateConfig)
 		adminGroup.POST("/owner-test/orders", adminPaymentHandler.CreateOwnerTestOrder)
+
+		// Payment-discount category; registration gift codes retain their own endpoints.
+		adminGroup.GET("/coupons", adminPaymentHandler.ListCoupons)
+		adminGroup.POST("/coupons", adminPaymentHandler.SaveCoupon)
+		adminGroup.PUT("/coupons/:id", adminPaymentHandler.SaveCoupon)
+		adminGroup.GET("/coupons/:id/usages", adminPaymentHandler.CouponUsages)
+		adminGroup.GET("/coupons/:id/audits", adminPaymentHandler.CouponAudits)
 
 		// Orders
 		adminOrders := adminGroup.Group("/orders")

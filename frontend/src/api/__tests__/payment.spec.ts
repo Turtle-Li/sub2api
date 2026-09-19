@@ -52,6 +52,19 @@ describe('payment api', () => {
     expect(post).toHaveBeenCalledWith('/payment/orders', payload, config)
   })
 
+  it('posts the selected order inputs to the server-authoritative coupon quote endpoint', async () => {
+    const payload = {
+      coupon_code: 'SAVE2026',
+      amount: 100,
+      payment_type: 'wxpay',
+      order_type: 'balance' as const,
+    }
+
+    await paymentAPI.getCouponQuote(payload)
+
+    expect(post).toHaveBeenCalledWith('/payment/coupon-quote', payload)
+  })
+
   it('uses authenticated order-scoped invoice endpoints', async () => {
     const payload = {
       title_type: 'enterprise' as const,

@@ -194,6 +194,7 @@ describe('feature route guard', () => {
     appStore.cachedPublicSettings = { payment_enabled: false }
     appStore.publicSettingsLoaded = true
     const ordersRoute = routeFor('/admin/orders')
+    expect(routeFor('/admin/orders/coupons').meta).toMatchObject({ requiresAuth: true, requiresAdmin: true, requiresPayment: false })
 
     expect(ordersRoute.meta).toMatchObject({ requiresAuth: true, requiresAdmin: true })
     expect(ordersRoute.meta?.requiresPayment).toBeUndefined()

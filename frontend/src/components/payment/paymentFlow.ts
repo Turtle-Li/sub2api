@@ -3,6 +3,7 @@ import type {
   CreateOrderResult,
   MethodLimit,
   OrderType,
+  PaymentDiscountSnapshot,
   WechatJSAPIPayload,
   WechatOAuthInfo,
 } from '@/types/payment'
@@ -56,6 +57,8 @@ export interface PaymentRecoverySnapshot {
   paymentMode: string
   resumeToken: string
   alipayMobilePrecreateDeepLink?: boolean
+  /** Display-only server quote retained while a provider flow is in progress. */
+  paymentDiscount?: PaymentDiscountSnapshot
   createdAt: number
 }
 
@@ -81,6 +84,8 @@ export interface ResetCardCheckoutAttemptInput {
   expiresAt: string
   paymentType: string
   tierRevision?: string
+  couponCode?: string
+  couponRevision?: string
 }
 
 export interface ResetCardCheckoutAttempt {
@@ -102,6 +107,7 @@ export interface PaymentLaunchContext {
   stripePopupUrl?: string
   stripeRouteUrl?: string
   airwallexRouteUrl?: string
+  paymentDiscount?: PaymentDiscountSnapshot
 }
 
 export interface PaymentLaunchDecision {
@@ -226,6 +232,7 @@ export function decidePaymentLaunch(
     paymentMode: (result.payment_mode || '').trim(),
     resumeToken: result.resume_token || '',
     alipayMobilePrecreateDeepLink: result.alipay_mobile_precreate_deep_link === true,
+    paymentDiscount: result.payment_discount ?? context.paymentDiscount,
   }, context.now)
 
   if (visibleMethod === 'airwallex' && baseState.clientSecret && baseState.intentId) {
@@ -319,6 +326,30 @@ function normalizeOrderType(value: unknown): OrderType | '' {
   return value === 'subscription' || value === 'reset_card' || value === 'balance' ? value : 'balance'
 }
 
+function normalizePaymentDiscount(value: unknown): PaymentDiscountSnapshot | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const candidate = value as Partial<PaymentDiscountSnapshot>
+  const codeID = candidate.code_id
+  if (
+    !Number.isSafeInteger(codeID) || typeof codeID !== 'number' || codeID <= 0
+    || typeof candidate.code !== 'string'
+    || typeof candidate.original_amount !== 'string'
+    || typeof candidate.discount_amount !== 'string'
+    || typeof candidate.pay_amount !== 'string'
+    || typeof candidate.currency !== 'string'
+  ) {
+    return undefined
+  }
+  return {
+    code_id: codeID,
+    code: candidate.code,
+    original_amount: candidate.original_amount,
+    discount_amount: candidate.discount_amount,
+    pay_amount: candidate.pay_amount,
+    currency: candidate.currency,
+  }
+}
+
 function normalizeSnapshot(parsed: Partial<PaymentRecoverySnapshot>, now: number): PaymentRecoverySnapshot | null {
   if (
     typeof parsed.orderId !== 'number'
@@ -369,6 +400,7 @@ function normalizeSnapshot(parsed: Partial<PaymentRecoverySnapshot>, now: number
     paymentMode: parsed.paymentMode || '',
     resumeToken: parsed.resumeToken || '',
     alipayMobilePrecreateDeepLink: parsed.alipayMobilePrecreateDeepLink === true,
+    paymentDiscount: normalizePaymentDiscount(parsed.paymentDiscount),
     createdAt: parsed.createdAt,
   }
 }
@@ -500,6 +532,8 @@ export function createResetCardCheckoutFingerprint(input: ResetCardCheckoutAttem
     expiresAt: String(input.expiresAt || ''),
     paymentType: String(input.paymentType || '').trim(),
     tierRevision: String(input.tierRevision || '').trim(),
+    couponCode: String(input.couponCode || '').trim(),
+    couponRevision: String(input.couponRevision || '').trim(),
   })
 }
 

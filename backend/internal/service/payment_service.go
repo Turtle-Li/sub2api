@@ -72,6 +72,9 @@ func generateRandomString(n int) string {
 }
 
 type CreateOrderRequest struct {
+	CouponCode      string
+	CouponRevision  string
+	couponQuote     *PaymentDiscountQuote
 	UserID          int64
 	Amount          float64
 	PaymentType     string
@@ -121,6 +124,7 @@ type CreateOrderResponse struct {
 	PaymentMode                   string                          `json:"payment_mode,omitempty"`
 	ResumeToken                   string                          `json:"resume_token,omitempty"`
 	AlipayMobilePrecreateDeepLink bool                            `json:"alipay_mobile_precreate_deep_link,omitempty"`
+	PaymentDiscount               map[string]any                  `json:"payment_discount,omitempty"`
 }
 
 type OrderListParams struct {

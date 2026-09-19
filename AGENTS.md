@@ -2,6 +2,15 @@
 
 ## Payment catalog and reset-card purchases
 
+- For payment discount coupons (separate from registration gifts), read
+  `docs/PAYMENT_DISCOUNT_COUPONS_20260919.md`. Preserve order-bound reservations,
+  discounted refund/affiliate principal, paid manual-review fences and audit history.
+
+- For the September 19 compact recharge cards, monthly Plus default and
+  USD subscription quota presentation, read
+  `docs/operations/RECHARGE_COMPACT_CARDS_20260919.md`. The dollar label is
+  display-only; the local example catalog is not a production grant change.
+
 - Read `docs/PAYMENT_ORDER_CATALOG_RESET_CARD_DESIGN_20260914.md` before
   changing order/invoice entry points, refund reasons, the unified admin
   product façade, reset-card tier compatibility, or monthly reset-card

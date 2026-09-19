@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect"
+	"github.com/shopspring/decimal"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
@@ -182,6 +183,16 @@ func expectedNotificationProviderKey(registry *payment.Registry, orderPaymentTyp
 }
 
 func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, tradeNo string, paid float64, pk string) error {
+	if paymentOrderHasDiscount(o) {
+		allowed, err := s.markDiscountOrderPaid(ctx, o, tradeNo, paid)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return s.alreadyProcessed(ctx, o)
+		}
+		return s.executeFulfillment(ctx, o.ID)
+	}
 	previousStatus := o.Status
 	now := time.Now()
 	grace := now.Add(-paymentGraceMinutes * time.Minute)
@@ -255,7 +266,7 @@ func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentO
 		// operator-facing reason. A duplicate provider callback must acknowledge
 		// that fact rather than re-enter fulfillment; an administrator can still
 		// explicitly invoke RetryFulfillment after resolving the order.
-		if isResetCardGrantExpiryManualReview(cur) {
+		if isResetCardGrantExpiryManualReview(cur) || isPaymentDiscountManualReview(cur) {
 			return nil
 		}
 		return s.executeFulfillment(ctx, o.ID)
@@ -288,6 +299,9 @@ func (s *PaymentService) executeFulfillmentWithLeaseAcquirer(ctx context.Context
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
+	}
+	if isPaymentDiscountManualReview(o) {
+		return infraerrors.Conflict("COUPON_MANUAL_REVIEW", "coupon capacity must be resolved before fulfillment")
 	}
 	switch o.OrderType {
 	case payment.OrderTypeSubscription:
@@ -622,6 +636,9 @@ func (s *PaymentService) acquirePaymentFulfillmentLease(ctx context.Context, o *
 }
 
 func acquirePaymentFulfillmentLeaseWithClient(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder) (*paymentFulfillmentLease, error) {
+	if isPaymentDiscountManualReview(o) {
+		return nil, infraerrors.Conflict("COUPON_MANUAL_REVIEW", "coupon payment requires manual review")
+	}
 	if o == nil {
 		return nil, infraerrors.BadRequest("INVALID_STATUS", "nil payment order")
 	}
@@ -635,6 +652,7 @@ func acquirePaymentFulfillmentLeaseWithClient(ctx context.Context, client *dbent
 		Where(
 			paymentorder.IDEQ(o.ID),
 			paymentorder.PaidAtNotNil(),
+			paymentorder.Or(paymentorder.FailedReasonIsNil(), paymentorder.FailedReasonNEQ(paymentDiscountManualReviewReason)),
 			paymentorder.Or(
 				paymentorder.StatusIn(OrderStatusPaid, OrderStatusFailed),
 				paymentorder.And(
@@ -1454,6 +1472,28 @@ func affiliateRebateBaseAmount(o *dbent.PaymentOrder) float64 {
 	if o == nil {
 		return 0
 	}
+	if paymentOrderHasDiscount(o) {
+		if o.OrderType == payment.OrderTypeBalance {
+			value, ok := paymentSnapshotFloat(o.ProductSnapshot["paid_credit_amount"])
+			if ok && value > 0 {
+				return value
+			}
+			return 0
+		}
+		if o.OrderType == payment.OrderTypeSubscription {
+			raw, ok := o.ProductSnapshot["payment_discount"].(map[string]any)
+			if !ok {
+				return 0
+			}
+			originalText, _ := raw["original_amount"].(string)
+			original, err := decimal.NewFromString(originalText)
+			if err != nil || !original.IsPositive() {
+				return 0
+			}
+			return decimal.NewFromFloat(o.Amount).Mul(decimal.NewFromFloat(o.PayAmount)).Div(original).Truncate(8).InexactFloat64()
+		}
+		return 0
+	}
 	switch o.OrderType {
 	case payment.OrderTypeBalance, payment.OrderTypeSubscription:
 		return o.Amount
@@ -1615,6 +1655,9 @@ func (s *PaymentService) RetryFulfillment(ctx context.Context, oid int64) error 
 	}
 	if o.PaidAt == nil {
 		return infraerrors.BadRequest("INVALID_STATUS", "order is not paid")
+	}
+	if isPaymentDiscountManualReview(o) {
+		return infraerrors.Conflict("COUPON_MANUAL_REVIEW", "coupon capacity must be resolved before fulfillment")
 	}
 	if psIsRefundStatus(o.Status) {
 		return infraerrors.BadRequest("INVALID_STATUS", "refund-related order cannot retry")

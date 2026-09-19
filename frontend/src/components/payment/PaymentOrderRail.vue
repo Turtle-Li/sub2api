@@ -28,8 +28,20 @@
           <PaymentMethodSelector :methods="methods" :selected="selectedMethod" @select="emit('select-method', $event)" />
         </div>
 
+        <slot name="coupon" />
+
         <div v-if="hasAmount" class="flex flex-col gap-2">
-          <div v-if="showBreakdown" class="max-lg:hidden flex flex-col gap-2">
+          <div v-if="discount" class="max-lg:hidden flex flex-col gap-2" data-test="coupon-discount-breakdown">
+            <div class="payment-rail__row">
+              <span class="payment-rail__label">{{ t('payment.coupon.originalAmount') }}</span>
+              <span class="payment-rail__value">{{ formatPay(discount.original_amount) }}</span>
+            </div>
+            <div class="payment-rail__row">
+              <span class="payment-rail__label">{{ t('payment.coupon.discount') }}</span>
+              <span class="payment-rail__value text-emerald-600 dark:text-emerald-400">-{{ formatPay(discount.discount_amount) }}</span>
+            </div>
+          </div>
+          <div v-else-if="showBreakdown" class="max-lg:hidden flex flex-col gap-2">
             <div class="payment-rail__row">
               <span class="payment-rail__label">{{ t('payment.paymentAmount') }}</span>
               <span class="payment-rail__value">{{ formatPay(baseAmount) }}</span>
@@ -89,7 +101,9 @@ const props = withDefaults(defineProps<{
   baseAmount?: number
   feeRate?: number
   feeAmount?: number
-  totalAmount?: number
+  totalAmount?: number | string
+  /** A server-authoritative quote, shown instead of locally calculated rows. */
+  discount?: import('@/types/payment').PaymentDiscountSnapshot | null
   /** Platform credit the account receives, pre-formatted with its unit noun. */
   creditLine?: string
   creditLabel?: string
@@ -100,7 +114,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   submitting?: boolean
   /** Format helper supplied by the page so currency handling stays in one place. */
-  formatPay: (value: number) => string
+  formatPay: (value: number | string) => string
   /** Subscriptions have a single price with no multiplier, so no breakdown. */
   showBreakdown?: boolean
   /**
@@ -118,6 +132,7 @@ const props = withDefaults(defineProps<{
   feeRate: 0,
   feeAmount: 0,
   totalAmount: 0,
+  discount: null,
   creditLine: '',
   creditLabel: '',
   notice: '',
@@ -136,5 +151,5 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const hasAmount = computed(() => props.totalAmount > 0)
+const hasAmount = computed(() => Number(props.totalAmount) > 0)
 </script>

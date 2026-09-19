@@ -12,6 +12,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/ent/paymentinvoicedocument"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
@@ -289,6 +290,36 @@ func TestPaymentProductSnapshotFreezesKnownPlanAndGroupEvidence(t *testing.T) {
 	require.Equal(t, 2, entitlements["reset_card_count"])
 	require.Equal(t, 30, entitlements["reset_card_expiry_days"])
 	require.Equal(t, "Two reset cards included", entitlements["message"])
+}
+
+func TestCouponPaidReviewPresentationDoesNotChangeRefundStateOrWriteRetryAudit(t *testing.T) {
+	ctx := context.Background()
+	svc, client := newInvoiceUnitService(t, ctx)
+	createInvoiceUnitRefundFenceTables(t, ctx, client)
+	owner := createInvoiceUnitUser(t, ctx, client, "coupon-paid-review@example.com")
+	order := createInvoiceUnitOrder(t, ctx, client, owner, OrderStatusFailed, true, false)
+	order, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetFailedAt(time.Now().UTC()).
+		SetFailedReason(paymentDiscountManualReviewReason).
+		SetProductSnapshot(map[string]any{"payment_discount": map[string]any{"code": "SAFE2026"}}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	presentations, err := svc.InvoiceOrderPresentations(ctx, []*dbent.PaymentOrder{order})
+	require.NoError(t, err)
+	presentation := presentations[order.ID]
+	require.True(t, presentation.NeedsManualReview)
+	require.Equal(t, RefundEntitlementStatusNotApplicable, presentation.RefundEntitlementStatus)
+
+	err = svc.RetryFulfillment(ctx, order.ID)
+	require.Error(t, err)
+	require.Equal(t, "COUPON_MANUAL_REVIEW", infraerrors.Reason(err))
+	retryAuditCount, err := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(fmt.Sprint(order.ID)),
+		paymentauditlog.ActionEQ("RECHARGE_RETRY"),
+	).Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, retryAuditCount)
 }
 
 func TestInvoiceDeliveryReclaimsStaleClaimsAndKeepsFeishuPayloadPrivate(t *testing.T) {

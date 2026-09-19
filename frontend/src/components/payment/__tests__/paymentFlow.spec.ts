@@ -233,6 +233,29 @@ describe('decidePaymentLaunch', () => {
     expect(decision.paymentState.paymentType).toBe('wxpay')
   })
 
+  it('keeps the server-issued payment discount in the provider recovery state', () => {
+    const discount = {
+      code_id: 44,
+      code: 'SAVE2026',
+      original_amount: '100.00',
+      discount_amount: '20.00',
+      pay_amount: '80.00',
+      currency: 'CNY',
+    }
+    const decision = decidePaymentLaunch(createOrderResult({
+      pay_amount: 80,
+      qr_code: 'weixin://wxpay/bizpayurl?pr=coupon',
+      payment_discount: discount,
+    }), {
+      visibleMethod: 'wxpay',
+      orderType: 'balance',
+      isMobile: true,
+    })
+
+    expect(decision.paymentState.paymentDiscount).toEqual(discount)
+    expect(decision.recovery.paymentDiscount).toEqual(discount)
+  })
+
   it('returns wechat jsapi launch when backend has a jsapi payload ready', () => {
     const decision = decidePaymentLaunch(createOrderResult({
       result_type: 'jsapi_ready',
@@ -555,6 +578,41 @@ describe('readPaymentRecoverySnapshot', () => {
     expect(restored?.paymentEnv).toBe('')
   })
 
+  it('restores a valid persisted payment discount as display-only recovery data', () => {
+    const restored = readPaymentRecoverySnapshot(JSON.stringify({
+      orderId: 46,
+      amount: 100,
+      qrCode: 'weixin://wxpay/bizpayurl?pr=coupon',
+      expiresAt: '2099-01-01T00:10:00.000Z',
+      paymentType: 'wxpay',
+      payUrl: '',
+      outTradeNo: 'sub2_46',
+      clientSecret: '',
+      intentId: '',
+      currency: 'CNY',
+      countryCode: '',
+      paymentEnv: '',
+      payAmount: 80,
+      orderType: 'balance',
+      paymentMode: 'native',
+      resumeToken: 'resume-46',
+      paymentDiscount: {
+        code_id: 46,
+        code: 'SAVE2026',
+        original_amount: '100.00',
+        discount_amount: '20.00',
+        pay_amount: '80.00',
+        currency: 'CNY',
+      },
+      createdAt: Date.UTC(2099, 0, 1, 0, 0, 0),
+    }), {
+      now: Date.UTC(2099, 0, 1, 0, 1, 0),
+      resumeToken: 'resume-46',
+    })
+
+    expect(restored?.paymentDiscount).toMatchObject({ code: 'SAVE2026', pay_amount: '80.00' })
+  })
+
   it('keeps recoverable orders independently and clears only the matched terminal order', () => {
     const entries = new Map<string, string>()
     const now = Date.now()
@@ -654,6 +712,8 @@ describe('reset-card checkout attempts', () => {
     expect(createResetCardCheckoutFingerprint({ ...attemptInput, paymentType: 'alipay' }))
       .not.toBe(first.fingerprint)
     expect(createResetCardCheckoutFingerprint({ ...attemptInput, tierRevision: 'v1:3:gpt:2:124' }))
+      .not.toBe(first.fingerprint)
+    expect(createResetCardCheckoutFingerprint({ ...attemptInput, couponCode: 'SAVE2026', couponRevision: 'revision-1' }))
       .not.toBe(first.fingerprint)
   })
 
