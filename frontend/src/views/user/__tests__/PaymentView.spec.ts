@@ -41,6 +41,9 @@ const isMobileDevice = vi.hoisted(() => vi.fn(() => true))
 const appStoreState = vi.hoisted(() => ({
   setPublicSettings: (_value: Record<string, unknown> | undefined) => {},
 }))
+const subscriptionStoreState = vi.hoisted(() => ({
+  setActiveSubscriptions: (_value: unknown[]) => {},
+}))
 
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
@@ -82,12 +85,21 @@ vi.mock('@/stores/payment', () => ({
   }),
 }))
 
-vi.mock('@/stores/subscriptions', () => ({
-  useSubscriptionStore: () => ({
-    activeSubscriptions: [],
-    fetchActiveSubscriptions,
-  }),
-}))
+vi.mock('@/stores/subscriptions', async () => {
+  const { reactive } = await import('vue')
+  const state = reactive({ activeSubscriptions: [] as unknown[] })
+  subscriptionStoreState.setActiveSubscriptions = (value) => {
+    state.activeSubscriptions = value
+  }
+  return {
+    useSubscriptionStore: () => ({
+      get activeSubscriptions() {
+        return state.activeSubscriptions
+      },
+      fetchActiveSubscriptions,
+    }),
+  }
+})
 
 vi.mock('@/stores', async () => {
   const { reactive } = await import('vue')
@@ -122,6 +134,7 @@ enableAutoUnmount(afterEach)
 
 afterEach(() => {
   isMobileDevice.mockReset().mockReturnValue(true)
+  subscriptionStoreState.setActiveSubscriptions([])
 })
 
 function checkoutInfoFixture(overrides: Partial<CheckoutInfoResponse> = {}) {
@@ -1251,6 +1264,63 @@ describe('PaymentView desktop deep links', () => {
   })
 })
 
+describe('PaymentView reset-card quick entry navigation', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    routeState.path = '/purchase'
+    routeState.query = {
+      tab: 'subscription',
+      group: '3',
+      purchase: 'reset_card',
+      subscription_id: '22',
+    }
+    routerReplace.mockReset().mockResolvedValue(undefined)
+    routerPush.mockReset().mockResolvedValue(undefined)
+    createOrder.mockReset()
+    fetchActiveSubscriptions.mockReset().mockImplementation(async () => {
+      subscriptionStoreState.setActiveSubscriptions([{
+        id: 22,
+        group_id: 3,
+        status: 'active',
+        expires_at: '2099-01-01T00:00:00Z',
+        group: { name: 'Plus', platform: 'openai' },
+      }])
+    })
+    showError.mockReset()
+    showInfo.mockReset()
+    showWarning.mockReset()
+    window.localStorage.clear()
+  })
+
+  it('targets the fetched subscription without opening the renewal picker or creating an order', async () => {
+    const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      plans: [
+        { ...basePlan, id: 7, name: 'Plus', period_label: 'month', currency: 'CNY' },
+        { ...basePlan, id: 8, name: '5X Pro', period_label: 'quarter', currency: 'CNY', validity_unit: 'month', validity_days: 3 },
+      ],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: { template: '<div><slot /></div>' },
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.findComponent(ResetCardShop).props('targetSubscriptionId')).toBe(22)
+    expect(wrapper.findAll('button').some((button) => button.text() === 'payment.resetShop.quickEntry')).toBe(true)
+    expect(wrapper.find('.fixed.inset-0.z-50').exists()).toBe(false)
+    expect(createOrder).not.toHaveBeenCalled()
+    expect(fetchActiveSubscriptions).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('PaymentView payment recovery', () => {
   beforeEach(() => {
     vi.useRealTimers()
@@ -1408,7 +1478,7 @@ describe('PaymentView payment recovery', () => {
     wrapper.findComponent(PaymentDiscountCodeInput).vm.$emit('update:modelValue', 'SUBONLY2026')
     await flushPromises()
     getCouponQuote.mockClear()
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+    const resetCheckout = {
       subscription: { id: 91 },
       quote: {
         subscription_id: 91,
@@ -1419,9 +1489,12 @@ describe('PaymentView payment recovery', () => {
         expires_at: '2099-01-01T00:00:00Z',
         reset_card_tier_revision: 'v1:3:gpt:2:123',
       },
-    })
+    }
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', resetCheckout)
+    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', resetCheckout)
     await flushPromises()
 
+    expect(createOrder).toHaveBeenCalledTimes(1)
     expect(getCouponQuote).not.toHaveBeenCalled()
     expect(createOrder.mock.calls[0]?.[0]).not.toHaveProperty('coupon_code')
     expect(createOrder.mock.calls[0]?.[0]).not.toHaveProperty('coupon_revision')

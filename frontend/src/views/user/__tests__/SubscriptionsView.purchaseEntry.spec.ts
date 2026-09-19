@@ -37,11 +37,45 @@ describe('subscription renewal entry', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Plus')
     const renew = wrapper.findAll('button').find((button) => button.text() === 'payment.renewNow')
+    const resetCard = wrapper.findAll('button').find((button) => button.text() === 'payment.resetShop.quickEntry')
     expect(Boolean(renew)).toBe(visible)
+    expect(Boolean(resetCard)).toBe(visible)
     if (renew) {
       await renew.trigger('click')
       expect(push).toHaveBeenCalledWith({ path: '/purchase', query: { tab: 'subscription', group: '4' } })
     }
+    wrapper.unmount()
+  })
+
+  it('links only current OpenAI subscriptions to their exact reset-card offer', async () => {
+    settings.cachedPublicSettings = { payment_enabled: true, payment_entry_enabled: true }
+    getMySubscriptions.mockResolvedValue([
+      {
+        id: 1, group_id: 4, status: 'active', expires_at: '2099-01-01T00:00:00Z',
+        group: { name: 'Plus', platform: 'openai', rate_multiplier: 1 },
+      },
+      {
+        id: 2, group_id: 5, status: 'active', expires_at: '2000-01-01T00:00:00Z',
+        group: { name: 'Expired Plus', platform: 'openai', rate_multiplier: 1 },
+      },
+      {
+        id: 3, group_id: 6, status: 'active', expires_at: '2099-01-01T00:00:00Z',
+        group: { name: 'Claude', platform: 'anthropic', rate_multiplier: 1 },
+      },
+    ])
+
+    const wrapper = mount(SubscriptionsView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true, ConfirmDialog: true } },
+    })
+    await flushPromises()
+
+    const resetEntries = wrapper.findAll('button').filter((button) => button.text() === 'payment.resetShop.quickEntry')
+    expect(resetEntries).toHaveLength(1)
+    await resetEntries[0].trigger('click')
+    expect(push).toHaveBeenCalledWith({
+      path: '/purchase',
+      query: { tab: 'subscription', purchase: 'reset_card', subscription_id: '1' },
+    })
     wrapper.unmount()
   })
 })

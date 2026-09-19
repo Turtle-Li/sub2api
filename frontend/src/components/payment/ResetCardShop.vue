@@ -1,8 +1,8 @@
 <template>
-  <section class="mt-7 border-t border-gray-200 pt-5 dark:border-dark-700">
+  <section ref="shopRef" aria-labelledby="reset-card-shop-title" class="mt-7 border-t border-gray-200 pt-5 dark:border-dark-700" tabindex="-1">
     <div class="flex items-center gap-2">
       <Icon name="refresh" size="sm" class="text-primary-600 dark:text-primary-400" />
-      <h2 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('payment.resetShop.title') }}</h2>
+      <h2 id="reset-card-shop-title" class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('payment.resetShop.title') }}</h2>
     </div>
     <p class="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('payment.resetShop.hint') }}</p>
     <p class="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('payment.resetShop.tierBindingHint') }}</p>
@@ -10,7 +10,14 @@
     <p v-if="!offers.length" class="mt-3 text-sm text-gray-500">{{ t('payment.resetShop.requiresSubscription') }}</p>
     <div v-else class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <button v-for="offer in offers" :key="offer.subscription.id" type="button"
-        class="group flex min-w-0 items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3.5 text-left transition hover:border-primary-400 hover:bg-primary-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-70 dark:border-dark-700 dark:bg-dark-800 dark:hover:border-primary-600 dark:hover:bg-primary-950/30"
+        :data-reset-card-offer="offer.subscription.id"
+        :aria-current="isTargetOffer(offer) ? 'true' : undefined"
+        :class="[
+          'group flex min-w-0 items-center gap-3 rounded-xl border bg-white px-4 py-3.5 text-left transition hover:border-primary-400 hover:bg-primary-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-70 dark:bg-dark-800 dark:hover:border-primary-600 dark:hover:bg-primary-950/30',
+          isTargetOffer(offer)
+            ? 'border-primary-500 bg-primary-50/70 ring-1 ring-primary-500/30 dark:border-primary-500 dark:bg-primary-950/35'
+            : 'border-gray-200 dark:border-dark-700',
+        ]"
         :disabled="disabled || loading || offer.eligibility?.can_purchase === false" @click="select(offer.subscription)">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-300"><Icon name="refresh" size="sm" /></span>
           <span class="min-w-0 flex-1">
@@ -61,9 +68,11 @@ const props = withDefaults(defineProps<{
   subscriptions: UserSubscription[]
   plans?: SubscriptionPlan[]
   disabled?: boolean
+  targetSubscriptionId?: number | null
 }>(), {
   plans: () => [],
   disabled: false,
+  targetSubscriptionId: null,
 })
 const offers = computed(() => props.subscriptions.flatMap(subscription => {
   if (subscription.group?.platform !== 'openai' || subscription.status !== 'active' || (subscription.expires_at && Date.parse(subscription.expires_at) <= Date.now())) return []
@@ -87,8 +96,31 @@ const emit = defineEmits<{ checkout: [payload: { subscription: UserSubscription;
 const { t } = useI18n()
 const loading = ref(false)
 const error = ref('')
+const shopRef = ref<HTMLElement | null>(null)
 type Attempt = { quote: ResetCardQuote; name: string }
 const selected = ref<Attempt | null>(null)
+
+function isTargetOffer(offer: { subscription: UserSubscription }): boolean {
+  return props.targetSubscriptionId !== null && offer.subscription.id === props.targetSubscriptionId
+}
+
+function focusOffer(subscriptionId = props.targetSubscriptionId): boolean {
+  const offer = subscriptionId === null
+    ? offers.value[0]
+    : offers.value.find(item => item.subscription.id === subscriptionId)
+  if (!offer) return false
+
+  const button = shopRef.value?.querySelector<HTMLButtonElement>(
+    `[data-reset-card-offer="${offer.subscription.id}"]`,
+  )
+  if (!button) return false
+
+  button.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  button.focus({ preventScroll: true })
+  return true
+}
+
+defineExpose({ focusOffer })
 
 function errorMessage(value: unknown): string {
   return extractI18nErrorMessage(value, t, 'payment.errors', t('payment.resetShop.failed'))

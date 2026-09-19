@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -1107,4 +1109,47 @@ func TestPaymentOrderExpiresInSecondsUsesRemainingDeadline(t *testing.T) {
 	now := time.Date(2026, time.September, 13, 12, 0, 0, 500_000_000, time.UTC)
 	require.Equal(t, 300, paymentOrderExpiresInSeconds(now.Add(300*time.Second+900*time.Millisecond), now))
 	require.Zero(t, paymentOrderExpiresInSeconds(now, now))
+}
+
+func TestResetCardUnifiedDefiniteRejectionReleasesOnlyFreshDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		present     bool
+		providerErr error
+		released    bool
+	}{
+		{"fresh central rejection", true, &unifiedpay.APIError{StatusCode: 400, Code: "invalid_request"}, true},
+		{"fresh local validation", true, unifiedpay.ErrInvalidRequest, true},
+		{"prior unknown remains fenced", false, &unifiedpay.APIError{StatusCode: 400, Code: "invalid_request"}, false},
+		{"remote idempotency conflict remains fenced", true, &unifiedpay.APIError{StatusCode: 409, Code: "idempotency_conflict"}, false},
+		{"retryable invalid request remains fenced", true, &unifiedpay.APIError{StatusCode: 400, Code: "invalid_request", Retryable: true}, false},
+		{"server error remains fenced", true, &unifiedpay.APIError{StatusCode: 503, Code: "service_unavailable", Retryable: true}, false},
+		{"transport error remains fenced", true, errors.New("transport unavailable"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, order, req := newResetCardDispatchTestOrder(t, tc.present)
+			claimed, lease, dispatch, err := svc.claimResetCardDispatch(ctx, order, req)
+			require.NoError(t, err)
+			require.True(t, dispatch)
+			_, err = svc.handleResetCardProviderCreateError(ctx, claimed, lease, nil, req, &payment.InstanceSelection{ProviderKey: payment.TypeUnifiedPay}, tc.providerErr)
+			if tc.released {
+				require.Equal(t, "RESET_CARD_PAYMENT_REJECTED", infraerrors.Reason(err))
+			} else {
+				require.Equal(t, "RESET_CARD_PAYMENT_CREATE_UNCONFIRMED", infraerrors.Reason(err))
+			}
+			current, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+			require.NoError(t, err)
+			_, nextLease, nextDispatch, err := svc.claimResetCardDispatch(ctx, current, req)
+			if tc.released {
+				require.NoError(t, err)
+				require.True(t, nextDispatch)
+				require.False(t, nextLease.previouslyUncertain)
+				require.Equal(t, int64(2), nextLease.generation)
+			} else {
+				require.Equal(t, "RESET_CARD_ORDER_IN_PROGRESS", infraerrors.Reason(err))
+			}
+			require.Equal(t, 1, svc.entClient.PaymentOrder.Query().CountX(ctx))
+		})
+	}
 }

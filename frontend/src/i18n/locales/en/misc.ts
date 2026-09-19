@@ -403,6 +403,7 @@ export default {
       "tierBindingConfirm": "This card can be used only with the same type at this tier or a lower tier. Higher-tier subscriptions cannot see or use lower-tier cards.",
       "exactBindingConfirm": "This plan has no compatibility tier. The card will be bound only to this subscription and cannot be used with another subscription.",
       "buy": "Choose payment method",
+      "quickEntry": "Buy reset card",
       "success": "Order created. Complete payment before using your reset card.",
       "failed": "Order was not created. Please retry.",
       "paymentUnavailable": "No eligible Alipay or WeChat Pay method is available for this reset card."
@@ -706,6 +707,9 @@ export default {
       REFUND_AMOUNT_UNREPRESENTABLE: 'This amount cannot be mapped precisely to subscription time. Adjust the amount.',
       UNSUPPORTED_ORDER_TYPE: 'This order type does not support this refund workflow.',
       REFUND_FAILED: 'Refund failed.',
+      RESET_CARD_ORDER_IN_PROGRESS: 'Your checkout is being created. Please retry here shortly without clicking repeatedly.',
+      RESET_CARD_PAYMENT_CREATE_UNCONFIRMED: 'Your checkout is being confirmed. Retry here shortly to continue the same order.',
+      RESET_CARD_PAYMENT_REJECTED: 'The payment service could not accept this checkout. Contact an administrator to check the payment configuration, then retry.',
       RESET_CARD_TIER_POLICY_UNAVAILABLE: 'Reset-card compatibility rules are temporarily unavailable. Please try again.',
       RESET_CARD_TIER_GROUP_INVALID: 'This subscription group cannot be assigned a reset-card compatibility rule.',
       RESET_CARD_TIER_FAMILY_INVALID: 'The compatibility type must begin with a lowercase letter and use only lowercase letters, numbers, underscores, or hyphens.',

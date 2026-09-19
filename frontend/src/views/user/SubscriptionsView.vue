@@ -33,11 +33,11 @@
         >
           <!-- Header -->
           <div
-            class="flex items-center justify-between border-b border-gray-100 p-4 dark:border-dark-700"
+            class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 p-4 dark:border-dark-700"
           >
-            <div class="flex items-center gap-3">
+            <div class="flex min-w-0 items-center gap-3">
               <div :class="['h-1.5 w-1.5 shrink-0 rounded-full', platformAccentDotClass(subscription.group?.platform || '')]" />
-              <div>
+              <div class="min-w-0">
                 <div class="flex items-center gap-2">
                   <h3 class="font-semibold text-gray-900 dark:text-white">
                     {{ subscription.group?.name || `Group #${subscription.group_id}` }}
@@ -57,7 +57,7 @@
                 </div>
               </div>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
               <span
                 :class="[
                   'rounded-full px-2 py-0.5 text-xs font-medium',
@@ -76,6 +76,14 @@
                 @click="router.push({ path: '/purchase', query: { tab: 'subscription', group: String(subscription.group_id) } })"
               >
                 {{ t('payment.renewNow') }}
+              </button>
+              <button
+                v-if="canBuyResetCard(subscription)"
+                type="button"
+                class="rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-primary-800 dark:bg-primary-950/30 dark:text-primary-200 dark:hover:border-primary-700 dark:hover:bg-primary-900/40"
+                @click="openResetCardShop(subscription)"
+              >
+                {{ t('payment.resetShop.quickEntry') }}
               </button>
             </div>
           </div>
@@ -349,6 +357,26 @@ const showUseResetCardConfirm = ref(false)
 const resetCardSubscription = ref<UserSubscription | null>(null)
 const usingResetCardId = ref<number | null>(null)
 let useResetCardOperationKey: string | null = null
+
+function canBuyResetCard(subscription: UserSubscription): boolean {
+  if (!canShowPaymentEntry.value || subscription.status !== 'active' || subscription.group?.platform !== 'openai') {
+    return false
+  }
+  if (!subscription.expires_at) return true
+  const expiresAt = Date.parse(subscription.expires_at)
+  return Number.isFinite(expiresAt) && expiresAt > Date.now()
+}
+
+function openResetCardShop(subscription: UserSubscription) {
+  router.push({
+    path: '/purchase',
+    query: {
+      tab: 'subscription',
+      purchase: 'reset_card',
+      subscription_id: String(subscription.id),
+    },
+  })
+}
 
 function subscriptionHasPeakRate(subscription: UserSubscription): boolean {
   return hasPeakRate(subscription.group)

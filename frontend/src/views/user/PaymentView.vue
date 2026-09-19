@@ -90,6 +90,16 @@
 
             <!-- Subscribe -->
             <template v-else-if="activeTab === 'subscription'">
+              <div v-if="hasResetCardShortcut" class="mb-3 flex justify-end">
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-primary-800 dark:bg-primary-950/30 dark:text-primary-200 dark:hover:border-primary-700 dark:hover:bg-primary-900/40"
+                  @click="focusResetCardShop"
+                >
+                  <Icon name="refresh" size="xs" />
+                  {{ t('payment.resetShop.quickEntry') }}
+                </button>
+              </div>
               <div v-if="checkout.plans.length === 0" class="card py-16 text-center">
                 <Icon name="gift" size="xl" class="mx-auto mb-3 text-gray-300 dark:text-dark-600" />
                 <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noPlans') }}</p>
@@ -109,9 +119,11 @@
               </template>
 
               <ResetCardShop
+                ref="resetCardShop"
                 :subscriptions="activeSubscriptions"
                 :plans="checkout.plans"
                 :disabled="submitting || paymentPhase === 'paying'"
+                :target-subscription-id="resetCardTargetSubscriptionId"
                 @checkout="startResetCardCheckout"
               />
 
@@ -343,9 +355,53 @@ const appStore = useAppStore()
 const user = computed(() => authStore.user)
 const activeSubscriptions = computed(() => subscriptionStore.activeSubscriptions)
 
+type ResetCardShopHandle = {
+  focusOffer: (subscriptionId?: number | null) => boolean
+}
+
+const resetCardShop = ref<ResetCardShopHandle | null>(null)
+const resetCardTargetSubscriptionId = ref<number | null>(null)
+
 function getDaysRemaining(expiresAt: string): number {
   const diff = new Date(expiresAt).getTime() - Date.now()
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
+}
+
+function isActiveOpenAISubscription(subscription: UserSubscription): boolean {
+  if (subscription.status !== 'active' || subscription.group?.platform !== 'openai') return false
+  if (!subscription.expires_at) return true
+  const expiresAt = Date.parse(subscription.expires_at)
+  return Number.isFinite(expiresAt) && expiresAt > Date.now()
+}
+
+function hasResetCardOffer(subscription: UserSubscription): boolean {
+  if (!isActiveOpenAISubscription(subscription)) return false
+  const monthlyPlans = checkout.value.plans.filter(plan => plan.group_id === subscription.group_id && plan.group_platform === 'openai'
+    && plan.currency?.toUpperCase() === 'CNY' && ((['month', 'months'].includes(plan.validity_unit || '') && plan.validity_days === 1)
+      || (['day', 'days', ''].includes(plan.validity_unit || '') && plan.validity_days === 30)))
+  if (monthlyPlans.length !== 1 || monthlyPlans[0].reset_card_eligibility?.visible === false) return false
+  const price = monthlyPlans[0].entitlements?.reset_card_purchase_price ?? Math.round(monthlyPlans[0].price / 3 * 100) / 100
+  return Number.isFinite(price) && price > 0
+}
+
+const hasResetCardShortcut = computed(() => activeSubscriptions.value.some(hasResetCardOffer))
+
+function isResetCardPurchaseQuery(): boolean {
+  return route.query.purchase === 'reset_card'
+}
+
+function resetCardSubscriptionIdFromQuery(): number | null {
+  if (!isResetCardPurchaseQuery()) return null
+  const subscriptionId = Number(route.query.subscription_id)
+  return Number.isSafeInteger(subscriptionId) && subscriptionId > 0 ? subscriptionId : null
+}
+
+async function focusResetCardShop() {
+  await nextTick()
+  const shop = resetCardShop.value
+  if (typeof shop?.focusOffer === 'function') {
+    shop.focusOffer(resetCardTargetSubscriptionId.value)
+  }
 }
 
 
@@ -1262,7 +1318,6 @@ async function startResetCardCheckout(payload: { subscription: UserSubscription;
   }
   selectedMethod.value = paymentType
   invalidateCouponQuote()
-  await nextTick()
   const attempt = getOrCreateResetCardCheckoutAttempt(window.localStorage, {
     userId,
     subscriptionId: payload.subscription.id,
@@ -1849,20 +1904,24 @@ onMounted(async () => {
     // Renewal deep links are ignored while subscriptions are disabled.
     if (route.query.tab === 'subscription' && subscriptionEnabled.value) {
       activeTab.value = 'subscription'
-      const requestedPlanID = Number(route.query.plan_id)
-      const requestedPlan = Number.isFinite(requestedPlanID)
-        ? checkout.value.plans.find(plan => plan.id === requestedPlanID)
-        : undefined
-      if (requestedPlan) {
-        selectPlan(requestedPlan)
-      } else if (route.query.group) {
-        const groupId = Number(route.query.group)
-        const groupPlans = checkout.value.plans.filter(p => p.group_id === groupId)
-        if (groupPlans.length === 1) {
-          selectPlan(groupPlans[0])
-        } else if (groupPlans.length > 1) {
-          renewGroupId.value = groupId
-          showRenewalModal.value = true
+      if (isResetCardPurchaseQuery()) {
+        resetCardTargetSubscriptionId.value = resetCardSubscriptionIdFromQuery()
+      } else {
+        const requestedPlanID = Number(route.query.plan_id)
+        const requestedPlan = Number.isFinite(requestedPlanID)
+          ? checkout.value.plans.find(plan => plan.id === requestedPlanID)
+          : undefined
+        if (requestedPlan) {
+          selectPlan(requestedPlan)
+        } else if (route.query.group) {
+          const groupId = Number(route.query.group)
+          const groupPlans = checkout.value.plans.filter(p => p.group_id === groupId)
+          if (groupPlans.length === 1) {
+            selectPlan(groupPlans[0])
+          } else if (groupPlans.length > 1) {
+            renewGroupId.value = groupId
+            showRenewalModal.value = true
+          }
         }
       }
     }
@@ -1870,7 +1929,11 @@ onMounted(async () => {
   finally { loading.value = false }
   // Fetch active subscriptions (uses cache, non-blocking); skipped when the subscription feature is off
   if (subscriptionEnabled.value) {
-    subscriptionStore.fetchActiveSubscriptions().catch(() => {})
+    subscriptionStore.fetchActiveSubscriptions().then(() => {
+      if (resetCardTargetSubscriptionId.value !== null) {
+        void focusResetCardShop()
+      }
+    }).catch(() => {})
   }
 })
 </script>

@@ -635,6 +635,28 @@ func (s *PaymentService) handleResetCardProviderCreateError(ctx context.Context,
 	// has been persisted, so preserve the local uncertain state for a safe
 	// idempotent replay.
 	if sel.ProviderKey == payment.TypeUnifiedPay {
+		// Only a first, provably unadmitted create can relinquish the fence.
+		// A rejection of a later replay says nothing about an earlier uncertain
+		// request; conflicts, transport errors and retryable responses stay fenced.
+		var apiErr *unifiedpay.APIError
+		definitelyRejected := errors.Is(providerErr, unifiedpay.ErrInvalidRequest) ||
+			(errors.As(providerErr, &apiErr) && apiErr.StatusCode == 400 && apiErr.Code == "invalid_request" && !apiErr.Retryable)
+		if lease != nil && !lease.previouslyUncertain && definitelyRejected {
+			released, releaseErr := s.releaseResetCardDispatch(ctx, order, lease, false)
+			if releaseErr != nil {
+				return nil, releaseErr
+			}
+			if !released {
+				return nil, infraerrors.Conflict("RESET_CARD_DISPATCH_CONFLICT", "reset card payment state changed while rejection was recorded")
+			}
+			detail := map[string]any{"reason": "payment service rejected the create before order admission"}
+			if apiErr != nil {
+				detail["upstream_status"] = apiErr.StatusCode
+				detail["upstream_code"] = apiErr.Code
+			}
+			s.writeAuditLog(ctx, order.ID, "RESET_CARD_CREATE_REJECTED", sel.ProviderKey, detail)
+			return nil, infraerrors.ServiceUnavailable("RESET_CARD_PAYMENT_REJECTED", "payment service rejected this checkout; retry after the payment configuration is corrected")
+		}
 		s.writeAuditLog(ctx, order.ID, resetCardCreateUnconfirmedAuditAction, sel.ProviderKey, map[string]any{
 			"out_trade_no": order.OutTradeNo,
 			"payment_type": req.PaymentType,

@@ -24,8 +24,12 @@ const ConfirmDialogStub = {
   template: '<div v-if="show"><p>{{ message }}</p><slot /><button data-testid="confirm-reset-card" @click="$emit(\'confirm\')" /></div>',
 }
 
-const render = (subscriptions = [sub], planOverrides: Record<string, unknown> = {}) => mount(ResetCardShop, {
-  props: { subscriptions, plans: [{ ...plans[0], ...planOverrides }] },
+const render = (
+  subscriptions = [sub],
+  planOverrides: Record<string, unknown> = {},
+  targetSubscriptionId: number | null = null,
+) => mount(ResetCardShop, {
+  props: { subscriptions, plans: [{ ...plans[0], ...planOverrides }], targetSubscriptionId },
   global: { stubs: { ConfirmDialog: ConfirmDialogStub } },
 })
 
@@ -120,5 +124,19 @@ describe('ResetCardShop', () => {
     expect(wrapper.text()).toContain('payment.resetShop.requiresSubscription')
     expect(wrapper.find('button').exists()).toBe(false)
     expect(getResetCardQuote).not.toHaveBeenCalled()
+  })
+
+  it('highlights and focuses the deep-linked offer without quoting or opening checkout', () => {
+    const wrapper = render([sub], {}, 7)
+    const offer = wrapper.get('[data-reset-card-offer="7"]')
+
+    expect(offer.attributes('aria-current')).toBe('true')
+    expect(offer.classes()).toContain('border-primary-500')
+    expect(getResetCardQuote).not.toHaveBeenCalled()
+
+    const shop = wrapper.vm as unknown as { focusOffer: () => boolean }
+    expect(shop.focusOffer()).toBe(true)
+    expect(getResetCardQuote).not.toHaveBeenCalled()
+    expect(wrapper.emitted('checkout')).toBeUndefined()
   })
 })

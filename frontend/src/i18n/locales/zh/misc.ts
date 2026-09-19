@@ -427,6 +427,7 @@ export default {
       "tierBindingConfirm": "该卡仅可用于同类型的当前等级或更低等级；更高等级订阅不会显示或使用低等级卡。",
       "exactBindingConfirm": "该套餐尚未配置兼容等级；这张卡只会绑定到当前这笔订阅，不能用于其他订阅。",
       "buy": "选择支付方式",
+      "quickEntry": "购买重置卡",
       "success": "订单已创建，请完成支付后使用重置卡。",
       "failed": "订单未创建，请重试。",
       "paymentUnavailable": "当前没有可用于这张重置卡的支付宝或微信支付通道。"
@@ -730,6 +731,9 @@ export default {
       REFUND_AMOUNT_UNREPRESENTABLE: '该金额无法精确换算订阅时长，请调整金额。',
       UNSUPPORTED_ORDER_TYPE: '该订单类型不支持此退款流程。',
       REFUND_FAILED: '退款失败',
+      RESET_CARD_ORDER_IN_PROGRESS: '支付订单正在创建，请稍后在此页面重试，无需重复点击。',
+      RESET_CARD_PAYMENT_CREATE_UNCONFIRMED: '正在确认支付订单，请稍后在此页面重试，系统会继续处理同一笔订单。',
+      RESET_CARD_PAYMENT_REJECTED: '支付服务暂时无法受理此订单，请联系管理员检查支付配置后重试。',
       RESET_CARD_TIER_POLICY_UNAVAILABLE: '重置卡兼容等级规则暂时不可用，请稍后重试。',
       RESET_CARD_TIER_GROUP_INVALID: '该订阅分组不能配置重置卡兼容等级规则。',
       RESET_CARD_TIER_FAMILY_INVALID: '兼容类型标识必须以小写字母开头，且只能使用小写字母、数字、下划线或连字符。',

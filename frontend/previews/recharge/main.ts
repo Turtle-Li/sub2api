@@ -5,6 +5,7 @@ import { i18n, loadLocaleMessages } from '@/i18n'
 import { apiClient } from '@/api/client'
 import { useAppStore } from '@/stores/app'
 import PaymentView from '@/views/user/PaymentView.vue'
+import SubscriptionsView from '@/views/user/SubscriptionsView.vue'
 import AdminPaymentCouponsView from '@/views/admin/orders/AdminPaymentCouponsView.vue'
 import AdminOrdersView from '@/views/admin/orders/AdminOrdersView.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
@@ -12,8 +13,54 @@ import catalog from './catalog.json'
 import '@/style.css'
 
 const method = { daily_limit: 0, daily_used: 0, daily_remaining: 0, single_min: 0, single_max: 0, fee_rate: 0, available: true }
-const previewPlans = () => catalog.plans.map(plan => ({ ...plan, ...catalog.groups[String(plan.group_id) as keyof typeof catalog.groups] }))
+const previewGroups = {
+  1: { id: 1, name: 'Plus', description: '日常编程与轻量任务', platform: 'openai', ...catalog.groups['1'] },
+  2: { id: 2, name: '5X Pro', description: '更高用量，适合高频开发', platform: 'openai', ...catalog.groups['2'] },
+}
+const previewPlans = () => catalog.plans.map(plan => {
+  const group = previewGroups[plan.group_id as keyof typeof previewGroups]
+  return {
+    ...plan,
+    group_name: group.name,
+    group_platform: group.platform,
+    rate_multiplier: group.rate_multiplier,
+    weekly_limit_usd: group.weekly_limit_usd,
+    monthly_limit_usd: group.monthly_limit_usd,
+    currency: 'CNY',
+    sort_order: plan.id,
+    entitlements: {
+      ...plan.entitlements,
+      reset_card_purchase_price: plan.group_id === 1 ? 40 : 180,
+    },
+    reset_card_eligibility: { visible: true, can_purchase: true },
+  }
+})
 const checkout = { methods: { alipay: method, wxpay: method }, global_min: 0, global_max: 0, plans: previewPlans(), recharge_options: catalog.recharge_options, balance_disabled: false, balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, help_text: '', help_image_url: '', stripe_publishable_key: '' }
+const previewNow = Date.now()
+const previewSubscriptions = [
+  {
+    id: 9101, user_id: 1, group_id: 1, status: 'active', starts_at: new Date(previewNow - 14 * 24 * 60 * 60_000).toISOString(),
+    daily_usage_usd: 42, weekly_usage_usd: 96, monthly_usage_usd: 188,
+    daily_window_start: new Date(previewNow - 5 * 60 * 60_000).toISOString(),
+    weekly_window_start: new Date(previewNow - 2 * 24 * 60 * 60_000).toISOString(),
+    monthly_window_start: new Date(previewNow - 9 * 24 * 60 * 60_000).toISOString(),
+    created_at: new Date(previewNow - 14 * 24 * 60 * 60_000).toISOString(), updated_at: new Date(previewNow).toISOString(),
+    expires_at: new Date(previewNow + 16 * 24 * 60 * 60_000).toISOString(), group: previewGroups[1],
+    reset_card_count: 2,
+    reset_card_batches: [{ remaining: 2, expires_at: new Date(previewNow + 12 * 24 * 60 * 60_000).toISOString() }],
+  },
+  {
+    id: 9102, user_id: 1, group_id: 2, status: 'active', starts_at: new Date(previewNow - 7 * 24 * 60 * 60_000).toISOString(),
+    daily_usage_usd: 180, weekly_usage_usd: 430, monthly_usage_usd: 960,
+    daily_window_start: new Date(previewNow - 3 * 60 * 60_000).toISOString(),
+    weekly_window_start: new Date(previewNow - 3 * 24 * 60 * 60_000).toISOString(),
+    monthly_window_start: new Date(previewNow - 11 * 24 * 60 * 60_000).toISOString(),
+    created_at: new Date(previewNow - 7 * 24 * 60 * 60_000).toISOString(), updated_at: new Date(previewNow).toISOString(),
+    expires_at: new Date(previewNow + 27 * 24 * 60 * 60_000).toISOString(), group: previewGroups[2],
+    reset_card_count: 0,
+    reset_card_batches: [],
+  },
+]
 const previewCoupon = {
   id: 2026,
   code: 'SAVE2026',
@@ -95,6 +142,7 @@ function previewResponse(config: Parameters<NonNullable<typeof apiClient.default
 
 const previewCouponView = new URLSearchParams(window.location.search).get('view') === 'coupons'
 const previewConfirmationView = new URLSearchParams(window.location.search).get('view') === 'confirmation'
+const previewSubscriptionsView = new URLSearchParams(window.location.search).get('view') === 'subscriptions'
 const previewDeadline = new Date(Date.now() + 30 * 60_000).toISOString()
 const confirmationPreview = { render: () => h('main', { class: 'mx-auto max-w-lg p-6' }, [h(PaymentStatusPanel, {
   orderId: 202601, amount: 104, payAmount: 80, currency: 'CNY', paymentType: 'alipay', orderType: 'balance',
@@ -130,6 +178,22 @@ apiClient.defaults.adapter = async config => {
     })
   }
   if (requestMethod !== 'get') throw new Error('预览不支持创建订单或支付')
+  if (requestURL === '/subscriptions' || requestURL === '/subscriptions/active') return previewResponse(config, previewSubscriptions)
+  if (/^\/subscriptions\/\d+\/reset-card-quote$/.test(requestURL)) {
+    const subscriptionId = Number(requestURL.split('/')[2])
+    const subscription = previewSubscriptions.find(item => item.id === subscriptionId)
+    if (!subscription) throw new Error('预览订阅不存在')
+    const plan = previewPlans().find(item => item.group_id === subscription.group_id && item.period_label === 'month')
+    if (!plan) throw new Error('预览订阅套餐不存在')
+    return previewResponse(config, {
+      subscription_id: subscription.id,
+      group_id: subscription.group_id,
+      plan_id: plan.id,
+      monthly_price: plan.price,
+      price: plan.entitlements.reset_card_purchase_price,
+      expires_at: subscription.expires_at,
+    })
+  }
   if (requestURL === '/payment/orders/202601') return previewResponse(config, { ...previewOrder, status: 'PENDING', payment_status: 'UNPAID', fulfillment_status: 'NOT_STARTED', paid_at: null, completed_at: null, expires_at: previewDeadline })
   if (requestURL.endsWith('/admin/payment/orders/202601')) return previewResponse(config, { order: previewOrder, audit_logs: [] })
   if (requestURL.endsWith('/admin/payment/orders/202602')) return previewResponse(config, { order: previewReviewOrder, audit_logs: [] })
@@ -156,11 +220,13 @@ const app = createApp({
 const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/admin/orders', component: AdminOrdersView },
   { path: '/admin/orders/coupons', component: AdminPaymentCouponsView },
-  { path: '/:pathMatch(.*)*', component: previewCouponView ? AdminPaymentCouponsView : previewConfirmationView ? confirmationPreview : PaymentView },
+  { path: '/subscriptions', component: SubscriptionsView },
+  { path: '/purchase', component: PaymentView },
+  { path: '/:pathMatch(.*)*', component: previewCouponView ? AdminPaymentCouponsView : previewConfirmationView ? confirmationPreview : previewSubscriptionsView ? SubscriptionsView : PaymentView },
 ] })
 app.use(pinia).use(i18n).use(router)
 const store = useAppStore()
-store.cachedPublicSettings = { subscription_enabled: true, billing_mode: 'mixed', server_utc_offset: 8 } as never
+store.cachedPublicSettings = { subscription_enabled: true, payment_enabled: true, payment_entry_enabled: true, billing_mode: 'mixed', server_utc_offset: 8 } as never
 store.publicSettingsLoaded = true
 await loadLocaleMessages('zh')
 i18n.global.locale.value = 'zh'
