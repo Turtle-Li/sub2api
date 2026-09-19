@@ -36,3 +36,10 @@
 - 自动合并的payment store接纳并发configPromise；统一支付gateway、webhook inbox、到期worker、退款恢复、每月重置卡发放及cleanup链经独立审查未丢失。上游没有新增Ent/schema迁移，未启用插件能力不在本次扩大配置范围。
 
 前端独立审查最终153项通过；三项界面P2已修复且复审通过。合并后的全量测试和线上记录待完成后补录。
+
+### 合并后验证（候选，尚未上线）
+
+- `go test -p 4 -tags unit ./... -count=1`、`go test -p 2 -tags integration ./... -count=1`、`go vet ./...`、embed web/server测试均通过。
+- 前端lint、生产构建（含vue-tsc/i18n）通过。全量334文件中333文件/2598项通过，新增上游退款余额测试旧契约的4项已适配为服务端review边界，相关退款套件48项全部通过；其他测试无失败。
+- 合并的前端冲突区域独立定向检查37项通过；通用弹窗及本地退款审核契约14项通过。退款测试适配后typecheck再次通过。
+- 当前线上仍为95075af9；新预发布备份 `/opt/sub2api-db-backups/sub2api-db-backup-20260919-192813.tar.gz` 已完成，隔离还原验收执行中。
