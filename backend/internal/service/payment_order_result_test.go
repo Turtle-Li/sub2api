@@ -134,6 +134,78 @@ func TestBuildCreateOrderResponseDefaultsToOrderCreated(t *testing.T) {
 	}
 }
 
+func TestBuildCreateOrderResponseExposesOnlyTrustedUnifiedAlipayFrame(t *testing.T) {
+	t.Parallel()
+
+	trustedFrame := "https://openapi.alipay.com/gateway.do?biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&method=alipay.trade.page.pay&sign=test-sign&sign_type=RSA2"
+	for _, testCase := range []struct {
+		name        string
+		selection   *payment.InstanceSelection
+		paymentType string
+		frame       string
+		want        string
+	}{
+		{name: "trusted unified Alipay", selection: &payment.InstanceSelection{ProviderKey: payment.TypeUnifiedPay}, paymentType: payment.TypeAlipay, frame: trustedFrame, want: trustedFrame},
+		{name: "untrusted unified Alipay", selection: &payment.InstanceSelection{ProviderKey: payment.TypeUnifiedPay}, paymentType: payment.TypeAlipay, frame: "https://attacker.example/frame"},
+		{name: "legacy Alipay provider", selection: &payment.InstanceSelection{ProviderKey: payment.TypeAlipay}, paymentType: payment.TypeAlipay, frame: trustedFrame},
+		{name: "unified WeChat", selection: &payment.InstanceSelection{ProviderKey: payment.TypeUnifiedPay}, paymentType: payment.TypeWxpay, frame: trustedFrame},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := buildCreateOrderResponse(
+				&dbent.PaymentOrder{ID: 704, OutTradeNo: "sub2_frame_704", ExpiresAt: time.Now().Add(time.Hour)},
+				CreateOrderRequest{PaymentType: testCase.paymentType}, 1,
+				testCase.selection,
+				&payment.CreatePaymentResponse{TradeNo: "payment-order-704", CheckoutFrameURL: testCase.frame},
+				payment.CreatePaymentResultOrderCreated,
+			)
+			require.Equal(t, testCase.want, response.CheckoutFrameURL)
+		})
+	}
+}
+
+func TestBuildResetCardOrderResponseRevalidatesPersistedAlipayFrame(t *testing.T) {
+	t.Parallel()
+
+	trustedFrame := "https://openapi.alipay.com/gateway.do?biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&method=alipay.trade.page.pay&sign=test-sign&sign_type=RSA2"
+	now := time.Now()
+	for _, testCase := range []struct {
+		name, status, paymentType, providerKey, frame, wantFrame string
+		expiresAt                                                time.Time
+		wantPayURL                                               bool
+	}{
+		{name: "pending unified Alipay snapshot", status: OrderStatusPending, paymentType: payment.TypeAlipay, providerKey: payment.TypeUnifiedPay, frame: trustedFrame, wantFrame: trustedFrame, expiresAt: now.Add(time.Hour), wantPayURL: true},
+		{name: "legacy pending order without frame", status: OrderStatusPending, paymentType: payment.TypeAlipay, providerKey: payment.TypeUnifiedPay, expiresAt: now.Add(time.Hour), wantPayURL: true},
+		{name: "malicious persisted frame", status: OrderStatusPending, paymentType: payment.TypeAlipay, providerKey: payment.TypeUnifiedPay, frame: "https://attacker.example/frame", expiresAt: now.Add(time.Hour), wantPayURL: true},
+		{name: "expired pending order", status: OrderStatusPending, paymentType: payment.TypeAlipay, providerKey: payment.TypeUnifiedPay, frame: trustedFrame, expiresAt: now.Add(-time.Minute)},
+		{name: "terminal order", status: OrderStatusCompleted, paymentType: payment.TypeAlipay, providerKey: payment.TypeUnifiedPay, frame: trustedFrame, expiresAt: now.Add(time.Hour)},
+		{name: "unified WeChat", status: OrderStatusPending, paymentType: payment.TypeWxpay, providerKey: payment.TypeUnifiedPay, frame: trustedFrame, expiresAt: now.Add(time.Hour), wantPayURL: true},
+		{name: "legacy Alipay provider", status: OrderStatusPending, paymentType: payment.TypeAlipay, providerKey: payment.TypeAlipay, frame: trustedFrame, expiresAt: now.Add(time.Hour), wantPayURL: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			providerKey := testCase.providerKey
+			payURL := "https://pay.totools.cn/checkout/original"
+			order := &dbent.PaymentOrder{
+				ID:          705,
+				Status:      testCase.status,
+				PaymentType: testCase.paymentType,
+				ProviderKey: &providerKey,
+				ExpiresAt:   testCase.expiresAt,
+				PayURL:      &payURL,
+				ProviderSnapshot: map[string]any{
+					"schema_version":     2,
+					"provider_key":       testCase.providerKey,
+					"payment_order_id":   "11111111-2222-4333-8444-555555555555",
+					"checkout_frame_url": testCase.frame,
+				},
+			}
+
+			response := buildResetCardOrderResponse(order)
+			require.Equal(t, testCase.wantFrame, response.CheckoutFrameURL)
+			require.Equal(t, testCase.wantPayURL, response.PayURL != "")
+		})
+	}
+}
+
 func TestBuildCreateOrderResponseCopiesJSAPIPayload(t *testing.T) {
 	t.Parallel()
 
@@ -445,38 +517,26 @@ func TestComputeValidityDaysSupportsSingularAndPluralUnits(t *testing.T) {
 	}
 }
 
-func TestBuildPaymentSubjectAppliesAffixToSubscriptionPlanProductName(t *testing.T) {
+func TestBuildPaymentSubjectCustomerDescriptions(t *testing.T) {
 	t.Parallel()
-
-	svc := &PaymentService{}
-	cfg := &PaymentConfig{
-		ProductNamePrefix: "PRE",
-		ProductNameSuffix: "SUF",
-	}
-	plan := &dbent.SubscriptionPlan{
-		Name:        "Pro Monthly",
-		ProductName: "Claude Pro",
-	}
-
-	got := svc.buildPaymentSubject(plan, 0, cfg, nil)
-	if got != "PRE Claude Pro SUF" {
-		t.Fatalf("buildPaymentSubject() = %q, want %q", got, "PRE Claude Pro SUF")
-	}
-}
-
-func TestBuildPaymentSubjectAppliesAffixToSubscriptionPlanDefaultName(t *testing.T) {
-	t.Parallel()
-
-	svc := &PaymentService{}
-	cfg := &PaymentConfig{
-		ProductNamePrefix: "PRE",
-		ProductNameSuffix: "SUF",
-	}
-	plan := &dbent.SubscriptionPlan{Name: "Team Monthly"}
-
-	got := svc.buildPaymentSubject(plan, 0, cfg, nil)
-	if got != "PRE Sub2API Subscription Team Monthly SUF" {
-		t.Fatalf("buildPaymentSubject() = %q, want %q", got, "PRE Sub2API Subscription Team Monthly SUF")
+	cfg := &PaymentConfig{ProductNamePrefix: "Sub2API", ProductNameSuffix: "INTERNAL"}
+	for _, tc := range []struct {
+		name string
+		plan *dbent.SubscriptionPlan
+		want string
+	}{
+		{"balance", nil, "余额充值"},
+		{"plus", &dbent.SubscriptionPlan{Name: "GPT Plus 月付"}, "Plus订阅"},
+		{"pro", &dbent.SubscriptionPlan{Name: "5X Pro 年付", ProductName: "Sub2API"}, "Pro订阅"},
+		{"custom", &dbent.SubscriptionPlan{Name: "Team Monthly"}, "订阅"},
+		{"not substring", &dbent.SubscriptionPlan{Name: "Professional"}, "订阅"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := (&PaymentService{}).buildPaymentSubject(tc.plan, 99, cfg, nil)
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

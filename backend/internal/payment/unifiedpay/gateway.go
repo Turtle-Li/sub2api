@@ -259,11 +259,15 @@ func (g *Gateway) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 		return nil, ErrInvalidRequest
 	}
 	returnURL := g.returnURL
+	metadata := map[string]string{"source": "sub2"}
+	if paymentMethod == PaymentMethodAlipay {
+		metadata["checkout_presentation"] = "embedded_qr"
+	}
 	input := createPaymentOrderRequest{
 		ProductOrderNo: req.OrderID, OrderType: strings.TrimSpace(req.OrderType), AmountFen: amountFen,
 		Currency: payment.DefaultPaymentCurrency, Subject: strings.TrimSpace(req.Subject),
 		PaymentMethod: paymentMethod, ExpiresInSeconds: req.ExpiresInSeconds,
-		ReturnURL: &returnURL, Metadata: map[string]string{"source": "sub2"},
+		ReturnURL: &returnURL, Metadata: metadata,
 	}
 	if input.Subject == "" || !utf8.ValidString(input.Subject) || utf8.RuneCountInString(input.Subject) > 120 {
 		return nil, ErrInvalidRequest
@@ -297,6 +301,9 @@ func (g *Gateway) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 			return nil, ErrInvalidResponse
 		}
 		response.QRCode = strings.TrimSpace(*result.CheckoutCodeURL)
+	}
+	if paymentMethod == PaymentMethodAlipay && result.Status == StatusPendingPayment && result.CheckoutFrameURL != nil {
+		response.CheckoutFrameURL = AlipayEmbeddedCheckoutFrameURL(*result.CheckoutFrameURL)
 	}
 	return response, nil
 }
@@ -340,6 +347,30 @@ func (c *client) validCheckoutURL(raw string) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, c.baseURL.Scheme) && strings.EqualFold(parsed.Host, c.baseURL.Host)
+}
+
+// RecoverAlipayCheckoutFrameURL obtains a current, display-only embedded QR
+// presentation from the authenticated payment API. It does not create, close,
+// or otherwise mutate a payment order. Empty means no currently valid frame is
+// available, including a terminal or manual-review order.
+func (g *Gateway) RecoverAlipayCheckoutFrameURL(ctx context.Context, paymentOrderID, productOrderNo string) (string, error) {
+	if !g.Enabled() {
+		return "", ErrDisabled
+	}
+	if !validUUID(paymentOrderID) || !validIdentifier(productOrderNo, 6, 64) {
+		return "", ErrInvalidRequest
+	}
+	result, err := g.client.getPaymentOrder(ctx, paymentOrderID)
+	if err != nil {
+		return "", err
+	}
+	if result.ProductOrderNo != productOrderNo || result.PaymentMethod != PaymentMethodAlipay {
+		return "", ErrInvalidResponse
+	}
+	if result.Status != StatusPendingPayment || result.NeedsManualReview || result.CheckoutFrameURL == nil {
+		return "", nil
+	}
+	return AlipayEmbeddedCheckoutFrameURL(*result.CheckoutFrameURL), nil
 }
 
 func (g *Gateway) QueryOrder(ctx context.Context, paymentOrderID string) (*payment.QueryOrderResponse, error) {

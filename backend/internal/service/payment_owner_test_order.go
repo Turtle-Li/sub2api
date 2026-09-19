@@ -374,7 +374,7 @@ func (c *ownerTestOrderContext) attachLedger(cfg *PaymentConfig) error {
 			Amount:          c.amountDecimal,
 			Currency:        payment.DefaultPaymentCurrency,
 			PaymentType:     c.input.PaymentType,
-			Subject:         "Sub2API admin test " + c.amountDecimal + " CNY",
+			Subject:         "余额充值",
 			ReturnURL:       ownerTestReturnURL,
 			ExpiresInSecond: ttl,
 			IdempotencyKey:  "sub2:create:" + c.outTradeNo,
@@ -762,6 +762,9 @@ func (s *PaymentService) finishOwnerTestProviderSuccess(ctx context.Context, ord
 	nextLedger.AuthoritativeExpiresAt = &expiresAt
 	snapshot := clonePaymentOrderSnapshot(order.ProviderSnapshot)
 	snapshot["payment_order_id"] = strings.TrimSpace(providerResp.TradeNo)
+	if frameURL := paymentOrderCheckoutFrameURLFromProviderResponse(owner.selection, ledger.ProviderRequest.PaymentType, providerResp); frameURL != "" {
+		snapshot[paymentOrderCheckoutFrameURLSnapshotKey] = frameURL
+	}
 	snapshot[ownerTestProviderSnapshotKey] = nextLedger
 	updated, err := s.entClient.PaymentOrder.Update().Where(
 		paymentorder.IDEQ(order.ID),
@@ -812,6 +815,7 @@ func buildOwnerTestOrderResponse(order *dbent.PaymentOrder, owner *ownerTestOrde
 	paymentType := ""
 	paymentMode := ""
 	payURL := ""
+	checkoutFrameURL := ""
 	qrCode := ""
 	if ledger != nil {
 		paymentType = ledger.ProviderRequest.PaymentType
@@ -823,22 +827,24 @@ func buildOwnerTestOrderResponse(order *dbent.PaymentOrder, owner *ownerTestOrde
 	// not an invitation to reuse a stale browser checkout or QR payload.
 	if order.Status == OrderStatusPending && order.ExpiresAt.After(time.Now()) {
 		payURL = psStringValue(order.PayURL)
+		checkoutFrameURL = paymentOrderCheckoutFrameURLFromSnapshot(order)
 		qrCode = psStringValue(order.QrCode)
 	}
 	return &CreateOrderResponse{
-		OrderID:     order.ID,
-		Amount:      order.Amount,
-		PayAmount:   order.PayAmount,
-		FeeRate:     order.FeeRate,
-		Status:      order.Status,
-		ResultType:  payment.CreatePaymentResultOrderCreated,
-		PaymentType: paymentType,
-		OutTradeNo:  order.OutTradeNo,
-		PayURL:      payURL,
-		QRCode:      qrCode,
-		Currency:    payment.DefaultPaymentCurrency,
-		ExpiresAt:   order.ExpiresAt,
-		PaymentMode: paymentMode,
+		OrderID:          order.ID,
+		Amount:           order.Amount,
+		PayAmount:        order.PayAmount,
+		FeeRate:          order.FeeRate,
+		Status:           order.Status,
+		ResultType:       payment.CreatePaymentResultOrderCreated,
+		PaymentType:      paymentType,
+		OutTradeNo:       order.OutTradeNo,
+		PayURL:           payURL,
+		CheckoutFrameURL: checkoutFrameURL,
+		QRCode:           qrCode,
+		Currency:         payment.DefaultPaymentCurrency,
+		ExpiresAt:        order.ExpiresAt,
+		PaymentMode:      paymentMode,
 	}
 }
 

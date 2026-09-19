@@ -9,7 +9,8 @@
         :aria-labelledby="dialogId"
         role="dialog"
         aria-modal="true"
-        @click.self="handleClose"
+        @pointerdown="recordBackdropPointerDown"
+        @click.self="handleBackdropClick"
       >
         <!-- Modal panel -->
         <div
@@ -52,6 +53,7 @@
 // Normal script scope is shared by every dialog instance.
 let dialogIdCounter = 0
 let bodyLockCount = 0
+const openDialogIds: string[] = []
 </script>
 
 <script setup lang="ts">
@@ -90,7 +92,7 @@ interface Emits {
 const props = withDefaults(defineProps<Props>(), {
   width: 'normal',
   closeOnEscape: true,
-  closeOnClickOutside: false,
+  closeOnClickOutside: true,
   showCloseButton: true,
   zIndex: 50,
   keepMounted: false,
@@ -98,6 +100,8 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<Emits>()
+
+let backdropPointerStarted = false
 
 // Custom z-index style (overrides the default z-50 from CSS)
 const zIndexStyle = computed(() => {
@@ -122,6 +126,33 @@ const handleClose = () => {
   if (props.closeOnClickOutside) {
     emit('close')
   }
+}
+
+function recordBackdropPointerDown(event: PointerEvent): void {
+  // A click is only a backdrop dismissal when its pointer began on the backdrop.
+  backdropPointerStarted = event.target === event.currentTarget
+}
+
+function handleBackdropClick(event: MouseEvent): void {
+  if (!backdropPointerStarted || event.target !== event.currentTarget) return
+  backdropPointerStarted = false
+  handleClose()
+}
+
+function activateDialog(): void {
+  const existingIndex = openDialogIds.indexOf(dialogId)
+  if (existingIndex >= 0) openDialogIds.splice(existingIndex, 1)
+  openDialogIds.push(dialogId)
+}
+
+function deactivateDialog(): void {
+  const existingIndex = openDialogIds.indexOf(dialogId)
+  if (existingIndex >= 0) openDialogIds.splice(existingIndex, 1)
+  backdropPointerStarted = false
+}
+
+function isTopmostDialog(): boolean {
+  return openDialogIds[openDialogIds.length - 1] === dialogId
 }
 
 function acquireBodyLock(): void {
@@ -191,7 +222,7 @@ function trapFocus(event: KeyboardEvent): void {
 }
 
 const handleKeydown = (event: KeyboardEvent) => {
-  if (!props.show) return
+  if (!props.show || !isTopmostDialog()) return
   if (event.key === 'Escape' && props.closeOnEscape) {
     event.preventDefault()
     emit('close')
@@ -207,6 +238,7 @@ watch(
   () => props.show,
   async (isOpen) => {
     if (isOpen) {
+      activateDialog()
       // 保存当前焦点元素
       previousActiveElement = document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -221,6 +253,7 @@ watch(
       }
       if (props.show) focusInitialElement()
     } else {
+      deactivateDialog()
       releaseBodyLock()
       // 恢复之前的焦点
       restorePreviousFocus()
@@ -235,6 +268,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
+  deactivateDialog()
   releaseBodyLock()
   // A parent may remove an open dialog without first setting `show` false.
   // Restore the connected opener in that path as well.

@@ -36,19 +36,31 @@
         <!-- Order Info -->
         <div v-if="order" class="rounded-xl bg-white p-5 shadow-sm dark:bg-dark-800">
           <div class="space-y-3 text-sm">
-            <div v-if="hasOrderId(order)" class="flex justify-between">
-              <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">#{{ order.id }}</span>
+            <div v-if="hasOrderId(order)" class="flex items-start justify-between gap-3">
+              <span class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
+              <span class="min-w-0 text-right font-medium text-gray-900 dark:text-white">#{{ order.id }}</span>
             </div>
-            <div v-if="order.out_trade_no" class="flex justify-between">
-              <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">{{ order.out_trade_no }}</span>
+            <div v-if="order.out_trade_no" class="flex items-start justify-between gap-3">
+              <span class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</span>
+              <div class="flex min-w-0 items-start justify-end gap-1">
+                <code data-test="payment-result-page-order-number" class="min-w-0 break-all text-right font-mono text-xs text-gray-900 dark:text-white">{{ order.out_trade_no }}</code>
+                <button
+                  data-test="copy-payment-result-page-order"
+                  type="button"
+                  class="inline-flex shrink-0 rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+                  :aria-label="t('common.copy')"
+                  :title="t('common.copy')"
+                  @click="copyOrderNumber(order.out_trade_no)"
+                >
+                  <Icon name="copy" size="xs" />
+                </button>
+              </div>
             </div>
-            <div v-if="hasAmountFields(order)" class="flex justify-between">
+            <div v-if="hasAmountFields(order) && order.order_type === 'balance'" class="flex justify-between">
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.baseAmount') }}</span>
               <span class="font-medium text-gray-900 dark:text-white">{{ formatGatewayAmount(baseAmount) }}</span>
             </div>
-            <div v-if="hasAmountFields(order) && Number(order.fee_rate) > 0" class="flex justify-between">
+            <div v-if="hasAmountFields(order) && order.order_type === 'balance' && Number(order.fee_rate) > 0" class="flex justify-between">
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.fee') }} ({{ order.fee_rate }}%)</span>
               <span class="font-medium text-gray-900 dark:text-white">{{ formatGatewayAmount(feeAmount) }}</span>
             </div>
@@ -56,9 +68,9 @@
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
               <span class="font-bold text-primary-600 dark:text-primary-400">{{ formatGatewayAmount(order.pay_amount) }}</span>
             </div>
-            <div v-if="hasAmountFields(order) && order.amount !== order.pay_amount" class="flex justify-between">
+            <div v-if="hasAmountFields(order) && order.order_type === 'balance' && order.amount !== order.pay_amount" class="flex justify-between">
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.creditedAmount') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">{{ order.order_type === 'balance' ? '$' + order.amount.toFixed(2) : formatGatewayAmount(order.amount) }}</span>
+              <span class="font-medium text-gray-900 dark:text-white">${{ order.amount.toFixed(2) }}</span>
             </div>
             <div v-if="hasPaymentType(order)" class="flex justify-between">
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.paymentMethod') }}</span>
@@ -75,9 +87,21 @@
         <!-- EasyPay return info (when no order loaded) -->
         <div v-else-if="returnInfo" class="rounded-xl bg-white p-5 shadow-sm dark:bg-dark-800">
           <div class="space-y-3 text-sm">
-            <div v-if="returnInfo.outTradeNo" class="flex justify-between">
-              <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">{{ returnInfo.outTradeNo }}</span>
+            <div v-if="returnInfo.outTradeNo" class="flex items-start justify-between gap-3">
+              <span class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
+              <div class="flex min-w-0 items-start justify-end gap-1">
+                <code data-test="payment-result-page-return-order-number" class="min-w-0 break-all text-right font-mono text-xs text-gray-900 dark:text-white">{{ returnInfo.outTradeNo }}</code>
+                <button
+                  data-test="copy-payment-result-page-return-order"
+                  type="button"
+                  class="inline-flex shrink-0 rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+                  :aria-label="t('common.copy')"
+                  :title="t('common.copy')"
+                  @click="copyOrderNumber(returnInfo.outTradeNo)"
+                >
+                  <Icon name="copy" size="xs" />
+                </button>
+              </div>
             </div>
             <div v-if="returnInfo.money" class="flex justify-between">
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
@@ -105,6 +129,7 @@ import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
+import Icon from '@/components/icons/Icon.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   clearResetCardCheckoutAttempt,
@@ -254,6 +279,14 @@ function normalizedOrderPaymentType(paymentType: string): string {
 
 function formatGatewayAmount(value: number): string {
   return formatPaymentAmount(value, currency.value, localeCode.value)
+}
+
+async function copyOrderNumber(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value)
+  } catch {
+    // The full value remains selectable when the browser denies clipboard access.
+  }
 }
 
 function setResolvedOrder(nextOrder: ResolvedOrder | null): void {

@@ -26,8 +26,30 @@
 
     <template #table>
       <DataTable :columns="columns" :data="coupons" :loading="loading" row-key="id">
-        <template #cell-code="{ value }">
-          <code class="font-mono text-sm font-medium text-gray-900 dark:text-white">{{ value }}</code>
+        <template #cell-code="{ row }">
+          <div class="flex items-center gap-1.5">
+            <code data-test="payment-coupon-code" class="min-w-0 break-all font-mono text-sm font-medium text-gray-900 dark:text-white">{{ isCouponCodeVisible(row) ? row.code : maskedCouponCode(row.code) }}</code>
+            <button
+              type="button"
+              data-test="payment-coupon-code-visibility"
+              class="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+              :title="isCouponCodeVisible(row) ? t('admin.paymentCoupons.hideCode') : t('admin.paymentCoupons.showCode')"
+              :aria-label="isCouponCodeVisible(row) ? t('admin.paymentCoupons.hideCode') : t('admin.paymentCoupons.showCode')"
+              @click="toggleCouponCodeVisibility(row)"
+            >
+              <Icon :name="isCouponCodeVisible(row) ? 'eyeOff' : 'eye'" size="sm" />
+            </button>
+            <button
+              type="button"
+              data-test="payment-coupon-code-copy"
+              class="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+              :title="t('common.copy')"
+              :aria-label="t('common.copy')"
+              @click="copyCouponCode(row.code)"
+            >
+              <Icon name="copy" size="sm" />
+            </button>
+          </div>
         </template>
         <template #cell-discount="{ row }">
           <span class="font-medium text-gray-900 dark:text-white">{{ formatDiscount(row) }}</span>
@@ -296,7 +318,7 @@
 
   <BaseDialog
     :show="showHistory"
-    :title="historyCoupon ? t('admin.paymentCoupons.historyTitle', { code: historyCoupon.code }) : t('admin.paymentCoupons.history')"
+    :title="historyCoupon ? t('admin.paymentCoupons.historyTitle', { code: maskedCouponCode(historyCoupon.code) }) : t('admin.paymentCoupons.history')"
     width="extra-wide"
     @close="closeHistory"
   >
@@ -326,7 +348,7 @@
                 <td class="px-3 py-2.5"><RouterLink :to="{ path: '/admin/orders', query: { order_id: String(usage.order_id) } }" class="font-mono text-primary-700 hover:underline dark:text-primary-300">#{{ usage.order_id }}</RouterLink></td>
                 <td class="px-3 py-2.5">
                   <RouterLink :to="{ path: '/admin/usage', query: { user_id: String(usage.user_id) } }" class="text-primary-700 hover:underline dark:text-primary-300">
-                    {{ usage.user_email || `#${usage.user_id}` }}
+                    {{ usageUserLabel(usage) }}
                   </RouterLink>
                 </td>
                 <td class="px-3 py-2.5"><span :class="['badge', usageStatusClass(usage.status)]">{{ usageStatusLabel(usage.status) }}</span></td>
@@ -350,7 +372,7 @@
               <tr v-if="auditsLoading"><td colspan="4" class="px-3 py-8 text-center text-gray-500 dark:text-dark-400">{{ t('common.loading') }}</td></tr>
               <tr v-else-if="audits.length === 0"><td colspan="4" class="px-3 py-8 text-center text-gray-500 dark:text-dark-400">{{ t('admin.paymentCoupons.noAudit') }}</td></tr>
               <tr v-for="audit in audits" :key="audit.id || `${audit.action}-${audit.created_at}`" class="bg-white align-top dark:bg-dark-900">
-                <td class="px-3 py-2.5 font-medium">{{ audit.action }}</td>
+                <td class="px-3 py-2.5 font-medium">{{ formatAuditAction(audit.action) }}</td>
                 <td class="px-3 py-2.5">
                   <RouterLink
                     v-if="audit.admin_user_id"
@@ -385,6 +407,7 @@ import type {
 } from '@/api/admin/payment'
 import { useAppStore } from '@/stores/app'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { useClipboard } from '@/composables/useClipboard'
 import { formatCurrency, formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { SubscriptionPlan } from '@/types/payment'
@@ -404,8 +427,8 @@ interface CouponForm {
   discountValue: string
   currency: 'CNY' | 'USD'
   maxUses: number
-  perUserMaxUses: string
-  targetUserId: string
+  perUserMaxUses: number | ''
+  targetUserId: number | ''
   startsAt: string
   expiresAt: string
   enabled: boolean
@@ -417,6 +440,7 @@ interface CouponForm {
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const { copyToClipboard } = useClipboard()
 const coupons = ref<PaymentDiscountCoupon[]>([])
 const loading = ref(false)
 const search = ref('')
@@ -435,6 +459,7 @@ const auditPagination = reactive({ page: 1, page_size: 20, total: 0 })
 const plans = ref<SubscriptionPlan[]>([])
 const plansLoading = ref(false)
 const plansLoadError = ref(false)
+const revealedCouponCodeIDs = ref<Set<number>>(new Set())
 
 function localDateTimeInputValue(value: Date): string {
   return formatDateTimeLocalInput(Math.floor(value.getTime() / 1000))
@@ -599,8 +624,8 @@ function openEdit(coupon: PaymentDiscountCoupon): void {
     discountValue: coupon.discount_value,
     currency: coupon.currency,
     maxUses: coupon.max_uses,
-    perUserMaxUses: String(coupon.per_user_max_uses),
-    targetUserId: coupon.target_user_id == null ? '' : String(coupon.target_user_id),
+    perUserMaxUses: coupon.per_user_max_uses,
+    targetUserId: coupon.target_user_id ?? '',
     startsAt: asLocalInput(coupon.starts_at),
     expiresAt: asLocalInput(coupon.expires_at),
     enabled: coupon.enabled,
@@ -630,6 +655,10 @@ function nonNegativeInteger(value: string | number): number | null {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
 }
 
+function trimmedNumericInput(value: string | number): string {
+  return String(value).trim()
+}
+
 function localInputToISO(value: string): string | null {
   const timestamp = parseDateTimeLocalInput(value)
   return timestamp === null ? null : new Date(timestamp * 1000).toISOString()
@@ -637,8 +666,10 @@ function localInputToISO(value: string): string | null {
 
 const formValid = computed(() => {
   const maxUses = nonNegativeInteger(form.maxUses)
-  const perUser = form.perUserMaxUses.trim() ? nonNegativeInteger(form.perUserMaxUses) : 1
-  const targetUser = form.targetUserId.trim() ? Number(form.targetUserId) : null
+  const perUserText = trimmedNumericInput(form.perUserMaxUses)
+  const targetUserText = trimmedNumericInput(form.targetUserId)
+  const perUser = perUserText ? nonNegativeInteger(perUserText) : 1
+  const targetUser = targetUserText ? Number(targetUserText) : null
   const starts = localInputToISO(form.startsAt)
   const expires = localInputToISO(form.expiresAt)
   const hasValidScope = form.orderTypes.length > 0
@@ -662,9 +693,9 @@ function buildPayload(): SavePaymentDiscountCouponRequest | null {
   const maxUses = nonNegativeInteger(form.maxUses)
   const startsAt = localInputToISO(form.startsAt)
   const expiresAt = localInputToISO(form.expiresAt)
-  const perUserText = form.perUserMaxUses.trim()
+  const perUserText = trimmedNumericInput(form.perUserMaxUses)
   const perUserMaxUses = perUserText ? nonNegativeInteger(perUserText) : null
-  const targetText = form.targetUserId.trim()
+  const targetText = trimmedNumericInput(form.targetUserId)
   const targetUserID = targetText ? Number(targetText) : null
   const validTargetUser = targetUserID === null || (Number.isSafeInteger(targetUserID) && targetUserID > 0)
   const orderTypes = normalizeOrderTypes(form.orderTypes)
@@ -748,6 +779,7 @@ async function loadCoupons(): Promise<void> {
     if (request !== listRequest) return
     coupons.value = response.data.items || []
     pagination.total = response.data.total || 0
+    revealedCouponCodeIDs.value = new Set()
   } catch (err: unknown) {
     if (request === listRequest) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('admin.paymentCoupons.loadFailed')))
   } finally {
@@ -857,6 +889,30 @@ function formatMoney(value: string, currency: string): string {
   return formatCurrency(Number(value), currency || 'CNY')
 }
 
+function maskedCouponCode(_code: string): string {
+  return '********'
+}
+
+function isCouponCodeVisible(coupon: PaymentDiscountCoupon): boolean {
+  return revealedCouponCodeIDs.value.has(coupon.id)
+}
+
+function toggleCouponCodeVisibility(coupon: PaymentDiscountCoupon): void {
+  const next = new Set(revealedCouponCodeIDs.value)
+  if (next.has(coupon.id)) next.delete(coupon.id)
+  else next.add(coupon.id)
+  revealedCouponCodeIDs.value = next
+}
+
+function copyCouponCode(code: string): void {
+  void copyToClipboard(code, t('admin.paymentCoupons.codeCopied'))
+}
+
+function usageUserLabel(usage: PaymentDiscountCouponUsage): string {
+  const username = usage.username?.trim()
+  return username || t('admin.paymentCoupons.deletedUser', { id: usage.user_id })
+}
+
 function formatDiscount(coupon: PaymentDiscountCoupon): string {
   return coupon.discount_type === 'percent'
     ? `${coupon.discount_value}%`
@@ -916,25 +972,77 @@ function formatAuditOrderTypes(value: unknown): string {
   return orderTypes.length ? formatProductScope(orderTypes) : '-'
 }
 
-function formatAuditValue(field: string, value: unknown): string {
+type PaymentDiscountAuditConfig = Record<string, unknown>
+
+const auditConfigFields = [
+  'code',
+  'discount_type',
+  'discount_value',
+  'currency',
+  'max_uses',
+  'per_user_max_uses',
+  'target_user_id',
+  'starts_at',
+  'expires_at',
+  'enabled',
+  'version',
+  'notes',
+  'order_types',
+  'plan_ids',
+] as const
+
+function formatAuditValue(field: string, value: unknown, config: PaymentDiscountAuditConfig): string {
+  if (field === 'code') return typeof value === 'string' && value ? maskedCouponCode(value) : '-'
+  if (field === 'discount_type') {
+    if (value === 'percent' || value === 'fixed') return t(`admin.paymentCoupons.discountTypes.${value}`)
+    return '-'
+  }
+  if (field === 'discount_value') {
+    if (typeof value !== 'string' && typeof value !== 'number') return '-'
+    if (config.discount_type === 'percent') return `${value}%`
+    if (config.discount_type === 'fixed') return formatMoney(String(value), typeof config.currency === 'string' ? config.currency : 'CNY')
+    return String(value)
+  }
+  if (field === 'max_uses' || field === 'per_user_max_uses') {
+    const uses = nonNegativeInteger(typeof value === 'string' || typeof value === 'number' ? value : '')
+    return uses === null ? '-' : uses === 0 ? t('admin.paymentCoupons.zeroUnlimited') : String(uses)
+  }
+  if (field === 'target_user_id') {
+    if (value == null) return t('admin.paymentCoupons.allUsers')
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? `#${value}` : '-'
+  }
+  if (field === 'starts_at' || field === 'expires_at') {
+    return typeof value === 'string' && Number.isFinite(new Date(value).getTime()) ? formatDateTime(value) : '-'
+  }
+  if (field === 'enabled') {
+    return typeof value === 'boolean' ? t(value ? 'admin.paymentCoupons.statuses.enabled' : 'admin.paymentCoupons.statuses.disabled') : '-'
+  }
   if (field === 'order_types') return formatAuditOrderTypes(value)
   if (field === 'plan_ids') {
     if (!Array.isArray(value)) return '-'
     const planIds = normalizePlanIds(value)
     return planIds.length ? planIds.map(id => `#${id}`).join(', ') : t('admin.paymentCoupons.allSubscriptionPlansShort')
   }
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  if (value == null) return '-'
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
+  if (field === 'currency') return value === 'CNY' || value === 'USD' ? value : '-'
+  if (field === 'version') return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? String(value) : '-'
+  if (field === 'notes') return typeof value === 'string' && value.trim() ? value : '-'
+  return '-'
 }
 
 function auditFieldLabel(field: string): string {
   const labels: Record<string, string> = {
+    code: 'code',
+    discount_type: 'discountType',
+    discount_value: 'discountValue',
+    currency: 'currency',
+    max_uses: 'maxUses',
+    per_user_max_uses: 'perUserMaxUses',
+    target_user_id: 'targetUser',
+    starts_at: 'startsAt',
+    expires_at: 'expiresAt',
+    enabled: 'enabled',
+    version: 'version',
+    notes: 'notes',
     order_types: 'orderTypes',
     plan_ids: 'planIds',
   }
@@ -943,11 +1051,17 @@ function auditFieldLabel(field: string): string {
 }
 
 function formatAuditConfig(value: unknown): string {
-  if (value == null || typeof value !== 'object' || Array.isArray(value)) return formatAuditValue('', value)
-  const fields = Object.entries(value as Record<string, unknown>)
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return '-'
+  const config = value as PaymentDiscountAuditConfig
+  const fields = auditConfigFields.filter(field => field in config)
   return fields.length
-    ? fields.map(([field, fieldValue]) => `${auditFieldLabel(field)}: ${formatAuditValue(field, fieldValue)}`).join('; ')
+    ? fields.map(field => `${auditFieldLabel(field)}: ${formatAuditValue(field, config[field], config)}`).join('; ')
     : '-'
+}
+
+function formatAuditAction(action: string): string {
+  if (action === 'created' || action === 'updated') return t(`admin.paymentCoupons.auditActions.${action}`)
+  return t('admin.paymentCoupons.auditActions.changed')
 }
 
 function formatAuditDetail(detail: unknown): string {
@@ -957,10 +1071,10 @@ function formatAuditDetail(detail: unknown): string {
     try {
       parsed = JSON.parse(detail)
     } catch {
-      return detail
+      return '-'
     }
   }
-  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return formatAuditValue('', parsed)
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return '-'
   const record = parsed as Record<string, unknown>
   if ('before' in record || 'after' in record) {
     return [

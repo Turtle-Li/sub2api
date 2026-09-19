@@ -494,6 +494,8 @@ export interface CreateOrderResult {
   amount: number
   pay_url?: string
   qr_code?: string
+  /** Server-issued Alipay page-pay frame URL; kept separate from QR and hosted links. */
+  checkout_frame_url?: string
   client_secret?: string
   intent_id?: string
   currency?: string

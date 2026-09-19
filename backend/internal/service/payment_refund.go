@@ -155,47 +155,64 @@ func psLegacyOrderMatchesInstance(orderPaymentType string, inst *dbent.PaymentPr
 }
 
 func (s *PaymentService) RequestRefund(ctx context.Context, oid, uid int64, reason string) error {
-	o, err := s.validateRefundRequest(ctx, oid, uid)
-	if err != nil {
+	if _, err := s.validateRefundRequest(ctx, oid, uid); err != nil {
 		return err
 	}
-	if !refundStateValid(o) {
-		return infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
-	}
-	if refundAlreadySettled(o) {
-		return refundAlreadySettledError()
-	}
-	settled, _ := refundOrderAmounts(o)
-	remaining := refundRemainingAmount(o, settled)
-	if remaining <= paymentAmountZeroTolerance(PaymentOrderCurrency(o)) {
-		return infraerrors.Conflict("REFUND_ALREADY_SETTLED", "the order has no refundable amount remaining")
-	}
 	nr := strings.TrimSpace(reason)
-	now := time.Now()
 	by := fmt.Sprintf("%d", uid)
-	claim := s.entClient.PaymentOrder.Update().Where(
-		paymentorder.IDEQ(oid),
-		paymentorder.UserIDEQ(uid),
-		paymentorder.RefundAmountEQ(o.RefundAmount),
-		paymentorder.RefundRequestedAmountEQ(o.RefundRequestedAmount),
-		paymentorder.StatusIn(OrderStatusCompleted),
-		paymentorder.OrderTypeEQ(payment.OrderTypeBalance),
-	)
-	if paymentAuditDialect(s.entClient) == "postgres" {
-		claim = claim.Where(paymentorder.UpdatedAtEQ(o.UpdatedAt))
-	}
-	c, err := claim.SetStatus(OrderStatusRefundRequested).
-		SetRefundRequestedAt(now).
-		SetRefundRequestReason(nr).
-		SetRefundRequestedBy(by).
-		SetRefundAmount(settled).
-		SetRefundRequestedAmount(remaining).
-		Save(ctx)
+	var settled, remaining float64
+	err := s.withLockedInvoiceOrder(ctx, oid, func(txCtx context.Context, client *dbent.Client, order *dbent.PaymentOrder) error {
+		if order.UserID != uid {
+			return infraerrors.Forbidden("FORBIDDEN", "no permission")
+		}
+		if order.OrderType != payment.OrderTypeBalance {
+			return infraerrors.BadRequest("INVALID_ORDER_TYPE", "only balance orders can request refund")
+		}
+		if !refundStateValid(order) {
+			return infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
+		}
+		if refundAlreadySettled(order) {
+			return refundAlreadySettledError()
+		}
+		if order.Status != OrderStatusCompleted {
+			return infraerrors.Conflict("CONFLICT", "order status changed")
+		}
+		if err := ensureRefundInvoiceAllowed(txCtx, client, order.ID); err != nil {
+			return err
+		}
+		settled, _ = refundOrderAmounts(order)
+		remaining = refundRemainingAmount(order, settled)
+		if remaining <= paymentAmountZeroTolerance(PaymentOrderCurrency(order)) {
+			return infraerrors.Conflict("REFUND_ALREADY_SETTLED", "the order has no refundable amount remaining")
+		}
+		claim := client.PaymentOrder.Update().Where(
+			paymentorder.IDEQ(oid),
+			paymentorder.UserIDEQ(uid),
+			paymentorder.RefundAmountEQ(order.RefundAmount),
+			paymentorder.RefundRequestedAmountEQ(order.RefundRequestedAmount),
+			paymentorder.StatusIn(OrderStatusCompleted),
+			paymentorder.OrderTypeEQ(payment.OrderTypeBalance),
+		)
+		if paymentAuditDialect(client) == "postgres" {
+			claim = claim.Where(paymentorder.UpdatedAtEQ(order.UpdatedAt))
+		}
+		updated, claimErr := claim.SetStatus(OrderStatusRefundRequested).
+			SetRefundRequestedAt(time.Now()).
+			SetRefundRequestReason(nr).
+			SetRefundRequestedBy(by).
+			SetRefundAmount(settled).
+			SetRefundRequestedAmount(remaining).
+			Save(txCtx)
+		if claimErr != nil {
+			return fmt.Errorf("update: %w", claimErr)
+		}
+		if updated == 0 {
+			return infraerrors.Conflict("CONFLICT", "order status changed")
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("update: %w", err)
-	}
-	if c == 0 {
-		return infraerrors.Conflict("CONFLICT", "order status changed")
+		return err
 	}
 	s.writeRefundAuditLog(ctx, oid, "REFUND_REQUESTED", fmt.Sprintf("user:%d", uid), map[string]any{
 		"amount": remaining, "settledRefundAmount": settled, "reason": nr,
@@ -641,69 +658,80 @@ func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*Ref
 	if paymentOrderUsesUnifiedPay(p.Order) {
 		return s.executeUnifiedRefund(ctx, p)
 	}
-	// A plan may have been prepared before another partial refund committed.
-	// Read the authoritative row immediately before the CAS and use that row's
-	// status/settled amount for the attempt.  Relying on p.Order here would let
-	// a stale full-refund plan add money on top of a newer partial refund.
-	preClaim, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID)
-	if err != nil {
-		return nil, fmt.Errorf("reload refund order before claim: %w", err)
-	}
-	if !refundStateValid(preClaim) {
-		return nil, infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
-	}
-	if refundAlreadySettled(preClaim) {
-		return nil, refundAlreadySettledError()
-	}
-	originalStatus := preClaim.Status
-	// Status plus both monetary columns form the portable optimistic claim
-	// predicate.  On PostgreSQL we also compare the row timestamp; SQLite's
-	// time adapter does not support equality predicates for scanned timestamps,
-	// so the monetary predicates keep the unit/in-memory path safe as well.
-	claim := s.entClient.PaymentOrder.Update().Where(
-		paymentorder.IDEQ(p.OrderID),
-		paymentorder.RefundAmountEQ(preClaim.RefundAmount),
-		paymentorder.RefundRequestedAmountEQ(preClaim.RefundRequestedAmount),
-		paymentorder.StatusIn(OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed),
+	// The final legacy claim shares the order lock with invoice writers. A plan
+	// can be stale by the time an administrator submits it, so the lock also
+	// owns the authoritative state reload and the pending-money record.
+	var (
+		current        *dbent.PaymentOrder
+		originalStatus string
+		settled        float64
+		remaining      float64
+		refundAmount   = p.RefundAmount
+		gatewayAmount  float64
 	)
-	if paymentAuditDialect(s.entClient) == "postgres" {
-		claim = claim.Where(paymentorder.UpdatedAtEQ(preClaim.UpdatedAt))
-	}
-	c, err := claim.SetStatus(OrderStatusRefunding).Save(ctx)
+	err := s.withLockedInvoiceOrder(ctx, p.OrderID, func(txCtx context.Context, client *dbent.Client, preClaim *dbent.PaymentOrder) error {
+		if !refundStateValid(preClaim) {
+			return infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
+		}
+		if refundAlreadySettled(preClaim) {
+			return refundAlreadySettledError()
+		}
+		if err := ensureRefundInvoiceAllowed(txCtx, client, preClaim.ID); err != nil {
+			return err
+		}
+		originalStatus = preClaim.Status
+		// Status plus both monetary columns form the portable optimistic claim
+		// predicate. On PostgreSQL we also compare the row timestamp; SQLite's
+		// time adapter does not support equality predicates for scanned timestamps.
+		claim := client.PaymentOrder.Update().Where(
+			paymentorder.IDEQ(p.OrderID),
+			paymentorder.RefundAmountEQ(preClaim.RefundAmount),
+			paymentorder.RefundRequestedAmountEQ(preClaim.RefundRequestedAmount),
+			paymentorder.StatusIn(OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed),
+		)
+		if paymentAuditDialect(client) == "postgres" {
+			claim = claim.Where(paymentorder.UpdatedAtEQ(preClaim.UpdatedAt))
+		}
+		claimed, claimErr := claim.SetStatus(OrderStatusRefunding).Save(txCtx)
+		if claimErr != nil {
+			return fmt.Errorf("lock: %w", claimErr)
+		}
+		if claimed == 0 {
+			return infraerrors.Conflict("CONFLICT", "order status changed")
+		}
+		var reloadErr error
+		current, reloadErr = client.PaymentOrder.Get(txCtx, p.OrderID)
+		if reloadErr != nil {
+			return fmt.Errorf("reload claimed refund order: %w", reloadErr)
+		}
+		// The compatibility reader intentionally treats an old REFUNDING row's
+		// refund_amount as an in-flight request. The pre-claim status disambiguates
+		// a new partial claim whose refund_amount is settled cumulative money.
+		settled, _ = refundAmountsForClaim(preClaim, current)
+		remaining = refundRemainingAmount(current, settled)
+		zeroTolerance := paymentAmountZeroTolerance(PaymentOrderCurrency(current))
+		if refundAmount <= zeroTolerance || refundAmount-remaining > zeroTolerance {
+			return infraerrors.Conflict("REFUND_AMOUNT_CHANGED", "refund amount exceeds the remaining refundable amount")
+		}
+		if math.Abs(refundAmount-remaining) < zeroTolerance {
+			refundAmount = remaining
+		}
+		gatewayAmount = calculateGatewayRefundDelta(current.Amount, current.PayAmount, settled, refundAmount, PaymentOrderCurrency(current))
+		if gatewayAmount <= 0 {
+			return infraerrors.BadRequest("INVALID_AMOUNT", "refund amount is below the payment channel precision")
+		}
+		if _, updateErr := client.PaymentOrder.UpdateOneID(p.OrderID).
+			SetRefundAmount(settled).
+			SetRefundRequestedAmount(refundAmount).
+			Save(txCtx); updateErr != nil {
+			return fmt.Errorf("record refund request: %w", updateErr)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("lock: %w", err)
+		return nil, err
 	}
-	if c == 0 {
-		return nil, infraerrors.Conflict("CONFLICT", "order status changed")
-	}
-	// The status transition is the single-writer fence for a legacy admin
-	// refund. Reload the row after claiming it, then persist the settled and
-	// current-request amounts separately before any deduction or gateway call.
-	// This is important for a second partial attempt: a settled
-	// refund_amount must never be mistaken for the new in-flight request.
-	current, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID)
-	if err != nil {
-		return nil, fmt.Errorf("reload claimed refund order: %w", err)
-	}
-	// The compatibility reader intentionally treats a legacy REFUNDING row's
-	// refund_amount as an in-flight request.  After a new partial claim the row
-	// is REFUNDING too, but its refund_amount is settled cumulative money.  The
-	// persisted pre-claim status disambiguates those cases; importantly, it is
-	// read from the database rather than from the possibly stale plan.
-	settled, _ := refundAmountsForClaim(preClaim, current)
-	remaining := refundRemainingAmount(current, settled)
-	zeroTolerance := paymentAmountZeroTolerance(PaymentOrderCurrency(current))
-	restoreClaimed := func() {
-		original := *preClaim
-		s.restoreStatus(ctx, &RefundPlan{OrderID: p.OrderID, Order: &original})
-	}
-	if p.RefundAmount <= zeroTolerance || p.RefundAmount-remaining > zeroTolerance {
-		restoreClaimed()
-		return nil, infraerrors.Conflict("REFUND_AMOUNT_CHANGED", "refund amount exceeds the remaining refundable amount")
-	}
-	if math.Abs(p.RefundAmount-remaining) < zeroTolerance {
-		p.RefundAmount = remaining
-	}
+	p.RefundAmount = refundAmount
 	p.Order = current
 	// Keep the pre-claim status on the in-memory plan so rollback paths restore
 	// PARTIALLY_REFUNDED/REFUND_FAILED/REFUND_REQUESTED rather than defaulting
@@ -712,18 +740,7 @@ func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*Ref
 	p.Order.Status = originalStatus
 	p.SettledRefundAmount = settled
 	p.RemainingRefundable = remaining
-	p.GatewayAmount = calculateGatewayRefundDelta(current.Amount, current.PayAmount, settled, p.RefundAmount, PaymentOrderCurrency(current))
-	if p.GatewayAmount <= 0 {
-		restoreClaimed()
-		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "refund amount is below the payment channel precision")
-	}
-	if _, err := s.entClient.PaymentOrder.UpdateOneID(p.OrderID).
-		SetRefundAmount(settled).
-		SetRefundRequestedAmount(p.RefundAmount).
-		Save(ctx); err != nil {
-		restoreClaimed()
-		return nil, fmt.Errorf("record refund request: %w", err)
-	}
+	p.GatewayAmount = gatewayAmount
 	if p.DeductionType == payment.DeductionTypeBalance && p.BalanceToDeduct > 0 {
 		// Skip balance deduction on retry if previous attempt already deducted
 		// but failed to roll back (REFUND_ROLLBACK_FAILED in audit log).

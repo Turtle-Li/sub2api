@@ -174,6 +174,7 @@ type paymentOrderResponse struct {
 	PaymentMethod           string      `json:"payment_method"`
 	Status                  string      `json:"status"`
 	CheckoutURL             *string     `json:"checkout_url"`
+	CheckoutFrameURL        *string     `json:"checkout_frame_url"`
 	CheckoutCodeURL         *string     `json:"checkout_code_url"`
 	CheckoutExpiresAt       *time.Time  `json:"checkout_expires_at"`
 	ChannelOutTradeNo       *string     `json:"channel_out_trade_no"`

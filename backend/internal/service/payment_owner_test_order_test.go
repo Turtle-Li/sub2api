@@ -269,6 +269,7 @@ func TestOwnerTestOrderPinsLiveGatewayAndPreservesDisabledCustomerCheckout(t *te
 	var sent ownerTestCentralCreateRequest
 	require.NoError(t, json.Unmarshal([]byte(posts[0]), &sent))
 	require.Equal(t, int64(1), sent.AmountFen)
+	require.Equal(t, "余额充值", sent.Subject)
 	require.Equal(t, "CNY", sent.Currency)
 	require.Equal(t, unifiedpay.PaymentMethodAlipay, sent.PaymentMethod)
 	require.Equal(t, ownerTestReturnURL, *sent.ReturnURL)

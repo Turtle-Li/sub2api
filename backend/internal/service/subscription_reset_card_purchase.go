@@ -35,6 +35,8 @@ var (
 // fit before the target subscription expires.
 const resetCardMinimumRemainingValidity = resetCardMinimumExternalCheckoutLifetime
 
+const resetCardPurchasedValidityDays = 15
+
 // SubscriptionResetCardQuote is the server-derived, short-lived price for one
 // reset card. The monthly plan remains the source of truth at purchase time.
 type SubscriptionResetCardQuote struct {
@@ -44,6 +46,7 @@ type SubscriptionResetCardQuote struct {
 	MonthlyPrice          float64                          `json:"monthly_price"`
 	Price                 float64                          `json:"price"`
 	ExpiresAt             time.Time                        `json:"expires_at"`
+	ValidityDays          int                              `json:"validity_days"`
 	ResetCardTier         *SubscriptionResetCardTierPolicy `json:"reset_card_tier,omitempty"`
 	ResetCardTierRevision string                           `json:"reset_card_tier_revision,omitempty"`
 }
@@ -144,7 +147,8 @@ func (s *SubscriptionService) GetResetCardQuote(ctx context.Context, userID, sub
 		PlanID:                plan.id,
 		MonthlyPrice:          plan.price.InexactFloat64(),
 		Price:                 price.InexactFloat64(),
-		ExpiresAt:             subscription.expiresAt,
+		ExpiresAt:             now.Add(time.Duration(resetCardPurchasedValidityDays) * 24 * time.Hour),
+		ValidityDays:          resetCardPurchasedValidityDays,
 		ResetCardTier:         tierPolicy,
 		ResetCardTierRevision: resetCardTierPolicyRevision(tierPolicy),
 	}, nil

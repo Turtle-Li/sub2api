@@ -43,6 +43,12 @@ function mountDialog(currentOrder: PaymentOrder) {
 }
 
 describe('InvoiceRequestDialog', () => {
+  it('warns that an issued invoice blocks a later refund before submission', () => {
+    const wrapper = mountDialog(order())
+
+    expect(wrapper.text()).toContain('payment.invoice.refundBlockedAfterIssue')
+  })
+
   it('prefills a rejected request and clears the business tax ID when resubmitted as personal', async () => {
     const wrapper = mountDialog(order(invoice()))
 

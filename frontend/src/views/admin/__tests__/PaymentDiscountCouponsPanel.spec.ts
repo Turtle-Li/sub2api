@@ -12,6 +12,7 @@ const {
   getPaymentDiscountCouponAudits,
   getPlans,
   promoList,
+  copyToClipboard,
   showSuccess,
   showError,
 } = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const {
   getPaymentDiscountCouponAudits: vi.fn(),
   getPlans: vi.fn(),
   promoList: vi.fn(),
+  copyToClipboard: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn(),
 }))
@@ -54,7 +56,7 @@ vi.mock('@/stores/app', () => ({
 }))
 
 vi.mock('@/composables/useClipboard', () => ({
-  useClipboard: () => ({ copyToClipboard: vi.fn() }),
+  useClipboard: () => ({ copyToClipboard }),
 }))
 
 vi.mock('@/composables/usePersistedPageSize', () => ({
@@ -112,7 +114,7 @@ const panelStubs = {
   TablePageLayout: { template: '<section><slot name="filters" /><slot name="table" /><slot name="pagination" /></section>' },
   DataTable: {
     props: ['data'],
-    template: '<div data-test="coupon-table"><div v-for="row in data" :key="row.id"><slot name="cell-actions" :row="row" /></div></div>',
+    template: '<div data-test="coupon-table"><div v-for="row in data" :key="row.id"><slot name="cell-code" :row="row" :value="row.code" /><slot name="cell-actions" :row="row" /></div></div>',
   },
   Pagination: true,
   BaseDialog: {
@@ -148,6 +150,7 @@ describe('payment discount coupon panel', () => {
     getPaymentDiscountCouponUsages.mockResolvedValue({ data: { items: [], total: 0 } })
     getPaymentDiscountCouponAudits.mockResolvedValue({ data: { items: [], total: 0 } })
     getPlans.mockResolvedValue({ data: subscriptionPlans })
+    copyToClipboard.mockResolvedValue(true)
   })
 
   it('omits an empty code and per-user cap so the server generates a code and applies its default cap', async () => {
@@ -217,6 +220,44 @@ describe('payment discount coupon panel', () => {
       target_user_id: null,
     }))
     expect(updatePaymentDiscountCoupon.mock.calls[0][1]).not.toHaveProperty('code')
+    wrapper.unmount()
+  })
+
+  it('keeps the editor stable when native number inputs provide numeric values', async () => {
+    const wrapper = await mountPanel([coupon])
+
+    await wrapper.get('[data-test="edit-payment-coupon"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('#payment-discount-per-user').setValue(2)
+    await wrapper.get('#payment-discount-target-user').setValue(42)
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="dialog"]').exists()).toBe(true)
+    await wrapper.get('[data-test="payment-discount-coupon-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(updatePaymentDiscountCoupon).toHaveBeenCalledWith(17, expect.objectContaining({
+      per_user_max_uses: 2,
+      target_user_id: 42,
+    }))
+    expect(wrapper.find('[data-test="dialog"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('masks codes by default, then reveals, hides, and copies only on explicit actions', async () => {
+    const wrapper = await mountPanel([coupon])
+
+    expect(wrapper.get('[data-test="payment-coupon-code"]').text()).toBe('********')
+    expect(wrapper.text()).not.toContain('PAYMENT20')
+
+    await wrapper.get('[data-test="payment-coupon-code-visibility"]').trigger('click')
+    expect(wrapper.get('[data-test="payment-coupon-code"]').text()).toBe('PAYMENT20')
+
+    await wrapper.get('[data-test="payment-coupon-code-copy"]').trigger('click')
+    expect(copyToClipboard).toHaveBeenCalledWith('PAYMENT20', 'admin.paymentCoupons.codeCopied')
+
+    await wrapper.get('[data-test="payment-coupon-code-visibility"]').trigger('click')
+    expect(wrapper.get('[data-test="payment-coupon-code"]').text()).toBe('********')
     wrapper.unmount()
   })
 
@@ -330,9 +371,20 @@ describe('payment discount coupon panel', () => {
           currency: 'CNY',
           created_at: '2030-02-01T00:00:00Z',
           updated_at: '2030-02-01T00:01:00Z',
-          user_email: 'user@example.com',
+          username: 'coupon-user',
+        }, {
+          id: 3,
+          order_id: 100,
+          user_id: 43,
+          status: 'released',
+          original_amount: '20.00',
+          discount_amount: '4.00',
+          pay_amount: '16.00',
+          currency: 'CNY',
+          created_at: '2030-02-02T00:00:00Z',
+          updated_at: '2030-02-02T00:01:00Z',
         }],
-        total: 1,
+        total: 2,
       },
     })
     getPaymentDiscountCouponAudits.mockResolvedValue({
@@ -343,7 +395,22 @@ describe('payment discount coupon panel', () => {
           action: 'updated',
           detail: JSON.stringify({
             before: { order_types: ['balance'], plan_ids: [] },
-            after: { order_types: ['subscription'], plan_ids: [301] },
+            after: {
+              code: 'PAYMENT20',
+              discount_type: 'percent',
+              discount_value: '20.00',
+              currency: 'CNY',
+              max_uses: 10,
+              per_user_max_uses: 2,
+              target_user_id: null,
+              starts_at: '2030-01-01T00:00:00Z',
+              expires_at: '2030-12-31T23:59:00Z',
+              enabled: true,
+              version: 7,
+              notes: 'new customer discount',
+              order_types: ['subscription'],
+              plan_ids: [301],
+            },
           }),
           created_at: '2030-02-01T00:00:00Z',
         }],
@@ -358,10 +425,13 @@ describe('payment discount coupon panel', () => {
     expect(getPaymentDiscountCouponUsages).toHaveBeenCalledWith(17, { page: 1, page_size: 20 })
     expect(getPaymentDiscountCouponAudits).toHaveBeenCalledWith(17, { page: 1, page_size: 20 })
     expect(wrapper.text()).toContain('#99')
-    expect(wrapper.text()).toContain('user@example.com')
-    expect(wrapper.text()).toContain('updated')
+    expect(wrapper.text()).toContain('coupon-user')
+    expect(wrapper.text()).toContain('admin.paymentCoupons.deletedUser')
+    expect(wrapper.text()).toContain('admin.paymentCoupons.auditActions.updated')
     expect(wrapper.text()).toContain('admin.paymentCoupons.auditBefore')
+    expect(wrapper.text()).toContain('admin.paymentCoupons.auditFields.discountType')
     expect(wrapper.text()).toContain('admin.paymentCoupons.auditFields.orderTypes')
+    expect(wrapper.text()).not.toContain('PAYMENT20')
     wrapper.unmount()
   })
 })

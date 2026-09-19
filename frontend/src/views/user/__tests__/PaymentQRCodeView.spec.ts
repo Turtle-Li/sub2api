@@ -44,5 +44,6 @@ describe('PaymentQRCodeView', () => {
       payUrl: 'https://pay.example.com/hosted/42',
       outTradeNo: 'sub2_42',
     })
+    expect(panel.props('allowCheckoutFrame')).not.toBe(true)
   })
 })

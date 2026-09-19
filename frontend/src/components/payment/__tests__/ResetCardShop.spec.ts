@@ -48,7 +48,7 @@ describe('ResetCardShop', () => {
   })
 
   it('localizes a tier mismatch returned after the storefront state changes', async () => {
-    vi.mocked(getResetCardQuote).mockRejectedValueOnce({
+    vi.mocked(getResetCardQuote).mockRejectedValue({
       reason: 'RESET_CARD_TIER_INSUFFICIENT',
       message: 'available reset cards in this family are from a lower subscription tier',
     })
@@ -66,6 +66,39 @@ describe('ResetCardShop', () => {
     await wrapper.get('[data-reset-card-offer]').trigger('click')
     await flushPromises()
     expect(getResetCardQuote).toHaveBeenCalledWith(7)
+    expect(getResetCardQuote).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('select')).toEqual([[{ subscription: sub, quote }]])
+  })
+
+  it('warms the quote before a click and reuses it without another request', async () => {
+    const wrapper = render()
+    await flushPromises()
+    expect(getResetCardQuote).toHaveBeenCalledTimes(1)
+    await wrapper.get('[data-reset-card-offer]').trigger('click')
+    await flushPromises()
+    expect(getResetCardQuote).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('select')).toHaveLength(1)
+  })
+
+  it('ignores a quote that finishes after the subscription catalog changes', async () => {
+    let resolveOld!: (value: typeof quote) => void
+    vi.mocked(getResetCardQuote).mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve }))
+    const wrapper = render()
+    await wrapper.get('[data-reset-card-offer]').trigger('click')
+    await wrapper.setProps({ subscriptions: [] })
+    resolveOld(quote)
+    await flushPromises()
+    expect(wrapper.emitted('select')).toBeUndefined()
+  })
+
+  it('retries a failed background warmup when the user selects the card', async () => {
+    vi.mocked(getResetCardQuote).mockRejectedValueOnce(new Error('temporary outage'))
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.emitted('select')).toBeUndefined()
+    await wrapper.get('[data-reset-card-offer]').trigger('click')
+    await flushPromises()
+    expect(getResetCardQuote).toHaveBeenCalledTimes(2)
     expect(wrapper.emitted('select')).toEqual([[{ subscription: sub, quote }]])
   })
 
@@ -73,6 +106,7 @@ describe('ResetCardShop', () => {
     const wrapper = mount(ResetCardShop, {
       props: { subscriptions: [sub], plans, selectedSubscriptionId: sub.id, selectedQuote: quote },
     })
+    await flushPromises()
     const freshQuote = { ...quote, price: 45 }
     vi.mocked(getResetCardQuote).mockResolvedValueOnce(freshQuote)
     await wrapper.get('[data-reset-card-offer]').trigger('click')
@@ -151,7 +185,6 @@ describe('ResetCardShop', () => {
 
     await wrapper.get('[data-reset-card-offer]').trigger('click')
 
-    expect(getResetCardQuote).not.toHaveBeenCalled()
     expect(wrapper.emitted('select')).toBeUndefined()
   })
 
@@ -169,11 +202,10 @@ describe('ResetCardShop', () => {
     expect(offer.attributes('aria-pressed')).toBe('false')
     expect(wrapper.get('article').classes()).not.toContain('payment-product-card--selected')
     expect(wrapper.get('[data-test="reset-card-increase"]').attributes('disabled')).toBeDefined()
-    expect(getResetCardQuote).not.toHaveBeenCalled()
+    expect(wrapper.emitted('select')).toBeUndefined()
 
     const shop = wrapper.vm as unknown as { focusOffer: () => boolean }
     expect(shop.focusOffer()).toBe(true)
-    expect(getResetCardQuote).not.toHaveBeenCalled()
     expect(wrapper.emitted('select')).toBeUndefined()
   })
 })

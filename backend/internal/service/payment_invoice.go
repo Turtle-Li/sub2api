@@ -1055,6 +1055,31 @@ func invoiceOrderEligible(order *dbent.PaymentOrder, needsReview bool) bool {
 	return true
 }
 
+// ensureRefundInvoiceAllowed is called only while the caller holds the payment
+// order lock. Invoice writers acquire that same lock before they can transition
+// to ISSUED, so this read makes new refund admission and issuance mutually
+// exclusive without changing recovery for an existing refund attempt.
+func ensureRefundInvoiceAllowed(ctx context.Context, client *dbent.Client, orderID int64) error {
+	if client == nil || orderID <= 0 {
+		return errors.New("refund invoice eligibility store is unavailable")
+	}
+	invoice, err := client.PaymentInvoiceRequest.Query().
+		Where(paymentinvoicerequest.OrderIDEQ(orderID)).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil
+		}
+		// Do not treat an unreadable invoice row as refundable. A storage outage
+		// must not allow a refund that could require an external tax correction.
+		return fmt.Errorf("read refund invoice status: %w", err)
+	}
+	if invoice.Status == InvoiceStatusIssued {
+		return infraerrors.Conflict("REFUND_INVOICED_ORDER", "the order already has an issued invoice and cannot be refunded")
+	}
+	return nil
+}
+
 func (s *PaymentService) withLockedInvoiceOrder(ctx context.Context, orderID int64, fn func(context.Context, *dbent.Client, *dbent.PaymentOrder) error) error {
 	if s == nil || s.entClient == nil {
 		return errors.New("invoice workflow requires an order store")

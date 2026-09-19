@@ -113,5 +113,6 @@ func (s *PaymentService) ResumeOrder(ctx context.Context, orderID, userID int64)
 	if strings.TrimSpace(result.PayURL) == "" && strings.TrimSpace(result.QRCode) == "" && result.JSAPI == nil {
 		return nil, infraerrors.Conflict("CHECKOUT_UNAVAILABLE", "original checkout is unavailable")
 	}
+	s.hydrateCheckoutFrameURL(ctx, order, result)
 	return result, nil
 }

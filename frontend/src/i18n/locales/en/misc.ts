@@ -317,6 +317,11 @@ export default {
     },
 
     orderOps: {
+      purchaseInfo: 'Purchase information',
+      amountAndDiscount: 'Amount and discount',
+      statusAndFulfillment: 'Payment and fulfillment',
+      timeline: 'Timeline and actions',
+
       dailyQuota: 'Daily allowance',
       weeklyQuota: 'Weekly allowance',
       monthlyQuota: 'Monthly allowance',
@@ -403,6 +408,7 @@ export default {
     bestValue: 'Best value',
     mostPopular: 'Most popular',
     resetShop: {
+      validDays: '{days} days after payment',
       decrease: 'Remove one card',
       increase: 'Add one card',
       perCard: 'card',
@@ -501,6 +507,11 @@ export default {
       refund_failed: 'Refund Failed',
     },
     qr: {
+      alipayEmbeddedTitle: 'Scan with Alipay',
+      alipayEmbeddedHint: 'Use Alipay to scan the QR code below and complete payment.',
+      alipayEmbeddedFrameTitle: 'Alipay payment QR code',
+      alipayEmbeddedFallback: 'Open the payment page in a new window',
+
       scanToPay: 'Scan to Pay',
       scanAlipay: 'Alipay QR Payment',
       scanWxpay: 'WeChat QR Payment',
@@ -548,6 +559,7 @@ export default {
       requestRefund: 'Request Refund',
     },
     invoice: {
+      refundBlockedAfterIssue: 'Once the invoice is issued, this order can no longer be refunded.',
       request: 'Request Invoice',
       correct: 'Correct Invoice Details',
       viewDelivery: 'View Invoice Email',
@@ -618,7 +630,7 @@ export default {
         customerEmailNotice: 'Saving commits the status first, then emails the PDF attachment or rejection notice to the requested recipient. Failures are shown in the list and can be retried.',
         retryEmail: 'Retry Email',
         emailRetryQueued: 'The invoice email has been queued again',
-        refundCorrectionWarning: 'This order has already been invoiced. A later refund still requires a manual red-letter or reversal workflow in the tax system; this application does not perform it automatically.',
+        refundCorrectionWarning: 'Once the invoice is issued, this order can no longer be refunded.',
       },
     },
     result: {
@@ -750,6 +762,7 @@ export default {
       INVALID_REFUND_REASON_CODE: 'Choose a valid refund reason.',
       INVALID_REFUND_REASON_DETAIL: 'Refund reason details are invalid or too long.',
       REFUND_REASON_DETAIL_REQUIRED: 'Add details when choosing Other as the refund reason.',
+      REFUND_INVOICED_ORDER: 'This order has an issued invoice and cannot be refunded.',
       REFUND_ALREADY_SETTLED: 'This order has already been refunded. Each order allows only one successful refund, including a partial refund.',
       REFUND_QUOTE_STALE: 'The refund review changed. Refresh the quote before submitting.',
       REFUND_RECOVERY_OPERATOR_REQUIRED: 'A signed-in human administrator must perform this recovery action.',
@@ -1021,6 +1034,7 @@ export default {
       refundTimeMinutes: '{count}m',
       refundTimeSeconds: '{count}s',
       refundReviewReasons: {
+        REFUND_INVOICED_ORDER: 'This order has an issued invoice and cannot be refunded.',
         REFUND_ALREADY_SETTLED: 'This order has already been refunded. Each order allows only one successful refund, including a partial refund.',
         INVALID_REFUND_STATE: 'The stored refund accounting is invalid and needs manual review.',
         INVALID_STATUS: 'The current order status does not allow a new refund.',

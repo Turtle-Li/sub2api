@@ -369,7 +369,9 @@ func (s *PaymentService) invokeResetCardProvider(ctx context.Context, order *dbe
 		return nil, err
 	}
 	if !dispatch {
-		return buildResetCardOrderResponse(claimed), nil
+		response := buildResetCardOrderResponse(claimed)
+		s.hydrateCheckoutFrameURL(ctx, claimed, response)
+		return response, nil
 	}
 	prov, sel, err := s.resetCardProviderForOrder(ctx, claimed, req)
 	if err != nil {
@@ -610,7 +612,9 @@ func (s *PaymentService) reconcileResetCardBeforeCreate(ctx context.Context, ord
 		if err != nil {
 			return true, nil, fmt.Errorf("reload reconciled reset card order: %w", err)
 		}
-		return true, buildResetCardOrderResponse(reloaded), nil
+		response := buildResetCardOrderResponse(reloaded)
+		s.hydrateCheckoutFrameURL(ctx, reloaded, response)
+		return true, response, nil
 	case payment.ProviderStatusFailed, payment.ProviderStatusRefunded:
 		return true, nil, s.finishResetCardProviderFailure(ctx, order, lease, errors.New("the prior upstream checkout is closed"))
 	case payment.ProviderStatusPending:
@@ -681,7 +685,9 @@ func (s *PaymentService) handleResetCardProviderCreateError(ctx context.Context,
 			if err != nil {
 				return nil, fmt.Errorf("reload reset card order after create reconciliation: %w", err)
 			}
-			return buildResetCardOrderResponse(reloaded), nil
+			response := buildResetCardOrderResponse(reloaded)
+			s.hydrateCheckoutFrameURL(ctx, reloaded, response)
+			return response, nil
 		case payment.ProviderStatusFailed, payment.ProviderStatusRefunded:
 			return nil, s.finishResetCardProviderFailure(ctx, order, lease, providerErr)
 		}
@@ -715,6 +721,9 @@ func (s *PaymentService) finishResetCardProviderSuccess(ctx context.Context, ord
 	}
 	if sel.ProviderKey == payment.TypeUnifiedPay {
 		snapshot["payment_order_id"] = strings.TrimSpace(providerResp.TradeNo)
+		if frameURL := paymentOrderCheckoutFrameURLFromProviderResponse(sel, req.PaymentType, providerResp); frameURL != "" {
+			snapshot[paymentOrderCheckoutFrameURLSnapshotKey] = frameURL
+		}
 	}
 	if completeWechatJSAPIPayload(providerResp.JSAPI) {
 		snapshot[resetCardCheckoutSnapshotKey] = resetCardCheckoutSnapshot{

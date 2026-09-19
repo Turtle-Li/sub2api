@@ -70,6 +70,7 @@
           <textarea id="invoice-remark" v-model.trim="form.remark" rows="3" class="input mt-1 w-full" maxlength="1000" :placeholder="t('payment.invoice.remarkPlaceholder')" />
         </div>
         <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('payment.invoice.legalNotice') }}</p>
+        <p role="note" class="text-xs leading-5 text-amber-700 dark:text-amber-300">{{ t('payment.invoice.refundBlockedAfterIssue') }}</p>
       </form>
     </div>
 

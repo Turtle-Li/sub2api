@@ -47,6 +47,14 @@ const (
 	AirwallexDemoStaticDomain = "https://static-demo.airwallex.com"
 	// AirwallexDemoCheckoutDomain 是 Airwallex 沙箱环境收银台元素和 iframe 域名。
 	AirwallexDemoCheckoutDomain = "https://checkout-demo.airwallex.com"
+	// AlipayLiveGatewayDomain is the exact official live page-pay gateway used
+	// as the initial embedded checkout document.
+	AlipayLiveGatewayDomain = "https://openapi.alipay.com"
+	// AlipaySandboxGatewayDomain is the exact official sandbox page-pay gateway.
+	AlipaySandboxGatewayDomain = "https://openapi-sandbox.dl.alipaydev.com"
+	// AlipayCashierDomain is the official page-pay redirect target observed for
+	// live checkout. Keep this distinct from a broad alipay.com wildcard.
+	AlipayCashierDomain = "https://excashier.alipay.com"
 )
 
 var requiredCSPDirectiveValues = []struct {
@@ -83,6 +91,9 @@ var requiredCSPDirectiveValues = []struct {
 	{"style-src", AirwallexDemoStaticDomain},
 	{"style-src", AirwallexDemoCheckoutDomain},
 	{"frame-src", AirwallexDemoCheckoutDomain},
+	{"frame-src", AlipayLiveGatewayDomain},
+	{"frame-src", AlipaySandboxGatewayDomain},
+	{"frame-src", AlipayCashierDomain},
 }
 
 // GenerateNonce generates a cryptographically secure random nonce.

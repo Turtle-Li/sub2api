@@ -511,6 +511,11 @@ export default {
     },
 
     paymentCoupons: {
+      showCode: '查看优惠码',
+      hideCode: '隐藏优惠码',
+      codeCopied: '优惠码已复制',
+      deletedUser: '已删除或无用户名的用户（ID #{id}）',
+
       search: '搜索支付抵扣码...',
       create: '创建支付抵扣码',
       edit: '编辑支付抵扣码',
@@ -600,7 +605,25 @@ export default {
       noAudit: '暂无审计记录。',
       auditBefore: '修改前',
       auditAfter: '修改后',
+      auditActions: {
+        created: '已创建',
+        updated: '已更新',
+        changed: '配置变更',
+      },
       auditFields: {
+        code: '优惠码',
+        discountType: '抵扣类型',
+        discountValue: '抵扣值',
+        currency: '币种',
+        maxUses: '全局最大次数',
+        perUserMaxUses: '每位用户最大次数',
+        targetUser: '指定用户',
+        startsAt: '生效时间',
+        expiresAt: '到期时间',
+        enabled: '启用状态',
+        version: '版本',
+        notes: '备注',
+
         orderTypes: '适用商品',
         planIds: '指定套餐'
       },

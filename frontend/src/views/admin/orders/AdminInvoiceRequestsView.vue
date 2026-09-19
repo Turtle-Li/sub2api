@@ -70,7 +70,8 @@
           <button
             type="button"
             class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
-            @click="invoiceTarget = row"
+            :disabled="submitting || retrying"
+            @click="openInvoiceDialog(row)"
           >
             <Icon name="document" size="sm" />
             {{ row.invoice.status === 'ISSUED' || row.invoice.status === 'REJECTED' ? t('payment.invoice.admin.view') : t('payment.invoice.admin.process') }}
@@ -101,7 +102,7 @@
       :retrying="retrying"
       @submit="handleUpdate"
       @retry-email="handleRetryEmail" @retry-feishu="handleRetryFeishu"
-      @close="invoiceTarget = null"
+      @close="closeInvoiceDialog"
     />
   </AppLayout>
 </template>
@@ -211,6 +212,14 @@ function handlePageSizeChange(pageSize: number) {
   pagination.page_size = pageSize
   pagination.page = 1
   loadApplications()
+}
+
+function openInvoiceDialog(order: PaymentOrder) {
+  if (!submitting.value && !retrying.value) invoiceTarget.value = order
+}
+
+function closeInvoiceDialog() {
+  if (!submitting.value && !retrying.value) invoiceTarget.value = null
 }
 
 async function handleUpdate(payload: AdminUpdateInvoiceRequest) {

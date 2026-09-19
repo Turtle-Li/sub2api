@@ -1144,6 +1144,33 @@ func TestReviewedBalanceRefundReviewReturnsZeroAfterPaidPrincipalIsConsumed(t *t
 	require.Zero(t, review.Balance.GiftCreditToReclaim)
 }
 
+func TestReviewedRefundReviewExplainsIssuedInvoiceAndAllowsRejectedInvoice(t *testing.T) {
+	t.Run("issued invoice requires correction", func(t *testing.T) {
+		ctx := context.Background()
+		svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
+		createRefundInvoice(t, ctx, svc.entClient, order, InvoiceStatusIssued)
+
+		review, err := svc.ReviewRefund(ctx, order.ID)
+		require.NoError(t, err)
+		require.False(t, review.CanRefund)
+		require.True(t, review.RequiresManualReview)
+		require.Equal(t, "REFUND_INVOICED_ORDER", review.ReasonCode)
+		require.Contains(t, review.Reason, "issued invoice")
+	})
+
+	t.Run("rejected invoice keeps the existing refund quote", func(t *testing.T) {
+		ctx := context.Background()
+		svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
+		createRefundInvoice(t, ctx, svc.entClient, order, InvoiceStatusRejected)
+
+		review, err := svc.ReviewRefund(ctx, order.ID)
+		require.NoError(t, err)
+		require.True(t, review.CanRefund)
+		require.False(t, review.RequiresManualReview)
+		require.Empty(t, review.ReasonCode)
+	})
+}
+
 func TestReviewedRefundReservationRejectsExpiredQuoteWithoutMovingBalance(t *testing.T) {
 	ctx := context.Background()
 	svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
@@ -1158,6 +1185,31 @@ func TestReviewedRefundReservationRejectsExpiredQuoteWithoutMovingBalance(t *tes
 	require.Error(t, err)
 	require.Nil(t, attempt)
 	require.Equal(t, "REFUND_QUOTE_STALE", infraerrors.Reason(err))
+	funding, user := loadReviewedBalanceRefundState(t, svc, order)
+	require.InDelta(t, 100, user.Balance, 1e-9)
+	require.Zero(t, user.FrozenBalance)
+	require.InDelta(t, 0.1, user.WalletAvailablePaid, 1e-9)
+	require.Zero(t, user.WalletFrozenPaid)
+	require.True(t, funding.ReservedPaid.IsZero())
+	require.True(t, funding.ReservedGift.IsZero())
+	require.Zero(t, funding.ReservedCashMinor)
+	persisted, err := svc.entClient.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, persisted.Status)
+}
+
+func TestReviewedRefundReservationRejectsInvoiceIssuedAfterQuoteWithoutReservation(t *testing.T) {
+	ctx := context.Background()
+	svc, order := newReviewedBalanceRefundFixture(t, 100, 0.1)
+	review, err := svc.ReviewRefund(ctx, order.ID)
+	require.NoError(t, err)
+	plan, err := svc.PrepareReviewedRefund(ctx, order.ID, review.QuoteRevision, "invoice issued after review")
+	require.NoError(t, err)
+	createRefundInvoice(t, ctx, svc.entClient, order, InvoiceStatusIssued)
+
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.Nil(t, attempt)
+	require.Equal(t, "REFUND_INVOICED_ORDER", infraerrors.Reason(err))
 	funding, user := loadReviewedBalanceRefundState(t, svc, order)
 	require.InDelta(t, 100, user.Balance, 1e-9)
 	require.Zero(t, user.FrozenBalance)

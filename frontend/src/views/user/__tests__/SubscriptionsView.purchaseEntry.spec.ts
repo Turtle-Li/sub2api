@@ -48,6 +48,23 @@ describe('subscription renewal entry', () => {
     wrapper.unmount()
   })
 
+  it('retains expired subscriptions and links their renewal to the same group', async () => {
+    settings.cachedPublicSettings = { payment_enabled: true, payment_entry_enabled: true }
+    getMySubscriptions.mockResolvedValue([{
+      id: 1, group_id: 4, status: 'expired', expires_at: '2000-01-01T00:00:00Z',
+      group: { name: 'Expired Plus', platform: 'openai', rate_multiplier: 1 },
+    }])
+    const wrapper = mount(SubscriptionsView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true, ConfirmDialog: true } },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Expired Plus')
+    const renew = wrapper.findAll('button').find(button => button.text() === 'payment.renewNow')!
+    await renew.trigger('click')
+    expect(push).toHaveBeenCalledWith({ path: '/purchase', query: { tab: 'subscription', group: '4' } })
+    expect(wrapper.findAll('button').some(button => button.text() === 'payment.resetShop.quickEntry')).toBe(false)
+  })
+
   it('links only current OpenAI subscriptions to their exact reset-card offer', async () => {
     settings.cachedPublicSettings = { payment_enabled: true, payment_entry_enabled: true }
     getMySubscriptions.mockResolvedValue([

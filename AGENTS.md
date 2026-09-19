@@ -2,6 +2,8 @@
 
 ## Payment catalog and reset-card purchases
 
+- Current September 20 payment/coupon/invoice follow-up checklist and progress: `docs/operations/PAYMENT_FIX_CHECKLIST_20260920.md`. Update each item with evidence; preserve paid-order and invoice/refund boundaries.
+
 - For authenticated checkout recovery, cancellation-pending presentation,
   historical missing-binding recovery and reset-card quantity/auto-use, read
   `docs/operations/PAYMENT_RECOVERY_RESET_CARDS_20260919.md`.

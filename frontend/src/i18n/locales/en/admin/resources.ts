@@ -514,6 +514,11 @@ export default {
     },
 
     paymentCoupons: {
+      showCode: 'Show code',
+      hideCode: 'Hide code',
+      codeCopied: 'Discount code copied',
+      deletedUser: 'Deleted or unnamed user (ID #{id})',
+
       search: 'Search payment discount codes...',
       create: 'Create Payment Discount',
       edit: 'Edit Payment Discount',
@@ -603,7 +608,25 @@ export default {
       noAudit: 'No audit records yet.',
       auditBefore: 'Before',
       auditAfter: 'After',
+      auditActions: {
+        created: 'Created',
+        updated: 'Updated',
+        changed: 'Configuration changed',
+      },
       auditFields: {
+        code: 'Discount code',
+        discountType: 'Discount type',
+        discountValue: 'Discount value',
+        currency: 'Currency',
+        maxUses: 'Global max uses',
+        perUserMaxUses: 'Per-user max uses',
+        targetUser: 'Target user',
+        startsAt: 'Starts at',
+        expiresAt: 'Expires at',
+        enabled: 'Enabled',
+        version: 'Version',
+        notes: 'Notes',
+
         orderTypes: 'Applicable products',
         planIds: 'Specific plans'
       },

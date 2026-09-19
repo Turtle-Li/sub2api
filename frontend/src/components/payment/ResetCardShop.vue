@@ -26,7 +26,7 @@
           <PurchaseEligibilityHint :eligibility="offer.eligibility" />
           <div class="flex items-baseline justify-between gap-3 text-xs text-gray-500 dark:text-dark-400">
             <span class="shrink-0">{{ t('payment.resetShop.validity') }}</span>
-            <span class="text-right tabular-nums text-gray-700 dark:text-dark-200">{{ formatExpiry(isSelectedOffer(offer) && selectedQuote ? selectedQuote.expires_at : offer.subscription.expires_at) }}</span>
+            <span class="text-right tabular-nums text-gray-700 dark:text-dark-200">{{ t('payment.resetShop.validDays', { days: isSelectedOffer(offer) && selectedQuote?.validity_days ? selectedQuote.validity_days : 15 }) }}</span>
           </div>
           <div class="mt-auto border-t border-gray-100 pt-3 dark:border-dark-700" data-test="reset-card-options" @click.stop>
             <div class="flex items-center justify-between gap-3 text-sm text-gray-700 dark:text-dark-200">
@@ -54,12 +54,15 @@
             <label class="mt-2 flex min-h-10 items-center gap-2 text-sm text-gray-700 dark:text-dark-200" :class="isSelectedOffer(offer) && !disabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'">
               <input
                 data-test="reset-card-use-on-purchase"
-                class="h-4 w-4 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                class="peer sr-only"
                 type="checkbox"
                 :checked="isSelectedOffer(offer) && useOnPurchase"
                 :disabled="disabled || !isSelectedOffer(offer)"
                 @change="updateUseOnPurchase"
               />
+              <span aria-hidden="true" class="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-gray-300 bg-white text-transparent transition-colors peer-checked:border-primary-600 peer-checked:bg-primary-600 peer-checked:text-white peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500 peer-focus-visible:ring-offset-2 dark:border-dark-500 dark:bg-dark-900 dark:peer-checked:border-primary-500 dark:peer-checked:bg-primary-500 dark:peer-focus-visible:ring-offset-dark-800">
+                <Icon name="check" size="xs" :stroke-width="3" />
+              </span>
               <span>{{ t('payment.resetShop.useOnPurchase') }}</span>
             </label>
           </div>
@@ -72,7 +75,7 @@
             :disabled="disabled || loading || offer.eligibility?.can_purchase === false"
             @click.stop="select(offer.subscription)"
           >
-            {{ loading ? t('common.loading') : isSelectedOffer(offer) ? t('payment.selectedRechargeTier') : t('payment.resetShop.select') }}
+            {{ isSelectedOffer(offer) ? t('payment.selectedRechargeTier') : t('payment.resetShop.select') }}
           </button>
         </div>
       </article>
@@ -83,7 +86,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getResetCardQuote, type ResetCardQuote } from '@/api/subscriptions'
 import { extractI18nErrorMessage } from '@/utils/apiError'
@@ -174,16 +177,50 @@ function errorMessage(value: unknown): string {
   return extractI18nErrorMessage(value, t, 'payment.errors', t('payment.resetShop.failed'))
 }
 
+// Warm eligible quotes while the customer reads the plans. The server still
+// revalidates price, tier and eligibility when creating the actual order.
+const quoteCache = new Map<number, { quote: ResetCardQuote; fetchedAt: number }>()
+const quoteRequests = new Map<number, Promise<ResetCardQuote>>()
+let quoteGeneration = 0
+
+function loadQuote(subscriptionId: number, force = false): Promise<ResetCardQuote> {
+  const cached = quoteCache.get(subscriptionId)
+  if (!force && cached && Date.now() - cached.fetchedAt < 60_000) return Promise.resolve(cached.quote)
+  const pending = quoteRequests.get(subscriptionId)
+  if (pending) return pending
+  const generation = quoteGeneration
+  const request = getResetCardQuote(subscriptionId).then(quote => {
+    if (generation === quoteGeneration) quoteCache.set(subscriptionId, { quote, fetchedAt: Date.now() })
+    return quote
+  }).finally(() => {
+    if (quoteRequests.get(subscriptionId) === request) quoteRequests.delete(subscriptionId)
+  })
+  quoteRequests.set(subscriptionId, request)
+  return request
+}
+
+watch(() => [props.subscriptions, props.plans], () => {
+  quoteGeneration++
+  quoteCache.clear()
+  quoteRequests.clear()
+  for (const offer of offers.value) {
+    if (offer.eligibility?.can_purchase !== false) void loadQuote(offer.subscription.id).catch(() => {})
+  }
+}, { immediate: true, deep: true })
+
 async function select(subscription: UserSubscription) {
   if (props.disabled || loading.value ||
     !offers.value.some(offer => offer.subscription.id === subscription.id && offer.eligibility?.can_purchase !== false)) return
   error.value = ''
   loading.value = true
+  const generation = quoteGeneration
   try {
-    const quote = await getResetCardQuote(subscription.id)
-    emit('select', { subscription, quote })
+    // Clicking an already selected card also gives a stale-quote error a
+    // direct retry path without requiring a page reload.
+    const quote = await loadQuote(subscription.id, props.selectedSubscriptionId === subscription.id)
+    if (generation === quoteGeneration && !props.disabled) emit('select', { subscription, quote })
   } catch (err) {
-    error.value = errorMessage(err)
+    if (generation === quoteGeneration) error.value = errorMessage(err)
   } finally {
     loading.value = false
   }
@@ -199,10 +236,4 @@ function updateUseOnPurchase(event: Event) {
   emit('updateOptions', { quantity: normalizedQuantity.value, useOnPurchase: input.checked })
 }
 
-function formatExpiry(value: string | null): string {
-  if (!value) return t('userSubscriptions.noExpiration')
-  const expiresAt = Date.parse(value)
-  if (!Number.isFinite(expiresAt)) return value
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(expiresAt))
-}
 </script>

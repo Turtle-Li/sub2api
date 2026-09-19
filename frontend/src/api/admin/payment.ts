@@ -67,6 +67,8 @@ export interface PaymentDiscountCouponUsage {
   id?: number
   order_id: number
   user_id: number
+  /** Present for active and soft-deleted users when their profile still exists. */
+  username?: string
   status: 'reserved' | 'consumed' | 'released' | 'paid_review'
   original_amount: string
   discount_amount: string
@@ -74,7 +76,6 @@ export interface PaymentDiscountCouponUsage {
   currency: string
   created_at: string
   updated_at: string
-  user_email?: string
 }
 
 export interface PaymentDiscountCouponAudit {

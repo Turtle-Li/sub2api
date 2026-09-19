@@ -225,7 +225,7 @@
       width="normal"
       mobile-sheet
       keep-mounted
-      :close-on-click-outside="false"
+      :close-on-click-outside="true"
       @close="hidePaymentModal"
     >
       <PaymentStatusPanel
@@ -236,6 +236,8 @@
         :expires-at="paymentState.expiresAt"
         :payment-type="paymentState.paymentType"
         :pay-url="paymentState.payUrl"
+        :checkout-frame-url="paymentState.checkoutFrameUrl"
+        :allow-checkout-frame="true"
         :order-type="paymentState.orderType"
         :currency="paymentState.currency || selectedCurrency"
         :out-trade-no="paymentState.outTradeNo"
@@ -475,6 +477,7 @@ function emptyPaymentState(): PaymentRecoverySnapshot {
     expiresAt: '',
     paymentType: '',
     payUrl: '',
+    checkoutFrameUrl: '',
     outTradeNo: '',
     clientSecret: '',
     intentId: '',
@@ -549,6 +552,7 @@ function snapshotWithoutLaunchMaterial(snapshot: PaymentRecoverySnapshot): Payme
     ...snapshot,
     qrCode: '',
     payUrl: '',
+    checkoutFrameUrl: '',
     clientSecret: '',
     intentId: '',
     paymentMode: '',
@@ -727,6 +731,7 @@ function hidePaymentModal() {
 }
 
 async function onPaymentSuccess() {
+  removeCoupon()
   // The panel emits this only for a server-recorded COMPLETED order. Keep the
   // terminal panel mounted until the user dismisses it; a browser callback is
   // never treated as an entitlement result.
@@ -866,20 +871,10 @@ const planGridClass = computed(() => {
   return 'grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3'
 })
 
-// Prefer the admin-selected recommendation. The discount fallback keeps older
-// configurations useful until an admin explicitly selects a plan.
-const featuredPlanId = computed<number | null>(() => {
-  const recommended = visibleSubscriptionPlans.value.find(plan => plan.entitlements?.recommended)
-  if (recommended) return recommended.id
-
-  let best: SubscriptionPlan | null = null
-  for (const plan of visibleSubscriptionPlans.value) {
-    const percent = planDiscountPercent(plan)
-    if (percent <= 0) continue
-    if (!best || percent > planDiscountPercent(best)) best = plan
-  }
-  return best ? best.id : null
-})
+// Recommendation is an explicit catalog choice, independent of discounts.
+const featuredPlanId = computed<number | null>(() =>
+  visibleSubscriptionPlans.value.find(plan => plan.entitlements?.recommended)?.id ?? null,
+)
 
 // Check if an amount fits a method's [min, max]. 0 = no limit.
 function amountFitsMethod(amt: number, methodType: string): boolean {
@@ -1194,7 +1189,7 @@ const railProductMeta = computed(() => {
   if (isRecharge.value) return selectedRechargeOption.value?.description || ''
   const resetCard = selectedResetCard.value
   if (resetCard) {
-    return `${resetCard.subscription.group?.name || t('payment.groupFallback', { id: resetCard.subscription.group_id })} · ${t('payment.resetShop.quantitySummary', { quantity: resetCardQuantity.value })} · ${t('payment.resetShop.validUntil', { date: formatResetCardExpiry(resetCard.quote.expires_at) })}`
+    return `${resetCard.subscription.group?.name || t('payment.groupFallback', { id: resetCard.subscription.group_id })} · ${t('payment.resetShop.quantitySummary', { quantity: resetCardQuantity.value })} · ${resetCard.quote.validity_days ? t('payment.resetShop.validDays', { days: resetCard.quote.validity_days }) : t('payment.resetShop.validUntil', { date: formatResetCardExpiry(resetCard.quote.expires_at) })}`
   }
   if (!selectedPlan.value) return ''
   return `${platformLabel(selectedPlan.value.group_platform || '')} · ${planValiditySuffix.value}`
@@ -1267,7 +1262,6 @@ const couponStatus = computed(() => {
   if (couponError.value) return couponError.value
   if (couponQuoting.value) return t('payment.coupon.quoting')
   if (selectedCoupon.value) return t('payment.coupon.appliedCode', { code: selectedCoupon.value.quote.code })
-  if (normalizeCouponCode(couponCode.value)) return t('payment.coupon.reapply')
   return ''
 })
 const railDisplayTotalAmount = computed<number | string>(() => selectedCoupon.value?.quote.pay_amount ?? railTotalAmount.value)
@@ -1366,8 +1360,6 @@ const railNotice = computed(() => {
   }
   const eligibility = isRecharge.value ? selectedRechargeOption.value?.eligibility : selectedPlan.value?.eligibility
   if (eligibility?.can_purchase === false) return t('payment.eligibility.minimum', { required: eligibility.required_total_recharge || 0, current: eligibility.current_total_recharge || 0 })
-  if (couponError.value) return couponError.value
-  if (!couponReady.value) return t('payment.coupon.reapply')
   if (isRecharge.value) {
     if (validAmount.value <= 0) return t('payment.selectTierFirst')
     return amountError.value
@@ -1457,11 +1449,11 @@ function shouldPreopenHostedPopup(requestType: string, options: CreateOrderOptio
     return true
   }
 
-  // Alipay is the only direct gateway whose desktop hosted checkout can use
-  // the reserved popup. The mobile-precreate flag has no effect on a desktop
-  // request, so only the explicit force-QR setting rules out this window.
-  return visibleMethod === 'alipay'
-    && !checkout.value.alipay_force_qrcode
+  // Alipay may return an embedded page-pay frame only after create-order
+  // succeeds. Do not reserve an empty external window before that response;
+  // the local payment shell keeps a hosted fallback available by explicit
+  // user action if no frame was issued.
+  return false
 }
 
 async function handleSubmitRecharge() {
@@ -1499,7 +1491,7 @@ function isSameResetCardSelection(next: ResetCardSelection): boolean {
   return current?.subscription.id === next.subscription.id
     && current.quote.plan_id === next.quote.plan_id
     && current.quote.price === next.quote.price
-    && current.quote.expires_at === next.quote.expires_at
+    && (current.quote.validity_days ? current.quote.validity_days === next.quote.validity_days : current.quote.expires_at === next.quote.expires_at)
     && current.quote.reset_card_tier_revision === next.quote.reset_card_tier_revision
 }
 
@@ -1553,6 +1545,7 @@ async function submitResetCardCheckout() {
     amount: resetCardBaseAmountForCurrency(selection.quote, quantity, 'CNY'),
     monthlyPrice: selection.quote.monthly_price,
     expiresAt: selection.quote.expires_at,
+    validityDays: selection.quote.validity_days,
     paymentType,
     tierRevision: selection.quote.reset_card_tier_revision,
     quantity,
@@ -1786,6 +1779,11 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       return
     }
     if (decision.kind === 'redirect_waiting' && decision.paymentState.payUrl) {
+      if (visibleMethod === 'alipay') {
+        // Preserve the order-scoped local shell. Its explicit fallback button
+        // resumes this order before opening the hosted checkout.
+        return
+      }
       if (isMobileDevice()) {
         window.location.href = decision.paymentState.payUrl
         return

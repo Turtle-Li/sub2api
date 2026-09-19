@@ -118,20 +118,93 @@
     </div>
 
     <BaseDialog :show="!!detailOrder" :title="t('payment.orderOps.detail')" @close="closeDetails">
-      <div v-if="detailOrder" class="space-y-4">
-        <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }} · #{{ detailOrder.id }}</p><p class="break-all text-sm">{{ detailOrder.out_trade_no }}</p><button type="button" class="mt-2 text-sm text-primary-700 dark:text-primary-300" @click="copyOrderNumber(detailOrder.out_trade_no)">{{ t('payment.orderOps.copyOrder') }}</button></div>
-        <div class="flex flex-wrap gap-2">
-          <OrderStatusBadge :status="detailOrder.status" :cancellation-pending="detailOrder.cancellation_pending === true" />
-          <OrderLifecycleBadge kind="payment" :value="paymentFact(detailOrder)" />
-          <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(detailOrder)" />
-        </div>
-        <dl class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-          <div><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</dt><dd class="font-semibold">{{ currencySymbol(detailOrder.currency) }}{{ detailOrder.pay_amount.toFixed(2) }}</dd></div>
-          <div><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.createdAt') }}</dt><dd>{{ formatOrderDateTime(detailOrder.created_at) }}</dd></div>
-          <div v-if="detailOrder.paid_at"><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.paidAt') }}</dt><dd>{{ formatOrderDateTime(detailOrder.paid_at) }}</dd></div>
-          <div v-if="detailOrder.completed_at"><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.fulfillment.fulfilled') }}</dt><dd>{{ formatOrderDateTime(detailOrder.completed_at) }}</dd></div>
-        </dl>
-        <OrderPurchaseSnapshot :order="detailOrder" />
+      <div v-if="detailOrder" class="space-y-5">
+        <section data-test="order-detail-purchase" class="space-y-3">
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.purchaseInfo') }}</h3>
+          <dl class="grid grid-cols-1 gap-3 border-b border-gray-100 pb-3 text-sm dark:border-dark-600 sm:grid-cols-2">
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</dt>
+              <dd class="font-mono text-gray-900 dark:text-white">#{{ detailOrder.id }}</dd>
+            </div>
+            <div class="min-w-0 sm:col-span-2">
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</dt>
+              <dd class="mt-1 flex min-w-0 items-start justify-between gap-2">
+                <code data-test="detail-order-number" class="min-w-0 break-all font-mono text-xs text-gray-900 dark:text-white">{{ detailOrder.out_trade_no }}</code>
+                <button
+                  type="button"
+                  class="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
+                  @click="copyOrderNumber(detailOrder.out_trade_no)"
+                >
+                  <Icon name="copy" size="xs" />
+                  {{ t('payment.orderOps.copyOrder') }}
+                </button>
+              </dd>
+            </div>
+          </dl>
+          <OrderPurchaseSnapshot :order="detailOrder" :show-title="false" :show-financials="false" />
+        </section>
+
+        <section data-test="order-detail-financials" class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-600">
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.amountAndDiscount') }}</h3>
+          <dl class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</dt>
+              <dd class="font-semibold text-gray-900 dark:text-white">{{ formatOrderAmount(detailOrder.pay_amount, detailOrder.currency) }}</dd>
+            </div>
+            <div v-if="detailOrder.order_type === 'balance'">
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.creditedAmount') }}</dt>
+              <dd class="font-semibold text-gray-900 dark:text-white">${{ detailOrder.amount.toFixed(2) }}</dd>
+            </div>
+            <div v-if="detailOrder.product_snapshot?.price != null">
+              <dt class="text-gray-500 dark:text-gray-400">{{ t(detailOrder.order_type === 'reset_card' ? 'payment.orderOps.resetCardTotalPrice' : 'payment.orderOps.listPrice') }}</dt>
+              <dd class="text-gray-900 dark:text-white">{{ formatOrderAmount(detailOrder.product_snapshot.price, detailOrder.product_snapshot.currency || (detailOrder.order_type === 'balance' ? detailOrder.currency : 'USD')) }}</dd>
+            </div>
+            <template v-if="detailPaymentDiscount">
+              <div>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.paymentCoupon') }}</dt>
+                <dd><code class="font-mono text-gray-900 dark:text-white">{{ detailPaymentDiscount.code }}</code></dd>
+              </div>
+              <div>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.originalPayment') }}</dt>
+                <dd class="text-gray-900 dark:text-white">{{ formatOrderAmount(Number(detailPaymentDiscount.original_amount), detailPaymentDiscount.currency) }}</dd>
+              </div>
+              <div>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.paymentDiscount') }}</dt>
+                <dd class="text-emerald-700 dark:text-emerald-300">-{{ formatOrderAmount(Number(detailPaymentDiscount.discount_amount), detailPaymentDiscount.currency) }}</dd>
+              </div>
+              <div>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.finalPayment') }}</dt>
+                <dd class="font-semibold text-gray-900 dark:text-white">{{ formatOrderAmount(Number(detailPaymentDiscount.pay_amount), detailPaymentDiscount.currency) }}</dd>
+              </div>
+            </template>
+          </dl>
+        </section>
+
+        <section data-test="order-detail-status" class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-600">
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.statusAndFulfillment') }}</h3>
+          <div class="flex flex-wrap gap-2">
+            <OrderStatusBadge :status="detailOrder.status" :cancellation-pending="detailOrder.cancellation_pending === true" />
+            <OrderLifecycleBadge kind="payment" :value="paymentFact(detailOrder)" />
+            <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(detailOrder)" />
+          </div>
+          <p v-if="detailOrder.invoice" class="text-sm text-gray-600 dark:text-gray-300">
+            {{ t('payment.invoice.currentStatus') }}: {{ t(`payment.invoice.status.${detailOrder.invoice.status.toLowerCase()}`) }}
+          </p>
+          <p v-if="detailOrder.needs_manual_review" class="text-sm text-amber-700 dark:text-amber-300">{{ t('payment.orderOps.reviewRequired') }}</p>
+        </section>
+
+        <section data-test="order-detail-timeline" class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-600">
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.timeline') }}</h3>
+          <dl class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <div><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.createdAt') }}</dt><dd class="text-gray-900 dark:text-white">{{ formatOrderDateTime(detailOrder.created_at) }}</dd></div>
+            <div v-if="detailOrder.paid_at"><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.paidAt') }}</dt><dd class="text-gray-900 dark:text-white">{{ formatOrderDateTime(detailOrder.paid_at) }}</dd></div>
+            <div v-if="detailOrder.completed_at"><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.fulfillment.fulfilled') }}</dt><dd class="text-gray-900 dark:text-white">{{ formatOrderDateTime(detailOrder.completed_at) }}</dd></div>
+          </dl>
+          <div v-if="canRequestRefund(detailOrder) || canOpenInvoice(detailOrder)" class="flex flex-wrap gap-2 border-t border-gray-100 pt-3 dark:border-dark-600">
+            <button v-if="canRequestRefund(detailOrder)" type="button" class="btn btn-secondary btn-sm" @click="openRefundFromDetails(detailOrder)">{{ t('payment.orders.requestRefund') }}</button>
+            <button v-if="canOpenInvoice(detailOrder)" type="button" class="btn btn-secondary btn-sm" @click="openInvoiceFromDetails(detailOrder)">{{ invoiceActionLabel(detailOrder) }}</button>
+          </div>
+        </section>
       </div>
     </BaseDialog>
     <!-- Cancel Confirm Dialog -->
@@ -139,8 +212,9 @@
       :show="!!cancelTarget"
       :title="t('payment.orders.cancel')"
       width="narrow"
-      :close-on-escape="!cancellingOrderId"
-      :show-close-button="!cancellingOrderId"
+      :close-on-escape="cancellingOrderId === null"
+      :close-on-click-outside="cancellingOrderId === null"
+      :show-close-button="cancellingOrderId === null"
       @close="closeCancelDialog"
     >
       <div v-if="cancelTarget" class="space-y-4">
@@ -177,7 +251,6 @@
       :title="resumeDialogTitle"
       width="normal"
       mobile-sheet
-      :close-on-click-outside="false"
       @close="closeResumedPayment"
     >
       <PaymentStatusPanel
@@ -190,6 +263,8 @@
         :expires-at="resumedPayment.expiresAt"
         :payment-type="resumedPayment.paymentType"
         :pay-url="resumedPayment.payUrl"
+        :checkout-frame-url="resumedPayment.checkoutFrameUrl"
+        :allow-checkout-frame="true"
         :order-type="resumedPayment.orderType"
         :currency="resumedPayment.currency"
         :out-trade-no="resumedPayment.outTradeNo"
@@ -202,7 +277,14 @@
     </BaseDialog>
 
     <!-- Refund Dialog -->
-    <BaseDialog :show="!!refundTarget" :title="t('payment.orders.requestRefund')" @close="refundTarget = null">
+    <BaseDialog
+      :show="!!refundTarget"
+      :title="t('payment.orders.requestRefund')"
+      :close-on-escape="!actionLoading"
+      :close-on-click-outside="!actionLoading"
+      :show-close-button="!actionLoading"
+      @close="closeRefundDialog"
+    >
       <div v-if="refundTarget" class="space-y-4">
         <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800">
           <div class="flex justify-between text-sm">
@@ -210,8 +292,8 @@
             <span class="font-mono text-gray-900 dark:text-white">#{{ refundTarget.id }}</span>
           </div>
           <div class="mt-2 flex justify-between text-sm">
-            <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</span>
-            <span class="text-gray-900 dark:text-white">${{ refundTarget.amount.toFixed(2) }}</span>
+            <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
+            <span class="text-gray-900 dark:text-white">{{ formatOrderAmount(refundTarget.pay_amount, refundTarget.currency) }}</span>
           </div>
         </div>
         <div>
@@ -221,7 +303,7 @@
       </div>
       <template #footer>
         <div class="flex justify-end gap-3">
-          <button class="btn btn-secondary" @click="refundTarget = null">{{ t('common.cancel') }}</button>
+          <button class="btn btn-secondary" :disabled="actionLoading" @click="closeRefundDialog">{{ t('common.cancel') }}</button>
           <button class="btn btn-primary" :disabled="actionLoading || !refundReason.trim()" @click="confirmRefund">{{ actionLoading ? t('common.processing') : t('payment.orders.requestRefund') }}</button>
         </div>
       </template>
@@ -231,7 +313,7 @@
       :show="!!invoiceTarget"
       :order="invoiceTarget"
       :submitting="invoiceSubmitting"
-      @close="invoiceTarget = null"
+      @close="closeInvoiceDialog"
       @submit="submitInvoiceRequest"
     />
   </AppLayout>
@@ -261,7 +343,7 @@ import { decidePaymentLaunch, type PaymentRecoverySnapshot } from '@/components/
 import { isPaymentEntryVisible } from '@/utils/featureFlags'
 import { isMobileDevice } from '@/utils/device'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
-import { currencySymbol } from '@/components/payment/currency'
+import { currencySymbol, formatPaymentAmount } from '@/components/payment/currency'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -281,6 +363,7 @@ const currentFilter = ref('')
 const fulfillmentFilter = ref('')
 const invoiceFilter = ref('')
 const detailOrder = ref<PaymentOrder | null>(null)
+const detailPaymentDiscount = computed(() => detailOrder.value?.product_snapshot?.payment_discount)
 const fulfillmentOptions = computed(() => [
   { value: '', label: t('payment.orderOps.allFulfillments') },
   ...['PENDING', 'FAILED', 'FULFILLED', 'NOT_STARTED'].map(value => ({ value, label: t(`payment.orderOps.fulfillment.${value.toLowerCase()}`) })),
@@ -306,6 +389,10 @@ async function openDetails(order: PaymentOrder) {
 async function copyOrderNumber(value: string) {
   try { await navigator.clipboard.writeText(value); appStore.showSuccess(t('common.success')) }
   catch { appStore.showError(t('payment.orderOps.copyFailed')) }
+}
+
+function formatOrderAmount(amount: number, currency?: string): string {
+  return formatPaymentAmount(amount, currency)
 }
 const cancelTarget = ref<PaymentOrder | null>(null)
 const cancellingOrderId = ref<number | null>(null)
@@ -541,6 +628,17 @@ function refreshPaymentLifecycle() {
 
 function openRefundDialog(order: PaymentOrder) { refundTarget.value = order; refundReason.value = '' }
 
+function openRefundFromDetails(order: PaymentOrder) {
+  closeDetails()
+  openRefundDialog(order)
+}
+
+function closeRefundDialog() {
+  if (actionLoading.value) return
+  refundTarget.value = null
+  refundReason.value = ''
+}
+
 async function confirmRefund() {
   if (!refundTarget.value || !refundReason.value.trim()) return
   actionLoading.value = true
@@ -559,6 +657,7 @@ async function confirmRefund() {
 
 function canRequestRefund(order: PaymentOrder): boolean {
   if (order.status !== 'COMPLETED' || order.refund_amount > 0) return false
+  if (order.invoice?.status === 'ISSUED') return false
   if (!order.provider_instance_id) return false
   return refundEligibleProviders.value.has(order.provider_instance_id)
 }
@@ -586,6 +685,15 @@ function invoiceOrderEligible(order: PaymentOrder): boolean {
 
 function openInvoiceDialog(order: PaymentOrder) {
   invoiceTarget.value = order
+}
+
+function openInvoiceFromDetails(order: PaymentOrder) {
+  closeDetails()
+  openInvoiceDialog(order)
+}
+
+function closeInvoiceDialog() {
+  if (!invoiceSubmitting.value) invoiceTarget.value = null
 }
 
 async function submitInvoiceRequest(payload: CreateInvoiceRequest) {

@@ -99,7 +99,7 @@ describe('AdminInvoiceRequestsView', () => {
     expect(wrapper.get('[data-test="applications"]').text()).toBe('1')
   })
 
-  it.each(['update', 'email', 'feishu'])('keeps the current order when a delayed %s response belongs to a closed dialog', async (action) => {
+  it.each(['update', 'email', 'feishu'])('keeps the invoice dialog and target locked during an in-flight %s request', async (action) => {
     const otherOrder = { ...invoiceOrder, id: 52, out_trade_no: 'sub2_52', invoice: { ...invoiceOrder.invoice, id: 3, order_id: 52, title: 'Second Co.' } }
     getOrders.mockResolvedValue({ data: { items: [invoiceOrder, otherOrder], total: 2 } })
     let resolve!: (value: unknown) => void
@@ -115,9 +115,14 @@ describe('AdminInvoiceRequestsView', () => {
     expect(request).toHaveBeenCalledWith(51, ...(action === 'update' ? [{ status: 'PROCESSING' }] : []))
     dialog.vm.$emit('close')
     await wrapper.get('[data-order="52"] button').trigger('click')
+    expect(dialog.props('show')).toBe(true)
+    expect(dialog.props('order')).toMatchObject({ id: 51 })
     resolve({ data: { ...invoiceOrder.invoice, title: 'First updated' } })
     await flushPromises()
-    expect(dialog.props('show')).toBe(true)
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(dialog.props('show')).toBe(false)
+    await wrapper.get('[data-order="52"] button').trigger('click')
     expect(dialog.props('order')).toMatchObject({ id: 52, invoice: { title: 'Second Co.' } })
     wrapper.unmount()
   })

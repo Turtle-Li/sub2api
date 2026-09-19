@@ -97,4 +97,35 @@ describe('OrderPurchaseSnapshot quota semantics', () => {
     } as PaymentOrder
     expect(mount(OrderPurchaseSnapshot, { props: { order: notUsedOnPurchase } }).text()).toContain('common.no')
   })
+
+  it('can embed product facts under a parent heading while the parent owns financial grouping', () => {
+    const order = {
+      order_type: 'reset_card',
+      currency: 'CNY',
+      product_snapshot: {
+        name: 'Quota reset card',
+        price: 37.02,
+        currency: 'CNY',
+        quantity: 3,
+        payment_discount: {
+          code_id: 9,
+          code: 'SAVE2026',
+          original_amount: '40.00',
+          discount_amount: '2.98',
+          pay_amount: '37.02',
+          currency: 'CNY',
+        },
+      },
+    } as PaymentOrder
+    const wrapper = mount(OrderPurchaseSnapshot, {
+      props: { order, showTitle: false, showFinancials: false },
+    })
+    const text = wrapper.text()
+
+    expect(text).toContain('Quota reset card')
+    expect(text).toContain('payment.orderOps.resetCardQuantity')
+    expect(wrapper.find('h3').exists()).toBe(false)
+    expect(text).not.toContain('payment.orderOps.resetCardTotalPrice')
+    expect(text).not.toContain('SAVE2026')
+  })
 })

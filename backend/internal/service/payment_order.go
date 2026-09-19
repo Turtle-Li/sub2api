@@ -584,7 +584,9 @@ func (s *PaymentService) replayResetCardOrderRecord(ctx context.Context, order *
 		}
 	}
 	if resetCardOrderHasReusableResponse(order) {
-		return buildResetCardOrderResponse(order), nil
+		response := buildResetCardOrderResponse(order)
+		s.hydrateCheckoutFrameURL(ctx, order, response)
+		return response, nil
 	}
 	if s.configService == nil {
 		return nil, infraerrors.ServiceUnavailable("PAYMENT_CONFIG_UNAVAILABLE", "payment configuration is unavailable")
@@ -746,11 +748,12 @@ func buildResetCardOrderResponse(order *dbent.PaymentOrder) *CreateOrderResponse
 	if snapshot := psOrderProviderSnapshot(order); snapshot != nil {
 		paymentMode = snapshot.PaymentMode
 	}
-	payURL, qrCode := "", ""
+	payURL, checkoutFrameURL, qrCode := "", "", ""
 	resultType := payment.CreatePaymentResultOrderCreated
 	var jsapi *payment.WechatJSAPIPayload
 	if order.Status == OrderStatusPending && order.ExpiresAt.After(time.Now()) {
 		payURL = psStringValue(order.PayURL)
+		checkoutFrameURL = paymentOrderCheckoutFrameURLFromSnapshot(order)
 		qrCode = psStringValue(order.QrCode)
 		if checkout, _, err := resetCardCheckoutFromOrder(order); err == nil && checkout != nil {
 			resultType = checkout.ResultType
@@ -758,22 +761,23 @@ func buildResetCardOrderResponse(order *dbent.PaymentOrder) *CreateOrderResponse
 		}
 	}
 	return &CreateOrderResponse{
-		OrderID:         order.ID,
-		Amount:          order.Amount,
-		PayAmount:       order.PayAmount,
-		FeeRate:         order.FeeRate,
-		Status:          order.Status,
-		ResultType:      resultType,
-		PaymentType:     order.PaymentType,
-		OutTradeNo:      order.OutTradeNo,
-		PayURL:          payURL,
-		QRCode:          qrCode,
-		JSAPI:           jsapi,
-		JSAPIPayload:    jsapi,
-		Currency:        PaymentOrderCurrency(order),
-		ExpiresAt:       order.ExpiresAt,
-		PaymentMode:     paymentMode,
-		PaymentDiscount: paymentOrderResponsePaymentDiscount(order),
+		OrderID:          order.ID,
+		Amount:           order.Amount,
+		PayAmount:        order.PayAmount,
+		FeeRate:          order.FeeRate,
+		Status:           order.Status,
+		ResultType:       resultType,
+		PaymentType:      order.PaymentType,
+		OutTradeNo:       order.OutTradeNo,
+		PayURL:           payURL,
+		CheckoutFrameURL: checkoutFrameURL,
+		QRCode:           qrCode,
+		JSAPI:            jsapi,
+		JSAPIPayload:     jsapi,
+		Currency:         PaymentOrderCurrency(order),
+		ExpiresAt:        order.ExpiresAt,
+		PaymentMode:      paymentMode,
+		PaymentDiscount:  paymentOrderResponsePaymentDiscount(order),
 	}
 }
 
@@ -1543,7 +1547,7 @@ func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, 
 		unitPrice = source.price
 	}
 	snapshot := map[string]any{
-		"schema_version":          2,
+		"schema_version":          3,
 		"kind":                    "reset_card",
 		"subscription_id":         source.subscriptionID,
 		"plan_id":                 source.plan.ID,
@@ -1558,7 +1562,8 @@ func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, 
 		"pay_amount":              payAmount,
 		"quantity":                quantity,
 		"use_on_purchase":         source.useOnPurchase,
-		"grant_expiry_policy":     "subscription",
+		"grant_expiry_policy":     "paid_duration",
+		"grant_validity_days":     resetCardPurchasedValidityDays,
 		"subscription_expires_at": source.subscriptionExpires.UTC().Format(time.RFC3339Nano),
 		"idempotency_key_sha256":  source.idempotencyKeyHash,
 	}
@@ -1912,7 +1917,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	}
 	subject := s.buildPaymentSubject(plan, limitAmount, cfg, sel)
 	if req.OrderType == payment.OrderTypeResetCard {
-		subject = applyPaymentProductNameAffix("Subscription reset card", cfg)
+		subject = "订阅重置卡"
 	}
 	outTradeNo := order.OutTradeNo
 	canonicalReturnURL, err := CanonicalizeReturnURL(req.ReturnURL, req.SrcHost, req.SrcURL)
@@ -1972,10 +1977,14 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	sanitizeCreatePaymentResponseDetails(pr)
 	providerSnapshot := order.ProviderSnapshot
 	if sel.ProviderKey == payment.TypeUnifiedPay {
+		providerSnapshot = clonePaymentOrderSnapshot(providerSnapshot)
 		if providerSnapshot == nil {
 			providerSnapshot = make(map[string]any)
 		}
 		providerSnapshot["payment_order_id"] = strings.TrimSpace(pr.TradeNo)
+		if frameURL := paymentOrderCheckoutFrameURLFromProviderResponse(sel, req.PaymentType, pr); frameURL != "" {
+			providerSnapshot[paymentOrderCheckoutFrameURLSnapshotKey] = frameURL
+		}
 	}
 	update := s.entClient.PaymentOrder.UpdateOneID(order.ID).
 		SetNillablePaymentTradeNo(psNilIfEmpty(pr.TradeNo)).
@@ -2075,23 +2084,24 @@ func selectedInstanceSupportedTypes(sel *payment.InstanceSelection) string {
 	return sel.SupportedTypes
 }
 
-func (s *PaymentService) buildPaymentSubject(plan *dbent.SubscriptionPlan, limitAmount float64, cfg *PaymentConfig, sel *payment.InstanceSelection) string {
-	if plan != nil {
-		productName := plan.ProductName
-		if productName == "" {
-			productName = "Sub2API Subscription " + plan.Name
+// Customer-facing channel descriptions deliberately omit internal branding and
+// legacy prefix/suffix configuration. They do not determine entitlement tiers.
+func (s *PaymentService) buildPaymentSubject(plan *dbent.SubscriptionPlan, _ float64, _ *PaymentConfig, _ *payment.InstanceSelection) string {
+	if plan == nil {
+		return "余额充值"
+	}
+	words := strings.FieldsFunc(strings.ToLower(plan.Name+" "+plan.ProductName), func(r rune) bool {
+		return r < 'a' || r > 'z'
+	})
+	for _, word := range words {
+		if word == "pro" {
+			return "Pro订阅"
 		}
-		return applyPaymentProductNameAffix(productName, cfg)
+		if word == "plus" {
+			return "Plus订阅"
+		}
 	}
-	currency := payment.DefaultPaymentCurrency
-	if sel != nil {
-		currency = paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
-	}
-	amountStr := payment.FormatAmountForCurrency(limitAmount, currency)
-	if hasPaymentProductNameAffix(cfg) {
-		return applyPaymentProductNameAffix(amountStr, cfg)
-	}
-	return "Sub2API " + amountStr + " " + currency
+	return "订阅"
 }
 
 func hasPaymentProductNameAffix(cfg *PaymentConfig) bool {
@@ -2275,27 +2285,28 @@ func classifyCreatePaymentError(req CreateOrderRequest, providerKey string, err 
 
 func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest, payAmount float64, sel *payment.InstanceSelection, pr *payment.CreatePaymentResponse, resultType payment.CreatePaymentResultType) *CreateOrderResponse {
 	return &CreateOrderResponse{
-		OrderID:         order.ID,
-		Amount:          order.Amount,
-		PayAmount:       payAmount,
-		FeeRate:         order.FeeRate,
-		Status:          OrderStatusPending,
-		ResultType:      resultType,
-		PaymentType:     req.PaymentType,
-		OutTradeNo:      order.OutTradeNo,
-		PayURL:          pr.PayURL,
-		QRCode:          pr.QRCode,
-		ClientSecret:    pr.ClientSecret,
-		IntentID:        pr.IntentID,
-		Currency:        pr.Currency,
-		CountryCode:     pr.CountryCode,
-		PaymentEnv:      pr.PaymentEnv,
-		OAuth:           pr.OAuth,
-		JSAPI:           pr.JSAPI,
-		JSAPIPayload:    pr.JSAPI,
-		ExpiresAt:       order.ExpiresAt,
-		PaymentMode:     sel.PaymentMode,
-		PaymentDiscount: paymentOrderResponsePaymentDiscount(order),
+		OrderID:          order.ID,
+		Amount:           order.Amount,
+		PayAmount:        payAmount,
+		FeeRate:          order.FeeRate,
+		Status:           OrderStatusPending,
+		ResultType:       resultType,
+		PaymentType:      req.PaymentType,
+		OutTradeNo:       order.OutTradeNo,
+		PayURL:           pr.PayURL,
+		CheckoutFrameURL: paymentOrderCheckoutFrameURLFromProviderResponse(sel, req.PaymentType, pr),
+		QRCode:           pr.QRCode,
+		ClientSecret:     pr.ClientSecret,
+		IntentID:         pr.IntentID,
+		Currency:         pr.Currency,
+		CountryCode:      pr.CountryCode,
+		PaymentEnv:       pr.PaymentEnv,
+		OAuth:            pr.OAuth,
+		JSAPI:            pr.JSAPI,
+		JSAPIPayload:     pr.JSAPI,
+		ExpiresAt:        order.ExpiresAt,
+		PaymentMode:      sel.PaymentMode,
+		PaymentDiscount:  paymentOrderResponsePaymentDiscount(order),
 	}
 }
 

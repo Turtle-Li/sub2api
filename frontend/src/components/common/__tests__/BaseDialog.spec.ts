@@ -74,6 +74,51 @@ describe('BaseDialog', () => {
     wrapper.unmount()
   })
 
+  it('closes from a backdrop click by default but ignores a drag that started inside the panel', async () => {
+    const wrapper = mount(BaseDialog, {
+      attachTo: document.body,
+      props: { show: true, title: 'Details' },
+      slots: { default: '<button data-test="dialog-action">Continue</button>' },
+      global: { stubs: { Icon: true } },
+    })
+    await nextTick()
+
+    const overlay = document.body.querySelector<HTMLElement>('.modal-overlay')!
+    const panel = document.body.querySelector<HTMLElement>('.modal-content')!
+
+    panel.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    overlay.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(wrapper.emitted('close')).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
+  it('only lets the topmost stacked dialog react to Escape', async () => {
+    const outer = mount(BaseDialog, {
+      attachTo: document.body,
+      props: { show: true, title: 'Outer' },
+      global: { stubs: { Icon: true } },
+    })
+    const inner = mount(BaseDialog, {
+      attachTo: document.body,
+      props: { show: true, title: 'Inner' },
+      global: { stubs: { Icon: true } },
+    })
+    await nextTick()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+
+    expect(outer.emitted('close')).toBeUndefined()
+    expect(inner.emitted('close')).toHaveLength(1)
+
+    outer.unmount()
+    inner.unmount()
+  })
+
   it('restores a connected opener when an open dialog unmounts directly', async () => {
     const opener = document.createElement('button')
     opener.textContent = 'Open details'

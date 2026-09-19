@@ -715,7 +715,7 @@ function openRefundDialog(order: PaymentOrder) {
   reviewedRefundAmount.value = undefined
   refundReviewError.value = ''
   refundPreviewing.value = false
-  refundWarning.value = order.invoice?.status === 'ISSUED' ? t('payment.invoice.admin.refundCorrectionWarning') : ''
+  refundWarning.value = order.invoice?.status === 'ISSUED' ? t('payment.invoice.refundBlockedAfterIssue') : ''
   showRefundDialog.value = true
   void loadRefundReview(order, session)
 }

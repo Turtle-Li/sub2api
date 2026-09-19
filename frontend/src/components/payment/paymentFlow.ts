@@ -46,6 +46,8 @@ export interface PaymentRecoverySnapshot {
   expiresAt: string
   paymentType: string
   payUrl: string
+  /** Validated Alipay page-pay iframe URL. It is never treated as QR data. */
+  checkoutFrameUrl?: string
   outTradeNo: string
   clientSecret: string
   intentId: string
@@ -85,6 +87,7 @@ export interface ResetCardCheckoutAttemptInput {
   amount: number
   monthlyPrice: number
   expiresAt: string
+  validityDays?: number
   paymentType: string
   tierRevision?: string
   quantity?: number
@@ -160,6 +163,85 @@ interface PaymentRecoveryEnvelope {
 
 const MAX_RECOVERY_ENTRIES = 4
 const MAX_RECOVERY_AGE_MS = 2 * 60 * 60 * 1000
+const ALIPAY_CHECKOUT_FRAME_HOSTS = new Set([
+  'openapi.alipay.com',
+  'openapi-sandbox.dl.alipaydev.com',
+])
+const MAX_ALIPAY_CHECKOUT_FRAME_URL_LENGTH = 16384
+
+function readSingleSearchParam(params: URLSearchParams, name: string): string | null {
+  const values = params.getAll(name)
+  return values.length === 1 ? values[0] : null
+}
+
+function hasUnsafeUrlCharacters(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.charCodeAt(0)
+    return code <= 0x1f || code === 0x7f || character.trim() === ''
+  })
+}
+
+/**
+ * The backend is authoritative for the signed checkout URL. This browser-side
+ * check only prevents an altered recovery value from becoming an iframe src.
+ */
+export function validateAlipayCheckoutFrameUrl(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const raw = value
+  if (
+    !raw
+    || raw.length > MAX_ALIPAY_CHECKOUT_FRAME_URL_LENGTH
+    || raw !== raw.trim()
+    || hasUnsafeUrlCharacters(raw)
+  ) return ''
+
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return ''
+  }
+
+  const rawAuthority = raw.match(/^https:\/\/([^/?#]+)/i)?.[1]?.toLowerCase()
+  if (
+    url.protocol !== 'https:'
+    || !ALIPAY_CHECKOUT_FRAME_HOSTS.has(url.hostname)
+    || !rawAuthority
+    || rawAuthority !== url.hostname
+    || url.username
+    || url.password
+    || url.port
+    || url.hash
+    || url.pathname !== '/gateway.do'
+  ) {
+    return ''
+  }
+
+  const method = readSingleSearchParam(url.searchParams, 'method')
+  const bizContent = readSingleSearchParam(url.searchParams, 'biz_content')
+  const signType = readSingleSearchParam(url.searchParams, 'sign_type')
+  const sign = readSingleSearchParam(url.searchParams, 'sign')
+  if (method !== 'alipay.trade.page.pay' || signType !== 'RSA2' || !sign || sign.trim() !== sign || !bizContent) {
+    return ''
+  }
+
+  try {
+    const biz = JSON.parse(bizContent) as Record<string, unknown>
+    if (
+      !biz
+      || Array.isArray(biz)
+      || String(biz.qr_pay_mode) !== '4'
+      || String(biz.qrcode_width) !== '224'
+    ) {
+      return ''
+    }
+  } catch {
+    return ''
+  }
+
+  // Keep the original signed bytes intact; URL serialization can change query encoding.
+  return raw
+}
 
 export function normalizeVisibleMethod(method: string): VisiblePaymentMethod | '' {
   const normalized = VISIBLE_METHOD_ALIASES[method.trim() as keyof typeof VISIBLE_METHOD_ALIASES]
@@ -239,6 +321,7 @@ export function decidePaymentLaunch(
     expiresAt: result.expires_at || '',
     paymentType: visibleMethod,
     payUrl: result.pay_url || '',
+    checkoutFrameUrl: validateAlipayCheckoutFrameUrl(result.checkout_frame_url),
     outTradeNo: result.out_trade_no || '',
     clientSecret: result.client_secret || '',
     intentId: result.intent_id || '',
@@ -309,6 +392,12 @@ export function decidePaymentLaunch(
     && baseState.qrCode
   ) {
     return { kind: 'alipay_deep_link', paymentState: baseState, recovery: baseState }
+  }
+
+  // A valid embedded page-pay URL is a presentation option for Alipay only.
+  // It stays distinct from both gateway QR data and conventional hosted URLs.
+  if (visibleMethod === 'alipay' && baseState.checkoutFrameUrl) {
+    return { kind: 'qr_waiting', paymentState: baseState, recovery: baseState }
   }
 
   const normalizedPaymentMode = baseState.paymentMode.trim().toLowerCase()
@@ -398,6 +487,7 @@ function normalizeSnapshot(parsed: Partial<PaymentRecoverySnapshot>, now: number
     || typeof parsed.expiresAt !== 'string'
     || typeof parsed.paymentType !== 'string'
     || typeof parsed.payUrl !== 'string'
+    || (parsed.checkoutFrameUrl != null && typeof parsed.checkoutFrameUrl !== 'string')
     || (parsed.qrCode != null && typeof parsed.qrCode !== 'string')
     || (parsed.outTradeNo != null && typeof parsed.outTradeNo !== 'string')
     || (parsed.clientSecret != null && typeof parsed.clientSecret !== 'string')
@@ -429,6 +519,7 @@ function normalizeSnapshot(parsed: Partial<PaymentRecoverySnapshot>, now: number
     expiresAt: parsed.expiresAt,
     paymentType: parsed.paymentType,
     payUrl: parsed.payUrl,
+    checkoutFrameUrl: validateAlipayCheckoutFrameUrl(parsed.checkoutFrameUrl),
     outTradeNo: parsed.outTradeNo || '',
     clientSecret: parsed.clientSecret || '',
     intentId: parsed.intentId || '',
@@ -571,7 +662,8 @@ export function createResetCardCheckoutFingerprint(input: ResetCardCheckoutAttem
     planId: input.planId,
     amount: fingerprintMoney(input.amount),
     monthlyPrice: fingerprintMoney(input.monthlyPrice),
-    expiresAt: String(input.expiresAt || ''),
+    expiresAt: input.validityDays ? undefined : String(input.expiresAt || ''),
+    ...(input.validityDays ? { validityDays: input.validityDays } : {}),
     paymentType: String(input.paymentType || '').trim(),
     tierRevision: String(input.tierRevision || '').trim(),
     quantity: Number.isSafeInteger(input.quantity) && input.quantity! >= 1 && input.quantity! <= 99 ? input.quantity : 1,

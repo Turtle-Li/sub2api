@@ -233,3 +233,23 @@ Vault 项。任一内存代理重启都会主动清空密钥并 fail-closed，�
 测试创建自己的普通余额订单，手续费和额外赠送均为零。支付宝打开返回的收银台；微信在管理员页面本地生成 Native 二维码。二维码或浏览器返回不表示到账，以已验签的统一支付通知及订单履约结果为准，到账后可从原订单执行退款。
 
 接口为 `POST /api/v1/admin/payment/owner-test/orders`，请求仅含整数 `amount_fen`（1 或 2）及 `payment_type`（`alipay` 或 `wxpay`），必须携带 `Idempotency-Key`。身份、订单类型、正式环境和回调范围全部由服务器决定。同一意图遇到网络中断时保留原请求键重试，不能换键猜测原请求失败。该入口属于部署后的验收手段；文档存在不代表生产通道已经通过真实支付验收。
+
+## 2026-09-20 支付宝站内二维码候选（尚未发布）
+
+显式请求 `metadata.checkout_presentation=embedded_qr` 时，中央服务沿现有
+`alipay.trade.page.pay` 使用 `qr_pay_mode=4`、`qrcode_width=224`，认证响应新增
+可选 `checkout_frame_url`，用于本应用支付弹窗内的官方二维码 iframe。它与微信
+`checkout_code_url`/本地 `qr_code` 分开，不把托管收银台链接生成伪原生二维码。
+未选择嵌入方式的其他产品保持原行为；没有新字段的历史订单保留原支付入口。
+到账仍只认后端查单/可信通知，不认 iframe 加载或浏览器回跳。
+
+本次读取并保存在中央仓库对象库的固定契约快照：
+
+- `internal/service/orders.go`: `e0015337d2d266e09c6f89a6fb6dbf37f3f2b03c`
+- `internal/channel/alipay/sdk.go`: `8690f6bd37364b923f7883027af81474f2013692`
+- `sdk/go/payclient/types.go`: `a8cdb1d963f1a8ac4f79d796542749b7a1da2d2d`
+- `contracts/openapi.yaml`: `3db42b8b797a7ff6ea01e7eeb3b5e11dcaeeaaca`
+
+官方协议和固定 SDK 的出处、许可和有意差异记录在中央项目
+`docs/支付通道上游参考.md` 的同日条目。两端严格校验官方 HTTPS 网关、page.pay
+方法、RSA2/签名和嵌入参数；页面 CSP 仅扩展必要的支付宝 frame 来源。

@@ -28,21 +28,33 @@
           <p class="text-lg font-bold text-gray-900 dark:text-white">{{ props.orderType === 'subscription' ? t('payment.result.subscriptionSuccess') : t('payment.result.success') }}</p>
           <div v-if="paidOrder" class="w-full rounded-xl bg-gray-50 p-4 dark:bg-dark-800">
             <div class="space-y-2 text-sm">
-              <div class="flex justify-between">
-                <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
-                <span class="font-medium text-gray-900 dark:text-white">#{{ paidOrder.id }}</span>
+              <div class="flex items-start justify-between gap-3">
+                <span class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
+                <span class="min-w-0 font-medium text-right text-gray-900 dark:text-white">#{{ paidOrder.id }}</span>
               </div>
-              <div v-if="paidOrder.out_trade_no" class="flex justify-between">
-                <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</span>
-                <span class="font-medium text-gray-900 dark:text-white">{{ paidOrder.out_trade_no }}</span>
+              <div v-if="paidOrder.out_trade_no" class="flex items-start justify-between gap-3">
+                <span class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</span>
+                <div class="flex min-w-0 items-start justify-end gap-1">
+                  <code data-test="payment-result-order-number" class="min-w-0 break-all text-right font-mono text-xs text-gray-900 dark:text-white">{{ paidOrder.out_trade_no }}</code>
+                  <button
+                    data-test="copy-payment-result-order"
+                    type="button"
+                    class="inline-flex shrink-0 rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+                    :aria-label="t('payment.orderOps.copyOrder')"
+                    :title="t('payment.orderOps.copyOrder')"
+                    @click="copyOrderNumber(paidOrder.out_trade_no)"
+                  >
+                    <Icon name="copy" size="xs" />
+                  </button>
+                </div>
               </div>
-              <div class="flex justify-between">
-                <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</span>
-                <span class="font-medium text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ paidOrder.amount.toFixed(2) }}</span>
+              <div v-if="paidOrder.order_type === 'balance'" class="flex items-start justify-between gap-3">
+                <span class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.creditedAmount') }}</span>
+                <span class="min-w-0 text-right font-medium text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ paidOrder.amount.toFixed(2) }}</span>
               </div>
-              <div class="flex justify-between">
-                <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
-                <span class="font-medium text-gray-900 dark:text-white">{{ formatGatewayAmount(paidOrder.pay_amount, paidOrder.currency) }}</span>
+              <div class="flex items-start justify-between gap-3">
+                <span class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
+                <span class="min-w-0 text-right font-medium text-gray-900 dark:text-white">{{ formatGatewayAmount(paidOrder.pay_amount, paidOrder.currency) }}</span>
               </div>
             </div>
           </div>
@@ -231,6 +243,57 @@
       </template>
     </template>
 
+    <!-- Desktop Alipay page-pay QR. The iframe is only a display surface; status polling remains authoritative. -->
+    <template v-else-if="showCheckoutFrame">
+      <div class="card p-6">
+        <div class="flex flex-col items-center space-y-4">
+          <div class="text-center">
+            <p class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.qr.alipayEmbeddedTitle') }}</p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('payment.qr.alipayEmbeddedHint') }}</p>
+          </div>
+          <div
+            data-test="alipay-checkout-frame-region"
+            class="relative h-[224px] w-[224px] overflow-hidden rounded border border-gray-200 bg-white dark:border-dark-600"
+            :aria-busy="checkoutFrameLoading"
+          >
+            <iframe
+              data-test="alipay-checkout-frame"
+              :src="currentCheckoutFrameUrl"
+              :title="t('payment.qr.alipayEmbeddedFrameTitle')"
+              class="h-[224px] w-[224px] border-0"
+              sandbox="allow-scripts allow-forms allow-same-origin"
+              referrerpolicy="strict-origin-when-cross-origin"
+              @load="handleCheckoutFrameLoad"
+              @error="handleCheckoutFrameError"
+            ></iframe>
+            <div v-if="checkoutFrameLoading" class="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-dark-900/80">
+              <div class="h-8 w-8 animate-spin rounded-full border-4 border-[#00AEEF] border-t-transparent"></div>
+            </div>
+          </div>
+          <button
+            v-if="checkoutFrameFallbackVisible && checkoutFrameFallbackUrl"
+            data-test="open-alipay-checkout-fallback"
+            class="btn btn-secondary text-sm"
+            :disabled="resumingLaunch"
+            @click="reopenPopup"
+          >
+            {{ t('payment.qr.alipayEmbeddedFallback') }}
+          </button>
+        </div>
+      </div>
+      <div class="card p-4 text-center">
+        <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.qr.expiresIn') }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-gray-900 dark:text-white">{{ countdownDisplay }}</p>
+        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ waitingHint }}</p>
+      </div>
+      <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
+        {{ t('payment.qr.refreshStatus') }}
+      </button>
+      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="handleCancel">
+        {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
+      </button>
+    </template>
+
     <!-- QR Code Mode -->
     <template v-else-if="showQRCode">
       <div class="card p-6">
@@ -247,7 +310,7 @@
             </div>
           </div>
           <p v-if="scanHint" class="text-center text-sm text-gray-500 dark:text-gray-400">{{ scanHint }}</p>
-          <button v-if="currentPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
+          <button v-if="checkoutFrameFallbackUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
             {{ t('payment.qr.openPayWindow') }}
           </button>
         </div>
@@ -271,7 +334,7 @@
         <div class="flex flex-col items-center space-y-4 py-4">
           <div class="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
           <p class="text-center text-sm text-gray-500 dark:text-gray-400">{{ waitingHint }}</p>
-          <button v-if="currentPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
+          <button v-if="checkoutFrameFallbackUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
             {{ t('payment.qr.openPayWindow') }}
           </button>
         </div>
@@ -297,8 +360,10 @@ import { usePaymentStore } from '@/stores/payment'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
 import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
+import { isMobileDevice } from '@/utils/device'
 import { getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
 import { currencySymbol, formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
+import { validateAlipayCheckoutFrameUrl } from '@/components/payment/paymentFlow'
 import type { CreateOrderResult, PaymentDiscountSnapshot, PaymentOrder, WechatJSAPIPayload } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
 import QRCode from 'qrcode'
@@ -320,6 +385,9 @@ const props = defineProps<{
   expiresAt: string
   paymentType: string
   payUrl?: string
+  checkoutFrameUrl?: string
+  /** The signed Alipay QR frame may only be embedded by a local checkout dialog. */
+  allowCheckoutFrame?: boolean
   orderType?: string
   currency?: string
   outTradeNo?: string
@@ -348,6 +416,7 @@ const qrUrl = ref('')
 // user explicitly reopens checkout, this holds only the authoritative resume
 // response and never falls back to the cached prop URL.
 const resumedPayUrl = ref<string | null>(null)
+const resumedCheckoutFrameUrl = ref<string | null>(null)
 const resumedMobileAlipayDeepLink = ref<boolean | null>(null)
 const sessionVersion = ref(0)
 const remainingSeconds = ref(0)
@@ -359,6 +428,8 @@ const paidOrder = ref<PaymentOrder | null>(null)
 const latestOrder = ref<PaymentOrder | null>(null)
 const deepLinkState = ref<AlipayDeepLinkState>('idle')
 const deepLinkFallbackVisible = ref(false)
+const checkoutFrameLoading = ref(false)
+const checkoutFrameFallbackVisible = ref(false)
 const paymentCurrency = computed(() => normalizePaymentCurrency(props.currency))
 const creditedAmountSymbol = currencySymbol('USD')
 const localeCode = computed(() => {
@@ -375,6 +446,7 @@ const outcome = ref<PaymentOutcome | null>(null)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+let checkoutFrameTimer: ReturnType<typeof setTimeout> | null = null
 let verifyAttempts = 0
 let lastVerifyAt = 0
 let alipayLauncher: AlipayDeepLinkLauncher | null = null
@@ -392,12 +464,30 @@ const VERIFY_RETRY_INTERVAL_MS = 15000
 const VERIFY_RETRY_MAX_ATTEMPTS = 6
 const POLL_INTERVAL_MS = 3000
 const POLL_MAX_ATTEMPTS = 120
+const CHECKOUT_FRAME_FALLBACK_DELAY_MS = 6000
 
 const isAlipay = computed(() => isBuiltInAlipayMethod(props.paymentType))
 const isWxpay = computed(() => isBuiltInWxpayMethod(props.paymentType))
 const currentPayUrl = computed(() => resumedPayUrl.value ?? props.payUrl ?? '')
+const currentCheckoutFrameUrl = computed(() => validateAlipayCheckoutFrameUrl(
+  resumedCheckoutFrameUrl.value ?? props.checkoutFrameUrl,
+))
 const isMobileAlipayDeepLink = computed(() => (resumedMobileAlipayDeepLink.value ?? props.mobileAlipayDeepLink) === true && isAlipay.value && !!qrUrl.value)
-const showQRCode = computed(() => !!qrUrl.value && (!isMobileAlipayDeepLink.value || deepLinkFallbackVisible.value))
+const showCheckoutFrame = computed(() => (
+  props.allowCheckoutFrame === true
+  && isAlipay.value
+  && !isMobileDevice()
+  && !isMobileAlipayDeepLink.value
+  && !!currentCheckoutFrameUrl.value
+))
+const checkoutFrameFallbackUrl = computed(() => (
+  currentPayUrl.value || (props.allowCheckoutFrame === true ? currentCheckoutFrameUrl.value : '')
+))
+const showQRCode = computed(() => (
+  !showCheckoutFrame.value
+  && !!qrUrl.value
+  && (!isMobileAlipayDeepLink.value || deepLinkFallbackVisible.value)
+))
 
 const qrBorderClass = computed(() => {
   if (isAlipay.value) return 'border-[#00AEEF] bg-blue-50 dark:border-[#00AEEF]/70 dark:bg-blue-950/20'
@@ -453,6 +543,15 @@ function formatGatewayAmount(value: number | string, currency?: string | null): 
   return formatPaymentAmount(Number(value), currency || paymentCurrency.value, localeCode.value)
 }
 
+async function copyOrderNumber(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value)
+    appStore.showSuccess(t('common.success'))
+  } catch {
+    appStore.showError(t('payment.orderOps.copyFailed'))
+  }
+}
+
 function isSuccessStatus(status: string | null | undefined): boolean {
   return normalizeStatus(status) === 'COMPLETED'
 }
@@ -461,9 +560,53 @@ function normalizeStatus(status: string | null | undefined): string {
   return String(status || '').trim().toUpperCase()
 }
 
+function clearCheckoutFrameTimer() {
+  if (checkoutFrameTimer !== null) {
+    clearTimeout(checkoutFrameTimer)
+    checkoutFrameTimer = null
+  }
+}
+
+function startCheckoutFrameFallbackTimer(
+  generation = lifecycleGeneration,
+  fingerprint = currentSessionFingerprint(),
+) {
+  clearCheckoutFrameTimer()
+  checkoutFrameLoading.value = false
+  checkoutFrameFallbackVisible.value = false
+  if (!isCurrentLifecycle(generation, fingerprint) || !showCheckoutFrame.value) return
+
+  checkoutFrameLoading.value = true
+  checkoutFrameTimer = setTimeout(() => {
+    showCheckoutFrameFallback(generation, fingerprint)
+  }, CHECKOUT_FRAME_FALLBACK_DELAY_MS)
+}
+
+function showCheckoutFrameFallback(
+  generation = lifecycleGeneration,
+  fingerprint = currentSessionFingerprint(),
+) {
+  if (!isCurrentLifecycle(generation, fingerprint) || !showCheckoutFrame.value || outcome.value) return
+  checkoutFrameLoading.value = false
+  checkoutFrameFallbackVisible.value = true
+  clearCheckoutFrameTimer()
+}
+
+function handleCheckoutFrameLoad() {
+  if (!showCheckoutFrame.value || outcome.value) return
+  // A cross-origin load only means the iframe navigated. It cannot prove that
+  // the provider's QR is usable, so keep server-side polling authoritative.
+  checkoutFrameLoading.value = false
+}
+
+function handleCheckoutFrameError() {
+  showCheckoutFrameFallback()
+}
+
 interface ResumedPaymentLaunch {
   qrCode: string
   payUrl: string
+  checkoutFrameUrl: string
   expiresAt: string
   mobileAlipayDeepLink: boolean
 }
@@ -471,7 +614,11 @@ interface ResumedPaymentLaunch {
 function clearLaunchMaterial() {
   qrUrl.value = ''
   resumedPayUrl.value = ''
+  resumedCheckoutFrameUrl.value = ''
   resumedMobileAlipayDeepLink.value = false
+  clearCheckoutFrameTimer()
+  checkoutFrameLoading.value = false
+  checkoutFrameFallbackVisible.value = false
   alipayLauncher?.dispose()
   alipayLauncher = null
 }
@@ -540,13 +687,15 @@ function applyResumedPaymentLaunch(result: CreateOrderResult): ResumedPaymentLau
   }
   const qrCode = String(result.qr_code || '').trim()
   const payUrl = String(result.pay_url || '').trim()
-  if (!qrCode && !payUrl) {
+  const checkoutFrameUrl = validateAlipayCheckoutFrameUrl(result.checkout_frame_url)
+  if (!qrCode && !payUrl && !checkoutFrameUrl) {
     waitForAuthoritativeConfirmation()
     return null
   }
 
   qrUrl.value = qrCode
   resumedPayUrl.value = payUrl
+  resumedCheckoutFrameUrl.value = checkoutFrameUrl
   resumedMobileAlipayDeepLink.value = result.alipay_mobile_precreate_deep_link === true
   deadlineReached.value = false
   if (countdownTimer) {
@@ -555,10 +704,12 @@ function applyResumedPaymentLaunch(result: CreateOrderResult): ResumedPaymentLau
   }
   sessionVersion.value += 1
   startCountdown(Math.floor((deadline - Date.now()) / 1000), lifecycleGeneration, currentSessionFingerprint())
+  startCheckoutFrameFallbackTimer(lifecycleGeneration, currentSessionFingerprint())
   void renderQR()
   return {
     qrCode,
     payUrl,
+    checkoutFrameUrl,
     expiresAt: result.expires_at,
     mobileAlipayDeepLink: result.alipay_mobile_precreate_deep_link === true,
   }
@@ -607,14 +758,15 @@ async function reopenPopup() {
   let navigated = false
   try {
     const launch = await resumePaymentLaunch()
-    if (!launch?.payUrl) return
+    const launchUrl = launch?.payUrl || launch?.checkoutFrameUrl
+    if (!launchUrl) return
     if (popup && !popup.closed) {
-      popup.location.href = launch.payUrl
+      popup.location.href = launchUrl
       navigated = true
       return
     }
-    const opened = window.open(launch.payUrl, 'paymentPopup', getPaymentPopupFeatures())
-    if (!opened || opened.closed) window.location.assign(launch.payUrl)
+    const opened = window.open(launchUrl, 'paymentPopup', getPaymentPopupFeatures())
+    if (!opened || opened.closed) window.location.assign(launchUrl)
   } finally {
     if (popup && !popup.closed && !navigated && typeof popup.close === 'function') popup.close()
   }
@@ -635,6 +787,8 @@ function currentSessionFingerprint(): string {
     props.expiresAt,
     props.paymentType,
     props.payUrl,
+    props.checkoutFrameUrl,
+    props.allowCheckoutFrame,
     props.orderType,
     props.currency,
     props.outTradeNo,
@@ -973,6 +1127,9 @@ function cleanupSession() {
   lifecycleGeneration += 1
   cleanupPollTimer()
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+  clearCheckoutFrameTimer()
+  checkoutFrameLoading.value = false
+  checkoutFrameFallbackVisible.value = false
   alipayLauncher?.dispose()
   alipayLauncher = null
 }
@@ -983,6 +1140,7 @@ function startSession() {
   const fingerprint = currentSessionFingerprint()
   qrUrl.value = props.qrCode
   resumedPayUrl.value = null
+  resumedCheckoutFrameUrl.value = null
   resumedMobileAlipayDeepLink.value = null
   sessionVersion.value += 1
   remainingSeconds.value = 0
@@ -1009,6 +1167,7 @@ function startSession() {
   startCountdown(seconds, generation, fingerprint)
   pollTimer = setInterval(() => { void pollStatus({}, generation, fingerprint) }, POLL_INTERVAL_MS)
   void pollStatus({}, generation, fingerprint)
+  startCheckoutFrameFallbackTimer(generation, fingerprint)
   void renderQR(generation, fingerprint)
   void launchRecoveredWechatJsapi(generation, fingerprint)
 
@@ -1024,6 +1183,8 @@ watch(
     props.expiresAt,
     props.paymentType,
     props.payUrl,
+    props.checkoutFrameUrl,
+    props.allowCheckoutFrame,
     props.orderType,
     props.currency,
     props.outTradeNo,

@@ -104,10 +104,13 @@ type PaymentDiscountCodeInput struct {
 // hashes, idempotency hashes, quote JSON, and provider response JSON remain
 // internal to the service layer.
 type PaymentDiscountUse struct {
-	ID             int64      `json:"id"`
-	CodeID         int64      `json:"code_id"`
-	OrderID        int64      `json:"order_id"`
-	UserID         int64      `json:"user_id"`
+	ID      int64 `json:"id"`
+	CodeID  int64 `json:"code_id"`
+	OrderID int64 `json:"order_id"`
+	UserID  int64 `json:"user_id"`
+	// Username is projected only for administrative usage history. The list
+	// query deliberately retains soft-deleted user profiles for attribution.
+	Username       string     `json:"username,omitempty"`
 	Status         string     `json:"status"`
 	OriginalAmount string     `json:"original_amount"`
 	DiscountAmount string     `json:"discount_amount"`
@@ -1286,25 +1289,50 @@ func (s *PaymentService) ListPaymentDiscountCodes(ctx context.Context, page, siz
 	return items, total, nil
 }
 
-func paymentDiscountUseColumns() string {
-	return `id, code_id, order_id, user_id, status,
-		CAST(original_amount AS TEXT), CAST(discount_amount AS TEXT), CAST(pay_amount AS TEXT),
-		currency, quote_version, quote_revision, request_hash, idempotency_hash,
-		reserved_at, consumed_at, released_at, paid_review_at, created_at, updated_at`
+func paymentDiscountUseColumns(tableAlias ...string) string {
+	prefix := ""
+	if len(tableAlias) > 0 && tableAlias[0] != "" {
+		prefix = tableAlias[0] + "."
+	}
+	return fmt.Sprintf(`%sid, %scode_id, %sorder_id, %suser_id, %sstatus,
+		CAST(%soriginal_amount AS TEXT), CAST(%sdiscount_amount AS TEXT), CAST(%spay_amount AS TEXT),
+		%scurrency, %squote_version, %squote_revision, %srequest_hash, %sidempotency_hash,
+		%sreserved_at, %sconsumed_at, %sreleased_at, %spaid_review_at, %screated_at, %supdated_at`,
+		prefix, prefix, prefix, prefix, prefix,
+		prefix, prefix, prefix,
+		prefix, prefix, prefix, prefix, prefix,
+		prefix, prefix, prefix, prefix, prefix, prefix)
 }
 
 func scanPaymentDiscountUse(rows *stdsql.Rows) (*paymentDiscountUseRecord, error) {
+	return scanPaymentDiscountUseRow(rows, false)
+}
+
+func scanPaymentDiscountUseWithUsername(rows *stdsql.Rows) (*paymentDiscountUseRecord, error) {
+	return scanPaymentDiscountUseRow(rows, true)
+}
+
+type paymentDiscountUseScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPaymentDiscountUseRow(rows paymentDiscountUseScanner, includeUsername bool) (*paymentDiscountUseRecord, error) {
 	record := &paymentDiscountUseRecord{}
 	var (
 		original, discount, payAmount  string
 		consumed, released, paidReview stdsql.NullTime
+		username                       stdsql.NullString
 	)
-	err := rows.Scan(
+	scanTargets := []any{
 		&record.ID, &record.CodeID, &record.OrderID, &record.UserID, &record.Status,
 		&original, &discount, &payAmount, &record.Currency, &record.QuoteVersion,
 		&record.QuoteRevision, &record.RequestHash, &record.IdempotencyHash,
 		&record.ReservedAt, &consumed, &released, &paidReview, &record.CreatedAt, &record.UpdatedAt,
-	)
+	}
+	if includeUsername {
+		scanTargets = append(scanTargets, &username)
+	}
+	err := rows.Scan(scanTargets...)
 	if err != nil {
 		return nil, err
 	}
@@ -1347,6 +1375,9 @@ func scanPaymentDiscountUse(rows *stdsql.Rows) (*paymentDiscountUseRecord, error
 	if paidReview.Valid {
 		value := paidReview.Time
 		record.PaidReviewAt = &value
+	}
+	if username.Valid {
+		record.Username = username.String
 	}
 	return record, nil
 }
@@ -1446,16 +1477,18 @@ func (s *PaymentService) ListPaymentDiscountUses(ctx context.Context, codeID int
 		return nil, 0, err
 	}
 	offset := (page - 1) * size
-	rows, err := s.entClient.QueryContext(ctx, `SELECT `+paymentDiscountUseColumns()+`
-		FROM payment_discount_uses WHERE code_id = $1
-		ORDER BY id DESC LIMIT $2 OFFSET $3`, codeID, size, offset)
+	rows, err := s.entClient.QueryContext(ctx, `SELECT `+paymentDiscountUseColumns("use_row")+`, user_row.username
+		FROM payment_discount_uses AS use_row
+		LEFT JOIN users AS user_row ON user_row.id = use_row.user_id
+		WHERE use_row.code_id = $1
+		ORDER BY use_row.id DESC LIMIT $2 OFFSET $3`, codeID, size, offset)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer func() { _ = rows.Close() }()
 	items := make([]PaymentDiscountUse, 0, size)
 	for rows.Next() {
-		record, err := scanPaymentDiscountUse(rows)
+		record, err := scanPaymentDiscountUseWithUsername(rows)
 		if err != nil {
 			return nil, 0, err
 		}

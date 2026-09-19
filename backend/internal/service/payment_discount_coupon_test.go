@@ -266,6 +266,34 @@ func TestPaymentDiscountReservationReplayResponseAndActiveCapReduction(t *testin
 	require.Len(t, audits, 1)
 }
 
+func TestPaymentDiscountUsageListProjectsUsernameForSoftDeletedUser(t *testing.T) {
+	ctx := context.Background()
+	client := newUnifiedRefundSQLiteClient(t)
+	installPaymentDiscountTestSchema(t, client)
+	user := createPaymentDiscountCouponTestUser(t, client, "usage-projection")
+	svc := &PaymentService{entClient: client}
+	coupon, err := svc.SavePaymentDiscountCode(ctx, user.ID, 0, paymentDiscountCouponTestInput("USAGEPROJ26", "fixed", "20.00", "CNY", 0, nil), 0)
+	require.NoError(t, err)
+	order := createPaymentDiscountCouponTestOrder(t, client, user, "usage-projection")
+	reservePaymentDiscountCouponTestUse(t, client, user.ID, order.ID, coupon.Code, "a", "b")
+
+	_, err = client.User.UpdateOneID(user.ID).SetDeletedAt(time.Now().UTC()).Save(ctx)
+	require.NoError(t, err)
+
+	uses, total, err := svc.ListPaymentDiscountUses(ctx, coupon.ID, 1, 20)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, uses, 1)
+	require.Equal(t, user.Username, uses[0].Username)
+
+	encoded, err := json.Marshal(uses[0])
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &payload))
+	require.Equal(t, user.Username, payload["username"])
+	require.NotContains(t, payload, "user_email")
+}
+
 func TestPaymentDiscountScopeValidationAndReservationAuthority(t *testing.T) {
 	ctx := context.Background()
 	client := newUnifiedRefundSQLiteClient(t)

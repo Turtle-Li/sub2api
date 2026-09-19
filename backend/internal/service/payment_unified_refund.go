@@ -261,6 +261,9 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}, o.Status) {
 		return nil, infraerrors.Conflict("CONFLICT", "order status does not allow another refund")
 	}
+	if err := ensureRefundInvoiceAllowed(txCtx, client, o.ID); err != nil {
+		return nil, err
+	}
 	snapshot := psOrderProviderSnapshot(o)
 	method, _ := unifiedpay.PaymentMethodForPaymentType(o.PaymentType)
 	id := uuid.NewString()
@@ -299,6 +302,9 @@ func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Conte
 	}
 	if !psSliceContains([]string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}, order.Status) {
 		return nil, infraerrors.Conflict("CONFLICT", "order status does not allow another refund")
+	}
+	if err := ensureRefundInvoiceAllowed(ctx, client, order.ID); err != nil {
+		return nil, err
 	}
 	now := s.refundValuationTime()
 	review, err := s.reserveReviewedRefundEntitlement(ctx, client, order, plan, now)

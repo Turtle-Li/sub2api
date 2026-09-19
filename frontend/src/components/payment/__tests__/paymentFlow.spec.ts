@@ -14,6 +14,7 @@ import {
   recordResetCardCheckoutOrder,
   RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY,
   type PaymentRecoverySnapshot,
+  validateAlipayCheckoutFrameUrl,
   writePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
 
@@ -39,6 +40,29 @@ function createOrderResult(overrides: Partial<CreateOrderResult> = {}): CreateOr
     expires_at: '2099-01-01T00:10:00.000Z',
     ...overrides,
   }
+}
+
+function alipayCheckoutFrameUrl(options: {
+  host?: string
+  pathname?: string
+  qrPayMode?: string | number
+  qrcodeWidth?: string | number
+  method?: string
+  signType?: string
+  sign?: string
+  fragment?: string
+} = {}): string {
+  const url = new URL(`https://${options.host || 'openapi.alipay.com'}${options.pathname || '/gateway.do'}`)
+  url.searchParams.set('method', options.method || 'alipay.trade.page.pay')
+  url.searchParams.set('biz_content', JSON.stringify({
+    out_trade_no: 'sub2_101',
+    qr_pay_mode: options.qrPayMode ?? '4',
+    qrcode_width: options.qrcodeWidth ?? '224',
+  }))
+  url.searchParams.set('sign_type', options.signType || 'RSA2')
+  url.searchParams.set('sign', options.sign ?? 'signed-payload')
+  url.hash = options.fragment || ''
+  return url.toString()
 }
 
 describe('getVisibleMethods', () => {
@@ -79,6 +103,45 @@ describe('getVisibleMethods', () => {
       ldc: methodLimit({ single_min: 3 }),
       usdt_trc20: methodLimit({ fee_rate: 1 }),
     })
+  })
+})
+
+describe('validateAlipayCheckoutFrameUrl', () => {
+  it('accepts only the signed Alipay page-pay QR endpoint', () => {
+    const valid = alipayCheckoutFrameUrl()
+    expect(validateAlipayCheckoutFrameUrl(valid)).toBe(valid)
+  })
+
+  it.each([
+    'http://openapi.alipay.com/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
+    'https://checkout.example.invalid/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
+    'https://openapi.alipay.com:443/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
+    'https://openapi.alipay.com@gateway.do/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
+    alipayCheckoutFrameUrl({ pathname: '/gateway.do/' }),
+    alipayCheckoutFrameUrl({ fragment: 'return' }),
+    alipayCheckoutFrameUrl({ method: 'alipay.trade.precreate' }),
+    alipayCheckoutFrameUrl({ qrPayMode: '2' }),
+    alipayCheckoutFrameUrl({ qrcodeWidth: 320 }),
+    alipayCheckoutFrameUrl({ signType: 'RSA' }),
+    alipayCheckoutFrameUrl({ sign: '' }),
+    ` ${alipayCheckoutFrameUrl()}`,
+  ])('rejects an untrusted frame URL: %s', (value) => {
+    expect(validateAlipayCheckoutFrameUrl(value)).toBe('')
+  })
+
+  it('rejects duplicated signed parameters', () => {
+    const url = new URL(alipayCheckoutFrameUrl())
+    url.searchParams.append('method', 'alipay.trade.page.pay')
+    expect(validateAlipayCheckoutFrameUrl(url.toString())).toBe('')
+  })
+
+  it('rejects a signed frame URL above the backend-aligned length limit', () => {
+    const oversized = `${alipayCheckoutFrameUrl()}&padding=${'x'.repeat(16384)}`
+    expect(validateAlipayCheckoutFrameUrl(oversized)).toBe('')
+  })
+
+  it('rejects a signed frame URL with whitespace in its signature', () => {
+    expect(validateAlipayCheckoutFrameUrl(alipayCheckoutFrameUrl({ sign: ' signed-payload ' }))).toBe('')
   })
 })
 
@@ -211,6 +274,25 @@ describe('decidePaymentLaunch', () => {
     expect(decision.kind).toBe('redirect_waiting')
     expect(decision.paymentState.payUrl).toBe('https://pay.example.com/hosted/session')
     expect(decision.paymentState.qrCode).toBe('')
+  })
+
+  it('keeps a valid Alipay checkout frame separate from QR and suppresses redirect launch', () => {
+    const checkoutFrameUrl = alipayCheckoutFrameUrl()
+    const decision = decidePaymentLaunch(createOrderResult({
+      payment_mode: 'redirect',
+      pay_url: 'https://pay.example.com/hosted/session',
+      checkout_frame_url: checkoutFrameUrl,
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: false,
+    })
+
+    expect(decision.kind).toBe('qr_waiting')
+    expect(decision.paymentState.checkoutFrameUrl).toBe(checkoutFrameUrl)
+    expect(decision.recovery.checkoutFrameUrl).toBe(checkoutFrameUrl)
+    expect(decision.paymentState.qrCode).toBe('')
+    expect(decision.paymentState.payUrl).toBe('https://pay.example.com/hosted/session')
   })
 
   it('returns wechat oauth launch when backend requires in-app authorization', () => {
@@ -518,6 +600,7 @@ describe('readPaymentRecoverySnapshot', () => {
       expiresAt: '2099-01-01T00:10:00.000Z',
       paymentType: 'alipay',
       payUrl: 'https://pay.example.com/session/33',
+      checkoutFrameUrl: alipayCheckoutFrameUrl(),
       outTradeNo: 'sub2_33',
       clientSecret: '',
       intentId: '',
@@ -537,6 +620,36 @@ describe('readPaymentRecoverySnapshot', () => {
     })
 
     expect(restored?.orderId).toBe(33)
+    expect(restored?.checkoutFrameUrl).toBe(snapshot.checkoutFrameUrl)
+  })
+
+  it('drops an invalid persisted checkout frame without discarding the owned order recovery', () => {
+    const restored = readPaymentRecoverySnapshot(JSON.stringify({
+      orderId: 34,
+      amount: 18,
+      qrCode: '',
+      expiresAt: '2099-01-01T00:10:00.000Z',
+      paymentType: 'alipay',
+      payUrl: 'https://pay.example.com/session/34',
+      checkoutFrameUrl: 'https://checkout.example.invalid/gateway.do?method=alipay.trade.page.pay',
+      outTradeNo: 'sub2_34',
+      clientSecret: '',
+      intentId: '',
+      currency: '',
+      countryCode: '',
+      paymentEnv: '',
+      payAmount: 18,
+      orderType: 'balance',
+      paymentMode: 'popup',
+      resumeToken: 'resume-34',
+      createdAt: Date.UTC(2099, 0, 1, 0, 0, 0),
+    }), {
+      now: Date.UTC(2099, 0, 1, 0, 1, 0),
+      resumeToken: 'resume-34',
+    })
+
+    expect(restored?.orderId).toBe(34)
+    expect(restored?.checkoutFrameUrl).toBe('')
   })
 
   it('retains a recent snapshot after its browser deadline so the server can settle it', () => {
@@ -761,6 +874,8 @@ describe('reset-card checkout attempts', () => {
 
     expect(changedQuote.idempotencyKey).not.toBe(first.idempotencyKey)
     expect(changedQuote.fingerprint).not.toBe(first.fingerprint)
+    expect(createResetCardCheckoutFingerprint({ ...attemptInput, validityDays: 15, expiresAt: '2026-10-01' }))
+      .toBe(createResetCardCheckoutFingerprint({ ...attemptInput, validityDays: 15, expiresAt: '2026-10-02' }))
     expect(createResetCardCheckoutFingerprint({ ...attemptInput, paymentType: 'alipay' }))
       .not.toBe(first.fingerprint)
     expect(createResetCardCheckoutFingerprint({ ...attemptInput, tierRevision: 'v1:3:gpt:2:124' }))

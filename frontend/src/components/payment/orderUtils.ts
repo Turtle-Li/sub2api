@@ -27,8 +27,8 @@ export function statusBadgeClass(status: string): string {
   return STATUS_BADGE_MAP[status] || 'badge-secondary'
 }
 
-export function canRefund(order: Pick<PaymentOrder, 'status' | 'refund_amount'>): boolean {
-  return !(order.refund_amount > 0) && REFUNDABLE_STATUSES.includes(order.status)
+export function canRefund(order: Pick<PaymentOrder, 'status' | 'refund_amount' | 'invoice'>): boolean {
+  return order.invoice?.status !== 'ISSUED' && !(order.refund_amount > 0) && REFUNDABLE_STATUSES.includes(order.status)
 }
 
 export function formatOrderDateTime(dateStr: string): string {

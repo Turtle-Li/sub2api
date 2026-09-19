@@ -279,6 +279,63 @@ func TestUnifiedRefundReservationRejectsSecondAttemptAfterPartialSuccess(t *test
 	require.InDelta(t, 4, persisted.RefundAmount, 0.000001)
 }
 
+func TestUnifiedRefundNewAdmissionRespectsInvoiceLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     string
+		wantReason string
+	}{
+		{name: "no invoice remains refundable"},
+		{name: "pending invoice remains refundable", status: InvoiceStatusPending},
+		{name: "processing invoice remains refundable", status: InvoiceStatusProcessing},
+		{name: "issued invoice blocks a zero-provider admission", status: InvoiceStatusIssued, wantReason: "REFUND_INVOICED_ORDER"},
+		{name: "rejected invoice remains refundable", status: InvoiceStatusRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, order, plan := newUnifiedRefundFixture(t, newUnifiedRefundSQLiteClient(t), payment.TypeAlipay)
+			if tc.status != "" {
+				createRefundInvoice(t, ctx, svc.entClient, order, tc.status)
+			}
+
+			attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+			if tc.wantReason != "" {
+				require.Nil(t, attempt)
+				require.Equal(t, tc.wantReason, infraerrors.Reason(err))
+				rows, queryErr := svc.entClient.QueryContext(ctx, "SELECT COUNT(*) FROM unified_payment_refund_attempts WHERE order_id=$1", order.ID)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				require.True(t, rows.Next())
+				var attempts int
+				require.NoError(t, rows.Scan(&attempts))
+				require.Zero(t, attempts)
+				assertUnifiedRefundBalance(t, svc, order, OrderStatusCompleted, 10)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, attempt)
+			assertUnifiedRefundBalance(t, svc, order, OrderStatusRefundPending, 10)
+		})
+	}
+}
+
+func TestUnifiedRefundExistingAttemptRemainsRecoverableAfterInvoiceIssue(t *testing.T) {
+	ctx := context.Background()
+	svc, order, plan := newUnifiedRefundFixture(t, newUnifiedRefundSQLiteClient(t), payment.TypeWxpay)
+	attempt, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+	createRefundInvoice(t, ctx, svc.entClient, order, InvoiceStatusIssued)
+
+	resumed, err := svc.reserveUnifiedRefundAttempt(ctx, plan)
+	require.NoError(t, err)
+	require.Equal(t, attempt.ProductRefundNo, resumed.ProductRefundNo)
+
+	result, err := svc.applyUnifiedRefundResource(ctx, order.ID, unifiedRefundFixtureResource(attempt, unifiedpay.RefundStatusSucceeded), "recovery")
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	assertUnifiedRefundBalance(t, svc, order, OrderStatusRefunded, 0)
+}
+
 func TestUnifiedRefundFailureHistoryAndLateConflict(t *testing.T) {
 	svc, o, p := newUnifiedRefundFixture(t, newUnifiedRefundSQLiteClient(t), payment.TypeAlipay)
 	ctx := context.Background()

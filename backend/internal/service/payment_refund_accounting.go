@@ -492,6 +492,12 @@ func (s *PaymentService) reviewRefundWithClient(ctx context.Context, client *dbe
 		}
 		return nil, err
 	}
+	if err := ensureRefundInvoiceAllowed(ctx, client, order.ID); err != nil {
+		if infraerrors.Reason(err) == "REFUND_INVOICED_ORDER" {
+			return manualRefundReview(order, now, "REFUND_INVOICED_ORDER", "the order already has an issued invoice and cannot be refunded"), nil
+		}
+		return nil, err
+	}
 	if !refundStateValid(order) {
 		return manualRefundReview(order, now, "INVALID_REFUND_STATE", "stored refund accounting is invalid"), nil
 	}

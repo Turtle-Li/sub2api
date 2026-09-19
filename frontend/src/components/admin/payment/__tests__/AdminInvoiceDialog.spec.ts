@@ -44,9 +44,27 @@ function mountDialog(currentOrder: PaymentOrder) {
 }
 
 describe('AdminInvoiceDialog', () => {
+  it.each(['submitting', 'retrying'])('prevents every close route while %s', async (busyProp) => {
+    const wrapper = mountDialog(order('PROCESSING'))
+    await wrapper.setProps({ [busyProp]: true })
+    const dialog = wrapper.findComponent(BaseDialogStub)
+    expect(dialog.attributes('close-on-click-outside')).toBe('false')
+    expect(dialog.attributes('close-on-escape')).toBe('false')
+    expect(dialog.attributes('show-close-button')).toBe('false')
+    dialog.vm.$emit('close')
+    const close = wrapper.findAll('button').find(button => button.text() === 'common.close')!
+    expect(close.attributes('disabled')).toBeDefined()
+    await close.trigger('click')
+    expect(wrapper.emitted('close')).toBeUndefined()
+    await wrapper.setProps({ [busyProp]: false })
+    await close.trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
   it('requires and emits the issued-invoice delivery contract', async () => {
     const wrapper = mountDialog(order('PROCESSING'))
     await wrapper.find('#admin-invoice-status').setValue('ISSUED')
+    expect(wrapper.text()).toContain('payment.invoice.refundBlockedAfterIssue')
     await wrapper.find('#admin-invoice-item').setValue('Information technology services')
     await wrapper.find('#admin-invoice-number').setValue('24612000000000000001')
     const pdf = new File(['%PDF-1.7\ninvoice'], 'invoice-1.pdf', { type: 'application/pdf' })
@@ -68,10 +86,10 @@ describe('AdminInvoiceDialog', () => {
     expect(values).toEqual(['PROCESSING', 'REJECTED'])
   })
 
-  it('keeps an issued invoice read-only and surfaces the refund correction warning', () => {
+  it('keeps an issued invoice read-only and surfaces the refund block', () => {
     const wrapper = mountDialog(order('ISSUED'))
     expect(wrapper.find('form').exists()).toBe(false)
-    expect(wrapper.text()).toContain('payment.invoice.admin.refundCorrectionWarning')
+    expect(wrapper.text()).toContain('payment.invoice.refundBlockedAfterIssue')
   })
 
   it('allows an administrator to retry a failed result email', async () => {

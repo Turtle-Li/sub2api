@@ -458,7 +458,7 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 		// Eligibility is authoritative at checkout. Fulfillment locks only the
 		// immutable subscription identity, so a later suspension, soft delete,
 		// catalogue edit, or natural expiry cannot invalidate an already-paid
-		// order. The grant keeps the checkout-time subscription expiry snapshot.
+		// order. The grant keeps the purchased expiry policy from its immutable snapshot.
 		target, err := lockResetCardFulfillmentTarget(txCtx, tx.Client(), targetID, o.UserID)
 		if err != nil {
 			return err
@@ -640,10 +640,22 @@ func resetCardPaymentOrderGrantExpiry(o *dbent.PaymentOrder, now time.Time) (tim
 	if o == nil || o.ProductSnapshot == nil {
 		return time.Time{}, errors.New("reset card order is missing product snapshot")
 	}
-	raw, _ := o.ProductSnapshot["subscription_expires_at"].(string)
-	expiresAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
-	if err != nil || !expiresAt.After(o.CreatedAt) {
-		return time.Time{}, errors.New("reset card order has an invalid subscription expiry snapshot")
+	policy, _ := o.ProductSnapshot["grant_expiry_policy"].(string)
+	var expiresAt time.Time
+	if policy == "paid_duration" {
+		days, valid := paymentSnapshotInt64(o.ProductSnapshot["grant_validity_days"])
+		if !valid || days != resetCardPurchasedValidityDays || o.PaidAt == nil || o.PaidAt.Before(o.CreatedAt) {
+			return time.Time{}, errors.New("reset card order has invalid paid validity terms")
+		}
+		expiresAt = o.PaidAt.Add(time.Duration(days) * 24 * time.Hour)
+	} else {
+		// Preserve historical purchases exactly; never reinterpret their term.
+		raw, _ := o.ProductSnapshot["subscription_expires_at"].(string)
+		var err error
+		expiresAt, err = time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+		if (policy != "" && policy != "subscription") || err != nil || !expiresAt.After(o.CreatedAt) {
+			return time.Time{}, errors.New("reset card order has an invalid subscription expiry snapshot")
+		}
 	}
 	if !expiresAt.After(now) {
 		return time.Time{}, errResetCardGrantExpirySnapshotElapsed
@@ -698,7 +710,7 @@ func validateResetCardPaymentOrderSnapshot(o *dbent.PaymentOrder) (int64, int64,
 	idempotencyHash, _ := o.ProductSnapshot["idempotency_key_sha256"].(string)
 	if kind != "reset_card" || !quantityOK || termsErr != nil || quantity != int64(terms.quantity) || !priceOK || !orderAmountOK || !payAmountOK ||
 		!strings.EqualFold(strings.TrimSpace(currency), payment.DefaultPaymentCurrency) ||
-		strings.TrimSpace(expiryPolicy) != "subscription" || expiresAtErr != nil || !expiresAt.After(o.CreatedAt) ||
+		!validResetCardExpiryPolicy(o.ProductSnapshot, expiryPolicy) || expiresAtErr != nil || !expiresAt.After(o.CreatedAt) ||
 		!amountsMatch {
 		return 0, 0, errors.New("reset card order has an invalid product snapshot")
 	}
@@ -720,6 +732,15 @@ func validateResetCardPaymentOrderSnapshot(o *dbent.PaymentOrder) (int64, int64,
 		return 0, 0, err
 	}
 	return targetID, groupID, nil
+}
+
+func validResetCardExpiryPolicy(snapshot map[string]any, policy string) bool {
+	if policy == "subscription" {
+		return true
+	}
+	version, versionOK := paymentSnapshotInt64(snapshot["schema_version"])
+	days, daysOK := paymentSnapshotInt64(snapshot["grant_validity_days"])
+	return policy == "paid_duration" && versionOK && version == 3 && daysOK && days == resetCardPurchasedValidityDays
 }
 
 func resetCardTierSnapshotForPaymentOrder(order *dbent.PaymentOrder) (*SubscriptionResetCardTierSnapshot, error) {

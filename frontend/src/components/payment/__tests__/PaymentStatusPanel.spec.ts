@@ -7,7 +7,9 @@ const verifyOrder = vi.hoisted(() => vi.fn())
 const resumeOrder = vi.hoisted(() => vi.fn())
 const showError = vi.hoisted(() => vi.fn())
 const showInfo = vi.hoisted(() => vi.fn())
+const showSuccess = vi.hoisted(() => vi.fn())
 const toCanvas = vi.hoisted(() => vi.fn())
+const isMobileDevice = vi.hoisted(() => vi.fn(() => false))
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -29,6 +31,7 @@ vi.mock('@/stores', () => ({
   useAppStore: () => ({
     showError,
     showInfo,
+    showSuccess,
   }),
 }))
 
@@ -46,7 +49,12 @@ vi.mock('qrcode', () => ({
   },
 }))
 
+vi.mock('@/utils/device', () => ({
+  isMobileDevice,
+}))
+
 import PaymentStatusPanel from '../PaymentStatusPanel.vue'
+import { formatPaymentAmount } from '../currency'
 
 const orderFactory = (status: string) => ({
   id: 42,
@@ -62,6 +70,23 @@ const orderFactory = (status: string) => ({
   expires_at: '2099-01-01T12:30:00Z',
   refund_amount: 0,
 })
+
+function alipayCheckoutFrameUrl(overrides: {
+  host?: string
+  qrPayMode?: string | number
+  qrcodeWidth?: string | number
+} = {}): string {
+  const url = new URL(`https://${overrides.host || 'openapi.alipay.com'}/gateway.do`)
+  url.searchParams.set('method', 'alipay.trade.page.pay')
+  url.searchParams.set('biz_content', JSON.stringify({
+    out_trade_no: 'sub2_42',
+    qr_pay_mode: overrides.qrPayMode ?? '4',
+    qrcode_width: overrides.qrcodeWidth ?? '224',
+  }))
+  url.searchParams.set('sign_type', 'RSA2')
+  url.searchParams.set('sign', 'signed-payload')
+  return url.toString()
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -82,7 +107,9 @@ describe('PaymentStatusPanel', () => {
     resumeOrder.mockReset()
     showError.mockReset()
     showInfo.mockReset()
+    showSuccess.mockReset()
     toCanvas.mockReset().mockResolvedValue(undefined)
+    isMobileDevice.mockReset().mockReturnValue(false)
   })
 
   afterEach(() => {
@@ -114,6 +141,261 @@ describe('PaymentStatusPanel', () => {
     expect(pollOrderStatus).toHaveBeenCalledWith(42)
     expect(wrapper.text()).not.toContain('payment.result.success')
     expect(wrapper.emitted('success')).toBeUndefined()
+  })
+
+  it('renders a validated desktop Alipay checkout frame without opening a browser', async () => {
+    const checkoutFrameUrl = alipayCheckoutFrameUrl()
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const openSpy = vi.spyOn(window, 'open')
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://qr.example.test/alipay-42',
+        payUrl: 'https://pay.example.test/alipay-42',
+        checkoutFrameUrl,
+        allowCheckoutFrame: true,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    const frame = wrapper.get('[data-test="alipay-checkout-frame"]')
+    expect(frame.attributes('src')).toBe(checkoutFrameUrl)
+    expect(wrapper.get('[data-test="alipay-checkout-frame-region"]').classes()).toEqual(expect.arrayContaining(['h-[224px]', 'w-[224px]']))
+    expect(frame.classes()).toEqual(expect.arrayContaining(['h-[224px]', 'w-[224px]']))
+    expect(frame.attributes('sandbox')).toBe('allow-scripts allow-forms allow-same-origin')
+    expect(frame.attributes('referrerpolicy')).toBe('strict-origin-when-cross-origin')
+    expect(frame.attributes('title')).toBe('payment.qr.alipayEmbeddedFrameTitle')
+    expect(toCanvas).not.toHaveBeenCalled()
+    expect(openSpy).not.toHaveBeenCalled()
+
+    await frame.trigger('load')
+    await flushPromises()
+
+    // An iframe navigation does not prove payment or cause an external launch.
+    expect(wrapper.emitted('success')).toBeUndefined()
+    expect(wrapper.find('[data-test="open-alipay-checkout-fallback"]').exists()).toBe(false)
+    expect(openSpy).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(6000)
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="open-alipay-checkout-fallback"]').exists()).toBe(true)
+    expect(openSpy).not.toHaveBeenCalled()
+    openSpy.mockRestore()
+  })
+
+  it('keeps a validated frame on the existing QR path without local modal opt-in', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://qr.example.test/alipay-42',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.example.test/alipay-42', expect.any(Object))
+  })
+
+  it('rejects an invalid embedded URL and keeps the normal Alipay QR flow', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://qr.example.test/alipay-42',
+        checkoutFrameUrl: alipayCheckoutFrameUrl({ host: 'checkout.example.invalid' }),
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.example.test/alipay-42', expect.any(Object))
+  })
+
+  it('shows an explicit frame fallback after a bounded wait without opening it automatically', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const openSpy = vi.spyOn(window, 'open')
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        payUrl: 'https://pay.example.test/alipay-42',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        allowCheckoutFrame: true,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    expect(wrapper.find('[data-test="open-alipay-checkout-fallback"]').exists()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(6000)
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="open-alipay-checkout-fallback"]').exists()).toBe(true)
+    expect(openSpy).not.toHaveBeenCalled()
+    openSpy.mockRestore()
+  })
+
+  it('hides an embedded checkout frame only after the server records completion', async () => {
+    pollOrderStatus
+      .mockResolvedValueOnce(orderFactory('PENDING'))
+      .mockResolvedValueOnce(orderFactory('COMPLETED'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        allowCheckoutFrame: true,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.emitted('success')).toHaveLength(1)
+  })
+
+  it('does not use an Alipay checkout frame for WeChat QR payments', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'weixin://wxpay/bizpayurl?pr=unchanged',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'wxpay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('payment.qr.scanWxpay')
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'weixin://wxpay/bizpayurl?pr=unchanged', expect.any(Object))
+  })
+
+  it('uses the completed reset-card order currency and lets a long order number be copied', async () => {
+    const orderNumber = 'SUB2-RESET-CARD-ORDER-NUMBER-THAT-IS-LONG-ENOUGH-TO-WRAP-WITHOUT-SQUEEZING-LABELS'
+    pollOrderStatus.mockResolvedValue({
+      ...orderFactory('COMPLETED'),
+      amount: 37.02,
+      pay_amount: 37.02,
+      currency: 'CNY',
+      order_type: 'reset_card',
+      out_trade_no: orderNumber,
+    })
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        amount: 5,
+        payAmount: 5,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+        currency: 'USD',
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(formatPaymentAmount(37.02, 'CNY'))
+    expect(wrapper.get('[data-test="payment-result-order-number"]').classes()).toContain('break-all')
+    await wrapper.get('[data-test="copy-payment-result-order"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith(orderNumber)
+
+    wrapper.unmount()
+    if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+    else delete (navigator as Navigator & { clipboard?: Clipboard }).clipboard
+  })
+
+  it('shows only the trusted CNY payment amount for a USD-priced subscription', async () => {
+    pollOrderStatus.mockResolvedValue({
+      ...orderFactory('COMPLETED'),
+      amount: 12,
+      pay_amount: 88,
+      currency: 'CNY',
+      order_type: 'subscription',
+    })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'subscription',
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(formatPaymentAmount(88, 'CNY'))
+    expect(wrapper.text()).not.toContain(formatPaymentAmount(12, 'CNY'))
+    expect(wrapper.text()).not.toContain('payment.orders.baseAmount')
+  })
+
+  it('keeps the internal-credit marker only for a completed balance order', async () => {
+    pollOrderStatus.mockResolvedValue({
+      ...orderFactory('COMPLETED'),
+      amount: 100,
+      pay_amount: 108,
+      currency: 'CNY',
+      order_type: 'balance',
+    })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'reset_card',
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('$100.00')
+    expect(wrapper.text()).toContain(formatPaymentAmount(108, 'CNY'))
+    wrapper.unmount()
   })
 
   it.each(['', 'not-a-date', '2026-09-19T00:00:00.000Z'])('checks an unavailable or elapsed deadline instead of rendering a %s countdown spinner', async (expiresAt) => {

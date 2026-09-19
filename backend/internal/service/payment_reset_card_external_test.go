@@ -1153,3 +1153,31 @@ func TestResetCardUnifiedDefiniteRejectionReleasesOnlyFreshDispatch(t *testing.T
 		})
 	}
 }
+
+func TestResetCardPaidValidityIsFifteenDaysIndependentOfSubscription(t *testing.T) {
+	created := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	paid := created.Add(5 * time.Minute)
+	for _, subscriptionExpiry := range []time.Time{created.Add(time.Hour), created.Add(365 * 24 * time.Hour)} {
+		order := &dbent.PaymentOrder{CreatedAt: created, PaidAt: &paid, ProductSnapshot: map[string]any{
+			"schema_version": 3, "grant_expiry_policy": "paid_duration", "grant_validity_days": 15,
+			"subscription_expires_at": subscriptionExpiry.Format(time.RFC3339Nano),
+		}}
+		expiry, err := resetCardPaymentOrderGrantExpiry(order, paid.Add(24*time.Hour))
+		require.NoError(t, err)
+		require.Equal(t, paid.Add(15*24*time.Hour), expiry)
+		_, err = resetCardPaymentOrderGrantExpiry(order, expiry)
+		require.ErrorIs(t, err, errResetCardGrantExpirySnapshotElapsed)
+		order.PaidAt = nil
+		_, err = resetCardPaymentOrderGrantExpiry(order, paid)
+		require.Error(t, err)
+	}
+}
+
+func TestResetCardPaidValidityRejectsUntrustedTerms(t *testing.T) {
+	for _, days := range []any{nil, 0, -1, 14, 16, 15.5} {
+		snapshot := map[string]any{"schema_version": 3, "grant_validity_days": days}
+		require.False(t, validResetCardExpiryPolicy(snapshot, "paid_duration"))
+	}
+	require.True(t, validResetCardExpiryPolicy(map[string]any{"schema_version": 3, "grant_validity_days": 15}, "paid_duration"))
+	require.False(t, validResetCardExpiryPolicy(map[string]any{"schema_version": 2, "grant_validity_days": 15}, "paid_duration"))
+}

@@ -466,10 +466,7 @@ func TestResetCardExternalOrderPostgresFulfillsCheckoutTimeEligibilityAfterExpir
 	require.NoError(t, err)
 	remotePaymentOrderID, ok := stored.ProviderSnapshot["payment_order_id"].(string)
 	require.True(t, ok)
-	snapshotExpiryText, ok := stored.ProductSnapshot["subscription_expires_at"].(string)
-	require.True(t, ok)
-	snapshotExpiry, err := time.Parse(time.RFC3339Nano, snapshotExpiryText)
-	require.NoError(t, err)
+	require.Equal(t, "paid_duration", stored.ProductSnapshot["grant_expiry_policy"])
 
 	_, err = integrationEntClient.UserSubscription.UpdateOneID(fixture.subscription.ID).
 		SetStatus(service.SubscriptionStatusExpired).
@@ -501,7 +498,17 @@ func TestResetCardExternalOrderPostgresFulfillsCheckoutTimeEligibilityAfterExpir
 		FROM subscription_reset_grants
 		WHERE payment_order_id = $1
 	`, created.OrderID).Scan(&grantExpiry))
-	require.WithinDuration(t, snapshotExpiry, grantExpiry, time.Microsecond)
+	require.NotNil(t, completed.PaidAt)
+	require.WithinDuration(t, completed.PaidAt.Add(15*24*time.Hour), grantExpiry, time.Microsecond)
+	repo := NewSubscriptionResetCardRepository(integrationEntClient)
+	now := time.Now().UTC()
+	_, err = repo.ConsumeAndReset(ctx, fixture.user.ID, fixture.subscription.ID, now, now)
+	require.ErrorIs(t, err, service.ErrSubscriptionExpired)
+	_, err = integrationEntClient.UserSubscription.UpdateOneID(fixture.subscription.ID).
+		SetStatus(service.SubscriptionStatusActive).SetExpiresAt(now.Add(30 * 24 * time.Hour)).Save(ctx)
+	require.NoError(t, err)
+	_, err = repo.ConsumeAndReset(ctx, fixture.user.ID, fixture.subscription.ID, now, now)
+	require.NoError(t, err, "a renewed subscription may consume the retained card within its 15 days")
 }
 
 func TestResetCardPaymentGrantUniqueIndexRejectsDuplicateOrderGrant(t *testing.T) {

@@ -172,6 +172,7 @@ func (s *PaymentService) replayPaymentDiscount(ctx context.Context, req CreateOr
 	if resp == nil {
 		return nil, true, infraerrors.Conflict("PAYMENT_CONFIRMATION_PENDING", "the existing payment order is being confirmed; view your orders").WithMetadata(map[string]string{"order_id": fmt.Sprint(o.ID)})
 	}
+	s.hydrateCheckoutFrameURL(ctx, o, resp)
 	return resp, true, nil
 }
 

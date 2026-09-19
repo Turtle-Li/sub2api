@@ -91,6 +91,7 @@ export interface ResetCardQuote {
   monthly_price: number
   price: number
   expires_at: string
+  validity_days?: number
   reset_card_tier?: ResetCardTierPolicy
   /** Opaque binding for the exact compatibility policy observed by this quote. */
   reset_card_tier_revision?: string

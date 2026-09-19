@@ -90,8 +90,8 @@ function mountView() {
         },
         PaymentStatusPanel: {
           name: 'PaymentStatusPanel',
-          props: ['orderId', 'qrCode', 'payUrl', 'wechatJsapi'],
-          template: '<div data-test="resume-panel" :data-order-id="orderId" :data-qr-code="qrCode" :data-pay-url="payUrl" />',
+          props: ['orderId', 'qrCode', 'payUrl', 'checkoutFrameUrl', 'allowCheckoutFrame', 'wechatJsapi'],
+          template: '<div data-test="resume-panel" :data-order-id="orderId" :data-qr-code="qrCode" :data-pay-url="payUrl" :data-checkout-frame-url="checkoutFrameUrl" :data-allow-checkout-frame="allowCheckoutFrame" />',
         },
         Icon: true,
         InvoiceRequestDialog: true,
@@ -166,6 +166,7 @@ describe('UserOrdersView pending payment lifecycle', () => {
         out_trade_no: 'SUB2-PENDING-51',
         qr_code: 'https://qr.example.test/original-51',
         pay_url: 'https://pay.example.test/original-51',
+        checkout_frame_url: 'https://openapi.alipay.com/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
         expires_at: order.expires_at,
       },
     })
@@ -179,6 +180,8 @@ describe('UserOrdersView pending payment lifecycle', () => {
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-order-id')).toBe('51')
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-qr-code')).toBe('https://qr.example.test/original-51')
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-pay-url')).toBe('https://pay.example.test/original-51')
+    expect(wrapper.get('[data-test="resume-panel"]').attributes('data-checkout-frame-url')).toContain('openapi.alipay.com/gateway.do')
+    expect(wrapper.get('[data-test="resume-panel"]').attributes('data-allow-checkout-frame')).toBe('true')
     wrapper.unmount()
   })
 

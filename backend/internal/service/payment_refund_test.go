@@ -170,6 +170,32 @@ func TestRequestRefundRejectsAlreadySettledPartial(t *testing.T) {
 	require.Zero(t, persisted.RefundRequestedAmount)
 }
 
+func TestRequestRefundRejectsIssuedInvoiceAtLockedAdmission(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "issued-invoice-user-request")
+	_, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusCompleted).
+		SetRefundAmount(0).
+		SetRefundRequestedAmount(0).
+		Save(ctx)
+	require.NoError(t, err)
+	instance, err := client.PaymentProviderInstance.Query().Only(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentProviderInstance.UpdateOneID(instance.ID).SetAllowUserRefund(true).Save(ctx)
+	require.NoError(t, err)
+	createRefundInvoice(t, ctx, client, order, InvoiceStatusIssued)
+
+	err = (&PaymentService{entClient: client}).RequestRefund(ctx, order.ID, order.UserID, "customer requested")
+	require.Equal(t, "REFUND_INVOICED_ORDER", infraerrors.Reason(err))
+
+	persisted, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, persisted.Status)
+	require.Zero(t, persisted.RefundAmount)
+	require.Zero(t, persisted.RefundRequestedAmount)
+}
+
 func TestPrepDeductBalanceRequiresForceWhenBalanceIsInsufficient(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -791,6 +817,35 @@ func TestExecuteRefundRejectsStalePlanAfterAnotherPartialRefund(t *testing.T) {
 	require.Equal(t, OrderStatusPartiallyRefunded, reloaded.Status)
 	require.InDelta(t, 60, reloaded.RefundAmount, 0.000001)
 	require.Zero(t, reloaded.RefundRequestedAmount)
+}
+
+func TestExecuteRefundRejectsInvoiceIssuedAfterPlanPreparation(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "issued-invoice-stale-plan")
+	_, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetStatus(OrderStatusCompleted).
+		SetRefundAmount(0).
+		SetRefundRequestedAmount(0).
+		SetPaymentTradeNo("").
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	plan, early, err := svc.PrepareRefund(ctx, order.ID, 100, "stale before invoice issue", false, false)
+	require.NoError(t, err)
+	require.Nil(t, early)
+	createRefundInvoice(t, ctx, client, order, InvoiceStatusIssued)
+
+	result, err := svc.ExecuteRefund(ctx, plan)
+	require.Nil(t, result)
+	require.Equal(t, "REFUND_INVOICED_ORDER", infraerrors.Reason(err))
+
+	persisted, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, persisted.Status)
+	require.Zero(t, persisted.RefundAmount)
+	require.Zero(t, persisted.RefundRequestedAmount)
 }
 
 func TestQueryAndFinalizeRefundFinalizesProviderStatuses(t *testing.T) {

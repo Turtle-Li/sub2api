@@ -341,6 +341,11 @@ export default {
     },
 
     orderOps: {
+      purchaseInfo: '购买信息',
+      amountAndDiscount: '金额与优惠',
+      statusAndFulfillment: '支付与履约状态',
+      timeline: '时间与操作',
+
       dailyQuota: '每日额度',
       weeklyQuota: '每周额度',
       monthlyQuota: '每月额度',
@@ -427,6 +432,7 @@ export default {
     bestValue: '最超值',
     mostPopular: '最受欢迎',
     resetShop: {
+      validDays: '付款后 {days} 天',
       decrease: '减少一张',
       increase: '增加一张',
       perCard: '张',
@@ -525,6 +531,11 @@ export default {
       refund_failed: '退款失败',
     },
     qr: {
+      alipayEmbeddedTitle: '请使用支付宝扫码付款',
+      alipayEmbeddedHint: '请使用支付宝扫描下方二维码完成支付',
+      alipayEmbeddedFrameTitle: '支付宝付款二维码',
+      alipayEmbeddedFallback: '在新窗口打开付款页',
+
       scanToPay: '请扫码支付',
       scanAlipay: '支付宝扫码支付',
       scanWxpay: '微信扫码支付',
@@ -572,6 +583,7 @@ export default {
       requestRefund: '申请退款',
     },
     invoice: {
+      refundBlockedAfterIssue: '开票成功后，该订单无法退款。',
       request: '申请发票',
       correct: '修正开票信息',
       viewDelivery: '查看发票邮件',
@@ -642,7 +654,7 @@ export default {
         customerEmailNotice: '保存后先更新开票状态，再向申请中填写的收件邮箱发送 PDF 附件或驳回通知；邮件失败会在列表标记，可人工重试。',
         retryEmail: '重试邮件',
         emailRetryQueued: '发票邮件已重新进入发送队列',
-        refundCorrectionWarning: '该订单已开票。继续退款后，仍需在线下税务流程中完成红字发票或冲红处理，本系统不会自动执行。',
+        refundCorrectionWarning: '开票成功后，该订单无法退款。',
       },
     },
     result: {
@@ -774,6 +786,7 @@ export default {
       INVALID_REFUND_REASON_CODE: '请选择有效的退款原因',
       INVALID_REFUND_REASON_DETAIL: '退款补充说明无效或过长',
       REFUND_REASON_DETAIL_REQUIRED: '选择“其他”作为退款原因时必须填写补充说明',
+      REFUND_INVOICED_ORDER: '该订单已成功开票，无法退款。',
       REFUND_ALREADY_SETTLED: '该订单已成功退款，每个订单仅允许退款一次，部分退款后也不能再次退款。',
       REFUND_QUOTE_STALE: '退款审核已变化，请刷新报价后再提交',
       REFUND_RECOVERY_OPERATOR_REQUIRED: '该退款恢复操作必须由已登录的人工管理员完成。',
@@ -1045,6 +1058,7 @@ export default {
       refundTimeMinutes: '{count}分钟',
       refundTimeSeconds: '{count}秒',
       refundReviewReasons: {
+        REFUND_INVOICED_ORDER: '该订单已成功开票，无法退款。',
         REFUND_ALREADY_SETTLED: '该订单已成功退款，每个订单仅允许退款一次，部分退款后也不能再次退款。',
         INVALID_REFUND_STATE: '订单退款核算记录无效，需要人工审核。',
         INVALID_STATUS: '当前订单状态不允许发起新的退款。',

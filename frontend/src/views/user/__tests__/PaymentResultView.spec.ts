@@ -192,7 +192,7 @@ describe('PaymentResultView', () => {
     expect(wrapper.text()).toContain('payment.result.processing')
   })
 
-  it('renders a pending state instead of a failure state when the restored order is still pending', async () => {
+  it('does not treat a browser return or embedded checkout frame as payment completion', async () => {
     routeState.query = {
       resume_token: 'resume-42',
       order_id: '999',
@@ -205,6 +205,7 @@ describe('PaymentResultView', () => {
       expiresAt: '2099-01-01T00:10:00.000Z',
       paymentType: 'alipay',
       payUrl: 'https://pay.example.com/session/42',
+      checkoutFrameUrl: 'https://openapi.alipay.com/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
       outTradeNo: 'sub2_20260420abcd1234',
       clientSecret: '',
       intentId: '',
@@ -806,6 +807,57 @@ describe('PaymentResultView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain(formatPaymentAmount(103, 'HKD'))
+  })
+
+  it('wraps and copies a long order number while preserving a reset-card CNY result', async () => {
+    const orderNumber = 'SUB2-RESET-CARD-ORDER-NUMBER-THAT-IS-LONG-ENOUGH-TO-WRAP-WITHOUT-SQUEEZING-LABELS'
+    routeState.query = { resume_token: 'resume-reset-card-long-order' }
+    resolveOrderPublicByResumeToken.mockResolvedValue({
+      data: {
+        ...orderFactory('COMPLETED'),
+        order_type: 'reset_card',
+        amount: 37.02,
+        pay_amount: 37.02,
+        currency: 'CNY',
+        out_trade_no: orderNumber,
+      },
+    })
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+
+    const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true, Icon: true } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(formatPaymentAmount(37.02, 'CNY'))
+    expect(wrapper.get('[data-test="payment-result-page-order-number"]').classes()).toContain('break-all')
+    await wrapper.get('[data-test="copy-payment-result-page-order"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith(orderNumber)
+
+    wrapper.unmount()
+    if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+    else delete (navigator as Navigator & { clipboard?: Clipboard }).clipboard
+  })
+
+  it('does not relabel a USD subscription price as a CNY settlement amount', async () => {
+    routeState.query = { resume_token: 'resume-subscription-cny-settlement' }
+    resolveOrderPublicByResumeToken.mockResolvedValue({
+      data: {
+        ...orderFactory('COMPLETED'),
+        order_type: 'subscription',
+        amount: 12,
+        pay_amount: 88,
+        currency: 'CNY',
+      },
+    })
+
+    const wrapper = mount(PaymentResultView, { global: { stubs: { OrderStatusBadge: true } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(formatPaymentAmount(88, 'CNY'))
+    expect(wrapper.text()).not.toContain(formatPaymentAmount(12, 'CNY'))
+    expect(wrapper.text()).not.toContain('payment.orders.baseAmount')
   })
 
   it('normalizes aliased payment methods before rendering the label', async () => {

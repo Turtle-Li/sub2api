@@ -71,7 +71,7 @@
                 {{ t(`userSubscriptions.status.${subscription.status}`) }}
               </span>
               <button
-                v-if="subscription.status === 'active' && canShowPaymentEntry"
+                v-if="['active', 'expired'].includes(subscription.status) && canShowPaymentEntry"
                 :class="['rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors', platformButtonClass(subscription.group?.platform || '')]"
                 @click="router.push({ path: '/purchase', query: { tab: 'subscription', group: String(subscription.group_id) } })"
               >

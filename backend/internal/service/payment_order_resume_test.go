@@ -86,6 +86,47 @@ func TestResumeExistingCheckoutAndCancellation(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestResumeOrderHydratesTrustedCentralAlipayFrame(t *testing.T) {
+	trustedFrame := "https://openapi.alipay.com/gateway.do?biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&method=alipay.trade.page.pay&sign=test-sign&sign_type=RSA2"
+	for _, testCase := range []struct {
+		name, status, frame, want string
+	}{
+		{name: "pending trusted", status: "PENDING_PAYMENT", frame: trustedFrame, want: trustedFrame},
+		{name: "pending malicious", status: "PENDING_PAYMENT", frame: "https://attacker.example/frame"},
+		{name: "created state", status: "CREATED", frame: trustedFrame},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			client := newPaymentOrderLifecycleTestClient(t)
+			order := resumeTestOrder(t, client)
+			requests, createRequests := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests++
+				if request.Method == http.MethodPost && request.URL.Path == "/v1/payment-orders" {
+					createRequests++
+				}
+				require.Equal(t, http.MethodGet, request.Method)
+				require.Equal(t, "/v1/payment-orders/11111111-2222-4333-8444-555555555555", request.URL.Path)
+				writer.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(writer).Encode(map[string]any{
+					"environment": "sandbox", "organization_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "product_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "app_id": "app.sub2.sandbox",
+					"payment_order_id": "11111111-2222-4333-8444-555555555555", "product_order_no": order.OutTradeNo, "order_type": "balance", "amount_fen": 12000, "paid_amount_fen": 0, "currency": "CNY", "payment_method": "alipay", "status": testCase.status,
+					"checkout_frame_url": testCase.frame, "created_at": order.CreatedAt, "expires_at": order.ExpiresAt,
+				}))
+			}))
+			defer server.Close()
+
+			svc := &PaymentService{entClient: client}
+			svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+			response, err := svc.ResumeOrder(ctx, order.ID, order.UserID)
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, response.CheckoutFrameURL)
+			require.Equal(t, 2, requests, "resume queries payment state and separately obtains its current frame")
+			require.Zero(t, createRequests, "checkout recovery must not create another financial order")
+		})
+	}
+}
+
 func TestResumeCheckoutFailsClosedOnUnknownAndMissingLaunch(t *testing.T) {
 	for _, tc := range []struct {
 		name, status                           string

@@ -1,5 +1,5 @@
 <template>
-  <BaseDialog :show="show" :title="t('payment.invoice.admin.title')" width="wide" @close="emit('close')">
+  <BaseDialog :show="show" :title="t('payment.invoice.admin.title')" width="wide" :close-on-click-outside="!busy" :close-on-escape="!busy" :show-close-button="!busy" @close="closeDialog">
     <div v-if="order?.invoice" class="space-y-5">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="min-w-0">
@@ -52,6 +52,7 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.invoice.admin.pdfFileHint') }}</p>
             <p v-if="pdfError" role="alert" class="mt-1 text-xs text-red-600 dark:text-red-400">{{ pdfError }}</p>
           </div>
+          <p role="note" class="text-xs leading-5 text-amber-700 dark:text-amber-300">{{ t('payment.invoice.refundBlockedAfterIssue') }}</p>
         </template>
 
         <div v-if="form.status === 'REJECTED'">
@@ -86,7 +87,7 @@
             <Icon name="refresh" size="sm" />{{ retrying ? t('common.processing') : t('payment.invoice.admin.retryEmail') }}
           </button>
         </div>
-        <p v-if="order.invoice.status === 'ISSUED'" class="text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('payment.invoice.admin.refundCorrectionWarning') }}</p>
+        <p v-if="order.invoice.status === 'ISSUED'" role="note" class="text-xs leading-5 text-amber-700 dark:text-amber-300">{{ t('payment.invoice.refundBlockedAfterIssue') }}</p>
       </div>
     </div>
 
@@ -96,8 +97,8 @@
     </div>
     <template #footer>
       <div class="flex w-full flex-wrap justify-end gap-3">
-        <button type="button" class="btn btn-secondary" @click="emit('close')">{{ t('common.close') }}</button>
-        <button v-if="editable" type="submit" form="admin-invoice-form" class="btn btn-primary" :disabled="submitting || !formValid">
+        <button type="button" class="btn btn-secondary" :disabled="busy" @click="closeDialog">{{ t('common.close') }}</button>
+        <button v-if="editable" type="submit" form="admin-invoice-form" class="btn btn-primary" :disabled="busy || !formValid">
           {{ submitting ? t('common.processing') : t('payment.invoice.admin.save') }}
         </button>
       </div>
@@ -124,6 +125,11 @@ const emit = defineEmits<{
   (event: 'retry-feishu'): void
 }>()
 const { t } = useI18n()
+
+const busy = computed(() => props.submitting || props.retrying)
+function closeDialog() {
+  if (!busy.value) emit('close')
+}
 
 const form = reactive<AdminUpdateInvoiceRequest>({
   status: 'PROCESSING', provider: 'manual', provider_invoice_id: '', invoice_item_name: '',
@@ -174,7 +180,7 @@ function handlePDFSelected(event: Event) {
 }
 
 function submit() {
-  if (!formValid.value || props.submitting) return
+  if (!formValid.value || busy.value) return
   emit('submit', { ...form })
 }
 

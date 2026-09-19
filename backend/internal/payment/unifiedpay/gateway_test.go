@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +29,20 @@ const (
 	testRequestKeyID   = "request.key.sandbox"
 	testWebhookKeyID   = "webhook.key.sandbox"
 )
+
+func testAlipayEmbeddedCheckoutFrameURL(host string) string {
+	return testAlipayEmbeddedCheckoutFrameURLWith(host, "alipay.trade.page.pay", "RSA2", "test-sign", "4", "224")
+}
+
+func testAlipayEmbeddedCheckoutFrameURLWith(host, method, signType, sign, mode, width string) string {
+	query := url.Values{
+		"method":      {method},
+		"sign_type":   {signType},
+		"sign":        {sign},
+		"biz_content": {`{"qr_pay_mode":"` + mode + `","qrcode_width":"` + width + `"}`},
+	}
+	return "https://" + host + "/gateway.do?" + query.Encode()
+}
 
 func TestCanonicalPayloadSignatureVector(t *testing.T) {
 	seed, err := hex.DecodeString("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
@@ -59,7 +75,10 @@ func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 		require.Equal(t, "sub2:create:"+input.ProductOrderNo, request.Header.Get(HeaderIdempotencyKey))
 		require.Equal(t, int64(1234), input.AmountFen)
 		require.Equal(t, "balance", input.OrderType)
+		require.Equal(t, "sub2", input.Metadata["source"])
+		require.Equal(t, "embedded_qr", input.Metadata["checkout_presentation"])
 		checkout := server.URL + "/checkout/token"
+		checkoutFrame := testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com")
 		if foreignCheckout {
 			checkout = "https://checkout.attacker.example/checkout/token"
 		}
@@ -69,7 +88,7 @@ func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 			Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID,
 			AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: input.ProductOrderNo,
 			OrderType: input.OrderType, AmountFen: input.AmountFen, Currency: "CNY", PaymentMethod: PaymentMethodAlipay,
-			Status: StatusPendingPayment, CheckoutURL: &checkout, CreatedAt: time.Now(), ExpiresAt: expiresAt,
+			Status: StatusPendingPayment, CheckoutURL: &checkout, CheckoutFrameURL: &checkoutFrame, CreatedAt: time.Now(), ExpiresAt: expiresAt,
 		})
 	}))
 	defer server.Close()
@@ -82,6 +101,7 @@ func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, testPaymentOrderID, result.TradeNo)
 	require.Contains(t, result.PayURL, "/checkout/token")
+	require.Equal(t, testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com"), result.CheckoutFrameURL)
 	require.True(t, result.ExpiresAt.Equal(expiresAt))
 
 	foreignCheckout = true
@@ -103,14 +123,17 @@ func TestGatewayCreatesNativeWechatOrderAndReturnsCodeURL(t *testing.T) {
 		var input createPaymentOrderRequest
 		require.NoError(t, json.Unmarshal(body, &input))
 		require.Equal(t, PaymentMethodWechatPay, input.PaymentMethod)
+		require.Equal(t, "sub2", input.Metadata["source"])
+		require.NotContains(t, input.Metadata, "checkout_presentation")
 		checkout := server.URL + "/checkout/token"
+		checkoutFrame := testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com")
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(writer).Encode(paymentOrderResponse{
 			Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID,
 			AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: input.ProductOrderNo,
 			OrderType: input.OrderType, AmountFen: input.AmountFen, Currency: "CNY", PaymentMethod: PaymentMethodWechatPay,
-			Status: StatusPendingPayment, CheckoutURL: &checkout, CheckoutCodeURL: &code,
+			Status: StatusPendingPayment, CheckoutURL: &checkout, CheckoutFrameURL: &checkoutFrame, CheckoutCodeURL: &code,
 			CreatedAt: time.Now(), ExpiresAt: time.Now().Add(30 * time.Minute),
 		})
 	}))
@@ -124,7 +147,153 @@ func TestGatewayCreatesNativeWechatOrderAndReturnsCodeURL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, testPaymentOrderID, result.TradeNo)
 	require.Equal(t, code, result.QRCode)
+	require.Empty(t, result.CheckoutFrameURL)
 	require.Equal(t, "qrcode", gateway.Selection(payment.TypeWxpay).PaymentMode)
+}
+
+func TestAlipayEmbeddedCheckoutFrameURLValidation(t *testing.T) {
+	valid := testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com")
+	for _, testCase := range []struct {
+		name  string
+		raw   string
+		valid bool
+	}{
+		{name: "live gateway", raw: valid, valid: true},
+		{name: "sandbox gateway", raw: testAlipayEmbeddedCheckoutFrameURL("openapi-sandbox.dl.alipaydev.com"), valid: true},
+		{name: "host suffix", raw: strings.Replace(valid, "openapi.alipay.com", "openapi.alipay.com.attacker.test", 1), valid: false},
+		{name: "custom port", raw: strings.Replace(valid, "openapi.alipay.com", "openapi.alipay.com:443", 1), valid: false},
+		{name: "non https", raw: strings.Replace(valid, "https://", "http://", 1), valid: false},
+		{name: "credentials", raw: strings.Replace(valid, "https://", "https://merchant@", 1), valid: false},
+		{name: "fragment", raw: valid + "#payment", valid: false},
+		{name: "wrong endpoint", raw: strings.Replace(valid, "/gateway.do", "/other", 1), valid: false},
+		{name: "wrong method", raw: testAlipayEmbeddedCheckoutFrameURLWith("openapi.alipay.com", "alipay.trade.wap.pay", "RSA2", "test-sign", "4", "224"), valid: false},
+		{name: "wrong signature type", raw: testAlipayEmbeddedCheckoutFrameURLWith("openapi.alipay.com", "alipay.trade.page.pay", "RSA", "test-sign", "4", "224"), valid: false},
+		{name: "missing signature", raw: testAlipayEmbeddedCheckoutFrameURLWith("openapi.alipay.com", "alipay.trade.page.pay", "RSA2", "", "4", "224"), valid: false},
+		{name: "wrong QR mode", raw: testAlipayEmbeddedCheckoutFrameURLWith("openapi.alipay.com", "alipay.trade.page.pay", "RSA2", "test-sign", "2", "224"), valid: false},
+		{name: "wrong QR width", raw: testAlipayEmbeddedCheckoutFrameURLWith("openapi.alipay.com", "alipay.trade.page.pay", "RSA2", "test-sign", "4", "200"), valid: false},
+		{name: "duplicate signature", raw: valid + "&sign=duplicate", valid: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.valid {
+				require.Equal(t, testCase.raw, AlipayEmbeddedCheckoutFrameURL(testCase.raw))
+				return
+			}
+			require.Empty(t, AlipayEmbeddedCheckoutFrameURL(testCase.raw))
+		})
+	}
+}
+
+func TestGatewayDropsUntrustedOrNonPendingAlipayCheckoutFrame(t *testing.T) {
+	for _, testCase := range []struct {
+		name, status, frame string
+	}{
+		{name: "untrusted URL", status: StatusPendingPayment, frame: "https://checkout.attacker.test/frame"},
+		{name: "created state", status: StatusCreated, frame: testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			privateKey := testPrivateKey()
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, err := io.ReadAll(request.Body)
+				require.NoError(t, err)
+				verifySignedRequest(t, request, body, testPublicKey(t, privateKey))
+				var input createPaymentOrderRequest
+				require.NoError(t, json.Unmarshal(body, &input))
+				checkout := server.URL + "/checkout/token"
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(http.StatusCreated)
+				require.NoError(t, json.NewEncoder(writer).Encode(paymentOrderResponse{
+					Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID,
+					AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: input.ProductOrderNo,
+					OrderType: input.OrderType, AmountFen: input.AmountFen, Currency: "CNY", PaymentMethod: PaymentMethodAlipay,
+					Status: testCase.status, CheckoutURL: &checkout, CheckoutFrameURL: &testCase.frame,
+					CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+				}))
+			}))
+			defer server.Close()
+
+			gateway, err := New(testConfig(privateKey, server.URL))
+			require.NoError(t, err)
+			response, err := gateway.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+				OrderID: "sub2_20260920frame" + strings.ReplaceAll(testCase.status, "_", ""), Amount: "12.34", PaymentType: payment.TypeAlipay,
+				OrderType: "balance", Subject: "Sub2API 12.34 CNY", ReturnURL: gateway.ReturnURL(), ExpiresInSeconds: 1800,
+			})
+			require.NoError(t, err)
+			require.Empty(t, response.CheckoutFrameURL)
+		})
+	}
+}
+
+func TestGatewayRecoversOnlyTrustedPendingAlipayCheckoutFrame(t *testing.T) {
+	for _, testCase := range []struct {
+		name, status, frame, want string
+		manual                    bool
+	}{
+		{name: "pending trusted", status: StatusPendingPayment, frame: testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com"), want: testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com")},
+		{name: "pending malicious", status: StatusPendingPayment, frame: "https://attacker.test/frame"},
+		{name: "created", status: StatusCreated, frame: testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com")},
+		{name: "closed", status: StatusClosed, frame: testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com")},
+		{name: "manual review", status: StatusPendingPayment, frame: testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com"), manual: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			privateKey := testPrivateKey()
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				require.Equal(t, http.MethodGet, request.Method)
+				require.Equal(t, "/v1/payment-orders/"+testPaymentOrderID, request.URL.Path)
+				verifySignedRequest(t, request, nil, testPublicKey(t, privateKey))
+				writer.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(writer).Encode(paymentOrderResponse{
+					Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID,
+					AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: "sub2_20260920recover",
+					OrderType: "balance", AmountFen: 1234, Currency: "CNY", PaymentMethod: PaymentMethodAlipay,
+					Status: testCase.status, CheckoutFrameURL: &testCase.frame, NeedsManualReview: testCase.manual,
+					CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+				}))
+			}))
+			defer server.Close()
+
+			gateway, err := New(testConfig(privateKey, server.URL))
+			require.NoError(t, err)
+			frame, err := gateway.RecoverAlipayCheckoutFrameURL(context.Background(), testPaymentOrderID, "sub2_20260920recover")
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, frame)
+		})
+	}
+}
+
+func TestGatewayRejectsMismatchedRecoveredAlipayCheckoutFrame(t *testing.T) {
+	for _, testCase := range []struct {
+		name, productOrderNo, paymentMethod, organizationID string
+	}{
+		{name: "foreign product order", productOrderNo: "sub2_20260920other", paymentMethod: PaymentMethodAlipay, organizationID: testOrganizationID},
+		{name: "wrong payment method", productOrderNo: "sub2_20260920recover", paymentMethod: PaymentMethodWechatPay, organizationID: testOrganizationID},
+		{name: "foreign scope", productOrderNo: "sub2_20260920recover", paymentMethod: PaymentMethodAlipay, organizationID: "foreign-organization"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			privateKey := testPrivateKey()
+			checkoutFrame := testAlipayEmbeddedCheckoutFrameURL("openapi.alipay.com")
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				require.Equal(t, http.MethodGet, request.Method)
+				require.Equal(t, "/v1/payment-orders/"+testPaymentOrderID, request.URL.Path)
+				verifySignedRequest(t, request, nil, testPublicKey(t, privateKey))
+				writer.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(writer).Encode(paymentOrderResponse{
+					Environment: EnvironmentSandbox, OrganizationID: testCase.organizationID, ProductID: testProductID,
+					AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: testCase.productOrderNo,
+					OrderType: "balance", AmountFen: 1234, Currency: "CNY", PaymentMethod: testCase.paymentMethod,
+					Status: StatusPendingPayment, CheckoutFrameURL: &checkoutFrame,
+					CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+				}))
+			}))
+			defer server.Close()
+
+			gateway, err := New(testConfig(privateKey, server.URL))
+			require.NoError(t, err)
+			frame, err := gateway.RecoverAlipayCheckoutFrameURL(context.Background(), testPaymentOrderID, "sub2_20260920recover")
+			require.ErrorIs(t, err, ErrInvalidResponse)
+			require.Empty(t, frame)
+		})
+	}
 }
 
 func TestGatewayRejectsUnsupportedConfiguredMethod(t *testing.T) {

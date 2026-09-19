@@ -464,6 +464,12 @@ describe('PaymentView help text', () => {
 })
 
 describe('PaymentView subscription plan grid', () => {
+  it.each([false, true])('uses only the configured recommendation despite a discount (%s)', async recommended => {
+    const plan = { ...checkoutInfoWithPlansFixture().data.plans[0], discount_percent: 20, entitlements: { recommended } }
+    const wrapper = await mountSubscriptionPlans([plan])
+    expect(wrapper.findComponent(SubscriptionPlanCard).props('featured')).toBe(recommended)
+  })
+
   it('refreshes linked-group catalog data on focus while preserving the selected plan', async () => {
     const plan = { ...checkoutInfoWithPlansFixture().data.plans[0], name: 'Plus', validity_days: 1, validity_unit: 'months', period_label: 'month', weekly_limit_usd: 110 }
     const wrapper = await mountSubscriptionPlans([plan])
@@ -871,6 +877,31 @@ describe('PaymentView payment discount coupons', () => {
       code: 'SAVE2026',
       pay_amount: '80.00',
     })
+    expect(wrapper.findComponent(PaymentStatusPanel).props('allowCheckoutFrame')).toBe(true)
+  })
+
+  it('keeps first-time coupon typing quiet and clears it after a successful payment without reloading', async () => {
+    const wrapper = await mountCouponCheckout()
+    const input = wrapper.findComponent(PaymentDiscountCodeInput)
+    input.vm.$emit('update:modelValue', 'save2026')
+    await flushPromises()
+    expect(input.props('status')).toBe('')
+    expect(wrapper.findComponent(PaymentOrderRail).props('notice')).toBe('')
+    expect(wrapper.findComponent(PaymentOrderRail).props('disabled')).toBe(true)
+    getCouponQuote.mockResolvedValue({ data: couponQuote() })
+    createOrder.mockResolvedValue(paymentOrder())
+    input.vm.$emit('apply')
+    await flushPromises()
+    wrapper.findComponent(PaymentOrderRail).vm.$emit('submit')
+    await flushPromises()
+    const panel = wrapper.findComponent(PaymentStatusPanel)
+    refreshUser.mockResolvedValue(undefined)
+    panel.vm.$emit('success')
+    panel.vm.$emit('success')
+    await flushPromises()
+    expect(input.props('modelValue')).toBe('')
+    expect(input.props('applied')).toBeNull()
+    expect(panel.props('paymentDiscount')).toMatchObject({ code: 'SAVE2026' })
   })
 
   it('requires a fresh coupon quote after refreshing the catalog', async () => {
@@ -882,7 +913,7 @@ describe('PaymentView payment discount coupons', () => {
     const rail = wrapper.findComponent(PaymentOrderRail)
     expect(rail.props('discount')).toBeNull()
     expect(rail.props('disabled')).toBe(true)
-    expect(rail.props('notice')).toBe('payment.coupon.reapply')
+    expect(rail.props('notice')).toBe('')
   })
 
   it('clears a server-rejected stale quote and lets the user apply the same code again', async () => {
@@ -896,7 +927,7 @@ describe('PaymentView payment discount coupons', () => {
     expect(rail.props('discount')).toBeNull()
     expect(rail.props('disabled')).toBe(true)
     expect(wrapper.findComponent(PaymentDiscountCodeInput).props('modelValue')).toBe('save2026')
-    expect(rail.props('notice')).toBe('payment.coupon.reapply')
+    expect(rail.props('notice')).toBe('')
     getCouponQuote.mockResolvedValue({ data: couponQuote('SAVE2026', '75.00') })
     wrapper.findComponent(PaymentDiscountCodeInput).vm.$emit('apply')
     await flushPromises()
@@ -936,7 +967,7 @@ describe('PaymentView payment discount coupons', () => {
 
     expect(rail.props('discount')).toBeNull()
     expect(rail.props('disabled')).toBe(true)
-    expect(rail.props('notice')).toBe('payment.coupon.reapply')
+    expect(rail.props('notice')).toBe('')
   })
 
   it('removes the quote before a normal order is created', async () => {
@@ -1900,7 +1931,7 @@ describe('PaymentView payment recovery', () => {
     openSpy.mockRestore()
   })
 
-  it('navigates a synchronously reserved desktop popup for hosted Alipay', async () => {
+  it('keeps a desktop hosted Alipay checkout in the local shell until the user opens its fallback', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -1919,11 +1950,17 @@ describe('PaymentView payment recovery', () => {
       payment_mode: 'popup',
       out_trade_no: 'sub2_reset_907',
     })
-    const popup = { closed: false, close: vi.fn(), location: { href: '' } } as unknown as Window
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
 
     const wrapper = shallowMount(PaymentView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
     })
     await flushPromises()
     await flushPromises()
@@ -1933,14 +1970,14 @@ describe('PaymentView payment recovery', () => {
     })
     await submitSelectedResetCard(wrapper)
 
-    expect(openSpy).toHaveBeenCalledOnce()
-    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
-    expect(popup.location.href).toBe('https://pay.example.com/reset-card/907')
-    expect(popup.close).not.toHaveBeenCalled()
+    const panel = wrapper.findComponent(PaymentStatusPanel)
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(panel.props('payUrl')).toBe('https://pay.example.com/reset-card/907')
+    expect(panel.props('qrCode')).toBe('')
     openSpy.mockRestore()
   })
 
-  it('falls back to a full-page hosted redirect when the reserved desktop popup is blocked', async () => {
+  it('does not preopen a desktop window when a new Alipay order returns an embedded checkout frame', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -1957,15 +1994,20 @@ describe('PaymentView payment recovery', () => {
       payment_type: 'alipay',
       pay_url: 'https://pay.example.com/reset-card/908',
       payment_mode: 'popup',
+      checkout_frame_url: 'https://openapi.alipay.com/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
       out_trade_no: 'sub2_reset_908',
     })
-    const originalLocation = window.location
-    const locationState = { href: 'http://localhost/purchase', origin: 'http://localhost' }
-    Object.defineProperty(window, 'location', { configurable: true, value: locationState })
     const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
 
     const wrapper = shallowMount(PaymentView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
     })
     await flushPromises()
     await flushPromises()
@@ -1975,12 +2017,12 @@ describe('PaymentView payment recovery', () => {
     })
     await submitSelectedResetCard(wrapper)
 
-    expect(openSpy).toHaveBeenNthCalledWith(1, '', 'paymentPopup', expect.any(String))
-    expect(openSpy).toHaveBeenNthCalledWith(2, 'https://pay.example.com/reset-card/908', 'paymentPopup', expect.any(String))
-    expect(locationState.href).toBe('https://pay.example.com/reset-card/908')
+    const panel = wrapper.findComponent(PaymentStatusPanel)
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(panel.props('checkoutFrameUrl')).toContain('openapi.alipay.com/gateway.do')
+    expect(panel.props('allowCheckoutFrame')).toBe(true)
 
     openSpy.mockRestore()
-    Object.defineProperty(window, 'location', { configurable: true, value: originalLocation })
   })
 })
 
