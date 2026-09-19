@@ -598,17 +598,17 @@ func requirePaymentDiscountPlans(ctx context.Context, client *dbent.Client, plan
 		return errors.New("payment discount plan lookup has no client")
 	}
 	var query strings.Builder
-	query.WriteString(`SELECT id FROM subscription_plans WHERE id IN (`)
+	_, _ = query.WriteString(`SELECT id FROM subscription_plans WHERE id IN (`)
 	args := make([]any, 0, len(planIDs))
 	for index, planID := range planIDs {
 		if index > 0 {
-			query.WriteByte(',')
+			_ = query.WriteByte(',')
 		}
-		query.WriteByte('$')
-		query.WriteString(strconv.Itoa(index + 1))
+		_ = query.WriteByte('$')
+		_, _ = query.WriteString(strconv.Itoa(index + 1))
 		args = append(args, planID)
 	}
-	query.WriteByte(')')
+	_ = query.WriteByte(')')
 	rows, err := client.QueryContext(ctx, query.String(), args...)
 	if err != nil {
 		return err
