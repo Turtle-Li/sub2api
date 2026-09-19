@@ -197,7 +197,8 @@ func (r *paymentRefundReconciliationStore) Stats(ctx context.Context) (service.P
 			(
 				SELECT COUNT(*) FROM payment_orders
 				WHERE order_type = 'reset_card'
-				  AND COALESCE(product_snapshot->>'schema_version', '1') <> '1'
+				  AND product_snapshot ? 'schema_version'
+				  AND product_snapshot->>'schema_version' IS DISTINCT FROM '1'
 				  AND NOT (
 					status IN ('COMPLETED', 'REFUNDED', 'PARTIALLY_REFUNDED')
 					OR (status IN ('CANCELLED', 'EXPIRED') AND paid_at IS NULL)

@@ -37,7 +37,10 @@ func TestPaymentRefundReconciliationStoreStatsBlocksRollbackForUnsettledResetCar
 	createOrder := func(orderType, status string, schemaVersion any, paidAt *time.Time) *dbent.PaymentOrder {
 		t.Helper()
 		id := uuid.NewString()
-		snapshot := map[string]any{"schema_version": schemaVersion, "kind": orderType}
+		snapshot := map[string]any{"kind": orderType}
+		if schemaVersion != nil {
+			snapshot["schema_version"] = schemaVersion
+		}
 		if orderType == payment.OrderTypeResetCard {
 			snapshot["quantity"] = 2
 			snapshot["use_on_purchase"] = true
@@ -119,4 +122,13 @@ func TestPaymentRefundReconciliationStoreStatsBlocksRollbackForUnsettledResetCar
 	require.NoError(t, err)
 	createOrder(payment.OrderTypeResetCard, "FUTURE_PENDING", 2, nil)
 	require.EqualValues(t, baseline+9, stats().UnsettledResetCardPurchaseCount)
+
+	// An absent version is legacy; an explicitly malformed version is not.
+	invalid := createOrder(payment.OrderTypeResetCard, payment.OrderStatusPending, 2, nil)
+	_, err = client.PaymentOrder.UpdateOneID(invalid.ID).SetProductSnapshot(map[string]any{
+		"schema_version": nil, "kind": payment.OrderTypeResetCard,
+		"quantity": 1, "use_on_purchase": true,
+	}).Save(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, baseline+10, stats().UnsettledResetCardPurchaseCount)
 }
