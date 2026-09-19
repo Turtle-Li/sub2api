@@ -6,7 +6,6 @@
 import { apiClient } from '../client'
 import type {
   DashboardStats,
-  CreateOrderResult,
   PaymentOrder,
   PaymentChannel,
   SubscriptionPlan,
@@ -14,7 +13,6 @@ import type {
   PaymentInvoiceRecord,
   AdminUpdateInvoiceRequest,
   PaymentBanner,
-  OrderStatus,
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -151,6 +149,7 @@ export interface RefundReview {
   reason?: string
   quote_revision?: string
   generated_at: string
+  min_refund_amount?: number
   default_refund_amount: number
   max_refund_amount: number
   entitlement_amount: number
@@ -212,6 +211,7 @@ export interface SubscriptionRefundReview {
   purchased_seconds: number
   used_seconds: number
   remaining_seconds: number
+  seconds_to_reclaim: number
 }
 
 export type RefundReasonCode =
@@ -225,6 +225,8 @@ export interface RefundOrderRequest {
   quote_revision: string
   reason_code: RefundReasonCode
   reason_detail?: string
+  /** Present only when the administrator explicitly selected a subscription cash amount. */
+  refund_amount?: number
 }
 
 export type ExternalRefundMethodCode =
@@ -238,42 +240,6 @@ export interface ExternalRefundConfirmationRequest {
   external_reference: string
   refunded_at: string
   evidence_detail: string
-}
-
-export type OwnerTestPaymentType = 'alipay' | 'wxpay'
-
-export interface OwnerTestOrderRequest {
-  amount_fen: 1 | 2
-  payment_type: OwnerTestPaymentType
-}
-
-/** The owner-test endpoint returns the normal order creation payload plus its current status. */
-export interface OwnerTestOrderResponse extends CreateOrderResult {
-  status: OrderStatus
-}
-
-export function isOwnerTestOrderRequest(value: unknown): value is OwnerTestOrderRequest {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const record = value as Record<string, unknown>
-  const keys = Object.keys(record)
-  return keys.length === 2 && keys.includes('amount_fen') && keys.includes('payment_type') &&
-    (record.amount_fen === 1 || record.amount_fen === 2) && (record.payment_type === 'alipay' || record.payment_type === 'wxpay')
-}
-
-function validOwnerTestIdempotencyKey(value: string): boolean {
-  return value.length >= 16 && value.length <= 80 && /^[\x21-\x7e]+$/.test(value)
-}
-
-export async function createOwnerTestOrder(request: OwnerTestOrderRequest, idempotencyKey: string): Promise<OwnerTestOrderResponse> {
-  if (!isOwnerTestOrderRequest(request) || !validOwnerTestIdempotencyKey(idempotencyKey)) {
-    throw new Error('invalid owner payment test request')
-  }
-  const { data } = await apiClient.post<OwnerTestOrderResponse>(
-    '/admin/payment/owner-test/orders',
-    request,
-    { headers: { 'Idempotency-Key': idempotencyKey } },
-  )
-  return data
 }
 
 export const adminPaymentAPI = {
@@ -342,8 +308,8 @@ export const adminPaymentAPI = {
   },
 
   /** Get a specific order by ID */
-  getOrder(id: number) {
-    return apiClient.get<PaymentOrder>(`/admin/payment/orders/${id}`)
+  getOrder(id: number, signal?: AbortSignal) {
+    return apiClient.get<PaymentOrder>(`/admin/payment/orders/${id}`, { signal })
   },
 
   /** Advance or complete the invoice workflow for an order. */
@@ -382,8 +348,11 @@ export const adminPaymentAPI = {
   },
 
   /** Load the fresh server-authoritative quote before an admin confirms a refund. */
-  getRefundReview(id: number) {
-    return apiClient.get<RefundReview>(`/admin/payment/orders/${id}/refund-review`)
+  getRefundReview(id: number, refundAmount?: number) {
+    const url = `/admin/payment/orders/${id}/refund-review`
+    return refundAmount === undefined
+      ? apiClient.get<RefundReview>(url)
+      : apiClient.get<RefundReview>(url, { params: { refund_amount: refundAmount } })
   },
 
   /** Restore missing historical subscription provenance, then return a fresh server quote. */

@@ -2,13 +2,14 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import UserOrdersView from '../UserOrdersView.vue'
 
-const { getOrder, getMyOrders, showError, appStoreState } = vi.hoisted(() => ({
+const { getOrder, getMyOrders, getRefundEligibleProviders, showError, appStoreState } = vi.hoisted(() => ({
   getOrder: vi.fn(),
   getMyOrders: vi.fn(),
+  getRefundEligibleProviders: vi.fn().mockResolvedValue({ data: { provider_instance_ids: [] } }),
   showError: vi.fn(),
   appStoreState: { cachedPublicSettings: null as null | Record<string, unknown> },
 }))
-vi.mock('@/api/payment', () => ({ paymentAPI: { getOrder, getMyOrders, getRefundEligibleProviders: vi.fn().mockResolvedValue({ data: { provider_instance_ids: [] } }) } }))
+vi.mock('@/api/payment', () => ({ paymentAPI: { getOrder, getMyOrders, getRefundEligibleProviders } }))
 vi.mock('@/stores', () => ({ useAppStore: () => ({ showError, showSuccess: vi.fn(), cachedPublicSettings: appStoreState.cachedPublicSettings }) }))
 // featureFlags.ts reads the store via '@/stores/app'; both paths must agree.
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ cachedPublicSettings: appStoreState.cachedPublicSettings }) }))
@@ -16,8 +17,8 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
 const order = { id: 51, user_id: 7, status: 'PAID', order_type: 'balance', amount: 100, pay_amount: 100, refund_amount: 0, currency: 'CNY', out_trade_no: 'ORDER-51', created_at: '2026-09-10T00:00:00Z' }
 
-function setup() {
-  getMyOrders.mockResolvedValue({ data: { items: [order], total: 1 } })
+function setup(rows = [order]) {
+  getMyOrders.mockResolvedValue({ data: { items: rows, total: rows.length } })
   return mount(UserOrdersView, { global: { stubs: {
     AppLayout: { template: '<main><slot /></main>' },
     OrderTable: { props: ['orders'], template: '<div data-test="orders"><slot v-for="row in orders" name="actions" :row="row" /></div>' },
@@ -68,5 +69,24 @@ describe('UserOrdersView purchase entry CTA', () => {
 
     wrapper.unmount()
     appStoreState.cachedPublicSettings = null
+  })
+})
+
+
+describe('UserOrdersView single successful refund policy', () => {
+  it.each([
+    ['COMPLETED', 0, true],
+    ['COMPLETED', 1, false],
+    ['PARTIALLY_REFUNDED', 1, false],
+    ['PARTIALLY_REFUNDED', 0, false],
+    ['REFUNDED', 5, false],
+  ])('refund entry for %s with settled amount %s is %s', async (status, refunded, visible) => {
+    getRefundEligibleProviders.mockResolvedValue({ data: { provider_instance_ids: ['provider-1'] } })
+    const row = { ...order, status, refund_amount: refunded, provider_instance_id: 'provider-1' }
+    const wrapper = setup([row])
+    await flushPromises()
+    expect(wrapper.findAll('button').some(button => button.text() === 'payment.orders.requestRefund')).toBe(visible)
+    wrapper.unmount()
+    getRefundEligibleProviders.mockResolvedValue({ data: { provider_instance_ids: [] } })
   })
 })

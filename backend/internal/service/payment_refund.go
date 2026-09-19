@@ -162,6 +162,9 @@ func (s *PaymentService) RequestRefund(ctx context.Context, oid, uid int64, reas
 	if !refundStateValid(o) {
 		return infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
 	}
+	if refundAlreadySettled(o) {
+		return refundAlreadySettledError()
+	}
 	settled, _ := refundOrderAmounts(o)
 	remaining := refundRemainingAmount(o, settled)
 	if remaining <= paymentAmountZeroTolerance(PaymentOrderCurrency(o)) {
@@ -175,7 +178,7 @@ func (s *PaymentService) RequestRefund(ctx context.Context, oid, uid int64, reas
 		paymentorder.UserIDEQ(uid),
 		paymentorder.RefundAmountEQ(o.RefundAmount),
 		paymentorder.RefundRequestedAmountEQ(o.RefundRequestedAmount),
-		paymentorder.StatusIn(OrderStatusCompleted, OrderStatusPartiallyRefunded),
+		paymentorder.StatusIn(OrderStatusCompleted),
 		paymentorder.OrderTypeEQ(payment.OrderTypeBalance),
 	)
 	if paymentAuditDialect(s.entClient) == "postgres" {
@@ -234,6 +237,25 @@ func refundOrderAmounts(o *dbent.PaymentOrder) (settled, requested float64) {
 		requested, settled = settled, 0
 	}
 	return settled, requested
+}
+
+// refundAlreadySettled identifies any order that has already completed a
+// refund, including a partial refund. It always reads the normalized settled
+// amount so a legacy pending request stored in refund_amount is not mistaken
+// for completed money.
+func refundAlreadySettled(o *dbent.PaymentOrder) bool {
+	if o == nil {
+		return false
+	}
+	if o.Status == OrderStatusPartiallyRefunded || o.Status == OrderStatusRefunded {
+		return true
+	}
+	settled, _ := refundOrderAmounts(o)
+	return settled > paymentAmountZeroTolerance(PaymentOrderCurrency(o))
+}
+
+func refundAlreadySettledError() error {
+	return infraerrors.Conflict("REFUND_ALREADY_SETTLED", "each order allows only one successful refund")
 }
 
 func refundAmountsValid(o *dbent.PaymentOrder) bool {
@@ -353,7 +375,7 @@ func settledRefundTotal(o *dbent.PaymentOrder, settled, attempt float64) (float6
 
 // nextRefundAuditAction works around the historical unique (order_id,
 // action) index while retaining the stable action names for the first event.
-// Subsequent partial attempts remain append-only and queryable by prefix.
+// Historical attempts remain append-only and queryable by prefix.
 func nextRefundAuditAction(ctx context.Context, client *dbent.Client, oid int64, prefix string) string {
 	if client == nil {
 		return prefix
@@ -408,9 +430,9 @@ func (s *PaymentService) writeRefundPendingAudit(ctx context.Context, oid int64,
 
 // writeRefundAuditLog is append-only for refund events. PaymentAuditLog keeps
 // a historical unique (order_id, action) index for fulfillment idempotency;
-// refund attempts, however, may legitimately repeat after a partial success
-// or a gateway retry. The first event retains its stable action name and later
-// events receive a bounded timestamp suffix.
+// gateway retries and historical recovery may legitimately repeat. The first
+// event retains its stable action name and later events receive a bounded
+// timestamp suffix.
 func (s *PaymentService) writeRefundAuditLog(ctx context.Context, oid int64, action, operator string, detail map[string]any) {
 	if s == nil || s.entClient == nil {
 		return
@@ -439,8 +461,11 @@ func (s *PaymentService) validateRefundRequest(ctx context.Context, oid, uid int
 	if o.OrderType != payment.OrderTypeBalance {
 		return nil, infraerrors.BadRequest("INVALID_ORDER_TYPE", "only balance orders can request refund")
 	}
-	if o.Status != OrderStatusCompleted && o.Status != OrderStatusPartiallyRefunded {
-		return nil, infraerrors.BadRequest("INVALID_STATUS", "only completed or partially refunded orders can request refund")
+	if refundAlreadySettled(o) {
+		return nil, refundAlreadySettledError()
+	}
+	if o.Status != OrderStatusCompleted {
+		return nil, infraerrors.BadRequest("INVALID_STATUS", "only completed orders can request refund")
 	}
 	if manual, err := paymentOrderRequiresManualRefund(o); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "payment order entitlement snapshot is invalid")
@@ -468,12 +493,17 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	if !refundStateValid(o) {
 		return nil, nil, infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
 	}
+	// A pending row may be resumed only through its existing durable attempt.
+	// Do not let this new-admission guard interrupt that recovery path.
+	if refundAlreadySettled(o) && o.Status != OrderStatusRefundPending {
+		return nil, nil, refundAlreadySettledError()
+	}
 	if manual, entitlementErr := paymentOrderRequiresManualRefund(o); entitlementErr != nil {
 		return nil, nil, infraerrors.BadRequest("INVALID_PRODUCT_SNAPSHOT", "payment order entitlement snapshot is invalid")
 	} else if manual {
 		return nil, nil, infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "orders with non-reversible entitlements require manual entitlement rollback")
 	}
-	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundPending, OrderStatusRefundFailed, OrderStatusPartiallyRefunded}
+	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundPending, OrderStatusRefundFailed}
 	if !psSliceContains(ok, o.Status) {
 		return nil, nil, infraerrors.BadRequest("INVALID_STATUS", "order status does not allow refund")
 	}
@@ -622,6 +652,9 @@ func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*Ref
 	if !refundStateValid(preClaim) {
 		return nil, infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
 	}
+	if refundAlreadySettled(preClaim) {
+		return nil, refundAlreadySettledError()
+	}
 	originalStatus := preClaim.Status
 	// Status plus both monetary columns form the portable optimistic claim
 	// predicate.  On PostgreSQL we also compare the row timestamp; SQLite's
@@ -631,7 +664,7 @@ func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*Ref
 		paymentorder.IDEQ(p.OrderID),
 		paymentorder.RefundAmountEQ(preClaim.RefundAmount),
 		paymentorder.RefundRequestedAmountEQ(preClaim.RefundRequestedAmount),
-		paymentorder.StatusIn(OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded),
+		paymentorder.StatusIn(OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed),
 	)
 	if paymentAuditDialect(s.entClient) == "postgres" {
 		claim = claim.Where(paymentorder.UpdatedAtEQ(preClaim.UpdatedAt))

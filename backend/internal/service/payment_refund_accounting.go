@@ -126,6 +126,7 @@ func refundReasonDefaultSummary(code string) string {
 // initiate a refund. Amounts at the payment boundary are in the receipt
 // currency; wallet credit and subscription time are reported separately.
 type RefundReview struct {
+	subscriptionInputs   *subscriptionRefundInputs
 	OrderID              int64                          `json:"order_id"`
 	OrderType            string                         `json:"order_type"`
 	Currency             string                         `json:"currency"`
@@ -136,6 +137,7 @@ type RefundReview struct {
 	QuoteRevision        string                         `json:"quote_revision,omitempty"`
 	GeneratedAt          time.Time                      `json:"generated_at"`
 	DefaultRefundAmount  float64                        `json:"default_refund_amount"`
+	MinRefundAmount      float64                        `json:"min_refund_amount,omitempty"`
 	MaxRefundAmount      float64                        `json:"max_refund_amount"`
 	EntitlementAmount    float64                        `json:"entitlement_amount"`
 	Balance              *BalanceRefundReview           `json:"balance,omitempty"`
@@ -163,6 +165,7 @@ type SubscriptionRefundReview struct {
 	PurchasedSeconds int64     `json:"purchased_seconds"`
 	UsedSeconds      int64     `json:"used_seconds"`
 	RemainingSeconds int64     `json:"remaining_seconds"`
+	SecondsToReclaim int64     `json:"seconds_to_reclaim"`
 }
 
 type walletRefundInputs struct {
@@ -348,6 +351,20 @@ func manualRefundReview(order *dbent.PaymentOrder, now time.Time, code, reason s
 	return review
 }
 
+func refundAlreadySettledReview(order *dbent.PaymentOrder, now time.Time) *RefundReview {
+	review := &RefundReview{
+		GeneratedAt: now,
+		ReasonCode:  "REFUND_ALREADY_SETTLED",
+		Reason:      "the order already has a successful refund",
+	}
+	if order != nil {
+		review.OrderID = order.ID
+		review.OrderType = order.OrderType
+		review.Currency = PaymentOrderCurrency(order)
+	}
+	return review
+}
+
 func refundReviewRevision(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
 	return hex.EncodeToString(sum[:])
@@ -359,7 +376,7 @@ func decimalString(value float64) string {
 
 func refundReviewStateAllowed(order *dbent.PaymentOrder) bool {
 	return order != nil && psSliceContains([]string{
-		OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded,
+		OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed,
 	}, order.Status)
 }
 
@@ -374,7 +391,7 @@ func paymentOrderHasAppliedAffiliateRebate(ctx context.Context, client *dbent.Cl
 }
 
 func (s *PaymentService) ReviewRefund(ctx context.Context, orderID int64) (*RefundReview, error) {
-	return s.reviewRefundWithClient(ctx, s.entClient, orderID, s.refundValuationTime(), false)
+	return s.ReviewRefundWithAmount(ctx, orderID, nil)
 }
 
 // ensureReviewedSubscriptionRefundAuthorizationCaches invalidates the shared
@@ -478,6 +495,9 @@ func (s *PaymentService) reviewRefundWithClient(ctx context.Context, client *dbe
 	if !refundStateValid(order) {
 		return manualRefundReview(order, now, "INVALID_REFUND_STATE", "stored refund accounting is invalid"), nil
 	}
+	if refundAlreadySettled(order) {
+		return refundAlreadySettledReview(order, now), nil
+	}
 	if !refundReviewStateAllowed(order) {
 		return manualRefundReview(order, now, "INVALID_STATUS", "order status does not allow a new refund"), nil
 	}
@@ -557,7 +577,7 @@ func (s *PaymentService) reviewBalanceRefund(ctx context.Context, client *dbent.
 }
 
 func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, now time.Time, lock bool) (*RefundReview, error) {
-	grant, sub, err := loadPaymentSubscriptionRefundState(ctx, client, order.ID, lock)
+	grant, sub, err := loadReviewedSubscriptionRefundState(ctx, client, order.ID, lock)
 	if errors.Is(err, errRefundAccountingMissing) {
 		return s.manualSubscriptionGrantBackfillReview(ctx, client, order, now)
 	}
@@ -577,16 +597,17 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 	if otherReservation {
 		return manualRefundReview(order, now, "SUBSCRIPTION_REFUND_IN_FLIGHT", "another order on this subscription has a refund in progress"), nil
 	}
-	if !sub.ExpiresAt.Equal(grant.CurrentEnd) || grant.ReservedSeconds > 0 {
+	if !sub.ExpiresAt.Equal(grant.CurrentEnd) || grant.ReservedSeconds > 0 || grant.ReservedCashMinor > 0 {
 		return manualRefundReview(order, now, "SUBSCRIPTION_NOT_TAIL", "the purchased term is no longer the current refundable tail"), nil
 	}
 	settled, _ := refundOrderAmounts(order)
-	quote := calculateSubscriptionRefundQuote(subscriptionRefundInputs{
+	inputs := subscriptionRefundInputs{
 		OrderAmount: decimal.NewFromFloat(order.Amount), PayAmount: decimal.NewFromFloat(order.PayAmount),
 		SettledProductAmount: decimal.NewFromFloat(settled), TermStart: grant.TermStart,
 		OriginalEnd: grant.OriginalEnd, CurrentEnd: grant.CurrentEnd, ValuationAt: now,
 		RefundedSeconds: grant.RefundedSeconds, RefundedCashMinor: grant.RefundedCashMinor,
-	})
+	}
+	quote := calculateSubscriptionRefundQuote(inputs)
 	totalSeconds := int64(grant.OriginalEnd.Sub(grant.TermStart) / time.Second)
 	usedSeconds := totalSeconds - grant.RefundedSeconds - quote.Seconds
 	if usedSeconds < 0 {
@@ -602,14 +623,15 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 	)
 	review := &RefundReview{
 		OrderID: order.ID, OrderType: order.OrderType, Currency: PaymentOrderCurrency(order),
-		GeneratedAt: now, QuoteRevision: revision,
+		subscriptionInputs: &inputs,
+		GeneratedAt:        now, QuoteRevision: revision,
 		DefaultRefundAmount: float64(quote.CashMinor) / 100,
 		MaxRefundAmount:     float64(quote.CashMinor) / 100,
 		EntitlementAmount:   quote.ProductAmount.InexactFloat64(),
 		Subscription: &SubscriptionRefundReview{
 			SubscriptionID: grant.SubscriptionID, TermStartAt: grant.TermStart, TermEndAt: grant.OriginalEnd,
 			CurrentExpiresAt: sub.ExpiresAt, NewExpiresAt: quote.NewExpiry,
-			PurchasedSeconds: totalSeconds, UsedSeconds: usedSeconds, RemainingSeconds: quote.Seconds,
+			PurchasedSeconds: totalSeconds, UsedSeconds: usedSeconds, RemainingSeconds: quote.Seconds, SecondsToReclaim: quote.Seconds,
 		},
 	}
 	if quote.CashMinor <= 0 || quote.Seconds <= 0 || !quote.ProductAmount.IsPositive() {
@@ -645,6 +667,18 @@ func (s *PaymentService) PrepareReviewedRefund(ctx context.Context, orderID int6
 }
 
 func (s *PaymentService) PrepareReviewedRefundRequest(ctx context.Context, orderID int64, quoteRevision string, reasonInput RefundReasonInput) (*RefundPlan, error) {
+	return s.PrepareReviewedRefundRequestWithAmount(ctx, orderID, quoteRevision, reasonInput, nil)
+}
+
+func (s *PaymentService) PrepareReviewedRefundRequestWithAmount(ctx context.Context, orderID int64, quoteRevision string, reasonInput RefundReasonInput, amount *string) (*RefundPlan, error) {
+	var selected *int64
+	if amount != nil {
+		v, err := parseSelectedRefundAmount(*amount)
+		if err != nil {
+			return nil, err
+		}
+		selected = &v
+	}
 	review, err := s.ReviewRefund(ctx, orderID)
 	if err != nil {
 		return nil, err
@@ -655,8 +689,11 @@ func (s *PaymentService) PrepareReviewedRefundRequest(ctx context.Context, order
 	if !review.CanRefund {
 		return nil, infraerrors.Conflict(review.ReasonCode, review.Reason)
 	}
-	if strings.TrimSpace(quoteRevision) == "" || quoteRevision != review.QuoteRevision {
+	if strings.TrimSpace(quoteRevision) == "" || quoteRevision != selectedRefundRevision(review.QuoteRevision, selected) {
 		return nil, infraerrors.Conflict("REFUND_QUOTE_STALE", "refund review changed; refresh before submitting")
+	}
+	if err := selectRefundReviewAmount(review, selected); err != nil {
+		return nil, err
 	}
 	order, err := s.entClient.PaymentOrder.Get(ctx, orderID)
 	if err != nil {
@@ -673,6 +710,7 @@ func (s *PaymentService) PrepareReviewedRefundRequest(ctx context.Context, order
 		DeductBalance: order.OrderType == payment.OrderTypeBalance,
 		QuoteRevision: review.QuoteRevision, ReviewKind: review.OrderType,
 	}
+	plan.RequestedCashMinor = selected
 	if review.Balance != nil {
 		plan.DeductionType = payment.DeductionTypeBalance
 		plan.BalanceToDeduct = review.EntitlementAmount
@@ -682,7 +720,7 @@ func (s *PaymentService) PrepareReviewedRefundRequest(ctx context.Context, order
 	if review.Subscription != nil {
 		plan.DeductionType = payment.DeductionTypeSubscription
 		plan.SubscriptionID = review.Subscription.SubscriptionID
-		plan.SubscriptionSecondsToReserve = review.Subscription.RemainingSeconds
+		plan.SubscriptionSecondsToReserve = review.Subscription.SecondsToReclaim
 		plan.SubscriptionNewExpiry = review.Subscription.NewExpiresAt
 	}
 	return plan, nil
