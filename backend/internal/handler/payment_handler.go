@@ -348,19 +348,21 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 
 // CreateOrderRequest is the request body for creating a payment order.
 type CreateOrderRequest struct {
-	CouponCode            string  `json:"coupon_code" binding:"max=32"`
-	CouponRevision        string  `json:"coupon_revision" binding:"max=64"`
-	Amount                float64 `json:"amount"`
-	PaymentType           string  `json:"payment_type" binding:"required"`
-	OpenID                string  `json:"openid"`
-	WechatResumeToken     string  `json:"wechat_resume_token"`
-	ReturnURL             string  `json:"return_url"`
-	PaymentSource         string  `json:"payment_source"`
-	OrderType             string  `json:"order_type"`
-	PlanID                int64   `json:"plan_id"`
-	SubscriptionID        int64   `json:"subscription_id"`
-	ResetCardTierRevision string  `json:"reset_card_tier_revision"`
-	IdempotencyKeyHash    string  `json:"-"`
+	CouponCode             string  `json:"coupon_code" binding:"max=32"`
+	CouponRevision         string  `json:"coupon_revision" binding:"max=64"`
+	Amount                 float64 `json:"amount"`
+	PaymentType            string  `json:"payment_type" binding:"required"`
+	OpenID                 string  `json:"openid"`
+	WechatResumeToken      string  `json:"wechat_resume_token"`
+	ReturnURL              string  `json:"return_url"`
+	PaymentSource          string  `json:"payment_source"`
+	OrderType              string  `json:"order_type"`
+	PlanID                 int64   `json:"plan_id"`
+	SubscriptionID         int64   `json:"subscription_id"`
+	ResetCardTierRevision  string  `json:"reset_card_tier_revision"`
+	ResetCardQuantity      int     `json:"reset_card_quantity"`
+	ResetCardUseOnPurchase bool    `json:"reset_card_use_on_purchase"`
+	IdempotencyKeyHash     string  `json:"-"`
 	// IsMobile lets the frontend declare its mobile status directly. When
 	// nil we fall back to User-Agent heuristics (which miss iPadOS / some
 	// embedded browsers that strip the "Mobile" keyword).
@@ -397,26 +399,28 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 		mobile = *req.IsMobile
 	}
 	result, err := h.paymentService.CreateOrder(c.Request.Context(), service.CreateOrderRequest{
-		UserID:                subject.UserID,
-		CouponCode:            req.CouponCode,
-		CouponRevision:        req.CouponRevision,
-		Amount:                req.Amount,
-		PaymentType:           req.PaymentType,
-		OpenID:                req.OpenID,
-		ClientIP:              c.ClientIP(),
-		IsMobile:              mobile,
-		IsWeChatBrowser:       isWeChatBrowser(c),
-		SrcHost:               c.Request.Host,
-		SrcURL:                c.Request.Referer(),
-		ReturnURL:             req.ReturnURL,
-		PaymentSource:         req.PaymentSource,
-		OrderType:             req.OrderType,
-		PlanID:                req.PlanID,
-		SubscriptionID:        req.SubscriptionID,
-		ResetCardTierRevision: req.ResetCardTierRevision,
-		IdempotencyKey:        c.GetHeader("Idempotency-Key"),
-		IdempotencyKeyHash:    req.IdempotencyKeyHash,
-		Locale:                c.GetHeader("Accept-Language"),
+		UserID:                 subject.UserID,
+		CouponCode:             req.CouponCode,
+		CouponRevision:         req.CouponRevision,
+		Amount:                 req.Amount,
+		PaymentType:            req.PaymentType,
+		OpenID:                 req.OpenID,
+		ClientIP:               c.ClientIP(),
+		IsMobile:               mobile,
+		IsWeChatBrowser:        isWeChatBrowser(c),
+		SrcHost:                c.Request.Host,
+		SrcURL:                 c.Request.Referer(),
+		ReturnURL:              req.ReturnURL,
+		PaymentSource:          req.PaymentSource,
+		OrderType:              req.OrderType,
+		PlanID:                 req.PlanID,
+		SubscriptionID:         req.SubscriptionID,
+		ResetCardTierRevision:  req.ResetCardTierRevision,
+		ResetCardQuantity:      req.ResetCardQuantity,
+		ResetCardUseOnPurchase: req.ResetCardUseOnPurchase,
+		IdempotencyKey:         c.GetHeader("Idempotency-Key"),
+		IdempotencyKeyHash:     req.IdempotencyKeyHash,
+		Locale:                 c.GetHeader("Accept-Language"),
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -468,6 +472,10 @@ func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeC
 	if strings.TrimSpace(claims.ResetCardTierRevision) != "" {
 		req.ResetCardTierRevision = strings.TrimSpace(claims.ResetCardTierRevision)
 	}
+	// These values must always come from the signed token. In particular, a
+	// false use-on-purchase claim must clear a true browser body value.
+	req.ResetCardQuantity = claims.ResetCardQuantity
+	req.ResetCardUseOnPurchase = claims.ResetCardUseOnPurchase
 	if strings.TrimSpace(claims.IdempotencyKeyHash) != "" {
 		req.IdempotencyKeyHash = strings.TrimSpace(claims.IdempotencyKeyHash)
 	}
@@ -855,6 +863,7 @@ type PaymentOrderResult struct {
 	FulfillmentStatus       string                        `json:"fulfillment_status"`
 	RefundEntitlementStatus string                        `json:"refund_entitlement_status"`
 	NeedsManualReview       bool                          `json:"needs_manual_review"`
+	CancellationPending     bool                          `json:"cancellation_pending"`
 	InvoiceEligible         bool                          `json:"invoice_eligible"`
 	Invoice                 *service.PaymentInvoiceRecord `json:"invoice,omitempty"`
 }
@@ -905,6 +914,7 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder, projected ...ser
 		FulfillmentStatus:       presentation.FulfillmentStatus,
 		RefundEntitlementStatus: presentation.RefundEntitlementStatus,
 		NeedsManualReview:       presentation.NeedsManualReview,
+		CancellationPending:     presentation.CancellationPending,
 		InvoiceEligible:         presentation.InvoiceEligible,
 		Invoice:                 presentation.Invoice,
 	}
@@ -931,4 +941,23 @@ func defaultPaymentOrderInvoicePresentation(order *dbent.PaymentOrder) service.P
 
 func isWeChatBrowser(c *gin.Context) bool {
 	return strings.Contains(strings.ToLower(c.GetHeader("User-Agent")), "micromessenger")
+}
+
+// ResumeOrder returns the owned original checkout without creating an order.
+func (h *PaymentHandler) ResumeOrder(c *gin.Context) {
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	orderID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || orderID <= 0 {
+		response.BadRequest(c, "Invalid order ID")
+		return
+	}
+	result, err := h.paymentService.ResumeOrder(c.Request.Context(), orderID, subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }

@@ -161,6 +161,25 @@ func (f *resetCardExternalPGFixture) request(key string) service.CreateOrderRequ
 	}
 }
 
+func resetCardExternalPGSuccessNotification(t *testing.T, order *dbent.PaymentOrder, amount float64, tradeNo string) *payment.PaymentNotification {
+	t.Helper()
+	remotePaymentOrderID, ok := order.ProviderSnapshot["payment_order_id"].(string)
+	require.True(t, ok)
+	return &payment.PaymentNotification{
+		TradeNo: tradeNo,
+		OrderID: order.OutTradeNo,
+		Amount:  amount,
+		Status:  payment.NotificationStatusSuccess,
+		Metadata: map[string]string{
+			"payment_order_id": remotePaymentOrderID,
+			"environment":      "live",
+			"organization_id":  ownerTestPGOrganizationID,
+			"product_id":       ownerTestPGProductID,
+			"app_id":           ownerTestPGAppID,
+		},
+	}
+}
+
 func TestResetCardExternalOrderPostgresPricingReplayAndFulfillment(t *testing.T) {
 	fixture := newResetCardExternalPGFixture(t)
 	ctx := context.Background()
@@ -237,6 +256,144 @@ func TestResetCardExternalOrderPostgresPricingReplayAndFulfillment(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_reset_grants WHERE payment_order_id = $1`, created.OrderID).Scan(&grants))
 	require.Equal(t, 1, grants)
+}
+
+func TestResetCardExternalOrderPostgresQuantityAutoUseConsumesNewGrantOnce(t *testing.T) {
+	fixture := newResetCardExternalPGFixture(t)
+	ctx := context.Background()
+	windowBeforePayment := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
+	_, err := integrationEntClient.UserSubscription.UpdateOneID(fixture.subscription.ID).
+		SetDailyUsageUsd(12.5).
+		SetWeeklyUsageUsd(23.5).
+		SetMonthlyUsageUsd(45.5).
+		SetDailyWindowStart(windowBeforePayment).
+		SetWeeklyWindowStart(windowBeforePayment).
+		SetMonthlyWindowStart(windowBeforePayment).
+		Save(ctx)
+	require.NoError(t, err)
+
+	request := fixture.request("reset-card-external-quantity-auto-use-0001")
+	request.Amount = 120
+	request.ResetCardQuantity = 3
+	request.ResetCardUseOnPurchase = true
+	created, err := fixture.service.CreateOrder(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 120.0, created.Amount)
+	require.Equal(t, 120.0, created.PayAmount)
+	bodies, _, remoteOrders := fixture.central.snapshot()
+	require.Len(t, bodies, 1)
+	require.Equal(t, 1, remoteOrders)
+	var sent ownerTestPGCentralRequest
+	require.NoError(t, json.Unmarshal([]byte(bodies[0]), &sent))
+	require.Equal(t, int64(12000), sent.AmountFen)
+
+	stored, err := integrationEntClient.PaymentOrder.Get(ctx, created.OrderID)
+	require.NoError(t, err)
+	require.Equal(t, float64(3), stored.ProductSnapshot["quantity"])
+	require.Equal(t, 40.0, stored.ProductSnapshot["unit_price"])
+	require.Equal(t, 120.0, stored.ProductSnapshot["price"])
+	require.Equal(t, true, stored.ProductSnapshot["use_on_purchase"])
+
+	notification := resetCardExternalPGSuccessNotification(t, stored, created.PayAmount, "reset-card-provider-trade-quantity-auto-use")
+	require.NoError(t, fixture.service.HandlePaymentNotification(ctx, notification, payment.TypeUnifiedPay))
+	// The second notification must hit the completed-order replay path and leave
+	// both the grant and the consumed-card count unchanged.
+	require.NoError(t, fixture.service.HandlePaymentNotification(ctx, notification, payment.TypeUnifiedPay))
+
+	var grants, quantity, usedCount, grantedAudits, usedAudits, skippedAudits int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(MAX(quantity), 0), COALESCE(MAX(used_count), 0)
+		FROM subscription_reset_grants
+		WHERE payment_order_id = $1
+	`, created.OrderID).Scan(&grants, &quantity, &usedCount))
+	require.Equal(t, 1, grants)
+	require.Equal(t, 3, quantity)
+	require.Equal(t, 1, usedCount, "automatic use must consume exactly one card from the newly granted batch")
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM payment_audit_logs WHERE order_id = $1::text AND action = 'RESET_CARD_GRANTED'`, created.OrderID).Scan(&grantedAudits))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM payment_audit_logs WHERE order_id = $1::text AND action = 'RESET_CARD_AUTO_USED'`, created.OrderID).Scan(&usedAudits))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM payment_audit_logs WHERE order_id = $1::text AND action = 'RESET_CARD_AUTO_USE_NOT_PERFORMED'`, created.OrderID).Scan(&skippedAudits))
+	require.Equal(t, 1, grantedAudits)
+	require.Equal(t, 1, usedAudits)
+	require.Zero(t, skippedAudits)
+
+	updatedSubscription, err := integrationEntClient.UserSubscription.Get(ctx, fixture.subscription.ID)
+	require.NoError(t, err)
+	require.Zero(t, updatedSubscription.DailyUsageUsd)
+	require.Zero(t, updatedSubscription.WeeklyUsageUsd)
+	require.Zero(t, updatedSubscription.MonthlyUsageUsd)
+	require.NotNil(t, updatedSubscription.DailyWindowStart)
+	require.NotNil(t, updatedSubscription.WeeklyWindowStart)
+	require.NotNil(t, updatedSubscription.MonthlyWindowStart)
+	require.Equal(t, *updatedSubscription.DailyWindowStart, *updatedSubscription.WeeklyWindowStart)
+	require.Equal(t, *updatedSubscription.DailyWindowStart, *updatedSubscription.MonthlyWindowStart)
+
+	replayed, err := fixture.service.CreateOrder(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, created.OrderID, replayed.OrderID)
+	_, _, remoteOrders = fixture.central.snapshot()
+	require.Equal(t, 1, remoteOrders)
+}
+
+func TestResetCardExternalOrderPostgresQuantityAutoUsePausedTargetKeepsGrant(t *testing.T) {
+	fixture := newResetCardExternalPGFixture(t)
+	ctx := context.Background()
+	windowBeforePayment := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
+	_, err := integrationEntClient.UserSubscription.UpdateOneID(fixture.subscription.ID).
+		SetDailyUsageUsd(12.5).
+		SetWeeklyUsageUsd(23.5).
+		SetMonthlyUsageUsd(45.5).
+		SetDailyWindowStart(windowBeforePayment).
+		SetWeeklyWindowStart(windowBeforePayment).
+		SetMonthlyWindowStart(windowBeforePayment).
+		Save(ctx)
+	require.NoError(t, err)
+
+	request := fixture.request("reset-card-external-quantity-paused-skip-0001")
+	request.Amount = 120
+	request.ResetCardQuantity = 3
+	request.ResetCardUseOnPurchase = true
+	created, err := fixture.service.CreateOrder(ctx, request)
+	require.NoError(t, err)
+	stored, err := integrationEntClient.PaymentOrder.Get(ctx, created.OrderID)
+	require.NoError(t, err)
+
+	_, err = integrationEntClient.UserSubscription.UpdateOneID(fixture.subscription.ID).
+		SetStatus(service.SubscriptionStatusSuspended).
+		Save(ctx)
+	require.NoError(t, err)
+	notification := resetCardExternalPGSuccessNotification(t, stored, created.PayAmount, "reset-card-provider-trade-quantity-paused")
+	require.NoError(t, fixture.service.HandlePaymentNotification(ctx, notification, payment.TypeUnifiedPay))
+	require.NoError(t, fixture.service.HandlePaymentNotification(ctx, notification, payment.TypeUnifiedPay))
+
+	var grants, quantity, usedCount, grantedAudits, usedAudits, skippedAudits int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(MAX(quantity), 0), COALESCE(MAX(used_count), 0)
+		FROM subscription_reset_grants
+		WHERE payment_order_id = $1
+	`, created.OrderID).Scan(&grants, &quantity, &usedCount))
+	require.Equal(t, 1, grants)
+	require.Equal(t, 3, quantity)
+	require.Zero(t, usedCount)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM payment_audit_logs WHERE order_id = $1::text AND action = 'RESET_CARD_GRANTED'`, created.OrderID).Scan(&grantedAudits))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM payment_audit_logs WHERE order_id = $1::text AND action = 'RESET_CARD_AUTO_USED'`, created.OrderID).Scan(&usedAudits))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM payment_audit_logs WHERE order_id = $1::text AND action = 'RESET_CARD_AUTO_USE_NOT_PERFORMED'`, created.OrderID).Scan(&skippedAudits))
+	require.Equal(t, 1, grantedAudits)
+	require.Zero(t, usedAudits)
+	require.Equal(t, 1, skippedAudits, "the skipped automatic use must be durable evidence for the user-facing grant")
+
+	updatedSubscription, err := integrationEntClient.UserSubscription.Get(ctx, fixture.subscription.ID)
+	require.NoError(t, err)
+	require.Equal(t, service.SubscriptionStatusSuspended, updatedSubscription.Status)
+	require.Equal(t, 12.5, updatedSubscription.DailyUsageUsd)
+	require.Equal(t, 23.5, updatedSubscription.WeeklyUsageUsd)
+	require.Equal(t, 45.5, updatedSubscription.MonthlyUsageUsd)
+	require.NotNil(t, updatedSubscription.DailyWindowStart)
+	require.Equal(t, windowBeforePayment, *updatedSubscription.DailyWindowStart)
+
+	completed, err := integrationEntClient.PaymentOrder.Get(ctx, created.OrderID)
+	require.NoError(t, err)
+	require.Equal(t, service.OrderStatusCompleted, completed.Status)
+	require.NotNil(t, completed.PaidAt)
 }
 
 func TestResetCardExternalOrderPostgresConcurrentCreateUsesOneLocalOrder(t *testing.T) {

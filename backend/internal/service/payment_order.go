@@ -47,6 +47,9 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	default:
 		return nil, infraerrors.BadRequest("INVALID_ORDER_TYPE", "unsupported payment order type")
 	}
+	if err := normalizeResetCardPurchaseOptions(&req); err != nil {
+		return nil, err
+	}
 	if err := normalizePaymentDiscountRequest(&req); err != nil {
 		return nil, err
 	}
@@ -82,13 +85,14 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		if req.PlanID == 0 {
 			req.PlanID = quote.PlanID
 		}
-		if math.Abs(req.Amount-quote.Price) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
-			return nil, infraerrors.Conflict("RESET_CARD_QUOTE_CHANGED", "reset card quote changed; request a new quote")
+		total, amountErr := validateResetCardRequestAmount(req.Amount, quote.Price, req.ResetCardQuantity)
+		if amountErr != nil {
+			return nil, amountErr
 		}
 		if err := validateResetCardTierQuoteRevision(req.ResetCardTierRevision, quote.ResetCardTier); err != nil {
 			return nil, err
 		}
-		req.Amount = quote.Price
+		req.Amount = total
 	}
 	cfg, err := s.configService.GetPaymentConfig(ctx)
 	if err != nil {
@@ -375,6 +379,9 @@ func (s *PaymentService) validateResetCardOrder(ctx context.Context, req CreateO
 	if req.PlanID != 0 && req.PlanID != quote.PlanID {
 		return nil, infraerrors.Conflict("RESET_CARD_QUOTE_CHANGED", "reset card quote changed; request a new quote")
 	}
+	if _, err := validateResetCardRequestAmount(req.Amount, quote.Price, req.ResetCardQuantity); err != nil {
+		return nil, err
+	}
 	if err := validateResetCardTierQuoteRevision(req.ResetCardTierRevision, quote.ResetCardTier); err != nil {
 		return nil, err
 	}
@@ -383,6 +390,88 @@ func (s *PaymentService) validateResetCardOrder(ctx context.Context, req CreateO
 		return nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "reset card source plan is no longer available")
 	}
 	return plan, nil
+}
+
+const (
+	resetCardDefaultQuantity = 1
+	resetCardMaximumQuantity = 99
+)
+
+// normalizeResetCardPurchaseOptions keeps the optional request fields scoped to
+// reset-card purchases. A zero quantity is the wire-compatible omitted value
+// for reset cards; ordinary orders retain zero because quantity is not part of
+// their product contract.
+func normalizeResetCardPurchaseOptions(req *CreateOrderRequest) error {
+	if req == nil {
+		return infraerrors.BadRequest("INVALID_INPUT", "payment order request is missing")
+	}
+	quantity, useOnPurchase, err := normalizeResetCardPurchaseTerms(req.OrderType, req.ResetCardQuantity, req.ResetCardUseOnPurchase)
+	if err != nil {
+		return err
+	}
+	req.ResetCardQuantity = quantity
+	req.ResetCardUseOnPurchase = useOnPurchase
+	return nil
+}
+
+func normalizeResetCardPurchaseTerms(orderType string, quantity int, useOnPurchase bool) (int, bool, error) {
+	if orderType != payment.OrderTypeResetCard {
+		if (quantity != 0 && quantity != resetCardDefaultQuantity) || useOnPurchase {
+			return 0, false, infraerrors.BadRequest("RESET_CARD_OPTIONS_UNSUPPORTED", "reset card purchase options are only supported for reset card orders")
+		}
+		return 0, false, nil
+	}
+	if quantity == 0 {
+		quantity = resetCardDefaultQuantity
+	}
+	if quantity < resetCardDefaultQuantity || quantity > resetCardMaximumQuantity {
+		return 0, false, infraerrors.BadRequest("RESET_CARD_QUANTITY_INVALID", "reset_card_quantity must be between 1 and 99")
+	}
+	return quantity, useOnPurchase, nil
+}
+
+func resetCardAmountToMinorUnit(amount float64) (int64, error) {
+	if !isValidProviderAmount(amount) {
+		return 0, ErrResetCardPriceInvalid
+	}
+	minor, err := payment.AmountToMinorUnit(strconv.FormatFloat(amount, 'f', -1, 64), payment.DefaultPaymentCurrency)
+	if err != nil || minor <= 0 {
+		return 0, ErrResetCardPriceInvalid
+	}
+	return minor, nil
+}
+
+// resetCardTotalFromUnitPrice computes the order amount in CNY minor units so
+// every quantity sees the same exact two-decimal contract as the quote.
+func resetCardTotalFromUnitPrice(unitPrice float64, quantity int) (float64, int64, error) {
+	if quantity < resetCardDefaultQuantity || quantity > resetCardMaximumQuantity {
+		return 0, 0, ErrResetCardPriceInvalid
+	}
+	unit, err := normalizeResetCardExpectedPrice(unitPrice)
+	if err != nil {
+		return 0, 0, err
+	}
+	unitMinor, err := payment.AmountToMinorUnit(unit.StringFixed(resetCardPurchasePriceScale), payment.DefaultPaymentCurrency)
+	if err != nil || unitMinor <= 0 || unitMinor > (int64(^uint64(0)>>1)/int64(quantity)) {
+		return 0, 0, ErrResetCardPriceInvalid
+	}
+	totalMinor := unitMinor * int64(quantity)
+	return payment.MinorUnitToAmount(totalMinor, payment.DefaultPaymentCurrency), totalMinor, nil
+}
+
+func validateResetCardRequestAmount(amount, unitPrice float64, quantity int) (float64, error) {
+	requestMinor, err := resetCardAmountToMinorUnit(amount)
+	if err != nil {
+		return 0, infraerrors.BadRequest("INVALID_AMOUNT", "amount must be a positive CNY amount with at most two decimal places")
+	}
+	total, totalMinor, err := resetCardTotalFromUnitPrice(unitPrice, quantity)
+	if err != nil {
+		return 0, ErrResetCardQuoteChanged
+	}
+	if requestMinor != totalMinor {
+		return 0, ErrResetCardQuoteChanged
+	}
+	return total, nil
 }
 
 func validateResetCardSelectedProvider(sel *payment.InstanceSelection) error {
@@ -511,7 +600,6 @@ func validateResetCardOrderRecord(order *dbent.PaymentOrder, req CreateOrderRequ
 	if order == nil || order.UserID != req.UserID || order.OrderType != payment.OrderTypeResetCard ||
 		order.OutTradeNo != resetCardOrderOutTradeNo(req.UserID, req.IdempotencyKeyHash) ||
 		NormalizeVisibleMethod(order.PaymentType) != NormalizeVisibleMethod(req.PaymentType) ||
-		math.Abs(order.Amount-req.Amount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) ||
 		order.ProductSnapshot == nil {
 		return ErrIdempotencyKeyConflict
 	}
@@ -527,11 +615,16 @@ func validateResetCardOrderRecord(order *dbent.PaymentOrder, req CreateOrderRequ
 	storedHash, _ := snapshot["idempotency_key_sha256"].(string)
 	subscriptionID, subscriptionOK := paymentSnapshotInt64(snapshot["subscription_id"])
 	planID, planOK := paymentSnapshotInt64(snapshot["plan_id"])
-	price, priceOK := paymentSnapshotFloat(snapshot["price"])
+	terms, termsErr := resetCardSnapshotPurchaseTerms(snapshot)
+	requestQuantity, requestUseOnPurchase, requestTermsErr := normalizeResetCardPurchaseTerms(req.OrderType, req.ResetCardQuantity, req.ResetCardUseOnPurchase)
+	requestMinor, requestMinorErr := resetCardAmountToMinorUnit(req.Amount)
+	orderMinor, orderMinorErr := resetCardAmountToMinorUnit(order.Amount)
 	if kind != "reset_card" || !strings.EqualFold(strings.TrimSpace(storedHash), req.IdempotencyKeyHash) ||
 		!subscriptionOK || subscriptionID != req.SubscriptionID || !planOK ||
-		(req.PlanID > 0 && planID != req.PlanID) || !priceOK ||
-		math.Abs(price-req.Amount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
+		(req.PlanID > 0 && planID != req.PlanID) || termsErr != nil || requestTermsErr != nil ||
+		requestMinorErr != nil || orderMinorErr != nil || requestMinor != orderMinor ||
+		requestMinor != terms.totalMinor || terms.quantity != requestQuantity ||
+		terms.useOnPurchase != requestUseOnPurchase {
 		return ErrIdempotencyKeyConflict
 	}
 	if sel != nil {
@@ -543,6 +636,90 @@ func validateResetCardOrderRecord(order *dbent.PaymentOrder, req CreateOrderRequ
 		}
 	}
 	return nil
+}
+
+type resetCardPaymentSnapshotTerms struct {
+	quantity      int
+	unitPrice     float64
+	totalAmount   float64
+	totalMinor    int64
+	useOnPurchase bool
+	legacy        bool
+}
+
+// resetCardSnapshotPurchaseTerms reads the immutable terms from a payment
+// snapshot. Pre-quantity rows are a deliberate compatibility case: they are
+// restricted to one card with no automatic use. All newer rows prove their
+// total from the frozen unit price in CNY minor units.
+func resetCardSnapshotPurchaseTerms(snapshot map[string]any) (resetCardPaymentSnapshotTerms, error) {
+	if snapshot == nil {
+		return resetCardPaymentSnapshotTerms{}, errors.New("reset card order is missing purchase terms")
+	}
+	price, priceOK := paymentSnapshotFloat(snapshot["price"])
+	if !priceOK {
+		return resetCardPaymentSnapshotTerms{}, errors.New("reset card order has invalid total price")
+	}
+	quantity := resetCardDefaultQuantity
+	quantityRaw, hasQuantity := snapshot["quantity"]
+	if hasQuantity {
+		parsed, ok := paymentSnapshotInt64(quantityRaw)
+		if !ok || parsed < resetCardDefaultQuantity || parsed > resetCardMaximumQuantity {
+			return resetCardPaymentSnapshotTerms{}, errors.New("reset card order has invalid quantity")
+		}
+		quantity = int(parsed)
+	}
+	_, hasUnitPrice := snapshot["unit_price"]
+	_, hasUseOnPurchase := snapshot["use_on_purchase"]
+	schemaVersion, hasSchemaVersion := paymentSnapshotInt64(snapshot["schema_version"])
+	modern := (hasSchemaVersion && schemaVersion >= 2) || hasUnitPrice || hasUseOnPurchase
+	if !modern {
+		if quantity != resetCardDefaultQuantity {
+			return resetCardPaymentSnapshotTerms{}, errors.New("legacy reset card order has invalid quantity")
+		}
+		totalMinor, err := resetCardAmountToMinorUnit(price)
+		if err != nil {
+			return resetCardPaymentSnapshotTerms{}, err
+		}
+		return resetCardPaymentSnapshotTerms{
+			quantity:    resetCardDefaultQuantity,
+			unitPrice:   payment.MinorUnitToAmount(totalMinor, payment.DefaultPaymentCurrency),
+			totalAmount: payment.MinorUnitToAmount(totalMinor, payment.DefaultPaymentCurrency),
+			totalMinor:  totalMinor,
+			legacy:      true,
+		}, nil
+	}
+	if !hasQuantity || !hasUnitPrice || !hasUseOnPurchase {
+		return resetCardPaymentSnapshotTerms{}, errors.New("reset card order is missing frozen purchase terms")
+	}
+	unitPrice, unitPriceOK := paymentSnapshotFloat(snapshot["unit_price"])
+	useOnPurchase, useOnPurchaseOK := paymentSnapshotBool(snapshot["use_on_purchase"])
+	if !unitPriceOK || !useOnPurchaseOK {
+		return resetCardPaymentSnapshotTerms{}, errors.New("reset card order has invalid frozen purchase terms")
+	}
+	unitMinor, err := resetCardAmountToMinorUnit(unitPrice)
+	if err != nil {
+		return resetCardPaymentSnapshotTerms{}, err
+	}
+	totalAmount, totalMinor, err := resetCardTotalFromUnitPrice(unitPrice, quantity)
+	if err != nil {
+		return resetCardPaymentSnapshotTerms{}, err
+	}
+	priceMinor, err := resetCardAmountToMinorUnit(price)
+	if err != nil || priceMinor != totalMinor {
+		return resetCardPaymentSnapshotTerms{}, errors.New("reset card order total does not match frozen unit price")
+	}
+	return resetCardPaymentSnapshotTerms{
+		quantity:      quantity,
+		unitPrice:     payment.MinorUnitToAmount(unitMinor, payment.DefaultPaymentCurrency),
+		totalAmount:   totalAmount,
+		totalMinor:    totalMinor,
+		useOnPurchase: useOnPurchase,
+	}, nil
+}
+
+func paymentSnapshotBool(value any) (bool, bool) {
+	valueBool, ok := value.(bool)
+	return valueBool, ok
 }
 
 func resetCardOrderHasReusableResponse(order *dbent.PaymentOrder) bool {
@@ -641,8 +818,16 @@ func (s *PaymentService) revalidateResetCardOrderInTx(ctx context.Context, tx *d
 	if err != nil {
 		return nil, err
 	}
-	if lockedSourcePlan.id != req.PlanID || lockedSourcePlan.id != expectedPlan.ID ||
-		!lockedPrice.Equal(decimal.NewFromFloat(req.Amount)) {
+	lockedUnitPrice := lockedPrice.InexactFloat64()
+	lockedTotal, lockedTotalMinor, err := resetCardTotalFromUnitPrice(lockedUnitPrice, req.ResetCardQuantity)
+	if err != nil {
+		return nil, ErrResetCardQuoteChanged
+	}
+	requestMinor, err := resetCardAmountToMinorUnit(req.Amount)
+	if err != nil || requestMinor != lockedTotalMinor {
+		return nil, ErrResetCardQuoteChanged
+	}
+	if lockedSourcePlan.id != req.PlanID || lockedSourcePlan.id != expectedPlan.ID {
 		return nil, ErrResetCardQuoteChanged
 	}
 	_, lockedEntitlements, err := normalizePlanEntitlements(lockedSourcePlan.entitlements)
@@ -689,7 +874,10 @@ func (s *PaymentService) revalidateResetCardOrderInTx(ctx context.Context, tx *d
 		subscriptionID:      req.SubscriptionID,
 		groupID:             subscription.groupID,
 		monthlyPrice:        lockedSourcePlan.price.InexactFloat64(),
-		price:               lockedPrice.InexactFloat64(),
+		unitPrice:           lockedUnitPrice,
+		price:               lockedTotal,
+		quantity:            req.ResetCardQuantity,
+		useOnPurchase:       req.ResetCardUseOnPurchase,
 		subscriptionExpires: subscription.expiresAt,
 		idempotencyKeyHash:  req.IdempotencyKeyHash,
 		tierSnapshot:        tierSnapshot,
@@ -960,7 +1148,10 @@ type resetCardOrderSnapshotSource struct {
 	subscriptionID      int64
 	groupID             int64
 	monthlyPrice        float64
+	unitPrice           float64
 	price               float64
+	quantity            int
+	useOnPurchase       bool
 	subscriptionExpires time.Time
 	idempotencyKeyHash  string
 	tierSnapshot        *SubscriptionResetCardTierSnapshot
@@ -1157,8 +1348,7 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 			if lockErr != nil {
 				return nil, false, lockErr
 			}
-			if math.Abs(orderAmount-lockedSource.price) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) ||
-				math.Abs(limitAmount-lockedSource.price) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
+			if orderAmount != lockedSource.price || limitAmount != lockedSource.price {
 				return nil, false, ErrResetCardQuoteChanged
 			}
 			plan = lockedSource.plan
@@ -1341,8 +1531,19 @@ func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, 
 	if source == nil || source.plan == nil {
 		return nil
 	}
+	quantity := source.quantity
+	if quantity == 0 {
+		quantity = resetCardDefaultQuantity
+	}
+	unitPrice := source.unitPrice
+	if unitPrice <= 0 {
+		// Private callers that construct an old one-card source retain the
+		// historical price as their unit price. Normal creation always supplies
+		// the independently locked unit value above.
+		unitPrice = source.price
+	}
 	snapshot := map[string]any{
-		"schema_version":          1,
+		"schema_version":          2,
 		"kind":                    "reset_card",
 		"subscription_id":         source.subscriptionID,
 		"plan_id":                 source.plan.ID,
@@ -1351,10 +1552,12 @@ func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, 
 		"description":             "One GPT subscription quota reset card",
 		"currency":                payment.DefaultPaymentCurrency,
 		"monthly_price":           source.monthlyPrice,
+		"unit_price":              unitPrice,
 		"price":                   source.price,
 		"order_amount":            source.price,
 		"pay_amount":              payAmount,
-		"quantity":                1,
+		"quantity":                quantity,
+		"use_on_purchase":         source.useOnPurchase,
 		"grant_expiry_policy":     "subscription",
 		"subscription_expires_at": source.subscriptionExpires.UTC().Format(time.RFC3339Nano),
 		"idempotency_key_sha256":  source.idempotencyKeyHash,
@@ -2136,6 +2339,12 @@ func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (stri
 	}
 	if revision := strings.TrimSpace(req.ResetCardTierRevision); revision != "" {
 		q.Set("reset_card_tier_revision", revision)
+	}
+	if req.OrderType == payment.OrderTypeResetCard {
+		q.Set("reset_card_quantity", strconv.Itoa(req.ResetCardQuantity))
+		if req.ResetCardUseOnPurchase {
+			q.Set("reset_card_use_on_purchase", "true")
+		}
 	}
 	if (req.OrderType == payment.OrderTypeResetCard || req.CouponCode != "") && req.IdempotencyKeyHash != "" {
 		q.Set("idempotency_key_hash", req.IdempotencyKeyHash)

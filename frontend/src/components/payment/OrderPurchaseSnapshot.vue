@@ -7,7 +7,7 @@
       <p v-if="order.product_snapshot.description" class="break-words text-sm text-gray-600 dark:text-gray-300">{{ order.product_snapshot.description }}</p>
       <ul v-if="order.product_snapshot.features?.length" class="list-inside list-disc space-y-1 text-sm text-gray-600 dark:text-gray-300"><li v-for="feature in order.product_snapshot.features" :key="feature">{{ feature }}</li></ul>
       <dl class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-        <div v-if="order.product_snapshot.price != null"><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.listPrice') }}</dt><dd>{{ order.product_snapshot.currency || (order.order_type === 'balance' ? order.currency : 'USD') }} {{ order.product_snapshot.price.toFixed(2) }}</dd></div>
+        <div v-if="order.product_snapshot.price != null"><dt class="text-gray-500 dark:text-gray-400">{{ t(order.order_type === 'reset_card' ? 'payment.orderOps.resetCardTotalPrice' : 'payment.orderOps.listPrice') }}</dt><dd>{{ order.product_snapshot.currency || (order.order_type === 'balance' ? order.currency : 'USD') }} {{ order.product_snapshot.price.toFixed(2) }}</dd></div>
         <template v-for="period in ['daily', 'weekly', 'monthly'] as const" :key="period"><div v-if="order.product_snapshot[`${period}_limit_usd`] != null"><dt class="text-gray-500 dark:text-gray-400">{{ t(`payment.orderOps.${period}Quota`) }}</dt><dd>{{ order.product_snapshot[`${period}_limit_usd`]! > 0 ? `$${order.product_snapshot[`${period}_limit_usd`]}` : t('payment.planCard.unlimited') }}</dd></div></template>
 
         <div v-if="order.product_snapshot.subscription_days != null">
@@ -18,6 +18,20 @@
           <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.creditedAmount') }}</dt>
           <dd>${{ order.product_snapshot.credited_amount.toFixed(2) }}</dd>
         </div>
+        <template v-if="order.order_type === 'reset_card'">
+          <div v-if="order.product_snapshot.quantity != null">
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.resetCardQuantity') }}</dt>
+            <dd>{{ order.product_snapshot.quantity }}</dd>
+          </div>
+          <div v-if="order.product_snapshot.unit_price != null">
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.resetCardUnitPrice') }}</dt>
+            <dd>{{ order.product_snapshot.currency || order.currency || 'CNY' }} {{ order.product_snapshot.unit_price.toFixed(2) }}</dd>
+          </div>
+          <div v-if="typeof order.product_snapshot.use_on_purchase === 'boolean'">
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.resetCardUseOnPurchase') }}</dt>
+            <dd>{{ order.product_snapshot.use_on_purchase ? t('common.yes') : t('common.no') }}</dd>
+          </div>
+        </template>
         <div v-if="benefits?.balance_bonus">
           <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.balanceBonus') }}</dt>
           <dd>${{ benefits.balance_bonus.toFixed(2) }}</dd>

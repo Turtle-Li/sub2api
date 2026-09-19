@@ -161,6 +161,62 @@ func (c *client) getPaymentOrderByProductOrderNo(ctx context.Context, productOrd
 	return result, nil
 }
 
+// lookupPaymentOrderByProductOrderNo performs the same signed, product-scoped
+// lookup used for ambiguous creates, but preserves a verified absence for the
+// narrow historical-binding recovery path. A raw 404 is not enough: the
+// response must match the fixed error contract and explicitly be non-retryable.
+func (c *client) lookupPaymentOrderByProductOrderNo(ctx context.Context, productOrderNo string) (*paymentOrderResponse, bool, error) {
+	if !validIdentifier(productOrderNo, 6, 64) {
+		return nil, false, ErrInvalidRequest
+	}
+	target := "/v1/payment-orders?product_order_no=" + url.QueryEscape(productOrderNo)
+	request, err := c.newSignedRequest(ctx, http.MethodGet, target, nil, "")
+	if err != nil {
+		return nil, false, err
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil || response == nil {
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return nil, false, ErrRequestFailed
+	}
+	body, err := readResponseBody(response)
+	if err != nil {
+		return nil, false, err
+	}
+	if response.StatusCode == http.StatusNotFound {
+		if !validProductOrderLookupNotFound(body) {
+			return nil, false, ErrInvalidResponse
+		}
+		return nil, false, nil
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, false, parseAPIError(response.StatusCode, body)
+	}
+	result, err := c.decodePaymentOrder(body)
+	if err != nil || result.ProductOrderNo != productOrderNo {
+		return nil, false, ErrInvalidResponse
+	}
+	return result, true, nil
+}
+
+func validProductOrderLookupNotFound(body []byte) bool {
+	var result struct {
+		Code      string `json:"error"`
+		Message   string `json:"message"`
+		RequestID string `json:"request_id"`
+		Retryable *bool  `json:"retryable"`
+	}
+	if err := strictUnmarshalObject(body, &result, true); err != nil {
+		return false
+	}
+	return result.Code == "not_found" &&
+		validIdentifier(result.RequestID, 16, 80) &&
+		len(result.Message) <= 240 &&
+		result.Retryable != nil && !*result.Retryable
+}
+
 func (c *client) closePaymentOrder(ctx context.Context, paymentOrderID, idempotencyKey string) (*paymentOrderResponse, error) {
 	if !validUUID(paymentOrderID) {
 		return nil, ErrInvalidRequest

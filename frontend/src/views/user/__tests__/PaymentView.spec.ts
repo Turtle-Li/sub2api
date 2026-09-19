@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { enableAutoUnmount, flushPromises, shallowMount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
@@ -33,6 +33,7 @@ const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
 const getCouponQuote = vi.hoisted(() => vi.fn())
+const resumeOrder = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
 const translate = vi.hoisted(() => vi.fn((key: string) => key))
 const isMobileDevice = vi.hoisted(() => vi.fn(() => true))
@@ -123,6 +124,7 @@ vi.mock('@/api/payment', () => ({
   paymentAPI: {
     getCheckoutInfo,
     getCouponQuote,
+    resumeOrder,
   },
 }))
 
@@ -262,6 +264,29 @@ async function resetCardWechatResumeToken(idempotencyKey: string): Promise<strin
   return `${tokenPayload}.signature`
 }
 
+type ResetCardCheckout = {
+  subscription: { id: number }
+  quote: {
+    subscription_id: number
+    group_id: number
+    plan_id: number
+    monthly_price: number
+    price: number
+    expires_at: string
+    reset_card_tier_revision?: string
+  }
+}
+
+async function selectResetCardCheckout(wrapper: VueWrapper, checkout: ResetCardCheckout): Promise<void> {
+  wrapper.findComponent(ResetCardShop).vm.$emit('select', checkout)
+  await flushPromises()
+}
+
+async function submitSelectedResetCard(wrapper: VueWrapper): Promise<void> {
+  wrapper.findComponent(PaymentOrderRail).vm.$emit('submit')
+  await flushPromises()
+}
+
 async function mountSubscriptionConfirm(options: Parameters<typeof checkoutInfoWithPlansFixture>[0] = {}) {
   vi.useRealTimers()
   routeState.path = '/purchase'
@@ -273,6 +298,7 @@ async function mountSubscriptionConfirm(options: Parameters<typeof checkoutInfoW
   routerPush.mockReset().mockResolvedValue(undefined)
   routerResolve.mockClear()
   createOrder.mockReset()
+  resumeOrder.mockReset()
   refreshUser.mockReset()
   fetchActiveSubscriptions.mockReset().mockResolvedValue(undefined)
   showError.mockReset()
@@ -1058,6 +1084,7 @@ describe('PaymentView desktop deep links', () => {
     routerPush.mockReset().mockResolvedValue(undefined)
     routerResolve.mockClear()
     createOrder.mockReset()
+    resumeOrder.mockReset()
     refreshUser.mockReset()
     fetchActiveSubscriptions.mockReset().mockResolvedValue(undefined)
     showError.mockReset()
@@ -1264,7 +1291,7 @@ describe('PaymentView desktop deep links', () => {
   })
 })
 
-describe('PaymentView reset-card quick entry navigation', () => {
+describe('PaymentView reset-card purchase navigation', () => {
   beforeEach(() => {
     vi.useRealTimers()
     routeState.path = '/purchase'
@@ -1292,7 +1319,7 @@ describe('PaymentView reset-card quick entry navigation', () => {
     window.localStorage.clear()
   })
 
-  it('targets the fetched subscription without opening the renewal picker or creating an order', async () => {
+  it('targets the fetched subscription without adding a duplicate quick entry or creating an order', async () => {
     const basePlan = checkoutInfoWithPlansFixture().data.plans[0]
     getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
       plans: [
@@ -1314,7 +1341,7 @@ describe('PaymentView reset-card quick entry navigation', () => {
     await flushPromises()
 
     expect(wrapper.findComponent(ResetCardShop).props('targetSubscriptionId')).toBe(22)
-    expect(wrapper.findAll('button').some((button) => button.text() === 'payment.resetShop.quickEntry')).toBe(true)
+    expect(wrapper.findAll('button').some((button) => button.text() === 'payment.resetShop.quickEntry')).toBe(false)
     expect(wrapper.find('.fixed.inset-0.z-50').exists()).toBe(false)
     expect(createOrder).not.toHaveBeenCalled()
     expect(fetchActiveSubscriptions).toHaveBeenCalledTimes(1)
@@ -1375,6 +1402,20 @@ describe('PaymentView payment recovery', () => {
       resumeToken: '',
       createdAt: Date.now(),
     }))
+    resumeOrder.mockResolvedValue({
+      data: {
+        order_id: 888,
+        status: 'PENDING',
+        amount: 66,
+        pay_amount: 66,
+        fee_rate: 0,
+        expires_at: '2099-01-01T00:10:00.000Z',
+        payment_type: 'ldc',
+        payment_mode: 'popup',
+        pay_url: 'https://central.example.invalid/checkout/888',
+        out_trade_no: 'sub2_ldc_888',
+      },
+    })
 
     const wrapper = shallowMount(PaymentView, {
       global: {
@@ -1383,6 +1424,7 @@ describe('PaymentView payment recovery', () => {
             template: '<div><slot /></div>',
           },
           PaymentStatusPanel: {
+            props: ['payUrl'],
             template: '<button data-test="payment-done" @click="$emit(\'done\')" />',
           },
           BaseDialog: {
@@ -1395,6 +1437,8 @@ describe('PaymentView payment recovery', () => {
     })
     await flushPromises()
     await flushPromises()
+    expect(resumeOrder).toHaveBeenCalledWith(888)
+    expect(wrapper.findComponent(PaymentStatusPanel).props('payUrl')).toBe('https://central.example.invalid/checkout/888')
     await wrapper.find('[data-test="payment-done"]').trigger('click')
     await flushPromises()
 
@@ -1422,6 +1466,20 @@ describe('PaymentView payment recovery', () => {
       resumeToken: 'resume-321',
       createdAt: Date.now(),
     }))
+    resumeOrder.mockResolvedValue({
+      data: {
+        order_id: 321,
+        status: 'PENDING',
+        amount: 66,
+        pay_amount: 66,
+        fee_rate: 0,
+        expires_at: '2099-01-01T00:10:00.000Z',
+        payment_type: 'wxpay',
+        payment_mode: 'native',
+        qr_code: 'provider-qr-from-central',
+        out_trade_no: 'sub2_resume_321',
+      },
+    })
 
     const wrapper = shallowMount(PaymentView, {
       global: {
@@ -1439,6 +1497,7 @@ describe('PaymentView payment recovery', () => {
     await flushPromises()
     await flushPromises()
 
+    expect(resumeOrder).toHaveBeenCalledWith(321)
     expect(wrapper.find('[data-test="payment-panel"]').exists()).toBe(true)
     await wrapper.get('[data-test="hide-dialog"]').trigger('click')
     await flushPromises()
@@ -1446,6 +1505,51 @@ describe('PaymentView payment recovery', () => {
     expect(wrapper.find('[data-test="resume-payment"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="payment-panel"]').exists()).toBe(true)
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('sub2_resume_321')
+  })
+
+  it('never restores a stale hosted URL when authoritative resume says payment confirmation is pending', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture())
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
+      orderId: 555,
+      amount: 40,
+      qrCode: 'https://stale.example.invalid/qr/555',
+      expiresAt: '2099-01-01T00:10:00.000Z',
+      paymentType: 'alipay',
+      payUrl: 'https://pay.totools.cn/checkout/obsolete-555',
+      outTradeNo: 'sub2_stale_555',
+      clientSecret: '',
+      intentId: '',
+      currency: 'CNY',
+      countryCode: '',
+      paymentEnv: '',
+      payAmount: 40,
+      orderType: 'reset_card',
+      paymentMode: 'popup',
+      resumeToken: '',
+      createdAt: Date.now(),
+    }))
+    resumeOrder.mockRejectedValue({ reason: 'PAYMENT_CONFIRMATION_PENDING' })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const panel = wrapper.findComponent(PaymentStatusPanel)
+    expect(resumeOrder).toHaveBeenCalledWith(555)
+    expect(panel.props('qrCode')).toBe('')
+    expect(panel.props('payUrl')).toBe('')
+    expect(panel.props('initialConfirmationPending')).toBe(true)
+    expect(showError).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).not.toContain('pay.totools.cn')
   })
 
   it('creates reset-card checkout with its subscription id and idempotency header', async () => {
@@ -1490,9 +1594,9 @@ describe('PaymentView payment recovery', () => {
         reset_card_tier_revision: 'v1:3:gpt:2:123',
       },
     }
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', resetCheckout)
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', resetCheckout)
-    await flushPromises()
+    await selectResetCardCheckout(wrapper, resetCheckout)
+    expect(createOrder).not.toHaveBeenCalled()
+    await submitSelectedResetCard(wrapper)
 
     expect(createOrder).toHaveBeenCalledTimes(1)
     expect(getCouponQuote).not.toHaveBeenCalled()
@@ -1509,6 +1613,46 @@ describe('PaymentView payment recovery', () => {
         'Idempotency-Key': expect.stringMatching(/^reset-card-payment-/),
       },
     })
+  })
+
+  it('prices a selected reset-card quantity and sends the purchase-and-use option only through its payment order', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder.mockResolvedValue({
+      order_id: 912,
+      amount: 120,
+      pay_amount: 120,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=reset-card-quantity',
+      out_trade_no: 'sub2_reset_912',
+    })
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, BaseDialog: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    await selectResetCardCheckout(wrapper, {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    wrapper.findComponent(ResetCardShop).vm.$emit('updateOptions', { quantity: 3, useOnPurchase: true })
+    await flushPromises()
+
+    expect(wrapper.findComponent(PaymentOrderRail).props('baseAmount')).toBe(120)
+    expect(wrapper.findComponent(PaymentOrderRail).props('totalAmount')).toBe(120)
+    expect(wrapper.findComponent(PaymentDiscountCodeInput).exists()).toBe(false)
+
+    await submitSelectedResetCard(wrapper)
+
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      amount: 120,
+      order_type: 'reset_card',
+      reset_card_quantity: 3,
+      reset_card_use_on_purchase: true,
+    }), expect.anything())
   })
 
   it('reuses the persisted reset-card checkout key after a create-order response is lost', async () => {
@@ -1551,15 +1695,14 @@ describe('PaymentView payment recovery', () => {
         expires_at: '2099-01-01T00:00:00Z',
       },
     }
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', checkout)
-    await flushPromises()
+    await selectResetCardCheckout(wrapper, checkout)
+    await submitSelectedResetCard(wrapper)
 
     const firstKey = createOrder.mock.calls[0]?.[1]?.headers?.['Idempotency-Key']
     expect(firstKey).toMatch(/^reset-card-payment-/)
     expect(window.localStorage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toContain(firstKey)
 
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', checkout)
-    await flushPromises()
+    await submitSelectedResetCard(wrapper)
 
     expect(createOrder).toHaveBeenCalledTimes(2)
     expect(createOrder.mock.calls[1]?.[1]?.headers?.['Idempotency-Key']).toBe(firstKey)
@@ -1607,11 +1750,11 @@ describe('PaymentView payment recovery', () => {
     wrapper.findComponent(PaymentOrderRail).vm.$emit('select-method', 'stripe')
     await flushPromises()
 
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+    await selectResetCardCheckout(wrapper, {
       subscription: { id: 91 },
       quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
     })
-    await flushPromises()
+    await submitSelectedResetCard(wrapper)
 
     expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({ payment_type: 'wxpay', order_type: 'reset_card' }), expect.anything())
     expect(wrapper.findComponent(PaymentOrderRail).props('selectedMethod')).toBe('wxpay')
@@ -1647,14 +1790,14 @@ describe('PaymentView payment recovery', () => {
     await flushPromises()
     wrapper.findComponent(PaymentOrderRail).vm.$emit('select-method', 'stripe')
 
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+    await selectResetCardCheckout(wrapper, {
       subscription: { id: 91 },
       quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
     })
-    await flushPromises()
+    await submitSelectedResetCard(wrapper)
 
     expect(createOrder).not.toHaveBeenCalled()
-    expect(showError).toHaveBeenCalledWith('payment.resetShop.paymentUnavailable')
+    expect(wrapper.findComponent(PaymentOrderRail).props('notice')).toBe('payment.resetShop.paymentUnavailable')
   })
 
   it('keeps a terminal reset-card replay in the local status shell instead of reporting an unhandled launch', async () => {
@@ -1683,11 +1826,11 @@ describe('PaymentView payment recovery', () => {
     })
     await flushPromises()
     await flushPromises()
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+    await selectResetCardCheckout(wrapper, {
       subscription: { id: 91 },
       quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
     })
-    await flushPromises()
+    await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
     expect(showError).not.toHaveBeenCalled()
@@ -1710,11 +1853,11 @@ describe('PaymentView payment recovery', () => {
     })
     await flushPromises()
     await flushPromises()
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+    await selectResetCardCheckout(wrapper, {
       subscription: { id: 91 },
       quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
     })
-    await flushPromises()
+    await submitSelectedResetCard(wrapper)
 
     const localKey = createOrder.mock.calls[0]?.[1]?.headers?.['Idempotency-Key']
     const redirect = new URL(locationState.href, 'http://localhost').searchParams.get('redirect') || ''
@@ -1746,11 +1889,11 @@ describe('PaymentView payment recovery', () => {
     })
     await flushPromises()
     await flushPromises()
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+    await selectResetCardCheckout(wrapper, {
       subscription: { id: 91 },
       quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
     })
-    await flushPromises()
+    await submitSelectedResetCard(wrapper)
 
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
@@ -1783,11 +1926,11 @@ describe('PaymentView payment recovery', () => {
     })
     await flushPromises()
     await flushPromises()
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+    await selectResetCardCheckout(wrapper, {
       subscription: { id: 91 },
       quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
     })
-    await flushPromises()
+    await submitSelectedResetCard(wrapper)
 
     expect(openSpy).toHaveBeenCalledOnce()
     expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
@@ -1825,11 +1968,11 @@ describe('PaymentView payment recovery', () => {
     })
     await flushPromises()
     await flushPromises()
-    wrapper.findComponent(ResetCardShop).vm.$emit('checkout', {
+    await selectResetCardCheckout(wrapper, {
       subscription: { id: 91 },
       quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
     })
-    await flushPromises()
+    await submitSelectedResetCard(wrapper)
 
     expect(openSpy).toHaveBeenNthCalledWith(1, '', 'paymentPopup', expect.any(String))
     expect(openSpy).toHaveBeenNthCalledWith(2, 'https://pay.example.com/reset-card/908', 'paymentPopup', expect.any(String))

@@ -87,15 +87,17 @@ type wechatOAuthUserInfoResponse struct {
 }
 
 type wechatPaymentOAuthContext struct {
-	CouponCode            string `json:"coupon_code,omitempty"`
-	CouponRevision        string `json:"coupon_revision,omitempty"`
-	PaymentType           string `json:"payment_type"`
-	Amount                string `json:"amount,omitempty"`
-	OrderType             string `json:"order_type,omitempty"`
-	PlanID                int64  `json:"plan_id,omitempty"`
-	SubscriptionID        int64  `json:"subscription_id,omitempty"`
-	ResetCardTierRevision string `json:"reset_card_tier_revision,omitempty"`
-	IdempotencyKeyHash    string `json:"idempotency_key_hash,omitempty"`
+	CouponCode             string `json:"coupon_code,omitempty"`
+	CouponRevision         string `json:"coupon_revision,omitempty"`
+	PaymentType            string `json:"payment_type"`
+	Amount                 string `json:"amount,omitempty"`
+	OrderType              string `json:"order_type,omitempty"`
+	PlanID                 int64  `json:"plan_id,omitempty"`
+	SubscriptionID         int64  `json:"subscription_id,omitempty"`
+	ResetCardTierRevision  string `json:"reset_card_tier_revision,omitempty"`
+	ResetCardQuantity      int    `json:"reset_card_quantity,omitempty"`
+	ResetCardUseOnPurchase bool   `json:"reset_card_use_on_purchase,omitempty"`
+	IdempotencyKeyHash     string `json:"idempotency_key_hash,omitempty"`
 }
 
 // WeChatOAuthStart starts the WeChat OAuth login flow and stores the short-lived
@@ -360,16 +362,28 @@ func (h *AuthHandler) WeChatPaymentOAuthStart(c *gin.Context) {
 	if redirectTo == "" {
 		redirectTo = wechatPaymentOAuthDefaultTo
 	}
+	resetCardQuantity, err := parseWeChatPaymentResetCardQuantity(c.Query("reset_card_quantity"))
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("RESET_CARD_QUANTITY_INVALID", "reset_card_quantity must be a whole number"))
+		return
+	}
+	resetCardUseOnPurchase, err := parseWeChatPaymentResetCardUseOnPurchase(c.Query("reset_card_use_on_purchase"))
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("RESET_CARD_OPTIONS_INVALID", "reset_card_use_on_purchase must be true or false"))
+		return
+	}
 	rawContext, err := encodeWeChatPaymentOAuthContext(wechatPaymentOAuthContext{
-		PaymentType:           paymentType,
-		CouponCode:            strings.TrimSpace(c.Query("coupon_code")),
-		CouponRevision:        strings.TrimSpace(c.Query("coupon_revision")),
-		Amount:                strings.TrimSpace(c.Query("amount")),
-		OrderType:             strings.TrimSpace(c.Query("order_type")),
-		PlanID:                parseWeChatPaymentPlanID(c.Query("plan_id")),
-		SubscriptionID:        parseWeChatPaymentPlanID(c.Query("subscription_id")),
-		ResetCardTierRevision: strings.TrimSpace(c.Query("reset_card_tier_revision")),
-		IdempotencyKeyHash:    strings.TrimSpace(c.Query("idempotency_key_hash")),
+		PaymentType:            paymentType,
+		CouponCode:             strings.TrimSpace(c.Query("coupon_code")),
+		CouponRevision:         strings.TrimSpace(c.Query("coupon_revision")),
+		Amount:                 strings.TrimSpace(c.Query("amount")),
+		OrderType:              strings.TrimSpace(c.Query("order_type")),
+		PlanID:                 parseWeChatPaymentPlanID(c.Query("plan_id")),
+		SubscriptionID:         parseWeChatPaymentPlanID(c.Query("subscription_id")),
+		ResetCardTierRevision:  strings.TrimSpace(c.Query("reset_card_tier_revision")),
+		ResetCardQuantity:      resetCardQuantity,
+		ResetCardUseOnPurchase: resetCardUseOnPurchase,
+		IdempotencyKeyHash:     strings.TrimSpace(c.Query("idempotency_key_hash")),
 	})
 	if err != nil {
 		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_CONTEXT_ENCODE_FAILED", "failed to encode oauth context").WithCause(err))
@@ -466,18 +480,20 @@ func (h *AuthHandler) WeChatPaymentOAuthCallback(c *gin.Context) {
 	}
 
 	resumeToken, err := h.wechatPaymentResumeService().CreateWeChatPaymentResumeToken(service.WeChatPaymentResumeClaims{
-		OpenID:                openid,
-		CouponCode:            paymentContext.CouponCode,
-		CouponRevision:        paymentContext.CouponRevision,
-		PaymentType:           paymentContext.PaymentType,
-		Amount:                paymentContext.Amount,
-		OrderType:             paymentContext.OrderType,
-		PlanID:                paymentContext.PlanID,
-		SubscriptionID:        paymentContext.SubscriptionID,
-		ResetCardTierRevision: paymentContext.ResetCardTierRevision,
-		IdempotencyKeyHash:    paymentContext.IdempotencyKeyHash,
-		RedirectTo:            redirectTo,
-		Scope:                 scope,
+		OpenID:                 openid,
+		CouponCode:             paymentContext.CouponCode,
+		CouponRevision:         paymentContext.CouponRevision,
+		PaymentType:            paymentContext.PaymentType,
+		Amount:                 paymentContext.Amount,
+		OrderType:              paymentContext.OrderType,
+		PlanID:                 paymentContext.PlanID,
+		SubscriptionID:         paymentContext.SubscriptionID,
+		ResetCardTierRevision:  paymentContext.ResetCardTierRevision,
+		ResetCardQuantity:      paymentContext.ResetCardQuantity,
+		ResetCardUseOnPurchase: paymentContext.ResetCardUseOnPurchase,
+		IdempotencyKeyHash:     paymentContext.IdempotencyKeyHash,
+		RedirectTo:             redirectTo,
+		Scope:                  scope,
 	})
 	if err != nil {
 		redirectOAuthError(c, frontendCallback, "invalid_context", "failed to encode payment resume context", "")
@@ -1351,6 +1367,26 @@ func decodeWeChatPaymentOAuthContext(raw string) (wechatPaymentOAuthContext, err
 func parseWeChatPaymentPlanID(raw string) int64 {
 	id, _ := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	return id
+}
+
+func parseWeChatPaymentResetCardQuantity(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	quantity, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+	return quantity, nil
+}
+
+func parseWeChatPaymentResetCardUseOnPurchase(raw string) (bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false, nil
+	}
+	return strconv.ParseBool(raw)
 }
 
 func wechatPaymentSetCookie(c *gin.Context, name string, value string, maxAgeSec int, secure bool) {

@@ -158,6 +158,12 @@ export interface OrderProductSnapshot {
   price?: number
   list_price?: number
   pay_amount?: number
+  /** Immutable reset-card purchase count; omitted on historical orders. */
+  quantity?: number
+  /** Immutable unit price of one reset card in the snapshot currency. */
+  unit_price?: number
+  /** Purchase-time intent only; fulfillment is recorded independently. */
+  use_on_purchase?: boolean
   credited_amount?: number
   subscription_days?: number
   validity_days?: number
@@ -205,6 +211,8 @@ export interface PaymentOrder {
   payment_type: string
   out_trade_no: string
   status: OrderStatus
+  /** The central gateway accepted a close request, but the local order is not terminal yet. */
+  cancellation_pending?: boolean
   order_type: OrderType
   created_at: string
   expires_at: string
@@ -446,6 +454,10 @@ export interface CreateOrderRequest {
   plan_id?: number
   subscription_id?: number
   reset_card_tier_revision?: string
+  /** Omitted means one card for compatibility with existing checkout requests. */
+  reset_card_quantity?: number
+  /** The backend consumes one card transactionally after the purchase succeeds. */
+  reset_card_use_on_purchase?: boolean
   return_url?: string
   payment_source?: string
   openid?: string

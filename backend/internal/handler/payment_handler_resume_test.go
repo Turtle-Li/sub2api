@@ -141,23 +141,51 @@ func TestApplyWeChatPaymentResumeClaimsPreservesResetCardTargetAndIdempotency(t 
 	t.Parallel()
 
 	keyHash := service.HashIdempotencyKey("reset-card-wechat-oauth")
-	req := CreateOrderRequest{PaymentType: payment.TypeWxpay}
+	req := CreateOrderRequest{
+		PaymentType:            payment.TypeWxpay,
+		ResetCardQuantity:      99,
+		ResetCardUseOnPurchase: false,
+	}
 	err := applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{
-		OpenID:                "openid-reset-card",
-		PaymentType:           payment.TypeWxpay,
-		Amount:                "40.00",
-		OrderType:             payment.OrderTypeResetCard,
-		PlanID:                7,
-		SubscriptionID:        42,
-		ResetCardTierRevision: "v1:9:gpt:2:123",
-		IdempotencyKeyHash:    keyHash,
+		OpenID:                 "openid-reset-card",
+		PaymentType:            payment.TypeWxpay,
+		Amount:                 "40.00",
+		OrderType:              payment.OrderTypeResetCard,
+		PlanID:                 7,
+		SubscriptionID:         42,
+		ResetCardTierRevision:  "v1:9:gpt:2:123",
+		ResetCardQuantity:      3,
+		ResetCardUseOnPurchase: true,
+		IdempotencyKeyHash:     keyHash,
 	})
 	require.NoError(t, err)
 	require.Equal(t, payment.OrderTypeResetCard, req.OrderType)
 	require.EqualValues(t, 7, req.PlanID)
 	require.EqualValues(t, 42, req.SubscriptionID)
 	require.Equal(t, "v1:9:gpt:2:123", req.ResetCardTierRevision)
+	require.Equal(t, 3, req.ResetCardQuantity)
+	require.True(t, req.ResetCardUseOnPurchase)
 	require.Equal(t, keyHash, req.IdempotencyKeyHash)
+}
+
+func TestApplyWeChatPaymentResumeClaimsClearsUnsignedResetCardOptions(t *testing.T) {
+	t.Parallel()
+
+	req := CreateOrderRequest{
+		PaymentType:            payment.TypeWxpay,
+		ResetCardQuantity:      99,
+		ResetCardUseOnPurchase: true,
+	}
+	err := applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{
+		OpenID:                 "openid-reset-card",
+		PaymentType:            payment.TypeWxpay,
+		OrderType:              payment.OrderTypeResetCard,
+		ResetCardQuantity:      1,
+		ResetCardUseOnPurchase: false,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, req.ResetCardQuantity)
+	require.False(t, req.ResetCardUseOnPurchase)
 }
 
 func TestApplyWeChatPaymentResumeClaimsRejectsPaymentTypeMismatch(t *testing.T) {

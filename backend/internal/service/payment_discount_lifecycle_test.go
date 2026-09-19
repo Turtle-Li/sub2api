@@ -26,7 +26,9 @@ func TestPaymentDiscountUnknownGatewayStateRetainsReservation(t *testing.T) {
 		name        string
 		response    *payment.QueryOrderResponse
 		cancelError error
+		expected    string
 	}{
+		{name: "cancel accepted", response: &payment.QueryOrderResponse{Status: payment.ProviderStatusPending}, cancelError: payment.ErrCancellationPending, expected: checkPaidResultCancellationPending},
 		{name: "empty query"},
 		{name: "manual review", response: &payment.QueryOrderResponse{Status: payment.ProviderStatusPending, Metadata: map[string]string{"needs_manual_review": "true"}}},
 		{name: "cancel failed", response: &payment.QueryOrderResponse{Status: payment.ProviderStatusPending}, cancelError: errors.New("gateway timeout")},
@@ -45,7 +47,11 @@ func TestPaymentDiscountUnknownGatewayStateRetainsReservation(t *testing.T) {
 			require.NoError(t, err)
 			order, err := newDiscountIntegrationOrder(t, svc, user, coupon.Code, "a")
 			require.NoError(t, err)
-			require.Equal(t, checkPaidResultUnconfirmed, svc.checkPaid(ctx, order))
+			expected := tc.expected
+			if expected == "" {
+				expected = checkPaidResultUnconfirmed
+			}
+			require.Equal(t, expected, svc.checkPaid(ctx, order))
 			require.Equal(t, 1, provider.queryCalls)
 			uses, total, err := svc.ListPaymentDiscountUses(ctx, coupon.ID, 1, 20)
 			require.NoError(t, err)

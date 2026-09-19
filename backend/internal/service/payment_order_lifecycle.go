@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	"github.com/Wei-Shaw/sub2api/internal/payment/unifiedpay"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 )
@@ -21,19 +22,21 @@ import (
 
 // Cancel rate limit configuration constants.
 const (
-	rateLimitUnitDay           = "day"
-	rateLimitUnitMinute        = "minute"
-	rateLimitUnitHour          = "hour"
-	rateLimitModeFixed         = "fixed"
-	checkPaidResultAlreadyPaid = "already_paid"
-	checkPaidResultCancelled   = "cancelled"
-	checkPaidResultUnconfirmed = "confirmation_pending"
+	rateLimitUnitDay                   = "day"
+	rateLimitUnitMinute                = "minute"
+	rateLimitUnitHour                  = "hour"
+	rateLimitModeFixed                 = "fixed"
+	checkPaidResultAlreadyPaid         = "already_paid"
+	checkPaidResultCancelled           = "cancelled"
+	checkPaidResultUnconfirmed         = "confirmation_pending"
+	checkPaidResultCancellationPending = "cancellation_pending"
 
 	pendingPaymentReconcileLimit = 20
 )
 
 type checkPaidOptions struct {
-	cancelIfUnpaid bool
+	cancelIfUnpaid   bool
+	requireConfirmed bool
 }
 
 func (s *PaymentService) checkCancelRateLimit(ctx context.Context, userID int64, cfg *PaymentConfig) error {
@@ -124,14 +127,30 @@ func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (s
 }
 
 func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
+	// Persist the local cancellation intent before interacting with the provider.
+	// Concurrent checkout recovery must not return a URL after close acceptance
+	// but before an acceptance audit is written. No financial state changes here.
+	if err := s.recordPaymentCancellationPending(ctx, o.ID, op); err != nil {
+		return "", err
+	}
 	if o.PaymentTradeNo != "" || o.PaymentType != "" || paymentOrderUsesUnifiedPay(o) {
 		switch s.checkPaid(ctx, o) {
 		case checkPaidResultAlreadyPaid:
 			return checkPaidResultAlreadyPaid, nil
+		case checkPaidResultCancelled:
+			return checkPaidResultCancelled, nil
+		case checkPaidResultCancellationPending:
+			return "", infraerrors.Conflict("PAYMENT_CANCELLATION_PENDING", "payment cancellation is being confirmed")
 		case checkPaidResultUnconfirmed:
 			return "", infraerrors.ServiceUnavailable("PAYMENT_CONFIRMATION_PENDING", "payment state is still being confirmed")
 		}
 	}
+	return s.finishUnpaidOrder(ctx, o, fs, op, ad)
+}
+
+// finishUnpaidOrder is called only after trusted upstream closure or for an order
+// that has never had an external payment route. Coupons remain reserved until here.
+func (s *PaymentService) finishUnpaidOrder(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
 	var c int
 	var err error
 	if paymentOrderHasDiscount(o) {
@@ -162,8 +181,14 @@ func (s *PaymentService) reconcilePaid(ctx context.Context, o *dbent.PaymentOrde
 
 func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.PaymentOrder, opts checkPaidOptions) string {
 	unknownResult := ""
-	if paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o) {
+	if opts.requireConfirmed || paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o) {
 		unknownResult = checkPaidResultUnconfirmed
+	}
+	switch s.reconcileMissingUnifiedPaymentOrder(ctx, o) {
+	case missingUnifiedPaymentOrderRetry:
+		return checkPaidResultUnconfirmed
+	case missingUnifiedPaymentOrderClosed:
+		return checkPaidResultCancelled
 	}
 	prov, err := s.getOrderProvider(ctx, o)
 	if err != nil {
@@ -216,6 +241,27 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		}
 		return checkPaidResultAlreadyPaid
 	}
+	if paymentOrderUsesUnifiedPay(o) {
+		target := ""
+		switch resp.Metadata["status"] {
+		case unifiedpay.StatusClosed:
+			target = OrderStatusCancelled
+		case unifiedpay.StatusExpired:
+			target = OrderStatusExpired
+		}
+		if target != "" {
+			if _, err := s.finishUnpaidOrder(ctx, o, target, payment.TypeUnifiedPay, "trusted upstream closure"); err != nil {
+				return checkPaidResultUnconfirmed
+			}
+			return checkPaidResultCancelled
+		}
+		if !opts.cancelIfUnpaid && resp.Metadata["status"] == unifiedpay.StatusConfirmationPending {
+			return checkPaidResultUnconfirmed
+		}
+	}
+	if opts.requireConfirmed && resp.Status != payment.ProviderStatusPending {
+		return checkPaidResultUnconfirmed
+	}
 	if !opts.cancelIfUnpaid {
 		return ""
 	}
@@ -223,6 +269,9 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 		cancelErr := cp.CancelPayment(ctx, queryRef)
 		finishProviderCall()
+		if errors.Is(cancelErr, payment.ErrCancellationPending) {
+			return checkPaidResultCancellationPending
+		}
 		if errors.Is(cancelErr, payment.ErrUpstreamStateUnconfirmed) || (cancelErr != nil && (paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o))) {
 			return checkPaidResultUnconfirmed
 		}
@@ -317,13 +366,34 @@ func (s *PaymentService) VerifyOrderByOutTradeNo(ctx context.Context, outTradeNo
 	if o.UserID != userID {
 		return nil, infraerrors.Forbidden("FORBIDDEN", "no permission for this order")
 	}
+	// Retry an accepted local cancellation intent as well as expired checkout.
+	// Never infer terminal state from time or intent; unknown closes stay pending.
+	pending := map[int64]bool{}
+	if o.Status == OrderStatusPending {
+		pending, err = s.paymentOrderCancellationPendingIDs(ctx, []int64{o.ID})
+		if err != nil {
+			return nil, err
+		}
+	}
+	expired := !o.ExpiresAt.After(time.Now())
+	if o.Status == OrderStatusPending && (expired || pending[o.ID]) {
+		target := OrderStatusCancelled
+		if expired {
+			target = OrderStatusExpired
+		}
+		_, closeErr := s.cancelCore(ctx, o, target, "system", "retry cancellation during authenticated verification")
+		if closeErr != nil && infraerrors.Reason(closeErr) != "PAYMENT_CANCELLATION_PENDING" && infraerrors.Reason(closeErr) != "PAYMENT_CONFIRMATION_PENDING" {
+			return nil, closeErr
+		}
+		return s.entClient.PaymentOrder.Get(ctx, o.ID)
+	}
 	// Reset-card create failures from an earlier binary can still represent a
 	// provider-accepted payment. Query those unpaid FAILED rows through their
 	// original provider binding before treating the local state as terminal.
 	if o.Status == OrderStatusPending || o.Status == OrderStatusExpired ||
 		(o.OrderType == payment.OrderTypeResetCard && o.Status == OrderStatusFailed && o.PaidAt == nil) {
 		result := s.reconcilePaid(ctx, o)
-		if result == checkPaidResultAlreadyPaid {
+		if result == checkPaidResultAlreadyPaid || result == checkPaidResultCancelled {
 			// Reload order to get updated status
 			o, err = s.entClient.PaymentOrder.Get(ctx, o.ID)
 			if err != nil {

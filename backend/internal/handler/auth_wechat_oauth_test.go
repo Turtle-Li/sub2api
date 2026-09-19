@@ -379,6 +379,17 @@ func TestWeChatPaymentOAuthCallbackRedirectsWithOpaqueResumeToken(t *testing.T) 
 	defer client.Close()
 	handler.cfg.Totp.EncryptionKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	handler.cfg.Totp.EncryptionKeyConfigured = true
+	contextRaw, err := encodeWeChatPaymentOAuthContext(wechatPaymentOAuthContext{
+		PaymentType:            payment.TypeWxpay,
+		Amount:                 "37.02",
+		OrderType:              payment.OrderTypeResetCard,
+		PlanID:                 7,
+		SubscriptionID:         42,
+		ResetCardQuantity:      3,
+		ResetCardUseOnPurchase: true,
+		IdempotencyKeyHash:     service.HashIdempotencyKey("reset-card-oauth-callback"),
+	})
+	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -386,7 +397,7 @@ func TestWeChatPaymentOAuthCallbackRedirectsWithOpaqueResumeToken(t *testing.T) 
 	req.Host = "api.example.com"
 	req.AddCookie(encodedCookie(wechatPaymentOAuthStateName, "state-123"))
 	req.AddCookie(encodedCookie(wechatPaymentOAuthRedirect, "/purchase?from=wechat"))
-	req.AddCookie(encodedCookie(wechatPaymentOAuthContextName, `{"payment_type":"wxpay","amount":"12.5","order_type":"subscription","plan_id":7}`))
+	req.AddCookie(encodedCookie(wechatPaymentOAuthContextName, contextRaw))
 	req.AddCookie(encodedCookie(wechatPaymentOAuthScope, "snsapi_base"))
 	c.Request = req
 
@@ -410,9 +421,12 @@ func TestWeChatPaymentOAuthCallbackRedirectsWithOpaqueResumeToken(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "openid-123", claims.OpenID)
 	require.Equal(t, payment.TypeWxpay, claims.PaymentType)
-	require.Equal(t, "12.5", claims.Amount)
-	require.Equal(t, payment.OrderTypeSubscription, claims.OrderType)
+	require.Equal(t, "37.02", claims.Amount)
+	require.Equal(t, payment.OrderTypeResetCard, claims.OrderType)
 	require.EqualValues(t, 7, claims.PlanID)
+	require.EqualValues(t, 42, claims.SubscriptionID)
+	require.Equal(t, 3, claims.ResetCardQuantity)
+	require.True(t, claims.ResetCardUseOnPurchase)
 	require.Equal(t, "/purchase?from=wechat", claims.RedirectTo)
 }
 

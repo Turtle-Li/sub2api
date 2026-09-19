@@ -86,6 +86,9 @@
                 {{ t('payment.resetShop.quickEntry') }}
               </button>
             </div>
+            <p v-if="subscription.status === 'active'" class="basis-full text-right text-xs text-gray-500 dark:text-dark-400">
+              {{ t('userSubscriptions.upgradeContactAdmin') }}
+            </p>
           </div>
 
           <!-- Usage Progress -->

@@ -65,4 +65,36 @@ describe('OrderPurchaseSnapshot quota semantics', () => {
     expect(text).toContain('20.00')
     expect(text).toContain('80.00')
   })
+
+  it('shows immutable reset-card quantity, unit price, and purchase-time use intent', () => {
+    const baseOrder = {
+      order_type: 'reset_card',
+      currency: 'CNY',
+      product_snapshot: {
+        name: 'Quota reset card',
+        currency: 'CNY',
+        quantity: 3,
+        price: 37.02,
+        unit_price: 12.34,
+        use_on_purchase: true,
+      },
+    } as PaymentOrder
+    const text = mount(OrderPurchaseSnapshot, { props: { order: baseOrder } }).text()
+
+    expect(text).toContain('payment.orderOps.resetCardQuantity')
+    expect(text).toContain('3')
+    expect(text).toContain('payment.orderOps.resetCardUnitPrice')
+    expect(text).toContain('CNY 12.34')
+    expect(text).toContain('payment.orderOps.resetCardTotalPrice')
+    expect(text).toContain('CNY 37.02')
+    expect(text).not.toContain('payment.orderOps.listPrice')
+    expect(text).toContain('payment.orderOps.resetCardUseOnPurchase')
+    expect(text).toContain('common.yes')
+
+    const notUsedOnPurchase = {
+      ...baseOrder,
+      product_snapshot: { ...baseOrder.product_snapshot, use_on_purchase: false },
+    } as PaymentOrder
+    expect(mount(OrderPurchaseSnapshot, { props: { order: notUsedOnPurchase } }).text()).toContain('common.no')
+  })
 })

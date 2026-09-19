@@ -99,6 +99,15 @@ export const paymentAPI = {
     return apiClient.post(`/payment/orders/${id}/cancel`)
   },
 
+  /**
+   * Recover the original provider launch material for an owned pending order.
+   * The server returns the same launch payload as order creation and never
+   * creates a replacement order or extends the original expiry.
+   */
+  resumeOrder(id: number) {
+    return apiClient.post<CreateOrderResult>(`/payment/orders/${id}/resume`)
+  },
+
   /** Verify order payment status with upstream provider */
   verifyOrder(outTradeNo: string) {
     return apiClient.post<PaymentOrder>('/payment/orders/verify', { out_trade_no: outTradeNo })

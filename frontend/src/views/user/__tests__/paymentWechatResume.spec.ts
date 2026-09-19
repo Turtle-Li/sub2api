@@ -77,6 +77,23 @@ describe('parseWechatResumeRoute', () => {
       resetCardTierRevision: 'v1:3:gpt:2:123',
     })
   })
+
+  it('preserves reset-card quantity and purchase-time use intent across OAuth return routes', () => {
+    expect(parseWechatResumeRoute({
+      wechat_resume: '1',
+      wechat_resume_token: 'resume-reset-card-options',
+      payment_type: 'wxpay',
+      order_type: 'reset_card',
+      plan_id: '7',
+      subscription_id: '99',
+      reset_card_quantity: '3',
+      reset_card_use_on_purchase: '1',
+    }, [], 88)).toMatchObject({
+      orderType: 'reset_card',
+      resetCardQuantity: 3,
+      resetCardUseOnPurchase: true,
+    })
+  })
 })
 
 describe('stripWechatResumeQuery', () => {
@@ -92,6 +109,8 @@ describe('stripWechatResumeQuery', () => {
       plan_id: '7',
       subscription_id: '99',
       reset_card_tier_revision: 'v1:3:gpt:2:123',
+      reset_card_quantity: '3',
+      reset_card_use_on_purchase: '1',
       payment_idempotency_key: 'reset-card-payment-opaque-key',
       state: 'state-123',
       scope: 'snsapi_base',

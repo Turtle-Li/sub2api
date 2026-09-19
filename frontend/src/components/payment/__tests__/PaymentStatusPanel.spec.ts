@@ -4,7 +4,9 @@ import { flushPromises, mount } from '@vue/test-utils'
 const pollOrderStatus = vi.hoisted(() => vi.fn())
 const cancelOrder = vi.hoisted(() => vi.fn())
 const verifyOrder = vi.hoisted(() => vi.fn())
+const resumeOrder = vi.hoisted(() => vi.fn())
 const showError = vi.hoisted(() => vi.fn())
+const showInfo = vi.hoisted(() => vi.fn())
 const toCanvas = vi.hoisted(() => vi.fn())
 
 vi.mock('vue-i18n', async () => {
@@ -26,6 +28,7 @@ vi.mock('@/stores/payment', () => ({
 vi.mock('@/stores', () => ({
   useAppStore: () => ({
     showError,
+    showInfo,
   }),
 }))
 
@@ -33,6 +36,7 @@ vi.mock('@/api/payment', () => ({
   paymentAPI: {
     cancelOrder,
     verifyOrder,
+    resumeOrder,
   },
 }))
 
@@ -75,7 +79,9 @@ describe('PaymentStatusPanel', () => {
     pollOrderStatus.mockReset()
     cancelOrder.mockReset()
     verifyOrder.mockReset()
+    resumeOrder.mockReset()
     showError.mockReset()
+    showInfo.mockReset()
     toCanvas.mockReset().mockResolvedValue(undefined)
   })
 
@@ -108,6 +114,234 @@ describe('PaymentStatusPanel', () => {
     expect(pollOrderStatus).toHaveBeenCalledWith(42)
     expect(wrapper.text()).not.toContain('payment.result.success')
     expect(wrapper.emitted('success')).toBeUndefined()
+  })
+
+  it.each(['', 'not-a-date', '2026-09-19T00:00:00.000Z'])('checks an unavailable or elapsed deadline instead of rendering a %s countdown spinner', async (expiresAt) => {
+    vi.setSystemTime(new Date('2026-09-19T00:01:00.000Z'))
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt,
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-expiry-checking"]').exists()).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === 'payment.qr.cancelOrder')).toBe(false)
+    expect(wrapper.text()).not.toContain('NaN')
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('locks the cashier into a cancellation-pending state after central close acceptance', async () => {
+    let cancellationPending = false
+    pollOrderStatus.mockImplementation(() => Promise.resolve({
+      ...orderFactory('PENDING'),
+      cancellation_pending: cancellationPending,
+    }))
+    cancelOrder.mockImplementation(async () => {
+      cancellationPending = true
+      throw { reason: 'PAYMENT_CANCELLATION_PENDING' }
+    })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://pay.example.com/qr/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
+    await cancelButton?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-cancellation-pending"]').exists()).toBe(true)
+    expect(wrapper.find('canvas').exists()).toBe(false)
+    expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps polling instead of reporting a terminal outcome while confirmation is pending', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    cancelOrder.mockRejectedValue({ reason: 'PAYMENT_CONFIRMATION_PENDING' })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://pay.example.com/qr/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
+    await cancelButton?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-confirmation-pending"]').exists()).toBe(true)
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.emitted('success')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('keeps a recovered confirmation-pending order out of the old QR and popup controls', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://stale.example.invalid/qr/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        payUrl: 'https://stale.example.invalid/checkout/42',
+        initialConfirmationPending: true,
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-confirmation-pending"]').exists()).toBe(true)
+    expect(wrapper.find('canvas').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === 'payment.qr.openPayWindow')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['PAYMENT_CANCELLATION_PENDING', '[data-test="payment-cancellation-pending"]'],
+    ['PAYMENT_CONFIRMATION_PENDING', '[data-test="payment-confirmation-pending"]'],
+  ])('never opens a cached checkout URL when resume returns %s', async (reason, pendingSelector) => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    resumeOrder.mockRejectedValue({ reason })
+    const close = vi.fn()
+    const open = vi.spyOn(window, 'open').mockReturnValue({ closed: false, close } as unknown as Window)
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        payUrl: 'https://stale.example.invalid/checkout/42',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+
+    const reopen = wrapper.findAll('button').find(button => button.text() === 'payment.qr.openPayWindow')
+    await reopen?.trigger('click')
+    await flushPromises()
+
+    expect(resumeOrder).toHaveBeenCalledWith(42)
+    expect(open).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(open).not.toHaveBeenCalledWith('https://stale.example.invalid/checkout/42', expect.anything(), expect.anything())
+    expect(wrapper.get(pendingSelector).exists()).toBe(true)
+    expect(close).toHaveBeenCalledTimes(1)
+    open.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('opens only the fresh same-order resume URL after validating the response', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    resumeOrder.mockResolvedValue({
+      data: {
+        order_id: 42,
+        status: 'PENDING',
+        amount: 88,
+        pay_amount: 88,
+        fee_rate: 0,
+        expires_at: '2099-01-01T12:30:00Z',
+        payment_type: 'alipay',
+        pay_url: 'https://fresh.example.invalid/checkout/42',
+      },
+    })
+    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        payUrl: 'https://stale.example.invalid/checkout/42',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+
+    const reopen = wrapper.findAll('button').find(button => button.text() === 'payment.qr.openPayWindow')
+    await reopen?.trigger('click')
+    await flushPromises()
+
+    expect(resumeOrder).toHaveBeenCalledWith(42)
+    expect(popup.location.href).toBe('https://fresh.example.invalid/checkout/42')
+    expect(popup.close).not.toHaveBeenCalled()
+    expect(open).not.toHaveBeenCalledWith('https://stale.example.invalid/checkout/42', expect.anything(), expect.anything())
+    open.mockRestore()
+    wrapper.unmount()
+  })
+
+  it.each(['ok', 'cancel'])('invokes recovered WeChat JSAPI %s without treating its callback as payment proof', async (result) => {
+    const originalBridge = Object.getOwnPropertyDescriptor(window, 'WeixinJSBridge')
+    const invoke = vi.fn((_action, _payload, callback: (result: Record<string, unknown>) => void) => {
+      callback({ err_msg: `get_brand_wcpay_request:${result}` })
+    })
+    Object.defineProperty(window, 'WeixinJSBridge', { configurable: true, value: { invoke } })
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'wxpay',
+        orderType: 'balance',
+        wechatJsapi: {
+          appId: 'wx-preview',
+          timeStamp: '1712345678',
+          nonceStr: 'nonce-preview',
+          package: 'prepay_id=preview',
+          signType: 'RSA',
+          paySign: 'signed-preview',
+        },
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(invoke).toHaveBeenCalledWith(
+      'getBrandWCPayRequest',
+      expect.objectContaining({ package: 'prepay_id=preview' }),
+      expect.any(Function),
+    )
+    expect(wrapper.emitted('success')).toBeUndefined()
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    if (result === 'cancel') {
+      expect(showInfo).toHaveBeenCalledWith('payment.qr.paymentSheetDismissed')
+      expect(showInfo).not.toHaveBeenCalledWith('payment.qr.cancelled')
+    }
+    wrapper.unmount()
+    if (originalBridge) Object.defineProperty(window, 'WeixinJSBridge', originalBridge)
+    else delete (window as Window & { WeixinJSBridge?: unknown }).WeixinJSBridge
   })
 
   it('immediately settles a trusted status-only replay without QR or hosted launch material', async () => {
@@ -213,8 +447,23 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.text()).toContain('payment.qr.expired')
   })
 
-  it('shows reopen button in QR mode when payUrl is also available', async () => {
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false } as Window)
+  it('shows reopen button in QR mode and replaces its URL through authenticated resume', async () => {
+    resumeOrder.mockResolvedValue({
+      data: {
+        order_id: 42,
+        status: 'PENDING',
+        amount: 88,
+        pay_amount: 88,
+        fee_rate: 0,
+        expires_at: '2099-01-01T12:30:00Z',
+        payment_type: 'alipay',
+        payment_mode: 'qrcode',
+        qr_code: 'https://pay.example.com/qr/42-fresh',
+        pay_url: 'https://pay.example.com/session/42-fresh',
+      },
+    })
+    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
 
     const wrapper = mount(PaymentStatusPanel, {
       props: {
@@ -236,11 +485,10 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.text()).toContain('payment.qr.openPayWindow')
 
     await wrapper.get('button.btn.btn-secondary.text-sm').trigger('click')
-    expect(openSpy).toHaveBeenCalledWith(
-      'https://pay.example.com/session/42',
-      'paymentPopup',
-      expect.any(String),
-    )
+    await flushPromises()
+    expect(resumeOrder).toHaveBeenCalledWith(42)
+    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(popup.location.href).toBe('https://pay.example.com/session/42-fresh')
 
     openSpy.mockRestore()
   })

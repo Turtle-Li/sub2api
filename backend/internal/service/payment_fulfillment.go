@@ -355,6 +355,10 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 	if err != nil {
 		return err
 	}
+	terms, err := resetCardSnapshotPurchaseTerms(o.ProductSnapshot)
+	if err != nil {
+		return err
+	}
 	tierSnapshot, err := resetCardTierSnapshotForPaymentOrder(o)
 	if err != nil {
 		return err
@@ -388,6 +392,13 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 	}
 	if lockedTargetID != targetID || lockedGroupID != groupID {
 		return errors.New("reset card order snapshot changed while fulfillment was being claimed")
+	}
+	lockedTerms, err := resetCardSnapshotPurchaseTerms(o.ProductSnapshot)
+	if err != nil {
+		return err
+	}
+	if lockedTerms != terms {
+		return errors.New("reset card order purchase terms changed while fulfillment was being claimed")
 	}
 	lockedTierSnapshot, err := resetCardTierSnapshotForPaymentOrder(o)
 	if err != nil {
@@ -435,34 +446,22 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 	if claimed != existingGrantFound {
 		return errors.New("reset card payment grant evidence is incomplete")
 	}
-	if existingGrantFound && (existingSubID != targetID || existingUserID != o.UserID || existingGroupID != groupID || existingQuantity != 1) {
+	if existingGrantFound && (existingSubID != targetID || existingUserID != o.UserID || existingGroupID != groupID || existingQuantity != terms.quantity) {
 		return errors.New("reset card payment grant evidence does not match the order")
 	}
+	if existingGrantFound && terms.useOnPurchase {
+		if err := validateResetCardAutoUseEvidence(txCtx, tx.Client(), o.ID); err != nil {
+			return err
+		}
+	}
 	if !claimed {
-		var lockedGroupID int64
 		// Eligibility is authoritative at checkout. Fulfillment locks only the
 		// immutable subscription identity, so a later suspension, soft delete,
 		// catalogue edit, or natural expiry cannot invalidate an already-paid
 		// order. The grant keeps the checkout-time subscription expiry snapshot.
-		subscriptionLockQuery := `SELECT group_id FROM user_subscriptions WHERE id=$1 AND user_id=$2`
-		if tx.Client().Driver().Dialect() == dialect.Postgres {
-			subscriptionLockQuery += " FOR UPDATE"
-		}
-		lockRows, err := tx.Client().QueryContext(txCtx, subscriptionLockQuery, targetID, o.UserID)
+		target, err := lockResetCardFulfillmentTarget(txCtx, tx.Client(), targetID, o.UserID)
 		if err != nil {
-			return fmt.Errorf("lock reset card subscription: %w", err)
-		}
-		if !lockRows.Next() {
-			_ = lockRows.Close()
-			return errors.New("reset card subscription is unavailable")
-		}
-		if err := lockRows.Scan(&lockedGroupID); err != nil {
-			_ = lockRows.Close()
-			return fmt.Errorf("scan reset card subscription: %w", err)
-		}
-		_ = lockRows.Close()
-		if groupID != lockedGroupID {
-			return errors.New("reset card order group changed")
+			return err
 		}
 		// The subscription lock may have blocked until the checkout-time expiry
 		// snapshot elapsed. Recheck after acquiring it so a grant can never be
@@ -473,7 +472,7 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 			return err
 		}
 		familyKey, tierRank, sourcePlanID := resetCardTierSnapshotValues(tierSnapshot)
-		rows, err := tx.Client().QueryContext(txCtx, `INSERT INTO subscription_reset_grants (subscription_id,user_id,group_id,quantity,used_count,expires_at,issued_by,payment_order_id,card_family_key,source_tier_rank,source_plan_id,tier_snapshot_resolved,created_at,updated_at) VALUES ($1,$2,$3,1,0,$4,NULL,$5,$6,$7,$8,TRUE,$9,$9) RETURNING id`, targetID, o.UserID, groupID, grantExpiresAt, o.ID, familyKey, tierRank, sourcePlanID, issuedAt)
+		rows, err := tx.Client().QueryContext(txCtx, `INSERT INTO subscription_reset_grants (subscription_id,user_id,group_id,quantity,used_count,expires_at,issued_by,payment_order_id,card_family_key,source_tier_rank,source_plan_id,tier_snapshot_resolved,created_at,updated_at) VALUES ($1,$2,$3,$4,0,$5,NULL,$6,$7,$8,$9,TRUE,$10,$10) RETURNING id`, targetID, o.UserID, groupID, terms.quantity, grantExpiresAt, o.ID, familyKey, tierRank, sourcePlanID, issuedAt)
 		if err != nil {
 			return fmt.Errorf("grant reset card: %w", err)
 		}
@@ -483,9 +482,25 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 			return errors.New("grant reset card returned no id")
 		}
 		_ = rows.Close()
-		detail, _ := json.Marshal(map[string]any{"subscription_id": targetID, "grant_id": grantID, "payment_order_id": o.ID})
+		detail, _ := json.Marshal(map[string]any{"subscription_id": targetID, "grant_id": grantID, "payment_order_id": o.ID, "quantity": terms.quantity, "use_on_purchase": terms.useOnPurchase})
 		if _, err := tx.Client().PaymentAuditLog.Create().SetOrderID(strconv.FormatInt(o.ID, 10)).SetAction("RESET_CARD_GRANTED").SetDetail(string(detail)).SetOperator("system").Save(txCtx); err != nil {
 			return fmt.Errorf("record reset card audit: %w", err)
+		}
+		if terms.useOnPurchase {
+			if reason := resetCardAutoUseSkipReason(target, groupID, issuedAt); reason != "" {
+				detail, _ := json.Marshal(map[string]any{"subscription_id": targetID, "grant_id": grantID, "payment_order_id": o.ID, "reason": reason})
+				if _, err := tx.Client().PaymentAuditLog.Create().SetOrderID(strconv.FormatInt(o.ID, 10)).SetAction("RESET_CARD_AUTO_USE_NOT_PERFORMED").SetDetail(string(detail)).SetOperator("system").Save(txCtx); err != nil {
+					return fmt.Errorf("record reset card auto-use skip audit: %w", err)
+				}
+			} else {
+				if err := consumeNewResetCardGrantAndReset(txCtx, tx.Client(), grantID, o.ID, targetID, o.UserID, groupID, issuedAt); err != nil {
+					return err
+				}
+				detail, _ := json.Marshal(map[string]any{"subscription_id": targetID, "grant_id": grantID, "payment_order_id": o.ID, "quantity_consumed": 1})
+				if _, err := tx.Client().PaymentAuditLog.Create().SetOrderID(strconv.FormatInt(o.ID, 10)).SetAction("RESET_CARD_AUTO_USED").SetDetail(string(detail)).SetOperator("system").Save(txCtx); err != nil {
+					return fmt.Errorf("record reset card auto-use audit: %w", err)
+				}
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -495,6 +510,130 @@ func (s *PaymentService) doResetCard(ctx context.Context, o *dbent.PaymentOrder,
 		_ = s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID)
 	}
 	return s.markCompleted(ctx, o, lease, "RESET_CARD_SUCCESS")
+}
+
+type resetCardFulfillmentTarget struct {
+	groupID    int64
+	status     string
+	expiresAt  time.Time
+	notDeleted bool
+}
+
+func lockResetCardFulfillmentTarget(ctx context.Context, client *dbent.Client, subscriptionID, userID int64) (resetCardFulfillmentTarget, error) {
+	if client == nil {
+		return resetCardFulfillmentTarget{}, errors.New("reset card subscription client is unavailable")
+	}
+	query := `SELECT group_id,status,expires_at,deleted_at IS NULL FROM user_subscriptions WHERE id=$1 AND user_id=$2`
+	if client.Driver().Dialect() == dialect.Postgres {
+		query += " FOR UPDATE"
+	}
+	rows, err := client.QueryContext(ctx, query, subscriptionID, userID)
+	if err != nil {
+		return resetCardFulfillmentTarget{}, fmt.Errorf("lock reset card subscription: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return resetCardFulfillmentTarget{}, fmt.Errorf("iterate reset card subscription: %w", err)
+		}
+		return resetCardFulfillmentTarget{}, errors.New("reset card subscription is unavailable")
+	}
+	var target resetCardFulfillmentTarget
+	if err := rows.Scan(&target.groupID, &target.status, &target.expiresAt, &target.notDeleted); err != nil {
+		return resetCardFulfillmentTarget{}, fmt.Errorf("scan reset card subscription: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return resetCardFulfillmentTarget{}, fmt.Errorf("iterate reset card subscription: %w", err)
+	}
+	return target, nil
+}
+
+func resetCardAutoUseSkipReason(target resetCardFulfillmentTarget, expectedGroupID int64, now time.Time) string {
+	if !target.notDeleted {
+		return "subscription_deleted"
+	}
+	if target.groupID != expectedGroupID {
+		return "subscription_group_changed"
+	}
+	if target.status != SubscriptionStatusActive {
+		return "subscription_not_active"
+	}
+	if !target.expiresAt.After(now) {
+		return "subscription_expired"
+	}
+	return ""
+}
+
+func consumeNewResetCardGrantAndReset(ctx context.Context, client *dbent.Client, grantID, orderID, subscriptionID, userID, groupID int64, now time.Time) error {
+	if client == nil {
+		return errors.New("reset card fulfillment client is unavailable")
+	}
+	result, err := client.ExecContext(ctx, `
+		UPDATE subscription_reset_grants
+		SET used_count = used_count + 1, updated_at = $2
+		WHERE id = $1 AND payment_order_id = $3 AND subscription_id = $4
+			AND user_id = $5 AND group_id = $6 AND used_count = 0
+			AND quantity >= 1 AND expires_at > $2
+	`, grantID, now, orderID, subscriptionID, userID, groupID)
+	if err != nil {
+		return fmt.Errorf("consume newly granted reset card: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read newly granted reset card consumption count: %w", err)
+	}
+	if affected != 1 {
+		return errors.New("newly granted reset card is unavailable for automatic use")
+	}
+	windowStart := startOfDay(now)
+	result, err = client.ExecContext(ctx, `
+		UPDATE user_subscriptions
+		SET daily_usage_usd = 0,
+			weekly_usage_usd = 0,
+			monthly_usage_usd = 0,
+			daily_window_start = $2,
+			weekly_window_start = $2,
+			monthly_window_start = $2,
+			updated_at = $3
+		WHERE id = $1 AND user_id = $4 AND group_id = $5
+			AND deleted_at IS NULL AND status = $6 AND expires_at > $3
+	`, subscriptionID, windowStart, now, userID, groupID, SubscriptionStatusActive)
+	if err != nil {
+		return fmt.Errorf("reset subscription usage with newly granted reset card: %w", err)
+	}
+	affected, err = result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read subscription auto-use reset count: %w", err)
+	}
+	if affected != 1 {
+		return errors.New("subscription became unavailable for reset card automatic use")
+	}
+	return nil
+}
+
+func validateResetCardAutoUseEvidence(ctx context.Context, client *dbent.Client, orderID int64) error {
+	if client == nil {
+		return errors.New("reset card audit client is unavailable")
+	}
+	orderIDText := strconv.FormatInt(orderID, 10)
+	used, err := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(orderIDText),
+		paymentauditlog.ActionEQ("RESET_CARD_AUTO_USED"),
+	).Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("check reset card automatic-use audit: %w", err)
+	}
+	skipped, err := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(orderIDText),
+		paymentauditlog.ActionEQ("RESET_CARD_AUTO_USE_NOT_PERFORMED"),
+	).Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("check reset card auto-use skip audit: %w", err)
+	}
+	if used == skipped {
+		return errors.New("reset card automatic-use evidence is incomplete")
+	}
+	return nil
 }
 
 func resetCardPaymentOrderGrantExpiry(o *dbent.PaymentOrder, now time.Time) (time.Time, error) {
@@ -535,17 +674,32 @@ func validateResetCardPaymentOrderSnapshot(o *dbent.PaymentOrder) (int64, int64,
 	price, priceOK := paymentSnapshotFloat(o.ProductSnapshot["price"])
 	orderAmount, orderAmountOK := paymentSnapshotFloat(o.ProductSnapshot["order_amount"])
 	snapshotPayAmount, payAmountOK := paymentSnapshotFloat(o.ProductSnapshot["pay_amount"])
+	terms, termsErr := resetCardSnapshotPurchaseTerms(o.ProductSnapshot)
+	amountsMatch := false
+	if termsErr == nil {
+		if terms.legacy {
+			amountsMatch = math.Abs(price-o.Amount) < paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) &&
+				math.Abs(orderAmount-o.Amount) < paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) &&
+				math.Abs(snapshotPayAmount-o.PayAmount) < paymentAmountZeroTolerance(payment.DefaultPaymentCurrency)
+		} else {
+			priceMinor, priceErr := resetCardAmountToMinorUnit(price)
+			orderMinor, orderErr := resetCardAmountToMinorUnit(orderAmount)
+			amountMinor, amountErr := resetCardAmountToMinorUnit(o.Amount)
+			snapshotPayMinor, snapshotPayErr := resetCardAmountToMinorUnit(snapshotPayAmount)
+			payMinor, payErr := resetCardAmountToMinorUnit(o.PayAmount)
+			amountsMatch = priceErr == nil && orderErr == nil && amountErr == nil && snapshotPayErr == nil && payErr == nil &&
+				priceMinor == terms.totalMinor && orderMinor == terms.totalMinor && amountMinor == terms.totalMinor && snapshotPayMinor == payMinor
+		}
+	}
 	currency, _ := o.ProductSnapshot["currency"].(string)
 	expiryPolicy, _ := o.ProductSnapshot["grant_expiry_policy"].(string)
 	expiresAtText, _ := o.ProductSnapshot["subscription_expires_at"].(string)
 	expiresAt, expiresAtErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(expiresAtText))
 	idempotencyHash, _ := o.ProductSnapshot["idempotency_key_sha256"].(string)
-	if kind != "reset_card" || !quantityOK || quantity != 1 || !priceOK || !orderAmountOK || !payAmountOK ||
+	if kind != "reset_card" || !quantityOK || termsErr != nil || quantity != int64(terms.quantity) || !priceOK || !orderAmountOK || !payAmountOK ||
 		!strings.EqualFold(strings.TrimSpace(currency), payment.DefaultPaymentCurrency) ||
 		strings.TrimSpace(expiryPolicy) != "subscription" || expiresAtErr != nil || !expiresAt.After(o.CreatedAt) ||
-		math.Abs(price-o.Amount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) ||
-		math.Abs(orderAmount-o.Amount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) ||
-		math.Abs(snapshotPayAmount-o.PayAmount) >= paymentAmountZeroTolerance(payment.DefaultPaymentCurrency) {
+		!amountsMatch {
 		return 0, 0, errors.New("reset card order has an invalid product snapshot")
 	}
 	normalizedHash, err := normalizeResetCardIdempotencyKeyHash(idempotencyHash)

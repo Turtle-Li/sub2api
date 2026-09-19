@@ -402,6 +402,8 @@ func (g *Gateway) CancelPayment(ctx context.Context, paymentOrderID string) erro
 	switch result.Status {
 	case StatusClosed, StatusExpired:
 		return nil
+	case StatusConfirmationPending:
+		return payment.ErrCancellationPending
 	default:
 		return fmt.Errorf("%w: status=%s", payment.ErrUpstreamStateUnconfirmed, result.Status)
 	}

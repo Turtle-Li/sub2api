@@ -57,21 +57,23 @@ type ResumeTokenClaims struct {
 }
 
 type WeChatPaymentResumeClaims struct {
-	CouponCode            string `json:"cc,omitempty"`
-	CouponRevision        string `json:"cr,omitempty"`
-	TokenType             string `json:"tk,omitempty"`
-	OpenID                string `json:"openid"`
-	PaymentType           string `json:"pt,omitempty"`
-	Amount                string `json:"amt,omitempty"`
-	OrderType             string `json:"ot,omitempty"`
-	PlanID                int64  `json:"pid,omitempty"`
-	SubscriptionID        int64  `json:"sid,omitempty"`
-	ResetCardTierRevision string `json:"rctr,omitempty"`
-	IdempotencyKeyHash    string `json:"ikh,omitempty"`
-	RedirectTo            string `json:"rd,omitempty"`
-	Scope                 string `json:"scp,omitempty"`
-	IssuedAt              int64  `json:"iat"`
-	ExpiresAt             int64  `json:"exp,omitempty"`
+	CouponCode             string `json:"cc,omitempty"`
+	CouponRevision         string `json:"cr,omitempty"`
+	TokenType              string `json:"tk,omitempty"`
+	OpenID                 string `json:"openid"`
+	PaymentType            string `json:"pt,omitempty"`
+	Amount                 string `json:"amt,omitempty"`
+	OrderType              string `json:"ot,omitempty"`
+	PlanID                 int64  `json:"pid,omitempty"`
+	SubscriptionID         int64  `json:"sid,omitempty"`
+	ResetCardTierRevision  string `json:"rctr,omitempty"`
+	ResetCardQuantity      int    `json:"rcq,omitempty"`
+	ResetCardUseOnPurchase bool   `json:"rcu,omitempty"`
+	IdempotencyKeyHash     string `json:"ikh,omitempty"`
+	RedirectTo             string `json:"rd,omitempty"`
+	Scope                  string `json:"scp,omitempty"`
+	IssuedAt               int64  `json:"iat"`
+	ExpiresAt              int64  `json:"exp,omitempty"`
 }
 
 type PaymentResumeService struct {
@@ -411,6 +413,12 @@ func (s *PaymentResumeService) CreateWeChatPaymentResumeToken(claims WeChatPayme
 	if claims.OrderType == "" {
 		claims.OrderType = payment.OrderTypeBalance
 	}
+	quantity, useOnPurchase, err := normalizeResetCardPurchaseTerms(claims.OrderType, claims.ResetCardQuantity, claims.ResetCardUseOnPurchase)
+	if err != nil {
+		return "", err
+	}
+	claims.ResetCardQuantity = quantity
+	claims.ResetCardUseOnPurchase = useOnPurchase
 	if claims.OrderType == payment.OrderTypeResetCard || claims.CouponCode != "" {
 		if _, err := normalizeResetCardIdempotencyKeyHash(claims.IdempotencyKeyHash); err != nil {
 			return "", err
@@ -447,6 +455,12 @@ func (s *PaymentResumeService) ParseWeChatPaymentResumeToken(token string) (*WeC
 	if claims.OrderType == "" {
 		claims.OrderType = payment.OrderTypeBalance
 	}
+	quantity, useOnPurchase, err := normalizeResetCardPurchaseTerms(claims.OrderType, claims.ResetCardQuantity, claims.ResetCardUseOnPurchase)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token reset card context is invalid")
+	}
+	claims.ResetCardQuantity = quantity
+	claims.ResetCardUseOnPurchase = useOnPurchase
 	if claims.OrderType == payment.OrderTypeResetCard || claims.CouponCode != "" {
 		normalizedHash, err := normalizeResetCardIdempotencyKeyHash(claims.IdempotencyKeyHash)
 		if err != nil {

@@ -9,6 +9,8 @@ export interface ParsedWechatResumeRoute {
   planId?: number
   subscriptionId?: number
   resetCardTierRevision?: string
+  resetCardQuantity?: number
+  resetCardUseOnPurchase?: boolean
   openid?: string
   wechatResumeToken?: string
 }
@@ -19,6 +21,11 @@ function readQueryString(query: LocationQuery, key: string): string {
     return typeof value[0] === 'string' ? value[0] : ''
   }
   return typeof value === 'string' ? value : ''
+}
+
+function readResetCardQuantity(query: LocationQuery): number | undefined {
+  const quantity = Number.parseInt(readQueryString(query, 'reset_card_quantity'), 10)
+  return Number.isSafeInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : undefined
 }
 
 export function hasWechatResumeQuery(query: LocationQuery): boolean {
@@ -45,10 +52,18 @@ export function parseWechatResumeRoute(
   const subscriptionId = Number.parseInt(readQueryString(query, 'subscription_id'), 10)
   const hasSubscriptionId = Number.isFinite(subscriptionId) && subscriptionId > 0
   const resetCardTierRevision = readQueryString(query, 'reset_card_tier_revision').trim()
+  const resetCardQuantity = readResetCardQuantity(query)
+  const resetCardUseOnPurchase = readQueryString(query, 'reset_card_use_on_purchase') === '1'
   const requestedType = readQueryString(query, 'order_type')
   const orderType = requestedType === 'reset_card'
     ? 'reset_card'
     : requestedType === 'subscription' || hasPlanId ? 'subscription' : 'balance'
+  const resetCardContext = orderType === 'reset_card'
+    ? {
+        ...(resetCardQuantity ? { resetCardQuantity } : {}),
+        ...(resetCardUseOnPurchase ? { resetCardUseOnPurchase: true } : {}),
+      }
+    : {}
   if (wechatResumeToken) {
     return {
       wechatResumeToken,
@@ -58,6 +73,7 @@ export function parseWechatResumeRoute(
       planId: hasPlanId ? planId : undefined,
       subscriptionId: hasSubscriptionId ? subscriptionId : undefined,
       resetCardTierRevision: resetCardTierRevision || undefined,
+      ...resetCardContext,
     }
   }
 
@@ -81,6 +97,7 @@ export function parseWechatResumeRoute(
     planId: hasPlanId ? planId : undefined,
     subscriptionId: hasSubscriptionId ? subscriptionId : undefined,
     resetCardTierRevision: resetCardTierRevision || undefined,
+    ...resetCardContext,
   }
 }
 
@@ -97,6 +114,8 @@ export function stripWechatResumeQuery(query: LocationQuery): LocationQueryRaw {
   delete nextQuery.plan_id
   delete nextQuery.subscription_id
   delete nextQuery.reset_card_tier_revision
+  delete nextQuery.reset_card_quantity
+  delete nextQuery.reset_card_use_on_purchase
   delete nextQuery.payment_idempotency_key
   return nextQuery
 }

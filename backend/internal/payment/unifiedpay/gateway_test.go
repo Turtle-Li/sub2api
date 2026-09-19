@@ -281,3 +281,39 @@ func mustBase64(t *testing.T, value string) []byte {
 	require.NoError(t, err)
 	return decoded
 }
+
+func TestGatewayCancellationDistinguishesAcceptedFromUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name, status        string
+		review, unavailable bool
+		want                error
+	}{
+		{name: "accepted", status: StatusConfirmationPending, want: payment.ErrCancellationPending},
+		{name: "closed", status: StatusClosed},
+		{name: "expired", status: StatusExpired},
+		{name: "still pending", status: StatusPendingPayment, want: payment.ErrUpstreamStateUnconfirmed},
+		{name: "manual review", status: StatusConfirmationPending, review: true, want: payment.ErrUpstreamStateUnconfirmed},
+		{name: "network rejected", unavailable: true, want: payment.ErrUpstreamStateUnconfirmed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodPost, r.Method)
+				require.Equal(t, "/v1/payment-orders/"+testPaymentOrderID+"/close", r.URL.Path)
+				if tc.unavailable {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				require.NoError(t, json.NewEncoder(w).Encode(paymentOrderResponse{Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID, AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: "sub2_cancel_test", OrderType: "balance", AmountFen: 12000, Currency: "CNY", PaymentMethod: PaymentMethodAlipay, Status: tc.status, NeedsManualReview: tc.review, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}))
+			}))
+			defer server.Close()
+			gateway, err := New(testConfig(testPrivateKey(), server.URL))
+			require.NoError(t, err)
+			err = gateway.CancelPayment(context.Background(), testPaymentOrderID)
+			if tc.want == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tc.want)
+			}
+		})
+	}
+}

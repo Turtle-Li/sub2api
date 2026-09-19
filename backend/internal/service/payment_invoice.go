@@ -165,6 +165,7 @@ type PaymentInvoiceRecord struct {
 // response. Payment and fulfillment truth remain on PaymentOrder; this merely
 // presents trusted timestamps plus the durable refund-review fence.
 type PaymentOrderInvoicePresentation struct {
+	CancellationPending     bool
 	Invoice                 *PaymentInvoiceRecord
 	ProductSnapshot         map[string]any
 	PaymentStatus           string
@@ -267,6 +268,10 @@ func (s *PaymentService) InvoiceOrderPresentations(ctx context.Context, orders [
 	if err != nil {
 		return nil, err
 	}
+	cancellationIDs, err := s.paymentOrderCancellationPendingIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for _, order := range orders {
 		if order == nil {
 			continue
@@ -274,6 +279,7 @@ func (s *PaymentService) InvoiceOrderPresentations(ctx context.Context, orders [
 		refundNeedsReview := reviewIDs[order.ID]
 		attempt := latestAttempts[order.ID]
 		presentations[order.ID] = PaymentOrderInvoicePresentation{
+			CancellationPending:     order.Status == OrderStatusPending && cancellationIDs[order.ID],
 			Invoice:                 PaymentOrderInvoiceRecord(order),
 			ProductSnapshot:         SanitizedPaymentOrderProductSnapshot(order),
 			PaymentStatus:           PaymentOrderPaymentStatus(order),
@@ -533,10 +539,15 @@ func SanitizedPaymentOrderProductSnapshot(order *dbent.PaymentOrder) map[string]
 	for _, key := range []string{
 		"request_amount", "list_price", "price", "discount_percent", "credited_amount", "pay_amount",
 		"estimated_rate_multiplier", "estimated_tokens", "plan_id", "order_amount", "validity_days",
-		"subscription_days", "group_id", "daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
+		"subscription_days", "group_id", "quantity", "unit_price", "daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
 	} {
 		if value, ok := sanitizedInvoiceSnapshotNumber(order.ProductSnapshot[key]); ok {
 			out[key] = value
+		}
+	}
+	if order.OrderType == payment.OrderTypeResetCard {
+		if useOnPurchase, ok := order.ProductSnapshot["use_on_purchase"].(bool); ok {
+			out["use_on_purchase"] = useOnPurchase
 		}
 	}
 	if raw, ok := order.ProductSnapshot["payment_discount"].(map[string]any); ok {

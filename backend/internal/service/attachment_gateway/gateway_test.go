@@ -1227,7 +1227,9 @@ func TestColdEncodeCountOnlyTracksAcquiredEncodeSlots(t *testing.T) {
 	encoder := newFirstCallBlockingEncoder()
 	gateway, err := newWithEncoder(config, encoder)
 	require.NoError(t, err)
-	firstBody := makeResponsesPayload(t, []string{dataURL("image/png", makePhotoLikePNG(t, 240, 160, 78))}, 0)
+	disableAsyncCacheCleanupForTest(gateway)
+	firstSource := makePhotoLikePNG(t, 240, 160, 78)
+	firstBody := makeResponsesPayload(t, []string{dataURL("image/png", firstSource)}, 0)
 	secondSource := makePhotoLikePNG(t, 240, 160, 79)
 	secondBody := makeResponsesPayload(t, []string{dataURL("image/png", secondSource)}, 0)
 
@@ -1266,7 +1268,9 @@ func TestColdEncodeCountOnlyTracksAcquiredEncodeSlots(t *testing.T) {
 
 	close(encoder.releaseFirst)
 	require.Eventually(t, func() bool {
-		return len(gateway.encodeSlots) == 0
+		// Slot release precedes cache persistence; wait for the detached flight
+		// before TempDir cleanup can remove its directory.
+		return len(gateway.encodeSlots) == 0 && !cacheFlightExists(gateway, firstSource)
 	}, time.Second, 10*time.Millisecond)
 }
 

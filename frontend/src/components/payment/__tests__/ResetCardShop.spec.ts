@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ResetCardShop from '../ResetCardShop.vue'
 import type { UserSubscription } from '@/types'
@@ -18,11 +19,6 @@ import { getResetCardQuote } from '@/api/subscriptions'
 const sub = { id: 7, group_id: 4, status: 'active', expires_at: '2027-01-01', group: { name: 'Plus', platform: 'openai' } } as UserSubscription
 const quote = { subscription_id: 7, group_id: 4, plan_id: 10, monthly_price: 120, price: 40, expires_at: '2027-01-01' }
 const plans = [{ id: 10, group_id: 4, group_platform: 'openai', currency: 'CNY', price: 120, validity_unit: 'month', validity_days: 1 }] as SubscriptionPlan[]
-const ConfirmDialogStub = {
-  props: ['show', 'message'],
-  emits: ['confirm', 'cancel'],
-  template: '<div v-if="show"><p>{{ message }}</p><slot /><button data-testid="confirm-reset-card" @click="$emit(\'confirm\')" /></div>',
-}
 
 const render = (
   subscriptions = [sub],
@@ -30,7 +26,6 @@ const render = (
   targetSubscriptionId: number | null = null,
 ) => mount(ResetCardShop, {
   props: { subscriptions, plans: [{ ...plans[0], ...planOverrides }], targetSubscriptionId },
-  global: { stubs: { ConfirmDialog: ConfirmDialogStub } },
 })
 
 beforeEach(() => {
@@ -66,57 +61,82 @@ describe('ResetCardShop', () => {
     expect(wrapper.text()).not.toContain('available reset cards in this family')
   })
 
-  it('quotes before confirmation and emits a shared external checkout request', async () => {
+  it('quotes a selected card and emits its checkout selection', async () => {
     const wrapper = render()
     await wrapper.get('button').trigger('click')
     await flushPromises()
     expect(getResetCardQuote).toHaveBeenCalledWith(7)
-    await wrapper.get('[data-testid="confirm-reset-card"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.emitted('checkout')).toEqual([[{ subscription: sub, quote }]])
+    expect(wrapper.emitted('select')).toEqual([[{ subscription: sub, quote }]])
   })
 
-  it('explains the purchase-bound tier rule and exposes only the numeric tier to customers', async () => {
-    vi.mocked(getResetCardQuote).mockResolvedValue({
-      ...quote,
-      reset_card_tier: { group_id: 4, family_key: 'gpt_standard', tier_rank: 2 },
+  it('shows quantity, expiry, and one-card use controls for the selected quote', async () => {
+    const wrapper = mount(ResetCardShop, {
+      props: {
+        subscriptions: [sub],
+        plans,
+        selectedSubscriptionId: sub.id,
+        selectedQuote: quote,
+        quantity: 2,
+      },
     })
-    const wrapper = render([sub], {
-      reset_card_tier: { group_id: 4, family_key: 'gpt_standard', tier_rank: 2 },
-    })
 
-    expect(wrapper.text()).toContain('payment.resetShop.tierBindingHint')
-    expect(wrapper.text()).toContain('payment.resetShop.tierRank')
-    expect(wrapper.text()).not.toContain('gpt_standard')
+    expect(wrapper.get('[data-test="reset-card-options"]').text()).toContain('payment.resetShop.validity')
+    expect((wrapper.get('[data-test="reset-card-quantity"]').element as HTMLInputElement).value).toBe('2')
 
-    await wrapper.get('button').trigger('click')
-    await flushPromises()
+    await wrapper.get('[data-test="reset-card-quantity"]').setValue('100')
+    expect(wrapper.emitted('updateOptions')).toEqual([[{ quantity: 99, useOnPurchase: false }]])
 
-    expect(wrapper.text()).toContain('payment.resetShop.tierBindingConfirm')
-    expect(wrapper.text()).toContain('payment.resetShop.tierRank')
-    expect(wrapper.text()).not.toContain('gpt_standard')
+    await wrapper.get('[data-test="reset-card-use-on-purchase"]').setValue(true)
+    expect(wrapper.emitted('updateOptions')?.[1]).toEqual([{ quantity: 2, useOnPurchase: true }])
+    expect(wrapper.text()).not.toContain('tierBinding')
   })
 
-  it('warns that a plan without a tier remains bound to the exact subscription', async () => {
-    const wrapper = render()
+  it('keeps a newly entered quantity when the use-on-purchase checkbox changes immediately after it', async () => {
+    const Harness = defineComponent({
+      components: { ResetCardShop },
+      setup() {
+        const quantity = ref(1)
+        const useOnPurchase = ref(false)
+        const updateOptions = (next: { quantity: number; useOnPurchase: boolean }) => {
+          quantity.value = next.quantity
+          useOnPurchase.value = next.useOnPurchase
+        }
+        return { quantity, useOnPurchase, updateOptions }
+      },
+      template: `
+        <ResetCardShop
+          :subscriptions="subscriptions"
+          :plans="plans"
+          :selected-subscription-id="subscription.id"
+          :selected-quote="quote"
+          :quantity="quantity"
+          :use-on-purchase="useOnPurchase"
+          @update-options="updateOptions"
+        />
+      `,
+      data: () => ({ subscriptions: [sub], plans, subscription: sub, quote }),
+    })
+    const wrapper = mount(Harness)
+    const quantityInput = wrapper.get('[data-test="reset-card-quantity"]')
 
-    await wrapper.get('button').trigger('click')
-    await flushPromises()
+    ;(quantityInput.element as HTMLInputElement).value = '3'
+    await quantityInput.trigger('input')
+    await wrapper.get('[data-test="reset-card-use-on-purchase"]').setValue(true)
 
-    expect(wrapper.text()).toContain('payment.resetShop.exactBindingConfirm')
-    expect(wrapper.text()).not.toContain('payment.resetShop.tierBindingConfirm')
+    expect((quantityInput.element as HTMLInputElement).value).toBe('3')
+    expect((wrapper.vm as unknown as { quantity: number }).quantity).toBe(3)
+    expect((wrapper.vm as unknown as { useOnPurchase: boolean }).useOnPurchase).toBe(true)
   })
 
   it('does not start another reset-card checkout while its parent is submitting', async () => {
     const wrapper = mount(ResetCardShop, {
       props: { subscriptions: [sub], plans, disabled: true },
-      global: { stubs: { ConfirmDialog: ConfirmDialogStub } },
     })
 
     await wrapper.get('button').trigger('click')
 
     expect(getResetCardQuote).not.toHaveBeenCalled()
-    expect(wrapper.emitted('checkout')).toBeUndefined()
+    expect(wrapper.emitted('select')).toBeUndefined()
   })
 
   it('offers no purchase button without an active subscription', () => {
@@ -130,13 +150,13 @@ describe('ResetCardShop', () => {
     const wrapper = render([sub], {}, 7)
     const offer = wrapper.get('[data-reset-card-offer="7"]')
 
-    expect(offer.attributes('aria-current')).toBe('true')
+    expect(offer.attributes('aria-pressed')).toBe('false')
     expect(offer.classes()).toContain('border-primary-500')
     expect(getResetCardQuote).not.toHaveBeenCalled()
 
     const shop = wrapper.vm as unknown as { focusOffer: () => boolean }
     expect(shop.focusOffer()).toBe(true)
     expect(getResetCardQuote).not.toHaveBeenCalled()
-    expect(wrapper.emitted('checkout')).toBeUndefined()
+    expect(wrapper.emitted('select')).toBeUndefined()
   })
 })

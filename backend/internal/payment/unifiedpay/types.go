@@ -118,6 +118,20 @@ type Config struct {
 	NonceSource      func() (string, error)
 }
 
+// PaymentOrderLookup is the minimal, scope-validated result of looking up a
+// payment order by the product's immutable order number. It deliberately
+// omits checkout material because lookup is used only to repair a missing
+// local payment-order binding before ordinary reconciliation.
+type PaymentOrderLookup struct {
+	Found          bool
+	PaymentOrderID string
+	ProductOrderNo string
+	OrderType      string
+	AmountFen      int64
+	Currency       string
+	PaymentMethod  string
+}
+
 // PaymentMethodForPaymentType maps Sub2's visible method names to the pay-v1
 // contract values. It deliberately accepts only the two native CNY methods.
 func PaymentMethodForPaymentType(paymentType string) (string, bool) {

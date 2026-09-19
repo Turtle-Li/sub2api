@@ -89,6 +89,11 @@ type CreateOrderRequest struct {
 	OrderType       string
 	PlanID          int64
 	SubscriptionID  int64
+	// ResetCardQuantity defaults to one for reset-card orders. It is kept on
+	// the creation request so the idempotency binding and signed OAuth resume
+	// path carry the exact purchase terms through checkout.
+	ResetCardQuantity      int
+	ResetCardUseOnPurchase bool
 	// ResetCardTierRevision repeats the tier revision returned by the reset
 	// card quote. It is required for new purchases when the source group has a
 	// configured tier policy.

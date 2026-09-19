@@ -13,6 +13,10 @@ import (
 // is safely closed. Callers must retry reconciliation instead of guessing.
 var ErrUpstreamStateUnconfirmed = errors.New("upstream payment state is not safely closed")
 
+// ErrCancellationPending means a trusted upstream accepted the close request,
+// but has not yet proved the order closed. It never authorizes local closure.
+var ErrCancellationPending = errors.New("upstream payment cancellation is pending")
+
 // PaymentType represents a supported payment method.
 type PaymentType = string
 

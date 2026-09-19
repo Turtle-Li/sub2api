@@ -83,6 +83,54 @@
       </div>
     </template>
 
+    <!-- The provider accepted cancellation, but the local order is still pending. -->
+    <template v-else-if="cancellationPending || props.initialCancellationPending">
+      <div data-test="payment-cancellation-pending" class="card p-6">
+        <div class="flex flex-col items-center space-y-3 py-3 text-center">
+          <div class="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+            <Icon name="sync" size="lg" class="animate-spin text-amber-600 dark:text-amber-300" />
+          </div>
+          <p class="text-base font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.cancellationPending') }}</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.result.processingHint') }}</p>
+        </div>
+      </div>
+      <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
+        {{ t('payment.qr.refreshStatus') }}
+      </button>
+    </template>
+
+    <!-- Never present a terminal result while the gateway state is unknown. -->
+    <template v-else-if="confirmationPending || props.initialConfirmationPending">
+      <div data-test="payment-confirmation-pending" class="card p-6">
+        <div class="flex flex-col items-center space-y-3 py-3 text-center">
+          <div class="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-950/30">
+            <Icon name="sync" size="lg" class="animate-spin text-primary-600 dark:text-primary-300" />
+          </div>
+          <p class="text-base font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.confirmationPending') }}</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.result.processingHint') }}</p>
+        </div>
+      </div>
+      <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
+        {{ t('payment.qr.refreshStatus') }}
+      </button>
+    </template>
+
+    <!-- A browser clock only prompts an authoritative status check. -->
+    <template v-else-if="deadlineReached && !paymentReceivedHint">
+      <div data-test="payment-expiry-checking" class="card p-6">
+        <div class="flex flex-col items-center space-y-3 py-3 text-center">
+          <div class="flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-dark-700">
+            <Icon name="sync" size="lg" class="animate-spin text-gray-600 dark:text-gray-300" />
+          </div>
+          <p class="text-base font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.paymentExpiryChecking') }}</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.result.processingHint') }}</p>
+        </div>
+      </div>
+      <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
+        {{ t('payment.qr.refreshStatus') }}
+      </button>
+    </template>
+
     <!-- ═══ Active States: QR or Popup waiting ═══ -->
 
     <!-- Mobile Alipay app handoff. The QR fallback stays hidden until launch timeout. -->
@@ -108,6 +156,7 @@
               v-if="deepLinkState === 'backgrounded'"
               data-test="reopen-alipay"
               class="btn btn-alipay inline-flex items-center gap-2 text-sm"
+              :disabled="resumingLaunch"
               @click="reopenAlipay"
             >
               <Icon name="externalLink" size="sm" />
@@ -159,6 +208,7 @@
               <button
                 data-test="reopen-alipay"
                 class="btn btn-alipay inline-flex items-center justify-center gap-2"
+                :disabled="resumingLaunch"
                 @click="reopenAlipay"
               >
                 <Icon name="externalLink" size="sm" />
@@ -197,7 +247,7 @@
             </div>
           </div>
           <p v-if="scanHint" class="text-center text-sm text-gray-500 dark:text-gray-400">{{ scanHint }}</p>
-          <button v-if="payUrl" class="btn btn-secondary text-sm" @click="reopenPopup">
+          <button v-if="currentPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
             {{ t('payment.qr.openPayWindow') }}
           </button>
         </div>
@@ -221,7 +271,7 @@
         <div class="flex flex-col items-center space-y-4 py-4">
           <div class="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
           <p class="text-center text-sm text-gray-500 dark:text-gray-400">{{ waitingHint }}</p>
-          <button v-if="payUrl" class="btn btn-secondary text-sm" @click="reopenPopup">
+          <button v-if="currentPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
             {{ t('payment.qr.openPayWindow') }}
           </button>
         </div>
@@ -246,10 +296,10 @@ import { useI18n } from 'vue-i18n'
 import { usePaymentStore } from '@/stores/payment'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
-import { extractI18nErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import { getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
 import { currencySymbol, formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
-import type { PaymentDiscountSnapshot, PaymentOrder } from '@/types/payment'
+import type { CreateOrderResult, PaymentDiscountSnapshot, PaymentOrder, WechatJSAPIPayload } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
 import QRCode from 'qrcode'
 import alipayIcon from '@/assets/icons/alipay.svg'
@@ -275,6 +325,12 @@ const props = defineProps<{
   outTradeNo?: string
   mobileAlipayDeepLink?: boolean
   paymentDiscount?: PaymentDiscountSnapshot
+  /** A recovered WeChat JSAPI payload belongs to this existing order only. */
+  wechatJsapi?: WechatJSAPIPayload
+  /** Resume was refused because the central close is still being applied. */
+  initialCancellationPending?: boolean
+  /** Resume was refused while the provider payment state is still uncertain. */
+  initialConfirmationPending?: boolean
 }>()
 
 type PaymentOutcome = 'success' | 'cancelled' | 'expired'
@@ -288,9 +344,17 @@ const appStore = useAppStore()
 
 const qrCanvas = ref<HTMLCanvasElement | null>(null)
 const qrUrl = ref('')
+// `null` means the original first-launch material is still displayed. Once a
+// user explicitly reopens checkout, this holds only the authoritative resume
+// response and never falls back to the cached prop URL.
+const resumedPayUrl = ref<string | null>(null)
+const resumedMobileAlipayDeepLink = ref<boolean | null>(null)
 const sessionVersion = ref(0)
 const remainingSeconds = ref(0)
 const cancelling = ref(false)
+const resumingLaunch = ref(false)
+const cancellationPending = ref(false)
+const confirmationPending = ref(false)
 const paidOrder = ref<PaymentOrder | null>(null)
 const latestOrder = ref<PaymentOrder | null>(null)
 const deepLinkState = ref<AlipayDeepLinkState>('idle')
@@ -319,8 +383,9 @@ const pollExhausted = ref(false)
 let lifecycleGeneration = 0
 let disposed = false
 let mounted = false
-let deadlineReached = false
+const deadlineReached = ref(false)
 let deadlineCheckRequestedGeneration: number | null = null
+let wechatJsapiLaunchGeneration: number | null = null
 const pollInFlightGenerations = new Set<number>()
 
 const VERIFY_RETRY_INTERVAL_MS = 15000
@@ -330,7 +395,8 @@ const POLL_MAX_ATTEMPTS = 120
 
 const isAlipay = computed(() => isBuiltInAlipayMethod(props.paymentType))
 const isWxpay = computed(() => isBuiltInWxpayMethod(props.paymentType))
-const isMobileAlipayDeepLink = computed(() => props.mobileAlipayDeepLink === true && isAlipay.value && !!qrUrl.value)
+const currentPayUrl = computed(() => resumedPayUrl.value ?? props.payUrl ?? '')
+const isMobileAlipayDeepLink = computed(() => (resumedMobileAlipayDeepLink.value ?? props.mobileAlipayDeepLink) === true && isAlipay.value && !!qrUrl.value)
 const showQRCode = computed(() => !!qrUrl.value && (!isMobileAlipayDeepLink.value || deepLinkFallbackVisible.value))
 
 const qrBorderClass = computed(() => {
@@ -395,12 +461,162 @@ function normalizeStatus(status: string | null | undefined): string {
   return String(status || '').trim().toUpperCase()
 }
 
-function reopenPopup() {
-  if (props.payUrl) {
-    const win = window.open(props.payUrl, 'paymentPopup', getPaymentPopupFeatures())
-    if (!win || win.closed) {
-      window.location.href = props.payUrl
+interface ResumedPaymentLaunch {
+  qrCode: string
+  payUrl: string
+  expiresAt: string
+  mobileAlipayDeepLink: boolean
+}
+
+function clearLaunchMaterial() {
+  qrUrl.value = ''
+  resumedPayUrl.value = ''
+  resumedMobileAlipayDeepLink.value = false
+  alipayLauncher?.dispose()
+  alipayLauncher = null
+}
+
+function waitForAuthoritativeConfirmation() {
+  clearLaunchMaterial()
+  cancellationPending.value = false
+  confirmationPending.value = true
+  void pollStatus({ force: true })
+}
+
+function waitForAuthoritativeExpiry() {
+  clearLaunchMaterial()
+  deadlineReached.value = true
+  remainingSeconds.value = 0
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  void pollStatus({ force: true })
+}
+
+function setTerminalResumeStatus(status: string): boolean {
+  if (status === 'CANCELLED') {
+    clearLaunchMaterial()
+    cleanupSession()
+    setOutcome('cancelled')
+    return true
+  }
+  if (status === 'EXPIRED' || status === 'FAILED') {
+    clearLaunchMaterial()
+    cleanupSession()
+    setOutcome('expired')
+    return true
+  }
+  return false
+}
+
+function isSamePaymentFamily(paymentType: string): boolean {
+  const expected = String(props.paymentType || '').trim()
+  const received = paymentType.trim()
+  if (!expected || !received) return false
+  if (isBuiltInAlipayMethod(expected) || isBuiltInAlipayMethod(received)) {
+    return isBuiltInAlipayMethod(expected) && isBuiltInAlipayMethod(received)
+  }
+  if (isBuiltInWxpayMethod(expected) || isBuiltInWxpayMethod(received)) {
+    return isBuiltInWxpayMethod(expected) && isBuiltInWxpayMethod(received)
+  }
+  return expected === received
+}
+
+function applyResumedPaymentLaunch(result: CreateOrderResult): ResumedPaymentLaunch | null {
+  const status = normalizeStatus(result.status)
+  if (status !== 'PENDING') {
+    if (!setTerminalResumeStatus(status)) waitForAuthoritativeConfirmation()
+    return null
+  }
+  if (!isSamePaymentFamily(String(result.payment_type || ''))) {
+    waitForAuthoritativeConfirmation()
+    return null
+  }
+  const deadline = Date.parse(result.expires_at || '')
+  if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+    waitForAuthoritativeExpiry()
+    return null
+  }
+  const qrCode = String(result.qr_code || '').trim()
+  const payUrl = String(result.pay_url || '').trim()
+  if (!qrCode && !payUrl) {
+    waitForAuthoritativeConfirmation()
+    return null
+  }
+
+  qrUrl.value = qrCode
+  resumedPayUrl.value = payUrl
+  resumedMobileAlipayDeepLink.value = result.alipay_mobile_precreate_deep_link === true
+  deadlineReached.value = false
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  sessionVersion.value += 1
+  startCountdown(Math.floor((deadline - Date.now()) / 1000), lifecycleGeneration, currentSessionFingerprint())
+  void renderQR()
+  return {
+    qrCode,
+    payUrl,
+    expiresAt: result.expires_at,
+    mobileAlipayDeepLink: result.alipay_mobile_precreate_deep_link === true,
+  }
+}
+
+async function resumePaymentLaunch(): Promise<ResumedPaymentLaunch | null> {
+  const generation = lifecycleGeneration
+  const fingerprint = currentSessionFingerprint()
+  if (!isCurrentLifecycle(generation, fingerprint) || !props.orderId || resumingLaunch.value) return null
+
+  resumingLaunch.value = true
+  try {
+    const response = await paymentAPI.resumeOrder(props.orderId)
+    if (!isCurrentLifecycle(generation, fingerprint)) return null
+    const result = response.data
+    if (result.order_id !== props.orderId) {
+      waitForAuthoritativeConfirmation()
+      return null
     }
+    return applyResumedPaymentLaunch(result)
+  } catch (err: unknown) {
+    if (!isCurrentLifecycle(generation, fingerprint)) return null
+    const code = extractApiErrorCode(err)
+    clearLaunchMaterial()
+    if (code === 'PAYMENT_CANCELLATION_PENDING') {
+      cancellationPending.value = true
+      confirmationPending.value = false
+      void pollStatus({ force: true }, generation, fingerprint)
+    } else if (code === 'PAYMENT_CONFIRMATION_PENDING') {
+      cancellationPending.value = false
+      confirmationPending.value = true
+      void pollStatus({ force: true }, generation, fingerprint)
+    } else {
+      waitForAuthoritativeConfirmation()
+    }
+    return null
+  } finally {
+    if (isCurrentLifecycle(generation, fingerprint)) resumingLaunch.value = false
+  }
+}
+
+async function reopenPopup() {
+  // Reserve a browsing context synchronously from the click. It is closed if
+  // the authenticated resume call says this order is no longer payable.
+  const popup = window.open('', 'paymentPopup', getPaymentPopupFeatures())
+  let navigated = false
+  try {
+    const launch = await resumePaymentLaunch()
+    if (!launch?.payUrl) return
+    if (popup && !popup.closed) {
+      popup.location.href = launch.payUrl
+      navigated = true
+      return
+    }
+    const opened = window.open(launch.payUrl, 'paymentPopup', getPaymentPopupFeatures())
+    if (!opened || opened.closed) window.location.assign(launch.payUrl)
+  } finally {
+    if (popup && !popup.closed && !navigated && typeof popup.close === 'function') popup.close()
   }
 }
 
@@ -423,6 +639,9 @@ function currentSessionFingerprint(): string {
     props.currency,
     props.outTradeNo,
     props.mobileAlipayDeepLink,
+    props.wechatJsapi,
+    props.initialCancellationPending,
+    props.initialConfirmationPending,
   ])
 }
 
@@ -461,8 +680,27 @@ function updateDeepLinkState(
   }
 }
 
-function reopenAlipay() {
-  alipayLauncher?.launch()
+function launchAlipayDeepLink(
+  generation = lifecycleGeneration,
+  fingerprint = currentSessionFingerprint(),
+) {
+  if (!isCurrentLifecycle(generation, fingerprint) || !isMobileAlipayDeepLink.value) return
+  alipayLauncher?.dispose()
+  alipayLauncher = createAlipayDeepLinkLauncher({
+    qrCode: qrUrl.value,
+    document,
+    lifecycleTarget: window,
+    userAgent: window.navigator.userAgent,
+    assignLocation: (url) => window.location.assign(url),
+    onStateChange: (state) => updateDeepLinkState(state, generation, fingerprint),
+  })
+  alipayLauncher.launch()
+}
+
+async function reopenAlipay() {
+  const launch = await resumePaymentLaunch()
+  if (!launch?.qrCode || !launch.mobileAlipayDeepLink) return
+  launchAlipayDeepLink()
 }
 
 function saveQRCode() {
@@ -474,6 +712,75 @@ function saveQRCode() {
   document.body.appendChild(link)
   link.click()
   link.remove()
+}
+
+interface WeixinJSBridgeLike {
+  invoke(
+    action: string,
+    payload: Record<string, unknown>,
+    callback: (result: Record<string, unknown>) => void,
+  ): void
+}
+
+function getWeixinJSBridge(): WeixinJSBridgeLike | undefined {
+  return (window as Window & { WeixinJSBridge?: WeixinJSBridgeLike }).WeixinJSBridge
+}
+
+function waitForWeixinJSBridge(timeoutMs = 4000): Promise<WeixinJSBridgeLike | null> {
+  const existing = getWeixinJSBridge()
+  if (existing) return Promise.resolve(existing)
+
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (bridge: WeixinJSBridgeLike | null) => {
+      if (settled) return
+      settled = true
+      document.removeEventListener('WeixinJSBridgeReady', handleReady)
+      document.removeEventListener('onWeixinJSBridgeReady', handleReady)
+      window.clearTimeout(timer)
+      resolve(bridge)
+    }
+    const handleReady = () => finish(getWeixinJSBridge() ?? null)
+    const timer = window.setTimeout(() => finish(getWeixinJSBridge() ?? null), timeoutMs)
+    document.addEventListener('WeixinJSBridgeReady', handleReady, false)
+    document.addEventListener('onWeixinJSBridgeReady', handleReady, false)
+  })
+}
+
+async function invokeRecoveredWechatJsapi(
+  payload: WechatJSAPIPayload,
+): Promise<Record<string, unknown>> {
+  const bridge = await waitForWeixinJSBridge()
+  if (!bridge) throw new Error('WECHAT_JSAPI_UNAVAILABLE')
+  return new Promise((resolve) => {
+    bridge.invoke('getBrandWCPayRequest', payload as Record<string, unknown>, (result) => resolve(result || {}))
+  })
+}
+
+async function launchRecoveredWechatJsapi(
+  generation = lifecycleGeneration,
+  fingerprint = currentSessionFingerprint(),
+) {
+  const payload = props.wechatJsapi
+  if (!payload || !isCurrentLifecycle(generation, fingerprint) || wechatJsapiLaunchGeneration === generation) return
+  wechatJsapiLaunchGeneration = generation
+
+  try {
+    const result = await invokeRecoveredWechatJsapi(payload)
+    if (!isCurrentLifecycle(generation, fingerprint)) return
+    const resultMessage = String(result.err_msg || '').toLowerCase()
+    if (resultMessage.includes('cancel')) {
+      // Closing the provider sheet does not prove the local order is unpaid.
+      // Keep this exact order in the authoritative polling loop.
+      appStore.showInfo(t('payment.qr.paymentSheetDismissed'))
+    } else if (resultMessage && !resultMessage.includes('ok')) {
+      appStore.showError(t('payment.errors.wechatJsapiFailed'))
+    }
+  } catch {
+    if (isCurrentLifecycle(generation, fingerprint)) {
+      appStore.showError(t('payment.errors.wechatJsapiUnavailable'))
+    }
+  }
 }
 
 async function tryRecoverPendingOrder(
@@ -538,9 +845,21 @@ async function pollStatus(
     }
     if (!order) return
     latestOrder.value = order
-    order = await tryRecoverPendingOrder(order, { generation, fingerprint, paymentType })
+    if (!order.cancellation_pending) {
+      order = await tryRecoverPendingOrder(order, { generation, fingerprint, paymentType })
+    }
     if (!isCurrentLifecycle(generation, fingerprint) || outcome.value) return
     latestOrder.value = order
+    const orderStatus = normalizeStatus(order.status)
+    const serverCancellationPending = orderStatus === 'PENDING' && order.cancellation_pending === true
+    // The 409 is an accepted close request. A list/status projection can lag
+    // that audit write briefly, so retain this safety state until a terminal
+    // server result rather than re-exposing a payable checkout in the gap.
+    if (serverCancellationPending) cancellationPending.value = true
+    if (orderStatus !== 'PENDING') cancellationPending.value = false
+    if (cancellationPending.value || orderStatus !== 'PENDING') {
+      confirmationPending.value = false
+    }
     if (isSuccessStatus(order.status)) {
       cleanupSession()
       paidOrder.value = order
@@ -603,8 +922,8 @@ function startCountdown(seconds: number, generation: number, fingerprint: string
 }
 
 function requestDeadlineCheck(generation = lifecycleGeneration, fingerprint = currentSessionFingerprint()) {
-  if (!isCurrentLifecycle(generation, fingerprint) || deadlineReached || outcome.value) return
-  deadlineReached = true
+  if (!isCurrentLifecycle(generation, fingerprint) || deadlineReached.value || outcome.value) return
+  deadlineReached.value = true
   remainingSeconds.value = 0
   if (countdownTimer) {
     clearInterval(countdownTimer)
@@ -629,7 +948,17 @@ async function handleCancel() {
     await pollStatus({ force: true }, generation, fingerprint)
   } catch (err: unknown) {
     if (isCurrentLifecycle(generation, fingerprint)) {
-      appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+      const code = extractApiErrorCode(err)
+      if (code === 'PAYMENT_CANCELLATION_PENDING') {
+        cancellationPending.value = true
+        confirmationPending.value = false
+        void pollStatus({ force: true }, generation, fingerprint)
+      } else if (code === 'PAYMENT_CONFIRMATION_PENDING') {
+        confirmationPending.value = true
+        void pollStatus({ force: true }, generation, fingerprint)
+      } else {
+        appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+      }
     }
   } finally {
     if (isCurrentLifecycle(generation, fingerprint)) {
@@ -653,9 +982,14 @@ function startSession() {
   const generation = lifecycleGeneration
   const fingerprint = currentSessionFingerprint()
   qrUrl.value = props.qrCode
+  resumedPayUrl.value = null
+  resumedMobileAlipayDeepLink.value = null
   sessionVersion.value += 1
   remainingSeconds.value = 0
   cancelling.value = false
+  resumingLaunch.value = false
+  cancellationPending.value = props.initialCancellationPending === true
+  confirmationPending.value = props.initialConfirmationPending === true && !cancellationPending.value
   paidOrder.value = null
   latestOrder.value = null
   outcome.value = null
@@ -665,27 +999,20 @@ function startSession() {
   lastVerifyAt = 0
   pollAttempts = 0
   pollExhausted.value = false
-  deadlineReached = false
+  deadlineReached.value = false
   deadlineCheckRequestedGeneration = null
-  let seconds = 30 * 60
-  if (props.expiresAt) {
-    seconds = Math.floor((new Date(props.expiresAt).getTime() - Date.now()) / 1000)
-  }
+  wechatJsapiLaunchGeneration = null
+  const deadline = Date.parse(props.expiresAt)
+  const seconds = Number.isFinite(deadline)
+    ? Math.floor((deadline - Date.now()) / 1000)
+    : 0
   startCountdown(seconds, generation, fingerprint)
   pollTimer = setInterval(() => { void pollStatus({}, generation, fingerprint) }, POLL_INTERVAL_MS)
   void pollStatus({}, generation, fingerprint)
   void renderQR(generation, fingerprint)
+  void launchRecoveredWechatJsapi(generation, fingerprint)
 
-  if (!isMobileAlipayDeepLink.value) return
-  alipayLauncher = createAlipayDeepLinkLauncher({
-    qrCode: qrUrl.value,
-    document,
-    lifecycleTarget: window,
-    userAgent: window.navigator.userAgent,
-    assignLocation: (url) => window.location.assign(url),
-    onStateChange: (state) => updateDeepLinkState(state, generation, fingerprint),
-  })
-  alipayLauncher.launch()
+  launchAlipayDeepLink(generation, fingerprint)
 }
 
 watch(
@@ -701,6 +1028,9 @@ watch(
     props.currency,
     props.outTradeNo,
     props.mobileAlipayDeepLink,
+    props.wechatJsapi,
+    props.initialCancellationPending,
+    props.initialConfirmationPending,
   ],
   () => {
     if (mounted && !disposed) startSession()

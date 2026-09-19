@@ -3,6 +3,7 @@ import type { CreateOrderResult, MethodLimit } from '@/types/payment'
 import {
   buildCreateOrderPayload,
   clearResetCardCheckoutAttempt,
+  discardResetCardCheckoutAttemptForSelectionChange,
   clearPaymentRecoverySnapshot,
   createResetCardCheckoutFingerprint,
   decidePaymentLaunch,
@@ -354,6 +355,39 @@ describe('decidePaymentLaunch', () => {
     expect(decision.paymentState.orderId).toBe(902)
     expect(decision.paymentState.qrCode).toBe('')
   })
+
+  it('rejects a pending response that has no QR, hosted URL, or JSAPI payload', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      status: 'PENDING',
+      payment_type: 'alipay',
+      out_trade_no: 'sub2_missing-launch-material',
+      qr_code: '',
+      pay_url: '',
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: false,
+    })
+
+    expect(decision.kind).toBe('unhandled')
+  })
+
+  it('keeps an already-expired pending response in status checking instead of opening its stale QR', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      status: 'PENDING',
+      payment_type: 'alipay',
+      out_trade_no: 'sub2_expired-before-launch',
+      qr_code: 'https://qr.example.test/stale',
+      expires_at: '2026-09-19T00:00:00.000Z',
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: false,
+      now: Date.parse('2026-09-19T00:01:00.000Z'),
+    })
+
+    expect(decision.kind).toBe('status_waiting')
+  })
 })
 
 describe('buildCreateOrderPayload', () => {
@@ -410,6 +444,24 @@ describe('buildCreateOrderPayload', () => {
       plan_id: 7,
       subscription_id: 91,
       reset_card_tier_revision: 'v1:3:gpt:2:123',
+    })
+  })
+
+  it('carries reset-card quantity and purchase-time use intent only for reset-card orders', () => {
+    expect(buildCreateOrderPayload({
+      amount: 120,
+      paymentType: 'alipay',
+      orderType: 'reset_card',
+      planId: 7,
+      subscriptionId: 91,
+      resetCardQuantity: 3,
+      resetCardUseOnPurchase: true,
+      isMobile: false,
+      isWechatBrowser: false,
+    })).toMatchObject({
+      amount: 120,
+      reset_card_quantity: 3,
+      reset_card_use_on_purchase: true,
     })
   })
 
@@ -713,8 +765,31 @@ describe('reset-card checkout attempts', () => {
       .not.toBe(first.fingerprint)
     expect(createResetCardCheckoutFingerprint({ ...attemptInput, tierRevision: 'v1:3:gpt:2:124' }))
       .not.toBe(first.fingerprint)
+    expect(createResetCardCheckoutFingerprint({ ...attemptInput, quantity: 2 }))
+      .not.toBe(first.fingerprint)
+    expect(createResetCardCheckoutFingerprint({ ...attemptInput, useOnPurchase: true }))
+      .not.toBe(first.fingerprint)
     expect(createResetCardCheckoutFingerprint({ ...attemptInput, couponCode: 'SAVE2026', couponRevision: 'revision-1' }))
       .not.toBe(first.fingerprint)
+  })
+
+  it('clears an unbound retry when choices change but never reuses a pending order key', () => {
+    const storage = memoryStorage()
+    let generated = 0
+    const createKey = () => `reset-card-payment-${++generated}`
+    const first = getOrCreateResetCardCheckoutAttempt(storage, attemptInput, createKey)
+
+    discardResetCardCheckoutAttemptForSelectionChange(storage)
+    expect(storage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toBeNull()
+
+    const pending = getOrCreateResetCardCheckoutAttempt(storage, attemptInput, createKey)
+    recordResetCardCheckoutOrder(storage, pending, 88)
+    discardResetCardCheckoutAttemptForSelectionChange(storage)
+    expect(storage.getItem(RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY)).toContain(pending.idempotencyKey)
+
+    const changed = getOrCreateResetCardCheckoutAttempt(storage, { ...attemptInput, quantity: 2 }, createKey)
+    expect(changed.idempotencyKey).not.toBe(first.idempotencyKey)
+    expect(changed.idempotencyKey).not.toBe(pending.idempotencyKey)
   })
 
   it('matches an OAuth resume only to the browser attempt named by its signed hash payload', async () => {

@@ -2,6 +2,10 @@
 
 ## Payment catalog and reset-card purchases
 
+- For authenticated checkout recovery, cancellation-pending presentation,
+  historical missing-binding recovery and reset-card quantity/auto-use, read
+  `docs/operations/PAYMENT_RECOVERY_RESET_CARDS_20260919.md`.
+
 - For payment discount coupons (separate from registration gifts), read
   `docs/PAYMENT_DISCOUNT_COUPONS_20260919.md`. Preserve order-bound reservations,
   discounted refund/affiliate principal, paid manual-review fences and audit history.

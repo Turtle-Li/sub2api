@@ -57,6 +57,9 @@ export interface PaymentRecoverySnapshot {
   paymentMode: string
   resumeToken: string
   alipayMobilePrecreateDeepLink?: boolean
+  /** Reset-card choices retained for OAuth/session recovery only. */
+  resetCardQuantity?: number
+  resetCardUseOnPurchase?: boolean
   /** Display-only server quote retained while a provider flow is in progress. */
   paymentDiscount?: PaymentDiscountSnapshot
   createdAt: number
@@ -84,6 +87,8 @@ export interface ResetCardCheckoutAttemptInput {
   expiresAt: string
   paymentType: string
   tierRevision?: string
+  quantity?: number
+  useOnPurchase?: boolean
   couponCode?: string
   couponRevision?: string
 }
@@ -108,6 +113,8 @@ export interface PaymentLaunchContext {
   stripeRouteUrl?: string
   airwallexRouteUrl?: string
   paymentDiscount?: PaymentDiscountSnapshot
+  resetCardQuantity?: number
+  resetCardUseOnPurchase?: boolean
 }
 
 export interface PaymentLaunchDecision {
@@ -126,6 +133,8 @@ export interface BuildCreateOrderPayloadInput {
   planId?: number
   subscriptionId?: number
   resetCardTierRevision?: string
+  resetCardQuantity?: number
+  resetCardUseOnPurchase?: boolean
   origin?: string
   isMobile: boolean
   isWechatBrowser: boolean
@@ -202,6 +211,15 @@ export function buildCreateOrderPayload(input: BuildCreateOrderPayloadInput): Cr
   if (tierRevision) {
     payload.reset_card_tier_revision = tierRevision
   }
+  if (input.orderType === 'reset_card') {
+    const quantity = Number(input.resetCardQuantity)
+    if (Number.isSafeInteger(quantity) && quantity >= 1 && quantity <= 99) {
+      payload.reset_card_quantity = quantity
+    }
+    if (input.resetCardUseOnPurchase === true) {
+      payload.reset_card_use_on_purchase = true
+    }
+  }
   if (normalizedOrigin) {
     payload.return_url = `${normalizedOrigin}/payment/result`
   }
@@ -232,8 +250,28 @@ export function decidePaymentLaunch(
     paymentMode: (result.payment_mode || '').trim(),
     resumeToken: result.resume_token || '',
     alipayMobilePrecreateDeepLink: result.alipay_mobile_precreate_deep_link === true,
+    ...(context.orderType === 'reset_card' && Number.isSafeInteger(context.resetCardQuantity) && context.resetCardQuantity! >= 1 && context.resetCardQuantity! <= 99
+      ? { resetCardQuantity: context.resetCardQuantity }
+      : {}),
+    ...(context.orderType === 'reset_card' && context.resetCardUseOnPurchase === true
+      ? { resetCardUseOnPurchase: true }
+      : {}),
     paymentDiscount: result.payment_discount ?? context.paymentDiscount,
   }, context.now)
+
+  const normalizedStatus = String(result.status || '').trim().toUpperCase()
+  if (normalizedStatus === 'PENDING') {
+    const deadline = Date.parse(baseState.expiresAt)
+    // A pending order has no safe browser-side launch without a trustworthy
+    // deadline. A malformed response must return to the normal error path,
+    // while a past deadline stays in the status shell for server verification.
+    if (!baseState.expiresAt || !Number.isFinite(deadline)) {
+      return { kind: 'unhandled', paymentState: baseState, recovery: baseState }
+    }
+    if (deadline <= (context.now ?? Date.now())) {
+      return { kind: 'status_waiting', paymentState: baseState, recovery: baseState }
+    }
+  }
 
   if (visibleMethod === 'airwallex' && baseState.clientSecret && baseState.intentId) {
     if (!context.airwallexRouteUrl) {
@@ -301,7 +339,7 @@ export function decidePaymentLaunch(
   // Keep that authenticated order in the status shell so the client asks the
   // server for the authoritative outcome instead of treating it as a launch
   // error or creating another provider transaction.
-  if (String(result.status || '').trim() && Number.isSafeInteger(result.order_id) && result.order_id > 0) {
+  if (normalizedStatus && normalizedStatus !== 'PENDING' && Number.isSafeInteger(result.order_id) && result.order_id > 0) {
     return { kind: 'status_waiting', paymentState: baseState, recovery: baseState }
   }
 
@@ -371,6 +409,8 @@ function normalizeSnapshot(parsed: Partial<PaymentRecoverySnapshot>, now: number
     || !Number.isFinite(parsed.payAmount)
     || (parsed.paymentMode != null && typeof parsed.paymentMode !== 'string')
     || (parsed.resumeToken != null && typeof parsed.resumeToken !== 'string')
+    || (parsed.resetCardQuantity != null && (!Number.isSafeInteger(parsed.resetCardQuantity) || parsed.resetCardQuantity < 1 || parsed.resetCardQuantity > 99))
+    || (parsed.resetCardUseOnPurchase != null && typeof parsed.resetCardUseOnPurchase !== 'boolean')
     || typeof parsed.createdAt !== 'number'
     || !Number.isFinite(parsed.createdAt)
   ) {
@@ -400,6 +440,8 @@ function normalizeSnapshot(parsed: Partial<PaymentRecoverySnapshot>, now: number
     paymentMode: parsed.paymentMode || '',
     resumeToken: parsed.resumeToken || '',
     alipayMobilePrecreateDeepLink: parsed.alipayMobilePrecreateDeepLink === true,
+    ...(parsed.resetCardQuantity ? { resetCardQuantity: parsed.resetCardQuantity } : {}),
+    ...(parsed.resetCardUseOnPurchase === true ? { resetCardUseOnPurchase: true } : {}),
     paymentDiscount: normalizePaymentDiscount(parsed.paymentDiscount),
     createdAt: parsed.createdAt,
   }
@@ -522,7 +564,7 @@ function fingerprintMoney(value: number): string {
  */
 export function createResetCardCheckoutFingerprint(input: ResetCardCheckoutAttemptInput): string {
   return JSON.stringify({
-    version: 1,
+    version: 2,
     userId: input.userId,
     subscriptionId: input.subscriptionId,
     groupId: input.groupId,
@@ -532,6 +574,8 @@ export function createResetCardCheckoutFingerprint(input: ResetCardCheckoutAttem
     expiresAt: String(input.expiresAt || ''),
     paymentType: String(input.paymentType || '').trim(),
     tierRevision: String(input.tierRevision || '').trim(),
+    quantity: Number.isSafeInteger(input.quantity) && input.quantity! >= 1 && input.quantity! <= 99 ? input.quantity : 1,
+    useOnPurchase: input.useOnPurchase === true,
     couponCode: String(input.couponCode || '').trim(),
     couponRevision: String(input.couponRevision || '').trim(),
   })
@@ -658,4 +702,13 @@ export function clearResetCardCheckoutAttempt(
   const current = readResetCardCheckoutAttempt(storage.getItem(key))
   if (current?.orderId !== match.orderId) return
   storage.removeItem(key)
+}
+
+/** Discard only an unbound response-loss retry when checkout choices change. */
+export function discardResetCardCheckoutAttemptForSelectionChange(
+  storage: AttemptStorage,
+  key = RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY,
+): void {
+  const current = readResetCardCheckoutAttempt(storage.getItem(key))
+  if (!current?.orderId) storage.removeItem(key)
 }

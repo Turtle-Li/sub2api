@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -311,13 +312,15 @@ func TestWeChatPaymentResumeTokenRoundTripResetCardContext(t *testing.T) {
 	svc := NewPaymentResumeService([]byte("0123456789abcdef0123456789abcdef"))
 	keyHash := HashIdempotencyKey("reset-card-wechat-oauth")
 	token, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
-		OpenID:             "openid-reset-card",
-		PaymentType:        payment.TypeWxpay,
-		Amount:             "40.00",
-		OrderType:          payment.OrderTypeResetCard,
-		PlanID:             7,
-		SubscriptionID:     42,
-		IdempotencyKeyHash: keyHash,
+		OpenID:                 "openid-reset-card",
+		PaymentType:            payment.TypeWxpay,
+		Amount:                 "40.00",
+		OrderType:              payment.OrderTypeResetCard,
+		PlanID:                 7,
+		SubscriptionID:         42,
+		ResetCardQuantity:      3,
+		ResetCardUseOnPurchase: true,
+		IdempotencyKeyHash:     keyHash,
 	})
 	if err != nil {
 		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
@@ -327,7 +330,7 @@ func TestWeChatPaymentResumeTokenRoundTripResetCardContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWeChatPaymentResumeToken returned error: %v", err)
 	}
-	if claims.OrderType != payment.OrderTypeResetCard || claims.PlanID != 7 || claims.SubscriptionID != 42 || claims.IdempotencyKeyHash != keyHash {
+	if claims.OrderType != payment.OrderTypeResetCard || claims.PlanID != 7 || claims.SubscriptionID != 42 || claims.IdempotencyKeyHash != keyHash || claims.ResetCardQuantity != 3 || !claims.ResetCardUseOnPurchase {
 		t.Fatalf("reset card claims mismatch: %+v", claims)
 	}
 
@@ -338,6 +341,67 @@ func TestWeChatPaymentResumeTokenRoundTripResetCardContext(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("reset card resume token should require an idempotency hash")
+	}
+}
+
+func TestWeChatPaymentResumeTokenRejectsResetCardOptionForgery(t *testing.T) {
+	t.Parallel()
+
+	svc := NewPaymentResumeService([]byte("0123456789abcdef0123456789abcdef"))
+	keyHash := HashIdempotencyKey("reset-card-wechat-tamper")
+	token, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:                 "openid-reset-card",
+		PaymentType:            payment.TypeWxpay,
+		Amount:                 "120.00",
+		OrderType:              payment.OrderTypeResetCard,
+		PlanID:                 7,
+		SubscriptionID:         42,
+		ResetCardQuantity:      3,
+		ResetCardUseOnPurchase: true,
+		IdempotencyKeyHash:     keyHash,
+	})
+	if err != nil {
+		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
+	}
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		t.Fatalf("unexpected token format: %q", token)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatalf("decode token payload: %v", err)
+	}
+	var forged map[string]any
+	if err := json.Unmarshal(payload, &forged); err != nil {
+		t.Fatalf("unmarshal token payload: %v", err)
+	}
+	forged["rcq"] = 99
+	forgedPayload, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatalf("marshal forged payload: %v", err)
+	}
+	forgedToken := base64.RawURLEncoding.EncodeToString(forgedPayload) + "." + parts[1]
+	if _, err := svc.ParseWeChatPaymentResumeToken(forgedToken); err == nil {
+		t.Fatal("forged reset card quantity should invalidate the signed token")
+	}
+
+	if _, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:             "openid-reset-card",
+		PaymentType:        payment.TypeWxpay,
+		OrderType:          payment.OrderTypeResetCard,
+		ResetCardQuantity:  resetCardMaximumQuantity + 1,
+		IdempotencyKeyHash: keyHash,
+	}); err == nil {
+		t.Fatal("out-of-range reset card quantity should not be signed")
+	}
+	if _, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:            "openid-balance",
+		PaymentType:       payment.TypeWxpay,
+		OrderType:         payment.OrderTypeBalance,
+		ResetCardQuantity: 2,
+	}); err == nil {
+		t.Fatal("non-reset card options should not be signed")
 	}
 }
 

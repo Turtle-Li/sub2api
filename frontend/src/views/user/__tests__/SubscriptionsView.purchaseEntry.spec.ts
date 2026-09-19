@@ -40,6 +40,7 @@ describe('subscription renewal entry', () => {
     const resetCard = wrapper.findAll('button').find((button) => button.text() === 'payment.resetShop.quickEntry')
     expect(Boolean(renew)).toBe(visible)
     expect(Boolean(resetCard)).toBe(visible)
+    expect(wrapper.text()).toContain('userSubscriptions.upgradeContactAdmin')
     if (renew) {
       await renew.trigger('click')
       expect(push).toHaveBeenCalledWith({ path: '/purchase', query: { tab: 'subscription', group: '4' } })

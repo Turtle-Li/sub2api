@@ -90,16 +90,6 @@
 
             <!-- Subscribe -->
             <template v-else-if="activeTab === 'subscription'">
-              <div v-if="hasResetCardShortcut" class="mb-3 flex justify-end">
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-700 transition-colors hover:border-primary-300 hover:bg-primary-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-primary-800 dark:bg-primary-950/30 dark:text-primary-200 dark:hover:border-primary-700 dark:hover:bg-primary-900/40"
-                  @click="focusResetCardShop"
-                >
-                  <Icon name="refresh" size="xs" />
-                  {{ t('payment.resetShop.quickEntry') }}
-                </button>
-              </div>
               <div v-if="checkout.plans.length === 0" class="card py-16 text-center">
                 <Icon name="gift" size="xl" class="mx-auto mb-3 text-gray-300 dark:text-dark-600" />
                 <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noPlans') }}</p>
@@ -124,7 +114,12 @@
                 :plans="checkout.plans"
                 :disabled="submitting || paymentPhase === 'paying'"
                 :target-subscription-id="resetCardTargetSubscriptionId"
-                @checkout="startResetCardCheckout"
+                :selected-subscription-id="selectedResetCard?.subscription.id ?? null"
+                :selected-quote="selectedResetCard?.quote ?? null"
+                :quantity="resetCardQuantity"
+                :use-on-purchase="resetCardUseOnPurchase"
+                @select="selectResetCard"
+                @update-options="updateResetCardOptions"
               />
 
               <div v-if="activeSubscriptions.length > 0" class="mt-8">
@@ -154,6 +149,7 @@
             </section>
 
             <PaymentDiscountCodeInput
+              v-if="!isResetCardCheckout"
               class="mt-4 lg:hidden"
               input-id="payment-discount-code-mobile"
               :model-value="couponCode"
@@ -194,7 +190,7 @@
             :button-class="paymentButtonClass"
             :disabled="!railCanSubmit"
             :submitting="submitting"
-            :format-pay="formatSelectedPaymentAmount"
+            :format-pay="formatRailPaymentAmount"
             :show-breakdown="activeTab === 'recharge' || feeRate > 0"
             methods-collapsed-on-mobile
             @select-method="selectedMethod = $event"
@@ -202,6 +198,7 @@
           >
             <template #coupon>
               <PaymentDiscountCodeInput
+                v-if="!isResetCardCheckout"
                 class="hidden lg:block"
                 input-id="payment-discount-code-rail"
                 :model-value="couponCode"
@@ -244,6 +241,9 @@
         :out-trade-no="paymentState.outTradeNo"
         :mobile-alipay-deep-link="paymentState.alipayMobilePrecreateDeepLink"
         :payment-discount="paymentState.paymentDiscount"
+        :wechat-jsapi="recoveredWechatJsapi"
+        :initial-cancellation-pending="recoveryPendingState === 'cancellation'"
+        :initial-confirmation-pending="recoveryPendingState === 'confirmation'"
         @done="onPaymentDone"
         @success="onPaymentSuccess"
         @settled="onPaymentSettled"
@@ -292,7 +292,7 @@ import { useSubscriptionStore } from '@/stores/subscriptions'
 import { useAppStore } from '@/stores'
 import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
 import { paymentAPI } from '@/api/payment'
-import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
 import type {
   CheckoutInfoResponse,
@@ -303,6 +303,7 @@ import type {
   PaymentDiscountSnapshot,
   RechargeOption,
   SubscriptionPlan,
+  WechatJSAPIPayload,
 } from '@/types/payment'
 import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -315,6 +316,7 @@ import {
   clearResetCardCheckoutAttempt,
   clearPaymentRecoverySnapshot,
   decidePaymentLaunch,
+  discardResetCardCheckoutAttemptForSelectionChange,
   getOrCreateResetCardCheckoutAttempt,
   getVisibleMethods,
   matchResetCardCheckoutAttemptForResume,
@@ -340,7 +342,7 @@ import { creditedBalanceAmount, subscriptionGatewayAmount } from '@/components/p
 import { planValiditySuffix as validitySuffixOf } from '@/components/payment/validity'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
 import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
-import { parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
+import { hasWechatResumeQuery, parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
 import { createIdempotencyKey } from '@/utils/idempotency'
 
 const i18n = useI18n()
@@ -366,25 +368,6 @@ function getDaysRemaining(expiresAt: string): number {
   const diff = new Date(expiresAt).getTime() - Date.now()
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
 }
-
-function isActiveOpenAISubscription(subscription: UserSubscription): boolean {
-  if (subscription.status !== 'active' || subscription.group?.platform !== 'openai') return false
-  if (!subscription.expires_at) return true
-  const expiresAt = Date.parse(subscription.expires_at)
-  return Number.isFinite(expiresAt) && expiresAt > Date.now()
-}
-
-function hasResetCardOffer(subscription: UserSubscription): boolean {
-  if (!isActiveOpenAISubscription(subscription)) return false
-  const monthlyPlans = checkout.value.plans.filter(plan => plan.group_id === subscription.group_id && plan.group_platform === 'openai'
-    && plan.currency?.toUpperCase() === 'CNY' && ((['month', 'months'].includes(plan.validity_unit || '') && plan.validity_days === 1)
-      || (['day', 'days', ''].includes(plan.validity_unit || '') && plan.validity_days === 30)))
-  if (monthlyPlans.length !== 1 || monthlyPlans[0].reset_card_eligibility?.visible === false) return false
-  const price = monthlyPlans[0].entitlements?.reset_card_purchase_price ?? Math.round(monthlyPlans[0].price / 3 * 100) / 100
-  return Number.isFinite(price) && price > 0
-}
-
-const hasResetCardShortcut = computed(() => activeSubscriptions.value.some(hasResetCardOffer))
 
 function isResetCardPurchaseQuery(): boolean {
   return route.query.purchase === 'reset_card'
@@ -414,6 +397,14 @@ const activeTab = ref<'recharge' | 'subscription'>('recharge')
 const amount = ref<number | null>(null)
 const selectedMethod = ref('')
 const selectedPlan = ref<SubscriptionPlan | null>(null)
+interface ResetCardSelection {
+  subscription: UserSubscription
+  quote: ResetCardQuote
+}
+const selectedResetCard = ref<ResetCardSelection | null>(null)
+const resetCardQuantity = ref(1)
+const resetCardUseOnPurchase = ref(false)
+const isResetCardCheckout = computed(() => selectedResetCard.value !== null)
 type SubscriptionPeriod = 'month' | 'quarter' | 'year' | 'custom'
 const selectedSubscriptionPeriod = ref<SubscriptionPeriod | ''>('')
 const previewImage = ref('')
@@ -454,6 +445,8 @@ interface CreateOrderOptions {
   subscriptionId?: number
   /** Opaque reset-card quote binding; never derive a tier from client state. */
   resetCardTierRevision?: string
+  resetCardQuantity?: number
+  resetCardUseOnPurchase?: boolean
   /** Reserve a popup synchronously inside an explicit desktop checkout click. */
   preopenHostedPopup?: boolean
   /** Reuse this key for one local reset-card checkout attempt and its QR fallback. */
@@ -533,6 +526,97 @@ async function invokeWechatJsapiPayment(payload: Record<string, unknown>): Promi
 }
 
 const paymentState = ref<PaymentRecoverySnapshot>(emptyPaymentState())
+type RecoveryPendingState = 'cancellation' | 'confirmation' | null
+const recoveredWechatJsapi = ref<WechatJSAPIPayload | undefined>()
+const recoveryPendingState = ref<RecoveryPendingState>(null)
+
+function setRecoveredPaymentState(
+  snapshot: PaymentRecoverySnapshot,
+  options: { wechatJsapi?: WechatJSAPIPayload; pendingState?: RecoveryPendingState } = {},
+) {
+  paymentState.value = snapshot
+  recoveredWechatJsapi.value = options.wechatJsapi
+  recoveryPendingState.value = options.pendingState ?? null
+  paymentPhase.value = 'paying'
+  paymentModalVisible.value = true
+  const restoredMethod = normalizeVisibleMethod(snapshot.paymentType)
+    || (visibleMethods.value[snapshot.paymentType] ? snapshot.paymentType : '')
+  if (restoredMethod) selectedMethod.value = restoredMethod
+}
+
+function snapshotWithoutLaunchMaterial(snapshot: PaymentRecoverySnapshot): PaymentRecoverySnapshot {
+  return {
+    ...snapshot,
+    qrCode: '',
+    payUrl: '',
+    clientSecret: '',
+    intentId: '',
+    paymentMode: '',
+    alipayMobilePrecreateDeepLink: false,
+    createdAt: Date.now(),
+  }
+}
+
+async function resumeStoredPayment(snapshot: PaymentRecoverySnapshot): Promise<void> {
+  const orderType: OrderType = snapshot.orderType || 'balance'
+  try {
+    const response = await paymentAPI.resumeOrder(snapshot.orderId)
+    const result = response.data
+    const visibleMethod = normalizeVisibleMethod(result.payment_type || snapshot.paymentType)
+      || result.payment_type
+      || snapshot.paymentType
+    const decision = decidePaymentLaunch(result, {
+      visibleMethod,
+      orderType,
+      isMobile: isMobileDevice(),
+      isWechatBrowser: /MicroMessenger/i.test(window.navigator.userAgent),
+      forceQRCode: !!(checkout.value.alipay_force_qrcode && visibleMethod === 'alipay'),
+      mobilePrecreateDeepLink: checkout.value.alipay_mobile_precreate_deep_link === true,
+      paymentDiscount: result.payment_discount ?? snapshot.paymentDiscount,
+      resetCardQuantity: snapshot.resetCardQuantity,
+      resetCardUseOnPurchase: snapshot.resetCardUseOnPurchase,
+    })
+
+    if (decision.kind === 'unhandled') {
+      removeRecoverySnapshot(snapshot)
+      return
+    }
+    if (decision.kind === 'wechat_oauth' && decision.oauth?.authorize_url) {
+      persistRecoverySnapshot(decision.recovery)
+      window.location.href = buildWechatOAuthAuthorizeUrl(decision.oauth.authorize_url, {
+        paymentType: visibleMethod,
+        orderType,
+        resetCardQuantity: snapshot.resetCardQuantity,
+        resetCardUseOnPurchase: snapshot.resetCardUseOnPurchase,
+        orderAmount: result.amount,
+      })
+      return
+    }
+
+    setRecoveredPaymentState(decision.paymentState, {
+      wechatJsapi: decision.kind === 'wechat_jsapi' ? decision.jsapi : undefined,
+    })
+    persistRecoverySnapshot(decision.recovery)
+  } catch (err: unknown) {
+    const code = extractApiErrorCode(err)
+    const pendingState: RecoveryPendingState = code === 'PAYMENT_CANCELLATION_PENDING'
+      ? 'cancellation'
+      : code === 'PAYMENT_CONFIRMATION_PENDING'
+        ? 'confirmation'
+        : null
+    if (!pendingState) {
+      removeRecoverySnapshot(snapshot)
+      return
+    }
+
+    // Cached provider URLs are never an authority. Keep only this local order
+    // reference while the server confirms its close/payment outcome.
+    const safeSnapshot = snapshotWithoutLaunchMaterial(snapshot)
+    removeRecoverySnapshot(snapshot)
+    setRecoveredPaymentState(safeSnapshot, { pendingState })
+    persistRecoverySnapshot(safeSnapshot)
+  }
+}
 
 function persistRecoverySnapshot(snapshot: PaymentRecoverySnapshot) {
   if (typeof window === 'undefined' || !snapshot.orderId) return
@@ -556,12 +640,14 @@ function resetPayment() {
   paymentPhase.value = 'select'
   paymentModalVisible.value = false
   paymentState.value = emptyPaymentState()
+  recoveredWechatJsapi.value = undefined
+  recoveryPendingState.value = null
   removeRecoverySnapshot(previous)
 }
 
 function buildWechatOAuthAuthorizeUrl(
   authorizeUrl: string,
-  context: { paymentType: string; orderType: OrderType; planId?: number; subscriptionId?: number; resetCardTierRevision?: string; orderAmount: number },
+  context: { paymentType: string; orderType: OrderType; planId?: number; subscriptionId?: number; resetCardTierRevision?: string; resetCardQuantity?: number; resetCardUseOnPurchase?: boolean; orderAmount: number },
 ): string {
   const normalizedUrl = authorizeUrl.trim()
   if (!normalizedUrl || typeof window === 'undefined') {
@@ -593,6 +679,17 @@ function buildWechatOAuthAuthorizeUrl(
     } else {
       redirectUrl.searchParams.delete('reset_card_tier_revision')
     }
+    const resetCardQuantity = Number(context.resetCardQuantity)
+    if (context.orderType === 'reset_card' && Number.isSafeInteger(resetCardQuantity) && resetCardQuantity >= 1 && resetCardQuantity <= 99) {
+      redirectUrl.searchParams.set('reset_card_quantity', String(resetCardQuantity))
+    } else {
+      redirectUrl.searchParams.delete('reset_card_quantity')
+    }
+    if (context.orderType === 'reset_card' && context.resetCardUseOnPurchase === true) {
+      redirectUrl.searchParams.set('reset_card_use_on_purchase', '1')
+    } else {
+      redirectUrl.searchParams.delete('reset_card_use_on_purchase')
+    }
 
     if (context.orderAmount > 0) {
       redirectUrl.searchParams.set('amount', String(context.orderAmount))
@@ -617,6 +714,7 @@ function onPaymentDone() {
   const wasResetCard = paymentState.value.orderType === 'reset_card'
   resetPayment()
   selectedPlan.value = null
+  if (wasResetCard) clearResetCardSelection()
   if (wasSubscription || wasResetCard) {
     subscriptionStore.fetchActiveSubscriptions(true).catch(() => {})
   }
@@ -680,7 +778,10 @@ watch(tabs, (available) => {
   if (available.some((tab) => tab.key === activeTab.value)) return
   const leavingSubscription = activeTab.value === 'subscription'
   activeTab.value = available[0]?.key ?? 'recharge'
-  if (leavingSubscription) selectedPlan.value = null
+  if (leavingSubscription) {
+    selectedPlan.value = null
+    clearResetCardSelection()
+  }
 })
 
 const visibleMethods = computed(() => getVisibleMethods(checkout.value.methods))
@@ -977,6 +1078,82 @@ const subMethodOptions = computed<PaymentMethodOption[]>(() => {
   })
 })
 
+function normalizeResetCardQuantity(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value), 10)
+  if (!Number.isSafeInteger(parsed)) return 1
+  return Math.min(99, Math.max(1, parsed))
+}
+
+function resetCardBaseAmountForCurrency(quote: ResetCardQuote, quantity: number, currency: string): number {
+  return roundPaymentAmount(quote.price * normalizeResetCardQuantity(quantity), currency)
+}
+
+function resetCardGatewayAmount(quote: ResetCardQuote, paymentType: string, quantity = 1): number {
+  const currency = normalizePaymentCurrency(visibleMethods.value[paymentType]?.currency)
+  const baseAmount = resetCardBaseAmountForCurrency(quote, quantity, currency)
+  if (baseAmount <= 0 || feeRate.value <= 0) return baseAmount
+  const fee = ceilPaymentAmount((baseAmount * feeRate.value) / 100, currency)
+  return roundPaymentAmount(baseAmount + fee, currency)
+}
+
+const RESET_CARD_GATEWAY_METHODS = ['alipay', 'wxpay'] as const
+
+function resetCardPaymentMethodForQuote(quote: ResetCardQuote, quantity = 1): string {
+  const eligible = RESET_CARD_GATEWAY_METHODS.filter((paymentType) => {
+    const limit = visibleMethods.value[paymentType]
+    if (!limit || limit.available === false || normalizePaymentCurrency(limit.currency) !== 'CNY') {
+      return false
+    }
+    const gatewayAmount = resetCardGatewayAmount(quote, paymentType, quantity)
+    return gatewayAmount > 0 && amountFitsMethod(gatewayAmount, paymentType)
+  })
+  const selected = normalizeVisibleMethod(selectedMethod.value)
+  return selected && eligible.includes(selected as typeof RESET_CARD_GATEWAY_METHODS[number])
+    ? selected
+    : (eligible[0] || '')
+}
+
+const resetCardMethodOptions = computed<PaymentMethodOption[]>(() => {
+  const selection = selectedResetCard.value
+  if (!selection) return []
+  return RESET_CARD_GATEWAY_METHODS.map((type) => {
+    const limit = visibleMethods.value[type]
+    const eligible = !!limit
+      && limit.available !== false
+      && normalizePaymentCurrency(limit.currency) === 'CNY'
+      && amountFitsMethod(resetCardGatewayAmount(selection.quote, type, resetCardQuantity.value), type)
+    return {
+      type,
+      display_name: limit?.display_name,
+      fee_rate: limit?.fee_rate ?? 0,
+      available: eligible,
+    }
+  }).filter(option => visibleMethods.value[option.type])
+})
+
+const resetCardBaseAmount = computed(() => {
+  const selection = selectedResetCard.value
+  return selection ? resetCardBaseAmountForCurrency(selection.quote, resetCardQuantity.value, 'CNY') : 0
+})
+const resetCardFeeAmount = computed(() => {
+  if (feeRate.value <= 0 || resetCardBaseAmount.value <= 0) return 0
+  return ceilPaymentAmount((resetCardBaseAmount.value * feeRate.value) / 100, 'CNY')
+})
+const resetCardTotalAmount = computed(() => {
+  if (feeRate.value <= 0 || resetCardBaseAmount.value <= 0) return resetCardBaseAmount.value
+  return roundPaymentAmount(resetCardBaseAmount.value + resetCardFeeAmount.value, 'CNY')
+})
+const canSubmitResetCard = computed(() => {
+  const selection = selectedResetCard.value
+  if (!selection) return false
+  const paymentType = normalizeVisibleMethod(selectedMethod.value) || selectedMethod.value
+  return RESET_CARD_GATEWAY_METHODS.includes(paymentType as typeof RESET_CARD_GATEWAY_METHODS[number])
+    && resetCardTotalAmount.value > 0
+    && amountFitsMethod(resetCardTotalAmount.value, paymentType)
+    && visibleMethods.value[paymentType]?.available !== false
+    && normalizePaymentCurrency(visibleMethods.value[paymentType]?.currency) === 'CNY'
+})
+
 const canSubmitSubscription = computed(() =>
   selectedPlan.value !== null
     && selectedPlan.value.eligibility?.can_purchase !== false
@@ -1001,6 +1178,7 @@ watch(() => [validAmount.value, selectedMethod.value] as const, ([amt, method]) 
  * ------------------------------------------------------------------------- */
 
 const isRecharge = computed(() => activeTab.value === 'recharge')
+const railCurrency = computed(() => isResetCardCheckout.value ? 'CNY' : selectedCurrency.value)
 
 const railProductName = computed(() => {
   if (isRecharge.value) {
@@ -1008,21 +1186,36 @@ const railProductName = computed(() => {
     if (!option) return ''
     return option.label || t('payment.rechargeTierName', { amount: validAmount.value })
   }
+  if (isResetCardCheckout.value) return t('payment.resetShop.title')
   return selectedPlan.value?.name || ''
 })
 
 const railProductMeta = computed(() => {
   if (isRecharge.value) return selectedRechargeOption.value?.description || ''
+  const resetCard = selectedResetCard.value
+  if (resetCard) {
+    return `${resetCard.subscription.group?.name || t('payment.groupFallback', { id: resetCard.subscription.group_id })} · ${t('payment.resetShop.quantitySummary', { quantity: resetCardQuantity.value })} · ${t('payment.resetShop.validUntil', { date: formatResetCardExpiry(resetCard.quote.expires_at) })}`
+  }
   if (!selectedPlan.value) return ''
   return `${platformLabel(selectedPlan.value.group_platform || '')} · ${planValiditySuffix.value}`
 })
 
-const railMethods = computed(() => (isRecharge.value ? methodOptions.value : subMethodOptions.value))
-const railBaseAmount = computed(() => (isRecharge.value ? validAmount.value : subPaymentAmount.value))
-const railFeeAmount = computed(() => (isRecharge.value ? feeAmount.value : subFeeAmount.value))
-const railTotalAmount = computed(() => (isRecharge.value ? totalAmount.value : subTotalAmount.value))
+const railMethods = computed(() => (isRecharge.value ? methodOptions.value : isResetCardCheckout.value ? resetCardMethodOptions.value : subMethodOptions.value))
+const railBaseAmount = computed(() => (isRecharge.value ? validAmount.value : isResetCardCheckout.value ? resetCardBaseAmount.value : subPaymentAmount.value))
+const railFeeAmount = computed(() => (isRecharge.value ? feeAmount.value : isResetCardCheckout.value ? resetCardFeeAmount.value : subFeeAmount.value))
+const railTotalAmount = computed(() => (isRecharge.value ? totalAmount.value : isResetCardCheckout.value ? resetCardTotalAmount.value : subTotalAmount.value))
 
-const railBaseCanSubmit = computed(() => (isRecharge.value ? canSubmit.value : canSubmitSubscription.value))
+const railBaseCanSubmit = computed(() => (isRecharge.value ? canSubmit.value : isResetCardCheckout.value ? canSubmitResetCard.value : canSubmitSubscription.value))
+
+function formatRailPaymentAmount(value: number | string): string {
+  return formatPaymentAmount(Number(value), railCurrency.value, localeCode.value)
+}
+
+function formatResetCardExpiry(value: string): string {
+  const expiresAt = Date.parse(value)
+  if (!Number.isFinite(expiresAt)) return value
+  return new Intl.DateTimeFormat(localeCode.value, { dateStyle: 'medium' }).format(new Date(expiresAt))
+}
 
 function normalizeCouponCode(value: string): string {
   return value.trim().toUpperCase()
@@ -1047,6 +1240,7 @@ function createCouponQuoteContext(input: Omit<CouponQuoteContext, 'key' | 'coupo
 }
 
 function selectedCouponQuoteContext(): CouponQuoteContext | null {
+  if (isResetCardCheckout.value) return null
   const coupon = normalizeCouponCode(couponCode.value)
   const orderAmount = isRecharge.value ? validAmount.value : selectedPlan.value?.price ?? 0
   if (!coupon || !railBaseCanSubmit.value || !selectedMethod.value || orderAmount <= 0) return null
@@ -1154,7 +1348,7 @@ function removeCoupon(): void {
 
 watch(couponCode, () => invalidateCouponQuote(), { flush: 'sync' })
 watch(
-  () => [activeTab.value, validAmount.value, selectedMethod.value, selectedPlan.value?.id, selectedPlan.value?.price] as const,
+  () => [activeTab.value, validAmount.value, selectedMethod.value, selectedPlan.value?.id, selectedPlan.value?.price, selectedResetCard.value?.subscription.id, resetCardQuantity.value, resetCardUseOnPurchase.value] as const,
   () => invalidateCouponQuote(),
   { flush: 'sync' },
 )
@@ -1167,6 +1361,9 @@ const railCreditLine = computed(() => {
 // The rail is where a blocked purchase has to explain itself; the alternative
 // is a disabled button with no reason attached.
 const railNotice = computed(() => {
+  if (isResetCardCheckout.value) {
+    return canSubmitResetCard.value ? '' : t('payment.resetShop.paymentUnavailable')
+  }
   const eligibility = isRecharge.value ? selectedRechargeOption.value?.eligibility : selectedPlan.value?.eligibility
   if (eligibility?.can_purchase === false) return t('payment.eligibility.minimum', { required: eligibility.required_total_recharge || 0, current: eligibility.current_total_recharge || 0 })
   if (couponError.value) return couponError.value
@@ -1182,13 +1379,18 @@ const railNotice = computed(() => {
 const railCanSubmit = computed(() => railBaseCanSubmit.value && couponReady.value && !couponQuoting.value)
 
 const railActionLabel = computed(() => {
-  if (Number(railDisplayTotalAmount.value) <= 0) return t('payment.createOrder')
-  return `${t('payment.createOrder')} ${formatSelectedPaymentAmount(railDisplayTotalAmount.value)}`
+  const label = isResetCardCheckout.value ? t('payment.resetShop.checkout') : t('payment.createOrder')
+  if (Number(railDisplayTotalAmount.value) <= 0) return label
+  return `${label} ${formatRailPaymentAmount(railDisplayTotalAmount.value)}`
 })
 
 function handleRailSubmit() {
   if (isRecharge.value) {
     void handleSubmitRecharge()
+    return
+  }
+  if (isResetCardCheckout.value) {
+    void submitResetCardCheckout()
     return
   }
   void confirmSubscribe()
@@ -1223,6 +1425,7 @@ const planValiditySuffix = computed(() => {
 
 function selectPlan(plan: SubscriptionPlan) {
   if (plan.eligibility?.can_purchase === false) return
+  clearResetCardSelection()
   selectedSubscriptionPeriod.value = subscriptionPeriodOf(plan)
   selectedPlan.value = plan
   errorMessage.value = ''
@@ -1237,31 +1440,6 @@ function selectPlanFromModal(plan: SubscriptionPlan) {
 function closeRenewalModal() {
   showRenewalModal.value = false
   renewGroupId.value = null
-}
-
-const RESET_CARD_GATEWAY_METHODS = ['alipay', 'wxpay'] as const
-
-function resetCardGatewayAmount(quote: ResetCardQuote, paymentType: string): number {
-  const currency = normalizePaymentCurrency(visibleMethods.value[paymentType]?.currency)
-  const baseAmount = roundPaymentAmount(quote.price, currency)
-  if (baseAmount <= 0 || feeRate.value <= 0) return baseAmount
-  const fee = ceilPaymentAmount((baseAmount * feeRate.value) / 100, currency)
-  return roundPaymentAmount(baseAmount + fee, currency)
-}
-
-function resetCardPaymentMethodForQuote(quote: ResetCardQuote): string {
-  const eligible = RESET_CARD_GATEWAY_METHODS.filter((paymentType) => {
-    const limit = visibleMethods.value[paymentType]
-    if (!limit || limit.available === false || normalizePaymentCurrency(limit.currency) !== 'CNY') {
-      return false
-    }
-    const gatewayAmount = resetCardGatewayAmount(quote, paymentType)
-    return gatewayAmount > 0 && amountFitsMethod(gatewayAmount, paymentType)
-  })
-  const selected = normalizeVisibleMethod(selectedMethod.value)
-  return selected && eligible.includes(selected as typeof RESET_CARD_GATEWAY_METHODS[number])
-    ? selected
-    : (eligible[0] || '')
 }
 
 function shouldPreopenHostedPopup(requestType: string, options: CreateOrderOptions): boolean {
@@ -1302,36 +1480,89 @@ async function confirmSubscribe() {
   })
 }
 
-async function startResetCardCheckout(payload: { subscription: UserSubscription; quote: ResetCardQuote }) {
-  if (submitting.value) return
+function discardUnboundResetCardAttempt(): void {
+  if (typeof window === 'undefined') return
+  discardResetCardCheckoutAttemptForSelectionChange(window.localStorage)
+}
+
+function clearResetCardSelection(): void {
+  const hadSelection = selectedResetCard.value !== null
+  if (hadSelection) discardUnboundResetCardAttempt()
+  selectedResetCard.value = null
+  resetCardQuantity.value = 1
+  resetCardUseOnPurchase.value = false
+  if (hadSelection) removeCoupon()
+}
+
+function isSameResetCardSelection(next: ResetCardSelection): boolean {
+  const current = selectedResetCard.value
+  return current?.subscription.id === next.subscription.id
+    && current.quote.plan_id === next.quote.plan_id
+    && current.quote.price === next.quote.price
+    && current.quote.expires_at === next.quote.expires_at
+    && current.quote.reset_card_tier_revision === next.quote.reset_card_tier_revision
+}
+
+function selectResetCard(next: ResetCardSelection): void {
+  if (submitting.value || paymentPhase.value === 'paying') return
+  if (!isSameResetCardSelection(next)) discardUnboundResetCardAttempt()
+  selectedResetCard.value = next
+  selectedPlan.value = null
+  resetCardQuantity.value = 1
+  resetCardUseOnPurchase.value = false
+  removeCoupon()
+  errorMessage.value = ''
+  errorHintMessage.value = ''
+  const paymentType = resetCardPaymentMethodForQuote(next.quote, resetCardQuantity.value)
+  if (paymentType) selectedMethod.value = paymentType
+}
+
+function updateResetCardOptions(next: { quantity: number; useOnPurchase: boolean }): void {
+  if (!selectedResetCard.value || submitting.value || paymentPhase.value === 'paying') return
+  const quantity = normalizeResetCardQuantity(next.quantity)
+  const useOnPurchase = next.useOnPurchase === true
+  if (quantity === resetCardQuantity.value && useOnPurchase === resetCardUseOnPurchase.value) return
+  discardUnboundResetCardAttempt()
+  resetCardQuantity.value = quantity
+  resetCardUseOnPurchase.value = useOnPurchase
+  const paymentType = resetCardPaymentMethodForQuote(selectedResetCard.value.quote, quantity)
+  if (paymentType) selectedMethod.value = paymentType
+}
+
+async function submitResetCardCheckout() {
+  const selection = selectedResetCard.value
+  if (!selection || !railCanSubmit.value || submitting.value) return
   const userId = user.value?.id
   if (!Number.isSafeInteger(userId) || !userId || typeof window === 'undefined') {
     errorMessage.value = t('payment.result.failed')
     return
   }
-  const paymentType = resetCardPaymentMethodForQuote(payload.quote)
+  const quantity = normalizeResetCardQuantity(resetCardQuantity.value)
+  const paymentType = resetCardPaymentMethodForQuote(selection.quote, quantity)
   if (!paymentType) {
     errorMessage.value = t('payment.resetShop.paymentUnavailable')
     errorHintMessage.value = ''
-    appStore.showError(errorMessage.value)
     return
   }
   selectedMethod.value = paymentType
-  invalidateCouponQuote()
   const attempt = getOrCreateResetCardCheckoutAttempt(window.localStorage, {
     userId,
-    subscriptionId: payload.subscription.id,
-    groupId: payload.quote.group_id,
-    planId: payload.quote.plan_id,
-    amount: payload.quote.price,
-    monthlyPrice: payload.quote.monthly_price,
-    expiresAt: payload.quote.expires_at,
+    subscriptionId: selection.subscription.id,
+    groupId: selection.quote.group_id,
+    planId: selection.quote.plan_id,
+    amount: resetCardBaseAmountForCurrency(selection.quote, quantity, 'CNY'),
+    monthlyPrice: selection.quote.monthly_price,
+    expiresAt: selection.quote.expires_at,
     paymentType,
-    tierRevision: payload.quote.reset_card_tier_revision,
+    tierRevision: selection.quote.reset_card_tier_revision,
+    quantity,
+    useOnPurchase: resetCardUseOnPurchase.value,
   }, () => createIdempotencyKey('reset-card-payment'))
-  await createOrder(payload.quote.price, 'reset_card', payload.quote.plan_id, {
-    subscriptionId: payload.subscription.id,
-    resetCardTierRevision: payload.quote.reset_card_tier_revision,
+  await createOrder(resetCardBaseAmountForCurrency(selection.quote, quantity, 'CNY'), 'reset_card', selection.quote.plan_id, {
+    subscriptionId: selection.subscription.id,
+    resetCardTierRevision: selection.quote.reset_card_tier_revision,
+    resetCardQuantity: quantity,
+    resetCardUseOnPurchase: resetCardUseOnPurchase.value,
     paymentType,
     idempotencyKey: attempt.idempotencyKey,
     resetCardAttempt: attempt,
@@ -1370,6 +1601,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       mobilePrecreateDeepLink: checkout.value.alipay_mobile_precreate_deep_link === true,
       subscriptionId: options.subscriptionId,
       resetCardTierRevision: options.resetCardTierRevision,
+      resetCardQuantity: options.resetCardQuantity,
+      resetCardUseOnPurchase: options.resetCardUseOnPurchase,
     })
     if (options.openid) {
       payload.openid = options.openid
@@ -1445,6 +1678,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       stripeRouteUrl,
       airwallexRouteUrl,
       paymentDiscount: result.payment_discount ?? options.paymentDiscountDisplay ?? options.coupon?.quote,
+      resetCardQuantity: options.resetCardQuantity,
+      resetCardUseOnPurchase: options.resetCardUseOnPurchase,
     })
 
     if (decision.kind === 'wechat_oauth' && decision.oauth?.authorize_url) {
@@ -1458,6 +1693,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         planId,
         subscriptionId: options.subscriptionId,
         resetCardTierRevision: options.resetCardTierRevision,
+        resetCardQuantity: options.resetCardQuantity,
+        resetCardUseOnPurchase: options.resetCardUseOnPurchase,
         orderAmount,
       })
       return
@@ -1468,6 +1705,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       return
     }
 
+    recoveredWechatJsapi.value = undefined
+    recoveryPendingState.value = null
     paymentState.value = decision.paymentState
     paymentPhase.value = 'paying'
     persistRecoverySnapshot(decision.recovery)
@@ -1506,6 +1745,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
               attempted: options.mobileQrFallbackAttempted === true,
               subscriptionId: options.subscriptionId,
               resetCardTierRevision: options.resetCardTierRevision,
+              resetCardQuantity: options.resetCardQuantity,
+              resetCardUseOnPurchase: options.resetCardUseOnPurchase,
               wechatResumeToken: options.wechatResumeToken,
               idempotencyKey: options.idempotencyKey,
               resetCardAttempt: options.resetCardAttempt,
@@ -1530,6 +1771,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
           attempted: options.mobileQrFallbackAttempted === true,
           subscriptionId: options.subscriptionId,
           resetCardTierRevision: options.resetCardTierRevision,
+          resetCardQuantity: options.resetCardQuantity,
+          resetCardUseOnPurchase: options.resetCardUseOnPurchase,
           wechatResumeToken: options.wechatResumeToken,
           idempotencyKey: options.idempotencyKey,
           resetCardAttempt: options.resetCardAttempt,
@@ -1571,6 +1814,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       attempted: options.mobileQrFallbackAttempted === true,
       subscriptionId: options.subscriptionId,
       resetCardTierRevision: options.resetCardTierRevision,
+      resetCardQuantity: options.resetCardQuantity,
+      resetCardUseOnPurchase: options.resetCardUseOnPurchase,
       wechatResumeToken: options.wechatResumeToken,
       idempotencyKey: options.idempotencyKey,
       resetCardAttempt: options.resetCardAttempt,
@@ -1606,6 +1851,8 @@ interface MobileQrFallbackContext {
   attempted: boolean
   subscriptionId?: number
   resetCardTierRevision?: string
+  resetCardQuantity?: number
+  resetCardUseOnPurchase?: boolean
   wechatResumeToken?: string
   idempotencyKey?: string
   resetCardAttempt?: ResetCardCheckoutAttempt
@@ -1660,6 +1907,8 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
       planId: context.planId,
       subscriptionId: context.subscriptionId,
       resetCardTierRevision: context.resetCardTierRevision,
+      resetCardQuantity: context.resetCardQuantity,
+      resetCardUseOnPurchase: context.resetCardUseOnPurchase,
       origin: typeof window !== 'undefined' ? window.location.origin : '',
       isMobile: false,
       isWechatBrowser: false,
@@ -1700,6 +1949,8 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
       stripePopupUrl: stripeRouteUrl,
       stripeRouteUrl,
       paymentDiscount: result.payment_discount ?? context.paymentDiscountDisplay ?? context.coupon?.quote,
+      resetCardQuantity: context.resetCardQuantity,
+      resetCardUseOnPurchase: context.resetCardUseOnPurchase,
     })
 
     if (decision.kind !== 'qr_waiting' || !decision.paymentState.qrCode) {
@@ -1708,6 +1959,8 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
 
     errorMessage.value = ''
     errorHintMessage.value = ''
+    recoveredWechatJsapi.value = undefined
+    recoveryPendingState.value = null
     paymentState.value = decision.paymentState
     paymentPhase.value = 'paying'
     paymentModalVisible.value = true
@@ -1782,6 +2035,8 @@ async function resumeWechatPaymentFromQuery() {
       isResume: true,
       subscriptionId: resume.subscriptionId,
       resetCardTierRevision: resume.resetCardTierRevision,
+      resetCardQuantity: resume.resetCardQuantity,
+      resetCardUseOnPurchase: resume.resetCardUseOnPurchase,
       // The signed token matched this local attempt by hash. Retain the raw
       // key only in request headers so an H5/JSAPI failure and its QR retry
       // replay the same server-side reset-card checkout.
@@ -1799,6 +2054,8 @@ async function resumeWechatPaymentFromQuery() {
       isResume: true,
       subscriptionId: resume.subscriptionId,
       resetCardTierRevision: resume.resetCardTierRevision,
+      resetCardQuantity: resume.resetCardQuantity,
+      resetCardUseOnPurchase: resume.resetCardUseOnPurchase,
     })
   }
 }
@@ -1832,7 +2089,11 @@ function refreshVisibleCheckout() {
 }
 
 watch(activeTab, (tab) => {
-  if (tab === 'subscription') void refreshCheckoutCatalog()
+  if (tab === 'subscription') {
+    void refreshCheckoutCatalog()
+    return
+  }
+  clearResetCardSelection()
 })
 
 onBeforeUnmount(() => {
@@ -1880,13 +2141,12 @@ onMounted(async () => {
         { resumeToken: routeResumeToken },
       )
       if (restored) {
-        paymentState.value = restored
-        paymentPhase.value = 'paying'
-        paymentModalVisible.value = true
-        const restoredMethod = normalizeVisibleMethod(restored.paymentType)
-          || (visibleMethods.value[restored.paymentType] ? restored.paymentType : '')
-        if (restoredMethod) {
-          selectedMethod.value = restoredMethod
+        if (hasWechatResumeQuery(route.query)) {
+          // The signed OAuth callback owns this recovery path. Its next
+          // create/resume request remains the authority for launch material.
+          paymentState.value = restored
+        } else {
+          await resumeStoredPayment(restored)
         }
       }
     }
