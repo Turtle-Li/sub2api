@@ -57,13 +57,14 @@ func TestPaymentRefundReconciliationStoreStatsCountEveryReservedReviewedAttempt(
 
 	oldest := time.Now().UTC().Add(-2 * time.Minute)
 	mock.ExpectQuery("(?s)WITH scoped AS.*entitlement_reserved = TRUE.*quote_revision <> ''.*refund_kind IN \\('balance', 'subscription'\\).*COUNT\\(\\*\\).*COUNT\\(\\*\\) FILTER").
-		WillReturnRows(sqlmock.NewRows([]string{"reserved", "automatic", "oldest", "attempts", "last_error"}).
-			AddRow(int64(2), int64(1), oldest, 4, "provider confirmation pending"))
+		WillReturnRows(sqlmock.NewRows([]string{"reserved", "automatic", "oldest", "attempts", "last_error", "reset_purchases"}).
+			AddRow(int64(2), int64(1), oldest, 4, "provider confirmation pending", int64(3)))
 
 	store := NewPaymentRefundReconciliationStore(db)
 	stats, err := store.Stats(context.Background())
 	require.NoError(t, err)
 	require.EqualValues(t, 2, stats.EntitlementReservedReviewedPending)
+	require.EqualValues(t, 3, stats.UnsettledResetCardPurchaseCount)
 	require.EqualValues(t, 1, stats.AutomaticallyReconciledPending)
 	require.NotNil(t, stats.OldestCreatedAt)
 	require.Equal(t, oldest, *stats.OldestCreatedAt)

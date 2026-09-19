@@ -43,3 +43,13 @@
 - 前端lint、生产构建（含vue-tsc/i18n）通过。全量334文件中333文件/2598项通过，新增上游退款余额测试旧契约的4项已适配为服务端review边界，相关退款套件48项全部通过；其他测试无失败。
 - 合并的前端冲突区域独立定向检查37项通过；通用弹窗及本地退款审核契约14项通过。退款测试适配后typecheck再次通过。
 - 当前线上仍为95075af9；新预发布备份 `/opt/sub2api-db-backups/sub2api-db-backup-20260919-192813.tar.gz` 已完成，隔离还原验收执行中。
+
+### 新快照的降级边界
+
+旧版本会拒绝多张重置卡快照，但会忽略单张的`use_on_purchase`。因此本版扩展现有monitor-token-only `/internal/refund-rollback-readiness`，新增可选`unsettled_reset_card_purchase_count`；只要新格式reset-card订单未终结，返回503且`ready=false`，沿用canonical receiver的drain/readiness/保留候选流程，禁止旧版本接管。数据库读取失败同样拒绝回滚；不修改金融状态来清空门槛。
+
+统计保守覆盖所有非v1快照（包括v2单张未勾选使用），而非猜测将来的字段兼容。COMPLETED、REFUNDED、PARTIALLY_REFUNDED为终态；CANCELLED/EXPIRED仅当paid_at为空时允许排除。PENDING、PAID、RECHARGING、FAILED及未知状态均阻止降级。常规发布和购买不受影响；计划降级须在同一维护锁内drain后，先由兼容版本完成履约/可信关单再检查。若有不可恢复异常，保留兼容版本前向修复，不跳过门槛、不删除审计或订单。
+
+本门槛不改变旧字段与零值JSON；canonical脚本已拒绝任何非2xx/ready=false响应，无须修改服务器脚本。原实现的新增单测已实际失败（新订单存在仍Ready=true），修复后服务端/readiness路由和真实PostgreSQL状态矩阵必须通过才重建镜像。
+
+门槛验证：service/repository/routes单测、embed路由和go vet通过；真实PostgreSQL与全部ResetCardExternalOrderPostgres合跑通过（7.045s）。状态矩阵包含v1/缺版本不拦、v2各未终态与已付款取消/过期拦、未来v3和未知状态拦，以及保守的v2单张不自动使用也拦。原候选956512264的CI35440405229、安全35440404805、镜像build-only35440405117均通过但不部署，待本门槛新提交的同版CI/安全/镜像完成。

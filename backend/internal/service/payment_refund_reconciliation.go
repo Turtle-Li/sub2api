@@ -43,6 +43,8 @@ type PaymentRefundReconciliationCandidate struct {
 // is still held, including a terminal/manual anomaly: treating only ordinary
 // PENDING rows as safe would allow rollback to strand a local entitlement.
 type PaymentRefundReconciliationStats struct {
+	// Old runtimes cannot fulfill quantity/auto-use promises in reset-card v2 orders.
+	UnsettledResetCardPurchaseCount    int64
 	EntitlementReservedReviewedPending int64
 	AutomaticallyReconciledPending     int64
 	OldestCreatedAt                    *time.Time
@@ -54,6 +56,7 @@ type PaymentRefundReconciliationStats struct {
 // through the monitor-token-only internal endpoint. A negative count means the
 // underlying accounting state could not be read and is therefore unsafe.
 type PaymentRefundRollbackReadiness struct {
+	UnsettledResetCardPurchaseCount         int64 `json:"unsettled_reset_card_purchase_count,omitempty"`
 	Ready                                   bool  `json:"ready"`
 	EntitlementReservedReviewedPendingCount int64 `json:"entitlement_reserved_reviewed_pending_count"`
 }
@@ -378,7 +381,8 @@ func (s *PaymentRefundReconciliationService) Health(ctx context.Context) Payment
 
 // RefundRollbackReadiness returns a fail-closed release gate. All reviewed
 // reservations count, including a terminal provider result whose local
-// entitlement release failed and therefore needs manual intervention.
+// entitlement release failed and therefore needs manual intervention. New reset
+// purchase promises must also settle before an older runtime can take over.
 func (s *PaymentRefundReconciliationService) RefundRollbackReadiness(ctx context.Context) (PaymentRefundRollbackReadiness, error) {
 	if s == nil || s.store == nil {
 		return PaymentRefundRollbackReadiness{EntitlementReservedReviewedPendingCount: -1}, errors.New("payment refund reconciliation store unavailable")
@@ -388,7 +392,8 @@ func (s *PaymentRefundReconciliationService) RefundRollbackReadiness(ctx context
 		return PaymentRefundRollbackReadiness{EntitlementReservedReviewedPendingCount: -1}, err
 	}
 	return PaymentRefundRollbackReadiness{
-		Ready:                                   stats.EntitlementReservedReviewedPending == 0,
+		Ready:                                   stats.EntitlementReservedReviewedPending == 0 && stats.UnsettledResetCardPurchaseCount == 0,
+		UnsettledResetCardPurchaseCount:         stats.UnsettledResetCardPurchaseCount,
 		EntitlementReservedReviewedPendingCount: stats.EntitlementReservedReviewedPending,
 	}, nil
 }

@@ -1050,3 +1050,13 @@ Owner requested robust automatic retry after payment fulfillment failures. Relea
 2026-09-09 18:02 UTC preflight: sub2api-candidate reports traffic=accepting active_container=sub2api-blue background=active; sub2api-new reports traffic=accepting active_container=sub2api-blue background=standby. Installed --check confirms fork/main7f8b274b baseline. Preserve those roles and memory agents. Build the reviewed fork/main commit using workflow_dispatch build_only=true, verify artifact metadata/digest, then use each installed lock-owning receiver with the same archive; Azure activate, old origin preserve-standby. Do not use default workflow deployment that could activate the old origin. Existing Caddy/health/real-request/drain gates remain in force. No public purchase enablement, DNS changes, new real charges/refunds or state injection. Rollback uses retained prior7f8b274b image through canonical helper, preserving current background ownership and all financial data.
 
 Release completed: reviewed runtime c82e5df699575a7b4f2faa76253b7d96208ab2a7, GitHub build-only run34390838357, identical image19b7c12a530b2f4475048e7d115bc5904f79d2bd4c49d566fcb05f0acec789ba on both green generations. Azure remains background active, old origin standby; health and canonical rollback gates passed, agents preserved, payment_enabled=false, two existing paid orders remain REFUNDED with one grant/refund audit each. Full final evidence and rollback boundary: `docs/operations/PAYMENT_FULFILLMENT_RELIABILITY_20260910.md`.
+
+### Reset-card purchase compatibility (2026-09-19)
+
+The existing internal rollback-readiness endpoint also fences unfinished reset-card
+orders with a non-v1 product snapshot. `unsettled_reset_card_purchase_count` is
+omitted at zero; a nonzero count produces `ready: false` and HTTP503. Old runtimes
+cannot honor quantity/auto-use promises. Keep the maintenance lock, drain and
+readiness sequence; let a compatible runtime fulfill or authoritatively close
+these orders, or forward-fix it. Never force an old-generation takeover or rewrite
+orders to bypass the count. Details: `docs/operations/PAYMENT_RECOVERY_RESET_CARDS_20260919.md`.

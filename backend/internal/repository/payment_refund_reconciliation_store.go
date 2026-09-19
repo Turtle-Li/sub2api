@@ -193,6 +193,15 @@ func (r *paymentRefundReconciliationStore) Stats(ctx context.Context) (service.P
 				WHERE reconciliation_last_error IS NOT NULL
 				ORDER BY reconciliation_updated_at DESC, product_refund_no DESC
 				LIMIT 1
+			),
+			(
+				SELECT COUNT(*) FROM payment_orders
+				WHERE order_type = 'reset_card'
+				  AND COALESCE(product_snapshot->>'schema_version', '1') <> '1'
+				  AND NOT (
+					status IN ('COMPLETED', 'REFUNDED', 'PARTIALLY_REFUNDED')
+					OR (status IN ('CANCELLED', 'EXPIRED') AND paid_at IS NULL)
+				  )
 			)
 		FROM scoped
 	`).Scan(
@@ -201,6 +210,7 @@ func (r *paymentRefundReconciliationStore) Stats(ctx context.Context) (service.P
 		&oldest,
 		&stats.MaxAttempts,
 		&lastError,
+		&stats.UnsettledResetCardPurchaseCount,
 	)
 	if err != nil {
 		return stats, err

@@ -216,6 +216,13 @@ func TestPaymentRefundRollbackReadinessFailsClosed(t *testing.T) {
 	require.True(t, readiness.Ready)
 	require.Zero(t, readiness.EntitlementReservedReviewedPendingCount)
 
+	store.stats = PaymentRefundReconciliationStats{UnsettledResetCardPurchaseCount: 1}
+	readiness, err = worker.RefundRollbackReadiness(context.Background())
+	require.NoError(t, err)
+	require.False(t, readiness.Ready, "old runtimes cannot honor pending reset-card purchase options")
+	require.EqualValues(t, 1, readiness.UnsettledResetCardPurchaseCount)
+	require.Zero(t, readiness.EntitlementReservedReviewedPendingCount)
+
 	store.statsErr = context.DeadlineExceeded
 	readiness, err = worker.RefundRollbackReadiness(context.Background())
 	require.ErrorIs(t, err, context.DeadlineExceeded)
