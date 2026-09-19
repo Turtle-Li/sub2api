@@ -1,5 +1,7 @@
 # 支付恢复、订单到期与重置卡购买（2026-09-19）
 
+状态：已于2026-09-19 20:09:47 +08发布v0.2.7，运行提交`ebf5e2e63cbfe381d920418864a606a0e02f4480`。
+
 本轮 owner 明确授权修复后合并上游并发布。自动升级因历史付款及重置卡来源无法完整证明，按 owner 允许的管理员兜底处理；决策详见 `PAYMENT_ORDER_CATALOG_RESET_CARD_DESIGN_20260914.md`，不得用普通订阅新购模拟升级。
 
 ## 支付与订单契约
@@ -16,7 +18,7 @@
 
 ## 验证与发布记录
 
-开发阶段：订单恢复/取消/缺绑定恢复有针对性单元测试；前端本地实际组件样例用于验证倒计时、恢复二维码、取消确认和确认中状态，不调用真实支付。最后的测试结果、独立审查、上游合并及线上镜像记录在发布后补充，当前文档不代表已上线。
+开发阶段：订单恢复/取消/缺绑定恢复有针对性单元测试；前端本地实际组件样例用于验证倒计时、恢复二维码、取消确认和确认中状态，不调用真实支付。最终测试、独立审查、上游合并及线上镜像见下文实际发布记录。
 
 ### 发布前证据
 
@@ -35,14 +37,14 @@
 - `UserOrdersView.vue`保留本地状态/履约/发票筛选及handleFilterChange重置页码，覆盖上游同目的修复并保留新恢复/取消交互。
 - 自动合并的payment store接纳并发configPromise；统一支付gateway、webhook inbox、到期worker、退款恢复、每月重置卡发放及cleanup链经独立审查未丢失。上游没有新增Ent/schema迁移，未启用插件能力不在本次扩大配置范围。
 
-前端独立审查最终153项通过；三项界面P2已修复且复审通过。合并后的全量测试和线上记录待完成后补录。
+前端独立审查最终153项通过；三项界面P2已修复且复审通过。合并后的全量测试及线上记录如下。
 
-### 合并后验证（候选，尚未上线）
+### 合并后验证
 
 - `go test -p 4 -tags unit ./... -count=1`、`go test -p 2 -tags integration ./... -count=1`、`go vet ./...`、embed web/server测试均通过。
 - 前端lint、生产构建（含vue-tsc/i18n）通过。全量334文件中333文件/2598项通过，新增上游退款余额测试旧契约的4项已适配为服务端review边界，相关退款套件48项全部通过；其他测试无失败。
 - 合并的前端冲突区域独立定向检查37项通过；通用弹窗及本地退款审核契约14项通过。退款测试适配后typecheck再次通过。
-- 当前线上仍为95075af9；新预发布备份 `/opt/sub2api-db-backups/sub2api-db-backup-20260919-192813.tar.gz` 已完成，隔离还原验收执行中。
+- 发布前线上为95075af9；预发布备份 `/opt/sub2api-db-backups/sub2api-db-backup-20260919-192813.tar.gz` 已完成，PostgreSQL和Redis隔离还原验收通过（schema_count311）。
 
 ### 新快照的降级边界
 
@@ -52,4 +54,16 @@
 
 本门槛不改变旧字段与零值JSON；canonical脚本已拒绝任何非2xx/ready=false响应，无须修改服务器脚本。原实现的新增单测已实际失败（新订单存在仍Ready=true），修复后服务端/readiness路由和真实PostgreSQL状态矩阵必须通过才重建镜像。
 
-门槛验证：service/repository/routes单测、embed路由和go vet通过；真实PostgreSQL与全部ResetCardExternalOrderPostgres合跑通过（7.020s）。状态矩阵包含v1/缺版本不拦、v2各未终态与已付款取消/过期拦、未来v3和未知状态拦，以及保守的v2单张不自动使用也拦。原候选956512264的CI35440405229、安全35440404805、镜像build-only35440405117均通过但不部署，待本门槛新提交的同版CI/安全/镜像完成。
+门槛验证：service/repository/routes单测、embed路由和go vet通过；真实PostgreSQL与全部ResetCardExternalOrderPostgres合跑通过（7.020s）。状态矩阵包含v1/缺版本不拦、v2各未终态与已付款取消/过期拦、未来v3和未知状态拦，以及保守的v2单张不自动使用也拦。原候选956512264的CI35440405229、安全35440404805、镜像build-only35440405117均通过但未部署；最终采用包含本门槛的ebf5e2e63镜像，证据如下。
+
+## 实际发布与线上验收
+
+- 最终运行提交：`ebf5e2e63cbfe381d920418864a606a0e02f4480`，版本`0.2.7`。上游固定合并点`1a9d49e16f7a22c432b428fce4af8d731f1fa364`。
+- 同提交GitHub CI `35441367103`、Security Scan `35441366302`、build-only `35441366334`均成功；独立后端/前端/合并/回滚门槛审查通过。
+- GitHub artifact `10583289633`（84598213 bytes），外层SHA256 `9977fe6e2b75a0adfa290969881551c92a65dde487a8a47bc0566686ece2df5a`；内层Docker归档84597394 bytes，SHA256 `73d7fd42bcde05eae4b8264c849a12e2064562d66d131ff32992701b2d28bd42`。已逐字节验证外层/内层、成员白名单和来源/版本/平台，未在生产编译。
+- 原canonical receiver SHA256 `8ccb62ae77776ff5f3298b3dc5ff0b3599ac5dc344db649f8f68f4a439f941d8`保持不变，使用其维护锁、镜像身份、健康、切换、回滚及排空流程。
+- `sub2api-candidate` 当前绿色实例`sub2api-green`，镜像`sub2api:auto-20260919-200928-ebf5e2e6`，镜像ID `sha256:33c98eaf8176e6e97640aa88d3f7ef57a472a73d480a2ac2a3f7929f034a8015`；healthy、restart0，`traffic=accepting active_container=sub2api-green background=active`。旧蓝色由canonical drain monitor退出；支付和飞书Vault Agent实例ID保持不变。
+- 发布日志：`/var/log/sub2api-release/gha-20260919-200928-ebf5e2e6-3030257`，app_5xx=0、app_fatal=0、caddy_5xx=0。www/API health、login、purchase均200，未登录`/api/v1/payment/orders/my`为401；公网入口资源`/assets/index-BGMMdFoz.js`。
+- 备份：`/opt/sub2api-db-backups/sub2api-db-backup-20260919-192813.tar.gz`，SHA256 `45c987a58096e6b2a25a4538df600d67f6342b8814254a4832cd54327d1f14a2`；外层/内层校验、PostgreSQL实际恢复和Redis加载通过，schema_count311。本轮不增加数据库迁移。
+- 线上只读确认：#5在20:10:41 +08由后台写入`RESET_CARD_UNIFIED_ORDER_ABSENT_EXPIRED`审计并转EXPIRED（paid_at仍为空）；#6保持CANCELLED。没有手工重写订单/金融状态，没有发起真实购买、支付、退款或伪造通知。
+- 统一支付取消修复已先发布`20260919-alipay-cancel21`并自动关闭相关历史订单，详见该项目`docs/operations/ALIPAY_CANCEL_RECONCILIATION_20260919.md`。本轮线上验证不替代owner实际支付宝/微信付款验收。
