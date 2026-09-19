@@ -18,6 +18,20 @@
 
       <!-- Table -->
       <OrderTable :orders="orders" :loading="loading">
+        <template #payment-status="{ row }">
+          <div class="space-y-1">
+            <OrderStatusBadge
+              :data-test="`order-status-${row.id}`"
+              :status="row.status"
+              :cancellation-pending="row.cancellation_pending === true"
+            />
+            <OrderLifecycleBadge
+              :data-test="`order-payment-fact-${row.id}`"
+              kind="payment"
+              :value="paymentFact(row)"
+            />
+          </div>
+        </template>
         <template #actions="{ row }">
           <div class="flex flex-wrap items-center gap-2">
             <button type="button" class="btn btn-secondary btn-sm" @click="openDetails(row)">{{ t('common.view') }}</button>
@@ -106,7 +120,11 @@
     <BaseDialog :show="!!detailOrder" :title="t('payment.orderOps.detail')" @close="closeDetails">
       <div v-if="detailOrder" class="space-y-4">
         <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }} · #{{ detailOrder.id }}</p><p class="break-all text-sm">{{ detailOrder.out_trade_no }}</p><button type="button" class="mt-2 text-sm text-primary-700 dark:text-primary-300" @click="copyOrderNumber(detailOrder.out_trade_no)">{{ t('payment.orderOps.copyOrder') }}</button></div>
-        <div class="flex flex-wrap gap-2"><OrderLifecycleBadge kind="payment" :value="paymentFact(detailOrder)" /><OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(detailOrder)" /></div>
+        <div class="flex flex-wrap gap-2">
+          <OrderStatusBadge :status="detailOrder.status" :cancellation-pending="detailOrder.cancellation_pending === true" />
+          <OrderLifecycleBadge kind="payment" :value="paymentFact(detailOrder)" />
+          <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(detailOrder)" />
+        </div>
         <dl class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <div><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</dt><dd class="font-semibold">{{ currencySymbol(detailOrder.currency) }}{{ detailOrder.pay_amount.toFixed(2) }}</dd></div>
           <div><dt class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.createdAt') }}</dt><dd>{{ formatOrderDateTime(detailOrder.created_at) }}</dd></div>
@@ -236,6 +254,7 @@ import OrderTable from '@/components/payment/OrderTable.vue'
 import InvoiceRequestDialog from '@/components/payment/InvoiceRequestDialog.vue'
 import OrderPurchaseSnapshot from '@/components/payment/OrderPurchaseSnapshot.vue'
 import OrderLifecycleBadge from '@/components/payment/OrderLifecycleBadge.vue'
+import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import { fulfillmentFact, paymentFact } from '@/components/payment/orderPresentation'
 import { decidePaymentLaunch, type PaymentRecoverySnapshot } from '@/components/payment/paymentFlow'

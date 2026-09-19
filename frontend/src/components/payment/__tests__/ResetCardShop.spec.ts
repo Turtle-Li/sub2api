@@ -38,7 +38,7 @@ describe('ResetCardShop', () => {
     const wrapper = render([sub], { entitlements: { reset_card_title: 'GPT refill', reset_card_description: 'One reset', reset_card_purchase_price: 40 }, reset_card_eligibility: { visible: true, can_purchase: false, reason: 'minimum_recharge', required_total_recharge: 1000, current_total_recharge: 100 } })
     expect(wrapper.text()).toContain('GPT refill')
     expect(wrapper.text()).toContain('One reset')
-    expect(wrapper.get('button').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-reset-card-offer]').attributes('disabled')).toBeDefined()
   })
 
   it('does not offer Claude or groups without a matching sale plan', () => {
@@ -54,7 +54,7 @@ describe('ResetCardShop', () => {
     })
     const wrapper = render()
 
-    await wrapper.get('button').trigger('click')
+    await wrapper.get('[data-reset-card-offer]').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('localized tier mismatch')
@@ -63,10 +63,21 @@ describe('ResetCardShop', () => {
 
   it('quotes a selected card and emits its checkout selection', async () => {
     const wrapper = render()
-    await wrapper.get('button').trigger('click')
+    await wrapper.get('[data-reset-card-offer]').trigger('click')
     await flushPromises()
     expect(getResetCardQuote).toHaveBeenCalledWith(7)
     expect(wrapper.emitted('select')).toEqual([[{ subscription: sub, quote }]])
+  })
+
+  it('allows requoting the selected card after its price changes', async () => {
+    const wrapper = mount(ResetCardShop, {
+      props: { subscriptions: [sub], plans, selectedSubscriptionId: sub.id, selectedQuote: quote },
+    })
+    const freshQuote = { ...quote, price: 45 }
+    vi.mocked(getResetCardQuote).mockResolvedValueOnce(freshQuote)
+    await wrapper.get('[data-reset-card-offer]').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('select')).toEqual([[{ subscription: sub, quote: freshQuote }]])
   })
 
   it('shows quantity, expiry, and one-card use controls for the selected quote', async () => {
@@ -80,18 +91,22 @@ describe('ResetCardShop', () => {
       },
     })
 
-    expect(wrapper.get('[data-test="reset-card-options"]').text()).toContain('payment.resetShop.validity')
-    expect((wrapper.get('[data-test="reset-card-quantity"]').element as HTMLInputElement).value).toBe('2')
+    expect(wrapper.get('article').text()).toContain('payment.resetShop.validity')
+    expect(wrapper.get('[data-test="reset-card-quantity"]').text()).toBe('2')
 
-    await wrapper.get('[data-test="reset-card-quantity"]').setValue('100')
-    expect(wrapper.emitted('updateOptions')).toEqual([[{ quantity: 99, useOnPurchase: false }]])
+    await wrapper.get('[data-test="reset-card-increase"]').trigger('click')
+    expect(wrapper.emitted('updateOptions')).toEqual([[{ quantity: 3, useOnPurchase: false }]])
 
     await wrapper.get('[data-test="reset-card-use-on-purchase"]').setValue(true)
     expect(wrapper.emitted('updateOptions')?.[1]).toEqual([{ quantity: 2, useOnPurchase: true }])
+    await wrapper.setProps({ quantity: 99 })
+    expect(wrapper.get('[data-test="reset-card-increase"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="reset-card-decrease"]').trigger('click')
+    expect(wrapper.emitted('updateOptions')?.[2]).toEqual([{ quantity: 98, useOnPurchase: false }])
     expect(wrapper.text()).not.toContain('tierBinding')
   })
 
-  it('keeps a newly entered quantity when the use-on-purchase checkbox changes immediately after it', async () => {
+  it('keeps an incremented quantity when the use-on-purchase checkbox changes immediately after it', async () => {
     const Harness = defineComponent({
       components: { ResetCardShop },
       setup() {
@@ -119,11 +134,12 @@ describe('ResetCardShop', () => {
     const wrapper = mount(Harness)
     const quantityInput = wrapper.get('[data-test="reset-card-quantity"]')
 
-    ;(quantityInput.element as HTMLInputElement).value = '3'
-    await quantityInput.trigger('input')
+    expect(wrapper.get('[data-test="reset-card-decrease"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="reset-card-increase"]').trigger('click')
+    await wrapper.get('[data-test="reset-card-increase"]').trigger('click')
     await wrapper.get('[data-test="reset-card-use-on-purchase"]').setValue(true)
 
-    expect((quantityInput.element as HTMLInputElement).value).toBe('3')
+    expect(quantityInput.text()).toBe('3')
     expect((wrapper.vm as unknown as { quantity: number }).quantity).toBe(3)
     expect((wrapper.vm as unknown as { useOnPurchase: boolean }).useOnPurchase).toBe(true)
   })
@@ -133,7 +149,7 @@ describe('ResetCardShop', () => {
       props: { subscriptions: [sub], plans, disabled: true },
     })
 
-    await wrapper.get('button').trigger('click')
+    await wrapper.get('[data-reset-card-offer]').trigger('click')
 
     expect(getResetCardQuote).not.toHaveBeenCalled()
     expect(wrapper.emitted('select')).toBeUndefined()
@@ -146,12 +162,13 @@ describe('ResetCardShop', () => {
     expect(getResetCardQuote).not.toHaveBeenCalled()
   })
 
-  it('highlights and focuses the deep-linked offer without quoting or opening checkout', () => {
+  it('focuses but does not select the deep-linked offer without quoting or opening checkout', () => {
     const wrapper = render([sub], {}, 7)
     const offer = wrapper.get('[data-reset-card-offer="7"]')
 
     expect(offer.attributes('aria-pressed')).toBe('false')
-    expect(offer.classes()).toContain('border-primary-500')
+    expect(wrapper.get('article').classes()).not.toContain('payment-product-card--selected')
+    expect(wrapper.get('[data-test="reset-card-increase"]').attributes('disabled')).toBeDefined()
     expect(getResetCardQuote).not.toHaveBeenCalled()
 
     const shop = wrapper.vm as unknown as { focusOffer: () => boolean }

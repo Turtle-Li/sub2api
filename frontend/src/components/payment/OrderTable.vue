@@ -20,16 +20,18 @@
       </div>
     </template>
     <template #cell-payment_status="{ row }">
-      <div v-if="showUser">
-        <OrderStatusBadge v-if="hasCurrentPaymentOutcome(row)" :status="row.status" />
-        <OrderLifecycleBadge v-else kind="payment" :value="paymentFact(row)" />
-      </div>
-      <div v-else class="space-y-1">
-        <OrderLifecycleBadge kind="payment" :value="paymentFact(row)" />
-        <div v-if="hasCurrentPaymentOutcome(row)">
-          <OrderStatusBadge :status="row.status" />
+      <slot name="payment-status" :row="row">
+        <div v-if="showUser">
+          <OrderStatusBadge v-if="hasCurrentPaymentOutcome(row)" :status="row.status" />
+          <OrderLifecycleBadge v-else kind="payment" :value="paymentFact(row)" />
         </div>
-      </div>
+        <div v-else class="space-y-1">
+          <OrderLifecycleBadge kind="payment" :value="paymentFact(row)" />
+          <div v-if="hasCurrentPaymentOutcome(row)">
+            <OrderStatusBadge :status="row.status" />
+          </div>
+        </div>
+      </slot>
     </template>
     <template #cell-fulfillment_status="{ row }">
       <div v-if="showUser" class="space-y-1">

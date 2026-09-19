@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import type { OrderStatus } from '@/types/payment'
 
 const {
   cancelOrder,
@@ -81,7 +82,7 @@ function mountView() {
         AppLayout: { template: '<main><slot /></main>' },
         OrderTable: {
           props: ['orders'],
-          template: '<div data-test="orders"><template v-for="row in orders" :key="row.id"><slot name="actions" :row="row" /></template></div>',
+          template: '<div data-test="orders"><template v-for="row in orders" :key="row.id"><slot name="payment-status" :row="row" /><slot name="actions" :row="row" /></template></div>',
         },
         BaseDialog: {
           props: ['show'],
@@ -214,6 +215,8 @@ describe('UserOrdersView pending payment lifecycle', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="order-cancellation-pending-51"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.orderOps.cancellationPending')
+    expect(wrapper.get('[data-test="order-status-51"]').classes()).toContain('bg-amber-100')
     expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
     expect(showSuccess).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
@@ -235,6 +238,47 @@ describe('UserOrdersView pending payment lifecycle', () => {
     expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
     expect(showSuccess).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each<[OrderStatus, string, string]>([
+    ['PENDING', 'payment.status.pending', 'bg-amber-100'],
+    ['PAID', 'payment.status.paid', 'bg-blue-100'],
+    ['RECHARGING', 'payment.status.recharging', 'bg-cyan-100'],
+    ['COMPLETED', 'payment.status.completed', 'bg-green-100'],
+    ['EXPIRED', 'payment.status.expired', 'bg-orange-100'],
+    ['CANCELLED', 'payment.status.cancelled', 'bg-rose-100'],
+    ['FAILED', 'payment.status.failed', 'bg-red-100'],
+    ['REFUND_REQUESTED', 'payment.status.refund_requested', 'bg-purple-100'],
+    ['REFUNDING', 'payment.status.refunding', 'bg-purple-100'],
+    ['REFUND_PENDING', 'payment.status.refund_pending', 'bg-purple-100'],
+    ['PARTIALLY_REFUNDED', 'payment.status.partially_refunded', 'bg-purple-100'],
+    ['REFUNDED', 'payment.status.refunded', 'bg-purple-100'],
+    ['REFUND_FAILED', 'payment.status.refund_failed', 'bg-red-100'],
+  ])('renders %s with its status text and semantic tone', async (status, label, tone) => {
+    rows = [pendingOrder(new Date(start.getTime() + 60_000).toISOString(), { status })]
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const badge = wrapper.get('[data-test="order-status-51"]')
+    expect(badge.text()).toBe(label)
+    expect(badge.classes()).toContain(tone)
+    wrapper.unmount()
+  })
+
+  it('keeps the paid fact separate from a completed order status', async () => {
+    rows = [pendingOrder(new Date(start.getTime() + 60_000).toISOString(), {
+      status: 'COMPLETED',
+      payment_status: 'PAID',
+      fulfillment_status: 'FULFILLED',
+    })]
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.status.completed')
+    expect(wrapper.get('[data-test="order-payment-fact-51"]').attributes('value')).toBe('PAID')
     wrapper.unmount()
   })
 })

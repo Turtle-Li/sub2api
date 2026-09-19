@@ -427,13 +427,18 @@ export default {
     bestValue: '最超值',
     mostPopular: '最受欢迎',
     resetShop: {
+      decrease: '减少一张',
+      increase: '增加一张',
+      perCard: '张',
+      select: '选择重置卡',
+
       noCoupons: '重置卡不参与优惠码抵扣。',
       singleCard: '1 张 · 使用后重置用量',
       quantity: '购买数量',
       quantitySummary: '{quantity} 张',
       validity: '有效期',
       validUntil: '有效期至 {date}',
-      useOnPurchase: '购买成功后立即使用一张',
+      useOnPurchase: '购买并使用一张',
       selectFirst: '请选择一张重置卡',
       checkout: '购买并支付',
       "title": "GPT 订阅重置卡",
@@ -477,6 +482,7 @@ export default {
     fee: '手续费',
     actualPay: '实付金额',
     coupon: {
+      resetCardUnavailable: '重置卡不支持优惠码',
       label: '支付优惠码',
       placeholder: '输入优惠码',
       apply: '使用',

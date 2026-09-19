@@ -149,13 +149,13 @@
             </section>
 
             <PaymentDiscountCodeInput
-              v-if="!isResetCardCheckout"
               class="mt-4 lg:hidden"
               input-id="payment-discount-code-mobile"
               :model-value="couponCode"
               :applied="selectedCoupon?.quote"
               :applying="couponQuoting"
-              :disabled="!railBaseCanSubmit"
+              :disabled="isResetCardCheckout || !railBaseCanSubmit"
+              :placeholder="isResetCardCheckout ? t('payment.coupon.resetCardUnavailable') : undefined"
               :status="couponStatus"
               :error="!!couponError"
               @update:model-value="couponCode = $event"
@@ -198,13 +198,13 @@
           >
             <template #coupon>
               <PaymentDiscountCodeInput
-                v-if="!isResetCardCheckout"
                 class="hidden lg:block"
                 input-id="payment-discount-code-rail"
                 :model-value="couponCode"
                 :applied="selectedCoupon?.quote"
                 :applying="couponQuoting"
-                :disabled="!railBaseCanSubmit"
+                :disabled="isResetCardCheckout || !railBaseCanSubmit"
+                :placeholder="isResetCardCheckout ? t('payment.coupon.resetCardUnavailable') : undefined"
                 :status="couponStatus"
                 :error="!!couponError"
                 @update:model-value="couponCode = $event"

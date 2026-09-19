@@ -1643,7 +1643,8 @@ describe('PaymentView payment recovery', () => {
 
     expect(wrapper.findComponent(PaymentOrderRail).props('baseAmount')).toBe(120)
     expect(wrapper.findComponent(PaymentOrderRail).props('totalAmount')).toBe(120)
-    expect(wrapper.findComponent(PaymentDiscountCodeInput).exists()).toBe(false)
+    expect(wrapper.findComponent(PaymentDiscountCodeInput).exists()).toBe(true)
+    expect(wrapper.findComponent(PaymentDiscountCodeInput).props('disabled')).toBe(true)
 
     await submitSelectedResetCard(wrapper)
 

@@ -403,6 +403,11 @@ export default {
     bestValue: 'Best value',
     mostPopular: 'Most popular',
     resetShop: {
+      decrease: 'Remove one card',
+      increase: 'Add one card',
+      perCard: 'card',
+      select: 'Select reset card',
+
       noCoupons: 'Discount codes do not apply to reset cards.',
       singleCard: '1 card · Reset usage',
       quantity: 'Quantity',
@@ -453,6 +458,7 @@ export default {
     fee: 'Fee',
     actualPay: 'Actual Payment',
     coupon: {
+      resetCardUnavailable: 'Not available for reset cards',
       label: 'Payment coupon',
       placeholder: 'Enter coupon code',
       apply: 'Apply',

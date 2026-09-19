@@ -6,73 +6,76 @@
     </div>
     <p v-if="!offers.length" class="mt-3 text-sm text-gray-500">{{ t('payment.resetShop.requiresSubscription') }}</p>
 
-    <div v-else class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <button
+    <div v-else class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <article
         v-for="offer in offers"
         :key="offer.subscription.id"
-        type="button"
-        :data-reset-card-offer="offer.subscription.id"
-        :aria-pressed="isSelectedOffer(offer)"
-        :class="[
-          'group flex min-w-0 items-center gap-3 rounded-xl border bg-white px-4 py-3.5 text-left transition hover:border-primary-400 hover:bg-primary-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-70 dark:bg-dark-800 dark:hover:border-primary-600 dark:hover:bg-primary-950/30',
-          isHighlightedOffer(offer)
-            ? 'border-primary-500 bg-primary-50/70 ring-1 ring-primary-500/30 dark:border-primary-500 dark:bg-primary-950/35'
-            : 'border-gray-200 dark:border-dark-700',
-        ]"
-        :disabled="disabled || loading || offer.eligibility?.can_purchase === false"
+        :class="['payment-product-card', isSelectedOffer(offer) && 'payment-product-card--selected', offer.eligibility?.can_purchase === false && 'payment-product-card--unavailable']"
         @click="select(offer.subscription)"
       >
-        <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-300">
-          <Icon :name="isSelectedOffer(offer) ? 'check' : 'refresh'" size="sm" />
+        <span v-if="isSelectedOffer(offer)" class="payment-product-card__check" aria-hidden="true">
+          <Icon name="check" size="xs" :stroke-width="3" />
         </span>
-        <span class="min-w-0 flex-1">
-          <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">{{ offer.title }}</span>
-          <span class="mt-0.5 block text-xs text-gray-500 dark:text-dark-400">
-            {{ offer.description || t('payment.resetShop.singleCard') }}
-            <PurchaseEligibilityHint :eligibility="offer.eligibility" />
-          </span>
-        </span>
-        <span class="shrink-0 text-right">
-          <strong class="block text-lg font-semibold tabular-nums text-gray-900 dark:text-white">{{ offer.price }}</strong>
-          <span class="text-[10px] text-gray-500 dark:text-dark-400">{{ t('payment.currencyUnit') }}</span>
-        </span>
-        <Icon name="chevronRight" size="xs" class="shrink-0 text-gray-400 group-hover:text-primary-500" />
-      </button>
-    </div>
-
-    <div v-if="selectedQuote" class="mt-4 rounded-xl border border-primary-200 bg-primary-50/40 p-4 dark:border-primary-900/60 dark:bg-primary-950/20" data-test="reset-card-options">
-      <div class="flex flex-wrap items-end justify-between gap-4">
-        <label class="grid gap-1.5 text-sm font-medium text-gray-800 dark:text-gray-100">
-          <span>{{ t('payment.resetShop.quantity') }}</span>
-          <input
-            data-test="reset-card-quantity"
-            class="input h-10 w-24 tabular-nums"
-            type="number"
-            min="1"
-            max="99"
-            step="1"
-            inputmode="numeric"
-            :value="normalizedQuantity"
-            :disabled="disabled"
-            @input="updateQuantity"
-          />
-        </label>
-        <div class="min-w-0 text-right text-sm text-gray-600 dark:text-gray-300">
-          <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('payment.resetShop.validity') }}</p>
-          <p class="mt-1 font-medium tabular-nums text-gray-900 dark:text-white">{{ formatExpiry(selectedQuote.expires_at) }}</p>
+        <div class="payment-product-card__body">
+          <h3 class="payment-product-card__title pr-5">{{ offer.title }}</h3>
+          <div class="flex flex-wrap items-baseline gap-2">
+            <span class="payment-product-card__price">{{ formatPaymentAmount(isSelectedOffer(offer) && selectedQuote ? selectedQuote.price : offer.price, 'CNY') }}</span>
+            <span class="text-sm text-gray-500 dark:text-dark-400">/ {{ t('payment.resetShop.perCard') }}</span>
+          </div>
+          <p v-if="offer.description" class="text-[13px] leading-relaxed text-gray-600 dark:text-dark-300">{{ offer.description }}</p>
+          <PurchaseEligibilityHint :eligibility="offer.eligibility" />
+          <div class="flex items-baseline justify-between gap-3 text-xs text-gray-500 dark:text-dark-400">
+            <span class="shrink-0">{{ t('payment.resetShop.validity') }}</span>
+            <span class="text-right tabular-nums text-gray-700 dark:text-dark-200">{{ formatExpiry(isSelectedOffer(offer) && selectedQuote ? selectedQuote.expires_at : offer.subscription.expires_at) }}</span>
+          </div>
+          <div class="mt-auto border-t border-gray-100 pt-3 dark:border-dark-700" data-test="reset-card-options" @click.stop>
+            <div class="flex items-center justify-between gap-3 text-sm text-gray-700 dark:text-dark-200">
+              <span>{{ t('payment.resetShop.quantity') }}</span>
+              <div role="group" :aria-label="t('payment.resetShop.quantity')" class="inline-flex items-center rounded-lg border border-gray-200 dark:border-dark-600">
+                <button
+                  type="button"
+                  data-test="reset-card-decrease"
+                  class="flex h-10 w-10 items-center justify-center rounded-l-lg hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-dark-700"
+                  :aria-label="t('payment.resetShop.decrease')"
+                  :disabled="disabled || !isSelectedOffer(offer) || normalizedQuantity <= 1"
+                  @click="changeQuantity(-1)"
+                ><Icon name="minus" size="sm" /></button>
+                <output data-test="reset-card-quantity" class="min-w-8 text-center font-medium tabular-nums" aria-live="polite">{{ isSelectedOffer(offer) ? normalizedQuantity : 1 }}</output>
+                <button
+                  type="button"
+                  data-test="reset-card-increase"
+                  class="flex h-10 w-10 items-center justify-center rounded-r-lg hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-dark-700"
+                  :aria-label="t('payment.resetShop.increase')"
+                  :disabled="disabled || !isSelectedOffer(offer) || normalizedQuantity >= 99"
+                  @click="changeQuantity(1)"
+                ><Icon name="plus" size="sm" /></button>
+              </div>
+            </div>
+            <label class="mt-2 flex min-h-10 items-center gap-2 text-sm text-gray-700 dark:text-dark-200" :class="isSelectedOffer(offer) && !disabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'">
+              <input
+                data-test="reset-card-use-on-purchase"
+                class="h-4 w-4 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                type="checkbox"
+                :checked="isSelectedOffer(offer) && useOnPurchase"
+                :disabled="disabled || !isSelectedOffer(offer)"
+                @change="updateUseOnPurchase"
+              />
+              <span>{{ t('payment.resetShop.useOnPurchase') }}</span>
+            </label>
+          </div>
+          <button
+            type="button"
+            :data-reset-card-offer="offer.subscription.id"
+            :aria-pressed="isSelectedOffer(offer)"
+            :aria-label="`${offer.title} · ${t('payment.resetShop.select')}`"
+            :class="['payment-product-card__action', isSelectedOffer(offer) ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300' : 'bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-dark-700 dark:text-dark-100 dark:hover:bg-dark-600']"
+            :disabled="disabled || loading || offer.eligibility?.can_purchase === false"
+            @click.stop="select(offer.subscription)"
+          >
+            {{ loading ? t('common.loading') : isSelectedOffer(offer) ? t('payment.selectedRechargeTier') : t('payment.resetShop.select') }}
+          </button>
         </div>
-      </div>
-      <label class="mt-4 flex cursor-pointer items-start gap-3 rounded-lg border border-primary-100 bg-white/80 p-3 text-sm text-gray-800 dark:border-primary-900/40 dark:bg-dark-800/70 dark:text-gray-100">
-        <input
-          data-test="reset-card-use-on-purchase"
-          class="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-          type="checkbox"
-          :checked="useOnPurchase"
-          :disabled="disabled"
-          @change="updateUseOnPurchase"
-        />
-        <span>{{ t('payment.resetShop.useOnPurchase') }}</span>
-      </label>
+      </article>
     </div>
 
     <p v-if="error" role="alert" class="mt-3 text-sm text-red-600 dark:text-red-400">{{ error }}</p>
@@ -87,6 +90,7 @@ import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
+import { formatPaymentAmount } from './currency'
 import PurchaseEligibilityHint from './PurchaseEligibilityHint.vue'
 
 const props = withDefaults(defineProps<{
@@ -148,10 +152,6 @@ function isSelectedOffer(offer: { subscription: UserSubscription }): boolean {
   return props.selectedSubscriptionId !== null && offer.subscription.id === props.selectedSubscriptionId
 }
 
-function isHighlightedOffer(offer: { subscription: UserSubscription }): boolean {
-  return isSelectedOffer(offer) || (props.selectedSubscriptionId === null && props.targetSubscriptionId === offer.subscription.id)
-}
-
 function focusOffer(subscriptionId = props.selectedSubscriptionId ?? props.targetSubscriptionId): boolean {
   const offer = subscriptionId === null
     ? offers.value[0]
@@ -175,7 +175,8 @@ function errorMessage(value: unknown): string {
 }
 
 async function select(subscription: UserSubscription) {
-  if (props.disabled || loading.value) return
+  if (props.disabled || loading.value ||
+    !offers.value.some(offer => offer.subscription.id === subscription.id && offer.eligibility?.can_purchase !== false)) return
   error.value = ''
   loading.value = true
   try {
@@ -188,9 +189,9 @@ async function select(subscription: UserSubscription) {
   }
 }
 
-function updateQuantity(event: Event) {
-  const input = event.target as HTMLInputElement
-  emit('updateOptions', { quantity: clampQuantity(input.value), useOnPurchase: props.useOnPurchase })
+function changeQuantity(delta: number) {
+  if (props.disabled) return
+  emit('updateOptions', { quantity: clampQuantity(normalizedQuantity.value + delta), useOnPurchase: props.useOnPurchase })
 }
 
 function updateUseOnPurchase(event: Event) {
@@ -198,7 +199,8 @@ function updateUseOnPurchase(event: Event) {
   emit('updateOptions', { quantity: normalizedQuantity.value, useOnPurchase: input.checked })
 }
 
-function formatExpiry(value: string): string {
+function formatExpiry(value: string | null): string {
+  if (!value) return t('userSubscriptions.noExpiration')
   const expiresAt = Date.parse(value)
   if (!Number.isFinite(expiresAt)) return value
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(expiresAt))

@@ -18,7 +18,7 @@
         spellcheck="false"
         maxlength="32"
         class="input min-w-0 flex-1 font-mono uppercase"
-        :placeholder="t('payment.coupon.placeholder')"
+        :placeholder="placeholder || t('payment.coupon.placeholder')"
         :disabled="disabled || applying"
         :aria-describedby="status ? `${inputId}-status` : undefined"
         :aria-invalid="error || undefined"
@@ -68,8 +68,10 @@ withDefaults(defineProps<{
   disabled?: boolean
   status?: string
   error?: boolean
+  placeholder?: string
   inputId?: string
 }>(), {
+  placeholder: undefined,
   applied: null,
   applying: false,
   disabled: false,
