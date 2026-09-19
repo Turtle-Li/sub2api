@@ -24,3 +24,15 @@
 - 桌面1280与手机390本地实际组件检查：输入3后立即勾选保持3张与¥120，选中重置卡隐藏优惠码，手机二维码及原订单倒计时可见；样例全部使用本地模拟接口。
 - JSAPI关闭支付窗口不再误报订单已取消；重置卡快照分别标记商品总价及单价。
 - 合并前全后端 unit 唯一失败为既有附件测试清理竞态：编码slot释放早于后台cache落盘，测试仅等待slot就删除TempDir。独立分析后仅修测试等待flight落盘结束；隔离复现并修后50次通过。生产附件逻辑未改。go vet ./...通过。
+
+### 上游 v0.2.7 合并
+
+固定上游 `1a9d49e16f7a22c432b428fce4af8d731f1fa364`（包含v0.2.7版本同步），在本地支付修复 `c095e5fec` 后合入。9处冲突：
+
+- `.gitignore` 合并双方文档例外；Go模块保留本地x/text直接依赖并运行tidy去除旧校验记录，接纳上游smithy直接依赖。
+- `AmountInput.vue`及测试保留固定充值档位，不恢复上游任意金额输入；`AdminRefundDialog.vue`保留本地服务端审核报价/权限/审计路径，不引入旧balance不足前端判断。
+- `BaseDialog.vue`保留共享唯一ID和嵌套body锁；`ChannelMonitorView.grok.spec.ts`保留动态PROVIDERS数量断言，覆盖上游新增provider。
+- `UserOrdersView.vue`保留本地状态/履约/发票筛选及handleFilterChange重置页码，覆盖上游同目的修复并保留新恢复/取消交互。
+- 自动合并的payment store接纳并发configPromise；统一支付gateway、webhook inbox、到期worker、退款恢复、每月重置卡发放及cleanup链经独立审查未丢失。上游没有新增Ent/schema迁移，未启用插件能力不在本次扩大配置范围。
+
+前端独立审查最终153项通过；三项界面P2已修复且复审通过。合并后的全量测试和线上记录待完成后补录。
