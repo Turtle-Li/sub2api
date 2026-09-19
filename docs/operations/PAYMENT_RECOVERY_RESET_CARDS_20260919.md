@@ -75,3 +75,11 @@
 我的订单列表和详情使用状态标签：待付/取消处理中琥珀、已付蓝、发放中青、完成绿、取消玫红、过期橙、失败红、退款紫；详情继续独立显示支付和履约事实，不改持久化状态。
 
 本轮仅前端呈现与交互，没有支付、履约、定价、数据库或目录配置变化。本地专项96项通过；生产构建含类型/i18n校验通过。浏览器本地 mock 页面已确认整卡内容与未选中状态的可访问树；浏览器连接认证及系统截屏服务不可用，未取得本轮最终桌面/手机截图，不能声称已完成视觉验收。
+
+### UI 修正实际发布
+
+2026-09-19 23:12:33 +08 已发布 `b7fa7f4af7d876de513f082c5e058f9dd637a5ad`（版本仍0.2.7）。GitHub CI35450409266、安全35450411355、build-only35450413171全部成功；前端及状态色独立审查无P1/P2。Artifact10587260232，外层84614151 bytes/SHA256 `bd3af2f526216856a1013ee45533b7b9cb1d189acb2f4106b7c65b645cafe21b`；内层84613332 bytes/SHA256 `bfbc9798445933ce656744edd3a59baf1f0cebb9aeb490ab7dba1086e3cfa336`。
+
+原canonical receiver未变，已按维护锁与blue-green门槛发布蓝色实例，镜像 `sub2api:auto-20260919-231215-b7fa7f4a`，ID `sha256:2459a5dd25809a8f94053799253974032e522ca6bdf229d3be74610295dcfdcd`；healthy/restart0，支付/飞书Vault Agent实例不变。旧绿色由canonical monitor排空，不手工终止连接。发布目录 `/var/log/sub2api-release/gha-20260919-231215-b7fa7f4a-3327260`，app5xx/fatal/caddy5xx均0。
+
+公网curl检查www health/login/purchase200，未认证orders/my401，API health200；Python urllib被边缘403拒绝，不作为产品不可用结论。新入口 `/assets/index-DbxnZQVt.js`、PaymentView-B8zTOHZY.js含数量加减、UserOrdersView-e5YICLls.js引用新状态色组件，已核对公网实际字节。没有真实金融操作或数据库变更；回滚保留上一版ebf5e2e63及既有guard。视觉截图限制如上，仍需owner实际页面验收。
