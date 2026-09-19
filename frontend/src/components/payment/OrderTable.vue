@@ -118,7 +118,7 @@ function hasRefundHandling(order: PaymentOrder): boolean {
 function refundBlockerKey(order: PaymentOrder): string {
   if (order.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE') return 'payment.admin.refundMerchantBalanceInsufficientCompact'
   if (order.refund_recovery?.state === 'RETRY_QUEUED') return 'payment.admin.refundRetryQueuedCompact'
-  if (order.needs_manual_review) return 'payment.admin.refundManualReviewCompact'
+  if (order.needs_manual_review) return hasRefundHandling(order) ? 'payment.admin.refundManualReviewCompact' : 'payment.orderOps.reviewRequired'
   return ''
 }
 function refundBlockerClass(order: PaymentOrder): string {

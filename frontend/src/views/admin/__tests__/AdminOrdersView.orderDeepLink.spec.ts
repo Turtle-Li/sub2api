@@ -1,7 +1,9 @@
 import { nextTick, reactive } from 'vue'
-import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AdminOrdersView from '../orders/AdminOrdersView.vue'
+
+enableAutoUnmount(afterEach)
 
 const { getOrders, getOrder, showError, showSuccess, showWarning } = vi.hoisted(() => ({
   getOrders: vi.fn(),
@@ -118,8 +120,8 @@ describe('admin order deep links', () => {
       expect(detail).not.toContain('payment.orderOps.refundHandling')
       expect(detail).not.toContain('payment.orderOps.refundReviewRequired')
     } else {
-      expect(detail).toContain('payment.orderOps.refundHandling')
-      expect(detail).toContain('payment.orderOps.refundReviewRequired')
+      expect(detail).toContain('payment.orderOps.currentEntitlement')
+      expect(wrapper.get('order-lifecycle-badge-stub[kind="refundEntitlement"]').attributes('value')).toBe('MANUAL_REVIEW')
       expect(detail).not.toContain('payment.result.paidManualReview')
     }
     wrapper.unmount()
