@@ -18,6 +18,9 @@ TRAFFIC_STATE_FILE="$RUNTIME_STATE_DIR/traffic-state"
 BACKGROUND_STATE_DIR="$RUNTIME_STATE_DIR/background"
 BACKGROUND_STATE_FILE="$BACKGROUND_STATE_DIR/sub2api-green"
 HEALTH_TOKEN_FILE="$TEST_ROOT/health-token"
+PRESERVED_PANEL_URL='http://172.17.0.1:8788'
+OVERRIDE_PANEL_URL='http://172.18.0.1:8788'
+PANEL_TOKEN_CONTAINER_PATH='/run/sub2api-runtime/health-token'
 CADDY_STARTUP_FILE="$TEST_ROOT/caddy-startup.Caddyfile"
 CADDY_ACTIVE_FILE="$TEST_ROOT/caddy-active.json"
 CADDY_CANDIDATE_FILE="$TEST_ROOT/caddy-candidate.Caddyfile"
@@ -51,6 +54,21 @@ assert_not_line() {
   if grep -Fxq -- "$2" "$1"; then
     fail "forbidden exact line was present"
   fi
+}
+
+assert_panel_configuration_rejected() {
+  local description="$1" panel_url="$2" panel_token_file="$3" dual_node_enabled="$4"
+
+  : >"$CALLS"
+  if PANEL_URL="$panel_url" \
+    PANEL_TOKEN_FILE="$panel_token_file" \
+    DUAL_NODE_RUNTIME_ENABLED="$dual_node_enabled" \
+    VALIDATE_EXTERNAL_RUNTIME_ONLY=true \
+    run_helper >"$OUTPUT" 2>&1; then
+    fail "$description was accepted"
+  fi
+  assert_contains "$OUTPUT" 'CODEX_TURN_STATE_PANEL'
+  [ ! -s "$CALLS" ] || fail "$description touched Docker before rejection"
 }
 
 state_path() {
@@ -391,6 +409,8 @@ printf '%s\n' \
   'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state' \
   'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state' \
   'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token' \
+  "CODEX_TURN_STATE_PANEL_URL=$PRESERVED_PANEL_URL" \
+  "CODEX_TURN_STATE_PANEL_TOKEN_FILE=$PANEL_TOKEN_CONTAINER_PATH" \
   'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false' \
   'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=legacy-private-key-must-be-removed' \
   'UNRELATED_SETTING=preserved' >"$old_env"
@@ -440,6 +460,8 @@ run_helper() {
     SUB2API_BACKGROUND_STATE_DIR_HOST="$BACKGROUND_STATE_DIR" \
     SUB2API_INTERNAL_HEALTH_TOKEN_FILE="$HEALTH_TOKEN_FILE" \
     SUB2API_DUAL_NODE_RUNTIME_ENABLED="${DUAL_NODE_RUNTIME_ENABLED:-true}" \
+    CODEX_TURN_STATE_PANEL_URL="${PANEL_URL:-}" \
+    CODEX_TURN_STATE_PANEL_TOKEN_FILE="${PANEL_TOKEN_FILE:-}" \
     SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
     SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="${PRESERVE_SOURCE_CONTAINER:-}" \
     SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY="${ROUTE_CONTRACT_WARN_ONLY:-false}" \
@@ -455,6 +477,34 @@ run_helper() {
     HEALTH_INTERVAL_SECONDS=1 \
     /bin/bash "$SCRIPT"
 }
+
+# The panel listener is reachable only through the local Docker bridge and
+# authenticates with the already-approved health-token mount. Reject malformed
+# release overrides before dependency validation or any Docker inspection.
+assert_panel_configuration_rejected \
+  'single-node panel override' "$OVERRIDE_PANEL_URL" "$PANEL_TOKEN_CONTAINER_PATH" false
+assert_panel_configuration_rejected \
+  'panel override with the wrong token file' "$OVERRIDE_PANEL_URL" '/tmp/panel-token' true
+assert_panel_configuration_rejected \
+  'panel override with userinfo' 'http://operator@172.18.0.1:8788' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel override with a public address' 'http://8.8.8.8:8788' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel override with a DNS host' 'http://localhost:8788' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel override with an IPv6 loopback address' 'http://[::1]:8788' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel override with an IPv6 private address' 'http://[fc00::1]:8788' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel override with a query' 'http://172.18.0.1:8788?debug=true' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel override with a path' 'http://172.18.0.1:8788/admin' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel override with a fragment' 'http://172.18.0.1:8788#state' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel override with a line break' $'http://172.18.0.1:8788\nnext' "$PANEL_TOKEN_CONTAINER_PATH" true
+assert_panel_configuration_rejected \
+  'panel token file without a URL' '' "$PANEL_TOKEN_CONTAINER_PATH" true
 
 # Feishu enablement attaches only its independent read-only socket volume.
 : >"$CALLS"
@@ -591,6 +641,10 @@ assert_contains "$(state_path sub2api-green)/env" 'PGSSLROOTCERT=/etc/sub2api-db
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state'
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state'
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token'
+[ "$(grep -Fxc "CODEX_TURN_STATE_PANEL_URL=$PRESERVED_PANEL_URL" "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'unconfigured panel URL was not preserved from the active container'
+[ "$(grep -Fxc "CODEX_TURN_STATE_PANEL_TOKEN_FILE=$PANEL_TOKEN_CONTAINER_PATH" "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'unconfigured panel token file was not preserved from the active container'
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false'
 assert_contains "$(state_path sub2api-green)/env" 'UNRELATED_SETTING=preserved'
 assert_not_line "$(state_path sub2api-green)/env" 'DATABASE_HOST=postgres'
@@ -600,10 +654,56 @@ assert_contains "$(state_path sub2api-green)/mounts" "bind|$CA_FILE|/etc/ssl/cer
 assert_contains "$(state_path sub2api-green)/mounts" "bind|$TRAFFIC_STATE_FILE|/run/sub2api-runtime/traffic-state|false"
 assert_contains "$(state_path sub2api-green)/mounts" "bind|$BACKGROUND_STATE_FILE|/run/sub2api-runtime/background-state|false"
 assert_contains "$(state_path sub2api-green)/mounts" "bind|$HEALTH_TOKEN_FILE|/run/sub2api-runtime/health-token|false"
+[ "$(grep -Fc '/run/sub2api-runtime/' "$(state_path sub2api-green)/mounts")" -eq 3 ] \
+  || fail 'panel override added an unexpected runtime mount'
 assert_not_contains "$OUTPUT" 'external-secret-not-for-logs'
 
 assert_not_contains "$OUTPUT" 'redis-secret-not-for-logs'
 assert_not_contains "$CALLS" 'external-secret-not-for-logs'
+
+# An explicit release override replaces both inherited values and must never
+# reuse a candidate that was precreated for a different listener endpoint.
+: >"$CALLS"
+if PANEL_URL="$OVERRIDE_PANEL_URL" PANEL_TOKEN_FILE="$PANEL_TOKEN_CONTAINER_PATH" \
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'panel override reused a candidate created without the override'
+fi
+assert_contains "$OUTPUT" 'does not match'
+assert_not_contains "$CALLS" 'rm '
+assert_not_contains "$CALLS" 'start sub2api-green'
+rm -rf "$(state_path sub2api-green)"
+: >"$CALLS"
+PANEL_URL="$OVERRIDE_PANEL_URL" PANEL_TOKEN_FILE="$PANEL_TOKEN_CONTAINER_PATH" \
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+[ "$(grep -Fxc "CODEX_TURN_STATE_PANEL_URL=$OVERRIDE_PANEL_URL" "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'explicit panel URL was not written exactly once'
+[ "$(grep -Fxc "CODEX_TURN_STATE_PANEL_TOKEN_FILE=$PANEL_TOKEN_CONTAINER_PATH" "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'explicit panel token file was not written exactly once'
+sed -i.bak \
+  's@^CODEX_TURN_STATE_PANEL_URL=http://172.18.0.1:8788$@CODEX_TURN_STATE_PANEL_URL=http://172.19.0.1:8788@' \
+  "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/env.bak"
+: >"$CALLS"
+if PANEL_URL="$OVERRIDE_PANEL_URL" PANEL_TOKEN_FILE="$PANEL_TOKEN_CONTAINER_PATH" \
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'external candidate with a stale panel URL was reused'
+fi
+assert_contains "$OUTPUT" 'does not match'
+assert_not_contains "$CALLS" 'rm '
+sed -i.bak \
+  's@^CODEX_TURN_STATE_PANEL_URL=http://172.19.0.1:8788$@CODEX_TURN_STATE_PANEL_URL=http://172.18.0.1:8788@' \
+  "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/env.bak"
+printf 'CODEX_TURN_STATE_PANEL_TOKEN_FILE=%s\n' "$PANEL_TOKEN_CONTAINER_PATH" >>"$(state_path sub2api-green)/env"
+: >"$CALLS"
+if PANEL_URL="$OVERRIDE_PANEL_URL" PANEL_TOKEN_FILE="$PANEL_TOKEN_CONTAINER_PATH" \
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'external candidate with duplicate panel token files was reused'
+fi
+assert_contains "$OUTPUT" 'does not match'
+assert_not_contains "$CALLS" 'rm '
+sed -i.bak '$d' "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/env.bak"
 
 # The migration override deliberately replaces the inherited application
 # value, is unique, and is itself part of prepared-target validation.
@@ -795,6 +895,30 @@ fi
 assert_not_contains "$(state_path sub2api-green)/mounts" '/run/sub2api-runtime/'
 assert_not_contains "$(state_path sub2api-green)/env" 'SUB2API_TRAFFIC_STATE_FILE='
 assert_not_contains "$(state_path sub2api-green)/env" 'SUB2API_INTERNAL_HEALTH_TOKEN_FILE='
+
+# A local candidate may be started after precreation by an intervening
+# lifecycle action. Its reuse path must enforce the same exact panel values.
+rm -rf "$(state_path sub2api-green)"
+: >"$CALLS"
+PANEL_URL="$OVERRIDE_PANEL_URL" PANEL_TOKEN_FILE="$PANEL_TOKEN_CONTAINER_PATH" \
+  MODE=local PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+[ "$(grep -Fxc "CODEX_TURN_STATE_PANEL_URL=$OVERRIDE_PANEL_URL" "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'local explicit panel URL was not written exactly once'
+[ "$(grep -Fxc "CODEX_TURN_STATE_PANEL_TOKEN_FILE=$PANEL_TOKEN_CONTAINER_PATH" "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'local explicit panel token file was not written exactly once'
+sed -i.bak 's/^running=.*/running=true/' "$(state_path sub2api-green)/meta"
+sed -i.bak \
+  's@^CODEX_TURN_STATE_PANEL_TOKEN_FILE=/run/sub2api-runtime/health-token$@CODEX_TURN_STATE_PANEL_TOKEN_FILE=/tmp/stale-panel-token@' \
+  "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/meta.bak" "$(state_path sub2api-green)/env.bak"
+: >"$CALLS"
+if PANEL_URL="$OVERRIDE_PANEL_URL" PANEL_TOKEN_FILE="$PANEL_TOKEN_CONTAINER_PATH" \
+  MODE=local PRECREATE_ONLY=false run_helper >"$OUTPUT" 2>&1; then
+  fail 'local candidate with a stale panel token file was reused'
+fi
+assert_contains "$OUTPUT" 'does not match the requested image or dual-node runtime contract'
+assert_not_contains "$CALLS" 'exec '
+rm -rf "$(state_path sub2api-green)"
 
 # Local mode retains the original run-from-old-env behavior and does not mount
 # the external CA. The later app probe is intentionally the only failure.
@@ -1110,6 +1234,8 @@ if FAKE_DOCKER_CADDY_FLOW=true \
   HELPER_NEW_CONTAINER=sub2api \
   HELPER_NEW_IMAGE=sub2api:old \
   PRESERVE_SOURCE_CONTAINER=sub2api \
+  PANEL_URL="$OVERRIDE_PANEL_URL" \
+  PANEL_TOKEN_FILE="$PANEL_TOKEN_CONTAINER_PATH" \
   run_helper >"$OUTPUT" 2>&1; then
   :
 else
@@ -1120,6 +1246,8 @@ assert_contains "$APP_DIR/Caddyfile" 'reverse_proxy sub2api:8080'
 assert_contains "$CADDY_STARTUP_FILE" 'reverse_proxy sub2api:8080'
 assert_contains "$CADDY_ACTIVE_FILE" 'reverse_proxy sub2api:8080'
 assert_contains "$(state_path sub2api)/env" 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=true'
+assert_not_contains "$(state_path sub2api)/env" 'CODEX_TURN_STATE_PANEL_URL='
+assert_not_contains "$(state_path sub2api)/env" 'CODEX_TURN_STATE_PANEL_TOKEN_FILE='
 
 # Recovery can also start with the Caddy-selected container absent (for
 # example after an interrupted cleanup). With the audited isolated-old mode,

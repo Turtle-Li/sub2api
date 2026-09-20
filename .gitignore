@@ -181,3 +181,8 @@ output/
 
 # Local privacy-minimized monetary audit; contains user-linked balances.
 /evidence/credit-parity/
+
+# Own Codex monitor integration contract
+!docs/features/
+docs/features/*
+!docs/features/own-codex-monitor-panel.md

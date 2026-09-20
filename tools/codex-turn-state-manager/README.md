@@ -65,3 +65,56 @@ drain exclusion and JSON routing. Production query performance remains an
 operator validation item before enabling the optional mismatch feed.
 
 Proxy cooldown state uses hashed endpoint identities, with automatic legacy key migration; the state directory is private (0700) and usage writes are atomic (0600).
+
+## Own-admin source management adapter
+
+Run `integrated.py --config /protected/config.json --daemon` to add proxy-source
+management. It preserves the own manager's active-container discovery, optional
+device ID, per-account/model static-first policy, backoff, and atomic pin writer.
+Do not install the other project's `legacy_host_adapter.py` or shared-static-round
+policy. The original `manager.py` entry point remains available for rollback.
+
+`GET /api/proxy-sources` lists safe metadata for baseline and managed sources.
+Baseline configuration is read-only. Panel-created sources support import,
+`POST /api/proxy-sources/<id>/enabled` with a boolean `enabled`, and deletion.
+Changes are saved to the private `state_dir/proxy-sources.json` overlay and applied
+by the worker; pending changes are distinguished from loaded/disabled sources.
+Invalid overlay files produce an explicit read error while the worker retains
+the last accepted pool. Source names cannot collide with baseline statistics.
+Reads do not resolve DNS, call extraction providers or issue model requests.
+
+Dynamic extraction is deferred until that account/model exhausts static entries,
+with bounded HTTPS fetches, public-address validation, no redirects and no
+forwarding of proxy credentials to the extraction API. A failed due refresh
+drops prior extraction results. Gateway count does not measure exit IP count.
+
+The admin app uses `CODEX_TURN_STATE_PANEL_URL` to reach the private HTTP service.
+The default is `http://127.0.0.1:8787`, suitable only when the app and daemon share
+the host network namespace. A container's localhost is not the host's localhost.
+Keep Tailnet/non-loopback viewers read-only; management still requires loopback.
+Do not expose an unauthenticated management listener to solve container access.
+Install/transport changes require the project's release and maintenance process.
+See `docs/features/own-codex-monitor-panel.md` for the reference and rollout limits.
+
+## Authenticated same-host admin transport
+
+For a Docker app that cannot reach the daemon loopback, `integrated.py` optionally
+starts a second API-only listener from `admin_panel`: `enabled`, literal private
+IPv4 `bind`, `port`, and absolute `token_file`. The existing `panel` listener
+keeps its read-only setting. Every admin-listener request requires its bearer
+token; mutations additionally require the existing CSRF header. No HTML page
+or unprotected mutation API is exposed on that listener.
+
+The own host reuses its protected internal-health token file, already mounted
+read-only in the app. Go injects the token from `CODEX_TURN_STATE_PANEL_TOKEN_FILE`
+and only permits token-bearing requests to a literal private/loopback target.
+Set `CODEX_TURN_STATE_PANEL_URL` in the root-owned release environment so the
+canonical blue-green helper carries both non-secret settings into new slots.
+No token value enters environment variables, source, audit bodies or logs.
+Token-file read failure is fail-closed; file rotation is picked up on requests.
+
+Set `static_proxy_order=random` to shuffle the static queue once per account/model
+renewal cycle. Each static endpoint is tried at most once before dynamic fallback;
+continuation passes do not reshuffle/reset the queue. The absent-key behavior
+retains the historical configured order. This does not bypass backoff or force
+extra live probes.

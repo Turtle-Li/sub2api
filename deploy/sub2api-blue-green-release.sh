@@ -92,6 +92,13 @@ HEALTH_TOKEN_FILE="${SUB2API_INTERNAL_HEALTH_TOKEN_FILE:-${APP_DIR}/secrets/inte
 CONTAINER_TRAFFIC_STATE_PATH="/run/sub2api-runtime/traffic-state"
 CONTAINER_BACKGROUND_STATE_PATH="/run/sub2api-runtime/background-state"
 CONTAINER_HEALTH_TOKEN_PATH="/run/sub2api-runtime/health-token"
+CODEX_TURN_STATE_PANEL_URL="${CODEX_TURN_STATE_PANEL_URL:-}"
+CODEX_TURN_STATE_PANEL_TOKEN_FILE="${CODEX_TURN_STATE_PANEL_TOKEN_FILE:-}"
+CODEX_TURN_STATE_PANEL_OVERRIDE_CONFIGURED=false
+CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES=false
+if [ -n "$CODEX_TURN_STATE_PANEL_URL" ] || [ -n "$CODEX_TURN_STATE_PANEL_TOKEN_FILE" ]; then
+  CODEX_TURN_STATE_PANEL_OVERRIDE_CONFIGURED=true
+fi
 UNIFIED_PAYMENT_VAULT_VOLUME="${SUB2API_UNIFIED_PAYMENT_VAULT_VOLUME:-}"
 FEISHU_MODE="${SUB2API_FEISHU_ENABLED:-preserve}"
 FEISHU_ENABLED=false
@@ -126,6 +133,9 @@ EXTERNAL_ENV_KEYS=(
 EXTERNAL_OVERRIDE_KEYS=("${EXTERNAL_ENV_KEYS[@]}" PGSSLROOTCERT)
 RUNTIME_OVERRIDE_KEYS=(
   SUB2API_TRAFFIC_STATE_FILE SUB2API_BACKGROUND_STATE_FILE SUB2API_INTERNAL_HEALTH_TOKEN_FILE
+)
+CODEX_TURN_STATE_PANEL_OVERRIDE_KEYS=(
+  CODEX_TURN_STATE_PANEL_URL CODEX_TURN_STATE_PANEL_TOKEN_FILE
 )
 UNIFIED_PAYMENT_ENV_KEYS=(
   UNIFIED_PAYMENT_ENABLED UNIFIED_PAYMENT_PAYMENT_METHODS UNIFIED_PAYMENT_BASE_URL UNIFIED_PAYMENT_ENVIRONMENT
@@ -458,6 +468,73 @@ validate_runtime_files() {
   validate_runtime_file SUB2API_INTERNAL_HEALTH_TOKEN_FILE "$HEALTH_TOKEN_FILE" 1000 1000 600
 }
 
+resolve_codex_turn_state_panel_override() {
+  CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES=false
+  [ "$CODEX_TURN_STATE_PANEL_OVERRIDE_CONFIGURED" = true ] || return 0
+  # Rollback points NEW_CONTAINER at an already-running old generation. Its
+  # environment is a recovery input, so a newly configured listener cannot
+  # make an otherwise usable rollback target fail preflight.
+  if [ "$ALLOW_ISOLATED_OLD_CONTAINER" = true ] \
+    || [ -n "$FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER" ]; then
+    return 0
+  fi
+  CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES=true
+}
+
+validate_codex_turn_state_panel_override() {
+  [ "$CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES" = true ] || return 0
+
+  case "$CODEX_TURN_STATE_PANEL_URL" in
+    *$'\n'*|*$'\r'*) die "CODEX_TURN_STATE_PANEL_URL must not contain a line break" ;;
+  esac
+  case "$CODEX_TURN_STATE_PANEL_TOKEN_FILE" in
+    *$'\n'*|*$'\r'*) die "CODEX_TURN_STATE_PANEL_TOKEN_FILE must not contain a line break" ;;
+  esac
+  [ -n "$CODEX_TURN_STATE_PANEL_URL" ] \
+    || die "CODEX_TURN_STATE_PANEL_URL is required when configuring the panel token file"
+  [ -n "$CODEX_TURN_STATE_PANEL_TOKEN_FILE" ] \
+    || die "CODEX_TURN_STATE_PANEL_TOKEN_FILE is required when configuring the panel URL"
+  [ "$DUAL_NODE_RUNTIME_ENABLED" = true ] \
+    || die "CODEX_TURN_STATE_PANEL_URL requires SUB2API_DUAL_NODE_RUNTIME_ENABLED=true"
+  [ "$CODEX_TURN_STATE_PANEL_TOKEN_FILE" = "$CONTAINER_HEALTH_TOKEN_PATH" ] \
+    || die "CODEX_TURN_STATE_PANEL_TOKEN_FILE must use $CONTAINER_HEALTH_TOKEN_PATH"
+  if ! python3 - "$CODEX_TURN_STATE_PANEL_URL" <<'PY'
+import ipaddress
+import sys
+from urllib.parse import urlsplit
+
+value = sys.argv[1]
+try:
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError
+    if parsed.path not in ("", "/") or "?" in value or "#" in value:
+        raise ValueError
+    host = parsed.hostname
+    if host is None:
+        raise ValueError
+    address = ipaddress.ip_address(host)
+    if address.version != 4:
+        raise ValueError
+    private_networks = (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+    )
+    if not address.is_loopback and not any(address in network for network in private_networks):
+        raise ValueError
+    if parsed.port is not None and not 1 <= parsed.port <= 65535:
+        raise ValueError
+except ValueError:
+    raise SystemExit(1)
+PY
+  then
+    die "CODEX_TURN_STATE_PANEL_URL must be an HTTP(S) URL with a literal IPv4 private or loopback host and no path, query, or fragment"
+  fi
+}
+
 write_external_overrides() {
   local output_file="$1"
   local key value
@@ -635,6 +712,25 @@ container_matches_feishu_env() {
   esac
 }
 
+container_matches_codex_turn_state_panel_env() {
+  local inspect_env="$1" key expected_value actual_value
+
+  [ "$CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES" = true ] || return 0
+  for key in "${CODEX_TURN_STATE_PANEL_OVERRIDE_KEYS[@]}"; do
+    case "$key" in
+      CODEX_TURN_STATE_PANEL_URL) expected_value="$CODEX_TURN_STATE_PANEL_URL" ;;
+      CODEX_TURN_STATE_PANEL_TOKEN_FILE) expected_value="$CODEX_TURN_STATE_PANEL_TOKEN_FILE" ;;
+    esac
+    if ! actual_value="$(awk -v expected_key="$key" '
+      index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
+      END { if (count != 1) exit 1; print value }
+    ' "$inspect_env")"; then
+      return 1
+    fi
+    [ "$actual_value" = "$expected_value" ] || return 1
+  done
+}
+
 make_runtime_env_file() {
   local old_env_file output_file line key source_container
 
@@ -666,6 +762,9 @@ make_runtime_env_file() {
 	  SUB2API_TRAFFIC_STATE_FILE|SUB2API_BACKGROUND_STATE_FILE|SUB2API_INTERNAL_HEALTH_TOKEN_FILE)
 		continue
 		;;
+	  CODEX_TURN_STATE_PANEL_URL|CODEX_TURN_STATE_PANEL_TOKEN_FILE)
+		[ "$CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES" = true ] && continue
+		;;
 	  SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE)
 		[ "$FIXED_EGRESS_COMPATIBILITY_MODE" = preserve ] || continue
 		;;
@@ -683,6 +782,12 @@ make_runtime_env_file() {
 	  printf 'SUB2API_TRAFFIC_STATE_FILE=%s\n' "$CONTAINER_TRAFFIC_STATE_PATH"
 	  printf 'SUB2API_BACKGROUND_STATE_FILE=%s\n' "$CONTAINER_BACKGROUND_STATE_PATH"
 	  printf 'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=%s\n' "$CONTAINER_HEALTH_TOKEN_PATH"
+	} >>"$output_file"
+  fi
+  if [ "$CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES" = true ]; then
+	{
+	  printf 'CODEX_TURN_STATE_PANEL_URL=%s\n' "$CODEX_TURN_STATE_PANEL_URL"
+	  printf 'CODEX_TURN_STATE_PANEL_TOKEN_FILE=%s\n' "$CODEX_TURN_STATE_PANEL_TOKEN_FILE"
 	} >>"$output_file"
   fi
   if [ "$FIXED_EGRESS_COMPATIBILITY_MODE" != preserve ]; then
@@ -742,6 +847,7 @@ container_matches_external_runtime() {
   container_matches_unified_payment_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
+  container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
   for key in "${EXTERNAL_OVERRIDE_KEYS[@]}"; do
     if [ "$key" = PGSSLROOTCERT ]; then
       expected_value="$CONTAINER_PG_CA_PATH"
@@ -819,6 +925,7 @@ container_matches_local_runtime() {
   container_matches_unified_payment_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
+  container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
   for key in "${RUNTIME_OVERRIDE_KEYS[@]}"; do
 	case "$key" in
 	  SUB2API_TRAFFIC_STATE_FILE) expected_value="$CONTAINER_TRAFFIC_STATE_PATH" ;;
@@ -1337,6 +1444,7 @@ case "$FIXED_EGRESS_COMPATIBILITY_MODE" in
   preserve|true|false) ;;
   *) die "SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE must be preserve, true, or false" ;;
 esac
+resolve_codex_turn_state_panel_override
 require_positive_integer HEALTH_ATTEMPTS "$HEALTH_ATTEMPTS"
 require_positive_integer HEALTH_INTERVAL_SECONDS "$HEALTH_INTERVAL_SECONDS"
 require_positive_integer APP_PORT "$APP_PORT"
@@ -1349,6 +1457,7 @@ for command_name in awk chmod cp date docker grep id mktemp mv nsenter perl pyth
     realpath rm sha256sum stat; do
   require_cmd "$command_name"
 done
+validate_codex_turn_state_panel_override
 if [ "$CADDY_SWITCH_RECOVERY_ACTION" = restore-after-refund-gate ]; then
   [ "$SERVER_WRAPPER_OWNS_CADDY_RECOVERY" = true ] \
     || die "guarded Caddy restoration requires the server-release coordinator"

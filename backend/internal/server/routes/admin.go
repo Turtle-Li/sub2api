@@ -31,6 +31,11 @@ func RegisterAdminRoutes(
 	admin.Use(gin.HandlerFunc(auditLog))
 	admin.Use(middleware.AdminComplianceGuard(settingService))
 	{
+		// Existing private Codex manager, protected by the normal admin middleware.
+		admin.GET("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
+		admin.POST("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
+		admin.DELETE("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
+
 		// 部署与运营合规确认
 		registerAdminComplianceRoutes(admin, h)
 

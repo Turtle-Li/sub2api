@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -267,4 +268,52 @@ func TestOllamaCloudUsageSessionRouteOmitsAuditBody(t *testing.T) {
 	require.Len(t, logs, 1)
 	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
 	require.NotContains(t, logs[0].RequestBody, "audit-canary")
+}
+
+func TestCodexTurnStateProxyRoutesOmitCredentialBearingBodies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const route = "/api/v1/admin/codex-turn-state/*path"
+	require.True(t, shouldOmitAuditRequestBody("POST "+route))
+	require.True(t, shouldOmitAuditRequestBody("DELETE "+route))
+	require.False(t, shouldOmitAuditRequestBody("POST /api/v1/admin/codex-turn-stateful/*path"))
+
+	repository := &auditCaptureRepository{}
+	auditService := service.NewAuditLogService(repository, nil)
+	auditService.Start()
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyUser), AuthSubject{UserID: 77})
+		c.Set(string(ContextKeyUserRole), "admin")
+		c.Next()
+	})
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+	var receivedBody string
+	router.POST(route, func(c *gin.Context) {
+		raw, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		receivedBody = string(raw)
+		c.Status(http.StatusAccepted)
+	})
+
+	const canary = "codex-proxy-source-credential-canary"
+	body := `{"content":"http://user:` + canary + `@proxy.example","api_token":"` + canary + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/codex-turn-state/api/proxy-sources", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+	require.Equal(t, body, receivedBody)
+	auditService.Stop()
+
+	repository.mu.Lock()
+	logs := append([]*service.AuditLog(nil), repository.logs...)
+	repository.mu.Unlock()
+	require.Len(t, logs, 1)
+	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
+	require.NotContains(t, logs[0].RequestBody, canary)
+	require.Equal(t, "POST", logs[0].Method)
+	require.Equal(t, route, logs[0].Path)
+	require.Equal(t, http.StatusAccepted, logs[0].StatusCode)
+	require.NotEmpty(t, logs[0].Action)
 }

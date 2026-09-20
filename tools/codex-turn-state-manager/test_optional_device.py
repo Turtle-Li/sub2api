@@ -1,4 +1,4 @@
-import io,json,unittest
+import base64,io,json,unittest
 from pathlib import Path
 from unittest import mock
 from test_rotating import manager_module as m
@@ -11,6 +11,17 @@ class OptionalDeviceTests(unittest.TestCase):
     if device=='bad\nvalue':
      with self.assertRaises(RuntimeError):host.fetch_account(60,'test@example.com')
     else:self.assertEqual(host.fetch_account(60,'test@example.com')['device'],device or '')
+ def test_utf8_account_name_uses_base64_sql_comparison(self):
+  host=m.Sub2APIHost({})
+  name='账号 九  测试'
+  data=dict(token='token',account='account',version='0.154.0',device=None)
+  with mock.patch.object(host,'run_sql',return_value=json.dumps(data)) as run_sql:
+   self.assertEqual(host.fetch_account(9,name)['device'],'')
+  sql=run_sql.call_args.args[0]
+  encoded=base64.b64encode(name.encode('utf-8')).decode('ascii')
+  self.assertIn(f"convert_from(decode('{encoded}', 'base64'), 'UTF8')",sql)
+  self.assertNotIn(name,sql)
+  with self.assertRaises(ValueError):host.fetch_account(9,'账号\n测试')
  def test_wire_omits_only_absent_device(self):
   for device in (None,'existing-device'):
    captured=[]

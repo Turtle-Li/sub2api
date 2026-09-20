@@ -31,6 +31,7 @@ import math
 import os
 from pathlib import Path
 import re
+import random
 import socket
 import struct
 import subprocess
@@ -39,6 +40,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+import unicodedata
 import urllib.request
 from probe_diagnostics import classify_response
 from probe_stats import ProbeStats
@@ -48,7 +50,6 @@ MAX_STATE_BYTES = 8192
 # gpt-6-astra is rejected with HTTP 400 below this client version.
 MIN_CODEX_CLIENT_VERSION = "0.154.0"
 BASE64_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
-ACCOUNT_NAME_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
 MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
@@ -129,6 +130,20 @@ def is_valid_header_value(value: str) -> bool:
         if code < 0x20 or code == 0x7F or code > 0xFF:
             return False
     return True
+
+
+def is_safe_account_name(value: Any) -> bool:
+    """Accept ordinary UTF-8 account labels without letting control data into SQL."""
+    if not isinstance(value, str) or not 1 <= len(value) <= 128:
+        return False
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return len(encoded) <= 512 and all(
+        not unicodedata.category(character).startswith("C")
+        for character in value
+    )
 
 
 def normalize_proxy_url(raw: str) -> Optional[str]:
@@ -366,8 +381,11 @@ class Sub2APIHost:
 
     def fetch_account(self, account_id: int, account_name: str) -> Dict[str, Any]:
         """Load the OAuth credentials and codex client version for one account."""
-        if not ACCOUNT_NAME_RE.match(account_name):
+        if not is_safe_account_name(account_name):
             raise ValueError(f"unsafe account name: {account_name!r}")
+        encoded_name = base64.b64encode(account_name.encode("utf-8")).decode("ascii")
+        if not BASE64_RE.fullmatch(encoded_name):
+            raise RuntimeError("encoded account name failed its own alphabet check")
         sql = f"""
 SELECT jsonb_build_object(
   'token', a.credentials->>'access_token',
@@ -379,7 +397,7 @@ SELECT jsonb_build_object(
 )
 FROM accounts a
 WHERE a.id = {int(account_id)}
-  AND a.name = '{account_name}'
+  AND a.name = convert_from(decode('{encoded_name}', 'base64'), 'UTF8')
   AND a.status = 'active'
   AND a.deleted_at IS NULL;
 """
@@ -819,7 +837,7 @@ class StateManager:
                 raise ValueError("account must be object")
             account = dict(entry)
             account["id"] = int(key if key is not None else account["id"])
-            if account["id"] <= 0 or not ACCOUNT_NAME_RE.fullmatch(account.get("name", "")):
+            if account["id"] <= 0 or not is_safe_account_name(account.get("name", "")):
                 raise ValueError("invalid account identity")
             if not isinstance(account.get("enabled", True), bool):
                 raise ValueError("enabled must be boolean")
@@ -955,7 +973,7 @@ class StateManager:
 
     def upsert_account(self, account_id: int, name: str, model: str,
                        target_state_len: int) -> Dict[str, Any]:
-        if not ACCOUNT_NAME_RE.fullmatch(name or ""):
+        if not is_safe_account_name(name):
             raise ValueError("invalid account name")
         if not MODEL_NAME_RE.fullmatch(model or "") or account_id <= 0:
             raise ValueError("invalid account or model")
@@ -1487,8 +1505,12 @@ class StateManager:
         except Exception:
             print(f"[!] [{model}] credentials unavailable; waiting for recovery.")
             return None
-        pending = self._static_pending.setdefault(slot, [
-            p for p in self.proxies if p not in self._dynamic_proxies])
+        if slot not in self._static_pending:
+            pending = [p for p in self.proxies if p not in self._dynamic_proxies]
+            if self.config.get("static_proxy_order") == "random":
+                random.SystemRandom().shuffle(pending)
+            self._static_pending[slot] = pending
+        pending = self._static_pending[slot]
         if pending:
             proxy = pending.pop(0)
             source_kind = "static"
