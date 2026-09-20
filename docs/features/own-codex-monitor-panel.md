@@ -1,5 +1,7 @@
 # 自有 Sub2API 续期面板与 IP 池管理
 
+> 当前状态：2026-09-20 已上线，源码 `260b915e092705659f5454467870fdf217aab52c`。正式管理员页面已验证，当前活动池为10静态＋1动态。
+
 ## 范围与参照
 
 自有主线基线 `d9e6f1e21ba8f9dc6d15d894ed59430de7594604`。复用现有探针、账号覆盖层、模型写入和统计，不将第三方 host 适配器或共享静态池调度套入自有项目。
@@ -68,10 +70,10 @@ Bug: CTS-SOURCE-OBSERVABILITY-20260920
 - 现有配置来源在面板中只读，新增来源才可从面板启停/移除；不会重新导入或覆盖用户已有IP。
 - 统计按来源、UTC日期汇总；尚无逐个真实动态出口IP的采样，因此不能指出哪个动态出口导致312。
 - 原因没有通过随机对照或实际出口记录确认；不会以统计差异直接更换账号、供应商或代理。
-- 尚未部署，线上旧服务/配置保持不变；容器到管理监听的私有传输仍是发布前核验项。
+- 已通过带令牌校验的同机私网入口连接主应用；既有Tailnet查看入口仍只读。
 - knowledge_candidate: no，本次为项目特定适配，不晋升全局规范。
 
-## 最终交付状态
+## 首次本地交付记录（上线前）
 
 IMPLEMENTATION_READY，未提交/推送/部署。最终前端build、vue-tsc、22项定向测试和3项locale测试通过；Python全套74项通过；Go带embed整包构建通过，产物仅供本地评审。独立前端QA与Python源码复验均通过，本次未发现未解决的范围内阻塞问题。
 
@@ -99,3 +101,13 @@ Python的admin_panel仅接受字面量私网IPv4，所有API要求Bearer，写�
 - Go handler完整包及race测试通过，覆盖令牌文件逐请求读取、错误不发上游、公网目标拒绝及重定向不跟随。
 - 线上manager与候选使用跨Python版本标准化AST比较，原有函数除账号名称相关3处外一致；随后按用户追加指令显式增加静态随机序列。
 - 新网关已存Vault并通过固定hash消费者注入远端0600暂存；CLI操作完成后回到locked。
+
+## 正式上线结果（2026-09-20）
+
+GitHub生产发布成功：`https://github.com/Turtle-Li/sub2api/actions/runs/35511273437`。运行源码 `260b915e092705659f5454467870fdf217aab52c`，线上活动容器 `sub2api-blue`，镜像 `sub2api:auto-20260920-204854-260b915e`，healthy、restart_count=0，traffic accepting/background active。未登录访问管理API返回401，公共health为ok。
+
+实际Chrome管理员登录页面 `/admin/codex-turn-state` 已验证：10静态、1动态、2账号6模型均有效，`static`与`webshare_sg`均已加载，刷新操作正常。旧供应商只留历史统计，新池不再使用它们。新SOCKS5网关经一次IP-echo请求验证HTTP200和公网出口；没有触发强制模型探测，故尚不声称新来源已有目标状态命中。
+
+探针服务active/running，NRestarts=0。私有API未认证401、错误写入400、Tailnet只读写入403。原静态文件SHA256保持不变。新增精确UFW规则只允许本项目桥接口/网段访问管理端口，没有开放公网监听。
+
+回滚备份（仅远端root可读）：`/opt/sub2api/codex-turn-state-manager/backups/own-admin-20260920-01/deployment.json`，记录原/新目标文件hash、权限与对应备份索引。安装事务已完成，暂存私密代理文件已删除；不得对完成的安装调用 `--recover`。回滚须持项目维护锁、比较当前hash、恢复对应代码及配置，保留pins/账号/统计，主应用走既有蓝绿回滚。私有Registry记录 `projects/sub2api-own-admin-panel-20260920.md` 保存防火墙和完整运维细节。
