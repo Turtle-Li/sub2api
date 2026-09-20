@@ -16,7 +16,8 @@ func newAuthorizationFenceCacheForTest(t *testing.T) (*concurrencyCache, *minire
 	t.Helper()
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	cache := NewConcurrencyCache(client, 15, 900).(*concurrencyCache)
+	cache, ok := NewConcurrencyCache(client, 15, 900).(*concurrencyCache)
+	require.True(t, ok)
 	cache.EnableUserConcurrencyAuthorizationFence()
 	return cache, server
 }

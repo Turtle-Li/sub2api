@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -528,13 +527,6 @@ func paymentRefundBenefitSourceAuditDetailWithPresence(source *paymentRefundBene
 		}
 	}
 	return detail
-}
-
-func paymentRefundBenefitSourceReference(source *paymentRefundBenefitSource) string {
-	if source == nil {
-		return ""
-	}
-	return strconv.FormatInt(source.ID, 10)
 }
 
 func paymentRefundBenefitHasOnlyAutomaticExtras(order *dbent.PaymentOrder) bool {
@@ -1445,7 +1437,7 @@ func lockReservedPaymentRefundBenefits(
 	// A release retry after its original transaction already restored ACTIVE is
 	// idempotent. Every other state must remain bound to this exact provider
 	// attempt and proof before its lifecycle can change.
-	if !(source.State == refundBenefitStateActive && source.ReservedProductRefundNo == "") &&
+	if (source.State != refundBenefitStateActive || source.ReservedProductRefundNo != "") &&
 		(source.ReservedProductRefundNo != attempt.ProductRefundNo || source.ReservationProofDigest != attempt.BenefitProofDigest) {
 		return nil, nil, 0, nil, 0, errRefundBenefitProvenanceMissing
 	}
@@ -1523,7 +1515,7 @@ func releaseReviewedRefundBenefits(ctx context.Context, client *dbent.Client, fe
 	if attempt == nil || strings.TrimSpace(attempt.BenefitProofDigest) == "" {
 		return nil
 	}
-	source, cards, current, events, baseline, err := lockReservedPaymentRefundBenefits(ctx, client, order, attempt)
+	source, cards, current, _, _, err := lockReservedPaymentRefundBenefits(ctx, client, order, attempt)
 	if err != nil {
 		return err
 	}
@@ -1560,7 +1552,7 @@ func releaseReviewedRefundBenefits(ctx context.Context, client *dbent.Client, fe
 		// Reload event state after the ACTIVE transition; the rows locked before
 		// the update still describe the source as RESERVED and would otherwise
 		// incorrectly predict the held cap.
-		baseline, events, err = loadPaymentRefundConcurrencyHistory(ctx, client, source.UserID)
+		baseline, events, err := loadPaymentRefundConcurrencyHistory(ctx, client, source.UserID)
 		if err != nil {
 			return err
 		}

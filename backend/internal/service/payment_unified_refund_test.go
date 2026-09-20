@@ -304,7 +304,7 @@ func TestUnifiedRefundNewAdmissionRespectsInvoiceLifecycle(t *testing.T) {
 				require.Equal(t, tc.wantReason, infraerrors.Reason(err))
 				rows, queryErr := svc.entClient.QueryContext(ctx, "SELECT COUNT(*) FROM unified_payment_refund_attempts WHERE order_id=$1", order.ID)
 				require.NoError(t, queryErr)
-				defer rows.Close()
+				defer func() { require.NoError(t, rows.Close()) }()
 				require.True(t, rows.Next())
 				var attempts int
 				require.NoError(t, rows.Scan(&attempts))
