@@ -14,6 +14,8 @@ describe('Codex turn-state panel API bridge', () => {
 
   it.each([
     ['GET', 'api/state?window=30m', undefined],
+    ['GET', 'api/settings', undefined],
+    ['POST', 'api/settings', {refresh_advance_minutes:5}],
     ['POST', 'api/probe', { account_id: 17, model: 'gpt-6-astra', force: true }],
     ['DELETE', 'api/accounts/17/gpt-6-astra', undefined],
     ['POST', 'api/proxy-sources/0123456789abcdef0123456789abcdef/enabled', { enabled: false }],

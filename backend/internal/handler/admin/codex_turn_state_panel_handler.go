@@ -108,12 +108,12 @@ func allowedCodexPanelPath(method, path string) bool {
 	switch method {
 	case http.MethodGet:
 		switch path {
-		case "/api/state", "/api/degraded", "/api/stats", "/api/history", "/api/jobs", "/api/proxy-sources":
+		case "/api/settings", "/api/state", "/api/degraded", "/api/stats", "/api/history", "/api/jobs", "/api/proxy-sources":
 			return true
 		}
 		return codexPanelJobPath.MatchString(path)
 	case http.MethodPost:
-		return path == "/api/probe" || path == "/api/accounts" || path == "/api/proxy-sources" || codexPanelSourceEnabledPath.MatchString(path)
+		return path == "/api/settings" || path == "/api/probe" || path == "/api/accounts" || path == "/api/proxy-sources" || codexPanelSourceEnabledPath.MatchString(path)
 	case http.MethodDelete:
 		return codexPanelModelPath.MatchString(path) || codexPanelSourcePath.MatchString(path)
 	}

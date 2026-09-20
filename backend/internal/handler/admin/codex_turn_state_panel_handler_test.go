@@ -52,6 +52,9 @@ func TestCodexPanelAdapterAllowlist(t *testing.T) {
 		{http.MethodGet, "/", false},
 		{http.MethodGet, "/api/../../settings", false},
 		{http.MethodPost, "/api/state", false},
+		{http.MethodGet, "/api/settings", true},
+		{http.MethodPost, "/api/settings", true},
+		{http.MethodDelete, "/api/settings", false},
 		{http.MethodPut, "/api/accounts", false},
 		{http.MethodGet, "//remote.invalid", false},
 	} {

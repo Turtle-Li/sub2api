@@ -118,3 +118,27 @@ renewal cycle. Each static endpoint is tried at most once before dynamic fallbac
 continuation passes do not reshuffle/reset the queue. The absent-key behavior
 retains the historical configured order. This does not bypass backoff or force
 extra live probes.
+
+## Renewal settings and cycle timing
+
+`GET /api/settings` returns `refresh_advance_minutes` plus a safe error flag.
+`POST /api/settings` accepts exactly `{ "refresh_advance_minutes": 5 }`, an integer
+from 1 to 30. The private, atomically written `state_dir/settings.json` is the
+global operator override for all accounts; without it the original configuration
+stays effective. Malformed settings keep the last accepted value and reject
+mutation until repaired. Saving wakes the worker but never bypasses backoff.
+
+`/api/state` includes `settings` and `renewal_timing` with samples, average_seconds,
+last_seconds, since, and window=`last_200_successes`. A cycle starts immediately
+before the first harvest and ends only after a verified pin write. Retries and
+backoff belong to the same elapsed duration. Incomplete cycles stay in memory;
+a process restart drops them rather than manufacturing durations. The latest
+200 successful durations persist in private `renewal-timing.json`; no credentials,
+states, endpoint details, or account labels are stored there. Historical TTFB
+statistics and truncated probe history are not imported as full-cycle timings.
+
+The embedded admin UI updates countdown text every second and polls read-only
+snapshots every ten seconds while visible. Existing DOM nodes are reconciled,
+inputs/scroll/focus preserved, and hidden pages stop polling until visible again.
+Snapshot model `remaining_seconds` is the countdown basis; `remaining_minutes`
+remains for backward compatibility. No dashboard refresh enqueues a probe.

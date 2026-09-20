@@ -500,5 +500,87 @@ class IntegratedProxySourceTests(unittest.TestCase):
         shuffle.assert_called_once()
 
 
+    def test_settings_validate_persist_override_accounts_and_preserve_backoff(self):
+        account={"id":9,"name":"test","refresh_advance_minutes":20,"models":[{"name":"a"}]}
+        candidate, root, state_dir, config = self._manager(accounts=[account])
+        self.assertEqual(candidate.settings_snapshot()['refresh_advance_minutes'],15)
+        for invalid in (0,31,True,1.5,'5',None,float('nan')):
+            with self.assertRaises(ValueError):candidate.update_settings({'refresh_advance_minutes':invalid})
+        candidate._retry_after['9:a']=time.time()+200
+        candidate.update_settings({'refresh_advance_minutes':5})
+        self.assertEqual(candidate.account_advance_minutes(account),5)
+        self.assertEqual((state_dir/'settings.json').stat().st_mode & 0o777,0o600)
+        with mock.patch.object(integrated.manager,'probe_turn_state') as probe:
+            candidate.run_check_and_refresh(force=True)
+        probe.assert_not_called()
+        again=integrated.IntegratedStateManager(config)
+        self.assertEqual(again.settings_snapshot()['refresh_advance_minutes'],5)
+        (state_dir/'settings.json').write_text('{broken')
+        self.assertIsNotNone(candidate.settings_snapshot()['error'])
+        self.assertEqual(candidate.account_advance_minutes(account),5)
+        with self.assertRaises(ValueError):candidate.update_settings({'refresh_advance_minutes':3})
+
+    def test_average_measures_complete_cycle_across_retries_and_persists(self):
+        account={"id":9,"name":"test","models":[{"name":"a"}]}
+        candidate, _root, _state, config = self._manager(accounts=[account])
+        candidate._rotating=True
+        candidate._harvest_retry_delay=0
+        state=valid_state(292)
+        result=(state,integrated.manager.inspect_turn_state(state),candidate.proxies[0])
+        clock=[100.0]
+        def harvest(*args):
+            candidate._harvest_retry_delay=0
+            return None if clock[0]==100 else result
+        self.assertIsNone(candidate.renewal_timing_snapshot()['average_seconds'])
+        with mock.patch.object(integrated.manager.time,'monotonic',side_effect=lambda:clock[0]),mock.patch.object(candidate,'harvest',side_effect=harvest):
+            candidate.run_check_and_refresh()
+            self.assertEqual(candidate.renewal_timing_snapshot()['samples'],0)
+            clock[0]=130.0
+            candidate.run_check_and_refresh()
+        self.assertEqual(candidate.renewal_timing_snapshot()['samples'],1)
+        self.assertEqual(candidate.renewal_timing_snapshot()['average_seconds'],30.0)
+        again=integrated.IntegratedStateManager(config)
+        self.assertEqual(again.renewal_timing_snapshot()['last_seconds'],30.0)
+        self.assertEqual(again._renewal_started,{})
+
+    def test_failed_write_and_removed_slot_do_not_count_as_success(self):
+        account={"id":9,"name":"test","models":[{"name":"a"}]}
+        candidate, _root, _state, _config = self._manager(accounts=[account])
+        state=valid_state(292);result=(state,integrated.manager.inspect_turn_state(state),candidate.proxies[0])
+        with mock.patch.object(candidate,'harvest',return_value=result),mock.patch.object(candidate.host,'write_pinned_state',return_value=False):
+            candidate.run_check_and_refresh()
+        self.assertEqual(candidate.renewal_timing_snapshot()['samples'],0)
+        self.assertIn('9:a',candidate._renewal_started)
+        candidate.config['accounts']=[]
+        candidate.run_check_and_refresh()
+        self.assertEqual(candidate._renewal_started,{})
+
+    def test_settings_http_enforces_readonly_and_csrf(self):
+        candidate, _root, _state, _config = self._manager()
+        server,thread=self._server(candidate)
+        try:
+            connection=http.client.HTTPConnection(*server.server_address,timeout=3)
+            self.assertEqual(self._request(connection,'GET','/api/settings')[0],200)
+            self.assertEqual(self._request(connection,'POST','/api/settings',{'refresh_advance_minutes':5})[0],403)
+            headers={'X-CTSM-Panel':'1'}
+            candidate.config['panel']={'read_only':True}
+            self.assertEqual(self._request(connection,'POST','/api/settings',{'refresh_advance_minutes':5},headers)[0],403)
+            candidate.config['panel']={'read_only':False}
+            self.assertEqual(self._request(connection,'POST','/api/settings',{'refresh_advance_minutes':5},headers)[0],200)
+            self.assertEqual(self._request(connection,'POST','/api/settings',{'refresh_advance_minutes':True},headers)[0],400)
+            self.assertEqual(candidate.settings_snapshot()['refresh_advance_minutes'],5)
+            connection.close()
+        finally:server.shutdown();server.server_close();thread.join(timeout=3)
+
+    def test_target_hit_uses_the_same_saved_advance_window(self):
+        account={"id":9,"name":"test","refresh_advance_minutes":20,"models":[{"name":"a"}]}
+        candidate, _root, _state, _config = self._manager(accounts=[account])
+        candidate.update_settings({'refresh_advance_minutes':5})
+        info={'valid':True,'is_expired':False,'remaining_minutes':10}
+        with mock.patch.object(integrated.manager,'inspect_turn_state',return_value=info):
+            candidate._stats_attempt(account,account['models'][0],'static',probe_result(valid_state(292)))
+        self.assertEqual(candidate.source_stats()['totals']['target_hits'],1)
+
+
 if __name__ == "__main__":
     unittest.main()

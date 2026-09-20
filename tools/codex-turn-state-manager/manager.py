@@ -792,6 +792,16 @@ class StateManager:
         self.refresh_advance_minutes = float(
             self.config.get("refresh_advance_minutes", 15)
         )
+        self._settings_file = state_dir / "settings.json"
+        self._settings_lock = threading.RLock()
+        self._settings_override = None
+        self._settings_error = False
+        self._reload_settings()
+        self._renewal_file = state_dir / "renewal-timing.json"
+        self._renewal_lock = threading.RLock()
+        self._renewal_started = {}
+        self._renewal_samples = self._load_renewal_samples()
+
         # Caps how many addresses one pass may burn. Without it, a pass over a
         # large pool costs len(pool) x request_timeout in the worst case (21
         # proxies x 30s = 10.5 min), which alone can outlast the refresh window
@@ -841,7 +851,7 @@ class StateManager:
                 raise ValueError("invalid account identity")
             if not isinstance(account.get("enabled", True), bool):
                 raise ValueError("enabled must be boolean")
-            advance = float(account.get("refresh_advance_minutes", self.refresh_advance_minutes))
+            advance = self.account_advance_minutes(account)
             if not 0 <= advance < 60:
                 raise ValueError("invalid refresh window")
             models = account.get("models", [])
@@ -921,9 +931,88 @@ class StateManager:
         atomic_write_json(self._overlay_file, overlay)
         self._accounts_unlocked()
 
+    @staticmethod
+    def _validate_settings(value):
+        if not isinstance(value, dict) or set(value) != {"refresh_advance_minutes"}:
+            raise ValueError("invalid renewal settings")
+        minutes = value["refresh_advance_minutes"]
+        if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= 30:
+            raise ValueError("refresh advance must be an integer from 1 to 30")
+        return {"refresh_advance_minutes": minutes}
+
+    def _read_settings_file(self):
+        try:
+            return self._validate_settings(json.loads(self._settings_file.read_text()))
+        except FileNotFoundError:
+            return None
+
+    def _reload_settings(self):
+        with self._settings_lock:
+            try:
+                candidate = self._read_settings_file()
+                if candidate is not None:
+                    self._settings_override = candidate
+                self._settings_error = False
+            except (OSError, ValueError, TypeError):
+                self._settings_error = True
+
+    def settings_snapshot(self):
+        self._reload_settings()
+        with self._settings_lock:
+            value = self._settings_override or {"refresh_advance_minutes": self.refresh_advance_minutes}
+            return {**value, "error": "invalid settings file; last valid value retained" if self._settings_error else None}
+
+    def update_settings(self, value):
+        candidate = self._validate_settings(value)
+        with self._settings_lock:
+            # Never replace a corrupt operator file with an assumed empty value.
+            self._read_settings_file()
+            atomic_write_json(self._settings_file, candidate)
+            self._settings_override = candidate
+            self._settings_error = False
+        self._wake.set()
+        return self.settings_snapshot()
+
+    def _load_renewal_samples(self):
+        try:
+            rows = json.loads(self._renewal_file.read_text())
+            if not isinstance(rows, list):
+                return []
+            return [row for row in rows[-200:]
+                    if isinstance(row, dict)
+                    and isinstance(row.get("seconds"), (int, float)) and not isinstance(row["seconds"], bool)
+                    and math.isfinite(row["seconds"]) and 0 <= row["seconds"]
+                    and isinstance(row.get("at"), int) and not isinstance(row["at"], bool)]
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def renewal_timing_snapshot(self):
+        with self._renewal_lock:
+            rows = list(self._renewal_samples)
+        return {"samples": len(rows), "average_seconds": sum(row["seconds"] for row in rows) / len(rows) if rows else None,
+                "last_seconds": rows[-1]["seconds"] if rows else None,
+                "since": rows[0]["at"] if rows else None, "window": "last_200_successes"}
+
+    def _record_renewal_success(self, slot):
+        started = self._renewal_started.pop(slot, None)
+        if started is None:
+            return
+        seconds = max(0.0, time.monotonic() - started)
+        with self._renewal_lock:
+            rows = (self._renewal_samples + [{"at": int(time.time()), "seconds": round(seconds, 3)}])[-200:]
+            # A telemetry storage error must not invalidate a verified pin.
+            try:
+                atomic_write_json(self._renewal_file, rows)
+            except OSError:
+                print("[!] Renewal timing persistence failed.")
+            self._renewal_samples = rows
+
     def account_advance_minutes(self, account: Dict[str, Any]) -> float:
         """Single source for the refresh window, used by both the status table
         and the refresh decision. These two used to carry different defaults."""
+        with self._settings_lock:
+            if self._settings_override is not None:
+                return float(self._settings_override["refresh_advance_minutes"])
         return float(account.get("refresh_advance_minutes", self.refresh_advance_minutes))
 
     def _load_history(self) -> Dict[str, List[Dict[str, Any]]]:
@@ -1128,6 +1217,7 @@ class StateManager:
 
     def snapshot(self) -> Dict[str, Any]:
         """Everything the panel renders, in one read-only pass."""
+        self._reload_settings()
         now = time.time()
         degraded, degraded_error = self.degraded.fetch()
 
@@ -1177,6 +1267,7 @@ class StateManager:
                     "expired": bool(info.get("is_expired")),
                     "expires_at": info.get("expires_at"),
                     "remaining_minutes": info.get("remaining_minutes", 0),
+                    "remaining_seconds": info.get("remaining_seconds", 0),
                     "pinned_updated_at": pin.get("updated_at"),
                     # A pinned state whose length differs from the target is the
                     # signal that a harvest silently regressed.
@@ -1192,13 +1283,15 @@ class StateManager:
                     # The daemon harvests once the remaining TTL drops under the
                     # advance window, so that crossing is the next probe time.
                     row["next_probe_seconds"] = max(
-                        0, int((float(info.get("remaining_minutes", 0)) - advance) * 60)
+                        0, int(float(info.get("remaining_seconds", 0)) - advance * 60)
                     )
                 entry["models"].append(row)
             accounts.append(entry)
 
         return {
             "generated_at": int(now),
+            "settings": self.settings_snapshot(),
+            "renewal_timing": self.renewal_timing_snapshot(),
             "read_only": bool(self.config.get("panel", {}).get("read_only", False)),
             "degraded_enabled": self.degraded.enabled,
             "accounts": accounts,
@@ -1474,8 +1567,7 @@ class StateManager:
         info = inspect_turn_state(state) if state and status == 200 else {}
         hit = bool(status == 200 and state and info.get("valid")
                    and not info.get("is_expired", True)
-                   and info.get("remaining_minutes", 0) > float(account.get(
-                       "refresh_advance_minutes", self.refresh_advance_minutes))
+                   and info.get("remaining_minutes", 0) > self.account_advance_minutes(account)
                    and len(state) <= MAX_STATE_BYTES and is_valid_header_value(state)
                    and (not model_cfg.get("require_exact_len", True)
                         or len(state) == int(model_cfg.get("target_state_len", 292))))
@@ -1586,8 +1678,7 @@ class StateManager:
             return None
         info = inspect_turn_state(state)
         if (not info.get("valid") or info.get("is_expired", True)
-                or info.get("remaining_minutes", 0) <= float(account.get(
-                    "refresh_advance_minutes", self.refresh_advance_minutes))
+                or info.get("remaining_minutes", 0) <= self.account_advance_minutes(account)
                 or len(state) > MAX_STATE_BYTES or not is_valid_header_value(state)):
             print(f"[*] [{model}] rejected invalid or insufficient-lifetime state.")
             return None
@@ -1659,8 +1750,7 @@ class StateManager:
 
                 info = inspect_turn_state(result["state"])
                 if (not info.get("valid") or info.get("is_expired", True)
-                        or info.get("remaining_minutes", 0) <= float(account.get(
-                            "refresh_advance_minutes", self.refresh_advance_minutes))
+                        or info.get("remaining_minutes", 0) <= self.account_advance_minutes(account)
                         or len(result["state"]) > MAX_STATE_BYTES
                         or not is_valid_header_value(result["state"])):
                     print("[REJECT: invalid or insufficient-lifetime state]")
@@ -1761,11 +1851,13 @@ class StateManager:
     def run_check_and_refresh(self, force: bool = False,
                               only_account: Optional[int] = None,
                               only_model: Optional[str] = None) -> int:
+        self._reload_settings()
         round_started = time.monotonic()
         self._continue_harvest = False
         updated, attempted = 0, 0
         accounts = self.accounts()
         live_slots = {f"{a['id']}:{m['name']}" for a in accounts for m in a.get("models", [])}
+        self._renewal_started = {k: v for k, v in self._renewal_started.items() if k in live_slots}
         self._forced_pending.intersection_update(live_slots)
         self._short_retries.intersection_update(live_slots)
         self._retry_after = {k: v for k, v in self._retry_after.items() if k in live_slots}
@@ -1775,7 +1867,7 @@ class StateManager:
         for account in accounts:
             if only_account is not None and int(account['id']) != only_account:
                 continue
-            advance = float(account.get("refresh_advance_minutes", self.refresh_advance_minutes))
+            advance = self.account_advance_minutes(account)
             try:
                 pinned = self.host.read_pinned_states(int(account["id"]))
             except Exception as exc:  # noqa: BLE001
@@ -1807,6 +1899,7 @@ class StateManager:
                         )
                     )
                 if not needs_refresh:
+                    self._renewal_started.pop(slot, None)
                     self._static_pending.pop(slot, None)
                     continue
 
@@ -1833,6 +1926,7 @@ class StateManager:
             def _process_one(model_cfg: Dict[str, Any]) -> bool:
                 model = model_cfg["name"]
                 slot = f"{account['id']}:{model}"
+                self._renewal_started.setdefault(slot, time.monotonic())
                 harvested = self.harvest(account, model_cfg)
                 if not harvested:
                     with self._retry_lock:
@@ -1863,6 +1957,7 @@ class StateManager:
                     return False
 
                 if ok:
+                    self._record_renewal_success(slot)
                     self.record_probe(slot, {"at": int(time.time()), "ok": True,
                         "outcome": "saved", "state_len": info["length"],
                         "source": self._proxy_sources.get(proxy, "static")})
@@ -2007,6 +2102,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                     self._send(500, "panel.html is missing", "text/plain; charset=utf-8")
                     return
                 self._send(200, html, "text/html; charset=utf-8")
+            elif path == "/api/settings":
+                self._send(200, self.manager.settings_snapshot())
             elif path == "/api/state":
                 self._send(200, self.manager.snapshot())
             elif path == "/api/degraded":
@@ -2041,7 +2138,9 @@ class PanelHandler(BaseHTTPRequestHandler):
             for field in ("account_id", "target_state_len"):
                 if field in body and (isinstance(body[field], bool) or not isinstance(body[field], int)):
                     raise ValueError(field + " must be an integer")
-            if path == "/api/probe":
+            if path == "/api/settings":
+                self._send(200, self.manager.update_settings(body))
+            elif path == "/api/probe":
                 account_id = int(body.get("account_id") or 0)
                 if account_id <= 0:
                     self._send(400, {"error": "account_id is required"})

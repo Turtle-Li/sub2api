@@ -165,6 +165,15 @@
 
 <main>
   <div id="notice" role="status" aria-live="polite" hidden></div>
+  <section id="renewalSettingsSection">
+    <h2>续期提前量与成功耗时</h2>
+    <div class="row">
+      <label for="advanceMinutes">到期前 <input id="advanceMinutes" type="number" min="1" max="30" step="1" style="width:80px"> 分钟开始探测</label>
+      <button id="saveAdvance">保存提前量</button><span id="advanceStatus" class="meta" role="status"></span>
+    </div>
+    <p id="timingSummary" class="meta management-help" role="status">正在读取成功耗时…</p>
+    <p class="meta management-help">成功耗时从本轮首次探测到验证写入，包含重试与退避。平均值不保证每轮都能及时完成。</p>
+  </section>
   <section id="managementSection">
     <h2>探针账号与模型管理</h2>
     <p class="meta management-help">选择已有账号，填写或选择要监控的模型。可为同一账号添加多个模型；移出最后一个模型后，该账号停止探针。已有状态保留至到期。</p>
@@ -256,6 +265,69 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let busy = false;
+let latestState = null;
+let snapshotReceivedAt = 0;
+let settingsDirty = false;
+let settingsSaving = false;
+let settingsEpoch = 0;
+let settingsEditRevision = 0;
+let refreshQueued = false;
+let sourceInventorySignature = null;
+let historyCache = {};
+// Reconcile existing nodes in place. No table replacement, focus/scroll reset,
+// or loading placeholder while a background request is in flight.
+function syncNode(current, next) {
+  if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) { current.replaceWith(next.cloneNode(true)); return; }
+  if (current.nodeType === Node.TEXT_NODE) { if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue; return; }
+  if (current.nodeType !== Node.ELEMENT_NODE) return;
+  if (current.classList.contains('spark') && current.id === next.id && next.textContent === '—') return;
+  for (const attr of [...current.attributes]) if (!next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+  for (const attr of [...next.attributes]) if (current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+  const key = node => node.nodeType === Node.ELEMENT_NODE ? node.getAttribute('data-key') || node.id : null;
+  let cursor = current.firstChild;
+  for (const wanted of [...next.childNodes]) {
+    if (key(wanted)) {
+      const match = [...current.childNodes].find(node => key(node) === key(wanted));
+      if (match && match !== cursor) current.insertBefore(match, cursor);
+      if (match) cursor = match;
+    }
+    if (!cursor) { current.append(wanted.cloneNode(true)); continue; }
+    if (key(wanted) && key(cursor) !== key(wanted)) { current.insertBefore(wanted.cloneNode(true), cursor); continue; }
+    const following = cursor.nextSibling;
+    syncNode(cursor, wanted);
+    cursor = following;
+  }
+  while (cursor) { const following = cursor.nextSibling; cursor.remove(); cursor = following; }
+}
+function updateHTML(id, html) {
+  const current = $(id), next = current.cloneNode(false);
+  next.innerHTML = html;
+  syncNode(current, next);
+}
+function showTiming(state) {
+  const settings = state.settings;
+  if (settings && !settingsDirty && document.activeElement !== $('advanceMinutes')) $('advanceMinutes').value = settings.refresh_advance_minutes;
+  $('advanceMinutes').disabled = panelReadOnly || !settings;
+  $('saveAdvance').disabled = settingsSaving || panelReadOnly || !settings;
+  if (!settingsDirty) $('advanceStatus').textContent = settings?.error ? '设置文件异常，保留最后有效值；请检查服务配置' : settings ? `当前提前 ${settings.refresh_advance_minutes} 分钟${panelReadOnly ? ' · 只读' : ''}` : '等待服务设置';
+  const timing = state.renewal_timing;
+  $('timingSummary').textContent = timing?.samples > 0 && Number.isFinite(timing.average_seconds)
+    ? `平均成功耗时 ${duration(timing.average_seconds)} · 最近 ${timing.samples} 个成功样本（最多 200） · 最近一次 ${duration(timing.last_seconds)}`
+    : '平均成功耗时：暂无完整样本，下一轮成功后开始显示。';
+}
+const duration = value => Number.isFinite(value) ? (value < 60 ? `${value.toFixed(1)} 秒` : `${Math.floor(value / 60)} 分 ${Math.round(value % 60)} 秒`) : '—';
+function tickCountdowns() {
+  if (!latestState) return;
+  const elapsed = Math.max(0, (performance.now() - snapshotReceivedAt) / 1000);
+  const state = {...latestState, accounts: latestState.accounts.map(account => ({...account,models: account.models.map(model => {
+    const remaining = (Number.isFinite(model.remaining_seconds) ? model.remaining_seconds : Number(model.remaining_minutes) * 60) - elapsed;
+    return {...model,remaining_minutes:Math.max(0,remaining / 60),expired:model.expired || (model.valid && remaining <= 0),
+      backoff_seconds:Math.max(0,Math.ceil(model.backoff_seconds - elapsed)),next_probe_seconds:Math.max(0,Math.ceil(model.next_probe_seconds - elapsed))};
+  })}))};
+  renderModels(state);
+  applyHistory();
+}
+
 let panelReadOnly = true;
 let sourceInventory = [];
 let sourceReport = null;
@@ -343,11 +415,11 @@ function renewal(m) {
 
 function renderModels(state) {
   $('managementSection').hidden = state.read_only;
-  $('monitoredAccounts').innerHTML = state.accounts.map(account => `<div class="monitored-account">
+  updateHTML('monitoredAccounts', state.accounts.map(account => `<div class="monitored-account" data-key="account-${account.id}">
     <strong>${esc(account.name)}</strong>
     <div class="monitored-models">${account.models.map(m => `<span class="monitored-model">${esc(m.model)} <button data-remove="${account.id}" data-model="${esc(m.model)}" aria-label="移出 ${esc(account.name)} 的 ${esc(m.model)} 监控">移出</button></span>`).join('')}</div>
     <button data-select-account="${account.id}" data-name="${esc(account.name)}">添加模型</button>
-  </div>`).join('') || '<p class="meta">尚未配置探针账号，请先选择账号并添加模型。</p>';
+  </div>`).join('') || '<p class="meta">尚未配置探针账号，请先选择账号并添加模型。</p>');
   $('proxyImportSection').hidden = false;
   $('actionsHeading').hidden = state.read_only;
   $('degradationSection').hidden = !state.degraded_enabled;
@@ -357,13 +429,14 @@ function renderModels(state) {
   const expired = models.filter(m => m.expired).length;
   const backoff = models.filter(m => m.backoff_seconds > 0).length;
   const failures = state.accounts.filter(a => a.error).length;
-  $('renewalSummary').textContent = `${state.accounts.length} 个账号 · ${models.length} 个模型 · ${healthy} 个当前有效 · ${expired} 个已过期 · ${backoff} 个退避中` +
+  const summary = `${state.accounts.length} 个账号 · ${models.length} 个模型 · ${healthy} 个当前有效 · ${expired} 个已过期 · ${backoff} 个退避中` +
     (failures ? ` · ${failures} 个账号读取失败` : '') +
     (state.read_only ? ' · 只读模式，自动续期持续运行' : '');
+  if ($('renewalSummary').textContent !== summary) $('renewalSummary').textContent = summary;
   const rows = [];
   for (const acct of state.accounts) {
     if (acct.error) {
-      rows.push(`<tr><td>${esc(acct.name)}</td><td colspan="9" class="bad">${esc(acct.error)}</td></tr>`);
+      rows.push(`<tr data-key="error-${acct.id}"><td>${esc(acct.name)}</td><td colspan="9" class="bad">${esc(acct.error)}</td></tr>`);
       continue;
     }
     for (const m of acct.models) {
@@ -373,12 +446,12 @@ function renderModels(state) {
       const next = m.backoff_seconds > 0
         ? `<span class="warn">退避 ${secs(m.backoff_seconds)}</span>`
         : secs(m.next_probe_seconds);
-      rows.push(`<tr>
+      rows.push(`<tr data-key="${acct.id}:${esc(m.model)}">
         <td>${esc(acct.name)}<span class="dim"> #${acct.id}</span></td>
         <td>${esc(m.model)}</td>
         <td><span class="tag ${renewal(m)[0]}">${renewal(m)[1]}</span></td>
         <td class="${lenCls}">${m.state_len || '—'}<span class="dim"> / ${m.target_len}</span></td>
-        <td>${m.expired ? '<span class="bad">已过期</span>' : (m.valid ? Math.max(0,m.remaining_minutes) + ' 分' : '<span class="bad">无</span>')}</td>
+        <td>${m.expired ? '<span class="bad">已过期</span>' : (m.valid ? secs(Math.ceil(Math.max(0,m.remaining_minutes) * 60)) : '<span class="bad">无</span>')}</td>
         <td>${next}</td>
         <td>${m.pinned_updated_at ? esc(new Date(m.pinned_updated_at).toLocaleString()) : '—'}</td>
         ${state.degraded_enabled ? `<td><span class="tag ${cls}">${esc(label)}</span></td>` : ''}
@@ -387,7 +460,7 @@ function renderModels(state) {
       </tr>`);
     }
   }
-  $('models').innerHTML = rows.join('') || '<tr><td colspan="10" class="dim">探针清单为空</td></tr>';
+  updateHTML('models', rows.join('') || '<tr><td colspan="10" class="dim">探针清单为空</td></tr>');
 }
 
 function renderDegraded(state) {
@@ -408,8 +481,8 @@ function renderDegraded(state) {
     <td>${d.ttft_avg_ms ? Math.round(d.ttft_avg_ms) + ' ms' : '—'}</td>
     <td>${state.read_only ? '' : `<button data-add="${d.account_id}" data-name="${esc(d.account_name)}" data-model="${esc(d.sent_model)}">加入清单</button>`}</td>
   </tr>`);
-  $('degraded').innerHTML = rows.join('')
-    || '<tr><td colspan="7" class="dim">窗口内没有模型不匹配记录（不代表已验证质量）</td></tr>';
+  updateHTML('degraded', rows.join('')
+    || '<tr><td colspan="7" class="dim">窗口内没有模型不匹配记录（不代表已验证质量）</td></tr>');
 }
 
 function renderJobs(state) {
@@ -425,34 +498,50 @@ function renderJobs(state) {
       <td>${j.error ? `<span class="bad">${esc(j.error)}</span>` : (j.updated + ' 个已更新')}</td>
     </tr>`;
   });
-  $('jobs').innerHTML = rows.join('') || '<tr><td colspan="5" class="dim">暂无</td></tr>';
+  updateHTML('jobs', rows.join('') || '<tr><td colspan="5" class="dim">暂无</td></tr>');
 }
 
 async function renderHistory() {
-  const history = await getJSON('api/history');
-  for (const [slot, entries] of Object.entries(history)) {
+  historyCache = await getJSON('api/history');
+  applyHistory();
+}
+function applyHistory() {
+  const visible = new Set();
+  for (const [slot, entries] of Object.entries(historyCache)) {
     const [id, ...rest] = slot.split(':');
     const cell = $(`h-${id}-${cssId(rest.join(':'))}`);
     if (!cell) continue;
-    // Newest last, so the trend reads left to right like the log does.
-    cell.textContent = entries.slice(-10).map((e) => (e.outcome === 'saved' ? '✓' : e.ok ? '◎' : '·')).join(' ');
+    visible.add(cell.id);
+    const text = entries.slice(-10).map(e => e.outcome === 'saved' ? '✓' : e.ok ? '◎' : '·').join(' ') || '—';
+    if (cell.textContent !== text) cell.textContent = text;
     const last = entries[entries.length - 1];
     if (last) cell.title = `✓ 已钉入 · ◎ 目标命中 · · 未命中；最近：${last.outcome}，长度 ${last.state_len}，来源 ${last.source}`;
+    else cell.removeAttribute('title');
   }
+  document.querySelectorAll('#models .spark').forEach(cell => {
+    if (!visible.has(cell.id)) { if (cell.textContent !== '—') cell.textContent = '—'; cell.removeAttribute('title'); }
+  });
 }
 
 async function load() {
-  if (busy) return;
+  if (busy) { refreshQueued = true; return; }
   busy = true;
+  const requestEpoch = settingsEpoch;
   try {
     const state = await getJSON('api/state');
+    if (requestEpoch !== settingsEpoch) { refreshQueued = true; return; }
+    const newer = !latestState || state.generated_at > latestState.generated_at;
     panelReadOnly = state.read_only !== false;
     $('proxyImportForm').hidden = panelReadOnly;
-    renderModels(state);
+    if (panelReadOnly) $('proxySources').querySelectorAll('button').forEach(button => { button.disabled = true; });
+    if (newer) { latestState = state; snapshotReceivedAt = performance.now(); }
+    else if (state.generated_at === latestState.generated_at) latestState = state;
+    showTiming(state);
+    tickCountdowns();
     renderDegraded(state);
     renderJobs(state);
     if ($('notice').textContent === '续期状态暂不可用，请刷新重试。') $('notice').hidden = true;
-    await Promise.all([renderHistory().catch(() => notice('最近探针历史暂不可用', true)), loadStats(), refreshProxySources()]);
+    await Promise.all([renderHistory().catch(() => { historyCache = {}; applyHistory(); notice('最近探针历史暂不可用', true); }), loadStats(), refreshProxySources()]);
     $('meta').textContent =
       `${state.static_proxy_count} 个静态代理 / ${state.dynamic_provider_count} 个动态网关 · 更新于 ` +
       new Date(state.generated_at * 1000).toLocaleTimeString();
@@ -460,6 +549,12 @@ async function load() {
     $('meta').textContent = '加载失败：' + e.message;
     notice('续期状态暂不可用，请刷新重试。', true);
     panelReadOnly = true;
+    latestState = null;
+    sourceInventorySignature = null;
+    $('saveAdvance').disabled = true;
+    $('advanceMinutes').disabled = true;
+    $('advanceStatus').textContent = '设置状态未知，请刷新重试';
+    $('timingSummary').textContent = '成功耗时暂不可用，请刷新重试。';
     $('proxyImportForm').hidden = true;
     $('managementSection').hidden = true;
     $('renewalSummary').textContent = '无法读取续期状态，不能判断当前是否正常。';
@@ -472,6 +567,7 @@ async function load() {
 
   } finally {
     busy = false;
+    if (refreshQueued) { refreshQueued = false; queueMicrotask(load); }
   }
 }
 
@@ -602,14 +698,14 @@ function renderSourceStats() {
   const stats = sourceReport;
   const names = new Set([...sourceInventory.map(s => s.name), ...Object.keys(stats.by_source)]);
   const rows = [...names].map(source => ({source, ...(stats.by_source[source] || {attempts:0,http_200:0,target_hits:0,persisted:0,errors:0,status_counts:{}})}));
-  $('sources').innerHTML = rows.map(row => `<tr>
+  updateHTML('sources', rows.map(row => `<tr>
     <td>${esc(row.source)}</td><td>${row.attempts}</td><td>${row.http_200}</td>
     <td>${row.target_hits}</td><td>${row.persisted}</td>
     <td>${row.attempts ? (100 * row.target_hits / row.attempts).toFixed(1) + '%' : '—'}</td>
     <td>${esc(sourceOutcome(row))}</td>
     <td title="${esc(Object.entries(row.status_counts || {}).filter(([code]) => code !== '200').map(([code,n]) => `${code === '0' ? '网络错误' : 'HTTP ' + code}: ${n}`).join(' · '))}">${row.errors}</td>
     <td>${row.attempts ? Math.round(row.header_ms_average || 0) + ' ms' : '—'}</td>
-  </tr>`).join('') || '<tr><td colspan="9" class="dim">该时间范围样本不足</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="9" class="dim">该时间范围样本不足</td></tr>');
   const zeroHit = rows.filter(row => row.attempts > 0 && row.target_hits === 0);
   $('sourceSummary').textContent = zeroHit.length
     ? zeroHit.map(row => `${row.source}：${row.attempts} 次尝试 / 0 命中`).join('；') + '。HTTP 200 只表示请求成功；静态优先会影响各来源样本。'
@@ -621,6 +717,9 @@ async function refreshProxySources() {
     const rows = Array.isArray(data) ? data : data.sources || [];
     sourceInventory = rows;
     $('proxySourcesError').hidden = true;
+    const signature = JSON.stringify([panelReadOnly, rows]);
+    if (signature === sourceInventorySignature) { renderSourceStats(); return; }
+    sourceInventorySignature = signature;
     const container = $('proxySources'); container.replaceChildren();
     if (!rows.length) container.innerHTML = '<tr><td colspan="6" class="dim">暂无可展示来源；请确认服务配置。</td></tr>';
     rows.forEach(source => {
@@ -636,12 +735,14 @@ async function refreshProxySources() {
       } else {
         const toggle=document.createElement('button');toggle.textContent=source.enabled === false ? '启用' : '暂停';
         toggle.onclick=async()=>{
+          if (panelReadOnly) return;
           toggle.disabled=true;
           try { await mutate('POST','api/proxy-sources/'+encodeURIComponent(source.id)+'/enabled',{enabled:source.enabled === false}); notice('来源设置已保存，下一轮探针生效。');await refreshProxySources(); }
           catch(e){ notice(e.message,true);toggle.disabled=false; }
         };actions.append(toggle);
         const button=document.createElement('button');button.textContent='移除';button.style.marginInlineStart='6px';
         button.onclick=async()=>{
+          if (panelReadOnly) return;
           if(button.dataset.confirm!=='armed') {button.dataset.confirm='armed';button.textContent='确认移除';setTimeout(()=>{button.dataset.confirm='';button.textContent='移除';},5000);return;}
           button.disabled=true;
           try {await mutate('DELETE','api/proxy-sources/'+encodeURIComponent(source.id));notice('来源已移除，历史统计保留。');await refreshProxySources();}
@@ -653,6 +754,7 @@ async function refreshProxySources() {
     renderSourceStats();
   } catch(e) {
     sourceInventory=[];
+    sourceInventorySignature=null;
     $('proxySourcesError').hidden=false;
     $('proxySourcesError').textContent='IP 池列表读取失败，请刷新重试。';
     $('proxySources').innerHTML='<tr><td colspan="6" class="dim">来源状态未知</td></tr>';
@@ -669,8 +771,29 @@ $('importProxy').onclick = async () => {
   } catch(e) { notice(e.message, true); }
   finally { button.disabled = false; }
 };
+$('advanceMinutes').addEventListener('input', () => { settingsDirty = true; settingsEditRevision += 1; $('advanceStatus').textContent = '未保存'; });
+$('saveAdvance').onclick = async () => {
+  if (panelReadOnly) return;
+  const editRevision = settingsEditRevision;
+  const value = Number($('advanceMinutes').value);
+  if (!Number.isInteger(value) || value < 1 || value > 30) { $('advanceStatus').textContent = '请输入 1–30 的整数分钟'; return; }
+  if (settingsSaving) return;
+  settingsSaving = true;
+  $('saveAdvance').disabled = true;
+  try {
+    await mutate('POST', 'api/settings', {refresh_advance_minutes:value});
+    settingsEpoch += 1;
+    if (settingsEditRevision === editRevision) settingsDirty = false;
+    notice('提前量已保存，后续续期使用新设置。');
+    await load();
+  } catch (error) { $('advanceStatus').textContent = '保存失败：' + error.message; }
+  finally { settingsSaving = false; $('saveAdvance').disabled = panelReadOnly; }
+};
 load();
-// Refresh on entry, explicit refresh, and completed management actions only.
+const countdownTimer = setInterval(() => { if (!document.hidden) tickCountdowns(); }, 1000);
+const refreshTimer = setInterval(() => { if (!document.hidden) load(); }, 10000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickCountdowns(); load(); } });
+window.addEventListener('pagehide', () => { clearInterval(countdownTimer); clearInterval(refreshTimer); });
 
 // Keep the containing admin page as the single vertical scroll owner.
 let lastPanelHeight = 0;
