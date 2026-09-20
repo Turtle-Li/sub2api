@@ -194,7 +194,7 @@
       @confirm="handleRefund"
       @preview="scheduleRefundPreview"
       @backfill="handleSubscriptionGrantBackfill"
-      @cancel="closeRefundDialog"
+      @cancel="requestCloseRefundDialog"
     />
     <BaseDialog :show="!!externalRefundTarget" :title="t('payment.admin.externalRefundTitle')" @close="closeExternalRefundDialog">
       <form v-if="externalRefundTarget" class="space-y-4" @submit.prevent="handleConfirmExternalRefund">
@@ -718,6 +718,10 @@ function openRefundDialog(order: PaymentOrder) {
   refundWarning.value = order.invoice?.status === 'ISSUED' ? t('payment.invoice.refundBlockedAfterIssue') : ''
   showRefundDialog.value = true
   void loadRefundReview(order, session)
+}
+
+function requestCloseRefundDialog() {
+  if (!refundSubmitting.value && !refundBackfilling.value) closeRefundDialog()
 }
 
 function closeRefundDialog() {

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"math"
 	"math/big"
 	"regexp"
@@ -58,6 +59,13 @@ func (s *PaymentService) requireReviewedRefundAdmission(ctx context.Context) err
 }
 
 func (s *PaymentService) validateUnifiedRefundOrder(o *dbent.PaymentOrder) error {
+	return s.validateUnifiedRefundOrderWithBenefitExtras(o, false)
+}
+
+// validateUnifiedRefundOrderWithBenefitExtras keeps the legacy blanket fence
+// for every caller except the reviewed P19 path. The reviewed path performs
+// the stronger source/card/concurrency proof before it reaches the provider.
+func (s *PaymentService) validateUnifiedRefundOrderWithBenefitExtras(o *dbent.PaymentOrder, allowBenefitExtras bool) error {
 	if !refundStateValid(o) {
 		return infraerrors.BadRequest("INVALID_REFUND_STATE", "stored order refund amounts are invalid")
 	}
@@ -83,7 +91,7 @@ func (s *PaymentService) validateUnifiedRefundOrder(o *dbent.PaymentOrder) error
 		return infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "this unified-payment order type requires manual review")
 	}
 	manual, err := paymentOrderRequiresManualRefund(o)
-	if err != nil || manual {
+	if err != nil || (manual && (!allowBenefitExtras || !paymentRefundBenefitOrderTypeSupported(o) || !paymentRefundBenefitHasOnlyAutomaticExtras(o))) {
 		return infraerrors.BadRequest("REFUND_REQUIRES_MANUAL_REVIEW", "order entitlements require manual refund review")
 	}
 	return nil
@@ -184,7 +192,7 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateUnifiedRefundOrder(o); err != nil {
+	if err := s.validateUnifiedRefundOrderWithBenefitExtras(o, reviewed); err != nil {
 		return nil, err
 	}
 	manual, err := unifiedRefundOrderNeedsReview(txCtx, client, o.ID)
@@ -342,6 +350,12 @@ func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Conte
 	if err := insertUnifiedRefundAttempt(ctx, client, a); err != nil {
 		return nil, err
 	}
+	// The base wallet/subscription reserve already holds the historical lock
+	// prefix. Reserve reset-card and concurrency evidence only after the durable
+	// attempt exists so its source lifecycle is tied to this exact provider id.
+	if err := reserveReviewedRefundBenefits(ctx, client, s.concurrencyAuthorizationFence, order, review, a); err != nil {
+		return nil, err
+	}
 	settled, _ := refundOrderAmounts(order)
 	if _, err := client.PaymentOrder.UpdateOneID(order.ID).SetStatus(OrderStatusRefundPending).
 		SetRefundAmount(settled).SetRefundRequestedAmount(review.EntitlementAmount).
@@ -354,7 +368,8 @@ func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Conte
 		"entitlement_amount_minor": a.BalanceAmountMinor, "refund_kind": a.RefundKind,
 		"wallet_paid_amount": a.WalletPaidAmount, "wallet_gift_amount": a.WalletGiftAmount,
 		"subscription_seconds": a.SubscriptionSeconds, "quote_revision": a.QuoteRevision,
-		"reason_code": a.ReasonCode, "reason_summary": a.ReasonSummary,
+		"benefit_proof_digest": a.BenefitProofDigest,
+		"reason_code":          a.ReasonCode, "reason_summary": a.ReasonSummary,
 	}); err != nil {
 		return nil, err
 	}
@@ -719,7 +734,7 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateUnifiedRefundOrder(o); err != nil {
+	if err := s.validateUnifiedRefundOrderWithBenefitExtras(o, strings.TrimSpace(a.BenefitProofDigest) != ""); err != nil {
 		return nil, err
 	}
 	if a.Status != unifiedRefundPending {
@@ -755,6 +770,17 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 			// The wallet entitlement is already frozen. Do not create or query
 			// a provider refund until the shared balance generation invalidates
 			// every compatible cache value that could still authorize it.
+			return s.pendingReviewedRefundForCacheBoundary(ctx, a)
+		}
+	}
+	if strings.TrimSpace(a.BenefitProofDigest) != "" {
+		cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		cacheErr := s.ensureReviewedRefundBenefitConcurrencyAuthorizationFence(cacheCtx, a)
+		cancel()
+		if cacheErr != nil {
+			// This is the strict P19 boundary: source state and its effective
+			// cap are already durable, but no provider request may be created
+			// while a stale user admission cache could still exceed that cap.
 			return s.pendingReviewedRefundForCacheBoundary(ctx, a)
 		}
 	}
@@ -904,6 +930,9 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 				if err := finalizeReviewedRefundEntitlement(txCtx, client, o, a); err != nil {
 					return nil, err
 				}
+				if err := captureReviewedRefundBenefits(txCtx, client, s.concurrencyAuthorizationFence, o, a); err != nil {
+					return nil, err
+				}
 			} else if a.DeductBalance {
 				plan.DeductionType, plan.BalanceToDeduct = payment.DeductionTypeBalance, amount
 				if err := s.applyRefundFinalDeduction(txCtx, plan); err != nil {
@@ -921,6 +950,14 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 		} else {
 			if a.EntitlementReserved {
 				if releaseErr := releaseReviewedRefundEntitlement(txCtx, client, o, a); releaseErr != nil {
+					a.NeedsManualReview = true
+					response = pendingUnifiedRefundResult(true)
+					if err := writeUnifiedRefundAudit(txCtx, client, orderID, "UNIFIED_REFUND_RELEASE_FAILED", map[string]any{
+						"product_refund_no": a.ProductRefundNo, "reason": releaseErr.Error(),
+					}); err != nil {
+						return nil, err
+					}
+				} else if releaseErr := releaseReviewedRefundBenefits(txCtx, client, s.concurrencyAuthorizationFence, o, a); releaseErr != nil {
 					a.NeedsManualReview = true
 					response = pendingUnifiedRefundResult(true)
 					if err := writeUnifiedRefundAudit(txCtx, client, orderID, "UNIFIED_REFUND_RELEASE_FAILED", map[string]any{
@@ -955,6 +992,13 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(a.BenefitProofDigest) != "" {
+		cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		if syncErr := s.syncPaymentRefundBenefitConcurrencyAuthorizationFence(cacheCtx, a); syncErr != nil {
+			slog.Warn("sync payment refund concurrency authorization fence failed", "orderID", a.OrderID, "err", syncErr)
+		}
+		cancel()
 	}
 	switch a.RefundKind {
 	case refundReviewKindSubscription:

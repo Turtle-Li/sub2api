@@ -27,7 +27,7 @@ Task ID: PAYMENT-FIX-20260920
 
 - [x] P17 （已实现/本地验证，源码独立复核通过；待实际浏览器验收）支付宝站内二维码：对齐微信弹窗；核查可信支付返回类型与二维码内容，保留已存在订单恢复、原截止时间及移动端兼容，不把HTML/错误链接冒充原生二维码。
 - [x] P18 （已实现/本地验证，独立复核通过）支付渠道商品说明中文化：Plus订阅、Pro订阅、订阅重置卡、余额充值；不出现Sub2API等内部英文标识。沿实际发给支付宝/微信/统一支付的边界确认，保留渠道必需技术ID，不篡改旧交易。
-- [ ] P19 历史订阅/余额无法退款：逐笔只读核查审核阻断原因、paid/gift来源及权益发放/使用证据；已用重置卡不可退规则保留。可证明的未用权益应自动判断回收，历史无法证明不可盲目退；解释需要人工撤销的具体权益与系统能处理的边界，优先实现可靠自动回收。不得手工改金融状态或发起未经单独确认的实际退款。
+- [x] P19 （源码/本地验证/独立复核通过；Sub2部署与激活待完成）历史订阅/余额无法退款：逐笔只读核查审核阻断原因、paid/gift来源及权益发放/使用证据；已用重置卡不可退规则保留。可证明的未用权益应自动判断回收，历史无法证明不可盲目退；解释需要人工撤销的具体权益与系统能处理的边界，优先实现可靠自动回收。不得手工改金融状态或发起未经单独确认的实际退款。
 
 ## 执行分组与所有权
 
@@ -89,3 +89,54 @@ P19待产品决定，不标完成：推荐未用赠卡自动回收、已用赠�
 2026-09-20：P01–P18源码与定向测试门禁PASS。中央QA/Review、Sub2后端QA/Review、前端QA/Review均通过；FR-001已复核关闭。前端最终冻结37文件manifest SHA256：49d40e8e113cf9e7d2b6a6847523b725311ebbf02fbfc01d6ba76222d5d57231。最终开票关闭保护11项测试、typecheck通过。浏览器认证/真实商户视觉验收仍未完成；不能把测试通过当成线上已生效。
 
 保存已验证修复提交；不发布生产。P19仍未实现，需用户确认赠卡使用后的退款规则及正式每日退款限额后继续自动回收开发和发布。
+
+## P19 已确认开发与发布（2026-09-20 后续）
+
+用户明确取消每日退款限额，并要求系统记录赠卡ID及发放前历史并发，退款自动检查和回收，无需常规人工撤销。沿既有未用赠卡回收、已用赠卡拒绝退款边界实现，不新增扣卡价格规则；重复请求/未知资金结果继续既有幂等与预占恢复。
+
+执行DAG：T19-A中央0=不限额与相关数据库/准入校验（独立并行）→中央单元/PG验收；T19-B Sub2真实发放快照、管理员覆盖版本、赠卡来源ID（后端单一写入责任）→T19-C接入既有review/reserve/capture/release并补用卡竞态/失败恢复→T19-D展示自动回收效果、历史证据可证明时自动处理→独立QA与双轴Review→同源CI/安全检查/制品与备份恢复验证→canonical中央/Sub2发布。
+
+架构责任root；中央写入refund_unlimited_central；Sub2后端责任待架构边界冻结后分配；root负责UI/文档/集成/最终发布。正常新订单必须有完整快照；历史缺失数据不能伪造，先利用既有订单、赠卡来源和更高并发证据自动判断。支付总额上限、单笔预占、开票互斥、单次成功退款和账务审计保持。
+
+复用现有任务分支；preflight因项目无.agent-worktree.toml trunk返回CANONICAL_NOT_READY，不创建重复分支、不修改全局框架配置。当前a025553c4与fork/main一致，已有用户开发/提交/发布授权继续生效。
+
+### P19 开发与发布准备证据
+
+前端自动回收明细与busy关闭保护45项测试通过，i18n3项与typecheck通过；独立UI QA/Review无P0-P2，已把“赠卡”文案明确为赠送重置卡。实际回收数量、卡ID及并发变化仅展示服务端审核结果，不在浏览器推算。
+
+中央migration22/0=unlimited候选已完成开发者真实PG17.11测试与制品构建；archive、scope config SQL、rollout script已上传项目release目录并核对SHA，仍为暂存未运行。中央独立release review进行中。
+
+Sub2现网blue健康，旧green已正常退出。root-owned receiver SHA256保持8ccb62ae77776ff5f3298b3dc5ff0b3599ac5dc344db649f8f68f4a439f941d8，配置仍Turtle-Li/sub2api/main。
+新canonical备份：/opt/sub2api-db-backups/sub2api-db-backup-20260920-035430.tar.gz，288402827字节，SHA256 42f13644bf78ec373d5cf4f251887d97257b059c239e7b5f39f112b86bbf5127。备份service success/exit0；installed隔离restore-smoke通过outer/inner校验、PostgreSQL恢复/amcheck和Redis载入，schema_count311、schema_hash d718ec8409f7a53578b5927f1081cdbe。未恢复生产数据。
+
+中央R1独立发布检查NO：旧默认0不能被直接解释成无限，否则可能放宽非Sub2项目；旧回滚镜像必须校验不可变ID，不能仅tag。R1未执行，暂存脚本已隔离为REJECTED。正在修R2：明确unlimited opt-in、旧0仍禁止退款，仅授权的Sub2两个binding设置0+opt-in；增加旧imageID前置/回滚核验。R2须重新通过独立检查后才运行。
+
+### P19 独立审查返修（未发布Sub2）
+
+中央R2通过独立检查后实际执行停在前置备份verify：backup create成功，verify 5分钟timeout。API/Worker/PG仍cancel21、4代理healthy、尚未dockerload/Compose变更/迁移/SQL配置。根因已定位verify的GPG stdout→pg_restore --list管道：目录读取提前结束，父进程不drain剩余解密流，较大备份阻塞到timeout。R3修复读完并验证解密/MDC状态，不能跳过校验；新只读oneshot helper先验证旧备份，旧PG21helper继续隔离恢复验收，之后才允许发布。
+
+Sub2独立缓存审查返修：wire_gen过时；提交后的新cap必须立即限制旧AuthSubject，不能等freshsnapshot；0无限/tombstone必须合法。作者正在补tokenized mutation barrier+提交/回滚投影同步、revisionCAS/reconcile及server实际构建。
+Sub2财务审查返修：balance已有walletledger回收赠额时应允许与并发一起自动退；旧balance来源兼容遗漏；旧writer rawUPDATE必须UNATTRIBUTED屏障而非可信SET；审计0不能视为缺省；补真实service→PG refundreserve/capture/release而非仅手动改state的测试。
+
+root新增restrict-only forwardpause hostguard及PGadvisory CAS SQL，正常HTTP/WS不drain；hermetic守卫/EOF/错误ACK/pending拒绝和真实PG CAS/重复/并发预占竞争均通过，待独立审查。该guard仅暂停新reviewedrefund，旧writer数据桥接仍依赖上述UNATTRIBUTED边界，不能凭gate关闭宣称安全。
+
+P19前端最终定向46项通过，生产build通过（17.32s），ESLint无错误；退款并发0按现有语义显示“无限制”。Root另补P17手机兼容：仅桌面新Alipay请求embedded_qr，手机保留原hosted表现；统一支付Alipay/Wechat相关测试通过0.707s，已交cache审查范围。
+forwardpause guard独立检查PASS，仅限hostguard/PGCAS；包括hermetic、ShellCheck、真实PG竞争及应用advisory-lock测试。自动回收整体仍待cache/financial返修复核，不因gate通过而提前激活。
+中央R3加入GPG流drain/MDC校验，真实>1MiB旧超时/新成功与坏口令/截断失败测试通过，source/artifact重新构建并上传校验，待独立R3delta复核。R2失败backupverify未改变线上服务/schema/配置。
+
+中央R3真实尝试再次在服务切换前停止，ERR定位为一次性helper挂载文本比较（Docker模板额外换行排序后多空行）。root创建未启动inspect-onlyhelper读取结构确认2个ro bind/private、UID999、caps/security/network全部符合；该helper已按精确ID删除。R3b仅把挂载检查改为JSON exactlen2/固定dest/固定source/Typebind/RWfalse/Propagationrprivate，7类正常/恶意fixture通过，scriptSHA7ea17e12f094d6e9aaf64efc2c843325183b1383883a6bb71f73403c121f3e3a；R3archive/SQL/backupbinary不变，待独立delta复核。生产仍cancel21，未迁移22/未改退款限额。
+
+中央服务已实际发布成功（2026-09-20 06:59:16+08）：R3b script c6eddf5aeec014b0d32b4af1d80795f2a70377c3000334b2df3c26a82af47cf3，unit totools-pay-refund22-r3b-20260920.service exit0。migration22、Sub2支付宝/微信每日退款0+opt-in=true，收款0/0保持。API/Worker/PG及4代理healthy/restart0，代理ID未变。pre/post encrypted backups20260919T225857Z/225914Z均verify+isolatedrestore通过。中央P17embedded支持已包含；Sub2UI/自动权益回收尚未发布。全证据在中央docs/operations/SUB2_UNLIMITED_DAILY_REFUND_R3_20260919.md及privateRegistry项目记录；未执行真实订单退款。
+
+forwardpause helper c2edfe266affde6ee7b9192f79d848b35ae4871645e197ca76db20cd842a8043已按只读比对确认原已安装版本与HEAD基线相同后安装；原helper SHA111037b559d4aea9b1bb9cdc8a2929c55602f4282f3151458144502d0de141c1已保留before-p19副本。仅更新控制工具，未执行pause、未改变refundgate或普通请求状态。
+Cache作者新的真实PG测试验证外层Ent事务8→3提交后旧Auth8受到regular/Live约束、回滚1→0不留下错误；server wire/serverbuild已通过，缓存slice独立复核中。财务worker真实service→PG balancebonus+并发review/reserve/capture与audit首例通过，继续最小release/zero/legacy/unknown屏障用例。
+
+### P19 返修冻结，等待最终独立结论
+
+Cache marker ownership已改为captured token/revision CAS；old completion A/reconcile-A不得清writer B，regular/Live保持failclosed，0无限保留。真实PGoutertx提交/rollback及Rootrepo/race/PG/UserRepo/service/servercompile/build链全部通过。
+财务返修已冻结：balancebonus+concurrency可自动处理、legacybalancecurrent>target保守不降、UNATTRIBUTED屏障、新source后可回放、0audit不改写；source migration255 SHAfe22f4f5f7252af380740d54bdb6ecaf4e4274757792e11f04b8624e018e4e22，helper0ded90c1d2f559a6527a1cf1e4330dbd0153e1e43d98e70eabfa3954739f4fc9。unit新3例和既有outerReview/Prepare/terminal4例通过；真实PGservice2例7.790s、repository4例5.776s通过。独立financial/cache最后delta复核中；root正在较大unit回归。任何未过gate仍不激活Sub2。
+
+最终Sub2 independent financial/cache复核均PASS，无P0-P2；financial PG service7.367s、repo/migration5.682s/0.593s验证了5项修复；marker ownership竞态normal/race和regular/Live保护均独立通过。
+Root较大unit回归：service197.325s与migration1.780s通过；repository唯一4个失败已定位为本地httptest被固定Tea SDK字面host:port NO_PROXY匹配误送代理（并非真实Aliyun外部测试）。仅测试helper临时追加对应loopback endpoint，继承其他proxy值不变、生产代码不变；原4断言无删减，重跑通过2.062s，repository全量重跑中。该测试卫生delta独立复核中。
+
+P19源码本地门禁收敛：service全量unit197.325s、repository全量unit4.680s、migrationunit1.780s通过；独立financial/cache/forwardguard/UI均PASS；captcha测试卫生delta也独立PASS（固定SDKliteralhost:port，仅本地mockendpoint绕代理，未削弱断言或改生产配置）。当前保存同一source提交进入CI/security/build-only，Sub2生产仍旧b7fa，尚未启用权益自动退款。

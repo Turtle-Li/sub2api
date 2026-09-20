@@ -71,21 +71,22 @@ type JWTClaims struct {
 
 // AuthService 认证服务
 type AuthService struct {
-	entClient             *dbent.Client
-	userRepo              UserRepository
-	redeemRepo            RedeemCodeRepository
-	refreshTokenCache     RefreshTokenCache
-	cfg                   *config.Config
-	settingService        *SettingService
-	emailService          *EmailService
-	turnstileService      *TurnstileService
-	tencentCaptchaService *TencentCaptchaService
-	aliyunCaptchaService  *AliyunCaptchaService
-	emailQueueService     *EmailQueueService
-	promoService          *PromoService
-	affiliateService      *AffiliateService
-	defaultSubAssigner    DefaultSubscriptionAssigner
-	userPlatformQuotaRepo UserPlatformQuotaRepository
+	entClient                     *dbent.Client
+	userRepo                      UserRepository
+	redeemRepo                    RedeemCodeRepository
+	refreshTokenCache             RefreshTokenCache
+	cfg                           *config.Config
+	settingService                *SettingService
+	emailService                  *EmailService
+	turnstileService              *TurnstileService
+	tencentCaptchaService         *TencentCaptchaService
+	aliyunCaptchaService          *AliyunCaptchaService
+	emailQueueService             *EmailQueueService
+	promoService                  *PromoService
+	affiliateService              *AffiliateService
+	defaultSubAssigner            DefaultSubscriptionAssigner
+	userPlatformQuotaRepo         UserPlatformQuotaRepository
+	concurrencyAuthorizationFence *ConcurrencyService
 }
 
 type CaptchaProof struct {
@@ -152,6 +153,17 @@ func (s *AuthService) SetTencentCaptchaService(tencentCaptchaService *TencentCap
 
 func (s *AuthService) SetAliyunCaptchaService(aliyunCaptchaService *AliyunCaptchaService) {
 	s.aliyunCaptchaService = aliyunCaptchaService
+}
+
+// SetConcurrencyAuthorizationFence installs the transaction-bound strict
+// admission publisher used by first-bind concurrency grants. The normal user
+// repository covers administrator and redeem writes; this direct bootstrap
+// path owns its own Ent transaction and therefore attaches its own marker.
+func (s *AuthService) SetConcurrencyAuthorizationFence(fence *ConcurrencyService) {
+	if s == nil {
+		return
+	}
+	s.concurrencyAuthorizationFence = fence
 }
 
 // Register 用户注册，返回token和用户

@@ -1060,3 +1060,46 @@ cannot honor quantity/auto-use promises. Keep the maintenance lock, drain and
 readiness sequence; let a compatible runtime fulfill or authoritatively close
 these orders, or forward-fix it. Never force an old-generation takeover or rewrite
 orders to bypass the count. Details: `docs/operations/PAYMENT_RECOVERY_RESET_CARDS_20260919.md`.
+
+### Restrictive forward-upgrade refund pause (P19)
+
+The ordinary `true -> false` helper remains the incompatible-rollback path:
+its full request drain is intentional. P19 forward rollout may instead pause
+only new reviewed refunds while ordinary HTTP/WS traffic stays accepting.
+This requires a migration/protocol compatibility review of old writers; a
+closed refund flag alone does not prove old fulfillment writers are safe.
+
+The authorized coordinator starts the same root-owned host helper with
+`EXPECTED_COMMIT ACTIVE_CONTAINER true --forward-pause-guard` and keeps stdin
+open. The helper owns the shared maintenance lock, checks the exact immutable
+active image and all Caddy views, excludes other writers, and verifies zero
+reviewed reservations. It prints `FORWARD_PAUSE_GUARD_READY` without changing
+request admission or the setting.
+
+Only while that guard is held, run the reviewed
+`deploy/sub2api-reviewed-refunds-forward-pause.sql` through the dedicated
+project database host's existing secure injection. The SQL takes the same
+PostgreSQL advisory lock as refund admission, rechecks reservations (including
+benefit holds when the new table exists), and CASes only
+`PAYMENT_REVIEWED_REFUNDS_ENABLED=true` to `false`. `ON_ERROR_STOP` and a
+post-commit acknowledgement prevent a failed transaction from looking like a
+successful pause. It cannot enable refunds or change financial records.
+
+After confirmed commit, the coordinator sends `DB_CAS_FALSE_CONFIRMED` to the
+held guard. The guard rechecks topology/readiness and exits, releasing the
+host lock. EOF, wrong acknowledgement or the 120-second timeout only releases
+the guard; it never changes ordinary traffic. On an uncertain DB outcome,
+inspect and resolve the flag before any later operation; do not automatically
+re-enable it.
+
+Then use the installed canonical image receiver for blue-green release. Let
+its drain monitor retire the old writer naturally; never force-close active
+WebSockets. After all old request processes have exited and the new strict
+concurrency fence is reconciled, the existing enable helper verifies the new
+exact image/topology and CASes `false -> true`. This guard is not a substitute
+for the old drain/readiness sequence when rolling back to incompatible code.
+
+Hermetic host-guard tests and
+`deploy/tests/reviewed-refunds-forward-pause-pg-test.sh` cover live requests,
+coordinator loss, pending reservations, replay refusal and the shared/exclusive
+advisory-lock race. Their fixtures are local and disposable, never production.

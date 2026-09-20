@@ -260,7 +260,7 @@ func (g *Gateway) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 	}
 	returnURL := g.returnURL
 	metadata := map[string]string{"source": "sub2"}
-	if paymentMethod == PaymentMethodAlipay {
+	if paymentMethod == PaymentMethodAlipay && !req.IsMobile {
 		metadata["checkout_presentation"] = "embedded_qr"
 	}
 	input := createPaymentOrderRequest{

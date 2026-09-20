@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -28,6 +30,18 @@ const (
 	accountSlotKeyPrefix = "concurrency:account:"
 	// 格式: concurrency:user:{userID}
 	userSlotKeyPrefix = "concurrency:user:"
+	// P19 stores a revisioned hash per user. A zero ceiling means no extra
+	// ceiling (the ordinary stored cap still applies); keeping that zero hash
+	// prevents an old positive snapshot from recreating a revoked restriction.
+	userAuthorizationCeilingKeyPrefix  = "concurrency:authorization_ceiling:user:"
+	userAuthorizationCeilingUsersKey   = "concurrency:authorization_ceiling:users"
+	userAuthorizationFenceReadyKey     = "concurrency:authorization_ceiling:ready"
+	userAuthorizationFenceReconcileKey = "concurrency:authorization_ceiling:reconcile"
+	// A mutation marker is persistent until a transaction completion or a
+	// locked durable lookup resolves it. Do not give it a TTL: expiry could
+	// silently reopen an old ceiling after a worker crash.
+	userAuthorizationFenceMutationKeyPrefix = "concurrency:authorization_ceiling:mutation:user:"
+	userAuthorizationFenceMutationUsersKey  = "concurrency:authorization_ceiling:mutation:users"
 	// 格式: concurrency:api_key:{apiKeyID}
 	apiKeySlotKeyPrefix      = "concurrency:api_key:"
 	liveAccountSlotKeyPrefix = "concurrency:live:account:"
@@ -64,9 +78,12 @@ var (
 	// acquireScript 使用有序集合计数并在未达上限时添加槽位
 	// 使用 Redis TIME 命令获取服务器时间，避免多实例时钟不同步问题
 	// KEYS[1] = 普通槽位键，KEYS[2] = 对应 Live 槽位键
+	// KEYS[3] = revisioned user refund-ceiling hash, KEYS[4] = strict-fence ready marker,
+	// KEYS[5] = per-user in-flight durable mutation marker
 	// ARGV[1] = maxConcurrency
 	// ARGV[2] = TTL（秒）
 	// ARGV[3] = requestID
+	// ARGV[4] = strict fence enabled for this process
 	// 返回 {是否成功, Redis 当前秒}，Go 侧复用同一时间源写活跃索引，省去额外 TIME 往返。
 	acquireScript = redis.NewScript(`
 		-- Redis 3.2-4.x compat: opt into effects replication so redis.call('TIME')
@@ -77,6 +94,7 @@ var (
 		local maxConcurrency = tonumber(ARGV[1])
 		local ttl = tonumber(ARGV[2])
 		local requestID = ARGV[3]
+		local strictFence = tonumber(ARGV[4]) or 0
 
 		-- 使用 Redis 服务器时间，确保多实例时钟一致
 		local timeResult = redis.call('TIME')
@@ -95,15 +113,142 @@ var (
 			return {1, now}
 		end
 
+		-- A lost Redis-ready marker is fail-closed only for a newly admitted
+		-- request. Existing slots above deliberately remain alive while the
+		-- application rebuilds ceilings from durable benefit sources.
+		if strictFence == 1 and redis.call('GET', KEYS[4]) == false then
+			return {-1, now}
+		end
+		-- The mutation marker is created only after the writer holds the user
+		-- row FOR UPDATE. It blocks new slots until the committed durable
+		-- projection is published; existing slots above intentionally refresh.
+		if strictFence == 1 and redis.call('EXISTS', KEYS[5]) == 1 then
+			return {-2, now}
+		end
+
+		local effectiveMax = maxConcurrency
+		if strictFence == 1 then
+			local rawCeiling = redis.call('HGET', KEYS[3], 'ceiling')
+			if rawCeiling ~= false then
+				local ceiling = tonumber(rawCeiling)
+				if ceiling == nil or ceiling < 0 then
+					return {-1, now}
+				end
+				if ceiling > 0 and (effectiveMax <= 0 or ceiling < effectiveMax) then
+					effectiveMax = ceiling
+				end
+			end
+		end
+
+		-- Zero/negative is the existing unlimited semantic. Return a distinct
+		-- success so Go avoids adding a pointless ZSET member and active index.
+		if effectiveMax <= 0 then
+			return {2, now}
+		end
+
 		-- 检查是否达到并发上限
 		local count = redis.call('ZCARD', key) + redis.call('ZCARD', liveKey)
-		if count < maxConcurrency then
+		if count < effectiveMax then
 			redis.call('ZADD', key, now, requestID)
 			redis.call('EXPIRE', key, ttl)
 			return {1, now}
 		end
 
 		return {0, now}
+	`)
+
+	// setUserAuthorizationCeilingScript stores a durable projection only when
+	// its revision is strictly newer. A clear is represented by ceiling=0
+	// rather than DEL so a stale positive writer cannot revive it.
+	setUserAuthorizationCeilingScript = redis.NewScript(`
+		local key = KEYS[1]
+		local usersKey = KEYS[2]
+		local userID = ARGV[1]
+		local incomingRevision = tonumber(ARGV[2])
+		local incomingCeiling = tonumber(ARGV[3])
+		if incomingRevision == nil or incomingRevision < 0
+			or incomingCeiling == nil or incomingCeiling < 0 then
+			return redis.error_reply('invalid user authorization ceiling projection')
+		end
+		local currentRevision = tonumber(redis.call('HGET', key, 'revision'))
+		if currentRevision ~= nil and currentRevision >= incomingRevision then
+			return 0
+		end
+		redis.call('HSET', key, 'revision', incomingRevision)
+		redis.call('HSET', key, 'ceiling', incomingCeiling)
+		redis.call('SADD', usersKey, userID)
+		return 1
+	`)
+
+	beginUserAuthorizationFenceReconcileScript = redis.NewScript(`
+		redis.call('DEL', KEYS[1])
+		redis.call('SET', KEYS[2], ARGV[1])
+		return 1
+	`)
+
+	finishUserAuthorizationFenceReconcileScript = redis.NewScript(`
+		if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+			return 0
+		end
+		redis.call('SET', KEYS[2], '1')
+		redis.call('DEL', KEYS[1])
+		return 1
+	`)
+
+	// A mutation marker stores both its owner token and the next durable
+	// projection revision expected from that writer. When callers do not have
+	// a database revision at the marker boundary, Redis derives it atomically
+	// from the current projection, so reconcile can still distinguish an
+	// already committed marker from an uncommitted one.
+	beginUserAuthorizationFenceMutationScript = redis.NewScript(`
+		local projectionKey = KEYS[2]
+		local currentRevision = tonumber(redis.call('HGET', projectionKey, 'revision')) or 0
+		local expectedRevision = tonumber(ARGV[2]) or 0
+		if expectedRevision <= 0 then
+			expectedRevision = currentRevision + 1
+		end
+		if expectedRevision <= 0 then
+			return redis.error_reply('invalid user authorization mutation revision')
+		end
+		redis.call('DEL', KEYS[1])
+		redis.call('HSET', KEYS[1], 'token', ARGV[1], 'expected_revision', expectedRevision)
+		redis.call('SADD', KEYS[3], ARGV[3])
+		return expectedRevision
+	`)
+
+	finishUserAuthorizationFenceMutationScript = redis.NewScript(`
+		if redis.call('HGET', KEYS[1], 'token') ~= ARGV[1] then
+			return 0
+		end
+		redis.call('DEL', KEYS[1])
+		redis.call('SREM', KEYS[2], ARGV[2])
+		return 1
+	`)
+
+	captureUserAuthorizationFenceMutationScript = redis.NewScript(`
+		local token = redis.call('HGET', KEYS[1], 'token')
+		if token == false then
+			return {'', '0'}
+		end
+		local expectedRevision = redis.call('HGET', KEYS[1], 'expected_revision') or '0'
+		return {token, expectedRevision}
+	`)
+
+	clearUserAuthorizationFenceMutationIfUnchangedScript = redis.NewScript(`
+		if redis.call('HGET', KEYS[1], 'token') ~= ARGV[1] then
+			return 0
+		end
+		local storedExpectedRevision = tonumber(redis.call('HGET', KEYS[1], 'expected_revision')) or 0
+		local capturedExpectedRevision = tonumber(ARGV[3]) or 0
+		local observedRevision = tonumber(ARGV[4]) or -1
+		if storedExpectedRevision <= 0 or capturedExpectedRevision <= 0
+			or storedExpectedRevision ~= capturedExpectedRevision
+			or observedRevision < capturedExpectedRevision then
+			return 0
+		end
+		redis.call('DEL', KEYS[1])
+		redis.call('SREM', KEYS[2], ARGV[2])
+		return 1
 	`)
 
 	// getCountScript 统计有序集合中的槽位数量并清理过期条目
@@ -135,11 +280,15 @@ var (
 		local userRegular = KEYS[3]
 		local userLive = KEYS[4]
 		local apiLive = KEYS[5]
+		local userCeilingKey = KEYS[6]
+		local readyKey = KEYS[7]
+		local mutationKey = KEYS[8]
 		local accountMax = tonumber(ARGV[1])
 		local userMax = tonumber(ARGV[2])
 		local ttl = tonumber(ARGV[3])
 		local leaseID = ARGV[4]
 		local replacing = tonumber(ARGV[5])
+		local strictFence = tonumber(ARGV[6]) or 0
 		local now = tonumber(redis.call('TIME')[1])
 		local liveExpireBefore = now - ttl
 		redis.call('ZREMRANGEBYSCORE', accountLive, '-inf', liveExpireBefore)
@@ -148,8 +297,18 @@ var (
 		if redis.call('ZSCORE', accountLive, leaseID) ~= false then
 			return 1
 		end
+		if strictFence == 1 and redis.call('GET', readyKey) == false then return -1 end
+		if strictFence == 1 and redis.call('EXISTS', mutationKey) == 1 then return -2 end
 		local accountCount = redis.call('ZCARD', accountRegular) + redis.call('ZCARD', accountLive)
 		local userCount = redis.call('ZCARD', userRegular) + redis.call('ZCARD', userLive)
+		if strictFence == 1 then
+			local rawCeiling = redis.call('HGET', userCeilingKey, 'ceiling')
+			if rawCeiling ~= false then
+				local ceiling = tonumber(rawCeiling)
+				if ceiling == nil or ceiling < 0 then return -1 end
+				if ceiling > 0 and (userMax <= 0 or ceiling < userMax) then userMax = ceiling end
+			end
+		end
 		local allowance = 0
 		if replacing == 1 then allowance = 1 end
 		if accountMax > 0 and accountCount >= accountMax + allowance then return 0 end
@@ -355,9 +514,10 @@ var (
 )
 
 type concurrencyCache struct {
-	rdb                 *redis.Client
-	slotTTLSeconds      int // 槽位过期时间（秒）
-	waitQueueTTLSeconds int // 等待队列过期时间（秒）
+	rdb                           *redis.Client
+	slotTTLSeconds                int // 槽位过期时间（秒）
+	waitQueueTTLSeconds           int // 等待队列过期时间（秒）
+	userAuthorizationFenceEnabled atomic.Bool
 }
 
 // NewConcurrencyCache 创建并发控制缓存
@@ -386,6 +546,14 @@ func userSlotKey(userID int64) string {
 	return fmt.Sprintf("%s%d", userSlotKeyPrefix, userID)
 }
 
+func userAuthorizationCeilingKey(userID int64) string {
+	return fmt.Sprintf("%s%d", userAuthorizationCeilingKeyPrefix, userID)
+}
+
+func userAuthorizationFenceMutationKey(userID int64) string {
+	return fmt.Sprintf("%s%d", userAuthorizationFenceMutationKeyPrefix, userID)
+}
+
 func apiKeySlotKey(apiKeyID int64) string {
 	return fmt.Sprintf("%s%d", apiKeySlotKeyPrefix, apiKeyID)
 }
@@ -412,6 +580,210 @@ func waitQueueKey(userID int64) string {
 
 func accountWaitKey(accountID int64) string {
 	return fmt.Sprintf("%s%d", accountWaitKeyPrefix, accountID)
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func (c *concurrencyCache) EnableUserConcurrencyAuthorizationFence() {
+	if c != nil {
+		c.userAuthorizationFenceEnabled.Store(true)
+	}
+}
+
+func (c *concurrencyCache) SetUserConcurrencyAuthorizationCeiling(
+	ctx context.Context,
+	userID int64,
+	projection service.UserConcurrencyAuthorizationFenceProjection,
+) (bool, error) {
+	if c == nil || c.rdb == nil || userID <= 0 {
+		return false, errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	if projection.Ceiling < 0 || projection.Revision < 0 {
+		return false, errors.New("user concurrency authorization fence projection is invalid")
+	}
+	result, err := setUserAuthorizationCeilingScript.Run(ctx, c.rdb,
+		[]string{userAuthorizationCeilingKey(userID), userAuthorizationCeilingUsersKey},
+		strconv.FormatInt(userID, 10), projection.Revision, projection.Ceiling,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *concurrencyCache) UserConcurrencyAuthorizationFenceReady(ctx context.Context) (bool, error) {
+	if c == nil || c.rdb == nil {
+		return false, errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	value, err := c.rdb.Get(ctx, userAuthorizationFenceReadyKey).Result()
+	if errors.Is(err, redis.Nil) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return value == "1", nil
+}
+
+// BeginUserConcurrencyAuthorizationFenceReconcile removes the ready marker
+// before rebuilding. The opaque token detects a Redis restart or a competing
+// rebuild, so a snapshot can never mark ready after losing its own projection.
+func (c *concurrencyCache) BeginUserConcurrencyAuthorizationFenceReconcile(ctx context.Context) (string, error) {
+	if c == nil || c.rdb == nil {
+		return "", errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	token := uuid.NewString()
+	if _, err := beginUserAuthorizationFenceReconcileScript.Run(ctx, c.rdb,
+		[]string{userAuthorizationFenceReadyKey, userAuthorizationFenceReconcileKey}, token,
+	).Result(); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// FinishUserConcurrencyAuthorizationFenceReconcile sets ready only if the
+// begin token still exists. Redis loss clears the token, keeping new admission
+// fail-closed until a fresh projection is completed.
+func (c *concurrencyCache) FinishUserConcurrencyAuthorizationFenceReconcile(ctx context.Context, token string) (bool, error) {
+	if c == nil || c.rdb == nil || token == "" {
+		return false, errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	result, err := finishUserAuthorizationFenceReconcileScript.Run(ctx, c.rdb,
+		[]string{userAuthorizationFenceReconcileKey, userAuthorizationFenceReadyKey}, token,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+// BeginUserConcurrencyAuthorizationFenceMutation installs a persistent marker
+// after the caller holds users.id FOR UPDATE. The lack of a TTL is deliberate:
+// silent expiry could re-admit stale auth snapshots after a crashed writer.
+// expectedRevision is the next durable projection revision when the caller
+// already knows it; zero asks Redis to derive current projection revision+1
+// atomically in the same marker-install script.
+func (c *concurrencyCache) BeginUserConcurrencyAuthorizationFenceMutation(
+	ctx context.Context,
+	userID int64,
+	token string,
+	expectedRevision int64,
+) error {
+	if c == nil || c.rdb == nil || userID <= 0 || token == "" || expectedRevision < 0 {
+		return errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	_, err := beginUserAuthorizationFenceMutationScript.Run(ctx, c.rdb,
+		[]string{
+			userAuthorizationFenceMutationKey(userID),
+			userAuthorizationCeilingKey(userID),
+			userAuthorizationFenceMutationUsersKey,
+		}, token, expectedRevision, strconv.FormatInt(userID, 10)).Result()
+	return err
+}
+
+// FinishUserConcurrencyAuthorizationFenceMutation removes only the caller's
+// marker. A later mutation may already own the key and must remain fail-closed.
+func (c *concurrencyCache) FinishUserConcurrencyAuthorizationFenceMutation(ctx context.Context, userID int64, token string) (bool, error) {
+	if c == nil || c.rdb == nil || userID <= 0 || token == "" {
+		return false, errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	result, err := finishUserAuthorizationFenceMutationScript.Run(ctx, c.rdb,
+		[]string{userAuthorizationFenceMutationKey(userID), userAuthorizationFenceMutationUsersKey}, token, strconv.FormatInt(userID, 10)).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+// CaptureUserConcurrencyAuthorizationFenceMutation reads one marker's owner
+// and expected revision atomically. The caller must retain the returned token
+// and use it for any later cleanup; a fresh writer can safely replace it.
+func (c *concurrencyCache) CaptureUserConcurrencyAuthorizationFenceMutation(
+	ctx context.Context,
+	userID int64,
+) (service.UserConcurrencyAuthorizationFenceMutationMarker, bool, error) {
+	if c == nil || c.rdb == nil || userID <= 0 {
+		return service.UserConcurrencyAuthorizationFenceMutationMarker{}, false, errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	raw, err := captureUserAuthorizationFenceMutationScript.Run(ctx, c.rdb,
+		[]string{userAuthorizationFenceMutationKey(userID)}).Result()
+	if err != nil {
+		return service.UserConcurrencyAuthorizationFenceMutationMarker{}, false, err
+	}
+	token, err := redisScriptStringAt(raw, 0)
+	if err != nil {
+		return service.UserConcurrencyAuthorizationFenceMutationMarker{}, false, fmt.Errorf("parse mutation token: %w", err)
+	}
+	if token == "" {
+		return service.UserConcurrencyAuthorizationFenceMutationMarker{}, false, nil
+	}
+	expectedRevision, err := redisScriptInt64At(raw, 1)
+	if err != nil {
+		return service.UserConcurrencyAuthorizationFenceMutationMarker{}, false, fmt.Errorf("parse mutation expected revision: %w", err)
+	}
+	return service.UserConcurrencyAuthorizationFenceMutationMarker{
+		Token:            token,
+		ExpectedRevision: expectedRevision,
+	}, true, nil
+}
+
+// CaptureUserConcurrencyAuthorizationFenceMutations captures the currently
+// indexed markers. The index is advisory; each marker is read atomically and
+// later cleanup still performs an owner-token/version CAS.
+func (c *concurrencyCache) CaptureUserConcurrencyAuthorizationFenceMutations(
+	ctx context.Context,
+) (map[int64]service.UserConcurrencyAuthorizationFenceMutationMarker, error) {
+	if c == nil || c.rdb == nil {
+		return nil, errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	ids, err := c.rdb.SMembers(ctx, userAuthorizationFenceMutationUsersKey).Result()
+	if err != nil {
+		return nil, err
+	}
+	markers := make(map[int64]service.UserConcurrencyAuthorizationFenceMutationMarker, len(ids))
+	for _, rawUserID := range ids {
+		userID, err := strconv.ParseInt(rawUserID, 10, 64)
+		if err != nil || userID <= 0 {
+			continue
+		}
+		marker, ok, err := c.CaptureUserConcurrencyAuthorizationFenceMutation(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			markers[userID] = marker
+		}
+	}
+	return markers, nil
+}
+
+// ClearUserConcurrencyAuthorizationFenceMutationIfUnchanged removes a marker
+// only when the captured token and expected revision still own the Redis key,
+// and the durable snapshot has reached that expected revision. An in-flight
+// writer therefore survives reconciliation, while a newer writer can never
+// be deleted by an older callback.
+func (c *concurrencyCache) ClearUserConcurrencyAuthorizationFenceMutationIfUnchanged(
+	ctx context.Context,
+	userID int64,
+	marker service.UserConcurrencyAuthorizationFenceMutationMarker,
+	observedRevision int64,
+) (bool, error) {
+	if c == nil || c.rdb == nil || userID <= 0 || marker.Token == "" || marker.ExpectedRevision <= 0 || observedRevision < 0 {
+		return false, errors.New("user concurrency authorization fence cache is unavailable")
+	}
+	result, err := clearUserAuthorizationFenceMutationIfUnchangedScript.Run(ctx, c.rdb,
+		[]string{userAuthorizationFenceMutationKey(userID), userAuthorizationFenceMutationUsersKey},
+		marker.Token, strconv.FormatInt(userID, 10), marker.ExpectedRevision, observedRevision,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
 }
 
 // redisUnixSeconds 统一使用 Redis 服务器时间，避免多实例本地时钟漂移导致索引提前/延后过期。
@@ -626,12 +998,33 @@ func runScriptInt64Pair(ctx context.Context, rdb *redis.Client, script *redis.Sc
 	return first, second, nil
 }
 
+// redisScriptStringAt parses one string element from a Redis Lua array.
+func redisScriptStringAt(result any, index int) (string, error) {
+	values, ok := result.([]any)
+	if !ok {
+		return "", fmt.Errorf("expected redis script array, got %T", result)
+	}
+	if index < 0 || index >= len(values) {
+		return "", fmt.Errorf("redis script array missing index %d", index)
+	}
+	switch value := values[index].(type) {
+	case string:
+		return value, nil
+	case []byte:
+		return string(value), nil
+	case nil:
+		return "", nil
+	default:
+		return "", fmt.Errorf("unexpected redis script value %T", value)
+	}
+}
+
 // Account slot operations
 
 func (c *concurrencyCache) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
 	key := accountSlotKey(accountID)
 	// 时间戳在 Lua 脚本内使用 Redis TIME 命令获取，确保多实例时钟一致
-	result, now, err := runScriptInt64Pair(ctx, c.rdb, acquireScript, []string{key, liveAccountSlotKey(accountID)}, maxConcurrency, c.slotTTLSeconds, requestID)
+	result, now, err := runScriptInt64Pair(ctx, c.rdb, acquireScript, []string{key, liveAccountSlotKey(accountID)}, maxConcurrency, c.slotTTLSeconds, requestID, 0)
 	if err != nil {
 		return false, err
 	}
@@ -708,15 +1101,27 @@ func (c *concurrencyCache) GetAccountConcurrencyBatch(ctx context.Context, accou
 func (c *concurrencyCache) AcquireUserSlot(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
 	key := userSlotKey(userID)
 	// 时间戳在 Lua 脚本内使用 Redis TIME 命令获取，确保多实例时钟一致
-	result, now, err := runScriptInt64Pair(ctx, c.rdb, acquireScript, []string{key, liveUserSlotKey(userID)}, maxConcurrency, c.slotTTLSeconds, requestID)
+	strictFence := 0
+	if c.userAuthorizationFenceEnabled.Load() {
+		strictFence = 1
+	}
+	result, now, err := runScriptInt64Pair(ctx, c.rdb, acquireScript,
+		[]string{key, liveUserSlotKey(userID), userAuthorizationCeilingKey(userID), userAuthorizationFenceReadyKey, userAuthorizationFenceMutationKey(userID)},
+		maxConcurrency, c.slotTTLSeconds, requestID, strictFence)
 	if err != nil {
 		return false, err
+	}
+	if result == -1 {
+		return false, service.ErrUserConcurrencyAuthorizationFenceNotReady
+	}
+	if result == -2 {
+		return false, service.ErrUserConcurrencyAuthorizationFenceMutationInFlight
 	}
 	if result == 1 {
 		// 成功占槽后标记活跃用户，避免启动清理依赖全量 SCAN。
 		c.touchActiveIndexAt(ctx, userActiveIndexKey, userID, now+int64(c.slotTTLSeconds))
 	}
-	return result == 1, nil
+	return result == 1 || result == 2, nil
 }
 
 func (c *concurrencyCache) ReleaseUserSlot(ctx context.Context, userID int64, requestID string) error {
@@ -815,8 +1220,20 @@ func (c *concurrencyCache) AcquireLiveLease(
 		userSlotKey(userID),
 		liveUserSlotKey(userID),
 		liveAPIKeySlotKey(apiKeyID),
-	}, accountMax, userMax, liveLeaseTTLSeconds, leaseID, replacing).Int()
-	return result == 1, err
+		userAuthorizationCeilingKey(userID),
+		userAuthorizationFenceReadyKey,
+		userAuthorizationFenceMutationKey(userID),
+	}, accountMax, userMax, liveLeaseTTLSeconds, leaseID, replacing, boolToInt(c.userAuthorizationFenceEnabled.Load())).Int()
+	if err != nil {
+		return false, err
+	}
+	if result == -1 {
+		return false, service.ErrUserConcurrencyAuthorizationFenceNotReady
+	}
+	if result == -2 {
+		return false, service.ErrUserConcurrencyAuthorizationFenceMutationInFlight
+	}
+	return result == 1, nil
 }
 
 func (c *concurrencyCache) RefreshLiveLease(ctx context.Context, accountID, userID, apiKeyID int64, leaseID string) (bool, error) {

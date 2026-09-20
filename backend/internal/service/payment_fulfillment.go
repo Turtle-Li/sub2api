@@ -958,7 +958,7 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 
 	switch action {
 	case redeemActionSkipCompleted:
-		if err := grantPaymentOrderConcurrency(ctx, s.entClient, o); err != nil {
+		if err := s.grantPaymentOrderConcurrency(ctx, o); err != nil {
 			return err
 		}
 		s.invalidatePaymentAuthCache(ctx, o.UserID)
@@ -978,7 +978,7 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 	if _, err := s.redeemService.redeemForPaymentFulfillment(redeemCtx, o.UserID, o.RechargeCode); err != nil {
 		return fmt.Errorf("redeem balance: %w", err)
 	}
-	if err := grantPaymentOrderConcurrency(ctx, s.entClient, o); err != nil {
+	if err := s.grantPaymentOrderConcurrency(ctx, o); err != nil {
 		return err
 	}
 	s.invalidatePaymentAuthCache(ctx, o.UserID)
@@ -1233,13 +1233,14 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	if grantErr != nil && !errors.Is(grantErr, errRefundAccountingMissing) {
 		return fmt.Errorf("load exact payment subscription grant: %w", grantErr)
 	}
-	if err := grantPaymentProductEntitlementsForSubscriptionGrant(
+	if err := grantPaymentProductEntitlementsForSubscriptionGrantWithConcurrencyAuthorizationFence(
 		txCtx,
 		txClient,
 		o,
 		groupID,
 		grant,
 		grantedSubscription,
+		s.concurrencyAuthorizationFence,
 	); err != nil {
 		return err
 	}
@@ -1281,6 +1282,25 @@ func grantPaymentProductEntitlementsForSubscriptionGrant(
 	exactGrant *paymentSubscriptionGrant,
 	exactSubscription *dbent.UserSubscription,
 ) error {
+	return grantPaymentProductEntitlementsForSubscriptionGrantWithConcurrencyAuthorizationFence(
+		ctx, client, order, groupID, exactGrant, exactSubscription, nil,
+	)
+}
+
+// grantPaymentProductEntitlementsForSubscriptionGrantWithConcurrencyAuthorizationFence
+// keeps the user-row lock obtained by createPaymentRefundBenefitSource and
+// attaches a post-commit projection marker before a source-backed cap change.
+// The public compatibility wrapper intentionally passes nil for old direct
+// callers and focused dialect tests.
+func grantPaymentProductEntitlementsForSubscriptionGrantWithConcurrencyAuthorizationFence(
+	ctx context.Context,
+	client *dbent.Client,
+	order *dbent.PaymentOrder,
+	groupID int64,
+	exactGrant *paymentSubscriptionGrant,
+	exactSubscription *dbent.UserSubscription,
+	fence *ConcurrencyService,
+) error {
 	if order == nil || client == nil {
 		return nil
 	}
@@ -1318,8 +1338,24 @@ func grantPaymentProductEntitlementsForSubscriptionGrant(
 	if entitlements.BalanceBonus <= 0 && entitlements.ResetCardCount <= 0 && entitlements.Concurrency <= 0 {
 		return nil
 	}
+	benefitSource, err := createPaymentRefundBenefitSource(ctx, client, order, entitlements, exactGrant, exactSubscription)
+	if err != nil {
+		return fmt.Errorf("record payment refund benefit source: %w", err)
+	}
 	if entitlements.Concurrency > 0 {
-		if err := setPaymentUserConcurrencyAtLeast(ctx, client, order.UserID, entitlements.Concurrency); err != nil {
+		if benefitSource != nil {
+			if _, err := BeginUserConcurrencyAuthorizationFenceMutationAfterUserLock(ctx, fence, order.UserID); err != nil {
+				return fmt.Errorf("begin source-backed subscription concurrency authorization fence: %w", err)
+			}
+			before, after, err := applyPaymentRefundBenefitConcurrencyMax(ctx, client, order.UserID, int64(entitlements.Concurrency), benefitSource.ID)
+			if err != nil {
+				return fmt.Errorf("grant source-backed subscription concurrency: %w", err)
+			}
+			if benefitSource.ConcurrencyBefore == nil || benefitSource.ConcurrencyAfterGrant == nil ||
+				*benefitSource.ConcurrencyBefore != before || *benefitSource.ConcurrencyAfterGrant != after {
+				return fmt.Errorf("payment concurrency source snapshot mismatch")
+			}
+		} else if err := setPaymentUserConcurrencyAtLeast(ctx, client, order.UserID, entitlements.Concurrency); err != nil {
 			return fmt.Errorf("grant subscription concurrency: %w", err)
 		}
 	}
@@ -1426,6 +1462,24 @@ func grantPaymentProductEntitlementsForSubscriptionGrant(
 		Save(ctx); err != nil {
 		return fmt.Errorf("record subscription benefits audit: %w", err)
 	}
+	if benefitSource != nil {
+		cards, err := loadPaymentRefundBenefitResetCards(ctx, client, benefitSource.ID, false)
+		if err != nil {
+			return fmt.Errorf("load payment benefit source cards: %w", err)
+		}
+		detail, err := json.Marshal(paymentRefundBenefitSourceAuditDetail(benefitSource, cards, 0, 0))
+		if err != nil {
+			return fmt.Errorf("encode payment benefit source audit: %w", err)
+		}
+		if _, err := client.PaymentAuditLog.Create().
+			SetOrderID(strconv.FormatInt(order.ID, 10)).
+			SetAction("PAYMENT_BENEFIT_SOURCE_CAPTURED").
+			SetDetail(string(detail)).
+			SetOperator("system").
+			Save(ctx); err != nil {
+			return fmt.Errorf("record payment benefit source audit: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -1440,7 +1494,27 @@ func resetCardTierSnapshotForSubscriptionEntitlementOrder(order *dbent.PaymentOr
 // its own transaction. The audit row and user update commit together, so a
 // crash can only leave a retryable order; the monotonic target update is safe
 // to repeat and safe if callbacks for different tiers arrive out of order.
+func (s *PaymentService) grantPaymentOrderConcurrency(ctx context.Context, order *dbent.PaymentOrder) error {
+	if s == nil {
+		return nil
+	}
+	return grantPaymentOrderConcurrencyWithConcurrencyAuthorizationFence(
+		ctx, s.entClient, order, s.concurrencyAuthorizationFence,
+	)
+}
+
+// grantPaymentOrderConcurrency is retained for direct compatibility callers
+// that do not have a PaymentService-owned strict fence.
 func grantPaymentOrderConcurrency(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder) error {
+	return grantPaymentOrderConcurrencyWithConcurrencyAuthorizationFence(ctx, client, order, nil)
+}
+
+func grantPaymentOrderConcurrencyWithConcurrencyAuthorizationFence(
+	ctx context.Context,
+	client *dbent.Client,
+	order *dbent.PaymentOrder,
+	fence *ConcurrencyService,
+) error {
 	if client == nil || order == nil {
 		return nil
 	}
@@ -1469,14 +1543,40 @@ func grantPaymentOrderConcurrency(ctx context.Context, client *dbent.Client, ord
 	if claimed {
 		return tx.Commit()
 	}
-	if err := setPaymentUserConcurrencyAtLeast(txCtx, tx.Client(), order.UserID, entitlements.Concurrency); err != nil {
-		return fmt.Errorf("grant balance concurrency: %w", err)
+	benefitSource, err := createPaymentRefundBenefitSource(txCtx, tx.Client(), order, entitlements, nil, nil)
+	if err != nil {
+		return fmt.Errorf("record balance payment refund benefit source: %w", err)
 	}
-	detail, _ := json.Marshal(map[string]any{"concurrency": entitlements.Concurrency})
+	detail := map[string]any{"concurrency": entitlements.Concurrency}
+	if benefitSource == nil {
+		// P19 source evidence is required in PostgreSQL, where refunds can
+		// later reclaim this paid cap. Existing non-PostgreSQL test and
+		// development dialects retain the historical monotonic grant path.
+		if paymentAuditDialect(tx.Client()) == dialect.Postgres {
+			return errors.New("balance concurrency source snapshot is unavailable")
+		}
+		if err := setPaymentUserConcurrencyAtLeast(txCtx, tx.Client(), order.UserID, entitlements.Concurrency); err != nil {
+			return fmt.Errorf("grant balance concurrency: %w", err)
+		}
+	} else {
+		if _, err := BeginUserConcurrencyAuthorizationFenceMutationAfterUserLock(txCtx, fence, order.UserID); err != nil {
+			return fmt.Errorf("begin source-backed balance concurrency authorization fence: %w", err)
+		}
+		before, after, err := applyPaymentRefundBenefitConcurrencyMax(txCtx, tx.Client(), order.UserID, int64(entitlements.Concurrency), benefitSource.ID)
+		if err != nil {
+			return fmt.Errorf("grant balance concurrency: %w", err)
+		}
+		if benefitSource.ConcurrencyBefore == nil || benefitSource.ConcurrencyAfterGrant == nil ||
+			*benefitSource.ConcurrencyBefore != before || *benefitSource.ConcurrencyAfterGrant != after {
+			return errors.New("balance payment concurrency source snapshot mismatch")
+		}
+		detail["benefit_source"] = paymentRefundBenefitSourceAuditDetail(benefitSource, nil, before, after)
+	}
+	detailJSON, _ := json.Marshal(detail)
 	if _, err := tx.Client().PaymentAuditLog.Create().
 		SetOrderID(strconv.FormatInt(order.ID, 10)).
 		SetAction("PAYMENT_CONCURRENCY_GRANTED").
-		SetDetail(string(detail)).
+		SetDetail(string(detailJSON)).
 		SetOperator("system").Save(txCtx); err != nil {
 		return fmt.Errorf("record balance concurrency audit: %w", err)
 	}

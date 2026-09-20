@@ -698,6 +698,10 @@ export default {
     airwallexLoadFailed: 'Failed to load Airwallex payment component. Please refresh and try again.',
     airwallexMissingParams: 'Missing Airwallex payment parameters',
     errors: {
+      RESET_CARD_BENEFIT_USED: 'A reset card gifted by this order has been used; this order cannot be refunded.',
+      BENEFIT_PROVENANCE_MISSING: 'This historical order lacks the benefit grant records needed for safe refund recovery.',
+      BENEFIT_REFUND_IN_FLIGHT: 'A refund is already reserving these benefits. Wait for its result.',
+
       tooManyPending: 'Too many pending orders (max {max}). Please complete or cancel existing orders first.',
       cancelRateLimited: 'Too many cancellations. Please try again later.',
       wechatH5NotAuthorized: 'This merchant has not enabled WeChat H5 payment. Open this page in WeChat to continue.',
@@ -1033,7 +1037,17 @@ export default {
       refundTimeHours: '{count}h',
       refundTimeMinutes: '{count}m',
       refundTimeSeconds: '{count}s',
+      benefitRefundImpact: 'Automatic benefit recovery',
+      giftResetCardsRecovery: 'Unused gifted reset cards to recover',
+      giftResetCardsCount: '{count} cards',
+      concurrencyRefundChange: 'Concurrency (current → after refund)',
+      concurrencyBeforePurchase: 'Before this grant: {count}',
+      giftResetCardGrantIds: 'View gifted reset card grant IDs',
       refundReviewReasons: {
+        RESET_CARD_BENEFIT_USED: 'A reset card gifted by this order has been used; this order cannot be refunded.',
+        BENEFIT_PROVENANCE_MISSING: 'This historical order lacks the benefit grant records needed for safe refund recovery.',
+        BENEFIT_REFUND_IN_FLIGHT: 'A refund is already reserving these benefits. Wait for its result.',
+
         REFUND_INVOICED_ORDER: 'This order has an issued invoice and cannot be refunded.',
         REFUND_ALREADY_SETTLED: 'This order has already been refunded. Each order allows only one successful refund, including a partial refund.',
         INVALID_REFUND_STATE: 'The stored refund accounting is invalid and needs manual review.',

@@ -156,6 +156,7 @@ export interface RefundReview {
   entitlement_amount: number
   balance?: BalanceRefundReview
   subscription?: SubscriptionRefundReview
+  benefits?: RefundBenefitReview
   subscription_backfill?: SubscriptionGrantBackfillSuggestion
 }
 
@@ -190,6 +191,14 @@ export interface SubscriptionGrantBackfillRequest {
   term_end_at: string
   evidence_source: SubscriptionGrantBackfillEvidenceSource
   evidence_detail: string
+}
+
+export interface RefundBenefitReview {
+  reset_card_grant_ids: number[]
+  reset_cards_to_reclaim: number
+  concurrency_before?: number | null
+  concurrency_current: number
+  concurrency_after_refund: number
 }
 
 export interface BalanceRefundReview {

@@ -3,7 +3,10 @@
     :show="show"
     :title="t('payment.admin.refundOrder')"
     width="normal"
-    @close="emit('cancel')"
+    :close-on-click-outside="!submitting && !backfilling"
+    :close-on-escape="!submitting && !backfilling"
+    :show-close-button="!submitting && !backfilling"
+    @close="requestCancel"
   >
     <form id="refund-form" class="space-y-4" @submit.prevent="handleSubmit">
       <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-700">
@@ -127,6 +130,32 @@
             <span class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundCash') }}</span>
             <span class="font-medium text-red-600 dark:text-red-400">{{ formatCash(review.default_refund_amount, review.currency) }}</span>
           </div>
+        </section>
+
+        <section
+          v-if="review.benefits && review.can_refund"
+          data-testid="refund-benefits"
+          class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
+          :aria-label="t('payment.admin.benefitRefundImpact')"
+        >
+          <h3 class="text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.admin.benefitRefundImpact') }}</h3>
+          <dl class="mt-3 space-y-3 text-sm">
+            <div v-if="review.benefits.reset_cards_to_reclaim > 0" class="flex justify-between gap-3">
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.giftResetCardsRecovery') }}</dt>
+              <dd class="font-medium text-gray-900 dark:text-white">{{ t('payment.admin.giftResetCardsCount', { count: review.benefits.reset_cards_to_reclaim }) }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500 dark:text-gray-400">{{ t('payment.admin.concurrencyRefundChange') }}</dt>
+              <dd class="mt-1">
+                <span class="font-medium tabular-nums text-gray-900 dark:text-white">{{ formatConcurrencyLimit(review.benefits.concurrency_current) }} → {{ formatConcurrencyLimit(review.benefits.concurrency_after_refund) }}</span>
+                <p v-if="review.benefits.concurrency_before != null" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.concurrencyBeforePurchase', { count: formatConcurrencyLimit(review.benefits.concurrency_before) }) }}</p>
+              </dd>
+            </div>
+          </dl>
+          <details v-if="review.benefits.reset_card_grant_ids?.length" class="mt-3 border-t border-gray-100 pt-2 text-xs text-gray-500 dark:border-dark-600 dark:text-gray-400">
+            <summary class="cursor-pointer">{{ t('payment.admin.giftResetCardGrantIds') }}</summary>
+            <p class="mt-2 break-words font-mono">{{ review.benefits.reset_card_grant_ids.map(id => `#${id}`).join(' · ') }}</p>
+          </details>
         </section>
 
         <div
@@ -256,7 +285,7 @@
 
     <template #footer>
       <div class="flex justify-end gap-3">
-        <button type="button" class="btn btn-secondary" @click="emit('cancel')">
+        <button type="button" class="btn btn-secondary" :disabled="submitting || backfilling" @click="requestCancel">
           {{ t('common.cancel') }}
         </button>
         <button
@@ -332,6 +361,14 @@ const form = reactive<{ reasonCode: RefundReasonCode; reasonDetail: string }>({
   reasonDetail: '',
 })
 const refundAmount = ref('')
+function formatConcurrencyLimit(value: number): string {
+  return value === 0 ? t('payment.admin.unlimited') : String(value)
+}
+
+function requestCancel() {
+  if (!props.submitting && !props.backfilling) emit('cancel')
+}
+
 const refundAmountTouched = ref(false)
 const backfillEvidenceSources: SubscriptionGrantBackfillEvidenceSource[] = [
   'payment_audit_and_subscription',

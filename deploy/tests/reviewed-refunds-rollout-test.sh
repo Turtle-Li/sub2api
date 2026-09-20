@@ -326,6 +326,7 @@ EOF
 
 run_helper() {
   local expected_state="$1"
+  shift
 
   env \
     PATH="${FAKE_BIN}:${PATH}" \
@@ -357,7 +358,7 @@ run_helper() {
     SUB2API_REVIEWED_REFUNDS_ROLLOUT_CONFIG_FILE="${CASE_ROOT}/config.env" \
     SUB2API_REVIEWED_REFUNDS_ROLLOUT_DRAIN_ATTEMPTS=2 \
     SUB2API_REVIEWED_REFUNDS_ROLLOUT_DRAIN_INTERVAL_SECONDS=0 \
-    /bin/bash "$SCRIPT" "$EXPECTED_COMMIT" sub2api-green "$expected_state"
+    /bin/bash "$SCRIPT" "$EXPECTED_COMMIT" sub2api-green "$expected_state" "$@"
 }
 
 expect_failure() {
@@ -464,5 +465,36 @@ expect_failure true in-flight 'leaving traffic drained'
 grep -qx 'traffic=draining active_container=sub2api-green background=standby' "$FAKE_NODE_STATE_FILE" \
   || fail 'in-flight failure did not leave the runtime drained'
 [ ! -e "$FAKE_CAS_CALLS" ] || fail 'in-flight drain failure reached the CAS endpoint'
+
+new_case
+FAKE_IN_FLIGHT=7
+printf 'DB_CAS_FALSE_CONFIRMED\n' | run_helper true --forward-pause-guard >"${CASE_ROOT}/forward.log" 2>&1
+assert_contains "${CASE_ROOT}/forward.log" 'FORWARD_PAUSE_GUARD_READY'
+assert_contains "${CASE_ROOT}/forward.log" 'FORWARD_PAUSE_GUARD_COMPLETE'
+grep -qx 'traffic=accepting active_container=sub2api-green background=active' "$FAKE_NODE_STATE_FILE" \
+  || fail 'forward guard interrupted ordinary requests'
+[ ! -e "$FAKE_CAS_CALLS" ] || fail 'guard-only mode called the old CAS endpoint'
+assert_not_contains "$FAKE_NODE_STATE_CALLS" drain
+
+new_case
+if printf 'wrong-ack\n' | run_helper true --forward-pause-guard >"${CASE_ROOT}/forward-bad-ack.log" 2>&1; then
+  fail 'forward guard accepted a wrong acknowledgement'
+fi
+assert_not_contains "$FAKE_NODE_STATE_CALLS" drain
+[ ! -e "$FAKE_CAS_CALLS" ] || fail 'wrong acknowledgement reached CAS'
+
+new_case
+FAKE_REFUND_PENDING_COUNT=1
+if printf 'DB_CAS_FALSE_CONFIRMED\n' | run_helper true --forward-pause-guard >"${CASE_ROOT}/forward-pending.log" 2>&1; then
+  fail 'forward guard accepted pending reviewed refunds'
+fi
+assert_not_contains "${CASE_ROOT}/forward-pending.log" FORWARD_PAUSE_GUARD_READY
+assert_not_contains "$FAKE_NODE_STATE_CALLS" drain
+
+new_case
+if run_helper true --forward-pause-guard </dev/null >"${CASE_ROOT}/forward-eof.log" 2>&1; then
+  fail 'forward guard accepted a disconnected coordinator'
+fi
+assert_not_contains "$FAKE_NODE_STATE_CALLS" drain
 
 printf 'Reviewed-refunds rollout helper tests passed.\n'

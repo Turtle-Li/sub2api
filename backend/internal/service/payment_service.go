@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -236,26 +237,27 @@ type BalanceAuthorizationCacheInvalidator interface {
 }
 
 type PaymentService struct {
-	providerMu                sync.Mutex
-	providersLoaded           bool
-	entClient                 *dbent.Client
-	registry                  *payment.Registry
-	loadBalancer              payment.LoadBalancer
-	redeemService             *RedeemService
-	subscriptionSvc           *SubscriptionService
-	configService             *PaymentConfigService
-	userRepo                  UserRepository
-	groupRepo                 GroupRepository
-	resumeService             *PaymentResumeService
-	affiliateService          *AffiliateService
-	notificationEmailService  *NotificationEmailService
-	authCacheInvalidator      APIKeyAuthCacheInvalidator
-	balanceAuthorizationCache BalanceAuthorizationCacheInvalidator
-	unifiedPayment            *unifiedpay.Gateway
-	unifiedWebhookInbox       UnifiedWebhookInboxStore
-	invoiceFeishuSender       FeishuPaymentTextSender
-	resetCardNow              func() time.Time
-	refundReviewNow           func() time.Time
+	providerMu                    sync.Mutex
+	providersLoaded               bool
+	entClient                     *dbent.Client
+	registry                      *payment.Registry
+	loadBalancer                  payment.LoadBalancer
+	redeemService                 *RedeemService
+	subscriptionSvc               *SubscriptionService
+	configService                 *PaymentConfigService
+	userRepo                      UserRepository
+	groupRepo                     GroupRepository
+	resumeService                 *PaymentResumeService
+	affiliateService              *AffiliateService
+	notificationEmailService      *NotificationEmailService
+	authCacheInvalidator          APIKeyAuthCacheInvalidator
+	balanceAuthorizationCache     BalanceAuthorizationCacheInvalidator
+	concurrencyAuthorizationFence *ConcurrencyService
+	unifiedPayment                *unifiedpay.Gateway
+	unifiedWebhookInbox           UnifiedWebhookInboxStore
+	invoiceFeishuSender           FeishuPaymentTextSender
+	resetCardNow                  func() time.Time
+	refundReviewNow               func() time.Time
 }
 
 func (s *PaymentService) resetCardCurrentTime() time.Time {
@@ -303,6 +305,28 @@ func (s *PaymentService) SetBalanceAuthorizationCacheInvalidator(invalidator Bal
 		return
 	}
 	s.balanceAuthorizationCache = invalidator
+}
+
+// SetConcurrencyAuthorizationFence configures the P19 Redis admission fence
+// from durable benefit-source state. The generated production graph treats an
+// error as a startup failure: leaving this unset would let a provider-bound
+// refund move money without the strict admission ceiling in effect. Direct
+// constructors used by narrow legacy tests may intentionally omit the call.
+func (s *PaymentService) SetConcurrencyAuthorizationFence(fence *ConcurrencyService) error {
+	if s == nil || s.entClient == nil {
+		return errors.New("payment concurrency authorization fence is unavailable")
+	}
+	if fence == nil {
+		return errors.New("payment concurrency authorization fence service is unavailable")
+	}
+	if err := fence.ConfigureUserConcurrencyAuthorizationFence(
+		s.paymentRefundBenefitConcurrencyCeilingSnapshot,
+		s.paymentRefundBenefitConcurrencyCeilingForUser,
+	); err != nil {
+		return fmt.Errorf("configure payment refund concurrency authorization fence: %w", err)
+	}
+	s.concurrencyAuthorizationFence = fence
+	return nil
 }
 
 // SetUnifiedPayment wires the optional pay-v1 adapter and its durable Webhook

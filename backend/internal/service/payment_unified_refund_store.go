@@ -30,6 +30,7 @@ type unifiedRefundAttempt struct {
 	ProviderUpdatedAt                                                                        *time.Time
 	NeedsManualReview                                                                        bool
 	RefundKind, QuoteRevision                                                                string
+	BenefitProofDigest                                                                       string
 	WalletPaidAmount, WalletGiftAmount                                                       float64
 	SubscriptionSeconds, SubscriptionGrantOrderID                                            int64
 	EntitlementReserved                                                                      bool
@@ -51,7 +52,7 @@ func loadUnifiedRefundAttempt(ctx context.Context, client *dbent.Client, orderID
 	 COALESCE(CAST(refund_request_id AS TEXT), ''), COALESCE(channel_out_refund_no, ''),
 		 COALESCE(provider_refund_id, ''), COALESCE(provider_status, ''),
 		 COALESCE(failure_code, ''), provider_updated_at, needs_manual_review,
-		 refund_kind, quote_revision, CAST(wallet_paid_amount AS TEXT),
+		 refund_kind, quote_revision, benefit_proof_digest, CAST(wallet_paid_amount AS TEXT),
 		 CAST(wallet_gift_amount AS TEXT), subscription_seconds,
 		 COALESCE(subscription_grant_order_id, 0), entitlement_reserved,
 		 valuation_at
@@ -82,7 +83,7 @@ func loadUnifiedRefundAttempt(ctx context.Context, client *dbent.Client, orderID
 		&a.AmountFen, &a.BalanceAmountMinor, &a.DeductBalance, &a.Force, &a.ReasonCode, &a.ReasonSummary,
 		&a.Status, &a.RefundRequestID, &a.ChannelOutRefundNo, &a.ProviderRefundID,
 		&a.ProviderStatus, &a.FailureCode, &providerUpdated, &a.NeedsManualReview,
-		&a.RefundKind, &a.QuoteRevision, &paidRaw, &giftRaw, &a.SubscriptionSeconds,
+		&a.RefundKind, &a.QuoteRevision, &a.BenefitProofDigest, &paidRaw, &giftRaw, &a.SubscriptionSeconds,
 		&a.SubscriptionGrantOrderID, &a.EntitlementReserved, &valuation)
 	if err != nil {
 		return nil, err
@@ -151,13 +152,13 @@ func insertUnifiedRefundAttempt(ctx context.Context, client *dbent.Client, a *un
 	 (product_refund_no, order_id, payment_order_id, idempotency_key, environment,
 	 organization_id, product_id, app_id, payment_method, amount_fen, balance_amount_minor,
 	 deduct_balance, force_refund, reason_code, reason_summary, status, refund_kind,
-	 quote_revision, wallet_paid_amount, wallet_gift_amount, subscription_seconds,
+	 quote_revision, benefit_proof_digest, wallet_paid_amount, wallet_gift_amount, subscription_seconds,
 	 subscription_grant_order_id, entitlement_reserved, valuation_at)
-	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
 		a.ProductRefundNo, a.OrderID, a.PaymentOrderID, a.IdempotencyKey, a.Environment,
 		a.OrganizationID, a.ProductID, a.AppID, a.PaymentMethod, a.AmountFen, a.BalanceAmountMinor,
 		a.DeductBalance, a.Force, a.ReasonCode, a.ReasonSummary, a.Status, a.RefundKind,
-		a.QuoteRevision, a.WalletPaidAmount, a.WalletGiftAmount, a.SubscriptionSeconds,
+		a.QuoteRevision, a.BenefitProofDigest, a.WalletPaidAmount, a.WalletGiftAmount, a.SubscriptionSeconds,
 		nullableUnifiedRefundGrantOrder(a.SubscriptionGrantOrderID), a.EntitlementReserved, a.ValuationAt)
 	return err
 }

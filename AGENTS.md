@@ -114,6 +114,10 @@
 
 ## Unified payment integration
 
+- For automatic refund recovery of gifted reset cards and concurrency, read
+  `docs/PAYMENT_BENEFIT_REFUNDS_20260920.md`; preserve actual grant provenance,
+  replayable concurrency source history, pending holds and cache/rollout fences.
+
 - One order permits at most one successful refund, including a partial refund.
   Preserve pending-attempt recovery and callback idempotency. See the September 19
   policy in `docs/PAYMENT_REFUND_ACCOUNTING_20260914.md`; admin auto-refresh must

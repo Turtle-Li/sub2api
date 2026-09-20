@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"entgo.io/ent/dialect"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 
 	entsql "entgo.io/ent/dialect/sql"
@@ -83,7 +84,16 @@ ON CONFLICT (user_id, provider_type, grant_reason) DO NOTHING`,
 		}
 	}
 	if providerDefaults.Concurrency != 0 {
-		if err := client.User.UpdateOneID(userID).AddConcurrency(providerDefaults.Concurrency).Exec(ctx); err != nil {
+		if client.Driver().Dialect() == dialect.Postgres {
+			if _, err := BeginUserConcurrencyAuthorizationFenceMutationWithUserLock(
+				ctx, client, s.concurrencyAuthorizationFence, userID,
+			); err != nil {
+				return fmt.Errorf("begin first bind concurrency authorization fence: %w", err)
+			}
+			if _, _, err := applyPaymentRefundBenefitConcurrencyDelta(ctx, client, userID, providerDefaults.Concurrency); err != nil {
+				return fmt.Errorf("apply first bind concurrency default: %w", err)
+			}
+		} else if err := client.User.UpdateOneID(userID).AddConcurrency(providerDefaults.Concurrency).Exec(ctx); err != nil {
 			return fmt.Errorf("apply first bind concurrency default: %w", err)
 		}
 	}

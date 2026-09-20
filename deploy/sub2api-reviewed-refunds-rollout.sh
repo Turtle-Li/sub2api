@@ -10,13 +10,17 @@ umask 077
 
 usage() {
   cat >&2 <<'EOF'
-Usage: sub2api-reviewed-refunds-rollout.sh EXPECTED_COMMIT TARGET_CONTAINER EXPECTED_FLAG_STATE
+Usage: sub2api-reviewed-refunds-rollout.sh EXPECTED_COMMIT TARGET_CONTAINER EXPECTED_FLAG_STATE [--forward-pause-guard]
 
 EXPECTED_COMMIT      Full 40-character lowercase Git commit.
 TARGET_CONTAINER     One of sub2api, sub2api-blue, or sub2api-green.
 EXPECTED_FLAG_STATE  absent, false, or true.
 
 The desired transition is absent|false -> true and true -> false.
+--forward-pause-guard is only valid with expected true. It holds the verified
+host maintenance boundary without draining ordinary traffic or changing the
+flag. An authorized coordinator must perform the restrictive database CAS
+while this guard is held, then acknowledge DB_CAS_FALSE_CONFIRMED on stdin.
 EOF
   exit 2
 }
@@ -30,7 +34,12 @@ die() {
   exit 1
 }
 
-[ "$#" -eq 3 ] || usage
+[ "$#" -eq 3 ] || [ "$#" -eq 4 ] || usage
+FORWARD_PAUSE_GUARD=false
+if [ "$#" -eq 4 ]; then
+  [ "$4" = --forward-pause-guard ] && [ "$3" = true ] || usage
+  FORWARD_PAUSE_GUARD=true
+fi
 EXPECTED_COMMIT="$1"
 TARGET_CONTAINER="$2"
 EXPECTED_FLAG_STATE="$3"
@@ -563,6 +572,25 @@ fi
 flock -n 8 || die 'production maintenance is already running'
 
 verify_topology
+if [ "$FORWARD_PAUSE_GUARD" = true ]; then
+  # Restrictive forward-upgrade pause only. Unlike incompatible rollback, it
+  # does not require ordinary HTTP/WS requests to stop. The DB coordinator
+  # repeats the zero-reservation check under the existing advisory lock.
+  read_node_state accepting active
+  require_enable_readiness
+  log "FORWARD_PAUSE_GUARD_READY target=${TARGET_CONTAINER} commit=${EXPECTED_COMMIT}"
+  acknowledgment=''
+  if ! IFS= read -r -t 120 acknowledgment; then
+    die 'forward pause coordinator disconnected or timed out; ordinary traffic was not changed'
+  fi
+  [ "$acknowledgment" = DB_CAS_FALSE_CONFIRMED ] \
+    || die 'forward pause coordinator did not acknowledge its restrictive database CAS'
+  verify_topology
+  read_node_state accepting active
+  require_enable_readiness
+  log 'FORWARD_PAUSE_GUARD_COMPLETE coordinator_acknowledged=true ordinary_traffic=accepting'
+  exit 0
+fi
 if [ "$TARGET_ENABLED" = true ]; then
   read_node_state accepting active
   require_enable_readiness

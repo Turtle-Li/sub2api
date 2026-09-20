@@ -127,6 +127,7 @@ func refundReasonDefaultSummary(code string) string {
 // currency; wallet credit and subscription time are reported separately.
 type RefundReview struct {
 	subscriptionInputs   *subscriptionRefundInputs
+	benefitState         *paymentRefundBenefitReviewState
 	OrderID              int64                          `json:"order_id"`
 	OrderType            string                         `json:"order_type"`
 	Currency             string                         `json:"currency"`
@@ -142,7 +143,20 @@ type RefundReview struct {
 	EntitlementAmount    float64                        `json:"entitlement_amount"`
 	Balance              *BalanceRefundReview           `json:"balance,omitempty"`
 	Subscription         *SubscriptionRefundReview      `json:"subscription,omitempty"`
+	Benefits             *RefundBenefitsReview          `json:"benefits,omitempty"`
 	SubscriptionBackfill *SubscriptionGrantBackfillHint `json:"subscription_backfill,omitempty"`
+}
+
+// RefundBenefitsReview is the exact automatic-reclaim view for P19 payment
+// extras. The card IDs are durable grant IDs, not a count inferred from a
+// product snapshot. A nil concurrency_before means this order has no proven
+// source-backed concurrency entitlement.
+type RefundBenefitsReview struct {
+	ResetCardGrantIDs      []int64 `json:"reset_card_grant_ids"`
+	ResetCardsToReclaim    int     `json:"reset_cards_to_reclaim"`
+	ConcurrencyBefore      *int    `json:"concurrency_before,omitempty"`
+	ConcurrencyCurrent     int     `json:"concurrency_current"`
+	ConcurrencyAfterRefund int     `json:"concurrency_after_refund"`
 }
 
 type BalanceRefundReview struct {
@@ -351,6 +365,19 @@ func manualRefundReview(order *dbent.PaymentOrder, now time.Time, code, reason s
 	return review
 }
 
+// benefitRefundDeniedReview is a deterministic automatic denial. It is not a
+// request for a routine human rollback: the stored evidence says that the
+// benefit has been used, cannot be proven, or is already held by a retry.
+func benefitRefundDeniedReview(order *dbent.PaymentOrder, now time.Time, code, reason string) *RefundReview {
+	review := &RefundReview{GeneratedAt: now, ReasonCode: code, Reason: reason}
+	if order != nil {
+		review.OrderID = order.ID
+		review.OrderType = order.OrderType
+		review.Currency = PaymentOrderCurrency(order)
+	}
+	return review
+}
+
 func refundAlreadySettledReview(order *dbent.PaymentOrder, now time.Time) *RefundReview {
 	review := &RefundReview{
 		GeneratedAt: now,
@@ -516,11 +543,11 @@ func (s *PaymentService) reviewRefundWithClient(ctx context.Context, client *dbe
 	}
 	if manual, entitlementErr := paymentOrderRequiresManualRefund(order); entitlementErr != nil {
 		return manualRefundReview(order, now, "INVALID_PRODUCT_SNAPSHOT", "payment order entitlement snapshot is invalid"), nil
-	} else if manual {
+	} else if manual && (!paymentRefundBenefitOrderTypeSupported(order) || !paymentRefundBenefitHasOnlyAutomaticExtras(order)) {
 		return manualRefundReview(order, now, "NON_REVERSIBLE_ENTITLEMENT", "this order contains benefits that require manual rollback"), nil
 	}
 	if paymentOrderUsesUnifiedPay(order) {
-		if err := s.validateUnifiedRefundOrder(order); err != nil {
+		if err := s.validateUnifiedRefundOrderWithBenefitExtras(order, paymentAuditDialect(client) == "postgres"); err != nil {
 			return manualRefundReview(order, now, infraerrors.Reason(err), err.Error()), nil
 		}
 	} else {
@@ -555,11 +582,22 @@ func (s *PaymentService) reviewBalanceRefund(ctx context.Context, client *dbent.
 	})
 	availableGift := nonNegativeDecimal(decimal.NewFromFloat(user.Balance).Sub(decimal.NewFromFloat(user.WalletAvailablePaid)))
 	remainingPaid := nonNegativeDecimal(funding.Paid.Sub(funding.RefundedPaid).Sub(funding.ReservedPaid))
-	revision := refundReviewRevision(
+	benefits, err := reviewPaymentRefundBenefits(ctx, client, order, nil, nil, lock)
+	if err != nil {
+		if code, reason, ok := paymentRefundBenefitDenial(err); ok {
+			return benefitRefundDeniedReview(order, now, code, reason), nil
+		}
+		return nil, err
+	}
+	revisionParts := []string{
 		strconv.FormatInt(order.ID, 10), order.Status, decimalString(order.RefundAmount), decimalString(order.RefundRequestedAmount),
 		order.UpdatedAt.UTC().Format(time.RFC3339Nano), strconv.FormatInt(user.WalletComponentVersion, 10),
 		strconv.FormatInt(funding.Version, 10), funding.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	)
+	}
+	if benefits != nil {
+		revisionParts = append(revisionParts, benefits.ProofDigest)
+	}
+	revision := refundReviewRevision(revisionParts...)
 	review := &RefundReview{
 		OrderID: order.ID, OrderType: order.OrderType, Currency: funding.Currency,
 		GeneratedAt: now, QuoteRevision: revision,
@@ -572,6 +610,10 @@ func (s *PaymentService) reviewBalanceRefund(ctx context.Context, client *dbent.
 			AvailablePaidCredit: user.WalletAvailablePaid, AvailableGiftCredit: availableGift.InexactFloat64(),
 			PaidCreditToReclaim: quote.Principal.InexactFloat64(), GiftCreditToReclaim: quote.GiftReclaimed.InexactFloat64(),
 		},
+	}
+	if benefits != nil {
+		review.Benefits = paymentRefundBenefitsDTO(benefits)
+		review.benefitState = benefits
 	}
 	if quote.CashMinor <= 0 || !quote.Entitlement.IsPositive() {
 		review.ReasonCode = "PAID_BALANCE_CONSUMED"
@@ -590,7 +632,7 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 	if err != nil {
 		return nil, err
 	}
-	if grant.BalanceBonus.IsPositive() || grant.ResetCardCount > 0 || grant.ConcurrencyTarget > 0 {
+	if grant.BalanceBonus.IsPositive() {
 		return manualRefundReview(order, now, "NON_REVERSIBLE_ENTITLEMENT", "subscription extras require manual rollback"), nil
 	}
 	if sub.DeletedAt != nil || sub.Status != SubscriptionStatusActive || sub.GroupID != grant.GroupID || sub.UserID != grant.UserID {
@@ -619,14 +661,25 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 	if usedSeconds < 0 {
 		usedSeconds = 0
 	}
-	revision := refundReviewRevision(
+	benefits, err := reviewPaymentRefundBenefits(ctx, client, order, grant, sub, lock)
+	if err != nil {
+		if code, reason, ok := paymentRefundBenefitDenial(err); ok {
+			return benefitRefundDeniedReview(order, now, code, reason), nil
+		}
+		return nil, err
+	}
+	revisionParts := []string{
 		strconv.FormatInt(order.ID, 10), order.Status, decimalString(order.RefundAmount), decimalString(order.RefundRequestedAmount),
 		order.UpdatedAt.UTC().Format(time.RFC3339Nano), strconv.FormatInt(grant.Version, 10),
 		sub.ExpiresAt.UTC().Format(time.RFC3339Nano), sub.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		strconv.FormatInt(quote.CashMinor, 10), quote.ProductAmount.StringFixed(2),
 		strconv.FormatInt(quote.Seconds, 10), quote.NewExpiry.UTC().Format(time.RFC3339Nano),
 		now.UTC().Format(time.RFC3339Nano),
-	)
+	}
+	if benefits != nil {
+		revisionParts = append(revisionParts, benefits.ProofDigest)
+	}
+	revision := refundReviewRevision(revisionParts...)
 	review := &RefundReview{
 		OrderID: order.ID, OrderType: order.OrderType, Currency: PaymentOrderCurrency(order),
 		subscriptionInputs: &inputs,
@@ -639,6 +692,10 @@ func (s *PaymentService) reviewSubscriptionRefund(ctx context.Context, client *d
 			CurrentExpiresAt: sub.ExpiresAt, NewExpiresAt: quote.NewExpiry,
 			PurchasedSeconds: totalSeconds, UsedSeconds: usedSeconds, RemainingSeconds: quote.Seconds, SecondsToReclaim: quote.Seconds,
 		},
+	}
+	if benefits != nil {
+		review.Benefits = paymentRefundBenefitsDTO(benefits)
+		review.benefitState = benefits
 	}
 	if quote.CashMinor <= 0 || quote.Seconds <= 0 || !quote.ProductAmount.IsPositive() {
 		review.ReasonCode = "SUBSCRIPTION_FULLY_USED"

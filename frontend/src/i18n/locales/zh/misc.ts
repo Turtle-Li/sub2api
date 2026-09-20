@@ -722,6 +722,10 @@ export default {
     airwallexLoadFailed: 'Airwallex 支付组件加载失败，请刷新页面重试',
     airwallexMissingParams: '缺少 Airwallex 支付参数',
     errors: {
+      RESET_CARD_BENEFIT_USED: '本订单赠送的重置卡已使用，无法退款。',
+      BENEFIT_PROVENANCE_MISSING: '该历史订单缺少完整的权益发放记录，无法安全计算退款回收。',
+      BENEFIT_REFUND_IN_FLIGHT: '该订单权益正在处理退款，请等待处理结果。',
+
       tooManyPending: '待支付订单过多（最多 {max} 个），请先完成或取消现有订单',
       cancelRateLimited: '取消订单过于频繁，请稍后再试',
       wechatH5NotAuthorized: '当前商户未开通微信 H5 支付，请在微信中打开当前页面继续支付。',
@@ -1057,7 +1061,17 @@ export default {
       refundTimeHours: '{count}小时',
       refundTimeMinutes: '{count}分钟',
       refundTimeSeconds: '{count}秒',
+      benefitRefundImpact: '自动收回权益',
+      giftResetCardsRecovery: '收回未使用重置卡',
+      giftResetCardsCount: '{count} 张',
+      concurrencyRefundChange: '并发（当前 → 退款后）',
+      concurrencyBeforePurchase: '本次发放前：{count}',
+      giftResetCardGrantIds: '查看赠送重置卡批次',
       refundReviewReasons: {
+        RESET_CARD_BENEFIT_USED: '本订单赠送的重置卡已使用，无法退款。',
+        BENEFIT_PROVENANCE_MISSING: '该历史订单缺少完整的权益发放记录，无法安全计算退款回收。',
+        BENEFIT_REFUND_IN_FLIGHT: '该订单权益正在处理退款，请等待处理结果。',
+
         REFUND_INVOICED_ORDER: '该订单已成功开票，无法退款。',
         REFUND_ALREADY_SETTLED: '该订单已成功退款，每个订单仅允许退款一次，部分退款后也不能再次退款。',
         INVALID_REFUND_STATE: '订单退款核算记录无效，需要人工审核。',

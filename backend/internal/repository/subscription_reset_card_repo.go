@@ -36,8 +36,27 @@ const resetCardTierEligibilityPredicateSQL = `
 					AND rg.card_family_key = target.family_key
 					AND rg.source_tier_rank >= target.tier_rank
 				)
-			)
+		)
 `
+
+// P19 sources stay append-only. A card row remains for audit after its source
+// is reserved or revoked, but it must not appear available to either summary
+// or selection queries. The database trigger is the final guard for older
+// writers; this predicate prevents a held/revoked card from shaping normal UI
+// availability or a tier-insufficient result.
+func resetCardRefundBenefitAvailabilityPredicate(client *dbent.Client) string {
+	if client == nil || client.Driver().Dialect() != dialect.Postgres {
+		return ""
+	}
+	return `
+			AND NOT EXISTS (
+				SELECT 1
+				FROM payment_refund_benefit_reset_card_grants benefit_link
+				JOIN payment_refund_benefit_sources benefit_source ON benefit_source.id = benefit_link.source_id
+				WHERE benefit_link.reset_card_grant_id = rg.id
+					AND benefit_source.state <> 'ACTIVE'
+			)`
+}
 
 func NewSubscriptionResetCardRepository(client *dbent.Client) service.SubscriptionResetCardRepository {
 	return &subscriptionResetCardRepository{client: client}
@@ -237,6 +256,7 @@ func (r *subscriptionResetCardRepository) ListAvailable(
 	}
 
 	client := clientFromContext(ctx, r.client)
+	benefitAvailability := resetCardRefundBenefitAvailabilityPredicate(client)
 	rows, err := client.QueryContext(ctx, `
 		WITH target AS (
 			SELECT us.id AS subscription_id, us.user_id, tier.family_key, tier.tier_rank
@@ -252,6 +272,7 @@ func (r *subscriptionResetCardRepository) ListAvailable(
 		JOIN subscription_reset_grants rg ON rg.user_id = target.user_id
 		WHERE rg.expires_at > $2
 			AND rg.used_count < rg.quantity
+`+benefitAvailability+`
 `+resetCardTierEligibilityPredicateSQL+`
 		GROUP BY target.subscription_id, rg.expires_at
 		ORDER BY target.subscription_id ASC, rg.expires_at ASC
@@ -290,6 +311,7 @@ func (r *subscriptionResetCardRepository) ConsumeAndReset(
 ) (int64, error) {
 	var groupID int64
 	err := r.withTx(ctx, func(txCtx context.Context, client *dbent.Client) error {
+		benefitAvailability := resetCardRefundBenefitAvailabilityPredicate(client)
 		rows, err := client.QueryContext(txCtx, `
 			SELECT us.group_id, us.status, us.expires_at, tier.family_key, tier.tier_rank
 			FROM user_subscriptions us
@@ -351,6 +373,7 @@ func (r *subscriptionResetCardRepository) ConsumeAndReset(
 			WHERE rg.user_id = target.user_id
 				AND rg.expires_at > $5
 				AND rg.used_count < rg.quantity
+`+benefitAvailability+`
 `+resetCardTierEligibilityPredicateSQL+`
 			ORDER BY rg.expires_at ASC, rg.source_tier_rank ASC NULLS FIRST, rg.id ASC
 			LIMIT 1
@@ -385,6 +408,7 @@ func (r *subscriptionResetCardRepository) ConsumeAndReset(
 						WHERE rg.user_id = target.user_id
 							AND rg.expires_at > $4
 							AND rg.used_count < rg.quantity
+						`+benefitAvailability+`
 							AND rg.card_family_key = target.family_key
 							AND rg.source_tier_rank IS NOT NULL
 							AND rg.source_tier_rank < target.tier_rank

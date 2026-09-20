@@ -72,6 +72,7 @@ func ProvideAuthService(
 	defaultSubAssigner DefaultSubscriptionAssigner,
 	affiliateService *AffiliateService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	concurrencyService *ConcurrencyService,
 ) *AuthService {
 	svc := NewAuthService(
 		entClient,
@@ -90,6 +91,7 @@ func ProvideAuthService(
 	)
 	svc.SetTencentCaptchaService(tencentCaptchaService)
 	svc.SetAliyunCaptchaService(aliyunCaptchaService)
+	svc.SetConcurrencyAuthorizationFence(concurrencyService)
 	return svc
 }
 
@@ -1034,13 +1036,18 @@ func ProvideBalanceNotifyService(emailService *EmailService, settingRepo Setting
 }
 
 // ProvidePaymentService creates PaymentService and attaches notification email delivery.
-func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService, notificationEmailService *NotificationEmailService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService, unifiedGateway *unifiedpay.Gateway, unifiedInbox UnifiedWebhookInboxStore) *PaymentService {
+// The strict P19 concurrency fence is a production prerequisite, so Wire
+// propagates configuration errors instead of starting with it silently absent.
+func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService, notificationEmailService *NotificationEmailService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService, concurrencyService *ConcurrencyService, unifiedGateway *unifiedpay.Gateway, unifiedInbox UnifiedWebhookInboxStore) (*PaymentService, error) {
 	svc := NewPaymentService(entClient, registry, loadBalancer, redeemService, subscriptionSvc, configService, userRepo, groupRepo, affiliateService)
 	svc.SetNotificationEmailService(notificationEmailService)
 	svc.SetAuthCacheInvalidator(authCacheInvalidator)
 	svc.SetBalanceAuthorizationCacheInvalidator(billingCacheService)
+	if err := svc.SetConcurrencyAuthorizationFence(concurrencyService); err != nil {
+		return nil, err
+	}
 	svc.SetUnifiedPayment(unifiedGateway, unifiedInbox)
-	return svc
+	return svc, nil
 }
 
 // ProvidePaymentOrderExpiryService creates and starts PaymentOrderExpiryService.

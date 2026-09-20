@@ -82,7 +82,7 @@ func ProvideCurrencyAwareBillingCache(rdb *redis.Client, bypass *runtimegate.Cur
 
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
-	NewUserRepository,
+	ProvideUserRepository,
 	NewAPIKeyRepository,
 	NewGroupRepository,
 	NewAdminGroupRepository,

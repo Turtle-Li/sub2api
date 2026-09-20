@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -59,6 +60,63 @@ type APIKeyConcurrencyCache interface {
 	TrackAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
 	ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
 	GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
+}
+
+// ErrUserConcurrencyAuthorizationFenceNotReady means the Redis-side strict
+// ceiling has been lost (for example after a Redis restart). New admissions
+// must wait for a durable DB-to-Redis reconciliation; existing slots and live
+// leases are deliberately allowed to finish.
+var ErrUserConcurrencyAuthorizationFenceNotReady = errors.New("user concurrency authorization fence is not ready")
+
+// ErrUserConcurrencyAuthorizationFenceMutationInFlight means a durable
+// concurrency write has not yet published its committed authorization
+// projection. New admissions must retry; existing slots continue normally.
+var ErrUserConcurrencyAuthorizationFenceMutationInFlight = errors.New("user concurrency authorization fence mutation is in flight")
+
+// UserConcurrencyAuthorizationFenceProjection is the durable value mirrored
+// into Redis for one user. Revision is monotonic in PostgreSQL and advances on
+// every relevant user-concurrency event and benefit-source lifecycle change.
+// Ceiling zero deliberately means the stored cap is unlimited / has no extra
+// refund ceiling; it is still projected so a newer clear cannot be overwritten
+// by a stale positive value.
+type UserConcurrencyAuthorizationFenceProjection struct {
+	Ceiling  int
+	Revision int64
+}
+
+// UserConcurrencyAuthorizationFenceCache is intentionally optional so legacy
+// concurrency cache implementations remain valid. The concrete Redis cache
+// enforces a temporary ceiling inside the same Lua operation that counts
+// ordinary and Live slots. Projection writes are compare-and-set by revision.
+type UserConcurrencyAuthorizationFenceCache interface {
+	EnableUserConcurrencyAuthorizationFence()
+	SetUserConcurrencyAuthorizationCeiling(ctx context.Context, userID int64, projection UserConcurrencyAuthorizationFenceProjection) (applied bool, err error)
+	UserConcurrencyAuthorizationFenceReady(ctx context.Context) (bool, error)
+	BeginUserConcurrencyAuthorizationFenceReconcile(ctx context.Context) (token string, err error)
+	FinishUserConcurrencyAuthorizationFenceReconcile(ctx context.Context, token string) (ready bool, err error)
+}
+
+// UserConcurrencyAuthorizationFenceMutationMarker identifies one durable
+// writer's fail-closed Redis marker. ExpectedRevision is the next durable
+// baseline revision while the writer still holds users.id FOR UPDATE. It lets
+// full reconciliation distinguish a committed stale marker from a live or
+// rolled-back writer without deleting a newer owner.
+type UserConcurrencyAuthorizationFenceMutationMarker struct {
+	Token            string
+	ExpectedRevision int64
+}
+
+// UserConcurrencyAuthorizationFenceMutationCache provides a short-lived,
+// per-user fail-closed marker around a durable concurrency mutation. Every
+// removal is ownership-aware: a completion may remove only its own token, and
+// full reconciliation may remove only a marker captured before its snapshot
+// whose expected revision is present in the revisioned projection.
+type UserConcurrencyAuthorizationFenceMutationCache interface {
+	BeginUserConcurrencyAuthorizationFenceMutation(ctx context.Context, userID int64, token string, expectedRevision int64) error
+	FinishUserConcurrencyAuthorizationFenceMutation(ctx context.Context, userID int64, token string) (finished bool, err error)
+	CaptureUserConcurrencyAuthorizationFenceMutation(ctx context.Context, userID int64) (UserConcurrencyAuthorizationFenceMutationMarker, bool, error)
+	CaptureUserConcurrencyAuthorizationFenceMutations(ctx context.Context) (map[int64]UserConcurrencyAuthorizationFenceMutationMarker, error)
+	ClearUserConcurrencyAuthorizationFenceMutationIfUnchanged(ctx context.Context, userID int64, marker UserConcurrencyAuthorizationFenceMutationMarker, observedRevision int64) (cleared bool, err error)
 }
 
 // OpenAIWSIngressLeaseCache owns the short-lived distributed lease used to
@@ -231,6 +289,12 @@ const (
 type ConcurrencyService struct {
 	cache ConcurrencyCache
 
+	userAuthorizationFenceEnabled atomic.Bool
+	userAuthorizationFenceMu      sync.RWMutex
+	userAuthorizationFenceState   func(context.Context) (map[int64]UserConcurrencyAuthorizationFenceProjection, error)
+	userAuthorizationFenceUser    func(context.Context, int64) (UserConcurrencyAuthorizationFenceProjection, bool, error)
+	userAuthorizationFenceGroup   singleflight.Group
+
 	accountLoadCacheTTL atomic.Int64
 	accountLoadCacheMu  sync.RWMutex
 	accountLoadCache    map[string]cachedAccountLoadBatch
@@ -250,6 +314,260 @@ func NewConcurrencyService(cache ConcurrencyCache) *ConcurrencyService {
 	}
 	svc.SetAccountLoadBatchCacheTTL(defaultAccountLoadBatchCacheTTL)
 	return svc
+}
+
+// ConfigureUserConcurrencyAuthorizationFence activates the strict Lua branch
+// in this process and supplies the durable projection used after Redis loses
+// its ready marker. A revisioned per-user resolver lets fresh API-key auth
+// snapshots restore a later legitimate SET/DELTA/purchase cap without trusting
+// an older Redis writer.
+func (s *ConcurrencyService) ConfigureUserConcurrencyAuthorizationFence(
+	snapshot func(context.Context) (map[int64]UserConcurrencyAuthorizationFenceProjection, error),
+	lookup func(context.Context, int64) (UserConcurrencyAuthorizationFenceProjection, bool, error),
+) error {
+	if s == nil || snapshot == nil || lookup == nil {
+		return errors.New("user concurrency authorization fence is unavailable")
+	}
+	cache, ok := s.cache.(UserConcurrencyAuthorizationFenceCache)
+	if !ok {
+		return errors.New("user concurrency authorization fence cache is unsupported")
+	}
+	s.userAuthorizationFenceMu.Lock()
+	s.userAuthorizationFenceState = snapshot
+	s.userAuthorizationFenceUser = lookup
+	s.userAuthorizationFenceMu.Unlock()
+	cache.EnableUserConcurrencyAuthorizationFence()
+	s.userAuthorizationFenceEnabled.Store(true)
+	return s.reconcileUserConcurrencyAuthorizationFence(context.Background())
+}
+
+// EnsureUserConcurrencyAuthorizationCeiling publishes one committed durable
+// projection before the refund provider call. A lower revision is ignored by
+// Redis CAS, while a later legitimate concurrency event can raise or clear the
+// ceiling with its strictly greater revision.
+func (s *ConcurrencyService) EnsureUserConcurrencyAuthorizationCeiling(
+	ctx context.Context,
+	userID int64,
+	projection UserConcurrencyAuthorizationFenceProjection,
+) error {
+	if s == nil || userID <= 0 || !s.userAuthorizationFenceEnabled.Load() {
+		return errors.New("user concurrency authorization fence is unavailable")
+	}
+	if projection.Ceiling < 0 || projection.Revision < 0 {
+		return errors.New("user concurrency authorization fence projection is invalid")
+	}
+	cache, ok := s.cache.(UserConcurrencyAuthorizationFenceCache)
+	if !ok {
+		return errors.New("user concurrency authorization fence cache is unsupported")
+	}
+	if _, err := cache.SetUserConcurrencyAuthorizationCeiling(ctx, userID, projection); err != nil {
+		return err
+	}
+	ready, err := cache.UserConcurrencyAuthorizationFenceReady(ctx)
+	if err != nil {
+		return err
+	}
+	if ready {
+		return nil
+	}
+	return s.reconcileUserConcurrencyAuthorizationFence(ctx)
+}
+
+// SynchronizeUserConcurrencyAuthorizationFence refreshes one user after a
+// durable FOR SHARE lookup. It captures any marker before that lookup and only
+// removes the exact captured token after the lookup has returned and its
+// projection is in Redis. A newer writer that installs a replacement marker in
+// the gap therefore remains fail-closed.
+func (s *ConcurrencyService) SynchronizeUserConcurrencyAuthorizationFence(ctx context.Context, userID int64) error {
+	return s.synchronizeUserConcurrencyAuthorizationFence(ctx, userID, true)
+}
+
+// synchronizeUserConcurrencyAuthorizationFence can leave marker ownership to
+// a transaction completion callback. That callback must only finish its own
+// token; ordinary admission and fresh auth snapshots use captureAndFinish so a
+// crashed writer can be recovered after the durable user-row lookup.
+func (s *ConcurrencyService) synchronizeUserConcurrencyAuthorizationFence(
+	ctx context.Context,
+	userID int64,
+	captureAndFinish bool,
+) error {
+	if s == nil || userID <= 0 || !s.userAuthorizationFenceEnabled.Load() {
+		return nil
+	}
+	s.userAuthorizationFenceMu.RLock()
+	lookup := s.userAuthorizationFenceUser
+	s.userAuthorizationFenceMu.RUnlock()
+	if lookup == nil {
+		return errors.New("user concurrency authorization fence lookup is unavailable")
+	}
+
+	var (
+		marker      UserConcurrencyAuthorizationFenceMutationMarker
+		hasMarker   bool
+		markerCache UserConcurrencyAuthorizationFenceMutationCache
+	)
+	if captureAndFinish {
+		var ok bool
+		markerCache, ok = s.cache.(UserConcurrencyAuthorizationFenceMutationCache)
+		if ok {
+			var err error
+			marker, hasMarker, err = markerCache.CaptureUserConcurrencyAuthorizationFenceMutation(ctx, userID)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Production lookup takes users.id FOR SHARE. A marker-owning writer starts
+	// after FOR UPDATE and holds that row through commit/rollback, so once this
+	// call returns a captured marker can only be removed if its exact token is
+	// still present. A writer that begins after this query replaces the token.
+	projection, tracked, err := lookup(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if tracked {
+		if err := s.EnsureUserConcurrencyAuthorizationCeiling(ctx, userID, projection); err != nil {
+			return err
+		}
+	}
+	if !captureAndFinish || !hasMarker || markerCache == nil {
+		return nil
+	}
+	_, err = markerCache.FinishUserConcurrencyAuthorizationFenceMutation(ctx, userID, marker.Token)
+	return err
+}
+
+func sameUserConcurrencyAuthorizationFenceProjectionMap(
+	left, right map[int64]UserConcurrencyAuthorizationFenceProjection,
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for userID, value := range left {
+		other, ok := right[userID]
+		if !ok || other != value {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedUserConcurrencyAuthorizationFenceProjectionIDs(values map[int64]UserConcurrencyAuthorizationFenceProjection) []int64 {
+	ids := make([]int64, 0, len(values))
+	for userID := range values {
+		if userID > 0 {
+			ids = append(ids, userID)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func (s *ConcurrencyService) reconcileUserConcurrencyAuthorizationFence(ctx context.Context) error {
+	if s == nil || !s.userAuthorizationFenceEnabled.Load() {
+		return errors.New("user concurrency authorization fence is unavailable")
+	}
+	cache, ok := s.cache.(UserConcurrencyAuthorizationFenceCache)
+	if !ok {
+		return errors.New("user concurrency authorization fence cache is unsupported")
+	}
+	s.userAuthorizationFenceMu.RLock()
+	snapshot := s.userAuthorizationFenceState
+	s.userAuthorizationFenceMu.RUnlock()
+	if snapshot == nil {
+		return errors.New("user concurrency authorization fence snapshot is unavailable")
+	}
+	_, err, _ := s.userAuthorizationFenceGroup.Do("reconcile", func() (any, error) {
+		// A short bounded retry is enough to close the only unsafe window: a
+		// Redis restart after a newer direct write but before an old full
+		// snapshot finishes. The ready marker is never set unless both the
+		// Redis reconciliation token and durable revision vector survive.
+		for attempt := 0; attempt < 4; attempt++ {
+			token, err := cache.BeginUserConcurrencyAuthorizationFenceReconcile(context.WithoutCancel(ctx))
+			if err != nil {
+				return nil, err
+			}
+
+			// Capture marker ownership before the durable snapshot. A writer that
+			// starts later replaces the token, so this reconcile can never clear
+			// that newer writer. Its expected revision additionally proves that
+			// the captured mutation committed before a full-snapshot cleanup.
+			var capturedMarkers map[int64]UserConcurrencyAuthorizationFenceMutationMarker
+			mutationCache, hasMutationCache := s.cache.(UserConcurrencyAuthorizationFenceMutationCache)
+			if hasMutationCache {
+				capturedMarkers, err = mutationCache.CaptureUserConcurrencyAuthorizationFenceMutations(context.WithoutCancel(ctx))
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			before, err := snapshot(context.WithoutCancel(ctx))
+			if err != nil {
+				return nil, err
+			}
+			for _, userID := range sortedUserConcurrencyAuthorizationFenceProjectionIDs(before) {
+				projection := before[userID]
+				if projection.Ceiling < 0 || projection.Revision < 0 {
+					return nil, errors.New("user concurrency authorization fence snapshot is invalid")
+				}
+				if _, err := cache.SetUserConcurrencyAuthorizationCeiling(context.WithoutCancel(ctx), userID, projection); err != nil {
+					return nil, err
+				}
+			}
+			after, err := snapshot(context.WithoutCancel(ctx))
+			if err != nil {
+				return nil, err
+			}
+			if !sameUserConcurrencyAuthorizationFenceProjectionMap(before, after) {
+				continue
+			}
+			if hasMutationCache {
+				for userID, marker := range capturedMarkers {
+					projection, tracked := before[userID]
+					if !tracked || marker.ExpectedRevision > projection.Revision {
+						// An uncommitted/rolled-back or source-less marker remains
+						// fail-closed until a per-user FOR SHARE recovery observes it.
+						continue
+					}
+					if _, err := mutationCache.ClearUserConcurrencyAuthorizationFenceMutationIfUnchanged(
+						context.WithoutCancel(ctx), userID, marker, projection.Revision,
+					); err != nil {
+						return nil, err
+					}
+				}
+			}
+			ready, err := cache.FinishUserConcurrencyAuthorizationFenceReconcile(context.WithoutCancel(ctx), token)
+			if err != nil {
+				return nil, err
+			}
+			if ready {
+				return nil, nil
+			}
+		}
+		return nil, errors.New("user concurrency authorization fence changed while reconciling")
+	})
+	return err
+}
+
+func (s *ConcurrencyService) acquireUserSlotWithAuthorizationFence(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
+	acquired, err := s.cache.AcquireUserSlot(ctx, userID, maxConcurrency, requestID)
+	if errors.Is(err, ErrUserConcurrencyAuthorizationFenceMutationInFlight) {
+		// The per-user lookup blocks behind the mutation's FOR UPDATE lock, then
+		// publishes its committed (or rolled-back) durable projection before a
+		// retry. This also recovers a marker left by a crashed request process.
+		if syncErr := s.SynchronizeUserConcurrencyAuthorizationFence(ctx, userID); syncErr != nil {
+			return false, syncErr
+		}
+		return s.cache.AcquireUserSlot(ctx, userID, maxConcurrency, requestID)
+	}
+	if !errors.Is(err, ErrUserConcurrencyAuthorizationFenceNotReady) {
+		return acquired, err
+	}
+	if err := s.reconcileUserConcurrencyAuthorizationFence(ctx); err != nil {
+		return false, err
+	}
+	return s.cache.AcquireUserSlot(ctx, userID, maxConcurrency, requestID)
 }
 
 // AcquireOpenAIWSIngressLease atomically reserves one live ingress connection
@@ -379,18 +697,23 @@ func (s *ConcurrencyService) AcquireAccountSlot(ctx context.Context, accountID i
 // If the user is at max concurrency, it waits until a slot is available or timeout.
 // Returns a release function that MUST be called when the request completes.
 func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, maxConcurrency int) (*AcquireResult, error) {
-	// If maxConcurrency is 0 or negative, no limit
-	if maxConcurrency <= 0 {
+	// A zero stored cap is unlimited. Once P19 strict authorization is wired,
+	// it still enters Lua so a positive refund ceiling can constrain a stale
+	// high auth snapshot without turning zero into a rejection.
+	if maxConcurrency <= 0 && !s.userAuthorizationFenceEnabled.Load() {
 		return &AcquireResult{
 			Acquired:    true,
 			ReleaseFunc: func() {}, // no-op
 		}, nil
 	}
+	if s == nil || s.cache == nil {
+		return nil, errors.New("user concurrency cache is unavailable")
+	}
 
 	// Generate unique request ID for this slot
 	requestID := generateRequestID()
 
-	acquired, err := s.cache.AcquireUserSlot(ctx, userID, maxConcurrency, requestID)
+	acquired, err := s.acquireUserSlotWithAuthorizationFence(ctx, userID, maxConcurrency, requestID)
 	if err != nil {
 		return nil, err
 	}
@@ -768,4 +1091,41 @@ func (s *ConcurrencyService) GetAccountConcurrencyBatch(ctx context.Context, acc
 	defer cancel()
 
 	return s.cache.GetAccountConcurrencyBatch(redisCtx, accountIDs)
+}
+
+// AcquireLiveLeaseWithAuthorizationFence uses the same strict projection and
+// mutation-recovery path as ordinary HTTP and WebSocket user slots. Existing
+// Live leases are refreshed by the Lua script before the fence check, so P19
+// constrains only new admissions.
+func (s *ConcurrencyService) AcquireLiveLeaseWithAuthorizationFence(
+	ctx context.Context,
+	accountID int64,
+	accountMax int,
+	userID int64,
+	userMax int,
+	apiKeyID int64,
+	leaseID string,
+	replacingRegularSlots bool,
+) (bool, error) {
+	if s == nil || s.cache == nil {
+		return false, errors.New("live concurrency cache is unavailable")
+	}
+	cache, ok := s.cache.(LiveConcurrencyCache)
+	if !ok {
+		return false, errors.New("live concurrency cache is unsupported")
+	}
+	acquired, err := cache.AcquireLiveLease(ctx, accountID, accountMax, userID, userMax, apiKeyID, leaseID, replacingRegularSlots)
+	if errors.Is(err, ErrUserConcurrencyAuthorizationFenceMutationInFlight) {
+		if syncErr := s.SynchronizeUserConcurrencyAuthorizationFence(ctx, userID); syncErr != nil {
+			return false, syncErr
+		}
+		return cache.AcquireLiveLease(ctx, accountID, accountMax, userID, userMax, apiKeyID, leaseID, replacingRegularSlots)
+	}
+	if !errors.Is(err, ErrUserConcurrencyAuthorizationFenceNotReady) {
+		return acquired, err
+	}
+	if err := s.reconcileUserConcurrencyAuthorizationFence(ctx); err != nil {
+		return false, err
+	}
+	return cache.AcquireLiveLease(ctx, accountID, accountMax, userID, userMax, apiKeyID, leaseID, replacingRegularSlots)
 }

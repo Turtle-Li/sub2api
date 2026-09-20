@@ -112,6 +112,33 @@ func TestGatewayCreatesScopedAlipayOrderAndRejectsRedirects(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidResponse)
 }
 
+func TestGatewayMobileAlipayPreservesHostedCheckoutPresentation(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input createPaymentOrderRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&input))
+		require.NotContains(t, input.Metadata, "checkout_presentation", "mobile page-pay must keep its existing full checkout presentation")
+		checkout := server.URL + "/checkout/mobile-token"
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(paymentOrderResponse{
+			Environment: EnvironmentSandbox, OrganizationID: testOrganizationID, ProductID: testProductID,
+			AppID: testAppID, PaymentOrderID: testPaymentOrderID, ProductOrderNo: input.ProductOrderNo,
+			OrderType: input.OrderType, AmountFen: input.AmountFen, Currency: "CNY", PaymentMethod: PaymentMethodAlipay,
+			Status: StatusPendingPayment, CheckoutURL: &checkout, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+		}))
+	}))
+	defer server.Close()
+	gateway, err := New(testConfig(testPrivateKey(), server.URL))
+	require.NoError(t, err)
+	result, err := gateway.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID: "sub2_mobile_20260920", Amount: "12.34", PaymentType: payment.TypeAlipay,
+		OrderType: "balance", Subject: "余额充值", ReturnURL: gateway.ReturnURL(), ExpiresInSeconds: 1800, IsMobile: true,
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.CheckoutFrameURL)
+	require.Equal(t, server.URL+"/checkout/mobile-token", result.PayURL)
+}
+
 func TestGatewayCreatesNativeWechatOrderAndReturnsCodeURL(t *testing.T) {
 	privateKey := testPrivateKey()
 	code := "weixin://wxpay/bizpayurl?pr=native-token"

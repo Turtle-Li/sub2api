@@ -66,6 +66,42 @@ function mountDialog(review: RefundReview, props: Record<string, unknown> = {}) 
 }
 
 describe('AdminRefundDialog', () => {
+  it('shows server-calculated gift IDs and concurrency recovery without deriving it in the browser', () => {
+    const wrapper = mountDialog(balanceReview({ benefits: {
+      reset_card_grant_ids: [91, 92], reset_cards_to_reclaim: 3,
+      concurrency_before: 2, concurrency_current: 8, concurrency_after_refund: 5,
+    } }))
+    const benefits = wrapper.get('[data-testid="refund-benefits"]')
+    expect(benefits.text()).toContain('payment.admin.giftResetCardsCount:3')
+    expect(benefits.text()).toContain('8 → 5')
+    expect(benefits.text()).toContain('payment.admin.concurrencyBeforePurchase:2')
+    expect(benefits.get('details').text()).toContain('#91 · #92')
+  })
+
+  it('labels a zero concurrency limit as unlimited', () => {
+    const wrapper = mountDialog(balanceReview({ benefits: {
+      reset_card_grant_ids: [], reset_cards_to_reclaim: 0,
+      concurrency_before: 0, concurrency_current: 4, concurrency_after_refund: 0,
+    } }))
+    expect(wrapper.get('[data-testid="refund-benefits"]').text()).toContain('4 → payment.admin.unlimited')
+    expect(wrapper.text()).toContain('payment.admin.concurrencyBeforePurchase:payment.admin.unlimited')
+  })
+
+  it.each(['submitting', 'backfilling'])('does not emit cancellation while %s', async (busyProp) => {
+    const wrapper = mountDialog(balanceReview(), { [busyProp]: true })
+    const dialog = wrapper.findComponent(BaseDialogStub)
+    expect(dialog.attributes('close-on-click-outside')).toBe('false')
+    expect(dialog.attributes('close-on-escape')).toBe('false')
+    dialog.vm.$emit('close')
+    const cancel = wrapper.findAll('button').find(button => button.text() === 'common.cancel')!
+    expect(cancel.attributes('disabled')).toBeDefined()
+    await cancel.trigger('click')
+    expect(wrapper.emitted('cancel')).toBeUndefined()
+    await wrapper.setProps({ [busyProp]: false })
+    await cancel.trigger('click')
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
+  })
+
   it('renders server-calculated balance effects without editable monetary or recovery controls', async () => {
     const wrapper = mountDialog(balanceReview())
 

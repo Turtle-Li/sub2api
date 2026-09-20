@@ -368,6 +368,14 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 	if apiKey == nil || apiKey.User == nil {
 		return nil
 	}
+	// A fresh database-backed auth snapshot is the narrow synchronization point
+	// for later legitimate user cap changes while a P19 refund is held. Ordinary
+	// users are a no-op; tracked users publish a revisioned Redis projection.
+	if s.concurrencyService != nil {
+		if err := s.concurrencyService.SynchronizeUserConcurrencyAuthorizationFence(ctx, apiKey.User.ID); err != nil {
+			slog.Warn("synchronize user concurrency authorization fence from auth snapshot failed", "user_id", apiKey.User.ID, "err", err)
+		}
+	}
 	snapshot := &APIKeyAuthSnapshot{
 		Version:     apiKeyAuthSnapshotVersion,
 		APIKeyID:    apiKey.ID,

@@ -30,14 +30,24 @@ import (
 )
 
 type userRepository struct {
-	client *dbent.Client
-	sql    sqlExecutor
+	client                        *dbent.Client
+	sql                           sqlExecutor
+	concurrencyAuthorizationFence *service.ConcurrencyService
 }
 
 var _ service.RedeemUserAdjustmentRepository = (*userRepository)(nil)
 
 func NewUserRepository(client *dbent.Client, sqlDB *sql.DB) service.UserRepository {
 	return newUserRepositoryWithSQL(client, sqlDB)
+}
+
+// ProvideUserRepository adds the strict P19 authorization-fence coordinator
+// without changing the lightweight constructor used throughout repository
+// tests. Wire injects the same ConcurrencyService used by HTTP, WS and Live.
+func ProvideUserRepository(client *dbent.Client, sqlDB *sql.DB, concurrencyFence *service.ConcurrencyService) service.UserRepository {
+	repo := newUserRepositoryWithSQL(client, sqlDB)
+	repo.concurrencyAuthorizationFence = concurrencyFence
+	return repo
 }
 
 func newUserRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *userRepository {
@@ -248,24 +258,34 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 		return nil
 	}
 
-	// 使用 ent 事务包裹用户更新与 allowed_groups 同步，避免跨层事务不一致。
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
-	var txClient *dbent.Client
-	txCtx := ctx
-	if err == nil {
-		defer func() { _ = tx.Rollback() }()
-		txClient = tx.Client()
-		txCtx = dbent.NewTxContext(ctx, tx)
+	// Use a caller-owned Ent transaction directly when one is in ctx. Starting
+	// another transaction from the base client would make its concurrency marker
+	// complete before the outer financial/admin transaction commits.
+	var (
+		tx       *dbent.Tx
+		txClient *dbent.Client
+		txCtx    = ctx
+		activeTx *dbent.Tx
+	)
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		txClient = existingTx.Client()
+		activeTx = existingTx
 	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前事务 client 并由调用方负责提交/回滚。
-		if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
-			txClient = existingTx.Client()
-		} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			if !errors.Is(err, dbent.ErrTxStarted) {
+				return err
+			}
+			// A transaction-bound client without its context cannot expose a
+			// completion hook. The strict marker path will reject this state
+			// rather than allow a commit to outrun its Redis projection.
 			txClient = r.client
+		} else {
+			defer func() { _ = tx.Rollback() }()
+			txClient = tx.Client()
+			txCtx = dbent.NewTxContext(ctx, tx)
+			activeTx = tx
 		}
 	}
 
@@ -310,7 +330,13 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 	if fields.Role {
 		updateOp = updateOp.SetRole(userIn.Role)
 	}
-	if fields.Concurrency {
+	useConcurrencyEvents := fields.Concurrency && txClient.Driver().Dialect() == dialect.Postgres
+	if useConcurrencyEvents {
+		if _, err := r.beginUserConcurrencyAuthorizationFenceMutation(txCtx, txClient, activeTx, []int64{userIn.ID}); err != nil {
+			return err
+		}
+	}
+	if fields.Concurrency && !useConcurrencyEvents {
 		updateOp = updateOp.SetConcurrency(userIn.Concurrency)
 	}
 	if fields.RPMLimit {
@@ -346,6 +372,12 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 	updated, err := updateOp.Save(txCtx)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrUserNotFound, service.ErrEmailExists)
+	}
+	if useConcurrencyEvents {
+		if _, _, err := applyUserConcurrencySetEvent(txCtx, txClient, userIn.ID, userIn.Concurrency); err != nil {
+			return translateConcurrencyMutationError(err)
+		}
+		updated.Concurrency = max(userIn.Concurrency, 0)
 	}
 
 	if fields.AllowedGroups {
@@ -1083,6 +1115,14 @@ func scanBalanceChange(ctx context.Context, client *dbent.Client, query string, 
 
 func (r *userRepository) UpdateConcurrency(ctx context.Context, id int64, amount int) error {
 	client := clientFromContext(ctx, r.client)
+	if client.Driver().Dialect() == dialect.Postgres {
+		return r.withPostgresUserConcurrencyMutation(ctx, []int64{id}, func(txCtx context.Context, txClient *dbent.Client) error {
+			if _, _, err := applyUserConcurrencyDeltaEvent(txCtx, txClient, id, amount); err != nil {
+				return translateConcurrencyMutationError(err)
+			}
+			return nil
+		})
+	}
 	n, err := client.User.Update().Where(dbuser.IDEQ(id)).AddConcurrency(amount).Save(ctx)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrUserNotFound, nil)
@@ -1094,12 +1134,20 @@ func (r *userRepository) UpdateConcurrency(ctx context.Context, id int64, amount
 }
 
 func (r *userRepository) ApplyRedeemConcurrencyAdjustment(ctx context.Context, id int64, delta int) error {
+	client := clientFromContext(ctx, r.client)
+	if client.Driver().Dialect() == dialect.Postgres {
+		return r.withPostgresUserConcurrencyMutation(ctx, []int64{id}, func(txCtx context.Context, txClient *dbent.Client) error {
+			if _, _, err := applyUserConcurrencyDeltaEvent(txCtx, txClient, id, delta); err != nil {
+				return translateConcurrencyMutationError(err)
+			}
+			return nil
+		})
+	}
 	const updateSQL = `
 		UPDATE users
 		SET concurrency = GREATEST(concurrency + $1, 0), updated_at = NOW()
 		WHERE id = $2 AND deleted_at IS NULL
 	`
-	client := clientFromContext(ctx, r.client)
 	result, err := client.ExecContext(ctx, updateSQL, delta, id)
 	if err != nil {
 		return err
@@ -1121,6 +1169,19 @@ func (r *userRepository) BatchSetConcurrency(ctx context.Context, userIDs []int6
 	if value < 0 {
 		value = 0
 	}
+	client := clientFromContext(ctx, r.client)
+	if client.Driver().Dialect() == dialect.Postgres {
+		var affected int
+		err := r.withPostgresUserConcurrencyMutation(ctx, userIDs, func(txCtx context.Context, txClient *dbent.Client) error {
+			var err error
+			affected, err = applyUserConcurrencySetBatchEvent(txCtx, txClient, userIDs, value)
+			if err != nil {
+				return fmt.Errorf("batch set concurrency: %w", translateConcurrencyMutationError(err))
+			}
+			return nil
+		})
+		return affected, err
+	}
 	res, err := r.sql.ExecContext(ctx,
 		"UPDATE users SET concurrency = $1, updated_at = NOW() WHERE id = ANY($2) AND deleted_at IS NULL",
 		value, pq.Array(userIDs))
@@ -1135,6 +1196,19 @@ func (r *userRepository) BatchAddConcurrency(ctx context.Context, userIDs []int6
 	if len(userIDs) == 0 {
 		return 0, nil
 	}
+	client := clientFromContext(ctx, r.client)
+	if client.Driver().Dialect() == dialect.Postgres {
+		var affected int
+		err := r.withPostgresUserConcurrencyMutation(ctx, userIDs, func(txCtx context.Context, txClient *dbent.Client) error {
+			var err error
+			affected, err = applyUserConcurrencyDeltaBatchEvent(txCtx, txClient, userIDs, delta)
+			if err != nil {
+				return fmt.Errorf("batch add concurrency: %w", translateConcurrencyMutationError(err))
+			}
+			return nil
+		})
+		return affected, err
+	}
 	res, err := r.sql.ExecContext(ctx,
 		"UPDATE users SET concurrency = GREATEST(concurrency + $1, 0), updated_at = NOW() WHERE id = ANY($2) AND deleted_at IS NULL",
 		delta, pq.Array(userIDs))
@@ -1148,6 +1222,10 @@ func (r *userRepository) BatchAddConcurrency(ctx context.Context, userIDs []int6
 func (r *userRepository) BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error) {
 	if len(userIDs) == 0 || (concurrency == nil && rpmLimit == nil) {
 		return 0, nil
+	}
+
+	if concurrency != nil && clientFromContext(ctx, r.client).Driver().Dialect() == dialect.Postgres {
+		return r.batchUpdateLimitsWithConcurrencyEvent(ctx, userIDs, *concurrency, rpmLimit)
 	}
 
 	setClauses := make([]string, 0, 3)
@@ -1176,6 +1254,222 @@ func (r *userRepository) BatchUpdateLimits(ctx context.Context, userIDs []int64,
 	}
 	affected, _ := res.RowsAffected()
 	return int(affected), nil
+}
+
+func (r *userRepository) batchUpdateLimitsWithConcurrencyEvent(ctx context.Context, userIDs []int64, concurrency int, rpmLimit *int) (int, error) {
+	value := max(concurrency, 0)
+	var affected int
+	err := r.withPostgresUserConcurrencyMutation(ctx, userIDs, func(txCtx context.Context, txClient *dbent.Client) error {
+		var err error
+		affected, err = applyUserConcurrencySetBatchEvent(txCtx, txClient, userIDs, value)
+		if err != nil {
+			return fmt.Errorf("batch update concurrency: %w", translateConcurrencyMutationError(err))
+		}
+		if rpmLimit != nil {
+			res, err := txClient.ExecContext(txCtx,
+				"UPDATE users SET rpm_limit = $1, updated_at = NOW() WHERE id = ANY($2) AND deleted_at IS NULL",
+				max(*rpmLimit, 0), pq.Array(userIDs))
+			if err != nil {
+				return fmt.Errorf("batch update rpm limit: %w", err)
+			}
+			if _, err := res.RowsAffected(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return affected, err
+}
+
+// withPostgresUserConcurrencyMutation serializes the durable write with a
+// per-user Redis marker. Rows are locked in ascending user ID before markers
+// are installed, matching the database batch function's lock order.
+func (r *userRepository) withPostgresUserConcurrencyMutation(
+	ctx context.Context,
+	userIDs []int64,
+	apply func(context.Context, *dbent.Client) error,
+) error {
+	if apply == nil {
+		return nil
+	}
+	// The compatibility constructor deliberately omits the P19 fence in unit
+	// tests and isolated legacy callers. Its SQL functions remain atomic, so do
+	// not create an otherwise unnecessary outer transaction merely to attach a
+	// marker that cannot exist.
+	if r == nil {
+		return errors.New("user concurrency repository is unavailable")
+	}
+	if r.concurrencyAuthorizationFence == nil {
+		return apply(ctx, clientFromContext(ctx, r.client))
+	}
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		if _, err := r.beginUserConcurrencyAuthorizationFenceMutation(ctx, existingTx.Client(), existingTx, userIDs); err != nil {
+			return err
+		}
+		return apply(ctx, existingTx.Client())
+	}
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		if errors.Is(err, dbent.ErrTxStarted) {
+			// A transaction-bound client without its context cannot attach a
+			// completion hook. Fail closed once P19 is active rather than let a
+			// commit outrun its strict Redis projection.
+			if r.concurrencyAuthorizationFence != nil {
+				return errors.New("user concurrency authorization fence transaction context is unavailable")
+			}
+			return apply(ctx, r.client)
+		}
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if _, err := r.beginUserConcurrencyAuthorizationFenceMutation(txCtx, tx.Client(), tx, userIDs); err != nil {
+		return err
+	}
+	if err := apply(txCtx, tx.Client()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *userRepository) beginUserConcurrencyAuthorizationFenceMutation(
+	ctx context.Context,
+	client *dbent.Client,
+	tx *dbent.Tx,
+	userIDs []int64,
+) ([]*service.UserConcurrencyAuthorizationFenceMutation, error) {
+	if r == nil || r.concurrencyAuthorizationFence == nil || client == nil || len(userIDs) == 0 {
+		return nil, nil
+	}
+	if tx == nil {
+		return nil, errors.New("user concurrency authorization fence transaction is unavailable")
+	}
+	lockedIDs, err := lockUserConcurrencyFenceRows(ctx, client, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	mutations := make([]*service.UserConcurrencyAuthorizationFenceMutation, 0, len(lockedIDs))
+	for _, userID := range lockedIDs {
+		// A zero expected revision asks Redis to derive current projection+1
+		// atomically while this user row remains locked. This keeps the helper
+		// usable for every existing user writer without a second DB read, while
+		// reconcile still gets a concrete version for CAS cleanup.
+		mutation, err := r.concurrencyAuthorizationFence.BeginUserConcurrencyAuthorizationFenceMutation(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		if mutation != nil {
+			mutation.Attach(tx)
+			mutations = append(mutations, mutation)
+		}
+	}
+	return mutations, nil
+}
+
+func lockUserConcurrencyFenceRows(ctx context.Context, client *dbent.Client, userIDs []int64) ([]int64, error) {
+	if client == nil {
+		return nil, errors.New("user concurrency client is unavailable")
+	}
+	unique := make(map[int64]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID > 0 {
+			unique[userID] = struct{}{}
+		}
+	}
+	if len(unique) == 0 {
+		return nil, nil
+	}
+	ordered := make([]int64, 0, len(unique))
+	for userID := range unique {
+		ordered = append(ordered, userID)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	rows, err := client.QueryContext(ctx, `SELECT id FROM users
+		WHERE id = ANY($1) AND deleted_at IS NULL ORDER BY id ASC FOR UPDATE`, pq.Array(ordered))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	locked := make([]int64, 0, len(ordered))
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		locked = append(locked, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return locked, nil
+}
+
+func applyUserConcurrencyDeltaEvent(ctx context.Context, client *dbent.Client, userID int64, delta int) (int, int, error) {
+	return scanUserConcurrencyEvent(ctx, client,
+		`SELECT before_concurrency, after_concurrency FROM sub2api_apply_user_concurrency_delta($1, $2)`, userID, delta)
+}
+
+func applyUserConcurrencySetEvent(ctx context.Context, client *dbent.Client, userID int64, target int) (int, int, error) {
+	return scanUserConcurrencyEvent(ctx, client,
+		`SELECT before_concurrency, after_concurrency FROM sub2api_set_user_concurrency($1, $2)`, userID, max(target, 0))
+}
+
+func scanUserConcurrencyEvent(ctx context.Context, client *dbent.Client, query string, args ...any) (int, int, error) {
+	rows, err := client.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, 0, err
+		}
+		return 0, 0, service.ErrUserNotFound
+	}
+	var before, after int
+	if err := rows.Scan(&before, &after); err != nil {
+		return 0, 0, err
+	}
+	return before, after, rows.Err()
+}
+
+func applyUserConcurrencySetBatchEvent(ctx context.Context, client *dbent.Client, userIDs []int64, target int) (int, error) {
+	return scanUserConcurrencyBatchEvent(ctx, client,
+		`SELECT sub2api_set_user_concurrency_batch($1, $2)`, pq.Array(userIDs), max(target, 0))
+}
+
+func applyUserConcurrencyDeltaBatchEvent(ctx context.Context, client *dbent.Client, userIDs []int64, delta int) (int, error) {
+	return scanUserConcurrencyBatchEvent(ctx, client,
+		`SELECT sub2api_apply_user_concurrency_delta_batch($1, $2)`, pq.Array(userIDs), delta)
+}
+
+func scanUserConcurrencyBatchEvent(ctx context.Context, client *dbent.Client, query string, args ...any) (int, error) {
+	rows, err := client.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	var affected int
+	if err := rows.Scan(&affected); err != nil {
+		return 0, err
+	}
+	return affected, rows.Err()
+}
+
+func translateConcurrencyMutationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "not found while") {
+		return service.ErrUserNotFound
+	}
+	return err
 }
 
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {

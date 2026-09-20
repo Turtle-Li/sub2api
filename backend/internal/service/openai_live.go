@@ -134,8 +134,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	if err != nil {
 		return nil, err
 	}
-	liveCache, err := s.liveConcurrencyCache()
-	if err != nil {
+	if _, err := s.liveConcurrencyCache(); err != nil {
 		return nil, err
 	}
 	attestation, attestationCiphertext, err := s.prepareLiveAttestation(ctx)
@@ -177,7 +176,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 
 		account := selection.Account
 		leaseID := generateRequestID()
-		acquired, acquireErr := liveCache.AcquireLiveLease(
+		acquired, acquireErr := s.concurrencyService.AcquireLiveLeaseWithAuthorizationFence(
 			ctx,
 			account.ID,
 			account.Concurrency,

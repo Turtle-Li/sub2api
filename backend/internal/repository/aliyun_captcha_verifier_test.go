@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ func newAliyunCaptchaTestTarget(t *testing.T, handler http.HandlerFunc) (*aliyun
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
+	allowAliyunCaptchaLoopbackEndpoint(t, strings.TrimPrefix(server.URL, "http://"))
 
 	verifier := &aliyunCaptchaVerifier{protocol: "HTTP", timeoutMillis: 2_000}
 	cred := service.AliyunCaptchaCredentials{
@@ -27,6 +29,20 @@ func newAliyunCaptchaTestTarget(t *testing.T, handler http.HandlerFunc) (*aliyun
 		Endpoint:        strings.TrimPrefix(server.URL, "http://"),
 	}
 	return verifier, cred
+}
+
+// The pinned Tea SDK compares NO_PROXY entries to host:port literally, unlike
+// net/http. Keep only this local test endpoint off the inherited proxy; real
+// dependency and API traffic keeps the operator's existing proxy environment.
+func allowAliyunCaptchaLoopbackEndpoint(t *testing.T, endpoint string) {
+	t.Helper()
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		current := os.Getenv(key)
+		if current != "" {
+			current += ","
+		}
+		t.Setenv(key, current+endpoint)
+	}
 }
 
 func TestAliyunCaptchaVerifier_VerifySuccess(t *testing.T) {
@@ -77,6 +93,7 @@ func TestAliyunCaptchaVerifier_TransportError(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	endpoint := strings.TrimPrefix(server.URL, "http://")
 	server.Close() // 立即关闭，制造连接失败
+	allowAliyunCaptchaLoopbackEndpoint(t, endpoint)
 
 	verifier := &aliyunCaptchaVerifier{protocol: "HTTP", timeoutMillis: 2_000}
 	cred := service.AliyunCaptchaCredentials{
