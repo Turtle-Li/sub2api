@@ -276,7 +276,7 @@ describe('decidePaymentLaunch', () => {
     expect(decision.paymentState.qrCode).toBe('')
   })
 
-  it('keeps a valid Alipay checkout frame separate from QR and suppresses redirect launch', () => {
+  it('keeps a hosted Alipay checkout as a top-level fallback until native QR data exists', () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     const decision = decidePaymentLaunch(createOrderResult({
       payment_mode: 'redirect',
@@ -288,7 +288,7 @@ describe('decidePaymentLaunch', () => {
       isMobile: false,
     })
 
-    expect(decision.kind).toBe('qr_waiting')
+    expect(decision.kind).toBe('redirect_waiting')
     expect(decision.paymentState.checkoutFrameUrl).toBe(checkoutFrameUrl)
     expect(decision.recovery.checkoutFrameUrl).toBe(checkoutFrameUrl)
     expect(decision.paymentState.qrCode).toBe('')

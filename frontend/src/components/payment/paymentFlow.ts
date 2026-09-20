@@ -394,12 +394,6 @@ export function decidePaymentLaunch(
     return { kind: 'alipay_deep_link', paymentState: baseState, recovery: baseState }
   }
 
-  // A valid embedded page-pay URL is a presentation option for Alipay only.
-  // It stays distinct from both gateway QR data and conventional hosted URLs.
-  if (visibleMethod === 'alipay' && baseState.checkoutFrameUrl) {
-    return { kind: 'qr_waiting', paymentState: baseState, recovery: baseState }
-  }
-
   const normalizedPaymentMode = baseState.paymentMode.trim().toLowerCase()
   const explicitRedirect = normalizedPaymentMode === 'redirect' || normalizedPaymentMode === 'popup'
   const explicitQr = normalizedPaymentMode === 'qrcode' || normalizedPaymentMode === 'native'

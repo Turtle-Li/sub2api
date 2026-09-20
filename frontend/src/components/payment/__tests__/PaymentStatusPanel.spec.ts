@@ -143,7 +143,7 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.emitted('success')).toBeUndefined()
   })
 
-  it('renders a validated desktop Alipay checkout frame without opening a browser', async () => {
+  it('does not embed a hosted Alipay page and keeps the normal QR surface', async () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     const openSpy = vi.spyOn(window, 'open')
@@ -164,28 +164,8 @@ describe('PaymentStatusPanel', () => {
 
     await flushPromises()
 
-    const frame = wrapper.get('[data-test="alipay-checkout-frame"]')
-    expect(frame.attributes('src')).toBe(checkoutFrameUrl)
-    expect(wrapper.get('[data-test="alipay-checkout-frame-region"]').classes()).toEqual(expect.arrayContaining(['h-[224px]', 'w-[224px]']))
-    expect(frame.classes()).toEqual(expect.arrayContaining(['h-[224px]', 'w-[224px]']))
-    expect(frame.attributes('sandbox')).toBe('allow-scripts allow-forms allow-same-origin')
-    expect(frame.attributes('referrerpolicy')).toBe('strict-origin-when-cross-origin')
-    expect(frame.attributes('title')).toBe('payment.qr.alipayEmbeddedFrameTitle')
-    expect(toCanvas).not.toHaveBeenCalled()
-    expect(openSpy).not.toHaveBeenCalled()
-
-    await frame.trigger('load')
-    await flushPromises()
-
-    // An iframe navigation does not prove payment or cause an external launch.
-    expect(wrapper.emitted('success')).toBeUndefined()
-    expect(wrapper.find('[data-test="open-alipay-checkout-fallback"]').exists()).toBe(false)
-    expect(openSpy).not.toHaveBeenCalled()
-
-    await vi.advanceTimersByTimeAsync(6000)
-    await flushPromises()
-
-    expect(wrapper.get('[data-test="open-alipay-checkout-fallback"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.example.test/alipay-42', expect.any(Object))
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
   })
@@ -230,7 +210,7 @@ describe('PaymentStatusPanel', () => {
     expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.example.test/alipay-42', expect.any(Object))
   })
 
-  it('shows an explicit frame fallback after a bounded wait without opening it automatically', async () => {
+  it('shows the hosted Alipay fallback button without embedding the provider page', async () => {
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     const openSpy = vi.spyOn(window, 'open')
     const wrapper = mount(PaymentStatusPanel, {
@@ -248,17 +228,35 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    expect(wrapper.find('[data-test="open-alipay-checkout-fallback"]').exists()).toBe(false)
-
-    await vi.advanceTimersByTimeAsync(6000)
-    await flushPromises()
-
-    expect(wrapper.get('[data-test="open-alipay-checkout-fallback"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.get('button').text()).toContain('payment.qr.openPayWindow')
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
   })
 
-  it('hides an embedded checkout frame only after the server records completion', async () => {
+  it('keeps a top-level fallback button for legacy frame-only recovery data', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        allowCheckoutFrame: true,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.get('button').text()).toContain('payment.qr.openPayWindow')
+    wrapper.unmount()
+  })
+
+  it('waits for the server result while the hosted fallback is open', async () => {
     pollOrderStatus
       .mockResolvedValueOnce(orderFactory('PENDING'))
       .mockResolvedValueOnce(orderFactory('COMPLETED'))
@@ -276,7 +274,7 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
 
     await vi.advanceTimersByTimeAsync(3000)
     await flushPromises()
@@ -452,6 +450,36 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.get('[data-test="payment-cancellation-pending"]').exists()).toBe(true)
     expect(wrapper.find('canvas').exists()).toBe(false)
     expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps verifying beyond the ordinary retry cap while local cancellation is pending', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    verifyOrder.mockResolvedValue({ data: orderFactory('PENDING') })
+    cancelOrder.mockRejectedValue({ reason: 'PAYMENT_CANCELLATION_PENDING' })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://pay.example.com/qr/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
+    await cancelButton?.trigger('click')
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(15_000 * 7)
+    await flushPromises()
+
+    expect(verifyOrder.mock.calls.length).toBeGreaterThan(6)
+    expect(wrapper.get('[data-test="payment-cancellation-pending"]').exists()).toBe(true)
+    expect(wrapper.emitted('settled')).toBeUndefined()
     wrapper.unmount()
   })
 

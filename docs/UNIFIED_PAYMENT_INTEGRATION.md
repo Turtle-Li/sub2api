@@ -19,8 +19,9 @@ https://www.turtleligpt.com/payment/result
 
 1. Sub2 先创建本地 `PENDING` 订单，并生成唯一 `out_trade_no`。
 2. Sub2 后端用 `pay-v1` + Ed25519 调用统一支付服务的 `POST /v1/payment-orders`；金额只以整数分发送。
-3. 前端打开返回的 `checkout_url`；微信 Native 订单同时返回 `checkout_code_url`，由 Sub2
-   作为二维码内容展示。
+3. 前端打开返回的 `checkout_url`；支付宝预创建和微信 Native 订单同时返回
+   `checkout_code_url`，由 Sub2 使用同一个页面二维码组件展示。支付宝未开通预创建时，
+   `checkout_url` 是官方 page.pay 顶层兜底页面。
 4. 支付宝/微信异步通知统一支付服务；统一支付服务验签并落库。
 5. 统一支付服务向 Sub2 投递 `POST /api/v1/payment/webhook/unified`。
 6. Sub2 验证原始正文签名、事件时间窗、环境/组织/产品/应用作用域、支付订单 ID、业务订单号和整数分金额。
@@ -234,14 +235,13 @@ Vault 项。任一内存代理重启都会主动清空密钥并 fail-closed，�
 
 接口为 `POST /api/v1/admin/payment/owner-test/orders`，请求仅含整数 `amount_fen`（1 或 2）及 `payment_type`（`alipay` 或 `wxpay`），必须携带 `Idempotency-Key`。身份、订单类型、正式环境和回调范围全部由服务器决定。同一意图遇到网络中断时保留原请求键重试，不能换键猜测原请求失败。该入口属于部署后的验收手段；文档存在不代表生产通道已经通过真实支付验收。
 
-## 2026-09-20 支付宝站内二维码候选（尚未发布）
+## 2026-09-20 支付宝原生二维码展示
 
-显式请求 `metadata.checkout_presentation=embedded_qr` 时，中央服务沿现有
-`alipay.trade.page.pay` 使用 `qr_pay_mode=4`、`qrcode_width=224`，认证响应新增
-可选 `checkout_frame_url`，用于本应用支付弹窗内的官方二维码 iframe。它与微信
-`checkout_code_url`/本地 `qr_code` 分开，不把托管收银台链接生成伪原生二维码。
-未选择嵌入方式的其他产品保持原行为；没有新字段的历史订单保留原支付入口。
-到账仍只认后端查单/可信通知，不认 iframe 加载或浏览器回跳。
+支付宝桌面端优先使用 `alipay.trade.precreate` 返回的 `qr_code`，统一支付服务
+通过 `checkout_code_url` 返回该原生二维码内容，Sub2 与微信 Native 使用同一个
+页面二维码组件渲染。支付宝 `page.pay` 地址仅作为商户未开通当面付时的顶层收银台
+兜底，不能放进 iframe，也不能把网页地址冒充原生二维码。
+到账仍只认后端查单或可信通知，不认二维码组件加载、浏览器回跳或页面打开事件。
 
 本次读取并保存在中央仓库对象库的固定契约快照：
 

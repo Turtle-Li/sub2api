@@ -202,10 +202,10 @@ func (g *Gateway) Selection(paymentType ...string) *payment.InstanceSelection {
 	paymentMode := "popup"
 	if len(paymentType) > 0 {
 		method, _ := PaymentMethodForPaymentType(paymentType[0])
-		if method == PaymentMethodWechatPay {
+		if method == PaymentMethodAlipay || method == PaymentMethodWechatPay {
 			// Unified WeChat Native returns a display-only weixin:// code URL. The
-			// product should render that payload as a QR code instead of attempting
-			// to navigate a browser popup to the custom scheme.
+			// product should render provider-native code URLs as QR data instead of
+			// attempting to navigate a browser popup to them.
 			paymentMode = "qrcode"
 		}
 	}
@@ -296,8 +296,8 @@ func (g *Gateway) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 		ExpiresAt: result.ExpiresAt.UTC(), Currency: payment.DefaultPaymentCurrency,
 		ResultType: payment.CreatePaymentResultOrderCreated,
 	}
-	if paymentMethod == PaymentMethodWechatPay {
-		if result.CheckoutCodeURL == nil || !validCheckoutCodeURL(*result.CheckoutCodeURL) {
+	if result.CheckoutCodeURL != nil {
+		if !validCheckoutCodeURLForMethod(*result.CheckoutCodeURL, paymentMethod) {
 			return nil, ErrInvalidResponse
 		}
 		response.QRCode = strings.TrimSpace(*result.CheckoutCodeURL)
@@ -320,6 +320,19 @@ func validCheckoutCodeURL(raw string) bool {
 		return false
 	}
 	return true
+}
+
+func validCheckoutCodeURLForMethod(raw, method string) bool {
+	if method == PaymentMethodAlipay {
+		if raw == "" || len(raw) > 2048 || raw != strings.TrimSpace(raw) || strings.ContainsAny(raw, "\x00\r\n\t ") {
+			return false
+		}
+		parsed, err := url.ParseRequestURI(raw)
+		return err == nil && parsed != nil && strings.EqualFold(parsed.Scheme, "https") &&
+			(strings.EqualFold(parsed.Hostname(), "qr.alipay.com") || strings.EqualFold(parsed.Hostname(), "qr.alipaydev.com")) &&
+			parsed.User == nil && parsed.Port() == "" && parsed.Fragment == "" && parsed.EscapedPath() != ""
+	}
+	return validCheckoutCodeURL(raw)
 }
 
 func validateCreatedOrder(result *paymentOrderResponse, input createPaymentOrderRequest) error {

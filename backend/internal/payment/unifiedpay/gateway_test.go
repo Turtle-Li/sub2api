@@ -356,6 +356,28 @@ func TestValidCheckoutCodeURLMatchesWechatNativeShape(t *testing.T) {
 	}
 }
 
+func TestValidCheckoutCodeURLMatchesAlipayNativeShape(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		raw   string
+		valid bool
+	}{
+		{name: "live QR host", raw: "https://qr.alipay.com/bax-native-token", valid: true},
+		{name: "sandbox QR host", raw: "https://qr.alipaydev.com/bax-native-token", valid: true},
+		{name: "host is case insensitive", raw: "https://QR.ALIPAY.COM/bax-native-token", valid: true},
+		{name: "wrong host", raw: "https://qr.alipay.com.attacker.test/code", valid: false},
+		{name: "custom port", raw: "https://qr.alipay.com:443/code", valid: false},
+		{name: "credentials", raw: "https://merchant@qr.alipay.com/code", valid: false},
+		{name: "fragment", raw: "https://qr.alipay.com/code#payment", valid: false},
+		{name: "missing path", raw: "https://qr.alipay.com", valid: false},
+		{name: "non https", raw: "http://qr.alipay.com/code", valid: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			require.Equal(t, testCase.valid, validCheckoutCodeURLForMethod(testCase.raw, PaymentMethodAlipay))
+		})
+	}
+}
+
 func TestGatewayDoesNotFulfillManualReviewOrderFromActiveQuery(t *testing.T) {
 	privateKey := testPrivateKey()
 	transactionID := "alipay_trade_001"

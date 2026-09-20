@@ -1449,11 +1449,7 @@ function shouldPreopenHostedPopup(requestType: string, options: CreateOrderOptio
     return true
   }
 
-  // Alipay may return an embedded page-pay frame only after create-order
-  // succeeds. Do not reserve an empty external window before that response;
-  // the local payment shell keeps a hosted fallback available by explicit
-  // user action if no frame was issued.
-  return false
+  return visibleMethod === 'alipay'
 }
 
 async function handleSubmitRecharge() {
@@ -1694,6 +1690,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     }
 
     if (decision.kind === 'unhandled') {
+      closePreopenedPopup()
       applyScenarioError({ reason: 'UNHANDLED_PAYMENT_SCENARIO' }, visibleMethod)
       return
     }
@@ -1704,6 +1701,10 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     paymentPhase.value = 'paying'
     persistRecoverySnapshot(decision.recovery)
     paymentModalVisible.value = true
+
+    if (decision.kind === 'qr_waiting' || decision.kind === 'status_waiting') {
+      closePreopenedPopup()
+    }
 
     if (decision.kind === 'stripe_popup') {
       openWindow(decision.paymentState.payUrl)
@@ -1780,8 +1781,11 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     }
     if (decision.kind === 'redirect_waiting' && decision.paymentState.payUrl) {
       if (visibleMethod === 'alipay') {
-        // Preserve the order-scoped local shell. Its explicit fallback button
-        // resumes this order before opening the hosted checkout.
+        // Alipay blocks its signed page-pay document inside an iframe. Open
+        // the official checkout as a top-level page so Alipay can render its
+        // own QR presentation without triggering the browser's blocked-frame
+        // page.
+        openWindow(decision.paymentState.payUrl)
         return
       }
       if (isMobileDevice()) {
