@@ -73,7 +73,7 @@ func readCodexPanelToken(path string) (string, error) {
 	if err != nil {
 		return "", errInvalidCodexPanelToken
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	contents, err := io.ReadAll(io.LimitReader(file, codexPanelTokenMaxBytes+1))
 	if err != nil || len(contents) > codexPanelTokenMaxBytes {
@@ -88,7 +88,7 @@ func readCodexPanelToken(path string) (string, error) {
 
 func (h *CodexTurnStatePanelHandler) doWithoutRedirect(req *http.Request) (*http.Response, error) {
 	if h.client == nil {
-		return nil, errors.New("Codex panel client is unavailable")
+		return nil, errors.New("codex panel client is unavailable")
 	}
 	client := *h.client
 	client.Jar = nil
@@ -182,7 +182,7 @@ func (h *CodexTurnStatePanelHandler) Proxy(c *gin.Context) {
 		response.Error(c, http.StatusServiceUnavailable, "Codex panel service unavailable; check the local manager service")
 		return
 	}
-	defer upstream.Body.Close()
+	defer func() { _ = upstream.Body.Close() }()
 	payload, err := io.ReadAll(io.LimitReader(upstream.Body, 2*1024*1024+1))
 	if err != nil || len(payload) > 2*1024*1024 || !json.Valid(payload) {
 		response.Error(c, http.StatusBadGateway, "Invalid panel service response")

@@ -1931,7 +1931,7 @@ describe('PaymentView payment recovery', () => {
     openSpy.mockRestore()
   })
 
-  it('keeps a desktop hosted Alipay checkout in the local shell until the user opens its fallback', async () => {
+  it('opens a desktop hosted Alipay checkout in the preopened popup', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -1950,7 +1950,9 @@ describe('PaymentView payment recovery', () => {
       payment_mode: 'popup',
       out_trade_no: 'sub2_reset_907',
     })
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+    const popupLocation = { href: '' }
+    const popup = { closed: false, location: popupLocation } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
 
     const wrapper = shallowMount(PaymentView, {
       global: {
@@ -1971,13 +1973,15 @@ describe('PaymentView payment recovery', () => {
     await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
-    expect(openSpy).not.toHaveBeenCalled()
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(popupLocation.href).toBe('https://pay.example.com/reset-card/907')
     expect(panel.props('payUrl')).toBe('https://pay.example.com/reset-card/907')
     expect(panel.props('qrCode')).toBe('')
     openSpy.mockRestore()
   })
 
-  it('does not preopen a desktop window when a new Alipay order returns an embedded checkout frame', async () => {
+  it('opens a legacy Alipay checkout at top level instead of embedding its frame', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -1997,7 +2001,9 @@ describe('PaymentView payment recovery', () => {
       checkout_frame_url: 'https://openapi.alipay.com/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
       out_trade_no: 'sub2_reset_908',
     })
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+    const popupLocation = { href: '' }
+    const popup = { closed: false, location: popupLocation } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
 
     const wrapper = shallowMount(PaymentView, {
       global: {
@@ -2018,7 +2024,9 @@ describe('PaymentView payment recovery', () => {
     await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
-    expect(openSpy).not.toHaveBeenCalled()
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(popupLocation.href).toBe('https://pay.example.com/reset-card/908')
+    expect(popupLocation.href).not.toContain('openapi.alipay.com/gateway.do')
     expect(panel.props('checkoutFrameUrl')).toContain('openapi.alipay.com/gateway.do')
     expect(panel.props('allowCheckoutFrame')).toBe(true)
 

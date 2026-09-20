@@ -324,13 +324,13 @@ func validCheckoutCodeURL(raw string) bool {
 
 func validCheckoutCodeURLForMethod(raw, method string) bool {
 	if method == PaymentMethodAlipay {
-		if raw == "" || len(raw) > 2048 || raw != strings.TrimSpace(raw) || strings.ContainsAny(raw, "\x00\r\n\t ") {
+		if raw == "" || len(raw) > 2048 || raw != strings.TrimSpace(raw) || strings.ContainsAny(raw, "\x00\r\n\t ") || strings.ContainsRune(raw, '#') {
 			return false
 		}
 		parsed, err := url.ParseRequestURI(raw)
 		return err == nil && parsed != nil && strings.EqualFold(parsed.Scheme, "https") &&
 			(strings.EqualFold(parsed.Hostname(), "qr.alipay.com") || strings.EqualFold(parsed.Hostname(), "qr.alipaydev.com")) &&
-			parsed.User == nil && parsed.Port() == "" && parsed.Fragment == "" && parsed.EscapedPath() != ""
+			parsed.User == nil && parsed.Port() == "" && parsed.Fragment == "" && parsed.RawFragment == "" && parsed.EscapedPath() != ""
 	}
 	return validCheckoutCodeURL(raw)
 }
