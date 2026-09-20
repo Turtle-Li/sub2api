@@ -1,6 +1,6 @@
 # 自动退款权益回收 — 2026-09-20
 
-状态：开发中；关联清单 PAYMENT-FIX-20260920 / P19。基线 a025553c4。用户已明确授权开发、测试与发布，并取消 Sub2 支付宝和微信的每日退款总额限制。
+状态：已上线并启用。发布证据见 `docs/operations/PAYMENT_BENEFIT_REFUND_RELEASE_20260920.md`。关联清单 PAYMENT-FIX-20260920 / P19。基线 a025553c4。用户已明确授权开发、测试与发布，并取消 Sub2 支付宝和微信的每日退款总额限制。
 
 ## 产品规则
 
@@ -13,7 +13,7 @@
 
 ## 持久化和事务边界
 
-当前实现新增 `payment_refund_benefit_sources`、赠卡来源关联与用户并发事件账本（精确表名以migration255为准），生命周期与现有退款attempt绑定。
+migration255 新增 `payment_refund_benefit_sources`（实际发放与退款状态）、`payment_refund_benefit_reset_card_grants`（实际赠卡ID）、`payment_refund_concurrency_baselines`（并发基线与缓存版本）、`payment_refund_concurrency_events`（有序并发事件）和 `payment_refund_benefit_rollout`（历史兼容截止时间）；生命周期与现有退款attempt绑定。
 
 沿既有 payment_wallet_fundings、payment_subscription_grants、unified_payment_refund_attempts，以及月度 schedule/issuance 账本扩展。不另建第二套资金状态机。
 
@@ -33,7 +33,7 @@
 
 API-key auth 缓存含并发字段，仅删缓存不足以阻止旧值写回。启用自动并发回收前须有严格 admission/cache fence，并覆盖并发 0 表示无限制的原语义和 Live/WS 路径。已有请求不强制中断，后续准入使用正确限制。
 
-首次自动回收启用必须与旧进程排空、退款回滚 readiness 和 canonical 发布衔接，不能假设旧 WebSocket 已随 Caddy 切流退出。精确 activation 方案与最终数据表/函数名待实现收敛后补录。
+首次自动回收启用必须与旧进程排空、退款回滚 readiness 和 canonical 发布衔接，不能假设旧 WebSocket 已随 Caddy 切流退出。精确启用顺序见本文“前向发布补充”和 `deploy/README.md` 的 Restrictive forward-upgrade refund pause；启动时 `PaymentService.SetConcurrencyAuthorizationFence` 必须完成版本化 Redis 投影对账，否则应用启动失败。
 
 ## 验证与发布
 
