@@ -54,6 +54,7 @@ vi.mock('@/utils/device', () => ({
 }))
 
 import PaymentStatusPanel from '../PaymentStatusPanel.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { PAYMENT_CANCELLATION_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '../currency'
 
@@ -476,6 +477,7 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
     const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
     await cancelButton?.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     expect(cancelOrder).toHaveBeenCalledWith(42)

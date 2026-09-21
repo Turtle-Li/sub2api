@@ -1533,7 +1533,7 @@ describe('PaymentView payment recovery', () => {
     await wrapper.get('[data-test="hide-dialog"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="resume-payment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="resume-payment"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="payment-panel"]').exists()).toBe(true)
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('sub2_resume_321')
   })

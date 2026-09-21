@@ -272,7 +272,7 @@
       <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
         {{ t('payment.qr.refreshStatus') }}
       </button>
-      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="handleCancel">
+      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
         {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
       </button>
     </template>
@@ -312,7 +312,7 @@
       <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
         {{ t('payment.qr.refreshStatus') }}
       </button>
-      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="handleCancel">
+      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
         {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
       </button>
     </template>
@@ -335,11 +335,21 @@
       <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
         {{ t('payment.qr.refreshStatus') }}
       </button>
-      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="handleCancel">
+      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
         {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
       </button>
     </template>
   </div>
+  <ConfirmDialog
+    :show="confirmingCancel"
+    :title="t('payment.orderOps.cancelOrderConfirmTitle')"
+    :message="t('payment.orderOps.cancelOrderConfirmMessage')"
+    :confirm-text="t('payment.orders.cancel')"
+    :cancel-text="t('payment.orderOps.keepOrder')"
+    :danger="true"
+    @confirm="handleCancel"
+    @cancel="confirmingCancel = false"
+  />
 </template>
 
 <script setup lang="ts">
@@ -361,6 +371,7 @@ import {
 } from '@/components/payment/paymentFlow'
 import type { CreateOrderResult, PaymentDiscountSnapshot, PaymentOrder, WechatJSAPIPayload } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import QRCode from 'qrcode'
 import alipayIcon from '@/assets/icons/alipay.svg'
 import wxpayIcon from '@/assets/icons/wxpay.svg'
@@ -416,6 +427,7 @@ const resumedMobileAlipayDeepLink = ref<boolean | null>(null)
 const sessionVersion = ref(0)
 const remainingSeconds = ref(0)
 const cancelling = ref(false)
+const confirmingCancel = ref(false)
 const resumingLaunch = ref(false)
 const cancellationPending = ref(false)
 const confirmationPending = ref(false)
@@ -1065,11 +1077,17 @@ function requestDeadlineCheck(generation = lifecycleGeneration, fingerprint = cu
   void pollStatus({ force: true }, generation, fingerprint)
 }
 
+function requestCancel() {
+  if (!props.orderId || cancelling.value) return
+  confirmingCancel.value = true
+}
+
 function handleCancel() {
   const generation = lifecycleGeneration
   const fingerprint = currentSessionFingerprint()
   const orderId = props.orderId
   if (!isCurrentLifecycle(generation, fingerprint) || !orderId || cancelling.value) return
+  confirmingCancel.value = false
   cancelling.value = true
   // The local checkout is finished immediately. The server records the
   // cancellation intent before returning and retries provider confirmation in
@@ -1099,6 +1117,7 @@ function cleanupSession() {
 
 function startSession() {
   cleanupSession()
+  confirmingCancel.value = false
   const generation = lifecycleGeneration
   const fingerprint = currentSessionFingerprint()
   if (isAlipay.value) {

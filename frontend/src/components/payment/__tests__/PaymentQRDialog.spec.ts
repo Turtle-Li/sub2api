@@ -131,6 +131,8 @@ describe('PaymentQRDialog currency display', () => {
     await flushPromises()
     const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
     await cancelButton?.trigger('click')
+    const confirmButton = wrapper.findAll('button').find(button => button.text() === 'payment.orders.cancel')
+    await confirmButton?.trigger('click')
     await flushPromises()
 
     expect(cancelOrder).toHaveBeenCalledWith(42)

@@ -295,8 +295,6 @@ func (a *Alipay) createPagePayTrade(client *alipay.Client, req payment.CreatePay
 	param.NotifyURL = notifyURL
 	param.ReturnURL = returnURL
 	param.TimeoutExpress = alipayTimeoutExpress(req.ExpiresInSeconds)
-	param.QRPayMode = "4"
-	param.QRCodeWidth = "220"
 
 	payURL, err := alipayTradePagePay(client, param)
 	if err != nil {
@@ -305,9 +303,9 @@ func (a *Alipay) createPagePayTrade(client *alipay.Client, req payment.CreatePay
 	if payURL == nil || !ValidateAlipayPayURL(payURL.String()) {
 		return nil, fmt.Errorf("alipay TradePagePay: invalid checkout URL")
 	}
-	// alipay.trade.page.pay returns a top-level checkout page. qr_pay_mode=4
-	// makes Alipay render its own QR inside that page; the URL is not a native
-	// qr_code payload and must not be encoded or embedded by the frontend.
+	// alipay.trade.page.pay returns a top-level checkout page. Keep this as a
+	// normal page-pay URL; the frontend opens it as a page instead of embedding
+	// an Alipay QR fragment that is only valid for a different checkout mode.
 	return &payment.CreatePaymentResponse{
 		TradeNo: req.OrderID,
 		PayURL:  payURL.String(),

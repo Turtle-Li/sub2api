@@ -56,11 +56,21 @@
         </button>
       </div>
       <!-- Cancel order -->
-      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="handleCancel">
+      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
         {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
       </button>
     </template>
   </div>
+  <ConfirmDialog
+    :show="confirmingCancel"
+    :title="t('payment.orderOps.cancelOrderConfirmTitle')"
+    :message="t('payment.orderOps.cancelOrderConfirmMessage')"
+    :confirm-text="t('payment.orders.cancel')"
+    :cancel-text="t('payment.orderOps.keepOrder')"
+    :danger="true"
+    @confirm="handleCancel"
+    @cancel="confirmingCancel = false"
+  />
 </template>
 
 <script setup lang="ts">
@@ -74,6 +84,7 @@ import { clearQueuedPaymentCancellation, queuePaymentCancellation } from '@/comp
 import { currencySymbol } from '@/components/payment/currency'
 import type { Stripe, StripeElements } from '@stripe/stripe-js'
 import Icon from '@/components/icons/Icon.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 // Stripe payment methods that open a popup (redirect or QR code)
 const POPUP_METHODS = new Set(['alipay', 'wechat_pay'])
@@ -99,6 +110,7 @@ const initError = ref('')
 const error = ref('')
 const submitting = ref(false)
 const cancelling = ref(false)
+const confirmingCancel = ref(false)
 const success = ref(false)
 const ready = ref(false)
 const selectedType = ref('')
@@ -195,8 +207,14 @@ async function handlePay() {
   }
 }
 
+function requestCancel() {
+  if (!props.orderId || cancelling.value) return
+  confirmingCancel.value = true
+}
+
 function handleCancel() {
   if (!props.orderId || cancelling.value) return
+  confirmingCancel.value = false
   cancelling.value = true
   if (typeof window !== 'undefined') queuePaymentCancellation(window.localStorage, props.orderId)
   void Promise.resolve()

@@ -6,16 +6,6 @@
       </div>
 
       <template v-else>
-        <div v-if="paymentPhase === 'paying' && !paymentModalVisible" class="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary-200 bg-primary-50 px-4 py-3 dark:border-primary-800 dark:bg-primary-950/30">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-primary-900 dark:text-primary-100">{{ t('payment.resume.title') }}</p>
-            <p class="mt-0.5 truncate text-xs text-primary-700 dark:text-primary-300">{{ paymentState.outTradeNo || `#${paymentState.orderId}` }}</p>
-          </div>
-          <button type="button" class="btn btn-primary shrink-0" data-test="resume-payment" @click="paymentModalVisible = true">
-            {{ t('payment.resume.open') }}
-          </button>
-        </div>
-
         <!-- Masthead: who is buying, and what they hold today. -->
         <header class="flex flex-wrap items-end justify-between gap-4 pb-6">
           <div class="min-w-0">
@@ -112,7 +102,7 @@
                 ref="resetCardShop"
                 :subscriptions="activeSubscriptions"
                 :plans="checkout.plans"
-                :disabled="submitting || paymentPhase === 'paying'"
+                :disabled="submitting"
                 :target-subscription-id="resetCardTargetSubscriptionId"
                 :selected-subscription-id="selectedResetCard?.subscription.id ?? null"
                 :selected-quote="selectedResetCard?.quote ?? null"
@@ -251,6 +241,40 @@
       />
     </BaseDialog>
 
+    <BaseDialog
+      :show="existingOrderPromptVisible"
+      :title="t('payment.orderOps.existingOrderTitle')"
+      width="narrow"
+      data-test="existing-order-prompt"
+      @close="existingOrderPromptVisible = false"
+    >
+      <p class="text-sm leading-6 text-gray-600 dark:text-gray-300">
+        {{ t('payment.orderOps.existingOrderMessage') }}
+      </p>
+      <template #footer>
+        <div class="flex flex-wrap justify-end gap-3">
+          <button type="button" class="btn btn-secondary" data-test="cancel-existing-order" @click="askCancelExistingOrder">
+            {{ t('payment.orderOps.cancelExistingOrder') }}
+          </button>
+          <button type="button" class="btn btn-primary" data-test="open-existing-order" @click="openExistingOrder">
+            {{ t('payment.orderOps.openExistingOrder') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
+
+    <ConfirmDialog
+      :show="cancelExistingOrderConfirmVisible"
+      :title="t('payment.orderOps.cancelOrderConfirmTitle')"
+      :message="t('payment.orderOps.cancelOrderConfirmMessage')"
+      :confirm-text="t('payment.orders.cancel')"
+      :cancel-text="t('payment.orderOps.keepOrder')"
+      :danger="true"
+      data-test="cancel-existing-order-confirm"
+      @confirm="confirmCancelExistingOrder"
+      @cancel="cancelExistingOrderConfirmVisible = false"
+    />
+
     <!-- Renewal Plan Selection Modal -->
     <Teleport to="body">
       <Transition name="modal">
@@ -340,6 +364,7 @@ import PaymentOrderRail from '@/components/payment/PaymentOrderRail.vue'
 import PaymentDiscountCodeInput from '@/components/payment/PaymentDiscountCodeInput.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
 import { creditedBalanceAmount, subscriptionGatewayAmount } from '@/components/payment/pricing'
@@ -406,6 +431,7 @@ interface ResetCardSelection {
   quote: ResetCardQuote
 }
 const selectedResetCard = ref<ResetCardSelection | null>(null)
+const pendingResetCardSelection = ref<ResetCardSelection | null>(null)
 const resetCardQuantity = ref(1)
 const resetCardUseOnPurchase = ref(false)
 const isResetCardCheckout = computed(() => selectedResetCard.value !== null)
@@ -439,6 +465,8 @@ let couponQuoteRequest = 0
 
 const paymentPhase = ref<'select' | 'paying'>('select')
 const paymentModalVisible = ref(false)
+const existingOrderPromptVisible = ref(false)
+const cancelExistingOrderConfirmVisible = ref(false)
 
 interface CreateOrderOptions {
   openid?: string
@@ -586,6 +614,14 @@ function finishBackgroundCancellation(snapshot: PaymentRecoverySnapshot) {
   clearCancellationRetry(snapshot.orderId)
   clearQueuedPaymentCancellation(window.localStorage, snapshot.orderId)
   clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, { orderId: snapshot.orderId })
+  if (paymentState.value.orderId !== snapshot.orderId || !paymentState.value.cancellationRequested) return
+  const nextResetCardSelection = pendingResetCardSelection.value
+  const wasResetCard = paymentState.value.orderType === 'reset_card'
+  resetPayment()
+  clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, { orderId: snapshot.orderId })
+  pendingResetCardSelection.value = null
+  if (wasResetCard) clearResetCardSelection()
+  if (nextResetCardSelection) applyResetCardSelection(nextResetCardSelection)
 }
 
 function scheduleBackgroundCancellation(snapshot: PaymentRecoverySnapshot, attempt = 0) {
@@ -602,7 +638,7 @@ function scheduleBackgroundCancellation(snapshot: PaymentRecoverySnapshot, attem
       await paymentAPI.cancelOrder(snapshot.orderId)
       clearQueuedPaymentCancellation(window.localStorage, snapshot.orderId)
       if (!snapshot.outTradeNo) {
-        scheduleBackgroundCancellation(snapshot, attempt + 1)
+        finishBackgroundCancellation(snapshot)
         return
       }
       try {
@@ -1573,17 +1609,7 @@ function clearResetCardSelection(): void {
   if (hadSelection) removeCoupon()
 }
 
-function isSameResetCardSelection(next: ResetCardSelection): boolean {
-  const current = selectedResetCard.value
-  return current?.subscription.id === next.subscription.id
-    && current.quote.plan_id === next.quote.plan_id
-    && current.quote.price === next.quote.price
-    && (current.quote.validity_days ? current.quote.validity_days === next.quote.validity_days : current.quote.expires_at === next.quote.expires_at)
-    && current.quote.reset_card_tier_revision === next.quote.reset_card_tier_revision
-}
-
-function selectResetCard(next: ResetCardSelection): void {
-  if (submitting.value || paymentPhase.value === 'paying') return
+function applyResetCardSelection(next: ResetCardSelection): void {
   if (!isSameResetCardSelection(next)) discardUnboundResetCardAttempt()
   selectedResetCard.value = next
   selectedPlan.value = null
@@ -1594,6 +1620,50 @@ function selectResetCard(next: ResetCardSelection): void {
   errorHintMessage.value = ''
   const paymentType = resetCardPaymentMethodForQuote(next.quote, resetCardQuantity.value)
   if (paymentType) selectedMethod.value = paymentType
+}
+
+function isSameResetCardSelection(next: ResetCardSelection): boolean {
+  const current = selectedResetCard.value
+  return current?.subscription.id === next.subscription.id
+    && current.quote.plan_id === next.quote.plan_id
+    && current.quote.price === next.quote.price
+    && (current.quote.validity_days ? current.quote.validity_days === next.quote.validity_days : current.quote.expires_at === next.quote.expires_at)
+    && current.quote.reset_card_tier_revision === next.quote.reset_card_tier_revision
+}
+
+function selectResetCard(next: ResetCardSelection): void {
+  if (submitting.value) return
+  if (paymentPhase.value === 'paying' && paymentState.value.orderId > 0) {
+    pendingResetCardSelection.value = next
+    existingOrderPromptVisible.value = true
+    return
+  }
+  applyResetCardSelection(next)
+}
+
+function openExistingOrder(): void {
+  existingOrderPromptVisible.value = false
+  pendingResetCardSelection.value = null
+  paymentModalVisible.value = true
+}
+
+function askCancelExistingOrder(): void {
+  existingOrderPromptVisible.value = false
+  cancelExistingOrderConfirmVisible.value = true
+}
+
+function confirmCancelExistingOrder(): void {
+  const current = paymentState.value
+  if (!current.orderId || current.cancellationRequested) return
+  const snapshot = cancellationRecoverySnapshot(current)
+  paymentState.value = snapshot
+  recoveredWechatJsapi.value = undefined
+  recoveryPendingState.value = 'cancellation'
+  cancelExistingOrderConfirmVisible.value = false
+  paymentModalVisible.value = true
+  queuePaymentCancellation(window.localStorage, snapshot.orderId)
+  persistRecoverySnapshot(snapshot)
+  scheduleBackgroundCancellation(snapshot)
 }
 
 function updateResetCardOptions(next: { quantity: number; useOnPurchase: boolean }): void {

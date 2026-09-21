@@ -56,7 +56,7 @@
     </div>
     <template #footer>
       <div class="flex justify-end gap-3">
-        <button v-if="!success && !expired" class="btn btn-secondary" :disabled="cancelling" @click="handleCancel">
+        <button v-if="!success && !expired" class="btn btn-secondary" :disabled="cancelling" @click="requestCancel">
           {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
         </button>
         <button v-if="success" class="btn btn-primary" @click="handleDone">
@@ -66,14 +66,25 @@
           {{ t('payment.result.backToRecharge') }}
         </button>
       </div>
-    </template>
+  </template>
   </BaseDialog>
+  <ConfirmDialog
+    :show="confirmingCancel"
+    :title="t('payment.orderOps.cancelOrderConfirmTitle')"
+    :message="t('payment.orderOps.cancelOrderConfirmMessage')"
+    :confirm-text="t('payment.orders.cancel')"
+    :cancel-text="t('payment.orderOps.keepOrder')"
+    :danger="true"
+    @confirm="handleCancel"
+    @cancel="confirmingCancel = false"
+  />
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { usePaymentStore } from '@/stores/payment'
 import { paymentAPI } from '@/api/payment'
@@ -108,6 +119,7 @@ const qrUrl = ref('')
 const remainingSeconds = ref(0)
 const expired = ref(false)
 const cancelling = ref(false)
+const confirmingCancel = ref(false)
 const success = ref(false)
 const paidOrder = ref<PaymentOrder | null>(null)
 const creditedAmountSymbol = currencySymbol('USD')
@@ -245,8 +257,14 @@ function startCountdown(seconds: number) {
   }, 1000)
 }
 
+function requestCancel() {
+  if (!props.orderId || cancelling.value) return
+  confirmingCancel.value = true
+}
+
 function handleCancel() {
   if (!props.orderId || cancelling.value) return
+  confirmingCancel.value = false
   cancelling.value = true
   if (typeof window !== 'undefined') queuePaymentCancellation(window.localStorage, props.orderId)
   void Promise.resolve()
@@ -280,6 +298,7 @@ function init() {
   paidOrder.value = null
   expired.value = false
   cancelling.value = false
+  confirmingCancel.value = false
   qrUrl.value = props.qrCode
   verifyAttempts = 0
   lastVerifyAt = 0
