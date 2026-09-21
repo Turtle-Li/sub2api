@@ -1823,7 +1823,8 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
         self._record_diagnostic(slot, diagnostic, len(state))
         target = int(model_cfg.get("target_state_len", 292))
         if not state or (bool(model_cfg.get("require_exact_len", True)) and len(state) != target):
-            if attempt >= max(16, len(self.proxies) * 2):
+            max_unhit = int(self.config.get("max_attempts_per_round", max(16, len(self.proxies) * 2)))
+            if attempt >= max_unhit:
                 self._probe_attempts[slot] = 0
                 self._static_pending.pop(slot, None)
                 self._harvest_retry_delay = self.failure_backoff_seconds
