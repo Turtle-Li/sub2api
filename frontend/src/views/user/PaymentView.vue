@@ -314,6 +314,7 @@ import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vu
 import { METHOD_ORDER, getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
+  clearQueuedPaymentCancellation,
   buildCreateOrderPayload,
   clearResetCardCheckoutAttempt,
   clearPaymentRecoverySnapshot,
@@ -323,6 +324,8 @@ import {
   getVisibleMethods,
   matchResetCardCheckoutAttemptForResume,
   normalizeVisibleMethod,
+  queuePaymentCancellation,
+  readQueuedPaymentCancellationIds,
   readPaymentRecoverySnapshot,
   recordResetCardCheckoutOrder,
   type ResetCardCheckoutAttempt,
@@ -561,8 +564,86 @@ function snapshotWithoutLaunchMaterial(snapshot: PaymentRecoverySnapshot): Payme
   }
 }
 
+const cancellationRetryTimers = new Map<number, number>()
+const CANCELLATION_RETRY_DELAYS_MS = [0, 5000, 15000, 30000]
+
+function cancellationRecoverySnapshot(snapshot: PaymentRecoverySnapshot): PaymentRecoverySnapshot {
+  return {
+    ...snapshotWithoutLaunchMaterial(snapshot),
+    cancellationRequested: true,
+    createdAt: Date.now(),
+  }
+}
+
+function clearCancellationRetry(orderId: number) {
+  const timer = cancellationRetryTimers.get(orderId)
+  if (timer !== undefined) {
+    window.clearTimeout(timer)
+    cancellationRetryTimers.delete(orderId)
+  }
+}
+
+function finishBackgroundCancellation(snapshot: PaymentRecoverySnapshot) {
+  clearCancellationRetry(snapshot.orderId)
+  clearQueuedPaymentCancellation(window.localStorage, snapshot.orderId)
+  clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, { orderId: snapshot.orderId })
+}
+
+function scheduleBackgroundCancellation(snapshot: PaymentRecoverySnapshot, attempt = 0) {
+  if (
+    typeof window === 'undefined'
+    || !snapshot.orderId
+    || attempt >= CANCELLATION_RETRY_DELAYS_MS.length
+    || cancellationRetryTimers.has(snapshot.orderId)
+  ) return
+  const delay = CANCELLATION_RETRY_DELAYS_MS[attempt]
+  const timer = window.setTimeout(async () => {
+    cancellationRetryTimers.delete(snapshot.orderId)
+    try {
+      await paymentAPI.cancelOrder(snapshot.orderId)
+      clearQueuedPaymentCancellation(window.localStorage, snapshot.orderId)
+      if (!snapshot.outTradeNo) {
+        scheduleBackgroundCancellation(snapshot, attempt + 1)
+        return
+      }
+      try {
+        const response = await paymentAPI.verifyOrder(snapshot.outTradeNo)
+        const status = String(response.data.status || '').trim().toUpperCase()
+        if (status === 'PENDING') {
+          scheduleBackgroundCancellation(snapshot, attempt + 1)
+        } else {
+          finishBackgroundCancellation(snapshot)
+        }
+      } catch (err: unknown) {
+        const code = extractApiErrorCode(err)
+        if (code === 'INVALID_STATUS' || code === 'NOT_FOUND') finishBackgroundCancellation(snapshot)
+        else scheduleBackgroundCancellation(snapshot, attempt + 1)
+      }
+    } catch (err: unknown) {
+      const code = extractApiErrorCode(err)
+      if (code === 'INVALID_STATUS' || code === 'NOT_FOUND') finishBackgroundCancellation(snapshot)
+      else scheduleBackgroundCancellation(snapshot, attempt + 1)
+    }
+  }, delay)
+  cancellationRetryTimers.set(snapshot.orderId, timer)
+}
+
+function flushQueuedPaymentCancellations() {
+  if (typeof window === 'undefined') return
+  for (const orderId of readQueuedPaymentCancellationIds(window.localStorage)) {
+    void paymentAPI.cancelOrder(orderId)
+      .then(() => clearQueuedPaymentCancellation(window.localStorage, orderId))
+      .catch(() => {})
+  }
+}
+
 async function resumeStoredPayment(snapshot: PaymentRecoverySnapshot): Promise<void> {
   const orderType: OrderType = snapshot.orderType || 'balance'
+  if (snapshot.cancellationRequested) {
+    queuePaymentCancellation(window.localStorage, snapshot.orderId)
+    scheduleBackgroundCancellation(snapshot)
+    return
+  }
   try {
     const response = await paymentAPI.resumeOrder(snapshot.orderId)
     const result = response.data
@@ -646,7 +727,7 @@ function resetPayment() {
   paymentState.value = emptyPaymentState()
   recoveredWechatJsapi.value = undefined
   recoveryPendingState.value = null
-  removeRecoverySnapshot(previous)
+  if (!previous.cancellationRequested) removeRecoverySnapshot(previous)
 }
 
 function buildWechatOAuthAuthorizeUrl(
@@ -747,6 +828,14 @@ function onPaymentSettled(outcome: 'success' | 'cancelled' | 'expired') {
     clearResetCardCheckoutAttempt(window.localStorage, { orderId: settled.orderId })
   }
   if (outcome === 'success') return
+  if (outcome === 'cancelled') {
+    const snapshot = cancellationRecoverySnapshot(settled)
+    paymentState.value = snapshot
+    queuePaymentCancellation(window.localStorage, snapshot.orderId)
+    persistRecoverySnapshot(snapshot)
+    scheduleBackgroundCancellation(snapshot)
+    return
+  }
   removeRecoverySnapshot()
 }
 
@@ -1449,7 +1538,10 @@ function shouldPreopenHostedPopup(requestType: string, options: CreateOrderOptio
     return true
   }
 
-  return visibleMethod === 'alipay'
+  // Native Alipay QR responses stay in the current dialog. If the merchant
+  // only provides page-pay, the same order can still be opened explicitly by
+  // the user from the dialog's fallback button.
+  return false
 }
 
 async function handleSubmitRecharge() {
@@ -1780,16 +1872,14 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       return
     }
     if (decision.kind === 'redirect_waiting' && decision.paymentState.payUrl) {
-      if (visibleMethod === 'alipay') {
-        // Alipay blocks its signed page-pay document inside an iframe. Open
-        // the official checkout as a top-level page so Alipay can render its
-        // own QR presentation without triggering the browser's blocked-frame
-        // page.
-        openWindow(decision.paymentState.payUrl)
-        return
-      }
       if (isMobileDevice()) {
         window.location.href = decision.paymentState.payUrl
+        return
+      }
+      if (visibleMethod === 'alipay') {
+        // Desktop Alipay stays in the current dialog. The user can explicitly
+        // open the same order from its fallback button; no replacement order
+        // or automatic second popup is created.
         return
       }
       openWindow(decision.paymentState.payUrl)
@@ -1889,7 +1979,10 @@ function shouldFallbackToDesktopQr(err: unknown, paymentMethod: string, attempte
   }
 
   if (normalizedMethod === 'alipay') {
-    return reason === 'PAYMENT_GATEWAY_ERROR' || reason === 'UNHANDLED_PAYMENT_SCENARIO'
+    // Do not create a second Alipay order to switch presentation modes. A
+    // failed first request must be resumed or reported to the user; only the
+    // existing WeChat mobile fallback has an explicit same-order resume path.
+    return false
   }
 
   return false
@@ -2107,6 +2200,7 @@ onBeforeUnmount(() => {
 onMounted(async () => {
   window.addEventListener('focus', refreshVisibleCheckout)
   document.addEventListener('visibilitychange', refreshVisibleCheckout)
+  flushQueuedPaymentCancellations()
   try {
     const res = await paymentAPI.getCheckoutInfo()
     checkout.value = res.data

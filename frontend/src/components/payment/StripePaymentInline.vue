@@ -69,8 +69,8 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { paymentAPI } from '@/api/payment'
-import { useAppStore } from '@/stores'
 import { getPaymentPopupFeatures } from '@/components/payment/providerConfig'
+import { clearQueuedPaymentCancellation, queuePaymentCancellation } from '@/components/payment/paymentFlow'
 import { currencySymbol } from '@/components/payment/currency'
 import type { Stripe, StripeElements } from '@stripe/stripe-js'
 import Icon from '@/components/icons/Icon.vue'
@@ -92,7 +92,6 @@ const emit = defineEmits<{ success: []; done: []; back: []; redirect: [orderId: 
 
 const { t } = useI18n()
 const router = useRouter()
-const appStore = useAppStore()
 
 const stripeMount = ref<HTMLElement | null>(null)
 const loading = ref(true)
@@ -196,16 +195,16 @@ async function handlePay() {
   }
 }
 
-async function handleCancel() {
+function handleCancel() {
   if (!props.orderId || cancelling.value) return
   cancelling.value = true
-  try {
-    await paymentAPI.cancelOrder(props.orderId)
-    emit('back')
-  } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
-  } finally {
-    cancelling.value = false
-  }
+  if (typeof window !== 'undefined') queuePaymentCancellation(window.localStorage, props.orderId)
+  void Promise.resolve()
+    .then(() => paymentAPI.cancelOrder(props.orderId))
+    .then(() => {
+      if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, props.orderId)
+    })
+    .catch(() => {})
+  emit('back')
 }
 </script>

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { OrderStatus } from '@/types/payment'
+import { PAYMENT_CANCELLATION_STORAGE_KEY } from '@/components/payment/paymentFlow'
 
 const {
   cancelOrder,
@@ -75,7 +76,21 @@ function pendingOrder(expiresAt: string, overrides: Record<string, unknown> = {}
   }
 }
 
-function mountView() {
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function mountView(paymentPanelStub = {
+  name: 'PaymentStatusPanel',
+  props: ['orderId', 'qrCode', 'payUrl', 'checkoutFrameUrl', 'allowCheckoutFrame', 'wechatJsapi'],
+  template: '<div data-test="resume-panel" :data-order-id="orderId" :data-qr-code="qrCode" :data-pay-url="payUrl" :data-checkout-frame-url="checkoutFrameUrl" :data-allow-checkout-frame="allowCheckoutFrame" />',
+}) {
   return mount(UserOrdersView, {
     global: {
       stubs: {
@@ -88,11 +103,7 @@ function mountView() {
           props: ['show'],
           template: '<section v-if="show" data-test="dialog"><slot /><slot name="footer" /></section>',
         },
-        PaymentStatusPanel: {
-          name: 'PaymentStatusPanel',
-          props: ['orderId', 'qrCode', 'payUrl', 'checkoutFrameUrl', 'allowCheckoutFrame', 'wechatJsapi'],
-          template: '<div data-test="resume-panel" :data-order-id="orderId" :data-qr-code="qrCode" :data-pay-url="payUrl" :data-checkout-frame-url="checkoutFrameUrl" :data-allow-checkout-frame="allowCheckoutFrame" />',
-        },
+        PaymentStatusPanel: paymentPanelStub,
         Icon: true,
         InvoiceRequestDialog: true,
         OrderLifecycleBadge: true,
@@ -110,6 +121,7 @@ describe('UserOrdersView pending payment lifecycle', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(start)
+    window.localStorage.clear()
     rows = []
     cancelOrder.mockReset()
     getMyOrders.mockReset().mockImplementation(() => Promise.resolve({ data: { items: rows, total: rows.length } }))
@@ -123,6 +135,7 @@ describe('UserOrdersView pending payment lifecycle', () => {
   })
 
   afterEach(() => {
+    window.localStorage.clear()
     vi.useRealTimers()
   })
 
@@ -153,6 +166,7 @@ describe('UserOrdersView pending payment lifecycle', () => {
   it('reopens only the server-returned launch material for the original pending order', async () => {
     const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString())
     rows = [order]
+    cancelOrder.mockReturnValue(new Promise(() => {}))
     resumeOrder.mockResolvedValue({
       data: {
         order_id: 51,
@@ -164,8 +178,8 @@ describe('UserOrdersView pending payment lifecycle', () => {
         payment_type: 'alipay',
         payment_mode: 'qrcode',
         out_trade_no: 'SUB2-PENDING-51',
-        qr_code: 'https://qr.example.test/original-51',
-        pay_url: 'https://pay.example.test/original-51',
+        qr_code: 'https://qr.alipay.com/original-51',
+        pay_url: 'https://pay.totools.cn/checkout/original-51',
         checkout_frame_url: 'https://openapi.alipay.com/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
         expires_at: order.expires_at,
       },
@@ -178,10 +192,49 @@ describe('UserOrdersView pending payment lifecycle', () => {
 
     expect(resumeOrder).toHaveBeenCalledWith(51)
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-order-id')).toBe('51')
-    expect(wrapper.get('[data-test="resume-panel"]').attributes('data-qr-code')).toBe('https://qr.example.test/original-51')
-    expect(wrapper.get('[data-test="resume-panel"]').attributes('data-pay-url')).toBe('https://pay.example.test/original-51')
+    expect(wrapper.get('[data-test="resume-panel"]').attributes('data-qr-code')).toBe('https://qr.alipay.com/original-51')
+    expect(wrapper.get('[data-test="resume-panel"]').attributes('data-pay-url')).toBe('https://pay.totools.cn/checkout/original-51')
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-checkout-frame-url')).toContain('openapi.alipay.com/gateway.do')
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-allow-checkout-frame')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('fences a resumed order immediately when the payment panel is cancelled', async () => {
+    const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString())
+    rows = [order]
+    resumeOrder.mockResolvedValue({
+      data: {
+        order_id: 51,
+        status: 'PENDING',
+        amount: 88,
+        pay_amount: 88,
+        fee_rate: 0,
+        currency: 'CNY',
+        payment_type: 'alipay',
+        payment_mode: 'qrcode',
+        out_trade_no: 'SUB2-PENDING-51',
+        qr_code: 'https://qr.alipay.com/original-51',
+        pay_url: 'https://pay.totools.cn/checkout/original-51',
+        expires_at: order.expires_at,
+      },
+    })
+    const paymentPanelStub = {
+      name: 'PaymentStatusPanel',
+      props: ['orderId', 'qrCode', 'payUrl', 'checkoutFrameUrl', 'allowCheckoutFrame', 'wechatJsapi'],
+      emits: ['settled', 'done'],
+      template: '<div data-test="resume-panel"><button data-test="resume-cancel" @click="$emit(\'settled\', \'cancelled\'); $emit(\'done\')">cancel</button></div>',
+    }
+
+    const wrapper = mountView(paymentPanelStub)
+    await flushPromises()
+    await wrapper.get('[data-test="continue-payment-51"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="resume-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="order-cancellation-pending-51"]').exists()).toBe(true)
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[51]')
     wrapper.unmount()
   })
 
@@ -206,10 +259,8 @@ describe('UserOrdersView pending payment lifecycle', () => {
   it('locks payment actions and polls after a cancellation request was accepted centrally', async () => {
     const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString())
     rows = [order]
-    cancelOrder.mockImplementation(async () => {
-      rows = [{ ...order, cancellation_pending: true }]
-      throw { reason: 'PAYMENT_CANCELLATION_PENDING' }
-    })
+    const cancellationRequest = deferred<void>()
+    cancelOrder.mockReturnValue(cancellationRequest.promise)
 
     const wrapper = mountView()
     await flushPromises()
@@ -217,16 +268,21 @@ describe('UserOrdersView pending payment lifecycle', () => {
     await wrapper.get('[data-test="confirm-cancel-order"]').trigger('click')
     await flushPromises()
 
+    expect(wrapper.find('[data-test="dialog"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="order-cancellation-pending-51"]').exists()).toBe(true)
     expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.orderOps.cancellationPending')
     expect(wrapper.get('[data-test="order-status-51"]').classes()).toContain('bg-amber-100')
     expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
     expect(showSuccess).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[51]')
+    cancellationRequest.resolve()
+    await flushPromises()
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
     wrapper.unmount()
   })
 
-  it('shows an informational confirmation state when cancellation status is uncertain', async () => {
+  it('keeps cancellation fenced when the background request is uncertain', async () => {
     const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString())
     rows = [order]
     cancelOrder.mockRejectedValue({ reason: 'PAYMENT_CONFIRMATION_PENDING' })
@@ -237,10 +293,14 @@ describe('UserOrdersView pending payment lifecycle', () => {
     await wrapper.get('[data-test="confirm-cancel-order"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[data-test="order-confirmation-pending-51"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="order-cancellation-pending-51"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
     expect(showSuccess).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[51]')
+    await vi.advanceTimersByTimeAsync(15_000)
+    await flushPromises()
+    expect(cancelOrder.mock.calls.length).toBeGreaterThan(1)
     wrapper.unmount()
   })
 

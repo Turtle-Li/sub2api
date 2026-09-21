@@ -76,10 +76,9 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { usePaymentStore } from '@/stores/payment'
-import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
-import { extractI18nErrorMessage } from '@/utils/apiError'
 import { getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
+import { clearQueuedPaymentCancellation, queuePaymentCancellation } from '@/components/payment/paymentFlow'
 import type { PaymentOrder } from '@/types/payment'
 import { currencySymbol } from '@/components/payment/currency'
 import QRCode from 'qrcode'
@@ -103,7 +102,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const paymentStore = usePaymentStore()
-const appStore = useAppStore()
 
 const qrCanvas = ref<HTMLCanvasElement | null>(null)
 const qrUrl = ref('')
@@ -247,18 +245,18 @@ function startCountdown(seconds: number) {
   }, 1000)
 }
 
-async function handleCancel() {
+function handleCancel() {
   if (!props.orderId || cancelling.value) return
   cancelling.value = true
-  try {
-    await paymentAPI.cancelOrder(props.orderId)
-    cleanup()
-    emit('close')
-  } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
-  } finally {
-    cancelling.value = false
-  }
+  if (typeof window !== 'undefined') queuePaymentCancellation(window.localStorage, props.orderId)
+  void Promise.resolve()
+    .then(() => paymentAPI.cancelOrder(props.orderId))
+    .then(() => {
+      if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, props.orderId)
+    })
+    .catch(() => {})
+  cleanup()
+  emit('close')
 }
 
 function handleClose() {

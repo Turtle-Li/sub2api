@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import PaymentQRDialog from '../PaymentQRDialog.vue'
+import { PAYMENT_CANCELLATION_STORAGE_KEY } from '@/components/payment/paymentFlow'
 
 const pollOrderStatus = vi.hoisted(() => vi.fn())
 const cancelOrder = vi.hoisted(() => vi.fn())
@@ -62,6 +63,7 @@ const paidOrder = {
 describe('PaymentQRDialog currency display', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    window.localStorage.clear()
     pollOrderStatus.mockReset().mockResolvedValue(paidOrder)
     cancelOrder.mockReset()
     verifyOrder.mockReset()
@@ -70,6 +72,7 @@ describe('PaymentQRDialog currency display', () => {
   })
 
   afterEach(() => {
+    window.localStorage.clear()
     vi.useRealTimers()
   })
 
@@ -101,5 +104,39 @@ describe('PaymentQRDialog currency display', () => {
     expect(pollOrderStatus).toHaveBeenCalledWith(42)
     expect(wrapper.text()).toContain('$100.00')
     expect(wrapper.text()).toContain('¥108.00')
+  })
+
+  it('closes immediately while the cancellation request continues silently', async () => {
+    cancelOrder.mockReturnValue(new Promise(() => {}))
+    const wrapper = mount(PaymentQRDialog, {
+      props: {
+        show: false,
+        orderId: 42,
+        qrCode: '',
+        expiresAt: '2099-01-01T10:30:00Z',
+        paymentType: 'alipay',
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            props: ['show'],
+            template: '<div v-if="show"><slot /><slot name="footer" /></div>',
+          },
+          Icon: true,
+        },
+      },
+    })
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
+    await cancelButton?.trigger('click')
+    await flushPromises()
+
+    expect(cancelOrder).toHaveBeenCalledWith(42)
+    expect(wrapper.emitted('close')).toEqual([[]])
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[42]')
+    expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })

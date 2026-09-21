@@ -156,6 +156,64 @@ func TestAlipayTimeoutExpressUsesSafeWholeMinutes(t *testing.T) {
 	}
 }
 
+func TestValidateAlipayQRCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "production payload", value: "https://qr.alipay.com/precreate-token?scene=bar_code", want: true},
+		{name: "sandbox payload", value: "https://qr.alipaydev.com/precreate-token", want: true},
+		{name: "wrong host", value: "https://openapi.alipay.com/gateway.do?pay", want: false},
+		{name: "lookalike host", value: "https://qr.alipay.com.example.com/precreate-token", want: false},
+		{name: "insecure scheme", value: "http://qr.alipay.com/precreate-token", want: false},
+		{name: "explicit port", value: "https://qr.alipay.com:443/precreate-token", want: false},
+		{name: "userinfo", value: "https://user@qr.alipay.com/precreate-token", want: false},
+		{name: "fragment", value: "https://qr.alipay.com/precreate-token#fragment", want: false},
+		{name: "root path", value: "https://qr.alipay.com/", want: false},
+		{name: "surrounding whitespace", value: " https://qr.alipay.com/precreate-token", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ValidateAlipayQRCode(tt.value); got != tt.want {
+				t.Errorf("ValidateAlipayQRCode(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateAlipayPayURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "production gateway", value: "https://openapi.alipay.com/gateway.do?page-pay", want: true},
+		{name: "sandbox gateway", value: "https://openapi-sandbox.dl.alipaydev.com/gateway.do?page-pay", want: true},
+		{name: "wrong path", value: "https://openapi.alipay.com/checkout/page-pay", want: false},
+		{name: "wrong host", value: "https://pay.totools.cn/checkout/page-pay", want: false},
+		{name: "insecure scheme", value: "http://openapi.alipay.com/gateway.do?page-pay", want: false},
+		{name: "explicit port", value: "https://openapi.alipay.com:443/gateway.do?page-pay", want: false},
+		{name: "fragment", value: "https://openapi.alipay.com/gateway.do?page-pay#fragment", want: false},
+		{name: "missing query", value: "https://openapi.alipay.com/gateway.do", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ValidateAlipayPayURL(tt.value); got != tt.want {
+				t.Errorf("ValidateAlipayPayURL(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {
 	origPreCreate := alipayTradePreCreate
 	origPagePay := alipayTradePagePay
@@ -281,7 +339,7 @@ func TestCreateTradeRedirectModeSkipsPrecreate(t *testing.T) {
 		preCreateCalls++
 		return &alipay.TradePreCreateRsp{
 			Error:  alipay.Error{Code: alipay.CodeSuccess},
-			QRCode: "https://qr.alipay.example.com/precreate-token",
+			QRCode: "https://qr.alipay.com/precreate-token",
 		}, nil
 	}
 	alipayTradePagePay = func(client *alipay.Client, param alipay.TradePagePay) (*url.URL, error) {
@@ -374,7 +432,7 @@ func TestCreatePaymentUsesPrecreateForMobileWhenEnabled(t *testing.T) {
 		}
 		return &alipay.TradePreCreateRsp{
 			Error:  alipay.Error{Code: alipay.CodeSuccess},
-			QRCode: "https://qr.alipay.example.com/mobile-dynamic-token",
+			QRCode: "https://qr.alipay.com/mobile-dynamic-token",
 		}, nil
 	}
 	alipayTradeWapPay = func(_ *alipay.Client, _ alipay.TradeWapPay) (*url.URL, error) {
@@ -396,7 +454,7 @@ func TestCreatePaymentUsesPrecreateForMobileWhenEnabled(t *testing.T) {
 	if precreateCalls != 1 || wapPayCalls != 0 {
 		t.Fatalf("precreate calls = %d, wap calls = %d; want 1, 0", precreateCalls, wapPayCalls)
 	}
-	if resp.QRCode != "https://qr.alipay.example.com/mobile-dynamic-token" || resp.PayURL != "" {
+	if resp.QRCode != "https://qr.alipay.com/mobile-dynamic-token" || resp.PayURL != "" {
 		t.Fatalf("unexpected response: qr_code=%q pay_url=%q", resp.QRCode, resp.PayURL)
 	}
 }
@@ -455,7 +513,7 @@ func TestCreateTradeUsesPrecreateForDesktopWhenAvailable(t *testing.T) {
 		}
 		return &alipay.TradePreCreateRsp{
 			Error:  alipay.Error{Code: alipay.CodeSuccess},
-			QRCode: "https://qr.alipay.example.com/precreate-token",
+			QRCode: "https://qr.alipay.com/precreate-token",
 		}, nil
 	}
 	alipayTradePagePay = func(client *alipay.Client, param alipay.TradePagePay) (*url.URL, error) {
@@ -478,7 +536,7 @@ func TestCreateTradeUsesPrecreateForDesktopWhenAvailable(t *testing.T) {
 	if pagePayCalls != 0 {
 		t.Fatalf("page pay calls = %d, want 0", pagePayCalls)
 	}
-	if resp.QRCode != "https://qr.alipay.example.com/precreate-token" {
+	if resp.QRCode != "https://qr.alipay.com/precreate-token" {
 		t.Fatalf("qr_code = %q", resp.QRCode)
 	}
 	if resp.PayURL != "" {

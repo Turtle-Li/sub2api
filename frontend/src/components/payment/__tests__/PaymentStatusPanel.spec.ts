@@ -54,6 +54,7 @@ vi.mock('@/utils/device', () => ({
 }))
 
 import PaymentStatusPanel from '../PaymentStatusPanel.vue'
+import { PAYMENT_CANCELLATION_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '../currency'
 
 const orderFactory = (status: string) => ({
@@ -101,6 +102,7 @@ function deferred<T>() {
 describe('PaymentStatusPanel', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    window.localStorage.clear()
     pollOrderStatus.mockReset()
     cancelOrder.mockReset()
     verifyOrder.mockReset()
@@ -113,6 +115,7 @@ describe('PaymentStatusPanel', () => {
   })
 
   afterEach(() => {
+    window.localStorage.clear()
     vi.useRealTimers()
   })
 
@@ -122,7 +125,7 @@ describe('PaymentStatusPanel', () => {
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
-        qrCode: 'https://pay.example.com/qr/42',
+        qrCode: 'https://qr.alipay.com/qr-42',
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
         orderType: 'balance',
@@ -151,8 +154,8 @@ describe('PaymentStatusPanel', () => {
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
-        qrCode: 'https://qr.example.test/alipay-42',
-        payUrl: 'https://pay.example.test/alipay-42',
+        qrCode: 'https://qr.alipay.com/alipay-42',
+        payUrl: 'https://pay.totools.cn/checkout/alipay-42',
         checkoutFrameUrl,
         allowCheckoutFrame: true,
         expiresAt: '2099-01-01T12:30:00Z',
@@ -165,7 +168,7 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
-    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.example.test/alipay-42', expect.any(Object))
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.alipay.com/alipay-42', expect.any(Object))
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
   })
@@ -175,7 +178,7 @@ describe('PaymentStatusPanel', () => {
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
-        qrCode: 'https://qr.example.test/alipay-42',
+        qrCode: 'https://qr.alipay.com/alipay-42',
         checkoutFrameUrl: alipayCheckoutFrameUrl(),
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
@@ -187,7 +190,7 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
-    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.example.test/alipay-42', expect.any(Object))
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.alipay.com/alipay-42', expect.any(Object))
   })
 
   it('rejects an invalid embedded URL and keeps the normal Alipay QR flow', async () => {
@@ -195,7 +198,7 @@ describe('PaymentStatusPanel', () => {
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
-        qrCode: 'https://qr.example.test/alipay-42',
+        qrCode: 'https://qr.alipay.com/alipay-42',
         checkoutFrameUrl: alipayCheckoutFrameUrl({ host: 'checkout.example.invalid' }),
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
@@ -207,7 +210,7 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
-    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.example.test/alipay-42', expect.any(Object))
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.alipay.com/alipay-42', expect.any(Object))
   })
 
   it('shows the hosted Alipay fallback button without embedding the provider page', async () => {
@@ -217,7 +220,7 @@ describe('PaymentStatusPanel', () => {
       props: {
         orderId: 42,
         qrCode: '',
-        payUrl: 'https://pay.example.test/alipay-42',
+        payUrl: 'https://pay.totools.cn/checkout/alipay-42',
         checkoutFrameUrl: alipayCheckoutFrameUrl(),
         allowCheckoutFrame: true,
         expiresAt: '2099-01-01T12:30:00Z',
@@ -229,6 +232,7 @@ describe('PaymentStatusPanel', () => {
 
     await flushPromises()
     expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://pay.totools.cn/checkout/alipay-42', expect.any(Object))
     expect(wrapper.get('button').text()).toContain('payment.qr.openPayWindow')
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
@@ -252,6 +256,7 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), alipayCheckoutFrameUrl(), expect.any(Object))
     expect(wrapper.get('button').text()).toContain('payment.qr.openPayWindow')
     wrapper.unmount()
   })
@@ -275,6 +280,7 @@ describe('PaymentStatusPanel', () => {
 
     await flushPromises()
     expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), alipayCheckoutFrameUrl(), expect.any(Object))
 
     await vi.advanceTimersByTimeAsync(3000)
     await flushPromises()
@@ -420,21 +426,15 @@ describe('PaymentStatusPanel', () => {
     wrapper.unmount()
   })
 
-  it('locks the cashier into a cancellation-pending state after central close acceptance', async () => {
-    let cancellationPending = false
-    pollOrderStatus.mockImplementation(() => Promise.resolve({
-      ...orderFactory('PENDING'),
-      cancellation_pending: cancellationPending,
-    }))
-    cancelOrder.mockImplementation(async () => {
-      cancellationPending = true
-      throw { reason: 'PAYMENT_CANCELLATION_PENDING' }
-    })
+  it('closes the cashier immediately while cancellation runs in the background', async () => {
+    const cancellationRequest = deferred<void>()
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    cancelOrder.mockReturnValue(cancellationRequest.promise)
 
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
-        qrCode: 'https://pay.example.com/qr/42',
+        qrCode: 'https://qr.alipay.com/qr-42',
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
         orderType: 'balance',
@@ -447,65 +447,15 @@ describe('PaymentStatusPanel', () => {
     await cancelButton?.trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[data-test="payment-cancellation-pending"]').exists()).toBe(true)
+    expect(cancelOrder).toHaveBeenCalledWith(42)
+    expect(wrapper.emitted('settled')).toEqual([['cancelled']])
+    expect(wrapper.emitted('done')).toEqual([[]])
+    expect(wrapper.find('[data-test="payment-cancellation-pending"]').exists()).toBe(false)
     expect(wrapper.find('canvas').exists()).toBe(false)
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[42]')
+    cancellationRequest.reject(new Error('background cancellation failure'))
+    await flushPromises()
     expect(showError).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-
-  it('keeps verifying beyond the ordinary retry cap while local cancellation is pending', async () => {
-    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
-    verifyOrder.mockResolvedValue({ data: orderFactory('PENDING') })
-    cancelOrder.mockRejectedValue({ reason: 'PAYMENT_CANCELLATION_PENDING' })
-
-    const wrapper = mount(PaymentStatusPanel, {
-      props: {
-        orderId: 42,
-        qrCode: 'https://pay.example.com/qr/42',
-        expiresAt: '2099-01-01T12:30:00Z',
-        paymentType: 'alipay',
-        orderType: 'balance',
-      },
-      global: { stubs: { Icon: true } },
-    })
-
-    await flushPromises()
-    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
-    await cancelButton?.trigger('click')
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(15_000 * 7)
-    await flushPromises()
-
-    expect(verifyOrder.mock.calls.length).toBeGreaterThan(6)
-    expect(wrapper.get('[data-test="payment-cancellation-pending"]').exists()).toBe(true)
-    expect(wrapper.emitted('settled')).toBeUndefined()
-    wrapper.unmount()
-  })
-
-  it('keeps polling instead of reporting a terminal outcome while confirmation is pending', async () => {
-    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
-    cancelOrder.mockRejectedValue({ reason: 'PAYMENT_CONFIRMATION_PENDING' })
-
-    const wrapper = mount(PaymentStatusPanel, {
-      props: {
-        orderId: 42,
-        qrCode: 'https://pay.example.com/qr/42',
-        expiresAt: '2099-01-01T12:30:00Z',
-        paymentType: 'alipay',
-        orderType: 'balance',
-      },
-      global: { stubs: { Icon: true } },
-    })
-
-    await flushPromises()
-    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
-    await cancelButton?.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.get('[data-test="payment-confirmation-pending"]').exists()).toBe(true)
-    expect(wrapper.emitted('settled')).toBeUndefined()
-    expect(wrapper.emitted('success')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -518,7 +468,7 @@ describe('PaymentStatusPanel', () => {
         qrCode: 'https://stale.example.invalid/qr/42',
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
-        payUrl: 'https://stale.example.invalid/checkout/42',
+        payUrl: 'https://pay.totools.cn/checkout/stale-42',
         initialConfirmationPending: true,
         orderType: 'balance',
       },
@@ -547,7 +497,7 @@ describe('PaymentStatusPanel', () => {
         qrCode: '',
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
-        payUrl: 'https://stale.example.invalid/checkout/42',
+        payUrl: 'https://pay.totools.cn/checkout/stale-42',
         orderType: 'balance',
       },
       global: { stubs: { Icon: true } },
@@ -560,7 +510,7 @@ describe('PaymentStatusPanel', () => {
 
     expect(resumeOrder).toHaveBeenCalledWith(42)
     expect(open).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
-    expect(open).not.toHaveBeenCalledWith('https://stale.example.invalid/checkout/42', expect.anything(), expect.anything())
+    expect(open).not.toHaveBeenCalledWith('https://pay.totools.cn/checkout/stale-42', expect.anything(), expect.anything())
     expect(wrapper.get(pendingSelector).exists()).toBe(true)
     expect(close).toHaveBeenCalledTimes(1)
     open.mockRestore()
@@ -578,7 +528,7 @@ describe('PaymentStatusPanel', () => {
         fee_rate: 0,
         expires_at: '2099-01-01T12:30:00Z',
         payment_type: 'alipay',
-        pay_url: 'https://fresh.example.invalid/checkout/42',
+        pay_url: 'https://pay.totools.cn/checkout/fresh-42',
       },
     })
     const popup = { closed: false, close: vi.fn(), location: { href: '' } }
@@ -590,7 +540,7 @@ describe('PaymentStatusPanel', () => {
         qrCode: '',
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
-        payUrl: 'https://stale.example.invalid/checkout/42',
+        payUrl: 'https://pay.totools.cn/checkout/stale-42',
         orderType: 'balance',
       },
       global: { stubs: { Icon: true } },
@@ -602,9 +552,9 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(resumeOrder).toHaveBeenCalledWith(42)
-    expect(popup.location.href).toBe('https://fresh.example.invalid/checkout/42')
+    expect(popup.location.href).toBe('https://pay.totools.cn/checkout/fresh-42')
     expect(popup.close).not.toHaveBeenCalled()
-    expect(open).not.toHaveBeenCalledWith('https://stale.example.invalid/checkout/42', expect.anything(), expect.anything())
+    expect(open).not.toHaveBeenCalledWith('https://pay.totools.cn/checkout/stale-42', expect.anything(), expect.anything())
     open.mockRestore()
     wrapper.unmount()
   })
@@ -688,7 +638,7 @@ describe('PaymentStatusPanel', () => {
       fulfillment_status: 'FAILED',
     })
     const wrapper = mount(PaymentStatusPanel, {
-      props: { orderId: 42, qrCode: 'https://pay.example.com/qr/42', expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay', orderType: 'balance' },
+      props: { orderId: 42, qrCode: 'https://qr.alipay.com/qr-42', expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay', orderType: 'balance' },
       global: { stubs: { Icon: true } },
     })
     await vi.advanceTimersByTimeAsync(3000)
@@ -768,8 +718,8 @@ describe('PaymentStatusPanel', () => {
         expires_at: '2099-01-01T12:30:00Z',
         payment_type: 'alipay',
         payment_mode: 'qrcode',
-        qr_code: 'https://pay.example.com/qr/42-fresh',
-        pay_url: 'https://pay.example.com/session/42-fresh',
+        qr_code: 'https://qr.alipay.com/42-fresh',
+        pay_url: 'https://pay.totools.cn/checkout/42-fresh',
       },
     })
     const popup = { closed: false, close: vi.fn(), location: { href: '' } }
@@ -778,8 +728,8 @@ describe('PaymentStatusPanel', () => {
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
-        qrCode: 'https://pay.example.com/qr/42',
-        payUrl: 'https://pay.example.com/session/42',
+        qrCode: 'https://qr.alipay.com/42',
+        payUrl: 'https://pay.totools.cn/checkout/42',
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
         orderType: 'balance',
@@ -798,7 +748,7 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
     expect(resumeOrder).toHaveBeenCalledWith(42)
     expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
-    expect(popup.location.href).toBe('https://pay.example.com/session/42-fresh')
+    expect(popup.location.href).toBe('https://pay.totools.cn/checkout/42-fresh')
 
     openSpy.mockRestore()
   })

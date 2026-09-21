@@ -1974,6 +1974,14 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 		}
 		return nil, classifyCreatePaymentError(req, sel.ProviderKey, err)
 	}
+	if payment.GetBasePaymentType(req.PaymentType) == payment.TypeAlipay && strings.TrimSpace(pr.QRCode) != "" && !provider.ValidateAlipayQRCode(pr.QRCode) {
+		slog.Warn("[PaymentService] discarded invalid Alipay QR payload", "provider", sel.ProviderKey, "instance", sel.InstanceID)
+		pr.QRCode = ""
+	}
+	if sel.ProviderKey == payment.TypeAlipay && strings.TrimSpace(pr.PayURL) != "" && !provider.ValidateAlipayPayURL(pr.PayURL) {
+		slog.Warn("[PaymentService] discarded invalid Alipay checkout URL", "provider", sel.ProviderKey, "instance", sel.InstanceID)
+		pr.PayURL = ""
+	}
 	sanitizeCreatePaymentResponseDetails(pr)
 	providerSnapshot := order.ProviderSnapshot
 	if sel.ProviderKey == payment.TypeUnifiedPay {

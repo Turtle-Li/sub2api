@@ -100,7 +100,7 @@
       <div data-test="payment-cancellation-pending" class="card p-6">
         <div class="flex flex-col items-center space-y-3 py-3 text-center">
           <div class="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
-            <Icon name="sync" size="lg" class="animate-spin text-amber-600 dark:text-amber-300" />
+            <Icon name="sync" size="lg" class="text-amber-600 dark:text-amber-300" />
           </div>
           <p class="text-base font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.cancellationPending') }}</p>
           <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.result.processingHint') }}</p>
@@ -308,10 +308,18 @@ import { useI18n } from 'vue-i18n'
 import { usePaymentStore } from '@/stores/payment'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
-import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode } from '@/utils/apiError'
 import { getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
+import { isMobileDevice } from '@/utils/device'
 import { currencySymbol, formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
-import { validateAlipayCheckoutFrameUrl } from '@/components/payment/paymentFlow'
+import {
+  clearQueuedPaymentCancellation,
+  queuePaymentCancellation,
+  resolveAlipayQRCode,
+  validateAlipayCheckoutFrameUrl,
+  validateAlipayHostedCheckoutUrl,
+  validateAlipayQRCode,
+} from '@/components/payment/paymentFlow'
 import type { CreateOrderResult, PaymentDiscountSnapshot, PaymentOrder, WechatJSAPIPayload } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
 import QRCode from 'qrcode'
@@ -413,7 +421,10 @@ const POLL_MAX_ATTEMPTS = 120
 
 const isAlipay = computed(() => isBuiltInAlipayMethod(props.paymentType))
 const isWxpay = computed(() => isBuiltInWxpayMethod(props.paymentType))
-const currentPayUrl = computed(() => resumedPayUrl.value ?? props.payUrl ?? '')
+const currentPayUrl = computed(() => {
+  const raw = resumedPayUrl.value ?? props.payUrl ?? ''
+  return isAlipay.value ? validateAlipayHostedCheckoutUrl(raw) || validateAlipayCheckoutFrameUrl(raw) : raw
+})
 const currentHostedPayUrl = computed(() => (
   currentPayUrl.value
   || resumedCheckoutFrameUrl.value
@@ -575,8 +586,12 @@ function applyResumedPaymentLaunch(result: CreateOrderResult): ResumedPaymentLau
     waitForAuthoritativeExpiry()
     return null
   }
-  const qrCode = String(result.qr_code || '').trim()
-  const payUrl = String(result.pay_url || '').trim()
+  const qrCode = isBuiltInAlipayMethod(props.paymentType)
+    ? validateAlipayQRCode(result.qr_code) || (!isMobileDevice() ? resolveAlipayQRCode(result) : '')
+    : String(result.qr_code || '').trim()
+  const payUrl = isBuiltInAlipayMethod(props.paymentType)
+    ? validateAlipayHostedCheckoutUrl(result.pay_url) || validateAlipayCheckoutFrameUrl(result.pay_url)
+    : String(result.pay_url || '').trim()
   const checkoutFrameUrl = validateAlipayCheckoutFrameUrl(result.checkout_frame_url)
   if (!qrCode && !payUrl && !checkoutFrameUrl) {
     waitForAuthoritativeConfirmation()
@@ -983,38 +998,26 @@ function requestDeadlineCheck(generation = lifecycleGeneration, fingerprint = cu
   void pollStatus({ force: true }, generation, fingerprint)
 }
 
-async function handleCancel() {
+function handleCancel() {
   const generation = lifecycleGeneration
   const fingerprint = currentSessionFingerprint()
   const orderId = props.orderId
   if (!isCurrentLifecycle(generation, fingerprint) || !orderId || cancelling.value) return
   cancelling.value = true
-  try {
-    await paymentAPI.cancelOrder(orderId)
-    if (!isCurrentLifecycle(generation, fingerprint)) return
-    // The cancellation endpoint can race a payment callback. Query the local
-    // order afterwards and only clear recovery once the server records its
-    // terminal state.
-    await pollStatus({ force: true }, generation, fingerprint)
-  } catch (err: unknown) {
-    if (isCurrentLifecycle(generation, fingerprint)) {
-      const code = extractApiErrorCode(err)
-      if (code === 'PAYMENT_CANCELLATION_PENDING') {
-        cancellationPending.value = true
-        confirmationPending.value = false
-        void pollStatus({ force: true }, generation, fingerprint)
-      } else if (code === 'PAYMENT_CONFIRMATION_PENDING') {
-        confirmationPending.value = true
-        void pollStatus({ force: true }, generation, fingerprint)
-      } else {
-        appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
-      }
-    }
-  } finally {
-    if (isCurrentLifecycle(generation, fingerprint)) {
-      cancelling.value = false
-    }
-  }
+  // The local checkout is finished immediately. The server records the
+  // cancellation intent before returning and retries provider confirmation in
+  // its background reconciliation loop, so provider latency never remains in
+  // the foreground dialog.
+  if (typeof window !== 'undefined') queuePaymentCancellation(window.localStorage, orderId)
+  void Promise.resolve()
+    .then(() => paymentAPI.cancelOrder(orderId))
+    .then(() => {
+      if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, orderId)
+    })
+    .catch(() => {})
+  cleanupSession()
+  setOutcome('cancelled')
+  emit('done')
 }
 
 function handleDone() { cleanupSession(); emit('done') }
@@ -1031,7 +1034,20 @@ function startSession() {
   cleanupSession()
   const generation = lifecycleGeneration
   const fingerprint = currentSessionFingerprint()
-  qrUrl.value = props.qrCode
+  if (isAlipay.value) {
+    const providedQRCode = validateAlipayQRCode(props.qrCode)
+      || validateAlipayHostedCheckoutUrl(props.qrCode)
+      || validateAlipayCheckoutFrameUrl(props.qrCode)
+    qrUrl.value = providedQRCode || (!isMobileDevice()
+      ? resolveAlipayQRCode({
+        qr_code: props.qrCode,
+        pay_url: props.payUrl,
+        checkout_frame_url: props.checkoutFrameUrl,
+      })
+      : '')
+  } else {
+    qrUrl.value = props.qrCode
+  }
   resumedPayUrl.value = null
   resumedCheckoutFrameUrl.value = null
   resumedMobileAlipayDeepLink.value = null

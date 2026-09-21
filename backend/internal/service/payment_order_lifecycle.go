@@ -112,7 +112,35 @@ func (s *PaymentService) CancelOrder(ctx context.Context, orderID, userID int64)
 	if o.Status != OrderStatusPending {
 		return "", infraerrors.BadRequest("INVALID_STATUS", "order cannot be cancelled in current status")
 	}
+	// User cancellation fences the local checkout immediately. Provider query and
+	// close calls are deliberately moved to the periodic reconciler so a slow or
+	// temporarily unavailable gateway never keeps the browser request open.
+	if paymentOrderSupportsAsyncUserCancellation(o) {
+		if err := s.recordPaymentCancellationPending(ctx, o.ID, fmt.Sprintf("user:%d", userID)); err != nil {
+			return "", err
+		}
+		return "cancellation_requested", nil
+	}
 	return s.cancelCore(ctx, o, OrderStatusCancelled, fmt.Sprintf("user:%d", userID), "user cancelled order")
+}
+
+func paymentOrderSupportsAsyncUserCancellation(order *dbent.PaymentOrder) bool {
+	if order == nil {
+		return false
+	}
+	if paymentOrderUsesUnifiedPay(order) {
+		return true
+	}
+	for _, candidate := range []string{
+		strings.TrimSpace(order.PaymentType),
+		strings.TrimSpace(psStringValue(order.ProviderKey)),
+	} {
+		switch payment.GetBasePaymentType(candidate) {
+		case payment.TypeAlipay, payment.TypeWxpay:
+			return true
+		}
+	}
+	return false
 }
 
 func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (string, error) {
@@ -181,7 +209,12 @@ func (s *PaymentService) reconcilePaid(ctx context.Context, o *dbent.PaymentOrde
 
 func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.PaymentOrder, opts checkPaidOptions) string {
 	unknownResult := ""
-	if opts.requireConfirmed || paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o) {
+	// A cancellation/expiry decision must never turn an unavailable provider
+	// read into a local terminal state. Direct Alipay and WeChat providers need
+	// the same fail-closed behavior as unified payment; ordinary reconciliation
+	// keeps its historical best-effort result when it is not trying to close an
+	// order.
+	if opts.requireConfirmed || opts.cancelIfUnpaid || paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o) {
 		unknownResult = checkPaidResultUnconfirmed
 	}
 	switch s.reconcileMissingUnifiedPaymentOrder(ctx, o) {
@@ -272,10 +305,10 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		if errors.Is(cancelErr, payment.ErrCancellationPending) {
 			return checkPaidResultCancellationPending
 		}
-		if errors.Is(cancelErr, payment.ErrUpstreamStateUnconfirmed) || (cancelErr != nil && (paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o))) {
+		if cancelErr != nil {
 			return checkPaidResultUnconfirmed
 		}
-	} else if paymentOrderHasDiscount(o) {
+	} else if paymentOrderSupportsAsyncUserCancellation(o) || paymentOrderHasDiscount(o) {
 		return checkPaidResultUnconfirmed
 	}
 	return ""
@@ -436,9 +469,30 @@ func (s *PaymentService) ReconcilePendingPaymentOrders(ctx context.Context) (int
 	if err != nil {
 		return 0, fmt.Errorf("query pending payment orders: %w", err)
 	}
+	orderIDs := make([]int64, 0, len(orders))
+	for _, order := range orders {
+		orderIDs = append(orderIDs, order.ID)
+	}
+	cancellationPending, err := s.paymentOrderCancellationPendingIDs(ctx, orderIDs)
+	if err != nil {
+		return 0, fmt.Errorf("query pending payment cancellations: %w", err)
+	}
 
 	recovered := 0
 	for _, order := range orders {
+		if cancellationPending[order.ID] {
+			outcome, cancelErr := s.cancelCore(ctx, order, OrderStatusCancelled, "system", "retry cancellation requested by user")
+			if outcome == checkPaidResultAlreadyPaid {
+				recovered++
+			}
+			if cancelErr != nil {
+				reason := infraerrors.Reason(cancelErr)
+				if reason != "PAYMENT_CANCELLATION_PENDING" && reason != "PAYMENT_CONFIRMATION_PENDING" {
+					slog.Warn("failed to reconcile requested payment cancellation", "orderID", order.ID, "error", cancelErr)
+				}
+			}
+			continue
+		}
 		if s.reconcilePaid(ctx, order) == checkPaidResultAlreadyPaid {
 			recovered++
 		}

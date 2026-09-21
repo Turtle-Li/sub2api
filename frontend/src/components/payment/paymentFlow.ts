@@ -9,6 +9,7 @@ import type {
 } from '@/types/payment'
 
 export const PAYMENT_RECOVERY_STORAGE_KEY = 'payment.recovery.current'
+export const PAYMENT_CANCELLATION_STORAGE_KEY = 'payment.cancellation.pending.v1'
 export const RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY = 'payment.reset-card.checkout-attempt.v1'
 
 const VISIBLE_METHOD_ALIASES = {
@@ -46,7 +47,7 @@ export interface PaymentRecoverySnapshot {
   expiresAt: string
   paymentType: string
   payUrl: string
-  /** Validated Alipay page-pay iframe URL. It is never treated as QR data. */
+  /** Server-issued Alipay checkout URL used by the shared QR surface. */
   checkoutFrameUrl?: string
   outTradeNo: string
   clientSecret: string
@@ -64,6 +65,8 @@ export interface PaymentRecoverySnapshot {
   resetCardUseOnPurchase?: boolean
   /** Display-only server quote retained while a provider flow is in progress. */
   paymentDiscount?: PaymentDiscountSnapshot
+  /** The user closed this checkout and the cancel request still needs silent retry. */
+  cancellationRequested?: boolean
   createdAt: number
 }
 
@@ -167,7 +170,16 @@ const ALIPAY_CHECKOUT_FRAME_HOSTS = new Set([
   'openapi.alipay.com',
   'openapi-sandbox.dl.alipaydev.com',
 ])
+const ALIPAY_NATIVE_QR_HOSTS = new Set([
+  'qr.alipay.com',
+  'qr.alipaydev.com',
+])
+const ALIPAY_HOSTED_CHECKOUT_HOSTS = new Set([
+  ...ALIPAY_CHECKOUT_FRAME_HOSTS,
+  'pay.totools.cn',
+])
 const MAX_ALIPAY_CHECKOUT_FRAME_URL_LENGTH = 16384
+const MAX_ALIPAY_HOSTED_CHECKOUT_URL_LENGTH = 16384
 
 function readSingleSearchParam(params: URLSearchParams, name: string): string | null {
   const values = params.getAll(name)
@@ -243,6 +255,100 @@ export function validateAlipayCheckoutFrameUrl(value: unknown): string {
   return raw
 }
 
+function validateAlipayHTTPSURL(
+  value: unknown,
+  hosts: ReadonlySet<string>,
+  maxLength: number,
+  pathValidator?: (url: URL) => boolean,
+): string {
+  if (typeof value !== 'string') return ''
+  const raw = value
+  if (
+    !raw
+    || raw.length > maxLength
+    || raw !== raw.trim()
+    || hasUnsafeUrlCharacters(raw)
+  ) return ''
+
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return ''
+  }
+
+  const rawAuthority = raw.match(/^https:\/\/([^/?#]+)/i)?.[1]?.toLowerCase()
+  if (
+    url.protocol !== 'https:'
+    || !url.hostname
+    || !hosts.has(url.hostname.toLowerCase())
+    || !rawAuthority
+    || rawAuthority !== url.hostname.toLowerCase()
+    || url.username
+    || url.password
+    || url.port
+    || url.hash
+    || !url.pathname
+    || url.pathname === '/'
+  ) {
+    return ''
+  }
+
+  if (pathValidator && !pathValidator(url)) return ''
+
+  return raw
+}
+
+function isValidAlipayHostedCheckoutPath(url: URL): boolean {
+  const host = url.hostname.toLowerCase()
+  if (host === 'pay.totools.cn') {
+    return url.pathname.startsWith('/checkout/') && url.pathname.length > '/checkout/'.length
+  }
+  return url.pathname === '/gateway.do'
+}
+
+/** Validate the official HTTPS payload returned by Alipay precreate. */
+export function validateAlipayQRCode(value: unknown): string {
+  return validateAlipayHTTPSURL(value, ALIPAY_NATIVE_QR_HOSTS, MAX_ALIPAY_HOSTED_CHECKOUT_URL_LENGTH)
+}
+
+/**
+ * Validate a server-issued hosted checkout URL before using it as QR content.
+ * The URL is a fallback presentation only: payment completion still comes
+ * from the order status poll. Keeping this separate from the native QR field
+ * lets Alipay page-pay work in the same embedded QR surface without placing
+ * the provider document in an iframe.
+ */
+export function validateAlipayHostedCheckoutUrl(value: unknown): string {
+  return validateAlipayHTTPSURL(
+    value,
+    ALIPAY_HOSTED_CHECKOUT_HOSTS,
+    MAX_ALIPAY_HOSTED_CHECKOUT_URL_LENGTH,
+    isValidAlipayHostedCheckoutPath,
+  )
+}
+
+/**
+ * Return the value that the Alipay QR renderer should encode for one order.
+ * Native qr_code data wins. When a merchant only exposes page-pay, the
+ * signed/hosted checkout URL is still a real scannable URL and keeps the
+ * original order; it never triggers a replacement order.
+ */
+export function resolveAlipayQRCode(
+  result: Pick<CreateOrderResult, 'qr_code' | 'pay_url' | 'checkout_frame_url'>,
+  options: { allowHostedCheckout?: boolean } = {},
+): string {
+  const nativeQRCode = validateAlipayQRCode(result.qr_code)
+  if (nativeQRCode) return nativeQRCode
+
+  if (options.allowHostedCheckout === false) return ''
+
+  const hostedCheckoutURL = validateAlipayHostedCheckoutUrl(result.pay_url)
+  if (hostedCheckoutURL) return hostedCheckoutURL
+
+  return validateAlipayCheckoutFrameUrl(result.checkout_frame_url)
+}
+
 export function normalizeVisibleMethod(method: string): VisiblePaymentMethod | '' {
   const normalized = VISIBLE_METHOD_ALIASES[method.trim() as keyof typeof VISIBLE_METHOD_ALIASES]
   return normalized ?? ''
@@ -314,13 +420,20 @@ export function decidePaymentLaunch(
   context: PaymentLaunchContext,
 ): PaymentLaunchDecision {
   const visibleMethod = normalizeVisibleMethod(context.visibleMethod) || context.visibleMethod
+  const nativeQRCode = String(result.qr_code || '').trim()
+  const alipayQRCode = visibleMethod === 'alipay'
+    ? resolveAlipayQRCode(result, { allowHostedCheckout: !context.isMobile || context.forceQRCode === true })
+    : nativeQRCode
+  const payUrl = visibleMethod === 'alipay'
+    ? validateAlipayHostedCheckoutUrl(result.pay_url) || validateAlipayCheckoutFrameUrl(result.pay_url)
+    : result.pay_url || ''
   const baseState = createPaymentRecoverySnapshot({
     orderId: result.order_id,
     amount: result.amount,
-    qrCode: result.qr_code || '',
+    qrCode: nativeQRCode,
     expiresAt: result.expires_at || '',
     paymentType: visibleMethod,
-    payUrl: result.pay_url || '',
+    payUrl,
     checkoutFrameUrl: validateAlipayCheckoutFrameUrl(result.checkout_frame_url),
     outTradeNo: result.out_trade_no || '',
     clientSecret: result.client_secret || '',
@@ -394,23 +507,15 @@ export function decidePaymentLaunch(
     return { kind: 'alipay_deep_link', paymentState: baseState, recovery: baseState }
   }
 
-  const normalizedPaymentMode = baseState.paymentMode.trim().toLowerCase()
-  const explicitRedirect = normalizedPaymentMode === 'redirect' || normalizedPaymentMode === 'popup'
-  const explicitQr = normalizedPaymentMode === 'qrcode' || normalizedPaymentMode === 'native'
-
-  // A real gateway QR payload is authoritative for the QR shell. A hosted
-  // checkout URL is only a fallback when the provider did not supply one or
-  // explicitly selected redirect mode; it is never encoded as a fake QR.
-  if (baseState.qrCode && (explicitQr || !explicitRedirect)) {
-    return { kind: 'qr_waiting', paymentState: baseState, recovery: baseState }
-  }
-
-  if (baseState.payUrl && (explicitRedirect || context.isMobile || !baseState.qrCode)) {
-    return { kind: 'redirect_waiting', paymentState: baseState, recovery: baseState }
-  }
-
-  if (baseState.qrCode) {
-    return { kind: 'qr_waiting', paymentState: baseState, recovery: baseState }
+  // A native QR payload is authoritative. Alipay page-pay has no native
+  // payload on merchants without face-to-face precreate, so use the same
+  // order's hosted checkout URL as the QR content and keep it in this dialog.
+  // This avoids an iframe block and never creates a second financial order.
+  if (alipayQRCode) {
+    const paymentState = baseState.qrCode === alipayQRCode
+      ? baseState
+      : { ...baseState, qrCode: alipayQRCode }
+    return { kind: 'qr_waiting', paymentState, recovery: paymentState }
   }
 
   if (baseState.payUrl) {
@@ -495,6 +600,7 @@ function normalizeSnapshot(parsed: Partial<PaymentRecoverySnapshot>, now: number
     || (parsed.resumeToken != null && typeof parsed.resumeToken !== 'string')
     || (parsed.resetCardQuantity != null && (!Number.isSafeInteger(parsed.resetCardQuantity) || parsed.resetCardQuantity < 1 || parsed.resetCardQuantity > 99))
     || (parsed.resetCardUseOnPurchase != null && typeof parsed.resetCardUseOnPurchase !== 'boolean')
+    || (parsed.cancellationRequested != null && typeof parsed.cancellationRequested !== 'boolean')
     || typeof parsed.createdAt !== 'number'
     || !Number.isFinite(parsed.createdAt)
   ) {
@@ -528,6 +634,7 @@ function normalizeSnapshot(parsed: Partial<PaymentRecoverySnapshot>, now: number
     ...(parsed.resetCardQuantity ? { resetCardQuantity: parsed.resetCardQuantity } : {}),
     ...(parsed.resetCardUseOnPurchase === true ? { resetCardUseOnPurchase: true } : {}),
     paymentDiscount: normalizePaymentDiscount(parsed.paymentDiscount),
+    ...(parsed.cancellationRequested === true ? { cancellationRequested: true } : {}),
     createdAt: parsed.createdAt,
   }
 }
@@ -636,6 +743,38 @@ export function readPaymentRecoverySnapshot(
     if (active) return active
   }
   return candidates.sort((left, right) => right.createdAt - left.createdAt)[0] || null
+}
+
+type CancellationStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
+
+function readQueuedPaymentCancellations(storage: CancellationStorage, key = PAYMENT_CANCELLATION_STORAGE_KEY): number[] {
+  const raw = storage.getItem(key)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return [...new Set(parsed.filter((value): value is number => Number.isSafeInteger(value) && value > 0))]
+  } catch {
+    return []
+  }
+}
+
+/** Keep a cancellation request durable when a dialog is closed before HTTP settles. */
+export function queuePaymentCancellation(storage: CancellationStorage, orderId: number, key = PAYMENT_CANCELLATION_STORAGE_KEY): void {
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) return
+  const queued = readQueuedPaymentCancellations(storage, key)
+  if (!queued.includes(orderId)) queued.push(orderId)
+  storage.setItem(key, JSON.stringify(queued.slice(-MAX_RECOVERY_ENTRIES)))
+}
+
+export function clearQueuedPaymentCancellation(storage: CancellationStorage, orderId: number, key = PAYMENT_CANCELLATION_STORAGE_KEY): void {
+  const queued = readQueuedPaymentCancellations(storage, key).filter(id => id !== orderId)
+  if (queued.length === 0) storage.removeItem(key)
+  else storage.setItem(key, JSON.stringify(queued))
+}
+
+export function readQueuedPaymentCancellationIds(storage: CancellationStorage, key = PAYMENT_CANCELLATION_STORAGE_KEY): number[] {
+  return readQueuedPaymentCancellations(storage, key)
 }
 
 function fingerprintMoney(value: number): string {

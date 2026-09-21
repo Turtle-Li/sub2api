@@ -1931,7 +1931,7 @@ describe('PaymentView payment recovery', () => {
     openSpy.mockRestore()
   })
 
-  it('opens a desktop hosted Alipay checkout in the preopened popup', async () => {
+  it('renders a desktop hosted Alipay fallback as QR content in the current dialog', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -1946,7 +1946,7 @@ describe('PaymentView payment recovery', () => {
       fee_rate: 0,
       expires_at: '2099-01-01T00:10:00.000Z',
       payment_type: 'alipay',
-      pay_url: 'https://pay.example.com/reset-card/907',
+      pay_url: 'https://pay.totools.cn/checkout/reset-card-907',
       payment_mode: 'popup',
       out_trade_no: 'sub2_reset_907',
     })
@@ -1973,15 +1973,14 @@ describe('PaymentView payment recovery', () => {
     await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
-    expect(openSpy).toHaveBeenCalledTimes(1)
-    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
-    expect(popupLocation.href).toBe('https://pay.example.com/reset-card/907')
-    expect(panel.props('payUrl')).toBe('https://pay.example.com/reset-card/907')
-    expect(panel.props('qrCode')).toBe('')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(popupLocation.href).toBe('')
+    expect(panel.props('payUrl')).toBe('https://pay.totools.cn/checkout/reset-card-907')
+    expect(panel.props('qrCode')).toBe('https://pay.totools.cn/checkout/reset-card-907')
     openSpy.mockRestore()
   })
 
-  it('opens a legacy Alipay checkout at top level instead of embedding its frame', async () => {
+  it('keeps a legacy Alipay checkout in the current dialog instead of opening it automatically', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -1996,7 +1995,7 @@ describe('PaymentView payment recovery', () => {
       fee_rate: 0,
       expires_at: '2099-01-01T00:10:00.000Z',
       payment_type: 'alipay',
-      pay_url: 'https://pay.example.com/reset-card/908',
+      pay_url: 'https://pay.totools.cn/checkout/reset-card-908',
       payment_mode: 'popup',
       checkout_frame_url: 'https://openapi.alipay.com/gateway.do?method=alipay.trade.page.pay&biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&sign_type=RSA2&sign=signed',
       out_trade_no: 'sub2_reset_908',
@@ -2024,13 +2023,49 @@ describe('PaymentView payment recovery', () => {
     await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
-    expect(openSpy).toHaveBeenCalledTimes(1)
-    expect(popupLocation.href).toBe('https://pay.example.com/reset-card/908')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(popupLocation.href).toBe('')
     expect(popupLocation.href).not.toContain('openapi.alipay.com/gateway.do')
+    expect(panel.props('qrCode')).toBe('https://pay.totools.cn/checkout/reset-card-908')
     expect(panel.props('checkoutFrameUrl')).toContain('openapi.alipay.com/gateway.do')
     expect(panel.props('allowCheckoutFrame')).toBe(true)
 
     openSpy.mockRestore()
+  })
+
+  it('does not create a second Alipay order after a mobile create failure', async () => {
+    routeState.query = { tab: 'subscription' }
+    isMobileDevice.mockReturnValue(true)
+    const checkout = checkoutInfoWithPlansFixture()
+    checkout.data.methods = {
+      alipay: { ...checkout.data.methods.wxpay, currency: 'CNY' },
+    }
+    getCheckoutInfo.mockResolvedValue(checkout)
+    createOrder.mockRejectedValue({ reason: 'PAYMENT_GATEWAY_ERROR' })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    await selectResetCardCheckout(wrapper, {
+      subscription: { id: 91 },
+      quote: { subscription_id: 91, group_id: 3, plan_id: 7, monthly_price: 120, price: 40, expires_at: '2099-01-01T00:00:00Z' },
+    })
+    await submitSelectedResetCard(wrapper)
+    await flushPromises()
+
+    expect(createOrder).toHaveBeenCalledTimes(1)
+    expect(showError).toHaveBeenCalled()
+    expect(wrapper.findComponent(PaymentStatusPanel).exists()).toBe(false)
+    wrapper.unmount()
   })
 })
 

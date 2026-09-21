@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -25,7 +26,9 @@ type paymentOrderLifecycleQueryProvider struct {
 	lastCancelTradeNo string
 	queryCalls        int
 	cancelCalls       int
+	queryErrors       []error
 	responses         []*payment.QueryOrderResponse
+	cancelErrors      []error
 	resp              *payment.QueryOrderResponse
 }
 
@@ -59,6 +62,11 @@ func (p *paymentOrderLifecycleQueryProvider) CreatePayment(context.Context, paym
 func (p *paymentOrderLifecycleQueryProvider) QueryOrder(_ context.Context, tradeNo string) (*payment.QueryOrderResponse, error) {
 	p.lastQueryTradeNo = tradeNo
 	p.queryCalls++
+	if len(p.queryErrors) > 0 {
+		err := p.queryErrors[0]
+		p.queryErrors = p.queryErrors[1:]
+		return nil, err
+	}
 	if len(p.responses) > 0 {
 		resp := p.responses[0]
 		if len(p.responses) > 1 {
@@ -80,6 +88,11 @@ func (p *paymentOrderLifecycleQueryProvider) Refund(context.Context, payment.Ref
 func (p *paymentOrderLifecycleQueryProvider) CancelPayment(_ context.Context, tradeNo string) error {
 	p.lastCancelTradeNo = tradeNo
 	p.cancelCalls++
+	if len(p.cancelErrors) > 0 {
+		err := p.cancelErrors[0]
+		p.cancelErrors = p.cancelErrors[1:]
+		return err
+	}
 	return nil
 }
 
@@ -558,11 +571,127 @@ func TestCancelOrderStillClosesUnpaidUpstreamOrder(t *testing.T) {
 
 	outcome, err := svc.CancelOrder(ctx, order.ID, user.ID)
 	require.NoError(t, err)
-	require.Equal(t, checkPaidResultCancelled, outcome)
+	require.Equal(t, "cancellation_requested", outcome)
+	require.Empty(t, provider.lastCancelTradeNo)
+	require.Zero(t, provider.cancelCalls)
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPending, reloaded.Status)
+
+	recovered, err := svc.ReconcilePendingPaymentOrders(ctx)
+	require.NoError(t, err)
+	require.Zero(t, recovered)
 	require.Equal(t, order.OutTradeNo, provider.lastCancelTradeNo)
 	require.Equal(t, 1, provider.cancelCalls)
 
+	reloaded, err = client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCancelled, reloaded.Status)
+}
+
+func TestCancelOrderKeepsDirectAlipayPendingWhenProviderStateIsUncertain(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		suffix       string
+		queryErrors  []error
+		cancelErrors []error
+	}{
+		{name: "query failure", suffix: "query", queryErrors: []error{errors.New("query timeout")}},
+		{name: "close failure", suffix: "close", cancelErrors: []error{errors.New("close timeout")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			client := newPaymentOrderLifecycleTestClient(t)
+			user, err := client.User.Create().SetEmail("direct-cancel-uncertain@example.com").SetPasswordHash("hash").SetUsername("direct-cancel-uncertain").Save(ctx)
+			require.NoError(t, err)
+			order, err := client.PaymentOrder.Create().SetUserID(user.ID).SetUserEmail(user.Email).SetUserName(user.Username).
+				SetAmount(88).SetPayAmount(88).SetFeeRate(0).SetRechargeCode("DIRECT-CANCEL-UNCERTAIN").SetOutTradeNo("sub2_direct_cancel_uncertain_" + tc.suffix).
+				SetPaymentType(payment.TypeAlipay).SetPaymentTradeNo("").SetOrderType(payment.OrderTypeBalance).SetStatus(OrderStatusPending).
+				SetExpiresAt(time.Now().Add(time.Hour)).SetClientIP("127.0.0.1").SetSrcHost("api.example.com").Save(ctx)
+			require.NoError(t, err)
+
+			provider := &paymentOrderLifecycleQueryProvider{
+				resp:         &payment.QueryOrderResponse{TradeNo: order.OutTradeNo, Status: payment.ProviderStatusPending},
+				queryErrors:  tc.queryErrors,
+				cancelErrors: tc.cancelErrors,
+			}
+			registry := payment.NewRegistry()
+			registry.Register(provider)
+			svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true}
+
+			_, err = svc.CancelOrder(ctx, order.ID, user.ID)
+			require.NoError(t, err)
+			_, err = svc.ReconcilePendingPaymentOrders(ctx)
+			require.NoError(t, err)
+			reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+			require.NoError(t, err)
+			require.Equal(t, OrderStatusPending, reloaded.Status)
+		})
+	}
+}
+
+func TestReconcilePendingPaymentOrdersRetriesRequestedCancellation(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+
+	user, err := client.User.Create().
+		SetEmail("cancel-retry@example.com").
+		SetPasswordHash("hash").
+		SetUsername("cancel-retry-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(88).
+		SetPayAmount(88).
+		SetFeeRate(0).
+		SetRechargeCode("CANCEL-RETRY").
+		SetOutTradeNo("sub2_cancel_retry").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusPending).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+
+	registry := payment.NewRegistry()
+	provider := &paymentOrderLifecycleQueryProvider{
+		key: payment.TypeAlipay,
+		resp: &payment.QueryOrderResponse{
+			TradeNo: order.OutTradeNo,
+			Status:  payment.ProviderStatusPending,
+		},
+		cancelErrors: []error{payment.ErrCancellationPending, nil},
+	}
+	registry.Register(provider)
+
+	svc := &PaymentService{
+		entClient:       client,
+		registry:        registry,
+		providersLoaded: true,
+	}
+
+	_, err = svc.CancelOrder(ctx, order.ID, user.ID)
+	require.NoError(t, err)
+
+	_, err = svc.ReconcilePendingPaymentOrders(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, provider.cancelCalls)
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPending, reloaded.Status)
+
+	_, err = svc.ReconcilePendingPaymentOrders(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, provider.cancelCalls)
+	reloaded, err = client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusCancelled, reloaded.Status)
 }

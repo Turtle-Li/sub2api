@@ -28,6 +28,16 @@ const (
 	alipayRefundSuffix     = "-refund"
 )
 
+var alipayQRCodeHosts = map[string]struct{}{
+	"qr.alipay.com":    {},
+	"qr.alipaydev.com": {},
+}
+
+var alipayGatewayHosts = map[string]struct{}{
+	"openapi.alipay.com":               {},
+	"openapi-sandbox.dl.alipaydev.com": {},
+}
+
 var (
 	alipayTradeWapPay = func(client *alipay.Client, param alipay.TradeWapPay) (*url.URL, error) {
 		return client.TradeWapPay(param)
@@ -113,14 +123,14 @@ func (a *Alipay) MerchantIdentityMetadata() map[string]string {
 //     dynamic QR payload so the frontend can open it through the Alipay app.
 //   - Desktop, default: prefer alipay.trade.precreate (FACE_TO_FACE_PAYMENT) to
 //     get a scannable QR payload. If precreate is unavailable for the merchant,
-//     fall back to alipay.trade.page.pay and expose pay_url only — the frontend
-//     opens the Alipay checkout in a new tab.
+//     fall back to alipay.trade.page.pay and expose its same-order checkout URL;
+//     the frontend can encode that URL in the shared QR dialog.
 //   - Desktop, paymentMode == "redirect": skip precreate and go straight to
 //     alipay.trade.page.pay so the frontend always opens the Alipay checkout
 //     in a new tab. Use this when the merchant has not enabled FACE_TO_FACE_PAYMENT.
 //
-// Note: alipay.trade.page.pay returns a checkout page URL, not a scannable
-// payment QR. Never expose it via the QRCode field.
+// Note: alipay.trade.page.pay returns a checkout page URL. It remains in
+// PayURL and is never mislabeled as a native provider QRCode payload.
 func (a *Alipay) CreatePayment(ctx context.Context, req payment.CreatePaymentRequest) (*payment.CreatePaymentResponse, error) {
 	client, err := a.getClient()
 	if err != nil {
@@ -158,6 +168,9 @@ func (a *Alipay) createWapTrade(client *alipay.Client, req payment.CreatePayment
 	payURL, err := alipayTradeWapPay(client, param)
 	if err != nil {
 		return nil, fmt.Errorf("alipay TradeWapPay: %w", err)
+	}
+	if payURL == nil || !ValidateAlipayPayURL(payURL.String()) {
+		return nil, fmt.Errorf("alipay TradeWapPay: invalid checkout URL")
 	}
 	return &payment.CreatePaymentResponse{
 		TradeNo: req.OrderID,
@@ -212,7 +225,7 @@ func (a *Alipay) createPrecreateTrade(ctx context.Context, client *alipay.Client
 	if rsp.IsFailure() {
 		return nil, fmt.Errorf("alipay TradePreCreate failed: %s", rsp.Error.Error())
 	}
-	if strings.TrimSpace(rsp.QRCode) == "" {
+	if !ValidateAlipayQRCode(rsp.QRCode) {
 		return nil, fmt.Errorf("alipay TradePreCreate: empty qr_code")
 	}
 
@@ -220,6 +233,57 @@ func (a *Alipay) createPrecreateTrade(ctx context.Context, client *alipay.Client
 		TradeNo: req.OrderID,
 		QRCode:  rsp.QRCode,
 	}, nil
+}
+
+// ValidateAlipayQRCode validates the provider payload before it is persisted or
+// exposed to a browser QR renderer.
+func ValidateAlipayQRCode(raw string) bool {
+	if raw == "" || raw != strings.TrimSpace(raw) || len(raw) > 16384 || strings.ContainsAny(raw, "\x00\r\n\t ") || strings.ContainsRune(raw, '#') {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed == nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil || parsed.Port() != "" || parsed.Fragment != "" || parsed.RawFragment != "" || parsed.EscapedPath() == "" || parsed.EscapedPath() == "/" {
+		return false
+	}
+	rawAuthority := ""
+	if schemeEnd := strings.Index(raw, "://"); schemeEnd >= 0 {
+		rest := raw[schemeEnd+3:]
+		if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+			rest = rest[:end]
+		}
+		rawAuthority = rest
+	}
+	if rawAuthority == "" || !strings.EqualFold(rawAuthority, parsed.Host) {
+		return false
+	}
+	_, ok := alipayQRCodeHosts[strings.ToLower(parsed.Hostname())]
+	return ok
+}
+
+// ValidateAlipayPayURL validates a direct Alipay page/WAP checkout URL before
+// it is persisted or exposed to a browser. Unified payment checkout URLs use
+// their own gateway allowlist and are validated elsewhere.
+func ValidateAlipayPayURL(raw string) bool {
+	if raw == "" || raw != strings.TrimSpace(raw) || len(raw) > 16384 || strings.ContainsAny(raw, "\x00\r\n\t ") || strings.ContainsRune(raw, '#') {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed == nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil || parsed.Port() != "" || parsed.Fragment != "" || parsed.RawFragment != "" || parsed.Path != "/gateway.do" || parsed.RawPath != "" || parsed.RawQuery == "" {
+		return false
+	}
+	rawAuthority := ""
+	if schemeEnd := strings.Index(raw, "://"); schemeEnd >= 0 {
+		rest := raw[schemeEnd+3:]
+		if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+			rest = rest[:end]
+		}
+		rawAuthority = rest
+	}
+	if rawAuthority == "" || !strings.EqualFold(rawAuthority, parsed.Host) {
+		return false
+	}
+	_, ok := alipayGatewayHosts[strings.ToLower(parsed.Hostname())]
+	return ok
 }
 
 func (a *Alipay) createPagePayTrade(client *alipay.Client, req payment.CreatePaymentRequest, notifyURL, returnURL string) (*payment.CreatePaymentResponse, error) {
@@ -235,6 +299,9 @@ func (a *Alipay) createPagePayTrade(client *alipay.Client, req payment.CreatePay
 	payURL, err := alipayTradePagePay(client, param)
 	if err != nil {
 		return nil, fmt.Errorf("alipay TradePagePay: %w", err)
+	}
+	if payURL == nil || !ValidateAlipayPayURL(payURL.String()) {
+		return nil, fmt.Errorf("alipay TradePagePay: invalid checkout URL")
 	}
 	// Only PayURL is exposed: alipay.trade.page.pay returns a checkout page URL
 	// that must be opened in a browser, not a scannable payment QR. Setting it
