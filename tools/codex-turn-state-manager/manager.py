@@ -1760,7 +1760,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
         self._stats_attempt(account, model_cfg, source_name, result)
         status, state = result["http_status"], result["state"]
         diagnostic = result.get("diagnostic") or classify_response(status, {}, "", "unknown")
-        print(f"[*] [account={account['id']}] [{model}] {source_kind} source={source_name} attempt={attempt} HTTP={status} state_len={len(state)} header_ms={result.get('header_ms', 0)}", flush=True)
+        print(f"[*] [account={account['id']}] [{model}] {source_kind} source={source_name} ({mask_proxy(proxy)}) attempt={attempt} HTTP={status} state_len={len(state)} header_ms={result.get('header_ms', 0)}", flush=True)
         if status == 0:
             # Transport failures may be exit-specific. A small delay prevents
             # immediate local failures from creating a CPU/network busy loop.
@@ -1818,15 +1818,17 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
         self._record_diagnostic(slot, diagnostic, len(state))
         target = int(model_cfg.get("target_state_len", 292))
         if not state or (bool(model_cfg.get("require_exact_len", True)) and len(state) != target):
-            if attempt >= max(16, len(self.proxies) * 2):
+            max_attempts = max(10, len([p for p in self.proxies if p not in self._dynamic_proxies]) + min(4, len(self._dynamic_proxies) * 2))
+            if attempt >= max_attempts:
                 self._probe_attempts[slot] = 0
                 self._static_pending.pop(slot, None)
-                self._harvest_retry_delay = self.failure_backoff_seconds
-                print(f"[*] Skipping [{account.get('name')}] [{model}]: backing off for {int(self.failure_backoff_seconds)}s after {attempt} un-hit attempts.")
+                delay = min(int(self.failure_backoff_seconds), 20)
+                self._harvest_retry_delay = delay
+                print(f"[*] Skipping [{account.get('name')}] [{model}]: backing off for {delay}s after {attempt} un-hit attempts.")
                 with self._retry_lock:
                     for m in account.get("models", []):
                         m_slot = f"{account['id']}:{m.get('name')}"
-                        self._retry_after[m_slot] = time.time() + self.failure_backoff_seconds
+                        self._retry_after[m_slot] = time.time() + delay
             return None
         info = inspect_turn_state(state)
         if (not info.get("valid") or info.get("is_expired", True)
@@ -2064,7 +2066,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                         try:
                             exp_dt = datetime.fromisoformat(str(cookie_exp).replace("Z", "+00:00"))
                             now_dt = datetime.now(timezone.utc)
-                            if (exp_dt - now_dt).total_seconds() <= 60:
+                            if (exp_dt - now_dt).total_seconds() <= 120:
                                 cookie_needs_refresh = True
                         except Exception:
                             cookie_needs_refresh = True
@@ -2099,8 +2101,11 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
 
             # Routing cookies are account-wide: if only cookies need refresh across
             # multiple models, harvest only ONE model to refresh the account routing cookie!
+            # Round-robin across models so one stubborn model doesn't block cookie refresh.
             if not models_to_harvest and cookie_refresh_models:
-                models_to_harvest.append(cookie_refresh_models[0])
+                c_idx = getattr(self, "_cookie_model_idx", 0)
+                models_to_harvest.append(cookie_refresh_models[c_idx % len(cookie_refresh_models)])
+                self._cookie_model_idx = c_idx + 1
 
             if not models_to_harvest:
                 continue
