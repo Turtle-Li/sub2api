@@ -2509,8 +2509,8 @@ def main() -> int:
                 manager._wake.wait(timeout=wait)
                 manager._wake.clear()
             else:
-                delay = float(manager.config.get("rotating_continue_delay_seconds", 12.0))
-                manager._wake.wait(timeout=max(10.0, delay))
+                delay = float(manager.config.get("rotating_continue_delay_seconds", 2.0))
+                manager._wake.wait(timeout=max(0.5, delay))
                 manager._wake.clear()
 
     manager.print_status_table()
