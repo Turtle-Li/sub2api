@@ -434,15 +434,38 @@ WHERE a.id = {int(account_id)}
 
     def read_pinned_states(self, account_id: int) -> Dict[str, Any]:
         sql = (
-            "SELECT COALESCE(extra->'pinned_codex_turn_states','{}'::jsonb) "
-            f"FROM accounts WHERE id = {int(account_id)} AND deleted_at IS NULL;"
+            "SELECT jsonb_build_object("
+            "'states', COALESCE(extra->'pinned_codex_turn_states','{}'::jsonb), "
+            "'account_cookie', COALESCE(extra->'pinned_codex_routing_cookie','{}'::jsonb)"
+            f") FROM accounts WHERE id = {int(account_id)} AND deleted_at IS NULL;"
         )
         rows = self._rows(self.run_sql(sql))
         if not rows:
             return {}
         try:
-            return json.loads(rows[0])
-        except json.JSONDecodeError:
+            parsed = json.loads(rows[0])
+            if not isinstance(parsed, dict):
+                return {}
+            if "states" not in parsed and "account_cookie" not in parsed:
+                return parsed
+            states = parsed.get("states") or {}
+            acct_cookie_obj = parsed.get("account_cookie") or {}
+            acct_cookie = acct_cookie_obj.get("cookie", "")
+            acct_cookie_exp = acct_cookie_obj.get("expires_at", "")
+            if acct_cookie and acct_cookie_exp:
+                try:
+                    exp_dt = datetime.fromisoformat(str(acct_cookie_exp).replace("Z", "+00:00"))
+                    if exp_dt > datetime.now(timezone.utc):
+                        for m_entry in states.values():
+                            if isinstance(m_entry, dict):
+                                m_exp = m_entry.get("cookie_expires_at", "")
+                                if not m_exp or m_exp < acct_cookie_exp:
+                                    m_entry["cookie"] = acct_cookie
+                                    m_entry["cookie_expires_at"] = acct_cookie_exp
+                except Exception:
+                    pass
+            return states
+        except Exception:
             return {}
 
     def write_pinned_state(
@@ -815,6 +838,7 @@ class StateManager:
         self._probe_attempts = {}
         self._creds_cache: Dict[int, Dict[str, Any]] = {}
         self._retry_after: Dict[str, float] = {}
+        self._logged_skips: Dict[str, float] = {}
         try:
             saved = json.loads((state_dir / "probe-diagnostics.json").read_text())
             now = time.time()
@@ -1351,6 +1375,18 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 with self._retry_lock:
                     retry_at = self._retry_after.get(slot, 0.0)
 
+                cookie = pin.get("cookie", "")
+                cookie_exp_str = pin.get("cookie_expires_at", "")
+                cookie_remaining = 0
+                cookie_valid = False
+                if cookie and cookie_exp_str:
+                    try:
+                        c_exp_dt = datetime.fromisoformat(str(cookie_exp_str).replace("Z", "+00:00"))
+                        cookie_remaining = max(0, int((c_exp_dt - datetime.now(timezone.utc)).total_seconds()))
+                        cookie_valid = cookie_remaining > 0
+                    except Exception:
+                        pass
+
                 row: Dict[str, Any] = {
                     "model": model,
                     "target_len": target_len,
@@ -1360,6 +1396,10 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     "expires_at": info.get("expires_at"),
                     "remaining_minutes": info.get("remaining_minutes", 0),
                     "remaining_seconds": info.get("remaining_seconds", 0),
+                    "cookie_present": bool(cookie),
+                    "cookie_valid": cookie_valid,
+                    "cookie_remaining_seconds": cookie_remaining,
+                    "cookie_expires_at": cookie_exp_str,
                     "pinned_updated_at": pin.get("updated_at"),
                     # A pinned state whose length differs from the target is the
                     # signal that a harvest silently regressed.
@@ -1372,11 +1412,13 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     "recent_degradation": by_slot.get(f"{account_id}:{model.lower()}"),
                 }
                 if row["backoff_seconds"] <= 0 and info.get("valid"):
-                    # The daemon harvests once the remaining TTL drops under the
-                    # advance window, so that crossing is the next probe time.
-                    row["next_probe_seconds"] = max(
-                        0, int(float(info.get("remaining_seconds", 0)) - advance * 60)
-                    )
+                    if cookie:
+                        # Cookie routing mode: refresh proactively when cookie has <= 60s left
+                        row["next_probe_seconds"] = max(0, int(cookie_remaining - 60))
+                    else:
+                        row["next_probe_seconds"] = max(
+                            0, int(float(info.get("remaining_seconds", 0)) - advance * 60)
+                        )
                 entry["models"].append(row)
             accounts.append(entry)
 
@@ -1732,7 +1774,9 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 overrides = self.config.get("http_error_backoff_seconds", {})
                 self._harvest_retry_delay = max(1, int(overrides.get(
                     str(status), self.failure_backoff_seconds)))
-            retry_after = result.get("retry_after", "")
+            else:
+                self._harvest_retry_delay = self.failure_backoff_seconds
+            retry_after = (result.get("headers") or {}).get("retry-after") or result.get("retry_after", "")
             if retry_after:
                 try:
                     try:
@@ -1743,6 +1787,13 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                         self._harvest_retry_delay = max(self._harvest_retry_delay, delay)
                 except (ValueError, TypeError, OverflowError):
                     pass
+            self._static_pending.pop(slot, None)
+            self._probe_attempts[slot] = 0
+            # Rate limit or HTTP failure applies to the entire account
+            with self._retry_lock:
+                for m in account.get("models", []):
+                    m_slot = f"{account['id']}:{m.get('name')}"
+                    self._retry_after[m_slot] = time.time() + self._harvest_retry_delay
             if diagnostic.get("retryable") and not retry_after:
                 count = self._error_streaks.get(slot, 0) + 1
                 self._error_streaks[slot] = count
@@ -1767,6 +1818,15 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
         self._record_diagnostic(slot, diagnostic, len(state))
         target = int(model_cfg.get("target_state_len", 292))
         if not state or (bool(model_cfg.get("require_exact_len", True)) and len(state) != target):
+            if attempt >= max(16, len(self.proxies) * 2):
+                self._probe_attempts[slot] = 0
+                self._static_pending.pop(slot, None)
+                self._harvest_retry_delay = self.failure_backoff_seconds
+                print(f"[*] Skipping [{account.get('name')}] [{model}]: backing off for {int(self.failure_backoff_seconds)}s after {attempt} un-hit attempts.")
+                with self._retry_lock:
+                    for m in account.get("models", []):
+                        m_slot = f"{account['id']}:{m.get('name')}"
+                        self._retry_after[m_slot] = time.time() + self.failure_backoff_seconds
             return None
         info = inspect_turn_state(state)
         if (not info.get("valid") or info.get("is_expired", True)
@@ -1971,6 +2031,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 continue
 
             models_to_harvest = []
+            cookie_refresh_models = []
             for model_cfg in account.get("models", []):
                 model = model_cfg["name"]
                 if only_model is not None and model != only_model:
@@ -1982,10 +2043,11 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 slot = f"{account['id']}:{model}"
                 if force:
                     self._forced_pending.add(slot)
-                needs_refresh = slot in self._forced_pending or not state
-                if state and not needs_refresh:
+
+                ticket_needs_refresh = slot in self._forced_pending or not state
+                if state and not ticket_needs_refresh:
                     info = inspect_turn_state(state)
-                    needs_refresh = (
+                    ticket_needs_refresh = (
                         not info.get("valid")
                         or info["is_expired"]
                         or info["remaining_minutes"] <= advance
@@ -1994,39 +2056,51 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                             and info["length"] != target_len
                         )
                     )
-                    # Live tests show routing cookies persist ~240s without continuous traffic.
-                    # Refresh proactively when cookie is within 60s of expiry.
-                    if not needs_refresh:
-                        cookie_exp = entry.get("cookie_expires_at")
-                        if cookie_exp:
-                            try:
-                                exp_dt = datetime.fromisoformat(str(cookie_exp).replace("Z", "+00:00"))
-                                now_dt = datetime.now(timezone.utc)
-                                if (exp_dt - now_dt).total_seconds() <= 60:
-                                    needs_refresh = True
-                            except Exception:
-                                needs_refresh = True
+
+                cookie_needs_refresh = False
+                if not ticket_needs_refresh and state:
+                    cookie_exp = entry.get("cookie_expires_at")
+                    if cookie_exp:
+                        try:
+                            exp_dt = datetime.fromisoformat(str(cookie_exp).replace("Z", "+00:00"))
+                            now_dt = datetime.now(timezone.utc)
+                            if (exp_dt - now_dt).total_seconds() <= 60:
+                                cookie_needs_refresh = True
+                        except Exception:
+                            cookie_needs_refresh = True
+
+                needs_refresh = ticket_needs_refresh or cookie_needs_refresh
                 if not needs_refresh:
                     self._renewal_started.pop(slot, None)
                     self._static_pending.pop(slot, None)
                     continue
 
-                # A pass that exhausts the whole pool is expensive (every proxy
-                # gets a full request timeout), so back off instead of retrying
-                # it on the very next tick.
                 slot = f"{account['id']}:{model}"
                 with self._retry_lock:
                     retry_at = self._retry_after.get(slot, 0.0)
                 if time.time() < retry_at:
                     if slot in self._short_retries:
                         self._continue_harvest = True
-                    print(
-                        f"[*] Skipping [{account.get('name')}] [{model}]: backing off for "
-                        f"{int(retry_at - time.time())}s after the last exhausted pass."
-                    )
+                    last_log = self._logged_skips.get(slot, 0)
+                    if time.time() - last_log > 60:
+                        self._logged_skips[slot] = time.time()
+                        print(
+                            f"[*] Skipping [{account.get('name')}] [{model}]: backing off for "
+                            f"{int(retry_at - time.time())}s after the last exhausted pass."
+                        )
                     continue
+                else:
+                    self._logged_skips.pop(slot, None)
 
-                models_to_harvest.append(model_cfg)
+                if ticket_needs_refresh:
+                    models_to_harvest.append(model_cfg)
+                elif cookie_needs_refresh:
+                    cookie_refresh_models.append(model_cfg)
+
+            # Routing cookies are account-wide: if only cookies need refresh across
+            # multiple models, harvest only ONE model to refresh the account routing cookie!
+            if not models_to_harvest and cookie_refresh_models:
+                models_to_harvest.append(cookie_refresh_models[0])
 
             if not models_to_harvest:
                 continue
@@ -2045,6 +2119,10 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                             self._retry_after[slot] = time.time() + self._harvest_retry_delay
                             if slot in self._short_retries:
                                 self._continue_harvest = True
+                            elif self._harvest_retry_delay > 0:
+                                for m in account.get("models", []):
+                                    m_name = m.get("name") if isinstance(m, dict) else m
+                                    self._retry_after[f"{account['id']}:{m_name}"] = time.time() + self._harvest_retry_delay
                     return False
                 with self._retry_lock:
                     self._retry_after.pop(slot, None)
@@ -2072,7 +2150,9 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 except Exception as exc:  # noqa: BLE001
                     print(f"[!] Write failed for [{model}]; keeping model pending.")
                     with self._retry_lock:
-                        self._retry_after[slot] = time.time() + self.failure_backoff_seconds
+                        for m in account.get("models", []):
+                            m_name = m.get("name") if isinstance(m, dict) else m
+                            self._retry_after[f"{account['id']}:{m_name}"] = time.time() + self.failure_backoff_seconds
                     return False
 
                 if ok:
@@ -2098,7 +2178,9 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 else:
                     print(f"[!] Write verification failed for [{account.get('name')}] [{model}]")
                     with self._retry_lock:
-                        self._retry_after[slot] = time.time() + self.failure_backoff_seconds
+                        for m in account.get("models", []):
+                            m_name = m.get("name") if isinstance(m, dict) else m
+                            self._retry_after[f"{account['id']}:{m_name}"] = time.time() + self.failure_backoff_seconds
                     return False
 
             # Models of one account are probed strictly one at a time. Firing
@@ -2108,15 +2190,23 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             # flags repeat probers. Serialising costs ~12s per account per hour
             # and removes that pattern entirely.
             for m_cfg in models_to_harvest:
+                slot = f"{account['id']}:{m_cfg['name']}"
+                with self._retry_lock:
+                    if self._retry_after.get(slot, 0) > time.time():
+                        continue
                 try:
                     attempted += 1
                     if _process_one(m_cfg):
                         updated += 1
+                    elif not (self._rotating and self._harvest_retry_delay == 0):
+                        break
                 except Exception:  # noqa: BLE001
-                    slot = f"{account['id']}:{m_cfg['name']}"
                     with self._retry_lock:
-                        self._retry_after[slot] = time.time() + self.failure_backoff_seconds
+                        for m in account.get("models", []):
+                            m_name = m.get("name") if isinstance(m, dict) else m
+                            self._retry_after[f"{account['id']}:{m_name}"] = time.time() + self.failure_backoff_seconds
                     print(f"[!] Harvest error for [{m_cfg.get('name')}]; waiting for recovery.")
+                    break
 
         if self._continue_harvest:
             # No per-pass rest. Only prevent a zero-latency response path from
@@ -2415,8 +2505,12 @@ def main() -> int:
                 now = time.time()
                 deadlines = [v - now for v in manager._retry_after.values() if v > now]
                 if deadlines:
-                    wait = min(interval, max(0.1, min(deadlines)))
+                    wait = min(interval, max(15.0, min(deadlines)))
                 manager._wake.wait(timeout=wait)
+                manager._wake.clear()
+            else:
+                delay = float(manager.config.get("rotating_continue_delay_seconds", 12.0))
+                manager._wake.wait(timeout=max(10.0, delay))
                 manager._wake.clear()
 
     manager.print_status_table()

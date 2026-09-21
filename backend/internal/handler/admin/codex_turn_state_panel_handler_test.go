@@ -38,6 +38,7 @@ func TestCodexPanelAdapterAllowlist(t *testing.T) {
 		allowed bool
 	}{
 		{http.MethodGet, "/api/state", true},
+		{http.MethodGet, "/api/accounts/7/models", true},
 		{http.MethodGet, "/api/jobs/job-1", true},
 		{http.MethodPost, "/api/proxy-sources", true},
 		{http.MethodPost, "/api/proxy-sources/" + codexPanelTestSourceID + "/enabled", true},

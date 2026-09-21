@@ -97,6 +97,7 @@ func (h *CodexTurnStatePanelHandler) doWithoutRedirect(req *http.Request) (*http
 }
 
 var codexPanelModelPath = regexp.MustCompile(`^/api/accounts/[1-9][0-9]*/[A-Za-z0-9_.:@-]{1,128}$`)
+var codexPanelAccountModelsPath = regexp.MustCompile(`^/api/accounts/[1-9][0-9]*/models$`)
 var codexPanelJobPath = regexp.MustCompile(`^/api/jobs/[A-Za-z0-9_-]{1,128}$`)
 var codexPanelSourcePath = regexp.MustCompile(`^/api/proxy-sources/[A-Za-z0-9_-]{1,128}$`)
 var codexPanelSourceEnabledPath = regexp.MustCompile(`^/api/proxy-sources/[a-f0-9]{32}/enabled$`)
@@ -111,7 +112,7 @@ func allowedCodexPanelPath(method, path string) bool {
 		case "/api/settings", "/api/state", "/api/degraded", "/api/stats", "/api/history", "/api/jobs", "/api/proxy-sources":
 			return true
 		}
-		return codexPanelJobPath.MatchString(path)
+		return codexPanelJobPath.MatchString(path) || codexPanelAccountModelsPath.MatchString(path)
 	case http.MethodPost:
 		return path == "/api/settings" || path == "/api/probe" || path == "/api/accounts" || path == "/api/proxy-sources" || codexPanelSourceEnabledPath.MatchString(path)
 	case http.MethodDelete:

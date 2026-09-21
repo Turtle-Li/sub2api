@@ -330,8 +330,15 @@ function tickCountdowns() {
   const elapsed = Math.max(0, (performance.now() - snapshotReceivedAt) / 1000);
   const state = {...latestState, accounts: latestState.accounts.map(account => ({...account,models: account.models.map(model => {
     const remaining = (Number.isFinite(model.remaining_seconds) ? model.remaining_seconds : Number(model.remaining_minutes) * 60) - elapsed;
-    return {...model,remaining_minutes:Math.max(0,remaining / 60),expired:model.expired || (model.valid && remaining <= 0),
-      backoff_seconds:Math.max(0,Math.ceil(model.backoff_seconds - elapsed)),next_probe_seconds:Math.max(0,Math.ceil(model.next_probe_seconds - elapsed))};
+    const cookieRemaining = Math.max(0, Math.ceil((model.cookie_remaining_seconds || 0) - elapsed));
+    return {...model,
+      remaining_minutes:Math.max(0,remaining / 60),
+      cookie_remaining_seconds: cookieRemaining,
+      cookie_valid: Boolean(model.cookie_present && cookieRemaining > 0),
+      expired:model.expired || (model.valid && remaining <= 0),
+      backoff_seconds:Math.max(0,Math.ceil(model.backoff_seconds - elapsed)),
+      next_probe_seconds:Math.max(0,Math.ceil(model.next_probe_seconds - elapsed))
+    };
   })}))};
   renderModels(state);
   applyHistory();
@@ -447,10 +454,15 @@ const VERDICT = {
 };
 
 function renewal(m) {
+  if (m.backoff_seconds > 0) return ['warn', `退避中 (${secs(m.backoff_seconds)})`];
+  if (m.cookie_present) {
+    if (!m.cookie_valid) return ['bad', 'Cookie已到期'];
+    if (m.cookie_remaining_seconds <= 60) return ['warn', 'Cookie续期中'];
+    return ['ok', '当前有效 · Cookie正常'];
+  }
   if (m.expired) return ['bad', '已过期'];
   if (!m.valid) return ['bad', '等待首次有效状态'];
   if (m.length_degraded) return ['warn', '长度不符，待续期'];
-  if (m.backoff_seconds > 0) return ['warn', '当前有效 · 退避重试'];
   if (m.next_probe_seconds <= 0) return ['warn', '当前有效 · 等待续期'];
   return ['ok', '当前有效'];
 }
@@ -487,13 +499,27 @@ function renderModels(state) {
       const pending = (state.jobs || []).some(j => j.account_id === acct.id && (!j.model || j.model === m.model) && ['queued','running','waiting'].includes(j.status));
       const next = m.backoff_seconds > 0
         ? `<span class="warn">退避 ${secs(m.backoff_seconds)}</span>`
-        : secs(m.next_probe_seconds);
+        : (m.next_probe_seconds > 0 ? secs(m.next_probe_seconds) : '<span class="warn">探针执行中</span>');
+      let remainingDisplay = '';
+      if (m.cookie_present) {
+        const cSecs = m.cookie_remaining_seconds || 0;
+        const cClass = cSecs <= 0 ? 'bad' : (cSecs <= 60 ? 'warn' : 'ok');
+        const cText = cSecs > 0 ? `Cookie: ${secs(cSecs)}` : 'Cookie: 已到期';
+        const sSecs = Math.ceil(Math.max(0, m.remaining_minutes || 0) * 60);
+        remainingDisplay = `<div><span class="${cClass}"><strong>${cText}</strong></span></div><div class="dim" style="font-size:11px" title="票据有效至 ${esc(m.expires_at || '')}">票据: ${secs(sSecs)}</div>`;
+      } else if (m.expired) {
+        remainingDisplay = '<span class="bad">已过期</span>';
+      } else if (m.valid) {
+        remainingDisplay = secs(Math.ceil(Math.max(0, m.remaining_minutes) * 60));
+      } else {
+        remainingDisplay = '<span class="bad">无</span>';
+      }
       rows.push(`<tr data-key="${acct.id}:${esc(m.model)}">
         <td>${esc(acct.name)}<span class="dim"> #${acct.id}</span></td>
         <td>${esc(m.model)}</td>
         <td><span class="tag ${renewal(m)[0]}">${renewal(m)[1]}</span></td>
         <td class="${lenCls}">${m.state_len || '—'}<span class="dim"> / ${m.target_len}</span></td>
-        <td>${m.expired ? '<span class="bad">已过期</span>' : (m.valid ? secs(Math.ceil(Math.max(0,m.remaining_minutes) * 60)) : '<span class="bad">无</span>')}</td>
+        <td>${remainingDisplay}</td>
         <td>${next}</td>
         <td>${m.pinned_updated_at ? esc(new Date(m.pinned_updated_at).toLocaleString()) : '—'}</td>
         ${state.degraded_enabled ? `<td><span class="tag ${cls}">${esc(label)}</span></td>` : ''}
