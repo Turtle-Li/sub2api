@@ -180,8 +180,17 @@
     <div class="row">
       <button id="chooseAccount">选择账号</button>
       <span id="selectedAccount" class="meta" role="status">尚未选择账号</span>
-      <label for="addModel">监控模型 <input aria-label="模型" id="addModel" list="monitorModelOptions" placeholder="选择或输入模型" value="gpt-6-astra"></label>
-      <datalist id="monitorModelOptions"><option value="gpt-6-astra"><option value="gpt-5.6-sol"><option value="gpt-5.6-terra"></datalist>
+      <label for="addModel">监控模型
+        <select aria-label="模型" id="addModel" style="min-width:160px">
+          <option value="gpt-6-astra">gpt-6-astra</option>
+          <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+          <option value="gpt-5.6-terra">gpt-5.6-terra</option>
+          <option value="gpt-6">gpt-6</option>
+          <option value="gpt-5.5">gpt-5.5</option>
+          <option value="__custom__">自定义输入...</option>
+        </select>
+      </label>
+      <input aria-label="自定义模型" id="addCustomModel" placeholder="输入自定义模型" style="display:none; width:140px">
       <label for="addLen">目标长度 <input aria-label="目标长度" id="addLen" min="1" max="8192" step="1" type="number" style="width:88px" value="292"></label>
       <button id="add">添加到监控</button>
     </div>
@@ -386,8 +395,41 @@ function notice(message, failed = false) {
 async function mutate(method, url, body) { return bridge(method, url, body); }
 
 let selectedAccount = null;
+async function loadAccountModels(accountId) {
+  try {
+    const data = await getJSON(`api/accounts/${accountId}/models`);
+    if (data && Array.isArray(data.models) && data.models.length > 0) {
+      const select = $('addModel');
+      const currentVal = select.value;
+      select.innerHTML = '';
+      data.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        select.appendChild(opt);
+      });
+      const customOpt = document.createElement('option');
+      customOpt.value = '__custom__';
+      customOpt.textContent = '自定义输入...';
+      select.appendChild(customOpt);
+      if (data.models.includes(currentVal)) {
+        select.value = currentVal;
+      } else {
+        select.value = data.models[0];
+      }
+      $('addCustomModel').style.display = 'none';
+      $('addCustomModel').value = '';
+    }
+  } catch (e) {
+    // If endpoint fails, keep default options
+  }
+}
+
 function renderSelectedAccount() {
   $('selectedAccount').textContent = selectedAccount ? selectedAccount.name : '尚未选择账号';
+  if (selectedAccount && selectedAccount.id) {
+    loadAccountModels(selectedAccount.id);
+  }
 }
 
 const secs = (n) => {
@@ -644,8 +686,11 @@ document.addEventListener('click', async (ev) => {
   if (btn.id === 'add') {
     try {
       if (!selectedAccount) throw new Error('请先选择 OpenAI OAuth 账号');
-      const model = $('addModel').value.trim();
-      if (!model) throw new Error('请填写模型');
+      let model = $('addModel').value;
+      if (model === '__custom__') {
+        model = $('addCustomModel').value.trim();
+      }
+      if (!model) throw new Error('请选择或填写模型');
       await mutate('POST', 'api/accounts', {
         account_id: selectedAccount.id,
         name: selectedAccount.name,
@@ -658,6 +703,12 @@ document.addEventListener('click', async (ev) => {
       await load();
     } catch (e) { notice(e.message, true); }
   }
+});
+
+$('addModel').addEventListener('change', () => {
+  const isCustom = $('addModel').value === '__custom__';
+  $('addCustomModel').style.display = isCustom ? 'inline-block' : 'none';
+  if (isCustom) $('addCustomModel').focus();
 });
 
 async function loadStats() {

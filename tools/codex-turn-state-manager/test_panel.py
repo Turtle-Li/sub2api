@@ -172,6 +172,33 @@ class PanelTests(support.AccountsAndRetryTests):
             conn.close()
         finally: server.shutdown(); server.server_close(); thread.join()
 
+    def test_get_account_models_endpoint(self):
+        manager, *_ = self.make()
+        manager.host.run_sql = mock.Mock(return_value='{"model_mapping":{"custom-codex":"custom-codex"},"model_whitelist":[],"pinned_states":{}}')
+        manager.host._rows = lambda out: [out]
+        models = manager.get_account_models(7)
+        self.assertIn("gpt-6-astra", models)
+        self.assertIn("custom-codex", models)
+
+        handler = type('TestHandler', (mod.PanelHandler,), {'manager': manager})
+        server = mod.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = http.client.HTTPConnection(*server.server_address, timeout=3)
+            conn.request('GET', '/api/accounts/7/models')
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            data = json.loads(response.read().decode())
+            self.assertEqual(data['account_id'], 7)
+            self.assertIn('gpt-6-astra', data['models'])
+            self.assertIn('custom-codex', data['models'])
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
 # Prevent duplicate inherited baseline tests (these run in their own module).
 for name in dir(support.AccountsAndRetryTests):
     if name.startswith('test_') and name not in PanelTests.__dict__:

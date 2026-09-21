@@ -11,13 +11,18 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
-const PinnedCodexTurnStatesExtraKey = "pinned_codex_turn_states"
+const (
+	PinnedCodexTurnStatesExtraKey    = "pinned_codex_turn_states"
+	PinnedCodexRoutingCookieExtraKey = "pinned_codex_routing_cookie"
+)
 
 type PinnedCodexTurnStateEntry struct {
-	State     string     `json:"state"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
-	StateLen  int        `json:"state_len,omitempty"`
+	State           string     `json:"state"`
+	Cookie          string     `json:"cookie,omitempty"`
+	CookieExpiresAt *time.Time `json:"cookie_expires_at,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
+	StateLen        int        `json:"state_len,omitempty"`
 }
 
 // GetPinnedCodexTurnStates 返回该账号配置的所有 pinned turn-state 映射表。
@@ -50,67 +55,112 @@ func (a *Account) GetPinnedCodexTurnStates() map[string]PinnedCodexTurnStateEntr
 	return result
 }
 
-// GetPinnedCodexTurnState 返回匹配指定 model 的未过期 pinned state。
-// 若无配置、已过期、非 OpenAI OAuth 账号或不匹配则返回空字符串。
-func (a *Account) GetPinnedCodexTurnState(model string) string {
+// GetActivePinnedCodexRoutingCookie 返回当前账号级别有效的活 Cookie（用于跨模型粘性路由兜底）。
+func (a *Account) GetActivePinnedCodexRoutingCookie() string {
 	if a == nil || !a.IsOpenAIOAuthLike() || a.Extra == nil {
 		return ""
 	}
+	// 1. 优先读取账号级独立路由 Cookie
+	if raw, ok := a.Extra[PinnedCodexRoutingCookieExtraKey]; ok && raw != nil {
+		if rawMap, ok := raw.(map[string]any); ok {
+			if cookie, ok := rawMap["cookie"].(string); ok && strings.TrimSpace(cookie) != "" {
+				exp := parseFlexibleTime(rawMap["expires_at"])
+				if exp == nil || time.Now().UTC().Before(*exp) {
+					return strings.TrimSpace(cookie)
+				}
+			}
+		}
+	}
+	// 2. 回退读取同账号任一未过期模型的活 Cookie
+	states := a.GetPinnedCodexTurnStates()
+	for _, entry := range states {
+		if entry.Cookie != "" {
+			if isPinnedCookieActive(entry) {
+				return entry.Cookie
+			}
+		}
+	}
+	return ""
+}
+
+// GetPinnedCodexTurnState 返回匹配指定 model 的未过期 pinned state。
+// 若无配置、已过期、非 OpenAI OAuth 账号或不匹配则返回空字符串。
+func (a *Account) GetPinnedCodexTurnState(model string) string {
+	state, _ := a.GetPinnedCodexTurnStateAndCookie(model)
+	return state
+}
+
+// GetPinnedCodexTurnStateAndCookie 返回匹配指定 model 的未过期 pinned state 及其关联的有效路由 Cookie。
+func (a *Account) GetPinnedCodexTurnStateAndCookie(model string) (string, string) {
+	if a == nil || !a.IsOpenAIOAuthLike() || a.Extra == nil {
+		return "", ""
+	}
 	normModel := strings.ToLower(strings.TrimSpace(model))
 	if normModel == "" {
-		return ""
+		return "", ""
 	}
 	states := a.GetPinnedCodexTurnStates()
 	if len(states) == 0 {
-		return ""
+		return "", ""
 	}
+
+	var matchedEntry *PinnedCodexTurnStateEntry
 
 	// 1. 精确匹配（最高优先级）
 	if entry, ok := states[normModel]; ok {
 		if isPinnedStateActive(entry) {
-			return entry.State
+			matchedEntry = &entry
 		}
-		return ""
 	}
 
 	// 2. 严格的带版本/日期快照别名匹配（按 pattern 长度降序，最长确定性命中）
-	// 例如：配置了 gpt-6-astra，请求模型为 gpt-6-astra-20260301（后缀为数字日期）可以安全命中；
-	// 但配置 gpt-6 绝不能命中 gpt-6-astra，配置 gpt-5 绝不能命中 gpt-5-codex。
-	type candidate struct {
-		pattern string
-		entry   PinnedCodexTurnStateEntry
-	}
-	var matches []candidate
-	for key, entry := range states {
-		if matchesPinnedModelPattern(normModel, key) {
-			matches = append(matches, candidate{pattern: key, entry: entry})
+	if matchedEntry == nil {
+		type candidate struct {
+			pattern string
+			entry   PinnedCodexTurnStateEntry
+		}
+		var matches []candidate
+		for key, entry := range states {
+			if matchesPinnedModelPattern(normModel, key) {
+				matches = append(matches, candidate{pattern: key, entry: entry})
+			}
+		}
+		if len(matches) > 0 {
+			sort.Slice(matches, func(i, j int) bool {
+				return len(matches[i].pattern) > len(matches[j].pattern)
+			})
+			for _, m := range matches {
+				if isPinnedStateActive(m.entry) {
+					e := m.entry
+					matchedEntry = &e
+					break
+				}
+			}
 		}
 	}
-	if len(matches) == 0 {
-		return ""
+
+	if matchedEntry == nil {
+		return "", ""
 	}
-	// 按 pattern 长度降序排序（最长最精确的优先）
-	sort.Slice(matches, func(i, j int) bool {
-		return len(matches[i].pattern) > len(matches[j].pattern)
-	})
-	for _, m := range matches {
-		if isPinnedStateActive(m.entry) {
-			return m.entry.State
-		}
+
+	// 提取路由 Cookie：优先该模型自身的 Cookie；若已过期，回退至账号级活 Cookie
+	cookie := ""
+	if isPinnedCookieActive(*matchedEntry) {
+		cookie = matchedEntry.Cookie
+	} else {
+		cookie = a.GetActivePinnedCodexRoutingCookie()
 	}
-	return ""
+
+	return matchedEntry.State, cookie
 }
 
 func matchesPinnedModelPattern(model, pattern string) bool {
 	if strings.EqualFold(model, pattern) {
 		return true
 	}
-	// 标签匹配：model 为 pattern:tag（例如 gpt-6-astra:latest）
 	if strings.HasPrefix(model, pattern+":") {
 		return true
 	}
-	// 日期/版本快照匹配：model 必须以 pattern + "-" 开头，且紧随其后的字符必须是数字（如 -20260301）
-	// 严格杜绝 gpt-6 匹配 gpt-6-astra，或 gpt-5 匹配 gpt-5-codex 的跨模型泄漏！
 	if strings.HasPrefix(model, pattern+"-") {
 		rem := strings.TrimPrefix(model, pattern+"-")
 		if rem != "" && rem[0] >= '0' && rem[0] <= '9' {
@@ -132,6 +182,18 @@ func isPinnedStateActive(entry PinnedCodexTurnStateEntry) bool {
 	return true
 }
 
+func isPinnedCookieActive(entry PinnedCodexTurnStateEntry) bool {
+	if entry.Cookie == "" {
+		return false
+	}
+	if entry.CookieExpiresAt != nil && !entry.CookieExpiresAt.IsZero() {
+		if time.Now().After(*entry.CookieExpiresAt) {
+			return false
+		}
+	}
+	return true
+}
+
 func parsePinnedCodexTurnStateEntry(v any) PinnedCodexTurnStateEntry {
 	switch val := v.(type) {
 	case string:
@@ -146,6 +208,21 @@ func parsePinnedCodexTurnStateEntry(v any) PinnedCodexTurnStateEntry {
 		entry := PinnedCodexTurnStateEntry{
 			State:    state,
 			StateLen: len(state),
+		}
+		if cookie, ok := val["cookie"].(string); ok {
+			entry.Cookie = strings.TrimSpace(cookie)
+		} else if cookiesMap, ok := val["cookies"].(map[string]any); ok {
+			var parts []string
+			for ck, cv := range cookiesMap {
+				if s, ok := cv.(string); ok && s != "" {
+					parts = append(parts, ck+"="+s)
+				}
+			}
+			sort.Strings(parts)
+			entry.Cookie = strings.Join(parts, "; ")
+		}
+		if exp := parseFlexibleTime(val["cookie_expires_at"]); exp != nil {
+			entry.CookieExpiresAt = exp
 		}
 		if sl, ok := val["state_len"].(float64); ok && sl > 0 {
 			entry.StateLen = int(sl)
@@ -199,12 +276,12 @@ func parseFlexibleTime(v any) *time.Time {
 }
 
 // applyPinnedCodexTurnState 若账号在对应 model 上配置了有效 pinned state，
-// 则将其强制写入请求头 x-codex-turn-state。
+// 则将其强制写入请求头 x-codex-turn-state，并在有活 Cookie 时安全注入路由 Cookie。
 func applyPinnedCodexTurnState(headers http.Header, account *Account, model string) bool {
 	if headers == nil || account == nil || strings.TrimSpace(model) == "" {
 		return false
 	}
-	pinnedState := account.GetPinnedCodexTurnState(model)
+	pinnedState, cookie := account.GetPinnedCodexTurnStateAndCookie(model)
 	if pinnedState == "" {
 		return false
 	}
@@ -213,7 +290,54 @@ func applyPinnedCodexTurnState(headers http.Header, account *Account, model stri
 		return false
 	}
 	headers.Set(openAICodexTurnStateHeader, pinnedState)
+
+	// 若存在有效的负载均衡路由凭证（__cflb, __oailb），注入 Cookie 标头（若客户端有旧的路由 cookie，予以更新替换）
+	if cookie != "" && httpguts.ValidHeaderFieldValue(cookie) {
+		existing := headers.Get("Cookie")
+		headers.Set("Cookie", mergeRoutingCookie(existing, cookie))
+	}
 	return true
+}
+
+func mergeRoutingCookie(existing, fresh string) string {
+	existing = strings.TrimSpace(existing)
+	fresh = strings.TrimSpace(fresh)
+	if existing == "" {
+		return fresh
+	}
+	if fresh == "" {
+		return existing
+	}
+	freshMap := make(map[string]bool)
+	var freshParts []string
+	for _, part := range strings.Split(fresh, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		freshParts = append(freshParts, part)
+		if eq := strings.IndexByte(part, '='); eq > 0 {
+			k := strings.TrimSpace(part[:eq])
+			freshMap[k] = true
+		}
+	}
+
+	var keptParts []string
+	for _, part := range strings.Split(existing, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if eq := strings.IndexByte(part, '='); eq > 0 {
+			k := strings.TrimSpace(part[:eq])
+			if freshMap[k] {
+				continue
+			}
+		}
+		keptParts = append(keptParts, part)
+	}
+	keptParts = append(keptParts, freshParts...)
+	return strings.Join(keptParts, "; ")
 }
 
 func (s *adminServiceImpl) GetPinnedCodexTurnStates(ctx context.Context, accountID int64) (map[string]PinnedCodexTurnStateEntry, error) {
@@ -266,6 +390,12 @@ func (s *adminServiceImpl) SetPinnedCodexTurnState(ctx context.Context, accountI
 			"state":     v.State,
 			"state_len": v.StateLen,
 		}
+		if v.Cookie != "" {
+			m["cookie"] = v.Cookie
+		}
+		if v.CookieExpiresAt != nil {
+			m["cookie_expires_at"] = v.CookieExpiresAt.Format(time.RFC3339)
+		}
 		if v.ExpiresAt != nil {
 			m["expires_at"] = v.ExpiresAt.Format(time.RFC3339)
 		}
@@ -310,6 +440,9 @@ func (s *adminServiceImpl) SetPinnedCodexTurnStates(ctx context.Context, account
 		if !httpguts.ValidHeaderFieldValue(state) {
 			return nil, infraerrors.BadRequest("INVALID_STATE_HEADER", "turn state contains invalid characters for HTTP header")
 		}
+		if entry.Cookie != "" && !httpguts.ValidHeaderFieldValue(entry.Cookie) {
+			return nil, infraerrors.BadRequest("INVALID_COOKIE_HEADER", "cookie contains invalid characters for HTTP header")
+		}
 	}
 
 	currentStates := account.GetPinnedCodexTurnStates()
@@ -332,6 +465,12 @@ func (s *adminServiceImpl) SetPinnedCodexTurnStates(ctx context.Context, account
 		m := map[string]any{
 			"state":     v.State,
 			"state_len": v.StateLen,
+		}
+		if v.Cookie != "" {
+			m["cookie"] = v.Cookie
+		}
+		if v.CookieExpiresAt != nil {
+			m["cookie_expires_at"] = v.CookieExpiresAt.Format(time.RFC3339)
 		}
 		if v.ExpiresAt != nil {
 			m["expires_at"] = v.ExpiresAt.Format(time.RFC3339)

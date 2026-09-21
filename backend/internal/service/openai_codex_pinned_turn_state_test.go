@@ -155,6 +155,99 @@ func TestAccountGetPinnedCodexTurnState(t *testing.T) {
 		require.False(t, applied2)
 		require.Equal(t, "existing-state", headers2.Get(openAICodexTurnStateHeader))
 	})
+
+	t.Run("cookie injection and merging", func(t *testing.T) {
+		cookieFuture := now.Add(240 * time.Second)
+		accWithCookie := &Account{
+			ID:       20,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				PinnedCodexTurnStatesExtraKey: map[string]any{
+					"gpt-6-astra": map[string]any{
+						"state":              "gAAAAAB_astra_292",
+						"state_len":          292,
+						"expires_at":         future.Format(time.RFC3339),
+						"cookie":             "__cflb=02DiuF1; __oailb=node-123",
+						"cookie_expires_at":  cookieFuture.Format(time.RFC3339),
+					},
+				},
+			},
+		}
+
+		// Fresh request without Cookie header
+		h1 := make(http.Header)
+		applied := applyPinnedCodexTurnState(h1, accWithCookie, "gpt-6-astra")
+		require.True(t, applied)
+		require.Equal(t, "gAAAAAB_astra_292", h1.Get(openAICodexTurnStateHeader))
+		require.Equal(t, "__cflb=02DiuF1; __oailb=node-123", h1.Get("Cookie"))
+
+		// Existing client cookie should be preserved and merged
+		h2 := make(http.Header)
+		h2.Set("Cookie", "session_id=xyz987; __cflb=old_val")
+		applied2 := applyPinnedCodexTurnState(h2, accWithCookie, "gpt-6-astra")
+		require.True(t, applied2)
+		mergedCookie := h2.Get("Cookie")
+		require.Contains(t, mergedCookie, "session_id=xyz987")
+		require.Contains(t, mergedCookie, "__cflb=02DiuF1")
+		require.Contains(t, mergedCookie, "__oailb=node-123")
+		require.NotContains(t, mergedCookie, "old_val")
+	})
+
+	t.Run("account-level fallback cookie when model has no cookie", func(t *testing.T) {
+		cookieFuture := now.Add(240 * time.Second)
+		accWithFallback := &Account{
+			ID:       21,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				PinnedCodexRoutingCookieExtraKey: map[string]any{
+					"cookie":     "__cflb=shared_fallback; __oailb=node-shared",
+					"expires_at": cookieFuture.Format(time.RFC3339),
+				},
+				PinnedCodexTurnStatesExtraKey: map[string]any{
+					"gpt-6-astra": map[string]any{
+						"state":      "gAAAAAB_astra_292",
+						"state_len":  292,
+						"expires_at": future.Format(time.RFC3339),
+						// No model-specific cookie
+					},
+				},
+			},
+		}
+
+		h := make(http.Header)
+		applied := applyPinnedCodexTurnState(h, accWithFallback, "gpt-6-astra")
+		require.True(t, applied)
+		require.Equal(t, "gAAAAAB_astra_292", h.Get(openAICodexTurnStateHeader))
+		require.Equal(t, "__cflb=shared_fallback; __oailb=node-shared", h.Get("Cookie"))
+	})
+
+	t.Run("expired cookie is omitted", func(t *testing.T) {
+		cookiePast := now.Add(-30 * time.Second)
+		accWithExpiredCookie := &Account{
+			ID:       22,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				PinnedCodexTurnStatesExtraKey: map[string]any{
+					"gpt-6-astra": map[string]any{
+						"state":             "gAAAAAB_astra_292",
+						"state_len":         292,
+						"expires_at":        future.Format(time.RFC3339),
+						"cookie":            "__cflb=expired_val",
+						"cookie_expires_at": cookiePast.Format(time.RFC3339),
+					},
+				},
+			},
+		}
+
+		h := make(http.Header)
+		applied := applyPinnedCodexTurnState(h, accWithExpiredCookie, "gpt-6-astra")
+		require.True(t, applied)
+		require.Equal(t, "gAAAAAB_astra_292", h.Get(openAICodexTurnStateHeader))
+		require.Empty(t, h.Get("Cookie"))
+	})
 }
 
 type mockPinnedTurnStateAccountRepo struct {

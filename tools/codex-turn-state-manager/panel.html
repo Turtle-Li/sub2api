@@ -87,7 +87,15 @@
     <div class="row">
       <input aria-label="账号 ID" id="addId" min="1" step="1" type="number" placeholder="账号 ID" style="width:100px">
       <input aria-label="账号名" id="addName" placeholder="账号名" style="width:170px">
-      <input aria-label="模型" id="addModel" placeholder="模型" style="width:150px" value="gpt-6-astra">
+      <select aria-label="模型" id="addModel" style="width:160px">
+        <option value="gpt-6-astra">gpt-6-astra</option>
+        <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+        <option value="gpt-5.6-terra">gpt-5.6-terra</option>
+        <option value="gpt-6">gpt-6</option>
+        <option value="gpt-5.5">gpt-5.5</option>
+        <option value="__custom__">自定义输入...</option>
+      </select>
+      <input aria-label="自定义模型" id="addCustomModel" placeholder="输入自定义模型" style="display:none; width:140px">
       <input aria-label="目标长度" id="addLen" min="1" max="8192" step="1" type="number" placeholder="目标长度" style="width:100px" value="292">
       <button id="add">加入探针清单</button>
     </div>
@@ -337,10 +345,15 @@ document.addEventListener('click', async (ev) => {
 
   if (btn.id === 'add') {
     try {
+      let model = $('addModel').value;
+      if (model === '__custom__') {
+        model = $('addCustomModel').value.trim();
+      }
+      if (!model) throw new Error('请选择或填写模型');
       await mutate('POST', '/api/accounts', {
         account_id: Number($('addId').value),
         name: $('addName').value.trim(),
-        model: $('addModel').value.trim(),
+        model: model,
         target_state_len: Number($('addLen').value),
       });
       notice('已加入探针清单。');
@@ -348,6 +361,41 @@ document.addEventListener('click', async (ev) => {
       await load();
     } catch (e) { notice(e.message, true); }
   }
+});
+
+async function loadAccountModelsForId(accountId) {
+  if (!accountId || accountId <= 0) return;
+  try {
+    const data = await getJSON(`api/accounts/${accountId}/models`);
+    if (data && Array.isArray(data.models) && data.models.length > 0) {
+      const select = $('addModel');
+      const currentVal = select.value;
+      select.innerHTML = '';
+      data.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        select.appendChild(opt);
+      });
+      const customOpt = document.createElement('option');
+      customOpt.value = '__custom__';
+      customOpt.textContent = '自定义输入...';
+      select.appendChild(customOpt);
+      if (data.models.includes(currentVal)) {
+        select.value = currentVal;
+      } else {
+        select.value = data.models[0];
+      }
+      $('addCustomModel').style.display = 'none';
+      $('addCustomModel').value = '';
+    }
+  } catch (e) {}
+}
+$('addId').addEventListener('change', () => loadAccountModelsForId(Number($('addId').value)));
+$('addModel').addEventListener('change', () => {
+  const isCustom = $('addModel').value === '__custom__';
+  $('addCustomModel').style.display = isCustom ? 'inline-block' : 'none';
+  if (isCustom) $('addCustomModel').focus();
 });
 
 async function loadStats() {

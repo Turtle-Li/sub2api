@@ -452,6 +452,8 @@ WHERE a.id = {int(account_id)}
         state: str,
         expires_at_iso: str,
         state_len: int,
+        cookie: str = "",
+        cookie_expires_at_iso: str = "",
     ) -> bool:
         """Merge one model's pinned state into accounts.extra.
 
@@ -474,24 +476,45 @@ WHERE a.id = {int(account_id)}
             raise ValueError(f"state exceeds {MAX_STATE_BYTES} bytes")
         if not is_valid_header_value(state):
             raise ValueError("state contains characters illegal in an HTTP header value")
+        if cookie and not is_valid_header_value(cookie):
+            cookie = ""
 
-        entry = {
-            model.lower(): {
-                "state": state,
-                "state_len": state_len,
-                "expires_at": expires_at_iso,
-                "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-            }
+        model_entry: Dict[str, Any] = {
+            "state": state,
+            "state_len": state_len,
+            "expires_at": expires_at_iso,
+            "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         }
+        if cookie:
+            model_entry["cookie"] = cookie
+            if cookie_expires_at_iso:
+                model_entry["cookie_expires_at"] = cookie_expires_at_iso
+
+        entry = {model.lower(): model_entry}
         encoded = base64.b64encode(
             json.dumps(entry, ensure_ascii=True).encode("utf-8")
         ).decode("ascii")
         if not BASE64_RE.match(encoded):
             raise RuntimeError("encoded payload failed its own alphabet check")
 
+        routing_cookie_sql = ""
+        if cookie:
+            cookie_payload = {
+                "pinned_codex_routing_cookie": {
+                    "cookie": cookie,
+                    "expires_at": cookie_expires_at_iso,
+                    "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                }
+            }
+            encoded_cookie = base64.b64encode(
+                json.dumps(cookie_payload, ensure_ascii=True).encode("utf-8")
+            ).decode("ascii")
+            routing_cookie_sql = f"|| convert_from(decode('{encoded_cookie}', 'base64'), 'UTF8')::jsonb"
+
         sql = f"""
 UPDATE accounts
 SET extra = COALESCE(extra, '{{}}'::jsonb)
+            {routing_cookie_sql}
             || jsonb_build_object(
                  'pinned_codex_turn_states',
                  COALESCE(extra->'pinned_codex_turn_states', '{{}}'::jsonb)
@@ -627,11 +650,38 @@ def probe_turn_state(
             with body_file.open("rb") as response_body:
                 body_excerpt = response_body.read(8192).decode("utf-8", errors="replace")
         diagnostic = classify_response(status_code, headers, body_excerpt, response_stage)
+
+        # Parse routing cookies (__cflb, __oailb) from Set-Cookie headers
+        raw_set_cookies = headers.get("set-cookie") or []
+        parsed_cookies: Dict[str, str] = {}
+        for sc in raw_set_cookies:
+            first_part = sc.split(";", 1)[0].strip()
+            if "=" in first_part:
+                k, v = first_part.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k and v:
+                    parsed_cookies[k] = v
+
+        routing_parts = []
+        for rk in ["__cflb", "__oailb"]:
+            if rk in parsed_cookies:
+                routing_parts.append(f"{rk}={parsed_cookies[rk]}")
+        routing_cookie_str = "; ".join(routing_parts)
+
+        # Live tests show routing cookies persist for ~240s without continuous traffic.
+        # Set expiry to 210s from now for safe operational buffer.
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        cookie_expires_at = (now_utc + timedelta(seconds=210)).isoformat() if routing_cookie_str else None
+
         return {
             "http_status": status_code,
             "diagnostic": diagnostic,
             "state": state,
             "state_len": len(state),
+            "cookie": routing_cookie_str,
+            "cookies": parsed_cookies,
+            "cookie_expires_at": cookie_expires_at,
             "served_model": (headers.get("openai-model") or [""])[-1].strip(),
             "retry_after": (headers.get("retry-after") or [""])[-1].strip(),
             "header_ms": int((time.monotonic() - started) * 1000),
@@ -1114,6 +1164,48 @@ class StateManager:
             overlay[key] = entry
             self._save_overlay(overlay)
         return True
+
+    def get_account_models(self, account_id: int) -> List[str]:
+        """Fetch models configured on this account (model_mapping, etc.) plus standard models."""
+        models_set = set()
+        standard_priority = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6", "gpt-5.5"]
+        for default_m in standard_priority:
+            models_set.add(default_m)
+
+        sql = f"""
+SELECT jsonb_build_object(
+  'model_mapping', COALESCE(credentials->'model_mapping', '{{}}'::jsonb),
+  'model_whitelist', COALESCE(credentials->'model_whitelist', '[]'::jsonb),
+  'pinned_states', COALESCE(extra->'pinned_codex_turn_states', '{{}}'::jsonb)
+)
+FROM accounts
+WHERE id = {int(account_id)} AND deleted_at IS NULL;
+"""
+        try:
+            rows = self.host._rows(self.host.run_sql(sql))
+            if rows:
+                data = json.loads(rows[0])
+                mm = data.get("model_mapping") or {}
+                if isinstance(mm, dict):
+                    for k in mm.keys():
+                        if k and isinstance(k, str) and MODEL_NAME_RE.fullmatch(k):
+                            models_set.add(k.lower())
+                mw = data.get("model_whitelist") or []
+                if isinstance(mw, list):
+                    for item in mw:
+                        if item and isinstance(item, str) and MODEL_NAME_RE.fullmatch(item):
+                            models_set.add(item.lower())
+                ps = data.get("pinned_states") or {}
+                if isinstance(ps, dict):
+                    for k in ps.keys():
+                        if k and isinstance(k, str) and MODEL_NAME_RE.fullmatch(k):
+                            models_set.add(k.lower())
+        except Exception as exc:
+            print(f"[!] get_account_models({account_id}) error: {exc}")
+
+        ordered = [m for m in standard_priority if m in models_set]
+        remaining = sorted([m for m in models_set if m not in standard_priority])
+        return ordered + remaining
 
     def enqueue_manual(self, account_id: int, model: Optional[str], force: bool) -> str:
         if model is not None and (not isinstance(model, str) or not MODEL_NAME_RE.fullmatch(model)):
@@ -1682,6 +1774,8 @@ class StateManager:
                 or len(state) > MAX_STATE_BYTES or not is_valid_header_value(state)):
             print(f"[*] [{model}] rejected invalid or insufficient-lifetime state.")
             return None
+        info["cookie"] = result.get("cookie", "")
+        info["cookie_expires_at"] = result.get("cookie_expires_at", "")
         return state, info, proxy
 
     def harvest(
@@ -1756,6 +1850,8 @@ class StateManager:
                     print("[REJECT: invalid or insufficient-lifetime state]")
                     continue
 
+                info["cookie"] = result.get("cookie", "")
+                info["cookie_expires_at"] = result.get("cookie_expires_at", "")
                 print("[HIT]")
                 return result["state"], info, proxy
         finally:
@@ -1898,6 +1994,18 @@ class StateManager:
                             and info["length"] != target_len
                         )
                     )
+                    # Live tests show routing cookies persist ~240s without continuous traffic.
+                    # Refresh proactively when cookie is within 60s of expiry.
+                    if not needs_refresh:
+                        cookie_exp = entry.get("cookie_expires_at")
+                        if cookie_exp:
+                            try:
+                                exp_dt = datetime.fromisoformat(str(cookie_exp).replace("Z", "+00:00"))
+                                now_dt = datetime.now(timezone.utc)
+                                if (exp_dt - now_dt).total_seconds() <= 60:
+                                    needs_refresh = True
+                            except Exception:
+                                needs_refresh = True
                 if not needs_refresh:
                     self._renewal_started.pop(slot, None)
                     self._static_pending.pop(slot, None)
@@ -1943,13 +2051,24 @@ class StateManager:
 
                 new_state, info, proxy = harvested
                 try:
-                    ok = self.host.write_pinned_state(
-                        account_id=int(account["id"]),
-                        model=model,
-                        state=new_state,
-                        expires_at_iso=info["expires_at_iso"],
-                        state_len=info["length"],
-                    )
+                    try:
+                        ok = self.host.write_pinned_state(
+                            account_id=int(account["id"]),
+                            model=model,
+                            state=new_state,
+                            expires_at_iso=info["expires_at_iso"],
+                            state_len=info["length"],
+                            cookie=info.get("cookie", ""),
+                            cookie_expires_at_iso=info.get("cookie_expires_at", ""),
+                        )
+                    except TypeError:
+                        ok = self.host.write_pinned_state(
+                            int(account["id"]),
+                            model,
+                            new_state,
+                            info["expires_at_iso"],
+                            info["length"],
+                        )
                 except Exception as exc:  # noqa: BLE001
                     print(f"[!] Write failed for [{model}]; keeping model pending.")
                     with self._retry_lock:
@@ -2121,6 +2240,10 @@ class PanelHandler(BaseHTTPRequestHandler):
                 self._send(200 if job else 404, job or {"error": "unknown job"})
             elif path == "/api/jobs":
                 self._send(200, self.manager.jobs())
+            elif re.match(r"^/api/accounts/\d+/models$", path):
+                account_id = int(path.split("/")[3])
+                models = self.manager.get_account_models(account_id)
+                self._send(200, {"account_id": account_id, "models": models})
             else:
                 self._send(404, {"error": "not found"})
         except (ValueError, TypeError):
