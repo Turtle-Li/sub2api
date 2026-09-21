@@ -852,7 +852,7 @@ class StateManager:
         except (OSError, ValueError, TypeError, AttributeError, KeyError):
             pass
         self.failure_backoff_seconds = int(
-            self.config.get("failure_backoff_seconds", 300)
+            self.config.get("failure_backoff_seconds", 30)
         )
         self._usage_lock = threading.Lock()
         # Guards _retry_after only. Writes need no lock: write_pinned_state does
