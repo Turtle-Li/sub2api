@@ -1538,6 +1538,9 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             )
         ready.sort(key=lambda item: item[0])
         resting.sort(key=lambda item: item[0])
+        if self.config.get("static_proxy_order") == "random":
+            random.SystemRandom().shuffle(ready)
+            random.SystemRandom().shuffle(resting)
         if resting and not ready:
             print(f"[*] All {len(resting)} proxies are within their cooldown; trying oldest first.")
         return [proxy for _, proxy in ready] + [proxy for _, proxy in resting]
@@ -1735,6 +1738,8 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             pending = [p for p in self.proxies if p not in self._dynamic_proxies]
             if self.config.get("static_proxy_order") == "random":
                 random.SystemRandom().shuffle(pending)
+                first_masked = mask_proxy(pending[0]) if pending else "none"
+                print(f"[*] [{model}] Shuffled {len(pending)} static proxies into random probe order (first: {first_masked}).", flush=True)
             self._static_pending[slot] = pending
         pending = self._static_pending[slot]
         if pending:
