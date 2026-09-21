@@ -1818,17 +1818,15 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
         self._record_diagnostic(slot, diagnostic, len(state))
         target = int(model_cfg.get("target_state_len", 292))
         if not state or (bool(model_cfg.get("require_exact_len", True)) and len(state) != target):
-            max_attempts = max(10, len([p for p in self.proxies if p not in self._dynamic_proxies]) + min(4, len(self._dynamic_proxies) * 2))
-            if attempt >= max_attempts:
+            if attempt >= max(16, len(self.proxies) * 2):
                 self._probe_attempts[slot] = 0
                 self._static_pending.pop(slot, None)
-                delay = min(int(self.failure_backoff_seconds), 20)
-                self._harvest_retry_delay = delay
-                print(f"[*] Skipping [{account.get('name')}] [{model}]: backing off for {delay}s after {attempt} un-hit attempts.")
+                self._harvest_retry_delay = self.failure_backoff_seconds
+                print(f"[*] Skipping [{account.get('name')}] [{model}]: backing off for {int(self.failure_backoff_seconds)}s after {attempt} un-hit attempts.")
                 with self._retry_lock:
                     for m in account.get("models", []):
                         m_slot = f"{account['id']}:{m.get('name')}"
-                        self._retry_after[m_slot] = time.time() + delay
+                        self._retry_after[m_slot] = time.time() + self.failure_backoff_seconds
             return None
         info = inspect_turn_state(state)
         if (not info.get("valid") or info.get("is_expired", True)
@@ -2066,7 +2064,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                         try:
                             exp_dt = datetime.fromisoformat(str(cookie_exp).replace("Z", "+00:00"))
                             now_dt = datetime.now(timezone.utc)
-                            if (exp_dt - now_dt).total_seconds() <= 120:
+                            if (exp_dt - now_dt).total_seconds() <= 60:
                                 cookie_needs_refresh = True
                         except Exception:
                             cookie_needs_refresh = True
