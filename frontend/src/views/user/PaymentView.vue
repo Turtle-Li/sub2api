@@ -237,7 +237,6 @@
         :payment-type="paymentState.paymentType"
         :pay-url="paymentState.payUrl"
         :checkout-frame-url="paymentState.checkoutFrameUrl"
-        :allow-checkout-frame="true"
         :order-type="paymentState.orderType"
         :currency="paymentState.currency || selectedCurrency"
         :out-trade-no="paymentState.outTradeNo"
@@ -1794,7 +1793,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     persistRecoverySnapshot(decision.recovery)
     paymentModalVisible.value = true
 
-    if (decision.kind === 'qr_waiting' || decision.kind === 'status_waiting' || decision.kind === 'checkout_frame') {
+    if (decision.kind === 'qr_waiting' || decision.kind === 'status_waiting') {
       closePreopenedPopup()
     }
 

@@ -195,7 +195,7 @@ describe('UserOrdersView pending payment lifecycle', () => {
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-qr-code')).toBe('https://qr.alipay.com/original-51')
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-pay-url')).toBe('https://pay.totools.cn/checkout/original-51')
     expect(wrapper.get('[data-test="resume-panel"]').attributes('data-checkout-frame-url')).toContain('openapi.alipay.com/gateway.do')
-    expect(wrapper.get('[data-test="resume-panel"]').attributes('data-allow-checkout-frame')).toBe('true')
+    expect(wrapper.get('[data-test="resume-panel"]').attributes('data-allow-checkout-frame')).toBeUndefined()
     wrapper.unmount()
   })
 

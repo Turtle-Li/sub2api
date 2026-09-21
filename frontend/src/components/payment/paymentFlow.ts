@@ -25,7 +25,6 @@ export type VisiblePaymentMethod = 'alipay' | 'wxpay' | 'stripe' | 'airwallex'
 export type StripeVisibleMethod = 'alipay' | 'wechat_pay'
 export type PaymentLaunchKind =
   | 'qr_waiting'
-  | 'checkout_frame'
   | 'status_waiting'
   | 'alipay_deep_link'
   | 'redirect_waiting'
@@ -507,13 +506,8 @@ export function decidePaymentLaunch(
     return { kind: 'qr_waiting', paymentState, recovery: paymentState }
   }
 
-  // 2. iframe 收银台: Desktop Alipay page-pay with qr_pay_mode=4 is embedded via iframe.
-  // Prohibit converting page.pay URLs into Canvas QR codes.
-  if (visibleMethod === 'alipay' && !context.isMobile && baseState.checkoutFrameUrl) {
-    return { kind: 'checkout_frame', paymentState: baseState, recovery: baseState }
-  }
-
-  // 3. 页面跳转: Hosted redirect or popup waiting card.
+  // 2. 页面跳转: Hosted redirect or popup waiting card. Alipay page.pay is a
+  // top-level checkout page; it must not be embedded in an iframe.
   if (baseState.payUrl) {
     return { kind: 'redirect_waiting', paymentState: baseState, recovery: baseState }
   }

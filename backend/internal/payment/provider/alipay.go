@@ -305,14 +305,12 @@ func (a *Alipay) createPagePayTrade(client *alipay.Client, req payment.CreatePay
 	if payURL == nil || !ValidateAlipayPayURL(payURL.String()) {
 		return nil, fmt.Errorf("alipay TradePagePay: invalid checkout URL")
 	}
-	checkoutFrameURL := payURL.String()
-	// Only PayURL and CheckoutFrameURL are exposed: alipay.trade.page.pay returns a checkout page URL
-	// that must be embedded in an iframe (or opened in a browser), not a scannable payment QR. Setting it
-	// as QRCode would let the frontend render an unscannable image.
+	// alipay.trade.page.pay returns a top-level checkout page. qr_pay_mode=4
+	// makes Alipay render its own QR inside that page; the URL is not a native
+	// qr_code payload and must not be encoded or embedded by the frontend.
 	return &payment.CreatePaymentResponse{
-		TradeNo:          req.OrderID,
-		PayURL:           checkoutFrameURL,
-		CheckoutFrameURL: checkoutFrameURL,
+		TradeNo: req.OrderID,
+		PayURL:  payURL.String(),
 	}, nil
 }
 

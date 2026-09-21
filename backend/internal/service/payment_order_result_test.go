@@ -134,7 +134,7 @@ func TestBuildCreateOrderResponseDefaultsToOrderCreated(t *testing.T) {
 	}
 }
 
-func TestBuildCreateOrderResponseExposesOnlyTrustedUnifiedAlipayFrame(t *testing.T) {
+func TestBuildCreateOrderResponseExposesOnlyTrustedAlipayFrame(t *testing.T) {
 	t.Parallel()
 
 	trustedFrame := "https://openapi.alipay.com/gateway.do?biz_content=%7B%22qr_pay_mode%22%3A%224%22%2C%22qrcode_width%22%3A%22224%22%7D&method=alipay.trade.page.pay&sign=test-sign&sign_type=RSA2"
@@ -147,7 +147,7 @@ func TestBuildCreateOrderResponseExposesOnlyTrustedUnifiedAlipayFrame(t *testing
 	}{
 		{name: "trusted unified Alipay", selection: &payment.InstanceSelection{ProviderKey: payment.TypeUnifiedPay}, paymentType: payment.TypeAlipay, frame: trustedFrame, want: trustedFrame},
 		{name: "untrusted unified Alipay", selection: &payment.InstanceSelection{ProviderKey: payment.TypeUnifiedPay}, paymentType: payment.TypeAlipay, frame: "https://attacker.example/frame"},
-		{name: "legacy Alipay provider", selection: &payment.InstanceSelection{ProviderKey: payment.TypeAlipay}, paymentType: payment.TypeAlipay, frame: trustedFrame},
+		{name: "direct Alipay provider", selection: &payment.InstanceSelection{ProviderKey: payment.TypeAlipay}, paymentType: payment.TypeAlipay, frame: trustedFrame, want: trustedFrame},
 		{name: "unified WeChat", selection: &payment.InstanceSelection{ProviderKey: payment.TypeUnifiedPay}, paymentType: payment.TypeWxpay, frame: trustedFrame},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -179,7 +179,7 @@ func TestBuildResetCardOrderResponseRevalidatesPersistedAlipayFrame(t *testing.T
 		{name: "expired pending order", status: OrderStatusPending, paymentType: payment.TypeAlipay, providerKey: payment.TypeUnifiedPay, frame: trustedFrame, expiresAt: now.Add(-time.Minute)},
 		{name: "terminal order", status: OrderStatusCompleted, paymentType: payment.TypeAlipay, providerKey: payment.TypeUnifiedPay, frame: trustedFrame, expiresAt: now.Add(time.Hour)},
 		{name: "unified WeChat", status: OrderStatusPending, paymentType: payment.TypeWxpay, providerKey: payment.TypeUnifiedPay, frame: trustedFrame, expiresAt: now.Add(time.Hour), wantPayURL: true},
-		{name: "legacy Alipay provider", status: OrderStatusPending, paymentType: payment.TypeAlipay, providerKey: payment.TypeAlipay, frame: trustedFrame, expiresAt: now.Add(time.Hour), wantPayURL: true},
+		{name: "direct Alipay provider", status: OrderStatusPending, paymentType: payment.TypeAlipay, providerKey: payment.TypeAlipay, frame: trustedFrame, wantFrame: trustedFrame, expiresAt: now.Add(time.Hour), wantPayURL: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			providerKey := testCase.providerKey

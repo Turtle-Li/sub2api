@@ -877,7 +877,7 @@ describe('PaymentView payment discount coupons', () => {
       code: 'SAVE2026',
       pay_amount: '80.00',
     })
-    expect(wrapper.findComponent(PaymentStatusPanel).props('allowCheckoutFrame')).toBe(true)
+    expect(wrapper.findComponent(PaymentStatusPanel).props('allowCheckoutFrame')).toBe(false)
   })
 
   it('keeps first-time coupon typing quiet and clears it after a successful payment without reloading', async () => {
@@ -2028,7 +2028,7 @@ describe('PaymentView payment recovery', () => {
     expect(popupLocation.href).not.toContain('openapi.alipay.com/gateway.do')
     expect(panel.props('qrCode')).toBe('')
     expect(panel.props('checkoutFrameUrl')).toContain('openapi.alipay.com/gateway.do')
-    expect(panel.props('allowCheckoutFrame')).toBe(true)
+    expect(panel.props('allowCheckoutFrame')).toBe(false)
 
     openSpy.mockRestore()
   })
