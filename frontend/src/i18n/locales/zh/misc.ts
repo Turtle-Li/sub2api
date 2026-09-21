@@ -727,6 +727,7 @@ export default {
       BENEFIT_REFUND_IN_FLIGHT: '该订单权益正在处理退款，请等待处理结果。',
 
       tooManyPending: '待支付订单过多（最多 {max} 个），请先完成或取消现有订单',
+      pendingOrderExists: '已有待支付订单，请继续支付或先取消该订单',
       cancelRateLimited: '取消订单过于频繁，请稍后再试',
       wechatH5NotAuthorized: '当前商户未开通微信 H5 支付，请在微信中打开当前页面继续支付。',
       wechatPaymentMpNotConfigured: '当前站点未完成公众号/JSAPI 支付配置，暂时无法在微信内直接拉起支付。',

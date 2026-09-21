@@ -1537,10 +1537,10 @@ function shouldPreopenHostedPopup(requestType: string, options: CreateOrderOptio
     return true
   }
 
-  // Native Alipay QR responses stay in the current dialog. If the merchant
-  // only provides page-pay, the same order can still be opened explicitly by
-  // the user from the dialog's fallback button.
-  return false
+  // Native Alipay QR responses close this popup after the launch decision. A
+  // page-pay response must use the same user-gesture popup at top level; it
+  // cannot be rendered safely in an iframe.
+  return visibleMethod === 'alipay'
 }
 
 async function handleSubmitRecharge() {
@@ -1651,6 +1651,10 @@ async function submitResetCardCheckout() {
 }
 
 async function createOrder(orderAmount: number, orderType: OrderType, planId?: number, options: CreateOrderOptions = {}) {
+  if (!options.isResume && paymentPhase.value === 'paying' && paymentState.value.orderId > 0) {
+    paymentModalVisible.value = true
+    return
+  }
   if (orderType !== 'reset_card' && !options.isResume && normalizeCouponCode(couponCode.value) && !options.coupon) {
     couponError.value = t('payment.coupon.reapply')
     return
@@ -1876,9 +1880,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         return
       }
       if (visibleMethod === 'alipay') {
-        // Desktop Alipay stays in the current dialog. The user can explicitly
-        // open the same order from its fallback button; no replacement order
-        // or automatic second popup is created.
+        openWindow(decision.paymentState.payUrl)
         return
       }
       openWindow(decision.paymentState.payUrl)
@@ -1892,7 +1894,14 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       errorHintMessage.value = ''
     } else if (apiErr.reason === 'TOO_MANY_PENDING') {
       const metadata = apiErr.metadata as Record<string, unknown> | undefined
-      errorMessage.value = t('payment.errors.tooManyPending', { max: metadata?.max || '' })
+      const existingOrderId = Number(metadata?.order_id)
+      if (existingOrderId > 0 && paymentPhase.value === 'paying' && paymentState.value.orderId === existingOrderId) {
+        paymentModalVisible.value = true
+        return
+      }
+      errorMessage.value = existingOrderId > 0
+        ? t('payment.errors.pendingOrderExists')
+        : t('payment.errors.tooManyPending', { max: metadata?.max || '' })
       errorHintMessage.value = ''
     } else if (apiErr.reason === 'CANCEL_RATE_LIMITED') {
       errorMessage.value = t('payment.errors.cancelRateLimited')

@@ -703,6 +703,7 @@ export default {
       BENEFIT_REFUND_IN_FLIGHT: 'A refund is already reserving these benefits. Wait for its result.',
 
       tooManyPending: 'Too many pending orders (max {max}). Please complete or cancel existing orders first.',
+      pendingOrderExists: 'You already have a pending order. Continue paying it or cancel it first.',
       cancelRateLimited: 'Too many cancellations. Please try again later.',
       wechatH5NotAuthorized: 'This merchant has not enabled WeChat H5 payment. Open this page in WeChat to continue.',
       wechatPaymentMpNotConfigured: 'This site has not completed WeChat MP/JSAPI payment setup, so in-app WeChat payment is unavailable right now.',

@@ -1538,6 +1538,44 @@ describe('PaymentView payment recovery', () => {
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('sub2_resume_321')
   })
 
+  it('reuses the existing pending order when the payment rail is submitted again', async () => {
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture())
+    createOrder.mockResolvedValue({
+      order_id: 654,
+      amount: 66,
+      pay_amount: 66,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=pending-654',
+      out_trade_no: 'sub2_pending_654',
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const rail = wrapper.findComponent(PaymentOrderRail)
+    rail.vm.$emit('submit')
+    await flushPromises()
+    expect(wrapper.findComponent(PaymentStatusPanel).props('orderId')).toBe(654)
+
+    rail.vm.$emit('submit')
+    await flushPromises()
+
+    expect(createOrder).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(PaymentStatusPanel).props('orderId')).toBe(654)
+  })
+
   it('never restores a stale hosted URL when authoritative resume says payment confirmation is pending', async () => {
     getCheckoutInfo.mockResolvedValue(checkoutInfoFixture())
     window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
@@ -1931,7 +1969,7 @@ describe('PaymentView payment recovery', () => {
     openSpy.mockRestore()
   })
 
-  it('keeps a desktop hosted Alipay fallback as redirect waiting in the current dialog without drawing QR', async () => {
+  it('opens a desktop hosted Alipay fallback in the top-level payment popup', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -1973,14 +2011,14 @@ describe('PaymentView payment recovery', () => {
     await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
-    expect(openSpy).not.toHaveBeenCalled()
-    expect(popupLocation.href).toBe('')
+    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(popupLocation.href).toBe('https://pay.totools.cn/checkout/reset-card-907')
     expect(panel.props('payUrl')).toBe('https://pay.totools.cn/checkout/reset-card-907')
     expect(panel.props('qrCode')).toBe('')
     openSpy.mockRestore()
   })
 
-  it('keeps a legacy Alipay checkout in the current dialog instead of opening it automatically', async () => {
+  it('opens a legacy Alipay page-pay checkout automatically without embedding it', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -2023,9 +2061,8 @@ describe('PaymentView payment recovery', () => {
     await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
-    expect(openSpy).not.toHaveBeenCalled()
-    expect(popupLocation.href).toBe('')
-    expect(popupLocation.href).not.toContain('openapi.alipay.com/gateway.do')
+    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(popupLocation.href).toBe('https://pay.totools.cn/checkout/reset-card-908')
     expect(panel.props('qrCode')).toBe('')
     expect(panel.props('checkoutFrameUrl')).toContain('openapi.alipay.com/gateway.do')
     expect(panel.props('allowCheckoutFrame')).toBe(false)

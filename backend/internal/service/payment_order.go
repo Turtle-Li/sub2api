@@ -1382,7 +1382,11 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		}
 		sel = lockedSelection
 	}
-	if err := s.checkPendingLimit(ctx, tx, req.UserID, cfg.MaxPendingOrders); err != nil {
+	if opts == nil || !opts.lockOwnerTestUser {
+		if err := s.checkSinglePendingOrder(ctx, tx, req.UserID); err != nil {
+			return nil, false, err
+		}
+	} else if err := s.checkPendingLimit(ctx, tx, req.UserID, cfg.MaxPendingOrders); err != nil {
 		return nil, false, err
 	}
 	if err := s.checkDailyLimit(ctx, tx, req.UserID, limitAmount, cfg.DailyLimit); err != nil {
@@ -1713,6 +1717,35 @@ func (s *PaymentService) checkPendingLimit(ctx context.Context, tx *dbent.Tx, us
 			WithMetadata(map[string]string{"max": strconv.Itoa(max)})
 	}
 	return nil
+}
+
+// checkSinglePendingOrder serializes customer order creation on the user row.
+// The lock is held by the surrounding transaction through the pending-order
+// check and insert, so concurrent requests cannot both observe an empty queue.
+func (s *PaymentService) checkSinglePendingOrder(ctx context.Context, tx *dbent.Tx, userID int64) error {
+	lockedUserQuery := tx.User.Query().Where(user.IDEQ(userID))
+	if tx.Client().Driver().Dialect() == dialect.Postgres {
+		lockedUserQuery.ForUpdate()
+	}
+	if _, err := lockedUserQuery.Only(ctx); err != nil {
+		return fmt.Errorf("lock payment order user: %w", err)
+	}
+
+	existing, err := tx.PaymentOrder.Query().
+		Where(paymentorder.UserIDEQ(userID), paymentorder.StatusEQ(OrderStatusPending)).
+		Order(paymentorder.ByID()).
+		First(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("find pending payment order: %w", err)
+	}
+	return infraerrors.TooManyRequests("TOO_MANY_PENDING", "too_many_pending").
+		WithMetadata(map[string]string{
+			"max":      "1",
+			"order_id": strconv.FormatInt(existing.ID, 10),
+		})
 }
 
 func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req CreateOrderRequest) map[string]any {
