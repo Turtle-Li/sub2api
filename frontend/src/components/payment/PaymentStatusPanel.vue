@@ -277,6 +277,46 @@
       </button>
     </template>
 
+    <!-- iframe Checkout Mode (e.g. Alipay page-pay with qr_pay_mode=4) -->
+    <template v-else-if="showCheckoutFrame">
+      <div class="card p-6">
+        <div class="flex flex-col items-center space-y-4">
+          <p class="text-lg font-semibold text-gray-900 dark:text-white">{{ scanTitle }}</p>
+          <p v-if="paymentReceivedHint" class="text-center text-sm text-amber-600 dark:text-amber-300">{{ paymentReceivedHint }}</p>
+          <div :class="['relative overflow-hidden rounded-lg border-2 p-2 bg-white flex items-center justify-center', qrBorderClass]" style="width: 236px; height: 236px;">
+            <div v-if="iframeLoading" class="absolute inset-0 flex items-center justify-center bg-white/90 dark:bg-dark-800/90 z-10">
+              <div class="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
+            </div>
+            <iframe
+              data-test="alipay-checkout-frame"
+              :src="currentCheckoutFrameUrl"
+              class="border-0"
+              style="width: 220px; height: 220px; overflow: hidden; display: block;"
+              scrolling="no"
+              frameborder="0"
+              @load="onIframeLoad"
+              @error="onIframeError"
+            />
+          </div>
+          <p v-if="scanHint" class="text-center text-sm text-gray-500 dark:text-gray-400">{{ scanHint }}</p>
+          <button v-if="currentHostedPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
+            {{ t('payment.qr.openPayWindow') }}
+          </button>
+        </div>
+      </div>
+      <div class="card p-4 text-center">
+        <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.qr.expiresIn') }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-gray-900 dark:text-white">{{ countdownDisplay }}</p>
+        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ waitingHint }}</p>
+      </div>
+      <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
+        {{ t('payment.qr.refreshStatus') }}
+      </button>
+      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="handleCancel">
+        {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
+      </button>
+    </template>
+
     <!-- Waiting for Popup/Redirect Mode -->
     <template v-else>
       <div class="card p-6">
@@ -315,7 +355,6 @@ import { currencySymbol, formatPaymentAmount, normalizePaymentCurrency } from '@
 import {
   clearQueuedPaymentCancellation,
   queuePaymentCancellation,
-  resolveAlipayQRCode,
   validateAlipayCheckoutFrameUrl,
   validateAlipayHostedCheckoutUrl,
   validateAlipayQRCode,
@@ -430,10 +469,34 @@ const currentHostedPayUrl = computed(() => (
   || resumedCheckoutFrameUrl.value
   || validateAlipayCheckoutFrameUrl(props.checkoutFrameUrl)
 ))
+const currentCheckoutFrameUrl = computed(() => {
+  const raw = resumedCheckoutFrameUrl.value ?? props.checkoutFrameUrl ?? ''
+  return validateAlipayCheckoutFrameUrl(raw)
+})
+const frameLoadError = ref(false)
+const iframeLoading = ref(true)
+
+function onIframeLoad() {
+  iframeLoading.value = false
+}
+
+function onIframeError() {
+  iframeLoading.value = false
+  frameLoadError.value = true
+}
+
 const isMobileAlipayDeepLink = computed(() => (resumedMobileAlipayDeepLink.value ?? props.mobileAlipayDeepLink) === true && isAlipay.value && !!qrUrl.value)
 const showQRCode = computed(() => (
   !!qrUrl.value
   && (!isMobileAlipayDeepLink.value || deepLinkFallbackVisible.value)
+))
+const showCheckoutFrame = computed(() => (
+  !showQRCode.value
+  && !isMobileAlipayDeepLink.value
+  && !isMobileDevice()
+  && props.allowCheckoutFrame === true
+  && !!currentCheckoutFrameUrl.value
+  && !frameLoadError.value
 ))
 
 const qrBorderClass = computed(() => {
@@ -520,6 +583,8 @@ function clearLaunchMaterial() {
   resumedPayUrl.value = ''
   resumedCheckoutFrameUrl.value = ''
   resumedMobileAlipayDeepLink.value = false
+  frameLoadError.value = false
+  iframeLoading.value = true
   alipayLauncher?.dispose()
   alipayLauncher = null
 }
@@ -587,7 +652,7 @@ function applyResumedPaymentLaunch(result: CreateOrderResult): ResumedPaymentLau
     return null
   }
   const qrCode = isBuiltInAlipayMethod(props.paymentType)
-    ? validateAlipayQRCode(result.qr_code) || (!isMobileDevice() ? resolveAlipayQRCode(result) : '')
+    ? validateAlipayQRCode(result.qr_code)
     : String(result.qr_code || '').trim()
   const payUrl = isBuiltInAlipayMethod(props.paymentType)
     ? validateAlipayHostedCheckoutUrl(result.pay_url) || validateAlipayCheckoutFrameUrl(result.pay_url)
@@ -602,6 +667,8 @@ function applyResumedPaymentLaunch(result: CreateOrderResult): ResumedPaymentLau
   resumedPayUrl.value = payUrl
   resumedCheckoutFrameUrl.value = checkoutFrameUrl
   resumedMobileAlipayDeepLink.value = result.alipay_mobile_precreate_deep_link === true
+  frameLoadError.value = false
+  iframeLoading.value = true
   deadlineReached.value = false
   if (countdownTimer) {
     clearInterval(countdownTimer)
@@ -1035,22 +1102,15 @@ function startSession() {
   const generation = lifecycleGeneration
   const fingerprint = currentSessionFingerprint()
   if (isAlipay.value) {
-    const providedQRCode = validateAlipayQRCode(props.qrCode)
-      || validateAlipayHostedCheckoutUrl(props.qrCode)
-      || validateAlipayCheckoutFrameUrl(props.qrCode)
-    qrUrl.value = providedQRCode || (!isMobileDevice()
-      ? resolveAlipayQRCode({
-        qr_code: props.qrCode,
-        pay_url: props.payUrl,
-        checkout_frame_url: props.checkoutFrameUrl,
-      })
-      : '')
+    qrUrl.value = validateAlipayQRCode(props.qrCode)
   } else {
     qrUrl.value = props.qrCode
   }
   resumedPayUrl.value = null
   resumedCheckoutFrameUrl.value = null
   resumedMobileAlipayDeepLink.value = null
+  frameLoadError.value = false
+  iframeLoading.value = true
   sessionVersion.value += 1
   remainingSeconds.value = 0
   cancelling.value = false

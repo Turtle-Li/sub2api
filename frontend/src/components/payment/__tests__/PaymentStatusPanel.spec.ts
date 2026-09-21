@@ -213,7 +213,8 @@ describe('PaymentStatusPanel', () => {
     expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.alipay.com/alipay-42', expect.any(Object))
   })
 
-  it('shows the hosted Alipay fallback button without embedding the provider page', async () => {
+  it('embeds a validated Alipay checkout frame when native QR is absent and allowCheckoutFrame is true', async () => {
+    const checkoutFrameUrl = alipayCheckoutFrameUrl()
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     const openSpy = vi.spyOn(window, 'open')
     const wrapper = mount(PaymentStatusPanel, {
@@ -221,7 +222,7 @@ describe('PaymentStatusPanel', () => {
         orderId: 42,
         qrCode: '',
         payUrl: 'https://pay.totools.cn/checkout/alipay-42',
-        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        checkoutFrameUrl,
         allowCheckoutFrame: true,
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
@@ -231,37 +232,17 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
-    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://pay.totools.cn/checkout/alipay-42', expect.any(Object))
-    expect(wrapper.get('button').text()).toContain('payment.qr.openPayWindow')
+    const iframe = wrapper.find('[data-test="alipay-checkout-frame"]')
+    expect(iframe.exists()).toBe(true)
+    expect(iframe.attributes('src')).toBe(checkoutFrameUrl)
+    expect(toCanvas).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.qr.openPayWindow')
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
   })
 
-  it('keeps a top-level fallback button for legacy frame-only recovery data', async () => {
-    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
-    const wrapper = mount(PaymentStatusPanel, {
-      props: {
-        orderId: 42,
-        qrCode: '',
-        checkoutFrameUrl: alipayCheckoutFrameUrl(),
-        allowCheckoutFrame: true,
-        expiresAt: '2099-01-01T12:30:00Z',
-        paymentType: 'alipay',
-        orderType: 'balance',
-      },
-      global: { stubs: { Icon: true } },
-    })
-
-    await flushPromises()
-
-    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
-    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), alipayCheckoutFrameUrl(), expect.any(Object))
-    expect(wrapper.get('button').text()).toContain('payment.qr.openPayWindow')
-    wrapper.unmount()
-  })
-
-  it('waits for the server result while the hosted fallback is open', async () => {
+  it('waits for the server result while the embedded checkout frame is open', async () => {
+    const checkoutFrameUrl = alipayCheckoutFrameUrl()
     pollOrderStatus
       .mockResolvedValueOnce(orderFactory('PENDING'))
       .mockResolvedValueOnce(orderFactory('COMPLETED'))
@@ -269,7 +250,7 @@ describe('PaymentStatusPanel', () => {
       props: {
         orderId: 42,
         qrCode: '',
-        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        checkoutFrameUrl,
         allowCheckoutFrame: true,
         expiresAt: '2099-01-01T12:30:00Z',
         paymentType: 'alipay',
@@ -279,14 +260,64 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
-    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), alipayCheckoutFrameUrl(), expect.any(Object))
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+    expect(toCanvas).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(3000)
     await flushPromises()
 
-    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
     expect(wrapper.emitted('success')).toHaveLength(1)
+  })
+
+  it('falls back to redirect waiting card without drawing canvas when allowCheckoutFrame is false', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        allowCheckoutFrame: false,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(toCanvas).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.qr.openPayWindow')
+    wrapper.unmount()
+  })
+
+  it('falls back to redirect waiting mode when iframe triggers an error', async () => {
+    const checkoutFrameUrl = alipayCheckoutFrameUrl()
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        checkoutFrameUrl,
+        allowCheckoutFrame: true,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const iframe = wrapper.find('[data-test="alipay-checkout-frame"]')
+    expect(iframe.exists()).toBe(true)
+
+    await iframe.trigger('error')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(toCanvas).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.qr.openPayWindow')
   })
 
   it('does not use an Alipay checkout frame for WeChat QR payments', async () => {

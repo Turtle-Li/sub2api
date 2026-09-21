@@ -13,7 +13,8 @@ import (
 const paymentOrderCheckoutFrameURLSnapshotKey = "checkout_frame_url"
 
 func paymentOrderCheckoutFrameURLFromProviderResponse(selection *payment.InstanceSelection, paymentType string, response *payment.CreatePaymentResponse) string {
-	if selection == nil || response == nil || strings.TrimSpace(selection.ProviderKey) != payment.TypeUnifiedPay ||
+	if selection == nil || response == nil ||
+		(strings.TrimSpace(selection.ProviderKey) != payment.TypeUnifiedPay && strings.TrimSpace(selection.ProviderKey) != payment.TypeAlipay) ||
 		payment.GetBasePaymentType(paymentType) != payment.TypeAlipay {
 		return ""
 	}
@@ -24,7 +25,8 @@ func paymentOrderCheckoutFrameURLFromProviderResponse(selection *payment.Instanc
 // before it reaches an authenticated caller. Older rows simply have no value.
 func paymentOrderCheckoutFrameURLFromSnapshot(order *dbent.PaymentOrder) string {
 	if order == nil || order.Status != OrderStatusPending || !order.ExpiresAt.After(time.Now()) ||
-		!paymentOrderUsesUnifiedPay(order) || payment.GetBasePaymentType(order.PaymentType) != payment.TypeAlipay {
+		(!paymentOrderUsesUnifiedPay(order) && !paymentOrderUsesAlipay(order)) ||
+		payment.GetBasePaymentType(order.PaymentType) != payment.TypeAlipay {
 		return ""
 	}
 	return unifiedpay.AlipayEmbeddedCheckoutFrameURL(psSnapshotStringValue(order.ProviderSnapshot[paymentOrderCheckoutFrameURLSnapshotKey]))

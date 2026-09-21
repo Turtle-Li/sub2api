@@ -1984,12 +1984,14 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	}
 	sanitizeCreatePaymentResponseDetails(pr)
 	providerSnapshot := order.ProviderSnapshot
-	if sel.ProviderKey == payment.TypeUnifiedPay {
+	if sel.ProviderKey == payment.TypeUnifiedPay || pr.CheckoutFrameURL != "" {
 		providerSnapshot = clonePaymentOrderSnapshot(providerSnapshot)
 		if providerSnapshot == nil {
 			providerSnapshot = make(map[string]any)
 		}
-		providerSnapshot["payment_order_id"] = strings.TrimSpace(pr.TradeNo)
+		if sel.ProviderKey == payment.TypeUnifiedPay {
+			providerSnapshot["payment_order_id"] = strings.TrimSpace(pr.TradeNo)
+		}
 		if frameURL := paymentOrderCheckoutFrameURLFromProviderResponse(sel, req.PaymentType, pr); frameURL != "" {
 			providerSnapshot[paymentOrderCheckoutFrameURLSnapshotKey] = frameURL
 		}

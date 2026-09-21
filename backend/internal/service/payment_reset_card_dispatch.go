@@ -721,9 +721,9 @@ func (s *PaymentService) finishResetCardProviderSuccess(ctx context.Context, ord
 	}
 	if sel.ProviderKey == payment.TypeUnifiedPay {
 		snapshot["payment_order_id"] = strings.TrimSpace(providerResp.TradeNo)
-		if frameURL := paymentOrderCheckoutFrameURLFromProviderResponse(sel, req.PaymentType, providerResp); frameURL != "" {
-			snapshot[paymentOrderCheckoutFrameURLSnapshotKey] = frameURL
-		}
+	}
+	if frameURL := paymentOrderCheckoutFrameURLFromProviderResponse(sel, req.PaymentType, providerResp); frameURL != "" {
+		snapshot[paymentOrderCheckoutFrameURLSnapshotKey] = frameURL
 	}
 	if completeWechatJSAPIPayload(providerResp.JSAPI) {
 		snapshot[resetCardCheckoutSnapshotKey] = resetCardCheckoutSnapshot{

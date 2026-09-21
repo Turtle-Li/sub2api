@@ -250,6 +250,12 @@ func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {
 		if param.TimeoutExpress != "10m" {
 			t.Fatalf("page pay timeout_express = %q, want 10m", param.TimeoutExpress)
 		}
+		if param.QRPayMode != "4" {
+			t.Fatalf("qr_pay_mode = %q, want 4", param.QRPayMode)
+		}
+		if param.QRCodeWidth != "220" {
+			t.Fatalf("qrcode_width = %q, want 220", param.QRCodeWidth)
+		}
 		return url.Parse("https://openapi.alipay.com/gateway.do?page-pay")
 	}
 	alipayTradeWapPay = func(client *alipay.Client, param alipay.TradeWapPay) (*url.URL, error) {
@@ -278,6 +284,9 @@ func TestCreateTradeUsesPagePayForDesktop(t *testing.T) {
 	}
 	if resp.PayURL == "" {
 		t.Fatal("expected pay_url for desktop page pay")
+	}
+	if resp.CheckoutFrameURL != "https://openapi.alipay.com/gateway.do?page-pay" {
+		t.Fatalf("checkout_frame_url = %q, want https://openapi.alipay.com/gateway.do?page-pay", resp.CheckoutFrameURL)
 	}
 	// page.pay returns a checkout page URL, not a scannable QR payload —
 	// it must never be exposed via QRCode (the frontend would render an
@@ -369,6 +378,9 @@ func TestCreateTradeRedirectModeSkipsPrecreate(t *testing.T) {
 	}
 	if resp.PayURL == "" {
 		t.Fatal("expected pay_url for redirect mode")
+	}
+	if resp.CheckoutFrameURL != "https://openapi.alipay.com/gateway.do?page-pay" {
+		t.Fatalf("checkout_frame_url = %q, want https://openapi.alipay.com/gateway.do?page-pay", resp.CheckoutFrameURL)
 	}
 	if resp.QRCode != "" {
 		t.Fatalf("qr_code = %q, want empty for redirect mode", resp.QRCode)

@@ -1794,7 +1794,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     persistRecoverySnapshot(decision.recovery)
     paymentModalVisible.value = true
 
-    if (decision.kind === 'qr_waiting' || decision.kind === 'status_waiting') {
+    if (decision.kind === 'qr_waiting' || decision.kind === 'status_waiting' || decision.kind === 'checkout_frame') {
       closePreopenedPopup()
     }
 

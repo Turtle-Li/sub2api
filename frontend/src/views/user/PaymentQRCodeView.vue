@@ -9,6 +9,7 @@
         :expires-at="expiresAt"
         :payment-type="paymentType"
         :pay-url="payUrl"
+        :checkout-frame-url="checkoutFrameUrl"
         :order-type="orderType"
         :currency="currency"
         :out-trade-no="outTradeNo"
@@ -50,6 +51,7 @@ const qrCode = queryString('qr') || queryString('qr_code')
 const expiresAt = queryString('expires_at')
 const paymentType = queryString('payment_type')
 const payUrl = queryString('pay_url')
+const checkoutFrameUrl = queryString('checkout_frame_url')
 const orderType = queryString('order_type')
 const currency = queryString('currency')
 const outTradeNo = queryString('out_trade_no')

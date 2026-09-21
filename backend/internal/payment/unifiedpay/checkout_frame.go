@@ -42,7 +42,7 @@ func AlipayEmbeddedCheckoutFrameURL(raw string) string {
 		QRCodeWidth string `json:"qrcode_width"`
 	}
 	if strictUnmarshalObject([]byte(bizContent), &businessContent, false) != nil ||
-		businessContent.QRPayMode != "4" || businessContent.QRCodeWidth != "224" {
+		businessContent.QRPayMode != "4" || (businessContent.QRCodeWidth != "220" && businessContent.QRCodeWidth != "224") {
 		return ""
 	}
 	return raw

@@ -36,6 +36,16 @@ func paymentOrderUsesUnifiedPay(order *dbent.PaymentOrder) bool {
 	return strings.TrimSpace(psStringValue(order.ProviderKey)) == payment.TypeUnifiedPay
 }
 
+func paymentOrderUsesAlipay(order *dbent.PaymentOrder) bool {
+	if order == nil {
+		return false
+	}
+	if snapshot := psOrderProviderSnapshot(order); snapshot != nil && snapshot.ProviderKey == payment.TypeAlipay {
+		return true
+	}
+	return strings.TrimSpace(psStringValue(order.ProviderKey)) == payment.TypeAlipay
+}
+
 func psOrderProviderSnapshot(order *dbent.PaymentOrder) *paymentOrderProviderSnapshot {
 	if order == nil || len(order.ProviderSnapshot) == 0 {
 		return nil

@@ -60,7 +60,7 @@ function alipayCheckoutFrameUrl(options: {
   url.searchParams.set('biz_content', JSON.stringify({
     out_trade_no: 'sub2_101',
     qr_pay_mode: options.qrPayMode ?? '4',
-    qrcode_width: options.qrcodeWidth ?? '224',
+    qrcode_width: options.qrcodeWidth ?? '220',
   }))
   url.searchParams.set('sign_type', options.signType || 'RSA2')
   url.searchParams.set('sign', options.sign ?? 'signed-payload')
@@ -113,6 +113,13 @@ describe('validateAlipayCheckoutFrameUrl', () => {
   it('accepts only the signed Alipay page-pay QR endpoint', () => {
     const valid = alipayCheckoutFrameUrl()
     expect(validateAlipayCheckoutFrameUrl(valid)).toBe(valid)
+  })
+
+  it('accepts both 220 and 224 qrcode_width values', () => {
+    const url220 = alipayCheckoutFrameUrl({ qrcodeWidth: '220' })
+    const url224 = alipayCheckoutFrameUrl({ qrcodeWidth: '224' })
+    expect(validateAlipayCheckoutFrameUrl(url220)).toBe(url220)
+    expect(validateAlipayCheckoutFrameUrl(url224)).toBe(url224)
   })
 
   it.each([
@@ -203,21 +210,18 @@ describe('resolveAlipayQRCode', () => {
     })).toBe('https://qr.alipay.com/native-101')
   })
 
-  it('uses the same order hosted URL when native QR data is absent', () => {
+  it('prohibits converting hosted checkout URLs or frame URLs into QR code strings', () => {
     expect(resolveAlipayQRCode({
       qr_code: '',
       pay_url: 'https://pay.totools.cn/checkout/101',
       checkout_frame_url: alipayCheckoutFrameUrl(),
-    })).toBe('https://pay.totools.cn/checkout/101')
-  })
+    })).toBe('')
 
-  it('falls back to the signed page-pay URL when only frame data is available', () => {
-    const checkoutFrameUrl = alipayCheckoutFrameUrl()
     expect(resolveAlipayQRCode({
       qr_code: '',
       pay_url: '',
-      checkout_frame_url: checkoutFrameUrl,
-    })).toBe(checkoutFrameUrl)
+      checkout_frame_url: alipayCheckoutFrameUrl(),
+    })).toBe('')
   })
 })
 
@@ -367,7 +371,7 @@ describe('decidePaymentLaunch', () => {
     expect(decision.paymentState.payUrl).toBe('https://openapi.alipay.com/gateway.do?page-pay')
   })
 
-  it('allows an explicit mobile QR mode to use the same hosted order URL', () => {
+  it('keeps mobile Alipay without native QR as redirect', () => {
     const decision = decidePaymentLaunch(createOrderResult({
       pay_url: 'https://pay.totools.cn/checkout/mobile-session',
       payment_mode: 'qrcode',
@@ -378,8 +382,9 @@ describe('decidePaymentLaunch', () => {
       forceQRCode: true,
     })
 
-    expect(decision.kind).toBe('qr_waiting')
-    expect(decision.paymentState.qrCode).toBe('https://pay.totools.cn/checkout/mobile-session')
+    expect(decision.kind).toBe('redirect_waiting')
+    expect(decision.paymentState.qrCode).toBe('')
+    expect(decision.paymentState.payUrl).toBe('https://pay.totools.cn/checkout/mobile-session')
   })
 
   it('keeps a non-Alipay hosted URL as a redirect', () => {
@@ -397,7 +402,7 @@ describe('decidePaymentLaunch', () => {
     expect(decision.paymentState.qrCode).toBe('')
   })
 
-  it('encodes a hosted Alipay checkout in the existing QR dialog', () => {
+  it('routes desktop Alipay with checkout_frame_url to checkout_frame mode', () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     const decision = decidePaymentLaunch(createOrderResult({
       payment_mode: 'redirect',
@@ -409,14 +414,14 @@ describe('decidePaymentLaunch', () => {
       isMobile: false,
     })
 
-    expect(decision.kind).toBe('qr_waiting')
+    expect(decision.kind).toBe('checkout_frame')
     expect(decision.paymentState.checkoutFrameUrl).toBe(checkoutFrameUrl)
     expect(decision.recovery.checkoutFrameUrl).toBe(checkoutFrameUrl)
-    expect(decision.paymentState.qrCode).toBe('https://pay.totools.cn/checkout/hosted-session')
+    expect(decision.paymentState.qrCode).toBe('')
     expect(decision.paymentState.payUrl).toBe('https://pay.totools.cn/checkout/hosted-session')
   })
 
-  it('uses a signed frame URL as QR content when the hosted URL is absent', () => {
+  it('routes desktop Alipay to checkout_frame mode even when pay_url is absent', () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     const decision = decidePaymentLaunch(createOrderResult({
       payment_mode: 'redirect',
@@ -428,8 +433,9 @@ describe('decidePaymentLaunch', () => {
       isMobile: false,
     })
 
-    expect(decision.kind).toBe('qr_waiting')
-    expect(decision.paymentState.qrCode).toBe(checkoutFrameUrl)
+    expect(decision.kind).toBe('checkout_frame')
+    expect(decision.paymentState.qrCode).toBe('')
+    expect(decision.paymentState.checkoutFrameUrl).toBe(checkoutFrameUrl)
   })
 
   it('returns wechat oauth launch when backend requires in-app authorization', () => {

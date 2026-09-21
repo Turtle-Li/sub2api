@@ -25,6 +25,7 @@ export type VisiblePaymentMethod = 'alipay' | 'wxpay' | 'stripe' | 'airwallex'
 export type StripeVisibleMethod = 'alipay' | 'wechat_pay'
 export type PaymentLaunchKind =
   | 'qr_waiting'
+  | 'checkout_frame'
   | 'status_waiting'
   | 'alipay_deep_link'
   | 'redirect_waiting'
@@ -243,7 +244,7 @@ export function validateAlipayCheckoutFrameUrl(value: unknown): string {
       !biz
       || Array.isArray(biz)
       || String(biz.qr_pay_mode) !== '4'
-      || String(biz.qrcode_width) !== '224'
+      || (String(biz.qrcode_width) !== '220' && String(biz.qrcode_width) !== '224')
     ) {
       return ''
     }
@@ -330,23 +331,14 @@ export function validateAlipayHostedCheckoutUrl(value: unknown): string {
 
 /**
  * Return the value that the Alipay QR renderer should encode for one order.
- * Native qr_code data wins. When a merchant only exposes page-pay, the
- * signed/hosted checkout URL is still a real scannable URL and keeps the
- * original order; it never triggers a replacement order.
+ * Native qr_code data (https://qr.alipay.com/...) is strictly required.
+ * Prohibits encoding page.pay hosted checkout URLs or iframe frame URLs as a QR code string.
  */
 export function resolveAlipayQRCode(
   result: Pick<CreateOrderResult, 'qr_code' | 'pay_url' | 'checkout_frame_url'>,
-  options: { allowHostedCheckout?: boolean } = {},
+  _options: { allowHostedCheckout?: boolean } = {},
 ): string {
-  const nativeQRCode = validateAlipayQRCode(result.qr_code)
-  if (nativeQRCode) return nativeQRCode
-
-  if (options.allowHostedCheckout === false) return ''
-
-  const hostedCheckoutURL = validateAlipayHostedCheckoutUrl(result.pay_url)
-  if (hostedCheckoutURL) return hostedCheckoutURL
-
-  return validateAlipayCheckoutFrameUrl(result.checkout_frame_url)
+  return validateAlipayQRCode(result.qr_code)
 }
 
 export function normalizeVisibleMethod(method: string): VisiblePaymentMethod | '' {
@@ -421,8 +413,8 @@ export function decidePaymentLaunch(
 ): PaymentLaunchDecision {
   const visibleMethod = normalizeVisibleMethod(context.visibleMethod) || context.visibleMethod
   const nativeQRCode = String(result.qr_code || '').trim()
-  const alipayQRCode = visibleMethod === 'alipay'
-    ? resolveAlipayQRCode(result, { allowHostedCheckout: !context.isMobile || context.forceQRCode === true })
+  const effectiveQRCode = visibleMethod === 'alipay'
+    ? resolveAlipayQRCode(result)
     : nativeQRCode
   const payUrl = visibleMethod === 'alipay'
     ? validateAlipayHostedCheckoutUrl(result.pay_url) || validateAlipayCheckoutFrameUrl(result.pay_url)
@@ -430,7 +422,7 @@ export function decidePaymentLaunch(
   const baseState = createPaymentRecoverySnapshot({
     orderId: result.order_id,
     amount: result.amount,
-    qrCode: nativeQRCode,
+    qrCode: effectiveQRCode,
     expiresAt: result.expires_at || '',
     paymentType: visibleMethod,
     payUrl,
@@ -507,17 +499,21 @@ export function decidePaymentLaunch(
     return { kind: 'alipay_deep_link', paymentState: baseState, recovery: baseState }
   }
 
-  // A native QR payload is authoritative. Alipay page-pay has no native
-  // payload on merchants without face-to-face precreate, so use the same
-  // order's hosted checkout URL as the QR content and keep it in this dialog.
-  // This avoids an iframe block and never creates a second financial order.
-  if (alipayQRCode) {
-    const paymentState = baseState.qrCode === alipayQRCode
+  // 1. 码串绘制: A native scannable QR payload is authoritative (WeChat Native or Alipay precreate).
+  if (effectiveQRCode) {
+    const paymentState = baseState.qrCode === effectiveQRCode
       ? baseState
-      : { ...baseState, qrCode: alipayQRCode }
+      : { ...baseState, qrCode: effectiveQRCode }
     return { kind: 'qr_waiting', paymentState, recovery: paymentState }
   }
 
+  // 2. iframe 收银台: Desktop Alipay page-pay with qr_pay_mode=4 is embedded via iframe.
+  // Prohibit converting page.pay URLs into Canvas QR codes.
+  if (visibleMethod === 'alipay' && !context.isMobile && baseState.checkoutFrameUrl) {
+    return { kind: 'checkout_frame', paymentState: baseState, recovery: baseState }
+  }
+
+  // 3. 页面跳转: Hosted redirect or popup waiting card.
   if (baseState.payUrl) {
     return { kind: 'redirect_waiting', paymentState: baseState, recovery: baseState }
   }
