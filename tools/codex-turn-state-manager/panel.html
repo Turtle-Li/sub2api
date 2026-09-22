@@ -51,12 +51,19 @@
 <header>
   <h1>Codex 续期监控</h1>
   <span class="meta" id="meta">加载中…</span>
+  <div style="display:flex; align-items:center; gap:8px; margin-left:12px;">
+    <span class="tag dim" id="probeStatusTag">读取中…</span>
+    <button id="toggleProbingBtn" style="font-weight:600">暂停探针</button>
+  </div>
   <span style="flex:1"></span>
   <button id="refresh">刷新</button>
 </header>
 
 <main>
   <div id="notice" role="status" aria-live="polite" hidden></div>
+  <div id="probingPausedBanner" style="background:#2a1b04; border:1px solid var(--warn); color:#e3b341; padding:10px 14px; border-radius:6px; font-size:13px; line-height:1.5" hidden>
+    ⚠️ <strong>探针自动巡检已暂停</strong>：系统已停止所有后台自动探测与会话保活请求，避免占用代理或造成上游限流。如需单次测试，可点击下方各模型的“立即探测”。
+  </div>
   <section>
     <h2>账号模型续期状态</h2>
     <div id="renewalSummary" class="row meta" role="status">正在读取续期状态…</div>
@@ -183,6 +190,30 @@ function renewal(m) {
 }
 
 function renderModels(state) {
+  const isEnabled = state.probing_enabled !== false;
+  window._currentProbingEnabled = isEnabled;
+  const tag = $('probeStatusTag');
+  const btn = $('toggleProbingBtn');
+  const banner = $('probingPausedBanner');
+  if (tag && btn) {
+    btn.hidden = state.read_only;
+    if (isEnabled) {
+      tag.className = 'tag ok';
+      tag.textContent = '🟢 自动探针：运行中';
+      btn.textContent = '⏸️ 暂停自动探针';
+      btn.style.color = 'var(--warn)';
+      btn.style.borderColor = 'var(--warn)';
+      if (banner) banner.hidden = true;
+    } else {
+      tag.className = 'tag warn';
+      tag.textContent = '⏸️ 自动探针：已暂停';
+      btn.textContent = '▶️ 开启自动探针';
+      btn.style.color = 'var(--ok)';
+      btn.style.borderColor = 'var(--ok)';
+      if (banner) banner.hidden = false;
+    }
+  }
+
   $('managementSection').hidden = state.read_only;
   $('actionsHeading').hidden = state.read_only;
   $('degradationSection').hidden = !state.degraded_enabled;
@@ -343,6 +374,21 @@ document.addEventListener('click', async (ev) => {
 
   if (btn.id === 'refresh') return load();
   if (btn.id === 'filterStats') return loadStats();
+  if (btn.id === 'toggleProbingBtn') {
+    if (latestState && latestState.read_only) return;
+    btn.disabled = true;
+    const nextState = !window._currentProbingEnabled;
+    try {
+      await mutate('POST', 'api/settings', { probing_enabled: nextState });
+      notice(nextState ? '已开启探针自动巡检' : '已暂停探针自动巡检，后台已停止发送探测请求');
+      await load();
+    } catch (e) {
+      notice('切换失败：' + e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
   if (btn.dataset.remove) {
     btn.disabled = true;
     try {
