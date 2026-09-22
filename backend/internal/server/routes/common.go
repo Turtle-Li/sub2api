@@ -90,7 +90,8 @@ func RegisterCommonRoutes(r *gin.Engine, internalHealth InternalHealth) {
 			})
 			return
 		}
-		if !result.Ready || result.EntitlementReservedReviewedPendingCount != 0 || result.UnsettledResetCardPurchaseCount != 0 {
+		if !result.Ready || result.EntitlementReservedReviewedPendingCount != 0 || result.UnsettledResetCardPurchaseCount != 0 ||
+			result.LateCancellationRefundPendingCount != 0 || result.LocalCancellationWorkOutstandingCount != 0 {
 			result.Ready = false
 			c.JSON(http.StatusServiceUnavailable, result)
 			return

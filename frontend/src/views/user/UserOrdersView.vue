@@ -36,15 +36,26 @@
           <div class="flex flex-wrap items-center gap-2">
             <button type="button" class="btn btn-secondary btn-sm" @click="openDetails(row)">{{ t('common.view') }}</button>
             <template v-if="row.status === 'PENDING'">
-              <span
-                v-if="isCancellationPending(row)"
-                :data-test="`order-cancellation-pending-${row.id}`"
-                class="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200"
-                role="status"
-              >
-                <Icon name="sync" size="xs" />
-                {{ t('payment.orderOps.cancellationPending') }}
-              </span>
+              <template v-if="isCancellationPending(row)">
+                <span
+                  :data-test="`order-cancellation-pending-${row.id}`"
+                  class="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200"
+                  role="status"
+                >
+                  <Icon name="sync" size="xs" />
+                  {{ t('payment.orderOps.cancellationPending') }}
+                </span>
+                <button
+                  :data-test="`retry-cancel-order-${row.id}`"
+                  type="button"
+                  class="btn btn-secondary btn-sm border-red-200 text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-900/60 dark:text-red-300 dark:hover:border-red-800 dark:hover:bg-red-950/30"
+                  :disabled="cancellingOrderId === row.id"
+                  @click="handleCancel(row)"
+                >
+                  <Icon name="sync" size="xs" />
+                  {{ t('payment.orderOps.retryCancellation') }}
+                </button>
+              </template>
               <span
                 v-else-if="isConfirmationPending(row)"
                 :data-test="`order-confirmation-pending-${row.id}`"
@@ -237,6 +248,9 @@
             <dd class="font-semibold text-gray-900 dark:text-white">{{ currencySymbol(cancelTarget.currency) }}{{ cancelTarget.pay_amount.toFixed(2) }}</dd>
           </div>
         </dl>
+        <p v-if="cancelError" data-test="cancel-order-error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300" role="alert">
+          {{ cancelError }}
+        </p>
       </div>
       <template #footer>
         <div class="flex justify-end gap-3">
@@ -324,7 +338,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
-import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractI18nErrorMessage, extractMappedI18nErrorMessage } from '@/utils/apiError'
 import type { CreateInvoiceRequest, PaymentOrder, WechatJSAPIPayload } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
@@ -401,12 +415,14 @@ function formatOrderAmount(amount: number, currency?: string): string {
 }
 const cancelTarget = ref<PaymentOrder | null>(null)
 const cancellingOrderId = ref<number | null>(null)
+const cancelError = ref('')
 const resumingOrderId = ref<number | null>(null)
 const resumedPayment = ref<PaymentRecoverySnapshot | null>(null)
 const resumedWechatJsapi = ref<WechatJSAPIPayload | undefined>()
 const now = ref(Date.now())
 const confirmationPendingOrderIds = ref<Set<number>>(new Set())
 const cancellationPendingOrderIds = ref<Set<number>>(new Set())
+const locallyCancelledOrderIds = ref<Set<number>>(new Set())
 const cancellationRequestInFlight = new Set<number>()
 const cancellationRequestRetryAt = new Map<number, number>()
 const refundTarget = ref<PaymentOrder | null>(null)
@@ -461,7 +477,12 @@ function isCancellationPending(order: PaymentOrder): boolean {
 
 function applyCancellationFence(items: PaymentOrder[]): PaymentOrder[] {
   const next = new Set(cancellationPendingOrderIds.value)
+  const locallyCancelled = new Set(locallyCancelledOrderIds.value)
   const result = items.map((order) => {
+    if (locallyCancelled.has(order.id)) {
+      if (order.status === 'PENDING') return { ...order, status: 'CANCELLED' as const, cancellation_pending: false }
+      locallyCancelled.delete(order.id)
+    }
     if (order.status !== 'PENDING') {
       next.delete(order.id)
       if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, order.id)
@@ -471,6 +492,7 @@ function applyCancellationFence(items: PaymentOrder[]): PaymentOrder[] {
     return { ...order, cancellation_pending: true }
   })
   cancellationPendingOrderIds.value = next
+  locallyCancelledOrderIds.value = locallyCancelled
   return result
 }
 
@@ -504,6 +526,10 @@ function canContinuePayment(order: PaymentOrder): boolean {
     && !isPaymentDeadlineReached(order)
 }
 
+function canRetryCancellation(order: PaymentOrder): boolean {
+  return order.status === 'PENDING' && !isConfirmationPending(order)
+}
+
 function updateOrder(updated: PaymentOrder) {
   if (updated.status !== 'PENDING') {
     const next = new Set(cancellationPendingOrderIds.value)
@@ -528,31 +554,86 @@ function markCancellationPending(orderId: number) {
   setConfirmationPending(orderId, false)
 }
 
+function clearCancellationPending(orderId: number) {
+  const next = new Set(cancellationPendingOrderIds.value)
+  next.delete(orderId)
+  cancellationPendingOrderIds.value = next
+}
+
+function settleLocallyCancelledOrder(orderId: number) {
+  clearCancellationPending(orderId)
+  setConfirmationPending(orderId, false)
+  const locallyCancelled = new Set(locallyCancelledOrderIds.value)
+  locallyCancelled.add(orderId)
+  locallyCancelledOrderIds.value = locallyCancelled
+  if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, orderId)
+  cancellationRequestRetryAt.delete(orderId)
+  const current = orders.value.find(order => order.id === orderId)
+  if (current) updateOrder({ ...current, status: 'CANCELLED', cancellation_pending: false })
+  else void fetchOrders({ silent: true })
+}
+
+function settleAlreadyPaidOrder(orderId: number) {
+  clearCancellationPending(orderId)
+  setConfirmationPending(orderId, true)
+  const locallyCancelled = new Set(locallyCancelledOrderIds.value)
+  locallyCancelled.delete(orderId)
+  locallyCancelledOrderIds.value = locallyCancelled
+  if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, orderId)
+  cancellationRequestRetryAt.delete(orderId)
+  void fetchOrders({ silent: true })
+}
+
 function handleCancel(order: PaymentOrder) {
-  if (cancellingOrderId.value || !canContinuePayment(order)) return
+  if (cancellingOrderId.value || !canRetryCancellation(order)) return
+  cancelError.value = ''
   cancelTarget.value = order
 }
 
 function closeCancelDialog() {
-  if (!cancellingOrderId.value) cancelTarget.value = null
+  if (!cancellingOrderId.value) {
+    cancelTarget.value = null
+    cancelError.value = ''
+  }
 }
 
-function confirmCancel() {
+async function confirmCancel() {
   const target = cancelTarget.value
-  if (!target || cancellingOrderId.value || !canContinuePayment(target)) return
-
-  // Close the user flow immediately. The backend records the cancellation
-  // intent before returning, and the reconciler performs provider queries and
-  // retries without holding this page open.
-  markCancellationPending(target.id)
-  cancelTarget.value = null
-  cancellingOrderId.value = null
+  if (!target || cancellingOrderId.value || !canRetryCancellation(target)) return
+  cancellingOrderId.value = target.id
+  cancelError.value = ''
   if (typeof window !== 'undefined') {
     queuePaymentCancellation(window.localStorage, target.id)
     cancellationRequestRetryAt.delete(target.id)
   }
-  refreshPaymentLifecycle()
-  flushQueuedPaymentCancellations()
+  try {
+    const response = await paymentAPI.cancelOrder(target.id)
+    const message = response.data?.message
+    if (message === 'cancelled') {
+      settleLocallyCancelledOrder(target.id)
+      if (cancelTarget.value?.id === target.id) cancelTarget.value = null
+      return
+    }
+    if (message === 'already_paid') {
+      settleAlreadyPaidOrder(target.id)
+      if (cancelTarget.value?.id === target.id) cancelTarget.value = null
+      return
+    }
+    throw { reason: 'CANCEL_RESPONSE_INVALID' }
+  } catch (err: unknown) {
+    // A lost response can still become a server-side cancellation. Keep the
+    // durable intent and fence resume until a cancel retry resolves it.
+    markCancellationPending(target.id)
+    cancellationRequestRetryAt.set(target.id, Date.now() + CANCELLATION_REQUEST_RETRY_INTERVAL_MS)
+    cancelError.value = extractMappedI18nErrorMessage(
+      err,
+      t,
+      'payment.errors',
+      t('payment.orderOps.cancelFailedRetry'),
+    )
+  } finally {
+    if (cancellingOrderId.value === target.id) cancellingOrderId.value = null
+  }
 }
 
 async function continuePayment(order: PaymentOrder) {
@@ -604,16 +685,14 @@ function closeResumedPayment() {
 function onResumedPaymentSettled(outcome: 'success' | 'cancelled' | 'expired') {
   const orderId = resumedPayment.value?.orderId
   if (outcome === 'cancelled' && orderId) {
-    // The panel closes before the detached cancel request settles. Fence this
-    // order in the list immediately so a lost request cannot reopen checkout.
-    markCancellationPending(orderId)
-    if (typeof window !== 'undefined') queuePaymentCancellation(window.localStorage, orderId)
+    // The payment panel emits this only after the local cancellation commit.
+    settleLocallyCancelledOrder(orderId)
+    return
   }
   void fetchOrders()
 }
 
 const ORDER_STATUS_POLL_INTERVAL_MS = 3000
-const CANCELLATION_VERIFY_RETRY_INTERVAL_MS = 15000
 const CANCELLATION_REQUEST_RETRY_INTERVAL_MS = 15000
 type PaymentSyncState = { inFlight: boolean; nextAttemptAt: number }
 const paymentSyncStates = new Map<number, PaymentSyncState>()
@@ -630,30 +709,33 @@ function flushQueuedPaymentCancellations() {
   for (const orderId of readQueuedPaymentCancellationIds(window.localStorage)) {
     if (cancellationRequestInFlight.has(orderId)) continue
     if ((cancellationRequestRetryAt.get(orderId) || 0) > now) continue
+    markCancellationPending(orderId)
     cancellationRequestInFlight.add(orderId)
     cancellationRequestRetryAt.set(orderId, now + CANCELLATION_REQUEST_RETRY_INTERVAL_MS)
     void paymentAPI.cancelOrder(orderId)
-      .then(() => {
-        clearQueuedPaymentCancellation(window.localStorage, orderId)
-        cancellationRequestRetryAt.delete(orderId)
-        void fetchOrders({ silent: true })
-      })
-      .catch((err: unknown) => {
-        const code = extractApiErrorCode(err)
-        if (code === 'INVALID_STATUS' || code === 'NOT_FOUND') {
-          clearQueuedPaymentCancellation(window.localStorage, orderId)
-          cancellationRequestRetryAt.delete(orderId)
+      .then((response) => {
+        if (response.data?.message === 'cancelled') {
+          settleLocallyCancelledOrder(orderId)
+          return
         }
+        if (response.data?.message === 'already_paid') {
+          settleAlreadyPaidOrder(orderId)
+        }
+      })
+      .catch(() => {
+        // A transport failure cannot prove that cancellation did not commit.
+        // Retain the durable intent and keep this order fenced from resume.
       })
       .finally(() => cancellationRequestInFlight.delete(orderId))
   }
 }
 
 async function synchronizePaymentOrder(order: PaymentOrder, state: PaymentSyncState) {
-  const cancellationPending = isCancellationPending(order)
   const deadlineReached = isPaymentDeadlineReached(order)
   try {
-    const response = cancellationPending || deadlineReached
+    // Cancellation and confirmation projections are local database reads. Only
+    // a browser deadline invokes the provider-verification endpoint.
+    const response = deadlineReached
       ? await paymentAPI.verifyOrder(order.out_trade_no)
       : await paymentAPI.getOrder(order.id)
     updateOrder(response.data)
@@ -681,7 +763,7 @@ function refreshPaymentLifecycle() {
     paymentSyncStates.set(order.id, state)
     if (state.inFlight || state.nextAttemptAt > now.value) return
     state.inFlight = true
-    state.nextAttemptAt = now.value + (isCancellationPending(order) ? CANCELLATION_VERIFY_RETRY_INTERVAL_MS : ORDER_STATUS_POLL_INTERVAL_MS)
+    state.nextAttemptAt = now.value + ORDER_STATUS_POLL_INTERVAL_MS
     void synchronizePaymentOrder(order, state)
   })
   for (const orderId of paymentSyncStates.keys()) {
@@ -795,5 +877,6 @@ onUnmounted(() => {
   paymentSyncStates.clear()
   cancellationRequestInFlight.clear()
   cancellationRequestRetryAt.clear()
+  locallyCancelledOrderIds.value = new Set()
 })
 </script>

@@ -1235,8 +1235,11 @@ func TestConcurrentDuplicateAlipayNotificationsCreditLocalUserExactlyOnce(t *tes
 	// in a pending/recharging state.
 	for callbackErr := range errs {
 		if callbackErr != nil {
+			message := strings.ToLower(callbackErr.Error())
 			require.True(t,
-				infraerrors.Reason(callbackErr) == "CONFLICT" || strings.Contains(strings.ToLower(callbackErr.Error()), "database is locked"),
+				infraerrors.Reason(callbackErr) == "CONFLICT" ||
+					strings.Contains(message, "database is locked") ||
+					strings.Contains(message, "database table is locked"),
 				"unexpected concurrent callback error: %v", callbackErr,
 			)
 		}
@@ -1379,7 +1382,18 @@ func TestExpiryAndLatePaymentCallbacksHaveNoLossOrDoubleCredit(t *testing.T) {
 	// A normal paid event from the unified payment service remains authoritative
 	// even if delivery was delayed beyond Sub2's legacy provider grace window.
 	// True late funds arrive as payment.order.paid_after_close and never call
-	// this fulfillment path.
+	// this fulfillment path. Model the pinned unified provider identity that the
+	// signed webhook requires; a direct Alipay order cannot accept a unified
+	// envelope merely because this internal helper was called in a test.
+	tooLate, err = client.PaymentOrder.UpdateOneID(tooLate.ID).
+		SetProviderKey(payment.TypeUnifiedPay).
+		SetProviderSnapshot(map[string]any{
+			"schema_version":   2,
+			"provider_key":     payment.TypeUnifiedPay,
+			"payment_order_id": "late-normal-paid-302",
+		}).
+		Save(ctx)
+	require.NoError(t, err)
 	require.NoError(t, svc.toPaid(ctx, tooLate, "alipay-unified-normal-paid-302", tooLate.PayAmount, payment.TypeUnifiedPay))
 	reloadedTooLate, err = client.PaymentOrder.Get(ctx, tooLate.ID)
 	require.NoError(t, err)

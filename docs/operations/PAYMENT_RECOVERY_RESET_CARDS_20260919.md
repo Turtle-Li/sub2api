@@ -4,6 +4,8 @@
 
 本轮 owner 明确授权修复后合并上游并发布。自动升级因历史付款及重置卡来源无法完整证明，按 owner 允许的管理员兜底处理；决策详见 `PAYMENT_ORDER_CATALOG_RESET_CARD_DESIGN_20260914.md`，不得用普通订阅新购模拟升级。
 
+> 2026-09-22 用户取消契约变更已完成本地验证，尚未发布：见 `PAYMENT_LOCAL_CANCELLATION_20260922.md`。下文记录的是 September 19 已发布行为；新的本地取消与迟到付款退款必须成套发布，不能只提前改状态。
+
 ## 支付与订单契约
 
 - 取消请求通过归属/状态校验后，先记录本地 `PAYMENT_CANCELLATION_REQUESTED` 意图，再请求支付服务；尚未可信关闭时保留 PENDING 并展示 `cancellation_pending`；不能把受理当成已取消，不释放已预占优惠券。

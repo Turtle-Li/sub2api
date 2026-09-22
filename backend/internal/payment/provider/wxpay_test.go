@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	"github.com/stretchr/testify/require"
 	"github.com/wechatpay-apiv3/wechatpay-go/core"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/h5"
@@ -91,6 +92,20 @@ func TestMapWxState(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWxpayRefundReferencePrefersStableProductReference(t *testing.T) {
+	t.Parallel()
+
+	request := payment.RefundRequest{
+		OrderID:         "sub2-order-123",
+		Amount:          "12.34",
+		RefundReference: "sub2-cancel-123",
+	}
+	require.Equal(t, "sub2-cancel-123", wxpayRefundReference(request))
+
+	request.RefundReference = ""
+	require.Equal(t, "sub2-order-123-refund-1234", wxpayRefundReference(request))
 }
 
 func TestWxSV(t *testing.T) {

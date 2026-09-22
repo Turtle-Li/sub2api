@@ -132,6 +132,12 @@ func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo 
 		return fmt.Errorf("invalid paid amount from provider: %v", paid)
 	}
 	if math.Abs(paid-o.PayAmount) > paymentAmountToleranceForCurrency(PaymentOrderCurrency(o)) {
+		if o.Status == OrderStatusCancelled {
+			// The locked late-payment path commits an operator-visible manual
+			// fence for a trusted but financially inconsistent callback. Do not
+			// reject it before that transaction can preserve the evidence.
+			return s.toPaid(ctx, o, tradeNo, paid, pk)
+		}
 		s.writeAuditLog(ctx, o.ID, "PAYMENT_AMOUNT_MISMATCH", pk, map[string]any{"expected": o.PayAmount, "paid": paid, "tradeNo": tradeNo})
 		return fmt.Errorf("amount mismatch: expected %s, got %s", strconv.FormatFloat(o.PayAmount, 'f', -1, 64), strconv.FormatFloat(paid, 'f', -1, 64))
 	}
@@ -183,71 +189,123 @@ func expectedNotificationProviderKey(registry *payment.Registry, orderPaymentTyp
 }
 
 func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, tradeNo string, paid float64, pk string) error {
-	if paymentOrderHasDiscount(o) {
-		allowed, err := s.markDiscountOrderPaid(ctx, o, tradeNo, paid)
+	if o == nil {
+		return errors.New("payment order is missing")
+	}
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	locked, err := lockUnifiedRefundOrder(txCtx, client, o.ID)
+	if err != nil {
+		return err
+	}
+	if expected := expectedNotificationProviderKeyForOrder(s.registry, locked, ""); expected != "" && strings.TrimSpace(pk) != "" && !strings.EqualFold(expected, strings.TrimSpace(pk)) {
+		return fmt.Errorf("provider mismatch: expected %s, got %s", expected, pk)
+	}
+
+	// A locally cancelled row is never eligible for PAID. It is a separate,
+	// durable late-money claim and retains CANCELLED even when the payment is
+	// trusted. This branch executes before the discount ledger so a released
+	// coupon can never be reserved or consumed again by a delayed callback.
+	if locked.Status == OrderStatusCancelled {
+		if err := s.recordCancelledLatePaymentTx(txCtx, client, locked, tradeNo, paid, pk); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if !isValidProviderAmount(paid) || math.Abs(paid-locked.PayAmount) > paymentAmountToleranceForCurrency(PaymentOrderCurrency(locked)) {
+		return fmt.Errorf("amount mismatch: expected %s, got %s", strconv.FormatFloat(locked.PayAmount, 'f', -1, 64), strconv.FormatFloat(paid, 'f', -1, 64))
+	}
+	// Historical rows can carry a gateway timestamp while still being PENDING
+	// or within the normal expiry-recovery window. Those rows have never won a
+	// PAID claim, so preserve the long-standing status-based recovery behavior.
+	// Once a row has moved to another paid/fulfillment state, its PaidAt is the
+	// authoritative duplicate fence.
+	if locked.PaidAt != nil && locked.Status != OrderStatusPending && locked.Status != OrderStatusExpired {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return s.alreadyProcessed(ctx, locked)
+	}
+
+	if paymentOrderHasDiscount(locked) {
+		allowed, changed, err := s.markDiscountOrderPaidTx(txCtx, client, locked, tradeNo, paid)
 		if err != nil {
 			return err
 		}
-		if !allowed {
-			return s.alreadyProcessed(ctx, o)
+		if err := tx.Commit(); err != nil {
+			return err
 		}
-		return s.executeFulfillment(ctx, o.ID)
+		if !changed || !allowed {
+			return s.alreadyProcessed(ctx, locked)
+		}
+		return s.executeFulfillment(ctx, locked.ID)
 	}
-	previousStatus := o.Status
+
+	previousStatus := locked.Status
 	now := time.Now()
 	grace := now.Add(-paymentGraceMinutes * time.Minute)
+	// Keep the status and grace fence in the update itself. PostgreSQL holds the
+	// locked row while this runs, and the CAS remains essential for SQLite and
+	// for callers that reached this code with a stale snapshot. In particular,
+	// do not turn an order's database timestamp into an in-memory eligibility
+	// decision: SQLite's stored precision and concurrent lifecycle updates are
+	// the authority for the historical expiry grace rule.
 	eligibleStatus := paymentorder.Or(
 		paymentorder.StatusEQ(OrderStatusPending),
-		paymentorder.StatusEQ(OrderStatusCancelled),
 		paymentorder.And(
 			paymentorder.StatusEQ(OrderStatusExpired),
 			paymentorder.UpdatedAtGTE(grace),
 		),
 	)
 	if strings.EqualFold(strings.TrimSpace(pk), payment.TypeUnifiedPay) {
-		// payment.order.paid is a trusted normal-pay event (or an equivalent
-		// active query result). True late funds use paid_after_close and never
-		// enter this path, so delivery delay must not make Sub2 lose fulfillment.
-		eligibleStatus = paymentorder.StatusIn(OrderStatusPending, OrderStatusCancelled, OrderStatusExpired)
+		// A normal signed unified paid event remains authoritative even when
+		// delivery is delayed. True late money is routed through PAID_AFTER_CLOSE
+		// and the immutable CANCELLED branch above.
+		eligibleStatus = paymentorder.StatusIn(OrderStatusPending, OrderStatusExpired)
 	}
-	// A provider-create call can fail locally after the gateway has already
-	// accepted the order. The callback may also have loaded PENDING just before
-	// that failure finalizer changed the current row to FAILED. Once the
-	// notification has passed provider, merchant, currency, and amount checks,
-	// it is authoritative payment evidence and may recover any still-unpaid
-	// FAILED order. Fulfillment failures keep paid_at and are not matched here.
-	if o.PaidAt == nil {
-		eligibleStatus = paymentorder.Or(
-			eligibleStatus,
-			paymentorder.And(paymentorder.StatusEQ(OrderStatusFailed), paymentorder.PaidAtIsNil()),
-		)
-	}
-	c, err := s.entClient.PaymentOrder.Update().Where(
-		paymentorder.IDEQ(o.ID),
+	// Provider-create responses can race a callback after the gateway accepted
+	// payment. Recover only still-unpaid failed rows; a failure after PaidAt is
+	// a fulfillment concern, not a new claim.
+	eligibleStatus = paymentorder.Or(
 		eligibleStatus,
-	).SetStatus(OrderStatusPaid).SetPayAmount(paid).SetPaymentTradeNo(tradeNo).SetPaidAt(now).ClearFailedAt().ClearFailedReason().Save(ctx)
+		paymentorder.And(paymentorder.StatusEQ(OrderStatusFailed), paymentorder.PaidAtIsNil()),
+	)
+	updated, err := client.PaymentOrder.Update().Where(
+		paymentorder.IDEQ(locked.ID),
+		eligibleStatus,
+	).SetStatus(OrderStatusPaid).SetPayAmount(paid).SetPaymentTradeNo(tradeNo).SetPaidAt(now).
+		ClearFailedAt().ClearFailedReason().Save(txCtx)
 	if err != nil {
 		return fmt.Errorf("update to PAID: %w", err)
 	}
-	if c == 0 {
-		return s.alreadyProcessed(ctx, o)
+	if updated == 0 {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return s.alreadyProcessed(ctx, locked)
 	}
-	if previousStatus == OrderStatusCancelled || previousStatus == OrderStatusExpired || previousStatus == OrderStatusFailed {
-		slog.Info("order recovered from webhook payment success",
-			"orderID", o.ID,
-			"previousStatus", previousStatus,
-			"tradeNo", tradeNo,
-			"provider", pk,
-		)
-		s.writeAuditLog(ctx, o.ID, "ORDER_RECOVERED", pk, map[string]any{
+	if err := writePaymentAuditTx(txCtx, client, locked.ID, "ORDER_PAID", pk, map[string]any{"tradeNo": tradeNo, "paidAmount": paid}); err != nil {
+		return err
+	}
+	if previousStatus == OrderStatusExpired || previousStatus == OrderStatusFailed {
+		if err := writePaymentAuditTx(txCtx, client, locked.ID, "ORDER_RECOVERED", pk, map[string]any{
 			"previous_status": previousStatus,
 			"tradeNo":         tradeNo,
 			"paidAmount":      paid,
 			"reason":          "webhook payment success received after order " + previousStatus,
-		})
+		}); err != nil {
+			return err
+		}
 	}
-	s.writeAuditLog(ctx, o.ID, "ORDER_PAID", pk, map[string]any{"tradeNo": tradeNo, "paidAmount": paid})
-	return s.executeFulfillment(ctx, o.ID)
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.executeFulfillment(ctx, locked.ID)
 }
 
 func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentOrder) error {

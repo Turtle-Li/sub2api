@@ -105,18 +105,17 @@ func TestPaymentDiscountReleaseLatePaidCapacityAndRetryFence(t *testing.T) {
 	require.Equal(t, 1, count)
 	second, err := newDiscountIntegrationOrder(t, svc, actor, coupon.Code, "b")
 	require.NoError(t, err)
+	// A formerly pending cancellation used to route a delayed coupon payment
+	// into a manual coupon-capacity hold. Explicit local cancellation is now an
+	// immutable admission fence: late money is handled by the separate refund
+	// path and must never reserve the released coupon again.
 	allowed, err := svc.markDiscountOrderPaid(ctx, first, "late-trade", 80)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.False(t, allowed)
 	held, err := client.PaymentOrder.Get(ctx, first.ID)
 	require.NoError(t, err)
-	require.NotNil(t, held.PaidAt)
-	require.True(t, isPaymentDiscountManualReview(held))
-	require.NoError(t, svc.alreadyProcessed(ctx, held))
-	require.Error(t, svc.RetryFulfillment(ctx, held.ID))
-	require.False(t, isPaymentFulfillmentRecoveryClaimable(held, time.Now().Add(time.Hour)))
-	_, err = acquirePaymentFulfillmentLeaseWithClient(ctx, client, held)
-	require.Error(t, err)
+	require.Nil(t, held.PaidAt)
+	require.Equal(t, OrderStatusCancelled, held.Status)
 	allowed, err = svc.markDiscountOrderPaid(ctx, second, "normal-trade", 80)
 	require.NoError(t, err)
 	require.True(t, allowed)
@@ -131,5 +130,5 @@ func TestPaymentDiscountReleaseLatePaidCapacityAndRetryFence(t *testing.T) {
 		statuses[u.Status]++
 	}
 	require.Equal(t, 1, statuses["consumed"])
-	require.Equal(t, 1, statuses["paid_review"])
+	require.Equal(t, 1, statuses["released"])
 }

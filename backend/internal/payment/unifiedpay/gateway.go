@@ -400,21 +400,30 @@ func (g *Gateway) QueryOrder(ctx context.Context, paymentOrderID string) (*payme
 		status = payment.ProviderStatusPaid
 	case StatusPartiallyRefunded, StatusRefunded:
 		status = payment.ProviderStatusRefunded
-	case StatusClosed, StatusExpired, StatusPaidAfterClose:
+	case StatusPaidAfterClose:
+		// The caller must retain its local cancellation fence and create the
+		// dedicated no-entitlement refund attempt. Mapping this as paid keeps
+		// the trusted amount and channel reference available to that path.
+		status = payment.ProviderStatusPaid
+	case StatusClosed, StatusExpired:
 		status = payment.ProviderStatusFailed
 	}
 	if result.NeedsManualReview {
 		status = payment.ProviderStatusPending
 	}
 	tradeNo := result.PaymentOrderID
+	channelTransactionID := ""
 	if result.ChannelTransactionID != nil && strings.TrimSpace(*result.ChannelTransactionID) != "" {
-		tradeNo = strings.TrimSpace(*result.ChannelTransactionID)
+		channelTransactionID = strings.TrimSpace(*result.ChannelTransactionID)
+		tradeNo = channelTransactionID
 	}
 	metadata := map[string]string{
-		"payment_order_id":    result.PaymentOrderID,
-		"status":              result.Status,
-		"payment_method":      result.PaymentMethod,
-		"needs_manual_review": strconv.FormatBool(result.NeedsManualReview),
+		"payment_order_id":       result.PaymentOrderID,
+		"status":                 result.Status,
+		"paid_after_close":       strconv.FormatBool(result.Status == StatusPaidAfterClose),
+		"payment_method":         result.PaymentMethod,
+		"needs_manual_review":    strconv.FormatBool(result.NeedsManualReview),
+		"channel_transaction_id": channelTransactionID,
 	}
 	for key, value := range g.ScopeMetadata() {
 		metadata[key] = value

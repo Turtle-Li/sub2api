@@ -146,7 +146,9 @@ func (s *PaymentService) processUnifiedPaymentEvent(ctx context.Context, verifie
 			return err
 		}
 	case unifiedpay.EventPaymentPaidAfterClose:
-		s.writeAuditLog(ctx, order.ID, "UNIFIED_PAYMENT_PAID_AFTER_CLOSE", payment.TypeUnifiedPay, safeUnifiedEventAudit(event))
+		if err := s.recordUnifiedPaidAfterClose(ctx, order.ID, strings.TrimSpace(*resource.ChannelTransactionID), payment.MinorUnitToAmount(resource.PaidAmountFen, payment.DefaultPaymentCurrency)); err != nil {
+			return err
+		}
 	case unifiedpay.EventPaymentConfirmationPending:
 		s.writeAuditLog(ctx, order.ID, "UNIFIED_PAYMENT_CONFIRMATION_PENDING", payment.TypeUnifiedPay, safeUnifiedEventAudit(event))
 	case unifiedpay.EventPaymentClosed:

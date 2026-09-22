@@ -304,6 +304,153 @@ func (s *PaymentService) reserveUnifiedRefundAttempt(ctx context.Context, p *Ref
 	return a, nil
 }
 
+// reserveCancelledLateUnifiedRefundAttemptTx persists the one allowed refund
+// path for money that arrives after an immediate local cancellation. It never
+// changes the order back to a payable or fulfillable status and intentionally
+// carries no balance, subscription, or benefit entitlement reservation.
+func (s *PaymentService) reserveCancelledLateUnifiedRefundAttemptTx(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, actualPaid float64) (*unifiedRefundAttempt, error) {
+	if err := s.validateCancelledLateUnifiedRefundOrder(order); err != nil {
+		return nil, err
+	}
+	snapshot := psOrderProviderSnapshot(order)
+	method, _ := unifiedpay.PaymentMethodForPaymentType(order.PaymentType)
+	amountFen, err := payment.AmountToMinorUnit(strconv.FormatFloat(actualPaid, 'f', -1, 64), payment.DefaultPaymentCurrency)
+	if err != nil || amountFen <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "late unified payment amount is invalid")
+	}
+	expectedFen, err := payment.AmountToMinorUnit(strconv.FormatFloat(order.PayAmount, 'f', -1, 64), payment.DefaultPaymentCurrency)
+	if err != nil || expectedFen != amountFen {
+		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "late unified payment amount does not match the cancelled order")
+	}
+	productRefundNo := "sub2_cancel_" + strconv.FormatInt(order.ID, 10)
+	existing, err := loadUnifiedRefundAttempt(ctx, client, order.ID, productRefundNo)
+	if err == nil {
+		if existing.PaymentOrderID != snapshot.PaymentOrderID || existing.AmountFen != amountFen ||
+			existing.PaymentMethod != method || existing.RefundKind != cancelLatePaymentRefundKind ||
+			existing.BalanceAmountMinor != 0 || existing.DeductBalance || existing.EntitlementReserved {
+			existing.NeedsManualReview = true
+			if saveErr := saveUnifiedRefundAttempt(ctx, client, existing); saveErr != nil {
+				return nil, saveErr
+			}
+			if auditErr := writeUnifiedRefundAudit(ctx, client, order.ID, "UNIFIED_CANCEL_LATE_REFUND_CONFLICT", map[string]any{
+				"product_refund_no": productRefundNo, "reason": "persisted_late_refund_contract_mismatch",
+			}); auditErr != nil {
+				return nil, auditErr
+			}
+			// Return the fenced attempt without an error so the enclosing paid
+			// claim commits the evidence and provider callbacks can be safely ACKed.
+			return existing, nil
+		}
+		return existing, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	var otherRefundNo string
+	rows, queryErr := client.QueryContext(ctx, `
+		SELECT product_refund_no FROM unified_payment_refund_attempts
+		WHERE order_id = $1 AND status = 'PENDING' AND product_refund_no <> $2
+		ORDER BY created_at ASC, product_refund_no ASC LIMIT 1`, order.ID, productRefundNo)
+	if queryErr != nil {
+		return nil, queryErr
+	}
+	if rows.Next() {
+		if err := rows.Scan(&otherRefundNo); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if otherRefundNo != "" {
+		other, loadErr := loadUnifiedRefundAttempt(ctx, client, order.ID, otherRefundNo)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		other.NeedsManualReview = true
+		if saveErr := saveUnifiedRefundAttempt(ctx, client, other); saveErr != nil {
+			return nil, saveErr
+		}
+		if auditErr := writeUnifiedRefundAudit(ctx, client, order.ID, "UNIFIED_CANCEL_LATE_REFUND_CONFLICT", map[string]any{
+			"product_refund_no": otherRefundNo, "reason": "other_pending_refund_attempt",
+		}); auditErr != nil {
+			return nil, auditErr
+		}
+		return other, nil
+	}
+	manual, err := unifiedRefundOrderNeedsReview(ctx, client, order.ID)
+	if err != nil {
+		return nil, err
+	}
+	a := &unifiedRefundAttempt{
+		ProductRefundNo:    productRefundNo,
+		IdempotencyKey:     localCancellationDirectRefundIdempotencyKey(order.ID),
+		OrderID:            order.ID,
+		PaymentOrderID:     snapshot.PaymentOrderID,
+		Environment:        snapshot.Environment,
+		OrganizationID:     snapshot.OrganizationID,
+		ProductID:          snapshot.ProductID,
+		AppID:              snapshot.AppID,
+		PaymentMethod:      method,
+		AmountFen:          amountFen,
+		BalanceAmountMinor: 0,
+		DeductBalance:      false,
+		Force:              false,
+		ReasonCode:         "service_not_delivered",
+		ReasonSummary:      "payment accepted after local cancellation",
+		Status:             unifiedRefundPending,
+		NeedsManualReview:  manual,
+		RefundKind:         cancelLatePaymentRefundKind,
+	}
+	if err := insertUnifiedRefundAttempt(ctx, client, a); err != nil {
+		return nil, err
+	}
+	if err := writeUnifiedRefundAudit(ctx, client, order.ID, "UNIFIED_CANCEL_LATE_REFUND_QUEUED", map[string]any{
+		"product_refund_no":   a.ProductRefundNo,
+		"payment_order_id":    a.PaymentOrderID,
+		"amount_fen":          a.AmountFen,
+		"reason_code":         a.ReasonCode,
+		"needs_manual_review": a.NeedsManualReview,
+	}); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+func (s *PaymentService) validateCancelledLateUnifiedRefundOrder(order *dbent.PaymentOrder) error {
+	if order == nil || order.Status != OrderStatusCancelled || order.PaidAt == nil {
+		return infraerrors.Conflict("INVALID_STATUS", "late unified refund requires a cancelled paid order")
+	}
+	if s == nil || s.unifiedPayment == nil || !s.unifiedPayment.Enabled() {
+		return infraerrors.BadRequest("REFUND_UNAVAILABLE", "unified payment runtime is unavailable")
+	}
+	snapshot := psOrderProviderSnapshot(order)
+	if snapshot == nil || snapshot.ProviderKey != payment.TypeUnifiedPay || snapshot.PaymentOrderID == "" {
+		return infraerrors.BadRequest("REFUND_UNAVAILABLE", "unified payment order binding is incomplete")
+	}
+	if _, err := uuid.Parse(snapshot.PaymentOrderID); err != nil {
+		return infraerrors.BadRequest("REFUND_UNAVAILABLE", "unified payment order binding is invalid")
+	}
+	scope := s.unifiedPayment.ScopeMetadata()
+	if snapshot.Environment != scope["environment"] || snapshot.OrganizationID != scope["organization_id"] ||
+		snapshot.ProductID != scope["product_id"] || snapshot.AppID != scope["app_id"] {
+		return infraerrors.BadRequest("REFUND_UNAVAILABLE", "unified payment runtime does not match the historical order")
+	}
+	if _, ok := unifiedpay.PaymentMethodForPaymentType(order.PaymentType); !ok || PaymentOrderCurrency(order) != payment.DefaultPaymentCurrency {
+		return infraerrors.BadRequest("REFUND_UNAVAILABLE", "unified payment order method or currency is invalid")
+	}
+	return nil
+}
+
+func isCancelledLateUnifiedRefund(a *unifiedRefundAttempt) bool {
+	return a != nil && a.RefundKind == cancelLatePaymentRefundKind
+}
+
 func (s *PaymentService) reserveReviewedUnifiedRefundAttemptTx(ctx context.Context, client *dbent.Client, order *dbent.PaymentOrder, plan *RefundPlan, reason normalizedRefundReason) (*unifiedRefundAttempt, error) {
 	if refundAlreadySettled(order) {
 		return nil, refundAlreadySettledError()
@@ -734,7 +881,12 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateUnifiedRefundOrderWithBenefitExtras(o, strings.TrimSpace(a.BenefitProofDigest) != ""); err != nil {
+	if isCancelledLateUnifiedRefund(a) {
+		err = s.validateCancelledLateUnifiedRefundOrder(o)
+	} else {
+		err = s.validateUnifiedRefundOrderWithBenefitExtras(o, strings.TrimSpace(a.BenefitProofDigest) != "")
+	}
+	if err != nil {
 		return nil, err
 	}
 	if a.Status != unifiedRefundPending {
@@ -746,7 +898,7 @@ func (s *PaymentService) advanceUnifiedRefund(ctx context.Context, a *unifiedRef
 	// ID must remain pending until the rollout is explicitly enabled. Once a
 	// remote ID is known, read-only provider queries stay allowed while disabled
 	// so already-moved money can converge to a durable terminal state.
-	if a.RefundRequestID == "" && (a.EntitlementReserved || strings.TrimSpace(a.QuoteRevision) != "" || strings.TrimSpace(a.RefundKind) != "") {
+	if a.RefundRequestID == "" && !isCancelledLateUnifiedRefund(a) && (a.EntitlementReserved || strings.TrimSpace(a.QuoteRevision) != "" || strings.TrimSpace(a.RefundKind) != "") {
 		if s == nil || s.configService == nil || !s.configService.IsReviewedRefundsEnabled(ctx) {
 			return nil, infraerrors.ServiceUnavailable("REVIEWED_REFUNDS_DISABLED", "reviewed refunds are not enabled for this application generation")
 		}
@@ -909,7 +1061,37 @@ func (s *PaymentService) applyUnifiedRefundObservation(ctx context.Context, orde
 		a.Status = result.Status
 	}
 	response := pendingUnifiedRefundResult(a.NeedsManualReview)
-	if terminal && !a.NeedsManualReview && (previousStatus == unifiedRefundPending ||
+	if isCancelledLateUnifiedRefund(a) {
+		if terminal && !a.NeedsManualReview {
+			if o.Status != OrderStatusCancelled || o.PaidAt == nil {
+				a.NeedsManualReview = true
+				response = pendingUnifiedRefundResult(true)
+			} else if result.Status == unifiedpay.RefundStatusSucceeded {
+				// The original local cancellation is immutable. Channel money has
+				// been returned, but no product entitlement or order lifecycle is
+				// ever recreated from this late-payment refund.
+				response = &RefundResult{Success: true}
+				if err := writeUnifiedRefundAudit(txCtx, client, orderID, "UNIFIED_CANCEL_LATE_REFUND_SUCCEEDED", map[string]any{
+					"product_refund_no": a.ProductRefundNo, "amount_fen": a.AmountFen,
+				}); err != nil {
+					return nil, err
+				}
+			} else {
+				// A terminal failure after trusted accepted money must remain
+				// operator-visible. Retrying a terminal direct/central failure
+				// without fresh evidence could hide or duplicate a refund.
+				a.NeedsManualReview = true
+				response = pendingUnifiedRefundResult(true)
+				if err := writeUnifiedRefundAudit(txCtx, client, orderID, "UNIFIED_CANCEL_LATE_REFUND_FAILED", map[string]any{
+					"product_refund_no": a.ProductRefundNo, "amount_fen": a.AmountFen,
+				}); err != nil {
+					return nil, err
+				}
+			}
+		} else if a.Status == unifiedpay.RefundStatusSucceeded && !a.NeedsManualReview {
+			response = &RefundResult{Success: true}
+		}
+	} else if terminal && !a.NeedsManualReview && (previousStatus == unifiedRefundPending ||
 		(result.Status == unifiedpay.RefundStatusSucceeded && a.EntitlementReserved)) {
 		if o.Status != OrderStatusRefundPending {
 			a.NeedsManualReview = true

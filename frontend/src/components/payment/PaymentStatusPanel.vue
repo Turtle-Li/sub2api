@@ -95,6 +95,29 @@
       </div>
     </template>
 
+    <!-- A cancellation response was lost, so retain the local intent and never
+         re-open a payment surface until it reaches an authoritative result. -->
+    <template v-else-if="cancellationRetryNeeded">
+      <div data-test="payment-cancellation-retry-needed" class="card p-6">
+        <div class="flex flex-col items-center space-y-3 py-3 text-center">
+          <div class="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+            <Icon name="sync" size="lg" class="text-amber-600 dark:text-amber-300" />
+          </div>
+          <p class="text-base font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.cancellationPending') }}</p>
+          <p v-if="!cancellationError" class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.cancelFailedRetry') }}</p>
+        </div>
+      </div>
+      <button
+        ref="retryCancellationButton"
+        data-test="retry-payment-cancel"
+        class="btn btn-secondary w-full"
+        :disabled="cancelling"
+        @click="retryCancellation"
+      >
+        {{ cancelling ? t('common.processing') : t('payment.orderOps.retryCancellation') }}
+      </button>
+    </template>
+
     <!-- The provider accepted cancellation, but the local order is still pending. -->
     <template v-else-if="cancellationPending || props.initialCancellationPending">
       <div data-test="payment-cancellation-pending" class="card p-6">
@@ -119,7 +142,7 @@
             <Icon name="sync" size="lg" class="animate-spin text-primary-600 dark:text-primary-300" />
           </div>
           <p class="text-base font-semibold text-gray-900 dark:text-white">{{ t('payment.orderOps.confirmationPending') }}</p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.result.processingHint') }}</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">{{ paymentReceivedHint || t('payment.result.processingHint') }}</p>
         </div>
       </div>
       <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
@@ -272,47 +295,7 @@
       <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
         {{ t('payment.qr.refreshStatus') }}
       </button>
-      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
-        {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
-      </button>
-    </template>
-
-    <!-- iframe Checkout Mode (e.g. Alipay page-pay with qr_pay_mode=4) -->
-    <template v-else-if="showCheckoutFrame">
-      <div class="card p-6">
-        <div class="flex flex-col items-center space-y-4">
-          <p class="text-lg font-semibold text-gray-900 dark:text-white">{{ scanTitle }}</p>
-          <p v-if="paymentReceivedHint" class="text-center text-sm text-amber-600 dark:text-amber-300">{{ paymentReceivedHint }}</p>
-          <div :class="['relative overflow-hidden rounded-lg border-2 p-2 bg-white flex items-center justify-center', qrBorderClass]" style="width: 236px; height: 236px;">
-            <div v-if="iframeLoading" class="absolute inset-0 flex items-center justify-center bg-white/90 dark:bg-dark-800/90 z-10">
-              <div class="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
-            </div>
-            <iframe
-              data-test="alipay-checkout-frame"
-              :src="currentCheckoutFrameUrl"
-              class="border-0"
-              style="width: 220px; height: 220px; overflow: hidden; display: block;"
-              scrolling="no"
-              frameborder="0"
-              @load="onIframeLoad"
-              @error="onIframeError"
-            />
-          </div>
-          <p v-if="scanHint" class="text-center text-sm text-gray-500 dark:text-gray-400">{{ scanHint }}</p>
-          <button v-if="currentHostedPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
-            {{ t('payment.qr.openPayWindow') }}
-          </button>
-        </div>
-      </div>
-      <div class="card p-4 text-center">
-        <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.qr.expiresIn') }}</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-gray-900 dark:text-white">{{ countdownDisplay }}</p>
-        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ waitingHint }}</p>
-      </div>
-      <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
-        {{ t('payment.qr.refreshStatus') }}
-      </button>
-      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
+      <button ref="cancelOrderButton" class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
         {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
       </button>
     </template>
@@ -323,6 +306,13 @@
         <div class="flex flex-col items-center space-y-4 py-4">
           <div class="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
           <p class="text-center text-sm text-gray-500 dark:text-gray-400">{{ waitingHint }}</p>
+          <p
+            v-if="showCheckoutFrame"
+            data-test="alipay-checkout-popup-fallback"
+            class="text-center text-xs leading-5 text-gray-500 dark:text-gray-400"
+          >
+            {{ t('payment.qr.payInNewWindowHint') }}
+          </p>
           <button v-if="currentHostedPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
             {{ t('payment.qr.openPayWindow') }}
           </button>
@@ -335,10 +325,18 @@
       <button v-if="pollExhausted" class="btn btn-secondary w-full" @click="refreshNow">
         {{ t('payment.qr.refreshStatus') }}
       </button>
-      <button class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
+      <button ref="cancelOrderButton" class="btn btn-secondary w-full" :disabled="cancelling" @click="requestCancel">
         {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
       </button>
     </template>
+    <p
+      v-if="cancellationError"
+      data-test="payment-cancel-error"
+      class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+      role="alert"
+    >
+      {{ cancellationError }}
+    </p>
   </div>
   <ConfirmDialog
     :show="confirmingCancel"
@@ -348,7 +346,7 @@
     :cancel-text="t('payment.orderOps.keepOrder')"
     :danger="true"
     @confirm="handleCancel"
-    @cancel="confirmingCancel = false"
+    @cancel="closeCancelConfirmation"
   />
 </template>
 
@@ -358,13 +356,14 @@ import { useI18n } from 'vue-i18n'
 import { usePaymentStore } from '@/stores/payment'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
-import { extractApiErrorCode } from '@/utils/apiError'
+import { extractApiErrorCode, extractMappedI18nErrorMessage } from '@/utils/apiError'
 import { getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
 import { isMobileDevice } from '@/utils/device'
 import { currencySymbol, formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
 import {
   clearQueuedPaymentCancellation,
   queuePaymentCancellation,
+  readQueuedPaymentCancellationIds,
   validateAlipayCheckoutFrameUrl,
   validateAlipayHostedCheckoutUrl,
   validateAlipayQRCode,
@@ -392,7 +391,7 @@ const props = defineProps<{
   paymentType: string
   payUrl?: string
   checkoutFrameUrl?: string
-  /** The signed Alipay QR frame may only be embedded by a local checkout dialog. */
+  /** Enables the legacy signed frame URL as a top-level-popup fallback hint. */
   allowCheckoutFrame?: boolean
   orderType?: string
   currency?: string
@@ -431,6 +430,10 @@ const confirmingCancel = ref(false)
 const resumingLaunch = ref(false)
 const cancellationPending = ref(false)
 const confirmationPending = ref(false)
+const cancellationError = ref('')
+const cancellationRetryNeeded = ref(false)
+const cancelOrderButton = ref<HTMLButtonElement | null>(null)
+const retryCancellationButton = ref<HTMLButtonElement | null>(null)
 const paidOrder = ref<PaymentOrder | null>(null)
 const latestOrder = ref<PaymentOrder | null>(null)
 const deepLinkState = ref<AlipayDeepLinkState>('idle')
@@ -453,7 +456,6 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 let verifyAttempts = 0
 let lastVerifyAt = 0
-let lastCancellationVerifyAt = 0
 let alipayLauncher: AlipayDeepLinkLauncher | null = null
 let pollAttempts = 0
 const pollExhausted = ref(false)
@@ -485,17 +487,6 @@ const currentCheckoutFrameUrl = computed(() => {
   const raw = resumedCheckoutFrameUrl.value ?? props.checkoutFrameUrl ?? ''
   return validateAlipayCheckoutFrameUrl(raw)
 })
-const frameLoadError = ref(false)
-const iframeLoading = ref(true)
-
-function onIframeLoad() {
-  iframeLoading.value = false
-}
-
-function onIframeError() {
-  iframeLoading.value = false
-  frameLoadError.value = true
-}
 
 const isMobileAlipayDeepLink = computed(() => (resumedMobileAlipayDeepLink.value ?? props.mobileAlipayDeepLink) === true && isAlipay.value && !!qrUrl.value)
 const showQRCode = computed(() => (
@@ -508,7 +499,6 @@ const showCheckoutFrame = computed(() => (
   && !isMobileDevice()
   && props.allowCheckoutFrame === true
   && !!currentCheckoutFrameUrl.value
-  && !frameLoadError.value
 ))
 
 const qrBorderClass = computed(() => {
@@ -574,10 +564,6 @@ async function copyOrderNumber(value: string): Promise<void> {
   }
 }
 
-function isSuccessStatus(status: string | null | undefined): boolean {
-  return normalizeStatus(status) === 'COMPLETED'
-}
-
 function normalizeStatus(status: string | null | undefined): string {
   return String(status || '').trim().toUpperCase()
 }
@@ -595,10 +581,29 @@ function clearLaunchMaterial() {
   resumedPayUrl.value = ''
   resumedCheckoutFrameUrl.value = ''
   resumedMobileAlipayDeepLink.value = false
-  frameLoadError.value = false
-  iframeLoading.value = true
   alipayLauncher?.dispose()
   alipayLauncher = null
+}
+
+function clearResolvedCancellationState(orderId: number): void {
+  confirmingCancel.value = false
+  cancellationPending.value = false
+  cancellationRetryNeeded.value = false
+  cancellationError.value = ''
+  if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, orderId)
+}
+
+function clearAuthoritativeTerminalState(orderId: number): void {
+  clearResolvedCancellationState(orderId)
+  confirmationPending.value = false
+}
+
+function terminalOutcomeFor(order: PaymentOrder): PaymentOutcome | null {
+  const status = normalizeStatus(order.status)
+  if (status === 'COMPLETED') return 'success'
+  if (status === 'CANCELLED') return 'cancelled'
+  if (status === 'EXPIRED' || (status === 'FAILED' && paymentFact(order) === 'UNPAID')) return 'expired'
+  return null
 }
 
 function waitForAuthoritativeConfirmation() {
@@ -621,12 +626,14 @@ function waitForAuthoritativeExpiry() {
 
 function setTerminalResumeStatus(status: string): boolean {
   if (status === 'CANCELLED') {
+    clearAuthoritativeTerminalState(props.orderId)
     clearLaunchMaterial()
     cleanupSession()
     setOutcome('cancelled')
     return true
   }
   if (status === 'EXPIRED' || status === 'FAILED') {
+    clearAuthoritativeTerminalState(props.orderId)
     clearLaunchMaterial()
     cleanupSession()
     setOutcome('expired')
@@ -679,8 +686,6 @@ function applyResumedPaymentLaunch(result: CreateOrderResult): ResumedPaymentLau
   resumedPayUrl.value = payUrl
   resumedCheckoutFrameUrl.value = checkoutFrameUrl
   resumedMobileAlipayDeepLink.value = result.alipay_mobile_precreate_deep_link === true
-  frameLoadError.value = false
-  iframeLoading.value = true
   deadlineReached.value = false
   if (countdownTimer) {
     clearInterval(countdownTimer)
@@ -701,7 +706,14 @@ function applyResumedPaymentLaunch(result: CreateOrderResult): ResumedPaymentLau
 async function resumePaymentLaunch(): Promise<ResumedPaymentLaunch | null> {
   const generation = lifecycleGeneration
   const fingerprint = currentSessionFingerprint()
-  if (!isCurrentLifecycle(generation, fingerprint) || !props.orderId || resumingLaunch.value) return null
+  if (
+    !isCurrentLifecycle(generation, fingerprint)
+    || !props.orderId
+    || resumingLaunch.value
+    || cancellationRetryNeeded.value
+    || cancellationPending.value
+    || confirmationPending.value
+  ) return null
 
   resumingLaunch.value = true
   try {
@@ -735,6 +747,7 @@ async function resumePaymentLaunch(): Promise<ResumedPaymentLaunch | null> {
 }
 
 async function reopenPopup() {
+  if (cancellationRetryNeeded.value || cancellationPending.value || confirmationPending.value) return
   // Reserve a browsing context synchronously from the click. It is closed if
   // the authenticated resume call says this order is no longer payable.
   const popup = window.open('', 'paymentPopup', getPaymentPopupFeatures())
@@ -835,6 +848,7 @@ function launchAlipayDeepLink(
 }
 
 async function reopenAlipay() {
+  if (cancellationRetryNeeded.value || cancellationPending.value || confirmationPending.value) return
   const launch = await resumePaymentLaunch()
   if (!launch?.qrCode || !launch.mobileAlipayDeepLink) return
   launchAlipayDeepLink()
@@ -929,21 +943,15 @@ async function tryRecoverPendingOrder(
   if (!outTradeNo) return order
   const normalizedStatus = String(order.status || '').trim().toUpperCase()
   if (normalizedStatus !== 'PENDING') return order
-  // The close endpoint can acknowledge the request before the order projection
-  // exposes cancellation_pending. Keep retrying from the local safety state in
-  // that short window so cancellation recovery is not capped at normal checks.
-  const isCancellationPending = order.cancellation_pending === true || cancellationPending.value
+  // Cancellation is now committed synchronously by the local API. Do not use
+  // a provider verification request while the order projection catches up.
+  if (order.cancellation_pending === true || cancellationPending.value) return order
   const now = Date.now()
-  if (isCancellationPending) {
-    if (now - lastCancellationVerifyAt < VERIFY_RETRY_INTERVAL_MS) return order
-    lastCancellationVerifyAt = now
-  } else {
-    if (verifyAttempts >= VERIFY_RETRY_MAX_ATTEMPTS || now - lastVerifyAt < VERIFY_RETRY_INTERVAL_MS) {
-      return order
-    }
-    lastVerifyAt = now
-    verifyAttempts += 1
+  if (verifyAttempts >= VERIFY_RETRY_MAX_ATTEMPTS || now - lastVerifyAt < VERIFY_RETRY_INTERVAL_MS) {
+    return order
   }
+  lastVerifyAt = now
+  verifyAttempts += 1
 
   try {
     const result = await paymentAPI.verifyOrder(outTradeNo)
@@ -996,28 +1004,35 @@ async function pollStatus(
     latestOrder.value = order
     const orderStatus = normalizeStatus(order.status)
     const serverCancellationPending = orderStatus === 'PENDING' && order.cancellation_pending === true
+    const terminalOutcome = terminalOutcomeFor(order)
+    if (terminalOutcome) {
+      clearAuthoritativeTerminalState(orderId)
+      cleanupSession()
+      if (terminalOutcome === 'success') {
+        paidOrder.value = order
+        setOutcome('success')
+        emit('success')
+      } else {
+        setOutcome(terminalOutcome)
+      }
+      return
+    }
+
+    // PAID and RECHARGING mean money has been received but fulfillment has
+    // not completed. Retain the confirmation fence so stale checkout controls
+    // cannot re-open or cancel an order that is already being fulfilled.
+    if (paymentFact(order) === 'PAID') {
+      clearResolvedCancellationState(orderId)
+      confirmationPending.value = true
+      clearLaunchMaterial()
+      return
+    }
+
     // The 409 is an accepted close request. A list/status projection can lag
-    // that audit write briefly, so retain this safety state until a terminal
-    // server result rather than re-exposing a payable checkout in the gap.
+    // that audit write briefly, so retain this safety state until an
+    // authoritative result rather than re-exposing a payable checkout.
     if (serverCancellationPending) cancellationPending.value = true
-    if (orderStatus !== 'PENDING') cancellationPending.value = false
-    if (cancellationPending.value || orderStatus !== 'PENDING') {
-      confirmationPending.value = false
-    }
-    if (isSuccessStatus(order.status)) {
-      cleanupSession()
-      paidOrder.value = order
-      setOutcome('success')
-      emit('success')
-    } else if (normalizeStatus(order.status) === 'CANCELLED') {
-      cleanupSession()
-      setOutcome('cancelled')
-    } else if (normalizeStatus(order.status) === 'EXPIRED' || (normalizeStatus(order.status) === 'FAILED' && paymentFact(order) === 'UNPAID')) {
-      // An expired browser countdown is only a prompt to ask the server. A
-      // terminal expiry is authoritative only after the server records it.
-      cleanupSession()
-      setOutcome('expired')
-    }
+    if (cancellationPending.value) confirmationPending.value = false
   } finally {
     pollInFlightGenerations.delete(generation)
     if (
@@ -1082,27 +1097,67 @@ function requestCancel() {
   confirmingCancel.value = true
 }
 
-function handleCancel() {
+function restoreCancellationActionFocus(): void {
+  void nextTick(() => {
+    (cancellationRetryNeeded.value ? retryCancellationButton.value : cancelOrderButton.value)?.focus()
+  })
+}
+
+function closeCancelConfirmation(): void {
+  confirmingCancel.value = false
+  restoreCancellationActionFocus()
+}
+
+function retryCancellation(): void {
+  if (!cancellationRetryNeeded.value || cancelling.value) return
+  void handleCancel()
+}
+
+async function handleCancel() {
   const generation = lifecycleGeneration
   const fingerprint = currentSessionFingerprint()
   const orderId = props.orderId
   if (!isCurrentLifecycle(generation, fingerprint) || !orderId || cancelling.value) return
   confirmingCancel.value = false
   cancelling.value = true
-  // The local checkout is finished immediately. The server records the
-  // cancellation intent before returning and retries provider confirmation in
-  // its background reconciliation loop, so provider latency never remains in
-  // the foreground dialog.
+  cancellationError.value = ''
   if (typeof window !== 'undefined') queuePaymentCancellation(window.localStorage, orderId)
-  void Promise.resolve()
-    .then(() => paymentAPI.cancelOrder(orderId))
-    .then(() => {
-      if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, orderId)
-    })
-    .catch(() => {})
-  cleanupSession()
-  setOutcome('cancelled')
-  emit('done')
+  try {
+    const response = await paymentAPI.cancelOrder(orderId)
+    const message = response.data?.message
+    if (typeof window !== 'undefined' && (message === 'cancelled' || message === 'already_paid')) {
+      clearQueuedPaymentCancellation(window.localStorage, orderId)
+    }
+    if (!isCurrentLifecycle(generation, fingerprint)) return
+    if (message === 'cancelled') {
+      clearAuthoritativeTerminalState(orderId)
+      cleanupSession()
+      setOutcome('cancelled')
+      emit('done')
+      return
+    }
+    if (message === 'already_paid') {
+      clearResolvedCancellationState(orderId)
+      waitForAuthoritativeConfirmation()
+      return
+    }
+    throw { reason: 'CANCEL_RESPONSE_INVALID' }
+  } catch (err: unknown) {
+    if (isCurrentLifecycle(generation, fingerprint)) {
+      cancellationRetryNeeded.value = true
+      cancellationError.value = extractMappedI18nErrorMessage(
+        err,
+        t,
+        'payment.errors',
+        t('payment.orderOps.cancelFailedRetry'),
+      )
+    }
+  } finally {
+    if (isCurrentLifecycle(generation, fingerprint)) {
+      cancelling.value = false
+      if (cancellationRetryNeeded.value) restoreCancellationActionFocus()
+    }
+  }
 }
 
 function handleDone() { cleanupSession(); emit('done') }
@@ -1128,13 +1183,14 @@ function startSession() {
   resumedPayUrl.value = null
   resumedCheckoutFrameUrl.value = null
   resumedMobileAlipayDeepLink.value = null
-  frameLoadError.value = false
-  iframeLoading.value = true
   sessionVersion.value += 1
   remainingSeconds.value = 0
   cancelling.value = false
+  cancellationError.value = ''
   resumingLaunch.value = false
   cancellationPending.value = props.initialCancellationPending === true
+  cancellationRetryNeeded.value = typeof window !== 'undefined'
+    && readQueuedPaymentCancellationIds(window.localStorage).includes(props.orderId)
   confirmationPending.value = props.initialConfirmationPending === true && !cancellationPending.value
   paidOrder.value = null
   latestOrder.value = null
@@ -1143,7 +1199,6 @@ function startSession() {
   deepLinkFallbackVisible.value = false
   verifyAttempts = 0
   lastVerifyAt = 0
-  lastCancellationVerifyAt = 0
   pollAttempts = 0
   pollExhausted.value = false
   deadlineReached.value = false

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
 import {
+  PAYMENT_CANCELLATION_STORAGE_KEY,
   PAYMENT_RECOVERY_STORAGE_KEY,
   RESET_CARD_CHECKOUT_ATTEMPT_STORAGE_KEY,
 } from '@/components/payment/paymentFlow'
@@ -33,6 +34,9 @@ const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
 const getCouponQuote = vi.hoisted(() => vi.fn())
+const getMyOrders = vi.hoisted(() => vi.fn())
+const getOrder = vi.hoisted(() => vi.fn())
+const cancelOrder = vi.hoisted(() => vi.fn())
 const resumeOrder = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
 const translate = vi.hoisted(() => vi.fn((key: string) => key))
@@ -124,6 +128,9 @@ vi.mock('@/api/payment', () => ({
   paymentAPI: {
     getCheckoutInfo,
     getCouponQuote,
+    getMyOrders,
+    getOrder,
+    cancelOrder,
     resumeOrder,
   },
 }))
@@ -251,6 +258,36 @@ function oauthOrderFixture() {
       redirect_url: '/auth/wechat/payment/callback',
     },
   }
+}
+
+function pendingExistingOrder(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 77,
+    user_id: 9,
+    amount: 88,
+    pay_amount: 88,
+    currency: 'CNY',
+    fee_rate: 0,
+    payment_type: 'alipay',
+    out_trade_no: 'SUB2-PENDING-77',
+    status: 'PENDING',
+    order_type: 'subscription',
+    created_at: '2026-09-22T08:00:00.000Z',
+    expires_at: '2099-01-01T00:10:00.000Z',
+    refund_amount: 0,
+    product_snapshot: { name: 'Pro plan' },
+    ...overrides,
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 async function resetCardWechatResumeToken(idempotencyKey: string): Promise<string> {
@@ -1376,6 +1413,233 @@ describe('PaymentView reset-card purchase navigation', () => {
     expect(wrapper.find('.fixed.inset-0.z-50').exists()).toBe(false)
     expect(createOrder).not.toHaveBeenCalled()
     expect(fetchActiveSubscriptions).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('PaymentView existing pending order dialog', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    routeState.path = '/purchase'
+    routeState.query = {}
+    routerReplace.mockReset().mockResolvedValue(undefined)
+    routerPush.mockReset().mockResolvedValue(undefined)
+    routerResolve.mockReset().mockReturnValue({ href: '/payment/stripe?mock=1' })
+    createOrder.mockReset()
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture())
+    getCouponQuote.mockReset()
+    getMyOrders.mockReset().mockResolvedValue({ data: { items: [], total: 0 } })
+    getOrder.mockReset()
+    cancelOrder.mockReset()
+    resumeOrder.mockReset()
+    refreshUser.mockReset()
+    fetchActiveSubscriptions.mockReset().mockResolvedValue(undefined)
+    showError.mockReset()
+    showInfo.mockReset()
+    showWarning.mockReset()
+    bridgeInvoke.mockReset()
+    isMobileDevice.mockReset().mockReturnValue(true)
+    window.localStorage.clear()
+  })
+
+  async function mountExistingOrderFlow(options: { attachTo?: HTMLElement } = {}) {
+    const wrapper = shallowMount(PaymentView, {
+      attachTo: options.attachTo,
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          BaseDialog: {
+            props: ['show'],
+            template: '<section v-if="show"><slot /><slot name="footer" /></section>',
+          },
+          ConfirmDialog: {
+            props: ['show'],
+            emits: ['confirm', 'cancel'],
+            template: `
+              <section data-test="existing-cancel-confirm" :data-show="show ? 'true' : 'false'">
+                <button data-test="confirm-existing-cancel" @click="$emit('confirm')"></button>
+                <button data-test="cancel-existing-cancel" @click="$emit('cancel')"></button>
+              </section>
+            `,
+          },
+          PaymentStatusPanel: {
+            props: ['orderId', 'payUrl', 'initialConfirmationPending'],
+            template: '<div data-test="payment-status-panel" :data-order-id="orderId" :data-pay-url="payUrl" :data-confirmation="initialConfirmationPending" />',
+          },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    return wrapper
+  }
+
+  async function submitTooManyPending(wrapper: VueWrapper) {
+    wrapper.findComponent(PaymentOrderRail).vm.$emit('submit')
+    await flushPromises()
+    await flushPromises()
+    await flushPromises()
+  }
+
+  it('loads authenticated existing-order details and suppresses the generic TOO_MANY_PENDING toast', async () => {
+    const order = pendingExistingOrder()
+    createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: { order_id: order.id } })
+    getOrder.mockResolvedValue({ data: order })
+
+    const wrapper = await mountExistingOrderFlow()
+    await submitTooManyPending(wrapper)
+
+    expect(getOrder).toHaveBeenCalledWith(77)
+    expect(wrapper.get('[data-test="existing-order-number"]').text()).toBe('SUB2-PENDING-77')
+    expect(wrapper.get('[data-test="existing-order-payment-method"]').text()).toBe('payment.methods.alipay')
+    expect(wrapper.get('[data-test="existing-order-product"]').text()).toBe('Pro plan')
+    expect(wrapper.get('[data-test="existing-order-type"]').text()).toBe('payment.admin.subscriptionOrder')
+    expect(wrapper.get('[data-test="open-existing-order"]').text()).toBe('payment.orderOps.openExistingOrder')
+    expect(wrapper.get('[data-test="cancel-existing-order"]').text()).toBe('payment.orderOps.cancelExistingOrder')
+    expect(zh.payment.orderOps.existingOrderTitle).toBe('已有待支付订单')
+    expect(zh.payment.orderOps.openExistingOrder).toBe('继续支付')
+    expect(zh.payment.orderOps.cancelExistingOrder).toBe('取消订单')
+    expect(en.payment.orderOps.existingOrderTitle).toBe('You have a pending order')
+    expect(en.payment.orderOps.openExistingOrder).toBe('Continue payment')
+    expect(en.payment.orderOps.cancelExistingOrder).toBe('Cancel order')
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the authenticated pending-order list when the conflict omits an order id', async () => {
+    const order = pendingExistingOrder({ id: 78, out_trade_no: 'SUB2-PENDING-78' })
+    createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: {} })
+    getMyOrders.mockResolvedValue({ data: { items: [order], total: 1 } })
+
+    const wrapper = await mountExistingOrderFlow()
+    await submitTooManyPending(wrapper)
+
+    expect(getOrder).not.toHaveBeenCalled()
+    expect(getMyOrders).toHaveBeenCalledWith({ page: 1, page_size: 50, status: 'PENDING' })
+    expect(wrapper.get('[data-test="existing-order-number"]').text()).toBe('SUB2-PENDING-78')
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('continues with only the fresh authenticated resume launch and a user-gesture popup', async () => {
+    const order = pendingExistingOrder()
+    createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: { order_id: order.id } })
+    getOrder.mockResolvedValue({ data: order })
+    resumeOrder.mockResolvedValue({
+      data: {
+        order_id: 77,
+        status: 'PENDING',
+        amount: 88,
+        pay_amount: 88,
+        fee_rate: 0,
+        currency: 'CNY',
+        payment_type: 'alipay',
+        pay_url: 'https://pay.totools.cn/checkout/fresh-77',
+        expires_at: '2099-01-01T00:10:00.000Z',
+        out_trade_no: 'SUB2-PENDING-77',
+      },
+    })
+    isMobileDevice.mockReturnValue(false)
+    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+
+    const wrapper = await mountExistingOrderFlow()
+    await submitTooManyPending(wrapper)
+    await wrapper.get('[data-test="open-existing-order"]').trigger('click')
+    await flushPromises()
+
+    expect(resumeOrder).toHaveBeenCalledWith(77)
+    expect(open).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
+    expect(popup.location.href).toBe('https://pay.totools.cn/checkout/fresh-77')
+    expect(wrapper.get('[data-test="payment-status-panel"]').attributes('data-order-id')).toBe('77')
+    expect(wrapper.find('[data-test="existing-order-details"]').exists()).toBe(false)
+    open.mockRestore()
+  })
+
+  it('waits for the local cancellation result and keeps an error inline instead of falsely cancelling', async () => {
+    const order = pendingExistingOrder()
+    const cancellation = deferred<{ data: { message: 'cancelled' } }>()
+    createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: { order_id: order.id } })
+    getOrder.mockResolvedValue({ data: order })
+    cancelOrder.mockReturnValue(cancellation.promise)
+
+    const wrapper = await mountExistingOrderFlow()
+    await submitTooManyPending(wrapper)
+    await wrapper.get('[data-test="cancel-existing-order"]').trigger('click')
+    expect(wrapper.get('[data-test="cancel-existing-order-confirm"]').attributes('data-show')).toBe('true')
+    await wrapper.get('[data-test="confirm-existing-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="existing-order-details"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="cancel-existing-order"]').attributes('disabled')).toBeDefined()
+    cancellation.resolve({ data: { message: 'cancelled' } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="existing-order-details"]').exists()).toBe(false)
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('keeps an ambiguous existing-order cancellation fenced and uses the localized retry fallback', async () => {
+    const order = pendingExistingOrder()
+    createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: { order_id: order.id } })
+    getOrder.mockResolvedValue({ data: order })
+    cancelOrder
+      .mockRejectedValueOnce({ reason: 'SERVICE_UNAVAILABLE', message: 'SERVICE_UNAVAILABLE' })
+      .mockResolvedValueOnce({ data: { message: 'cancelled' } })
+
+    const wrapper = await mountExistingOrderFlow()
+    await submitTooManyPending(wrapper)
+    await wrapper.get('[data-test="cancel-existing-order"]').trigger('click')
+    expect(wrapper.get('[data-test="cancel-existing-order-confirm"]').attributes('data-show')).toBe('true')
+    await wrapper.get('[data-test="confirm-existing-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="existing-order-action-error"]').text()).toBe('payment.orderOps.cancelFailedRetry')
+    expect(wrapper.get('[data-test="cancel-existing-order"]').text()).toBe('payment.orderOps.retryCancellation')
+    expect(wrapper.find('[data-test="open-existing-order"]').exists()).toBe(false)
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[77]')
+
+    await wrapper.get('[data-test="cancel-existing-order"]').trigger('click')
+    await flushPromises()
+
+    expect(cancelOrder).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-test="existing-order-details"]').exists()).toBe(false)
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('returns keyboard focus to the existing-order cancel action when its confirmation is dismissed', async () => {
+    const order = pendingExistingOrder()
+    createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: { order_id: order.id } })
+    getOrder.mockResolvedValue({ data: order })
+
+    const wrapper = await mountExistingOrderFlow({ attachTo: document.body })
+    await submitTooManyPending(wrapper)
+    const cancelButton = wrapper.get('[data-test="cancel-existing-order"]')
+    ;(cancelButton.element as HTMLButtonElement).focus()
+    await cancelButton.trigger('click')
+    expect(wrapper.get('[data-test="cancel-existing-order-confirm"]').attributes('data-show')).toBe('true')
+    await wrapper.get('[data-test="cancel-existing-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(document.activeElement).toBe(cancelButton.element)
+  })
+
+  it('switches to local confirmation rather than showing a cancelled order when payment already won', async () => {
+    const order = pendingExistingOrder()
+    createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: { order_id: order.id } })
+    getOrder.mockResolvedValue({ data: order })
+    cancelOrder.mockResolvedValue({ data: { message: 'already_paid' } })
+
+    const wrapper = await mountExistingOrderFlow()
+    await submitTooManyPending(wrapper)
+    await wrapper.get('[data-test="cancel-existing-order"]').trigger('click')
+    expect(wrapper.get('[data-test="cancel-existing-order-confirm"]').attributes('data-show')).toBe('true')
+    await wrapper.get('[data-test="confirm-existing-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-status-panel"]').attributes('data-confirmation')).toBe('true')
+    expect(wrapper.find('[data-test="existing-order-details"]').exists()).toBe(false)
+    expect(showError).not.toHaveBeenCalled()
   })
 })
 

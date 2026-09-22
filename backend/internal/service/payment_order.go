@@ -2030,6 +2030,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 		}
 	}
 	update := s.entClient.PaymentOrder.UpdateOneID(order.ID).
+		Where(paymentorder.StatusEQ(OrderStatusPending), paymentorder.PaidAtIsNil(), paymentorder.PaymentTradeNoEQ("")).
 		SetNillablePaymentTradeNo(psNilIfEmpty(pr.TradeNo)).
 		SetNillablePayURL(psNilIfEmpty(pr.PayURL)).
 		SetNillableQrCode(psNilIfEmpty(pr.QRCode)).
@@ -2040,6 +2041,21 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	}
 	_, err = update.Save(ctx)
 	if err != nil {
+		if dbent.IsNotFound(err) {
+			_, bindErr := s.bindCancelledProviderCreateResponse(ctx, order.ID, sel, pr, providerSnapshot)
+			if bindErr != nil {
+				return nil, fmt.Errorf("persist raced provider binding: %w", bindErr)
+			}
+			// A callback or cancellation won the CAS after the provider call. The
+			// authoritative row is the response contract now: never return this
+			// stale checkout, and never overwrite a trusted callback trade number
+			// with the provider's create-time identifier.
+			current, reloadErr := s.entClient.PaymentOrder.Get(ctx, order.ID)
+			if reloadErr != nil {
+				return nil, fmt.Errorf("reload raced payment order: %w", reloadErr)
+			}
+			return buildResetCardOrderResponse(current), nil
+		}
 		if sel.ProviderKey == payment.TypeUnifiedPay {
 			return nil, fmt.Errorf("%w: persist remote order binding", unifiedpay.ErrCreateStateUnconfirmed)
 		}

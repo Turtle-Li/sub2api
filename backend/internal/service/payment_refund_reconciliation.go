@@ -35,6 +35,8 @@ type PaymentRefundReconciliationCandidate struct {
 	ProductRefundNo string
 	OrderID         int64
 	Attempts        int
+	// ClaimedAt identifies this exact lease generation, including same-worker reclaims.
+	ClaimedAt time.Time
 }
 
 // PaymentRefundReconciliationStats is safe operational state. It deliberately
@@ -46,6 +48,8 @@ type PaymentRefundReconciliationStats struct {
 	// Old runtimes cannot fulfill quantity/auto-use promises in reset-card v2 orders.
 	UnsettledResetCardPurchaseCount    int64
 	EntitlementReservedReviewedPending int64
+	LateCancellationRefundPending      int64
+	LocalCancellationWorkOutstanding   int64
 	AutomaticallyReconciledPending     int64
 	OldestCreatedAt                    *time.Time
 	MaxAttempts                        int
@@ -59,6 +63,8 @@ type PaymentRefundRollbackReadiness struct {
 	UnsettledResetCardPurchaseCount         int64 `json:"unsettled_reset_card_purchase_count,omitempty"`
 	Ready                                   bool  `json:"ready"`
 	EntitlementReservedReviewedPendingCount int64 `json:"entitlement_reserved_reviewed_pending_count"`
+	LateCancellationRefundPendingCount      int64 `json:"late_cancellation_refund_pending_count,omitempty"`
+	LocalCancellationWorkOutstandingCount   int64 `json:"local_cancellation_work_outstanding_count,omitempty"`
 }
 
 // PaymentRefundReconciliationHealth is for in-process observability. The
@@ -68,6 +74,8 @@ type PaymentRefundReconciliationHealth struct {
 	Processed                          uint64
 	Failures                           uint64
 	EntitlementReservedReviewedPending int64
+	LateCancellationRefundPending      int64
+	LocalCancellationWorkOutstanding   int64
 	AutomaticallyReconciledPending     int64
 	OldestLag                          time.Duration
 	MaxAttempts                        int
@@ -80,8 +88,8 @@ type PaymentRefundReconciliationHealth struct {
 // provider state; those are finalized atomically by PaymentService.
 type PaymentRefundReconciliationStore interface {
 	ClaimReviewedEntitlementReservations(context.Context, string, int, time.Duration) ([]PaymentRefundReconciliationCandidate, error)
-	CompleteClaim(context.Context, string, string, time.Duration) error
-	RetryClaim(context.Context, string, string, time.Duration, time.Time, string) error
+	CompleteClaim(context.Context, string, string, time.Time, time.Duration) error
+	RetryClaim(context.Context, string, string, time.Time, time.Duration, time.Time, string) error
 	Stats(context.Context) (PaymentRefundReconciliationStats, error)
 }
 
@@ -227,18 +235,21 @@ func joinPaymentRefundReconciliationErrors(errs <-chan error) error {
 }
 
 func (s *PaymentRefundReconciliationService) reconcileCandidate(parent context.Context, candidate PaymentRefundReconciliationCandidate) error {
+	if candidate.ClaimedAt.IsZero() {
+		return errors.New("payment refund reconciliation claim generation is required")
+	}
 	if !runtimegate.DurableRecoveryWorkAllowed() {
-		return s.completeClaim(candidate.ProductRefundNo)
+		return s.completeClaim(candidate)
 	}
 	attempt, err := loadUnifiedRefundAttempt(parent, s.paymentSvc.entClient, candidate.OrderID, candidate.ProductRefundNo)
 	if errors.Is(err, sql.ErrNoRows) {
-		return s.completeClaim(candidate.ProductRefundNo)
+		return s.completeClaim(candidate)
 	}
 	if err != nil {
 		return s.retryClaim(candidate, err)
 	}
-	if !isReviewedRefundReconciliationEligible(attempt) {
-		return s.completeClaim(candidate.ProductRefundNo)
+	if !isUnifiedRefundReconciliationEligible(attempt) {
+		return s.completeClaim(candidate)
 	}
 
 	requestCtx, cancel := context.WithTimeout(parent, paymentRefundReconciliationAttemptTimeout)
@@ -250,7 +261,7 @@ func (s *PaymentRefundReconciliationService) reconcileCandidate(parent context.C
 	// response; the persisted state, not the response shape, decides the lease.
 	refreshed, loadErr := loadUnifiedRefundAttempt(parent, s.paymentSvc.entClient, candidate.OrderID, candidate.ProductRefundNo)
 	if errors.Is(loadErr, sql.ErrNoRows) {
-		return s.completeClaim(candidate.ProductRefundNo)
+		return s.completeClaim(candidate)
 	}
 	if loadErr != nil {
 		if advanceErr != nil {
@@ -258,8 +269,8 @@ func (s *PaymentRefundReconciliationService) reconcileCandidate(parent context.C
 		}
 		return s.retryClaim(candidate, loadErr)
 	}
-	if !isReviewedRefundReconciliationEligible(refreshed) {
-		return s.completeClaim(candidate.ProductRefundNo)
+	if !isUnifiedRefundReconciliationEligible(refreshed) {
+		return s.completeClaim(candidate)
 	}
 	if advanceErr != nil {
 		return s.retryClaim(candidate, advanceErr)
@@ -267,8 +278,14 @@ func (s *PaymentRefundReconciliationService) reconcileCandidate(parent context.C
 	return s.retryClaim(candidate, errPaymentRefundConfirmationPending)
 }
 
-func isReviewedRefundReconciliationEligible(attempt *unifiedRefundAttempt) bool {
-	if attempt == nil || attempt.Status != unifiedRefundPending || !attempt.EntitlementReserved || attempt.NeedsManualReview {
+func isUnifiedRefundReconciliationEligible(attempt *unifiedRefundAttempt) bool {
+	if attempt == nil || attempt.Status != unifiedRefundPending || attempt.NeedsManualReview {
+		return false
+	}
+	if isCancelledLateUnifiedRefund(attempt) {
+		return !attempt.EntitlementReserved && attempt.BalanceAmountMinor == 0 && !attempt.DeductBalance && attempt.QuoteRevision == ""
+	}
+	if !attempt.EntitlementReserved {
 		return false
 	}
 	if attempt.QuoteRevision == "" {
@@ -279,11 +296,11 @@ func isReviewedRefundReconciliationEligible(attempt *unifiedRefundAttempt) bool 
 
 var errPaymentRefundConfirmationPending = errors.New("provider confirmation pending")
 
-func (s *PaymentRefundReconciliationService) completeClaim(productRefundNo string) error {
+func (s *PaymentRefundReconciliationService) completeClaim(candidate PaymentRefundReconciliationCandidate) error {
 	ctx, cancel := context.WithTimeout(context.Background(), paymentRefundReconciliationReleaseTimeout)
 	defer cancel()
-	if err := s.store.CompleteClaim(ctx, productRefundNo, s.workerID, paymentRefundReconciliationLease); err != nil {
-		return fmt.Errorf("complete reviewed refund reconciliation %s: %w", productRefundNo, err)
+	if err := s.store.CompleteClaim(ctx, candidate.ProductRefundNo, s.workerID, candidate.ClaimedAt, paymentRefundReconciliationLease); err != nil {
+		return fmt.Errorf("complete reviewed refund reconciliation %s: %w", candidate.ProductRefundNo, err)
 	}
 	s.processed.Add(1)
 	s.lastError.Store("")
@@ -298,6 +315,7 @@ func (s *PaymentRefundReconciliationService) retryClaim(candidate PaymentRefundR
 		ctx,
 		candidate.ProductRefundNo,
 		s.workerID,
+		candidate.ClaimedAt,
 		paymentRefundReconciliationLease,
 		time.Now().UTC().Add(delay),
 		boundedPaymentRefundReconciliationError(cause),
@@ -365,6 +383,8 @@ func (s *PaymentRefundReconciliationService) Health(ctx context.Context) Payment
 		return health
 	}
 	health.EntitlementReservedReviewedPending = stats.EntitlementReservedReviewedPending
+	health.LateCancellationRefundPending = stats.LateCancellationRefundPending
+	health.LocalCancellationWorkOutstanding = stats.LocalCancellationWorkOutstanding
 	health.AutomaticallyReconciledPending = stats.AutomaticallyReconciledPending
 	health.MaxAttempts = stats.MaxAttempts
 	if health.LastError == "" {
@@ -385,15 +405,17 @@ func (s *PaymentRefundReconciliationService) Health(ctx context.Context) Payment
 // purchase promises must also settle before an older runtime can take over.
 func (s *PaymentRefundReconciliationService) RefundRollbackReadiness(ctx context.Context) (PaymentRefundRollbackReadiness, error) {
 	if s == nil || s.store == nil {
-		return PaymentRefundRollbackReadiness{EntitlementReservedReviewedPendingCount: -1}, errors.New("payment refund reconciliation store unavailable")
+		return PaymentRefundRollbackReadiness{EntitlementReservedReviewedPendingCount: -1, LateCancellationRefundPendingCount: -1, LocalCancellationWorkOutstandingCount: -1}, errors.New("payment refund reconciliation store unavailable")
 	}
 	stats, err := s.store.Stats(ctx)
 	if err != nil {
-		return PaymentRefundRollbackReadiness{EntitlementReservedReviewedPendingCount: -1}, err
+		return PaymentRefundRollbackReadiness{EntitlementReservedReviewedPendingCount: -1, LateCancellationRefundPendingCount: -1, LocalCancellationWorkOutstandingCount: -1}, err
 	}
 	return PaymentRefundRollbackReadiness{
-		Ready:                                   stats.EntitlementReservedReviewedPending == 0 && stats.UnsettledResetCardPurchaseCount == 0,
+		Ready:                                   stats.EntitlementReservedReviewedPending == 0 && stats.LateCancellationRefundPending == 0 && stats.LocalCancellationWorkOutstanding == 0 && stats.UnsettledResetCardPurchaseCount == 0,
 		UnsettledResetCardPurchaseCount:         stats.UnsettledResetCardPurchaseCount,
 		EntitlementReservedReviewedPendingCount: stats.EntitlementReservedReviewedPending,
+		LateCancellationRefundPendingCount:      stats.LateCancellationRefundPending,
+		LocalCancellationWorkOutstandingCount:   stats.LocalCancellationWorkOutstanding,
 	}, nil
 }

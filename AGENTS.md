@@ -2,6 +2,8 @@
 
 ## Payment catalog and reset-card purchases
 
+- For local-first user cancellation, late-payment refunds and existing-order checkout recovery, read `docs/operations/PAYMENT_LOCAL_CANCELLATION_20260922.md`. This owner-requested contract supersedes the September 19 wait-for-provider user-cancellation rule; preserve trusted payment facts and independent review fences.
+
 - Current September 20 payment/coupon/invoice follow-up checklist and progress: `docs/operations/PAYMENT_FIX_CHECKLIST_20260920.md`. Update each item with evidence; preserve paid-order and invoice/refund boundaries.
 
 - For authenticated checkout recovery, cancellation-pending presentation,

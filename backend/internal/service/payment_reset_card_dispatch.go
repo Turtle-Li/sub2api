@@ -760,6 +760,13 @@ func (s *PaymentService) finishResetCardProviderSuccess(ctx context.Context, ord
 		return nil, resetCardCreateUnconfirmedError(fmt.Errorf("persist provider checkout: %w", err))
 	}
 	if updated != 1 {
+		cancelled, bindErr := s.bindCancelledProviderCreateResponse(ctx, order.ID, sel, providerResp, snapshot)
+		if bindErr != nil {
+			return nil, resetCardCreateUnconfirmedError(fmt.Errorf("persist cancelled provider binding: %w", bindErr))
+		}
+		if cancelled {
+			return nil, infraerrors.Conflict("INVALID_STATUS", "order is no longer awaiting payment")
+		}
 		return s.replayResetCardOrder(ctx, req)
 	}
 	reloaded, err := s.entClient.PaymentOrder.Get(ctx, order.ID)

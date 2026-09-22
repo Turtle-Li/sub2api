@@ -96,6 +96,18 @@ func (p *paymentOrderLifecycleQueryProvider) CancelPayment(_ context.Context, tr
 	return nil
 }
 
+func localCancellationWorkCount(t *testing.T, ctx context.Context, client *dbent.Client, orderID int64, workKind string) int {
+	t.Helper()
+	rows, err := client.QueryContext(ctx, `SELECT COUNT(*) FROM payment_local_cancellation_work WHERE order_id = $1 AND work_kind = $2`, orderID, workKind)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	require.True(t, rows.Next())
+	var count int
+	require.NoError(t, rows.Scan(&count))
+	require.NoError(t, rows.Err())
+	return count
+}
+
 func (r *paymentOrderLifecycleRedeemRepo) Create(context.Context, *RedeemCode) error {
 	panic("unexpected call")
 }
@@ -523,7 +535,7 @@ func TestVerifyOrderByOutTradeNoDoesNotCancelUnpaidUpstreamOrder(t *testing.T) {
 	require.Equal(t, OrderStatusPending, reloaded.Status)
 }
 
-func TestCancelOrderStillClosesUnpaidUpstreamOrder(t *testing.T) {
+func TestCancelOrderPersistsUnpaidCloseWorkWithoutProviderIO(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentOrderLifecycleTestClient(t)
 
@@ -571,26 +583,25 @@ func TestCancelOrderStillClosesUnpaidUpstreamOrder(t *testing.T) {
 
 	outcome, err := svc.CancelOrder(ctx, order.ID, user.ID)
 	require.NoError(t, err)
-	require.Equal(t, "cancellation_requested", outcome)
+	require.Equal(t, checkPaidResultCancelled, outcome)
 	require.Empty(t, provider.lastCancelTradeNo)
 	require.Zero(t, provider.cancelCalls)
+	require.Zero(t, provider.queryCalls)
 
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
-	require.Equal(t, OrderStatusPending, reloaded.Status)
+	require.Equal(t, OrderStatusCancelled, reloaded.Status)
+
+	require.Equal(t, 1, localCancellationWorkCount(t, ctx, client, order.ID, localCancellationWorkClose))
 
 	recovered, err := svc.ReconcilePendingPaymentOrders(ctx)
 	require.NoError(t, err)
 	require.Zero(t, recovered)
-	require.Equal(t, order.OutTradeNo, provider.lastCancelTradeNo)
-	require.Equal(t, 1, provider.cancelCalls)
-
-	reloaded, err = client.PaymentOrder.Get(ctx, order.ID)
-	require.NoError(t, err)
-	require.Equal(t, OrderStatusCancelled, reloaded.Status)
+	require.Zero(t, provider.queryCalls, "normal pending-payment reconciliation must not revive a locally cancelled order")
+	require.Zero(t, provider.cancelCalls, "provider close belongs to durable cancellation work")
 }
 
-func TestCancelOrderKeepsDirectAlipayPendingWhenProviderStateIsUncertain(t *testing.T) {
+func TestCancelOrderDefersDirectProviderUncertaintyToDurableWork(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		suffix       string
@@ -620,18 +631,21 @@ func TestCancelOrderKeepsDirectAlipayPendingWhenProviderStateIsUncertain(t *test
 			registry.Register(provider)
 			svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true}
 
-			_, err = svc.CancelOrder(ctx, order.ID, user.ID)
+			result, err := svc.CancelOrder(ctx, order.ID, user.ID)
 			require.NoError(t, err)
+			require.Equal(t, checkPaidResultCancelled, result)
 			_, err = svc.ReconcilePendingPaymentOrders(ctx)
 			require.NoError(t, err)
 			reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 			require.NoError(t, err)
-			require.Equal(t, OrderStatusPending, reloaded.Status)
+			require.Equal(t, OrderStatusCancelled, reloaded.Status)
+			require.Zero(t, provider.queryCalls, "local cancellation must not wait for an uncertain provider query")
+			require.Zero(t, provider.cancelCalls, "local cancellation must not call provider close inline")
 		})
 	}
 }
 
-func TestReconcilePendingPaymentOrdersRetriesRequestedCancellation(t *testing.T) {
+func TestReconcilePendingPaymentOrdersCompletesLegacyCancellationIntentLocally(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentOrderLifecycleTestClient(t)
 
@@ -668,7 +682,6 @@ func TestReconcilePendingPaymentOrdersRetriesRequestedCancellation(t *testing.T)
 			TradeNo: order.OutTradeNo,
 			Status:  payment.ProviderStatusPending,
 		},
-		cancelErrors: []error{payment.ErrCancellationPending, nil},
 	}
 	registry.Register(provider)
 
@@ -678,22 +691,21 @@ func TestReconcilePendingPaymentOrdersRetriesRequestedCancellation(t *testing.T)
 		providersLoaded: true,
 	}
 
-	_, err = svc.CancelOrder(ctx, order.ID, user.ID)
-	require.NoError(t, err)
+	// Simulate the audit-only cancellation request written by a draining old
+	// binary. The current reconciler must convert it to local cancellation
+	// without waiting for or retrying provider close inline.
+	require.NoError(t, svc.recordPaymentCancellationPending(ctx, order.ID, "old-binary"))
 
-	_, err = svc.ReconcilePendingPaymentOrders(ctx)
+	recovered, err := svc.ReconcilePendingPaymentOrders(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, provider.cancelCalls)
+	require.Zero(t, recovered)
+	require.Zero(t, provider.queryCalls)
+	require.Zero(t, provider.cancelCalls)
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
-	require.Equal(t, OrderStatusPending, reloaded.Status)
-
-	_, err = svc.ReconcilePendingPaymentOrders(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 2, provider.cancelCalls)
-	reloaded, err = client.PaymentOrder.Get(ctx, order.ID)
-	require.NoError(t, err)
 	require.Equal(t, OrderStatusCancelled, reloaded.Status)
+
+	require.Equal(t, 1, localCancellationWorkCount(t, ctx, client, order.ID, localCancellationWorkClose))
 }
 
 func TestReconcilePendingPaymentOrdersBackfillsPaidOrder(t *testing.T) {
@@ -991,5 +1003,28 @@ func newPaymentOrderLifecycleTestClient(t *testing.T) *dbent.Client {
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
 	t.Cleanup(func() { _ = client.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE payment_local_cancellation_work (
+			order_id INTEGER NOT NULL,
+			work_kind TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'PENDING',
+			provider_key TEXT NOT NULL DEFAULT '',
+			payment_trade_no TEXT NOT NULL DEFAULT '',
+			provider_refund_id TEXT NOT NULL DEFAULT '',
+			provider_status TEXT NOT NULL DEFAULT '',
+			amount_fen INTEGER NOT NULL DEFAULT 0,
+			currency TEXT NOT NULL DEFAULT 'CNY',
+			idempotency_key TEXT NOT NULL,
+			available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			claimed_at DATETIME,
+			claimed_by TEXT,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT,
+			completed_at DATETIME,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (order_id, work_kind)
+		)`)
+	require.NoError(t, err)
 	return client
 }

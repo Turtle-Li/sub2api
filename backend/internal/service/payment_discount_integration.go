@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -240,40 +241,57 @@ func (s *PaymentService) markDiscountOrderPaid(ctx context.Context, o *dbent.Pay
 	if err != nil {
 		return false, err
 	}
-	if locked.PaidAt != nil {
-		return false, nil
-	}
-	if psIsRefundStatus(locked.Status) {
-		return false, infraerrors.Conflict("INVALID_STATUS", "refund order cannot be paid")
-	}
-	if !decimal.NewFromFloat(locked.PayAmount).Equal(decimal.NewFromFloat(paid)) {
-		return false, fmt.Errorf("coupon payment amount mismatch")
-	}
-	allowed, err := consumePaymentDiscount(txCtx, tx.Client(), locked.ID)
+	allowed, _, err := s.markDiscountOrderPaidTx(txCtx, tx.Client(), locked, tradeNo, paid)
 	if err != nil {
-		return false, err
-	}
-	now := time.Now()
-	b := tx.PaymentOrder.UpdateOneID(locked.ID).SetPaidAt(now).SetPaymentTradeNo(tradeNo).SetPayAmount(paid)
-	if allowed {
-		b.SetStatus(OrderStatusPaid).ClearFailedAt().ClearFailedReason()
-	} else {
-		b.SetStatus(OrderStatusFailed).SetFailedAt(now).SetFailedReason(paymentDiscountManualReviewReason)
-	}
-	if _, err = b.Save(txCtx); err != nil {
-		return false, err
-	}
-	action := "PAYMENT_COUPON_CONSUMED"
-	if !allowed {
-		action = "PAYMENT_COUPON_MANUAL_REVIEW"
-	}
-	if _, err = tx.PaymentAuditLog.Create().SetOrderID(fmt.Sprint(locked.ID)).SetAction(action).SetOperator("system").SetDetail(`{"trusted_payment":true}`).Save(txCtx); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(); err != nil {
 		return false, err
 	}
 	return allowed, nil
+}
+
+// markDiscountOrderPaidTx owns only the trusted paid claim and coupon ledger.
+// The caller already holds the order row lock, so cancellation can choose its
+// own branch before this function attempts any released-coupon recovery.
+func (s *PaymentService) markDiscountOrderPaidTx(ctx context.Context, client *dbent.Client, locked *dbent.PaymentOrder, tradeNo string, paid float64) (allowed bool, changed bool, err error) {
+	if locked == nil {
+		return false, false, errors.New("discount payment order is missing")
+	}
+	if locked.PaidAt != nil {
+		return false, false, nil
+	}
+	if psIsRefundStatus(locked.Status) {
+		return false, false, infraerrors.Conflict("INVALID_STATUS", "refund order cannot be paid")
+	}
+	if locked.Status == OrderStatusCancelled {
+		return false, false, infraerrors.Conflict("INVALID_STATUS", "cancelled coupon order must use the late-payment refund path")
+	}
+	if !decimal.NewFromFloat(locked.PayAmount).Equal(decimal.NewFromFloat(paid)) {
+		return false, false, fmt.Errorf("coupon payment amount mismatch")
+	}
+	allowed, err = consumePaymentDiscount(ctx, client, locked.ID)
+	if err != nil {
+		return false, false, err
+	}
+	now := time.Now()
+	b := client.PaymentOrder.UpdateOneID(locked.ID).SetPaidAt(now).SetPaymentTradeNo(tradeNo).SetPayAmount(paid)
+	if allowed {
+		b.SetStatus(OrderStatusPaid).ClearFailedAt().ClearFailedReason()
+	} else {
+		b.SetStatus(OrderStatusFailed).SetFailedAt(now).SetFailedReason(paymentDiscountManualReviewReason)
+	}
+	if _, err = b.Save(ctx); err != nil {
+		return false, false, err
+	}
+	action := "PAYMENT_COUPON_CONSUMED"
+	if !allowed {
+		action = "PAYMENT_COUPON_MANUAL_REVIEW"
+	}
+	if err = writePaymentAuditTx(ctx, client, locked.ID, action, "system", map[string]any{"trusted_payment": true}); err != nil {
+		return false, false, err
+	}
+	return allowed, true, nil
 }
 
 func (s *PaymentService) cancelDiscountOrder(ctx context.Context, o *dbent.PaymentOrder, status string) (int, error) {

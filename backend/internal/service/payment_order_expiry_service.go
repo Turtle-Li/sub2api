@@ -13,13 +13,15 @@ import (
 const expiryCheckTimeout = 30 * time.Second
 
 const (
-	// paymentOrderExpiryLeaderLockKey gates the periodic reconcile, expiry, and
-	// fulfillment-recovery sweep so only one instance runs each cycle.
+	// paymentOrderExpiryLeaderLockKey gates the periodic reconcile, expiry,
+	// fulfillment-recovery, and local-cancellation work sweep so only one
+	// instance runs each cycle.
 	paymentOrderExpiryLeaderLockKey = "payment:order:expiry:leader"
 	// paymentOrderExpiryLeaderLockTTL must exceed the combined reconcile, expiry,
-	// and fulfillment-recovery timeouts (3 * expiryCheckTimeout) so the lock
+	// fulfillment-recovery, and local-cancellation work timeouts
+	// (4 * expiryCheckTimeout) so the lock
 	// never expires mid-run.
-	paymentOrderExpiryLeaderLockTTL = 3 * time.Minute
+	paymentOrderExpiryLeaderLockTTL = 4 * time.Minute
 )
 
 // PaymentOrderExpiryService periodically expires timed-out payment orders.
@@ -90,7 +92,7 @@ func (s *PaymentOrderExpiryService) Stop() {
 func (s *PaymentOrderExpiryService) runOnce() {
 	// Multi-instance guard: only the leader reconciles, expires, and recovers
 	// orders per cycle, avoiding N× provider calls and fulfillment races.
-	jobCtx, jobCancel := context.WithTimeout(context.Background(), 3*expiryCheckTimeout+10*time.Second)
+	jobCtx, jobCancel := context.WithTimeout(context.Background(), 4*expiryCheckTimeout+10*time.Second)
 	defer jobCancel()
 	leaseCtx, release, ok := tryAcquireSingletonLeaderLock(jobCtx, s.lockCache, s.db, paymentOrderExpiryLeaderLockKey, s.instanceID, paymentOrderExpiryLeaderLockTTL)
 	if !ok {
@@ -123,5 +125,14 @@ func (s *PaymentOrderExpiryService) runOnce() {
 		slog.Warn("[PaymentOrderExpiry] failed to recover paid order fulfillments", "error", err)
 	} else if recoveredFulfillments > 0 {
 		slog.Info("[PaymentOrderExpiry] recovered paid order fulfillments", "count", recoveredFulfillments)
+	}
+
+	localCancellationCtx, cancel := context.WithTimeout(leaseCtx, expiryCheckTimeout)
+	processedLocalCancellation, err := s.paymentSvc.ReconcileLocalCancellationWork(localCancellationCtx, s.instanceID)
+	cancel()
+	if err != nil {
+		slog.Warn("[PaymentOrderExpiry] failed to reconcile local cancellation work", "error", err)
+	} else if processedLocalCancellation > 0 {
+		slog.Info("[PaymentOrderExpiry] reconciled local cancellation work", "count", processedLocalCancellation)
 	}
 }

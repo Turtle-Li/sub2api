@@ -106,6 +106,18 @@ func TestPaymentRefundRollbackReadinessRouteFailsClosedWithSafeCount(t *testing.
 	require.Equal(t, http.StatusServiceUnavailable, response.Code)
 	require.JSONEq(t, `{"ready":false,"entitlement_reserved_reviewed_pending_count":0,"unsettled_reset_card_purchase_count":1}`, response.Body.String())
 
+	health.rollbackReadiness = service.PaymentRefundRollbackReadiness{Ready: true, LateCancellationRefundPendingCount: 1}
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusServiceUnavailable, response.Code)
+	require.JSONEq(t, `{"ready":false,"entitlement_reserved_reviewed_pending_count":0,"late_cancellation_refund_pending_count":1}`, response.Body.String())
+
+	health.rollbackReadiness = service.PaymentRefundRollbackReadiness{Ready: true, LocalCancellationWorkOutstandingCount: 2}
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusServiceUnavailable, response.Code)
+	require.JSONEq(t, `{"ready":false,"entitlement_reserved_reviewed_pending_count":0,"local_cancellation_work_outstanding_count":2}`, response.Body.String())
+
 	health.rollbackErr = errors.New("database unavailable")
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)

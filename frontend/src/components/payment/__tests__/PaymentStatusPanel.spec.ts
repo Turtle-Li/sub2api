@@ -214,7 +214,7 @@ describe('PaymentStatusPanel', () => {
     expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 'https://qr.alipay.com/alipay-42', expect.any(Object))
   })
 
-  it('embeds a validated Alipay checkout frame when native QR is absent and allowCheckoutFrame is true', async () => {
+  it('keeps a valid legacy Alipay frame as an opt-in top-level fallback when native QR is absent', async () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     const openSpy = vi.spyOn(window, 'open')
@@ -233,16 +233,15 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    const iframe = wrapper.find('[data-test="alipay-checkout-frame"]')
-    expect(iframe.exists()).toBe(true)
-    expect(iframe.attributes('src')).toBe(checkoutFrameUrl)
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="alipay-checkout-popup-fallback"]').exists()).toBe(true)
     expect(toCanvas).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('payment.qr.openPayWindow')
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
   })
 
-  it('waits for the server result while the embedded checkout frame is open', async () => {
+  it('waits for the server result while the top-level Alipay fallback is available', async () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     pollOrderStatus
       .mockResolvedValueOnce(orderFactory('PENDING'))
@@ -261,7 +260,8 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="alipay-checkout-popup-fallback"]').exists()).toBe(true)
     expect(toCanvas).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(3000)
@@ -290,12 +290,27 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
     expect(toCanvas).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('payment.qr.openPayWindow')
+    expect(wrapper.find('[data-test="alipay-checkout-popup-fallback"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('falls back to redirect waiting mode when iframe triggers an error', async () => {
+  it('opens only a freshly resumed legacy frame URL at top level', async () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    resumeOrder.mockResolvedValue({
+      data: {
+        order_id: 42,
+        status: 'PENDING',
+        amount: 88,
+        pay_amount: 88,
+        fee_rate: 0,
+        expires_at: '2099-01-01T12:30:00Z',
+        payment_type: 'alipay',
+        checkout_frame_url: checkoutFrameUrl,
+      },
+    })
+    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
@@ -310,15 +325,14 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    const iframe = wrapper.find('[data-test="alipay-checkout-frame"]')
-    expect(iframe.exists()).toBe(true)
-
-    await iframe.trigger('error')
+    await wrapper.get('button').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
-    expect(toCanvas).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('payment.qr.openPayWindow')
+    expect(resumeOrder).toHaveBeenCalledWith(42)
+    expect(popup.location.href).toBe(checkoutFrameUrl)
+    expect(popup.close).not.toHaveBeenCalled()
+    open.mockRestore()
   })
 
   it('does not use an Alipay checkout frame for WeChat QR payments', async () => {
@@ -458,8 +472,8 @@ describe('PaymentStatusPanel', () => {
     wrapper.unmount()
   })
 
-  it('closes the cashier immediately while cancellation runs in the background', async () => {
-    const cancellationRequest = deferred<void>()
+  it('settles and releases the cashier only after the local cancellation commit', async () => {
+    const cancellationRequest = deferred<{ data: { message: 'cancelled' } }>()
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     cancelOrder.mockReturnValue(cancellationRequest.promise)
 
@@ -481,14 +495,219 @@ describe('PaymentStatusPanel', () => {
     await flushPromises()
 
     expect(cancelOrder).toHaveBeenCalledWith(42)
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.emitted('done')).toBeUndefined()
+    expect(wrapper.find('[data-test="payment-cancellation-pending"]').exists()).toBe(false)
+    expect(wrapper.find('canvas').exists()).toBe(true)
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[42]')
+    cancellationRequest.resolve({ data: { message: 'cancelled' } })
+    await flushPromises()
+
     expect(wrapper.emitted('settled')).toEqual([['cancelled']])
     expect(wrapper.emitted('done')).toEqual([[]])
-    expect(wrapper.find('[data-test="payment-cancellation-pending"]').exists()).toBe(false)
     expect(wrapper.find('canvas').exists()).toBe(false)
-    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[42]')
-    cancellationRequest.reject(new Error('background cancellation failure'))
-    await flushPromises()
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
     expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps the checkout in local confirmation when payment already won the cancellation race', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    cancelOrder.mockResolvedValue({ data: { message: 'already_paid' } })
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://qr.alipay.com/qr-42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
+    await cancelButton?.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-confirmation-pending"]').exists()).toBe(true)
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.emitted('done')).toBeUndefined()
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('keeps already-paid PAID and RECHARGING orders confirmation-fenced until completion', async () => {
+    pollOrderStatus
+      .mockResolvedValueOnce(orderFactory('PENDING'))
+      .mockResolvedValueOnce({
+        ...orderFactory('PAID'),
+        paid_at: '2026-04-20T12:01:00Z',
+        payment_status: 'PAID',
+        fulfillment_status: 'PENDING',
+      })
+      .mockResolvedValueOnce({
+        ...orderFactory('RECHARGING'),
+        paid_at: '2026-04-20T12:01:00Z',
+        payment_status: 'PAID',
+        fulfillment_status: 'PENDING',
+      })
+      .mockResolvedValueOnce({
+        ...orderFactory('COMPLETED'),
+        paid_at: '2026-04-20T12:01:00Z',
+        payment_status: 'PAID',
+        fulfillment_status: 'FULFILLED',
+      })
+    cancelOrder.mockResolvedValue({ data: { message: 'already_paid' } })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://qr.alipay.com/qr-42',
+        payUrl: 'https://pay.totools.cn/checkout/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
+    await cancelButton?.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
+    await flushPromises()
+
+    const expectConfirmationFence = () => {
+      expect(wrapper.get('[data-test="payment-confirmation-pending"]').exists()).toBe(true)
+      expect(wrapper.find('canvas').exists()).toBe(false)
+      expect(wrapper.findAll('button').some(button => button.text() === 'payment.qr.cancelOrder')).toBe(false)
+      expect(wrapper.findAll('button').some(button => button.text() === 'payment.qr.openPayWindow')).toBe(false)
+      expect(wrapper.emitted('settled')).toBeUndefined()
+    }
+
+    expectConfirmationFence()
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expectConfirmationFence()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledTimes(4)
+    expect(wrapper.text()).toContain('payment.result.success')
+    expect(wrapper.find('[data-test="payment-confirmation-pending"]').exists()).toBe(false)
+    expect(wrapper.emitted('settled')).toEqual([['success']])
+    expect(wrapper.emitted('success')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('fences payable launch paths after an ambiguous cancellation failure and lets the user retry', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    cancelOrder
+      .mockRejectedValueOnce({ reason: 'SERVICE_UNAVAILABLE', message: 'SERVICE_UNAVAILABLE' })
+      .mockResolvedValueOnce({ data: { message: 'cancelled' } })
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://qr.alipay.com/qr-42',
+        payUrl: 'https://pay.totools.cn/checkout/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
+    await cancelButton?.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-cancel-error"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="payment-cancel-error"]').text()).toBe('payment.orderOps.cancelFailedRetry')
+    expect(wrapper.get('[data-test="payment-cancellation-retry-needed"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="retry-payment-cancel"]').exists()).toBe(true)
+    expect(wrapper.find('canvas').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === 'payment.qr.openPayWindow')).toBe(false)
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.emitted('done')).toBeUndefined()
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[42]')
+    expect(showError).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-test="retry-payment-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(cancelOrder).toHaveBeenCalledTimes(2)
+    expect(wrapper.emitted('settled')).toEqual([['cancelled']])
+    expect(wrapper.emitted('done')).toEqual([[]])
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('clears an ambiguous cancellation error and queue when polling confirms payment completed', async () => {
+    pollOrderStatus
+      .mockResolvedValueOnce(orderFactory('PENDING'))
+      .mockResolvedValueOnce(orderFactory('COMPLETED'))
+    cancelOrder.mockRejectedValue({ reason: 'SERVICE_UNAVAILABLE', message: 'SERVICE_UNAVAILABLE' })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://qr.alipay.com/qr-42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'payment.qr.cancelOrder')
+    await cancelButton?.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-cancel-error"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="payment-cancellation-retry-needed"]').exists()).toBe(true)
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[42]')
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.result.success')
+    expect(wrapper.find('[data-test="payment-cancel-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="payment-cancellation-retry-needed"]').exists()).toBe(false)
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
+    expect(wrapper.emitted('settled')).toEqual([['success']])
+    wrapper.unmount()
+  })
+
+  it('keeps a queued cancellation fenced after reload before any popup can be opened', async () => {
+    window.localStorage.setItem(PAYMENT_CANCELLATION_STORAGE_KEY, '[42]')
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const openSpy = vi.spyOn(window, 'open')
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://qr.alipay.com/qr-42',
+        payUrl: 'https://pay.totools.cn/checkout/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="payment-cancellation-retry-needed"]').exists()).toBe(true)
+    expect(wrapper.find('canvas').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === 'payment.qr.openPayWindow')).toBe(false)
+    expect(openSpy).not.toHaveBeenCalled()
+    openSpy.mockRestore()
     wrapper.unmount()
   })
 

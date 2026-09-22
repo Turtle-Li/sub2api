@@ -442,7 +442,7 @@ func (a *Alipay) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 		OutTradeNo:   req.OrderID,
 		RefundAmount: req.Amount,
 		RefundReason: req.Reason,
-		OutRequestNo: fmt.Sprintf("%s-refund-%d", req.OrderID, time.Now().UnixNano()),
+		OutRequestNo: alipayRefundReference(req),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("alipay TradeRefund: %w", err)
@@ -462,6 +462,13 @@ func (a *Alipay) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 		RefundID: refundID,
 		Status:   refundStatus,
 	}, nil
+}
+
+func alipayRefundReference(req payment.RefundRequest) string {
+	if reference := strings.TrimSpace(req.RefundReference); reference != "" {
+		return reference
+	}
+	return fmt.Sprintf("%s-refund-%d", req.OrderID, time.Now().UnixNano())
 }
 
 // CancelPayment closes a pending trade on Alipay.

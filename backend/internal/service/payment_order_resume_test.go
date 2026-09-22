@@ -62,29 +62,31 @@ func TestResumeExistingCheckoutAndCancellation(t *testing.T) {
 	require.Equal(t, *order.PayURL, resumed.PayURL)
 	require.True(t, order.ExpiresAt.Equal(resumed.ExpiresAt))
 	require.Zero(t, closes)
+	queriesBeforeCancel := queries
 	result, err := svc.CancelOrder(ctx, order.ID, order.UserID)
 	require.NoError(t, err)
-	require.Equal(t, "cancellation_requested", result)
+	require.Equal(t, checkPaidResultCancelled, result)
 	stored, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
-	require.Equal(t, OrderStatusPending, stored.Status)
+	require.Equal(t, OrderStatusCancelled, stored.Status)
 	pending, err := svc.paymentOrderCancellationPendingIDs(ctx, []int64{order.ID})
 	require.NoError(t, err)
-	require.True(t, pending[order.ID])
+	require.False(t, pending[order.ID], "new local cancellation must not use the legacy pending-intent audit")
 	_, err = svc.ResumeOrder(ctx, order.ID, order.UserID)
-	require.Equal(t, "PAYMENT_CANCELLATION_PENDING", infraerrors.Reason(err))
-	require.Zero(t, closes, "cancellation is deferred to the background reconciler")
+	require.Equal(t, "INVALID_STATUS", infraerrors.Reason(err))
+	require.Zero(t, closes, "local cancellation must not wait for upstream close")
 	count, err := client.PaymentOrder.Query().Count(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
-	state = "CLOSED"
-	_, err = svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, order.UserID)
+	verified, err := svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, order.UserID)
 	require.NoError(t, err)
+	require.Equal(t, OrderStatusCancelled, verified.Status)
+	require.Equal(t, queriesBeforeCancel, queries, "a cancelled order must not re-query upstream on verification")
 	stored, err = client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusCancelled, stored.Status)
 	_, err = svc.ResumeOrder(ctx, order.ID, order.UserID)
-	require.Error(t, err)
+	require.Equal(t, "INVALID_STATUS", infraerrors.Reason(err))
 }
 
 func TestResumeOrderHydratesTrustedCentralAlipayFrame(t *testing.T) {
@@ -189,7 +191,7 @@ func TestResumeCheckoutFailsClosedOnUnknownAndMissingLaunch(t *testing.T) {
 	}
 }
 
-func TestCancellationIntentFencesResumeBeforeProviderCall(t *testing.T) {
+func TestLegacyCancellationIntentFencesResumeBeforeProviderCall(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentOrderLifecycleTestClient(t)
 	order := resumeTestOrder(t, client)
@@ -197,25 +199,28 @@ func TestCancellationIntentFencesResumeBeforeProviderCall(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		pending, err := svc.paymentOrderCancellationPendingIDs(ctx, []int64{order.ID})
-		require.NoError(t, err)
-		require.True(t, pending[order.ID], "cancel intent must be durable before any provider interaction")
-		if pending[order.ID] {
-			resumed, err := svc.ResumeOrder(ctx, order.ID, order.UserID)
-			require.Nil(t, resumed)
-			require.Equal(t, "PAYMENT_CANCELLATION_PENDING", infraerrors.Reason(err))
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
+		t.Fatal("legacy cancellation migration must complete locally before provider I/O")
 	}))
 	defer server.Close()
 	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
-	result, err := svc.CancelOrder(ctx, order.ID, order.UserID)
+
+	// This audit can exist from an older binary. New CancelOrder calls no
+	// longer write it; an owned read must migrate it to the immediate local
+	// cancellation contract before exposing a checkout or querying upstream.
+	require.NoError(t, svc.recordPaymentCancellationPending(ctx, order.ID, "old-binary"))
+	pending, err := svc.paymentOrderCancellationPendingIDs(ctx, []int64{order.ID})
 	require.NoError(t, err)
-	require.Equal(t, "cancellation_requested", result)
+	require.True(t, pending[order.ID])
+
+	resumed, err := svc.ResumeOrder(ctx, order.ID, order.UserID)
+	require.Nil(t, resumed)
+	require.Equal(t, "PAYMENT_CANCELLATION_PENDING", infraerrors.Reason(err))
+
+	verified, err := svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, order.UserID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCancelled, verified.Status)
+	require.Zero(t, calls, "legacy migration must not wait for provider I/O")
 	stored, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
-	require.Equal(t, OrderStatusPending, stored.Status)
-	_, err = svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, order.UserID)
-	require.NoError(t, err)
-	require.Equal(t, 1, calls, "verification retries a persisted cancellation before checkout expiry")
+	require.Equal(t, OrderStatusCancelled, stored.Status)
 }

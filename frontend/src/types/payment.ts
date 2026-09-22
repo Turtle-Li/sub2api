@@ -517,6 +517,12 @@ export interface CreateOrderResult {
   payment_discount?: PaymentDiscountSnapshot
 }
 
+/** Result of the local order-cancellation commit. */
+export interface CancelOrderResult {
+  /** The order was cancelled locally, or a payment had already won the race. */
+  message: 'cancelled' | 'already_paid'
+}
+
 export type CurrencyAmounts = Record<string, number>
 
 export interface DailyPaymentStats {

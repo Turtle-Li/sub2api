@@ -114,6 +114,35 @@ export function extractI18nErrorMessage(
 }
 
 /**
+ * Resolve an API reason through i18n, using a contextual fallback when the
+ * server gives an unmapped machine code. Errors without a reason still retain
+ * a readable transport or browser message.
+ *
+ * This is useful for actions such as cancellation, where showing
+ * `SERVICE_UNAVAILABLE` gives the user no useful next step.
+ */
+export function extractMappedI18nErrorMessage(
+  err: unknown,
+  t: TranslateFn,
+  namespace: string,
+  fallback: string,
+): string {
+  const code = extractApiErrorCode(err)
+  if (!code) return extractApiErrorMessage(err, fallback)
+
+  const key = `${namespace}.${code}`
+  const rawMetadata = extractApiErrorMetadata(err) ?? {}
+  const metadata = localizeMetadata(rawMetadata, t)
+  const translated = t(key, metadata)
+  if (translated !== key) return translated
+
+  const te = (t as TranslateWithExistsFn).te
+  if (te && te(key)) return translated
+
+  return fallback
+}
+
+/**
  * Extract a displayable error message from an API error.
  *
  * @param err - The caught error (unknown type)

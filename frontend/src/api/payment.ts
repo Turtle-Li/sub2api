@@ -15,6 +15,7 @@ import type {
   PaymentCouponQuoteRequest,
   PaymentDiscountQuote,
   PaymentOrder,
+  CancelOrderResult,
   PaymentInvoiceRecord,
   CreateInvoiceRequest
 } from '@/types/payment'
@@ -96,7 +97,7 @@ export const paymentAPI = {
 
   /** Cancel a pending order */
   cancelOrder(id: number) {
-    return apiClient.post(`/payment/orders/${id}/cancel`)
+    return apiClient.post<CancelOrderResult>(`/payment/orders/${id}/cancel`)
   },
 
   /**

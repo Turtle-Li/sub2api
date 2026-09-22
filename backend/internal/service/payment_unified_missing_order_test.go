@@ -277,3 +277,166 @@ func writeMissingUnifiedPaymentOrderLookup(t *testing.T, writer http.ResponseWri
 	writer.Header().Set("Content-Type", "application/json")
 	require.NoError(t, json.NewEncoder(writer).Encode(response))
 }
+
+func TestReconcileMissingUnifiedPaymentOrderBindsCancelledLostCreateResponseForProductOrders(t *testing.T) {
+	for _, orderType := range []string{payment.OrderTypeBalance, payment.OrderTypeSubscription} {
+		t.Run(orderType, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Now().UTC().Truncate(time.Second)
+			client := newPaymentOrderLifecycleTestClient(t)
+			order := newCancelledMissingUnifiedPaymentOrder(t, client, orderType, now)
+			require.NoError(t, ensureLocalCancellationCloseWorkTx(ctx, client, order))
+
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				require.Equal(t, http.MethodGet, request.Method)
+				require.Equal(t, "/v1/payment-orders?product_order_no="+order.OutTradeNo, request.RequestURI)
+				writeMissingUnifiedPaymentOrderLookup(t, writer, order, now, "app.sub2.sandbox", orderType, 1234, unifiedpay.PaymentMethodAlipay, unifiedpay.StatusPendingPayment)
+			}))
+			defer server.Close()
+
+			svc := &PaymentService{entClient: client, resetCardNow: func() time.Time { return now }}
+			svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+			require.Equal(t, missingUnifiedPaymentOrderNotHandled, svc.reconcileMissingUnifiedPaymentOrder(ctx, order))
+
+			persisted, err := client.PaymentOrder.Get(ctx, order.ID)
+			require.NoError(t, err)
+			require.Equal(t, OrderStatusCancelled, persisted.Status)
+			require.Nil(t, persisted.PaidAt)
+			require.Equal(t, missingUnifiedPaymentOrderID, persisted.PaymentTradeNo)
+			require.Equal(t, missingUnifiedPaymentOrderID, psOrderProviderSnapshot(persisted).PaymentOrderID)
+			require.Empty(t, persisted.PayURL)
+			require.Empty(t, persisted.QrCode)
+			require.Empty(t, persisted.QrCodeImg)
+
+			require.Equal(t, 1, localCancellationWorkCount(t, ctx, client, order.ID, localCancellationWorkClose))
+			rows, err := client.QueryContext(ctx, `
+				SELECT status, provider_key, payment_trade_no
+				FROM payment_local_cancellation_work
+				WHERE order_id = $1 AND work_kind = $2`, order.ID, localCancellationWorkClose)
+			require.NoError(t, err)
+			defer func() { _ = rows.Close() }()
+			require.True(t, rows.Next())
+			var status, providerKey, tradeNo string
+			require.NoError(t, rows.Scan(&status, &providerKey, &tradeNo))
+			require.NoError(t, rows.Err())
+			require.Equal(t, localCancellationWorkPending, status)
+			require.Equal(t, payment.TypeUnifiedPay, providerKey)
+			require.Equal(t, missingUnifiedPaymentOrderID, tradeNo)
+		})
+	}
+}
+
+func TestReconcileMissingUnifiedPaymentOrderDoesNotGuessCancelledRemoteIDWhenAbsent(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	client := newPaymentOrderLifecycleTestClient(t)
+	order := newCancelledMissingUnifiedPaymentOrder(t, client, payment.OrderTypeBalance, now)
+	require.NoError(t, ensureLocalCancellationCloseWorkTx(ctx, client, order))
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writeMissingUnifiedPaymentOrderNotFound(t, writer)
+	}))
+	defer server.Close()
+
+	svc := &PaymentService{entClient: client, resetCardNow: func() time.Time { return now }}
+	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+	require.Equal(t, missingUnifiedPaymentOrderRetry, svc.reconcileMissingUnifiedPaymentOrder(ctx, order))
+
+	persisted, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCancelled, persisted.Status)
+	require.Empty(t, persisted.PaymentTradeNo)
+	require.Empty(t, psOrderProviderSnapshot(persisted).PaymentOrderID)
+	rows, err := client.QueryContext(ctx, `
+		SELECT payment_trade_no FROM payment_local_cancellation_work
+		WHERE order_id = $1 AND work_kind = $2`, order.ID, localCancellationWorkClose)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	require.True(t, rows.Next())
+	var tradeNo string
+	require.NoError(t, rows.Scan(&tradeNo))
+	require.Empty(t, tradeNo)
+}
+
+func newCancelledMissingUnifiedPaymentOrder(t *testing.T, client *dbent.Client, orderType string, now time.Time) *dbent.PaymentOrder {
+	t.Helper()
+	order := newMissingUnifiedPaymentOrder(t, client, now.Add(time.Hour))
+	updated, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetOrderType(orderType).
+		SetStatus(OrderStatusCancelled).
+		SetOutTradeNo("sub2_cancelled_missing_unified_" + orderType).
+		SetProductSnapshot(map[string]any{"kind": orderType}).
+		ClearPayURL().ClearQrCode().ClearQrCodeImg().
+		Save(context.Background())
+	require.NoError(t, err)
+	return updated
+}
+
+func TestReconcileMissingUnifiedPaymentOrderCancelledAbsenceUsesOriginalDeadline(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		orderType  string
+		expiresAt  func(time.Time) time.Time
+		statusCode int
+		want       missingUnifiedPaymentOrderResult
+	}{
+		{
+			name:       "before safe deadline retries",
+			orderType:  payment.OrderTypeBalance,
+			expiresAt:  func(now time.Time) time.Time { return now.Add(-2*unifiedpay.MaximumClockSkew + time.Second) },
+			statusCode: http.StatusNotFound,
+			want:       missingUnifiedPaymentOrderRetry,
+		},
+		{
+			name:       "balance safe absence closes durable work",
+			orderType:  payment.OrderTypeBalance,
+			expiresAt:  func(now time.Time) time.Time { return now.Add(-2*unifiedpay.MaximumClockSkew - time.Second) },
+			statusCode: http.StatusNotFound,
+			want:       missingUnifiedPaymentOrderClosed,
+		},
+		{
+			name:       "subscription safe absence closes durable work",
+			orderType:  payment.OrderTypeSubscription,
+			expiresAt:  func(now time.Time) time.Time { return now.Add(-2*unifiedpay.MaximumClockSkew - time.Second) },
+			statusCode: http.StatusNotFound,
+			want:       missingUnifiedPaymentOrderClosed,
+		},
+		{
+			name:       "unknown lookup retries after safe deadline",
+			orderType:  payment.OrderTypeBalance,
+			expiresAt:  func(now time.Time) time.Time { return now.Add(-2*unifiedpay.MaximumClockSkew - time.Second) },
+			statusCode: http.StatusServiceUnavailable,
+			want:       missingUnifiedPaymentOrderRetry,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Now().UTC().Truncate(time.Second)
+			client := newPaymentOrderLifecycleTestClient(t)
+			order := newCancelledMissingUnifiedPaymentOrder(t, client, testCase.orderType, now)
+			updated, err := client.PaymentOrder.UpdateOneID(order.ID).SetExpiresAt(testCase.expiresAt(now)).Save(ctx)
+			require.NoError(t, err)
+			order = updated
+			require.NoError(t, ensureLocalCancellationCloseWorkTx(ctx, client, order))
+
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if testCase.statusCode == http.StatusNotFound {
+					writeMissingUnifiedPaymentOrderNotFound(t, writer)
+					return
+				}
+				writer.WriteHeader(testCase.statusCode)
+			}))
+			defer server.Close()
+			svc := &PaymentService{entClient: client, resetCardNow: func() time.Time { return now }}
+			svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, server.URL), nil)
+			require.Equal(t, testCase.want, svc.reconcileMissingUnifiedPaymentOrder(ctx, order))
+
+			persisted, err := client.PaymentOrder.Get(ctx, order.ID)
+			require.NoError(t, err)
+			require.Equal(t, OrderStatusCancelled, persisted.Status)
+			require.Nil(t, persisted.PaidAt)
+			require.Empty(t, persisted.PaymentTradeNo)
+			require.Empty(t, psOrderProviderSnapshot(persisted).PaymentOrderID)
+			require.Equal(t, 1, localCancellationWorkCount(t, ctx, client, order.ID, localCancellationWorkClose))
+		})
+	}
+}

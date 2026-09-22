@@ -11,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/smartwalle/alipay/v3"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsTradeNotExist(t *testing.T) {
@@ -57,6 +58,20 @@ func TestIsTradeNotExist(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAlipayRefundReferencePrefersStableProductReference(t *testing.T) {
+	t.Parallel()
+
+	request := payment.RefundRequest{
+		OrderID:         "sub2-order-123",
+		Amount:          "12.34",
+		RefundReference: "sub2-cancel-123",
+	}
+	require.Equal(t, "sub2-cancel-123", alipayRefundReference(request))
+
+	request.RefundReference = ""
+	require.Contains(t, alipayRefundReference(request), "sub2-order-123-refund-")
 }
 
 func TestNewAlipay(t *testing.T) {

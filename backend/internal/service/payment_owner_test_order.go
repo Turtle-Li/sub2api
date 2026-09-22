@@ -781,6 +781,13 @@ func (s *PaymentService) finishOwnerTestProviderSuccess(ctx context.Context, ord
 		return nil, fmt.Errorf("persist owner test checkout: %w", err)
 	}
 	if updated == 0 {
+		cancelled, bindErr := s.bindCancelledProviderCreateResponse(ctx, order.ID, owner.selection, providerResp, snapshot)
+		if bindErr != nil {
+			return nil, fmt.Errorf("persist cancelled provider binding: %w", bindErr)
+		}
+		if cancelled {
+			return nil, infraerrors.Conflict("INVALID_STATUS", "order is no longer awaiting payment")
+		}
 		return s.replayOwnerTestOrder(ctx, owner)
 	}
 	reloaded, err := s.entClient.PaymentOrder.Get(ctx, order.ID)

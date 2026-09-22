@@ -498,7 +498,7 @@ func (w *Wxpay) Refund(ctx context.Context, req payment.RefundRequest) (*payment
 	}
 	rs := refunddomestic.RefundsApiService{Client: c}
 	cur := wxpayCurrency
-	outRefundNo := wxpayRefundID(req.OrderID, req.Amount)
+	outRefundNo := wxpayRefundReference(req)
 	res, _, err := rs.Create(ctx, refunddomestic.CreateRequest{
 		OutTradeNo:  core.String(req.OrderID),
 		OutRefundNo: core.String(outRefundNo),
@@ -513,6 +513,16 @@ func (w *Wxpay) Refund(ctx context.Context, req payment.RefundRequest) (*payment
 		st = payment.ProviderStatusSuccess
 	}
 	return &payment.RefundResponse{RefundID: outRefundNo, Status: st}, nil
+}
+
+// wxpayRefundReference is the merchant-visible idempotency identity. A
+// locally-cancelled late payment supplies a durable product reference here so
+// a crashed worker can query or safely replay the exact same refund request.
+func wxpayRefundReference(req payment.RefundRequest) string {
+	if reference := strings.TrimSpace(req.RefundReference); reference != "" {
+		return reference
+	}
+	return wxpayRefundID(req.OrderID, req.Amount)
 }
 
 func (w *Wxpay) QueryRefund(ctx context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {

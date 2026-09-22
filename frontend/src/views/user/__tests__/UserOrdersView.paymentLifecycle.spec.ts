@@ -199,7 +199,7 @@ describe('UserOrdersView pending payment lifecycle', () => {
     wrapper.unmount()
   })
 
-  it('fences a resumed order immediately when the payment panel is cancelled', async () => {
+  it('marks a resumed order cancelled immediately after the panel reports its local commit', async () => {
     const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString())
     rows = [order]
     resumeOrder.mockResolvedValue({
@@ -233,8 +233,8 @@ describe('UserOrdersView pending payment lifecycle', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="order-cancellation-pending-51"]').exists()).toBe(true)
-    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[51]')
+    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.status.cancelled')
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
     wrapper.unmount()
   })
 
@@ -256,10 +256,10 @@ describe('UserOrdersView pending payment lifecycle', () => {
     wrapper.unmount()
   })
 
-  it('locks payment actions and polls after a cancellation request was accepted centrally', async () => {
+  it('waits for the local cancellation commit before changing a pending row', async () => {
     const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString())
     rows = [order]
-    const cancellationRequest = deferred<void>()
+    const cancellationRequest = deferred<{ data: { message: 'cancelled' } }>()
     cancelOrder.mockReturnValue(cancellationRequest.promise)
 
     const wrapper = mountView()
@@ -268,24 +268,26 @@ describe('UserOrdersView pending payment lifecycle', () => {
     await wrapper.get('[data-test="confirm-cancel-order"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="dialog"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="order-cancellation-pending-51"]').exists()).toBe(true)
-    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.orderOps.cancellationPending')
-    expect(wrapper.get('[data-test="order-status-51"]').classes()).toContain('bg-amber-100')
-    expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dialog"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.status.pending')
+    expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(true)
     expect(showSuccess).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
     expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[51]')
-    cancellationRequest.resolve()
+    cancellationRequest.resolve({ data: { message: 'cancelled' } })
     await flushPromises()
+
+    expect(wrapper.find('[data-test="dialog"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.status.cancelled')
+    expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
     expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
     wrapper.unmount()
   })
 
-  it('keeps cancellation fenced when the background request is uncertain', async () => {
+  it('keeps the cancellation dialog actionable while fencing an ambiguous local cancellation', async () => {
     const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString())
     rows = [order]
-    cancelOrder.mockRejectedValue({ reason: 'PAYMENT_CONFIRMATION_PENDING' })
+    cancelOrder.mockRejectedValue({ reason: 'SERVICE_UNAVAILABLE', message: 'SERVICE_UNAVAILABLE' })
 
     const wrapper = mountView()
     await flushPromises()
@@ -293,14 +295,35 @@ describe('UserOrdersView pending payment lifecycle', () => {
     await wrapper.get('[data-test="confirm-cancel-order"]').trigger('click')
     await flushPromises()
 
+    expect(wrapper.find('[data-test="dialog"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="cancel-order-error"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="cancel-order-error"]').text()).toBe('payment.orderOps.cancelFailedRetry')
+    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.orderOps.cancellationPending')
     expect(wrapper.get('[data-test="order-cancellation-pending-51"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="retry-cancel-order-51"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
     expect(showSuccess).not.toHaveBeenCalled()
     expect(showError).not.toHaveBeenCalled()
     expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBe('[51]')
-    await vi.advanceTimersByTimeAsync(15_000)
+    wrapper.unmount()
+  })
+
+  it('does not mark the row cancelled when the local cancellation reports an already-paid order', async () => {
+    const order = pendingOrder(new Date(start.getTime() + 60_000).toISOString())
+    rows = [order]
+    cancelOrder.mockResolvedValue({ data: { message: 'already_paid' } })
+
+    const wrapper = mountView()
     await flushPromises()
-    expect(cancelOrder.mock.calls.length).toBeGreaterThan(1)
+    await wrapper.get('[data-test="cancel-order-51"]').trigger('click')
+    await wrapper.get('[data-test="confirm-cancel-order"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="dialog"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="order-status-51"]').text()).toBe('payment.status.pending')
+    expect(wrapper.get('[data-test="order-confirmation-pending-51"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="continue-payment-51"]').exists()).toBe(false)
+    expect(window.localStorage.getItem(PAYMENT_CANCELLATION_STORAGE_KEY)).toBeNull()
     wrapper.unmount()
   })
 

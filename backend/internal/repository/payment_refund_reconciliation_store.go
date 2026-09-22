@@ -46,10 +46,19 @@ func (r *paymentRefundReconciliationStore) ClaimReviewedEntitlementReservations(
 			SELECT product_refund_no
 			FROM unified_payment_refund_attempts
 			WHERE status = 'PENDING'
-			  AND entitlement_reserved = TRUE
 			  AND needs_manual_review = FALSE
-			  AND quote_revision <> ''
-			  AND refund_kind IN ('balance', 'subscription')
+			  AND (
+				(entitlement_reserved = TRUE
+				 AND quote_revision <> ''
+				 AND refund_kind IN ('balance', 'subscription'))
+				OR (
+					refund_kind = 'cancel_late_payment'
+					AND entitlement_reserved = FALSE
+					AND balance_amount_minor = 0
+					AND deduct_balance = FALSE
+					AND quote_revision = ''
+				)
+			  )
 			  AND reconciliation_available_at <= NOW()
 			  AND (
 				reconciliation_claimed_at IS NULL
@@ -65,7 +74,7 @@ func (r *paymentRefundReconciliationStore) ClaimReviewedEntitlementReservations(
 			reconciliation_updated_at = NOW()
 		FROM candidates
 		WHERE attempt.product_refund_no = candidates.product_refund_no
-		RETURNING attempt.product_refund_no, attempt.order_id, attempt.reconciliation_attempts
+		RETURNING attempt.product_refund_no, attempt.order_id, attempt.reconciliation_attempts, attempt.reconciliation_claimed_at
 	`, workerID, limit, leaseSeconds)
 	if err != nil {
 		return nil, err
@@ -75,7 +84,7 @@ func (r *paymentRefundReconciliationStore) ClaimReviewedEntitlementReservations(
 	candidates := make([]service.PaymentRefundReconciliationCandidate, 0, limit)
 	for rows.Next() {
 		var candidate service.PaymentRefundReconciliationCandidate
-		if err := rows.Scan(&candidate.ProductRefundNo, &candidate.OrderID, &candidate.Attempts); err != nil {
+		if err := rows.Scan(&candidate.ProductRefundNo, &candidate.OrderID, &candidate.Attempts, &candidate.ClaimedAt); err != nil {
 			return nil, err
 		}
 		candidates = append(candidates, candidate)
@@ -87,9 +96,10 @@ func (r *paymentRefundReconciliationStore) CompleteClaim(
 	ctx context.Context,
 	productRefundNo string,
 	workerID string,
+	claimedAt time.Time,
 	lease time.Duration,
 ) error {
-	return r.updateClaim(ctx, productRefundNo, workerID, lease, `
+	return r.updateClaim(ctx, productRefundNo, workerID, claimedAt, lease, `
 		SET reconciliation_claimed_at = NULL,
 			reconciliation_claimed_by = NULL,
 			reconciliation_last_error = NULL,
@@ -101,6 +111,7 @@ func (r *paymentRefundReconciliationStore) RetryClaim(
 	ctx context.Context,
 	productRefundNo string,
 	workerID string,
+	claimedAt time.Time,
 	lease time.Duration,
 	availableAt time.Time,
 	lastError string,
@@ -108,8 +119,8 @@ func (r *paymentRefundReconciliationStore) RetryClaim(
 	if r == nil || r.db == nil {
 		return errors.New("payment refund reconciliation database unavailable")
 	}
-	if productRefundNo == "" || workerID == "" {
-		return errors.New("payment refund reconciliation claim identity is required")
+	if productRefundNo == "" || workerID == "" || claimedAt.IsZero() {
+		return errors.New("payment refund reconciliation claim identity and generation are required")
 	}
 	leaseSeconds := int64(lease / time.Second)
 	if leaseSeconds < 1 {
@@ -118,15 +129,16 @@ func (r *paymentRefundReconciliationStore) RetryClaim(
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE unified_payment_refund_attempts
 		SET reconciliation_attempts = reconciliation_attempts + 1,
-			reconciliation_available_at = $4,
+			reconciliation_available_at = $5,
 			reconciliation_claimed_at = NULL,
 			reconciliation_claimed_by = NULL,
-			reconciliation_last_error = $5,
+			reconciliation_last_error = $6,
 			reconciliation_updated_at = NOW()
 		WHERE product_refund_no = $1
 		  AND reconciliation_claimed_by = $2
+		  AND reconciliation_claimed_at = $4
 		  AND reconciliation_claimed_at >= NOW() - ($3 * INTERVAL '1 second')
-	`, productRefundNo, workerID, leaseSeconds, availableAt.UTC(), lastError)
+	`, productRefundNo, workerID, leaseSeconds, claimedAt.UTC(), availableAt.UTC(), lastError)
 	if err != nil {
 		return err
 	}
@@ -137,14 +149,15 @@ func (r *paymentRefundReconciliationStore) updateClaim(
 	ctx context.Context,
 	productRefundNo string,
 	workerID string,
+	claimedAt time.Time,
 	lease time.Duration,
 	setClause string,
 ) error {
 	if r == nil || r.db == nil {
 		return errors.New("payment refund reconciliation database unavailable")
 	}
-	if productRefundNo == "" || workerID == "" {
-		return errors.New("payment refund reconciliation claim identity is required")
+	if productRefundNo == "" || workerID == "" || claimedAt.IsZero() {
+		return errors.New("payment refund reconciliation claim identity and generation are required")
 	}
 	leaseSeconds := int64(lease / time.Second)
 	if leaseSeconds < 1 {
@@ -155,8 +168,9 @@ func (r *paymentRefundReconciliationStore) updateClaim(
 		`+setClause+`
 		WHERE product_refund_no = $1
 		  AND reconciliation_claimed_by = $2
+		  AND reconciliation_claimed_at = $4
 		  AND reconciliation_claimed_at >= NOW() - ($3 * INTERVAL '1 second')
-	`, productRefundNo, workerID, leaseSeconds)
+	`, productRefundNo, workerID, leaseSeconds, claimedAt.UTC())
 	if err != nil {
 		return err
 	}
@@ -173,19 +187,33 @@ func (r *paymentRefundReconciliationStore) Stats(ctx context.Context) (service.P
 		lastError sql.NullString
 	)
 	err := r.db.QueryRowContext(ctx, `
-		WITH scoped AS (
+	WITH scoped AS (
 			SELECT product_refund_no, status, needs_manual_review, created_at,
 				reconciliation_attempts, reconciliation_last_error,
-				reconciliation_updated_at
+				reconciliation_updated_at, refund_kind, entitlement_reserved,
+				quote_revision, balance_amount_minor, deduct_balance
 			FROM unified_payment_refund_attempts
-			WHERE entitlement_reserved = TRUE
-			  AND quote_revision <> ''
-			  AND refund_kind IN ('balance', 'subscription')
-		)
+			WHERE (entitlement_reserved = TRUE
+			       AND quote_revision <> ''
+			       AND refund_kind IN ('balance', 'subscription'))
+			   OR (refund_kind = 'cancel_late_payment'
+			       AND entitlement_reserved = FALSE
+			       AND balance_amount_minor = 0
+			       AND deduct_balance = FALSE
+			       AND quote_revision = '')
+	), local_cancellation_work AS (
+			SELECT COUNT(*) AS outstanding
+			FROM payment_local_cancellation_work
+			WHERE status IN ('PENDING', 'MANUAL_REVIEW')
+	)
 		SELECT
-			COUNT(*),
+			COUNT(*) FILTER (WHERE entitlement_reserved = TRUE),
+			COUNT(*) FILTER (
+				WHERE refund_kind = 'cancel_late_payment'
+				  AND (status = 'PENDING' OR needs_manual_review = TRUE)
+			),
 			COUNT(*) FILTER (WHERE status = 'PENDING' AND needs_manual_review = FALSE),
-			MIN(created_at),
+			MIN(created_at) FILTER (WHERE status = 'PENDING' OR needs_manual_review = TRUE),
 			COALESCE(MAX(reconciliation_attempts), 0),
 			(
 				SELECT reconciliation_last_error
@@ -194,6 +222,7 @@ func (r *paymentRefundReconciliationStore) Stats(ctx context.Context) (service.P
 				ORDER BY reconciliation_updated_at DESC, product_refund_no DESC
 				LIMIT 1
 			),
+			(SELECT outstanding FROM local_cancellation_work),
 			(
 				SELECT COUNT(*) FROM payment_orders
 				WHERE order_type = 'reset_card'
@@ -207,10 +236,12 @@ func (r *paymentRefundReconciliationStore) Stats(ctx context.Context) (service.P
 		FROM scoped
 	`).Scan(
 		&stats.EntitlementReservedReviewedPending,
+		&stats.LateCancellationRefundPending,
 		&stats.AutomaticallyReconciledPending,
 		&oldest,
 		&stats.MaxAttempts,
 		&lastError,
+		&stats.LocalCancellationWorkOutstanding,
 		&stats.UnsettledResetCardPurchaseCount,
 	)
 	if err != nil {

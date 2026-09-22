@@ -39,6 +39,56 @@ type checkPaidOptions struct {
 	requireConfirmed bool
 }
 
+// unifiedPaidAfterCloseQueryValidationError is deliberately distinct from a
+// transport or database error: a contradictory central query response must
+// leave an operator-visible fence, while a transient persistence failure can
+// be retried under the existing durable lease.
+type unifiedPaidAfterCloseQueryValidationError struct{ reason string }
+
+func (e *unifiedPaidAfterCloseQueryValidationError) Error() string {
+	return "unified paid-after-close query validation failed: " + e.reason
+}
+
+// recordUnifiedPaidAfterCloseQuery recognizes the one central status whose
+// payment fact remains valid even though the central resource has its own
+// needs_manual_review marker. The generic marker still blocks every other
+// ambiguous query result. A real channel transaction, exact scope, and exact
+// minor-unit amount are required before the local cancellation/refund fact is
+// written.
+func (s *PaymentService) recordUnifiedPaidAfterCloseQuery(ctx context.Context, order *dbent.PaymentOrder, response *payment.QueryOrderResponse) (bool, error) {
+	if order == nil || response == nil || !paymentOrderUsesUnifiedPay(order) ||
+		!strings.EqualFold(strings.TrimSpace(response.Metadata["status"]), unifiedpay.StatusPaidAfterClose) {
+		return false, nil
+	}
+	reject := func(reason string) (bool, error) {
+		s.writeAuditLog(ctx, order.ID, "UNIFIED_PAID_AFTER_CLOSE_QUERY_REJECTED", payment.TypeUnifiedPay, map[string]any{
+			"reason":   reason,
+			"trade_no": strings.TrimSpace(response.TradeNo),
+		})
+		return true, &unifiedPaidAfterCloseQueryValidationError{reason: reason}
+	}
+	if !strings.EqualFold(strings.TrimSpace(response.Metadata["paid_after_close"]), "true") {
+		return reject("paid_after_close_marker_missing")
+	}
+	if err := validateProviderNotificationMetadata(order, payment.TypeUnifiedPay, response.Metadata); err != nil {
+		return reject(err.Error())
+	}
+	channelTransactionID := strings.TrimSpace(response.Metadata["channel_transaction_id"])
+	if channelTransactionID == "" || strings.TrimSpace(response.TradeNo) == "" ||
+		!strings.EqualFold(channelTransactionID, strings.TrimSpace(response.TradeNo)) {
+		return reject("channel_transaction_mismatch")
+	}
+	expectedFen, expectedErr := payment.AmountToMinorUnit(strconv.FormatFloat(order.PayAmount, 'f', -1, 64), payment.DefaultPaymentCurrency)
+	actualFen, actualErr := payment.AmountToMinorUnit(strconv.FormatFloat(response.Amount, 'f', -1, 64), payment.DefaultPaymentCurrency)
+	if expectedErr != nil || actualErr != nil || expectedFen <= 0 || expectedFen != actualFen {
+		return reject("paid_amount_mismatch")
+	}
+	if err := s.recordUnifiedPaidAfterClose(ctx, order.ID, response.TradeNo, response.Amount); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func (s *PaymentService) checkCancelRateLimit(ctx context.Context, userID int64, cfg *PaymentConfig) error {
 	if !cfg.CancelRateLimitEnabled || cfg.CancelRateLimitMax <= 0 {
 		return nil
@@ -102,26 +152,7 @@ func cancelRateLimitWindowStart(cfg *PaymentConfig) time.Time {
 }
 
 func (s *PaymentService) CancelOrder(ctx context.Context, orderID, userID int64) (string, error) {
-	o, err := s.entClient.PaymentOrder.Get(ctx, orderID)
-	if err != nil {
-		return "", infraerrors.NotFound("NOT_FOUND", "order not found")
-	}
-	if o.UserID != userID {
-		return "", infraerrors.Forbidden("FORBIDDEN", "no permission for this order")
-	}
-	if o.Status != OrderStatusPending {
-		return "", infraerrors.BadRequest("INVALID_STATUS", "order cannot be cancelled in current status")
-	}
-	// User cancellation fences the local checkout immediately. Provider query and
-	// close calls are deliberately moved to the periodic reconciler so a slow or
-	// temporarily unavailable gateway never keeps the browser request open.
-	if paymentOrderSupportsAsyncUserCancellation(o) {
-		if err := s.recordPaymentCancellationPending(ctx, o.ID, fmt.Sprintf("user:%d", userID)); err != nil {
-			return "", err
-		}
-		return "cancellation_requested", nil
-	}
-	return s.cancelCore(ctx, o, OrderStatusCancelled, fmt.Sprintf("user:%d", userID), "user cancelled order")
+	return s.cancelOrderLocally(ctx, orderID, userID, fmt.Sprintf("user:%d", userID), "user cancelled order", true)
 }
 
 func paymentOrderSupportsAsyncUserCancellation(order *dbent.PaymentOrder) bool {
@@ -144,14 +175,7 @@ func paymentOrderSupportsAsyncUserCancellation(order *dbent.PaymentOrder) bool {
 }
 
 func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (string, error) {
-	o, err := s.entClient.PaymentOrder.Get(ctx, orderID)
-	if err != nil {
-		return "", infraerrors.NotFound("NOT_FOUND", "order not found")
-	}
-	if o.Status != OrderStatusPending {
-		return "", infraerrors.BadRequest("INVALID_STATUS", "order cannot be cancelled in current status")
-	}
-	return s.cancelCore(ctx, o, OrderStatusCancelled, "admin", "admin cancelled order")
+	return s.cancelOrderLocally(ctx, orderID, 0, "admin", "admin cancelled order", false)
 }
 
 func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
@@ -238,7 +262,21 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
 		return unknownResult
 	}
-	if resp == nil || ((paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o)) && resp.Metadata["needs_manual_review"] == "true") {
+	if resp == nil {
+		return unknownResult
+	}
+	// PAID_AFTER_CLOSE is the one central query result that must be handled
+	// before the generic manual-review gate: central deliberately tags that
+	// resource for review, while Sub2 must persist the immutable local-cancel
+	// payment evidence and queue the no-entitlement refund attempt.
+	if handled, lateErr := s.recordUnifiedPaidAfterCloseQuery(ctx, o, resp); handled {
+		if lateErr != nil {
+			slog.Warn("record unified paid-after-close query result failed", "orderID", o.ID, "error", lateErr)
+			return unknownResult
+		}
+		return checkPaidResultAlreadyPaid
+	}
+	if (paymentOrderUsesUnifiedPay(o) || paymentOrderHasDiscount(o)) && resp.Metadata["needs_manual_review"] == "true" {
 		return unknownResult
 	}
 	if resp.Status == payment.ProviderStatusPaid {
@@ -399,8 +437,10 @@ func (s *PaymentService) VerifyOrderByOutTradeNo(ctx context.Context, outTradeNo
 	if o.UserID != userID {
 		return nil, infraerrors.Forbidden("FORBIDDEN", "no permission for this order")
 	}
-	// Retry an accepted local cancellation intent as well as expired checkout.
-	// Never infer terminal state from time or intent; unknown closes stay pending.
+	// A cancellation intent written by an older binary becomes the current
+	// immediate local cancellation contract on its next owned read. Expiry keeps
+	// its historical provider-confirmed behavior; only an explicit user intent
+	// releases admission without waiting for that provider call.
 	pending := map[int64]bool{}
 	if o.Status == OrderStatusPending {
 		pending, err = s.paymentOrderCancellationPendingIDs(ctx, []int64{o.ID})
@@ -408,13 +448,16 @@ func (s *PaymentService) VerifyOrderByOutTradeNo(ctx context.Context, outTradeNo
 			return nil, err
 		}
 	}
-	expired := !o.ExpiresAt.After(time.Now())
-	if o.Status == OrderStatusPending && (expired || pending[o.ID]) {
-		target := OrderStatusCancelled
-		if expired {
-			target = OrderStatusExpired
+	if o.Status == OrderStatusPending && pending[o.ID] {
+		_, closeErr := s.cancelOrderLocally(ctx, o.ID, o.UserID, "system", "complete legacy cancellation requested by user", false)
+		if closeErr != nil {
+			return nil, closeErr
 		}
-		_, closeErr := s.cancelCore(ctx, o, target, "system", "retry cancellation during authenticated verification")
+		return s.entClient.PaymentOrder.Get(ctx, o.ID)
+	}
+	expired := !o.ExpiresAt.After(time.Now())
+	if o.Status == OrderStatusPending && expired {
+		_, closeErr := s.cancelCore(ctx, o, OrderStatusExpired, "system", "order expired during authenticated verification")
 		if closeErr != nil && infraerrors.Reason(closeErr) != "PAYMENT_CANCELLATION_PENDING" && infraerrors.Reason(closeErr) != "PAYMENT_CONFIRMATION_PENDING" {
 			return nil, closeErr
 		}
@@ -481,15 +524,12 @@ func (s *PaymentService) ReconcilePendingPaymentOrders(ctx context.Context) (int
 	recovered := 0
 	for _, order := range orders {
 		if cancellationPending[order.ID] {
-			outcome, cancelErr := s.cancelCore(ctx, order, OrderStatusCancelled, "system", "retry cancellation requested by user")
+			outcome, cancelErr := s.cancelOrderLocally(ctx, order.ID, 0, "system", "complete legacy cancellation requested by user", false)
 			if outcome == checkPaidResultAlreadyPaid {
 				recovered++
 			}
 			if cancelErr != nil {
-				reason := infraerrors.Reason(cancelErr)
-				if reason != "PAYMENT_CANCELLATION_PENDING" && reason != "PAYMENT_CONFIRMATION_PENDING" {
-					slog.Warn("failed to reconcile requested payment cancellation", "orderID", order.ID, "error", cancelErr)
-				}
+				slog.Warn("failed to complete legacy requested payment cancellation", "orderID", order.ID, "error", cancelErr)
 			}
 			continue
 		}

@@ -21,15 +21,16 @@ import (
 )
 
 type paymentRefundReconciliationStoreStub struct {
-	mu          sync.Mutex
-	batches     [][]PaymentRefundReconciliationCandidate
-	completed   []string
-	retried     []paymentRefundReconciliationRetry
-	stats       PaymentRefundReconciliationStats
-	claimErr    error
-	completeErr error
-	retryErr    error
-	statsErr    error
+	mu              sync.Mutex
+	batches         [][]PaymentRefundReconciliationCandidate
+	completed       []string
+	completedClaims []time.Time
+	retried         []paymentRefundReconciliationRetry
+	stats           PaymentRefundReconciliationStats
+	claimErr        error
+	completeErr     error
+	retryErr        error
+	statsErr        error
 }
 
 type paymentRefundReconciliationRetry struct {
@@ -37,6 +38,7 @@ type paymentRefundReconciliationRetry struct {
 	attempts        int
 	availableAt     time.Time
 	lastError       string
+	claimedAt       time.Time
 }
 
 func (s *paymentRefundReconciliationStoreStub) ClaimReviewedEntitlementReservations(_ context.Context, _ string, _ int, _ time.Duration) ([]PaymentRefundReconciliationCandidate, error) {
@@ -53,17 +55,18 @@ func (s *paymentRefundReconciliationStoreStub) ClaimReviewedEntitlementReservati
 	return batch, nil
 }
 
-func (s *paymentRefundReconciliationStoreStub) CompleteClaim(_ context.Context, productRefundNo, _ string, _ time.Duration) error {
+func (s *paymentRefundReconciliationStoreStub) CompleteClaim(_ context.Context, productRefundNo, _ string, claimedAt time.Time, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.completeErr != nil {
 		return s.completeErr
 	}
 	s.completed = append(s.completed, productRefundNo)
+	s.completedClaims = append(s.completedClaims, claimedAt)
 	return nil
 }
 
-func (s *paymentRefundReconciliationStoreStub) RetryClaim(_ context.Context, productRefundNo, _ string, _ time.Duration, availableAt time.Time, lastError string) error {
+func (s *paymentRefundReconciliationStoreStub) RetryClaim(_ context.Context, productRefundNo, _ string, claimedAt time.Time, _ time.Duration, availableAt time.Time, lastError string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.retryErr != nil {
@@ -75,6 +78,7 @@ func (s *paymentRefundReconciliationStoreStub) RetryClaim(_ context.Context, pro
 	}
 	s.retried = append(s.retried, paymentRefundReconciliationRetry{
 		productRefundNo: productRefundNo,
+		claimedAt:       claimedAt,
 		attempts:        attempts,
 		availableAt:     availableAt,
 		lastError:       lastError,
@@ -121,9 +125,10 @@ func TestPaymentRefundReconciliationReplaysReservedAttemptAndFinalizesOnce(t *te
 	defer provider.Close()
 	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, provider.URL), nil)
 
+	claimedAt := time.Now().UTC().Truncate(time.Microsecond)
 	store := &paymentRefundReconciliationStoreStub{batches: [][]PaymentRefundReconciliationCandidate{
-		{{ProductRefundNo: attempt.ProductRefundNo, OrderID: order.ID}},
-		{{ProductRefundNo: attempt.ProductRefundNo, OrderID: order.ID}},
+		{{ProductRefundNo: attempt.ProductRefundNo, OrderID: order.ID, ClaimedAt: claimedAt}},
+		{{ProductRefundNo: attempt.ProductRefundNo, OrderID: order.ID, ClaimedAt: claimedAt}},
 	}}
 	worker := NewPaymentRefundReconciliationService(svc, store)
 	t.Cleanup(worker.Stop)
@@ -143,6 +148,7 @@ func TestPaymentRefundReconciliationReplaysReservedAttemptAndFinalizesOnce(t *te
 	require.True(t, funding.ReservedPaid.IsZero())
 	require.True(t, funding.RefundedPaid.Equal(decimalRequire("0.10")))
 	require.Zero(t, user.Balance)
+	require.Equal(t, []time.Time{claimedAt, claimedAt}, store.completedClaims)
 	require.Len(t, store.completed, 2, "each acquired lease is acknowledged, but only the first may finalize")
 }
 
@@ -175,9 +181,10 @@ func TestPaymentRefundReconciliationKeepsUnknownReservationThenQueriesSameReques
 	defer provider.Close()
 	svc.SetUnifiedPayment(newUnifiedServiceTestGateway(t, provider.URL), nil)
 
+	claimedAt := time.Now().UTC().Truncate(time.Microsecond)
 	store := &paymentRefundReconciliationStoreStub{batches: [][]PaymentRefundReconciliationCandidate{
-		{{ProductRefundNo: attempt.ProductRefundNo, OrderID: order.ID, Attempts: 0}},
-		{{ProductRefundNo: attempt.ProductRefundNo, OrderID: order.ID, Attempts: 1}},
+		{{ProductRefundNo: attempt.ProductRefundNo, OrderID: order.ID, ClaimedAt: claimedAt, Attempts: 0}},
+		{{ProductRefundNo: attempt.ProductRefundNo, OrderID: order.ID, ClaimedAt: claimedAt, Attempts: 1}},
 	}}
 	worker := NewPaymentRefundReconciliationService(svc, store)
 	t.Cleanup(worker.Stop)
@@ -188,6 +195,7 @@ func TestPaymentRefundReconciliationKeepsUnknownReservationThenQueriesSameReques
 	require.Equal(t, unifiedRefundPending, pending.Status)
 	require.True(t, pending.EntitlementReserved, "unknown provider state must never release the local hold")
 	require.Len(t, store.retried, 1)
+	require.Equal(t, claimedAt, store.retried[0].claimedAt)
 	require.Equal(t, "provider confirmation pending", store.retried[0].lastError)
 	require.True(t, store.retried[0].availableAt.After(time.Now().UTC().Add(-time.Second)))
 
@@ -273,4 +281,14 @@ func writePaymentRefundReconciliationResponse(t *testing.T, w http.ResponseWrite
 
 func decimalRequire(value string) decimal.Decimal {
 	return decimal.RequireFromString(value)
+}
+
+func TestPaymentRefundReconciliationRejectsMissingClaimGeneration(t *testing.T) {
+	store := &paymentRefundReconciliationStoreStub{}
+	worker := NewPaymentRefundReconciliationService(&PaymentService{}, store)
+	t.Cleanup(worker.Stop)
+	err := worker.reconcileCandidate(context.Background(), PaymentRefundReconciliationCandidate{ProductRefundNo: "missing-generation", OrderID: 1})
+	require.ErrorContains(t, err, "claim generation is required")
+	require.Empty(t, store.completed)
+	require.Empty(t, store.retried)
 }

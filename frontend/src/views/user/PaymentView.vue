@@ -246,18 +246,88 @@
       :title="t('payment.orderOps.existingOrderTitle')"
       width="narrow"
       data-test="existing-order-prompt"
-      @close="existingOrderPromptVisible = false"
+      :close-on-escape="!existingOrderActionBusy"
+      :close-on-click-outside="!existingOrderActionBusy"
+      :show-close-button="!existingOrderActionBusy"
+      @close="closeExistingOrderPrompt"
     >
-      <p class="text-sm leading-6 text-gray-600 dark:text-gray-300">
-        {{ t('payment.orderOps.existingOrderMessage') }}
-      </p>
+      <div class="space-y-4">
+        <div v-if="existingOrderLoading" class="flex items-center gap-3 py-4 text-sm text-gray-500 dark:text-gray-400" data-test="existing-order-loading">
+          <span class="h-5 w-5 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></span>
+          {{ t('common.loading') }}
+        </div>
+        <div v-else-if="existingOrderLoadError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300" data-test="existing-order-load-error" role="alert">
+          {{ existingOrderLoadError }}
+        </div>
+        <template v-else-if="existingOrder">
+          <p v-if="existingOrder.status === 'PENDING'" class="text-sm leading-6 text-gray-600 dark:text-gray-300">
+            {{ t('payment.orderOps.existingOrderMessage') }}
+          </p>
+          <p v-else data-test="existing-order-status" class="text-sm leading-6 text-gray-600 dark:text-gray-300">
+            {{ t(`payment.status.${existingOrder.status.toLowerCase()}`) }}
+          </p>
+          <dl class="space-y-2 rounded-xl bg-gray-50 p-4 text-sm dark:bg-dark-800" data-test="existing-order-details">
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</dt>
+              <dd data-test="existing-order-number" class="min-w-0 break-all text-right font-mono text-xs text-gray-900 dark:text-white">{{ existingOrder.out_trade_no }}</dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</dt>
+              <dd data-test="existing-order-amount" class="text-right font-semibold text-gray-900 dark:text-white">{{ formatExistingOrderAmount(existingOrder) }}</dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.paymentMethod') }}</dt>
+              <dd data-test="existing-order-payment-method" class="text-right text-gray-900 dark:text-white">{{ existingOrderPaymentMethodLabel(existingOrder) }}</dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.product') }}</dt>
+              <dd data-test="existing-order-product" class="min-w-0 break-words text-right text-gray-900 dark:text-white">{{ existingOrderProductName(existingOrder) }}</dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.admin.orderType') }}</dt>
+              <dd data-test="existing-order-type" class="text-right text-gray-900 dark:text-white">{{ existingOrderTypeLabel(existingOrder) }}</dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.orders.createdAt') }}</dt>
+              <dd data-test="existing-order-created-at" class="text-right text-gray-900 dark:text-white">{{ formatExistingOrderDate(existingOrder.created_at) }}</dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0 text-gray-500 dark:text-gray-400">{{ t('payment.admin.expiresAt') }}</dt>
+              <dd data-test="existing-order-expires-at" class="text-right text-gray-900 dark:text-white">{{ formatExistingOrderDate(existingOrder.expires_at) }}</dd>
+            </div>
+          </dl>
+          <p v-if="existingOrderActionError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300" data-test="existing-order-action-error" role="alert">
+            {{ existingOrderActionError }}
+          </p>
+        </template>
+      </div>
       <template #footer>
         <div class="flex flex-wrap justify-end gap-3">
-          <button type="button" class="btn btn-secondary" data-test="cancel-existing-order" @click="askCancelExistingOrder">
-            {{ t('payment.orderOps.cancelExistingOrder') }}
-          </button>
-          <button type="button" class="btn btn-primary" data-test="open-existing-order" @click="openExistingOrder">
-            {{ t('payment.orderOps.openExistingOrder') }}
+          <template v-if="existingOrderLoadError">
+            <button type="button" class="btn btn-secondary" @click="closeExistingOrderPrompt">
+              {{ t('common.close') }}
+            </button>
+            <button type="button" class="btn btn-primary" data-test="retry-existing-order" @click="retryExistingOrderPrompt">
+              {{ t('common.retry') }}
+            </button>
+          </template>
+          <template v-else-if="existingOrder && existingOrder.status === 'PENDING'">
+            <button
+              ref="existingOrderCancelButton"
+              type="button"
+              class="btn btn-secondary"
+              data-test="cancel-existing-order"
+              :disabled="existingOrderActionBusy"
+              @click="existingOrderCancellationRetryNeeded ? retryCancelExistingOrder() : askCancelExistingOrder()"
+            >
+              {{ existingOrderCancelLoading ? t('common.processing') : existingOrderCancellationRetryNeeded ? t('payment.orderOps.retryCancellation') : t('payment.orderOps.cancelExistingOrder') }}
+            </button>
+            <button v-if="!existingOrderCancellationRetryNeeded" type="button" class="btn btn-primary" data-test="open-existing-order" :disabled="existingOrderActionBusy" @click="openExistingOrder">
+              {{ existingOrderContinueLoading ? t('common.processing') : t('payment.orderOps.openExistingOrder') }}
+            </button>
+          </template>
+          <button v-else-if="existingOrder" type="button" class="btn btn-primary" :disabled="existingOrderActionBusy" @click="closeExistingOrderPrompt">
+            {{ t('common.close') }}
           </button>
         </div>
       </template>
@@ -272,7 +342,7 @@
       :danger="true"
       data-test="cancel-existing-order-confirm"
       @confirm="confirmCancelExistingOrder"
-      @cancel="cancelExistingOrderConfirmVisible = false"
+      @cancel="closeExistingOrderCancelConfirmation"
     />
 
     <!-- Renewal Plan Selection Modal -->
@@ -317,7 +387,7 @@ import { useSubscriptionStore } from '@/stores/subscriptions'
 import { useAppStore } from '@/stores'
 import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
 import { paymentAPI } from '@/api/payment'
-import { extractApiErrorCode, extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMessage, extractI18nErrorMessage, extractMappedI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
 import type {
   CheckoutInfoResponse,
@@ -326,6 +396,7 @@ import type {
   PaymentCouponQuoteRequest,
   PaymentDiscountQuote,
   PaymentDiscountSnapshot,
+  PaymentOrder,
   RechargeOption,
   SubscriptionPlan,
   WechatJSAPIPayload,
@@ -373,6 +444,8 @@ import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSele
 import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
 import { hasWechatResumeQuery, parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
 import { createIdempotencyKey } from '@/utils/idempotency'
+import { formatDateTimeToMinute } from '@/utils/format'
+import { purchaseName } from '@/components/payment/orderPresentation'
 
 const i18n = useI18n()
 const { t } = i18n
@@ -467,6 +540,18 @@ const paymentPhase = ref<'select' | 'paying'>('select')
 const paymentModalVisible = ref(false)
 const existingOrderPromptVisible = ref(false)
 const cancelExistingOrderConfirmVisible = ref(false)
+const existingOrder = ref<PaymentOrder | null>(null)
+const existingOrderLoading = ref(false)
+const existingOrderLoadError = ref('')
+const existingOrderActionError = ref('')
+const existingOrderContinueLoading = ref(false)
+const existingOrderCancelLoading = ref(false)
+const existingOrderCancellationRetryNeeded = ref(false)
+const existingOrderCancelButton = ref<HTMLButtonElement | null>(null)
+const existingOrderRequestedId = ref<number | null>(null)
+let existingOrderPromptRequest = 0
+let existingOrderActionRequest = 0
+const existingOrderActionBusy = computed(() => existingOrderContinueLoading.value || existingOrderCancelLoading.value)
 
 interface CreateOrderOptions {
   openid?: string
@@ -591,92 +676,87 @@ function snapshotWithoutLaunchMaterial(snapshot: PaymentRecoverySnapshot): Payme
   }
 }
 
-const cancellationRetryTimers = new Map<number, number>()
-const CANCELLATION_RETRY_DELAYS_MS = [0, 5000, 15000, 30000]
+const queuedCancellationInFlight = new Set<number>()
 
-function cancellationRecoverySnapshot(snapshot: PaymentRecoverySnapshot): PaymentRecoverySnapshot {
+function recoverySnapshotForExistingOrder(order: PaymentOrder): PaymentRecoverySnapshot {
   return {
-    ...snapshotWithoutLaunchMaterial(snapshot),
-    cancellationRequested: true,
+    ...emptyPaymentState(),
+    orderId: order.id,
+    amount: order.amount,
+    payAmount: order.pay_amount,
+    currency: order.currency || '',
+    paymentType: order.payment_type,
+    outTradeNo: order.out_trade_no,
+    orderType: order.order_type,
+    expiresAt: order.expires_at,
     createdAt: Date.now(),
   }
 }
 
-function clearCancellationRetry(orderId: number) {
-  const timer = cancellationRetryTimers.get(orderId)
-  if (timer !== undefined) {
-    window.clearTimeout(timer)
-    cancellationRetryTimers.delete(orderId)
+function settlePersistedCancellation(orderId: number, message: 'cancelled' | 'already_paid') {
+  if (typeof window === 'undefined') return
+  clearQueuedPaymentCancellation(window.localStorage, orderId)
+  const current = paymentState.value
+  const currentMatches = current.orderId === orderId
+  const stored = currentMatches
+    ? current
+    : readPaymentRecoverySnapshot(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY))
+  const snapshot = stored?.orderId === orderId ? stored : null
+
+  if (message === 'cancelled') {
+    clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, { orderId })
+    clearResetCardCheckoutAttempt(window.localStorage, { orderId })
+    if (!currentMatches || !current.cancellationRequested) return
+    const nextResetCardSelection = pendingResetCardSelection.value
+    const wasResetCard = current.orderType === 'reset_card'
+    resetPayment()
+    pendingResetCardSelection.value = null
+    if (wasResetCard) clearResetCardSelection()
+    if (nextResetCardSelection) applyResetCardSelection(nextResetCardSelection)
+    return
   }
+
+  if (!snapshot) return
+  const safeSnapshot = {
+    ...snapshotWithoutLaunchMaterial(snapshot),
+    cancellationRequested: undefined,
+  }
+  if (currentMatches) {
+    setRecoveredPaymentState(safeSnapshot, { pendingState: 'confirmation' })
+  }
+  persistRecoverySnapshot(safeSnapshot)
 }
 
-function finishBackgroundCancellation(snapshot: PaymentRecoverySnapshot) {
-  clearCancellationRetry(snapshot.orderId)
-  clearQueuedPaymentCancellation(window.localStorage, snapshot.orderId)
-  clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, { orderId: snapshot.orderId })
-  if (paymentState.value.orderId !== snapshot.orderId || !paymentState.value.cancellationRequested) return
-  const nextResetCardSelection = pendingResetCardSelection.value
-  const wasResetCard = paymentState.value.orderType === 'reset_card'
-  resetPayment()
-  clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, { orderId: snapshot.orderId })
-  pendingResetCardSelection.value = null
-  if (wasResetCard) clearResetCardSelection()
-  if (nextResetCardSelection) applyResetCardSelection(nextResetCardSelection)
-}
-
-function scheduleBackgroundCancellation(snapshot: PaymentRecoverySnapshot, attempt = 0) {
-  if (
-    typeof window === 'undefined'
-    || !snapshot.orderId
-    || attempt >= CANCELLATION_RETRY_DELAYS_MS.length
-    || cancellationRetryTimers.has(snapshot.orderId)
-  ) return
-  const delay = CANCELLATION_RETRY_DELAYS_MS[attempt]
-  const timer = window.setTimeout(async () => {
-    cancellationRetryTimers.delete(snapshot.orderId)
-    try {
-      await paymentAPI.cancelOrder(snapshot.orderId)
-      clearQueuedPaymentCancellation(window.localStorage, snapshot.orderId)
-      if (!snapshot.outTradeNo) {
-        finishBackgroundCancellation(snapshot)
-        return
-      }
-      try {
-        const response = await paymentAPI.verifyOrder(snapshot.outTradeNo)
-        const status = String(response.data.status || '').trim().toUpperCase()
-        if (status === 'PENDING') {
-          scheduleBackgroundCancellation(snapshot, attempt + 1)
-        } else {
-          finishBackgroundCancellation(snapshot)
-        }
-      } catch (err: unknown) {
-        const code = extractApiErrorCode(err)
-        if (code === 'INVALID_STATUS' || code === 'NOT_FOUND') finishBackgroundCancellation(snapshot)
-        else scheduleBackgroundCancellation(snapshot, attempt + 1)
-      }
-    } catch (err: unknown) {
-      const code = extractApiErrorCode(err)
-      if (code === 'INVALID_STATUS' || code === 'NOT_FOUND') finishBackgroundCancellation(snapshot)
-      else scheduleBackgroundCancellation(snapshot, attempt + 1)
+async function commitQueuedPaymentCancellation(orderId: number): Promise<void> {
+  if (typeof window === 'undefined' || queuedCancellationInFlight.has(orderId)) return
+  queuedCancellationInFlight.add(orderId)
+  try {
+    const response = await paymentAPI.cancelOrder(orderId)
+    const message = response.data?.message
+    if (message === 'cancelled' || message === 'already_paid') {
+      settlePersistedCancellation(orderId, message)
     }
-  }, delay)
-  cancellationRetryTimers.set(snapshot.orderId, timer)
+  } catch {
+    // Preserve the local intent for a later explicit retry or a future visit.
+  } finally {
+    queuedCancellationInFlight.delete(orderId)
+  }
 }
 
 function flushQueuedPaymentCancellations() {
   if (typeof window === 'undefined') return
   for (const orderId of readQueuedPaymentCancellationIds(window.localStorage)) {
-    void paymentAPI.cancelOrder(orderId)
-      .then(() => clearQueuedPaymentCancellation(window.localStorage, orderId))
-      .catch(() => {})
+    void commitQueuedPaymentCancellation(orderId)
   }
 }
 
 async function resumeStoredPayment(snapshot: PaymentRecoverySnapshot): Promise<void> {
   const orderType: OrderType = snapshot.orderType || 'balance'
-  if (snapshot.cancellationRequested) {
-    queuePaymentCancellation(window.localStorage, snapshot.orderId)
-    scheduleBackgroundCancellation(snapshot)
+  const cancellationQueued = typeof window !== 'undefined'
+    && readQueuedPaymentCancellationIds(window.localStorage).includes(snapshot.orderId)
+  if (snapshot.cancellationRequested || cancellationQueued) {
+    if (!cancellationQueued) queuePaymentCancellation(window.localStorage, snapshot.orderId)
+    void commitQueuedPaymentCancellation(snapshot.orderId)
     return
   }
   try {
@@ -864,11 +944,12 @@ function onPaymentSettled(outcome: 'success' | 'cancelled' | 'expired') {
   }
   if (outcome === 'success') return
   if (outcome === 'cancelled') {
-    const snapshot = cancellationRecoverySnapshot(settled)
-    paymentState.value = snapshot
-    queuePaymentCancellation(window.localStorage, snapshot.orderId)
-    persistRecoverySnapshot(snapshot)
-    scheduleBackgroundCancellation(snapshot)
+    // PaymentStatusPanel emits this only after the local cancellation commit.
+    // Do not queue a second cancellation or retain stale launch material.
+    if (typeof window !== 'undefined' && settled.orderId > 0) {
+      clearQueuedPaymentCancellation(window.localStorage, settled.orderId)
+    }
+    removeRecoverySnapshot(settled)
     return
   }
   removeRecoverySnapshot()
@@ -1635,35 +1716,321 @@ function selectResetCard(next: ResetCardSelection): void {
   if (submitting.value) return
   if (paymentPhase.value === 'paying' && paymentState.value.orderId > 0) {
     pendingResetCardSelection.value = next
-    existingOrderPromptVisible.value = true
+    void openExistingOrderPrompt(paymentState.value.orderId)
     return
   }
   applyResetCardSelection(next)
 }
 
-function openExistingOrder(): void {
+function formatExistingOrderAmount(order: PaymentOrder): string {
+  return formatPaymentAmount(order.pay_amount, order.currency || selectedCurrency.value, localeCode.value)
+}
+
+function formatExistingOrderDate(value: string): string {
+  return formatDateTimeToMinute(value, localeCode.value)
+}
+
+function existingOrderTypeLabel(order: PaymentOrder): string {
+  if (order.order_type === 'balance') return t('payment.admin.balanceOrder')
+  if (order.order_type === 'subscription') return t('payment.admin.subscriptionOrder')
+  return t('payment.orderOps.resetCards')
+}
+
+function existingOrderProductName(order: PaymentOrder): string {
+  return purchaseName(order) || existingOrderTypeLabel(order)
+}
+
+function existingOrderPaymentMethodLabel(order: PaymentOrder): string {
+  const visibleMethod = normalizeVisibleMethod(order.payment_type) || order.payment_type
+  if (visibleMethod === 'alipay') return t('payment.methods.alipay')
+  if (visibleMethod === 'wxpay') return t('payment.methods.wxpay')
+  if (visibleMethod === 'stripe') return t('payment.methods.stripe')
+  if (visibleMethod === 'airwallex') return t('payment.methods.airwallex')
+  return order.payment_type
+}
+
+function resetExistingOrderPromptState(): void {
+  existingOrder.value = null
+  existingOrderLoading.value = false
+  existingOrderLoadError.value = ''
+  existingOrderActionError.value = ''
+  existingOrderCancellationRetryNeeded.value = false
+  existingOrderRequestedId.value = null
+}
+
+function closeExistingOrderPrompt(): void {
+  if (existingOrderActionBusy.value) return
+  existingOrderPromptRequest += 1
   existingOrderPromptVisible.value = false
+  cancelExistingOrderConfirmVisible.value = false
   pendingResetCardSelection.value = null
-  paymentModalVisible.value = true
+  resetExistingOrderPromptState()
+}
+
+async function openExistingOrderPrompt(orderId?: number): Promise<void> {
+  const request = ++existingOrderPromptRequest
+  const requestedId = Number.isSafeInteger(orderId) && Number(orderId) > 0 ? Number(orderId) : null
+  existingOrderRequestedId.value = requestedId
+  existingOrderPromptVisible.value = true
+  existingOrderLoading.value = true
+  existingOrderLoadError.value = ''
+  existingOrderActionError.value = ''
+  existingOrder.value = null
+
+  let order: PaymentOrder | null = null
+  if (requestedId) {
+    try {
+      const response = await paymentAPI.getOrder(requestedId)
+      if (response.data?.id === requestedId) order = response.data
+    } catch {
+      // Legacy servers may omit an ID in TOO_MANY_PENDING. Fall back to the
+      // authenticated pending-order list before presenting an error.
+    }
+  }
+
+  if (!order) {
+    try {
+      const response = await paymentAPI.getMyOrders({ page: 1, page_size: 50, status: 'PENDING' })
+      const candidates = (response.data.items || []).filter(item => item.status === 'PENDING')
+      order = requestedId
+        ? candidates.find(item => item.id === requestedId) || null
+        : [...candidates].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0] || null
+    } catch {
+      // The dialog owns this failure so TOO_MANY_PENDING never falls through
+      // to the generic checkout toast layer.
+    }
+  }
+
+  if (request !== existingOrderPromptRequest || !existingOrderPromptVisible.value) return
+  existingOrderLoading.value = false
+  if (!order) {
+    existingOrderLoadError.value = t('payment.errors.pendingOrderExists')
+    return
+  }
+  existingOrder.value = order
+  existingOrderCancellationRetryNeeded.value = typeof window !== 'undefined'
+    && readQueuedPaymentCancellationIds(window.localStorage).includes(order.id)
+  if (existingOrderCancellationRetryNeeded.value) {
+    existingOrderActionError.value = t('payment.orderOps.cancelFailedRetry')
+  }
+}
+
+function retryExistingOrderPrompt(): void {
+  if (existingOrderActionBusy.value) return
+  void openExistingOrderPrompt(existingOrderRequestedId.value ?? undefined)
 }
 
 function askCancelExistingOrder(): void {
-  existingOrderPromptVisible.value = false
+  if (!existingOrder.value || existingOrder.value.status !== 'PENDING' || existingOrderActionBusy.value) return
+  existingOrderActionError.value = ''
   cancelExistingOrderConfirmVisible.value = true
 }
 
-function confirmCancelExistingOrder(): void {
-  const current = paymentState.value
-  if (!current.orderId || current.cancellationRequested) return
-  const snapshot = cancellationRecoverySnapshot(current)
-  paymentState.value = snapshot
-  recoveredWechatJsapi.value = undefined
-  recoveryPendingState.value = 'cancellation'
+function restoreExistingOrderCancelFocus(): void {
+  void nextTick(() => existingOrderCancelButton.value?.focus())
+}
+
+function closeExistingOrderCancelConfirmation(): void {
   cancelExistingOrderConfirmVisible.value = false
-  paymentModalVisible.value = true
-  queuePaymentCancellation(window.localStorage, snapshot.orderId)
-  persistRecoverySnapshot(snapshot)
-  scheduleBackgroundCancellation(snapshot)
+  restoreExistingOrderCancelFocus()
+}
+
+function retryCancelExistingOrder(): void {
+  if (!existingOrderCancellationRetryNeeded.value || existingOrderActionBusy.value) return
+  void confirmCancelExistingOrder()
+}
+
+function clearExistingOrderDialogAfterAction(): void {
+  existingOrderPromptRequest += 1
+  existingOrderPromptVisible.value = false
+  cancelExistingOrderConfirmVisible.value = false
+  resetExistingOrderPromptState()
+}
+
+function existingOrderLaunchRoutes(result: CreateOrderResult, visibleMethod: string) {
+  const stripeMethod = visibleMethod === 'stripe'
+    ? ''
+    : visibleMethod === 'wxpay' ? 'wechat_pay' : 'alipay'
+  const stripeRouteUrl = result.client_secret && visibleMethod === 'stripe'
+    ? router.resolve({
+      path: '/payment/stripe',
+      query: {
+        order_id: String(result.order_id),
+        client_secret: result.client_secret,
+        method: stripeMethod || undefined,
+        resume_token: result.resume_token || undefined,
+      },
+    }).href
+    : ''
+  const airwallexRouteUrl = result.client_secret && result.intent_id
+    ? router.resolve({
+      path: '/payment/airwallex',
+      query: {
+        order_id: String(result.order_id),
+        out_trade_no: result.out_trade_no || undefined,
+        resume_token: result.resume_token || undefined,
+      },
+    }).href
+    : ''
+  return { stripeRouteUrl, airwallexRouteUrl }
+}
+
+async function openExistingOrder(): Promise<void> {
+  const order = existingOrder.value
+  if (!order || order.status !== 'PENDING' || existingOrderActionBusy.value || existingOrderCancellationRetryNeeded.value) return
+  const promptRequest = existingOrderPromptRequest
+  const actionRequest = ++existingOrderActionRequest
+  existingOrderContinueLoading.value = true
+  existingOrderActionError.value = ''
+  let popup: Window | null = null
+  let popupNavigated = false
+  if (typeof window !== 'undefined' && !isMobileDevice()) {
+    try {
+      popup = window.open('', 'paymentPopup', getPaymentPopupFeatures())
+    } catch {
+      popup = null
+    }
+  }
+  const closePopup = () => {
+    if (popup && !popup.closed && !popupNavigated && typeof popup.close === 'function') popup.close()
+  }
+  const navigatePopup = (url: string) => {
+    if (popup && !popup.closed) {
+      try {
+        popup.location.href = url
+        popupNavigated = true
+        return
+      } catch {
+        // Browser popup ownership can change after the authenticated response.
+      }
+    }
+    const opened = window.open(url, 'paymentPopup', getPaymentPopupFeatures())
+    if (!opened || opened.closed) window.location.href = url
+  }
+
+  try {
+    const response = await paymentAPI.resumeOrder(order.id)
+    const result = response.data
+    if (result.order_id !== order.id) throw new Error('Invalid existing order resume response')
+    if (promptRequest !== existingOrderPromptRequest || existingOrder.value?.id !== order.id) return
+    const visibleMethod = normalizeVisibleMethod(result.payment_type || order.payment_type) || result.payment_type || order.payment_type
+    const { stripeRouteUrl, airwallexRouteUrl } = existingOrderLaunchRoutes(result, visibleMethod)
+    const decision = decidePaymentLaunch(result, {
+      visibleMethod,
+      orderType: order.order_type,
+      isMobile: isMobileDevice(),
+      isWechatBrowser: /MicroMessenger/i.test(window.navigator.userAgent),
+      forceQRCode: !!(checkout.value.alipay_force_qrcode && visibleMethod === 'alipay'),
+      mobilePrecreateDeepLink: checkout.value.alipay_mobile_precreate_deep_link === true,
+      stripePopupUrl: stripeRouteUrl,
+      stripeRouteUrl,
+      airwallexRouteUrl,
+      paymentDiscount: result.payment_discount,
+    })
+    if (decision.kind === 'unhandled' || !decision.paymentState.orderId) {
+      throw new Error('Invalid existing order launch')
+    }
+    if (decision.kind === 'wechat_oauth' && decision.oauth?.authorize_url) {
+      persistRecoverySnapshot(decision.recovery)
+      clearExistingOrderDialogAfterAction()
+      window.location.href = buildWechatOAuthAuthorizeUrl(decision.oauth.authorize_url, {
+        paymentType: visibleMethod,
+        orderType: order.order_type,
+        orderAmount: result.amount,
+      })
+      return
+    }
+
+    setRecoveredPaymentState(decision.paymentState, {
+      wechatJsapi: decision.kind === 'wechat_jsapi' ? decision.jsapi : undefined,
+    })
+    persistRecoverySnapshot(decision.recovery)
+    pendingResetCardSelection.value = null
+    clearExistingOrderDialogAfterAction()
+
+    if (decision.kind === 'redirect_waiting' || decision.kind === 'stripe_popup') {
+      if (decision.paymentState.payUrl) navigatePopup(decision.paymentState.payUrl)
+      return
+    }
+    if (decision.kind === 'stripe_route' || decision.kind === 'airwallex_route') {
+      if (decision.paymentState.payUrl) window.location.href = decision.paymentState.payUrl
+      return
+    }
+  } catch (err: unknown) {
+    if (promptRequest === existingOrderPromptRequest && existingOrder.value?.id === order.id) {
+      existingOrderActionError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))
+    }
+  } finally {
+    closePopup()
+    if (actionRequest === existingOrderActionRequest) existingOrderContinueLoading.value = false
+  }
+}
+
+async function confirmCancelExistingOrder(): Promise<void> {
+  const order = existingOrder.value
+  if (!order || order.status !== 'PENDING' || existingOrderActionBusy.value) return
+  const orderId = order.id
+  const promptRequest = existingOrderPromptRequest
+  const actionRequest = ++existingOrderActionRequest
+  cancelExistingOrderConfirmVisible.value = false
+  existingOrderCancelLoading.value = true
+  existingOrderActionError.value = ''
+  if (typeof window !== 'undefined') queuePaymentCancellation(window.localStorage, orderId)
+  try {
+    const response = await paymentAPI.cancelOrder(orderId)
+    const message = response.data?.message
+    if (message !== 'cancelled' && message !== 'already_paid') {
+      throw { reason: 'CANCEL_RESPONSE_INVALID' }
+    }
+    if (typeof window !== 'undefined') clearQueuedPaymentCancellation(window.localStorage, orderId)
+
+    if (message === 'cancelled') {
+      clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, { orderId })
+      clearResetCardCheckoutAttempt(window.localStorage, { orderId })
+      if (promptRequest !== existingOrderPromptRequest || existingOrder.value?.id !== orderId) return
+      const currentMatches = paymentState.value.orderId === orderId
+      const nextResetCardSelection = currentMatches ? pendingResetCardSelection.value : null
+      const wasResetCard = currentMatches && paymentState.value.orderType === 'reset_card'
+      if (currentMatches) resetPayment()
+      pendingResetCardSelection.value = null
+      if (wasResetCard) clearResetCardSelection()
+      if (nextResetCardSelection) applyResetCardSelection(nextResetCardSelection)
+      clearExistingOrderDialogAfterAction()
+      return
+    }
+
+    if (promptRequest !== existingOrderPromptRequest || existingOrder.value?.id !== orderId) return
+    if (paymentState.value.orderId > 0 && paymentState.value.orderId !== orderId) {
+      existingOrderActionError.value = t('payment.result.paymentReceivedProcessing')
+      return
+    }
+    const current = paymentState.value.orderId === orderId
+      ? paymentState.value
+      : recoverySnapshotForExistingOrder(order)
+    const safeSnapshot = {
+      ...snapshotWithoutLaunchMaterial(current),
+      cancellationRequested: undefined,
+    }
+    pendingResetCardSelection.value = null
+    setRecoveredPaymentState(safeSnapshot, { pendingState: 'confirmation' })
+    persistRecoverySnapshot(safeSnapshot)
+    clearExistingOrderDialogAfterAction()
+  } catch (err: unknown) {
+    if (promptRequest === existingOrderPromptRequest && existingOrder.value?.id === orderId) {
+      existingOrderCancellationRetryNeeded.value = true
+      existingOrderActionError.value = extractMappedI18nErrorMessage(
+        err,
+        t,
+        'payment.errors',
+        t('payment.orderOps.cancelFailedRetry'),
+      )
+    }
+  } finally {
+    if (actionRequest === existingOrderActionRequest) {
+      existingOrderCancelLoading.value = false
+      if (existingOrderCancellationRetryNeeded.value) restoreExistingOrderCancelFocus()
+    }
+  }
 }
 
 function updateResetCardOptions(next: { quantity: number; useOnPurchase: boolean }): void {
@@ -1965,14 +2332,10 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     } else if (apiErr.reason === 'TOO_MANY_PENDING') {
       const metadata = apiErr.metadata as Record<string, unknown> | undefined
       const existingOrderId = Number(metadata?.order_id)
-      if (existingOrderId > 0 && paymentPhase.value === 'paying' && paymentState.value.orderId === existingOrderId) {
-        paymentModalVisible.value = true
-        return
-      }
-      errorMessage.value = existingOrderId > 0
-        ? t('payment.errors.pendingOrderExists')
-        : t('payment.errors.tooManyPending', { max: metadata?.max || '' })
+      errorMessage.value = ''
       errorHintMessage.value = ''
+      void openExistingOrderPrompt(existingOrderId > 0 ? existingOrderId : undefined)
+      return
     } else if (apiErr.reason === 'CANCEL_RATE_LIMITED') {
       errorMessage.value = t('payment.errors.cancelRateLimited')
       errorHintMessage.value = ''
