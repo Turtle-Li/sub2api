@@ -439,7 +439,15 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 		policy := "default-src 'self'; script-src 'self' __CSP_NONCE__; style-src 'self'; connect-src 'self'; frame-src 'self'"
 		enhanced := enhanceCSPPolicy(policy)
 
-		for _, domain := range []string{AlipayLiveGatewayDomain, AlipaySandboxGatewayDomain, AlipayCashierDomain} {
+		alipayDomains := []string{
+			AlipayLiveGatewayDomain,
+			AlipaySandboxGatewayDomain,
+			AlipayCashierDomain,
+			AlipayUnitradeDomain,
+			AlipayWildcardDomain,
+			AlipayDevWildcardDomain,
+		}
+		for _, domain := range alipayDomains {
 			assert.Equal(t, 1, countDirectiveValue(enhanced, "frame-src", domain))
 			assert.Zero(t, countDirectiveValue(enhanced, "script-src", domain))
 			assert.Zero(t, countDirectiveValue(enhanced, "style-src", domain))
@@ -451,13 +459,20 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 	t.Run("default_policy_limits_Alipay_to_exact_frame_sources", func(t *testing.T) {
 		enhanced := enhanceCSPPolicy(config.DefaultCSPPolicy)
 
-		for _, domain := range []string{AlipayLiveGatewayDomain, AlipaySandboxGatewayDomain, AlipayCashierDomain} {
+		alipayDomains := []string{
+			AlipayLiveGatewayDomain,
+			AlipaySandboxGatewayDomain,
+			AlipayCashierDomain,
+			AlipayUnitradeDomain,
+			AlipayWildcardDomain,
+			AlipayDevWildcardDomain,
+		}
+		for _, domain := range alipayDomains {
 			assert.Equal(t, 1, countDirectiveValue(enhanced, "frame-src", domain))
 			assert.Zero(t, countDirectiveValue(enhanced, "script-src", domain))
 			assert.Zero(t, countDirectiveValue(enhanced, "style-src", domain))
 			assert.Zero(t, countDirectiveValue(enhanced, "connect-src", domain))
 		}
-		assert.Zero(t, countDirectiveValue(enhanced, "frame-src", "https://*.alipay.com"))
 		assert.Zero(t, countDirectiveValue(enhanced, "frame-src", "https://alipay.com"))
 	})
 }

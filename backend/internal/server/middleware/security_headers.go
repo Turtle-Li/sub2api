@@ -53,8 +53,15 @@ const (
 	// AlipaySandboxGatewayDomain is the exact official sandbox page-pay gateway.
 	AlipaySandboxGatewayDomain = "https://openapi-sandbox.dl.alipaydev.com"
 	// AlipayCashierDomain is the official page-pay redirect target observed for
-	// live checkout. Keep this distinct from a broad alipay.com wildcard.
+	// live checkout.
 	AlipayCashierDomain = "https://excashier.alipay.com"
+	// AlipayUnitradeDomain is the intermediate official dispatch target observed
+	// during live checkout redirection.
+	AlipayUnitradeDomain = "https://unitradeprod.alipay.com"
+	// AlipayWildcardDomain covers all official Alipay checkout dispatch subdomains.
+	AlipayWildcardDomain = "https://*.alipay.com"
+	// AlipayDevWildcardDomain covers all official Alipay sandbox checkout dispatch subdomains.
+	AlipayDevWildcardDomain = "https://*.alipaydev.com"
 )
 
 var requiredCSPDirectiveValues = []struct {
@@ -94,6 +101,9 @@ var requiredCSPDirectiveValues = []struct {
 	{"frame-src", AlipayLiveGatewayDomain},
 	{"frame-src", AlipaySandboxGatewayDomain},
 	{"frame-src", AlipayCashierDomain},
+	{"frame-src", AlipayUnitradeDomain},
+	{"frame-src", AlipayWildcardDomain},
+	{"frame-src", AlipayDevWildcardDomain},
 }
 
 // GenerateNonce generates a cryptographically secure random nonce.
