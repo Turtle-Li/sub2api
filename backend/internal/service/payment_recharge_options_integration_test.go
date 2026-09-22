@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,39 +38,36 @@ func TestRechargeOptionsFirstWritePostgresSerializesBalanceCheckout(t *testing.T
 	t.Cleanup(func() { _ = client.Close() })
 	require.NoError(t, client.Schema.Create(ctx))
 
-	user, err := client.User.Create().
-		SetEmail("recharge-options-postgres@example.test").
-		SetPasswordHash("hash").
-		SetUsername("recharge-options-postgres").
-		Save(ctx)
-	require.NoError(t, err)
-
 	svc := &PaymentService{entClient: client}
 	cfg := &PaymentConfig{MaxPendingOrders: 100, OrderTimeoutMin: 30}
-	request := CreateOrderRequest{
-		UserID:      user.ID,
-		PaymentType: payment.TypeAlipay,
-		OrderType:   payment.OrderTypeBalance,
-		ClientIP:    "127.0.0.1",
-		SrcHost:     "recharge-options.integration.test",
-	}
-	createOrder := func() (*dbent.PaymentOrder, error) {
-		return svc.createOrderInTx(ctx, request, &User{ID: user.ID, Email: user.Email, Username: user.Username}, nil, cfg, 88, 88, 0, 88, nil)
+	userIndex := 0
+	newCheckoutScenario := func(t *testing.T) (func() (*dbent.PaymentOrder, error), string) {
+		t.Helper()
+		// Each scenario owns its checkout user. A pending order created by an
+		// earlier scenario must not exercise the unrelated single-order fence.
+		userIndex++
+		user, createErr := client.User.Create().
+			SetEmail(fmt.Sprintf("recharge-options-%d@example.test", userIndex)).
+			SetPasswordHash("hash").SetUsername("recharge-options-postgres").Save(ctx)
+		require.NoError(t, createErr)
+		request := CreateOrderRequest{UserID: user.ID, PaymentType: payment.TypeAlipay,
+			OrderType: payment.OrderTypeBalance, ClientIP: "127.0.0.1", SrcHost: "recharge-options.integration.test"}
+		createOrder := func() (*dbent.PaymentOrder, error) {
+			return svc.createOrderInTx(ctx, request, &User{ID: user.ID, Email: user.Email, Username: user.Username}, nil, cfg, 88, 88, 0, 88, nil)
+		}
+		restricted, encodeErr := encodeRechargeOptions([]RechargeOption{{Amount: 88, Enabled: true,
+			PurchaseRules: &PurchaseRules{VisibleUserIDs: []int64{user.ID + 1}},
+		}})
+		require.NoError(t, encodeErr)
+		return createOrder, restricted
 	}
 	clearRechargeOptions := func() {
 		_, deleteErr := client.Setting.Delete().Where(setting.KeyEQ(SettingRechargeOptions)).Exec(ctx)
 		require.NoError(t, deleteErr)
 	}
-	restrictedOptions, err := encodeRechargeOptions([]RechargeOption{{
-		Amount:  88,
-		Enabled: true,
-		PurchaseRules: &PurchaseRules{
-			VisibleUserIDs: []int64{user.ID + 1},
-		},
-	}})
-	require.NoError(t, err)
 
 	t.Run("absent setting is the persistent custom-mode default", func(t *testing.T) {
+		createOrder, _ := newCheckoutScenario(t)
 		clearRechargeOptions()
 		order, createErr := createOrder()
 		require.NoError(t, createErr)
@@ -80,6 +78,7 @@ func TestRechargeOptionsFirstWritePostgresSerializesBalanceCheckout(t *testing.T
 	})
 
 	t.Run("admin first restricted card rejects stale custom checkout", func(t *testing.T) {
+		createOrder, restrictedOptions := newCheckoutScenario(t)
 		clearRechargeOptions()
 		_, createErr := client.Setting.Create().SetKey(SettingRechargeOptions).SetValue(restrictedOptions).Save(ctx)
 		require.NoError(t, createErr)
@@ -94,6 +93,7 @@ func TestRechargeOptionsFirstWritePostgresSerializesBalanceCheckout(t *testing.T
 	})
 
 	t.Run("checkout first holds the unique key through the write", func(t *testing.T) {
+		createOrder, restrictedOptions := newCheckoutScenario(t)
 		clearRechargeOptions()
 		checkoutReachedSettingRead := make(chan struct{})
 		releaseCheckout := make(chan struct{})

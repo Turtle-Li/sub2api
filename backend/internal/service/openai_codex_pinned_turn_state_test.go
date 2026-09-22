@@ -165,11 +165,11 @@ func TestAccountGetPinnedCodexTurnState(t *testing.T) {
 			Extra: map[string]any{
 				PinnedCodexTurnStatesExtraKey: map[string]any{
 					"gpt-6-astra": map[string]any{
-						"state":              "gAAAAAB_astra_292",
-						"state_len":          292,
-						"expires_at":         future.Format(time.RFC3339),
-						"cookie":             "__cflb=02DiuF1; __oailb=node-123",
-						"cookie_expires_at":  cookieFuture.Format(time.RFC3339),
+						"state":             "gAAAAAB_astra_292",
+						"state_len":         292,
+						"expires_at":        future.Format(time.RFC3339),
+						"cookie":            "__cflb=02DiuF1; __oailb=node-123",
+						"cookie_expires_at": cookieFuture.Format(time.RFC3339),
 					},
 				},
 			},
