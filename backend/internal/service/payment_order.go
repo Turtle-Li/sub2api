@@ -1383,6 +1383,20 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		sel = lockedSelection
 	}
 	if opts == nil || !opts.lockOwnerTestUser {
+		if opts != nil && opts.resetCardIdempotent && opts.fixedOutTradeNo != "" {
+			// The first lookup happens before the user-row lock so uncontended
+			// replays stay cheap. A concurrent request can miss that lookup while
+			// the winner is still inserting; recheck after the lock so the same
+			// idempotency key replays the winner instead of being misclassified as
+			// a different pending order.
+			existing, lookupErr := tx.PaymentOrder.Query().Where(paymentorder.OutTradeNoEQ(opts.fixedOutTradeNo)).Only(ctx)
+			if lookupErr == nil {
+				return existing, false, nil
+			}
+			if !dbent.IsNotFound(lookupErr) {
+				return nil, false, fmt.Errorf("recheck reset card payment replay: %w", lookupErr)
+			}
+		}
 		if err := s.checkSinglePendingOrder(ctx, tx, req.UserID); err != nil {
 			return nil, false, err
 		}

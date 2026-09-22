@@ -81,7 +81,7 @@ func TestPaymentRefundReconciliationStoreStatsCountEveryReservedReviewedAttempt(
 func TestPaymentRefundReconciliationStoreRejectsZeroGeneration(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	store := NewPaymentRefundReconciliationStore(db)
 	require.ErrorContains(t, store.CompleteClaim(context.Background(), "refund", "worker", time.Time{}, time.Minute), "generation")
 	require.ErrorContains(t, store.RetryClaim(context.Background(), "refund", "worker", time.Time{}, time.Minute, time.Now(), "retry"), "generation")
