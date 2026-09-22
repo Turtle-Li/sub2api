@@ -1923,6 +1923,9 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
         )
 
         try:
+            # Send probe with existing sticky routing cookie to maintain Cloudflare node affinity.
+            # Do NOT pass turn_state: OpenAI omits x-codex-turn-state header from response
+            # when x-codex-turn-state is supplied in request headers.
             result = probe_turn_state(
                 proxy,
                 creds,
@@ -1930,7 +1933,6 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 connect_timeout=10,
                 max_time=timeout,
                 cookie=current_cookie,
-                turn_state=current_state,
             )
         except Exception as exc:
             print(f"[!] [account={acct_id}] [{model}] Probe exception during session roll: {exc}")
@@ -1940,14 +1942,17 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
         status = result["http_status"]
         state = result["state"]
         state_len = result["state_len"]
-        cookie = result.get("cookie", "")
+        cookie = result.get("cookie", "") or current_cookie
 
         if status == 200 and state and state_len == target_len and cookie:
             info = inspect_turn_state(state)
             if (info.get("valid") and not info.get("is_expired", True)
                     and len(state) <= MAX_STATE_BYTES and is_valid_header_value(state)):
                 info["cookie"] = cookie
-                info["cookie_expires_at"] = result.get("cookie_expires_at", "")
+                cookie_exp = result.get("cookie_expires_at", "")
+                if not cookie_exp and cookie:
+                    cookie_exp = (datetime.now(timezone.utc) + timedelta(seconds=180)).isoformat()
+                info["cookie_expires_at"] = cookie_exp
                 self._session_proxy[acct_id] = proxy
                 print(
                     f"[+] [account={acct_id}] [{model}] Session rolled successfully via keep-alive "

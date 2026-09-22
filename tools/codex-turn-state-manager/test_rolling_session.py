@@ -161,7 +161,7 @@ class TestRollingSession(TestCase):
             mock_probe.assert_called_once()
             _, kwargs = mock_probe.call_args
             self.assertEqual(kwargs.get("cookie"), cookie)
-            self.assertEqual(kwargs.get("turn_state"), state292)
+            self.assertIsNone(kwargs.get("turn_state"))
 
     def test_roll_session_retires_when_exceeding_max_age(self):
         mgr = self._make_manager({"max_session_age_seconds": 1200})
