@@ -524,11 +524,12 @@ class IntegratedProxySourceTests(unittest.TestCase):
         account={"id":9,"name":"test","models":[{"name":"a"}]}
         candidate, _root, _state, config = self._manager(accounts=[account])
         candidate._rotating=True
+        candidate._integrated_base_rotating=True
         candidate._harvest_retry_delay=0
         state=valid_state(292)
         result=(state,integrated.manager.inspect_turn_state(state),candidate.proxies[0])
         clock=[100.0]
-        def harvest(*args):
+        def harvest(*args, **kwargs):
             candidate._harvest_retry_delay=0
             return None if clock[0]==100 else result
         self.assertIsNone(candidate.renewal_timing_snapshot()['average_seconds'])

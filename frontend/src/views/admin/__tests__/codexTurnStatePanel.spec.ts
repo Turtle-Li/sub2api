@@ -133,4 +133,20 @@ describe('actual embedded Codex panel source inventory', () => {
     expect(node('meta').textContent).not.toContain('加载失败')
   })
 
+  it('toggles probing_enabled through the bridge and updates status tag and banner', async () => {
+    const {state, requests} = startPanel()
+    await vi.waitFor(() => expect(node('probeStatusTag').textContent).toContain('运行中'))
+    expect(node('toggleProbingBtn').textContent).toBe('⏸️ 暂停自动探针')
+    expect(node('probingPausedBanner').hidden).toBe(true)
+
+    node('toggleProbingBtn').click()
+    await vi.waitFor(() => expect(requests.some(r => r.path === 'api/settings' && (r.body as any)?.probing_enabled === false)).toBe(true))
+    state.probing_enabled = false
+    state.generated_at += 1
+    node('refresh').click()
+    await vi.waitFor(() => expect(node('probeStatusTag').textContent).toContain('已暂停'))
+    expect(node('toggleProbingBtn').textContent).toBe('▶️ 开启自动探针')
+    expect(node('probingPausedBanner').hidden).toBe(false)
+  })
 })
+
