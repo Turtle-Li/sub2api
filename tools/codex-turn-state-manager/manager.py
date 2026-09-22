@@ -1587,19 +1587,14 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             entry = self._proxy_usage.get(ident, {})
             entry["last_used"] = time.time()
             entry["last_state_len"] = state_len
-            if state_len in (292, 312):
-                entry["hit_valid_count"] = entry.get("hit_valid_count", 0) + 1
+            if state_len == 292:
                 entry["hit_292_count"] = entry.get("hit_292_count", 0) + 1
             self._proxy_usage[ident] = entry
 
-    def _ordered_proxies(self, prefer_292: bool = False) -> List[str]:
-        """Least-recently-used first, resting addresses moved to the back.
-
-        When prefer_292 is True, addresses that previously hit 292/312 or match
-        known high-yield proxy seeds are prioritized to speed up cookie renewal.
-        """
+    def _ordered_proxies(self, prefer_292: bool = True) -> List[str]:
+        """Least-recently-used first, prioritizing known 292 seeds."""
         now = time.time()
-        ready, resting = [], []
+        seed_ready, seed_resting, other_ready, other_resting = [], [], [], []
         with self._usage_lock:
             usage = dict(self._proxy_usage)
         
@@ -1613,33 +1608,52 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             "91.123.10.25", "92.119.182.217",
         }
 
+        cooldown = min(self.proxy_cooldown_seconds, 60.0)
+
         for proxy in self.proxies:
             ident = self._proxy_identity(proxy)
             p_info = usage.get(ident, {})
             last_used = float(p_info.get("last_used", 0))
-            is_valid_seed = (
-                p_info.get("last_state_len") in (292, 312)
-                or p_info.get("hit_valid_count", 0) > 0
+            is_292 = (
+                p_info.get("last_state_len") == 292
                 or p_info.get("hit_292_count", 0) > 0
             )
-            if not is_valid_seed:
+            if not is_292:
                 for s in known_seeds:
                     if s in proxy:
-                        is_valid_seed = True
+                        is_292 = True
                         break
             
-            prio = 0 if (prefer_292 and is_valid_seed) else 1
-            item = (prio, last_used, proxy)
-            (resting if now - last_used < self.proxy_cooldown_seconds else ready).append(item)
+            is_resting = (now - last_used < cooldown)
+            item = (last_used, proxy)
+            if is_292:
+                (seed_resting if is_resting else seed_ready).append(item)
+            else:
+                (other_resting if is_resting else other_ready).append(item)
 
-        ready.sort(key=lambda x: (x[0], x[1]))
-        resting.sort(key=lambda x: (x[0], x[1]))
+        seed_ready.sort(key=lambda x: x[0])
+        seed_resting.sort(key=lambda x: x[0])
+        other_ready.sort(key=lambda x: x[0])
+        other_resting.sort(key=lambda x: x[0])
+
         if self.config.get("static_proxy_order") == "random" and not prefer_292:
-            random.SystemRandom().shuffle(ready)
-            random.SystemRandom().shuffle(resting)
-        if resting and not ready:
-            print(f"[*] All {len(resting)} proxies are within their cooldown; trying oldest first.")
-        return [proxy for _, _, proxy in ready] + [proxy for _, _, proxy in resting]
+            random.SystemRandom().shuffle(seed_ready)
+            random.SystemRandom().shuffle(other_ready)
+
+        if prefer_292:
+            return (
+                [p for _, p in seed_ready]
+                + [p for _, p in seed_resting]
+                + [p for _, p in other_ready]
+                + [p for _, p in other_resting]
+            )
+        else:
+            return (
+                [p for _, p in seed_ready]
+                + [p for _, p in other_ready]
+                + [p for _, p in seed_resting]
+                + [p for _, p in other_resting]
+            )
 
     def _load_config(self) -> Dict[str, Any]:
         if not self.config_path.exists():
@@ -1938,7 +1952,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 or len(state) > MAX_STATE_BYTES or not is_valid_header_value(state)):
             print(f"[*] [{model}] rejected invalid or insufficient-lifetime state.")
             return None
-        if (len(state) == target or len(state) in (292, 312)) and result.get("cookie"):
+        if len(state) == 292 and result.get("cookie"):
             info["cookie"] = result.get("cookie", "")
             info["cookie_expires_at"] = result.get("cookie_expires_at", "")
         else:
@@ -1981,10 +1995,10 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
 
         seen_lengths: List[int] = []
         timeout = int(self.config.get("request_timeout_seconds", 30))
-        ordered = self._ordered_proxies(prefer_292=require_cookie)
-        budget = max(1, self.max_probes_per_pass)
+        ordered = self._ordered_proxies(prefer_292=True)
+        budget = max(30, self.max_probes_per_pass)
         if require_cookie:
-            budget = min(budget, 25)
+            budget = max(30, min(budget, 35))
         if proxy_offset and len(ordered) > 1:
             offset = proxy_offset % len(ordered)
             ordered = ordered[offset:] + ordered[:offset]
@@ -2026,8 +2040,8 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
 
                 seen_lengths.append(state_len)
                 if require_cookie:
-                    if (require_exact and state_len != target_len) or not result.get("cookie"):
-                        print(f"[REJECT: want {target_len} with cookie, got {state_len}]")
+                    if (require_exact and state_len != 292) or not result.get("cookie"):
+                        print(f"[REJECT: want 292 with cookie, got {state_len}]")
                         continue
                 elif require_exact and state_len != target_len:
                     print(f"[REJECT: want {target_len}]")
@@ -2041,7 +2055,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     print("[REJECT: invalid or insufficient-lifetime state]")
                     continue
 
-                if (state_len == target_len or state_len in (292, 312)) and result.get("cookie"):
+                if state_len == 292 and result.get("cookie"):
                     info["cookie"] = result.get("cookie", "")
                     info["cookie_expires_at"] = result.get("cookie_expires_at", "")
                 else:
