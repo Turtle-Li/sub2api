@@ -914,7 +914,7 @@ describe('PaymentView payment discount coupons', () => {
       code: 'SAVE2026',
       pay_amount: '80.00',
     })
-    expect(wrapper.findComponent(PaymentStatusPanel).props('allowCheckoutFrame')).toBe(false)
+    expect(wrapper.findComponent(PaymentStatusPanel).props('allowCheckoutFrame')).toBe(true)
   })
 
   it('keeps first-time coupon typing quiet and clears it after a successful payment without reloading', async () => {
@@ -2233,7 +2233,7 @@ describe('PaymentView payment recovery', () => {
     openSpy.mockRestore()
   })
 
-  it('opens a desktop hosted Alipay fallback in the top-level payment popup', async () => {
+  it('keeps a desktop hosted Alipay fallback as redirect waiting in the current dialog without drawing QR', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -2275,14 +2275,14 @@ describe('PaymentView payment recovery', () => {
     await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
-    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
-    expect(popupLocation.href).toBe('https://pay.totools.cn/checkout/reset-card-907')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(popupLocation.href).toBe('')
     expect(panel.props('payUrl')).toBe('https://pay.totools.cn/checkout/reset-card-907')
     expect(panel.props('qrCode')).toBe('')
     openSpy.mockRestore()
   })
 
-  it('opens a legacy Alipay page-pay checkout automatically without embedding it', async () => {
+  it('embeds a validated Alipay checkout frame in the current dialog without opening a top-level popup', async () => {
     routeState.query = { tab: 'subscription' }
     isMobileDevice.mockReturnValue(false)
     const checkout = checkoutInfoWithPlansFixture()
@@ -2325,11 +2325,12 @@ describe('PaymentView payment recovery', () => {
     await submitSelectedResetCard(wrapper)
 
     const panel = wrapper.findComponent(PaymentStatusPanel)
-    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
-    expect(popupLocation.href).toBe('https://pay.totools.cn/checkout/reset-card-908')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(popupLocation.href).toBe('')
+    expect(popupLocation.href).not.toContain('openapi.alipay.com/gateway.do')
     expect(panel.props('qrCode')).toBe('')
     expect(panel.props('checkoutFrameUrl')).toContain('openapi.alipay.com/gateway.do')
-    expect(panel.props('allowCheckoutFrame')).toBe(false)
+    expect(panel.props('allowCheckoutFrame')).toBe(true)
 
     openSpy.mockRestore()
   })

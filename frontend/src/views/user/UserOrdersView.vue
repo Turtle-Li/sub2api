@@ -278,6 +278,7 @@
         :payment-type="resumedPayment.paymentType"
         :pay-url="resumedPayment.payUrl"
         :checkout-frame-url="resumedPayment.checkoutFrameUrl"
+        :allow-checkout-frame="true"
         :order-type="resumedPayment.orderType"
         :currency="resumedPayment.currency"
         :out-trade-no="resumedPayment.outTradeNo"

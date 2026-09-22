@@ -227,6 +227,7 @@
         :payment-type="paymentState.paymentType"
         :pay-url="paymentState.payUrl"
         :checkout-frame-url="paymentState.checkoutFrameUrl"
+        :allow-checkout-frame="true"
         :order-type="paymentState.orderType"
         :currency="paymentState.currency || selectedCurrency"
         :out-trade-no="paymentState.outTradeNo"
@@ -1654,10 +1655,10 @@ function shouldPreopenHostedPopup(requestType: string, options: CreateOrderOptio
     return true
   }
 
-  // Native Alipay QR responses close this popup after the launch decision. A
-  // page-pay response must use the same user-gesture popup at top level; it
-  // cannot be rendered safely in an iframe.
-  return visibleMethod === 'alipay'
+  // Native Alipay QR and embedded checkout frames stay in the current dialog.
+  // If the merchant only provides a top-level page-pay fallback, the same order
+  // can still be opened explicitly by the user from the dialog's fallback button.
+  return false
 }
 
 async function handleSubmitRecharge() {
@@ -2106,7 +2107,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
   let preopenedPopupNavigated = false
   const closePreopenedPopup = () => {
     if (preopenedPopup && !preopenedPopup.closed && !preopenedPopupNavigated) {
-      preopenedPopup.close()
+      preopenedPopup.close?.()
     }
   }
   try {
@@ -2234,7 +2235,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     persistRecoverySnapshot(decision.recovery)
     paymentModalVisible.value = true
 
-    if (decision.kind === 'qr_waiting' || decision.kind === 'status_waiting') {
+    if (decision.kind === 'qr_waiting' || decision.kind === 'status_waiting' || decision.kind === 'checkout_frame') {
       closePreopenedPopup()
     }
 
@@ -2317,7 +2318,9 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         return
       }
       if (visibleMethod === 'alipay') {
-        openWindow(decision.paymentState.payUrl)
+        // Desktop Alipay stays in the current dialog. The user can explicitly
+        // open the same order from its fallback button; no replacement order
+        // or automatic second popup is created.
         return
       }
       openWindow(decision.paymentState.payUrl)

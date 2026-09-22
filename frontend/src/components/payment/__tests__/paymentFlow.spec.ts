@@ -402,7 +402,7 @@ describe('decidePaymentLaunch', () => {
     expect(decision.paymentState.qrCode).toBe('')
   })
 
-  it('routes desktop Alipay with a hosted checkout to top-level redirect mode', () => {
+  it('routes desktop Alipay with checkout_frame_url to checkout_frame mode', () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     const decision = decidePaymentLaunch(createOrderResult({
       payment_mode: 'redirect',
@@ -414,14 +414,14 @@ describe('decidePaymentLaunch', () => {
       isMobile: false,
     })
 
-    expect(decision.kind).toBe('redirect_waiting')
+    expect(decision.kind).toBe('checkout_frame')
     expect(decision.paymentState.checkoutFrameUrl).toBe(checkoutFrameUrl)
     expect(decision.recovery.checkoutFrameUrl).toBe(checkoutFrameUrl)
     expect(decision.paymentState.qrCode).toBe('')
     expect(decision.paymentState.payUrl).toBe('https://pay.totools.cn/checkout/hosted-session')
   })
 
-  it('does not launch an iframe when Alipay pay_url is absent', () => {
+  it('routes desktop Alipay to checkout_frame mode even when pay_url is absent', () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
     const decision = decidePaymentLaunch(createOrderResult({
       payment_mode: 'redirect',
@@ -433,7 +433,7 @@ describe('decidePaymentLaunch', () => {
       isMobile: false,
     })
 
-    expect(decision.kind).toBe('unhandled')
+    expect(decision.kind).toBe('checkout_frame')
     expect(decision.paymentState.qrCode).toBe('')
     expect(decision.paymentState.checkoutFrameUrl).toBe(checkoutFrameUrl)
   })
