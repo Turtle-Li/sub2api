@@ -570,6 +570,8 @@ def probe_turn_state(
     model: str,
     connect_timeout: int = 15,
     max_time: int = 30,
+    cookie: Optional[str] = None,
+    turn_state: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Issue one codex-tui-shaped request and abort as soon as the header lands.
 
@@ -605,6 +607,10 @@ def probe_turn_state(
 
         if creds.get("device"):
             curl_config.append(f'header = "X-Codex-Installation-ID: {esc(creds["device"])}"')
+        if turn_state:
+            curl_config.append(f'header = "x-codex-turn-state: {esc(turn_state)}"')
+        if cookie:
+            curl_config.append(f'header = "Cookie: {esc(cookie)}"')
 
         started = time.monotonic()
         proc = subprocess.Popen(
@@ -839,6 +845,8 @@ class StateManager:
         self._creds_cache: Dict[int, Dict[str, Any]] = {}
         self._retry_after: Dict[str, float] = {}
         self._logged_skips: Dict[str, float] = {}
+        self._session_start: Dict[int, float] = {}
+        self._session_proxy: Dict[int, str] = {}
         try:
             saved = json.loads((state_dir / "probe-diagnostics.json").read_text())
             now = time.time()
@@ -1842,7 +1850,118 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             return None
         info["cookie"] = result.get("cookie", "")
         info["cookie_expires_at"] = result.get("cookie_expires_at", "")
+        self._session_proxy[int(account["id"])] = proxy
         return state, info, proxy
+
+    def roll_session(
+        self,
+        account: Dict[str, Any],
+        model_cfg: Dict[str, Any],
+        current_state: str,
+        current_cookie: str,
+    ) -> Optional[Tuple[str, Dict[str, Any], str]]:
+        """Perform a single keep-alive request carrying the active session cookie.
+
+        Preserves Cloudflare LB affinity to node 292 without blind proxy hunting.
+        Retires session if age exceeds max_session_age_seconds (default 1200s / 20m).
+        Returns (new_state, info, proxy) on success, or None on failure/expiration.
+        """
+        acct_id = int(account["id"])
+        model = model_cfg["name"]
+        now = time.time()
+        max_age = int(self.config.get("max_session_age_seconds", 1200))
+
+        session_start = self._session_start.get(acct_id, 0.0)
+        if not session_start:
+            try:
+                pinned = self.host.read_pinned_states(acct_id)
+                entry = pinned.get(model.lower(), {}) or {}
+                up_str = entry.get("updated_at")
+                if up_str:
+                    session_start = datetime.fromisoformat(up_str.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                pass
+            if not session_start:
+                session_start = now
+            self._session_start[acct_id] = session_start
+
+        session_age = now - session_start
+        if session_age >= max_age:
+            print(
+                f"[*] [account={acct_id}] [{model}] Session reached maximum lifetime "
+                f"({int(session_age)}s >= {max_age}s limit); retiring session for fresh hunt.",
+                flush=True
+            )
+            self._session_start.pop(acct_id, None)
+            return None
+
+        try:
+            creds = self._credentials(account)
+        except Exception as exc:
+            print(f"[!] [account={acct_id}] [{model}] Credentials unavailable for session roll: {exc}")
+            return None
+
+        if not self.proxies:
+            self._refresh_proxies()
+        if not self.proxies:
+            print(f"[!] [account={acct_id}] [{model}] No proxies available for session roll.")
+            return None
+
+        proxy = self._session_proxy.get(acct_id)
+        if not proxy or proxy not in self.proxies:
+            ordered = self._ordered_proxies()
+            proxy = ordered[0] if ordered else self.proxies[0]
+
+        timeout = int(self.config.get("request_timeout_seconds", 30))
+        target_len = int(model_cfg.get("target_state_len", 292))
+        source_name = self._proxy_sources.get(proxy, "static")
+
+        print(
+            f"[*] [account={acct_id}] [{model}] Rolling session keep-alive via {mask_proxy(proxy)} "
+            f"(session age: {int(session_age)}s/{max_age}s)...",
+            flush=True
+        )
+
+        try:
+            result = probe_turn_state(
+                proxy,
+                creds,
+                model,
+                connect_timeout=10,
+                max_time=timeout,
+                cookie=current_cookie,
+                turn_state=current_state,
+            )
+        except Exception as exc:
+            print(f"[!] [account={acct_id}] [{model}] Probe exception during session roll: {exc}")
+            return None
+
+        self._stats_attempt(account, model_cfg, source_name, result)
+        status = result["http_status"]
+        state = result["state"]
+        state_len = result["state_len"]
+        cookie = result.get("cookie", "")
+
+        if status == 200 and state and state_len == target_len and cookie:
+            info = inspect_turn_state(state)
+            if (info.get("valid") and not info.get("is_expired", True)
+                    and len(state) <= MAX_STATE_BYTES and is_valid_header_value(state)):
+                info["cookie"] = cookie
+                info["cookie_expires_at"] = result.get("cookie_expires_at", "")
+                self._session_proxy[acct_id] = proxy
+                print(
+                    f"[+] [account={acct_id}] [{model}] Session rolled successfully via keep-alive "
+                    f"(session age: {int(session_age)}s/{max_age}s, state_len={state_len})",
+                    flush=True
+                )
+                return state, info, proxy
+
+        print(
+            f"[*] [account={acct_id}] [{model}] Keep-alive roll missed "
+            f"(HTTP {status}, state_len={state_len}, cookie={'yes' if cookie else 'no'}); falling back to harvest hunt.",
+            flush=True
+        )
+        return None
 
     def harvest(
         self, account: Dict[str, Any], model_cfg: Dict[str, Any]
@@ -1918,6 +2037,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
 
                 info["cookie"] = result.get("cookie", "")
                 info["cookie_expires_at"] = result.get("cookie_expires_at", "")
+                self._session_proxy[int(account["id"])] = proxy
                 print("[HIT]")
                 return result["state"], info, proxy
         finally:
@@ -2064,13 +2184,14 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     )
 
                 cookie_needs_refresh = False
+                cookie_advance = int(self.config.get("cookie_advance_seconds", 90))
                 if not ticket_needs_refresh and state:
                     cookie_exp = entry.get("cookie_expires_at")
                     if cookie_exp:
                         try:
                             exp_dt = datetime.fromisoformat(str(cookie_exp).replace("Z", "+00:00"))
                             now_dt = datetime.now(timezone.utc)
-                            if (exp_dt - now_dt).total_seconds() <= 60:
+                            if (exp_dt - now_dt).total_seconds() <= cookie_advance:
                                 cookie_needs_refresh = True
                         except Exception:
                             cookie_needs_refresh = True
@@ -2104,21 +2225,37 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     cookie_refresh_models.append(model_cfg)
 
             # Routing cookies are account-wide: if only cookies need refresh across
-            # multiple models, harvest only ONE model to refresh the account routing cookie!
+            # multiple models, roll only ONE model to refresh the account routing cookie!
             # Round-robin across models so one stubborn model doesn't block cookie refresh.
-            if not models_to_harvest and cookie_refresh_models:
+            is_cookie_roll = (not models_to_harvest and bool(cookie_refresh_models))
+            if is_cookie_roll:
                 c_idx = getattr(self, "_cookie_model_idx", 0)
-                models_to_harvest.append(cookie_refresh_models[c_idx % len(cookie_refresh_models)])
+                target_model = cookie_refresh_models[c_idx % len(cookie_refresh_models)]
                 self._cookie_model_idx = c_idx + 1
+                models_to_process = [(target_model, True)]
+            else:
+                models_to_process = [(m, False) for m in models_to_harvest]
 
-            if not models_to_harvest:
+            if not models_to_process:
                 continue
 
-            def _process_one(model_cfg: Dict[str, Any]) -> bool:
+            def _process_one(model_cfg: Dict[str, Any], is_roll: bool = False) -> bool:
                 model = model_cfg["name"]
                 slot = f"{account['id']}:{model}"
                 self._renewal_started.setdefault(slot, time.monotonic())
-                harvested = self.harvest(account, model_cfg)
+                harvested = None
+                if is_roll:
+                    cur_entry = pinned.get(model.lower(), {}) or {}
+                    cur_state = cur_entry.get("state", "")
+                    cur_cookie = cur_entry.get("cookie", "")
+                    if cur_state and cur_cookie:
+                        harvested = self.roll_session(account, model_cfg, cur_state, cur_cookie)
+
+                if not harvested:
+                    harvested = self.harvest(account, model_cfg)
+                    if harvested:
+                        self._session_start[int(account["id"])] = time.time()
+
                 if not harvested:
                     with self._retry_lock:
                         if self._rotating and self._harvest_retry_delay == 0:
@@ -2166,6 +2303,11 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
 
                 if ok:
                     self._record_renewal_success(slot)
+                    via = (
+                        "keep-alive session roll"
+                        if is_roll and harvested and proxy == self._session_proxy.get(int(account["id"]))
+                        else ("dynamic gateway" if proxy in self._dynamic_proxies else "static proxy")
+                    )
                     self.record_probe(slot, {"at": int(time.time()), "ok": True,
                         "outcome": "saved", "state_len": info["length"],
                         "source": self._proxy_sources.get(proxy, "static")})
@@ -2179,7 +2321,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     self._probe_attempts.pop(slot, None)
                     print(
                         f"[+] Pinned {info['length']}-byte state for "
-                        f"[{account.get('name')}] [{model}] via {'dynamic gateway' if proxy in self._dynamic_proxies else 'static proxy'} "
+                        f"[{account.get('name')}] [{model}] via {via} "
                         f"(expires {info['expires_at']})"
                     )
                     self.notifier.clear(f"exhausted:{account.get('id')}:{model}")
@@ -2198,14 +2340,14 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             # impossible-travel signature, aimed at an upstream we already know
             # flags repeat probers. Serialising costs ~12s per account per hour
             # and removes that pattern entirely.
-            for m_cfg in models_to_harvest:
+            for m_cfg, is_roll in models_to_process:
                 slot = f"{account['id']}:{m_cfg['name']}"
                 with self._retry_lock:
                     if self._retry_after.get(slot, 0) > time.time():
                         continue
                 try:
                     attempted += 1
-                    if _process_one(m_cfg):
+                    if _process_one(m_cfg, is_roll=is_roll):
                         updated += 1
                     elif not (self._rotating and self._harvest_retry_delay == 0):
                         break
