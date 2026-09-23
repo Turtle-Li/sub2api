@@ -1,13 +1,13 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -26,6 +26,13 @@ const (
 	DefaultAntiDegradationUserAgent     = "codex-tui/0.154.0 (Ubuntu 22.4.0; x86_64) xterm-256color"
 	DefaultWestUSProxyURL               = "http://faf0f4f404d7:6455cfc8e603a1fc69280f02b6735f8c240b7335d334d23e@100.67.153.111:7890"
 	CodexResponsesEndpoint             = "https://chatgpt.com/backend-api/codex/responses"
+
+	// TakaichiProbePrompt 严格用于识别 Tier 3（超满血，知识库截止 2025.12）实例。
+	// 只有回答包含“高市”的实例才具备未剪枝、长思维链满血推理能力（通过鹈鹕等复杂基准测试）。
+	// 石破茂（Tier 2，剪枝版）或岸田文雄（Tier 1，降智）均在此阶段被严格过滤剔除。
+	TakaichiProbePrompt     = "不要联网，不要调用工具，直接回答，你记忆中的日本首相是谁？"
+	TakaichiExpectedKeyword = "高市"
+	MaxHarvestAttempts      = 25
 )
 
 var defaultAntiDegradationModels = []string{
@@ -37,7 +44,7 @@ var defaultAntiDegradationModels = []string{
 	"gpt-5.4-mini",
 }
 
-var defaultProtectedAccountIDs = []int64{69, 9, 56}
+var defaultProtectedAccountIDs = []int64{15, 69, 9, 56}
 
 // OpenAICodexAntiDegradationService 在 Sub2API 内部自动守护 OpenAI/Codex 账号，
 // 周期性（默认 1 小时）通过西美干净出口代理（Proxy 40）探测并获取活的 Phoenix 满血集群
@@ -242,15 +249,64 @@ func (s *OpenAICodexAntiDegradationService) harvestRoutingCookie(
 	ctx context.Context,
 	token, accountUID, proxyURL string,
 ) (string, string, error) {
-	client, err := s.buildHTTPClient(proxyURL, 15*time.Second)
+	for attempt := 1; attempt <= MaxHarvestAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return "", "", ctx.Err()
+		default:
+		}
+
+		cookieStr, clusterHost, text, cflbSuffix, err := s.tryHarvestTakaichiCookie(ctx, token, accountUID, proxyURL)
+		if err != nil {
+			slog.Warn("[AntiDegradation] Harvest attempt encountered network/upstream error",
+				"attempt", attempt,
+				"error", err,
+			)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		if strings.Contains(text, TakaichiExpectedKeyword) {
+			slog.Info("[AntiDegradation] SUCCESS: Harvested verified Takaichi Sanae cookie!",
+				"attempt", attempt,
+				"cflb_suffix", cflbSuffix,
+				"cluster_host", clusterHost,
+				"ans_snippet", truncateString(text, 60),
+			)
+			return cookieStr, clusterHost, nil
+		}
+
+		tier := "Tier 1 (Degraded/Kishida)"
+		if strings.Contains(text, "石破") {
+			tier = "Tier 2 (Pruned/Ishiba)"
+		}
+		slog.Info("[AntiDegradation] Discarded non-Takaichi cluster instance, continuing search for Takaichi Sanae...",
+			"attempt", attempt,
+			"tier", tier,
+			"cflb_suffix", cflbSuffix,
+			"ans_snippet", truncateString(text, 50),
+		)
+
+		// 每次重试前留出短暂间隔，促使负载均衡器分流至不同后端机
+		time.Sleep(1200 * time.Millisecond)
+	}
+
+	return "", "", fmt.Errorf("failed to harvest verified Takaichi Sanae cookie after %d attempts", MaxHarvestAttempts)
+}
+
+func (s *OpenAICodexAntiDegradationService) tryHarvestTakaichiCookie(
+	ctx context.Context,
+	token, accountUID, proxyURL string,
+) (string, string, string, string, error) {
+	client, err := s.buildHTTPClient(proxyURL, 20*time.Second)
 	if err != nil {
-		return "", "", err
+		return "", "", "", "", err
 	}
 
 	probePayload := map[string]any{
 		"model": DefaultAntiDegradationProbeModel,
 		"input": []map[string]any{
-			{"role": "user", "content": []map[string]any{{"type": "input_text", "text": "hi"}}},
+			{"role": "user", "content": []map[string]any{{"type": "input_text", "text": TakaichiProbePrompt}}},
 		},
 		"stream":       true,
 		"store":        false,
@@ -260,7 +316,7 @@ func (s *OpenAICodexAntiDegradationService) harvestRoutingCookie(
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, CodexResponsesEndpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", "", err
+		return "", "", "", "", err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -276,15 +332,18 @@ func (s *OpenAICodexAntiDegradationService) harvestRoutingCookie(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", err
+		return "", "", "", "", err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", "", "", fmt.Errorf("upstream returned status %d", resp.StatusCode)
+	}
 
 	cookies := parseCookiesFromHeader(resp.Header)
 	oailb, hasOailb := cookies["__oailb"]
 	if !hasOailb || oailb == "" {
-		return "", "", fmt.Errorf("no __oailb in upstream response cookies")
+		return "", "", "", "", fmt.Errorf("no __oailb in upstream response cookies")
 	}
 
 	cflb := cookies["__cflb"]
@@ -294,16 +353,42 @@ func (s *OpenAICodexAntiDegradationService) harvestRoutingCookie(
 	}
 	cookieParts = append(cookieParts, "__oailb="+oailb)
 	cookieStr := strings.Join(cookieParts, "; ")
-
 	clusterHost := extractClusterHostFromOailb(oailb)
-	return cookieStr, clusterHost, nil
+
+	cflbSuffix := ""
+	if len(cflb) > 12 {
+		cflbSuffix = cflb[len(cflb)-12:]
+	} else {
+		cflbSuffix = cflb
+	}
+
+	// 消费 SSE 流并提取回答文本判定是否为高市早苗
+	var sb strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				break
+			}
+			msgType := gjson.Get(data, "type").String()
+			if msgType == "response.output_text.delta" {
+				sb.WriteString(gjson.Get(data, "delta").String())
+			} else if gjson.Get(data, "delta.text").Exists() {
+				sb.WriteString(gjson.Get(data, "delta.text").String())
+			}
+		}
+	}
+
+	return cookieStr, clusterHost, sb.String(), cflbSuffix, nil
 }
 
 func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 	ctx context.Context,
 	token, accountUID, cookieStr, proxyURL string,
 ) (string, string, error) {
-	client, err := s.buildHTTPClient(proxyURL, 20*time.Second)
+	client, err := s.buildHTTPClient(proxyURL, 25*time.Second)
 	if err != nil {
 		return "", "", err
 	}
@@ -311,7 +396,7 @@ func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 	probePayload := map[string]any{
 		"model": DefaultAntiDegradationProbeModel,
 		"input": []map[string]any{
-			{"role": "user", "content": []map[string]any{{"type": "input_text", "text": "hi"}}},
+			{"role": "user", "content": []map[string]any{{"type": "input_text", "text": TakaichiProbePrompt}}},
 		},
 		"stream":       true,
 		"store":        false,
@@ -341,11 +426,32 @@ func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 		return "", "", err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
 
 	turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state"))
+
+	// 消费流并尝试从 response.completed 兜底提取 turn_state
+	var sb strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				break
+			}
+			msgType := gjson.Get(data, "type").String()
+			if msgType == "response.output_text.delta" {
+				sb.WriteString(gjson.Get(data, "delta").String())
+			} else if msgType == "response.completed" {
+				if turnState == "" {
+					turnState = strings.TrimSpace(gjson.Get(data, "response.turn_state").String())
+				}
+			}
+		}
+	}
+
 	if turnState == "" {
-		return "", "", fmt.Errorf("upstream returned empty x-codex-turn-state (status %d)", resp.StatusCode)
+		return "", "", fmt.Errorf("upstream returned empty turn-state (status %d)", resp.StatusCode)
 	}
 	if len(turnState) < 600 {
 		return "", "", fmt.Errorf("upstream returned degraded turn-state (len=%d, expected ~780)", len(turnState))
@@ -362,8 +468,16 @@ func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 		freshCookie = strings.Join(parts, "; ")
 	}
 
+	ans := sb.String()
+	slog.Info("[AntiDegradation] Target account bootstrapped on Takaichi cluster",
+		"account_uid", accountUID,
+		"ans_snippet", truncateString(ans, 50),
+		"turn_state_len", len(turnState),
+	)
+
 	return turnState, freshCookie, nil
 }
+
 
 func (s *OpenAICodexAntiDegradationService) persistAntiDegradationData(
 	ctx context.Context,
