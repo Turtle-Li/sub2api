@@ -147,6 +147,10 @@
 
 ## Production host
 
+- The AWS Lightsail migration candidate is documented in
+  `deploy/AWS_CANDIDATE_20260923.md`. It is not a serving origin or release
+  target. Do not copy production secrets, change DNS, or authorize database
+  access merely because the host is provisioned.
 - Use the configured SSH alias `sub2api-candidate` for current web/API releases;
   it is the serving Azure node and background owner. `sub2api-new` expired on
   2026-09-12 and is no longer a release target or fallback. Recheck node state
