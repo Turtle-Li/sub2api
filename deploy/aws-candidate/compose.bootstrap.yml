@@ -1,0 +1,19 @@
+services:
+  caddy:
+    image: caddy@sha256:77c07d5ebfa5be9fd6c820d2094ae662c9e7eeb9bf98346b7f639900263ee2a2
+    container_name: sub2api-candidate-caddy
+    restart: unless-stopped
+    network_mode: host
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./Caddyfile.bootstrap:/etc/caddy/Caddyfile:ro
+      - sub2api-candidate-caddy-data:/data
+      - sub2api-candidate-caddy-config:/config
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+
+volumes:
+  sub2api-candidate-caddy-data:
+    external: true
+  sub2api-candidate-caddy-config:
+    external: true

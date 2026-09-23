@@ -89,11 +89,24 @@ slot and matching Caddy host/startup/Admin views.
    repository Caddy example is a drop-in production config. Keep public
    HTTP/HTTPS closed until pinned-host TLS, challenge reachability, route
    verification, trusted client IP, and www downloads have passed. Use the
-   canonical maintenance lock for Caddy/container lifecycle operations.
+   canonical maintenance lock for Caddy/container lifecycle operations. The
+   candidate's `aws-candidate/compose.bootstrap.yml` is a loopback 503 stub,
+   **not** the eventual production Caddy. Preserve its separate data/config
+   volumes and copied `/data/sub2-web` public files when replacing it; do not
+   import the Azure GCP PROXY listener, live private key, or active Caddy
+   certificate state by blind copying. Ensure the API certificate renewal and
+   www ACME challenge both work on the AWS route before DNS cutover.
 5. Establish a candidate-only release image/rollback point and its restricted
    GitHub Actions SSH receiver with a distinct Vault-managed Ed25519 key.
    Verify the forced-command account cannot run arbitrary commands. Do not
    change production GitHub deploy secrets to the candidate prematurely.
+6. Enroll the candidate in Komari using an independent Vault-backed token
+   and the pinned Agent described in the `infra-monitoring` project. Test a
+   delivered notification; the present Lightsail status alarm has notifications
+   disabled. Back up candidate-local config, Docker volumes, certificates and
+   release image with off-host retention and a restore drill. The base-system
+   snapshot `sub2api-aws-base-20260923` does not cover these later changes;
+   the production PostgreSQL/Redis backup remains owned by the data host.
 
 ## 4. Acceptance before traffic
 
@@ -132,8 +145,11 @@ slot and matching Caddy host/startup/Admin views.
 
 The candidate has a static IP, imported public key, key-only SSH, host/cloud
 firewalls, OS/Docker baseline, root-owned private paths, release-control
-scripts and disabled timers. It has **no** application container, Caddy,
-database credentials, production data, backup, verified alert delivery,
-public HTTP/HTTPS, or serving role. Its SSH credential still needs owner-led
-Vault reconciliation; no `vault_ref` is asserted. Do not label it migration-
-ready until Sections 3 and 4 are independently passed.
+scripts and disabled timers. It has separate Docker volumes/network, a
+loopback-only bootstrap Caddy that serves 503 outside its health path, copied
+public www assets and one base-system snapshot. It has **no** application
+container, production Caddy/TLS, database credentials, payment/Feishu agents,
+candidate application/data backup, verified alert delivery, public HTTP/HTTPS,
+or serving role. Its SSH credential still needs owner-led Vault reconciliation;
+no `vault_ref` is asserted. Do not label it migration-ready until Sections 3
+and 4 are independently passed.

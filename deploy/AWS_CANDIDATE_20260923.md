@@ -18,6 +18,9 @@ Cloud-resource deletion was not independently verified in this task.
 | Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700; no application containers |
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
 | Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, candidate-pinned health resolve, both release/recovery timers disabled and inactive |
+| Proxy bootstrap | Pinned Caddy image in `sub2api-candidate-caddy`, host loopback `127.0.0.1:8088` only; `/health` returns `candidate-proxy-ready`, all other paths return 503; not a production Caddy route |
+| Local Docker state | Project network and separate application, Caddy data/config, payment-agent, and Feishu-agent named volumes; agent volumes have no credential/socket injection |
+| Public www assets | Six regular files in the Caddy data volume at `/data/sub2-web/{home,help}`, copied from the serving Azure Caddy volume and SHA-256 matched file by file |
 
 SSH effective settings were verified as `PubkeyAuthentication yes`,
 `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, and
@@ -48,9 +51,28 @@ fetches Git refs and creates a server-side worktree cache.
 A Lightsail `StatusCheckFailed` alarm is present and currently has notifications
 disabled because this account has no verified Lightsail contact method. The
 account has an existing $30 monthly cost budget; it is account-wide, not a
-candidate-specific traffic cap. No automated instance snapshot or offsite
-backup is configured yet. Do not enable chargeable snapshot retention without
-reviewing the backup scope and cost.
+candidate-specific traffic cap. One manual 60 GB instance snapshot,
+`sub2api-aws-base-20260923`, reached `available`; it predates the public www
+assets and is only a base-system recovery point, **not** an application,
+database, or offsite backup. Snapshot storage is chargeable. No recurring
+snapshot, application backup, verified restore, or offsite copy exists yet;
+do not enable chargeable retention without reviewing its scope and cost.
+
+The bootstrap proxy is staged from [`aws-candidate/compose.bootstrap.yml`](aws-candidate/compose.bootstrap.yml)
+and [`aws-candidate/Caddyfile.bootstrap`](aws-candidate/Caddyfile.bootstrap).
+Its host-network loopback listener is deliberately isolated from the future
+application network and must be replaced under the canonical maintenance lock
+by a reviewed API/www production configuration. Neither public 80/443 nor
+DNS was changed. The source Azure Caddyfile has an old GCP PROXY-protocol
+listener and external API certificate bind: do not copy it unchanged to AWS.
+The six copied www files exclude the unrecovered historical DMG download.
+
+Monitoring is **not** complete: sysstat and an AWS status alarm without
+notifications are not an enrolled Komari Agent or a tested alert path. Komari
+needs a candidate-specific client/token held in Vault and an outbound-only
+Agent deployment using `infra-monitoring/agents/komari/README.md`. The Vault
+task grant was `not-granted` at the last check; no runtime, payment, Feishu,
+database, deploy-receiver, or monitor secret was copied from Azure.
 
 ## Bandwidth probe
 
@@ -70,6 +92,9 @@ fixed 16 MB/s in this test.
 - Establish candidate-only backups, notification delivery, rollback image,
   and the restricted GitHub receiver under the canonical maintenance-lock
   contract. An inert control-script install is already complete.
+- Replace the loopback Caddy stub with the actual AWS-specific API/www site,
+  issue/restore certificates through the reviewed mechanism, and verify
+  the six public www assets plus all dynamic routes on the candidate IP.
 - Restore compatible application configuration and its credential agents
   through the reviewed Vault injection flow, never by copying raw secrets.
 - Decide the PostgreSQL/Redis location; authorize only exact candidate network

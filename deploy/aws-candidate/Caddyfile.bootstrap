@@ -1,0 +1,10 @@
+{
+    admin localhost:2019
+    auto_https off
+}
+
+:8088 {
+    bind 127.0.0.1
+    respond /health "candidate-proxy-ready" 200
+    respond "candidate-not-serving" 503
+}
