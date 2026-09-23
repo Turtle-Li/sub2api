@@ -101,6 +101,7 @@ func provideCleanup(
 	accountExpiry *service.AccountExpiryService,
 	cnProviderBalanceCheck *service.CNProviderBalanceCheckService,
 	codexVersionSync *service.OpenAICodexVersionSyncService,
+	codexAntiDegradation *service.OpenAICodexAntiDegradationService,
 	proxyExpiry *service.ProxyExpiryService,
 	proxyTimezoneBackfill *service.ProxyTimezoneBackfillService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
@@ -284,6 +285,12 @@ func provideCleanup(
 			}},
 			{"OpenAICodexVersionSyncService", func() error {
 				codexVersionSync.Stop()
+				return nil
+			}},
+			{"OpenAICodexAntiDegradationService", func() error {
+				if codexAntiDegradation != nil {
+					codexAntiDegradation.Stop()
+				}
 				return nil
 			}},
 			{"ProxyExpiryService", func() error {
