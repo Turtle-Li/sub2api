@@ -277,26 +277,30 @@ func parseFlexibleTime(v any) *time.Time {
 
 // applyPinnedCodexTurnState 若账号在对应 model 上配置了有效 pinned state，
 // 则将其强制写入请求头 x-codex-turn-state，并在有活 Cookie 时安全注入路由 Cookie。
+// 若未配置或暂未生成 turn-state，但账号存在有效路由 Cookie，亦予以安全注入以保证流量锁定在正确片区。
 func applyPinnedCodexTurnState(headers http.Header, account *Account, model string) bool {
 	if headers == nil || account == nil || strings.TrimSpace(model) == "" {
 		return false
 	}
 	pinnedState, cookie := account.GetPinnedCodexTurnStateAndCookie(model)
-	if pinnedState == "" {
-		return false
+	if cookie == "" {
+		cookie = account.GetActivePinnedCodexRoutingCookie()
 	}
+
+	applied := false
 	// 防御性检查：确保 header 值不含非法字符（如换行符），杜绝任何导致上游请求硬失败的自伤风险
-	if !httpguts.ValidHeaderFieldValue(pinnedState) {
-		return false
+	if pinnedState != "" && httpguts.ValidHeaderFieldValue(pinnedState) {
+		headers.Set(openAICodexTurnStateHeader, pinnedState)
+		applied = true
 	}
-	headers.Set(openAICodexTurnStateHeader, pinnedState)
 
 	// 若存在有效的负载均衡路由凭证（__cflb, __oailb），注入 Cookie 标头（若客户端有旧的路由 cookie，予以更新替换）
 	if cookie != "" && httpguts.ValidHeaderFieldValue(cookie) {
 		existing := headers.Get("Cookie")
 		headers.Set("Cookie", mergeRoutingCookie(existing, cookie))
+		applied = true
 	}
-	return true
+	return applied
 }
 
 func mergeRoutingCookie(existing, fresh string) string {
