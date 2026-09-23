@@ -148,7 +148,8 @@
 ## Production host
 
 - The AWS Lightsail migration candidate is documented in
-  `deploy/AWS_CANDIDATE_20260923.md`. It is not a serving origin or release
+  `deploy/AWS_CANDIDATE_20260923.md`; use `deploy/AWS_MIGRATION_RUNBOOK.md`
+  for first deployment and cutover gates. It is not a serving origin or release
   target. Do not copy production secrets, change DNS, or authorize database
   access merely because the host is provisioned.
 - Use the configured SSH alias `sub2api-candidate` for current web/API releases;

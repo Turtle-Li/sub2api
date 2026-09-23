@@ -15,8 +15,9 @@ Cloud-resource deletion was not independently verified in this task.
 | Static public IPv4 | `54.248.123.174` (`sub2api-aws-small-ip`) |
 | SSH | `ubuntu:22`, Mac-owned public key `SHA256:ZNtRYxiEl8geAnff30YCs0lJlc1wi6sMahsFuFe4WwA`; host ED25519 fingerprint `SHA256:pzaFT0Kylal6P5nKsQtoaoTvgORxIxb1BxDMxposYGk` |
 | Public ingress | TCP 22 from the temporary operator IPv4 `/32` and Lightsail browser-SSH alias only; no public HTTP/HTTPS or database ports |
-| Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; empty, with no application containers |
-| Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades |
+| Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700; no application containers |
+| Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
+| Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, candidate-pinned health resolve, both release/recovery timers disabled and inactive |
 
 SSH effective settings were verified as `PubkeyAuthentication yes`,
 `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, and
@@ -24,6 +25,32 @@ SSH effective settings were verified as `PubkeyAuthentication yes`,
 no private key was exported from AWS. The local private key remains device-local
 and is not a project artifact. Its Vault reconciliation is pending; no
 `vault_ref` has been invented.
+
+The Lightsail firewall admits TCP 22 only from the operator's current IPv4
+`125.120.233.128/32` and the `lightsail-connect` console alias. Host UFW
+additionally permits TCP 22 only from that IPv4 and denies other inbound
+traffic. The console alias is therefore not independently sufficient to pass
+host UFW; retain tested Mac access before changing either layer. The operator
+address is temporary and must be revalidated before future access.
+
+The repository's exact-commit `deploy/` tree was staged root-owned on the
+candidate. `install-autodeploy.sh` installed the blue-green helper and control
+units with `--dependency-mode external`, `--no-enable-runtime-guard`, and
+`--no-enable`. Both timers were confirmed disabled/inactive; Docker has zero
+application containers. The configured external runtime file and CA path are
+references only: neither file nor any database credential has been provisioned.
+The generated release configuration contains a default `activate` value, but
+no image receiver or release may be invoked before the migration gates in
+[`AWS_MIGRATION_RUNBOOK.md`](AWS_MIGRATION_RUNBOOK.md) are passed. Do not run
+`sub2api-autodeploy.sh --check` as a purported no-write host preflight: it
+fetches Git refs and creates a server-side worktree cache.
+
+A Lightsail `StatusCheckFailed` alarm is present and currently has notifications
+disabled because this account has no verified Lightsail contact method. The
+account has an existing $30 monthly cost budget; it is account-wide, not a
+candidate-specific traffic cap. No automated instance snapshot or offsite
+backup is configured yet. Do not enable chargeable snapshot retention without
+reviewing the backup scope and cost.
 
 ## Bandwidth probe
 
@@ -40,8 +67,9 @@ fixed 16 MB/s in this test.
 
 - Reconcile the SSH identity in Vault and configure a stable SSH alias;
   replace the temporary operator-address firewall rule when its address changes.
-- Establish candidate-only backups, monitoring, rollback image, and the
-  restricted GitHub receiver under the canonical maintenance-lock contract.
+- Establish candidate-only backups, notification delivery, rollback image,
+  and the restricted GitHub receiver under the canonical maintenance-lock
+  contract. An inert control-script install is already complete.
 - Restore compatible application configuration and its credential agents
   through the reviewed Vault injection flow, never by copying raw secrets.
 - Decide the PostgreSQL/Redis location; authorize only exact candidate network

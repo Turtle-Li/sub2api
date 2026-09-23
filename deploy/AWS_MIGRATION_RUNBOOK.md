@@ -1,0 +1,139 @@
+# Sub2API: New AWS host and migration runbook
+
+This document governs a future first deployment, validation, and authorized
+cutover. It is **not** authorization to change production DNS, the database
+allowlist, payment writers, or background ownership. Current host facts and
+what is already installed: [AWS_CANDIDATE_20260923.md](AWS_CANDIDATE_20260923.md).
+For the release and runtime contracts read [README.md](README.md), the project
+`AGENTS.md`, and the latest dated production operation records. Historical
+GCP/Taiwan and expired `sub2api-new` instructions are not rollback targets.
+
+## 1. New host prerequisites
+
+1. Resolve the current production topology from project docs and the private
+   Registry. Confirm the active Azure image revision, background owner, public
+   API/www routes, database location, live backup state, and deployment agents.
+   Keep existing production traffic and rollback capacity unchanged.
+2. Use the approved AWS account/region and explicit Lightsail bundle; verify
+   the price, monthly transfer allowance, credits, budget and any regional
+   allowance adjustment in the account. Create a project-isolated instance
+   with a per-device public key at launch and attach a static IP. Record the
+   instance ID, region, AZ, IP, host fingerprint, and owner in the Registry.
+   Never export an AWS-generated private key as an access shortcut.
+3. Admit only the operator's current `/32` on TCP 22 at the Lightsail firewall
+   and host firewall. Verify public-key login and effective `sshd -T` values:
+   password/keyboard-interactive/root login disabled. Confirm a second login
+   works before closing any access path. A changed operator IP needs a
+   separately verified firewall update; never open SSH to the world.
+4. Install OS security updates, Docker/Compose, sysstat and unattended
+   upgrades. Keep project directories root-owned and private. Establish
+   monitored backup and restore capability before storing application state;
+   review snapshot storage cost and offsite retention. Verify monitoring
+   notifications actually reach an owner before treating an alarm as coverage.
+5. Size the instance against the real image: two GiB RAM and 60 GB disk are
+   assumptions, not proof of application headroom. Measure memory, swap,
+   Docker storage, CPU burst balance, and sustained network transfer under a
+   representative concurrent workload. Upgrade the bundle if the measured
+   workload cannot safely fit; do not weaken health or drain gates.
+
+## 2. Prepare release control, not the application
+
+Use an exact reviewed fork `main` revision as the source of deployment scripts.
+Stage the `deploy/` tree in a root-owned, non-group-writable directory and
+verify its digest. The candidate already has these scripts installed with
+the following inert configuration:
+
+```text
+SUB2API_APP_DIR=/opt/sub2api
+SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL=https://github.com/Turtle-Li/sub2api.git
+SUB2API_AUTODEPLOY_PRODUCTION_BRANCH=main
+SUB2API_PUBLIC_HEALTH_RESOLVE=api.turtleligpt.com:443:54.248.123.174
+SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external
+SUB2API_EXTERNAL_RUNTIME_ENV_FILE=/etc/sub2api-external-runtime.env
+SUB2API_EXTERNAL_CA_FILE=/opt/sub2api/db-host-ca/ca.crt
+```
+
+The installer invocation used `--install-blue-green-helper`,
+`--no-enable-runtime-guard`, and `--no-enable`. Before any later installation,
+check the canonical maintenance-lock contract and existing config; never
+replace a live config merely to rerun an installer. Both timers must remain
+`disabled` and `inactive` until an approved first slot and recovery exercise
+exist. The current `activate` default in the generated config is not a
+standby guarantee. Do not dispatch the normal GitHub receiver or run the
+blue-green wrapper against an empty host: they require a healthy existing
+slot and matching Caddy host/startup/Admin views.
+
+## 3. First application deployment: separate approval gate
+
+1. Decide whether PostgreSQL/Redis remain on the dedicated Tokyo data host
+   or move with their own backup/restore plan. Take a fresh, verified backup
+   and perform an isolated restore. Establish an offsite copy and a tested
+   recovery point. Never restore a pre-cutover full database over later
+   financial writes or rerun the September 12 currency conversion.
+2. Review the latest exact database host firewall, PostgreSQL HBA, Redis TLS,
+   and source-address boundary. Only after a reviewed rollback plan, authorize
+   the candidate's exact source for a bounded test. Verify egress address and
+   TLS hostname/CA, then inject the external runtime file as root-owned 0600
+   and the CA through the approved Vault/host mechanism. No secrets enter Git,
+   terminal output, shell history, or an unprotected transfer archive.
+3. Stage the exact production image, application config, protected agent
+   mounts, network and data volumes. Preserve payment/signing identities and
+   immutable financial records. Reconcile migrations and image compatibility
+   before first process startup: startup may run forward SQL migrations and
+   background jobs. Build a reviewed **first-slot bootstrap** procedure that
+   starts only a fenced, non-serving generation with background work disabled;
+   the normal blue-green receiver is not a substitute. If isolation or
+   migration semantics cannot be proven, stop here.
+4. Reconstruct the *actual* API and www Caddy routes, static assets, and
+   certificate plan from the serving host and its recovery record. Neither
+   repository Caddy example is a drop-in production config. Keep public
+   HTTP/HTTPS closed until pinned-host TLS, challenge reachability, route
+   verification, trusted client IP, and www downloads have passed. Use the
+   canonical maintenance lock for Caddy/container lifecycle operations.
+5. Establish a candidate-only release image/rollback point and its restricted
+   GitHub Actions SSH receiver with a distinct Vault-managed Ed25519 key.
+   Verify the forced-command account cannot run arbitrary commands. Do not
+   change production GitHub deploy secrets to the candidate prematurely.
+
+## 4. Acceptance before traffic
+
+- Confirm image revision/labels, health, Caddy's host/startup/Admin agreement,
+  Docker restart/OOM counts, migration ledger and all dependency TLS paths.
+- Run pinned-IP API and www checks without changing public DNS. Include
+  authenticated model-list and tiny real Responses probes with bounded cost,
+  SSE/WS, login, purchase callback safety, assets, and payment-agent health.
+  Maintain candidate background standby and block unintended financial jobs.
+- Verify public ingress controls, logs, monitoring notification delivery,
+  database backup/restore and current recovery point. Compare 2 GiB memory
+  and sustained/concurrent egress to measured production demand. A short
+  single-upload burst is insufficient evidence.
+- Obtain independent review and owner approval for the exact release image,
+  data boundary, DNS changes, maintenance window, stop conditions and rollback.
+
+## 5. Cutover and rollback
+
+1. Under the canonical lock and documented node-state protocol, fence new
+   background claims on Azure and prove zero old claims before assigning the
+   sole owner to AWS. Preserve request-triggered refresh semantics and the
+   financial refund-readiness gate. Do not run two active queue consumers.
+2. Change only the approved API/www DNS or proxy targets. Observe real traffic
+   through at least two effective TTLs and compare error rate, latency,
+   WebSocket duration, payment callbacks, database connections, memory and
+   network usage. Keep Azure running as the verified same-data rollback host.
+3. On a stop condition, drain admissions and verify refund/readiness fences,
+   then return DNS/proxy and background ownership using the existing
+   lock-owning transaction recovery. Do not manually stop containers, delete
+   Caddy transactions, restore stale full DB, or select expired `sub2api-new`.
+4. Only after a stable observation window, reconcile obsolete DB sources,
+   renew backup and monitoring ownership, and retire Azure in a separate
+   approved task. Update project and Registry topology records together.
+
+## New-host checklist and current status
+
+The candidate has a static IP, imported public key, key-only SSH, host/cloud
+firewalls, OS/Docker baseline, root-owned private paths, release-control
+scripts and disabled timers. It has **no** application container, Caddy,
+database credentials, production data, backup, verified alert delivery,
+public HTTP/HTTPS, or serving role. Its SSH credential still needs owner-led
+Vault reconciliation; no `vault_ref` is asserted. Do not label it migration-
+ready until Sections 3 and 4 are independently passed.
