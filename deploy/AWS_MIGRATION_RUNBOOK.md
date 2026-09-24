@@ -33,8 +33,10 @@ design.
 4. Install OS security updates, Docker/Compose, sysstat and unattended
    upgrades. Keep project directories root-owned and private. Establish
    monitored backup and restore capability before storing application state;
-   review snapshot storage cost and offsite retention. Verify monitoring
-   notifications actually reach an owner before treating an alarm as coverage.
+   review snapshot storage cost and offsite retention. External standalone
+   monitoring migration is waived by owner direction for this cutover. Record
+   the explicit operator observation checklist and rollback stop conditions; do
+   not claim that a disabled or unverified alarm will notify the owner.
 5. Size the instance against the real image: two GiB RAM and 60 GB disk are
    assumptions, not proof of application headroom. Measure memory, swap,
    Docker storage, CPU burst balance, and sustained network transfer under a
@@ -92,8 +94,10 @@ approved.
   run `36070650495` for exact `main` commit
   `557d5c079a025f6488c12904137e238734a8c5ed`; release log
   `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` is the host record.
-  Certificate renewal automation, alert delivery, backup/restore drill, and
-  load/headroom evidence remain open gates.
+  Initial certificate issuance, backup/restore drill, and load/headroom evidence
+  remain open gates. Later renewal is a separate post-issuance observation.
+  External alert delivery is not a gate under the owner's monitoring exclusion;
+  the cutover still requires active operator observation and stop conditions.
 
 ## 3. First application deployment: separate approval gate
 
@@ -159,8 +163,12 @@ approved.
   candidate background standby and block unintended financial jobs.
 - Create a DNS-only `aws-test.turtleligpt.com` A record pointing to the AWS
   static IP. The test Caddy host must omit imported certificates so automatic
-  ACME issuance and renewal are exercised. Run the same authenticated smoke
-  suite through that hostname before editing the production records.
+  ACME issuance is exercised. Before loading it, open a bounded public TCP
+  80/443 window in both Lightsail and UFW because the current operator-only
+  rules block HTTP-01 and TLS-ALPN-01. Run the same authenticated smoke suite
+  through that hostname before editing the production records. Restore the
+  reviewed steady-state ingress boundary after the rehearsal/cutover decision.
+  Observe automatic renewal later; initial issuance alone is not renewal proof.
 - Verify unified-payment live configuration, payment Vault sidecar health,
   refund rollback readiness, invalid-signature rejection and one owner-approved
   1-2 fen checkout after recent administrator TOTP step-up. Do not synthesize
@@ -205,7 +213,7 @@ approved.
    Caddy transactions, restore stale full DB, or select expired `sub2api-new`.
 5. Only after a stable observation window, fresh backup/restore evidence and
    confirmation that DNS no longer resolves to `4.216.216.16`, reconcile
-   obsolete DB sources and retire Azure. Delete the six approved application
+   obsolete DB sources and retire Azure. Delete the six owner-approved Azure
    resource groups (`sub2_group`, `jp_group`, `westus_group`, `jp2_group`,
    `westus2_relay_group`, `westus3_relay_group`) and verify that no VM, disk,
    NIC, public IPv4 or billable attachment remains. Preserve `NetworkWatcherRG`
@@ -213,7 +221,11 @@ approved.
    together. The first three groups belong to Azure subscription
    `6835deb1-678b-4067-b516-b57f80e14e25`; the final three belong to
    `65c9db87-f353-427d-80cc-af2953c8761b`. Inventory and delete in each explicit
-   subscription instead of relying on the CLI default.
+   subscription instead of relying on the CLI default. `sub2_group` is the
+   application origin; the other five groups are independent relay workloads.
+   Before deleting any relay group, complete a separate client dependency
+   inventory covering non-Sub2 consumers as well as the nine known account
+   bindings, and either migrate or explicitly retire each consumer.
 
 ## New-host checklist and current status
 

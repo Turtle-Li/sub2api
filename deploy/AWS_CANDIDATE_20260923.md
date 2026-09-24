@@ -26,7 +26,7 @@ subscriptions and AWS Lightsail. No Azure resource was deleted in this task.
 | Proxy | AWS-specific Caddy route for API and www; the operator-only origin passed HTTPS health, auth-boundary, public settings, homepage, help, and HTTP-to-HTTPS redirect probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
 | Public www assets | Six regular files in the Caddy data volume at `/data/sub2-web/{home,help}`, copied from the serving Azure Caddy volume and SHA-256 matched file by file |
-| Automatic-TLS rehearsal | The rendered active-slot file is staged root-only at `/opt/sub2api/Caddyfile.aws-test.staged` with SHA-256 `0947c585dbe57f9ad127dee5d3d12832ce058ea0f75f68cd64d3b601af40013f`; Caddy 2.11 validation passed without reload. `aws-test.turtleligpt.com` still has no DNS record, so ACME issuance has not started. |
+| Automatic-TLS rehearsal | The rendered active-slot file is staged root-only at `/opt/sub2api/Caddyfile.aws-test.staged` with SHA-256 `0947c585dbe57f9ad127dee5d3d12832ce058ea0f75f68cd64d3b601af40013f`; Caddy 2.11 validation passed without reload. `aws-test.turtleligpt.com` still has no DNS record, so ACME issuance has not started. Initial issuance is the pre-cutover gate; later renewal must be observed separately. |
 
 SSH effective settings were verified as `PubkeyAuthentication yes`,
 `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, and
@@ -165,9 +165,13 @@ fixed 16 MB/s in this test.
   identity is recorded under Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`.
   Replace the temporary operator-address firewall rule when its address changes.
 - Establish candidate-only backups, a rollback image, automatic certificate
-  issuance/renewal evidence, an offsite copy and an isolated restore drill.
+  issuance evidence, an offsite copy and an isolated restore drill. Observe a
+  later automatic renewal separately; first issuance is not renewal evidence.
   External Komari/anti-degradation/standalone monitoring migration is explicitly
-  out of scope; do not reintroduce it as a hidden cutover prerequisite.
+  out of scope by owner direction; do not reintroduce it as a hidden cutover
+  prerequisite. During the cutover window, use explicit operator observation of
+  Lightsail status, application/Caddy errors, latency, memory, network and the
+  rollback stop conditions instead of claiming an unverified alert channel.
 - Retain successful GitHub Actions run `36070650495` and release log
   `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` as the
   end-to-end deployment evidence. Keep the separate `azure-production`
@@ -180,7 +184,11 @@ fixed 16 MB/s in this test.
   probes through it before changing `api` or `www`. The test-host config is
   staged and validated but intentionally not loaded. The bounded Cloudflare API
   operation remains blocked on one owner-run Vault injection; public DNS still
-  returns no record for the test hostname.
+  returns no record for the test hostname. Before loading it, open a bounded
+  public TCP 80/443 ACME window in both Lightsail and UFW; the current
+  operator-only `/32` rules block HTTP-01 and TLS-ALPN-01. Recheck host exposure,
+  complete issuance and smoke tests, then restore the reviewed ingress boundary
+  appropriate for the production cutover.
 - Run the low-cost Gemini Batch Image canary with a temporary enabled-group key
   and delete that key. Complete a 1-2 fen owner payment checkout after recent
   administrator TOTP step-up.
@@ -197,14 +205,17 @@ fixed 16 MB/s in this test.
 - Transfer sole background/queue ownership from Azure to AWS under the
   maintenance lock, take a fresh database backup, preserve an offsite copy and
   prove isolated restore before DNS cutover.
-- Azure retirement spans two subscriptions. Subscription
+- Owner-directed Azure retirement spans two subscriptions. Subscription
   `6835deb1-678b-4067-b516-b57f80e14e25` owns `sub2_group`, `jp_group`, and
   `westus_group`; subscription `65c9db87-f353-427d-80cc-af2953c8761b` owns
   `jp2_group`, `westus2_relay_group`, and `westus3_relay_group`. The six VMs
   were running at the 2026-09-25 inventory. The only Azure public IPv4 found
   was `sub2-ip` (`4.216.216.16`) in `sub2_group`; the relay nodes expose static
-  IPv6 addresses. Preserve both subscriptions' `NetworkWatcherRG` groups unless
-  separately approved.
+  IPv6 addresses. The five relay groups are separate proxy workloads and may
+  serve clients outside the nine Sub2 account bindings. Before deleting them,
+  perform an independent relay/client dependency inventory and confirm every
+  remaining consumer has migrated or is intentionally retired. Preserve both
+  subscriptions' `NetworkWatcherRG` groups unless separately approved.
 
 No production DNS or Azure runtime ownership was changed. The database host now
 allows the exact AWS source for the tested candidate only.
