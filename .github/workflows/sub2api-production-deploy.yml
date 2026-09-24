@@ -24,6 +24,7 @@ on:
 # and performs the blue-green switch; it never checks out source or compiles.
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: sub2api-production-deploy
@@ -266,8 +267,78 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      - name: Configure AWS OIDC credentials for candidate firewall
+        if: ${{ !inputs.build_only && inputs.deployment_target == 'aws-candidate' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.SUB2API_AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.SUB2API_AWS_REGION }}
+          allowed-account-ids: '633841884781'
+          role-session-name: sub2api-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Open exact runner SSH access on AWS candidate
+        if: ${{ !inputs.build_only && inputs.deployment_target == 'aws-candidate' }}
+        env:
+          AWS_INSTANCE_NAME: ${{ vars.SUB2API_AWS_INSTANCE_NAME }}
+          AWS_REGION: ${{ vars.SUB2API_AWS_REGION }}
+        run: |
+          test -n "$AWS_INSTANCE_NAME"
+          test -n "$AWS_REGION"
+          command -v aws >/dev/null
+          command -v curl >/dev/null
+          command -v python3 >/dev/null
+
+          RUNNER_IPV4=$(
+            curl --fail --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              https://checkip.amazonaws.com
+          )
+          RUNNER_IPV4=$(python3 - "$RUNNER_IPV4" <<'PY_RUNNER_IP'
+          import ipaddress
+          import sys
+
+          address = ipaddress.ip_address(sys.argv[1].strip())
+          if address.version != 4 or not address.is_global:
+              raise SystemExit("Runner address must be a global IPv4 address")
+          print(address.compressed)
+          PY_RUNNER_IP
+          )
+          RUNNER_SSH_CIDR="${RUNNER_IPV4}/32"
+          printf 'SUB2API_RUNNER_SSH_CIDR=%s\n' "$RUNNER_SSH_CIDR" >> "$GITHUB_ENV"
+
+          aws lightsail open-instance-public-ports \
+            --region "$AWS_REGION" \
+            --instance-name "$AWS_INSTANCE_NAME" \
+            --port-info "{\"fromPort\":22,\"toPort\":22,\"protocol\":\"tcp\",\"cidrs\":[\"${RUNNER_SSH_CIDR}\"]}" \
+            >/dev/null
+
+          PORT_STATE_FILE="$RUNNER_TEMP/sub2api-lightsail-ssh-open.json"
+          aws lightsail get-instance-port-states \
+            --region "$AWS_REGION" \
+            --instance-name "$AWS_INSTANCE_NAME" \
+            --output json \
+            > "$PORT_STATE_FILE"
+          python3 - "$PORT_STATE_FILE" "$RUNNER_SSH_CIDR" <<'PY_VERIFY_OPEN'
+          import json
+          import sys
+
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected = sys.argv[2]
+          ssh_rules = [
+              item
+              for item in state.get("portStates", [])
+              if item.get("fromPort") == 22
+              and item.get("toPort") == 22
+              and item.get("protocol") == "tcp"
+          ]
+          if len(ssh_rules) != 1 or expected not in ssh_rules[0].get("cidrs", []):
+              raise SystemExit("Exact runner SSH CIDR was not opened")
+          PY_VERIFY_OPEN
+
       - name: Upload image and start verified blue-green release
         if: ${{ !inputs.build_only }}
+        timeout-minutes: 35
         env:
           DEPLOY_HOST: ${{ secrets.SUB2API_DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.SUB2API_DEPLOY_PORT }}
@@ -290,6 +361,76 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "deploy-image ${SOURCE_COMMIT} ${VERSION} ${ARCHIVE_DIGEST}" \
             < "$ARCHIVE_PATH"
+
+      - name: Close exact runner SSH access on AWS candidate
+        if: ${{ always() && !inputs.build_only && inputs.deployment_target == 'aws-candidate' }}
+        env:
+          AWS_INSTANCE_NAME: ${{ vars.SUB2API_AWS_INSTANCE_NAME }}
+          AWS_REGION: ${{ vars.SUB2API_AWS_REGION }}
+        run: |
+          if [ -z "${SUB2API_RUNNER_SSH_CIDR:-}" ]; then
+            echo "Runner SSH CIDR was never recorded; no temporary rule to close."
+            exit 0
+          fi
+          test -n "$AWS_INSTANCE_NAME"
+          test -n "$AWS_REGION"
+
+          PORT_STATE_FILE="$RUNNER_TEMP/sub2api-lightsail-ssh-before-close.json"
+          aws lightsail get-instance-port-states \
+            --region "$AWS_REGION" \
+            --instance-name "$AWS_INSTANCE_NAME" \
+            --output json \
+            > "$PORT_STATE_FILE"
+          RULE_PRESENT=$(python3 - "$PORT_STATE_FILE" "$SUB2API_RUNNER_SSH_CIDR" <<'PY_RULE_PRESENT'
+          import json
+          import sys
+
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected = sys.argv[2]
+          present = any(
+              expected in item.get("cidrs", [])
+              for item in state.get("portStates", [])
+              if item.get("fromPort") == 22
+              and item.get("toPort") == 22
+              and item.get("protocol") == "tcp"
+          )
+          print("true" if present else "false")
+          PY_RULE_PRESENT
+          )
+          if [ "$RULE_PRESENT" != "true" ]; then
+            echo "Runner SSH CIDR was recorded but is not open; no rule to close."
+            exit 0
+          fi
+
+          aws lightsail close-instance-public-ports \
+            --region "$AWS_REGION" \
+            --instance-name "$AWS_INSTANCE_NAME" \
+            --port-info "{\"fromPort\":22,\"toPort\":22,\"protocol\":\"tcp\",\"cidrs\":[\"${SUB2API_RUNNER_SSH_CIDR}\"]}" \
+            >/dev/null
+
+          PORT_STATE_FILE="$RUNNER_TEMP/sub2api-lightsail-ssh-closed.json"
+          aws lightsail get-instance-port-states \
+            --region "$AWS_REGION" \
+            --instance-name "$AWS_INSTANCE_NAME" \
+            --output json \
+            > "$PORT_STATE_FILE"
+          python3 - "$PORT_STATE_FILE" "$SUB2API_RUNNER_SSH_CIDR" <<'PY_VERIFY_CLOSED'
+          import json
+          import sys
+
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          removed = sys.argv[2]
+          remaining = {
+              cidr
+              for item in state.get("portStates", [])
+              if item.get("fromPort") == 22
+              and item.get("toPort") == 22
+              and item.get("protocol") == "tcp"
+              for cidr in item.get("cidrs", [])
+          }
+          if removed in remaining:
+              raise SystemExit("Temporary runner SSH CIDR is still open")
+          PY_VERIFY_CLOSED
 
       - name: Record release summary
         env:

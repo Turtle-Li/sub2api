@@ -80,7 +80,10 @@ approved.
 - AWS remains `traffic=accepting background=standby`; Azure remains the live
   production host. DNS and background ownership are unchanged.
 - The restricted GitHub receiver is installed with a distinct Vault-backed key
-  and `aws-candidate` GitHub Environment. An end-to-end workflow run from
+  and `aws-candidate` GitHub Environment. Its OIDC role is restricted to that
+  repository environment and may only manage Lightsail public-port state. The
+  workflow opens the current Runner IPv4 `/32` immediately before restricted
+  SSH and removes it in `always()` cleanup. An end-to-end workflow run from
   repository `main` remains required. Certificate renewal automation, alert
   delivery, backup/restore drill, and load/headroom evidence remain open gates.
 
@@ -120,7 +123,12 @@ approved.
 5. Preserve the candidate-only release image/rollback point and restricted
    GitHub Actions SSH receiver with its distinct Vault-managed Ed25519 key.
    The receiver must remain forced-command-only with no PTY, forwarding, user
-   rc or shell path. Prove the complete `main` workflow against the separate
+   rc or shell path. The `aws-candidate` workflow must use its environment-bound
+   OIDC role to add only the current Runner IPv4 `/32` to Lightsail TCP 22 and
+   remove that exact rule in `always()` cleanup; never statically allow all
+   GitHub Actions ranges or cloud SSH `0.0.0.0/0`. Host UFW may admit IPv4 SSH
+   generally only because Lightsail remains the exact source gate; do not add an
+   IPv6 SSH allow rule. Prove the complete `main` workflow against the separate
    `aws-candidate` Environment; do not replace `azure-production` secrets.
 6. Enroll the candidate in Komari using an independent Vault-backed token
    and the pinned Agent described in the `infra-monitoring` project. Test a

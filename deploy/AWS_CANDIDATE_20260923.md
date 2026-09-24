@@ -16,11 +16,11 @@ Cloud-resource deletion was not independently verified in this task.
 | Bundle | `small_3_0`: 2 vCPU, 2 GiB RAM, 60 GB disk, 3 TB monthly transfer, $12/month base |
 | Static public IPv4 | `54.248.123.174` (`sub2api-aws-small-ip`) |
 | SSH | `ubuntu:22`, Mac-owned public key `SHA256:ZNtRYxiEl8geAnff30YCs0lJlc1wi6sMahsFuFe4WwA`; v2 host ED25519 fingerprint `SHA256:j+7YLMWXvxqovDnB4sEYqtnkU8ETrcipmsxUFtH47aU`, verified against the Lightsail control plane |
-| Public ingress | TCP 80/443 from the current operator IPv4 `115.195.32.146/32`; TCP 22 from that `/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. Database ports are not public. |
+| Public ingress | TCP 80/443 from the current operator IPv4 `115.195.32.146/32`; steady-state TCP 22 from that `/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. An AWS OIDC role may add only the current GitHub-hosted Runner IPv4 `/32` during an `aws-candidate` release and must remove it in an `always()` cleanup step. Database ports are not public. |
 | Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700 |
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
 | Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `preserve-standby`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive |
-| GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol; deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630` |
+| GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol; deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
 | Application release | Fork `main` commit `a9f26360fcacf48a30da0ba67d4e5a1ac8c629fb`, version `0.2.8`, active slot `sub2api-green`, healthy with zero restarts/OOM |
 | Proxy | AWS-specific Caddy route for API and www; the operator-only origin passed HTTPS health, auth-boundary, public settings, homepage, help, and HTTP-to-HTTPS redirect probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
@@ -34,11 +34,16 @@ and is not a project artifact. Its Vault reconciliation is pending; no
 `vault_ref` has been invented.
 
 The Lightsail firewall admits TCP 80/443 only from the operator's current IPv4
-`115.195.32.146/32`. TCP 22 additionally admits Azure `4.216.216.16/32` and
-the `lightsail-connect` console alias. Host UFW mirrors the operator-only
-HTTP/HTTPS boundary and admits SSH from the operator and Azure. The operator
-address is temporary and must be revalidated before future access; never widen
-the candidate origin to `0.0.0.0/0` before an approved cutover.
+`115.195.32.146/32`. Steady-state TCP 22 additionally admits Azure
+`4.216.216.16/32` and the `lightsail-connect` console alias. For an explicitly
+dispatched `aws-candidate` release, GitHub OIDC obtains a short-lived AWS role,
+discovers the Runner's public IPv4, validates it as a global IPv4 address, adds
+only that `/32`, and removes the same `/32` in an `always()` cleanup step. Host
+UFW admits IPv4 TCP 22 generally because Lightsail is the source-address gate;
+it does not admit IPv6 SSH. UFW continues to mirror the operator-only HTTP/HTTPS
+boundary. The operator address is temporary and must be revalidated before
+future access; never widen the Lightsail candidate origin to `0.0.0.0/0` before
+an approved cutover.
 
 The repository's reviewed deployment tree bootstrapped the first application
 slot and then completed a verified blue-green release. The final release log is
