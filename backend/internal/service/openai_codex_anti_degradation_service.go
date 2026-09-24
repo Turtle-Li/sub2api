@@ -161,7 +161,10 @@ func (s *OpenAICodexAntiDegradationService) SyncOnce(ctx context.Context) error 
 	}
 
 	sourceToken := sourceAcc.GetCredential("access_token")
-	sourceAccountUID := sourceAcc.GetCredential("account_id")
+	sourceAccountUID := sourceAcc.GetChatGPTAccountID()
+	if sourceAccountUID == "" {
+		sourceAccountUID = sourceAcc.GetCredential("account_id")
+	}
 	if sourceToken == "" {
 		s.lastSyncStatus = "source account has no access_token"
 		return fmt.Errorf("source account %d has no access_token", s.sourceAccountID)
@@ -201,7 +204,10 @@ func (s *OpenAICodexAntiDegradationService) SyncOnce(ctx context.Context) error 
 		}
 
 		targetToken := targetAcc.GetCredential("access_token")
-		targetAccountUID := targetAcc.GetCredential("account_id")
+		targetAccountUID := targetAcc.GetChatGPTAccountID()
+		if targetAccountUID == "" {
+			targetAccountUID = targetAcc.GetCredential("account_id")
+		}
 		if targetToken == "" {
 			continue
 		}
@@ -388,9 +394,59 @@ func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 	ctx context.Context,
 	token, accountUID, cookieStr, proxyURL string,
 ) (string, string, error) {
+	for attempt := 1; attempt <= MaxHarvestAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return "", "", ctx.Err()
+		default:
+		}
+
+		turnState, freshCookie, ans, err := s.tryBootstrapAccountOnce(ctx, token, accountUID, cookieStr, proxyURL)
+		if err != nil {
+			slog.Warn("[AntiDegradation] Target account bootstrap attempt encountered error",
+				"account_uid", accountUID,
+				"attempt", attempt,
+				"error", err,
+			)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		if strings.Contains(ans, TakaichiExpectedKeyword) {
+			slog.Info("[AntiDegradation] SUCCESS: Target account bootstrapped with verified Takaichi Sanae!",
+				"account_uid", accountUID,
+				"attempt", attempt,
+				"ans_snippet", truncateString(ans, 60),
+				"turn_state_len", len(turnState),
+			)
+			return turnState, freshCookie, nil
+		}
+
+		tier := "Tier 1 (Degraded/Kishida)"
+		if strings.Contains(ans, "石破") {
+			tier = "Tier 2 (Pruned/Ishiba)"
+		}
+		slog.Info("[AntiDegradation] Target account hit non-Takaichi instance during bootstrap, retrying for Takaichi Sanae...",
+			"account_uid", accountUID,
+			"attempt", attempt,
+			"tier", tier,
+			"ans_snippet", truncateString(ans, 50),
+		)
+
+		// 每次重试前留出短暂间隔促使负载均衡分流
+		time.Sleep(1200 * time.Millisecond)
+	}
+
+	return "", "", fmt.Errorf("failed to bootstrap target account with verified Takaichi Sanae after %d attempts", MaxHarvestAttempts)
+}
+
+func (s *OpenAICodexAntiDegradationService) tryBootstrapAccountOnce(
+	ctx context.Context,
+	token, accountUID, cookieStr, proxyURL string,
+) (string, string, string, error) {
 	client, err := s.buildHTTPClient(proxyURL, 25*time.Second)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	probePayload := map[string]any{
@@ -406,7 +462,7 @@ func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, CodexResponsesEndpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -419,13 +475,19 @@ func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 	req.Header.Set("Originator", "codex-tui")
 	req.Header.Set("User-Agent", DefaultAntiDegradationUserAgent)
 	req.Header.Set("Version", DefaultAntiDegradationClientVersion)
-	req.Header.Set("Cookie", cookieStr)
+	if cookieStr != "" {
+		req.Header.Set("Cookie", cookieStr)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", "", fmt.Errorf("upstream returned status %d", resp.StatusCode)
+	}
 
 	turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state"))
 
@@ -451,10 +513,10 @@ func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 	}
 
 	if turnState == "" {
-		return "", "", fmt.Errorf("upstream returned empty turn-state (status %d)", resp.StatusCode)
+		return "", "", "", fmt.Errorf("upstream returned empty turn-state (status %d)", resp.StatusCode)
 	}
 	if len(turnState) < 600 {
-		return "", "", fmt.Errorf("upstream returned degraded turn-state (len=%d, expected ~780)", len(turnState))
+		return "", "", "", fmt.Errorf("upstream returned degraded turn-state (len=%d, expected ~780)", len(turnState))
 	}
 
 	respCookies := parseCookiesFromHeader(resp.Header)
@@ -469,13 +531,7 @@ func (s *OpenAICodexAntiDegradationService) bootstrapAccount(
 	}
 
 	ans := sb.String()
-	slog.Info("[AntiDegradation] Target account bootstrapped on Takaichi cluster",
-		"account_uid", accountUID,
-		"ans_snippet", truncateString(ans, 50),
-		"turn_state_len", len(turnState),
-	)
-
-	return turnState, freshCookie, nil
+	return turnState, freshCookie, ans, nil
 }
 
 
