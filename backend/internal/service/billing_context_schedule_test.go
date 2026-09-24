@@ -82,6 +82,24 @@ func mustCatalogFromJSON(body string) *PricingService {
 
 func openAILadderCatalog() *PricingService { return mustCatalogFromJSON(openAILadderCatalogJSON) }
 
+func TestResolveContextPricingSchedule_GPT6AstraOfficialScheduleKeepsReferencePrices(t *testing.T) {
+	catalog := mustCatalogFromJSON(gpt6AstraCatalogJSON)
+	bs := NewBillingService(&config.Config{}, catalog)
+	resolver := NewModelPricingResolver(nil, bs)
+
+	schedule, err := bs.ResolveContextPricingSchedule(context.Background(), resolver, ContextPricingScheduleInput{
+		Model:    "gpt-6-astra",
+		Platform: PlatformOpenAI,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, schedule)
+	require.Len(t, schedule.Tiers, 2)
+	requireTier(t, schedule.Tiers[0], 0, intPtr(272000), "≤272K",
+		testPtrFloat64(10e-6), testPtrFloat64(50e-6), testPtrFloat64(12.5e-6), testPtrFloat64(1e-6))
+	requireTier(t, schedule.Tiers[1], 272000, nil, ">272K",
+		testPtrFloat64(20e-6), testPtrFloat64(75e-6), testPtrFloat64(25e-6), testPtrFloat64(2e-6))
+}
+
 func scheduleScenarios() []scheduleScenario {
 	p := testPtrFloat64
 	return []scheduleScenario{

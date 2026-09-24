@@ -89,14 +89,15 @@ func tryModelFilePricing(billingService *BillingService, model string, tokens Us
 		reasoningEffort = reasoningEfforts[0]
 	}
 	breakdown, err := billingService.CalculateCostUnified(CostInput{
-		Ctx:             context.Background(),
-		Model:           model,
-		Tokens:          tokens,
-		RateMultiplier:  1,
-		ServiceTier:     normalizeBillingServiceTier(serviceTier),
-		ReasoningEffort: reasoningEffort,
-		PricingAt:       pricingAt,
-		Resolver:        NewModelPricingResolver(nil, billingService),
+		Ctx:                context.Background(),
+		Model:              model,
+		Tokens:             tokens,
+		RateMultiplier:     1,
+		ServiceTier:        normalizeBillingServiceTier(serviceTier),
+		ReasoningEffort:    reasoningEffort,
+		PricingAt:          pricingAt,
+		Resolver:           NewModelPricingResolver(nil, billingService),
+		referenceModelCost: true,
 	})
 	if err != nil || breakdown == nil || breakdown.TotalCost <= 0 {
 		return nil

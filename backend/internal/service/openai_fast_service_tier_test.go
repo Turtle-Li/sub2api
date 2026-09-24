@@ -297,6 +297,102 @@ func TestOpenAIFastBillingMultiplier_2xAnd25x(t *testing.T) {
 	}
 }
 
+func TestAstraConsumptionMultiplier_PreservesOfficialPricesAndMatchesWalletDebit(t *testing.T) {
+	t.Parallel()
+
+	billing := NewBillingService(&config.Config{}, nil)
+	pricing, err := billing.GetModelPricing("gpt-6-astra")
+	require.NoError(t, err)
+	require.InDelta(t, 10e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 50e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 1e-6, pricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 20e-6, pricing.InputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 100e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+
+	tokens := UsageTokens{InputTokens: 1079, OutputTokens: 769, CacheReadTokens: 48384}
+	officialStandardCost := float64(tokens.InputTokens)*10e-6 +
+		float64(tokens.OutputTokens)*50e-6 +
+		float64(tokens.CacheReadTokens)*1e-6
+	const groupMultiplier = 0.25
+
+	t.Run("legacy token path", func(t *testing.T) {
+		cost, err := billing.CalculateCost("gpt-6-astra", tokens, groupMultiplier)
+		require.NoError(t, err)
+		require.InDelta(t, float64(tokens.InputTokens)*10e-6, cost.InputCost, 1e-12)
+		require.InDelta(t, float64(tokens.OutputTokens)*50e-6, cost.OutputCost, 1e-12)
+		require.InDelta(t, float64(tokens.CacheReadTokens)*1e-6, cost.CacheReadCost, 1e-12)
+		require.InDelta(t, officialStandardCost*openAIAstraConsumptionMultiplier, cost.TotalCost, 1e-12)
+		require.InDelta(t, cost.TotalCost*groupMultiplier, cost.ActualCost, 1e-12)
+	})
+
+	t.Run("production resolver path records and deducts the same amount", func(t *testing.T) {
+		resolver := NewModelPricingResolver(nil, billing)
+		cost, err := billing.CalculateCostUnified(CostInput{
+			Ctx:            context.Background(),
+			Model:          "gpt-6-astra",
+			Tokens:         tokens,
+			RateMultiplier: groupMultiplier,
+			Resolver:       resolver,
+		})
+		require.NoError(t, err)
+		require.InDelta(t, float64(tokens.InputTokens)*10e-6, cost.InputCost, 1e-12)
+		require.InDelta(t, float64(tokens.OutputTokens)*50e-6, cost.OutputCost, 1e-12)
+		require.InDelta(t, float64(tokens.CacheReadTokens)*1e-6, cost.CacheReadCost, 1e-12)
+		require.InDelta(t, officialStandardCost*openAIAstraConsumptionMultiplier, cost.TotalCost, 1e-12)
+		require.InDelta(t, cost.TotalCost*groupMultiplier, cost.ActualCost, 1e-12)
+
+		apiKey := &APIKey{ID: 2}
+		user := &User{ID: 1}
+		account := &Account{ID: 3}
+		result := &ForwardResult{
+			RequestID: "astra-visible-debit-parity",
+			Model:     "gpt-6-astra",
+			Usage: ClaudeUsage{
+				InputTokens:          tokens.InputTokens,
+				OutputTokens:         tokens.OutputTokens,
+				CacheReadInputTokens: tokens.CacheReadTokens,
+			},
+		}
+		usageLog := (&GatewayService{}).buildRecordUsageLog(
+			context.Background(),
+			&recordUsageCoreInput{},
+			result,
+			apiKey,
+			user,
+			account,
+			nil,
+			"gpt-6-astra",
+			groupMultiplier,
+			1,
+			1,
+			0,
+			false,
+			cost,
+		)
+		require.InDelta(t, cost.TotalCost, usageLog.TotalCost, 1e-12)
+		require.InDelta(t, cost.ActualCost, usageLog.ActualCost, 1e-12)
+
+		cmd := buildUsageBillingCommand(result.RequestID, usageLog, &postUsageBillingParams{
+			Cost:    cost,
+			User:    user,
+			APIKey:  apiKey,
+			Account: account,
+		})
+		require.NotNil(t, cmd)
+		require.Equal(t, QuantizeUsageBillingAmount(usageLog.ActualCost), cmd.BalanceCost)
+	})
+
+	t.Run("official priority price remains 2x before hidden consumption", func(t *testing.T) {
+		cost, err := billing.CalculateCostWithServiceTier("gpt-6-astra", tokens, groupMultiplier, "priority")
+		require.NoError(t, err)
+		require.InDelta(t, float64(tokens.InputTokens)*20e-6, cost.InputCost, 1e-12)
+		require.InDelta(t, float64(tokens.OutputTokens)*100e-6, cost.OutputCost, 1e-12)
+		require.InDelta(t, float64(tokens.CacheReadTokens)*2e-6, cost.CacheReadCost, 1e-12)
+		require.InDelta(t, officialStandardCost*2*openAIAstraConsumptionMultiplier, cost.TotalCost, 1e-12)
+		require.InDelta(t, cost.TotalCost*groupMultiplier, cost.ActualCost, 1e-12)
+	})
+}
+
 func TestOpenAIFastBilling_FastMultiplierOverridesEnforcedRatio(t *testing.T) {
 	t.Parallel()
 

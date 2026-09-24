@@ -209,6 +209,8 @@ type CostBreakdown struct {
 	LongContextBillingApplied bool
 }
 
+const openAIAstraConsumptionMultiplier = 1.5
+
 func applyCostBreakdownMultiplier(cost *CostBreakdown, multiplier float64) {
 	if cost == nil || multiplier == 1 {
 		return
@@ -221,6 +223,18 @@ func applyCostBreakdownMultiplier(cost *CostBreakdown, multiplier float64) {
 	cost.CacheReadCost *= multiplier
 	cost.TotalCost *= multiplier
 	cost.ActualCost *= multiplier
+}
+
+// applyOpenAIAstraConsumptionMultiplier increases Astra's recorded consumption
+// without changing the component costs used to display official per-token
+// prices. TotalCost is the adjusted pre-group cost, while ActualCost stays
+// exactly equal to the amount later deducted after the group/user rate.
+func applyOpenAIAstraConsumptionMultiplier(model string, cost *CostBreakdown) {
+	if cost == nil || !isOpenAIGPT6AstraModel(model) {
+		return
+	}
+	cost.TotalCost *= openAIAstraConsumptionMultiplier
+	cost.ActualCost *= openAIAstraConsumptionMultiplier
 }
 
 func isClaudeFable51Model(model string) bool {
@@ -1449,6 +1463,7 @@ type CostInput struct {
 	Resolver                  *ModelPricingResolver // 定价解析器
 	Resolved                  *ResolvedPricing      // 可选：预解析的定价结果（避免重复 Resolve 调用）
 	LongContextBillingEnabled *bool
+	referenceModelCost        bool // 账号成本等内部参考口径：保留官方价，不叠加 Astra 客户消耗调整
 }
 
 // CalculateCostUnified 统一计费入口，支持三种计费模式。
@@ -1471,6 +1486,9 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (result *CostBrea
 		}
 		breakdown := s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongContextBilling)
 		applyCostBreakdownMultiplier(breakdown, reasoningEffortBillingMultiplier(input.ReasoningEffort, pricing.ReasoningEffortMultipliers))
+		if !input.referenceModelCost {
+			applyOpenAIAstraConsumptionMultiplier(input.Model, breakdown)
+		}
 		return breakdown, nil
 	}
 
@@ -1561,6 +1579,9 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 	breakdown := s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongCtx)
 	applyCostBreakdownMultiplier(breakdown, resolvedChannelTimeMultiplier(resolved, input.PricingAt))
 	applyCostBreakdownMultiplier(breakdown, reasoningEffortBillingMultiplier(input.ReasoningEffort, pricing.ReasoningEffortMultipliers))
+	if !input.referenceModelCost {
+		applyOpenAIAstraConsumptionMultiplier(input.Model, breakdown)
+	}
 	return breakdown, nil
 }
 
@@ -1805,7 +1826,9 @@ func (s *BillingService) calculateCostInternalWithPolicy(
 		return nil, err
 	}
 
-	return s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, longContextBillingEnabled), nil
+	breakdown := s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, longContextBillingEnabled)
+	applyOpenAIAstraConsumptionMultiplier(model, breakdown)
+	return breakdown, nil
 }
 
 // applyModelSpecificPricingPolicy 对目录数据做模型特定修正：DeepSeek 官方价

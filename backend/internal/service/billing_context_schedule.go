@@ -104,12 +104,13 @@ func (s *BillingService) ResolveContextPricingSchedule(ctx context.Context, reso
 	}
 
 	req := TokenCostRequest{
-		Ctx:            ctx,
-		Model:          in.Model,
-		Group:          in.Group,
-		RateMultiplier: 1,
-		Resolver:       resolver,
-		Resolved:       resolved,
+		Ctx:                ctx,
+		Model:              in.Model,
+		Group:              in.Group,
+		RateMultiplier:     1,
+		Resolver:           resolver,
+		Resolved:           resolved,
+		referenceModelCost: in.Group == nil,
 	}
 	probe := func(tokens UsageTokens) (*CostBreakdown, error) {
 		r := req

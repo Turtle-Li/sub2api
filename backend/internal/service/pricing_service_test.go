@@ -96,7 +96,7 @@ const gpt6AstraCatalogJSON = `{
 	}
 }`
 
-func TestBillingServiceGPT6AstraUsesOfficialPricingAcrossTiersAndLongContext(t *testing.T) {
+func TestBillingServiceGPT6AstraUsesOfficialPricingWithConsumptionAdjustmentAcrossTiersAndLongContext(t *testing.T) {
 	svc := NewBillingService(&config.Config{}, newStubPricingServiceFromJSON(t, gpt6AstraCatalogJSON))
 	boundaryTokens := UsageTokens{InputTokens: 100_000, CacheCreationTokens: 100_000, CacheReadTokens: 72_000, OutputTokens: 10}
 	boundary, err := svc.CalculateCost("gpt-6-astra", boundaryTokens, 1)
@@ -106,6 +106,7 @@ func TestBillingServiceGPT6AstraUsesOfficialPricingAcrossTiersAndLongContext(t *
 	require.InDelta(t, 100_000*12.5e-6, boundary.CacheCreationCost, 1e-12)
 	require.InDelta(t, 72_000*1e-6, boundary.CacheReadCost, 1e-12)
 	require.InDelta(t, 10*50e-6, boundary.OutputCost, 1e-12)
+	require.InDelta(t, (boundary.InputCost+boundary.CacheCreationCost+boundary.CacheReadCost+boundary.OutputCost)*openAIAstraConsumptionMultiplier, boundary.TotalCost, 1e-12)
 
 	tokens := UsageTokens{InputTokens: 100_000, CacheCreationTokens: 100_000, CacheReadTokens: 73_000, OutputTokens: 10}
 	tiers := []struct {
@@ -126,6 +127,7 @@ func TestBillingServiceGPT6AstraUsesOfficialPricingAcrossTiersAndLongContext(t *
 			require.InDelta(t, 100_000*12.5e-6*tier.priceScale*2, cost.CacheCreationCost, 1e-12)
 			require.InDelta(t, 73_000*1e-6*tier.priceScale*2, cost.CacheReadCost, 1e-12)
 			require.InDelta(t, 10*50e-6*tier.priceScale*1.5, cost.OutputCost, 1e-12)
+			require.InDelta(t, (cost.InputCost+cost.CacheCreationCost+cost.CacheReadCost+cost.OutputCost)*openAIAstraConsumptionMultiplier, cost.TotalCost, 1e-12)
 		})
 	}
 }

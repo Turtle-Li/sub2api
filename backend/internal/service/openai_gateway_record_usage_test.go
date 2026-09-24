@@ -439,6 +439,49 @@ func TestOpenAIGatewayServiceRecordUsage_UsesUserSpecificGroupRate(t *testing.T)
 	require.Equal(t, 1, userRepo.deductCalls)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_GPT6AstraLogMatchesAtomicWalletDebit(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(
+		usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil,
+	)
+	svc.resolver = NewModelPricingResolver(nil, svc.billingService)
+
+	const groupMultiplier = 0.25
+	const groupID = int64(1)
+	usage := OpenAIUsage{InputTokens: 49_463, OutputTokens: 769, CacheReadInputTokens: 48_384}
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_astra_atomic_debit",
+			Model:     "gpt-6-astra",
+			Usage:     usage,
+			Duration:  time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      1001,
+			GroupID: i64p(groupID),
+			Group:   &Group{ID: groupID, RateMultiplier: groupMultiplier, Platform: PlatformOpenAI},
+		},
+		User:    &User{ID: 2001},
+		Account: &Account{ID: 3001, Platform: PlatformOpenAI},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, usageRepo.calls)
+	require.Equal(t, 1, billingRepo.calls)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, billingRepo.lastCmd)
+
+	officialCost := 1079*10e-6 + 769*50e-6 + 48_384*1e-6
+	wantTotal := officialCost * openAIAstraConsumptionMultiplier
+	wantActual := wantTotal * groupMultiplier
+	require.InDelta(t, 1079*10e-6, usageRepo.lastLog.InputCost, 1e-12)
+	require.InDelta(t, 769*50e-6, usageRepo.lastLog.OutputCost, 1e-12)
+	require.InDelta(t, 48_384*1e-6, usageRepo.lastLog.CacheReadCost, 1e-12)
+	require.InDelta(t, wantTotal, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, wantActual, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Equal(t, QuantizeUsageBillingAmount(usageRepo.lastLog.ActualCost), billingRepo.lastCmd.BalanceCost)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *testing.T) {
 	groupID := int64(14)
 	groupRate := 1.0
