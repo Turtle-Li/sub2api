@@ -13,17 +13,27 @@ import (
 
 const (
 	// 与 service.isOpenCodeGoBaseURL 对齐：Go 侧接受显式默认端口 :443（parsed.Host ==
-	// hostname+":443"），SQL 正则必须同样接受可选 :443，否则同一 base_url 在 Go 判定
-	// eligible 而 SQL 判定不 eligible，身份清理与组查询会漏行。只做 parity，不扩域名/路径。
-	opencodeGoBaseURLRegexSQL       = `^[hH][tT][tT][pP][sS]://[oO][pP][eE][nN][cC][oO][dD][eE]\.[aA][iI](:[4][4][3])?/[zZ][eE][nN]/[gG][oO]/[vV]1/?$`
+	// hostname+":443"）与两个官方基址变体（CC/Responses 的 /zen/go/v1 与 Anthropic
+	// 的 /zen/go），SQL 正则必须同样接受，否则同一 base_url 在 Go 判定 eligible 而
+	// SQL 判定不 eligible，身份清理与组查询会漏行。只做 parity，不扩域名/路径；
+	// Zen 基址（/zen、/zen/v1）必须拒绝。
+	opencodeGoBaseURLRegexSQL       = `^[hH][tT][tT][pP][sS]://[oO][pP][eE][nN][cC][oO][dD][eE]\.[aA][iI](:[4][4][3])?/[zZ][eE][nN]/[gG][oO](/[vV]1)?/?$`
 	opencodeGoBaseURLMatchSQLPrefix = "btrim("
 	opencodeGoBaseURLMatchSQLSuffix = ") ~ '" + opencodeGoBaseURLRegexSQL + "'"
+	// opencodeGoUsageMountPlatformsSQL 是 service.isOpenCodeGoUsageMountPlatform 的
+	// SQL 镜像：OpenCode Go key 允许挂在 openai/anthropic 与国产 OpenAI 兼容平台
+	// 下复用，与 ollama 的 ollamaCloudUsagePlatformsSQL 完全一致。opencode_go
+	// 平台本身不在名单内——平台账号走 account_mode 分支。所有平台白名单 SQL
+	// 只允许引用本常量，不得各处重写字面量，防止漂移。
+	opencodeGoUsageMountPlatformsSQL = "'openai', 'anthropic', 'kimi', 'zhipu', 'deepseek', 'minimax'"
 )
 
-// opencodeGoUsageURLMatchSQL mirrors service.IsOpenCodeGoUsageAccount. The
-// saved upstream URL is the only usage-mode selector: an opencode keyword
-// selects OpenCode Go, a deepseek keyword selects the official balance path,
-// and the exact OpenCode Go URL remains a compatibility fallback.
+// opencodeGoUsageURLMatchSQL mirrors the base_url branch of
+// service.IsOpenCodeGoUsageAccount. The saved upstream URL is the only
+// usage-mode selector for mounted accounts: an opencode keyword selects
+// OpenCode Go, a deepseek keyword selects the official balance path, and the
+// exact OpenCode Go URL remains a compatibility fallback. Third-party relays
+// stay eligible, which upstream's URL-only predicate would drop.
 func opencodeGoUsageURLMatchSQL(baseURLExpr string) string {
 	lowerURL := "LOWER(COALESCE(" + baseURLExpr + ", ''))"
 	urlWithoutQuery := "POSITION('?' IN COALESCE(" + baseURLExpr + ", '')) = 0 AND POSITION('#' IN COALESCE(" + baseURLExpr + ", '')) = 0"
@@ -31,11 +41,30 @@ func opencodeGoUsageURLMatchSQL(baseURLExpr string) string {
 		opencodeGoBaseURLMatchSQLPrefix + baseURLExpr + opencodeGoBaseURLMatchSQLSuffix + ")))"
 }
 
+// opencodeGoUsageEligibleSQLFor 与 service.IsOpenCodeGoUsageAccount 互为镜像：
+//   - opencode_go 平台：account_mode 存储于 credentials（domain/constants.go），
+//     未设置/为 null/非 "zen" 一律视为 Go 订阅，与 GetOpenCodeAccountMode 的
+//     默认兼容逻辑一致；COALESCE 把 <> 对 NULL 的结果归一为 true。不校验
+//     base_url（平台字段已是权威来源）。
+//   - 挂载白名单平台：走 opencodeGoUsageURLMatchSQL 的关键字优先级，官方基址
+//     正则是兜底。
+//
+// type 仍保留 fork 的 apikey/upstream 两种形态：导入的中转/上游账号带同样的
+// base_url + api_key 凭证，必须与 service.isOpenCodeGoUsageAccountType 对齐。
+//
+// 已知且可接受的差异：btrim 只去空格，Go 侧 strings.TrimSpace 还会去
+// \t\n\v\f\r 等空白；account_mode 等凭证字段实际不会出现这类空白，且改用
+// btrim(x, E' \t\n\r\f\v') 会在 parity 关键的 SQL 字符串里引入转义脆弱性，
+// 故保持现状不改行为。
 func opencodeGoUsageEligibleSQLFor(credentialsExpr string) string {
 	return `
-		platform IN ('openai', 'deepseek')
+		(
+			(platform = 'opencode_go'
+				AND COALESCE(btrim(` + credentialsExpr + ` ->> 'account_mode') <> 'zen', true))
+			OR (platform IN (` + opencodeGoUsageMountPlatformsSQL + `)
+				AND ` + opencodeGoUsageURLMatchSQL(credentialsExpr+` ->> 'base_url'`) + `)
+		)
 		AND type IN ('apikey', 'upstream')
-		AND ` + opencodeGoUsageURLMatchSQL(credentialsExpr+` ->> 'base_url'`) + `
 		AND jsonb_typeof(` + credentialsExpr + ` -> 'api_key') = 'string'
 `
 }

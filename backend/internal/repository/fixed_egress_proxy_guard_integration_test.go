@@ -724,7 +724,10 @@ func TestFixedEgressProxyExpiryOwnTransactionEvictsParentAndShadowSchedulerCache
 	}}
 	repo := newProxyRepositoryWithSQL(integrationEntClient, integrationDB, cache)
 
-	affectedIDs, err := repo.sweepOneExpiredProxy(ctx, proxy.ID, nil, false, time.Now())
+	snapshot, err := repo.GetByID(ctx, proxy.ID)
+	require.NoError(t, err)
+
+	affectedIDs, err := repo.sweepOneExpiredProxy(ctx, *snapshot, time.Now(), nil, false)
 
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int64{parent.ID, shadow.ID}, affectedIDs)

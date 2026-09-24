@@ -91,13 +91,18 @@ const { t } = useI18n()
 const state = ref(props.account.opencode_go_usage)
 const refreshing = ref(false)
 const refreshError = ref<string | null>(null)
+// Mirrors service.isOpenCodeGoUsageMountPlatform; opencode_go is handled by the
+// platform branch below and is deliberately absent from this list.
+const OPENCODE_GO_USAGE_MOUNT_PLATFORMS = ['openai', 'anthropic', 'kimi', 'zhipu', 'deepseek', 'minimax']
+
 const urlEligible = computed(() => {
-  if (
-    !isOpenCodeGoUsageAccountType(props.account.type) ||
-    (props.account.platform !== 'openai' && props.account.platform !== 'deepseek')
-  ) {
-    return false
+  if (!isOpenCodeGoUsageAccountType(props.account.type)) return false
+  // opencode_go platform accounts are authoritative through the platform field;
+  // the server still owns the Go/Zen mode decision, so only hint on Go.
+  if (props.account.platform === 'opencode_go') {
+    return props.account.credentials?.account_mode !== 'zen'
   }
+  if (!OPENCODE_GO_USAGE_MOUNT_PLATFORMS.includes(props.account.platform)) return false
   return isOpenCodeGoUsageUrl(props.account.credentials?.base_url)
 })
 const usageEligible = computed(() => state.value?.eligible === true || urlEligible.value)

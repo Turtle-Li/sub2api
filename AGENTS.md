@@ -234,6 +234,16 @@
   or the HTTP/WS account-selected forwarding seams. Preserve the user-role
   exclusion and stale-probe identity guard.
 
+- For the v0.2.8 merge, read `docs/operations/UPSTREAM_V028_20260923.md`. Both
+  sides had implemented OpenCode Go usage windows independently; the merged
+  eligibility rule is the union of upstream's `opencode_go` platform branch plus
+  mount whitelist and the fork's relay keyword/`upstream`-type support, mirrored
+  between `service.IsOpenCodeGoUsageAccount` and
+  `repository.opencodeGoUsageEligibleSQLFor`. Change both sides together, and
+  keep the OpenCode CASE branch ahead of the Ollama branch. Upstream migration
+  239 replaces `max_reasoning_effort_multiplier` with a
+  `reasoning_effort_multipliers` map alongside the fork's `currency` column.
+
 - For the v0.2.5 OpenCode, site billing-mode, subscription bulk-action,
   proxy-credential, Images, WebSocket, and migration merge, read
   `docs/operations/UPSTREAM_V025_20260915.md`. Preserve the fork's independent

@@ -135,8 +135,9 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	cacheWriteMultiplier := 2.0
 	cacheReadMultiplier := 2.0
 	pricing := toUserPricing(&service.ChannelModelPricing{
-		BillingMode: service.BillingModeToken,
-		Currency:    "cny",
+		BillingMode:                service.BillingModeToken,
+		Currency:                   "cny",
+		ReasoningEffortMultipliers: map[string]float64{"high": 1.5, "max": 3},
 		Intervals: []service.PricingInterval{
 			{
 				ID: 7, MinTokens: 0, MaxTokens: nil, SortOrder: 3,
@@ -147,6 +148,7 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	})
 	require.NotNil(t, pricing)
 	require.Equal(t, service.PricingCurrencyCNY, pricing.Currency)
+	require.Equal(t, map[string]float64{"high": 1.5, "max": 3}, pricing.ReasoningEffortMultipliers)
 	require.Len(t, pricing.Intervals, 1)
 	rawIv, err := json.Marshal(pricing.Intervals[0])
 	require.NoError(t, err)

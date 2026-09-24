@@ -38,6 +38,7 @@ vi.mock('vue-i18n', async (importOriginal) => {
         if (key === 'profile.user') return 'User'
         if (key === 'profile.authBindings.providers.email') return 'Email'
         if (key === 'profile.authBindings.providers.linuxdo') return 'LinuxDo'
+        if (key === 'profile.authBindings.providers.dingtalk') return 'DingTalk'
         if (key === 'profile.authBindings.providers.wechat') return 'WeChat'
         if (key === 'profile.authBindings.providers.oidc') return params?.providerName || 'OIDC'
         if (key === 'profile.authBindings.source.avatar') {
@@ -75,6 +76,19 @@ function createUser(overrides: Partial<User> = {}): User {
 describe('ProfileInfoCard', () => {
   beforeEach(() => {
     appStore.cachedPublicSettings = null
+  })
+
+  it.each([
+    { avatar_source: 'dingtalk', username_source: 'dingtalk' },
+    { profile_sources: { avatar: { provider: 'dingtalk' }, username: { provider: 'dingtalk' } } },
+  ])('shows DingTalk as the synchronized profile source', (sources) => {
+    const wrapper = mount(ProfileInfoCard, {
+      props: { user: createUser(sources), dingtalkEnabled: true },
+      global: { stubs: { Icon: true } },
+    })
+    expect(wrapper.text()).toContain('Avatar synced from DingTalk')
+    expect(wrapper.text()).toContain('Username synced from DingTalk')
+    wrapper.unmount()
   })
 
   it('renders basic account information inside the new overview shell', () => {

@@ -74,11 +74,15 @@ function makeOllamaUsage(accountId: number, overrides: Partial<NonNullable<Accou
   }
 }
 
-// CN 平台 Ollama Cloud 用例共用的子组件 stub：按 data-test 断言渲染与否
+// CN 平台 Ollama Cloud / OpenCode Go 用例共用的子组件 stub：按 data-test 断言渲染与否
 const cnUsageCellStubs = {
   OllamaCloudUsageCell: {
     props: ['account'],
     template: '<div data-test="embedded-ollama">ollama</div>'
+  },
+  OpenCodeGoUsageCell: {
+    props: ['account'],
+    template: '<div data-test="opencode-go-cell" />'
   },
   CNProviderQuotaCell: {
     template: '<div data-test="cn-quota-cell" />'

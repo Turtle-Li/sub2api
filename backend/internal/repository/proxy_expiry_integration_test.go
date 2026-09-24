@@ -317,11 +317,14 @@ func (s *ProxyExpirySuite) TestSweep_StaleSnapshotDoesNotExpireRenewedProxy() {
 	past := time.Now().Add(-time.Hour)
 	proxyID := s.mkProxy("renewed-after-snapshot", service.FallbackModeDirect, &past, nil)
 	accountID := s.mkAccountWithProxy(proxyID)
+	// Snapshot the still-expired row, then renew it behind the sweep's back.
+	snapshot, err := s.repo.GetByID(s.ctx, proxyID)
+	s.Require().NoError(err)
 	future := time.Now().Add(24 * time.Hour)
-	_, err := s.tx.ExecContext(s.ctx, `UPDATE proxies SET expires_at=$1 WHERE id=$2`, future, proxyID)
+	_, err = s.tx.ExecContext(s.ctx, `UPDATE proxies SET expires_at=$1 WHERE id=$2`, future, proxyID)
 	s.Require().NoError(err)
 
-	affectedIDs, err := s.repo.sweepOneExpiredProxy(s.ctx, proxyID, nil, true, time.Now())
+	affectedIDs, err := s.repo.sweepOneExpiredProxy(s.ctx, *snapshot, time.Now(), nil, true)
 	s.Require().NoError(err)
 	s.Require().Empty(affectedIDs)
 	proxy, err := s.repo.GetByID(s.ctx, proxyID)
@@ -338,8 +341,10 @@ func (s *ProxyExpirySuite) TestSweepOne_OuterTransactionDoesNotEvictBeforeCommit
 		accountID: {ID: accountID},
 	}}
 	s.repo.schedulerCache = cache
+	snapshot, err := s.repo.GetByID(s.ctx, proxyID)
+	s.Require().NoError(err)
 
-	affectedIDs, err := s.repo.sweepOneExpiredProxy(s.ctx, proxyID, nil, false, time.Now())
+	affectedIDs, err := s.repo.sweepOneExpiredProxy(s.ctx, *snapshot, time.Now(), nil, false)
 
 	s.Require().NoError(err)
 	s.Require().Equal([]int64{accountID}, affectedIDs)

@@ -60,7 +60,8 @@ var (
 		"OPENCODE_GO_USAGE_UNAVAILABLE", "OpenCode Go usage is unavailable",
 	)
 	ErrOpenCodeGoUsageAccountInvalid = infraerrors.BadRequest(
-		"OPENCODE_GO_USAGE_ACCOUNT_INVALID", "account must be an OpenAI or DeepSeek API key account using an OpenCode URL",
+		"OPENCODE_GO_USAGE_ACCOUNT_INVALID",
+		"account must be an OpenCode Go platform subscription (go mode) account, or an API key/upstream account under openai/anthropic/kimi/zhipu/deepseek/minimax whose base_url points at an official OpenCode Go base URL or carries an opencode relay keyword",
 	)
 	ErrOpenCodeGoUsageIdentityChanged = infraerrors.Conflict(
 		"OPENCODE_GO_USAGE_IDENTITY_CHANGED", "account identity or proxy changed during refresh; retry",
@@ -469,11 +470,12 @@ func (s *OpenCodeGoUsageService) GetState(ctx context.Context, accountID int64) 
 	return OpenCodeGoUsageStateFromAccount(account), nil
 }
 
-// ResolveOpenCodeGoUsageAccounts overlays managed state onto the supplied account
-// objects. The auto-refresh switch is shared by the API-key group. A snapshot
-// from a different proxy is not used to refill a row whose own snapshot was
-// invalidated, while a successful refresh may still fan the fresh group result
-// out to all siblings. The repository resolves all matching siblings in one
+// ResolveOpenCodeGoUsageAccounts overlays group-owned managed state onto the
+// supplied account objects. The auto-refresh switch is shared by the API-key
+// group. A snapshot from a different proxy is not used to refill a row whose
+// own snapshot was invalidated, while a successful refresh may still fan the
+// fresh group result out to all siblings. The repository resolves all matching
+// siblings in one
 // bounded query, so account-list responses do not issue one query per row.
 func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Context, accounts []*Account) error {
 	if s == nil || s.accountRepo == nil || len(accounts) == 0 {
@@ -908,34 +910,18 @@ func OpenCodeGoUsageStateFromAccount(account *Account) *OpenCodeGoUsageState {
 	return state
 }
 
-func IsOpenCodeGoUsageAccount(account *Account) bool {
-	if account == nil || !isOpenCodeGoUsageAccountType(account.Type) || !isOpenCodeGoUsagePlatform(account.Platform) {
-		return false
-	}
-	// The saved upstream URL is the source of truth for the usage surface. The
-	// account name is only a display label and must not change whether an
-	// official DeepSeek balance or OpenCode Go window is shown.
-	baseURL, _ := account.Credentials["base_url"].(string)
-	// The official host is judged strictly: only the two protocol-compatible Zen
-	// Go bases are usage surfaces. Anthropic accounts keep /zen/go because their
-	// native endpoint builder adds /v1/messages; OpenAI-format accounts commonly
-	// store /zen/go/v1. Wrong ports, paths, and queries remain ineligible.
-	if isOpenCodeGoBaseURL(baseURL) {
+// isOpenCodeGoUsageMountPlatform 收敛允许以 base_url 挂载 OpenCode Go 用量身份的
+// 平台白名单，与 ollama 的 isOllamaCloudUsagePlatform 对齐。repository 侧 SQL
+// 白名单（opencodeGoUsageMountPlatformsSQL）是本列表的镜像，两侧必须同步修改。
+// opencode_go 平台本身不在名单内：平台账号走 IsOpenCodeGoPlan 判定，不依赖
+// base_url。
+func isOpenCodeGoUsageMountPlatform(platform string) bool {
+	switch platform {
+	case PlatformOpenAI, PlatformAnthropic, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
 		return true
-	}
-	if isOpenCodeGoOfficialHost(baseURL) {
+	default:
 		return false
 	}
-	// Third-party relays never match the official URL, so fall back to the
-	// usage-mode keyword carried by the saved URL. OpenCode wins over DeepSeek
-	// when a relay URL contains both.
-	switch accountUsageURLKeyword(baseURL) {
-	case "opencode":
-		return true
-	case "deepseek":
-		return false
-	}
-	return false
 }
 
 // isOpenCodeGoUsageAccountType covers both account shapes that carry a
@@ -978,10 +964,45 @@ func accountUsageURLKeyword(baseURL string) string {
 	return ""
 }
 
-// isOpenCodeGoUsagePlatform 仅允许配置 OpenCode Go 兼容端点的平台。
-// 线上账号使用 deepseek 平台标识，但实际指向 https://opencode.ai/zen/go/v1。
-func isOpenCodeGoUsagePlatform(platform string) bool {
-	return platform == PlatformOpenAI || platform == PlatformDeepseek
+// IsOpenCodeGoUsageAccount 判定账号是否参与 OpenCode Go 用量窗口，资格来源分派：
+//   - platform == opencode_go：平台字段是权威来源，以 IsOpenCodeGoPlan 为准（必须是
+//     Go 订阅；Zen 按量付费无订阅配额窗口，上游 CN 配额链路同样排除）。此分支不要求
+//     base_url 匹配——opencode_go 账号的 base_url 可能是 CC/Responses 基址
+//     （/zen/go/v1）或 Anthropic 基址（/zen/go），甚至为空。这是有意取舍：平台 +
+//     模式已是权威来源，且账号指向自建代理/中转时 key 仍是官方 OpenCode key，从
+//     官方端点取用量恰恰是正确数据源。
+//   - 其它平台：仅限挂载白名单（isOpenCodeGoUsageMountPlatform）内的账号。保存的上游
+//     URL 是用量面的唯一来源，账号名只是展示标签，不得改变展示的是 DeepSeek 官方余额
+//     还是 OpenCode Go 窗口。官方 host 被严格判定：只有两个协议兼容的 Zen Go 基址是
+//     用量面，错误端口、路径与查询串一律不合格。第三方中转永远不会命中官方 URL，因此
+//     回落到 URL 携带的用量模式关键字（fork 线上已有的中转账号依赖这一分支）。
+//
+// 两种情况都要求 account.Type ∈ {apikey, upstream}（见 isOpenCodeGoUsageAccountType）。
+func IsOpenCodeGoUsageAccount(account *Account) bool {
+	if account == nil || !isOpenCodeGoUsageAccountType(account.Type) {
+		return false
+	}
+	if account.IsOpenCodeGo() {
+		return account.IsOpenCodeGoPlan()
+	}
+	if !isOpenCodeGoUsageMountPlatform(account.Platform) {
+		return false
+	}
+	baseURL, _ := account.Credentials["base_url"].(string)
+	if isOpenCodeGoBaseURL(baseURL) {
+		return true
+	}
+	if isOpenCodeGoOfficialHost(baseURL) {
+		return false
+	}
+	// OpenCode wins over DeepSeek when a relay URL contains both keywords.
+	switch accountUsageURLKeyword(baseURL) {
+	case "opencode":
+		return true
+	case "deepseek":
+		return false
+	}
+	return false
 }
 
 func isOpenCodeGoBaseURL(raw string) bool {
@@ -1004,6 +1025,8 @@ func isOpenCodeGoBaseURL(raw string) bool {
 	if parsed.RawPath != "" {
 		return false
 	}
+	// 官方两个基址变体：CC/Responses 的 /zen/go/v1 与 Anthropic 的 /zen/go。
+	// TrimSuffix 归一尾斜杠后，Zen 基址（/zen、/zen/v1）自然被拒绝。
 	path := strings.ToLower(strings.TrimSuffix(parsed.Path, "/"))
 	return path == "/zen/go" || path == "/zen/go/v1"
 }
@@ -1019,6 +1042,10 @@ func canonicalOpenCodeGoUsageBaseURL(raw string) string {
 	return trimmed
 }
 
+// openCodeGoUsageIdentity 返回 OpenCode Go 用量组的身份。host 固定为 opencode.ai、
+// 以 api_key 聚合是平台无关的有意设计：同一个 OpenCode Go 订阅 key 无论以
+// opencode_go 平台账号存在，还是挂在 openai/anthropic 等挂载平台下，都属于
+// 同一组、共享一次外呼与同一份快照。
 func openCodeGoUsageIdentity(account *Account) map[string]any {
 	if !IsOpenCodeGoUsageAccount(account) {
 		return nil
@@ -1030,6 +1057,9 @@ func openCodeGoUsageIdentity(account *Account) map[string]any {
 	return map[string]any{"host": "opencode.ai", "api_key": apiKey}
 }
 
+// openCodeGoUsageGroupFingerprint 是组身份的指纹（sha256("opencode.ai\x00"+apiKey)）。
+// 与 openCodeGoUsageIdentity 一样保持平台无关：同一订阅 key 跨平台（opencode_go
+// 平台账号与挂载平台账号）必须得到相同指纹，才会被归入同一刷新组。
 func openCodeGoUsageGroupFingerprint(account *Account) (string, bool) {
 	identity := openCodeGoUsageIdentity(account)
 	if identity == nil {

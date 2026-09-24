@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import OpenCodeGoUsageCell from '../OpenCodeGoUsageCell.vue'
 import UsageProgressBar from '../UsageProgressBar.vue'
 import type { Account, OpenCodeGoUsageState } from '@/types'
