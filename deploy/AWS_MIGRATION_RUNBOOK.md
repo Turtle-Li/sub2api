@@ -123,7 +123,9 @@ approved.
 5. Preserve the candidate-only release image/rollback point and restricted
    GitHub Actions SSH receiver with its distinct Vault-managed Ed25519 key.
    The receiver must remain forced-command-only with no PTY, forwarding, user
-   rc or shell path. The `aws-candidate` workflow must use its environment-bound
+   rc or shell path. Install the unprivileged forced-command parser under
+   root-owned `/usr/local/libexec`; do not weaken the 0750 application root just
+   to make the SSH entrypoint executable. The `aws-candidate` workflow must use its environment-bound
    OIDC role to add only the current Runner IPv4 `/32` to Lightsail TCP 22 and
    remove that exact rule in `always()` cleanup; never statically allow all
    GitHub Actions ranges or cloud SSH `0.0.0.0/0`. Host UFW may admit IPv4 SSH

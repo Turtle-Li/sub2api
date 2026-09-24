@@ -41,9 +41,6 @@ case "$archive_digest_hex" in
   *[!0-9a-f]*|'') echo "Invalid archive digest." >&2; exit 2 ;;
 esac
 [ "${#archive_digest_hex}" -eq 64 ] || { echo "Invalid archive digest length." >&2; exit 2; }
-[ -f "$IMAGE_RELEASE_SCRIPT" ] || {
-  echo "GitHub image release helper is unavailable." >&2
-  exit 1
-}
-
+# The deploy account intentionally cannot traverse the root-only application
+# directory. sudo performs the policy check and resolves this root-owned helper.
 exec "$SUDO_BIN" -n "$IMAGE_RELEASE_SCRIPT" "$commit" "$version" "$archive_digest"

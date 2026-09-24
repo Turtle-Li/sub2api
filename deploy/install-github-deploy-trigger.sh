@@ -7,7 +7,8 @@
 set -Eeuo pipefail
 
 APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
-TRIGGER_SCRIPT="${APP_DIR}/scripts/sub2api-github-deploy-trigger.sh"
+TRIGGER_SOURCE="${APP_DIR}/scripts/sub2api-github-deploy-trigger.sh"
+TRIGGER_SCRIPT="${SUB2API_GITHUB_DEPLOY_TRIGGER_PATH:-/usr/local/libexec/sub2api-github-deploy-trigger}"
 IMAGE_RELEASE_SCRIPT="${APP_DIR}/scripts/sub2api-github-image-release.sh"
 DEPLOY_USER="${SUB2API_GITHUB_DEPLOY_USER:-sub2api-github-deploy}"
 DEPLOY_HOME="${SUB2API_GITHUB_DEPLOY_HOME:-/var/lib/sub2api-github-deploy}"
@@ -63,12 +64,16 @@ case "$DEPLOY_USER" in
   ''|-*|*[!a-zA-Z0-9_-]*) die "deploy user contains unsupported characters" ;;
 esac
 
-for command_name in install useradd getent id ssh-keygen visudo sudo; do
+for command_name in dirname install useradd getent id ssh-keygen visudo sudo; do
   require_cmd "$command_name"
 done
-[ -x "$TRIGGER_SCRIPT" ] || die "release trigger is missing or not executable: $TRIGGER_SCRIPT"
+[ -x "$TRIGGER_SOURCE" ] || die "release trigger source is missing or not executable: $TRIGGER_SOURCE"
 [ -x "$IMAGE_RELEASE_SCRIPT" ] \
   || die "GitHub image receiver is missing or not executable: $IMAGE_RELEASE_SCRIPT"
+case "$TRIGGER_SCRIPT" in
+  /*) ;;
+  *) die "deploy trigger path must be absolute: $TRIGGER_SCRIPT" ;;
+esac
 
 key_line="$(awk 'NF && $1 !~ /^#/ { print; exit }' "$PUBLIC_KEY_FILE")"
 [ -n "$key_line" ] || die "public key file contains no key"
@@ -87,6 +92,14 @@ else
   useradd --system --create-home --home-dir "$DEPLOY_HOME" \
     --shell /bin/bash --user-group "$DEPLOY_USER"
 fi
+
+# The application root remains root-only 0750. Install the non-privileged
+# forced-command parser outside that tree so sshd can execute it without
+# granting the deploy account traversal access to runtime configuration.
+install -d -o root -g root -m 755 "$(dirname "$TRIGGER_SCRIPT")"
+install -o root -g root -m 755 "$TRIGGER_SOURCE" "$TRIGGER_SCRIPT"
+sudo -u "$DEPLOY_USER" -- test -x "$TRIGGER_SCRIPT" \
+  || die "deploy user cannot execute forced-command trigger: $TRIGGER_SCRIPT"
 
 install -d -o root -g root -m 755 "$DEPLOY_HOME"
 # sshd on Ubuntu only accepts this account's authorized_keys when the account
