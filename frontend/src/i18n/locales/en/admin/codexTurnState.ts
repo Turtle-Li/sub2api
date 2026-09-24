@@ -1,8 +1,8 @@
 export default { codexTurnState: {
-  "title": "Codex renewal monitor",
-  "description": "Manage accounts, models, proxy sources and renewal using the existing probe tool.",
+  "title": "Degradation Fix",
+  "description": "Monitor and fix OpenAI/Codex degradation, automatically maintaining full-blood cluster cookies and 780-byte anti-degradation tickets.",
   "accounts": "Manage accounts",
-  "unavailable": "Panel operation failed. Check this project’s manager service and configuration.",
+  "unavailable": "Panel operation failed. Check the degradation fix service and configuration.",
   "accountPicker": {
     "title": "Choose OpenAI OAuth-compatible account",
     "label": "Account",

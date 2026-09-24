@@ -1,8 +1,8 @@
 export default { codexTurnState: {
-  "title": "Codex 续期监控",
-  "description": "沿用现有探针工具，管理账号、模型、代理来源与定时续期。",
+  "title": "降智修复",
+  "description": "监控与修复 OpenAI/Codex 账号降智，自动维持全血集群路由 Cookie 与 780 字节防降智票据。",
   "accounts": "账号管理",
-  "unavailable": "面板操作失败，请检查本项目探针服务是否启动、配置是否有效。",
+  "unavailable": "面板操作失败，请检查降智修复守护服务是否启动、配置是否有效。",
   "accountPicker": {
     "title": "选择 OpenAI OAuth 兼容账号",
     "label": "账号",

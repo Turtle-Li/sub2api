@@ -440,6 +440,20 @@ func ProvideClaudeCodeVersionSyncService(
 	return svc
 }
 
+// ProvideOpenAICodexAntiDegradationService creates and starts OpenAICodexAntiDegradationService.
+// 维持 Phoenix 满血集群路由 Cookie 与 780 字节防降智票据，自动守护受保护账号。
+func ProvideOpenAICodexAntiDegradationService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	lockCache LeaderLockCache,
+	db *sql.DB,
+) *OpenAICodexAntiDegradationService {
+	svc := NewOpenAICodexAntiDegradationService(accountRepo, proxyRepo, DefaultAntiDegradationInterval)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "openai-codex-anti-degradation", 2*time.Minute)
+	svc.Start()
+	return svc
+}
+
 // ProvideProxyExpiryService creates and starts ProxyExpiryService.
 func ProvideProxyExpiryService(proxyRepo ProxyRepository, lockCache LeaderLockCache, db *sql.DB) *ProxyExpiryService {
 	svc := NewProxyExpiryService(proxyRepo, time.Minute)
@@ -978,6 +992,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountExpiryService,
 	ProvideOpenAICodexVersionSyncService,
 	ProvideClaudeCodeVersionSyncService,
+	ProvideOpenAICodexAntiDegradationService,
 	ProvideProxyExpiryService,
 	ProvideProxyTimezoneBackfillService,
 	ProvideSubscriptionExpiryService,

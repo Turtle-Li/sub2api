@@ -141,7 +141,7 @@ describe('CodexTurnStateView panel bridge', () => {
 
     expect(iframe.attributes('sandbox')).toBe('allow-scripts')
     expect(iframe.attributes('src')).toBeUndefined()
-    expect(iframe.attributes('srcdoc')).toContain('Codex 续期监控')
+    expect(iframe.attributes('srcdoc')).toContain('降智修复')
     expect(iframe.attributes('srcdoc')).not.toContain('test-session-marker')
     expect(iframe.attributes('srcdoc')).not.toContain('id="addId"')
     expect(iframe.attributes('srcdoc')).not.toContain('confirm(')

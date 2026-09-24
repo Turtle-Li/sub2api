@@ -154,6 +154,14 @@ func TestAccountGetPinnedCodexTurnState(t *testing.T) {
 		applied2 := applyPinnedCodexTurnState(headers2, acc, "gpt-5.6-terra")
 		require.False(t, applied2)
 		require.Equal(t, "existing-state", headers2.Get(openAICodexTurnStateHeader))
+
+		// When client already has its own turn-state (multi-turn conversation),
+		// it must NOT be overwritten by pinned state, preserving dialogue session state
+		headers3 := make(http.Header)
+		headers3.Set(openAICodexTurnStateHeader, "client-multi-turn-state")
+		applied3 := applyPinnedCodexTurnState(headers3, acc, "gpt-6-astra")
+		require.False(t, applied3)
+		require.Equal(t, "client-multi-turn-state", headers3.Get(openAICodexTurnStateHeader))
 	})
 
 	t.Run("cookie injection and merging", func(t *testing.T) {
@@ -247,6 +255,26 @@ func TestAccountGetPinnedCodexTurnState(t *testing.T) {
 		require.True(t, applied)
 		require.Equal(t, "gAAAAAB_astra_292", h.Get(openAICodexTurnStateHeader))
 		require.Empty(t, h.Get("Cookie"))
+	})
+
+	t.Run("routing cookie alone is injected when turn state is empty", func(t *testing.T) {
+		accWithCookieOnly := &Account{
+			ID:       23,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				PinnedCodexRoutingCookieExtraKey: map[string]any{
+					"cookie":     "__cflb=cookie_only_val; __oailb=unified-149",
+					"expires_at": future.Format(time.RFC3339),
+				},
+			},
+		}
+
+		h := make(http.Header)
+		applied := applyPinnedCodexTurnState(h, accWithCookieOnly, "gpt-6-astra")
+		require.True(t, applied)
+		require.Empty(t, h.Get(openAICodexTurnStateHeader))
+		require.Equal(t, "__cflb=cookie_only_val; __oailb=unified-149", h.Get("Cookie"))
 	})
 }
 
