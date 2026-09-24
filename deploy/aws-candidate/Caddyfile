@@ -1,0 +1,85 @@
+{
+	admin 127.0.0.1:2019
+	servers {
+		protocols h1 h2
+	}
+}
+
+(sub2_proxy) {
+	reverse_proxy sub2api-blue:8080 {
+		header_up X-Forwarded-For {remote_host}
+		header_up -X-Real-IP
+		header_up -CF-Connecting-IP
+		flush_interval -1
+		transport http {
+			dial_timeout 30s
+			response_header_timeout 1800s
+			read_timeout 1800s
+			write_timeout 1800s
+		}
+	}
+}
+
+api.turtleligpt.com {
+	tls /etc/sub2api-certs/api/current/fullchain.pem /etc/sub2api-certs/api/current/privkey.pem
+	encode zstd gzip
+
+	@responses_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
+	@too_large_responses_body {
+		path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
+		expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 100000000`
+	}
+	handle @too_large_responses_body {
+		respond "请求体过大：本次请求超过 100MB，服务器已提前拦截。" 413
+	}
+	handle @responses_request_body {
+		request_body {
+			max_size 100MB
+		}
+		import sub2_proxy
+	}
+
+	@too_large_default_body expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 100000000`
+	handle @too_large_default_body {
+		respond "请求体过大：本次请求超过 100MB，服务器已提前拦截。" 413
+	}
+	handle {
+		request_body {
+			max_size 100MB
+		}
+		import sub2_proxy
+	}
+}
+
+www.turtleligpt.com {
+	tls /etc/sub2api-certs/www/current/fullchain.pem /etc/sub2api-certs/www/current/privkey.pem
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+	@homepage path /
+	handle @homepage {
+		root * /data/sub2-web/home
+		rewrite * /index.html
+		header Cache-Control "no-cache"
+		file_server
+	}
+	@helpcenter path /helpcenter /helpcenter/
+	handle @helpcenter {
+		root * /data/sub2-web/help
+		rewrite * /help-center.html
+		header Cache-Control "no-cache"
+		file_server
+	}
+	handle_path /helpcenter/* {
+		root * /data/sub2-web/help
+		file_server
+	}
+	@site_static path /logo.png /favicon.ico
+	handle @site_static {
+		root * /data/sub2-web/home
+		file_server
+	}
+	handle {
+		header Cache-Control "no-store"
+		import sub2_proxy
+	}
+}

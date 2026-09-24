@@ -1,0 +1,33 @@
+# Replace the bootstrap proxy only after certificate and application checks.
+services:
+  caddy:
+    image: caddy@sha256:77c07d5ebfa5be9fd6c820d2094ae662c9e7eeb9bf98346b7f639900263ee2a2
+    container_name: sub2api-candidate-caddy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - sub2api-candidate-network
+    volumes:
+      - /opt/sub2api/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/sub2api/certs:/etc/sub2api-certs:ro
+      - sub2api-candidate-caddy-data:/data
+      - sub2api-candidate-caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  sub2api-candidate-network:
+    external: true
+
+volumes:
+  sub2api-candidate-caddy-data:
+    external: true
+  sub2api-candidate-caddy-config:
+    external: true

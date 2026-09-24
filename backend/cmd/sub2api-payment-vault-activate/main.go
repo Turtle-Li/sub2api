@@ -43,9 +43,10 @@ const (
 	requestVaultRef = sandboxRequestVaultRef
 	webhookVaultRef = sandboxWebhookVaultRef
 
-	sandboxSub2Host     = "sub2api-new"
-	liveAzureSub2Host   = "sub2api-candidate"
-	liveStandbySub2Host = "sub2api-new"
+	sandboxSub2Host      = "sub2api-new"
+	liveAzureSub2Host    = "sub2api-candidate"
+	liveStandbySub2Host  = "sub2api-new"
+	liveAWSCandidateHost = "sub2api-aws-candidate"
 
 	organizationID = "84fc3e66-e959-4bc8-8d78-6f8c3d3483fb"
 	productID      = "00da03c5-bc5c-4edb-9d4c-c77da0e969d5"
@@ -223,7 +224,7 @@ func activationProfileFor(name string) (activationProfile, error) {
 }
 
 func validLiveSub2Host(host string) bool {
-	return host == liveAzureSub2Host || host == liveStandbySub2Host
+	return host == liveAzureSub2Host || host == liveStandbySub2Host || host == liveAWSCandidateHost
 }
 
 func validSub2HostForProfile(profile activationProfile, host string) bool {

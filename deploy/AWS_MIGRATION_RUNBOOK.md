@@ -47,21 +47,42 @@ the following inert configuration:
 SUB2API_APP_DIR=/opt/sub2api
 SUB2API_AUTODEPLOY_PRODUCTION_REPO_URL=https://github.com/Turtle-Li/sub2api.git
 SUB2API_AUTODEPLOY_PRODUCTION_BRANCH=main
-SUB2API_PUBLIC_HEALTH_RESOLVE=api.turtleligpt.com:443:54.248.123.174
+SUB2API_PUBLIC_HEALTH_RESOLVE=api.turtleligpt.com:443:127.0.0.1
 SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external
 SUB2API_EXTERNAL_RUNTIME_ENV_FILE=/etc/sub2api-external-runtime.env
 SUB2API_EXTERNAL_CA_FILE=/opt/sub2api/db-host-ca/ca.crt
+SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby
+SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=true
 ```
 
 The installer invocation used `--install-blue-green-helper`,
 `--no-enable-runtime-guard`, and `--no-enable`. Before any later installation,
 check the canonical maintenance-lock contract and existing config; never
-replace a live config merely to rerun an installer. Both timers must remain
-`disabled` and `inactive` until an approved first slot and recovery exercise
-exist. The current `activate` default in the generated config is not a
-standby guarantee. Do not dispatch the normal GitHub receiver or run the
-blue-green wrapper against an empty host: they require a healthy existing
-slot and matching Caddy host/startup/Admin views.
+replace a live config merely to rerun an installer. A `--replace-config` run
+rewrites the generated file and does **not** reconstruct the unified-payment
+managed block. Back up and reapply the complete managed block, including both
+markers and all project-defined keys, before allowing a new slot to start; a
+volume name alone is not sufficient. Re-verify `preserve-standby`, the real
+request probe, and the loopback health resolve after every replacement. Both
+timers must remain `disabled` and `inactive` until cutover is separately
+approved.
+
+### Deployment checkpoint (2026-09-25)
+
+- Fork `main` commit `a9f26360fcacf48a30da0ba67d4e5a1ac8c629fb`
+  (`0.2.8`) is healthy on `sub2api-green`; Caddy targets only that slot.
+- The final release passed authenticated model-list and tiny Responses probes
+  using `gpt-5.6-sol`; application/Caddy fatal and 5xx gates were clear.
+- Operator-only pinned-IP checks passed health, unauthenticated `/v1/models`
+  (401), `/api/v1/settings/public`, homepage, help, redirect, and TLS identity.
+- PostgreSQL 5432 and Redis 6379 connectivity from the application container
+  passed after adding exact source `54.248.123.174` to the data-host allowlist.
+- AWS remains `traffic=accepting background=standby`; Azure remains the live
+  production host. DNS and background ownership are unchanged.
+- The restricted GitHub receiver is installed with a distinct Vault-backed key
+  and `aws-candidate` GitHub Environment. An end-to-end workflow run from
+  repository `main` remains required. Certificate renewal automation, alert
+  delivery, backup/restore drill, and load/headroom evidence remain open gates.
 
 ## 3. First application deployment: separate approval gate
 
@@ -96,10 +117,11 @@ slot and matching Caddy host/startup/Admin views.
    import the Azure GCP PROXY listener, live private key, or active Caddy
    certificate state by blind copying. Ensure the API certificate renewal and
    www ACME challenge both work on the AWS route before DNS cutover.
-5. Establish a candidate-only release image/rollback point and its restricted
-   GitHub Actions SSH receiver with a distinct Vault-managed Ed25519 key.
-   Verify the forced-command account cannot run arbitrary commands. Do not
-   change production GitHub deploy secrets to the candidate prematurely.
+5. Preserve the candidate-only release image/rollback point and restricted
+   GitHub Actions SSH receiver with its distinct Vault-managed Ed25519 key.
+   The receiver must remain forced-command-only with no PTY, forwarding, user
+   rc or shell path. Prove the complete `main` workflow against the separate
+   `aws-candidate` Environment; do not replace `azure-production` secrets.
 6. Enroll the candidate in Komari using an independent Vault-backed token
    and the pinned Agent described in the `infra-monitoring` project. Test a
    delivered notification; the present Lightsail status alarm has notifications

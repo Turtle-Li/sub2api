@@ -132,6 +132,8 @@ CADDY_CONTAINER="${SUB2API_CADDY_CONTAINER:-sub2api-caddy}"
 EXTERNAL_RUNTIME_ENV_FILE="${SUB2API_EXTERNAL_RUNTIME_ENV_FILE:-}"
 EXTERNAL_CA_FILE="${SUB2API_EXTERNAL_CA_FILE:-}"
 DUAL_NODE_RUNTIME_ENABLED="${SUB2API_DUAL_NODE_RUNTIME_ENABLED:-false}"
+RELEASE_BACKGROUND_MODE="${SUB2API_RELEASE_BACKGROUND_MODE:-activate}"
+REAL_REQUEST_PROBE_ENABLED="${SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED:-false}"
 RUNTIME_CONFIG_EXPLICIT=false
 
 usage() {
@@ -770,6 +772,14 @@ case "$DUAL_NODE_RUNTIME_ENABLED" in
   true|false) ;;
   *) die "SUB2API_DUAL_NODE_RUNTIME_ENABLED must be true or false" ;;
 esac
+case "$RELEASE_BACKGROUND_MODE" in
+  activate|preserve-standby) ;;
+  *) die "SUB2API_RELEASE_BACKGROUND_MODE must be activate or preserve-standby" ;;
+esac
+case "$REAL_REQUEST_PROBE_ENABLED" in
+  true|false) ;;
+  *) die "SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED must be true or false" ;;
+esac
 require_docker_name SUB2API_RUNTIME_GUARD_NETWORK "$RUNTIME_NETWORK"
 require_docker_name SUB2API_RUNTIME_GUARD_DATA_VOLUME "$RUNTIME_DATA_VOLUME"
 require_docker_name SUB2API_CADDY_CONTAINER "$CADDY_CONTAINER"
@@ -794,6 +804,7 @@ for file in \
   deploy/verify_image_route_contract.py \
   deploy/sub2api-runtime-guard.sh \
   deploy/sub2api-github-deploy-trigger.sh \
+  deploy/install-github-deploy-trigger.sh \
   deploy/sub2api-cert-receiver.sh \
   deploy/sub2api-cert-deploy-trigger.sh \
   deploy/install-sub2api-cert-receiver.sh \
@@ -818,6 +829,7 @@ bash -n "${SOURCE_ROOT}/deploy/sub2api-real-request-probe.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-runtime-guard.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh"
+bash -n "${SOURCE_ROOT}/deploy/install-github-deploy-trigger.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-cert-receiver.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-cert-deploy-trigger.sh"
 bash -n "${SOURCE_ROOT}/deploy/install-sub2api-cert-receiver.sh"
@@ -947,9 +959,9 @@ else
     printf 'SUB2API_AUTODEPLOY_LOCK_WAIT_SECONDS=%s\n' '900'
     printf 'SUB2API_AUTODEPLOY_FAILURE_RETRY_SECONDS=%s\n' '1800'
     printf 'SUB2API_RELEASE_ALLOW_PREEXISTING_DRAINING_CONTAINER=%s\n' 'false'
-    printf 'SUB2API_RELEASE_BACKGROUND_MODE=%s\n' 'activate'
+    printf 'SUB2API_RELEASE_BACKGROUND_MODE=%s\n' "$RELEASE_BACKGROUND_MODE"
     printf 'SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=%s\n' 'preserve'
-    printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=%s\n' 'false'
+    printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=%s\n' "$REAL_REQUEST_PROBE_ENABLED"
     printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_SCRIPT=%s\n' "$APP_DIR/scripts/sub2api-real-request-probe.sh"
     printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_KEY_FILE=%s\n' "$APP_DIR/secrets/release-probe-api-key"
     printf 'SUB2API_RELEASE_REAL_REQUEST_PROBE_MODEL=%s\n' 'gpt-5.6-sol'
@@ -996,6 +1008,8 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-maintenance-lock.sh" \
   "${RUNTIME_GUARD_EXECUTABLE%/*}/sub2api-maintenance-lock.sh"
 install -D -m 755 "${SOURCE_ROOT}/deploy/sub2api-github-deploy-trigger.sh" \
   "${SCRIPT_DIR}/sub2api-github-deploy-trigger.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/install-github-deploy-trigger.sh" \
+  "${SCRIPT_DIR}/install-github-deploy-trigger.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-cert-receiver.sh" \
   "${SCRIPT_DIR}/sub2api-cert-receiver.sh"
 install -D -m 755 "${SOURCE_ROOT}/deploy/sub2api-cert-deploy-trigger.sh" \

@@ -1,7 +1,9 @@
 # AWS Sub2API migration candidate (2026-09-23)
 
-This is a staging host only. Azure `sub2api-candidate` continues to serve the
-application and own background work. The old `sub2api-new` is not a fallback.
+This is a staging host only. As of 2026-09-25, Azure `sub2api-candidate`
+continues to serve production traffic and own background work. AWS accepts
+operator-only origin probes while remaining `background=standby`; public DNS
+has not changed. The old `sub2api-new` is not a fallback.
 Historical GCP Taiwan ingress instructions in this repository are not current:
 the API A record resolved directly to Azure `4.216.216.16` on 2026-09-23.
 Cloud-resource deletion was not independently verified in this task.
@@ -10,16 +12,18 @@ Cloud-resource deletion was not independently verified in this task.
 | --- | --- |
 | Registry host ID | `srv-aws-sub2api-candidate` |
 | AWS account/region/AZ | `633841884781`, `ap-northeast-1`, `ap-northeast-1a` |
-| Lightsail instance | `sub2api-aws-small-candidate`, Ubuntu 24.04 x86_64 |
+| Lightsail instance | `sub2api-aws-small-candidate-v2`, Ubuntu 24.04 x86_64 |
 | Bundle | `small_3_0`: 2 vCPU, 2 GiB RAM, 60 GB disk, 3 TB monthly transfer, $12/month base |
 | Static public IPv4 | `54.248.123.174` (`sub2api-aws-small-ip`) |
-| SSH | `ubuntu:22`, Mac-owned public key `SHA256:ZNtRYxiEl8geAnff30YCs0lJlc1wi6sMahsFuFe4WwA`; host ED25519 fingerprint `SHA256:pzaFT0Kylal6P5nKsQtoaoTvgORxIxb1BxDMxposYGk` |
-| Public ingress | TCP 22 from the temporary operator IPv4 `/32` and Lightsail browser-SSH alias only; no public HTTP/HTTPS or database ports |
-| Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700; no application containers |
+| SSH | `ubuntu:22`, Mac-owned public key `SHA256:ZNtRYxiEl8geAnff30YCs0lJlc1wi6sMahsFuFe4WwA`; v2 host ED25519 fingerprint `SHA256:j+7YLMWXvxqovDnB4sEYqtnkU8ETrcipmsxUFtH47aU`, verified against the Lightsail control plane |
+| Public ingress | TCP 80/443 from the current operator IPv4 `115.195.32.146/32`; TCP 22 from that `/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. Database ports are not public. |
+| Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700 |
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
-| Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, candidate-pinned health resolve, both release/recovery timers disabled and inactive |
-| Proxy bootstrap | Pinned Caddy image in `sub2api-candidate-caddy`, host loopback `127.0.0.1:8088` only; `/health` returns `candidate-proxy-ready`, all other paths return 503; not a production Caddy route |
-| Local Docker state | Project network and separate application, Caddy data/config, payment-agent, and Feishu-agent named volumes; agent volumes have no credential/socket injection |
+| Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `preserve-standby`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive |
+| GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol; deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630` |
+| Application release | Fork `main` commit `a9f26360fcacf48a30da0ba67d4e5a1ac8c629fb`, version `0.2.8`, active slot `sub2api-green`, healthy with zero restarts/OOM |
+| Proxy | AWS-specific Caddy route for API and www; the operator-only origin passed HTTPS health, auth-boundary, public settings, homepage, help, and HTTP-to-HTTPS redirect probes |
+| Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
 | Public www assets | Six regular files in the Caddy data volume at `/data/sub2-web/{home,help}`, copied from the serving Azure Caddy volume and SHA-256 matched file by file |
 
 SSH effective settings were verified as `PubkeyAuthentication yes`,
@@ -29,24 +33,22 @@ no private key was exported from AWS. The local private key remains device-local
 and is not a project artifact. Its Vault reconciliation is pending; no
 `vault_ref` has been invented.
 
-The Lightsail firewall admits TCP 22 only from the operator's current IPv4
-`125.120.233.128/32` and the `lightsail-connect` console alias. Host UFW
-additionally permits TCP 22 only from that IPv4 and denies other inbound
-traffic. The console alias is therefore not independently sufficient to pass
-host UFW; retain tested Mac access before changing either layer. The operator
-address is temporary and must be revalidated before future access.
+The Lightsail firewall admits TCP 80/443 only from the operator's current IPv4
+`115.195.32.146/32`. TCP 22 additionally admits Azure `4.216.216.16/32` and
+the `lightsail-connect` console alias. Host UFW mirrors the operator-only
+HTTP/HTTPS boundary and admits SSH from the operator and Azure. The operator
+address is temporary and must be revalidated before future access; never widen
+the candidate origin to `0.0.0.0/0` before an approved cutover.
 
-The repository's exact-commit `deploy/` tree was staged root-owned on the
-candidate. `install-autodeploy.sh` installed the blue-green helper and control
-units with `--dependency-mode external`, `--no-enable-runtime-guard`, and
-`--no-enable`. Both timers were confirmed disabled/inactive; Docker has zero
-application containers. The configured external runtime file and CA path are
-references only: neither file nor any database credential has been provisioned.
-The generated release configuration contains a default `activate` value, but
-no image receiver or release may be invoked before the migration gates in
-[`AWS_MIGRATION_RUNBOOK.md`](AWS_MIGRATION_RUNBOOK.md) are passed. Do not run
-`sub2api-autodeploy.sh --check` as a purported no-write host preflight: it
-fetches Git refs and creates a server-side worktree cache.
+The repository's reviewed deployment tree bootstrapped the first application
+slot and then completed a verified blue-green release. The final release log is
+`/var/log/sub2api-release/gha-20260924-213221-a9f26360-62626`: health passed,
+authenticated `/v1/models` and `/v1/responses` returned 200 using
+`gpt-5.6-sol`, and Caddy switched only to `sub2api-green:8080`. PostgreSQL 5432
+and Redis 6379 TCP connectivity from the application container both pass. AWS
+remains `traffic=accepting background=standby`; both timers remain disabled and
+inactive. Do not run `sub2api-autodeploy.sh --check` as a purported no-write
+host preflight: it fetches Git refs and creates a server-side worktree cache.
 
 A Lightsail `StatusCheckFailed` alarm is present and currently has notifications
 disabled because this account has no verified Lightsail contact method. The
@@ -67,12 +69,11 @@ DNS was changed. The source Azure Caddyfile has an old GCP PROXY-protocol
 listener and external API certificate bind: do not copy it unchanged to AWS.
 The six copied www files exclude the unrecovered historical DMG download.
 
-Monitoring is **not** complete: sysstat and an AWS status alarm without
-notifications are not an enrolled Komari Agent or a tested alert path. Komari
-needs a candidate-specific client/token held in Vault and an outbound-only
-Agent deployment using `infra-monitoring/agents/komari/README.md`. The Vault
-task grant was `not-granted` at the last check; no runtime, payment, Feishu,
-database, deploy-receiver, or monitor secret was copied from Azure.
+Monitoring and recovery are **not** complete: sysstat and an AWS status alarm
+without verified notification delivery are not sufficient cutover coverage.
+The application, payment, Feishu, and database injection paths are active, but
+the GitHub deploy identity, candidate-specific backup/restore drill, certificate
+renewal automation, and owner-notified alert path remain separate gates.
 
 ## Bandwidth probe
 
@@ -87,22 +88,19 @@ fixed 16 MB/s in this test.
 
 ## Remaining migration gates
 
-- Reconcile the SSH identity in Vault and configure a stable SSH alias;
-  replace the temporary operator-address firewall rule when its address changes.
-- Establish candidate-only backups, notification delivery, rollback image,
-  and the restricted GitHub receiver under the canonical maintenance-lock
-  contract. An inert control-script install is already complete.
-- Replace the loopback Caddy stub with the actual AWS-specific API/www site,
-  issue/restore certificates through the reviewed mechanism, and verify
-  the six public www assets plus all dynamic routes on the candidate IP.
-- Restore compatible application configuration and its credential agents
-  through the reviewed Vault injection flow, never by copying raw secrets.
-- Decide the PostgreSQL/Redis location; authorize only exact candidate network
-  sources after a backup and isolated restore test. Do not rerun the completed
-  September 12 currency conversion or restore an old full DB over new writes.
+- Reconcile the SSH and GitHub deploy identities in Vault; replace the temporary
+  operator-address firewall rule when its address changes.
+- Establish candidate-only backups, verified notification delivery, rollback
+  image, certificate renewal automation, and a restore drill.
+- Trigger the repository workflow against `aws-candidate` after the deployment
+  changes reach `main`, and retain the successful run as end-to-end evidence.
+  Keep the separate `azure-production` Environment and its secrets unchanged.
+- Preserve the exact database allowlist at `54.248.123.174` and remove it only
+  after rollback/cutover decisions. Do not rerun the September 12 currency
+  conversion or restore an old full DB over new writes.
 - Verify 2 GiB memory headroom with the real image and background workload,
   sustained bandwidth under representative concurrency, DNS, TLS, www static
   assets, and public API smoke before any production cutover.
 
-No production DNS, Azure runtime, database firewall, or customer traffic was
-changed when preparing this candidate.
+No production DNS or Azure runtime ownership was changed. The database host now
+allows the exact AWS source for the tested candidate only.

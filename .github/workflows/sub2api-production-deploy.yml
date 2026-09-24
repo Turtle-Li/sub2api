@@ -8,6 +8,14 @@ on:
         required: false
         type: boolean
         default: false
+      deployment_target:
+        description: 'GitHub Environment that owns the target host SSH secrets'
+        required: true
+        type: choice
+        options:
+          - azure-production
+          - aws-candidate
+        default: azure-production
 
 # A production release is always explicit. GitHub builds the exact main commit
 # into a linux/amd64 image, compresses its Docker archive, and streams it over
@@ -27,6 +35,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    environment:
+      name: ${{ inputs.deployment_target }}
     steps:
       - name: Validate deployment configuration
         if: ${{ !inputs.build_only }}
@@ -294,6 +304,7 @@ jobs:
           {
             echo "### Sub2API verified image"
             echo
+            echo "- Deployment target: \`${{ inputs.deployment_target }}\`"
             echo "- Commit: \`${SOURCE_COMMIT}\`"
             echo "- Version: \`${VERSION}\`"
             echo "- Runner image ID: \`${IMAGE_ID}\`"

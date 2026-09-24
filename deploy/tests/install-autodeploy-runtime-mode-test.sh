@@ -303,6 +303,8 @@ rm -f -- "$NORMAL_FENCE_CHECKED"
     SUB2API_AUTODEPLOY_UNIT_DIR="$UNIT_DIR" \
     SUB2API_MAINTENANCE_LOCK_FILE="$MAINTENANCE_LOCK_FILE" \
     SUB2API_RUNTIME_GUARD_EXECUTABLE="${TEST_ROOT}/libexec/sub2api-runtime-guard.sh" \
+    SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby \
+    SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=true \
     /bin/bash deploy/install-autodeploy.sh \
       --production-branch main \
       --production-repo https://github.com/Turtle-Li/sub2api.git \
@@ -332,10 +334,13 @@ assert_contains "$CONFIG_FILE" 'SUB2API_CADDY_CONTAINER=candidate-caddy'
 assert_contains "$CONFIG_FILE" 'SUB2API_EXTERNAL_RUNTIME_ENV_FILE=/etc/sub2api-external-runtime.env'
 assert_contains "$CONFIG_FILE" 'SUB2API_EXTERNAL_CA_FILE=/opt/sub2api/db-host-ca/ca.crt'
 assert_contains "$CONFIG_FILE" 'SUB2API_DUAL_NODE_RUNTIME_ENABLED=true'
-assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_BACKGROUND_MODE=activate'
+assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby'
+assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=true'
 assert_contains "$CONFIG_FILE" "SUB2API_MAINTENANCE_LOCK_FILE=${MAINTENANCE_LOCK_FILE}"
 [ -x "${APP_DIR}/scripts/sub2api-maintenance-lock.sh" ] \
   || fail 'script-directory maintenance lock helper was not installed'
+[ -x "${APP_DIR}/scripts/install-github-deploy-trigger.sh" ] \
+  || fail 'GitHub forced-command installer was not installed'
 [ -x "${APP_DIR}/scripts/verify_image_route_contract.py" ] \
   || fail 'image route contract verifier was not installed beside release scripts'
 [ -x "${TEST_ROOT}/libexec/sub2api-maintenance-lock.sh" ] \

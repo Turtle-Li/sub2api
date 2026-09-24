@@ -153,7 +153,7 @@ func TestLiveActivationRequiresExplicitAllowlistedSub2Host(t *testing.T) {
 			t.Fatalf("unsafe activation target accepted: %q", args)
 		}
 	}
-	for _, host := range []string{liveAzureSub2Host, liveStandbySub2Host} {
+	for _, host := range []string{liveAzureSub2Host, liveStandbySub2Host, liveAWSCandidateHost} {
 		target, err := parseActivationTarget([]string{"--profile", "live", "--sub2-host", host, "--pay-identity", identity})
 		if err != nil || target.profile != liveActivationProfile || target.sub2Host != host {
 			t.Fatalf("approved live target rejected: host=%q target=%#v err=%v", host, target, err)
@@ -224,6 +224,7 @@ func TestLiveRemoteCommandsStayScoped(t *testing.T) {
 		t.Fatalf("live payment command lost its isolated profile boundary: %q", livePay)
 	}
 	if !validSub2HostForProfile(liveActivationProfile, liveAzureSub2Host) || !validSub2HostForProfile(liveActivationProfile, liveStandbySub2Host) ||
+		!validSub2HostForProfile(liveActivationProfile, liveAWSCandidateHost) ||
 		validSub2HostForProfile(liveActivationProfile, "sub2api-unapproved") || validSub2HostForProfile(sandboxActivationProfile, liveAzureSub2Host) ||
 		validSub2RemoteCommand(liveActivationProfile, sandboxRuntimeConfigCommand()) {
 		t.Fatal("live command or host allow-list expanded into an unsafe target")
