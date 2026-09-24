@@ -69,8 +69,8 @@ approved.
 
 ### Deployment checkpoint (2026-09-25)
 
-- Fork `main` commit `a9f26360fcacf48a30da0ba67d4e5a1ac8c629fb`
-  (`0.2.8`) is healthy on `sub2api-green`; Caddy targets only that slot.
+- Fork `main` commit `38835f5b9d031fab5331238178cf10f91ea7dc30`
+  (`0.2.8`) is healthy on `sub2api-blue`; Caddy targets only that slot.
 - The final release passed authenticated model-list and tiny Responses probes
   using `gpt-5.6-sol`; application/Caddy fatal and 5xx gates were clear.
 - Operator-only pinned-IP checks passed health, unauthenticated `/v1/models`
@@ -83,9 +83,11 @@ approved.
   and `aws-candidate` GitHub Environment. Its OIDC role is restricted to that
   repository environment and may only manage Lightsail public-port state. The
   workflow opens the current Runner IPv4 `/32` immediately before restricted
-  SSH and removes it in `always()` cleanup. An end-to-end workflow run from
-  repository `main` remains required. Certificate renewal automation, alert
-  delivery, backup/restore drill, and load/headroom evidence remain open gates.
+  SSH and removes it in `always()` cleanup. Run `36067946246` completed the
+  exact-`main` build, restricted upload, blue-green release and cleanup; release
+  log `/var/log/sub2api-release/gha-20260924-224053-38835f5b-106998` is the host
+  evidence. Certificate renewal automation, alert delivery, backup/restore
+  drill, and load/headroom evidence remain open gates.
 
 ## 3. First application deployment: separate approval gate
 
@@ -177,11 +179,13 @@ approved.
 
 The candidate has a static IP, imported public key, key-only SSH, host/cloud
 firewalls, OS/Docker baseline, root-owned private paths, release-control
-scripts and disabled timers. It has separate Docker volumes/network, a
-loopback-only bootstrap Caddy that serves 503 outside its health path, copied
-public www assets and one base-system snapshot. It has **no** application
-container, production Caddy/TLS, database credentials, payment/Feishu agents,
-candidate application/data backup, verified alert delivery, public HTTP/HTTPS,
-or serving role. Its SSH credential still needs owner-led Vault reconciliation;
-no `vault_ref` is asserted. Do not label it migration-ready until Sections 3
-and 4 are independently passed.
+scripts and disabled timers. It has separate Docker volumes/network, the
+AWS-specific Caddy route, copied public www assets, protected external-runtime
+configuration, payment/Feishu Vault Agents and a healthy exact-commit
+application release. PostgreSQL/Redis connectivity, operator origin checks,
+the restricted GitHub workflow and local pinned-IP authenticated models and
+Responses requests have passed. It still lacks current candidate/offsite
+backup plus restore evidence, verified alert delivery, certificate renewal
+automation, sustained 2 GiB memory/load/network headroom evidence and the
+controlled background-owner handoff. Azure remains production and DNS is
+unchanged. Do not label it cutover-ready until those Section 4 gates pass.

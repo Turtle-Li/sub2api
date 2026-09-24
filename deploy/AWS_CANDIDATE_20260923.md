@@ -21,7 +21,7 @@ Cloud-resource deletion was not independently verified in this task.
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
 | Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `preserve-standby`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive |
 | GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
-| Application release | Fork `main` commit `a9f26360fcacf48a30da0ba67d4e5a1ac8c629fb`, version `0.2.8`, active slot `sub2api-green`, healthy with zero restarts/OOM |
+| Application release | Fork `main` commit `38835f5b9d031fab5331238178cf10f91ea7dc30`, version `0.2.8`, active slot `sub2api-blue`, healthy with zero restarts/OOM |
 | Proxy | AWS-specific Caddy route for API and www; the operator-only origin passed HTTPS health, auth-boundary, public settings, homepage, help, and HTTP-to-HTTPS redirect probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
 | Public www assets | Six regular files in the Caddy data volume at `/data/sub2-web/{home,help}`, copied from the serving Azure Caddy volume and SHA-256 matched file by file |
@@ -46,12 +46,19 @@ future access; never widen the Lightsail candidate origin to `0.0.0.0/0` before
 an approved cutover.
 
 The repository's reviewed deployment tree bootstrapped the first application
-slot and then completed a verified blue-green release. The final release log is
-`/var/log/sub2api-release/gha-20260924-213221-a9f26360-62626`: health passed,
+slot and then completed verified blue-green releases. GitHub Actions run
+`36067946246` built and deployed exact `main` commit
+`38835f5b9d031fab5331238178cf10f91ea7dc30`; its OIDC step opened only the
+Runner IPv4 `/32`, the restricted SSH receiver accepted the image, and the
+`always()` cleanup restored the steady-state operator/Azure/browser-console SSH
+rules. The final release log is
+`/var/log/sub2api-release/gha-20260924-224053-38835f5b-106998`: health passed,
 authenticated `/v1/models` and `/v1/responses` returned 200 using
-`gpt-5.6-sol`, and Caddy switched only to `sub2api-green:8080`. PostgreSQL 5432
-and Redis 6379 TCP connectivity from the application container both pass. AWS
-remains `traffic=accepting background=standby`; both timers remain disabled and
+`gpt-5.6-sol`, and Caddy switched only to `sub2api-blue:8080`. A separate local
+Mac probe pinned `api.turtleligpt.com` to `54.248.123.174` and again returned
+200/200 for those authenticated endpoints. PostgreSQL 5432 and Redis 6379 TCP
+connectivity from the application container both pass. AWS remains
+`traffic=accepting background=standby`; both timers remain disabled and
 inactive. Do not run `sub2api-autodeploy.sh --check` as a purported no-write
 host preflight: it fetches Git refs and creates a server-side worktree cache.
 
@@ -93,13 +100,15 @@ fixed 16 MB/s in this test.
 
 ## Remaining migration gates
 
-- Reconcile the SSH and GitHub deploy identities in Vault; replace the temporary
-  operator-address firewall rule when its address changes.
+- Reconcile the operator SSH identity in Vault; the restricted GitHub deploy
+  identity is recorded under Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`.
+  Replace the temporary operator-address firewall rule when its address changes.
 - Establish candidate-only backups, verified notification delivery, rollback
   image, certificate renewal automation, and a restore drill.
-- Trigger the repository workflow against `aws-candidate` after the deployment
-  changes reach `main`, and retain the successful run as end-to-end evidence.
-  Keep the separate `azure-production` Environment and its secrets unchanged.
+- Retain successful GitHub Actions run `36067946246` and release log
+  `/var/log/sub2api-release/gha-20260924-224053-38835f5b-106998` as the
+  end-to-end deployment evidence. Keep the separate `azure-production`
+  Environment and its secrets unchanged.
 - Preserve the exact database allowlist at `54.248.123.174` and remove it only
   after rollback/cutover decisions. Do not rerun the September 12 currency
   conversion or restore an old full DB over new writes.
