@@ -51,6 +51,39 @@ api.turtleligpt.com {
 	}
 }
 
+# DNS-only cutover rehearsal host. Unlike api/www, this host deliberately has
+# no imported certificate directive so Caddy must prove automatic ACME issuance
+# and renewal on the AWS route before production DNS changes.
+aws-test.turtleligpt.com {
+	encode zstd gzip
+
+	@responses_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
+	@too_large_responses_body {
+		path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
+		expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 100000000`
+	}
+	handle @too_large_responses_body {
+		respond "请求体过大：本次请求超过 100MB，服务器已提前拦截。" 413
+	}
+	handle @responses_request_body {
+		request_body {
+			max_size 100MB
+		}
+		import sub2_proxy
+	}
+
+	@too_large_default_body expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 100000000`
+	handle @too_large_default_body {
+		respond "请求体过大：本次请求超过 100MB，服务器已提前拦截。" 413
+	}
+	handle {
+		request_body {
+			max_size 100MB
+		}
+		import sub2_proxy
+	}
+}
+
 www.turtleligpt.com {
 	tls /etc/sub2api-certs/www/current/fullchain.pem /etc/sub2api-certs/www/current/privkey.pem
 	encode zstd gzip

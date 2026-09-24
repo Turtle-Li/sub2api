@@ -7,6 +7,11 @@ what is already installed: [AWS_CANDIDATE_20260923.md](AWS_CANDIDATE_20260923.md
 For the release and runtime contracts read [README.md](README.md), the project
 `AGENTS.md`, and the latest dated production operation records. Historical
 GCP/Taiwan and expired `sub2api-new` instructions are not rollback targets.
+The standalone anti-degradation harvesters and current external monitoring
+solution are intentionally not migrated. The default-off native
+anti-degradation configuration must remain off during migration; any future
+monitoring or mitigation belongs inside Sub2API under a separately reviewed
+design.
 
 ## 1. New host prerequisites
 
@@ -83,11 +88,12 @@ approved.
   and `aws-candidate` GitHub Environment. Its OIDC role is restricted to that
   repository environment and may only manage Lightsail public-port state. The
   workflow opens the current Runner IPv4 `/32` immediately before restricted
-  SSH and removes it in `always()` cleanup. Run `36067946246` completed the
-  exact-`main` build, restricted upload, blue-green release and cleanup; release
-  log `/var/log/sub2api-release/gha-20260924-224053-38835f5b-106998` is the host
-  evidence. Certificate renewal automation, alert delivery, backup/restore
-  drill, and load/headroom evidence remain open gates.
+  SSH and removes it in `always()` cleanup. The current evidence is successful
+  run `36070650495` for exact `main` commit
+  `557d5c079a025f6488c12904137e238734a8c5ed`; release log
+  `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` is the host record.
+  Certificate renewal automation, alert delivery, backup/restore drill, and
+  load/headroom evidence remain open gates.
 
 ## 3. First application deployment: separate approval gate
 
@@ -134,13 +140,13 @@ approved.
    generally only because Lightsail remains the exact source gate; do not add an
    IPv6 SSH allow rule. Prove the complete `main` workflow against the separate
    `aws-candidate` Environment; do not replace `azure-production` secrets.
-6. Enroll the candidate in Komari using an independent Vault-backed token
-   and the pinned Agent described in the `infra-monitoring` project. Test a
-   delivered notification; the present Lightsail status alarm has notifications
-   disabled. Back up candidate-local config, Docker volumes, certificates and
-   release image with off-host retention and a restore drill. The base-system
-   snapshot `sub2api-aws-base-20260923` does not cover these later changes;
-   the production PostgreSQL/Redis backup remains owned by the data host.
+6. Do not migrate Komari, the standalone anti-degradation harvesters or other
+   unstable external monitoring components. Preserve host metrics, application
+   logs, runtime guards and the AWS status alarm for the migration window. Back
+   up candidate-local config, Docker volumes, certificates and the release
+   image with off-host retention and a restore drill. The base-system snapshot
+   `sub2api-aws-base-20260923` does not cover these later changes; the production
+   PostgreSQL/Redis backup remains owned by the data host.
 
 ## 4. Acceptance before traffic
 
@@ -148,32 +154,66 @@ approved.
   Docker restart/OOM counts, migration ledger and all dependency TLS paths.
 - Run pinned-IP API and www checks without changing public DNS. Include
   authenticated model-list and tiny real Responses probes with bounded cost,
-  SSE/WS, login, purchase callback safety, assets, and payment-agent health.
-  Maintain candidate background standby and block unintended financial jobs.
-- Verify public ingress controls, logs, monitoring notification delivery,
-  database backup/restore and current recovery point. Compare 2 GiB memory
-  and sustained/concurrent egress to measured production demand. A short
-  single-upload burst is insufficient evidence.
+  SSE/WS, login, synchronous and asynchronous image generation, Batch Image,
+  purchase callback safety, assets, and payment-agent health. Maintain
+  candidate background standby and block unintended financial jobs.
+- Create a DNS-only `aws-test.turtleligpt.com` A record pointing to the AWS
+  static IP. The test Caddy host must omit imported certificates so automatic
+  ACME issuance and renewal are exercised. Run the same authenticated smoke
+  suite through that hostname before editing the production records.
+- Verify unified-payment live configuration, payment Vault sidecar health,
+  refund rollback readiness, invalid-signature rejection and one owner-approved
+  1-2 fen checkout after recent administrator TOTP step-up. Do not synthesize
+  a successful payment or bypass the provider callback.
+- Verify ordinary and asynchronous image generation plus one low-cost Gemini
+  Batch Image job. If the release-probe group has Batch Image disabled, create
+  a temporary enabled Gemini-group key through the normal admin contract, run
+  the canary and delete the key. Do not enable Batch Image globally merely to
+  make the probe pass.
+- Verify public ingress controls, logs, database backup/restore and current
+  recovery point. Compare 2 GiB memory plus swap and sustained/concurrent
+  egress to measured production demand. A short single-upload burst is
+  insufficient evidence. External monitoring enrollment is not required.
+- Before Azure retirement, replace or clear every database proxy binding. A
+  single AWS node cannot preserve both Tokyo and US-West fixed egress. Use at
+  least one isolated Tokyo node and one isolated US-West node; use a third
+  US-West node if the current independent OAuth backup fault domain must be
+  preserved. Migrate parent accounts and credential shadows only through the
+  authenticated CAS operation with recorded old/new proxy IDs and a reverse-CAS
+  rollback. Never use raw SQL or cross-region automatic fallback.
 - Obtain independent review and owner approval for the exact release image,
   data boundary, DNS changes, maintenance window, stop conditions and rollback.
 
 ## 5. Cutover and rollback
 
-1. Under the canonical lock and documented node-state protocol, fence new
+1. Complete the Azure proxy replacement or remove the affected account
+   bindings, then rerun text/SSE/WS/OAuth refresh probes without any Azure
+   proxy dependency. Keep the old proxy records and nodes intact for reverse-CAS
+   rollback throughout the observation window.
+2. Under the canonical lock and documented node-state protocol, fence new
    background claims on Azure and prove zero old claims before assigning the
    sole owner to AWS. Preserve request-triggered refresh semantics and the
    financial refund-readiness gate. Do not run two active queue consumers.
-2. Change only the approved API/www DNS or proxy targets. Observe real traffic
+3. Change only the approved API/www DNS targets after the automatic-TLS test
+   host and Cloudflare API dry run pass. Observe real traffic
    through at least two effective TTLs and compare error rate, latency,
    WebSocket duration, payment callbacks, database connections, memory and
    network usage. Keep Azure running as the verified same-data rollback host.
-3. On a stop condition, drain admissions and verify refund/readiness fences,
+4. On a stop condition, drain admissions and verify refund/readiness fences,
    then return DNS/proxy and background ownership using the existing
    lock-owning transaction recovery. Do not manually stop containers, delete
    Caddy transactions, restore stale full DB, or select expired `sub2api-new`.
-4. Only after a stable observation window, reconcile obsolete DB sources,
-   renew backup and monitoring ownership, and retire Azure in a separate
-   approved task. Update project and Registry topology records together.
+5. Only after a stable observation window, fresh backup/restore evidence and
+   confirmation that DNS no longer resolves to `4.216.216.16`, reconcile
+   obsolete DB sources and retire Azure. Delete the six approved application
+   resource groups (`sub2_group`, `jp_group`, `westus_group`, `jp2_group`,
+   `westus2_relay_group`, `westus3_relay_group`) and verify that no VM, disk,
+   NIC, public IPv4 or billable attachment remains. Preserve `NetworkWatcherRG`
+   unless separately approved. Update project and Registry topology records
+   together. The first three groups belong to Azure subscription
+   `6835deb1-678b-4067-b516-b57f80e14e25`; the final three belong to
+   `65c9db87-f353-427d-80cc-af2953c8761b`. Inventory and delete in each explicit
+   subscription instead of relying on the CLI default.
 
 ## New-host checklist and current status
 
@@ -184,8 +224,17 @@ AWS-specific Caddy route, copied public www assets, protected external-runtime
 configuration, payment/Feishu Vault Agents and a healthy exact-commit
 application release. PostgreSQL/Redis connectivity, operator origin checks,
 the restricted GitHub workflow and local pinned-IP authenticated models and
-Responses requests have passed. It still lacks current candidate/offsite
-backup plus restore evidence, verified alert delivery, certificate renewal
-automation, sustained 2 GiB memory/load/network headroom evidence and the
-controlled background-owner handoff. Azure remains production and DNS is
-unchanged. Do not label it cutover-ready until those Section 4 gates pass.
+Responses requests have passed. Synchronous and asynchronous image generation,
+payment configuration/readiness and invalid webhook rejection have also passed.
+The remaining functional probes are Gemini Batch Image with an enabled-group
+temporary key and an owner-approved 1-2 fen live checkout. It still lacks
+current candidate/offsite backup plus restore evidence, automatic TLS issuance
+on the test hostname, sustained 2 GiB memory/load/network headroom evidence,
+Azure proxy replacement and the controlled background-owner handoff. Azure
+remains production and DNS is unchanged. Do not label it cutover-ready until
+those Section 4 gates pass. The automatic-TLS Caddyfile is already rendered for
+`sub2api-green`, staged at `/opt/sub2api/Caddyfile.aws-test.staged`, and passes
+Caddy validation without reload; Cloudflare creation and ACME issuance remain
+pending. Also retire the obsolete running Lightsail instance
+`sub2api-aws-small-candidate` after confirming its snapshot dependency, because
+it is separate from the active `sub2api-aws-small-candidate-v2` candidate.
