@@ -19,7 +19,7 @@ GCP/Taiwan ingress are not rollback targets.
 | Public ingress | TCP 80/443 from `0.0.0.0/0` for the production API/www service. TCP 22 remains limited in Lightsail to the current operator IPv4 `115.195.32.146/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. An AWS OIDC role may add only the current GitHub-hosted Runner IPv4 `/32` during an `aws-candidate` release and must remove it in an `always()` cleanup step. Database ports are not public. |
 | Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700 |
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
-| Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `preserve-standby`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive |
+| Release control | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `activate`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive. `activate` is required because AWS is the sole background owner; Azure retains `preserve-standby`. |
 | GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
 | Application release | Fork `main` commit `8561413932d232ab6025527bcebb94b9e5ee711e` from successful GitHub Actions run `36119866358` attempt 2, active image `sub2api:auto-20260925-095956-85614139` and slot `sub2api-green`, healthy with zero restarts/OOM; host release record `/var/log/sub2api-release/gha-20260925-095956-85614139-536585/`; 2 GiB persistent swap is enabled with swappiness 10 |
 | Proxy | AWS-specific Caddy route for production API and www; public HTTPS passed health, auth-boundary, public settings, homepage, authenticated Responses/SSE and synchronous/asynchronous image probes |
@@ -37,6 +37,13 @@ GCP/Taiwan ingress are not rollback targets.
   zero before AWS was activated. AWS then became
   `traffic=accepting/background=active`; no observation showed two active
   background owners.
+- At `2026-09-25T13:49:53Z`, the AWS release configuration was corrected from
+  the pre-cutover `SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby` value to
+  `activate` under the canonical maintenance lock. The previous mode had
+  correctly rejected an attempted local release because AWS was already
+  `traffic=accepting/background=active`. The root-owned mode-0600 backup is
+  `/etc/sub2api-autodeploy.env.pre-activate-20260925T134953Z`; the application
+  runtime and node ownership were unchanged by the configuration repair.
 - At approximately `2026-09-25T10:29:16Z`, Cloudflare DNS record
   `e07382c8d81397662cc0c31110af17f8` for `api.turtleligpt.com` and record
   `e7a4addc66fc2b1c3740438b27647ba4` for the `www.turtleligpt.com` origin
