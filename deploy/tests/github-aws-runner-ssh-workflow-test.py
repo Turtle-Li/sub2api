@@ -32,6 +32,15 @@ class GitHubAwsRunnerSshWorkflowTest(unittest.TestCase):
         self.assertIn('RUNNER_SSH_CIDR="${RUNNER_IPV4}/32"', self.workflow)
         self.assertNotIn("0.0.0.0/0", self.workflow)
 
+    def test_aws_is_the_only_production_deployment_target(self) -> None:
+        self.assertIn(
+            "description: 'AWS production environment that owns the target host SSH secrets'",
+            self.workflow,
+        )
+        self.assertIn("          - aws-candidate\n", self.workflow)
+        self.assertIn("        default: aws-candidate\n", self.workflow)
+        self.assertNotIn("azure-production", self.workflow)
+
     def test_temporary_rule_is_always_closed_after_upload(self) -> None:
         open_index = self.workflow.index("open-instance-public-ports")
         upload_index = self.workflow.index(

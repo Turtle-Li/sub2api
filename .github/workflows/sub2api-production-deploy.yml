@@ -9,13 +9,12 @@ on:
         type: boolean
         default: false
       deployment_target:
-        description: 'GitHub Environment that owns the target host SSH secrets'
+        description: 'AWS production environment that owns the target host SSH secrets'
         required: true
         type: choice
         options:
-          - azure-production
           - aws-candidate
-        default: azure-production
+        default: aws-candidate
 
 # A production release is always explicit. GitHub builds the exact main commit
 # into a linux/amd64 image, compresses its Docker archive, and streams it over
