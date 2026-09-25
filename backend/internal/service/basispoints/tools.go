@@ -400,8 +400,13 @@ func (b *Bridge) translateCall(native object) (object, error) {
 		if err != nil {
 			if recovered, ok := recoverTransportEnvelope(arguments["code"], b.tools); ok {
 				envelope, err = recovered, nil
-			} else if name := b.transportToolHint(arguments["code"]); name != "" {
-				err = fmt.Errorf("%w; tool=%s", err, name)
+			} else if recovered, ok := b.recoverUnmarkedFunctionCode(arguments); ok {
+				envelope, err = recovered, nil
+			} else {
+				err = fmt.Errorf("%w; %s", err, transportArgumentsShape(arguments))
+				if name := b.transportToolHint(arguments["code"]); name != "" {
+					err = fmt.Errorf("%w; tool=%s", err, name)
+				}
 			}
 		}
 	}

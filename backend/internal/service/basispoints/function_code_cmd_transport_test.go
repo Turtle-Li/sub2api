@@ -82,3 +82,38 @@ func TestTransportFailureNamesOnlyCatalogTools(t *testing.T) {
 		t.Fatalf("unknown names must not be echoed, got %v", err)
 	}
 }
+
+func TestFunctionCodeRecoversMissingMarker(t *testing.T) {
+	source := testSource()
+	writeStdin := object{"type": "function", "name": "write_stdin", "parameters": object{
+		"type": "object", "required": []any{"session_id"},
+		"properties": object{"session_id": object{"type": "number"}, "chars": object{"type": "string"}},
+	}}
+	source["tools"] = []any{execCommandTestTool(), writeStdin}
+	_, bridge := mustPrepare(t, source, "scope", nil)
+	native := func(summary, code, metadata string) object {
+		outer, _ := json.Marshal(object{"summary": summary, "code": code, "extended_summary": metadata, "destructive": false, "references": []any{}})
+		return object{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "run_officejs", "arguments": string(outer), "status": "completed"}
+	}
+
+	// 描述性 summary + 原始命令 + 元数据 JSON：唯一匹配的 FUNCTION_CODE 工具。
+	const cmd = "Get-ChildItem -Recurse | Select-String \"TODO\""
+	call, err := bridge.translateCall(native("List TODO comments", cmd, `{"workdir":"/repo"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args := functionCodeTestArguments(t, call); call["name"] != "exec_command" || args["cmd"] != cmd || args["workdir"] != "/repo" {
+		t.Fatalf("unexpected recovery: %v", call)
+	}
+
+	// 元数据不是 JSON 对象或包含未声明字段时不猜测，报错附带结构诊断。
+	for _, metadata := range []string{"list todo", `{"session_id":1}`} {
+		_, err = bridge.translateCall(native("List TODO comments", cmd, metadata))
+		if err == nil || !strings.Contains(err.Error(), "summary=descriptive") {
+			t.Fatalf("expected shape diagnostics for %q, got %v", metadata, err)
+		}
+	}
+	if strings.Contains(err.Error(), "TODO") {
+		t.Fatal("diagnostics must not leak code or summary")
+	}
+}

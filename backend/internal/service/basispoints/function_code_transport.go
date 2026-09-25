@@ -94,3 +94,97 @@ func encodeFunctionCodeTransport(name, field string, args object) (object, error
 		"extended_summary": string(encoded), "destructive": false, "references": []any{},
 	}, nil
 }
+
+// recoverUnmarkedFunctionCode accepts a FUNCTION_CODE call whose summary lost the
+// exact marker (the model wrote a descriptive summary but still sent raw code plus
+// metadata JSON). It only applies when code is not a JSON envelope, extended_summary
+// is one JSON object, and exactly one catalog FUNCTION_CODE tool fits that metadata
+// (or exactly one of the fitting tools is named in the summary). Nothing is parsed
+// out of the code itself.
+func (b *Bridge) recoverUnmarkedFunctionCode(arguments object) (object, bool) {
+	code, codeOK := arguments["code"].(string)
+	metadata, metadataOK := arguments["extended_summary"].(string)
+	trimmed := strings.TrimSpace(code)
+	if !codeOK || !metadataOK || trimmed == "" || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "```") {
+		return nil, false
+	}
+	var args object
+	if decode([]byte(metadata), &args) != nil || args == nil {
+		return nil, false
+	}
+	summary, _ := arguments["summary"].(string)
+	var fits, named []string
+	for name, info := range b.tools {
+		field := functionCodeTransportField(name, info.Kind, info.Parameters)
+		if field == "" || !functionCodeMetadataFits(info.Parameters, field, args) {
+			continue
+		}
+		fits = append(fits, name)
+		if strings.Contains(summary, name) {
+			named = append(named, name)
+		}
+	}
+	var name string
+	switch {
+	case len(named) == 1:
+		name = named[0]
+	case len(fits) == 1:
+		name = fits[0]
+	default:
+		return nil, false
+	}
+	marked := make(object, len(arguments))
+	for key, value := range arguments {
+		marked[key] = value
+	}
+	marked["summary"] = functionCodeTransportPrefix + name
+	envelope, _, err := b.functionCodeTransportEnvelope(marked)
+	return envelope, err == nil
+}
+
+// functionCodeMetadataFits reports whether metadata uses only declared fields and
+// supplies every required field other than the raw-code one.
+func functionCodeMetadataFits(schema object, field string, metadata object) bool {
+	properties, _ := schema["properties"].(object)
+	for key := range metadata {
+		if _, declared := properties[key]; !declared || key == field {
+			return false
+		}
+	}
+	required, _ := schema["required"].([]any)
+	for _, item := range required {
+		key, _ := item.(string)
+		if _, present := metadata[key]; key != field && !present {
+			return false
+		}
+	}
+	return true
+}
+
+// transportArgumentsShape reports structural facts about the outer transport
+// arguments for diagnostics, never their content.
+func transportArgumentsShape(arguments object) string {
+	summaryKind := "missing"
+	if summary, ok := arguments["summary"].(string); ok {
+		switch {
+		case strings.Contains(summary, "codex2api"):
+			summaryKind = "marker_variant"
+		case strings.TrimSpace(summary) != "":
+			summaryKind = "descriptive"
+		default:
+			summaryKind = "empty"
+		}
+	}
+	metadataKind := "missing"
+	if metadata, ok := arguments["extended_summary"].(string); ok {
+		var decoded object
+		if decode([]byte(metadata), &decoded) == nil && decoded != nil {
+			metadataKind = fmt.Sprintf("json_object_%d_keys", len(decoded))
+		} else if strings.TrimSpace(metadata) == "" {
+			metadataKind = "empty"
+		} else {
+			metadataKind = "text"
+		}
+	}
+	return "summary=" + summaryKind + "; extended_summary=" + metadataKind
+}
