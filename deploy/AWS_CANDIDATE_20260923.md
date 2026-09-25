@@ -1,16 +1,14 @@
-# AWS Sub2API migration candidate (2026-09-23)
+# AWS Sub2API production host (started as migration candidate, 2026-09-23)
 
-This is a staging host only. As of 2026-09-25, Azure `sub2api-candidate`
-continues to serve production traffic and own background work. AWS accepts
-public probes only through the DNS-only rehearsal host
-`aws-test.turtleligpt.com` while remaining `background=standby`; production
-`api` and `www` DNS have not changed. The old `sub2api-new` is not a fallback.
-Historical GCP Taiwan ingress instructions in this repository are not current:
-the API A record resolved directly to Azure `4.216.216.16` on 2026-09-23.
-Cloud-resource inventory was rechecked on 2026-09-25 across both Azure
-subscriptions and AWS Lightsail. No Azure resource was deleted in this task.
+This host became the Sub2API production origin on 2026-09-25. AWS now serves
+`api.turtleligpt.com` and `www.turtleligpt.com` and is the sole background
+owner (`background=active`). Azure `sub2api-candidate` remains online, healthy
+and `background=standby` as the immediate rollback origin; it was not deleted
+or stopped. The rehearsal record `aws-test.turtleligpt.com` was deleted after
+the production observation window passed. The old `sub2api-new` and historical
+GCP/Taiwan ingress are not rollback targets.
 
-| Item | Current candidate state |
+| Item | Current production state |
 | --- | --- |
 | Registry host ID | `srv-aws-sub2api-candidate` |
 | AWS account/region/AZ | `633841884781`, `ap-northeast-1`, `ap-northeast-1a` |
@@ -18,18 +16,52 @@ subscriptions and AWS Lightsail. No Azure resource was deleted in this task.
 | Bundle | `small_3_0`: 2 vCPU, 2 GiB RAM, 60 GB disk, 3 TB monthly transfer, $12/month base |
 | Static public IPv4 | `54.248.123.174` (`sub2api-aws-small-ip`) |
 | SSH | `ubuntu:22`, Mac-owned public key `SHA256:ZNtRYxiEl8geAnff30YCs0lJlc1wi6sMahsFuFe4WwA`; v2 host ED25519 fingerprint `SHA256:j+7YLMWXvxqovDnB4sEYqtnkU8ETrcipmsxUFtH47aU`, verified against the Lightsail control plane |
-| Public ingress | TCP 80/443 from `0.0.0.0/0` for the DNS-only automatic-TLS rehearsal and eventual public service. TCP 22 remains limited in Lightsail to the current operator IPv4 `115.195.32.146/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. An AWS OIDC role may add only the current GitHub-hosted Runner IPv4 `/32` during an `aws-candidate` release and must remove it in an `always()` cleanup step. Database ports are not public. |
+| Public ingress | TCP 80/443 from `0.0.0.0/0` for the production API/www service. TCP 22 remains limited in Lightsail to the current operator IPv4 `115.195.32.146/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. An AWS OIDC role may add only the current GitHub-hosted Runner IPv4 `/32` during an `aws-candidate` release and must remove it in an `always()` cleanup step. Database ports are not public. |
 | Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700 |
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
 | Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `preserve-standby`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive |
 | GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
 | Application release | Fork `main` commit `8561413932d232ab6025527bcebb94b9e5ee711e` from successful GitHub Actions run `36119866358` attempt 2, active image `sub2api:auto-20260925-095956-85614139` and slot `sub2api-green`, healthy with zero restarts/OOM; host release record `/var/log/sub2api-release/gha-20260925-095956-85614139-536585/`; 2 GiB persistent swap is enabled with swappiness 10 |
-| Proxy | AWS-specific Caddy route for API and www plus DNS-only `aws-test`; public HTTPS passed health, auth-boundary, public settings, homepage, authenticated Responses/SSE and synchronous/asynchronous image probes |
+| Proxy | AWS-specific Caddy route for production API and www; public HTTPS passed health, auth-boundary, public settings, homepage, authenticated Responses/SSE and synchronous/asynchronous image probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
 | Account egress | The nine previously proxy-bound parent accounts are now direct (`proxy_id=0`). OpenAI OAuth rows were cleared with authenticated expected-value CAS; the Anthropic/Antigravity rows used ordinary authenticated account updates. No replacement proxy node is required for this migration stage. |
 | Backup / NAS | Real upload of ten verified archives completed twice after the NAS identity was installed. Database backup and NAS synchronization timers are enabled and active on the data host, now scheduled once daily at 03:15 and 03:35 Asia/Shanghai with up to five minutes randomized delay. |
 | Public www assets | Six regular files in the Caddy data volume at `/data/sub2-web/{home,help}`, copied from the serving Azure Caddy volume and SHA-256 matched file by file |
-| Automatic-TLS rehearsal | Cloudflare DNS-only A record `aws-test.turtleligpt.com` points to `54.248.123.174`. The active Caddyfile matches the tracked staged SHA-256 `0947c585dbe57f9ad127dee5d3d12832ce058ea0f75f68cd64d3b601af40013f`. Let's Encrypt HTTP-01 validation and initial issuance passed on 2026-09-25; later renewal must still be observed separately. |
+| Production DNS / TLS | Cloudflare switched `api.turtleligpt.com` and the `www.turtleligpt.com` origin from Azure `4.216.216.16` to AWS `54.248.123.174` on 2026-09-25. The active Caddyfile matches tracked SHA-256 `0947c585dbe57f9ad127dee5d3d12832ce058ea0f75f68cd64d3b601af40013f`. Initial issuance passed; later renewal remains separate evidence. |
+
+## Production cutover record — 2026-09-25
+
+- At `2026-09-25T10:26:31Z`, Azure was changed from
+  `traffic=accepting/background=active` to
+  `traffic=accepting/background=standby`. Queue and refund claim checks were
+  zero before AWS was activated. AWS then became
+  `traffic=accepting/background=active`; no observation showed two active
+  background owners.
+- At approximately `2026-09-25T10:29:16Z`, Cloudflare DNS record
+  `e07382c8d81397662cc0c31110af17f8` for `api.turtleligpt.com` and record
+  `e7a4addc66fc2b1c3740438b27647ba4` for the `www.turtleligpt.com` origin
+  changed from `4.216.216.16` to `54.248.123.174`. API remains DNS-only and
+  www remains Cloudflare-proxied. The exact old values are the DNS rollback
+  targets.
+- Protected post-handoff probes returned `200` for models and Responses. A
+  production-DNS SSE request reached its first event in about 1.68 seconds.
+  Internal live, ready and refund-rollback-readiness checks all passed.
+- The observation window ran through `2026-09-25T10:43:28Z`. AWS remained
+  healthy with zero restart, OOM or panic evidence while real user Responses
+  and WebSocket traffic arrived. The final cumulative sample saw 461 requests,
+  423 `2xx`, eight expected `4xx`, and one known `503` on the intentionally
+  non-migrated legacy `/api/v1/admin/codex-turn-state/api/state` monitoring
+  surface; no production model path produced a `5xx`. Azure standby received
+  residual cached-DNS traffic without a `5xx`.
+- After that window, Cloudflare record
+  `65bbd7f20163df4ebd734b9b71279e85` for
+  `aws-test.turtleligpt.com` was deleted with compare-and-swap validation.
+  Public DNS confirmed the test name absent while production API and www
+  continued returning `200`.
+- Unified-payment configuration and webhook readiness passed before cutover.
+  The owner must now complete the real payment checkout/return test on the
+  production www origin. Azure remains online as rollback and must not be
+  deleted or stopped without a separate owner instruction.
 
 SSH effective settings were verified as `PubkeyAuthentication yes`,
 `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, and

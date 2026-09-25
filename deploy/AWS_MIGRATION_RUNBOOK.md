@@ -1,8 +1,9 @@
 # Sub2API: New AWS host and migration runbook
 
-This document governs a future first deployment, validation, and authorized
-cutover. It is **not** authorization to change production DNS, the database
-allowlist, payment writers, or background ownership. Current host facts and
+This document governs deployment, validation, the completed 2026-09-25
+production cutover, and any later rollback or host replacement. It is **not**
+standing authorization for another DNS, database-allowlist, payment-writer or
+background-ownership mutation. Current host facts and
 what is already installed: [AWS_CANDIDATE_20260923.md](AWS_CANDIDATE_20260923.md).
 For the release and runtime contracts read [README.md](README.md), the project
 `AGENTS.md`, and the latest dated production operation records. Historical
@@ -317,6 +318,21 @@ DNS and proxy CAS independently as required by the stop condition. Never use a
 container stop, stale database restore or simultaneous `activate` commands as a
 shortcut.
 
+### Handoff execution record — 2026-09-25
+
+The controlled handoff above completed at `2026-09-25T10:26:31Z`: Azure is
+accepting/standby and AWS is accepting/active. Queue/refund claim checks were
+zero before AWS activation, and no dual-active state occurred. Production API
+and www DNS moved from Azure `4.216.216.16` to AWS `54.248.123.174` at about
+`10:29:16Z`. Protected Models/Responses, SSE, WebSocket and internal readiness
+checks passed. The observation window continued through `10:43:28Z` with zero
+application restarts/OOM/panics and no production model-path `5xx`. The single
+observed `503` belonged to the intentionally non-migrated legacy external
+monitoring/anti-degradation surface and is not a serving-path rollback signal.
+The temporary `aws-test.turtleligpt.com` record was then deleted. Azure remains
+online as the exact background and DNS rollback target pending separate owner
+authorization to retire it.
+
 ## New-host checklist and current status
 
 The candidate has a static IP, imported public key, key-only SSH, host/cloud
@@ -336,11 +352,12 @@ temporary keys tombstoned with immediate 401 verification. The owner-approved
 `www` result origin points to AWS. The automatic data-host backup, isolated
 restore, standby request-load headroom and bounded sustained network evidence
 now pass. The restricted NAS upload and account proxy-clearing gates also pass.
-The candidate still lacks background-active observation and the controlled
-background-owner handoff.
-Initial automatic TLS issuance on the test hostname has passed; later renewal
-observation remains separate evidence. Azure remains production and DNS is
-unchanged. Do not label it cutover-ready until those Section 4 gates pass. Also
+The controlled background-owner handoff, production DNS switch, real-user
+observation and test-host retirement completed on 2026-09-25. AWS is now the
+production origin and sole background owner; Azure remains accepting/standby
+for rollback. Initial automatic TLS issuance passed; later renewal observation
+remains separate evidence. The remaining owner-visible acceptance item is a
+real unified-payment checkout and return test on the production www origin. Also
 retire the obsolete running Lightsail instance
 `sub2api-aws-small-candidate` after confirming its snapshot dependency, because
 it is separate from the active `sub2api-aws-small-candidate-v2` candidate.
