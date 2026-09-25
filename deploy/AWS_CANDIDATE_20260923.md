@@ -2,8 +2,9 @@
 
 This is a staging host only. As of 2026-09-25, Azure `sub2api-candidate`
 continues to serve production traffic and own background work. AWS accepts
-operator-only origin probes while remaining `background=standby`; public DNS
-has not changed. The old `sub2api-new` is not a fallback.
+public probes only through the DNS-only rehearsal host
+`aws-test.turtleligpt.com` while remaining `background=standby`; production
+`api` and `www` DNS have not changed. The old `sub2api-new` is not a fallback.
 Historical GCP Taiwan ingress instructions in this repository are not current:
 the API A record resolved directly to Azure `4.216.216.16` on 2026-09-23.
 Cloud-resource inventory was rechecked on 2026-09-25 across both Azure
@@ -17,16 +18,16 @@ subscriptions and AWS Lightsail. No Azure resource was deleted in this task.
 | Bundle | `small_3_0`: 2 vCPU, 2 GiB RAM, 60 GB disk, 3 TB monthly transfer, $12/month base |
 | Static public IPv4 | `54.248.123.174` (`sub2api-aws-small-ip`) |
 | SSH | `ubuntu:22`, Mac-owned public key `SHA256:ZNtRYxiEl8geAnff30YCs0lJlc1wi6sMahsFuFe4WwA`; v2 host ED25519 fingerprint `SHA256:j+7YLMWXvxqovDnB4sEYqtnkU8ETrcipmsxUFtH47aU`, verified against the Lightsail control plane |
-| Public ingress | TCP 80/443 from the current operator IPv4 `115.195.32.146/32`; steady-state TCP 22 from that `/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. An AWS OIDC role may add only the current GitHub-hosted Runner IPv4 `/32` during an `aws-candidate` release and must remove it in an `always()` cleanup step. Database ports are not public. |
+| Public ingress | TCP 80/443 from `0.0.0.0/0` for the DNS-only automatic-TLS rehearsal and eventual public service. TCP 22 remains limited in Lightsail to the current operator IPv4 `115.195.32.146/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. An AWS OIDC role may add only the current GitHub-hosted Runner IPv4 `/32` during an `aws-candidate` release and must remove it in an `always()` cleanup step. Database ports are not public. |
 | Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700 |
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
 | Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `preserve-standby`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive |
 | GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
 | Application release | Fork `main` commit `557d5c079a025f6488c12904137e238734a8c5ed`, version `0.2.8`, active slot `sub2api-green`, healthy with zero restarts/OOM; 2 GiB persistent swap is enabled with swappiness 10 |
-| Proxy | AWS-specific Caddy route for API and www; the operator-only origin passed HTTPS health, auth-boundary, public settings, homepage, help, and HTTP-to-HTTPS redirect probes |
+| Proxy | AWS-specific Caddy route for API and www plus DNS-only `aws-test`; public HTTPS passed health, auth-boundary, public settings, homepage, authenticated Responses/SSE and synchronous/asynchronous image probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
 | Public www assets | Six regular files in the Caddy data volume at `/data/sub2-web/{home,help}`, copied from the serving Azure Caddy volume and SHA-256 matched file by file |
-| Automatic-TLS rehearsal | The rendered active-slot file is staged root-only at `/opt/sub2api/Caddyfile.aws-test.staged` with SHA-256 `0947c585dbe57f9ad127dee5d3d12832ce058ea0f75f68cd64d3b601af40013f`; Caddy 2.11 validation passed without reload. `aws-test.turtleligpt.com` still has no DNS record, so ACME issuance has not started. Initial issuance is the pre-cutover gate; later renewal must be observed separately. |
+| Automatic-TLS rehearsal | Cloudflare DNS-only A record `aws-test.turtleligpt.com` points to `54.248.123.174`. The active Caddyfile matches the tracked staged SHA-256 `0947c585dbe57f9ad127dee5d3d12832ce058ea0f75f68cd64d3b601af40013f`. Let's Encrypt HTTP-01 validation and initial issuance passed on 2026-09-25; later renewal must still be observed separately. |
 
 SSH effective settings were verified as `PubkeyAuthentication yes`,
 `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, and
@@ -35,17 +36,19 @@ no private key was exported from AWS. The local private key remains device-local
 and is not a project artifact. Its Vault reconciliation is pending; no
 `vault_ref` has been invented.
 
-The Lightsail firewall admits TCP 80/443 only from the operator's current IPv4
-`115.195.32.146/32`. Steady-state TCP 22 additionally admits Azure
-`4.216.216.16/32` and the `lightsail-connect` console alias. For an explicitly
+The Lightsail firewall admits public IPv4 TCP 80/443 for the DNS-only ACME and
+public-route rehearsal. Steady-state TCP 22 admits the operator's current IPv4
+`115.195.32.146/32`, Azure `4.216.216.16/32` and the
+`lightsail-connect` console alias. For an explicitly
 dispatched `aws-candidate` release, GitHub OIDC obtains a short-lived AWS role,
 discovers the Runner's public IPv4, validates it as a global IPv4 address, adds
 only that `/32`, and removes the same `/32` in an `always()` cleanup step. Host
 UFW admits IPv4 TCP 22 generally because Lightsail is the source-address gate;
-it does not admit IPv6 SSH. UFW continues to mirror the operator-only HTTP/HTTPS
-boundary. The operator address is temporary and must be revalidated before
-future access; never widen the Lightsail candidate origin to `0.0.0.0/0` before
-an approved cutover.
+it does not admit IPv6 SSH. UFW admits public TCP 80/443 and keeps database
+ports closed. The operator address is temporary and must be revalidated before
+future SSH access. Public web ingress is now intentional for the DNS-only test
+host and eventual production service, but it is not authorization to change
+production DNS.
 
 The repository's reviewed deployment tree bootstrapped the first application
 slot and then completed verified blue-green releases. GitHub Actions run
@@ -159,13 +162,37 @@ burst-dependent observations, not a sustained throughput guarantee. No `tc`
 rate limiter was configured on `ens5`. The candidate was not limited to a
 fixed 16 MB/s in this test.
 
+## Public automatic TLS and real-request evidence
+
+Cloudflare DNS-only record `65bbd7f20163df4ebd734b9b71279e85` maps
+`aws-test.turtleligpt.com` to `54.248.123.174` with TTL 300. Both
+`1.1.1.1` and `8.8.8.8` returned the expected address. Caddy served the
+HTTP-01 challenge to multiple Let's Encrypt validators and obtained a leaf
+certificate for only `aws-test.turtleligpt.com`. The leaf is valid from
+`2026-09-25 03:59:10 UTC` through `2026-12-24 03:59:09 UTC`; its SHA-256
+fingerprint is
+`02:EA:89:BE:62:3C:C4:47:25:D6:18:5B:55:F7:12:75:31:DA:EC:F4:E2:12:18:4D:60:83:61:4A:56:73:24:22`.
+OpenSSL SNI, hostname and chain verification returned code 0. This proves first
+issuance only, not automatic renewal.
+
+Public HTTPS returned health 200, unauthenticated models 401, public settings
+200 and homepage 200. A root-only protected release key was passed to clients
+without appearing in process arguments or output. Through the public hostname
+it returned 27 models including `gpt-5.6-sol` and `gpt-image-1`, completed one
+non-streaming Responses request, completed one 18-event SSE request, returned
+one low-quality synchronous `gpt-image-1` output, and completed asynchronous
+task `imgtask_6e28c87748f94d7794405081db78f548` with one stored URL result.
+Immediately afterward the application used about 83 MiB and Caddy about 23 MiB
+of the 1.861 GiB container-visible memory; both had zero restarts/OOM and no
+application/Caddy 5xx or fatal log entry in the probe window.
+
 ## Remaining migration gates
 
 - Reconcile the operator SSH identity in Vault; the restricted GitHub deploy
   identity is recorded under Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`.
   Replace the temporary operator-address firewall rule when its address changes.
-- Establish candidate-only backups, a rollback image, automatic certificate
-  issuance evidence, an offsite copy and an isolated restore drill. Observe a
+- Establish candidate-only backups, a rollback image, an offsite copy and an
+  isolated restore drill. Initial automatic certificate issuance is complete; observe a
   later automatic renewal separately; first issuance is not renewal evidence.
   External Komari/anti-degradation/standalone monitoring migration is explicitly
   out of scope by owner direction; do not reintroduce it as a hidden cutover
@@ -179,16 +206,11 @@ fixed 16 MB/s in this test.
 - Preserve the exact database allowlist at `54.248.123.174` and remove it only
   after rollback/cutover decisions. Do not rerun the September 12 currency
   conversion or restore an old full DB over new writes.
-- Create DNS-only `aws-test.turtleligpt.com`, deploy the tracked automatic-TLS
-  test host, validate ACME issuance and run authenticated text/stream/image
-  probes through it before changing `api` or `www`. The test-host config is
-  staged and validated but intentionally not loaded. The bounded Cloudflare API
-  operation remains blocked on one owner-run Vault injection; public DNS still
-  returns no record for the test hostname. Before loading it, open a bounded
-  public TCP 80/443 ACME window in both Lightsail and UFW; the current
-  operator-only `/32` rules block HTTP-01 and TLS-ALPN-01. Recheck host exposure,
-  complete issuance and smoke tests, then restore the reviewed ingress boundary
-  appropriate for the production cutover.
+- Keep DNS-only `aws-test.turtleligpt.com` and its automatic certificate in
+  service for later renewal observation. Initial issuance and authenticated
+  text/SSE/synchronous-image/asynchronous-image probes are complete. Do not
+  change production `api` or `www` DNS until the remaining backup, proxy,
+  background-owner, payment, Batch Image and observation gates pass.
 - Run the low-cost Gemini Batch Image canary with a temporary enabled-group key
   and delete that key. Complete a 1-2 fen owner payment checkout after recent
   administrator TOTP step-up.
@@ -200,8 +222,9 @@ fixed 16 MB/s in this test.
   authenticated CAS endpoint to move parent accounts and credential shadows;
   never edit raw SQL and never permit cross-region automatic fallback.
 - Verify 2 GiB memory plus swap headroom with the real image and background
-  workload, sustained bandwidth under representative concurrency, DNS, TLS,
-  www static assets, and public API smoke before any production cutover.
+  workload and sustained bandwidth under representative concurrency before
+  any production cutover. DNS, initial TLS issuance, www static assets and
+  public API smoke have passed.
 - Transfer sole background/queue ownership from Azure to AWS under the
   maintenance lock, take a fresh database backup, preserve an offsite copy and
   prove isolated restore before DNS cutover.

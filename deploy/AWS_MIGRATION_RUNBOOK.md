@@ -76,12 +76,29 @@ approved.
 
 ### Deployment checkpoint (2026-09-25)
 
-- Fork `main` commit `38835f5b9d031fab5331238178cf10f91ea7dc30`
-  (`0.2.8`) is healthy on `sub2api-blue`; Caddy targets only that slot.
+- Fork `main` commit `557d5c079a025f6488c12904137e238734a8c5ed`
+  (`0.2.8`) is healthy on `sub2api-green`; Caddy targets only that slot.
 - The final release passed authenticated model-list and tiny Responses probes
   using `gpt-5.6-sol`; application/Caddy fatal and 5xx gates were clear.
 - Operator-only pinned-IP checks passed health, unauthenticated `/v1/models`
   (401), `/api/v1/settings/public`, homepage, help, redirect, and TLS identity.
+- DNS-only `aws-test.turtleligpt.com` now resolves to `54.248.123.174`.
+  Lightsail and UFW expose public TCP 80/443 for the automatic-TLS rehearsal;
+  production `api` and `www` DNS remain unchanged. Caddy loaded the tracked
+  active-slot file with SHA-256
+  `0947c585dbe57f9ad127dee5d3d12832ce058ea0f75f68cd64d3b601af40013f`.
+- Let's Encrypt HTTP-01 validation completed on 2026-09-25 and issued a
+  certificate for only `aws-test.turtleligpt.com`, valid from
+  `2026-09-25 03:59:10 UTC` through `2026-12-24 03:59:09 UTC`, with leaf
+  SHA-256 fingerprint
+  `02:EA:89:BE:62:3C:C4:47:25:D6:18:5B:55:F7:12:75:31:DA:EC:F4:E2:12:18:4D:60:83:61:4A:56:73:24:22`.
+  OpenSSL hostname/chain verification returned `Verify return code: 0`.
+- Public HTTPS canaries through `aws-test` passed health, auth boundary, public
+  settings and homepage. The protected release key then passed a 27-model
+  authenticated list, non-streaming Responses, completed SSE, one low-quality
+  synchronous `gpt-image-1` generation and one asynchronous generation whose
+  result was stored and returned by URL. No application/Caddy 5xx, fatal, OOM
+  or container restart was observed in the probe window.
 - PostgreSQL 5432 and Redis 6379 connectivity from the application container
   passed after adding exact source `54.248.123.174` to the data-host allowlist.
 - AWS remains `traffic=accepting background=standby`; Azure remains the live
@@ -94,8 +111,9 @@ approved.
   run `36070650495` for exact `main` commit
   `557d5c079a025f6488c12904137e238734a8c5ed`; release log
   `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` is the host record.
-  Initial certificate issuance, backup/restore drill, and load/headroom evidence
-  remain open gates. Later renewal is a separate post-issuance observation.
+  Initial certificate issuance is complete. Backup/restore drill and sustained
+  load/headroom evidence remain open gates; later renewal is a separate
+  post-issuance observation and has not yet been proven.
   External alert delivery is not a gate under the owner's monitoring exclusion;
   the cutover still requires active operator observation and stop conditions.
 
