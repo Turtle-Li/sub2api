@@ -516,8 +516,8 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/codex-turn-state',
     name: 'AdminCodexTurnState',
-    component: () => import('@/views/admin/CodexTurnStateView.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true, title: 'Degradation Fix', titleKey: 'admin.codexTurnState.title', descriptionKey: 'admin.codexTurnState.description' }
+    component: () => import('@/views/admin/BpsUpstreamView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Degradation Fix', titleKey: 'admin.bpsUpstream.title', descriptionKey: 'admin.bpsUpstream.description' }
   },
   {
     path: '/admin/accounts',

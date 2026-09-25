@@ -643,6 +643,10 @@ const (
 	SettingKeyCodexCLIOnlyWhitelist = "codex_cli_only_whitelist"
 	// SettingKeyCodexCLIOnlyAllowAppServerClients App Server 开关：对未列名客户端开闸（默认 false；仅显式 "true" 开）。
 	SettingKeyCodexCLIOnlyAllowAppServerClients = "codex_cli_only_allow_app_server_clients"
+	// SettingKeyOpenAIBPSUpstreamEnabled Basis Points 上游总开关（默认 false）。关闭即全部账号回到原 Codex 路径。
+	SettingKeyOpenAIBPSUpstreamEnabled = "openai_bps_upstream_enabled"
+	// SettingKeyOpenAIBPSUpstreamAccountIDs 参与 BPS 上游的账号 ID 列表（JSON 数组），由降智修复面板维护。
+	SettingKeyOpenAIBPSUpstreamAccountIDs = "openai_bps_upstream_account_ids"
 	// SettingKeyCodexCLIOnlyAllowBodyEngineFingerprint 引擎门 body 通道开关：接受 client_metadata 引擎指纹（默认 false；仅显式 "true" 开）。(已废弃，迁移并入信号列表)
 	SettingKeyCodexCLIOnlyAllowBodyEngineFingerprint = "codex_cli_only_allow_body_engine_fingerprint"
 	// SettingKeyCodexCLIOnlyEngineFingerprintSignals codex_cli_only 引擎指纹门信号列表（[]EngineFingerprintSignal JSON）。

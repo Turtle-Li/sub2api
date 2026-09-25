@@ -12,6 +12,7 @@ import (
 // ProvideAdminHandlers creates the AdminHandlers struct
 func ProvideAdminHandlers(
 	codexTurnStatePanelHandler *admin.CodexTurnStatePanelHandler,
+	bpsUpstreamHandler *admin.BPSUpstreamHandler,
 	dashboardHandler *admin.DashboardHandler,
 	userHandler *admin.UserHandler,
 	groupHandler *admin.GroupHandler,
@@ -59,6 +60,7 @@ func ProvideAdminHandlers(
 	accountHandler.SetOpenCodeGoUsageService(opencodeGoUsage)
 	return &AdminHandlers{
 		CodexTurnStatePanel:    codexTurnStatePanelHandler,
+		BPSUpstream:            bpsUpstreamHandler,
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,
 		Group:                  groupHandler,
@@ -145,6 +147,7 @@ func ProvideOpenAIGatewayHandler(
 	coordinator *securityaudit.Coordinator,
 ) *OpenAIGatewayHandler {
 	gatewayService.SetPluginManager(pluginManager)
+	gatewayService.SetBPSImageExternalizer(newBPSImageExternalizer(cfg, attachmentR2Service))
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.securityAuditCoordinator = coordinator
@@ -266,6 +269,7 @@ var ProviderSet = wire.NewSet(
 
 	// Admin handlers
 	admin.NewCodexTurnStatePanelHandler,
+	admin.NewBPSUpstreamHandler,
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
 	admin.NewGroupHandlerWithConfig,

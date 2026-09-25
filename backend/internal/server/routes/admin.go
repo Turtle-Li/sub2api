@@ -36,6 +36,9 @@ func RegisterAdminRoutes(
 		admin.POST("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
 		admin.DELETE("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
 
+		// BPS 上游（降智修复）账号名单与运行监控
+		registerBPSUpstreamRoutes(admin, h)
+
 		// 部署与运营合规确认
 		registerAdminComplianceRoutes(admin, h)
 
@@ -605,6 +608,15 @@ func registerPromoCodeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		promoCodes.PUT("/:id", h.Admin.Promo.Update)
 		promoCodes.DELETE("/:id", h.Admin.Promo.Delete)
 		promoCodes.GET("/:id/usages", h.Admin.Promo.GetUsages)
+	}
+}
+
+func registerBPSUpstreamRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	bps := admin.Group("/bps-upstream")
+	{
+		bps.GET("", h.Admin.BPSUpstream.GetOverview)
+		bps.PUT("/config", h.Admin.BPSUpstream.UpdateConfig)
+		bps.POST("/accounts/:id/reset-breaker", h.Admin.BPSUpstream.ResetBreaker)
 	}
 }
 

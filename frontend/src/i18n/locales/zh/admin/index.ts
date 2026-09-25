@@ -1,4 +1,4 @@
-import codexTurnState from './codexTurnState'
+import bpsUpstream from './bpsUpstream'
 import overview from './overview'
 import channels from './channels'
 import accounts from './accounts'
@@ -10,7 +10,7 @@ import promptAudit from './promptAudit'
 import plugins from './plugins'
 
 export default {
-  ...codexTurnState,
+  ...bpsUpstream,
   ...overview,
   ...channels,
   ...accounts,

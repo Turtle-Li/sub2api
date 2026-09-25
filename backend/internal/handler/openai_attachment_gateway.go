@@ -124,6 +124,32 @@ func newResponsesAttachmentURLExternalizer(
 	return externalizer
 }
 
+// newBPSImageExternalizer 为 Basis Points 上游构建内联图片外链化器。BPS 拒绝 data URL，
+// 因此与 URL rewrite 实验开关无关：任何大小的请求体都外链化，失败时由服务层回退原路径。
+func newBPSImageExternalizer(cfg *config.Config, storage *service.AttachmentR2Service) service.BPSImageExternalizer {
+	if storage == nil {
+		return nil
+	}
+	urlConfig := attachmentgateway.URLConfig{
+		Enabled:             true,
+		MinBodyBytes:        1,
+		MaxImagesPerRequest: 256,
+	}
+	if cfg != nil {
+		experiment := cfg.Gateway.AttachmentGateway
+		urlConfig.ObjectPrefix = experiment.URLObjectPrefix
+		urlConfig.URLCacheTTL = time.Duration(experiment.URLCacheTTLSeconds) * time.Second
+		urlConfig.MaxImageBytes = experiment.MaxImageBytes
+		urlConfig.MaxConcurrentUploads = experiment.MaxConcurrentURLUploads
+	}
+	externalizer, err := attachmentgateway.NewURLExternalizer(urlConfig, storage)
+	if err != nil {
+		logger.L().Warn("attachment_gateway.bps_url_initialization_failed", zap.Error(err))
+		return nil
+	}
+	return externalizer
+}
+
 func (h *OpenAIGatewayHandler) optimizeResponsesAttachments(
 	ctx context.Context,
 	reqLog *zap.Logger,

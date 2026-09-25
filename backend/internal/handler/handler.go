@@ -8,6 +8,7 @@ import (
 // AdminHandlers contains all admin-related HTTP handlers
 type AdminHandlers struct {
 	CodexTurnStatePanel    *admin.CodexTurnStatePanelHandler
+	BPSUpstream            *admin.BPSUpstreamHandler
 	Dashboard              *admin.DashboardHandler
 	User                   *admin.UserHandler
 	Group                  *admin.GroupHandler
