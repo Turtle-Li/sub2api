@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,7 +35,9 @@ func (p *fakeBatchImageDeliveryProvider) SignedResultSources(context.Context, *B
 type fakeBatchImageDeliveryStore struct {
 	headSize     int64
 	headType     string
+	headErr      error
 	presignedGet string
+	presignErr   error
 	putKeys      []string
 	getKeys      []string
 	headKeys     []string
@@ -48,11 +51,17 @@ func (s *fakeBatchImageDeliveryStore) PresignPut(_ context.Context, key string, 
 
 func (s *fakeBatchImageDeliveryStore) PresignGet(_ context.Context, key, _ string, _ time.Duration) (string, error) {
 	s.getKeys = append(s.getKeys, key)
+	if s.presignErr != nil {
+		return "", s.presignErr
+	}
 	return s.presignedGet, nil
 }
 
 func (s *fakeBatchImageDeliveryStore) Head(_ context.Context, key string) (int64, string, error) {
 	s.headKeys = append(s.headKeys, key)
+	if s.headErr != nil {
+		return 0, "", s.headErr
+	}
 	return s.headSize, s.headType, nil
 }
 
@@ -325,4 +334,73 @@ func TestResultFilesFailsClosedForArchivedJobWithoutDelivery(t *testing.T) {
 
 	_, err := service.ResultFiles(context.Background(), owner, batchID)
 	require.ErrorIs(t, err, ErrBatchImageDeliveryNotConfigured)
+}
+
+func TestResultFilesArchiveFailuresNeverReturnLegacyFallback(t *testing.T) {
+	const batchID = "imgbatch_3123456789abcdef0123456789abcdef"
+	apiKeyID := int64(2)
+	marker := batchImageCOSArchiveMarker(1)
+	owner := BatchImageOwner{UserID: 1, APIKeyID: apiKeyID}
+	cfg := &config.Config{BatchImage: config.BatchImageConfig{
+		DeliveryEnabled:   true,
+		DeliveryCOSPrefix: "sub2-batch-image/prod/",
+	}}
+
+	tests := []struct {
+		name  string
+		store *fakeBatchImageDeliveryStore
+		want  error
+	}{
+		{
+			name:  "head error",
+			store: &fakeBatchImageDeliveryStore{headErr: errors.New("head failed")},
+			want:  ErrBatchImageResultMissing,
+		},
+		{
+			name:  "empty object",
+			store: &fakeBatchImageDeliveryStore{headType: batchImageCOSArchiveContentType},
+			want:  ErrBatchImageResultMissing,
+		},
+		{
+			name:  "invalid content type",
+			store: &fakeBatchImageDeliveryStore{headSize: 128, headType: "application/octet-stream"},
+			want:  ErrBatchImageResultMissing,
+		},
+		{
+			name: "presign error",
+			store: &fakeBatchImageDeliveryStore{
+				headSize:   128,
+				headType:   batchImageCOSArchiveContentType,
+				presignErr: errors.New("presign failed"),
+			},
+			want: ErrBatchImageDownloadFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newFakeBatchImageRepository()
+			repo.jobs[batchID] = &BatchImageJob{
+				BatchID:      batchID,
+				UserID:       1,
+				APIKeyID:     &apiKeyID,
+				Provider:     BatchImageProviderVertex,
+				Status:       BatchImageJobStatusCompleted,
+				SuccessCount: 1,
+				ItemCount:    1,
+			}
+			repo.items[batchID] = []CreateBatchImageItemParams{{
+				JobID:                batchID,
+				CustomID:             "cover",
+				Status:               BatchImageItemStatusResultAvailable,
+				ProviderSourceObject: &marker,
+				ImageCount:           1,
+			}}
+			service := &BatchImageDownloadService{Repo: repo, DeliveryStore: tt.store, Config: cfg}
+
+			_, err := service.ResultFiles(context.Background(), owner, batchID)
+			require.ErrorIs(t, err, tt.want)
+			require.False(t, errors.Is(err, ErrBatchImageResultArchiveUnavailable))
+		})
+	}
 }
