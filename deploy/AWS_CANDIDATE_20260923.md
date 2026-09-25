@@ -23,9 +23,11 @@ subscriptions and AWS Lightsail. No Azure resource was deleted in this task.
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
 | Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `preserve-standby`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive |
 | GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
-| Application release | Fork `main` commit `32eeb9e2bc38e7d7874d50e33f11d2691db0790a` from successful GitHub Actions run `36101027759`, active image `sub2api:auto-20260925-060932-32eeb9e2` and slot `sub2api-blue`, healthy with zero restarts/OOM; 2 GiB persistent swap is enabled with swappiness 10 |
+| Application release | Fork `main` commit `8561413932d232ab6025527bcebb94b9e5ee711e` from successful GitHub Actions run `36119866358` attempt 2, active image `sub2api:auto-20260925-095956-85614139` and slot `sub2api-green`, healthy with zero restarts/OOM; host release record `/var/log/sub2api-release/gha-20260925-095956-85614139-536585/`; 2 GiB persistent swap is enabled with swappiness 10 |
 | Proxy | AWS-specific Caddy route for API and www plus DNS-only `aws-test`; public HTTPS passed health, auth-boundary, public settings, homepage, authenticated Responses/SSE and synchronous/asynchronous image probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
+| Account egress | The nine previously proxy-bound parent accounts are now direct (`proxy_id=0`). OpenAI OAuth rows were cleared with authenticated expected-value CAS; the Anthropic/Antigravity rows used ordinary authenticated account updates. No replacement proxy node is required for this migration stage. |
+| Backup / NAS | Real upload of ten verified archives completed twice after the NAS identity was installed. Database backup and NAS synchronization timers are enabled and active on the data host, now scheduled once daily at 03:15 and 03:35 Asia/Shanghai with up to five minutes randomized delay. |
 | Public www assets | Six regular files in the Caddy data volume at `/data/sub2-web/{home,help}`, copied from the serving Azure Caddy volume and SHA-256 matched file by file |
 | Automatic-TLS rehearsal | Cloudflare DNS-only A record `aws-test.turtleligpt.com` points to `54.248.123.174`. The active Caddyfile matches the tracked staged SHA-256 `0947c585dbe57f9ad127dee5d3d12832ce058ea0f75f68cd64d3b601af40013f`. Let's Encrypt HTTP-01 validation and initial issuance passed on 2026-09-25; later renewal must still be observed separately. |
 
@@ -122,13 +124,24 @@ separate evidence.
   11.02, 32.48, 11.66, 12.32 and 27.81 seconds. Application logs recorded all
   six Responses calls as HTTP 200 with no retry, forward-failure, cancellation
   or broken-pipe event.
-- Those OpenAI probes selected account 69, which is still bound to proxy 6,
-  `Azure JP` at Tailnet endpoint `100.79.230.109:7890`. Therefore the tests
-  prove the AWS application/Caddy path but do not remove the Azure proxy
-  dependency. The variable 10-32 second duration remains consistent with
-  upstream/account/egress variability. It is not evidence of AWS CPU, memory
-  or Caddy saturation, and the earlier user report still has CPA cancellation
-  as the direct interruption mechanism after a slow upstream wait.
+- The nine active parent accounts formerly using proxies 6, 7, 40, 41 and 44
+  were cleared to direct egress. OpenAI OAuth rows used authenticated
+  expected-value CAS with their old proxy IDs; the Anthropic/Antigravity rows
+  used ordinary authenticated account updates. A post-change read verified all
+  nine parent rows at `proxy_id=0`; no raw SQL changed account routing.
+- Release `856141393` fixes the admin account-test empty-model defect. An empty
+  JSON request now resolves a live OAuth text model from the account catalog
+  instead of falling back to unsupported `gpt-5.4`; explicit model requests and
+  API-key account behavior are unchanged. Real empty-body tests through
+  `aws-test` succeeded for accounts 9, 15, 60 and 69. Accounts 54, 55 and 56
+  reached the upstream normally and returned `usage_limit_reached` for their
+  exhausted free quotas. None returned the previous `gpt-5.4 is not supported`
+  error. The temporary `admin_api_key` row was deleted exactly and the final
+  database count was zero.
+- The variable OpenAI duration remains consistent with upstream/account/egress
+  variability. It is not evidence of AWS CPU, memory or Caddy saturation, and
+  the earlier user report still has CPA cancellation as the direct interruption
+  mechanism after a slow upstream wait.
 - A separate read-only audit at 2026-09-25 06:39 UTC confirmed that the active
   `sub2api-blue` container, Caddy and both Vault Agents had zero restarts and no
   OOM state. The 2-vCPU host had about 1.2 GiB available RAM, negligible swap
@@ -213,21 +226,22 @@ separate evidence.
 
 The dedicated data host completed automatic archive
 `/opt/sub2api-db-backups/sub2api-db-backup-20260925-121659.tar.gz` at 12:18 CST
-on 2026-09-25. The six-hour backup timer is enabled and active. The outer
+on 2026-09-25. The outer
 archive checksum and the internal `postgres.dump` and `redis.rdb` checksums all
 returned `OK`. An isolated restore smoke then restored PostgreSQL and Redis in
 temporary containers, passed `pg_amcheck`, produced `schema_count=317`,
 `schema_hash=060cb9c360c8dfa99c774e6a4177797e` and `redis_live_keys=1825`, and
 left no restore container behind.
 
-Offsite retention remains open. The guarded NAS sync service/timer is installed
-but intentionally disabled because `/root/.ssh/sub2api_nas_backup_target` is
-absent and no target archive has a `.nas-synced` marker. Registry credential
-record `cred-sub2api-db-nas-backup` confirms that the restricted write-only NAS
-identity has not been created in Vault. Do not copy raw database archives to an
-uncontrolled AWS location as a substitute. The owner must unlock Vault, create
-the target-specific identity, pin the NAS host key, and validate upload plus
-restore before enabling the timer.
+The unified NAS identity is Vault item
+`9e029391-7aa6-4aac-9e7a-474aced6b975`. The guarded sync first failed closed on
+an unaccepted key, then completed two real runs of ten verified archives at
+17:07 and 17:23 CST after the restricted runtime identity was installed. The
+owner accepted this real upload path as the NAS gate; no additional restore
+rehearsal is required for this migration stage. The database backup timer and
+NAS sync timer are both enabled and active, with daily schedules at 03:15 and
+03:35 Asia/Shanghai respectively and up to five minutes randomized delay. The
+next observed runs are 2026-09-26 03:18:59 and 03:39:50 CST.
 
 ## Bandwidth probe
 
@@ -255,8 +269,8 @@ destination; it is not a universal Internet throughput guarantee.
 
 ## Proxy dependency inventory
 
-A privacy-safe read-only database inventory on 2026-09-25 found nine active
-accounts still bound to Azure relay proxies and no credential values were read:
+A privacy-safe database inventory on 2026-09-25 identified nine active parent
+accounts formerly bound to Azure relay proxies; no credential values were read:
 
 | Proxy ID | Azure relay / region | Account IDs |
 | --- | --- | --- |
@@ -266,13 +280,13 @@ accounts still bound to Azure relay proxies and no credential values were read:
 | `41` | `westus2` / West US | `59` |
 | `44` | `westus3` / West US | `60` |
 
-All nine rows are parent accounts (`parent_account_id IS NULL`); the service
-still atomically propagates a parent CAS to any credential shadow. Replacement
-or clearing must use authenticated `POST /api/v1/admin/accounts/bulk-update`
-with only `account_ids`, `proxy_id` and `expected_proxy_id`. A reverse-CAS must
-record and swap the old/new proxy IDs, including expected `0` after a clear. Any
-mismatch rejects the operation. Never mutate these bindings with SQL, and keep
-the old proxies/nodes available through the observation window.
+All nine parent rows now have `proxy_id=0`. OpenAI OAuth rows were cleared with
+authenticated expected-value CAS against their old proxy IDs so credential
+shadows followed atomically. The Anthropic/Antigravity rows were changed through
+ordinary authenticated account updates. A reverse-CAS for any future
+reassignment must expect `0`; mismatches must stop the operation. Never mutate
+these bindings with SQL. The old relay resources may remain through the
+observation window, but Sub2API no longer depends on them.
 
 ## Public automatic TLS and real-request evidence
 
@@ -303,8 +317,9 @@ application/Caddy 5xx or fatal log entry in the probe window.
 - Reconcile the operator SSH identity in Vault; the restricted GitHub deploy
   identity is recorded under Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`.
   Replace the temporary operator-address firewall rule when its address changes.
-- Retain the verified automatic database archive and isolated restore evidence;
-  establish the restricted NAS offsite copy and test its restore before cutover.
+- Retain the verified automatic database archive, isolated restore evidence and
+  successful restricted NAS uploads. The owner accepted the real upload path as
+  the NAS gate; keep both daily timers enabled and monitor their results.
   Preserve a known-good rollback image. Initial automatic certificate issuance is complete; observe a
   later automatic renewal separately; first issuance is not renewal evidence.
   External Komari/anti-degradation/standalone monitoring migration is explicitly
@@ -314,9 +329,12 @@ application/Caddy 5xx or fatal log entry in the probe window.
   rollback stop conditions instead of claiming an unverified alert channel.
 - Retain successful GitHub Actions run `36070650495` and release log
   `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` as the first
-  end-to-end candidate evidence, plus successful fix release run `36101027759`
-  and `/var/log/sub2api-release/gha-20260925-060932-32eeb9e2-379538/` as the
-  current deployed evidence. Keep the separate `azure-production`
+  end-to-end candidate evidence, plus successful fix release run `36119866358`
+  attempt 2 and `/var/log/sub2api-release/gha-20260925-095956-85614139-536585/`
+  as the current deployed evidence. Attempt 1 failed closed on a transient
+  45-second real-upstream probe timeout; Caddy did not switch and the failed
+  container was removed. The same probe passed on attempt 2, and the workflow
+  verified removal of its temporary Runner SSH `/32`. Keep the separate `azure-production`
   Environment and its secrets unchanged.
 - Preserve the exact database allowlist at `54.248.123.174` and remove it only
   after rollback/cutover decisions. Do not rerun the September 12 currency
@@ -324,8 +342,8 @@ application/Caddy 5xx or fatal log entry in the probe window.
 - Keep DNS-only `aws-test.turtleligpt.com` and its automatic certificate in
   service for later renewal observation. Initial issuance and authenticated
   text/SSE/synchronous-image/asynchronous-image probes are complete. Do not
-  change production `api` or `www` DNS until the remaining backup, proxy,
-  background-owner, payment and observation gates pass.
+  change production `api` or `www` DNS until the remaining background-owner,
+  payment and observation gates pass.
 - The Batch Image legacy-download compatibility fix and real request validation
   are complete. Complete a 1-2 fen owner payment checkout only after production
   `www` DNS points to AWS and recent administrator TOTP step-up.

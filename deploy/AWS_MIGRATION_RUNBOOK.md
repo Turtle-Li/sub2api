@@ -76,8 +76,8 @@ approved.
 
 ### Deployment checkpoint (2026-09-25)
 
-- Fork `main` commit `32eeb9e2bc38e7d7874d50e33f11d2691db0790a`
-  (`0.2.8`) is healthy on `sub2api-blue`; Caddy targets only that slot.
+- Fork `main` commit `8561413932d232ab6025527bcebb94b9e5ee711e`
+  (`0.2.8`) is healthy on `sub2api-green`; Caddy targets only that slot.
 - The final release passed authenticated model-list and tiny Responses probes
   using `gpt-5.6-sol`; application/Caddy fatal and 5xx gates were clear.
 - Operator-only pinned-IP checks passed health, unauthenticated `/v1/models`
@@ -113,21 +113,30 @@ approved.
 - Automatic database archive `sub2api-db-backup-20260925-121659.tar.gz` passed
   its outer and internal PostgreSQL/Redis checksums. An isolated restore passed
   `pg_amcheck`, schema fingerprint
-  `060cb9c360c8dfa99c774e6a4177797e`, and 1,825 live Redis keys. The remaining
-  backup gate is the restricted NAS offsite copy and restore; its target-specific
-  Vault/SSH identity does not yet exist, so the guarded sync timer stays disabled.
-- A read-only inventory found nine active parent accounts on proxies 6, 7, 40,
-  41 and 44. No binding changed. Use only the authenticated bulk-update CAS with
-  recorded reverse-CAS before Azure relay retirement.
+  `060cb9c360c8dfa99c774e6a4177797e`, and 1,825 live Redis keys. The unified NAS
+  identity is Vault item `9e029391-7aa6-4aac-9e7a-474aced6b975`; two real runs
+  each uploaded ten verified archives and completed successfully. The owner
+  accepted this upload evidence as the NAS gate. Database backup and NAS sync
+  are enabled daily at 03:15 and 03:35 Asia/Shanghai with up to five minutes
+  randomized delay.
+- The nine active parent accounts formerly on proxies 6, 7, 40, 41 and 44 now
+  use direct egress (`proxy_id=0`). OpenAI OAuth rows were cleared with
+  authenticated expected-value CAS; Anthropic/Antigravity rows used ordinary
+  authenticated account updates. A replacement proxy node is deferred.
 - The restricted GitHub receiver is installed with a distinct Vault-backed key
   and `aws-candidate` GitHub Environment. Its OIDC role is restricted to that
   repository environment and may only manage Lightsail public-port state. The
   workflow opens the current Runner IPv4 `/32` immediately before restricted
   SSH and removes it in `always()` cleanup. The current evidence is successful
-  fix release run `36101027759` for exact `main` commit
-  `32eeb9e2bc38e7d7874d50e33f11d2691db0790a`; release log
-  `/var/log/sub2api-release/gha-20260925-060932-32eeb9e2-379538/` is the host
-  record. Earlier end-to-end candidate evidence remains run `36070650495` and
+  fix release run `36119866358` attempt 2 for exact `main` commit
+  `8561413932d232ab6025527bcebb94b9e5ee711e`; release log
+  `/var/log/sub2api-release/gha-20260925-095956-85614139-536585/` is the host
+  record. Attempt 1 failed closed because the new container's real upstream
+  probe returned HTTP `000` within its 45-second gate; Caddy never switched and
+  the failed container was removed. The same probe completed on the existing
+  slot six seconds later, and attempt 2 succeeded without a code/config change.
+  The workflow's final firewall step verified removal of Runner
+  `20.169.53.43/32`. Earlier end-to-end candidate evidence remains run `36070650495` and
   `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*`.
   Initial certificate issuance, isolated database restore, standby request-load
   headroom and bounded sustained egress evidence are complete. Offsite backup,
@@ -221,27 +230,22 @@ approved.
   recovery point. Compare 2 GiB memory plus swap and sustained/concurrent
   egress to measured production demand. A short single-upload burst is
   insufficient evidence. External monitoring enrollment is not required.
-- Before Azure retirement, replace or clear every database proxy binding. A
-  single AWS node cannot preserve both Tokyo and US-West fixed egress. Use at
-  least one isolated Tokyo node and one isolated US-West node; use a third
-  US-West node if the current independent OAuth backup fault domain must be
-  preserved. Migrate parent accounts and credential shadows only through the
-  authenticated CAS operation with recorded old/new proxy IDs and a reverse-CAS
-  rollback. Never use raw SQL or cross-region automatic fallback.
-  The current read-only set is proxy 6 -> accounts 9/15/54/55/69, proxy 7 ->
-  account 6, proxy 40 -> account 56, proxy 41 -> account 59 and proxy 44 ->
-  account 60. Call `POST /api/v1/admin/accounts/bulk-update` with only
-  `account_ids`, `proxy_id` and `expected_proxy_id`; a clear uses new proxy `0`
-  and a rollback expects `0`. Any expected-value mismatch must stop the batch.
+- Proxy retirement gate is complete for Sub2API account routing. Proxy 6 ->
+  accounts 9/15/54/55/69, proxy 7 -> account 6, proxy 40 -> account 56, proxy
+  41 -> account 59 and proxy 44 -> account 60 were cleared to direct egress.
+  OpenAI OAuth updates used authenticated CAS with old expected proxy IDs and
+  new proxy `0`; Anthropic/Antigravity used ordinary authenticated updates.
+  Future reassignment must keep the same expected-value/reverse-CAS discipline;
+  never use raw SQL or cross-region automatic fallback.
 - Obtain independent review and owner approval for the exact release image,
   data boundary, DNS changes, maintenance window, stop conditions and rollback.
 
 ## 5. Cutover and rollback
 
-1. Complete the Azure proxy replacement or remove the affected account
-   bindings, then rerun text/SSE/WS/OAuth refresh probes without any Azure
-   proxy dependency. Keep the old proxy records and nodes intact for reverse-CAS
-   rollback throughout the observation window.
+1. Reconfirm the nine affected accounts remain at direct egress (`proxy_id=0`)
+   and rerun text/SSE/WS/OAuth refresh probes before DNS change. The existing
+   Azure relay resources may remain during the observation window, but Sub2API
+   account routing no longer depends on them.
 2. Under the canonical lock and documented node-state protocol, fence new
    background claims on Azure and prove zero old claims before assigning the
    sole owner to AWS. Preserve request-triggered refresh semantics and the
@@ -331,8 +335,8 @@ temporary keys tombstoned with immediate 401 verification. The owner-approved
 1-2 fen live checkout is intentionally deferred until the configured production
 `www` result origin points to AWS. The automatic data-host backup, isolated
 restore, standby request-load headroom and bounded sustained network evidence
-now pass. The candidate still lacks the restricted offsite NAS copy/restore,
-Azure proxy replacement, background-active observation and the controlled
+now pass. The restricted NAS upload and account proxy-clearing gates also pass.
+The candidate still lacks background-active observation and the controlled
 background-owner handoff.
 Initial automatic TLS issuance on the test hostname has passed; later renewal
 observation remains separate evidence. Azure remains production and DNS is
