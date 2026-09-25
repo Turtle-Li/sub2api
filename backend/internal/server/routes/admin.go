@@ -617,6 +617,11 @@ func registerBPSUpstreamRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		bps.GET("", h.Admin.BPSUpstream.GetOverview)
 		bps.PUT("/config", h.Admin.BPSUpstream.UpdateConfig)
 		bps.POST("/accounts/:id/reset-breaker", h.Admin.BPSUpstream.ResetBreaker)
+		bps.GET("/probes", h.Admin.BPSUpstream.ListProbes)
+		bps.POST("/probes", h.Admin.BPSUpstream.CreateProbes)
+		bps.DELETE("/probes", h.Admin.BPSUpstream.DeleteAllProbes)
+		bps.GET("/probes/:id", h.Admin.BPSUpstream.GetProbe)
+		bps.DELETE("/probes/:id", h.Admin.BPSUpstream.DeleteProbe)
 	}
 }
 

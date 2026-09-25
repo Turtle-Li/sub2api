@@ -135,6 +135,7 @@
         </p>
       </section>
 
+      <BpsProbePanel :listed-accounts="probeAccounts" :models="policy?.models ?? []" />
     </div>
   </AppLayout>
 </template>
@@ -145,6 +146,7 @@ import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import BpsProbePanel from '@/components/admin/bps/BpsProbePanel.vue'
 import { list as listAccounts } from '@/api/admin/accounts'
 import {
   getOverview,
@@ -188,6 +190,10 @@ const pickerOptions = computed(() => {
     .filter((account) => !listed.has(account.id))
     .map((account) => ({ value: String(account.id), label: `${account.name} (#${account.id})` }))
 })
+
+const probeAccounts = computed(() => accounts.value
+  .filter((account) => !account.missing && account.eligible)
+  .map((account) => ({ id: account.id, name: account.name })))
 
 const allStats = computed(() => [
   ...accounts.value.map((account) => account.stats).filter((stats): stats is BPSAccountStats => !!stats),

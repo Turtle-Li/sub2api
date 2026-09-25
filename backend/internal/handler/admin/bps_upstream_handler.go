@@ -16,6 +16,14 @@ type bpsUpstreamConfigStore interface {
 	UpdateOpenAIBPSUpstreamConfig(ctx context.Context, cfg service.OpenAIBPSUpstreamConfig) (service.OpenAIBPSUpstreamConfig, error)
 }
 
+type bpsProbeStore interface {
+	Create(ctx context.Context, req service.BPSProbeRequest) ([]service.BPSProbeResult, error)
+	List(ctx context.Context) ([]service.BPSProbeResult, error)
+	Get(ctx context.Context, id int64) (*service.BPSProbeResult, error)
+	Delete(ctx context.Context, id int64) error
+	DeleteAll(ctx context.Context) (int64, error)
+}
+
 type bpsUpstreamAccountLookup interface {
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]*service.Account, error)
 }
@@ -26,12 +34,14 @@ type BPSUpstreamHandler struct {
 	accounts    bpsUpstreamAccountLookup
 	snapshot    func() service.BPSMonitorSnapshot
 	reset       func(accountID int64)
+	probes      bpsProbeStore
 }
 
-func NewBPSUpstreamHandler(settingService *service.SettingService, adminService service.AdminService) *BPSUpstreamHandler {
+func NewBPSUpstreamHandler(settingService *service.SettingService, adminService service.AdminService, probeService *service.BPSProbeService) *BPSUpstreamHandler {
 	return &BPSUpstreamHandler{
 		configStore: settingService,
 		accounts:    adminService,
+		probes:      probeService,
 		snapshot:    service.BPSUpstreamMonitorSnapshot,
 		reset:       service.ResetBPSUpstreamBreaker,
 	}
@@ -204,4 +214,68 @@ func (h *BPSUpstreamHandler) ResetBreaker(c *gin.Context) {
 	}
 	h.reset(id)
 	response.Success(c, gin.H{"account_id": id})
+}
+
+// ListProbes GET /api/v1/admin/bps-upstream/probes
+func (h *BPSUpstreamHandler) ListProbes(c *gin.Context) {
+	results, err := h.probes.List(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, results)
+}
+
+// CreateProbes POST /api/v1/admin/bps-upstream/probes
+func (h *BPSUpstreamHandler) CreateProbes(c *gin.Context) {
+	var req service.BPSProbeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	results, err := h.probes.Create(c.Request.Context(), req)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, results)
+}
+
+// GetProbe GET /api/v1/admin/bps-upstream/probes/:id
+func (h *BPSUpstreamHandler) GetProbe(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid probe ID")
+		return
+	}
+	result, err := h.probes.Get(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+// DeleteProbe DELETE /api/v1/admin/bps-upstream/probes/:id
+func (h *BPSUpstreamHandler) DeleteProbe(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid probe ID")
+		return
+	}
+	if err := h.probes.Delete(c.Request.Context(), id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"id": id})
+}
+
+// DeleteAllProbes DELETE /api/v1/admin/bps-upstream/probes
+func (h *BPSUpstreamHandler) DeleteAllProbes(c *gin.Context) {
+	deleted, err := h.probes.DeleteAll(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"deleted": deleted})
 }

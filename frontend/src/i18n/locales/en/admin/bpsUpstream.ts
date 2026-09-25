@@ -38,6 +38,63 @@ export default { bpsUpstream: {
   "unlisted": "Removed from the list but still has stats on this instance: {ids}",
   "events": "Recent events",
   "noEvents": "No events yet",
+  "probe": {
+    "title": "Degradation test",
+    "hint": "Ask a simple question to compare the same account via BPS (fixed) and the native path (unfixed). Tests call upstream directly, ignore the global switch, list and breaker, and are not counted in the stats above.",
+    "accounts": "Test accounts",
+    "noAccounts": "The list is empty. Search other OpenAI OAuth accounts below to test them.",
+    "extraPlaceholder": "Search other OpenAI OAuth accounts",
+    "addAccount": "Add to test",
+    "paths": "Path",
+    "path": {
+      "bps": "BPS (fixed)",
+      "native": "Native (unfixed)"
+    },
+    "model": "Model",
+    "effort": "Reasoning effort",
+    "effortDefault": "Default",
+    "prompt": "Prompt",
+    "presets": {
+      "reasoning": {
+        "label": "Reasoning",
+        "text": "A farmer must take a wolf, a goat and a cabbage across a river. The boat carries the farmer and only one item at a time; left alone, the wolf eats the goat and the goat eats the cabbage. Give the shortest complete plan and describe both banks after every step."
+      },
+      "html": {
+        "label": "HTML page",
+        "text": "Output only one complete single-file HTML page (inside an ```html code block): a playable Snake game with score, pause/resume and restart buttons, nicely styled, with no external resources."
+      },
+      "code": {
+        "label": "Coding",
+        "text": "Implement an LRU cache class in Python supporting get and put in O(1) time without functools or OrderedDict. Give the full code plus 5 test cases covering edge cases."
+      }
+    },
+    "runCount": "{count} test run(s) will be started",
+    "run": "Run test",
+    "submitting": "Submitting…",
+    "started": "Submitted {count} test run(s); running in the background",
+    "runFailed": "Failed to submit test",
+    "results": "Test results",
+    "retention": "Results can be deleted manually and are kept for at most 7 days",
+    "clearAll": "Clear all",
+    "clearConfirm": "Delete all test results? Running tests will be deleted too.",
+    "cleared": "Deleted {count} test result(s)",
+    "empty": "No test results yet",
+    "tokens": "Tokens",
+    "tokensTitle": "Input / output / reasoning",
+    "preview": "Answer preview",
+    "view": "View",
+    "detailTitle": "Test result #{id}",
+    "openHtml": "Open HTML in new window",
+    "showHtml": "Preview HTML inline",
+    "showText": "View raw text",
+    "popupBlocked": "The browser blocked the popup; allow popups for this site and retry",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Done",
+      "failed": "Failed"
+    }
+  },
   "columns": {
     "account": "Account",
     "status": "Status",

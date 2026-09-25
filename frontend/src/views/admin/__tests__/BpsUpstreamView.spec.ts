@@ -38,6 +38,12 @@ const SelectStub = defineComponent({
   `,
 })
 
+const ProbePanelStub = defineComponent({
+  name: 'BpsProbePanel',
+  props: { listedAccounts: { type: Array, default: () => [] }, models: { type: Array, default: () => [] } },
+  template: '<div data-test="probe-panel-stub" />',
+})
+
 const future = new Date(Date.now() + 60_000).toISOString()
 
 function overview(overrides: Record<string, unknown> = {}) {
@@ -59,7 +65,7 @@ const wrappers: VueWrapper[] = []
 
 async function mountView() {
   const wrapper = mount(BpsUpstreamView, {
-    global: { stubs: { AppLayout: PassThroughStub, Toggle: ToggleStub, Select: SelectStub } },
+    global: { stubs: { AppLayout: PassThroughStub, Toggle: ToggleStub, Select: SelectStub, BpsProbePanel: ProbePanelStub } },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -93,6 +99,13 @@ describe('BpsUpstreamView', () => {
     expect(wrapper.findAll('[data-test="bps-account-row"]')).toHaveLength(1)
     expect(wrapper.text()).toContain('admin.bpsUpstream.resetBreaker')
     expect(wrapper.find('[data-test="bps-event-row"]').exists()).toBe(false)
+  })
+
+  it('passes eligible listed accounts and BPS models to the probe panel', async () => {
+    const wrapper = await mountView()
+    const panel = wrapper.getComponent(ProbePanelStub)
+    expect(panel.props('listedAccounts')).toEqual([{ id: 69, name: 'cashtech' }])
+    expect(panel.props('models')).toEqual(['gpt-6-astra'])
   })
 
   it('filters account picker, adds and removes accounts', async () => {

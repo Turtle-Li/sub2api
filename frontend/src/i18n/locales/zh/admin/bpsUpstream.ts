@@ -38,6 +38,63 @@ export default { bpsUpstream: {
   "unlisted": "已移出名单但本实例仍有统计：{ids}",
   "events": "最近事件",
   "noEvents": "暂无事件",
+  "probe": {
+    "title": "降智测试",
+    "hint": "用一个简单提问对比同一账号走 BPS（修复后）与原生路径（未修复）的回答质量。测试直接调用上游，不受总开关、名单和熔断影响，也不计入上方统计。",
+    "accounts": "测试账号",
+    "noAccounts": "名单为空，可在下方搜索其他 OpenAI OAuth 账号加入测试。",
+    "extraPlaceholder": "搜索其他 OpenAI OAuth 账号",
+    "addAccount": "加入测试",
+    "paths": "路径",
+    "path": {
+      "bps": "BPS 修复",
+      "native": "原生（不修复）"
+    },
+    "model": "模型",
+    "effort": "推理档位",
+    "effortDefault": "默认",
+    "prompt": "题目",
+    "presets": {
+      "reasoning": {
+        "label": "推理题",
+        "text": "一个农夫要带一只狼、一只羊和一棵白菜过河。船每次只能载农夫和其中一样东西；农夫不在时，狼会吃羊，羊会吃白菜。请给出最少步数的完整过河方案，并逐步说明每一步后两岸的状态。"
+      },
+      "html": {
+        "label": "HTML 页面",
+        "text": "请只输出一个完整的单文件 HTML 页面（放在 ```html 代码块中）：实现一个可玩的贪吃蛇小游戏，包含计分、暂停/继续和重新开始按钮，样式美观，不依赖任何外部资源。"
+      },
+      "code": {
+        "label": "代码题",
+        "text": "用 Python 实现一个 LRU 缓存类，支持 get 和 put，时间复杂度均为 O(1)，不要使用 functools 或 OrderedDict。给出完整代码，并附上 5 个覆盖边界情况的测试用例。"
+      }
+    },
+    "runCount": "将发起 {count} 次测试",
+    "run": "开始测试",
+    "submitting": "提交中…",
+    "started": "已提交 {count} 次测试，正在后台执行",
+    "runFailed": "提交测试失败",
+    "results": "测试结果",
+    "retention": "结果可手动删除，服务端最多保留 7 天",
+    "clearAll": "清空全部",
+    "clearConfirm": "确定删除全部测试结果吗？执行中的测试也会被删除。",
+    "cleared": "已删除 {count} 条测试结果",
+    "empty": "暂无测试结果",
+    "tokens": "Token",
+    "tokensTitle": "输入 / 输出 / 推理",
+    "preview": "回答预览",
+    "view": "查看",
+    "detailTitle": "测试结果 #{id}",
+    "openHtml": "新窗口打开 HTML",
+    "showHtml": "内嵌预览 HTML",
+    "showText": "查看原文",
+    "popupBlocked": "浏览器拦截了弹出窗口，请允许本站弹窗后重试",
+    "status": {
+      "queued": "排队中",
+      "running": "执行中",
+      "succeeded": "已完成",
+      "failed": "失败"
+    }
+  },
   "columns": {
     "account": "账号",
     "status": "状态",
