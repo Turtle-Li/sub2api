@@ -109,8 +109,10 @@ onUnmounted(() => {
   @apply h-auto;
 }
 
-.table-page-layout.flow-mode:not(.mobile-mode) .table-scroll-container :deep(.table-wrapper) {
-  max-height: calc(100vh - 64px - 6rem);
+/* 只保留页面一个纵向滚动条：表格按内容撑开，分页跟随表格末尾 */
+.table-page-layout.flow-mode .table-scroll-container,
+.table-page-layout.flow-mode .table-scroll-container :deep(.table-wrapper) {
+  overflow-y: visible;
 }
 
 /* 移动端：恢复正常滚动 */

@@ -179,6 +179,61 @@ func TestBPSPrimedStreamFailsBeforeOutput(t *testing.T) {
 	require.Contains(t, string(out), "response.completed")
 }
 
+func TestBPSPrimedStreamHoldsTextUntilToolCall(t *testing.T) {
+	// 带工具的请求：开场白文字之后工具调用转换失败，仍在输出前失败并回退。
+	bogus := map[string]any{"type": "function_call", "id": "fc_1", "call_id": "c1", "name": "run_officejs", "arguments": `{"code":"Excel.run()"}`}
+	events := []string{
+		`{"type":"response.output_text.delta","output_index":0,"delta":"let me check"}`,
+		bpsTestJSON(t, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": bogus}),
+		bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"output": []any{bogus}}}),
+	}
+	held := bpsTestPrimedStream(t, events...)
+	held.holdForTools = true
+	ok, reason := held.primeUntilOutput()
+	require.False(t, ok)
+	require.Contains(t, reason, "response.failed")
+
+	// 未暂扣时首个文本即放行（保持无工具请求的低延迟）。
+	early := bpsTestPrimedStream(t, events...)
+	ok, _ = early.primeUntilOutput()
+	require.True(t, ok)
+
+	// 超过暂扣上限后放行，避免前置代理首字节超时。
+	capped := bpsTestPrimedStream(t, events...)
+	capped.holdForTools = true
+	start := time.Now()
+	calls := 0
+	capped.now = func() time.Time {
+		calls++
+		if calls == 1 {
+			return start
+		}
+		return start.Add(bpsToolHoldLimit + time.Second)
+	}
+	ok, _ = capped.primeUntilOutput()
+	require.True(t, ok)
+
+	// 文本后工具调用转换成功：在调用完成时放行。
+	native := map[string]any{
+		"type": "function_call", "id": "fc_native", "call_id": "call_bps_relay_1", "name": "run_officejs", "status": "completed",
+		"arguments": bpsTestJSON(t, map[string]any{
+			"summary": "list files", "extended_summary": "list files", "destructive": false, "references": []any{},
+			"code": `{"name":"shell","arguments":{"command":"ls"}}`,
+		}),
+	}
+	good := bpsTestPrimedStream(t,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"let me check"}`,
+		bpsTestJSON(t, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": native}),
+		bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"output": []any{native}}}),
+	)
+	good.holdForTools = true
+	ok, reason = good.primeUntilOutput()
+	require.True(t, ok, reason)
+	out, err := io.ReadAll(good)
+	require.NoError(t, err)
+	require.Contains(t, string(out), `"shell"`)
+}
+
 func bpsTestJSON(t *testing.T, value any) string {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -319,6 +374,23 @@ func TestBPSMonitorRingAndBreakerState(t *testing.T) {
 	require.Equal(t, int64(1), stats.Fallbacks)
 	require.Equal(t, "http_status: denied", stats.LastFailureReason)
 	require.NotNil(t, stats.BreakerOpenUntil)
+	require.Len(t, snapshot.Failures, 1)
+	require.Equal(t, 403, snapshot.Failures[0].StatusCode)
+}
+
+func TestBPSMonitorKeepsFailuresSeparately(t *testing.T) {
+	store := newBPSMonitorStore()
+	for i := 0; i < bpsMonitorMaxFailures+3; i++ {
+		store.record(BPSEvent{AccountID: 1, Outcome: BPSOutcomeErrorAfterOutput, Reason: "handler_before_output", DurationMs: int64(i)})
+		store.record(BPSEvent{AccountID: 1, Outcome: BPSOutcomeSuccess})
+		store.record(BPSEvent{AccountID: 1, Outcome: BPSOutcomeSkipped, Reason: "compact"})
+	}
+	snapshot := store.snapshot(&bpsCircuitBreaker{states: map[int64]*bpsBreakerState{}, now: time.Now})
+	require.Len(t, snapshot.Failures, bpsMonitorMaxFailures)
+	require.Equal(t, int64(bpsMonitorMaxFailures+2), snapshot.Failures[0].DurationMs)
+	for _, event := range snapshot.Failures {
+		require.Equal(t, BPSOutcomeErrorAfterOutput, event.Outcome)
+	}
 }
 
 type bpsExternalizerStub struct {

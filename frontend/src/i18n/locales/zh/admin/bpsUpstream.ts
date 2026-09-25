@@ -36,6 +36,10 @@ export default { bpsUpstream: {
   "breakerOpen": "熔断至 {time}",
   "breakerClosed": "正常（连续失败 {failures}）",
   "unlisted": "已移出名单但本实例仍有统计：{ids}",
+  "failures": "最近失败",
+  "failuresHint": "回退与输出后中断的逐条明细（本实例最近 100 条），按原因分组，点开查看每次请求。",
+  "noFailures": "暂无失败记录",
+  "failureCount": "{count} 次 · 最近 {time}",
   "events": "最近事件",
   "noEvents": "暂无事件",
   "probe": {

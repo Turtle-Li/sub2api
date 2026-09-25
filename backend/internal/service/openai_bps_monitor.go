@@ -14,7 +14,11 @@ const (
 	BPSOutcomeErrorAfterOutput = "error_after_output" // 已向客户端输出后中断，无法回退
 )
 
-const bpsMonitorMaxEvents = 200
+const (
+	bpsMonitorMaxEvents   = 200
+	bpsMonitorMaxFailures = 100 // 回退/输出后中断单独保留，避免被高频成功事件挤掉
+	bpsMonitorDetailLimit = 500
+)
 
 // BPSEvent 是一次 BPS 执行记录，不含任何请求内容。
 type BPSEvent struct {
@@ -50,6 +54,7 @@ type BPSMonitorSnapshot struct {
 	StartedAt time.Time         `json:"started_at"`
 	Accounts  []BPSAccountStats `json:"accounts"`
 	Events    []BPSEvent        `json:"events"`
+	Failures  []BPSEvent        `json:"failures"`
 }
 
 type bpsMonitorStore struct {
@@ -58,6 +63,8 @@ type bpsMonitorStore struct {
 	accounts  map[int64]*BPSAccountStats
 	events    []BPSEvent
 	next      int
+	failures  []BPSEvent
+	failNext  int
 	now       func() time.Time
 }
 
@@ -83,7 +90,7 @@ func (m *bpsMonitorStore) record(event BPSEvent) {
 	if event.Time.IsZero() {
 		event.Time = m.now()
 	}
-	event.Detail = truncateString(sanitizeUpstreamErrorMessage(event.Detail), 300)
+	event.Detail = truncateString(sanitizeUpstreamErrorMessage(event.Detail), bpsMonitorDetailLimit)
 	stats := m.statsLocked(event.AccountID)
 	at := event.Time
 	switch event.Outcome {
@@ -102,18 +109,31 @@ func (m *bpsMonitorStore) record(event BPSEvent) {
 			stats.LastFailureReason += ": " + event.Detail
 		}
 		stats.LastStatusCode = event.StatusCode
+		m.failures, m.failNext = appendBPSEventRing(m.failures, m.failNext, event, bpsMonitorMaxFailures)
 	case BPSOutcomeSkipped:
 		stats.Skipped[event.Reason]++
 		if event.Reason == bpsSkipUnsupportedModel {
 			return
 		}
 	}
-	if len(m.events) < bpsMonitorMaxEvents {
-		m.events = append(m.events, event)
-		return
+	m.events, m.next = appendBPSEventRing(m.events, m.next, event, bpsMonitorMaxEvents)
+}
+
+func appendBPSEventRing(ring []BPSEvent, next int, event BPSEvent, limit int) ([]BPSEvent, int) {
+	if len(ring) < limit {
+		return append(ring, event), next
 	}
-	m.events[m.next] = event
-	m.next = (m.next + 1) % bpsMonitorMaxEvents
+	ring[next] = event
+	return ring, (next + 1) % limit
+}
+
+// newestBPSEvents 按时间倒序复制环形缓冲。
+func newestBPSEvents(ring []BPSEvent, next int) []BPSEvent {
+	result := make([]BPSEvent, 0, len(ring))
+	for i := range ring {
+		result = append(result, ring[(next+len(ring)-1-i)%len(ring)])
+	}
+	return result
 }
 
 // snapshot 返回统计副本，事件按时间倒序。
@@ -128,10 +148,8 @@ func (m *bpsMonitorStore) snapshot(breaker *bpsCircuitBreaker) BPSMonitorSnapsho
 		}
 		result.Accounts = append(result.Accounts, copied)
 	}
-	result.Events = make([]BPSEvent, 0, len(m.events))
-	for i := range m.events {
-		result.Events = append(result.Events, m.events[(m.next+len(m.events)-1-i)%len(m.events)])
-	}
+	result.Events = newestBPSEvents(m.events, m.next)
+	result.Failures = newestBPSEvents(m.failures, m.failNext)
 	m.mu.Unlock()
 
 	for i := range result.Accounts {

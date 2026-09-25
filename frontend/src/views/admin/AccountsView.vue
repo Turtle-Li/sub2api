@@ -205,6 +205,7 @@
           @add-to-pool="openAssignToPool"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <!-- 页面单滚动条（flow 模式）下表格没有有界滚动容器，不启用虚拟化 -->
         <DataTable
           ref="dataTableRef"
           :columns="cols"
@@ -216,9 +217,7 @@
           default-sort-key="name"
           default-sort-order="asc"
           :sort-storage-key="ACCOUNT_SORT_STORAGE_KEY"
-          :estimate-row-height="156"
-          :overscan="5"
-          :virtualize-threshold="50"
+          :virtualize-threshold="100000"
         >
           <template #header-select>
             <input

@@ -36,6 +36,10 @@ export default { bpsUpstream: {
   "breakerOpen": "Open until {time}",
   "breakerClosed": "Closed ({failures} consecutive failures)",
   "unlisted": "Removed from the list but still has stats on this instance: {ids}",
+  "failures": "Recent failures",
+  "failuresHint": "Per-request details of fallbacks and errors after output (latest 100 on this instance), grouped by cause. Expand a group to see each request.",
+  "noFailures": "No failures recorded",
+  "failureCount": "{count} times · latest {time}",
   "events": "Recent events",
   "noEvents": "No events yet",
   "probe": {

@@ -327,6 +327,7 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(ctx context.Context, account
 			return nil, false
 		}
 		stream := newBPSPrimedBody(bridge.Stream(resp.Body))
+		stream.holdForTools = len(gjson.GetBytes(bpsBody, "tools").Array()) > 0
 		if ok, reason := stream.primeUntilOutput(); !ok {
 			_ = stream.Close()
 			attempt.recordFailure(bpsFailureStream, 0, reason, false)

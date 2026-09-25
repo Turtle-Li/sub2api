@@ -5,21 +5,36 @@ import (
 	"bytes"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/tidwall/gjson"
 )
 
-// bpsPrimedBody 包装 basispoints 转换后的 SSE 流：先预读到首个模型产出或终态，
+// 带工具的请求最多暂扣输出的时长与字节数。Cloudflare 等前置代理约 100 秒未收到
+// 响应头就会断开，超过上限后放行，退化为"首个产出即放行"。
+const (
+	bpsToolHoldLimit    = 45 * time.Second
+	bpsToolHoldMaxBytes = 8 << 20
+)
+
+// bpsPrimedBody 包装 basispoints 转换后的 SSE 流：先预读到可以安全放行的位置，
 // 预读的字节原样缓冲并在之后优先返回。预读期间尚未向客户端写出任何字节，
 // 上游失败（包括 basispoints_protocol_error）可以安全回退到原路径。
+//
+// holdForTools 为 true 时（请求声明了工具），不在首个文本产出时放行，而是等到
+// 首个工具调用转换成功或响应完成：工具调用转换失败最常见，且通常发生在开场白
+// 文字之后，暂扣可以让它仍在输出前失败，从而回退原路径而不是让客户端中断。
 type bpsPrimedBody struct {
-	upstream io.ReadCloser
-	reader   *bufio.Reader
-	primed   bytes.Buffer
+	upstream     io.ReadCloser
+	reader       *bufio.Reader
+	primed       bytes.Buffer
+	holdForTools bool
+	holdLimit    time.Duration
+	now          func() time.Time
 }
 
 func newBPSPrimedBody(upstream io.ReadCloser) *bpsPrimedBody {
-	return &bpsPrimedBody{upstream: upstream, reader: bufio.NewReaderSize(upstream, 64*1024)}
+	return &bpsPrimedBody{upstream: upstream, reader: bufio.NewReaderSize(upstream, 64*1024), holdLimit: bpsToolHoldLimit, now: time.Now}
 }
 
 func (b *bpsPrimedBody) Read(p []byte) (int, error) {
@@ -43,10 +58,23 @@ func bpsIsOutputEvent(eventType string) bool {
 	return false
 }
 
-// primeUntilOutput 逐个读取 SSE 事件直到首个模型产出或终态。返回 false 表示
-// 上游在产出任何内容前就失败或断开。
+// bpsIsToolCallDone 判断事件是否为一个已完成（已转换为客户端工具）的调用。
+func bpsIsToolCallDone(eventType, data string) bool {
+	if eventType != "response.output_item.done" {
+		return false
+	}
+	switch gjson.Get(data, "item.type").String() {
+	case "", "message", "reasoning":
+		return false
+	}
+	return true
+}
+
+// primeUntilOutput 逐个读取 SSE 事件直到可以放行（见 holdForTools）或终态。
+// 返回 false 表示上游在向客户端输出任何内容前就失败或断开。
 func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
 	eventName := ""
+	started := b.now()
 	for {
 		line, err := b.reader.ReadString('\n')
 		b.primed.WriteString(line)
@@ -61,7 +89,9 @@ func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
 				eventType = eventName
 			}
 			switch {
-			case bpsIsOutputEvent(eventType), eventType == "response.completed":
+			case eventType == "response.completed", bpsIsToolCallDone(eventType, data):
+				return true, ""
+			case bpsIsOutputEvent(eventType) && (!b.holdForTools || b.primed.Len() > bpsToolHoldMaxBytes || b.now().Sub(started) > b.holdLimit):
 				return true, ""
 			case eventType == "response.failed", eventType == "response.incomplete", eventType == "error":
 				message := gjson.Get(data, "response.error.message").String()

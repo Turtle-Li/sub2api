@@ -64,6 +64,7 @@ type bpsUpstreamOverview struct {
 	Policy    service.BPSUpstreamPolicy       `json:"policy"`
 	Accounts  []bpsUpstreamAccountView        `json:"accounts"`
 	Unlisted  []service.BPSAccountStats       `json:"unlisted_stats"`
+	Failures  []service.BPSEvent              `json:"recent_failures"`
 	StartedAt time.Time                       `json:"monitor_started_at"`
 	Now       time.Time                       `json:"now"`
 }
@@ -130,6 +131,7 @@ func (h *BPSUpstreamHandler) GetOverview(c *gin.Context) {
 		Policy:    service.BPSUpstreamPolicyInfo(),
 		Accounts:  views,
 		Unlisted:  unlisted,
+		Failures:  snapshot.Failures,
 		StartedAt: snapshot.StartedAt,
 		Now:       time.Now(),
 	})

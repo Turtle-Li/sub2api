@@ -40,11 +40,26 @@ export interface BPSUpstreamAccount {
   stats?: BPSAccountStats
 }
 
+export interface BPSEvent {
+  time: string
+  account_id: number
+  model?: string
+  outcome: string
+  reason?: string
+  detail?: string
+  status_code?: number
+  requested_effort?: string
+  applied_effort?: string
+  duration_ms?: number
+}
+
 export interface BPSUpstreamOverview {
   config: BPSUpstreamConfig
   policy: BPSUpstreamPolicy
   accounts: BPSUpstreamAccount[]
   unlisted_stats: BPSAccountStats[]
+  /** 最近的回退 / 输出后中断事件（新在前），与统计分开保留 */
+  recent_failures?: BPSEvent[]
   monitor_started_at: string
   now: string
 }

@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -223,7 +224,7 @@ func isUnsupportedHostedTool(kind string) bool {
 // rebuildNativeHistoryCall uses only the complete call supplied by the client.
 // It does not execute a tool or require that an old tool remain in today's
 // catalog. Cached native items remain authoritative when available.
-func rebuildNativeHistoryCall(item object) (object, error) {
+func (b *Bridge) rebuildNativeHistoryCall(item object) (object, error) {
 	id, name := text(item["call_id"]), text(item["name"])
 	if id == "" || strings.TrimSpace(id) != id || name == "" || strings.TrimSpace(name) != name {
 		return nil, fmt.Errorf("basispoints history recovery requires a complete tool call with nonempty call_id and name")
@@ -263,11 +264,22 @@ func rebuildNativeHistoryCall(item object) (object, error) {
 	if err != nil {
 		return nil, fmt.Errorf("basispoints history tool arguments cannot be serialized")
 	}
-	arguments, err := json.Marshal(object{
+	outer := object{
 		"code": string(code), "summary": "Replay a previously requested client tool",
 		"extended_summary": "The supplied client history contains this tool call; consume its recorded result without repeating it.",
 		"destructive":      false, "references": []any{},
-	})
+	}
+	if info, ok := b.tools[name]; ok && text(item["type"]) == "function_call" {
+		field := functionCodeTransportField(name, info.Kind, info.Parameters)
+		args, _ := envelope["arguments"].(object)
+		if _, hasCode := args[field].(string); field != "" && hasCode {
+			outer, err = encodeFunctionCodeTransport(name, field, args)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	arguments, err := json.Marshal(outer)
 	if err != nil {
 		return nil, fmt.Errorf("basispoints history transport cannot be serialized")
 	}
@@ -309,7 +321,7 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 			if native := b.replay.getForCall(b.scope, id, item); native != nil {
 				item = native
 			} else {
-				native, err := rebuildNativeHistoryCall(item)
+				native, err := b.rebuildNativeHistoryCall(item)
 				if err != nil {
 					return nil, err
 				}
@@ -379,11 +391,17 @@ func (b *Bridge) translateCall(native object) (object, error) {
 		return nil, fmt.Errorf("basispoints returned empty tool transport arguments")
 	}
 	envelope, marked, err := customTransportEnvelope(arguments)
+	rawCustom := marked
+	if !marked && err == nil {
+		envelope, marked, err = b.functionCodeTransportEnvelope(arguments)
+	}
 	if !marked && err == nil {
 		envelope, err = decodeTransportEnvelope(arguments["code"])
 		if err != nil {
 			if recovered, ok := recoverTransportEnvelope(arguments["code"], b.tools); ok {
 				envelope, err = recovered, nil
+			} else if name := b.transportToolHint(arguments["code"]); name != "" {
+				err = fmt.Errorf("%w; tool=%s", err, name)
 			}
 		}
 	}
@@ -398,7 +416,7 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	if !allowed {
 		return nil, fmt.Errorf("basispoints returned a tool outside the client's catalog")
 	}
-	result, err := b.finishClientToolCall(native, info, envelope, marked)
+	result, err := b.finishClientToolCall(native, info, envelope, rawCustom)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +475,7 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 	// The model bypassed run_officejs, so the bare native name is not a BPS tool.
 	// Cache a transport-wrapped replay so the next turn presents a BPS-known
 	// run_officejs item, matching how absent history is rebuilt.
-	wrapped, err := rebuildNativeHistoryCall(result)
+	wrapped, err := b.rebuildNativeHistoryCall(result)
 	if err != nil {
 		return nil, err
 	}
@@ -548,4 +566,26 @@ func (b *Bridge) translateResponse(response object) error {
 
 func isToolEvent(kind string) bool {
 	return strings.HasPrefix(kind, "response.function_call_arguments.") || strings.HasPrefix(kind, "response.custom_tool_call_input.")
+}
+
+var transportNameHint = regexp.MustCompile(`"(?:name|tool)"\s*:\s*"([A-Za-z0-9_.-]{1,128})"`)
+
+// transportToolHint names the tool of an unparseable envelope for diagnostics.
+// Only an exact catalog name is reported, never code or arguments.
+func (b *Bridge) transportToolHint(value any) string {
+	raw, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	if len(raw) > 4096 {
+		raw = raw[:4096]
+	}
+	match := transportNameHint.FindStringSubmatch(raw)
+	if len(match) != 2 {
+		return ""
+	}
+	if _, known := b.tools[match[1]]; known {
+		return match[1]
+	}
+	return ""
 }

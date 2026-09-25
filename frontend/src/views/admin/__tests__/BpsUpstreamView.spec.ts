@@ -101,6 +101,23 @@ describe('BpsUpstreamView', () => {
     expect(wrapper.find('[data-test="bps-event-row"]').exists()).toBe(false)
   })
 
+  it('groups recent failures by cause and lists each request', async () => {
+    getOverview.mockResolvedValue(overview({
+      recent_failures: [
+        { time: new Date().toISOString(), account_id: 69, model: 'gpt-6-astra', outcome: 'fallback', reason: 'stream_before_output', detail: 'call 12 failed: unexpected_eof', duration_ms: 1500 },
+        { time: new Date().toISOString(), account_id: 69, model: 'gpt-6-astra', outcome: 'fallback', reason: 'stream_before_output', detail: 'call 34 failed: unexpected_eof' },
+        { time: new Date().toISOString(), account_id: 77, outcome: 'error_after_output', reason: 'handler_before_output', detail: 'boom', status_code: 502 },
+      ],
+    }))
+    const wrapper = await mountView()
+    const groups = wrapper.findAll('[data-test="bps-failure-group"]')
+    expect(groups).toHaveLength(2)
+    expect(groups[0].findAll('[data-test="bps-failure-row"]')).toHaveLength(2)
+    expect(groups[0].text()).toContain('cashtech #69')
+    expect(groups[1].text()).toContain('HTTP 502')
+    expect(groups[1].text()).toContain('#77')
+  })
+
   it('passes eligible listed accounts and BPS models to the probe panel', async () => {
     const wrapper = await mountView()
     const panel = wrapper.getComponent(ProbePanelStub)

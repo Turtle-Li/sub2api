@@ -135,6 +135,50 @@
         </p>
       </section>
 
+      <section class="card p-5" data-test="bps-failures">
+        <div class="mb-3">
+          <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.bpsUpstream.failures') }}</h2>
+          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.bpsUpstream.failuresHint') }}</p>
+        </div>
+        <p v-if="!failures.length" class="py-4 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('admin.bpsUpstream.noFailures') }}</p>
+        <div v-else class="space-y-2">
+          <details v-for="group in failureGroups" :key="group.key" class="rounded-lg border border-gray-100 dark:border-dark-700" data-test="bps-failure-group">
+            <summary class="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2 text-sm">
+              <span :class="group.outcome === 'error_after_output' ? 'badge badge-danger' : 'badge badge-warning'">{{ outcomeLabel(group.outcome) }}</span>
+              <span class="font-medium text-gray-900 dark:text-white">{{ reasonLabel(group.reason) }}</span>
+              <span class="min-w-0 flex-1 truncate text-xs text-gray-500 dark:text-gray-400" :title="group.sample">{{ group.sample || '-' }}</span>
+              <span class="whitespace-nowrap text-xs text-gray-500">{{ t('admin.bpsUpstream.failureCount', { count: group.events.length, time: formatDateTime(group.events[0].time) }) }}</span>
+            </summary>
+            <div class="overflow-x-auto border-t border-gray-100 dark:border-dark-700">
+              <table class="w-full text-left text-xs">
+                <thead class="text-gray-500 dark:text-gray-400">
+                  <tr>
+                    <th class="whitespace-nowrap px-3 py-2">{{ t('admin.bpsUpstream.columns.time') }}</th>
+                    <th class="whitespace-nowrap px-3 py-2">{{ t('admin.bpsUpstream.columns.account') }}</th>
+                    <th class="whitespace-nowrap px-3 py-2">{{ t('admin.bpsUpstream.columns.model') }}</th>
+                    <th class="whitespace-nowrap px-3 py-2">{{ t('admin.bpsUpstream.columns.effort') }}</th>
+                    <th class="whitespace-nowrap px-3 py-2">{{ t('admin.bpsUpstream.columns.duration') }}</th>
+                    <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.reason') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr v-for="(event, index) in group.events" :key="`${event.time}-${index}`" data-test="bps-failure-row">
+                    <td class="whitespace-nowrap px-3 py-2">{{ formatDateTime(event.time) }}</td>
+                    <td class="whitespace-nowrap px-3 py-2">{{ accountLabel(event.account_id) }}</td>
+                    <td class="whitespace-nowrap px-3 py-2">{{ event.model || '-' }}</td>
+                    <td class="whitespace-nowrap px-3 py-2">{{ event.requested_effort || '-' }} → {{ event.applied_effort || '-' }}</td>
+                    <td class="whitespace-nowrap px-3 py-2">{{ event.duration_ms ? `${(event.duration_ms / 1000).toFixed(1)}s` : '-' }}</td>
+                    <td class="px-3 py-2 font-mono text-gray-700 break-all dark:text-gray-300">
+                      <span v-if="event.status_code">HTTP {{ event.status_code }} · </span>{{ event.detail || '-' }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+      </section>
+
       <BpsProbePanel :listed-accounts="probeAccounts" :models="policy?.models ?? []" />
     </div>
   </AppLayout>
@@ -153,6 +197,7 @@ import {
   resetBreaker,
   updateConfig,
   type BPSAccountStats,
+  type BPSEvent,
   type BPSUpstreamAccount,
   type BPSUpstreamConfig,
   type BPSUpstreamPolicy,
@@ -170,6 +215,7 @@ const config = ref<BPSUpstreamConfig>({ enabled: false, account_ids: [], live_se
 const policy = ref<BPSUpstreamPolicy | null>(null)
 const accounts = ref<BPSUpstreamAccount[]>([])
 const unlisted = ref<BPSAccountStats[]>([])
+const failures = ref<BPSEvent[]>([])
 const startedAt = ref('')
 const now = ref(Date.now())
 const loading = ref(false)
@@ -213,6 +259,29 @@ const totals = computed(() => {
   ]
 })
 
+// 同一原因的失败归为一组：详情里的数字、ID 归一化后取前缀作为分组键。
+const failureGroups = computed(() => {
+  const groups = new Map<string, { key: string; outcome: string; reason: string; sample: string; events: BPSEvent[] }>()
+  for (const event of failures.value) {
+    const signature = (event.detail ?? '').replace(/[0-9a-f]{8,}|\d+/gi, '#').slice(0, 80)
+    const key = `${event.outcome}|${event.reason ?? ''}|${event.status_code ?? ''}|${signature}`
+    const group = groups.get(key)
+    if (group) group.events.push(event)
+    else groups.set(key, { key, outcome: event.outcome, reason: event.reason ?? '', sample: event.detail ?? '', events: [event] })
+  }
+  return [...groups.values()].sort((a, b) => b.events.length - a.events.length)
+})
+
+function accountLabel(id: number) {
+  const account = accounts.value.find((item) => item.id === id)
+  return account && !account.missing ? `${account.name} #${id}` : `#${id}`
+}
+
+function outcomeLabel(outcome: string) {
+  const key = `admin.bpsUpstream.outcomes.${outcome}`
+  return te(key) ? t(key) : outcome
+}
+
 function breakerOpen(stats?: BPSAccountStats) {
   return !!stats?.breaker_open_until && new Date(stats.breaker_open_until).getTime() > now.value
 }
@@ -243,6 +312,7 @@ async function load() {
     policy.value = overview.policy
     accounts.value = overview.accounts ?? []
     unlisted.value = overview.unlisted_stats ?? []
+    failures.value = overview.recent_failures ?? []
     startedAt.value = overview.monitor_started_at
     now.value = overview.now ? new Date(overview.now).getTime() : Date.now()
     loadError.value = ''
