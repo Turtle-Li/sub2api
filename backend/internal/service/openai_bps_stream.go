@@ -5,47 +5,139 @@ import (
 	"bytes"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
 	"github.com/tidwall/gjson"
 )
 
-// 带工具的请求最多暂扣输出的时长与字节数。Cloudflare 等前置代理约 100 秒未收到
-// 响应头就会断开，超过上限后放行，退化为"首个产出即放行"。
+// BPS 预读最多占用的时长（从发起 BPS 请求起算）与字节数。Cloudflare 等前置代理
+// 约 100 秒未收到首字节就会断开；到点后放行，交给响应处理器（其 keepalive 会接手），
+// 之后的失败只能记为输出后中断。
 const (
-	bpsToolHoldLimit    = 45 * time.Second
+	bpsHoldLimit        = 45 * time.Second
 	bpsToolHoldMaxBytes = 8 << 20
 )
+
+// bpsHoldMode 决定预读在什么时候放行给响应处理器。
+type bpsHoldMode int
+
+const (
+	// bpsHoldFirstOutput：流式且未声明工具，首个模型产出即放行，保持低延迟。
+	bpsHoldFirstOutput bpsHoldMode = iota
+	// bpsHoldTools：流式且声明了工具。basispoints 会把工具事件扣到 response.completed
+	// 才统一发出，工具调用转换失败最常见，所以扣到转换成功或终态（受截止时间约束），
+	// 让失败仍发生在输出前，从而回退原路径。
+	bpsHoldTools
+	// bpsHoldTerminal：非流式，客户端本就等待完整响应，预读到终态再放行。
+	bpsHoldTerminal
+)
+
+type bpsStreamChunk struct {
+	data []byte
+	err  error
+}
 
 // bpsPrimedBody 包装 basispoints 转换后的 SSE 流：先预读到可以安全放行的位置，
 // 预读的字节原样缓冲并在之后优先返回。预读期间尚未向客户端写出任何字节，
 // 上游失败（包括 basispoints_protocol_error）可以安全回退到原路径。
 //
-// holdForTools 为 true 时（请求声明了工具），不在首个文本产出时放行，而是等到
-// 首个工具调用转换成功或响应完成：工具调用转换失败最常见，且通常发生在开场白
-// 文字之后，暂扣可以让它仍在输出前失败，从而回退原路径而不是让客户端中断。
+// 读取由后台 goroutine 完成，预读可以按截止时间放行，而不会阻塞在上游读取上：
+// basispoints 扣留工具事件期间管道里可能长时间没有任何事件。
 type bpsPrimedBody struct {
-	upstream     io.ReadCloser
-	reader       *bufio.Reader
-	primed       bytes.Buffer
-	holdForTools bool
-	holdLimit    time.Duration
-	now          func() time.Time
+	upstream  io.ReadCloser
+	chunks    chan bpsStreamChunk
+	done      chan struct{}
+	closeOnce sync.Once
+	onClose   func()
+
+	primed  bytes.Buffer
+	pending []byte
+	err     error
+
+	mode     bpsHoldMode
+	deadline time.Time
+	// fallbackOnDeadline 为 true 时截止时间到达即回退而非放行：截止时间取自首输出预算，
+	// 放行后客户端仍拿不到输出，首输出超时照样会触发，且剩余预算已不足以走原路径。
+	fallbackOnDeadline bool
+}
+
+// newBPSBridgeStream 转换 BPS 响应并按请求形态决定预读策略。BPS 请求体不带 tools
+// （工具目录写在提示词里），须以 bridge 记录的客户端声明为准。
+func newBPSBridgeStream(bridge *basispoints.Bridge, upstream io.ReadCloser, clientStream bool, deadline time.Time) *bpsPrimedBody {
+	mode := bpsHoldFirstOutput
+	switch {
+	case !clientStream:
+		mode = bpsHoldTerminal
+	case bridge.HasClientTools():
+		mode = bpsHoldTools
+	}
+	stream := newBPSPrimedBody(bridge.Stream(upstream))
+	stream.mode = mode
+	stream.deadline = deadline
+	return stream
 }
 
 func newBPSPrimedBody(upstream io.ReadCloser) *bpsPrimedBody {
-	return &bpsPrimedBody{upstream: upstream, reader: bufio.NewReaderSize(upstream, 64*1024), holdLimit: bpsToolHoldLimit, now: time.Now}
+	b := &bpsPrimedBody{upstream: upstream, chunks: make(chan bpsStreamChunk, 16), done: make(chan struct{})}
+	go b.pump()
+	return b
+}
+
+func (b *bpsPrimedBody) pump() {
+	reader := bufio.NewReaderSize(b.upstream, 64*1024)
+	for {
+		line, err := reader.ReadString('\n')
+		select {
+		case b.chunks <- bpsStreamChunk{data: []byte(line), err: err}:
+		case <-b.done:
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// next 取下一段上游数据；timeout 为 nil 表示不设截止。
+func (b *bpsPrimedBody) next(timeout <-chan time.Time) (bpsStreamChunk, bool) {
+	select {
+	case chunk := <-b.chunks:
+		return chunk, true
+	case <-b.done:
+		return bpsStreamChunk{err: io.ErrClosedPipe}, true
+	case <-timeout:
+		return bpsStreamChunk{}, false
+	}
 }
 
 func (b *bpsPrimedBody) Read(p []byte) (int, error) {
 	if b.primed.Len() > 0 {
 		return b.primed.Read(p)
 	}
-	return b.reader.Read(p)
+	for len(b.pending) == 0 {
+		if b.err != nil {
+			return 0, b.err
+		}
+		chunk, _ := b.next(nil)
+		b.pending, b.err = chunk.data, chunk.err
+	}
+	n := copy(p, b.pending)
+	b.pending = b.pending[n:]
+	return n, nil
 }
 
 func (b *bpsPrimedBody) Close() error {
-	return b.upstream.Close()
+	var err error
+	b.closeOnce.Do(func() {
+		close(b.done)
+		err = b.upstream.Close()
+		if b.onClose != nil {
+			b.onClose()
+		}
+	})
+	return err
 }
 
 // bpsIsOutputEvent 判断事件是否携带模型产出（推理、文本或工具调用）。
@@ -70,13 +162,25 @@ func bpsIsToolCallDone(eventType, data string) bool {
 	return true
 }
 
-// primeUntilOutput 逐个读取 SSE 事件直到可以放行（见 holdForTools）或终态。
-// 返回 false 表示上游在向客户端输出任何内容前就失败或断开。
+// primeUntilOutput 逐个读取 SSE 事件直到可以放行（见 bpsHoldMode）、到达截止时间
+// 或终态。返回 false 表示上游在向客户端输出任何内容前就失败或断开。
 func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
+	var timeout <-chan time.Time
+	if b.mode != bpsHoldTerminal && !b.deadline.IsZero() {
+		timer := time.NewTimer(time.Until(b.deadline))
+		defer timer.Stop()
+		timeout = timer.C
+	}
 	eventName := ""
-	started := b.now()
 	for {
-		line, err := b.reader.ReadString('\n')
+		chunk, ok := b.next(timeout)
+		if !ok {
+			if b.fallbackOnDeadline {
+				return false, "no output within the BPS share of the first-output budget"
+			}
+			return true, ""
+		}
+		line := string(chunk.data)
 		b.primed.WriteString(line)
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
@@ -89,9 +193,11 @@ func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
 				eventType = eventName
 			}
 			switch {
-			case eventType == "response.completed", bpsIsToolCallDone(eventType, data):
+			case eventType == "response.completed":
 				return true, ""
-			case bpsIsOutputEvent(eventType) && (!b.holdForTools || b.primed.Len() > bpsToolHoldMaxBytes || b.now().Sub(started) > b.holdLimit):
+			case b.mode == bpsHoldTools && (bpsIsToolCallDone(eventType, data) || b.primed.Len() > bpsToolHoldMaxBytes):
+				return true, ""
+			case b.mode == bpsHoldFirstOutput && bpsIsOutputEvent(eventType):
 				return true, ""
 			case eventType == "response.failed", eventType == "response.incomplete", eventType == "error":
 				message := gjson.Get(data, "response.error.message").String()
@@ -103,11 +209,11 @@ func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
 		case trimmed == "":
 			eventName = ""
 		}
-		if err != nil {
-			if err == io.EOF {
+		if chunk.err != nil {
+			if chunk.err == io.EOF {
 				return false, "stream ended before output"
 			}
-			return false, "stream error before output: " + err.Error()
+			return false, "stream error before output: " + chunk.err.Error()
 		}
 	}
 }

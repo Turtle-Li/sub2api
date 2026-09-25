@@ -26,6 +26,10 @@ type Bridge struct {
 	scope            string
 }
 
+// HasClientTools reports whether the client declared tools that BPS may call
+// through the run_officejs transport.
+func (b *Bridge) HasClientTools() bool { return len(b.tools) > 0 }
+
 func decode(raw []byte, target any) error {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()

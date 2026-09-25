@@ -1035,6 +1035,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	bpsAttempt := s.openAIBPSAttemptFor(ctx, c, account, body, upstreamModel, reasoningEffortValue, isCompactRequest, imageIntent, compatMessagesBridge)
+	if bpsAttempt != nil {
+		bpsAttempt.clientStream = reqStream
+		if firstOutputTimeout > 0 {
+			// 首输出预算的一半留给 BPS，另一半留给原路径回退。
+			bpsAttempt.budgetDeadline = startTime.Add(firstOutputTimeout / 2)
+		}
+	}
 	httpInvalidEncryptedContentRetryTried := false
 	compactModelFallbackRetried := false
 	agentTaskRecoveryTried := false
@@ -1231,6 +1238,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				outputStarted := openAIStreamClientOutputStarted(c, false)
 				bpsRun.recordFailure(bpsFailureHandler, 0, err.Error(), outputStarted)
 				if !outputStarted {
+					// 循环里的 defer 要到 Forward 返回才执行，回退前先释放 BPS 流与上游连接。
+					_ = resp.Body.Close()
 					continue
 				}
 			}
@@ -1286,6 +1295,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				outputStarted := openAIStreamClientOutputStarted(c, false)
 				bpsRun.recordFailure(bpsFailureHandler, 0, err.Error(), outputStarted)
 				if !outputStarted {
+					// 循环里的 defer 要到 Forward 返回才执行，回退前先释放 BPS 流与上游连接。
+					_ = resp.Body.Close()
 					continue
 				}
 			}

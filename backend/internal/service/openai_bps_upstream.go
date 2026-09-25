@@ -212,6 +212,19 @@ type openAIBPSAttempt struct {
 	// appliedEffort 是 BPS 实际使用的档位（max→xhigh），计费以此为准。
 	appliedEffort string
 	startedAt     time.Time
+	// clientStream 是客户端是否请求流式响应；非流式预读到终态再放行。
+	clientStream bool
+	// budgetDeadline 非零时为首输出超时预算中留给 BPS 的截止时间，其余留给原路径回退。
+	budgetDeadline time.Time
+}
+
+// holdDeadline 返回 BPS 等待响应头与预读的绝对截止时间。
+func (a *openAIBPSAttempt) holdDeadline() time.Time {
+	deadline := a.startedAt.Add(bpsHoldLimit)
+	if !a.budgetDeadline.IsZero() && a.budgetDeadline.Before(deadline) {
+		deadline = a.budgetDeadline
+	}
+	return deadline
 }
 
 // openAIBPSAttemptFor 判定请求是否可以尝试 BPS。只做廉价检查，不触碰网络。
@@ -285,8 +298,19 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamPreferBPS(
 	return resp, nil, err
 }
 
-func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(ctx context.Context, account *Account, token string, attempt *openAIBPSAttempt) (*http.Response, bool) {
+func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, account *Account, token string, attempt *openAIBPSAttempt) (*http.Response, bool) {
 	attempt.startedAt = time.Now()
+	deadline := attempt.holdDeadline()
+	// 等待 BPS 响应头同样受截止时间约束；拿到响应头后不再取消，流由 bpsPrimedBody 关闭时释放。
+	ctx, cancel := context.WithCancel(parent)
+	headerTimer := time.AfterFunc(time.Until(deadline), cancel)
+	released := false
+	defer func() {
+		if !released {
+			headerTimer.Stop()
+			cancel()
+		}
+	}()
 	body := attempt.body
 	if bytes.Contains(body, bpsInlineImageMarker) {
 		if s.bpsImageExternalizer == nil {
@@ -326,13 +350,20 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(ctx context.Context, account
 			attempt.recordFailure(bpsFailureHTTPStatus, statusCode, extractUpstreamErrorMessage(errBody), false)
 			return nil, false
 		}
-		stream := newBPSPrimedBody(bridge.Stream(resp.Body))
-		stream.holdForTools = len(gjson.GetBytes(bpsBody, "tools").Array()) > 0
+		if !headerTimer.Stop() {
+			_ = resp.Body.Close()
+			attempt.recordFailure(bpsFailureNetwork, 0, "response headers arrived after the BPS deadline", false)
+			return nil, false
+		}
+		stream := newBPSBridgeStream(bridge, resp.Body, attempt.clientStream, deadline)
+		stream.onClose = cancel
+		stream.fallbackOnDeadline = !attempt.budgetDeadline.IsZero()
 		if ok, reason := stream.primeUntilOutput(); !ok {
 			_ = stream.Close()
 			attempt.recordFailure(bpsFailureStream, 0, reason, false)
 			return nil, false
 		}
+		released = true
 		resp.Body = stream
 		return resp, true
 	}

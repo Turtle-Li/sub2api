@@ -48,15 +48,32 @@ func (b *Bridge) functionCodeTransportEnvelope(arguments object) (object, bool, 
 	}
 	name := strings.TrimPrefix(summary, functionCodeTransportPrefix)
 	info, allowed := b.tools[name]
+	if !allowed {
+		// 模型常把宿主展示用的 functions. 前缀带进标记。
+		if trimmed := strings.TrimPrefix(name, "functions."); trimmed != name {
+			name = trimmed
+			info, allowed = b.tools[name]
+		}
+	}
 	field := ""
 	if allowed {
 		field = functionCodeTransportField(name, info.Kind, info.Parameters)
 	}
-	if field == "" {
-		return nil, true, fmt.Errorf("basispoints function code transport requires an exact catalog function with a string code parameter")
-	}
 	code, codeOK := arguments["code"].(string)
 	metadata, metadataOK := arguments["extended_summary"].(string)
+	if field == "" {
+		// 标记指向普通 FUNCTION 工具时，code 若是一个 JSON 对象（参数或完整信封）仍可按原协议还原。
+		if allowed && info.Kind == "function" && codeOK {
+			if envelope, ok := plainFunctionFromCode(name, code); ok {
+				return envelope, true, nil
+			}
+		}
+		target := "unknown"
+		if allowed {
+			target = info.Kind + "_without_code_parameter"
+		}
+		return nil, true, fmt.Errorf("basispoints function code transport requires an exact catalog function with a string code parameter (marker_target=%s)", target)
+	}
 	if !codeOK || !metadataOK {
 		return nil, true, fmt.Errorf("basispoints function code transport requires string code and JSON arguments in extended_summary")
 	}
@@ -187,4 +204,24 @@ func transportArgumentsShape(arguments object) string {
 		}
 	}
 	return "summary=" + summaryKind + "; extended_summary=" + metadataKind
+}
+
+// plainFunctionFromCode reads code as the tool's JSON arguments or as a complete
+// {"name","arguments"} envelope for that same tool.
+func plainFunctionFromCode(name, code string) (object, bool) {
+	var value object
+	if decode([]byte(strings.TrimSpace(code)), &value) != nil || value == nil {
+		return nil, false
+	}
+	if envelopeName, ok := value["name"].(string); ok && len(value) == 2 {
+		if strings.TrimPrefix(envelopeName, "functions.") != name {
+			return nil, false
+		}
+		args, ok := value["arguments"].(object)
+		if !ok {
+			return nil, false
+		}
+		value = args
+	}
+	return object{"name": name, "arguments": value}, true
 }

@@ -117,3 +117,44 @@ func TestFunctionCodeRecoversMissingMarker(t *testing.T) {
 		t.Fatal("diagnostics must not leak code or summary")
 	}
 }
+
+func TestFunctionCodeMarkerVariants(t *testing.T) {
+	source := testSource()
+	writeStdin := object{"type": "function", "name": "write_stdin", "parameters": object{
+		"type": "object", "properties": object{"session_id": object{"type": "number"}, "chars": object{"type": "string"}},
+	}}
+	source["tools"] = []any{execCommandTestTool(), writeStdin}
+	_, bridge := mustPrepare(t, source, "scope", nil)
+	if !bridge.HasClientTools() {
+		t.Fatal("declared client tools must be reported")
+	}
+	native := func(summary, code, metadata string) object {
+		outer, _ := json.Marshal(object{"summary": summary, "code": code, "extended_summary": metadata, "destructive": false, "references": []any{}})
+		return object{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "run_officejs", "arguments": string(outer), "status": "completed"}
+	}
+
+	call, err := bridge.translateCall(native(functionCodeTransportPrefix+"functions.exec_command", "ls -la", "{}"))
+	if err != nil || call["name"] != "exec_command" || functionCodeTestArguments(t, call)["cmd"] != "ls -la" {
+		t.Fatalf("functions. prefix in marker must resolve: %v %v", call, err)
+	}
+	for _, code := range []string{`{"session_id":7,"chars":""}`, `{"name":"write_stdin","arguments":{"session_id":7,"chars":""}}`} {
+		call, err = bridge.translateCall(native(functionCodeTransportPrefix+"write_stdin", code, "{}"))
+		if err != nil || call["name"] != "write_stdin" || functionCodeTestArguments(t, call)["session_id"] == nil {
+			t.Fatalf("plain function marker with JSON code must resolve: %v %v", call, err)
+		}
+	}
+	_, err = bridge.translateCall(native(functionCodeTransportPrefix+"write_stdin", "not json", "{}"))
+	if err == nil || !strings.Contains(err.Error(), "marker_target=function_without_code_parameter") {
+		t.Fatalf("expected marker target diagnostics, got %v", err)
+	}
+	_, err = bridge.translateCall(native(functionCodeTransportPrefix+"secret_tool", "x", "{}"))
+	if err == nil || !strings.Contains(err.Error(), "marker_target=unknown") || strings.Contains(err.Error(), "secret_tool") {
+		t.Fatalf("unknown marker target must not echo the name: %v", err)
+	}
+
+	plain := testSource()
+	_, noTools := mustPrepare(t, plain, "scope", nil)
+	if noTools.HasClientTools() {
+		t.Fatal("requests without tools must not hold output")
+	}
+}

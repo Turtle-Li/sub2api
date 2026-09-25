@@ -100,9 +100,19 @@ func TestBPSStripEncryptedReasoning(t *testing.T) {
 
 func bpsTestPrimedStream(t *testing.T, events ...string) *bpsPrimedBody {
 	t.Helper()
-	_, bridge, err := prepareBPSRequestBody(bpsTestShellBody(), &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
+	// 与生产路径一致：Codex shell 请求声明了工具，必须暂扣。
+	return bpsTestModeStream(t, bpsTestShellBody(), true, bpsHoldTools, events...)
+}
+
+// bpsTestModeStream 经 newBPSBridgeStream 构造，校验请求形态推导出的预读模式。
+func bpsTestModeStream(t *testing.T, body []byte, clientStream bool, want bpsHoldMode, events ...string) *bpsPrimedBody {
+	t.Helper()
+	_, bridge, err := prepareBPSRequestBody(body, &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
 	require.NoError(t, err)
-	return newBPSPrimedBody(bridge.Stream(bpsTestSSE(events...)))
+	stream := newBPSBridgeStream(bridge, bpsTestSSE(events...), clientStream, time.Now().Add(time.Minute))
+	require.Equal(t, want, stream.mode)
+	t.Cleanup(func() { _ = stream.Close() })
+	return stream
 }
 
 func TestBPSPrimedStreamConvertsTransportCall(t *testing.T) {
@@ -179,7 +189,7 @@ func TestBPSPrimedStreamFailsBeforeOutput(t *testing.T) {
 	require.Contains(t, string(out), "response.completed")
 }
 
-func TestBPSPrimedStreamHoldsTextUntilToolCall(t *testing.T) {
+func TestBPSPrimedStreamHoldModes(t *testing.T) {
 	// 带工具的请求：开场白文字之后工具调用转换失败，仍在输出前失败并回退。
 	bogus := map[string]any{"type": "function_call", "id": "fc_1", "call_id": "c1", "name": "run_officejs", "arguments": `{"code":"Excel.run()"}`}
 	events := []string{
@@ -188,32 +198,22 @@ func TestBPSPrimedStreamHoldsTextUntilToolCall(t *testing.T) {
 		bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"output": []any{bogus}}}),
 	}
 	held := bpsTestPrimedStream(t, events...)
-	held.holdForTools = true
 	ok, reason := held.primeUntilOutput()
 	require.False(t, ok)
 	require.Contains(t, reason, "response.failed")
 
-	// 未暂扣时首个文本即放行（保持无工具请求的低延迟）。
-	early := bpsTestPrimedStream(t, events...)
+	// 未声明工具的流式请求：首个文本即放行（保持低延迟）。
+	plain := []byte(`{"model":"gpt-6-astra","stream":true,"input":"hi"}`)
+	early := bpsTestModeStream(t, plain, true, bpsHoldFirstOutput, events...)
 	ok, _ = early.primeUntilOutput()
 	require.True(t, ok)
 
-	// 超过暂扣上限后放行，避免前置代理首字节超时。
-	capped := bpsTestPrimedStream(t, events...)
-	capped.holdForTools = true
-	start := time.Now()
-	calls := 0
-	capped.now = func() time.Time {
-		calls++
-		if calls == 1 {
-			return start
-		}
-		return start.Add(bpsToolHoldLimit + time.Second)
-	}
-	ok, _ = capped.primeUntilOutput()
-	require.True(t, ok)
+	// 非流式请求：客户端本就等完整响应，同样预读到终态并回退。
+	terminal := bpsTestModeStream(t, bpsTestShellBody(), false, bpsHoldTerminal, events...)
+	ok, _ = terminal.primeUntilOutput()
+	require.False(t, ok)
 
-	// 文本后工具调用转换成功：在调用完成时放行。
+	// 文本后工具调用转换成功：放行并输出转换后的调用。
 	native := map[string]any{
 		"type": "function_call", "id": "fc_native", "call_id": "call_bps_relay_1", "name": "run_officejs", "status": "completed",
 		"arguments": bpsTestJSON(t, map[string]any{
@@ -226,12 +226,81 @@ func TestBPSPrimedStreamHoldsTextUntilToolCall(t *testing.T) {
 		bpsTestJSON(t, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": native}),
 		bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"output": []any{native}}}),
 	)
-	good.holdForTools = true
 	ok, reason = good.primeUntilOutput()
 	require.True(t, ok, reason)
 	out, err := io.ReadAll(good)
 	require.NoError(t, err)
 	require.Contains(t, string(out), `"shell"`)
+}
+
+// 真实场景：basispoints 扣留工具事件时管道里长时间没有事件，预读必须按截止时间放行，
+// 而不是阻塞在上游读取上；放行后缓冲内容与后续流都能继续读到。
+func TestBPSPrimedStreamReleasesAtDeadlineWithoutEvents(t *testing.T) {
+	_, bridge, err := prepareBPSRequestBody(bpsTestShellBody(), &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
+	require.NoError(t, err)
+	reader, writer := io.Pipe()
+	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(80*time.Millisecond))
+	defer func() { _ = stream.Close() }()
+	go func() {
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"thinking\"}\n\n")
+	}()
+
+	started := time.Now()
+	ok, reason := stream.primeUntilOutput()
+	require.True(t, ok, reason)
+	require.Less(t, time.Since(started), 2*time.Second)
+
+	go func() {
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n")
+		_ = writer.Close()
+	}()
+	out, err := io.ReadAll(stream)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "thinking")
+	require.Contains(t, string(out), "response.completed")
+}
+
+// 截止时间取自首输出预算时，到点无输出须回退而不是放行。
+func TestBPSPrimedStreamFallsBackAtBudgetDeadline(t *testing.T) {
+	_, bridge, err := prepareBPSRequestBody(bpsTestShellBody(), &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
+	require.NoError(t, err)
+	reader, writer := io.Pipe()
+	defer func() { _ = writer.Close() }()
+	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(80*time.Millisecond))
+	stream.fallbackOnDeadline = true
+	defer func() { _ = stream.Close() }()
+
+	started := time.Now()
+	ok, reason := stream.primeUntilOutput()
+	require.False(t, ok)
+	require.Contains(t, reason, "first-output budget")
+	require.Less(t, time.Since(started), 2*time.Second)
+}
+
+// Close 必须能打断阻塞中的读取，不泄漏读取 goroutine。
+func TestBPSPrimedStreamCloseUnblocksRead(t *testing.T) {
+	reader, _ := io.Pipe()
+	stream := newBPSPrimedBody(reader)
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.Read(make([]byte, 8))
+		done <- err
+	}()
+	require.NoError(t, stream.Close())
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("read stayed blocked after Close")
+	}
+}
+
+func TestBPSAttemptHoldDeadline(t *testing.T) {
+	now := time.Now()
+	attempt := &openAIBPSAttempt{startedAt: now}
+	require.Equal(t, now.Add(bpsHoldLimit), attempt.holdDeadline())
+	attempt.budgetDeadline = now.Add(10 * time.Second)
+	require.Equal(t, now.Add(10*time.Second), attempt.holdDeadline())
 }
 
 func bpsTestJSON(t *testing.T, value any) string {
@@ -310,9 +379,10 @@ func TestOpenAIBPSUpstreamConfig(t *testing.T) {
 
 func bpsResetMonitor(t *testing.T) {
 	t.Helper()
-	previous := bpsMonitor
+	previous, previousBreaker := bpsMonitor, bpsBreaker
 	bpsMonitor = newBPSMonitorStore()
-	t.Cleanup(func() { bpsMonitor = previous })
+	bpsBreaker = &bpsCircuitBreaker{states: map[int64]*bpsBreakerState{}, now: time.Now}
+	t.Cleanup(func() { bpsMonitor, bpsBreaker = previous, previousBreaker })
 }
 
 func TestOpenAIBPSAttemptGate(t *testing.T) {
@@ -468,6 +538,28 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 		require.Nil(t, bpsRun)
 		require.Len(t, upstream.requests, 2)
 		require.True(t, bpsBreaker.allow(account.ID))
+	})
+
+	t.Run("tool conversion failure after text falls back", func(t *testing.T) {
+		account := bpsTestAccount()
+		account.ID = 90_104
+		bogus := map[string]any{"type": "function_call", "id": "fc_1", "call_id": "c1", "name": "run_officejs", "arguments": `{"code":"Excel.run()"}`}
+		upstream := &httpUpstreamRecorder{responses: []*http.Response{
+			bpsTestSSEResponse(
+				`{"type":"response.output_text.delta","output_index":0,"delta":"let me check"}`,
+				bpsTestJSON(t, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": bogus}),
+				bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"output": []any{bogus}}}),
+			),
+			originalResp(),
+		}}
+		svc := &OpenAIGatewayService{httpUpstream: upstream}
+		attempt := &openAIBPSAttempt{accountID: account.ID, body: bpsTestShellBody(), upstreamModel: "gpt-6-astra", scope: "test", clientStream: true}
+		resp, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", attempt)
+		require.NoError(t, err)
+		require.Nil(t, bpsRun)
+		require.Len(t, upstream.requests, 2)
+		out, _ := io.ReadAll(resp.Body)
+		require.Equal(t, "original", string(out))
 	})
 
 	t.Run("inline image without externalizer skips bps", func(t *testing.T) {
