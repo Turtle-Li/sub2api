@@ -5,6 +5,8 @@ export default { bpsUpstream: {
   "enabled": "已启用",
   "disabled": "已关闭",
   "globalHint": "关闭后所有账号立即回到原路径；开启后仅对下方名单内的账号生效。",
+  "liveSearch": "实时联网搜索请求也走 BPS",
+  "liveSearchHint": "默认关闭：声明了实时联网搜索的请求（Codex 完全访问模式默认开启）回到原路径，会降智。开启后这类请求也走 BPS，但 BPS 无法执行托管搜索，模型会被告知搜索不可用。要同时保留搜索，客户端可启用 Codex 独立搜索（standalone_web_search），由客户端经 /alpha/search 单独搜索。",
   "policy": "支持模型：{models}；连续失败 {threshold} 次或遇到 HTTP {statuses} 时熔断 {minutes} 分钟。计费按 BPS 实际档位（max→xhigh），请求记录保留用户设置的档位。",
   "monitorSince": "统计起始：{time}",
   "monitorHint": "统计与事件仅保存在当前实例内存中，重启或蓝绿切换后清零；多实例时仅显示处理本次请求的实例。",

@@ -5,6 +5,8 @@ export default { bpsUpstream: {
   "enabled": "Enabled",
   "disabled": "Disabled",
   "globalHint": "When off, every account immediately uses the original path; when on, only the accounts listed below try BPS.",
+  "liveSearch": "Keep live web search requests on BPS",
+  "liveSearchHint": "Off by default: requests declaring live web search (the Codex default in full-access mode) use the original path and are degraded. When on they also use BPS, but BPS cannot run hosted search, so the model is told search is unavailable. To keep search, enable Codex standalone search (standalone_web_search) so the client searches separately through /alpha/search.",
   "policy": "Models: {models}. The breaker opens for {minutes} min after {threshold} consecutive failures or on HTTP {statuses}. Billing uses the applied BPS effort (max→xhigh); usage records keep the user's requested effort.",
   "monitorSince": "Stats since {time}",
   "monitorHint": "Stats and events live in this instance's memory only and reset on restart or blue-green switch; with multiple instances you only see the one that served this request.",

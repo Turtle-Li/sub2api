@@ -230,7 +230,8 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 	if account == nil || account.IsShadow() || account.IsOpenAIAgentIdentity() {
 		return nil
 	}
-	if enabled, listed := s.settingService.isOpenAIBPSUpstreamAccount(ctx, account.ID); !enabled || !listed {
+	enabled, listed, liveSearch := s.settingService.isOpenAIBPSUpstreamAccount(ctx, account.ID)
+	if !enabled || !listed {
 		return nil
 	}
 	attempt := &openAIBPSAttempt{accountID: account.ID, body: body, upstreamModel: upstreamModel, effort: effort}
@@ -250,7 +251,7 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 	if skip == "" {
 		if _, ok := openAIResponsesClientToolMapping(c); ok {
 			skip = bpsSkipClientToolMapping
-		} else if reason := basispoints.NativeFallbackReason(body); reason != "" {
+		} else if reason := basispoints.NativeFallbackReason(body, liveSearch); reason != "" {
 			skip, detail = bpsSkipNativeTool, reason
 		} else if !bpsBreaker.allow(account.ID) {
 			skip = bpsSkipBreakerOpen

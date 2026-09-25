@@ -42,17 +42,13 @@ const future = new Date(Date.now() + 60_000).toISOString()
 
 function overview(overrides: Record<string, unknown> = {}) {
   return {
-    config: { enabled: true, account_ids: [69] },
+    config: { enabled: true, account_ids: [69], live_search: false },
     policy: { models: ['gpt-6-astra'], breaker_threshold: 3, breaker_open_seconds: 600, immediate_breaker_status: [401, 403, 429] },
     accounts: [{
       id: 69, name: 'cashtech', platform: 'openai', type: 'oauth', status: 'active', schedulable: true, eligible: true, missing: false,
       stats: { account_id: 69, successes: 5, fallbacks: 2, errors_after_output: 1, skipped: { compact: 3 }, breaker_open_until: future, breaker_failures: 0 },
     }],
     unlisted_stats: [{ account_id: 12, successes: 1, fallbacks: 0, errors_after_output: 0, breaker_failures: 0 }],
-    events: [
-      { time: new Date().toISOString(), account_id: 69, model: 'gpt-6-astra', outcome: 'success', requested_effort: 'max', applied_effort: 'xhigh', duration_ms: 1200 },
-      { time: new Date().toISOString(), account_id: 69, model: 'gpt-5.6-sol', outcome: 'fallback', reason: 'http_status', status_code: 403 },
-    ],
     monitor_started_at: new Date().toISOString(),
     now: new Date().toISOString(),
     ...overrides,
@@ -89,15 +85,14 @@ describe('BpsUpstreamView', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders totals, accounts, breaker state and events', async () => {
+  it('renders totals, accounts, breaker state without an event list', async () => {
     const wrapper = await mountView()
     expect(wrapper.get('[data-test="bps-total-success"]').text()).toBe('6')
     expect(wrapper.get('[data-test="bps-total-fallback"]').text()).toBe('2')
     expect(wrapper.get('[data-test="bps-total-breakers"]').text()).toBe('1')
     expect(wrapper.findAll('[data-test="bps-account-row"]')).toHaveLength(1)
     expect(wrapper.text()).toContain('admin.bpsUpstream.resetBreaker')
-    expect(wrapper.findAll('[data-test="bps-event-row"]')).toHaveLength(2)
-    expect(wrapper.text()).toContain('max → xhigh')
+    expect(wrapper.find('[data-test="bps-event-row"]').exists()).toBe(false)
   })
 
   it('filters account picker, adds and removes accounts', async () => {
@@ -108,19 +103,23 @@ describe('BpsUpstreamView', () => {
     await wrapper.get('[data-test="bps-account-picker"]').setValue('90')
     await wrapper.get('[data-test="bps-add-account"]').trigger('click')
     await flushPromises()
-    expect(updateConfig).toHaveBeenLastCalledWith({ enabled: true, account_ids: [69, 90] })
+    expect(updateConfig).toHaveBeenLastCalledWith({ enabled: true, account_ids: [69, 90], live_search: false })
 
     // 保存后重新加载，概览仍只返回 #69。
     await wrapper.get('[data-test="bps-remove-account"]').trigger('click')
     await flushPromises()
-    expect(updateConfig).toHaveBeenLastCalledWith({ enabled: true, account_ids: [] })
+    expect(updateConfig).toHaveBeenLastCalledWith({ enabled: true, account_ids: [], live_search: false })
   })
 
   it('toggles the global switch and resets breakers', async () => {
     const wrapper = await mountView()
     await wrapper.get('[data-test="bps-global-toggle"]').trigger('click')
     await flushPromises()
-    expect(updateConfig).toHaveBeenCalledWith({ enabled: false, account_ids: [69] })
+    expect(updateConfig).toHaveBeenCalledWith({ enabled: false, account_ids: [69], live_search: false })
+
+    await wrapper.get('[data-test="bps-live-search-toggle"]').trigger('click')
+    await flushPromises()
+    expect(updateConfig).toHaveBeenLastCalledWith({ enabled: true, account_ids: [69], live_search: true })
 
     const resetButton = wrapper.findAll('button').find((button) => button.text() === 'admin.bpsUpstream.resetBreaker')
     await resetButton!.trigger('click')

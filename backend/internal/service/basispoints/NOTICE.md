@@ -27,3 +27,8 @@ ranxi2001/sub2api backend/internal/service/basispoints. The local image relay
 and structured-output validation files were not imported: images are uploaded
 to R2 by the attachment gateway, and requests with text.format json_object or
 json_schema stay on the native Codex channel.
+
+Resynced with ranxi2001/sub2api v2.8.13 (production 3e345632f): strict single
+catalog invocation recovery and custom single-string arguments (#73), content
+error locations (content.go, #73), and plaintext encrypted_function_args for
+collaboration tools (#78), with their tests.

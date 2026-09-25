@@ -27,10 +27,14 @@ const (
 type OpenAIBPSUpstreamConfig struct {
 	Enabled    bool    `json:"enabled"`
 	AccountIDs []int64 `json:"account_ids"`
+	// LiveSearch 让声明了实时联网搜索（external_web_access）的请求也走 BPS。
+	// BPS 无法执行托管搜索，这类请求会省略搜索工具并提示模型搜索不可用。
+	LiveSearch bool `json:"live_search"`
 }
 
 type cachedBPSUpstreamConfig struct {
 	enabled    bool
+	liveSearch bool
 	accountIDs map[int64]struct{}
 	expiresAt  int64
 }
@@ -41,7 +45,7 @@ func (c *cachedBPSUpstreamConfig) public() OpenAIBPSUpstreamConfig {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	return OpenAIBPSUpstreamConfig{Enabled: c.enabled, AccountIDs: ids}
+	return OpenAIBPSUpstreamConfig{Enabled: c.enabled, AccountIDs: ids, LiveSearch: c.liveSearch}
 }
 
 var bpsUpstreamConfigCache atomic.Value // *cachedBPSUpstreamConfig
@@ -52,7 +56,7 @@ func newCachedBPSUpstreamConfig(cfg OpenAIBPSUpstreamConfig, ttl time.Duration) 
 	for _, id := range cfg.AccountIDs {
 		ids[id] = struct{}{}
 	}
-	return &cachedBPSUpstreamConfig{enabled: cfg.Enabled, accountIDs: ids, expiresAt: time.Now().Add(ttl).UnixNano()}
+	return &cachedBPSUpstreamConfig{enabled: cfg.Enabled, liveSearch: cfg.LiveSearch, accountIDs: ids, expiresAt: time.Now().Add(ttl).UnixNano()}
 }
 
 // parseBPSAccountIDs 解析账号 ID 列表：去重、剔除非正数并排序。
@@ -94,9 +98,9 @@ func (s *SettingService) loadOpenAIBPSUpstreamConfig(ctx context.Context) *cache
 		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bpsSettingDBTimeout)
 		defer cancel()
 		// 逐个 GetValue：与现有设置读取路径一致，15s 才读一次。
-		values := make(map[string]string, 2)
+		values := make(map[string]string, 3)
 		var err error
-		for _, key := range []string{SettingKeyOpenAIBPSUpstreamEnabled, SettingKeyOpenAIBPSUpstreamAccountIDs} {
+		for _, key := range []string{SettingKeyOpenAIBPSUpstreamEnabled, SettingKeyOpenAIBPSUpstreamAccountIDs, SettingKeyOpenAIBPSUpstreamLiveSearch} {
 			value, getErr := s.settingRepo.GetValue(dbCtx, key)
 			if getErr != nil && !errors.Is(getErr, ErrSettingNotFound) {
 				err = getErr
@@ -114,7 +118,11 @@ func (s *SettingService) loadOpenAIBPSUpstreamConfig(ctx context.Context) *cache
 		if err != nil {
 			slog.Warn("invalid openai_bps_upstream_account_ids setting", "error", err)
 		}
-		cfg := OpenAIBPSUpstreamConfig{Enabled: strings.TrimSpace(values[SettingKeyOpenAIBPSUpstreamEnabled]) == "true", AccountIDs: ids}
+		cfg := OpenAIBPSUpstreamConfig{
+			Enabled:    strings.TrimSpace(values[SettingKeyOpenAIBPSUpstreamEnabled]) == "true",
+			AccountIDs: ids,
+			LiveSearch: strings.TrimSpace(values[SettingKeyOpenAIBPSUpstreamLiveSearch]) == "true",
+		}
 		cached := newCachedBPSUpstreamConfig(cfg, bpsSettingCacheTTL)
 		bpsUpstreamConfigCache.Store(cached)
 		return cached, nil
@@ -131,11 +139,11 @@ func (s *SettingService) GetOpenAIBPSUpstreamConfig(ctx context.Context) OpenAIB
 	return s.loadOpenAIBPSUpstreamConfig(ctx).public()
 }
 
-// isOpenAIBPSUpstreamAccount 判断总开关已开启且账号在参与列表中。
-func (s *SettingService) isOpenAIBPSUpstreamAccount(ctx context.Context, accountID int64) (enabled, listed bool) {
+// isOpenAIBPSUpstreamAccount 判断总开关已开启且账号在参与列表中，并返回是否允许实时搜索请求走 BPS。
+func (s *SettingService) isOpenAIBPSUpstreamAccount(ctx context.Context, accountID int64) (enabled, listed, liveSearch bool) {
 	cfg := s.loadOpenAIBPSUpstreamConfig(ctx)
 	_, listed = cfg.accountIDs[accountID]
-	return cfg.enabled, listed
+	return cfg.enabled, listed, cfg.liveSearch
 }
 
 // UpdateOpenAIBPSUpstreamConfig 保存配置并立即在本进程生效；其他实例在缓存到期（15s）后生效。
@@ -154,6 +162,7 @@ func (s *SettingService) UpdateOpenAIBPSUpstreamConfig(ctx context.Context, cfg 
 	if err := s.settingRepo.SetMultiple(ctx, map[string]string{
 		SettingKeyOpenAIBPSUpstreamEnabled:    strconv.FormatBool(cfg.Enabled),
 		SettingKeyOpenAIBPSUpstreamAccountIDs: string(encoded),
+		SettingKeyOpenAIBPSUpstreamLiveSearch: strconv.FormatBool(cfg.LiveSearch),
 	}); err != nil {
 		return OpenAIBPSUpstreamConfig{}, err
 	}

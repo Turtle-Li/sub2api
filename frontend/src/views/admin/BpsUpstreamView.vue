@@ -17,6 +17,11 @@
               </span>
             </div>
             <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.bpsUpstream.globalHint') }}</p>
+            <div class="flex items-center gap-3 pt-2">
+              <Toggle data-test="bps-live-search-toggle" :model-value="config.live_search" @update:model-value="setLiveSearch" />
+              <span class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.bpsUpstream.liveSearch') }}</span>
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.bpsUpstream.liveSearchHint') }}</p>
             <p v-if="policy" class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.bpsUpstream.policy', { models: policy.models.join(' / '), threshold: policy.breaker_threshold, minutes: Math.round(policy.breaker_open_seconds / 60), statuses: policy.immediate_breaker_status.join('/') }) }}
             </p>
@@ -130,61 +135,6 @@
         </p>
       </section>
 
-      <section class="card p-5">
-        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.bpsUpstream.events') }}</h2>
-          <div class="flex gap-1">
-            <button
-              v-for="filter in outcomeFilters"
-              :key="filter"
-              type="button"
-              class="btn btn-sm"
-              :class="outcomeFilter === filter ? 'btn-primary' : 'btn-secondary'"
-              @click="outcomeFilter = filter"
-            >
-              {{ t(`admin.bpsUpstream.outcomes.${filter}`) }}
-            </button>
-          </div>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-sm">
-            <thead class="text-xs uppercase text-gray-500 dark:text-gray-400">
-              <tr>
-                <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.time') }}</th>
-                <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.account') }}</th>
-                <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.model') }}</th>
-                <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.outcome') }}</th>
-                <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.effort') }}</th>
-                <th class="px-3 py-2 text-right">{{ t('admin.bpsUpstream.columns.duration') }}</th>
-                <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.reason') }}</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-              <tr v-if="!filteredEvents.length">
-                <td colspan="7" class="px-3 py-6 text-center text-gray-500 dark:text-gray-400">{{ t('admin.bpsUpstream.noEvents') }}</td>
-              </tr>
-              <tr v-for="(event, index) in filteredEvents" :key="`${event.time}-${index}`" data-test="bps-event-row">
-                <td class="whitespace-nowrap px-3 py-2 text-xs">{{ formatDateTime(event.time) }}</td>
-                <td class="px-3 py-2 text-xs">{{ accountLabel(event.account_id) }}</td>
-                <td class="px-3 py-2 text-xs">{{ event.model || '-' }}</td>
-                <td class="px-3 py-2"><span :class="outcomeClass(event.outcome)">{{ t(`admin.bpsUpstream.outcomes.${event.outcome}`) }}</span></td>
-                <td class="px-3 py-2 text-xs">
-                  <template v-if="event.requested_effort || event.applied_effort">
-                    {{ event.requested_effort || '-' }}<span v-if="event.applied_effort && event.applied_effort !== event.requested_effort"> → {{ event.applied_effort }}</span>
-                  </template>
-                  <span v-else>-</span>
-                </td>
-                <td class="px-3 py-2 text-right text-xs">{{ event.duration_ms ? `${event.duration_ms} ms` : '-' }}</td>
-                <td class="max-w-[360px] px-3 py-2 text-xs text-gray-600 dark:text-gray-300">
-                  <span v-if="event.reason">{{ reasonLabel(event.reason) }}</span>
-                  <span v-if="event.status_code"> · HTTP {{ event.status_code }}</span>
-                  <div v-if="event.detail" class="truncate text-gray-400" :title="event.detail">{{ event.detail }}</div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   </AppLayout>
 </template>
@@ -201,8 +151,6 @@ import {
   resetBreaker,
   updateConfig,
   type BPSAccountStats,
-  type BPSEvent,
-  type BPSOutcome,
   type BPSUpstreamAccount,
   type BPSUpstreamConfig,
   type BPSUpstreamPolicy,
@@ -212,24 +160,20 @@ import { formatDateTime } from '@/utils/format'
 
 const REFRESH_INTERVAL_MS = 10000
 const eligibleAccountTypes = ['oauth', 'setup-token'] as const
-const outcomeFilters = ['all', 'success', 'fallback', 'error_after_output', 'skipped'] as const
-type OutcomeFilter = (typeof outcomeFilters)[number]
 
 const { t, te } = useI18n()
 const appStore = useAppStore()
 
-const config = ref<BPSUpstreamConfig>({ enabled: false, account_ids: [] })
+const config = ref<BPSUpstreamConfig>({ enabled: false, account_ids: [], live_search: false })
 const policy = ref<BPSUpstreamPolicy | null>(null)
 const accounts = ref<BPSUpstreamAccount[]>([])
 const unlisted = ref<BPSAccountStats[]>([])
-const events = ref<BPSEvent[]>([])
 const startedAt = ref('')
 const now = ref(Date.now())
 const loading = ref(false)
 const saving = ref(false)
 const loadError = ref('')
 const autoRefresh = ref(true)
-const outcomeFilter = ref<OutcomeFilter>('all')
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 let loadSequence = 0
 
@@ -263,17 +207,6 @@ const totals = computed(() => {
   ]
 })
 
-const filteredEvents = computed(() =>
-  outcomeFilter.value === 'all' ? events.value : events.value.filter((event) => event.outcome === outcomeFilter.value),
-)
-
-const accountNames = computed(() => new Map(accounts.value.filter((a) => !a.missing).map((a) => [a.id, a.name])))
-
-function accountLabel(id: number) {
-  const name = accountNames.value.get(id)
-  return name ? `${name} (#${id})` : `#${id}`
-}
-
 function breakerOpen(stats?: BPSAccountStats) {
   return !!stats?.breaker_open_until && new Date(stats.breaker_open_until).getTime() > now.value
 }
@@ -287,15 +220,6 @@ function formatSkips(skipped?: Record<string, number>) {
   const entries = Object.entries(skipped ?? {}).filter(([, count]) => count > 0)
   if (!entries.length) return '-'
   return entries.sort((a, b) => b[1] - a[1]).map(([reason, count]) => `${reasonLabel(reason)} ${count}`).join(' · ')
-}
-
-function outcomeClass(outcome: BPSOutcome) {
-  switch (outcome) {
-    case 'success': return 'badge badge-success'
-    case 'fallback': return 'badge badge-warning'
-    case 'error_after_output': return 'badge badge-danger'
-    default: return 'badge badge-gray'
-  }
 }
 
 function errorMessage(err: unknown, fallback: string) {
@@ -313,7 +237,6 @@ async function load() {
     policy.value = overview.policy
     accounts.value = overview.accounts ?? []
     unlisted.value = overview.unlisted_stats ?? []
-    events.value = overview.events ?? []
     startedAt.value = overview.monitor_started_at
     now.value = overview.now ? new Date(overview.now).getTime() : Date.now()
     loadError.value = ''
@@ -341,6 +264,10 @@ async function save(next: BPSUpstreamConfig) {
 
 function setEnabled(enabled: boolean) {
   void save({ ...config.value, enabled })
+}
+
+function setLiveSearch(liveSearch: boolean) {
+  void save({ ...config.value, live_search: liveSearch })
 }
 
 async function addAccount() {

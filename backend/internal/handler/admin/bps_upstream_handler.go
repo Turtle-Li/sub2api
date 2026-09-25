@@ -54,7 +54,6 @@ type bpsUpstreamOverview struct {
 	Policy    service.BPSUpstreamPolicy       `json:"policy"`
 	Accounts  []bpsUpstreamAccountView        `json:"accounts"`
 	Unlisted  []service.BPSAccountStats       `json:"unlisted_stats"`
-	Events    []service.BPSEvent              `json:"events"`
 	StartedAt time.Time                       `json:"monitor_started_at"`
 	Now       time.Time                       `json:"now"`
 }
@@ -121,7 +120,6 @@ func (h *BPSUpstreamHandler) GetOverview(c *gin.Context) {
 		Policy:    service.BPSUpstreamPolicyInfo(),
 		Accounts:  views,
 		Unlisted:  unlisted,
-		Events:    snapshot.Events,
 		StartedAt: snapshot.StartedAt,
 		Now:       time.Now(),
 	})
@@ -132,6 +130,7 @@ const bpsUpstreamMaxAccounts = 1000
 type updateBPSUpstreamConfigRequest struct {
 	Enabled    bool    `json:"enabled"`
 	AccountIDs []int64 `json:"account_ids"`
+	LiveSearch bool    `json:"live_search"`
 }
 
 // UpdateConfig PUT /api/v1/admin/bps-upstream/config
@@ -188,7 +187,7 @@ func (h *BPSUpstreamHandler) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	saved, err := h.configStore.UpdateOpenAIBPSUpstreamConfig(ctx, service.OpenAIBPSUpstreamConfig{Enabled: req.Enabled, AccountIDs: req.AccountIDs})
+	saved, err := h.configStore.UpdateOpenAIBPSUpstreamConfig(ctx, service.OpenAIBPSUpstreamConfig{Enabled: req.Enabled, AccountIDs: req.AccountIDs, LiveSearch: req.LiveSearch})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

@@ -237,11 +237,20 @@ func TestOpenAIBPSUpstreamConfig(t *testing.T) {
 
 	// 缓存过期后从 settings 重新读取。
 	bpsUpstreamConfigCache.Store(&cachedBPSUpstreamConfig{})
-	enabled, listed := svc.isOpenAIBPSUpstreamAccount(context.Background(), 90)
+	enabled, listed, liveSearch := svc.isOpenAIBPSUpstreamAccount(context.Background(), 90)
 	require.True(t, enabled)
 	require.True(t, listed)
-	_, listed = svc.isOpenAIBPSUpstreamAccount(context.Background(), 70)
+	require.False(t, liveSearch)
+	_, listed, _ = svc.isOpenAIBPSUpstreamAccount(context.Background(), 70)
 	require.False(t, listed)
+
+	saved, err = svc.UpdateOpenAIBPSUpstreamConfig(context.Background(), OpenAIBPSUpstreamConfig{Enabled: true, AccountIDs: []int64{69}, LiveSearch: true})
+	require.NoError(t, err)
+	require.True(t, saved.LiveSearch)
+	require.Equal(t, "true", repo.values[SettingKeyOpenAIBPSUpstreamLiveSearch])
+	bpsUpstreamConfigCache.Store(&cachedBPSUpstreamConfig{})
+	_, _, liveSearch = svc.isOpenAIBPSUpstreamAccount(context.Background(), 69)
+	require.True(t, liveSearch)
 }
 
 func bpsResetMonitor(t *testing.T) {
@@ -270,6 +279,10 @@ func TestOpenAIBPSAttemptGate(t *testing.T) {
 	require.Nil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, body, "gpt-5.6-sol", "high", false, true, false))
 	imageTool := []byte(`{"model":"gpt-6-astra","tools":[{"type":"image_generation"}]}`)
 	require.Nil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, imageTool, "gpt-6-astra", "high", false, false, false))
+	liveSearchTool := []byte(`{"model":"gpt-5.6-terra","tools":[{"type":"web_search","external_web_access":true}]}`)
+	require.Nil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, liveSearchTool, "gpt-5.6-terra", "high", false, false, false))
+	refreshOpenAIBPSUpstreamConfigCache(OpenAIBPSUpstreamConfig{Enabled: true, AccountIDs: []int64{account.ID}, LiveSearch: true})
+	require.NotNil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, liveSearchTool, "gpt-5.6-terra", "high", false, false, false))
 
 	snapshot := BPSUpstreamMonitorSnapshot()
 	require.Len(t, snapshot.Accounts, 1)
@@ -277,7 +290,8 @@ func TestOpenAIBPSAttemptGate(t *testing.T) {
 	require.Equal(t, int64(1), snapshot.Accounts[0].Skipped[bpsSkipCompact])
 	require.Equal(t, int64(2), snapshot.Accounts[0].Skipped[bpsSkipImageGeneration])
 	// 不支持的模型只计数，不进事件列表。
-	require.Len(t, snapshot.Events, 3)
+	require.Equal(t, int64(1), snapshot.Accounts[0].Skipped[bpsSkipNativeTool])
+	require.Len(t, snapshot.Events, 4)
 
 	unlisted := bpsTestAccount()
 	unlisted.ID = 90_002

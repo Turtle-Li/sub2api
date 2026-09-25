@@ -3,6 +3,8 @@ import { apiClient } from '../client'
 export interface BPSUpstreamConfig {
   enabled: boolean
   account_ids: number[]
+  /** 声明实时联网搜索的请求也走 BPS（省略搜索工具），默认回原路径 */
+  live_search: boolean
 }
 
 export interface BPSUpstreamPolicy {
@@ -38,27 +40,11 @@ export interface BPSUpstreamAccount {
   stats?: BPSAccountStats
 }
 
-export type BPSOutcome = 'success' | 'fallback' | 'skipped' | 'error_after_output'
-
-export interface BPSEvent {
-  time: string
-  account_id: number
-  model: string
-  outcome: BPSOutcome
-  reason?: string
-  detail?: string
-  status_code?: number
-  requested_effort?: string
-  applied_effort?: string
-  duration_ms?: number
-}
-
 export interface BPSUpstreamOverview {
   config: BPSUpstreamConfig
   policy: BPSUpstreamPolicy
   accounts: BPSUpstreamAccount[]
   unlisted_stats: BPSAccountStats[]
-  events: BPSEvent[]
   monitor_started_at: string
   now: string
 }

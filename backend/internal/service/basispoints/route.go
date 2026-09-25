@@ -8,8 +8,9 @@ import (
 
 // NativeFallbackReason reports capabilities that must stay on the native Codex
 // channel because Basispoints cannot execute them. Empty means the request can
-// use the BPS bridge.
-func NativeFallbackReason(body []byte) string {
+// use the BPS bridge. keepLiveSearch keeps live web-search declarations on BPS;
+// Prepare then omits the hosted tool and tells the model search is unavailable.
+func NativeFallbackReason(body []byte, keepLiveSearch bool) string {
 	if !gjson.ValidBytes(body) {
 		return ""
 	}
@@ -22,7 +23,7 @@ func NativeFallbackReason(body []byte) string {
 				fallback = "image_generation"
 				return false
 			case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "web_search_2025_08_26":
-				if tool.Get("external_web_access").Bool() || tool.Get("search_context_size").String() == "high" {
+				if !keepLiveSearch && (tool.Get("external_web_access").Bool() || tool.Get("search_context_size").String() == "high") {
 					fallback = "web_search"
 					return false
 				}
