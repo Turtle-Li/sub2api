@@ -305,9 +305,6 @@ func (s *BatchImageDownloadService) ResultFiles(ctx context.Context, owner Batch
 	if err != nil {
 		return nil, err
 	}
-	if s.DeliveryStore == nil || s.Config == nil || !s.Config.BatchImage.DeliveryEnabled {
-		return nil, ErrBatchImageDeliveryNotConfigured
-	}
 	items, err := s.Repo.ListBatchImageItemsForDownload(ctx, job.BatchID, BatchImageItemStatusResultAvailable, 1)
 	if err != nil {
 		return nil, err
@@ -318,6 +315,9 @@ func (s *BatchImageDownloadService) ResultFiles(ctx context.Context, owner Batch
 	fileCount, ok := batchImageCOSArchiveFileCount(items[0])
 	if !ok {
 		return nil, ErrBatchImageResultArchiveUnavailable
+	}
+	if s.DeliveryStore == nil || s.Config == nil || !s.Config.BatchImage.DeliveryEnabled {
+		return nil, ErrBatchImageDeliveryNotConfigured
 	}
 	ttl := s.deliveryDownloadTTL()
 	result := &BatchImageResultFiles{

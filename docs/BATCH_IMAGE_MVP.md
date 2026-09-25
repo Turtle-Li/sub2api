@@ -461,6 +461,12 @@ bucket policy, and public-read permissions:
 - Clients must fall back to server ZIP only for the explicit
   `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE` legacy response, never after COS network/CORS/signature
   or archive-integrity errors.
+- The server must identify a COS archive marker before requiring delivery
+  configuration. A completed legacy job without that marker returns
+  `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE` even when delivery is disabled, so
+  clients may use the authenticated server ZIP path. A job with a valid archive
+  marker remains fail closed with `BATCH_IMAGE_DELIVERY_NOT_CONFIGURED` when the
+  private delivery store or configuration is unavailable.
 - Output deletion is owner-scoped.
 - Cleanup paths are server-generated only.
 

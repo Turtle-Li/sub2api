@@ -131,20 +131,38 @@ issuance are still gates.
   compatibility override to remove before cutover.
 - Synchronous `/v1/images/generations` with `gpt-image-1` returned 200 in about
   17 seconds with a valid Base64 image. The asynchronous route accepted a task
-  with 202 and later reached `completed` with one object-storage result. The
-  release probe key belongs to group 16 (`测试分组`), where ordinary image
-  generation is enabled but Gemini Batch Image is disabled;
-  `/v1/images/batches/models` correctly returned 403
-  `BATCH_IMAGE_GROUP_DISABLED`. A low-cost Batch Image request still requires
-  a temporary key in an enabled Gemini group and deletion of that key after
-  the test.
+  with 202 and later reached `completed` with one object-storage result.
+- A temporary owner key in enabled Gemini group 7 submitted low-cost Vertex
+  Batch Image job `imgbatch_9b7e6f6e539f3ecf0f21d55314fc596d` through the
+  AWS public test hostname. It moved `queued -> running -> completed`, produced
+  one successful item and no failed item, and settled actual cost
+  `0.0001447875`. The authenticated item-content endpoint returned a valid
+  1024x1024 PNG (722,989 bytes). The temporary key was tombstoned immediately
+  after the test and then returned 401. This proves AWS API/Caddy admission,
+  PostgreSQL/Redis state, the current Azure background owner, GCS/Vertex
+  execution, settlement and AWS result reads; it does not yet prove AWS queue
+  ownership.
+- Both Azure and AWS currently have `BATCH_IMAGE_DELIVERY_ENABLED=false`. The
+  successful legacy Vertex job therefore has no private COS archive. The
+  deployed `result-files` endpoint returns
+  `BATCH_IMAGE_DELIVERY_NOT_CONFIGURED` before identifying the legacy result,
+  while the frontend only falls back to server ZIP for
+  `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE`. A minimal compatibility fix now
+  checks for the archive marker first: legacy jobs receive the explicit
+  fallback error, while real COS-archive jobs still fail closed when delivery
+  configuration or storage is unavailable. Deploy and re-run this download
+  probe before cutover.
 - Unified payment is enabled in `live` mode with provider
   `https://pay.totools.cn`, production return/webhook URLs and a healthy
   `sub2api-payment-vault` sidecar. Provider TLS/connectivity passed, the
   monitor-token-protected refund rollback endpoint returned 200 with
   `ready=true` and zero reviewed pending entitlements, and an invalid-signature
-  webhook was rejected with 400. A real 1-2 fen owner checkout remains pending
-  recent administrator TOTP step-up and explicit action-time confirmation.
+  webhook was rejected with 400. Checkout from `aws-test.turtleligpt.com` is
+  intentionally not a valid payment result origin because the configured Sub2
+  result page is `www.turtleligpt.com/payment/result`; the owner chose not to
+  weaken that production binding for the rehearsal hostname. A real 1-2 fen
+  owner checkout therefore remains a post-DNS-cutover verification after recent
+  administrator TOTP step-up and explicit action-time confirmation.
 - The database-host rules shown by the owner contain exact single-IP permits
   for `54.248.123.174` on PostgreSQL 5432 and Redis 6379. The UI omits `/32`
   when displaying the single IP, but application-container connectivity has
@@ -211,9 +229,11 @@ application/Caddy 5xx or fatal log entry in the probe window.
   text/SSE/synchronous-image/asynchronous-image probes are complete. Do not
   change production `api` or `www` DNS until the remaining backup, proxy,
   background-owner, payment, Batch Image and observation gates pass.
-- Run the low-cost Gemini Batch Image canary with a temporary enabled-group key
-  and delete that key. Complete a 1-2 fen owner payment checkout after recent
-  administrator TOTP step-up.
+- Deploy the Batch Image legacy-download compatibility fix and verify that the
+  completed canary returns `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE` from
+  `result-files`, then that the existing `/download` ZIP fallback contains the
+  successful PNG. Complete a 1-2 fen owner payment checkout after production
+  `www` DNS points to AWS and recent administrator TOTP step-up.
 - Replace or clear every Azure proxy binding before deleting any Azure node.
   Current dependencies are proxy IDs 6, 7, 40, 41 and 44 across nine accounts.
   One AWS proxy cannot preserve both Tokyo and US-West egress. The minimum

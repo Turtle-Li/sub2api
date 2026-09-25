@@ -195,7 +195,10 @@ approved.
   Batch Image job. If the release-probe group has Batch Image disabled, create
   a temporary enabled Gemini-group key through the normal admin contract, run
   the canary and delete the key. Do not enable Batch Image globally merely to
-  make the probe pass.
+  make the probe pass. For a legacy/non-COS result, require `result-files` to
+  return `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE` and verify the authenticated
+  `/download` ZIP fallback. For a COS-archive result, never fall back after
+  delivery configuration, CORS, signature, network or integrity errors.
 - Verify public ingress controls, logs, database backup/restore and current
   recovery point. Compare 2 GiB memory plus swap and sustained/concurrent
   egress to measured production demand. A short single-upload burst is
@@ -256,15 +259,17 @@ application release. PostgreSQL/Redis connectivity, operator origin checks,
 the restricted GitHub workflow and local pinned-IP authenticated models and
 Responses requests have passed. Synchronous and asynchronous image generation,
 payment configuration/readiness and invalid webhook rejection have also passed.
-The remaining functional probes are Gemini Batch Image with an enabled-group
-temporary key and an owner-approved 1-2 fen live checkout. It still lacks
-current candidate/offsite backup plus restore evidence, automatic TLS issuance
-on the test hostname, sustained 2 GiB memory/load/network headroom evidence,
-Azure proxy replacement and the controlled background-owner handoff. Azure
-remains production and DNS is unchanged. Do not label it cutover-ready until
-those Section 4 gates pass. The automatic-TLS Caddyfile is already rendered for
-`sub2api-green`, staged at `/opt/sub2api/Caddyfile.aws-test.staged`, and passes
-Caddy validation without reload; Cloudflare creation and ACME issuance remain
-pending. Also retire the obsolete running Lightsail instance
+The enabled-group Gemini Batch Image canary has completed through the AWS test
+hostname, produced a valid PNG, settled correctly and had its temporary key
+deleted. Before cutover, deploy and verify the legacy server-ZIP fallback fix
+for the currently disabled COS delivery mode. The owner-approved 1-2 fen live
+checkout is intentionally deferred until the configured production `www`
+result origin points to AWS. The candidate still lacks current candidate/offsite
+backup plus restore evidence, sustained 2 GiB memory/load/network headroom
+evidence, Azure proxy replacement and the controlled background-owner handoff.
+Initial automatic TLS issuance on the test hostname has passed; later renewal
+observation remains separate evidence. Azure remains production and DNS is
+unchanged. Do not label it cutover-ready until those Section 4 gates pass. Also
+retire the obsolete running Lightsail instance
 `sub2api-aws-small-candidate` after confirming its snapshot dependency, because
 it is separate from the active `sub2api-aws-small-candidate-v2` candidate.

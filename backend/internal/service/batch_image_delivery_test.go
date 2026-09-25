@@ -266,3 +266,63 @@ func TestArchivedResultReturnsShortLivedFileCapabilitiesAndRequiresClientDecode(
 	_, err = service.StreamZip(context.Background(), owner, batchID, BatchImageZipOptions{}, io.Discard)
 	require.ErrorIs(t, err, ErrBatchImageArchiveClientRequired)
 }
+
+func TestResultFilesReturnsArchiveUnavailableForLegacyCompletedJob(t *testing.T) {
+	const batchID = "imgbatch_1123456789abcdef0123456789abcdef"
+	apiKeyID := int64(2)
+	repo := newFakeBatchImageRepository()
+	repo.jobs[batchID] = &BatchImageJob{
+		BatchID:      batchID,
+		UserID:       1,
+		APIKeyID:     &apiKeyID,
+		Provider:     BatchImageProviderVertex,
+		Status:       BatchImageJobStatusCompleted,
+		SuccessCount: 1,
+		ItemCount:    1,
+	}
+	repo.items[batchID] = []CreateBatchImageItemParams{{
+		JobID:      batchID,
+		CustomID:   "cover",
+		Status:     BatchImageItemStatusSuccess,
+		ImageCount: 1,
+	}}
+	service := &BatchImageDownloadService{
+		Repo:   repo,
+		Config: &config.Config{BatchImage: config.BatchImageConfig{DeliveryEnabled: false}},
+	}
+	owner := BatchImageOwner{UserID: 1, APIKeyID: apiKeyID}
+
+	_, err := service.ResultFiles(context.Background(), owner, batchID)
+	require.ErrorIs(t, err, ErrBatchImageResultArchiveUnavailable)
+}
+
+func TestResultFilesFailsClosedForArchivedJobWithoutDelivery(t *testing.T) {
+	const batchID = "imgbatch_2123456789abcdef0123456789abcdef"
+	apiKeyID := int64(2)
+	marker := batchImageCOSArchiveMarker(1)
+	repo := newFakeBatchImageRepository()
+	repo.jobs[batchID] = &BatchImageJob{
+		BatchID:      batchID,
+		UserID:       1,
+		APIKeyID:     &apiKeyID,
+		Provider:     BatchImageProviderVertex,
+		Status:       BatchImageJobStatusCompleted,
+		SuccessCount: 1,
+		ItemCount:    1,
+	}
+	repo.items[batchID] = []CreateBatchImageItemParams{{
+		JobID:                batchID,
+		CustomID:             "cover",
+		Status:               BatchImageItemStatusResultAvailable,
+		ProviderSourceObject: &marker,
+		ImageCount:           1,
+	}}
+	service := &BatchImageDownloadService{
+		Repo:   repo,
+		Config: &config.Config{BatchImage: config.BatchImageConfig{DeliveryEnabled: false}},
+	}
+	owner := BatchImageOwner{UserID: 1, APIKeyID: apiKeyID}
+
+	_, err := service.ResultFiles(context.Background(), owner, batchID)
+	require.ErrorIs(t, err, ErrBatchImageDeliveryNotConfigured)
+}
