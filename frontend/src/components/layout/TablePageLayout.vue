@@ -1,5 +1,5 @@
 <template>
-  <div class="table-page-layout" :class="{ 'mobile-mode': isMobile }">
+  <div class="table-page-layout" :class="{ 'mobile-mode': isMobile, 'flow-mode': flow }">
     <!-- 固定区域：操作按钮 -->
     <div v-if="$slots.actions" class="layout-section-fixed">
       <slot name="actions" />
@@ -26,6 +26,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+
+withDefaults(defineProps<{
+  /** 页面自然滚动：表格高度随行数自适应、最多一屏并在内部滚动，分页器跟在表格后面而不是固定在底部 */
+  flow?: boolean
+}>(), { flow: false })
 
 const isMobile = ref(false)
 
@@ -89,6 +94,23 @@ onUnmounted(() => {
 
 .table-scroll-container :deep(td) {
   @apply px-5 py-4 text-sm text-gray-700 dark:text-gray-300 border-b border-gray-100 dark:border-dark-800;
+}
+
+/* 自然滚动模式：顶部内容（如账号池）不再挤压表格 */
+.table-page-layout.flow-mode {
+  height: auto;
+}
+
+.table-page-layout.flow-mode .layout-section-scrollable {
+  @apply flex-none;
+}
+
+.table-page-layout.flow-mode .table-scroll-container {
+  @apply h-auto;
+}
+
+.table-page-layout.flow-mode:not(.mobile-mode) .table-scroll-container :deep(.table-wrapper) {
+  max-height: calc(100vh - 64px - 6rem);
 }
 
 /* 移动端：恢复正常滚动 */

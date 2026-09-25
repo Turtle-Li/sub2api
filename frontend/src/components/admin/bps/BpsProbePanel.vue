@@ -103,7 +103,7 @@
             <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.account') }}</th>
             <th class="px-3 py-2">{{ t('admin.bpsUpstream.probe.paths') }}</th>
             <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.effort') }}</th>
-            <th class="px-3 py-2">{{ t('admin.bpsUpstream.columns.status') }}</th>
+            <th class="whitespace-nowrap px-3 py-2">{{ t('admin.bpsUpstream.columns.status') }}</th>
             <th class="px-3 py-2 text-right">{{ t('admin.bpsUpstream.columns.duration') }}</th>
             <th class="px-3 py-2 text-right">{{ t('admin.bpsUpstream.probe.tokens') }}</th>
             <th class="px-3 py-2">{{ t('admin.bpsUpstream.probe.preview') }}</th>
@@ -120,14 +120,14 @@
               <div class="text-gray-900 dark:text-white">{{ row.account_name || '-' }}</div>
               <div class="text-xs text-gray-500">#{{ row.account_id }}</div>
             </td>
-            <td class="px-3 py-2">
+            <td class="whitespace-nowrap px-3 py-2">
               <span :class="row.path === 'bps' ? 'badge badge-primary' : 'badge badge-gray'">{{ t(`admin.bpsUpstream.probe.path.${row.path}`) }}</span>
             </td>
             <td class="whitespace-nowrap px-3 py-2 text-xs text-gray-600 dark:text-gray-300">
               <div>{{ row.model }}</div>
               <div>{{ formatEffort(row) }}</div>
             </td>
-            <td class="px-3 py-2">
+            <td class="whitespace-nowrap px-3 py-2">
               <span :class="statusClass(row.status)" :data-test="`bps-probe-status-${row.id}`">{{ t(`admin.bpsUpstream.probe.status.${row.status}`) }}</span>
             </td>
             <td class="whitespace-nowrap px-3 py-2 text-right text-xs">{{ row.duration_ms ? `${(row.duration_ms / 1000).toFixed(1)}s` : '-' }}</td>
