@@ -393,6 +393,44 @@ func TestAstraConsumptionMultiplier_PreservesOfficialPricesAndMatchesWalletDebit
 	})
 }
 
+func TestSolConsumptionMultiplier_PreservesOfficialPricesAndMatchesWalletDebit(t *testing.T) {
+	t.Parallel()
+
+	billing := NewBillingService(&config.Config{}, nil)
+	pricing, err := billing.GetModelPricing("gpt-6-sol")
+	require.NoError(t, err)
+	require.InDelta(t, 2e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 10e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.2e-6, pricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 4e-6, pricing.InputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 20e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+
+	tokens := UsageTokens{InputTokens: 1079, OutputTokens: 769, CacheReadTokens: 48384}
+	officialStandardCost := float64(tokens.InputTokens)*2e-6 +
+		float64(tokens.OutputTokens)*10e-6 +
+		float64(tokens.CacheReadTokens)*0.2e-6
+	const groupMultiplier = 0.25
+
+	for _, tt := range []struct {
+		name        string
+		serviceTier string
+		tierScale   float64
+	}{
+		{name: "standard", tierScale: 1},
+		{name: "priority", serviceTier: "priority", tierScale: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cost, err := billing.CalculateCostWithServiceTier("gpt-6-sol", tokens, groupMultiplier, tt.serviceTier)
+			require.NoError(t, err)
+			require.InDelta(t, float64(tokens.InputTokens)*2e-6*tt.tierScale, cost.InputCost, 1e-12)
+			require.InDelta(t, float64(tokens.OutputTokens)*10e-6*tt.tierScale, cost.OutputCost, 1e-12)
+			require.InDelta(t, float64(tokens.CacheReadTokens)*0.2e-6*tt.tierScale, cost.CacheReadCost, 1e-12)
+			require.InDelta(t, officialStandardCost*tt.tierScale*openAISolConsumptionMultiplier, cost.TotalCost, 1e-12)
+			require.InDelta(t, cost.TotalCost*groupMultiplier, cost.ActualCost, 1e-12)
+		})
+	}
+}
+
 func TestOpenAIFastBilling_FastMultiplierOverridesEnforcedRatio(t *testing.T) {
 	t.Parallel()
 

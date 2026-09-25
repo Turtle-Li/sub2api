@@ -510,29 +510,40 @@ func TestTryModelFilePricing_AppliesLongContextPricing(t *testing.T) {
 	require.InDelta(t, 0.233, *result, 1e-12)
 }
 
-func TestTryModelFilePricing_GPT6AstraKeepsOfficialReferenceCost(t *testing.T) {
+func TestTryModelFilePricing_HiddenConsumptionKeepsOfficialReferenceCost(t *testing.T) {
 	bs := newTestBillingService()
 	tokens := UsageTokens{InputTokens: 1079, OutputTokens: 769, CacheReadTokens: 48384}
-	officialStandardCost := float64(tokens.InputTokens)*10e-6 +
-		float64(tokens.OutputTokens)*50e-6 +
-		float64(tokens.CacheReadTokens)*1e-6
 
-	for _, tt := range []struct {
-		name        string
-		serviceTier string
-		tierScale   float64
+	for _, model := range []struct {
+		name, id                      string
+		inputPrice, outputPrice, read float64
+		consumptionMultiplier         float64
 	}{
-		{name: "standard", tierScale: 1},
-		{name: "priority", serviceTier: "priority", tierScale: 2},
+		{name: "astra", id: "gpt-6-astra", inputPrice: 10e-6, outputPrice: 50e-6, read: 1e-6, consumptionMultiplier: openAIAstraConsumptionMultiplier},
+		{name: "sol", id: "gpt-6-sol", inputPrice: 2e-6, outputPrice: 10e-6, read: 0.2e-6, consumptionMultiplier: openAISolConsumptionMultiplier},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			referenceCost := tryModelFilePricing(bs, "gpt-6-astra", tokens, tt.serviceTier, time.Time{})
-			require.NotNil(t, referenceCost)
-			require.InDelta(t, officialStandardCost*tt.tierScale, *referenceCost, 1e-12)
+		t.Run(model.name, func(t *testing.T) {
+			officialStandardCost := float64(tokens.InputTokens)*model.inputPrice +
+				float64(tokens.OutputTokens)*model.outputPrice +
+				float64(tokens.CacheReadTokens)*model.read
+			for _, tier := range []struct {
+				name        string
+				serviceTier string
+				tierScale   float64
+			}{
+				{name: "standard", tierScale: 1},
+				{name: "priority", serviceTier: "priority", tierScale: 2},
+			} {
+				t.Run(tier.name, func(t *testing.T) {
+					referenceCost := tryModelFilePricing(bs, model.id, tokens, tier.serviceTier, time.Time{})
+					require.NotNil(t, referenceCost)
+					require.InDelta(t, officialStandardCost*tier.tierScale, *referenceCost, 1e-12)
 
-			retailCost, err := bs.CalculateCostWithServiceTier("gpt-6-astra", tokens, 1, tt.serviceTier)
-			require.NoError(t, err)
-			require.InDelta(t, *referenceCost*openAIAstraConsumptionMultiplier, retailCost.TotalCost, 1e-12)
+					retailCost, err := bs.CalculateCostWithServiceTier(model.id, tokens, 1, tier.serviceTier)
+					require.NoError(t, err)
+					require.InDelta(t, *referenceCost*model.consumptionMultiplier, retailCost.TotalCost, 1e-12)
+				})
+			}
 		})
 	}
 }

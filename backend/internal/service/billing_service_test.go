@@ -1951,9 +1951,10 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 		for _, tc := range []struct {
 			model                      string
 			input, output, write, read float64
+			consumptionMultiplier      float64
 		}{
-			{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, 0.2e-6},
-			{"gpt-6-luna", 0.1e-6, 0.5e-6, 0.125e-6, 0.01e-6},
+			{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, 0.2e-6, openAISolConsumptionMultiplier},
+			{"gpt-6-luna", 0.1e-6, 0.5e-6, 0.125e-6, 0.01e-6, 1},
 		} {
 			t.Run(source+"/"+tc.model, func(t *testing.T) {
 				for _, n := range []int{271999, 272000, 272001} {
@@ -1970,7 +1971,8 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 						require.InDelta(t, 1000*tc.write*im*mult, cost.CacheCreationCost, 1e-10)
 						require.InDelta(t, 2000*tc.read*im*mult, cost.CacheReadCost, 1e-10)
 						require.InDelta(t, 500*tc.output*om*mult, cost.OutputCost, 1e-10)
-						require.InDelta(t, cost.InputCost+cost.OutputCost+cost.CacheCreationCost+cost.CacheReadCost, cost.TotalCost, 1e-10)
+						officialCost := cost.InputCost + cost.OutputCost + cost.CacheCreationCost + cost.CacheReadCost
+						require.InDelta(t, officialCost*tc.consumptionMultiplier, cost.TotalCost, 1e-10)
 						require.Equal(t, n > 272000, cost.LongContextBillingApplied)
 					}
 				}
@@ -2013,6 +2015,25 @@ func TestNewModelPricingChannelOverridesAndFamilyIsolation(t *testing.T) {
 	require.Equal(t, 10e-6, prices.InputPricePerToken)
 	require.Equal(t, "gpt-6-sol", normalizeKnownOpenAICodexModel("openai/gpt-6-sol-max"))
 	require.Equal(t, "gpt-6-luna", normalizeKnownOpenAICodexModel("gpt-6-luna-openai-compact"))
+}
+
+func TestOpenAIConsumptionMultiplierRecognizesSolVariantsOnly(t *testing.T) {
+	for _, model := range []string{
+		"gpt-6-sol",
+		"gpt-6-sol-none",
+		"gpt-6-sol-low",
+		"gpt-6-sol-medium",
+		"gpt-6-sol-high",
+		"gpt-6-sol-xhigh",
+		"gpt-6-sol-max",
+		"openai/gpt-6-sol-openai-compact",
+	} {
+		require.Equal(t, openAISolConsumptionMultiplier, openAIConsumptionMultiplier(model), model)
+	}
+
+	for _, model := range []string{"gpt-6-luna", "gpt-6-sol-preview", "gpt-6-solitude", "gpt-5.6-sol"} {
+		require.Equal(t, 1.0, openAIConsumptionMultiplier(model), model)
+	}
 }
 
 func TestNewModelPricingExplicitZeroCacheWrite(t *testing.T) {
