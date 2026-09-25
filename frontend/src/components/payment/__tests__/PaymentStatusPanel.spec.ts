@@ -237,7 +237,8 @@ describe('PaymentStatusPanel', () => {
     expect(iframe.exists()).toBe(true)
     expect(iframe.attributes('src')).toBe(checkoutFrameUrl)
     expect(toCanvas).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('payment.qr.openPayWindow')
+    expect(wrapper.text()).toContain('payment.qr.refreshQRCode')
+    expect(wrapper.text()).not.toContain('payment.qr.openPayWindow')
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
   })
@@ -321,8 +322,9 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.text()).toContain('payment.qr.openPayWindow')
   })
 
-  it('opens only a freshly resumed legacy frame URL at top level', async () => {
+  it('refreshes an embedded checkout frame without opening it at top level', async () => {
     const checkoutFrameUrl = alipayCheckoutFrameUrl()
+    const freshCheckoutFrameUrl = alipayCheckoutFrameUrl({ qrcodeWidth: 220 })
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     resumeOrder.mockResolvedValue({
       data: {
@@ -333,11 +335,10 @@ describe('PaymentStatusPanel', () => {
         fee_rate: 0,
         expires_at: '2099-01-01T12:30:00Z',
         payment_type: 'alipay',
-        checkout_frame_url: checkoutFrameUrl,
+        checkout_frame_url: freshCheckoutFrameUrl,
       },
     })
-    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
-    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    const open = vi.spyOn(window, 'open')
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
@@ -352,14 +353,12 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    const openBtn = wrapper.findAll('button').find(b => b.text().includes('payment.qr.openPayWindow'))!
-    await openBtn.trigger('click')
+    await wrapper.get('[data-test="refresh-payment-qr"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="alipay-checkout-frame"]').attributes('src')).toBe(freshCheckoutFrameUrl)
     expect(resumeOrder).toHaveBeenCalledWith(42)
-    expect(popup.location.href).toBe(checkoutFrameUrl)
-    expect(popup.close).not.toHaveBeenCalled()
+    expect(open).not.toHaveBeenCalled()
     open.mockRestore()
   })
 
@@ -987,7 +986,10 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.text()).toContain('payment.qr.expired')
   })
 
-  it('shows reopen button in QR mode and replaces its URL through authenticated resume', async () => {
+  it.each([
+    ['alipay', 'https://qr.alipay.com/42', 'https://qr.alipay.com/42-fresh'],
+    ['wxpay', 'weixin://wxpay/bizpayurl?pr=42', 'weixin://wxpay/bizpayurl?pr=42-fresh'],
+  ])('refreshes the %s QR code without opening a payment window', async (paymentType, initialQRCode, refreshedQRCode) => {
     resumeOrder.mockResolvedValue({
       data: {
         order_id: 42,
@@ -996,22 +998,21 @@ describe('PaymentStatusPanel', () => {
         pay_amount: 88,
         fee_rate: 0,
         expires_at: '2099-01-01T12:30:00Z',
-        payment_type: 'alipay',
+        payment_type: paymentType,
         payment_mode: 'qrcode',
-        qr_code: 'https://qr.alipay.com/42-fresh',
+        qr_code: refreshedQRCode,
         pay_url: 'https://pay.totools.cn/checkout/42-fresh',
       },
     })
-    const popup = { closed: false, close: vi.fn(), location: { href: '' } }
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    const openSpy = vi.spyOn(window, 'open')
 
     const wrapper = mount(PaymentStatusPanel, {
       props: {
         orderId: 42,
-        qrCode: 'https://qr.alipay.com/42',
+        qrCode: initialQRCode,
         payUrl: 'https://pay.totools.cn/checkout/42',
         expiresAt: '2099-01-01T12:30:00Z',
-        paymentType: 'alipay',
+        paymentType,
         orderType: 'balance',
       },
       global: {
@@ -1022,13 +1023,14 @@ describe('PaymentStatusPanel', () => {
     })
 
     await flushPromises()
-    expect(wrapper.text()).toContain('payment.qr.openPayWindow')
+    expect(wrapper.text()).toContain('payment.qr.refreshQRCode')
+    expect(wrapper.text()).not.toContain('payment.qr.openPayWindow')
 
-    await wrapper.get('button.btn.btn-secondary.text-sm').trigger('click')
+    await wrapper.get('[data-test="refresh-payment-qr"]').trigger('click')
     await flushPromises()
     expect(resumeOrder).toHaveBeenCalledWith(42)
-    expect(openSpy).toHaveBeenCalledWith('', 'paymentPopup', expect.any(String))
-    expect(popup.location.href).toBe('https://pay.totools.cn/checkout/42-fresh')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(toCanvas).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), refreshedQRCode, expect.any(Object))
 
     openSpy.mockRestore()
   })
@@ -1053,6 +1055,7 @@ describe('PaymentStatusPanel', () => {
 
     expect(wrapper.text()).toContain('payment.qr.scanToPay')
     expect(wrapper.text()).not.toContain('payment.qr.scanAlipay')
+    expect(wrapper.find('[data-test="refresh-payment-qr"]').exists()).toBe(false)
   })
 
   it('actively verifies a stuck pending order and settles it when upstream confirms payment', async () => {

@@ -282,8 +282,15 @@
             </div>
           </div>
           <p v-if="scanHint" class="text-center text-sm text-gray-500 dark:text-gray-400">{{ scanHint }}</p>
-          <button v-if="currentHostedPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
-            {{ t('payment.qr.openPayWindow') }}
+          <button
+            v-if="canRefreshPaymentCode"
+            data-test="refresh-payment-qr"
+            class="btn btn-secondary inline-flex items-center gap-2 text-sm"
+            :disabled="resumingLaunch"
+            @click="refreshPaymentCode"
+          >
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': resumingLaunch }" />
+            {{ t('payment.qr.refreshQRCode') }}
           </button>
         </div>
       </div>
@@ -322,8 +329,15 @@
             />
           </div>
           <p v-if="scanHint" class="text-center text-sm text-gray-500 dark:text-gray-400">{{ scanHint }}</p>
-          <button v-if="currentHostedPayUrl" class="btn btn-secondary text-sm" :disabled="resumingLaunch" @click="reopenPopup">
-            {{ t('payment.qr.openPayWindow') }}
+          <button
+            v-if="canRefreshPaymentCode"
+            data-test="refresh-payment-qr"
+            class="btn btn-secondary inline-flex items-center gap-2 text-sm"
+            :disabled="resumingLaunch"
+            @click="refreshPaymentCode"
+          >
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': resumingLaunch }" />
+            {{ t('payment.qr.refreshQRCode') }}
           </button>
         </div>
       </div>
@@ -522,6 +536,9 @@ const currentHostedPayUrl = computed(() => (
   currentPayUrl.value
   || resumedCheckoutFrameUrl.value
   || validateAlipayCheckoutFrameUrl(props.checkoutFrameUrl)
+))
+const canRefreshPaymentCode = computed(() => (
+  Boolean(currentHostedPayUrl.value) && (isAlipay.value || isWxpay.value)
 ))
 const currentCheckoutFrameUrl = computed(() => {
   const raw = resumedCheckoutFrameUrl.value ?? props.checkoutFrameUrl ?? ''
@@ -822,6 +839,10 @@ async function reopenPopup() {
   } finally {
     if (popup && !popup.closed && !navigated && typeof popup.close === 'function') popup.close()
   }
+}
+
+async function refreshPaymentCode() {
+  await resumePaymentLaunch()
 }
 
 function setOutcome(next: PaymentOutcome) {
