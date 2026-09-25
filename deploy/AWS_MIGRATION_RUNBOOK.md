@@ -260,11 +260,12 @@ the restricted GitHub workflow and local pinned-IP authenticated models and
 Responses requests have passed. Synchronous and asynchronous image generation,
 payment configuration/readiness and invalid webhook rejection have also passed.
 The enabled-group Gemini Batch Image canary has completed through the AWS test
-hostname, produced a valid PNG, settled correctly and had its temporary key
-deleted. Before cutover, deploy and verify the legacy server-ZIP fallback fix
-for the currently disabled COS delivery mode. The owner-approved 1-2 fen live
-checkout is intentionally deferred until the configured production `www`
-result origin points to AWS. The candidate still lacks current candidate/offsite
+hostname, produced valid PNGs, settled correctly, verified the legacy
+`result-files` error and authenticated server-ZIP fallback, and had both
+temporary keys tombstoned with immediate 401 verification. The owner-approved
+1-2 fen live checkout is intentionally deferred until the configured production
+`www` result origin points to AWS. The candidate still lacks current
+candidate/offsite
 backup plus restore evidence, sustained 2 GiB memory/load/network headroom
 evidence, Azure proxy replacement and the controlled background-owner handoff.
 Initial automatic TLS issuance on the test hostname has passed; later renewal

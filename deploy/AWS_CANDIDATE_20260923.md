@@ -23,7 +23,7 @@ subscriptions and AWS Lightsail. No Azure resource was deleted in this task.
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
 | Release-control staging | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `preserve-standby`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive |
 | GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
-| Application release | Fork `main` commit `557d5c079a025f6488c12904137e238734a8c5ed`, version `0.2.8`, active slot `sub2api-green`, healthy with zero restarts/OOM; 2 GiB persistent swap is enabled with swappiness 10 |
+| Application release | Fork `main` commit `32eeb9e2bc38e7d7874d50e33f11d2691db0790a` from successful GitHub Actions run `36101027759`, active image `sub2api:auto-20260925-060932-32eeb9e2` and slot `sub2api-blue`, healthy with zero restarts/OOM; 2 GiB persistent swap is enabled with swappiness 10 |
 | Proxy | AWS-specific Caddy route for API and www plus DNS-only `aws-test`; public HTTPS passed health, auth-boundary, public settings, homepage, authenticated Responses/SSE and synchronous/asynchronous image probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
 | Public www assets | Six regular files in the Caddy data volume at `/data/sub2-web/{home,help}`, copied from the serving Azure Caddy volume and SHA-256 matched file by file |
@@ -35,6 +35,11 @@ SSH effective settings were verified as `PubkeyAuthentication yes`,
 no private key was exported from AWS. The local private key remains device-local
 and is not a project artifact. Its Vault reconciliation is pending; no
 `vault_ref` has been invented.
+The effective local alias resolves final `hostname 54.248.123.174` with
+`ProxyJump sub2api-candidate`. A remote identity check returned hostname
+`ip-172-26-4-61`, public IPv4 `54.248.123.174` and manufacturer `Amazon EC2`,
+so the Azure address seen during SSH setup is the documented jump transport,
+not the inspected runtime target.
 
 The Lightsail firewall admits public IPv4 TCP 80/443 for the DNS-only ACME and
 public-route rehearsal. Steady-state TCP 22 admits the operator's current IPv4
@@ -101,8 +106,9 @@ new service-start entry. The owner intends any future monitoring or mitigation
 to be embedded in Sub2API instead of migrating the existing external stack.
 Host health, application logs, runtime guards and the AWS status alarm remain
 available for the migration window, but external monitoring enrollment is not
-a cutover gate. Candidate-specific backup/restore evidence and automatic TLS
-issuance are still gates.
+a cutover gate. Candidate-specific backup/restore evidence remains a gate;
+initial automatic TLS issuance has passed and later renewal observation is
+separate evidence.
 
 ## 2026-09-25 functional validation
 
@@ -123,6 +129,18 @@ issuance are still gates.
   upstream/account/egress variability. It is not evidence of AWS CPU, memory
   or Caddy saturation, and the earlier user report still has CPA cancellation
   as the direct interruption mechanism after a slow upstream wait.
+- A separate read-only audit at 2026-09-25 06:39 UTC confirmed that the active
+  `sub2api-blue` container, Caddy and both Vault Agents had zero restarts and no
+  OOM state. The 2-vCPU host had about 1.2 GiB available RAM, negligible swap
+  use and 14% root-disk use; the application and Caddy used about 53 MiB and
+  18-20 MiB respectively. In the two post-deploy Batch canary windows, status
+  and item requests returned HTTP 200 in about 7-80 ms, the ZIP fallback in
+  1.081 seconds and item content in 0.926 seconds. Application and proxy output
+  showed no 5xx, panic, fatal, OOM, cancellation, broken pipe or client-disconnect
+  signal. Caddy stdout currently contains administrative/configuration output
+  rather than complete request access lines; this is a request-correlation
+  evidence gap, not a confirmed runtime fault, and must be considered during
+  operator observation.
 - The release coordinator is configured with
   `SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE=preserve`, which preserves
   the source generation's exact setting rather than enabling compatibility.
@@ -142,16 +160,24 @@ issuance are still gates.
   PostgreSQL/Redis state, the current Azure background owner, GCS/Vertex
   execution, settlement and AWS result reads; it does not yet prove AWS queue
   ownership.
-- Both Azure and AWS currently have `BATCH_IMAGE_DELIVERY_ENABLED=false`. The
-  successful legacy Vertex job therefore has no private COS archive. The
-  deployed `result-files` endpoint returns
-  `BATCH_IMAGE_DELIVERY_NOT_CONFIGURED` before identifying the legacy result,
-  while the frontend only falls back to server ZIP for
-  `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE`. A minimal compatibility fix now
-  checks for the archive marker first: legacy jobs receive the explicit
-  fallback error, while real COS-archive jobs still fail closed when delivery
-  configuration or storage is unavailable. Deploy and re-run this download
-  probe before cutover.
+- Both Azure and AWS currently have `BATCH_IMAGE_DELIVERY_ENABLED=false`, so
+  completed Vertex provider-output jobs use the authenticated server-ZIP
+  fallback rather than a private COS archive. Release `32eeb9e2b` checks for
+  the archive marker before requiring COS delivery configuration: legacy jobs
+  return `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE`, while real COS-archive jobs
+  still fail closed on configuration, storage, signature, network or integrity
+  errors. Post-deploy job `imgbatch_8f4ccab2700afedec0be0fbd561964e5`
+  moved `queued -> running -> completed`, settled one success and zero failures
+  at actual cost `0.0001447875`, and exposed public item status `succeeded` with
+  MIME type `image/png`. `result-files` returned HTTP 409 with the required
+  fallback code; `/download` returned a valid ZIP containing a 1024x1024 PNG
+  of 206,491 bytes, and the item-content endpoint returned the same valid PNG.
+  Temporary key 109 was tombstoned, the original credential was absent from the
+  database, and the next authenticated request returned 401. Earlier
+  post-deploy job `imgbatch_41625cfb7603bd165fea4707a0c5d132` also completed
+  successfully at the same cost; its verifier stopped only because it expected
+  the internal item state `success` instead of the public API state
+  `succeeded`, and temporary key 108 was still tombstoned and verified 401.
 - Unified payment is enabled in `live` mode with provider
   `https://pay.totools.cn`, production return/webhook URLs and a healthy
   `sub2api-payment-vault` sidecar. Provider TLS/connectivity passed, the
@@ -218,8 +244,10 @@ application/Caddy 5xx or fatal log entry in the probe window.
   Lightsail status, application/Caddy errors, latency, memory, network and the
   rollback stop conditions instead of claiming an unverified alert channel.
 - Retain successful GitHub Actions run `36070650495` and release log
-  `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` as the
-  end-to-end deployment evidence. Keep the separate `azure-production`
+  `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` as the first
+  end-to-end candidate evidence, plus successful fix release run `36101027759`
+  and `/var/log/sub2api-release/gha-20260925-060932-32eeb9e2-379538/` as the
+  current deployed evidence. Keep the separate `azure-production`
   Environment and its secrets unchanged.
 - Preserve the exact database allowlist at `54.248.123.174` and remove it only
   after rollback/cutover decisions. Do not rerun the September 12 currency
@@ -228,11 +256,9 @@ application/Caddy 5xx or fatal log entry in the probe window.
   service for later renewal observation. Initial issuance and authenticated
   text/SSE/synchronous-image/asynchronous-image probes are complete. Do not
   change production `api` or `www` DNS until the remaining backup, proxy,
-  background-owner, payment, Batch Image and observation gates pass.
-- Deploy the Batch Image legacy-download compatibility fix and verify that the
-  completed canary returns `BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE` from
-  `result-files`, then that the existing `/download` ZIP fallback contains the
-  successful PNG. Complete a 1-2 fen owner payment checkout after production
+  background-owner, payment and observation gates pass.
+- The Batch Image legacy-download compatibility fix and real request validation
+  are complete. Complete a 1-2 fen owner payment checkout only after production
   `www` DNS points to AWS and recent administrator TOTP step-up.
 - Replace or clear every Azure proxy binding before deleting any Azure node.
   Current dependencies are proxy IDs 6, 7, 40, 41 and 44 across nine accounts.
