@@ -147,21 +147,19 @@
 
 ## Production host
 
-- The AWS Lightsail migration candidate is documented in
+- The AWS Lightsail production host is documented in
   `deploy/AWS_CANDIDATE_20260923.md`; use `deploy/AWS_MIGRATION_RUNBOOK.md`
-  for deployment and cutover gates. It is a staged release target through the
-  `aws-candidate` GitHub Environment and permits operator-only origin probes,
-  but it is not the public serving origin or background owner. Keep DNS on
-  Azure, preserve `background=standby`, and do not widen the exact database or
-  ingress allowlists before an approved cutover.
-- Use the configured SSH alias `sub2api-candidate` for current web/API releases;
-  it is the serving Azure node and background owner. `sub2api-new` expired on
-  2026-09-12 and is no longer a release target or fallback. Recheck node state
-  before lifecycle changes, and exclude remaining obsolete database connections
-  before currency cutover. Do not copy a raw host, port, or key into scripts.
-- Use `sub2api-aws-candidate` only for the staged AWS host. Do not confuse its
-  operator SSH path with the restricted `sub2api-github-deploy` forced-command
-  account used by GitHub Actions.
+  for deployment, recovery and retirement evidence. It is the public API/www
+  origin and sole background owner. The historical GitHub Environment remains
+  named `aws-candidate`, but the production workflow exposes it as the only
+  deployment target and the host release mode is `activate`.
+- Use the configured SSH alias `sub2api-aws-candidate` for current web/API
+  releases. The Azure `sub2api-candidate` host and all resources in both Azure
+  subscriptions were deleted on 2026-09-25 and are not a fallback.
+  `sub2api-new` expired on 2026-09-12 and is also not a release target. Recheck
+  node state before lifecycle changes and do not copy a raw host, port or key
+  into scripts. Do not confuse the operator SSH path with the restricted
+  `sub2api-github-deploy` forced-command account used by GitHub Actions.
 - Read `docs/operations/WWW_ORIGIN_RECOVERY_20260912.md` before release or Caddy
   work. Preserve the live www site, automatic HTTP-01 certificate and static
   files; never replace the live Caddyfile with the API-only example template.

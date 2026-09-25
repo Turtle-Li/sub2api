@@ -2,11 +2,12 @@
 
 This host became the Sub2API production origin on 2026-09-25. AWS now serves
 `api.turtleligpt.com` and `www.turtleligpt.com` and is the sole background
-owner (`background=active`). Azure `sub2api-candidate` remains online, healthy
-and `background=standby` as the immediate rollback origin; it was not deleted
-or stopped. The rehearsal record `aws-test.turtleligpt.com` was deleted after
-the production observation window passed. The old `sub2api-new` and historical
-GCP/Taiwan ingress are not rollback targets.
+owner (`background=active`). The former Azure application, relay, Traffic
+Manager and Network Watcher resource groups in both subscriptions were deleted
+on 2026-09-25 after the production observation window passed. Azure is no
+longer a rollback target. The rehearsal record `aws-test.turtleligpt.com` was
+also deleted. The old `sub2api-new` and historical GCP/Taiwan ingress are not
+rollback targets.
 
 | Item | Current production state |
 | --- | --- |
@@ -16,12 +17,12 @@ GCP/Taiwan ingress are not rollback targets.
 | Bundle | `small_3_0`: 2 vCPU, 2 GiB RAM, 60 GB disk, 3 TB monthly transfer, $12/month base |
 | Static public IPv4 | `54.248.123.174` (`sub2api-aws-small-ip`) |
 | SSH | `ubuntu:22`, Mac-owned public key `SHA256:ZNtRYxiEl8geAnff30YCs0lJlc1wi6sMahsFuFe4WwA`; v2 host ED25519 fingerprint `SHA256:j+7YLMWXvxqovDnB4sEYqtnkU8ETrcipmsxUFtH47aU`, verified against the Lightsail control plane |
-| Public ingress | TCP 80/443 from `0.0.0.0/0` for the production API/www service. TCP 22 remains limited in Lightsail to the current operator IPv4 `115.195.32.146/32`, Azure `4.216.216.16/32`, and the Lightsail browser-SSH alias. An AWS OIDC role may add only the current GitHub-hosted Runner IPv4 `/32` during an `aws-candidate` release and must remove it in an `always()` cleanup step. Database ports are not public. |
+| Public ingress | TCP 80/443 from `0.0.0.0/0` for the production API/www service. TCP 22 remains limited in Lightsail to the current operator IPv4 `115.195.32.146/32` and the Lightsail browser-SSH alias; retired Azure `4.216.216.16/32` was removed. An AWS OIDC role may add only the current GitHub-hosted Runner IPv4 `/32` during an `aws-candidate` release and must remove it in an `always()` cleanup step. Database ports are not public. |
 | Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700 |
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
-| Release control | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `activate`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive. `activate` is required because AWS is the sole background owner; Azure retains `preserve-standby`. |
+| Release control | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `activate`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive. `activate` is required because AWS is the sole background owner. |
 | GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
-| Application release | Fork `main` commit `8561413932d232ab6025527bcebb94b9e5ee711e` from successful GitHub Actions run `36119866358` attempt 2, active image `sub2api:auto-20260925-095956-85614139` and slot `sub2api-green`, healthy with zero restarts/OOM; host release record `/var/log/sub2api-release/gha-20260925-095956-85614139-536585/`; 2 GiB persistent swap is enabled with swappiness 10 |
+| Application release | Fork `main` commit `b806571f4223620a7f559ce920142f3f0439c227` from successful GitHub Actions run `36143574663`, active image `sub2api:auto-20260925-135754-b806571f` and slot `sub2api-blue`, healthy with zero restarts/OOM; host release record `/var/log/sub2api-release/gha-20260925-135754-b806571f-681848/`; authenticated models and Responses probes returned 200; 2 GiB persistent swap is enabled with swappiness 10 |
 | Proxy | AWS-specific Caddy route for production API and www; public HTTPS passed health, auth-boundary, public settings, homepage, authenticated Responses/SSE and synchronous/asynchronous image probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
 | Account egress | The nine previously proxy-bound parent accounts are now direct (`proxy_id=0`). OpenAI OAuth rows were cleared with authenticated expected-value CAS; the Anthropic/Antigravity rows used ordinary authenticated account updates. No replacement proxy node is required for this migration stage. |
@@ -48,8 +49,8 @@ GCP/Taiwan ingress are not rollback targets.
   `e07382c8d81397662cc0c31110af17f8` for `api.turtleligpt.com` and record
   `e7a4addc66fc2b1c3740438b27647ba4` for the `www.turtleligpt.com` origin
   changed from `4.216.216.16` to `54.248.123.174`. API remains DNS-only and
-  www remains Cloudflare-proxied. The exact old values are the DNS rollback
-  targets.
+  www remains Cloudflare-proxied. The exact old values were temporary rollback
+  targets during the observation window; Azure has since been deleted.
 - Protected post-handoff probes returned `200` for models and Responses. A
   production-DNS SSE request reached its first event in about 1.68 seconds.
   Internal live, ready and refund-rollback-readiness checks all passed.
@@ -67,8 +68,8 @@ GCP/Taiwan ingress are not rollback targets.
   continued returning `200`.
 - Unified-payment configuration and webhook readiness passed before cutover.
   The owner must now complete the real payment checkout/return test on the
-  production www origin. Azure remains online as rollback and must not be
-  deleted or stopped without a separate owner instruction.
+  production www origin. The owner separately authorized Azure retirement; all
+  Azure groups were deleted after this observation window.
 
 SSH effective settings were verified as `PubkeyAuthentication yes`,
 `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, and
@@ -76,25 +77,23 @@ SSH effective settings were verified as `PubkeyAuthentication yes`,
 no private key was exported from AWS. The local private key remains device-local
 and is not a project artifact. Its Vault reconciliation is pending; no
 `vault_ref` has been invented.
-The effective local alias resolves final `hostname 54.248.123.174` with
-`ProxyJump sub2api-candidate`. A remote identity check returned hostname
+The effective local alias resolves final `hostname 54.248.123.174` without an
+Azure `ProxyJump`. A remote identity check returned hostname
 `ip-172-26-4-61`, public IPv4 `54.248.123.174` and manufacturer `Amazon EC2`,
 so the Azure address seen during SSH setup is the documented jump transport,
 not the inspected runtime target.
 
-The Lightsail firewall admits public IPv4 TCP 80/443 for the DNS-only ACME and
-public-route rehearsal. Steady-state TCP 22 admits the operator's current IPv4
-`115.195.32.146/32`, Azure `4.216.216.16/32` and the
-`lightsail-connect` console alias. For an explicitly
+The Lightsail firewall admits public IPv4 TCP 80/443 for the production API/www
+service. Steady-state TCP 22 admits the operator's current IPv4
+`115.195.32.146/32` and the `lightsail-connect` console alias. For an explicitly
 dispatched `aws-candidate` release, GitHub OIDC obtains a short-lived AWS role,
 discovers the Runner's public IPv4, validates it as a global IPv4 address, adds
 only that `/32`, and removes the same `/32` in an `always()` cleanup step. Host
 UFW admits IPv4 TCP 22 generally because Lightsail is the source-address gate;
 it does not admit IPv6 SSH. UFW admits public TCP 80/443 and keeps database
 ports closed. The operator address is temporary and must be revalidated before
-future SSH access. Public web ingress is now intentional for the DNS-only test
-host and eventual production service, but it is not authorization to change
-production DNS.
+future SSH access. Public web ingress is intentional for the production service;
+future DNS or routing changes still require explicit owner authorization.
 
 The repository's reviewed deployment tree bootstrapped the first application
 slot and then completed verified blue-green releases. GitHub Actions run
@@ -208,11 +207,12 @@ separate evidence.
   one successful item and no failed item, and settled actual cost
   `0.0001447875`. The authenticated item-content endpoint returned a valid
   1024x1024 PNG (722,989 bytes). The temporary key was tombstoned immediately
-  after the test and then returned 401. This proves AWS API/Caddy admission,
-  PostgreSQL/Redis state, the current Azure background owner, GCS/Vertex
-  execution, settlement and AWS result reads; it does not yet prove AWS queue
-  ownership.
-- Both Azure and AWS currently have `BATCH_IMAGE_DELIVERY_ENABLED=false`, so
+  after the test and then returned 401. At that pre-cutover checkpoint this
+  proved AWS API/Caddy admission, PostgreSQL/Redis state, the then-current Azure
+  background owner, GCS/Vertex execution, settlement and AWS result reads; it
+  did not yet prove AWS queue ownership.
+- At that checkpoint both Azure and AWS had
+  `BATCH_IMAGE_DELIVERY_ENABLED=false`, so
   completed Vertex provider-output jobs use the authenticated server-ZIP
   fallback rather than a private COS archive. Release `32eeb9e2b` checks for
   the archive marker before requiring COS delivery configuration: legacy jobs
@@ -244,22 +244,22 @@ separate evidence.
 - The database-host rules shown by the owner contain exact single-IP permits
   for `54.248.123.174` on PostgreSQL 5432 and Redis 6379. The UI omits `/32`
   when displaying the single IP, but application-container connectivity has
-  already passed for both ports. Keep the old Azure source until rollback is
-  retired.
+  already passed for both ports. The old Azure source was removed after
+  rollback was retired.
 - A five-minute authenticated `/v1/models` admission soak ran 1,500 requests
   with 5 workers and no billable model invocation. All 1,500 returned HTTP 200
   in 329 seconds; P50/P95/P99 were 58.4/90.6/119.3 ms and the maximum was
   261.2 ms. Application CPU peaked at 3.7%, application memory at 77.4 MiB,
   host available memory never fell below 1,240 MiB, swap remained unused and
   application restarts stayed `0 -> 0`. No curl, application or Caddy error
-  signal was observed. This proves request-path headroom while AWS remains
-  `background=standby`; repeat representative observation after the controlled
-  background-owner handoff.
-- Read-only node-state checks returned AWS as `traffic=accepting`,
+  signal was observed. This proved request-path headroom while AWS was
+  `background=standby`; representative production observation later passed
+  after the controlled background-owner handoff.
+- At that checkpoint, read-only node-state checks returned AWS as `traffic=accepting`,
   `active_container=sub2api-blue`, `background=standby`, and Azure as
   `traffic=accepting`, `active_container=sub2api-blue`, `background=active`.
-  Azure is still the
-  sole background owner; no ownership transfer was attempted.
+  Azure was still the sole background owner; no ownership transfer had been
+  attempted yet.
 
 ## Backup and restore evidence
 
@@ -351,7 +351,7 @@ Immediately afterward the application used about 83 MiB and Caddy about 23 MiB
 of the 1.861 GiB container-visible memory; both had zero restarts/OOM and no
 application/Caddy 5xx or fatal log entry in the probe window.
 
-## Remaining migration gates
+## Post-migration follow-ups and retained evidence
 
 - Reconcile the operator SSH identity in Vault; the restricted GitHub deploy
   identity is recorded under Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`.
@@ -363,56 +363,47 @@ application/Caddy 5xx or fatal log entry in the probe window.
   later automatic renewal separately; first issuance is not renewal evidence.
   External Komari/anti-degradation/standalone monitoring migration is explicitly
   out of scope by owner direction; do not reintroduce it as a hidden cutover
-  prerequisite. During the cutover window, use explicit operator observation of
+  prerequisite. During future high-risk production changes, use explicit operator observation of
   Lightsail status, application/Caddy errors, latency, memory, network and the
   rollback stop conditions instead of claiming an unverified alert channel.
 - Retain successful GitHub Actions run `36070650495` and release log
   `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` as the first
   end-to-end candidate evidence, plus successful fix release run `36119866358`
   attempt 2 and `/var/log/sub2api-release/gha-20260925-095956-85614139-536585/`
-  as the current deployed evidence. Attempt 1 failed closed on a transient
+  as earlier deployed evidence. Production release run `36143574663` deployed
+  exact commit `b806571f4223620a7f559ce920142f3f0439c227` with release record
+  `/var/log/sub2api-release/gha-20260925-135754-b806571f-681848/`; its
+  authenticated models and Responses probes returned 200. Attempt 1 failed
+  closed on a transient
   45-second real-upstream probe timeout; Caddy did not switch and the failed
   container was removed. The same probe passed on attempt 2, and the workflow
-  verified removal of its temporary Runner SSH `/32`. Keep the separate `azure-production`
-  Environment and its secrets unchanged.
+  verified removal of its temporary Runner SSH `/32`. The production workflow
+  now exposes only `aws-candidate`; the retired Azure target is not selectable.
 - Preserve the exact database allowlist at `54.248.123.174` and remove it only
   after rollback/cutover decisions. Do not rerun the September 12 currency
   conversion or restore an old full DB over new writes.
-- Keep DNS-only `aws-test.turtleligpt.com` and its automatic certificate in
-  service for later renewal observation. Initial issuance and authenticated
-  text/SSE/synchronous-image/asynchronous-image probes are complete. Do not
-  change production `api` or `www` DNS until the remaining background-owner,
-  payment and observation gates pass.
+- `aws-test.turtleligpt.com` was removed after the production observation
+  window. Initial issuance and authenticated text/SSE/synchronous-image/
+  asynchronous-image probes are retained as historical evidence.
 - The Batch Image legacy-download compatibility fix and real request validation
-  are complete. Complete a 1-2 fen owner payment checkout only after production
-  `www` DNS points to AWS and recent administrator TOTP step-up.
-- Replace or clear every Azure proxy binding before deleting any Azure node.
-  Current dependencies are proxy IDs 6, 7, 40, 41 and 44 across accounts
-  `6, 9, 15, 54, 55, 56, 59, 60, 69`.
-  One AWS proxy cannot preserve both Tokyo and US-West egress. The minimum
-  full replacement is one Tokyo and one US-West node; a third independent
-  US-West node preserves the current fixed-egress backup fault domain. Use the
-  authenticated CAS endpoint to move parent accounts and credential shadows;
-  never edit raw SQL and never permit cross-region automatic fallback.
+  are complete. Production `www` already points to AWS; complete a 1-2 fen owner
+  payment checkout with recent administrator TOTP step-up.
+- The former Azure proxy bindings are cleared: accounts `6, 9, 15, 54, 55,
+  56, 59, 60, 69` remain direct (`proxy_id=0`). Future proxy assignment is a
+  separate project and must use authenticated expected-value CAS where required.
 - Request-path concurrency, 2 GiB memory/swap headroom and bounded sustained
-  egress have passed with the real image while AWS is standby. Recheck memory,
-  queue progress, latency and errors after the controlled background handoff
-  before changing DNS. DNS, initial TLS issuance, www static assets and public
-  API smoke have passed.
-- Transfer sole background/queue ownership from Azure to AWS under the
-  maintenance lock, take a fresh database backup, preserve an offsite copy and
-  prove isolated restore before DNS cutover.
-- Owner-directed Azure retirement spans two subscriptions. Subscription
-  `6835deb1-678b-4067-b516-b57f80e14e25` owns `sub2_group`, `jp_group`, and
-  `westus_group`; subscription `65c9db87-f353-427d-80cc-af2953c8761b` owns
+  egress passed with the real image while AWS was standby. Memory, queue
+  progress, latency and errors were rechecked after the controlled handoff; DNS,
+  initial TLS issuance, www static assets and public API smoke passed.
+- Background/queue ownership, DNS and production traffic have transferred to
+  AWS. Database backup, restricted NAS copy and isolated restore evidence pass.
+- Owner-directed Azure retirement completed on 2026-09-25. Subscription
+  `6835deb1-678b-4067-b516-b57f80e14e25` formerly owned `sub2_group`, `jp_group`, and
+  `westus_group`; subscription `65c9db87-f353-427d-80cc-af2953c8761b` formerly owned
   `jp2_group`, `westus2_relay_group`, and `westus3_relay_group`. The six VMs
-  were running at the 2026-09-25 inventory. The only Azure public IPv4 found
+  were running at the initial 2026-09-25 inventory. The only Azure public IPv4 found
   was `sub2-ip` (`4.216.216.16`) in `sub2_group`; the relay nodes expose static
-  IPv6 addresses. The five relay groups are separate proxy workloads and may
-  serve clients outside the nine Sub2 account bindings. Before deleting them,
-  perform an independent relay/client dependency inventory and confirm every
-  remaining consumer has migrated or is intentionally retired. Preserve both
-  subscriptions' `NetworkWatcherRG` groups unless separately approved.
-
-No production DNS or Azure runtime ownership was changed. The database host now
-allows the exact AWS source for the tested candidate only.
+  IPv6 addresses. Both subscriptions now report zero resource groups and zero
+  resources, including the owner-approved Traffic Manager and `NetworkWatcherRG`
+  groups. Lightsail SSH and the data-host PostgreSQL/Redis/UFW allowlists no
+  longer contain `4.216.216.16`; they retain only the AWS production source.

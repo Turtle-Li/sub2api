@@ -17,7 +17,7 @@ design.
 ## 1. New host prerequisites
 
 1. Resolve the current production topology from project docs and the private
-   Registry. Confirm the active Azure image revision, background owner, public
+   Registry. Confirm the active image revision, background owner, public
    API/www routes, database location, live backup state, and deployment agents.
    Keep existing production traffic and rollback capacity unchanged.
 2. Use the approved AWS account/region and explicit Lightsail bundle; verify
@@ -48,8 +48,8 @@ design.
 
 Use an exact reviewed fork `main` revision as the source of deployment scripts.
 Stage the `deploy/` tree in a root-owned, non-group-writable directory and
-verify its digest. The candidate already has these scripts installed with
-the following inert configuration:
+verify its digest. The production host has these scripts installed with the
+following active configuration:
 
 ```text
 SUB2API_APP_DIR=/opt/sub2api
@@ -59,7 +59,7 @@ SUB2API_PUBLIC_HEALTH_RESOLVE=api.turtleligpt.com:443:127.0.0.1
 SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external
 SUB2API_EXTERNAL_RUNTIME_ENV_FILE=/etc/sub2api-external-runtime.env
 SUB2API_EXTERNAL_CA_FILE=/opt/sub2api/db-host-ca/ca.crt
-SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby
+SUB2API_RELEASE_BACKGROUND_MODE=activate
 SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=true
 ```
 
@@ -70,10 +70,10 @@ replace a live config merely to rerun an installer. A `--replace-config` run
 rewrites the generated file and does **not** reconstruct the unified-payment
 managed block. Back up and reapply the complete managed block, including both
 markers and all project-defined keys, before allowing a new slot to start; a
-volume name alone is not sufficient. Re-verify `preserve-standby`, the real
-request probe, and the loopback health resolve after every replacement. Both
-timers must remain `disabled` and `inactive` until cutover is separately
-approved.
+volume name alone is not sufficient. Re-verify `activate`, the real request
+probe, and the loopback health resolve after every replacement. Both timers
+remain deliberately `disabled` and `inactive`; future enablement requires a
+separately reviewed operating decision.
 
 ### Deployment checkpoint (2026-09-25)
 
@@ -102,8 +102,9 @@ approved.
   or container restart was observed in the probe window.
 - PostgreSQL 5432 and Redis 6379 connectivity from the application container
   passed after adding exact source `54.248.123.174` to the data-host allowlist.
-- AWS remains `traffic=accepting background=standby`; Azure remains the live
-  production host. DNS and background ownership are unchanged.
+- At this pre-cutover checkpoint, AWS remained
+  `traffic=accepting background=standby`; Azure was still the live production
+  host and DNS/background ownership had not yet changed.
 - A five-minute authenticated `/v1/models` soak completed 1,500/1,500 HTTP 200
   responses with P95 90.6 ms, zero restarts/errors, application CPU below 3.7%
   and at least 1,240 MiB host memory available. A bounded 1 GiB sustained upload
@@ -189,7 +190,8 @@ approved.
    GitHub Actions ranges or cloud SSH `0.0.0.0/0`. Host UFW may admit IPv4 SSH
    generally only because Lightsail remains the exact source gate; do not add an
    IPv6 SSH allow rule. Prove the complete `main` workflow against the separate
-   `aws-candidate` Environment; do not replace `azure-production` secrets.
+   `aws-candidate` Environment. The production workflow is now AWS-only; do not
+   recreate the retired `azure-production` target or copy its former secrets.
 6. Do not migrate Komari, the standalone anti-degradation harvesters or other
    unstable external monitoring components. Preserve host metrics, application
    logs, runtime guards and the AWS status alarm for the migration window. Back
@@ -241,7 +243,12 @@ approved.
 - Obtain independent review and owner approval for the exact release image,
   data boundary, DNS changes, maintenance window, stop conditions and rollback.
 
-## 5. Cutover and rollback
+## 5. Historical 2026-09-25 cutover and retired rollback plan
+
+The numbered procedure below records the completed migration. It must not be
+rerun: Azure is empty and no longer a rollback target. Any future rollback or
+host replacement requires a new plan based on the current AWS production host
+and a newly verified standby.
 
 1. Reconfirm the nine affected accounts remain at direct egress (`proxy_id=0`)
    and rerun text/SSE/WS/OAuth refresh probes before DNS change. The existing
@@ -275,6 +282,13 @@ approved.
    Before deleting any relay group, complete a separate client dependency
    inventory covering non-Sub2 consumers as well as the nine known account
    bindings, and either migrate or explicitly retire each consumer.
+
+Retirement execution completed on 2026-09-25 after separate owner approval to
+delete every remaining Azure resource group, including Traffic Manager and both
+`NetworkWatcherRG` groups. Both subscriptions returned zero resource groups and
+zero resources. The retired `4.216.216.16/32` source was removed from Lightsail
+SSH and from the data-host PostgreSQL, Redis, Docker-firewall and UFW allowlists;
+the exact AWS production source remains allowed.
 
 ### Controlled sole-background-owner handoff
 
@@ -311,12 +325,12 @@ maintenance lock and fails closed when a local blue/green transaction exists.
    before changing production DNS. Azure remains online and standby throughout
    the observation window.
 
-Background rollback uses the exact reverse order: run AWS `rollback-standby`,
-prove its old claims have drained, then run Azure `activate` and require the
-two-host status pair AWS accepting/standby plus Azure accepting/active. Reverse
-DNS and proxy CAS independently as required by the stop condition. Never use a
-container stop, stale database restore or simultaneous `activate` commands as a
-shortcut.
+The unused rollback plan would have used the exact reverse order: run AWS
+`rollback-standby`, prove its old claims had drained, then run Azure `activate`
+and require the two-host status pair AWS accepting/standby plus Azure
+accepting/active. This path expired when Azure was deleted. Never recreate it
+from these historical commands or use a container stop, stale database restore
+or simultaneous `activate` commands as a shortcut.
 
 ### Handoff execution record — 2026-09-25
 
@@ -329,13 +343,15 @@ checks passed. The observation window continued through `10:43:28Z` with zero
 application restarts/OOM/panics and no production model-path `5xx`. The single
 observed `503` belonged to the intentionally non-migrated legacy external
 monitoring/anti-degradation surface and is not a serving-path rollback signal.
-The temporary `aws-test.turtleligpt.com` record was then deleted. Azure remains
-online as the exact background and DNS rollback target pending separate owner
-authorization to retire it.
+The temporary `aws-test.turtleligpt.com` record was then deleted. At the end of
+this observation window Azure still remained online as the exact background and
+DNS rollback target pending separate owner authorization. That authorization was
+subsequently given on 2026-09-25, and the retirement record above supersedes
+that temporary rollback state.
 
-## New-host checklist and current status
+## Current production follow-ups
 
-The candidate has a static IP, imported public key, key-only SSH, host/cloud
+The production host has a static IP, imported public key, key-only SSH, host/cloud
 firewalls, OS/Docker baseline, root-owned private paths, release-control
 scripts and disabled timers. It has separate Docker volumes/network, the
 AWS-specific Caddy route, copied public www assets, protected external-runtime
@@ -347,17 +363,19 @@ payment configuration/readiness and invalid webhook rejection have also passed.
 The enabled-group Gemini Batch Image canary has completed through the AWS test
 hostname, produced valid PNGs, settled correctly, verified the legacy
 `result-files` error and authenticated server-ZIP fallback, and had both
-temporary keys tombstoned with immediate 401 verification. The owner-approved
-1-2 fen live checkout is intentionally deferred until the configured production
-`www` result origin points to AWS. The automatic data-host backup, isolated
+temporary keys tombstoned with immediate 401 verification. Production `www` now
+points to AWS; the remaining owner-visible acceptance item is to complete a 1-2
+fen checkout and confirm the result return. The automatic data-host backup,
+isolated
 restore, standby request-load headroom and bounded sustained network evidence
 now pass. The restricted NAS upload and account proxy-clearing gates also pass.
 The controlled background-owner handoff, production DNS switch, real-user
-observation and test-host retirement completed on 2026-09-25. AWS is now the
-production origin and sole background owner; Azure remains accepting/standby
-for rollback. Initial automatic TLS issuance passed; later renewal observation
-remains separate evidence. The remaining owner-visible acceptance item is a
-real unified-payment checkout and return test on the production www origin. Also
-retire the obsolete running Lightsail instance
+observation, test-host retirement and Azure resource deletion completed on
+2026-09-25. AWS is now the production origin and sole background owner; Azure
+is no longer a rollback target. Exact production commit
+`b806571f4223620a7f559ce920142f3f0439c227` deployed through run
+`36143574663`, and authenticated Models/Responses returned 200. Initial
+automatic TLS issuance passed; later renewal observation remains separate
+evidence. Also retire the obsolete running Lightsail instance
 `sub2api-aws-small-candidate` after confirming its snapshot dependency, because
 it is separate from the active `sub2api-aws-small-candidate-v2` candidate.
