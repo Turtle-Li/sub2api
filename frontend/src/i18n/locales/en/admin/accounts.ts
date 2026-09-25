@@ -517,7 +517,8 @@ export default {
           unschedulable: 'Unschedulable',
           error: 'Error',
           inactive: 'Inactive',
-          expired: 'Expired'
+          expired: 'Expired',
+          otherUnavailable: 'Other unavailable'
         },
         usageWindow: 'Last {hours}h',
         requests: '{count} requests',
@@ -552,6 +553,9 @@ export default {
         importTarget: 'Import into pool',
         importTargetNone: 'No pool',
         importTargetHint: 'Put bulk-imported accounts straight into a pool to keep the main list tidy',
+        importTargetMixedHint: 'Only accounts matching the pool platform are added to it; others import normally',
+        createInline: 'New pool…',
+        createAndSelect: 'Create & select',
         badge: 'Pool: {name}'
       },
       bulkActions: {

@@ -75,6 +75,9 @@ type DataAccount struct {
 type DataImportRequest struct {
 	Data                 DataPayload `json:"data"`
 	SkipDefaultGroupBind *bool       `json:"skip_default_group_bind"`
+	// PoolID optionally places imported accounts into an account pool. Accounts
+	// whose platform differs from the pool are still imported, just unpooled.
+	PoolID *int64 `json:"pool_id"`
 }
 
 type DataImportResult struct {
@@ -449,8 +452,22 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			AutoPauseOnExpired:   item.AutoPauseOnExpired,
 			SkipDefaultGroupBind: skipDefaultGroupBind,
 		}
+		if req.PoolID != nil && *req.PoolID > 0 {
+			accountInput.PoolID = req.PoolID
+		}
 
 		created, err := h.adminService.CreateAccount(ctx, accountInput)
+		if err != nil && accountInput.PoolID != nil && errors.Is(err, service.ErrAccountPoolPlatformMismatch) {
+			accountInput.PoolID = nil
+			created, err = h.adminService.CreateAccount(ctx, accountInput)
+			if err == nil {
+				result.Errors = append(result.Errors, DataImportError{
+					Kind:    "account",
+					Name:    item.Name,
+					Message: "imported without account pool: platform does not match the pool",
+				})
+			}
+		}
 		if err != nil {
 			result.AccountFailed++
 			result.Errors = append(result.Errors, DataImportError{

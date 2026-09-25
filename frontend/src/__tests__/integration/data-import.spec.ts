@@ -18,6 +18,9 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       importData: vi.fn()
+    },
+    accountPools: {
+      list: vi.fn().mockResolvedValue([])
     }
   }
 }))
@@ -130,7 +133,8 @@ describe('ImportDataModal', () => {
       data: expect.objectContaining({
         accounts: [{ name: 'a' }]
       }),
-      skip_default_group_bind: true
+      skip_default_group_bind: true,
+      pool_id: null
     })
   })
 
@@ -170,7 +174,8 @@ describe('ImportDataModal', () => {
         proxies: [{ proxy_key: 'p' }],
         accounts: [{ name: 'a' }, { name: 'b' }]
       }),
-      skip_default_group_bind: true
+      skip_default_group_bind: true,
+      pool_id: null
     })
     expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
   })

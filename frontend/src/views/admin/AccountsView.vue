@@ -472,8 +472,9 @@
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
     <!-- Pool modal is declared before the account modals so editing a member opens on top of it. -->
+    <!-- Keep the pool modal mounted up front: dialogs share one z-index, so the
+         pool form/edit-account dialogs declared below must teleport after it. -->
     <AccountPoolModal
-      v-if="activePoolId != null"
       ref="poolModalRef"
       :show="showPoolModal"
       :pool-id="activePoolId"

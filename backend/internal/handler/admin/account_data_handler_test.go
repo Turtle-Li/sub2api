@@ -317,3 +317,64 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
 }
+
+func postImportData(t *testing.T, router http.Handler, payload map[string]any) DataImportResult {
+	t.Helper()
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var resp struct {
+		Data DataImportResult `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	return resp.Data
+}
+
+func importDataPayloadWithPool(poolID int64) map[string]any {
+	return map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []map[string]any{},
+			"accounts": []map[string]any{
+				{
+					"name":        "grok-1",
+					"platform":    service.PlatformGrok,
+					"type":        service.AccountTypeOAuth,
+					"credentials": map[string]any{"token": "x"},
+					"concurrency": 1,
+					"priority":    1,
+				},
+			},
+		},
+		"pool_id": poolID,
+	}
+}
+
+func TestImportDataPlacesAccountsIntoPool(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+
+	result := postImportData(t, router, importDataPayloadWithPool(9))
+
+	require.Equal(t, 1, result.AccountCreated)
+	require.Len(t, adminSvc.createdAccounts, 1)
+	require.NotNil(t, adminSvc.createdAccounts[0].PoolID)
+	require.Equal(t, int64(9), *adminSvc.createdAccounts[0].PoolID)
+}
+
+func TestImportDataKeepsPlatformMismatchedAccountsUnpooled(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	adminSvc.createAccountPoolErr = service.ErrAccountPoolPlatformMismatch
+
+	result := postImportData(t, router, importDataPayloadWithPool(9))
+
+	require.Equal(t, 1, result.AccountCreated)
+	require.Equal(t, 0, result.AccountFailed)
+	require.Len(t, result.Errors, 1)
+	require.Contains(t, result.Errors[0].Message, "without account pool")
+	require.Len(t, adminSvc.createdAccounts, 2)
+	require.Nil(t, adminSvc.createdAccounts[1].PoolID)
+}

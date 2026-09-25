@@ -38,6 +38,7 @@ type stubAdminService struct {
 	testedProxyIDs                      []int64
 	getUserErr                          error
 	createAccountErr                    error
+	createAccountPoolErr                error // returned only when input.PoolID is set
 	createSparkShadowErr                error
 	updateAccountErr                    error
 	lastUpdateAccountInput              *service.UpdateAccountInput
@@ -519,6 +520,9 @@ func (s *stubAdminService) CreateAccount(ctx context.Context, input *service.Cre
 	s.mu.Unlock()
 	if s.createAccountErr != nil {
 		return nil, s.createAccountErr
+	}
+	if input.PoolID != nil && s.createAccountPoolErr != nil {
+		return nil, s.createAccountPoolErr
 	}
 	account := service.Account{ID: 300, Name: input.Name, Status: service.StatusActive}
 	return &account, nil

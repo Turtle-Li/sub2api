@@ -637,7 +637,8 @@ export default {
           unschedulable: '停止调度',
           error: '异常',
           inactive: '停用',
-          expired: '已过期'
+          expired: '已过期',
+          otherUnavailable: '其他不可用'
         },
         usageWindow: '近 {hours} 小时',
         requests: '{count} 次请求',
@@ -672,6 +673,9 @@ export default {
         importTarget: '导入到账号池',
         importTargetNone: '不加入账号池',
         importTargetHint: '批量导入的账号可直接放入账号池，避免主列表变得杂乱',
+        importTargetMixedHint: '仅与账号池平台相同的账号会放入池，其余账号照常导入',
+        createInline: '新建账号池…',
+        createAndSelect: '创建并选择',
         badge: '池：{name}'
       },
       bulkActions: {
