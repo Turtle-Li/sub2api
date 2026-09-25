@@ -59,6 +59,7 @@ type stubAdminService struct {
 		search      string
 		groupID     int64
 		privacyMode string
+		poolID      int64
 		sortBy      string
 		sortOrder   string
 		calls       int
@@ -424,6 +425,11 @@ func (s *stubAdminService) ClearGroupRPMOverrides(_ context.Context, _ int64) er
 func (s *stubAdminService) BatchSetGroupRPMOverrides(_ context.Context, _ int64, _ []service.GroupRPMOverrideInput) error {
 	s.advancedGroupOperationCalls++
 	return nil
+}
+
+func (s *stubAdminService) ListAccountsFiltered(ctx context.Context, page, pageSize int, filter service.AccountListFilter, sortBy, sortOrder string) ([]service.Account, int64, error) {
+	s.lastListAccounts.poolID = filter.PoolID
+	return s.ListAccounts(ctx, page, pageSize, filter.Platform, filter.Type, filter.Status, filter.Search, filter.GroupID, filter.PrivacyMode, sortBy, sortOrder)
 }
 
 func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]service.Account, int64, error) {

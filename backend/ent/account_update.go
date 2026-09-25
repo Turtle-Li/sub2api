@@ -564,6 +564,33 @@ func (_u *AccountUpdate) SetNillableQuotaDimension(v *account.QuotaDimension) *A
 	return _u
 }
 
+// SetPoolID sets the "pool_id" field.
+func (_u *AccountUpdate) SetPoolID(v int64) *AccountUpdate {
+	_u.mutation.ResetPoolID()
+	_u.mutation.SetPoolID(v)
+	return _u
+}
+
+// SetNillablePoolID sets the "pool_id" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillablePoolID(v *int64) *AccountUpdate {
+	if v != nil {
+		_u.SetPoolID(*v)
+	}
+	return _u
+}
+
+// AddPoolID adds value to the "pool_id" field.
+func (_u *AccountUpdate) AddPoolID(v int64) *AccountUpdate {
+	_u.mutation.AddPoolID(v)
+	return _u
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (_u *AccountUpdate) ClearPoolID() *AccountUpdate {
+	_u.mutation.ClearPoolID()
+	return _u
+}
+
 // AddGroupIDs adds the "groups" edge to the Group entity by IDs.
 func (_u *AccountUpdate) AddGroupIDs(ids ...int64) *AccountUpdate {
 	_u.mutation.AddGroupIDs(ids...)
@@ -945,6 +972,15 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.QuotaDimension(); ok {
 		_spec.SetField(account.FieldQuotaDimension, field.TypeEnum, value)
+	}
+	if value, ok := _u.mutation.PoolID(); ok {
+		_spec.SetField(account.FieldPoolID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPoolID(); ok {
+		_spec.AddField(account.FieldPoolID, field.TypeInt64, value)
+	}
+	if _u.mutation.PoolIDCleared() {
+		_spec.ClearField(account.FieldPoolID, field.TypeInt64)
 	}
 	if _u.mutation.GroupsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1704,6 +1740,33 @@ func (_u *AccountUpdateOne) SetNillableQuotaDimension(v *account.QuotaDimension)
 	return _u
 }
 
+// SetPoolID sets the "pool_id" field.
+func (_u *AccountUpdateOne) SetPoolID(v int64) *AccountUpdateOne {
+	_u.mutation.ResetPoolID()
+	_u.mutation.SetPoolID(v)
+	return _u
+}
+
+// SetNillablePoolID sets the "pool_id" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillablePoolID(v *int64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetPoolID(*v)
+	}
+	return _u
+}
+
+// AddPoolID adds value to the "pool_id" field.
+func (_u *AccountUpdateOne) AddPoolID(v int64) *AccountUpdateOne {
+	_u.mutation.AddPoolID(v)
+	return _u
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (_u *AccountUpdateOne) ClearPoolID() *AccountUpdateOne {
+	_u.mutation.ClearPoolID()
+	return _u
+}
+
 // AddGroupIDs adds the "groups" edge to the Group entity by IDs.
 func (_u *AccountUpdateOne) AddGroupIDs(ids ...int64) *AccountUpdateOne {
 	_u.mutation.AddGroupIDs(ids...)
@@ -2115,6 +2178,15 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.QuotaDimension(); ok {
 		_spec.SetField(account.FieldQuotaDimension, field.TypeEnum, value)
+	}
+	if value, ok := _u.mutation.PoolID(); ok {
+		_spec.SetField(account.FieldPoolID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPoolID(); ok {
+		_spec.AddField(account.FieldPoolID, field.TypeInt64, value)
+	}
+	if _u.mutation.PoolIDCleared() {
+		_spec.ClearField(account.FieldPoolID, field.TypeInt64)
 	}
 	if _u.mutation.GroupsCleared() {
 		edge := &sqlgraph.EdgeSpec{

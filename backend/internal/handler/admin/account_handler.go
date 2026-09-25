@@ -134,6 +134,7 @@ type CreateAccountRequest struct {
 	ExpiresAt               *int64         `json:"expires_at"`
 	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
 	ProbeEnabled            *bool          `json:"upstream_billing_probe_enabled"`
+	PoolID                  *int64         `json:"pool_id"`
 	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
 }
 
@@ -186,6 +187,7 @@ type BulkUpdateAccountFilters struct {
 	Group       string `json:"group"`
 	Search      string `json:"search"`
 	PrivacyMode string `json:"privacy_mode"`
+	Pool        string `json:"pool"`
 }
 
 // CheckMixedChannelRequest represents check mixed channel risk request
@@ -675,7 +677,27 @@ func (h *AccountHandler) List(c *gin.Context) {
 		}
 	}
 
-	accounts, total, err := h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
+	poolID, err := service.ParseAccountListPoolFilter(c.Query("pool"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	var accounts []service.Account
+	var total int64
+	if poolID == 0 {
+		accounts, total, err = h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
+	} else {
+		accounts, total, err = h.adminService.ListAccountsFiltered(c.Request.Context(), page, pageSize, service.AccountListFilter{
+			Platform:    platform,
+			Type:        accountType,
+			Status:      status,
+			Search:      search,
+			GroupID:     groupID,
+			PrivacyMode: privacyMode,
+			PoolID:      poolID,
+		}, sortBy, sortOrder)
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -1057,6 +1079,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			ExpiresAt:             req.ExpiresAt,
 			AutoPauseOnExpired:    req.AutoPauseOnExpired,
 			ProbeEnabled:          req.ProbeEnabled,
+			PoolID:                req.PoolID,
 			SkipMixedChannelCheck: skipCheck,
 		})
 		if execErr != nil {
@@ -2139,6 +2162,7 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				GroupIDs:              item.GroupIDs,
 				ExpiresAt:             item.ExpiresAt,
 				AutoPauseOnExpired:    item.AutoPauseOnExpired,
+				PoolID:                item.PoolID,
 				SkipMixedChannelCheck: skipCheck,
 			})
 			if err != nil {
@@ -2393,6 +2417,7 @@ func toServiceBulkUpdateAccountFilters(filters *BulkUpdateAccountFilters) *servi
 		Group:       filters.Group,
 		Search:      filters.Search,
 		PrivacyMode: filters.PrivacyMode,
+		Pool:        filters.Pool,
 	}
 }
 

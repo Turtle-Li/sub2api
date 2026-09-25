@@ -3530,6 +3530,8 @@
           :mixed-scheduling="mixedScheduling"
           data-tour="account-form-groups"
         />
+
+        <AccountPoolSelect v-model="targetPoolId" :platform="form.platform" />
       </div>
 
     </form>
@@ -3932,6 +3934,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import AccountPoolSelect from '@/components/admin/account/AccountPoolSelect.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -4474,6 +4477,8 @@ adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
 
 loadQuotaNotifyGlobal()
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
+// Optional account pool that newly created/imported accounts are placed into.
+const targetPoolId = ref<number | null>(null)
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
 const antigravityProjectId = ref('')
@@ -5199,6 +5204,12 @@ const openMixedChannelDialog = (opts: {
   showMixedChannelWarning.value = true
 }
 
+const withTargetPool = <T extends { pool_id?: number | null }>(payload: T): T =>
+  targetPoolId.value != null ? { ...payload, pool_id: targetPoolId.value } : payload
+
+const createAccountInTargetPool = (payload: CreateAccountRequest) =>
+  adminAPI.accounts.create(withTargetPool(payload))
+
 const withAntigravityConfirmFlag = (payload: CreateAccountRequest): CreateAccountRequest => {
   if (needsMixedChannelCheck(payload.platform) && antigravityMixedChannelConfirmed.value) {
     return {
@@ -5244,7 +5255,7 @@ const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<v
 const submitCreateAccount = async (payload: CreateAccountRequest) => {
   submitting.value = true
   try {
-    const account = await adminAPI.accounts.create(withAntigravityConfirmFlag(payload))
+    const account = await createAccountInTargetPool(withAntigravityConfirmFlag(payload))
     const modelMapping = payload.credentials.model_mapping
     const hasConcreteMappedTarget = payload.type === 'apikey' &&
       typeof modelMapping === 'object' &&
@@ -5310,6 +5321,7 @@ const resetForm = () => {
   form.rate_multiplier = 1
   form.group_ids = []
   form.expires_at = null
+  targetPoolId.value = null
   accountCategory.value = 'oauth-based'
   addMethod.value = 'oauth'
   accountMode.value = 'payg'
@@ -6058,7 +6070,7 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
           return
         }
 
-        await adminAPI.accounts.create({
+        await createAccountInTargetPool({
           name: accountName,
           notes: form.notes,
           platform: 'grok',
@@ -6139,7 +6151,8 @@ const handleGrokImportSSO = async (ssoInput: string) => {
       priority: form.priority,
       rate_multiplier: form.rate_multiplier,
       expires_at: form.expires_at,
-      auto_pause_on_expired: autoPauseOnExpired.value
+      auto_pause_on_expired: autoPauseOnExpired.value,
+      pool_id: targetPoolId.value ?? undefined
     })
 
     const successCount = result.created?.length || 0
@@ -6235,7 +6248,7 @@ const handleGrokAuthorizePassword = async (emailPasswordInput: string) => {
           return
         }
 
-        await adminAPI.accounts.create({
+        await createAccountInTargetPool({
           name: accountName,
           notes: form.notes,
           platform: 'grok',
@@ -6334,7 +6347,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     }
 
     if (shouldCreateOpenAI) {
-      await adminAPI.accounts.create({
+      await createAccountInTargetPool({
         name: form.name,
         notes: form.notes,
         platform: 'openai',
@@ -6456,7 +6469,8 @@ const handleOpenAIImportCodexSession = async (content: string) => {
       auto_pause_on_expired: autoPauseOnExpired.value,
       credential_extras: Object.keys(credentialExtras).length > 0 ? credentialExtras : undefined,
       extra: withUpstreamRequestIdHeader(extra),
-      update_existing: true
+      update_existing: true,
+      pool_id: targetPoolId.value ?? undefined
     })
 
     const successCount = result.created + result.updated
@@ -6615,7 +6629,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
         const accountName = refreshTokens.length > 1 ? `${baseName} #${i + 1}` : baseName
 
         if (shouldCreateOpenAI) {
-          await adminAPI.accounts.create({
+          await createAccountInTargetPool({
             name: accountName,
             notes: form.notes,
             platform: 'openai',
@@ -6730,7 +6744,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           expires_at: form.expires_at,
           auto_pause_on_expired: autoPauseOnExpired.value
         })
-        await adminAPI.accounts.create(createPayload)
+        await createAccountInTargetPool(createPayload)
         successCount++
       } catch (error: any) {
         failedCount++
@@ -7095,7 +7109,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           credentials.temp_unschedulable_rules = tempUnschedPayload
         }
 
-        await adminAPI.accounts.create({
+        await createAccountInTargetPool({
           name: accountName,
           notes: form.notes,
           platform: form.platform,

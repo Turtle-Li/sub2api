@@ -108,6 +108,9 @@ func RegisterAdminRoutes(
 		// 错误透传规则管理
 		registerErrorPassthroughRoutes(admin, h)
 
+		// 账号池（仅展示/批量管理，不影响调度）
+		registerAccountPoolRoutes(admin, h)
+
 		// TLS 指纹模板管理
 		registerTLSFingerprintProfileRoutes(admin, h)
 
@@ -795,6 +798,20 @@ func registerScheduledTestRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 	// Nested under accounts
 	admin.GET("/accounts/:id/scheduled-test-plans", h.Admin.ScheduledTest.ListByAccount)
+}
+
+func registerAccountPoolRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	pools := admin.Group("/account-pools")
+	{
+		pools.GET("", h.Admin.AccountPool.List)
+		pools.POST("", h.Admin.AccountPool.Create)
+		pools.POST("/members/remove", h.Admin.AccountPool.RemoveMembers)
+		pools.GET("/:id", h.Admin.AccountPool.Get)
+		pools.PUT("/:id", h.Admin.AccountPool.Update)
+		pools.DELETE("/:id", h.Admin.AccountPool.Delete)
+		pools.POST("/:id/members", h.Admin.AccountPool.AddMembers)
+		pools.GET("/:id/account-ids", h.Admin.AccountPool.ListAccountIDs)
+	}
 }
 
 func registerErrorPassthroughRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

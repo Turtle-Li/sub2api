@@ -201,6 +201,9 @@ func (Account) Fields() []ent.Field {
 			Comment("Parent account id for a linked spark shadow (NULL = normal)."),
 		field.Enum("quota_dimension").Values("global", "spark").Default("global").
 			Comment("'global' (default) or 'spark' (shadow reads codex_bengalfox)."),
+		// pool_id: 所属账号池（仅用于后台折叠管理，不影响调度）。
+		// 外键 ON DELETE SET NULL 由迁移 258 创建。
+		field.Int64("pool_id").Optional().Nillable(),
 	}
 }
 
@@ -249,5 +252,6 @@ func (Account) Indexes() []ent.Index {
 		index.Fields("priority", "status"),
 		index.Fields("deleted_at"), // 软删除查询优化
 		index.Fields("parent_account_id"),
+		index.Fields("pool_id"),
 	}
 }

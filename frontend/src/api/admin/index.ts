@@ -7,6 +7,7 @@ import dashboardAPI from './dashboard'
 import usersAPI from './users'
 import groupsAPI from './groups'
 import accountsAPI from './accounts'
+import accountPoolsAPI from './accountPools'
 import proxiesAPI from './proxies'
 import redeemAPI from './redeem'
 import promoAPI from './promo'
@@ -46,6 +47,7 @@ export const adminAPI = {
   users: usersAPI,
   groups: groupsAPI,
   accounts: accountsAPI,
+  accountPools: accountPoolsAPI,
   proxies: proxiesAPI,
   redeem: redeemAPI,
   promo: promoAPI,
@@ -83,6 +85,7 @@ export {
   usersAPI,
   groupsAPI,
   accountsAPI,
+  accountPoolsAPI,
   proxiesAPI,
   redeemAPI,
   promoAPI,
@@ -118,6 +121,13 @@ export {
 export default adminAPI
 
 // Re-export types used by components
+export type {
+  AccountPool,
+  AccountPoolStats,
+  AccountPoolUsage,
+  AccountPoolCodexQuota,
+  AccountPoolGrokFreeQuota
+} from './accountPools'
 export type { AuditLog, AuditLogQuery, AuditLogListResponse } from './audit'
 export type { BalanceHistoryItem } from './users'
 export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from './errorPassthrough'

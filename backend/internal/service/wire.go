@@ -1010,6 +1010,7 @@ var ProviderSet = wire.NewSet(
 	NewUsageCache,
 	NewTotpService,
 	NewErrorPassthroughService,
+	NewAccountPoolService,
 	NewTLSFingerprintProfileService,
 	ProvidePluginManager,
 	NewDigestSessionStore,

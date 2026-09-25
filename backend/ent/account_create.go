@@ -419,6 +419,20 @@ func (_c *AccountCreate) SetNillableQuotaDimension(v *account.QuotaDimension) *A
 	return _c
 }
 
+// SetPoolID sets the "pool_id" field.
+func (_c *AccountCreate) SetPoolID(v int64) *AccountCreate {
+	_c.mutation.SetPoolID(v)
+	return _c
+}
+
+// SetNillablePoolID sets the "pool_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillablePoolID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetPoolID(*v)
+	}
+	return _c
+}
+
 // AddGroupIDs adds the "groups" edge to the Group entity by IDs.
 func (_c *AccountCreate) AddGroupIDs(ids ...int64) *AccountCreate {
 	_c.mutation.AddGroupIDs(ids...)
@@ -800,6 +814,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.QuotaDimension(); ok {
 		_spec.SetField(account.FieldQuotaDimension, field.TypeEnum, value)
 		_node.QuotaDimension = value
+	}
+	if value, ok := _c.mutation.PoolID(); ok {
+		_spec.SetField(account.FieldPoolID, field.TypeInt64, value)
+		_node.PoolID = &value
 	}
 	if nodes := _c.mutation.GroupsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1431,6 +1449,30 @@ func (u *AccountUpsert) UpdateQuotaDimension() *AccountUpsert {
 	return u
 }
 
+// SetPoolID sets the "pool_id" field.
+func (u *AccountUpsert) SetPoolID(v int64) *AccountUpsert {
+	u.Set(account.FieldPoolID, v)
+	return u
+}
+
+// UpdatePoolID sets the "pool_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdatePoolID() *AccountUpsert {
+	u.SetExcluded(account.FieldPoolID)
+	return u
+}
+
+// AddPoolID adds v to the "pool_id" field.
+func (u *AccountUpsert) AddPoolID(v int64) *AccountUpsert {
+	u.Add(account.FieldPoolID, v)
+	return u
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (u *AccountUpsert) ClearPoolID() *AccountUpsert {
+	u.SetNull(account.FieldPoolID)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -2047,6 +2089,34 @@ func (u *AccountUpsertOne) SetQuotaDimension(v account.QuotaDimension) *AccountU
 func (u *AccountUpsertOne) UpdateQuotaDimension() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateQuotaDimension()
+	})
+}
+
+// SetPoolID sets the "pool_id" field.
+func (u *AccountUpsertOne) SetPoolID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetPoolID(v)
+	})
+}
+
+// AddPoolID adds v to the "pool_id" field.
+func (u *AccountUpsertOne) AddPoolID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddPoolID(v)
+	})
+}
+
+// UpdatePoolID sets the "pool_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdatePoolID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdatePoolID()
+	})
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (u *AccountUpsertOne) ClearPoolID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearPoolID()
 	})
 }
 
@@ -2832,6 +2902,34 @@ func (u *AccountUpsertBulk) SetQuotaDimension(v account.QuotaDimension) *Account
 func (u *AccountUpsertBulk) UpdateQuotaDimension() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateQuotaDimension()
+	})
+}
+
+// SetPoolID sets the "pool_id" field.
+func (u *AccountUpsertBulk) SetPoolID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetPoolID(v)
+	})
+}
+
+// AddPoolID adds v to the "pool_id" field.
+func (u *AccountUpsertBulk) AddPoolID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddPoolID(v)
+	})
+}
+
+// UpdatePoolID sets the "pool_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdatePoolID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdatePoolID()
+	})
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (u *AccountUpsertBulk) ClearPoolID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearPoolID()
 	})
 }
 

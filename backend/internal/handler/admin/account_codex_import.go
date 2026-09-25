@@ -39,6 +39,7 @@ type CodexSessionImportRequest struct {
 	UpdateExisting          *bool          `json:"update_existing"`
 	SkipDefaultGroupBind    *bool          `json:"skip_default_group_bind"`
 	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"`
+	PoolID                  *int64         `json:"pool_id"`
 }
 
 type CodexSessionImportResult struct {
@@ -163,7 +164,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 		Items: make([]CodexSessionImportItem, 0, len(entries)),
 	}
 
-	existingAccounts, err := h.listAccountsFiltered(ctx, service.PlatformOpenAI, service.AccountTypeOAuth, "", "", 0, "", "created_at", "desc")
+	existingAccounts, err := h.listAccountsFiltered(ctx, service.AccountListFilter{Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth}, "created_at", "desc")
 	if err != nil {
 		return result, err
 	}
@@ -345,6 +346,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 			AutoPauseOnExpired:    autoPauseOnExpired,
 			SkipDefaultGroupBind:  skipDefaultGroupBind,
 			SkipMixedChannelCheck: skipMixedChannelCheck,
+			PoolID:                req.PoolID,
 		})
 		if createErr != nil {
 			result.Failed++

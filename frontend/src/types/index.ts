@@ -1217,6 +1217,8 @@ export interface Account {
   notes?: string | null
   platform: AccountPlatform
   type: AccountType
+  // 所属账号池（仅展示/批量管理用，不影响调度）
+  pool_id?: number | null
   // 后端响应里 credentials 已脱敏：access_token / refresh_token / id_token /
   // api_key / session_key / cookie / aws_secret_access_key / aws_session_token /
   // service_account_json / service_account / private_key 不会出现，
@@ -1547,6 +1549,7 @@ export interface CreateAccountRequest {
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean
+  pool_id?: number | null
   upstream_billing_probe_enabled?: boolean
   confirm_mixed_channel_risk?: boolean
 }
@@ -1693,6 +1696,7 @@ export interface CodexSessionImportRequest {
   load_factor?: number | null
   expires_at?: number | null
   auto_pause_on_expired?: boolean
+  pool_id?: number | null
   credential_extras?: Record<string, unknown>
   extra?: Record<string, unknown>
   update_existing?: boolean

@@ -195,6 +195,11 @@ func ParentAccountID(v int64) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldParentAccountID, v))
 }
 
+// PoolID applies equality check predicate on the "pool_id" field. It's identical to PoolIDEQ.
+func PoolID(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldPoolID, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldCreatedAt, v))
@@ -1603,6 +1608,56 @@ func QuotaDimensionIn(vs ...QuotaDimension) predicate.Account {
 // QuotaDimensionNotIn applies the NotIn predicate on the "quota_dimension" field.
 func QuotaDimensionNotIn(vs ...QuotaDimension) predicate.Account {
 	return predicate.Account(sql.FieldNotIn(FieldQuotaDimension, vs...))
+}
+
+// PoolIDEQ applies the EQ predicate on the "pool_id" field.
+func PoolIDEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldPoolID, v))
+}
+
+// PoolIDNEQ applies the NEQ predicate on the "pool_id" field.
+func PoolIDNEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldPoolID, v))
+}
+
+// PoolIDIn applies the In predicate on the "pool_id" field.
+func PoolIDIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldPoolID, vs...))
+}
+
+// PoolIDNotIn applies the NotIn predicate on the "pool_id" field.
+func PoolIDNotIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldPoolID, vs...))
+}
+
+// PoolIDGT applies the GT predicate on the "pool_id" field.
+func PoolIDGT(v int64) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldPoolID, v))
+}
+
+// PoolIDGTE applies the GTE predicate on the "pool_id" field.
+func PoolIDGTE(v int64) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldPoolID, v))
+}
+
+// PoolIDLT applies the LT predicate on the "pool_id" field.
+func PoolIDLT(v int64) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldPoolID, v))
+}
+
+// PoolIDLTE applies the LTE predicate on the "pool_id" field.
+func PoolIDLTE(v int64) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldPoolID, v))
+}
+
+// PoolIDIsNil applies the IsNil predicate on the "pool_id" field.
+func PoolIDIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldPoolID))
+}
+
+// PoolIDNotNil applies the NotNil predicate on the "pool_id" field.
+func PoolIDNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldPoolID))
 }
 
 // HasGroups applies the HasEdge predicate on the "groups" edge.

@@ -94,6 +94,12 @@
                         </span>
                         <span class="flex-1 text-left">{{ t('admin.accounts.syncFromCrs') }}</span>
                       </button>
+                      <button class="account-tools-menu-item" data-testid="account-tools-create-pool" @click="openCreatePoolFromMenu">
+                        <span class="account-tools-menu-icon bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-300">
+                          <Icon name="database" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.accounts.pools.create') }}</span>
+                      </button>
                       <button class="account-tools-menu-item" @click="openImportData">
                         <span class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
                           <Icon name="upload" size="sm" />
@@ -173,6 +179,12 @@
             {{ t('admin.accounts.listPendingSyncAction') }}
           </button>
         </div>
+        <AccountPoolStrip
+          v-if="visiblePools.length > 0"
+          :pools="visiblePools"
+          @open="openPool"
+          @create="openCreatePool"
+        />
       </template>
       <template #table>
         <AccountBulkActionsBar
@@ -190,6 +202,7 @@
           @select-page="selectPage"
           @select-all-results="handleSelectAllResults"
           @toggle-schedulable="handleBulkToggleSchedulable"
+          @add-to-pool="openAssignToPool"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
         <DataTable
@@ -242,6 +255,14 @@
                 </template>
               </HelpTooltip>
               <span v-else class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+              <button
+                v-if="row.pool_id && poolsByID.get(row.pool_id)"
+                type="button"
+                class="mt-0.5 self-start rounded bg-primary-50 px-1.5 py-0.5 text-xs text-primary-700 hover:bg-primary-100 dark:bg-primary-900/30 dark:text-primary-300"
+                @click="openPool(poolsByID.get(row.pool_id)!)"
+              >
+                {{ t('admin.accounts.pools.badge', { name: poolsByID.get(row.pool_id)!.name }) }}
+              </button>
               <span
                 v-if="accountDisplayEmail(row)"
                 class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]"
@@ -450,6 +471,34 @@
       </template>
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
+    <!-- Pool modal is declared before the account modals so editing a member opens on top of it. -->
+    <AccountPoolModal
+      v-if="activePoolId != null"
+      ref="poolModalRef"
+      :show="showPoolModal"
+      :pool-id="activePoolId"
+      :groups="groups"
+      :proxies="proxies"
+      @close="closePoolModal"
+      @changed="handlePoolsChanged"
+      @dissolved="handlePoolDissolved"
+      @edit-pool="openEditPool"
+      @edit-account="handleEdit"
+    />
+    <AccountPoolFormDialog
+      :show="showPoolForm"
+      :pool="editingPool"
+      :default-platform="params.platform || undefined"
+      @close="showPoolForm = false"
+      @saved="handlePoolSaved"
+    />
+    <AccountPoolAssignDialog
+      :show="showAssignToPool"
+      :platform="assignPlatform"
+      :account-ids="selIds"
+      @close="showAssignToPool = false"
+      @assigned="handleAssignedToPool"
+    />
     <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
@@ -507,6 +556,11 @@ import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrs
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
+import AccountPoolStrip from '@/components/admin/account/AccountPoolStrip.vue'
+import AccountPoolModal from '@/components/admin/account/AccountPoolModal.vue'
+import AccountPoolFormDialog from '@/components/admin/account/AccountPoolFormDialog.vue'
+import AccountPoolAssignDialog from '@/components/admin/account/AccountPoolAssignDialog.vue'
+import type { AccountPool } from '@/api/admin/accountPools'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
@@ -564,6 +618,7 @@ type AccountBulkEditTarget =
         group?: string
         search?: string
         privacy_mode?: string
+        pool?: string
         sort_by?: string
         sort_order?: AccountSortOrder
       }
@@ -1060,10 +1115,13 @@ const toggleColumn = (key: string) => {
 
 const isColumnVisible = (key: string) => !hiddenColumns.has(key)
 const shouldIncludeSchedulerScore = () => isColumnVisible('scheduler_score')
+const ACCOUNT_POOL_NONE_QUERY_VALUE = 'none'
 const syncAccountListDerivedParams = () => {
   // Keep every load path, including auto-refresh and sorting, aligned with the current column visibility.
   const requestParams = params as any
   requestParams.include_scheduler_score = shouldIncludeSchedulerScore() ? '1' : '0'
+  // Pooled accounts live in their pool modal; a name search still reaches them.
+  requestParams.pool = String(requestParams.search ?? '').trim() ? '' : ACCOUNT_POOL_NONE_QUERY_VALUE
 }
 
 const {
@@ -1085,6 +1143,7 @@ const {
     privacy_mode: '',
     group: '',
     search: '',
+    pool: ACCOUNT_POOL_NONE_QUERY_VALUE,
     lite: '1',
     include_scheduler_score: shouldIncludeSchedulerScore() ? '1' : '0',
     sort_by: sortState.sort_by,
@@ -1165,6 +1224,7 @@ const load = async (options: AccountLoadOptions = {}) => {
 }
 
 const reload = async () => {
+  void loadPools()
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
@@ -1182,6 +1242,7 @@ const buildUpstreamBillingRateFilters = () => {
     group: typeof rawParams.group === 'string' ? rawParams.group : '',
     search: typeof rawParams.search === 'string' ? rawParams.search : '',
     privacy_mode: typeof rawParams.privacy_mode === 'string' ? rawParams.privacy_mode : '',
+    pool: typeof rawParams.pool === 'string' ? rawParams.pool : '',
     sort_by: sortState.sort_by,
     sort_order: sortState.sort_order
   }
@@ -1438,6 +1499,7 @@ const mergeAccountsIncrementally = (nextRows: Account[]) => {
 
 const refreshAccountsIncrementally = async () => {
   if (autoRefreshFetching.value) return
+  loadPoolsIfStale()
   syncAccountListDerivedParams()
   autoRefreshFetching.value = true
   try {
@@ -1449,6 +1511,7 @@ const refreshAccountsIncrementally = async () => {
         type?: string
         status?: string
         privacy_mode?: string
+        pool?: string
         group?: string
         search?: string
         sort_by?: string
@@ -1478,7 +1541,7 @@ const refreshAccountsIncrementally = async () => {
 }
 
 const handleManualRefresh = async () => {
-  await Promise.all([load(), loadUpstreamBillingProbeGlobalState()])
+  await Promise.all([load(), loadUpstreamBillingProbeGlobalState(), loadPools()])
   // Force usage cells to refetch /usage on explicit user refresh.
   usageManualRefreshToken.value += 1
 }
@@ -2054,6 +2117,7 @@ const buildBulkEditFilterSnapshot = () => {
     group: typeof rawParams.group === 'string' ? rawParams.group : '',
     search: typeof rawParams.search === 'string' ? rawParams.search : '',
     privacy_mode: typeof rawParams.privacy_mode === 'string' ? rawParams.privacy_mode : '',
+    pool: typeof rawParams.pool === 'string' ? rawParams.pool : '',
     sort_by: typeof rawParams.sort_by === 'string' ? rawParams.sort_by : '',
     sort_order: sortOrder
   }
@@ -2122,6 +2186,86 @@ const handleBulkUpdated = () => {
   reload()
 }
 const handleDataImported = () => { showImportData.value = false; reload() }
+
+// Account pools: display-only containers shown as cards above the list.
+const POOLS_AUTO_REFRESH_MIN_INTERVAL_MS = 30_000
+const pools = ref<AccountPool[]>([])
+const poolsByID = computed(() => new Map(pools.value.map(pool => [pool.id, pool])))
+const visiblePools = computed(() =>
+  params.platform ? pools.value.filter(pool => pool.platform === params.platform) : pools.value
+)
+const poolModalRef = ref<InstanceType<typeof AccountPoolModal> | null>(null)
+const showPoolModal = ref(false)
+const activePoolId = ref<number | null>(null)
+const showPoolForm = ref(false)
+const editingPool = ref<AccountPool | null>(null)
+const showAssignToPool = ref(false)
+const assignPlatform = ref('')
+let poolsLoadedAt = 0
+
+const loadPools = async () => {
+  poolsLoadedAt = Date.now()
+  try {
+    pools.value = await adminAPI.accountPools.list()
+  } catch (error) {
+    console.error('Failed to load account pools:', error)
+  }
+}
+const loadPoolsIfStale = () => {
+  if (Date.now() - poolsLoadedAt >= POOLS_AUTO_REFRESH_MIN_INTERVAL_MS) void loadPools()
+}
+const openPool = (pool: AccountPool) => {
+  activePoolId.value = pool.id
+  showPoolModal.value = true
+}
+const closePoolModal = () => {
+  showPoolModal.value = false
+}
+const openCreatePool = () => {
+  editingPool.value = null
+  showPoolForm.value = true
+}
+const openCreatePoolFromMenu = () => {
+  closeAccountToolsDropdown()
+  openCreatePool()
+}
+const openEditPool = (pool: AccountPool) => {
+  editingPool.value = pool
+  showPoolForm.value = true
+}
+const handlePoolSaved = async (pool: AccountPool) => {
+  const wasEditing = editingPool.value != null
+  showPoolForm.value = false
+  editingPool.value = null
+  await loadPools()
+  if (wasEditing) poolModalRef.value?.refreshAll()
+  else openPool(pool)
+}
+const handlePoolsChanged = () => {
+  void loadPools()
+  reload()
+}
+const handlePoolDissolved = () => {
+  showPoolModal.value = false
+  activePoolId.value = null
+  handlePoolsChanged()
+}
+const openAssignToPool = () => {
+  const platforms = new Set(accounts.value.filter(account => isSelected(account.id)).map(account => account.platform))
+  // Off-page selections (select-all-results) share the list filter; fall back to it.
+  if (platforms.size === 0 && params.platform) platforms.add(params.platform)
+  if (platforms.size !== 1) {
+    appStore.showError(t('admin.accounts.pools.assignMixedPlatform'))
+    return
+  }
+  assignPlatform.value = [...platforms][0]
+  showAssignToPool.value = true
+}
+const handleAssignedToPool = () => {
+  showAssignToPool.value = false
+  clearSelection()
+  handlePoolsChanged()
+}
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
 const ACCOUNT_PRIVACY_MODE_UNSET_QUERY_VALUE = '__unset__'
 const buildAccountQueryFilters = () => ({
@@ -2130,6 +2274,7 @@ const buildAccountQueryFilters = () => ({
   status: params.status || '',
   group: params.group || '',
   privacy_mode: params.privacy_mode || '',
+  pool: params.pool || '',
   search: params.search || '',
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
@@ -2137,6 +2282,7 @@ const buildAccountQueryFilters = () => ({
 const accountMatchesCurrentFilters = (account: Account) => {
   const filters = buildAccountQueryFilters()
   if (filters.platform && account.platform !== filters.platform) return false
+  if (filters.pool === ACCOUNT_POOL_NONE_QUERY_VALUE && account.pool_id) return false
   if (filters.type && account.type !== filters.type) return false
   if (filters.status) {
     const now = Date.now()
@@ -2249,6 +2395,7 @@ const handleProbeUpstreamBilling = async (account: Account) => {
   }
 }
 const handleAccountUpdated = (updatedAccount: Account) => {
+  if (showPoolModal.value) poolModalRef.value?.refreshAll()
   patchAccountInList(updatedAccount)
   enterAutoRefreshSilentWindow()
 }
@@ -2533,6 +2680,7 @@ onMounted(async () => {
   }
 
   load()
+  loadPools()
   loadUpstreamBillingProbeGlobalState()
   const [proxiesResult, groupsResult] = await Promise.allSettled([
     adminAPI.proxies.getAll(),

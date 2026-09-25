@@ -7,6 +7,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/accountgroup"
+	"github.com/Wei-Shaw/sub2api/ent/accountpool"
 	"github.com/Wei-Shaw/sub2api/ent/announcement"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
@@ -268,6 +269,57 @@ func init() {
 	accountgroupDescCreatedAt := accountgroupFields[3].Descriptor()
 	// accountgroup.DefaultCreatedAt holds the default value on creation for the created_at field.
 	accountgroup.DefaultCreatedAt = accountgroupDescCreatedAt.Default.(func() time.Time)
+	accountpoolMixin := schema.AccountPool{}.Mixin()
+	accountpoolMixinFields0 := accountpoolMixin[0].Fields()
+	_ = accountpoolMixinFields0
+	accountpoolFields := schema.AccountPool{}.Fields()
+	_ = accountpoolFields
+	// accountpoolDescCreatedAt is the schema descriptor for created_at field.
+	accountpoolDescCreatedAt := accountpoolMixinFields0[0].Descriptor()
+	// accountpool.DefaultCreatedAt holds the default value on creation for the created_at field.
+	accountpool.DefaultCreatedAt = accountpoolDescCreatedAt.Default.(func() time.Time)
+	// accountpoolDescUpdatedAt is the schema descriptor for updated_at field.
+	accountpoolDescUpdatedAt := accountpoolMixinFields0[1].Descriptor()
+	// accountpool.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	accountpool.DefaultUpdatedAt = accountpoolDescUpdatedAt.Default.(func() time.Time)
+	// accountpool.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	accountpool.UpdateDefaultUpdatedAt = accountpoolDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// accountpoolDescName is the schema descriptor for name field.
+	accountpoolDescName := accountpoolFields[0].Descriptor()
+	// accountpool.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	accountpool.NameValidator = func() func(string) error {
+		validators := accountpoolDescName.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(name string) error {
+			for _, fn := range fns {
+				if err := fn(name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// accountpoolDescPlatform is the schema descriptor for platform field.
+	accountpoolDescPlatform := accountpoolFields[1].Descriptor()
+	// accountpool.PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
+	accountpool.PlatformValidator = func() func(string) error {
+		validators := accountpoolDescPlatform.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(platform string) error {
+			for _, fn := range fns {
+				if err := fn(platform); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
 	announcementFields := schema.Announcement{}.Fields()
 	_ = announcementFields
 	// announcementDescTitle is the schema descriptor for title field.

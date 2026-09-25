@@ -310,6 +310,7 @@ type Account struct {
 	// 影子账号关系（spark 维度影子）
 	ParentAccountID *int64 `json:"parent_account_id,omitempty"`
 	QuotaDimension  string `json:"quota_dimension,omitempty"`
+	PoolID          *int64 `json:"pool_id,omitempty"`
 
 	// 影子账号回填的母账号信息（仅影子非空，源自母账号 Credentials/Extra）
 	ParentEmail                 string `json:"parent_email,omitempty"`
@@ -412,6 +413,7 @@ type AccountListItem struct {
 
 	ParentAccountID             *int64 `json:"parent_account_id,omitempty"`
 	QuotaDimension              string `json:"quota_dimension,omitempty"`
+	PoolID                      *int64 `json:"pool_id,omitempty"`
 	ParentEmail                 string `json:"parent_email,omitempty"`
 	ParentPlanType              string `json:"parent_plan_type,omitempty"`
 	ParentPrivacyMode           string `json:"parent_privacy_mode,omitempty"`

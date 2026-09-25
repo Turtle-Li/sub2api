@@ -61,10 +61,21 @@ func (h *AccountHandler) GetUpstreamBillingRates(c *gin.Context) {
 		}
 	}
 
-	accounts, total, err := h.adminService.ListAccounts(
-		c.Request.Context(), page, pageSize, platform, accountType, status,
-		search, groupID, privacyMode, sortBy, sortOrder,
-	)
+	poolID, err := service.ParseAccountListPoolFilter(c.Query("pool"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	accounts, total, err := h.adminService.ListAccountsFiltered(c.Request.Context(), page, pageSize, service.AccountListFilter{
+		Platform:    platform,
+		Type:        accountType,
+		Status:      status,
+		Search:      search,
+		GroupID:     groupID,
+		PrivacyMode: privacyMode,
+		PoolID:      poolID,
+	}, sortBy, sortOrder)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

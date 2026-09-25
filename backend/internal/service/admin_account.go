@@ -36,6 +36,27 @@ func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int,
 	return accounts, result.Total, nil
 }
 
+func (s *adminServiceImpl) ListAccountsFiltered(ctx context.Context, page, pageSize int, filter AccountListFilter, sortBy, sortOrder string) ([]Account, int64, error) {
+	if filter.PoolID == 0 {
+		return s.ListAccounts(ctx, page, pageSize, filter.Platform, filter.Type, filter.Status, filter.Search, filter.GroupID, filter.PrivacyMode, sortBy, sortOrder)
+	}
+	reader, ok := s.accountRepo.(accountFilteredListReader)
+	if !ok {
+		return nil, 0, errors.New("account repository does not support pool filtering")
+	}
+	if filter.GroupID > 0 {
+		if err := s.ValidateAccountGroupBindings(ctx, []int64{filter.GroupID}); err != nil {
+			return nil, 0, err
+		}
+	}
+	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
+	accounts, result, err := reader.ListWithAccountFilter(ctx, params, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	return accounts, result.Total, nil
+}
+
 func (s *adminServiceImpl) ListAccountsForSchedulerScoreFilter(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, nil
@@ -434,6 +455,10 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		Priority:    input.Priority,
 		Status:      StatusActive,
 		Schedulable: true,
+	}
+	if input.PoolID != nil && *input.PoolID > 0 {
+		poolID := *input.PoolID
+		account.PoolID = &poolID
 	}
 	if input.ProbeEnabled != nil && *input.ProbeEnabled {
 		if !isUpstreamBillingProbeAccount(account) {
@@ -1444,25 +1469,26 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 		}
 		groupID = parsedGroupID
 	}
+	poolID, err := ParseAccountListPoolFilter(filters.Pool)
+	if err != nil {
+		return nil, err
+	}
+	listFilter := AccountListFilter{
+		Platform:    filters.Platform,
+		Type:        filters.Type,
+		Status:      filters.Status,
+		Search:      filters.Search,
+		GroupID:     groupID,
+		PrivacyMode: filters.PrivacyMode,
+		PoolID:      poolID,
+	}
 
 	const pageSize = 500
 	page := 1
 	accountIDs := make([]int64, 0, pageSize)
 
 	for {
-		accounts, total, err := s.ListAccounts(
-			ctx,
-			page,
-			pageSize,
-			filters.Platform,
-			filters.Type,
-			filters.Status,
-			filters.Search,
-			groupID,
-			filters.PrivacyMode,
-			"",
-			"",
-		)
+		accounts, total, err := s.ListAccountsFiltered(ctx, page, pageSize, listFilter, "", "")
 		if err != nil {
 			return nil, err
 		}

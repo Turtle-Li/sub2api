@@ -346,6 +346,12 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 	if account.ParentAccountID != nil {
 		builder.SetParentAccountID(*account.ParentAccountID)
 	}
+	if account.PoolID != nil {
+		if err := ensureAccountPoolAcceptsPlatform(ctx, client, *account.PoolID, account.Platform); err != nil {
+			return err
+		}
+		builder.SetPoolID(*account.PoolID)
+	}
 
 	created, err := builder.Save(ctx)
 	if err != nil {
@@ -1263,7 +1269,28 @@ func (r *accountRepository) List(ctx context.Context, params pagination.Paginati
 }
 
 func (r *accountRepository) accountListFilteredQuery(platform, accountType, status, search string, groupID int64, privacyMode string) *dbent.AccountQuery {
-	q := r.client.Account.Query()
+	return buildAccountListFilteredQuery(r.client, service.AccountListFilter{
+		Platform:    platform,
+		Type:        accountType,
+		Status:      status,
+		Search:      search,
+		GroupID:     groupID,
+		PrivacyMode: privacyMode,
+	})
+}
+
+// buildAccountListFilteredQuery is shared by the admin account list and the
+// account-pool member queries so pool stat click-through matches list filters.
+func buildAccountListFilteredQuery(client *dbent.Client, filter service.AccountListFilter) *dbent.AccountQuery {
+	platform, accountType, status, search := filter.Platform, filter.Type, filter.Status, filter.Search
+	groupID, privacyMode, poolID := filter.GroupID, filter.PrivacyMode, filter.PoolID
+	q := client.Account.Query()
+
+	if poolID == service.AccountListPoolNone {
+		q = q.Where(dbaccount.PoolIDIsNil())
+	} else if poolID > 0 {
+		q = q.Where(dbaccount.PoolIDEQ(poolID))
+	}
 
 	if platform != "" {
 		q = q.Where(dbaccount.PlatformEQ(platform))
@@ -1359,7 +1386,28 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 }
 
 func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
-	q := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode)
+	return r.listWithFilteredQuery(ctx, params, r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode))
+}
+
+// ListWithAccountFilter is ListWithFilters plus account-pool scoping.
+func (r *accountRepository) ListWithAccountFilter(ctx context.Context, params pagination.PaginationParams, filter service.AccountListFilter) ([]service.Account, *pagination.PaginationResult, error) {
+	return r.listWithFilteredQuery(ctx, params, r.accountListQueryFromFilter(filter))
+}
+
+// ListAllWithAccountFilter is ListAllWithFilters plus account-pool scoping.
+func (r *accountRepository) ListAllWithAccountFilter(ctx context.Context, filter service.AccountListFilter) ([]service.Account, error) {
+	accounts, err := r.accountListQueryFromFilter(filter).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return r.accountsToService(ctx, accounts)
+}
+
+func (r *accountRepository) accountListQueryFromFilter(filter service.AccountListFilter) *dbent.AccountQuery {
+	return buildAccountListFilteredQuery(r.client, filter)
+}
+
+func (r *accountRepository) listWithFilteredQuery(ctx context.Context, params pagination.PaginationParams, q *dbent.AccountQuery) ([]service.Account, *pagination.PaginationResult, error) {
 	// Clone before Count so interceptor-appended predicates (SoftDeleteMixin's
 	// deleted_at IS NULL) don't accumulate on the shared builder and pollute the
 	// subsequent list query. Same pattern used in group_repo/promo_code_repo/user_repo
@@ -4312,6 +4360,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		SessionWindowStatus:     derefString(m.SessionWindowStatus),
 		ParentAccountID:         m.ParentAccountID,
 		QuotaDimension:          string(m.QuotaDimension),
+		PoolID:                  m.PoolID,
 	}
 }
 
