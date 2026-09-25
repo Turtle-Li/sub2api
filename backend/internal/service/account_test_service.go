@@ -257,6 +257,44 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 	return payload.Data, nil
 }
 
+func isOpenAIResponseTestModel(modelID string) bool {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" || isOpenAIImageModel(modelID) {
+		return false
+	}
+	lower := strings.ToLower(modelID)
+	return !strings.Contains(lower, "gpt-reserve") &&
+		!strings.Contains(lower, "codex-auto-review")
+}
+
+func (s *AccountTestService) resolveOpenAIAccountTestModel(ctx context.Context, account *Account, requestedModelID string) (string, error) {
+	if requestedModelID = strings.TrimSpace(requestedModelID); requestedModelID != "" {
+		return requestedModelID, nil
+	}
+	if account == nil || !account.IsOpenAIOAuth() {
+		return openai.DefaultTestModel, nil
+	}
+
+	models, err := s.FetchOpenAIAccountModels(ctx, account)
+	if err != nil {
+		return "", fmt.Errorf("discover OpenAI OAuth account models: %w", err)
+	}
+
+	for _, preferred := range []string{"gpt-5.5", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		for _, model := range models {
+			if strings.EqualFold(strings.TrimSpace(model.ID), preferred) && isOpenAIResponseTestModel(model.ID) {
+				return strings.TrimSpace(model.ID), nil
+			}
+		}
+	}
+	for _, model := range models {
+		if isOpenAIResponseTestModel(model.ID) {
+			return strings.TrimSpace(model.ID), nil
+		}
+	}
+	return "", errors.New("OpenAI OAuth account model discovery returned no response-capable models")
+}
+
 // NewAccountTestService creates a new AccountTestService
 func NewAccountTestService(
 	accountRepo AccountRepository,
@@ -784,10 +822,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
 
-	// Default to openai.DefaultTestModel for OpenAI testing
-	testModelID := modelID
-	if testModelID == "" {
-		testModelID = openai.DefaultTestModel
+	testModelID, err := s.resolveOpenAIAccountTestModel(ctx, account, modelID)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to select OpenAI test model: %s", err.Error()))
 	}
 
 	// Align test routing with gateway behavior: OpenAI accounts apply normal

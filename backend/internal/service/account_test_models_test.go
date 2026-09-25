@@ -115,6 +115,55 @@ func TestFetchOpenAIAccountModelsPreservesEmptyCatalog(t *testing.T) {
 	require.Empty(t, models, "an empty upstream catalog must not become a static model list")
 }
 
+func TestResolveOpenAIAccountTestModelOAuthPrefersStableLiveTextModel(t *testing.T) {
+	_, calls := newCodexModelsOAuthCacheServer(t, `{"models":[
+		{"slug":"gpt-image-2.5-flare"},
+		{"slug":"gpt-5.6-terra"},
+		{"slug":"gpt-5.5"}
+	]}`)
+	svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}
+
+	modelID, err := svc.resolveOpenAIAccountTestModel(context.Background(), newCodexModelsTestAccount(), "")
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.5", modelID)
+	require.EqualValues(t, 1, calls.Load())
+}
+
+func TestResolveOpenAIAccountTestModelOAuthSkipsNonResponseModels(t *testing.T) {
+	newCodexModelsOAuthCacheServer(t, `{"models":[
+		{"slug":"gpt-image-2.5-flare"},
+		{"slug":"gpt-reserve"},
+		{"slug":"codex-auto-review"},
+		{"slug":"gpt-6-astra"}
+	]}`)
+	svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}
+
+	modelID, err := svc.resolveOpenAIAccountTestModel(context.Background(), newCodexModelsTestAccount(), "")
+	require.NoError(t, err)
+	require.Equal(t, "gpt-6-astra", modelID)
+}
+
+func TestResolveOpenAIAccountTestModelOAuthFailsWithoutResponseModel(t *testing.T) {
+	newCodexModelsOAuthCacheServer(t, `{"models":[
+		{"slug":"gpt-image-2.5-flare"},
+		{"slug":"gpt-reserve"},
+		{"slug":"codex-auto-review"}
+	]}`)
+	svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}
+
+	modelID, err := svc.resolveOpenAIAccountTestModel(context.Background(), newCodexModelsTestAccount(), "")
+	require.Error(t, err)
+	require.Empty(t, modelID)
+	require.Contains(t, err.Error(), "no response-capable models")
+}
+
+func TestResolveOpenAIAccountTestModelExplicitSkipsDiscovery(t *testing.T) {
+	svc := &AccountTestService{}
+	modelID, err := svc.resolveOpenAIAccountTestModel(context.Background(), newCodexModelsTestAccount(), "  gpt-6-astra  ")
+	require.NoError(t, err)
+	require.Equal(t, "gpt-6-astra", modelID)
+}
+
 func TestFetchOpenAIAccountModelsOAuthLabelsLocalImageModelsLikeUpstream(t *testing.T) {
 	newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"gpt-5.6-sol"}]}`)
 	svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}

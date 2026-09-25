@@ -63,7 +63,7 @@ func TestAccountTestServiceSkipsShadow(t *testing.T) {
 	svc := &AccountTestService{accountRepo: repo}
 	c := newShadowTestGinCtx()
 
-	err := svc.TestAccountConnection(c, 200, "", "", "")
+	err := svc.TestAccountConnection(c, 200, "gpt-5.3-codex-spark", "", "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "resolve spark shadow parent")
 }
