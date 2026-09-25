@@ -155,18 +155,57 @@
                 <div class="truncate font-medium text-gray-900 dark:text-white" :title="row.name">{{ row.name }}</div>
                 <div v-if="row.error_message" class="truncate text-xs text-red-500" :title="row.error_message">{{ row.error_message }}</div>
               </td>
-              <td class="px-3 py-2"><AccountStatusIndicator :account="row as Account" /></td>
               <td class="px-3 py-2">
-                <span :class="row.schedulable ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'">
-                  {{ row.schedulable ? t('common.enabled') : t('common.disabled') }}
-                </span>
+                <AccountStatusIndicator :account="row as Account" @show-temp-unsched="(account: Account) => $emit('show-temp-unsched', account)" />
+              </td>
+              <td class="px-3 py-2">
+                <button
+                  type="button"
+                  :data-testid="`account-pool-row-schedulable-${row.id}`"
+                  class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-dark-800"
+                  :class="row.schedulable ? 'bg-primary-500 hover:bg-primary-600' : 'bg-gray-200 hover:bg-gray-300 dark:bg-dark-600 dark:hover:bg-dark-500'"
+                  :title="row.schedulable ? t('admin.accounts.schedulableEnabled') : t('admin.accounts.schedulableDisabled')"
+                  @click="$emit('toggle-schedulable', row as Account)"
+                >
+                  <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out" :class="row.schedulable ? 'translate-x-4' : 'translate-x-0'" />
+                </button>
               </td>
               <td class="px-3 py-2"><AccountGroupsCell :groups="groupsForRow(row)" :max-display="3" /></td>
               <td class="whitespace-nowrap px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
                 {{ row.last_used_at ? formatRelativeTime(row.last_used_at) : '-' }}
               </td>
-              <td class="px-3 py-2 text-right">
-                <button class="text-xs text-primary-600 hover:underline" @click="$emit('edit-account', row as Account)">{{ t('common.edit') }}</button>
+              <!-- Same per-account actions as the main list; the parent owns the dialogs. -->
+              <td class="whitespace-nowrap px-3 py-2 text-right">
+                <div class="inline-flex items-center gap-1">
+                  <button
+                    :data-testid="`account-pool-row-test-${row.id}`"
+                    class="rounded-lg px-2 py-1 text-xs text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20"
+                    @click="$emit('test-account', row as Account)"
+                  >
+                    {{ t('admin.accounts.testConnection') }}
+                  </button>
+                  <button
+                    :data-testid="`account-pool-row-edit-${row.id}`"
+                    class="rounded-lg px-2 py-1 text-xs text-primary-600 hover:bg-gray-100 dark:hover:bg-dark-700"
+                    @click="$emit('edit-account', row as Account)"
+                  >
+                    {{ t('common.edit') }}
+                  </button>
+                  <button
+                    :data-testid="`account-pool-row-delete-${row.id}`"
+                    class="rounded-lg px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    @click="$emit('delete-account', row as Account)"
+                  >
+                    {{ t('common.delete') }}
+                  </button>
+                  <button
+                    :data-testid="`account-pool-row-more-${row.id}`"
+                    class="rounded-lg px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+                    @click="$emit('account-menu', row as Account, $event)"
+                  >
+                    {{ t('common.more') }}
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -266,6 +305,12 @@ const emit = defineEmits<{
   dissolved: [poolId: number]
   'edit-pool': [pool: AccountPool]
   'edit-account': [account: Account]
+  'test-account': [account: Account]
+  'delete-account': [account: Account]
+  'toggle-schedulable': [account: Account]
+  'show-temp-unsched': [account: Account]
+  /** Opens the shared account action menu (re-auth, refresh token, stats, ...). */
+  'account-menu': [account: Account, event: MouseEvent]
 }>()
 
 const { t } = useI18n()

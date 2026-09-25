@@ -3,18 +3,28 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 import AccountPoolStrip from '../AccountPoolStrip.vue'
 import AccountPoolSelect from '../AccountPoolSelect.vue'
+import AccountPoolModal from '../AccountPoolModal.vue'
 import { poolStatusBuckets, poolStatusSegments } from '../accountPoolStats'
 import type { AccountPool, AccountPoolStats } from '@/api/admin/accountPools'
 
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError: vi.fn() }) }))
 
-const { listPools, createPool } = vi.hoisted(() => ({ listPools: vi.fn(), createPool: vi.fn() }))
+const { listPools, createPool, getPool, listAccounts } = vi.hoisted(() => ({
+  listPools: vi.fn(),
+  createPool: vi.fn(),
+  getPool: vi.fn(),
+  listAccounts: vi.fn()
+}))
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accountPools: {
       list: listPools,
-      create: createPool
+      create: createPool,
+      get: getPool
+    },
+    accounts: {
+      list: listAccounts
     }
   }
 }))
@@ -207,5 +217,44 @@ describe('AccountPoolSelect', () => {
     await flushPromises()
     expect(listPools).toHaveBeenLastCalledWith('openai')
     expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([null])
+  })
+})
+
+describe('AccountPoolModal', () => {
+  const stubs = {
+    BaseDialog: { template: '<div><slot /></div>' },
+    ConfirmDialog: true,
+    Pagination: true,
+    SearchInput: true,
+    PlatformIcon: true,
+    Icon: true,
+    AccountStatusIndicator: true,
+    AccountGroupsCell: true,
+    BulkEditAccountModal: true,
+    AccountPoolAssignDialog: true
+  }
+
+  it('exposes the main-list account actions for every member row', async () => {
+    getPool.mockResolvedValue(pool())
+    listAccounts.mockResolvedValue({
+      items: [{ id: 42, name: 'member', platform: 'grok', type: 'oauth', status: 'active', schedulable: true, group_ids: [] }],
+      total: 1
+    })
+    const wrapper = mount(AccountPoolModal, {
+      props: { show: true, poolId: 7, groups: [], proxies: [] },
+      global: { stubs }
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="account-pool-row-test-42"]').trigger('click')
+    await wrapper.get('[data-testid="account-pool-row-edit-42"]').trigger('click')
+    await wrapper.get('[data-testid="account-pool-row-delete-42"]').trigger('click')
+    await wrapper.get('[data-testid="account-pool-row-schedulable-42"]').trigger('click')
+    await wrapper.get('[data-testid="account-pool-row-more-42"]').trigger('click')
+
+    for (const event of ['test-account', 'edit-account', 'delete-account', 'toggle-schedulable', 'account-menu']) {
+      expect(wrapper.emitted(event)?.[0]?.[0]).toMatchObject({ id: 42 })
+    }
+    expect(wrapper.emitted('account-menu')?.[0]?.[1]).toBeInstanceOf(MouseEvent)
   })
 })

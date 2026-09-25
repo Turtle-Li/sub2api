@@ -485,6 +485,11 @@
       @dissolved="handlePoolDissolved"
       @edit-pool="openEditPool"
       @edit-account="handleEdit"
+      @test-account="handleTest"
+      @delete-account="handleDelete"
+      @toggle-schedulable="handleToggleSchedulable"
+      @show-temp-unsched="handleShowTempUnsched"
+      @account-menu="openMenu"
     />
     <AccountPoolFormDialog
       :show="showPoolForm"
@@ -2222,6 +2227,12 @@ const openPool = (pool: AccountPool) => {
 const closePoolModal = () => {
   showPoolModal.value = false
 }
+/** Row actions opened from the pool modal reuse the list handlers; keep the modal in sync. */
+const refreshPoolModal = () => {
+  if (!showPoolModal.value) return
+  poolModalRef.value?.refreshAll()
+  void loadPools()
+}
 const openCreatePool = () => {
   editingPool.value = null
   showPoolForm.value = true
@@ -2396,7 +2407,7 @@ const handleProbeUpstreamBilling = async (account: Account) => {
   }
 }
 const handleAccountUpdated = (updatedAccount: Account) => {
-  if (showPoolModal.value) poolModalRef.value?.refreshAll()
+  refreshPoolModal()
   patchAccountInList(updatedAccount)
   enterAutoRefreshSilentWindow()
 }
@@ -2491,6 +2502,7 @@ const handleDuplicateAccount = async (a: Account) => {
     const duplicate = await adminAPI.accounts.duplicate(a.id)
     appStore.showSuccess(t('admin.accounts.duplicateSuccess', { name: duplicate.name }))
     reload()
+    refreshPoolModal()
   } catch (error: any) {
     console.error('Failed to duplicate account:', error)
     appStore.showError(error?.message || t('admin.accounts.duplicateFailed'))
@@ -2503,6 +2515,7 @@ const handleRefresh = async (a: Account) => {
     const result = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(result.account)
     enterAutoRefreshSilentWindow()
+    refreshPoolModal()
     if (result.warning) appStore.showWarning(result.message)
   } catch (error) {
     console.error('Failed to refresh credentials:', error)
@@ -2513,6 +2526,7 @@ const handleRecoverState = async (a: Account) => {
     const updated = await adminAPI.accounts.recoverState(a.id)
     patchAccountInList(updated)
     enterAutoRefreshSilentWindow()
+    refreshPoolModal()
     appStore.showSuccess(t('admin.accounts.recoverStateSuccess'))
   } catch (error: any) {
     console.error('Failed to recover account state:', error)
@@ -2524,6 +2538,7 @@ const handleResetQuota = async (a: Account) => {
     const updated = await adminAPI.accounts.resetAccountQuota(a.id)
     patchAccountInList(updated)
     enterAutoRefreshSilentWindow()
+    refreshPoolModal()
     appStore.showSuccess(t('common.success'))
   } catch (error) {
     console.error('Failed to reset quota:', error)
@@ -2556,6 +2571,7 @@ const handleSetPrivacy = async (a: Account) => {
     const updated = await adminAPI.accounts.setPrivacy(a.id)
     patchAccountInList(updated)
     enterAutoRefreshSilentWindow()
+    refreshPoolModal()
     const result = privacyResultMessageKey(updated)
     if (result.type === 'success') {
       appStore.showSuccess(t(result.key))
@@ -2590,13 +2606,14 @@ const confirmCreateSparkShadow = async () => {
     creatingShadowAcc.value = null
     appStore.showSuccess(t('admin.accounts.createSparkShadowSuccess'))
     reload()
+    refreshPoolModal()
   } catch (error: any) {
     console.error('Failed to create spark shadow:', error)
     appStore.showError(error?.response?.data?.message || t('admin.accounts.createSparkShadowFailed'))
   }
 }
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }
-const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload() } catch (error) { console.error('Failed to delete account:', error) } }
+const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload(); refreshPoolModal() } catch (error) { console.error('Failed to delete account:', error) } }
 const handleToggleSchedulable = async (a: Account) => {
   const nextSchedulable = !a.schedulable
   togglingSchedulable.value = a.id
@@ -2604,6 +2621,7 @@ const handleToggleSchedulable = async (a: Account) => {
     const updated = await adminAPI.accounts.setSchedulable(a.id, nextSchedulable)
     updateSchedulableInList([a.id], updated?.schedulable ?? nextSchedulable)
     enterAutoRefreshSilentWindow()
+    refreshPoolModal()
   } catch (error) {
     console.error('Failed to toggle schedulable:', error)
     appStore.showError(t('admin.accounts.failedToToggleSchedulable'))
@@ -2617,6 +2635,7 @@ const handleTempUnschedReset = async (updated: Account) => {
   tempUnschedAcc.value = null
   patchAccountInList(updated)
   enterAutoRefreshSilentWindow()
+  refreshPoolModal()
 }
 const formatExpiresAt = (value: number | null) => {
   if (!value) return '-'
