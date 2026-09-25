@@ -194,6 +194,40 @@ separate evidence.
   when displaying the single IP, but application-container connectivity has
   already passed for both ports. Keep the old Azure source until rollback is
   retired.
+- A five-minute authenticated `/v1/models` admission soak ran 1,500 requests
+  with 5 workers and no billable model invocation. All 1,500 returned HTTP 200
+  in 329 seconds; P50/P95/P99 were 58.4/90.6/119.3 ms and the maximum was
+  261.2 ms. Application CPU peaked at 3.7%, application memory at 77.4 MiB,
+  host available memory never fell below 1,240 MiB, swap remained unused and
+  application restarts stayed `0 -> 0`. No curl, application or Caddy error
+  signal was observed. This proves request-path headroom while AWS remains
+  `background=standby`; repeat representative observation after the controlled
+  background-owner handoff.
+- Read-only node-state checks returned AWS as `traffic=accepting`,
+  `active_container=sub2api-blue`, `background=standby`, and Azure as
+  `traffic=accepting`, `active_container=sub2api-blue`, `background=active`.
+  Azure is still the
+  sole background owner; no ownership transfer was attempted.
+
+## Backup and restore evidence
+
+The dedicated data host completed automatic archive
+`/opt/sub2api-db-backups/sub2api-db-backup-20260925-121659.tar.gz` at 12:18 CST
+on 2026-09-25. The six-hour backup timer is enabled and active. The outer
+archive checksum and the internal `postgres.dump` and `redis.rdb` checksums all
+returned `OK`. An isolated restore smoke then restored PostgreSQL and Redis in
+temporary containers, passed `pg_amcheck`, produced `schema_count=317`,
+`schema_hash=060cb9c360c8dfa99c774e6a4177797e` and `redis_live_keys=1825`, and
+left no restore container behind.
+
+Offsite retention remains open. The guarded NAS sync service/timer is installed
+but intentionally disabled because `/root/.ssh/sub2api_nas_backup_target` is
+absent and no target archive has a `.nas-synced` marker. Registry credential
+record `cred-sub2api-db-nas-backup` confirms that the restricted write-only NAS
+identity has not been created in Vault. Do not copy raw database archives to an
+uncontrolled AWS location as a substitute. The owner must unlock Vault, create
+the target-specific identity, pin the NAS host key, and validate upload plus
+restore before enabling the timer.
 
 ## Bandwidth probe
 
@@ -205,6 +239,40 @@ by approximately 264 MB during the probe window. These are destination- and
 burst-dependent observations, not a sustained throughput guarantee. No `tc`
 rate limiter was configured on `ens5`. The candidate was not limited to a
 fixed 16 MB/s in this test.
+
+A later 512 MiB single-request attempt was rejected immediately by the test
+endpoint with HTTP 413 after 65,536 bytes; that was an endpoint/request-size
+limit, not a candidate service failure. The sustained replacement test used 16
+sequential 64 MiB IPv4 uploads, each rate-limited to 16 MiB/s, for exactly 1
+GiB of application payload. All 16 returned HTTP 200. The run lasted 68.254
+seconds; the `ens5` transmit counter advanced 1,127,398,960 bytes and averaged
+15.753 MiB/s including protocol overhead and inter-request gaps. Minimum host
+available memory was 1,143.9 MiB, swap stayed at 0 MiB, load1 peaked at 0.09,
+application CPU at 4.61% and application memory at 55.9 MiB. Application and
+Caddy retained zero restarts/OOM and emitted no error signal in the test window.
+This establishes bounded sustained egress and host headroom to the selected
+destination; it is not a universal Internet throughput guarantee.
+
+## Proxy dependency inventory
+
+A privacy-safe read-only database inventory on 2026-09-25 found nine active
+accounts still bound to Azure relay proxies and no credential values were read:
+
+| Proxy ID | Azure relay / region | Account IDs |
+| --- | --- | --- |
+| `6` | `jp1` / Japan East | `9, 15, 54, 55, 69` |
+| `7` | `jp2` / Japan East | `6` |
+| `40` | `westus1` / West US | `56` |
+| `41` | `westus2` / West US | `59` |
+| `44` | `westus3` / West US | `60` |
+
+All nine rows are parent accounts (`parent_account_id IS NULL`); the service
+still atomically propagates a parent CAS to any credential shadow. Replacement
+or clearing must use authenticated `POST /api/v1/admin/accounts/bulk-update`
+with only `account_ids`, `proxy_id` and `expected_proxy_id`. A reverse-CAS must
+record and swap the old/new proxy IDs, including expected `0` after a clear. Any
+mismatch rejects the operation. Never mutate these bindings with SQL, and keep
+the old proxies/nodes available through the observation window.
 
 ## Public automatic TLS and real-request evidence
 
@@ -235,8 +303,9 @@ application/Caddy 5xx or fatal log entry in the probe window.
 - Reconcile the operator SSH identity in Vault; the restricted GitHub deploy
   identity is recorded under Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`.
   Replace the temporary operator-address firewall rule when its address changes.
-- Establish candidate-only backups, a rollback image, an offsite copy and an
-  isolated restore drill. Initial automatic certificate issuance is complete; observe a
+- Retain the verified automatic database archive and isolated restore evidence;
+  establish the restricted NAS offsite copy and test its restore before cutover.
+  Preserve a known-good rollback image. Initial automatic certificate issuance is complete; observe a
   later automatic renewal separately; first issuance is not renewal evidence.
   External Komari/anti-degradation/standalone monitoring migration is explicitly
   out of scope by owner direction; do not reintroduce it as a hidden cutover
@@ -261,16 +330,18 @@ application/Caddy 5xx or fatal log entry in the probe window.
   are complete. Complete a 1-2 fen owner payment checkout only after production
   `www` DNS points to AWS and recent administrator TOTP step-up.
 - Replace or clear every Azure proxy binding before deleting any Azure node.
-  Current dependencies are proxy IDs 6, 7, 40, 41 and 44 across nine accounts.
+  Current dependencies are proxy IDs 6, 7, 40, 41 and 44 across accounts
+  `6, 9, 15, 54, 55, 56, 59, 60, 69`.
   One AWS proxy cannot preserve both Tokyo and US-West egress. The minimum
   full replacement is one Tokyo and one US-West node; a third independent
   US-West node preserves the current fixed-egress backup fault domain. Use the
   authenticated CAS endpoint to move parent accounts and credential shadows;
   never edit raw SQL and never permit cross-region automatic fallback.
-- Verify 2 GiB memory plus swap headroom with the real image and background
-  workload and sustained bandwidth under representative concurrency before
-  any production cutover. DNS, initial TLS issuance, www static assets and
-  public API smoke have passed.
+- Request-path concurrency, 2 GiB memory/swap headroom and bounded sustained
+  egress have passed with the real image while AWS is standby. Recheck memory,
+  queue progress, latency and errors after the controlled background handoff
+  before changing DNS. DNS, initial TLS issuance, www static assets and public
+  API smoke have passed.
 - Transfer sole background/queue ownership from Azure to AWS under the
   maintenance lock, take a fresh database backup, preserve an offsite copy and
   prove isolated restore before DNS cutover.

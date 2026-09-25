@@ -76,8 +76,8 @@ approved.
 
 ### Deployment checkpoint (2026-09-25)
 
-- Fork `main` commit `557d5c079a025f6488c12904137e238734a8c5ed`
-  (`0.2.8`) is healthy on `sub2api-green`; Caddy targets only that slot.
+- Fork `main` commit `32eeb9e2bc38e7d7874d50e33f11d2691db0790a`
+  (`0.2.8`) is healthy on `sub2api-blue`; Caddy targets only that slot.
 - The final release passed authenticated model-list and tiny Responses probes
   using `gpt-5.6-sol`; application/Caddy fatal and 5xx gates were clear.
 - Operator-only pinned-IP checks passed health, unauthenticated `/v1/models`
@@ -103,17 +103,35 @@ approved.
   passed after adding exact source `54.248.123.174` to the data-host allowlist.
 - AWS remains `traffic=accepting background=standby`; Azure remains the live
   production host. DNS and background ownership are unchanged.
+- A five-minute authenticated `/v1/models` soak completed 1,500/1,500 HTTP 200
+  responses with P95 90.6 ms, zero restarts/errors, application CPU below 3.7%
+  and at least 1,240 MiB host memory available. A bounded 1 GiB sustained upload
+  completed 16/16 HTTP 200 transfers in 68.254 seconds at 15.753 MiB/s average
+  `ens5` transmit throughput, with no swap, restart, OOM or log error. These
+  tests cover standby request admission and egress; repeat observation with AWS
+  as the sole background owner before DNS change.
+- Automatic database archive `sub2api-db-backup-20260925-121659.tar.gz` passed
+  its outer and internal PostgreSQL/Redis checksums. An isolated restore passed
+  `pg_amcheck`, schema fingerprint
+  `060cb9c360c8dfa99c774e6a4177797e`, and 1,825 live Redis keys. The remaining
+  backup gate is the restricted NAS offsite copy and restore; its target-specific
+  Vault/SSH identity does not yet exist, so the guarded sync timer stays disabled.
+- A read-only inventory found nine active parent accounts on proxies 6, 7, 40,
+  41 and 44. No binding changed. Use only the authenticated bulk-update CAS with
+  recorded reverse-CAS before Azure relay retirement.
 - The restricted GitHub receiver is installed with a distinct Vault-backed key
   and `aws-candidate` GitHub Environment. Its OIDC role is restricted to that
   repository environment and may only manage Lightsail public-port state. The
   workflow opens the current Runner IPv4 `/32` immediately before restricted
   SSH and removes it in `always()` cleanup. The current evidence is successful
-  run `36070650495` for exact `main` commit
-  `557d5c079a025f6488c12904137e238734a8c5ed`; release log
-  `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*` is the host record.
-  Initial certificate issuance is complete. Backup/restore drill and sustained
-  load/headroom evidence remain open gates; later renewal is a separate
-  post-issuance observation and has not yet been proven.
+  fix release run `36101027759` for exact `main` commit
+  `32eeb9e2bc38e7d7874d50e33f11d2691db0790a`; release log
+  `/var/log/sub2api-release/gha-20260925-060932-32eeb9e2-379538/` is the host
+  record. Earlier end-to-end candidate evidence remains run `36070650495` and
+  `/var/log/sub2api-release/gha-20260924-231200-557d5c07-*`.
+  Initial certificate issuance, isolated database restore, standby request-load
+  headroom and bounded sustained egress evidence are complete. Offsite backup,
+  background-active observation and later certificate renewal remain open gates.
   External alert delivery is not a gate under the owner's monitoring exclusion;
   the cutover still requires active operator observation and stop conditions.
 
@@ -210,6 +228,11 @@ approved.
   preserved. Migrate parent accounts and credential shadows only through the
   authenticated CAS operation with recorded old/new proxy IDs and a reverse-CAS
   rollback. Never use raw SQL or cross-region automatic fallback.
+  The current read-only set is proxy 6 -> accounts 9/15/54/55/69, proxy 7 ->
+  account 6, proxy 40 -> account 56, proxy 41 -> account 59 and proxy 44 ->
+  account 60. Call `POST /api/v1/admin/accounts/bulk-update` with only
+  `account_ids`, `proxy_id` and `expected_proxy_id`; a clear uses new proxy `0`
+  and a rollback expects `0`. Any expected-value mismatch must stop the batch.
 - Obtain independent review and owner approval for the exact release image,
   data boundary, DNS changes, maintenance window, stop conditions and rollback.
 
@@ -264,10 +287,11 @@ hostname, produced valid PNGs, settled correctly, verified the legacy
 `result-files` error and authenticated server-ZIP fallback, and had both
 temporary keys tombstoned with immediate 401 verification. The owner-approved
 1-2 fen live checkout is intentionally deferred until the configured production
-`www` result origin points to AWS. The candidate still lacks current
-candidate/offsite
-backup plus restore evidence, sustained 2 GiB memory/load/network headroom
-evidence, Azure proxy replacement and the controlled background-owner handoff.
+`www` result origin points to AWS. The automatic data-host backup, isolated
+restore, standby request-load headroom and bounded sustained network evidence
+now pass. The candidate still lacks the restricted offsite NAS copy/restore,
+Azure proxy replacement, background-active observation and the controlled
+background-owner handoff.
 Initial automatic TLS issuance on the test hostname has passed; later renewal
 observation remains separate evidence. Azure remains production and DNS is
 unchanged. Do not label it cutover-ready until those Section 4 gates pass. Also
