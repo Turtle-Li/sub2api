@@ -271,6 +271,48 @@ approved.
    inventory covering non-Sub2 consumers as well as the nine known account
    bindings, and either migrate or explicitly retire each consumer.
 
+### Controlled sole-background-owner handoff
+
+This sequence is documented only; it is not authorized until the proxy,
+offsite-backup, payment/cutover and action-time approval gates above pass. Run
+the installed root-owned helper at `/opt/sub2api/scripts/sub2api-node-state.sh`;
+do not edit state files directly. Each mutation acquires that host's canonical
+maintenance lock and fails closed when a local blue/green transaction exists.
+
+1. Freeze application releases and protected account/proxy mutations. Confirm
+   AWS reports `traffic=accepting ... background=standby`, Azure reports
+   `traffic=accepting ... background=active`, both active containers are healthy,
+   and neither host has an unresolved local release transaction. Take the fresh
+   verified database backup and require the restricted offsite marker.
+2. On Azure, run `sub2api-node-state.sh rollback-standby`. This writes the
+   active generation to `background=standby` before retaining
+   `traffic=accepting`, so Azure stays available for ordinary requests and DNS
+   rollback while it stops acquiring new shared work. Require the resulting
+   status to be exactly accepting/standby.
+3. Do not activate AWS immediately. Prove that Azure no longer acquires new
+   Batch Image, Prompt Audit or outbox claims; allow already-owned jobs to finish
+   or expire under their existing owner/version/heartbeat rules; require the
+   singleton scheduler leases to leave Azure; and recheck payment refund
+   readiness. If this bounded drain does not converge, run Azure `activate` and
+   stop the cutover.
+4. Only after zero old claims are proven, run AWS
+   `sub2api-node-state.sh activate`. Require AWS accepting/active and Azure
+   accepting/standby on an
+   immediate two-host status read. At no point may both hosts report
+   `background=active`.
+5. Observe queue progress, scheduled work, OAuth refresh, payment/refund
+   readiness, database connections, memory, latency and errors with AWS as the
+   sole owner. Complete the direct authenticated request/background canaries
+   before changing production DNS. Azure remains online and standby throughout
+   the observation window.
+
+Background rollback uses the exact reverse order: run AWS `rollback-standby`,
+prove its old claims have drained, then run Azure `activate` and require the
+two-host status pair AWS accepting/standby plus Azure accepting/active. Reverse
+DNS and proxy CAS independently as required by the stop condition. Never use a
+container stop, stale database restore or simultaneous `activate` commands as a
+shortcut.
+
 ## New-host checklist and current status
 
 The candidate has a static IP, imported public key, key-only SSH, host/cloud
