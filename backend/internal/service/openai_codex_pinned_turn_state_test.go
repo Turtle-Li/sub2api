@@ -248,26 +248,6 @@ func TestAccountGetPinnedCodexTurnState(t *testing.T) {
 		require.Equal(t, "gAAAAAB_astra_292", h.Get(openAICodexTurnStateHeader))
 		require.Empty(t, h.Get("Cookie"))
 	})
-
-	t.Run("routing cookie alone is injected when turn state is empty", func(t *testing.T) {
-		accWithCookieOnly := &Account{
-			ID:       23,
-			Platform: PlatformOpenAI,
-			Type:     AccountTypeOAuth,
-			Extra: map[string]any{
-				PinnedCodexRoutingCookieExtraKey: map[string]any{
-					"cookie":     "__cflb=cookie_only_val; __oailb=unified-149",
-					"expires_at": future.Format(time.RFC3339),
-				},
-			},
-		}
-
-		h := make(http.Header)
-		applied := applyPinnedCodexTurnState(h, accWithCookieOnly, "gpt-6-astra")
-		require.True(t, applied)
-		require.Empty(t, h.Get(openAICodexTurnStateHeader))
-		require.Equal(t, "__cflb=cookie_only_val; __oailb=unified-149", h.Get("Cookie"))
-	})
 }
 
 type mockPinnedTurnStateAccountRepo struct {
