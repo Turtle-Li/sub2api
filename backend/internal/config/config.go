@@ -1086,10 +1086,6 @@ const (
 
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
-	// CodexAntiDegradationEnabled enables the experimental background service
-	// that probes Codex routes and persists routing cookies/turn-state tickets.
-	// Keep disabled by default until the mechanism is proven stable.
-	CodexAntiDegradationEnabled bool `mapstructure:"codex_anti_degradation_enabled"`
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
 	ResponseHeaderTimeout int `mapstructure:"response_header_timeout"`
@@ -2841,7 +2837,6 @@ func setDefaults() {
 // environment. Any subsystem that wants a richer default still applies it after
 // unmarshal, exactly as before.
 func setEnvReachableDefaults() {
-	viper.SetDefault("gateway.codex_anti_degradation_enabled", false)
 	viper.SetDefault("gateway.forced_codex_instructions_template_file", "")
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)
 	viper.SetDefault("gateway.user_message_queue.mode", "")

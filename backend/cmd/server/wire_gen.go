@@ -373,7 +373,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	cnProviderBalanceCheckService := service.ProvideCNProviderBalanceCheckService(accountRepository, cnProviderBalanceService, cnProviderQuotaService, configConfig, leaderLockCache, db)
 	openAICodexVersionSyncService := service.ProvideOpenAICodexVersionSyncService(settingRepository, settingService, gitHubReleaseClient, leaderLockCache, db)
 	claudeCodeVersionSyncService := service.ProvideClaudeCodeVersionSyncService(settingRepository, settingService, gitHubReleaseClient)
-	openAICodexAntiDegradationService := service.ProvideOpenAICodexAntiDegradationService(configConfig, accountRepository, proxyRepository, leaderLockCache, db)
+	openAICodexAntiDegradationService := service.ProvideOpenAICodexAntiDegradationService(accountRepository, proxyRepository, leaderLockCache, db)
 	proxyExpiryService := service.ProvideProxyExpiryService(proxyRepository, leaderLockCache, db)
 	proxyTimezoneBackfillService := service.ProvideProxyTimezoneBackfillService(proxyRepository, proxyExitInfoProber, leaderLockCache, db)
 	subscriptionExpiryService := service.ProvideSubscriptionExpiryService(userSubscriptionRepository, settingRepository, notificationEmailService, leaderLockCache, db)

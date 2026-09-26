@@ -443,15 +443,11 @@ func ProvideClaudeCodeVersionSyncService(
 // ProvideOpenAICodexAntiDegradationService creates and starts OpenAICodexAntiDegradationService.
 // 维持 Phoenix 满血集群路由 Cookie 与 780 字节防降智票据，自动守护受保护账号。
 func ProvideOpenAICodexAntiDegradationService(
-	cfg *config.Config,
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
 	lockCache LeaderLockCache,
 	db *sql.DB,
 ) *OpenAICodexAntiDegradationService {
-	if cfg == nil || !cfg.Gateway.CodexAntiDegradationEnabled {
-		return nil
-	}
 	svc := NewOpenAICodexAntiDegradationService(accountRepo, proxyRepo, DefaultAntiDegradationInterval)
 	svc.leaderLock = newSingletonJobLock(lockCache, db, "openai-codex-anti-degradation", 2*time.Minute)
 	svc.Start()

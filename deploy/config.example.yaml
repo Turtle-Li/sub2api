@@ -220,9 +220,6 @@ security:
 # 网关配置
 # =============================================================================
 gateway:
-  # Experimental Codex route-cookie/turn-state renewal. Keep disabled until the
-  # mechanism has passed stability validation; it mutates shared account state.
-  codex_anti_degradation_enabled: false
   # Timeout for waiting upstream response headers (seconds)
   # 等待上游响应头超时时间（秒）
   response_header_timeout: 600
