@@ -144,6 +144,11 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 	}
 	protocol := "This request comes from an external Responses client. Return assistant text. Do not call Excel, Office, workbook or connector tools."
 	if len(catalog) > 0 {
+		// 客户端未声明 update_plan 时不能引导模型调用它，否则会被目录校验拒绝。
+		planTransportHint := ""
+		if _, _, ok := b.lookupTool("update_plan"); ok {
+			planTransportHint = ", including update_plan through this transport"
+		}
 		protocol = "This request comes from an external Responses client. Use only the client tools in the catalog below. " +
 			"There is no live Excel workbook for this request. The proxy intercepts run_officejs as a transport and never executes Office code. " +
 			"To call one client tool, call native run_officejs using the transport matching its catalog type. " +
@@ -153,7 +158,7 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 			"For example, custom functions.exec uses summary=codex2api.custom/functions.exec and code containing its raw JavaScript; custom functions.apply_patch uses its exact patch text. The marker is mandatory for raw input. " +
 			"CATALOG_NAME includes its exact namespace. Outer arguments also include extended_summary, destructive=false and references=[]. For ordinary FUNCTION transport, use a descriptive summary; FUNCTION_CODE uses its exact marker and metadata JSON instead. " +
 			"Never nest run_officejs inside code. Serialize outer native arguments with proper JSON escaping. For FUNCTION envelopes also escape all quotes, backslashes, newline, carriage return and tab characters within JSON string values. " +
-			"Call one client tool at a time, including update_plan through this transport. After receiving its result continue the task; do not repeat completed calls. " +
+			"Call one client tool at a time" + planTransportHint + ". After receiving its result continue the task; do not repeat completed calls. " +
 			"Tool results replayed under run_officejs are the named client tool's results. When a tool is needed, emit its call in this response instead of only announcing it. " +
 			"Do not call other native tools or claim that shell, filesystem or workspace access is unavailable when a suitable catalog tool exists. " +
 			"If no tool is needed, answer as assistant text. Client tool catalog:\n" + describeCatalog(catalog) +

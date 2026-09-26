@@ -21,6 +21,12 @@ const (
 	bpsToolHoldMaxBytes = 8 << 20
 )
 
+// bpsSilenceKeepalive：放行后 basispoints 可能长时间不发事件（隐藏推理、扣留工具事件），
+// 期间写出 SSE 注释，避免响应处理器的上游数据间隔超时把仍在进行的 BPS 响应判为中断。
+var bpsSilenceKeepalive = 15 * time.Second
+
+var bpsKeepaliveComment = []byte(": bps keepalive\n\n")
+
 // bpsHoldMode 决定预读在什么时候放行给响应处理器。
 type bpsHoldMode int
 
@@ -56,6 +62,9 @@ type bpsPrimedBody struct {
 	stopOnce  sync.Once
 	closeOnce sync.Once
 	onClose   func()
+	// mu 保护 closed 与 nativeBody：Close 来自响应处理器，接续发生在读取协程。
+	mu     sync.Mutex
+	closed bool
 
 	primed  bytes.Buffer
 	pending []byte
@@ -171,7 +180,17 @@ func (b *bpsPrimedBody) fillBPS() {
 	var event bytes.Buffer
 	eventName, eventType, data := "", "", ""
 	for {
-		chunk, _ := b.next(nil)
+		var keepalive <-chan time.Time
+		if event.Len() == 0 {
+			timer := time.NewTimer(bpsSilenceKeepalive)
+			defer timer.Stop()
+			keepalive = timer.C
+		}
+		chunk, ok := b.next(keepalive)
+		if !ok {
+			b.primed.Write(bpsKeepaliveComment)
+			return
+		}
 		line := string(chunk.data)
 		event.WriteString(line)
 		trimmed := strings.TrimRight(line, "\r\n")
@@ -224,6 +243,10 @@ func (b *bpsPrimedBody) startContinuation(reason string) bool {
 		return false
 	}
 	b.continuation = nil
+	if b.isClosed() {
+		// 响应处理器已放弃这条流（如客户端断开或处理器超时），不再发起原路径请求。
+		return false
+	}
 	b.stopBPS()
 	body, err := continuation()
 	if b.onContinue != nil {
@@ -232,9 +255,21 @@ func (b *bpsPrimedBody) startContinuation(reason string) bool {
 	if err != nil {
 		return false
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		_ = body.Close()
+		return false
+	}
 	b.nativeBody = body
 	b.native = bufio.NewReaderSize(body, 64*1024)
 	return true
+}
+
+func (b *bpsPrimedBody) isClosed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closed
 }
 
 // fillNative 读取一个原路径 SSE 事件：丢弃 response.created / in_progress 等开头事件，
@@ -308,9 +343,13 @@ func (b *bpsPrimedBody) stopBPS() {
 
 func (b *bpsPrimedBody) Close() error {
 	b.closeOnce.Do(func() {
+		b.mu.Lock()
+		b.closed = true
+		nativeBody := b.nativeBody
+		b.mu.Unlock()
 		b.stopBPS()
-		if b.nativeBody != nil {
-			_ = b.nativeBody.Close()
+		if nativeBody != nil {
+			_ = nativeBody.Close()
 		}
 	})
 	return nil

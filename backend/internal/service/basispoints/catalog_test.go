@@ -38,3 +38,27 @@ func TestCatalogPreservesComplexSchemaConstraints(t *testing.T) {
 		}
 	}
 }
+
+// 客户端未声明 update_plan 时协议提示不能引导模型调用它，否则会被目录校验拒绝。
+func TestCatalogMentionsUpdatePlanOnlyWhenDeclared(t *testing.T) {
+	shell := object{"type": "function", "name": "shell", "parameters": object{"type": "object", "properties": object{"cmd": object{"type": "string"}}}}
+	plan := object{"type": "function", "name": "update_plan", "parameters": object{"type": "object", "properties": object{"plan": object{"type": "array"}}}}
+	for _, declared := range []bool{false, true} {
+		source := testSource()
+		tools := []any{shell}
+		if declared {
+			tools = append(tools, plan)
+		}
+		source["tools"] = tools
+		wire, _ := mustPrepare(t, source, "test", nil)
+		items := mustTestValue[[]any](t, wire["input"])
+		content := mustTestValue[[]any](t, mustTestValue[object](t, items[1])["content"])
+		protocol := text(mustTestValue[object](t, content[0])["text"])
+		if !strings.Contains(protocol, "Client tool catalog") {
+			t.Fatal("protocol message not found")
+		}
+		if got := strings.Contains(protocol, "including update_plan"); got != declared {
+			t.Fatalf("declared=%v but prompt mentions update_plan=%v", declared, got)
+		}
+	}
+}

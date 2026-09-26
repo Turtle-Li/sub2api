@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -251,7 +252,10 @@ func (a *openAIBPSAttempt) persist(event BPSEvent, breakerOpened bool) {
 // recordFailure 记录一次 BPS 失败并推进熔断；afterOutput 表示客户端已收到输出、无法回退。
 // 已发起请求后的转换或流失败还会让该会话短暂冷却，网络与状态码类失败交给账号熔断。
 func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail string, afterOutput bool) {
-	opened := bpsBreaker.recordFailure(a.accountID, statusCode)
+	opened := false
+	if a.failed.CompareAndSwap(false, true) {
+		opened = bpsBreaker.recordFailure(a.accountID, statusCode)
+	}
 	if reason == bpsFailureStream || reason == bpsFailureHandler || reason == bpsFailureContinued {
 		bpsSessionCooldowns.mark(a.scope)
 	}
@@ -310,6 +314,8 @@ type openAIBPSAttempt struct {
 	budgetDeadline time.Time
 	// continued 表示 BPS 输出后失败、本轮由原路径在同一条流里接续完成。
 	continued bool
+	// failed 保证一次请求至多推进一次熔断计数：流与响应处理器可能先后记录同一次失败。
+	failed atomic.Bool
 }
 
 // holdDeadline 返回预读放行的绝对截止时间：到点后已有产出即放行给客户端。
@@ -405,7 +411,8 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamPreferBPS(
 			if err != nil {
 				return nil, err
 			}
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 && isEventStreamResponse(resp.Header) {
+			// 与原路径流式转发一致只看状态码：OAuth 插件传输的成功响应不一定带 text/event-stream。
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				return resp.Body, nil
 			}
 			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, bpsErrorBodyLimit))

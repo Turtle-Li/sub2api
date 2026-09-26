@@ -146,3 +146,68 @@ func TestBPSContinuationOnTruncatedStream(t *testing.T) {
 	require.Equal(t, 1, calls)
 	require.Contains(t, string(out), "resp_native")
 }
+
+func bpsTestRawContinuationStream(t *testing.T, upstream io.ReadCloser, continuation bpsNativeContinuation) *bpsPrimedBody {
+	t.Helper()
+	stream := newBPSPrimedBody(upstream)
+	stream.deadline = time.Now().Add(time.Minute)
+	stream.continuation = continuation
+	t.Cleanup(func() { _ = stream.Close() })
+	return stream
+}
+
+// 放行后 BPS 长时间无事件时写出 SSE 注释，响应处理器的数据间隔计时随之刷新。
+func TestBPSContinuationKeepaliveDuringSilence(t *testing.T) {
+	previous := bpsSilenceKeepalive
+	bpsSilenceKeepalive = 20 * time.Millisecond
+	t.Cleanup(func() { bpsSilenceKeepalive = previous })
+
+	reader, writer := io.Pipe()
+	stream := bpsTestRawContinuationStream(t, reader, func() (io.ReadCloser, error) {
+		t.Fatal("continuation must not run for a completed stream")
+		return nil, nil
+	})
+	go func() {
+		_, _ = io.WriteString(writer, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"delta\":\"hi\"}\n\n")
+		time.Sleep(120 * time.Millisecond)
+		_, _ = io.WriteString(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{}}\n\n")
+		_ = writer.Close()
+	}()
+	out, err := io.ReadAll(stream)
+	require.NoError(t, err)
+	text := string(out)
+	require.Contains(t, text, ": bps keepalive\n\n")
+	require.Less(t, strings.Index(text, `"hi"`), strings.Index(text, ": bps keepalive"))
+	require.Less(t, strings.Index(text, ": bps keepalive"), strings.Index(text, "response.completed"))
+}
+
+// 响应处理器关闭流之后读到的管道错误不再发起原路径请求。
+func TestBPSContinuationNotStartedAfterClose(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	nativeCalls := 0
+	stream := bpsTestRawContinuationStream(t, reader, func() (io.ReadCloser, error) {
+		nativeCalls++
+		return bpsTestSSE(`{"type":"response.completed","sequence_number":0,"response":{}}`), nil
+	})
+	require.NoError(t, stream.Close())
+	buf := make([]byte, 256)
+	for {
+		if _, err := stream.Read(buf); err != nil {
+			break
+		}
+	}
+	require.Zero(t, nativeCalls)
+}
+
+// 同一请求的流与处理器先后记录失败时，熔断计数只推进一次。
+func TestBPSAttemptCountsBreakerOncePerRequest(t *testing.T) {
+	const accountID = 918273
+	t.Cleanup(func() { bpsBreaker.recordSuccess(accountID) })
+	attempt := &openAIBPSAttempt{accountID: accountID, scope: "test:" + t.Name()}
+	attempt.recordFailure(bpsFailureStream, 0, "first", true)
+	attempt.recordFailure(bpsFailureHandler, 0, "second", true)
+	failures, openUntil := bpsBreaker.state(accountID)
+	require.Equal(t, 1, failures)
+	require.Nil(t, openUntil)
+}

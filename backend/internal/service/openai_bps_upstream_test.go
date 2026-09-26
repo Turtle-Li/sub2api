@@ -609,7 +609,8 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 				bpsTestJSON(t, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": bogus}),
 				bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"output": []any{bogus}}}),
 			),
-			bpsTestSSEResponse(`{"type":"response.completed","response":{"id":"resp_native","output":[]}}`),
+			// 原路径成功响应不带 text/event-stream 也要接续（OAuth 插件传输的响应头可能不同）。
+			&http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: bpsTestSSE(`{"type":"response.completed","response":{"id":"resp_native","output":[]}}`)},
 		}}
 		svc := &OpenAIGatewayService{httpUpstream: upstream}
 		attempt := &openAIBPSAttempt{accountID: account.ID, body: bpsTestShellBody(), upstreamModel: "gpt-6-astra", scope: "test", clientStream: true}
