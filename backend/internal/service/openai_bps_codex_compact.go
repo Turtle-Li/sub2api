@@ -11,11 +11,13 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// bpsCodexAutoCompactTokenLimit 是下发给含 BPS 账号分组的 Codex 自动压缩上限。
+// bpsCodexAutoCompactTokenLimit 是下发给含 BPS 账号分组的 Codex 自动压缩上限，也是回报用量提示压缩的门槛。
 // BPS 在约 207k（按 BPS 计数，含约 25k 工具目录）处静默不产出；Codex 以上游回报的
-// 用量比较该上限，BPS 轮次回报的正是 BPS 计数，留约 7k 余量让 Codex 在卡住前自行压缩。
+// 用量比较该上限，BPS 轮次回报的正是 BPS 计数。须低于 bpsContextTokenLimit：Codex 的压缩请求
+// 是携带完整上下文的普通请求，提示门槛与跳过门槛相同时它必然被跳过、落到缓存冷的原路径（实测 75~170s）；
+// 留出单轮增长（实测约 11k）的余量，让压缩请求仍由 BPS 以热缓存完成。
 // 仅作用于 BPS 可承接的模型，且只下调不上调；未含 BPS 账号的分组不受影响。
-const bpsCodexAutoCompactTokenLimit = 200_000
+const bpsCodexAutoCompactTokenLimit = 185_000
 
 // bpsCodexCompactHintTokens 是回给客户端的用量下限，不低于任何 Codex 模型的上下文窗口，
 // 使客户端按"窗口已满"立即压缩。Codex 0.158 对 API Key 自定义 provider 不拉取 /models，
@@ -171,7 +173,7 @@ func observeBPSSkippedContext(c *gin.Context, account *Account, usage *OpenAIUsa
 	bpsSessionContexts.releaseAfterNative(hint.contextLimitScope, bpsUsageContextTokens(usage))
 }
 
-// applyBPSCodexCompactHintToSSELine 在已标记请求的终止事件中，若上报输入达到 BPS 上限，
+// applyBPSCodexCompactHintToSSELine 在已标记请求的终止事件中，若上报输入达到压缩门槛，
 // 抬高回给客户端的 input/total tokens 以触发 Codex 自动压缩。计费用量取自原始事件，不受影响。
 // 只看本轮上报用量、不看会话记录：客户端压缩后用量回落即停止，不会反复压缩。
 func applyBPSCodexCompactHintToSSELine(c *gin.Context, account *Account, line, eventType string) string {
@@ -185,7 +187,7 @@ func applyBPSCodexCompactHintToSSELine(c *gin.Context, account *Account, line, e
 	data = strings.TrimLeft(data, " ")
 	usage := gjson.Get(data, "response.usage")
 	input := usage.Get("input_tokens").Int()
-	if !usage.Exists() || input < bpsContextTokenLimit {
+	if !usage.Exists() || input < bpsCodexAutoCompactTokenLimit {
 		return line
 	}
 	delta := int64(bpsCodexCompactHintTokens) - input

@@ -95,12 +95,13 @@ Hold 模式（`openai_bps_stream.go`）：
 | `bpsContextStallTokens` | 150_000 | 首产出超时时视为上下文过大的门槛 |
 | `bpsContextShrinkRatio` | 0.8 | 请求体缩小到 80% 以下视为已压缩，恢复 BPS |
 | `bpsContextNativeResumeTokens` | 150_000 | 跳过轮次原路径用量低于此值 → 恢复 BPS |
-| `bpsCodexAutoCompactTokenLimit` | 200_000 | 下发给含 BPS 账号分组的 `/models` manifest 上限（只下调） |
-| `bpsCodexCompactHintTokens` | 1_050_000 | 终态 input ≥ 200k 时回给客户端的 input/total，迫使 Codex 立即压缩 |
+| `bpsCodexAutoCompactTokenLimit` | 185_000 | 压缩门槛：`/models` manifest 上限（只下调），也是回报用量提示压缩的门槛。**必须低于 `bpsContextTokenLimit`** |
+| `bpsCodexCompactHintTokens` | 1_050_000 | 终态 input ≥ 185k 时回给客户端的 input/total，迫使 Codex 立即压缩 |
 
 - 上下文规模只用 `bpsUsageContextTokens`（= `InputTokens`，**已含缓存**，切勿再加 `CacheReadInputTokens`；曾因此大量误跳过，见 72e4b9143）。
 - Codex 0.158 对 API Key 自定义 provider 不拉 `/models`，manifest 上限到不了客户端，所以主要靠“抬高回报用量”触发压缩；计费用量取原始事件，不受影响。
-- 压缩请求本身（`isCompactRequest`）总走原路径（skip `compact`）；上下文接近上限的那一轮会出现一次 `context_limit` 跳过，这是**预期行为**，每次会话填满出现一次。
+- Codex 对自定义 provider 的压缩请求是携带完整上下文的普通 `/responses` 请求（不是 `isCompactRequest`）。压缩门槛曾与跳过门槛同为 200k，压缩请求必然被 `context_limit` 跳过、落到缓存冷的原路径（2026-09-27 实测 75s、170s）。现压缩门槛为 185k（按 7 天数据估算约 12% 的压缩请求仍会被跳过，180k 约 8%、190k 约 21%、195k 约 42%）：压缩请求在 185k~200k 间仍走 BPS 热缓存；只有单轮从 <185k 直接跳到 ≥200k 才会再出现 `context_limit`。
+- `/responses/compact` 端点的请求（`isCompactRequest`）仍走原路径（skip `compact`）。
 
 ### 3.5 联网搜索
 
@@ -171,8 +172,8 @@ SELECT created_at, level, left(message, 300)
 FROM ops_system_logs
 WHERE message LIKE '[OpenAI BPS]%' AND created_at > now() - interval '6 hours'
 ORDER BY created_at DESC LIMIT 100;
--- 上下文规模：usage_logs 的 input_tokens 已扣缓存，要加回 cache_read_tokens
-SELECT created_at, model, input_tokens + cache_read_tokens AS ctx, output_tokens
+-- 上下文规模：usage_logs 的 input_tokens 已扣除缓存读与缓存写，要全部加回
+SELECT created_at, model, input_tokens + cache_read_tokens + cache_creation_tokens AS ctx, output_tokens
 FROM usage_logs WHERE account_id = 69 ORDER BY created_at DESC LIMIT 50;
 ```
 
@@ -205,7 +206,7 @@ git push fork HEAD:main && gh workflow run sub2api-production-deploy.yml -R Turt
 1. **纠正成功率未量化**：需要一段较长运行后统计 `tool transport correction` 次数与随后的 success / fallback 比例，决定是否需要更强的提示或 schema 校验。
 2. **纠正期间无首产出超时**：纠正请求只受请求 ctx 约束，若 BPS 在纠正时卡住，客户端会等待较久。可考虑给纠正单独加截止。
 3. **纠正请求的 token 未计费**：只上报最后一次续跑 usage，前面的失败轮次与纠正轮次消耗未记入 usage_logs。
-4. **压缩请求总走原路径**：`compact` 跳过；若 BPS 能承接压缩请求可进一步减少原路径流量（需验证 BPS 对压缩提示的输出质量与上下文上限）。
+4. **压缩门槛 185k 的效果待验证（不理想可降到 180k）**：观察 `context_limit` 跳过是否基本消失、BPS 上压缩请求的耗时与摘要质量。
 5. **207k 静默上限**：依赖 Codex 压缩；不同客户端（非 Codex、不响应用量提示）仍会遇到一次 context_stall。
 6. **JaxsonWang 的 references 式传输**：可评估作为减少格式错误的替代方案。
 7. **ranxi 10c0f90d8 的 unknown_tool_repair / tool_schema**：见第 2 节。

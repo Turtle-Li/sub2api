@@ -98,7 +98,13 @@ func TestApplyBPSCodexCompactHintToSSELine(t *testing.T) {
 	bps := &Account{ID: 69}
 	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(c, bps, line, "response.output_text.delta"))
 	small := completed(150_000, 500)
-	require.Equal(t, small, applyBPSCodexCompactHintToSSELine(c, bps, small, "response.completed"), "below the BPS limit the usage is real")
+	require.Equal(t, small, applyBPSCodexCompactHintToSSELine(c, bps, small, "response.completed"), "below the compaction threshold the usage is real")
+	// 压缩门槛低于跳过门槛：190k 已提示压缩，但压缩请求本身仍可走 BPS。
+	near := completed(190_000, 500)
+	require.Contains(t, applyBPSCodexCompactHintToSSELine(c, bps, near, "response.completed"), "1050000")
+	bpsSessionContexts.record("compact-gap", bpsSessionContext{tokens: 190_000, bodyBytes: 1000})
+	t.Cleanup(func() { bpsSessionContexts.releaseAfterNative("compact-gap", 1) })
+	require.False(t, bpsSessionContexts.tooLarge("compact-gap", 1000), "the compaction request right after the hint must not be skipped")
 
 	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(c, &Account{ID: 70}, line, "response.completed"), "failover to another account is untouched")
 
