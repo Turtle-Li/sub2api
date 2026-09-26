@@ -175,12 +175,66 @@ export async function resetQuota(id: number): Promise<GrokQuotaResetResult> {
 }
 
 export async function createFromSSO(payload: GrokSSOToOAuthRequest): Promise<GrokSSOToOAuthResponse> {
-  const { data } = await apiClient.post<GrokSSOToOAuthResponse>(
-    '/admin/grok/sso-to-oauth',
-    payload,
-    { timeout: getGrokSSOImportTimeout(payload.sso_tokens.length) }
-  )
-  return data
+  const tokens = payload.sso_tokens
+  if (tokens.length <= 1) {
+    const { data } = await apiClient.post<GrokSSOToOAuthResponse>(
+      '/admin/grok/sso-to-oauth',
+      payload,
+      { timeout: getGrokSSOImportTimeout(tokens.length) }
+    )
+    return data
+  }
+
+  const result: GrokSSOToOAuthResponse = { created: [], failed: [] }
+  const baseName = payload.name?.trim()
+
+  // The production reverse proxy closes requests after 120 seconds, while one
+  // xAI device-flow conversion can take about 90 seconds. Keep each HTTP
+  // request to one token and run at most three requests concurrently.
+  for (let offset = 0; offset < tokens.length; offset += GROK_SSO_IMPORT_CONCURRENCY) {
+    const batch = tokens.slice(offset, offset + GROK_SSO_IMPORT_CONCURRENCY)
+    const batchResults = await Promise.all(
+      batch.map(async (token, batchIndex): Promise<GrokSSOToOAuthResponse> => {
+        const globalIndex = offset + batchIndex + 1
+        const requestPayload: GrokSSOToOAuthRequest = {
+          ...payload,
+          sso_tokens: [token],
+          name: baseName ? `${baseName} #${globalIndex}` : payload.name
+        }
+
+        try {
+          const { data } = await apiClient.post<GrokSSOToOAuthResponse>(
+            '/admin/grok/sso-to-oauth',
+            requestPayload,
+            { timeout: getGrokSSOImportTimeout(1) }
+          )
+          const remapIndex = (item: GrokSSOToOAuthItemResult): GrokSSOToOAuthItemResult => ({
+            ...item,
+            index: globalIndex
+          })
+          return {
+            created: (data.created || []).map(remapIndex),
+            failed: (data.failed || []).map(remapIndex)
+          }
+        } catch (error: any) {
+          return {
+            created: [],
+            failed: [{
+              index: globalIndex,
+              error: error.response?.data?.detail || error.message || 'Unknown error'
+            }]
+          }
+        }
+      })
+    )
+
+    for (const batchResult of batchResults) {
+      result.created.push(...batchResult.created)
+      result.failed.push(...batchResult.failed)
+    }
+  }
+
+  return result
 }
 
 /** Validate a browser SSO cookie and convert to Build OAuth tokens (no raw SSO stored). */
