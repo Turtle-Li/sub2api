@@ -46,8 +46,10 @@ const (
 	bpsContextStallTokens = 150_000
 	// bpsContextShrinkRatio：请求体缩小到记录时的该比例以下，视为客户端已压缩上下文，恢复尝试 BPS。
 	bpsContextShrinkRatio = 0.8
-	bpsSessionContextTTL  = time.Hour
-	bpsUpstreamEndpoint   = "/basispoints/api/responses"
+	// bpsContextNativeResumeTokens：跳过 BPS 的原路径轮次上报上下文低于此值时恢复尝试 BPS。
+	bpsContextNativeResumeTokens = 150_000
+	bpsSessionContextTTL         = time.Hour
+	bpsUpstreamEndpoint          = "/basispoints/api/responses"
 )
 
 // bpsUpstreamModels 为已完成 Codex 别名归一化后的上游模型名。
@@ -253,6 +255,17 @@ func (c *bpsSessionContextStore) tooLarge(scope string, bodyBytes int) bool {
 	return true
 }
 
+// releaseAfterNative 在因上下文过大走原路径的轮次后调用：原路径上报的上下文已明显低于 BPS 上限，
+// 说明客户端已压缩，清除记录让下一轮恢复尝试 BPS。原路径计数不含 BPS 约 2.5 万的工具目录，故留足余量。
+func (c *bpsSessionContextStore) releaseAfterNative(scope string, nativeTokens int) {
+	if scope == "" || nativeTokens <= 0 || nativeTokens >= bpsContextNativeResumeTokens {
+		return
+	}
+	c.mu.Lock()
+	delete(c.sessions, scope)
+	c.mu.Unlock()
+}
+
 // ---- 执行记录 ----
 
 // 跳过原因（请求不适用 BPS，直接走原路径，不计入熔断）。
@@ -444,8 +457,9 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 	if !enabled || !listed {
 		return nil
 	}
+	var hint *bpsCodexCompactHint
 	if account.IsOpenAIOAuth() && isBPSUpstreamModel(upstreamModel) && !isCompactRequest {
-		markBPSCodexCompactHint(c, account.ID)
+		hint = markBPSCodexCompactHint(c, account.ID)
 	}
 	attempt := &openAIBPSAttempt{accountID: account.ID, log: logger.FromContext(ctx), body: body, upstreamModel: upstreamModel, effort: effort}
 	skip, detail := "", ""
@@ -475,6 +489,9 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 			skip = bpsSkipSessionCooldown
 		} else if bpsSessionContexts.tooLarge(attempt.scope, len(body)) {
 			skip = bpsSkipContextLimit
+			if hint != nil {
+				hint.contextLimitScope = attempt.scope
+			}
 		}
 	}
 	if skip != "" {

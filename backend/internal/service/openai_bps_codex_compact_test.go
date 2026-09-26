@@ -129,8 +129,7 @@ func TestOpenAIBPSAttemptMarksCompactHint(t *testing.T) {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
 		svc.openAIBPSAttemptFor(context.Background(), c, account, body, model, "high", compact, false, false)
-		id, ok := c.Get(bpsCodexCompactHintContextKey)
-		return ok && id == account.ID
+		return bpsCodexCompactHintFor(c, account) != nil
 	}
 
 	require.False(t, marked("gpt-6-astra", false), "BPS disabled")
@@ -147,6 +146,47 @@ func TestOpenAIBPSAttemptMarksCompactHint(t *testing.T) {
 	other.ID = 90_012
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	svc.openAIBPSAttemptFor(context.Background(), c, other, body, "gpt-6-astra", "high", false, false, false)
-	_, ok := c.Get(bpsCodexCompactHintContextKey)
-	require.False(t, ok, "accounts outside the BPS list are untouched")
+	require.Nil(t, bpsCodexCompactHintFor(c, other), "accounts outside the BPS list are untouched")
+}
+
+func TestBPSContextLimitSkipResumesAfterNativeUsageDrops(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	bpsResetMonitor(t)
+	t.Cleanup(func() { refreshOpenAIBPSUpstreamConfigCache(OpenAIBPSUpstreamConfig{}) })
+	svc := &OpenAIGatewayService{settingService: &SettingService{settingRepo: &bpsSettingRepoStub{values: map[string]string{}}}}
+	body := []byte(`{"model":"gpt-6-astra","input":"hi"}`)
+	account := bpsTestAccount()
+	account.ID = 90_021
+	refreshOpenAIBPSUpstreamConfigCache(OpenAIBPSUpstreamConfig{Enabled: true, AccountIDs: []int64{account.ID}})
+	round := func() (*gin.Context, *openAIBPSAttempt) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+		return c, svc.openAIBPSAttemptFor(context.Background(), c, account, body, "gpt-6-astra", "high", false, false, false)
+	}
+
+	_, attempt := round()
+	require.NotNil(t, attempt)
+	t.Cleanup(func() {
+		bpsSessionContexts.mu.Lock()
+		delete(bpsSessionContexts.sessions, attempt.scope)
+		bpsSessionContexts.mu.Unlock()
+	})
+	// 请求体没有缩小（压缩后图片等仍占大头），只能靠原路径用量判断。
+	bpsSessionContexts.record(attempt.scope, bpsSessionContext{tokens: 210_000, bodyBytes: len(body)})
+
+	c, skipped := round()
+	require.Nil(t, skipped)
+	observeBPSSkippedContext(c, account, &OpenAIUsage{InputTokens: 20_000, CacheReadInputTokens: 150_000})
+	_, stillSkipped := round()
+	require.Nil(t, stillSkipped, "native context still near the limit keeps BPS skipped")
+
+	c, _ = round()
+	observeBPSSkippedContext(c, &Account{ID: 1}, &OpenAIUsage{InputTokens: 1_000, CacheReadInputTokens: 96_000})
+	_, stillSkipped = round()
+	require.Nil(t, stillSkipped, "usage from another account is ignored")
+
+	c, _ = round()
+	observeBPSSkippedContext(c, account, &OpenAIUsage{InputTokens: 1_000, CacheReadInputTokens: 96_000})
+	_, resumed := round()
+	require.NotNil(t, resumed, "a compacted session returns to BPS")
 }

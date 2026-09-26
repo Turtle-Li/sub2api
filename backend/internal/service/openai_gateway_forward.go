@@ -1335,6 +1335,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		if bpsRun != nil {
 			bpsRun.recordSuccess(usage)
+		} else {
+			observeBPSSkippedContext(c, account, usage)
 		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
