@@ -176,17 +176,17 @@ func TestBPSContextLimitSkipResumesAfterNativeUsageDrops(t *testing.T) {
 
 	c, skipped := round()
 	require.Nil(t, skipped)
-	observeBPSSkippedContext(c, account, &OpenAIUsage{InputTokens: 20_000, CacheReadInputTokens: 150_000})
+	observeBPSSkippedContext(c, account, &OpenAIUsage{InputTokens: 170_000, CacheReadInputTokens: 150_000})
 	_, stillSkipped := round()
 	require.Nil(t, stillSkipped, "native context still near the limit keeps BPS skipped")
 
 	c, _ = round()
-	observeBPSSkippedContext(c, &Account{ID: 1}, &OpenAIUsage{InputTokens: 1_000, CacheReadInputTokens: 96_000})
+	observeBPSSkippedContext(c, &Account{ID: 1}, &OpenAIUsage{InputTokens: 125_000, CacheReadInputTokens: 120_000})
 	_, stillSkipped = round()
 	require.Nil(t, stillSkipped, "usage from another account is ignored")
 
 	c, _ = round()
-	observeBPSSkippedContext(c, account, &OpenAIUsage{InputTokens: 1_000, CacheReadInputTokens: 96_000})
+	observeBPSSkippedContext(c, account, &OpenAIUsage{InputTokens: 125_000, CacheReadInputTokens: 120_000})
 	_, resumed := round()
 	require.NotNil(t, resumed, "a compacted session returns to BPS")
 }

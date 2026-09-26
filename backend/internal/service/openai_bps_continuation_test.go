@@ -247,8 +247,15 @@ func TestBPSContextStallDoesNotCountTowardBreaker(t *testing.T) {
 func TestBPSRecordSuccessTracksSessionContext(t *testing.T) {
 	scope := "test:" + t.Name()
 	attempt := &openAIBPSAttempt{accountID: 918275, scope: scope, body: make([]byte, 4096)}
-	attempt.recordSuccess(&OpenAIUsage{InputTokens: 100, CacheReadInputTokens: bpsContextTokenLimit})
+	// input_tokens 已含缓存命中：12 万上下文、11.9 万命中缓存不能算成 23.9 万。
+	attempt.recordSuccess(&OpenAIUsage{InputTokens: 120_000, CacheReadInputTokens: 119_000})
 	entry, ok := bpsSessionContexts.get(scope)
+	require.True(t, ok)
+	require.Equal(t, 120_000, entry.tokens)
+	require.False(t, bpsSessionContexts.tooLarge(scope, 4096))
+
+	attempt.recordSuccess(&OpenAIUsage{InputTokens: bpsContextTokenLimit + 100, CacheReadInputTokens: bpsContextTokenLimit})
+	entry, ok = bpsSessionContexts.get(scope)
 	require.True(t, ok)
 	require.Equal(t, bpsContextTokenLimit+100, entry.tokens)
 	require.Equal(t, 4096, entry.bodyBytes)

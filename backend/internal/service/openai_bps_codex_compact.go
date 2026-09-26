@@ -168,8 +168,7 @@ func observeBPSSkippedContext(c *gin.Context, account *Account, usage *OpenAIUsa
 	if hint == nil || hint.contextLimitScope == "" || usage == nil {
 		return
 	}
-	tokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
-	bpsSessionContexts.releaseAfterNative(hint.contextLimitScope, tokens)
+	bpsSessionContexts.releaseAfterNative(hint.contextLimitScope, bpsUsageContextTokens(usage))
 }
 
 // applyBPSCodexCompactHintToSSELine 在已标记请求的终止事件中，若上报输入达到 BPS 上限，

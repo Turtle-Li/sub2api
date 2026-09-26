@@ -255,6 +255,15 @@ func (c *bpsSessionContextStore) tooLarge(scope string, bodyBytes int) bool {
 	return true
 }
 
+// bpsUsageContextTokens 返回本轮上下文规模。Responses 用量的 input_tokens 已包含缓存命中与写入，
+// 不能再加 cached_tokens（否则缓存命中高的会话被算成近两倍而误判过大）；仅在上游未回报总量时退回缓存之和。
+func bpsUsageContextTokens(usage *OpenAIUsage) int {
+	if usage == nil {
+		return 0
+	}
+	return max(usage.InputTokens, usage.CacheReadInputTokens+usage.CacheCreationInputTokens)
+}
+
 // releaseAfterNative 在因上下文过大走原路径的轮次后调用：原路径上报的上下文已明显低于 BPS 上限，
 // 说明客户端已压缩，清除记录让下一轮恢复尝试 BPS。原路径计数不含 BPS 约 2.5 万的工具目录，故留足余量。
 func (c *bpsSessionContextStore) releaseAfterNative(scope string, nativeTokens int) {
@@ -365,7 +374,7 @@ func (a *openAIBPSAttempt) recordSuccess(usage *OpenAIUsage) {
 		return
 	}
 	if usage != nil {
-		if tokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens; tokens > 0 {
+		if tokens := bpsUsageContextTokens(usage); tokens > 0 {
 			bpsSessionContexts.record(a.scope, bpsSessionContext{tokens: tokens, bodyBytes: len(a.body)})
 		}
 	}
