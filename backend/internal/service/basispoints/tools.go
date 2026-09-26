@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 type tool struct {
@@ -392,6 +393,9 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	}
 	envelope, marked, err := customTransportEnvelope(arguments)
 	rawCustom := marked
+	if marked && err == nil {
+		envelope, rawCustom = b.normalizeRawCustomTarget(envelope, arguments)
+	}
 	if !marked && err == nil {
 		envelope, marked, err = b.functionCodeTransportEnvelope(arguments)
 	}
@@ -417,9 +421,9 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, allowed := b.tools[toolName]
+	info, _, allowed := b.lookupTool(toolName)
 	if !allowed {
-		return nil, fmt.Errorf("basispoints returned a tool outside the client's catalog")
+		return nil, fmt.Errorf("basispoints returned a tool outside the client's catalog (tool=%s)", diagnosticToolName(toolName))
 	}
 	result, err := b.finishClientToolCall(native, info, envelope, rawCustom)
 	if err != nil {
@@ -428,6 +432,71 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	// run_officejs is a real BPS-native tool, so its item replays upstream verbatim.
 	b.replay.put(b.scope, text(native["call_id"]), native, result)
 	return result, nil
+}
+
+// lookupTool resolves a catalog tool by exact name, accepting the host
+// "functions." display prefix the model sometimes copies into envelopes and markers.
+func (b *Bridge) lookupTool(name string) (tool, string, bool) {
+	if info, ok := b.tools[name]; ok {
+		return info, name, true
+	}
+	if trimmed := strings.TrimPrefix(name, "functions."); trimmed != name {
+		if info, ok := b.tools[trimmed]; ok {
+			return info, trimmed, true
+		}
+	}
+	return tool{}, name, false
+}
+
+// diagnosticToolName bounds a model-chosen tool name for error messages.
+func diagnosticToolName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return '_'
+		}
+		return r
+	}, name)
+	if len(name) > 64 {
+		name = name[:64] + "..."
+	}
+	if name == "" {
+		return "empty"
+	}
+	return name
+}
+
+// normalizeRawCustomTarget handles a CUSTOM marker the model pointed at a FUNCTION
+// tool. A FUNCTION_CODE tool receives the raw text as its code argument (other
+// arguments come from extended_summary when it is a fitting JSON object); a plain
+// function accepts only code that is itself its JSON arguments or envelope. Any
+// other shape stays a raw custom envelope and fails as before. Nothing is executed.
+func (b *Bridge) normalizeRawCustomTarget(envelope object, arguments object) (object, bool) {
+	info, name, ok := b.lookupTool(text(envelope["name"]))
+	if !ok {
+		return envelope, true
+	}
+	if info.Kind != "function" {
+		envelope["name"] = name
+		return envelope, true
+	}
+	input, _ := envelope["input"].(string)
+	if field := functionCodeTransportField(name, info.Kind, info.Parameters); field != "" {
+		args := object{}
+		if metadata, ok := arguments["extended_summary"].(string); ok && strings.HasPrefix(strings.TrimSpace(metadata), "{") {
+			if decode([]byte(metadata), &args) != nil || args == nil {
+				return envelope, true
+			}
+		}
+		if !functionCodeMetadataFits(info.Parameters, field, args) {
+			return envelope, true
+		}
+		args[field] = input
+		return object{"name": name, "arguments": args}, false
+	}
+	if recovered, ok := plainFunctionFromCode(name, input); ok {
+		return recovered, false
+	}
+	return envelope, true
 }
 
 // translateDirectCatalogCall recovers a native tool call the model addressed by the

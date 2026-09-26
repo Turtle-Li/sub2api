@@ -1077,6 +1077,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		resp, bpsRun, err := s.doOpenAIUpstreamPreferBPS(upstreamReq, proxyURL, account, token, bpsAttempt)
 		// BPS 只尝试一次：后续重试（encrypted 重试、字段剔除等）一律走原路径。
 		bpsAttempt = nil
+		if bpsRun != nil {
+			// 请求记录与错误日志的上游端点区分 BPS 与原路径。
+			SetActualOpenAIUpstreamEndpoint(c, bpsUpstreamEndpoint)
+		}
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
 			if resp != nil && resp.Body != nil {
@@ -1240,6 +1244,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				if !outputStarted {
 					// 循环里的 defer 要到 Forward 返回才执行，回退前先释放 BPS 流与上游连接。
 					_ = resp.Body.Close()
+					SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 					continue
 				}
 			}
@@ -1297,6 +1302,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				if !outputStarted {
 					// 循环里的 defer 要到 Forward 返回才执行，回退前先释放 BPS 流与上游连接。
 					_ = resp.Body.Close()
+					SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 					continue
 				}
 			}
@@ -1377,7 +1383,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if searchCount > 0 && account != nil && account.IsGrok() {
 			forwardResult.SearchCount = searchCount
 		}
+		if bpsRun != nil {
+			forwardResult.UpstreamEndpoint = bpsUpstreamEndpoint
+		}
 		stampOpenAIResponsesUpstreamEndpoint(c, forwardResult)
+		if bpsRun != nil {
+			SetActualOpenAIUpstreamEndpoint(c, bpsUpstreamEndpoint)
+		}
 		return forwardResult, nil
 	}
 }

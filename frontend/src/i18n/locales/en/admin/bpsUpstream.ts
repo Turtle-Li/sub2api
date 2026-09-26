@@ -134,6 +134,7 @@ export default { bpsUpstream: {
     "breaker_open": "Breaker open",
     "inline_image": "Inline image",
     "unsupported_request": "Unsupported request",
+    "session_cooldown": "Session cooldown",
     "network": "Network error",
     "http_status": "HTTP error",
     "stream_before_output": "Stream failed before output",

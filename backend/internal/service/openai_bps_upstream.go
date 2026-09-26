@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 // Basis Points（bps.openai.com，Excel 插件后端）上游：复用 Codex OAuth 令牌与账号池，
@@ -31,6 +32,13 @@ const (
 	bpsErrorBodyLimit      = 4096
 	bpsBreakerThreshold    = 3
 	bpsBreakerOpenDuration = 10 * time.Minute
+	// bpsFirstOutputBudget 是未配置首输出超时时，BPS 从发起到出现首个模型产出事件的上限。
+	bpsFirstOutputBudget = 20 * time.Second
+	// bpsSessionCooldown 是同一会话 BPS 转换失败后直接走原路径的时长：
+	// 同一对话的下一轮通常以相同方式失败，避免每轮都先浪费一次 BPS 往返。
+	bpsSessionCooldown    = 3 * time.Minute
+	bpsSessionCooldownMax = 10000
+	bpsUpstreamEndpoint   = "/basispoints/api/responses"
 )
 
 // bpsUpstreamModels 为已完成 Codex 别名归一化后的上游模型名。
@@ -129,6 +137,47 @@ func (b *bpsCircuitBreaker) state(accountID int64) (int, *time.Time) {
 	return state.failures, &openUntil
 }
 
+// ---- 按会话冷却 ----
+
+type bpsSessionCooldownStore struct {
+	mu    sync.Mutex
+	until map[string]time.Time
+	now   func() time.Time
+}
+
+var bpsSessionCooldowns = &bpsSessionCooldownStore{until: map[string]time.Time{}, now: time.Now}
+
+func (c *bpsSessionCooldownStore) mark(scope string) {
+	if scope == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if len(c.until) >= bpsSessionCooldownMax {
+		for key, until := range c.until {
+			if !now.Before(until) {
+				delete(c.until, key)
+			}
+		}
+		if len(c.until) >= bpsSessionCooldownMax {
+			return
+		}
+	}
+	c.until[scope] = now.Add(bpsSessionCooldown)
+}
+
+func (c *bpsSessionCooldownStore) active(scope string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	until, ok := c.until[scope]
+	if ok && !c.now().Before(until) {
+		delete(c.until, scope)
+		return false
+	}
+	return ok
+}
+
 // ---- 执行记录 ----
 
 // 跳过原因（请求不适用 BPS，直接走原路径，不计入熔断）。
@@ -143,7 +192,17 @@ const (
 	bpsSkipBreakerOpen        = "breaker_open"
 	bpsSkipInlineImage        = "inline_image"
 	bpsSkipUnsupportedRequest = "unsupported_request"
+	bpsSkipSessionCooldown    = "session_cooldown"
 )
+
+// bpsRoutineSkips 是按配置或请求类型必然发生的跳过，只计入内存监控，不写 ops 日志。
+var bpsRoutineSkips = map[string]bool{
+	bpsSkipUnsupportedModel: true,
+	bpsSkipNotOAuth:         true,
+	bpsSkipCompact:          true,
+	bpsSkipImageGeneration:  true,
+	bpsSkipMessagesBridge:   true,
+}
 
 // 失败原因（BPS 已发起但失败，计入熔断）。
 const (
@@ -162,20 +221,45 @@ func (a *openAIBPSAttempt) event(outcome, reason, detail string, statusCode int)
 }
 
 func (a *openAIBPSAttempt) recordSkip(reason, detail string) {
-	bpsMonitor.record(a.event(BPSOutcomeSkipped, reason, detail, 0))
+	event := a.event(BPSOutcomeSkipped, reason, detail, 0)
+	bpsMonitor.record(event)
+	if !bpsRoutineSkips[reason] {
+		a.persist(event, false)
+	}
+}
+
+// persist 把 BPS 结果写入 ops 系统日志（warn 级别才会入库），供事后按账号、模型追查。
+func (a *openAIBPSAttempt) persist(event BPSEvent, breakerOpened bool) {
+	detail := truncateString(sanitizeUpstreamErrorMessage(event.Detail), 300)
+	log := a.log
+	if log == nil {
+		log = logger.L()
+	}
+	log.Warn(fmt.Sprintf("[OpenAI BPS] %s (account: %d, reason: %s, status: %d, breaker_open: %v): %s",
+		event.Outcome, event.AccountID, event.Reason, event.StatusCode, breakerOpened, detail),
+		zap.String("component", "service.openai_gateway"),
+		zap.Int64("account_id", event.AccountID),
+		zap.String("model", event.Model),
+		zap.String("bps_outcome", event.Outcome),
+		zap.String("bps_reason", event.Reason),
+		zap.Int64("bps_elapsed_ms", event.DurationMs),
+	)
 }
 
 // recordFailure 记录一次 BPS 失败并推进熔断；afterOutput 表示客户端已收到输出、无法回退。
+// 已发起请求后的转换或流失败还会让该会话短暂冷却，网络与状态码类失败交给账号熔断。
 func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail string, afterOutput bool) {
 	opened := bpsBreaker.recordFailure(a.accountID, statusCode)
+	if reason == bpsFailureStream || reason == bpsFailureHandler {
+		bpsSessionCooldowns.mark(a.scope)
+	}
 	outcome := BPSOutcomeFallback
 	if afterOutput {
 		outcome = BPSOutcomeErrorAfterOutput
 	}
-	bpsMonitor.record(a.event(outcome, reason, detail, statusCode))
-	logger.LegacyPrintf("service.openai_gateway",
-		"[OpenAI BPS] %s (account: %d, reason: %s, status: %d, breaker_open: %v): %s",
-		outcome, a.accountID, reason, statusCode, opened, truncateString(sanitizeUpstreamErrorMessage(detail), 300))
+	event := a.event(outcome, reason, detail, statusCode)
+	bpsMonitor.record(event)
+	a.persist(event, opened)
 }
 
 func (a *openAIBPSAttempt) recordSuccess() {
@@ -204,7 +288,9 @@ var bpsReplay basispoints.ReplayCache
 
 // openAIBPSAttempt 描述一次可尝试 BPS 的请求；nil 表示本轮直接走原路径。
 type openAIBPSAttempt struct {
-	accountID     int64
+	accountID int64
+	// log 是请求上下文的 logger（携带 request_id 等字段），为 nil 时用全局 logger。
+	log           *zap.Logger
 	body          []byte
 	upstreamModel string
 	effort        string
@@ -218,11 +304,24 @@ type openAIBPSAttempt struct {
 	budgetDeadline time.Time
 }
 
-// holdDeadline 返回 BPS 等待响应头与预读的绝对截止时间。
+// holdDeadline 返回预读放行的绝对截止时间：到点后已有产出即放行给客户端。
 func (a *openAIBPSAttempt) holdDeadline() time.Time {
 	deadline := a.startedAt.Add(bpsHoldLimit)
 	if !a.budgetDeadline.IsZero() && a.budgetDeadline.Before(deadline) {
 		deadline = a.budgetDeadline
+	}
+	return deadline
+}
+
+// outputDeadline 返回等待响应头与首个模型产出事件的截止时间，超出即回退原路径。
+// 配置了首输出超时时取其留给 BPS 的一半，否则取 bpsFirstOutputBudget。
+func (a *openAIBPSAttempt) outputDeadline() time.Time {
+	deadline := a.startedAt.Add(bpsFirstOutputBudget)
+	if !a.budgetDeadline.IsZero() {
+		deadline = a.budgetDeadline
+	}
+	if hold := a.holdDeadline(); hold.Before(deadline) {
+		deadline = hold
 	}
 	return deadline
 }
@@ -247,7 +346,7 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 	if !enabled || !listed {
 		return nil
 	}
-	attempt := &openAIBPSAttempt{accountID: account.ID, body: body, upstreamModel: upstreamModel, effort: effort}
+	attempt := &openAIBPSAttempt{accountID: account.ID, log: logger.FromContext(ctx), body: body, upstreamModel: upstreamModel, effort: effort}
 	skip, detail := "", ""
 	switch {
 	case !account.IsOpenAIOAuth():
@@ -261,22 +360,24 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 	case compatMessagesBridge:
 		skip = bpsSkipMessagesBridge
 	}
+	apiKeyID := getAPIKeyIDFromContext(c)
 	if skip == "" {
+		identity, _ := resolveOpenAIWSExecutionScope(c, body, apiKeyID)
+		attempt.scope = fmt.Sprintf("account:%d/key:%d/thread:%s", account.ID, apiKeyID, identity)
 		if _, ok := openAIResponsesClientToolMapping(c); ok {
 			skip = bpsSkipClientToolMapping
 		} else if reason := basispoints.NativeFallbackReason(body, liveSearch); reason != "" {
 			skip, detail = bpsSkipNativeTool, reason
 		} else if !bpsBreaker.allow(account.ID) {
 			skip = bpsSkipBreakerOpen
+		} else if bpsSessionCooldowns.active(attempt.scope) {
+			skip = bpsSkipSessionCooldown
 		}
 	}
 	if skip != "" {
 		attempt.recordSkip(skip, detail)
 		return nil
 	}
-	apiKeyID := getAPIKeyIDFromContext(c)
-	identity, _ := resolveOpenAIWSExecutionScope(c, body, apiKeyID)
-	attempt.scope = fmt.Sprintf("account:%d/key:%d/thread:%s", account.ID, apiKeyID, identity)
 	return attempt
 }
 
@@ -301,9 +402,10 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamPreferBPS(
 func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, account *Account, token string, attempt *openAIBPSAttempt) (*http.Response, bool) {
 	attempt.startedAt = time.Now()
 	deadline := attempt.holdDeadline()
-	// 等待 BPS 响应头同样受截止时间约束；拿到响应头后不再取消，流由 bpsPrimedBody 关闭时释放。
+	outputDeadline := attempt.outputDeadline()
+	// 等待 BPS 响应头受首产出截止约束；拿到响应头后不再取消，流由 bpsPrimedBody 关闭时释放。
 	ctx, cancel := context.WithCancel(parent)
-	headerTimer := time.AfterFunc(time.Until(deadline), cancel)
+	headerTimer := time.AfterFunc(time.Until(outputDeadline), cancel)
 	released := false
 	defer func() {
 		if !released {
@@ -357,7 +459,7 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, acco
 		}
 		stream := newBPSBridgeStream(bridge, resp.Body, attempt.clientStream, deadline)
 		stream.onClose = cancel
-		stream.fallbackOnDeadline = !attempt.budgetDeadline.IsZero()
+		stream.outputDeadline = outputDeadline
 		if ok, reason := stream.primeUntilOutput(); !ok {
 			_ = stream.Close()
 			attempt.recordFailure(bpsFailureStream, 0, reason, false)

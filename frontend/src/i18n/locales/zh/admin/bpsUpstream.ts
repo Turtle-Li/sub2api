@@ -134,6 +134,7 @@ export default { bpsUpstream: {
     "breaker_open": "熔断中",
     "inline_image": "内联图片",
     "unsupported_request": "请求形态不支持",
+    "session_cooldown": "会话冷却中",
     "network": "网络错误",
     "http_status": "HTTP 错误",
     "stream_before_output": "流在输出前失败",

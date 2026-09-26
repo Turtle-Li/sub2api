@@ -58,9 +58,9 @@ type bpsPrimedBody struct {
 
 	mode     bpsHoldMode
 	deadline time.Time
-	// fallbackOnDeadline 为 true 时截止时间到达即回退而非放行：截止时间取自首输出预算，
-	// 放行后客户端仍拿不到输出，首输出超时照样会触发，且剩余预算已不足以走原路径。
-	fallbackOnDeadline bool
+	// outputDeadline 非零时，到点仍未见任何模型产出事件（推理、文本或工具）即回退原路径：
+	// 此时 BPS 大概率排队或卡住，继续等只会拖长首字。已有产出则按 deadline 放行，不丢弃已完成的部分。
+	outputDeadline time.Time
 }
 
 // newBPSBridgeStream 转换 BPS 响应并按请求形态决定预读策略。BPS 请求体不带 tools
@@ -163,20 +163,33 @@ func bpsIsToolCallDone(eventType, data string) bool {
 }
 
 // primeUntilOutput 逐个读取 SSE 事件直到可以放行（见 bpsHoldMode）、到达截止时间
-// 或终态。返回 false 表示上游在向客户端输出任何内容前就失败或断开。
+// 或终态。返回 false 表示上游在向客户端输出任何内容前就失败、断开或超出首产出预算。
 func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
+	sawOutput := false
+	var timer *time.Timer
 	var timeout <-chan time.Time
-	if b.mode != bpsHoldTerminal && !b.deadline.IsZero() {
-		timer := time.NewTimer(time.Until(b.deadline))
-		defer timer.Stop()
-		timeout = timer.C
+	arm := func() {
+		if timer != nil {
+			timer.Stop()
+			timer, timeout = nil, nil
+		}
+		if deadline := b.waitDeadline(sawOutput); !deadline.IsZero() {
+			timer = time.NewTimer(time.Until(deadline))
+			timeout = timer.C
+		}
 	}
+	arm()
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	eventName := ""
 	for {
 		chunk, ok := b.next(timeout)
 		if !ok {
-			if b.fallbackOnDeadline {
-				return false, "no output within the BPS share of the first-output budget"
+			if !sawOutput && !b.outputDeadline.IsZero() {
+				return false, "no output within the BPS first-output budget"
 			}
 			return true, ""
 		}
@@ -191,6 +204,10 @@ func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
 			eventType := gjson.Get(data, "type").String()
 			if eventType == "" {
 				eventType = eventName
+			}
+			if !sawOutput && bpsIsOutputEvent(eventType) {
+				sawOutput = true
+				arm()
 			}
 			switch {
 			case eventType == "response.completed":
@@ -216,6 +233,19 @@ func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
 			return false, "stream error before output: " + chunk.err.Error()
 		}
 	}
+}
+
+// waitDeadline 返回当前阶段的等待截止：尚无产出时取首产出预算与放行截止中较早者；
+// 已有产出后流式按放行截止，非流式等到终态。
+func (b *bpsPrimedBody) waitDeadline(sawOutput bool) time.Time {
+	var deadline time.Time
+	if b.mode != bpsHoldTerminal {
+		deadline = b.deadline
+	}
+	if !sawOutput && !b.outputDeadline.IsZero() && (deadline.IsZero() || b.outputDeadline.Before(deadline)) {
+		deadline = b.outputDeadline
+	}
+	return deadline
 }
 
 var _ io.ReadCloser = (*bpsPrimedBody)(nil)

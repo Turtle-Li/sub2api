@@ -260,21 +260,72 @@ func TestBPSPrimedStreamReleasesAtDeadlineWithoutEvents(t *testing.T) {
 	require.Contains(t, string(out), "response.completed")
 }
 
-// 截止时间取自首输出预算时，到点无输出须回退而不是放行。
+// 到首产出截止仍无任何模型产出须回退而不是放行。
 func TestBPSPrimedStreamFallsBackAtBudgetDeadline(t *testing.T) {
 	_, bridge, err := prepareBPSRequestBody(bpsTestShellBody(), &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
 	require.NoError(t, err)
 	reader, writer := io.Pipe()
 	defer func() { _ = writer.Close() }()
-	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(80*time.Millisecond))
-	stream.fallbackOnDeadline = true
+	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(5*time.Second))
+	stream.outputDeadline = time.Now().Add(80 * time.Millisecond)
 	defer func() { _ = stream.Close() }()
+	go func() {
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.created\",\"response\":{\"output\":[]}}\n\n")
+	}()
 
 	started := time.Now()
 	ok, reason := stream.primeUntilOutput()
 	require.False(t, ok)
 	require.Contains(t, reason, "first-output budget")
 	require.Less(t, time.Since(started), 2*time.Second)
+}
+
+// 已有产出时首产出截止不再回退，继续扣留到放行截止后放行，不丢弃已完成的部分。
+func TestBPSPrimedStreamReleasesAfterOutputPastBudget(t *testing.T) {
+	_, bridge, err := prepareBPSRequestBody(bpsTestShellBody(), &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
+	require.NoError(t, err)
+	reader, writer := io.Pipe()
+	defer func() { _ = writer.Close() }()
+	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(200*time.Millisecond))
+	stream.outputDeadline = time.Now().Add(50 * time.Millisecond)
+	defer func() { _ = stream.Close() }()
+	go func() {
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"working\"}\n\n")
+	}()
+
+	started := time.Now()
+	ok, reason := stream.primeUntilOutput()
+	require.True(t, ok, reason)
+	require.GreaterOrEqual(t, time.Since(started), 150*time.Millisecond)
+}
+
+func TestBPSSessionCooldown(t *testing.T) {
+	now := time.Now()
+	store := &bpsSessionCooldownStore{until: map[string]time.Time{}, now: func() time.Time { return now }}
+	require.False(t, store.active("s1"))
+	store.mark("s1")
+	store.mark("")
+	require.True(t, store.active("s1"))
+	require.False(t, store.active("s2"))
+	now = now.Add(bpsSessionCooldown)
+	require.False(t, store.active("s1"))
+	require.Empty(t, store.until)
+}
+
+func TestBPSFailureCoolsDownOnlyConversionFailures(t *testing.T) {
+	previous := bpsSessionCooldowns
+	bpsSessionCooldowns = &bpsSessionCooldownStore{until: map[string]time.Time{}, now: time.Now}
+	defer func() { bpsSessionCooldowns = previous }()
+	accountID := int64(990000 + time.Now().UnixNano()%1000)
+	defer bpsBreaker.recordSuccess(accountID)
+
+	network := &openAIBPSAttempt{accountID: accountID, scope: "net"}
+	network.recordFailure(bpsFailureNetwork, 0, "dial", false)
+	require.False(t, bpsSessionCooldowns.active("net"))
+
+	stream := &openAIBPSAttempt{accountID: accountID, scope: "conv"}
+	stream.recordFailure(bpsFailureStream, 0, "raw transport", false)
+	require.True(t, bpsSessionCooldowns.active("conv"))
 }
 
 // Close 必须能打断阻塞中的读取，不泄漏读取 goroutine。
@@ -299,8 +350,10 @@ func TestBPSAttemptHoldDeadline(t *testing.T) {
 	now := time.Now()
 	attempt := &openAIBPSAttempt{startedAt: now}
 	require.Equal(t, now.Add(bpsHoldLimit), attempt.holdDeadline())
+	require.Equal(t, now.Add(bpsFirstOutputBudget), attempt.outputDeadline())
 	attempt.budgetDeadline = now.Add(10 * time.Second)
 	require.Equal(t, now.Add(10*time.Second), attempt.holdDeadline())
+	require.Equal(t, now.Add(10*time.Second), attempt.outputDeadline())
 }
 
 func bpsTestJSON(t *testing.T, value any) string {
@@ -408,6 +461,11 @@ func TestOpenAIBPSAttemptGate(t *testing.T) {
 	require.Nil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, liveSearchTool, "gpt-5.6-terra", "high", false, false, false))
 	refreshOpenAIBPSUpstreamConfigCache(OpenAIBPSUpstreamConfig{Enabled: true, AccountIDs: []int64{account.ID}, LiveSearch: true})
 	require.NotNil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, liveSearchTool, "gpt-5.6-terra", "high", false, false, false))
+	// 会话冷却期间同一会话直接走原路径。
+	bpsSessionCooldowns.mark(attempt.scope)
+	require.Nil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, body, "gpt-6-astra", "high", false, false, false))
+	delete(bpsSessionCooldowns.until, attempt.scope)
+	require.NotEmpty(t, attempt.scope)
 
 	snapshot := BPSUpstreamMonitorSnapshot()
 	require.Len(t, snapshot.Accounts, 1)
@@ -416,7 +474,8 @@ func TestOpenAIBPSAttemptGate(t *testing.T) {
 	require.Equal(t, int64(2), snapshot.Accounts[0].Skipped[bpsSkipImageGeneration])
 	// 不支持的模型只计数，不进事件列表。
 	require.Equal(t, int64(1), snapshot.Accounts[0].Skipped[bpsSkipNativeTool])
-	require.Len(t, snapshot.Events, 4)
+	require.Equal(t, int64(1), snapshot.Accounts[0].Skipped[bpsSkipSessionCooldown])
+	require.Len(t, snapshot.Events, 5)
 
 	unlisted := bpsTestAccount()
 	unlisted.ID = 90_002
