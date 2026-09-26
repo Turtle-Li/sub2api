@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +26,31 @@ var (
 		"PROXY_POOL_GUARD_UNAVAILABLE",
 		"the proxy pool assignment guard is unavailable",
 	)
+	ErrProxyPoolInvalidFilter = infraerrors.BadRequest("PROXY_POOL_INVALID_FILTER", "invalid proxy pool filter")
 )
+
+const (
+	// ProxyListPoolNone selects proxies that are not assigned to any pool.
+	ProxyListPoolNone int64 = -1
+	// ProxyListPoolFilterNone is the query value for unpooled proxies.
+	ProxyListPoolFilterNone = "none"
+)
+
+// ParseProxyListPoolFilter maps "" / "none" / "<id>" to a repository filter.
+func ParseProxyListPoolFilter(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	switch raw {
+	case "":
+		return 0, nil
+	case ProxyListPoolFilterNone:
+		return ProxyListPoolNone, nil
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, ErrProxyPoolInvalidFilter
+	}
+	return id, nil
+}
 
 // ProxyPool groups proxies for future automatic assignment. Existing accounts
 // remain pinned to accounts.proxy_id even when membership later changes.

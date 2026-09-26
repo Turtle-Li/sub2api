@@ -35,6 +35,7 @@ export async function list(
     protocol?: string
     status?: 'active' | 'inactive' | 'expired'
     search?: string
+    pool?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   },
@@ -241,6 +242,7 @@ export async function exportData(options?: {
     protocol?: string
     status?: 'active' | 'inactive' | 'expired'
     search?: string
+    pool?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   }
@@ -249,10 +251,11 @@ export async function exportData(options?: {
   if (options?.ids && options.ids.length > 0) {
     params.ids = options.ids.join(',')
   } else if (options?.filters) {
-    const { protocol, status, search, sort_by, sort_order } = options.filters
+    const { protocol, status, search, pool, sort_by, sort_order } = options.filters
     if (protocol) params.protocol = protocol
     if (status) params.status = status
     if (search) params.search = search
+    if (pool) params.pool = pool
     if (sort_by) params.sort_by = sort_by
     if (sort_order) params.sort_order = sort_order
   }

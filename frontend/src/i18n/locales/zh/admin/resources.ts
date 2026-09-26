@@ -116,7 +116,30 @@ export default {
         batchApply: '应用分配',
         batchAssigned: '已将 {count} 个代理分配到代理池',
         batchRemoved: '已将 {count} 个代理移出代理池',
-        batchFailed: '更新代理池归属失败'
+        batchFailed: '更新代理池归属失败',
+        title: '代理池',
+        create: '新建代理池',
+        createTitle: '新建代理池',
+        editTitle: '编辑代理池',
+        notes: '备注',
+        saved: '代理池已保存',
+        stats: {
+          total: '代理数',
+          available: '可用',
+          unavailable: '不可用',
+          boundAccounts: '已绑定账号'
+        },
+        memberHint: '池内 IP 与主列表分开管理。',
+        empty: '该代理池暂无 IP',
+        releaseSelected: '移出选中 ({count})',
+        releaseTitle: '移出代理池',
+        release: '移出',
+        releaseConfirm: '确认将 {count} 个 IP 移出代理池？移出后会回到主列表。',
+        releaseSuccess: '已将 {count} 个 IP 移出代理池',
+        dissolve: '解散代理池',
+        dissolveTitle: '解散代理池',
+        dissolveConfirm: '解散代理池「{name}」后，池内 IP 会回到主列表，IP 本身及账号绑定不受影响。',
+        dissolved: '代理池「{name}」已解散'
       },
       filters: {
         protocol: '协议',

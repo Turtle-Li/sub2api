@@ -2110,7 +2110,7 @@ func (stubProxyRepo) ListWithFilters(ctx context.Context, params pagination.Pagi
 	return nil, nil, errors.New("not implemented")
 }
 
-func (stubProxyRepo) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
+func (stubProxyRepo) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string, poolID int64) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	return nil, nil, errors.New("not implemented")
 }
 

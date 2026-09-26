@@ -57,7 +57,7 @@ func (r *contentModerationTestProxyRepo) ListWithFilters(ctx context.Context, pa
 	panic("not implemented")
 }
 
-func (r *contentModerationTestProxyRepo) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
+func (r *contentModerationTestProxyRepo) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string, poolID int64) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	panic("not implemented")
 }
 

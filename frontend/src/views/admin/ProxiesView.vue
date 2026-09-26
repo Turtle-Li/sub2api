@@ -39,7 +39,7 @@
           <!-- Right: All action buttons -->
           <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
             <button
-              @click="loadProxies"
+              @click="refreshProxyData"
               :disabled="loading"
               class="btn btn-secondary"
               :title="t('common.refresh')"
@@ -94,6 +94,12 @@
             </button>
           </div>
         </div>
+        <ProxyPoolStrip
+          v-if="proxyPools.length > 0"
+          :pools="proxyPools"
+          @open="openPool"
+          @create="openCreatePool"
+        />
       </template>
 
       <template #table>
@@ -386,6 +392,24 @@
         />
       </template>
     </TablePageLayout>
+
+    <ProxyPoolModal
+      ref="poolModalRef"
+      :show="showPoolModal"
+      :pool-id="activePoolId"
+      @close="closePoolModal"
+      @changed="handlePoolsChanged"
+      @dissolved="handlePoolDissolved"
+      @edit-pool="openEditPool"
+      @edit-proxy="openPoolProxyEdit"
+      @open-accounts="openPoolProxyAccounts"
+    />
+    <ProxyPoolFormDialog
+      :show="showPoolForm"
+      :pool="editingPool"
+      @close="showPoolForm = false"
+      @saved="handlePoolSaved"
+    />
 
     <!-- Create Proxy Modal -->
     <BaseDialog
@@ -1031,6 +1055,9 @@ import ImportDataModal from '@/components/admin/proxy/ImportDataModal.vue'
 import Select from '@/components/common/Select.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import ProxyPoolSelect from '@/components/admin/proxy/ProxyPoolSelect.vue'
+import ProxyPoolStrip from '@/components/admin/proxy/ProxyPoolStrip.vue'
+import ProxyPoolModal from '@/components/admin/proxy/ProxyPoolModal.vue'
+import ProxyPoolFormDialog from '@/components/admin/proxy/ProxyPoolFormDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import { useClipboard } from '@/composables/useClipboard'
@@ -1044,6 +1071,11 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
 const proxyPools = ref<ProxyPool[]>([])
+const poolModalRef = ref<InstanceType<typeof ProxyPoolModal> | null>(null)
+const showPoolModal = ref(false)
+const activePoolId = ref<number | null>(null)
+const showPoolForm = ref(false)
+const editingPool = ref<ProxyPool | null>(null)
 const proxyPoolName = (poolId: number | null | undefined) =>
   proxyPools.value.find(pool => pool.id === poolId)?.name || `#${poolId}`
 
@@ -1216,6 +1248,48 @@ const loadProxyPools = async () => {
     proxyPools.value = []
   }
 }
+const refreshProxyData = () => {
+  void Promise.all([loadProxies(), loadProxyPools()])
+}
+
+const openPool = (pool: ProxyPool) => {
+  activePoolId.value = pool.id
+  showPoolModal.value = true
+}
+const closePoolModal = () => {
+  showPoolModal.value = false
+}
+const openCreatePool = () => {
+  editingPool.value = null
+  showPoolForm.value = true
+}
+const openEditPool = (pool: ProxyPool) => {
+  editingPool.value = pool
+  showPoolModal.value = false
+  showPoolForm.value = true
+}
+const handlePoolSaved = async (pool: ProxyPool) => {
+  showPoolForm.value = false
+  editingPool.value = null
+  await loadProxyPools()
+  openPool(pool)
+}
+const handlePoolsChanged = () => {
+  void Promise.all([loadProxyPools(), loadProxies()])
+}
+const handlePoolDissolved = () => {
+  showPoolModal.value = false
+  activePoolId.value = null
+  handlePoolsChanged()
+}
+const openPoolProxyEdit = (proxy: Proxy) => {
+  showPoolModal.value = false
+  handleEdit(proxy)
+}
+const openPoolProxyAccounts = (proxy: Proxy) => {
+  showPoolModal.value = false
+  void openAccountsModal(proxy)
+}
 
 const allProxiesForBackup = ref<Proxy[]>([])
 const loadBackupProxyOptions = async () => {
@@ -1252,6 +1326,8 @@ const buildProxyQueryFilters = () => ({
   protocol: filters.protocol || undefined,
   status: (filters.status || undefined) as 'active' | 'inactive' | 'expired' | undefined,
   search: searchQuery.value || undefined,
+  // Pool members stay in their pool dialog; a search still reaches all proxies.
+  pool: searchQuery.value.trim() ? undefined : 'none',
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
 })
@@ -1348,7 +1424,7 @@ const closeCreateModal = () => {
 
 const handleDataImported = () => {
   showImportData.value = false
-  loadProxies()
+  void Promise.all([loadProxies(), loadProxyPools()])
 }
 
 // Parse proxy URL: protocol://user:pass@host:port or protocol://host:port
@@ -1438,7 +1514,7 @@ const handleBatchCreate = async () => {
     }
 
     closeCreateModal()
-    loadProxies()
+    void Promise.all([loadProxies(), loadProxyPools()])
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.proxies.failedToImport'))
     console.error('Error batch creating proxies:', error)
@@ -1477,7 +1553,7 @@ const handleCreateProxy = async () => {
     })
     appStore.showSuccess(t('admin.proxies.proxyCreated'))
     closeCreateModal()
-    loadProxies()
+    void Promise.all([loadProxies(), loadProxyPools()])
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.proxies.failedToCreate'))
     console.error('Error creating proxy:', error)
@@ -1551,7 +1627,7 @@ const handleUpdateProxy = async () => {
     await adminAPI.proxies.update(editingProxy.value.id, updateData)
     appStore.showSuccess(t('admin.proxies.proxyUpdated'))
     closeEditModal()
-    loadProxies()
+    void Promise.all([loadProxies(), loadProxyPools()])
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.proxies.failedToUpdate'))
     console.error('Error updating proxy:', error)
@@ -2088,7 +2164,7 @@ const confirmDelete = async () => {
     showDeleteDialog.value = false
     removeSelectedProxies([deletingProxy.value.id])
     deletingProxy.value = null
-    loadProxies()
+    void Promise.all([loadProxies(), loadProxyPools()])
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.proxies.failedToDelete'))
     console.error('Error deleting proxy:', error)
@@ -2115,7 +2191,7 @@ const confirmBatchDelete = async () => {
 
     clearSelectedProxies()
     showBatchDeleteDialog.value = false
-    loadProxies()
+    void Promise.all([loadProxies(), loadProxyPools()])
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.proxies.batchDeleteFailed'))
     console.error('Error batch deleting proxies:', error)

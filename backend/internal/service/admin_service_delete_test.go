@@ -387,7 +387,7 @@ func (s *proxyRepoStub) ListActiveWithAccountCount(ctx context.Context) ([]Proxy
 	panic("unexpected ListActiveWithAccountCount call")
 }
 
-func (s *proxyRepoStub) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
+func (s *proxyRepoStub) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string, poolID int64) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFiltersAndAccountCount call")
 }
 

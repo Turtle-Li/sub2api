@@ -74,6 +74,19 @@ func TestProxyPoolServiceNormalizesCreateAndMembers(t *testing.T) {
 	require.Equal(t, pool.ID, repo.assignedTo)
 }
 
+func TestParseProxyListPoolFilter(t *testing.T) {
+	cases := map[string]int64{"": 0, " none ": ProxyListPoolNone, "12": 12}
+	for raw, want := range cases {
+		got, err := ParseProxyListPoolFilter(raw)
+		require.NoError(t, err, raw)
+		require.Equal(t, want, got, raw)
+	}
+	for _, raw := range []string{"-1", "0", "abc"} {
+		_, err := ParseProxyListPoolFilter(raw)
+		require.ErrorIs(t, err, ErrProxyPoolInvalidFilter, raw)
+	}
+}
+
 func TestProxyPoolServiceRejectsInvalidPoolAndMembers(t *testing.T) {
 	svc := NewProxyPoolService(&proxyPoolRepositoryStub{})
 

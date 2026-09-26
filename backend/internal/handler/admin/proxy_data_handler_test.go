@@ -209,6 +209,27 @@ func TestProxyExportDataSortByAccountCountUsesAccountCountListing(t *testing.T) 
 	require.Equal(t, 0, adminSvc.lastListProxies.calls)
 }
 
+func TestProxyExportDataPoolFilterUsesAccountCountListing(t *testing.T) {
+	router, adminSvc := setupProxyDataRouter()
+	adminSvc.proxyCounts = []service.ProxyWithAccountCount{{
+		Proxy: service.Proxy{
+			ID:       1,
+			Name:     "proxy-pool-member",
+			Protocol: "http",
+			Host:     "127.0.0.1",
+			Port:     8080,
+			Status:   service.StatusActive,
+		},
+	}}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/proxies/data?pool=none", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 0, adminSvc.lastListProxies.calls)
+	require.Equal(t, service.ProxyListPoolNone, adminSvc.lastListProxies.poolID)
+}
+
 func TestProxyImportDataReusesAndTriggersLatencyProbe(t *testing.T) {
 	router, adminSvc := setupProxyDataRouter()
 

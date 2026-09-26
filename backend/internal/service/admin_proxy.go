@@ -24,9 +24,9 @@ func (s *adminServiceImpl) ListProxies(ctx context.Context, page, pageSize int, 
 	return proxies, result.Total, nil
 }
 
-func (s *adminServiceImpl) ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error) {
+func (s *adminServiceImpl) ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search string, poolID int64, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
-	proxies, result, err := s.proxyRepo.ListWithFiltersAndAccountCount(ctx, params, protocol, status, search)
+	proxies, result, err := s.proxyRepo.ListWithFiltersAndAccountCount(ctx, params, protocol, status, search, poolID)
 	if err != nil {
 		return nil, 0, err
 	}

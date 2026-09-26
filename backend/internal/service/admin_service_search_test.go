@@ -71,6 +71,7 @@ type proxyRepoStubForAdminList struct {
 	listWithFiltersAndAccountCountProtocol string
 	listWithFiltersAndAccountCountStatus   string
 	listWithFiltersAndAccountCountSearch   string
+	listWithFiltersAndAccountCountPoolID   int64
 	listWithFiltersAndAccountCountProxies  []ProxyWithAccountCount
 	listWithFiltersAndAccountCountResult   *pagination.PaginationResult
 	listWithFiltersAndAccountCountErr      error
@@ -99,12 +100,13 @@ func (s *proxyRepoStubForAdminList) ListWithFilters(_ context.Context, params pa
 	return s.listWithFiltersProxies, result, nil
 }
 
-func (s *proxyRepoStubForAdminList) ListWithFiltersAndAccountCount(_ context.Context, params pagination.PaginationParams, protocol, status, search string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
+func (s *proxyRepoStubForAdminList) ListWithFiltersAndAccountCount(_ context.Context, params pagination.PaginationParams, protocol, status, search string, poolID int64) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	s.listWithFiltersAndAccountCountCalls++
 	s.listWithFiltersAndAccountCountParams = params
 	s.listWithFiltersAndAccountCountProtocol = protocol
 	s.listWithFiltersAndAccountCountStatus = status
 	s.listWithFiltersAndAccountCountSearch = search
+	s.listWithFiltersAndAccountCountPoolID = poolID
 
 	if s.listWithFiltersAndAccountCountErr != nil {
 		return nil, nil, s.listWithFiltersAndAccountCountErr
@@ -233,7 +235,7 @@ func TestAdminService_ListProxiesWithAccountCount_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{proxyRepo: repo}
 
-		proxies, total, err := svc.ListProxiesWithAccountCount(context.Background(), 2, 10, "socks5", StatusDisabled, "p2", "account_count", "DESC")
+		proxies, total, err := svc.ListProxiesWithAccountCount(context.Background(), 2, 10, "socks5", StatusDisabled, "p2", 7, "account_count", "DESC")
 		require.NoError(t, err)
 		require.Equal(t, int64(9), total)
 		require.Equal(t, []ProxyWithAccountCount{{Proxy: Proxy{ID: 3, Name: "p2"}, AccountCount: 5}}, proxies)
@@ -243,6 +245,7 @@ func TestAdminService_ListProxiesWithAccountCount_WithSearch(t *testing.T) {
 		require.Equal(t, "socks5", repo.listWithFiltersAndAccountCountProtocol)
 		require.Equal(t, StatusDisabled, repo.listWithFiltersAndAccountCountStatus)
 		require.Equal(t, "p2", repo.listWithFiltersAndAccountCountSearch)
+		require.Equal(t, int64(7), repo.listWithFiltersAndAccountCountPoolID)
 	})
 }
 

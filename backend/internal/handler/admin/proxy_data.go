@@ -33,13 +33,18 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 		protocol := c.Query("protocol")
 		status := c.Query("status")
 		search := strings.TrimSpace(c.Query("search"))
+		poolID, parseErr := service.ParseProxyListPoolFilter(c.Query("pool"))
+		if parseErr != nil {
+			response.ErrorFrom(c, parseErr)
+			return
+		}
 		sortBy := c.DefaultQuery("sort_by", "id")
 		sortOrder := c.DefaultQuery("sort_order", "desc")
 		if len(search) > 100 {
 			search = search[:100]
 		}
 
-		proxies, err = h.listProxiesFiltered(ctx, protocol, status, search, sortBy, sortOrder)
+		proxies, err = h.listProxiesFiltered(ctx, protocol, status, search, poolID, sortBy, sortOrder)
 		if err != nil {
 			response.ErrorFrom(c, err)
 			return
@@ -111,7 +116,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 	ctx := c.Request.Context()
 	result := DataImportResult{}
 
-	existingProxies, err := h.listProxiesFiltered(ctx, "", "", "", "id", "desc")
+	existingProxies, err := h.listProxiesFiltered(ctx, "", "", "", 0, "id", "desc")
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -328,15 +333,16 @@ func parseProxyIDs(c *gin.Context) ([]int64, error) {
 	return ids, nil
 }
 
-func (h *ProxyHandler) listProxiesFiltered(ctx context.Context, protocol, status, search, sortBy, sortOrder string) ([]service.Proxy, error) {
+func (h *ProxyHandler) listProxiesFiltered(ctx context.Context, protocol, status, search string, poolID int64, sortBy, sortOrder string) ([]service.Proxy, error) {
 	page := 1
 	pageSize := dataPageCap
 	var out []service.Proxy
 	sortBy = strings.TrimSpace(sortBy)
-	useAccountCountSort := strings.EqualFold(sortBy, "account_count")
+	// The account-count query is also the proxy listing path that supports pool filtering.
+	useAccountCountSort := strings.EqualFold(sortBy, "account_count") || poolID != 0
 	for {
 		if useAccountCountSort {
-			items, total, err := h.adminService.ListProxiesWithAccountCount(ctx, page, pageSize, protocol, status, search, sortBy, sortOrder)
+			items, total, err := h.adminService.ListProxiesWithAccountCount(ctx, page, pageSize, protocol, status, search, poolID, sortBy, sortOrder)
 			if err != nil {
 				return nil, err
 			}

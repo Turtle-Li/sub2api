@@ -127,7 +127,30 @@ export default {
         batchApply: 'Apply assignment',
         batchAssigned: 'Assigned {count} proxies to the pool',
         batchRemoved: 'Removed {count} proxies from their pools',
-        batchFailed: 'Failed to update proxy pool membership'
+        batchFailed: 'Failed to update proxy pool membership',
+        title: 'Proxy pools',
+        create: 'New proxy pool',
+        createTitle: 'New proxy pool',
+        editTitle: 'Edit proxy pool',
+        notes: 'Notes',
+        saved: 'Proxy pool saved',
+        stats: {
+          total: 'Proxies',
+          available: 'Available',
+          unavailable: 'Unavailable',
+          boundAccounts: 'Bound accounts'
+        },
+        memberHint: 'Pool members are managed separately from the main list.',
+        empty: 'This proxy pool has no proxies',
+        releaseSelected: 'Remove selected ({count})',
+        releaseTitle: 'Remove from proxy pool',
+        release: 'Remove',
+        releaseConfirm: 'Remove {count} proxies from this pool? They will return to the main list.',
+        releaseSuccess: 'Removed {count} proxies from the pool',
+        dissolve: 'Dissolve pool',
+        dissolveTitle: 'Dissolve proxy pool',
+        dissolveConfirm: 'Dissolving "{name}" returns its proxies to the main list without changing the proxies or account bindings.',
+        dissolved: 'Proxy pool "{name}" was dissolved'
       },
       filters: {
         protocol: 'Protocol',

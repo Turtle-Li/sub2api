@@ -2,13 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import ProxiesView from '../ProxiesView.vue'
 
-const { listProxies, getAllWithCount } = vi.hoisted(() => ({
+const { listProxies, getAllWithCount, listProxyPools } = vi.hoisted(() => ({
   listProxies: vi.fn(),
-  getAllWithCount: vi.fn()
+  getAllWithCount: vi.fn(),
+  listProxyPools: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
-  adminAPI: { proxies: { list: listProxies, getAllWithCount } }
+  adminAPI: {
+    proxies: { list: listProxies, getAllWithCount },
+    proxyPools: { list: listProxyPools }
+  }
 }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError: vi.fn() }) }))
 vi.mock('vue-i18n', async () => ({
@@ -49,6 +53,7 @@ let wrapper: ReturnType<typeof mountView>
 beforeEach(() => {
   vi.clearAllMocks()
   getAllWithCount.mockResolvedValue([])
+  listProxyPools.mockResolvedValue([])
   listProxies.mockResolvedValue({ items: [], total: 100, pages: 5 })
 })
 
@@ -100,5 +105,22 @@ describe('proxy list filter pagination', () => {
 
     expect(listProxies.mock.lastCall?.[0]).toBe(2)
     expect(wrapper.get('[data-test="page"]').text()).toBe('2')
+  })
+
+  it('keeps pooled proxies out of the main list until a search is entered', async () => {
+    wrapper = mountView()
+    await flushPromises()
+
+    expect(listProxies.mock.lastCall?.[2]).toEqual(expect.objectContaining({ pool: 'none' }))
+
+    const search = wrapper.get('input[placeholder="admin.proxies.searchProxies"]')
+    await search.setValue('pool-member')
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await flushPromises()
+
+    expect(listProxies.mock.lastCall?.[2]).toEqual(expect.objectContaining({
+      search: 'pool-member',
+      pool: undefined
+    }))
   })
 })

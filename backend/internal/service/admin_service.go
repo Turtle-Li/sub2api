@@ -123,7 +123,7 @@ type AdminService interface {
 
 	// Proxy management
 	ListProxies(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]Proxy, int64, error)
-	ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error)
+	ListProxiesWithAccountCount(ctx context.Context, page, pageSize int, protocol, status, search string, poolID int64, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error)
 	GetAllProxies(ctx context.Context) ([]Proxy, error)
 	GetAllProxiesWithAccountCount(ctx context.Context) ([]ProxyWithAccountCount, error)
 	GetProxy(ctx context.Context, id int64) (*Proxy, error)

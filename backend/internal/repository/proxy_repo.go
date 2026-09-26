@@ -705,8 +705,13 @@ func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination
 }
 
 // ListWithFiltersAndAccountCount lists proxies with filters and includes account count per proxy
-func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
+func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string, poolID int64) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	q := r.client.Proxy.Query()
+	if poolID == service.ProxyListPoolNone {
+		q = q.Where(proxy.PoolIDIsNil())
+	} else if poolID > 0 {
+		q = q.Where(proxy.PoolIDEQ(poolID))
+	}
 	if protocol != "" {
 		q = q.Where(proxy.ProtocolEQ(protocol))
 	}
