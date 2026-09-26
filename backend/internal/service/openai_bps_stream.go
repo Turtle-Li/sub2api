@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"sync"
@@ -95,6 +96,11 @@ type bpsPrimedBody struct {
 // （工具目录写在提示词里），须以 bridge 记录的客户端声明为准。
 // 流式且有原路径接续时首个产出即放行：之后的失败由接续兜底，不必为工具转换扣住整段响应。
 func newBPSBridgeStream(bridge *basispoints.Bridge, upstream io.ReadCloser, clientStream bool, deadline time.Time, continuation bpsNativeContinuation) *bpsPrimedBody {
+	return newBPSBridgeStreamWithRepair(context.Background(), bridge, upstream, clientStream, deadline, continuation, nil)
+}
+
+// newBPSBridgeStreamWithRepair 同 newBPSBridgeStream，另允许 repair 在工具下发前纠正传输格式错误。
+func newBPSBridgeStreamWithRepair(ctx context.Context, bridge *basispoints.Bridge, upstream io.ReadCloser, clientStream bool, deadline time.Time, continuation bpsNativeContinuation, repair basispoints.ToolRepairFunc) *bpsPrimedBody {
 	mode := bpsHoldFirstOutput
 	switch {
 	case !clientStream:
@@ -103,7 +109,7 @@ func newBPSBridgeStream(bridge *basispoints.Bridge, upstream io.ReadCloser, clie
 	case bridge.HasClientTools() && continuation == nil:
 		mode = bpsHoldTools
 	}
-	stream := newBPSPrimedBody(bridge.Stream(upstream))
+	stream := newBPSPrimedBody(bridge.StreamWithToolRepair(ctx, upstream, repair))
 	stream.mode = mode
 	stream.deadline = deadline
 	stream.continuation = continuation

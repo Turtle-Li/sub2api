@@ -32,3 +32,12 @@ Resynced with ranxi2001/sub2api v2.8.13 (production 3e345632f): strict single
 catalog invocation recovery and custom single-string arguments (#73), content
 error locations (content.go, #73), and plaintext encrypted_function_args for
 collaboration tools (#78), with their tests.
+
+Tool transport correction (tool_repair.go, stream.go StreamWithToolRepair) is
+ported from ranxi2001/sub2api f35414792 and f405108e3 with their tests. Local
+differences: FUNCTION_CODE carries either code or cmd under one marker, the
+structured-output and argument-schema checks are not imported, and a broken
+JSON envelope (a "{" prefix that is not valid JSON, e.g. truncated output) may be
+reissued whole instead of byte-preserved, keeping any recognizable tool name.
+The final response reports the last continuation's usage instead of the sum, so
+session context tracking and Codex auto-compaction see the real context size.

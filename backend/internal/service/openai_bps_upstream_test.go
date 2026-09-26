@@ -609,23 +609,58 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 				bpsTestJSON(t, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": bogus}),
 				bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"output": []any{bogus}}}),
 			),
+			// 两次纠正仍无效。
+			bpsTestSSEResponse(bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "output": []any{bogus}}})),
+			bpsTestSSEResponse(bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "output": []any{bogus}}})),
 			// 原路径成功响应不带 text/event-stream 也要接续（OAuth 插件传输的响应头可能不同）。
 			&http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: bpsTestSSE(`{"type":"response.completed","response":{"id":"resp_native","output":[]}}`)},
 		}}
 		svc := &OpenAIGatewayService{httpUpstream: upstream}
-		attempt := &openAIBPSAttempt{accountID: account.ID, body: bpsTestShellBody(), upstreamModel: "gpt-6-astra", scope: "test", clientStream: true}
+		attempt := &openAIBPSAttempt{accountID: account.ID, body: bpsTestShellBody(), upstreamModel: "gpt-6-astra", scope: "test-format", clientStream: true}
 		resp, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", attempt)
 		require.NoError(t, err)
 		require.NotNil(t, bpsRun)
-		require.Len(t, upstream.requests, 1)
 		out, _ := io.ReadAll(resp.Body)
-		require.Len(t, upstream.requests, 2)
-		require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
+		require.Len(t, upstream.requests, 4)
+		require.Equal(t, basispoints.ResponsesURL, upstream.requests[1].URL.String())
+		require.Equal(t, basispoints.ResponsesURL, upstream.requests[2].URL.String())
+		require.Equal(t, "chatgpt.com", upstream.requests[3].URL.Host)
 		require.Contains(t, string(out), "let me check")
 		require.Contains(t, string(out), "resp_native")
 		require.NotContains(t, string(out), "response.failed")
 		require.True(t, bpsRun.continued)
-		require.True(t, bpsSessionCooldowns.active("test"))
+		require.False(t, bpsSessionCooldowns.active("test-format"), "a model formatting slip does not cool the session down")
+		require.True(t, bpsBreaker.allow(account.ID))
+	})
+
+	t.Run("tool transport correction fixes the call before dispatch", func(t *testing.T) {
+		account := bpsTestAccount()
+		account.ID = 90_105
+		bogus := map[string]any{"type": "function_call", "id": "fc_1", "call_id": "c1", "name": "run_officejs", "arguments": `{"summary":"List files","code":"{\"name\":\"shell\",\"arguments\":{\"command\":\"ls","extended_summary":"{}"}`}
+		fixed := map[string]any{"type": "function_call", "id": "fc_2", "call_id": "c2", "name": "run_officejs", "arguments": `{"summary":"List files","code":"{\"name\":\"shell\",\"arguments\":{\"command\":\"ls\"}}","extended_summary":"{}"}`}
+		upstream := &httpUpstreamRecorder{responses: []*http.Response{
+			bpsTestSSEResponse(
+				`{"type":"response.output_text.delta","output_index":0,"delta":"let me check"}`,
+				bpsTestJSON(t, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": bogus}),
+				bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "output": []any{bogus}, "usage": map[string]any{"input_tokens": 100, "output_tokens": 5}}}),
+			),
+			bpsTestSSEResponse(bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "output": []any{fixed}, "usage": map[string]any{"input_tokens": 120, "output_tokens": 7}}})),
+		}}
+		svc := &OpenAIGatewayService{httpUpstream: upstream}
+		attempt := &openAIBPSAttempt{accountID: account.ID, body: bpsTestShellBody(), upstreamModel: "gpt-6-astra", scope: "test-repair", clientStream: true}
+		resp, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", attempt)
+		require.NoError(t, err)
+		require.NotNil(t, bpsRun)
+		out, _ := io.ReadAll(resp.Body)
+		require.Len(t, upstream.requests, 2)
+		correction := upstream.bodies[1]
+		require.Contains(t, string(correction), "invalid_client_tool_transport")
+		require.Equal(t, "c1", gjson.GetBytes(correction, `input.#(type=="function_call_output").call_id`).String())
+		require.Contains(t, string(out), "let me check")
+		require.Contains(t, string(out), `"name":"shell"`)
+		require.Contains(t, string(out), `"input_tokens":120`)
+		require.NotContains(t, string(out), "response.failed")
+		require.False(t, bpsRun.continued)
 	})
 
 	t.Run("inline image without externalizer skips bps", func(t *testing.T) {

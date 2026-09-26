@@ -333,11 +333,7 @@ func (a *openAIBPSAttempt) recordSkip(reason, detail string) {
 // persist 把 BPS 结果写入 ops 系统日志（warn 级别才会入库），供事后按账号、模型追查。
 func (a *openAIBPSAttempt) persist(event BPSEvent, breakerOpened bool) {
 	detail := truncateString(sanitizeUpstreamErrorMessage(event.Detail), 300)
-	log := a.log
-	if log == nil {
-		log = logger.L()
-	}
-	log.Warn(fmt.Sprintf("[OpenAI BPS] %s (account: %d, reason: %s, status: %d, breaker_open: %v): %s",
+	a.logger().Warn(fmt.Sprintf("[OpenAI BPS] %s (account: %d, reason: %s, status: %d, breaker_open: %v): %s",
 		event.Outcome, event.AccountID, event.Reason, event.StatusCode, breakerOpened, detail),
 		zap.String("component", "service.openai_gateway"),
 		zap.Int64("account_id", event.AccountID),
@@ -348,14 +344,22 @@ func (a *openAIBPSAttempt) persist(event BPSEvent, breakerOpened bool) {
 	)
 }
 
+func (a *openAIBPSAttempt) logger() *zap.Logger {
+	if a.log == nil {
+		return logger.L()
+	}
+	return a.log
+}
+
 // recordFailure 记录一次 BPS 失败并推进熔断；afterOutput 表示客户端已收到输出、无法回退。
 // 已发起请求后的转换或流失败还会让该会话短暂冷却，网络与状态码类失败交给账号熔断。
 func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail string, afterOutput bool) {
 	opened := false
-	if a.failed.CompareAndSwap(false, true) && reason != bpsFailureContextStall {
+	formatOnly := bpsIsToolFormatFailure(detail)
+	if a.failed.CompareAndSwap(false, true) && reason != bpsFailureContextStall && !formatOnly {
 		opened = bpsBreaker.recordFailure(a.accountID, statusCode)
 	}
-	if reason == bpsFailureStream || reason == bpsFailureHandler || reason == bpsFailureContinued {
+	if !formatOnly && (reason == bpsFailureStream || reason == bpsFailureHandler || reason == bpsFailureContinued) {
 		bpsSessionCooldowns.mark(a.scope)
 	}
 	outcome := BPSOutcomeFallback
@@ -600,7 +604,7 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, acco
 			attempt.recordFailure(bpsFailureNetwork, 0, "response headers arrived after the BPS deadline", false)
 			return nil, false
 		}
-		stream := newBPSBridgeStream(bridge, resp.Body, attempt.clientStream, deadline, continuation)
+		stream := newBPSBridgeStreamWithRepair(ctx, bridge, resp.Body, attempt.clientStream, deadline, continuation, s.bpsToolRepair(account, token, attempt, bpsBody))
 		stream.onClose = cancel
 		stream.outputDeadline = outputDeadline
 		stream.onContinue = func(reason string, err error) {
@@ -625,6 +629,51 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, acco
 		resp.Body = stream
 		return resp, true
 	}
+}
+
+// bpsToolRepair 返回工具传输格式纠正：在同一账号上续跑 BPS 会话，把校验错误作为工具结果回传，
+// 让模型只修格式重发。此时尚未下发任何工具，纠正失败按原逻辑回退原路径。
+func (s *OpenAIGatewayService) bpsToolRepair(account *Account, token string, attempt *openAIBPSAttempt, prepared []byte) basispoints.ToolRepairFunc {
+	return func(ctx context.Context, failed map[string]any, validation error) (map[string]any, error) {
+		corrected, err := basispoints.BuildToolRepairRequest(prepared, failed, validation)
+		if err != nil {
+			return nil, err
+		}
+		attempt.logger().Warn(fmt.Sprintf("[OpenAI BPS] tool transport correction (account: %d): %s",
+			attempt.accountID, truncateString(sanitizeUpstreamErrorMessage(validation.Error()), 300)),
+			zap.String("component", "service.openai_gateway"),
+			zap.Int64("account_id", attempt.accountID),
+			zap.String("model", attempt.upstreamModel),
+		)
+		resp, statusCode, errBody, err := s.sendOpenAIBPSRequest(ctx, account, token, corrected)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("correction connection failed: %w", err)
+		}
+		if resp == nil {
+			return nil, fmt.Errorf("correction returned HTTP %d: %s", statusCode, extractUpstreamErrorMessage(errBody))
+		}
+		defer func() { _ = resp.Body.Close() }()
+		stop := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
+		defer stop()
+		prepared = corrected
+		return basispoints.ReadToolRepairResponse(resp.Body)
+	}
+}
+
+// bpsIsToolFormatFailure 判断失败是否只是模型本轮写错了工具传输格式（纠正后仍无效）。
+// 这与账号或会话状态无关，下一轮可能就正常，不应让会话冷却或推进账号熔断。
+func bpsIsToolFormatFailure(detail string) bool {
+	if strings.Contains(detail, "tool transport correction failed") {
+		// 纠正请求本身的网络或状态码失败仍按账号问题处理。
+		return false
+	}
+	return strings.Contains(detail, "basispoints tool transport") ||
+		strings.Contains(detail, "basispoints function code transport") ||
+		strings.Contains(detail, "basispoints returned invalid tool transport") ||
+		strings.Contains(detail, "basispoints returned empty tool transport")
 }
 
 // prepareBPSRequestBody 写入上游模型名与回退 effort 后交给 basispoints 转换。
