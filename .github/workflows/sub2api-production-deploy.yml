@@ -287,6 +287,35 @@ jobs:
           command -v curl >/dev/null
           command -v python3 >/dev/null
 
+          # The operator may keep SSH open to every IPv4 address (key-only). Lightsail
+          # rejects an exact CIDR next to that rule, and the runner can already connect.
+          PORT_STATE_FILE="$RUNNER_TEMP/sub2api-lightsail-ssh-before-open.json"
+          aws lightsail get-instance-port-states \
+            --region "$AWS_REGION" \
+            --instance-name "$AWS_INSTANCE_NAME" \
+            --output json \
+            > "$PORT_STATE_FILE"
+          SSH_OPEN_TO_ALL=$(python3 - "$PORT_STATE_FILE" <<'PY_SSH_OPEN_TO_ALL'
+          import ipaddress
+          import json
+          import sys
+
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          print("true" if any(
+              ipaddress.ip_network(cidr, strict=False).prefixlen == 0
+              for item in state.get("portStates", [])
+              if item.get("fromPort") == 22
+              and item.get("toPort") == 22
+              and item.get("protocol") == "tcp"
+              for cidr in item.get("cidrs", [])
+          ) else "false")
+          PY_SSH_OPEN_TO_ALL
+          )
+          if [ "$SSH_OPEN_TO_ALL" = "true" ]; then
+            echo "SSH is already open to every IPv4 address; no temporary runner rule needed."
+            exit 0
+          fi
+
           RUNNER_IPV4=$(
             curl --fail --silent --show-error \
               --connect-timeout 10 \

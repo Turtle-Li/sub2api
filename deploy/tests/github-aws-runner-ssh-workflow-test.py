@@ -32,6 +32,13 @@ class GitHubAwsRunnerSshWorkflowTest(unittest.TestCase):
         self.assertIn('RUNNER_SSH_CIDR="${RUNNER_IPV4}/32"', self.workflow)
         self.assertNotIn("0.0.0.0/0", self.workflow)
 
+    def test_existing_open_to_all_ssh_rule_skips_temporary_rule(self) -> None:
+        skip_index = self.workflow.index(
+            "SSH is already open to every IPv4 address; no temporary runner rule needed."
+        )
+        self.assertLess(skip_index, self.workflow.index("open-instance-public-ports"))
+        self.assertIn(".prefixlen == 0", self.workflow)
+
     def test_aws_is_the_only_production_deployment_target(self) -> None:
         self.assertIn(
             "description: 'AWS production environment that owns the target host SSH secrets'",
