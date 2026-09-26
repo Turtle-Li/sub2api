@@ -211,3 +211,46 @@ func TestBPSAttemptCountsBreakerOncePerRequest(t *testing.T) {
 	require.Equal(t, 1, failures)
 	require.Nil(t, openUntil)
 }
+
+// 会话上下文达到上限后跳过 BPS，直到请求体明显缩小（客户端压缩了上下文）。
+func TestBPSSessionContextSkipsUntilCompaction(t *testing.T) {
+	store := &bpsSessionContextStore{sessions: map[string]bpsSessionContext{}, now: time.Now}
+	store.record("s", bpsSessionContext{tokens: bpsContextTokenLimit - 1, bodyBytes: 1000})
+	require.False(t, store.tooLarge("s", 1100))
+
+	store.record("s", bpsSessionContext{tokens: bpsContextTokenLimit, bodyBytes: 1000})
+	require.True(t, store.tooLarge("s", 1100))
+	require.True(t, store.tooLarge("s", 900))
+	require.False(t, store.tooLarge("s", 300))
+	require.False(t, store.tooLarge("s", 1100), "compaction clears the record")
+
+	store.record("t", bpsSessionContext{tokens: bpsContextStallTokens, bodyBytes: 1000, stalled: true})
+	require.True(t, store.tooLarge("t", 1000))
+
+	now := time.Now()
+	store.now = func() time.Time { return now.Add(bpsSessionContextTTL) }
+	require.False(t, store.tooLarge("t", 1000))
+}
+
+// 上下文过大导致的首产出超时只影响该会话，不推进账号熔断。
+func TestBPSContextStallDoesNotCountTowardBreaker(t *testing.T) {
+	const accountID = 918274
+	t.Cleanup(func() { bpsBreaker.recordSuccess(accountID) })
+	attempt := &openAIBPSAttempt{accountID: accountID, scope: "test:" + t.Name()}
+	attempt.recordFailure(bpsFailureContextStall, 0, bpsNoOutputReason, false)
+	failures, _ := bpsBreaker.state(accountID)
+	require.Zero(t, failures)
+	require.False(t, bpsSessionCooldowns.active(attempt.scope))
+}
+
+// BPS 成功时按会话记录上下文规模。
+func TestBPSRecordSuccessTracksSessionContext(t *testing.T) {
+	scope := "test:" + t.Name()
+	attempt := &openAIBPSAttempt{accountID: 918275, scope: scope, body: make([]byte, 4096)}
+	attempt.recordSuccess(&OpenAIUsage{InputTokens: 100, CacheReadInputTokens: bpsContextTokenLimit})
+	entry, ok := bpsSessionContexts.get(scope)
+	require.True(t, ok)
+	require.Equal(t, bpsContextTokenLimit+100, entry.tokens)
+	require.Equal(t, 4096, entry.bodyBytes)
+	require.True(t, bpsSessionContexts.tooLarge(scope, 4096))
+}

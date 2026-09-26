@@ -1334,7 +1334,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 		}
 		if bpsRun != nil {
-			bpsRun.recordSuccess()
+			bpsRun.recordSuccess(usage)
 		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 

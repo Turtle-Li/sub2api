@@ -135,10 +135,12 @@ export default { bpsUpstream: {
     "inline_image": "内联图片",
     "unsupported_request": "请求形态不支持",
     "session_cooldown": "会话冷却中",
+    "context_limit": "会话上下文过大",
     "network": "网络错误",
     "http_status": "HTTP 错误",
     "stream_before_output": "流在输出前失败",
     "handler_before_output": "响应处理失败",
-    "native_continuation": "输出后接续原路径"
+    "native_continuation": "输出后接续原路径",
+    "context_stall": "上下文过大未产出"
   }
 } }

@@ -39,6 +39,14 @@ const (
 	// 同一对话的下一轮通常以相同方式失败，避免每轮都先浪费一次 BPS 往返。
 	bpsSessionCooldown    = 3 * time.Minute
 	bpsSessionCooldownMax = 10000
+	// bpsContextTokenLimit：BPS 上下文（按 BPS 计量）超过约 20.8 万 token 后不再产出也不报错，
+	// 只能等首产出预算超时再回退。会话上一轮已达此规模时直接走原路径，直到客户端压缩上下文。
+	bpsContextTokenLimit = 200_000
+	// bpsContextStallTokens：首产出超时发生时，会话上一轮上下文不低于此值即视为上下文过大。
+	bpsContextStallTokens = 150_000
+	// bpsContextShrinkRatio：请求体缩小到记录时的该比例以下，视为客户端已压缩上下文，恢复尝试 BPS。
+	bpsContextShrinkRatio = 0.8
+	bpsSessionContextTTL  = time.Hour
 	bpsUpstreamEndpoint   = "/basispoints/api/responses"
 )
 
@@ -179,6 +187,72 @@ func (c *bpsSessionCooldownStore) active(scope string) bool {
 	return ok
 }
 
+// ---- 按会话上下文规模 ----
+
+type bpsSessionContext struct {
+	tokens    int
+	bodyBytes int
+	// stalled 表示该会话已在此规模下出现首产出超时。
+	stalled bool
+	at      time.Time
+}
+
+type bpsSessionContextStore struct {
+	mu       sync.Mutex
+	sessions map[string]bpsSessionContext
+	now      func() time.Time
+}
+
+var bpsSessionContexts = &bpsSessionContextStore{sessions: map[string]bpsSessionContext{}, now: time.Now}
+
+func (c *bpsSessionContextStore) record(scope string, entry bpsSessionContext) {
+	if scope == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if _, ok := c.sessions[scope]; !ok && len(c.sessions) >= bpsSessionCooldownMax {
+		for key, existing := range c.sessions {
+			if now.Sub(existing.at) >= bpsSessionContextTTL {
+				delete(c.sessions, key)
+			}
+		}
+		if len(c.sessions) >= bpsSessionCooldownMax {
+			return
+		}
+	}
+	entry.at = now
+	c.sessions[scope] = entry
+}
+
+func (c *bpsSessionContextStore) get(scope string) (bpsSessionContext, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.sessions[scope]
+	if ok && c.now().Sub(entry.at) >= bpsSessionContextTTL {
+		delete(c.sessions, scope)
+		return bpsSessionContext{}, false
+	}
+	return entry, ok
+}
+
+// tooLarge 判断本轮是否应跳过 BPS：会话上下文已达上限或已在此规模下卡住，且请求体没有明显缩小。
+// 请求体缩小说明客户端压缩了上下文，清除记录重新尝试 BPS。
+func (c *bpsSessionContextStore) tooLarge(scope string, bodyBytes int) bool {
+	entry, ok := c.get(scope)
+	if !ok || (!entry.stalled && entry.tokens < bpsContextTokenLimit) {
+		return false
+	}
+	if float64(bodyBytes) < float64(entry.bodyBytes)*bpsContextShrinkRatio {
+		c.mu.Lock()
+		delete(c.sessions, scope)
+		c.mu.Unlock()
+		return false
+	}
+	return true
+}
+
 // ---- 执行记录 ----
 
 // 跳过原因（请求不适用 BPS，直接走原路径，不计入熔断）。
@@ -194,6 +268,7 @@ const (
 	bpsSkipInlineImage        = "inline_image"
 	bpsSkipUnsupportedRequest = "unsupported_request"
 	bpsSkipSessionCooldown    = "session_cooldown"
+	bpsSkipContextLimit       = "context_limit"
 )
 
 // bpsRoutineSkips 是按配置或请求类型必然发生的跳过，只计入内存监控，不写 ops 日志。
@@ -213,6 +288,8 @@ const (
 	bpsFailureHandler    = "handler_before_output"
 	// bpsFailureContinued：已向客户端输出后 BPS 失败，同一条流里接续了原路径。
 	bpsFailureContinued = "native_continuation"
+	// bpsFailureContextStall：会话上下文过大导致首产出超时，只影响该会话，不计入账号熔断。
+	bpsFailureContextStall = "context_stall"
 )
 
 func (a *openAIBPSAttempt) event(outcome, reason, detail string, statusCode int) BPSEvent {
@@ -253,7 +330,7 @@ func (a *openAIBPSAttempt) persist(event BPSEvent, breakerOpened bool) {
 // 已发起请求后的转换或流失败还会让该会话短暂冷却，网络与状态码类失败交给账号熔断。
 func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail string, afterOutput bool) {
 	opened := false
-	if a.failed.CompareAndSwap(false, true) {
+	if a.failed.CompareAndSwap(false, true) && reason != bpsFailureContextStall {
 		opened = bpsBreaker.recordFailure(a.accountID, statusCode)
 	}
 	if reason == bpsFailureStream || reason == bpsFailureHandler || reason == bpsFailureContinued {
@@ -268,10 +345,16 @@ func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail s
 	a.persist(event, opened)
 }
 
-func (a *openAIBPSAttempt) recordSuccess() {
+// recordSuccess 记录 BPS 成功；usage 为本轮用量，用于按会话跟踪上下文规模。
+func (a *openAIBPSAttempt) recordSuccess(usage *OpenAIUsage) {
 	if a.continued {
 		// 本轮由原路径接续完成，失败已在接续时记录。
 		return
+	}
+	if usage != nil {
+		if tokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens; tokens > 0 {
+			bpsSessionContexts.record(a.scope, bpsSessionContext{tokens: tokens, bodyBytes: len(a.body)})
+		}
 	}
 	bpsBreaker.recordSuccess(a.accountID)
 	bpsMonitor.record(a.event(BPSOutcomeSuccess, "", "", 0))
@@ -386,6 +469,8 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 			skip = bpsSkipBreakerOpen
 		} else if bpsSessionCooldowns.active(attempt.scope) {
 			skip = bpsSkipSessionCooldown
+		} else if bpsSessionContexts.tooLarge(attempt.scope, len(body)) {
+			skip = bpsSkipContextLimit
 		}
 	}
 	if skip != "" {
@@ -498,6 +583,11 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, acco
 		}
 		if ok, reason := stream.primeUntilOutput(); !ok {
 			_ = stream.Close()
+			if last, known := bpsSessionContexts.get(attempt.scope); reason == bpsNoOutputReason && known && last.tokens >= bpsContextStallTokens {
+				bpsSessionContexts.record(attempt.scope, bpsSessionContext{tokens: last.tokens, bodyBytes: len(attempt.body), stalled: true})
+				attempt.recordFailure(bpsFailureContextStall, 0, fmt.Sprintf("%s; previous turn context %d tokens", reason, last.tokens), false)
+				return nil, false
+			}
 			attempt.recordFailure(bpsFailureStream, 0, reason, false)
 			return nil, false
 		}

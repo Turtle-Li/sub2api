@@ -135,10 +135,12 @@ export default { bpsUpstream: {
     "inline_image": "Inline image",
     "unsupported_request": "Unsupported request",
     "session_cooldown": "Session cooldown",
+    "context_limit": "Session context too large",
     "network": "Network error",
     "http_status": "HTTP error",
     "stream_before_output": "Stream failed before output",
     "handler_before_output": "Response handling failed",
-    "native_continuation": "Continued natively after output"
+    "native_continuation": "Continued natively after output",
+    "context_stall": "No output: context too large"
   }
 } }

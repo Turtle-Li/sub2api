@@ -27,6 +27,8 @@ var bpsSilenceKeepalive = 15 * time.Second
 
 var bpsKeepaliveComment = []byte(": bps keepalive\n\n")
 
+const bpsNoOutputReason = "no output within the BPS first-output budget"
+
 // bpsHoldMode 决定预读在什么时候放行给响应处理器。
 type bpsHoldMode int
 
@@ -419,7 +421,7 @@ func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
 		chunk, ok := b.next(timeout)
 		if !ok {
 			if !sawOutput && !b.outputDeadline.IsZero() {
-				return false, "no output within the BPS first-output budget"
+				return false, bpsNoOutputReason
 			}
 			return true, ""
 		}
