@@ -501,7 +501,7 @@ export default {
         select: 'Select a proxy pool',
         none: 'No proxy pool',
         hint: 'Use an available proxy from the selected pool for each imported account.',
-        ssoHint: 'Only Grok SSO imports use this pool; each successful Free account keeps its selected proxy.'
+        ssoHint: 'Only Grok SSO imports use this pool; each successful Free/X Basic account keeps its selected proxy.'
       },
       pools: {
         title: 'Account Pools',

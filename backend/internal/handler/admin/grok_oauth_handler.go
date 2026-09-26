@@ -19,6 +19,15 @@ import (
 
 const grokSSOImportConcurrency = 3
 
+func isGrokProxyPoolEligibleSubscriptionTier(tier string) bool {
+	switch xai.NormalizeSubscriptionTier(tier) {
+	case "free", "x_basic":
+		return true
+	default:
+		return false
+	}
+}
+
 type GrokOAuthHandler struct {
 	grokOAuthService *service.GrokOAuthService
 	adminService     service.AdminService
@@ -461,7 +470,7 @@ func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req Gr
 	if err != nil {
 		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: grokSSOImportErrorMessage(err)}}
 	}
-	if req.ProxyPoolID != nil && !strings.EqualFold(strings.TrimSpace(tokenInfo.SubscriptionTier), "free") {
+	if req.ProxyPoolID != nil && !isGrokProxyPoolEligibleSubscriptionTier(tokenInfo.SubscriptionTier) {
 		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Email: tokenInfo.Email, Error: service.ErrProxyPoolFreeOnly.Error()}}
 	}
 

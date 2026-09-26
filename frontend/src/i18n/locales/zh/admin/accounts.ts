@@ -621,7 +621,7 @@ export default {
         select: '选择代理池',
         none: '不使用代理池',
         hint: '为每个导入账号从所选代理池中选择一个可用代理。',
-        ssoHint: '仅 Grok SSO 导入使用此代理池；每个导入成功的 Free 账号都会固定到选中的代理。'
+        ssoHint: '仅 Grok SSO 导入使用此代理池；每个导入成功的 Free/X Basic 账号都会固定到选中的代理。'
       },
       pools: {
         title: '账号池',
