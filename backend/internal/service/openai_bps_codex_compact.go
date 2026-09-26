@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // bpsCodexAutoCompactTokenLimit 是下发给含 BPS 账号分组的 Codex 自动压缩上限。
@@ -12,6 +16,13 @@ import (
 // 用量比较该上限，BPS 轮次回报的正是 BPS 计数，留约 7k 余量让 Codex 在卡住前自行压缩。
 // 仅作用于 BPS 可承接的模型，且只下调不上调；未含 BPS 账号的分组不受影响。
 const bpsCodexAutoCompactTokenLimit = 200_000
+
+// bpsCodexCompactHintTokens 是回给客户端的用量下限，不低于任何 Codex 模型的上下文窗口，
+// 使客户端按"窗口已满"立即压缩。Codex 0.158 对 API Key 自定义 provider 不拉取 /models，
+// 上面的 manifest 上限到不了客户端，只能靠回报用量触发压缩。
+const bpsCodexCompactHintTokens = 1_050_000
+
+const bpsCodexCompactHintContextKey = "openai_bps_codex_compact_hint"
 
 // FinalizeCodexModelsManifest 在分组 manifest 定稿后应用 BPS 压缩上限，再做 ETag 协商。
 // 调用方构建 manifest 时须传空 If-None-Match，否则旧 ETag 会让客户端一直沿用未下调的目录。
@@ -109,4 +120,50 @@ func capCodexAutoCompactForBPS(body []byte, isBPSModel func(slug string) bool) (
 	root["models"] = encoded
 	body, err = json.Marshal(root)
 	return body, err == nil, err
+}
+
+// markBPSCodexCompactHint 标记本请求由 BPS 账号承接 BPS 模型：无论本轮走 BPS 还是原路径，
+// 会话上下文达到 BPS 上限时都应让客户端压缩。BPS 关闭或账号移出列表后自然不再标记。
+func markBPSCodexCompactHint(c *gin.Context) {
+	if c != nil {
+		c.Set(bpsCodexCompactHintContextKey, true)
+	}
+}
+
+// applyBPSCodexCompactHintToSSELine 在已标记请求的终止事件中，若上报输入达到 BPS 上限，
+// 抬高回给客户端的 input/total tokens 以触发 Codex 自动压缩。计费用量取自原始事件，不受影响。
+// 只看本轮上报用量、不看会话记录：客户端压缩后用量回落即停止，不会反复压缩。
+func applyBPSCodexCompactHintToSSELine(c *gin.Context, line, eventType string) string {
+	if c == nil || (eventType != "response.completed" && eventType != "response.done") {
+		return line
+	}
+	if marked, _ := c.Get(bpsCodexCompactHintContextKey); marked != true {
+		return line
+	}
+	prefix, data, ok := strings.Cut(line, "data:")
+	if !ok || strings.TrimSpace(prefix) != "" {
+		return line
+	}
+	data = strings.TrimLeft(data, " ")
+	usage := gjson.Get(data, "response.usage")
+	input := usage.Get("input_tokens").Int()
+	if !usage.Exists() || input < bpsContextTokenLimit {
+		return line
+	}
+	delta := int64(bpsCodexCompactHintTokens) - input
+	if delta <= 0 {
+		return line
+	}
+	patched, err := sjson.Set(data, "response.usage.input_tokens", input+delta)
+	if err != nil {
+		return line
+	}
+	total := usage.Get("total_tokens").Int()
+	if total <= 0 {
+		total = input + usage.Get("output_tokens").Int()
+	}
+	if patched, err = sjson.Set(patched, "response.usage.total_tokens", total+delta); err != nil {
+		return line
+	}
+	return "data: " + patched
 }

@@ -3,9 +3,14 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func bpsCompactTestManifest() *OpenAIModelsResponse {
@@ -77,4 +82,57 @@ func TestFinalizeCodexModelsManifestLeavesOtherGroupsUntouched(t *testing.T) {
 	manifest = bpsCompactTestManifest()
 	require.NoError(t, svc.FinalizeCodexModelsManifest(context.Background(), &Group{ID: 16}, manifest, ""))
 	require.Equal(t, original, string(manifest.Body), "BPS disabled leaves the catalog as is")
+}
+
+func TestApplyBPSCodexCompactHintToSSELine(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	completed := func(input, output int64) string {
+		return fmt.Sprintf(`data: {"type":"response.completed","response":{"id":"r","usage":{"input_tokens":%d,"input_tokens_details":{"cached_tokens":1000},"output_tokens":%d,"total_tokens":%d}}}`, input, output, input+output)
+	}
+	unmarked, _ := gin.CreateTestContext(httptest.NewRecorder())
+	line := completed(210_000, 500)
+	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(unmarked, line, "response.completed"), "non-BPS requests are untouched")
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	markBPSCodexCompactHint(c)
+	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(c, line, "response.output_text.delta"))
+	small := completed(150_000, 500)
+	require.Equal(t, small, applyBPSCodexCompactHintToSSELine(c, small, "response.completed"), "below the BPS limit the usage is real")
+
+	patched := applyBPSCodexCompactHintToSSELine(c, line, "response.completed")
+	data := strings.TrimPrefix(patched, "data: ")
+	require.EqualValues(t, bpsCodexCompactHintTokens, gjson.Get(data, "response.usage.input_tokens").Int())
+	require.EqualValues(t, bpsCodexCompactHintTokens+500, gjson.Get(data, "response.usage.total_tokens").Int())
+	require.EqualValues(t, 500, gjson.Get(data, "response.usage.output_tokens").Int())
+	require.EqualValues(t, 1000, gjson.Get(data, "response.usage.input_tokens_details.cached_tokens").Int())
+	require.Equal(t, "r", gjson.Get(data, "response.id").String())
+}
+
+func TestOpenAIBPSAttemptMarksCompactHint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	bpsResetMonitor(t)
+	t.Cleanup(func() { refreshOpenAIBPSUpstreamConfigCache(OpenAIBPSUpstreamConfig{}) })
+	svc := &OpenAIGatewayService{settingService: &SettingService{settingRepo: &bpsSettingRepoStub{values: map[string]string{}}}}
+	body := []byte(`{"model":"gpt-6-astra","input":"hi"}`)
+	account := bpsTestAccount()
+	account.ID = 90_011
+	marked := func(model string, compact bool) bool {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+		svc.openAIBPSAttemptFor(context.Background(), c, account, body, model, "high", compact, false, false)
+		_, ok := c.Get(bpsCodexCompactHintContextKey)
+		return ok
+	}
+
+	require.False(t, marked("gpt-6-astra", false), "BPS disabled")
+	refreshOpenAIBPSUpstreamConfigCache(OpenAIBPSUpstreamConfig{Enabled: true, AccountIDs: []int64{account.ID}})
+	require.True(t, marked("gpt-6-astra", false))
+	require.False(t, marked("gpt-6-sol", false))
+	require.False(t, marked("gpt-6-astra", true))
+	other := bpsTestAccount()
+	other.ID = 90_012
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	svc.openAIBPSAttemptFor(context.Background(), c, other, body, "gpt-6-astra", "high", false, false, false)
+	_, ok := c.Get(bpsCodexCompactHintContextKey)
+	require.False(t, ok, "accounts outside the BPS list are untouched")
 }

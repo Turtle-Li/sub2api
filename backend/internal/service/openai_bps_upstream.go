@@ -443,6 +443,9 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 	if !enabled || !listed {
 		return nil
 	}
+	if account.IsOpenAIOAuth() && isBPSUpstreamModel(upstreamModel) && !isCompactRequest {
+		markBPSCodexCompactHint(c)
+	}
 	attempt := &openAIBPSAttempt{accountID: account.ID, log: logger.FromContext(ctx), body: body, upstreamModel: upstreamModel, effort: effort}
 	skip, detail := "", ""
 	switch {
