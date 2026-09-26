@@ -1,6 +1,7 @@
 package xai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 const (
@@ -147,7 +150,7 @@ func (f *ssoDeviceFlow) convert(ctx context.Context) (*TokenResponse, error) {
 		return nil, fmt.Errorf("open xAI device verification page: %w", SSOHTTPError{Status: status})
 	}
 
-	status, finalURL, _, err = f.do(ctx, http.MethodPost, SSOVerifyURL, url.Values{"user_code": {device.UserCode}})
+	status, finalURL, consentBody, err := f.do(ctx, http.MethodPost, SSOVerifyURL, url.Values{"user_code": {device.UserCode}})
 	if err != nil {
 		return nil, err
 	}
@@ -157,13 +160,26 @@ func (f *ssoDeviceFlow) convert(ctx context.Context) (*TokenResponse, error) {
 	if !strings.Contains(finalURL, "consent") {
 		return nil, errors.New("xAI device verification did not reach consent page")
 	}
+	consentToken, err := parseSSOConsentToken(finalURL, consentBody)
+	if err != nil {
+		return nil, err
+	}
+	consentURL, err := url.Parse(finalURL)
+	if err != nil || !safeXAIAuthURL(finalURL) {
+		return nil, errors.New("xAI device consent URL is invalid")
+	}
+	approveHeaders := http.Header{
+		"Origin":  {consentURL.Scheme + "://" + consentURL.Host},
+		"Referer": {finalURL},
+	}
 
-	status, finalURL, _, err = f.do(ctx, http.MethodPost, SSOApproveURL, url.Values{
+	status, finalURL, _, err = f.doWithHeaders(ctx, http.MethodPost, SSOApproveURL, url.Values{
 		"user_code":      {device.UserCode},
 		"action":         {"allow"},
 		"principal_type": {"User"},
 		"principal_id":   {""},
-	})
+		"consent_token":  {consentToken},
+	}, approveHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +258,10 @@ func (f *ssoDeviceFlow) pollToken(ctx context.Context, deviceCode string, interv
 }
 
 func (f *ssoDeviceFlow) do(ctx context.Context, method, endpoint string, form url.Values) (int, string, []byte, error) {
+	return f.doWithHeaders(ctx, method, endpoint, form, nil)
+}
+
+func (f *ssoDeviceFlow) doWithHeaders(ctx context.Context, method, endpoint string, form url.Values, extraHeaders http.Header) (int, string, []byte, error) {
 	if !safeXAIAuthURL(endpoint) {
 		return 0, "", nil, errors.New("xAI OAuth URL is not trusted")
 	}
@@ -265,6 +285,13 @@ func (f *ssoDeviceFlow) do(ctx context.Context, method, endpoint string, form ur
 		}
 		if currentForm != nil {
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		if redirects == 0 {
+			for name, values := range extraHeaders {
+				for _, value := range values {
+					request.Header.Add(name, value)
+				}
+			}
 		}
 
 		response, err := f.client.Do(request)
@@ -303,6 +330,64 @@ func (f *ssoDeviceFlow) do(ctx context.Context, method, endpoint string, form ur
 		}
 	}
 	return 0, currentURL, nil, errors.New("xAI OAuth redirected too many times")
+}
+
+func parseSSOConsentToken(consentPageURL string, body []byte) (string, error) {
+	base, err := url.Parse(consentPageURL)
+	if err != nil || !safeXAIAuthURL(consentPageURL) {
+		return "", errors.New("xAI device consent URL is invalid")
+	}
+	tokenizer := html.NewTokenizer(bytes.NewReader(body))
+	inApproveForm := false
+	for {
+		switch tokenizer.Next() {
+		case html.ErrorToken:
+			if errors.Is(tokenizer.Err(), io.EOF) {
+				return "", errors.New("xAI device consent token is missing")
+			}
+			return "", fmt.Errorf("parse xAI device consent page: %w", tokenizer.Err())
+		case html.StartTagToken, html.SelfClosingTagToken:
+			token := tokenizer.Token()
+			switch token.Data {
+			case "form":
+				inApproveForm = false
+				for _, attr := range token.Attr {
+					if attr.Key != "action" {
+						continue
+					}
+					action, parseErr := url.Parse(strings.TrimSpace(attr.Val))
+					if parseErr != nil {
+						continue
+					}
+					inApproveForm = base.ResolveReference(action).String() == SSOApproveURL
+					break
+				}
+			case "input":
+				if !inApproveForm {
+					continue
+				}
+				var name, value string
+				for _, attr := range token.Attr {
+					switch attr.Key {
+					case "name":
+						name = strings.TrimSpace(attr.Val)
+					case "value":
+						value = strings.TrimSpace(attr.Val)
+					}
+				}
+				if name == "consent_token" {
+					if value == "" || len(value) > ssoMaxTokenLength || strings.ContainsAny(value, "\r\n\x00") {
+						return "", errors.New("xAI device consent token is invalid")
+					}
+					return value, nil
+				}
+			}
+		case html.EndTagToken:
+			if tokenizer.Token().Data == "form" {
+				inApproveForm = false
+			}
+		}
+	}
 }
 
 func seedSSOCookies(jar http.CookieJar, token string) {

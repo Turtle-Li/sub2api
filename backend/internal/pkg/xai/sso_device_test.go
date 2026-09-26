@@ -18,7 +18,9 @@ import (
 type ssoDeviceFakeClient struct {
 	t             *testing.T
 	tokenCalls    int
+	approveCalls  int
 	cookieHeaders []string
+	consentBody   string
 }
 
 func (c *ssoDeviceFakeClient) Do(req *http.Request) (*http.Response, error) {
@@ -40,16 +42,24 @@ func (c *ssoDeviceFakeClient) Do(req *http.Request) (*http.Response, error) {
 		require.Equal(c.t, http.MethodPost, req.Method)
 		values := readSSODeviceForm(c.t, req)
 		require.Equal(c.t, "USER-1", values.Get("user_code"))
-		return ssoDeviceResponse(http.StatusFound, http.Header{"Location": {"/oauth2/device/consent"}}, ``), nil
-	case "https://auth.x.ai/oauth2/device/consent":
+		return ssoDeviceResponse(http.StatusFound, http.Header{"Location": {"https://accounts.x.ai/oauth2/device/consent"}}, ``), nil
+	case "https://accounts.x.ai/oauth2/device/consent":
 		require.Equal(c.t, http.MethodGet, req.Method)
-		return ssoDeviceResponse(http.StatusOK, nil, `<html>consent</html>`), nil
+		body := c.consentBody
+		if body == "" {
+			body = `<html><form method="post" action="https://auth.x.ai/oauth2/device/approve"><input type="hidden" name="user_code" value="USER-1"><input type="hidden" name="principal_type" value="User"><input type="hidden" name="principal_id" value=""><input type="hidden" name="consent_token" value="consent-token-1"></form></html>`
+		}
+		return ssoDeviceResponse(http.StatusOK, nil, body), nil
 	case SSOApproveURL:
+		c.approveCalls++
 		require.Equal(c.t, http.MethodPost, req.Method)
 		values := readSSODeviceForm(c.t, req)
 		require.Equal(c.t, "USER-1", values.Get("user_code"))
 		require.Equal(c.t, "allow", values.Get("action"))
 		require.Equal(c.t, "User", values.Get("principal_type"))
+		require.Equal(c.t, "consent-token-1", values.Get("consent_token"))
+		require.Equal(c.t, "https://accounts.x.ai", req.Header.Get("Origin"))
+		require.Equal(c.t, "https://accounts.x.ai/oauth2/device/consent", req.Header.Get("Referer"))
 		return ssoDeviceResponse(http.StatusSeeOther, http.Header{"Location": {"/oauth2/device/done"}}, ``), nil
 	case "https://auth.x.ai/oauth2/device/done":
 		require.Equal(c.t, http.MethodGet, req.Method)
@@ -87,6 +97,26 @@ func TestConvertSSOToBuildCompletesDeviceFlow(t *testing.T) {
 	require.Contains(t, client.cookieHeaders[0], "sso-rw=sso-token")
 	require.Contains(t, client.cookieHeaders[len(client.cookieHeaders)-1], "session=web-session")
 	require.Contains(t, client.cookieHeaders[len(client.cookieHeaders)-1], "csrf=csrf-token")
+	require.Equal(t, 1, client.approveCalls)
+}
+
+func TestConvertSSOToBuildRejectsMissingConsentToken(t *testing.T) {
+	t.Setenv(EnvClientID, "")
+	client := &ssoDeviceFakeClient{
+		t:           t,
+		consentBody: `<html><form method="post" action="https://auth.x.ai/oauth2/device/approve"><input type="hidden" name="user_code" value="USER-1"></form></html>`,
+	}
+
+	token, err := ConvertSSOToBuild(context.Background(), "sso-token", &SSODeviceOptions{
+		HTTPClient: client,
+		Sleep: func(context.Context, time.Duration) error {
+			return nil
+		},
+	})
+
+	require.ErrorContains(t, err, "consent token is missing")
+	require.Nil(t, token)
+	require.Zero(t, client.approveCalls)
 }
 
 func TestNormalizeSSOTokenAcceptsCookieHeader(t *testing.T) {
