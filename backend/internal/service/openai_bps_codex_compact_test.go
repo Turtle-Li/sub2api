@@ -91,15 +91,18 @@ func TestApplyBPSCodexCompactHintToSSELine(t *testing.T) {
 	}
 	unmarked, _ := gin.CreateTestContext(httptest.NewRecorder())
 	line := completed(210_000, 500)
-	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(unmarked, line, "response.completed"), "non-BPS requests are untouched")
+	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(unmarked, &Account{ID: 69}, line, "response.completed"), "non-BPS requests are untouched")
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	markBPSCodexCompactHint(c)
-	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(c, line, "response.output_text.delta"))
+	markBPSCodexCompactHint(c, 69)
+	bps := &Account{ID: 69}
+	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(c, bps, line, "response.output_text.delta"))
 	small := completed(150_000, 500)
-	require.Equal(t, small, applyBPSCodexCompactHintToSSELine(c, small, "response.completed"), "below the BPS limit the usage is real")
+	require.Equal(t, small, applyBPSCodexCompactHintToSSELine(c, bps, small, "response.completed"), "below the BPS limit the usage is real")
 
-	patched := applyBPSCodexCompactHintToSSELine(c, line, "response.completed")
+	require.Equal(t, line, applyBPSCodexCompactHintToSSELine(c, &Account{ID: 70}, line, "response.completed"), "failover to another account is untouched")
+
+	patched := applyBPSCodexCompactHintToSSELine(c, bps, line, "response.completed")
 	data := strings.TrimPrefix(patched, "data: ")
 	require.EqualValues(t, bpsCodexCompactHintTokens, gjson.Get(data, "response.usage.input_tokens").Int())
 	require.EqualValues(t, bpsCodexCompactHintTokens+500, gjson.Get(data, "response.usage.total_tokens").Int())
@@ -116,12 +119,18 @@ func TestOpenAIBPSAttemptMarksCompactHint(t *testing.T) {
 	body := []byte(`{"model":"gpt-6-astra","input":"hi"}`)
 	account := bpsTestAccount()
 	account.ID = 90_011
+	line := func(c *gin.Context) string {
+		if !strings.Contains(applyBPSCodexCompactHintToSSELine(c, account, `data: {"type":"response.completed","response":{"usage":{"input_tokens":300000,"total_tokens":300000}}}`, "response.completed"), "1050000") {
+			return ""
+		}
+		return "hinted"
+	}
 	marked := func(model string, compact bool) bool {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
 		svc.openAIBPSAttemptFor(context.Background(), c, account, body, model, "high", compact, false, false)
-		_, ok := c.Get(bpsCodexCompactHintContextKey)
-		return ok
+		id, ok := c.Get(bpsCodexCompactHintContextKey)
+		return ok && id == account.ID
 	}
 
 	require.False(t, marked("gpt-6-astra", false), "BPS disabled")
@@ -129,6 +138,11 @@ func TestOpenAIBPSAttemptMarksCompactHint(t *testing.T) {
 	require.True(t, marked("gpt-6-astra", false))
 	require.False(t, marked("gpt-6-sol", false))
 	require.False(t, marked("gpt-6-astra", true))
+	retry, _ := gin.CreateTestContext(httptest.NewRecorder())
+	retry.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	svc.openAIBPSAttemptFor(context.Background(), retry, account, body, "gpt-6-astra", "high", false, false, false)
+	svc.openAIBPSAttemptFor(context.Background(), retry, account, body, "gpt-6-sol", "high", false, false, false)
+	require.Equal(t, line(retry), "", "a retry with a non-BPS model clears the earlier mark")
 	other := bpsTestAccount()
 	other.ID = 90_012
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

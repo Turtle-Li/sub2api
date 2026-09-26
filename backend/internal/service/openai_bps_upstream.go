@@ -436,6 +436,7 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 	imageIntent bool,
 	compatMessagesBridge bool,
 ) *openAIBPSAttempt {
+	clearBPSCodexCompactHint(c)
 	if account == nil || account.IsShadow() || account.IsOpenAIAgentIdentity() {
 		return nil
 	}
@@ -444,7 +445,7 @@ func (s *OpenAIGatewayService) openAIBPSAttemptFor(
 		return nil
 	}
 	if account.IsOpenAIOAuth() && isBPSUpstreamModel(upstreamModel) && !isCompactRequest {
-		markBPSCodexCompactHint(c)
+		markBPSCodexCompactHint(c, account.ID)
 	}
 	attempt := &openAIBPSAttempt{accountID: account.ID, log: logger.FromContext(ctx), body: body, upstreamModel: upstreamModel, effort: effort}
 	skip, detail := "", ""

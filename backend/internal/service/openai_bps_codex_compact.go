@@ -124,20 +124,31 @@ func capCodexAutoCompactForBPS(body []byte, isBPSModel func(slug string) bool) (
 
 // markBPSCodexCompactHint 标记本请求由 BPS 账号承接 BPS 模型：无论本轮走 BPS 还是原路径，
 // 会话上下文达到 BPS 上限时都应让客户端压缩。BPS 关闭或账号移出列表后自然不再标记。
-func markBPSCodexCompactHint(c *gin.Context) {
+// 记录账号 ID：同一请求故障转移到其他账号时标记不随之生效。
+func markBPSCodexCompactHint(c *gin.Context, accountID int64) {
 	if c != nil {
-		c.Set(bpsCodexCompactHintContextKey, true)
+		c.Set(bpsCodexCompactHintContextKey, accountID)
+	}
+}
+
+// clearBPSCodexCompactHint 清除上一次尝试留下的标记，每次判定都按本次账号与模型重新决定。
+func clearBPSCodexCompactHint(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	if _, ok := c.Get(bpsCodexCompactHintContextKey); ok {
+		c.Set(bpsCodexCompactHintContextKey, int64(0))
 	}
 }
 
 // applyBPSCodexCompactHintToSSELine 在已标记请求的终止事件中，若上报输入达到 BPS 上限，
 // 抬高回给客户端的 input/total tokens 以触发 Codex 自动压缩。计费用量取自原始事件，不受影响。
 // 只看本轮上报用量、不看会话记录：客户端压缩后用量回落即停止，不会反复压缩。
-func applyBPSCodexCompactHintToSSELine(c *gin.Context, line, eventType string) string {
-	if c == nil || (eventType != "response.completed" && eventType != "response.done") {
+func applyBPSCodexCompactHintToSSELine(c *gin.Context, account *Account, line, eventType string) string {
+	if c == nil || account == nil || (eventType != "response.completed" && eventType != "response.done") {
 		return line
 	}
-	if marked, _ := c.Get(bpsCodexCompactHintContextKey); marked != true {
+	if marked, _ := c.Get(bpsCodexCompactHintContextKey); marked != account.ID {
 		return line
 	}
 	prefix, data, ok := strings.Cut(line, "data:")
