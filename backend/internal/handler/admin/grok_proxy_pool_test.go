@@ -13,6 +13,7 @@ func TestGrokProxyPoolEligibleSubscriptionTier(t *testing.T) {
 		tier string
 		want bool
 	}{
+		{name: "missing upstream tier", tier: "", want: true},
 		{name: "free", tier: "free", want: true},
 		{name: "x basic", tier: "x_basic", want: true},
 		{name: "numeric x basic", tier: "2", want: false},

@@ -21,7 +21,7 @@ const grokSSOImportConcurrency = 3
 
 func isGrokProxyPoolEligibleSubscriptionTier(tier string) bool {
 	switch xai.NormalizeSubscriptionTier(tier) {
-	case "free", "x_basic":
+	case "", "unknown", "n/a", "none", "free", "x_basic":
 		return true
 	default:
 		return false
