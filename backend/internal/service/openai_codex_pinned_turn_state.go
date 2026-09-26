@@ -276,9 +276,8 @@ func parseFlexibleTime(v any) *time.Time {
 }
 
 // applyPinnedCodexTurnState 若账号在对应 model 上配置了有效 pinned state，
-// 则在客户端未自带 turn-state 时（第 1 轮冷启动）将其安全写入请求头 x-codex-turn-state。
-// 若客户端已自带 turn-state（多轮对话持续中），必须保留客户端自身的会话状态，避免会话错位导致上游降级。
-// 无论是否注入 turn-state，只要账号存在有效路由 Cookie，均予以安全合并注入以保证流量锁定在正确片区。
+// 则将其强制写入请求头 x-codex-turn-state，并在有活 Cookie 时安全注入路由 Cookie。
+// 若未配置或暂未生成 turn-state，但账号存在有效路由 Cookie，亦予以安全注入以保证流量锁定在正确片区。
 func applyPinnedCodexTurnState(headers http.Header, account *Account, model string) bool {
 	if headers == nil || account == nil || strings.TrimSpace(model) == "" {
 		return false
@@ -289,13 +288,10 @@ func applyPinnedCodexTurnState(headers http.Header, account *Account, model stri
 	}
 
 	applied := false
-	// 防御性检查：确保 header 值不含非法字符（如换行符），杜绝任何导致上游请求硬失败的自伤风险。
-	// 仅在客户端未自带 turn-state 时注入（第 1 轮冷启动防降智）；多轮对话保留客户端自有 turn-state。
-	if headers.Get(openAICodexTurnStateHeader) == "" {
-		if pinnedState != "" && httpguts.ValidHeaderFieldValue(pinnedState) {
-			headers.Set(openAICodexTurnStateHeader, pinnedState)
-			applied = true
-		}
+	// 防御性检查：确保 header 值不含非法字符（如换行符），杜绝任何导致上游请求硬失败的自伤风险
+	if pinnedState != "" && httpguts.ValidHeaderFieldValue(pinnedState) {
+		headers.Set(openAICodexTurnStateHeader, pinnedState)
+		applied = true
 	}
 
 	// 若存在有效的负载均衡路由凭证（__cflb, __oailb），注入 Cookie 标头（若客户端有旧的路由 cookie，予以更新替换）

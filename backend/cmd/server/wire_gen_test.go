@@ -71,7 +71,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // cnProviderBalanceCheck
 		codexVersionSyncSvc,
 		claudeCodeVersionSyncSvc,
-		nil, // codexAntiDegradation
 		proxyExpirySvc,
 		nil, // proxyTimezoneBackfill
 		subscriptionExpirySvc,
