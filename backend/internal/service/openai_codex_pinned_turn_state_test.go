@@ -154,6 +154,13 @@ func TestAccountGetPinnedCodexTurnState(t *testing.T) {
 		applied2 := applyPinnedCodexTurnState(headers2, acc, "gpt-5.6-terra")
 		require.False(t, applied2)
 		require.Equal(t, "existing-state", headers2.Get(openAICodexTurnStateHeader))
+
+		// Client-supplied turn-state (multi-turn conversation) must not be overwritten
+		headers3 := make(http.Header)
+		headers3.Set(openAICodexTurnStateHeader, "client-multi-turn-state")
+		applied3 := applyPinnedCodexTurnState(headers3, acc, "gpt-6-astra")
+		require.False(t, applied3)
+		require.Equal(t, "client-multi-turn-state", headers3.Get(openAICodexTurnStateHeader))
 	})
 
 	t.Run("cookie injection and merging", func(t *testing.T) {

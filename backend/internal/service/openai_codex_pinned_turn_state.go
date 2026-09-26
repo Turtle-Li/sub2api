@@ -276,9 +276,13 @@ func parseFlexibleTime(v any) *time.Time {
 }
 
 // applyPinnedCodexTurnState 若账号在对应 model 上配置了有效 pinned state，
-// 则将其强制写入请求头 x-codex-turn-state，并在有活 Cookie 时安全注入路由 Cookie。
+// 则在客户端未自带 turn-state 时将其写入请求头 x-codex-turn-state，并在有活 Cookie 时安全注入路由 Cookie。
+// 客户端已自带 turn-state（多轮对话进行中）时保持原样，避免覆盖会话自身状态。
 func applyPinnedCodexTurnState(headers http.Header, account *Account, model string) bool {
 	if headers == nil || account == nil || strings.TrimSpace(model) == "" {
+		return false
+	}
+	if headers.Get(openAICodexTurnStateHeader) != "" {
 		return false
 	}
 	pinnedState, cookie := account.GetPinnedCodexTurnStateAndCookie(model)
