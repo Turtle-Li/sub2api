@@ -135,6 +135,11 @@ func TimezoneDetectedAt(v time.Time) predicate.Proxy {
 	return predicate.Proxy(sql.FieldEQ(FieldTimezoneDetectedAt, v))
 }
 
+// PoolID applies equality check predicate on the "pool_id" field. It's identical to PoolIDEQ.
+func PoolID(v int64) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldPoolID, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Proxy {
 	return predicate.Proxy(sql.FieldEQ(FieldCreatedAt, v))
@@ -1025,6 +1030,36 @@ func TimezoneDetectedAtNotNil() predicate.Proxy {
 	return predicate.Proxy(sql.FieldNotNull(FieldTimezoneDetectedAt))
 }
 
+// PoolIDEQ applies the EQ predicate on the "pool_id" field.
+func PoolIDEQ(v int64) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldPoolID, v))
+}
+
+// PoolIDNEQ applies the NEQ predicate on the "pool_id" field.
+func PoolIDNEQ(v int64) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNEQ(FieldPoolID, v))
+}
+
+// PoolIDIn applies the In predicate on the "pool_id" field.
+func PoolIDIn(vs ...int64) predicate.Proxy {
+	return predicate.Proxy(sql.FieldIn(FieldPoolID, vs...))
+}
+
+// PoolIDNotIn applies the NotIn predicate on the "pool_id" field.
+func PoolIDNotIn(vs ...int64) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotIn(FieldPoolID, vs...))
+}
+
+// PoolIDIsNil applies the IsNil predicate on the "pool_id" field.
+func PoolIDIsNil() predicate.Proxy {
+	return predicate.Proxy(sql.FieldIsNull(FieldPoolID))
+}
+
+// PoolIDNotNil applies the NotNil predicate on the "pool_id" field.
+func PoolIDNotNil() predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotNull(FieldPoolID))
+}
+
 // HasAccounts applies the HasEdge predicate on the "accounts" edge.
 func HasAccounts() predicate.Proxy {
 	return predicate.Proxy(func(s *sql.Selector) {
@@ -1086,6 +1121,29 @@ func HasBackupProxy() predicate.Proxy {
 func HasBackupProxyWith(preds ...predicate.Proxy) predicate.Proxy {
 	return predicate.Proxy(func(s *sql.Selector) {
 		step := newBackupProxyStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasPool applies the HasEdge predicate on the "pool" edge.
+func HasPool() predicate.Proxy {
+	return predicate.Proxy(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, PoolTable, PoolColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasPoolWith applies the HasEdge predicate on the "pool" edge with a given conditions (other predicates).
+func HasPoolWith(preds ...predicate.ProxyPool) predicate.Proxy {
+	return predicate.Proxy(func(s *sql.Selector) {
+		step := newPoolStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

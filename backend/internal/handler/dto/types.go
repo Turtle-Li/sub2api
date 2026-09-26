@@ -449,6 +449,7 @@ type Proxy struct {
 	ExpiresAt          *time.Time `json:"expires_at"`
 	FallbackMode       string     `json:"fallback_mode"`
 	BackupProxyID      *int64     `json:"backup_proxy_id"`
+	PoolID             *int64     `json:"pool_id"`
 	ExpiryWarnDays     int        `json:"expiry_warn_days"`
 	DetectedTimezone   string     `json:"detected_timezone,omitempty"`
 	TimezoneDetectedAt *time.Time `json:"timezone_detected_at,omitempty"`

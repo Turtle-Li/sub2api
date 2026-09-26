@@ -25,6 +25,7 @@ type GrokOAuthHandler struct {
 	quotaService     *service.GrokQuotaService
 	importProber     grokImportProber
 	reconciler       service.GrokOAuthReconciler
+	proxyPoolService *service.ProxyPoolService
 }
 
 func NewGrokOAuthHandler(
@@ -40,6 +41,18 @@ func NewGrokOAuthHandler(
 		importProber:     quotaService,
 		reconciler:       reconciler,
 	}
+}
+
+func NewGrokOAuthHandlerWithProxyPool(
+	grokOAuthService *service.GrokOAuthService,
+	adminService service.AdminService,
+	quotaService *service.GrokQuotaService,
+	reconciler service.GrokOAuthReconciler,
+	proxyPoolService *service.ProxyPoolService,
+) *GrokOAuthHandler {
+	h := NewGrokOAuthHandler(grokOAuthService, adminService, quotaService, reconciler)
+	h.proxyPoolService = proxyPoolService
+	return h
 }
 
 type GrokGenerateAuthURLRequest struct {
@@ -332,6 +345,7 @@ type GrokSSOToOAuthRequest struct {
 	ExpiresAt          *int64         `json:"expires_at"`
 	AutoPauseOnExpired *bool          `json:"auto_pause_on_expired"`
 	PoolID             *int64         `json:"pool_id"`
+	ProxyPoolID        *int64         `json:"proxy_pool_id"`
 }
 
 type GrokSSOToOAuthItemResult struct {
@@ -422,14 +436,42 @@ func (h *GrokOAuthHandler) safeCreateAccountFromSSOToken(ctx context.Context, re
 }
 
 func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req GrokSSOToOAuthRequest, token string, index, total int) grokSSOImportWorkerResult {
-	tokenInfo, err := h.grokOAuthService.ConvertFromSSO(ctx, token, req.ProxyID)
+	if req.ProxyID != nil && req.ProxyPoolID != nil {
+		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: "proxy_id and proxy_pool_id are mutually exclusive"}}
+	}
+	proxyID := req.ProxyID
+	var proxySnapshot *service.Proxy
+	var err error
+	if req.ProxyPoolID != nil {
+		if h.proxyPoolService == nil {
+			return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: "proxy pool service is unavailable"}}
+		}
+		proxySnapshot, err = h.proxyPoolService.PickActiveProxy(ctx, *req.ProxyPoolID)
+		if err != nil {
+			return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: grokSSOImportErrorMessage(err)}}
+		}
+		proxyID = &proxySnapshot.ID
+	}
+	var tokenInfo *service.GrokTokenInfo
+	if proxySnapshot != nil {
+		tokenInfo, err = h.grokOAuthService.ConvertFromSSOWithProxy(ctx, token, proxySnapshot)
+	} else {
+		tokenInfo, err = h.grokOAuthService.ConvertFromSSO(ctx, token, proxyID)
+	}
 	if err != nil {
 		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: grokSSOImportErrorMessage(err)}}
+	}
+	if req.ProxyPoolID != nil && !strings.EqualFold(strings.TrimSpace(tokenInfo.SubscriptionTier), "free") {
+		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Email: tokenInfo.Email, Error: service.ErrProxyPoolFreeOnly.Error()}}
 	}
 
 	credentials := grokSSOImportCredentials(h.grokOAuthService.BuildAccountCredentials(tokenInfo), req.Credentials)
 	name := grokSSOImportAccountName(req.Name, tokenInfo, index, total)
 	expiresAt, autoPauseOnExpired := grokSSOImportExpiry(req.ExpiresAt, req.AutoPauseOnExpired, tokenInfo)
+	priority := req.Priority
+	if priority <= 0 {
+		priority = 5
+	}
 	account, err := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
 		Name:               name,
 		Notes:              req.Notes,
@@ -437,10 +479,12 @@ func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req Gr
 		Type:               service.AccountTypeOAuth,
 		Credentials:        credentials,
 		Extra:              cloneGrokSSOMap(req.Extra),
-		ProxyID:            req.ProxyID,
+		ProxyID:            proxyID,
+		ProxyPoolID:        req.ProxyPoolID,
+		ProxyPoolSnapshot:  proxySnapshot,
 		Concurrency:        req.Concurrency,
 		LoadFactor:         req.LoadFactor,
-		Priority:           req.Priority,
+		Priority:           priority,
 		RateMultiplier:     req.RateMultiplier,
 		GroupIDs:           append([]int64(nil), req.GroupIDs...),
 		ExpiresAt:          expiresAt,

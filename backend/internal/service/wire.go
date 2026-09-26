@@ -993,6 +993,7 @@ var ProviderSet = wire.NewSet(
 	NewTotpService,
 	NewErrorPassthroughService,
 	NewAccountPoolService,
+	NewProxyPoolService,
 	NewTLSFingerprintProfileService,
 	ProvidePluginManager,
 	NewDigestSessionStore,

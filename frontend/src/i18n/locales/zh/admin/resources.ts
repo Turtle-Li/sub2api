@@ -75,6 +75,7 @@ export default {
       dataExportFailed: '数据导出失败',
       columns: {
         name: '名称',
+        pool: '代理池',
         protocol: '协议',
         address: '地址',
         auth: '认证',
@@ -99,6 +100,23 @@ export default {
         passwordPlaceholder: '请输入密码',
         priorityLabel: '优先级',
         statusLabel: '状态'
+      },
+      pools: {
+        label: '代理池',
+        name: '代理池名称',
+        none: '不使用代理池',
+        hint: '可选：将代理分组，用于导入账号时自动分配。',
+        createInline: '新建代理池…',
+        createAndSelect: '创建并选择',
+        saveFailed: '保存代理池失败',
+        batchAction: '分配代理池',
+        batchTitle: '批量分配代理池',
+        batchDescription: '将选中的 {count} 个代理移入同一个代理池；选择“不使用代理池”可从当前代理池移出。',
+        batchHint: '修改代理池归属不会改变已经固定绑定这些代理的账号。',
+        batchApply: '应用分配',
+        batchAssigned: '已将 {count} 个代理分配到代理池',
+        batchRemoved: '已将 {count} 个代理移出代理池',
+        batchFailed: '更新代理池归属失败'
       },
       filters: {
         protocol: '协议',

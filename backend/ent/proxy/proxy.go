@@ -47,12 +47,16 @@ const (
 	FieldDetectedTimezone = "detected_timezone"
 	// FieldTimezoneDetectedAt holds the string denoting the timezone_detected_at field in the database.
 	FieldTimezoneDetectedAt = "timezone_detected_at"
+	// FieldPoolID holds the string denoting the pool_id field in the database.
+	FieldPoolID = "pool_id"
 	// EdgeAccounts holds the string denoting the accounts edge name in mutations.
 	EdgeAccounts = "accounts"
 	// EdgePrimaryProxies holds the string denoting the primary_proxies edge name in mutations.
 	EdgePrimaryProxies = "primary_proxies"
 	// EdgeBackupProxy holds the string denoting the backup_proxy edge name in mutations.
 	EdgeBackupProxy = "backup_proxy"
+	// EdgePool holds the string denoting the pool edge name in mutations.
+	EdgePool = "pool"
 	// Table holds the table name of the proxy in the database.
 	Table = "proxies"
 	// AccountsTable is the table that holds the accounts relation/edge.
@@ -70,6 +74,13 @@ const (
 	BackupProxyTable = "proxies"
 	// BackupProxyColumn is the table column denoting the backup_proxy relation/edge.
 	BackupProxyColumn = "backup_proxy_id"
+	// PoolTable is the table that holds the pool relation/edge.
+	PoolTable = "proxies"
+	// PoolInverseTable is the table name for the ProxyPool entity.
+	// It exists in this package in order to avoid circular dependency with the "proxypool" package.
+	PoolInverseTable = "proxy_pools"
+	// PoolColumn is the table column denoting the pool relation/edge.
+	PoolColumn = "pool_id"
 )
 
 // Columns holds all SQL columns for proxy fields.
@@ -91,6 +102,7 @@ var Columns = []string{
 	FieldExpiryWarnDays,
 	FieldDetectedTimezone,
 	FieldTimezoneDetectedAt,
+	FieldPoolID,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -229,6 +241,11 @@ func ByTimezoneDetectedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTimezoneDetectedAt, opts...).ToFunc()
 }
 
+// ByPoolID orders the results by the pool_id field.
+func ByPoolID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPoolID, opts...).ToFunc()
+}
+
 // ByAccountsCount orders the results by accounts count.
 func ByAccountsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -263,6 +280,13 @@ func ByBackupProxyField(field string, opts ...sql.OrderTermOption) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newBackupProxyStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByPoolField orders the results by pool field.
+func ByPoolField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newPoolStep(), sql.OrderByField(field, opts...))
+	}
+}
 func newAccountsStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -282,5 +306,12 @@ func newBackupProxyStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(Table, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, false, BackupProxyTable, BackupProxyColumn),
+	)
+}
+func newPoolStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(PoolInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2O, false, PoolTable, PoolColumn),
 	)
 }

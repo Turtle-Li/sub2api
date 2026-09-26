@@ -3573,6 +3573,12 @@
         @authorize-password="handleGrokAuthorizePassword"
       />
 
+      <ProxyPoolSelect
+        v-if="isGrokSSOInputMethod"
+        v-model="proxyPoolId"
+        :hint="t('admin.accounts.proxyPool.ssoHint')"
+      />
+
     </div>
 
     <template #footer>
@@ -3935,6 +3941,7 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import AccountPoolSelect from '@/components/admin/account/AccountPoolSelect.vue'
+import ProxyPoolSelect from '@/components/admin/proxy/ProxyPoolSelect.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -4479,6 +4486,7 @@ loadQuotaNotifyGlobal()
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 // Optional account pool that newly created/imported accounts are placed into.
 const targetPoolId = ref<number | null>(null)
+const proxyPoolId = ref<number | null>(null)
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
 const antigravityProjectId = ref('')
@@ -4740,6 +4748,16 @@ const form = reactive({
   expires_at: null as number | null
 })
 
+watch(
+  () => form.proxy_id,
+  (proxyId) => {
+    if (proxyId != null && proxyPoolId.value != null) proxyPoolId.value = null
+  }
+)
+watch(proxyPoolId, (poolId) => {
+  if (poolId != null && form.proxy_id != null) form.proxy_id = null
+})
+
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
   // Antigravity upstream 类型不需要 OAuth 流程
@@ -4880,7 +4898,11 @@ watch(
       addMethod.value = 'oauth'
       modelRestrictionMode.value = 'mapping'
       form.concurrency = 1
+      form.priority = 5
       form.load_factor = null
+    }
+    if (newPlatform !== 'grok') {
+      proxyPoolId.value = null
     }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
@@ -5315,6 +5337,7 @@ const resetForm = () => {
   form.type = 'oauth'
   form.credentials = {}
   form.proxy_id = null
+  proxyPoolId.value = null
   form.concurrency = 10
   form.load_factor = null
   form.priority = 1
@@ -6143,7 +6166,8 @@ const handleGrokImportSSO = async (ssoInput: string) => {
       sso_tokens: ssoTokens,
       name: form.name || undefined,
       notes: form.notes || undefined,
-      proxy_id: form.proxy_id,
+      proxy_id: proxyPoolId.value == null ? form.proxy_id : null,
+      proxy_pool_id: proxyPoolId.value,
       group_ids: form.group_ids,
       credentials,
       concurrency: form.concurrency,

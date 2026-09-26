@@ -408,6 +408,8 @@ type CreateAccountInput struct {
 	Credentials        map[string]any
 	Extra              map[string]any
 	ProxyID            *int64
+	ProxyPoolID        *int64
+	ProxyPoolSnapshot  *Proxy
 	Concurrency        int
 	Priority           int
 	RateMultiplier     *float64 // 账号计费倍率（>=0，允许 0）
@@ -545,6 +547,7 @@ type CreateProxyInput struct {
 	ExpiresAt      *time.Time
 	FallbackMode   string
 	BackupProxyID  *int64
+	PoolID         *int64
 	ExpiryWarnDays int
 }
 
@@ -563,6 +566,8 @@ type UpdateProxyInput struct {
 	FallbackMode   string
 	BackupProxyID  *int64
 	ClearBackupID  bool
+	PoolID         *int64
+	ClearPoolID    bool
 	ExpiryWarnDays *int
 }
 

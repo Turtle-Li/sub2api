@@ -393,34 +393,7 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	if err := enforceOpenAIOAuthShadowProxyRelation(ctx, txClient, account); err != nil {
 		return err
 	}
-	groupIDs := make([]int64, 0, len(groups))
-	for i := range groups {
-		groupIDs = append(groupIDs, groups[i].GroupID)
-	}
-	if err := lockLiveGroups(ctx, txClient, groupIDs); err != nil {
-		return err
-	}
-
-	if err := createAccountRecord(ctx, txClient, account); err != nil {
-		return err
-	}
-	if len(groups) > 0 {
-		builders := make([]*dbent.AccountGroupCreate, 0, len(groups))
-		for i := range groups {
-			groups[i].AccountID = account.ID
-			builders = append(builders, txClient.AccountGroup.Create().
-				SetAccountID(account.ID).
-				SetGroupID(groups[i].GroupID).
-				SetPriority(groups[i].Priority),
-			)
-		}
-		if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
-			return err
-		}
-	}
-	account.GroupIDs = groupIDs
-	account.AccountGroups = append([]service.AccountGroup(nil), groups...)
-	if err := enqueueSchedulerOutbox(ctx, txClient, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
+	if err := createAccountWithGroups(ctx, txClient, account, groups); err != nil {
 		return err
 	}
 
@@ -428,6 +401,141 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// CreateWithAccountGroupsAndProxyPool keeps the selected proxy stable between
+// upstream SSO conversion and account persistence. It locks only for the final
+// database mutation, then rejects edits, expiry, deactivation, or pool moves.
+func (r *accountRepository) CreateWithAccountGroupsAndProxyPool(
+	ctx context.Context,
+	account *service.Account,
+	groups []service.AccountGroup,
+	proxyPoolID int64,
+	expectedProxy *service.Proxy,
+) error {
+	if account == nil {
+		return service.ErrAccountNilInput
+	}
+	if expectedProxy == nil || account.ProxyID == nil || expectedProxy.ID <= 0 ||
+		*account.ProxyID != expectedProxy.ID || proxyPoolID <= 0 {
+		return service.ErrProxyPoolBindingChanged
+	}
+
+	ctx, txClient, tx, err := r.accountMutationClient(ctx)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
+	}
+
+	currentProxy, err := lockProxyPoolAssignment(ctx, txClient, expectedProxy.ID)
+	if err != nil {
+		return err
+	}
+	if err := validateProxyPoolAssignment(currentProxy, expectedProxy, proxyPoolID, time.Now()); err != nil {
+		return service.ErrProxyPoolBindingChanged
+	}
+	if err := createAccountWithGroups(ctx, txClient, account, groups); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateProxyPoolAssignment(currentProxy, expectedProxy *service.Proxy, proxyPoolID int64, now time.Time) error {
+	if currentProxy == nil || expectedProxy == nil || proxyPoolID <= 0 ||
+		currentProxy.ID != expectedProxy.ID || currentProxy.PoolID == nil || *currentProxy.PoolID != proxyPoolID ||
+		currentProxy.Status != service.StatusActive || currentProxy.IsExpired(now) ||
+		!sameProxyProbeTransportIdentity(currentProxy, expectedProxy) {
+		return service.ErrProxyPoolBindingChanged
+	}
+	return nil
+}
+
+func lockProxyPoolAssignment(ctx context.Context, client *dbent.Client, proxyID int64) (*service.Proxy, error) {
+	rows, err := client.QueryContext(ctx, `
+		SELECT id, protocol, host, port, COALESCE(username, ''), COALESCE(password, ''), status,
+			expires_at, pool_id
+		FROM proxies
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR NO KEY UPDATE
+	`, proxyID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, service.ErrProxyPoolBindingChanged
+	}
+	var (
+		proxy   service.Proxy
+		expires sql.NullTime
+		poolID  sql.NullInt64
+	)
+	if err := rows.Scan(
+		&proxy.ID,
+		&proxy.Protocol,
+		&proxy.Host,
+		&proxy.Port,
+		&proxy.Username,
+		&proxy.Password,
+		&proxy.Status,
+		&expires,
+		&poolID,
+	); err != nil {
+		return nil, err
+	}
+	if expires.Valid {
+		value := expires.Time
+		proxy.ExpiresAt = &value
+	}
+	if poolID.Valid {
+		value := poolID.Int64
+		proxy.PoolID = &value
+	}
+	return &proxy, rows.Err()
+}
+
+func createAccountWithGroups(ctx context.Context, client *dbent.Client, account *service.Account, groups []service.AccountGroup) error {
+	groupIDs := make([]int64, 0, len(groups))
+	for i := range groups {
+		groupIDs = append(groupIDs, groups[i].GroupID)
+	}
+	if err := lockLiveGroups(ctx, client, groupIDs); err != nil {
+		return err
+	}
+
+	if err := createAccountRecord(ctx, client, account); err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		builders := make([]*dbent.AccountGroupCreate, 0, len(groups))
+		for i := range groups {
+			groups[i].AccountID = account.ID
+			builders = append(builders, client.AccountGroup.Create().
+				SetAccountID(account.ID).
+				SetGroupID(groups[i].GroupID).
+				SetPriority(groups[i].Priority),
+			)
+		}
+		if _, err := client.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
+			return err
+		}
+	}
+	account.GroupIDs = groupIDs
+	account.AccountGroups = append([]service.AccountGroup(nil), groups...)
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
+		return err
 	}
 	return nil
 }

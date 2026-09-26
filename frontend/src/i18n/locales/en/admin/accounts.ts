@@ -496,6 +496,13 @@ export default {
       bulkSchedulableDisabled: 'Successfully disabled scheduling for {count} account(s)',
       bulkSchedulablePartial: 'Scheduling updated partially: {success} succeeded, {failed} failed',
       bulkSchedulableResultUnknown: 'Bulk scheduling result incomplete. Please retry or refresh.',
+      proxyPool: {
+        label: 'Proxy Pool',
+        select: 'Select a proxy pool',
+        none: 'No proxy pool',
+        hint: 'Use an available proxy from the selected pool for each imported account.',
+        ssoHint: 'Only Grok SSO imports use this pool; each successful Free account keeps its selected proxy.'
+      },
       pools: {
         title: 'Account Pools',
         create: 'New pool',

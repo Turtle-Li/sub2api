@@ -972,7 +972,24 @@ export interface Proxy {
   expires_at: string | null
   fallback_mode: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
+  pool_id?: number | null
   expiry_warn_days: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ProxyPoolStats {
+  total: number
+  available: number
+  unavailable: number
+  bound_accounts: number
+}
+
+export interface ProxyPool {
+  id: number
+  name: string
+  notes?: string | null
+  stats: ProxyPoolStats
   created_at: string
   updated_at: string
 }
@@ -1614,6 +1631,7 @@ export interface CreateProxyRequest {
   expires_at?: number | null   // unix 秒；null/0 = 永不过期
   fallback_mode?: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
+  pool_id?: number | null
   expiry_warn_days?: number
 }
 
@@ -1628,6 +1646,7 @@ export interface UpdateProxyRequest {
   expires_at?: number | null   // unix 秒；null/0 = 永不过期
   fallback_mode?: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
+  pool_id?: number | null
   expiry_warn_days?: number
 }
 

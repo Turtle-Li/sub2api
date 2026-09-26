@@ -42,6 +42,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/promocode"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/proxypool"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
@@ -96,6 +97,7 @@ const (
 	TypePromoCode                     = "PromoCode"
 	TypePromoCodeUsage                = "PromoCodeUsage"
 	TypeProxy                         = "Proxy"
+	TypeProxyPool                     = "ProxyPool"
 	TypeRedeemCode                    = "RedeemCode"
 	TypeSecuritySecret                = "SecuritySecret"
 	TypeSetting                       = "Setting"
@@ -42685,6 +42687,8 @@ type ProxyMutation struct {
 	clearedprimary_proxies bool
 	backup_proxy           *int64
 	clearedbackup_proxy    bool
+	pool                   *int64
+	clearedpool            bool
 	done                   bool
 	oldValue               func(context.Context) (*Proxy, error)
 	predicates             []predicate.Proxy
@@ -43495,6 +43499,55 @@ func (m *ProxyMutation) ResetTimezoneDetectedAt() {
 	delete(m.clearedFields, proxy.FieldTimezoneDetectedAt)
 }
 
+// SetPoolID sets the "pool_id" field.
+func (m *ProxyMutation) SetPoolID(i int64) {
+	m.pool = &i
+}
+
+// PoolID returns the value of the "pool_id" field in the mutation.
+func (m *ProxyMutation) PoolID() (r int64, exists bool) {
+	v := m.pool
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPoolID returns the old "pool_id" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldPoolID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPoolID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPoolID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPoolID: %w", err)
+	}
+	return oldValue.PoolID, nil
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (m *ProxyMutation) ClearPoolID() {
+	m.pool = nil
+	m.clearedFields[proxy.FieldPoolID] = struct{}{}
+}
+
+// PoolIDCleared returns if the "pool_id" field was cleared in this mutation.
+func (m *ProxyMutation) PoolIDCleared() bool {
+	_, ok := m.clearedFields[proxy.FieldPoolID]
+	return ok
+}
+
+// ResetPoolID resets all changes to the "pool_id" field.
+func (m *ProxyMutation) ResetPoolID() {
+	m.pool = nil
+	delete(m.clearedFields, proxy.FieldPoolID)
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by ids.
 func (m *ProxyMutation) AddAccountIDs(ids ...int64) {
 	if m.accounts == nil {
@@ -43630,6 +43683,33 @@ func (m *ProxyMutation) ResetBackupProxy() {
 	m.clearedbackup_proxy = false
 }
 
+// ClearPool clears the "pool" edge to the ProxyPool entity.
+func (m *ProxyMutation) ClearPool() {
+	m.clearedpool = true
+	m.clearedFields[proxy.FieldPoolID] = struct{}{}
+}
+
+// PoolCleared reports if the "pool" edge to the ProxyPool entity was cleared.
+func (m *ProxyMutation) PoolCleared() bool {
+	return m.PoolIDCleared() || m.clearedpool
+}
+
+// PoolIDs returns the "pool" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// PoolID instead. It exists only for internal usage by the builders.
+func (m *ProxyMutation) PoolIDs() (ids []int64) {
+	if id := m.pool; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetPool resets all changes to the "pool" edge.
+func (m *ProxyMutation) ResetPool() {
+	m.pool = nil
+	m.clearedpool = false
+}
+
 // Where appends a list predicates to the ProxyMutation builder.
 func (m *ProxyMutation) Where(ps ...predicate.Proxy) {
 	m.predicates = append(m.predicates, ps...)
@@ -43664,7 +43744,7 @@ func (m *ProxyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxyMutation) Fields() []string {
-	fields := make([]string, 0, 16)
+	fields := make([]string, 0, 17)
 	if m.created_at != nil {
 		fields = append(fields, proxy.FieldCreatedAt)
 	}
@@ -43713,6 +43793,9 @@ func (m *ProxyMutation) Fields() []string {
 	if m.timezone_detected_at != nil {
 		fields = append(fields, proxy.FieldTimezoneDetectedAt)
 	}
+	if m.pool != nil {
+		fields = append(fields, proxy.FieldPoolID)
+	}
 	return fields
 }
 
@@ -43753,6 +43836,8 @@ func (m *ProxyMutation) Field(name string) (ent.Value, bool) {
 		return m.DetectedTimezone()
 	case proxy.FieldTimezoneDetectedAt:
 		return m.TimezoneDetectedAt()
+	case proxy.FieldPoolID:
+		return m.PoolID()
 	}
 	return nil, false
 }
@@ -43794,6 +43879,8 @@ func (m *ProxyMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldDetectedTimezone(ctx)
 	case proxy.FieldTimezoneDetectedAt:
 		return m.OldTimezoneDetectedAt(ctx)
+	case proxy.FieldPoolID:
+		return m.OldPoolID(ctx)
 	}
 	return nil, fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -43915,6 +44002,13 @@ func (m *ProxyMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetTimezoneDetectedAt(v)
 		return nil
+	case proxy.FieldPoolID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPoolID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -43993,6 +44087,9 @@ func (m *ProxyMutation) ClearedFields() []string {
 	if m.FieldCleared(proxy.FieldTimezoneDetectedAt) {
 		fields = append(fields, proxy.FieldTimezoneDetectedAt)
 	}
+	if m.FieldCleared(proxy.FieldPoolID) {
+		fields = append(fields, proxy.FieldPoolID)
+	}
 	return fields
 }
 
@@ -44027,6 +44124,9 @@ func (m *ProxyMutation) ClearField(name string) error {
 		return nil
 	case proxy.FieldTimezoneDetectedAt:
 		m.ClearTimezoneDetectedAt()
+		return nil
+	case proxy.FieldPoolID:
+		m.ClearPoolID()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy nullable field %s", name)
@@ -44084,13 +44184,16 @@ func (m *ProxyMutation) ResetField(name string) error {
 	case proxy.FieldTimezoneDetectedAt:
 		m.ResetTimezoneDetectedAt()
 		return nil
+	case proxy.FieldPoolID:
+		m.ResetPoolID()
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
 }
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ProxyMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.accounts != nil {
 		edges = append(edges, proxy.EdgeAccounts)
 	}
@@ -44099,6 +44202,9 @@ func (m *ProxyMutation) AddedEdges() []string {
 	}
 	if m.backup_proxy != nil {
 		edges = append(edges, proxy.EdgeBackupProxy)
+	}
+	if m.pool != nil {
+		edges = append(edges, proxy.EdgePool)
 	}
 	return edges
 }
@@ -44123,13 +44229,17 @@ func (m *ProxyMutation) AddedIDs(name string) []ent.Value {
 		if id := m.backup_proxy; id != nil {
 			return []ent.Value{*id}
 		}
+	case proxy.EdgePool:
+		if id := m.pool; id != nil {
+			return []ent.Value{*id}
+		}
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ProxyMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.removedaccounts != nil {
 		edges = append(edges, proxy.EdgeAccounts)
 	}
@@ -44161,7 +44271,7 @@ func (m *ProxyMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ProxyMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.clearedaccounts {
 		edges = append(edges, proxy.EdgeAccounts)
 	}
@@ -44170,6 +44280,9 @@ func (m *ProxyMutation) ClearedEdges() []string {
 	}
 	if m.clearedbackup_proxy {
 		edges = append(edges, proxy.EdgeBackupProxy)
+	}
+	if m.clearedpool {
+		edges = append(edges, proxy.EdgePool)
 	}
 	return edges
 }
@@ -44184,6 +44297,8 @@ func (m *ProxyMutation) EdgeCleared(name string) bool {
 		return m.clearedprimary_proxies
 	case proxy.EdgeBackupProxy:
 		return m.clearedbackup_proxy
+	case proxy.EdgePool:
+		return m.clearedpool
 	}
 	return false
 }
@@ -44194,6 +44309,9 @@ func (m *ProxyMutation) ClearEdge(name string) error {
 	switch name {
 	case proxy.EdgeBackupProxy:
 		m.ClearBackupProxy()
+		return nil
+	case proxy.EdgePool:
+		m.ClearPool()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy unique edge %s", name)
@@ -44212,8 +44330,614 @@ func (m *ProxyMutation) ResetEdge(name string) error {
 	case proxy.EdgeBackupProxy:
 		m.ResetBackupProxy()
 		return nil
+	case proxy.EdgePool:
+		m.ResetPool()
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy edge %s", name)
+}
+
+// ProxyPoolMutation represents an operation that mutates the ProxyPool nodes in the graph.
+type ProxyPoolMutation struct {
+	config
+	op             Op
+	typ            string
+	id             *int64
+	created_at     *time.Time
+	updated_at     *time.Time
+	name           *string
+	notes          *string
+	clearedFields  map[string]struct{}
+	proxies        map[int64]struct{}
+	removedproxies map[int64]struct{}
+	clearedproxies bool
+	done           bool
+	oldValue       func(context.Context) (*ProxyPool, error)
+	predicates     []predicate.ProxyPool
+}
+
+var _ ent.Mutation = (*ProxyPoolMutation)(nil)
+
+// proxypoolOption allows management of the mutation configuration using functional options.
+type proxypoolOption func(*ProxyPoolMutation)
+
+// newProxyPoolMutation creates new mutation for the ProxyPool entity.
+func newProxyPoolMutation(c config, op Op, opts ...proxypoolOption) *ProxyPoolMutation {
+	m := &ProxyPoolMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeProxyPool,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withProxyPoolID sets the ID field of the mutation.
+func withProxyPoolID(id int64) proxypoolOption {
+	return func(m *ProxyPoolMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ProxyPool
+		)
+		m.oldValue = func(ctx context.Context) (*ProxyPool, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ProxyPool.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withProxyPool sets the old ProxyPool of the mutation.
+func withProxyPool(node *ProxyPool) proxypoolOption {
+	return func(m *ProxyPoolMutation) {
+		m.oldValue = func(context.Context) (*ProxyPool, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ProxyPoolMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ProxyPoolMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ProxyPoolMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ProxyPoolMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ProxyPool.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *ProxyPoolMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *ProxyPoolMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the ProxyPool entity.
+// If the ProxyPool object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyPoolMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *ProxyPoolMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *ProxyPoolMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *ProxyPoolMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the ProxyPool entity.
+// If the ProxyPool object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyPoolMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *ProxyPoolMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetName sets the "name" field.
+func (m *ProxyPoolMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *ProxyPoolMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the ProxyPool entity.
+// If the ProxyPool object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyPoolMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *ProxyPoolMutation) ResetName() {
+	m.name = nil
+}
+
+// SetNotes sets the "notes" field.
+func (m *ProxyPoolMutation) SetNotes(s string) {
+	m.notes = &s
+}
+
+// Notes returns the value of the "notes" field in the mutation.
+func (m *ProxyPoolMutation) Notes() (r string, exists bool) {
+	v := m.notes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNotes returns the old "notes" field's value of the ProxyPool entity.
+// If the ProxyPool object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyPoolMutation) OldNotes(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNotes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNotes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNotes: %w", err)
+	}
+	return oldValue.Notes, nil
+}
+
+// ClearNotes clears the value of the "notes" field.
+func (m *ProxyPoolMutation) ClearNotes() {
+	m.notes = nil
+	m.clearedFields[proxypool.FieldNotes] = struct{}{}
+}
+
+// NotesCleared returns if the "notes" field was cleared in this mutation.
+func (m *ProxyPoolMutation) NotesCleared() bool {
+	_, ok := m.clearedFields[proxypool.FieldNotes]
+	return ok
+}
+
+// ResetNotes resets all changes to the "notes" field.
+func (m *ProxyPoolMutation) ResetNotes() {
+	m.notes = nil
+	delete(m.clearedFields, proxypool.FieldNotes)
+}
+
+// AddProxyIDs adds the "proxies" edge to the Proxy entity by ids.
+func (m *ProxyPoolMutation) AddProxyIDs(ids ...int64) {
+	if m.proxies == nil {
+		m.proxies = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.proxies[ids[i]] = struct{}{}
+	}
+}
+
+// ClearProxies clears the "proxies" edge to the Proxy entity.
+func (m *ProxyPoolMutation) ClearProxies() {
+	m.clearedproxies = true
+}
+
+// ProxiesCleared reports if the "proxies" edge to the Proxy entity was cleared.
+func (m *ProxyPoolMutation) ProxiesCleared() bool {
+	return m.clearedproxies
+}
+
+// RemoveProxyIDs removes the "proxies" edge to the Proxy entity by IDs.
+func (m *ProxyPoolMutation) RemoveProxyIDs(ids ...int64) {
+	if m.removedproxies == nil {
+		m.removedproxies = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.proxies, ids[i])
+		m.removedproxies[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedProxies returns the removed IDs of the "proxies" edge to the Proxy entity.
+func (m *ProxyPoolMutation) RemovedProxiesIDs() (ids []int64) {
+	for id := range m.removedproxies {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ProxiesIDs returns the "proxies" edge IDs in the mutation.
+func (m *ProxyPoolMutation) ProxiesIDs() (ids []int64) {
+	for id := range m.proxies {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetProxies resets all changes to the "proxies" edge.
+func (m *ProxyPoolMutation) ResetProxies() {
+	m.proxies = nil
+	m.clearedproxies = false
+	m.removedproxies = nil
+}
+
+// Where appends a list predicates to the ProxyPoolMutation builder.
+func (m *ProxyPoolMutation) Where(ps ...predicate.ProxyPool) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ProxyPoolMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ProxyPoolMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ProxyPool, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ProxyPoolMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ProxyPoolMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ProxyPool).
+func (m *ProxyPoolMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ProxyPoolMutation) Fields() []string {
+	fields := make([]string, 0, 4)
+	if m.created_at != nil {
+		fields = append(fields, proxypool.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, proxypool.FieldUpdatedAt)
+	}
+	if m.name != nil {
+		fields = append(fields, proxypool.FieldName)
+	}
+	if m.notes != nil {
+		fields = append(fields, proxypool.FieldNotes)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ProxyPoolMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case proxypool.FieldCreatedAt:
+		return m.CreatedAt()
+	case proxypool.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case proxypool.FieldName:
+		return m.Name()
+	case proxypool.FieldNotes:
+		return m.Notes()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ProxyPoolMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case proxypool.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case proxypool.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case proxypool.FieldName:
+		return m.OldName(ctx)
+	case proxypool.FieldNotes:
+		return m.OldNotes(ctx)
+	}
+	return nil, fmt.Errorf("unknown ProxyPool field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ProxyPoolMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case proxypool.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case proxypool.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case proxypool.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case proxypool.FieldNotes:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNotes(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ProxyPool field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ProxyPoolMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ProxyPoolMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ProxyPoolMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown ProxyPool numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ProxyPoolMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(proxypool.FieldNotes) {
+		fields = append(fields, proxypool.FieldNotes)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ProxyPoolMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ProxyPoolMutation) ClearField(name string) error {
+	switch name {
+	case proxypool.FieldNotes:
+		m.ClearNotes()
+		return nil
+	}
+	return fmt.Errorf("unknown ProxyPool nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ProxyPoolMutation) ResetField(name string) error {
+	switch name {
+	case proxypool.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case proxypool.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case proxypool.FieldName:
+		m.ResetName()
+		return nil
+	case proxypool.FieldNotes:
+		m.ResetNotes()
+		return nil
+	}
+	return fmt.Errorf("unknown ProxyPool field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ProxyPoolMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.proxies != nil {
+		edges = append(edges, proxypool.EdgeProxies)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ProxyPoolMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case proxypool.EdgeProxies:
+		ids := make([]ent.Value, 0, len(m.proxies))
+		for id := range m.proxies {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ProxyPoolMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.removedproxies != nil {
+		edges = append(edges, proxypool.EdgeProxies)
+	}
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ProxyPoolMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case proxypool.EdgeProxies:
+		ids := make([]ent.Value, 0, len(m.removedproxies))
+		for id := range m.removedproxies {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ProxyPoolMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedproxies {
+		edges = append(edges, proxypool.EdgeProxies)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ProxyPoolMutation) EdgeCleared(name string) bool {
+	switch name {
+	case proxypool.EdgeProxies:
+		return m.clearedproxies
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ProxyPoolMutation) ClearEdge(name string) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown ProxyPool unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ProxyPoolMutation) ResetEdge(name string) error {
+	switch name {
+	case proxypool.EdgeProxies:
+		m.ResetProxies()
+		return nil
+	}
+	return fmt.Errorf("unknown ProxyPool edge %s", name)
 }
 
 // RedeemCodeMutation represents an operation that mutates the RedeemCode nodes in the graph.

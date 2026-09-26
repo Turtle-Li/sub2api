@@ -9,6 +9,7 @@ import groupsAPI from './groups'
 import accountsAPI from './accounts'
 import accountPoolsAPI from './accountPools'
 import proxiesAPI from './proxies'
+import proxyPoolsAPI from './proxyPools'
 import redeemAPI from './redeem'
 import promoAPI from './promo'
 import announcementsAPI from './announcements'
@@ -49,6 +50,7 @@ export const adminAPI = {
   accounts: accountsAPI,
   accountPools: accountPoolsAPI,
   proxies: proxiesAPI,
+  proxyPools: proxyPoolsAPI,
   redeem: redeemAPI,
   promo: promoAPI,
   announcements: announcementsAPI,
@@ -87,6 +89,7 @@ export {
   accountsAPI,
   accountPoolsAPI,
   proxiesAPI,
+  proxyPoolsAPI,
   redeemAPI,
   promoAPI,
   announcementsAPI,
@@ -128,6 +131,12 @@ export type {
   AccountPoolCodexQuota,
   AccountPoolGrokFreeQuota
 } from './accountPools'
+export type {
+  ProxyPool,
+  ProxyPoolStats,
+  CreateProxyPoolRequest,
+  UpdateProxyPoolRequest
+} from './proxyPools'
 export type { AuditLog, AuditLogQuery, AuditLogListResponse } from './audit'
 export type { BalanceHistoryItem } from './users'
 export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from './errorPassthrough'

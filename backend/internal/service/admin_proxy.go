@@ -83,6 +83,7 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 		ExpiresAt:      input.ExpiresAt,
 		FallbackMode:   mode,
 		BackupProxyID:  input.BackupProxyID,
+		PoolID:         input.PoolID,
 		ExpiryWarnDays: input.ExpiryWarnDays,
 	}
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
@@ -148,6 +149,9 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	}
 	updated.FallbackMode = mode
 	updated.BackupProxyID = backupID
+	if input.PoolID != nil || input.ClearPoolID {
+		updated.PoolID = input.PoolID
+	}
 	if input.ExpiryWarnDays != nil {
 		updated.ExpiryWarnDays = *input.ExpiryWarnDays
 	}

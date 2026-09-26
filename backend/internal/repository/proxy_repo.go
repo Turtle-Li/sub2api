@@ -62,6 +62,9 @@ func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) er
 	if proxyIn.BackupProxyID != nil {
 		builder.SetBackupProxyID(*proxyIn.BackupProxyID)
 	}
+	if proxyIn.PoolID != nil {
+		builder.SetPoolID(*proxyIn.PoolID)
+	}
 
 	created, err := builder.Save(ctx)
 	if err == nil {
@@ -309,6 +312,11 @@ func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.C
 		builder.SetBackupProxyID(*proxyIn.BackupProxyID)
 	} else {
 		builder.ClearBackupProxyID()
+	}
+	if proxyIn.PoolID != nil {
+		builder.SetPoolID(*proxyIn.PoolID)
+	} else {
+		builder.ClearPoolID()
 	}
 	if transportIdentityChanged {
 		builder.ClearDetectedTimezone().ClearTimezoneDetectedAt()
@@ -983,6 +991,7 @@ func proxyEntityToService(m *dbent.Proxy) *service.Proxy {
 		ExpiresAt:          m.ExpiresAt,
 		FallbackMode:       m.FallbackMode,
 		BackupProxyID:      m.BackupProxyID,
+		PoolID:             m.PoolID,
 		ExpiryWarnDays:     m.ExpiryWarnDays,
 		TimezoneDetectedAt: m.TimezoneDetectedAt,
 	}
@@ -1006,6 +1015,7 @@ func applyProxyEntityToService(dst *service.Proxy, src *dbent.Proxy) {
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
 	dst.TimezoneDetectedAt = src.TimezoneDetectedAt
+	dst.PoolID = src.PoolID
 	if src.DetectedTimezone != nil {
 		dst.DetectedTimezone = *src.DetectedTimezone
 	} else {

@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/proxypool"
 )
 
 // ProxyCreate is the builder for creating a Proxy entity.
@@ -215,6 +216,20 @@ func (_c *ProxyCreate) SetNillableTimezoneDetectedAt(v *time.Time) *ProxyCreate 
 	return _c
 }
 
+// SetPoolID sets the "pool_id" field.
+func (_c *ProxyCreate) SetPoolID(v int64) *ProxyCreate {
+	_c.mutation.SetPoolID(v)
+	return _c
+}
+
+// SetNillablePoolID sets the "pool_id" field if the given value is not nil.
+func (_c *ProxyCreate) SetNillablePoolID(v *int64) *ProxyCreate {
+	if v != nil {
+		_c.SetPoolID(*v)
+	}
+	return _c
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_c *ProxyCreate) AddAccountIDs(ids ...int64) *ProxyCreate {
 	_c.mutation.AddAccountIDs(ids...)
@@ -248,6 +263,11 @@ func (_c *ProxyCreate) AddPrimaryProxies(v ...*Proxy) *ProxyCreate {
 // SetBackupProxy sets the "backup_proxy" edge to the Proxy entity.
 func (_c *ProxyCreate) SetBackupProxy(v *Proxy) *ProxyCreate {
 	return _c.SetBackupProxyID(v.ID)
+}
+
+// SetPool sets the "pool" edge to the ProxyPool entity.
+func (_c *ProxyCreate) SetPool(v *ProxyPool) *ProxyCreate {
+	return _c.SetPoolID(v.ID)
 }
 
 // Mutation returns the ProxyMutation object of the builder.
@@ -519,6 +539,23 @@ func (_c *ProxyCreate) createSpec() (*Proxy, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.BackupProxyID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.PoolIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   proxy.PoolTable,
+			Columns: []string{proxy.PoolColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxypool.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.PoolID = &nodes[0]
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec
@@ -804,6 +841,24 @@ func (u *ProxyUpsert) UpdateTimezoneDetectedAt() *ProxyUpsert {
 // ClearTimezoneDetectedAt clears the value of the "timezone_detected_at" field.
 func (u *ProxyUpsert) ClearTimezoneDetectedAt() *ProxyUpsert {
 	u.SetNull(proxy.FieldTimezoneDetectedAt)
+	return u
+}
+
+// SetPoolID sets the "pool_id" field.
+func (u *ProxyUpsert) SetPoolID(v int64) *ProxyUpsert {
+	u.Set(proxy.FieldPoolID, v)
+	return u
+}
+
+// UpdatePoolID sets the "pool_id" field to the value that was provided on create.
+func (u *ProxyUpsert) UpdatePoolID() *ProxyUpsert {
+	u.SetExcluded(proxy.FieldPoolID)
+	return u
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (u *ProxyUpsert) ClearPoolID() *ProxyUpsert {
+	u.SetNull(proxy.FieldPoolID)
 	return u
 }
 
@@ -1122,6 +1177,27 @@ func (u *ProxyUpsertOne) UpdateTimezoneDetectedAt() *ProxyUpsertOne {
 func (u *ProxyUpsertOne) ClearTimezoneDetectedAt() *ProxyUpsertOne {
 	return u.Update(func(s *ProxyUpsert) {
 		s.ClearTimezoneDetectedAt()
+	})
+}
+
+// SetPoolID sets the "pool_id" field.
+func (u *ProxyUpsertOne) SetPoolID(v int64) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetPoolID(v)
+	})
+}
+
+// UpdatePoolID sets the "pool_id" field to the value that was provided on create.
+func (u *ProxyUpsertOne) UpdatePoolID() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdatePoolID()
+	})
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (u *ProxyUpsertOne) ClearPoolID() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearPoolID()
 	})
 }
 
@@ -1606,6 +1682,27 @@ func (u *ProxyUpsertBulk) UpdateTimezoneDetectedAt() *ProxyUpsertBulk {
 func (u *ProxyUpsertBulk) ClearTimezoneDetectedAt() *ProxyUpsertBulk {
 	return u.Update(func(s *ProxyUpsert) {
 		s.ClearTimezoneDetectedAt()
+	})
+}
+
+// SetPoolID sets the "pool_id" field.
+func (u *ProxyUpsertBulk) SetPoolID(v int64) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetPoolID(v)
+	})
+}
+
+// UpdatePoolID sets the "pool_id" field to the value that was provided on create.
+func (u *ProxyUpsertBulk) UpdatePoolID() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdatePoolID()
+	})
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (u *ProxyUpsertBulk) ClearPoolID() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearPoolID()
 	})
 }
 

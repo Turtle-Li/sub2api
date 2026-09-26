@@ -36,6 +36,7 @@ type CreateProxyRequest struct {
 	ExpiresAt      *int64 `json:"expires_at"`
 	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
 	BackupProxyID  *int64 `json:"backup_proxy_id"`
+	PoolID         *int64 `json:"pool_id"`
 	ExpiryWarnDays int    `json:"expiry_warn_days" binding:"omitempty,min=0"`
 }
 
@@ -51,6 +52,7 @@ type UpdateProxyRequest struct {
 	ExpiresAt      dto.NullableInt64Field `json:"expires_at"`
 	FallbackMode   string                 `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
 	BackupProxyID  dto.NullableInt64Field `json:"backup_proxy_id"`
+	PoolID         dto.NullableInt64Field `json:"pool_id"`
 	ExpiryWarnDays *int                   `json:"expiry_warn_days" binding:"omitempty,min=0"`
 }
 
@@ -158,6 +160,7 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 			ExpiresAt:      expiresAt,
 			FallbackMode:   strings.TrimSpace(req.FallbackMode),
 			BackupProxyID:  req.BackupProxyID,
+			PoolID:         req.PoolID,
 			ExpiryWarnDays: req.ExpiryWarnDays,
 		})
 		if err != nil {
@@ -206,6 +209,8 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 		FallbackMode:   strings.TrimSpace(req.FallbackMode),
 		BackupProxyID:  req.BackupProxyID.Value,
 		ClearBackupID:  req.BackupProxyID.Set && req.BackupProxyID.Value == nil,
+		PoolID:         req.PoolID.Value,
+		ClearPoolID:    req.PoolID.Set && req.PoolID.Value == nil,
 		ExpiryWarnDays: req.ExpiryWarnDays,
 	})
 	if err != nil {
@@ -346,6 +351,7 @@ type BatchCreateProxyItem struct {
 // BatchCreateRequest represents batch create proxies request
 type BatchCreateRequest struct {
 	Proxies []BatchCreateProxyItem `json:"proxies" binding:"required,min=1"`
+	PoolID  *int64                 `json:"pool_id"`
 }
 
 // BatchCreate handles batch creating proxies
@@ -387,6 +393,7 @@ func (h *ProxyHandler) BatchCreate(c *gin.Context) {
 			Port:     item.Port,
 			Username: username,
 			Password: password,
+			PoolID:   req.PoolID,
 		})
 		if err != nil {
 			// If creation fails due to duplicate, count as skipped

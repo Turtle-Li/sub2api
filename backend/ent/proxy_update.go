@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/proxypool"
 )
 
 // ProxyUpdate is the builder for updating Proxy entities.
@@ -287,6 +288,26 @@ func (_u *ProxyUpdate) ClearTimezoneDetectedAt() *ProxyUpdate {
 	return _u
 }
 
+// SetPoolID sets the "pool_id" field.
+func (_u *ProxyUpdate) SetPoolID(v int64) *ProxyUpdate {
+	_u.mutation.SetPoolID(v)
+	return _u
+}
+
+// SetNillablePoolID sets the "pool_id" field if the given value is not nil.
+func (_u *ProxyUpdate) SetNillablePoolID(v *int64) *ProxyUpdate {
+	if v != nil {
+		_u.SetPoolID(*v)
+	}
+	return _u
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (_u *ProxyUpdate) ClearPoolID() *ProxyUpdate {
+	_u.mutation.ClearPoolID()
+	return _u
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *ProxyUpdate) AddAccountIDs(ids ...int64) *ProxyUpdate {
 	_u.mutation.AddAccountIDs(ids...)
@@ -320,6 +341,11 @@ func (_u *ProxyUpdate) AddPrimaryProxies(v ...*Proxy) *ProxyUpdate {
 // SetBackupProxy sets the "backup_proxy" edge to the Proxy entity.
 func (_u *ProxyUpdate) SetBackupProxy(v *Proxy) *ProxyUpdate {
 	return _u.SetBackupProxyID(v.ID)
+}
+
+// SetPool sets the "pool" edge to the ProxyPool entity.
+func (_u *ProxyUpdate) SetPool(v *ProxyPool) *ProxyUpdate {
+	return _u.SetPoolID(v.ID)
 }
 
 // Mutation returns the ProxyMutation object of the builder.
@@ -372,6 +398,12 @@ func (_u *ProxyUpdate) RemovePrimaryProxies(v ...*Proxy) *ProxyUpdate {
 // ClearBackupProxy clears the "backup_proxy" edge to the Proxy entity.
 func (_u *ProxyUpdate) ClearBackupProxy() *ProxyUpdate {
 	_u.mutation.ClearBackupProxy()
+	return _u
+}
+
+// ClearPool clears the "pool" edge to the ProxyPool entity.
+func (_u *ProxyUpdate) ClearPool() *ProxyUpdate {
+	_u.mutation.ClearPool()
 	return _u
 }
 
@@ -659,6 +691,35 @@ func (_u *ProxyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.PoolCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   proxy.PoolTable,
+			Columns: []string{proxy.PoolColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxypool.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.PoolIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   proxy.PoolTable,
+			Columns: []string{proxy.PoolColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxypool.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{proxy.Label}
@@ -937,6 +998,26 @@ func (_u *ProxyUpdateOne) ClearTimezoneDetectedAt() *ProxyUpdateOne {
 	return _u
 }
 
+// SetPoolID sets the "pool_id" field.
+func (_u *ProxyUpdateOne) SetPoolID(v int64) *ProxyUpdateOne {
+	_u.mutation.SetPoolID(v)
+	return _u
+}
+
+// SetNillablePoolID sets the "pool_id" field if the given value is not nil.
+func (_u *ProxyUpdateOne) SetNillablePoolID(v *int64) *ProxyUpdateOne {
+	if v != nil {
+		_u.SetPoolID(*v)
+	}
+	return _u
+}
+
+// ClearPoolID clears the value of the "pool_id" field.
+func (_u *ProxyUpdateOne) ClearPoolID() *ProxyUpdateOne {
+	_u.mutation.ClearPoolID()
+	return _u
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *ProxyUpdateOne) AddAccountIDs(ids ...int64) *ProxyUpdateOne {
 	_u.mutation.AddAccountIDs(ids...)
@@ -970,6 +1051,11 @@ func (_u *ProxyUpdateOne) AddPrimaryProxies(v ...*Proxy) *ProxyUpdateOne {
 // SetBackupProxy sets the "backup_proxy" edge to the Proxy entity.
 func (_u *ProxyUpdateOne) SetBackupProxy(v *Proxy) *ProxyUpdateOne {
 	return _u.SetBackupProxyID(v.ID)
+}
+
+// SetPool sets the "pool" edge to the ProxyPool entity.
+func (_u *ProxyUpdateOne) SetPool(v *ProxyPool) *ProxyUpdateOne {
+	return _u.SetPoolID(v.ID)
 }
 
 // Mutation returns the ProxyMutation object of the builder.
@@ -1022,6 +1108,12 @@ func (_u *ProxyUpdateOne) RemovePrimaryProxies(v ...*Proxy) *ProxyUpdateOne {
 // ClearBackupProxy clears the "backup_proxy" edge to the Proxy entity.
 func (_u *ProxyUpdateOne) ClearBackupProxy() *ProxyUpdateOne {
 	_u.mutation.ClearBackupProxy()
+	return _u
+}
+
+// ClearPool clears the "pool" edge to the ProxyPool entity.
+func (_u *ProxyUpdateOne) ClearPool() *ProxyUpdateOne {
+	_u.mutation.ClearPool()
 	return _u
 }
 
@@ -1332,6 +1424,35 @@ func (_u *ProxyUpdateOne) sqlSave(ctx context.Context) (_node *Proxy, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.PoolCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   proxy.PoolTable,
+			Columns: []string{proxy.PoolColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxypool.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.PoolIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   proxy.PoolTable,
+			Columns: []string{proxy.PoolColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxypool.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

@@ -164,6 +164,20 @@ type AccountDuplicateRepository interface {
 	CreateWithAccountGroups(ctx context.Context, account *Account, groups []AccountGroup) error
 }
 
+// AccountProxyPoolRepository atomically revalidates a proxy selected before an
+// upstream login, then persists the account and its exact group priorities.
+// The network request must finish before this method is called so no database
+// lock is held while contacting the provider.
+type AccountProxyPoolRepository interface {
+	CreateWithAccountGroupsAndProxyPool(
+		ctx context.Context,
+		account *Account,
+		groups []AccountGroup,
+		proxyPoolID int64,
+		expectedProxy *Proxy,
+	) error
+}
+
 // AccountProxyCASRepository provides the narrow transactional operation used by
 // fixed-egress binding and rollback. It updates eligible OpenAI Codex parents
 // and their credential shadows together, and rejects stale expected proxy IDs.

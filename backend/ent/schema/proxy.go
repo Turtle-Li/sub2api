@@ -73,6 +73,10 @@ func (Proxy) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Last successful exit-IP timezone detection time."),
+		field.Int64("pool_id").
+			Optional().
+			Nillable().
+			Comment("Operator proxy pool membership used for future automatic account imports."),
 	}
 }
 
@@ -89,6 +93,9 @@ func (Proxy) Edges() []ent.Edge {
 		edge.To("backup_proxy", Proxy.Type).
 			Field("backup_proxy_id").
 			Unique(),
+		edge.To("pool", ProxyPool.Type).
+			Field("pool_id").
+			Unique(),
 	}
 }
 
@@ -98,5 +105,6 @@ func (Proxy) Indexes() []ent.Index {
 		index.Fields("deleted_at"),
 		index.Fields("expires_at"),
 		index.Fields("backup_proxy_id"),
+		index.Fields("pool_id"),
 	}
 }

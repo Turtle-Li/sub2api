@@ -86,6 +86,7 @@ export default {
       },
       columns: {
         name: 'Name',
+        pool: 'Pool',
         protocol: 'Protocol',
         address: 'Address',
         auth: 'Auth',
@@ -110,6 +111,23 @@ export default {
         passwordPlaceholder: 'Enter password',
         priorityLabel: 'Priority',
         statusLabel: 'Status'
+      },
+      pools: {
+        label: 'Proxy Pool',
+        name: 'Proxy pool name',
+        none: 'No proxy pool',
+        hint: 'Optionally group proxies for automatic assignment during account imports.',
+        createInline: 'New proxy pool…',
+        createAndSelect: 'Create & select',
+        saveFailed: 'Failed to save proxy pool',
+        batchAction: 'Assign pool',
+        batchTitle: 'Assign selected proxies',
+        batchDescription: 'Move {count} selected proxies into one proxy pool, or choose no pool to remove them from their current pool.',
+        batchHint: 'Changing pool membership does not change accounts already pinned to these proxies.',
+        batchApply: 'Apply assignment',
+        batchAssigned: 'Assigned {count} proxies to the pool',
+        batchRemoved: 'Removed {count} proxies from their pools',
+        batchFailed: 'Failed to update proxy pool membership'
       },
       filters: {
         protocol: 'Protocol',

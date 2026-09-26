@@ -238,15 +238,30 @@ func (s *GrokOAuthService) ValidateRefreshToken(ctx context.Context, refreshToke
 // ValidateSSOToken converts a Web SSO cookie into Build OAuth tokens.
 // The raw sso_token is never stored on GrokTokenInfo or account credentials.
 func (s *GrokOAuthService) ValidateSSOToken(ctx context.Context, ssoToken string, proxyID *int64) (*GrokTokenInfo, error) {
+	proxyURL, err := s.proxyURL(ctx, proxyID)
+	if err != nil {
+		return nil, err
+	}
+	return s.convertSSOToBuild(ctx, ssoToken, proxyURL)
+}
+
+// ConvertFromSSOWithProxy uses the exact proxy snapshot selected from a proxy
+// pool. It intentionally does not re-read the proxy before the network call;
+// account persistence later locks and revalidates this same snapshot.
+func (s *GrokOAuthService) ConvertFromSSOWithProxy(ctx context.Context, ssoToken string, proxy *Proxy) (*GrokTokenInfo, error) {
+	proxyURL := ""
+	if proxy != nil {
+		proxyURL = proxy.URL()
+	}
+	return s.convertSSOToBuild(ctx, ssoToken, proxyURL)
+}
+
+func (s *GrokOAuthService) convertSSOToBuild(ctx context.Context, ssoToken, proxyURL string) (*GrokTokenInfo, error) {
 	ssoToken = strings.TrimSpace(ssoToken)
 	if ssoToken == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_NO_SSO_TOKEN", "sso_token is required")
 	}
 	if err := s.requireOAuthClient(); err != nil {
-		return nil, err
-	}
-	proxyURL, err := s.proxyURL(ctx, proxyID)
-	if err != nil {
 		return nil, err
 	}
 	tokenResp, err := s.oauthClient.ConvertSSOToBuild(ctx, ssoToken, proxyURL)

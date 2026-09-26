@@ -65,6 +65,15 @@
               {{ t('admin.proxies.batchQualityCheck') }}
             </button>
             <button
+              @click="openBatchPoolDialog"
+              :disabled="selectedCount === 0"
+              class="btn btn-secondary"
+              :title="t('admin.proxies.pools.batchAction')"
+            >
+              <Icon name="server" size="md" class="mr-2" />
+              {{ t('admin.proxies.pools.batchAction') }}
+            </button>
+            <button
               @click="openBatchDelete"
               :disabled="selectedCount === 0"
               class="btn btn-danger"
@@ -120,6 +129,13 @@
 
           <template #cell-name="{ value }">
             <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+          </template>
+
+          <template #cell-pool="{ row }">
+            <span v-if="row.pool_id" class="badge badge-primary">
+              {{ proxyPoolName(row.pool_id) }}
+            </span>
+            <span v-else class="text-sm text-gray-400">-</span>
           </template>
 
           <template #cell-protocol="{ value }">
@@ -532,11 +548,13 @@
           <label class="input-label">{{ t('admin.proxies.backupProxy') }}</label>
           <Select v-model="createForm.backup_proxy_id" :options="backupProxyOptions()" />
         </div>
+        <ProxyPoolSelect v-model="createForm.pool_id" />
 
       </form>
 
       <!-- Batch Add Form -->
       <div v-else class="space-y-5">
+        <ProxyPoolSelect v-model="batchPoolId" />
         <div>
           <label class="input-label">{{ t('admin.proxies.batchInput') }}</label>
           <textarea
@@ -765,6 +783,7 @@
           <label class="input-label">{{ t('admin.proxies.backupProxy') }}</label>
           <Select v-model="editForm.backup_proxy_id" :options="backupProxyOptions(editingProxy?.id)" />
         </div>
+        <ProxyPoolSelect v-model="editForm.pool_id" />
 
       </form>
 
@@ -829,6 +848,32 @@
       @confirm="confirmBatchDelete"
       @cancel="showBatchDeleteDialog = false"
     />
+    <BaseDialog
+      :show="showBatchPoolDialog"
+      :title="t('admin.proxies.pools.batchTitle')"
+      width="normal"
+      @close="closeBatchPoolDialog"
+    >
+      <div class="space-y-4">
+        <p class="text-sm text-gray-600 dark:text-gray-300">
+          {{ t('admin.proxies.pools.batchDescription', { count: selectedCount }) }}
+        </p>
+        <ProxyPoolSelect
+          v-model="batchAssignPoolId"
+          :hint="t('admin.proxies.pools.batchHint')"
+        />
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button type="button" class="btn btn-secondary" :disabled="batchPoolSubmitting" @click="closeBatchPoolDialog">
+            {{ t('common.cancel') }}
+          </button>
+          <button type="button" class="btn btn-primary" :disabled="batchPoolSubmitting" @click="confirmBatchPoolAssignment">
+            {{ batchPoolSubmitting ? t('common.saving') : t('admin.proxies.pools.batchApply') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
     <ConfirmDialog
       :show="showExportDataDialog"
       :title="t('admin.proxies.dataExport')"
@@ -973,7 +1018,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
+import type { Proxy, ProxyAccountSummary, ProxyPool, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -985,6 +1030,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import ImportDataModal from '@/components/admin/proxy/ImportDataModal.vue'
 import Select from '@/components/common/Select.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
+import ProxyPoolSelect from '@/components/admin/proxy/ProxyPoolSelect.vue'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import { useClipboard } from '@/composables/useClipboard'
@@ -997,10 +1043,14 @@ import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
+const proxyPools = ref<ProxyPool[]>([])
+const proxyPoolName = (poolId: number | null | undefined) =>
+  proxyPools.value.find(pool => pool.id === poolId)?.name || `#${poolId}`
 
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false },
   { key: 'name', label: t('admin.proxies.columns.name'), sortable: true },
+  { key: 'pool', label: t('admin.proxies.columns.pool'), sortable: false },
   { key: 'protocol', label: t('admin.proxies.columns.protocol'), sortable: true },
   { key: 'address', label: t('admin.proxies.columns.address'), sortable: false },
   { key: 'auth', label: t('admin.proxies.columns.auth'), sortable: false },
@@ -1070,6 +1120,7 @@ const editPasswordDirty = ref(false)
 const showImportData = ref(false)
 const showDeleteDialog = ref(false)
 const showBatchDeleteDialog = ref(false)
+const showBatchPoolDialog = ref(false)
 const showExportDataDialog = ref(false)
 const showAccountsModal = ref(false)
 const submitting = ref(false)
@@ -1078,6 +1129,7 @@ const testingProxyIds = ref<Set<number>>(new Set())
 const qualityCheckingProxyIds = ref<Set<number>>(new Set())
 const batchTesting = ref(false)
 const batchQualityChecking = ref(false)
+const batchPoolSubmitting = ref(false)
 const proxyTableRef = ref<HTMLElement | null>(null)
 const {
   selectedSet: selectedProxyIds,
@@ -1137,6 +1189,7 @@ const createForm = reactive({
   fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
   backup_proxy_id: null as number | null,
   expiry_warn_days: 7 as number,
+  pool_id: null as number | null,
 })
 
 const editForm = reactive({
@@ -1151,7 +1204,18 @@ const editForm = reactive({
   fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
   backup_proxy_id: null as number | null,
   expiry_warn_days: 7 as number,
+  pool_id: null as number | null,
 })
+const batchPoolId = ref<number | null>(null)
+const batchAssignPoolId = ref<number | null>(null)
+
+const loadProxyPools = async () => {
+  try {
+    proxyPools.value = await adminAPI.proxyPools.list()
+  } catch {
+    proxyPools.value = []
+  }
+}
 
 const allProxiesForBackup = ref<Proxy[]>([])
 const loadBackupProxyOptions = async () => {
@@ -1271,6 +1335,7 @@ const closeCreateModal = () => {
   createForm.fallback_mode = 'none'
   createForm.backup_proxy_id = null
   createForm.expiry_warn_days = 7
+  createForm.pool_id = null
   createPasswordVisible.value = false
   batchInput.value = ''
   batchParseResult.total = 0
@@ -1278,6 +1343,7 @@ const closeCreateModal = () => {
   batchParseResult.invalid = 0
   batchParseResult.duplicate = 0
   batchParseResult.proxies = []
+  batchPoolId.value = null
 }
 
 const handleDataImported = () => {
@@ -1361,7 +1427,7 @@ const handleBatchCreate = async () => {
 
   submitting.value = true
   try {
-    const result = await adminAPI.proxies.batchCreate(batchParseResult.proxies)
+    const result = await adminAPI.proxies.batchCreate(batchParseResult.proxies, batchPoolId.value)
     const created = result.created || 0
     const skipped = result.skipped || 0
 
@@ -1407,6 +1473,7 @@ const handleCreateProxy = async () => {
       fallback_mode: createForm.fallback_mode,
       backup_proxy_id: createForm.fallback_mode === 'proxy' ? createForm.backup_proxy_id : null,
       expiry_warn_days: createForm.expiry_warn_days,
+      pool_id: createForm.pool_id,
     })
     appStore.showSuccess(t('admin.proxies.proxyCreated'))
     closeCreateModal()
@@ -1432,6 +1499,7 @@ const handleEdit = (proxy: Proxy) => {
   editForm.fallback_mode = proxy.fallback_mode || 'none'
   editForm.backup_proxy_id = proxy.backup_proxy_id ?? null
   editForm.expiry_warn_days = proxy.expiry_warn_days ?? 7
+  editForm.pool_id = proxy.pool_id ?? null
   editPasswordVisible.value = false
   editPasswordDirty.value = false
   showEditModal.value = true
@@ -1472,6 +1540,7 @@ const handleUpdateProxy = async () => {
       fallback_mode: editForm.fallback_mode,
       backup_proxy_id: editForm.fallback_mode === 'proxy' ? editForm.backup_proxy_id : null,
       expiry_warn_days: editForm.expiry_warn_days,
+      pool_id: editForm.pool_id,
     }
 
     // Only include password if user actually modified the field
@@ -1973,6 +2042,43 @@ const openBatchDelete = () => {
   showBatchDeleteDialog.value = true
 }
 
+const openBatchPoolDialog = () => {
+  if (selectedCount.value === 0) return
+  batchAssignPoolId.value = null
+  showBatchPoolDialog.value = true
+}
+
+const closeBatchPoolDialog = () => {
+  if (batchPoolSubmitting.value) return
+  showBatchPoolDialog.value = false
+  batchAssignPoolId.value = null
+}
+
+const confirmBatchPoolAssignment = async () => {
+  const ids = Array.from(selectedProxyIds.value)
+  if (ids.length === 0 || batchPoolSubmitting.value) return
+
+  batchPoolSubmitting.value = true
+  try {
+    const result = batchAssignPoolId.value != null
+      ? await adminAPI.proxyPools.addMembers(batchAssignPoolId.value, ids)
+      : await adminAPI.proxyPools.removeMembers(ids)
+    const messageKey = batchAssignPoolId.value != null
+      ? 'admin.proxies.pools.batchAssigned'
+      : 'admin.proxies.pools.batchRemoved'
+    appStore.showSuccess(t(messageKey, { count: result.affected }))
+    clearSelectedProxies()
+    showBatchPoolDialog.value = false
+    batchAssignPoolId.value = null
+    await Promise.all([loadProxies(), loadProxyPools()])
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.proxies.pools.batchFailed'))
+    console.error('Error assigning proxy pool:', error)
+  } finally {
+    batchPoolSubmitting.value = false
+  }
+}
+
 const confirmDelete = async () => {
   if (!deletingProxy.value) return
 
@@ -2087,6 +2193,7 @@ function closeCopyMenu() {
 onMounted(() => {
   loadProxies()
   loadBackupProxyOptions()
+  loadProxyPools()
   document.addEventListener('click', closeCopyMenu)
 })
 

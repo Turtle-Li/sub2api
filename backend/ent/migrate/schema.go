@@ -1562,6 +1562,7 @@ var (
 		{Name: "detected_timezone", Type: field.TypeString, Nullable: true, Size: 64},
 		{Name: "timezone_detected_at", Type: field.TypeTime, Nullable: true},
 		{Name: "backup_proxy_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "pool_id", Type: field.TypeInt64, Nullable: true},
 	}
 	// ProxiesTable holds the schema information for the "proxies" table.
 	ProxiesTable = &schema.Table{
@@ -1573,6 +1574,12 @@ var (
 				Symbol:     "proxies_proxies_backup_proxy",
 				Columns:    []*schema.Column{ProxiesColumns[16]},
 				RefColumns: []*schema.Column{ProxiesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "proxies_proxy_pools_pool",
+				Columns:    []*schema.Column{ProxiesColumns[17]},
+				RefColumns: []*schema.Column{ProxyPoolsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 		},
@@ -1597,7 +1604,26 @@ var (
 				Unique:  false,
 				Columns: []*schema.Column{ProxiesColumns[16]},
 			},
+			{
+				Name:    "proxy_pool_id",
+				Unique:  false,
+				Columns: []*schema.Column{ProxiesColumns[17]},
+			},
 		},
+	}
+	// ProxyPoolsColumns holds the columns for the "proxy_pools" table.
+	ProxyPoolsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "name", Type: field.TypeString, Size: 100},
+		{Name: "notes", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+	}
+	// ProxyPoolsTable holds the schema information for the "proxy_pools" table.
+	ProxyPoolsTable = &schema.Table{
+		Name:       "proxy_pools",
+		Columns:    ProxyPoolsColumns,
+		PrimaryKey: []*schema.Column{ProxyPoolsColumns[0]},
 	}
 	// RedeemCodesColumns holds the columns for the "redeem_codes" table.
 	RedeemCodesColumns = []*schema.Column{
@@ -2270,6 +2296,7 @@ var (
 		PromoCodesTable,
 		PromoCodeUsagesTable,
 		ProxiesTable,
+		ProxyPoolsTable,
 		RedeemCodesTable,
 		SecuritySecretsTable,
 		SettingsTable,
@@ -2394,8 +2421,12 @@ func init() {
 		Table: "promo_code_usages",
 	}
 	ProxiesTable.ForeignKeys[0].RefTable = ProxiesTable
+	ProxiesTable.ForeignKeys[1].RefTable = ProxyPoolsTable
 	ProxiesTable.Annotation = &entsql.Annotation{
 		Table: "proxies",
+	}
+	ProxyPoolsTable.Annotation = &entsql.Annotation{
+		Table: "proxy_pools",
 	}
 	RedeemCodesTable.ForeignKeys[0].RefTable = GroupsTable
 	RedeemCodesTable.ForeignKeys[1].RefTable = UsersTable

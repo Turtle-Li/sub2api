@@ -536,6 +536,7 @@ func ProxyFromService(p *service.Proxy) *Proxy {
 		ExpiresAt:          p.ExpiresAt,
 		FallbackMode:       p.FallbackMode,
 		BackupProxyID:      p.BackupProxyID,
+		PoolID:             p.PoolID,
 		ExpiryWarnDays:     p.ExpiryWarnDays,
 		DetectedTimezone:   p.DetectedTimezone,
 		TimezoneDetectedAt: p.TimezoneDetectedAt,

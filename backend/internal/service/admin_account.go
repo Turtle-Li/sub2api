@@ -570,14 +570,39 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 	}
-	if err := s.accountRepo.Create(ctx, account); err != nil {
-		return nil, err
-	}
-
-	// 绑定分组
-	if len(groupIDs) > 0 {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+	if input.ProxyPoolID != nil {
+		guardedRepo, ok := s.accountRepo.(AccountProxyPoolRepository)
+		if !ok {
+			return nil, ErrProxyPoolGuardUnavailable
+		}
+		if account.Platform != PlatformGrok || account.Type != AccountTypeOAuth ||
+			account.ProxyID == nil || input.ProxyPoolSnapshot == nil ||
+			*account.ProxyID != input.ProxyPoolSnapshot.ID {
+			return nil, ErrProxyPoolBindingChanged
+		}
+		groups := make([]AccountGroup, 0, len(groupIDs))
+		for i, groupID := range groupIDs {
+			groups = append(groups, AccountGroup{GroupID: groupID, Priority: i + 1})
+		}
+		if err := guardedRepo.CreateWithAccountGroupsAndProxyPool(
+			ctx,
+			account,
+			groups,
+			*input.ProxyPoolID,
+			input.ProxyPoolSnapshot,
+		); err != nil {
 			return nil, err
+		}
+	} else {
+		if err := s.accountRepo.Create(ctx, account); err != nil {
+			return nil, err
+		}
+
+		// 绑定分组
+		if len(groupIDs) > 0 {
+			if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+				return nil, err
+			}
 		}
 	}
 

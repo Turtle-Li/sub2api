@@ -51,6 +51,7 @@ func ProvideAdminHandlers(
 	complianceHandler *admin.ComplianceHandler,
 	auditLogHandler *admin.AuditLogHandler,
 	accountPoolHandler *admin.AccountPoolHandler,
+	proxyPoolHandler *admin.ProxyPoolHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	opencodeGoUsage *service.OpenCodeGoUsageService,
@@ -99,6 +100,7 @@ func ProvideAdminHandlers(
 		Compliance:             complianceHandler,
 		AuditLog:               auditLogHandler,
 		AccountPool:            accountPoolHandler,
+		ProxyPool:              proxyPoolHandler,
 	}
 }
 
@@ -282,7 +284,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewOpenAIOAuthHandler,
 	admin.NewGeminiOAuthHandler,
 	admin.NewAntigravityOAuthHandler,
-	admin.NewGrokOAuthHandler,
+	admin.NewGrokOAuthHandlerWithProxyPool,
 	admin.NewCNProviderHandler,
 	admin.NewProxyHandler,
 	admin.NewRedeemHandler,

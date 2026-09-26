@@ -211,7 +211,8 @@ export async function batchCreate(
     port: number
     username?: string
     password?: string
-  }>
+  }>,
+  poolId?: number | null
 ): Promise<{
   created: number
   skipped: number
@@ -219,7 +220,7 @@ export async function batchCreate(
   const { data } = await apiClient.post<{
     created: number
     skipped: number
-  }>('/admin/proxies/batch', { proxies })
+  }>('/admin/proxies/batch', { proxies, pool_id: poolId ?? undefined })
   return data
 }
 

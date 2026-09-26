@@ -70,6 +70,7 @@ export interface GrokSSOToOAuthRequest {
   expires_at?: number | null
   auto_pause_on_expired?: boolean
   pool_id?: number | null
+  proxy_pool_id?: number | null
 }
 
 export interface GrokSSOToOAuthItemResult {
