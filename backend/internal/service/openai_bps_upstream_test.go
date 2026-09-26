@@ -109,7 +109,7 @@ func bpsTestModeStream(t *testing.T, body []byte, clientStream bool, want bpsHol
 	t.Helper()
 	_, bridge, err := prepareBPSRequestBody(body, &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
 	require.NoError(t, err)
-	stream := newBPSBridgeStream(bridge, bpsTestSSE(events...), clientStream, time.Now().Add(time.Minute))
+	stream := newBPSBridgeStream(bridge, bpsTestSSE(events...), clientStream, time.Now().Add(time.Minute), nil)
 	require.Equal(t, want, stream.mode)
 	t.Cleanup(func() { _ = stream.Close() })
 	return stream
@@ -239,7 +239,7 @@ func TestBPSPrimedStreamReleasesAtDeadlineWithoutEvents(t *testing.T) {
 	_, bridge, err := prepareBPSRequestBody(bpsTestShellBody(), &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
 	require.NoError(t, err)
 	reader, writer := io.Pipe()
-	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(80*time.Millisecond))
+	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(80*time.Millisecond), nil)
 	defer func() { _ = stream.Close() }()
 	go func() {
 		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"thinking\"}\n\n")
@@ -266,7 +266,7 @@ func TestBPSPrimedStreamFallsBackAtBudgetDeadline(t *testing.T) {
 	require.NoError(t, err)
 	reader, writer := io.Pipe()
 	defer func() { _ = writer.Close() }()
-	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(5*time.Second))
+	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(5*time.Second), nil)
 	stream.outputDeadline = time.Now().Add(80 * time.Millisecond)
 	defer func() { _ = stream.Close() }()
 	go func() {
@@ -286,7 +286,7 @@ func TestBPSPrimedStreamReleasesAfterOutputPastBudget(t *testing.T) {
 	require.NoError(t, err)
 	reader, writer := io.Pipe()
 	defer func() { _ = writer.Close() }()
-	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(200*time.Millisecond))
+	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(200*time.Millisecond), nil)
 	stream.outputDeadline = time.Now().Add(50 * time.Millisecond)
 	defer func() { _ = stream.Close() }()
 	go func() {
@@ -599,7 +599,7 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 		require.True(t, bpsBreaker.allow(account.ID))
 	})
 
-	t.Run("tool conversion failure after text falls back", func(t *testing.T) {
+	t.Run("tool conversion failure after text continues natively in stream", func(t *testing.T) {
 		account := bpsTestAccount()
 		account.ID = 90_104
 		bogus := map[string]any{"type": "function_call", "id": "fc_1", "call_id": "c1", "name": "run_officejs", "arguments": `{"code":"Excel.run()"}`}
@@ -609,16 +609,22 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 				bpsTestJSON(t, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": bogus}),
 				bpsTestJSON(t, map[string]any{"type": "response.completed", "response": map[string]any{"output": []any{bogus}}}),
 			),
-			originalResp(),
+			bpsTestSSEResponse(`{"type":"response.completed","response":{"id":"resp_native","output":[]}}`),
 		}}
 		svc := &OpenAIGatewayService{httpUpstream: upstream}
 		attempt := &openAIBPSAttempt{accountID: account.ID, body: bpsTestShellBody(), upstreamModel: "gpt-6-astra", scope: "test", clientStream: true}
 		resp, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", attempt)
 		require.NoError(t, err)
-		require.Nil(t, bpsRun)
-		require.Len(t, upstream.requests, 2)
+		require.NotNil(t, bpsRun)
+		require.Len(t, upstream.requests, 1)
 		out, _ := io.ReadAll(resp.Body)
-		require.Equal(t, "original", string(out))
+		require.Len(t, upstream.requests, 2)
+		require.Equal(t, "chatgpt.com", upstream.requests[1].URL.Host)
+		require.Contains(t, string(out), "let me check")
+		require.Contains(t, string(out), "resp_native")
+		require.NotContains(t, string(out), "response.failed")
+		require.True(t, bpsRun.continued)
+		require.True(t, bpsSessionCooldowns.active("test"))
 	})
 
 	t.Run("inline image without externalizer skips bps", func(t *testing.T) {

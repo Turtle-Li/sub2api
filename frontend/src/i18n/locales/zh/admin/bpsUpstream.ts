@@ -138,6 +138,7 @@ export default { bpsUpstream: {
     "network": "网络错误",
     "http_status": "HTTP 错误",
     "stream_before_output": "流在输出前失败",
-    "handler_before_output": "响应处理失败"
+    "handler_before_output": "响应处理失败",
+    "native_continuation": "输出后接续原路径"
   }
 } }

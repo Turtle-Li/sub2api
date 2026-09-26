@@ -210,6 +210,8 @@ const (
 	bpsFailureHTTPStatus = "http_status"
 	bpsFailureStream     = "stream_before_output"
 	bpsFailureHandler    = "handler_before_output"
+	// bpsFailureContinued：已向客户端输出后 BPS 失败，同一条流里接续了原路径。
+	bpsFailureContinued = "native_continuation"
 )
 
 func (a *openAIBPSAttempt) event(outcome, reason, detail string, statusCode int) BPSEvent {
@@ -250,7 +252,7 @@ func (a *openAIBPSAttempt) persist(event BPSEvent, breakerOpened bool) {
 // 已发起请求后的转换或流失败还会让该会话短暂冷却，网络与状态码类失败交给账号熔断。
 func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail string, afterOutput bool) {
 	opened := bpsBreaker.recordFailure(a.accountID, statusCode)
-	if reason == bpsFailureStream || reason == bpsFailureHandler {
+	if reason == bpsFailureStream || reason == bpsFailureHandler || reason == bpsFailureContinued {
 		bpsSessionCooldowns.mark(a.scope)
 	}
 	outcome := BPSOutcomeFallback
@@ -263,6 +265,10 @@ func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail s
 }
 
 func (a *openAIBPSAttempt) recordSuccess() {
+	if a.continued {
+		// 本轮由原路径接续完成，失败已在接续时记录。
+		return
+	}
 	bpsBreaker.recordSuccess(a.accountID)
 	bpsMonitor.record(a.event(BPSOutcomeSuccess, "", "", 0))
 }
@@ -302,6 +308,8 @@ type openAIBPSAttempt struct {
 	clientStream bool
 	// budgetDeadline 非零时为首输出超时预算中留给 BPS 的截止时间，其余留给原路径回退。
 	budgetDeadline time.Time
+	// continued 表示 BPS 输出后失败、本轮由原路径在同一条流里接续完成。
+	continued bool
 }
 
 // holdDeadline 返回预读放行的绝对截止时间：到点后已有产出即放行给客户端。
@@ -391,7 +399,20 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamPreferBPS(
 	attempt *openAIBPSAttempt,
 ) (*http.Response, *openAIBPSAttempt, error) {
 	if attempt != nil {
-		if resp, ok := s.tryOpenAIBPSUpstream(upstreamReq.Context(), account, token, attempt); ok {
+		// 原路径请求在 BPS 成功时不会发出，留给输出后失败时接续使用。
+		continuation := func() (io.ReadCloser, error) {
+			resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+			if err != nil {
+				return nil, err
+			}
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 && isEventStreamResponse(resp.Header) {
+				return resp.Body, nil
+			}
+			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, bpsErrorBodyLimit))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("native continuation status %d: %s", resp.StatusCode, extractUpstreamErrorMessage(errBody))
+		}
+		if resp, ok := s.tryOpenAIBPSUpstream(upstreamReq.Context(), account, token, attempt, continuation); ok {
 			return resp, attempt, nil
 		}
 	}
@@ -399,7 +420,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstreamPreferBPS(
 	return resp, nil, err
 }
 
-func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, account *Account, token string, attempt *openAIBPSAttempt) (*http.Response, bool) {
+func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, account *Account, token string, attempt *openAIBPSAttempt, continuation bpsNativeContinuation) (*http.Response, bool) {
 	attempt.startedAt = time.Now()
 	deadline := attempt.holdDeadline()
 	outputDeadline := attempt.outputDeadline()
@@ -457,9 +478,17 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, acco
 			attempt.recordFailure(bpsFailureNetwork, 0, "response headers arrived after the BPS deadline", false)
 			return nil, false
 		}
-		stream := newBPSBridgeStream(bridge, resp.Body, attempt.clientStream, deadline)
+		stream := newBPSBridgeStream(bridge, resp.Body, attempt.clientStream, deadline, continuation)
 		stream.onClose = cancel
 		stream.outputDeadline = outputDeadline
+		stream.onContinue = func(reason string, err error) {
+			if err != nil {
+				attempt.recordFailure(bpsFailureStream, 0, reason+"; "+err.Error(), true)
+				return
+			}
+			attempt.continued = true
+			attempt.recordFailure(bpsFailureContinued, 0, reason, false)
+		}
 		if ok, reason := stream.primeUntilOutput(); !ok {
 			_ = stream.Close()
 			attempt.recordFailure(bpsFailureStream, 0, reason, false)

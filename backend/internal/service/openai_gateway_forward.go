@@ -1328,6 +1328,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			searchCount = nonStreamResult.searchCount
 		}
+		if bpsRun != nil && bpsRun.continued {
+			// BPS 输出后失败、由原路径在同一条流里接续完成：用量与档位都来自原路径。
+			bpsRun = nil
+			SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
+		}
 		if bpsRun != nil {
 			bpsRun.recordSuccess()
 		}
