@@ -144,6 +144,7 @@ docs/*
 !docs/UNIFIED_PAYMENT_IMPLEMENTATION_PLAN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/ASYNC_IMAGE_TASKS.md
+!docs/BPS_UPSTREAM.md
 !docs/reports/
 docs/reports/*
 !docs/reports/attachment_gateway_research.md
