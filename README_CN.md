@@ -640,6 +640,12 @@ SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false
 - ✅ 获取 HTTPS 前测试账号连通性
 - ❌ 生产环境（仅使用 HTTPS）
 
+Grok 自定义 HTTP 中继额外采用 fail-close 策略：必须在
+`security.url_allowlist.upstream_hosts` 中精确列出目标 authority（非默认端口
+必须写成 `host:port`）。私网、localhost 和 Tailnet/CGNAT 地址还必须开启
+`allow_private_hosts: true`。即使全局白名单处于禁用状态，这项端点校验仍会
+执行，因此仅开启 HTTP 不会授权任意 Grok 主机。
+
 **设置 `allow_insecure_http: false` 后，HTTP URL 会返回如下错误：**
 ```
 Invalid base URL: invalid url scheme: http

@@ -23,6 +23,7 @@ func TestGrokAPIKeyURLPolicyFollowsGlobalSecurityConfig(t *testing.T) {
 		cfg := &config.Config{}
 		cfg.Security.URLAllowlist.Enabled = false
 		cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+		cfg.Security.URLAllowlist.UpstreamHosts = []string{"grok.example.test"}
 
 		responsesURL, err := buildGrokResponsesURL(account, cfg)
 		require.NoError(t, err)
@@ -41,6 +42,15 @@ func TestGrokAPIKeyURLPolicyFollowsGlobalSecurityConfig(t *testing.T) {
 		require.Equal(t, "http://grok.example.test/v1/videos/request%20123/content", contentURL)
 	})
 
+	t.Run("insecure HTTP requires an explicit endpoint allowlist", func(t *testing.T) {
+		cfg := &config.Config{}
+		cfg.Security.URLAllowlist.Enabled = false
+		cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+
+		_, err := buildGrokResponsesURL(account, cfg)
+		require.EqualError(t, err, "invalid base url: base URL rejected by URL security policy")
+	})
+
 	t.Run("insecure HTTP disabled", func(t *testing.T) {
 		cfg := &config.Config{}
 		cfg.Security.URLAllowlist.Enabled = false
@@ -50,15 +60,45 @@ func TestGrokAPIKeyURLPolicyFollowsGlobalSecurityConfig(t *testing.T) {
 		require.EqualError(t, err, "invalid base url: base URL rejected by URL security policy")
 	})
 
-	t.Run("enabled allowlist remains HTTPS only", func(t *testing.T) {
+	t.Run("enabled allowlist can authorize an exact HTTP endpoint", func(t *testing.T) {
 		cfg := &config.Config{}
 		cfg.Security.URLAllowlist.Enabled = true
 		cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 		cfg.Security.URLAllowlist.UpstreamHosts = []string{"grok.example.test"}
 
-		_, err := buildGrokResponsesURL(account, cfg)
-		require.EqualError(t, err, "invalid base url: base URL rejected by URL security policy")
+		target, err := buildGrokResponsesURL(account, cfg)
+		require.NoError(t, err)
+		require.Equal(t, "http://grok.example.test/v1/responses", target)
 	})
+}
+
+func TestGrokAPIKeyURLPolicyRequiresExactTailnetHTTPEndpointOptIn(t *testing.T) {
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "http://100.64.0.10:18000/v1",
+		},
+	}
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"100.64.0.10:18000"}
+
+	_, err := buildGrokResponsesURL(account, cfg)
+	require.EqualError(t, err, "invalid base url: base URL rejected by URL security policy")
+
+	cfg.Security.URLAllowlist.AllowPrivateHosts = true
+	target, err := buildGrokResponsesURL(account, cfg)
+	require.NoError(t, err)
+	require.Equal(t, "http://100.64.0.10:18000/v1/responses", target)
+
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"100.64.0.10"}
+	_, err = buildGrokResponsesURL(account, cfg)
+	require.EqualError(t, err, "invalid base url: base URL rejected by URL security policy")
+
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"100.64.0.10:18001"}
+	_, err = buildGrokResponsesURL(account, cfg)
+	require.EqualError(t, err, "invalid base url: base URL rejected by URL security policy")
 }
 
 func TestGrokAPIKeyURLPolicyAppliesAllowlistAndPrivateHostControls(t *testing.T) {
@@ -214,6 +254,7 @@ func TestGrokOAuthURLPolicy(t *testing.T) {
 		cfg := &config.Config{}
 		cfg.Security.URLAllowlist.Enabled = false
 		cfg.Security.URLAllowlist.AllowInsecureHTTP = false
+		cfg.Security.URLAllowlist.UpstreamHosts = []string{"relay.example.test"}
 
 		_, err := buildGrokResponsesURL(account, cfg)
 		require.EqualError(t, err, "invalid base url: base URL rejected by URL security policy")

@@ -595,6 +595,12 @@ SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false
 - ✅ Testing account connectivity before obtaining HTTPS
 - ❌ Production environments (use HTTPS only)
 
+Grok custom HTTP relays are additionally fail-closed: the exact authority must
+appear in `security.url_allowlist.upstream_hosts` (include `host:port` for a
+non-default port). Private, localhost, and Tailnet/CGNAT addresses also require
+`allow_private_hosts: true`. This endpoint check applies even when the global
+allowlist is disabled, so enabling HTTP does not authorize arbitrary Grok hosts.
+
 **Example error for HTTP URLs when `allow_insecure_http: false` is set:**
 ```
 Invalid base URL: invalid url scheme: http

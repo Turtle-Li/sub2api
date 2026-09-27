@@ -176,6 +176,13 @@ func isBlockedHost(host string) bool {
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 			return true
 		}
+		// net.IP.IsPrivate intentionally excludes RFC 6598 shared address space.
+		// Treat 100.64.0.0/10 as non-public too: Tailscale and carrier-grade NAT
+		// commonly use this range, so an outbound URL must require the explicit
+		// allow_private_hosts opt-in before credentials may be sent there.
+		if ipv4 := ip.To4(); ipv4 != nil && ipv4[0] == 100 && ipv4[1] >= 64 && ipv4[1] <= 127 {
+			return true
+		}
 	}
 	return false
 }

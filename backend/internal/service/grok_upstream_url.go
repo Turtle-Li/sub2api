@@ -41,23 +41,71 @@ func grokBaseURLValidator(account *Account, cfg *config.Config) (xai.BaseURLVali
 }
 
 // grokOperatorPolicyValidator 按全局出站 URL 安全策略校验自定义 base_url：
-// 白名单开启时强制 UpstreamHosts；关闭时仅做格式校验（HTTP 允许与否跟随配置）。
+// HTTPS 在白名单开启时强制 UpstreamHosts，关闭时仅做格式校验；HTTP 无论
+// Enabled 状态都必须同时开启 allow_insecure_http，并精确匹配 UpstreamHosts
+// 中的主机与端口。私网和 Tailnet/CGNAT 地址还需要 allow_private_hosts。
 func grokOperatorPolicyValidator(cfg *config.Config) xai.BaseURLValidator {
 	if cfg == nil {
 		return xai.ValidateBaseURL
 	}
-	if !cfg.Security.URLAllowlist.Enabled {
-		return func(raw string) (string, error) {
-			return urlvalidator.ValidateURLFormat(raw, cfg.Security.URLAllowlist.AllowInsecureHTTP)
-		}
-	}
 	return func(raw string) (string, error) {
+		parsed, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return "", errors.New("invalid URL")
+		}
+		if strings.EqualFold(parsed.Scheme, "http") {
+			return validateGrokInsecureHTTPURL(raw, parsed, cfg.Security.URLAllowlist)
+		}
+		if !cfg.Security.URLAllowlist.Enabled {
+			return urlvalidator.ValidateURLFormat(raw, false)
+		}
 		return urlvalidator.ValidateHTTPSURL(raw, urlvalidator.ValidationOptions{
 			AllowedHosts:     cfg.Security.URLAllowlist.UpstreamHosts,
 			RequireAllowlist: true,
 			AllowPrivate:     cfg.Security.URLAllowlist.AllowPrivateHosts,
 		})
 	}
+}
+
+func validateGrokInsecureHTTPURL(raw string, parsed *url.URL, policy config.URLAllowlistConfig) (string, error) {
+	if !policy.AllowInsecureHTTP {
+		return "", errors.New("insecure HTTP is disabled")
+	}
+	validated, err := urlvalidator.ValidateHTTPURL(raw, true, urlvalidator.ValidationOptions{
+		AllowedHosts:     []string{parsed.Hostname()},
+		RequireAllowlist: true,
+		AllowPrivate:     policy.AllowPrivateHosts,
+	})
+	if err != nil {
+		return "", err
+	}
+	if !grokHTTPAuthorityAllowlisted(parsed, policy.UpstreamHosts) {
+		return "", errors.New("HTTP endpoint is not allowlisted")
+	}
+	return validated, nil
+}
+
+// grokHTTPAuthorityAllowlisted requires an exact authority match for HTTP.
+// A non-default port therefore needs an explicit host:port entry; a host-only
+// entry cannot authorize arbitrary services on the same private machine.
+func grokHTTPAuthorityAllowlisted(parsed *url.URL, allowed []string) bool {
+	if parsed == nil {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSpace(parsed.Host))
+	if want == "" {
+		return false
+	}
+	for _, entry := range allowed {
+		candidate := strings.ToLower(strings.TrimSpace(entry))
+		if candidate == "" || strings.Contains(candidate, "://") || strings.ContainsAny(candidate, "/?#@") {
+			continue
+		}
+		if candidate == want {
+			return true
+		}
+	}
+	return false
 }
 
 func redactedGrokBaseURLValidator(validator xai.BaseURLValidator) xai.BaseURLValidator {

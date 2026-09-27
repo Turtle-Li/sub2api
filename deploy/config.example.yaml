@@ -164,6 +164,10 @@ security:
       - "generativelanguage.googleapis.com"
       - "cloudcode-pa.googleapis.com"
       - "*.openai.azure.com"
+      # Grok custom HTTP relays require an exact host:port entry here even
+      # when enabled=false; private/Tailnet addresses also require
+      # allow_insecure_http=true and allow_private_hosts=true.
+      # - "100.64.0.10:18000"
     # Allowed hosts for pricing data download
     # 允许下载定价数据的主机列表
     pricing_hosts:
