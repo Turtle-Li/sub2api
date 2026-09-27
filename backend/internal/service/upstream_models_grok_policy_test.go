@@ -35,6 +35,27 @@ func TestBuildGrokUpstreamModelsRequestUsesHTTPRelayPolicy(t *testing.T) {
 	require.True(t, forced)
 }
 
+func TestBuildGrokUpstreamModelsRequestUsesHTTPSRelayDNSPolicy(t *testing.T) {
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "grok-key",
+			"base_url": "https://relay.example.test/v1",
+		},
+	}
+	cfg := &config.Config{}
+	svc := &AccountTestService{cfg: cfg}
+
+	req, err := svc.buildGrokUpstreamModelsRequest(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "https://relay.example.test/v1/models", req.URL.String())
+	require.True(t, HTTPUpstreamRedirectsDisabled(req.Context()))
+	allowPrivate, forced := HTTPUpstreamResolvedIPValidation(req.Context())
+	require.False(t, allowPrivate)
+	require.True(t, forced)
+}
+
 func TestBuildGrokUpstreamModelsRequestRejectsHTTPRelayWithoutEndpointAllowlist(t *testing.T) {
 	account := &Account{
 		Platform: PlatformGrok,

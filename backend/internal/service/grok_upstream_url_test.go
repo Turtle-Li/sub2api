@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -13,10 +14,26 @@ import (
 func TestValidateGrokHTTPUpstreamDNSHonorsPrivateOptIn(t *testing.T) {
 	cfg := &config.Config{}
 	require.Error(t, validateGrokHTTPUpstreamDNS("http://localhost/v1", cfg))
+	require.Error(t, validateGrokHTTPUpstreamDNS("https://localhost/v1", cfg))
 
 	cfg.Security.URLAllowlist.AllowPrivateHosts = true
 	require.NoError(t, validateGrokHTTPUpstreamDNS("http://localhost/v1", cfg))
 	require.NoError(t, validateGrokHTTPUpstreamDNS("https://localhost/v1", cfg))
+}
+
+func TestWithGrokHTTPUpstreamPolicyForcesResolvedIPValidationForHTTPS(t *testing.T) {
+	cfg := &config.Config{}
+	ctx := withGrokHTTPUpstreamPolicy(context.Background(), "https://relay.example.test/v1/responses", cfg)
+
+	allowPrivate, forced := HTTPUpstreamResolvedIPValidation(ctx)
+	require.True(t, forced)
+	require.False(t, allowPrivate)
+
+	cfg.Security.URLAllowlist.AllowPrivateHosts = true
+	ctx = withGrokHTTPUpstreamPolicy(context.Background(), "https://relay.example.test/v1/responses", cfg)
+	allowPrivate, forced = HTTPUpstreamResolvedIPValidation(ctx)
+	require.True(t, forced)
+	require.True(t, allowPrivate)
 }
 
 func TestGrokAPIKeyURLPolicyFollowsGlobalSecurityConfig(t *testing.T) {

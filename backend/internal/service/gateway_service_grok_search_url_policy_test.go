@@ -54,7 +54,7 @@ func TestDoGrokNativeResponsesJSONDisablesRedirectsForAllowedRelay(t *testing.T)
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
 	allowPrivate, forced := HTTPUpstreamResolvedIPValidation(upstream.requests[0].Context())
 	require.False(t, allowPrivate)
-	require.False(t, forced, "HTTPS relays do not need the custom HTTP DNS marker")
+	require.True(t, forced, "HTTPS relays require resolved-IP validation too")
 }
 
 func TestDoGrokNativeResponsesJSONForcesResolvedIPValidationForHTTPRelay(t *testing.T) {

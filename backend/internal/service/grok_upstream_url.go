@@ -42,9 +42,10 @@ func grokBaseURLValidator(account *Account, cfg *config.Config) (xai.BaseURLVali
 }
 
 // grokOperatorPolicyValidator 按全局出站 URL 安全策略校验自定义 base_url：
-// HTTPS 在白名单开启时强制 UpstreamHosts，关闭时仅做格式校验；HTTP 无论
-// Enabled 状态都必须同时开启 allow_insecure_http，并精确匹配 UpstreamHosts
-// 中的主机与端口。私网和 Tailnet/CGNAT 地址还需要 allow_private_hosts。
+// HTTPS 在白名单开启时强制 UpstreamHosts，关闭时仅做格式校验；实际请求
+// 仍会强制校验解析后的 IP。HTTP 无论 Enabled 状态都必须同时开启
+// allow_insecure_http，并精确匹配 UpstreamHosts 中的主机与端口。私网和
+// Tailnet/CGNAT 地址还需要 allow_private_hosts。
 func grokOperatorPolicyValidator(cfg *config.Config) xai.BaseURLValidator {
 	if cfg == nil {
 		return xai.ValidateBaseURL
@@ -127,14 +128,15 @@ func withGrokHTTPUpstreamPolicy(ctx context.Context, targetURL string, cfg *conf
 		return ctx
 	}
 	parsed, err := url.Parse(targetURL)
-	if err == nil && strings.EqualFold(parsed.Scheme, "http") {
+	if err == nil && isGrokHTTPTransportScheme(parsed.Scheme) {
 		ctx = WithHTTPUpstreamResolvedIPValidation(ctx, cfg.Security.URLAllowlist.AllowPrivateHosts)
 	}
 	return ctx
 }
 
-// validateGrokHTTPUpstreamDNS validates the resolved destination before a
-// WebSocket dial, whose transport does not pass through HTTPUpstream.
+// validateGrokHTTPUpstreamDNS validates the resolved destination for both HTTP
+// and HTTPS base URLs before a WebSocket dial, whose transport does not pass
+// through HTTPUpstream.
 func validateGrokHTTPUpstreamDNS(raw string, cfg *config.Config) error {
 	if cfg == nil {
 		return nil
@@ -143,7 +145,7 @@ func validateGrokHTTPUpstreamDNS(raw string, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(parsed.Scheme, "http") {
+	if !isGrokHTTPTransportScheme(parsed.Scheme) {
 		return nil
 	}
 	host := strings.TrimSpace(parsed.Hostname())
@@ -151,6 +153,10 @@ func validateGrokHTTPUpstreamDNS(raw string, cfg *config.Config) error {
 		return errors.New("request host is empty")
 	}
 	return urlvalidator.ValidateResolvedIPWithOptions(host, cfg.Security.URLAllowlist.AllowPrivateHosts)
+}
+
+func isGrokHTTPTransportScheme(scheme string) bool {
+	return strings.EqualFold(scheme, "http") || strings.EqualFold(scheme, "https")
 }
 
 func redactedGrokBaseURLValidator(validator xai.BaseURLValidator) xai.BaseURLValidator {
