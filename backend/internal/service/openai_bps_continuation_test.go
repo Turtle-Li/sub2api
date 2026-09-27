@@ -261,3 +261,95 @@ func TestBPSRecordSuccessTracksSessionContext(t *testing.T) {
 	require.Equal(t, 4096, entry.bodyBytes)
 	require.True(t, bpsSessionContexts.tooLarge(scope, 4096))
 }
+
+// bpsTestStallStream 用管道模拟 BPS 上游，缩短 keepalive 与卡住判定以便测试。
+func bpsTestStallStream(t *testing.T, continuation bpsNativeContinuation) (*bpsPrimedBody, *io.PipeWriter) {
+	t.Helper()
+	previousKeepalive, previousStall := bpsSilenceKeepalive, bpsStreamStallLimit
+	bpsSilenceKeepalive, bpsStreamStallLimit = 10*time.Millisecond, 80*time.Millisecond
+	t.Cleanup(func() { bpsSilenceKeepalive, bpsStreamStallLimit = previousKeepalive, previousStall })
+	_, bridge, err := prepareBPSRequestBody(bpsTestShellBody(), &openAIBPSAttempt{upstreamModel: "gpt-6-astra", scope: "test:" + t.Name()})
+	require.NoError(t, err)
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = writer.Close() })
+	stream := newBPSBridgeStream(bridge, reader, true, time.Now().Add(time.Minute), continuation)
+	t.Cleanup(func() { _ = stream.Close() })
+	return stream, writer
+}
+
+func bpsTestWriteEvent(w io.Writer, event string) {
+	_, _ = io.WriteString(w, "event: "+gjson.Get(event, "type").String()+"\ndata: "+event+"\n\n")
+}
+
+// 已有输出后 BPS 上游长时间没有任何字节：不再用 keepalive 挂住客户端，改为接续原路径。
+func TestBPSContinuationAfterStall(t *testing.T) {
+	var reasons []string
+	stream, writer := bpsTestStallStream(t, func() (io.ReadCloser, error) {
+		return bpsTestSSE(`{"type":"response.completed","sequence_number":0,"response":{"id":"resp_native","output":[]}}`), nil
+	})
+	stream.onContinue = func(reason string, err error) {
+		require.NoError(t, err)
+		reasons = append(reasons, reason)
+	}
+	go bpsTestWriteEvent(writer, `{"type":"response.output_text.delta","sequence_number":1,"output_index":0,"delta":"let me check"}`)
+	ok, reason := stream.primeUntilOutput()
+	require.True(t, ok, reason)
+
+	done := make(chan []byte, 1)
+	go func() {
+		out, _ := io.ReadAll(stream)
+		done <- out
+	}()
+	select {
+	case out := <-done:
+		require.Contains(t, string(out), "let me check")
+		require.Contains(t, string(out), "resp_native")
+	case <-time.After(5 * time.Second):
+		t.Fatal("stalled BPS stream was never abandoned")
+	}
+	require.Len(t, reasons, 1)
+	require.Contains(t, reasons[0], "stream stalled after output")
+}
+
+// 上游仍在输出字节（如 basispoints 扣留工具事件）时，即使没有下发事件也不算卡住。
+func TestBPSStallIgnoresActiveUpstream(t *testing.T) {
+	stream, writer := bpsTestStallStream(t, func() (io.ReadCloser, error) {
+		t.Error("continuation must not run while the upstream is still sending")
+		return nil, errors.New("unexpected")
+	})
+	go func() {
+		bpsTestWriteEvent(writer, `{"type":"response.output_text.delta","sequence_number":1,"output_index":0,"delta":"hi"}`)
+		for i := 0; i < 15; i++ {
+			time.Sleep(20 * time.Millisecond)
+			_, _ = io.WriteString(writer, ": upstream ping\n\n")
+		}
+		bpsTestWriteEvent(writer, `{"type":"response.completed","sequence_number":2,"response":{"output":[]}}`)
+		_ = writer.Close()
+	}()
+	ok, reason := stream.primeUntilOutput()
+	require.True(t, ok, reason)
+	out, err := io.ReadAll(stream)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "response.completed")
+}
+
+// 接续也失败时以错误结束，客户端不会被无限期挂住。
+func TestBPSStallEndsStreamWhenContinuationFails(t *testing.T) {
+	stream, writer := bpsTestStallStream(t, func() (io.ReadCloser, error) {
+		return nil, errors.New("native down")
+	})
+	go bpsTestWriteEvent(writer, `{"type":"response.output_text.delta","sequence_number":1,"output_index":0,"delta":"hi"}`)
+	ok, reason := stream.primeUntilOutput()
+	require.True(t, ok, reason)
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.ReadAll(stream)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream kept hanging after a failed continuation")
+	}
+}

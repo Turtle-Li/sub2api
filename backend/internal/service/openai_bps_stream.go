@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
@@ -27,6 +29,57 @@ const (
 var bpsSilenceKeepalive = 15 * time.Second
 
 var bpsKeepaliveComment = []byte(": bps keepalive\n\n")
+
+// bpsStreamStallLimit：放行后 BPS 上游连续这么久没有任何字节即视为卡住，停止等待并接续原路径。
+// 生产中出现过上游卡住后，keepalive 一直维持连接 4~30 分钟才等到断开。按上游原始字节计时：
+// basispoints 扣留工具事件时上游仍在输出，不会误判；BPS 成功请求的首字延迟通常在 20 秒内。
+var bpsStreamStallLimit = 120 * time.Second
+
+// bpsUpstreamActivity 记录 BPS 上游（含工具格式纠正请求）最后一次收到字节的时间。
+type bpsUpstreamActivity struct {
+	last atomic.Int64
+}
+
+func newBPSUpstreamActivity() *bpsUpstreamActivity {
+	a := &bpsUpstreamActivity{}
+	a.touch()
+	return a
+}
+
+func (a *bpsUpstreamActivity) touch() { a.last.Store(time.Now().UnixNano()) }
+
+func (a *bpsUpstreamActivity) idle() time.Duration {
+	return time.Since(time.Unix(0, a.last.Load()))
+}
+
+// wrap 返回读取时刷新活动时间的 body；a 为 nil 时原样返回。
+func (a *bpsUpstreamActivity) wrap(body io.ReadCloser) io.ReadCloser {
+	if a == nil {
+		return body
+	}
+	return &bpsActivityReader{ReadCloser: body, activity: a}
+}
+
+type bpsActivityReader struct {
+	io.ReadCloser
+	activity *bpsUpstreamActivity
+}
+
+func (r *bpsActivityReader) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 {
+		r.activity.touch()
+	}
+	return n, err
+}
+
+type bpsActivityContextKey struct{}
+
+// bpsActivityFrom 取出流上的活动记录，供工具格式纠正请求的响应体计入活动。
+func bpsActivityFrom(ctx context.Context) *bpsUpstreamActivity {
+	activity, _ := ctx.Value(bpsActivityContextKey{}).(*bpsUpstreamActivity)
+	return activity
+}
 
 const bpsNoOutputReason = "no output within the BPS first-output budget"
 
@@ -82,6 +135,8 @@ type bpsPrimedBody struct {
 	// continuation 非 nil 时，放行后 BPS 再失败（response.failed、error 或未完成即断开）
 	// 不把失败转给客户端，而是发起原路径请求并把它的事件接在已输出内容之后。
 	continuation bpsNativeContinuation
+	// activity 非 nil 时，放行后上游静默超过 bpsStreamStallLimit 即视为卡住。
+	activity *bpsUpstreamActivity
 	// onContinue 在接续发生时回调：err 非 nil 表示原路径也失败，失败事件已原样转给客户端。
 	onContinue func(reason string, err error)
 	native     *bufio.Reader
@@ -109,10 +164,19 @@ func newBPSBridgeStreamWithRepair(ctx context.Context, bridge *basispoints.Bridg
 	case bridge.HasClientTools() && continuation == nil:
 		mode = bpsHoldTools
 	}
-	stream := newBPSPrimedBody(bridge.StreamWithToolRepair(ctx, upstream, repair))
+	activity := newBPSUpstreamActivity()
+	if repair != nil {
+		inner := repair
+		repair = func(ctx context.Context, failed map[string]any, validation error) (map[string]any, error) {
+			activity.touch()
+			return inner(context.WithValue(ctx, bpsActivityContextKey{}, activity), failed, validation)
+		}
+	}
+	stream := newBPSPrimedBody(bridge.StreamWithToolRepair(ctx, activity.wrap(upstream), repair))
 	stream.mode = mode
 	stream.deadline = deadline
 	stream.continuation = continuation
+	stream.activity = activity
 	return stream
 }
 
@@ -196,6 +260,10 @@ func (b *bpsPrimedBody) fillBPS() {
 		}
 		chunk, ok := b.next(keepalive)
 		if !ok {
+			if b.activity != nil && b.activity.idle() >= bpsStreamStallLimit {
+				b.abandonStalledBPS()
+				return
+			}
 			b.primed.Write(bpsKeepaliveComment)
 			return
 		}
@@ -241,6 +309,20 @@ func (b *bpsPrimedBody) fillBPS() {
 			b.err = io.EOF
 		}
 		return
+	}
+}
+
+// abandonStalledBPS 放弃卡住的 BPS 流：已完成则直接结束，否则接续原路径；接续失败时以错误结束，
+// 不再用 keepalive 无限期挂住客户端。
+func (b *bpsPrimedBody) abandonStalledBPS() {
+	if b.completed {
+		b.stopBPS()
+		b.err = io.EOF
+		return
+	}
+	if !b.startContinuation(fmt.Sprintf("stream stalled after output: no data for %s", bpsStreamStallLimit)) {
+		b.stopBPS()
+		b.err = io.ErrUnexpectedEOF
 	}
 }
 

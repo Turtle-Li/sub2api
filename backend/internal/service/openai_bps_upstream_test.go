@@ -301,31 +301,72 @@ func TestBPSPrimedStreamReleasesAfterOutputPastBudget(t *testing.T) {
 
 func TestBPSSessionCooldown(t *testing.T) {
 	now := time.Now()
-	store := &bpsSessionCooldownStore{until: map[string]time.Time{}, now: func() time.Time { return now }}
+	store := newBPSSessionCooldownStore(func() time.Time { return now })
 	require.False(t, store.active("s1"))
-	store.mark("s1")
-	store.mark("")
+	// 单次、两次失败都照常尝试 BPS，连续第三次才冷却。
+	for i := 1; i < bpsSessionCooldownThreshold; i++ {
+		require.False(t, store.mark("s1"))
+		require.False(t, store.active("s1"), "failure %d must not cool the session down", i)
+	}
+	require.False(t, store.mark(""))
+	require.True(t, store.mark("s1"))
 	require.True(t, store.active("s1"))
 	require.False(t, store.active("s2"))
 	now = now.Add(bpsSessionCooldown)
 	require.False(t, store.active("s1"))
-	require.Empty(t, store.until)
+
+	// 冷却结束后重新计数。
+	require.False(t, store.mark("s1"))
+	require.False(t, store.active("s1"))
+
+	// BPS 成功清除计数。
+	store.mark("s3")
+	store.mark("s3")
+	store.clear("s3")
+	require.False(t, store.mark("s3"))
+
+	// 失败间隔超过窗口时重新计数。
+	store.mark("s4")
+	store.mark("s4")
+	now = now.Add(bpsSessionFailureWindow)
+	require.False(t, store.mark("s4"))
+	require.False(t, store.active("s4"))
+
+	now = now.Add(bpsSessionFailureWindow)
+	for _, scope := range []string{"s1", "s3", "s4"} {
+		require.False(t, store.active(scope))
+	}
+	require.Empty(t, store.sessions)
 }
 
 func TestBPSFailureCoolsDownOnlyConversionFailures(t *testing.T) {
 	previous := bpsSessionCooldowns
-	bpsSessionCooldowns = &bpsSessionCooldownStore{until: map[string]time.Time{}, now: time.Now}
+	bpsSessionCooldowns = newBPSSessionCooldownStore(time.Now)
 	defer func() { bpsSessionCooldowns = previous }()
 	accountID := int64(990000 + time.Now().UnixNano()%1000)
 	defer bpsBreaker.recordSuccess(accountID)
 
-	network := &openAIBPSAttempt{accountID: accountID, scope: "net"}
-	network.recordFailure(bpsFailureNetwork, 0, "dial", false)
+	for i := 0; i < bpsSessionCooldownThreshold; i++ {
+		network := &openAIBPSAttempt{accountID: accountID, scope: "net"}
+		network.recordFailure(bpsFailureNetwork, 0, "dial", false)
+		bpsBreaker.recordSuccess(accountID)
+	}
 	require.False(t, bpsSessionCooldowns.active("net"))
 
-	stream := &openAIBPSAttempt{accountID: accountID, scope: "conv"}
-	stream.recordFailure(bpsFailureStream, 0, "raw transport", false)
+	for i := 0; i < bpsSessionCooldownThreshold; i++ {
+		require.False(t, bpsSessionCooldowns.active("conv"), "failure %d", i)
+		stream := &openAIBPSAttempt{accountID: accountID, scope: "conv"}
+		stream.recordFailure(bpsFailureStream, 0, "raw transport", false)
+	}
 	require.True(t, bpsSessionCooldowns.active("conv"))
+
+	// 中途成功一次会清除连续失败计数。
+	for i := 0; i < bpsSessionCooldownThreshold-1; i++ {
+		(&openAIBPSAttempt{accountID: accountID, scope: "flaky"}).recordFailure(bpsFailureStream, 0, "raw transport", false)
+	}
+	(&openAIBPSAttempt{accountID: accountID, scope: "flaky"}).recordSuccess(nil)
+	(&openAIBPSAttempt{accountID: accountID, scope: "flaky"}).recordFailure(bpsFailureStream, 0, "raw transport", false)
+	require.False(t, bpsSessionCooldowns.active("flaky"))
 }
 
 // Close 必须能打断阻塞中的读取，不泄漏读取 goroutine。
@@ -462,9 +503,11 @@ func TestOpenAIBPSAttemptGate(t *testing.T) {
 	refreshOpenAIBPSUpstreamConfigCache(OpenAIBPSUpstreamConfig{Enabled: true, AccountIDs: []int64{account.ID}, LiveSearch: true})
 	require.NotNil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, liveSearchTool, "gpt-5.6-terra", "high", false, false, false))
 	// 会话冷却期间同一会话直接走原路径。
-	bpsSessionCooldowns.mark(attempt.scope)
+	for i := 0; i < bpsSessionCooldownThreshold; i++ {
+		bpsSessionCooldowns.mark(attempt.scope)
+	}
 	require.Nil(t, svc.openAIBPSAttemptFor(context.Background(), nil, account, body, "gpt-6-astra", "high", false, false, false))
-	delete(bpsSessionCooldowns.until, attempt.scope)
+	bpsSessionCooldowns.clear(attempt.scope)
 	require.NotEmpty(t, attempt.scope)
 
 	snapshot := BPSUpstreamMonitorSnapshot()
@@ -617,6 +660,11 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 		}}
 		svc := &OpenAIGatewayService{httpUpstream: upstream}
 		attempt := &openAIBPSAttempt{accountID: account.ID, body: bpsTestShellBody(), upstreamModel: "gpt-6-astra", scope: "test-format", clientStream: true}
+		// 会话已差一次失败就会冷却：格式错误不能计入。
+		t.Cleanup(func() { bpsSessionCooldowns.clear("test-format") })
+		for i := 0; i < bpsSessionCooldownThreshold-1; i++ {
+			bpsSessionCooldowns.mark("test-format")
+		}
 		resp, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", attempt)
 		require.NoError(t, err)
 		require.NotNil(t, bpsRun)

@@ -35,10 +35,13 @@ const (
 	bpsBreakerOpenDuration = 10 * time.Minute
 	// bpsFirstOutputBudget 是未配置首输出超时时，BPS 从发起到出现首个模型产出事件的上限。
 	bpsFirstOutputBudget = 20 * time.Second
-	// bpsSessionCooldown 是同一会话 BPS 转换失败后直接走原路径的时长：
-	// 同一对话的下一轮通常以相同方式失败，避免每轮都先浪费一次 BPS 往返。
-	bpsSessionCooldown    = 3 * time.Minute
-	bpsSessionCooldownMax = 10000
+	// bpsSessionCooldown 是同一会话连续 bpsSessionCooldownThreshold 次 BPS 转换失败后直接走原路径的时长。
+	// 单次首产出超时或中途卡住多为偶发，下一轮照常尝试 BPS；连续失败才说明该会话在 BPS 上有问题。
+	bpsSessionCooldown          = 3 * time.Minute
+	bpsSessionCooldownThreshold = 3
+	// bpsSessionFailureWindow：距上次失败超过此时长，连续失败计数重新开始。
+	bpsSessionFailureWindow = 10 * time.Minute
+	bpsSessionCooldownMax   = 10000
 	// bpsContextTokenLimit：BPS 上下文（按 BPS 计量）超过约 20.8 万 token 后不再产出也不报错，
 	// 只能等首产出预算超时再回退。会话上一轮已达此规模时直接走原路径，直到客户端压缩上下文。
 	bpsContextTokenLimit = 200_000
@@ -150,43 +153,84 @@ func (b *bpsCircuitBreaker) state(accountID int64) (int, *time.Time) {
 
 // ---- 按会话冷却 ----
 
-type bpsSessionCooldownStore struct {
-	mu    sync.Mutex
-	until map[string]time.Time
-	now   func() time.Time
+type bpsSessionCooldownState struct {
+	failures    int
+	lastFailure time.Time
+	until       time.Time
 }
 
-var bpsSessionCooldowns = &bpsSessionCooldownStore{until: map[string]time.Time{}, now: time.Now}
+type bpsSessionCooldownStore struct {
+	mu       sync.Mutex
+	sessions map[string]*bpsSessionCooldownState
+	now      func() time.Time
+}
 
-func (c *bpsSessionCooldownStore) mark(scope string) {
+var bpsSessionCooldowns = newBPSSessionCooldownStore(time.Now)
+
+func newBPSSessionCooldownStore(now func() time.Time) *bpsSessionCooldownStore {
+	return &bpsSessionCooldownStore{sessions: map[string]*bpsSessionCooldownState{}, now: now}
+}
+
+// mark 记录会话一次 BPS 转换失败，连续失败达到阈值时开始冷却并重新计数；返回是否开始冷却。
+func (c *bpsSessionCooldownStore) mark(scope string) bool {
 	if scope == "" {
-		return
+		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
-	if len(c.until) >= bpsSessionCooldownMax {
-		for key, until := range c.until {
-			if !now.Before(until) {
-				delete(c.until, key)
+	state := c.sessions[scope]
+	if state == nil {
+		if len(c.sessions) >= bpsSessionCooldownMax {
+			for key, s := range c.sessions {
+				if c.expired(s, now) {
+					delete(c.sessions, key)
+				}
+			}
+			if len(c.sessions) >= bpsSessionCooldownMax {
+				return false
 			}
 		}
-		if len(c.until) >= bpsSessionCooldownMax {
-			return
-		}
+		state = &bpsSessionCooldownState{}
+		c.sessions[scope] = state
 	}
-	c.until[scope] = now.Add(bpsSessionCooldown)
+	if now.Sub(state.lastFailure) >= bpsSessionFailureWindow {
+		state.failures = 0
+	}
+	state.failures++
+	state.lastFailure = now
+	if state.failures < bpsSessionCooldownThreshold {
+		return false
+	}
+	state.failures = 0
+	state.until = now.Add(bpsSessionCooldown)
+	return true
+}
+
+// clear 在会话 BPS 成功后清除连续失败计数。
+func (c *bpsSessionCooldownStore) clear(scope string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.sessions, scope)
 }
 
 func (c *bpsSessionCooldownStore) active(scope string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	until, ok := c.until[scope]
-	if ok && !c.now().Before(until) {
-		delete(c.until, scope)
+	state, ok := c.sessions[scope]
+	if !ok {
 		return false
 	}
-	return ok
+	now := c.now()
+	if c.expired(state, now) {
+		delete(c.sessions, scope)
+	}
+	return now.Before(state.until)
+}
+
+// expired 表示记录既不在冷却中、失败计数也已过期，可以删除。
+func (c *bpsSessionCooldownStore) expired(state *bpsSessionCooldownState, now time.Time) bool {
+	return !now.Before(state.until) && now.Sub(state.lastFailure) >= bpsSessionFailureWindow
 }
 
 // ---- 按会话上下文规模 ----
@@ -383,6 +427,7 @@ func (a *openAIBPSAttempt) recordSuccess(usage *OpenAIUsage) {
 		}
 	}
 	bpsBreaker.recordSuccess(a.accountID)
+	bpsSessionCooldowns.clear(a.scope)
 	bpsMonitor.record(a.event(BPSOutcomeSuccess, "", "", 0))
 }
 
@@ -659,7 +704,7 @@ func (s *OpenAIGatewayService) bpsToolRepair(account *Account, token string, att
 		stop := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
 		defer stop()
 		prepared = corrected
-		return basispoints.ReadToolRepairResponse(resp.Body)
+		return basispoints.ReadToolRepairResponse(bpsActivityFrom(ctx).wrap(resp.Body))
 	}
 }
 
