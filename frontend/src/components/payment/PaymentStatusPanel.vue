@@ -318,6 +318,7 @@
               <div class="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
             </div>
             <iframe
+              ref="checkoutFrame"
               data-test="alipay-checkout-frame"
               :src="currentCheckoutFrameUrl"
               class="border-0"
@@ -544,11 +545,38 @@ const currentCheckoutFrameUrl = computed(() => {
   const raw = resumedCheckoutFrameUrl.value ?? props.checkoutFrameUrl ?? ''
   return validateAlipayCheckoutFrameUrl(raw)
 })
+const checkoutFrame = ref<HTMLIFrameElement | null>(null)
 const frameLoadError = ref(false)
 const iframeLoading = ref(true)
 
+function isEmbeddedPaymentResultUrl(rawUrl: string): boolean {
+  if (typeof window === 'undefined' || !rawUrl) return false
+  try {
+    const url = new URL(rawUrl, window.location.origin)
+    return url.origin === window.location.origin
+      && url.pathname.replace(/\/+$/, '') === '/payment/result'
+  } catch {
+    return false
+  }
+}
+
 function onIframeLoad() {
   iframeLoading.value = false
+  const frame = checkoutFrame.value
+  if (!frame) return
+
+  try {
+    const frameUrl = frame.contentWindow?.location.href || ''
+    if (!isEmbeddedPaymentResultUrl(frameUrl)) return
+
+    // Hide the full-page result synchronously before Vue swaps the checkout
+    // surface for our own authoritative confirmation state.
+    frame.style.visibility = 'hidden'
+    waitForAuthoritativeConfirmation()
+  } catch {
+    // Alipay remains cross-origin while checkout is active. The browser blocks
+    // location access in that state, which is expected and must not imply paid.
+  }
 }
 
 function onIframeError() {

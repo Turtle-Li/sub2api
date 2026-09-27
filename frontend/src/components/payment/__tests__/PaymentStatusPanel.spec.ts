@@ -271,6 +271,106 @@ describe('PaymentStatusPanel', () => {
     expect(wrapper.emitted('success')).toHaveLength(1)
   })
 
+  it('keeps the Alipay frame open while its cross-origin location is unreadable', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        allowCheckoutFrame: true,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const iframe = wrapper.get('[data-test="alipay-checkout-frame"]')
+    Object.defineProperty(iframe.element, 'contentWindow', {
+      configurable: true,
+      get: () => { throw new DOMException('Blocked by cross-origin policy', 'SecurityError') },
+    })
+
+    await iframe.trigger('load')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="payment-confirmation-pending"]').exists()).toBe(false)
+    expect(wrapper.emitted('success')).toBeUndefined()
+  })
+
+  it('ignores same-origin iframe loads outside the payment result route', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        allowCheckoutFrame: true,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const iframe = wrapper.get('[data-test="alipay-checkout-frame"]')
+    Object.defineProperty(iframe.element, 'contentWindow', {
+      configurable: true,
+      value: { location: { href: window.location.origin + '/account/orders' } },
+    })
+
+    await iframe.trigger('load')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="payment-confirmation-pending"]').exists()).toBe(false)
+  })
+
+  it('replaces the embedded result page with confirmation state until the server completes the order', async () => {
+    pollOrderStatus
+      .mockResolvedValueOnce(orderFactory('PENDING'))
+      .mockResolvedValueOnce(orderFactory('PENDING'))
+      .mockResolvedValueOnce(orderFactory('COMPLETED'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        checkoutFrameUrl: alipayCheckoutFrameUrl(),
+        allowCheckoutFrame: true,
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    const iframe = wrapper.get('[data-test="alipay-checkout-frame"]')
+    Object.defineProperty(iframe.element, 'contentWindow', {
+      configurable: true,
+      value: { location: { href: window.location.origin + '/payment/result?order_id=42&status=success' } },
+    })
+
+    await iframe.trigger('load')
+    expect((iframe.element as HTMLIFrameElement).style.visibility).toBe('hidden')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="alipay-checkout-frame"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="payment-confirmation-pending"]').exists()).toBe(true)
+    expect(wrapper.emitted('success')).toBeUndefined()
+    expect(pollOrderStatus).toHaveBeenCalledTimes(2)
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+
+    expect(wrapper.emitted('success')).toHaveLength(1)
+    expect(wrapper.text()).toContain('payment.result.success')
+  })
+
   it('falls back to redirect waiting card without drawing canvas when allowCheckoutFrame is false', async () => {
     pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
     const wrapper = mount(PaymentStatusPanel, {
