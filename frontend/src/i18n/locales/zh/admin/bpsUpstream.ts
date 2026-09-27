@@ -145,6 +145,7 @@ export default { bpsUpstream: {
     "stream_before_output": "流在输出前失败",
     "handler_before_output": "响应处理失败",
     "native_continuation": "输出后接续原路径",
-    "context_stall": "上下文过大未产出"
+    "context_stall": "上下文过大未产出",
+    "encrypted_content": "会话密文无法解密"
   }
 } }

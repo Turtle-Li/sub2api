@@ -356,6 +356,9 @@ const (
 	bpsFailureContinued = "native_continuation"
 	// bpsFailureContextStall：会话上下文过大导致首产出超时，只影响该会话，不计入账号熔断。
 	bpsFailureContextStall = "context_stall"
+	// bpsFailureEncrypted：删掉推理密文重试后 BPS 仍拒绝会话里的密文（如多智能体消息），
+	// 只影响该会话：不计入账号熔断，按会话冷却。
+	bpsFailureEncrypted = "encrypted_content"
 )
 
 func (a *openAIBPSAttempt) event(outcome, reason, detail string, statusCode int) BPSEvent {
@@ -400,10 +403,10 @@ func (a *openAIBPSAttempt) logger() *zap.Logger {
 func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail string, afterOutput bool) {
 	opened := false
 	formatOnly := bpsIsToolFormatFailure(detail)
-	if a.failed.CompareAndSwap(false, true) && reason != bpsFailureContextStall && !formatOnly {
+	if a.failed.CompareAndSwap(false, true) && reason != bpsFailureContextStall && reason != bpsFailureEncrypted && !formatOnly {
 		opened = bpsBreaker.recordFailure(a.accountID, statusCode)
 	}
-	if !formatOnly && (reason == bpsFailureStream || reason == bpsFailureHandler || reason == bpsFailureContinued) {
+	if !formatOnly && (reason == bpsFailureStream || reason == bpsFailureHandler || reason == bpsFailureContinued || reason == bpsFailureEncrypted) {
 		bpsSessionCooldowns.mark(a.scope)
 	}
 	outcome := BPSOutcomeFallback
@@ -644,7 +647,11 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, acco
 			}
 		}
 		if resp == nil {
-			attempt.recordFailure(bpsFailureHTTPStatus, statusCode, extractUpstreamErrorMessage(errBody), false)
+			reason := bpsFailureHTTPStatus
+			if statusCode == http.StatusBadRequest && extractUpstreamErrorCode(errBody) == "invalid_encrypted_content" {
+				reason = bpsFailureEncrypted
+			}
+			attempt.recordFailure(reason, statusCode, extractUpstreamErrorMessage(errBody), false)
 			return nil, false
 		}
 		if !headerTimer.Stop() {

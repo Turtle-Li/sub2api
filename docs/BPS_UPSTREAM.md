@@ -1,7 +1,7 @@
 # BPS 上游（Basis Points）维护手册
 
 > 目的：让后续迭代新功能、排查和修复问题时不必重新摸索。改动 BPS 相关代码后请同步更新本文件（尤其是“未解决问题”和“常量”两节）。
-> 最后更新：2026-09-28（新增放行后总时长上限 5 分钟；inline_image 以外链化结果判定，不再因文本提到 data:image/ 跳过）。
+> 最后更新：2026-09-28（新增放行后总时长上限 5 分钟；inline_image 以外链化结果判定，不再因文本提到 data:image/ 跳过；多智能体加密消息原样透传给 BPS）。
 
 ## 1. 是什么、为什么
 
@@ -116,6 +116,7 @@ Hold 模式（`openai_bps_stream.go`）：
 
 - 内联 `data:` 图片先由附件网关 `bpsImageExternalizer` 上传 R2 转为 HTTPS 链接；未配置或外链化出错/超时/未全部外链化 → skip `inline_image`（不计熔断）。`data:image/` 子串只是粗筛：文本里提到它（外链化统计 0 张图）不再跳过，残留的内联图由 basispoints 校验拒绝（`unsupported_request`）。此前 7 天 294 次 inline_image 跳过中 169 次统计为 0 张图，其余图片已全部外链化，基本都是这种误判。
 - 图片 `detail: "original"`（Codex `view_image` 对支持原图的模型会发）由 `bpsNormalizeImageDetail` 改为 `high` 后再交给 basispoints（它只接受 auto/low/high）。这类图片会留在对话历史里：不改写的话，整个会话之后每个请求都会 skip `unsupported_request`。2026-09-27 生产上就有一个会话因此持续走原路径，又碰上原路径 503 overloaded。
+- Codex 多智能体（collaboration 工具）经原路径时，`send_message`/`followup_task` 的消息正文被加密，历史中出现 `agent_message` 项，content 含 `{"type":"encrypted_content"}`。BPS 能直接解密（实测：另一账号在原路径产生的密文，BPS 能准确复述内容），因此 basispoints 只在 `agent_message` 内原样透传这种内容；空密文或出现在其他项里仍拒绝。此前一律报 `unsupported_request`，会话只要有一轮多智能体消息走过原路径，此后每轮都跳过 BPS（2026-09-27/28 共约 400 次）。万一 BPS 解不开（删掉推理密文重试后仍报 400 `invalid_encrypted_content`），记为 `encrypted_content`：只让该会话冷却，不计入账号熔断。
 - 未导入 ranxi 的本地图片中转与结构化输出校验；`text.format` 为 `json_object`/`json_schema` 的请求 Prepare 报错 → skip `unsupported_request`。
 
 ### 3.7 模型与请求头

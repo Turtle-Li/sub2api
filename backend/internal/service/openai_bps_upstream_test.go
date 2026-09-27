@@ -369,6 +369,24 @@ func TestBPSFailureCoolsDownOnlyConversionFailures(t *testing.T) {
 	require.False(t, bpsSessionCooldowns.active("flaky"))
 }
 
+// 会话里的密文 BPS 解不开只影响该会话：按会话冷却，不熔断整个账号。
+func TestBPSEncryptedFailureCoolsSessionWithoutBreaker(t *testing.T) {
+	previous := bpsSessionCooldowns
+	bpsSessionCooldowns = newBPSSessionCooldownStore(time.Now)
+	defer func() { bpsSessionCooldowns = previous }()
+	accountID := int64(991000 + time.Now().UnixNano()%1000)
+	defer bpsBreaker.recordSuccess(accountID)
+
+	for i := 0; i < bpsBreakerThreshold+bpsSessionCooldownThreshold; i++ {
+		(&openAIBPSAttempt{accountID: accountID, scope: "agents"}).recordFailure(bpsFailureEncrypted, 400, "invalid encrypted content", false)
+	}
+	failures, openUntil := bpsBreaker.state(accountID)
+	require.Zero(t, failures)
+	require.Nil(t, openUntil)
+	require.True(t, bpsBreaker.allow(accountID))
+	require.True(t, bpsSessionCooldowns.active("agents"))
+}
+
 // Close 必须能打断阻塞中的读取，不泄漏读取 goroutine。
 func TestBPSPrimedStreamCloseUnblocksRead(t *testing.T) {
 	reader, _ := io.Pipe()

@@ -162,14 +162,38 @@ func TestRelayDoesNotCopyWrapperEncryptionMetadata(t *testing.T) {
 	requirePlaintextArguments(t, call)
 }
 
-func TestAgentCiphertextIsNeverGuessedAsPlaintext(t *testing.T) {
+func TestAgentCiphertextPassesThroughVerbatim(t *testing.T) {
+	// 原通道加密的代理间消息由 BPS 解密：原样透传，既不当作明文也不丢弃。
 	for _, value := range []string{"ordinary-looking task from an old session", "gAAAAABopaqueCiphertext"} {
+		header := object{"type": "input_text", "text": "Message Type: MESSAGE\nPayload:\n"}
+		encrypted := object{"type": "encrypted_content", "encrypted_content": value}
 		source := testSource()
-		source["input"] = []any{object{"type": "agent_message", "author": "/root", "recipient": "/root/worker",
-			"content": []any{object{"type": "encrypted_content", "encrypted_content": value}}}}
+		source["input"] = []any{message("user", "review"), object{"type": "agent_message", "author": "/root/worker", "recipient": "/root",
+			"content": []any{header, encrypted}}}
+		result, _ := mustPrepare(t, source, "scope", nil)
+		var forwarded object
+		for _, raw := range mustTestValue[[]any](t, result["input"]) {
+			if item, _ := raw.(object); text(item["type"]) == "agent_message" {
+				forwarded = item
+			}
+		}
+		want := []any{object{"type": "input_text", "text": "Message Type: MESSAGE\nPayload:\n"}, object{"type": "encrypted_content", "encrypted_content": value}}
+		if forwarded == nil || !reflect.DeepEqual(forwarded["content"], want) {
+			t.Fatalf("agent ciphertext must be forwarded unchanged, got %#v", forwarded)
+		}
+	}
+}
+
+func TestEncryptedContentOutsideAgentMessagesIsRejected(t *testing.T) {
+	for _, item := range []object{
+		{"type": "agent_message", "author": "/root", "recipient": "/root/worker", "content": []any{object{"type": "encrypted_content", "encrypted_content": ""}}},
+		{"type": "message", "role": "user", "content": []any{object{"type": "encrypted_content", "encrypted_content": "gAAAAABopaqueCiphertext"}}},
+	} {
+		source := testSource()
+		source["input"] = []any{item}
 		raw, _ := json.Marshal(source)
-		if _, _, err := Prepare(raw, "scope", nil); err == nil {
-			t.Fatal("unknown encrypted content must not be reinterpreted or dropped")
+		if _, _, err := Prepare(raw, "scope", nil); err == nil || !strings.Contains(err.Error(), "input[0].content[0]") {
+			t.Fatalf("expected rejection with path for %#v, got %v", item, err)
 		}
 	}
 }
