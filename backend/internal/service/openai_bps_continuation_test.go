@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -324,6 +325,70 @@ func TestBPSStallIgnoresActiveUpstream(t *testing.T) {
 			_, _ = io.WriteString(writer, ": upstream ping\n\n")
 		}
 		bpsTestWriteEvent(writer, `{"type":"response.completed","sequence_number":2,"response":{"output":[]}}`)
+		_ = writer.Close()
+	}()
+	ok, reason := stream.primeUntilOutput()
+	require.True(t, ok, reason)
+	out, err := io.ReadAll(stream)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "response.completed")
+}
+
+// 上游一直有字节但事件全被扣留（如失控生成超长工具调用）：超过 bpsStreamSilenceLimit 即接续原路径。
+func TestBPSContinuationWhenEventsWithheld(t *testing.T) {
+	previous := bpsStreamSilenceLimit
+	bpsStreamSilenceLimit = 150 * time.Millisecond
+	t.Cleanup(func() { bpsStreamSilenceLimit = previous })
+	var reasons []string
+	stream, writer := bpsTestStallStream(t, func() (io.ReadCloser, error) {
+		return bpsTestSSE(`{"type":"response.completed","sequence_number":0,"response":{"id":"resp_native","output":[]}}`), nil
+	})
+	stream.onContinue = func(reason string, err error) {
+		require.NoError(t, err)
+		reasons = append(reasons, reason)
+	}
+	go func() {
+		bpsTestWriteEvent(writer, `{"type":"response.output_text.delta","sequence_number":1,"output_index":0,"delta":"let me check"}`)
+		for {
+			time.Sleep(20 * time.Millisecond)
+			if _, err := io.WriteString(writer, ": upstream ping\n\n"); err != nil {
+				return
+			}
+		}
+	}()
+	ok, reason := stream.primeUntilOutput()
+	require.True(t, ok, reason)
+
+	done := make(chan []byte, 1)
+	go func() {
+		out, _ := io.ReadAll(stream)
+		done <- out
+	}()
+	select {
+	case out := <-done:
+		require.Contains(t, string(out), "resp_native")
+	case <-time.After(5 * time.Second):
+		t.Fatal("withheld BPS stream was never abandoned")
+	}
+	require.Len(t, reasons, 1)
+	require.Contains(t, reasons[0], "stream withheld after output")
+}
+
+// 持续下发事件的 BPS 流即使总时长超过 bpsStreamSilenceLimit 也不会被放弃。
+func TestBPSSilenceResetsOnDeliveredEvents(t *testing.T) {
+	previous := bpsStreamSilenceLimit
+	bpsStreamSilenceLimit = 100 * time.Millisecond
+	t.Cleanup(func() { bpsStreamSilenceLimit = previous })
+	stream, writer := bpsTestStallStream(t, func() (io.ReadCloser, error) {
+		t.Error("continuation must not run while events are delivered")
+		return nil, errors.New("unexpected")
+	})
+	go func() {
+		for i := 1; i <= 15; i++ {
+			bpsTestWriteEvent(writer, fmt.Sprintf(`{"type":"response.output_text.delta","sequence_number":%d,"output_index":0,"delta":"x"}`, i))
+			time.Sleep(20 * time.Millisecond)
+		}
+		bpsTestWriteEvent(writer, `{"type":"response.completed","sequence_number":16,"response":{"output":[]}}`)
 		_ = writer.Close()
 	}()
 	ok, reason := stream.primeUntilOutput()

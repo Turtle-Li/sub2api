@@ -1,7 +1,7 @@
 # BPS 上游（Basis Points）维护手册
 
 > 目的：让后续迭代新功能、排查和修复问题时不必重新摸索。改动 BPS 相关代码后请同步更新本文件（尤其是“未解决问题”和“常量”两节）。
-> 最后更新：2026-09-27（会话冷却改为连续 3 次失败、新增中途卡住接续）。
+> 最后更新：2026-09-27（会话冷却改为连续 3 次失败、新增中途卡住与事件扣留接续）。
 
 ## 1. 是什么、为什么
 
@@ -83,6 +83,7 @@ Hold 模式（`openai_bps_stream.go`）：
 - **按账号熔断**：连续 3 次失败打开 10 分钟（`bpsBreakerThreshold`、`bpsBreakerOpenDuration`）。面板可手动重置。
 - **会话冷却**：同一会话连续 3 次 BPS 转换失败（`stream_before_output` / `handler_before_output` / `native_continuation`）后 3 分钟内直接走原路径（`bpsSessionCooldownThreshold`、`bpsSessionCooldown`）。单次失败下一轮照常尝试 BPS；BPS 成功或距上次失败超过 10 分钟（`bpsSessionFailureWindow`）清零计数。scope = `account:%d/key:%d/thread:<identity>`。
 - **中途卡住**：放行后 BPS 上游连续 `bpsStreamStallLimit = 120s` 没有任何字节（按原始上游字节计时，含工具纠正请求的响应，不受 basispoints 扣留工具事件影响）即停止 BPS，同一条流接续原路径（`native_continuation`，detail `stream stalled after output`）；接续失败以错误结束流。此前 keepalive 会无限期维持连接，生产中出现过卡住 4~30 分钟才因上游断开（unexpected EOF）接续。
+- **事件扣留（失控生成）**：放行后连续 `bpsStreamSilenceLimit = 180s` 没有向客户端送出任何 BPS 事件（keepalive 不算）同样接续原路径（detail `stream withheld after output`）。生产中 gpt-6-astra 出现过上游持续生成、事件全被 basispoints 扣留，直到 128000 输出上限、17~24 分钟才结束；此时上游一直有字节，120s 字节判定不会触发。正常 BPS 请求总时长最长约 130 秒。
 - **格式类失败豁免**：`bpsIsToolFormatFailure` 为真（模型纠正后仍写错传输格式）时不推进熔断、不设冷却；纠正请求本身网络/HTTP 失败仍按账号问题处理。
 - **context_stall**：首产出超时且上一轮上下文 ≥ 15 万时标记该会话 stalled，不计入账号熔断。
 
@@ -151,7 +152,7 @@ Hold 模式（`openai_bps_stream.go`）：
 | http_status | 非 2xx 或非 SSE | 是 |
 | stream_before_output | 首产出前流错误或超时 | 是（格式类除外） |
 | handler_before_output | 处理器在输出前失败 | 是 |
-| native_continuation | 已输出后 BPS 失败或卡住 120s，同流接续原路径 | 否 |
+| native_continuation | 已输出后 BPS 失败、卡住 120s 或 180s 无事件，同流接续原路径 | 否 |
 | context_stall | 上下文过大导致首产出超时 | 否 |
 
 结果：`success` / `fallback` / `skipped` / `error_after_output`。

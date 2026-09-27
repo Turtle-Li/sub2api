@@ -35,6 +35,11 @@ var bpsKeepaliveComment = []byte(": bps keepalive\n\n")
 // basispoints 扣留工具事件时上游仍在输出，不会误判；BPS 成功请求的首字延迟通常在 20 秒内。
 var bpsStreamStallLimit = 120 * time.Second
 
+// bpsStreamSilenceLimit：放行后连续这么久没有向客户端送出任何 BPS 事件（keepalive 不算）即视为失控，
+// 接续原路径。生产中出现过上游持续生成却全被扣留（工具事件），直到 128000 输出上限、20 多分钟后才结束；
+// 此时上游一直有字节，bpsStreamStallLimit 不会触发。正常 BPS 请求总时长最长约 130 秒。
+var bpsStreamSilenceLimit = 180 * time.Second
+
 // bpsUpstreamActivity 记录 BPS 上游（含工具格式纠正请求）最后一次收到字节的时间。
 type bpsUpstreamActivity struct {
 	last atomic.Int64
@@ -137,6 +142,8 @@ type bpsPrimedBody struct {
 	continuation bpsNativeContinuation
 	// activity 非 nil 时，放行后上游静默超过 bpsStreamStallLimit 即视为卡住。
 	activity *bpsUpstreamActivity
+	// lastDelivered 是放行后最近一次向客户端送出 BPS 事件的时间，用于 bpsStreamSilenceLimit。
+	lastDelivered time.Time
 	// onContinue 在接续发生时回调：err 非 nil 表示原路径也失败，失败事件已原样转给客户端。
 	onContinue func(reason string, err error)
 	native     *bufio.Reader
@@ -249,6 +256,9 @@ func (b *bpsPrimedBody) readRaw(p []byte) (int, error) {
 
 // fillBPS 读取一个完整的 BPS SSE 事件放入缓冲；遇到失败终态或未完成即断开时改为接续原路径。
 func (b *bpsPrimedBody) fillBPS() {
+	if b.lastDelivered.IsZero() {
+		b.lastDelivered = time.Now()
+	}
 	var event bytes.Buffer
 	eventName, eventType, data := "", "", ""
 	for {
@@ -261,7 +271,11 @@ func (b *bpsPrimedBody) fillBPS() {
 		chunk, ok := b.next(keepalive)
 		if !ok {
 			if b.activity != nil && b.activity.idle() >= bpsStreamStallLimit {
-				b.abandonStalledBPS()
+				b.abandonStalledBPS(fmt.Sprintf("stream stalled after output: no data for %s", bpsStreamStallLimit))
+				return
+			}
+			if time.Since(b.lastDelivered) >= bpsStreamSilenceLimit {
+				b.abandonStalledBPS(fmt.Sprintf("stream withheld after output: no event for %s", bpsStreamSilenceLimit))
 				return
 			}
 			b.primed.Write(bpsKeepaliveComment)
@@ -302,6 +316,7 @@ func (b *bpsPrimedBody) fillBPS() {
 		}
 		if data != "" {
 			b.observe(eventType, data)
+			b.lastDelivered = time.Now()
 		}
 		b.primed.Write(event.Bytes())
 		if attempted && b.continuation == nil {
@@ -314,13 +329,13 @@ func (b *bpsPrimedBody) fillBPS() {
 
 // abandonStalledBPS 放弃卡住的 BPS 流：已完成则直接结束，否则接续原路径；接续失败时以错误结束，
 // 不再用 keepalive 无限期挂住客户端。
-func (b *bpsPrimedBody) abandonStalledBPS() {
+func (b *bpsPrimedBody) abandonStalledBPS(reason string) {
 	if b.completed {
 		b.stopBPS()
 		b.err = io.EOF
 		return
 	}
-	if !b.startContinuation(fmt.Sprintf("stream stalled after output: no data for %s", bpsStreamStallLimit)) {
+	if !b.startContinuation(reason) {
 		b.stopBPS()
 		b.err = io.ErrUnexpectedEOF
 	}
