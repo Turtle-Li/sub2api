@@ -566,11 +566,15 @@ func TestBPSMonitorKeepsFailuresSeparately(t *testing.T) {
 }
 
 type bpsExternalizerStub struct {
-	body []byte
+	body    []byte
+	metrics attachmentgateway.URLMetrics
 }
 
-func (s bpsExternalizerStub) Externalize(context.Context, []byte) attachmentgateway.URLResult {
-	return attachmentgateway.URLResult{Body: s.body}
+func (s bpsExternalizerStub) Externalize(_ context.Context, body []byte) attachmentgateway.URLResult {
+	if s.body == nil {
+		return attachmentgateway.URLResult{Body: body, Metrics: s.metrics}
+	}
+	return attachmentgateway.URLResult{Body: s.body, Metrics: s.metrics}
 }
 
 func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
@@ -730,6 +734,49 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, bpsRun)
 		require.Contains(t, string(upstream.bodies[0]), "https://r2.example/x.png")
+	})
+
+	// 标记只是粗筛：对话文本提到 data:image/ 不应让整轮跳过 BPS。
+	t.Run("data image text mention still uses bps", func(t *testing.T) {
+		account := bpsTestAccount()
+		account.ID = 90_105
+		upstream := &httpUpstreamRecorder{responses: []*http.Response{bpsTestSSEResponse(`{"type":"response.output_text.delta","delta":"ok"}`, `{"type":"response.completed","response":{"output":[]}}`)}}
+		svc := &OpenAIGatewayService{httpUpstream: upstream}
+		svc.SetBPSImageExternalizer(bpsExternalizerStub{})
+		attempt := &openAIBPSAttempt{body: []byte(`{"model":"gpt-6-astra","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"why does the marker match data:image/png here?"}]}]}`), upstreamModel: "gpt-6-astra", scope: "test", accountID: account.ID}
+		_, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", attempt)
+		require.NoError(t, err)
+		require.NotNil(t, bpsRun)
+		require.Contains(t, string(upstream.bodies[0]), "data:image/png here")
+	})
+
+	t.Run("partial externalization skips bps", func(t *testing.T) {
+		account := bpsTestAccount()
+		account.ID = 90_106
+		upstream := &httpUpstreamRecorder{responses: []*http.Response{originalResp()}}
+		svc := &OpenAIGatewayService{httpUpstream: upstream}
+		svc.SetBPSImageExternalizer(bpsExternalizerStub{metrics: attachmentgateway.URLMetrics{ImageCount: 2, ExternalizedCount: 1}})
+		attempt := &openAIBPSAttempt{body: []byte(`{"model":"gpt-6-astra","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]}`), upstreamModel: "gpt-6-astra", scope: "test", accountID: account.ID}
+		_, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", attempt)
+		require.NoError(t, err)
+		require.Nil(t, bpsRun)
+		require.Len(t, upstream.requests, 1)
+		require.Equal(t, "chatgpt.com", upstream.requests[0].URL.Host)
+	})
+
+	// 外链化未处理的内联图片（如存储不可用）由 basispoints 校验拒绝，仍走原路径。
+	t.Run("leftover inline image rejected by validation", func(t *testing.T) {
+		account := bpsTestAccount()
+		account.ID = 90_107
+		upstream := &httpUpstreamRecorder{responses: []*http.Response{originalResp()}}
+		svc := &OpenAIGatewayService{httpUpstream: upstream}
+		svc.SetBPSImageExternalizer(bpsExternalizerStub{metrics: attachmentgateway.URLMetrics{StorageUnavailable: true}})
+		attempt := &openAIBPSAttempt{body: []byte(`{"model":"gpt-6-astra","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]}`), upstreamModel: "gpt-6-astra", scope: "test", accountID: account.ID}
+		_, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", attempt)
+		require.NoError(t, err)
+		require.Nil(t, bpsRun)
+		require.Len(t, upstream.requests, 1)
+		require.Equal(t, "chatgpt.com", upstream.requests[0].URL.Host)
 	})
 }
 

@@ -40,6 +40,11 @@ var bpsStreamStallLimit = 120 * time.Second
 // 此时上游一直有字节，bpsStreamStallLimit 不会触发。正常 BPS 请求总时长最长约 130 秒。
 var bpsStreamSilenceLimit = 180 * time.Second
 
+// bpsStreamTotalLimit：放行后 BPS 流总时长上限，到点仍未完成即接续原路径。生产中出现过 BPS 持续下发事件
+// （如推理摘要）却 29 分钟不结束、最终上游 INTERNAL_ERROR 断开，此时前两项判定都不会触发。
+// 7 天内正常 BPS 请求总时长最长约 3 分钟，5 分钟不会误伤。
+var bpsStreamTotalLimit = 5 * time.Minute
+
 // bpsUpstreamActivity 记录 BPS 上游（含工具格式纠正请求）最后一次收到字节的时间。
 type bpsUpstreamActivity struct {
 	last atomic.Int64
@@ -144,6 +149,8 @@ type bpsPrimedBody struct {
 	activity *bpsUpstreamActivity
 	// lastDelivered 是放行后最近一次向客户端送出 BPS 事件的时间，用于 bpsStreamSilenceLimit。
 	lastDelivered time.Time
+	// releasedAt 是放行后首次读取 BPS 事件的时间，用于 bpsStreamTotalLimit。
+	releasedAt time.Time
 	// onContinue 在接续发生时回调：err 非 nil 表示原路径也失败，失败事件已原样转给客户端。
 	onContinue func(reason string, err error)
 	native     *bufio.Reader
@@ -256,8 +263,15 @@ func (b *bpsPrimedBody) readRaw(p []byte) (int, error) {
 
 // fillBPS 读取一个完整的 BPS SSE 事件放入缓冲；遇到失败终态或未完成即断开时改为接续原路径。
 func (b *bpsPrimedBody) fillBPS() {
+	if b.releasedAt.IsZero() {
+		b.releasedAt = time.Now()
+	}
 	if b.lastDelivered.IsZero() {
 		b.lastDelivered = time.Now()
+	}
+	if time.Since(b.releasedAt) >= bpsStreamTotalLimit {
+		b.abandonStalledBPS(fmt.Sprintf("stream unfinished after output: over %s", bpsStreamTotalLimit))
+		return
 	}
 	var event bytes.Buffer
 	eventName, eventType, data := "", "", ""

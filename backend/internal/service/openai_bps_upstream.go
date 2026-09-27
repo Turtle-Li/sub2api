@@ -612,12 +612,15 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, acco
 			return nil, false
 		}
 		result := s.bpsImageExternalizer.Externalize(ctx, body)
-		if bytes.Contains(result.Body, bpsInlineImageMarker) {
+		m := result.Metrics
+		if m.Errors > 0 || m.TimedOut || m.WriteSuppressed || m.ExternalizedCount < m.ImageCount {
 			// 外链化失败或部分失败：不计入熔断，直接走原路径。
 			attempt.recordSkip(bpsSkipInlineImage, fmt.Sprintf("images: %d, externalized: %d, errors: %d",
-				result.Metrics.ImageCount, result.Metrics.ExternalizedCount, result.Metrics.Errors))
+				m.ImageCount, m.ExternalizedCount, m.Errors))
 			return nil, false
 		}
+		// 标记只是粗筛：对话文本里提到 data:image/ 也会命中。外链化没有失败就继续，
+		// 仍残留的内联图片由 basispoints 请求校验拒绝（记为 unsupported_request）。
 		body = result.Body
 	}
 	bpsBody, bridge, err := prepareBPSRequestBody(body, attempt)

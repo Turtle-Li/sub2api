@@ -398,6 +398,46 @@ func TestBPSSilenceResetsOnDeliveredEvents(t *testing.T) {
 	require.Contains(t, string(out), "response.completed")
 }
 
+// 持续下发事件却一直不结束的 BPS 流：超过 bpsStreamTotalLimit 即接续原路径。
+func TestBPSContinuationWhenStreamNeverFinishes(t *testing.T) {
+	previous := bpsStreamTotalLimit
+	bpsStreamTotalLimit = 200 * time.Millisecond
+	t.Cleanup(func() { bpsStreamTotalLimit = previous })
+	var reasons []string
+	stream, writer := bpsTestStallStream(t, func() (io.ReadCloser, error) {
+		return bpsTestSSE(`{"type":"response.completed","sequence_number":0,"response":{"id":"resp_native","output":[]}}`), nil
+	})
+	stream.onContinue = func(reason string, err error) {
+		require.NoError(t, err)
+		reasons = append(reasons, reason)
+	}
+	go func() {
+		for i := 1; ; i++ {
+			event := fmt.Sprintf(`{"type":"response.output_text.delta","sequence_number":%d,"output_index":0,"delta":"x"}`, i)
+			if _, err := io.WriteString(writer, "event: response.output_text.delta\ndata: "+event+"\n\n"); err != nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	ok, reason := stream.primeUntilOutput()
+	require.True(t, ok, reason)
+
+	done := make(chan []byte, 1)
+	go func() {
+		out, _ := io.ReadAll(stream)
+		done <- out
+	}()
+	select {
+	case out := <-done:
+		require.Contains(t, string(out), "resp_native")
+	case <-time.After(5 * time.Second):
+		t.Fatal("unfinished BPS stream was never abandoned")
+	}
+	require.Len(t, reasons, 1)
+	require.Contains(t, reasons[0], "stream unfinished after output")
+}
+
 // 接续也失败时以错误结束，客户端不会被无限期挂住。
 func TestBPSStallEndsStreamWhenContinuationFails(t *testing.T) {
 	stream, writer := bpsTestStallStream(t, func() (io.ReadCloser, error) {
