@@ -13,6 +13,9 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+// ErrRequestBodyStalled 表示上传请求体时连续一段时间没有收到任何数据，连接已被判定为坏连接。
+var ErrRequestBodyStalled = errors.New("request body upload stalled")
+
 const (
 	requestBodyReadInitCap    = 512
 	requestBodyReadMaxInitCap = 1 << 20

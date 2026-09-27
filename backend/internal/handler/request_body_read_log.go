@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"go.uber.org/zap"
 )
 
@@ -53,6 +54,9 @@ func requestContentEncodingCategory(value string) string {
 func requestBodyReadErrorKind(err error) string {
 	if err == nil {
 		return "none"
+	}
+	if errors.Is(err, pkghttputil.ErrRequestBodyStalled) {
+		return "upload_stalled"
 	}
 	var maxErr *http.MaxBytesError
 	if errors.As(err, &maxErr) {

@@ -126,6 +126,8 @@ func ProvideHTTPServer(cfg *config.Config, router *gin.Engine) *http.Server {
 		// 不设置 ReadTimeout，因为大请求体可能需要较长时间读取
 	}
 
+	httpHandler = withRequestBodyIdleTimeout(httpHandler, time.Duration(cfg.Server.RequestBodyIdleTimeout)*time.Second)
+
 	globalMaxSize := cfg.Server.MaxRequestBodySize
 	if globalMaxSize <= 0 {
 		globalMaxSize = cfg.Gateway.MaxBodySize

@@ -36,6 +36,10 @@ server:
   # Keep-alive idle timeout in seconds.
   # Keep-Alive 空闲连接超时（秒）。
   idle_timeout: 120
+  # Abort a request body upload after this many seconds without receiving any bytes (0 = no limit).
+  # Large bodies are never cut while data keeps arriving.
+  # 上传请求体时连续这么多秒没有收到任何数据就判定连接已坏并中止（0 表示不限）；只要还在传输就不会中断。
+  request_body_idle_timeout: 180
   # Trusted proxies used when security.trust_forwarded_ip_for_api_key_acl is false.
   # List only the exact proxy addresses that connect directly to Sub2API.
   # Set [] explicitly to disable forwarded-IP trust in high-security mode.
