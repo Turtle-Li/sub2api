@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 
@@ -87,17 +88,18 @@ func validateGrokInsecureHTTPURL(raw string, parsed *url.URL, policy config.URLA
 
 // grokHTTPAuthorityAllowlisted requires an exact authority match for HTTP.
 // A non-default port therefore needs an explicit host:port entry; a host-only
-// entry cannot authorize arbitrary services on the same private machine.
+// entry cannot authorize arbitrary services on the same private machine. An
+// explicit default HTTP port is equivalent to omitting the port.
 func grokHTTPAuthorityAllowlisted(parsed *url.URL, allowed []string) bool {
 	if parsed == nil {
 		return false
 	}
-	want := strings.ToLower(strings.TrimSpace(parsed.Host))
+	want := normalizeGrokHTTPAuthority(parsed.Host)
 	if want == "" {
 		return false
 	}
 	for _, entry := range allowed {
-		candidate := strings.ToLower(strings.TrimSpace(entry))
+		candidate := normalizeGrokHTTPAuthority(entry)
 		if candidate == "" || strings.Contains(candidate, "://") || strings.ContainsAny(candidate, "/?#@") {
 			continue
 		}
@@ -106,6 +108,17 @@ func grokHTTPAuthorityAllowlisted(parsed *url.URL, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeGrokHTTPAuthority(raw string) string {
+	authority := strings.ToLower(strings.TrimSpace(raw))
+	if host, port, err := net.SplitHostPort(authority); err == nil && port == "80" {
+		if strings.Contains(host, ":") {
+			return "[" + host + "]"
+		}
+		return host
+	}
+	return authority
 }
 
 func redactedGrokBaseURLValidator(validator xai.BaseURLValidator) xai.BaseURLValidator {

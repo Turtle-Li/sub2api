@@ -101,6 +101,23 @@ func TestGrokAPIKeyURLPolicyRequiresExactTailnetHTTPEndpointOptIn(t *testing.T) 
 	require.EqualError(t, err, "invalid base url: base URL rejected by URL security policy")
 }
 
+func TestGrokAPIKeyURLPolicyAcceptsExplicitDefaultHTTPPort(t *testing.T) {
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "http://grok.example.test:80/v1",
+		},
+	}
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"grok.example.test"}
+
+	target, err := buildGrokResponsesURL(account, cfg)
+	require.NoError(t, err)
+	require.Equal(t, "http://grok.example.test:80/v1/responses", target)
+}
+
 func TestGrokAPIKeyURLPolicyAppliesAllowlistAndPrivateHostControls(t *testing.T) {
 	account := &Account{
 		Platform: PlatformGrok,
