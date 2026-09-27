@@ -1369,12 +1369,17 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 			Reason:     GatewayFailureReason("grok_search_read"),
 		}
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg := string(respBytes)
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusPaymentRequired || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		if (resp.StatusCode >= 300 && resp.StatusCode < 400) ||
+			resp.StatusCode == http.StatusUnauthorized ||
+			resp.StatusCode == http.StatusPaymentRequired ||
+			resp.StatusCode == http.StatusForbidden ||
+			resp.StatusCode == http.StatusTooManyRequests ||
+			resp.StatusCode >= 500 {
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBytes}
 		}
 		return nil, fmt.Errorf("grok upstream %d: %s", resp.StatusCode, msg)

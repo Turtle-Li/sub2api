@@ -53,3 +53,25 @@ func TestDoGrokNativeResponsesJSONDisablesRedirectsForAllowedRelay(t *testing.T)
 	require.Len(t, upstream.requests, 1)
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
 }
+
+func TestDoGrokNativeResponsesJSONRejectsRedirectResponse(t *testing.T) {
+	account := healthyGrokOAuthGatewayTestAccount(9905, "access-token")
+	account.Credentials["base_url"] = "https://relay.example.test/v1"
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = true
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"relay.example.test"}
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusFound,
+		Header:     http.Header{"Location": []string{"https://unexpected.example.test/v1"}},
+		Body:       io.NopCloser(bytes.NewReader([]byte("redirected"))),
+	}}
+	svc := &GatewayService{cfg: cfg, httpUpstream: upstream}
+
+	_, err := svc.DoGrokNativeResponsesJSON(context.Background(), account, []byte(`{"model":"grok","input":"search"}`))
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusFound, failoverErr.StatusCode)
+	require.Equal(t, []byte("redirected"), failoverErr.ResponseBody)
+}
