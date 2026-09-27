@@ -51,6 +51,22 @@ func TestHTTPUpstreamDoCanDisableRedirectsPerRequest(t *testing.T) {
 	require.Zero(t, redirectedCalls.Load())
 }
 
+func TestHTTPUpstreamForcedResolvedIPValidationHonorsPrivateOptIn(t *testing.T) {
+	upstream := &httpUpstreamService{cfg: &config.Config{}}
+
+	req, err := http.NewRequestWithContext(
+		service.WithHTTPUpstreamResolvedIPValidation(t.Context(), false),
+		http.MethodGet,
+		"http://localhost",
+		nil,
+	)
+	require.NoError(t, err)
+	require.Error(t, upstream.validateRequestHost(req))
+
+	req = req.WithContext(service.WithHTTPUpstreamResolvedIPValidation(t.Context(), true))
+	require.NoError(t, upstream.validateRequestHost(req))
+}
+
 func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredHTTPProxy(t *testing.T) {
 	var upstreamCalls atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

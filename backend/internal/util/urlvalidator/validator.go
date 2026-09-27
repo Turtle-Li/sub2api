@@ -108,6 +108,12 @@ func ValidateHTTPSURL(raw string, opts ValidationOptions) (string, error) {
 // ValidateResolvedIP 验证 DNS 解析后的 IP 地址是否安全
 // 用于防止 DNS Rebinding 攻击：在实际 HTTP 请求时调用此函数验证解析后的 IP
 func ValidateResolvedIP(host string) error {
+	return ValidateResolvedIPWithOptions(host, false)
+}
+
+// ValidateResolvedIPWithOptions validates DNS results and optionally permits
+// private destinations when the caller has explicitly opted into them.
+func ValidateResolvedIPWithOptions(host string, allowPrivate bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -117,8 +123,7 @@ func ValidateResolvedIP(host string) error {
 	}
 
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-			ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		if !allowPrivate && isBlockedHost(ip.String()) {
 			return fmt.Errorf("resolved ip %s is not allowed", ip.String())
 		}
 	}

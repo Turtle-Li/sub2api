@@ -121,6 +121,18 @@ func normalizeGrokHTTPAuthority(raw string) string {
 	return authority
 }
 
+func withGrokHTTPUpstreamPolicy(ctx context.Context, targetURL string, cfg *config.Config) context.Context {
+	ctx = WithHTTPUpstreamRedirectsDisabled(ctx)
+	if cfg == nil {
+		return ctx
+	}
+	parsed, err := url.Parse(targetURL)
+	if err == nil && strings.EqualFold(parsed.Scheme, "http") {
+		ctx = WithHTTPUpstreamResolvedIPValidation(ctx, cfg.Security.URLAllowlist.AllowPrivateHosts)
+	}
+	return ctx
+}
+
 func redactedGrokBaseURLValidator(validator xai.BaseURLValidator) xai.BaseURLValidator {
 	return func(raw string) (string, error) {
 		validated, err := validator(raw)

@@ -91,3 +91,12 @@ func TestIsBlockedHost(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateResolvedIPWithOptionsHonorsPrivateOptIn(t *testing.T) {
+	if err := ValidateResolvedIPWithOptions("localhost", false); err == nil {
+		t.Fatal("expected localhost DNS result to be rejected without private opt-in")
+	}
+	if err := ValidateResolvedIPWithOptions("localhost", true); err != nil {
+		t.Fatalf("expected localhost DNS result to be allowed with private opt-in, got %v", err)
+	}
+}

@@ -1339,7 +1339,7 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 		}
 	}
 	upstreamReq, err := http.NewRequestWithContext(
-		WithHTTPUpstreamRedirectsDisabled(ctx),
+		withGrokHTTPUpstreamPolicy(ctx, targetURL, s.cfg),
 		http.MethodPost,
 		targetURL,
 		bytes.NewReader(body),

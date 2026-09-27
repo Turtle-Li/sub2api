@@ -52,6 +52,33 @@ func TestDoGrokNativeResponsesJSONDisablesRedirectsForAllowedRelay(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
+	allowPrivate, forced := HTTPUpstreamResolvedIPValidation(upstream.requests[0].Context())
+	require.False(t, allowPrivate)
+	require.False(t, forced, "HTTPS relays do not need the custom HTTP DNS marker")
+}
+
+func TestDoGrokNativeResponsesJSONForcesResolvedIPValidationForHTTPRelay(t *testing.T) {
+	account := healthyGrokOAuthGatewayTestAccount(9906, "access-token")
+	account.Credentials["base_url"] = "http://relay.example.test/v1"
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Security.URLAllowlist.Enabled = true
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"relay.example.test"}
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader([]byte(`{"ok":true}`))),
+	}}
+	svc := &GatewayService{cfg: cfg, httpUpstream: upstream}
+
+	_, err := svc.DoGrokNativeResponsesJSON(context.Background(), account, []byte(`{"model":"grok","input":"search"}`))
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	allowPrivate, forced := HTTPUpstreamResolvedIPValidation(upstream.requests[0].Context())
+	require.False(t, allowPrivate)
+	require.True(t, forced)
 }
 
 func TestDoGrokNativeResponsesJSONRejectsRedirectResponse(t *testing.T) {

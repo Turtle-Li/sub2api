@@ -16,6 +16,7 @@ const (
 type httpUpstreamProfileContextKey struct{}
 type httpUpstreamDisableRedirectsContextKey struct{}
 type httpUpstreamPublicHostsOnlyContextKey struct{}
+type httpUpstreamResolvedIPPolicyContextKey struct{}
 
 // WithHTTPUpstreamProfile injects an upstream transport profile into ctx.
 func WithHTTPUpstreamProfile(ctx context.Context, profile HTTPUpstreamProfile) context.Context {
@@ -58,14 +59,30 @@ func HTTPUpstreamRedirectsDisabled(ctx context.Context) bool {
 	return ctx != nil && ctx.Value(httpUpstreamDisableRedirectsContextKey{}) == true
 }
 
+// WithHTTPUpstreamResolvedIPValidation forces DNS-resolved host validation for
+// a request even when the global URL allowlist is disabled.
+func WithHTTPUpstreamResolvedIPValidation(ctx context.Context, allowPrivate bool) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, httpUpstreamResolvedIPPolicyContextKey{}, allowPrivate)
+}
+
+// HTTPUpstreamResolvedIPValidation returns the request's resolved-IP policy.
+func HTTPUpstreamResolvedIPValidation(ctx context.Context) (allowPrivate, forced bool) {
+	if ctx == nil {
+		return false, false
+	}
+	allowPrivate, ok := ctx.Value(httpUpstreamResolvedIPPolicyContextKey{}).(bool)
+	return allowPrivate, ok
+}
+
 // WithHTTPUpstreamPublicHostsOnly marks a request whose destination, and every
 // redirect hop after it, must resolve to a public address. The shared upstream
 // client enforces it regardless of the security.url_allowlist configuration;
 // use it for fetches whose URL comes from an untrusted upstream response.
 func WithHTTPUpstreamPublicHostsOnly(ctx context.Context) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = WithHTTPUpstreamResolvedIPValidation(ctx, false)
 	return context.WithValue(ctx, httpUpstreamPublicHostsOnlyContextKey{}, true)
 }
 

@@ -161,7 +161,12 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 
 	callCtx, cancel := context.WithTimeout(ctx, grokQuotaUpstreamTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, targetURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(callCtx, targetURL, s.cfg),
+		http.MethodPost,
+		targetURL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_PROBE_REQUEST_BUILD_FAILED", "failed to build upstream request: %v", err)
 	}
@@ -385,7 +390,12 @@ func (s *GrokQuotaService) fetchBilling(
 		return nil, 0, infraerrors.Newf(http.StatusBadRequest, "GROK_QUOTA_BASE_URL_INVALID", "invalid Grok base_url: %v", err)
 	}
 	for attempt := 0; attempt < grokBillingMaxAttempts; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, billingURL, nil)
+		req, err := http.NewRequestWithContext(
+			withGrokHTTPUpstreamPolicy(ctx, billingURL, s.cfg),
+			http.MethodGet,
+			billingURL,
+			nil,
+		)
 		if err != nil {
 			return nil, 0, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_PROBE_REQUEST_BUILD_FAILED", "failed to build billing request: %v", err)
 		}

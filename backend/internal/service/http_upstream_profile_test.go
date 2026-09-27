@@ -38,6 +38,23 @@ func TestWithHTTPUpstreamRedirectsDisabled(t *testing.T) {
 	}
 }
 
+func TestWithHTTPUpstreamResolvedIPValidation(t *testing.T) {
+	ctx := WithHTTPUpstreamResolvedIPValidation(context.Background(), false)
+	allowPrivate, forced := HTTPUpstreamResolvedIPValidation(ctx)
+	if allowPrivate {
+		t.Fatal("private destinations should be rejected by default")
+	}
+	if !forced {
+		t.Fatal("expected resolved-IP validation marker to be forced")
+	}
+
+	ctx = WithHTTPUpstreamResolvedIPValidation(context.Background(), true)
+	allowPrivate, forced = HTTPUpstreamResolvedIPValidation(ctx)
+	if !allowPrivate || !forced {
+		t.Fatalf("expected private opt-in marker, got allowPrivate=%v forced=%v", allowPrivate, forced)
+	}
+}
+
 func TestWithHTTPUpstreamPublicHostsOnly(t *testing.T) {
 	//nolint:staticcheck // Exercises the defensive nil-context fallback.
 	ctx := WithHTTPUpstreamPublicHostsOnly(nil)

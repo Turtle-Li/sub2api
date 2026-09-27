@@ -649,10 +649,13 @@ func (s *httpUpstreamService) shouldValidateResolvedIP() bool {
 }
 
 // validateRequestHost 校验请求主机的解析结果不落在回环、私网、链路本地或未指定地址。
-// 是否全局启用由 security.url_allowlist 决定；带 WithHTTPUpstreamPublicHostsOnly 标记的请求无论配置如何都校验。
+// 是否全局启用由 security.url_allowlist 决定；带显式解析策略标记的请求无论配置如何都校验。
 func (s *httpUpstreamService) validateRequestHost(req *http.Request) error {
-	publicHostsOnly := req != nil && service.HTTPUpstreamPublicHostsOnly(req.Context())
-	if !s.shouldValidateResolvedIP() && !publicHostsOnly {
+	allowPrivate, forced := false, false
+	if req != nil {
+		allowPrivate, forced = service.HTTPUpstreamResolvedIPValidation(req.Context())
+	}
+	if !s.shouldValidateResolvedIP() && !forced {
 		return nil
 	}
 	if req == nil || req.URL == nil {
@@ -662,7 +665,7 @@ func (s *httpUpstreamService) validateRequestHost(req *http.Request) error {
 	if host == "" {
 		return errors.New("request host is empty")
 	}
-	if err := urlvalidator.ValidateResolvedIP(host); err != nil {
+	if err := urlvalidator.ValidateResolvedIPWithOptions(host, allowPrivate); err != nil {
 		return err
 	}
 	return nil

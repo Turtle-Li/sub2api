@@ -86,7 +86,13 @@ func (s *GrokQuotaService) syncGrokObservedModels(ctx context.Context, account *
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAIModelsURL(validatedBaseURL), nil)
+	targetURL := buildOpenAIModelsURL(validatedBaseURL)
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, targetURL, s.cfg),
+		http.MethodGet,
+		targetURL,
+		nil,
+	)
 	if err != nil {
 		return err
 	}

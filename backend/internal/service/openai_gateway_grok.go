@@ -1577,7 +1577,12 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, targetURL, cfg),
+		http.MethodPost,
+		targetURL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return nil, err
 	}

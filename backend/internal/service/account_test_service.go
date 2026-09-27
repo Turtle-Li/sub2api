@@ -1282,7 +1282,12 @@ func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx con
 		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, apiURL, s.cfg),
+		http.MethodPost,
+		apiURL,
+		bytes.NewReader(payloadBytes),
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok request")
 	}
@@ -1353,7 +1358,12 @@ func (s *AccountTestService) testGrokImageGeneration(c *gin.Context, ctx context
 		return s.sendErrorAndEnd(c, "Failed to marshal Grok image request")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, apiURL, s.cfg),
+		http.MethodPost,
+		apiURL,
+		bytes.NewReader(payloadBytes),
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok image request")
 	}
@@ -1369,7 +1379,12 @@ func (s *AccountTestService) testGrokImageGeneration(c *gin.Context, ctx context
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
 			s.sendEvent(c, TestEvent{Type: "status", Text: "Retrying Grok image request after transport error..."})
-			req, err = http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+			req, err = http.NewRequestWithContext(
+				withGrokHTTPUpstreamPolicy(ctx, apiURL, s.cfg),
+				http.MethodPost,
+				apiURL,
+				bytes.NewReader(payloadBytes),
+			)
 			if err != nil {
 				return s.sendErrorAndEnd(c, "Failed to create Grok image retry request")
 			}
@@ -1461,7 +1476,12 @@ func (s *AccountTestService) testGrokVideoGeneration(c *gin.Context, ctx context
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, apiURL, s.cfg),
+		http.MethodPost,
+		apiURL,
+		bytes.NewReader(payloadBytes),
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok video request")
 	}
@@ -1503,7 +1523,12 @@ func (s *AccountTestService) testGrokVideoGeneration(c *gin.Context, ctx context
 		if ctx.Err() != nil {
 			return s.sendErrorAndEnd(c, "Grok video poll canceled")
 		}
-		statusReq, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
+		statusReq, err := http.NewRequestWithContext(
+			withGrokHTTPUpstreamPolicy(ctx, statusURL, s.cfg),
+			http.MethodGet,
+			statusURL,
+			nil,
+		)
 		if err != nil {
 			return s.sendErrorAndEnd(c, "Failed to create Grok video status request")
 		}
@@ -1560,7 +1585,12 @@ func (s *AccountTestService) emitGrokVideoResult(c *gin.Context, ctx context.Con
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Grok video content URL: %s", err.Error()))
 	}
 	s.sendEvent(c, TestEvent{Type: "status", Text: "Downloading video content for preview..."})
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, contentURL, nil)
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, contentURL, s.cfg),
+		http.MethodGet,
+		contentURL,
+		nil,
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok video content request")
 	}
@@ -1631,7 +1661,12 @@ User query:
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Grok base URL: %s", err.Error()))
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, apiURL, s.cfg),
+		http.MethodPost,
+		apiURL,
+		bytes.NewReader(payloadBytes),
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create standalone web_search probe request")
 	}
@@ -1713,7 +1748,12 @@ func (s *AccountTestService) testGrokTTS(c *gin.Context, ctx context.Context, ac
 	var lastCode int
 	for _, payload := range payloads {
 		payloadBytes, _ := json.Marshal(payload)
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+		req, err := http.NewRequestWithContext(
+			withGrokHTTPUpstreamPolicy(ctx, apiURL, s.cfg),
+			http.MethodPost,
+			apiURL,
+			bytes.NewReader(payloadBytes),
+		)
 		if err != nil {
 			return s.sendErrorAndEnd(c, "Failed to create Grok TTS request")
 		}
@@ -1797,7 +1837,12 @@ func (s *AccountTestService) testGrokSTT(c *gin.Context, ctx context.Context, ac
 		return s.sendErrorAndEnd(c, "Failed to finalize STT multipart body")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, &bodyBuf)
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, apiURL, s.cfg),
+		http.MethodPost,
+		apiURL,
+		&bodyBuf,
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok STT request")
 	}

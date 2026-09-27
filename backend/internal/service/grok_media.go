@@ -704,7 +704,12 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	}
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
-	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, endpoint.httpMethod(), targetURL, bodyReader)
+	upstreamReq, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(upstreamCtx, targetURL, s.cfg),
+		endpoint.httpMethod(),
+		targetURL,
+		bodyReader,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -811,7 +816,7 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
 	statusReq, err := http.NewRequestWithContext(
-		WithHTTPUpstreamRedirectsDisabled(upstreamCtx),
+		withGrokHTTPUpstreamPolicy(upstreamCtx, statusURL, s.cfg),
 		http.MethodGet,
 		statusURL,
 		nil,
@@ -867,7 +872,7 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 	}
 
 	contentReq, err := http.NewRequestWithContext(
-		WithHTTPUpstreamRedirectsDisabled(upstreamCtx),
+		withGrokHTTPUpstreamPolicy(upstreamCtx, contentURL, s.cfg),
 		http.MethodGet,
 		contentURL,
 		nil,

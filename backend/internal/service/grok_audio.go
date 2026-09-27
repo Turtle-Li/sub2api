@@ -71,7 +71,12 @@ func (s *OpenAIGatewayService) ForwardGrokVoice(ctx context.Context, c *gin.Cont
 	if c != nil && c.Request != nil && strings.TrimSpace(c.Request.Method) != "" {
 		method = c.Request.Method
 	}
-	req, err := http.NewRequestWithContext(upstreamCtx, method, targetURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(upstreamCtx, targetURL, s.cfg),
+		method,
+		targetURL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return nil, err
 	}
