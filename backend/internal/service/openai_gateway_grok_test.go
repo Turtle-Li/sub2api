@@ -2482,7 +2482,7 @@ func TestAccountTestServiceGrokAPIKeyUsesXAIResponses(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
 }
 
-func TestAccountTestServiceGrokAPIKeyAllowsConfiguredHTTPWhenGlobalPolicyDoes(t *testing.T) {
+func TestAccountTestServiceGrokAPIKeyAllowsConfiguredHTTPWhenEndpointAllowlisted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	account := &Account{
@@ -2504,7 +2504,9 @@ func TestAccountTestServiceGrokAPIKeyAllowsConfiguredHTTPWhenGlobalPolicyDoes(t 
 				"data: {\"type\":\"response.completed\"}\n\n",
 		)),
 	}}
-	svc := &AccountTestService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"grok.example.test"}
+	svc := &AccountTestService{cfg: cfg, httpUpstream: upstream}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/55/test", nil)
