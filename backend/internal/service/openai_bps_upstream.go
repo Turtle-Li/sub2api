@@ -733,7 +733,38 @@ func prepareBPSRequestBody(body []byte, attempt *openAIBPSAttempt) ([]byte, *bas
 			return nil, nil, err
 		}
 	}
+	if body, err = bpsNormalizeImageDetail(body); err != nil {
+		return nil, nil, err
+	}
 	return basispoints.Prepare(body, attempt.scope, &bpsReplay)
+}
+
+// bpsNormalizeImageDetail 把 BPS 不支持的图片 detail "original"（Codex view_image 对支持原图的模型会发）改为 high。
+// 这类图片留在对话历史里，不改写的话整个会话之后的每个请求都会跳过 BPS 走原路径。
+func bpsNormalizeImageDetail(body []byte) ([]byte, error) {
+	var paths []string
+	gjson.GetBytes(body, "input").ForEach(func(i, item gjson.Result) bool {
+		for _, field := range []string{"content", "output"} {
+			parts := item.Get(field)
+			if !parts.IsArray() {
+				continue
+			}
+			parts.ForEach(func(j, part gjson.Result) bool {
+				if part.Get("type").String() == "input_image" && part.Get("detail").String() == "original" {
+					paths = append(paths, fmt.Sprintf("input.%d.%s.%d.detail", i.Int(), field, j.Int()))
+				}
+				return true
+			})
+		}
+		return true
+	})
+	var err error
+	for _, path := range paths {
+		if body, err = sjson.SetBytes(body, path, "high"); err != nil {
+			return nil, err
+		}
+	}
+	return body, nil
 }
 
 // sendOpenAIBPSRequest 发送一次 BPS 请求。2xx 且为 SSE 时返回 resp；

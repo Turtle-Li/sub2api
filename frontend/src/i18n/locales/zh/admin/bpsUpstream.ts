@@ -59,6 +59,10 @@ export default { bpsUpstream: {
     "effortDefault": "默认",
     "prompt": "题目",
     "presets": {
+      "pelican": {
+        "label": "鹈鹕骑车",
+        "text": "创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画，你不需要任何测试。"
+      },
       "reasoning": {
         "label": "推理题",
         "text": "一个农夫要带一只狼、一只羊和一棵白菜过河。船每次只能载农夫和其中一样东西；农夫不在时，狼会吃羊，羊会吃白菜。请给出最少步数的完整过河方案，并逐步说明每一步后两岸的状态。"

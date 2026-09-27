@@ -212,10 +212,10 @@ const props = defineProps<{
 
 const POLL_INTERVAL_MS = 3000
 const MAX_PROMPT = 8000
-const DEFAULT_MODEL = 'gpt-5.6-terra'
+const DEFAULT_MODEL = 'gpt-6-astra'
 const probePaths: BPSProbePath[] = ['bps', 'native']
 const efforts = ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh']
-const presets = ['reasoning', 'html', 'code'] as const
+const presets = ['pelican', 'reasoning', 'html', 'code'] as const
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -223,8 +223,8 @@ const appStore = useAppStore()
 const selectedIds = ref<number[]>([])
 const selectedPaths = ref<BPSProbePath[]>(['bps', 'native'])
 const model = ref(DEFAULT_MODEL)
-const effort = ref('high')
-const prompt = ref(t('admin.bpsUpstream.probe.presets.reasoning.text'))
+const effort = ref('medium')
+const prompt = ref(t('admin.bpsUpstream.probe.presets.pelican.text'))
 const submitting = ref(false)
 const extraAccounts = ref<AccountChoice[]>([])
 const extraValue = ref<string | null>(null)

@@ -59,6 +59,10 @@ export default { bpsUpstream: {
     "effortDefault": "Default",
     "prompt": "Prompt",
     "presets": {
+      "pelican": {
+        "label": "Pelican on a bike",
+        "text": "Create an HTML page with an SVG 2D animation of a pelican riding a bicycle. You don't need any tests."
+      },
       "reasoning": {
         "label": "Reasoning",
         "text": "A farmer must take a wolf, a goat and a cabbage across a river. The boat carries the farmer and only one item at a time; left alone, the wolf eats the goat and the goat eats the cabbage. Give the shortest complete plan and describe both banks after every step."

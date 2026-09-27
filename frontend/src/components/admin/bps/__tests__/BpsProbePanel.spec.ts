@@ -84,6 +84,13 @@ describe('BpsProbePanel', () => {
     vi.restoreAllMocks()
   })
 
+  it('defaults to gpt-6-astra, medium effort and the pelican prompt', async () => {
+    const wrapper = await mountPanel()
+    expect((wrapper.get('[data-test="bps-probe-model"]').element as HTMLSelectElement).value).toBe('gpt-6-astra')
+    expect((wrapper.get('[data-test="bps-probe-effort"]').element as HTMLSelectElement).value).toBe('medium')
+    expect((wrapper.get('[data-test="bps-probe-prompt"]').element as HTMLTextAreaElement).value).toBe('admin.bpsUpstream.probe.presets.pelican.text')
+  })
+
   it('submits selected accounts, both paths and a custom prompt', async () => {
     const wrapper = await mountPanel()
     expect(wrapper.get('[data-test="bps-probe-run"]').attributes('disabled')).toBeDefined()
@@ -97,7 +104,7 @@ describe('BpsProbePanel', () => {
     await flushPromises()
 
     expect(createProbes).toHaveBeenCalledWith({
-      account_ids: [69, 90], paths: ['bps', 'native'], model: 'gpt-5.6-terra', effort: 'xhigh', prompt: '1+1?',
+      account_ids: [69, 90], paths: ['bps', 'native'], model: 'gpt-6-astra', effort: 'xhigh', prompt: '1+1?',
     })
     expect(listProbes).toHaveBeenCalledTimes(2)
   })

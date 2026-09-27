@@ -732,3 +732,25 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 		require.Contains(t, string(upstream.bodies[0]), "https://r2.example/x.png")
 	})
 }
+
+// Codex view_image 对支持原图的模型发 detail "original"，BPS 只接受 auto/low/high；
+// 这类图片会留在历史里，不改写的话整个会话都会跳过 BPS。
+func TestPrepareBPSRequestBodyNormalizesOriginalImageDetail(t *testing.T) {
+	raw := `{"model":"gpt-5.6-sol","input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"看图"},{"type":"input_image","image_url":"https://images.example/a.png","detail":"original"}]},
+		{"type":"function_call","call_id":"call_1","name":"view_image","arguments":"{\"path\":\"a.png\"}"},
+		{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"ok"},{"type":"input_image","image_url":"https://images.example/b.png","detail":"original"}]},
+		{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://images.example/c.png","detail":"low"}]}
+	]}`
+	_, _, err := basispoints.Prepare([]byte(raw), "test:"+t.Name(), &basispoints.ReplayCache{})
+	require.ErrorContains(t, err, "image detail", "basispoints itself must still reject original")
+
+	normalized, err := bpsNormalizeImageDetail([]byte(raw))
+	require.NoError(t, err)
+	require.Equal(t, "high", gjson.GetBytes(normalized, "input.0.content.1.detail").String())
+	require.Equal(t, "high", gjson.GetBytes(normalized, "input.2.output.1.detail").String())
+	require.Equal(t, "low", gjson.GetBytes(normalized, "input.3.content.0.detail").String())
+
+	_, _, err = prepareBPSRequestBody([]byte(raw), &openAIBPSAttempt{upstreamModel: "gpt-5.6-sol", scope: "test:" + t.Name()})
+	require.NoError(t, err)
+}
