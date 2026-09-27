@@ -1,5 +1,22 @@
 # Sub2API Deployment Files
 
+## Image 2.5 upscale dependency
+
+Image 2.5 2K/4K uses the private Office Mini asynchronous upscale gateway and
+a dedicated memory-only Vault agent. Read
+`docs/operations/IMAGE_25_UPSCALE_20260928.md` before activation or rollback.
+The raw bearer must never enter `.env`, Docker inspect, release logs, or
+`config.yaml`; only the exact Vault reference and read-only Unix socket mount
+are allowed. The sidecar must be loaded and healthy before the blue-green
+release enables `IMAGE_UPSCALE_ENABLED=true`.
+Only the canonical `docker-compose.yml` declares the stable socket volume. It
+is empty and harmless while the feature is disabled, preserving the normal
+Compose quick start. The hardened helper must initialize it and start the
+memory-only sidecar before activation. Production blue-green releases treat it
+as an externally verified runtime dependency. The `dev`, `local`, and
+`standalone` topologies explicitly force the feature off because they do not
+provide that sidecar.
+
 This directory contains files for deploying Sub2API on Linux servers and Apple-silicon Macs.
 
 ## Deployment Methods
@@ -399,6 +416,8 @@ normal production path.
 | `sub2api-server-release.sh` | Runs preflight, blue-green switch, verification, rollback, and draining |
 | `sub2api-drain-monitor.sh` | Waits for a drained slot to become idle and stops it under the maintenance lock |
 | `sub2api-maintenance-lock.sh` | Validates and opens the private shared maintenance lock for root-owned helpers |
+| `sub2api-image-upscale-config.sh` | Atomically installs or toggles the fixed non-secret image-upscale release block |
+| `sub2api-image-upscale-vault-container.sh` | Prepares and verifies the networkless image-upscale Vault sidecar without loading secrets |
 | `sub2api-runtime-guard.sh` | Recovers dependencies/active slot and safely falls back to a historical slot |
 | `sub2api-runtime-guard.service` | Root-owned one-shot runtime recovery service |
 | `sub2api-runtime-guard.timer` | Runs the runtime guard every 30 seconds |

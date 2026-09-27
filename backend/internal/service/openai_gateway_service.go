@@ -476,6 +476,7 @@ type OpenAIGatewayService struct {
 	httpUpstream          HTTPUpstream
 	pluginManager         *PluginManager
 	bpsImageExternalizer  BPSImageExternalizer
+	imageUpscaler         *ImageUpscaleService
 	deferredService       *DeferredService
 	openAITokenProvider   *OpenAITokenProvider
 	grokTokenProvider     *GrokTokenProvider
@@ -582,6 +583,7 @@ func NewOpenAIGatewayService(
 			"service.openai_gateway",
 		),
 		httpUpstream:          httpUpstream,
+		imageUpscaler:         SharedImageUpscaleService(cfg),
 		deferredService:       deferredService,
 		openAITokenProvider:   openAITokenProvider,
 		grokTokenProvider:     grokTokenProvider,

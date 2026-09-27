@@ -25,6 +25,8 @@ const (
 	FieldProvider = "provider"
 	// FieldModel holds the string denoting the model field in the database.
 	FieldModel = "model"
+	// FieldImageSize holds the string denoting the image_size field in the database.
+	FieldImageSize = "image_size"
 	// FieldTaskName holds the string denoting the task_name field in the database.
 	FieldTaskName = "task_name"
 	// FieldStatus holds the string denoting the status field in the database.
@@ -106,6 +108,7 @@ var Columns = []string{
 	FieldAccountID,
 	FieldProvider,
 	FieldModel,
+	FieldImageSize,
 	FieldTaskName,
 	FieldStatus,
 	FieldProviderJobName,
@@ -159,6 +162,10 @@ var (
 	ProviderValidator func(string) error
 	// ModelValidator is a validator for the "model" field. It is called by the builders before save.
 	ModelValidator func(string) error
+	// DefaultImageSize holds the default value on creation for the "image_size" field.
+	DefaultImageSize string
+	// ImageSizeValidator is a validator for the "image_size" field. It is called by the builders before save.
+	ImageSizeValidator func(string) error
 	// DefaultTaskName holds the default value on creation for the "task_name" field.
 	DefaultTaskName string
 	// TaskNameValidator is a validator for the "task_name" field. It is called by the builders before save.
@@ -247,6 +254,11 @@ func ByProvider(opts ...sql.OrderTermOption) OrderOption {
 // ByModel orders the results by the model field.
 func ByModel(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldModel, opts...).ToFunc()
+}
+
+// ByImageSize orders the results by the image_size field.
+func ByImageSize(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldImageSize, opts...).ToFunc()
 }
 
 // ByTaskName orders the results by the task_name field.

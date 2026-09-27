@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -26,10 +27,11 @@ type batchImageCOSDeliveryStore struct {
 var _ service.BatchImageDeliveryObjectStore = (*batchImageCOSDeliveryStore)(nil)
 
 // ProvideBatchImageDeliveryObjectStore builds the private COS control-plane
-// client. Disabled delivery intentionally returns nil so legacy deployments do
-// not need COS credentials.
+// client. A complete COS configuration remains active while batch processing
+// is enabled so a feature rollback can still read and clean durable 2K/4K
+// objects. Legacy deployments without COS credentials still receive nil.
 func ProvideBatchImageDeliveryObjectStore(cfg *config.Config) service.BatchImageDeliveryObjectStore {
-	if cfg == nil || !cfg.BatchImage.DeliveryEnabled {
+	if cfg == nil || (!cfg.BatchImage.DeliveryEnabled && !(cfg.BatchImage.Enabled && batchImageCOSConfigured(cfg))) {
 		return nil
 	}
 	client, err := newS3Client(context.Background(), s3ClientParams{
@@ -48,6 +50,59 @@ func ProvideBatchImageDeliveryObjectStore(cfg *config.Config) service.BatchImage
 		store.presign = s3.NewPresignClient(client)
 	}
 	return store
+}
+
+func batchImageCOSConfigured(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, value := range []string{
+		cfg.BatchImage.DeliveryCOSEndpoint,
+		cfg.BatchImage.DeliveryCOSRegion,
+		cfg.BatchImage.DeliveryCOSBucket,
+		cfg.BatchImage.DeliveryCOSAccessKeyID,
+		cfg.BatchImage.DeliveryCOSSecretAccessKey,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *batchImageCOSDeliveryStore) Put(ctx context.Context, key, contentType string, body io.Reader, size int64) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(key) == "" || body == nil || size <= 0 {
+		return errors.New("invalid COS delivery object")
+	}
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        &s.bucket,
+		Key:           &key,
+		Body:          body,
+		ContentLength: &size,
+		ContentType:   &contentType,
+	})
+	if err != nil {
+		return errors.New("put COS delivery object failed")
+	}
+	return nil
+}
+
+func (s *batchImageCOSDeliveryStore) Open(ctx context.Context, key string) (io.ReadCloser, int64, string, error) {
+	if err := s.ready(); err != nil {
+		return nil, 0, "", err
+	}
+	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
+	if err != nil || result == nil || result.Body == nil {
+		return nil, 0, "", errors.New("open COS delivery object failed")
+	}
+	size := int64(0)
+	if result.ContentLength != nil {
+		size = *result.ContentLength
+	}
+	return result.Body, size, strings.TrimSpace(stringValue(result.ContentType)), nil
 }
 
 func (s *batchImageCOSDeliveryStore) ready() error {

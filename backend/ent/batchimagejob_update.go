@@ -131,6 +131,20 @@ func (_u *BatchImageJobUpdate) SetNillableModel(v *string) *BatchImageJobUpdate 
 	return _u
 }
 
+// SetImageSize sets the "image_size" field.
+func (_u *BatchImageJobUpdate) SetImageSize(v string) *BatchImageJobUpdate {
+	_u.mutation.SetImageSize(v)
+	return _u
+}
+
+// SetNillableImageSize sets the "image_size" field if the given value is not nil.
+func (_u *BatchImageJobUpdate) SetNillableImageSize(v *string) *BatchImageJobUpdate {
+	if v != nil {
+		_u.SetImageSize(*v)
+	}
+	return _u
+}
+
 // SetTaskName sets the "task_name" field.
 func (_u *BatchImageJobUpdate) SetTaskName(v string) *BatchImageJobUpdate {
 	_u.mutation.SetTaskName(v)
@@ -833,6 +847,11 @@ func (_u *BatchImageJobUpdate) check() error {
 			return &ValidationError{Name: "model", err: fmt.Errorf(`ent: validator failed for field "BatchImageJob.model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ImageSize(); ok {
+		if err := batchimagejob.ImageSizeValidator(v); err != nil {
+			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "BatchImageJob.image_size": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.TaskName(); ok {
 		if err := batchimagejob.TaskNameValidator(v); err != nil {
 			return &ValidationError{Name: "task_name", err: fmt.Errorf(`ent: validator failed for field "BatchImageJob.task_name": %w`, err)}
@@ -942,6 +961,9 @@ func (_u *BatchImageJobUpdate) sqlSave(ctx context.Context) (_node int, err erro
 	}
 	if value, ok := _u.mutation.Model(); ok {
 		_spec.SetField(batchimagejob.FieldModel, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ImageSize(); ok {
+		_spec.SetField(batchimagejob.FieldImageSize, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.TaskName(); ok {
 		_spec.SetField(batchimagejob.FieldTaskName, field.TypeString, value)
@@ -1254,6 +1276,20 @@ func (_u *BatchImageJobUpdateOne) SetModel(v string) *BatchImageJobUpdateOne {
 func (_u *BatchImageJobUpdateOne) SetNillableModel(v *string) *BatchImageJobUpdateOne {
 	if v != nil {
 		_u.SetModel(*v)
+	}
+	return _u
+}
+
+// SetImageSize sets the "image_size" field.
+func (_u *BatchImageJobUpdateOne) SetImageSize(v string) *BatchImageJobUpdateOne {
+	_u.mutation.SetImageSize(v)
+	return _u
+}
+
+// SetNillableImageSize sets the "image_size" field if the given value is not nil.
+func (_u *BatchImageJobUpdateOne) SetNillableImageSize(v *string) *BatchImageJobUpdateOne {
+	if v != nil {
+		_u.SetImageSize(*v)
 	}
 	return _u
 }
@@ -1973,6 +2009,11 @@ func (_u *BatchImageJobUpdateOne) check() error {
 			return &ValidationError{Name: "model", err: fmt.Errorf(`ent: validator failed for field "BatchImageJob.model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ImageSize(); ok {
+		if err := batchimagejob.ImageSizeValidator(v); err != nil {
+			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "BatchImageJob.image_size": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.TaskName(); ok {
 		if err := batchimagejob.TaskNameValidator(v); err != nil {
 			return &ValidationError{Name: "task_name", err: fmt.Errorf(`ent: validator failed for field "BatchImageJob.task_name": %w`, err)}
@@ -2099,6 +2140,9 @@ func (_u *BatchImageJobUpdateOne) sqlSave(ctx context.Context) (_node *BatchImag
 	}
 	if value, ok := _u.mutation.Model(); ok {
 		_spec.SetField(batchimagejob.FieldModel, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ImageSize(); ok {
+		_spec.SetField(batchimagejob.FieldImageSize, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.TaskName(); ok {
 		_spec.SetField(batchimagejob.FieldTaskName, field.TypeString, value)

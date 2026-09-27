@@ -37,6 +37,70 @@ func TestBatchImageDownloadService_OpenItemContent(t *testing.T) {
 		require.Equal(t, 1, limiter.releaseCount)
 	})
 
+	t.Run("streams marked upscaled image from its deterministic object", func(t *testing.T) {
+		svc, repo, limiter, store := newTestBatchImageUpscaledDownloadService()
+		job := repo.jobs["imgbatch_download"]
+		marker := batchImageUpscaleMarker
+		mime := "image/png"
+		extension := "png"
+		repo.items[job.BatchID] = []CreateBatchImageItemParams{{
+			JobID:                job.BatchID,
+			CustomID:             "cover/../001",
+			Status:               BatchImageItemStatusSuccess,
+			ProviderSourceObject: &marker,
+			MimeType:             &mime,
+			FileExtension:        &extension,
+			ImageCount:           1,
+		}}
+
+		key, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, "cover/../001", 0, extension)
+		require.NoError(t, err)
+		store.setObject(key, mime, []byte("upscaled-image"))
+
+		stream, err := svc.OpenItemContent(ctx, testBatchImageOwner(), job.BatchID, "cover/../001", 0)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = stream.Reader.Close() })
+
+		body, err := io.ReadAll(stream.Reader)
+		require.NoError(t, err)
+		require.Equal(t, []byte("upscaled-image"), body)
+		require.Equal(t, []string{key}, store.opened)
+		require.Equal(t, "image/png", stream.ContentType)
+		require.Equal(t, "cover___001.png", stream.Filename)
+		require.NotNil(t, stream.ContentLength)
+		require.EqualValues(t, len(body), *stream.ContentLength)
+		require.Zero(t, store.readerCloseCount)
+		require.Zero(t, limiter.releaseCount)
+
+		require.NoError(t, stream.Reader.Close())
+		require.Equal(t, 1, store.readerCloseCount)
+		require.Equal(t, 1, limiter.releaseCount)
+		require.NoError(t, stream.Reader.Close())
+		require.Equal(t, 1, store.readerCloseCount)
+		require.Equal(t, 1, limiter.releaseCount)
+	})
+
+	t.Run("bounds a blocking upscaled object open", func(t *testing.T) {
+		svc, repo, limiter, store := newTestBatchImageUpscaledDownloadService()
+		job := repo.jobs["imgbatch_download"]
+		marker := batchImageUpscaleMarker
+		mime := "image/png"
+		extension := "png"
+		repo.items[job.BatchID] = []CreateBatchImageItemParams{{
+			JobID: job.BatchID, CustomID: "blocked", Status: BatchImageItemStatusSuccess,
+			ProviderSourceObject: &marker, MimeType: &mime, FileExtension: &extension, ImageCount: 1,
+		}}
+		store.blockOpen = true
+		requestCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		_, err := svc.OpenItemContent(requestCtx, testBatchImageOwner(), job.BatchID, "blocked", 0)
+		require.ErrorIs(t, err, ErrBatchImageResultMissing)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, 1, limiter.acquireCount)
+		require.Equal(t, 1, limiter.releaseCount)
+	})
+
 	tests := []struct {
 		name   string
 		mutate func(*fakeBatchImageRepository)
@@ -74,6 +138,41 @@ func TestBatchImageDownloadService_OpenItemContent(t *testing.T) {
 			require.NotContains(t, err.Error(), "gs://")
 		})
 	}
+}
+
+func TestBatchImageUpscaleRollbackDisabledStillReadsAndCleansObjects(t *testing.T) {
+	svc, repo, _, store := newTestBatchImageUpscaledDownloadService()
+	require.False(t, svc.Config.ImageUpscale.Enabled)
+	job := repo.jobs["imgbatch_download"]
+	finishedAt := time.Now().Add(-BatchImageUpscaleCleanupGrace - time.Minute)
+	job.FinishedAt = &finishedAt
+	marker := batchImageUpscaleMarker
+	mime := "image/png"
+	extension := "png"
+	customID := "rollback-readable"
+	repo.items[job.BatchID] = []CreateBatchImageItemParams{{
+		JobID: job.BatchID, CustomID: customID, Status: BatchImageItemStatusSuccess,
+		ProviderSourceObject: &marker, MimeType: &mime, FileExtension: &extension, ImageCount: 1,
+	}}
+	key, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, customID, 0, extension)
+	require.NoError(t, err)
+	store.setObject(key, mime, []byte("durable-after-rollback"))
+
+	stream, err := svc.OpenItemContent(context.Background(), testBatchImageOwner(), job.BatchID, customID, 0)
+	require.NoError(t, err)
+	body, err := io.ReadAll(stream.Reader)
+	require.NoError(t, err)
+	require.NoError(t, stream.Reader.Close())
+	require.Equal(t, []byte("durable-after-rollback"), body)
+
+	cleanup := &BatchImageCleanupService{
+		Repo: repo, ProviderRegistry: svc.ProviderRegistry, AccountResolver: svc.AccountResolver,
+		DeliveryStore: store, Config: svc.Config,
+	}
+	err = cleanup.CleanupOutput(context.Background(), job.BatchID, "rollback")
+	require.NoError(t, err)
+	require.NotContains(t, store.objects, key)
+	require.NotNil(t, job.OutputDeletedAt)
 }
 
 func TestBatchImageDownloadService_StreamZip(t *testing.T) {
@@ -123,6 +222,85 @@ func TestBatchImageDownloadService_StreamZip(t *testing.T) {
 		require.Len(t, errorsJSON, 1)
 		require.Equal(t, "bad", errorsJSON[0]["custom_id"])
 		require.Equal(t, "SAFETY_BLOCKED", errorsJSON[0]["code"])
+	})
+
+	t.Run("streams marked upscaled objects and manifest", func(t *testing.T) {
+		svc, repo, limiter, store := newTestBatchImageUpscaledDownloadService()
+		job := repo.jobs["imgbatch_download"]
+		marker := batchImageUpscaleMarker
+		png := "image/png"
+		pngExtension := "png"
+		webp := "image/webp"
+		webpExtension := "webp"
+		repo.items[job.BatchID] = []CreateBatchImageItemParams{
+			{
+				JobID:                job.BatchID,
+				CustomID:             "cover/../001",
+				Status:               BatchImageItemStatusSuccess,
+				ProviderSourceObject: &marker,
+				MimeType:             &png,
+				FileExtension:        &pngExtension,
+				ImageCount:           2,
+			},
+			{
+				JobID:                job.BatchID,
+				CustomID:             "artwork-02",
+				Status:               BatchImageItemStatusSuccess,
+				ProviderSourceObject: &marker,
+				MimeType:             &webp,
+				FileExtension:        &webpExtension,
+				ImageCount:           1,
+			},
+		}
+		job.ItemCount = 2
+		job.SuccessCount = 2
+		job.FailCount = 0
+
+		coverFirstKey, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, "cover/../001", 0, pngExtension)
+		require.NoError(t, err)
+		coverSecondKey, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, "cover/../001", 1, pngExtension)
+		require.NoError(t, err)
+		artworkKey, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, "artwork-02", 0, webpExtension)
+		require.NoError(t, err)
+		store.setObject(coverFirstKey, png, []byte("upscaled-first"))
+		store.setObject(coverSecondKey, png, []byte("upscaled-second"))
+		store.setObject(artworkKey, webp, []byte("upscaled-third"))
+
+		var buf bytes.Buffer
+		result, err := svc.StreamZip(ctx, testBatchImageOwner(), job.BatchID, BatchImageZipOptions{}, &buf)
+		require.NoError(t, err)
+		require.Equal(t, 3, result.FileCount)
+		require.Zero(t, result.ErrorCount)
+		require.Equal(t, 1, limiter.acquireCount)
+		require.Equal(t, 1, limiter.releaseCount)
+		require.Equal(t, []string{coverFirstKey, coverSecondKey, artworkKey}, store.opened)
+		require.Equal(t, 3, store.readerCloseCount)
+
+		files := readZipFiles(t, buf.Bytes())
+		require.Equal(t, []byte("upscaled-first"), files["images/cover___001.png"])
+		require.Equal(t, []byte("upscaled-second"), files["images/cover___001_2.png"])
+		require.Equal(t, []byte("upscaled-third"), files["images/artwork-02.webp"])
+
+		var manifest struct {
+			Files []struct {
+				CustomID   string `json:"custom_id"`
+				Filename   string `json:"filename"`
+				MimeType   string `json:"mime_type"`
+				ImageIndex int    `json:"image_index"`
+			} `json:"files"`
+		}
+		require.NoError(t, json.Unmarshal(files["manifest.json"], &manifest))
+		require.Len(t, manifest.Files, 3)
+		require.Equal(t, "cover/../001", manifest.Files[0].CustomID)
+		require.Equal(t, "images/cover___001.png", manifest.Files[0].Filename)
+		require.Equal(t, "image/png", manifest.Files[0].MimeType)
+		require.Equal(t, 0, manifest.Files[0].ImageIndex)
+		require.Equal(t, "images/cover___001_2.png", manifest.Files[1].Filename)
+		require.Equal(t, 1, manifest.Files[1].ImageIndex)
+		require.Equal(t, "artwork-02", manifest.Files[2].CustomID)
+		require.Equal(t, "images/artwork-02.webp", manifest.Files[2].Filename)
+		require.Equal(t, "image/webp", manifest.Files[2].MimeType)
+		require.Equal(t, 0, manifest.Files[2].ImageIndex)
 	})
 
 	t.Run("limiter denial returns public limit error", func(t *testing.T) {
@@ -231,6 +409,15 @@ func newTestBatchImageDownloadService() (*BatchImageDownloadService, *fakeBatchI
 	return svc, repo, limiter
 }
 
+func newTestBatchImageUpscaledDownloadService() (*BatchImageDownloadService, *fakeBatchImageRepository, *fakeBatchImageDownloadLimiter, *batchImageUpscaleObjectStoreTest) {
+	svc, repo, limiter := newTestBatchImageDownloadService()
+	repo.jobs["imgbatch_download"].ImageSize = "2K"
+	svc.Config.BatchImage.DeliveryCOSPrefix = "batch-image/delivery"
+	store := newBatchImageUpscaleObjectStoreTest()
+	svc.DeliveryStore = store
+	return svc, repo, limiter, store
+}
+
 const batchImageDownloadTestBase64 = "Zmlyc3Q="
 
 func batchImageDownloadResultJSONL() string {
@@ -295,5 +482,108 @@ func (p *fakeBatchImageDownloadPermit) Release(context.Context) error {
 	return nil
 }
 
+type batchImageUpscaleObjectStoreTestObject struct {
+	data        []byte
+	contentType string
+}
+
+// batchImageUpscaleObjectStoreTest intentionally supports only exact-object operations.
+type batchImageUpscaleObjectStoreTest struct {
+	objects          map[string]batchImageUpscaleObjectStoreTestObject
+	opened           []string
+	deletes          [][]string
+	deleteErr        error
+	deleteCalls      int
+	blockOpen        bool
+	readerCloseCount int
+}
+
+func newBatchImageUpscaleObjectStoreTest() *batchImageUpscaleObjectStoreTest {
+	return &batchImageUpscaleObjectStoreTest{objects: make(map[string]batchImageUpscaleObjectStoreTestObject)}
+}
+
+func (s *batchImageUpscaleObjectStoreTest) setObject(key, contentType string, data []byte) {
+	s.objects[key] = batchImageUpscaleObjectStoreTestObject{data: append([]byte(nil), data...), contentType: contentType}
+}
+
+func (s *batchImageUpscaleObjectStoreTest) Put(_ context.Context, key, contentType string, body io.Reader, size int64) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) != size {
+		return io.ErrShortBuffer
+	}
+	s.setObject(key, contentType, data)
+	return nil
+}
+
+func (s *batchImageUpscaleObjectStoreTest) Open(ctx context.Context, key string) (io.ReadCloser, int64, string, error) {
+	s.opened = append(s.opened, key)
+	if s.blockOpen {
+		<-ctx.Done()
+		return nil, 0, "", ctx.Err()
+	}
+	object, ok := s.objects[key]
+	if !ok {
+		return nil, 0, "", io.EOF
+	}
+	reader := &batchImageUpscaleObjectStoreTestReader{
+		Reader: bytes.NewReader(append([]byte(nil), object.data...)),
+		onClose: func() {
+			s.readerCloseCount++
+		},
+	}
+	return reader, int64(len(object.data)), object.contentType, nil
+}
+
+func (s *batchImageUpscaleObjectStoreTest) PresignPut(context.Context, string, time.Duration) (string, error) {
+	return "", nil
+}
+
+func (s *batchImageUpscaleObjectStoreTest) PresignGet(context.Context, string, string, time.Duration) (string, error) {
+	return "", nil
+}
+
+func (s *batchImageUpscaleObjectStoreTest) Head(_ context.Context, key string) (int64, string, error) {
+	object, ok := s.objects[key]
+	if !ok {
+		return 0, "", io.EOF
+	}
+	return int64(len(object.data)), object.contentType, nil
+}
+
+func (s *batchImageUpscaleObjectStoreTest) Delete(_ context.Context, keys []string) error {
+	deleted := append([]string(nil), keys...)
+	s.deletes = append(s.deletes, deleted)
+	s.deleteCalls++
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	for _, key := range keys {
+		delete(s.objects, key)
+	}
+	return nil
+}
+
+type batchImageUpscaleObjectStoreTestReader struct {
+	*bytes.Reader
+	onClose func()
+	closed  bool
+}
+
+func (r *batchImageUpscaleObjectStoreTestReader) Close() error {
+	if r.closed {
+		return nil
+	}
+	r.closed = true
+	if r.onClose != nil {
+		r.onClose()
+	}
+	return nil
+}
+
 var _ BatchImageDownloadLimiter = (*fakeBatchImageDownloadLimiter)(nil)
 var _ BatchImageDownloadPermit = (*fakeBatchImageDownloadPermit)(nil)
+var _ BatchImageDeliveryObjectStore = (*batchImageUpscaleObjectStoreTest)(nil)
+var _ BatchImageUpscaleObjectStore = (*batchImageUpscaleObjectStoreTest)(nil)

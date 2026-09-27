@@ -1,0 +1,149 @@
+# Image 2.5 2K/4K Upscale Contract
+
+Date: 2026-09-28
+
+## Scope
+
+This contract applies only to `gemini-2.5-flash-image` and
+`gemini-2.5-flash-image-preview` when the requested output tier is `2K` or
+`4K`. `1K` and every other model keep their existing provider path unchanged.
+
+- `2K`: generate the requested aspect ratio at `1K`, then use native `2x`.
+- `4K`: generate the requested aspect ratio at `1K`, then use native `4x`.
+- The post-processing path is selected only by literal `2K` and `4K` tier
+  values. Pixel-dimension values such as `2048x1152` keep the existing provider
+  path unchanged; they are not rewritten into unsupported Gemini pixel sizes.
+- Batch JSONL sends `generationConfig.imageConfig.imageSize=1K` and preserves a
+  supported Gemini 2.5 `aspectRatio`. Ordinary `1K` jobs retain their previous
+  JSONL shape.
+- Billing and balance holds retain the originally requested `2K`/`4K` tier.
+- The synchronous Images API and asynchronous image-task wrapper use the same
+  adapter. Batch indexing uses that same process singleton and limiter.
+
+The fixed service contract is the Office Mini gateway source deployed on
+2026-09-28 from `deploy/office-mini-upscale-api/upscale_api/app.py` in the
+retained `infra-upscale-task` work artifact. The active service accepts
+`POST /v1/upscale`, `GET /v1/jobs/{id}`, and
+`GET /v1/jobs/{id}/result`; all three calls require the same Bearer token.
+Supported scales are 2 and 4 and the selected preset is `faithful`.
+
+## Failure and concurrency behavior
+
+One process-level limiter is shared by synchronous and batch calls. Production
+uses one active request and at most eight local waiters, matching the remote
+gateway's single worker and bounded queue. A full local queue returns a typed
+429/backpressure error. The complete submit/poll/result lifecycle has a 900
+second deadline.
+All images in one synchronous, asynchronous, or batch-indexing operation share
+that single 900-second lifecycle deadline; requesting multiple outputs never
+multiplies the Office Mini occupancy window.
+
+Submit retries are limited to explicit HTTP 429 responses because the remote
+API has no idempotency key and a transport/5xx retry could duplicate an accepted
+job. Poll and result GET requests may retry 429/5xx within the configured bound.
+401/403, invalid MIME, corrupt bytes, and dimension mismatches are permanent.
+The shared limiter admits work before inline base64 decoding or URL download.
+Each provider `1K` source is limited to 16 MiB, 2048 pixels on either axis, and
+2,097,152 total pixels before submission. The adapter decodes the result and
+requires its dimensions to equal the source dimensions multiplied by the
+requested scale.
+
+A synchronous request is atomic: if any returned image cannot be upscaled, the
+request fails and Sub2 does not charge it. Batch processing is item-isolated:
+one failed item is stored as `IMAGE_UPSCALE_*`, successful items remain
+downloadable, and settlement charges successful images only.
+The synchronous provider response must contain exactly the requested `n`
+images, and every expanded batch `custom_id` result must contain exactly one
+image. Cardinality mismatches fail before any upscale submission or COS write.
+
+## Batch persistence and objects
+
+Migration `261_batch_image_image_size.sql` persists the requested output tier;
+legacy rows default to `1K`. Providers still receive `1K` for 2K/4K Image 2.5
+jobs. During result indexing, each successfully upscaled image is written to the
+existing private batch COS bucket under:
+
+`<delivery_cos_prefix>/upscaled/<batch_id>/<sha256(custom_id)>/00.<ext>`
+
+Only a fixed marker is stored in `provider_source_object`; custom IDs never
+enter object paths directly. Item and ZIP downloads stream exact private
+objects through the existing owner authorization and download limiter. Output
+cleanup derives the three fixed `00.jpg`, `00.png`, and `00.webp` candidates
+for every durable custom ID and deletes them without ListBucket access. Index
+retries overwrite deterministic keys and never delete them out of band, which
+prevents a stale worker from deleting a winning worker's object after a lease
+expires. Objects written before an item metadata commit therefore remain
+discoverable and are removed by manual or TTL output cleanup. Cleanup uses a
+bounded retry and does not mark output deleted until the COS sweep succeeds.
+Failed or cancelled high-resolution jobs receive a bounded output
+cleanup deadline after a 150-second fence and are eligible for the same worker
+sweep; this covers a COS write followed by an indexing metadata-commit failure.
+Every COS write also holds a PostgreSQL `FOR UPDATE` permit on the job row from
+the final `indexing` status check until `Put` returns. Cancel/failure/completion
+transitions serialize on that same row, so a Redis-lease-expired worker cannot
+begin or resume a write after terminal cleanup. The 150-second delay remains
+defense-in-depth beyond the 120-second write timeout. Manual deletion observes
+the same delay. Completed jobs retain the configured output-retention window.
+Each COS write is capped at 120 seconds. Authenticated item and ZIP reads use
+a 10-minute per-object context that is cancelled when the stream closes, so a
+stalled object-store connection cannot pin a worker or download indefinitely.
+
+## Credential and deployment boundary
+
+The raw bearer token belongs only to Vault item
+`13f74ced-5297-4789-a595-df01e346ba29`, field `api_key`. Repository and runtime
+configuration store only the exact non-secret label:
+
+`vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key`
+
+`sub2api-upscale-vault` is a networkless, read-only, memory-only agent with an
+exact allowlist. The application sees only
+`/run/sub2api-upscale-vault/public.sock`. A restart clears the value and becomes
+unhealthy until an operator reloads the field through the hash-pinned
+`infra-vault run-item-env-file` flow. Never add an `IMAGE_UPSCALE_API_KEY`
+environment variable, Docker secret value, config key, log field, or command
+argument.
+
+Production is pinned to `https://hcmac-mini.tailfc4ed7.ts.net`. The blue-green
+release and runtime guard accept only the dedicated
+`sub2api_image_upscale_vault` read-only mount and reject a raw bearer
+environment. Prepare and verify the sidecar with
+`deploy/sub2api-image-upscale-vault-container.sh`; inject the value separately
+through a hash-pinned `infra-vault run-item-env-file` request whose sole command
+is `deploy/sub2api-image-upscale-vault-inject.sh`. The request maps only Vault
+field `api_key` to `IMAGE_UPSCALE_API_KEY`; the consumer removes that variable
+from SSH's environment and sends the value through stdin to the fixed remote
+agent load command. It then runs the sidecar's `ready` check. Do not reuse the
+request for another command or image revision.
+
+The canonical generic Compose topology declares the stable local
+`sub2api_image_upscale_vault` volume so a disabled fresh install still starts.
+It is empty and contains no credential. The sidecar helper must initialize it
+before activation. Production blue-green releases do not rely on Compose to
+create it: their preflight requires the helper-prepared volume and a healthy
+sidecar before mounting it read-only into the application.
+
+Install the fixed release variables initially disabled by piping the exact
+12-line block from `deploy/.env.example` to the root-owned
+`/opt/sub2api/scripts/sub2api-image-upscale-config.sh`. After the sidecar is
+ready, pipe the same block with only `IMAGE_UPSCALE_ENABLED=true` changed. The
+config helper accepts only the documented values, requires a root-owned mode
+`0600` release environment, runs under the shared maintenance lock, and allows
+only an exact false/true transition after initial installation. It does not
+print or replace surrounding configuration. The sidecar helper never accepts a
+raw secret and never replaces an existing sidecar outside the maintenance
+lifecycle.
+
+## Validation and rollback
+
+Release gates require unit/race tests, migration tests, shell syntax and runtime
+guard tests, a real 2K and 4K smoke, and owner-visible dimension evidence.
+Production activation follows the exact-commit GitHub blue-green workflow.
+
+Rollback is configuration-compatible: pipe the exact fixed block with
+`IMAGE_UPSCALE_ENABLED=false` to the installed config helper, then run the
+normal guarded release. Retain the sidecar and its volume; a rollback does not
+need to expose or reload the bearer. Existing 1K jobs remain readable. Completed
+2K/4K object results remain readable and cleanable by this release; do not roll
+back to a binary that predates migration 261 while such jobs still need item or
+ZIP download.

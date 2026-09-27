@@ -1,5 +1,13 @@
 # Sub2API project operations
 
+## Image 2.5 upscale
+
+- Before changing Image 2.5 2K/4K generation, batch result storage, the Office
+  Mini upscale client, or its Vault/runtime mounts, read
+  `docs/operations/IMAGE_25_UPSCALE_20260928.md`. Preserve the 1K bypass,
+  requested-tier billing, shared bounded limiter, per-item batch failure and
+  memory-only bearer contract.
+
 ## Payment catalog and reset-card purchases
 
 - For local-first user cancellation, late-payment refunds and existing-order checkout recovery, read `docs/operations/PAYMENT_LOCAL_CANCELLATION_20260922.md`. This owner-requested contract supersedes the September 19 wait-for-provider user-cancellation rule; preserve trusted payment facts and independent review fences.

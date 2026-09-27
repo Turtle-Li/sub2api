@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -18,6 +19,7 @@ func TestBatchImageSettlementService_SettlesAndChargesSuccessfulImagesOnly(t *te
 	job.SuccessCount = 3
 	job.FailCount = 2
 	job.ItemCount = 5
+	job.ImageSize = "2K"
 	job.SessionID = batchImageStringPtr("batch-settlement-session")
 	repo.jobs[job.BatchID] = job
 	billing := &fakeBatchImageBillingRepo{}
@@ -38,6 +40,8 @@ func TestBatchImageSettlementService_SettlesAndChargesSuccessfulImagesOnly(t *te
 	require.NotEmpty(t, batchImageDerefString(repo.jobs[job.BatchID].ManifestHash))
 	require.NotNil(t, repo.jobs[job.BatchID].SettledAt)
 	require.Equal(t, "batch-settlement-session", batchImageDerefString(usageLogs.lastLog.SessionID))
+	require.Equal(t, "2K", batchImageDerefString(usageLogs.lastLog.ImageSize))
+	require.Equal(t, "gemini:v1beta/models:batchGenerateContent", batchImageDerefString(usageLogs.lastLog.UpstreamEndpoint))
 	require.Len(t, billing.captures, 1)
 	require.Equal(t, int64(321), billing.captures[0].APIKeyID)
 	require.Equal(t, job.UserID, billing.captures[0].UserID)
@@ -47,6 +51,27 @@ func TestBatchImageSettlementService_SettlesAndChargesSuccessfulImagesOnly(t *te
 	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), batchImageTestData)
 	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), "gs://")
 	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), "prompt")
+}
+
+func TestBatchImageSettlementUsageEndpointMatchesProvider(t *testing.T) {
+	for _, tt := range []struct {
+		provider string
+		want     string
+	}{
+		{provider: BatchImageProviderGeminiAPI, want: "gemini:v1beta/models:batchGenerateContent"},
+		{provider: BatchImageProviderVertex, want: "vertex:batchPredictionJobs"},
+	} {
+		t.Run(tt.provider, func(t *testing.T) {
+			job := testSettlingBatchImageJob("imgbatch_endpoint_" + tt.provider)
+			job.Provider = tt.provider
+			usageLogs := &openAIRecordUsageLogRepoStub{}
+			(&BatchImageSettlementService{UsageLogRepo: usageLogs}).recordUsageLog(
+				context.Background(), job, 0.25, "request-endpoint", time.Now(),
+			)
+			require.NotNil(t, usageLogs.lastLog)
+			require.Equal(t, tt.want, batchImageDerefString(usageLogs.lastLog.UpstreamEndpoint))
+		})
+	}
 }
 
 func TestBatchImageSettlementService_ZeroSuccessCanComplete(t *testing.T) {
@@ -416,9 +441,11 @@ func testSettlingBatchImageJob(batchID string) *BatchImageJob {
 }
 
 type fakeBatchImagePricingResolver struct {
-	unitPrice     float64
-	missingModels map[string]bool
-	err           error
+	unitPrice             float64
+	unitPricesByImageSize map[string]float64
+	lastImageSize         string
+	missingModels         map[string]bool
+	err                   error
 }
 
 func (r *fakeBatchImagePricingResolver) BatchImageUnitPrice(_ context.Context, job *BatchImageJob) (float64, error) {
@@ -427,6 +454,12 @@ func (r *fakeBatchImagePricingResolver) BatchImageUnitPrice(_ context.Context, j
 	}
 	if job != nil && r.missingModels[job.Model] {
 		return 0, ErrBatchImageSettlementPricingMissing
+	}
+	if job != nil {
+		r.lastImageSize = job.ImageSize
+		if unitPrice, ok := r.unitPricesByImageSize[job.ImageSize]; ok {
+			return unitPrice, nil
+		}
 	}
 	return r.unitPrice, nil
 }

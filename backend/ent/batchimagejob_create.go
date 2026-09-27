@@ -74,6 +74,20 @@ func (_c *BatchImageJobCreate) SetModel(v string) *BatchImageJobCreate {
 	return _c
 }
 
+// SetImageSize sets the "image_size" field.
+func (_c *BatchImageJobCreate) SetImageSize(v string) *BatchImageJobCreate {
+	_c.mutation.SetImageSize(v)
+	return _c
+}
+
+// SetNillableImageSize sets the "image_size" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableImageSize(v *string) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetImageSize(*v)
+	}
+	return _c
+}
+
 // SetTaskName sets the "task_name" field.
 func (_c *BatchImageJobCreate) SetTaskName(v string) *BatchImageJobCreate {
 	_c.mutation.SetTaskName(v)
@@ -577,6 +591,10 @@ func (_c *BatchImageJobCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *BatchImageJobCreate) defaults() {
+	if _, ok := _c.mutation.ImageSize(); !ok {
+		v := batchimagejob.DefaultImageSize
+		_c.mutation.SetImageSize(v)
+	}
 	if _, ok := _c.mutation.TaskName(); !ok {
 		v := batchimagejob.DefaultTaskName
 		_c.mutation.SetTaskName(v)
@@ -650,6 +668,14 @@ func (_c *BatchImageJobCreate) check() error {
 	if v, ok := _c.mutation.Model(); ok {
 		if err := batchimagejob.ModelValidator(v); err != nil {
 			return &ValidationError{Name: "model", err: fmt.Errorf(`ent: validator failed for field "BatchImageJob.model": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.ImageSize(); !ok {
+		return &ValidationError{Name: "image_size", err: errors.New(`ent: missing required field "BatchImageJob.image_size"`)}
+	}
+	if v, ok := _c.mutation.ImageSize(); ok {
+		if err := batchimagejob.ImageSizeValidator(v); err != nil {
+			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "BatchImageJob.image_size": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.TaskName(); !ok {
@@ -803,6 +829,10 @@ func (_c *BatchImageJobCreate) createSpec() (*BatchImageJob, *sqlgraph.CreateSpe
 	if value, ok := _c.mutation.Model(); ok {
 		_spec.SetField(batchimagejob.FieldModel, field.TypeString, value)
 		_node.Model = value
+	}
+	if value, ok := _c.mutation.ImageSize(); ok {
+		_spec.SetField(batchimagejob.FieldImageSize, field.TypeString, value)
+		_node.ImageSize = value
 	}
 	if value, ok := _c.mutation.TaskName(); ok {
 		_spec.SetField(batchimagejob.FieldTaskName, field.TypeString, value)
@@ -1079,6 +1109,18 @@ func (u *BatchImageJobUpsert) SetModel(v string) *BatchImageJobUpsert {
 // UpdateModel sets the "model" field to the value that was provided on create.
 func (u *BatchImageJobUpsert) UpdateModel() *BatchImageJobUpsert {
 	u.SetExcluded(batchimagejob.FieldModel)
+	return u
+}
+
+// SetImageSize sets the "image_size" field.
+func (u *BatchImageJobUpsert) SetImageSize(v string) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldImageSize, v)
+	return u
+}
+
+// UpdateImageSize sets the "image_size" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateImageSize() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldImageSize)
 	return u
 }
 
@@ -1814,6 +1856,20 @@ func (u *BatchImageJobUpsertOne) SetModel(v string) *BatchImageJobUpsertOne {
 func (u *BatchImageJobUpsertOne) UpdateModel() *BatchImageJobUpsertOne {
 	return u.Update(func(s *BatchImageJobUpsert) {
 		s.UpdateModel()
+	})
+}
+
+// SetImageSize sets the "image_size" field.
+func (u *BatchImageJobUpsertOne) SetImageSize(v string) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetImageSize(v)
+	})
+}
+
+// UpdateImageSize sets the "image_size" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateImageSize() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateImageSize()
 	})
 }
 
@@ -2812,6 +2868,20 @@ func (u *BatchImageJobUpsertBulk) SetModel(v string) *BatchImageJobUpsertBulk {
 func (u *BatchImageJobUpsertBulk) UpdateModel() *BatchImageJobUpsertBulk {
 	return u.Update(func(s *BatchImageJobUpsert) {
 		s.UpdateModel()
+	})
+}
+
+// SetImageSize sets the "image_size" field.
+func (u *BatchImageJobUpsertBulk) SetImageSize(v string) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetImageSize(v)
+	})
+}
+
+// UpdateImageSize sets the "image_size" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateImageSize() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateImageSize()
 	})
 }
 

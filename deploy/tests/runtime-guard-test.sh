@@ -480,6 +480,7 @@ new_case() {
   chmod 700 "$CASE_ROOT"
   : >"${CASE_ROOT}/docker-calls.log"
   : >"${CASE_ROOT}/release-calls.log"
+  : >"${CASE_ROOT}/image-upscale-helper-calls.log"
   : >"${CASE_ROOT}/curl-calls.log"
   : >"${CASE_ROOT}/node-state-calls.log"
   : >"${CASE_ROOT}/refund-gate-events.log"
@@ -525,6 +526,13 @@ fi
 printf '%s\n' "${FAKE_NODE_STATE_RESPONSE:-NO_LOCAL_RECOVERY}"
 EOF
   chmod +x "${CASE_ROOT}/app/scripts/sub2api-node-state.sh"
+cat >"${CASE_ROOT}/app/scripts/sub2api-image-upscale-vault-container.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >>"$FAKE_IMAGE_UPSCALE_HELPER_CALLS"
+[ "${FAKE_IMAGE_UPSCALE_HELPER_FAIL:-false}" != true ]
+EOF
+  chmod +x "${CASE_ROOT}/app/scripts/sub2api-image-upscale-vault-container.sh"
 }
 
 write_standard_dependencies() {
@@ -551,6 +559,8 @@ run_guard() {
     FAKE_RUNTIME_ROOT="${CASE_ROOT}/runtime" \
     FAKE_NODE_STATE_CALLS="${CASE_ROOT}/node-state-calls.log" \
     FAKE_NODE_STATE_RESPONSE="${FAKE_NODE_STATE_RESPONSE:-NO_LOCAL_RECOVERY}" \
+    FAKE_IMAGE_UPSCALE_HELPER_CALLS="${CASE_ROOT}/image-upscale-helper-calls.log" \
+    FAKE_IMAGE_UPSCALE_HELPER_FAIL="${FAKE_IMAGE_UPSCALE_HELPER_FAIL:-false}" \
     FAKE_REFUND_GATE_EVENTS="${CASE_ROOT}/refund-gate-events.log" \
     FAKE_REFUND_ROLLBACK_IN_FLIGHT="${FAKE_REFUND_ROLLBACK_IN_FLIGHT:-0}" \
     FAKE_REFUND_ROLLBACK_LIVEZ_UNREACHABLE="${FAKE_REFUND_ROLLBACK_LIVEZ_UNREACHABLE:-false}" \
@@ -661,6 +671,22 @@ assert_contains "${CASE_ROOT}/node-state-calls.log" 'recover-local'
 # Local, non-dual deployments use the same container-owned feature contract:
 # only approved Vault mounts accompany enabled switches, and all other mounts
 # and raw credential/webhook environment entries fail before lifecycle work.
+new_case local-active-image-upscale-vault
+write_standard_dependencies
+write_container sub2api-upscale-vault true healthy false 0 sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+  $'volume|sub2api_sub2api_data|/app/data|true\nvolume|sub2api_image_upscale_vault|/run/sub2api-upscale-vault|false' \
+  $'IMAGE_UPSCALE_ENABLED=true\nIMAGE_UPSCALE_BASE_URL=https://hcmac-mini.tailfc4ed7.ts.net\nIMAGE_UPSCALE_API_KEY_VAULT_REF=vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key\nIMAGE_UPSCALE_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock'
+run_guard >"${CASE_ROOT}/output.log" 2>&1
+assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
+assert_contains "${CASE_ROOT}/image-upscale-helper-calls.log" 'ready-auto sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+if FAKE_IMAGE_UPSCALE_HELPER_FAIL=true run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'runtime guard accepted an image-upscale sidecar that failed hardened readiness'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+
 new_case local-active-payment-and-feishu-vaults
 write_standard_dependencies
 write_container sub2api-green true healthy false 0 sub2api:current

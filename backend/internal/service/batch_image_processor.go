@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"go.uber.org/zap"
@@ -206,6 +207,9 @@ func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *B
 		if errors.Is(err, ErrBatchImageIndexOutputMissing) {
 			return BatchImageProcessResult{}, err
 		}
+		if errors.Is(err, ErrBatchImageUpscaleCleanupFailed) || errors.Is(err, ErrBatchImageUpscaleWriteFenceFailed) {
+			return BatchImageProcessResult{}, err
+		}
 		// job 状态已被并发方推进（如已进入 settling/终态）：不是索引数据问题，
 		// 短延迟 requeue 让下一轮按最新状态处理，不能误转 failed。
 		if errors.Is(err, ErrBatchImageIndexStateConflict) {
@@ -299,7 +303,11 @@ type BatchImageIndexResult struct {
 }
 
 type BatchImageResultIndexer struct {
-	Repo BatchImageRepository
+	Repo               BatchImageRepository
+	Config             *config.Config
+	Upscaler           *ImageUpscaleService
+	UpscaleStore       BatchImageUpscaleObjectStore
+	UpscaleWriteFencer BatchImageUpscaleWriteFencer
 }
 
 func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (*BatchImageIndexResult, error) {
@@ -324,6 +332,19 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 	unknownCount := 0
 	var items []CreateBatchImageItemParams
 	result := &BatchImageIndexResult{}
+	writeFencer := i.UpscaleWriteFencer
+	if writeFencer == nil {
+		writeFencer, _ = i.Repo.(BatchImageUpscaleWriteFencer)
+	}
+	if batchImageJobRequiresUpscale(job) && writeFencer == nil {
+		return nil, ErrBatchImageUpscaleWriteFenceFailed
+	}
+	upscaleCtx := ctx
+	cancelUpscale := func() {}
+	if batchImageJobRequiresUpscale(job) && i.Upscaler != nil {
+		upscaleCtx, cancelUpscale = imageUpscaleLifecycleContext(ctx, i.Upscaler.cfg)
+	}
+	defer cancelUpscale()
 	lineNumber := 0
 	now := time.Now()
 	sourceObject := batchImageDerefString(job.ProviderOutputRef)
@@ -365,10 +386,33 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 			IndexedAt:            &now,
 		}
 		if parsed.Status == BatchImageParsedStatusSucceeded {
-			item.Status = BatchImageItemStatusSuccess
-			item.MimeType = batchImageOptionalStringPtr(parsed.MimeType)
-			item.FileExtension = batchImageOptionalStringPtr(parsed.FileExtension)
-			result.SuccessCount++
+			if _, upscaleRequired := Image25UpscaleScale(job.Model, job.ImageSize); upscaleRequired {
+				mimeType, extension, imageCount, _, upscaleErr := upscaleBatchImageResultLine(
+					upscaleCtx, i.Config, i.Upscaler, i.UpscaleStore, writeFencer, job, []byte(line),
+				)
+				if upscaleErr != nil {
+					if errors.Is(upscaleErr, ErrBatchImageIndexStateConflict) || errors.Is(upscaleErr, ErrBatchImageUpscaleWriteFenceFailed) {
+						return nil, upscaleErr
+					}
+					code, message := batchImageUpscaleFailure(upscaleErr)
+					item.ImageCount = 0
+					item.ErrorCode = batchImageOptionalStringPtr(code)
+					item.ErrorMessage = batchImageOptionalStringPtr(message)
+					result.FailCount++
+				} else {
+					item.Status = BatchImageItemStatusSuccess
+					item.ProviderSourceObject = batchImageOptionalStringPtr(batchImageUpscaleMarker)
+					item.MimeType = batchImageOptionalStringPtr(mimeType)
+					item.FileExtension = batchImageOptionalStringPtr(extension)
+					item.ImageCount = imageCount
+					result.SuccessCount++
+				}
+			} else {
+				item.Status = BatchImageItemStatusSuccess
+				item.MimeType = batchImageOptionalStringPtr(parsed.MimeType)
+				item.FileExtension = batchImageOptionalStringPtr(parsed.FileExtension)
+				result.SuccessCount++
+			}
 		} else {
 			item.ErrorCode = batchImageOptionalStringPtr(parsed.ErrorCode)
 			item.ErrorMessage = batchImageOptionalStringPtr(parsed.ErrorMessage)

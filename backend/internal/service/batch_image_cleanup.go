@@ -62,7 +62,12 @@ func (s *BatchImageCleanupService) DeleteOutputsForOwner(ctx context.Context, ow
 	if job.Status == BatchImageJobStatusOutputDeleted || job.OutputDeletedAt != nil {
 		return BatchImageJobToPublic(job), nil
 	}
-	if job.Status != BatchImageJobStatusCompleted {
+	if job.Status != BatchImageJobStatusCompleted &&
+		!((job.Status == BatchImageJobStatusFailed || job.Status == BatchImageJobStatusCancelled) && batchImageJobRequiresUpscale(job)) {
+		return nil, ErrBatchImageOutputDeleteNotReady
+	}
+	if batchImageJobRequiresUpscale(job) &&
+		(job.FinishedAt == nil || time.Now().Before(job.FinishedAt.Add(BatchImageUpscaleCleanupGrace))) {
 		return nil, ErrBatchImageOutputDeleteNotReady
 	}
 	s.appendCleanupEvent(ctx, job.BatchID, "manual_output_delete_requested", map[string]any{
@@ -247,6 +252,9 @@ func (s *BatchImageCleanupService) recordCleanupFailure(ctx context.Context, job
 }
 
 func (s *BatchImageCleanupService) cleanupCOSDelivery(ctx context.Context, job *BatchImageJob) error {
+	if batchImageJobRequiresUpscale(job) {
+		return s.cleanupUpscaledObjects(ctx, job)
+	}
 	if s == nil || job == nil || s.Config == nil || !s.Config.BatchImage.DeliveryEnabled ||
 		job.Provider != BatchImageProviderVertex {
 		return nil
@@ -265,6 +273,40 @@ func (s *BatchImageCleanupService) cleanupCOSDelivery(ctx context.Context, job *
 		keys = append(keys, key)
 	}
 	if err := s.DeliveryStore.Delete(ctx, keys); err != nil {
+		return ErrBatchImageCleanupFailed.WithCause(err)
+	}
+	return nil
+}
+
+func (s *BatchImageCleanupService) cleanupUpscaledObjects(ctx context.Context, job *BatchImageJob) error {
+	if s == nil || s.Repo == nil || s.Config == nil || job == nil {
+		return ErrBatchImageCleanupFailed
+	}
+	store, ok := s.DeliveryStore.(BatchImageUpscaleObjectStore)
+	if !ok || store == nil {
+		return ErrBatchImageDeliveryNotConfigured
+	}
+	const pageSize = 500
+	var customIDs []string
+	for offset := 0; ; offset += pageSize {
+		items, err := s.Repo.ListBatchImageItems(ctx, job.BatchID, BatchImageItemFilter{Limit: pageSize, Offset: offset})
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			if item != nil {
+				customIDs = append(customIDs, item.CustomID)
+			}
+		}
+		if len(items) < pageSize {
+			break
+		}
+	}
+	keys, err := batchImageUpscaleRecoveryKeys(s.Config, job.BatchID, customIDs)
+	if err != nil {
+		return ErrBatchImageCleanupFailed.WithCause(err)
+	}
+	if err := deleteBatchImageUpscaleKeys(ctx, store, keys); err != nil {
 		return ErrBatchImageCleanupFailed.WithCause(err)
 	}
 	return nil

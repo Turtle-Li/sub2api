@@ -126,6 +126,7 @@ type BatchImagePublicBatch struct {
 	ParentBatchID   *string                `json:"parent_batch_id,omitempty"`
 	Status          string                 `json:"status"`
 	Model           string                 `json:"model"`
+	ImageSize       string                 `json:"image_size"`
 	Provider        string                 `json:"provider"`
 	ItemCount       int                    `json:"item_count"`
 	SuccessCount    int                    `json:"success_count"`
@@ -326,6 +327,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		AccountID:               &accountID,
 		Provider:                provider.Name(),
 		Model:                   normalized.Model,
+		ImageSize:               normalized.ImageSize,
 		TaskName:                normalized.TaskName,
 		ParentBatchID:           parentBatchID,
 		Status:                  BatchImageJobStatusCreated,
@@ -406,6 +408,10 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		ImageSize:        normalized.ImageSize,
 		Metadata:         normalized.Metadata,
 		Items:            make([]BatchImageInputItem, 0, len(normalized.Items)),
+	}
+	if _, upscaleRequired := Image25UpscaleScale(normalized.Model, normalized.ImageSize); upscaleRequired {
+		input.ImageSize = defaultBatchImageImageSize
+		input.ExplicitImageConfig = true
 	}
 	for _, item := range normalized.Items {
 		refs := make([]BatchImageReference, 0, len(item.ReferenceImages))
@@ -1276,10 +1282,29 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 	if req.ImageSize == "" {
 		req.ImageSize = s.defaultImageSize()
 	}
-	if !strings.EqualFold(req.ImageSize, defaultBatchImageImageSize) {
+	req.ImageSize = strings.ToUpper(req.ImageSize)
+	switch req.ImageSize {
+	case "1K":
+	case "2K", "4K":
+		if _, ok := Image25UpscaleScale(req.Model, req.ImageSize); !ok {
+			return req, ErrBatchImageInvalidItems
+		}
+		if !isImage25SupportedAspectRatio(req.AspectRatio) {
+			return req, ErrBatchImageInvalidItems
+		}
+		if req.Provider != "" && req.Provider != BatchImageProviderGeminiAPI {
+			return req, ErrBatchImageInvalidItems
+		}
+		// High-resolution Image 2.5 jobs must never enter the ordinary
+		// Gemini-to-Vertex fallback order: only Gemini API produces the 1K
+		// source consumed by the private upscale adapter.
+		req.Provider = BatchImageProviderGeminiAPI
+		if s == nil || s.Config == nil || !s.Config.ImageUpscale.Active() {
+			return req, ErrBatchImageUpscaleUnavailable
+		}
+	default:
 		return req, ErrBatchImageInvalidItems
 	}
-	req.ImageSize = defaultBatchImageImageSize
 	req.Metadata = sanitizeBatchImageMetadata(req.Metadata)
 	sharedReferences, err := normalizeBatchImageSharedReferenceInputs(
 		req.SharedReferenceImages,
@@ -1617,7 +1642,11 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if s.Pricing == nil {
 			return nil, ErrBatchImageSettlementPricingMissing
 		}
-		resolvedUnit, err := s.Pricing.BatchImageUnitPrice(ctx, &BatchImageJob{Provider: provider, Model: req.Model})
+		resolvedUnit, err := s.Pricing.BatchImageUnitPrice(ctx, &BatchImageJob{
+			Provider:  provider,
+			Model:     req.Model,
+			ImageSize: req.ImageSize,
+		})
 		if err != nil || resolvedUnit < 0 {
 			return nil, ErrBatchImageSettlementPricingMissing
 		}
@@ -1760,6 +1789,7 @@ func BatchImageJobToPublic(job *BatchImageJob) *BatchImagePublicBatch {
 		ParentBatchID:   job.ParentBatchID,
 		Status:          PublicBatchImageStatus(job.Status),
 		Model:           job.Model,
+		ImageSize:       job.ImageSize,
 		Provider:        job.Provider,
 		ItemCount:       job.ItemCount,
 		SuccessCount:    job.SuccessCount,

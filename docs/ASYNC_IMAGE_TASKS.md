@@ -16,6 +16,13 @@ The aliases are `/images/generations/async`, `/images/edits/async`, and `/images
 
 Only OpenAI and Grok groups are supported. Requests use the same JSON or multipart payload as the corresponding synchronous endpoint. Streaming image requests are rejected because a polled task returns one final JSON result.
 
+For exact Image 2.5 models, a requested `2K` or `4K` tier follows the same
+post-processing path as the synchronous Images API: the provider receives the
+ratio-matched `1K` request, then the shared private adapter performs native
+`2x` or `4x` upscaling. The completed bytes are still passed through the normal
+async object-storage uploader before the task becomes pollable; `1K` and other
+models are unchanged. See `docs/operations/IMAGE_25_UPSCALE_20260928.md`.
+
 ## Enabling the feature (object storage)
 
 Asynchronous image tasks are **disabled by default** and gated on object storage. When the switch is off — or the S3 credentials are incomplete — the async endpoints return `404` and never create a task or write to Redis. This is deliberate: without offloading, large `b64_json` results (several MB each, e.g. `gpt-image-1`) would accumulate in Redis and exhaust its memory.

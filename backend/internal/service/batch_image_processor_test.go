@@ -390,6 +390,7 @@ type fakeBatchImageRepository struct {
 	transitions   map[string][]string
 	events        map[string][]string
 	transitionErr error
+	replaceErr    error
 	replaceCalls  int
 }
 
@@ -403,6 +404,17 @@ func newFakeBatchImageRepository() *fakeBatchImageRepository {
 	}
 }
 
+type noopBatchImageUpscaleWritePermit struct{}
+
+func (noopBatchImageUpscaleWritePermit) Release() error { return nil }
+
+func (r *fakeBatchImageRepository) BeginBatchImageUpscaleWrite(_ context.Context, batchID string) (BatchImageUpscaleWritePermit, error) {
+	if job, ok := r.jobs[batchID]; ok && job.Status != BatchImageJobStatusIndexing {
+		return nil, ErrBatchImageIndexStateConflict
+	}
+	return noopBatchImageUpscaleWritePermit{}, nil
+}
+
 func (r *fakeBatchImageRepository) CreateBatchImageJob(_ context.Context, params CreateBatchImageJobParams) (*BatchImageJob, error) {
 	job := &BatchImageJob{
 		BatchID:                 params.BatchID,
@@ -412,6 +424,7 @@ func (r *fakeBatchImageRepository) CreateBatchImageJob(_ context.Context, params
 		Status:                  params.Status,
 		Provider:                params.Provider,
 		Model:                   params.Model,
+		ImageSize:               params.ImageSize,
 		TaskName:                params.TaskName,
 		ProviderJobName:         params.ProviderJobName,
 		ItemCount:               params.ItemCount,
@@ -531,6 +544,19 @@ func (r *fakeBatchImageRepository) TransitionBatchImageJobStatus(_ context.Conte
 	job.Status = toStatus
 	job.LastErrorCode = opts.ErrorCode
 	job.LastErrorMessage = opts.ErrorMessage
+	now := time.Now()
+	if opts.Now != nil {
+		now = *opts.Now
+	}
+	job.UpdatedAt = now
+	if IsTerminalBatchImageJobStatus(toStatus) && job.FinishedAt == nil {
+		job.FinishedAt = &now
+	}
+	if (toStatus == BatchImageJobStatusFailed || toStatus == BatchImageJobStatusCancelled) &&
+		job.OutputExpiresAt == nil && batchImageJobRequiresUpscale(job) {
+		expiresAt := now.Add(BatchImageUpscaleCleanupGrace)
+		job.OutputExpiresAt = &expiresAt
+	}
 	if toStatus == BatchImageJobStatusFailed {
 		r.failPendingItems(
 			batchID,
@@ -695,6 +721,9 @@ func (r *fakeBatchImageRepository) BulkCreateBatchImageItems(ctx context.Context
 }
 
 func (r *fakeBatchImageRepository) ReplaceBatchImageItemsForJob(_ context.Context, batchID string, items []CreateBatchImageItemParams, counts BatchImageCounts) error {
+	if r.replaceErr != nil {
+		return r.replaceErr
+	}
 	// 与真实实现一致：仅 indexing 状态允许重建 item 表（未注册的 job 保持宽松，
 	// 供直接构造 job 的单测使用）。
 	if job, ok := r.jobs[batchID]; ok && job.Status != BatchImageJobStatusIndexing {
@@ -833,7 +862,9 @@ func (r *fakeBatchImageRepository) ListBatchImageJobsDueForOutputCleanup(_ conte
 	}
 	var jobs []*BatchImageJob
 	for _, job := range r.jobs {
-		if job.OutputDeletedAt != nil || batchImageDerefString(job.ProviderOutputRef) == "" || job.Status != BatchImageJobStatusCompleted || job.OutputExpiresAt == nil || job.OutputExpiresAt.After(now) {
+		eligibleStatus := job.Status == BatchImageJobStatusCompleted || job.Status == BatchImageJobStatusFailed || job.Status == BatchImageJobStatusCancelled
+		hasRecoverableOutput := batchImageDerefString(job.ProviderOutputRef) != "" || batchImageJobRequiresUpscale(job)
+		if job.OutputDeletedAt != nil || !hasRecoverableOutput || !eligibleStatus || job.OutputExpiresAt == nil || job.OutputExpiresAt.After(now) {
 			continue
 		}
 		jobs = append(jobs, job)

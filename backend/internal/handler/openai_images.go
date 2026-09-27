@@ -269,6 +269,21 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					zap.Error(err),
 				)
 			} else {
+				var upscaleErr *service.ImageUpscaleError
+				if errors.As(err, &upscaleErr) {
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), true, nil)
+					status := upscaleErr.StatusCode
+					if status <= 0 {
+						if upscaleErr.Temporary {
+							status = http.StatusGatewayTimeout
+						} else {
+							status = http.StatusBadGateway
+						}
+					}
+					h.handleStreamingAwareError(c, status, "image_upscale_error", upscaleErr.Error(), streamStarted)
+					reqLog.Warn("openai.images.upscale_failed", zap.Int("status_code", status), zap.String("error_code", upscaleErr.Code))
+					return
+				}
 				var imageUpstreamErr *service.OpenAIImagesUpstreamError
 				if errors.As(err, &imageUpstreamErr) {
 					retryableServerError := service.IsOpenAIImagesRetryableUpstreamError(imageUpstreamErr)

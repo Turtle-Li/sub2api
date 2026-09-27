@@ -32,6 +32,19 @@ func TestBatchImageCleanupService_DeleteOutputsForOwner(t *testing.T) {
 		requireBatchImagePublicJSONHasNoInternals(t, body)
 	})
 
+	t.Run("rejects high-resolution deletion during stale-write fence", func(t *testing.T) {
+		svc, repo, provider := newTestBatchImageCleanupService()
+		job := repo.jobs["imgbatch_cleanup"]
+		job.ImageSize = "2K"
+		now := time.Now()
+		job.FinishedAt = &now
+
+		_, err := svc.DeleteOutputsForOwner(ctx, testBatchImageOwner(), job.BatchID)
+		require.ErrorIs(t, err, ErrBatchImageOutputDeleteNotReady)
+		require.Nil(t, job.OutputDeletedAt)
+		require.Empty(t, provider.cleanupTargets)
+	})
+
 	t.Run("repeated delete is idempotent", func(t *testing.T) {
 		svc, repo, provider := newTestBatchImageCleanupService()
 		deletedAt := time.Now()
@@ -88,6 +101,109 @@ func TestBatchImageCleanupService_DeleteOutputsForOwner(t *testing.T) {
 		require.ErrorIs(t, err, ErrBatchImageCleanupUnsafePath)
 		require.Equal(t, "BATCH_IMAGE_CLEANUP_UNSAFE_PATH", batchImageDerefString(repo.jobs["imgbatch_cleanup"].LastErrorCode))
 	})
+}
+
+func TestBatchImageCleanupService_CleanupUpscaledObjectsSweepsDeterministicRecoveryKeys(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, provider := newTestBatchImageCleanupService()
+	job := repo.jobs["imgbatch_cleanup"]
+	job.ImageSize = "2K"
+	job.ItemCount = 3
+	job.SuccessCount = 2
+	job.FailCount = 1
+	svc.Config.BatchImage.DeliveryCOSPrefix = "batch-image/delivery"
+	store := newBatchImageUpscaleObjectStoreTest()
+	svc.DeliveryStore = store
+
+	marker := batchImageUpscaleMarker
+	normalSource := "provider/results/not-upscaled.jsonl"
+	png := "image/png"
+	pngExtension := "png"
+	repo.items[job.BatchID] = []CreateBatchImageItemParams{
+		{
+			JobID:                job.BatchID,
+			CustomID:             "marked-item",
+			Status:               BatchImageItemStatusSuccess,
+			ProviderSourceObject: &marker,
+			MimeType:             &png,
+			FileExtension:        &pngExtension,
+			ImageCount:           1,
+		},
+		{
+			JobID:                job.BatchID,
+			CustomID:             "normal-success",
+			Status:               BatchImageItemStatusSuccess,
+			ProviderSourceObject: &normalSource,
+			MimeType:             &png,
+			FileExtension:        &pngExtension,
+			ImageCount:           1,
+		},
+		{
+			JobID:                job.BatchID,
+			CustomID:             "marked-failure",
+			Status:               BatchImageItemStatusFailed,
+			ProviderSourceObject: &marker,
+			MimeType:             &png,
+			FileExtension:        &pngExtension,
+			ImageCount:           1,
+		},
+	}
+
+	markedFirstKey, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, "marked-item", 0, pngExtension)
+	require.NoError(t, err)
+	normalSuccessKey, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, "normal-success", 0, pngExtension)
+	require.NoError(t, err)
+	failedMarkedKey, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, "marked-failure", 0, pngExtension)
+	require.NoError(t, err)
+	store.setObject(markedFirstKey, png, []byte("first"))
+	store.setObject(normalSuccessKey, png, []byte("normal"))
+	store.setObject(failedMarkedKey, png, []byte("failed"))
+	store.setObject("batch-image/delivery/unrelated.png", png, []byte("unrelated"))
+
+	err = svc.CleanupOutput(ctx, job.BatchID, "ttl")
+	require.NoError(t, err)
+	require.Len(t, store.deletes, 1)
+	require.Contains(t, store.deletes[0], markedFirstKey)
+	require.Contains(t, store.deletes[0], normalSuccessKey)
+	require.Contains(t, store.deletes[0], failedMarkedKey)
+	require.NotContains(t, store.objects, markedFirstKey)
+	require.NotContains(t, store.objects, normalSuccessKey)
+	require.NotContains(t, store.objects, failedMarkedKey)
+	require.Contains(t, store.objects, "batch-image/delivery/unrelated.png")
+	require.Equal(t, []CleanupTarget{CleanupTargetOutput}, provider.cleanupTargets)
+	require.NotNil(t, job.OutputDeletedAt)
+}
+
+func TestBatchImageCleanupService_UpscaleDeleteFailureRetriesWithoutMarkingDeleted(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, provider := newTestBatchImageCleanupService()
+	job := repo.jobs["imgbatch_cleanup"]
+	job.ImageSize = "2K"
+	svc.Config.BatchImage.DeliveryCOSPrefix = "batch-image/delivery"
+	store := newBatchImageUpscaleObjectStoreTest()
+	store.deleteErr = errors.New("temporary COS delete failure")
+	svc.DeliveryStore = store
+	repo.items[job.BatchID] = []CreateBatchImageItemParams{{
+		JobID: job.BatchID, CustomID: "recoverable-item", Status: BatchImageItemStatusFailed,
+	}}
+	key, err := batchImageUpscaleObjectKey(svc.Config, job.BatchID, "recoverable-item", 0, "png")
+	require.NoError(t, err)
+	store.setObject(key, "image/png", []byte("recoverable"))
+
+	err = svc.CleanupOutput(ctx, job.BatchID, "ttl")
+	require.ErrorIs(t, err, ErrBatchImageProviderCleanupFailed)
+	require.Equal(t, batchImageUpscaleDeleteAttempts, store.deleteCalls)
+	require.Nil(t, job.OutputDeletedAt)
+	require.Contains(t, store.objects, key)
+	require.Empty(t, provider.cleanupTargets)
+
+	store.deleteErr = nil
+	err = svc.CleanupOutput(ctx, job.BatchID, "ttl-retry")
+	require.NoError(t, err)
+	require.Equal(t, batchImageUpscaleDeleteAttempts+1, store.deleteCalls)
+	require.NotNil(t, job.OutputDeletedAt)
+	require.NotContains(t, store.objects, key)
+	require.Equal(t, []CleanupTarget{CleanupTargetOutput}, provider.cleanupTargets)
 }
 
 func TestBatchImageCleanupService_InputOutputAndWorker(t *testing.T) {

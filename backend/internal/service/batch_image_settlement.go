@@ -40,6 +40,11 @@ func (r *BatchImageModelPricingResolver) BatchImageUnitPrice(ctx context.Context
 	}
 	switch resolved.Mode {
 	case BillingModeImage, BillingModePerRequest:
+		if imageSize := strings.ToUpper(strings.TrimSpace(job.ImageSize)); imageSize != "" {
+			if tierPrice := r.Resolver.GetRequestTierPrice(resolved, imageSize); tierPrice > 0 {
+				return tierPrice, nil
+			}
+		}
 		if resolved.DefaultPerRequestPrice > 0 {
 			return resolved.DefaultPerRequestPrice, nil
 		}
@@ -256,8 +261,11 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 	billingMode := string(BillingModeImage)
 	accountRateMultiplier := job.AccountRateMultiplier
 	inboundEndpoint := "/v1/images/batches"
-	upstreamEndpoint := "vertex:batchPredictionJobs"
-	imageSize := "1K"
+	upstreamEndpoint := batchImageUsageUpstreamEndpoint(job.Provider)
+	imageSize := strings.ToUpper(strings.TrimSpace(job.ImageSize))
+	if imageSize == "" {
+		imageSize = defaultBatchImageImageSize
+	}
 	usageLog := &UsageLog{
 		UserID:                job.UserID,
 		APIKeyID:              *job.APIKeyID,
@@ -282,6 +290,17 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		CreatedAt:             createdAt,
 	}
 	writeUsageLogBestEffort(ctx, s.UsageLogRepo, usageLog, "service.batch_image_settlement")
+}
+
+func batchImageUsageUpstreamEndpoint(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case BatchImageProviderGeminiAPI:
+		return "gemini:v1beta/models:batchGenerateContent"
+	case BatchImageProviderVertex:
+		return "vertex:batchPredictionJobs"
+	default:
+		return "batch:" + strings.TrimSpace(provider)
+	}
 }
 
 func (s *BatchImageSettlementService) invalidateAuthCache(ctx context.Context, userID int64) {

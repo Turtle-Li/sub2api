@@ -11998,6 +11998,7 @@ type BatchImageJobMutation struct {
 	addaccount_id       *int64
 	provider            *string
 	model               *string
+	image_size          *string
 	task_name           *string
 	status              *string
 	provider_job_name   *string
@@ -12447,6 +12448,42 @@ func (m *BatchImageJobMutation) OldModel(ctx context.Context) (v string, err err
 // ResetModel resets all changes to the "model" field.
 func (m *BatchImageJobMutation) ResetModel() {
 	m.model = nil
+}
+
+// SetImageSize sets the "image_size" field.
+func (m *BatchImageJobMutation) SetImageSize(s string) {
+	m.image_size = &s
+}
+
+// ImageSize returns the value of the "image_size" field in the mutation.
+func (m *BatchImageJobMutation) ImageSize() (r string, exists bool) {
+	v := m.image_size
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldImageSize returns the old "image_size" field's value of the BatchImageJob entity.
+// If the BatchImageJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BatchImageJobMutation) OldImageSize(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldImageSize is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldImageSize requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldImageSize: %w", err)
+	}
+	return oldValue.ImageSize, nil
+}
+
+// ResetImageSize resets all changes to the "image_size" field.
+func (m *BatchImageJobMutation) ResetImageSize() {
+	m.image_size = nil
 }
 
 // SetTaskName sets the "task_name" field.
@@ -14175,7 +14212,7 @@ func (m *BatchImageJobMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BatchImageJobMutation) Fields() []string {
-	fields := make([]string, 0, 40)
+	fields := make([]string, 0, 41)
 	if m.batch_id != nil {
 		fields = append(fields, batchimagejob.FieldBatchID)
 	}
@@ -14193,6 +14230,9 @@ func (m *BatchImageJobMutation) Fields() []string {
 	}
 	if m.model != nil {
 		fields = append(fields, batchimagejob.FieldModel)
+	}
+	if m.image_size != nil {
+		fields = append(fields, batchimagejob.FieldImageSize)
 	}
 	if m.task_name != nil {
 		fields = append(fields, batchimagejob.FieldTaskName)
@@ -14316,6 +14356,8 @@ func (m *BatchImageJobMutation) Field(name string) (ent.Value, bool) {
 		return m.Provider()
 	case batchimagejob.FieldModel:
 		return m.Model()
+	case batchimagejob.FieldImageSize:
+		return m.ImageSize()
 	case batchimagejob.FieldTaskName:
 		return m.TaskName()
 	case batchimagejob.FieldStatus:
@@ -14405,6 +14447,8 @@ func (m *BatchImageJobMutation) OldField(ctx context.Context, name string) (ent.
 		return m.OldProvider(ctx)
 	case batchimagejob.FieldModel:
 		return m.OldModel(ctx)
+	case batchimagejob.FieldImageSize:
+		return m.OldImageSize(ctx)
 	case batchimagejob.FieldTaskName:
 		return m.OldTaskName(ctx)
 	case batchimagejob.FieldStatus:
@@ -14523,6 +14567,13 @@ func (m *BatchImageJobMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetModel(v)
+		return nil
+	case batchimagejob.FieldImageSize:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetImageSize(v)
 		return nil
 	case batchimagejob.FieldTaskName:
 		v, ok := value.(string)
@@ -15122,6 +15173,9 @@ func (m *BatchImageJobMutation) ResetField(name string) error {
 		return nil
 	case batchimagejob.FieldModel:
 		m.ResetModel()
+		return nil
+	case batchimagejob.FieldImageSize:
+		m.ResetImageSize()
 		return nil
 	case batchimagejob.FieldTaskName:
 		m.ResetTaskName()

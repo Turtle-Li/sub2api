@@ -13,6 +13,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestBatchImageProviderRegistry_ReturnsGeminiAPI(t *testing.T) {
@@ -56,6 +57,26 @@ func TestBuildGeminiBatchJSONL_WritesValidLinesAndPreservesCustomID(t *testing.T
 	require.Len(t, lines, 2)
 	requireJSONLLine(t, lines[0], "cover_001", "A clean product hero image")
 	requireJSONLLine(t, lines[1], "cover_002", "Second prompt")
+}
+
+func TestBuildGeminiBatchJSONL_WritesExplicitOneKConfigOnlyForUpscaleSource(t *testing.T) {
+	input := validGeminiBatchInput()
+	input.Model = "gemini-2.5-flash-image"
+	input.ImageSize = "1K"
+	input.AspectRatio = "16:9"
+	input.ExplicitImageConfig = true
+
+	jsonl, err := BuildGeminiBatchJSONL(input)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(jsonl), &got))
+	config := got["request"].(map[string]any)["generationConfig"].(map[string]any)
+	require.Equal(t, map[string]any{"aspectRatio": "16:9", "imageSize": "1K"}, config["imageConfig"])
+
+	input.ExplicitImageConfig = false
+	jsonl, err = BuildGeminiBatchJSONL(input)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(bytes.TrimSpace(jsonl), "request.generationConfig.imageConfig").Exists())
 }
 
 func TestBuildGeminiBatchJSONL_RejectsDuplicateCustomIDs(t *testing.T) {

@@ -32,6 +32,8 @@ services:
       - sub2api_data:/app/data
       # Contains only the memory agent's Unix socket inode, never a key value.
       - unified_payment_vault:/run/sub2api-payment-vault:ro
+      # Contains only the Image 2.5 upscale agent's public Unix socket.
+      - image_upscale_vault:/run/sub2api-upscale-vault:ro
       # Optional: Mount custom config.yaml (uncomment and create the file first)
       # Copy config.example.yaml to config.yaml, modify it, then uncomment:
       # - ./config.yaml:/app/data/config.yaml
@@ -230,6 +232,17 @@ services:
       - GATEWAY_IMAGE_CONCURRENCY_WAIT_TIMEOUT_SECONDS=${GATEWAY_IMAGE_CONCURRENCY_WAIT_TIMEOUT_SECONDS:-30}
       - GATEWAY_IMAGE_CONCURRENCY_MAX_WAITING_REQUESTS=${GATEWAY_IMAGE_CONCURRENCY_MAX_WAITING_REQUESTS:-100}
       - BATCH_IMAGE_WORKER_CONCURRENCY=${BATCH_IMAGE_WORKER_CONCURRENCY:-2}
+      - IMAGE_UPSCALE_ENABLED=${IMAGE_UPSCALE_ENABLED:-false}
+      - IMAGE_UPSCALE_BASE_URL=${IMAGE_UPSCALE_BASE_URL:-}
+      - IMAGE_UPSCALE_API_KEY_VAULT_REF=${IMAGE_UPSCALE_API_KEY_VAULT_REF:-}
+      - IMAGE_UPSCALE_VAULT_AGENT_SOCKET=${IMAGE_UPSCALE_VAULT_AGENT_SOCKET:-/run/sub2api-upscale-vault/public.sock}
+      - IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS=${IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS:-30}
+      - IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS=${IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS:-900}
+      - IMAGE_UPSCALE_POLL_INTERVAL_MS=${IMAGE_UPSCALE_POLL_INTERVAL_MS:-500}
+      - IMAGE_UPSCALE_RETRY_MAX=${IMAGE_UPSCALE_RETRY_MAX:-3}
+      - IMAGE_UPSCALE_MAX_CONCURRENT=${IMAGE_UPSCALE_MAX_CONCURRENT:-1}
+      - IMAGE_UPSCALE_MAX_QUEUE=${IMAGE_UPSCALE_MAX_QUEUE:-8}
+      - IMAGE_UPSCALE_MAX_RESULT_BYTES=${IMAGE_UPSCALE_MAX_RESULT_BYTES:-134217728}
     depends_on:
       postgres:
         condition: service_healthy
@@ -392,6 +405,11 @@ volumes:
   redis_data:
     driver: local
   unified_payment_vault:
+    driver: local
+  image_upscale_vault:
+    name: sub2api_image_upscale_vault
+    # Empty and harmless while disabled. The hardened helper initializes this
+    # socket-only volume before Image 2.5 upscale is enabled.
     driver: local
 
 # =============================================================================

@@ -34,14 +34,22 @@ func ProvideBatchImageWorkerRuntime(
 	deliveryStore BatchImageDeliveryObjectStore,
 	cfg *config.Config,
 ) *BatchImageWorkerRuntime {
+	upscaler := SharedImageUpscaleService(cfg)
+	upscaleStore, _ := deliveryStore.(BatchImageUpscaleObjectStore)
 	processor := &BatchImagePipelineProcessor{
 		ProviderProcessor: &BatchImageProviderProcessor{
 			Repo:             repo,
 			ProviderRegistry: NewBatchImageProviderRegistryFromConfig(cfg),
 			AccountResolver:  &BatchImageAccountRepositoryResolver{Repo: accountRepo},
 			Delivery:         NewBatchImageDeliveryService(repo, deliveryStore, cfg),
-			BillingRepo:      billingRepo,
-			AuthCache:        authCache,
+			Indexer: &BatchImageResultIndexer{
+				Repo:         repo,
+				Config:       cfg,
+				Upscaler:     upscaler,
+				UpscaleStore: upscaleStore,
+			},
+			BillingRepo: billingRepo,
+			AuthCache:   authCache,
 		},
 		SettlementService: &BatchImageSettlementService{
 			Repo:         repo,

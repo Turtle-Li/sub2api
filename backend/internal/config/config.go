@@ -103,6 +103,7 @@ type Config struct {
 	Update                  UpdateConfig                  `mapstructure:"update"`
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
+	ImageUpscale            ImageUpscaleConfig            `mapstructure:"image_upscale"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
 	UnifiedPayment          UnifiedPaymentConfig          `mapstructure:"unified_payment"`
@@ -307,6 +308,28 @@ type BatchImageConfig struct {
 	DeliveryCOSSecretAccessKey  string `mapstructure:"delivery_cos_secret_access_key"`
 	DeliveryCOSPrefix           string `mapstructure:"delivery_cos_prefix"`
 	DeliveryCOSForcePathStyle   bool   `mapstructure:"delivery_cos_force_path_style"`
+}
+
+// ImageUpscaleConfig controls the private Image 2.5 post-processing gateway.
+// The bearer value is never accepted in configuration or environment; only an
+// exact Vault reference exposed by the colocated memory-only agent is stored.
+type ImageUpscaleConfig struct {
+	Enabled               bool   `mapstructure:"enabled"`
+	BaseURL               string `mapstructure:"base_url"`
+	APIKeyVaultRef        string `mapstructure:"api_key_vault_ref"`
+	VaultAgentSocket      string `mapstructure:"vault_agent_socket"`
+	RequestTimeoutSeconds int    `mapstructure:"request_timeout_seconds"`
+	JobTimeoutSeconds     int    `mapstructure:"job_timeout_seconds"`
+	PollIntervalMillis    int    `mapstructure:"poll_interval_ms"`
+	RetryMax              int    `mapstructure:"retry_max"`
+	MaxConcurrent         int    `mapstructure:"max_concurrent"`
+	MaxQueue              int    `mapstructure:"max_queue"`
+	MaxResultBytes        int64  `mapstructure:"max_result_bytes"`
+}
+
+func (c ImageUpscaleConfig) Active() bool {
+	return c.Enabled && strings.TrimSpace(c.BaseURL) != "" &&
+		strings.TrimSpace(c.APIKeyVaultRef) != "" && strings.TrimSpace(c.VaultAgentSocket) != ""
 }
 
 const (
@@ -2440,6 +2463,17 @@ func setDefaults() {
 	viper.SetDefault("batch_image.delivery_cos_secret_access_key", "")
 	viper.SetDefault("batch_image.delivery_cos_prefix", "sub2-batch-image/prod/")
 	viper.SetDefault("batch_image.delivery_cos_force_path_style", false)
+	viper.SetDefault("image_upscale.enabled", false)
+	viper.SetDefault("image_upscale.base_url", "")
+	viper.SetDefault("image_upscale.api_key_vault_ref", "")
+	viper.SetDefault("image_upscale.vault_agent_socket", "/run/sub2api-upscale-vault/public.sock")
+	viper.SetDefault("image_upscale.request_timeout_seconds", 30)
+	viper.SetDefault("image_upscale.job_timeout_seconds", 900)
+	viper.SetDefault("image_upscale.poll_interval_ms", 500)
+	viper.SetDefault("image_upscale.retry_max", 3)
+	viper.SetDefault("image_upscale.max_concurrent", 1)
+	viper.SetDefault("image_upscale.max_queue", 8)
+	viper.SetDefault("image_upscale.max_result_bytes", 134217728)
 
 	// Image storage (async image task result offload to S3-compatible object storage)
 	viper.SetDefault("image_storage.enabled", false)
@@ -3423,6 +3457,64 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("batch_image.vertex_output_retention_hours must be positive")
 		}
 	}
+	if c.ImageUpscale.Enabled {
+		upscaleURL, err := url.Parse(strings.TrimSpace(c.ImageUpscale.BaseURL))
+		if err != nil || upscaleURL.Scheme != "https" || upscaleURL.Host == "" || upscaleURL.User != nil || upscaleURL.RawQuery != "" || upscaleURL.Fragment != "" {
+			return fmt.Errorf("image_upscale.base_url must be an HTTPS origin")
+		}
+		if upscaleURL.Path != "" && upscaleURL.Path != "/" {
+			return fmt.Errorf("image_upscale.base_url must not contain a path")
+		}
+		if !validImageUpscaleVaultReference(c.ImageUpscale.APIKeyVaultRef) {
+			return fmt.Errorf("image_upscale.api_key_vault_ref must be an exact vault:// reference")
+		}
+		if strings.TrimSpace(c.ImageUpscale.VaultAgentSocket) != "/run/sub2api-upscale-vault/public.sock" {
+			return fmt.Errorf("image_upscale.vault_agent_socket must use the dedicated fixed socket")
+		}
+		if c.ImageUpscale.RequestTimeoutSeconds < 1 || c.ImageUpscale.RequestTimeoutSeconds > 120 {
+			return fmt.Errorf("image_upscale.request_timeout_seconds must be between 1 and 120")
+		}
+		if c.ImageUpscale.JobTimeoutSeconds < 30 || c.ImageUpscale.JobTimeoutSeconds > 1800 {
+			return fmt.Errorf("image_upscale.job_timeout_seconds must be between 30 and 1800")
+		}
+		if c.ImageUpscale.PollIntervalMillis < 100 || c.ImageUpscale.PollIntervalMillis > 5000 {
+			return fmt.Errorf("image_upscale.poll_interval_ms must be between 100 and 5000")
+		}
+		if c.ImageUpscale.RetryMax < 0 || c.ImageUpscale.RetryMax > 10 {
+			return fmt.Errorf("image_upscale.retry_max must be between 0 and 10")
+		}
+		if c.ImageUpscale.MaxConcurrent < 1 || c.ImageUpscale.MaxConcurrent > 2 {
+			return fmt.Errorf("image_upscale.max_concurrent must be between 1 and 2")
+		}
+		if c.ImageUpscale.MaxQueue < 0 || c.ImageUpscale.MaxQueue > 64 {
+			return fmt.Errorf("image_upscale.max_queue must be between 0 and 64")
+		}
+		if c.ImageUpscale.MaxResultBytes < 1024 || c.ImageUpscale.MaxResultBytes > 512*1024*1024 {
+			return fmt.Errorf("image_upscale.max_result_bytes must be between 1024 and 536870912")
+		}
+		if c.BatchImage.Enabled {
+			for name, value := range map[string]string{
+				"delivery_cos_endpoint":          c.BatchImage.DeliveryCOSEndpoint,
+				"delivery_cos_region":            c.BatchImage.DeliveryCOSRegion,
+				"delivery_cos_bucket":            c.BatchImage.DeliveryCOSBucket,
+				"delivery_cos_access_key_id":     c.BatchImage.DeliveryCOSAccessKeyID,
+				"delivery_cos_secret_access_key": c.BatchImage.DeliveryCOSSecretAccessKey,
+				"delivery_cos_prefix":            c.BatchImage.DeliveryCOSPrefix,
+			} {
+				if strings.TrimSpace(value) == "" {
+					return fmt.Errorf("batch_image.%s must not be empty when Image 2.5 batch upscale is enabled", name)
+				}
+			}
+			cosURL, err := url.Parse(strings.TrimSpace(c.BatchImage.DeliveryCOSEndpoint))
+			if err != nil || cosURL.Scheme != "https" || cosURL.Host == "" || cosURL.User != nil || cosURL.RawQuery != "" || cosURL.Fragment != "" {
+				return fmt.Errorf("batch_image.delivery_cos_endpoint must be an HTTPS endpoint")
+			}
+			cosPrefix := strings.Trim(strings.TrimSpace(c.BatchImage.DeliveryCOSPrefix), "/")
+			if cosPrefix == "" || strings.Contains(cosPrefix, "..") {
+				return fmt.Errorf("batch_image.delivery_cos_prefix is invalid")
+			}
+		}
+	}
 	if c.BatchImage.DeliveryEnabled {
 		if !c.BatchImage.VertexEnabled {
 			return fmt.Errorf("batch_image.delivery_enabled requires batch_image.vertex_enabled")
@@ -4157,6 +4249,30 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("dingtalk_connect: %w", err)
 	}
 	return nil
+}
+
+func validImageUpscaleVaultReference(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value || !strings.HasPrefix(value, "vault://") || strings.Count(value, "#") != 1 {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(value, "vault://"), "#", 2)
+	if parts[0] == "" || parts[1] == "" || strings.HasPrefix(parts[0], "/") || strings.HasSuffix(parts[0], "/") || strings.Contains(parts[0], "//") {
+		return false
+	}
+	for _, token := range append(strings.Split(parts[0], "/"), parts[1]) {
+		if token == "." || token == ".." || token == "" || len(token) > 128 {
+			return false
+		}
+		for index := 0; index < len(token); index++ {
+			char := token[index]
+			if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+				(char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeStringSlice(values []string) []string {

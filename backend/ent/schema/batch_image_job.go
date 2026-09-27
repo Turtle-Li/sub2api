@@ -34,6 +34,7 @@ func (BatchImageJob) Fields() []ent.Field {
 		field.Int64("account_id").Optional().Nillable(),
 		field.String("provider").MaxLen(32),
 		field.String("model").MaxLen(128),
+		field.String("image_size").MaxLen(2).Default("1K"),
 		field.String("task_name").MaxLen(255).Default(""),
 		field.String("status").MaxLen(32).Default("created"),
 		field.String("provider_job_name").Optional().Nillable().MaxLen(512),

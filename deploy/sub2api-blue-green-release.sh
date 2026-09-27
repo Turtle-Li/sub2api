@@ -113,6 +113,20 @@ APPROVED_UNIFIED_PAYMENT_WEBHOOK_URL="https://api.turtleligpt.com/api/v1/payment
 # destination at release time so their candidate containers still receive it.
 UNIFIED_PAYMENT_WEBHOOK_URL="${UNIFIED_PAYMENT_WEBHOOK_URL:-$APPROVED_UNIFIED_PAYMENT_WEBHOOK_URL}"
 CONTAINER_UNIFIED_PAYMENT_VAULT_PATH="/run/sub2api-payment-vault"
+IMAGE_UPSCALE_ENABLED="${IMAGE_UPSCALE_ENABLED:-false}"
+IMAGE_UPSCALE_BASE_URL="${IMAGE_UPSCALE_BASE_URL:-https://hcmac-mini.tailfc4ed7.ts.net}"
+IMAGE_UPSCALE_API_KEY_VAULT_REF="${IMAGE_UPSCALE_API_KEY_VAULT_REF:-vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key}"
+IMAGE_UPSCALE_VAULT_AGENT_SOCKET="${IMAGE_UPSCALE_VAULT_AGENT_SOCKET:-/run/sub2api-upscale-vault/public.sock}"
+IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS="${IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS:-30}"
+IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS="${IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS:-900}"
+IMAGE_UPSCALE_POLL_INTERVAL_MS="${IMAGE_UPSCALE_POLL_INTERVAL_MS:-500}"
+IMAGE_UPSCALE_RETRY_MAX="${IMAGE_UPSCALE_RETRY_MAX:-3}"
+IMAGE_UPSCALE_MAX_CONCURRENT="${IMAGE_UPSCALE_MAX_CONCURRENT:-1}"
+IMAGE_UPSCALE_MAX_QUEUE="${IMAGE_UPSCALE_MAX_QUEUE:-8}"
+IMAGE_UPSCALE_MAX_RESULT_BYTES="${IMAGE_UPSCALE_MAX_RESULT_BYTES:-134217728}"
+IMAGE_UPSCALE_VAULT_VOLUME="${SUB2API_IMAGE_UPSCALE_VAULT_VOLUME:-sub2api_image_upscale_vault}"
+CONTAINER_IMAGE_UPSCALE_VAULT_PATH="/run/sub2api-upscale-vault"
+IMAGE_UPSCALE_VAULT_HELPER="${APP_DIR}/scripts/sub2api-image-upscale-vault-container.sh"
 UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=false
 if [ "${UNIFIED_PAYMENT_ENABLED+x}" = x ]; then
   UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=true
@@ -144,7 +158,13 @@ UNIFIED_PAYMENT_ENV_KEYS=(
   UNIFIED_PAYMENT_VAULT_AGENT_SOCKET UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON
   UNIFIED_PAYMENT_RETURN_URL UNIFIED_PAYMENT_WEBHOOK_URL
 )
+IMAGE_UPSCALE_ENV_KEYS=(
+  IMAGE_UPSCALE_ENABLED IMAGE_UPSCALE_BASE_URL IMAGE_UPSCALE_API_KEY_VAULT_REF IMAGE_UPSCALE_VAULT_AGENT_SOCKET
+  IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS IMAGE_UPSCALE_POLL_INTERVAL_MS
+  IMAGE_UPSCALE_RETRY_MAX IMAGE_UPSCALE_MAX_CONCURRENT IMAGE_UPSCALE_MAX_QUEUE IMAGE_UPSCALE_MAX_RESULT_BYTES
+)
 PAYMENT_VAULT_MOUNT_ARGS=()
+IMAGE_UPSCALE_VAULT_MOUNT_ARGS=()
 
 log() {
   printf '%s %s\n' "$(date -Is)" "$*"
@@ -344,6 +364,45 @@ validate_unified_payment_runtime() {
 			--mount "type=volume,source=$UNIFIED_PAYMENT_VAULT_VOLUME,target=$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH,readonly"
 		)
 	fi
+}
+
+validate_image_upscale_runtime() {
+	local value sidecar_image
+	require_bool IMAGE_UPSCALE_ENABLED "$IMAGE_UPSCALE_ENABLED"
+	[ "$IMAGE_UPSCALE_ENABLED" = true ] || return 0
+	[ "$IMAGE_UPSCALE_BASE_URL" = "https://hcmac-mini.tailfc4ed7.ts.net" ] \
+		|| die "IMAGE_UPSCALE_BASE_URL does not match the approved Office Mini gateway"
+	[ "$IMAGE_UPSCALE_API_KEY_VAULT_REF" = "vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key" ] \
+		|| die "IMAGE_UPSCALE_API_KEY_VAULT_REF does not match the approved Vault field"
+	[ "$IMAGE_UPSCALE_VAULT_AGENT_SOCKET" = "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/public.sock" ] \
+		|| die "IMAGE_UPSCALE_VAULT_AGENT_SOCKET does not match the mounted agent socket"
+	require_docker_name SUB2API_IMAGE_UPSCALE_VAULT_VOLUME "$IMAGE_UPSCALE_VAULT_VOLUME"
+	[ "$IMAGE_UPSCALE_VAULT_VOLUME" = sub2api_image_upscale_vault ] \
+		|| die "SUB2API_IMAGE_UPSCALE_VAULT_VOLUME does not match the approved Sub2 volume"
+	for value in "$IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS" "$IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS" \
+		"$IMAGE_UPSCALE_POLL_INTERVAL_MS" "$IMAGE_UPSCALE_MAX_CONCURRENT" "$IMAGE_UPSCALE_MAX_RESULT_BYTES"; do
+		case "$value" in ''|*[!0-9]*|0) die "image upscale positive numeric configuration is invalid" ;; esac
+	done
+	for value in "$IMAGE_UPSCALE_RETRY_MAX" "$IMAGE_UPSCALE_MAX_QUEUE"; do
+		case "$value" in ''|*[!0-9]*) die "image upscale bounded numeric configuration is invalid" ;; esac
+	done
+	[ "$IMAGE_UPSCALE_MAX_CONCURRENT" -le 2 ] || die "IMAGE_UPSCALE_MAX_CONCURRENT exceeds the gateway limit"
+	[ "$IMAGE_UPSCALE_MAX_QUEUE" -le 64 ] || die "IMAGE_UPSCALE_MAX_QUEUE exceeds the local bound"
+	docker volume inspect "$IMAGE_UPSCALE_VAULT_VOLUME" >/dev/null 2>&1 \
+		|| die "image upscale Vault socket volume is missing"
+	[ -f "$IMAGE_UPSCALE_VAULT_HELPER" ] && [ ! -L "$IMAGE_UPSCALE_VAULT_HELPER" ] \
+		&& [ -x "$IMAGE_UPSCALE_VAULT_HELPER" ] \
+		|| die "image upscale Vault helper is missing or unsafe"
+	[ "$(realpath -e -- "$IMAGE_UPSCALE_VAULT_HELPER")" = "$IMAGE_UPSCALE_VAULT_HELPER" ] \
+		|| die "image upscale Vault helper must be canonical"
+	sidecar_image="$(docker inspect sub2api-upscale-vault --format '{{.Config.Image}}' 2>/dev/null)" \
+		|| die "image upscale Vault agent is missing"
+	SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" \
+		bash "$IMAGE_UPSCALE_VAULT_HELPER" ready-auto "$sidecar_image" >/dev/null \
+		|| die "image upscale Vault agent failed hardened readiness verification"
+	IMAGE_UPSCALE_VAULT_MOUNT_ARGS=(
+		--mount "type=volume,source=$IMAGE_UPSCALE_VAULT_VOLUME,target=$CONTAINER_IMAGE_UPSCALE_VAULT_PATH,readonly"
+	)
 }
 
 validate_absolute_path() {
@@ -555,6 +614,15 @@ write_unified_payment_overrides() {
   done
 }
 
+write_image_upscale_overrides() {
+	local output_file="$1"
+	local key value
+	for key in "${IMAGE_UPSCALE_ENV_KEYS[@]}"; do
+		value="${!key-}"
+		printf '%s=%s\n' "$key" "$value" >>"$output_file"
+	done
+}
+
 container_matches_unified_payment_env() {
   local inspect_env="$1"
   local key expected_value actual_value
@@ -570,6 +638,32 @@ container_matches_unified_payment_env() {
     fi
     [ "$actual_value" = "$expected_value" ] || return 1
   done
+}
+
+container_matches_image_upscale_env() {
+	local inspect_env="$1"
+	local key expected_value actual_value configured_count
+	! grep -q '^IMAGE_UPSCALE_API_KEY=' "$inspect_env" || return 1
+	configured_count="$(awk '
+		/^IMAGE_UPSCALE_[A-Z0-9_]*=/ { count += 1 }
+		END { print count + 0 }
+	' "$inspect_env")"
+	# A rollback target created before this feature has no upscale variables at
+	# all. It is equivalent to the disabled default, but a partial configuration
+	# is never accepted.
+	if [ "$IMAGE_UPSCALE_ENABLED" = false ] && [ "$configured_count" -eq 0 ]; then
+		return 0
+	fi
+	for key in "${IMAGE_UPSCALE_ENV_KEYS[@]}"; do
+		expected_value="${!key-}"
+		if ! actual_value="$(awk -v expected_key="$key" '
+			index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
+			END { if (count != 1) exit 1; print value }
+		' "$inspect_env")"; then
+			return 1
+		fi
+		[ "$actual_value" = "$expected_value" ] || return 1
+	done
 }
 
 container_matches_fixed_egress_compatibility_env() {
@@ -756,6 +850,12 @@ make_runtime_env_file() {
 	  UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64)
 		continue
 		;;
+	  IMAGE_UPSCALE_API_KEY)
+		die "raw image upscale bearer environment is forbidden; use the dedicated Vault agent"
+		;;
+	  IMAGE_UPSCALE_ENABLED|IMAGE_UPSCALE_BASE_URL|IMAGE_UPSCALE_API_KEY_VAULT_REF|IMAGE_UPSCALE_VAULT_AGENT_SOCKET|IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS|IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS|IMAGE_UPSCALE_POLL_INTERVAL_MS|IMAGE_UPSCALE_RETRY_MAX|IMAGE_UPSCALE_MAX_CONCURRENT|IMAGE_UPSCALE_MAX_QUEUE|IMAGE_UPSCALE_MAX_RESULT_BYTES)
+		continue
+		;;
 	  UNIFIED_PAYMENT_ENABLED|UNIFIED_PAYMENT_PAYMENT_METHODS|UNIFIED_PAYMENT_BASE_URL|UNIFIED_PAYMENT_ENVIRONMENT|UNIFIED_PAYMENT_ORGANIZATION_ID|UNIFIED_PAYMENT_PRODUCT_ID|UNIFIED_PAYMENT_APP_ID|UNIFIED_PAYMENT_REQUEST_KEY_ID|UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF|UNIFIED_PAYMENT_VAULT_AGENT_SOCKET|UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON|UNIFIED_PAYMENT_RETURN_URL|UNIFIED_PAYMENT_WEBHOOK_URL)
 		[ "$UNIFIED_PAYMENT_OVERRIDE_CONFIGURED" = true ] && continue
 		;;
@@ -794,6 +894,7 @@ make_runtime_env_file() {
 	printf 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=%s\n' "$FIXED_EGRESS_COMPATIBILITY_MODE" >>"$output_file"
   fi
   write_unified_payment_overrides "$output_file"
+	write_image_upscale_overrides "$output_file"
   printf 'SUB2API_FEISHU_ENABLED=%s\n' "$FEISHU_ENABLED" >>"$output_file"
   RUNTIME_ENV_FILE="$output_file"
 }
@@ -824,6 +925,7 @@ container_matches_external_runtime() {
   expected_mount_count=3
   [ "$DUAL_NODE_RUNTIME_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 3))
   [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$IMAGE_UPSCALE_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$FEISHU_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$mount_count" -eq "$expected_mount_count" ] || return 1
   if [ "$FEISHU_ENABLED" = true ]; then
@@ -840,11 +942,15 @@ container_matches_external_runtime() {
   if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
 	grep -qxF "volume|$UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" "$inspect_mounts" || return 1
   fi
+  if [ "$IMAGE_UPSCALE_ENABLED" = true ]; then
+	grep -qxF "volume|$IMAGE_UPSCALE_VAULT_VOLUME|$CONTAINER_IMAGE_UPSCALE_VAULT_PATH|false" "$inspect_mounts" || return 1
+  fi
 
   new_temp_file
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
+  container_matches_image_upscale_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
@@ -906,6 +1012,7 @@ container_matches_local_runtime() {
   mount_count="$(awk 'NF { count += 1 } END { print count + 0 }' "$inspect_mounts")"
   expected_mount_count=4
   [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$IMAGE_UPSCALE_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$FEISHU_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$mount_count" -eq "$expected_mount_count" ] || return 1
   if [ "$FEISHU_ENABLED" = true ]; then
@@ -918,11 +1025,15 @@ container_matches_local_runtime() {
   if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
 	grep -qxF "volume|$UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" "$inspect_mounts" || return 1
   fi
+  if [ "$IMAGE_UPSCALE_ENABLED" = true ]; then
+	grep -qxF "volume|$IMAGE_UPSCALE_VAULT_VOLUME|$CONTAINER_IMAGE_UPSCALE_VAULT_PATH|false" "$inspect_mounts" || return 1
+  fi
 
   new_temp_file
   inspect_env="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
+  container_matches_image_upscale_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
@@ -952,6 +1063,7 @@ create_external_target() {
       --env-file "$env_file" \
       --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
       "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+      "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
       --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_PG_CA_PATH,readonly" \
 	  --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_REDIS_CA_PATH,readonly" \
@@ -967,6 +1079,7 @@ create_external_target() {
     --env-file "$env_file" \
     --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
     "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+    "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
     --mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_PG_CA_PATH,readonly" \
 	--mount "type=bind,source=$EXTERNAL_CA_FILE,target=$CONTAINER_REDIS_CA_PATH,readonly" \
@@ -986,6 +1099,7 @@ create_local_target() {
       --env-file "$env_file" \
 	  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 	  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+      "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
 	  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
 	  --mount "type=bind,source=$BACKGROUND_STATE_FILE,target=$CONTAINER_BACKGROUND_STATE_PATH,readonly" \
@@ -999,6 +1113,7 @@ create_local_target() {
     --env-file "$env_file" \
 	--mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 	"${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+    "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
     --restart unless-stopped \
     "$NEW_IMAGE" >/dev/null
@@ -1507,6 +1622,7 @@ if [ "$REAL_REQUEST_PROBE_ENABLED" = true ]; then
     || die "real request probe key file must be root-owned mode 0600"
 fi
 validate_unified_payment_runtime
+validate_image_upscale_runtime
 if [ "$DEPENDENCY_MODE" = external ]; then
   load_external_runtime_env
   validate_external_ca_file
@@ -1683,6 +1799,7 @@ else
 		docker create --name "$NEW_CONTAINER" --network "$NETWORK" --env-file "$env_file" \
 		  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+          "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
 		  --mount "type=bind,source=$TRAFFIC_STATE_FILE,target=$CONTAINER_TRAFFIC_STATE_PATH,readonly" \
 		  --mount "type=bind,source=$BACKGROUND_STATE_FILE,target=$CONTAINER_BACKGROUND_STATE_PATH,readonly" \
@@ -1695,6 +1812,7 @@ else
 		docker create --name "$NEW_CONTAINER" --network "$NETWORK" --env-file "$env_file" \
 		  --mount "type=volume,source=$DATA_VOLUME,target=/app/data" \
 		  "${PAYMENT_VAULT_MOUNT_ARGS[@]+${PAYMENT_VAULT_MOUNT_ARGS[@]}}" \
+          "${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]+${IMAGE_UPSCALE_VAULT_MOUNT_ARGS[@]}}" \
     "${FEISHU_VAULT_MOUNT_ARGS[@]+${FEISHU_VAULT_MOUNT_ARGS[@]}}" \
 		  --restart no "$NEW_IMAGE" >/dev/null
 		container_matches_local_compatibility_container "$NEW_CONTAINER" \

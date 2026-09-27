@@ -26,6 +26,7 @@ CADDY_ACTIVE_FILE="$TEST_ROOT/caddy-active.json"
 CADDY_CANDIDATE_FILE="$TEST_ROOT/caddy-candidate.Caddyfile"
 ROUTE_VERIFIER="$TEST_ROOT/verify-image-route-contract"
 NSENTER_FAIL_MARKER="$TEST_ROOT/nsenter-fail-once.marker"
+UPSCALE_HELPER_CALLS="$TEST_ROOT/image-upscale-helper-calls.log"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -102,7 +103,15 @@ printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_STARTUP_FILE"
 printf 'reverse_proxy sub2api-green:8080\n' >"$CADDY_ACTIVE_FILE"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_DIR/scripts/backup.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_DIR/scripts/sub2api-drain-monitor.sh"
-chmod +x "$APP_DIR/scripts/backup.sh" "$APP_DIR/scripts/sub2api-drain-monitor.sh"
+cat >"$APP_DIR/scripts/sub2api-image-upscale-vault-container.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >>"$FAKE_IMAGE_UPSCALE_HELPER_CALLS"
+[ "${FAKE_IMAGE_UPSCALE_HELPER_FAIL:-false}" != true ]
+EOF
+chmod +x "$APP_DIR/scripts/backup.sh" "$APP_DIR/scripts/sub2api-drain-monitor.sh" \
+  "$APP_DIR/scripts/sub2api-image-upscale-vault-container.sh"
+: >"$UPSCALE_HELPER_CALLS"
 cat >"$ROUTE_VERIFIER" <<'EOF'
 #!/usr/bin/env bash
 cat >/dev/null
@@ -417,6 +426,7 @@ printf '%s\n' \
 printf '%s\n' 'volume|sub2api_sub2api_data|/app/data|true' >"$old_mounts"
 make_state sub2api sub2api:old true unless-stopped "$old_env" "$old_mounts"
 make_state sub2api-caddy caddy:old true unless-stopped "$old_env" "$old_mounts"
+make_state sub2api-upscale-vault sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa true unless-stopped "$old_env" "$old_mounts"
 
 run_helper() {
   env \
@@ -438,6 +448,8 @@ run_helper() {
     SUB2API_IMAGE_ROUTE_CONTRACT_VERIFIER="$ROUTE_VERIFIER" \
     FAKE_NSENTER_FAIL_RO_ONCE="${FAKE_NSENTER_FAIL_RO_ONCE:-false}" \
     FAKE_NSENTER_FAIL_MARKER="$NSENTER_FAIL_MARKER" \
+    FAKE_IMAGE_UPSCALE_HELPER_CALLS="$UPSCALE_HELPER_CALLS" \
+    FAKE_IMAGE_UPSCALE_HELPER_FAIL="${FAKE_IMAGE_UPSCALE_HELPER_FAIL:-false}" \
     FAKE_CA_MODE="${FAKE_CA_MODE:-644}" \
     FAKE_REALPATH_DRIFT="${FAKE_REALPATH_DRIFT:-false}" \
     APP_DIR="$APP_DIR" \
@@ -505,6 +517,17 @@ assert_panel_configuration_rejected \
   'panel override with a line break' $'http://172.18.0.1:8788\nnext' "$PANEL_TOKEN_CONTAINER_PATH" true
 assert_panel_configuration_rejected \
   'panel token file without a URL' '' "$PANEL_TOKEN_CONTAINER_PATH" true
+
+# Enabled upscale releases must invoke the same hardened readiness helper used
+# by secret injection. A healthy container name alone is not sufficient.
+: >"$UPSCALE_HELPER_CALLS"
+IMAGE_UPSCALE_ENABLED=true VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$UPSCALE_HELPER_CALLS" 'ready-auto sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+if IMAGE_UPSCALE_ENABLED=true FAKE_IMAGE_UPSCALE_HELPER_FAIL=true \
+  VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'release accepted an image-upscale sidecar that failed hardened readiness'
+fi
+assert_contains "$OUTPUT" 'image upscale Vault agent failed hardened readiness verification'
 
 # Feishu enablement attaches only its independent read-only socket volume.
 : >"$CALLS"

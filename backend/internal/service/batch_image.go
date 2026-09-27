@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"time"
 
@@ -82,6 +83,9 @@ var (
 	ErrBatchImageSubmitPending              = infraerrors.New(http.StatusTooEarly, "BATCH_IMAGE_SUBMIT_PENDING", "batch image submit outcome is still being confirmed")
 	ErrBatchImagePreviousSubmitFailed       = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_PREVIOUS_SUBMIT_FAILED", "the previous batch image submit failed before provider creation")
 	ErrBatchImageQueueFailed                = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_QUEUE_FAILED", "batch image queue failed")
+	ErrBatchImageUpscaleUnavailable         = infraerrors.New(http.StatusServiceUnavailable, "BATCH_IMAGE_UPSCALE_UNAVAILABLE", "batch image upscale is not configured")
+	ErrBatchImageUpscaleCleanupFailed       = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_UPSCALE_CLEANUP_FAILED", "batch image upscale cleanup failed")
+	ErrBatchImageUpscaleWriteFenceFailed    = infraerrors.New(http.StatusServiceUnavailable, "BATCH_IMAGE_UPSCALE_WRITE_FENCE_FAILED", "batch image upscale write fence failed")
 	ErrBatchImageIdempotencyConflict        = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_IDEMPOTENCY_CONFLICT", "idempotency key reused with different batch image request")
 	ErrBatchImageCancelFailed               = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_CANCEL_FAILED", "batch image cancel failed")
 	ErrBatchImageVertexGCSBucketMissing     = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_VERTEX_GCS_BUCKET_MISSING", "Vertex managed GCS bucket is not configured")
@@ -116,6 +120,7 @@ type BatchImageJob struct {
 	AccountID         *int64
 	Provider          string
 	Model             string
+	ImageSize         string
 	TaskName          string
 	ParentBatchID     *string
 	Status            string
@@ -176,6 +181,7 @@ type CreateBatchImageJobParams struct {
 	AccountID         *int64
 	Provider          string
 	Model             string
+	ImageSize         string
 	TaskName          string
 	ParentBatchID     *string
 	Status            string
@@ -370,6 +376,15 @@ type BatchImageDeliveryObjectStore interface {
 	PresignPut(ctx context.Context, key string, expires time.Duration) (string, error)
 	PresignGet(ctx context.Context, key, filename string, expires time.Duration) (string, error)
 	Head(ctx context.Context, key string) (size int64, contentType string, err error)
+	Delete(ctx context.Context, keys []string) error
+}
+
+// BatchImageUpscaleObjectStore is the direct object I/O extension used only by
+// post-processed Image 2.5 results. Legacy archive-only fakes and deployments
+// continue to implement the narrower delivery interface above.
+type BatchImageUpscaleObjectStore interface {
+	Put(ctx context.Context, key, contentType string, body io.Reader, size int64) error
+	Open(ctx context.Context, key string) (body io.ReadCloser, size int64, contentType string, err error)
 	Delete(ctx context.Context, keys []string) error
 }
 

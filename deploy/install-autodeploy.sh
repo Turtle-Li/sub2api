@@ -801,6 +801,8 @@ for file in \
   deploy/sub2api-real-request-probe.sh \
   deploy/sub2api-drain-monitor.sh \
   deploy/sub2api-maintenance-lock.sh \
+  deploy/sub2api-image-upscale-config.sh \
+  deploy/sub2api-image-upscale-vault-container.sh \
   deploy/verify_image_route_contract.py \
   deploy/sub2api-runtime-guard.sh \
   deploy/sub2api-github-deploy-trigger.sh \
@@ -824,6 +826,8 @@ bash -n "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-reviewed-refunds-rollout.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-real-request-probe.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-image-upscale-config.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-image-upscale-vault-container.sh"
 [ "$INSTALL_BLUE_GREEN_HELPER" != true ] \
   || bash -n "${SOURCE_ROOT}/deploy/sub2api-blue-green-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-drain-monitor.sh"
@@ -984,6 +988,10 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-real-request-probe.sh" \
   "${SCRIPT_DIR}/sub2api-real-request-probe.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-maintenance-lock.sh" \
   "${SCRIPT_DIR}/sub2api-maintenance-lock.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-image-upscale-config.sh" \
+  "${SCRIPT_DIR}/sub2api-image-upscale-config.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-image-upscale-vault-container.sh" \
+  "${SCRIPT_DIR}/sub2api-image-upscale-vault-container.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/verify_image_route_contract.py" \
   "${SCRIPT_DIR}/verify_image_route_contract.py"
 if [ "$INSTALL_BLUE_GREEN_HELPER" = true ]; then

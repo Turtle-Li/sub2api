@@ -27,6 +27,7 @@ const (
 	defaultBatchImageDownloadDuration     = 10 * time.Minute
 	defaultBatchImageDownloadConcurrency  = 1
 	batchImageDownloadScannerMaxLineBytes = 16 * 1024 * 1024
+	batchImageUpscaleObjectReadTimeout    = 10 * time.Minute
 )
 
 var errBatchImageDownloadSizeExceeded = errors.New("batch image download size limit exceeded")
@@ -155,6 +156,42 @@ func (s *BatchImageDownloadService) OpenItemContent(ctx context.Context, owner B
 			_ = permit.Release(ctx)
 		}
 	}()
+	if isBatchImageUpscaledItem(item) {
+		store, ok := s.DeliveryStore.(BatchImageUpscaleObjectStore)
+		if !ok || store == nil || s.Config == nil {
+			return nil, ErrBatchImageDeliveryNotConfigured
+		}
+		extension := batchImageDerefString(item.FileExtension)
+		key, keyErr := batchImageUpscaleObjectKey(s.Config, job.BatchID, item.CustomID, imageIndex, extension)
+		if keyErr != nil {
+			return nil, ErrBatchImageResultMissing.WithCause(keyErr)
+		}
+		objectCtx, cancelObject := context.WithTimeout(ctx, batchImageUpscaleObjectReadTimeout)
+		reader, size, contentType, openErr := store.Open(objectCtx, key)
+		if openErr != nil {
+			if reader != nil {
+				_ = reader.Close()
+			}
+			cancelObject()
+			return nil, ErrBatchImageResultMissing.WithCause(openErr)
+		}
+		expectedType := normalizeUpscaleMime(batchImageDerefString(item.MimeType))
+		if size <= 0 || normalizeUpscaleMime(contentType) != expectedType {
+			_ = reader.Close()
+			cancelObject()
+			return nil, ErrBatchImageResultMissing
+		}
+		releasePermit = false
+		return &BatchImageContentStream{
+			Reader: &batchImagePermitReadCloser{
+				Reader: &batchImageContextReader{ctx: objectCtx, reader: reader},
+				closer: reader, permit: permit, cancel: cancelObject,
+			},
+			ContentType:   expectedType,
+			Filename:      BatchImageSafeDownloadFilename(item.CustomID, extension),
+			ContentLength: &size,
+		}, nil
+	}
 
 	provider, account, err := s.providerAndAccount(ctx, job)
 	if err != nil {
@@ -238,16 +275,6 @@ func (s *BatchImageDownloadService) StreamZip(ctx context.Context, owner BatchIm
 		defer func() { _ = permit.Release(ctx) }()
 	}
 
-	provider, account, err := s.providerAndAccount(ctx, job)
-	if err != nil {
-		return nil, err
-	}
-	r, _, err := provider.OpenResult(ctx, job, account)
-	if err != nil {
-		return nil, ErrBatchImageResultMissing.WithCause(err)
-	}
-	defer func() { _ = r.Close() }()
-
 	streamCtx := ctx
 	cancel := func() {}
 	if d := s.maxDownloadDuration(); d > 0 {
@@ -257,7 +284,25 @@ func (s *BatchImageDownloadService) StreamZip(ctx context.Context, owner BatchIm
 
 	limitedWriter := &batchImageDownloadLimitWriter{w: w, limit: s.maxDownloadBytes()}
 	zipWriter := zip.NewWriter(limitedWriter)
-	result, manifestFiles, zipErrors, err := s.writeZipImages(streamCtx, zipWriter, r, successItems)
+	var result *BatchImageZipResult
+	var manifestFiles []batchImageZipManifestFile
+	var zipErrors []batchImageZipError
+	if batchImageJobRequiresUpscale(job) {
+		result, manifestFiles, zipErrors, err = s.writeZipUpscaledImages(streamCtx, zipWriter, job, successItems)
+	} else {
+		provider, account, providerErr := s.providerAndAccount(ctx, job)
+		if providerErr != nil {
+			_ = zipWriter.Close()
+			return nil, providerErr
+		}
+		r, _, openErr := provider.OpenResult(ctx, job, account)
+		if openErr != nil {
+			_ = zipWriter.Close()
+			return nil, ErrBatchImageResultMissing.WithCause(openErr)
+		}
+		result, manifestFiles, zipErrors, err = s.writeZipImages(streamCtx, zipWriter, r, successItems)
+		_ = r.Close()
+	}
 	if err != nil {
 		_ = zipWriter.Close()
 		if errors.Is(err, errBatchImageDownloadSizeExceeded) {
@@ -425,6 +470,72 @@ func (s *BatchImageDownloadService) writeZipImages(ctx context.Context, zipWrite
 		zipErrors = append(zipErrors, batchImageZipError{CustomID: customID, Code: "RESULT_MISSING", Message: "provider result was not found for item"})
 	}
 	return result, manifestFiles, zipErrors, nil
+}
+
+func (s *BatchImageDownloadService) writeZipUpscaledImages(ctx context.Context, zipWriter *zip.Writer, job *BatchImageJob, successItems []*BatchImageItem) (*BatchImageZipResult, []batchImageZipManifestFile, []batchImageZipError, error) {
+	result := &BatchImageZipResult{}
+	var manifestFiles []batchImageZipManifestFile
+	var zipErrors []batchImageZipError
+	store, ok := s.DeliveryStore.(BatchImageUpscaleObjectStore)
+	if !ok || store == nil || s.Config == nil {
+		return result, nil, nil, ErrBatchImageDeliveryNotConfigured
+	}
+	for _, item := range successItems {
+		if err := ctx.Err(); err != nil {
+			return result, manifestFiles, zipErrors, err
+		}
+		if !isBatchImageUpscaledItem(item) {
+			zipErrors = append(zipErrors, batchImageZipError{CustomID: item.CustomID, Code: "RESULT_MISSING", Message: "upscaled result marker is missing"})
+			continue
+		}
+		extension := batchImageDerefString(item.FileExtension)
+		expectedType := normalizeUpscaleMime(batchImageDerefString(item.MimeType))
+		for imageIndex := 0; imageIndex < item.ImageCount; imageIndex++ {
+			key, err := batchImageUpscaleObjectKey(s.Config, job.BatchID, item.CustomID, imageIndex, extension)
+			if err != nil {
+				return result, manifestFiles, zipErrors, err
+			}
+			objectCtx, cancelObject := context.WithTimeout(ctx, batchImageUpscaleObjectReadTimeout)
+			reader, size, contentType, err := store.Open(objectCtx, key)
+			if err != nil || size <= 0 || normalizeUpscaleMime(contentType) != expectedType {
+				if reader != nil {
+					_ = reader.Close()
+				}
+				cancelObject()
+				zipErrors = append(zipErrors, batchImageZipError{CustomID: item.CustomID, Code: "RESULT_MISSING", Message: "upscaled image object is missing"})
+				continue
+			}
+			filename := batchImageZipImageFilename(item.CustomID, imageIndex, extension)
+			entry, createErr := zipWriter.CreateHeader(&zip.FileHeader{Name: filename, Method: zip.Deflate})
+			if createErr != nil {
+				_ = reader.Close()
+				cancelObject()
+				return result, manifestFiles, zipErrors, createErr
+			}
+			_, copyErr := io.Copy(entry, &batchImageContextReader{ctx: objectCtx, reader: reader})
+			closeErr := reader.Close()
+			cancelObject()
+			if copyErr != nil || closeErr != nil {
+				zipErrors = append(zipErrors, batchImageZipError{CustomID: item.CustomID, Code: "RESULT_READ_FAILED", Message: "upscaled image object could not be read"})
+				continue
+			}
+			result.FileCount++
+			manifestFiles = append(manifestFiles, batchImageZipManifestFile{CustomID: item.CustomID, Filename: filename, MimeType: expectedType, ImageIndex: imageIndex})
+		}
+	}
+	return result, manifestFiles, zipErrors, nil
+}
+
+type batchImageContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *batchImageContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 func (s *BatchImageDownloadService) getCompletedJob(ctx context.Context, owner BatchImageOwner, batchID string) (*BatchImageJob, error) {
@@ -734,15 +845,25 @@ func batchImageZipErrorsFromItems(items []*BatchImageItem) []batchImageZipError 
 
 type batchImagePermitReadCloser struct {
 	io.Reader
+	closer io.Closer
 	permit BatchImageDownloadPermit
+	cancel context.CancelFunc
 	once   sync.Once
 	err    error
 }
 
 func (r *batchImagePermitReadCloser) Close() error {
 	r.once.Do(func() {
+		if r.closer != nil {
+			r.err = r.closer.Close()
+		}
+		if r.cancel != nil {
+			r.cancel()
+		}
 		if r.permit != nil {
-			r.err = r.permit.Release(context.Background())
+			if err := r.permit.Release(context.Background()); r.err == nil {
+				r.err = err
+			}
 		}
 	})
 	return r.err

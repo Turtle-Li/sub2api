@@ -339,6 +339,10 @@ assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=true'
 assert_contains "$CONFIG_FILE" "SUB2API_MAINTENANCE_LOCK_FILE=${MAINTENANCE_LOCK_FILE}"
 [ -x "${APP_DIR}/scripts/sub2api-maintenance-lock.sh" ] \
   || fail 'script-directory maintenance lock helper was not installed'
+[ -x "${APP_DIR}/scripts/sub2api-image-upscale-config.sh" ] \
+  || fail 'image upscale config helper was not installed'
+[ -x "${APP_DIR}/scripts/sub2api-image-upscale-vault-container.sh" ] \
+  || fail 'image upscale Vault sidecar helper was not installed'
 [ -x "${APP_DIR}/scripts/install-github-deploy-trigger.sh" ] \
   || fail 'GitHub forced-command installer was not installed'
 [ -x "${APP_DIR}/scripts/verify_image_route_contract.py" ] \

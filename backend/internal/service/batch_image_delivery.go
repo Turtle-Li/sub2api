@@ -96,7 +96,7 @@ func NewBatchImageDeliveryService(repo BatchImageRepository, store BatchImageDel
 
 func (s *BatchImageDeliveryService) Applies(job *BatchImageJob) bool {
 	return s != nil && s.Config != nil && s.Config.BatchImage.DeliveryEnabled &&
-		job != nil && job.Provider == BatchImageProviderVertex
+		job != nil && job.Provider == BatchImageProviderVertex && !batchImageJobRequiresUpscale(job)
 }
 
 func (s *BatchImageDeliveryService) Process(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (*BatchImageIndexResult, time.Duration, error) {

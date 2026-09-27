@@ -73,9 +73,10 @@ type BatchImageInput struct {
 	DisplayName string
 	Items       []BatchImageInputItem
 
-	ResponseMimeType string
-	AspectRatio      string
-	ImageSize        string
+	ResponseMimeType    string
+	AspectRatio         string
+	ImageSize           string
+	ExplicitImageConfig bool
 
 	Metadata map[string]string
 }

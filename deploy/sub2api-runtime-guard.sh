@@ -68,6 +68,9 @@ CONTAINER_HEALTH_TOKEN_PATH="/run/sub2api-runtime/health-token"
 # target would let an unreviewed container satisfy recovery verification.
 APPROVED_UNIFIED_PAYMENT_VAULT_VOLUME="sub2api_unified_payment_vault"
 CONTAINER_UNIFIED_PAYMENT_VAULT_PATH="/run/sub2api-payment-vault"
+APPROVED_IMAGE_UPSCALE_VAULT_VOLUME="sub2api_image_upscale_vault"
+CONTAINER_IMAGE_UPSCALE_VAULT_PATH="/run/sub2api-upscale-vault"
+IMAGE_UPSCALE_VAULT_HELPER="${APP_DIR}/scripts/sub2api-image-upscale-vault-container.sh"
 APPROVED_FEISHU_VAULT_VOLUME="sub2api_feishu_vault"
 CONTAINER_FEISHU_VAULT_PATH="/run/sub2api-feishu-vault"
 REFUND_ROLLBACK_READINESS_PATH="/internal/refund-rollback-readiness"
@@ -351,6 +354,7 @@ if not isinstance(environment, list) or any(not isinstance(item, str) for item i
 
 for forbidden in (
     "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64",
+    "IMAGE_UPSCALE_API_KEY",
     "SUB2API_FEISHU_WEBHOOK_URL",
 ):
     if any(item == forbidden or item.startswith(forbidden + "=") for item in environment):
@@ -370,8 +374,9 @@ def enabled(name):
     return matches[0]
 
 payment = enabled("UNIFIED_PAYMENT_ENABLED")
+upscale = enabled("IMAGE_UPSCALE_ENABLED")
 feishu = enabled("SUB2API_FEISHU_ENABLED")
-print(f"{payment}|{feishu}")
+print(f"{payment}|{upscale}|{feishu}")
 '
 }
 
@@ -441,8 +446,8 @@ fixed_egress_mode_matches_active() {
 
 application_runtime_matches() {
   local container_name="$1" networks mounts environment environment_json feature_flags
-  local network_count mount_count expected_mount_count unified_payment_enabled feishu_enabled
-  local extra_feature_value unified_payment_mount_count
+  local network_count mount_count expected_mount_count unified_payment_enabled image_upscale_enabled feishu_enabled
+  local extra_feature_value unified_payment_mount_count image_upscale_mount_count
   local key expected_value actual_value
   container_exists "$container_name" || return 1
   [ "$(container_field "$container_name" '{{.HostConfig.RestartPolicy.Name}}')" = unless-stopped ] || return 1
@@ -451,9 +456,10 @@ application_runtime_matches() {
   environment="$(docker inspect "$container_name" --format '{{range .Config.Env}}{{println .}}{{end}}')" || return 1
   environment_json="$(docker inspect "$container_name" --format '{{json .Config.Env}}')" || return 1
   feature_flags="$(runtime_feature_flags_from_environment "$environment_json")" || return 1
-  IFS='|' read -r unified_payment_enabled feishu_enabled extra_feature_value <<<"$feature_flags"
+  IFS='|' read -r unified_payment_enabled image_upscale_enabled feishu_enabled extra_feature_value <<<"$feature_flags"
   [ -z "${extra_feature_value:-}" ] || return 1
   case "$unified_payment_enabled" in true|false) ;; *) return 1 ;; esac
+  case "$image_upscale_enabled" in true|false) ;; *) return 1 ;; esac
   case "$feishu_enabled" in true|false) ;; *) return 1 ;; esac
 
   network_count="$(printf '%s\n' "$networks" | awk 'NF { count += 1 } END { print count + 0 }')"
@@ -495,6 +501,34 @@ application_runtime_matches() {
     esac
   else
     mount_target_is_absent "$mounts" "$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH" || return 1
+  fi
+  if [ "$image_upscale_enabled" = true ]; then
+	local sidecar_image
+    expected_mount_count=$((expected_mount_count + 1))
+    printf '%s\n' "$mounts" | grep -qxF \
+      "volume|$APPROVED_IMAGE_UPSCALE_VAULT_VOLUME|$CONTAINER_IMAGE_UPSCALE_VAULT_PATH|false" || return 1
+    [ "$(environment_value_once "$environment" IMAGE_UPSCALE_BASE_URL)" = "https://hcmac-mini.tailfc4ed7.ts.net" ] || return 1
+    [ "$(environment_value_once "$environment" IMAGE_UPSCALE_API_KEY_VAULT_REF)" = "vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key" ] || return 1
+    [ "$(environment_value_once "$environment" IMAGE_UPSCALE_VAULT_AGENT_SOCKET)" = "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/public.sock" ] || return 1
+	[ -f "$IMAGE_UPSCALE_VAULT_HELPER" ] && [ ! -L "$IMAGE_UPSCALE_VAULT_HELPER" ] \
+		&& [ -x "$IMAGE_UPSCALE_VAULT_HELPER" ] || return 1
+	[ "$(realpath -e -- "$IMAGE_UPSCALE_VAULT_HELPER")" = "$IMAGE_UPSCALE_VAULT_HELPER" ] || return 1
+	sidecar_image="$(docker inspect sub2api-upscale-vault --format '{{.Config.Image}}' 2>/dev/null)" || return 1
+	SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" \
+		bash "$IMAGE_UPSCALE_VAULT_HELPER" ready-auto "$sidecar_image" >/dev/null || return 1
+  elif [ "$DEPENDENCY_MODE" = local ] && [ "$DUAL_NODE_RUNTIME_ENABLED" = false ]; then
+    image_upscale_mount_count="$(mount_target_count "$mounts" "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH")"
+    case "$image_upscale_mount_count" in
+      0) ;;
+      1)
+        expected_mount_count=$((expected_mount_count + 1))
+        printf '%s\n' "$mounts" | grep -qxF \
+          "volume|$APPROVED_IMAGE_UPSCALE_VAULT_VOLUME|$CONTAINER_IMAGE_UPSCALE_VAULT_PATH|false" || return 1
+        ;;
+      *) return 1 ;;
+    esac
+  else
+    mount_target_is_absent "$mounts" "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH" || return 1
   fi
   if [ "$feishu_enabled" = true ]; then
     expected_mount_count=$((expected_mount_count + 1))
@@ -1412,7 +1446,7 @@ case "$DEPENDENCY_MODE" in
   *) die "SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE must be local or external (got: ${DEPENDENCY_MODE})" ;;
 esac
 
-for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date tr id stat chmod python3; do
+for command_name in docker curl flock grep sort awk sed mktemp mkdir mv rm sleep date tr id stat chmod python3 realpath; do
   require_cmd "$command_name"
 done
 require_positive_integer SUB2API_RUNTIME_GUARD_RETRY_ATTEMPTS "$RETRY_ATTEMPTS"

@@ -106,6 +106,7 @@ Public batch response:
   "object": "image.batch",
   "status": "queued",
   "model": "gemini-2.5-flash-image",
+  "image_size": "1K",
   "provider": "gemini_api",
   "item_count": 1,
   "success_count": 0,
@@ -280,8 +281,22 @@ For the managed Vertex/GCS batch bucket, disable Cloud Storage soft delete or co
 - Supports Gemini `service_account` upstream accounts with valid service account JSON.
 - GCS bucket and prefix are server-managed.
 - Vertex job name and GCS paths are internal.
-- Batch image output should be treated as `1K`/default only in MVP.
-- Do not promise `2K` or `4K`.
+- `1K` keeps the provider result path unchanged. `2K` and `4K` are accepted
+  only for exact `gemini-2.5-flash-image` / `gemini-2.5-flash-image-preview`
+  jobs routed through `gemini_api` while the private upscale adapter is active.
+  Those jobs ask Gemini for the requested aspect ratio at `1K`, then use the
+  shared native `2x` or `4x` adapter. Billing and holds retain the requested
+  tier. See `docs/operations/IMAGE_25_UPSCALE_20260928.md` for the failure,
+  storage, credential, and rollback contract.
+- Upscaled batch images are private COS objects served through authenticated
+  item and ZIP downloads. They do not use the Vertex raw-result capability
+  endpoint. Each expanded `custom_id` must return exactly one image; a provider
+  line with zero or multiple images fails before upscaling or COS persistence.
+  Retries overwrite one deterministic object key, while manual/TTL cleanup
+  sweeps the bounded JPG/PNG/WebP candidates for every durable custom ID.
+  Failed and cancelled high-resolution jobs are cleanup-eligible after the
+  stale-write fence; completed jobs retain the configured output-retention
+  window.
 - Optional delivery mode streams completed JSONL shards unchanged through a dedicated Cloudflare
   Workflow into private Tencent COS before settlement. Only source listing, Vertex status, and
   exact-object COS `HEAD`/signing control traffic touches Sub2.

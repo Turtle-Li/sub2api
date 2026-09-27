@@ -38,3 +38,22 @@ func TestBatchImageCOSPresignUsesPrivateBucketVirtualHost(t *testing.T) {
 	require.NotEmpty(t, parsed.Query().Get("X-Amz-Signature"))
 	require.NotContains(t, signed, "test-secret-only")
 }
+
+func TestBatchImageCOSStoreRemainsAvailableWhenUpscaleIsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		BatchImage: config.BatchImageConfig{
+			Enabled:                    true,
+			DeliveryCOSEndpoint:        "https://cos.ap-shanghai.myqcloud.com",
+			DeliveryCOSRegion:          "ap-shanghai",
+			DeliveryCOSBucket:          "image-1309919944",
+			DeliveryCOSAccessKeyID:     "AKIDEXAMPLE",
+			DeliveryCOSSecretAccessKey: "test-secret-only",
+			DeliveryCOSForcePathStyle:  false,
+		},
+		ImageUpscale: config.ImageUpscaleConfig{Enabled: false},
+	}
+
+	require.NotNil(t, ProvideBatchImageDeliveryObjectStore(cfg))
+	cfg.BatchImage.DeliveryCOSSecretAccessKey = ""
+	require.Nil(t, ProvideBatchImageDeliveryObjectStore(cfg))
+}

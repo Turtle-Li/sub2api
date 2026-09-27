@@ -1349,6 +1349,25 @@ unified_payment:
   webhook_url: "https://api.turtleligpt.com/api/v1/payment/webhook/unified"
 
 # =============================================================================
+# Image 2.5 Upscale (2K / 4K post-processing)
+# =============================================================================
+# 1K remains a direct provider result. 2K and 4K generate at 1K, then use the
+# private asynchronous gateway at 2x or 4x. The raw bearer token is held only
+# by the dedicated memory Vault agent and is never written to this file.
+image_upscale:
+  enabled: false
+  base_url: "https://hcmac-mini.tailfc4ed7.ts.net"
+  api_key_vault_ref: "vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key"
+  vault_agent_socket: "/run/sub2api-upscale-vault/public.sock"
+  request_timeout_seconds: 30
+  job_timeout_seconds: 900
+  poll_interval_ms: 500
+  retry_max: 3
+  max_concurrent: 1
+  max_queue: 8
+  max_result_bytes: 134217728
+
+# =============================================================================
 # Image Storage (异步图片任务结果对象存储)
 # =============================================================================
 # 长耗时生图套 Cloudflare 会 524 超时，异步图片任务接口（/v1/images/generations/async
