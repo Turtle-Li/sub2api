@@ -1,13 +1,35 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestCoderOpenAIWSClientDialerDoesNotFollowRedirects(t *testing.T) {
+	var redirectedCalls atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectedCalls.Add(1)
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	t.Cleanup(target.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(redirector.URL, "http")
+	_, _, _, err := newDefaultOpenAIWSClientDialer().Dial(context.Background(), wsURL, nil, "")
+	require.Error(t, err)
+	require.Zero(t, redirectedCalls.Load())
+}
 
 func TestCoderOpenAIWSClientDialer_ProxyHTTPClientReuse(t *testing.T) {
 	dialer := newDefaultOpenAIWSClientDialer()

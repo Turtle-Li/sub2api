@@ -10,6 +10,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateGrokHTTPUpstreamDNSHonorsPrivateOptIn(t *testing.T) {
+	cfg := &config.Config{}
+	require.Error(t, validateGrokHTTPUpstreamDNS("http://localhost/v1", cfg))
+
+	cfg.Security.URLAllowlist.AllowPrivateHosts = true
+	require.NoError(t, validateGrokHTTPUpstreamDNS("http://localhost/v1", cfg))
+	require.NoError(t, validateGrokHTTPUpstreamDNS("https://localhost/v1", cfg))
+}
+
 func TestGrokAPIKeyURLPolicyFollowsGlobalSecurityConfig(t *testing.T) {
 	account := &Account{
 		Platform: PlatformGrok,

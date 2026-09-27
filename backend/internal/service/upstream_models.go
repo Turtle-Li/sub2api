@@ -835,7 +835,11 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 		if baseURL == "" {
 			baseURL = "https://api.x.ai"
 		}
-		validatedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+		validator, err := grokBaseURLValidator(account, s.cfg)
+		if err != nil {
+			return nil, newUpstreamModelSyncConfigError("Invalid Grok base URL", err)
+		}
+		validatedBaseURL, err := validator(baseURL)
 		if err != nil {
 			return nil, newUpstreamModelSyncConfigError("Invalid Grok base URL", err)
 		}
@@ -872,7 +876,13 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 		)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAIModelsURL(normalizedBaseURL), nil)
+	targetURL := buildOpenAIModelsURL(normalizedBaseURL)
+	req, err := http.NewRequestWithContext(
+		withGrokHTTPUpstreamPolicy(ctx, targetURL, s.cfg),
+		http.MethodGet,
+		targetURL,
+		nil,
+	)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Grok model list URL", err)
 	}

@@ -1894,6 +1894,9 @@ func (s *AccountTestService) testGrokRealtime(c *gin.Context, ctx context.Contex
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Grok Realtime URL: %s", err.Error()))
 	}
+	if err := validateGrokHTTPUpstreamDNS(base, s.cfg); err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Grok Realtime URL: %s", err.Error()))
+	}
 	u, err := url.Parse(base)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Grok Realtime URL: %s", err.Error()))

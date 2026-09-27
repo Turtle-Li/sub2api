@@ -133,6 +133,26 @@ func withGrokHTTPUpstreamPolicy(ctx context.Context, targetURL string, cfg *conf
 	return ctx
 }
 
+// validateGrokHTTPUpstreamDNS validates the resolved destination before a
+// WebSocket dial, whose transport does not pass through HTTPUpstream.
+func validateGrokHTTPUpstreamDNS(raw string, cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") {
+		return nil
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return errors.New("request host is empty")
+	}
+	return urlvalidator.ValidateResolvedIPWithOptions(host, cfg.Security.URLAllowlist.AllowPrivateHosts)
+}
+
 func redactedGrokBaseURLValidator(validator xai.BaseURLValidator) xai.BaseURLValidator {
 	return func(raw string) (string, error) {
 		validated, err := validator(raw)

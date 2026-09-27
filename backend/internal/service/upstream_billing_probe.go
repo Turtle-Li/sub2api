@@ -641,8 +641,18 @@ func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, ac
 		// 拿账号 Key 周期性请求官方域的不存在路径。
 		return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "unsupported", 0)
 	}
-	normalizedBaseURL, err := s.accountTestService.validateUpstreamBaseURL(baseURL)
-	if err != nil {
+	var normalizedBaseURL string
+	var validationErr error
+	if account.IsGrok() {
+		validator, validatorErr := grokBaseURLValidator(account, s.accountTestService.cfg)
+		if validatorErr != nil {
+			return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "invalid_base_url", 0)
+		}
+		normalizedBaseURL, validationErr = validator(baseURL)
+	} else {
+		normalizedBaseURL, validationErr = s.accountTestService.validateUpstreamBaseURL(baseURL)
+	}
+	if validationErr != nil {
 		return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "invalid_base_url", 0)
 	}
 	proxyURL := ""
@@ -668,7 +678,12 @@ func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, ac
 		profile = HTTPUpstreamProfileOpenAI
 	}
 	reqCtx := WithHTTPUpstreamProfile(req.Context(), profile)
-	req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(reqCtx))
+	if account.IsGrok() {
+		reqCtx = withGrokHTTPUpstreamPolicy(reqCtx, probeURL, s.accountTestService.cfg)
+	} else {
+		reqCtx = WithHTTPUpstreamRedirectsDisabled(reqCtx)
+	}
+	req = req.WithContext(reqCtx)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	account.ApplyHeaderOverrides(req.Header)

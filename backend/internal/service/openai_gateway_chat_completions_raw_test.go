@@ -124,6 +124,34 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
 }
 
+func TestForwardAsRawChatCompletions_GrokHTTPRelayUsesUpstreamPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"grok-4.5","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"chatcmpl_grok","model":"grok-4.5","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)),
+	}}
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"relay.example.test"}
+	account := rawChatCompletionsTestAccount()
+	account.Platform = PlatformGrok
+	account.Credentials["base_url"] = "http://relay.example.test/v1"
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+
+	_, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
+	require.NoError(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
+	allowPrivate, forced := HTTPUpstreamResolvedIPValidation(upstream.lastReq.Context())
+	require.False(t, allowPrivate)
+	require.True(t, forced)
+}
+
 func TestForwardAsChatCompletions_OpenAICompatibleGrokRawMissingUsageFailsBeforeWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

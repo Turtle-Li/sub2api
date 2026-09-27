@@ -126,6 +126,9 @@ func (d *coderOpenAIWSClientDialer) Dial(
 	opts := &coderws.DialOptions{
 		HTTPHeader:      cloneHeader(headers),
 		CompressionMode: coderws.CompressionContextTakeover,
+		HTTPClient: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
 		OnPingReceived: func(context.Context, []byte) bool {
 			wrapped.upstreamPings.Add(1)
 			return true
@@ -136,7 +139,11 @@ func (d *coderOpenAIWSClientDialer) Dial(
 		if err != nil {
 			return nil, 0, nil, err
 		}
-		opts.HTTPClient = proxyClient
+		proxyClientCopy := *proxyClient
+		proxyClientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		opts.HTTPClient = &proxyClientCopy
 	}
 
 	conn, resp, err := coderws.Dial(ctx, targetURL, opts)

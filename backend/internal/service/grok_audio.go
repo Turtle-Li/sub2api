@@ -170,6 +170,9 @@ func (s *OpenAIGatewayService) OpenGrokRealtime(ctx context.Context, account *Ac
 	if err != nil {
 		return nil, err
 	}
+	if err := validateGrokHTTPUpstreamDNS(base, s.cfg); err != nil {
+		return nil, fmt.Errorf("grok realtime upstream host validation failed: %w", err)
+	}
 	u, err := url.Parse(base)
 	if err != nil {
 		return nil, err
@@ -274,6 +277,9 @@ func (s *OpenAIGatewayService) ProbeGrokRealtime(ctx context.Context, account *A
 	base, err := buildGrokVoiceURL(account, s.cfg, "realtime")
 	if err != nil {
 		return err
+	}
+	if err := validateGrokHTTPUpstreamDNS(base, s.cfg); err != nil {
+		return fmt.Errorf("grok realtime upstream host validation failed: %w", err)
 	}
 	u, err := url.Parse(base)
 	if err != nil {
