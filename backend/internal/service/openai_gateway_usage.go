@@ -397,6 +397,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		// Keep the image cache split in the existing usage_logs JSONB payload.
 		imageSizeBreakdown["image_cache_read_tokens"] = result.Usage.ImageCacheReadTokens
 	}
+	usageImageSize, usageImageSizeSource := openAIUsageLogImageSize(result)
 	usageLog := &UsageLog{
 		UserID:                   user.ID,
 		APIKeyID:                 apiKey.ID,
@@ -420,10 +421,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		ImageInputTokens:         result.Usage.ImageInputTokens,
 		ImageOutputTokens:        result.Usage.ImageOutputTokens,
 		ImageCount:               result.ImageCount,
-		ImageSize:                optionalTrimmedStringPtr(result.ImageSize),
+		ImageSize:                optionalTrimmedStringPtr(usageImageSize),
 		ImageInputSize:           optionalTrimmedStringPtr(result.ImageInputSize),
 		ImageOutputSize:          optionalTrimmedStringPtr(result.ImageOutputSize),
-		ImageSizeSource:          optionalTrimmedStringPtr(result.ImageSizeSource),
+		ImageSizeSource:          optionalTrimmedStringPtr(usageImageSizeSource),
 		ImageSizeBreakdown:       imageSizeBreakdown,
 		NativeCompactionV2:       input.NativeCompactionV2,
 	}
@@ -772,6 +773,28 @@ func openAIBillableImageCount(result *OpenAIForwardResult) int {
 		return result.ImageCount
 	}
 	return min(result.BillableImageCount, result.ImageCount)
+}
+
+// openAIUsageLogImageSize keeps the list's billing-size badge aligned with
+// the exact tier used by calculateOpenAIImageCost. Actual upstream dimensions
+// remain available through ImageOutputSize and ImageSizeBreakdown.
+func openAIUsageLogImageSize(result *OpenAIForwardResult) (string, string) {
+	if result == nil {
+		return "", ""
+	}
+
+	size := strings.TrimSpace(result.ImageSize)
+	source := strings.TrimSpace(result.ImageSizeSource)
+	if strings.TrimSpace(result.BillableImageSize) == "" {
+		return size, source
+	}
+
+	size = NormalizeImageBillingTierOrDefault(result.BillableImageSize)
+	inputSize := strings.TrimSpace(result.ImageInputSize)
+	if inputSize == "" || strings.EqualFold(inputSize, "auto") {
+		return size, ImageSizeSourceDefault
+	}
+	return size, ImageSizeSourceInput
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIImageCost(

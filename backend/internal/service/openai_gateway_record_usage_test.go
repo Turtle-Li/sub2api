@@ -2267,6 +2267,51 @@ func TestOpenAIGatewayServiceRecordUsage_OutputImageSizeWinsBeforeBillingAndPers
 	require.InDelta(t, 0.44, usageRepo.lastLog.ActualCost, 1e-12)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_BillableImageSizeDrivesListMetadata(t *testing.T) {
+	imagePrice2K := 0.22
+	imagePrice4K := 0.44
+	groupID := int64(1203)
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:         "resp_image_billed_4k_output_2k",
+			Model:             "gpt-image-2",
+			ImageCount:        1,
+			BillableImageSize: ImageBillingSize4K,
+			ImageSize:         ImageBillingSize4K,
+			ImageInputSize:    "3840x2160",
+			ImageOutputSizes:  []string{"1672x941"},
+			Duration:          time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      11203,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:             groupID,
+				RateMultiplier: 1.0,
+				ImagePrice2K:   &imagePrice2K,
+				ImagePrice4K:   &imagePrice4K,
+			},
+		},
+		User:    &User{ID: 21203},
+		Account: &Account{ID: 31203},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.ImageSize)
+	require.Equal(t, ImageBillingSize4K, *usageRepo.lastLog.ImageSize)
+	require.NotNil(t, usageRepo.lastLog.ImageSizeSource)
+	require.Equal(t, ImageSizeSourceInput, *usageRepo.lastLog.ImageSizeSource)
+	require.NotNil(t, usageRepo.lastLog.ImageOutputSize)
+	require.Equal(t, "1672x941", *usageRepo.lastLog.ImageOutputSize)
+	require.Equal(t, map[string]int{ImageBillingSize2K: 1}, usageRepo.lastLog.ImageSizeBreakdown)
+	require.InDelta(t, imagePrice4K, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, imagePrice4K, usageRepo.lastLog.ActualCost, 1e-12)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_ImageUsesPerImageBillingEvenWithUsageTokens(t *testing.T) {
 	imagePrice := 0.02
 	groupID := int64(12)
@@ -2338,7 +2383,10 @@ func TestOpenAIGatewayServiceRecordUsage_ImageOverageIsLoggedButNotBilled(t *tes
 	require.NotNil(t, usageRepo.lastLog)
 	require.Equal(t, 3, usageRepo.lastLog.ImageCount)
 	require.NotNil(t, usageRepo.lastLog.ImageSize)
-	require.Equal(t, ImageBillingSize4K, *usageRepo.lastLog.ImageSize)
+	require.Equal(t, ImageBillingSize1K, *usageRepo.lastLog.ImageSize)
+	require.NotNil(t, usageRepo.lastLog.ImageSizeSource)
+	require.Equal(t, ImageSizeSourceInput, *usageRepo.lastLog.ImageSizeSource)
+	require.Equal(t, map[string]int{ImageBillingSize1K: 2, ImageBillingSize4K: 1}, usageRepo.lastLog.ImageSizeBreakdown)
 	require.InDelta(t, 0.04, usageRepo.lastLog.TotalCost, 1e-12)
 	require.InDelta(t, 0.04, usageRepo.lastLog.ActualCost, 1e-12)
 	require.InDelta(t, 0.04, userRepo.lastAmount, 1e-12)

@@ -509,6 +509,19 @@ describe('admin UsageTable tooltip', () => {
       expected: ['4K', 'Upstream output', '1024x1024', '3840x2160', '4K x 1'],
     },
     {
+      name: 'requested 4K row with a smaller upstream output',
+      row: {
+        ...baseImageRow,
+        request_id: 'req-admin-billed-4k-output-2k',
+        image_size: '4K',
+        image_input_size: '3840x2160',
+        image_output_size: '1672x941',
+        image_size_source: 'input',
+        image_size_breakdown: { '2K': 1 },
+      },
+      expected: ['4K', 'Request input', '3840x2160', '1672x941', '2K x 1'],
+    },
+    {
       name: 'input-sourced row',
       row: {
         ...baseImageRow,
