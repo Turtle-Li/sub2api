@@ -31,12 +31,14 @@ func TestBatchImageRepository_CreateJobAndDuplicates(t *testing.T) {
 		UserID:        1001,
 		Provider:      service.BatchImageProviderGeminiAPI,
 		Model:         "gemini-2.5-flash-image",
+		ImageSize:     "1K",
 		ItemCount:     2,
 		EstimatedCost: 0.02,
 	})
 	require.NoError(t, err)
 	require.Equal(t, batchID, job.BatchID)
 	require.Equal(t, service.BatchImageJobStatusCreated, job.Status)
+	require.Equal(t, "1K", job.ImageSize)
 	require.Equal(t, "USD", job.Currency)
 
 	_, err = repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
@@ -44,6 +46,7 @@ func TestBatchImageRepository_CreateJobAndDuplicates(t *testing.T) {
 		UserID:    1001,
 		Provider:  service.BatchImageProviderGeminiAPI,
 		Model:     "gemini-2.5-flash-image",
+		ImageSize: "1K",
 		ItemCount: 1,
 	})
 	require.Error(t, err)
@@ -59,6 +62,7 @@ func TestBatchImageRepository_InvalidProvider(t *testing.T) {
 		UserID:    1001,
 		Provider:  "unknown",
 		Model:     "gemini-2.5-flash-image",
+		ImageSize: "1K",
 		ItemCount: 1,
 	})
 	require.Error(t, err)
@@ -77,6 +81,7 @@ func TestBatchImageRepository_TransitionIncrementsVersionAndEvents(t *testing.T)
 		UserID:    1001,
 		Provider:  service.BatchImageProviderVertex,
 		Model:     "gemini-2.5-flash-image",
+		ImageSize: "1K",
 		ItemCount: 1,
 	})
 	require.NoError(t, err)
@@ -110,6 +115,7 @@ func TestBatchImageRepository_InvalidTransition(t *testing.T) {
 		UserID:    1001,
 		Provider:  service.BatchImageProviderGeminiAPI,
 		Model:     "gemini-2.5-flash-image",
+		ImageSize: "1K",
 		ItemCount: 1,
 	})
 	require.NoError(t, err)
@@ -130,6 +136,7 @@ func TestBatchImageRepository_TerminalStatusCannotMoveBack(t *testing.T) {
 		UserID:    1001,
 		Provider:  service.BatchImageProviderGeminiAPI,
 		Model:     "gemini-2.5-flash-image",
+		ImageSize: "1K",
 		Status:    service.BatchImageJobStatusCompleted,
 		ItemCount: 1,
 	})
@@ -153,6 +160,7 @@ func TestBatchImageRepository_ItemCustomIDUniqueness(t *testing.T) {
 			UserID:    1001,
 			Provider:  service.BatchImageProviderGeminiAPI,
 			Model:     "gemini-2.5-flash-image",
+			ImageSize: "1K",
 			ItemCount: 1,
 		})
 		require.NoError(t, err)
@@ -202,6 +210,7 @@ func TestBatchImageRepository_SubmitFailureFailsOnlyPendingItems(t *testing.T) {
 		UserID:    1001,
 		Provider:  service.BatchImageProviderGeminiAPI,
 		Model:     "gemini-3.1-flash-image",
+		ImageSize: "1K",
 		ItemCount: 2,
 	})
 	require.NoError(t, err)
@@ -250,6 +259,7 @@ func TestBatchImageRepository_StalePreProviderFailureFailsPendingItems(t *testin
 		UserID:    1001,
 		Provider:  service.BatchImageProviderVertex,
 		Model:     "gemini-3.1-flash-image",
+		ImageSize: "1K",
 		Status:    service.BatchImageJobStatusUploading,
 		ItemCount: 1,
 	})
@@ -292,6 +302,7 @@ func TestBatchImageRepository_ReplaceBatchImageItemsForJob(t *testing.T) {
 		UserID:    1001,
 		Provider:  service.BatchImageProviderGeminiAPI,
 		Model:     "gemini-2.5-flash-image",
+		ImageSize: "1K",
 		ItemCount: 2,
 	})
 	require.NoError(t, err)
@@ -347,6 +358,7 @@ func TestBatchImageRepository_MarkBatchImageJobSettled(t *testing.T) {
 		AccountID:         &accountID,
 		Provider:          service.BatchImageProviderGeminiAPI,
 		Model:             "gemini-image",
+		ImageSize:         "1K",
 		Status:            service.BatchImageJobStatusSettling,
 		ProviderJobName:   &providerJob,
 		ProviderOutputRef: &outputRef,
@@ -391,6 +403,7 @@ func TestBatchImageRepository_SetBatchImageJobSettlementFailed(t *testing.T) {
 		UserID:       1001,
 		Provider:     service.BatchImageProviderGeminiAPI,
 		Model:        "gemini-image",
+		ImageSize:    "1K",
 		Status:       service.BatchImageJobStatusSettling,
 		ItemCount:    1,
 		SuccessCount: 1,
@@ -420,6 +433,7 @@ func TestBatchImageRepository_AppendEvent(t *testing.T) {
 		UserID:    1001,
 		Provider:  service.BatchImageProviderVertex,
 		Model:     "gemini-2.5-flash-image",
+		ImageSize: "1K",
 		ItemCount: 1,
 	})
 	require.NoError(t, err)
