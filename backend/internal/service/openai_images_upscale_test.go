@@ -150,7 +150,7 @@ func TestUpscaleOpenAIImagesResponseRejectsOversizedEncodedSource(t *testing.T) 
 		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
 		"gemini-2.5-flash-image", body, 2,
 	)
-	requireImageUpscaleError(t, err, "SOURCE_LIMIT_EXCEEDED")
+	_ = requireImageUpscaleError(t, err, "SOURCE_LIMIT_EXCEEDED")
 }
 
 func TestHandleOpenAIImagesHighResSkipsB64BackfillBeforeUpscaleAdmission(t *testing.T) {
@@ -186,7 +186,7 @@ func TestHandleOpenAIImagesHighResSkipsB64BackfillBeforeUpscaleAdmission(t *test
 		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
 		"gemini-2.5-flash-image", 2,
 	)
-	requireImageUpscaleError(t, err, "BACKPRESSURE")
+	_ = requireImageUpscaleError(t, err, "BACKPRESSURE")
 	require.Empty(t, upstream.requests, "URL backfill must not run before upscale admission")
 }
 

@@ -43,9 +43,9 @@ func TestNormalizeBPSProbeRequest(t *testing.T) {
 func probeSSE(events ...string) string {
 	var b strings.Builder
 	for _, event := range events {
-		b.WriteString("data: ")
-		b.WriteString(event)
-		b.WriteString("\n\n")
+		_, _ = b.WriteString("data: ")
+		_, _ = b.WriteString(event)
+		_, _ = b.WriteString("\n\n")
 	}
 	return b.String()
 }

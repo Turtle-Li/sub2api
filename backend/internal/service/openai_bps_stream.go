@@ -292,11 +292,11 @@ func (b *bpsPrimedBody) fillBPS() {
 				b.abandonStalledBPS(fmt.Sprintf("stream withheld after output: no event for %s", bpsStreamSilenceLimit))
 				return
 			}
-			b.primed.Write(bpsKeepaliveComment)
+			_, _ = b.primed.Write(bpsKeepaliveComment)
 			return
 		}
 		line := string(chunk.data)
-		event.WriteString(line)
+		_, _ = event.WriteString(line)
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(trimmed, "event:"):
@@ -316,7 +316,7 @@ func (b *bpsPrimedBody) fillBPS() {
 				reason = bpsFailureMessage(eventType, data)
 			}
 			if b.completed && !bpsIsFailureEvent(eventType) || !b.startContinuation(reason) {
-				b.primed.Write(event.Bytes())
+				_, _ = b.primed.Write(event.Bytes())
 				b.err = chunk.err
 			}
 			return
@@ -332,7 +332,7 @@ func (b *bpsPrimedBody) fillBPS() {
 			b.observe(eventType, data)
 			b.lastDelivered = time.Now()
 		}
-		b.primed.Write(event.Bytes())
+		_, _ = b.primed.Write(event.Bytes())
 		if attempted && b.continuation == nil {
 			// 接续失败：BPS 流已停止，失败事件即最后一个事件。
 			b.err = io.EOF
@@ -433,7 +433,7 @@ func (b *bpsPrimedBody) writeNativeEvent(lines []string) {
 		lines[i] = "data: " + data + line[len(trimmed):]
 	}
 	for _, line := range lines {
-		b.primed.WriteString(line)
+		_, _ = b.primed.WriteString(line)
 	}
 }
 
@@ -543,7 +543,7 @@ func (b *bpsPrimedBody) primeUntilOutput() (bool, string) {
 			return true, ""
 		}
 		line := string(chunk.data)
-		b.primed.WriteString(line)
+		_, _ = b.primed.WriteString(line)
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(trimmed, "event:"):

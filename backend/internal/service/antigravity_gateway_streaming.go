@@ -332,12 +332,6 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	}
 }
 
-// handleGeminiStreamToNonStreaming 读取上游流式响应，合并为非流式响应返回给客户端
-// Gemini 流式响应是增量的，需要累积所有 chunk 的内容
-func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time) (*antigravityStreamResult, error) {
-	return s.handleGeminiStreamToNonStreamingWithImageUpscale(context.Background(), c, resp, startTime, 0)
-}
-
 func (s *AntigravityGatewayService) handleGeminiStreamToNonStreamingWithImageUpscale(
 	ctx context.Context,
 	c *gin.Context,

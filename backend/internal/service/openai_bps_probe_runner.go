@@ -126,7 +126,7 @@ func parseOpenAIProbeStream(body io.Reader) (*bpsProbeOutput, error) {
 			switch event.Get("type").String() {
 			case "response.output_text.delta":
 				if content.Len() < bpsProbeMaxContent {
-					content.WriteString(event.Get("delta").String())
+					_, _ = content.WriteString(event.Get("delta").String())
 				}
 			case "response.completed", "response.done":
 				response := event.Get("response")
@@ -141,7 +141,7 @@ func parseOpenAIProbeStream(body io.Reader) (*bpsProbeOutput, error) {
 						}
 						for _, part := range item.Get("content").Array() {
 							if part.Get("type").String() == "output_text" {
-								content.WriteString(part.Get("text").String())
+								_, _ = content.WriteString(part.Get("text").String())
 							}
 						}
 					}

@@ -34,10 +34,6 @@ func functionCodeTransportField(name, kind string, parameters any) string {
 	return ""
 }
 
-func supportsFunctionCodeTransport(name, kind string, parameters any) bool {
-	return functionCodeTransportField(name, kind, parameters) != ""
-}
-
 // Keep executable text in the native code string. extended_summary carries only
 // the other JSON arguments; the server serializes the final client arguments.
 // No source text is parsed, repaired, evaluated or treated as another tool call.

@@ -18,11 +18,11 @@ import (
 func bpsTestSSE(events ...string) io.ReadCloser {
 	var builder strings.Builder
 	for _, event := range events {
-		builder.WriteString("event: ")
-		builder.WriteString(gjson.Get(event, "type").String())
-		builder.WriteString("\ndata: ")
-		builder.WriteString(event)
-		builder.WriteString("\n\n")
+		_, _ = builder.WriteString("event: ")
+		_, _ = builder.WriteString(gjson.Get(event, "type").String())
+		_, _ = builder.WriteString("\ndata: ")
+		_, _ = builder.WriteString(event)
+		_, _ = builder.WriteString("\n\n")
 	}
 	return io.NopCloser(strings.NewReader(builder.String()))
 }

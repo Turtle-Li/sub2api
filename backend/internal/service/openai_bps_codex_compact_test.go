@@ -30,7 +30,9 @@ func bpsCompactLimits(t *testing.T, body []byte) map[string]any {
 	require.NoError(t, json.Unmarshal(body, &root))
 	limits := map[string]any{}
 	for _, model := range root.Models {
-		limits[model["slug"].(string)] = model["auto_compact_token_limit"]
+		slug, ok := model["slug"].(string)
+		require.True(t, ok)
+		limits[slug] = model["auto_compact_token_limit"]
 	}
 	return limits
 }

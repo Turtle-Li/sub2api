@@ -355,7 +355,7 @@ func TestImageUpscaleRejectsSourceDimensionAndPixelLimits(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			source := imageUpscaleTestPNG(t, tt.width, tt.height)
 			_, _, _, err := validateUpscaleSource(source)
-			requireImageUpscaleError(t, err, "SOURCE_LIMIT_EXCEEDED")
+			_ = requireImageUpscaleError(t, err, "SOURCE_LIMIT_EXCEEDED")
 		})
 	}
 }
@@ -372,7 +372,7 @@ func TestImageUpscaleAdmissionPrecedesSourceLoader(t *testing.T) {
 		loaderCalls.Add(1)
 		return base64.StdEncoding.EncodeToString(imageUpscaleTestPNG(t, 1, 1)), nil
 	})
-	requireImageUpscaleError(t, err, "BACKPRESSURE")
+	_ = requireImageUpscaleError(t, err, "BACKPRESSURE")
 	require.Zero(t, loaderCalls.Load())
 }
 

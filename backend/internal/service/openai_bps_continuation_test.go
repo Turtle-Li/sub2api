@@ -185,7 +185,7 @@ func TestBPSContinuationKeepaliveDuringSilence(t *testing.T) {
 // 响应处理器关闭流之后读到的管道错误不再发起原路径请求。
 func TestBPSContinuationNotStartedAfterClose(t *testing.T) {
 	reader, writer := io.Pipe()
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 	nativeCalls := 0
 	stream := bpsTestRawContinuationStream(t, reader, func() (io.ReadCloser, error) {
 		nativeCalls++

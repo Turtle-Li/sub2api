@@ -31,7 +31,7 @@ var _ service.BatchImageDeliveryObjectStore = (*batchImageCOSDeliveryStore)(nil)
 // is enabled so a feature rollback can still read and clean durable 2K/4K
 // objects. Legacy deployments without COS credentials still receive nil.
 func ProvideBatchImageDeliveryObjectStore(cfg *config.Config) service.BatchImageDeliveryObjectStore {
-	if cfg == nil || (!cfg.BatchImage.DeliveryEnabled && !(cfg.BatchImage.Enabled && batchImageCOSConfigured(cfg))) {
+	if cfg == nil || (!cfg.BatchImage.DeliveryEnabled && (!cfg.BatchImage.Enabled || !batchImageCOSConfigured(cfg))) {
 		return nil
 	}
 	client, err := newS3Client(context.Background(), s3ClientParams{
