@@ -87,13 +87,13 @@ Current model limits are:
 
 - `gemini-2.5-flash-image`: up to 3 reference images per item.
 - `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, and `gemini-3-pro-image`: up to 14 reference images per item.
-- Per batch job: up to 1000 reference image attachments total after `output_count` expansion across all items. This is an internal Sub2API guardrail for request size and cost control, not the generated-image cap and not a Pro Image per-item capability. The generated-output cap is 200 images per job.
+- Per batch job: up to 1000 reference image attachments total after `output_count` expansion across all items. This is an internal Sub2API guardrail for request size and cost control, not the generated-image cap and not a Pro Image per-item capability. Generated-output caps are resolution-aware: 50 images at `1K`, 15 at `2K`, and 10 at `4K`.
 - Per batch job: up to 128 MB decoded inline reference image data total. For large batches or repeated reference images, prefer `gs://` `file_uri` references or split the request into multiple jobs.
 
 `output_count` is optional per item and defaults to `1`. It means "repeat this prompt and reference image set N times" rather than relying on Gemini to return multiple images from one upstream request. The backend expands each repeat into a separate provider JSONL line with suffixed custom ids such as `cover_001_01`, `cover_001_02`. Current limits are:
 
 - Per prompt item: up to 4 output images.
-- Per batch job: up to 200 expected output images after expansion. This is the hard generated-output cap for a single job; clients and Codex skills must split larger workloads before submission.
+- Per batch job after expansion: up to 50 expected outputs at `1K`, 15 at `2K`, and 10 at `4K`. These are hard generated-output caps; clients and Codex skills must split larger workloads before submission.
 - Legacy provider-streamed jobs can use server ZIP subject to the item and byte caps. New
   COS-delivered jobs return raw JSONL result-file capabilities; browsers and Codex decode images
   and assemble ZIP files locally, so bulk media never traverses the Sub2API host.
