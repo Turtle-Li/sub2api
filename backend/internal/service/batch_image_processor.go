@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -23,10 +24,41 @@ const (
 	BatchImageParsedStatusSucceeded = "succeeded"
 	BatchImageParsedStatusFailed    = "failed"
 
-	defaultBatchImageProcessorRequeue = 30 * time.Second
-	batchImageProviderErrorRequeue    = time.Minute
-	batchImageMaxErrorMessageLength   = 1000
+	defaultBatchImageProcessorRequeue              = 30 * time.Second
+	batchImageProviderErrorRequeue                 = time.Minute
+	batchImageMaxErrorMessageLength                = 1000
+	defaultBatchImageHighResolutionFinalizeRequeue = 15 * time.Second
 )
+
+type batchImageHighResolutionFinalizer interface {
+	TryAcquire() (release func(), ok bool)
+}
+
+type batchImageHighResolutionFinalizeSlots struct {
+	slots chan struct{}
+}
+
+func newBatchImageHighResolutionFinalizeSlots(concurrency int) *batchImageHighResolutionFinalizeSlots {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	return &batchImageHighResolutionFinalizeSlots{slots: make(chan struct{}, concurrency)}
+}
+
+func (g *batchImageHighResolutionFinalizeSlots) TryAcquire() (func(), bool) {
+	if g == nil {
+		return func() {}, true
+	}
+	select {
+	case g.slots <- struct{}{}:
+		var once sync.Once
+		return func() {
+			once.Do(func() { <-g.slots })
+		}, true
+	default:
+		return nil, false
+	}
+}
 
 type BatchImageAccountResolver interface {
 	ResolveBatchImageAccount(ctx context.Context, accountID int64) (*Account, error)
@@ -48,14 +80,16 @@ func (r *BatchImageAccountRepositoryResolver) ResolveBatchImageAccount(ctx conte
 }
 
 type BatchImageProviderProcessor struct {
-	Repo             BatchImageRepository
-	ProviderRegistry *BatchImageProviderRegistry
-	AccountResolver  BatchImageAccountResolver
-	Indexer          *BatchImageResultIndexer
-	Delivery         BatchImageResultDelivery
-	BillingRepo      UsageBillingRepository
-	AuthCache        APIKeyAuthCacheInvalidator
-	DefaultRequeue   time.Duration
+	Repo                          BatchImageRepository
+	ProviderRegistry              *BatchImageProviderRegistry
+	AccountResolver               BatchImageAccountResolver
+	Indexer                       *BatchImageResultIndexer
+	Delivery                      BatchImageResultDelivery
+	BillingRepo                   UsageBillingRepository
+	AuthCache                     APIKeyAuthCacheInvalidator
+	DefaultRequeue                time.Duration
+	HighResolutionFinalizer       batchImageHighResolutionFinalizer
+	HighResolutionFinalizeRequeue time.Duration
 }
 
 func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID string) (BatchImageProcessResult, error) {
@@ -178,6 +212,19 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 }
 
 func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (BatchImageProcessResult, error) {
+	if batchImageJobRequiresUpscale(job) && p.HighResolutionFinalizer != nil {
+		release, ok := p.HighResolutionFinalizer.TryAcquire()
+		if !ok {
+			delay := p.HighResolutionFinalizeRequeue
+			if delay <= 0 {
+				delay = defaultBatchImageHighResolutionFinalizeRequeue
+			}
+			return BatchImageProcessResult{RequeueAfter: delay}, nil
+		}
+		if release != nil {
+			defer release()
+		}
+	}
 	var (
 		result       *BatchImageIndexResult
 		err          error

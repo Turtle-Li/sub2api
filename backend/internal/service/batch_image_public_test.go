@@ -431,6 +431,96 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.ErrorIs(t, err, ErrBatchImageTooManyOutputImages)
 	})
 
+	t.Run("applies output image limits by resolution", func(t *testing.T) {
+		svc, _, _, _, _ := newTestBatchImagePublicService(true)
+		svc.Config.BatchImage.MaxItemsPerJobDefault = 100
+		svc.Config.BatchImage.MaxOutputImagesPerJob = 50
+		svc.Config.BatchImage.MaxOutputImagesPerJob1K = 50
+		svc.Config.BatchImage.MaxOutputImagesPerJob2K = 15
+		svc.Config.BatchImage.MaxOutputImagesPerJob4K = 10
+		svc.Config.ImageUpscale = config.ImageUpscaleConfig{
+			Enabled:          true,
+			BaseURL:          "https://upscale.test",
+			APIKeyVaultRef:   "vault://test#api_key",
+			VaultAgentSocket: "/tmp/upscale-vault.sock",
+		}
+		for _, tt := range []struct {
+			imageSize string
+			limit     int
+		}{
+			{imageSize: "1K", limit: 50},
+			{imageSize: "2K", limit: 15},
+			{imageSize: "4K", limit: 10},
+		} {
+			t.Run(tt.imageSize, func(t *testing.T) {
+				request := validBatchImageSubmitRequest()
+				request.ImageSize = tt.imageSize
+				request.Items = make([]BatchImageSubmitItem, tt.limit)
+				for index := range request.Items {
+					request.Items[index] = BatchImageSubmitItem{
+						CustomID: fmt.Sprintf("item_%03d", index),
+						Prompt:   "hero",
+					}
+				}
+				_, err := svc.validateSubmitRequest(request)
+				require.NoError(t, err)
+
+				request.Items = append(request.Items, BatchImageSubmitItem{
+					CustomID: "one_over_limit",
+					Prompt:   "hero",
+				})
+				_, err = svc.validateSubmitRequest(request)
+				require.ErrorIs(t, err, ErrBatchImageTooManyOutputImages)
+			})
+		}
+	})
+
+	t.Run("legacy global output ceiling cannot raise 1K tier", func(t *testing.T) {
+		svc, _, _, _, _ := newTestBatchImagePublicService(true)
+		svc.Config.BatchImage.MaxItemsPerJobDefault = 100
+		svc.Config.BatchImage.MaxOutputImagesPerJob = 200
+		request := validBatchImageSubmitRequest()
+		request.Items = make([]BatchImageSubmitItem, 51)
+		for index := range request.Items {
+			request.Items[index] = BatchImageSubmitItem{
+				CustomID: fmt.Sprintf("legacy_%03d", index),
+				Prompt:   "hero",
+			}
+		}
+
+		_, err := svc.validateSubmitRequest(request)
+		require.ErrorIs(t, err, ErrBatchImageTooManyOutputImages)
+	})
+
+	t.Run("rejects high resolution overflow before side effects", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		svc.Config.BatchImage.MaxItemsPerJobDefault = 100
+		svc.Config.BatchImage.MaxOutputImagesPerJob = 50
+		svc.Config.BatchImage.MaxOutputImagesPerJob2K = 15
+		svc.Config.ImageUpscale = config.ImageUpscaleConfig{
+			Enabled:          true,
+			BaseURL:          "https://upscale.test",
+			APIKeyVaultRef:   "vault://test#api_key",
+			VaultAgentSocket: "/tmp/upscale-vault.sock",
+		}
+		request := validBatchImageSubmitRequest()
+		request.ImageSize = "2K"
+		request.Items = make([]BatchImageSubmitItem, 16)
+		for index := range request.Items {
+			request.Items[index] = BatchImageSubmitItem{
+				CustomID: fmt.Sprintf("overflow_%03d", index),
+				Prompt:   "hero",
+			}
+		}
+
+		_, err := svc.Submit(ctx, testBatchImageOwner(), request, "")
+		require.ErrorIs(t, err, ErrBatchImageTooManyOutputImages)
+		require.Empty(t, repo.jobs)
+		require.Empty(t, queue.enqueued)
+		require.Empty(t, gemini.submits)
+		require.Empty(t, svc.BillingRepo.(*fakeBatchImageBillingRepo).reserves)
+	})
+
 	t.Run("rejects too many reference images across request", func(t *testing.T) {
 		svc, _, _, _, _ := newTestBatchImagePublicService(true)
 		svc.Config.BatchImage.MaxReferenceImagesPerJob = 3

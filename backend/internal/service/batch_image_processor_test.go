@@ -319,6 +319,76 @@ func TestBatchImageProviderProcessor_StatusFlow(t *testing.T) {
 	})
 }
 
+func TestBatchImageProviderProcessor_HighResolutionFinalizerDoesNotBlockWorkers(t *testing.T) {
+	ctx := context.Background()
+	accountID := int64(10)
+	providerJob := "providers/job"
+	gate := newBatchImageHighResolutionFinalizeSlots(1)
+	release, ok := gate.TryAcquire()
+	require.True(t, ok)
+	defer release()
+
+	t.Run("busy high resolution finalizer requeues without opening output", func(t *testing.T) {
+		repo := newFakeBatchImageRepository()
+		repo.jobs["imgbatch_2k_busy"] = &BatchImageJob{
+			BatchID:         "imgbatch_2k_busy",
+			Status:          BatchImageJobStatusIndexing,
+			Provider:        "fake",
+			AccountID:       &accountID,
+			ProviderJobName: &providerJob,
+			Model:           "gemini-2.5-flash-image",
+			ImageSize:       "2K",
+		}
+		provider := &fakeProcessorProvider{result: "{\"key\":\"ok\",\"error\":{\"message\":\"unused\"}}\n"}
+		processor := newTestBatchImageProcessor(repo, provider)
+		processor.HighResolutionFinalizer = gate
+		processor.HighResolutionFinalizeRequeue = 7 * time.Second
+
+		got, err := processor.Process(ctx, "imgbatch_2k_busy")
+		require.NoError(t, err)
+		require.Equal(t, 7*time.Second, got.RequeueAfter)
+		require.False(t, got.Terminal)
+		require.False(t, provider.openResultCalled)
+		require.Equal(t, BatchImageJobStatusIndexing, repo.jobs["imgbatch_2k_busy"].Status)
+	})
+
+	t.Run("1K indexing bypasses busy finalizer", func(t *testing.T) {
+		repo := newFakeBatchImageRepository()
+		repo.jobs["imgbatch_1k_ready"] = &BatchImageJob{
+			BatchID:         "imgbatch_1k_ready",
+			Status:          BatchImageJobStatusIndexing,
+			Provider:        "fake",
+			AccountID:       &accountID,
+			ProviderJobName: &providerJob,
+			Model:           "gemini-2.5-flash-image",
+			ImageSize:       "1K",
+		}
+		provider := &fakeProcessorProvider{result: "{\"key\":\"ok\",\"error\":{\"code\":\"SAFETY\",\"message\":\"blocked\"}}\n"}
+		processor := newTestBatchImageProcessor(repo, provider)
+		processor.HighResolutionFinalizer = gate
+
+		got, err := processor.Process(ctx, "imgbatch_1k_ready")
+		require.NoError(t, err)
+		require.Equal(t, time.Millisecond, got.RequeueAfter)
+		require.True(t, provider.openResultCalled)
+		require.Equal(t, BatchImageJobStatusSettling, repo.jobs["imgbatch_1k_ready"].Status)
+	})
+}
+
+func TestBatchImageHighResolutionFinalizeSlots_BoundsWholeJobs(t *testing.T) {
+	gate := newBatchImageHighResolutionFinalizeSlots(1)
+	releaseFirst, ok := gate.TryAcquire()
+	require.True(t, ok)
+	_, ok = gate.TryAcquire()
+	require.False(t, ok)
+
+	releaseFirst()
+	releaseFirst()
+	releaseNext, ok := gate.TryAcquire()
+	require.True(t, ok)
+	releaseNext()
+}
+
 func TestCanTransitionBatchImageJob_PR5DirectIndexing(t *testing.T) {
 	require.True(t, CanTransitionBatchImageJob(BatchImageJobStatusSubmitted, BatchImageJobStatusIndexing))
 	require.True(t, CanTransitionBatchImageJob(BatchImageJobStatusSubmitted, BatchImageJobStatusFailed))

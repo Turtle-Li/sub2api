@@ -38,6 +38,14 @@ All images in one synchronous, asynchronous, or batch-indexing operation share
 that single 900-second lifecycle deadline; requesting multiple outputs never
 multiplies the Office Mini occupancy window.
 
+Batch admission is resolution-aware after `output_count` expansion: `1K` is
+limited to 50 output images, `2K` to 15, and `4K` to 10. High-resolution result
+indexing also holds one process-level whole-job finalization slot. If that slot
+is occupied, the completed provider job is delayed for 15 seconds and the queue
+worker is released; it must not wait behind the per-image upscale limiter while
+holding a second worker. This keeps one release-mode worker available for `1K`
+jobs, provider polling, and settlement while the Office Mini processes a batch.
+
 Submit retries are limited to explicit HTTP 429 responses because the remote
 API has no idempotency key and a transport/5xx retry could duplicate an accepted
 job. Poll and result GET requests may retry 429/5xx within the configured bound.

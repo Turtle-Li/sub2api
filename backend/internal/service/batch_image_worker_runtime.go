@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/runtimegate"
@@ -36,6 +37,16 @@ func ProvideBatchImageWorkerRuntime(
 ) *BatchImageWorkerRuntime {
 	upscaler := SharedImageUpscaleService(cfg)
 	upscaleStore, _ := deliveryStore.(BatchImageUpscaleObjectStore)
+	highResolutionFinalizeConcurrency := 1
+	highResolutionFinalizeRequeue := defaultBatchImageHighResolutionFinalizeRequeue
+	if cfg != nil {
+		if cfg.BatchImage.HighResolutionFinalizeConcurrency > 0 {
+			highResolutionFinalizeConcurrency = cfg.BatchImage.HighResolutionFinalizeConcurrency
+		}
+		if cfg.BatchImage.HighResolutionFinalizeRequeueSeconds > 0 {
+			highResolutionFinalizeRequeue = time.Duration(cfg.BatchImage.HighResolutionFinalizeRequeueSeconds) * time.Second
+		}
+	}
 	processor := &BatchImagePipelineProcessor{
 		ProviderProcessor: &BatchImageProviderProcessor{
 			Repo:             repo,
@@ -48,8 +59,10 @@ func ProvideBatchImageWorkerRuntime(
 				Upscaler:     upscaler,
 				UpscaleStore: upscaleStore,
 			},
-			BillingRepo: billingRepo,
-			AuthCache:   authCache,
+			BillingRepo:                   billingRepo,
+			AuthCache:                     authCache,
+			HighResolutionFinalizer:       newBatchImageHighResolutionFinalizeSlots(highResolutionFinalizeConcurrency),
+			HighResolutionFinalizeRequeue: highResolutionFinalizeRequeue,
 		},
 		SettlementService: &BatchImageSettlementService{
 			Repo:         repo,

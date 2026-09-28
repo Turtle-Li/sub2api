@@ -2724,6 +2724,28 @@ func TestLoad_DefaultBatchImagePromptLimit(t *testing.T) {
 	if cfg.BatchImage.WorkerConcurrency != 2 {
 		t.Fatalf("batch_image.worker_concurrency = %d, want 2 in release mode", cfg.BatchImage.WorkerConcurrency)
 	}
+	if cfg.BatchImage.MaxItemsPerJobDefault != 50 || cfg.BatchImage.MaxOutputImagesPerJob != 50 || cfg.BatchImage.MaxOutputImagesPerJob1K != 50 {
+		t.Fatalf(
+			"batch image 1K limits = items %d, ceiling %d, tier %d; want 50/50/50",
+			cfg.BatchImage.MaxItemsPerJobDefault,
+			cfg.BatchImage.MaxOutputImagesPerJob,
+			cfg.BatchImage.MaxOutputImagesPerJob1K,
+		)
+	}
+	if cfg.BatchImage.MaxOutputImagesPerJob2K != 15 || cfg.BatchImage.MaxOutputImagesPerJob4K != 10 {
+		t.Fatalf(
+			"batch image high-resolution limits = 2K %d, 4K %d; want 15/10",
+			cfg.BatchImage.MaxOutputImagesPerJob2K,
+			cfg.BatchImage.MaxOutputImagesPerJob4K,
+		)
+	}
+	if cfg.BatchImage.HighResolutionFinalizeConcurrency != 1 || cfg.BatchImage.HighResolutionFinalizeRequeueSeconds != 15 {
+		t.Fatalf(
+			"batch image high-resolution scheduling = concurrency %d, requeue %d; want 1/15",
+			cfg.BatchImage.HighResolutionFinalizeConcurrency,
+			cfg.BatchImage.HighResolutionFinalizeRequeueSeconds,
+		)
+	}
 }
 
 func TestLoad_DebugConcurrencyDefaultsRemainConservative(t *testing.T) {

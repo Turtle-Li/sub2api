@@ -244,6 +244,9 @@ type BatchImageConfig struct {
 	MaxItemsPerJobDefault             int    `mapstructure:"max_items_per_job_default"`
 	MaxItemsPerJobTrial               int    `mapstructure:"max_items_per_job_trial"`
 	MaxOutputImagesPerJob             int    `mapstructure:"max_output_images_per_job"`
+	MaxOutputImagesPerJob1K           int    `mapstructure:"max_output_images_per_job_1k"`
+	MaxOutputImagesPerJob2K           int    `mapstructure:"max_output_images_per_job_2k"`
+	MaxOutputImagesPerJob4K           int    `mapstructure:"max_output_images_per_job_4k"`
 	MaxOutputImagesPerItem            int    `mapstructure:"max_output_images_per_item"`
 	MaxPromptCharsPerItem             int    `mapstructure:"max_prompt_chars_per_item"`
 	MaxReferenceImagesPerJob          int    `mapstructure:"max_reference_images_per_job"`
@@ -279,10 +282,15 @@ type BatchImageConfig struct {
 	RecoverLimit                      int    `mapstructure:"recover_limit"`
 	// WorkerConcurrency controls independent Redis queue consumers in this
 	// process. Each consumer still owns a durable per-job lock.
-	WorkerConcurrency int    `mapstructure:"worker_concurrency"`
-	VertexEnabled     bool   `mapstructure:"vertex_enabled"`
-	VertexProjectID   string `mapstructure:"vertex_project_id"`
-	VertexLocation    string `mapstructure:"vertex_location"`
+	WorkerConcurrency int `mapstructure:"worker_concurrency"`
+	// HighResolutionFinalizeConcurrency bounds whole 2K/4K jobs that may enter
+	// the serial upscale/indexing phase. Busy jobs are delayed rather than
+	// occupying another queue worker while the shared upscale slot is in use.
+	HighResolutionFinalizeConcurrency    int    `mapstructure:"high_resolution_finalize_concurrency"`
+	HighResolutionFinalizeRequeueSeconds int    `mapstructure:"high_resolution_finalize_requeue_seconds"`
+	VertexEnabled                        bool   `mapstructure:"vertex_enabled"`
+	VertexProjectID                      string `mapstructure:"vertex_project_id"`
+	VertexLocation                       string `mapstructure:"vertex_location"`
 	// VertexManagedGCSBucket is a server-owned bucket for batch JSONL input/output.
 	// Disable Cloud Storage soft delete on this bucket to avoid retaining deleted batch objects.
 	VertexManagedGCSBucket       string `mapstructure:"vertex_managed_gcs_bucket"`
@@ -2405,9 +2413,12 @@ func setDefaults() {
 
 	// Batch Image queue
 	viper.SetDefault("batch_image.enabled", false)
-	viper.SetDefault("batch_image.max_items_per_job_default", 200)
+	viper.SetDefault("batch_image.max_items_per_job_default", 50)
 	viper.SetDefault("batch_image.max_items_per_job_trial", 50)
-	viper.SetDefault("batch_image.max_output_images_per_job", 200)
+	viper.SetDefault("batch_image.max_output_images_per_job", 50)
+	viper.SetDefault("batch_image.max_output_images_per_job_1k", 50)
+	viper.SetDefault("batch_image.max_output_images_per_job_2k", 15)
+	viper.SetDefault("batch_image.max_output_images_per_job_4k", 10)
 	viper.SetDefault("batch_image.max_output_images_per_item", 4)
 	viper.SetDefault("batch_image.max_prompt_chars_per_item", 24000)
 	viper.SetDefault("batch_image.max_reference_images_per_job", 1000)
@@ -2442,6 +2453,8 @@ func setDefaults() {
 	viper.SetDefault("batch_image.delayed_move_limit", 100)
 	viper.SetDefault("batch_image.recover_limit", 100)
 	viper.SetDefault("batch_image.worker_concurrency", 1)
+	viper.SetDefault("batch_image.high_resolution_finalize_concurrency", 1)
+	viper.SetDefault("batch_image.high_resolution_finalize_requeue_seconds", 15)
 	viper.SetDefault("batch_image.vertex_enabled", false)
 	viper.SetDefault("batch_image.vertex_project_id", "")
 	viper.SetDefault("batch_image.vertex_location", "global")

@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	defaultBatchImageMaxItems           = 200
-	defaultBatchImageMaxOutputImages    = 200
+	defaultBatchImageMaxItems           = 50
+	defaultBatchImageMaxOutputImages    = 50
+	defaultBatchImageMaxOutputImages2K  = 15
+	defaultBatchImageMaxOutputImages4K  = 10
 	defaultBatchImageMaxOutputCount     = 4
 	defaultBatchImageMaxPromptChars     = 24000
 	defaultBatchImageResponseMime       = "image/png"
@@ -1341,7 +1343,7 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 			return req, ErrBatchImageInvalidItems
 		}
 		totalOutputImages += outputCount
-		if totalOutputImages > s.maxOutputImagesPerJob() {
+		if totalOutputImages > s.maxOutputImagesPerJob(req.ImageSize) {
 			return req, ErrBatchImageTooManyOutputImages
 		}
 		req.Items[i].Prompt = strings.TrimSpace(req.Items[i].Prompt)
@@ -1711,11 +1713,34 @@ func (s *BatchImagePublicService) maxItems() int {
 	return defaultBatchImageMaxItems
 }
 
-func (s *BatchImagePublicService) maxOutputImagesPerJob() int {
+func (s *BatchImagePublicService) maxOutputImagesPerJob(imageSize string) int {
+	globalLimit := defaultBatchImageMaxOutputImages
 	if s != nil && s.Config != nil && s.Config.BatchImage.MaxOutputImagesPerJob > 0 {
-		return s.Config.BatchImage.MaxOutputImagesPerJob
+		globalLimit = s.Config.BatchImage.MaxOutputImagesPerJob
 	}
-	return defaultBatchImageMaxOutputImages
+
+	tierLimit := globalLimit
+	switch strings.ToUpper(strings.TrimSpace(imageSize)) {
+	case "1K":
+		tierLimit = defaultBatchImageMaxOutputImages
+		if s != nil && s.Config != nil && s.Config.BatchImage.MaxOutputImagesPerJob1K > 0 {
+			tierLimit = s.Config.BatchImage.MaxOutputImagesPerJob1K
+		}
+	case "2K":
+		tierLimit = defaultBatchImageMaxOutputImages2K
+		if s != nil && s.Config != nil && s.Config.BatchImage.MaxOutputImagesPerJob2K > 0 {
+			tierLimit = s.Config.BatchImage.MaxOutputImagesPerJob2K
+		}
+	case "4K":
+		tierLimit = defaultBatchImageMaxOutputImages4K
+		if s != nil && s.Config != nil && s.Config.BatchImage.MaxOutputImagesPerJob4K > 0 {
+			tierLimit = s.Config.BatchImage.MaxOutputImagesPerJob4K
+		}
+	}
+	if globalLimit < tierLimit {
+		return globalLimit
+	}
+	return tierLimit
 }
 
 func (s *BatchImagePublicService) maxOutputImagesPerItem() int {

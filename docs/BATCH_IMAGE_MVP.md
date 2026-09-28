@@ -210,6 +210,20 @@ Redis is used for wakeups, retries, worker coordination, per-job locks, and down
 
 Size the worker count against both the upstream account concurrency and the host budget. On the current 2 vCPU production shape, start at `2`; raising it beyond the available Gemini/Vertex account concurrency only increases queue and database pressure without adding throughput.
 
+Submission limits apply after `output_count` expansion: `1K` accepts at most 50
+output images, `2K` accepts at most 15, and `4K` accepts at most 10. The generic
+`max_output_images_per_job` remains an absolute ceiling, so lowering it also
+lowers the high-resolution tiers. Requests above a tier limit are rejected
+before account selection, balance hold, provider upload, or provider job creation.
+
+`2K` and `4K` jobs share a separate whole-job finalization gate. Production
+keeps this concurrency at `1`, matching the Office Mini upscale worker. When the
+gate is occupied, another completed high-resolution job is returned to the
+delayed queue instead of waiting inside a batch worker. This preserves the
+second release-mode worker for provider polling, settlement, and ordinary `1K`
+indexing. The gate is process-local because production has one active background
+owner; horizontal background workers require a distributed finalization lease.
+
 The production Compose file also enables the process-local synchronous image gate at `16` requests with `wait` overflow and `100` waiting entries. This is a host backpressure limit for image response bodies, not a Provider quota: Gemini account slots and image2 account slots are still selected by the Redis/DB account scheduler.
 
 Redis structures:
@@ -338,9 +352,12 @@ These keys exist in `backend/internal/config/config.go`:
 ```yaml
 batch_image:
   enabled: false
-  max_items_per_job_default: 200
+  max_items_per_job_default: 50
   max_items_per_job_trial: 50
-  max_output_images_per_job: 200
+  max_output_images_per_job: 50
+  max_output_images_per_job_1k: 50
+  max_output_images_per_job_2k: 15
+  max_output_images_per_job_4k: 10
   max_output_images_per_item: 4
   max_prompt_chars_per_item: 24000
   max_reference_images_per_job: 1000
@@ -378,6 +395,8 @@ batch_image:
   delayed_move_limit: 100
   recover_limit: 100
   worker_concurrency: 1
+  high_resolution_finalize_concurrency: 1
+  high_resolution_finalize_requeue_seconds: 15
 
   vertex_enabled: false
   vertex_project_id: ""
