@@ -335,6 +335,16 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 // handleGeminiStreamToNonStreaming 读取上游流式响应，合并为非流式响应返回给客户端
 // Gemini 流式响应是增量的，需要累积所有 chunk 的内容
 func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time) (*antigravityStreamResult, error) {
+	return s.handleGeminiStreamToNonStreamingWithImageUpscale(context.Background(), c, resp, startTime, 0)
+}
+
+func (s *AntigravityGatewayService) handleGeminiStreamToNonStreamingWithImageUpscale(
+	ctx context.Context,
+	c *gin.Context,
+	resp *http.Response,
+	startTime time.Time,
+	upscaleScale int,
+) (*antigravityStreamResult, error) {
 	if upstreamResponseModelObserverFromContext(c) == nil {
 		beginUpstreamResponseModelObservation(c)
 	}
@@ -519,6 +529,10 @@ returnResponse:
 	respBody, err := json.Marshal(finalResponse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
+	}
+	respBody, err = processGeminiImageGenerationResponse(ctx, s.imageUpscaler, s.imageStorageResolver, respBody, upscaleScale, "antigravity")
+	if err != nil {
+		return nil, err
 	}
 	c.Data(http.StatusOK, "application/json", respBody)
 

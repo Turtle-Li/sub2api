@@ -477,6 +477,7 @@ type OpenAIGatewayService struct {
 	pluginManager         *PluginManager
 	bpsImageExternalizer  BPSImageExternalizer
 	imageUpscaler         *ImageUpscaleService
+	imageStorageResolver  ImageStorageResolver
 	deferredService       *DeferredService
 	openAITokenProvider   *OpenAITokenProvider
 	grokTokenProvider     *GrokTokenProvider

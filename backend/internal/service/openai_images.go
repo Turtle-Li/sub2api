@@ -1033,6 +1033,19 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	} else {
 		body = s.backfillOpenAIImagesB64JSON(ctx, account, parsed, body)
 	}
+	usage, _ := extractOpenAIUsageFromJSONBytes(body)
+	imageCount := extractOpenAIImageCountFromJSONBytes(body)
+	imageOutputSizes := collectOpenAIResponseImageOutputSizesFromJSONBytes(body)
+	if upscaleScale > 0 && s.imageStorageResolver != nil {
+		if uploader, enabled := s.imageStorageResolver(); enabled && uploader != nil {
+			storedBody, storageErr := uploader.Rewrite(ctx, newSynchronousImageResultID(), body)
+			if storageErr != nil {
+				logImageStorageFallback("openai_images", imageCount, storageErr)
+			} else {
+				body = storedBody
+			}
+		}
+	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := "application/json"
 	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
@@ -1042,8 +1055,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	}
 	c.Data(resp.StatusCode, contentType, body)
 
-	usage, _ := extractOpenAIUsageFromJSONBytes(body)
-	return usage, extractOpenAIImageCountFromJSONBytes(body), collectOpenAIResponseImageOutputSizesFromJSONBytes(body), nil
+	return usage, imageCount, imageOutputSizes, nil
 }
 
 func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(

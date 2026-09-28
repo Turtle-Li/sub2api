@@ -65,6 +65,8 @@ type GeminiMessagesCompatService struct {
 	httpUpstream              HTTPUpstream
 	antigravityGatewayService *AntigravityGatewayService
 	cfg                       *config.Config
+	imageUpscaler             *ImageUpscaleService
+	imageStorageResolver      ImageStorageResolver
 	responseHeaderFilter      *responseheaders.CompiledHeaderFilter
 }
 
@@ -101,6 +103,7 @@ func NewGeminiMessagesCompatService(
 		httpUpstream:              httpUpstream,
 		antigravityGatewayService: antigravityGatewayService,
 		cfg:                       cfg,
+		imageUpscaler:             SharedImageUpscaleService(cfg),
 		responseHeaderFilter:      compileResponseHeaderFilter(cfg),
 	}
 }
@@ -1188,10 +1191,26 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	// Some Gemini upstreams validate tool call parts strictly; ensure any `functionCall` part includes a
 	// `thoughtSignature` to avoid frequent INVALID_ARGUMENT 400s.
 	body = ensureGeminiFunctionCallThoughtSignatures(body)
+	requestedImageInputSize := s.extractImageInputSize(body)
 
 	mappedModel := originalModel
 	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
 		mappedModel = account.GetMappedModel(originalModel)
+	}
+	providerBody := body
+	upscaleScale := 0
+	if !stream && action == "generateContent" {
+		if scale, required := image25RequestedUpscaleScaleForModels(originalModel, mappedModel, requestedImageInputSize); required {
+			if s.imageUpscaler == nil || !s.imageUpscaler.Active() {
+				return nil, s.writeGoogleError(c, http.StatusServiceUnavailable, "Image upscale service unavailable")
+			}
+			var err error
+			providerBody, err = rewriteGeminiImageSize(providerBody, ImageBillingSize1K)
+			if err != nil {
+				return nil, s.writeGoogleError(c, http.StatusBadRequest, "Invalid image generation config")
+			}
+			upscaleScale = scale
+		}
 	}
 
 	proxyURL := ""
@@ -1230,7 +1249,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				return nil, "", err
 			}
 
-			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(providerBody))
 			if err != nil {
 				return nil, "", err
 			}
@@ -1271,7 +1290,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					"project": projectID,
 				}
 				var inner any
-				if err := json.Unmarshal(body, &inner); err != nil {
+				if err := json.Unmarshal(providerBody, &inner); err != nil {
 					return nil, "", fmt.Errorf("failed to parse gemini request: %w", err)
 				}
 				wrapped["request"] = inner
@@ -1298,7 +1317,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					return nil, "", err
 				}
 
-				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(providerBody))
 				if err != nil {
 					return nil, "", err
 				}
@@ -1324,7 +1343,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				return nil, "", err
 			}
 
-			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(providerBody))
 			if err != nil {
 				return nil, "", err
 			}
@@ -1618,10 +1637,14 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			b, _ := json.Marshal(collected)
 			upstreamResponseModelObserverFromContext(c).ObserveGemini(b)
 			observeGeminiImageOutputs(c, b)
+			b, err = processGeminiImageGenerationResponse(ctx, s.imageUpscaler, s.imageStorageResolver, b, upscaleScale, "gemini_native")
+			if err != nil {
+				return nil, err
+			}
 			c.Data(http.StatusOK, "application/json", b)
 			usage = usageObj
 		} else {
-			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth, account, requestID)
+			usageResp, err := s.handleNativeNonStreamingResponseWithImageUpscale(ctx, c, resp, isOAuth, account, requestID, upscaleScale)
 			if err != nil {
 				return nil, err
 			}
@@ -1634,7 +1657,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	// 图片生成计费
-	imageInputSize := s.extractImageInputSize(body)
+	imageInputSize := requestedImageInputSize
 	imageSize := normalizeOpenAIImageSizeTier(imageInputSize)
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 
@@ -2694,6 +2717,18 @@ type UpstreamHTTPResult struct {
 }
 
 func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Context, resp *http.Response, isOAuth bool, account *Account, upstreamRequestID string) (*ClaudeUsage, error) {
+	return s.handleNativeNonStreamingResponseWithImageUpscale(context.Background(), c, resp, isOAuth, account, upstreamRequestID, 0)
+}
+
+func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponseWithImageUpscale(
+	ctx context.Context,
+	c *gin.Context,
+	resp *http.Response,
+	isOAuth bool,
+	account *Account,
+	upstreamRequestID string,
+	upscaleScale int,
+) (*ClaudeUsage, error) {
 	if s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
 		logger.LegacyPrintf("service.gemini_messages_compat", "[GeminiAPI] ========== Response Headers ==========")
 		for key, values := range resp.Header {
@@ -2726,6 +2761,11 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 	} else if isGeminiEmptyResponseBody(respBody) {
 		s.markGeminiEmptyResponse(c, account, false, upstreamRequestID)
 	}
+	processedBody, err := processGeminiImageGenerationResponse(ctx, s.imageUpscaler, s.imageStorageResolver, respBody, upscaleScale, "gemini_native")
+	if err != nil {
+		return nil, err
+	}
+	respBody = processedBody
 
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 

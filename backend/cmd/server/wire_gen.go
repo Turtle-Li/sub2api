@@ -227,7 +227,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	dbDumper := repository.NewPgDumper(configConfig, db)
 	backupService := service.ProvideBackupService(settingRepository, configConfig, secretEncryptor, backupObjectStoreFactory, dbDumper, leaderLockCache, db)
 	imageStorageFactory := repository.ProvideImageStorageFactory()
-	imageStorageSettingService := service.ProvideImageStorageSettingService(settingRepository, secretEncryptor, backupService, imageStorageFactory, configConfig)
+	imageStorageSettingService := service.ProvideImageStorageSettingService(settingRepository, secretEncryptor, backupService, imageStorageFactory, configConfig, openAIGatewayService, geminiMessagesCompatService, antigravityGatewayService)
 	backupHandler := admin.NewBackupHandler(backupService, userService, imageStorageSettingService)
 	attachmentR2StoreFactory := repository.NewAttachmentR2StoreFactory()
 	attachmentR2Service := service.NewAttachmentR2Service(settingRepository, secretEncryptor, attachmentR2StoreFactory)

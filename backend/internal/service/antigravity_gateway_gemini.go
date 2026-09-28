@@ -97,6 +97,21 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		return nil, s.writeGoogleError(c, http.StatusForbidden, fmt.Sprintf("model %s not in whitelist", originalModel))
 	}
 	forwardedModel := mappedModel
+	providerBody := body
+	upscaleScale := 0
+	if !stream && action == "generateContent" {
+		if scale, required := image25RequestedUpscaleScaleForModels(originalModel, mappedModel, imageInputSize); required {
+			if s.imageUpscaler == nil || !s.imageUpscaler.Active() {
+				return nil, s.writeGoogleError(c, http.StatusServiceUnavailable, "Image upscale service unavailable")
+			}
+			var err error
+			providerBody, err = rewriteGeminiImageSize(providerBody, ImageBillingSize1K)
+			if err != nil {
+				return nil, s.writeGoogleError(c, http.StatusBadRequest, "Invalid image generation config")
+			}
+			upscaleScale = scale
+		}
+	}
 
 	// 获取 access_token
 	if s.tokenProvider == nil {
@@ -123,7 +138,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	}
 
 	// Antigravity 上游要求必须包含身份提示词，注入到请求中
-	injectedBody, err := injectIdentityPatchToGeminiRequest(body)
+	injectedBody, err := injectIdentityPatchToGeminiRequest(providerBody)
 	if err != nil {
 		return nil, s.writeGoogleError(c, http.StatusBadRequest, "Invalid request body")
 	}
@@ -436,7 +451,7 @@ handleSuccess:
 		clientDisconnect = streamRes.clientDisconnect
 	} else {
 		// 客户端要求非流式，收集流式响应后返回
-		streamRes, err := s.handleGeminiStreamToNonStreaming(c, resp, startTime)
+		streamRes, err := s.handleGeminiStreamToNonStreamingWithImageUpscale(ctx, c, resp, startTime, upscaleScale)
 		if err != nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_collect_error error=%v", prefix, err)
 			return nil, err

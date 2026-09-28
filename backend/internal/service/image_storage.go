@@ -110,6 +110,21 @@ func (u *ImageResultUploader) Rewrite(ctx context.Context, taskID string, result
 	return out, nil
 }
 
+// SaveBytes stores one already-materialized image under the uploader's configured prefix.
+// It is used by synchronous image post-processing paths that already hold the final bytes
+// and therefore should not encode and decode them through an intermediate JSON response.
+func (u *ImageResultUploader) SaveBytes(ctx context.Context, resultID string, index int, contentType string, data []byte) (string, error) {
+	if u == nil || u.storage == nil {
+		return "", errors.New("image storage is not configured")
+	}
+	key := u.buildKey(resultID, index, contentType)
+	url, err := u.storage.Save(ctx, key, contentType, data)
+	if err != nil {
+		return "", fmt.Errorf("upload to object storage: %w", err)
+	}
+	return url, nil
+}
+
 func (u *ImageResultUploader) fetchImageBytes(ctx context.Context, item map[string]json.RawMessage) ([]byte, string, error) {
 	if raw, ok := item["b64_json"]; ok {
 		var b64 string

@@ -121,14 +121,16 @@ func (e *PromptTooLongError) Error() string {
 
 // AntigravityGatewayService 处理 Antigravity 平台的 API 转发
 type AntigravityGatewayService struct {
-	accountRepo       AccountRepository
-	tokenProvider     *AntigravityTokenProvider
-	rateLimitService  *RateLimitService
-	httpUpstream      HTTPUpstream
-	settingService    *SettingService
-	cache             GatewayCache // 用于模型级限流时清除粘性会话绑定
-	schedulerSnapshot *SchedulerSnapshotService
-	internal500Cache  Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
+	accountRepo          AccountRepository
+	tokenProvider        *AntigravityTokenProvider
+	rateLimitService     *RateLimitService
+	httpUpstream         HTTPUpstream
+	settingService       *SettingService
+	cache                GatewayCache // 用于模型级限流时清除粘性会话绑定
+	schedulerSnapshot    *SchedulerSnapshotService
+	internal500Cache     Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
+	imageUpscaler        *ImageUpscaleService
+	imageStorageResolver ImageStorageResolver
 }
 
 func (s *AntigravityGatewayService) upstreamErrorBodyReadLimit() int64 {
@@ -157,6 +159,10 @@ func NewAntigravityGatewayService(
 	settingService *SettingService,
 	internal500Cache Internal500CounterCache,
 ) *AntigravityGatewayService {
+	imageUpscaler := NewImageUpscaleService(nil)
+	if settingService != nil {
+		imageUpscaler = SharedImageUpscaleService(settingService.cfg)
+	}
 	return &AntigravityGatewayService{
 		accountRepo:       accountRepo,
 		tokenProvider:     tokenProvider,
@@ -166,6 +172,7 @@ func NewAntigravityGatewayService(
 		cache:             cache,
 		schedulerSnapshot: schedulerSnapshot,
 		internal500Cache:  internal500Cache,
+		imageUpscaler:     imageUpscaler,
 	}
 }
 

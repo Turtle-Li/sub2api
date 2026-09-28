@@ -56,6 +56,35 @@ The synchronous provider response must contain exactly the requested `n`
 images, and every expanded batch `custom_id` result must contain exactly one
 image. Cardinality mismatches fail before any upscale submission or COS write.
 
+## Synchronous delivery and object storage fallback
+
+OpenAI Images-compatible, Gemini native, and Antigravity non-streaming 2K/4K
+responses first retain every final upscaled image in memory. When the dynamic
+`ImageStorage` setting is enabled, Sub2 then attempts to offload the completed
+images through the existing S3-compatible abstraction; the configured backend
+may be R2, COS, OSS, S3, or MinIO. Only when every image upload succeeds is the
+client response atomically rewritten to object-storage URLs (`data[].url` for
+OpenAI-compatible responses and `fileData`/`file_data` for Gemini responses).
+
+Object storage is a bandwidth and memory-pressure optimization, not a success
+dependency. If storage is disabled, unreachable, times out, or any image upload
+fails, the request must still succeed with all final upscaled images returned
+inline (`b64_json` or a data URL for OpenAI-compatible responses, and
+`inlineData`/`inline_data` for Gemini). A multi-image response must never mix
+stored URLs and inline images. The fallback warning records only the protocol
+path, image count, and error type; it must not log credentials, object URLs, or
+image data.
+
+If an earlier image upload succeeds and a later upload fails, the client still
+receives the complete inline response. The already uploaded object can remain
+orphaned because synchronous object keys are unique and there is no response
+metadata commit from which to drive cleanup. Operators should monitor this
+bounded leak risk; add explicit synchronous-object TTL or cleanup indexing if
+fallback frequency becomes material. Office Mini does not receive permanent
+object-storage credentials in this phase: bytes still return to Sub2, which
+performs the optional upload. Direct Mini-to-storage upload requires a future
+short-lived presigned PUT design.
+
 ## Batch persistence and objects
 
 Migration `261_batch_image_image_size.sql` persists the requested output tier;

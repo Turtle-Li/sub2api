@@ -721,6 +721,9 @@ func ProvideImageStorageSettingService(
 	backup *BackupService,
 	factory ImageStorageFactory,
 	cfg *config.Config,
+	openAIGateway *OpenAIGatewayService,
+	geminiGateway *GeminiMessagesCompatService,
+	antigravityGateway *AntigravityGatewayService,
 ) *ImageStorageSettingService {
 	if cfg.ImageStorage.Enabled && !cfg.ImageStorage.Active() {
 		// 列出具体缺失的键。若这些键其实已在环境变量里设过，说明它们没被读进来，
@@ -728,7 +731,12 @@ func ProvideImageStorageSettingService(
 		logger.L().Warn("image_storage.enabled is true in config but object storage is not fully configured; configure it in the admin UI or complete the config file",
 			zap.Strings("missing_keys", cfg.ImageStorage.MissingCredentialKeys()))
 	}
-	return NewImageStorageSettingService(settingRepo, encryptor, backup, factory, cfg.ImageStorage)
+	settings := NewImageStorageSettingService(settingRepo, encryptor, backup, factory, cfg.ImageStorage)
+	resolve := settings.Resolver()
+	openAIGateway.SetImageStorageResolver(resolve)
+	geminiGateway.SetImageStorageResolver(resolve)
+	antigravityGateway.SetImageStorageResolver(resolve)
+	return settings
 }
 
 // ProvideImageTaskService 构造异步图片任务服务。
