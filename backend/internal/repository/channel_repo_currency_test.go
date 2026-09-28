@@ -23,10 +23,10 @@ func TestAccountStatsModelPricingCurrencyPersistence(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "rule_id", "platform", "models", "billing_mode", "currency", "input_price", "output_price",
-			"cache_write_price", "cache_write_1h_price", "cache_read_price", "image_output_price", "per_request_price", "created_at", "updated_at",
+			"cache_write_price", "cache_write_1h_price", "cache_read_price", "reasoning_effort_multipliers", "image_output_price", "per_request_price", "created_at", "updated_at",
 		}).AddRow(
 			int64(11), int64(7), "openai", `["gpt-5"]`, service.BillingModeToken, service.PricingCurrencyCNY,
-			nil, nil, nil, nil, nil, nil, nil, time.Time{}, time.Time{},
+			nil, nil, nil, nil, nil, "{}", nil, nil, time.Time{}, time.Time{},
 		))
 	mock.ExpectQuery(`SELECT id, pricing_id, min_tokens, max_tokens, tier_label`).
 		WithArgs(sqlmock.AnyArg()).
@@ -47,10 +47,10 @@ func TestAccountStatsModelPricingCurrencyPersistence(t *testing.T) {
 		Currency:    "cny",
 		BillingMode: service.BillingModeToken,
 	}
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO channel_account_stats_model_pricing (rule_id, platform, models, billing_mode, currency, input_price, output_price, cache_write_price, cache_write_1h_price, cache_read_price, image_output_price, per_request_price)")).
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO channel_account_stats_model_pricing (rule_id, platform, models, billing_mode, currency, input_price, output_price, cache_write_price, cache_write_1h_price, cache_read_price, reasoning_effort_multipliers, image_output_price, per_request_price)")).
 		WithArgs(
 			int64(7), "openai", []byte(`["gpt-5"]`), service.BillingModeToken, service.PricingCurrencyCNY,
-			nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, "{}", nil, nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(int64(12), time.Time{}, time.Time{}))
 	mock.ExpectCommit()
