@@ -21,6 +21,7 @@ HEALTH_TOKEN_FILE="$TEST_ROOT/health-token"
 PRESERVED_PANEL_URL='http://172.17.0.1:8788'
 OVERRIDE_PANEL_URL='http://172.18.0.1:8788'
 PANEL_TOKEN_CONTAINER_PATH='/run/sub2api-runtime/health-token'
+APPROVED_URL_ALLOWLIST_HOSTS='api.openai.com,api.anthropic.com,api.kimi.com,api.moonshot.ai,api.moonshot.cn,open.bigmodel.cn,api.minimaxi.com,api.minimax.io,opencode.ai,generativelanguage.googleapis.com,cloudcode-pa.googleapis.com,*.openai.azure.com,100.121.157.55:18000'
 CADDY_STARTUP_FILE="$TEST_ROOT/caddy-startup.Caddyfile"
 CADDY_ACTIVE_FILE="$TEST_ROOT/caddy-active.json"
 CADDY_CANDIDATE_FILE="$TEST_ROOT/caddy-candidate.Caddyfile"
@@ -421,6 +422,10 @@ printf '%s\n' \
   "CODEX_TURN_STATE_PANEL_URL=$PRESERVED_PANEL_URL" \
   "CODEX_TURN_STATE_PANEL_TOKEN_FILE=$PANEL_TOKEN_CONTAINER_PATH" \
   'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false' \
+  'SECURITY_URL_ALLOWLIST_ENABLED=false' \
+  'SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false' \
+  'SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=false' \
+  'SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=api.openai.com' \
   'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=legacy-private-key-must-be-removed' \
   'UNRELATED_SETTING=preserved' >"$old_env"
 printf '%s\n' 'volume|sub2api_sub2api_data|/app/data|true' >"$old_mounts"
@@ -517,6 +522,49 @@ assert_panel_configuration_rejected \
   'panel override with a line break' $'http://172.18.0.1:8788\nnext' "$PANEL_TOKEN_CONTAINER_PATH" true
 assert_panel_configuration_rejected \
   'panel token file without a URL' '' "$PANEL_TOKEN_CONTAINER_PATH" true
+
+# A reviewed release may replace the inherited URL policy only when all four
+# settings are supplied together. The exact host list is verified on the
+# candidate before it can be reused or started.
+rm -rf "$(state_path sub2api-green)"
+(
+  export SECURITY_URL_ALLOWLIST_ENABLED=false
+  export SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
+  export SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=true
+  export SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS="$APPROVED_URL_ALLOWLIST_HOSTS"
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+)
+assert_contains "$(state_path sub2api-green)/env" 'SECURITY_URL_ALLOWLIST_ENABLED=false'
+assert_contains "$(state_path sub2api-green)/env" 'SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true'
+assert_contains "$(state_path sub2api-green)/env" 'SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=true'
+assert_contains "$(state_path sub2api-green)/env" "SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=$APPROVED_URL_ALLOWLIST_HOSTS"
+[ "$(grep -c '^SECURITY_URL_ALLOWLIST_' "$(state_path sub2api-green)/env")" -eq 4 ] \
+  || fail 'candidate retained duplicate URL allowlist settings'
+rm -rf "$(state_path sub2api-green)"
+if SECURITY_URL_ALLOWLIST_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'partial URL allowlist override was accepted'
+fi
+assert_contains "$OUTPUT" 'all SECURITY_URL_ALLOWLIST_* release settings must be provided together'
+if (
+  export SECURITY_URL_ALLOWLIST_ENABLED=false
+  export SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
+  export SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=true
+  export SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS='http://100.121.157.55:18000'
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+); then
+  fail 'URL allowlist override accepted a scheme in the host list'
+fi
+assert_contains "$OUTPUT" 'SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS must be a comma-separated host[:port] list'
+if (
+  export SECURITY_URL_ALLOWLIST_ENABLED=false
+  export SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
+  export SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=true
+  export SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS="${APPROVED_URL_ALLOWLIST_HOSTS%18000}18001"
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+); then
+  fail 'URL allowlist override accepted an unreviewed relay port'
+fi
+assert_contains "$OUTPUT" 'SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS does not match the reviewed production policy'
 
 # Enabled upscale releases must invoke the same hardened readiness helper used
 # by secret injection. A healthy container name alone is not sufficient.

@@ -131,6 +131,7 @@ UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=false
 if [ "${UNIFIED_PAYMENT_ENABLED+x}" = x ]; then
   UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=true
 fi
+URL_ALLOWLIST_OVERRIDE_CONFIGURED=false
 
 TEMP_FILES=()
 TEMP_FILE=""
@@ -163,6 +164,21 @@ IMAGE_UPSCALE_ENV_KEYS=(
   IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS IMAGE_UPSCALE_POLL_INTERVAL_MS
   IMAGE_UPSCALE_RETRY_MAX IMAGE_UPSCALE_MAX_CONCURRENT IMAGE_UPSCALE_MAX_QUEUE IMAGE_UPSCALE_MAX_RESULT_BYTES
 )
+URL_ALLOWLIST_ENV_KEYS=(
+  SECURITY_URL_ALLOWLIST_ENABLED
+  SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP
+  SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS
+  SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS
+)
+APPROVED_URL_ALLOWLIST_ENABLED=false
+APPROVED_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
+APPROVED_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=true
+APPROVED_URL_ALLOWLIST_UPSTREAM_HOSTS='api.openai.com,api.anthropic.com,api.kimi.com,api.moonshot.ai,api.moonshot.cn,open.bigmodel.cn,api.minimaxi.com,api.minimax.io,opencode.ai,generativelanguage.googleapis.com,cloudcode-pa.googleapis.com,*.openai.azure.com,100.121.157.55:18000'
+for key in "${URL_ALLOWLIST_ENV_KEYS[@]}"; do
+  if [ "${!key+x}" = x ]; then
+    URL_ALLOWLIST_OVERRIDE_CONFIGURED=true
+  fi
+done
 PAYMENT_VAULT_MOUNT_ARGS=()
 IMAGE_UPSCALE_VAULT_MOUNT_ARGS=()
 
@@ -623,6 +639,83 @@ write_image_upscale_overrides() {
 	done
 }
 
+validate_url_allowlist_runtime() {
+  local key
+  [ "$URL_ALLOWLIST_OVERRIDE_CONFIGURED" = true ] || return 0
+  for key in "${URL_ALLOWLIST_ENV_KEYS[@]}"; do
+    [ "${!key+x}" = x ] \
+      || die "all SECURITY_URL_ALLOWLIST_* release settings must be provided together"
+  done
+  require_bool SECURITY_URL_ALLOWLIST_ENABLED "$SECURITY_URL_ALLOWLIST_ENABLED"
+  require_bool SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP "$SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP"
+  require_bool SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS "$SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS"
+  [ -n "$SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS" ] \
+    || die "SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS must not be empty"
+  python3 - "$SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS" <<'PY' \
+    || die "SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS must be a comma-separated host[:port] list"
+import ipaddress
+import re
+import sys
+
+items = [item.strip() for item in sys.argv[1].split(",")]
+if not items or any(not item for item in items) or len(items) != len(set(items)):
+    raise SystemExit(1)
+for item in items:
+    if any(ch.isspace() for ch in item) or any(ch in item for ch in "/@?#\\") or "://" in item:
+        raise SystemExit(1)
+    host = item
+    port = None
+    if item.count(":") == 1:
+        possible_host, possible_port = item.rsplit(":", 1)
+        if possible_port.isdigit():
+            host, port = possible_host, int(possible_port)
+    elif item.count(":") > 1:
+        raise SystemExit(1)
+    if port is not None and not 1 <= port <= 65535:
+        raise SystemExit(1)
+    candidate = host[2:] if host.startswith("*.") else host
+    if not candidate:
+        raise SystemExit(1)
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        if len(candidate) > 253 or not all(
+            re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+            for label in candidate.split(".")
+        ):
+            raise SystemExit(1)
+PY
+  [ "$SECURITY_URL_ALLOWLIST_ENABLED" = "$APPROVED_URL_ALLOWLIST_ENABLED" ] \
+    || die "SECURITY_URL_ALLOWLIST_ENABLED does not match the reviewed production policy"
+  [ "$SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP" = "$APPROVED_URL_ALLOWLIST_ALLOW_INSECURE_HTTP" ] \
+    || die "SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP does not match the reviewed production policy"
+  [ "$SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS" = "$APPROVED_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS" ] \
+    || die "SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS does not match the reviewed production policy"
+  [ "$SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS" = "$APPROVED_URL_ALLOWLIST_UPSTREAM_HOSTS" ] \
+    || die "SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS does not match the reviewed production policy"
+}
+
+write_url_allowlist_overrides() {
+  local output_file="$1" key
+  [ "$URL_ALLOWLIST_OVERRIDE_CONFIGURED" = true ] || return 0
+  for key in "${URL_ALLOWLIST_ENV_KEYS[@]}"; do
+    printf '%s=%s\n' "$key" "${!key}" >>"$output_file"
+  done
+}
+
+container_matches_url_allowlist_env() {
+  local inspect_env="$1" key expected_value actual_value
+  [ "$URL_ALLOWLIST_OVERRIDE_CONFIGURED" = true ] || return 0
+  for key in "${URL_ALLOWLIST_ENV_KEYS[@]}"; do
+    expected_value="${!key}"
+    actual_value="$(awk -v expected_key="$key" '
+      index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
+      END { if (count != 1) exit 1; print value }
+    ' "$inspect_env")" || return 1
+    [ "$actual_value" = "$expected_value" ] || return 1
+  done
+}
+
 container_matches_unified_payment_env() {
   local inspect_env="$1"
   local key expected_value actual_value
@@ -746,6 +839,7 @@ container_matches_local_compatibility_container() {
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
+  container_matches_url_allowlist_env "$inspect_env" || return 1
   new_temp_file
   inspect_mounts="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}' >"$inspect_mounts"
@@ -865,6 +959,9 @@ make_runtime_env_file() {
 	  CODEX_TURN_STATE_PANEL_URL|CODEX_TURN_STATE_PANEL_TOKEN_FILE)
 		[ "$CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES" = true ] && continue
 		;;
+      SECURITY_URL_ALLOWLIST_ENABLED|SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP|SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS|SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS)
+        [ "$URL_ALLOWLIST_OVERRIDE_CONFIGURED" = true ] && continue
+        ;;
 	  SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE)
 		[ "$FIXED_EGRESS_COMPATIBILITY_MODE" = preserve ] || continue
 		;;
@@ -895,6 +992,7 @@ make_runtime_env_file() {
   fi
   write_unified_payment_overrides "$output_file"
 	write_image_upscale_overrides "$output_file"
+  write_url_allowlist_overrides "$output_file"
   printf 'SUB2API_FEISHU_ENABLED=%s\n' "$FEISHU_ENABLED" >>"$output_file"
   RUNTIME_ENV_FILE="$output_file"
 }
@@ -954,6 +1052,7 @@ container_matches_external_runtime() {
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
+  container_matches_url_allowlist_env "$inspect_env" || return 1
   for key in "${EXTERNAL_OVERRIDE_KEYS[@]}"; do
     if [ "$key" = PGSSLROOTCERT ]; then
       expected_value="$CONTAINER_PG_CA_PATH"
@@ -1037,6 +1136,7 @@ container_matches_local_runtime() {
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
+  container_matches_url_allowlist_env "$inspect_env" || return 1
   for key in "${RUNTIME_OVERRIDE_KEYS[@]}"; do
 	case "$key" in
 	  SUB2API_TRAFFIC_STATE_FILE) expected_value="$CONTAINER_TRAFFIC_STATE_PATH" ;;
@@ -1573,6 +1673,7 @@ for command_name in awk chmod cp date docker grep id mktemp mv nsenter perl pyth
   require_cmd "$command_name"
 done
 validate_codex_turn_state_panel_override
+validate_url_allowlist_runtime
 if [ "$CADDY_SWITCH_RECOVERY_ACTION" = restore-after-refund-gate ]; then
   [ "$SERVER_WRAPPER_OWNS_CADDY_RECOVERY" = true ] \
     || die "guarded Caddy restoration requires the server-release coordinator"
