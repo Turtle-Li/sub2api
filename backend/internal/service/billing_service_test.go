@@ -1953,8 +1953,8 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 			input, output, write, read float64
 			consumptionMultiplier      float64
 		}{
-			{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, 0.2e-6, openAISolConsumptionMultiplier},
-			{"gpt-6-luna", 0.1e-6, 0.5e-6, 0.125e-6, 0.01e-6, 1},
+			{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, 0.2e-6, 1.8},
+			{"gpt-6-luna", 0.25e-6, 1.25e-6, 0.3125e-6, 0.025e-6, 1.5},
 		} {
 			t.Run(source+"/"+tc.model, func(t *testing.T) {
 				for _, n := range []int{271999, 272000, 272001} {
@@ -2017,22 +2017,90 @@ func TestNewModelPricingChannelOverridesAndFamilyIsolation(t *testing.T) {
 	require.Equal(t, "gpt-6-luna", normalizeKnownOpenAICodexModel("gpt-6-luna-openai-compact"))
 }
 
-func TestOpenAIConsumptionMultiplierRecognizesSolVariantsOnly(t *testing.T) {
-	for _, model := range []string{
-		"gpt-6-sol",
-		"gpt-6-sol-none",
-		"gpt-6-sol-low",
-		"gpt-6-sol-medium",
-		"gpt-6-sol-high",
-		"gpt-6-sol-xhigh",
-		"gpt-6-sol-max",
-		"openai/gpt-6-sol-openai-compact",
-	} {
-		require.Equal(t, openAISolConsumptionMultiplier, openAIConsumptionMultiplier(model), model)
+func TestOpenAIConsumptionMultiplierRecognizesSelectedModelVariants(t *testing.T) {
+	tests := []struct {
+		multiplier float64
+		models     []string
+	}{
+		{1.8, []string{
+			"gpt-6-sol",
+			"gpt-6-sol-none",
+			"gpt-6-sol-low",
+			"gpt-6-sol-medium",
+			"gpt-6-sol-high",
+			"gpt-6-sol-xhigh",
+			"gpt-6-sol-max",
+			"openai/gpt-6-sol-openai-compact",
+		}},
+		{1.5, []string{
+			"gpt-5.6-luna",
+			"gpt-5.6-luna-high",
+			"openai/gpt-5.6-luna-max",
+			"gpt-6-luna",
+			"gpt-6-luna-none",
+			"gpt-6-luna-xhigh",
+			"openai/gpt-6-luna-openai-compact",
+		}},
+	}
+	for _, tt := range tests {
+		for _, model := range tt.models {
+			require.Equal(t, tt.multiplier, openAIConsumptionMultiplier(model), model)
+		}
 	}
 
-	for _, model := range []string{"gpt-6-luna", "gpt-6-sol-preview", "gpt-6-solitude", "gpt-5.6-sol"} {
+	for _, model := range []string{"gpt-6-luna-preview", "gpt-6-sol-preview", "gpt-6-solitude", "gpt-5.6-sol", "gpt-5.6-terra"} {
 		require.Equal(t, 1.0, openAIConsumptionMultiplier(model), model)
+	}
+}
+
+func TestOpenAILunaModelPricePolicyUsesConfiguredOfficialBaseWithoutDoubleMarkup(t *testing.T) {
+	tests := []struct {
+		model                                    string
+		sourceInput, sourceOutput                float64
+		sourceCacheWrite, sourceCacheRead        float64
+		wantInput, wantOutput                    float64
+		wantCacheWrite, wantCacheRead            float64
+		wantPriorityInput, wantPriorityOutput    float64
+		wantPriorityWrite, wantPriorityCacheRead float64
+	}{
+		{
+			model: "gpt-5.6-luna",
+			// Simulate a pre-existing 2.5x override: the code policy must not multiply it again.
+			sourceInput: 0.5e-6, sourceOutput: 3e-6, sourceCacheWrite: 0.625e-6, sourceCacheRead: 0.05e-6,
+			wantInput: 0.5e-6, wantOutput: 3e-6, wantCacheWrite: 0.625e-6, wantCacheRead: 0.05e-6,
+			wantPriorityInput: 1e-6, wantPriorityOutput: 6e-6, wantPriorityWrite: 1.25e-6, wantPriorityCacheRead: 0.1e-6,
+		},
+		{
+			model: "gpt-6-luna",
+			// Simulate the official 1x catalog currently shipped by the remote mirror.
+			sourceInput: 0.1e-6, sourceOutput: 0.5e-6, sourceCacheWrite: 0.125e-6, sourceCacheRead: 0.01e-6,
+			wantInput: 0.25e-6, wantOutput: 1.25e-6, wantCacheWrite: 0.3125e-6, wantCacheRead: 0.025e-6,
+			wantPriorityInput: 0.5e-6, wantPriorityOutput: 2.5e-6, wantPriorityWrite: 0.625e-6, wantPriorityCacheRead: 0.05e-6,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			catalog := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+				tt.model: {
+					InputCostPerToken:                   tt.sourceInput,
+					OutputCostPerToken:                  tt.sourceOutput,
+					CacheCreationInputTokenCost:         tt.sourceCacheWrite,
+					CacheCreationInputTokenCostExplicit: true,
+					CacheReadInputTokenCost:             tt.sourceCacheRead,
+				},
+			}}
+			pricing, err := NewBillingService(&config.Config{}, catalog).GetModelPricing(tt.model)
+			require.NoError(t, err)
+			require.InDelta(t, tt.wantInput, pricing.InputPricePerToken, 1e-15)
+			require.InDelta(t, tt.wantOutput, pricing.OutputPricePerToken, 1e-15)
+			require.InDelta(t, tt.wantCacheWrite, pricing.CacheCreationPricePerToken, 1e-15)
+			require.InDelta(t, tt.wantCacheRead, pricing.CacheReadPricePerToken, 1e-15)
+			require.InDelta(t, tt.wantPriorityInput, pricing.InputPricePerTokenPriority, 1e-15)
+			require.InDelta(t, tt.wantPriorityOutput, pricing.OutputPricePerTokenPriority, 1e-15)
+			require.InDelta(t, tt.wantPriorityWrite, pricing.CacheCreationPricePerTokenPriority, 1e-15)
+			require.InDelta(t, tt.wantPriorityCacheRead, pricing.CacheReadPricePerTokenPriority, 1e-15)
+		})
 	}
 }
 

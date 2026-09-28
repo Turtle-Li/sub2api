@@ -168,8 +168,19 @@ func TestApplyModelSpecificPricingPolicy_EnforcesOpenAIFastRatios(t *testing.T) 
 	})
 
 	t.Run("gpt-5.6 family keeps 2x", func(t *testing.T) {
-		for _, model := range []string{"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-max", "gpt-5.6-sol-preview"} {
-			got := svc.applyModelSpecificPricingPolicy(model, &ModelPricing{
+		for _, tc := range []struct {
+			model                         string
+			standardInput, standardOutput float64
+			priorityInput, priorityOutput float64
+		}{
+			{model: "gpt-5.6", standardInput: 5e-6, standardOutput: 30e-6, priorityInput: 10e-6, priorityOutput: 60e-6},
+			{model: "gpt-5.6-sol", standardInput: 5e-6, standardOutput: 30e-6, priorityInput: 10e-6, priorityOutput: 60e-6},
+			{model: "gpt-5.6-terra", standardInput: 5e-6, standardOutput: 30e-6, priorityInput: 10e-6, priorityOutput: 60e-6},
+			{model: "gpt-5.6-luna", standardInput: 0.5e-6, standardOutput: 3e-6, priorityInput: 1e-6, priorityOutput: 6e-6},
+			{model: "gpt-5.6-max", standardInput: 5e-6, standardOutput: 30e-6, priorityInput: 10e-6, priorityOutput: 60e-6},
+			{model: "gpt-5.6-sol-preview", standardInput: 5e-6, standardOutput: 30e-6, priorityInput: 10e-6, priorityOutput: 60e-6},
+		} {
+			got := svc.applyModelSpecificPricingPolicy(tc.model, &ModelPricing{
 				InputPricePerToken:             5e-6,
 				InputPricePerTokenPriority:     10e-6,
 				OutputPricePerToken:            30e-6,
@@ -177,8 +188,10 @@ func TestApplyModelSpecificPricingPolicy_EnforcesOpenAIFastRatios(t *testing.T) 
 				CacheReadPricePerToken:         0.5e-6,
 				CacheReadPricePerTokenPriority: 1e-6,
 			})
-			require.InDelta(t, 10e-6, got.InputPricePerTokenPriority, 1e-12, "model %s", model)
-			require.InDelta(t, 60e-6, got.OutputPricePerTokenPriority, 1e-12, "model %s", model)
+			require.InDelta(t, tc.standardInput, got.InputPricePerToken, 1e-12, "model %s", tc.model)
+			require.InDelta(t, tc.standardOutput, got.OutputPricePerToken, 1e-12, "model %s", tc.model)
+			require.InDelta(t, tc.priorityInput, got.InputPricePerTokenPriority, 1e-12, "model %s", tc.model)
+			require.InDelta(t, tc.priorityOutput, got.OutputPricePerTokenPriority, 1e-12, "model %s", tc.model)
 		}
 	})
 
@@ -321,7 +334,7 @@ func TestAstraConsumptionMultiplier_PreservesOfficialPricesAndMatchesWalletDebit
 		require.InDelta(t, float64(tokens.InputTokens)*10e-6, cost.InputCost, 1e-12)
 		require.InDelta(t, float64(tokens.OutputTokens)*50e-6, cost.OutputCost, 1e-12)
 		require.InDelta(t, float64(tokens.CacheReadTokens)*1e-6, cost.CacheReadCost, 1e-12)
-		require.InDelta(t, officialStandardCost*openAIAstraConsumptionMultiplier, cost.TotalCost, 1e-12)
+		require.InDelta(t, officialStandardCost*1.5, cost.TotalCost, 1e-12)
 		require.InDelta(t, cost.TotalCost*groupMultiplier, cost.ActualCost, 1e-12)
 	})
 
@@ -338,7 +351,7 @@ func TestAstraConsumptionMultiplier_PreservesOfficialPricesAndMatchesWalletDebit
 		require.InDelta(t, float64(tokens.InputTokens)*10e-6, cost.InputCost, 1e-12)
 		require.InDelta(t, float64(tokens.OutputTokens)*50e-6, cost.OutputCost, 1e-12)
 		require.InDelta(t, float64(tokens.CacheReadTokens)*1e-6, cost.CacheReadCost, 1e-12)
-		require.InDelta(t, officialStandardCost*openAIAstraConsumptionMultiplier, cost.TotalCost, 1e-12)
+		require.InDelta(t, officialStandardCost*1.5, cost.TotalCost, 1e-12)
 		require.InDelta(t, cost.TotalCost*groupMultiplier, cost.ActualCost, 1e-12)
 
 		apiKey := &APIKey{ID: 2}
@@ -388,7 +401,7 @@ func TestAstraConsumptionMultiplier_PreservesOfficialPricesAndMatchesWalletDebit
 		require.InDelta(t, float64(tokens.InputTokens)*20e-6, cost.InputCost, 1e-12)
 		require.InDelta(t, float64(tokens.OutputTokens)*100e-6, cost.OutputCost, 1e-12)
 		require.InDelta(t, float64(tokens.CacheReadTokens)*2e-6, cost.CacheReadCost, 1e-12)
-		require.InDelta(t, officialStandardCost*2*openAIAstraConsumptionMultiplier, cost.TotalCost, 1e-12)
+		require.InDelta(t, officialStandardCost*2*1.5, cost.TotalCost, 1e-12)
 		require.InDelta(t, cost.TotalCost*groupMultiplier, cost.ActualCost, 1e-12)
 	})
 }
@@ -425,7 +438,7 @@ func TestSolConsumptionMultiplier_PreservesOfficialPricesAndMatchesWalletDebit(t
 			require.InDelta(t, float64(tokens.InputTokens)*2e-6*tt.tierScale, cost.InputCost, 1e-12)
 			require.InDelta(t, float64(tokens.OutputTokens)*10e-6*tt.tierScale, cost.OutputCost, 1e-12)
 			require.InDelta(t, float64(tokens.CacheReadTokens)*0.2e-6*tt.tierScale, cost.CacheReadCost, 1e-12)
-			require.InDelta(t, officialStandardCost*tt.tierScale*openAISolConsumptionMultiplier, cost.TotalCost, 1e-12)
+			require.InDelta(t, officialStandardCost*tt.tierScale*1.8, cost.TotalCost, 1e-12)
 			require.InDelta(t, cost.TotalCost*groupMultiplier, cost.ActualCost, 1e-12)
 		})
 	}

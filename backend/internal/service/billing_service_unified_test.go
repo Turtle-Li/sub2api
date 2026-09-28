@@ -169,6 +169,58 @@ func TestCalculateCostUnified_ImageMode(t *testing.T) {
 	require.Equal(t, string(BillingModeImage), cost.BillingMode)
 }
 
+func TestCalculateCostUnified_LunaHiddenMultiplierAppliesToNonTokenModes(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+
+	for _, mode := range []BillingMode{BillingModePerRequest, BillingModeImage, BillingModeVideo} {
+		t.Run(string(mode), func(t *testing.T) {
+			cost, err := bs.CalculateCostUnified(CostInput{
+				Ctx:            context.Background(),
+				Model:          "gpt-5.6-luna",
+				RequestCount:   2,
+				RateMultiplier: 0.4,
+				Resolver:       resolver,
+				Resolved: &ResolvedPricing{
+					Mode:                   mode,
+					DefaultPerRequestPrice: 0.10,
+				},
+			})
+			require.NoError(t, err)
+			require.InDelta(t, 0.30, cost.TotalCost, 1e-12)
+			require.InDelta(t, 0.12, cost.ActualCost, 1e-12)
+		})
+	}
+
+	for _, bypass := range []struct {
+		name       string
+		reference  bool
+		suppressUI bool
+	}{
+		{name: "official reference", reference: true},
+		{name: "model price display", suppressUI: true},
+	} {
+		t.Run(bypass.name, func(t *testing.T) {
+			cost, err := bs.CalculateCostUnified(CostInput{
+				Ctx:                       context.Background(),
+				Model:                     "gpt-6-luna",
+				RequestCount:              2,
+				RateMultiplier:            0.4,
+				Resolver:                  resolver,
+				referenceModelCost:        bypass.reference,
+				suppressHiddenConsumption: bypass.suppressUI,
+				Resolved: &ResolvedPricing{
+					Mode:                   BillingModePerRequest,
+					DefaultPerRequestPrice: 0.10,
+				},
+			})
+			require.NoError(t, err)
+			require.InDelta(t, 0.20, cost.TotalCost, 1e-12)
+			require.InDelta(t, 0.08, cost.ActualCost, 1e-12)
+		})
+	}
+}
+
 func channelTimeResolvedForTest(base *ModelPricing, intervals []PricingInterval) *ResolvedPricing {
 	return &ResolvedPricing{
 		Mode:        BillingModeToken,

@@ -209,11 +209,6 @@ type CostBreakdown struct {
 	LongContextBillingApplied bool
 }
 
-const (
-	openAIAstraConsumptionMultiplier = 1.5
-	openAISolConsumptionMultiplier   = 1.8
-)
-
 func applyCostBreakdownMultiplier(cost *CostBreakdown, multiplier float64) {
 	if cost == nil || multiplier == 1 {
 		return
@@ -226,17 +221,6 @@ func applyCostBreakdownMultiplier(cost *CostBreakdown, multiplier float64) {
 	cost.CacheReadCost *= multiplier
 	cost.TotalCost *= multiplier
 	cost.ActualCost *= multiplier
-}
-
-func openAIConsumptionMultiplier(model string) float64 {
-	switch {
-	case isOpenAIGPT6AstraModel(model):
-		return openAIAstraConsumptionMultiplier
-	case normalizeKnownOpenAICodexModel(model) == "gpt-6-sol":
-		return openAISolConsumptionMultiplier
-	default:
-		return 1
-	}
 }
 
 // applyOpenAIConsumptionMultiplier increases selected models' recorded
@@ -1478,7 +1462,8 @@ type CostInput struct {
 	Resolver                  *ModelPricingResolver // 定价解析器
 	Resolved                  *ResolvedPricing      // 可选：预解析的定价结果（避免重复 Resolve 调用）
 	LongContextBillingEnabled *bool
-	referenceModelCost        bool // 账号成本等内部参考口径：保留官方价，不叠加客户消耗调整
+	referenceModelCost        bool // 账号成本等内部参考口径：使用官方价，不叠加客户消耗调整
+	suppressHiddenConsumption bool // 定价展示口径：保留模型售价，但不暴露隐藏结算倍率
 }
 
 // CalculateCostUnified 统一计费入口，支持三种计费模式。
@@ -1499,9 +1484,12 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (result *CostBrea
 		if err != nil {
 			return nil, err
 		}
+		if input.referenceModelCost {
+			pricing = applyOpenAIConfiguredModelPrice(input.Model, pricing, false)
+		}
 		breakdown := s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongContextBilling)
 		applyCostBreakdownMultiplier(breakdown, reasoningEffortBillingMultiplier(input.ReasoningEffort, pricing.ReasoningEffortMultipliers))
-		if !input.referenceModelCost {
+		if !input.referenceModelCost && !input.suppressHiddenConsumption {
 			applyOpenAIConsumptionMultiplier(input.Model, breakdown)
 		}
 		return breakdown, nil
@@ -1538,6 +1526,9 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (result *CostBrea
 		if breakdown.BillingMode == "" {
 			breakdown.BillingMode = string(BillingModeToken)
 		}
+		if !input.referenceModelCost && !input.suppressHiddenConsumption {
+			applyOpenAIConsumptionMultiplier(input.Model, breakdown)
+		}
 	}
 	return breakdown, err
 }
@@ -1570,9 +1561,12 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 		pricingAt = timezone.Now()
 	}
 
-	// 默认价卡（Source=LiteLLM）应用 DeepSeek 官方价强制覆盖（幂等，GetModelPricing
-	// 内部已强制过）；分组/渠道自定义定价保留运营者配置，不强制覆盖官方价。
+	// 默认价卡（Source=LiteLLM）应用代码级默认价格策略（幂等，GetModelPricing
+	// 内部已应用过）；分组/渠道自定义定价保留运营者配置，不强制覆盖。
 	pricing = s.applyModelSpecificPricingPolicyEx(input.Model, pricing, resolved.Source == PricingSourceLiteLLM, pricingAt)
+	if input.referenceModelCost {
+		pricing = applyOpenAIConfiguredModelPrice(input.Model, pricing, false)
+	}
 
 	// DeepSeek 模型默认价卡按官方峰谷口径调整：高峰时段（01:00–04:00 与
 	// 06:00–10:00 UTC，仅工作日；北京时间周末全天低谷）按 2× 低谷价计费。
@@ -1594,9 +1588,6 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 	breakdown := s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongCtx)
 	applyCostBreakdownMultiplier(breakdown, resolvedChannelTimeMultiplier(resolved, input.PricingAt))
 	applyCostBreakdownMultiplier(breakdown, reasoningEffortBillingMultiplier(input.ReasoningEffort, pricing.ReasoningEffortMultipliers))
-	if !input.referenceModelCost {
-		applyOpenAIConsumptionMultiplier(input.Model, breakdown)
-	}
 	return breakdown, nil
 }
 
@@ -1846,9 +1837,9 @@ func (s *BillingService) calculateCostInternalWithPolicy(
 	return breakdown, nil
 }
 
-// applyModelSpecificPricingPolicy 对目录数据做模型特定修正：DeepSeek 官方价
-// 强制覆盖；GPT-5.6 缺 cache_write 价时按官方规则补 1.25 倍输入价；Fast/priority
-// 档按业务倍率改写（本地/远程目录的 priority 价可能沿用官方旧口径）。长上下文
+// applyModelSpecificPricingPolicy 对目录数据做模型特定修正：代码配置的模型售价与
+// DeepSeek 官方价强制覆盖；GPT-5.6 缺 cache_write 价时按官方规则补 1.25 倍输入价；
+// Fast/priority 档按业务倍率改写（本地/远程目录的 priority 价可能沿用官方旧口径）。长上下文
 // 阶梯不在此处补齐：一律由目录数据（above_XXXk 折算或显式 long_context_* 字段）
 // 驱动。强制 DeepSeek 官方价且无显式计费时点（pro→Flash 切换按当前时刻判定），
 // 供无既有时点的策略修正场景与测试使用；计费/展示主路径分别经
@@ -1859,11 +1850,11 @@ func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *
 }
 
 // applyModelSpecificPricingPolicyEx 与 applyModelSpecificPricingPolicy 相同，
-// 但由调用方控制是否强制 DeepSeek 官方价（forceDeepSeekRates），并显式传入
+// 但由调用方控制是否应用代码级默认价格策略（applyDefaultRatePolicy），并显式传入
 // 计费时点 pricingAt（零值表示按当前时刻判定）。
 // calculateTokenCost 对分组/渠道自定义定价（Source 非 LiteLLM）传 false：
-// 强制覆盖会把运营者配置的售价盖回官方价，违反自定义定价语义。
-func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing *ModelPricing, forceDeepSeekRates bool, pricingAt time.Time) *ModelPricing {
+// 代码级覆盖会把运营者配置的售价改写，违反自定义定价语义。
+func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing *ModelPricing, applyDefaultRatePolicy bool, pricingAt time.Time) *ModelPricing {
 	if pricing == nil {
 		return nil
 	}
@@ -1877,7 +1868,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	// Flash 三档价计费；历史时点（早于切换时刻）仍按 Pro 价。
 	// 高峰时段倍率不在本函数处理，由 calculateTokenCost 按 deepseekPeakMultiplierAt
 	// 对默认价卡另行叠加（分组/渠道自定义定价不叠加）。
-	if forceDeepSeekRates && isDeepSeekModel(model) {
+	if applyDefaultRatePolicy && isDeepSeekModel(model) {
 		cloned := *pricing
 		if isDeepSeekProModel(model) && !deepseekProBilledAsFlash(pricingAt) {
 			cloned.InputPricePerToken = deepseekProOffPeakInputPrice
@@ -1892,6 +1883,9 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 			cloned.CacheReadPricePerToken = deepseekFlashOffPeakCacheRead
 		}
 		return &cloned
+	}
+	if applyDefaultRatePolicy {
+		pricing = applyOpenAIConfiguredModelPrice(model, pricing, true)
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
 	usesCacheWritePremium := isOpenAIGPT56Model(normalized) || openai.IsGPT6SolOrLunaModelSpelling(normalized)

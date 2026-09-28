@@ -100,6 +100,44 @@ func TestResolveContextPricingSchedule_GPT6AstraOfficialScheduleKeepsReferencePr
 		testPtrFloat64(20e-6), testPtrFloat64(75e-6), testPtrFloat64(25e-6), testPtrFloat64(2e-6))
 }
 
+func TestResolveContextPricingSchedule_LunaSeparatesOfficialModelAndHiddenPrices(t *testing.T) {
+	catalog := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gpt-5.6-luna": {
+			InputCostPerToken:                   0.2e-6,
+			OutputCostPerToken:                  1.2e-6,
+			CacheCreationInputTokenCost:         0.25e-6,
+			CacheCreationInputTokenCostExplicit: true,
+			CacheReadInputTokenCost:             0.02e-6,
+		},
+	}}
+	bs := NewBillingService(&config.Config{}, catalog)
+	resolver := NewModelPricingResolver(nil, bs)
+
+	official, err := bs.ResolveContextPricingSchedule(context.Background(), resolver, ContextPricingScheduleInput{
+		Model:    "gpt-5.6-luna",
+		Platform: PlatformOpenAI,
+	})
+	require.NoError(t, err)
+	require.Len(t, official.Tiers, 1)
+	requireTier(t, official.Tiers[0], 0, nil, "",
+		testPtrFloat64(0.2e-6), testPtrFloat64(1.2e-6), testPtrFloat64(0.25e-6), testPtrFloat64(0.02e-6))
+
+	modelPrice, err := bs.ResolveContextPricingSchedule(context.Background(), resolver, ContextPricingScheduleInput{
+		Model:    "gpt-5.6-luna",
+		Group:    enabledGroup(PlatformOpenAI),
+		Platform: PlatformOpenAI,
+	})
+	require.NoError(t, err)
+	require.Len(t, modelPrice.Tiers, 1)
+	requireTier(t, modelPrice.Tiers[0], 0, nil, "",
+		testPtrFloat64(0.5e-6), testPtrFloat64(3e-6), testPtrFloat64(0.625e-6), testPtrFloat64(0.05e-6))
+
+	billed, err := bs.CalculateCost("gpt-5.6-luna", UsageTokens{InputTokens: 1_000_000}, 1)
+	require.NoError(t, err)
+	require.InDelta(t, 0.5, billed.InputCost, 1e-12)
+	require.InDelta(t, 0.75, billed.TotalCost, 1e-12)
+}
+
 func scheduleScenarios() []scheduleScenario {
 	p := testPtrFloat64
 	return []scheduleScenario{

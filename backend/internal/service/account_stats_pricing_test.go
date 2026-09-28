@@ -517,10 +517,13 @@ func TestTryModelFilePricing_HiddenConsumptionKeepsOfficialReferenceCost(t *test
 	for _, model := range []struct {
 		name, id                      string
 		inputPrice, outputPrice, read float64
-		consumptionMultiplier         float64
+		modelPriceMultiplier          float64
+		hiddenConsumptionMultiplier   float64
 	}{
-		{name: "astra", id: "gpt-6-astra", inputPrice: 10e-6, outputPrice: 50e-6, read: 1e-6, consumptionMultiplier: openAIAstraConsumptionMultiplier},
-		{name: "sol", id: "gpt-6-sol", inputPrice: 2e-6, outputPrice: 10e-6, read: 0.2e-6, consumptionMultiplier: openAISolConsumptionMultiplier},
+		{name: "astra", id: "gpt-6-astra", inputPrice: 10e-6, outputPrice: 50e-6, read: 1e-6, modelPriceMultiplier: 1, hiddenConsumptionMultiplier: 1.5},
+		{name: "sol", id: "gpt-6-sol", inputPrice: 2e-6, outputPrice: 10e-6, read: 0.2e-6, modelPriceMultiplier: 1, hiddenConsumptionMultiplier: 1.8},
+		{name: "gpt-5.6-luna", id: "gpt-5.6-luna", inputPrice: 0.2e-6, outputPrice: 1.2e-6, read: 0.02e-6, modelPriceMultiplier: 2.5, hiddenConsumptionMultiplier: 1.5},
+		{name: "gpt-6-luna", id: "gpt-6-luna", inputPrice: 0.1e-6, outputPrice: 0.5e-6, read: 0.01e-6, modelPriceMultiplier: 2.5, hiddenConsumptionMultiplier: 1.5},
 	} {
 		t.Run(model.name, func(t *testing.T) {
 			officialStandardCost := float64(tokens.InputTokens)*model.inputPrice +
@@ -541,7 +544,7 @@ func TestTryModelFilePricing_HiddenConsumptionKeepsOfficialReferenceCost(t *test
 
 					retailCost, err := bs.CalculateCostWithServiceTier(model.id, tokens, 1, tier.serviceTier)
 					require.NoError(t, err)
-					require.InDelta(t, *referenceCost*model.consumptionMultiplier, retailCost.TotalCost, 1e-12)
+					require.InDelta(t, *referenceCost*model.modelPriceMultiplier*model.hiddenConsumptionMultiplier, retailCost.TotalCost, 1e-12)
 				})
 			}
 		})
