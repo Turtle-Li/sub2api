@@ -193,6 +193,34 @@ print or replace surrounding configuration. The sidecar helper never accepts a
 raw secret and never replaces an existing sidecar outside the maintenance
 lifecycle.
 
+## Resolution eligibility and production routing
+
+Upscale eligibility is model-independent. A literal `2K` or `4K` request is
+accepted for every image model. After generation, Sub2 decodes every returned
+image and compares its real pixel dimensions with the requested tier. Images
+that already satisfy the tier pass through unchanged; undersized images enter
+the shared Mini scheduler. Adding a future model such as `image-3` must not
+require an upscale allowlist change.
+
+The production hostname `hcmac-mini.tailfc4ed7.ts.net` depends on Tailnet split
+DNS. The production host must keep Tailscale DNS acceptance enabled and both the
+host and application container must resolve that hostname to the Tailnet peer,
+not a public DNS answer. This setting does not enable an exit node or a system
+proxy. After host network or Tailscale changes, verify resolution and the Mini
+`/health` endpoint from inside the active application container before treating
+2K/4K image generation as available.
+
+On 2026-09-29, production initially timed out during Mini submission because
+the host had Tailscale DNS acceptance disabled and the hostname resolved through
+public DNS. Enabling split DNS restored direct Tailnet routing. Exact commit
+`c1202ddcadbea710211c7420581ec72191a649a8` then passed a real concurrent probe
+with `gpt-image-2.5-sunburst`: one synchronous `n=2`, `2K` request returned two
+stored-URL PNGs in 66.976 seconds, while a synchronous `n=1`, `2K` request
+started ten seconds later and returned independently in 37.624 seconds. All
+three files decoded as `2048x3072`. The multi-image response carried root-level
+`size: "2048x3072"`; no response contained inline base64 after successful
+storage offload. These timings are an observed probe, not an SLA.
+
 ## Validation and rollback
 
 Release gates require unit/race tests, migration tests, shell syntax and runtime

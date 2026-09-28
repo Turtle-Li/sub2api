@@ -397,6 +397,17 @@ application/Caddy 5xx or fatal log entry in the probe window.
   initial TLS issuance, www static assets and public API smoke passed.
 - Background/queue ownership, DNS and production traffic have transferred to
   AWS. Database backup, restricted NAS copy and isolated restore evidence pass.
+- Office Mini high-resolution image generation requires Tailnet split DNS on
+  the production host. On 2026-09-29, a real probe exposed that Tailscale DNS
+  acceptance was disabled: the Mini hostname resolved through public DNS and
+  submissions timed out. `tailscale set --accept-dns=true` restored the
+  Tailnet answer for both the host and application container without enabling
+  an exit node or system proxy. Container `/health` then passed, followed by a
+  concurrent real `gpt-image-2.5-sunburst` probe: `n=2` at 2K returned two
+  `2048x3072` stored images in 66.976 seconds, and an `n=1` 2K request started
+  ten seconds later returned independently in 37.624 seconds. Preserve this
+  split-DNS setting and recheck Mini resolution from the active container after
+  host network or Tailscale changes.
 - Owner-directed Azure retirement completed on 2026-09-25. Subscription
   `6835deb1-678b-4067-b516-b57f80e14e25` formerly owned `sub2_group`, `jp_group`, and
   `westus_group`; subscription `65c9db87-f353-427d-80cc-af2953c8761b` formerly owned
