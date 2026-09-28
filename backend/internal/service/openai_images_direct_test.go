@@ -10,8 +10,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -19,6 +21,27 @@ import (
 func directImagesTestAccount() *Account {
 	return &Account{ID: 35, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"}}
+}
+
+func forwardCodexDirectImagesForTest(
+	t *testing.T,
+	svc *OpenAIGatewayService,
+	c *gin.Context,
+	parsed *OpenAIImagesRequest,
+) (*OpenAIForwardResult, error) {
+	t.Helper()
+	return svc.forwardOpenAIImagesOAuthDirect(
+		context.Background(),
+		c,
+		directImagesTestAccount(),
+		parsed,
+		"",
+		parsed.Model,
+		parsed.Model,
+		time.Now(),
+		context.Background(),
+		"test-token",
+	)
 }
 
 func TestCodexDirectImagesRouting(t *testing.T) {
@@ -139,7 +162,7 @@ func TestCodexDirectImagesMultipleOutputs(t *testing.T) {
 			svc := newOpenAIImagesTestService(upstream)
 			parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 			require.NoError(t, err)
-			result, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+			result, err := forwardCodexDirectImagesForTest(t, svc, c, parsed)
 			require.NoError(t, err)
 			require.Equal(t, 2, result.ImageCount)
 			require.Equal(t, 40, result.Usage.ImageOutputTokens)
@@ -186,7 +209,7 @@ func TestCodexDirectImagesMultipleOutputsUpscaleByActualDimensions(t *testing.T)
 	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 	require.NoError(t, err)
 
-	forwarded, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	forwarded, err := forwardCodexDirectImagesForTest(t, svc, c, parsed)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), upscaleCalls.Load())
 	require.Equal(t, 2, forwarded.ImageCount)
@@ -245,7 +268,7 @@ func TestCodexDirectImagesMultipleOutputsRemainAtomicWhenSecondUpscaleFails(t *t
 	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 	require.NoError(t, err)
 
-	forwarded, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	forwarded, err := forwardCodexDirectImagesForTest(t, svc, c, parsed)
 	require.Error(t, err)
 	require.Nil(t, forwarded)
 	require.Equal(t, int32(2), upscaleCalls.Load())
@@ -278,7 +301,7 @@ func TestCodexDirectImagesHighResolutionRejectsMissingOutputBeforeUpscale(t *tes
 	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 	require.NoError(t, err)
 
-	forwarded, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	forwarded, err := forwardCodexDirectImagesForTest(t, svc, c, parsed)
 	require.Error(t, err)
 	require.Nil(t, forwarded)
 	require.Zero(t, upscaleCalls.Load(), "cardinality validation must run before Mini")

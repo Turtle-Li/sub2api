@@ -19,6 +19,11 @@ pixel-dimension values keep their existing provider path.
 - Provider request rewriting is a separate compatibility concern. Known Gemini
   2.5 providers receive `imageSize=1K`; unknown or future models retain the
   requested native tier and still pass through the same actual-dimension check.
+- Codex OAuth non-streaming requests use the native Images transport only for
+  `n=1`. Non-streaming multi-image requests use the Responses transport, which
+  requests parallel image tool calls, fills any shortfall before returning,
+  and preserves all-or-nothing response semantics. Streaming keeps its existing
+  transport contract. This rule does not affect Mini eligibility.
 - Batch JSONL preserves an explicit supported aspect ratio and either the native
   requested tier or the provider-compatible `1K` source tier.
 - Billing and balance holds retain the originally requested `2K`/`4K` tier.

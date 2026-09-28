@@ -2041,7 +2041,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			return nil, imageUpscaleError("UNAVAILABLE", http.StatusServiceUnavailable, false, nil)
 		}
 	}
-	direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)
+	// The native Codex Images endpoint currently emits one final image for a
+	// non-streaming request even when n > 1. Route those multi-image requests
+	// through the Responses transport instead: it explicitly asks for parallel
+	// image tool calls and already owns shortfall filling plus atomic response
+	// assembly. Streaming keeps its existing transport contract. This is a
+	// transport capability decision only; Mini eligibility remains based on the
+	// requested tier and the decoded output dimensions.
+	direct := (parsed.N == 1 || parsed.Stream) && usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)
 	beginUpstreamResponseModelObservation(c)
 	SetOpsUpstreamModel(c, upstreamModel)
 	logger.LegacyPrintf(

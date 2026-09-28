@@ -922,6 +922,39 @@ func TestOpenAIGatewayServiceForwardImages_OAuthRequestsParallelToolCallsAndRetu
 	require.Equal(t, strings.Repeat("x", 64), result.RequestID)
 }
 
+func TestOpenAIGatewayServiceForwardImages_CodexDirectModelUsesResponsesForMultipleImages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2.5-sunburst","prompt":"draw two models","size":"1K","n":2}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	responseBody := "data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000000,\"tool_usage\":{\"image_gen\":{\"input_tokens\":20,\"output_tokens\":40,\"output_tokens_details\":{\"image_tokens\":40},\"images\":2}},\"output\":[{\"type\":\"image_generation_call\",\"result\":\"aW1hZ2UtMQ==\",\"size\":\"1024x1024\"},{\"type\":\"image_generation_call\",\"result\":\"aW1hZ2UtMg==\",\"size\":\"1024x1024\"}]}}\n\n" +
+		"data: [DONE]\n\n"
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	result, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	require.NoError(t, err)
+	require.Equal(t, 2, result.ImageCount)
+	require.Equal(t, chatgptCodexURL, upstream.lastReq.URL.String())
+	require.Equal(t, "gpt-image-2.5-sunburst", gjson.GetBytes(upstream.lastBody, "tools.0.model").String())
+	require.True(t, gjson.GetBytes(upstream.lastBody, "parallel_tool_calls").Bool())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tools.0.n").Exists())
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "instructions").String(), "exactly 2 final images")
+	require.Len(t, gjson.GetBytes(rec.Body.Bytes(), "data").Array(), 2)
+}
+
 func TestOpenAIGatewayServiceForwardImages_OAuthFillsShortfallWithoutBillingRetryInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-image-1","prompt":"draw three cats","n":3}`)
