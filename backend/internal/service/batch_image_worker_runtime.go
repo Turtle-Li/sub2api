@@ -37,12 +37,9 @@ func ProvideBatchImageWorkerRuntime(
 ) *BatchImageWorkerRuntime {
 	upscaler := SharedImageUpscaleService(cfg)
 	upscaleStore, _ := deliveryStore.(BatchImageUpscaleObjectStore)
-	highResolutionFinalizeConcurrency := 1
+	highResolutionFinalizeConcurrency := batchImageHighResolutionFinalizeConcurrency(cfg)
 	highResolutionFinalizeRequeue := defaultBatchImageHighResolutionFinalizeRequeue
 	if cfg != nil {
-		if cfg.BatchImage.HighResolutionFinalizeConcurrency > 0 {
-			highResolutionFinalizeConcurrency = cfg.BatchImage.HighResolutionFinalizeConcurrency
-		}
 		if cfg.BatchImage.HighResolutionFinalizeRequeueSeconds > 0 {
 			highResolutionFinalizeRequeue = time.Duration(cfg.BatchImage.HighResolutionFinalizeRequeueSeconds) * time.Second
 		}
@@ -95,6 +92,22 @@ func ProvideBatchImageWorkerRuntime(
 	}
 	runtime.Start()
 	return runtime
+}
+
+func batchImageHighResolutionFinalizeConcurrency(cfg *config.Config) int {
+	desired := 1
+	workerConcurrency := 1
+	if cfg != nil {
+		if cfg.BatchImage.HighResolutionFinalizeConcurrency > 0 {
+			desired = cfg.BatchImage.HighResolutionFinalizeConcurrency
+		}
+		if cfg.BatchImage.WorkerConcurrency > 0 {
+			workerConcurrency = min(cfg.BatchImage.WorkerConcurrency, config.BatchImageWorkerConcurrencyMax)
+		}
+	}
+	// Keep one worker available for provider polling, 1K jobs and settlement
+	// whenever the runtime has more than one worker.
+	return min(desired, max(1, workerConcurrency-1))
 }
 
 func (r *BatchImageWorkerRuntime) Start() {

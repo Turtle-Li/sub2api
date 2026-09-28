@@ -59,12 +59,30 @@ type ImageUpscaleResult struct {
 
 type imageUpscaleAPIKeyLoader func(context.Context) ([]byte, error)
 
+type imageUpscaleWorkClass uint8
+
+const (
+	imageUpscaleWorkInteractive imageUpscaleWorkClass = iota
+	imageUpscaleWorkBatch
+	imageUpscaleInteractiveBurst = 2
+)
+
+type imageUpscaleWaiter struct {
+	ready   chan struct{}
+	class   imageUpscaleWorkClass
+	granted bool
+}
+
 type ImageUpscaleService struct {
-	cfg        config.ImageUpscaleConfig
-	httpClient *http.Client
-	loadAPIKey imageUpscaleAPIKeyLoader
-	slots      chan struct{}
-	waiting    atomic.Int64
+	cfg              config.ImageUpscaleConfig
+	httpClient       *http.Client
+	loadAPIKey       imageUpscaleAPIKeyLoader
+	slots            chan struct{}
+	waiting          atomic.Int64
+	queueMu          sync.Mutex
+	interactiveQueue []*imageUpscaleWaiter
+	batchQueue       []*imageUpscaleWaiter
+	interactiveBurst int
 }
 
 var sharedImageUpscalers = struct {
@@ -113,10 +131,7 @@ func (s *ImageUpscaleService) Active() bool {
 	return s != nil && s.cfg.Active() && s.loadAPIKey != nil && s.httpClient != nil
 }
 
-func Image25UpscaleScale(model, sizeTier string) (int, bool) {
-	if !isImage25UpscaleModel(model) {
-		return 0, false
-	}
+func RequestedImageUpscaleScale(sizeTier string) (int, bool) {
 	switch strings.ToUpper(strings.TrimSpace(sizeTier)) {
 	case "2K":
 		return 2, true
@@ -127,12 +142,40 @@ func Image25UpscaleScale(model, sizeTier string) (int, bool) {
 	}
 }
 
-func isImage25UpscaleModel(model string) bool {
+// shouldForceProviderImageSize1K is a provider-request capability check, not
+// an upscale eligibility check. Unknown and future models keep their native
+// request unchanged, then the model-independent response postcondition decides
+// whether Mini is needed from the actual returned dimensions.
+func shouldForceProviderImageSize1K(model string) bool {
 	switch strings.ToLower(strings.TrimSpace(model)) {
 	case "gemini-2.5-flash-image", "gemini-2.5-flash-image-preview":
 		return true
 	default:
 		return false
+	}
+}
+
+func imageUpscaleScaleForDimensions(requestedSize string, width, height int) (int, bool) {
+	if width <= 0 || height <= 0 {
+		return 0, false
+	}
+	longEdge := max(width, height)
+	switch strings.ToUpper(strings.TrimSpace(requestedSize)) {
+	case ImageBillingSize2K:
+		if longEdge >= 2048 {
+			return 0, false
+		}
+		return 2, true
+	case ImageBillingSize4K:
+		if longEdge >= 3840 {
+			return 0, false
+		}
+		if longEdge >= 1920 {
+			return 2, true
+		}
+		return 4, true
+	default:
+		return 0, false
 	}
 }
 
@@ -145,21 +188,8 @@ func isImage25SupportedAspectRatio(aspectRatio string) bool {
 	}
 }
 
-func image25RequestedUpscaleScale(model, requestedSize string) (int, bool) {
-	_, scale, ok := image25RequestedUpscalePlan(model, requestedSize)
-	return scale, ok
-}
-
-func image25RequestedUpscalePlan(model, requestedSize string) (string, int, bool) {
-	scale, ok := Image25UpscaleScale(model, requestedSize)
-	if !ok {
-		return "", 0, false
-	}
-	return ImageBillingSize1K, scale, true
-}
-
 func (s *ImageUpscaleService) Upscale(ctx context.Context, source []byte, scale int) (*ImageUpscaleResult, error) {
-	return s.upscaleWithSourceLoader(ctx, scale, false, func(context.Context) ([]byte, error) {
+	return s.upscaleWithSourceLoader(ctx, scale, false, imageUpscaleWorkInteractive, func(context.Context) ([]byte, error) {
 		return source, nil
 	})
 }
@@ -169,7 +199,17 @@ func (s *ImageUpscaleService) UpscaleBase64(ctx context.Context, encoded string,
 	if err != nil {
 		return nil, err
 	}
-	return s.upscaleWithSourceLoader(ctx, scale, true, func(context.Context) ([]byte, error) {
+	return s.upscaleWithSourceLoader(ctx, scale, true, imageUpscaleWorkInteractive, func(context.Context) ([]byte, error) {
+		return decodePreparedUpscaleSourceBase64(normalized)
+	})
+}
+
+func (s *ImageUpscaleService) UpscaleBase64Batch(ctx context.Context, encoded string, scale int) (*ImageUpscaleResult, error) {
+	normalized, err := prepareUpscaleSourceBase64(encoded, imageUpscaleMaxSourceBytes)
+	if err != nil {
+		return nil, err
+	}
+	return s.upscaleWithSourceLoader(ctx, scale, true, imageUpscaleWorkBatch, func(context.Context) ([]byte, error) {
 		return decodePreparedUpscaleSourceBase64(normalized)
 	})
 }
@@ -179,10 +219,32 @@ func (s *ImageUpscaleService) upscaleBase64FromLoader(
 	scale int,
 	loader func(context.Context) (string, error),
 ) (*ImageUpscaleResult, error) {
-	return s.upscaleWithSourceLoader(ctx, scale, true, func(loadCtx context.Context) ([]byte, error) {
+	return s.upscaleWithSourceLoader(ctx, scale, true, imageUpscaleWorkInteractive, func(loadCtx context.Context) ([]byte, error) {
 		if loader == nil {
 			return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, nil)
 		}
+		encoded, err := loader(loadCtx)
+		if err != nil {
+			return nil, err
+		}
+		normalized, err := prepareUpscaleSourceBase64(encoded, imageUpscaleMaxSourceBytes)
+		if err != nil {
+			return nil, err
+		}
+		return decodePreparedUpscaleSourceBase64(normalized)
+	})
+}
+
+func (s *ImageUpscaleService) upscaleBase64FromLoaderToRequestedSize(
+	ctx context.Context,
+	requestedSize string,
+	class imageUpscaleWorkClass,
+	loader func(context.Context) (string, error),
+) (*ImageUpscaleResult, error) {
+	if loader == nil {
+		return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, nil)
+	}
+	return s.upscaleToRequestedSizeWithSourceLoader(ctx, requestedSize, class, func(loadCtx context.Context) ([]byte, error) {
 		encoded, err := loader(loadCtx)
 		if err != nil {
 			return nil, err
@@ -199,6 +261,7 @@ func (s *ImageUpscaleService) upscaleWithSourceLoader(
 	ctx context.Context,
 	scale int,
 	clearSource bool,
+	class imageUpscaleWorkClass,
 	loader func(context.Context) ([]byte, error),
 ) (*ImageUpscaleResult, error) {
 	if !s.Active() {
@@ -209,10 +272,10 @@ func (s *ImageUpscaleService) upscaleWithSourceLoader(
 	}
 	jobCtx, cancel := imageUpscaleLifecycleContext(ctx, s.cfg)
 	defer cancel()
-	if err := s.acquire(jobCtx); err != nil {
+	if err := s.acquireClass(jobCtx, class); err != nil {
 		return nil, err
 	}
-	defer func() { <-s.slots }()
+	defer s.release()
 	if loader == nil {
 		return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, nil)
 	}
@@ -223,6 +286,52 @@ func (s *ImageUpscaleService) upscaleWithSourceLoader(
 	if clearSource {
 		defer clearBytes(source)
 	}
+	return s.upscaleLoadedSource(jobCtx, source, scale)
+}
+
+func (s *ImageUpscaleService) upscaleToRequestedSizeWithSourceLoader(
+	ctx context.Context,
+	requestedSize string,
+	class imageUpscaleWorkClass,
+	loader func(context.Context) ([]byte, error),
+) (*ImageUpscaleResult, error) {
+	if !s.Active() {
+		return nil, imageUpscaleError("UNAVAILABLE", 0, false, nil)
+	}
+	if _, ok := RequestedImageUpscaleScale(requestedSize); !ok {
+		return nil, imageUpscaleError("INVALID_SCALE", 0, false, nil)
+	}
+	jobCtx, cancel := imageUpscaleLifecycleContext(ctx, s.cfg)
+	defer cancel()
+	if err := s.acquireClass(jobCtx, class); err != nil {
+		return nil, err
+	}
+	defer s.release()
+	if loader == nil {
+		return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, nil)
+	}
+	source, err := loader(jobCtx)
+	if err != nil {
+		return nil, err
+	}
+	if len(source) > imageUpscaleMaxSourceBytes {
+		clearBytes(source)
+		return nil, imageUpscaleError("SOURCE_LIMIT_EXCEEDED", 0, false, errors.New("source image exceeds byte limit"))
+	}
+	width, height, mimeType, err := decodeUpscaleImageConfig(source)
+	if err != nil {
+		clearBytes(source)
+		return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, err)
+	}
+	scale, required := imageUpscaleScaleForDimensions(requestedSize, width, height)
+	if !required {
+		return &ImageUpscaleResult{Data: source, MimeType: mimeType, Width: width, Height: height, Scale: 1}, nil
+	}
+	defer clearBytes(source)
+	return s.upscaleLoadedSource(jobCtx, source, scale)
+}
+
+func (s *ImageUpscaleService) upscaleLoadedSource(jobCtx context.Context, source []byte, scale int) (*ImageUpscaleResult, error) {
 	sourceWidth, sourceHeight, _, err := validateUpscaleSource(source)
 	if err != nil {
 		return nil, err
@@ -313,25 +422,120 @@ func imageUpscaleLifecycleContext(ctx context.Context, cfg config.ImageUpscaleCo
 }
 
 func (s *ImageUpscaleService) acquire(ctx context.Context) error {
-	select {
-	case s.slots <- struct{}{}:
-		return nil
-	default:
+	return s.acquireClass(ctx, imageUpscaleWorkInteractive)
+}
+
+func (s *ImageUpscaleService) acquireClass(ctx context.Context, class imageUpscaleWorkClass) error {
+	if s == nil || s.slots == nil {
+		return imageUpscaleError("UNAVAILABLE", http.StatusServiceUnavailable, false, nil)
+	}
+	waiter := &imageUpscaleWaiter{ready: make(chan struct{}), class: class}
+	s.queueMu.Lock()
+	if len(s.interactiveQueue) == 0 && len(s.batchQueue) == 0 {
+		select {
+		case s.slots <- struct{}{}:
+			s.recordGrantedClassLocked(class)
+			s.queueMu.Unlock()
+			return nil
+		default:
+		}
 	}
 	maxQueue := int64(s.cfg.MaxQueue)
-	if maxQueue <= 0 || s.waiting.Add(1) > maxQueue {
-		if maxQueue > 0 {
-			s.waiting.Add(-1)
-		}
+	if maxQueue <= 0 || s.waiting.Load() >= maxQueue {
+		s.queueMu.Unlock()
 		return imageUpscaleError("BACKPRESSURE", http.StatusTooManyRequests, true, nil)
 	}
-	defer s.waiting.Add(-1)
+	if class == imageUpscaleWorkBatch {
+		s.batchQueue = append(s.batchQueue, waiter)
+	} else {
+		s.interactiveQueue = append(s.interactiveQueue, waiter)
+	}
+	s.waiting.Add(1)
+	s.queueMu.Unlock()
+
 	select {
-	case s.slots <- struct{}{}:
+	case <-waiter.ready:
 		return nil
 	case <-ctx.Done():
+		s.queueMu.Lock()
+		if waiter.granted {
+			s.queueMu.Unlock()
+			return nil
+		}
+		removed := s.removeWaiterLocked(waiter)
+		if removed {
+			s.waiting.Add(-1)
+		}
+		s.queueMu.Unlock()
 		return imageUpscaleError("QUEUE_TIMEOUT", 0, true, ctx.Err())
 	}
+}
+
+func (s *ImageUpscaleService) release() {
+	if s == nil || s.slots == nil {
+		return
+	}
+	s.queueMu.Lock()
+	select {
+	case <-s.slots:
+	default:
+		s.queueMu.Unlock()
+		return
+	}
+	waiter := s.nextWaiterLocked()
+	if waiter != nil {
+		s.slots <- struct{}{}
+		waiter.granted = true
+		s.waiting.Add(-1)
+		s.recordGrantedClassLocked(waiter.class)
+		close(waiter.ready)
+	}
+	s.queueMu.Unlock()
+}
+
+func (s *ImageUpscaleService) nextWaiterLocked() *imageUpscaleWaiter {
+	if len(s.interactiveQueue) > 0 && (len(s.batchQueue) == 0 || s.interactiveBurst < imageUpscaleInteractiveBurst) {
+		waiter := s.interactiveQueue[0]
+		s.interactiveQueue = s.interactiveQueue[1:]
+		return waiter
+	}
+	if len(s.batchQueue) > 0 {
+		waiter := s.batchQueue[0]
+		s.batchQueue = s.batchQueue[1:]
+		return waiter
+	}
+	if len(s.interactiveQueue) > 0 {
+		waiter := s.interactiveQueue[0]
+		s.interactiveQueue = s.interactiveQueue[1:]
+		return waiter
+	}
+	return nil
+}
+
+func (s *ImageUpscaleService) recordGrantedClassLocked(class imageUpscaleWorkClass) {
+	if class == imageUpscaleWorkBatch {
+		s.interactiveBurst = 0
+		return
+	}
+	if s.interactiveBurst < imageUpscaleInteractiveBurst {
+		s.interactiveBurst++
+	}
+}
+
+func (s *ImageUpscaleService) removeWaiterLocked(target *imageUpscaleWaiter) bool {
+	queue := &s.interactiveQueue
+	if target.class == imageUpscaleWorkBatch {
+		queue = &s.batchQueue
+	}
+	for i, waiter := range *queue {
+		if waiter != target {
+			continue
+		}
+		copy((*queue)[i:], (*queue)[i+1:])
+		*queue = (*queue)[:len(*queue)-1]
+		return true
+	}
+	return false
 }
 
 func (s *ImageUpscaleService) submit(ctx context.Context, source []byte, scale int, apiKey []byte) (string, error) {

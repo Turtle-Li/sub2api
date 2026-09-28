@@ -79,6 +79,18 @@ func TestBuildGeminiBatchJSONL_WritesExplicitOneKConfigOnlyForUpscaleSource(t *t
 	require.False(t, gjson.GetBytes(bytes.TrimSpace(jsonl), "request.generationConfig.imageConfig").Exists())
 }
 
+func TestBuildGeminiBatchJSONL_PreservesNativeHighResolutionForFutureModels(t *testing.T) {
+	input := validGeminiBatchInput()
+	input.Model = "image-3"
+	input.ImageSize = "2K"
+	input.AspectRatio = "16:9"
+	input.ExplicitImageConfig = true
+
+	jsonl, err := BuildGeminiBatchJSONL(input)
+	require.NoError(t, err)
+	require.Equal(t, "2K", gjson.GetBytes(bytes.TrimSpace(jsonl), "request.generationConfig.imageConfig.imageSize").String())
+}
+
 func TestBuildGeminiBatchJSONL_RejectsDuplicateCustomIDs(t *testing.T) {
 	input := validGeminiBatchInput()
 	input.Items = append(input.Items, BatchImageInputItem{CustomID: "cover_001", Prompt: "Duplicate"})

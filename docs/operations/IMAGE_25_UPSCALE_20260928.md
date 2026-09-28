@@ -1,21 +1,26 @@
-# Image 2.5 2K/4K Upscale Contract
+# Image 2K/4K Resolution Adapter Contract
 
 Date: 2026-09-28
 
 ## Scope
 
-This contract applies only to `gemini-2.5-flash-image` and
-`gemini-2.5-flash-image-preview` when the requested output tier is `2K` or
-`4K`. `1K` and every other model keep their existing provider path unchanged.
+This contract applies to every supported image model when the requested output
+tier is literal `2K` or `4K`. Eligibility never depends on a model-name
+allowlist. The adapter decodes each returned image and invokes Office Mini only
+when its actual dimensions do not satisfy the requested tier. `1K` and explicit
+pixel-dimension values keep their existing provider path.
 
-- `2K`: generate the requested aspect ratio at `1K`, then use native `2x`.
-- `4K`: generate the requested aspect ratio at `1K`, then use native `4x`.
+- `2K`: skip Mini when the longest edge is at least 2048; otherwise use `2x`.
+- `4K`: skip Mini when the longest edge is at least 3840; use `2x` for a
+  returned image whose longest edge is at least 1920, otherwise use `4x`.
 - The post-processing path is selected only by literal `2K` and `4K` tier
   values. Pixel-dimension values such as `2048x1152` keep the existing provider
   path unchanged; they are not rewritten into unsupported Gemini pixel sizes.
-- Batch JSONL sends `generationConfig.imageConfig.imageSize=1K` and preserves a
-  supported Gemini 2.5 `aspectRatio`. Ordinary `1K` jobs retain their previous
-  JSONL shape.
+- Provider request rewriting is a separate compatibility concern. Known Gemini
+  2.5 providers receive `imageSize=1K`; unknown or future models retain the
+  requested native tier and still pass through the same actual-dimension check.
+- Batch JSONL preserves an explicit supported aspect ratio and either the native
+  requested tier or the provider-compatible `1K` source tier.
 - Billing and balance holds retain the originally requested `2K`/`4K` tier.
 - The synchronous Images API and asynchronous image-task wrapper use the same
   adapter. Batch indexing uses that same process singleton and limiter.
@@ -39,12 +44,23 @@ that single 900-second lifecycle deadline; requesting multiple outputs never
 multiplies the Office Mini occupancy window.
 
 Batch admission is resolution-aware after `output_count` expansion: `1K` is
-limited to 50 output images, `2K` to 15, and `4K` to 10. High-resolution result
-indexing also holds one process-level whole-job finalization slot. If that slot
-is occupied, the completed provider job is delayed for 15 seconds and the queue
-worker is released; it must not wait behind the per-image upscale limiter while
-holding a second worker. This keeps one release-mode worker available for `1K`
-jobs, provider polling, and settlement while the Office Mini processes a batch.
+limited to 50 output images, `2K` to 15, and `4K` to 10. A nonblocking
+high-resolution job admission gate is capped below queue-worker concurrency
+whenever more than one worker exists, preserving at least one worker for 1K
+jobs, provider polling, and settlement. Excess completed high-resolution jobs
+are requeued without opening provider output. Once admitted, images enter the
+shared per-image scheduler: interactive single-image work may receive at most
+two consecutive grants while batch work is waiting; the next Mini slot then
+goes to the oldest batch item. An `n>1` synchronous Images response is
+classified as batch work, so one large request cannot continuously monopolize
+Mini and admitted batch work cannot starve.
+
+Synchronous `n>1` requests remain atomic and return only after every output has
+finished post-processing. Separate synchronous requests return independently as
+their own images finish. The asynchronous batch API returns a job ID after
+submission, but the job becomes terminal only after all provider output has been
+indexed and post-processed. Item results are still committed after the complete
+provider output scan; progressive per-item visibility is not part of this phase.
 
 Submit retries are limited to explicit HTTP 429 responses because the remote
 API has no idempotency key and a transport/5xx retry could duplicate an accepted
@@ -96,8 +112,9 @@ short-lived presigned PUT design.
 ## Batch persistence and objects
 
 Migration `261_batch_image_image_size.sql` persists the requested output tier;
-legacy rows default to `1K`. Providers still receive `1K` for 2K/4K Image 2.5
-jobs. During result indexing, each successfully upscaled image is written to the
+legacy rows default to `1K`. Known Gemini 2.5 providers receive `1K` for 2K/4K
+jobs; future providers retain their native requested tier. During result
+indexing, each successfully upscaled image is written to the
 existing private batch COS bucket under:
 
 `<delivery_cos_prefix>/upscaled/<batch_id>/<sha256(custom_id)>/00.<ext>`

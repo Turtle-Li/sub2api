@@ -44,7 +44,7 @@ func batchImageJobRequiresUpscale(job *BatchImageJob) bool {
 	if job == nil {
 		return false
 	}
-	_, required := Image25UpscaleScale(job.Model, job.ImageSize)
+	_, required := RequestedImageUpscaleScale(job.ImageSize)
 	return required
 }
 
@@ -141,8 +141,7 @@ func upscaleBatchImageResultLine(
 	if job == nil || upscaler == nil || !upscaler.Active() || store == nil || writeFencer == nil {
 		return "", "", 0, nil, imageUpscaleError("UNAVAILABLE", 0, false, nil)
 	}
-	scale, required := Image25UpscaleScale(job.Model, job.ImageSize)
-	if !required {
+	if _, required := RequestedImageUpscaleScale(job.ImageSize); !required {
 		return "", "", 0, nil, errors.New("batch item does not require upscale")
 	}
 	parts, err := ExtractBatchImagePartsFromResultLine(line)
@@ -158,10 +157,29 @@ func upscaleBatchImageResultLine(
 		)
 	}
 	for index, imagePart := range parts.Images {
-		result, upscaleErr := upscaler.UpscaleBase64(ctx, imagePart.Base64Data, scale)
-		if upscaleErr != nil {
-			err = upscaleErr
+		normalized, prepareErr := prepareUpscaleSourceBase64(imagePart.Base64Data, imageUpscaleMaxSourceBytes)
+		if prepareErr != nil {
+			err = prepareErr
 			break
+		}
+		source, decodeErr := decodePreparedUpscaleSourceBase64(normalized)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		width, height, sourceMime, configErr := decodeUpscaleImageConfig(source)
+		if configErr != nil {
+			clearBytes(source)
+			err = imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, configErr)
+			break
+		}
+		result := &ImageUpscaleResult{Data: source, MimeType: sourceMime, Width: width, Height: height, Scale: 1}
+		if scale, upscaleRequired := imageUpscaleScaleForDimensions(job.ImageSize, width, height); upscaleRequired {
+			result, err = upscaler.UpscaleBase64Batch(ctx, imagePart.Base64Data, scale)
+			clearBytes(source)
+			if err != nil {
+				break
+			}
 		}
 		ext := batchImageFileExtension(result.MimeType)
 		key, keyErr := batchImageUpscaleObjectKey(cfg, job.BatchID, parts.CustomID, index, ext)

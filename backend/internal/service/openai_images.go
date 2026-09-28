@@ -645,7 +645,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err := validateCompatibleImagesModel(upstreamModel); err != nil {
 		return nil, err
 	}
-	providerImageSize, upscaleScale, upscaleRequired := image25RequestedUpscalePlan(upstreamModel, parsed.Size)
+	_, upscaleRequired := RequestedImageUpscaleScale(parsed.Size)
 	if upscaleRequired {
 		if parsed.Stream {
 			return nil, imageUpscaleError("STREAMING_UNSUPPORTED", http.StatusBadRequest, false, nil)
@@ -667,7 +667,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err != nil {
 		return nil, err
 	}
-	if upscaleRequired {
+	if upscaleRequired && shouldForceProviderImageSize1K(upstreamModel) {
+		providerImageSize := ImageBillingSize1K
 		forwardBody, forwardContentType, err = rewriteOpenAIImagesSize(forwardBody, forwardContentType, providerImageSize)
 		if err != nil {
 			return nil, err
@@ -816,7 +817,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			ImageOutputSizes:   imageOutputSizes,
 		}, nil
 	} else {
-		nonStreamUsage, nonStreamCount, nonStreamSizes, err := s.handleOpenAIImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed, upstreamModel, upscaleScale)
+		nonStreamUsage, nonStreamCount, nonStreamSizes, err := s.handleOpenAIImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed, upstreamModel, upscaleRequired)
 		if err != nil {
 			return nil, err
 		}
@@ -1018,15 +1019,15 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	c *gin.Context,
 	account *Account,
 	parsed *OpenAIImagesRequest,
-	upstreamModel string,
-	upscaleScale int,
+	_ string,
+	upscaleRequired bool,
 ) (OpenAIUsage, int, []string, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return OpenAIUsage{}, 0, nil, err
 	}
-	if upscaleScale > 0 {
-		body, err = s.upscaleOpenAIImagesResponse(ctx, account, parsed, upstreamModel, body, upscaleScale)
+	if upscaleRequired {
+		body, err = s.upscaleOpenAIImagesResponse(ctx, account, parsed, body)
 		if err != nil {
 			return OpenAIUsage{}, 0, nil, err
 		}
@@ -1036,7 +1037,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	usage, _ := extractOpenAIUsageFromJSONBytes(body)
 	imageCount := extractOpenAIImageCountFromJSONBytes(body)
 	imageOutputSizes := collectOpenAIResponseImageOutputSizesFromJSONBytes(body)
-	if upscaleScale > 0 && s.imageStorageResolver != nil {
+	if upscaleRequired && s.imageStorageResolver != nil {
 		if uploader, enabled := s.imageStorageResolver(); enabled && uploader != nil {
 			storedBody, storageErr := uploader.Rewrite(ctx, newSynchronousImageResultID(), body)
 			if storageErr != nil {

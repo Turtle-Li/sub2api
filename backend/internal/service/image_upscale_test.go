@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestImage25UpscaleScaleUsesOnlySupportedModelsAndTiers(t *testing.T) {
+func TestImageUpscaleScaleIsModelIndependent(t *testing.T) {
 	tests := []struct {
 		name      string
 		model     string
@@ -30,22 +30,47 @@ func TestImage25UpscaleScaleUsesOnlySupportedModelsAndTiers(t *testing.T) {
 		{name: "flash image preview 4K", model: "gemini-2.5-flash-image-preview", sizeTier: "4K", wantScale: 4, wantOK: true},
 		{name: "one K bypasses upscale", model: "gemini-2.5-flash-image", sizeTier: "1K", wantScale: 0, wantOK: false},
 		{name: "unsupported size bypasses upscale", model: "gemini-2.5-flash-image", sizeTier: "8K", wantScale: 0, wantOK: false},
-		{name: "model suffix is not an exact supported model", model: "gemini-2.5-flash-image-latest", sizeTier: "2K", wantScale: 0, wantOK: false},
-		{name: "other image model bypasses upscale", model: "gemini-3-pro-image", sizeTier: "4K", wantScale: 0, wantOK: false},
+		{name: "future image model uses requested tier", model: "image-3", sizeTier: "2K", wantScale: 2, wantOK: true},
+		{name: "other image model uses requested tier", model: "gpt-image-2.5-sunburst", sizeTier: "4K", wantScale: 4, wantOK: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotScale, gotOK := Image25UpscaleScale(tt.model, tt.sizeTier)
+			gotScale, gotOK := RequestedImageUpscaleScale(tt.sizeTier)
 			require.Equal(t, tt.wantScale, gotScale)
 			require.Equal(t, tt.wantOK, gotOK)
 		})
 	}
 }
 
-func TestImage25RequestedUpscaleScaleRequiresExplicitClassifiableSize(t *testing.T) {
+func TestImageUpscaleScaleUsesActualDimensions(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested string
+		width     int
+		height    int
+		wantScale int
+		want      bool
+	}{
+		{name: "portrait 1K needs 2x for 2K", requested: "2K", width: 1024, height: 1536, wantScale: 2, want: true},
+		{name: "native 2K skips adapter", requested: "2K", width: 1536, height: 2048},
+		{name: "portrait 1K needs 4x for 4K", requested: "4K", width: 1024, height: 1536, wantScale: 4, want: true},
+		{name: "native 2K needs 2x for 4K", requested: "4K", width: 2048, height: 3072, wantScale: 2, want: true},
+		{name: "native 4K skips adapter", requested: "4K", width: 2160, height: 3840},
+		{name: "1K never invokes adapter", requested: "1K", width: 512, height: 768},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scale, required := imageUpscaleScaleForDimensions(tt.requested, tt.width, tt.height)
+			require.Equal(t, tt.want, required)
+			require.Equal(t, tt.wantScale, scale)
+		})
+	}
+}
+
+func TestRequestedImageUpscaleScaleRequiresExplicitClassifiableSize(t *testing.T) {
 	for _, size := range []string{"", "auto", "unknown"} {
-		scale, ok := image25RequestedUpscaleScale("gemini-2.5-flash-image", size)
+		scale, ok := RequestedImageUpscaleScale(size)
 		require.False(t, ok, "size %q must keep the existing provider path", size)
 		require.Zero(t, scale)
 	}
@@ -66,9 +91,13 @@ func TestImage25RequestedUpscaleScaleRequiresExplicitClassifiableSize(t *testing
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			providerSize, scale, ok := image25RequestedUpscalePlan(tt.model, tt.requested)
+			scale, ok := RequestedImageUpscaleScale(tt.requested)
 			require.Equal(t, tt.wantOK, ok)
-			require.Equal(t, tt.wantProvider, providerSize)
+			if ok {
+				require.Equal(t, ImageBillingSize1K, tt.wantProvider)
+			} else {
+				require.Empty(t, tt.wantProvider)
+			}
 			require.Equal(t, tt.wantScale, scale)
 		})
 	}
@@ -333,6 +362,35 @@ func TestImageUpscaleQueueTimeout(t *testing.T) {
 	upscaleErr := requireImageUpscaleError(t, service.acquire(ctx), "QUEUE_TIMEOUT")
 	require.True(t, upscaleErr.Temporary)
 	require.ErrorIs(t, upscaleErr, context.DeadlineExceeded)
+	require.Zero(t, service.waiting.Load())
+}
+
+func TestImageUpscaleQueueGivesBatchOneTurnAfterTwoInteractiveJobs(t *testing.T) {
+	cfg := imageUpscaleTestConfig("http://upscale.test")
+	cfg.MaxQueue = 4
+	service := newImageUpscaleTestService(cfg, &http.Client{}, imageUpscaleTestStaticLoader)
+	service.slots <- struct{}{}
+
+	order := make(chan string, 4)
+	start := func(name string, class imageUpscaleWorkClass) {
+		expectedWaiting := service.waiting.Load() + 1
+		go func() {
+			require.NoError(t, service.acquireClass(context.Background(), class))
+			order <- name
+			service.release()
+		}()
+		require.Eventually(t, func() bool { return service.waiting.Load() == expectedWaiting }, time.Second, time.Millisecond)
+	}
+
+	start("interactive-1", imageUpscaleWorkInteractive)
+	start("interactive-2", imageUpscaleWorkInteractive)
+	start("interactive-3", imageUpscaleWorkInteractive)
+	start("batch-1", imageUpscaleWorkBatch)
+	require.Eventually(t, func() bool { return service.waiting.Load() == 4 }, time.Second, time.Millisecond)
+
+	service.release()
+	got := []string{<-order, <-order, <-order, <-order}
+	require.Equal(t, []string{"interactive-1", "interactive-2", "batch-1", "interactive-3"}, got)
 	require.Zero(t, service.waiting.Load())
 }
 

@@ -24,13 +24,6 @@ func newSynchronousImageResultID() string {
 	return "imgsync_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
-func image25RequestedUpscaleScaleForModels(originalModel, mappedModel, requestedSize string) (int, bool) {
-	if scale, ok := image25RequestedUpscaleScale(mappedModel, requestedSize); ok {
-		return scale, true
-	}
-	return image25RequestedUpscaleScale(originalModel, requestedSize)
-}
-
 func rewriteGeminiImageSize(body []byte, size string) ([]byte, error) {
 	rewritten, err := sjson.SetBytes(body, "generationConfig.imageConfig.imageSize", strings.TrimSpace(size))
 	if err != nil {
@@ -55,6 +48,10 @@ func processGeminiImageGenerationResponse(
 	}
 	if scale != 2 && scale != 4 {
 		return nil, imageUpscaleError("INVALID_SCALE", 0, false, nil)
+	}
+	requestedSize := ImageBillingSize2K
+	if scale == 4 {
+		requestedSize = ImageBillingSize4K
 	}
 	upscaleCtx, cancelUpscale := imageUpscaleLifecycleContext(ctx, upscaler.cfg)
 	defer cancelUpscale()
@@ -97,13 +94,34 @@ func processGeminiImageGenerationResponse(
 				return nil, imageUpscaleError("MISSING_IMAGE_OUTPUT", 0, false, nil)
 			}
 
-			result, err := upscaler.UpscaleBase64(upscaleCtx, encoded, scale)
+			normalized, err := prepareUpscaleSourceBase64(encoded, imageUpscaleMaxSourceBytes)
 			if err != nil {
 				return nil, err
 			}
+			source, err := decodePreparedUpscaleSourceBase64(normalized)
+			if err != nil {
+				return nil, err
+			}
+			width, height, detectedMime, err := decodeUpscaleImageConfig(source)
+			if err != nil {
+				clearBytes(source)
+				return nil, imageUpscaleError("INVALID_SOURCE_IMAGE", 0, false, err)
+			}
+			actualScale, upscaleRequired := imageUpscaleScaleForDimensions(requestedSize, width, height)
+			resultData := source
+			resultMime := detectedMime
+			if upscaleRequired {
+				result, upscaleErr := upscaler.UpscaleBase64(upscaleCtx, encoded, actualScale)
+				clearBytes(source)
+				if upscaleErr != nil {
+					return nil, upscaleErr
+				}
+				resultData = result.Data
+				resultMime = result.MimeType
+			}
 			images = append(images, geminiUpscaledImage{
 				part: part, inlineKey: inlineKey, mimeKey: mimeKey, dataKey: dataKey,
-				data: result.Data, contentType: result.MimeType,
+				data: resultData, contentType: resultMime,
 			})
 		}
 	}

@@ -2032,6 +2032,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
 		return nil, err
 	}
+	_, upscaleRequired := RequestedImageUpscaleScale(parsed.Size)
+	if upscaleRequired {
+		if parsed.Stream {
+			return nil, imageUpscaleError("STREAMING_UNSUPPORTED", http.StatusBadRequest, false, nil)
+		}
+		if s.imageUpscaler == nil || !s.imageUpscaler.Active() {
+			return nil, imageUpscaleError("UNAVAILABLE", http.StatusServiceUnavailable, false, nil)
+		}
+	}
 	direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)
 	beginUpstreamResponseModelObservation(c)
 	SetOpsUpstreamModel(c, upstreamModel)
@@ -2250,6 +2259,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			)
 			return resultOnError(handledErr)
 		}
+		if upscaleRequired {
+			if upscaleErr := s.upscaleOpenAIImageResults(upstreamCtx, parsed, collected.results); upscaleErr != nil {
+				return resultOnError(upscaleErr)
+			}
+			if len(collected.results) > 0 {
+				collected.firstMeta.Size = collected.results[0].Size
+			}
+		}
 		attemptImageCount := len(collected.results)
 		addOpenAIUsage(&usage, collected.usage)
 		if attemptImageCount == 0 {
@@ -2293,6 +2310,16 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		)
 		if responseErr != nil {
 			return resultOnError(responseErr)
+		}
+		if upscaleRequired && s.imageStorageResolver != nil {
+			if uploader, enabled := s.imageStorageResolver(); enabled && uploader != nil {
+				storedBody, storageErr := uploader.Rewrite(upstreamCtx, newSynchronousImageResultID(), responseBody)
+				if storageErr != nil {
+					logImageStorageFallback("openai_images_responses", imageCount, storageErr)
+				} else {
+					responseBody = storedBody
+				}
+			}
 		}
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), firstHeaders, s.responseHeaderFilter)
 		c.Data(http.StatusOK, "application/json; charset=utf-8", responseBody)
@@ -2421,7 +2448,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthDirect(
 		usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesStreamingResponse(resp, c, startTime, parsed)
 		partialOutputStarted = OpenAIImagesSemanticOutputWritten(c)
 	} else {
-		usage, imageCount, imageOutputSizes, err = s.handleCodexDirectImagesNonStreamingResponse(resp, c, parsed)
+		usage, imageCount, imageOutputSizes, err = s.handleCodexDirectImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed)
 	}
 	billableImageCount := min(imageCount, parsed.N)
 	billingUsage := OpenAIUsage{}

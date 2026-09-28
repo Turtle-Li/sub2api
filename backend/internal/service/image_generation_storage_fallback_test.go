@@ -80,7 +80,7 @@ func TestHandleOpenAIImagesHighResStorageFailureFallsBackToInline(t *testing.T) 
 	_, count, _, err := svc.handleOpenAIImagesNonStreamingResponse(
 		context.Background(), response, c, &Account{},
 		&OpenAIImagesRequest{N: 2, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
-		"gemini-2.5-flash-image", 2,
+		"gemini-2.5-flash-image", true,
 	)
 	require.NoError(t, err)
 	require.Equal(t, 2, count)
@@ -118,7 +118,7 @@ func TestHandleOpenAIImagesHighResStorageSuccessReturnsURLs(t *testing.T) {
 	_, _, _, err := svc.handleOpenAIImagesNonStreamingResponse(
 		context.Background(), response, c, &Account{},
 		&OpenAIImagesRequest{N: 2, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
-		"gemini-2.5-flash-image", 2,
+		"gemini-2.5-flash-image", true,
 	)
 	require.NoError(t, err)
 	require.Len(t, storage.saved, 2)

@@ -82,7 +82,7 @@ func TestUpscaleOpenAIImagesResponsePreservesShape(t *testing.T) {
 	_, _, _, decodeErr = decodeUpscaleImageConfig(decodedSource)
 	require.NoError(t, decodeErr)
 
-	got, err := svc.upscaleOpenAIImagesResponse(context.Background(), &Account{}, &OpenAIImagesRequest{Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"}, "gemini-2.5-flash-image", body, 2)
+	got, err := svc.upscaleOpenAIImagesResponse(context.Background(), &Account{}, &OpenAIImagesRequest{Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"}, body)
 	require.NoError(t, err)
 	require.Equal(t, "cat", gjson.GetBytes(got, "data.0.revised_prompt").String())
 	require.Equal(t, int64(7), gjson.GetBytes(got, "usage.total_tokens").Int())
@@ -92,6 +92,39 @@ func TestUpscaleOpenAIImagesResponsePreservesShape(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, w)
 	require.Equal(t, 6, h)
+}
+
+func TestUpscaleOpenAIImagesResponseSkipsAlreadySatisfiedOutput(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "unexpected upscale request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	upscaler := &ImageUpscaleService{
+		cfg: config.ImageUpscaleConfig{
+			Enabled: true, BaseURL: server.URL, APIKeyVaultRef: "vault://test/key#api_key",
+			VaultAgentSocket: imageUpscaleVaultSocket, RequestTimeoutSeconds: 2,
+			JobTimeoutSeconds: 30, PollIntervalMillis: 1, MaxConcurrent: 1,
+			MaxQueue: 1, MaxResultBytes: 1024 * 1024,
+		},
+		httpClient: server.Client(),
+		loadAPIKey: func(context.Context) ([]byte, error) {
+			return []byte("test-token"), nil
+		},
+		slots: make(chan struct{}, 1),
+	}
+	source := base64.StdEncoding.EncodeToString(testUpscalePNG(t, 2048, 1024))
+	body := []byte(`{"data":[{"b64_json":"` + source + `"}]}`)
+
+	got, err := (&OpenAIGatewayService{imageUpscaler: upscaler}).upscaleOpenAIImagesResponse(
+		context.Background(), &Account{},
+		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"}, body,
+	)
+	require.NoError(t, err)
+	require.Equal(t, source, gjson.GetBytes(got, "data.0.b64_json").String())
+	require.Equal(t, "2048x1024", gjson.GetBytes(got, "data.0.size").String())
+	require.Zero(t, calls.Load())
 }
 
 func TestUpscaleOpenAIImagesResponseRejectsSurplusBeforeUpscale(t *testing.T) {
@@ -119,8 +152,7 @@ func TestUpscaleOpenAIImagesResponseRejectsSurplusBeforeUpscale(t *testing.T) {
 
 	_, err := (&OpenAIGatewayService{imageUpscaler: upscaler}).upscaleOpenAIImagesResponse(
 		context.Background(), &Account{},
-		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
-		"gemini-2.5-flash-image", body, 2,
+		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"}, body,
 	)
 	require.Error(t, err)
 	var upscaleErr *ImageUpscaleError
@@ -147,8 +179,7 @@ func TestUpscaleOpenAIImagesResponseRejectsOversizedEncodedSource(t *testing.T) 
 
 	_, err := (&OpenAIGatewayService{imageUpscaler: upscaler}).upscaleOpenAIImagesResponse(
 		context.Background(), &Account{},
-		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
-		"gemini-2.5-flash-image", body, 2,
+		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"}, body,
 	)
 	_ = requireImageUpscaleError(t, err, "SOURCE_LIMIT_EXCEEDED")
 }
@@ -184,7 +215,7 @@ func TestHandleOpenAIImagesHighResSkipsB64BackfillBeforeUpscaleAdmission(t *test
 	_, _, _, err := svc.handleOpenAIImagesNonStreamingResponse(
 		context.Background(), response, c, b64BackfillAccount(true),
 		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
-		"gemini-2.5-flash-image", 2,
+		"gemini-2.5-flash-image", true,
 	)
 	_ = requireImageUpscaleError(t, err, "BACKPRESSURE")
 	require.Empty(t, upstream.requests, "URL backfill must not run before upscale admission")
@@ -229,8 +260,7 @@ func TestUpscaleOpenAIImagesResponseUsesOneLifecycleDeadlineForAllImages(t *test
 
 	_, err := (&OpenAIGatewayService{imageUpscaler: upscaler}).upscaleOpenAIImagesResponse(
 		context.Background(), &Account{},
-		&OpenAIImagesRequest{N: 2, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
-		"gemini-2.5-flash-image", body, 2,
+		&OpenAIImagesRequest{N: 2, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"}, body,
 	)
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.DeadlineExceeded)

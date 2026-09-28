@@ -283,9 +283,9 @@ type BatchImageConfig struct {
 	// WorkerConcurrency controls independent Redis queue consumers in this
 	// process. Each consumer still owns a durable per-job lock.
 	WorkerConcurrency int `mapstructure:"worker_concurrency"`
-	// HighResolutionFinalizeConcurrency bounds whole 2K/4K jobs that may enter
-	// the serial upscale/indexing phase. Busy jobs are delayed rather than
-	// occupying another queue worker while the shared upscale slot is in use.
+	// High-resolution batch admission reserves a bounded number of jobs before
+	// per-image fair Mini scheduling, keeping queue workers available for 1K and
+	// provider polling. Runtime caps this below worker concurrency.
 	HighResolutionFinalizeConcurrency    int    `mapstructure:"high_resolution_finalize_concurrency"`
 	HighResolutionFinalizeRequeueSeconds int    `mapstructure:"high_resolution_finalize_requeue_seconds"`
 	VertexEnabled                        bool   `mapstructure:"vertex_enabled"`

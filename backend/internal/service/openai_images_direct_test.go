@@ -2,12 +2,16 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -141,6 +145,144 @@ func TestCodexDirectImagesMultipleOutputs(t *testing.T) {
 			require.Equal(t, 40, result.Usage.ImageOutputTokens)
 		})
 	}
+}
+
+func TestCodexDirectImagesMultipleOutputsUpscaleByActualDimensions(t *testing.T) {
+	source := testUpscalePNG(t, 1024, 1536)
+	resultImage := testUpscalePNG(t, 2048, 3072)
+	var upscaleCalls atomic.Int32
+	mini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/upscale":
+			upscaleCalls.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"job":{"id":"job-direct-multi"}}`))
+		case "/v1/jobs/job-direct-multi":
+			_, _ = w.Write([]byte(`{"job":{"state":"completed"}}`))
+		case "/v1/jobs/job-direct-multi/result":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(resultImage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mini.Close()
+
+	encoded := base64.StdEncoding.EncodeToString(source)
+	response := fmt.Sprintf(`{"data":[{"b64_json":%q},{"b64_json":%q}],"usage":{"input_tokens":10,"output_tokens":40}}`, encoded, encoded)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(response))}}
+	svc := newOpenAIImagesTestService(upstream)
+	svc.imageUpscaler = &ImageUpscaleService{
+		cfg: config.ImageUpscaleConfig{
+			Enabled: true, BaseURL: mini.URL, APIKeyVaultRef: "vault://test/key#api_key", VaultAgentSocket: imageUpscaleVaultSocket,
+			RequestTimeoutSeconds: 2, JobTimeoutSeconds: 30, PollIntervalMillis: 1, MaxConcurrent: 1, MaxQueue: 4, MaxResultBytes: 1024 * 1024,
+		},
+		httpClient: mini.Client(),
+		loadAPIKey: func(context.Context) ([]byte, error) { return []byte("test-token"), nil },
+		slots:      make(chan struct{}, 1),
+	}
+	body := []byte(`{"model":"gpt-image-2.5-sunburst","prompt":"draw two models","n":2,"size":"2K"}`)
+	c, rec := newOpenAIImagesTestContext(t, body)
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	forwarded, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	require.NoError(t, err)
+	require.Equal(t, int32(2), upscaleCalls.Load())
+	require.Equal(t, 2, forwarded.ImageCount)
+	require.Equal(t, []string{"2048x3072", "2048x3072"}, forwarded.ImageOutputSizes)
+	require.Equal(t, "2K", gjson.GetBytes(upstream.lastBody, "size").String(), "OpenAI request remains provider-native; response dimensions decide Mini use")
+	for i := 0; i < 2; i++ {
+		decoded, decodeErr := base64.StdEncoding.DecodeString(gjson.GetBytes(rec.Body.Bytes(), fmt.Sprintf("data.%d.b64_json", i)).String())
+		require.NoError(t, decodeErr)
+		width, height, _, decodeErr := decodeUpscaleImageConfig(decoded)
+		require.NoError(t, decodeErr)
+		require.Equal(t, 2048, width)
+		require.Equal(t, 3072, height)
+	}
+}
+
+func TestCodexDirectImagesMultipleOutputsRemainAtomicWhenSecondUpscaleFails(t *testing.T) {
+	source := testUpscalePNG(t, 2, 3)
+	resultImage := testUpscalePNG(t, 4, 6)
+	var upscaleCalls atomic.Int32
+	mini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/upscale":
+			call := upscaleCalls.Add(1)
+			if call == 2 {
+				http.Error(w, "upstream overloaded", http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"job":{"id":"job-direct-atomic"}}`))
+		case "/v1/jobs/job-direct-atomic":
+			_, _ = w.Write([]byte(`{"job":{"state":"completed"}}`))
+		case "/v1/jobs/job-direct-atomic/result":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(resultImage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mini.Close()
+
+	encoded := base64.StdEncoding.EncodeToString(source)
+	response := fmt.Sprintf(`{"data":[{"b64_json":%q},{"b64_json":%q}],"usage":{"input_tokens":10,"output_tokens":40}}`, encoded, encoded)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(response))}}
+	svc := newOpenAIImagesTestService(upstream)
+	svc.imageUpscaler = &ImageUpscaleService{
+		cfg: config.ImageUpscaleConfig{
+			Enabled: true, BaseURL: mini.URL, APIKeyVaultRef: "vault://test/key#api_key", VaultAgentSocket: imageUpscaleVaultSocket,
+			RequestTimeoutSeconds: 2, JobTimeoutSeconds: 30, PollIntervalMillis: 1, MaxConcurrent: 1, MaxQueue: 4, MaxResultBytes: 1024 * 1024,
+		},
+		httpClient: mini.Client(),
+		loadAPIKey: func(context.Context) ([]byte, error) { return []byte("test-token"), nil },
+		slots:      make(chan struct{}, 1),
+	}
+	body := []byte(`{"model":"gpt-image-2.5-sunburst","prompt":"draw two models","n":2,"size":"2K"}`)
+	c, rec := newOpenAIImagesTestContext(t, body)
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	forwarded, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	require.Error(t, err)
+	require.Nil(t, forwarded)
+	require.Equal(t, int32(2), upscaleCalls.Load())
+	require.Zero(t, rec.Body.Len(), "no partial image response may be written before every output succeeds")
+}
+
+func TestCodexDirectImagesHighResolutionRejectsMissingOutputBeforeUpscale(t *testing.T) {
+	source := base64.StdEncoding.EncodeToString(testUpscalePNG(t, 2, 3))
+	var upscaleCalls atomic.Int32
+	mini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upscaleCalls.Add(1)
+		http.Error(w, "unexpected upscale", http.StatusInternalServerError)
+	}))
+	defer mini.Close()
+
+	response := fmt.Sprintf(`{"data":[{}, {"b64_json":%q}],"usage":{"input_tokens":10,"output_tokens":40}}`, source)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(response))}}
+	svc := newOpenAIImagesTestService(upstream)
+	svc.imageUpscaler = &ImageUpscaleService{
+		cfg: config.ImageUpscaleConfig{
+			Enabled: true, BaseURL: mini.URL, APIKeyVaultRef: "vault://test/key#api_key", VaultAgentSocket: imageUpscaleVaultSocket,
+			RequestTimeoutSeconds: 2, JobTimeoutSeconds: 30, PollIntervalMillis: 1, MaxConcurrent: 1, MaxQueue: 4, MaxResultBytes: 1024 * 1024,
+		},
+		httpClient: mini.Client(),
+		loadAPIKey: func(context.Context) ([]byte, error) { return []byte("test-token"), nil },
+		slots:      make(chan struct{}, 1),
+	}
+	body := []byte(`{"model":"gpt-image-2.5-sunburst","prompt":"draw two models","n":2,"size":"2K"}`)
+	c, rec := newOpenAIImagesTestContext(t, body)
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	forwarded, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	require.Error(t, err)
+	require.Nil(t, forwarded)
+	require.Zero(t, upscaleCalls.Load(), "cardinality validation must run before Mini")
+	require.Zero(t, rec.Body.Len())
 }
 
 func TestCodexDirectImagesStreaming(t *testing.T) {

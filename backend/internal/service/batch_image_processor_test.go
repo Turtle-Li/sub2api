@@ -319,7 +319,7 @@ func TestBatchImageProviderProcessor_StatusFlow(t *testing.T) {
 	})
 }
 
-func TestBatchImageProviderProcessor_HighResolutionFinalizerDoesNotBlockWorkers(t *testing.T) {
+func TestBatchImageProviderProcessor_HighResolutionAdmissionKeepsWorkerAvailable(t *testing.T) {
 	ctx := context.Background()
 	accountID := int64(10)
 	providerJob := "providers/job"
@@ -328,7 +328,7 @@ func TestBatchImageProviderProcessor_HighResolutionFinalizerDoesNotBlockWorkers(
 	require.True(t, ok)
 	defer release()
 
-	t.Run("busy high resolution finalizer requeues without opening output", func(t *testing.T) {
+	t.Run("busy high resolution admission requeues without opening output", func(t *testing.T) {
 		repo := newFakeBatchImageRepository()
 		repo.jobs["imgbatch_2k_busy"] = &BatchImageJob{
 			BatchID:         "imgbatch_2k_busy",
@@ -352,7 +352,7 @@ func TestBatchImageProviderProcessor_HighResolutionFinalizerDoesNotBlockWorkers(
 		require.Equal(t, BatchImageJobStatusIndexing, repo.jobs["imgbatch_2k_busy"].Status)
 	})
 
-	t.Run("1K indexing bypasses busy finalizer", func(t *testing.T) {
+	t.Run("1K indexing preserves its ordinary flow", func(t *testing.T) {
 		repo := newFakeBatchImageRepository()
 		repo.jobs["imgbatch_1k_ready"] = &BatchImageJob{
 			BatchID:         "imgbatch_1k_ready",
@@ -375,7 +375,7 @@ func TestBatchImageProviderProcessor_HighResolutionFinalizerDoesNotBlockWorkers(
 	})
 }
 
-func TestBatchImageHighResolutionFinalizeSlots_BoundsWholeJobs(t *testing.T) {
+func TestBatchImageHighResolutionFinalizeSlots_BoundsAdmittedJobs(t *testing.T) {
 	gate := newBatchImageHighResolutionFinalizeSlots(1)
 	releaseFirst, ok := gate.TryAcquire()
 	require.True(t, ok)
@@ -384,9 +384,9 @@ func TestBatchImageHighResolutionFinalizeSlots_BoundsWholeJobs(t *testing.T) {
 
 	releaseFirst()
 	releaseFirst()
-	releaseNext, ok := gate.TryAcquire()
+	releaseSecond, ok := gate.TryAcquire()
 	require.True(t, ok)
-	releaseNext()
+	releaseSecond()
 }
 
 func TestCanTransitionBatchImageJob_PR5DirectIndexing(t *testing.T) {

@@ -100,14 +100,16 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	providerBody := body
 	upscaleScale := 0
 	if !stream && action == "generateContent" {
-		if scale, required := image25RequestedUpscaleScaleForModels(originalModel, mappedModel, imageInputSize); required {
+		if scale, required := RequestedImageUpscaleScale(imageInputSize); required {
 			if s.imageUpscaler == nil || !s.imageUpscaler.Active() {
 				return nil, s.writeGoogleError(c, http.StatusServiceUnavailable, "Image upscale service unavailable")
 			}
-			var err error
-			providerBody, err = rewriteGeminiImageSize(providerBody, ImageBillingSize1K)
-			if err != nil {
-				return nil, s.writeGoogleError(c, http.StatusBadRequest, "Invalid image generation config")
+			if shouldForceProviderImageSize1K(mappedModel) || shouldForceProviderImageSize1K(originalModel) {
+				var err error
+				providerBody, err = rewriteGeminiImageSize(providerBody, ImageBillingSize1K)
+				if err != nil {
+					return nil, s.writeGoogleError(c, http.StatusBadRequest, "Invalid image generation config")
+				}
 			}
 			upscaleScale = scale
 		}

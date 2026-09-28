@@ -172,6 +172,38 @@ func TestBatchImageResultIndexer_StoresSingle2KAnd4KResultsWithMarker(t *testing
 	}
 }
 
+func TestBatchImageResultIndexerSkipsMiniWhenOutputAlreadyMeetsRequestedTier(t *testing.T) {
+	upscaleAPI := newBatchImageUpscaleTestAPI()
+	t.Cleanup(upscaleAPI.Close)
+	cfg, upscaler := newBatchImageUpscaleTestService(upscaleAPI.URL(), "batch-image/delivery")
+	store := newBatchImageUpscaleTestStore()
+	source := batchImageUpscaleTestPNG(2048, 1024)
+	outputRef := "provider/results/output.jsonl"
+	job := &BatchImageJob{
+		BatchID:           "imgbatch_native_2k",
+		Model:             "future-image-3",
+		ImageSize:         "2K",
+		ProviderOutputRef: &outputRef,
+	}
+	provider := &fakeProcessorProvider{result: string(batchImageUpscaleTestResultLine("image_native_2k", source)) + "\n"}
+	repo := newFakeBatchImageRepository()
+
+	result, err := (&BatchImageResultIndexer{
+		Repo: repo, Config: cfg, Upscaler: upscaler, UpscaleStore: store,
+	}).Index(context.Background(), job, provider, &Account{})
+	require.NoError(t, err)
+	require.Equal(t, &BatchImageIndexResult{SuccessCount: 1, TotalCount: 1}, result)
+	require.Empty(t, upscaleAPI.SubmittedScales(), "actual 2K bytes must bypass Mini regardless of model name")
+	item := repo.items[job.BatchID][0]
+	key, err := batchImageUpscaleObjectKey(cfg, job.BatchID, item.CustomID, 0, "png")
+	require.NoError(t, err)
+	stored := store.objects[key]
+	decoded, _, err := image.DecodeConfig(bytes.NewReader(stored.data))
+	require.NoError(t, err)
+	require.Equal(t, 2048, decoded.Width)
+	require.Equal(t, 1024, decoded.Height)
+}
+
 func TestBatchImageUpscaleWriteFenceSerializesTerminalCleanupAndRejectsPostCleanupPut(t *testing.T) {
 	upscaleAPI := newBatchImageUpscaleTestAPI()
 	t.Cleanup(upscaleAPI.Close)

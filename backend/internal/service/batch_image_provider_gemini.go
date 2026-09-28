@@ -307,12 +307,18 @@ func BuildGeminiBatchJSONL(input BatchImageInput) ([]byte, error) {
 
 		var imageConfig *geminiImageConfig
 		if input.ExplicitImageConfig {
-			if !isImage25UpscaleModel(input.Model) || strings.ToUpper(strings.TrimSpace(input.ImageSize)) != ImageBillingSize1K || !isImage25SupportedAspectRatio(input.AspectRatio) {
-				return nil, batchImageProviderInputError("invalid explicit Image 2.5 image config")
+			imageSize := strings.ToUpper(strings.TrimSpace(input.ImageSize))
+			if imageSize != ImageBillingSize1K {
+				if _, ok := RequestedImageUpscaleScale(imageSize); !ok {
+					return nil, batchImageProviderInputError("invalid explicit image config")
+				}
+			}
+			if !isImage25SupportedAspectRatio(input.AspectRatio) {
+				return nil, batchImageProviderInputError("invalid explicit image config")
 			}
 			imageConfig = &geminiImageConfig{
 				AspectRatio: strings.TrimSpace(input.AspectRatio),
-				ImageSize:   ImageBillingSize1K,
+				ImageSize:   imageSize,
 			}
 		}
 		line := geminiJSONLLine{

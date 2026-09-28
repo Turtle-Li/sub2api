@@ -163,6 +163,30 @@ func parseCodexDirectImagesResponse(body []byte) ([]openAIResponsesImageResult, 
 	return results, nil
 }
 
+func validateCodexDirectImagesHighResolutionOutputs(body []byte, expectedCount int) error {
+	items := gjson.GetBytes(body, "data")
+	itemList := items.Array()
+	if !items.IsArray() || len(itemList) != expectedCount {
+		return imageUpscaleError(
+			"INVALID_IMAGE_COUNT",
+			0,
+			false,
+			fmt.Errorf("upstream returned %d images, expected %d", len(itemList), expectedCount),
+		)
+	}
+	for index, item := range itemList {
+		if strings.TrimSpace(item.Get("b64_json").String()) == "" {
+			return imageUpscaleError(
+				"MISSING_IMAGE_OUTPUT",
+				0,
+				false,
+				fmt.Errorf("upstream image %d is missing b64_json", index),
+			)
+		}
+	}
+	return nil
+}
+
 func codexDirectImageURL(body []byte, path, outputFormat string) []byte {
 	if result := gjson.GetBytes(body, path+"b64_json").String(); result != "" {
 		body, _ = sjson.SetBytes(body, path+"url", "data:"+openAIImageOutputMIMEType(outputFormat)+";base64,"+result)
@@ -204,7 +228,13 @@ func codexDirectImagesUsage(body []byte) (OpenAIUsage, bool) {
 	return usage, true
 }
 
-func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp *http.Response, c *gin.Context, parsed *OpenAIImagesRequest) (OpenAIUsage, int, []string, error) {
+func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	parsed *OpenAIImagesRequest,
+) (OpenAIUsage, int, []string, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		if shouldClassifyOpenAIUpstreamStreamReadError(err) {
@@ -212,9 +242,34 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp 
 		}
 		return OpenAIUsage{}, 0, nil, err
 	}
+	_, upscaleRequired := RequestedImageUpscaleScale(parsed.Size)
+	if upscaleRequired {
+		expectedCount := parsed.N
+		if expectedCount <= 0 {
+			expectedCount = 1
+		}
+		if err := validateCodexDirectImagesHighResolutionOutputs(body, expectedCount); err != nil {
+			return OpenAIUsage{}, 0, nil, err
+		}
+	}
 	results, err := parseCodexDirectImagesResponse(body)
 	if err != nil {
 		return OpenAIUsage{}, 0, nil, err
+	}
+	if upscaleRequired {
+		if err := s.upscaleOpenAIImageResults(ctx, parsed, results); err != nil {
+			return OpenAIUsage{}, 0, nil, err
+		}
+		for i := range results {
+			body, _ = sjson.SetBytes(body, fmt.Sprintf("data.%d.b64_json", i), results[i].Result)
+			body, _ = sjson.SetBytes(body, fmt.Sprintf("data.%d.size", i), results[i].Size)
+			if results[i].OutputFormat != "" {
+				body, _ = sjson.SetBytes(body, fmt.Sprintf("data.%d.output_format", i), results[i].OutputFormat)
+			}
+		}
+		if len(results) > 0 {
+			body, _ = sjson.SetBytes(body, "size", results[0].Size)
+		}
 	}
 	usage, _ := codexDirectImagesUsage(body)
 	if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
@@ -247,6 +302,16 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp 
 				format = parsed.OutputFormat
 			}
 			body = codexDirectImageURL(body, fmt.Sprintf("data.%d.", i), format)
+		}
+	}
+	if upscaleRequired && s.imageStorageResolver != nil {
+		if uploader, enabled := s.imageStorageResolver(); enabled && uploader != nil {
+			storedBody, storageErr := uploader.Rewrite(ctx, newSynchronousImageResultID(), body)
+			if storageErr != nil {
+				logImageStorageFallback("openai_images_direct", len(results), storageErr)
+			} else {
+				body = storedBody
+			}
 		}
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

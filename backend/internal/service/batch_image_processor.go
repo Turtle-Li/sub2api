@@ -52,9 +52,7 @@ func (g *batchImageHighResolutionFinalizeSlots) TryAcquire() (func(), bool) {
 	select {
 	case g.slots <- struct{}{}:
 		var once sync.Once
-		return func() {
-			once.Do(func() { <-g.slots })
-		}, true
+		return func() { once.Do(func() { <-g.slots }) }, true
 	default:
 		return nil, false
 	}
@@ -433,7 +431,7 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 			IndexedAt:            &now,
 		}
 		if parsed.Status == BatchImageParsedStatusSucceeded {
-			if _, upscaleRequired := Image25UpscaleScale(job.Model, job.ImageSize); upscaleRequired {
+			if _, upscaleRequired := RequestedImageUpscaleScale(job.ImageSize); upscaleRequired {
 				mimeType, extension, imageCount, _, upscaleErr := upscaleBatchImageResultLine(
 					upscaleCtx, i.Config, i.Upscaler, i.UpscaleStore, writeFencer, job, []byte(line),
 				)

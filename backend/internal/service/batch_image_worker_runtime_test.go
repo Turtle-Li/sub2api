@@ -89,6 +89,29 @@ func TestBatchImageWorkerRuntime_BoundsParallelJobProcessing(t *testing.T) {
 	runtime.Stop()
 }
 
+func TestBatchImageHighResolutionFinalizeConcurrency_ReservesWorker(t *testing.T) {
+	tests := []struct {
+		name    string
+		workers int
+		desired int
+		want    int
+	}{
+		{name: "single worker remains usable", workers: 1, desired: 4, want: 1},
+		{name: "default two workers reserve one", workers: 2, desired: 2, want: 1},
+		{name: "four workers admit three high resolution jobs", workers: 4, desired: 4, want: 3},
+		{name: "smaller configured limit is retained", workers: 4, desired: 2, want: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{BatchImage: config.BatchImageConfig{
+				WorkerConcurrency:                 tt.workers,
+				HighResolutionFinalizeConcurrency: tt.desired,
+			}}
+			require.Equal(t, tt.want, batchImageHighResolutionFinalizeConcurrency(cfg))
+		})
+	}
+}
+
 type blockingBatchImageRuntimeQueue struct {
 	reserveCalls atomic.Int64
 }

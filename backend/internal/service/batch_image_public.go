@@ -411,9 +411,11 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		Metadata:         normalized.Metadata,
 		Items:            make([]BatchImageInputItem, 0, len(normalized.Items)),
 	}
-	if _, upscaleRequired := Image25UpscaleScale(normalized.Model, normalized.ImageSize); upscaleRequired {
-		input.ImageSize = defaultBatchImageImageSize
+	if _, upscaleRequired := RequestedImageUpscaleScale(normalized.ImageSize); upscaleRequired {
 		input.ExplicitImageConfig = true
+		if shouldForceProviderImageSize1K(normalized.Model) {
+			input.ImageSize = defaultBatchImageImageSize
+		}
 	}
 	for _, item := range normalized.Items {
 		refs := make([]BatchImageReference, 0, len(item.ReferenceImages))
@@ -1288,18 +1290,15 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 	switch req.ImageSize {
 	case "1K":
 	case "2K", "4K":
-		if _, ok := Image25UpscaleScale(req.Model, req.ImageSize); !ok {
-			return req, ErrBatchImageInvalidItems
-		}
 		if !isImage25SupportedAspectRatio(req.AspectRatio) {
 			return req, ErrBatchImageInvalidItems
 		}
 		if req.Provider != "" && req.Provider != BatchImageProviderGeminiAPI {
 			return req, ErrBatchImageInvalidItems
 		}
-		// High-resolution Image 2.5 jobs must never enter the ordinary
-		// Gemini-to-Vertex fallback order: only Gemini API produces the 1K
-		// source consumed by the private upscale adapter.
+		// High-resolution jobs use Gemini API so the provider JSONL retains an
+		// explicit image config. The final-resolution adapter remains model
+		// independent and checks the decoded output dimensions.
 		req.Provider = BatchImageProviderGeminiAPI
 		if s == nil || s.Config == nil || !s.Config.ImageUpscale.Active() {
 			return req, ErrBatchImageUpscaleUnavailable
