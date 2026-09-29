@@ -117,6 +117,57 @@ application response rather than edge HTTP 413, while a request larger than
 hashes must converge, and the application bootstrap log must distinguish the
 128 MiB client ingress value from the 16 MiB upstream response value.
 
+## Production closure on 2026-09-30
+
+The AWS host's upload path was measured before choosing the final ceiling. The
+16, 32, 64, and 128 MiB loopback-to-public-TLS probes all completed with HTTP
+200 and observed burst upload rates of 54,585,258, 103,258,067, 36,679,547,
+and 113,003,948 bytes per second respectively. A separate sustained 1 GiB
+transfer averaged 15.753 MiB/s. At that sustained rate, 128 MiB occupies the
+upload path for about 8.1 seconds, while 256 MiB would occupy it for about
+16.3 seconds. The host has 2 GiB of RAM and more than 1 GiB available, but the
+larger limit would double per-request exposure without a demonstrated product
+need. The production contract therefore remains exactly 128 MiB.
+
+GitHub Actions run `36640878475` successfully built and switched the
+application to `6b8a1aab879002bd4057080f69b7b1288e36a0c4`, then stopped safely
+before creating a Caddy transaction because the original three-view hash
+treated Caddy's generated `file_server.hide` source paths as drift. No partial
+Caddy mutation or release transaction remained. The view-specific identity
+repair was committed in `369c21efa4afb11758552b650adf5e5c225ee942` and the
+reviewed receiver SHA-256
+`bf9fbdcb86f2b1eab7b7c16a000249f8103f82292cf24ff9461ea9be02ca49bc`
+was installed under the canonical maintenance lock. Its prior version is kept
+at
+`/opt/sub2api/backups/caddy-receiver-hotfix-369c21efa-20260929T233551Z/`.
+
+The Caddy-only recovery used the unchanged `6b8a1aab` template and the same
+root receiver used by the workflow. It completed at `2026-09-29T23:36:21Z`
+with active slot `green`, template digest
+`sha256:8469457ee548ed85c3cb88f0a61359d32ee2902a6ef3919ce87acf2752857257`,
+and final host/startup Caddyfile SHA-256
+`bb81db5a19648a277a0288c3f51abb31c0c81104bb94046e1fc31c979eae5baa`.
+The rollback backup and mode-0600 completion record share the prefix
+`/opt/sub2api/backups/Caddyfile.before-caddy-config-release-20260929T233619Z-6b8a1aab8790.5PcHC0`.
+
+Post-release verification found four exact 128 MiB request-body handlers, four
+Content-Length guards, and four 128 MiB operator messages in both the tracked
+file and active Admin API JSON. Host and startup files were byte-identical;
+there were no stale AWS 16 MiB or decimal 100,000,000-byte values. The active
+application was healthy with zero restarts and no OOM, and each of
+`SERVER_MAX_REQUEST_BODY_SIZE`, `GATEWAY_MAX_BODY_SIZE`, and
+`GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES` appeared exactly once with value
+`134217728`. Startup logs separately reported the intentional
+`upstream_ws_read_limit_bytes=16777216` and
+`client_ws_read_limit_bytes=134217728` values.
+
+An authenticated 17 MiB JSON request uploaded all 17,825,792 bytes and reached
+the application, which returned `404 model_not_found`; it was not rejected by
+Caddy and created zero usage rows. A declared Content-Length of 134,217,729
+bytes returned the expected Caddy `413` with the 128 MiB message. Public health
+remained OK, both automatic timers remained disabled, the maintenance lock was
+available, and no release transaction was left behind.
+
 ## Rollback
 
 The Caddy receiver restores the pre-change bytes in place and force-reloads the
