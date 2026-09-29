@@ -289,6 +289,20 @@ during upload, before the Mini gateway could return a job ID; the 900-second job
 lifecycle never started. The transport repair and regression scope are recorded
 in `docs/bugs/backend/BUG-20260929-image-upscale-transfer-deadline.md`.
 
+Exact commit `26e16557a23e78836c1435caf78550dc335edfc0` corrected that timeout
+boundary and was deployed by successful guarded workflow `36598546824` on
+2026-09-30. A real asynchronous `n=2`, `2K` probe then completed in 172 seconds
+and returned two distinct `2048x3072` RGB PNGs. Both were single-person,
+single-pose, continuous-frame compositions with no collage or panels. The
+active application stayed healthy with zero restarts and no OOM; the Vault
+sidecar and Mini/Comfy endpoint remained healthy. The completion window held
+exactly one usage row and one billing-dedup row, with requested billing tier
+`2K`, `image_count=2`, base cost `0.402 CNY`, probe multiplier `0.01`, and
+committed charge `0.00402 CNY`. Independent source QA/review and Level 2
+post-deployment QA passed. This probe validates the repaired 2K slow-transfer
+path; it is not a substitute for a separate 4K or per-item batch-reference
+mapping test.
+
 ## Validation and rollback
 
 Release gates require unit/race tests, migration tests, shell syntax and runtime

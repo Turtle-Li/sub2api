@@ -1,7 +1,8 @@
 # BUG-20260929-image-upscale-transfer-deadline
 
-Status: IMPLEMENTATION_READY; independent QA/review and production correction
-pending. Baseline: `cfc18e67f91a40dc15ede0ba0135a39579b47245`.
+Status: RESOLVED; independently reviewed, deployed, and verified in production.
+Baseline: `cfc18e67f91a40dc15ede0ba0135a39579b47245`. Fixed release:
+`26e16557a23e78836c1435caf78550dc335edfc0`.
 
 ## Failure and evidence
 
@@ -42,9 +43,25 @@ response semantics, storage, usage recording, or billing.
 Unit regressions assert the configured/default response-header timeout, absence
 of a client-wide timeout, a synthetic upload lasting longer than the configured
 header timeout, cancellation by the job context, and timeout while waiting for
-response headers. The exact release candidate must also pass the Image Upscale
-service tests, independent QA/review, guarded production deployment, and a real
-single-frame `n=2`, `2K` smoke before this incident is closed.
+response headers. The complete Image Upscale service test suite passed, followed
+by independent Level 1 QA and code review of the frozen source candidate.
+
+GitHub Actions workflow `36598546824` deployed the exact fixed release through
+the guarded production blue-green path on 2026-09-30. The active
+`sub2api-blue` container reported the exact OCI revision, healthy state, zero
+restarts, and no OOM. Public health, the networkless upscale Vault sidecar, the
+Tailnet Mini endpoint, and ComfyUI were healthy.
+
+The post-deployment OpenAI-compatible asynchronous task
+`imgtask_cf1a14c37a9b4a3fa959bd4f67f01943` completed an `n=2`, `2K` request in
+172 seconds of client-observed time. It returned two distinct `2048x3072` RGB
+PNGs through task-scoped storage. Both images were independently inspected and
+contained one person, one pose, and one continuous frame, with no collage or
+multi-panel composition. The exact completion window contained one usage row
+and one billing-dedup row: `image_count=2`, requested billing tier `2K`, base
+cost `0.402 CNY`, probe multiplier `0.01`, and committed charge `0.00402 CNY`.
+Independent Level 2 artifact and production QA passed without issuing another
+generation request.
 
 Knowledge candidate: yes; the distinction between response-header and total
 client timeout is a durable runtime transport contract for large media uploads.
