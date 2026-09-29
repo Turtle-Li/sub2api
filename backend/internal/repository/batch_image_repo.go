@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -299,7 +300,10 @@ func (r *batchImageRepository) UpdateBatchImageJobProviderSubmit(ctx context.Con
 	if err := r.updateBatchImageJobProviderSubmitWithSQL(ctx, tx, params); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: %v", service.ErrBatchImageProviderSubmitCommitUncertain, err)
+	}
+	return nil
 }
 
 func (r *batchImageRepository) updateBatchImageJobProviderSubmitWithSQL(ctx context.Context, sqlq batchImageSQLExecutor, params service.UpdateBatchImageJobProviderSubmitParams) error {
@@ -528,8 +532,10 @@ SET
     settled_at = CASE WHEN $2::varchar = 'completed' AND settled_at IS NULL THEN $3 ELSE settled_at END,
     output_expires_at = CASE
         WHEN $2::varchar IN ('failed', 'cancelled')
-         AND LOWER(BTRIM(model)) IN ('gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview')
-         AND UPPER(BTRIM(COALESCE(image_size, '1K'))) IN ('2K', '4K')
+         AND (
+             (provider_output_ref IS NOT NULL AND BTRIM(provider_output_ref) <> '')
+             OR UPPER(BTRIM(COALESCE(image_size, '1K'))) IN ('2K', '4K')
+         )
          AND output_expires_at IS NULL THEN $6
         ELSE output_expires_at
     END,
@@ -737,7 +743,7 @@ func (r *batchImageRepository) ListBatchImageJobsDueForInputCleanup(ctx context.
 	}
 	rows, err := r.sql.QueryContext(ctx, batchImageJobSelectSQL+`
  WHERE input_deleted_at IS NULL
-   AND provider_input_ref IS NOT NULL
+   AND (provider_input_ref IS NOT NULL OR provider = 'openai_images')
    AND status IN ('completed', 'failed', 'cancelled', 'output_deleted')
    AND COALESCE(finished_at, settled_at, updated_at, created_at) <= $1
  ORDER BY id ASC
@@ -776,11 +782,8 @@ func (r *batchImageRepository) ListBatchImageJobsDueForOutputCleanup(ctx context
 	rows, err := r.sql.QueryContext(ctx, batchImageJobSelectSQL+`
  WHERE output_deleted_at IS NULL
    AND (
-        provider_output_ref IS NOT NULL
-        OR (
-            LOWER(BTRIM(model)) IN ('gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview')
-            AND UPPER(BTRIM(COALESCE(image_size, '1K'))) IN ('2K', '4K')
-        )
+        (provider_output_ref IS NOT NULL AND BTRIM(provider_output_ref) <> '')
+        OR UPPER(BTRIM(COALESCE(image_size, '1K'))) IN ('2K', '4K')
    )
    AND status IN ('completed', 'failed', 'cancelled')
    AND output_expires_at IS NOT NULL

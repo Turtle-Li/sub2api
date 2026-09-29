@@ -105,6 +105,26 @@ func ProvideBatchImageModelPricingResolver(resolver *ModelPricingResolver) *Batc
 	return &BatchImageModelPricingResolver{Resolver: resolver}
 }
 
+func ProvideBatchImagePublicService(
+	repo BatchImageRepository,
+	accountRepo AccountRepository,
+	groupRepo GroupRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	queue BatchImageQueue,
+	pricing *BatchImageModelPricingResolver,
+	billingRepo UsageBillingRepository,
+	authCache APIKeyAuthCacheInvalidator,
+	deliveryStore BatchImageDeliveryObjectStore,
+	cfg *config.Config,
+) *BatchImagePublicService {
+	svc := NewBatchImagePublicService(
+		repo, accountRepo, groupRepo, userGroupRateRepo, queue,
+		pricing, billingRepo, authCache, cfg,
+	)
+	svc.ProviderRegistry = NewBatchImageProviderRegistryWithRuntime(cfg, deliveryStore, nil)
+	return svc
+}
+
 func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, deliveryStore BatchImageDeliveryObjectStore, cfg *config.Config, lockCache LeaderLockCache, db *sql.DB) *BatchImageCleanupService {
 	svc := NewBatchImageCleanupService(repo, accountRepo, deliveryStore, cfg)
 	svc.leaderLock = newSingletonJobLock(lockCache, db, "batch-image-cleanup", 2*time.Minute)
@@ -919,7 +939,7 @@ var ProviderSet = wire.NewSet(
 	NewDesktopStorageService,
 	ProvideImageTaskService,
 	ProvideBatchImageModelPricingResolver,
-	NewBatchImagePublicService,
+	ProvideBatchImagePublicService,
 	NewBatchImageDownloadService,
 	ProvideBatchImageCleanupService,
 	ProvideBatchImageWorkerRuntime,

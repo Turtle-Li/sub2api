@@ -74,6 +74,24 @@ IMAGE_UPSCALE_VAULT_HELPER="${APP_DIR}/scripts/sub2api-image-upscale-vault-conta
 APPROVED_FEISHU_VAULT_VOLUME="sub2api_feishu_vault"
 CONTAINER_FEISHU_VAULT_PATH="/run/sub2api-feishu-vault"
 REFUND_ROLLBACK_READINESS_PATH="/internal/refund-rollback-readiness"
+BATCH_IMAGE_DELIVERY_COS_ENV_KEYS=(
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF
+  BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET
+)
+BATCH_IMAGE_DELIVERY_COS_RAW_ENV_KEYS=(
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY
+)
+BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED=false
+for batch_image_delivery_cos_key in "${BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}"; do
+  if [ "${!batch_image_delivery_cos_key+x}" = x ]; then
+    BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED=true
+  fi
+done
+BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="${BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF:-}"
+BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF="${BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF:-}"
+BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET="${BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET:-}"
 
 ACTIVE_CONTAINER=""
 ACTIVE_UPSTREAM=""
@@ -333,6 +351,131 @@ environment_value_once() {
     }'
 }
 
+parse_batch_image_delivery_cos_vault_reference() {
+  local reference="$1" expected_field="$2" body path field component
+  local -a components
+
+  case "$reference" in
+    vault://*) ;;
+    *) return 1 ;;
+  esac
+  case "$reference" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  body="${reference#vault://}"
+  path="${body%%#*}"
+  field="${body#*#}"
+  [ "$field" != "$body" ] || return 1
+  [ "${field#*#}" = "$field" ] || return 1
+  case "$path" in
+    ''|/*|*/|*//* ) return 1 ;;
+  esac
+  IFS=/ read -r -a components <<<"$path"
+  for component in "${components[@]}"; do
+    case "$component" in
+      ''|.|..|*[!A-Za-z0-9_.-]*) return 1 ;;
+    esac
+    [ "${#component}" -le 128 ] || return 1
+  done
+  [ "$field" = "$expected_field" ] || return 1
+  printf '%s\n' "$path"
+}
+
+validate_batch_image_delivery_cos_runtime() {
+  local key access_path secret_path
+
+  for key in "${BATCH_IMAGE_DELIVERY_COS_RAW_ENV_KEYS[@]}"; do
+    [ "${!key+x}" != x ] \
+      || die "$key is forbidden; use the dedicated memory-only Vault agent"
+  done
+  [ "$BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED" = true ] || return 0
+  for key in "${BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}"; do
+    [ -n "${!key-}" ] \
+      || die "$key is required together with the Batch Image COS Vault profile"
+  done
+  [ "$BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET" = "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/public.sock" ] \
+    || die "BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET does not match the mounted agent socket"
+  access_path="$(parse_batch_image_delivery_cos_vault_reference "$BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF" access_key_id)" \
+    || die "BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF is invalid"
+  secret_path="$(parse_batch_image_delivery_cos_vault_reference "$BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF" secret_access_key)" \
+    || die "BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF is invalid"
+  [ "$access_path" = "$secret_path" ] \
+    || die "Batch Image COS Vault references must use the same path"
+}
+
+batch_image_delivery_cos_configured_from_environment() {
+  local environment_json="$1"
+
+  printf '%s' "$environment_json" | python3 -c '
+import json
+import re
+import sys
+
+try:
+    environment = json.load(sys.stdin)
+except (TypeError, ValueError):
+    raise SystemExit(1)
+
+if not isinstance(environment, list) or any(not isinstance(item, str) for item in environment):
+    raise SystemExit(1)
+
+raw_names = (
+    "BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID",
+    "BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY",
+)
+for name in raw_names:
+    if any(item == name or item.startswith(name + "=") for item in environment):
+        raise SystemExit(1)
+
+names = (
+    "BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF",
+    "BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF",
+    "BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET",
+)
+values = {}
+for name in names:
+    matches = []
+    for item in environment:
+        if item == name:
+            raise SystemExit(1)
+        if item.startswith(name + "="):
+            matches.append(item[len(name) + 1:])
+    if len(matches) > 1:
+        raise SystemExit(1)
+    if matches:
+        values[name] = matches[0]
+
+if not values:
+    print("false")
+    raise SystemExit(0)
+if len(values) != len(names):
+    raise SystemExit(1)
+
+access = values[names[0]]
+secret = values[names[1]]
+socket = values[names[2]]
+if access == "" and secret == "" and socket == "/run/sub2api-upscale-vault/public.sock":
+    print("false")
+    raise SystemExit(0)
+
+pattern = re.compile(r"vault://([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)#([A-Za-z0-9_-]+)$")
+access_match = pattern.fullmatch(access)
+secret_match = pattern.fullmatch(secret)
+if (
+    not access_match
+    or not secret_match
+    or access_match.group(1) != secret_match.group(1)
+    or access_match.group(2) != "access_key_id"
+    or secret_match.group(2) != "secret_access_key"
+    or socket != "/run/sub2api-upscale-vault/public.sock"
+):
+    raise SystemExit(1)
+if any(part in ("", ".", "..") or len(part) > 128 for part in access_match.group(1).split("/")):
+    raise SystemExit(1)
+print("true")
+'
+}
+
 # Docker's line-oriented template output cannot distinguish an environment
 # value containing a newline from a second environment entry. Read the raw
 # JSON array for feature controls so a malformed value cannot create a false
@@ -355,6 +498,8 @@ if not isinstance(environment, list) or any(not isinstance(item, str) for item i
 for forbidden in (
     "UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64",
     "IMAGE_UPSCALE_API_KEY",
+    "BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID",
+    "BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY",
     "SUB2API_FEISHU_WEBHOOK_URL",
 ):
     if any(item == forbidden or item.startswith(forbidden + "=") for item in environment):
@@ -447,6 +592,7 @@ fixed_egress_mode_matches_active() {
 application_runtime_matches() {
   local container_name="$1" networks mounts environment environment_json feature_flags
   local network_count mount_count expected_mount_count unified_payment_enabled image_upscale_enabled feishu_enabled
+  local batch_image_delivery_cos_configured vault_socket_required sidecar_image
   local extra_feature_value unified_payment_mount_count image_upscale_mount_count
   local key expected_value actual_value
   container_exists "$container_name" || return 1
@@ -461,6 +607,17 @@ application_runtime_matches() {
   case "$unified_payment_enabled" in true|false) ;; *) return 1 ;; esac
   case "$image_upscale_enabled" in true|false) ;; *) return 1 ;; esac
   case "$feishu_enabled" in true|false) ;; *) return 1 ;; esac
+  batch_image_delivery_cos_configured="$(batch_image_delivery_cos_configured_from_environment "$environment_json")" || return 1
+  case "$batch_image_delivery_cos_configured" in true|false) ;; *) return 1 ;; esac
+  if [ "$BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED" = true ]; then
+    [ "$batch_image_delivery_cos_configured" = true ] || return 1
+    for key in "${BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}"; do
+      actual_value="$(environment_value_once "$environment" "$key")" || return 1
+      [ "$actual_value" = "${!key}" ] || return 1
+    done
+  else
+    [ "$batch_image_delivery_cos_configured" = false ] || return 1
+  fi
 
   network_count="$(printf '%s\n' "$networks" | awk 'NF { count += 1 } END { print count + 0 }')"
   [ "$network_count" -eq 1 ] && printf '%s\n' "$networks" | grep -qxF "$RUNTIME_GUARD_NETWORK" || return 1
@@ -502,14 +659,21 @@ application_runtime_matches() {
   else
     mount_target_is_absent "$mounts" "$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH" || return 1
   fi
+  vault_socket_required=false
   if [ "$image_upscale_enabled" = true ]; then
-	local sidecar_image
-    expected_mount_count=$((expected_mount_count + 1))
-    printf '%s\n' "$mounts" | grep -qxF \
-      "volume|$APPROVED_IMAGE_UPSCALE_VAULT_VOLUME|$CONTAINER_IMAGE_UPSCALE_VAULT_PATH|false" || return 1
+    vault_socket_required=true
     [ "$(environment_value_once "$environment" IMAGE_UPSCALE_BASE_URL)" = "https://hcmac-mini.tailfc4ed7.ts.net" ] || return 1
     [ "$(environment_value_once "$environment" IMAGE_UPSCALE_API_KEY_VAULT_REF)" = "vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key" ] || return 1
     [ "$(environment_value_once "$environment" IMAGE_UPSCALE_VAULT_AGENT_SOCKET)" = "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/public.sock" ] || return 1
+  fi
+  if [ "$batch_image_delivery_cos_configured" = true ]; then
+    vault_socket_required=true
+  fi
+  if [ "$vault_socket_required" = true ]; then
+    [ "$BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED" = true ] || return 1
+    expected_mount_count=$((expected_mount_count + 1))
+    printf '%s\n' "$mounts" | grep -qxF \
+      "volume|$APPROVED_IMAGE_UPSCALE_VAULT_VOLUME|$CONTAINER_IMAGE_UPSCALE_VAULT_PATH|false" || return 1
 	[ -f "$IMAGE_UPSCALE_VAULT_HELPER" ] && [ ! -L "$IMAGE_UPSCALE_VAULT_HELPER" ] \
 		&& [ -x "$IMAGE_UPSCALE_VAULT_HELPER" ] || return 1
 	[ "$(realpath -e -- "$IMAGE_UPSCALE_VAULT_HELPER")" = "$IMAGE_UPSCALE_VAULT_HELPER" ] || return 1
@@ -1470,6 +1634,7 @@ if [ "$DEPENDENCY_MODE" = external ] || [ "$DUAL_NODE_RUNTIME_ENABLED" = true ];
   require_cmd realpath
   require_cmd stat
 fi
+validate_batch_image_delivery_cos_runtime
 if [ "$DEPENDENCY_MODE" = external ]; then
   load_external_runtime_env
   validate_external_ca_file

@@ -282,6 +282,10 @@ func BuildGeminiBatchJSONL(input BatchImageInput) ([]byte, error) {
 	if len(input.Items) == 0 {
 		return nil, batchImageProviderInputError("at least one item is required")
 	}
+	imageConfig, err := batchImageGenerationImageConfig(input)
+	if err != nil {
+		return nil, err
+	}
 
 	seen := make(map[string]struct{}, len(input.Items))
 	var buf bytes.Buffer
@@ -305,22 +309,6 @@ func BuildGeminiBatchJSONL(input BatchImageInput) ([]byte, error) {
 			return nil, err
 		}
 
-		var imageConfig *geminiImageConfig
-		if input.ExplicitImageConfig {
-			imageSize := strings.ToUpper(strings.TrimSpace(input.ImageSize))
-			if imageSize != ImageBillingSize1K {
-				if _, ok := RequestedImageUpscaleScale(imageSize); !ok {
-					return nil, batchImageProviderInputError("invalid explicit image config")
-				}
-			}
-			if !isImage25SupportedAspectRatio(input.AspectRatio) {
-				return nil, batchImageProviderInputError("invalid explicit image config")
-			}
-			imageConfig = &geminiImageConfig{
-				AspectRatio: strings.TrimSpace(input.AspectRatio),
-				ImageSize:   imageSize,
-			}
-		}
 		line := geminiJSONLLine{
 			Key: customID,
 			Request: geminiGenerateRequest{
@@ -338,6 +326,25 @@ func BuildGeminiBatchJSONL(input BatchImageInput) ([]byte, error) {
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+func batchImageGenerationImageConfig(input BatchImageInput) (*geminiImageConfig, error) {
+	if !input.ExplicitImageConfig {
+		return nil, nil
+	}
+	imageSize := strings.ToUpper(strings.TrimSpace(input.ImageSize))
+	if imageSize != ImageBillingSize1K {
+		if _, ok := RequestedImageUpscaleScale(imageSize); !ok {
+			return nil, batchImageProviderInputError("invalid explicit image config")
+		}
+	}
+	if !isImage25SupportedAspectRatio(input.AspectRatio) {
+		return nil, batchImageProviderInputError("invalid explicit image config")
+	}
+	return &geminiImageConfig{
+		AspectRatio: strings.TrimSpace(input.AspectRatio),
+		ImageSize:   imageSize,
+	}, nil
 }
 
 func batchImageGeminiParts(prompt string, refs []BatchImageReference) ([]geminiPart, error) {

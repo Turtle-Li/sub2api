@@ -422,6 +422,68 @@ func TestBatchImageRepository_SetBatchImageJobSettlementFailed(t *testing.T) {
 	require.Equal(t, 1, job.RetryCount)
 }
 
+func TestBatchImageRepository_FailedOutputSchedulesProviderIndependentCleanup(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 4, 11, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name              string
+		imageSize         string
+		providerOutputRef *string
+	}{
+		{
+			name:              "provider output at 1K",
+			imageSize:         "1K",
+			providerOutputRef: batchImageTestStringPtr("batch-images/provider/openai/output.jsonl"),
+		},
+		{
+			name:      "deterministic upscale output without provider ref",
+			imageSize: "2K",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := testTx(t)
+			repo := newBatchImageRepositoryWithSQL(tx)
+			batchID := batchImageTestID(t, tt.name)
+
+			_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
+				BatchID:           batchID,
+				UserID:            1001,
+				Provider:          service.BatchImageProviderOpenAI,
+				Model:             "gpt-image-2.5-sunburst",
+				ImageSize:         tt.imageSize,
+				Status:            service.BatchImageJobStatusIndexing,
+				ProviderOutputRef: tt.providerOutputRef,
+				ItemCount:         1,
+			})
+			require.NoError(t, err)
+
+			require.NoError(t, repo.TransitionBatchImageJobStatus(
+				ctx,
+				batchID,
+				service.BatchImageJobStatusFailed,
+				service.BatchImageTransitionOptions{Now: &now},
+			))
+
+			job, err := repo.GetBatchImageJobByBatchID(ctx, batchID)
+			require.NoError(t, err)
+			require.NotNil(t, job.OutputExpiresAt)
+			require.Equal(t, now.Add(service.BatchImageUpscaleCleanupGrace), *job.OutputExpiresAt)
+
+			due, err := repo.ListBatchImageJobsDueForOutputCleanup(
+				ctx,
+				now.Add(service.BatchImageUpscaleCleanupGrace),
+				10,
+			)
+			require.NoError(t, err)
+			require.Len(t, due, 1)
+			require.Equal(t, batchID, due[0].BatchID)
+		})
+	}
+}
+
 func TestBatchImageRepository_AppendEvent(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)

@@ -49,3 +49,39 @@ func TestImageUpscaleRejectsRawOrUnboundedConfiguration(t *testing.T) {
 	cfg.ImageUpscale.MaxConcurrent = 3
 	require.ErrorContains(t, cfg.Validate(), "between 1 and 2")
 }
+
+func TestLoadBatchImageCOSVaultReferencesFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF", "vault://secret/data/sub2api/batch-cos#access_key_id")
+	t.Setenv("BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF", "vault://secret/data/sub2api/batch-cos#secret_access_key")
+	t.Setenv("BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET", "/run/sub2api-upscale-vault/public.sock")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "vault://secret/data/sub2api/batch-cos#access_key_id", cfg.BatchImage.DeliveryCOSAccessKeyVaultRef)
+	require.Equal(t, "vault://secret/data/sub2api/batch-cos#secret_access_key", cfg.BatchImage.DeliveryCOSSecretAccessKeyVaultRef)
+	require.Equal(t, "/run/sub2api-upscale-vault/public.sock", cfg.BatchImage.DeliveryCOSVaultAgentSocket)
+}
+
+func TestBatchImageCOSRejectsRawCredentials(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID", "legacy-access-key")
+	t.Setenv("BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY", "legacy-secret-key")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "raw COS credentials are not accepted")
+}
+
+func TestBatchImageCOSVaultReferencesRequireExactFieldsOnOnePath(t *testing.T) {
+	validAccess := "vault://secret/data/sub2api/batch-cos#access_key_id"
+	validSecret := "vault://secret/data/sub2api/batch-cos#secret_access_key"
+	require.True(t, validBatchImageCOSVaultReferences(validAccess, validSecret))
+	require.False(t, validBatchImageCOSVaultReferences(
+		"vault://secret/data/sub2api/batch-cos#wrong",
+		validSecret,
+	))
+	require.False(t, validBatchImageCOSVaultReferences(
+		validAccess,
+		"vault://secret/data/sub2api/other#secret_access_key",
+	))
+}

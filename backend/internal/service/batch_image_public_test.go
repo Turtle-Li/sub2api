@@ -46,6 +46,22 @@ func TestBatchImagePublicService_SelectAccountPriority(t *testing.T) {
 	}
 }
 
+func TestBatchImageAccountSupportsProviderModelRejectsUnsupportedMappedOpenAIModel(t *testing.T) {
+	account := Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{"model_mapping": map[string]any{
+			"gpt-image-2.5-sunburst": "gpt-image-1.5",
+		}},
+	}
+	require.False(t, batchImageAccountSupportsProviderModel(BatchImageProviderOpenAI, &account, "gpt-image-2.5-sunburst"))
+
+	account.Credentials["model_mapping"] = map[string]any{
+		"gpt-image-2.5-sunburst": "gpt-image-2.5-sunburst-2026-09-08",
+	}
+	require.True(t, batchImageAccountSupportsProviderModel(BatchImageProviderOpenAI, &account, "gpt-image-2.5-sunburst"))
+}
+
 func TestBatchImagePublicService_Submit(t *testing.T) {
 	ctx := context.Background()
 
@@ -347,7 +363,7 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 			{name: "empty_prompt", mutate: func(r *BatchImageSubmitRequest) { r.Items[0].Prompt = " " }, want: ErrBatchImageInvalidItems},
 			{name: "prompt_too_long", mutate: func(r *BatchImageSubmitRequest) { r.Items[0].Prompt = strings.Repeat("x", 9) }, want: ErrBatchImagePromptTooLong},
 			{name: "unsupported_provider", mutate: func(r *BatchImageSubmitRequest) { r.Provider = "other" }, want: ErrBatchImageUnsupportedProvider},
-			{name: "vertex_rejects_2k", mutate: func(r *BatchImageSubmitRequest) { r.Provider = BatchImageProviderVertex; r.ImageSize = "2K" }, want: ErrBatchImageInvalidItems},
+			{name: "vertex_requires_upscaler_for_2k", mutate: func(r *BatchImageSubmitRequest) { r.Provider = BatchImageProviderVertex; r.ImageSize = "2K" }, want: ErrBatchImageUpscaleUnavailable},
 			{name: "too_many_outputs_per_item", mutate: func(r *BatchImageSubmitRequest) {
 				r.Items[0].OutputCount = 5
 			}, want: ErrBatchImageInvalidItems},
@@ -695,6 +711,89 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Len(t, gemini.submits, 1)
 	})
 
+	t.Run("committed provider submit survives lost commit acknowledgement", func(t *testing.T) {
+		svc, repo, queue, _, _ := newTestBatchImagePublicService(true)
+		store := newFakeOpenAIImageBatchStore()
+		provider := NewOpenAIImagesBatchProvider(store, nil, testOpenAIImageBatchObjectPrefix)
+		svc.ProviderRegistry = NewBatchImageProviderRegistry(provider)
+		svc.AccountRepo = &publicBatchImageAccountRepo{accounts: []Account{{
+			ID:          303,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Credentials: map[string]any{"api_key": "test-secret"},
+		}}}
+		repo.providerSubmitErr = errors.New("commit acknowledgement lost")
+		repo.providerSubmitErrAfterCommit = true
+		req := validBatchImageSubmitRequest()
+		req.Provider = BatchImageProviderOpenAI
+		req.Model = "gpt-image-2.5-sunburst"
+
+		got, err := svc.Submit(ctx, testBatchImageOwner(), req, "lost-commit-ack")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, BatchImageProviderOpenAI, got.Provider)
+		require.Equal(t, BatchImageJobStatusSubmitted, repo.jobs[got.ID].Status)
+		require.Equal(t, []string{got.ID}, queue.enqueued)
+
+		manifestExists, err := store.Exists(ctx, provider.inputKey(got.ID))
+		require.NoError(t, err)
+		require.True(t, manifestExists)
+		cancelExists, err := store.Exists(ctx, provider.cancelKey(got.ID))
+		require.NoError(t, err)
+		require.False(t, cancelExists)
+	})
+
+	t.Run("confirmed uncommitted provider submit is aborted", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		updateErr := errors.New("provider submit transaction rejected")
+		repo.providerSubmitErr = updateErr
+
+		got, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "uncommitted-submit")
+		require.Nil(t, got)
+		require.ErrorIs(t, err, updateErr)
+		require.Empty(t, queue.enqueued)
+		require.Equal(t, 1, gemini.cancelCount)
+		require.Equal(t, []CleanupTarget{CleanupTargetInput}, gemini.cleanupTargets)
+		for _, job := range repo.jobs {
+			require.Equal(t, BatchImageJobStatusUploading, job.Status)
+			require.Empty(t, batchImageDerefString(job.ProviderJobName))
+		}
+	})
+
+	t.Run("uncertain provider submit keeps provider objects and schedules recovery", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		repo.providerSubmitErr = errors.New("provider submit commit response lost")
+		repo.getBatchImageJobByBatchIDErr = errors.New("database temporarily unavailable")
+		repo.providerSubmitErrAfterCommit = true
+
+		got, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "uncertain-submit")
+		require.Nil(t, got)
+		require.ErrorIs(t, err, ErrBatchImageSubmitPending)
+		require.Equal(t, 0, gemini.cancelCount)
+		require.Empty(t, gemini.cleanupTargets)
+		require.Len(t, queue.enqueued, 1)
+	})
+
+	t.Run("unresolved commit with stale uploading read preserves provider objects", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		repo.providerSubmitErr = errors.New("provider submit commit still resolving")
+		repo.providerSubmitCommitUncertain = true
+
+		got, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "stale-confirmation-read")
+		require.Nil(t, got)
+		require.ErrorIs(t, err, ErrBatchImageSubmitPending)
+		require.Equal(t, 0, gemini.cancelCount)
+		require.Empty(t, gemini.cleanupTargets)
+		require.Len(t, queue.enqueued, 1)
+		for _, job := range repo.jobs {
+			require.Equal(t, BatchImageJobStatusUploading, job.Status)
+			require.Empty(t, batchImageDerefString(job.ProviderJobName))
+		}
+	})
+
 	t.Run("provider failure with release failure enqueues billing retry", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		gemini.submitErr = errors.New("projects/secret-provider-job failed")
@@ -933,6 +1032,120 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 	})
 }
 
+func TestBatchImagePublicServiceOpenAIModelRoutingAndSourceTier(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, _, _, _ := newTestBatchImagePublicService(true)
+	openAI := &publicBatchImageProvider{name: BatchImageProviderOpenAI}
+	svc.ProviderRegistry = NewBatchImageProviderRegistry(openAI)
+	account := testBatchImageAccount(404, AccountTypeOAuth)
+	account.Platform = PlatformOpenAI
+	account.Credentials["model_mapping"] = map[string]any{
+		"gpt-image-2.5-sunburst": "gpt-image-2.5-sunburst",
+	}
+	svc.AccountRepo = &publicBatchImageAccountRepo{accounts: []Account{account}}
+	svc.Config.ImageUpscale = config.ImageUpscaleConfig{
+		Enabled:          true,
+		BaseURL:          "https://upscale.example.test",
+		APIKeyVaultRef:   "vault://secret/data/infrastructure/upscale#api_key",
+		VaultAgentSocket: imageUpscaleVaultSocket,
+	}
+
+	request := BatchImageSubmitRequest{
+		Model:       "gpt-image-2.5-sunburst",
+		AspectRatio: "1:1",
+		ImageSize:   "2K",
+		SharedReferenceImages: []BatchImageSharedReferenceInput{
+			{SharedReferenceID: "product", MimeType: "image/png", Data: []byte("shared-product")},
+		},
+		Items: []BatchImageSubmitItem{
+			{
+				CustomID: "red",
+				Prompt:   "red cup",
+				ReferenceImages: []BatchImageReferenceInput{
+					{ID: "red-product", Type: "product_truth", SharedReferenceID: "product"},
+					{ID: "red-scene", Type: "scene", MimeType: "image/jpeg", Data: []byte("red-scene")},
+				},
+			},
+			{
+				CustomID: "blue",
+				Prompt:   "blue bag",
+				ReferenceImages: []BatchImageReferenceInput{
+					{ID: "blue-product", Type: "product_truth", SharedReferenceID: "product"},
+					{ID: "blue-scene", Type: "scene", MimeType: "image/jpeg", Data: []byte("blue-scene")},
+				},
+			},
+		},
+	}
+
+	created, err := svc.Submit(ctx, testBatchImageOwner(), request, "")
+	require.NoError(t, err)
+	require.Equal(t, BatchImageProviderOpenAI, created.Provider)
+	require.Equal(t, "2K", created.ImageSize)
+	require.Len(t, openAI.submits, 1)
+	providerInput := openAI.submits[0]
+	require.Equal(t, ImageBillingSize1K, providerInput.ImageSize)
+	require.True(t, providerInput.ExplicitImageConfig)
+	require.Len(t, providerInput.Items, 2)
+	require.Equal(t, "red cup", providerInput.Items[0].Prompt)
+	require.Equal(t, []byte("shared-product"), providerInput.Items[0].ReferenceImages[0].Data)
+	require.Equal(t, []byte("red-scene"), providerInput.Items[0].ReferenceImages[1].Data)
+	require.Equal(t, "blue bag", providerInput.Items[1].Prompt)
+	require.Equal(t, []byte("shared-product"), providerInput.Items[1].ReferenceImages[0].Data)
+	require.Equal(t, []byte("blue-scene"), providerInput.Items[1].ReferenceImages[1].Data)
+	require.Equal(t, "2K", repo.jobs[created.ID].ImageSize)
+}
+
+func TestBatchImagePublicServiceOneKSendsExplicitSourceImageConfig(t *testing.T) {
+	svc, _, _, gemini, _ := newTestBatchImagePublicService(true)
+	request := validBatchImageSubmitRequest()
+	request.ImageSize = ImageBillingSize1K
+	request.AspectRatio = "16:9"
+
+	created, err := svc.Submit(context.Background(), testBatchImageOwner(), request, "")
+	require.NoError(t, err)
+	require.Equal(t, ImageBillingSize1K, created.ImageSize)
+	require.Len(t, gemini.submits, 1)
+	require.Equal(t, ImageBillingSize1K, gemini.submits[0].ImageSize)
+	require.Equal(t, "16:9", gemini.submits[0].AspectRatio)
+	require.True(t, gemini.submits[0].ExplicitImageConfig)
+}
+
+func TestBatchImagePublicServiceRejectsOpenAIAspectRatioThatCannotRemainSource1K(t *testing.T) {
+	svc, _, _, _, _ := newTestBatchImagePublicService(true)
+	request := validBatchImageSubmitRequest()
+	request.Model = "gpt-image-2.5-flare"
+	request.Provider = BatchImageProviderOpenAI
+	request.AspectRatio = "16:9"
+
+	_, err := svc.validateSubmitRequest(request)
+	require.ErrorIs(t, err, ErrBatchImageInvalidItems)
+}
+
+func TestBatchImagePublicServiceRejectsProviderModelPlatformMismatch(t *testing.T) {
+	svc, _, _, _, _ := newTestBatchImagePublicService(true)
+
+	gptRequest := validBatchImageSubmitRequest()
+	gptRequest.Model = "gpt-image-2.5-flare"
+	gptRequest.Provider = BatchImageProviderGeminiAPI
+	_, err := svc.validateSubmitRequest(gptRequest)
+	require.ErrorIs(t, err, ErrBatchImageUnsupportedProvider)
+
+	geminiRequest := validBatchImageSubmitRequest()
+	geminiRequest.Provider = BatchImageProviderOpenAI
+	_, err = svc.validateSubmitRequest(geminiRequest)
+	require.ErrorIs(t, err, ErrBatchImageUnsupportedProvider)
+
+	legacyOpenAIRequest := validBatchImageSubmitRequest()
+	legacyOpenAIRequest.Model = "gpt-image-1.5"
+	legacyOpenAIRequest.Provider = BatchImageProviderOpenAI
+	_, err = svc.validateSubmitRequest(legacyOpenAIRequest)
+	require.ErrorIs(t, err, ErrBatchImageInvalidModel)
+	require.NotContains(t, defaultBatchImageModelCandidates(), "gpt-image-1.5")
+	require.NotContains(t, defaultBatchImageModelCandidates(), "gemini-2.0-flash-exp-image-generation")
+	require.NotContains(t, defaultBatchImageModelCandidates(), "gemini-3-pro-image-preview")
+	require.NotContains(t, defaultBatchImageModelCandidates(), "gemini-3.1-flash-image-preview")
+}
+
 func TestBatchImagePublicService_List(t *testing.T) {
 	ctx := context.Background()
 	svc, repo, _, _, _ := newTestBatchImagePublicService(true)
@@ -1040,11 +1253,43 @@ func TestBatchImagePublicService_ListModels(t *testing.T) {
 		}}, got.Data)
 	})
 
+	t.Run("returns only GPT Image models for an OpenAI group", func(t *testing.T) {
+		svc, _, _, _, _ := newTestBatchImagePublicService(true)
+		openAI := &publicBatchImageProvider{name: BatchImageProviderOpenAI}
+		svc.ProviderRegistry = NewBatchImageProviderRegistry(
+			&publicBatchImageProvider{name: BatchImageProviderGeminiAPI},
+			openAI,
+		)
+		groupID := int64(8)
+		svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{
+			groupID: {
+				ID:                        groupID,
+				Platform:                  PlatformOpenAI,
+				AllowImageGeneration:      true,
+				AllowBatchImageGeneration: true,
+			},
+		}}
+		account := testBatchImageMappedAccount(404, AccountTypeOAuth, map[string]any{
+			"gpt-image-2.5-flare":    "gpt-image-2.5-flare",
+			"gemini-2.5-flash-image": "gemini-2.5-flash-image",
+		})
+		account.Platform = PlatformOpenAI
+		svc.AccountRepo = &publicBatchImageAccountRepo{accounts: []Account{account}}
+
+		got, err := svc.ListModels(ctx, BatchImageOwner{UserID: 11, APIKeyID: 22, GroupID: &groupID})
+		require.NoError(t, err)
+		require.Equal(t, []BatchImagePublicModel{{
+			ID:       "gpt-image-2.5-flare",
+			Object:   "image.batch.model",
+			Provider: BatchImageProviderOpenAI,
+		}}, got.Data)
+	})
+
 	t.Run("expands wildcard mappings against batch image candidates", func(t *testing.T) {
 		svc, _, _, _, _ := newTestBatchImagePublicService(true)
 		accountRepo := svc.AccountRepo.(*publicBatchImageAccountRepo)
 		accountRepo.accounts = []Account{testBatchImageMappedAccount(303, AccountTypeAPIKey, map[string]any{
-			"gemini-3.1-*": "gemini-3.1-flash-lite-image",
+			"gemini-*": "gemini-3.1-flash-lite-image",
 		})}
 
 		got, err := svc.ListModels(ctx, testBatchImageOwner())
@@ -1056,7 +1301,10 @@ func TestBatchImagePublicService_ListModels(t *testing.T) {
 		}
 		require.Contains(t, ids, "gemini-3.1-flash-image")
 		require.Contains(t, ids, "gemini-3.1-flash-lite-image")
-		require.NotContains(t, ids, "gemini-2.5-flash-image")
+		require.Contains(t, ids, "gemini-2.5-flash-image")
+		require.NotContains(t, ids, "gemini-2.0-flash-exp-image-generation")
+		require.NotContains(t, ids, "gemini-3-pro-image-preview")
+		require.NotContains(t, ids, "gemini-3.1-flash-image-preview")
 	})
 
 	t.Run("filters models without batch image pricing", func(t *testing.T) {
@@ -1358,6 +1606,36 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 		require.Zero(t, gemini.getCount)
 		require.Zero(t, gemini.cancelCount)
 		require.Empty(t, queue.ensured)
+	})
+
+	t.Run("durable local cancel intent is accepted while worker holds job lock", func(t *testing.T) {
+		svc, repo, queue, _, _ := newTestBatchImagePublicService(true)
+		apiKeyID := int64(22)
+		accountID := int64(101)
+		baseProvider := &publicBatchImageProvider{name: BatchImageProviderOpenAI}
+		openAI := &publicDurableCancelProvider{publicBatchImageProvider: baseProvider}
+		svc.ProviderRegistry = NewBatchImageProviderRegistry(openAI)
+		repo.jobs["imgbatch_openai_locked"] = &BatchImageJob{
+			BatchID:         "imgbatch_openai_locked",
+			UserID:          11,
+			APIKeyID:        &apiKeyID,
+			AccountID:       &accountID,
+			Provider:        BatchImageProviderOpenAI,
+			Model:           "gpt-image-2.5-sunburst",
+			Status:          BatchImageJobStatusSubmitted,
+			ProviderJobName: batchImageStringPtr("openai-images:imgbatch_openai_locked"),
+			CreatedAt:       time.Now(),
+		}
+		queue.lockAcquired = false
+
+		got, err := svc.Cancel(ctx, testBatchImageOwner(), "imgbatch_openai_locked")
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.Status)
+		require.Equal(t, 1, openAI.persistCount)
+		require.Zero(t, baseProvider.getCount)
+		require.Zero(t, baseProvider.cancelCount)
+		require.Empty(t, queue.ensured)
+		require.Contains(t, repo.events["imgbatch_openai_locked"], "job_cancel_requested")
 	})
 
 	t.Run("refreshes the job lock while provider status is blocked", func(t *testing.T) {
@@ -1806,6 +2084,17 @@ type publicBatchImageProvider struct {
 	result         string
 	cleanupTargets []CleanupTarget
 	cleanupErr     error
+}
+
+type publicDurableCancelProvider struct {
+	*publicBatchImageProvider
+	persistCount int
+	persistErr   error
+}
+
+func (p *publicDurableCancelProvider) PersistCancelIntent(context.Context, *BatchImageJob) error {
+	p.persistCount++
+	return p.persistErr
 }
 
 func (p *publicBatchImageProvider) Name() string { return p.name }

@@ -36,7 +36,7 @@ type BatchImageCleanupService struct {
 func NewBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, deliveryStore BatchImageDeliveryObjectStore, cfg *config.Config) *BatchImageCleanupService {
 	return &BatchImageCleanupService{
 		Repo:             repo,
-		ProviderRegistry: NewBatchImageProviderRegistryFromConfig(cfg),
+		ProviderRegistry: NewBatchImageProviderRegistryWithRuntime(cfg, deliveryStore, nil),
 		AccountResolver:  &BatchImageAccountRepositoryResolver{Repo: accountRepo},
 		DeliveryStore:    deliveryStore,
 		Config:           cfg,
@@ -319,6 +319,15 @@ func (s *BatchImageCleanupService) callProviderCleanup(ctx context.Context, job 
 	provider, ok := s.ProviderRegistry.Get(job.Provider)
 	if !ok || provider == nil {
 		return ErrBatchImageUnsupportedProvider
+	}
+	if accountless, ok := provider.(BatchImageProviderAccountlessCleanup); ok {
+		if err := accountless.CleanupWithoutAccount(ctx, job, target); err != nil {
+			if cleanupErrorIsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 	if job.AccountID == nil || *job.AccountID <= 0 {
 		return ErrBatchImageMissingAccountID

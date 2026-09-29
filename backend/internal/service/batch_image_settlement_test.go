@@ -60,6 +60,7 @@ func TestBatchImageSettlementUsageEndpointMatchesProvider(t *testing.T) {
 	}{
 		{provider: BatchImageProviderGeminiAPI, want: "gemini:v1beta/models:batchGenerateContent"},
 		{provider: BatchImageProviderVertex, want: "vertex:batchPredictionJobs"},
+		{provider: BatchImageProviderOpenAI, want: "openai:images"},
 	} {
 		t.Run(tt.provider, func(t *testing.T) {
 			job := testSettlingBatchImageJob("imgbatch_endpoint_" + tt.provider)

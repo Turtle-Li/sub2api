@@ -28,6 +28,9 @@ CADDY_CANDIDATE_FILE="$TEST_ROOT/caddy-candidate.Caddyfile"
 ROUTE_VERIFIER="$TEST_ROOT/verify-image-route-contract"
 NSENTER_FAIL_MARKER="$TEST_ROOT/nsenter-fail-once.marker"
 UPSCALE_HELPER_CALLS="$TEST_ROOT/image-upscale-helper-calls.log"
+BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF='vault://secret/data/test/sub2api-batch-image#access_key_id'
+BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF='vault://secret/data/test/sub2api-batch-image#secret_access_key'
+BATCH_IMAGE_DELIVERY_COS_SOCKET='/run/sub2api-upscale-vault/public.sock'
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -573,13 +576,53 @@ assert_contains "$OUTPUT" 'SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS does not match 
 # Enabled upscale releases must invoke the same hardened readiness helper used
 # by secret injection. A healthy container name alone is not sufficient.
 : >"$UPSCALE_HELPER_CALLS"
-IMAGE_UPSCALE_ENABLED=true VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1
+BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF" \
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF" \
+  BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET="$BATCH_IMAGE_DELIVERY_COS_SOCKET" \
+  IMAGE_UPSCALE_ENABLED=true VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1
 assert_contains "$UPSCALE_HELPER_CALLS" 'ready-auto sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-if IMAGE_UPSCALE_ENABLED=true FAKE_IMAGE_UPSCALE_HELPER_FAIL=true \
+if BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF" \
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF" \
+  BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET="$BATCH_IMAGE_DELIVERY_COS_SOCKET" \
+  IMAGE_UPSCALE_ENABLED=true FAKE_IMAGE_UPSCALE_HELPER_FAIL=true \
   VALIDATE_EXTERNAL_RUNTIME_ONLY=true run_helper >"$OUTPUT" 2>&1; then
   fail 'release accepted an image-upscale sidecar that failed hardened readiness'
 fi
 assert_contains "$OUTPUT" 'image upscale Vault agent failed hardened readiness verification'
+
+# COS delivery credentials are runtime references only. They must be forwarded
+# exactly to the candidate, while a raw credential is rejected before Docker.
+rm -rf "$(state_path sub2api-green)"
+BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF" \
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF" \
+  BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET="$BATCH_IMAGE_DELIVERY_COS_SOCKET" \
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_contains "$(state_path sub2api-green)/env" "BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF=$BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF"
+assert_contains "$(state_path sub2api-green)/env" "BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF=$BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF"
+assert_contains "$(state_path sub2api-green)/env" "BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET=$BATCH_IMAGE_DELIVERY_COS_SOCKET"
+assert_not_contains "$(state_path sub2api-green)/env" 'BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID='
+assert_not_contains "$(state_path sub2api-green)/env" 'BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY='
+assert_contains "$(state_path sub2api-green)/mounts" 'volume|sub2api_image_upscale_vault|/run/sub2api-upscale-vault|false'
+rm -rf "$(state_path sub2api-green)"
+if BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID='test-cos-access-key-must-not-leak' \
+  PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'release accepted a raw Batch Image COS access key'
+fi
+assert_contains "$OUTPUT" 'BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID is forbidden'
+assert_not_contains "$OUTPUT" 'test-cos-access-key-must-not-leak'
+
+# Compose's disabled default is a complete empty COS profile. A candidate with
+# exactly that profile remains reusable, while any partial/non-empty profile
+# is handled by the stricter release override path above.
+PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+printf '%s\n' \
+  'BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF=' \
+  'BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF=' \
+  'BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock' \
+  >>"$(state_path sub2api-green)/env"
+PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+assert_not_contains "$OUTPUT" 'candidate does not match expected runtime contract'
+rm -rf "$(state_path sub2api-green)"
 
 # Feishu enablement attaches only its independent read-only socket volume.
 : >"$CALLS"

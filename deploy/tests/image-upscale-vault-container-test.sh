@@ -15,7 +15,10 @@ STATE="$TEST_ROOT/container-created"
 HEALTH="$TEST_ROOT/health"
 CALLS="$TEST_ROOT/calls"
 OUTPUT="$TEST_ROOT/output"
-VAULT_REF='vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key'
+CONFIG_FILE="$TEST_ROOT/autodeploy.env"
+UPSCALE_VAULT_REF='vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key'
+COS_ACCESS_VAULT_REF='vault://secret/data/test/sub2api-batch-image#access_key_id'
+COS_SECRET_VAULT_REF='vault://secret/data/test/sub2api-batch-image#secret_access_key'
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 fail() {
@@ -30,12 +33,14 @@ run_script() {
     MOCK_NETWORK="${MOCK_NETWORK:-none}" MOCK_USER="${MOCK_USER:-1000:1000}" \
     MOCK_INIT_FAIL="${MOCK_INIT_FAIL:-0}" \
     SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS=1 \
-    SUB2API_MAINTENANCE_LOCK_FILE="$LOCK_FILE" bash "$SCRIPT" "$@"
+    SUB2API_MAINTENANCE_LOCK_FILE="$LOCK_FILE" \
+    SUB2API_AUTODEPLOY_CONFIG_FILE="$CONFIG_FILE" bash "$SCRIPT" "$@"
 }
 
 run_without_non_root_allowance() {
   PATH="$FAKE_BIN:$PATH" MOCK_STATE="$STATE" MOCK_HEALTH="$HEALTH" MOCK_CALLS="$CALLS" MOCK_IMAGE="$image" \
-    MOCK_ID_UID=1000 SUB2API_MAINTENANCE_LOCK_FILE="$LOCK_FILE" bash "$SCRIPT" "$@"
+    MOCK_ID_UID=1000 SUB2API_MAINTENANCE_LOCK_FILE="$LOCK_FILE" \
+    SUB2API_AUTODEPLOY_CONFIG_FILE="$CONFIG_FILE" bash "$SCRIPT" "$@"
 }
 
 run_count() {
@@ -47,9 +52,20 @@ init_count() {
 }
 
 assert_no_ref_in_output() {
-  if grep -Fq -- "$VAULT_REF" "$OUTPUT"; then
-    fail 'script output exposed the Vault reference'
-  fi
+  for reference in "$UPSCALE_VAULT_REF" "$COS_ACCESS_VAULT_REF" "$COS_SECRET_VAULT_REF"; do
+    if grep -Fq -- "$reference" "$OUTPUT"; then
+      fail 'script output exposed a Vault reference'
+    fi
+  done
+}
+
+assert_no_secret_in_output_or_calls() {
+  local secret
+  for secret in "$@"; do
+    if grep -Fq -- "$secret" "$OUTPUT" || grep -Fq -- "$secret" "$CALLS"; then
+      fail 'secret escaped stdin-only injection'
+    fi
+  done
 }
 
 reject_identity() {
@@ -67,6 +83,13 @@ reject_identity() {
 mkdir -p "$FAKE_BIN" "$LOCK_DIR"
 chmod 700 "$LOCK_DIR"
 printf 'starting\n' >"$HEALTH"
+cat >"$CONFIG_FILE" <<EOF
+IMAGE_UPSCALE_API_KEY_VAULT_REF=$UPSCALE_VAULT_REF
+BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF=$COS_ACCESS_VAULT_REF
+BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF=$COS_SECRET_VAULT_REF
+BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock
+EOF
+chmod 600 "$CONFIG_FILE"
 
 cat >"$FAKE_BIN/flock" <<'EOF_FLOCK'
 #!/usr/bin/env python3
@@ -111,7 +134,9 @@ printf '%s\n' "$*" >>"$MOCK_CALLS"
 public_dir=/run/sub2api-upscale-vault
 admin_dir=/run/sub2api-upscale-vault-admin
 volume=sub2api_image_upscale_vault
-request_ref='vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key'
+upscale_ref='vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key'
+cos_access_ref='vault://secret/data/test/sub2api-batch-image#access_key_id'
+cos_secret_ref='vault://secret/data/test/sub2api-batch-image#secret_access_key'
 
 case "$1:$2" in
   image:inspect)
@@ -153,7 +178,7 @@ case "$1:$2" in
       *"$admin_dir"*) printf '%s\n' "${MOCK_ADMIN_TMPFS:-rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000}" ;;
       *'.HostConfig.Tmpfs'*'/tmp'*) printf '%s\n' "${MOCK_TMP_TMPFS:-rw,noexec,nosuid,nodev,size=4m,mode=0700,uid=1000,gid=1000}" ;;
       *'range .Mounts'*) printf 'volume|%s|%s|true\n' "$volume" "$public_dir" ;;
-      *'.Config.Cmd'*) printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s"]\n' "$public_dir" "$admin_dir" "$request_ref" ;;
+      *'.Config.Cmd'*) printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s","--allowed-ref","%s","--allowed-ref","%s"]\n' "$public_dir" "$admin_dir" "$upscale_ref" "$cos_access_ref" "$cos_secret_ref" ;;
       *'.Config.Healthcheck.Test'*) printf '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket %s/public.sock"]\n' "$public_dir" ;;
       *) exit 1 ;;
     esac
@@ -166,6 +191,11 @@ case "$1:$2" in
   run:-d)
     touch "$MOCK_STATE"
     printf 'container-id\n'
+    ;;
+  exec:*)
+    if [ "${2:-}" = -i ]; then
+      cat >/dev/null
+    fi
     ;;
   *) exit 1 ;;
 esac
@@ -194,7 +224,8 @@ grep -q -- "chown 1000:1000 \"\$socket_dir\"" "$CALLS" || fail 'volume initializ
 grep -q -- "chmod 0700 \"\$socket_dir\"" "$CALLS" || fail 'volume initializer mode repair drifted'
 grep -q -- 'run -d --name sub2api-upscale-vault --network none --read-only --init --restart unless-stopped --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --user 1000:1000' "$CALLS" \
   || fail 'main agent non-root hardening drifted'
-grep -q -- "--allowed-ref $VAULT_REF" "$CALLS" || fail 'exact allowed reference missing'
+grep -q -- "--allowed-ref $UPSCALE_VAULT_REF --allowed-ref $COS_ACCESS_VAULT_REF --allowed-ref $COS_SECRET_VAULT_REF" "$CALLS" \
+  || fail 'three exact allowed references are missing'
 [ "$(init_count)" = 1 ] || fail 'prepare did not run exactly one volume initializer'
 
 before_runs="$(run_count)"
@@ -212,6 +243,28 @@ grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY' "$OUTPUT" || fail 'ready 
 run_script ready-auto "$image" >"$OUTPUT"
 grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY' "$OUTPUT" || fail 'ready-auto classification drifted'
 [ "$before_runs" = "$(run_count)" ] || fail 'ready-auto replaced the sidecar'
+
+# The historical single-key operation remains available, while the two COS
+# values use independent stdin-only loads. Neither secret may become a Docker
+# argument, command log, or helper output.
+api_secret='api-secret-must-not-appear'
+access_secret='access-secret-must-not-appear'
+cos_secret='cos-secret-must-not-appear'
+printf '%s\n' "$api_secret" | run_script load-api "$image" >"$OUTPUT"
+grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_LOADED' "$OUTPUT" || fail 'single-key load classification drifted'
+assert_no_secret_in_output_or_calls "$api_secret"
+printf '%s\n%s\n' "$access_secret" "$cos_secret" | run_script load-batch-cos "$image" >"$OUTPUT"
+grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_LOADED' "$OUTPUT" || fail 'COS load classification drifted'
+assert_no_secret_in_output_or_calls "$access_secret" "$cos_secret"
+printf '%s\n%s\n%s\n' "$api_secret" "$access_secret" "$cos_secret" | run_script load-all "$image" >"$OUTPUT"
+grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY' "$OUTPUT" || fail 'combined load readiness drifted'
+assert_no_secret_in_output_or_calls "$api_secret" "$access_secret" "$cos_secret"
+grep -q -- "exec -i sub2api-upscale-vault /app/sub2api-vault-agent load --admin-socket /run/sub2api-upscale-vault-admin/admin.sock --ref $UPSCALE_VAULT_REF" "$CALLS" \
+  || fail 'single-key load did not target the exact approved reference'
+grep -q -- "exec -i sub2api-upscale-vault /app/sub2api-vault-agent load --admin-socket /run/sub2api-upscale-vault-admin/admin.sock --ref $COS_ACCESS_VAULT_REF" "$CALLS" \
+  || fail 'COS access-key load did not target the exact configured reference'
+grep -q -- "exec -i sub2api-upscale-vault /app/sub2api-vault-agent load --admin-socket /run/sub2api-upscale-vault-admin/admin.sock --ref $COS_SECRET_VAULT_REF" "$CALLS" \
+  || fail 'COS secret-key load did not target the exact configured reference'
 
 before_runs="$(run_count)"
 if MOCK_NETWORK=bridge run_script ready "$image" >"$OUTPUT" 2>&1; then
@@ -264,5 +317,21 @@ reject_identity 'non-amd64 image' linux/arm64 '' '' '0.1.186'
 reject_identity 'revision label mismatch' linux/amd64 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb '' '0.1.186'
 reject_identity 'source label mismatch' linux/amd64 '' https://example.invalid/sub2api '0.1.186'
 reject_identity 'empty version label' linux/amd64 '' '' ''
+
+# The two COS refs are an atomic same-item profile. A root-owned config that
+# points them at different paths fails before Docker receives any command.
+cat >"$CONFIG_FILE" <<EOF
+IMAGE_UPSCALE_API_KEY_VAULT_REF=$UPSCALE_VAULT_REF
+BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF=$COS_ACCESS_VAULT_REF
+BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF=vault://secret/data/test/other-batch-image#secret_access_key
+BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock
+EOF
+chmod 600 "$CONFIG_FILE"
+before_calls="$(wc -l <"$CALLS")"
+if run_script prepare "$image" >"$OUTPUT" 2>&1; then
+  fail 'mismatched Batch Image COS Vault paths were accepted'
+fi
+[ "$before_calls" = "$(wc -l <"$CALLS")" ] || fail 'mismatched COS refs reached Docker'
+assert_no_ref_in_output
 
 printf 'Image upscale Vault container tests passed.\n'

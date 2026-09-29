@@ -115,6 +115,11 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 	}
 	account, err := p.AccountResolver.ResolveBatchImageAccount(ctx, *job.AccountID)
 	if err != nil {
+		if errors.Is(err, ErrAccountNotFound) {
+			if _, cleanupWithoutAccount := provider.(BatchImageProviderAccountlessCleanup); cleanupWithoutAccount {
+				return p.failForMissingAccount(ctx, job)
+			}
+		}
 		return BatchImageProcessResult{}, err
 	}
 	if !provider.SupportsAccount(account) {
@@ -128,7 +133,12 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 		return p.indexAndSettle(ctx, job, provider, account)
 	}
 
-	status, err := provider.Get(ctx, job, account)
+	var status *BatchProviderStatus
+	if advancer, ok := provider.(BatchImageProviderAdvancer); ok {
+		status, err = advancer.Advance(ctx, job, account)
+	} else {
+		status, err = provider.Get(ctx, job, account)
+	}
 	if err != nil {
 		logger.L().Warn("batch_image.provider_status_check_failed",
 			zap.String("batch_id", job.BatchID),
@@ -207,6 +217,26 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 	default:
 		return BatchImageProcessResult{RequeueAfter: p.requeueDelay(status.SuggestedRequeueAfter)}, nil
 	}
+}
+
+func (p *BatchImageProviderProcessor) failForMissingAccount(ctx context.Context, job *BatchImageJob) (BatchImageProcessResult, error) {
+	const (
+		code    = "BATCH_IMAGE_ACCOUNT_REMOVED"
+		message = "batch image provider account is no longer available"
+	)
+	if err := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusFailed, BatchImageTransitionOptions{
+		EventType:    "job_failed_account_missing",
+		EventPayload: map[string]any{"error_code": code},
+		ErrorCode:    batchImageStringPtr(code),
+		ErrorMessage: batchImageStringPtr(message),
+	}); err != nil {
+		return BatchImageProcessResult{}, err
+	}
+	job.Status = BatchImageJobStatusFailed
+	if err := p.releaseTerminalHold(ctx, job); err != nil {
+		return BatchImageProcessResult{}, err
+	}
+	return BatchImageProcessResult{Terminal: true}, nil
 }
 
 func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (BatchImageProcessResult, error) {

@@ -22,6 +22,45 @@ type BatchImageProvider interface {
 	Cleanup(ctx context.Context, job *BatchImageJob, account *Account, target CleanupTarget) error
 }
 
+// BatchImageProviderAdvancer is implemented by providers whose local worker
+// must perform bounded work in addition to polling an upstream batch job.
+// Get remains safe for status and cancellation paths; only the queue worker
+// calls Advance.
+type BatchImageProviderAdvancer interface {
+	Advance(ctx context.Context, job *BatchImageJob, account *Account) (*BatchProviderStatus, error)
+}
+
+// BatchImageProviderSubmissionAvailability lets providers whose runtime
+// depends on optional local infrastructure hide models until that
+// infrastructure is actually ready. Cleanup/status support remains separate.
+type BatchImageProviderSubmissionAvailability interface {
+	SubmissionAvailable() bool
+}
+
+// BatchImageProviderAccountlessCleanup is implemented only by providers whose
+// cleanup targets are deterministic private-storage keys and require no
+// upstream credential. It lets retention cleanup continue after an account is
+// soft-deleted without weakening credential checks for remote providers.
+type BatchImageProviderAccountlessCleanup interface {
+	CleanupWithoutAccount(ctx context.Context, job *BatchImageJob, target CleanupTarget) error
+}
+
+// BatchImageProviderDurableCancelIntent is implemented by providers that can
+// persist a cancellation fence without an account credential or the worker's
+// exclusive job lock. Long-running local providers use it so a concurrent
+// cancel request is accepted while the worker finishes its current item.
+type BatchImageProviderDurableCancelIntent interface {
+	PersistCancelIntent(ctx context.Context, job *BatchImageJob) error
+}
+
+func batchImageProviderSubmissionAvailable(provider BatchImageProvider) bool {
+	if provider == nil {
+		return false
+	}
+	availability, ok := provider.(BatchImageProviderSubmissionAvailability)
+	return !ok || availability.SubmissionAvailable()
+}
+
 type BatchImageProviderRegistry struct {
 	providers map[string]BatchImageProvider
 }
@@ -41,6 +80,7 @@ func NewDefaultBatchImageProviderRegistry() *BatchImageProviderRegistry {
 	return NewBatchImageProviderRegistry(
 		NewGeminiAPIBatchImageProvider(nil),
 		NewVertexBatchImageProvider(VertexBatchImageProviderOptions{}, nil, nil, nil),
+		NewOpenAIImagesBatchProvider(nil, nil, ""),
 	)
 }
 
@@ -48,7 +88,32 @@ func NewBatchImageProviderRegistryFromConfig(cfg *config.Config) *BatchImageProv
 	return NewBatchImageProviderRegistry(
 		NewGeminiAPIBatchImageProvider(nil),
 		NewVertexBatchImageProviderFromConfig(cfg, nil, nil, nil),
+		NewOpenAIImagesBatchProvider(nil, nil, batchImageOpenAIStoragePrefix(cfg)),
 	)
+}
+
+func NewBatchImageProviderRegistryWithRuntime(
+	cfg *config.Config,
+	objectStore BatchImageDeliveryObjectStore,
+	openAIGateway *OpenAIGatewayService,
+) *BatchImageProviderRegistry {
+	providerStore, _ := objectStore.(BatchImageProviderObjectStore)
+	var executor OpenAIImageBatchItemExecutor
+	if openAIGateway != nil {
+		executor = &GatewayOpenAIImageBatchItemExecutor{Gateway: openAIGateway}
+	}
+	return NewBatchImageProviderRegistry(
+		NewGeminiAPIBatchImageProvider(nil),
+		NewVertexBatchImageProviderFromConfig(cfg, nil, nil, nil),
+		NewOpenAIImagesBatchProvider(providerStore, executor, batchImageOpenAIStoragePrefix(cfg)),
+	)
+}
+
+func batchImageOpenAIStoragePrefix(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.BatchImage.DeliveryCOSPrefix
 }
 
 func (r *BatchImageProviderRegistry) Get(provider string) (BatchImageProvider, bool) {

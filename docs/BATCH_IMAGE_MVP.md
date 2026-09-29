@@ -1,13 +1,14 @@
 # Batch Image MVP
 
-Sub2API Batch Image MVP provides asynchronous Gemini image batch generation through a unified API surface backed by Redis workers, PostgreSQL state, and provider-specific batch backends.
+Sub2API Batch Image MVP provides asynchronous Gemini and OpenAI/Image batch generation through a unified API surface backed by Redis workers, PostgreSQL state, private object storage, and provider-specific execution backends.
 
 Supported providers:
 
 - `gemini_api`
 - `vertex`
+- `openai_images`
 
-API users do not see Gemini file names, Vertex job names, GCS paths, API keys, service-account
+API users do not see Gemini file names, Vertex job names, internal OpenAI item markers, GCS paths, API keys, service-account
 material, or permanent COS credentials. Private-COS delivery exposes short-lived exact-object
 read capabilities only through the authenticated `result-files` endpoint. Those URLs are
 temporary bearer capabilities and are never included in task list/status/item responses.
@@ -68,10 +69,11 @@ pooled payload with `shared_reference_id` while retaining its own ordered `id` a
 Sub2API resolves the pool before validation, request hashing, idempotency checks, and
 provider JSONL generation. It is intended for product-truth images reused by every output,
 but item order and role labels remain independent. Every pool entry must be referenced.
-The client therefore sends an inline shared payload to Sub2API only once. Gemini still
-receives every reference required by each independent JSONL request: resolved inline bytes
-are serialized into each applicable line, while a reusable internal `gs://` `file_uri`
-repeats only the URI. Use `file_uri` when avoiding repeated provider-upload bytes matters.
+The client therefore sends an inline shared payload to Sub2API only once. Every provider
+still receives every reference required by each independent item: resolved inline bytes
+are serialized into each applicable request, while a reusable internal `gs://` `file_uri`
+repeats only the URI on Gemini/Vertex. OpenAI/Image items accept inline bytes only; `gs://`
+references are rejected rather than forwarded as unusable or accidentally public URLs.
 The field does not weaken per-item model limits: resolved shared and inline references are
 counted together. The normalized request clears the transport pool and reference IDs, so
 an expanded legacy request and its compact equivalent have the same semantic request hash.
@@ -80,7 +82,7 @@ an expanded legacy request and its compact equivalent have the same semantic req
 output, such as its assigned scene. Inline `data` is a base64 string decoded by the backend;
 `file_uri` is reserved for internal Google Cloud Storage references and must be a `gs://`
 URI. Each reference image must use one of `image/png`, `image/jpeg`, or `image/webp`.
-When `type` is a recognized closed role, both Gemini API and Vertex JSONL place a
+When `type` is a recognized closed role, every provider adapter places a
 server-owned role guide immediately before that image part. This preserves per-image
 authority after provider serialization (for example, `MODEL_REFERENCE` may define the
 adult person but every worn or held product is an untrusted placeholder that must be
@@ -91,16 +93,19 @@ Current model limits are:
 
 - `gemini-2.5-flash-image`: up to 3 reference images per item.
 - `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, and `gemini-3-pro-image`: up to 14 reference images per item.
+- Supported OpenAI Image batch models (`gpt-image-2` and the configured Image 2.5
+  flare/sunburst revisions): up to 16 inline reference images per item.
 - Per batch job: up to 1000 reference image attachments total after `output_count` expansion across all items. This is an internal Sub2API guardrail for request size and cost control, not the generated-image cap and not a Pro Image per-item capability. Generated-output caps are resolution-aware: 50 images at `1K`, 15 at `2K`, and 10 at `4K`.
-- Per batch job: up to 128 MB decoded inline reference image data total. For large batches or repeated reference images, prefer `gs://` `file_uri` references or split the request into multiple jobs.
+- Per batch job: up to 128 MB decoded inline reference image data total. For large Gemini/Vertex batches, prefer server-managed `gs://` `file_uri` references or split the request into multiple jobs. OpenAI/Image batches must split when the inline limits are reached.
 
-`output_count` is optional per item and defaults to `1`. It means "repeat this prompt and reference image set N times" rather than relying on Gemini to return multiple images from one upstream request. The backend expands each repeat into a separate provider JSONL line with suffixed custom ids such as `cover_001_01`, `cover_001_02`. Current limits are:
+`output_count` is optional per item and defaults to `1`. It means "repeat this prompt and reference image set N times" rather than relying on one upstream request to return multiple images. The backend expands each repeat into a separate provider item with suffixed custom ids such as `cover_001_01`, `cover_001_02`. Gemini/Vertex serialize those items as JSONL; `openai_images` executes each expanded item as a separate `n=1` Images request. Current limits are:
 
 The OpenAI-compatible `/v1/images/generations` `n` field likewise repeats one
 prompt and one reference set; it cannot express ten different prompt/reference
 assignments. Use ten batch `items` when every output needs its own prompt or
-reference set. Each item becomes its own keyed JSONL request, and results are
-reconciled back to the expanded `custom_id` rather than by provider row order.
+reference set. Each batch item retains its own prompt and ordered reference set,
+and results are reconciled back to the expanded `custom_id` rather than by
+provider row or completion order.
 
 - Per prompt item: up to 4 output images.
 - Per batch job after expansion: up to 50 expected outputs at `1K`, 15 at `2K`, and 10 at `4K`. These are hard generated-output caps; clients and Codex skills must split larger workloads before submission.
@@ -185,16 +190,21 @@ output_deleted    -> output_deleted
 
 `completed -> output_deleted` happens after manual output deletion or TTL cleanup.
 
-Cancellation is provider-state aware. For a provider-backed job, the public cancel path acquires
+Cancellation is provider-state aware. For Gemini/Vertex jobs, the public cancel path acquires
 the same per-job lock as the worker, reloads the durable row, and checks the provider before
-requesting cancellation. A provider terminal result is never overwritten: `succeeded`, `failed`,
+requesting cancellation. For `openai_images`, it first persists a durable cancel marker without
+waiting for that lock. A currently running Images request may finish and be billed, but the worker
+checks the marker before its upstream-attempt claim and cannot start another item afterward. If
+the lock is busy, cancel returns the current job after the marker is durable; reconciliation remains
+the worker's responsibility. A provider terminal result is never overwritten: `succeeded`, `failed`,
 `expired`, and `cancelled` are repaired into the normal worker queue with `EnsureEnqueued`, and a
 successful output reference is persisted before repair. If `Cancel` races with provider
 completion, one follow-up status check applies the same reconciliation. The worker remains the
 only component that indexes/delivers results, persists terminal state, and settles or releases the
-balance hold; cancellation reconciliation never calls `Submit`. Missing locks, unsupported queue
-repair, Redis errors, or inconclusive provider evidence fail closed with the generic public cancel
-error and do not expose provider identifiers or raw responses.
+balance hold; cancellation reconciliation never calls `Submit`. Except for the durable
+`openai_images` marker case above, missing locks, unsupported queue repair, Redis errors, or
+inconclusive provider evidence fail closed with the generic public cancel error and do not expose
+provider identifiers or raw responses.
 
 For Vertex jobs with private-COS delivery enabled, `indexing` includes a durable delivery gate:
 
@@ -218,7 +228,7 @@ Redis is used for wakeups, retries, worker coordination, per-job locks, and down
 
 `batch_image.queue_enabled` defaults to `false`. When it is set to `true`, app startup starts `batch_image.worker_concurrency` independent `BatchImageWorker` consumers plus one delayed queue mover, one stale active recovery loop, and one provider-submitted queue reconciliation loop. The worker count defaults to `1` and is validated in the range `1..16`. Each consumer reserves jobs from the Redis ready queue and keeps the existing per-job Redis lock and heartbeat while Provider I/O is in flight. Lock refresh runs strictly before the lease deadline. If refresh reports a lost lease, the worker cancels the processor context and must not acknowledge or requeue the reservation; the new lock holder or durable recovery loop owns subsequent progress. Worker acknowledgement/requeue and lock-owned queue repair verify the current lock token in the same Redis Lua operation that changes queue membership, so a paused stale owner cannot mutate a replacement owner's state after its lease expires.
 
-Size the worker count against both the upstream account concurrency and the host budget. On the current 2 vCPU production shape, start at `2`; raising it beyond the available Gemini/Vertex account concurrency only increases queue and database pressure without adding throughput.
+Size the worker count against both upstream account concurrency and the host budget. On the current 2 vCPU production shape, start at `2`; raising it beyond available Gemini/Vertex/OpenAI account concurrency only increases queue and database pressure without adding throughput. One `openai_images` worker advance starts at most one item, and account-slot admission still caps concurrent Images calls across jobs.
 
 Submission limits apply after `output_count` expansion: `1K` accepts at most 50
 output images, `2K` accepts at most 15, and `4K` accepts at most 10. The generic
@@ -256,7 +266,7 @@ MVP billing rules:
 - Settlement runs after result indexing.
 - Only successful images are charged.
 - Failed items are not charged.
-- Reference images are sent to Gemini as input and can create small upstream input-token and temporary storage cost. They are counted once per expanded output request when `output_count > 1`, but the public MVP billing model does not add a separate reference-image surcharge. User-facing estimated, held, and settled amounts are still based on the output image count and configured batch image unit price.
+- Reference images are sent to the selected provider as input and can create upstream input-token, transfer, or temporary-storage cost. They are counted once per expanded output request when `output_count > 1`, but the public MVP billing model does not add a separate reference-image surcharge. User-facing estimated, held, and settled amounts are still based on the successful output image count and configured requested-tier batch price.
 - Settlement request id is `batch_image_settlement:{batch_id}`.
 - Settlement is idempotent; re-running settlement must not double charge.
 - Settlement billing failures are retried with a bounded retry limit. After the retry limit is reached, the job is failed and the remaining hold is released through the idempotent release path.
@@ -287,6 +297,13 @@ For COS-delivered Vertex jobs, output cleanup removes every bounded deterministi
 deleting the managed GCS output. A cleanup failure keeps the output state retryable and does not
 falsely mark it deleted.
 
+For `openai_images`, every cleanup target is a bounded deterministic private-COS key. Cleanup therefore
+does not require the upstream account credential and remains possible after an administrator soft-deletes
+the account. If an account disappears while one of its jobs is still active, the processor moves that job
+to `failed`, releases the remaining hold through the idempotent release path, and leaves its deterministic
+objects eligible for the ordinary retention worker. Transient account-database errors remain retryable and
+must not be treated as account deletion.
+
 For the managed Vertex/GCS batch bucket, disable Cloud Storage soft delete or configure lifecycle carefully to avoid hidden retained storage cost.
 
 ## Provider Notes
@@ -305,13 +322,12 @@ For the managed Vertex/GCS batch bucket, disable Cloud Storage soft delete or co
 - Supports Gemini `service_account` upstream accounts with valid service account JSON.
 - GCS bucket and prefix are server-managed.
 - Vertex job name and GCS paths are internal.
-- `1K` keeps the provider result path unchanged. `2K` and `4K` are accepted
-  only for exact `gemini-2.5-flash-image` / `gemini-2.5-flash-image-preview`
-  jobs routed through `gemini_api` while the private upscale adapter is active.
-  Those jobs ask Gemini for the requested aspect ratio at `1K`, then use the
-  shared native `2x` or `4x` adapter. Billing and holds retain the requested
-  tier. See `docs/operations/IMAGE_25_UPSCALE_20260928.md` for the failure,
-  storage, credential, and rollback contract.
+- `1K` keeps the provider result path unchanged. When the private upscale
+  adapter is active, both Gemini API and Vertex accept `2K`/`4K` batch jobs,
+  ask Gemini for the requested aspect ratio at source `1K`, and use the shared
+  native `2x`/`4x` post-processor. Billing and holds retain the requested tier.
+  See `docs/operations/IMAGE_25_UPSCALE_20260928.md` for the failure, storage,
+  credential, and rollback contract.
 - Upscaled batch images are private COS objects served through authenticated
   item and ZIP downloads. They do not use the Vertex raw-result capability
   endpoint. Each expanded `custom_id` must return exactly one image; a provider
@@ -325,9 +341,72 @@ For the managed Vertex/GCS batch bucket, disable Cloud Storage soft delete or co
   Workflow into private Tencent COS before settlement. Only source listing, Vertex status, and
   exact-object COS `HEAD`/signing control traffic touches Sub2.
 
-Other Gemini account/login types are not selected by the current batch image providers unless they expose equivalent API-key or service-account credentials through the same provider flow. They were not covered by the 2026-07-07 PR validation.
+`openai_images`:
 
-## Official Google Enablement
+- Supports `gpt-image-2`, Image 2.5 flare/sunburst, and their configured dated
+  revisions on OpenAI `oauth`, `setup_token`, and compatible `apikey` accounts.
+  Other GPT Image models fail request validation rather than being guessed compatible.
+  Model routing is strict: GPT Image models cannot select a
+  Gemini provider, and Gemini image models cannot select `openai_images`.
+- Source-1K aspect ratios are limited to `1:1`, `2:3`, `3:2`, `3:4`, `4:3`,
+  `4:5`, and `5:4`. `9:16`, `16:9`, and `21:9` are rejected because the upstream
+  minimum-pixel requirement and Sub2API's longest-edge-at-most-1024 source contract
+  cannot both preserve those exact ratios.
+- API-key edits send references as repeated `image[]` multipart file parts. OAuth
+  and setup-token transports use ordered inline data URLs. The public shared-reference
+  pool still uploads common bytes to Sub2API once; each independent upstream item
+  receives the references it actually uses in its original order.
+- OpenAI does not receive one native multi-item batch request. Sub2API first
+  stores a private durable manifest, then the queue worker executes exactly one
+  `n=1`, source-`1K` Images request for each expanded `custom_id`. A ten-item
+  public batch therefore means up to ten separately admitted upstream Images
+  calls, while the client still sees one `imgbatch_*`, one hold, one aggregate
+  usage row, and one idempotent settlement transaction.
+- Deterministic per-item attempt and result objects prevent a worker retry from
+  replaying an accepted non-idempotent Images call. If a process ends after an
+  attempt starts but before its result is durable, that item fails as an
+  unknown provider outcome instead of automatically charging the upstream a
+  second time. Other items continue.
+- The attempt claim is an atomic COS create guarded by
+  `x-cos-forbid-overwrite: true`; only `409/FileAlreadyExists` means another
+  worker already owns it. This guarantee requires a non-versioned COS bucket.
+  Application startup and every claim read bucket versioning and fail closed
+  for `Enabled`, `Suspended`, or an unreadable state. The COS identity therefore needs the
+  minimum permission to read bucket versioning in addition to its exact-prefix
+  object permissions. OpenAI batch enablement must remain off until a real
+  create-twice readiness probe confirms that the second write is rejected,
+  followed by exact-key cleanup.
+- Attempt and result objects are both first-writer-wins atomic creates. A stale
+  worker that finishes after lease handoff cannot overwrite the new owner's
+  durable success, failure, or unknown-outcome decision.
+- `Get` is status-only. Only the queue worker's explicit `Advance` operation may
+  start another item, so status checks and cancellation cannot accidentally
+  generate a new image. Account concurrency admission happens before the
+  durable attempt marker and before the upstream request.
+- Each upstream item has a 20-minute execution deadline. A timeout records only
+  that item as failed and later items continue; it does not discard earlier
+  durable successes. Items in one batch advance sequentially, so the strict
+  ten-item source-generation upper bound is approximately 200 minutes plus
+  bounded queue/storage overhead if every upstream request consumes its full
+  deadline. This is a failure bound, not an expected duration or SLA.
+- Requested `2K`/`4K` remains on the durable job and its pricing snapshot; each
+  upstream item is source `1K`, then the common actual-dimension check and Mini
+  post-processor produce the requested tier. Successful items are billed at
+  that requested tier and failed items are not billed.
+
+Other Gemini account/login types are not selected unless they expose equivalent
+API-key or service-account credentials through the same provider flow. OpenAI
+account types outside the list above are likewise not selected.
+
+## Provider Enablement
+
+OpenAI/Image groups require an eligible OpenAI account, an explicit model
+mapping/whitelist, configured batch pricing for the requested resolution tier,
+private batch object storage, and the group-level image and batch-image gates.
+The object store holds manifests, attempt markers, per-item results, and the
+combined provider result; without it `openai_images` submission fails closed.
+
+### Official Google Enablement
 
 Operators must enable Gemini/Vertex capability in Google's official console before turning on Sub2API batch image for any group. Sub2API feature flags and group switches do not create Google-side access by themselves.
 
@@ -338,7 +417,7 @@ Recommended production path:
 - Use a service account or Application Default Credentials for the Sub2API runtime.
 - Create one fixed Cloud Storage bucket for batch image input and output, then grant the runtime and Vertex service agent the minimum required bucket permissions.
 - Configure Sub2API with the project id, location, managed bucket, provider account, model whitelist, and pricing.
-- Enable `BATCH_IMAGE_ENABLED` globally, enable image generation on the intended Gemini group, then enable `allow_batch_image_generation` for that group. Non-Gemini groups are not eligible for batch image generation, and the admin UI only shows the batch image group switch after image generation is enabled on a Gemini group.
+- Enable `BATCH_IMAGE_ENABLED` globally, enable image generation on the intended Gemini or OpenAI group, then enable `allow_batch_image_generation` for that group. The submitted model family must match the group platform.
 
 API-key path:
 
@@ -428,13 +507,17 @@ batch_image:
   delivery_cos_endpoint: "https://cos.ap-shanghai.myqcloud.com"
   delivery_cos_region: "ap-shanghai"
   delivery_cos_bucket: "image-1309919944"
-  delivery_cos_access_key_id: "<dedicated CAM key>"
-  delivery_cos_secret_access_key: "<dedicated CAM secret>"
+  delivery_cos_access_key_vault_ref: "vault://<approved-cos-item>#access_key_id"
+  delivery_cos_secret_access_key_vault_ref: "vault://<approved-cos-item>#secret_access_key"
+  delivery_cos_vault_agent_socket: "/run/sub2api-upscale-vault/public.sock"
   delivery_cos_prefix: "sub2-batch-image/prod/"
   delivery_cos_force_path_style: false
 ```
 
-Feature flags default to disabled.
+Feature flags default to disabled. Raw `delivery_cos_access_key_id` and
+`delivery_cos_secret_access_key` values are rejected at startup. Both exact
+references must point to the same Vault KV item; the colocated networkless
+agent returns only those two allowed fields over its read-only Unix socket.
 
 Once a batch row is durable, provider submission uses the server-owned
 `provider_submit_timeout_seconds` deadline rather than the HTTP client's

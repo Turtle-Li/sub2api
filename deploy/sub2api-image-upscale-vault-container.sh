@@ -9,12 +9,16 @@
 # a separately coordinated, lock-owning maintenance operation.
 
 set -Eeuo pipefail
+set +x
 
 CONTAINER=sub2api-upscale-vault
 VOLUME=sub2api_image_upscale_vault
 PUBLIC_DIR=/run/sub2api-upscale-vault
 ADMIN_DIR=/run/sub2api-upscale-vault-admin
-VAULT_REF='vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key'
+UPSCAPE_API_KEY_VAULT_REF='vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key'
+CONFIG_FILE="${SUB2API_AUTODEPLOY_CONFIG_FILE:-/etc/sub2api-autodeploy.env}"
+COS_ACCESS_KEY_VAULT_REF=''
+COS_SECRET_ACCESS_KEY_VAULT_REF=''
 
 die() {
   printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_REJECTED' >&2
@@ -26,7 +30,76 @@ MAINTENANCE_LOCK_HELPER="${UPSCALE_VAULT_SCRIPT_DIR}/sub2api-maintenance-lock.sh
 [ -r "$MAINTENANCE_LOCK_HELPER" ] && [ ! -L "$MAINTENANCE_LOCK_HELPER" ] || die
 # shellcheck disable=SC1090,SC1091 # Installed alongside this root-owned executable.
 . "$MAINTENANCE_LOCK_HELPER"
-LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
+
+file_owner_mode() {
+  stat -c '%u:%a' "$1" 2>/dev/null || stat -f '%u:%Lp' "$1" 2>/dev/null
+}
+
+parse_exact_vault_reference() {
+  local reference="$1" expected_field="$2" body path field component
+  local -a components
+
+  case "$reference" in
+    vault://*) ;;
+    *) return 1 ;;
+  esac
+  case "$reference" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  body="${reference#vault://}"
+  path="${body%%#*}"
+  field="${body#*#}"
+  [ "$field" != "$body" ] || return 1
+  [ "${field#*#}" = "$field" ] || return 1
+  case "$path" in
+    ''|/*|*/|*//* ) return 1 ;;
+  esac
+  IFS=/ read -r -a components <<<"$path"
+  for component in "${components[@]}"; do
+    case "$component" in
+      ''|.|..|*[!A-Za-z0-9_.-]*) return 1 ;;
+    esac
+    [ "${#component}" -le 128 ] || return 1
+  done
+  [ "$field" = "$expected_field" ] || return 1
+  printf '%s\n' "$path"
+}
+
+load_root_runtime_configuration() {
+  local expected_owner access_path secret_path key config_directory config_name canonical_config
+
+  case "${SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS:-0}" in
+    1) expected_owner="$(id -u)" ;;
+    0) expected_owner=0 ;;
+    *) die ;;
+  esac
+  case "$CONFIG_FILE" in
+    /*) ;;
+    *) die ;;
+  esac
+  [ -f "$CONFIG_FILE" ] && [ ! -L "$CONFIG_FILE" ] || die
+  config_directory="${CONFIG_FILE%/*}"
+  config_name="${CONFIG_FILE##*/}"
+  [ -n "$config_directory" ] && [ -n "$config_name" ] || die
+  canonical_config="$(cd -P -- "$config_directory" 2>/dev/null && pwd -P)/$config_name" || die
+  [ "$canonical_config" = "$CONFIG_FILE" ] || die
+  [ "$(file_owner_mode "$CONFIG_FILE")" = "${expected_owner}:600" ] || die
+
+  # shellcheck disable=SC1090 # The checked root-owned production runtime configuration owns these non-secret refs.
+  . "$CONFIG_FILE"
+  set +x
+
+  for key in IMAGE_UPSCALE_API_KEY BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY; do
+    [ "${!key+x}" != x ] || die
+  done
+  [ "${IMAGE_UPSCALE_API_KEY_VAULT_REF:-}" = "$UPSCAPE_API_KEY_VAULT_REF" ] || die
+  [ "${BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET:-}" = "$PUBLIC_DIR/public.sock" ] || die
+  COS_ACCESS_KEY_VAULT_REF="${BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF:-}"
+  COS_SECRET_ACCESS_KEY_VAULT_REF="${BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF:-}"
+  access_path="$(parse_exact_vault_reference "$COS_ACCESS_KEY_VAULT_REF" access_key_id)" || die
+  secret_path="$(parse_exact_vault_reference "$COS_SECRET_ACCESS_KEY_VAULT_REF" secret_access_key)" || die
+  [ "$access_path" = "$secret_path" ] || die
+}
 
 require_image() {
   local image="$1" revision platform source version
@@ -51,8 +124,8 @@ require_image() {
 }
 
 agent_command_json() {
-  printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s"]' \
-    "$PUBLIC_DIR" "$ADMIN_DIR" "$VAULT_REF"
+  printf '["/app/sub2api-vault-agent","serve","--public-socket","%s/public.sock","--admin-socket","%s/admin.sock","--allowed-ref","%s","--allowed-ref","%s","--allowed-ref","%s"]' \
+    "$PUBLIC_DIR" "$ADMIN_DIR" "$UPSCAPE_API_KEY_VAULT_REF" "$COS_ACCESS_KEY_VAULT_REF" "$COS_SECRET_ACCESS_KEY_VAULT_REF"
 }
 
 prepare_public_volume() {
@@ -107,6 +180,50 @@ verify_container() {
   [ "$health" = '["CMD-SHELL","/app/sub2api-vault-agent check --public-socket '"$PUBLIC_DIR"'/public.sock"]' ] || return 1
 }
 
+clear_secret() {
+  local variable="$1" value
+  value="${!variable-}"
+  if [ -n "$value" ]; then
+    printf -v "$variable" '%*s' "${#value}" ''
+  fi
+  unset "$variable"
+}
+
+read_secret_line() {
+  local variable="$1" maximum="$2" reject_all_whitespace="$3" value
+
+  IFS= read -r "$variable" || die
+  value="${!variable}"
+  [ -n "$value" ] && [ "${#value}" -le "$maximum" ] || die
+  case "$value" in
+    *$'\r'*|*$'\n'*) die ;;
+  esac
+  [ "$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" = "$value" ] || die
+  if [ "$reject_all_whitespace" = true ]; then
+    case "$value" in *[[:space:]]*) die ;; esac
+  fi
+}
+
+require_no_additional_stdin() {
+  local extra
+  if IFS= read -r extra; then
+    die
+  fi
+}
+
+load_secret() {
+  local reference="$1" variable="$2"
+
+  printf '%s' "${!variable}" \
+    | docker exec -i "$CONTAINER" /app/sub2api-vault-agent load \
+      --admin-socket "$ADMIN_DIR/admin.sock" --ref "$reference" >/dev/null 2>&1 || die
+}
+
+check_agent_ready() {
+  docker exec "$CONTAINER" /app/sub2api-vault-agent check \
+    --public-socket "$PUBLIC_DIR/public.sock" >/dev/null 2>&1 || die
+}
+
 case "${SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS:-0}" in
   1)
     # shellcheck disable=SC2034 # Read by the sourced maintenance-lock helper.
@@ -120,16 +237,18 @@ esac
 action="$1"
 image="$2"
 case "$action" in
-  prepare|ready|ready-auto) ;;
+  prepare|ready|ready-auto|load-api|load-batch-cos|load-all) ;;
   *) die ;;
 esac
 
+for command_name in docker flock id stat sed; do
+  command -v "$command_name" >/dev/null 2>&1 || die
+done
+load_root_runtime_configuration
+LOCK_FILE="${SUB2API_MAINTENANCE_LOCK_FILE:-$SUB2API_MAINTENANCE_LOCK_DEFAULT_FILE}"
 if ! sub2api_maintenance_lock_validate_configured_path "$LOCK_FILE"; then
   die
 fi
-for command_name in docker flock; do
-  command -v "$command_name" >/dev/null 2>&1 || die
-done
 require_image "$image"
 
 if [ "$action" = ready-auto ]; then
@@ -178,13 +297,58 @@ else
     /app/sub2api-vault-agent serve \
     --public-socket "$PUBLIC_DIR/public.sock" \
     --admin-socket "$ADMIN_DIR/admin.sock" \
-    --allowed-ref "$VAULT_REF" >/dev/null || die
+    --allowed-ref "$UPSCAPE_API_KEY_VAULT_REF" \
+    --allowed-ref "$COS_ACCESS_KEY_VAULT_REF" \
+    --allowed-ref "$COS_SECRET_ACCESS_KEY_VAULT_REF" >/dev/null || die
 fi
 
 verify_container "$image" || die
-if [ "$action" = ready ] || [ "$action" = ready-auto ]; then
-  [ "$(docker container inspect "$CONTAINER" --format '{{.State.Health.Status}}')" = healthy ] || die
-  printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY'
-else
-  printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_WAITING_FOR_INJECTION'
-fi
+case "$action" in
+  ready|ready-auto)
+    [ "$(docker container inspect "$CONTAINER" --format '{{.State.Health.Status}}')" = healthy ] || die
+    printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY'
+    ;;
+  load-api|load-batch-cos|load-all)
+    api_key=''
+    cos_access_key=''
+    cos_secret_key=''
+    cleanup_injected_values() {
+      clear_secret api_key
+      clear_secret cos_access_key
+      clear_secret cos_secret_key
+    }
+    trap cleanup_injected_values EXIT
+    case "$action" in
+      load-api)
+        read_secret_line api_key 512 true
+        require_no_additional_stdin
+        load_secret "$UPSCAPE_API_KEY_VAULT_REF" api_key
+        ;;
+      load-batch-cos)
+        read_secret_line cos_access_key 256 false
+        read_secret_line cos_secret_key 512 false
+        require_no_additional_stdin
+        load_secret "$COS_ACCESS_KEY_VAULT_REF" cos_access_key
+        load_secret "$COS_SECRET_ACCESS_KEY_VAULT_REF" cos_secret_key
+        ;;
+      load-all)
+        read_secret_line api_key 512 true
+        read_secret_line cos_access_key 256 false
+        read_secret_line cos_secret_key 512 false
+        require_no_additional_stdin
+        load_secret "$UPSCAPE_API_KEY_VAULT_REF" api_key
+        load_secret "$COS_ACCESS_KEY_VAULT_REF" cos_access_key
+        load_secret "$COS_SECRET_ACCESS_KEY_VAULT_REF" cos_secret_key
+        ;;
+    esac
+    if [ "$action" = load-all ]; then
+      check_agent_ready
+      printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_READY'
+    else
+      printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_LOADED'
+    fi
+    ;;
+  prepare)
+    printf '%s\n' 'SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_WAITING_FOR_INJECTION'
+    ;;
+esac

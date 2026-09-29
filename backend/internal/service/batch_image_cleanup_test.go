@@ -259,6 +259,57 @@ func TestBatchImageCleanupService_InputOutputAndWorker(t *testing.T) {
 	})
 }
 
+func TestBatchImageCleanupService_OpenAIDeterministicCleanupSurvivesDeletedAccount(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeBatchImageRepository()
+	store := newFakeOpenAIImageBatchStore()
+	provider := NewOpenAIImagesBatchProvider(store, nil, testOpenAIImageBatchObjectPrefix)
+	accountID := int64(404)
+	batchID := "imgbatch_deleted_account_cleanup"
+	now := time.Now().Add(-48 * time.Hour)
+	job := &BatchImageJob{
+		BatchID:           batchID,
+		AccountID:         &accountID,
+		Provider:          BatchImageProviderOpenAI,
+		Model:             "gpt-image-2.5-sunburst",
+		ImageSize:         "1K",
+		Status:            BatchImageJobStatusCompleted,
+		ProviderJobName:   batchImageStringPtr(batchImageOpenAIProviderJobPrefix + batchID),
+		ProviderInputRef:  batchImageStringPtr(provider.inputKey(batchID)),
+		ProviderOutputRef: batchImageStringPtr(provider.outputKey(batchID)),
+		ItemCount:         1,
+		SuccessCount:      1,
+		FinishedAt:        &now,
+	}
+	repo.jobs[batchID] = job
+
+	objects := map[string][]byte{
+		provider.inputKey(batchID):          []byte(`{"version":1}`),
+		provider.outputKey(batchID):         []byte("result\n"),
+		provider.cancelKey(batchID):         []byte("cancelled"),
+		provider.itemAttemptKey(batchID, 0): []byte("started"),
+		provider.itemResultKey(batchID, 0):  []byte("item\n"),
+	}
+	for key, payload := range objects {
+		require.NoError(t, store.Put(ctx, key, "application/octet-stream", strings.NewReader(string(payload)), int64(len(payload))))
+	}
+
+	svc := &BatchImageCleanupService{
+		Repo:             repo,
+		ProviderRegistry: NewBatchImageProviderRegistry(provider),
+		AccountResolver:  &fakeBatchImageAccountResolver{err: ErrBatchImageJobNotFound},
+	}
+	require.NoError(t, svc.CleanupInput(ctx, batchID))
+	require.NoError(t, svc.CleanupOutput(ctx, batchID, "expired"))
+	require.NotNil(t, job.InputDeletedAt)
+	require.NotNil(t, job.OutputDeletedAt)
+	for key := range objects {
+		exists, err := store.Exists(ctx, key)
+		require.NoError(t, err)
+		require.False(t, exists, "cleanup left object %s", key)
+	}
+}
+
 func TestBatchImageSettlementOutputExpiration(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_expire")

@@ -56,6 +56,7 @@ export interface BatchImageJob {
   parent_batch_id?: string | null
   status: BatchImageStatus
   model: string
+  image_size: '1K' | '2K' | '4K' | string
   provider: string
   item_count: number
   success_count: number

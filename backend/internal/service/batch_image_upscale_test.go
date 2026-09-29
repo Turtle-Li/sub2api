@@ -446,7 +446,7 @@ func TestBatchImageSubmitValidationAllowsConfiguredGeminiImage25Upscale(t *testi
 	require.Equal(t, BatchImageProviderGeminiAPI, normalized.Provider)
 }
 
-func TestBatchImageSubmitHighResolutionDoesNotFallbackToVertex(t *testing.T) {
+func TestBatchImageSubmitHighResolutionCanUseVertexSourceTier(t *testing.T) {
 	service, repo, _, gemini, vertex := newTestBatchImagePublicService(true)
 	service.Config.ImageUpscale = config.ImageUpscaleConfig{
 		Enabled:          true,
@@ -460,11 +460,15 @@ func TestBatchImageSubmitHighResolutionDoesNotFallbackToVertex(t *testing.T) {
 	request.Model = "gemini-2.5-flash-image"
 	request.ImageSize = "2K"
 
-	_, err := service.Submit(context.Background(), testBatchImageOwner(), request, "")
-	require.ErrorIs(t, err, ErrBatchImageNoAccountAvailable)
-	require.Empty(t, repo.jobs)
+	created, err := service.Submit(context.Background(), testBatchImageOwner(), request, "")
+	require.NoError(t, err)
+	require.Equal(t, BatchImageProviderVertex, created.Provider)
+	require.Equal(t, "2K", created.ImageSize)
+	require.Equal(t, "2K", repo.jobs[created.ID].ImageSize)
 	require.Empty(t, gemini.submits)
-	require.Empty(t, vertex.submits)
+	require.Len(t, vertex.submits, 1)
+	require.Equal(t, ImageBillingSize1K, vertex.submits[0].ImageSize)
+	require.True(t, vertex.submits[0].ExplicitImageConfig)
 }
 
 func TestBatchImageSubmitHighResolutionPricesRequestedTierAndSendsProvider1K(t *testing.T) {

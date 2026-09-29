@@ -272,9 +272,9 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err != nil {
 		return nil, err
 	}
-	// 与 ListModels 使用同一鉴权谓词（AllowBatchImageGeneration + Platform==Gemini），
-	// 避免两个入口校验口径不一致留下防御纵深缺口。
-	if err := s.ensureGroupAllowsBatchImage(ctx, owner.GroupID); err != nil {
+	// Submit and ListModels share the same group-level batch permission. Submit
+	// additionally requires the group's platform to match the model family.
+	if err := s.ensureGroupAllowsBatchImage(ctx, owner.GroupID, normalized.Model); err != nil {
 		return nil, err
 	}
 	requestHash := hashBatchImageIdempotencyRequest(normalized, taskNameProvided)
@@ -402,21 +402,19 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	}
 
 	input := BatchImageInput{
-		BatchID:          job.BatchID,
-		Model:            normalized.Model,
-		DisplayName:      job.BatchID,
-		ResponseMimeType: normalized.ResponseMimeType,
-		AspectRatio:      normalized.AspectRatio,
-		ImageSize:        normalized.ImageSize,
-		Metadata:         normalized.Metadata,
-		Items:            make([]BatchImageInputItem, 0, len(normalized.Items)),
+		BatchID:             job.BatchID,
+		Model:               normalized.Model,
+		DisplayName:         job.BatchID,
+		ResponseMimeType:    normalized.ResponseMimeType,
+		AspectRatio:         normalized.AspectRatio,
+		ImageSize:           defaultBatchImageImageSize,
+		ExplicitImageConfig: true,
+		Metadata:            normalized.Metadata,
+		Items:               make([]BatchImageInputItem, 0, len(normalized.Items)),
 	}
-	if _, upscaleRequired := RequestedImageUpscaleScale(normalized.ImageSize); upscaleRequired {
-		input.ExplicitImageConfig = true
-		if shouldForceProviderImageSize1K(normalized.Model) {
-			input.ImageSize = defaultBatchImageImageSize
-		}
-	}
+	// Both supported upstream families always receive an explicit source-tier
+	// image config. The durable job retains the requested 1K/2K/4K tier; the
+	// common finalizer performs any required 2K/4K post-upscale and settlement.
 	for _, item := range normalized.Items {
 		refs := make([]BatchImageReference, 0, len(item.ReferenceImages))
 		for _, ref := range item.ReferenceImages {
@@ -481,6 +479,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		return nil, ErrBatchImageProviderSubmitFailed
 	}
 
+	postSubmitCtx := submitCtx
 	if err := s.Repo.UpdateBatchImageJobProviderSubmit(submitCtx, UpdateBatchImageJobProviderSubmitParams{
 		BatchID:           job.BatchID,
 		ProviderJobName:   providerJob.ProviderJobName,
@@ -490,26 +489,86 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		GCSOutputURI:      batchImageGCSRef(provider.Name(), providerJob.ProviderOutputRef),
 		EventPayload:      map[string]any{"provider": provider.Name()},
 	}); err != nil {
-		// job 可能已被恢复扫描转 failed 并退款：上游批任务已创建成功，
-		// 必须尽力取消并清理输入，否则上游照常产生成本（孤儿任务）。
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(submitCtx), 30*time.Second)
-		defer cleanupCancel()
-		s.abortOrphanProviderJob(cleanupCtx, provider, job, account, providerJob)
-		return nil, err
+		if !errors.Is(err, ErrBatchImageProviderSubmitCommitUncertain) {
+			// The repository guarantees that Commit was never attempted for an
+			// unmarked error, so this provider job is definitely orphaned.
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(submitCtx), 30*time.Second)
+			defer cleanupCancel()
+			s.abortOrphanProviderJob(cleanupCtx, provider, job, account, providerJob)
+			return nil, err
+		}
+
+		// Commit 可能已在数据库生效，但客户端丢失了确认。在证明未落库前
+		// 不能删除 deterministic manifest，否则已提交的 job 会永久失去执行输入。
+		confirmCtx, confirmCancel := context.WithTimeout(context.WithoutCancel(submitCtx), 30*time.Second)
+		defer confirmCancel()
+		persisted, confirmErr := s.confirmProviderSubmitPersistence(confirmCtx, job.BatchID, providerJob)
+		if persisted {
+			postSubmitCtx = confirmCtx
+			logger.L().Warn("batch_image.provider_submit_commit_confirmed_after_error",
+				zap.String("batch_id", job.BatchID),
+				zap.String("provider", provider.Name()),
+				zap.Error(err),
+			)
+		} else {
+			logger.L().Warn("batch_image.provider_submit_commit_outcome_uncertain",
+				zap.String("batch_id", job.BatchID),
+				zap.String("provider", provider.Name()),
+				zap.Error(err),
+				zap.NamedError("confirmation_error", confirmErr),
+			)
+			// 即使当前读到旧的 uploading 行，Commit 仍可能正在服务端收敛。
+			// 入队是可重复的，并且任何未确认结果都必须保留 provider 对象。
+			if s.Queue != nil {
+				if enqueueErr := s.Queue.Enqueue(confirmCtx, job.BatchID); enqueueErr != nil && !errors.Is(enqueueErr, ErrBatchImageAlreadyQueued) {
+					logger.L().Warn("batch_image.provider_submit_uncertain_enqueue_failed",
+						zap.String("batch_id", job.BatchID),
+						zap.Error(enqueueErr),
+					)
+				}
+			}
+			return nil, ErrBatchImageSubmitPending
+		}
 	}
 
 	if s.Queue != nil {
-		if err := s.Queue.Enqueue(submitCtx, job.BatchID); err != nil && !errors.Is(err, ErrBatchImageAlreadyQueued) {
-			_ = s.Repo.RecordBatchImageJobSubmitFailure(submitCtx, job.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(err.Error()), false)
+		if err := s.Queue.Enqueue(postSubmitCtx, job.BatchID); err != nil && !errors.Is(err, ErrBatchImageAlreadyQueued) {
+			_ = s.Repo.RecordBatchImageJobSubmitFailure(postSubmitCtx, job.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(err.Error()), false)
 			return nil, ErrBatchImageQueueFailed
 		}
 	}
 
-	created, err := s.Repo.GetBatchImageJobByBatchID(submitCtx, job.BatchID)
+	created, err := s.Repo.GetBatchImageJobByBatchID(postSubmitCtx, job.BatchID)
 	if err != nil {
 		return nil, err
 	}
 	return BatchImageJobToPublic(created), nil
+}
+
+func (s *BatchImagePublicService) confirmProviderSubmitPersistence(
+	ctx context.Context,
+	batchID string,
+	providerJob *BatchProviderJob,
+) (bool, error) {
+	if s == nil || s.Repo == nil || providerJob == nil {
+		return false, errors.New("batch image provider submit confirmation unavailable")
+	}
+	stored, err := s.Repo.GetBatchImageJobByBatchID(ctx, batchID)
+	if err != nil {
+		return false, err
+	}
+	if stored == nil {
+		return false, ErrBatchImageJobNotFound
+	}
+
+	providerJobName := strings.TrimSpace(providerJob.ProviderJobName)
+	if providerJobName != "" &&
+		strings.TrimSpace(batchImageDerefString(stored.ProviderJobName)) == providerJobName &&
+		strings.TrimSpace(batchImageDerefString(stored.ProviderInputRef)) == strings.TrimSpace(providerJob.ProviderInputRef) &&
+		strings.TrimSpace(batchImageDerefString(stored.ProviderOutputRef)) == strings.TrimSpace(providerJob.ProviderOutputRef) {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *BatchImagePublicService) getIdempotentBatchImageSubmission(
@@ -788,9 +847,16 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 	}
 
 	modelsByProvider := make(map[string]map[string]struct{})
+	groupPlatform, err := s.batchImageGroupPlatform(ctx, owner.GroupID)
+	if err != nil {
+		return nil, err
+	}
 	for _, providerName := range batchImageProviderSelectionOrder("") {
+		if groupPlatform != "" && batchImageProviderPlatform(providerName) != groupPlatform {
+			continue
+		}
 		provider, ok := s.ProviderRegistry.Get(providerName)
-		if !ok || provider == nil {
+		if !ok || provider == nil || !batchImageProviderSubmissionAvailable(provider) {
 			continue
 		}
 		accounts, err := s.listCandidateAccounts(ctx, owner.GroupID, batchImageProviderPlatform(providerName))
@@ -803,10 +869,14 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 				continue
 			}
 			for _, model := range batchImageModelsFromAccountMapping(&account) {
+				modelPlatform, ok := batchImageModelPlatform(model)
+				if !ok || modelPlatform != batchImageProviderPlatform(providerName) {
+					continue
+				}
 				if _, err := s.Pricing.BatchImageUnitPrice(ctx, &BatchImageJob{Provider: providerName, Model: model}); err != nil {
 					continue
 				}
-				if !account.IsModelSupported(model) {
+				if !batchImageAccountSupportsProviderModel(providerName, &account, model) {
 					continue
 				}
 				if modelsByProvider[providerName] == nil {
@@ -884,8 +954,26 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return BatchImageJobToPublic(job), nil
 	}
 	if job.ProviderJobName != nil && strings.TrimSpace(*job.ProviderJobName) != "" {
-		queueFencer, lock, lockTTL, err := s.acquireBatchImageCancelLock(ctx, job.BatchID)
-		if err != nil {
+		provider, ok := s.ProviderRegistry.Get(job.Provider)
+		if !ok || provider == nil {
+			return nil, ErrBatchImageUnsupportedProvider
+		}
+		durableCancelPersisted := false
+		if job.Status != BatchImageJobStatusIndexing {
+			if durableCanceller, ok := provider.(BatchImageProviderDurableCancelIntent); ok {
+				if err := durableCanceller.PersistCancelIntent(ctx, job); err != nil {
+					return nil, ErrBatchImageCancelFailed
+				}
+				durableCancelPersisted = true
+			}
+		}
+
+		queueFencer, lock, lockTTL, acquired, err := s.acquireBatchImageCancelLock(ctx, job.BatchID)
+		if err != nil || !acquired {
+			if durableCancelPersisted {
+				s.appendBatchImageCancelRequestedEvent(ctx, job)
+				return BatchImageJobToPublic(job), nil
+			}
 			return nil, ErrBatchImageCancelFailed
 		}
 		defer func() {
@@ -943,11 +1031,14 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 			return nil, ErrBatchImageCancelFailed
 		}
 
-		provider, ok := s.ProviderRegistry.Get(job.Provider)
-		if !ok || provider == nil {
-			return nil, ErrBatchImageUnsupportedProvider
-		}
 		if job.AccountID == nil {
+			if durableCancelPersisted {
+				s.appendBatchImageCancelRequestedEvent(ctx, job)
+				if _, err := s.ensureBatchImageCancelContinuation(ctx, queueFencer, job, nil); err != nil {
+					return nil, ErrBatchImageCancelFailed
+				}
+				return s.reloadBatchImagePublicBatch(ctx, owner, batchID)
+			}
 			return nil, ErrBatchImageCancelFailed
 		}
 		account, err := s.AccountRepo.GetByID(ctx, *job.AccountID)
@@ -955,6 +1046,13 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 			return nil, ErrBatchImageCancelFailed
 		}
 		if err != nil {
+			if durableCancelPersisted {
+				s.appendBatchImageCancelRequestedEvent(ctx, job)
+				if _, ensureErr := s.ensureBatchImageCancelContinuation(ctx, queueFencer, job, nil); ensureErr != nil {
+					return nil, ErrBatchImageCancelFailed
+				}
+				return s.reloadBatchImagePublicBatch(ctx, owner, batchID)
+			}
 			return nil, ErrBatchImageCancelFailed
 		}
 
@@ -1018,12 +1116,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		if lockGuard.Err() != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
-		if eventErr := s.Repo.AppendBatchImageEvent(ctx, job.BatchID, "job_cancel_requested", map[string]any{"batch_id": job.BatchID}); eventErr != nil {
-			logger.L().Warn("batch_image.cancel_event_failed",
-				zap.String("batch_id", job.BatchID),
-				zap.Error(eventErr),
-			)
-		}
+		s.appendBatchImageCancelRequestedEvent(ctx, job)
 		if lockGuard.Err() != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
@@ -1057,28 +1150,43 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 	return BatchImageJobToPublic(updated), nil
 }
 
-func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Context, batchID string) (BatchImageJobLockQueueFencer, BatchImageJobLock, time.Duration, error) {
+func (s *BatchImagePublicService) acquireBatchImageCancelLock(ctx context.Context, batchID string) (BatchImageJobLockQueueFencer, BatchImageJobLock, time.Duration, bool, error) {
 	if s == nil || s.Queue == nil {
-		return nil, nil, 0, ErrBatchImageCancelFailed
+		return nil, nil, 0, false, ErrBatchImageCancelFailed
 	}
 	ensurer, ok := s.Queue.(BatchImageQueueEnsurer)
 	if !ok || ensurer == nil {
-		return nil, nil, 0, ErrBatchImageCancelFailed
+		return nil, nil, 0, false, ErrBatchImageCancelFailed
 	}
 	lockTTL := defaultBatchImageCancelLockTTL
 	if s.Config != nil && s.Config.BatchImage.JobLockTTLSeconds > 0 {
 		lockTTL = time.Duration(s.Config.BatchImage.JobLockTTLSeconds) * time.Second
 	}
 	lock, acquired, err := ensurer.TryAcquireJobLock(ctx, batchID, lockTTL)
-	if err != nil || !acquired || lock == nil {
-		return nil, nil, 0, ErrBatchImageCancelFailed
+	if err != nil {
+		return nil, nil, lockTTL, false, ErrBatchImageCancelFailed
+	}
+	if !acquired || lock == nil {
+		return nil, nil, lockTTL, false, nil
 	}
 	queueFencer, ok := lock.(BatchImageJobLockQueueFencer)
 	if !ok || queueFencer == nil {
 		_ = lock.Release(context.WithoutCancel(ctx))
-		return nil, nil, 0, ErrBatchImageCancelFailed
+		return nil, nil, lockTTL, false, ErrBatchImageCancelFailed
 	}
-	return queueFencer, lock, lockTTL, nil
+	return queueFencer, lock, lockTTL, true, nil
+}
+
+func (s *BatchImagePublicService) appendBatchImageCancelRequestedEvent(ctx context.Context, job *BatchImageJob) {
+	if s == nil || s.Repo == nil || job == nil {
+		return
+	}
+	if eventErr := s.Repo.AppendBatchImageEvent(ctx, job.BatchID, "job_cancel_requested", map[string]any{"batch_id": job.BatchID}); eventErr != nil {
+		logger.L().Warn("batch_image.cancel_event_failed",
+			zap.String("batch_id", job.BatchID),
+			zap.Error(eventErr),
+		)
+	}
 }
 
 type batchImageCancelLockGuard struct {
@@ -1249,6 +1357,10 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 	if req.Model == "" {
 		return req, ErrBatchImageInvalidModel
 	}
+	modelPlatform, ok := batchImageModelPlatform(req.Model)
+	if !ok {
+		return req, ErrBatchImageInvalidModel
+	}
 	if req.TaskName == "" {
 		req.TaskName = defaultBatchImageTaskName(time.Now())
 	}
@@ -1256,6 +1368,9 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 		req.TaskName = truncateBatchImageMessage(req.TaskName, 255)
 	}
 	if req.Provider != "" && !IsSupportedBatchImageProvider(req.Provider) {
+		return req, ErrBatchImageUnsupportedProvider
+	}
+	if req.Provider != "" && batchImageProviderPlatform(req.Provider) != modelPlatform {
 		return req, ErrBatchImageUnsupportedProvider
 	}
 	if len(req.Items) == 0 {
@@ -1293,18 +1408,16 @@ func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequ
 		if !isImage25SupportedAspectRatio(req.AspectRatio) {
 			return req, ErrBatchImageInvalidItems
 		}
-		if req.Provider != "" && req.Provider != BatchImageProviderGeminiAPI {
-			return req, ErrBatchImageInvalidItems
-		}
-		// High-resolution jobs use Gemini API so the provider JSONL retains an
-		// explicit image config. The final-resolution adapter remains model
-		// independent and checks the decoded output dimensions.
-		req.Provider = BatchImageProviderGeminiAPI
 		if s == nil || s.Config == nil || !s.Config.ImageUpscale.Active() {
 			return req, ErrBatchImageUpscaleUnavailable
 		}
 	default:
 		return req, ErrBatchImageInvalidItems
+	}
+	if modelPlatform == PlatformOpenAI {
+		if _, err := batchImageOpenAI1KSizeForAspectRatio(req.AspectRatio); err != nil {
+			return req, ErrBatchImageInvalidItems
+		}
 	}
 	req.Metadata = sanitizeBatchImageMetadata(req.Metadata)
 	sharedReferences, err := normalizeBatchImageSharedReferenceInputs(
@@ -1402,6 +1515,12 @@ func normalizeBatchImageReferenceInputs(model string, item *BatchImageSubmitItem
 		normalized, err := normalizeBatchImageReferenceInput(ref)
 		if err != nil {
 			return 0, 0, err
+		}
+		// gs:// references are a Gemini/Vertex transport. OpenAI Images receives
+		// only server-validated inline bytes so a private object URI can never be
+		// forwarded as if it were a public image URL.
+		if IsGPTImageGenerationModel(model) && strings.TrimSpace(normalized.FileURI) != "" {
+			return 0, 0, ErrBatchImageInvalidReferenceImage
 		}
 		inlineBytes += len(normalized.Data)
 		out = append(out, normalized)
@@ -1515,6 +1634,9 @@ func batchImageRepeatSuffixWidth(count int) int {
 
 func maxBatchImageReferenceImagesForModel(model string) int {
 	model = strings.ToLower(strings.TrimSpace(model))
+	if IsGPTImageGenerationModel(model) {
+		return 16
+	}
 	if strings.Contains(model, "gemini-3.1-flash-image") ||
 		strings.Contains(model, "gemini-3.1-flash-lite-image") ||
 		strings.Contains(model, "gemini-3-pro-image") {
@@ -1527,10 +1649,10 @@ func maxBatchImageReferenceImagesForModel(model string) int {
 }
 
 func (s *BatchImagePublicService) selectProviderAndAccount(ctx context.Context, owner BatchImageOwner, requestedProvider, model string) (BatchImageProvider, *Account, error) {
-	providers := batchImageProviderSelectionOrder(requestedProvider)
+	providers := batchImageProviderSelectionOrder(requestedProvider, model)
 	for _, providerName := range providers {
 		provider, ok := s.ProviderRegistry.Get(providerName)
-		if !ok || provider == nil {
+		if !ok || provider == nil || !batchImageProviderSubmissionAvailable(provider) {
 			continue
 		}
 		accounts, err := s.listCandidateAccounts(ctx, owner.GroupID, batchImageProviderPlatform(providerName))
@@ -1546,7 +1668,7 @@ func (s *BatchImagePublicService) selectProviderAndAccount(ctx context.Context, 
 		})
 		for i := range accounts {
 			account := accounts[i]
-			if !account.IsSchedulable() || !account.IsModelSupported(model) {
+			if !account.IsSchedulable() || !batchImageAccountSupportsProviderModel(providerName, &account, model) {
 				continue
 			}
 			if provider.SupportsAccount(&account) {
@@ -1570,7 +1692,7 @@ func (s *BatchImagePublicService) listCandidateAccounts(ctx context.Context, gro
 	return s.AccountRepo.ListSchedulableByPlatform(ctx, platform)
 }
 
-func (s *BatchImagePublicService) ensureGroupAllowsBatchImage(ctx context.Context, groupID *int64) error {
+func (s *BatchImagePublicService) ensureGroupAllowsBatchImage(ctx context.Context, groupID *int64, models ...string) error {
 	if groupID == nil || *groupID <= 0 {
 		return nil
 	}
@@ -1584,10 +1706,31 @@ func (s *BatchImagePublicService) ensureGroupAllowsBatchImage(ctx context.Contex
 	if !group.AllowBatchImageGeneration {
 		return ErrBatchImageGroupDisabled
 	}
-	if group.Platform != PlatformGemini {
+	platform := NormalizeGroupPlatform(group.Platform)
+	if platform != PlatformGemini && platform != PlatformOpenAI {
 		return ErrBatchImageGroupDisabled
 	}
+	if len(models) > 0 && strings.TrimSpace(models[0]) != "" {
+		modelPlatform, ok := batchImageModelPlatform(models[0])
+		if !ok || platform != modelPlatform {
+			return ErrBatchImageGroupDisabled
+		}
+	}
 	return nil
+}
+
+func (s *BatchImagePublicService) batchImageGroupPlatform(ctx context.Context, groupID *int64) (string, error) {
+	if groupID == nil || *groupID <= 0 {
+		return "", nil
+	}
+	if s == nil || s.GroupRepo == nil {
+		return "", ErrBatchImageSettlementPricingMissing
+	}
+	group, err := s.GroupRepo.GetByIDLite(ctx, *groupID)
+	if err != nil || group == nil {
+		return "", ErrBatchImageSettlementPricingMissing
+	}
+	return NormalizeGroupPlatform(group.Platform), nil
 }
 
 func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, owner BatchImageOwner, req BatchImageSubmitRequest, provider string, account *Account) (*BatchImagePricingSnapshot, error) {
@@ -1922,16 +2065,51 @@ func batchImageProviderPlatform(provider string) string {
 	switch provider {
 	case BatchImageProviderGeminiAPI, BatchImageProviderVertex:
 		return PlatformGemini
+	case BatchImageProviderOpenAI:
+		return PlatformOpenAI
 	default:
-		return PlatformGemini
+		return ""
 	}
 }
 
-func batchImageProviderSelectionOrder(requestedProvider string) []string {
+func batchImageProviderSelectionOrder(requestedProvider string, models ...string) []string {
 	if strings.TrimSpace(requestedProvider) != "" {
 		return []string{strings.TrimSpace(requestedProvider)}
 	}
-	return []string{BatchImageProviderGeminiAPI, BatchImageProviderVertex}
+	if len(models) > 0 {
+		switch platform, ok := batchImageModelPlatform(models[0]); {
+		case !ok:
+			return nil
+		case platform == PlatformOpenAI:
+			return []string{BatchImageProviderOpenAI}
+		default:
+			return []string{BatchImageProviderGeminiAPI, BatchImageProviderVertex}
+		}
+	}
+	return []string{BatchImageProviderGeminiAPI, BatchImageProviderVertex, BatchImageProviderOpenAI}
+}
+
+func batchImageModelPlatform(model string) (string, bool) {
+	if isOpenAIImageBatchModel(model) {
+		return PlatformOpenAI, true
+	}
+	if isGeminiCompatibleImageModel(model) {
+		return PlatformGemini, true
+	}
+	return "", false
+}
+
+func isOpenAIImageBatchModel(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "gpt-image-2",
+		"gpt-image-2.5-flare",
+		"gpt-image-2.5-flare-2026-09-08",
+		"gpt-image-2.5-sunburst",
+		"gpt-image-2.5-sunburst-2026-09-08":
+		return true
+	default:
+		return false
+	}
 }
 
 func batchImageModelsFromAccountMapping(account *Account) []string {
@@ -1966,14 +2144,26 @@ func batchImageModelsFromAccountMapping(account *Account) []string {
 	return out
 }
 
+func batchImageAccountSupportsProviderModel(providerName string, account *Account, requestedModel string) bool {
+	if account == nil || !account.IsModelSupported(requestedModel) {
+		return false
+	}
+	if providerName == BatchImageProviderOpenAI {
+		return isOpenAIImageBatchModel(account.GetMappedModel(requestedModel))
+	}
+	return true
+}
+
 func defaultBatchImageModelCandidates() []string {
 	return []string{
-		"gemini-2.0-flash-exp-image-generation",
+		"gpt-image-2",
+		"gpt-image-2.5-flare",
+		"gpt-image-2.5-flare-2026-09-08",
+		"gpt-image-2.5-sunburst",
+		"gpt-image-2.5-sunburst-2026-09-08",
 		"gemini-2.5-flash-image",
 		"gemini-3-pro-image",
-		"gemini-3-pro-image-preview",
 		"gemini-3.1-flash-image",
-		"gemini-3.1-flash-image-preview",
 		"gemini-3.1-flash-lite-image",
 	}
 }

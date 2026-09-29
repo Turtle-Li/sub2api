@@ -555,11 +555,11 @@
             <label class="input-label">API Key</label>
             <select v-model.number="form.apiKeyId" class="input" :disabled="loadingKeys">
               <option :value="0">{{ loadingKeys ? t('batchImage.create.loadingKeys') : t('batchImage.create.selectKeyPlaceholder') }}</option>
-              <option v-for="key in geminiApiKeys" :key="key.id" :value="key.id">
-                {{ key.name }} · {{ key.group?.name || 'Gemini' }}
+              <option v-for="key in batchImageApiKeys" :key="key.id" :value="key.id">
+                {{ key.name }} · {{ key.group?.name || 'Batch Image' }}
               </option>
             </select>
-            <p v-if="!loadingKeys && geminiApiKeys.length === 0" class="input-hint text-amber-600 dark:text-amber-400">
+            <p v-if="!loadingKeys && batchImageApiKeys.length === 0" class="input-hint text-amber-600 dark:text-amber-400">
               {{ t('batchImage.create.noKeysHint') }}
             </p>
           </div>
@@ -583,9 +583,11 @@
 
           <div>
             <label class="input-label">{{ t('batchImage.create.imageSize') }}</label>
-            <div class="input flex items-center bg-gray-50 text-gray-600 dark:bg-dark-900 dark:text-gray-300">
-              1K
-            </div>
+            <select v-model="form.imageSize" class="input">
+              <option value="1K">1K</option>
+              <option value="2K">2K</option>
+              <option value="4K">4K</option>
+            </select>
             <p class="input-hint">{{ t('batchImage.create.imageSizeHint') }}</p>
           </div>
 
@@ -669,7 +671,7 @@
               </span>
             </div>
             <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('batchImage.create.limitsHint', { maxPerItem: BATCH_IMAGE_MAX_OUTPUTS_PER_ITEM, maxPerJob: BATCH_IMAGE_MAX_OUTPUTS_PER_JOB, refLimit: selectedModelReferenceLimit }) }}
+              {{ t('batchImage.create.limitsHint', { maxPerItem: BATCH_IMAGE_MAX_OUTPUTS_PER_ITEM, maxPerJob: maxOutputsPerJob, refLimit: selectedModelReferenceLimit }) }}
             </p>
           </div>
           <div v-if="promptRows.length" class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-700">
@@ -794,7 +796,7 @@ import {
 import type { ApiKey } from '@/types'
 import type { Column } from '@/components/common/types'
 
-type BatchImageJobRow = Pick<BatchImageJob, 'id' | 'task_name' | 'parent_batch_id' | 'status' | 'model' | 'provider' | 'item_count' | 'success_count' | 'fail_count' | 'estimated_cost' | 'hold_amount' | 'actual_cost' | 'created_at' | 'downloaded_at'> & {
+type BatchImageJobRow = Pick<BatchImageJob, 'id' | 'task_name' | 'parent_batch_id' | 'status' | 'model' | 'image_size' | 'provider' | 'item_count' | 'success_count' | 'fail_count' | 'estimated_cost' | 'hold_amount' | 'actual_cost' | 'created_at' | 'downloaded_at'> & {
   api_key_id: number
   api_key_name: string
   child_count: number
@@ -838,7 +840,7 @@ const PREVIEW_CACHE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
 const PREVIEW_CACHE_MAX_ENTRIES = 120
 const PREVIEW_CACHE_MAX_BYTES = 48 * 1024 * 1024
 const BATCH_IMAGE_MAX_OUTPUTS_PER_ITEM = 4
-const BATCH_IMAGE_MAX_OUTPUTS_PER_JOB = 200
+const BATCH_IMAGE_MAX_OUTPUTS_BY_SIZE = { '1K': 50, '2K': 15, '4K': 10 } as const
 const outputCountOptions = Array.from({ length: BATCH_IMAGE_MAX_OUTPUTS_PER_ITEM }, (_, index) => index + 1)
 const batchPageSizeOptions: SelectOption[] = [20, 50, 100].map(size => ({ value: size, label: String(size) }))
 
@@ -881,6 +883,7 @@ const form = reactive({
   apiKeyId: 0,
   taskName: '',
   model: '',
+  imageSize: '1K' as '1K' | '2K' | '4K',
   responseMimeType: 'image/png',
 })
 
@@ -946,27 +949,27 @@ let promptPopoverCloseTimer: ReturnType<typeof setTimeout> | null = null
 let promptPopoverOpenTimer: ReturnType<typeof setTimeout> | null = null
 let activePromptPopoverTarget: HTMLElement | null = null
 
-const geminiApiKeys = computed(() =>
+const batchImageApiKeys = computed(() =>
   apiKeys.value.filter((key) =>
     key.status === 'active' &&
-    key.group?.platform === 'gemini' &&
+    ['gemini', 'openai'].includes(String(key.group?.platform || '')) &&
     key.group?.allow_batch_image_generation === true,
   ),
 )
 
 const selectedApiKey = computed(() =>
-  geminiApiKeys.value.find((key) => key.id === Number(form.apiKeyId)) || null,
+  batchImageApiKeys.value.find((key) => key.id === Number(form.apiKeyId)) || null,
 )
 
 const filteredApiKeys = computed(() => {
   const selectedFilterID = Number(filters.apiKeyId || 0)
-  if (!selectedFilterID) return geminiApiKeys.value
-  return geminiApiKeys.value.filter(key => key.id === selectedFilterID)
+  if (!selectedFilterID) return batchImageApiKeys.value
+  return batchImageApiKeys.value.filter(key => key.id === selectedFilterID)
 })
 
 const apiKeyFilterOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('batchImage.filters.allApiKeys') },
-  ...geminiApiKeys.value.map(key => ({
+  ...batchImageApiKeys.value.map(key => ({
     value: String(key.id),
     label: key.name || `API Key #${key.id}`,
   })),
@@ -1044,6 +1047,7 @@ const endpointBase = computed(() => {
 })
 
 const selectedModelReferenceLimit = computed(() => referenceImageLimitForModel(form.model))
+const maxOutputsPerJob = computed(() => BATCH_IMAGE_MAX_OUTPUTS_BY_SIZE[form.imageSize])
 
 const estimatedOutputCount = computed(() =>
   promptRows.value.reduce((sum, row) => sum + normalizeOutputCount(row.output_count), 0),
@@ -1069,14 +1073,19 @@ const parsedItems = computed<BatchImageSubmitItem[]>(() => {
 
 function referenceImageLimitForModel(model: string) {
   const normalized = String(model || '').toLowerCase()
-  if (normalized.includes('pro-image')) return 14
-  if (normalized.includes('flash-image')) return 3
+  if (normalized.startsWith('gpt-image-')) return 16
+  if (
+    normalized.includes('gemini-3.1-flash-image') ||
+    normalized.includes('gemini-3.1-flash-lite-image') ||
+    normalized.includes('gemini-3-pro-image')
+  ) return 14
+  if (normalized.includes('gemini-2.5-flash-image')) return 3
   return 0
 }
 
 const agentInstruction = computed(() => `---
 name: sub2api-batch-image
-description: 当用户希望用 Gemini/Vertex 批量生成图片、批量跑提示词、下载批量生图结果、重试失败图片时使用。
+description: 当用户希望用 Gemini/Vertex 或 OpenAI/Image 2.5 批量生成图片、批量跑提示词、下载批量生图结果、重试失败图片时使用。
 ---
 
 你是 Codex 中的批量生图执行 Agent。用户不需要手动填写页面表单；你应从当前聊天、用户给的文件、目录或上下文中整理任务名称、prompt 列表和输出目录，只有缺少关键决策时才向用户提问。
@@ -1088,9 +1097,9 @@ ${endpointBase.value}
 1. 从用户聊天或附件中提取 prompt。每条 prompt 保留完整文本，按顺序生成稳定 custom_id，例如 img_001、img_002。
 2. 从用户要求或上下文推断任务名称；没有明确名称时用当前时间生成任务名。
 3. 从用户要求或上下文推断输出目录；如果用户没有说保存到哪里，才询问用户。
-4. 提交前必须先计算 expected_output_count = 所有 item 的 output_count 之和。单个批量任务硬性最多 200 张输出图；超过 200 张必须拆成多组任务，不能提交一个超大任务，也不能把参考图附件上限当成生成张数上限。
-5. 如果用户提供参考图，把参考图按用途绑定到具体 item。参考图只是输入附件，不是输出图数量。模型单条限制必须按模型执行：Gemini 2.5 Flash Image 每条最多 3 张参考图；Gemini 3 Pro Image 每条最多 14 张参考图。不要把后端附件风控理解成 Pro 单条能力：按 output_count 展开后，所有 item 的参考图附件总数还有内部保护阈值 1000 个，inline base64 参考图解码后总量最多 128MB。这个 1000 只是服务器拒绝异常请求的保护阈值，不是推荐规模；参考图很多或总请求体较大时应主动拆分任务。
-6. 参考图会按 output_count 重复消耗输入 token；大量任务、重复复用同一张参考图或参考图总体积较大时，优先使用 gs:// file_uri 或拆分成多组任务。
+4. 提交前必须先计算 expected_output_count = 所有 item 的 output_count 之和。单个批量任务按请求分辨率限制：1K 最多 50 张、2K 最多 15 张、4K 最多 10 张；超过对应上限必须拆成多组任务，不能把参考图附件上限当成生成张数上限。
+5. 如果用户提供参考图，把参考图按用途绑定到具体 item。参考图只是输入附件，不是输出图数量。模型单条限制必须按模型执行：Gemini 2.5 Flash Image 每条最多 3 张，Gemini 3 系列图片模型每条最多 14 张，gpt-image-* 每条最多 16 张内联参考图。按 output_count 展开后，所有 item 的参考图附件总数还有内部保护阈值 1000 个，inline base64 参考图解码后总量最多 128MB。
+6. 参考图会按 output_count 重复消耗上游输入；Gemini 可按服务能力使用 gs:// file_uri，gpt-image-* 只接受 inline 数据。大量任务、重复复用同一张参考图或总体积较大时，应使用 shared_reference_images 只上传公共图片一次，或拆分任务。
 7. 选择 API Key 和模型：先获取当前可用的批量生图 Key/模型；如果用户指定模型且该 Key 支持，则使用用户指定模型；否则使用该 Key 可用模型中的默认/第一个。不要展示或询问内部 provider 名称。
 8. 调用批量生图 API 提交、轮询、下载，不要求用户去页面里手填。
 
@@ -1107,7 +1116,7 @@ API 调用规范：
 {
   "model": "<按所选 Key 可用模型填写>",
   "task_name": "<从聊天推断；为空则用当前时间>",
-  "image_size": "1K",
+  "image_size": "<1K、2K 或 4K；按用户要求填写>",
   "response_mime_type": "image/png",
   "items": [
     {
@@ -1129,9 +1138,10 @@ API 调用规范：
 必须遵守：
 - 不要把 API Key 写入仓库、日志、提交记录或最终回复。
 - 不要把参考图 base64 写入最终回复、日志或公开文件。恢复记录中只保存参考图文件名、用途、数量和请求 JSON 文件路径；若请求 JSON 文件包含 base64，应保存在用户指定输出目录且不要提交到仓库。
-- output_count 表示同一 prompt 和参考图重复生成几张，默认 1，每条最多 4；这不是依赖 Gemini 单次请求返回多图，而是系统展开成多个真实任务项。提交前必须确认预计输出图总数不超过 200，超过就拆分成多组任务。绝不能因为参考图附件有更高的内部保护阈值，就提交会生成超过 200 张图的任务。
+- output_count 表示同一 prompt 和参考图重复生成几张，默认 1，每条最多 4；这不依赖上游单次请求返回多图，而是系统展开成多个真实任务项。提交前必须按分辨率确认预计输出图总数不超过 1K=50、2K=15、4K=10，超过就拆分成多组任务。
+- 1K/2K/4K 是最终交付档位。Gemini 与 gpt-image-* 批量任务都先生成 1K 源图；2K/4K 再进入公共超分流程，并按请求档位计费。
 - 当前对用户的批量生图计费仍按成功输出图片数量结算，不单独对参考图加价。可以向用户说明：参考图会产生少量上游输入 token 和临时存储成本，且会随 output_count 重复计算；页面显示的冻结/结算金额按输出图片数量计算。
-- 新 Vertex 任务完成后，先调用 result-files 获取短时、只读、精确对象的私有 COS JSONL 下载地址。在本机直接下载 JSONL、逐行解析 response.candidates[].content.parts[].inlineData.data、Base64 解码图片，并在本机生成 ZIP；图片正文不得经过 Sub2 日本服务器。
+- 任务完成后，先调用 result-files 获取短时、只读、精确对象的私有 COS JSONL 下载地址。在本机直接下载并解析 JSONL、Base64 解码图片，并在本机生成 ZIP；图片正文不得经过 Sub2 日本服务器。
 - 请求 COS 签名地址时绝不能携带 Sub2 的 Authorization 头，必须禁止输出 verbose/trace，不得把签名地址写进日志、恢复记录、提交记录或最终回复。签名过期时重新调用已认证的 result-files，不能修改签名参数。
 - result-files 明确返回 BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE 时，才使用旧的 /download 兼容接口；网络、CORS、签名或归档校验错误不得静默回退到日本服务器下载。
 - 提交成功后，必须立刻在输出目录写入本地恢复记录，例如 batch-image-resume.json。不要在恢复记录里保存 API Key。
@@ -1256,10 +1266,10 @@ async function loadApiKeys() {
   try {
     const response = await keysAPI.list(1, 100, { status: 'active', sort_by: 'created_at', sort_order: 'desc' })
     apiKeys.value = response.items || []
-    if (!selectedApiKey.value && geminiApiKeys.value.length > 0) {
-      form.apiKeyId = geminiApiKeys.value[0].id
+    if (!selectedApiKey.value && batchImageApiKeys.value.length > 0) {
+      form.apiKeyId = batchImageApiKeys.value[0].id
     }
-    if (filters.apiKeyId && !geminiApiKeys.value.some(key => String(key.id) === filters.apiKeyId)) {
+    if (filters.apiKeyId && !batchImageApiKeys.value.some(key => String(key.id) === filters.apiKeyId)) {
       filters.apiKeyId = ''
     }
     if (!selectedApiKey.value) {
@@ -1343,6 +1353,7 @@ function toJobRow(job: BatchImageJob, key = selectedApiKey.value): BatchImageJob
     status: job.status,
     model: job.model,
     provider: job.provider,
+    image_size: job.image_size || '1K',
     item_count: job.item_count,
     success_count: job.success_count,
     fail_count: job.fail_count,
@@ -1582,6 +1593,7 @@ function closeCreateModal() {
 
 function resetCreateDraft() {
   form.taskName = ''
+  form.imageSize = '1K'
   form.responseMimeType = 'image/png'
   promptRows.value = []
   promptDraft.value = ''
@@ -1601,7 +1613,7 @@ function closeDetail() {
 
 function keyForSelectedBatch(): ApiKey | null {
   if (selectedBatchApiKeyId.value) {
-    const key = geminiApiKeys.value.find(item => item.id === selectedBatchApiKeyId.value)
+    const key = batchImageApiKeys.value.find(item => item.id === selectedBatchApiKeyId.value)
     if (key) return key
   }
   return selectedApiKey.value
@@ -1625,8 +1637,8 @@ function validateForm(): boolean {
     appStore.showError(batchImageText('promptRequired'))
     return false
   }
-  if (estimatedOutputCount.value > BATCH_IMAGE_MAX_OUTPUTS_PER_JOB) {
-    appStore.showError(batchImageText('tooManyOutputImages'))
+  if (estimatedOutputCount.value > maxOutputsPerJob.value) {
+    appStore.showError(t('batchImage.messages.tooManyOutputImages', { max: maxOutputsPerJob.value }))
     return false
   }
   const refLimit = selectedModelReferenceLimit.value
@@ -1650,7 +1662,7 @@ async function submitJob() {
 	      {
 	        model: form.model,
         task_name: form.taskName.trim() || defaultTaskName(),
-        image_size: '1K',
+        image_size: form.imageSize,
         response_mime_type: form.responseMimeType,
         items: parsedItems.value,
 	      },
@@ -1699,7 +1711,7 @@ async function refreshDetail() {
 
 function selectJob(batchId: string) {
   const row = batchJobs.value.find(job => job.id === batchId)
-  if (row?.api_key_id && geminiApiKeys.value.some(key => key.id === row.api_key_id)) {
+  if (row?.api_key_id && batchImageApiKeys.value.some(key => key.id === row.api_key_id)) {
     form.apiKeyId = row.api_key_id
     selectedBatchApiKeyId.value = row.api_key_id
   } else {
@@ -1748,14 +1760,14 @@ function isDownloadingJob(batchId: string) {
 }
 
 function applyJobApiKey(job: BatchImageJobRow | Pick<BatchImageJob, 'id'>) {
-  if ('api_key_id' in job && job.api_key_id && geminiApiKeys.value.some(key => key.id === job.api_key_id)) {
+  if ('api_key_id' in job && job.api_key_id && batchImageApiKeys.value.some(key => key.id === job.api_key_id)) {
     form.apiKeyId = job.api_key_id
   }
 }
 
 function apiKeyForJob(job: BatchImageJobRow | Pick<BatchImageJob, 'id'>): ApiKey | null {
   if ('api_key_id' in job && job.api_key_id) {
-    return geminiApiKeys.value.find(key => key.id === job.api_key_id) || null
+    return batchImageApiKeys.value.find(key => key.id === job.api_key_id) || null
   }
   return selectedApiKey.value
 }
@@ -1831,7 +1843,7 @@ async function retryFailedJob(job: BatchImageJobRow | BatchImageJob) {
         task_name: `${job.task_name || defaultTaskName()} ${t('batchImage.messages.retryTaskNameSuffix')}`,
         parent_batch_id: rootBatchIdForRetry(job),
         provider: job.provider,
-        image_size: '1K',
+        image_size: job.image_size || '1K',
         response_mime_type: form.responseMimeType,
         items: failedItems,
       },

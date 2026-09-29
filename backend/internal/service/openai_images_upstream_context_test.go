@@ -145,6 +145,16 @@ func TestDetachUpstreamContextSemantics(t *testing.T) {
 			"async tasks are already detached from the client and must keep their own execution cancellation")
 	})
 
+	t.Run("batch_image_task_preserves_worker_cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		ctx = withOpenAIImageBatchExecution(ctx)
+		detached, release := detachUpstreamContext(ctx)
+		defer release()
+		cancel()
+		require.ErrorIs(t, detached.Err(), context.Canceled,
+			"batch workers must stop when their job ownership is lost")
+	})
+
 	t.Run("detachStreamUpstreamContext_keeps_cancel_when_not_streaming", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()

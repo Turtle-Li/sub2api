@@ -117,7 +117,7 @@ func (w *batchImageDownloadLimitWriter) Write(p []byte) (int, error) {
 func NewBatchImageDownloadService(repo BatchImageRepository, accountRepo AccountRepository, limiter BatchImageDownloadLimiter, deliveryStore BatchImageDeliveryObjectStore, cfg *config.Config) *BatchImageDownloadService {
 	return &BatchImageDownloadService{
 		Repo:             repo,
-		ProviderRegistry: NewBatchImageProviderRegistryFromConfig(cfg),
+		ProviderRegistry: NewBatchImageProviderRegistryWithRuntime(cfg, deliveryStore, nil),
 		AccountResolver:  &BatchImageAccountRepositoryResolver{Repo: accountRepo},
 		Limiter:          limiter,
 		DeliveryStore:    deliveryStore,

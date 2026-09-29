@@ -13,6 +13,9 @@ TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="${TEST_ROOT}/bin"
 CASE_ROOT=""
 REAL_STAT="$(command -v stat)"
+BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF='vault://secret/data/test/sub2api-batch-image#access_key_id'
+BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF='vault://secret/data/test/sub2api-batch-image#secret_access_key'
+BATCH_IMAGE_DELIVERY_COS_SOCKET='/run/sub2api-upscale-vault/public.sock'
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -587,6 +590,13 @@ run_guard() {
     /bin/bash "$SCRIPT"
 }
 
+run_guard_with_batch_image_cos() {
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_ACCESS_VAULT_REF" \
+    BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF="$BATCH_IMAGE_DELIVERY_COS_SECRET_VAULT_REF" \
+    BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET="$BATCH_IMAGE_DELIVERY_COS_SOCKET" \
+    run_guard "$@"
+}
+
 run_external_guard() {
   SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE=external \
   SUB2API_EXTERNAL_RUNTIME_ENV_FILE="${CASE_ROOT}/external/external-runtime.env" \
@@ -677,12 +687,12 @@ write_container sub2api-upscale-vault true healthy false 0 sub2api:prebuilt-aaaa
 write_container sub2api-green true healthy false 0 sub2api:current
 write_runtime_metadata sub2api-green unless-stopped sub2api_default \
   $'volume|sub2api_sub2api_data|/app/data|true\nvolume|sub2api_image_upscale_vault|/run/sub2api-upscale-vault|false' \
-  $'IMAGE_UPSCALE_ENABLED=true\nIMAGE_UPSCALE_BASE_URL=https://hcmac-mini.tailfc4ed7.ts.net\nIMAGE_UPSCALE_API_KEY_VAULT_REF=vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key\nIMAGE_UPSCALE_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock'
-run_guard >"${CASE_ROOT}/output.log" 2>&1
+  $'IMAGE_UPSCALE_ENABLED=true\nIMAGE_UPSCALE_BASE_URL=https://hcmac-mini.tailfc4ed7.ts.net\nIMAGE_UPSCALE_API_KEY_VAULT_REF=vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key\nIMAGE_UPSCALE_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock\nBATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF=vault://secret/data/test/sub2api-batch-image#access_key_id\nBATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF=vault://secret/data/test/sub2api-batch-image#secret_access_key\nBATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET=/run/sub2api-upscale-vault/public.sock'
+run_guard_with_batch_image_cos >"${CASE_ROOT}/output.log" 2>&1
 assert_contains "${CASE_ROOT}/output.log" 'active container is already healthy: sub2api-green'
 assert_contains "${CASE_ROOT}/image-upscale-helper-calls.log" 'ready-auto sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
-if FAKE_IMAGE_UPSCALE_HELPER_FAIL=true run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+if FAKE_IMAGE_UPSCALE_HELPER_FAIL=true run_guard_with_batch_image_cos >"${CASE_ROOT}/output.log" 2>&1; then
   fail 'runtime guard accepted an image-upscale sidecar that failed hardened readiness'
 fi
 assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
@@ -782,6 +792,19 @@ for local_forbidden_environment_case in payment-private-key feishu-raw-webhook; 
   assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
   assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 done
+
+new_case local-active-batch-cos-raw-environment
+write_standard_dependencies
+write_container sub2api-green true healthy false 0 sub2api:current
+write_runtime_metadata sub2api-green unless-stopped sub2api_default \
+  'volume|sub2api_sub2api_data|/app/data|true' \
+  'BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY=must-not-appear-in-guard-output'
+if run_guard >"${CASE_ROOT}/output.log" 2>&1; then
+  fail 'local runtime guard accepted a raw Batch Image COS secret key'
+fi
+assert_contains "${CASE_ROOT}/output.log" 'application runtime verification failed before lifecycle action: sub2api-green'
+assert_not_contains "${CASE_ROOT}/output.log" 'must-not-appear-in-guard-output'
+assert_not_contains "${CASE_ROOT}/docker-calls.log" 'restart sub2api-green'
 
 # External shared dependencies are never treated as local Docker containers.
 # A healthy active slot is accepted only when its exact external credentials,

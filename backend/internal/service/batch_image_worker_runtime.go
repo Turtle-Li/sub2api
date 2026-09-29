@@ -33,6 +33,7 @@ func ProvideBatchImageWorkerRuntime(
 	pricing *BatchImageModelPricingResolver,
 	authCache APIKeyAuthCacheInvalidator,
 	deliveryStore BatchImageDeliveryObjectStore,
+	openAIGateway *OpenAIGatewayService,
 	cfg *config.Config,
 ) *BatchImageWorkerRuntime {
 	upscaler := SharedImageUpscaleService(cfg)
@@ -47,7 +48,7 @@ func ProvideBatchImageWorkerRuntime(
 	processor := &BatchImagePipelineProcessor{
 		ProviderProcessor: &BatchImageProviderProcessor{
 			Repo:             repo,
-			ProviderRegistry: NewBatchImageProviderRegistryFromConfig(cfg),
+			ProviderRegistry: NewBatchImageProviderRegistryWithRuntime(cfg, deliveryStore, openAIGateway),
 			AccountResolver:  &BatchImageAccountRepositoryResolver{Repo: accountRepo},
 			Delivery:         NewBatchImageDeliveryService(repo, deliveryStore, cfg),
 			Indexer: &BatchImageResultIndexer{

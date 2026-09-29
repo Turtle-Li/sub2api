@@ -312,10 +312,15 @@ type BatchImageConfig struct {
 	DeliveryCOSEndpoint         string `mapstructure:"delivery_cos_endpoint"`
 	DeliveryCOSRegion           string `mapstructure:"delivery_cos_region"`
 	DeliveryCOSBucket           string `mapstructure:"delivery_cos_bucket"`
-	DeliveryCOSAccessKeyID      string `mapstructure:"delivery_cos_access_key_id"`
-	DeliveryCOSSecretAccessKey  string `mapstructure:"delivery_cos_secret_access_key"`
-	DeliveryCOSPrefix           string `mapstructure:"delivery_cos_prefix"`
-	DeliveryCOSForcePathStyle   bool   `mapstructure:"delivery_cos_force_path_style"`
+	// Deprecated raw fields are retained only so Validate can reject legacy
+	// config instead of silently accepting long-lived COS credentials.
+	DeliveryCOSAccessKeyID             string `mapstructure:"delivery_cos_access_key_id"`
+	DeliveryCOSSecretAccessKey         string `mapstructure:"delivery_cos_secret_access_key"`
+	DeliveryCOSAccessKeyVaultRef       string `mapstructure:"delivery_cos_access_key_vault_ref"`
+	DeliveryCOSSecretAccessKeyVaultRef string `mapstructure:"delivery_cos_secret_access_key_vault_ref"`
+	DeliveryCOSVaultAgentSocket        string `mapstructure:"delivery_cos_vault_agent_socket"`
+	DeliveryCOSPrefix                  string `mapstructure:"delivery_cos_prefix"`
+	DeliveryCOSForcePathStyle          bool   `mapstructure:"delivery_cos_force_path_style"`
 }
 
 // ImageUpscaleConfig controls the private Image 2.5 post-processing gateway.
@@ -2476,6 +2481,9 @@ func setDefaults() {
 	viper.SetDefault("batch_image.delivery_cos_bucket", "")
 	viper.SetDefault("batch_image.delivery_cos_access_key_id", "")
 	viper.SetDefault("batch_image.delivery_cos_secret_access_key", "")
+	viper.SetDefault("batch_image.delivery_cos_access_key_vault_ref", "")
+	viper.SetDefault("batch_image.delivery_cos_secret_access_key_vault_ref", "")
+	viper.SetDefault("batch_image.delivery_cos_vault_agent_socket", "/run/sub2api-upscale-vault/public.sock")
 	viper.SetDefault("batch_image.delivery_cos_prefix", "sub2-batch-image/prod/")
 	viper.SetDefault("batch_image.delivery_cos_force_path_style", false)
 	viper.SetDefault("image_upscale.enabled", false)
@@ -3472,6 +3480,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("batch_image.vertex_output_retention_hours must be positive")
 		}
 	}
+	if strings.TrimSpace(c.BatchImage.DeliveryCOSAccessKeyID) != "" || strings.TrimSpace(c.BatchImage.DeliveryCOSSecretAccessKey) != "" {
+		return fmt.Errorf("batch_image raw COS credentials are not accepted; configure exact Vault references")
+	}
 	if c.ImageUpscale.Enabled {
 		upscaleURL, err := url.Parse(strings.TrimSpace(c.ImageUpscale.BaseURL))
 		if err != nil || upscaleURL.Scheme != "https" || upscaleURL.Host == "" || upscaleURL.User != nil || upscaleURL.RawQuery != "" || upscaleURL.Fragment != "" {
@@ -3509,12 +3520,13 @@ func (c *Config) Validate() error {
 		}
 		if c.BatchImage.Enabled {
 			for name, value := range map[string]string{
-				"delivery_cos_endpoint":          c.BatchImage.DeliveryCOSEndpoint,
-				"delivery_cos_region":            c.BatchImage.DeliveryCOSRegion,
-				"delivery_cos_bucket":            c.BatchImage.DeliveryCOSBucket,
-				"delivery_cos_access_key_id":     c.BatchImage.DeliveryCOSAccessKeyID,
-				"delivery_cos_secret_access_key": c.BatchImage.DeliveryCOSSecretAccessKey,
-				"delivery_cos_prefix":            c.BatchImage.DeliveryCOSPrefix,
+				"delivery_cos_endpoint":                    c.BatchImage.DeliveryCOSEndpoint,
+				"delivery_cos_region":                      c.BatchImage.DeliveryCOSRegion,
+				"delivery_cos_bucket":                      c.BatchImage.DeliveryCOSBucket,
+				"delivery_cos_access_key_vault_ref":        c.BatchImage.DeliveryCOSAccessKeyVaultRef,
+				"delivery_cos_secret_access_key_vault_ref": c.BatchImage.DeliveryCOSSecretAccessKeyVaultRef,
+				"delivery_cos_vault_agent_socket":          c.BatchImage.DeliveryCOSVaultAgentSocket,
+				"delivery_cos_prefix":                      c.BatchImage.DeliveryCOSPrefix,
 			} {
 				if strings.TrimSpace(value) == "" {
 					return fmt.Errorf("batch_image.%s must not be empty when Image 2.5 batch upscale is enabled", name)
@@ -3527,6 +3539,12 @@ func (c *Config) Validate() error {
 			cosPrefix := strings.Trim(strings.TrimSpace(c.BatchImage.DeliveryCOSPrefix), "/")
 			if cosPrefix == "" || strings.Contains(cosPrefix, "..") {
 				return fmt.Errorf("batch_image.delivery_cos_prefix is invalid")
+			}
+			if !validBatchImageCOSVaultReferences(c.BatchImage.DeliveryCOSAccessKeyVaultRef, c.BatchImage.DeliveryCOSSecretAccessKeyVaultRef) {
+				return fmt.Errorf("batch_image COS credentials must use exact same-path Vault references with access_key_id and secret_access_key fields")
+			}
+			if strings.TrimSpace(c.BatchImage.DeliveryCOSVaultAgentSocket) != "/run/sub2api-upscale-vault/public.sock" {
+				return fmt.Errorf("batch_image.delivery_cos_vault_agent_socket must use the dedicated fixed socket")
 			}
 		}
 	}
@@ -3561,12 +3579,13 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("batch_image.delivery_download_ttl_seconds must not exceed one hour")
 		}
 		for name, value := range map[string]string{
-			"delivery_cos_endpoint":          c.BatchImage.DeliveryCOSEndpoint,
-			"delivery_cos_region":            c.BatchImage.DeliveryCOSRegion,
-			"delivery_cos_bucket":            c.BatchImage.DeliveryCOSBucket,
-			"delivery_cos_access_key_id":     c.BatchImage.DeliveryCOSAccessKeyID,
-			"delivery_cos_secret_access_key": c.BatchImage.DeliveryCOSSecretAccessKey,
-			"delivery_cos_prefix":            c.BatchImage.DeliveryCOSPrefix,
+			"delivery_cos_endpoint":                    c.BatchImage.DeliveryCOSEndpoint,
+			"delivery_cos_region":                      c.BatchImage.DeliveryCOSRegion,
+			"delivery_cos_bucket":                      c.BatchImage.DeliveryCOSBucket,
+			"delivery_cos_access_key_vault_ref":        c.BatchImage.DeliveryCOSAccessKeyVaultRef,
+			"delivery_cos_secret_access_key_vault_ref": c.BatchImage.DeliveryCOSSecretAccessKeyVaultRef,
+			"delivery_cos_vault_agent_socket":          c.BatchImage.DeliveryCOSVaultAgentSocket,
+			"delivery_cos_prefix":                      c.BatchImage.DeliveryCOSPrefix,
 		} {
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf("batch_image.%s must not be empty when delivery is enabled", name)
@@ -3579,6 +3598,12 @@ func (c *Config) Validate() error {
 		cosPrefix := strings.Trim(strings.TrimSpace(c.BatchImage.DeliveryCOSPrefix), "/")
 		if cosPrefix == "" || strings.Contains(cosPrefix, "..") {
 			return fmt.Errorf("batch_image.delivery_cos_prefix is invalid")
+		}
+		if !validBatchImageCOSVaultReferences(c.BatchImage.DeliveryCOSAccessKeyVaultRef, c.BatchImage.DeliveryCOSSecretAccessKeyVaultRef) {
+			return fmt.Errorf("batch_image COS credentials must use exact same-path Vault references with access_key_id and secret_access_key fields")
+		}
+		if strings.TrimSpace(c.BatchImage.DeliveryCOSVaultAgentSocket) != "/run/sub2api-upscale-vault/public.sock" {
+			return fmt.Errorf("batch_image.delivery_cos_vault_agent_socket must use the dedicated fixed socket")
 		}
 	}
 	if c.Dashboard.Enabled {
@@ -4267,16 +4292,28 @@ func (c *Config) Validate() error {
 }
 
 func validImageUpscaleVaultReference(value string) bool {
+	_, _, ok := parseExactVaultReference(value)
+	return ok
+}
+
+func validBatchImageCOSVaultReferences(accessKeyReference, secretKeyReference string) bool {
+	accessPath, accessField, accessOK := parseExactVaultReference(accessKeyReference)
+	secretPath, secretField, secretOK := parseExactVaultReference(secretKeyReference)
+	return accessOK && secretOK && accessPath == secretPath &&
+		accessField == "access_key_id" && secretField == "secret_access_key"
+}
+
+func parseExactVaultReference(value string) (string, string, bool) {
 	if value == "" || strings.TrimSpace(value) != value || !strings.HasPrefix(value, "vault://") || strings.Count(value, "#") != 1 {
-		return false
+		return "", "", false
 	}
 	parts := strings.SplitN(strings.TrimPrefix(value, "vault://"), "#", 2)
 	if parts[0] == "" || parts[1] == "" || strings.HasPrefix(parts[0], "/") || strings.HasSuffix(parts[0], "/") || strings.Contains(parts[0], "//") {
-		return false
+		return "", "", false
 	}
 	for _, token := range append(strings.Split(parts[0], "/"), parts[1]) {
 		if token == "." || token == ".." || token == "" || len(token) > 128 {
-			return false
+			return "", "", false
 		}
 		for index := 0; index < len(token); index++ {
 			char := token[index]
@@ -4284,10 +4321,10 @@ func validImageUpscaleVaultReference(value string) bool {
 				(char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
 				continue
 			}
-			return false
+			return "", "", false
 		}
 	}
-	return true
+	return parts[0], parts[1], true
 }
 
 func normalizeStringSlice(values []string) []string {

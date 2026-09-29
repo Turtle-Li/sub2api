@@ -20,16 +20,23 @@ fail() {
 }
 
 image='sub2api:prebuilt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-secret='must-not-appear-in-output'
+api_secret='must-not-appear-api-secret'
+access_secret='must-not-appear-access-secret'
+cos_secret='must-not-appear-cos-secret'
 
-if IMAGE_UPSCALE_API_KEY="$secret" bash "$SCRIPT" invalid-image >"$OUTPUT" 2>&1; then
+if IMAGE_UPSCALE_API_KEY="$api_secret" \
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID="$access_secret" \
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY="$cos_secret" \
+  bash "$SCRIPT" invalid-image >"$OUTPUT" 2>&1; then
   fail 'invalid image was accepted'
 fi
 grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_INJECT_REJECTED' "$OUTPUT" || fail 'invalid image rejection drifted'
-grep -q "$secret" "$OUTPUT" && fail 'invalid image rejection leaked the secret'
+for secret in "$api_secret" "$access_secret" "$cos_secret"; do
+  grep -q "$secret" "$OUTPUT" && fail 'invalid image rejection leaked a secret'
+done
 
 if bash "$SCRIPT" "$image" >"$OUTPUT" 2>&1; then
-  fail 'missing secret was accepted'
+  fail 'missing injection set was accepted'
 fi
 grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_INJECT_REJECTED' "$OUTPUT" || fail 'missing secret rejection drifted'
 
@@ -38,10 +45,28 @@ if IMAGE_UPSCALE_API_KEY='contains whitespace' bash "$SCRIPT" "$image" >"$OUTPUT
 fi
 grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_INJECT_REJECTED' "$OUTPUT" || fail 'token validation rejection drifted'
 
-grep -Fq '/usr/bin/env -u IMAGE_UPSCALE_API_KEY /usr/bin/ssh' "$SCRIPT" || fail 'SSH child inherits the secret environment'
-grep -Fq 'docker exec -i sub2api-upscale-vault /app/sub2api-vault-agent load' "$SCRIPT" || fail 'fixed remote load command is missing'
-# shellcheck disable=SC2016 # Assert the source uses the fixed variables,
-# rather than expanding test-process variables into the expected text.
-grep -Fq 'ready_command="sudo -n $REMOTE_HELPER ready $image"' "$SCRIPT" || fail 'post-injection readiness gate is missing'
+if BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID="$access_secret" \
+  bash "$SCRIPT" batch-cos "$image" >"$OUTPUT" 2>&1; then
+  fail 'partial Batch Image COS credential set was accepted'
+fi
+grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_INJECT_REJECTED' "$OUTPUT" || fail 'partial COS rejection drifted'
+
+if IMAGE_UPSCALE_API_KEY="$api_secret" \
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID="$access_secret" \
+  bash "$SCRIPT" "$image" >"$OUTPUT" 2>&1; then
+  fail 'single-argument partial COS migration was accepted'
+fi
+grep -qx 'SUB2API_IMAGE_UPSCALE_VAULT_INJECT_REJECTED' "$OUTPUT" || fail 'single-argument partial COS rejection drifted'
+
+grep -Fq -- '-u IMAGE_UPSCALE_API_KEY' "$SCRIPT" || fail 'SSH child inherits the upscale secret environment'
+grep -Fq -- '-u BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID' "$SCRIPT" || fail 'SSH child inherits the COS access-key environment'
+grep -Fq -- '-u BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY' "$SCRIPT" || fail 'SSH child inherits the COS secret-key environment'
+grep -Fq 'action=api' "$SCRIPT" || fail 'legacy single-key injection path is missing'
+grep -Fq 'remote_action=load-all' "$SCRIPT" || fail 'combined stdin-only load action is missing'
+grep -Fq 'remote_action=load-batch-cos' "$SCRIPT" || fail 'independent COS load action is missing'
+grep -Fq 'remote_action=ready' "$SCRIPT" || fail 'post-injection readiness action is missing'
+if grep -Fq -- '--ref vault://' "$SCRIPT"; then
+  fail 'local injector hardcodes a Vault reference instead of using remote root configuration'
+fi
 
 printf '%s\n' 'Image upscale Vault inject tests passed.'

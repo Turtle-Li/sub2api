@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 const (
 	BatchImageProviderGeminiAPI = "gemini_api"
 	BatchImageProviderVertex    = "vertex"
+	BatchImageProviderOpenAI    = "openai_images"
 )
 
 const (
@@ -40,6 +42,11 @@ const (
 )
 
 var (
+	// ErrBatchImageProviderSubmitCommitUncertain marks an error returned by the
+	// database commit itself. The transaction may already be durable, so callers
+	// must preserve provider-side input and let idempotent recovery converge.
+	ErrBatchImageProviderSubmitCommitUncertain = errors.New("batch image provider submit commit outcome is uncertain")
+
 	ErrBatchImageJobNotFound = infraerrors.New(http.StatusNotFound, "BATCH_IMAGE_JOB_NOT_FOUND", "batch image job not found")
 	ErrBatchImageJobExists   = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_JOB_EXISTS", "batch image job already exists")
 	ErrBatchImageItemExists  = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_ITEM_EXISTS", "batch image item already exists")
@@ -84,6 +91,7 @@ var (
 	ErrBatchImagePreviousSubmitFailed       = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_PREVIOUS_SUBMIT_FAILED", "the previous batch image submit failed before provider creation")
 	ErrBatchImageQueueFailed                = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_QUEUE_FAILED", "batch image queue failed")
 	ErrBatchImageUpscaleUnavailable         = infraerrors.New(http.StatusServiceUnavailable, "BATCH_IMAGE_UPSCALE_UNAVAILABLE", "batch image upscale is not configured")
+	ErrBatchImageProviderStorageUnavailable = infraerrors.New(http.StatusServiceUnavailable, "BATCH_IMAGE_PROVIDER_STORAGE_UNAVAILABLE", "batch image provider storage is not configured")
 	ErrBatchImageUpscaleCleanupFailed       = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_UPSCALE_CLEANUP_FAILED", "batch image upscale cleanup failed")
 	ErrBatchImageUpscaleWriteFenceFailed    = infraerrors.New(http.StatusServiceUnavailable, "BATCH_IMAGE_UPSCALE_WRITE_FENCE_FAILED", "batch image upscale write fence failed")
 	ErrBatchImageIdempotencyConflict        = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_IDEMPOTENCY_CONFLICT", "idempotency key reused with different batch image request")
@@ -334,6 +342,9 @@ type BatchImageRepository interface {
 	// 返回 false 表示 job 已被并发推进（如已提交成功），调用方不得释放冻结。
 	FailStaleUnsubmittedBatchImageJob(ctx context.Context, batchID string, cutoff time.Time, code, message string) (bool, error)
 	UpdateBatchImageJobProviderOutputRef(ctx context.Context, batchID, providerOutputRef string) error
+	// UpdateBatchImageJobProviderSubmit returns
+	// ErrBatchImageProviderSubmitCommitUncertain only when Commit itself fails.
+	// Other errors prove that Commit was never attempted.
 	UpdateBatchImageJobProviderSubmit(ctx context.Context, params UpdateBatchImageJobProviderSubmitParams) error
 	RecordBatchImageJobSubmitFailure(ctx context.Context, batchID, code, message string, markFailed bool) error
 	MarkBatchImageJobSettled(ctx context.Context, params MarkBatchImageJobSettledParams) error
@@ -388,6 +399,16 @@ type BatchImageUpscaleObjectStore interface {
 	Delete(ctx context.Context, keys []string) error
 }
 
+// BatchImageProviderObjectStore extends the private batch object store with
+// atomic create and existence checks. Providers must claim non-idempotent
+// attempts with PutIfAbsent; a separate Exists+Put sequence is not a safe claim
+// when worker leases overlap.
+type BatchImageProviderObjectStore interface {
+	BatchImageUpscaleObjectStore
+	Exists(ctx context.Context, key string) (bool, error)
+	PutIfAbsent(ctx context.Context, key, contentType string, body io.Reader, size int64) (created bool, err error)
+}
+
 func NewBatchImageID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -398,7 +419,7 @@ func NewBatchImageID() (string, error) {
 
 func IsSupportedBatchImageProvider(provider string) bool {
 	switch provider {
-	case BatchImageProviderGeminiAPI, BatchImageProviderVertex:
+	case BatchImageProviderGeminiAPI, BatchImageProviderVertex, BatchImageProviderOpenAI:
 		return true
 	default:
 		return false

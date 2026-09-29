@@ -298,6 +298,8 @@ func batchImageUsageUpstreamEndpoint(provider string) string {
 		return "gemini:v1beta/models:batchGenerateContent"
 	case BatchImageProviderVertex:
 		return "vertex:batchPredictionJobs"
+	case BatchImageProviderOpenAI:
+		return "openai:images"
 	default:
 		return "batch:" + strings.TrimSpace(provider)
 	}

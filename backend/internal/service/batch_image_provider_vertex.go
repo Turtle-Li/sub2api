@@ -485,6 +485,10 @@ func BuildVertexBatchJSONL(input BatchImageInput) ([]byte, error) {
 	if len(input.Items) == 0 {
 		return nil, batchImageProviderInputError("at least one item is required")
 	}
+	imageConfig, err := batchImageGenerationImageConfig(input)
+	if err != nil {
+		return nil, err
+	}
 	seen := make(map[string]struct{}, len(input.Items))
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -505,6 +509,12 @@ func BuildVertexBatchJSONL(input BatchImageInput) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		generationConfig := map[string]any{
+			"responseModalities": []string{"TEXT", "IMAGE"},
+		}
+		if imageConfig != nil {
+			generationConfig["imageConfig"] = imageConfig
+		}
 		line := map[string]any{
 			"key": customID,
 			"request": map[string]any{
@@ -512,9 +522,7 @@ func BuildVertexBatchJSONL(input BatchImageInput) ([]byte, error) {
 					"role":  "user",
 					"parts": parts,
 				}},
-				"generationConfig": map[string]any{
-					"responseModalities": []string{"TEXT", "IMAGE"},
-				},
+				"generationConfig": generationConfig,
 			},
 		}
 		if err := enc.Encode(line); err != nil {

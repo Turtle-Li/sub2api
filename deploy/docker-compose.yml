@@ -246,6 +246,11 @@ services:
       - IMAGE_UPSCALE_MAX_CONCURRENT=${IMAGE_UPSCALE_MAX_CONCURRENT:-1}
       - IMAGE_UPSCALE_MAX_QUEUE=${IMAGE_UPSCALE_MAX_QUEUE:-8}
       - IMAGE_UPSCALE_MAX_RESULT_BYTES=${IMAGE_UPSCALE_MAX_RESULT_BYTES:-134217728}
+      # Batch Image COS credentials remain in the same memory-only Vault
+      # agent; refs are non-secret and raw credential variables are forbidden.
+      - BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF=${BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF:-}
+      - BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF=${BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF:-}
+      - BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET=${BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET:-/run/sub2api-upscale-vault/public.sock}
     depends_on:
       postgres:
         condition: service_healthy

@@ -60,6 +60,23 @@ func TestBuildVertexBatchJSONL_WritesValidLinesAndPreservesCustomID(t *testing.T
 	requireVertexJSONLLine(t, lines[1], "cover_002", "Second prompt")
 }
 
+func TestBuildVertexBatchJSONL_WritesExplicitOneKImageConfig(t *testing.T) {
+	input := validVertexBatchInput()
+	input.ImageSize = ImageBillingSize1K
+	input.AspectRatio = "16:9"
+	input.ExplicitImageConfig = true
+
+	jsonl, err := BuildVertexBatchJSONL(input)
+	require.NoError(t, err)
+	require.Equal(t, ImageBillingSize1K, gjson.GetBytes(bytes.TrimSpace(jsonl), "request.generationConfig.imageConfig.imageSize").String())
+	require.Equal(t, "16:9", gjson.GetBytes(bytes.TrimSpace(jsonl), "request.generationConfig.imageConfig.aspectRatio").String())
+
+	input.ExplicitImageConfig = false
+	jsonl, err = BuildVertexBatchJSONL(input)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(bytes.TrimSpace(jsonl), "request.generationConfig.imageConfig").Exists())
+}
+
 func TestBuildVertexBatchJSONL_RejectsDuplicateCustomIDs(t *testing.T) {
 	input := validVertexBatchInput()
 	input.Items = append(input.Items, BatchImageInputItem{CustomID: "cover_001", Prompt: "Duplicate"})

@@ -132,6 +132,24 @@ IMAGE_UPSCALE_MAX_RESULT_BYTES="${IMAGE_UPSCALE_MAX_RESULT_BYTES:-134217728}"
 IMAGE_UPSCALE_VAULT_VOLUME="${SUB2API_IMAGE_UPSCALE_VAULT_VOLUME:-sub2api_image_upscale_vault}"
 CONTAINER_IMAGE_UPSCALE_VAULT_PATH="/run/sub2api-upscale-vault"
 IMAGE_UPSCALE_VAULT_HELPER="${APP_DIR}/scripts/sub2api-image-upscale-vault-container.sh"
+BATCH_IMAGE_DELIVERY_COS_ENV_KEYS=(
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF
+  BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET
+)
+BATCH_IMAGE_DELIVERY_COS_RAW_ENV_KEYS=(
+  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID
+  BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY
+)
+BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED=false
+for batch_image_delivery_cos_key in "${BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}"; do
+  if [ "${!batch_image_delivery_cos_key+x}" = x ]; then
+    BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED=true
+  fi
+done
+BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF="${BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF:-}"
+BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF="${BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF:-}"
+BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET="${BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET:-}"
 UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=false
 if [ "${UNIFIED_PAYMENT_ENABLED+x}" = x ]; then
   UNIFIED_PAYMENT_OVERRIDE_CONFIGURED=true
@@ -190,6 +208,7 @@ for key in "${URL_ALLOWLIST_ENV_KEYS[@]}"; do
 done
 PAYMENT_VAULT_MOUNT_ARGS=()
 IMAGE_UPSCALE_VAULT_MOUNT_ARGS=()
+IMAGE_UPSCALE_VAULT_REQUIRED=false
 
 log() {
   printf '%s %s\n' "$(date -Is)" "$*"
@@ -391,43 +410,102 @@ validate_unified_payment_runtime() {
 	fi
 }
 
+parse_batch_image_delivery_cos_vault_reference() {
+  local reference="$1" expected_field="$2" body path field component
+  local -a components
+
+  case "$reference" in
+    vault://*) ;;
+    *) return 1 ;;
+  esac
+  case "$reference" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  body="${reference#vault://}"
+  path="${body%%#*}"
+  field="${body#*#}"
+  [ "$field" != "$body" ] || return 1
+  [ "${field#*#}" = "$field" ] || return 1
+  case "$path" in
+    ''|/*|*/|*//* ) return 1 ;;
+  esac
+  IFS=/ read -r -a components <<<"$path"
+  for component in "${components[@]}"; do
+    case "$component" in
+      ''|.|..|*[!A-Za-z0-9_.-]*) return 1 ;;
+    esac
+    [ "${#component}" -le 128 ] || return 1
+  done
+  [ "$field" = "$expected_field" ] || return 1
+  printf '%s\n' "$path"
+}
+
+validate_batch_image_delivery_cos_runtime() {
+  local key access_path secret_path
+
+  for key in "${BATCH_IMAGE_DELIVERY_COS_RAW_ENV_KEYS[@]}"; do
+    [ "${!key+x}" != x ] \
+      || die "$key is forbidden; use the dedicated memory-only Vault agent"
+  done
+  [ "$BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED" = true ] || return 0
+  for key in "${BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}"; do
+    [ -n "${!key-}" ] \
+      || die "$key is required together with the Batch Image COS Vault profile"
+  done
+  [ "$BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET" = "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/public.sock" ] \
+    || die "BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET does not match the mounted agent socket"
+  access_path="$(parse_batch_image_delivery_cos_vault_reference "$BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF" access_key_id)" \
+    || die "BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF is invalid"
+  secret_path="$(parse_batch_image_delivery_cos_vault_reference "$BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF" secret_access_key)" \
+    || die "BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF is invalid"
+  [ "$access_path" = "$secret_path" ] \
+    || die "Batch Image COS Vault references must use the same path"
+}
+
 validate_image_upscale_runtime() {
 	local value sidecar_image
 	require_bool IMAGE_UPSCALE_ENABLED "$IMAGE_UPSCALE_ENABLED"
-	[ "$IMAGE_UPSCALE_ENABLED" = true ] || return 0
-	[ "$IMAGE_UPSCALE_BASE_URL" = "https://hcmac-mini.tailfc4ed7.ts.net" ] \
-		|| die "IMAGE_UPSCALE_BASE_URL does not match the approved Office Mini gateway"
-	[ "$IMAGE_UPSCALE_API_KEY_VAULT_REF" = "vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key" ] \
-		|| die "IMAGE_UPSCALE_API_KEY_VAULT_REF does not match the approved Vault field"
-	[ "$IMAGE_UPSCALE_VAULT_AGENT_SOCKET" = "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/public.sock" ] \
-		|| die "IMAGE_UPSCALE_VAULT_AGENT_SOCKET does not match the mounted agent socket"
-	require_docker_name SUB2API_IMAGE_UPSCALE_VAULT_VOLUME "$IMAGE_UPSCALE_VAULT_VOLUME"
-	[ "$IMAGE_UPSCALE_VAULT_VOLUME" = sub2api_image_upscale_vault ] \
-		|| die "SUB2API_IMAGE_UPSCALE_VAULT_VOLUME does not match the approved Sub2 volume"
-	for value in "$IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS" "$IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS" \
-		"$IMAGE_UPSCALE_POLL_INTERVAL_MS" "$IMAGE_UPSCALE_MAX_CONCURRENT" "$IMAGE_UPSCALE_MAX_RESULT_BYTES"; do
-		case "$value" in ''|*[!0-9]*|0) die "image upscale positive numeric configuration is invalid" ;; esac
-	done
-	for value in "$IMAGE_UPSCALE_RETRY_MAX" "$IMAGE_UPSCALE_MAX_QUEUE"; do
-		case "$value" in ''|*[!0-9]*) die "image upscale bounded numeric configuration is invalid" ;; esac
-	done
-	[ "$IMAGE_UPSCALE_MAX_CONCURRENT" -le 2 ] || die "IMAGE_UPSCALE_MAX_CONCURRENT exceeds the gateway limit"
-	[ "$IMAGE_UPSCALE_MAX_QUEUE" -le 64 ] || die "IMAGE_UPSCALE_MAX_QUEUE exceeds the local bound"
-	docker volume inspect "$IMAGE_UPSCALE_VAULT_VOLUME" >/dev/null 2>&1 \
-		|| die "image upscale Vault socket volume is missing"
-	[ -f "$IMAGE_UPSCALE_VAULT_HELPER" ] && [ ! -L "$IMAGE_UPSCALE_VAULT_HELPER" ] \
-		&& [ -x "$IMAGE_UPSCALE_VAULT_HELPER" ] \
-		|| die "image upscale Vault helper is missing or unsafe"
-	[ "$(realpath -e -- "$IMAGE_UPSCALE_VAULT_HELPER")" = "$IMAGE_UPSCALE_VAULT_HELPER" ] \
-		|| die "image upscale Vault helper must be canonical"
-	sidecar_image="$(docker inspect sub2api-upscale-vault --format '{{.Config.Image}}' 2>/dev/null)" \
-		|| die "image upscale Vault agent is missing"
-	SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" \
-		bash "$IMAGE_UPSCALE_VAULT_HELPER" ready-auto "$sidecar_image" >/dev/null \
-		|| die "image upscale Vault agent failed hardened readiness verification"
-	IMAGE_UPSCALE_VAULT_MOUNT_ARGS=(
-		--mount "type=volume,source=$IMAGE_UPSCALE_VAULT_VOLUME,target=$CONTAINER_IMAGE_UPSCALE_VAULT_PATH,readonly"
-	)
+	IMAGE_UPSCALE_VAULT_REQUIRED=false
+	if [ "$IMAGE_UPSCALE_ENABLED" = true ]; then
+		[ "$IMAGE_UPSCALE_BASE_URL" = "https://hcmac-mini.tailfc4ed7.ts.net" ] \
+			|| die "IMAGE_UPSCALE_BASE_URL does not match the approved Office Mini gateway"
+		[ "$IMAGE_UPSCALE_VAULT_AGENT_SOCKET" = "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/public.sock" ] \
+			|| die "IMAGE_UPSCALE_VAULT_AGENT_SOCKET does not match the mounted agent socket"
+		for value in "$IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS" "$IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS" \
+			"$IMAGE_UPSCALE_POLL_INTERVAL_MS" "$IMAGE_UPSCALE_MAX_CONCURRENT" "$IMAGE_UPSCALE_MAX_RESULT_BYTES"; do
+			case "$value" in ''|*[!0-9]*|0) die "image upscale positive numeric configuration is invalid" ;; esac
+		done
+		for value in "$IMAGE_UPSCALE_RETRY_MAX" "$IMAGE_UPSCALE_MAX_QUEUE"; do
+			case "$value" in ''|*[!0-9]*) die "image upscale bounded numeric configuration is invalid" ;; esac
+		done
+		[ "$IMAGE_UPSCALE_MAX_CONCURRENT" -le 2 ] || die "IMAGE_UPSCALE_MAX_CONCURRENT exceeds the gateway limit"
+		[ "$IMAGE_UPSCALE_MAX_QUEUE" -le 64 ] || die "IMAGE_UPSCALE_MAX_QUEUE exceeds the local bound"
+	fi
+	if [ "$IMAGE_UPSCALE_ENABLED" = true ] || [ "$BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED" = true ]; then
+		[ "$BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED" = true ] \
+			|| die "Batch Image COS Vault references are required for the shared Vault sidecar"
+		[ "$IMAGE_UPSCALE_API_KEY_VAULT_REF" = "vault://secret/data/infrastructure/office-mini-upscale-api-public-key-20260928#api_key" ] \
+			|| die "IMAGE_UPSCALE_API_KEY_VAULT_REF does not match the approved Vault field"
+		require_docker_name SUB2API_IMAGE_UPSCALE_VAULT_VOLUME "$IMAGE_UPSCALE_VAULT_VOLUME"
+		[ "$IMAGE_UPSCALE_VAULT_VOLUME" = sub2api_image_upscale_vault ] \
+			|| die "SUB2API_IMAGE_UPSCALE_VAULT_VOLUME does not match the approved Sub2 volume"
+		docker volume inspect "$IMAGE_UPSCALE_VAULT_VOLUME" >/dev/null 2>&1 \
+			|| die "image upscale Vault socket volume is missing"
+		[ -f "$IMAGE_UPSCALE_VAULT_HELPER" ] && [ ! -L "$IMAGE_UPSCALE_VAULT_HELPER" ] \
+			&& [ -x "$IMAGE_UPSCALE_VAULT_HELPER" ] \
+			|| die "image upscale Vault helper is missing or unsafe"
+		[ "$(realpath -e -- "$IMAGE_UPSCALE_VAULT_HELPER")" = "$IMAGE_UPSCALE_VAULT_HELPER" ] \
+			|| die "image upscale Vault helper must be canonical"
+		sidecar_image="$(docker inspect sub2api-upscale-vault --format '{{.Config.Image}}' 2>/dev/null)" \
+			|| die "image upscale Vault agent is missing"
+		SUB2API_IMAGE_UPSCALE_VAULT_CONTAINER_ALLOW_NON_ROOT_FOR_TESTS="${SUB2API_MAINTENANCE_LOCK_ALLOW_NON_ROOT_FOR_TESTS:-0}" \
+			bash "$IMAGE_UPSCALE_VAULT_HELPER" ready-auto "$sidecar_image" >/dev/null \
+			|| die "image upscale Vault agent failed hardened readiness verification"
+		IMAGE_UPSCALE_VAULT_REQUIRED=true
+		IMAGE_UPSCALE_VAULT_MOUNT_ARGS=(
+			--mount "type=volume,source=$IMAGE_UPSCALE_VAULT_VOLUME,target=$CONTAINER_IMAGE_UPSCALE_VAULT_PATH,readonly"
+		)
+	fi
 }
 
 validate_absolute_path() {
@@ -648,6 +726,14 @@ write_image_upscale_overrides() {
 	done
 }
 
+write_batch_image_delivery_cos_overrides() {
+  local output_file="$1" key
+  [ "$BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED" = true ] || return 0
+  for key in "${BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}"; do
+    printf '%s=%s\n' "$key" "${!key}" >>"$output_file"
+  done
+}
+
 validate_url_allowlist_runtime() {
   local key
   [ "$URL_ALLOWLIST_OVERRIDE_CONFIGURED" = true ] || return 0
@@ -861,7 +947,53 @@ container_matches_local_compatibility_container() {
     grep -qxF "volume|$FEISHU_VAULT_VOLUME|$CONTAINER_FEISHU_VAULT_PATH|false" "$inspect_mounts" || return 1
   else
     [ "$bot_mount_count" -eq 0 ] || return 1
+	fi
+}
+
+container_matches_batch_image_delivery_cos_env() {
+  local inspect_env="$1" key expected_value actual_value configured_count
+
+  for key in "${BATCH_IMAGE_DELIVERY_COS_RAW_ENV_KEYS[@]}"; do
+    ! grep -q "^${key}=" "$inspect_env" || return 1
+  done
+  if [ "$BATCH_IMAGE_DELIVERY_COS_OVERRIDE_CONFIGURED" = false ]; then
+    configured_count="$(awk '
+      /^BATCH_IMAGE_DELIVERY_COS_(ACCESS_KEY_VAULT_REF|SECRET_ACCESS_KEY_VAULT_REF|VAULT_AGENT_SOCKET)=/ { count += 1 }
+      END { print count + 0 }
+    ' "$inspect_env")"
+    [ "$configured_count" -eq 0 ] && return 0
+    # docker-compose supplies this complete empty profile by default. It is
+    # equivalent to the absent disabled state, but partial/altered entries
+    # must never become an implicit credential configuration.
+    [ "$configured_count" -eq "${#BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}" ] || return 1
+    for key in "${BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}"; do
+      if ! actual_value="$(awk -v expected_key="$key" '
+        index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
+        END { if (count != 1) exit 1; print value }
+      ' "$inspect_env")"; then
+        return 1
+      fi
+      case "$key" in
+        BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF|BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF)
+          [ -z "$actual_value" ] || return 1
+          ;;
+        BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET)
+          [ "$actual_value" = "$CONTAINER_IMAGE_UPSCALE_VAULT_PATH/public.sock" ] || return 1
+          ;;
+      esac
+    done
+    return 0
   fi
+  for key in "${BATCH_IMAGE_DELIVERY_COS_ENV_KEYS[@]}"; do
+    expected_value="${!key}"
+    if ! actual_value="$(awk -v expected_key="$key" '
+      index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
+      END { if (count != 1) exit 1; print value }
+    ' "$inspect_env")"; then
+      return 1
+    fi
+    [ "$actual_value" = "$expected_value" ] || return 1
+  done
 }
 
 # Notification configuration contains only the public enable switch. Secret
@@ -959,7 +1091,13 @@ make_runtime_env_file() {
 	  IMAGE_UPSCALE_API_KEY)
 		die "raw image upscale bearer environment is forbidden; use the dedicated Vault agent"
 		;;
+	  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID|BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY)
+		die "raw Batch Image COS credential environment is forbidden; use the dedicated Vault agent"
+		;;
 	  IMAGE_UPSCALE_ENABLED|IMAGE_UPSCALE_BASE_URL|IMAGE_UPSCALE_API_KEY_VAULT_REF|IMAGE_UPSCALE_VAULT_AGENT_SOCKET|IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS|IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS|IMAGE_UPSCALE_POLL_INTERVAL_MS|IMAGE_UPSCALE_RETRY_MAX|IMAGE_UPSCALE_MAX_CONCURRENT|IMAGE_UPSCALE_MAX_QUEUE|IMAGE_UPSCALE_MAX_RESULT_BYTES)
+		continue
+		;;
+	  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_VAULT_REF|BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY_VAULT_REF|BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET)
 		continue
 		;;
 	  UNIFIED_PAYMENT_ENABLED|UNIFIED_PAYMENT_PAYMENT_METHODS|UNIFIED_PAYMENT_BASE_URL|UNIFIED_PAYMENT_ENVIRONMENT|UNIFIED_PAYMENT_ORGANIZATION_ID|UNIFIED_PAYMENT_PRODUCT_ID|UNIFIED_PAYMENT_APP_ID|UNIFIED_PAYMENT_REQUEST_KEY_ID|UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_VAULT_REF|UNIFIED_PAYMENT_VAULT_AGENT_SOCKET|UNIFIED_PAYMENT_WEBHOOK_PUBLIC_KEYS_JSON|UNIFIED_PAYMENT_RETURN_URL|UNIFIED_PAYMENT_WEBHOOK_URL)
@@ -1008,8 +1146,9 @@ make_runtime_env_file() {
   if [ "$FIXED_EGRESS_COMPATIBILITY_MODE" != preserve ]; then
 	printf 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=%s\n' "$FIXED_EGRESS_COMPATIBILITY_MODE" >>"$output_file"
   fi
-  write_unified_payment_overrides "$output_file"
+	write_unified_payment_overrides "$output_file"
 	write_image_upscale_overrides "$output_file"
+	write_batch_image_delivery_cos_overrides "$output_file"
   write_url_allowlist_overrides "$output_file"
   printf 'SUB2API_FEISHU_ENABLED=%s\n' "$FEISHU_ENABLED" >>"$output_file"
   RUNTIME_ENV_FILE="$output_file"
@@ -1055,7 +1194,7 @@ container_matches_external_runtime() {
   expected_mount_count=3
   [ "$DUAL_NODE_RUNTIME_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 3))
   [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
-  [ "$IMAGE_UPSCALE_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$IMAGE_UPSCALE_VAULT_REQUIRED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$FEISHU_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$mount_count" -eq "$expected_mount_count" ] || return 1
   if [ "$FEISHU_ENABLED" = true ]; then
@@ -1072,7 +1211,7 @@ container_matches_external_runtime() {
   if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
 	grep -qxF "volume|$UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" "$inspect_mounts" || return 1
   fi
-  if [ "$IMAGE_UPSCALE_ENABLED" = true ]; then
+  if [ "$IMAGE_UPSCALE_VAULT_REQUIRED" = true ]; then
 	grep -qxF "volume|$IMAGE_UPSCALE_VAULT_VOLUME|$CONTAINER_IMAGE_UPSCALE_VAULT_PATH|false" "$inspect_mounts" || return 1
   fi
 
@@ -1081,6 +1220,7 @@ container_matches_external_runtime() {
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
   container_matches_image_upscale_env "$inspect_env" || return 1
+  container_matches_batch_image_delivery_cos_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
@@ -1146,7 +1286,7 @@ container_matches_local_runtime() {
   mount_count="$(awk 'NF { count += 1 } END { print count + 0 }' "$inspect_mounts")"
   expected_mount_count=4
   [ "${UNIFIED_PAYMENT_ENABLED:-false}" != true ] || expected_mount_count=$((expected_mount_count + 1))
-  [ "$IMAGE_UPSCALE_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
+  [ "$IMAGE_UPSCALE_VAULT_REQUIRED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$FEISHU_ENABLED" != true ] || expected_mount_count=$((expected_mount_count + 1))
   [ "$mount_count" -eq "$expected_mount_count" ] || return 1
   if [ "$FEISHU_ENABLED" = true ]; then
@@ -1159,7 +1299,7 @@ container_matches_local_runtime() {
   if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
 	grep -qxF "volume|$UNIFIED_PAYMENT_VAULT_VOLUME|$CONTAINER_UNIFIED_PAYMENT_VAULT_PATH|false" "$inspect_mounts" || return 1
   fi
-  if [ "$IMAGE_UPSCALE_ENABLED" = true ]; then
+  if [ "$IMAGE_UPSCALE_VAULT_REQUIRED" = true ]; then
 	grep -qxF "volume|$IMAGE_UPSCALE_VAULT_VOLUME|$CONTAINER_IMAGE_UPSCALE_VAULT_PATH|false" "$inspect_mounts" || return 1
   fi
 
@@ -1168,6 +1308,7 @@ container_matches_local_runtime() {
   docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' >"$inspect_env"
   container_matches_unified_payment_env "$inspect_env" || return 1
   container_matches_image_upscale_env "$inspect_env" || return 1
+  container_matches_batch_image_delivery_cos_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
@@ -1762,6 +1903,7 @@ if [ "$REAL_REQUEST_PROBE_ENABLED" = true ]; then
     || die "real request probe key file must be root-owned mode 0600"
 fi
 validate_unified_payment_runtime
+validate_batch_image_delivery_cos_runtime
 validate_image_upscale_runtime
 if [ "$DEPENDENCY_MODE" = external ]; then
   load_external_runtime_env

@@ -16,16 +16,19 @@ pixel-dimension values keep their existing provider path.
 - The post-processing path is selected only by literal `2K` and `4K` tier
   values. Pixel-dimension values such as `2048x1152` keep the existing provider
   path unchanged; they are not rewritten into unsupported Gemini pixel sizes.
-- Provider request rewriting is a separate compatibility concern. Known Gemini
-  2.5 providers receive `imageSize=1K`; unknown or future models retain the
-  requested native tier and still pass through the same actual-dimension check.
+- Provider request rewriting is a separate compatibility concern. Supported
+  batch providers receive a source `1K` request for requested `2K`/`4K` jobs:
+  Gemini API/Vertex retain the explicit aspect ratio, while `openai_images`
+  executes each expanded item as an `n=1` Images request. Synchronous provider
+  compatibility remains governed by its own request rewriter.
 - Codex OAuth non-streaming requests use the native Images transport only for
   `n=1`. Non-streaming multi-image requests use the Responses transport, which
   requests parallel image tool calls, fills any shortfall before returning,
   and preserves all-or-nothing response semantics. Streaming keeps its existing
   transport contract. This rule does not affect Mini eligibility.
-- Batch JSONL preserves an explicit supported aspect ratio and either the native
-  requested tier or the provider-compatible `1K` source tier.
+- Batch provider input preserves the explicit supported aspect ratio and uses
+  source tier `1K`; the durable job and pricing snapshot preserve the requested
+  output tier.
 - Billing and balance holds retain the originally requested `2K`/`4K` tier.
 - The synchronous Images API and asynchronous image-task wrapper use the same
   adapter. Batch indexing uses that same process singleton and limiter.
@@ -75,6 +78,54 @@ two consecutive grants while batch work is waiting; the next Mini slot then
 goes to the oldest batch item. An `n>1` synchronous Images response is
 classified as batch work, so one large request cannot continuously monopolize
 Mini and admitted batch work cannot starve.
+
+For `openai_images`, the public batch is durable but the upstream execution is
+not a native multi-item OpenAI batch. Every expanded `custom_id` is one `n=1`,
+source-`1K` request. A worker advance starts at most one item after acquiring the
+selected account's concurrency slot. Status polling and cancellation use the
+read-only provider `Get` path and cannot start an item. Public cancellation first
+writes a durable provider cancel marker even when the worker still owns the job
+lock; the in-flight item may finish, but the marker fences every later item. The
+worker keeps its
+own cancellation/deadline when the Images transport is invoked, so losing the
+Redis job lease stops the old owner instead of allowing a detached HTTP request
+to write after ownership changes.
+
+Supported OpenAI batch models are `gpt-image-2` and the configured Image 2.5
+flare/sunburst revisions. Source-1K aspect ratios are `1:1`, `2:3`, `3:2`,
+`3:4`, `4:3`, `4:5`, and `5:4`; wider/taller exact ratios are rejected instead
+of silently requesting an upstream image whose longest edge exceeds 1024. API-key
+edits use repeated multipart `image[]` parts, while OAuth/setup-token edits use
+ordered inline data URLs. GPT Image's fixed base64 response behavior is relied on
+without sending the unsupported `response_format` request field.
+
+The pre-upstream attempt fence is an atomic Tencent COS create using
+`x-cos-forbid-overwrite: true`; a second claimant is recognized only from
+`409/FileAlreadyExists`. Tencent documents that this guard is ineffective when
+bucket versioning is enabled, so the private batch bucket must be non-versioned.
+The runtime reads the bucket versioning state during application startup and
+before every claim, and fails closed when the state is `Enabled`, `Suspended`,
+or cannot be read; the CAM policy must
+therefore grant the narrow bucket-versioning read action.
+Before enabling any OpenAI batch group, perform a real create-twice/delete probe
+against the configured bucket and keep the group disabled unless the second write
+is rejected.
+
+COS credentials are not accepted as raw config or environment values. The
+application receives only two same-path Vault references (`#access_key_id` and
+`#secret_access_key`) plus the fixed read-only
+`/run/sub2api-upscale-vault/public.sock`. The networkless sidecar must explicitly
+allow and load both fields before the candidate application starts. A failed
+Vault read or bucket-versioning probe makes candidate startup fail.
+
+Each OpenAI Images item has a 20-minute execution deadline. Deadline exhaustion
+fails that item, persists the failure, releases the account slot, and allows the
+next item to advance. A ten-item batch therefore has a conservative source-side
+failure bound of roughly 200 minutes plus bounded scheduling and storage work if
+every item stalls to its deadline; there is deliberately no shorter whole-batch
+source deadline that discards earlier durable results. Under normal upstream
+latency the observed duration should be much lower, but only a production probe
+can provide current timing evidence.
 
 Synchronous `n>1` requests remain atomic and return only after every output has
 finished post-processing. Separate synchronous requests return independently as
@@ -151,8 +202,8 @@ short-lived presigned PUT design.
 ## Batch persistence and objects
 
 Migration `261_batch_image_image_size.sql` persists the requested output tier;
-legacy rows default to `1K`. Known Gemini 2.5 providers receive `1K` for 2K/4K
-jobs; future providers retain their native requested tier. During result
+legacy rows default to `1K`. Gemini API, Vertex, and `openai_images` receive
+source `1K` for 2K/4K batch jobs. During result
 indexing, each successfully upscaled image is written to the
 existing private batch COS bucket under:
 
@@ -180,6 +231,21 @@ the same delay. Completed jobs retain the configured output-retention window.
 Each COS write is capped at 120 seconds. Authenticated item and ZIP reads use
 a 10-minute per-object context that is cancelled when the stream closes, so a
 stalled object-store connection cannot pin a worker or download indefinitely.
+
+The same private batch object store is the durable control plane for
+`openai_images`: it holds the normalized manifest, deterministic per-item
+attempt markers, one JSONL result per item, and the final combined JSONL.
+Because the upstream Images operation has no idempotency key, an attempt marker
+is written immediately before the non-idempotent call. A result object is also
+an atomic first-writer-wins create. If recovery sees an attempt without a
+result, it records that item as `PROVIDER_ATTEMPT_OUTCOME_UNKNOWN` and does not
+replay the request; an older worker cannot later overwrite that outcome. Other
+items continue and settlement charges successful items only.
+If the selected upstream account is soft-deleted while the job is active, the
+processor terminally fails the job and idempotently releases its remaining hold
+instead of requeueing forever. OpenAI batch cleanup can then delete its exact
+deterministic COS keys without the deleted credential. Temporary account lookup
+errors still requeue and do not take this permanent-failure path.
 
 ## Credential and deployment boundary
 
