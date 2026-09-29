@@ -55,7 +55,9 @@ budget of a later image. The operation window never becomes shorter than an
 explicitly configured per-job timeout. The
 parent request or worker context can still impose an earlier deadline; the
 OpenAI-compatible asynchronous task wrapper currently has a 30-minute total
-execution deadline, leaving five minutes for final storage and task commit.
+execution deadline. Provider generation, Mini processing, final storage, and
+task commit all share that parent lifetime, so the earlier parent deadline wins
+and the difference between 25 and 30 minutes is not a guaranteed storage SLA.
 For Responses shortfall filling, the shared window starts with the first Mini
 job and is also inherited by later provider fill attempts, so those attempts
 cannot reset or outlive the remaining high-resolution operation budget.
