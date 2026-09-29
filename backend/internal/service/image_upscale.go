@@ -33,6 +33,8 @@ const (
 	imageUpscaleMaxSourcePixels    = 2 * 1024 * 1024
 )
 
+var errImageUpscaleResultTooLarge = errors.New("response body exceeds limit")
+
 type ImageUpscaleError struct {
 	Code       string
 	StatusCode int
@@ -681,9 +683,13 @@ func (s *ImageUpscaleService) downloadResult(ctx context.Context, jobID string, 
 			}
 			body, readErr := readBoundedResponse(resp, limit)
 			if readErr != nil {
-				return nil, "", imageUpscaleError("RESULT_TOO_LARGE", 0, false, readErr)
+				if errors.Is(readErr, errImageUpscaleResultTooLarge) {
+					return nil, "", imageUpscaleError("RESULT_TOO_LARGE", 0, false, readErr)
+				}
+				lastErr = imageUpscaleError("RESULT_TRANSPORT_FAILED", 0, true, readErr)
+			} else {
+				return body, normalizeUpscaleMime(resp.Header.Get("Content-Type")), nil
 			}
-			return body, normalizeUpscaleMime(resp.Header.Get("Content-Type")), nil
 		} else {
 			_, _ = readBoundedResponse(resp, 64*1024)
 			lastErr = imageUpscaleError(upscaleHTTPErrorCode("RESULT", resp.StatusCode), resp.StatusCode, resp.StatusCode == 429 || resp.StatusCode >= 500, nil)
@@ -834,7 +840,7 @@ func readBoundedResponse(resp *http.Response, maxBytes int64) ([]byte, error) {
 	}
 	if int64(len(body)) > maxBytes {
 		clearBytes(body)
-		return nil, errors.New("response body exceeds limit")
+		return nil, errImageUpscaleResultTooLarge
 	}
 	return body, nil
 }

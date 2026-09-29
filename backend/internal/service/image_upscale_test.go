@@ -207,6 +207,54 @@ func TestImageUpscaleRunsSubmitPollAndDownloadForSupportedScales(t *testing.T) {
 	}
 }
 
+func TestImageUpscaleRetriesTruncatedResultDownload(t *testing.T) {
+	resultData := imageUpscaleTestPNG(t, 4, 4)
+	var downloads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/jobs/job-truncated/result" {
+			http.NotFound(w, r)
+			return
+		}
+		if downloads.Add(1) == 1 {
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Content-Length", strconv.Itoa(len(resultData)+1))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(resultData)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(resultData)
+	}))
+	defer server.Close()
+
+	cfg := imageUpscaleTestConfig(server.URL)
+	cfg.RetryMax = 1
+	service := newImageUpscaleTestService(cfg, server.Client(), imageUpscaleTestStaticLoader)
+
+	body, mimeType, err := service.downloadResult(context.Background(), "job-truncated", []byte("test-token"))
+	require.NoError(t, err)
+	require.Equal(t, resultData, body)
+	require.Equal(t, "image/png", mimeType)
+	require.Equal(t, int32(2), downloads.Load(), "a truncated result must be retried once")
+}
+
+func TestImageUpscaleKeepsTrueResultLimitFailureNonTemporary(t *testing.T) {
+	resultData := imageUpscaleTestPNG(t, 4, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(resultData)
+	}))
+	defer server.Close()
+
+	cfg := imageUpscaleTestConfig(server.URL)
+	cfg.MaxResultBytes = int64(len(resultData) - 1)
+	service := newImageUpscaleTestService(cfg, server.Client(), imageUpscaleTestStaticLoader)
+
+	_, _, err := service.downloadResult(context.Background(), "job-too-large", []byte("test-token"))
+	upscaleErr := requireImageUpscaleError(t, err, "RESULT_TOO_LARGE")
+	require.False(t, upscaleErr.Temporary)
+}
+
 func TestImageUpscaleRejectsMismatchedResultMetadata(t *testing.T) {
 	tests := []struct {
 		name         string
