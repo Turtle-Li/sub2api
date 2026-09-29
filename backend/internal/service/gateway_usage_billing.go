@@ -889,6 +889,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 				ImageOutputTokens:   result.Usage.ImageOutputTokens,
 			},
 			accountQuotaBasis(cost), pricingAt,
+			accountStatsLongContextPricingEnabled(nil),
 		)
 	}
 

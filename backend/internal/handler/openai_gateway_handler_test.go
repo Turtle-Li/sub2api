@@ -1934,11 +1934,14 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 }
 
 type openAIResponsesWSUsageLogCase struct {
+	simpleModeRejectAtRead int64
+	compositeResolver      *service.CompositeRouteResolver
+	accountPlatform        string
 	firstPayload           string
 	firstClientClose       *openAIResponsesWSClientCloseExpectation
-	simpleModeRejectAtRead int64
 	// closeReason 覆盖首帧/次轮被拒时期待的 1008 关闭原因；留空沿用分组白名单文案。
 	closeReason string
+	closeStatus coderws.StatusCode
 	// midPayload 在首个 turn 完成后发送（如 session.update），上游桩会为它
 	// 回一个 response.completed，客户端按普通事件读取。
 	midPayload          string
@@ -3001,6 +3004,13 @@ func expectedWSCloseReason(tc openAIResponsesWSUsageLogCase) string {
 	return "not available for this group"
 }
 
+func expectedWSCloseStatus(tc openAIResponsesWSUsageLogCase) coderws.StatusCode {
+	if tc.closeStatus != 0 {
+		return tc.closeStatus
+	}
+	return coderws.StatusPolicyViolation
+}
+
 func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSUsageLogCase) openAIResponsesWSUsageLogResult {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -3040,6 +3050,17 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	var channelSvc *service.ChannelService
 	var accountRepo *openAIWSUsageHandlerAccountRepoStub
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tc.accountPlatform == service.PlatformGrok {
+			payload, err := io.ReadAll(r.Body)
+			if err != nil {
+				upstreamErrCh <- err
+				return
+			}
+			upstreamPayloadCh <- payload
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_grok_test\",\"model\":%q,\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n", gjson.GetBytes(payload, "model").String())
+			return
+		}
 		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{
 			CompressionMode: coderws.CompressionContextTakeover,
 		})
@@ -3152,6 +3173,9 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			"openai_apikey_responses_websockets_v2_mode":    wsMode,
 		},
 	}
+	if tc.accountPlatform != "" {
+		account.Platform = tc.accountPlatform
+	}
 	if strings.TrimSpace(tc.ingressMode) != "" {
 		account.Extra["openai_apikey_responses_websockets_v2_mode"] = tc.ingressMode
 	}
@@ -3161,6 +3185,10 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	cfg.Default.RateMultiplier = 1
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	if tc.accountPlatform == service.PlatformGrok {
+		cfg.Security.URLAllowlist.AllowPrivateHosts = true
+		cfg.Security.URLAllowlist.UpstreamHosts = []string{strings.TrimPrefix(upstreamServer.URL, "http://")}
+	}
 	cfg.Gateway.OpenAIWS.Enabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
@@ -3210,7 +3238,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		service.NewBillingService(cfg, nil),
 		nil,
 		billingCacheSvc,
-		nil,
+		&compositeWSHTTPUpstream{},
 		&service.DeferredService{},
 		nil,
 		nil,
@@ -3231,6 +3259,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	}
 	h := &OpenAIGatewayHandler{
 		cfg:                 cfg,
+		compositeResolver:   tc.compositeResolver,
 		gatewayService:      gatewaySvc,
 		billingCacheService: billingCacheSvc,
 		apiKeyService:       &service.APIKeyService{},
@@ -3305,7 +3334,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		require.Error(t, readErr, "first frame should have been rejected with a close")
 		var closeErr coderws.CloseError
 		require.ErrorAs(t, readErr, &closeErr)
-		require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+		require.Equal(t, expectedWSCloseStatus(tc), closeErr.Code)
 		require.Contains(t, closeErr.Reason, expectedWSCloseReason(tc))
 	} else {
 		readCompleted()
@@ -3339,7 +3368,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			require.Error(t, readErr, "second turn should have been rejected with a close")
 			var closeErr coderws.CloseError
 			require.ErrorAs(t, readErr, &closeErr)
-			require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+			require.Equal(t, expectedWSCloseStatus(tc), closeErr.Code)
 			require.Contains(t, closeErr.Reason, expectedWSCloseReason(tc))
 			close(releaseUpstream)
 		} else {
@@ -3371,6 +3400,9 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	}
 
 	if !firstFrameCloseExpected {
+		if tc.accountPlatform == service.PlatformGrok {
+			upstreamErrCh <- nil
+		}
 		select {
 		case upstreamErr := <-upstreamErrCh:
 			require.NoError(t, upstreamErr)

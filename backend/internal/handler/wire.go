@@ -55,10 +55,12 @@ func ProvideAdminHandlers(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	opencodeGoUsage *service.OpenCodeGoUsageService,
+	claudeResetCredits *service.ClaudeResetCreditService,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetOpenCodeGoUsageService(opencodeGoUsage)
+	accountHandler.SetClaudeResetCreditService(claudeResetCredits)
 	return &AdminHandlers{
 		CodexTurnStatePanel:    codexTurnStatePanelHandler,
 		BPSUpstream:            bpsUpstreamHandler,
@@ -147,11 +149,13 @@ func ProvideOpenAIGatewayHandler(
 	attachmentR2Service *service.AttachmentR2Service,
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
+	compositeResolver *service.CompositeRouteResolver,
 ) *OpenAIGatewayHandler {
 	gatewayService.SetPluginManager(pluginManager)
 	gatewayService.SetBPSImageExternalizer(newBPSImageExternalizer(cfg, attachmentR2Service))
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
+	h.compositeResolver = compositeResolver
 	h.securityAuditCoordinator = coordinator
 	h.subscriptionService = subscriptionService
 	h.grokMediaEligibilityProber = grokQuotaService
@@ -309,6 +313,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewComplianceHandler,
 	admin.NewAuditLogHandler,
 	admin.NewAccountPoolHandler,
+	admin.NewProxyPoolHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

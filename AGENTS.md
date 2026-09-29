@@ -240,6 +240,14 @@
 
 ## Upstream update scope
 
+- For the v0.2.9 and v0.2.10 merge, read
+  `docs/operations/UPSTREAM_V0210_20260930.md`. Preserve the fork's payment and
+  CNY settlement contracts, BPS, fixed egress and Grok relay policy, exact-N
+  image behavior, OpenCode union, and manual release controls. Risk-control
+  allowlisted requests are log-only but still retain `FullPrompt` audit
+  evidence; CC Switch keeps WebSocket settings and the local
+  `gpt-5.6-terra` default while adopting upstream URL normalization.
+
 - Read `docs/operations/OPENAI_PROXY_TIMEZONE_REWRITE_20260916.md` before
   changing proxy exit geolocation, OpenAI/Codex developer context rewriting,
   or the HTTP/WS account-selected forwarding seams. Preserve the user-role
