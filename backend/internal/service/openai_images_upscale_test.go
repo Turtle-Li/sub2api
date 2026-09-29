@@ -212,7 +212,7 @@ func TestHandleOpenAIImagesHighResSkipsB64BackfillBeforeUpscaleAdmission(t *test
 		)),
 	}
 
-	_, _, _, err := svc.handleOpenAIImagesNonStreamingResponse(
+	_, _, _, _, err := svc.handleOpenAIImagesNonStreamingResponse(
 		context.Background(), response, c, b64BackfillAccount(true),
 		&OpenAIImagesRequest{N: 1, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"},
 		"gemini-2.5-flash-image", true,

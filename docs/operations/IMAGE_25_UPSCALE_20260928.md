@@ -86,12 +86,14 @@ A synchronous request is atomic: if any returned image cannot be upscaled, the
 request fails and Sub2 does not charge it. Batch processing is item-isolated:
 one failed item is stored as `IMAGE_UPSCALE_*`, successful items remain
 downloadable, and settlement charges successful images only.
-The synchronous provider response must contain exactly the requested `n`
-images, and every expanded batch `custom_id` result must contain exactly one
-image. For the Responses shortfall loop, each attempt may return fewer than the
-remaining count and trigger another attempt, but it may not return more than
-the remaining count. Cardinality mismatches fail before that attempt submits
-any image to Mini or object storage.
+The synchronous client response contains at most the requested `n` images, and
+every expanded batch `custom_id` result must contain exactly one image. For the
+Responses shortfall loop, each attempt may return fewer than the remaining
+count and trigger another attempt. If a non-streaming upstream attempt returns
+more than remain, Sub2 retains only the required prefix before Mini, object
+storage, response assembly, and billing. Structured logs record each event;
+successful usage rows retain discarded-image and event counts in
+`image_size_breakdown` for durable frequency analysis.
 
 ## Synchronous delivery and object storage fallback
 
@@ -242,7 +244,15 @@ related usage row and one billing-dedup row. The usage row recorded
 probe multiplier `0.01`, and committed charge `0.0201 CNY`. Its diagnostic
 dimension breakdown classified the 3072-pixel long edge as 4K, but
 `BillableImageSize` and the displayed billing tier remained the requested 2K.
-These timings and resource peaks are observed evidence, not an SLA.
+These timings and resource peaks are observed evidence, not an SLA. The probe's
+prompt also asked for “ten clearly varied poses” while sending `n=10`; the
+model therefore rendered a ten-panel collage inside each of the ten distinct
+PNG files despite the bridge's no-collage instruction. That run remains valid
+for transport, scheduling, upscale, storage, and billing evidence, but its
+visual-semantics check is failed and must not be cited as proof that `n=10`
+produces ten single-frame compositions. Future probes must ask for exactly one
+subject and one continuous frame per returned image and explicitly prohibit a
+grid, collage, contact sheet, split panel, storyboard, inset, or multiple poses.
 
 ## Validation and rollback
 

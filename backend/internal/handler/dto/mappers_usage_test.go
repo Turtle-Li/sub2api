@@ -281,14 +281,18 @@ func TestUsageLogFromService_IncludesImageBillingMetadataForUserAndAdmin(t *test
 	outputSize := "3840x2160"
 	source := "output"
 	log := &service.UsageLog{
-		RequestID:          "req_image_metadata",
-		Model:              "gpt-image-2",
-		ImageCount:         2,
-		ImageSize:          &imageSize,
-		ImageInputSize:     &inputSize,
-		ImageOutputSize:    &outputSize,
-		ImageSizeSource:    &source,
-		ImageSizeBreakdown: map[string]int{"4K": 2},
+		RequestID:       "req_image_metadata",
+		Model:           "gpt-image-2",
+		ImageCount:      2,
+		ImageSize:       &imageSize,
+		ImageInputSize:  &inputSize,
+		ImageOutputSize: &outputSize,
+		ImageSizeSource: &source,
+		ImageSizeBreakdown: map[string]int{
+			"4K":                              2,
+			"upstream_overdelivery_discarded": 1,
+			"upstream_overdelivery_events":    1,
+		},
 	}
 
 	userDTO := UsageLogFromService(log)
@@ -304,7 +308,13 @@ func TestUsageLogFromService_IncludesImageBillingMetadataForUserAndAdmin(t *test
 		require.Equal(t, outputSize, *got.ImageOutputSize)
 		require.NotNil(t, got.ImageSizeSource)
 		require.Equal(t, source, *got.ImageSizeSource)
-		require.Equal(t, map[string]int{"4K": 2}, got.ImageSizeBreakdown)
+		require.Equal(t, map[string]int{
+			"4K":                              2,
+			"upstream_overdelivery_discarded": 1,
+			"upstream_overdelivery_events":    1,
+		}, got.ImageSizeBreakdown)
+		require.Equal(t, 1, got.ImageOverdeliveryCount)
+		require.Equal(t, 1, got.ImageOverdeliveryEvents)
 	}
 }
 

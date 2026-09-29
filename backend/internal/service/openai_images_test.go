@@ -957,7 +957,7 @@ func TestOpenAIGatewayServiceForwardImages_CodexDirectModelUsesResponsesForMulti
 	require.Len(t, gjson.GetBytes(rec.Body.Bytes(), "data").Array(), 2)
 }
 
-func TestOpenAIGatewayServiceForwardImages_CodexResponsesRejectsHighResolutionOverageBeforeUpscale(t *testing.T) {
+func TestOpenAIGatewayServiceForwardImages_CodexResponsesTrimsHighResolutionOverageBeforeUpscale(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-image-2.5-sunburst","prompt":"draw two models","size":"2K","n":2}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
@@ -981,9 +981,21 @@ func TestOpenAIGatewayServiceForwardImages_CodexResponsesRejectsHighResolutionOv
 	}}
 
 	var upscaleCalls atomic.Int32
-	mini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		upscaleCalls.Add(1)
-		http.Error(w, "unexpected upscale request", http.StatusInternalServerError)
+	upscaled := testUpscalePNG(t, 4, 6)
+	mini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/upscale":
+			upscaleCalls.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"job":{"id":"job-overdelivery"}}`))
+		case "/v1/jobs/job-overdelivery":
+			_, _ = w.Write([]byte(`{"job":{"state":"completed"}}`))
+		case "/v1/jobs/job-overdelivery/result":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(upscaled)
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	t.Cleanup(mini.Close)
 	svc := newOpenAIImagesTestService(upstream)
@@ -998,14 +1010,25 @@ func TestOpenAIGatewayServiceForwardImages_CodexResponsesRejectsHighResolutionOv
 		},
 		slots: make(chan struct{}, 1),
 	}
+	storage := &failNthImageStorage{}
+	svc.imageStorageResolver = func() (*ImageResultUploader, bool) {
+		return NewImageResultUploader(storage, "images/", 0, nil), true
+	}
 	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 	require.NoError(t, err)
 
 	result, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
-	require.Nil(t, result)
-	_ = requireImageUpscaleError(t, err, "INVALID_IMAGE_COUNT")
-	require.Zero(t, upscaleCalls.Load(), "cardinality validation must run before Mini")
-	require.Zero(t, rec.Body.Len(), "an invalid cardinality must not write a partial response")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 2, result.ImageCount)
+	require.Equal(t, 1, result.ImageOverdeliveryCount)
+	require.Equal(t, 1, result.ImageOverdeliveryEvents)
+	require.Equal(t, OpenAIUsage{InputTokens: 20, OutputTokens: 60, ImageOutputTokens: 60}, result.Usage)
+	require.NotNil(t, result.BillingUsage)
+	require.Equal(t, OpenAIUsage{InputTokens: 20, OutputTokens: 40, ImageOutputTokens: 40}, *result.BillingUsage)
+	require.Equal(t, int32(2), upscaleCalls.Load(), "discarded images must not reach Mini")
+	require.Equal(t, 2, storage.calls, "discarded images must not reach object storage")
+	require.Len(t, gjson.Get(rec.Body.String(), "data").Array(), 2)
 }
 
 func TestOpenAIGatewayServiceForwardImages_CodexResponsesAsyncHighResolutionN10StoresOnce(t *testing.T) {
@@ -1145,13 +1168,15 @@ func TestOpenAIGatewayServiceForwardImages_OAuthReturnsOverageAndCapsBillableUsa
 	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, 3, result.ImageCount)
+	require.Equal(t, 2, result.ImageCount)
 	require.Equal(t, 2, result.BillableImageCount)
+	require.Equal(t, 1, result.ImageOverdeliveryCount)
+	require.Equal(t, 1, result.ImageOverdeliveryEvents)
 	require.Equal(t, 687, result.Usage.ImageOutputTokens)
 	require.NotNil(t, result.BillingUsage)
 	require.Equal(t, 458, result.BillingUsage.ImageOutputTokens)
 	require.Equal(t, 458, result.BillingUsage.OutputTokens)
-	require.Len(t, gjson.Get(rec.Body.String(), "data").Array(), 3)
+	require.Len(t, gjson.Get(rec.Body.String(), "data").Array(), 2)
 	require.Len(t, upstream.requests, 1)
 	require.NotContains(t, rec.Body.String(), "image_count_mismatch")
 }
@@ -1183,14 +1208,18 @@ func TestOpenAIGatewayServiceForwardImages_OAuthReturnsFillOverageAndCapsAggrega
 	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, 4, result.ImageCount)
+	require.Equal(t, 3, result.ImageCount)
 	require.Equal(t, 3, result.BillableImageCount)
+	require.Equal(t, 1, result.ImageOverdeliveryCount)
+	require.Equal(t, 1, result.ImageOverdeliveryEvents)
 	require.Equal(t, OpenAIUsage{InputTokens: 40, OutputTokens: 916, ImageOutputTokens: 916}, result.Usage)
 	require.NotNil(t, result.BillingUsage)
 	require.Equal(t, OpenAIUsage{InputTokens: 10, OutputTokens: 687, ImageOutputTokens: 687}, *result.BillingUsage)
 	require.Len(t, upstream.requests, 2)
 	require.Contains(t, gjson.GetBytes(upstream.bodies[1], "instructions").String(), "requires exactly 2 final images")
-	require.Len(t, gjson.Get(rec.Body.String(), "data").Array(), 4)
+	require.Len(t, gjson.Get(rec.Body.String(), "data").Array(), 3)
+	require.Equal(t, "aW1hZ2UtMw==", gjson.Get(rec.Body.String(), "data.2.b64_json").String())
+	require.NotContains(t, rec.Body.String(), "aW1hZ2UtNA==")
 }
 
 func TestOpenAIGatewayServiceForwardImages_OAuthNonStreamingRetriesEmptyFillInternally(t *testing.T) {

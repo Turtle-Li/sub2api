@@ -741,6 +741,8 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		ImageOutputCost:           l.ImageOutputCost,
 		ImageSizeSource:           l.ImageSizeSource,
 		ImageSizeBreakdown:        l.ImageSizeBreakdown,
+		ImageOverdeliveryCount:    max(l.ImageSizeBreakdown["upstream_overdelivery_discarded"], 0),
+		ImageOverdeliveryEvents:   max(l.ImageSizeBreakdown["upstream_overdelivery_events"], 0),
 		MediaType:                 l.MediaType,
 		UserAgent:                 l.UserAgent,
 		IPAddress:                 l.IPAddress,

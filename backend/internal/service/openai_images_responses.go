@@ -2095,6 +2095,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		emptyFillRetries     int
 		taskRecoveryWasTried bool
 		partialOutputStarted bool
+		overdeliveryCount    int
+		overdeliveryEvents   int
 	)
 	buildResult := func() *OpenAIForwardResult {
 		billableUsageCopy := billingUsage
@@ -2118,6 +2120,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
 			ImageCount:                    imageCount,
+			ImageOverdeliveryCount:        overdeliveryCount,
+			ImageOverdeliveryEvents:       overdeliveryEvents,
 			BillableImageCount:            billableImageCount,
 			BillableImageSize:             parsed.SizeTier,
 			ImageSize:                     parsed.SizeTier,
@@ -2266,13 +2270,23 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			)
 			return resultOnError(handledErr)
 		}
-		if upscaleRequired && len(collected.results) > remaining {
-			return resultOnError(imageUpscaleError(
-				"INVALID_IMAGE_COUNT",
-				0,
-				false,
-				fmt.Errorf("upstream returned %d images, expected at most %d for this attempt", len(collected.results), remaining),
-			))
+		upstreamAttemptImageCount := len(collected.results)
+		if upstreamAttemptImageCount > remaining {
+			discarded := upstreamAttemptImageCount - remaining
+			overdeliveryCount += discarded
+			overdeliveryEvents++
+			logOpenAIImagesOverdelivery(
+				account,
+				requestModel,
+				upstreamModel,
+				upstreamReq.URL.Path,
+				attemptIndex+1,
+				parsed.N,
+				remaining,
+				upstreamAttemptImageCount,
+				discarded,
+			)
+			collected.results = collected.results[:remaining]
 		}
 		if upscaleRequired {
 			if upscaleErr := s.upscaleOpenAIImageResults(upstreamCtx, parsed, collected.results); upscaleErr != nil {
@@ -2300,11 +2314,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 				resp, writerSizeBeforeResponse, failoverErr,
 			)
 		}
-		billableAttemptImages := attemptImageCount
-		if billableAttemptImages > remaining {
-			billableAttemptImages = remaining
-		}
-		addOpenAIImagesBillableAttemptUsage(&billingUsage, collected.usage, attemptImageCount, billableAttemptImages, successfulAttempts == 0)
+		addOpenAIImagesBillableAttemptUsage(&billingUsage, collected.usage, upstreamAttemptImageCount, attemptImageCount, successfulAttempts == 0)
 		allResults = append(allResults, collected.results...)
 		imageOutputSizes = append(imageOutputSizes, openAIResponsesImageResultSizes(collected.results)...)
 		imageCount += attemptImageCount
@@ -2456,16 +2466,22 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthDirect(
 		imageOutputSizes     []string
 		firstTokenMs         *int
 		partialOutputStarted bool
+		overdeliveryCount    int
+		overdeliveryEvents   int
 	)
 	if parsed.Stream {
 		usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesStreamingResponse(resp, c, startTime, parsed)
 		partialOutputStarted = OpenAIImagesSemanticOutputWritten(c)
 	} else {
-		usage, imageCount, imageOutputSizes, err = s.handleCodexDirectImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed)
+		usage, imageCount, imageOutputSizes, overdeliveryCount, err = s.handleCodexDirectImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed, upstreamModel)
+		if overdeliveryCount > 0 {
+			overdeliveryEvents = 1
+		}
 	}
 	billableImageCount := min(imageCount, parsed.N)
 	billingUsage := OpenAIUsage{}
-	addOpenAIImagesBillableAttemptUsage(&billingUsage, usage, imageCount, billableImageCount, true)
+	upstreamImageCount := imageCount + overdeliveryCount
+	addOpenAIImagesBillableAttemptUsage(&billingUsage, usage, upstreamImageCount, billableImageCount, true)
 	buildResult := func() *OpenAIForwardResult {
 		billingUsageCopy := billingUsage
 		return &OpenAIForwardResult{
@@ -2484,6 +2500,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthDirect(
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
 			ImageCount:                    imageCount,
+			ImageOverdeliveryCount:        overdeliveryCount,
+			ImageOverdeliveryEvents:       overdeliveryEvents,
 			BillableImageCount:            billableImageCount,
 			BillableImageSize:             parsed.SizeTier,
 			ImageSize:                     parsed.SizeTier,

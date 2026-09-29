@@ -234,31 +234,49 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(
 	c *gin.Context,
 	account *Account,
 	parsed *OpenAIImagesRequest,
-) (OpenAIUsage, int, []string, error) {
+	upstreamModel string,
+) (OpenAIUsage, int, []string, int, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		if shouldClassifyOpenAIUpstreamStreamReadError(err) {
 			err = newOpenAIUpstreamStreamReadError(err)
 		}
-		return OpenAIUsage{}, 0, nil, err
+		return OpenAIUsage{}, 0, nil, 0, err
+	}
+	expectedCount := parsed.N
+	if expectedCount <= 0 {
+		expectedCount = 1
+	}
+	body, upstreamCount, overdeliveryCount, err := limitOpenAIImagesJSONData(body, expectedCount)
+	if err != nil {
+		return OpenAIUsage{}, 0, nil, 0, err
+	}
+	if overdeliveryCount > 0 {
+		logOpenAIImagesOverdelivery(
+			account,
+			parsed.Model,
+			upstreamModel,
+			parsed.Endpoint,
+			1,
+			expectedCount,
+			expectedCount,
+			upstreamCount,
+			overdeliveryCount,
+		)
 	}
 	_, upscaleRequired := RequestedImageUpscaleScale(parsed.Size)
 	if upscaleRequired {
-		expectedCount := parsed.N
-		if expectedCount <= 0 {
-			expectedCount = 1
-		}
 		if err := validateCodexDirectImagesHighResolutionOutputs(body, expectedCount); err != nil {
-			return OpenAIUsage{}, 0, nil, err
+			return OpenAIUsage{}, 0, nil, 0, err
 		}
 	}
 	results, err := parseCodexDirectImagesResponse(body)
 	if err != nil {
-		return OpenAIUsage{}, 0, nil, err
+		return OpenAIUsage{}, 0, nil, 0, err
 	}
 	if upscaleRequired {
 		if err := s.upscaleOpenAIImageResults(ctx, parsed, results); err != nil {
-			return OpenAIUsage{}, 0, nil, err
+			return OpenAIUsage{}, 0, nil, 0, err
 		}
 		for i := range results {
 			body, _ = sjson.SetBytes(body, fmt.Sprintf("data.%d.b64_json", i), results[i].Result)
@@ -307,7 +325,7 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(
 	if upscaleRequired {
 		body, err = s.storeHighResolutionOpenAIImages(ctx, "openai_images_direct", len(results), body)
 		if err != nil {
-			return OpenAIUsage{}, 0, nil, err
+			return OpenAIUsage{}, 0, nil, 0, err
 		}
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -318,5 +336,5 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(
 		}
 	}
 	c.Data(resp.StatusCode, contentType, body)
-	return usage, len(results), openAIResponsesImageResultSizes(results), nil
+	return usage, len(results), openAIResponsesImageResultSizes(results), overdeliveryCount, nil
 }

@@ -575,7 +575,8 @@ func TestOpenAIGatewayServiceRecordUsage_TokenImageUsesBillableUsageButLogsActua
 		Result: &OpenAIForwardResult{
 			RequestID: "resp_image_billable_usage",
 			Usage:     actualUsage, BillingUsage: &billableUsage,
-			Model: "gpt-5.1", ImageCount: 3, BillableImageCount: 2, Duration: time.Second,
+			Model: "gpt-5.1", ImageCount: 2, BillableImageCount: 2,
+			ImageOverdeliveryCount: 1, ImageOverdeliveryEvents: 1, Duration: time.Second,
 		},
 		APIKey: &APIKey{
 			ID: 1041, GroupID: i64p(groupID),
@@ -589,7 +590,9 @@ func TestOpenAIGatewayServiceRecordUsage_TokenImageUsesBillableUsageButLogsActua
 	require.Equal(t, actualUsage.InputTokens, usageRepo.lastLog.InputTokens)
 	require.Equal(t, actualUsage.OutputTokens, usageRepo.lastLog.OutputTokens)
 	require.Equal(t, actualUsage.ImageOutputTokens, usageRepo.lastLog.ImageOutputTokens)
-	require.Equal(t, 3, usageRepo.lastLog.ImageCount)
+	require.Equal(t, 2, usageRepo.lastLog.ImageCount)
+	require.Equal(t, 1, usageRepo.lastLog.ImageSizeBreakdown[openAIImagesOverdeliveryDiscardedKey])
+	require.Equal(t, 1, usageRepo.lastLog.ImageSizeBreakdown[openAIImagesOverdeliveryEventsKey])
 	expected, err := svc.billingService.CalculateCostUnified(CostInput{
 		Ctx: context.Background(), Model: "gpt-5.1", GroupID: i64p(groupID),
 		Tokens: UsageTokens{

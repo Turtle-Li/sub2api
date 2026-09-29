@@ -34,8 +34,13 @@ short. Those attempts are internal: one async submission still creates one
 `imgtask_*` task, one usage log, and one idempotent billing transaction. Real
 upstream usage aggregates all successful attempts, while customer billing
 counts the initial prompt/input once and the delivered image output up to the
-requested `n`, using the originally requested size tier. A `2K`/`4K` attempt
-that returns more images than remain is rejected before Mini or object storage.
+requested `n`, using the originally requested size tier. If a non-streaming
+attempt returns more images than remain, the relay keeps only the required
+prefix. Extra images are not sent to Mini, stored, returned, or billed. The
+usage row's `image_size_breakdown` records
+`upstream_overdelivery_discarded` and `upstream_overdelivery_events` so the
+affected-request rate and discarded-image volume remain queryable after a
+process restart.
 
 ## Enabling the feature (object storage)
 

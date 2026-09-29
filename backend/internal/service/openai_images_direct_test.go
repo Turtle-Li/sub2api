@@ -79,6 +79,34 @@ func TestCodexDirectImagesRouting(t *testing.T) {
 	}
 }
 
+func TestCodexDirectImagesSingleRequestTrimsUpstreamOverdelivery(t *testing.T) {
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw one portrait","n":1}`)
+	c, rec := newOpenAIImagesTestContext(t, body)
+	response := `{"data":[{"b64_json":"aW1hZ2UtMQ=="},{"b64_json":"aW1hZ2UtMg=="}],"usage":{"input_tokens":10,"output_tokens":40}}`
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(response)),
+	}}
+	svc := newOpenAIImagesTestService(upstream)
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	result, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.ImageCount)
+	require.Equal(t, 1, result.BillableImageCount)
+	require.Equal(t, 1, result.ImageOverdeliveryCount)
+	require.Equal(t, 1, result.ImageOverdeliveryEvents)
+	require.Equal(t, OpenAIUsage{InputTokens: 10, OutputTokens: 40, ImageOutputTokens: 40}, result.Usage)
+	require.NotNil(t, result.BillingUsage)
+	require.Equal(t, OpenAIUsage{InputTokens: 10, OutputTokens: 20, ImageOutputTokens: 20}, *result.BillingUsage)
+	require.Len(t, gjson.GetBytes(rec.Body.Bytes(), "data").Array(), 1)
+	require.Equal(t, "aW1hZ2UtMQ==", gjson.GetBytes(rec.Body.Bytes(), "data.0.b64_json").String())
+	require.NotContains(t, rec.Body.String(), "aW1hZ2UtMg==")
+}
+
 func TestCodexDirectImagesMappingBeforeRouting(t *testing.T) {
 	for _, accountType := range []string{AccountTypeOAuth, AccountTypeSetupToken} {
 		t.Run(accountType, func(t *testing.T) {

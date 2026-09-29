@@ -26,6 +26,7 @@ import (
 	"github.com/imroc/req/v3"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 const (
@@ -43,7 +44,80 @@ const (
 	openAIImagesMaxN                       = 10       // OpenAI image-generation APIs accept up to ten outputs per request.
 	openAIImagesResponsesMainModel         = "gpt-5.6-luna"
 	openAIImagesVerbatimPromptInstructions = "When invoking the image_generation tool, use the user's image prompt verbatim. Do not rewrite, expand, summarize, embellish, translate, normalize punctuation, or add or remove visual details or constraints. Preserve the original language, wording, capitalization, quotes, and punctuation exactly."
+
+	openAIImagesOverdeliveryDiscardedKey = "upstream_overdelivery_discarded"
+	openAIImagesOverdeliveryEventsKey    = "upstream_overdelivery_events"
 )
+
+func limitOpenAIImagesJSONData(body []byte, limit int) ([]byte, int, int, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	if !gjson.ValidBytes(body) {
+		return body, 0, 0, nil
+	}
+	data := gjson.GetBytes(body, "data")
+	if !data.IsArray() {
+		return body, 0, 0, nil
+	}
+	actual := len(data.Array())
+	if actual <= limit {
+		return body, actual, 0, nil
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, actual, 0, fmt.Errorf("decode Images response for overdelivery trim: %w", err)
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(payload["data"], &items); err != nil {
+		return nil, actual, 0, fmt.Errorf("decode Images data for overdelivery trim: %w", err)
+	}
+	trimmedData, err := json.Marshal(items[:limit])
+	if err != nil {
+		return nil, actual, 0, fmt.Errorf("encode trimmed Images data: %w", err)
+	}
+	payload["data"] = trimmedData
+	trimmed, err := json.Marshal(payload)
+	if err != nil {
+		return nil, actual, 0, fmt.Errorf("encode trimmed Images response: %w", err)
+	}
+	return trimmed, actual, actual - limit, nil
+}
+
+func logOpenAIImagesOverdelivery(
+	account *Account,
+	requestModel string,
+	upstreamModel string,
+	upstreamEndpoint string,
+	attemptIndex int,
+	requestedCount int,
+	remainingCount int,
+	upstreamCount int,
+	discardedCount int,
+) {
+	if discardedCount <= 0 {
+		return
+	}
+	accountID := int64(0)
+	platform := ""
+	if account != nil {
+		accountID = account.ID
+		platform = account.Platform
+	}
+	logger.L().Warn("openai_images.upstream_overdelivery",
+		zap.Int64("account_id", accountID),
+		zap.String("platform", platform),
+		zap.String("request_model", strings.TrimSpace(requestModel)),
+		zap.String("upstream_model", strings.TrimSpace(upstreamModel)),
+		zap.String("upstream_endpoint", strings.TrimSpace(upstreamEndpoint)),
+		zap.Int("attempt_index", attemptIndex),
+		zap.Int("requested_count", requestedCount),
+		zap.Int("remaining_count", remainingCount),
+		zap.Int("upstream_count", upstreamCount),
+		zap.Int("discarded_count", discardedCount),
+	)
+}
 
 // openAIImagesResponsesMainModelValue selects the Responses driver independently
 // of the image_generation tool model. An environment override lets operators
@@ -817,7 +891,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			ImageOutputSizes:   imageOutputSizes,
 		}, nil
 	} else {
-		nonStreamUsage, nonStreamCount, nonStreamSizes, err := s.handleOpenAIImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed, upstreamModel, upscaleRequired)
+		nonStreamUsage, nonStreamCount, nonStreamSizes, overdeliveryCount, err := s.handleOpenAIImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed, upstreamModel, upscaleRequired)
 		if err != nil {
 			return nil, err
 		}
@@ -825,24 +899,30 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		imageCount := nonStreamCount
 		billableCount := min(imageCount, parsed.N)
 		billableUsage := OpenAIUsage{}
-		addOpenAIImagesBillableAttemptUsage(&billableUsage, usage, imageCount, billableCount, true)
+		addOpenAIImagesBillableAttemptUsage(&billableUsage, usage, imageCount+overdeliveryCount, billableCount, true)
+		overdeliveryEvents := 0
+		if overdeliveryCount > 0 {
+			overdeliveryEvents = 1
+		}
 		return &OpenAIForwardResult{
-			RequestID:          resp.Header.Get("x-request-id"),
-			UpstreamHeaders:    resp.Header,
-			Usage:              usage,
-			BillingUsage:       &billableUsage,
-			Model:              requestModel,
-			UpstreamModel:      upstreamModel,
-			Stream:             parsed.Stream,
-			ResponseHeaders:    resp.Header.Clone(),
-			Duration:           time.Since(startTime),
-			FirstTokenMs:       firstTokenMs,
-			ImageCount:         imageCount,
-			BillableImageCount: billableCount,
-			BillableImageSize:  parsed.SizeTier,
-			ImageSize:          parsed.SizeTier,
-			ImageInputSize:     parsed.Size,
-			ImageOutputSizes:   nonStreamSizes,
+			RequestID:               resp.Header.Get("x-request-id"),
+			UpstreamHeaders:         resp.Header,
+			Usage:                   usage,
+			BillingUsage:            &billableUsage,
+			Model:                   requestModel,
+			UpstreamModel:           upstreamModel,
+			Stream:                  parsed.Stream,
+			ResponseHeaders:         resp.Header.Clone(),
+			Duration:                time.Since(startTime),
+			FirstTokenMs:            firstTokenMs,
+			ImageCount:              imageCount,
+			ImageOverdeliveryCount:  overdeliveryCount,
+			ImageOverdeliveryEvents: overdeliveryEvents,
+			BillableImageCount:      billableCount,
+			BillableImageSize:       parsed.SizeTier,
+			ImageSize:               parsed.SizeTier,
+			ImageInputSize:          parsed.Size,
+			ImageOutputSizes:        nonStreamSizes,
 		}, nil
 	}
 }
@@ -1019,17 +1099,38 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	c *gin.Context,
 	account *Account,
 	parsed *OpenAIImagesRequest,
-	_ string,
+	upstreamModel string,
 	upscaleRequired bool,
-) (OpenAIUsage, int, []string, error) {
+) (OpenAIUsage, int, []string, int, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
-		return OpenAIUsage{}, 0, nil, err
+		return OpenAIUsage{}, 0, nil, 0, err
+	}
+	expectedCount := parsed.N
+	if expectedCount <= 0 {
+		expectedCount = 1
+	}
+	body, upstreamCount, overdeliveryCount, err := limitOpenAIImagesJSONData(body, expectedCount)
+	if err != nil {
+		return OpenAIUsage{}, 0, nil, 0, err
+	}
+	if overdeliveryCount > 0 {
+		logOpenAIImagesOverdelivery(
+			account,
+			parsed.Model,
+			upstreamModel,
+			parsed.Endpoint,
+			1,
+			expectedCount,
+			expectedCount,
+			upstreamCount,
+			overdeliveryCount,
+		)
 	}
 	if upscaleRequired {
 		body, err = s.upscaleOpenAIImagesResponse(ctx, account, parsed, body)
 		if err != nil {
-			return OpenAIUsage{}, 0, nil, err
+			return OpenAIUsage{}, 0, nil, 0, err
 		}
 	} else {
 		body = s.backfillOpenAIImagesB64JSON(ctx, account, parsed, body)
@@ -1040,7 +1141,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	if upscaleRequired {
 		body, err = s.storeHighResolutionOpenAIImages(ctx, "openai_images", imageCount, body)
 		if err != nil {
-			return OpenAIUsage{}, 0, nil, err
+			return OpenAIUsage{}, 0, nil, 0, err
 		}
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -1052,7 +1153,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	}
 	c.Data(resp.StatusCode, contentType, body)
 
-	return usage, imageCount, imageOutputSizes, nil
+	return usage, imageCount, imageOutputSizes, overdeliveryCount, nil
 }
 
 func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(

@@ -397,6 +397,15 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		// Keep the image cache split in the existing usage_logs JSONB payload.
 		imageSizeBreakdown["image_cache_read_tokens"] = result.Usage.ImageCacheReadTokens
 	}
+	if result.ImageOverdeliveryCount > 0 {
+		if imageSizeBreakdown == nil {
+			imageSizeBreakdown = make(map[string]int)
+		}
+		// Preserve overdelivery diagnostics with the usage row so operators can
+		// calculate affected-request frequency across process restarts.
+		imageSizeBreakdown[openAIImagesOverdeliveryDiscardedKey] = result.ImageOverdeliveryCount
+		imageSizeBreakdown[openAIImagesOverdeliveryEventsKey] = result.ImageOverdeliveryEvents
+	}
 	usageImageSize, usageImageSizeSource := openAIUsageLogImageSize(result)
 	usageLog := &UsageLog{
 		UserID:                   user.ID,

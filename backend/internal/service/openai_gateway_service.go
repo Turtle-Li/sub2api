@@ -281,10 +281,16 @@ type OpenAIForwardResult struct {
 	// failover and allows the failed attempt's actual usage to be recorded.
 	PartialOutput bool
 	ImageCount    int
+	// ImageOverdeliveryCount is the number of upstream images discarded because
+	// they exceeded the downstream request. Discarded images are never upscaled,
+	// stored, returned, or billed to the client.
+	ImageOverdeliveryCount int
+	// ImageOverdeliveryEvents counts upstream attempts that returned more images
+	// than were still required by the downstream request.
+	ImageOverdeliveryEvents int
 	// BillableImageCount caps the number of returned images charged to the user.
 	// Zero preserves the legacy behavior of billing ImageCount. The images
-	// endpoint sets this to the requested n so upstream over-delivery remains
-	// visible and is returned to the client without increasing the charge.
+	// endpoint sets this to the number actually delivered to the client.
 	BillableImageCount int
 	// BillingUsage optionally separates user-billable token usage from the
 	// actual aggregate upstream usage retained in Usage for observability.

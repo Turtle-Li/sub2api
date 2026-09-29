@@ -651,7 +651,11 @@ type UsageLog struct {
 	ImageOutputCost    float64        `json:"image_output_cost"`
 	ImageSizeSource    *string        `json:"image_size_source"`
 	ImageSizeBreakdown map[string]int `json:"image_size_breakdown"`
-	MediaType          *string        `json:"media_type"`
+	// ImageOverdeliveryCount is the number of upstream images absorbed by the
+	// relay instead of being returned or billed to the client.
+	ImageOverdeliveryCount  int     `json:"image_overdelivery_count,omitempty"`
+	ImageOverdeliveryEvents int     `json:"image_overdelivery_events,omitempty"`
+	MediaType               *string `json:"media_type"`
 
 	// User-Agent
 	UserAgent *string `json:"user_agent"`
