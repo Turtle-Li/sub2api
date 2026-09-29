@@ -261,7 +261,7 @@ func TestBatchImageUpscaleWriteFenceSerializesTerminalCleanupAndRejectsPostClean
 	require.Empty(t, baseStore.objects)
 }
 
-func TestBatchImageResultIndexer_UsesOneLifecycleDeadlineAcrossItems(t *testing.T) {
+func TestBatchImageResultIndexer_GivesEachItemItsOwnJobDeadline(t *testing.T) {
 	upscaleAPI := newBatchImageUpscaleTestAPI()
 	upscaleAPI.resultDelay = 600 * time.Millisecond
 	t.Cleanup(upscaleAPI.Close)
@@ -285,9 +285,9 @@ func TestBatchImageResultIndexer_UsesOneLifecycleDeadlineAcrossItems(t *testing.
 		Repo: repo, Config: cfg, Upscaler: upscaler, UpscaleStore: store,
 	}).Index(context.Background(), job, provider, &Account{})
 	require.NoError(t, err)
-	require.Equal(t, &BatchImageIndexResult{SuccessCount: 1, FailCount: 1, TotalCount: 2}, result)
-	require.Less(t, time.Since(started), 1500*time.Millisecond)
-	require.Len(t, store.objects, 1)
+	require.Equal(t, &BatchImageIndexResult{SuccessCount: 2, FailCount: 0, TotalCount: 2}, result)
+	require.Less(t, time.Since(started), 2500*time.Millisecond)
+	require.Len(t, store.objects, 2)
 	require.Equal(t, []int{2, 2}, upscaleAPI.SubmittedScales())
 }
 
@@ -309,6 +309,25 @@ func TestUpscaleBatchImageResultLine_RejectsSurplusImagesBeforeSideEffects(t *te
 	require.Nil(t, keys)
 	require.Empty(t, store.puts)
 	require.Empty(t, store.deletes)
+	require.Empty(t, store.objects)
+	require.Empty(t, upscaleAPI.SubmittedScales())
+}
+
+func TestUpscaleBatchImageResultLine_ExpiredOperationDoesNotSubmit(t *testing.T) {
+	upscaleAPI := newBatchImageUpscaleTestAPI()
+	t.Cleanup(upscaleAPI.Close)
+	cfg, upscaler := newBatchImageUpscaleTestService(upscaleAPI.URL(), "batch-image/delivery")
+	store := newBatchImageUpscaleTestStore()
+	job := &BatchImageJob{BatchID: "imgbatch_expired", Model: "gemini-2.5-flash-image", ImageSize: "2K"}
+	line := batchImageUpscaleTestResultLine("expired", batchImageUpscaleTestPNG(2, 3))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, count, keys, err := upscaleBatchImageResultLine(ctx, cfg, upscaler, store, noopBatchImageUpscaleWriteFencer{}, job, line)
+	upscaleErr := requireImageUpscaleError(t, err, "JOB_TIMEOUT")
+	require.ErrorIs(t, upscaleErr, context.Canceled)
+	require.Zero(t, count)
+	require.Nil(t, keys)
 	require.Empty(t, store.objects)
 	require.Empty(t, upscaleAPI.SubmittedScales())
 }

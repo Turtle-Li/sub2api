@@ -68,6 +68,10 @@ pooled payload with `shared_reference_id` while retaining its own ordered `id` a
 Sub2API resolves the pool before validation, request hashing, idempotency checks, and
 provider JSONL generation. It is intended for product-truth images reused by every output,
 but item order and role labels remain independent. Every pool entry must be referenced.
+The client therefore sends an inline shared payload to Sub2API only once. Gemini still
+receives every reference required by each independent JSONL request: resolved inline bytes
+are serialized into each applicable line, while a reusable internal `gs://` `file_uri`
+repeats only the URI. Use `file_uri` when avoiding repeated provider-upload bytes matters.
 The field does not weaken per-item model limits: resolved shared and inline references are
 counted together. The normalized request clears the transport pool and reference IDs, so
 an expanded legacy request and its compact equivalent have the same semantic request hash.
@@ -91,6 +95,12 @@ Current model limits are:
 - Per batch job: up to 128 MB decoded inline reference image data total. For large batches or repeated reference images, prefer `gs://` `file_uri` references or split the request into multiple jobs.
 
 `output_count` is optional per item and defaults to `1`. It means "repeat this prompt and reference image set N times" rather than relying on Gemini to return multiple images from one upstream request. The backend expands each repeat into a separate provider JSONL line with suffixed custom ids such as `cover_001_01`, `cover_001_02`. Current limits are:
+
+The OpenAI-compatible `/v1/images/generations` `n` field likewise repeats one
+prompt and one reference set; it cannot express ten different prompt/reference
+assignments. Use ten batch `items` when every output needs its own prompt or
+reference set. Each item becomes its own keyed JSONL request, and results are
+reconciled back to the expanded `custom_id` rather than by provider row order.
 
 - Per prompt item: up to 4 output images.
 - Per batch job after expansion: up to 50 expected outputs at `1K`, 15 at `2K`, and 10 at `4K`. These are hard generated-output caps; clients and Codex skills must split larger workloads before submission.

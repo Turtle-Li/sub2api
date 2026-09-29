@@ -27,10 +27,11 @@ import (
 )
 
 const (
-	imageUpscaleVaultSocket        = "/run/sub2api-upscale-vault/public.sock"
-	imageUpscaleMaxSourceBytes     = 16 * 1024 * 1024
-	imageUpscaleMaxSourceDimension = 2048
-	imageUpscaleMaxSourcePixels    = 2 * 1024 * 1024
+	imageUpscaleVaultSocket         = "/run/sub2api-upscale-vault/public.sock"
+	imageUpscaleMaxSourceBytes      = 16 * 1024 * 1024
+	imageUpscaleMaxSourceDimension  = 2048
+	imageUpscaleMaxSourcePixels     = 2 * 1024 * 1024
+	imageUpscaleMaxOperationTimeout = 25 * time.Minute
 )
 
 var errImageUpscaleResultTooLarge = errors.New("response body exceeds limit")
@@ -274,6 +275,9 @@ func (s *ImageUpscaleService) upscaleWithSourceLoader(
 	}
 	jobCtx, cancel := imageUpscaleLifecycleContext(ctx, s.cfg)
 	defer cancel()
+	if ctxErr := jobCtx.Err(); ctxErr != nil {
+		return nil, imageUpscaleError("JOB_TIMEOUT", 0, true, ctxErr)
+	}
 	if err := s.acquireClass(jobCtx, class); err != nil {
 		return nil, err
 	}
@@ -305,6 +309,9 @@ func (s *ImageUpscaleService) upscaleToRequestedSizeWithSourceLoader(
 	}
 	jobCtx, cancel := imageUpscaleLifecycleContext(ctx, s.cfg)
 	defer cancel()
+	if ctxErr := jobCtx.Err(); ctxErr != nil {
+		return nil, imageUpscaleError("JOB_TIMEOUT", 0, true, ctxErr)
+	}
 	if err := s.acquireClass(jobCtx, class); err != nil {
 		return nil, err
 	}
@@ -416,11 +423,39 @@ func validateUpscaleSource(source []byte) (int, int, string, error) {
 }
 
 func imageUpscaleLifecycleContext(ctx context.Context, cfg config.ImageUpscaleConfig) (context.Context, context.CancelFunc) {
-	jobTimeout := time.Duration(cfg.JobTimeoutSeconds) * time.Second
-	if jobTimeout <= 0 {
-		jobTimeout = 15 * time.Minute
+	return context.WithTimeout(ctx, imageUpscaleJobTimeout(cfg))
+}
+
+func imageUpscaleJobTimeout(cfg config.ImageUpscaleConfig) time.Duration {
+	timeout := time.Duration(cfg.JobTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		return 15 * time.Minute
 	}
-	return context.WithTimeout(ctx, jobTimeout)
+	return timeout
+}
+
+// A multi-image operation gets enough time for independent Mini jobs without
+// allowing one request to grow to itemCount times the per-job worst case.
+func imageUpscaleOperationContext(ctx context.Context, cfg config.ImageUpscaleConfig, itemCount int) (context.Context, context.CancelFunc) {
+	if itemCount < 1 {
+		itemCount = 1
+	}
+	jobTimeout := imageUpscaleJobTimeout(cfg)
+	operationTimeout := jobTimeout
+	if itemCount > 1 {
+		if jobTimeout > imageUpscaleMaxOperationTimeout/time.Duration(itemCount) {
+			operationTimeout = imageUpscaleMaxOperationTimeout
+		} else {
+			operationTimeout = jobTimeout * time.Duration(itemCount)
+			if operationTimeout > imageUpscaleMaxOperationTimeout {
+				operationTimeout = imageUpscaleMaxOperationTimeout
+			}
+		}
+		if operationTimeout < jobTimeout {
+			operationTimeout = jobTimeout
+		}
+	}
+	return context.WithTimeout(ctx, operationTimeout)
 }
 
 func (s *ImageUpscaleService) acquire(ctx context.Context) error {

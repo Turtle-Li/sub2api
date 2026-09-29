@@ -24,7 +24,7 @@ func (s *OpenAIGatewayService) upscaleOpenAIImageResults(
 	if s == nil || s.imageUpscaler == nil || !s.imageUpscaler.Active() {
 		return imageUpscaleError("UNAVAILABLE", 0, false, nil)
 	}
-	upscaleCtx, cancelUpscale := imageUpscaleLifecycleContext(ctx, s.imageUpscaler.cfg)
+	upscaleCtx, cancelUpscale := imageUpscaleOperationContext(ctx, s.imageUpscaler.cfg, len(results))
 	defer cancelUpscale()
 	workClass := imageUpscaleWorkInteractive
 	if len(results) > 1 {
@@ -95,7 +95,7 @@ func (s *OpenAIGatewayService) upscaleOpenAIImagesResponse(
 			fmt.Errorf("upstream returned %d images, expected %d", len(itemList), expectedCount),
 		)
 	}
-	upscaleCtx, cancelUpscale := imageUpscaleLifecycleContext(ctx, s.imageUpscaler.cfg)
+	upscaleCtx, cancelUpscale := imageUpscaleOperationContext(ctx, s.imageUpscaler.cfg, len(itemList))
 	defer cancelUpscale()
 	workClass := imageUpscaleWorkInteractive
 	if len(itemList) > 1 {

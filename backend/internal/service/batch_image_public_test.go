@@ -327,6 +327,12 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 				gemini.submits[0].Items[1].ReferenceImages[2].ID,
 			},
 		)
+		require.Equal(t, []byte("front"), gemini.submits[0].Items[0].ReferenceImages[0].Data)
+		require.Equal(t, []byte("back"), gemini.submits[0].Items[0].ReferenceImages[1].Data)
+		require.Equal(t, []byte("scene-1"), gemini.submits[0].Items[0].ReferenceImages[2].Data)
+		require.Equal(t, []byte("back"), gemini.submits[0].Items[1].ReferenceImages[0].Data)
+		require.Equal(t, []byte("front"), gemini.submits[0].Items[1].ReferenceImages[1].Data)
+		require.Equal(t, []byte("scene-2"), gemini.submits[0].Items[1].ReferenceImages[2].Data)
 	})
 
 	t.Run("validates request fields", func(t *testing.T) {

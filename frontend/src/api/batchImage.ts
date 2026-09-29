@@ -23,6 +23,14 @@ export interface BatchImageSubmitItem {
 export interface BatchImageReferenceImage {
   id?: string
   type?: string
+  shared_reference_id?: string
+  mime_type?: string
+  data?: string
+  file_uri?: string
+}
+
+export interface BatchImageSharedReferenceImage {
+  shared_reference_id: string
   mime_type: string
   data?: string
   file_uri?: string
@@ -36,6 +44,7 @@ export interface BatchImageSubmitRequest {
   image_size?: '1K' | '2K' | '4K' | string
   response_mime_type?: string
   aspect_ratio?: string
+  shared_reference_images?: BatchImageSharedReferenceImage[]
   items: BatchImageSubmitItem[]
   metadata?: Record<string, string>
 }

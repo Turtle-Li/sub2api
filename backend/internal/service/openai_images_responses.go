@@ -2140,6 +2140,23 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		}
 		return nil, err
 	}
+	var upscaleOperationCtx context.Context
+	var cancelUpscaleOperation context.CancelFunc
+	defer func() {
+		if cancelUpscaleOperation != nil {
+			cancelUpscaleOperation()
+		}
+	}()
+	sharedUpscaleOperationContext := func() context.Context {
+		if upscaleOperationCtx == nil {
+			upscaleOperationCtx, cancelUpscaleOperation = imageUpscaleOperationContext(
+				upstreamCtx,
+				s.imageUpscaler.cfg,
+				parsed.N,
+			)
+		}
+		return upscaleOperationCtx
+	}
 
 	upstreamTotalStart := time.Now()
 	for attemptIndex := 0; imageCount < parsed.N; attemptIndex++ {
@@ -2154,7 +2171,11 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		if stickySeed != "" && attemptIndex > 0 {
 			stickySeed = fmt.Sprintf("%s|image-fill=%d", stickySeed, attemptIndex+1)
 		}
-		upstreamReq, buildErr := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, stickySeed, false)
+		attemptUpstreamCtx := upstreamCtx
+		if upscaleOperationCtx != nil {
+			attemptUpstreamCtx = upscaleOperationCtx
+		}
+		upstreamReq, buildErr := s.buildUpstreamRequest(attemptUpstreamCtx, c, account, responsesBody, token, true, stickySeed, false)
 		if buildErr != nil {
 			return resultOnError(buildErr)
 		}
@@ -2289,7 +2310,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			collected.results = collected.results[:remaining]
 		}
 		if upscaleRequired {
-			if upscaleErr := s.upscaleOpenAIImageResults(upstreamCtx, parsed, collected.results); upscaleErr != nil {
+			if upscaleErr := s.upscaleOpenAIImageResults(sharedUpscaleOperationContext(), parsed, collected.results); upscaleErr != nil {
 				return resultOnError(upscaleErr)
 			}
 			if len(collected.results) > 0 {

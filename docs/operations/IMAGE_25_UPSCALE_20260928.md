@@ -47,11 +47,20 @@ Supported scales are 2 and 4 and the selected preset is `faithful`.
 One process-level limiter is shared by synchronous and batch calls. Production
 uses one active request and at most eight local waiters, matching the remote
 gateway's single worker and bounded queue. A full local queue returns a typed
-429/backpressure error. The complete submit/poll/result lifecycle has a 900
-second deadline.
-All images in one synchronous, asynchronous, or batch-indexing operation share
-that single 900-second lifecycle deadline; requesting multiple outputs never
-multiplies the Office Mini occupancy window.
+429/backpressure error. Each Office Mini submit/poll/result job has its own 900
+second deadline, including its queue wait and source loading. A multi-image
+operation receives the sum of its per-image job budgets with a 25-minute cap
+at the production 900-second setting, so one image cannot consume the complete
+budget of a later image. The operation window never becomes shorter than an
+explicitly configured per-job timeout. The
+parent request or worker context can still impose an earlier deadline; the
+OpenAI-compatible asynchronous task wrapper currently has a 30-minute total
+execution deadline, leaving five minutes for final storage and task commit.
+For Responses shortfall filling, the shared window starts with the first Mini
+job and is also inherited by later provider fill attempts, so those attempts
+cannot reset or outlive the remaining high-resolution operation budget.
+The scheduler releases and reacquires the Mini slot between images, so a
+multi-image operation does not reserve the remote worker for its entire lifetime.
 
 Batch admission is resolution-aware after `output_count` expansion: `1K` is
 limited to 50 output images, `2K` to 15, and `4K` to 10. A nonblocking
@@ -86,6 +95,11 @@ A synchronous request is atomic: if any returned image cannot be upscaled, the
 request fails and Sub2 does not charge it. Batch processing is item-isolated:
 one failed item is stored as `IMAGE_UPSCALE_*`, successful items remain
 downloadable, and settlement charges successful images only.
+The OpenAI-compatible asynchronous `n>1` wrapper preserves the same atomic
+Images result contract: if its parent deadline expires before all images and
+required storage complete, the task fails without customer billing and does not
+publish a partial result. Workloads that require completed items to survive a
+later item timeout must use the batch API's separate `custom_id` items.
 The synchronous client response contains at most the requested `n` images, and
 every expanded batch `custom_id` result must contain exactly one image. For the
 Responses shortfall loop, each attempt may return fewer than the remaining

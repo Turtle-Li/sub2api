@@ -144,6 +144,9 @@ func upscaleBatchImageResultLine(
 	if _, required := RequestedImageUpscaleScale(job.ImageSize); !required {
 		return "", "", 0, nil, errors.New("batch item does not require upscale")
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", "", 0, nil, imageUpscaleError("JOB_TIMEOUT", 0, true, ctxErr)
+	}
 	parts, err := ExtractBatchImagePartsFromResultLine(line)
 	if err != nil || strings.TrimSpace(parts.CustomID) == "" {
 		return "", "", 0, nil, imageUpscaleError("SOURCE_RESULT_INVALID", 0, false, err)

@@ -16,6 +16,16 @@ The aliases are `/images/generations/async`, `/images/edits/async`, and `/images
 
 Only OpenAI and Grok groups are supported. Requests use the same JSON or multipart payload as the corresponding synchronous endpoint. Streaming image requests are rejected because a polled task returns one final JSON result.
 
+An OpenAI-compatible task remains atomic when `n > 1`: polling exposes one final
+result only after every requested image and required object-storage write succeeds.
+Each Office Mini image job gets its own configured lifecycle deadline; at the
+production 900-second setting, the combined post-processing window expands with
+the image count but is capped at 25 minutes inside the task's 30-minute total
+execution deadline. If that parent deadline or
+any image fails, the task returns `failed`, publishes no partial image list, and
+does not charge the customer. Use `/v1/images/batches` when completed items must
+remain available even if another item later fails or times out.
+
 For supported image models, a requested `2K` or `4K` tier follows the same
 post-processing path as the synchronous Images API: the provider receives the
 ratio-matched `1K` request, then the shared private adapter performs native

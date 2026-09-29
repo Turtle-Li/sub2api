@@ -53,13 +53,12 @@ func processGeminiImageGenerationResponse(
 	if scale == 4 {
 		requestedSize = ImageBillingSize4K
 	}
-	upscaleCtx, cancelUpscale := imageUpscaleLifecycleContext(ctx, upscaler.cfg)
-	defer cancelUpscale()
-
 	var response map[string]any
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, imageUpscaleError("INVALID_IMAGE_RESPONSE", 0, false, err)
 	}
+	upscaleCtx, cancelUpscale := imageUpscaleOperationContext(ctx, upscaler.cfg, countGeminiInlineImages(response))
+	defer cancelUpscale()
 
 	images := make([]geminiUpscaledImage, 0, 1)
 	candidates, _ := response["candidates"].([]any)
@@ -186,4 +185,32 @@ func processGeminiImageGenerationResponse(
 		return nil, imageUpscaleError("RESPONSE_REWRITE_FAILED", 0, false, err)
 	}
 	return out, nil
+}
+
+func countGeminiInlineImages(response map[string]any) int {
+	count := 0
+	candidates, _ := response["candidates"].([]any)
+	for _, candidateValue := range candidates {
+		candidate, _ := candidateValue.(map[string]any)
+		content, _ := candidate["content"].(map[string]any)
+		parts, _ := content["parts"].([]any)
+		for _, partValue := range parts {
+			part, _ := partValue.(map[string]any)
+			inline, _ := part["inlineData"].(map[string]any)
+			if inline == nil {
+				inline, _ = part["inline_data"].(map[string]any)
+			}
+			if inline == nil {
+				continue
+			}
+			contentType, _ := inline["mimeType"].(string)
+			if strings.TrimSpace(contentType) == "" {
+				contentType, _ = inline["mime_type"].(string)
+			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "image/") {
+				count++
+			}
+		}
+	}
+	return count
 }

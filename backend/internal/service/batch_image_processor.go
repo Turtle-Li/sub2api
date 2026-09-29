@@ -387,7 +387,7 @@ func (i *BatchImageResultIndexer) Index(ctx context.Context, job *BatchImageJob,
 	upscaleCtx := ctx
 	cancelUpscale := func() {}
 	if batchImageJobRequiresUpscale(job) && i.Upscaler != nil {
-		upscaleCtx, cancelUpscale = imageUpscaleLifecycleContext(ctx, i.Upscaler.cfg)
+		upscaleCtx, cancelUpscale = imageUpscaleOperationContext(ctx, i.Upscaler.cfg, len(expected))
 	}
 	defer cancelUpscale()
 	lineNumber := 0

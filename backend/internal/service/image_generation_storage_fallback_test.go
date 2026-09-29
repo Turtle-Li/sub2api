@@ -249,7 +249,7 @@ func TestProcessGeminiImageGenerationResponseStorageSuccessUsesOnlyFileData(t *t
 	require.NotEmpty(t, gjson.GetBytes(out, "candidates.0.content.parts.1.file_data.file_uri").String())
 }
 
-func TestProcessGeminiImageGenerationResponseUsesOneLifecycleDeadlineForAllImages(t *testing.T) {
+func TestProcessGeminiImageGenerationResponseGivesEachImageItsOwnJobDeadline(t *testing.T) {
 	result := imageUpscaleTestPNG(t, 4, 6)
 	var resultCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -275,9 +275,9 @@ func TestProcessGeminiImageGenerationResponseUsesOneLifecycleDeadlineForAllImage
 	body := []byte(`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"` + source + `"}},{"inlineData":{"mimeType":"image/png","data":"` + source + `"}}]}}]}`)
 	started := time.Now()
 
-	_, err := processGeminiImageGenerationResponse(context.Background(), upscaler, nil, body, 2, "gemini_native")
-	require.Error(t, err)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, time.Since(started), 1500*time.Millisecond)
+	out, err := processGeminiImageGenerationResponse(context.Background(), upscaler, nil, body, 2, "gemini_native")
+	require.NoError(t, err)
+	require.Len(t, gjson.GetBytes(out, "candidates.0.content.parts").Array(), 2)
+	require.Less(t, time.Since(started), 2500*time.Millisecond)
 	require.Equal(t, int32(2), resultCalls.Load())
 }

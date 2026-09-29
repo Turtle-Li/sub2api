@@ -482,6 +482,30 @@ func TestImageUpscaleAdmissionPrecedesSourceLoader(t *testing.T) {
 	require.Zero(t, loaderCalls.Load())
 }
 
+func TestImageUpscaleOperationContextScalesAndCapsDeadline(t *testing.T) {
+	tests := []struct {
+		name       string
+		jobSeconds int
+		itemCount  int
+		want       time.Duration
+	}{
+		{name: "single item keeps job timeout", jobSeconds: 900, itemCount: 1, want: 15 * time.Minute},
+		{name: "short test jobs scale by item count", jobSeconds: 1, itemCount: 2, want: 2 * time.Second},
+		{name: "large operation is capped", jobSeconds: 900, itemCount: 10, want: imageUpscaleMaxOperationTimeout},
+		{name: "operation never shortens configured job timeout", jobSeconds: 1800, itemCount: 2, want: 30 * time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			started := time.Now()
+			ctx, cancel := imageUpscaleOperationContext(context.Background(), config.ImageUpscaleConfig{JobTimeoutSeconds: tt.jobSeconds}, tt.itemCount)
+			defer cancel()
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.WithinDuration(t, started.Add(tt.want), deadline, 100*time.Millisecond)
+		})
+	}
+}
+
 func imageUpscaleTestConfig(baseURL string) config.ImageUpscaleConfig {
 	return config.ImageUpscaleConfig{
 		Enabled:            true,

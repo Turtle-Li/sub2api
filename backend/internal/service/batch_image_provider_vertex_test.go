@@ -5,6 +5,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestBatchImageProviderRegistry_ReturnsVertex(t *testing.T) {
@@ -97,6 +99,43 @@ func TestBuildVertexBatchJSONL_WritesReferenceImages(t *testing.T) {
 	fileData := parts[2].(map[string]any)["fileData"].(map[string]any)
 	require.Equal(t, "image/jpeg", fileData["mimeType"])
 	require.Equal(t, "gs://bucket/refs/style.jpg", fileData["fileUri"])
+}
+
+func TestBuildVertexBatchJSONL_IsolatesEachItemsPromptAndReferences(t *testing.T) {
+	input := validVertexBatchInput()
+	input.Items = []BatchImageInputItem{
+		{
+			CustomID: "product_a",
+			Prompt:   "Place product A on a white pedestal",
+			ReferenceImages: []BatchImageReference{
+				{MimeType: "image/png", Data: []byte("product-a-reference")},
+			},
+		},
+		{
+			CustomID: "product_b",
+			Prompt:   "Place product B beside a window",
+			ReferenceImages: []BatchImageReference{
+				{MimeType: "image/jpeg", Data: []byte("product-b-reference")},
+			},
+		},
+	}
+
+	jsonl, err := BuildVertexBatchJSONL(input)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(jsonl)), "\n")
+	require.Len(t, lines, 2)
+
+	require.Equal(t, "product_a", gjson.Get(lines[0], "key").String())
+	require.Equal(t, "Place product A on a white pedestal", gjson.Get(lines[0], "request.contents.0.parts.0.text").String())
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("product-a-reference")), gjson.Get(lines[0], "request.contents.0.parts.1.inlineData.data").String())
+	require.NotContains(t, lines[0], "Place product B beside a window")
+	require.NotContains(t, lines[0], base64.StdEncoding.EncodeToString([]byte("product-b-reference")))
+
+	require.Equal(t, "product_b", gjson.Get(lines[1], "key").String())
+	require.Equal(t, "Place product B beside a window", gjson.Get(lines[1], "request.contents.0.parts.0.text").String())
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("product-b-reference")), gjson.Get(lines[1], "request.contents.0.parts.1.inlineData.data").String())
+	require.NotContains(t, lines[1], "Place product A on a white pedestal")
+	require.NotContains(t, lines[1], base64.StdEncoding.EncodeToString([]byte("product-a-reference")))
 }
 
 func TestBuildVertexBatchJSONL_LabelsTypedReferenceImagesInPlace(t *testing.T) {

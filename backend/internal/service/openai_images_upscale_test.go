@@ -221,7 +221,7 @@ func TestHandleOpenAIImagesHighResSkipsB64BackfillBeforeUpscaleAdmission(t *test
 	require.Empty(t, upstream.requests, "URL backfill must not run before upscale admission")
 }
 
-func TestUpscaleOpenAIImagesResponseUsesOneLifecycleDeadlineForAllImages(t *testing.T) {
+func TestUpscaleOpenAIImagesResponseGivesEachImageItsOwnJobDeadline(t *testing.T) {
 	result := testUpscalePNG(t, 4, 6)
 	var resultCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,13 +258,13 @@ func TestUpscaleOpenAIImagesResponseUsesOneLifecycleDeadlineForAllImages(t *test
 	body := []byte(`{"data":[{"b64_json":"` + source + `"},{"b64_json":"` + source + `"}]}`)
 	started := time.Now()
 
-	_, err := (&OpenAIGatewayService{imageUpscaler: upscaler}).upscaleOpenAIImagesResponse(
+	got, err := (&OpenAIGatewayService{imageUpscaler: upscaler}).upscaleOpenAIImagesResponse(
 		context.Background(), &Account{},
 		&OpenAIImagesRequest{N: 2, Size: "2K", SizeTier: "2K", ResponseFormat: "b64_json"}, body,
 	)
-	require.Error(t, err)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, time.Since(started), 1500*time.Millisecond)
+	require.NoError(t, err)
+	require.Len(t, gjson.GetBytes(got, "data").Array(), 2)
+	require.Less(t, time.Since(started), 2500*time.Millisecond)
 	require.Equal(t, int32(2), resultCalls.Load())
 }
 

@@ -33,6 +33,22 @@ type openAIImagesReadErrorBody struct {
 	err error
 }
 
+type openAIImagesDelayedReadCloser struct {
+	reader  io.Reader
+	delay   time.Duration
+	delayed bool
+}
+
+func (r *openAIImagesDelayedReadCloser) Read(p []byte) (int, error) {
+	if !r.delayed {
+		r.delayed = true
+		time.Sleep(r.delay)
+	}
+	return r.reader.Read(p)
+}
+
+func (r *openAIImagesDelayedReadCloser) Close() error { return nil }
+
 func (b *openAIImagesReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b *openAIImagesReadErrorBody) Close() error             { return nil }
 
@@ -1139,6 +1155,74 @@ func TestOpenAIGatewayServiceForwardImages_OAuthFillsShortfallWithoutBillingRetr
 	require.Equal(t, "aW1hZ2UtMg==", data[1].Get("b64_json").String())
 	require.Equal(t, "aW1hZ2UtMw==", data[2].Get("b64_json").String())
 	require.NotContains(t, rec.Body.String(), "image_count_mismatch")
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthShortfallSharesUpscaleOperationDeadline(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-1","prompt":"draw two cats","n":2,"size":"2K"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	source := base64.StdEncoding.EncodeToString(imageUpscaleTestPNG(t, 2, 3))
+	resultImage := imageUpscaleTestPNG(t, 4, 6)
+	var upscaleCalls atomic.Int32
+	upscaleAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/upscale":
+			upscaleCalls.Add(1)
+			imageUpscaleTestWriteJSON(w, http.StatusAccepted, `{"job":{"id":"job-shortfall-deadline"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/job-shortfall-deadline":
+			imageUpscaleTestWriteJSON(w, http.StatusOK, `{"job":{"state":"completed"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/job-shortfall-deadline/result":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(resultImage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upscaleAPI.Close)
+	upscaleConfig := imageUpscaleTestConfig(upscaleAPI.URL)
+	upscaleConfig.JobTimeoutSeconds = 1
+
+	responsePayload := fmt.Sprintf(
+		"data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000000,\"tool_usage\":{\"image_gen\":{\"input_tokens\":10,\"output_tokens\":229,\"output_tokens_details\":{\"image_tokens\":229},\"images\":1}},\"output\":[{\"type\":\"image_generation_call\",\"result\":%q,\"output_format\":\"png\"}]}}\n\ndata: [DONE]\n\n",
+		source,
+	)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(responsePayload)),
+		},
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: &openAIImagesDelayedReadCloser{
+				reader: strings.NewReader(responsePayload),
+				delay:  2200 * time.Millisecond,
+			},
+		},
+	}}
+	svc := newOpenAIImagesTestService(upstream)
+	svc.imageUpscaler = newImageUpscaleTestService(upscaleConfig, upscaleAPI.Client(), imageUpscaleTestStaticLoader)
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	account := &Account{
+		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 3,
+		Credentials: map[string]any{"access_token": "token-123", "chatgpt_account_id": "acct-123"},
+	}
+
+	forwarded, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	upscaleErr := requireImageUpscaleError(t, err, "JOB_TIMEOUT")
+	require.ErrorIs(t, upscaleErr, context.DeadlineExceeded)
+	require.Nil(t, forwarded)
+	require.Empty(t, rec.Body.String())
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, int32(1), upscaleCalls.Load(), "an expired shared operation must not submit another Mini job")
 }
 
 func TestOpenAIGatewayServiceForwardImages_OAuthReturnsOverageAndCapsBillableUsage(t *testing.T) {
