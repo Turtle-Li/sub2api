@@ -586,6 +586,12 @@ func detachUpstreamContext(ctx context.Context) (context.Context, context.Cancel
 	if ctx == nil {
 		return context.Background(), func() {}
 	}
+	// Async image requests already detached from the submitting HTTP request and
+	// carry their own execution deadline. Preserve that deadline instead of
+	// stripping it a second time.
+	if _, ok := asyncImageTaskStorageID(ctx); ok {
+		return ctx, func() {}
+	}
 	return context.WithoutCancel(ctx), func() {}
 }
 

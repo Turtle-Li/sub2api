@@ -16,12 +16,26 @@ The aliases are `/images/generations/async`, `/images/edits/async`, and `/images
 
 Only OpenAI and Grok groups are supported. Requests use the same JSON or multipart payload as the corresponding synchronous endpoint. Streaming image requests are rejected because a polled task returns one final JSON result.
 
-For exact Image 2.5 models, a requested `2K` or `4K` tier follows the same
+For supported image models, a requested `2K` or `4K` tier follows the same
 post-processing path as the synchronous Images API: the provider receives the
 ratio-matched `1K` request, then the shared private adapter performs native
-`2x` or `4x` upscaling. The completed bytes are still passed through the normal
-async object-storage uploader before the task becomes pollable; `1K` and other
-models are unchanged. See `docs/operations/IMAGE_25_UPSCALE_20260928.md`.
+`2x` or `4x` upscaling. For OpenAI-platform tasks, the gateway writes the final
+high-resolution bytes directly under the `imgtask_*` task ID before usage is
+recorded. The task finalizer then persists the compact URL result without a
+second download/upload. Required storage failure therefore fails the task
+before usage billing instead of producing a charged task whose final offload
+failed. `1K` tasks retain the normal async uploader path. See
+`docs/operations/IMAGE_25_UPSCALE_20260928.md`.
+
+For Codex OAuth, a non-streaming request with `n > 1` uses the Responses
+transport. The first upstream request asks for every remaining image in
+parallel; another upstream request is made only when the preceding response is
+short. Those attempts are internal: one async submission still creates one
+`imgtask_*` task, one usage log, and one idempotent billing transaction. Real
+upstream usage aggregates all successful attempts, while customer billing
+counts the initial prompt/input once and the delivered image output up to the
+requested `n`, using the originally requested size tier. A `2K`/`4K` attempt
+that returns more images than remain is rejected before Mini or object storage.
 
 ## Enabling the feature (object storage)
 

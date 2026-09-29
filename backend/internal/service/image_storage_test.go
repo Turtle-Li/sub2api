@@ -244,3 +244,54 @@ func TestImageTaskServiceCompleteOffloadFailureMarksFailed(t *testing.T) {
 	require.Contains(t, string(got.Error), "object storage")
 	require.NotContains(t, string(got.Result), "b64_json", "failed offload must not persist base64 to Redis")
 }
+
+func TestImageTaskServiceCompleteFailsWhenDynamicStorageWasDisabled(t *testing.T) {
+	store := &imageTaskMemoryStore{}
+	enabled := true
+	uploader := NewImageResultUploader(&fakeImageStorage{}, "images/", 0, nil)
+	svc := NewImageTaskServiceWithResolver(store, func() (*ImageResultUploader, bool) {
+		if !enabled {
+			return nil, false
+		}
+		return uploader, true
+	}, time.Hour, time.Minute)
+	owner := ImageTaskOwner{UserID: 1, APIKeyID: 2}
+	created, err := svc.Create(context.Background(), owner)
+	require.NoError(t, err)
+
+	enabled = false
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
+	result := json.RawMessage(`{"data":[{"b64_json":"` + b64 + `"}]}`)
+	require.NoError(t, svc.Complete(context.Background(), created.ID, http.StatusOK, result))
+
+	got, err := svc.Get(context.Background(), owner, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, ImageTaskStatusFailed, got.Status)
+	require.Equal(t, http.StatusBadGateway, got.HTTPStatus)
+	require.Contains(t, string(got.Error), "storage is unavailable")
+	require.Empty(t, got.Result, "inline image bytes must never be stored in Redis")
+}
+
+func TestImageTaskServiceCompletePreservesCompactURLWhenDynamicStorageWasDisabled(t *testing.T) {
+	store := &imageTaskMemoryStore{}
+	enabled := true
+	uploader := NewImageResultUploader(&fakeImageStorage{}, "images/", 0, nil)
+	svc := NewImageTaskServiceWithResolver(store, func() (*ImageResultUploader, bool) {
+		if !enabled {
+			return nil, false
+		}
+		return uploader, true
+	}, time.Hour, time.Minute)
+	owner := ImageTaskOwner{UserID: 1, APIKeyID: 2}
+	created, err := svc.Create(context.Background(), owner)
+	require.NoError(t, err)
+
+	enabled = false
+	result := json.RawMessage(`{"data":[{"url":"https://provider.example.test/image.png"}]}`)
+	require.NoError(t, svc.Complete(context.Background(), created.ID, http.StatusOK, result))
+
+	got, err := svc.Get(context.Background(), owner, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, ImageTaskStatusCompleted, got.Status)
+	require.JSONEq(t, string(result), string(got.Result))
+}

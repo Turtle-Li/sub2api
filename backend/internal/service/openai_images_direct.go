@@ -304,14 +304,10 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(
 			body = codexDirectImageURL(body, fmt.Sprintf("data.%d.", i), format)
 		}
 	}
-	if upscaleRequired && s.imageStorageResolver != nil {
-		if uploader, enabled := s.imageStorageResolver(); enabled && uploader != nil {
-			storedBody, storageErr := uploader.Rewrite(ctx, newSynchronousImageResultID(), body)
-			if storageErr != nil {
-				logImageStorageFallback("openai_images_direct", len(results), storageErr)
-			} else {
-				body = storedBody
-			}
+	if upscaleRequired {
+		body, err = s.storeHighResolutionOpenAIImages(ctx, "openai_images_direct", len(results), body)
+		if err != nil {
+			return OpenAIUsage{}, 0, nil, err
 		}
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

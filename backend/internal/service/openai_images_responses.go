@@ -2266,6 +2266,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			)
 			return resultOnError(handledErr)
 		}
+		if upscaleRequired && len(collected.results) > remaining {
+			return resultOnError(imageUpscaleError(
+				"INVALID_IMAGE_COUNT",
+				0,
+				false,
+				fmt.Errorf("upstream returned %d images, expected at most %d for this attempt", len(collected.results), remaining),
+			))
+		}
 		if upscaleRequired {
 			if upscaleErr := s.upscaleOpenAIImageResults(upstreamCtx, parsed, collected.results); upscaleErr != nil {
 				return resultOnError(upscaleErr)
@@ -2318,14 +2326,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		if responseErr != nil {
 			return resultOnError(responseErr)
 		}
-		if upscaleRequired && s.imageStorageResolver != nil {
-			if uploader, enabled := s.imageStorageResolver(); enabled && uploader != nil {
-				storedBody, storageErr := uploader.Rewrite(upstreamCtx, newSynchronousImageResultID(), responseBody)
-				if storageErr != nil {
-					logImageStorageFallback("openai_images_responses", imageCount, storageErr)
-				} else {
-					responseBody = storedBody
-				}
+		if upscaleRequired {
+			responseBody, responseErr = s.storeHighResolutionOpenAIImages(
+				upstreamCtx, "openai_images_responses", imageCount, responseBody,
+			)
+			if responseErr != nil {
+				return resultOnError(responseErr)
 			}
 		}
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), firstHeaders, s.responseHeaderFilter)

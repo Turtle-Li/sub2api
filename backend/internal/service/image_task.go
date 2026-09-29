@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -191,7 +192,8 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 	if !json.Valid(result) {
 		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned a non-JSON image response"))
 	}
-	if uploader, _ := s.current(); uploader != nil {
+	uploader, enabled := s.current()
+	if enabled && uploader != nil {
 		rewritten, err := uploader.Rewrite(ctx, id, result)
 		if err != nil {
 			// 转存失败不回退存 base64，避免大 blob 撑爆 Redis：直接把任务标记为失败。
@@ -199,8 +201,52 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 			return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "failed to store generated image to object storage"))
 		}
 		result = rewritten
+	} else if err := validateStoredImageTaskResult(result); err != nil {
+		// An in-flight task may outlive a dynamic storage toggle. Preserve an
+		// already compact URL result, but never allow inline bytes into Redis when
+		// no uploader is available.
+		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "image object storage is unavailable"))
 	}
 	return s.finish(ctx, id, ImageTaskStatusCompleted, statusCode, result, nil)
+}
+
+// CompleteStored persists a result that the gateway has already written to
+// object storage under the task ID. It deliberately does not call Rewrite
+// again, preventing duplicate objects and a second fallible download/upload.
+func (s *ImageTaskService) CompleteStored(ctx context.Context, id string, statusCode int, result json.RawMessage) error {
+	if err := validateStoredImageTaskResult(result); err != nil {
+		logger.L().Error("image_task.stored_result_invalid", zap.String("task_id", id), zap.Error(err))
+		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "generated image was not stored correctly"))
+	}
+	return s.finish(ctx, id, ImageTaskStatusCompleted, statusCode, result, nil)
+}
+
+func validateStoredImageTaskResult(result json.RawMessage) error {
+	if !json.Valid(result) {
+		return errors.New("result is not valid JSON")
+	}
+	var response struct {
+		Data []struct {
+			URL     string          `json:"url"`
+			B64JSON json.RawMessage `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(result, &response); err != nil {
+		return fmt.Errorf("parse stored image result: %w", err)
+	}
+	if len(response.Data) == 0 {
+		return errors.New("stored image result has no images")
+	}
+	for i, item := range response.Data {
+		url := strings.TrimSpace(item.URL)
+		if url == "" || strings.HasPrefix(strings.ToLower(url), "data:") {
+			return fmt.Errorf("stored image %d has no object-storage URL", i)
+		}
+		if len(item.B64JSON) > 0 && string(item.B64JSON) != "null" {
+			return fmt.Errorf("stored image %d still contains b64_json", i)
+		}
+	}
+	return nil
 }
 
 func (s *ImageTaskService) Fail(ctx context.Context, id string, statusCode int, taskErr json.RawMessage) error {

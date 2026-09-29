@@ -29,6 +29,11 @@ pixel-dimension values keep their existing provider path.
 - Billing and balance holds retain the originally requested `2K`/`4K` tier.
 - The synchronous Images API and asynchronous image-task wrapper use the same
   adapter. Batch indexing uses that same process singleton and limiter.
+- OpenAI-platform asynchronous 2K/4K results are stored once under their
+  `imgtask_*` ID inside the gateway before usage recording. Task finalization
+  only commits the already compact URL response; it never downloads and
+  uploads those results a second time. A required storage failure returns no
+  successful image result and does not enter usage billing.
 
 The fixed service contract is the Office Mini gateway source deployed on
 2026-09-28 from `deploy/office-mini-upscale-api/upscale_api/app.py` in the
@@ -83,7 +88,10 @@ one failed item is stored as `IMAGE_UPSCALE_*`, successful items remain
 downloadable, and settlement charges successful images only.
 The synchronous provider response must contain exactly the requested `n`
 images, and every expanded batch `custom_id` result must contain exactly one
-image. Cardinality mismatches fail before any upscale submission or COS write.
+image. For the Responses shortfall loop, each attempt may return fewer than the
+remaining count and trigger another attempt, but it may not return more than
+the remaining count. Cardinality mismatches fail before that attempt submits
+any image to Mini or object storage.
 
 ## Synchronous delivery and object storage fallback
 

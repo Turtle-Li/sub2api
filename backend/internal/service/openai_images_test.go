@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -953,6 +955,109 @@ func TestOpenAIGatewayServiceForwardImages_CodexDirectModelUsesResponsesForMulti
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tools.0.n").Exists())
 	require.Contains(t, gjson.GetBytes(upstream.lastBody, "instructions").String(), "exactly 2 final images")
 	require.Len(t, gjson.GetBytes(rec.Body.Bytes(), "data").Array(), 2)
+}
+
+func TestOpenAIGatewayServiceForwardImages_CodexResponsesRejectsHighResolutionOverageBeforeUpscale(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2.5-sunburst","prompt":"draw two models","size":"2K","n":2}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	source := base64.StdEncoding.EncodeToString(testUpscalePNG(t, 2, 3))
+	responseBody := fmt.Sprintf(
+		"data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000000,\"tool_usage\":{\"image_gen\":{\"input_tokens\":20,\"output_tokens\":60,\"output_tokens_details\":{\"image_tokens\":60},\"images\":3}},\"output\":[{\"type\":\"image_generation_call\",\"result\":%q},{\"type\":\"image_generation_call\",\"result\":%q},{\"type\":\"image_generation_call\",\"result\":%q}]}}\n\ndata: [DONE]\n\n",
+		source,
+		source,
+		source,
+	)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
+	}}
+
+	var upscaleCalls atomic.Int32
+	mini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upscaleCalls.Add(1)
+		http.Error(w, "unexpected upscale request", http.StatusInternalServerError)
+	}))
+	t.Cleanup(mini.Close)
+	svc := newOpenAIImagesTestService(upstream)
+	svc.imageUpscaler = &ImageUpscaleService{
+		cfg: config.ImageUpscaleConfig{
+			Enabled: true, BaseURL: mini.URL, APIKeyVaultRef: "vault://test/key#api_key", VaultAgentSocket: imageUpscaleVaultSocket,
+			RequestTimeoutSeconds: 2, JobTimeoutSeconds: 30, PollIntervalMillis: 1, MaxConcurrent: 1, MaxQueue: 4, MaxResultBytes: 1024 * 1024,
+		},
+		httpClient: mini.Client(),
+		loadAPIKey: func(context.Context) ([]byte, error) {
+			return []byte("test-token"), nil
+		},
+		slots: make(chan struct{}, 1),
+	}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	result, err := svc.ForwardImages(context.Background(), c, directImagesTestAccount(), body, parsed, "")
+	require.Nil(t, result)
+	_ = requireImageUpscaleError(t, err, "INVALID_IMAGE_COUNT")
+	require.Zero(t, upscaleCalls.Load(), "cardinality validation must run before Mini")
+	require.Zero(t, rec.Body.Len(), "an invalid cardinality must not write a partial response")
+}
+
+func TestOpenAIGatewayServiceForwardImages_CodexResponsesAsyncHighResolutionN10StoresOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2.5-sunburst","prompt":"draw ten models","size":"2K","n":10}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	upscaler, _, source := newSynchronousImageUpscaleTestService(t)
+	outputs := make([]string, 10)
+	for i := range outputs {
+		outputs[i] = fmt.Sprintf(`{"type":"image_generation_call","result":%q}`, source)
+	}
+	responseBody := fmt.Sprintf(
+		"data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000000,\"tool_usage\":{\"image_gen\":{\"input_tokens\":20,\"output_tokens\":200,\"output_tokens_details\":{\"image_tokens\":200},\"images\":10}},\"output\":[%s]}}\n\ndata: [DONE]\n\n",
+		strings.Join(outputs, ","),
+	)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
+	}}
+	storage := &failNthImageStorage{}
+	uploader := NewImageResultUploader(storage, "images/", 0, nil)
+	svc := newOpenAIImagesTestService(upstream)
+	svc.imageUpscaler = upscaler
+	svc.imageStorageResolver = func() (*ImageResultUploader, bool) { return uploader, true }
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	ctx := WithAsyncImageTaskStorage(context.Background(), "imgtask_responses_once")
+	result, err := svc.ForwardImages(ctx, c, directImagesTestAccount(), body, parsed, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 10, result.ImageCount)
+	require.Equal(t, 10, result.BillableImageCount)
+	require.True(t, AsyncImageTaskStorageComplete(ctx))
+	require.Len(t, upstream.requests, 1)
+	require.Len(t, storage.saved, 10)
+	for i, saved := range storage.saved {
+		require.Equal(t, fmt.Sprintf("images/imgtask_responses_once-%d.png", i), saved.key)
+		require.NotContains(t, saved.key, "imgsync_")
+	}
+	require.Len(t, gjson.GetBytes(rec.Body.Bytes(), "data").Array(), 10)
+	for _, item := range gjson.GetBytes(rec.Body.Bytes(), "data").Array() {
+		require.NotEmpty(t, item.Get("url").String())
+		require.False(t, item.Get("b64_json").Exists())
+	}
 }
 
 func TestOpenAIGatewayServiceForwardImages_OAuthFillsShortfallWithoutBillingRetryInput(t *testing.T) {

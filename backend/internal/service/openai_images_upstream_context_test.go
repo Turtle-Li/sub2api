@@ -135,6 +135,16 @@ func TestDetachUpstreamContextSemantics(t *testing.T) {
 		require.NoError(t, detached.Err())
 	})
 
+	t.Run("async_image_task_preserves_execution_cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		ctx = WithAsyncImageTaskStorage(ctx, "imgtask_deadline")
+		detached, release := detachUpstreamContext(ctx)
+		defer release()
+		cancel()
+		require.ErrorIs(t, detached.Err(), context.Canceled,
+			"async tasks are already detached from the client and must keep their own execution cancellation")
+	})
+
 	t.Run("detachStreamUpstreamContext_keeps_cancel_when_not_streaming", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()

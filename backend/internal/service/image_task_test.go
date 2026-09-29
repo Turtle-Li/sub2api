@@ -82,6 +82,21 @@ func TestImageTaskServiceInvalidResultBecomesFailed(t *testing.T) {
 	require.Contains(t, string(got.Error), "non-JSON")
 }
 
+func TestImageTaskServiceCompleteStoredRejectsInlineImage(t *testing.T) {
+	store := &imageTaskMemoryStore{}
+	svc := NewImageTaskServiceWithOptions(store, time.Hour, time.Minute)
+	created, err := svc.Create(context.Background(), ImageTaskOwner{UserID: 1, APIKeyID: 2})
+	require.NoError(t, err)
+
+	result := json.RawMessage(`{"data":[{"url":"data:image/png;base64,AA==","b64_json":"AA=="}]}`)
+	require.NoError(t, svc.CompleteStored(context.Background(), created.ID, http.StatusOK, result))
+	got, err := svc.Get(context.Background(), ImageTaskOwner{UserID: 1, APIKeyID: 2}, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, ImageTaskStatusFailed, got.Status)
+	require.Equal(t, http.StatusBadGateway, got.HTTPStatus)
+	require.NotContains(t, string(got.Result), "b64_json")
+}
+
 func TestImageTaskServiceMapsStoreFailures(t *testing.T) {
 	store := &imageTaskMemoryStore{saveErr: errors.New("redis down")}
 	svc := NewImageTaskService(store)

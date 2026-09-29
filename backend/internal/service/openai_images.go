@@ -1037,14 +1037,10 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	usage, _ := extractOpenAIUsageFromJSONBytes(body)
 	imageCount := extractOpenAIImageCountFromJSONBytes(body)
 	imageOutputSizes := collectOpenAIResponseImageOutputSizesFromJSONBytes(body)
-	if upscaleRequired && s.imageStorageResolver != nil {
-		if uploader, enabled := s.imageStorageResolver(); enabled && uploader != nil {
-			storedBody, storageErr := uploader.Rewrite(ctx, newSynchronousImageResultID(), body)
-			if storageErr != nil {
-				logImageStorageFallback("openai_images", imageCount, storageErr)
-			} else {
-				body = storedBody
-			}
+	if upscaleRequired {
+		body, err = s.storeHighResolutionOpenAIImages(ctx, "openai_images", imageCount, body)
+		if err != nil {
+			return OpenAIUsage{}, 0, nil, err
 		}
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

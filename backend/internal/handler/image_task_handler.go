@@ -26,6 +26,8 @@ type AsyncImageHandler struct {
 	execute func(platform string, c *gin.Context)
 }
 
+const asyncImageTaskFailureStatusContextKey = "_async_image_task_failure_status"
+
 func NewAsyncImageHandler(tasks *service.ImageTaskService, openAI *OpenAIGatewayHandler) *AsyncImageHandler {
 	h := &AsyncImageHandler{tasks: tasks, openAI: openAI}
 	h.execute = h.executeWithGateway
@@ -107,6 +109,7 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 		imageTaskError(c, err)
 		return
 	}
+	taskCtx.Request = taskCtx.Request.WithContext(service.WithAsyncImageTaskStorage(taskCtx.Request.Context(), task.ID))
 
 	pollURL := imageTaskPollURL(c.Request.URL.Path, task.ID)
 	c.Header("Cache-Control", "no-store")
@@ -239,12 +242,30 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, r
 	if statusCode == 0 {
 		statusCode = http.StatusOK
 	}
+	if taskErr, ok := imageTaskErrorEnvelope(body); ok {
+		if semanticStatus, exists := taskCtx.Get(asyncImageTaskFailureStatusContextKey); exists {
+			if parsedStatus, valid := semanticStatus.(int); valid && parsedStatus >= http.StatusBadRequest {
+				statusCode = parsedStatus
+			}
+		}
+		if statusCode < http.StatusBadRequest {
+			statusCode = http.StatusBadGateway
+		}
+		h.failTask(taskID, statusCode, taskErr)
+		return
+	}
 	if statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices {
 		if len(body) == 0 || !json.Valid(body) {
 			h.failTask(taskID, http.StatusBadGateway, imageTaskErrorPayload("api_error", "upstream returned an invalid image response"))
 			return
 		}
-		if err := h.tasks.Complete(context.Background(), taskID, statusCode, json.RawMessage(body)); err != nil {
+		var err error
+		if service.AsyncImageTaskStorageComplete(taskCtx.Request.Context()) {
+			err = h.tasks.CompleteStored(context.Background(), taskID, statusCode, json.RawMessage(body))
+		} else {
+			err = h.tasks.Complete(context.Background(), taskID, statusCode, json.RawMessage(body))
+		}
+		if err != nil {
 			logger.L().Error("image_task.complete_store_failed", zap.String("task_id", taskID), zap.Error(err))
 		}
 		return
@@ -295,16 +316,26 @@ func imageTaskPollURL(submitPath, taskID string) string {
 }
 
 func extractImageTaskError(body []byte) json.RawMessage {
+	if taskErr, ok := imageTaskErrorEnvelope(body); ok {
+		return taskErr
+	}
 	if json.Valid(body) {
-		var envelope struct {
-			Error json.RawMessage `json:"error"`
-		}
-		if json.Unmarshal(body, &envelope) == nil && len(envelope.Error) > 0 && json.Valid(envelope.Error) {
-			return envelope.Error
-		}
 		return json.RawMessage(body)
 	}
 	return imageTaskErrorPayload("api_error", "image generation failed")
+}
+
+func imageTaskErrorEnvelope(body []byte) (json.RawMessage, bool) {
+	if !json.Valid(body) {
+		return nil, false
+	}
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || len(envelope.Error) == 0 || !json.Valid(envelope.Error) || string(envelope.Error) == "null" {
+		return nil, false
+	}
+	return envelope.Error, true
 }
 
 func imageTaskErrorPayload(errorType, message string) json.RawMessage {
