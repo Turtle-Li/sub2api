@@ -33,6 +33,16 @@ The runtime env generator also copied an explicitly configured legacy client
 WebSocket limit from the old container unless that key was made a managed
 override.
 
+The first production activation exposed one further release-gate defect before
+the Caddy receiver created a transaction. Caddy automatically adds the path of
+the source Caddyfile to each `file_server.hide` list. The same live bytes were
+therefore represented as `/dev/stdin` in the host adaptation,
+`/etc/caddy/Caddyfile` in the startup adaptation, and
+`/tmp/sub2api-release-sub2api-<slot>.Caddyfile` in the Admin API state left by
+the blue-green switch. A byte-for-byte canonical JSON hash treated those
+security-equivalent generated paths as configuration drift and rejected the
+release even though every other field matched.
+
 ## Repair contract
 
 AWS production uses one exact 128 MiB (`134217728` byte) HTTP edge limit for
@@ -69,6 +79,16 @@ release. The root receiver must:
 
 The previous configuration is retained as a root-only rollback backup, and the
 release record binds the source commit, uploaded digest, and activated SHA.
+For three-view hashing, only the source identity expected for that view is
+replaced with an internal marker, and only inside a `file_server.hide` list.
+The host view requires `/dev/stdin`, the startup view requires the configured
+startup path, and a candidate requires its exact receiver-generated path. The
+active view accepts the startup path, requires a normal blue-green temporary
+path to match the selected slot, and separately recognizes the tightly named
+rollback paths. Operator-supplied hide entries, arbitrary or cross-view paths,
+and every other JSON field remain in the hash. This preserves the
+full-configuration drift gate without confusing Caddy's automatic source-file
+protection with a semantic change.
 
 ## Verification
 
@@ -83,6 +103,12 @@ topology. Blue-green tests begin with inherited 256 MiB HTTP and decimal
 100 MB WebSocket values, prove all three are normalized, and reject reuse after
 one prepared value is changed back. A configuration test also proves these
 environment values override stale values in the persistent `config.yaml`.
+The receiver regression fixture models distinct host, startup, blue-green,
+candidate, and rollback source paths. It proves those reviewed generated paths
+converge while an unreviewed path, a near-miss suffix, a normal-release path for
+the other slot, a candidate-only receiver path or host-only identity in the
+active view, and unrelated active JSON still fail before a transaction is
+created.
 
 The production acceptance probe must then demonstrate that a valid authenticated
 JSON request larger than 16 MiB reaches the application and receives an

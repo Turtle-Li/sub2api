@@ -433,17 +433,65 @@ for expression in expressions:
 }
 
 caddy_json_sha() {
+  local source_identity="$2"
+
   printf '%s' "$1" | python3 -c '
 import hashlib
 import json
+import re
 import sys
 
 config = json.load(sys.stdin)
 if type(config) is not dict:
     raise SystemExit(1)
+
+# Caddy automatically adds the path used for adaptation to every file_server
+# hide list so the source Caddyfile cannot be served. The same reviewed bytes
+# are adapted through stdin, the startup bind, and tightly named release files;
+# normalize only the source identity expected for this view while retaining
+# every operator-supplied hide entry and every other JSON field in the hash.
+startup_path = sys.argv[1]
+source_identity = sys.argv[2]
+rollback_patterns = (
+    re.compile(r"/tmp/sub2api-release-rollback-sub2api-(?:blue|green)\.Caddyfile"),
+    re.compile(r"/tmp/sub2api-caddy-config-rollback-[0-9a-f]{40}-[0-9]+\.Caddyfile"),
+)
+if source_identity.startswith("active:"):
+    active_slot = source_identity.removeprefix("active:")
+    if active_slot not in {"blue", "green"}:
+        raise SystemExit(1)
+else:
+    active_slot = None
+
+def is_generated_source(path):
+    if active_slot is None:
+        return path == source_identity
+    if path in {
+        startup_path,
+        "/tmp/sub2api-release-sub2api-{}.Caddyfile".format(active_slot),
+    }:
+        return True
+    return any(pattern.fullmatch(path) for pattern in rollback_patterns)
+
+def normalize(value):
+    if type(value) is dict:
+        if value.get("handler") == "file_server" and type(value.get("hide")) is list:
+            value["hide"] = [
+                {"sub2api_generated_caddy_source": True}
+                if type(item) is str and is_generated_source(item)
+                else item
+                for item in value["hide"]
+            ]
+        for child in value.values():
+            normalize(child)
+    elif type(value) is list:
+        for child in value:
+            normalize(child)
+
+normalize(config)
 encoded = json.dumps(config, separators=(",", ":"), sort_keys=True).encode("utf-8")
 print(hashlib.sha256(encoded).hexdigest())
-'
+' "$CADDY_CONFIG_PATH" "$source_identity"
 }
 
 verify_source_contract() {
@@ -545,9 +593,9 @@ assert_current_views() {
   active_slot="$(caddy_json_slot "$active_json")" || die 'active Caddy configuration does not uniquely select blue or green'
   [ "$host_slot" = "$startup_slot" ] && [ "$host_slot" = "$active_slot" ] \
     || die 'host, startup, and active Caddy views do not select the same slot'
-  host_config="$(caddy_json_sha "$host_json")" || die 'host Caddy JSON is invalid'
-  startup_config="$(caddy_json_sha "$startup_json")" || die 'startup Caddy JSON is invalid'
-  active_config="$(caddy_json_sha "$active_json")" || die 'active Caddy JSON is invalid'
+  host_config="$(caddy_json_sha "$host_json" /dev/stdin)" || die 'host Caddy JSON is invalid'
+  startup_config="$(caddy_json_sha "$startup_json" "$CADDY_CONFIG_PATH")" || die 'startup Caddy JSON is invalid'
+  active_config="$(caddy_json_sha "$active_json" "active:${active_slot}")" || die 'active Caddy JSON is invalid'
   [ "$host_config" = "$startup_config" ] && [ "$host_config" = "$active_config" ] \
     || die 'host, startup, and active Caddy configuration SHA-256 values diverge'
   BEFORE_SLOT="$host_slot"
@@ -571,9 +619,9 @@ verify_converged_views() {
       && verify_caddy_json_body_contract "$startup_json" \
       && verify_caddy_json_body_contract "$active_json" || return 1
   fi
-  host_config="$(caddy_json_sha "$host_json")" || return 1
-  startup_config="$(caddy_json_sha "$startup_json")" || return 1
-  active_config="$(caddy_json_sha "$active_json")" || return 1
+  host_config="$(caddy_json_sha "$host_json" /dev/stdin)" || return 1
+  startup_config="$(caddy_json_sha "$startup_json" "$CADDY_CONFIG_PATH")" || return 1
+  active_config="$(caddy_json_sha "$active_json" "active:${expected_slot}")" || return 1
   [ "$host_config" = "$expected_config" ] \
     && [ "$startup_config" = "$expected_config" ] \
     && [ "$active_config" = "$expected_config" ] || return 1
@@ -804,7 +852,7 @@ candidate_json="$(docker exec "$CADDY_CONTAINER" caddy adapt --config "$CONTAINE
   || die 'candidate Caddyfile does not uniquely select the active slot'
 verify_caddy_json_body_contract "$candidate_json" \
   || die 'candidate Caddy JSON does not enforce the exact 128 MiB body contract'
-AFTER_CONFIG_SHA="$(caddy_json_sha "$candidate_json")" \
+AFTER_CONFIG_SHA="$(caddy_json_sha "$candidate_json" "$CONTAINER_CANDIDATE_PATH")" \
   || die 'could not normalize candidate Caddy JSON'
 
 write_transaction prepared || die 'could not publish the Caddy configuration transaction'

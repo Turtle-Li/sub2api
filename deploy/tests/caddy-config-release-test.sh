@@ -75,13 +75,54 @@ file_inode() {
 }
 
 json_sha() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "$2" <<'PY'
 import hashlib
 import json
+import re
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as source:
     config = json.load(source)
+
+startup_path = "/etc/caddy/Caddyfile"
+source_identity = sys.argv[2]
+rollback_patterns = (
+    re.compile(r"/tmp/sub2api-release-rollback-sub2api-(?:blue|green)\.Caddyfile"),
+    re.compile(r"/tmp/sub2api-caddy-config-rollback-[0-9a-f]{40}-[0-9]+\.Caddyfile"),
+)
+if source_identity.startswith("active:"):
+    active_slot = source_identity.removeprefix("active:")
+    if active_slot not in {"blue", "green"}:
+        raise SystemExit(1)
+else:
+    active_slot = None
+
+def generated(path):
+    if active_slot is None:
+        return path == source_identity
+    if path in {
+        startup_path,
+        "/tmp/sub2api-release-sub2api-{}.Caddyfile".format(active_slot),
+    }:
+        return True
+    return any(pattern.fullmatch(path) for pattern in rollback_patterns)
+
+def normalize(value):
+    if isinstance(value, dict):
+        if value.get("handler") == "file_server" and isinstance(value.get("hide"), list):
+            value["hide"] = [
+                {"sub2api_generated_caddy_source": True}
+                if isinstance(item, str) and generated(item)
+                else item
+                for item in value["hide"]
+            ]
+        for child in value.values():
+            normalize(child)
+    elif isinstance(value, list):
+        for child in value:
+            normalize(child)
+
+normalize(config)
 print(hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest())
 PY
 }
@@ -225,7 +266,7 @@ reset_fixture() {
   write_caddyfile "$HOST_CADDY" "$slot" "$max_size" "$threshold"
   cp "$HOST_CADDY" "$STARTUP_CADDY"
   chmod 0600 "$STARTUP_CADDY"
-  "$FAKE_JSON" "$HOST_CADDY" >"$ACTIVE_JSON"
+  "$FAKE_JSON" "$HOST_CADDY" "/tmp/sub2api-release-sub2api-${slot}.Caddyfile" >"$ACTIVE_JSON"
 }
 
 run_receiver() {
@@ -270,6 +311,7 @@ import re
 import sys
 
 text = open(sys.argv[1], "r", encoding="utf-8").read()
+caddy_source = sys.argv[2] if len(sys.argv) > 2 else "/dev/stdin"
 upstreams = sorted(set(re.findall(r"\bsub2api(?:-(?:blue|green))?:8080\b", text)))
 hosts = [
     host for host in ("api.turtleligpt.com", "aws-test.turtleligpt.com")
@@ -302,6 +344,7 @@ for index, host in enumerate(hosts):
                 "handle": [
                     {"handler": "request_body", "max_size": sizes[guard]},
                     {"handler": "reverse_proxy", "upstreams": [{"dial": value} for value in upstreams]},
+                    {"handler": "file_server", "hide": [caddy_source]},
                 ],
             }]}],
         })
@@ -415,7 +458,7 @@ case "${1:-}" in
             [ ! -e "$FAKE_FAIL_VALIDATE" ] || exit 41
             ;;
           adapt)
-            "$FAKE_JSON" "$source_path"
+            "$FAKE_JSON" "$source_path" "$config_path"
             ;;
           reload)
             case " $* " in *' --force '*) ;; *) exit 42 ;; esac
@@ -423,7 +466,7 @@ case "${1:-}" in
               rm -f "$FAKE_FAIL_RELOAD"
               exit 43
             fi
-            "$FAKE_JSON" "$source_path" >"$FAKE_ACTIVE_JSON"
+            "$FAKE_JSON" "$source_path" "$config_path" >"$FAKE_ACTIVE_JSON"
             ;;
           *) exit 8 ;;
         esac
@@ -436,7 +479,7 @@ case "${1:-}" in
         args="$*"
         case "$args" in
           *'2019/config'*) cat "$FAKE_ACTIVE_JSON" ;;
-          *'caddy adapt'*) "$FAKE_JSON" "$FAKE_STARTUP_CADDY" ;;
+          *'caddy adapt'*) "$FAKE_JSON" "$FAKE_STARTUP_CADDY" /etc/caddy/Caddyfile ;;
           *'/health'*) [ ! -e "${FAKE_FAIL_HEALTH:-/nonexistent}" ] ;;
           *) exit 10 ;;
         esac
@@ -576,6 +619,48 @@ assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" 'divergent active JSON ho
 [ ! -e "$TRANSACTION_PATH" ] && [ ! -L "$TRANSACTION_PATH" ] \
   || fail 'divergent active JSON created a transaction'
 
+# Only the source identity approved for a particular view may be normalized
+# out of a file_server hide list. Arbitrary, near-miss, cross-slot, and
+# cross-view identities remain semantic configuration and keep the gate closed.
+for unreviewed_hide in \
+  /tmp/unreviewed.Caddyfile \
+  /tmp/sub2api-release-sub2api-green.Caddyfile.bak \
+  /tmp/sub2api-release-sub2api-green.Caddyfile \
+  "/tmp/sub2api-caddy-config-release-${COMMIT}-123.Caddyfile" \
+  /dev/stdin; do
+  reset_fixture blue 100MB 100000000
+  before_sha="$(file_sha "$HOST_CADDY")"
+  python3 - "$ACTIVE_JSON" "$unreviewed_hide" <<'PY'
+import json
+import sys
+
+path, unreviewed_hide = sys.argv[1:]
+with open(path, "r", encoding="utf-8") as source:
+    config = json.load(source)
+
+def walk(value):
+    if isinstance(value, dict):
+        if value.get("handler") == "file_server":
+            value["hide"] = [unreviewed_hide]
+        for child in value.values():
+            walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            walk(child)
+
+walk(config)
+with open(path, "w", encoding="utf-8") as destination:
+    json.dump(config, destination, separators=(",", ":"))
+PY
+  if run_receiver "$GOOD_TEMPLATE" "sha256:$(file_sha "$GOOD_TEMPLATE")" "${TEST_ROOT}/unreviewed-hide-path.log"; then
+    fail "receiver normalized unreviewed file_server hide path: ${unreviewed_hide}"
+  fi
+  assert_contains "${TEST_ROOT}/unreviewed-hide-path.log" 'configuration SHA-256 values diverge'
+  assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" "unreviewed hide path host hash: ${unreviewed_hide}"
+  [ ! -e "$TRANSACTION_PATH" ] && [ ! -L "$TRANSACTION_PATH" ] \
+    || fail "unreviewed hide path created a transaction: ${unreviewed_hide}"
+done
+
 # The active green slot must be projected into the blue-only template, and a
 # successful release must preserve the host bind inode while all views converge.
 reset_fixture green 100MB 100000000
@@ -597,10 +682,10 @@ assert_contains "$ACTIVE_JSON" '134217728'
 assert_source_body_contract "$HOST_CADDY"
 assert_source_body_contract "$STARTUP_CADDY"
 assert_json_body_contract "$ACTIVE_JSON"
-"$FAKE_JSON" "$HOST_CADDY" >"${TEST_ROOT}/host-after.json"
-"$FAKE_JSON" "$STARTUP_CADDY" >"${TEST_ROOT}/startup-after.json"
-assert_equal "$(json_sha "${TEST_ROOT}/host-after.json")" "$(json_sha "${TEST_ROOT}/startup-after.json")" 'successful release host/startup normalized JSON'
-assert_equal "$(json_sha "${TEST_ROOT}/host-after.json")" "$(json_sha "$ACTIVE_JSON")" 'successful release host/active normalized JSON'
+"$FAKE_JSON" "$HOST_CADDY" /dev/stdin >"${TEST_ROOT}/host-after.json"
+"$FAKE_JSON" "$STARTUP_CADDY" /etc/caddy/Caddyfile >"${TEST_ROOT}/startup-after.json"
+assert_equal "$(json_sha "${TEST_ROOT}/host-after.json" /dev/stdin)" "$(json_sha "${TEST_ROOT}/startup-after.json" /etc/caddy/Caddyfile)" 'successful release host/startup normalized JSON'
+assert_equal "$(json_sha "${TEST_ROOT}/host-after.json" /dev/stdin)" "$(json_sha "$ACTIVE_JSON" active:green)" 'successful release host/active normalized JSON'
 [ ! -e "$TRANSACTION_PATH" ] && [ ! -L "$TRANSACTION_PATH" ] \
   || fail 'successful release retained its transaction'
 assert_contains "${TEST_ROOT}/green-success.log" 'CADDY_CONFIG_RELEASED'
@@ -650,7 +735,8 @@ fi
 assert_contains "${TEST_ROOT}/reload-failure.log" 'previous Caddy configuration was restored'
 assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" 'reload rollback host hash'
 cmp -s "$HOST_CADDY" "$STARTUP_CADDY" || fail 'reload rollback did not restore startup Caddyfile'
-cmp -s "$ACTIVE_JSON" "${TEST_ROOT}/reload-before-active.json" || fail 'reload rollback did not restore active Caddy state'
+assert_equal "$(json_sha "$ACTIVE_JSON" active:blue)" "$(json_sha "${TEST_ROOT}/reload-before-active.json" active:blue)" \
+  'reload rollback active Caddy state'
 [ -f "$TRANSACTION_PATH" ] || fail 'reload rollback did not retain its transaction'
 rollback_backup="$(sed -n 's/^BACKUP_PATH=//p' "$TRANSACTION_PATH")"
 [ -f "$rollback_backup" ] || fail 'reload rollback transaction does not retain a backup'
@@ -671,7 +757,8 @@ assert_contains "${TEST_ROOT}/transaction-clear-failure.log" 'could not clear th
 assert_contains "${TEST_ROOT}/transaction-clear-failure.log" 'previous Caddy configuration was restored'
 assert_equal "$(file_sha "$HOST_CADDY")" "$before_sha" 'transaction-clear rollback host hash'
 cmp -s "$HOST_CADDY" "$STARTUP_CADDY" || fail 'transaction-clear rollback did not restore startup Caddyfile'
-cmp -s "$ACTIVE_JSON" "${TEST_ROOT}/transaction-clear-before-active.json" || fail 'transaction-clear rollback did not restore active Caddy state'
+assert_equal "$(json_sha "$ACTIVE_JSON" active:blue)" "$(json_sha "${TEST_ROOT}/transaction-clear-before-active.json" active:blue)" \
+  'transaction-clear rollback active Caddy state'
 [ -f "$TRANSACTION_PATH" ] || fail 'transaction-clear rollback did not retain its transaction'
 if find "$BACKUP_DIR" -maxdepth 1 -name '*.release.env' -print -quit | grep -q .; then
   fail 'transaction-clear rollback retained a completion record after reverting Caddy'
