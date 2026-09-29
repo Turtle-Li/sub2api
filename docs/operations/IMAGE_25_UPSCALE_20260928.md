@@ -229,6 +229,21 @@ three files decoded as `2048x3072`. The multi-image response carried root-level
 `size: "2048x3072"`; no response contained inline base64 after successful
 storage offload. These timings are an observed probe, not an SLA.
 
+Exact commit `67ac5eec3e83e60a278a2580e3bce268e5b2aa2b` then passed the
+production asynchronous stress probe on 2026-09-29. One and only one
+`n=10`, `2K` submission returned task
+`imgtask_595d95e0c7b14a9ba61d9c4e8342fc97` in 0.324 seconds and completed
+after 707 seconds. It produced ten unique `2048x3072` PNGs. Every result was
+a task-scoped object URL, with no `imgsync_*` URL and no inline base64. The
+application stayed healthy with zero restarts and no OOM; observed peaks were
+143.28% multi-core CPU and 37.63% memory. The task window contained exactly one
+related usage row and one billing-dedup row. The usage row recorded
+`billing_mode=image`, `image_count=10`, `image_size=2K`, base cost `2.01 CNY`,
+probe multiplier `0.01`, and committed charge `0.0201 CNY`. Its diagnostic
+dimension breakdown classified the 3072-pixel long edge as 4K, but
+`BillableImageSize` and the displayed billing tier remained the requested 2K.
+These timings and resource peaks are observed evidence, not an SLA.
+
 ## Validation and rollback
 
 Release gates require unit/race tests, migration tests, shell syntax and runtime
