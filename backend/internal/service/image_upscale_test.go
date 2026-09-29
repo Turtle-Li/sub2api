@@ -43,6 +43,98 @@ func TestImageUpscaleScaleIsModelIndependent(t *testing.T) {
 	}
 }
 
+func TestNewImageUpscaleServiceUsesResponseHeaderTimeout(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		configured int
+		want       time.Duration
+	}{
+		{name: "configured timeout", configured: 7, want: 7 * time.Second},
+		{name: "default timeout", want: 30 * time.Second},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service := NewImageUpscaleService(&config.Config{ImageUpscale: config.ImageUpscaleConfig{
+				RequestTimeoutSeconds: tt.configured,
+			}})
+
+			require.NotNil(t, service.httpClient)
+			require.Zero(t, service.httpClient.Timeout, "job contexts, rather than a client-wide deadline, govern the lifecycle")
+			transport, ok := service.httpClient.Transport.(*http.Transport)
+			require.True(t, ok, "the service must use a cloned standard HTTP transport")
+			require.NotSame(t, http.DefaultTransport, transport)
+			require.Equal(t, tt.want, transport.ResponseHeaderTimeout)
+		})
+	}
+}
+
+func TestNewImageUpscaleServiceAllowsSlowUploadPastHeaderTimeout(t *testing.T) {
+	service := NewImageUpscaleService(&config.Config{ImageUpscale: config.ImageUpscaleConfig{
+		BaseURL:               "http://upscale.test",
+		RequestTimeoutSeconds: 1,
+		RetryMax:              0,
+	}})
+	service.httpClient.Transport = imageUpscaleSlowUploadRoundTripper{
+		chunkSize: 512,
+		delay:     150 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	started := time.Now()
+	jobID, err := service.submit(ctx, bytes.Repeat([]byte("x"), 4096), 2, []byte("test-token"))
+
+	require.NoError(t, err)
+	require.Equal(t, "slow-upload", jobID)
+	require.GreaterOrEqual(t, time.Since(started), time.Second,
+		"the synthetic upload must outlast request_timeout_seconds")
+}
+
+func TestNewImageUpscaleServiceSlowUploadHonorsContextCancellation(t *testing.T) {
+	service := NewImageUpscaleService(&config.Config{ImageUpscale: config.ImageUpscaleConfig{
+		BaseURL:               "http://upscale.test",
+		RequestTimeoutSeconds: 1,
+		RetryMax:              0,
+	}})
+	service.httpClient.Transport = imageUpscaleSlowUploadRoundTripper{
+		chunkSize: 512,
+		delay:     time.Second,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := service.submit(ctx, bytes.Repeat([]byte("x"), 4096), 2, []byte("test-token"))
+
+	upscaleErr := requireImageUpscaleError(t, err, "SUBMIT_TRANSPORT_FAILED")
+	require.True(t, upscaleErr.Temporary)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestNewImageUpscaleServiceStillBoundsResponseHeaderWait(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		time.Sleep(1500 * time.Millisecond)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	service := NewImageUpscaleService(&config.Config{ImageUpscale: config.ImageUpscaleConfig{
+		BaseURL:               server.URL,
+		RequestTimeoutSeconds: 1,
+		RetryMax:              0,
+	}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := service.submit(ctx, []byte("source-image"), 2, []byte("test-token"))
+	elapsed := time.Since(started)
+
+	upscaleErr := requireImageUpscaleError(t, err, "SUBMIT_TRANSPORT_FAILED")
+	require.True(t, upscaleErr.Temporary)
+	require.GreaterOrEqual(t, elapsed, 900*time.Millisecond)
+	require.Less(t, elapsed, 2*time.Second)
+}
+
 func TestImageUpscaleScaleUsesActualDimensions(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -553,4 +645,49 @@ func requireImageUpscaleError(t *testing.T, err error, wantCode string) *ImageUp
 	require.ErrorAs(t, err, &upscaleErr)
 	require.Equal(t, wantCode, upscaleErr.Code)
 	return upscaleErr
+}
+
+type imageUpscaleSlowUploadRoundTripper struct {
+	chunkSize int
+	delay     time.Duration
+}
+
+func (transport imageUpscaleSlowUploadRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	defer req.Body.Close()
+
+	chunkSize := transport.chunkSize
+	if chunkSize <= 0 {
+		chunkSize = 512
+	}
+	buffer := make([]byte, chunkSize)
+	for {
+		if err := req.Context().Err(); err != nil {
+			return nil, err
+		}
+		read, err := req.Body.Read(buffer)
+		if read > 0 {
+			timer := time.NewTimer(transport.delay)
+			select {
+			case <-req.Context().Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return nil, req.Context().Err()
+			case <-timer.C:
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &http.Response{
+		StatusCode: http.StatusAccepted,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewBufferString(`{"job":{"id":"slow-upload"}}`)),
+		Request:    req,
+	}, nil
 }

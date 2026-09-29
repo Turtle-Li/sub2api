@@ -114,17 +114,19 @@ func NewImageUpscaleService(cfg *config.Config) *ImageUpscaleService {
 	if cfg != nil {
 		settings = cfg.ImageUpscale
 	}
-	requestTimeout := time.Duration(settings.RequestTimeoutSeconds) * time.Second
-	if requestTimeout <= 0 {
-		requestTimeout = 30 * time.Second
+	responseHeaderTimeout := time.Duration(settings.RequestTimeoutSeconds) * time.Second
+	if responseHeaderTimeout <= 0 {
+		responseHeaderTimeout = 30 * time.Second
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 	maxConcurrent := settings.MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
 	}
 	return &ImageUpscaleService{
 		cfg:        settings,
-		httpClient: &http.Client{Timeout: requestTimeout},
+		httpClient: &http.Client{Transport: transport},
 		loadAPIKey: newImageUpscaleVaultLoader(settings.VaultAgentSocket, settings.APIKeyVaultRef),
 		slots:      make(chan struct{}, maxConcurrent),
 	}

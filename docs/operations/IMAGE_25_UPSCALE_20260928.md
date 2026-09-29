@@ -86,6 +86,14 @@ provider output scan; progressive per-item visibility is not part of this phase.
 Submit retries are limited to explicit HTTP 429 responses because the remote
 API has no idempotency key and a transport/5xx retry could duplicate an accepted
 job. Poll and result GET requests may retry 429/5xx within the configured bound.
+`IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS` limits only the wait for response
+headers after a request body has been written. It is not a total HTTP-client
+deadline: a multi-megabyte source upload and result-body download remain bounded
+by the per-job context and its parent operation/request deadline. The client
+therefore uses the standard transport with `ResponseHeaderTimeout` and no
+client-wide `Timeout`. This distinction is required because a valid source can
+take longer than 30 seconds to traverse the production Tailnet link before the
+Mini gateway can parse and acknowledge the multipart submission.
 401/403, invalid MIME, corrupt bytes, and dimension mismatches are permanent.
 The shared limiter admits work before inline base64 decoding or URL download.
 Each provider `1K` source is limited to 16 MiB, 2048 pixels on either axis, and
@@ -269,6 +277,17 @@ visual-semantics check is failed and must not be cited as proof that `n=10`
 produces ten single-frame compositions. Future probes must ask for exactly one
 subject and one continuous frame per returned image and explicitly prohibit a
 grid, collage, contact sheet, split panel, storyboard, inset, or multiple poses.
+
+On 2026-09-29, the first post-release `n=2`, `2K` probe for exact commit
+`cfc18e67f91a40dc15ede0ba0135a39579b47245` failed without billing as
+`SUBMIT_TRANSPORT_FAILED`. The active application and Mini gateway were healthy,
+DNS resolved to the Tailnet peer, and the Mini logs showed no corresponding
+POST or queued job. A no-job diagnostic transfer then measured about 34 KiB/s:
+256 KiB reached the gateway in 7.6 seconds, while a 2.5 MiB body exceeded 60
+seconds. The service's former 30-second `http.Client.Timeout` therefore expired
+during upload, before the Mini gateway could return a job ID; the 900-second job
+lifecycle never started. The transport repair and regression scope are recorded
+in `docs/bugs/backend/BUG-20260929-image-upscale-transfer-deadline.md`.
 
 ## Validation and rollback
 
