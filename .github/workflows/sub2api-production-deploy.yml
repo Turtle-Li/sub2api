@@ -17,10 +17,10 @@ on:
         default: aws-candidate
 
 # A production release is always explicit. GitHub builds the exact main commit
-# into a linux/amd64 image, compresses its Docker archive, and streams it over
-# the existing restricted SSH account unless build_only retains an artifact.
-# Production only loads the verified image
-# and performs the blue-green switch; it never checks out source or compiles.
+# into a linux/amd64 image, compresses its Docker archive, and streams the image
+# plus the reviewed AWS Caddy template over the existing restricted SSH account
+# unless build_only retains an artifact. Production performs no source checkout
+# or compilation.
 permissions:
   contents: read
   id-token: write
@@ -389,6 +389,31 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "deploy-image ${SOURCE_COMMIT} ${VERSION} ${ARCHIVE_DIGEST}" \
             < "$ARCHIVE_PATH"
+
+      - name: Upload and activate verified AWS Caddy configuration
+        if: ${{ !inputs.build_only && inputs.deployment_target == 'aws-candidate' }}
+        timeout-minutes: 10
+        env:
+          DEPLOY_HOST: ${{ secrets.SUB2API_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.SUB2API_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.SUB2API_DEPLOY_USER }}
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+        run: |
+          CADDY_CONFIG=deploy/aws-candidate/Caddyfile
+          CADDY_DIGEST="sha256:$(sha256sum "$CADDY_CONFIG" | awk '{print $1}')"
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o IdentitiesOnly=yes \
+            -o LogLevel=ERROR \
+            -o ServerAliveCountMax=60 \
+            -o ServerAliveInterval=10 \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy-caddy ${SOURCE_COMMIT} ${CADDY_DIGEST}" \
+            < "$CADDY_CONFIG"
 
       - name: Close exact runner SSH access on AWS candidate
         if: ${{ always() && !inputs.build_only && inputs.deployment_target == 'aws-candidate' }}

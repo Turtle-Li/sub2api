@@ -22,8 +22,12 @@ jobs:
           /bin/bash deploy/tests/url-allowlist-config-test.sh
           /bin/bash -n deploy/sub2api-autodeploy.sh
           /bin/bash -n deploy/sub2api-github-image-release.sh
+          /bin/bash -n deploy/sub2api-caddy-config-release.sh
           /bin/bash deploy/tests/autodeploy-control-flow-test.sh
           /bin/bash deploy/tests/github-image-release-test.sh
+          /bin/bash deploy/tests/caddy-config-release-test.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/github-deploy-trigger-install-test.py -v
+          PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/github-aws-runner-ssh-workflow-test.py -v
           /bin/bash deploy/tests/server-release-container-guard-test.sh
           /bin/bash -n deploy/sub2api-maintenance-lock.sh
           /bin/bash deploy/tests/maintenance-lock-test.sh
@@ -61,6 +65,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v deploy.tests.test_gateway_caddy_route_drift
           /bin/bash deploy/gcp-taiwan-line/tests/transport-config-test.sh
           shellcheck \
+            deploy/sub2api-caddy-config-release.sh \
+            deploy/tests/caddy-config-release-test.sh \
             deploy/gcp-taiwan-line/azure-caddy-listeners.sh \
             deploy/gcp-taiwan-line/gcp-startup-bootstrap.sh \
             deploy/gcp-taiwan-line/gcp-update-bootstrap.sh \

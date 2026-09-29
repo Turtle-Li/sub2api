@@ -83,6 +83,7 @@ for consumer in \
   "${DEPLOY_DIR}/sub2api-runtime-guard.sh" \
   "${DEPLOY_DIR}/sub2api-drain-monitor.sh" \
   "${DEPLOY_DIR}/sub2api-server-release.sh" \
+  "${DEPLOY_DIR}/sub2api-caddy-config-release.sh" \
   "${DEPLOY_DIR}/sub2api-node-state.sh" \
   "${DEPLOY_DIR}/sub2api-cert-receiver.sh" \
   "$PAYMENT_VAULT_SCRIPT" \

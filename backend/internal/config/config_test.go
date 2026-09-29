@@ -609,6 +609,28 @@ func TestLoadOpenAIWSClientFirstMessageTimeoutFromEnv(t *testing.T) {
 	require.Equal(t, 120, cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds)
 }
 
+func TestLoadRequestBodyEnvOverridesPersistedConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`server:
+  max_request_body_size: 100000000
+gateway:
+  max_body_size: 100000000
+  openai_ws:
+    client_read_limit_bytes: 100000000
+`), 0o600))
+	t.Setenv("CONFIG_FILE", configPath)
+	t.Setenv("SERVER_MAX_REQUEST_BODY_SIZE", "134217728")
+	t.Setenv("GATEWAY_MAX_BODY_SIZE", "134217728")
+	t.Setenv("GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES", "134217728")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, int64(134217728), cfg.Server.MaxRequestBodySize)
+	require.Equal(t, int64(134217728), cfg.Gateway.MaxBodySize)
+	require.Equal(t, int64(134217728), cfg.Gateway.OpenAIWS.ClientReadLimitBytes)
+}
+
 func TestLoadOpenAIWSForceHTTPFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_WS_FORCE_HTTP", "true")

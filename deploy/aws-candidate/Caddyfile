@@ -27,25 +27,25 @@ api.turtleligpt.com {
 	@responses_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
 	@too_large_responses_body {
 		path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
-		expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 100000000`
+		expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 134217728`
 	}
 	handle @too_large_responses_body {
-		respond "请求体过大：本次请求超过 100MB，服务器已提前拦截。" 413
+		respond "请求体过大：本次请求超过 128MiB，服务器已提前拦截。" 413
 	}
 	handle @responses_request_body {
 		request_body {
-			max_size 100MB
+			max_size 128MiB
 		}
 		import sub2_proxy
 	}
 
-	@too_large_default_body expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 100000000`
+	@too_large_default_body expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 134217728`
 	handle @too_large_default_body {
-		respond "请求体过大：本次请求超过 100MB，服务器已提前拦截。" 413
+		respond "请求体过大：本次请求超过 128MiB，服务器已提前拦截。" 413
 	}
 	handle {
 		request_body {
-			max_size 100MB
+			max_size 128MiB
 		}
 		import sub2_proxy
 	}
@@ -60,25 +60,25 @@ aws-test.turtleligpt.com {
 	@responses_request_body path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
 	@too_large_responses_body {
 		path /v1/responses /v1/responses/* /responses /responses/* /backend-api/codex/responses /backend-api/codex/responses/* /v1/images/batches
-		expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 100000000`
+		expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 134217728`
 	}
 	handle @too_large_responses_body {
-		respond "请求体过大：本次请求超过 100MB，服务器已提前拦截。" 413
+		respond "请求体过大：本次请求超过 128MiB，服务器已提前拦截。" 413
 	}
 	handle @responses_request_body {
 		request_body {
-			max_size 100MB
+			max_size 128MiB
 		}
 		import sub2_proxy
 	}
 
-	@too_large_default_body expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 100000000`
+	@too_large_default_body expression `{http.request.header.Content-Length} != '' && int({http.request.header.Content-Length}) > 134217728`
 	handle @too_large_default_body {
-		respond "请求体过大：本次请求超过 100MB，服务器已提前拦截。" 413
+		respond "请求体过大：本次请求超过 128MiB，服务器已提前拦截。" 413
 	}
 	handle {
 		request_body {
-			max_size 100MB
+			max_size 128MiB
 		}
 		import sub2_proxy
 	}

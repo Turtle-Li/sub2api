@@ -10,6 +10,7 @@ APP_DIR="${SUB2API_APP_DIR:-/opt/sub2api}"
 TRIGGER_SOURCE="${APP_DIR}/scripts/sub2api-github-deploy-trigger.sh"
 TRIGGER_SCRIPT="${SUB2API_GITHUB_DEPLOY_TRIGGER_PATH:-/usr/local/libexec/sub2api-github-deploy-trigger}"
 IMAGE_RELEASE_SCRIPT="${APP_DIR}/scripts/sub2api-github-image-release.sh"
+CADDY_RELEASE_SCRIPT="${APP_DIR}/scripts/sub2api-caddy-config-release.sh"
 DEPLOY_USER="${SUB2API_GITHUB_DEPLOY_USER:-sub2api-github-deploy}"
 DEPLOY_HOME="${SUB2API_GITHUB_DEPLOY_HOME:-/var/lib/sub2api-github-deploy}"
 PUBLIC_KEY_FILE=""
@@ -70,6 +71,8 @@ done
 [ -x "$TRIGGER_SOURCE" ] || die "release trigger source is missing or not executable: $TRIGGER_SOURCE"
 [ -x "$IMAGE_RELEASE_SCRIPT" ] \
   || die "GitHub image receiver is missing or not executable: $IMAGE_RELEASE_SCRIPT"
+[ -x "$CADDY_RELEASE_SCRIPT" ] \
+  || die "GitHub Caddy receiver is missing or not executable: $CADDY_RELEASE_SCRIPT"
 case "$TRIGGER_SCRIPT" in
   /*) ;;
   *) die "deploy trigger path must be absolute: $TRIGGER_SCRIPT" ;;
@@ -122,6 +125,8 @@ sudoers_temp="$(mktemp)"
   printf 'Defaults:%s !use_pty\n' "$DEPLOY_USER"
   printf '%s ALL=(root) NOPASSWD: %s *\n' \
     "$DEPLOY_USER" "$IMAGE_RELEASE_SCRIPT"
+  printf '%s ALL=(root) NOPASSWD: %s *\n' \
+    "$DEPLOY_USER" "$CADDY_RELEASE_SCRIPT"
 } >"$sudoers_temp"
 visudo -cf "$sudoers_temp" >/dev/null || {
   rm -f "$sudoers_temp"

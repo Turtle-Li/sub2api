@@ -21,6 +21,8 @@ import (
 )
 
 func TestResolveOpenAIWSClientFirstMessageTimeout(t *testing.T) {
+	require.Equal(t, int64(128*1024*1024), config.DefaultOpenAIWSClientReadLimitBytes)
+
 	defaultTimeout := time.Duration(config.DefaultOpenAIWSClientFirstMessageTimeoutSeconds) * time.Second
 	require.Equal(t, defaultTimeout, ResolveOpenAIWSClientFirstMessageTimeout(nil))
 

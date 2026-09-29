@@ -419,6 +419,9 @@ printf '%s\n' \
   'SUB2API_TRAFFIC_STATE_FILE=/run/sub2api-runtime/traffic-state' \
   'SUB2API_BACKGROUND_STATE_FILE=/run/sub2api-runtime/background-state' \
   'SUB2API_INTERNAL_HEALTH_TOKEN_FILE=/run/sub2api-runtime/health-token' \
+  'SERVER_MAX_REQUEST_BODY_SIZE=268435456' \
+  'GATEWAY_MAX_BODY_SIZE=268435456' \
+  'GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=100000000' \
   "CODEX_TURN_STATE_PANEL_URL=$PRESERVED_PANEL_URL" \
   "CODEX_TURN_STATE_PANEL_TOKEN_FILE=$PANEL_TOKEN_CONTAINER_PATH" \
   'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false' \
@@ -481,6 +484,7 @@ run_helper() {
     CODEX_TURN_STATE_PANEL_TOKEN_FILE="${PANEL_TOKEN_FILE:-}" \
     SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE="${RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-preserve}" \
     SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER="${PRESERVE_SOURCE_CONTAINER:-}" \
+    SUB2API_RELEASE_REQUEST_BODY_CONTRACT_ENFORCED="${REQUEST_BODY_CONTRACT_ENFORCED:-true}" \
     SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY="${ROUTE_CONTRACT_WARN_ONLY:-false}" \
     SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY="${SERVER_WRAPPER_OWNS_CADDY_RECOVERY:-false}" \
     SUB2API_CADDY_SWITCH_RECOVERY_ACTION="${CADDY_SWITCH_RECOVERY_ACTION:-normal}" \
@@ -623,6 +627,23 @@ for feishu_fault in missing_mount writable_mount wrong_flag duplicate_flag; do
   rm -rf "$(state_path sub2api-green)"
 done
 
+# Single-node local reuse also enforces the managed ingress trio. This path has
+# a smaller compatibility verifier than dual-node mode and must not silently
+# retain the former decimal 100 MB client WebSocket value.
+MODE=local DUAL_NODE_RUNTIME_ENABLED=false PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
+sed -i.bak 's/^running=.*/running=true/' "$(state_path sub2api-green)/meta"
+sed -i.bak \
+  's/^GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=134217728$/GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=100000000/' \
+  "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/meta.bak" "$(state_path sub2api-green)/env.bak"
+: >"$CALLS"
+if MODE=local DUAL_NODE_RUNTIME_ENABLED=false PRECREATE_ONLY=false run_helper >"$OUTPUT" 2>&1; then
+  fail 'single-node local reuse accepted a stale client WebSocket ingress limit'
+fi
+assert_contains "$OUTPUT" 'does not match the requested fixed-egress, Feishu, or ingress configuration'
+assert_not_contains "$CALLS" 'exec '
+rm -rf "$(state_path sub2api-green)"
+
 # A retained listener transaction owns the complete Caddyfile until it is
 # explicitly committed or rolled back. A release must fail before Docker or
 # either application generation is touched.
@@ -718,6 +739,12 @@ assert_contains "$(state_path sub2api-green)/env" 'SUB2API_INTERNAL_HEALTH_TOKEN
   || fail 'unconfigured panel token file was not preserved from the active container'
 assert_contains "$(state_path sub2api-green)/env" 'SUB2API_FIXED_EGRESS_COMPATIBILITY_MODE=false'
 assert_contains "$(state_path sub2api-green)/env" 'UNRELATED_SETTING=preserved'
+[ "$(grep -Fxc 'SERVER_MAX_REQUEST_BODY_SIZE=134217728' "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'candidate did not pin the Server request-body limit exactly once'
+[ "$(grep -Fxc 'GATEWAY_MAX_BODY_SIZE=134217728' "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'candidate did not pin the Gateway request-body limit exactly once'
+[ "$(grep -Fxc 'GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=134217728' "$(state_path sub2api-green)/env")" -eq 1 ] \
+  || fail 'candidate did not replace the inherited client WebSocket ingress limit'
 assert_not_line "$(state_path sub2api-green)/env" 'DATABASE_HOST=postgres'
 assert_not_line "$(state_path sub2api-green)/env" 'REDIS_HOST=redis'
 assert_contains "$(state_path sub2api-green)/mounts" "bind|$CA_FILE|/etc/sub2api-db-ca/ca.crt|false"
@@ -731,6 +758,23 @@ assert_not_contains "$OUTPUT" 'external-secret-not-for-logs'
 
 assert_not_contains "$OUTPUT" 'redis-secret-not-for-logs'
 assert_not_contains "$CALLS" 'external-secret-not-for-logs'
+
+# The exact body-limit trio is part of target identity. A prepared generation
+# with one stale inherited WebSocket value must never be reused.
+sed -i.bak \
+  's/^GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=134217728$/GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=100000000/' \
+  "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/env.bak"
+: >"$CALLS"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'prepared target with a stale client WebSocket ingress limit was reused'
+fi
+assert_contains "$OUTPUT" 'does not match'
+assert_not_contains "$CALLS" 'start sub2api-green'
+sed -i.bak \
+  's/^GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=100000000$/GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES=134217728/' \
+  "$(state_path sub2api-green)/env"
+rm -f "$(state_path sub2api-green)/env.bak"
 
 # An explicit release override replaces both inherited values and must never
 # reuse a candidate that was precreated for a different listener endpoint.
@@ -1305,6 +1349,7 @@ if FAKE_DOCKER_CADDY_FLOW=true \
   HELPER_NEW_CONTAINER=sub2api \
   HELPER_NEW_IMAGE=sub2api:old \
   PRESERVE_SOURCE_CONTAINER=sub2api \
+  REQUEST_BODY_CONTRACT_ENFORCED=false \
   PANEL_URL="$OVERRIDE_PANEL_URL" \
   PANEL_TOKEN_FILE="$PANEL_TOKEN_CONTAINER_PATH" \
   run_helper >"$OUTPUT" 2>&1; then
@@ -1351,6 +1396,7 @@ if FAKE_DOCKER_CADDY_FLOW=true \
   ALLOW_ISOLATED_OLD_CONTAINER=true \
   REMOVE_EXISTING_NEW_CONTAINER=false \
   PRESERVE_SOURCE_CONTAINER=sub2api \
+  REQUEST_BODY_CONTRACT_ENFORCED=false \
   run_helper >"$OUTPUT" 2>&1; then
   :
 else

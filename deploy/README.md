@@ -33,7 +33,8 @@ Ordinary pushes and tags do not start GitHub Actions. CI, security scans,
 artifact releases, and production deployment are all manually dispatched.
 The production workflow checks out the exact fork `main` commit on a
 GitHub-hosted runner, builds one `linux/amd64` Docker image, and streams a
-zstd-compressed Docker archive through the restricted deploy SSH key.
+zstd-compressed Docker archive plus the reviewed AWS Caddy template through the
+restricted deploy SSH key.
 The runner hashes the exact compressed archive before upload, and production
 verifies that digest before loading it. Docker/containerd may assign different
 local image and config IDs both during `docker save` and again during
@@ -45,7 +46,11 @@ The production host does not check out source, download build dependencies, or
 compile the application in the normal path. Its receiver enforces a compressed
 upload size limit, verifies the archive digest and tag, the `linux/amd64`
 platform, and OCI source/revision/version labels, then passes the verified local
-image to the existing blue-green release helper. A failed identity check,
+image to the existing blue-green release helper. After a successful image
+switch, a separate digest-bound receiver projects and verifies the Caddy
+template against the active slot. Forward releases normalize and verify the
+Server, Gateway, and client Responses WebSocket ingress limits before Caddy can
+activate the matching edge policy. A failed identity check,
 health check, or traffic switch never replaces the active color.
 
 Official upstream changes are deliberately merged into fork `main` by a
@@ -395,8 +400,11 @@ sudo deploy/install-github-deploy-trigger.sh \
 ```
 
 The account has no interactive shell access. Its key accepts only the validated
-`deploy-image COMMIT VERSION ARCHIVE_DIGEST` protocol and cannot start the legacy
-source-build service or run arbitrary SSH commands.
+`deploy-image COMMIT VERSION ARCHIVE_DIGEST` and
+`deploy-caddy COMMIT CONFIG_DIGEST` protocols. The first performs the verified
+blue-green image release; the second applies the reviewed AWS Caddy template
+under the same host-wide maintenance lock with validation and rollback. Neither
+protocol can start the legacy source-build service or run arbitrary commands.
 
 `sub2api-autodeploy.timer` is disabled by default. It can be explicitly used
 by a root operator as a source-build recovery fallback with
@@ -413,6 +421,7 @@ normal production path.
 | `install-github-deploy-trigger.sh` | Installs the restricted GitHub Actions deploy-key account |
 | `sub2api-github-deploy-trigger.sh` | Forced SSH command that validates the deploy protocol |
 | `sub2api-github-image-release.sh` | Validates and loads a GitHub-built image before blue-green release |
+| `sub2api-caddy-config-release.sh` | Validates, projects, activates, and verifies the AWS Caddy template with rollback |
 | `sub2api-server-release.sh` | Runs preflight, blue-green switch, verification, rollback, and draining |
 | `sub2api-drain-monitor.sh` | Waits for a drained slot to become idle and stops it under the maintenance lock |
 | `sub2api-maintenance-lock.sh` | Validates and opens the private shared maintenance lock for root-owned helpers |

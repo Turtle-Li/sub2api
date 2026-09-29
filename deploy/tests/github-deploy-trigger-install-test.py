@@ -29,9 +29,25 @@ class GitHubDeployTriggerInstallTest(unittest.TestCase):
     def test_parser_delegates_private_helper_to_sudo(self) -> None:
         trigger = TRIGGER.read_text(encoding="utf-8")
         self.assertNotIn('[ -f "$IMAGE_RELEASE_SCRIPT" ]', trigger)
+        self.assertNotIn('[ -f "$CADDY_RELEASE_SCRIPT" ]', trigger)
         self.assertIn(
             'exec "$SUDO_BIN" -n "$IMAGE_RELEASE_SCRIPT"',
             trigger,
+        )
+        self.assertIn(
+            'exec "$SUDO_BIN" -n "$CADDY_RELEASE_SCRIPT"',
+            trigger,
+        )
+
+    def test_installer_grants_only_both_release_receivers(self) -> None:
+        installer = INSTALLER.read_text(encoding="utf-8")
+        self.assertIn(
+            '"$DEPLOY_USER" "$IMAGE_RELEASE_SCRIPT"',
+            installer,
+        )
+        self.assertIn(
+            '"$DEPLOY_USER" "$CADDY_RELEASE_SCRIPT"',
+            installer,
         )
 
 

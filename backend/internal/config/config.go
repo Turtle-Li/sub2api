@@ -1399,13 +1399,13 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 }
 
 const (
-	// DefaultOpenAIWSClientFirstMessageTimeoutSeconds allows a 100 MB ingress
+	// DefaultOpenAIWSClientFirstMessageTimeoutSeconds allows a 128 MiB ingress
 	// frame enough time on a normal client uplink without leaving a stalled
 	// authenticated socket open for several minutes.
 	DefaultOpenAIWSClientFirstMessageTimeoutSeconds = 120
 	// DefaultOpenAIWSClientReadLimitBytes keeps WebSocket ingress aligned with
 	// the production Responses request-body policy.
-	DefaultOpenAIWSClientReadLimitBytes int64 = 100_000_000
+	DefaultOpenAIWSClientReadLimitBytes int64 = 128 * 1024 * 1024
 )
 
 // GatewayOpenAIWSConfig OpenAI Responses WebSocket 配置。

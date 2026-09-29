@@ -116,7 +116,7 @@ if [ "${VALIDATE_EXTERNAL_RUNTIME_ONLY:-false}" = true ]; then
   exit 0
 fi
 if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
-  printf 'mode=%s old=%s new=%s backup=%s isolated_old=%s route_contract_warn_only=%s fixed_egress_compatibility=%s preserve_source=%s wrapper_owns_caddy_recovery=%s caddy_recovery_action=%s\n' \
+  printf 'mode=%s old=%s new=%s backup=%s isolated_old=%s route_contract_warn_only=%s fixed_egress_compatibility=%s preserve_source=%s request_body_contract=%s wrapper_owns_caddy_recovery=%s caddy_recovery_action=%s\n' \
     "${SUB2API_RUNTIME_GUARD_DEPENDENCY_MODE:-}" \
     "${OLD_CONTAINER:-}" \
     "${NEW_CONTAINER:-}" \
@@ -125,6 +125,7 @@ if [ -n "${FAKE_BLUE_GREEN_ENV_LOG:-}" ]; then
     "${SUB2API_RELEASE_ROUTE_CONTRACT_WARN_ONLY:-false}" \
     "${SUB2API_RELEASE_FIXED_EGRESS_COMPATIBILITY_MODE:-}" \
     "${SUB2API_RELEASE_FIXED_EGRESS_PRESERVE_SOURCE_CONTAINER:-}" \
+    "${SUB2API_RELEASE_REQUEST_BODY_CONTRACT_ENFORCED:-}" \
     "${SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY:-false}" \
     "${SUB2API_CADDY_SWITCH_RECOVERY_ACTION:-normal}" >>"$FAKE_BLUE_GREEN_ENV_LOG"
 fi
@@ -755,6 +756,8 @@ assert_contains "$BLUE_GREEN_ENV_LOG" \
   'mode=local old=sub2api-blue new=sub2api-green backup=false isolated_old=true route_contract_warn_only=true fixed_egress_compatibility=preserve preserve_source=sub2api-green'
 assert_contains "$BLUE_GREEN_ENV_LOG" \
   'route_contract_warn_only=true fixed_egress_compatibility=preserve preserve_source=sub2api-green'
+assert_contains "$BLUE_GREEN_ENV_LOG" \
+  'preserve_source=sub2api-green request_body_contract=false'
 
 # If the failed new generation is still running, rollback must retain the
 # normal blue-green source contract rather than forcing isolated-old mode.
@@ -783,6 +786,7 @@ assert_contains "$NODE_STATE_CALLS" 'commit-local'
 assert_contains "$CURL_CALLS" '--resolve example.invalid:443:192.0.2.10'
 assert_contains "$CURL_CALLS" '--noproxy *'
 assert_contains "$BLUE_GREEN_ENV_LOG" 'fixed_egress_compatibility=true'
+assert_contains "$BLUE_GREEN_ENV_LOG" 'request_body_contract=true'
 if grep -Fq -- 'abort-local' "$NODE_STATE_CALLS"; then
   fail 'successful release invoked node-state abort'
 fi

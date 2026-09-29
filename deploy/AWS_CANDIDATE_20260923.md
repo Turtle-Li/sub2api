@@ -21,7 +21,7 @@ rollback targets.
 | Runtime directories | Root-owned `/opt/sub2api` and `/var/log/sub2api-release`, mode 0750; `secrets`, `db-host-ca`, and `staging` mode 0700 |
 | Installed baseline | Docker 29.1.3, Compose 2.40.3, sysstat, unattended-upgrades; UFW default-deny incoming, allow outgoing |
 | Release control | Root-owned `/opt/sub2api/scripts` and mode-0600 `/etc/sub2api-autodeploy.env`; external dependency mode, `activate`, real-request probe enabled, loopback-pinned public health check, both release/recovery timers disabled and inactive. `activate` is required because AWS is the sole background owner. |
-| GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the image-release protocol through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
+| GitHub deployment | Environment `aws-candidate` owns distinct host, user, key and known-host secrets plus non-secret OIDC role, region and instance variables. Forced-command account `sub2api-github-deploy` accepts only the digest-bound image-release and Caddy-config protocols through root-owned `/usr/local/libexec/sub2api-github-deploy-trigger`; the application root remains 0750. Deploy-key fingerprint `SHA256:im2yTlnEhikA+shKRt00rpAuBVhHTvXYwlH8d7nOOpc`; Vault item `86513fc6-74bb-47f5-8942-c91db01e0630`; OIDC role `GitHubSub2APIAWSCandidateDeploy` trusts only `repo:Turtle-Li/sub2api:environment:aws-candidate`. |
 | Application release | Fork `main` commit `b806571f4223620a7f559ce920142f3f0439c227` from successful GitHub Actions run `36143574663`, active image `sub2api:auto-20260925-135754-b806571f` and slot `sub2api-blue`, healthy with zero restarts/OOM; host release record `/var/log/sub2api-release/gha-20260925-135754-b806571f-681848/`; authenticated models and Responses probes returned 200; 2 GiB persistent swap is enabled with swappiness 10 |
 | Proxy | AWS-specific Caddy route for production API and www; public HTTPS passed health, auth-boundary, public settings, homepage, authenticated Responses/SSE and synchronous/asynchronous image probes |
 | Local Docker state | Healthy application, Caddy, payment Vault Agent, and Feishu Vault Agent containers with project network and separate named volumes |
@@ -305,6 +305,57 @@ application CPU at 4.61% and application memory at 55.9 MiB. Application and
 Caddy retained zero restarts/OOM and emitted no error signal in the test window.
 This establishes bounded sustained egress and host headroom to the selected
 destination; it is not a universal Internet throughput guarantee.
+
+### 2026-09-30 upload recheck and request-body contract
+
+A second sequential, single-connection upload probe sent 240 MiB total to the
+same Cloudflare endpoint without involving any model request. The 16, 32, 64,
+and 128 MiB requests all returned HTTP 200. Their observed payload rates were
+54,585,258, 103,258,067, 36,679,547, and 113,003,948 bytes/s respectively.
+These burst results vary by request and destination, so the earlier sustained
+1 GiB result of 15.753 MiB/s remains the conservative sizing input.
+
+At that sustained rate a 128 MiB request takes about 8.1 seconds, while 256
+MiB takes about 16.3 seconds. The application host has 2 GiB RAM. The selected
+production ingress ceiling is therefore exactly 128 MiB (`134217728` bytes),
+which preserves useful multimodal headroom without doubling the worst-case
+per-request buffering budget. During the probe, the application and Caddy kept
+zero restarts and OOM events, health remained good, load stayed low, and
+available memory remained above 1 GiB.
+
+The pre-repair audit found configuration drift rather than a 16 MB live cap:
+
+- live AWS Caddy enforced decimal `100000000` bytes on every API route;
+- the live application pinned both `SERVER_MAX_REQUEST_BODY_SIZE` and
+  `GATEWAY_MAX_BODY_SIZE` to `134217728` bytes;
+- client Responses WebSocket ingress defaulted to `100000000` bytes;
+- a 16 MiB startup log value belonged only to upstream WebSocket response
+  messages, but its ambiguous field name could be mistaken for ingress.
+
+The repaired contract sets AWS Caddy HTTP ingress, both application HTTP
+guards, and client Responses WebSocket ingress to the same exact 128 MiB value.
+Every forward blue-green release removes inherited values for those three
+application environment keys, writes one exact value for each, and verifies
+the candidate before cutover. The separate upstream response-message limit is
+named explicitly. Known pure-text endpoints retain their intentional 32 MiB
+application policy, and per-feature image/reference budgets remain independent
+business constraints rather than hidden edge limits.
+
+The audit also found narrower, intentional application contracts that are not
+AWS edge drift: compressed request bodies are capped at 64 MiB after
+decompression to bound decompression bombs; image multipart parts are capped at
+20 MiB; Image 2.5 source images at 16 MiB; payment/webhook, invoice, plugin,
+and internal control endpoints have their own smaller authenticated payload
+budgets. The generic bundled Caddy templates still use a scoped 128 MB/16 MB
+policy, but they are not mounted by the AWS production topology.
+
+The production workflow now transfers the reviewed AWS Caddy template with
+its SHA-256 after every blue-green image release. The root-owned receiver holds
+the shared maintenance lock, projects the currently active blue/green slot,
+validates Caddy and the body-size contract, updates the bind-mounted file in
+place, reloads, verifies host/startup/Admin API convergence plus health, and
+restores the prior bytes on failure. This closes the prior template-to-live
+projection gap; a Git-only Caddy change is no longer considered deployed.
 
 ## Proxy dependency inventory
 

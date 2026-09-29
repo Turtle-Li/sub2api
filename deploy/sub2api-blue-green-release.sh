@@ -50,6 +50,11 @@ REAL_REQUEST_PROBE_ENABLED="${SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED:-false}
 REAL_REQUEST_PROBE_SCRIPT="${SUB2API_RELEASE_REAL_REQUEST_PROBE_SCRIPT:-${APP_DIR}/scripts/sub2api-real-request-probe.sh}"
 REAL_REQUEST_PROBE_KEY_FILE="${SUB2API_RELEASE_REAL_REQUEST_PROBE_KEY_FILE:-${APP_DIR}/secrets/release-probe-api-key}"
 REAL_REQUEST_PROBE_MODEL="${SUB2API_RELEASE_REAL_REQUEST_PROBE_MODEL:-gpt-5.6-sol}"
+# Forward releases normalize and verify the production ingress contract. A
+# rollback may target a generation created before this contract existed, so
+# the server coordinator can narrowly disable only the target-env identity
+# check while retaining every ordinary rollback safety gate.
+REQUEST_BODY_CONTRACT_ENFORCED="${SUB2API_RELEASE_REQUEST_BODY_CONTRACT_ENFORCED:-true}"
 # This narrow mode validates the externally supplied dependency/runtime files
 # and exits before any Docker or Caddy lifecycle operation.  The server
 # coordinator uses it before discarding a stale stopped external target.
@@ -148,6 +153,10 @@ EXTERNAL_ENV_KEYS=(
 EXTERNAL_OVERRIDE_KEYS=("${EXTERNAL_ENV_KEYS[@]}" PGSSLROOTCERT)
 RUNTIME_OVERRIDE_KEYS=(
   SUB2API_TRAFFIC_STATE_FILE SUB2API_BACKGROUND_STATE_FILE SUB2API_INTERNAL_HEALTH_TOKEN_FILE
+)
+REQUEST_BODY_LIMIT_BYTES=134217728
+REQUEST_BODY_OVERRIDE_KEYS=(
+  SERVER_MAX_REQUEST_BODY_SIZE GATEWAY_MAX_BODY_SIZE GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES
 )
 CODEX_TURN_STATE_PANEL_OVERRIDE_KEYS=(
   CODEX_TURN_STATE_PANEL_URL CODEX_TURN_STATE_PANEL_TOKEN_FILE
@@ -840,6 +849,9 @@ container_matches_local_compatibility_container() {
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_feishu_env "$inspect_env" || return 1
   container_matches_url_allowlist_env "$inspect_env" || return 1
+  if [ "$REQUEST_BODY_CONTRACT_ENFORCED" = true ]; then
+	container_matches_request_body_env "$inspect_env" || return 1
+  fi
   new_temp_file
   inspect_mounts="$TEMP_FILE"
   docker inspect "$container" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{printf "%s|%s|%s|%t\n" .Type .Name .Destination .RW}}{{else}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}{{end}}' >"$inspect_mounts"
@@ -956,6 +968,9 @@ make_runtime_env_file() {
 	  SUB2API_TRAFFIC_STATE_FILE|SUB2API_BACKGROUND_STATE_FILE|SUB2API_INTERNAL_HEALTH_TOKEN_FILE)
 		continue
 		;;
+	  SERVER_MAX_REQUEST_BODY_SIZE|GATEWAY_MAX_BODY_SIZE|GATEWAY_OPENAI_WS_CLIENT_READ_LIMIT_BYTES)
+		continue
+		;;
 	  CODEX_TURN_STATE_PANEL_URL|CODEX_TURN_STATE_PANEL_TOKEN_FILE)
 		[ "$CODEX_TURN_STATE_PANEL_OVERRIDE_APPLIES" = true ] && continue
 		;;
@@ -974,6 +989,9 @@ make_runtime_env_file() {
   if [ "$DEPENDENCY_MODE" = external ]; then
 	write_external_overrides "$output_file"
   fi
+  for key in "${REQUEST_BODY_OVERRIDE_KEYS[@]}"; do
+	printf '%s=%s\n' "$key" "$REQUEST_BODY_LIMIT_BYTES" >>"$output_file"
+  done
   if [ "$DUAL_NODE_RUNTIME_ENABLED" = true ]; then
 	{
 	  printf 'SUB2API_TRAFFIC_STATE_FILE=%s\n' "$CONTAINER_TRAFFIC_STATE_PATH"
@@ -995,6 +1013,20 @@ make_runtime_env_file() {
   write_url_allowlist_overrides "$output_file"
   printf 'SUB2API_FEISHU_ENABLED=%s\n' "$FEISHU_ENABLED" >>"$output_file"
   RUNTIME_ENV_FILE="$output_file"
+}
+
+container_matches_request_body_env() {
+  local inspect_env="$1" key actual_value
+
+  for key in "${REQUEST_BODY_OVERRIDE_KEYS[@]}"; do
+	if ! actual_value="$(awk -v expected_key="$key" '
+	  index($0, expected_key "=") == 1 { count += 1; value = substr($0, length(expected_key) + 2) }
+	  END { if (count != 1) exit 1; print value }
+	' "$inspect_env")"; then
+	  return 1
+	fi
+	[ "$actual_value" = "$REQUEST_BODY_LIMIT_BYTES" ] || return 1
+  done
 }
 
 container_matches_external_runtime() {
@@ -1053,6 +1085,9 @@ container_matches_external_runtime() {
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
   container_matches_url_allowlist_env "$inspect_env" || return 1
+  if [ "$REQUEST_BODY_CONTRACT_ENFORCED" = true ]; then
+	container_matches_request_body_env "$inspect_env" || return 1
+  fi
   for key in "${EXTERNAL_OVERRIDE_KEYS[@]}"; do
     if [ "$key" = PGSSLROOTCERT ]; then
       expected_value="$CONTAINER_PG_CA_PATH"
@@ -1137,6 +1172,9 @@ container_matches_local_runtime() {
   container_matches_fixed_egress_compatibility_env "$inspect_env" || return 1
   container_matches_codex_turn_state_panel_env "$inspect_env" || return 1
   container_matches_url_allowlist_env "$inspect_env" || return 1
+  if [ "$REQUEST_BODY_CONTRACT_ENFORCED" = true ]; then
+	container_matches_request_body_env "$inspect_env" || return 1
+  fi
   for key in "${RUNTIME_OVERRIDE_KEYS[@]}"; do
 	case "$key" in
 	  SUB2API_TRAFFIC_STATE_FILE) expected_value="$CONTAINER_TRAFFIC_STATE_PATH" ;;
@@ -1625,6 +1663,7 @@ require_bool RUN_BACKUP "$RUN_BACKUP"
 require_bool PULL_IMAGE "$PULL_IMAGE"
 require_bool SUB2API_DUAL_NODE_RUNTIME_ENABLED "$DUAL_NODE_RUNTIME_ENABLED"
 require_bool SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED "$REAL_REQUEST_PROBE_ENABLED"
+require_bool SUB2API_RELEASE_REQUEST_BODY_CONTRACT_ENFORCED "$REQUEST_BODY_CONTRACT_ENFORCED"
 require_bool VALIDATE_EXTERNAL_RUNTIME_ONLY "$VALIDATE_EXTERNAL_RUNTIME_ONLY"
 require_bool SUB2API_SERVER_WRAPPER_OWNS_CADDY_RECOVERY "$SERVER_WRAPPER_OWNS_CADDY_RECOVERY"
 case "$CADDY_SWITCH_RECOVERY_ACTION" in
@@ -1872,8 +1911,8 @@ else
 		container_matches_local_runtime "$NEW_CONTAINER" true \
 		  || die "running local target does not match the requested image or dual-node runtime contract"
 	  else
-		container_matches_local_compatibility_container "$NEW_CONTAINER" \
-		  || die "running local target does not match the requested fixed-egress or Feishu configuration"
+	container_matches_local_compatibility_container "$NEW_CONTAINER" \
+		  || die "running local target does not match the requested fixed-egress, Feishu, or ingress configuration"
 	  fi
       log "$NEW_CONTAINER already exists with status $status; reusing it"
     else

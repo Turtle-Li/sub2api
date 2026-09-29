@@ -347,6 +347,8 @@ assert_contains "$CONFIG_FILE" "SUB2API_MAINTENANCE_LOCK_FILE=${MAINTENANCE_LOCK
   || fail 'image upscale Vault sidecar helper was not installed'
 [ -x "${APP_DIR}/scripts/install-github-deploy-trigger.sh" ] \
   || fail 'GitHub forced-command installer was not installed'
+[ -x "${APP_DIR}/scripts/sub2api-caddy-config-release.sh" ] \
+  || fail 'GitHub Caddy configuration receiver was not installed'
 [ -x "${APP_DIR}/scripts/verify_image_route_contract.py" ] \
   || fail 'image route contract verifier was not installed beside release scripts'
 [ -x "${TEST_ROOT}/libexec/sub2api-maintenance-lock.sh" ] \

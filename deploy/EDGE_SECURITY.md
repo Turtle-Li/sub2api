@@ -19,8 +19,20 @@ terminate healthy long generations and streams.
   the exact `/v1/images/batches` submit path, and 16 MB on every other route.
   The Batch Image handler authenticates before reading its potentially large
   JSON body, while its application contract still enforces reference and job
-  budgets. Responses WebSocket frames use the matching 100,000,000-byte
-  application read limit instead of Caddy's HTTP-body limit.
+  budgets.
+- AWS production uses its dedicated `deploy/aws-candidate/Caddyfile`, not the
+  bundled baseline. Every AWS API HTTP route has one exact 128 MiB
+  (`134217728` byte) edge limit. The restricted production release protocol
+  uploads, validates, activates, and verifies that template after each image
+  release, so a repository-only edit cannot leave the live edge on 16 MB or a
+  stale decimal-MB limit.
+- Client-to-Sub2API Responses WebSocket ingress also defaults to 128 MiB. The
+  forward blue-green release normalizes the Server, Gateway, and client
+  WebSocket environment keys to exact `134217728` values and the Caddy release
+  receiver verifies all three on the exact active image revision. The separate
+  16 MiB `upstream_ws_read_limit_bytes` log field protects individual messages
+  received from the upstream OpenAI WebSocket; it is not a client upload or
+  HTTP request-body limit.
 - H2C defaults to 50 concurrent streams per connection, a 2 MiB connection
   upload window, and a 512 KiB stream upload window.
 - Invalid credential abuse is limited in process by trusted client IP (IPv6
@@ -154,8 +166,9 @@ processing is restricted to explicit trusted proxy CIDRs.
 ## Caddy and CDN
 
 The bundled `deploy/Caddyfile` sets a 64 KiB header limit, a 10-second header
-timeout, a 256 MiB absolute body limit, and overwrites forwarded addresses from
-the TCP peer. It is therefore a direct-to-Caddy baseline. Do not use its
+timeout, scoped 128 MB multimodal and 16 MB standard-route body limits, and
+overwrites forwarded addresses from the TCP peer. It is therefore a
+direct-to-Caddy baseline. Do not use its
 `{remote_host}` forwarding lines unchanged behind a CDN: all clients would be
 attributed to a CDN egress address, collapsing rejection aggregation and the
 invalid-auth limiter onto unrelated users.

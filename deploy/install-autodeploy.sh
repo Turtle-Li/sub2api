@@ -796,6 +796,7 @@ git -C "$SOURCE_ROOT" check-ref-format --branch "$PRODUCTION_BRANCH" >/dev/null
 for file in \
   deploy/sub2api-autodeploy.sh \
   deploy/sub2api-github-image-release.sh \
+  deploy/sub2api-caddy-config-release.sh \
   deploy/sub2api-server-release.sh \
   deploy/sub2api-reviewed-refunds-rollout.sh \
   deploy/sub2api-real-request-probe.sh \
@@ -824,6 +825,7 @@ done
 
 bash -n "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh"
+bash -n "${SOURCE_ROOT}/deploy/sub2api-caddy-config-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-server-release.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-reviewed-refunds-rollout.sh"
 bash -n "${SOURCE_ROOT}/deploy/sub2api-real-request-probe.sh"
@@ -982,6 +984,8 @@ install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-autodeploy.sh" \
   "${SCRIPT_DIR}/sub2api-autodeploy.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-github-image-release.sh" \
   "${SCRIPT_DIR}/sub2api-github-image-release.sh"
+install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-caddy-config-release.sh" \
+  "${SCRIPT_DIR}/sub2api-caddy-config-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-server-release.sh" \
   "${SCRIPT_DIR}/sub2api-server-release.sh"
 install -D -m 750 "${SOURCE_ROOT}/deploy/sub2api-reviewed-refunds-rollout.sh" \

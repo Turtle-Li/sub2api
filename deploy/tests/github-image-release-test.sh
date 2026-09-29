@@ -221,9 +221,14 @@ cat >"${APP_DIR}/scripts/sub2api-github-image-release.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
+cat >"${APP_DIR}/scripts/sub2api-caddy-config-release.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
 # The forced-command user only needs to see the root-owned receiver path; sudo
 # performs the actual execute permission check as root.
 chmod 644 "${APP_DIR}/scripts/sub2api-github-image-release.sh"
+chmod 644 "${APP_DIR}/scripts/sub2api-caddy-config-release.sh"
 
 cat >"${FAKE_BIN}/sudo" <<'EOF'
 #!/usr/bin/env bash
@@ -241,6 +246,16 @@ SSH_ORIGINAL_COMMAND="deploy-image ${COMMIT} ${VERSION} ${ARCHIVE_DIGEST}" \
 assert_contains "$SUDO_CALLS" \
   "-n ${trigger_receiver} ${COMMIT} ${VERSION} ${ARCHIVE_DIGEST}"
 
+caddy_digest="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+caddy_receiver="${APP_DIR}/scripts/sub2api-caddy-config-release.sh"
+SSH_ORIGINAL_COMMAND="deploy-caddy ${COMMIT} ${caddy_digest}" \
+  FAKE_SUDO_CALLS="$SUDO_CALLS" \
+  SUB2API_APP_DIR="$APP_DIR" \
+  SUB2API_SUDO_BIN="${FAKE_BIN}/sudo" \
+  /bin/bash "$TRIGGER"
+assert_contains "$SUDO_CALLS" \
+  "-n ${caddy_receiver} ${COMMIT} ${caddy_digest}"
+
 sudo_count_before="$(line_count "$SUDO_CALLS")"
 if SSH_ORIGINAL_COMMAND="deploy-image ${COMMIT} ${VERSION} ${ARCHIVE_DIGEST} extra" \
   FAKE_SUDO_CALLS="$SUDO_CALLS" \
@@ -251,6 +266,16 @@ if SSH_ORIGINAL_COMMAND="deploy-image ${COMMIT} ${VERSION} ${ARCHIVE_DIGEST} ext
 fi
 [ "$(line_count "$SUDO_CALLS")" = "$sudo_count_before" ] \
   || fail 'invalid forced command reached sudo'
+
+if SSH_ORIGINAL_COMMAND="deploy-caddy ${COMMIT} ${caddy_digest} extra" \
+  FAKE_SUDO_CALLS="$SUDO_CALLS" \
+  SUB2API_APP_DIR="$APP_DIR" \
+  SUB2API_SUDO_BIN="${FAKE_BIN}/sudo" \
+  /bin/bash "$TRIGGER" >/dev/null 2>&1; then
+  fail 'forced-command handler accepted an extra Caddy argument'
+fi
+[ "$(line_count "$SUDO_CALLS")" = "$sudo_count_before" ] \
+  || fail 'invalid Caddy deploy command reached sudo'
 
 if SSH_ORIGINAL_COMMAND=deploy \
   FAKE_SUDO_CALLS="$SUDO_CALLS" \

@@ -50,12 +50,16 @@ class GitHubAwsRunnerSshWorkflowTest(unittest.TestCase):
 
     def test_temporary_rule_is_always_closed_after_upload(self) -> None:
         open_index = self.workflow.index("open-instance-public-ports")
-        upload_index = self.workflow.index(
+        image_upload_index = self.workflow.index(
             "Upload image and start verified blue-green release"
         )
+        caddy_upload_index = self.workflow.index(
+            "Upload and activate verified AWS Caddy configuration"
+        )
         close_index = self.workflow.index("close-instance-public-ports")
-        self.assertLess(open_index, upload_index)
-        self.assertLess(upload_index, close_index)
+        self.assertLess(open_index, image_upload_index)
+        self.assertLess(image_upload_index, caddy_upload_index)
+        self.assertLess(caddy_upload_index, close_index)
         self.assertIn(
             "if: ${{ always() && !inputs.build_only && "
             "inputs.deployment_target == 'aws-candidate' }}",
@@ -67,6 +71,18 @@ class GitHubAwsRunnerSshWorkflowTest(unittest.TestCase):
             self.workflow,
         )
         self.assertIn("timeout-minutes: 35", self.workflow)
+
+    def test_caddy_upload_is_bound_to_the_exact_source_commit_and_digest(self) -> None:
+        self.assertIn("CADDY_CONFIG=deploy/aws-candidate/Caddyfile", self.workflow)
+        self.assertIn(
+            'CADDY_DIGEST="sha256:$(sha256sum "$CADDY_CONFIG" | awk \'{print $1}\')"',
+            self.workflow,
+        )
+        self.assertIn(
+            '"deploy-caddy ${SOURCE_COMMIT} ${CADDY_DIGEST}"',
+            self.workflow,
+        )
+        self.assertIn('< "$CADDY_CONFIG"', self.workflow)
 
 
 if __name__ == "__main__":

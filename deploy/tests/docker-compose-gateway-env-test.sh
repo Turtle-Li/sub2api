@@ -11,7 +11,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 awk '
-  /^GATEWAY_[A-Z0-9_]+=/ {
+  /^(SERVER_MAX_REQUEST_BODY_SIZE|GATEWAY_[A-Z0-9_]+)=/ {
     separator = index($0, "=")
     print substr($0, 1, separator - 1) "\t" substr($0, separator + 1)
   }
@@ -54,4 +54,4 @@ do
   done < "$gateway_variables"
 done
 
-printf 'docker compose Gateway environment test passed\n'
+printf 'docker compose request-body and Gateway environment test passed\n'

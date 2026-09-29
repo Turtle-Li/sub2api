@@ -4,6 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 caddyfile="$repo_root/deploy/Caddyfile"
 external_caddyfile="$repo_root/deploy/Caddyfile.external-cert.example"
+candidate_caddyfile="$repo_root/deploy/aws-candidate/Caddyfile"
 route_verifier="$repo_root/deploy/verify_image_route_contract.py"
 if [ ! -x "$route_verifier" ]; then
 	echo "image route contract verifier must be an executable source artifact" >&2
@@ -159,4 +160,19 @@ if ! printf '%s\n' "$external_config" | grep -Eq '^[[:space:]]*@standard_request
 	exit 1
 fi
 
-echo "Caddyfile preserves backend cache policy, image aliases, routing, SSE streaming, and scoped multimodal body limits"
+# AWS production has a dedicated all-route ingress policy. Keep every matcher,
+# Caddy streaming limiter, and operator-facing error on the exact same binary
+# value so a decimal-MB or stale 16 MB layer cannot silently become effective.
+candidate_max_size_count=$(grep -Ec '^[[:space:]]*max_size[[:space:]]+128MiB[[:space:]]*$' "$candidate_caddyfile" || true)
+candidate_threshold_count=$(grep -Fc '> 134217728`' "$candidate_caddyfile" || true)
+candidate_message_count=$(grep -Fc '超过 128MiB' "$candidate_caddyfile" || true)
+if [ "$candidate_max_size_count" -ne 4 ] || [ "$candidate_threshold_count" -ne 4 ] || [ "$candidate_message_count" -ne 4 ]; then
+	echo "AWS production Caddyfile must define four aligned 128 MiB request-body guards" >&2
+	exit 1
+fi
+if grep -Eq 'max_size[[:space:]]+(16MB|100MB)|100000000|超过 (16MB|100MB)' "$candidate_caddyfile"; then
+	echo "AWS production Caddyfile must not retain a stale 16 MB or decimal 100 MB request-body guard" >&2
+	exit 1
+fi
+
+echo "Caddyfiles preserve routing/streaming policy and the AWS 128 MiB request-body contract"
