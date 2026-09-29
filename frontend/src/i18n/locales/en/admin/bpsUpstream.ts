@@ -146,6 +146,7 @@ export default { bpsUpstream: {
     "handler_before_output": "Response handling failed",
     "native_continuation": "Continued natively after output",
     "context_stall": "No output: context too large",
-    "encrypted_content": "Session ciphertext rejected"
+    "encrypted_content": "Session ciphertext rejected",
+    "usage_policy": "Blocked by usage policy"
   }
 } }

@@ -33,6 +33,10 @@ const (
 	bpsErrorBodyLimit      = 4096
 	bpsBreakerThreshold    = 3
 	bpsBreakerOpenDuration = 10 * time.Minute
+	// bpsBreakerPolicyOpenDuration：BPS 以用量策略 403 拒绝属于账号级风控，按账号熔断更久。
+	// 到期后再次被拦则时长翻倍，最长 bpsBreakerPolicyMaxOpen；成功一次即清零。原路径不受影响。
+	bpsBreakerPolicyOpenDuration = time.Hour
+	bpsBreakerPolicyMaxOpen      = 4 * time.Hour
 	// bpsFirstOutputBudget 是未配置首输出超时时，BPS 从发起到出现首个模型产出事件的上限。
 	bpsFirstOutputBudget = 20 * time.Second
 	// bpsSessionCooldown 是同一会话连续 bpsSessionCooldownThreshold 次 BPS 转换失败后直接走原路径的时长。
@@ -94,6 +98,9 @@ func isBPSUpstreamModel(model string) bool {
 type bpsBreakerState struct {
 	failures  int
 	openUntil time.Time
+	// policyStrikes 为未经成功打断的用量策略熔断次数，policyUntil 为本次策略熔断截止时间。
+	policyStrikes int
+	policyUntil   time.Time
 }
 
 type bpsCircuitBreaker struct {
@@ -129,11 +136,44 @@ func (b *bpsCircuitBreaker) recordFailure(accountID int64, statusCode int) bool 
 	state.failures++
 	immediate := statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden || statusCode == http.StatusTooManyRequests
 	if immediate || state.failures >= bpsBreakerThreshold {
-		state.openUntil = b.now().Add(bpsBreakerOpenDuration)
+		// 只延长不缩短：熔断前已发出的请求随后失败，不能把更长的策略熔断改短。
+		if until := b.now().Add(bpsBreakerOpenDuration); state.openUntil.Before(until) {
+			state.openUntil = until
+		}
 		state.failures = 0
 		return true
 	}
 	return false
+}
+
+// recordPolicyBlock 按账号风控熔断 BPS：首次 bpsBreakerPolicyOpenDuration，到期后再被拦依次翻倍。
+// 熔断前已发出的请求随后陆续被拦只算一次，返回是否新开了熔断。
+func (b *bpsCircuitBreaker) recordPolicyBlock(accountID int64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	state := b.states[accountID]
+	if state == nil {
+		state = &bpsBreakerState{}
+		b.states[accountID] = state
+	}
+	now := b.now()
+	if now.Before(state.policyUntil) {
+		return false
+	}
+	d := bpsBreakerPolicyOpenDuration
+	for i := 0; i < state.policyStrikes && d < bpsBreakerPolicyMaxOpen; i++ {
+		d *= 2
+	}
+	if d > bpsBreakerPolicyMaxOpen {
+		d = bpsBreakerPolicyMaxOpen
+	}
+	state.policyStrikes++
+	state.policyUntil = now.Add(d)
+	if state.openUntil.Before(state.policyUntil) {
+		state.openUntil = state.policyUntil
+	}
+	state.failures = 0
+	return true
 }
 
 // state 返回连续失败数与熔断截止时间（未熔断时为 nil）。
@@ -359,7 +399,14 @@ const (
 	// bpsFailureEncrypted：删掉推理密文重试后 BPS 仍拒绝会话里的密文（如多智能体消息），
 	// 只影响该会话：不计入账号熔断，按会话冷却。
 	bpsFailureEncrypted = "encrypted_content"
+	// bpsFailurePolicy：BPS 以 403 "blocked by our usage policy" 拒绝，属账号级风控，按账号长时熔断。
+	bpsFailurePolicy = "usage_policy"
 )
+
+// bpsIsUsagePolicyBlock 识别 BPS 用量策略拦截的 403（"This request was blocked by our usage policy."）。
+func bpsIsUsagePolicyBlock(statusCode int, message string) bool {
+	return statusCode == http.StatusForbidden && strings.Contains(strings.ToLower(message), "usage policy")
+}
 
 func (a *openAIBPSAttempt) event(outcome, reason, detail string, statusCode int) BPSEvent {
 	event := BPSEvent{AccountID: a.accountID, Model: a.upstreamModel, Outcome: outcome, Reason: reason, Detail: detail, StatusCode: statusCode, RequestedEffort: a.effort, AppliedEffort: a.appliedEffort}
@@ -404,7 +451,11 @@ func (a *openAIBPSAttempt) recordFailure(reason string, statusCode int, detail s
 	opened := false
 	formatOnly := bpsIsToolFormatFailure(detail)
 	if a.failed.CompareAndSwap(false, true) && reason != bpsFailureContextStall && reason != bpsFailureEncrypted && !formatOnly {
-		opened = bpsBreaker.recordFailure(a.accountID, statusCode)
+		if reason == bpsFailurePolicy {
+			opened = bpsBreaker.recordPolicyBlock(a.accountID)
+		} else {
+			opened = bpsBreaker.recordFailure(a.accountID, statusCode)
+		}
 	}
 	if !formatOnly && (reason == bpsFailureStream || reason == bpsFailureHandler || reason == bpsFailureContinued || reason == bpsFailureEncrypted) {
 		bpsSessionCooldowns.mark(a.scope)
@@ -648,10 +699,14 @@ func (s *OpenAIGatewayService) tryOpenAIBPSUpstream(parent context.Context, acco
 		}
 		if resp == nil {
 			reason := bpsFailureHTTPStatus
-			if statusCode == http.StatusBadRequest && extractUpstreamErrorCode(errBody) == "invalid_encrypted_content" {
+			message := extractUpstreamErrorMessage(errBody)
+			switch {
+			case statusCode == http.StatusBadRequest && extractUpstreamErrorCode(errBody) == "invalid_encrypted_content":
 				reason = bpsFailureEncrypted
+			case bpsIsUsagePolicyBlock(statusCode, message):
+				reason = bpsFailurePolicy
 			}
-			attempt.recordFailure(reason, statusCode, extractUpstreamErrorMessage(errBody), false)
+			attempt.recordFailure(reason, statusCode, message, false)
 			return nil, false
 		}
 		if !headerTimer.Stop() {

@@ -441,6 +441,40 @@ func TestBPSCircuitBreaker(t *testing.T) {
 	require.True(t, breaker.allow(3))
 }
 
+// 用量策略 403 按账号风控长时熔断：到期后再被拦时长翻倍、封顶，成功一次清零。
+func TestBPSCircuitBreakerPolicyBlock(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	breaker := &bpsCircuitBreaker{states: map[int64]*bpsBreakerState{}, now: func() time.Time { return now }}
+	openFor := func() time.Duration {
+		_, until := breaker.state(1)
+		require.NotNil(t, until)
+		return until.Sub(now)
+	}
+
+	require.True(t, bpsIsUsagePolicyBlock(http.StatusForbidden, "403: This request was blocked by our usage policy."))
+	require.False(t, bpsIsUsagePolicyBlock(http.StatusForbidden, "basispoints_model_access_changed"))
+	require.False(t, bpsIsUsagePolicyBlock(http.StatusBadRequest, "blocked by our usage policy"))
+
+	require.True(t, breaker.recordPolicyBlock(1))
+	require.Equal(t, bpsBreakerPolicyOpenDuration, openFor())
+	// 熔断前已发出的请求随后被拦或普通失败，既不叠加也不把熔断改短。
+	require.False(t, breaker.recordPolicyBlock(1))
+	breaker.recordFailure(1, http.StatusForbidden)
+	require.Equal(t, bpsBreakerPolicyOpenDuration, openFor())
+
+	for _, want := range []time.Duration{2 * time.Hour, 4 * time.Hour, bpsBreakerPolicyMaxOpen} {
+		now = now.Add(bpsBreakerPolicyMaxOpen)
+		require.True(t, breaker.allow(1))
+		require.True(t, breaker.recordPolicyBlock(1))
+		require.Equal(t, want, openFor())
+	}
+
+	breaker.recordSuccess(1)
+	require.True(t, breaker.allow(1))
+	require.True(t, breaker.recordPolicyBlock(1))
+	require.Equal(t, bpsBreakerPolicyOpenDuration, openFor())
+}
+
 type bpsSettingRepoStub struct {
 	SettingRepository
 	values map[string]string
@@ -647,6 +681,26 @@ func TestDoOpenAIUpstreamPreferBPS(t *testing.T) {
 		out, _ := io.ReadAll(resp.Body)
 		require.Equal(t, "original", string(out))
 		require.False(t, bpsBreaker.allow(account.ID))
+	})
+
+	t.Run("usage policy 403 falls back and opens long breaker", func(t *testing.T) {
+		account := bpsTestAccount()
+		account.ID = 90_106
+		t.Cleanup(func() { bpsBreaker.recordSuccess(account.ID) })
+		upstream := &httpUpstreamRecorder{responses: []*http.Response{
+			{StatusCode: http.StatusForbidden, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"403: This request was blocked by our usage policy.","type":"server_error"}}`))},
+			originalResp(),
+		}}
+		svc := &OpenAIGatewayService{httpUpstream: upstream}
+		resp, bpsRun, err := svc.doOpenAIUpstreamPreferBPS(newReq(), "", account, "tok", newAttempt(account))
+		require.NoError(t, err)
+		require.Nil(t, bpsRun)
+		require.Len(t, upstream.requests, 2)
+		out, _ := io.ReadAll(resp.Body)
+		require.Equal(t, "original", string(out))
+		_, openUntil := bpsBreaker.state(account.ID)
+		require.NotNil(t, openUntil)
+		require.Greater(t, time.Until(*openUntil), bpsBreakerPolicyOpenDuration-time.Minute)
 	})
 
 	t.Run("failed stream before output falls back", func(t *testing.T) {

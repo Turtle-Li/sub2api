@@ -146,6 +146,7 @@ export default { bpsUpstream: {
     "handler_before_output": "响应处理失败",
     "native_continuation": "输出后接续原路径",
     "context_stall": "上下文过大未产出",
-    "encrypted_content": "会话密文无法解密"
+    "encrypted_content": "会话密文无法解密",
+    "usage_policy": "内容被用量策略拦截"
   }
 } }
