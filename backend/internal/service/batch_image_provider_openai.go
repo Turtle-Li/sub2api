@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -468,40 +469,42 @@ func (p *OpenAIImagesBatchProvider) combineResults(ctx context.Context, batchID 
 		totalSize += size
 	}
 
-	reader, writer := io.Pipe()
-	copyDone := make(chan error, 1)
-	go func() {
-		var copyErr error
-		defer func() {
-			_ = writer.CloseWithError(copyErr)
-			copyDone <- copyErr
-		}()
-		for _, key := range keys {
-			body, _, _, err := p.store.Open(ctx, key)
-			if err != nil {
-				copyErr = err
-				return
-			}
-			_, err = io.Copy(writer, body)
-			closeErr := body.Close()
-			if err != nil {
-				copyErr = err
-				return
-			}
-			if closeErr != nil {
-				copyErr = closeErr
-				return
-			}
-		}
-	}()
-	putErr := p.store.Put(ctx, outputKey, "application/x-ndjson", reader, totalSize)
-	_ = reader.CloseWithError(putErr)
-	copyErr := <-copyDone
-	if putErr != nil {
-		return ErrBatchImageProviderStorageUnavailable.WithCause(putErr)
+	// S3-compatible PutObject implementations may hash or retry the payload and
+	// therefore require an io.ReadSeeker. Spool the bounded combined result to a
+	// private temporary file instead of passing a one-shot io.Pipe reader.
+	temporary, err := os.CreateTemp("", "sub2api-openai-batch-results-*")
+	if err != nil {
+		return ErrBatchImageProviderStorageUnavailable.WithCause(err)
 	}
-	if copyErr != nil {
-		return ErrBatchImageProviderStorageUnavailable.WithCause(copyErr)
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	written := int64(0)
+	for _, key := range keys {
+		body, _, _, openErr := p.store.Open(ctx, key)
+		if openErr != nil {
+			return ErrBatchImageProviderStorageUnavailable.WithCause(openErr)
+		}
+		copied, copyErr := io.Copy(temporary, body)
+		closeErr := body.Close()
+		if copyErr != nil {
+			return ErrBatchImageProviderStorageUnavailable.WithCause(copyErr)
+		}
+		if closeErr != nil {
+			return ErrBatchImageProviderStorageUnavailable.WithCause(closeErr)
+		}
+		written += copied
+	}
+	if written != totalSize {
+		return ErrBatchImageProviderStorageUnavailable.WithCause(errors.New("combined OpenAI image batch result size changed during copy"))
+	}
+	if _, err := temporary.Seek(0, io.SeekStart); err != nil {
+		return ErrBatchImageProviderStorageUnavailable.WithCause(err)
+	}
+	if err := p.store.Put(ctx, outputKey, "application/x-ndjson", temporary, totalSize); err != nil {
+		return ErrBatchImageProviderStorageUnavailable.WithCause(err)
 	}
 	return nil
 }

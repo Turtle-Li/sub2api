@@ -32,6 +32,21 @@ type fakeOpenAIImageBatchStore struct {
 	objects map[string]fakeOpenAIImageBatchObject
 }
 
+type seekableOutputOpenAIImageBatchStore struct {
+	*fakeOpenAIImageBatchStore
+	outputPutWasSeekable bool
+}
+
+func (s *seekableOutputOpenAIImageBatchStore) Put(ctx context.Context, key, contentType string, body io.Reader, size int64) error {
+	if strings.HasSuffix(key, "/output/results.jsonl") {
+		if _, ok := body.(io.ReadSeeker); !ok {
+			return errors.New("combined output body is not seekable")
+		}
+		s.outputPutWasSeekable = true
+	}
+	return s.fakeOpenAIImageBatchStore.Put(ctx, key, contentType, body, size)
+}
+
 func newFakeOpenAIImageBatchStore() *fakeOpenAIImageBatchStore {
 	return &fakeOpenAIImageBatchStore{objects: make(map[string]fakeOpenAIImageBatchObject)}
 }
@@ -176,7 +191,7 @@ func (e *fakeOpenAIImageBatchExecutor) Execute(
 
 func TestOpenAIImagesBatchProviderExecutesDistinctItemsAndCombinesResults(t *testing.T) {
 	ctx := context.Background()
-	store := newFakeOpenAIImageBatchStore()
+	store := &seekableOutputOpenAIImageBatchStore{fakeOpenAIImageBatchStore: newFakeOpenAIImageBatchStore()}
 	executor := &fakeOpenAIImageBatchExecutor{}
 	provider := NewOpenAIImagesBatchProvider(store, executor, testOpenAIImageBatchObjectPrefix)
 	account := &Account{ID: 91, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
@@ -211,6 +226,7 @@ func TestOpenAIImagesBatchProviderExecutesDistinctItemsAndCombinesResults(t *tes
 	require.NoError(t, err)
 	require.Equal(t, BatchProviderStateSucceeded, status.InternalState)
 	require.True(t, status.Done)
+	require.True(t, store.outputPutWasSeekable)
 
 	executor.mu.Lock()
 	require.Len(t, executor.requests, 2)
