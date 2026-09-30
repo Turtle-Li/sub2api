@@ -5,10 +5,12 @@ package repository
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,6 +143,33 @@ func TestBatchImageCOSPutIfAbsentUsesAtomicPrecondition(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, created)
 	require.Equal(t, 2, requestCount)
+}
+
+func TestBatchImageCOSPutReportsSanitizedServiceDiagnostics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPut, r.Method)
+		w.Header().Set("Content-Type", "application/xml")
+		w.Header().Set("x-amz-request-id", "request-safe-123")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code><Message>do not expose https://secret.example/path?signature=private-token</Message><RequestId>request-safe-123</RequestId></Error>`)
+	}))
+	t.Cleanup(server.Close)
+
+	providerStore := testBatchImageCOSStore(t, server.URL)
+	err := providerStore.Put(context.Background(), "provider/openai/output", "application/x-ndjson", bytes.NewReader([]byte("result\n")), 7)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "put COS delivery object failed")
+	require.Contains(t, err.Error(), "status=403")
+	require.Contains(t, err.Error(), "code=AccessDenied")
+	require.Contains(t, err.Error(), "request_id=request-safe-123")
+	require.Contains(t, err.Error(), "category=service_api")
+	require.False(t, strings.Contains(err.Error(), "secret.example"))
+	require.False(t, strings.Contains(err.Error(), "private-token"))
+}
+
+func TestBatchImageCOSOperationErrorClassifiesLocalFailuresWithoutEchoingCause(t *testing.T) {
+	err := batchImageCOSOperationError("put COS delivery object", errors.New("failed to seek https://secret.example/private-token"))
+	require.Equal(t, "put COS delivery object failed (category=body_seek)", err.Error())
 }
 
 func TestBatchImageCOSPutIfAbsentFailsClosedForVersionedBucket(t *testing.T) {

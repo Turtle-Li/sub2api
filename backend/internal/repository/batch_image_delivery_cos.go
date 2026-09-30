@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -273,9 +274,85 @@ func (s *batchImageCOSDeliveryStore) Put(ctx context.Context, key, contentType s
 		ContentType:   &contentType,
 	})
 	if err != nil {
-		return errors.New("put COS delivery object failed")
+		return batchImageCOSOperationError("put COS delivery object", err)
 	}
 	return nil
+}
+
+func batchImageCOSOperationError(operation string, err error) error {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = "COS operation"
+	}
+	details := make([]string, 0, 4)
+	var responseErr *smithyhttp.ResponseError
+	if errors.As(err, &responseErr) && responseErr.HTTPStatusCode() > 0 {
+		details = append(details, fmt.Sprintf("status=%d", responseErr.HTTPStatusCode()))
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if code := batchImageCOSDiagnosticToken(apiErr.ErrorCode(), 64); code != "" {
+			details = append(details, "code="+code)
+		}
+	}
+	var awsResponseErr *awshttp.ResponseError
+	if errors.As(err, &awsResponseErr) {
+		if requestID := batchImageCOSDiagnosticToken(awsResponseErr.ServiceRequestID(), 128); requestID != "" {
+			details = append(details, "request_id="+requestID)
+		}
+	}
+	details = append(details, "category="+batchImageCOSErrorCategory(err))
+	return fmt.Errorf("%s failed (%s)", operation, strings.Join(details, ","))
+}
+
+func batchImageCOSDiagnosticToken(value string, maximum int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > maximum {
+		return ""
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '_' || character == '-' || character == '.' {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func batchImageCOSErrorCategory(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) && networkErr.Timeout() {
+		return "network_timeout"
+	}
+	var responseErr *smithyhttp.ResponseError
+	if errors.As(err, &responseErr) {
+		return "service_api"
+	}
+	lower := strings.ToLower(err.Error())
+	for _, candidate := range []struct {
+		needle   string
+		category string
+	}{
+		{needle: "seek", category: "body_seek"},
+		{needle: "content length", category: "content_length"},
+		{needle: "checksum", category: "checksum"},
+		{needle: "signature", category: "signing"},
+		{needle: "connection reset", category: "connection_reset"},
+		{needle: "tls", category: "tls"},
+	} {
+		if strings.Contains(lower, candidate.needle) {
+			return candidate.category
+		}
+	}
+	return "sdk_transport"
 }
 
 func (s *batchImageCOSDeliveryStore) PutIfAbsent(ctx context.Context, key, contentType string, body io.Reader, size int64) (bool, error) {
