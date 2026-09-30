@@ -15,29 +15,13 @@ class GitHubAwsRunnerSshWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
         self.workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    def test_oidc_and_exact_runner_rule_are_scoped_to_aws_candidate(self) -> None:
-        self.assertIn("  id-token: write\n", self.workflow)
-        self.assertIn(
-            "aws-actions/configure-aws-credentials@"
-            "e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0",
-            self.workflow,
-        )
-        condition = (
-            "if: ${{ !inputs.build_only && "
-            "inputs.deployment_target == 'aws-candidate' }}"
-        )
-        self.assertGreaterEqual(self.workflow.count(condition), 2)
-        self.assertIn("https://checkip.amazonaws.com", self.workflow)
-        self.assertIn("ipaddress.ip_address", self.workflow)
-        self.assertIn('RUNNER_SSH_CIDR="${RUNNER_IPV4}/32"', self.workflow)
-        self.assertNotIn("0.0.0.0/0", self.workflow)
-
-    def test_existing_open_to_all_ssh_rule_skips_temporary_rule(self) -> None:
-        skip_index = self.workflow.index(
-            "SSH is already open to every IPv4 address; no temporary runner rule needed."
-        )
-        self.assertLess(skip_index, self.workflow.index("open-instance-public-ports"))
-        self.assertIn(".prefixlen == 0", self.workflow)
+    def test_workflow_never_mutates_lightsail_firewall(self) -> None:
+        self.assertNotIn("  id-token: write\n", self.workflow)
+        self.assertNotIn("aws-actions/configure-aws-credentials@", self.workflow)
+        self.assertNotIn("checkip.amazonaws.com", self.workflow)
+        self.assertNotIn("open-instance-public-ports", self.workflow)
+        self.assertNotIn("close-instance-public-ports", self.workflow)
+        self.assertNotIn("SUB2API_RUNNER_SSH_CIDR", self.workflow)
 
     def test_aws_is_the_only_production_deployment_target(self) -> None:
         self.assertIn(
@@ -48,28 +32,16 @@ class GitHubAwsRunnerSshWorkflowTest(unittest.TestCase):
         self.assertIn("        default: aws-candidate\n", self.workflow)
         self.assertNotIn("azure-production", self.workflow)
 
-    def test_temporary_rule_is_always_closed_after_upload(self) -> None:
-        open_index = self.workflow.index("open-instance-public-ports")
+    def test_image_and_caddy_upload_order_is_preserved(self) -> None:
         image_upload_index = self.workflow.index(
             "Upload image and start verified blue-green release"
         )
         caddy_upload_index = self.workflow.index(
             "Upload and activate verified AWS Caddy configuration"
         )
-        close_index = self.workflow.index("close-instance-public-ports")
-        self.assertLess(open_index, image_upload_index)
+        summary_index = self.workflow.index("Record release summary")
         self.assertLess(image_upload_index, caddy_upload_index)
-        self.assertLess(caddy_upload_index, close_index)
-        self.assertIn(
-            "if: ${{ always() && !inputs.build_only && "
-            "inputs.deployment_target == 'aws-candidate' }}",
-            self.workflow,
-        )
-        self.assertIn("Temporary runner SSH CIDR is still open", self.workflow)
-        self.assertIn(
-            "Runner SSH CIDR was recorded but is not open; no rule to close.",
-            self.workflow,
-        )
+        self.assertLess(caddy_upload_index, summary_index)
         self.assertIn("timeout-minutes: 35", self.workflow)
 
     def test_caddy_upload_is_bound_to_the_exact_source_commit_and_digest(self) -> None:
