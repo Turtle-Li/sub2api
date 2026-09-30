@@ -953,6 +953,10 @@ container_matches_local_compatibility_container() {
 container_matches_batch_image_delivery_cos_env() {
   local inspect_env="$1" key expected_value actual_value configured_count
 
+  # Delivery enablement is owned by config.yaml. An inherited environment
+  # override would take precedence through Viper AutomaticEnv and can silently
+  # disable a release whose mounted configuration enables delivery.
+  ! grep -q '^BATCH_IMAGE_DELIVERY_ENABLED=' "$inspect_env" || return 1
   for key in "${BATCH_IMAGE_DELIVERY_COS_RAW_ENV_KEYS[@]}"; do
     ! grep -q "^${key}=" "$inspect_env" || return 1
   done
@@ -1093,6 +1097,9 @@ make_runtime_env_file() {
 		;;
 	  BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID|BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY)
 		die "raw Batch Image COS credential environment is forbidden; use the dedicated Vault agent"
+		;;
+	  BATCH_IMAGE_DELIVERY_ENABLED)
+		continue
 		;;
 	  IMAGE_UPSCALE_ENABLED|IMAGE_UPSCALE_BASE_URL|IMAGE_UPSCALE_API_KEY_VAULT_REF|IMAGE_UPSCALE_VAULT_AGENT_SOCKET|IMAGE_UPSCALE_REQUEST_TIMEOUT_SECONDS|IMAGE_UPSCALE_JOB_TIMEOUT_SECONDS|IMAGE_UPSCALE_POLL_INTERVAL_MS|IMAGE_UPSCALE_RETRY_MAX|IMAGE_UPSCALE_MAX_CONCURRENT|IMAGE_UPSCALE_MAX_QUEUE|IMAGE_UPSCALE_MAX_RESULT_BYTES)
 		continue

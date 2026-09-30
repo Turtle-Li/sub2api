@@ -419,6 +419,13 @@ except (TypeError, ValueError):
 if not isinstance(environment, list) or any(not isinstance(item, str) for item in environment):
     raise SystemExit(1)
 
+config_owned_names = (
+    "BATCH_IMAGE_DELIVERY_ENABLED",
+)
+for name in config_owned_names:
+    if any(item == name or item.startswith(name + "=") for item in environment):
+        raise SystemExit(1)
+
 raw_names = (
     "BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID",
     "BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY",

@@ -432,6 +432,7 @@ printf '%s\n' \
   'SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false' \
   'SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=false' \
   'SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=api.openai.com' \
+  'BATCH_IMAGE_DELIVERY_ENABLED=false' \
   'UNIFIED_PAYMENT_REQUEST_PRIVATE_KEY_BASE64=legacy-private-key-must-be-removed' \
   'UNRELATED_SETTING=preserved' >"$old_env"
 printf '%s\n' 'volume|sub2api_sub2api_data|/app/data|true' >"$old_mounts"
@@ -602,6 +603,7 @@ assert_contains "$(state_path sub2api-green)/env" "BATCH_IMAGE_DELIVERY_COS_SECR
 assert_contains "$(state_path sub2api-green)/env" "BATCH_IMAGE_DELIVERY_COS_VAULT_AGENT_SOCKET=$BATCH_IMAGE_DELIVERY_COS_SOCKET"
 assert_not_contains "$(state_path sub2api-green)/env" 'BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID='
 assert_not_contains "$(state_path sub2api-green)/env" 'BATCH_IMAGE_DELIVERY_COS_SECRET_ACCESS_KEY='
+assert_not_contains "$(state_path sub2api-green)/env" 'BATCH_IMAGE_DELIVERY_ENABLED='
 assert_contains "$(state_path sub2api-green)/mounts" 'volume|sub2api_image_upscale_vault|/run/sub2api-upscale-vault|false'
 rm -rf "$(state_path sub2api-green)"
 if BATCH_IMAGE_DELIVERY_COS_ACCESS_KEY_ID='test-cos-access-key-must-not-leak' \
@@ -622,6 +624,11 @@ printf '%s\n' \
   >>"$(state_path sub2api-green)/env"
 PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1
 assert_not_contains "$OUTPUT" 'candidate does not match expected runtime contract'
+printf '%s\n' 'BATCH_IMAGE_DELIVERY_ENABLED=false' >>"$(state_path sub2api-green)/env"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'precreated candidate with a stale Batch Image delivery override was reused'
+fi
+assert_contains "$OUTPUT" 'existing external precreated target does not match the requested image'
 rm -rf "$(state_path sub2api-green)"
 
 # Feishu enablement attaches only its independent read-only socket volume.
