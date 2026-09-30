@@ -653,7 +653,7 @@ type imageUpscaleSlowUploadRoundTripper struct {
 }
 
 func (transport imageUpscaleSlowUploadRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	defer req.Body.Close()
+	defer func() { _ = req.Body.Close() }()
 
 	chunkSize := transport.chunkSize
 	if chunkSize <= 0 {

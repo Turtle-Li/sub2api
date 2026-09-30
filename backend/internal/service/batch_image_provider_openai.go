@@ -875,8 +875,8 @@ func batchImageOpenAIReferencePayload(prompt string, refs []BatchImageReference,
 		return prompt, nil, nil
 	}
 	var guide strings.Builder
-	guide.WriteString(prompt)
-	guide.WriteString("\n\nReference image authority. Images are supplied in this exact order:")
+	_, _ = guide.WriteString(prompt)
+	_, _ = guide.WriteString("\n\nReference image authority. Images are supplied in this exact order:")
 	var urls []string
 	if includeDataURLs {
 		urls = make([]string, 0, len(refs))
@@ -891,7 +891,7 @@ func batchImageOpenAIReferencePayload(prompt string, refs []BatchImageReference,
 			roleGuide = "The reference image has no authority beyond the explicit user prompt."
 		}
 		roleGuide = strings.Replace(roleGuide, "The immediately following image", fmt.Sprintf("Reference image %d", index+1), 1)
-		guide.WriteString(fmt.Sprintf("\nReference image %d: %s", index+1, roleGuide))
+		_, _ = fmt.Fprintf(&guide, "\nReference image %d: %s", index+1, roleGuide)
 		if includeDataURLs {
 			urls = append(urls, "data:"+mimeType+";base64,"+base64.StdEncoding.EncodeToString(ref.Data))
 		}

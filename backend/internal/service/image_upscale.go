@@ -118,7 +118,11 @@ func NewImageUpscaleService(cfg *config.Config) *ImageUpscaleService {
 	if responseHeaderTimeout <= 0 {
 		responseHeaderTimeout = 30 * time.Second
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	baseTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		baseTransport = &http.Transport{}
+	}
+	transport := baseTransport.Clone()
 	transport.ResponseHeaderTimeout = responseHeaderTimeout
 	maxConcurrent := settings.MaxConcurrent
 	if maxConcurrent <= 0 {
