@@ -2572,8 +2572,15 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 	}
 
 	cfg := &config.Config{}
-	cfg.RunMode = config.RunModeSimple
+	cfg.RunMode = config.RunModeStandard
 	cfg.Default.RateMultiplier = 1
+	cfg.Billing.InflightReservation = config.InflightReservationConfig{
+		Enabled:          true,
+		TTLSeconds:       60,
+		DefaultMaxTokens: 8192,
+		MaxInputTokens:   200000,
+		MaxOutputTokens:  128000,
+	}
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -2587,7 +2594,8 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
 	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
-	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	inflightCache := newHandlerInflightCache(100)
+	billingCacheSvc := service.NewBillingCacheService(inflightCache, nil, nil, nil, nil, nil, cfg, nil)
 	gatewaySvc := service.NewOpenAIGatewayService(
 		accountRepo,
 		nil,
@@ -2633,7 +2641,7 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 		ID:      1802,
 		GroupID: &groupID,
 		User:    &service.User{ID: 1702, Status: service.StatusActive},
-		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive, RateMultiplier: 1},
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -2678,6 +2686,7 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 		t.Fatal("等待第二个上游收到重放首帧超时")
 	}
 	require.Equal(t, []int64{int64(9902)}, accountRepo.rateLimitedIDs)
+	require.Equal(t, 2, inflightCache.reserveCount(), "首次尝试和替换账号重放都必须独立预留")
 }
 
 func TestOpenAIResponsesWebSocket_FirstOutputTimeoutWithoutDownstreamReusesClientForOneFailover(t *testing.T) {
