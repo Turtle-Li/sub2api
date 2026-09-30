@@ -167,6 +167,29 @@ func TestBatchImageCOSPutReportsSanitizedServiceDiagnostics(t *testing.T) {
 	require.False(t, strings.Contains(err.Error(), "private-token"))
 }
 
+func TestBatchImageCOSDeleteReportsSanitizedServiceDiagnostics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.True(t, r.URL.Query().Has("delete"))
+		w.Header().Set("Content-Type", "application/xml")
+		w.Header().Set("x-amz-request-id", "delete-safe-456")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code><Message>do not expose https://secret.example/path?signature=private-token</Message><RequestId>delete-safe-456</RequestId></Error>`)
+	}))
+	t.Cleanup(server.Close)
+
+	providerStore := testBatchImageCOSStore(t, server.URL)
+	err := providerStore.Delete(context.Background(), []string{"provider/openai/input", "provider/openai/output"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "delete COS delivery objects failed")
+	require.Contains(t, err.Error(), "status=403")
+	require.Contains(t, err.Error(), "code=AccessDenied")
+	require.Contains(t, err.Error(), "request_id=delete-safe-456")
+	require.Contains(t, err.Error(), "category=service_api")
+	require.False(t, strings.Contains(err.Error(), "secret.example"))
+	require.False(t, strings.Contains(err.Error(), "private-token"))
+}
+
 func TestBatchImageCOSOperationErrorClassifiesLocalFailuresWithoutEchoingCause(t *testing.T) {
 	err := batchImageCOSOperationError("put COS delivery object", errors.New("failed to seek https://secret.example/private-token"))
 	require.Equal(t, "put COS delivery object failed (category=body_seek)", err.Error())

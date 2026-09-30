@@ -528,7 +528,7 @@ func (s *batchImageCOSDeliveryStore) Delete(ctx context.Context, keys []string) 
 			},
 		})
 		if err != nil {
-			return errors.New("delete COS delivery objects failed")
+			return batchImageCOSOperationError("delete COS delivery objects", err)
 		}
 		if len(result.Errors) > 0 {
 			return fmt.Errorf("delete COS delivery objects returned %d object errors", len(result.Errors))
