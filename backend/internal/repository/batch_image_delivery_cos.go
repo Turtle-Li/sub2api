@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -26,6 +27,7 @@ import (
 
 const (
 	batchImageCOSDeleteChunkSize     = 1000
+	batchImageCOSDeleteConcurrency   = 32
 	batchImageCOSVaultAgentSocket    = "/run/sub2api-upscale-vault/public.sock"
 	batchImageCOSVaultAgentTimeout   = 3 * time.Second
 	batchImageCOSVaultAgentMaxBody   = 4 * 1024
@@ -510,11 +512,13 @@ func (s *batchImageCOSDeliveryStore) Delete(ctx context.Context, keys []string) 
 			end = len(keys)
 		}
 		objects := make([]s3types.ObjectIdentifier, 0, end-start)
+		objectKeys := make([]string, 0, end-start)
 		for _, key := range keys[start:end] {
 			key = strings.TrimSpace(key)
 			if key == "" {
 				continue
 			}
+			objectKeys = append(objectKeys, key)
 			objects = append(objects, s3types.ObjectIdentifier{Key: &key})
 		}
 		if len(objects) == 0 {
@@ -528,11 +532,80 @@ func (s *batchImageCOSDeliveryStore) Delete(ctx context.Context, keys []string) 
 			},
 		})
 		if err != nil {
+			if batchImageCOSDeleteObjectsUnsupported(err) {
+				if fallbackErr := s.deleteObjectsIndividually(ctx, objectKeys); fallbackErr != nil {
+					return fallbackErr
+				}
+				continue
+			}
 			return batchImageCOSOperationError("delete COS delivery objects", err)
 		}
 		if len(result.Errors) > 0 {
 			return fmt.Errorf("delete COS delivery objects returned %d object errors", len(result.Errors))
 		}
+	}
+	return nil
+}
+
+func batchImageCOSDeleteObjectsUnsupported(err error) bool {
+	var responseErr *smithyhttp.ResponseError
+	var apiErr smithy.APIError
+	return errors.As(err, &responseErr) && responseErr.HTTPStatusCode() == http.StatusBadRequest &&
+		errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidRequest"
+}
+
+func (s *batchImageCOSDeliveryStore) deleteObjectsIndividually(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	workerCount := batchImageCOSDeleteConcurrency
+	if workerCount > len(keys) {
+		workerCount = len(keys)
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan string)
+	var workers sync.WaitGroup
+	var firstError error
+	var firstErrorOnce sync.Once
+	workers.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer workers.Done()
+			for {
+				select {
+				case <-workerCtx.Done():
+					return
+				case key, ok := <-jobs:
+					if !ok {
+						return
+					}
+					if _, err := s.client.DeleteObject(workerCtx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &key}); err != nil {
+						firstErrorOnce.Do(func() {
+							firstError = batchImageCOSOperationError("delete COS delivery object", err)
+							cancel()
+						})
+						return
+					}
+				}
+			}
+		}()
+	}
+sendKeys:
+	for _, key := range keys {
+		select {
+		case <-workerCtx.Done():
+			break sendKeys
+		case jobs <- key:
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	if firstError != nil {
+		return firstError
+	}
+	if err := ctx.Err(); err != nil {
+		return batchImageCOSOperationError("delete COS delivery object", err)
 	}
 	return nil
 }

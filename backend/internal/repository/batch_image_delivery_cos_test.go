@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,6 +189,40 @@ func TestBatchImageCOSDeleteReportsSanitizedServiceDiagnostics(t *testing.T) {
 	require.Contains(t, err.Error(), "category=service_api")
 	require.False(t, strings.Contains(err.Error(), "secret.example"))
 	require.False(t, strings.Contains(err.Error(), "private-token"))
+}
+
+func TestBatchImageCOSDeleteFallsBackToIndividualDeletesOnInvalidRequest(t *testing.T) {
+	var lock sync.Mutex
+	bulkCalls := 0
+	deleted := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+			lock.Lock()
+			bulkCalls++
+			lock.Unlock()
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `<Error><Code>InvalidRequest</Code><Message>batch checksum unsupported</Message></Error>`)
+		case r.Method == http.MethodDelete:
+			key := strings.TrimPrefix(r.URL.Path, "/private-bucket/")
+			lock.Lock()
+			deleted[key]++
+			lock.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected COS request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	providerStore := testBatchImageCOSStore(t, server.URL)
+	err := providerStore.Delete(context.Background(), []string{"provider/openai/input", "provider/openai/output"})
+	require.NoError(t, err)
+	lock.Lock()
+	defer lock.Unlock()
+	require.Equal(t, 1, bulkCalls)
+	require.Equal(t, map[string]int{"provider/openai/input": 1, "provider/openai/output": 1}, deleted)
 }
 
 func TestBatchImageCOSOperationErrorClassifiesLocalFailuresWithoutEchoingCause(t *testing.T) {
