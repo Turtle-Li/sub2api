@@ -906,12 +906,12 @@ class IntegratedStateManager(manager.StateManager):
         self._apply_proxy_source_overlay()
         return super().run_check_and_refresh(*args, **kwargs)
 
-    def harvest(self, account, model_cfg):
+    def harvest(self, account, model_cfg, *args, **kwargs):
         slot = f"{account['id']}:{model_cfg['name']}"
         static = [proxy for proxy in self.proxies if proxy not in self._dynamic_proxies]
         if self._active_extract_source_records and not self._static_pending.get(slot, static):
             self._activate_extract_sources_for_dynamic()
-        return super().harvest(account, model_cfg)
+        return super().harvest(account, model_cfg, *args, **kwargs)
 
 
 class IntegratedPanelHandler(manager.PanelHandler):

@@ -397,6 +397,15 @@ class IntegratedProxySourceTests(unittest.TestCase):
             candidate.run_check_and_refresh(force=True, only_account=9, only_model="a")
         probe.assert_not_called()
 
+    def test_harvest_accepts_base_keyword_arguments(self):
+        # StateManager.run_check_and_refresh calls harvest(..., require_cookie=...);
+        # the override once dropped it and every daemon harvest raised TypeError.
+        account = {"id":9,"name":"test","models":[{"name":"a"}]}
+        candidate, _root, _state, _config = self._manager(accounts=[account], proxies={"static_proxies":["http://s1.example:80"],"sources":[]})
+        with mock.patch.object(integrated.manager, "probe_turn_state", return_value=probe_result(valid_state(312))) as probe:
+            candidate.harvest(account, account["models"][0], require_cookie=False)
+        probe.assert_called()
+
     def test_extract_waits_for_per_model_static_exhaustion(self):
         account={"id":9,"name":"test","models":[{"name":"a"}]}
         candidate, _root, _state, _config = self._manager(accounts=[account])
