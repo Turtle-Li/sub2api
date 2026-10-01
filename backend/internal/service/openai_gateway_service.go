@@ -482,7 +482,6 @@ type OpenAIGatewayService struct {
 	userGroupRateResolver *userGroupRateResolver
 	httpUpstream          HTTPUpstream
 	pluginManager         *PluginManager
-	bpsImageExternalizer  BPSImageExternalizer
 	imageUpscaler         *ImageUpscaleService
 	imageStorageResolver  ImageStorageResolver
 	deferredService       *DeferredService

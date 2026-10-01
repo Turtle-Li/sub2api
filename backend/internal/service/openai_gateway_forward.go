@@ -1034,14 +1034,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		firstOutputTimeout = s.openAIFirstOutputTimeout(reasoningEffortValue)
 	}
 
-	bpsAttempt := s.openAIBPSAttemptFor(ctx, c, account, body, upstreamModel, reasoningEffortValue, isCompactRequest, imageIntent, compatMessagesBridge)
-	if bpsAttempt != nil {
-		bpsAttempt.clientStream = reqStream
-		if firstOutputTimeout > 0 {
-			// 首输出预算的一半留给 BPS，另一半留给原路径回退。
-			bpsAttempt.budgetDeadline = startTime.Add(firstOutputTimeout / 2)
-		}
-	}
 	httpInvalidEncryptedContentRetryTried := false
 	compactModelFallbackRetried := false
 	agentTaskRecoveryTried := false
@@ -1074,13 +1066,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		// Send request
 		upstreamStart := time.Now()
-		resp, bpsRun, err := s.doOpenAIUpstreamPreferBPS(upstreamReq, proxyURL, account, token, bpsAttempt)
-		// BPS 只尝试一次：后续重试（encrypted 重试、字段剔除等）一律走原路径。
-		bpsAttempt = nil
-		if bpsRun != nil {
-			// 请求记录与错误日志的上游端点区分 BPS 与原路径。
-			SetActualOpenAIUpstreamEndpoint(c, bpsUpstreamEndpoint)
-		}
+		resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
 			if resp != nil && resp.Body != nil {
@@ -1237,17 +1223,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		var imageOutputSizes []string
 		if reqStream {
 			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
-			if err != nil && bpsRun != nil {
-				// 客户端尚未收到输出时回退原路径；已输出则只能记录并按原逻辑返回错误。
-				outputStarted := openAIStreamClientOutputStarted(c, false)
-				bpsRun.recordFailure(bpsFailureHandler, 0, err.Error(), outputStarted)
-				if !outputStarted {
-					// 循环里的 defer 要到 Forward 返回才执行，回退前先释放 BPS 流与上游连接。
-					_ = resp.Body.Close()
-					SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
-					continue
-				}
-			}
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
@@ -1295,17 +1270,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			searchCount = streamResult.searchCount
 		} else {
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
-			if err != nil && bpsRun != nil {
-				// 客户端尚未收到输出时回退原路径；已输出则只能记录并按原逻辑返回错误。
-				outputStarted := openAIStreamClientOutputStarted(c, false)
-				bpsRun.recordFailure(bpsFailureHandler, 0, err.Error(), outputStarted)
-				if !outputStarted {
-					// 循环里的 defer 要到 Forward 返回才执行，回退前先释放 BPS 流与上游连接。
-					_ = resp.Body.Close()
-					SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
-					continue
-				}
-			}
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
@@ -1327,16 +1291,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			searchCount = nonStreamResult.searchCount
-		}
-		if bpsRun != nil && bpsRun.continued {
-			// BPS 输出后失败、由原路径在同一条流里接续完成：用量与档位都来自原路径。
-			bpsRun = nil
-			SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
-		}
-		if bpsRun != nil {
-			bpsRun.recordSuccess(usage)
-		} else {
-			observeBPSSkippedContext(c, account, usage)
 		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
@@ -1372,11 +1326,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
 		}
-		if bpsRun != nil && bpsRun.appliedEffort != "" {
-			// BPS 按实际档位计费（max→xhigh），请求记录仍展示用户设置的档位。
-			forwardResult.RequestedReasoningEffort = reasoningEffort
-			forwardResult.ReasoningEffort = &bpsRun.appliedEffort
-		}
 		if imageCount > 0 {
 			forwardResult.ImageCount = imageCount
 			forwardResult.ImageSize = imageSizeTier
@@ -1390,13 +1339,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if searchCount > 0 && account != nil && account.IsGrok() {
 			forwardResult.SearchCount = searchCount
 		}
-		if bpsRun != nil {
-			forwardResult.UpstreamEndpoint = bpsUpstreamEndpoint
-		}
 		stampOpenAIResponsesUpstreamEndpoint(c, forwardResult)
-		if bpsRun != nil {
-			SetActualOpenAIUpstreamEndpoint(c, bpsUpstreamEndpoint)
-		}
 		return forwardResult, nil
 	}
 }

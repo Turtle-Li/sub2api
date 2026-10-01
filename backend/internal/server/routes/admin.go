@@ -36,8 +36,8 @@ func RegisterAdminRoutes(
 		admin.POST("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
 		admin.DELETE("/codex-turn-state/*path", h.Admin.CodexTurnStatePanel.Proxy)
 
-		// BPS 上游（降智修复）账号名单与运行监控
-		registerBPSUpstreamRoutes(admin, h)
+		// 降智测试：仅测固定 turn-state 票据路径。不能挂在 /codex-turn-state 下，那里是 *path 通配代理。
+		registerCodexDegradationProbeRoutes(admin, h)
 
 		// 部署与运营合规确认
 		registerAdminComplianceRoutes(admin, h)
@@ -629,17 +629,14 @@ func registerPromoCodeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 }
 
-func registerBPSUpstreamRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	bps := admin.Group("/bps-upstream")
+func registerCodexDegradationProbeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	probes := admin.Group("/codex-degradation-probes")
 	{
-		bps.GET("", h.Admin.BPSUpstream.GetOverview)
-		bps.PUT("/config", h.Admin.BPSUpstream.UpdateConfig)
-		bps.POST("/accounts/:id/reset-breaker", h.Admin.BPSUpstream.ResetBreaker)
-		bps.GET("/probes", h.Admin.BPSUpstream.ListProbes)
-		bps.POST("/probes", h.Admin.BPSUpstream.CreateProbes)
-		bps.DELETE("/probes", h.Admin.BPSUpstream.DeleteAllProbes)
-		bps.GET("/probes/:id", h.Admin.BPSUpstream.GetProbe)
-		bps.DELETE("/probes/:id", h.Admin.BPSUpstream.DeleteProbe)
+		probes.GET("", h.Admin.CodexDegradationProbe.List)
+		probes.POST("", h.Admin.CodexDegradationProbe.Create)
+		probes.DELETE("", h.Admin.CodexDegradationProbe.DeleteAll)
+		probes.GET("/:id", h.Admin.CodexDegradationProbe.Get)
+		probes.DELETE("/:id", h.Admin.CodexDegradationProbe.Delete)
 	}
 }
 

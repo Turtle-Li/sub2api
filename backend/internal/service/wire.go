@@ -972,7 +972,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountUsageService,
 	ProvideAccountTestService,
 	ProvideUpstreamBillingProbeService,
-	NewBPSProbeService,
+	NewCodexDegradationProbeService,
 	ProvideOllamaCloudUsageService,
 	ProvideOpenCodeGoUsageService,
 	ProvideSettingService,

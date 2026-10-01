@@ -12,7 +12,7 @@ import (
 // ProvideAdminHandlers creates the AdminHandlers struct
 func ProvideAdminHandlers(
 	codexTurnStatePanelHandler *admin.CodexTurnStatePanelHandler,
-	bpsUpstreamHandler *admin.BPSUpstreamHandler,
+	codexDegradationProbeHandler *admin.CodexDegradationProbeHandler,
 	dashboardHandler *admin.DashboardHandler,
 	userHandler *admin.UserHandler,
 	groupHandler *admin.GroupHandler,
@@ -63,7 +63,7 @@ func ProvideAdminHandlers(
 	accountHandler.SetClaudeResetCreditService(claudeResetCredits)
 	return &AdminHandlers{
 		CodexTurnStatePanel:    codexTurnStatePanelHandler,
-		BPSUpstream:            bpsUpstreamHandler,
+		CodexDegradationProbe:  codexDegradationProbeHandler,
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,
 		Group:                  groupHandler,
@@ -152,7 +152,6 @@ func ProvideOpenAIGatewayHandler(
 	compositeResolver *service.CompositeRouteResolver,
 ) *OpenAIGatewayHandler {
 	gatewayService.SetPluginManager(pluginManager)
-	gatewayService.SetBPSImageExternalizer(newBPSImageExternalizer(cfg, attachmentR2Service))
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.compositeResolver = compositeResolver
@@ -275,7 +274,7 @@ var ProviderSet = wire.NewSet(
 
 	// Admin handlers
 	admin.NewCodexTurnStatePanelHandler,
-	admin.NewBPSUpstreamHandler,
+	admin.NewCodexDegradationProbeHandler,
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
 	admin.NewGroupHandlerWithConfig,

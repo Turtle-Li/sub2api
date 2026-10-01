@@ -670,7 +670,6 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if needModelReplace {
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
 			}
-			line = applyBPSCodexCompactHintToSSELine(c, account, line, eventType)
 			startsClientOutput := forceFlushFailedEvent || openAIStreamDataStartsClientOutput(data, eventType)
 			startsVisibleOutput := openAIStreamDataStartsVisibleOutput(data, eventType)
 			startsTTFTOutput := openAIStreamDataStartsTTFT(data, eventType, forceFlushFailedEvent, ttftMode)
