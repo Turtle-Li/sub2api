@@ -15,6 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 import re
 import sqlite3
+import threading
 from typing import Any, Dict, Optional, Union
 
 
@@ -127,11 +128,15 @@ class ProbeStats:
     def __init__(self, state_dir: Path, read_only: bool = False):
         self.state_dir = Path(state_dir)
         self.path = self.state_dir / "probe-stats.sqlite3"
+        # The manager records from cookie worker threads as well as the main
+        # loop, so the connection is shared across threads behind one lock.
+        self._lock = threading.RLock()
         if read_only:
-            self._connection = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5.0)
+            self._connection = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True,
+                                               timeout=5.0, check_same_thread=False)
         else:
             self.state_dir.mkdir(parents=True, exist_ok=True)
-            self._connection = sqlite3.connect(str(self.path), timeout=5.0)
+            self._connection = sqlite3.connect(str(self.path), timeout=5.0, check_same_thread=False)
             self._initialise_schema()
 
     def _initialise_schema(self) -> None:
@@ -225,7 +230,7 @@ class ProbeStats:
             int(http_status != 200),
             observed_header_ms,
         )
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 """
                 INSERT INTO probe_stats_daily (
@@ -259,7 +264,7 @@ class ProbeStats:
         model_name = _require_model(model)
         source_name = _normalise_source(source)
         day = _utc_day()
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 """
                 INSERT INTO probe_stats_daily (
@@ -300,6 +305,7 @@ class ProbeStats:
         # SELECT does not reliably begin a transaction under sqlite3's legacy
         # transaction control.  Start one explicitly so the counters and status
         # breakdown come from one snapshot when the daemon writes concurrently.
+        self._lock.acquire()
         try:
             self._connection.execute("BEGIN")
             rows = self._connection.execute(
@@ -325,6 +331,8 @@ class ProbeStats:
         except Exception:
             self._connection.rollback()
             raise
+        finally:
+            self._lock.release()
 
         statuses: Dict[tuple, Dict[int, int]] = {}
         for day, account_id, model_name, source_name, status, count in status_rows:

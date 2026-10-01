@@ -360,3 +360,116 @@ func TestAdminServicePinnedCodexTurnState(t *testing.T) {
 	_, err = svc.SetPinnedCodexTurnState(ctx, 11, "gpt-6-astra", PinnedCodexTurnStateEntry{State: hugeState})
 	require.Error(t, err)
 }
+
+func TestAdminServiceDeletePinnedCodexTurnStatePreservesCookies(t *testing.T) {
+	exp := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
+	acc := &Account{
+		ID:       21,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			PinnedCodexTurnStatesExtraKey: map[string]any{
+				"gpt-6-astra": map[string]any{
+					"state":             "gAAAAAB_astra",
+					"cookie":            "__cflb=a; __oailb=b",
+					"cookie_expires_at": exp.Format(time.RFC3339),
+					"expires_at":        exp.Format(time.RFC3339),
+					"proxy":             "http://user:secret@10.0.0.1:7890",
+				},
+				"gpt-6-sol": map[string]any{
+					"state":      "gAAAAAB_sol",
+					"expires_at": exp.Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	repo := &mockPinnedTurnStateAccountRepo{account: acc}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	_, err := svc.DeletePinnedCodexTurnState(context.Background(), 21, "gpt-6-sol")
+	require.NoError(t, err)
+
+	states := acc.GetPinnedCodexTurnStates()
+	require.Len(t, states, 1)
+	astra := states["gpt-6-astra"]
+	require.Equal(t, "__cflb=a; __oailb=b", astra.Cookie)
+	require.NotNil(t, astra.CookieExpiresAt)
+	require.True(t, exp.Equal(*astra.CookieExpiresAt))
+	require.Equal(t, "10.0.0.1:7890", astra.ProxyEndpoint)
+
+	raw := acc.Extra[PinnedCodexTurnStatesExtraKey].(map[string]any)["gpt-6-astra"].(map[string]any)
+	require.NotContains(t, raw, "proxy", "legacy proxy URL with credentials must not be written back")
+	require.Equal(t, "10.0.0.1:7890", raw["proxy_endpoint"])
+}
+
+func TestAccountPinnedCodexRoutingCookieFallbackIsDeterministic(t *testing.T) {
+	now := time.Now()
+	acc := &Account{
+		ID:       22,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			PinnedCodexTurnStatesExtraKey: map[string]any{
+				"a-model": map[string]any{"state": "s1", "cookie": "c=soon", "cookie_expires_at": now.Add(1 * time.Minute).Format(time.RFC3339)},
+				"b-model": map[string]any{"state": "s2", "cookie": "c=late", "cookie_expires_at": now.Add(10 * time.Minute).Format(time.RFC3339)},
+				"c-model": map[string]any{"state": "s3", "cookie": "c=noexp"},
+				"d-model": map[string]any{"state": "s4", "cookie": "c=dead", "cookie_expires_at": now.Add(-1 * time.Minute).Format(time.RFC3339)},
+			},
+		},
+	}
+	for i := 0; i < 20; i++ {
+		require.Equal(t, "c=late", acc.GetActivePinnedCodexRoutingCookie())
+	}
+}
+
+func TestAccountPinnedCodexCookieRequireSameEgress(t *testing.T) {
+	future := time.Now().Add(1 * time.Hour).Format(time.RFC3339)
+	newAccount := func(require bool, proxy *Proxy) *Account {
+		extra := map[string]any{
+			PinnedCodexTurnStatesExtraKey: map[string]any{
+				"gpt-6-astra": map[string]any{
+					"state":             "gAAAAAB_astra",
+					"expires_at":        future,
+					"cookie":            "__oailb=jp",
+					"cookie_expires_at": future,
+					"proxy_endpoint":    "100.79.230.109:7890",
+				},
+				"gpt-6-sol": map[string]any{
+					"state":             "gAAAAAB_sol",
+					"expires_at":        future,
+					"cookie":            "__oailb=unknown",
+					"cookie_expires_at": future,
+				},
+			},
+		}
+		if require {
+			extra[PinnedCodexCookieRequireSameEgressExtraKey] = true
+		}
+		return &Account{ID: 23, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: extra, Proxy: proxy}
+	}
+	jp := &Proxy{Host: "100.79.230.109", Port: 7890}
+	us := &Proxy{Host: "10.9.9.9", Port: 8080}
+
+	t.Run("default off keeps legacy behavior", func(t *testing.T) {
+		_, cookie := newAccount(false, us).GetPinnedCodexTurnStateAndCookie("gpt-6-astra")
+		require.Equal(t, "__oailb=jp", cookie)
+	})
+	t.Run("matching egress injects cookie", func(t *testing.T) {
+		state, cookie := newAccount(true, jp).GetPinnedCodexTurnStateAndCookie("gpt-6-astra")
+		require.Equal(t, "gAAAAAB_astra", state)
+		require.Equal(t, "__oailb=jp", cookie)
+	})
+	t.Run("mismatched egress keeps state but drops cookie", func(t *testing.T) {
+		state, cookie := newAccount(true, us).GetPinnedCodexTurnStateAndCookie("gpt-6-astra")
+		require.Equal(t, "gAAAAAB_astra", state)
+		require.Empty(t, cookie)
+	})
+	t.Run("unknown egress cookie is not used as fallback", func(t *testing.T) {
+		_, cookie := newAccount(true, jp).GetPinnedCodexTurnStateAndCookie("gpt-6-sol")
+		require.Equal(t, "__oailb=jp", cookie, "falls back to the same-egress cookie, never the unknown one")
+	})
+	t.Run("no account proxy drops cookie", func(t *testing.T) {
+		_, cookie := newAccount(true, nil).GetPinnedCodexTurnStateAndCookie("gpt-6-astra")
+		require.Empty(t, cookie)
+	})
+}

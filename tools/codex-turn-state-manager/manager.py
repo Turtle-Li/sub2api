@@ -163,6 +163,28 @@ def normalize_proxy_url(raw: str) -> Optional[str]:
     return None
 
 
+def proxy_endpoint(proxy: str) -> str:
+    """host:port of a proxy URL. Credentials never leave this process: the
+    value is persisted into accounts.extra, which the admin API and the
+    scheduler's Redis snapshots both expose."""
+    try:
+        parsed = urllib.parse.urlsplit(proxy)
+        if parsed.hostname and parsed.port:
+            return f"{parsed.hostname}:{parsed.port}"
+    except (ValueError, TypeError):
+        pass
+    return ""
+
+
+def scheduler_outbox_dedup_key(account_id: int) -> str:
+    """Same key Go's enqueueSchedulerOutbox derives for a nil-payload
+    account_changed event, so our event coalesces with pending Go events."""
+    digest = hashlib.sha256(
+        b"account_changed\x00" + str(int(account_id)).encode("ascii") + b"\x00\x00"
+    ).hexdigest()
+    return f"scheduler_outbox:{digest}"
+
+
 def mask_proxy(proxy: str) -> str:
     try:
         parsed = urllib.parse.urlsplit(proxy)
@@ -311,6 +333,9 @@ class FeishuNotifier:
 # Sub2API host access
 # --------------------------------------------------------------------------
 
+SUBPROCESS_TIMEOUT_SECONDS = 60
+
+
 class Sub2APIHost:
     """Reads and writes account state through the active Sub2API container.
 
@@ -340,6 +365,7 @@ class Sub2APIHost:
             text=True,
             capture_output=True,
             check=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
         match = re.search(r"active_container=([^\s]+)", proc.stdout)
         if not match:
@@ -364,9 +390,10 @@ class Sub2APIHost:
                     text=True,
                     capture_output=True,
                     check=True,
+                    timeout=SUBPROCESS_TIMEOUT_SECONDS,
                 )
                 return proc.stdout
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 self._container = None
                 if attempt == 1:
                     raise
@@ -453,7 +480,8 @@ WHERE a.id = {int(account_id)}
             acct_cookie_obj = parsed.get("account_cookie") or {}
             acct_cookie = acct_cookie_obj.get("cookie", "")
             acct_cookie_exp = acct_cookie_obj.get("expires_at", "")
-            acct_proxy = acct_cookie_obj.get("proxy", "")
+            acct_proxy = acct_cookie_obj.get("proxy_endpoint", "") or proxy_endpoint(
+                acct_cookie_obj.get("proxy", ""))
             if acct_proxy:
                 states["_account_proxy"] = acct_proxy
             if acct_cookie and acct_cookie_exp:
@@ -467,9 +495,9 @@ WHERE a.id = {int(account_id)}
                                     m_entry["cookie"] = acct_cookie
                                     m_entry["cookie_expires_at"] = acct_cookie_exp
                                     if acct_proxy:
-                                        m_entry["proxy"] = acct_proxy
-                                elif acct_proxy and "proxy" not in m_entry:
-                                    m_entry["proxy"] = acct_proxy
+                                        m_entry["proxy_endpoint"] = acct_proxy
+                                elif acct_proxy and "proxy_endpoint" not in m_entry:
+                                    m_entry["proxy_endpoint"] = acct_proxy
                 except Exception:
                     pass
             return states
@@ -517,8 +545,9 @@ WHERE a.id = {int(account_id)}
             "expires_at": expires_at_iso,
             "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         }
-        if proxy:
-            model_entry["proxy"] = proxy
+        endpoint = proxy_endpoint(proxy) if proxy else ""
+        if endpoint:
+            model_entry["proxy_endpoint"] = endpoint
         if cookie:
             model_entry["cookie"] = cookie
             if cookie_expires_at_iso:
@@ -541,8 +570,8 @@ WHERE a.id = {int(account_id)}
                     "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
                 }
             }
-            if proxy:
-                cookie_payload["pinned_codex_routing_cookie"]["proxy"] = proxy
+            if endpoint:
+                cookie_payload["pinned_codex_routing_cookie"]["proxy_endpoint"] = endpoint
             encoded_cookie = base64.b64encode(
                 json.dumps(cookie_payload, ensure_ascii=True).encode("utf-8")
             ).decode("ascii")
@@ -577,6 +606,19 @@ SET extra = COALESCE(extra, '{{}}'::jsonb)
                ),
     updated_at = NOW()
 WHERE id = {int(account_id)} AND deleted_at IS NULL;
+-- Publish the change to the gateway's Redis snapshot through the scheduler
+-- outbox (polled every second) instead of waiting for the periodic full
+-- rebuild. Same transaction as the UPDATE; a missing outbox schema must not
+-- block the pin itself, hence the exception-guarded block.
+DO $outbox$
+BEGIN
+  INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload, dedup_key)
+  VALUES ('account_changed', {int(account_id)}, NULL, NULL, '{scheduler_outbox_dedup_key(account_id)}')
+  ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING;
+EXCEPTION WHEN undefined_table OR undefined_column OR invalid_column_reference THEN
+  NULL;
+END
+$outbox$;
 """
         self.run_sql(sql, read_only=False)
         written = self.read_pinned_states(account_id).get(model.lower(), {})
@@ -600,8 +642,8 @@ def probe_turn_state(
     proxy_url: str,
     creds: Dict[str, Any],
     model: str,
-    connect_timeout: int = 15,
-    max_time: int = 30,
+    connect_timeout: int = 4,
+    max_time: int = 5,
     cookie: Optional[str] = None,
     turn_state: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -793,6 +835,7 @@ class DegradedAccountsClient:
             text=True,
             capture_output=True,
             check=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
         for candidate in proc.stdout.split():
             if candidate:
@@ -880,6 +923,7 @@ class StateManager:
         self._logged_skips: Dict[str, float] = {}
         self._session_start: Dict[int, float] = {}
         self._session_proxy: Dict[int, str] = {}
+        self._diagnostics_lock = threading.Lock()
         try:
             saved = json.loads((state_dir / "probe-diagnostics.json").read_text())
             now = time.time()
@@ -1154,7 +1198,9 @@ class StateManager:
         and the refresh decision. These two used to carry different defaults."""
         with self._settings_lock:
             if self._settings_override is not None:
-                return float(self._settings_override["refresh_advance_minutes"])
+                override = self._settings_override.get("refresh_advance_minutes")
+                if override is not None:
+                    return float(override)
         return float(account.get("refresh_advance_minutes", self.refresh_advance_minutes))
 
     def _load_history(self) -> Dict[str, List[Dict[str, Any]]]:
@@ -1524,23 +1570,26 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
 
     def _record_diagnostic(self, slot, diagnostic, state_len):
         # Diagnostic helper emits only allowlisted codes/IDs, never raw content.
-        last_error = self._diagnostics.get(slot, {}).get("last_error")
-        if diagnostic.get("http_status", 0) >= 400:
-            last_error = dict(diagnostic, at=int(time.time()))
-        self._diagnostics[slot] = dict(diagnostic, at=int(time.time()),
-                                      state_len=state_len,
-                                      consecutive_errors=self._error_streaks.get(slot, 0),
-                                      retry_delay_seconds=self._harvest_retry_delay,
-                                      last_error=last_error)
-        try:
-            self.state_dir.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(mode="w", dir=self.state_dir,
-                                             prefix=".diagnostic-", delete=False) as out:
-                tmp = Path(out.name)
-                json.dump(self._diagnostics, out)
-            os.replace(tmp, self.state_dir / "probe-diagnostics.json")
-        except OSError:
-            print("[!] Could not persist sanitized diagnostics.")
+        # Cookie workers call this concurrently; serialize the mutate+dump so
+        # json.dump never iterates a dict another thread is resizing.
+        with self._diagnostics_lock:
+            last_error = self._diagnostics.get(slot, {}).get("last_error")
+            if diagnostic.get("http_status", 0) >= 400:
+                last_error = dict(diagnostic, at=int(time.time()))
+            self._diagnostics[slot] = dict(diagnostic, at=int(time.time()),
+                                          state_len=state_len,
+                                          consecutive_errors=self._error_streaks.get(slot, 0),
+                                          retry_delay_seconds=self._harvest_retry_delay,
+                                          last_error=last_error)
+            try:
+                self.state_dir.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", dir=self.state_dir,
+                                                 prefix=".diagnostic-", delete=False) as out:
+                    tmp = Path(out.name)
+                    json.dump(self._diagnostics, out)
+                os.replace(tmp, self.state_dir / "probe-diagnostics.json")
+            except OSError:
+                print("[!] Could not persist sanitized diagnostics.")
 
     # -- proxy usage bookkeeping ------------------------------------------
 
@@ -1593,11 +1642,9 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
 
     def _ordered_proxies(self, prefer_292: bool = True) -> List[str]:
         """Least-recently-used first, prioritizing known 292 seeds."""
-        now = time.time()
-        seed_ready, seed_resting, other_ready, other_resting = [], [], [], []
         with self._usage_lock:
             usage = dict(self._proxy_usage)
-        
+
         known_seeds = {
             "102.212.88.10", "104.232.209.183", "107.174.4.115", "13.143.125.4",
             "142.111.131.183", "142.111.67.146", "146.103.1.58", "148.135.188.159",
@@ -1608,7 +1655,8 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             "91.123.10.25", "92.119.182.217",
         }
 
-        cooldown = min(self.proxy_cooldown_seconds, 60.0)
+        seed_list: List[Tuple[float, str]] = []
+        other_list: List[Tuple[float, str]] = []
 
         for proxy in self.proxies:
             ident = self._proxy_identity(proxy)
@@ -1617,43 +1665,22 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             is_292 = (
                 p_info.get("last_state_len") == 292
                 or p_info.get("hit_292_count", 0) > 0
+                or any(s in proxy for s in known_seeds)
             )
-            if not is_292:
-                for s in known_seeds:
-                    if s in proxy:
-                        is_292 = True
-                        break
-            
-            is_resting = (now - last_used < cooldown)
             item = (last_used, proxy)
             if is_292:
-                (seed_resting if is_resting else seed_ready).append(item)
+                seed_list.append(item)
             else:
-                (other_resting if is_resting else other_ready).append(item)
+                other_list.append(item)
 
-        seed_ready.sort(key=lambda x: x[0])
-        seed_resting.sort(key=lambda x: x[0])
-        other_ready.sort(key=lambda x: x[0])
-        other_resting.sort(key=lambda x: x[0])
-
-        if self.config.get("static_proxy_order") == "random" and not prefer_292:
-            random.SystemRandom().shuffle(seed_ready)
-            random.SystemRandom().shuffle(other_ready)
+        # LRU sort: least recently used first
+        seed_list.sort(key=lambda x: x[0])
+        other_list.sort(key=lambda x: x[0])
 
         if prefer_292:
-            return (
-                [p for _, p in seed_ready]
-                + [p for _, p in seed_resting]
-                + [p for _, p in other_ready]
-                + [p for _, p in other_resting]
-            )
+            return [p for _, p in seed_list] + [p for _, p in other_list]
         else:
-            return (
-                [p for _, p in seed_ready]
-                + [p for _, p in other_ready]
-                + [p for _, p in seed_resting]
-                + [p for _, p in other_resting]
-            )
+            return [p for _, p in other_list] + [p for _, p in seed_list]
 
     def _load_config(self) -> Dict[str, Any]:
         if not self.config_path.exists():
@@ -1994,11 +2021,9 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
             return None
 
         seen_lengths: List[int] = []
-        timeout = int(self.config.get("request_timeout_seconds", 30))
+        timeout = min(int(self.config.get("request_timeout_seconds", 30)), 4)
         ordered = self._ordered_proxies(prefer_292=True)
-        budget = max(30, self.max_probes_per_pass)
-        if require_cookie:
-            budget = max(30, min(budget, 35))
+        budget = max(24, int(self.max_probes_per_pass))
         if proxy_offset and len(ordered) > 1:
             offset = proxy_offset % len(ordered)
             ordered = ordered[offset:] + ordered[:offset]
@@ -2017,7 +2042,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
 
                 print(f"  [{model}] -> [{index}/{len(ordered)}] {mask_proxy(proxy)} ...", end=" ", flush=True)
                 try:
-                    result = probe_turn_state(proxy, creds, model, max_time=timeout)
+                    result = probe_turn_state(proxy, creds, model, connect_timeout=3, max_time=timeout)
                 except Exception:
                     self._stats_attempt(account, model_cfg, "static", {"http_status": 0, "state": "", "header_ms": 0})
                     raise
@@ -2039,6 +2064,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     continue
 
                 seen_lengths.append(state_len)
+                time.sleep(0.25)
                 if require_cookie:
                     if (require_exact and state_len != 292) or not result.get("cookie"):
                         print(f"[REJECT: want 292 with cookie, got {state_len}]")
@@ -2355,16 +2381,21 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     return False
                 return _save_harvested(model_cfg, harvested)
 
-            # 1. First, handle cookie refresh if any models need cookie renewal
-            if cookie_refresh_models:
-                candidate_cfgs = [
-                    m for m in cookie_refresh_models
-                    if self._retry_after.get(f"{account['id']}:{m['name']}", 0) <= time.time()
-                ]
-                if not candidate_cfgs:
-                    candidate_cfgs = cookie_refresh_models[:1]
-
-                for candidate in candidate_cfgs:
+            # 1. Cookie refresh first (cookies live minutes, tickets an hour).
+            # Slots still inside their own retry window are skipped; when none
+            # remain, ticket renewal still runs instead of the account being
+            # skipped for the whole pass.
+            cookie_candidates = [
+                m for m in cookie_refresh_models
+                if self._retry_after.get(f"{account['id']}:{m['name']}", 0) <= time.time()
+            ]
+            if cookie_candidates:
+                # Serial on purpose: harvest keeps per-pass retry state on self
+                # (and the rotating harvester ignores abort/offset), so racing
+                # worker threads only discarded each other's hits and clobbered
+                # that state. _process_one keeps the Retry-After / short-retry /
+                # zero-delay schedule it computed for the slot.
+                for candidate in cookie_candidates:
                     attempted += 1
                     if _process_one(candidate, require_cookie=True):
                         updated += 1
@@ -2383,6 +2414,9 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                         attempted += 1
                         if _process_one(m_cfg, require_cookie=False):
                             updated += 1
+                        # _process_one already scheduled this slot (Retry-After,
+                        # 2s/4s short retries, or none for a rotating zero-delay
+                        # miss); 403/429 account-wide waits are set by harvest.
                         elif not (self._rotating and self._harvest_retry_delay == 0):
                             break
                     except Exception:  # noqa: BLE001

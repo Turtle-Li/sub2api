@@ -168,3 +168,14 @@ func TestEnqueueSchedulerOutbox_UngroupedAccountDedupesWithLiteralNilPayload(t *
 	require.Equal(t, keyLiteralNil, keyEmptyGroups,
 		"ungrouped-account account_changed must share dedup_key with other nil-payload variants")
 }
+
+// tools/codex-turn-state-manager computes this key independently so its
+// direct-SQL account_changed events coalesce with Go's; both sides pin it.
+func TestSchedulerOutboxDedupKeyMatchesTurnStateManager(t *testing.T) {
+	accountID := int64(9)
+	got := schedulerOutboxDedupKey("account_changed", &accountID, nil, nil)
+	want := "scheduler_outbox:8ff3d5cb02708a941c0c97b3c284ddffdad885615336d19668da3c422c8ea5d2"
+	if got != want {
+		t.Fatalf("dedup key drifted from the Python manager: got %s want %s", got, want)
+	}
+}

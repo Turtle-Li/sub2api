@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +17,10 @@ import (
 const (
 	PinnedCodexTurnStatesExtraKey    = "pinned_codex_turn_states"
 	PinnedCodexRoutingCookieExtraKey = "pinned_codex_routing_cookie"
+	// PinnedCodexCookieRequireSameEgressExtraKey 为 true 时，只注入在账号当前代理
+	// （host:port）上采集的路由 Cookie；来源出口未知或不一致的 Cookie 一律不注入。
+	// 默认关闭：Cookie 是否绑定出口 IP 尚无实测结论，按账号灰度开启。
+	PinnedCodexCookieRequireSameEgressExtraKey = "pinned_codex_cookie_require_same_egress"
 )
 
 type PinnedCodexTurnStateEntry struct {
@@ -23,6 +30,8 @@ type PinnedCodexTurnStateEntry struct {
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
 	StateLen        int        `json:"state_len,omitempty"`
+	// ProxyEndpoint 为采集该 Cookie 时的代理出口 host:port（不含凭据）。
+	ProxyEndpoint string `json:"proxy_endpoint,omitempty"`
 }
 
 // GetPinnedCodexTurnStates 返回该账号配置的所有 pinned turn-state 映射表。
@@ -65,22 +74,79 @@ func (a *Account) GetActivePinnedCodexRoutingCookie() string {
 		if rawMap, ok := raw.(map[string]any); ok {
 			if cookie, ok := rawMap["cookie"].(string); ok && strings.TrimSpace(cookie) != "" {
 				exp := parseFlexibleTime(rawMap["expires_at"])
-				if exp == nil || time.Now().UTC().Before(*exp) {
+				if (exp == nil || time.Now().UTC().Before(*exp)) && a.pinnedCookieEgressAllowed(parsePinnedProxyEndpoint(rawMap)) {
 					return strings.TrimSpace(cookie)
 				}
 			}
 		}
 	}
-	// 2. 回退读取同账号任一未过期模型的活 Cookie
+	// 2. 回退读取同账号未过期模型的活 Cookie：取过期时间最晚者，同值按模型名排序，保证确定性
 	states := a.GetPinnedCodexTurnStates()
-	for _, entry := range states {
-		if entry.Cookie != "" {
-			if isPinnedCookieActive(entry) {
-				return entry.Cookie
-			}
+	keys := make([]string, 0, len(states))
+	for k := range states {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var best *PinnedCodexTurnStateEntry
+	for _, k := range keys {
+		entry := states[k]
+		if !a.isPinnedCookieUsable(entry) {
+			continue
+		}
+		if best == nil || pinnedCookieOutlives(entry, *best) {
+			e := entry
+			best = &e
 		}
 	}
-	return ""
+	if best == nil {
+		return ""
+	}
+	return best.Cookie
+}
+
+// pinnedCookieOutlives 判断 a 的 Cookie 是否比 b 更晚过期；未设置过期时间视为最弱。
+func pinnedCookieOutlives(a, b PinnedCodexTurnStateEntry) bool {
+	if a.CookieExpiresAt == nil {
+		return false
+	}
+	if b.CookieExpiresAt == nil {
+		return true
+	}
+	return a.CookieExpiresAt.After(*b.CookieExpiresAt)
+}
+
+func (a *Account) isPinnedCookieUsable(entry PinnedCodexTurnStateEntry) bool {
+	return isPinnedCookieActive(entry) && a.pinnedCookieEgressAllowed(entry.ProxyEndpoint)
+}
+
+// pinnedCookieEgressAllowed 在账号开启同出口约束时，要求 Cookie 的采集出口与账号当前代理一致。
+func (a *Account) pinnedCookieEgressAllowed(endpoint string) bool {
+	if a == nil || a.Extra == nil {
+		return true
+	}
+	if required, _ := a.Extra[PinnedCodexCookieRequireSameEgressExtraKey].(bool); !required {
+		return true
+	}
+	if endpoint == "" || a.Proxy == nil || a.Proxy.Host == "" || a.Proxy.Port <= 0 {
+		return false
+	}
+	return strings.EqualFold(endpoint, net.JoinHostPort(a.Proxy.Host, strconv.Itoa(a.Proxy.Port)))
+}
+
+// parsePinnedProxyEndpoint 读取 proxy_endpoint；兼容旧数据的完整代理 URL 字段 proxy（仅取 host:port，丢弃凭据）。
+func parsePinnedProxyEndpoint(m map[string]any) string {
+	if ep, ok := m["proxy_endpoint"].(string); ok && strings.TrimSpace(ep) != "" {
+		return strings.TrimSpace(ep)
+	}
+	raw, ok := m["proxy"].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host
 }
 
 // GetPinnedCodexTurnState 返回匹配指定 model 的未过期 pinned state。
@@ -145,7 +211,7 @@ func (a *Account) GetPinnedCodexTurnStateAndCookie(model string) (string, string
 
 	// 提取路由 Cookie：优先该模型自身的 Cookie；若已过期，回退至账号级活 Cookie
 	cookie := ""
-	if isPinnedCookieActive(*matchedEntry) {
+	if a.isPinnedCookieUsable(*matchedEntry) {
 		cookie = matchedEntry.Cookie
 	} else {
 		cookie = a.GetActivePinnedCodexRoutingCookie()
@@ -235,6 +301,7 @@ func parsePinnedCodexTurnStateEntry(v any) PinnedCodexTurnStateEntry {
 		if upd := parseFlexibleTime(val["updated_at"]); upd != nil {
 			entry.UpdatedAt = upd
 		}
+		entry.ProxyEndpoint = parsePinnedProxyEndpoint(val)
 		return entry
 	default:
 		return PinnedCodexTurnStateEntry{}
@@ -344,6 +411,34 @@ func mergeRoutingCookie(existing, fresh string) string {
 	return strings.Join(keptParts, "; ")
 }
 
+// pinnedCodexTurnStatesPayload 将 pinned 映射序列化回 extra JSON，保留全部字段（含 Cookie 与采集出口）。
+func pinnedCodexTurnStatesPayload(states map[string]PinnedCodexTurnStateEntry) map[string]any {
+	payload := make(map[string]any, len(states))
+	for k, v := range states {
+		m := map[string]any{
+			"state":     v.State,
+			"state_len": v.StateLen,
+		}
+		if v.Cookie != "" {
+			m["cookie"] = v.Cookie
+		}
+		if v.CookieExpiresAt != nil {
+			m["cookie_expires_at"] = v.CookieExpiresAt.Format(time.RFC3339)
+		}
+		if v.ExpiresAt != nil {
+			m["expires_at"] = v.ExpiresAt.Format(time.RFC3339)
+		}
+		if v.UpdatedAt != nil {
+			m["updated_at"] = v.UpdatedAt.Format(time.RFC3339)
+		}
+		if v.ProxyEndpoint != "" {
+			m["proxy_endpoint"] = v.ProxyEndpoint
+		}
+		payload[k] = m
+	}
+	return payload
+}
+
 func (s *adminServiceImpl) GetPinnedCodexTurnStates(ctx context.Context, accountID int64) (map[string]PinnedCodexTurnStateEntry, error) {
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
@@ -375,6 +470,9 @@ func (s *adminServiceImpl) SetPinnedCodexTurnState(ctx context.Context, accountI
 	if !httpguts.ValidHeaderFieldValue(state) {
 		return nil, infraerrors.BadRequest("INVALID_STATE_HEADER", "turn state contains invalid characters for HTTP header")
 	}
+	if entry.Cookie != "" && !httpguts.ValidHeaderFieldValue(entry.Cookie) {
+		return nil, infraerrors.BadRequest("INVALID_COOKIE_HEADER", "cookie contains invalid characters for HTTP header")
+	}
 	entry.State = state
 	if entry.StateLen == 0 {
 		entry.StateLen = len(entry.State)
@@ -388,29 +486,8 @@ func (s *adminServiceImpl) SetPinnedCodexTurnState(ctx context.Context, accountI
 	}
 	currentStates[normModel] = entry
 
-	payloadMap := make(map[string]any, len(currentStates))
-	for k, v := range currentStates {
-		m := map[string]any{
-			"state":     v.State,
-			"state_len": v.StateLen,
-		}
-		if v.Cookie != "" {
-			m["cookie"] = v.Cookie
-		}
-		if v.CookieExpiresAt != nil {
-			m["cookie_expires_at"] = v.CookieExpiresAt.Format(time.RFC3339)
-		}
-		if v.ExpiresAt != nil {
-			m["expires_at"] = v.ExpiresAt.Format(time.RFC3339)
-		}
-		if v.UpdatedAt != nil {
-			m["updated_at"] = v.UpdatedAt.Format(time.RFC3339)
-		}
-		payloadMap[k] = m
-	}
-
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
-		PinnedCodexTurnStatesExtraKey: payloadMap,
+		PinnedCodexTurnStatesExtraKey: pinnedCodexTurnStatesPayload(currentStates),
 	}); err != nil {
 		return nil, err
 	}
@@ -464,29 +541,8 @@ func (s *adminServiceImpl) SetPinnedCodexTurnStates(ctx context.Context, account
 		currentStates[normModel] = entry
 	}
 
-	payloadMap := make(map[string]any, len(currentStates))
-	for k, v := range currentStates {
-		m := map[string]any{
-			"state":     v.State,
-			"state_len": v.StateLen,
-		}
-		if v.Cookie != "" {
-			m["cookie"] = v.Cookie
-		}
-		if v.CookieExpiresAt != nil {
-			m["cookie_expires_at"] = v.CookieExpiresAt.Format(time.RFC3339)
-		}
-		if v.ExpiresAt != nil {
-			m["expires_at"] = v.ExpiresAt.Format(time.RFC3339)
-		}
-		if v.UpdatedAt != nil {
-			m["updated_at"] = v.UpdatedAt.Format(time.RFC3339)
-		}
-		payloadMap[k] = m
-	}
-
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
-		PinnedCodexTurnStatesExtraKey: payloadMap,
+		PinnedCodexTurnStatesExtraKey: pinnedCodexTurnStatesPayload(currentStates),
 	}); err != nil {
 		return nil, err
 	}
@@ -509,23 +565,8 @@ func (s *adminServiceImpl) DeletePinnedCodexTurnState(ctx context.Context, accou
 		delete(currentStates, normModel)
 	}
 
-	payloadMap := make(map[string]any, len(currentStates))
-	for k, v := range currentStates {
-		m := map[string]any{
-			"state":     v.State,
-			"state_len": v.StateLen,
-		}
-		if v.ExpiresAt != nil {
-			m["expires_at"] = v.ExpiresAt.Format(time.RFC3339)
-		}
-		if v.UpdatedAt != nil {
-			m["updated_at"] = v.UpdatedAt.Format(time.RFC3339)
-		}
-		payloadMap[k] = m
-	}
-
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
-		PinnedCodexTurnStatesExtraKey: payloadMap,
+		PinnedCodexTurnStatesExtraKey: pinnedCodexTurnStatesPayload(currentStates),
 	}); err != nil {
 		return nil, err
 	}
