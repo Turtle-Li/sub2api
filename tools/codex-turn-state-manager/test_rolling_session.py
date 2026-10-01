@@ -317,6 +317,30 @@ class TestFreshCookieRefresh(TestCase):
         self.assertEqual(result[1]["length"], 292)
         self.assertEqual(result[1]["cookie"], "__cflb=fresh")
 
+    def test_cookie_refresh_honors_configured_780_target(self):
+        # Production full-capability tickets are 780 bytes; the cookie path once
+        # hard-coded 292 and rejected every one of them regardless of config.
+        mgr = self._make_manager()
+        mgr.host = FakeHost()
+        with mock.patch.object(
+            manager_module,
+            "probe_turn_state",
+            side_effect=[
+                probe_result(200, valid_state(292), cookie="__cflb=old-target"),
+                probe_result(200, valid_state(780), cookie="__cflb=fresh; __oailb=fresh"),
+            ],
+        ) as probe:
+            with redirect_stdout(io.StringIO()):
+                result = mgr.harvest(
+                    {"id": 60, "name": "test_account"},
+                    {"name": "gpt-6-astra", "target_state_len": 780, "require_exact_len": True},
+                    require_cookie=True,
+                )
+
+        self.assertEqual(probe.call_count, 2)
+        self.assertEqual(result[1]["length"], 780)
+        self.assertEqual(result[1]["cookie"], "__cflb=fresh; __oailb=fresh")
+
     def test_ticket_only_non_target_does_not_replace_routing_cookie(self):
         mgr = self._make_manager()
         mgr.host = FakeHost()

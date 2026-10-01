@@ -1979,7 +1979,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 or len(state) > MAX_STATE_BYTES or not is_valid_header_value(state)):
             print(f"[*] [{model}] rejected invalid or insufficient-lifetime state.")
             return None
-        if len(state) == 292 and result.get("cookie"):
+        if len(state) == target and result.get("cookie"):
             info["cookie"] = result.get("cookie", "")
             info["cookie_expires_at"] = result.get("cookie_expires_at", "")
         else:
@@ -2066,8 +2066,8 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                 seen_lengths.append(state_len)
                 time.sleep(0.25)
                 if require_cookie:
-                    if (require_exact and state_len != 292) or not result.get("cookie"):
-                        print(f"[REJECT: want 292 with cookie, got {state_len}]")
+                    if (require_exact and state_len != target_len) or not result.get("cookie"):
+                        print(f"[REJECT: want {target_len} with cookie, got {state_len}]")
                         continue
                 elif require_exact and state_len != target_len:
                     print(f"[REJECT: want {target_len}]")
@@ -2081,7 +2081,7 @@ WHERE id = {int(account_id)} AND deleted_at IS NULL;
                     print("[REJECT: invalid or insufficient-lifetime state]")
                     continue
 
-                if state_len == 292 and result.get("cookie"):
+                if state_len == target_len and result.get("cookie"):
                     info["cookie"] = result.get("cookie", "")
                     info["cookie_expires_at"] = result.get("cookie_expires_at", "")
                 else:
