@@ -75,6 +75,13 @@ func TestBillingErrorDetails_MapsInsufficientBalanceToBusinessError(t *testing.T
 	require.Equal(t, "账户余额不足，请充值后再试。", msg)
 }
 
+func TestBillingErrorDetails_MapsSubscriptionExpiredToChineseGuidance(t *testing.T) {
+	status, code, msg, _ := billingErrorDetails(service.ErrSubscriptionExpired)
+	require.Equal(t, http.StatusForbidden, status)
+	require.Equal(t, "SUBSCRIPTION_EXPIRED", code)
+	require.Equal(t, "订阅已到期，请续费或切换至其他有效订阅分组后重试。", msg)
+}
+
 func TestBillingErrorDetails_MapsSubscriptionLimitToBusinessError(t *testing.T) {
 	cases := []struct {
 		name string

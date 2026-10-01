@@ -1206,14 +1206,17 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 		s.circuitBreaker.OnSuccess()
 	}
 
-	// 检查订阅状态
+	// 检查订阅状态；到期单独返回 ErrSubscriptionExpired，以便下游给出"订阅已到期"提示
+	if subData.Status == SubscriptionStatusExpired {
+		return ErrSubscriptionExpired
+	}
 	if subData.Status != SubscriptionStatusActive {
 		return ErrSubscriptionInvalid
 	}
 
 	// 检查是否过期
 	if time.Now().After(subData.ExpiresAt) {
-		return ErrSubscriptionInvalid
+		return ErrSubscriptionExpired
 	}
 
 	// 检查限额（使用传入的Group限额配置）

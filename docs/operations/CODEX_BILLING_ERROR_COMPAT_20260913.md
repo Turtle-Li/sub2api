@@ -103,3 +103,29 @@ strict official matcher or a documented exact billing-only client prefix or
 originator. Embedded tokens in a browser User-Agent must not activate the
 adapter. Ops coverage must ensure the header restores the original billing
 classification.
+
+## Subscription expiry guidance (2026-09-19)
+
+The adapter also accepts `SUBSCRIPTION_NOT_FOUND` and `SUBSCRIPTION_EXPIRED`.
+Authentication uses the former when its active-only subscription query finds no
+record, including expired subscriptions. It deliberately does not claim a
+confirmed expiry in that case and performs no extra history query:
+
+> 当前分组没有有效订阅，订阅可能已到期或尚未开通，请续费或切换至其他有效订阅分组后重试。
+
+When a loaded authorization snapshot is explicitly expired or has reached its
+expiry time, authentication returns `SUBSCRIPTION_EXPIRED` with:
+
+> 订阅已到期，请续费或切换至其他有效订阅分组后重试。
+
+Recognized Codex Responses clients receive the existing terminal plain-text 400
+format and business-code header. Other clients retain 403 and their JSON
+response shape; Gemini uses the same guidance in its native error envelope.
+Unexpected subscription lookup failures return 500 `SUBSCRIPTION_LOOKUP_FAILED`
+(native numeric code for Gemini) rather than incorrectly asking users to renew.
+Usage/billing introspection exemptions remain unchanged. Ops classifies expiry
+as a local subscription business limit, including native Gemini Chinese errors.
+
+The fixed Codex revision and test above were rechecked for this extension;
+unknown 400 bodies are still preserved as `InvalidRequest`. No upstream code
+was copied. This extends the earlier two-state local compatibility contract.

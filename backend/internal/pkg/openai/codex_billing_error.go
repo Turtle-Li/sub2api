@@ -61,7 +61,7 @@ func isClaudianBillingErrorClient(userAgent, originator string) bool {
 func NormalizeCodexBillingErrorCode(code string) (string, bool) {
 	code = strings.TrimSpace(code)
 	switch code {
-	case "USAGE_LIMIT_EXCEEDED", "INSUFFICIENT_BALANCE":
+	case "USAGE_LIMIT_EXCEEDED", "INSUFFICIENT_BALANCE", "SUBSCRIPTION_NOT_FOUND", "SUBSCRIPTION_EXPIRED":
 		return code, true
 	default:
 		return "", false

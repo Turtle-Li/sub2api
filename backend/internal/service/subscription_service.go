@@ -894,6 +894,24 @@ func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID,
 	return &cp, nil
 }
 
+// HasExpiredSubscription 判断用户在该分组的订阅是否存在但已到期。
+// GetActiveSubscription 只查有效订阅，无法区分"已到期"与"未开通"；仅在拒绝路径上
+// 调用以给出准确提示，查询失败一律视为无法确认（返回 false）。
+func (s *SubscriptionService) HasExpiredSubscription(ctx context.Context, userID, groupID int64) bool {
+	if s == nil || s.userSubRepo == nil {
+		return false
+	}
+	sub, err := s.userSubRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
+	if err != nil || sub == nil || sub.Status == SubscriptionStatusRevoked {
+		return false
+	}
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	return sub.Status == SubscriptionStatusExpired || !sub.ExpiresAt.After(now)
+}
+
 const subscriptionL1FillAttempts = 3
 
 func (s *SubscriptionService) loadActiveSubscriptionForL1(ctx context.Context, userID, groupID int64, key string) (*UserSubscription, error) {

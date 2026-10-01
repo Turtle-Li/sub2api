@@ -1154,6 +1154,19 @@ func TestClassifyOpsAuthClientErrorsExcludedFromSLA(t *testing.T) {
 	}
 }
 
+func TestSubscriptionExpiryBillingErrorClassification(t *testing.T) {
+	for _, code := range []string{"SUBSCRIPTION_NOT_FOUND", "SUBSCRIPTION_EXPIRED"} {
+		header := http.Header{}
+		header.Set("X-Sub2-Error-Code", code)
+		parsed := applyOpsResponseErrorCodeHeader(parsedOpsError{Message: "订阅已到期，请续费或切换至其他有效订阅分组后重试。"}, header)
+		require.Equal(t, code, parsed.Code)
+		require.Equal(t, "subscription_error", normalizeOpsErrorType("", parsed.Code))
+		require.True(t, isOpsLocalBusinessLimitError(parsed.Code, parsed.Message))
+	}
+	require.True(t, isOpsLocalBusinessLimitError("403", "当前分组没有有效订阅，订阅可能已到期或尚未开通，请续费或切换至其他有效订阅分组后重试。"))
+	require.True(t, isOpsLocalBusinessLimitError("403", "订阅已到期，请续费或切换至其他有效订阅分组后重试。"))
+}
+
 func TestClassifyOpsLocalBusinessLimitErrorsExcludedFromSLA(t *testing.T) {
 	tests := []struct {
 		name        string

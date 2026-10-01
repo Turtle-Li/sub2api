@@ -2619,6 +2619,9 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 	if errors.Is(err, service.ErrInsufficientBalance) {
 		return http.StatusForbidden, "INSUFFICIENT_BALANCE", "账户余额不足，请充值后再试。", 0
 	}
+	if errors.Is(err, service.ErrSubscriptionExpired) {
+		return http.StatusForbidden, "SUBSCRIPTION_EXPIRED", middleware2.SubscriptionExpiredMessage, 0
+	}
 	msg := pkgerrors.Message(err)
 	if msg == "" {
 		logger.L().With(

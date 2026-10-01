@@ -203,7 +203,15 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			)
 			if subErr != nil {
 				if !skipBilling {
-					AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", "No active subscription found for this group")
+					if errors.Is(subErr, service.ErrSubscriptionNotFound) {
+						if subscriptionService.HasExpiredSubscription(c.Request.Context(), apiKey.User.ID, apiKey.Group.ID) {
+							abortWithClientBillingError(c, 403, "SUBSCRIPTION_EXPIRED", SubscriptionExpiredMessage)
+						} else {
+							abortWithClientBillingError(c, 403, "SUBSCRIPTION_NOT_FOUND", subscriptionUnavailableMessage)
+						}
+					} else {
+						AbortWithError(c, 500, "SUBSCRIPTION_LOOKUP_FAILED", subscriptionLookupFailedMessage)
+					}
 					return
 				}
 				// skipBilling: 订阅不存在也放行，handler 会返回可用的数据
@@ -251,6 +259,10 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 					code := "SUBSCRIPTION_INVALID"
 					status := 403
 					message := validateErr.Error()
+					if errors.Is(validateErr, service.ErrSubscriptionExpired) {
+						code = "SUBSCRIPTION_EXPIRED"
+						message = SubscriptionExpiredMessage
+					}
 					if errors.Is(validateErr, service.ErrDailyLimitExceeded) ||
 						errors.Is(validateErr, service.ErrWeeklyLimitExceeded) ||
 						errors.Is(validateErr, service.ErrMonthlyLimitExceeded) {
@@ -298,6 +310,13 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		c.Next()
 	}
 }
+
+const (
+	// SubscriptionExpiredMessage 是订阅到期的统一中文提示，网关计费复核路径同样复用。
+	SubscriptionExpiredMessage      = "订阅已到期，请续费或切换至其他有效订阅分组后重试。"
+	subscriptionUnavailableMessage  = "当前分组没有有效订阅，请开通订阅或切换至其他有效订阅分组后重试。"
+	subscriptionLookupFailedMessage = "订阅状态查询失败，请稍后重试。"
+)
 
 // SubscriptionUsageLimitMessage returns the established localized recovery
 // guidance, including the live reset-card count when it can be read.

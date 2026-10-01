@@ -51,6 +51,7 @@ const (
 	opsCodeUsageLimitExceeded    = "USAGE_LIMIT_EXCEEDED"
 	opsCodeSubscriptionNotFound  = "SUBSCRIPTION_NOT_FOUND"
 	opsCodeSubscriptionInvalid   = "SUBSCRIPTION_INVALID"
+	opsCodeSubscriptionExpired   = "SUBSCRIPTION_EXPIRED"
 	opsCodeUserInactive          = "USER_INACTIVE"
 	opsCodeInvalidAPIKey         = "INVALID_API_KEY"
 	opsCodeAPIKeyRequired        = "API_KEY_REQUIRED"
@@ -1886,7 +1887,7 @@ func parseOpsErrorResponse(body []byte) parsedOpsError {
 }
 
 // applyOpsResponseErrorCodeHeader restores the local business classification
-// for Codex-specific plain-text errors. Only the two recognized billing codes
+// for Codex-specific plain-text errors. Only the recognized billing codes
 // are accepted, and a structured body code always wins.
 func applyOpsResponseErrorCodeHeader(parsed parsedOpsError, header http.Header) parsedOpsError {
 	if strings.TrimSpace(parsed.Code) != "" || header == nil {
@@ -2213,7 +2214,7 @@ func normalizeOpsErrorType(errType string, code string) string {
 	switch strings.TrimSpace(code) {
 	case opsCodeInsufficientBalance:
 		return "billing_error"
-	case opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid:
+	case opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid, opsCodeSubscriptionExpired:
 		return "subscription_error"
 	default:
 		return "api_error"
@@ -2357,6 +2358,7 @@ func isOpsLocalBusinessLimitError(code string, msg string) bool {
 		opsCodeUsageLimitExceeded,
 		opsCodeSubscriptionNotFound,
 		opsCodeSubscriptionInvalid,
+		opsCodeSubscriptionExpired,
 		opsCodeAPIKeyQuotaExhausted,
 		opsCodeAPIKeyQueryDeprecated:
 		return true
@@ -2364,6 +2366,8 @@ func isOpsLocalBusinessLimitError(code string, msg string) bool {
 	return strings.Contains(msg, "api key in query parameter is deprecated") ||
 		strings.Contains(msg, "query parameter api_key is deprecated") ||
 		strings.Contains(msg, "no active subscription found for this group") ||
+		strings.Contains(msg, "当前分组没有有效订阅") ||
+		strings.Contains(msg, "订阅已到期") ||
 		strings.Contains(msg, "subscription is invalid or expired") ||
 		strings.Contains(msg, opsErrInsufficientBalance) ||
 		strings.Contains(msg, "insufficient account balance") ||

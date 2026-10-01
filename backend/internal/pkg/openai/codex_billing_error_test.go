@@ -12,6 +12,8 @@ func TestNormalizeCodexBillingErrorCode(t *testing.T) {
 		code string
 		want string
 	}{
+		{name: "subscription missing", code: "SUBSCRIPTION_NOT_FOUND", want: "SUBSCRIPTION_NOT_FOUND"},
+		{name: "subscription expired", code: "SUBSCRIPTION_EXPIRED", want: "SUBSCRIPTION_EXPIRED"},
 		{
 			name: "subscription",
 			code: "USAGE_LIMIT_EXCEEDED",
