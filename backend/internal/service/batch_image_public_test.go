@@ -1146,6 +1146,87 @@ func TestBatchImagePublicServiceRejectsProviderModelPlatformMismatch(t *testing.
 	require.NotContains(t, defaultBatchImageModelCandidates(), "gemini-3.1-flash-image-preview")
 }
 
+func TestBatchImagePublicServiceProviderPricingRules(t *testing.T) {
+	ctx := context.Background()
+	billing := NewBillingService(&config.Config{}, nil)
+	billing.currencyPolicy.Store(PricingCurrencySettings{
+		SettlementCurrency: PricingSettlementCurrencyCNY,
+		USDToCNYRate:       6.75,
+	})
+
+	t.Run("standard OpenAI group uses wallet price without FX or batch discount", func(t *testing.T) {
+		svc, _, _, _, _ := newTestBatchImagePublicService(true)
+		svc.Pricing = &BatchImageModelPricingResolver{Resolver: NewModelPricingResolver(nil, billing)}
+		groupID := int64(801)
+		price2K := 0.603
+		svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{
+			groupID: {
+				ID:                           groupID,
+				Platform:                     PlatformOpenAI,
+				SubscriptionType:             SubscriptionTypeStandard,
+				RateMultiplier:               0.25,
+				AllowImageGeneration:         true,
+				AllowBatchImageGeneration:    true,
+				ImageRateIndependent:         true,
+				ImageRateMultiplier:          0.6,
+				ImagePrice2K:                 &price2K,
+				BatchImageDiscountMultiplier: 0.5,
+				BatchImageHoldMultiplier:     0.6,
+			},
+		}}
+		req := validBatchImageSubmitRequest()
+		req.Provider = BatchImageProviderOpenAI
+		req.Model = "gpt-image-2.5-sunburst"
+		req.ImageSize = "2K"
+		account := testBatchImageAccount(801, AccountTypeAPIKey)
+		account.Platform = PlatformOpenAI
+
+		snapshot, err := svc.resolvePricingSnapshot(ctx, BatchImageOwner{UserID: 11, GroupID: &groupID}, req, BatchImageProviderOpenAI, &account)
+		require.NoError(t, err)
+		require.Equal(t, PricingSettlementCurrencyCNY, snapshot.Currency)
+		require.InDelta(t, 0.603, snapshot.BaseUnitPrice, 1e-12)
+		require.InDelta(t, 0.6, snapshot.GroupRateMultiplier, 1e-12)
+		require.InDelta(t, 1.0, snapshot.BatchDiscountMultiplier, 1e-12)
+		require.InDelta(t, 1.0, snapshot.HoldMultiplier, 1e-12)
+		require.InDelta(t, 0.3618, snapshot.BillableUnitPrice, 1e-12)
+		require.InDelta(t, 0.3618, snapshot.HoldUnitPrice, 1e-12)
+		require.InDelta(t, 0.7236, snapshot.EstimatedCost, 1e-12)
+		require.InDelta(t, 0.7236, snapshot.HoldAmount, 1e-12)
+	})
+
+	t.Run("Gemini group keeps FX normalization and batch discount", func(t *testing.T) {
+		svc, _, _, _, _ := newTestBatchImagePublicService(true)
+		svc.Pricing = &BatchImageModelPricingResolver{Resolver: NewModelPricingResolver(nil, billing)}
+		groupID := int64(802)
+		price1K := 0.134
+		svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{
+			groupID: {
+				ID:                           groupID,
+				Platform:                     PlatformGemini,
+				SubscriptionType:             SubscriptionTypeStandard,
+				RateMultiplier:               1,
+				AllowImageGeneration:         true,
+				AllowBatchImageGeneration:    true,
+				ImagePrice1K:                 &price1K,
+				BatchImageDiscountMultiplier: 0.5,
+				BatchImageHoldMultiplier:     0.6,
+			},
+		}}
+		req := validBatchImageSubmitRequest()
+		req.ImageSize = "1K"
+		account := testBatchImageAccount(802, AccountTypeAPIKey)
+
+		snapshot, err := svc.resolvePricingSnapshot(ctx, BatchImageOwner{UserID: 11, GroupID: &groupID}, req, BatchImageProviderGeminiAPI, &account)
+		require.NoError(t, err)
+		require.Equal(t, PricingSettlementCurrencyCNY, snapshot.Currency)
+		require.InDelta(t, 0.9045, snapshot.BaseUnitPrice, 1e-12)
+		require.InDelta(t, 0.5, snapshot.BatchDiscountMultiplier, 1e-12)
+		require.InDelta(t, 0.6, snapshot.HoldMultiplier, 1e-12)
+		require.InDelta(t, 0.45225, snapshot.BillableUnitPrice, 1e-12)
+		require.InDelta(t, 0.5427, snapshot.HoldUnitPrice, 1e-12)
+	})
+}
+
 func TestBatchImagePublicService_List(t *testing.T) {
 	ctx := context.Background()
 	svc, repo, _, _, _ := newTestBatchImagePublicService(true)

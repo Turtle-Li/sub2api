@@ -1733,16 +1733,29 @@ func (s *BatchImagePublicService) batchImageGroupPlatform(ctx context.Context, g
 	return NormalizeGroupPlatform(group.Platform), nil
 }
 
+// batchImageUsesOpenAIWalletPricing reports whether the configured group image
+// card is already expressed in the wallet's internal unit. Subscription and
+// legacy missing-type groups intentionally keep the legacy normalization rules;
+// this mirrors the ordinary OpenAI usage finalization boundary.
+func batchImageUsesOpenAIWalletPricing(provider string, group *Group) bool {
+	return strings.TrimSpace(provider) == BatchImageProviderOpenAI &&
+		group != nil &&
+		NormalizeGroupPlatform(group.Platform) == PlatformOpenAI &&
+		group.SubscriptionType == SubscriptionTypeStandard
+}
+
 func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, owner BatchImageOwner, req BatchImageSubmitRequest, provider string, account *Account) (*BatchImagePricingSnapshot, error) {
 	unit := -1.0
 	groupMultiplier := 1.0
 	discountMultiplier := defaultBatchImageDiscountMultiplier
 	holdMultiplier := defaultBatchImageHoldMultiplier
+	var group *Group
 	if owner.GroupID != nil && *owner.GroupID > 0 {
 		if s.GroupRepo == nil {
 			return nil, ErrBatchImageSettlementPricingMissing
 		}
-		group, err := s.GroupRepo.GetByIDLite(ctx, *owner.GroupID)
+		var err error
+		group, err = s.GroupRepo.GetByIDLite(ctx, *owner.GroupID)
 		if err != nil || group == nil {
 			return nil, ErrBatchImageSettlementPricingMissing
 		}
@@ -1796,6 +1809,16 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		}
 		unit = resolvedUnit
 	}
+	// OpenAI Image batch has no Gemini-style batch discount. Keep the hold at
+	// least the undiscounted amount as well, otherwise a successful item could
+	// exceed the reserved balance even though the provider price is correct.
+	openAIImageProvider := strings.TrimSpace(provider) == BatchImageProviderOpenAI
+	if openAIImageProvider {
+		discountMultiplier = 1
+		if holdMultiplier < 1 {
+			holdMultiplier = 1
+		}
+	}
 	// 定价不变式：hold 比例不得低于 discount 比例，否则成功率足够高时
 	// actualCost > holdAmount，结算永远失败、冻结余额无法解冻。
 	// 管理端已校验新配置，此处兜底钳制存量脏数据。
@@ -1817,7 +1840,7 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 	if resolver, ok := s.Pricing.(*BatchImageModelPricingResolver); ok && resolver.Resolver != nil {
 		policy := resolver.Resolver.billingService.currentCurrencyPolicy()
 		currency = policy.SettlementCurrency
-		if currency == "CNY" {
+		if currency == "CNY" && !batchImageUsesOpenAIWalletPricing(provider, group) {
 			unit *= policy.USDToCNYRate
 		}
 	}

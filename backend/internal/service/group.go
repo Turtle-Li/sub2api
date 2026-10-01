@@ -40,7 +40,8 @@ type Group struct {
 	MonthlyLimitUSD     *float64
 	DefaultValidityDays int
 
-	// 图片生成计费配置（antigravity 和 gemini 平台使用）
+	// 图片生成计费配置。Gemini/Vertex 价卡沿用源价归一化；标准 OpenAI
+	// Image 分组价卡由管理员直接填写内部钱包单位，不应再次套用汇率。
 	AllowImageGeneration         bool
 	AllowBatchImageGeneration    bool
 	ImageRateIndependent         bool

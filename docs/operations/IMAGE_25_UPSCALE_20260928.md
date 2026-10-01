@@ -369,6 +369,12 @@ post-deployment QA passed. This probe validates the repaired 2K slow-transfer
 path; it is not a substitute for a separate 4K or per-item batch-reference
 mapping test.
 
+The `2.01 CNY` and `0.402 CNY` figures above are historical **async ordinary
+Images** observations, not batch-snapshot pricing evidence. They remain valid
+as audit rows for those probes, but must not be reused to infer the current
+OpenAI Image 2/2.5 batch price; the provider-specific batch rules are recorded
+in the pricing-currency document.
+
 ## Validation and rollback
 
 Release gates require unit/race tests, migration tests, shell syntax and runtime

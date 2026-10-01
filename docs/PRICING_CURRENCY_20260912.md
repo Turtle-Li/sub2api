@@ -140,6 +140,27 @@ retain their current numeric normalization rules. Catalog prices are not
 rewritten. Existing wallet values have already been rescaled and must never be
 multiplied again.
 
+### Batch Image provider split
+
+The batch image snapshot follows the same boundary, but also separates the
+provider's commercial rules:
+
+- `openai_images` on a standard OpenAI group treats `ImagePrice1K`,
+  `ImagePrice2K`, `ImagePrice4K` and the image multiplier as already-authorized
+  internal wallet units under the current CNY compatibility basis. It does not
+  apply `USDToCNYRate` a second time.
+  OpenAI Image batches also have no Gemini batch discount; the effective batch
+  discount is `1.0` and the hold is at least the undiscounted amount.
+- `gemini_api` and `vertex` retain their configured source-price normalization
+  and batch discount/hold behavior.
+- An OpenAI batch without an OpenAI group image card still uses the catalog
+  basis and its normal currency normalization; the no-FX rule is not a blanket
+  conversion switch for every provider price.
+
+This split prevents a Gemini price-card migration from multiplying an OpenAI
+Image group price by the compatibility exchange rate or silently applying a
+Gemini-only batch discount.
+
 Production activation changes group 6 from 0.03 to 0.25 after deploying this
 compatible code and naturally draining old binaries. Preserve its before-image,
 refresh scoped auth caches and allow the existing group-rate cache to expire.

@@ -196,3 +196,23 @@ func TestBillingCurrencyDirectOpenAIRateBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestBillingCurrencyStandardOpenAIImageCardSkipsSecondFX(t *testing.T) {
+	s := currencyTestBilling(PricingSettlementCurrencyCNY)
+	price2K := 0.603
+	group := &Group{
+		Platform:         PlatformOpenAI,
+		SubscriptionType: SubscriptionTypeStandard,
+		ImagePrice2K:     &price2K,
+	}
+	key := &APIKey{Group: group}
+	cost := s.CalculateImageCost("gpt-image-2.5-sunburst", ImageBillingSize2K, 1, &ImagePriceConfig{Price2K: &price2K}, 0.6)
+
+	// CalculateImageCost first records the CNY compatibility conversion. The
+	// standard OpenAI finalization then removes that conversion before wallet
+	// debit, leaving the configured RMB/internal-unit card price intact.
+	finalizeUsageCurrency(cost, key, false)
+	require.InDelta(t, 0.603, cost.TotalCost, 1e-12)
+	require.InDelta(t, 0.3618, cost.ActualCost, 1e-12)
+	require.Equal(t, PricingSettlementCurrencyCNY, costCurrency(cost))
+}
