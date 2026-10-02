@@ -158,8 +158,6 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 	} else if plan != nil {
 		orderAmount = plan.Price
 		limitAmount = plan.Price
-	} else if req.OrderType == payment.OrderTypeBalance {
-		orderAmount = calculateRechargeCreditedAmount(req.Amount, cfg.BalanceRechargeMultiplier, cfg.RechargeOptions)
 	}
 	feeRate := cfg.RechargeFeeRate
 	methodCurrency := payment.DefaultPaymentCurrency
@@ -170,6 +168,19 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		if err != nil {
 			return nil, err
 		}
+	}
+	if plan == nil && req.OrderType == payment.OrderTypeBalance {
+		// Keep the fork's configured preset bonus and add the upstream tier
+		// promotion on top. The tier quote also owns the discount-mode pay base.
+		quote := quoteRechargeBonus(cfg, req.Amount, methodCurrency)
+		baseWithPresets := calculateRechargeCreditedAmount(req.Amount, cfg.BalanceRechargeMultiplier, cfg.RechargeOptions)
+		baseWithoutPresets := calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
+		presetBonus := baseWithPresets - baseWithoutPresets
+		if presetBonus < 0 || math.IsNaN(presetBonus) || math.IsInf(presetBonus, 0) {
+			presetBonus = 0
+		}
+		limitAmount = quote.PayBase
+		orderAmount = addRechargeBonus(quote.Credited, presetBonus)
 	}
 	payAmountStr := ""
 	payAmount := float64(0)
@@ -1449,7 +1460,7 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		SetAmount(orderAmount).
 		SetPayAmount(payAmount).
 		SetFeeRate(feeRate).
-		SetBonusAmount(bonusAmount).
+		SetBonusAmount(rechargeOrderBonusAmount(req, cfg, orderAmount)).
 		SetRechargeCode("").
 		SetOutTradeNo(outTradeNo).
 		SetPaymentType(req.PaymentType).
@@ -1548,6 +1559,21 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		return nil, false, fmt.Errorf("commit order transaction: %w", err)
 	}
 	return order, true, nil
+}
+
+// rechargeOrderBonusAmount derives the immutable promotion portion from the
+// credited amount stored on a balance order. This keeps legacy preset bonuses
+// and the upstream tier promotion in the same persisted bonus_amount field.
+func rechargeOrderBonusAmount(req CreateOrderRequest, cfg *PaymentConfig, orderAmount float64) float64 {
+	if req.OrderType != payment.OrderTypeBalance || cfg == nil {
+		return 0
+	}
+	base := calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
+	bonus := orderAmount - base
+	if bonus <= 0 || math.IsNaN(bonus) || math.IsInf(bonus, 0) {
+		return 0
+	}
+	return decimal.NewFromFloat(bonus).Round(2).InexactFloat64()
 }
 
 func buildPaymentResetCardProductSnapshot(source *resetCardOrderSnapshotSource, payAmount float64) map[string]any {

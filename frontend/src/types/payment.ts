@@ -104,6 +104,10 @@ export interface CheckoutInfoResponse {
    * Absent on older servers, which is why the union includes undefined.
    */
   recharge_mode?: 'fixed' | 'custom'
+  /** 充值优惠阶梯与活动文案（旧服务端缺失时按空配置处理）。 */
+  recharge_bonus_tiers?: RechargeBonusTier[]
+  recharge_bonus_mode?: string
+  recharge_bonus_notice?: string
   help_text: string
   help_image_url: string
   banner?: PaymentBanner | null

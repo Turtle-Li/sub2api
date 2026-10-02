@@ -9839,6 +9839,10 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_weight_session_sticky: string;
   payment_recharge_options_json: string;
   payment_recommended_recharge_amount: number;
+  // 充值优惠阶梯编辑态：允许留空的行，提交时清洗为 RechargeBonusTier[]
+  payment_recharge_bonus_tiers: RechargeBonusTierDraft[];
+  payment_recharge_bonus_mode: RechargeBonusMode;
+  payment_recharge_bonus_notice: string;
   payment_banner: import("@/types/payment").PaymentBanner;
   // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
@@ -9908,6 +9912,9 @@ const form = reactive<SettingsForm>({
   payment_recharge_options: [] as Array<Record<string, unknown>>,
   payment_recharge_options_json: "[]",
   payment_recommended_recharge_amount: 0,
+  payment_recharge_bonus_tiers: [],
+  payment_recharge_bonus_mode: "bonus",
+  payment_recharge_bonus_notice: "",
   payment_banner: {
     enabled: false,
     title: "",
@@ -11845,6 +11852,11 @@ async function saveSettings() {
       payment_subscription_usd_to_cny_rate:
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
+      payment_recharge_bonus_tiers: sanitizeRechargeBonusTiersForSubmit(
+        form.payment_recharge_bonus_tiers,
+      ),
+      payment_recharge_bonus_mode: form.payment_recharge_bonus_mode,
+      payment_recharge_bonus_notice: form.payment_recharge_bonus_notice,
       // A malformed stored list is exposed as an empty/partial parsed list.
       // Saving unrelated settings must never replace it and reopen custom top-ups.
       ...(form.payment_recharge_options_json !== loadedRechargeOptionsJSON ||

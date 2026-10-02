@@ -1,5 +1,34 @@
 <template>
-  <div class="payment-recharge-options">
+  <div v-if="legacyQuickMode" class="space-y-4">
+    <div class="grid grid-cols-3 gap-x-4 gap-y-4 pt-2">
+      <button
+        v-for="amt in filteredAmounts"
+        :key="amt"
+        type="button"
+        :data-testid="`quick-amount-${amt}`"
+        class="relative rounded-lg border-2 px-3 py-3 text-center font-medium transition-colors"
+        @click="selectAmount(amt)"
+      >
+        <span
+          v-if="legacyQuoteFor(amt).percent > 0"
+          class="pointer-events-none absolute -right-2 -top-3 z-10 rotate-12"
+          data-testid="quick-amount-bonus-badge"
+        >
+          <span class="rounded bg-red-600 px-1.5 py-0.5 text-[11px] font-extrabold leading-tight text-white">
+            {{ legacyBadgeText(amt) }}
+          </span>
+        </span>
+        <span class="block">{{ amt }}</span>
+        <span
+          v-if="legacyShowSecondLine"
+          data-testid="quick-amount-credited"
+          class="mt-0.5 block text-[11px] font-normal leading-tight"
+        >{{ legacySecondLine(amt) }}</span>
+      </button>
+    </div>
+  </div>
+
+  <div v-else class="payment-recharge-options">
     <div v-if="filteredOptions.length > 0" class="payment-recharge-grid">
       <article
         v-for="option in filteredOptions"
@@ -103,14 +132,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { RechargeOption } from '@/types/payment'
+import type { RechargeBonusTier, RechargeOption } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
 import PurchaseEligibilityHint from './PurchaseEligibilityHint.vue'
 import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount } from './currency'
 import { creditedBalanceAmount } from './pricing'
+import { formatRechargeBonusNumber, quoteRechargeBonus, type RechargeBonusMode } from '@/utils/rechargeBonus'
 
 const props = withDefaults(defineProps<{
   amounts?: number[]
+  bonusTiers?: RechargeBonusTier[]
+  bonusMode?: RechargeBonusMode
+  multiplier?: number
   options?: RechargeOption[]
   modelValue: number | null
   min?: number
@@ -124,6 +157,9 @@ const props = withDefaults(defineProps<{
   balanceMultiplier?: number
 }>(), {
   amounts: () => [20, 50, 100, 200, 500],
+  bonusTiers: () => [],
+  bonusMode: 'bonus',
+  multiplier: 1,
   options: () => [],
   min: 0,
   max: 0,
@@ -138,6 +174,42 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+const legacyQuickMode = computed(() => props.options.length === 0 && props.bonusTiers.length > 0)
+const filteredAmounts = computed(() => props.amounts.filter((amount) =>
+  (props.min <= 0 || amount >= props.min) && (props.max <= 0 || amount <= props.max),
+))
+const legacyShowSecondLine = computed(() => props.bonusTiers.length > 0)
+
+function legacyCurrencyDigits(): number {
+  if (!props.currency) return 2
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: props.currency }).resolvedOptions().maximumFractionDigits ?? 2
+  } catch {
+    return 2
+  }
+}
+
+function legacyQuoteFor(amount: number) {
+  return quoteRechargeBonus(props.bonusTiers, amount, {
+    multiplier: props.multiplier,
+    mode: props.bonusMode,
+    currencyDigits: legacyCurrencyDigits(),
+  })
+}
+
+function legacyBadgeText(amount: number): string {
+  const percent = formatRechargeBonusNumber(legacyQuoteFor(amount).percent)
+  return props.bonusMode === 'discount' ? `${percent}% OFF` : `+${percent}%`
+}
+
+function legacySecondLine(amount: number): string {
+  const quote = legacyQuoteFor(amount)
+  if (props.bonusMode === 'discount') {
+    return formatPaymentAmount(quote.payBase, props.currency)
+  }
+  return '$' + quote.credited.toFixed(2)
+}
 
 const normalizedOptions = computed<RechargeOption[]>(() =>
   props.options.length > 0

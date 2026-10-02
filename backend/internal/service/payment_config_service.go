@@ -102,15 +102,21 @@ type PaymentConfig struct {
 	BalanceDisabled           bool     `json:"balance_disabled"`
 	BalanceRechargeMultiplier float64  `json:"balance_recharge_multiplier"`
 	// SubscriptionUSDToCNYRate 为 0 时订阅换算关闭（兼容存量行为）。
-	SubscriptionUSDToCNYRate float64        `json:"subscription_usd_to_cny_rate"`
-	RechargeFeeRate          float64        `json:"recharge_fee_rate"`
-	LoadBalanceStrategy      string         `json:"load_balance_strategy"`
-	ProductNamePrefix        string         `json:"product_name_prefix"`
-	ProductNameSuffix        string         `json:"product_name_suffix"`
-	HelpImageURL             string         `json:"help_image_url"`
-	HelpText                 string         `json:"help_text"`
-	Banner                   *PaymentBanner `json:"banner,omitempty"`
-	StripePublishableKey     string         `json:"stripe_publishable_key,omitempty"`
+	SubscriptionUSDToCNYRate float64 `json:"subscription_usd_to_cny_rate"`
+	RechargeFeeRate          float64 `json:"recharge_fee_rate"`
+	// RechargeBonusTiers stores the normalized balance recharge promotion tiers.
+	RechargeBonusTiers []RechargeBonusTier `json:"recharge_bonus_tiers"`
+	// RechargeBonusMode is "bonus" or "discount" after normalization.
+	RechargeBonusMode string `json:"recharge_bonus_mode"`
+	// RechargeBonusNotice is optional Markdown shown on the recharge page.
+	RechargeBonusNotice  string         `json:"recharge_bonus_notice"`
+	LoadBalanceStrategy  string         `json:"load_balance_strategy"`
+	ProductNamePrefix    string         `json:"product_name_prefix"`
+	ProductNameSuffix    string         `json:"product_name_suffix"`
+	HelpImageURL         string         `json:"help_image_url"`
+	HelpText             string         `json:"help_text"`
+	Banner               *PaymentBanner `json:"banner,omitempty"`
+	StripePublishableKey string         `json:"stripe_publishable_key,omitempty"`
 
 	// Cancel rate limit settings
 	CancelRateLimitEnabled bool   `json:"cancel_rate_limit_enabled"`
@@ -143,24 +149,28 @@ type UnifiedPaymentCapability interface {
 
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
 type UpdatePaymentConfigRequest struct {
-	Enabled                   *bool          `json:"enabled"`
-	EntryEnabled              *bool          `json:"entry_enabled"`
-	MinAmount                 *float64       `json:"min_amount"`
-	MaxAmount                 *float64       `json:"max_amount"`
-	DailyLimit                *float64       `json:"daily_limit"`
-	OrderTimeoutMin           *int           `json:"order_timeout_minutes"`
-	MaxPendingOrders          *int           `json:"max_pending_orders"`
-	EnabledTypes              []string       `json:"enabled_payment_types"`
-	BalanceDisabled           *bool          `json:"balance_disabled"`
-	BalanceRechargeMultiplier *float64       `json:"balance_recharge_multiplier"`
-	SubscriptionUSDToCNYRate  *float64       `json:"subscription_usd_to_cny_rate"`
-	RechargeFeeRate           *float64       `json:"recharge_fee_rate"`
-	LoadBalanceStrategy       *string        `json:"load_balance_strategy"`
-	ProductNamePrefix         *string        `json:"product_name_prefix"`
-	ProductNameSuffix         *string        `json:"product_name_suffix"`
-	HelpImageURL              *string        `json:"help_image_url"`
-	HelpText                  *string        `json:"help_text"`
-	Banner                    *PaymentBanner `json:"banner"`
+	Enabled                   *bool    `json:"enabled"`
+	EntryEnabled              *bool    `json:"entry_enabled"`
+	MinAmount                 *float64 `json:"min_amount"`
+	MaxAmount                 *float64 `json:"max_amount"`
+	DailyLimit                *float64 `json:"daily_limit"`
+	OrderTimeoutMin           *int     `json:"order_timeout_minutes"`
+	MaxPendingOrders          *int     `json:"max_pending_orders"`
+	EnabledTypes              []string `json:"enabled_payment_types"`
+	BalanceDisabled           *bool    `json:"balance_disabled"`
+	BalanceRechargeMultiplier *float64 `json:"balance_recharge_multiplier"`
+	SubscriptionUSDToCNYRate  *float64 `json:"subscription_usd_to_cny_rate"`
+	RechargeFeeRate           *float64 `json:"recharge_fee_rate"`
+	// A nil slice leaves tiers unchanged; an empty slice clears them.
+	RechargeBonusTiers  *[]RechargeBonusTier `json:"recharge_bonus_tiers"`
+	RechargeBonusMode   *string              `json:"recharge_bonus_mode"`
+	RechargeBonusNotice *string              `json:"recharge_bonus_notice"`
+	LoadBalanceStrategy *string              `json:"load_balance_strategy"`
+	ProductNamePrefix   *string              `json:"product_name_prefix"`
+	ProductNameSuffix   *string              `json:"product_name_suffix"`
+	HelpImageURL        *string              `json:"help_image_url"`
+	HelpText            *string              `json:"help_text"`
+	Banner              *PaymentBanner       `json:"banner"`
 
 	// Cancel rate limit settings
 	CancelRateLimitEnabled *bool   `json:"cancel_rate_limit_enabled"`

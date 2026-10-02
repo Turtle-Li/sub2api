@@ -748,6 +748,10 @@ func (*notificationEmailCacheStub) SetVerificationCode(context.Context, string, 
 
 func (*notificationEmailCacheStub) DeleteVerificationCode(context.Context, string) error { return nil }
 
+func (*notificationEmailCacheStub) IncrVerificationCodeAttempts(context.Context, string) (int, error) {
+	return 0, nil
+}
+
 func (*notificationEmailCacheStub) GetNotifyVerifyCode(context.Context, string) (*VerificationCodeData, error) {
 	return nil, nil
 }
@@ -757,6 +761,10 @@ func (*notificationEmailCacheStub) SetNotifyVerifyCode(context.Context, string, 
 }
 
 func (*notificationEmailCacheStub) DeleteNotifyVerifyCode(context.Context, string) error { return nil }
+
+func (*notificationEmailCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, string) (int, error) {
+	return 0, nil
+}
 
 func (*notificationEmailCacheStub) GetPasswordResetToken(context.Context, string) (*PasswordResetTokenData, error) {
 	return nil, nil
@@ -768,6 +776,10 @@ func (*notificationEmailCacheStub) SetPasswordResetToken(context.Context, string
 
 func (*notificationEmailCacheStub) DeletePasswordResetToken(context.Context, string) error {
 	return nil
+}
+
+func (*notificationEmailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
+	return false, nil
 }
 func (*notificationEmailCacheStub) IsPasswordResetEmailInCooldown(context.Context, string) bool {
 	return false

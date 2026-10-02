@@ -72,6 +72,11 @@
                   :fee-rate="feeRate"
                   :balance-multiplier="balanceRechargeMultiplier"
                 />
+                <div
+                  v-if="renderedBonusNotice"
+                  class="prose prose-sm mt-3 max-w-none text-gray-500 dark:prose-invert dark:text-dark-400"
+                  v-html="renderedBonusNotice"
+                />
                 <p v-if="amountError" class="mt-2 text-xs text-amber-600 dark:text-amber-300">{{ amountError }}</p>
                 <p v-if="balanceRechargeMultiplier !== 1" class="mt-4 text-xs text-gray-500 dark:text-dark-400">
                   {{ t('payment.rechargeRatePreview', { currency: selectedCurrency, usd: balanceRechargeMultiplier.toFixed(2) }) }}
@@ -439,7 +444,8 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
-import { creditedBalanceAmount, subscriptionGatewayAmount } from '@/components/payment/pricing'
+import { subscriptionGatewayAmount } from '@/components/payment/pricing'
+import { normalizeRechargeBonusMode, normalizeRechargeBonusTiers, quoteRechargeBonus } from '@/utils/rechargeBonus'
 import { planValiditySuffix as validitySuffixOf } from '@/components/payment/validity'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
 import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
@@ -965,7 +971,7 @@ const paymentDialogTitle = computed(() => {
 // All checkout data from single API call
 const checkout = ref<CheckoutInfoResponse>({
   methods: {}, global_min: 0, global_max: 0,
-  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, recharge_options: [], recharge_mode: undefined, help_text: '', help_image_url: '', banner: undefined, stripe_publishable_key: '',
+  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, recharge_options: [], recharge_mode: undefined, recharge_bonus_tiers: [], recharge_bonus_mode: 'bonus', recharge_bonus_notice: '', help_text: '', help_image_url: '', banner: undefined, stripe_publishable_key: '',
 })
 
 const renderedHelpText = computed(() => DOMPurify.sanitize(
@@ -1146,11 +1152,6 @@ const selectedRechargeOption = computed(() =>
   rechargePresetOptions.value.find(option => option.amount === validAmount.value) || null
 )
 const rechargeBalanceBonus = computed(() => selectedRechargeOption.value?.balance_bonus || 0)
-// Mirrors the server's two-step rounding; a single round drifts by a cent.
-const creditedAmount = computed(() =>
-  creditedBalanceAmount(validAmount.value, balanceRechargeMultiplier.value, rechargeBalanceBonus.value)
-)
-
 // Platform credit is not a gateway charge, so it never takes a currency symbol.
 function formatCreditAmount(value: number): string {
   const amount = Number.isFinite(value) ? value : 0
@@ -1204,16 +1205,22 @@ function formatSelectedPaymentAmount(value: number | string): string {
 
 // 充值优惠：阈值按输入金额命中；赠金模式按到账基数（输入 × 倍率）加赠送，折扣模式按百分比减实付。
 // 与后端 quoteRechargeBonus 一致；渠道限额、手续费、实付都按折后基数（payBaseAmount）计算，提交仍发送输入金额。
-const bonusQuote = computed(() => quoteRechargeBonus(rechargeBonusTiers.value, validAmount.value, {
-  multiplier: balanceRechargeMultiplier.value,
-  mode: rechargeBonusMode.value,
-  currencyDigits: currencyFractionDigits(selectedCurrency.value),
-}))
+const rechargeBonusTiers = computed(() => normalizeRechargeBonusTiers(checkout.value.recharge_bonus_tiers))
+const rechargeBonusMode = computed(() => normalizeRechargeBonusMode(checkout.value.recharge_bonus_mode))
+const bonusQuote = computed(() => {
+  const tierQuote = quoteRechargeBonus(rechargeBonusTiers.value, validAmount.value, {
+    multiplier: balanceRechargeMultiplier.value,
+    mode: rechargeBonusMode.value,
+    currencyDigits: currencyFractionDigits(selectedCurrency.value),
+  })
+  return {
+    ...tierQuote,
+    credited: roundPaymentAmount(tierQuote.credited + rechargeBalanceBonus.value, 'USD'),
+    bonus: roundPaymentAmount(tierQuote.bonus + rechargeBalanceBonus.value, 'USD'),
+  }
+})
 const payBaseAmount = computed(() => bonusQuote.value.payBase)
-const discountAmount = computed(() => roundPaymentAmount(validAmount.value - payBaseAmount.value, selectedCurrency.value))
 const creditedAmount = computed(() => bonusQuote.value.credited)
-const showBonusRow = computed(() => bonusQuote.value.mode !== 'discount' && bonusQuote.value.bonus > 0)
-const showCreditedBalance = computed(() => balanceRechargeMultiplier.value !== 1 || bonusQuote.value.percent > 0)
 
 const methodOptions = computed<PaymentMethodOption[]>(() =>
   enabledMethods.value.map((type) => {
@@ -1238,7 +1245,6 @@ const totalAmount = computed(() =>
     ? Math.round((payBaseAmount.value + feeAmount.value) * 100) / 100
     : payBaseAmount.value
 )
-const showActualPay = computed(() => feeRate.value > 0 || discountAmount.value > 0)
 
 const amountError = computed(() => {
   if (validAmount.value <= 0) return ''
