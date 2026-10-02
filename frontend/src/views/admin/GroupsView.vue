@@ -998,11 +998,14 @@
               />
               {{ t("admin.groups.imagePricing.allowBatchImageGeneration") }}
             </label>
-            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            <p v-if="supportsBatchImageDiscountPlatform(createForm.platform)" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
               {{ t("admin.groups.imagePricing.batchSectionHint") }}
             </p>
+            <p v-else class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t("admin.groups.imagePricing.batchOpenAIHint") }}
+            </p>
             <div
-              v-if="createForm.allow_batch_image_generation"
+              v-if="createForm.allow_batch_image_generation && supportsBatchImageDiscountPlatform(createForm.platform)"
               class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2"
             >
               <div>
@@ -2638,11 +2641,14 @@
               />
               {{ t("admin.groups.imagePricing.allowBatchImageGeneration") }}
             </label>
-            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            <p v-if="supportsBatchImageDiscountPlatform(editForm.platform)" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
               {{ t("admin.groups.imagePricing.batchSectionHint") }}
             </p>
+            <p v-else class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t("admin.groups.imagePricing.batchOpenAIHint") }}
+            </p>
             <div
-              v-if="editForm.allow_batch_image_generation"
+              v-if="editForm.allow_batch_image_generation && supportsBatchImageDiscountPlatform(editForm.platform)"
               class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2"
             >
               <div>
@@ -4367,6 +4373,8 @@ import {
   getImagePricePlaceholder,
   getVideoPricePlaceholder,
   imagePricingI18nKey,
+  supportsBatchImageDiscountPlatform,
+  supportsBatchImagePlatform,
   supportsImagePricingPlatform,
   supportsVideoPricingPlatform,
   videoPricingI18nKey,
@@ -5529,9 +5537,6 @@ const editWebSearchFinalPricePreview = computed(() =>
   buildWebSearchFinalPricePreview(editForm),
 );
 
-const supportsBatchImagePlatform = (platform: string) =>
-  platform === "gemini" || platform === "openai";
-
 const resetDisabledBatchImagePricing = (
   form: Pick<
     ImagePricingFormState,
@@ -5541,7 +5546,10 @@ const resetDisabledBatchImagePricing = (
   if (!supportsBatchImagePlatform(form.platform) || !form.allow_image_generation) {
     form.allow_batch_image_generation = false;
   }
-  if (!form.allow_batch_image_generation) {
+  if (form.platform === "openai") {
+    form.batch_image_discount_multiplier = 1;
+    form.batch_image_hold_multiplier = 1;
+  } else if (!form.allow_batch_image_generation) {
     form.batch_image_discount_multiplier = 0.5;
     form.batch_image_hold_multiplier = 0.6;
   }
@@ -6074,8 +6082,9 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.image_rate_independent = group.image_rate_independent ?? false;
   editForm.image_rate_multiplier = group.image_rate_multiplier ?? 1;
   editForm.batch_image_discount_multiplier =
-    group.batch_image_discount_multiplier ?? 0.5;
-  editForm.batch_image_hold_multiplier = group.batch_image_hold_multiplier ?? 0.6;
+    group.platform === "openai" ? 1 : group.batch_image_discount_multiplier ?? 0.5;
+  editForm.batch_image_hold_multiplier =
+    group.platform === "openai" ? 1 : group.batch_image_hold_multiplier ?? 0.6;
   editForm.image_price_1k = group.image_price_1k;
   editForm.image_price_2k = group.image_price_2k;
   editForm.image_price_4k = group.image_price_4k;

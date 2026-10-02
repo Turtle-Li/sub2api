@@ -101,6 +101,7 @@ export default {
       waiting: 'Waiting for results.',
       emptyImageOutput: 'The upstream returned a result, but this item has no image content. The individual generation may have failed or been blocked by a safety policy.',
       providerItemFailed: 'The upstream result for this item has no usable image.',
+      safetyBlocked: 'Not generated: the provider content safety policy rejected this prompt or reference image combination. Revise the prompt or reference images and try again.',
     },
     imagePreview: {
       title: 'Image preview',

@@ -178,7 +178,7 @@ On success, `result` mirrors the synchronous image API body, except each image h
 }
 ```
 
-For URL responses, `image_url` mirrors the first `data[].url` for simple clients. On failure, the task reaches `failed` and exposes the original OpenAI-compatible error object where available:
+For URL responses, `image_url` mirrors the first `data[].url` for simple clients. On failure, the task reaches `failed`. Provider content-safety refusals are normalized to a stable error so clients can show an actionable retry hint without exposing provider moderation categories or raw safety details:
 
 ```json
 {
@@ -196,6 +196,18 @@ For URL responses, `image_url` mirrors the first `data[].url` for simple clients
   "expires_at": 1784179323
 }
 ```
+
+Safety-policy failures use `http_status: 400`, `error.type` and `error.code` set to
+`content_policy_violation`, and the message `Image generation was blocked by the
+provider's content safety policy. Revise the prompt or reference images and try
+again.` They are not retried as transient transport failures and do not produce a
+billable image result.
+
+There are two policy checkpoints: Sub2API's configured security-audit gate runs
+before an asynchronous task is created, while the provider's image moderation
+also runs during generation. A pre-submit audit refusal returns immediately with
+no task ID; a provider refusal is stored on the accepted task (or batch item) so
+the client can poll the terminal error and retry after revising the input.
 
 All submit and poll responses include `Cache-Control: no-store`, preventing a CDN from caching the `processing` state. Tasks and results expire 24 hours after their latest state update. A task executes for at most 30 minutes.
 

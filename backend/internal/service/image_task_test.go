@@ -82,6 +82,29 @@ func TestImageTaskServiceInvalidResultBecomesFailed(t *testing.T) {
 	require.Contains(t, string(got.Error), "non-JSON")
 }
 
+func TestImageTaskServiceSanitizesProviderSafetyErrors(t *testing.T) {
+	store := &imageTaskMemoryStore{}
+	svc := NewImageTaskServiceWithOptions(store, time.Hour, time.Minute)
+	created, err := svc.Create(context.Background(), ImageTaskOwner{UserID: 1, APIKeyID: 2})
+	require.NoError(t, err)
+
+	raw := json.RawMessage(`{"type":"image_generation_user_error","code":"moderation_blocked","message":"Your request was rejected by the safety system. safety_violations=[sexual]."}`)
+	require.NoError(t, svc.Fail(context.Background(), created.ID, http.StatusBadRequest, raw))
+
+	got, err := svc.Get(context.Background(), ImageTaskOwner{UserID: 1, APIKeyID: 2}, created.ID)
+	require.NoError(t, err)
+	var payload struct {
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal(got.Error, &payload))
+	require.Equal(t, "content_policy_violation", payload.Type)
+	require.Equal(t, "content_policy_violation", payload.Code)
+	require.Equal(t, imageTaskSafetyBlockedMessage, payload.Message)
+	require.NotContains(t, payload.Message, "sexual")
+}
+
 func TestImageTaskServiceCompleteStoredRejectsInlineImage(t *testing.T) {
 	store := &imageTaskMemoryStore{}
 	svc := NewImageTaskServiceWithOptions(store, time.Hour, time.Minute)

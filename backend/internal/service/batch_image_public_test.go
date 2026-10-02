@@ -1487,7 +1487,8 @@ func TestBatchImagePublicService_StatusItemsAndCancel(t *testing.T) {
 		require.Len(t, filtered.Data, 1)
 		require.Equal(t, "failed", filtered.Data[0].Status)
 		require.NotNil(t, filtered.Data[0].Error)
-		require.Equal(t, "upstream provider operation failed", filtered.Data[0].Error.Message)
+		require.Equal(t, batchImageSafetyBlockedPublicMessage, filtered.Data[0].Error.Message)
+		require.NotContains(t, filtered.Data[0].Error.Message, "gs://")
 
 		body, err := json.Marshal(filtered)
 		require.NoError(t, err)

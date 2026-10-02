@@ -12,6 +12,12 @@ export const supportsImagePricingPlatform = (platform: string): boolean =>
 export const supportsVideoPricingPlatform = (platform: string): boolean =>
   platform === "grok";
 
+export const supportsBatchImagePlatform = (platform: string): boolean =>
+  platform === "gemini" || platform === "openai";
+
+export const supportsBatchImageDiscountPlatform = (platform: string): boolean =>
+  platform === "gemini";
+
 export const imagePricingI18nKey = (_platform: string, key: string): string =>
   `admin.groups.imagePricing.${key}`;
 

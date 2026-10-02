@@ -94,6 +94,11 @@ func cloneGroupMessagesDispatchModelConfig(value OpenAIMessagesDispatchModelConf
 }
 
 func cloneGroupForDuplicate(source *Group, operationID string) *Group {
+	batchImageDiscountMultiplier, batchImageHoldMultiplier := normalizeBatchImagePricingForPlatform(
+		source.Platform,
+		source.BatchImageDiscountMultiplier,
+		source.BatchImageHoldMultiplier,
+	)
 	return &Group{
 		Name:                            duplicateGroupName(source.Name, 1),
 		Description:                     source.Description,
@@ -123,8 +128,8 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
 		ImagePrice1K:                    cloneGroupValuePointer(source.ImagePrice1K),
 		ImagePrice2K:                    cloneGroupValuePointer(source.ImagePrice2K),
 		ImagePrice4K:                    cloneGroupValuePointer(source.ImagePrice4K),
-		BatchImageDiscountMultiplier:    source.BatchImageDiscountMultiplier,
-		BatchImageHoldMultiplier:        source.BatchImageHoldMultiplier,
+		BatchImageDiscountMultiplier:    batchImageDiscountMultiplier,
+		BatchImageHoldMultiplier:        batchImageHoldMultiplier,
 		VideoRateIndependent:            source.VideoRateIndependent,
 		VideoRateMultiplier:             source.VideoRateMultiplier,
 		VideoPrice480P:                  cloneGroupValuePointer(source.VideoPrice480P),

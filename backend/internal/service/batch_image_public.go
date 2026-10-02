@@ -38,6 +38,8 @@ const (
 	defaultBatchImageCancelLockTTL      = 5 * time.Minute
 )
 
+const batchImageSafetyBlockedPublicMessage = "Image generation was blocked by the provider's content safety policy. Revise the prompt or reference images and try again."
+
 type BatchImageAccountSelectionRepository interface {
 	GetByID(ctx context.Context, id int64) (*Account, error)
 	ListSchedulableByPlatform(ctx context.Context, platform string) ([]Account, error)
@@ -1960,7 +1962,8 @@ func BatchImageJobToPublic(job *BatchImageJob) *BatchImagePublicBatch {
 	}
 	var publicError *BatchImagePublicError
 	if code := strings.TrimSpace(batchImageDerefString(job.LastErrorCode)); code != "" {
-		message := sanitizeBatchImagePublicMessage(
+		message := batchImagePublicErrorMessage(
+			code,
 			batchImageDerefString(job.LastErrorMessage),
 		)
 		if message == "" {
@@ -2019,7 +2022,7 @@ func BatchImageItemToPublic(item *BatchImageItem) BatchImagePublicItem {
 	}
 	out.Error = &BatchImagePublicError{
 		Code:    batchImageDerefString(item.ErrorCode),
-		Message: sanitizeBatchImagePublicMessage(batchImageDerefString(item.ErrorMessage)),
+		Message: batchImagePublicErrorMessage(batchImageDerefString(item.ErrorCode), batchImageDerefString(item.ErrorMessage)),
 		Source:  batchImageItemErrorSource(item),
 	}
 	return out
@@ -2034,7 +2037,7 @@ func batchImageItemErrorSource(item *BatchImageItem) string {
 		return "provider"
 	}
 	switch code {
-	case "EMPTY_IMAGE_OUTPUT", "PROVIDER_ITEM_FAILED":
+	case "EMPTY_IMAGE_OUTPUT", "PROVIDER_ITEM_FAILED", "SAFETY_BLOCKED":
 		return "provider"
 	case "INDEX_OUTPUT_MISSING", "INDEX_PARSE_FAILED", "DUPLICATE_CUSTOM_ID_IN_OUTPUT":
 		return "system"
@@ -2296,6 +2299,13 @@ func sanitizeBatchImagePublicMessage(message string) string {
 		message = message[:maxBatchImagePublicErrorChars]
 	}
 	return message
+}
+
+func batchImagePublicErrorMessage(code, message string) string {
+	if strings.EqualFold(strings.TrimSpace(code), "SAFETY_BLOCKED") {
+		return batchImageSafetyBlockedPublicMessage
+	}
+	return sanitizeBatchImagePublicMessage(message)
 }
 
 func batchImageUnixPtr(t *time.Time) *int64 {

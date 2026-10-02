@@ -101,6 +101,7 @@ export default {
       waiting: '等待生成结果',
       emptyImageOutput: '上游返回了结果，但这条没有图片内容。通常是单条生成失败或被安全策略拦截。',
       providerItemFailed: '上游返回的这条结果没有可用图片。',
+      safetyBlocked: '未生成：上游内容安全策略拒绝了这条提示词或参考图组合。请修改提示词或参考图后重试。',
     },
     imagePreview: {
       title: '图片预览',

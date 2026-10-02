@@ -2509,6 +2509,7 @@ function itemResultClass(item: BatchImageDetailItem) {
 
 function friendlyItemError(error: BatchImageItem['error']) {
   if (!error) return '-'
+  if (error.code === 'SAFETY_BLOCKED') return t('batchImage.itemResult.safetyBlocked')
   if (error.code === 'EMPTY_IMAGE_OUTPUT') return t('batchImage.itemResult.emptyImageOutput')
   if (error.code === 'PROVIDER_ITEM_FAILED') return t('batchImage.itemResult.providerItemFailed')
   return error.message || error.code || '-'
@@ -2649,6 +2650,9 @@ function batchImageErrorMessage(error: any, fallback: string) {
   }
   if (code === 'BATCH_IMAGE_GROUP_DISABLED') {
     return batchImagePlainError(batchImageText('groupDisabled'))
+  }
+  if (code === 'SAFETY_BLOCKED' || code === 'content_policy_violation' || code === 'moderation_blocked') {
+    return batchImagePlainError(t('batchImage.itemResult.safetyBlocked'))
   }
   if (code === 'BATCH_IMAGE_SETTLEMENT_PRICING_MISSING') {
     return batchImageAdminError(batchImageText('pricingMissing'), error)

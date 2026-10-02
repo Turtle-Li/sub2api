@@ -285,6 +285,7 @@ func (s *ImageTaskService) Fail(ctx context.Context, id string, statusCode int, 
 	if !json.Valid(taskErr) {
 		taskErr = imageTaskErrorJSON("api_error", "image generation failed")
 	}
+	taskErr = sanitizeImageTaskError(taskErr)
 	return s.finish(ctx, id, ImageTaskStatusFailed, statusCode, nil, taskErr)
 }
 
@@ -351,5 +352,32 @@ func firstImageTaskURL(result json.RawMessage) string {
 
 func imageTaskErrorJSON(errorType, message string) json.RawMessage {
 	data, _ := json.Marshal(map[string]string{"type": errorType, "message": message})
+	return data
+}
+
+const imageTaskSafetyBlockedMessage = "Image generation was blocked by the provider's content safety policy. Revise the prompt or reference images and try again."
+
+func sanitizeImageTaskError(taskErr json.RawMessage) json.RawMessage {
+	var payload struct {
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(taskErr, &payload); err != nil {
+		return taskErr
+	}
+	text := strings.ToLower(strings.TrimSpace(payload.Type + " " + payload.Code + " " + payload.Message))
+	if !strings.Contains(text, "moderation_blocked") &&
+		!strings.Contains(text, "content_policy_violation") &&
+		!strings.Contains(text, "safety") &&
+		!strings.Contains(text, "prohibited") &&
+		!strings.Contains(text, "blocked by") {
+		return taskErr
+	}
+	data, _ := json.Marshal(map[string]string{
+		"type":    "content_policy_violation",
+		"code":    "content_policy_violation",
+		"message": imageTaskSafetyBlockedMessage,
+	})
 	return data
 }

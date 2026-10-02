@@ -1031,6 +1031,37 @@ func TestAdminService_CreateGroup_BatchImagePricingSettings(t *testing.T) {
 	require.InDelta(t, 0.9, repo.created.BatchImageHoldMultiplier, 1e-12)
 }
 
+func TestAdminService_OpenAIBatchImagePricingUsesFullPrice(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+	discount := 0.2
+	hold := 0.3
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                         "openai-image-batch",
+		Platform:                     PlatformOpenAI,
+		RateMultiplier:               1,
+		BatchImageDiscountMultiplier: &discount,
+		BatchImageHoldMultiplier:     &hold,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.InDelta(t, 1, repo.created.BatchImageDiscountMultiplier, 1e-12)
+	require.InDelta(t, 1, repo.created.BatchImageHoldMultiplier, 1e-12)
+
+	updatedDiscount := 0.1
+	updatedHold := 0.2
+	repo.getByID = repo.created
+	updated, err := svc.UpdateGroup(context.Background(), group.ID, &UpdateGroupInput{
+		BatchImageDiscountMultiplier: &updatedDiscount,
+		BatchImageHoldMultiplier:     &updatedHold,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.InDelta(t, 1, repo.updated.BatchImageDiscountMultiplier, 1e-12)
+	require.InDelta(t, 1, repo.updated.BatchImageHoldMultiplier, 1e-12)
+}
+
 func TestAdminService_CreateGroup_RejectsHoldBelowDiscount(t *testing.T) {
 	repo := &groupRepoStubForAdmin{}
 	svc := &adminServiceImpl{groupRepo: repo}

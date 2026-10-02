@@ -1077,6 +1077,7 @@ export default {
         batchDiscountMultiplier: 'Batch image discount',
         batchHoldMultiplier: 'Batch hold price ratio',
         batchSectionHint: 'Batch image settings only apply to batch jobs: settlement applies the batch discount, and the upfront hold is normal image price × batch hold price ratio. Reference images also create upstream input-token usage, so a batch image discount above 0.5 is recommended.',
+        batchOpenAIHint: 'OpenAI/Image batch generation is billed at the full per-image price and does not use the Gemini batch discount. This option only controls whether batch generation is allowed.',
         batchDisabledHint: 'Enable image generation for this group before enabling batch image generation.',
         batchPlatformOnlyHint: 'Batch image generation is currently available for Gemini and OpenAI/Image groups only.',
         modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',

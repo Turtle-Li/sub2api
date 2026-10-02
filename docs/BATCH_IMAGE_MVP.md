@@ -266,10 +266,12 @@ MVP billing rules:
 - Settlement runs after result indexing.
 - Only successful images are charged.
 - Failed items are not charged.
+- Prompts pass the configured Sub2API security-audit gate before a batch is accepted, and each provider generation can still be rejected by the provider's own image moderation. A pre-submit refusal creates no batch; a provider refusal becomes a `SAFETY_BLOCKED` item with no charge and a prompt/reference retry hint.
 - Reference images are sent to the selected provider as input and can create upstream input-token, transfer, or temporary-storage cost. They are counted once per expanded output request when `output_count > 1`, but the public MVP billing model does not add a separate reference-image surcharge. User-facing estimated, held, and settled amounts are still based on the successful output image count and configured requested-tier batch price.
 - Settlement request id is `batch_image_settlement:{batch_id}`.
 - Settlement is idempotent; re-running settlement must not double charge.
 - Settlement billing failures are retried with a bounded retry limit. After the retry limit is reached, the job is failed and the remaining hold is released through the idempotent release path.
+- The legacy batch discount and hold multipliers apply only to Gemini/Vertex batch image jobs. OpenAI/Image batches have no provider batch discount: they use the configured requested-tier image price at full value, and the balance hold is also full value. The group setting for OpenAI/Image controls permission to submit batch jobs only; legacy multiplier columns are stored as `1` for compatibility.
 
 Exact production pricing is resolved through model pricing configuration and is not defined here.
 
@@ -401,7 +403,7 @@ account types outside the list above are likewise not selected.
 ## Provider Enablement
 
 OpenAI/Image groups require an eligible OpenAI account, an explicit model
-mapping/whitelist, configured batch pricing for the requested resolution tier,
+mapping/whitelist, configured image pricing for the requested resolution tier,
 private batch object storage, and the group-level image and batch-image gates.
 The object store holds manifests, attempt markers, per-item results, and the
 combined provider result; without it `openai_images` submission fails closed.

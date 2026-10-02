@@ -320,6 +320,17 @@ func supportsBatchImageGenerationPlatform(platform string) bool {
 	return platform == PlatformGemini || platform == PlatformOpenAI
 }
 
+// normalizeBatchImagePricingForPlatform keeps the legacy multiplier columns
+// compatible while making their scope explicit. Gemini batch jobs may use the
+// configured discount/hold ratios; OpenAI Image batch jobs are billed at the
+// ordinary image price and therefore always use 1/1.
+func normalizeBatchImagePricingForPlatform(platform string, discount, hold float64) (float64, float64) {
+	if NormalizeGroupPlatform(platform) == PlatformOpenAI {
+		return 1, 1
+	}
+	return discount, hold
+}
+
 func compositeDefaultModelsListCandidateIDs() []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
@@ -465,6 +476,11 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		}
 		batchImageHoldMultiplier = *input.BatchImageHoldMultiplier
 	}
+	batchImageDiscountMultiplier, batchImageHoldMultiplier = normalizeBatchImagePricingForPlatform(
+		platform,
+		batchImageDiscountMultiplier,
+		batchImageHoldMultiplier,
+	)
 	// 不变式：hold 比例 >= discount 比例。否则批量任务成功率足够高时
 	// 实际成本会超过冻结额，结算永远失败、用户冻结余额无法解冻。
 	if batchImageHoldMultiplier < batchImageDiscountMultiplier {
@@ -839,17 +855,25 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 		group.ImageRateMultiplier = *input.ImageRateMultiplier
 	}
-	if input.BatchImageDiscountMultiplier != nil {
-		if *input.BatchImageDiscountMultiplier < 0 {
-			return nil, errors.New("batch_image_discount_multiplier must be >= 0")
+	if NormalizeGroupPlatform(group.Platform) == PlatformOpenAI {
+		group.BatchImageDiscountMultiplier, group.BatchImageHoldMultiplier = normalizeBatchImagePricingForPlatform(
+			group.Platform,
+			group.BatchImageDiscountMultiplier,
+			group.BatchImageHoldMultiplier,
+		)
+	} else {
+		if input.BatchImageDiscountMultiplier != nil {
+			if *input.BatchImageDiscountMultiplier < 0 {
+				return nil, errors.New("batch_image_discount_multiplier must be >= 0")
+			}
+			group.BatchImageDiscountMultiplier = *input.BatchImageDiscountMultiplier
 		}
-		group.BatchImageDiscountMultiplier = *input.BatchImageDiscountMultiplier
-	}
-	if input.BatchImageHoldMultiplier != nil {
-		if *input.BatchImageHoldMultiplier < 0 {
-			return nil, errors.New("batch_image_hold_multiplier must be >= 0")
+		if input.BatchImageHoldMultiplier != nil {
+			if *input.BatchImageHoldMultiplier < 0 {
+				return nil, errors.New("batch_image_hold_multiplier must be >= 0")
+			}
+			group.BatchImageHoldMultiplier = *input.BatchImageHoldMultiplier
 		}
-		group.BatchImageHoldMultiplier = *input.BatchImageHoldMultiplier
 	}
 	// 仅在本次更新显式触碰任一比例时校验合并后的不变式（hold >= discount），
 	// 避免存量脏数据阻塞其他字段的正常更新（提交侧另有钳制兜底）。

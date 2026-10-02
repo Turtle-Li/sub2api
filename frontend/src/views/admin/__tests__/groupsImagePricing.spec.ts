@@ -7,6 +7,8 @@ import {
   getVideoPricePlaceholder,
   imagePricingPlatforms,
   imagePricingI18nKey,
+  supportsBatchImageDiscountPlatform,
+  supportsBatchImagePlatform,
   supportsImagePricingPlatform,
   supportsVideoPricingPlatform,
   videoPricingI18nKey,
@@ -21,6 +23,13 @@ describe("groups image pricing platform support", () => {
   it("enables video pricing controls for Grok only", () => {
     expect(supportsVideoPricingPlatform("grok")).toBe(true);
     expect(supportsVideoPricingPlatform("openai")).toBe(false);
+  });
+
+  it("keeps batch permission separate from Gemini-only batch pricing", () => {
+    expect(supportsBatchImagePlatform("gemini")).toBe(true);
+    expect(supportsBatchImagePlatform("openai")).toBe(true);
+    expect(supportsBatchImageDiscountPlatform("gemini")).toBe(true);
+    expect(supportsBatchImageDiscountPlatform("openai")).toBe(false);
   });
 
   it("keeps non-media group platforms out of the image pricing controls", () => {

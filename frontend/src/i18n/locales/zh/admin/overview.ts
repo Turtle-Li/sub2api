@@ -1074,6 +1074,7 @@ export default {
         batchDiscountMultiplier: '批量生图折扣倍率',
         batchHoldMultiplier: '批量冻结价格比例',
         batchSectionHint: '批量生图仅影响批量任务：结算价格会叠加批量折扣倍率，提交时冻结金额按普通生图原价 × 批量冻结价格比例计算。参考图也会产生上游输入 token 消耗，建议批量生图折扣倍率设置大于 0.5。',
+        batchOpenAIHint: 'OpenAI/Image 批量生图按单张图片价格全额结算，不使用 Gemini 批量折扣；这里只控制是否允许批量生图。',
         batchDisabledHint: '请先开启当前分组生图，才能开启批量生图。',
         batchPlatformOnlyHint: '批量生图当前仅支持 Gemini 与 OpenAI/Image 分组。',
         modeHint: '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
