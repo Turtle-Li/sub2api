@@ -305,6 +305,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		SettingPaymentEnabled, SettingPaymentEntryEnabled, SettingKeySubscriptionEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
 		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingLoadBalanceStrategy,
+		SettingRechargeBonusTiers, SettingRechargeBonusMode, SettingRechargeBonusNotice,
 		SettingProductNamePrefix, SettingProductNameSuffix,
 		SettingHelpImageURL, SettingHelpText, SettingPaymentBanner,
 		SettingCancelRateLimitOn, SettingCancelRateLimitMax,
@@ -342,6 +343,8 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		BalanceRechargeMultiplier: normalizeBalanceRechargeMultiplier(pcParseFloat(vals[SettingBalanceRechargeMult], defaultBalanceRechargeMultiplier)),
 		SubscriptionUSDToCNYRate:  normalizeSubscriptionUSDToCNYRate(pcParseFloat(vals[SettingSubscriptionUSDToCNYRate], 0)),
 		RechargeFeeRate:           pcParseFloat(vals[SettingRechargeFeeRate], 0),
+		RechargeBonusTiers:        parseRechargeBonusTiers(vals[SettingRechargeBonusTiers]),
+		RechargeBonusNotice:       vals[SettingRechargeBonusNotice],
 		LoadBalanceStrategy:       vals[SettingLoadBalanceStrategy],
 		ProductNamePrefix:         vals[SettingProductNamePrefix],
 		ProductNameSuffix:         vals[SettingProductNameSuffix],
@@ -615,6 +618,15 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 			return infraerrors.BadRequest("INVALID_RECHARGE_FEE_RATE", "recharge fee rate allows at most 2 decimal places")
 		}
 	}
+	rechargeBonusTiersValue, rechargeBonusModeValue, err := s.resolveRechargeBonusUpdate(ctx, req)
+	if err != nil {
+		return err
+	}
+	if req.RechargeBonusNotice != nil {
+		if err := validateRechargeBonusNotice(*req.RechargeBonusNotice); err != nil {
+			return infraerrors.BadRequest("INVALID_RECHARGE_BONUS_NOTICE", err.Error())
+		}
+	}
 	m := make(map[string]string)
 	if req.Enabled != nil {
 		m[SettingPaymentEnabled] = formatBoolOrEmpty(req.Enabled)
@@ -651,6 +663,15 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	}
 	if req.RechargeFeeRate != nil {
 		m[SettingRechargeFeeRate] = formatNonNegativeFloat(req.RechargeFeeRate)
+	}
+	if req.RechargeBonusTiers != nil {
+		m[SettingRechargeBonusTiers] = rechargeBonusTiersValue
+	}
+	if req.RechargeBonusMode != nil {
+		m[SettingRechargeBonusMode] = rechargeBonusModeValue
+	}
+	if req.RechargeBonusNotice != nil {
+		m[SettingRechargeBonusNotice] = strings.TrimSpace(*req.RechargeBonusNotice)
 	}
 	if req.LoadBalanceStrategy != nil {
 		m[SettingLoadBalanceStrategy] = derefStr(req.LoadBalanceStrategy)

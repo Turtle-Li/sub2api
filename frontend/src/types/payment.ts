@@ -31,6 +31,12 @@ export type InvoiceTitleType = 'personal' | 'enterprise'
 
 // ==================== Configuration ====================
 
+/** 充值赠送档位：支付金额 ≥ min_amount 时在到账基数上赠送 bonus_percent% */
+export interface RechargeBonusTier {
+  min_amount: number
+  bonus_percent: number
+}
+
 export interface PaymentConfig {
   payment_enabled: boolean
   min_amount: number
@@ -208,6 +214,8 @@ export interface PaymentOrder {
   pay_amount: number
   currency?: string
   fee_rate: number
+  /** 充值赠送额度（USD），已计入 amount */
+  bonus_amount?: number
   payment_type: string
   out_trade_no: string
   status: OrderStatus
@@ -503,6 +511,7 @@ export interface CreateOrderResult {
   payment_env?: string
   pay_amount: number
   fee_rate: number
+  bonus_amount?: number
   expires_at: string
   result_type?: CreateOrderResultType
   payment_type?: string

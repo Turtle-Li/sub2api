@@ -972,6 +972,13 @@ const renderedHelpText = computed(() => DOMPurify.sanitize(
   marked.parse(checkout.value.help_text || '', { async: false, gfm: true, breaks: false }),
 ))
 
+// 充值赠送活动文案：后台 Markdown 配置，空字符串时金额卡顶部不渲染
+const renderedBonusNotice = computed(() => {
+  const raw = (checkout.value.recharge_bonus_notice || '').trim()
+  if (!raw) return ''
+  return DOMPurify.sanitize(marked.parse(raw, { async: false, gfm: true, breaks: true }))
+})
+
 // 订阅功能开关（public settings 的 subscription_enabled，opt-out）。关闭后购买页只保留充值：
 // 不再渲染「订阅」tab，只剩单个 tab 时顶部切换器也随之隐藏。
 const subscriptionEnabled = computed(() => resolveFeatureFlag(appStore.cachedPublicSettings, FeatureFlags.subscription))
@@ -1195,6 +1202,19 @@ function formatSelectedPaymentAmount(value: number | string): string {
 }
 
 
+// 充值优惠：阈值按输入金额命中；赠金模式按到账基数（输入 × 倍率）加赠送，折扣模式按百分比减实付。
+// 与后端 quoteRechargeBonus 一致；渠道限额、手续费、实付都按折后基数（payBaseAmount）计算，提交仍发送输入金额。
+const bonusQuote = computed(() => quoteRechargeBonus(rechargeBonusTiers.value, validAmount.value, {
+  multiplier: balanceRechargeMultiplier.value,
+  mode: rechargeBonusMode.value,
+  currencyDigits: currencyFractionDigits(selectedCurrency.value),
+}))
+const payBaseAmount = computed(() => bonusQuote.value.payBase)
+const discountAmount = computed(() => roundPaymentAmount(validAmount.value - payBaseAmount.value, selectedCurrency.value))
+const creditedAmount = computed(() => bonusQuote.value.credited)
+const showBonusRow = computed(() => bonusQuote.value.mode !== 'discount' && bonusQuote.value.bonus > 0)
+const showCreditedBalance = computed(() => balanceRechargeMultiplier.value !== 1 || bonusQuote.value.percent > 0)
+
 const methodOptions = computed<PaymentMethodOption[]>(() =>
   enabledMethods.value.map((type) => {
     const ml = visibleMethods.value[type]
@@ -1202,34 +1222,35 @@ const methodOptions = computed<PaymentMethodOption[]>(() =>
       type,
       display_name: ml?.display_name,
       fee_rate: ml?.fee_rate ?? 0,
-      available: ml?.available !== false && amountFitsMethod(validAmount.value, type),
+      available: ml?.available !== false && amountFitsMethod(payBaseAmount.value, type),
     }
   })
 )
 
 const feeRate = computed(() => checkout.value?.recharge_fee_rate ?? 0)
 const feeAmount = computed(() =>
-  feeRate.value > 0 && validAmount.value > 0
-    ? Math.ceil(((validAmount.value * feeRate.value) / 100) * 100) / 100
+  feeRate.value > 0 && payBaseAmount.value > 0
+    ? Math.ceil(((payBaseAmount.value * feeRate.value) / 100) * 100) / 100
     : 0
 )
 const totalAmount = computed(() =>
-  feeRate.value > 0 && validAmount.value > 0
-    ? Math.round((validAmount.value + feeAmount.value) * 100) / 100
-    : validAmount.value
+  feeRate.value > 0 && payBaseAmount.value > 0
+    ? Math.round((payBaseAmount.value + feeAmount.value) * 100) / 100
+    : payBaseAmount.value
 )
+const showActualPay = computed(() => feeRate.value > 0 || discountAmount.value > 0)
 
 const amountError = computed(() => {
   if (validAmount.value <= 0) return ''
   // No method can handle this amount
-  if (!enabledMethods.value.some((m) => amountFitsMethod(validAmount.value, m))) {
+  if (!enabledMethods.value.some((m) => amountFitsMethod(payBaseAmount.value, m))) {
     return t('payment.amountNoMethod')
   }
   // Selected method can't handle this amount (but others can)
   const ml = selectedLimit.value
   if (ml) {
-    if (ml.single_min > 0 && validAmount.value < ml.single_min) return t('payment.amountTooLow', { min: formatSelectedPaymentAmount(ml.single_min) })
-    if (ml.single_max > 0 && validAmount.value > ml.single_max) return t('payment.amountTooHigh', { max: formatSelectedPaymentAmount(ml.single_max) })
+    if (ml.single_min > 0 && payBaseAmount.value < ml.single_min) return t('payment.amountTooLow', { min: formatSelectedPaymentAmount(ml.single_min) })
+    if (ml.single_max > 0 && payBaseAmount.value > ml.single_max) return t('payment.amountTooHigh', { max: formatSelectedPaymentAmount(ml.single_max) })
   }
   return ''
 })
@@ -1363,7 +1384,7 @@ const canSubmitSubscription = computed(() =>
 )
 
 // Auto-switch to first available method when current selection can't handle the amount
-watch(() => [validAmount.value, selectedMethod.value] as const, ([amt, method]) => {
+watch(() => [payBaseAmount.value, selectedMethod.value] as const, ([amt, method]) => {
   if (amt <= 0 || amountFitsMethod(amt, method)) return
   const available = enabledMethods.value.find((m) => amountFitsMethod(amt, m))
   if (available) selectedMethod.value = available

@@ -1273,6 +1273,7 @@ var (
 		{Name: "amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "pay_amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "fee_rate", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(10,4)"}},
+		{Name: "bonus_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "recharge_code", Type: field.TypeString, Size: 64},
 		{Name: "out_trade_no", Type: field.TypeString, Size: 64, Default: ""},
 		{Name: "payment_type", Type: field.TypeString, Size: 30},
@@ -1326,7 +1327,7 @@ var (
 			{
 				Name:    "paymentorder_out_trade_no",
 				Unique:  true,
-				Columns: []*schema.Column{PaymentOrdersColumns[8]},
+				Columns: []*schema.Column{PaymentOrdersColumns[9]},
 				Annotation: &entsql.IndexAnnotation{
 					Where: "out_trade_no <> ''",
 				},
@@ -1364,7 +1365,7 @@ var (
 			{
 				Name:    "paymentorder_order_type",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[14]},
+				Columns: []*schema.Column{PaymentOrdersColumns[15]},
 			},
 		},
 	}

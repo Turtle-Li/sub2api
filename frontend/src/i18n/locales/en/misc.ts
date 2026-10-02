@@ -556,6 +556,8 @@ export default {
       amount: 'Amount',
       payAmount: 'Paid',
       creditedAmount: 'Credited Amount',
+      bonusAmount: 'Bonus',
+      bonusIncluded: 'incl. bonus {amount}',
       fee: 'Fee',
       baseAmount: 'Base Amount',
       includedInPayAmount: 'included in paid amount',

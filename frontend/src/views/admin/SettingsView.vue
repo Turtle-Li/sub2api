@@ -4055,7 +4055,7 @@
                       </tr>
                     </thead>
                     <tbody class="space-y-2">
-                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok'] as const)" :key="p" class="align-top">
+                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'typesafe'] as const)" :key="p" class="align-top">
                         <td class="pr-4 py-1">
                           <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                         </td>
@@ -4390,7 +4390,7 @@
                             </tr>
                           </thead>
                           <tbody>
-                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
+                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'typesafe'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
                               <td class="pr-4 py-1">
                                 <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                               </td>
@@ -8521,6 +8521,14 @@
             </div>
           </div>
 
+          <!-- 充值优惠阶梯（独立卡片，与服务商管理同级） -->
+          <RechargeBonusTierEditor
+            v-if="form.payment_enabled"
+            v-model="form.payment_recharge_bonus_tiers"
+            v-model:mode="form.payment_recharge_bonus_mode"
+            v-model:notice="form.payment_recharge_bonus_notice"
+          />
+
           <!-- Provider Management -->
           <PaymentProviderList
             v-if="form.payment_enabled"
@@ -9102,6 +9110,14 @@ import ImageUpload from "@/components/common/ImageUpload.vue";
 import PaymentBannerEditor from "@/components/payment/PaymentBannerEditor.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
+import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
+import {
+  normalizeRechargeBonusMode,
+  normalizeRechargeBonusTiers,
+  sanitizeRechargeBonusTiersForSubmit,
+  type RechargeBonusMode,
+  type RechargeBonusTierDraft,
+} from "@/utils/rechargeBonus";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import PricingCurrencySettingsCard from "@/views/admin/settings/PricingCurrencySettingsCard.vue";
 import { useClipboard } from "@/composables/useClipboard";
@@ -11196,6 +11212,13 @@ async function loadSettings() {
           }))
         : defaultLoginAgreementDocuments();
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(settings));
+    form.payment_recharge_bonus_tiers = normalizeRechargeBonusTiers(
+      settings.payment_recharge_bonus_tiers,
+    );
+    form.payment_recharge_bonus_mode = normalizeRechargeBonusMode(
+      settings.payment_recharge_bonus_mode,
+    );
+    form.payment_recharge_bonus_notice = settings.payment_recharge_bonus_notice || "";
     form.default_platform_quotas = normalizePlatformQuotasMap(settings.default_platform_quotas);
     form.account_scheduling_thresholds = normalizeAccountSchedulingThresholdsMap(
       settings.account_scheduling_thresholds,
