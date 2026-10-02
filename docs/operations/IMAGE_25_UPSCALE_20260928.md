@@ -377,6 +377,27 @@ in the pricing-currency document.
 
 ## Validation and rollback
 
+### Async batch and direct Mini delivery
+
+The standard `POST /v1/images/generations` route now submits requests with
+`n > 1` as an asynchronous image task. The accepted response contains a task
+ID and poll URL; `GET /v1/images/tasks/{task_id}` returns `processing`,
+`retrying`, `completed`, or `failed`, together with compact object-storage
+URLs when complete. The explicit `/images/generations/async` route remains
+available for clients that want the contract for single-image jobs as well.
+Task execution uses three bounded attempts with exponential backoff for
+timeouts, rate limits, and upstream 5xx responses. Redis stores only task
+metadata and compact URLs, never generated base64 payloads.
+
+When async image upscaling is active, Sub2API creates a short-lived scoped S3
+compatible presigned PUT URL and passes it to Office Mini as
+`result_upload_url`, together with the final `result_url`. Mini uploads the
+completed ComfyUI output directly to the configured object store and reports
+`result_uploaded`, dimensions, byte count, and content type through the job
+status endpoint. Mini has no object-store credentials; the existing bearer
+token remains the only Mini credential. If direct upload is unavailable, the
+existing bounded result-download path remains as compatibility fallback.
+
 Release gates require unit/race tests, migration tests, shell syntax and runtime
 guard tests, a real 2K and 4K smoke, and owner-visible dimension evidence.
 Production activation follows the exact-commit GitHub blue-green workflow.

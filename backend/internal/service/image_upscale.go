@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/google/uuid"
 	_ "golang.org/x/image/webp"
 )
 
@@ -35,6 +36,17 @@ const (
 )
 
 var errImageUpscaleResultTooLarge = errors.New("response body exceeds limit")
+
+type imageDirectUploadContextKey struct{}
+
+func WithImageDirectUpload(ctx context.Context) context.Context {
+	return context.WithValue(ctx, imageDirectUploadContextKey{}, true)
+}
+
+func imageDirectUploadEnabled(ctx context.Context) bool {
+	value, _ := ctx.Value(imageDirectUploadContextKey{}).(bool)
+	return value
+}
 
 type ImageUpscaleError struct {
 	Code       string
@@ -54,6 +66,7 @@ func (e *ImageUpscaleError) Unwrap() error { return e.Cause }
 
 type ImageUpscaleResult struct {
 	Data     []byte
+	URL      string
 	MimeType string
 	Width    int
 	Height   int
@@ -77,15 +90,16 @@ type imageUpscaleWaiter struct {
 }
 
 type ImageUpscaleService struct {
-	cfg              config.ImageUpscaleConfig
-	httpClient       *http.Client
-	loadAPIKey       imageUpscaleAPIKeyLoader
-	slots            chan struct{}
-	waiting          atomic.Int64
-	queueMu          sync.Mutex
-	interactiveQueue []*imageUpscaleWaiter
-	batchQueue       []*imageUpscaleWaiter
-	interactiveBurst int
+	cfg                  config.ImageUpscaleConfig
+	httpClient           *http.Client
+	loadAPIKey           imageUpscaleAPIKeyLoader
+	imageStorageResolver ImageStorageResolver
+	slots                chan struct{}
+	waiting              atomic.Int64
+	queueMu              sync.Mutex
+	interactiveQueue     []*imageUpscaleWaiter
+	batchQueue           []*imageUpscaleWaiter
+	interactiveBurst     int
 }
 
 var sharedImageUpscalers = struct {
@@ -138,6 +152,12 @@ func NewImageUpscaleService(cfg *config.Config) *ImageUpscaleService {
 
 func (s *ImageUpscaleService) Active() bool {
 	return s != nil && s.cfg.Active() && s.loadAPIKey != nil && s.httpClient != nil
+}
+
+func (s *ImageUpscaleService) SetImageStorageResolver(resolve ImageStorageResolver) {
+	if s != nil {
+		s.imageStorageResolver = resolve
+	}
 }
 
 func RequestedImageUpscaleScale(sizeTier string) (int, bool) {
@@ -357,12 +377,44 @@ func (s *ImageUpscaleService) upscaleLoadedSource(jobCtx context.Context, source
 	}
 	defer clearBytes(apiKey)
 
-	jobID, err := s.submit(jobCtx, source, scale, apiKey)
+	var direct *DirectImageUpload
+	if imageDirectUploadEnabled(jobCtx) && s.imageStorageResolver != nil {
+		if uploader, enabled := s.imageStorageResolver(); enabled && uploader != nil {
+			direct, _ = uploader.PrepareDirectUpload(jobCtx, "imgup_"+strings.ReplaceAll(uuid.NewString(), "-", ""), 0, "image/png", time.Hour)
+		}
+	}
+	jobID, err := s.submitWithOptions(jobCtx, source, scale, apiKey, imageUpscaleSubmitOptions{
+		resultUploadURL: func() string {
+			if direct != nil {
+				return direct.UploadURL
+			}
+			return ""
+		}(),
+		resultURL: func() string {
+			if direct != nil {
+				return direct.ResultURL
+			}
+			return ""
+		}(),
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := s.waitForCompletion(jobCtx, jobID, apiKey); err != nil {
+	details, err := s.waitForCompletionDetails(jobCtx, jobID, apiKey)
+	if err != nil {
 		return nil, err
+	}
+	if details.ResultUploaded && strings.TrimSpace(details.ResultURL) != "" {
+		width, height := details.OutputWidth, details.OutputHeight
+		if width != sourceWidth*scale || height != sourceHeight*scale {
+			return nil, imageUpscaleError("INVALID_RESULT_DIMENSIONS", 0, false,
+				fmt.Errorf("got %dx%d, expected %dx%d", width, height, sourceWidth*scale, sourceHeight*scale))
+		}
+		mimeType := normalizeUpscaleMime(details.ResultContentType)
+		if mimeType == "" {
+			mimeType = "image/png"
+		}
+		return &ImageUpscaleResult{URL: details.ResultURL, MimeType: mimeType, Width: width, Height: height, Scale: scale}, nil
 	}
 	result, mimeType, err := s.downloadResult(jobCtx, jobID, apiKey)
 	if err != nil {
@@ -581,7 +633,16 @@ func (s *ImageUpscaleService) removeWaiterLocked(target *imageUpscaleWaiter) boo
 	return false
 }
 
+type imageUpscaleSubmitOptions struct {
+	resultUploadURL string
+	resultURL       string
+}
+
 func (s *ImageUpscaleService) submit(ctx context.Context, source []byte, scale int, apiKey []byte) (string, error) {
+	return s.submitWithOptions(ctx, source, scale, apiKey, imageUpscaleSubmitOptions{})
+}
+
+func (s *ImageUpscaleService) submitWithOptions(ctx context.Context, source []byte, scale int, apiKey []byte, options imageUpscaleSubmitOptions) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt <= s.cfg.RetryMax; attempt++ {
 		var body bytes.Buffer
@@ -595,6 +656,12 @@ func (s *ImageUpscaleService) submit(ctx context.Context, source []byte, scale i
 		}
 		if createErr == nil {
 			createErr = writer.WriteField("preset", "faithful")
+		}
+		if createErr == nil && strings.TrimSpace(options.resultUploadURL) != "" {
+			createErr = writer.WriteField("result_upload_url", options.resultUploadURL)
+		}
+		if createErr == nil && strings.TrimSpace(options.resultURL) != "" {
+			createErr = writer.WriteField("result_url", options.resultURL)
 		}
 		if closeErr := writer.Close(); createErr == nil {
 			createErr = closeErr
@@ -639,6 +706,19 @@ func (s *ImageUpscaleService) submit(ctx context.Context, source []byte, scale i
 }
 
 func (s *ImageUpscaleService) waitForCompletion(ctx context.Context, jobID string, apiKey []byte) error {
+	_, err := s.waitForCompletionDetails(ctx, jobID, apiKey)
+	return err
+}
+
+type imageUpscaleCompletion struct {
+	ResultUploaded    bool
+	ResultURL         string
+	ResultContentType string
+	OutputWidth       int
+	OutputHeight      int
+}
+
+func (s *ImageUpscaleService) waitForCompletionDetails(ctx context.Context, jobID string, apiKey []byte) (*imageUpscaleCompletion, error) {
 	pollInterval := time.Duration(s.cfg.PollIntervalMillis) * time.Millisecond
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond
@@ -648,7 +728,7 @@ func (s *ImageUpscaleService) waitForCompletion(ctx context.Context, jobID strin
 		for attempt := 0; attempt <= s.cfg.RetryMax; attempt++ {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.endpoint("/v1/jobs/"+url.PathEscape(jobID)), nil)
 			if err != nil {
-				return imageUpscaleError("POLL_REQUEST_FAILED", 0, false, err)
+				return nil, imageUpscaleError("POLL_REQUEST_FAILED", 0, false, err)
 			}
 			req.Header.Set("Authorization", "Bearer "+string(apiKey))
 			resp, err := s.httpClient.Do(req)
@@ -657,26 +737,43 @@ func (s *ImageUpscaleService) waitForCompletion(ctx context.Context, jobID strin
 			} else {
 				body, readErr := readBoundedResponse(resp, 64*1024)
 				if readErr != nil {
-					return imageUpscaleError("POLL_RESPONSE_INVALID", imageUpscaleRemoteErrorStatus(resp.StatusCode), false, readErr)
+					return nil, imageUpscaleError("POLL_RESPONSE_INVALID", imageUpscaleRemoteErrorStatus(resp.StatusCode), false, readErr)
 				}
 				if resp.StatusCode == http.StatusOK {
 					var envelope struct {
 						Job struct {
-							State string `json:"state"`
+							State             string `json:"state"`
+							Error             string `json:"error"`
+							ResultUploaded    bool   `json:"result_uploaded"`
+							ResultURL         string `json:"result_url"`
+							ResultContentType string `json:"result_content_type"`
+							OutputWidth       int    `json:"output_width"`
+							OutputHeight      int    `json:"output_height"`
 						} `json:"job"`
 					}
 					if err := json.Unmarshal(body, &envelope); err != nil {
-						return imageUpscaleError("POLL_RESPONSE_INVALID", 0, false, err)
+						return nil, imageUpscaleError("POLL_RESPONSE_INVALID", 0, false, err)
 					}
 					switch strings.ToLower(strings.TrimSpace(envelope.Job.State)) {
 					case "completed":
-						return nil
+						return &imageUpscaleCompletion{
+							ResultUploaded:    envelope.Job.ResultUploaded,
+							ResultURL:         envelope.Job.ResultURL,
+							ResultContentType: envelope.Job.ResultContentType,
+							OutputWidth:       envelope.Job.OutputWidth,
+							OutputHeight:      envelope.Job.OutputHeight,
+						}, nil
 					case "failed":
-						return imageUpscaleError("REMOTE_JOB_FAILED", 0, false, nil)
+						temporary := strings.EqualFold(strings.TrimSpace(envelope.Job.Error), "direct_upload_failed")
+						statusCode := 0
+						if temporary {
+							statusCode = http.StatusServiceUnavailable
+						}
+						return nil, imageUpscaleError("REMOTE_JOB_FAILED", statusCode, temporary, nil)
 					case "queued", "running":
 						lastErr = nil
 					default:
-						return imageUpscaleError("POLL_RESPONSE_INVALID", 0, false, nil)
+						return nil, imageUpscaleError("POLL_RESPONSE_INVALID", 0, false, nil)
 					}
 					break
 				}
@@ -687,20 +784,20 @@ func (s *ImageUpscaleService) waitForCompletion(ctx context.Context, jobID strin
 			}
 			var upscaleErr *ImageUpscaleError
 			if !errors.As(lastErr, &upscaleErr) || !upscaleErr.Temporary {
-				return lastErr
+				return nil, lastErr
 			}
 			if err := waitUpscaleRetry(ctx, "", attempt); err != nil {
-				return imageUpscaleError("POLL_RETRY_TIMEOUT", 0, true, err)
+				return nil, imageUpscaleError("POLL_RETRY_TIMEOUT", 0, true, err)
 			}
 		}
 		if lastErr != nil {
-			return lastErr
+			return nil, lastErr
 		}
 		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return imageUpscaleError("JOB_TIMEOUT", 0, true, ctx.Err())
+			return nil, imageUpscaleError("JOB_TIMEOUT", 0, true, ctx.Err())
 		case <-timer.C:
 		}
 	}

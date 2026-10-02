@@ -109,6 +109,7 @@ func (s *OpenAIGatewayService) upscaleOpenAIImagesResponse(
 			return nil, imageUpscaleError("MISSING_IMAGE_OUTPUT", 0, false, nil)
 		}
 		resultEncoded := encoded
+		resultURL := ""
 		var resultMimeType string
 		resultWidth, resultHeight := 0, 0
 		if encoded != "" {
@@ -139,6 +140,7 @@ func (s *OpenAIGatewayService) upscaleOpenAIImagesResponse(
 					return nil, upscaleErr
 				}
 				resultEncoded = base64.StdEncoding.EncodeToString(result.Data)
+				resultURL = result.URL
 				resultMimeType = result.MimeType
 				resultWidth, resultHeight = result.Width, result.Height
 				clearBytes(result.Data)
@@ -158,19 +160,23 @@ func (s *OpenAIGatewayService) upscaleOpenAIImagesResponse(
 				return nil, upscaleErr
 			}
 			resultEncoded = base64.StdEncoding.EncodeToString(result.Data)
+			resultURL = result.URL
 			resultMimeType = result.MimeType
 			resultWidth, resultHeight = result.Width, result.Height
 			clearBytes(result.Data)
 		}
-		if parsed == nil || parsed.ResponseFormat != "url" || item.Get("b64_json").Exists() {
+		if resultURL == "" && (parsed == nil || parsed.ResponseFormat != "url" || item.Get("b64_json").Exists()) {
 			var err error
 			updated, err = sjson.SetBytes(updated, fmt.Sprintf("data.%d.b64_json", index), resultEncoded)
 			if err != nil {
 				return nil, imageUpscaleError("RESPONSE_REWRITE_FAILED", 0, false, err)
 			}
 		}
-		if (parsed != nil && parsed.ResponseFormat == "url") || item.Get("url").Exists() {
-			dataURL := "data:" + resultMimeType + ";base64," + resultEncoded
+		if (parsed != nil && parsed.ResponseFormat == "url") || item.Get("url").Exists() || resultURL != "" {
+			dataURL := resultURL
+			if dataURL == "" {
+				dataURL = "data:" + resultMimeType + ";base64," + resultEncoded
+			}
 			var err error
 			updated, err = sjson.SetBytes(updated, fmt.Sprintf("data.%d.url", index), dataURL)
 			if err != nil {

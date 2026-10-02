@@ -109,7 +109,9 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 		imageTaskError(c, err)
 		return
 	}
-	taskCtx.Request = taskCtx.Request.WithContext(service.WithAsyncImageTaskStorage(taskCtx.Request.Context(), task.ID))
+	taskCtx.Request = taskCtx.Request.WithContext(service.WithImageDirectUpload(
+		service.WithAsyncImageTaskStorage(taskCtx.Request.Context(), task.ID),
+	))
 
 	pollURL := imageTaskPollURL(c.Request.URL.Path, task.ID)
 	c.Header("Cache-Control", "no-store")
@@ -126,6 +128,38 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 	})
 
 	go h.run(task.ID, platform, taskCtx, recorder, cancel)
+}
+
+// AutoSubmitBatch converts the standard Images endpoint into a short-lived
+// task submission when the request asks for multiple images. Single-image
+// requests retain the synchronous compatibility path.
+func (h *AsyncImageHandler) AutoSubmitBatch(next gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+		if err != nil {
+			imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+			return
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+		if !isBatchImageRequest(c, body) {
+			next(c)
+			return
+		}
+		h.Submit(c)
+	}
+}
+
+func isBatchImageRequest(c *gin.Context, body []byte) bool {
+	if isMultipartImagesContentType(c.GetHeader("Content-Type")) {
+		return false
+	}
+	var envelope struct {
+		N int `json:"n"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	return envelope.N > 1
 }
 
 func (h *AsyncImageHandler) checkSecurityAuditBeforeSubmit(c *gin.Context, apiKey *service.APIKey, platform string, body []byte) bool {
@@ -184,7 +218,7 @@ func (h *AsyncImageHandler) Get(c *gin.Context) {
 		return
 	}
 	c.Header("Cache-Control", "no-store")
-	if task.Status == service.ImageTaskStatusProcessing {
+	if task.Status == service.ImageTaskStatusProcessing || task.Status == service.ImageTaskStatusRetrying {
 		c.Header("Retry-After", "3")
 	}
 	c.JSON(http.StatusOK, task)
@@ -223,7 +257,7 @@ func (h *AsyncImageHandler) executeWithGateway(platform string, c *gin.Context) 
 	h.openAI.Images(c)
 }
 
-func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, recorder *httptest.ResponseRecorder, cancel context.CancelFunc) {
+func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, _ *httptest.ResponseRecorder, cancel context.CancelFunc) {
 	defer cancel()
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -232,45 +266,80 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, r
 		}
 	}()
 
-	h.execute(platform, taskCtx)
-	body := bytes.TrimSpace(recorder.Body.Bytes())
-	if err := taskCtx.Request.Context().Err(); err != nil && len(body) == 0 {
-		h.failTask(taskID, http.StatusGatewayTimeout, imageTaskErrorPayload("timeout_error", "image generation task timed out"))
-		return
-	}
-	statusCode := recorder.Code
-	if statusCode == 0 {
-		statusCode = http.StatusOK
-	}
-	if taskErr, ok := imageTaskErrorEnvelope(body); ok {
-		if semanticStatus, exists := taskCtx.Get(asyncImageTaskFailureStatusContextKey); exists {
-			if parsedStatus, valid := semanticStatus.(int); valid && parsedStatus >= http.StatusBadRequest {
-				statusCode = parsedStatus
+	for attempt := 1; attempt <= 3; attempt++ {
+		if attempt > 1 {
+			_ = h.tasks.MarkRetrying(context.Background(), taskID, attempt)
+			delay := time.Duration(1<<(attempt-2)) * time.Second
+			timer := time.NewTimer(delay)
+			select {
+			case <-taskCtx.Request.Context().Done():
+				timer.Stop()
+				h.failTask(taskID, http.StatusGatewayTimeout, imageTaskErrorPayload("timeout_error", "image generation task timed out"))
+				return
+			case <-timer.C:
 			}
 		}
-		if statusCode < http.StatusBadRequest {
-			statusCode = http.StatusBadGateway
-		}
-		h.failTask(taskID, statusCode, taskErr)
-		return
-	}
-	if statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices {
-		if len(body) == 0 || !json.Valid(body) {
-			h.failTask(taskID, http.StatusBadGateway, imageTaskErrorPayload("api_error", "upstream returned an invalid image response"))
+		recorder := resetAsyncImageRecorder(taskCtx)
+		h.execute(platform, taskCtx)
+		body := bytes.TrimSpace(recorder.Body.Bytes())
+		if err := taskCtx.Request.Context().Err(); err != nil && len(body) == 0 {
+			h.failTask(taskID, http.StatusGatewayTimeout, imageTaskErrorPayload("timeout_error", "image generation task timed out"))
 			return
 		}
-		var err error
-		if service.AsyncImageTaskStorageComplete(taskCtx.Request.Context()) {
-			err = h.tasks.CompleteStored(context.Background(), taskID, statusCode, json.RawMessage(body))
-		} else {
-			err = h.tasks.Complete(context.Background(), taskID, statusCode, json.RawMessage(body))
+		statusCode := recorder.Code
+		if statusCode == 0 {
+			statusCode = http.StatusOK
 		}
-		if err != nil {
-			logger.L().Error("image_task.complete_store_failed", zap.String("task_id", taskID), zap.Error(err))
+		if taskErr, ok := imageTaskErrorEnvelope(body); ok {
+			if semanticStatus, exists := taskCtx.Get(asyncImageTaskFailureStatusContextKey); exists {
+				if parsedStatus, valid := semanticStatus.(int); valid && parsedStatus >= http.StatusBadRequest {
+					statusCode = parsedStatus
+				}
+			}
+			if statusCode < http.StatusBadRequest {
+				statusCode = http.StatusBadGateway
+			}
+			if attempt < 3 && retryableImageTaskStatus(statusCode) {
+				continue
+			}
+			h.failTask(taskID, statusCode, taskErr)
+			return
 		}
+		if statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices {
+			if len(body) == 0 || !json.Valid(body) {
+				if attempt < 3 {
+					continue
+				}
+				h.failTask(taskID, http.StatusBadGateway, imageTaskErrorPayload("api_error", "upstream returned an invalid image response"))
+				return
+			}
+			var err error
+			if service.AsyncImageTaskStorageComplete(taskCtx.Request.Context()) {
+				err = h.tasks.CompleteStored(context.Background(), taskID, statusCode, json.RawMessage(body))
+			} else {
+				err = h.tasks.Complete(context.Background(), taskID, statusCode, json.RawMessage(body))
+			}
+			if err != nil {
+				logger.L().Error("image_task.complete_store_failed", zap.String("task_id", taskID), zap.Error(err))
+			}
+			return
+		}
+		if attempt < 3 && retryableImageTaskStatus(statusCode) {
+			continue
+		}
+		h.failTask(taskID, statusCode, extractImageTaskError(body))
 		return
 	}
-	h.failTask(taskID, statusCode, extractImageTaskError(body))
+}
+
+func retryableImageTaskStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusInternalServerError,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *AsyncImageHandler) failTask(taskID string, statusCode int, taskErr json.RawMessage) {
@@ -296,6 +365,13 @@ func newAsyncImageContext(c *gin.Context, body []byte, timeoutDuration time.Dura
 	taskCtx.Writer = recorderCtx.Writer
 	taskCtx.Request = request
 	return taskCtx, recorder, cancel
+}
+
+func resetAsyncImageRecorder(c *gin.Context) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	recorderCtx, _ := gin.CreateTestContext(recorder)
+	c.Writer = recorderCtx.Writer
+	return recorder
 }
 
 func asyncImageRequestStreams(contentType string, body []byte) bool {

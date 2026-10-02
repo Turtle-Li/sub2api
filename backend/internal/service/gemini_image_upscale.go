@@ -17,6 +17,7 @@ type geminiUpscaledImage struct {
 	mimeKey     string
 	dataKey     string
 	data        []byte
+	url         string
 	contentType string
 }
 
@@ -116,7 +117,13 @@ func processGeminiImageGenerationResponse(
 					return nil, upscaleErr
 				}
 				resultData = result.Data
+				resultURL := result.URL
 				resultMime = result.MimeType
+				images = append(images, geminiUpscaledImage{
+					part: part, inlineKey: inlineKey, mimeKey: mimeKey, dataKey: dataKey,
+					data: resultData, url: resultURL, contentType: resultMime,
+				})
+				continue
 			}
 			images = append(images, geminiUpscaledImage{
 				part: part, inlineKey: inlineKey, mimeKey: mimeKey, dataKey: dataKey,
@@ -144,13 +151,17 @@ func processGeminiImageGenerationResponse(
 		storageFailed := false
 		for i := range images {
 			image := &images[i]
-			url, err := uploader.SaveBytes(ctx, resultID, i, image.contentType, image.data)
-			if err != nil {
-				logImageStorageFallback(storagePath, len(images), err)
-				storageFailed = true
-				break
+			if image.url != "" {
+				urls[i] = image.url
+			} else {
+				url, err := uploader.SaveBytes(ctx, resultID, i, image.contentType, image.data)
+				if err != nil {
+					logImageStorageFallback(storagePath, len(images), err)
+					storageFailed = true
+					break
+				}
+				urls[i] = url
 			}
-			urls[i] = url
 		}
 		if !storageFailed {
 			for i := range images {

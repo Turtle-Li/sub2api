@@ -17,6 +17,7 @@ import (
 
 const (
 	ImageTaskStatusProcessing = "processing"
+	ImageTaskStatusRetrying   = "retrying"
 	ImageTaskStatusCompleted  = "completed"
 	ImageTaskStatusFailed     = "failed"
 
@@ -40,6 +41,8 @@ type ImageTaskRecord struct {
 	HTTPStatus  int             `json:"http_status,omitempty"`
 	Result      json.RawMessage `json:"result,omitempty"`
 	Error       json.RawMessage `json:"error,omitempty"`
+	Attempt     int             `json:"attempt,omitempty"`
+	MaxAttempts int             `json:"max_attempts,omitempty"`
 	CreatedAt   int64           `json:"created_at"`
 	CompletedAt *int64          `json:"completed_at,omitempty"`
 	ExpiresAt   int64           `json:"expires_at"`
@@ -55,6 +58,8 @@ type ImageTask struct {
 	ImageURL    string          `json:"image_url,omitempty"`
 	Result      json.RawMessage `json:"result,omitempty"`
 	Error       json.RawMessage `json:"error,omitempty"`
+	Attempt     int             `json:"attempt,omitempty"`
+	MaxAttempts int             `json:"max_attempts,omitempty"`
 	CreatedAt   int64           `json:"created_at"`
 	CompletedAt *int64          `json:"completed_at,omitempty"`
 	ExpiresAt   int64           `json:"expires_at"`
@@ -157,17 +162,44 @@ func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner) (*I
 	}
 	now := time.Now().UTC()
 	task := &ImageTaskRecord{
-		ID:        "imgtask_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
-		UserID:    owner.UserID,
-		APIKeyID:  owner.APIKeyID,
-		Status:    ImageTaskStatusProcessing,
-		CreatedAt: now.Unix(),
-		ExpiresAt: now.Add(s.ttl).Unix(),
+		ID:          "imgtask_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		UserID:      owner.UserID,
+		APIKeyID:    owner.APIKeyID,
+		Status:      ImageTaskStatusProcessing,
+		Attempt:     1,
+		MaxAttempts: 3,
+		CreatedAt:   now.Unix(),
+		ExpiresAt:   now.Add(s.ttl).Unix(),
 	}
 	if err := s.store.Save(ctx, task, s.ttl); err != nil {
 		return nil, ErrImageTaskUnavailable.WithCause(err)
 	}
 	return imageTaskToPublic(task), nil
+}
+
+func (s *ImageTaskService) MarkRetrying(ctx context.Context, id string, attempt int) error {
+	if s == nil || s.store == nil {
+		return ErrImageTaskUnavailable
+	}
+	task, err := s.store.Get(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return ErrImageTaskUnavailable.WithCause(err)
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	task.Status = ImageTaskStatusRetrying
+	task.Attempt = attempt
+	if task.MaxAttempts <= 0 {
+		task.MaxAttempts = 3
+	}
+	task.CompletedAt = nil
+	task.Error = nil
+	task.ExpiresAt = time.Now().UTC().Add(s.ttl).Unix()
+	if err := s.store.Save(ctx, task, s.ttl); err != nil {
+		return ErrImageTaskUnavailable.WithCause(err)
+	}
+	return nil
 }
 
 func (s *ImageTaskService) Get(ctx context.Context, owner ImageTaskOwner, id string) (*ImageTask, error) {
@@ -294,6 +326,8 @@ func imageTaskToPublic(task *ImageTaskRecord) *ImageTask {
 		ImageURL:    firstImageTaskURL(task.Result),
 		Result:      task.Result,
 		Error:       task.Error,
+		Attempt:     task.Attempt,
+		MaxAttempts: task.MaxAttempts,
 		CreatedAt:   task.CreatedAt,
 		CompletedAt: task.CompletedAt,
 		ExpiresAt:   task.ExpiresAt,

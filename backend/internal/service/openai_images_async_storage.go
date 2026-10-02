@@ -78,6 +78,13 @@ func (s *OpenAIGatewayService) storeHighResolutionOpenAIImages(
 		}
 		return body, nil
 	}
+	// Mini may already have written the final bytes to the same object store via
+	// a scoped PUT URL. Keep the URL and avoid pulling the large object back into
+	// Sub2API just to upload it again.
+	if imageDirectUploadEnabled(ctx) && validateStoredImageTaskResult(body) == nil {
+		markAsyncImageTaskStorageComplete(ctx)
+		return body, nil
+	}
 
 	resultID := newSynchronousImageResultID()
 	if asyncRequired {
