@@ -124,6 +124,29 @@ func newResponsesAttachmentURLExternalizer(
 	return externalizer
 }
 
+func newResponsesAttachmentRemoteURLPrefetcher(cfg *config.Config) responsesAttachmentRemoteURLPrefetcher {
+	if cfg == nil {
+		return nil
+	}
+	experiment := cfg.Gateway.AttachmentGateway
+	if !experiment.AttachmentOptimizerEnabled || !experiment.URLRewriteEnabled || !experiment.ExternalURLPrefetchEnabled {
+		return nil
+	}
+	prefetcher, err := attachmentgateway.NewRemoteURLPrefetcher(attachmentgateway.RemoteURLPrefetchConfig{
+		Enabled:             true,
+		MaxImageBytes:       experiment.MaxImageBytes,
+		MaxPixels:           experiment.MaxPixels,
+		MaxImagesPerRequest: experiment.URLRewriteMaxImagesPerRequest,
+		MaxConcurrent:       experiment.MaxConcurrentURLUploads,
+		Timeout:             time.Duration(experiment.URLDownloadTimeoutMilliseconds) * time.Millisecond,
+	})
+	if err != nil {
+		logger.L().Warn("attachment_gateway.remote_url_prefetch_initialization_failed", zap.Error(err))
+		return nil
+	}
+	return prefetcher
+}
+
 func (h *OpenAIGatewayHandler) optimizeResponsesAttachments(
 	ctx context.Context,
 	reqLog *zap.Logger,
@@ -152,6 +175,18 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		return passthrough
 	}
 	dryRun := rolloutMode == attachmentGatewayRolloutDryRun
+	workingBody := body
+	remoteURLMetrics := attachmentgateway.RemoteURLMetrics{}
+	if !dryRun && rolloutMode == attachmentGatewayRolloutRewrite &&
+		experiment.URLRewriteEnabled && h.attachmentRemoteURLPrefetcher != nil &&
+		h.attachmentRemoteURLPrefetcher.Enabled() && h.attachmentURLExternalizer != nil &&
+		h.attachmentURLExternalizer.Enabled() && len(body) >= experiment.URLRewriteMinBodyBytes {
+		prefetchCtx, prefetchCancel := context.WithTimeout(ctx, time.Duration(experiment.URLDownloadTimeoutMilliseconds)*time.Millisecond)
+		prefetched := h.attachmentRemoteURLPrefetcher.Prefetch(prefetchCtx, body)
+		prefetchCancel()
+		remoteURLMetrics = prefetched.Metrics
+		workingBody = prefetched.Body
+	}
 	if experiment.RequestBudgetEnabled && experiment.RequestBudgetEnforce && rolloutMode == attachmentGatewayRolloutRewrite {
 		inlineStats, inspectErr := attachmentgateway.InspectInlineAttachments(body)
 		if inspectErr == nil {
@@ -184,7 +219,7 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 
 	optimizeCtx, cancel := context.WithTimeout(ctx, time.Duration(experiment.OptimizeTimeoutMilliseconds)*time.Millisecond)
 	defer cancel()
-	result := h.attachmentOptimizer.Optimize(optimizeCtx, body)
+	result := h.attachmentOptimizer.Optimize(optimizeCtx, workingBody)
 	metrics := result.Metrics
 	contextErr := optimizeCtx.Err()
 	urlMetrics := attachmentgateway.URLMetrics{}
@@ -230,7 +265,7 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		zap.String("rollout_mode", string(rolloutMode)),
 		zap.Bool("dry_run", dryRun),
 		zap.Bool("payload_rewritten", payloadRewritten),
-		zap.Int("original_body_bytes", metrics.OriginalBodyBytes),
+		zap.Int("original_body_bytes", len(body)),
 		zap.Int("optimized_body_bytes", metrics.OptimizedBodyBytes),
 		zap.Int("forward_body_bytes", len(forwardBody)),
 		zap.Int("image_count", metrics.ImageCount),
@@ -278,6 +313,14 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		zap.Bool("url_timed_out", urlMetrics.TimedOut),
 		zap.Float64("url_duration_ms", urlMetrics.DurationMS),
 		zap.Int("url_errors", urlMetrics.Errors),
+		zap.Bool("remote_url_prefetch_enabled", remoteURLMetrics.Enabled),
+		zap.Int("remote_url_count", remoteURLMetrics.ImageCount),
+		zap.Int("remote_url_downloaded_count", remoteURLMetrics.DownloadedCount),
+		zap.Int("remote_url_rewritten_count", remoteURLMetrics.RewrittenCount),
+		zap.Int("remote_url_downloaded_bytes", remoteURLMetrics.BytesDownloaded),
+		zap.Int("remote_url_errors", remoteURLMetrics.Errors),
+		zap.Bool("remote_url_timed_out", remoteURLMetrics.TimedOut),
+		zap.Float64("remote_url_duration_ms", remoteURLMetrics.DurationMS),
 		zap.Int("errors", metrics.Errors),
 	}
 	if budgetViolation != nil {

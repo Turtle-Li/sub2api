@@ -35,25 +35,26 @@ import (
 
 // OpenAIGatewayHandler handles OpenAI API gateway requests
 type OpenAIGatewayHandler struct {
-	compositeResolver          *service.CompositeRouteResolver
-	gatewayService             *service.OpenAIGatewayService
-	billingCacheService        *service.BillingCacheService
-	subscriptionService        *service.SubscriptionService
-	apiKeyService              *service.APIKeyService
-	usageRecordWorkerPool      *service.UsageRecordWorkerPool
-	errorPassthroughService    *service.ErrorPassthroughService
-	contentModerationService   *service.ContentModerationService
-	securityAuditCoordinator   *securityaudit.Coordinator
-	grokMediaEligibilityProber grokMediaEligibilityProber
-	opsService                 *service.OpsService
-	retryProtectionRegistrar   service.OpenAIAbnormalRetryRegistrar
-	concurrencyHelper          *ConcurrencyHelper
-	imageLimiter               *imageConcurrencyLimiter
-	attachmentOptimizer        responsesAttachmentOptimizer
-	attachmentURLExternalizer  responsesAttachmentURLExternalizer
-	retryProtectionCache       openAIAbnormalRetryRuntimeCache
-	maxAccountSwitches         int
-	cfg                        *config.Config
+	compositeResolver             *service.CompositeRouteResolver
+	gatewayService                *service.OpenAIGatewayService
+	billingCacheService           *service.BillingCacheService
+	subscriptionService           *service.SubscriptionService
+	apiKeyService                 *service.APIKeyService
+	usageRecordWorkerPool         *service.UsageRecordWorkerPool
+	errorPassthroughService       *service.ErrorPassthroughService
+	contentModerationService      *service.ContentModerationService
+	securityAuditCoordinator      *securityaudit.Coordinator
+	grokMediaEligibilityProber    grokMediaEligibilityProber
+	opsService                    *service.OpsService
+	retryProtectionRegistrar      service.OpenAIAbnormalRetryRegistrar
+	concurrencyHelper             *ConcurrencyHelper
+	imageLimiter                  *imageConcurrencyLimiter
+	attachmentOptimizer           responsesAttachmentOptimizer
+	attachmentRemoteURLPrefetcher responsesAttachmentRemoteURLPrefetcher
+	attachmentURLExternalizer     responsesAttachmentURLExternalizer
+	retryProtectionCache          openAIAbnormalRetryRuntimeCache
+	maxAccountSwitches            int
+	cfg                           *config.Config
 }
 
 type responsesAttachmentOptimizer interface {
@@ -68,6 +69,11 @@ type responsesAttachmentURLExternalizer interface {
 	ExternalizeWithWriteGuard(context.Context, []byte, func() bool) attachmentgateway.URLResult
 	ExternalizeSelected(context.Context, []byte, []int) attachmentgateway.URLResult
 	ExternalizeSelectedWithWriteGuard(context.Context, []byte, []int, func() bool) attachmentgateway.URLResult
+}
+
+type responsesAttachmentRemoteURLPrefetcher interface {
+	Enabled() bool
+	Prefetch(context.Context, []byte) attachmentgateway.RemoteURLResult
 }
 
 type openAIWSTurnChannelMappingSnapshot struct {
@@ -389,18 +395,19 @@ func NewOpenAIGatewayHandler(
 		}
 	}
 	return &OpenAIGatewayHandler{
-		gatewayService:           gatewayService,
-		billingCacheService:      billingCacheService,
-		apiKeyService:            apiKeyService,
-		usageRecordWorkerPool:    usageRecordWorkerPool,
-		errorPassthroughService:  errorPassthroughService,
-		contentModerationService: contentModerationService,
-		opsService:               opsService,
-		concurrencyHelper:        NewConcurrencyHelper(concurrencyService, SSEPingFormatComment, pingInterval),
-		imageLimiter:             &imageConcurrencyLimiter{},
-		attachmentOptimizer:      newResponsesAttachmentOptimizer(cfg),
-		maxAccountSwitches:       maxAccountSwitches,
-		cfg:                      cfg,
+		gatewayService:                gatewayService,
+		billingCacheService:           billingCacheService,
+		apiKeyService:                 apiKeyService,
+		usageRecordWorkerPool:         usageRecordWorkerPool,
+		errorPassthroughService:       errorPassthroughService,
+		contentModerationService:      contentModerationService,
+		opsService:                    opsService,
+		concurrencyHelper:             NewConcurrencyHelper(concurrencyService, SSEPingFormatComment, pingInterval),
+		imageLimiter:                  &imageConcurrencyLimiter{},
+		attachmentOptimizer:           newResponsesAttachmentOptimizer(cfg),
+		attachmentRemoteURLPrefetcher: newResponsesAttachmentRemoteURLPrefetcher(cfg),
+		maxAccountSwitches:            maxAccountSwitches,
+		cfg:                           cfg,
 	}
 }
 

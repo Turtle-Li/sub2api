@@ -92,6 +92,18 @@ POST /api/v1/admin/attachment-gateway/r2-config/test
   图片或凭证；
 - 请求预算在 URL 替换后重新计算；dry-run 保证零外部写入。
 
+## 第三方 HTTPS 图片预取（用户定向灰度）
+
+当 `external_url_prefetch_enabled=true` 且请求命中既有精确 scope 的 rewrite 模式时，
+网关会识别 Responses `input_image.image_url` / Chat 风格 `image_url` 中的 HTTPS 图片，
+先在 Sub2API 侧下载并校验，再把结果交给同一套图片解码、WebP 压缩、本地内容缓存和 R2
+内容哈希外置流程。下载失败保留原 URL，避免改变上游请求语义。
+
+该阶段只允许 HTTPS，不转发用户认证头，限制响应大小、像素数、图片数量、并发和下载
+超时；解析 DNS 后拒绝回环、私网、链路本地、未指定和组播地址，并校验重定向目标。
+日志只记录下载数量、字节数、错误、超时和耗时，不记录源 URL、图片、正文或 hash。
+默认关闭；本次灰度目标为用户 ID 25，API Key 不参与 scope。
+
 ## 默认安全配置
 
 ```yaml
@@ -100,6 +112,8 @@ gateway:
     attachment_optimizer_enabled: false
     attachment_optimizer_dry_run: true
     url_rewrite_enabled: false
+    external_url_prefetch_enabled: false
+    url_download_timeout_ms: 15000
     url_rewrite_min_body_bytes: 524288
     url_upload_timeout_ms: 15000
     url_object_prefix: "attachments/"

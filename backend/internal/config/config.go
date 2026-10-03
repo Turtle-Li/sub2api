@@ -1079,21 +1079,25 @@ type ImageConcurrencyConfig struct {
 }
 
 // AttachmentGatewayConfig controls the experimental Responses attachment
-// optimizer. It is deliberately disabled by default and currently handles only
-// inline PNG/JPEG/WebP image data URLs.
+// optimizer. It is deliberately disabled by default.
 type AttachmentGatewayConfig struct {
 	AttachmentOptimizerEnabled bool `mapstructure:"attachment_optimizer_enabled"`
 	AttachmentOptimizerDryRun  bool `mapstructure:"attachment_optimizer_dry_run"`
 	// URLRewriteEnabled externalizes optimized inline images through Attachment
 	// Gateway's independently persisted R2 config only while the scoped rollout
 	// is in rewrite. Dry-run never writes to object storage.
-	URLRewriteEnabled             bool   `mapstructure:"url_rewrite_enabled"`
-	URLRewriteMinBodyBytes        int    `mapstructure:"url_rewrite_min_body_bytes"`
-	URLRewriteMaxImagesPerRequest int    `mapstructure:"url_rewrite_max_images_per_request"`
-	URLUploadTimeoutMilliseconds  int    `mapstructure:"url_upload_timeout_ms"`
-	URLObjectPrefix               string `mapstructure:"url_object_prefix"`
-	URLCacheTTLSeconds            int    `mapstructure:"url_cache_ttl_seconds"`
-	MaxConcurrentURLUploads       int    `mapstructure:"max_concurrent_url_uploads"`
+	URLRewriteEnabled bool `mapstructure:"url_rewrite_enabled"`
+	// ExternalURLPrefetchEnabled downloads scoped HTTPS image URLs before the
+	// existing optimizer and R2 externalizer. It remains opt-in separately from
+	// inline-image URL rewriting because it performs outbound fetches.
+	ExternalURLPrefetchEnabled     bool   `mapstructure:"external_url_prefetch_enabled"`
+	URLDownloadTimeoutMilliseconds int    `mapstructure:"url_download_timeout_ms"`
+	URLRewriteMinBodyBytes         int    `mapstructure:"url_rewrite_min_body_bytes"`
+	URLRewriteMaxImagesPerRequest  int    `mapstructure:"url_rewrite_max_images_per_request"`
+	URLUploadTimeoutMilliseconds   int    `mapstructure:"url_upload_timeout_ms"`
+	URLObjectPrefix                string `mapstructure:"url_object_prefix"`
+	URLCacheTTLSeconds             int    `mapstructure:"url_cache_ttl_seconds"`
+	MaxConcurrentURLUploads        int    `mapstructure:"max_concurrent_url_uploads"`
 	// RequestBudgetEnabled adds privacy-safe aggregate attachment accounting.
 	// RequestBudgetEnforce remains a separate explicit gate for 413 responses.
 	RequestBudgetEnabled bool `mapstructure:"request_budget_enabled"`
@@ -2779,6 +2783,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.attachment_optimizer_dry_run", true)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_enabled", false)
+	viper.SetDefault("gateway.attachment_gateway.external_url_prefetch_enabled", false)
+	viper.SetDefault("gateway.attachment_gateway.url_download_timeout_ms", 15_000)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_min_body_bytes", 512*1024)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_max_images_per_request", 50)
 	viper.SetDefault("gateway.attachment_gateway.url_upload_timeout_ms", 60_000)
@@ -3875,6 +3881,9 @@ func (c *Config) Validate() error {
 			}
 			if attachment.MaxConcurrentURLUploads <= 0 {
 				return fmt.Errorf("gateway.attachment_gateway.max_concurrent_url_uploads must be positive")
+			}
+			if attachment.ExternalURLPrefetchEnabled && attachment.URLDownloadTimeoutMilliseconds <= 0 {
+				return fmt.Errorf("gateway.attachment_gateway.url_download_timeout_ms must be positive")
 			}
 		}
 		if attachment.RequestBudgetEnforce && !attachment.RequestBudgetEnabled {
