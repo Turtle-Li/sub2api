@@ -2,6 +2,7 @@ package attachment_gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +32,9 @@ type RemoteURLPrefetchConfig struct {
 	MaxImagesPerRequest int
 	MaxConcurrent       int
 	Timeout             time.Duration
+	CacheDir            string
+	CacheTTL            time.Duration
+	CacheMaxBytes       int64
 }
 
 type RemoteURLMetrics struct {
@@ -39,6 +45,8 @@ type RemoteURLMetrics struct {
 	BytesDownloaded int
 	Errors          int
 	TimedOut        bool
+	CacheHits       int
+	CacheMisses     int
 	DurationMS      float64
 }
 
@@ -53,10 +61,11 @@ type remoteURLPrefetcher struct {
 }
 
 type remoteURLPrefetchOutcome struct {
-	index int
-	value string
-	bytes int
-	err   error
+	index    int
+	value    string
+	bytes    int
+	cacheHit bool
+	err      error
 }
 
 func NewRemoteURLPrefetcher(config RemoteURLPrefetchConfig) (*remoteURLPrefetcher, error) {
@@ -97,11 +106,20 @@ func (c RemoteURLPrefetchConfig) withDefaults() RemoteURLPrefetchConfig {
 	if c.Timeout <= 0 {
 		c.Timeout = 15 * time.Second
 	}
+	if strings.TrimSpace(c.CacheDir) == "" {
+		c.CacheDir = "data/attachment_cache"
+	}
+	if c.CacheTTL <= 0 {
+		c.CacheTTL = 15 * time.Minute
+	}
+	if c.CacheMaxBytes <= 0 {
+		c.CacheMaxBytes = 512 * 1024 * 1024
+	}
 	return c
 }
 
 func (c RemoteURLPrefetchConfig) validate() error {
-	if c.MaxImageBytes <= 0 || c.MaxPixels <= 0 || c.MaxImagesPerRequest <= 0 || c.MaxConcurrent <= 0 || c.Timeout <= 0 {
+	if c.MaxImageBytes <= 0 || c.MaxPixels <= 0 || c.MaxImagesPerRequest <= 0 || c.MaxConcurrent <= 0 || c.Timeout <= 0 || strings.TrimSpace(c.CacheDir) == "" || c.CacheTTL <= 0 || c.CacheMaxBytes <= 0 {
 		return errors.New("attachment gateway: invalid remote URL prefetch limits")
 	}
 	if c.MaxImagesPerRequest > maxImagesPerRequest {
@@ -149,8 +167,8 @@ func (p *remoteURLPrefetcher) Prefetch(ctx context.Context, body []byte) (result
 					outcomes <- remoteURLPrefetchOutcome{index: token.start, err: valueErr}
 					continue
 				}
-				value, bytesDownloaded, fetchErr := p.fetch(ctx, raw)
-				outcomes <- remoteURLPrefetchOutcome{index: token.start, value: value, bytes: bytesDownloaded, err: fetchErr}
+				value, bytesDownloaded, cacheHit, fetchErr := p.fetch(ctx, raw)
+				outcomes <- remoteURLPrefetchOutcome{index: token.start, value: value, bytes: bytesDownloaded, cacheHit: cacheHit, err: fetchErr}
 			}
 		}()
 	}
@@ -183,7 +201,12 @@ func (p *remoteURLPrefetcher) Prefetch(ctx context.Context, body []byte) (result
 			}
 			continue
 		}
-		result.Metrics.DownloadedCount++
+		if outcome.cacheHit {
+			result.Metrics.CacheHits++
+		} else {
+			result.Metrics.CacheMisses++
+			result.Metrics.DownloadedCount++
+		}
 		result.Metrics.RewrittenCount++
 		result.Metrics.BytesDownloaded += outcome.bytes
 		rewritten[index] = imageURLRewrite{value: outcome.value, changed: true}
@@ -202,45 +225,113 @@ func (p *remoteURLPrefetcher) Prefetch(ctx context.Context, body []byte) (result
 	return result
 }
 
-func (p *remoteURLPrefetcher) fetch(ctx context.Context, raw string) (string, int, error) {
+func (p *remoteURLPrefetcher) fetch(ctx context.Context, raw string) (string, int, bool, error) {
 	u, err := validateRemoteImageURL(raw)
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
+	}
+	if data, ok := p.loadCached(raw); ok {
+		mimeType := detectDownloadedImageMIME("", data)
+		return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), 0, true, nil
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, p.config.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	req.Header.Set("Accept", "image/avif,image/webp,image/png,image/jpeg;q=0.9,*/*;q=0.1")
 	req.Header.Set("User-Agent", "Sub2API-AttachmentGateway/1")
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", 0, fmt.Errorf("remote image returned HTTP %s", resp.Status)
+		return "", 0, false, fmt.Errorf("remote image returned HTTP %s", resp.Status)
 	}
 	if resp.ContentLength > int64(p.config.MaxImageBytes) {
-		return "", 0, errImageTooLarge
+		return "", 0, false, errImageTooLarge
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(p.config.MaxImageBytes)+1))
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	if len(data) == 0 || len(data) > p.config.MaxImageBytes {
-		return "", len(data), errImageTooLarge
+		return "", len(data), false, errImageTooLarge
 	}
 	mimeType := detectDownloadedImageMIME(resp.Header.Get("Content-Type"), data)
 	if mimeType == "" {
-		return "", len(data), errUnsupportedMediaType
+		return "", len(data), false, errUnsupportedMediaType
 	}
 	if _, _, _, err := decodeImage(data, mimeType, p.config.MaxPixels); err != nil {
-		return "", len(data), err
+		return "", len(data), false, err
 	}
-	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), len(data), nil
+	p.storeCached(raw, data)
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), len(data), false, nil
+}
+
+func (p *remoteURLPrefetcher) cachePath(raw string) string {
+	digest := sha256.Sum256([]byte(raw))
+	return filepath.Join(p.config.CacheDir, "remote-url-v1", fmt.Sprintf("%x.img", digest[:]))
+}
+
+func (p *remoteURLPrefetcher) loadCached(raw string) ([]byte, bool) {
+	path := p.cachePath(raw)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || time.Since(info.ModTime()) > p.config.CacheTTL {
+		if err == nil {
+			_ = os.Remove(path)
+		}
+		return nil, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 || len(data) > p.config.MaxImageBytes {
+		_ = os.Remove(path)
+		return nil, false
+	}
+	mimeType := detectDownloadedImageMIME("", data)
+	if mimeType == "" {
+		_ = os.Remove(path)
+		return nil, false
+	}
+	if _, _, _, err := decodeImage(data, mimeType, p.config.MaxPixels); err != nil {
+		_ = os.Remove(path)
+		return nil, false
+	}
+	return data, true
+}
+
+func (p *remoteURLPrefetcher) storeCached(raw string, data []byte) {
+	if int64(len(data)) > p.config.CacheMaxBytes {
+		return
+	}
+	path := p.cachePath(raw)
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".remote-url-*.tmp")
+	if err != nil {
+		return
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(tmpPath, path)
 }
 
 func validateRemoteImageURL(raw string) (*url.URL, error) {

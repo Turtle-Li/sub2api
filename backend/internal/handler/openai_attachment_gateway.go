@@ -139,6 +139,9 @@ func newResponsesAttachmentRemoteURLPrefetcher(cfg *config.Config) responsesAtta
 		MaxImagesPerRequest: experiment.URLRewriteMaxImagesPerRequest,
 		MaxConcurrent:       experiment.MaxConcurrentURLUploads,
 		Timeout:             time.Duration(experiment.URLDownloadTimeoutMilliseconds) * time.Millisecond,
+		CacheDir:            experiment.CacheDir,
+		CacheTTL:            time.Duration(experiment.URLCacheTTLSeconds) * time.Second,
+		CacheMaxBytes:       experiment.CacheMaxBytes,
 	})
 	if err != nil {
 		logger.L().Warn("attachment_gateway.remote_url_prefetch_initialization_failed", zap.Error(err))
@@ -318,6 +321,8 @@ func (h *OpenAIGatewayHandler) prepareResponsesAttachments(
 		zap.Int("remote_url_downloaded_count", remoteURLMetrics.DownloadedCount),
 		zap.Int("remote_url_rewritten_count", remoteURLMetrics.RewrittenCount),
 		zap.Int("remote_url_downloaded_bytes", remoteURLMetrics.BytesDownloaded),
+		zap.Int("remote_url_cache_hits", remoteURLMetrics.CacheHits),
+		zap.Int("remote_url_cache_misses", remoteURLMetrics.CacheMisses),
 		zap.Int("remote_url_errors", remoteURLMetrics.Errors),
 		zap.Bool("remote_url_timed_out", remoteURLMetrics.TimedOut),
 		zap.Float64("remote_url_duration_ms", remoteURLMetrics.DurationMS),

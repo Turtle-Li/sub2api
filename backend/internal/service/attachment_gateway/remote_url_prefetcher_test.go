@@ -66,6 +66,33 @@ func TestRemoteURLPrefetchFailureKeepsOriginalURL(t *testing.T) {
 	require.Equal(t, 1, result.Metrics.Errors)
 }
 
+func TestRemoteURLPrefetchUsesPersistentURLCache(t *testing.T) {
+	imageBytes := remotePNG(t)
+	requests := 0
+	client := &http.Client{Transport: remoteImageRoundTripper(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(imageBytes)),
+			Header:     http.Header{"Content-Type": []string{"image/png"}},
+			Request:    req,
+		}, nil
+	})}
+	prefetcher, err := newRemoteURLPrefetcherForTest(RemoteURLPrefetchConfig{
+		Enabled: true, MaxImageBytes: 1 << 20, MaxPixels: 100, MaxImagesPerRequest: 1,
+		MaxConcurrent: 1, Timeout: time.Second, CacheDir: t.TempDir(), CacheTTL: time.Hour,
+	}, client)
+	require.NoError(t, err)
+	body := []byte(`{"input":[{"type":"input_image","image_url":"https://images.example.test/cached.png"}]}`)
+	first := prefetcher.Prefetch(context.Background(), body)
+	second := prefetcher.Prefetch(context.Background(), body)
+	require.Equal(t, 1, requests)
+	require.Equal(t, 1, first.Metrics.CacheMisses)
+	require.Equal(t, 1, second.Metrics.CacheHits)
+	require.Equal(t, 0, second.Metrics.DownloadedCount)
+	require.Equal(t, first.Body, second.Body)
+}
+
 func TestRemoteURLPrefetchRejectsNonHTTPSAndPrivateAddress(t *testing.T) {
 	require.False(t, isRemoteImageURL("http://images.example.test/a.png"))
 	require.False(t, isRemoteImageURL("https://127.0.0.1/a.png"))
