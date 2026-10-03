@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,8 +311,49 @@ func (p *remoteURLPrefetcher) storeCached(raw string, data []byte) {
 	if _, err := os.Stat(path); err == nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type cacheEntry struct {
+		path    string
+		modTime time.Time
+		size    int64
+	}
+	files := make([]cacheEntry, 0, len(entries))
+	var total int64
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		info, statErr := entry.Info()
+		if statErr != nil {
+			continue
+		}
+		size := info.Size()
+		if size < 0 {
+			continue
+		}
+		files = append(files, cacheEntry{path: filepath.Join(dir, entry.Name()), modTime: info.ModTime(), size: size})
+		total += size
+	}
+	if total+int64(len(data)) > p.config.CacheMaxBytes {
+		sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
+		for _, entry := range files {
+			if total+int64(len(data)) <= p.config.CacheMaxBytes {
+				break
+			}
+			if os.Remove(entry.path) == nil {
+				total -= entry.size
+			}
+		}
+		if total+int64(len(data)) > p.config.CacheMaxBytes {
+			return
+		}
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".remote-url-*.tmp")
 	if err != nil {
