@@ -97,7 +97,13 @@ POST /api/v1/admin/attachment-gateway/r2-config/test
 当 `external_url_prefetch_enabled=true` 且请求命中既有精确 scope 的 rewrite 模式时，
 网关会识别 Responses `input_image.image_url` / Chat 风格 `image_url` 中的 HTTPS 图片，
 先在 Sub2API 侧下载并校验，再把结果交给同一套图片解码、WebP 压缩、本地内容缓存和 R2
-内容哈希外置流程。下载失败保留原 URL，避免改变上游请求语义。
+内容哈希外置流程。网络错误和 408/425/429/5xx 默认最多重试 2 次；图片格式、尺寸、像素
+校验失败不重试，避免无效源站拖长首字等待。
+
+重试耗尽或下载失败时保留原 URL，继续把原始图片请求交给 OpenAI，预取功能不会把请求变成
+网关错误。压缩候选还会重新解码并校验格式和宽高；编码失败、候选损坏或尺寸变化时沿用原图。
+当前 WebP 策略不缩放图片，对疑似文字/UI 图使用更保守的质量参数，并且只有达到最小体积
+收益才替换原图。
 
 源 URL 的校验通过后会按 URL 哈希写入 `data/attachment_cache/remote-url-v1/`，默认复用
 URL 缓存 TTL（15 分钟）；TTL 内的重复请求直接从本地缓存进入压缩和 R2 流程，不再重复
@@ -119,6 +125,7 @@ gateway:
     url_rewrite_enabled: false
     external_url_prefetch_enabled: false
     url_download_timeout_ms: 15000
+    url_download_retry_count: 2
     url_rewrite_min_body_bytes: 524288
     url_upload_timeout_ms: 15000
     url_object_prefix: "attachments/"

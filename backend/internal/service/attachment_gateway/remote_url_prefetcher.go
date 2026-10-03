@@ -33,6 +33,7 @@ type RemoteURLPrefetchConfig struct {
 	MaxImagesPerRequest int
 	MaxConcurrent       int
 	Timeout             time.Duration
+	RetryCount          int
 	CacheDir            string
 	CacheTTL            time.Duration
 	CacheMaxBytes       int64
@@ -44,6 +45,7 @@ type RemoteURLMetrics struct {
 	DownloadedCount int
 	RewrittenCount  int
 	BytesDownloaded int
+	RetryCount      int
 	Errors          int
 	TimedOut        bool
 	CacheHits       int
@@ -65,9 +67,25 @@ type remoteURLPrefetchOutcome struct {
 	index    int
 	value    string
 	bytes    int
+	retries  int
 	cacheHit bool
 	err      error
 }
+
+const remoteURLRetryInitialDelay = 100 * time.Millisecond
+
+type remoteImageHTTPError struct {
+	status int
+}
+
+func (e remoteImageHTTPError) Error() string {
+	return fmt.Sprintf("remote image returned HTTP status %d", e.status)
+}
+
+type permanentRemoteImageError struct{ err error }
+
+func (e permanentRemoteImageError) Error() string { return e.err.Error() }
+func (e permanentRemoteImageError) Unwrap() error { return e.err }
 
 func NewRemoteURLPrefetcher(config RemoteURLPrefetchConfig) (*remoteURLPrefetcher, error) {
 	config = config.withDefaults()
@@ -120,7 +138,7 @@ func (c RemoteURLPrefetchConfig) withDefaults() RemoteURLPrefetchConfig {
 }
 
 func (c RemoteURLPrefetchConfig) validate() error {
-	if c.MaxImageBytes <= 0 || c.MaxPixels <= 0 || c.MaxImagesPerRequest <= 0 || c.MaxConcurrent <= 0 || c.Timeout <= 0 || strings.TrimSpace(c.CacheDir) == "" || c.CacheTTL <= 0 || c.CacheMaxBytes <= 0 {
+	if c.MaxImageBytes <= 0 || c.MaxPixels <= 0 || c.MaxImagesPerRequest <= 0 || c.MaxConcurrent <= 0 || c.Timeout <= 0 || c.RetryCount < 0 || c.RetryCount > 5 || strings.TrimSpace(c.CacheDir) == "" || c.CacheTTL <= 0 || c.CacheMaxBytes <= 0 {
 		return errors.New("attachment gateway: invalid remote URL prefetch limits")
 	}
 	if c.MaxImagesPerRequest > maxImagesPerRequest {
@@ -168,8 +186,8 @@ func (p *remoteURLPrefetcher) Prefetch(ctx context.Context, body []byte) (result
 					outcomes <- remoteURLPrefetchOutcome{index: token.start, err: valueErr}
 					continue
 				}
-				value, bytesDownloaded, cacheHit, fetchErr := p.fetch(ctx, raw)
-				outcomes <- remoteURLPrefetchOutcome{index: token.start, value: value, bytes: bytesDownloaded, cacheHit: cacheHit, err: fetchErr}
+				value, bytesDownloaded, cacheHit, retries, fetchErr := p.fetch(ctx, raw)
+				outcomes <- remoteURLPrefetchOutcome{index: token.start, value: value, bytes: bytesDownloaded, cacheHit: cacheHit, retries: retries, err: fetchErr}
 			}
 		}()
 	}
@@ -193,6 +211,9 @@ func (p *remoteURLPrefetcher) Prefetch(ctx context.Context, body []byte) (result
 	}
 	for index, token := range tokens {
 		outcome, ok := byStart[token.start]
+		if ok {
+			result.Metrics.RetryCount += outcome.retries
+		}
 		if !ok || outcome.err != nil {
 			if outcome.err != nil {
 				result.Metrics.Errors++
@@ -226,50 +247,93 @@ func (p *remoteURLPrefetcher) Prefetch(ctx context.Context, body []byte) (result
 	return result
 }
 
-func (p *remoteURLPrefetcher) fetch(ctx context.Context, raw string) (string, int, bool, error) {
+func (p *remoteURLPrefetcher) fetch(ctx context.Context, raw string) (string, int, bool, int, error) {
 	u, err := validateRemoteImageURL(raw)
 	if err != nil {
-		return "", 0, false, err
+		return "", 0, false, 0, err
 	}
 	if data, ok := p.loadCached(raw); ok {
 		mimeType := detectDownloadedImageMIME("", data)
-		return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), 0, true, nil
+		return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), 0, true, 0, nil
 	}
+	maxAttempts := p.config.RetryCount + 1
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	var lastErr error
+	retries := 0
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		value, bytesDownloaded, err := p.fetchOnce(ctx, u, raw)
+		if err == nil {
+			return value, bytesDownloaded, false, attempt, nil
+		}
+		lastErr = err
+		if attempt == maxAttempts-1 || !isRetryableRemoteImageError(err) {
+			break
+		}
+		retries++
+		delay := remoteURLRetryInitialDelay << attempt
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return "", 0, false, attempt, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return "", 0, false, retries, lastErr
+}
+
+func (p *remoteURLPrefetcher) fetchOnce(ctx context.Context, u *url.URL, raw string) (string, int, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, p.config.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return "", 0, false, err
+		return "", 0, permanentRemoteImageError{err: err}
 	}
 	req.Header.Set("Accept", "image/avif,image/webp,image/png,image/jpeg;q=0.9,*/*;q=0.1")
 	req.Header.Set("User-Agent", "Sub2API-AttachmentGateway/1")
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", 0, false, err
+		return "", 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", 0, false, fmt.Errorf("remote image returned HTTP %s", resp.Status)
+		return "", 0, remoteImageHTTPError{status: resp.StatusCode}
 	}
 	if resp.ContentLength > int64(p.config.MaxImageBytes) {
-		return "", 0, false, errImageTooLarge
+		return "", 0, permanentRemoteImageError{err: errImageTooLarge}
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(p.config.MaxImageBytes)+1))
 	if err != nil {
-		return "", 0, false, err
+		return "", len(data), err
 	}
 	if len(data) == 0 || len(data) > p.config.MaxImageBytes {
-		return "", len(data), false, errImageTooLarge
+		return "", len(data), permanentRemoteImageError{err: errImageTooLarge}
 	}
 	mimeType := detectDownloadedImageMIME(resp.Header.Get("Content-Type"), data)
 	if mimeType == "" {
-		return "", len(data), false, errUnsupportedMediaType
+		return "", len(data), permanentRemoteImageError{err: errUnsupportedMediaType}
 	}
 	if _, _, _, err := decodeImage(data, mimeType, p.config.MaxPixels); err != nil {
-		return "", len(data), false, err
+		return "", len(data), permanentRemoteImageError{err: err}
 	}
 	p.storeCached(raw, data)
-	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), len(data), false, nil
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), len(data), nil
+}
+
+func isRetryableRemoteImageError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var statusErr remoteImageHTTPError
+	if errors.As(err, &statusErr) {
+		return statusErr.status == http.StatusRequestTimeout || statusErr.status == http.StatusTooEarly || statusErr.status == http.StatusTooManyRequests || statusErr.status >= http.StatusInternalServerError
+	}
+	var permanent permanentRemoteImageError
+	return !errors.As(err, &permanent)
 }
 
 func (p *remoteURLPrefetcher) cachePath(raw string) string {

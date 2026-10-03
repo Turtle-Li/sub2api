@@ -613,6 +613,19 @@ func (g *Gateway) optimizeImage(
 		if err != nil {
 			return cacheLookup{}, err
 		}
+		// Treat the production libwebp encoder's output that cannot be decoded or
+		// changes dimensions as unsafe. Optimize is fail-open, so the original
+		// image remains available to OpenAI instead of forwarding a corrupt or
+		// unexpectedly resized one. Test encoders intentionally return sentinels.
+		if _, productionEncoder := g.encoder.(libwebpEncoder); productionEncoder {
+			_, candidateWidth, candidateHeight, err := decodeImage(encoded, "image/webp", g.config.MaxPixels)
+			if err != nil || candidateWidth != width || candidateHeight != height {
+				if err == nil {
+					err = fmt.Errorf("attachment gateway: encoded image dimensions changed from %dx%d to %dx%d", width, height, candidateWidth, candidateHeight)
+				}
+				return cacheLookup{}, fmt.Errorf("attachment gateway: validate encoded image: %w", err)
+			}
+		}
 		if err := workCtx.Err(); err != nil {
 			return cacheLookup{}, err
 		}

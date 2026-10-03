@@ -1090,14 +1090,17 @@ type AttachmentGatewayConfig struct {
 	// ExternalURLPrefetchEnabled downloads scoped HTTPS image URLs before the
 	// existing optimizer and R2 externalizer. It remains opt-in separately from
 	// inline-image URL rewriting because it performs outbound fetches.
-	ExternalURLPrefetchEnabled     bool   `mapstructure:"external_url_prefetch_enabled"`
-	URLDownloadTimeoutMilliseconds int    `mapstructure:"url_download_timeout_ms"`
-	URLRewriteMinBodyBytes         int    `mapstructure:"url_rewrite_min_body_bytes"`
-	URLRewriteMaxImagesPerRequest  int    `mapstructure:"url_rewrite_max_images_per_request"`
-	URLUploadTimeoutMilliseconds   int    `mapstructure:"url_upload_timeout_ms"`
-	URLObjectPrefix                string `mapstructure:"url_object_prefix"`
-	URLCacheTTLSeconds             int    `mapstructure:"url_cache_ttl_seconds"`
-	MaxConcurrentURLUploads        int    `mapstructure:"max_concurrent_url_uploads"`
+	ExternalURLPrefetchEnabled     bool `mapstructure:"external_url_prefetch_enabled"`
+	URLDownloadTimeoutMilliseconds int  `mapstructure:"url_download_timeout_ms"`
+	// URLDownloadRetryCount bounds transient remote-image retries inside the
+	// existing download timeout. Permanent validation failures are never retried.
+	URLDownloadRetryCount         int    `mapstructure:"url_download_retry_count"`
+	URLRewriteMinBodyBytes        int    `mapstructure:"url_rewrite_min_body_bytes"`
+	URLRewriteMaxImagesPerRequest int    `mapstructure:"url_rewrite_max_images_per_request"`
+	URLUploadTimeoutMilliseconds  int    `mapstructure:"url_upload_timeout_ms"`
+	URLObjectPrefix               string `mapstructure:"url_object_prefix"`
+	URLCacheTTLSeconds            int    `mapstructure:"url_cache_ttl_seconds"`
+	MaxConcurrentURLUploads       int    `mapstructure:"max_concurrent_url_uploads"`
 	// RequestBudgetEnabled adds privacy-safe aggregate attachment accounting.
 	// RequestBudgetEnforce remains a separate explicit gate for 413 responses.
 	RequestBudgetEnabled bool `mapstructure:"request_budget_enabled"`
@@ -1145,6 +1148,10 @@ type AttachmentGatewayConfig struct {
 // request-local attachment scan. Larger values provide no practical benefit on
 // a 100 MB ingress, but can multiply decode, cache and object-storage work.
 const AttachmentGatewayMaxImagesPerRequest = 256
+
+// AttachmentGatewayMaxURLDownloadRetries prevents a remote origin from
+// multiplying request latency without an explicit bounded cap.
+const AttachmentGatewayMaxURLDownloadRetries = 5
 
 const (
 	ImageConcurrencyOverflowModeReject = "reject"
@@ -2785,6 +2792,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.external_url_prefetch_enabled", false)
 	viper.SetDefault("gateway.attachment_gateway.url_download_timeout_ms", 15_000)
+	viper.SetDefault("gateway.attachment_gateway.url_download_retry_count", 2)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_min_body_bytes", 512*1024)
 	viper.SetDefault("gateway.attachment_gateway.url_rewrite_max_images_per_request", 50)
 	viper.SetDefault("gateway.attachment_gateway.url_upload_timeout_ms", 60_000)
@@ -3884,6 +3892,9 @@ func (c *Config) Validate() error {
 			}
 			if attachment.ExternalURLPrefetchEnabled && attachment.URLDownloadTimeoutMilliseconds <= 0 {
 				return fmt.Errorf("gateway.attachment_gateway.url_download_timeout_ms must be positive")
+			}
+			if attachment.URLDownloadRetryCount < 0 || attachment.URLDownloadRetryCount > AttachmentGatewayMaxURLDownloadRetries {
+				return fmt.Errorf("gateway.attachment_gateway.url_download_retry_count must be between 0 and %d", AttachmentGatewayMaxURLDownloadRetries)
 			}
 		}
 		if attachment.RequestBudgetEnforce && !attachment.RequestBudgetEnabled {

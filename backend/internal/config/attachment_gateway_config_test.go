@@ -17,6 +17,7 @@ func TestAttachmentGatewayDefaultsAreSafeAndDisabled(t *testing.T) {
 	require.False(t, attachment.URLRewriteEnabled)
 	require.False(t, attachment.ExternalURLPrefetchEnabled)
 	require.Equal(t, 15_000, attachment.URLDownloadTimeoutMilliseconds)
+	require.Equal(t, 2, attachment.URLDownloadRetryCount)
 	require.Equal(t, 512*1024, attachment.URLRewriteMinBodyBytes)
 	require.Equal(t, 50, attachment.URLRewriteMaxImagesPerRequest)
 	require.Equal(t, 60_000, attachment.URLUploadTimeoutMilliseconds)
@@ -76,6 +77,9 @@ func TestAttachmentGatewayURLRewriteUsesRuntimeStorageAndValidatesSafeValues(t *
 	attachment.URLUploadTimeoutMilliseconds = 0
 	require.ErrorContains(t, cfg.Validate(), "url_upload_timeout_ms")
 	attachment.URLUploadTimeoutMilliseconds = 60_000
+	attachment.URLDownloadRetryCount = AttachmentGatewayMaxURLDownloadRetries + 1
+	require.ErrorContains(t, cfg.Validate(), "url_download_retry_count")
+	attachment.URLDownloadRetryCount = 2
 	attachment.ExternalURLPrefetchEnabled = true
 	attachment.URLDownloadTimeoutMilliseconds = 0
 	require.ErrorContains(t, cfg.Validate(), "url_download_timeout_ms")

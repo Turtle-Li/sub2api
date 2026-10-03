@@ -272,6 +272,13 @@ gateway:
     # HTTPS URL 替换 data URL；不复用备份或 image_storage 凭证。
     # 仅 scoped rewrite 生效；dry-run 绝不写对象存储。
     url_rewrite_enabled: false
+    # Optional scoped prefetch of third-party HTTPS image URLs. A failed
+    # download is fail-open and leaves the original URL for OpenAI.
+    # 第三方 HTTPS 图片预取失败时保持原 URL 继续交给 OpenAI。
+    external_url_prefetch_enabled: false
+    url_download_timeout_ms: 15000
+    # Retries only transient network/408/425/429/5xx failures; 0 disables.
+    url_download_retry_count: 2
     url_rewrite_min_body_bytes: 524288
     # R2 externalization has its own per-request image cap and does not change
     # the compression cap configured by max_images_per_request below.
