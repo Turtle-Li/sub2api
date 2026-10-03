@@ -730,6 +730,21 @@
 	        </section>
 	        <section class="space-y-3">
 	          <div class="flex flex-wrap items-center justify-between gap-3">
+	            <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('batchImage.guide.apiTitle') }}</h3>
+	            <button type="button" class="btn btn-secondary btn-sm" @click="copyApiGuide">
+	              <Icon name="copy" size="sm" class="mr-1.5" />
+	              {{ t('batchImage.actions.copyApiGuide') }}
+	            </button>
+	          </div>
+	          <p class="text-sm leading-6 text-gray-600 dark:text-gray-300">{{ t('batchImage.guide.apiDesc') }}</p>
+	          <textarea
+	            :value="apiGuideInstruction"
+	            readonly
+	            class="min-h-[360px] w-full resize-y rounded-md border border-gray-200 bg-gray-50 p-4 font-mono text-sm leading-6 text-gray-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 dark:border-dark-600 dark:bg-dark-900 dark:text-gray-100 dark:focus:border-primary-500 dark:focus:ring-primary-900/40"
+	          />
+	        </section>
+	        <section class="space-y-3">
+	          <div class="flex flex-wrap items-center justify-between gap-3">
 	            <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('batchImage.guide.skillTitle') }}</h3>
 	            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('batchImage.guide.skillDesc') }}</p>
 	          </div>
@@ -1043,7 +1058,7 @@ const endpointBase = computed(() => {
   const configured = appStore.apiBaseUrl?.trim()
   if (configured) return configured.replace(/\/+$/, '')
   if (typeof window !== 'undefined') return window.location.origin.replace(/\/+$/, '')
-  return '<你的 Sub2API API 端点>'
+  return '<你的中转 API 端点>'
 })
 
 const selectedModelReferenceLimit = computed(() => referenceImageLimitForModel(form.model))
@@ -1083,8 +1098,71 @@ function referenceImageLimitForModel(model: string) {
   return 0
 }
 
+const apiGuideInstruction = computed(() => `# 图片接口调用说明
+
+将 https://relay.example.com 替换成中转服务地址，将 sk-... 替换成你的 API Key。
+
+## 1. 同步生成
+
+POST /v1/images/generations
+
+适合单张或少量图片；请求保持 OpenAI Images 兼容格式。JSON 示例：
+
+{
+  "model": "gpt-image-1",
+  "prompt": "一座冬季暴风雪中的灯塔",
+  "size": "1536x1024",
+  "quality": "high",
+  "n": 1
+}
+
+JSON 请求的 n > 1 可能自动返回异步任务 envelope；需要明确的 202 + task_id 响应时，请直接使用下面的显式异步接口。
+
+## 2. 异步单任务
+
+POST /v1/images/generations/async
+GET  /v1/images/tasks/{task_id}
+
+异步接口接受与同步生成相同的 JSON 或 multipart 请求，先返回 task_id，再使用同一个 API Key 查询。适合单次请求较慢或 n 大于 1 的场景。
+
+## 3. 批量任务
+
+GET  /v1/images/batches/models
+POST /v1/images/batches
+GET  /v1/images/batches
+GET  /v1/images/batches/{id}
+GET  /v1/images/batches/{id}/items
+GET  /v1/images/batches/{id}/items/{custom_id}/content
+GET  /v1/images/batches/{id}/result-files
+GET  /v1/images/batches/{id}/download
+POST /v1/images/batches/{id}/cancel
+DELETE /v1/images/batches/{id}
+DELETE /v1/images/batches/{id}/outputs
+
+批量请求把不同 prompt 放进 items，每个 item 可以设置 output_count 和 reference_images：
+
+{
+  "model": "gpt-image-2",
+  "task_name": "产品海报",
+  "image_size": "1K",
+  "response_mime_type": "image/png",
+  "items": [
+    {"custom_id": "poster_001", "prompt": "白底产品海报", "output_count": 1},
+    {"custom_id": "poster_002", "prompt": "深色产品海报", "output_count": 2}
+  ]
+}
+
+每个批量任务都是可查询、可取消、可重试失败项的独立任务。1K/2K/4K 的单任务输出上限分别为 50/15/10 张；超过上限请拆分任务。批量结果优先使用 result-files 返回的短时地址，在本地解析并打包 ZIP。
+
+可以用 Idempotency-Key 避免网络重试造成重复提交；列表支持 status、task_name、downloaded、from、to 和 cursor 筛选，明细支持 status、limit 和 cursor。
+
+所有请求都要携带：
+Authorization: Bearer sk-...
+Content-Type: application/json
+`)
+
 const agentInstruction = computed(() => `---
-name: sub2api-batch-image
+name: relay-batch-image
 description: 当用户希望用 Gemini/Vertex 或 OpenAI/Image 2.5 批量生成图片、批量跑提示词、下载批量生图结果、重试失败图片时使用。
 ---
 
@@ -1141,8 +1219,8 @@ API 调用规范：
 - output_count 表示同一 prompt 和参考图重复生成几张，默认 1，每条最多 4；这不依赖上游单次请求返回多图，而是系统展开成多个真实任务项。提交前必须按分辨率确认预计输出图总数不超过 1K=50、2K=15、4K=10，超过就拆分成多组任务。
 - 1K/2K/4K 是最终交付档位。Gemini 与 gpt-image-* 批量任务都先生成 1K 源图；2K/4K 再进入公共超分流程，并按请求档位计费。
 - 当前对用户的批量生图计费仍按成功输出图片数量结算，不单独对参考图加价。可以向用户说明：参考图会产生少量上游输入 token 和临时存储成本，且会随 output_count 重复计算；页面显示的冻结/结算金额按输出图片数量计算。
-- 任务完成后，先调用 result-files 获取短时、只读、精确对象的私有 COS JSONL 下载地址。在本机直接下载并解析 JSONL、Base64 解码图片，并在本机生成 ZIP；图片正文不得经过 Sub2 日本服务器。
-- 请求 COS 签名地址时绝不能携带 Sub2 的 Authorization 头，必须禁止输出 verbose/trace，不得把签名地址写进日志、恢复记录、提交记录或最终回复。签名过期时重新调用已认证的 result-files，不能修改签名参数。
+- 任务完成后，先调用 result-files 获取短时、只读、精确对象的私有存储 JSONL 下载地址。在本机直接下载并解析 JSONL、Base64 解码图片，并在本机生成 ZIP；图片正文不得经过中转服务器。
+- 请求签名地址时绝不能携带中转服务的 Authorization 头，必须禁止输出 verbose/trace，不得把签名地址写进日志、恢复记录、提交记录或最终回复。签名过期时重新调用已认证的 result-files，不能修改签名参数。
 - result-files 明确返回 BATCH_IMAGE_RESULT_ARCHIVE_UNAVAILABLE 时，才使用旧的 /download 兼容接口；网络、CORS、签名或归档校验错误不得静默回退到日本服务器下载。
 - 提交成功后，必须立刻在输出目录写入本地恢复记录，例如 batch-image-resume.json。不要在恢复记录里保存 API Key。
 - 恢复记录至少包含：endpoint、task_name、batch_id、model、output_dir、request_file、submitted_at、last_status、status_url、items_url、result_files_url、legacy_download_url、prompt_count、expected_output_count，以及可用于失败重试的 custom_id 到 prompt 映射或请求 JSON 文件路径；禁止保存实际 COS 签名 URL。
@@ -2423,6 +2501,10 @@ function copyInstruction() {
   void copyToClipboard(agentInstruction.value, batchImageText('copiedInstruction'))
 }
 
+function copyApiGuide() {
+  void copyToClipboard(apiGuideInstruction.value, batchImageText('copiedApiGuide'))
+}
+
 function statusLabel(jobOrStatus: BatchImageStatus | Pick<BatchImageJob, 'status' | 'success_count' | 'fail_count'>) {
   const status = typeof jobOrStatus === 'string' ? jobOrStatus : jobOrStatus.status
   if (typeof jobOrStatus !== 'string' && status === 'completed' && jobOrStatus.fail_count > 0) {
@@ -2554,8 +2636,9 @@ type BatchImageTextKey =
   | 'deleted'
   | 'deleteFailed'
 	  | 'loadItemsFailed'
-	  | 'loadPreviewFailed'
+  | 'loadPreviewFailed'
   | 'copiedInstruction'
+  | 'copiedApiGuide'
   | 'loadingModels'
   | 'noModels'
   | 'noModelsHint'

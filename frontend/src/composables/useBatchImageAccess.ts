@@ -9,10 +9,10 @@ const hasAllowedBatchImageKey = ref(false)
 let pendingLoad: Promise<boolean> | null = null
 const pageSize = 100
 
-function keyAllowsBatchImage(key: ApiKey): boolean {
+export function keyAllowsBatchImage(key: ApiKey): boolean {
   return (
     key.status === 'active' &&
-    key.group?.platform === 'gemini' &&
+    (key.group?.platform === 'gemini' || key.group?.platform === 'openai') &&
     key.group?.allow_batch_image_generation === true
   )
 }
