@@ -28,6 +28,10 @@ var openAIModelBillingPolicies = map[string]openAIModelBillingPolicy{
 		modelPriceMultiplier:        1,
 		hiddenConsumptionMultiplier: 1.8,
 	},
+	"gpt-6.1-sol": {
+		modelPriceMultiplier:        1,
+		hiddenConsumptionMultiplier: 2,
+	},
 	"gpt-5.6-luna": {
 		officialInputPrice:          0.2e-6,
 		officialOutputPrice:         1.2e-6,

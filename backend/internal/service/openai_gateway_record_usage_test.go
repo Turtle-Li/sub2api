@@ -450,6 +450,7 @@ func TestOpenAIGatewayServiceRecordUsage_HiddenConsumptionLogMatchesAtomicWallet
 	}{
 		{name: "astra", model: "gpt-6-astra", inputPrice: 10e-6, outputPrice: 50e-6, read: 1e-6, consumptionMultiplier: 1.5},
 		{name: "sol", model: "gpt-6-sol", inputPrice: 2e-6, outputPrice: 10e-6, read: 0.2e-6, consumptionMultiplier: 1.8},
+		{name: "sol-61", model: "gpt-6.1-sol", inputPrice: 2e-6, outputPrice: 10e-6, read: 0.1e-6, consumptionMultiplier: 2},
 		{name: "gpt-5.6-luna", model: "gpt-5.6-luna", inputPrice: 0.5e-6, outputPrice: 3e-6, read: 0.05e-6, consumptionMultiplier: 1.5},
 		{name: "gpt-6-luna", model: "gpt-6-luna", inputPrice: 0.25e-6, outputPrice: 1.25e-6, read: 0.025e-6, consumptionMultiplier: 1.5},
 	} {

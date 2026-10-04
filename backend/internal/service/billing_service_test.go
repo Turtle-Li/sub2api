@@ -1997,7 +1997,7 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 			input, output, write, read float64
 			consumptionMultiplier      float64
 		}{
-			{"gpt-6.1-sol", 2e-6, 10e-6, 2.5e-6, 0.1e-6, 1.0},
+			{"gpt-6.1-sol", 2e-6, 10e-6, 2.5e-6, 0.1e-6, 2.0},
 			{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, 0.2e-6, 1.8},
 			{"gpt-6-luna", 0.25e-6, 1.25e-6, 0.3125e-6, 0.025e-6, 1.5},
 		} {
@@ -2098,6 +2098,15 @@ func TestOpenAIConsumptionMultiplierRecognizesSelectedModelVariants(t *testing.T
 			"gpt-6-sol-xhigh",
 			"gpt-6-sol-max",
 			"openai/gpt-6-sol-openai-compact",
+		}},
+		{2.0, []string{
+			"gpt-6.1-sol",
+			"gpt-6.1-sol-low",
+			"gpt-6.1-sol-medium",
+			"gpt-6.1-sol-high",
+			"gpt-6.1-sol-xhigh",
+			"gpt-6.1-sol-max",
+			"openai/gpt-6.1-sol-openai-compact",
 		}},
 		{1.5, []string{
 			"gpt-5.6-luna",
