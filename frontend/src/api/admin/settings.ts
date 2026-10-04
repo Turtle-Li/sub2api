@@ -1687,6 +1687,8 @@ export const settingsAPI = {
   updateOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
+  getOpenAIModelBillingSettings,
+  updateOpenAIModelBillingSettings,
   getPanelRateLimitSettings,
   updatePanelRateLimitSettings,
   getPricingCurrencySettings,

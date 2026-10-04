@@ -12450,7 +12450,7 @@ async function loadOpenAIModelBillingSettings() {
       await adminAPI.settings.getOpenAIModelBillingSettings();
     openaiModelBillingForm.models = Object.entries(settings.multipliers)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([model, multiplier]) => ({ model, multiplier }));
+      .map(([model, multiplier]) => ({ model, multiplier: Number(multiplier) }));
   } catch (_error: unknown) {
     // Keep the empty form when the optional runtime settings endpoint is unavailable.
   } finally {
@@ -12473,7 +12473,7 @@ async function saveOpenAIModelBillingSettings() {
     const updated = await adminAPI.settings.updateOpenAIModelBillingSettings({ multipliers });
     openaiModelBillingForm.models = Object.entries(updated.multipliers)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([model, multiplier]) => ({ model, multiplier }));
+      .map(([model, multiplier]) => ({ model, multiplier: Number(multiplier) }));
     appStore.showSuccess(t("admin.settings.openaiModelBilling.saved"));
   } catch (error: unknown) {
     appStore.showError(
