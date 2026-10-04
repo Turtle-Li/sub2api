@@ -203,6 +203,81 @@
 
         <!-- Tab: Gateway -->
         <div v-show="activeTab === 'gateway'" class="space-y-6">
+          <!-- OpenAI model-level internal billing multipliers -->
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.openaiModelBilling.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.openaiModelBilling.description") }}
+              </p>
+            </div>
+            <div class="space-y-4 p-6">
+              <div v-if="openaiModelBillingLoading" class="flex items-center gap-2 text-gray-500">
+                <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>
+                {{ t("common.loading") }}
+              </div>
+              <template v-else>
+                <div
+                  v-for="(entry, index) in openaiModelBillingForm.models"
+                  :key="`${entry.model}-${index}`"
+                  class="grid grid-cols-1 gap-3 rounded-lg border border-gray-200 p-4 dark:border-dark-600 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end"
+                >
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.openaiModelBilling.model") }}
+                    </label>
+                    <input
+                      v-model="entry.model"
+                      type="text"
+                      class="input w-full"
+                      :placeholder="t('admin.settings.openaiModelBilling.modelPlaceholder')"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.openaiModelBilling.multiplier") }}
+                    </label>
+                    <input
+                      v-model.number="entry.multiplier"
+                      type="number"
+                      min="0.01"
+                      max="100"
+                      step="0.01"
+                      class="input w-full"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm text-red-600 hover:text-red-700 dark:text-red-400"
+                    @click="openaiModelBillingForm.models.splice(index, 1)"
+                  >
+                    {{ t("common.delete") }}
+                  </button>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    @click="openaiModelBillingForm.models.push({ model: '', multiplier: 1 })"
+                  >
+                    {{ t("admin.settings.openaiModelBilling.addModel") }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="openaiModelBillingSaving"
+                    @click="saveOpenAIModelBillingSettings"
+                  >
+                    <span v-if="openaiModelBillingSaving" class="mr-1 inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-white"></span>
+                    {{ openaiModelBillingSaving ? t("common.saving") : t("common.save") }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+
           <!-- Overload Cooldown (529) Settings -->
           <div class="card">
             <div
@@ -9078,6 +9153,7 @@ import type {
   WebSearchEmulationConfig,
   WebSearchProviderConfig,
   WebSearchTestResult,
+  OpenAIModelBillingSettings,
   PaymentVisibleMethod,
   PaymentVisibleMethodSource,
 } from "@/api/admin/settings";
@@ -9294,6 +9370,12 @@ const overloadCooldownSaving = ref(false);
 const overloadCooldownForm = reactive({
   enabled: true,
   cooldown_minutes: 10,
+});
+
+const openaiModelBillingLoading = ref(true);
+const openaiModelBillingSaving = ref(false);
+const openaiModelBillingForm = reactive({
+  models: [] as Array<{ model: string; multiplier: number }>,
 });
 
 // Rate Limit Cooldown (429) 状态
@@ -12361,6 +12443,47 @@ async function saveOverloadCooldownSettings() {
   }
 }
 
+async function loadOpenAIModelBillingSettings() {
+  openaiModelBillingLoading.value = true;
+  try {
+    const settings: OpenAIModelBillingSettings =
+      await adminAPI.settings.getOpenAIModelBillingSettings();
+    openaiModelBillingForm.models = Object.entries(settings.multipliers)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([model, multiplier]) => ({ model, multiplier }));
+  } catch (_error: unknown) {
+    // Keep the empty form when the optional runtime settings endpoint is unavailable.
+  } finally {
+    openaiModelBillingLoading.value = false;
+  }
+}
+
+async function saveOpenAIModelBillingSettings() {
+  openaiModelBillingSaving.value = true;
+  try {
+    const multipliers: Record<string, number> = {};
+    for (const entry of openaiModelBillingForm.models) {
+      const model = entry.model.trim();
+      const multiplier = Number(entry.multiplier);
+      if (!model || !Number.isFinite(multiplier) || multiplier < 0.01 || multiplier > 100) {
+        throw new Error(t("admin.settings.openaiModelBilling.invalidEntry"));
+      }
+      multipliers[model] = multiplier;
+    }
+    const updated = await adminAPI.settings.updateOpenAIModelBillingSettings({ multipliers });
+    openaiModelBillingForm.models = Object.entries(updated.multipliers)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([model, multiplier]) => ({ model, multiplier }));
+    appStore.showSuccess(t("admin.settings.openaiModelBilling.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.openaiModelBilling.saveFailed")),
+    );
+  } finally {
+    openaiModelBillingSaving.value = false;
+  }
+}
+
 // Panel API Rate Limit 方法
 async function loadPanelRateLimitSettings() {
   panelRateLimitLoading.value = true;
@@ -13114,6 +13237,7 @@ onMounted(() => {
   loadOllamaCloudUsageSettings();
   loadOpenCodeGoUsageSettings();
   loadOverloadCooldownSettings();
+  loadOpenAIModelBillingSettings();
   loadRateLimit429CooldownSettings();
   loadPanelRateLimitSettings();
   loadStreamTimeoutSettings();

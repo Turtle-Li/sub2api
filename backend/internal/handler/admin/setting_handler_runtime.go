@@ -154,6 +154,43 @@ func (h *SettingHandler) UpdateRateLimit429CooldownSettings(c *gin.Context) {
 	})
 }
 
+// GetOpenAIModelBillingSettings returns effective per-model hidden consumption
+// multipliers. These values affect internal debits only.
+// GET /api/v1/admin/settings/openai-model-billing
+func (h *SettingHandler) GetOpenAIModelBillingSettings(c *gin.Context) {
+	settings, err := h.settingService.GetOpenAIModelBillingSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.OpenAIModelBillingSettings{Multipliers: settings.Multipliers})
+}
+
+type UpdateOpenAIModelBillingSettingsRequest struct {
+	Multipliers map[string]float64 `json:"multipliers"`
+}
+
+// UpdateOpenAIModelBillingSettings replaces the per-model hidden consumption
+// multiplier map and takes effect in the billing cache immediately.
+// PUT /api/v1/admin/settings/openai-model-billing
+func (h *SettingHandler) UpdateOpenAIModelBillingSettings(c *gin.Context) {
+	var req UpdateOpenAIModelBillingSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := h.settingService.UpdateOpenAIModelBillingSettings(c.Request.Context(), service.OpenAIModelBillingSettings{Multipliers: req.Multipliers}); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	updated, err := h.settingService.GetOpenAIModelBillingSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.OpenAIModelBillingSettings{Multipliers: updated.Multipliers})
+}
+
 func (h *SettingHandler) GetOpenAIImagesOAuthUnavailableCooldownSettings(c *gin.Context) {
 	settings, err := h.settingService.GetOpenAIImagesOAuthUnavailableCooldownSettings(c.Request.Context())
 	if err != nil {

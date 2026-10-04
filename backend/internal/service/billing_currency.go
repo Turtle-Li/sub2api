@@ -19,6 +19,7 @@ func ProvideCurrencyAwareBillingService(cfg *config.Config, pricing *PricingServ
 	}
 	s.currencyPolicy.Store(policy)
 	s.currencyPolicyProvider = settings.GetPricingCurrencySettings
+	s.SetSettingService(settings)
 	return s, nil
 }
 

@@ -630,6 +630,11 @@ const (
 	// anthropic-beta header.
 	SettingKeyOpenAIFastPolicySettings = "openai_fast_policy_settings"
 
+	// SettingKeyOpenAIModelBillingSettings stores per-model hidden consumption
+	// multipliers. These affect internal debits only; customer-facing model
+	// component prices remain controlled by the code-level pricing policy.
+	SettingKeyOpenAIModelBillingSettings = "openai_model_billing_settings"
+
 	// =========================
 	// Claude Code Version Check
 	// =========================

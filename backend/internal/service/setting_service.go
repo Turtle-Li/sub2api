@@ -151,6 +151,12 @@ type SettingService struct {
 	pricingCurrencySettingsCache atomic.Value // *cachedPricingCurrencySettings
 	pricingCurrencySettingsSF    singleflight.Group
 
+	// openAIModelBillingSettingsCache keeps per-model hidden consumption
+	// multipliers out of the billing hot path's database calls. Updates store a
+	// fresh entry immediately; other processes refresh within the short TTL.
+	openAIModelBillingSettingsCache atomic.Value // *cachedOpenAIModelBillingSettings
+	openAIModelBillingSettingsSF    singleflight.Group
+
 	// openAIQuotaAutoPauseSettingsCache holds the most recently observed quota auto-pause
 	// settings. GetOpenAIQuotaAutoPauseSettings reads this atomic.Value on the request hot
 	// path without ever blocking on the DB; when the cached entry expires, a background

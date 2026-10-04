@@ -1374,6 +1374,30 @@ export async function updateRateLimit429CooldownSettings(
   return data;
 }
 
+// ==================== OpenAI Model Billing Settings ====================
+
+export interface OpenAIModelBillingSettings {
+  /** Effective hidden internal debit multiplier keyed by canonical model name. */
+  multipliers: Record<string, number>
+}
+
+export async function getOpenAIModelBillingSettings(): Promise<OpenAIModelBillingSettings> {
+  const { data } = await apiClient.get<OpenAIModelBillingSettings>(
+    '/admin/settings/openai-model-billing',
+  )
+  return data
+}
+
+export async function updateOpenAIModelBillingSettings(
+  settings: OpenAIModelBillingSettings,
+): Promise<OpenAIModelBillingSettings> {
+  const { data } = await apiClient.put<OpenAIModelBillingSettings>(
+    '/admin/settings/openai-model-billing',
+    settings,
+  )
+  return data
+}
+
 // ==================== Panel Rate Limit Settings ====================
 
 /**

@@ -232,8 +232,11 @@ func applyCostBreakdownMultiplier(cost *CostBreakdown, multiplier float64) {
 // consumption without changing the component costs used to display official
 // per-token prices. TotalCost is the adjusted pre-group cost, while ActualCost
 // stays exactly equal to the amount later deducted after the group/user rate.
-func applyOpenAIConsumptionMultiplier(model string, cost *CostBreakdown) {
+func (s *BillingService) applyOpenAIConsumptionMultiplier(model string, cost *CostBreakdown) {
 	multiplier := openAIConsumptionMultiplier(model)
+	if s != nil && s.settingService != nil {
+		multiplier = s.settingService.OpenAIConsumptionMultiplier(model)
+	}
 	if cost == nil || multiplier == 1 {
 		return
 	}
@@ -354,12 +357,22 @@ type BillingService struct {
 	currencyPolicyProvider func(context.Context) (PricingCurrencySettings, error)
 	cfg                    *config.Config
 	pricingService         *PricingService
+	settingService         *SettingService
 	fallbackPrices         map[string]*ModelPricing // 硬编码回退价格
 
 	// fallbackWarnSeen 记录已打过 fallback 警告日志的(已小写化)模型名,
 	// 让 "[Billing] Using fallback pricing" 每个模型每进程最多打一条,
 	// 避免热路径上每请求刷屏(issue #3394)。零值即可用,无需在构造函数初始化。
 	fallbackWarnSeen sync.Map
+}
+
+// SetSettingService attaches the runtime settings source used by model-level
+// internal billing multipliers. Legacy test constructors may leave it nil and
+// continue to use the built-in defaults.
+func (s *BillingService) SetSettingService(settingService *SettingService) {
+	if s != nil {
+		s.settingService = settingService
+	}
 }
 
 // NewBillingService 创建计费服务实例
@@ -1523,7 +1536,7 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (result *CostBrea
 		breakdown := s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongContextBilling)
 		applyCostBreakdownMultiplier(breakdown, reasoningEffortBillingMultiplier(input.ReasoningEffort, pricing.ReasoningEffortMultipliers))
 		if !input.referenceModelCost && !input.suppressHiddenConsumption {
-			applyOpenAIConsumptionMultiplier(input.Model, breakdown)
+			s.applyOpenAIConsumptionMultiplier(input.Model, breakdown)
 		}
 		return breakdown, nil
 	}
@@ -1560,7 +1573,7 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (result *CostBrea
 			breakdown.BillingMode = string(BillingModeToken)
 		}
 		if !input.referenceModelCost && !input.suppressHiddenConsumption {
-			applyOpenAIConsumptionMultiplier(input.Model, breakdown)
+			s.applyOpenAIConsumptionMultiplier(input.Model, breakdown)
 		}
 	}
 	return breakdown, err
@@ -1866,7 +1879,7 @@ func (s *BillingService) calculateCostInternalWithPolicy(
 	}
 
 	breakdown := s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, longContextBillingEnabled)
-	applyOpenAIConsumptionMultiplier(model, breakdown)
+	s.applyOpenAIConsumptionMultiplier(model, breakdown)
 	return breakdown, nil
 }
 

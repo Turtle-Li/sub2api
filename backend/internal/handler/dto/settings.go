@@ -502,6 +502,12 @@ type PricingCurrencySettings struct {
 	USDToCNYRate       float64 `json:"usd_to_cny_rate"`
 }
 
+// OpenAIModelBillingSettings contains effective per-model internal debit
+// multipliers. It intentionally excludes public component-price adjustments.
+type OpenAIModelBillingSettings struct {
+	Multipliers map[string]float64 `json:"multipliers"`
+}
+
 // StreamTimeoutSettings 流超时处理配置 DTO
 type StreamTimeoutSettings struct {
 	Enabled                bool   `json:"enabled"`

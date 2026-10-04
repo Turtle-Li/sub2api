@@ -1143,6 +1143,17 @@ export default {
         saved: '过载冷却设置保存成功',
         saveFailed: '保存过载冷却设置失败'
       },
+      openaiModelBilling: {
+        title: 'OpenAI 模型内部扣费倍率',
+        description: '按单独模型调整内部扣费总额；不会改变模型对外展示的单价。修改保存后立即对新请求生效。',
+        model: '模型名称',
+        modelPlaceholder: '例如：gpt-6.1-sol',
+        multiplier: '内部倍率',
+        addModel: '添加模型',
+        invalidEntry: '模型名称不能为空，倍率必须在 0.01 到 100 之间',
+        saved: 'OpenAI 模型内部扣费倍率已保存',
+        saveFailed: '保存 OpenAI 模型内部扣费倍率失败'
+      },
       rateLimit429Cooldown: {
         title: '429 默认回避',
         description: '配置上游返回 429 且没有明确重置时间时的默认账号回避策略',

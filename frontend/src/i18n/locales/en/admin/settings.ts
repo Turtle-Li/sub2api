@@ -1149,6 +1149,17 @@ export default {
         saved: 'Overload cooldown settings saved',
         saveFailed: 'Failed to save overload cooldown settings'
       },
+      openaiModelBilling: {
+        title: 'OpenAI Model Internal Billing Multipliers',
+        description: 'Adjust internal debit totals per model without changing customer-facing model prices. Changes apply to new requests immediately.',
+        model: 'Model name',
+        modelPlaceholder: 'For example: gpt-6.1-sol',
+        multiplier: 'Internal multiplier',
+        addModel: 'Add model',
+        invalidEntry: 'Model names are required and multipliers must be between 0.01 and 100',
+        saved: 'OpenAI model billing multipliers saved',
+        saveFailed: 'Failed to save OpenAI model billing multipliers'
+      },
       rateLimit429Cooldown: {
         title: '429 Default Cooldown',
         description: 'Configure the default account cooldown when upstream returns 429 without an explicit reset time',
