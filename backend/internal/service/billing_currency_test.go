@@ -174,8 +174,12 @@ func TestBillingCurrencyDirectOpenAIRateBoundaries(t *testing.T) {
 		{"openai-usd-wallet", PlatformOpenAI, SubscriptionTypeStandard, "USD", "USD", false, 1},
 		{"openai-subscription", PlatformOpenAI, SubscriptionTypeSubscription, "CNY", "USD", true, 1},
 		{"subscription-wallet-fallback", PlatformOpenAI, SubscriptionTypeSubscription, "CNY", "CNY", false, 6.75},
+		{"anthropic-wallet", PlatformAnthropic, SubscriptionTypeStandard, "CNY", "CNY", false, 1},
+		{"anthropic-subscription", PlatformAnthropic, SubscriptionTypeSubscription, "CNY", "USD", true, 1},
+		{"anthropic-subscription-wallet-fallback", PlatformAnthropic, SubscriptionTypeSubscription, "CNY", "CNY", false, 6.75},
 		{"gemini", PlatformGemini, SubscriptionTypeStandard, "CNY", "CNY", false, 6.75},
-		{"kimi", PlatformAnthropic, SubscriptionTypeStandard, "CNY", "CNY", false, 6.75},
+		{"kimi", PlatformKimi, SubscriptionTypeStandard, "CNY", "CNY", false, 6.75},
+		{"deepseek", PlatformDeepseek, SubscriptionTypeStandard, "CNY", "CNY", false, 6.75},
 		{"missing-type", PlatformOpenAI, "", "CNY", "CNY", false, 6.75},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

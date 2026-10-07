@@ -110,7 +110,8 @@
   original USD reference-price number directly times the existing multiplier;
   rate 0.25 means 1 reference unit debits 0.25 internal units, so a `¥500`
   recharge credits 500 units and buys 2000 reference units before bonuses. No
-  extra FX or new setting.
+  extra FX or new setting. Standard Anthropic/Claude groups follow the same
+  direct rule since 2026-10-07.
   Read the correction in `docs/PRICING_CURRENCY_20260912.md`; subscription groups
   and other platforms retain the initial rules. Deploy compatible code and
   drain old binaries before raising the group rate; rollback must preserve this

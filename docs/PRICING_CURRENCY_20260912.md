@@ -140,6 +140,15 @@ retain their current numeric normalization rules. Catalog prices are not
 rewritten. Existing wallet values have already been rescaled and must never be
 multiplied again.
 
+### Owner extension: standard Anthropic wallet rate (2026-10-07)
+
+The owner confirmed that standard (metered) Anthropic/Claude groups follow the
+same direct rule as standard OpenAI groups: USD reference prices times the
+group multiplier, with no extra `USDToCNYRate` multiplication. The shared usage
+finalization and in-flight reservation estimate apply it. Anthropic
+subscription groups (including wallet fallback) and all other provider
+platforms keep the rules above.
+
 ### Batch Image provider split
 
 The batch image snapshot follows the same boundary, but also separates the

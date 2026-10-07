@@ -138,19 +138,21 @@ func TestInflightEstimate_UsesWalletSettlementCurrency(t *testing.T) {
 	require.NoError(t, err)
 	rawUSD := 1000*pricing.InputPricePerToken + 1000*pricing.OutputPricePerToken
 
-	anthropicKey := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{
-		ID: groupID, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1,
+	geminiKey := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{
+		ID: groupID, Platform: PlatformGemini, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1,
 	}}
-	est, priced := svc.EstimateInflightReservation(context.Background(), anthropicKey, req)
+	est, priced := svc.EstimateInflightReservation(context.Background(), geminiKey, req)
 	require.True(t, priced)
-	require.InDelta(t, rawUSD*6.75, est, 1e-12, "non-OpenAI reservations must use the CNY wallet unit")
+	require.InDelta(t, rawUSD*6.75, est, 1e-12, "other platforms' reservations must use the CNY wallet unit")
 
-	openAIKey := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{
-		ID: groupID, Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1,
-	}}
-	est, priced = svc.EstimateInflightReservation(context.Background(), openAIKey, req)
-	require.True(t, priced)
-	require.InDelta(t, rawUSD, est, 1e-12, "standard OpenAI groups keep the historical CNY-per-reference-dollar convention")
+	for _, platform := range []string{PlatformOpenAI, PlatformAnthropic} {
+		key := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{
+			ID: groupID, Platform: platform, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1,
+		}}
+		est, priced = svc.EstimateInflightReservation(context.Background(), key, req)
+		require.True(t, priced)
+		require.InDelta(t, rawUSD, est, 1e-12, "standard %s groups keep the CNY-per-reference-dollar convention", platform)
+	}
 }
 
 func TestInflightEstimate_MaxReservationUSDUsesWalletSettlementCurrency(t *testing.T) {
@@ -160,19 +162,21 @@ func TestInflightEstimate_MaxReservationUSDUsesWalletSettlementCurrency(t *testi
 	svc.billingService.currencyPolicy.Store(PricingCurrencySettings{SettlementCurrency: PricingSettlementCurrencyCNY, USDToCNYRate: 6.75})
 	req := InflightEstimateRequest{Model: "claude-sonnet-4-5", BodyBytes: 400000, MaxTokens: 128000}
 
-	anthropicKey := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{
-		ID: groupID, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1,
+	geminiKey := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{
+		ID: groupID, Platform: PlatformGemini, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1,
 	}}
-	est, priced := svc.EstimateInflightReservation(context.Background(), anthropicKey, req)
+	est, priced := svc.EstimateInflightReservation(context.Background(), geminiKey, req)
 	require.True(t, priced)
 	require.InDelta(t, 6.75, est, 1e-12, "a USD-authored cap must be converted to the CNY wallet unit")
 
-	openAIKey := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{
-		ID: groupID, Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1,
-	}}
-	est, priced = svc.EstimateInflightReservation(context.Background(), openAIKey, req)
-	require.True(t, priced)
-	require.InDelta(t, 1.0, est, 1e-12, "standard OpenAI keeps its reference-dollar wallet convention")
+	for _, platform := range []string{PlatformOpenAI, PlatformAnthropic} {
+		key := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{
+			ID: groupID, Platform: platform, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1,
+		}}
+		est, priced = svc.EstimateInflightReservation(context.Background(), key, req)
+		require.True(t, priced)
+		require.InDelta(t, 1.0, est, 1e-12, "standard %s keeps its reference-dollar wallet convention", platform)
+	}
 }
 
 func TestInflightEstimate_UnpricedIsReportedAndNonMeteredIsNot(t *testing.T) {

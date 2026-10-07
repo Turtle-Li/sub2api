@@ -845,3 +845,25 @@ func TestGatewayServiceRecordUsage_CNYStandardUsesDirectOpenAIRate(t *testing.T)
 	require.InDelta(t, reference.ActualCost, billing.lastCmd.BalanceCost, 1e-8)
 	require.InDelta(t, reference.ActualCost, billing.lastCmd.APIKeyQuotaCost, 1e-8)
 }
+
+func TestGatewayServiceRecordUsage_CNYStandardUsesDirectAnthropicRate(t *testing.T) {
+	logs := &openAIRecordUsageLogRepoStub{inserted: true}
+	billing := &openAIRecordUsageBillingRepoStub{}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(logs, billing, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+	svc.billingService = currencyTestBilling("CNY")
+	usage := ClaudeUsage{InputTokens: 3000, OutputTokens: 200, CacheCreationInputTokens: 47000}
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{RequestID: "anthropic-direct-rate", Model: "claude-sonnet-4-6", Usage: usage},
+		APIKey: &APIKey{ID: 2, GroupID: i64p(10), Quota: 100, Group: &Group{ID: 10, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 2}},
+		User:   &User{ID: 1}, Account: &Account{ID: 3}, APIKeyService: &openAIRecordUsageAPIKeyQuotaStub{},
+	})
+	require.NoError(t, err)
+	reference, err := currencyTestBilling("USD").CalculateCost("claude-sonnet-4-6", UsageTokens{InputTokens: 3000, OutputTokens: 200, CacheCreationTokens: 47000}, 2)
+	require.NoError(t, err)
+	require.Positive(t, reference.ActualCost)
+	require.Equal(t, "CNY", logs.lastLog.Currency)
+	require.InDelta(t, reference.TotalCost, logs.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, reference.ActualCost, logs.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, reference.ActualCost, billing.lastCmd.BalanceCost, 1e-8)
+	require.InDelta(t, reference.ActualCost, billing.lastCmd.APIKeyQuotaCost, 1e-8)
+}

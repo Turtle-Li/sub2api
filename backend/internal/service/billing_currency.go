@@ -62,9 +62,9 @@ func subscriptionCost(cost *CostBreakdown) {
 	}
 }
 
-// Standard OpenAI groups quote USD reference prices and use their existing
-// multiplier as CNY per reference dollar. Finalize the same breakdown before
-// logging and debiting, so wallet/key/platform usage all omit the extra FX.
+// Standard OpenAI and Anthropic groups quote USD reference prices and use their
+// existing multiplier as CNY per reference dollar. Finalize the same breakdown
+// before logging and debiting, so wallet/key/platform usage all omit the extra FX.
 // Subscription groups (including wallet fallback) retain their existing units.
 func finalizeUsageCurrency(cost *CostBreakdown, key *APIKey, subscription bool) {
 	if subscription {
@@ -72,12 +72,19 @@ func finalizeUsageCurrency(cost *CostBreakdown, key *APIKey, subscription bool) 
 		return
 	}
 	if cost == nil || key == nil || key.Group == nil ||
-		key.Group.Platform != PlatformOpenAI || key.Group.SubscriptionType != SubscriptionTypeStandard ||
+		!usesDirectReferenceRate(key.Group) ||
 		cost.settlementCurrency != "CNY" || cost.settlementRate <= 0 {
 		return
 	}
 	applyCostBreakdownMultiplier(cost, 1/cost.settlementRate)
 	cost.settlementRate = 1
+}
+
+func usesDirectReferenceRate(group *Group) bool {
+	if group.SubscriptionType != SubscriptionTypeStandard {
+		return false
+	}
+	return group.Platform == PlatformOpenAI || group.Platform == PlatformAnthropic
 }
 
 func costCurrency(cost *CostBreakdown) string {
