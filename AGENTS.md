@@ -241,6 +241,13 @@
 
 ## Upstream update scope
 
+- For v0.2.14/v0.2.15, read `docs/operations/UPSTREAM_V0215_20261009.md`.
+  Preserve profile-aware protocol routing plus legacy OpenCode URL/eligibility
+  support, collection/no-credit and COMPLETED-only payment success, fixed
+  egress and internal-credit billing. Billing probes honor long Retry-After;
+  OpenCode usage refresh retains its separate 24-hour ceiling. Migration 242
+  removes only platform membership CHECKs; application validators remain required.
+
 - For the v0.2.9 and v0.2.10 merge, read
   `docs/operations/UPSTREAM_V0210_20260930.md`. Preserve the fork's payment and
   CNY settlement contracts, fixed egress and Grok relay policy, exact-N

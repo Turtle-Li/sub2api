@@ -441,9 +441,11 @@ async function onModelsUpdate(newModels: string[]) {
   const oldModels = props.entry.models
   emit('update', { ...props.entry, models: newModels })
 
-  // 只在新增模型且当前无价格时自动填充
+  // 仅在「空条目首次加入单个模型」时自动填充默认价：
+  // 条目已有模型时（即使价格留空、按各模型的官方默认价回退）追加模型不应改写整条价格，
+  // 一次加入多个模型也不应把第一个模型的价格套用到整条，否则条目内所有模型都会被静默改价。
   const addedModels = newModels.filter(m => !oldModels.includes(m))
-  if (addedModels.length === 0) return
+  if (oldModels.length !== 0 || addedModels.length !== 1) return
 
   // The catalog endpoint is USD-only. Do not silently put its USD numbers
   // into an entry authored in CNY.

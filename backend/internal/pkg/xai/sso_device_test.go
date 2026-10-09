@@ -98,6 +98,25 @@ func TestConvertSSOToBuildCompletesDeviceFlow(t *testing.T) {
 	require.Contains(t, client.cookieHeaders[len(client.cookieHeaders)-1], "session=web-session")
 	require.Contains(t, client.cookieHeaders[len(client.cookieHeaders)-1], "csrf=csrf-token")
 	require.Equal(t, 1, client.approveCalls)
+	for _, cookie := range client.cookieHeaders {
+		require.NotContains(t, cookie, "consent-token-1")
+	}
+}
+
+func TestParseSSOConsentTokenPreservesFormBoundaryAndHTMLEntities(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"encoded hidden value", `<form action="https://auth.x.ai/oauth2/device/approve"><input value='a&amp;b&#43;c' name='consent_token' type='hidden'></form>`, "a&b+c"},
+		{"case insensitive HTML", `<FORM ACTION="https://auth.x.ai/oauth2/device/approve"><INPUT TYPE="HIDDEN" NAME="consent_token" VALUE="token"/></FORM>`, "token"},
+		{"ignore unrelated form", `<form action="https://untrusted.example/approve"><input name="consent_token" value="fake"></form><form action="https://auth.x.ai/oauth2/device/approve"><input type="hidden" name="consent_token" value="real"></form>`, "real"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token, err := parseSSOConsentToken("https://accounts.x.ai/oauth2/device/consent", []byte(tc.body))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, token)
+		})
+	}
 }
 
 func TestConvertSSOToBuildRejectsMissingConsentToken(t *testing.T) {

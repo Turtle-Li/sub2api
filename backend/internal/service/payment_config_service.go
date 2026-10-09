@@ -340,6 +340,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 }
 
 func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *PaymentConfig {
+	rechargeBonusMode, _ := NormalizeRechargeBonusMode(vals[SettingRechargeBonusMode])
 	cfg := &PaymentConfig{
 		Enabled:                   vals[SettingPaymentEnabled] == "true",
 		EntryEnabled:              paymentEntryEnabledFromValue(vals[SettingPaymentEntryEnabled]),
@@ -354,6 +355,7 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		SubscriptionUSDToCNYRate:  normalizeSubscriptionUSDToCNYRate(pcParseFloat(vals[SettingSubscriptionUSDToCNYRate], 0)),
 		RechargeFeeRate:           pcParseFloat(vals[SettingRechargeFeeRate], 0),
 		RechargeBonusTiers:        parseRechargeBonusTiers(vals[SettingRechargeBonusTiers]),
+		RechargeBonusMode:         rechargeBonusMode,
 		RechargeBonusNotice:       vals[SettingRechargeBonusNotice],
 		LoadBalanceStrategy:       vals[SettingLoadBalanceStrategy],
 		ProductNamePrefix:         vals[SettingProductNamePrefix],
