@@ -1,5 +1,12 @@
 # Sub2API project operations
 
+## Multi-model provider accounts
+
+- For OpenCode / Command Code / Cline binding to model-provider groups, read
+  `docs/operations/MULTI_MODEL_ACCOUNT_GROUPS_20261009.md`. Preserve mapped-model
+  family checks, native forwarding identity, group billing/quota attribution,
+  and the separate Google-native Gemini account pool.
+
 ## Image 2.5 upscale
 
 - Before changing Image 2.5 2K/4K generation, batch result storage, the Office

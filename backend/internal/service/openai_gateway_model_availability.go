@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
 // DiagnoseModelAvailabilityForPlatform reports whether the requested model
@@ -44,7 +45,7 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(
 		ctx,
 		queryGroupID,
-		[]string{platform},
+		domain.GroupAccountPlatforms(platform),
 		includeGrouped,
 	)
 	if err != nil {
@@ -63,7 +64,7 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 		// (openai_account_scheduler.isAccountRequestCompatible): empty
 		// model_mapping accepts everything; otherwise the explicit / wildcard
 		// mapping must match.
-		if accounts[i].IsModelSupported(requestedModel) {
+		if accounts[i].SupportsGroupPlatformModel(platform, requestedModel) && accounts[i].IsModelSupported(requestedModel) {
 			diag.HasModelSupport = true
 			return diag
 		}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
 // ModelAvailabilityDiagnosis describes whether the requested model can be
@@ -73,7 +74,7 @@ func (s *GatewayService) DiagnoseModelAvailabilityForPlatform(
 	}
 
 	useMixed := platform == PlatformAnthropic || platform == PlatformGemini
-	platforms := []string{platform}
+	platforms := domain.GroupAccountPlatforms(platform)
 	if useMixed {
 		platforms = append(platforms, PlatformAntigravity)
 	}
@@ -105,7 +106,9 @@ func (s *GatewayService) DiagnoseModelAvailabilityForPlatform(
 			continue
 		}
 		diag.HasAccountsInPool = true
-		if s.isModelSupportedByAccountWithContext(ctx, &accounts[i], requestedModel) {
+		if s.isAccountAllowedForPlatform(ctx, &accounts[i], platform, useMixed, requestedModel) &&
+			s.isAccountSchedulableForNativeProtocol(ctx, &accounts[i]) &&
+			s.isModelSupportedByAccountWithContext(ctx, &accounts[i], requestedModel) {
 			diag.HasModelSupport = true
 			return diag
 		}

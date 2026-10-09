@@ -85,6 +85,33 @@ func IsGroupPlatform(id string) bool {
 	return id == PlatformComposite || IsConcretePlatform(id)
 }
 
+// IsMultiModelPlatform identifies providers whose native accounts serve models
+// from several vendors. Their identity still determines upstream forwarding.
+func IsMultiModelPlatform(id string) bool {
+	return id == PlatformOpenCodeGo || id == PlatformCommandCode || id == PlatformCline
+}
+
+// IsModelProviderPlatform excludes account-channel platforms from model-family
+// groups. Antigravity's existing opt-in mixed scheduling is handled separately.
+func IsModelProviderPlatform(id string) bool {
+	return IsConcretePlatform(id) && !IsMultiModelPlatform(id) && id != PlatformAntigravity
+}
+
+// IsGroupAccountPlatformCompatible is a binding/pool rule; request selection
+// must additionally check the resolved model family for multi-model accounts.
+func IsGroupAccountPlatformCompatible(groupPlatform, accountPlatform string) bool {
+	return groupPlatform == accountPlatform || groupPlatform == PlatformComposite ||
+		(IsModelProviderPlatform(groupPlatform) && IsMultiModelPlatform(accountPlatform))
+}
+
+func GroupAccountPlatforms(groupPlatform string) []string {
+	platforms := []string{groupPlatform}
+	if IsModelProviderPlatform(groupPlatform) {
+		platforms = append(platforms, PlatformOpenCodeGo, PlatformCommandCode, PlatformCline)
+	}
+	return platforms
+}
+
 // ConcretePlatformIDs 返回全部具体平台标识，按展示顺序。
 func ConcretePlatformIDs() []string {
 	return PlatformIDsWhere(func(PlatformSpec) bool { return true })

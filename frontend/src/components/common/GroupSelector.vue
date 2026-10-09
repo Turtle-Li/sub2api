@@ -63,6 +63,7 @@ import GroupBadge from './GroupBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { Group, GroupPlatform } from '@/types'
 import { useAuthStore } from '@/stores'
+import { isGroupAccountPlatformCompatible } from '@/constants/platforms'
 
 const { t } = useI18n()
 const authStore = useAuthStore()
@@ -101,8 +102,7 @@ const filteredGroups = computed(() => {
         (g) => g.platform === 'antigravity' || g.platform === 'anthropic' || g.platform === 'gemini' || g.platform === 'composite'
       )
     } else {
-      // 默认：只能选择同 platform 的分组；composite 分组可接收任意具体平台账号
-      result = result.filter((g) => g.platform === props.platform || g.platform === 'composite')
+      result = result.filter((g) => isGroupAccountPlatformCompatible(g.platform, props.platform!))
     }
   }
   if (isSearchable.value && searchText.value) {

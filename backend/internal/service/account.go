@@ -948,6 +948,30 @@ func (a *Account) isModelMappingSupported(requestedModel string) bool {
 	return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized)
 }
 
+// SupportsGroupPlatformModel keeps multi-model provider accounts inside the
+// model family of the group. Same-platform and composite behavior is unchanged.
+// Resolve after account mapping so aliases cannot route another vendor's model.
+func (a *Account) SupportsGroupPlatformModel(groupPlatform, requestedModel string) bool {
+	if a == nil {
+		return false
+	}
+	return a.SupportsGroupPlatformUpstreamModel(groupPlatform, a.GetMappedModel(requestedModel))
+}
+
+func (a *Account) SupportsGroupPlatformUpstreamModel(groupPlatform, upstreamModel string) bool {
+	if a == nil || !domain.IsGroupAccountPlatformCompatible(groupPlatform, a.Platform) {
+		return false
+	}
+	if a.Platform == groupPlatform || groupPlatform == PlatformComposite {
+		return true
+	}
+	if a.Type != AccountTypeAPIKey {
+		return false
+	}
+	family, ok := DetectModelPlatform(upstreamModel)
+	return ok && family == groupPlatform
+}
+
 // GetMappedModel 获取映射后的模型名（支持通配符，最长优先匹配）
 // 如果未配置 mapping，返回原始模型名
 func (a *Account) GetMappedModel(requestedModel string) string {

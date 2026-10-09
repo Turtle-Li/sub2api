@@ -3,9 +3,11 @@ package service
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"net/url"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
 var codexToolCapabilityFields = []string{
@@ -124,6 +126,9 @@ func codexModelRoutingAccountIDs(group *Group, modelID string) []int64 {
 }
 
 func codexAccountServesPlatformModel(account *Account, platform, modelID string) bool {
+	if domain.IsMultiModelPlatform(account.Platform) {
+		return account.SupportsGroupPlatformModel(platform, modelID)
+	}
 	return account.Platform == platform ||
 		(account.Platform == PlatformAntigravity && mixedListingAccountAllowed(platform, account) &&
 			mixedListingModelAllowed(platform, modelID))
@@ -189,7 +194,11 @@ func groupCodexModelMetadata(
 	missingMetadata := false
 	for i := range accounts {
 		account := &accounts[i]
-		if !codexAccountServesPlatformModel(account, platform, modelID) {
+		lookupInput := modelID
+		if domain.IsMultiModelPlatform(account.Platform) && !explicitClaims {
+			lookupInput = upstreamModel
+		}
+		if !codexAccountServesPlatformModel(account, platform, lookupInput) {
 			continue
 		}
 		if routed && !containsInt64(routedAccountIDs, account.ID) {

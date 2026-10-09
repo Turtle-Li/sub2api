@@ -181,7 +181,8 @@ func projectAccountModelsBody(body []byte, account *Account, group *Group, codex
 // projectAccountModelAliases retains the source entry's metadata, never changes
 // the shared response, and never synthesizes models absent from this account.
 func projectAccountModelAliases(body []byte, account *Account, group *Group, codex bool) ([]byte, error) {
-	if account.IsOpenAIPassthroughEnabled() || len(account.GetModelMapping()) == 0 {
+	crossPlatform := group != nil && group.Platform != PlatformComposite && account.Platform != group.Platform
+	if !crossPlatform && (account.IsOpenAIPassthroughEnabled() || len(account.GetModelMapping()) == 0) {
 		return body, nil
 	}
 	field, idField := "data", "id"
@@ -234,6 +235,9 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 	seen := make(map[string]struct{}, len(candidates))
 	for _, id := range candidates {
 		id = strings.TrimSpace(id)
+		if crossPlatform && !account.SupportsGroupPlatformModel(group.Platform, id) {
+			continue
+		}
 		if id == "" || strings.Contains(id, "*") {
 			continue
 		}
@@ -242,7 +246,7 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 		}
 		target, matched := account.ResolveMappedModel(id)
 		raw, available := byID[strings.TrimSpace(target)]
-		if !matched || !available {
+		if (!matched && len(account.GetModelMapping()) > 0) || !available {
 			continue
 		}
 		seen[id] = struct{}{}
@@ -396,8 +400,50 @@ func (s *OpenAIGatewayService) fetchScheduledOpenAIModels(ctx context.Context, g
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		account, err := s.SelectAccountForModelWithExclusions(ctx, &group.ID, "", "", excluded)
+		// Catalog requests have no model. For a cross-platform account, choose
+		// a model in the group's family before applying ordinary scheduler gates;
+		// the returned catalog is still filtered independently after fetching.
+		selectionModels := make([]string, 0)
+		seenModels := make(map[string]bool)
+		accounts, err := s.listSchedulableAccounts(ctx, &group.ID, group.Platform)
 		if err != nil {
+			return nil, err
+		}
+		for i := range accounts {
+			candidate := &accounts[i]
+			if _, skipped := excluded[candidate.ID]; skipped {
+				continue
+			}
+			if candidate.Platform == group.Platform {
+				if !seenModels[""] {
+					selectionModels = append(selectionModels, "")
+					seenModels[""] = true
+				}
+				continue
+			}
+			models := defaultModelsListCandidateIDs(group.Platform)
+			for model := range candidate.GetModelMapping() {
+				models = append(models, model)
+			}
+			sort.Strings(models)
+			for _, model := range models {
+				if !seenModels[model] && candidate.SupportsGroupPlatformModel(group.Platform, model) && candidate.IsModelSupported(model) && candidate.IsSchedulableForModelWithContext(ctx, model) {
+					selectionModels = append(selectionModels, model)
+					seenModels[model] = true
+				}
+			}
+		}
+		var account *Account
+		for _, selectionModel := range selectionModels {
+			account, err = s.selectAccountForModelWithExclusions(ctx, &group.ID, group.Platform, "", selectionModel, excluded, false, 0, "", false)
+			if err == nil && account != nil {
+				break
+			}
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+		}
+		if account == nil {
 			if lastErr != nil {
 				return nil, lastErr
 			}

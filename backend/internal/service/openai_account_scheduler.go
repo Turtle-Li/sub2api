@@ -528,7 +528,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		clearBinding()
 		return nil, false, nil
 	}
-	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
+	if shouldClearStickySession(account, req.RequestedModel) || !supportsGroupPlatformModelWithContext(ctx, account, NormalizeOpenAICompatiblePlatform(req.Platform), req.RequestedModel, req.RequireCompact) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
 		clearBinding()
 		return nil, false, nil
 	}
@@ -1453,11 +1453,11 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			filterStats.exclude("not_schedulable")
 			continue
 		}
-		if account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() {
+		if !supportsGroupPlatformModelWithContext(ctx, account, NormalizeOpenAICompatiblePlatform(req.Platform), req.RequestedModel, req.RequireCompact) || !account.IsOpenAICompatible() {
 			filterStats.exclude("platform_mismatch")
 			continue
 		}
-		if s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
+		if s.service.isOpenAIAccountRequestRuntimeBlocked(account, multiModelGroupRequestedModel(ctx, account, req.RequestedModel)) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
@@ -1776,6 +1776,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if !supportsGroupPlatformModelWithContext(ctx, account, NormalizeOpenAICompatiblePlatform(req.Platform), req.RequestedModel, req.RequireCompact) {
+		return false, "platform_mismatch"
+	}
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
 			return false, "account_model_not_owned"
@@ -1784,7 +1787,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if req.RequirePrivacySet && !account.IsPrivacySet() {
 		return false, "privacy_not_set"
 	}
-	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
+	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, multiModelGroupRequestedModel(ctx, account, req.RequestedModel)) {
 		return false, "runtime_blocked"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {
@@ -1812,7 +1815,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}) {
 		return false, "shadow_parent_unhealthy"
 	}
-	if req.RequestedModel != "" && !supportsOpenAIRequestModel(account, req.RequestedModel, req.RequireCompact) {
+	if req.RequestedModel != "" && !supportsOpenAIRequestModel(account, multiModelGroupRequestedModel(ctx, account, req.RequestedModel), req.RequireCompact) {
 		return false, "model_not_supported"
 	}
 	if reason := OpenAIResponsesImageModelRequirementFailureReason(ctx, account, req.Platform); reason != "" {
@@ -2325,6 +2328,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		ctx = s.withOpenAIProfitControlGate(ctx, groupID)
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	ctx = withAccountGroupModelConstraint(ctx, platform, requestedModel, requireCompact)
 	decision := OpenAIAccountScheduleDecision{}
 	preserveGuardianParentBinding := preserveOpenAIGuardianParentBinding(ctx, sessionHash)
 	guardianParentAccountID := int64(0)

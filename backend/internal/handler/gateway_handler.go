@@ -124,6 +124,7 @@ func NewGatewayHandler(
 // Messages handles Claude API compatible messages endpoint
 // POST /v1/messages
 func (h *GatewayHandler) Messages(c *gin.Context) {
+	c.Request = c.Request.WithContext(h.openAIGatewayService.WithMultiModelGroupProtocol(c.Request.Context(), service.APIProtocolAnthropic))
 	// 从context获取apiKey和user（ApiKeyAuth中间件已设置）
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
@@ -492,7 +493,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			// 转发请求 - 根据账号平台分流
 			var result *service.ForwardResult
-			requestCtx := c.Request.Context()
+			requestCtx := admissionCtx
 			if fs.SwitchCount > 0 {
 				requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
 			}
@@ -510,6 +511,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					hasBoundSession,
 					service.WithForwardGeminiSession(derefGroupID(apiKey.GroupID), sessionKey),
 				)
+			} else if domain.IsMultiModelPlatform(account.Platform) {
+				forwardBody := body
+				if channelMapping.Mapped {
+					forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
+				}
+				result, err = h.forwardMultiModelMessages(requestCtx, c, account, forwardBody)
 			} else {
 				result, err = h.geminiCompatService.Forward(requestCtx, c, account, body)
 			}
@@ -600,7 +607,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+				if err := h.recordAccountUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
 					QuotaPlatform:      quotaPlatform,
 					APIKey:             apiKey,
@@ -910,7 +917,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 转发请求 - 根据账号平台分流
 			c.Set("parsed_request", attemptParsedReq)
 			var result *service.ForwardResult
-			requestCtx := c.Request.Context()
+			requestCtx := admissionCtx
 			if fs.SwitchCount > 0 {
 				requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
 			}
@@ -921,6 +928,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			writerSizeBeforeForward := c.Writer.Size()
 			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, attemptBody, hasBoundSession)
+			} else if domain.IsMultiModelPlatform(account.Platform) {
+				result, err = h.forwardMultiModelMessages(requestCtx, c, account, attemptBody)
 			} else {
 				result, err = h.gatewayService.Forward(requestCtx, c, account, attemptParsedReq)
 			}
@@ -966,7 +975,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
 				sessionID := service.ExtractClientSessionID(c)
 				h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-					if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+					if err := h.recordAccountUsage(ctx, &service.RecordUsageInput{
 						Result:             result,
 						QuotaPlatform:      quotaPlatform,
 						APIKey:             currentAPIKey,

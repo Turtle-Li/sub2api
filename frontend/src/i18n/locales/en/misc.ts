@@ -216,7 +216,7 @@ export default {
       },
       accountPlatform: {
         title: '🤖 2. Select Platform',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Choose the service provider platform for this account.</p><p style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px;"><b>⚠️ Important:</b> Platform must match the group you just created</p></div>',
+        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Choose the service provider platform for this account.</p><p style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px;"><b>⚠️ Important:</b> Choose the account’s upstream platform. OpenCode, Command Code and Cline can also join groups for the models they serve.</p></div>',
         nextBtn: 'Next'
       },
       accountType: {

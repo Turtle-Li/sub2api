@@ -225,7 +225,7 @@ export default {
       accountPlatform: {
         title: '🤖 2. 选择平台',
         description:
-          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">选择该账号对应的服务商平台。</p><p style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px;"><b>⚠️ 重要：</b>平台必须与刚才创建的分组平台一致</p></div>',
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">选择该账号对应的服务商平台。</p><p style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px;"><b>⚠️ 重要：</b>选择账号的上游平台。OpenCode、Command Code、Cline 也可绑定到其支持模型对应的分组。</p></div>',
         nextBtn: '下一步'
       },
       accountType: {

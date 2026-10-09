@@ -885,7 +885,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.Forward(c.Request.Context(), c, account, attemptBody)
+			return h.gatewayService.Forward(service.ContextWithSelectionProfitGate(c.Request.Context(), selection), c, account, attemptBody)
 		}()
 		var cyberBlockBodyHTTP []byte
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -1242,6 +1242,7 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 // Messages handles Anthropic Messages API requests routed to OpenAI platform.
 // POST /v1/messages (when group platform is OpenAI)
 func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
+	c.Request = c.Request.WithContext(h.gatewayService.WithMultiModelGroupProtocol(c.Request.Context(), service.APIProtocolAnthropic))
 	streamStarted := false
 	defer h.recoverAnthropicMessagesPanic(c, &streamStarted)
 
@@ -1485,7 +1486,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, forwardBody, promptCacheKey, defaultMappedModel)
+			return h.gatewayService.ForwardAsAnthropic(service.ContextWithSelectionProfitGate(c.Request.Context(), selection), c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		}()
 		var cyberBlockBodyMsg []byte
 		if service.GetOpsCyberPolicy(c) != nil {

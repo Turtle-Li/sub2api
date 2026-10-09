@@ -287,8 +287,8 @@ func (s *OpenAIGatewayService) SelectAccountForTokenCount(
 }
 
 // NormalizeOpenAICompatiblePlatform 保留走 OpenAI 网关的平台（openai、grok 与多协议
-// API Key 供应商，见平台清单）的原值，其他值一律归一为 openai。调度器据此对账号与请求做精确平台匹配：
-// kimi 分组请求只命中 kimi 账号，语义与 openai/grok 一致。
+// API Key 供应商，见平台清单）的原值，其他值一律归一为 openai。
+// 多模型渠道可在对应模型族分组中调度，但不会改变分组的平台身份。
 // （upstream 曾将本函数改为未导出 normalizeOpenAICompatiblePlatform，本分支的
 // handler 调度入口仍需导出，保持导出名。）
 func NormalizeOpenAICompatiblePlatform(platform string) string {
@@ -401,9 +401,10 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 			return "account_model_not_owned"
 		}
 	}
-	if account.Platform != platform || !account.IsOpenAICompatible() {
+	if !supportsGroupPlatformModelWithContext(ctx, account, platform, requestedModel, requireCompact) || !account.IsOpenAICompatible() {
 		return "platform_mismatch"
 	}
+	requestedModel = multiModelGroupRequestedModel(ctx, account, requestedModel)
 	if !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		if account.IsSchedulable() {
 			return "model_rate_limited"
@@ -907,6 +908,7 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.C
 // 另返回账号是否来自粘性会话命中。
 func (s *OpenAIGatewayService) selectAccountForModelWithExclusionsStickyHit(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool) (*Account, bool, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	ctx = withAccountGroupModelConstraint(ctx, platform, requestedModel, requireCompact)
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
 			"group_id", derefGroupID(groupID),
@@ -995,7 +997,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) {
+	if s.isOpenAIAccountRequestRuntimeBlocked(account, multiModelGroupRequestedModel(ctx, account, requestedModel)) {
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
@@ -1148,6 +1150,7 @@ func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Contex
 
 func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, useUpstreamTokenCost bool) (*AccountSelectionResult, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	ctx = withAccountGroupModelConstraint(ctx, platform, requestedModel, requireCompact)
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
 			"group_id", derefGroupID(groupID),
@@ -1232,7 +1235,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
-					} else if s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) {
+					} else if s.isOpenAIAccountRequestRuntimeBlocked(account, multiModelGroupRequestedModel(ctx, account, requestedModel)) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -1301,7 +1304,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			filterStats.exclude("shadow_parent_unhealthy")
 			continue
 		}
-		if s.isOpenAIAccountRequestRuntimeBlocked(acc, requestedModel) {
+		if s.isOpenAIAccountRequestRuntimeBlocked(acc, multiModelGroupRequestedModel(ctx, acc, requestedModel)) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
@@ -1510,6 +1513,24 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	var accounts []Account
+	seen := make(map[int64]bool)
+	for _, accountPlatform := range domain.GroupAccountPlatforms(platform) {
+		candidates, err := s.listSchedulableAccountsForPlatform(ctx, groupID, accountPlatform)
+		if err != nil {
+			return nil, err
+		}
+		for _, account := range candidates {
+			if !seen[account.ID] {
+				accounts = append(accounts, account)
+				seen[account.ID] = true
+			}
+		}
+	}
+	return accounts, nil
+}
+
+func (s *OpenAIGatewayService) listSchedulableAccountsForPlatform(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
 		if err != nil {
@@ -1579,7 +1600,7 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccountBeforeProfit(
 	if !parentHealthyForShadow(fresh, s.parentAccountLookup(ctx)) {
 		return nil
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(fresh, requestedModel) {
+	if s.isOpenAIAccountRequestRuntimeBlocked(fresh, multiModelGroupRequestedModel(ctx, fresh, requestedModel)) {
 		return nil
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, fresh) {
@@ -1656,7 +1677,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if !parentHealthyForShadow(latest, s.parentAccountLookup(ctx)) {
 		return nil
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(latest, requestedModel) {
+	if s.isOpenAIAccountRequestRuntimeBlocked(latest, multiModelGroupRequestedModel(ctx, latest, requestedModel)) {
 		return nil
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, latest) {
@@ -1741,6 +1762,9 @@ func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, accou
 	}
 	if hydrated == nil {
 		return nil, fmt.Errorf("selected openai account %d not found during hydration", account.ID)
+	}
+	if !supportsHydratedAccountGroupModel(ctx, account, hydrated) {
+		return nil, fmt.Errorf("%w (selected account model mapping changed during hydration)", ErrNoAvailableAccounts)
 	}
 	return hydrated, nil
 }

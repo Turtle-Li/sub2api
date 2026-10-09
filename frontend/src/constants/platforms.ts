@@ -19,6 +19,16 @@ export const CONCRETE_PLATFORM_OPTIONS: PlatformOption<AccountPlatform>[] = reac
 /** Platforms that can own a group. */
 export const GROUP_PLATFORM_OPTIONS: PlatformOption<GroupPlatform>[] = reactive([])
 
+const MULTI_MODEL_PLATFORMS: string[] = ['opencode_go', 'command_code', 'cline']
+
+export function isGroupAccountPlatformCompatible(group: GroupPlatform, account: GroupPlatform): boolean {
+  return group === account || group === 'composite' || (
+    MULTI_MODEL_PLATFORMS.includes(account) &&
+    group !== 'antigravity' && !MULTI_MODEL_PLATFORMS.includes(group) &&
+    listPlatforms().some(spec => spec.id === group)
+  )
+}
+
 watchSyncEffect(() => {
   const concrete = listPlatforms().map(spec => ({ value: spec.id, label: spec.display_name }))
   CONCRETE_PLATFORM_OPTIONS.splice(0, CONCRETE_PLATFORM_OPTIONS.length, ...concrete)

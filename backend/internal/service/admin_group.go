@@ -116,11 +116,14 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 			if !isConcreteRequestPlatform(acc.Platform) {
 				continue
 			}
-		} else if acc.Platform != platform {
+		} else if !domain.IsGroupAccountPlatformCompatible(platform, acc.Platform) {
 			continue
 		}
 		for model := range acc.GetModelMapping() {
 			model = strings.TrimSpace(model)
+			if !acc.SupportsGroupPlatformModel(platform, model) {
+				continue
+			}
 			if model == "" {
 				continue
 			}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -21,6 +22,7 @@ import (
 // This converts Responses API requests to Anthropic format, forwards to Anthropic
 // upstream, and converts responses back to Responses format.
 func (h *GatewayHandler) Responses(c *gin.Context) {
+	c.Request = c.Request.WithContext(h.openAIGatewayService.WithMultiModelGroupProtocol(c.Request.Context(), service.APIProtocolResponses))
 	streamStarted := false
 
 	requestStart := time.Now()
@@ -297,6 +299,10 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			}
 			setActualUpstreamEndpoint(c, EndpointAntigravityGenerateContent)
 			result, err = h.antigravityGatewayService.ForwardAsResponses(requestCtx, c, account, forwardBody, parsedReq)
+		} else if domain.IsMultiModelPlatform(account.Platform) {
+			var compatibleResult *service.OpenAIForwardResult
+			compatibleResult, err = h.openAIGatewayService.Forward(admissionCtx, c, account, forwardBody)
+			result = wrapOpenAIForwardResult(compatibleResult)
 		} else {
 			result, err = h.gatewayService.ForwardAsResponses(requestCtx, c, account, forwardBody, parsedReq)
 		}
@@ -350,7 +356,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		sessionID := service.ExtractClientSessionID(c)
 		stampForwardRequestedReasoningEffort(result, service.RequestedReasoningEffortFromContext(c.Request.Context()))
 		h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-			if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+			if err := h.recordAccountUsage(ctx, &service.RecordUsageInput{
 				Result:             result,
 				QuotaPlatform:      quotaPlatform,
 				APIKey:             apiKey,

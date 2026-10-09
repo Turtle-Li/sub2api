@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
@@ -258,6 +259,8 @@ func loadCodexGroupCatalogAccounts(ctx context.Context, repo AccountRepository, 
 			PlatformDeepseek,
 			PlatformMiniMax,
 			PlatformOpenCodeGo,
+			PlatformCommandCode,
+			PlatformCline,
 		},
 		false,
 	)
@@ -272,10 +275,13 @@ func openAIConfiguredCodexModelIDs(accounts []Account) []string {
 	models := make([]string, 0)
 	for i := range accounts {
 		account := &accounts[i]
-		if account.Platform != PlatformOpenAI {
+		if !domain.IsGroupAccountPlatformCompatible(PlatformOpenAI, account.Platform) {
 			continue
 		}
 		for modelID := range account.GetModelMapping() {
+			if !account.SupportsGroupPlatformModel(PlatformOpenAI, modelID) {
+				continue
+			}
 			modelID = strings.TrimSpace(modelID)
 			if modelID == "" || strings.Contains(modelID, "*") {
 				continue
@@ -308,7 +314,7 @@ func openAIConfiguredCodexModelIDsForGroup(accounts []Account, group *Group) []s
 		}
 		for i := range accounts {
 			account := &accounts[i]
-			if account.Platform != PlatformOpenAI {
+			if !account.SupportsGroupPlatformModel(PlatformOpenAI, selectedModel) {
 				continue
 			}
 			mappedModel, matched := account.ResolveMappedModel(selectedModel)
@@ -1151,7 +1157,7 @@ func groupCodexModelSupportsImageInput(
 	candidates := 0
 	for i := range accounts {
 		account := &accounts[i]
-		if account.Platform != platform || !account.IsModelSupported(upstreamModel) {
+		if !account.SupportsGroupPlatformModel(platform, upstreamModel) || !account.IsModelSupported(upstreamModel) {
 			continue
 		}
 		candidates++
@@ -1197,7 +1203,7 @@ func groupCodexModelSupportsSearchTool(
 	candidates := 0
 	for i := range accounts {
 		account := &accounts[i]
-		if account.Platform != platform || !account.IsModelSupported(upstreamModel) {
+		if !account.SupportsGroupPlatformModel(platform, upstreamModel) || !account.IsModelSupported(upstreamModel) {
 			continue
 		}
 		candidates++

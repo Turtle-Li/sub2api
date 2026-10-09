@@ -1371,6 +1371,9 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool) (*http.Request, error) {
+	if err := validateMultiModelGroupUpstream(ctx, c, account, body); err != nil {
+		return nil, err
+	}
 	// Determine target URL based on account type
 	var targetURL string
 	switch account.Type {

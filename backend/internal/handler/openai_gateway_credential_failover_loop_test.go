@@ -42,7 +42,11 @@ type grokCredentialHandlerRepo struct {
 func (r *grokCredentialHandlerRepo) ListSchedulableByPlatform(_ context.Context, platform string) ([]service.Account, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.selectionCalls++
+	// One Grok pool read marks each selector attempt. Multi-model provider
+	// buckets are additional candidates, not credential failover reselections.
+	if platform == service.PlatformGrok {
+		r.selectionCalls++
+	}
 	out := make([]service.Account, 0, len(r.accounts))
 	for _, account := range r.accounts {
 		if account.Platform == platform && account.IsSchedulable() {

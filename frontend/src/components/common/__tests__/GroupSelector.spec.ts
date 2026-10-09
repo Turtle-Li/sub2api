@@ -40,4 +40,23 @@ describe('GroupSelector simple-mode binding policy', () => {
     const wrapper = mountSelector([1, 2])
     expect(wrapper.emitted('update:modelValue')).toEqual([[[1]]])
   })
+
+  it.each(['opencode_go', 'command_code', 'cline'])('allows %s accounts in model-provider groups', (platform) => {
+    const providerGroups = ['anthropic', 'openai', 'gemini', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax']
+      .map((provider, index) => ({ id: index + 10, name: `group-${provider}`, platform: provider, status: 'active' }))
+    const wrapper = mount(GroupSelector, {
+      props: { modelValue: [], platform: platform as any, groups: providerGroups as any, searchable: false },
+      global: { stubs: { GroupBadge: { props: ['name'], template: '<span>{{ name }}</span>' }, Icon: true } }
+    })
+    for (const group of providerGroups) expect(wrapper.text()).toContain(group.name)
+  })
+
+  it('keeps ordinary single-provider accounts restricted', () => {
+    const wrapper = mount(GroupSelector, {
+      props: { modelValue: [], platform: 'deepseek', groups },
+      global: { stubs: { GroupBadge: { props: ['name'], template: '<span>{{ name }}</span>' }, Icon: true } }
+    })
+    expect(wrapper.text()).not.toContain('Basic')
+    expect(wrapper.text()).toContain('Composite')
+  })
 })

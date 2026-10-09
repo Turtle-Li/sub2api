@@ -587,7 +587,8 @@ type AccountSelectionResult struct {
 	// profitGate 携带本次选号真实生效的利润门（无门为 nil）。门安装在调度栈的
 	// 局部 ctx 上，handler 必须经 ContextWithSelectionProfitGate 重放后才能在
 	// 调度栈之外做抢槽后终检与准入后粘性绑定。
-	profitGate *openAIProfitControlGate
+	profitGate           *openAIProfitControlGate
+	groupModelConstraint *accountGroupModelConstraint
 }
 
 // ProfitGateActive 报告本次选号是否处于利润门之下。
@@ -613,7 +614,10 @@ type AudioUsage struct {
 }
 
 type ForwardResult struct {
-	RequestID string
+	// OpenAIResult retains native usage/billing semantics when a multi-model
+	// account serves a provider group through the compatible gateway.
+	OpenAIResult *OpenAIForwardResult
+	RequestID    string
 	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
 	UpstreamHeaders http.Header
 	Usage           ClaudeUsage
@@ -1437,7 +1441,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	if platform != "" {
 		filtered := make([]Account, 0)
 		for _, acc := range accounts {
-			if acc.Platform == platform || mixedListingAccountAllowed(platform, &acc) {
+			if domain.IsGroupAccountPlatformCompatible(platform, acc.Platform) || mixedListingAccountAllowed(platform, &acc) {
 				filtered = append(filtered, acc)
 			}
 		}
@@ -1463,8 +1467,14 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 			// Accounts pulled in through mixed scheduling only contribute the
 			// models that belong to the listing platform (e.g. an antigravity
 			// account's claude-* mappings must not surface on a gemini group).
-			if platform != "" && acc.Platform != platform && !mixedListingModelAllowed(platform, model) {
-				continue
+			if platform != "" && acc.Platform != platform {
+				if domain.IsMultiModelPlatform(acc.Platform) {
+					if !acc.SupportsGroupPlatformModel(platform, model) {
+						continue
+					}
+				} else if !mixedListingModelAllowed(platform, model) {
+					continue
+				}
 			}
 			modelSet[model] = struct{}{}
 			hasAnyMapping = true
@@ -1569,7 +1579,7 @@ func (s *GatewayService) GetVerifiedProbeModelMetadata(ctx context.Context, grou
 		for i := range accounts {
 			account := &accounts[i]
 			useMixedScheduling := requestPlatform == PlatformAnthropic || requestPlatform == PlatformGemini
-			if requestPlatform != "" && !s.isAccountAllowedForPlatform(account, requestPlatform, useMixedScheduling) {
+			if requestPlatform != "" && !s.isAccountAllowedForPlatform(mappingCtx, account, requestPlatform, useMixedScheduling, sourceModel) {
 				continue
 			}
 			// Account selection is performed with the original request model.

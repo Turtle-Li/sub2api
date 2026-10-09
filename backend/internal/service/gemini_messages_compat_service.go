@@ -82,6 +82,20 @@ func (s *GeminiMessagesCompatService) readUpstreamErrorBody(resp *http.Response)
 	return body
 }
 
+type nativeGeminiAccountSelectionKey struct{}
+
+// WithNativeGeminiAccountSelection keeps Google-wire endpoints on accounts
+// with native Gemini support. Multi-model providers expose OpenAI/Messages
+// compatibility instead; adding them must not change the native Gemini pool.
+func WithNativeGeminiAccountSelection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, nativeGeminiAccountSelectionKey{}, true)
+}
+
+func nativeGeminiAccountSelection(ctx context.Context) bool {
+	value, _ := ctx.Value(nativeGeminiAccountSelectionKey{}).(bool)
+	return value
+}
+
 func NewGeminiMessagesCompatService(
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,

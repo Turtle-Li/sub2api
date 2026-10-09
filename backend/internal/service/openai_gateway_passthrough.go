@@ -586,6 +586,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	body []byte,
 	token string,
 ) (*http.Request, error) {
+	if err := validateMultiModelGroupUpstream(ctx, c, account, body); err != nil {
+		return nil, err
+	}
 	// The normal passthrough entry point resolves and stages fingerprint IDs
 	// before calling this builder. Keep the builder self-contained as well:
 	// direct callers (including retry/test seams) must produce the same body and
