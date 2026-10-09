@@ -252,10 +252,6 @@ func (s *PaymentService) requireActiveOwnerTestAdmin(ctx context.Context, userID
 	return nil
 }
 
-func (s *PaymentService) ownerTestUnifiedSelection(paymentType string) (*payment.InstanceSelection, ownerTestRuntimeScope, error) {
-	return s.administrativeUnifiedSelection(paymentType, true)
-}
-
 func (s *PaymentService) administrativeUnifiedSelection(paymentType string, strictOwnerTest bool) (*payment.InstanceSelection, ownerTestRuntimeScope, error) {
 	if s == nil || s.unifiedPayment == nil || !s.unifiedPayment.Enabled() {
 		return nil, ownerTestRuntimeScope{}, infraerrors.ServiceUnavailable("OWNER_TEST_UNIFIED_PAYMENT_UNAVAILABLE", "live unified payment is not enabled")

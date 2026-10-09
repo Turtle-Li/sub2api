@@ -239,6 +239,9 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		BalanceRechargeMultiplier:     cfg.BalanceRechargeMultiplier,
 		SubscriptionUSDToCNYRate:      cfg.SubscriptionUSDToCNYRate,
 		RechargeFeeRate:               cfg.RechargeFeeRate,
+		RechargeBonusTiers:            cfg.RechargeBonusTiers,
+		RechargeBonusMode:             cfg.RechargeBonusMode,
+		RechargeBonusNotice:           cfg.RechargeBonusNotice,
 		RechargeOptions:               publicRechargeOptions,
 		RechargeMode:                  service.RechargeModeForConfig(cfg),
 		HelpText:                      cfg.HelpText,
@@ -259,6 +262,9 @@ type checkoutInfoResponse struct {
 	BalanceRechargeMultiplier float64                         `json:"balance_recharge_multiplier"`
 	SubscriptionUSDToCNYRate  float64                         `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate           float64                         `json:"recharge_fee_rate"`
+	RechargeBonusTiers        []service.RechargeBonusTier     `json:"recharge_bonus_tiers"`
+	RechargeBonusMode         string                          `json:"recharge_bonus_mode"`
+	RechargeBonusNotice       string                          `json:"recharge_bonus_notice"`
 	RechargeOptions           []service.RechargeOption        `json:"recharge_options"`
 	// RechargeMode is "fixed" when the server only accepts the tiers above, and
 	// "custom" when any amount inside the min/max range is accepted. Clients

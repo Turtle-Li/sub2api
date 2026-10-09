@@ -397,7 +397,10 @@ func TestAdminServiceDeletePinnedCodexTurnStatePreservesCookies(t *testing.T) {
 	require.True(t, exp.Equal(*astra.CookieExpiresAt))
 	require.Equal(t, "10.0.0.1:7890", astra.ProxyEndpoint)
 
-	raw := acc.Extra[PinnedCodexTurnStatesExtraKey].(map[string]any)["gpt-6-astra"].(map[string]any)
+	rawStates, ok := acc.Extra[PinnedCodexTurnStatesExtraKey].(map[string]any)
+	require.True(t, ok, "stored pinned turn states must remain a map")
+	raw, ok := rawStates["gpt-6-astra"].(map[string]any)
+	require.True(t, ok, "stored model state must remain a map")
 	require.NotContains(t, raw, "proxy", "legacy proxy URL with credentials must not be written back")
 	require.Equal(t, "10.0.0.1:7890", raw["proxy_endpoint"])
 }
