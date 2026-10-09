@@ -1046,6 +1046,9 @@ func (s *PaymentService) AdminRetryInvoiceFeishuNotification(ctx context.Context
 }
 
 func invoiceOrderEligible(order *dbent.PaymentOrder, needsReview bool) bool {
+	if order != nil && order.OrderType == payment.OrderTypeCollection {
+		return false
+	}
 	if order == nil || needsReview || order.PaidAt == nil || order.CompletedAt == nil || order.PayAmount <= 0 {
 		return false
 	}

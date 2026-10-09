@@ -14,6 +14,10 @@
           <Select v-model="orderFilters.payment_status" :options="paymentFactOptions" :aria-label="t('payment.orderOps.paymentLabel')" class="w-40" @change="handleFilterChange" />
           <Select v-model="orderFilters.fulfillment_status" :options="fulfillmentOptions" :aria-label="t('payment.orderOps.fulfillmentFilterLabel')" class="w-40" @change="handleFilterChange" />
           <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
+            <button class="btn btn-primary inline-flex items-center gap-2" @click="showCollectionDialog = true">
+              <Icon name="plus" size="sm" />
+              {{ t('payment.admin.collection.action') }}
+            </button>
             <button @click="loadOrders" :disabled="ordersLoading" class="btn btn-secondary" :title="t('common.refresh')">
               <Icon name="refresh" size="md" :class="ordersLoading ? 'animate-spin' : ''" />
             </button>
@@ -34,21 +38,21 @@
               <Icon name="x" size="sm" />
               {{ t('payment.orders.cancel') }}
             </button>
-            <button v-if="fulfillmentFact(row) === 'FAILED' && !row.needs_manual_review" :disabled="refundMutationBusy" @click="handleRetryOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
+            <button v-if="row.order_type !== 'collection' && fulfillmentFact(row) === 'FAILED' && !row.needs_manual_review" :disabled="refundMutationBusy" @click="handleRetryOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retry') }}
             </button>
-            <template v-if="row.status === 'REFUND_REQUESTED' && canOpenRefundReview(row)">
+            <template v-if="row.order_type !== 'collection' && row.status === 'REFUND_REQUESTED' && canOpenRefundReview(row)">
               <button :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
                 <Icon name="check" size="sm" />
                 {{ t('payment.admin.approveRefund') }}
               </button>
             </template>
-            <button v-else-if="row.status === 'REFUND_FAILED' && canOpenRefundReview(row)" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
+            <button v-else-if="row.order_type !== 'collection' && row.status === 'REFUND_FAILED' && canOpenRefundReview(row)" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retryRefund') }}
             </button>
-            <template v-else-if="row.status === 'REFUND_PENDING'">
+            <template v-else-if="row.order_type !== 'collection' && row.status === 'REFUND_PENDING'">
               <template v-if="row.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'">
                 <button :disabled="refundMutationBusy" @click="handleRetryPausedRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-60 dark:text-blue-300 dark:hover:bg-blue-900/20">
                   <Icon name="refresh" size="sm" :class="refundRetryingIds.has(row.id) ? 'animate-spin' : ''" />
@@ -64,7 +68,7 @@
                 {{ t('payment.admin.queryRefundStatus') }}
               </button>
             </template>
-            <button v-else-if="canOpenRefundReview(row)" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+            <button v-else-if="row.order_type !== 'collection' && canOpenRefundReview(row)" :disabled="refundMutationBusy" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
               <Icon name="dollar" size="sm" />
               {{ row.needs_manual_review ? t('payment.admin.reviewRefund') : t('payment.admin.refund') }}
             </button>
@@ -81,7 +85,7 @@
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</p><p class="font-mono text-sm font-medium text-gray-900 dark:text-white">#{{ selectedOrder.id }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</p><p class="break-all text-sm font-medium text-gray-900 dark:text-white">{{ selectedOrder.out_trade_no }}</p><button type="button" class="mt-1 text-xs text-primary-700 dark:text-primary-300" @click="copyOrderNumber(selectedOrder.out_trade_no)">{{ t('payment.orderOps.copyOrder') }}</button></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.status') }}</p><OrderStatusBadge :status="selectedOrder.status" /></div>
-          <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ selectedOrder.amount.toFixed(2) }}</p></div>
+          <div v-if="selectedOrder.order_type !== 'collection'"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ selectedOrder.amount.toFixed(2) }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ paymentAmountSymbol(selectedOrder) }}{{ selectedOrder.pay_amount.toFixed(2) }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.paymentMethod') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ t('payment.methods.' + selectedOrder.payment_type, selectedOrder.payment_type) }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.feeRate') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ selectedOrder.fee_rate }}%</p></div>
@@ -122,7 +126,7 @@
           </div>
         </div>
         <div class="grid gap-3 sm:grid-cols-2">
-          <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
+          <div v-if="selectedOrder.order_type !== 'collection'" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
             <p class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('payment.orderOps.issuanceRecord') }}</p>
             <OrderLifecycleBadge kind="fulfillment" :value="fulfillmentFact(selectedOrder)" />
           </div>
@@ -143,13 +147,13 @@
           <button v-if="selectedOrder.status === 'PENDING'" :disabled="refundMutationBusy" class="btn btn-secondary" @click="handleCancelOrder(selectedOrder)">
             {{ t('payment.orders.cancel') }}
           </button>
-          <button v-if="fulfillmentFact(selectedOrder) === 'FAILED' && !selectedOrder.needs_manual_review" :disabled="refundMutationBusy" class="btn btn-secondary" @click="handleRetryOrder(selectedOrder)">
+          <button v-if="selectedOrder.order_type !== 'collection' && fulfillmentFact(selectedOrder) === 'FAILED' && !selectedOrder.needs_manual_review" :disabled="refundMutationBusy" class="btn btn-secondary" @click="handleRetryOrder(selectedOrder)">
             {{ t('payment.admin.retry') }}
           </button>
-          <button v-if="canOpenRefundReview(selectedOrder)" :disabled="refundMutationBusy" class="btn btn-danger" @click="openRefundDialog(selectedOrder)">
+          <button v-if="selectedOrder.order_type !== 'collection' && canOpenRefundReview(selectedOrder)" :disabled="refundMutationBusy" class="btn btn-danger" @click="openRefundDialog(selectedOrder)">
             {{ selectedOrder.needs_manual_review ? t('payment.admin.reviewRefund') : refundActionLabel(selectedOrder) }}
           </button>
-          <template v-else-if="selectedOrder.status === 'REFUND_PENDING'">
+          <template v-else-if="selectedOrder.order_type !== 'collection' && selectedOrder.status === 'REFUND_PENDING'">
             <template v-if="selectedOrder.refund_recovery?.state === 'WAITING_PROVIDER_BALANCE'">
               <button :disabled="refundMutationBusy" class="btn btn-secondary" @click="handleRetryPausedRefund(selectedOrder)">
                 {{ t('payment.admin.retryPausedRefund') }}
@@ -196,6 +200,7 @@
       @backfill="handleSubscriptionGrantBackfill"
       @cancel="requestCloseRefundDialog"
     />
+    <AdminCollectionDialog :show="showCollectionDialog" :step-up="stepUp" @close="showCollectionDialog = false" />
     <BaseDialog :show="!!externalRefundTarget" :title="t('payment.admin.externalRefundTitle')" @close="closeExternalRefundDialog">
       <form v-if="externalRefundTarget" class="space-y-4" @submit.prevent="handleConfirmExternalRefund">
         <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
@@ -263,6 +268,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import AdminRefundDialog from '@/components/admin/payment/AdminRefundDialog.vue'
+import AdminCollectionDialog from '@/components/admin/payment/AdminCollectionDialog.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import InvoiceStatusBadge from '@/components/payment/InvoiceStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
@@ -303,6 +309,7 @@ const orderFilters = reactive({ status: '', payment_type: '', order_type: '', in
 const orderPagination = reactive({ page: 1, page_size: 20, total: 0 })
 const selectedOrder = ref<PaymentOrder | null>(null)
 const showDetailDialog = ref(false)
+const showCollectionDialog = ref(false)
 const showRefundDialog = ref(false)
 const refundTarget = ref<PaymentOrder | null>(null)
 const refundReview = ref<RefundReview | null>(null)
@@ -520,6 +527,7 @@ const orderTypeFilterOptions = computed(() => [
   { value: '', label: t('payment.admin.allOrderTypes') },
   { value: 'balance', label: t('payment.admin.balanceOrder') },
   { value: 'subscription', label: t('payment.admin.subscriptionOrder') },
+  { value: 'collection', label: t('payment.admin.collectionOrder') },
 ])
 
 const invoiceStatusFilterOptions = computed(() => [
@@ -634,6 +642,7 @@ async function handleCancelOrder(order: PaymentOrder) {
 }
 
 async function handleRetryOrder(order: PaymentOrder) {
+  if (order.order_type === 'collection') return
   if (refundMutationBusy.value) return
   try { await adminPaymentAPI.retryRecharge(order.id); appStore.showSuccess(t('payment.admin.retrySuccess')); loadOrders() }
   catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }

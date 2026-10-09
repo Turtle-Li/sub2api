@@ -302,6 +302,8 @@
 
 ## Personal turn-state renewal panel
 
+- Admin custom collection (`collection`, no entitlement credit): read `docs/ADMIN_CUSTOM_COLLECTION.md` before changing its creation, callback, refund or invoice behavior.
+
 - For the own-admin panel and IP-source management, read `docs/features/own-codex-monitor-panel.md` for the pinned reference, source-statistics limits, private binding and deployment boundaries.
 
 - Read `tools/codex-turn-state-manager/README.md` for the standalone probe and private panel. Follow project deployment records before operating a live instance. Read-only renewal mode does not require the optional degraded-account API.

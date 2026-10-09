@@ -131,6 +131,13 @@ const previewReviewOrder = {
     payment_discount: { code_id: 2026, code: 'SAVE2026', original_amount: '5.00', discount_amount: '1.00', pay_amount: '4.00', currency: 'CNY' },
   },
 }
+const previewCollectionOrder = {
+  id: 202603, user_id: 1, user_email: 'admin-preview@example.test', user_name: '本地管理员',
+  amount: 0, pay_amount: 432, fee_rate: 0, currency: 'CNY', payment_type: 'alipay',
+  order_type: 'collection', status: 'PENDING', payment_status: 'UNPAID', fulfillment_status: 'NOT_STARTED',
+  out_trade_no: 'LOCAL_PREVIEW_COLLECTION_202603',
+  created_at: '2026-10-09T08:00:00Z', expires_at: '2099-01-02T03:04:05Z', refund_amount: 0,
+}
 
 function page(items: unknown[]) {
   return { items, total: items.length, page: 1, page_size: 20, pages: 1 }
@@ -143,6 +150,7 @@ function previewResponse(config: Parameters<NonNullable<typeof apiClient.default
 const previewCouponView = new URLSearchParams(window.location.search).get('view') === 'coupons'
 const previewConfirmationView = new URLSearchParams(window.location.search).get('view') === 'confirmation'
 const previewSubscriptionsView = new URLSearchParams(window.location.search).get('view') === 'subscriptions'
+const previewOrdersView = new URLSearchParams(window.location.search).get('view') === 'orders'
 const previewDeadline = new Date(Date.now() + 30 * 60_000).toISOString()
 const confirmationPreview = { render: () => h('main', { class: 'mx-auto max-w-lg p-6' }, [h(PaymentStatusPanel, {
   orderId: 202601, amount: 104, payAmount: 80, currency: 'CNY', paymentType: 'alipay', orderType: 'balance',
@@ -150,11 +158,32 @@ const confirmationPreview = { render: () => h('main', { class: 'mx-auto max-w-lg
   paymentDiscount: previewOrder.product_snapshot.payment_discount,
 })]) }
 
-// Block every write except the local quote fixture, and never forward requests
-// to a real API.
+// Block every write except local quote and collection fixtures, and never
+// forward requests to a real API.
 apiClient.defaults.adapter = async config => {
   const requestMethod = config.method?.toLowerCase()
   const requestURL = String(config.url || '')
+  if (requestMethod === 'post' && requestURL === '/admin/payment/collection/orders') {
+    const body = typeof config.data === 'string' ? JSON.parse(config.data) : (config.data || {})
+    const amountFen = Number(body.amount_fen)
+    if (!Number.isSafeInteger(amountFen) || amountFen < 1 || amountFen > 100_000_000 || !['alipay', 'wxpay'].includes(body.payment_type)) {
+      throw new Error('本地预览收款参数无效')
+    }
+    return previewResponse(config, {
+      order_id: previewCollectionOrder.id,
+      status: 'PENDING',
+      amount: 0,
+      pay_amount: amountFen / 100,
+      currency: 'CNY',
+      payment_type: body.payment_type,
+      out_trade_no: previewCollectionOrder.out_trade_no,
+      // This is deliberately a non-payable local fixture string, not a real payment code.
+      qr_code: body.payment_type === 'alipay'
+        ? 'https://qr.alipay.com/LOCAL-PREVIEW-ONLY-NOT-A-PAYMENT'
+        : 'weixin://wxpay/bizpayurl?pr=LOCAL_PREVIEW_ONLY_NOT_A_PAYMENT',
+      expires_at: previewCollectionOrder.expires_at,
+    })
+  }
   if (requestMethod === 'post' && requestURL.includes('/payment/coupon-quote')) {
     const body = typeof config.data === 'string' ? JSON.parse(config.data) : (config.data || {})
     if (String(body.coupon_code || '').trim().toUpperCase() !== 'SAVE2026') {
@@ -197,7 +226,8 @@ apiClient.defaults.adapter = async config => {
   if (requestURL === '/payment/orders/202601') return previewResponse(config, { ...previewOrder, status: 'PENDING', payment_status: 'UNPAID', fulfillment_status: 'NOT_STARTED', paid_at: null, completed_at: null, expires_at: previewDeadline })
   if (requestURL.endsWith('/admin/payment/orders/202601')) return previewResponse(config, { order: previewOrder, audit_logs: [] })
   if (requestURL.endsWith('/admin/payment/orders/202602')) return previewResponse(config, { order: previewReviewOrder, audit_logs: [] })
-  if (requestURL.endsWith('/admin/payment/orders')) return previewResponse(config, page([previewOrder, previewReviewOrder]))
+  if (requestURL.endsWith('/admin/payment/orders/202603')) return previewResponse(config, { order: previewCollectionOrder, audit_logs: [] })
+  if (requestURL.endsWith('/admin/payment/orders')) return previewResponse(config, page([previewOrder, previewReviewOrder, previewCollectionOrder]))
   if (requestURL.includes('/admin/payment/coupons/2026/usages')) return previewResponse(config, page(previewCouponUsages))
   if (requestURL.includes('/admin/payment/coupons/2026/audits')) return previewResponse(config, page(previewCouponAudits))
   if (requestURL.includes('/admin/payment/coupons')) return previewResponse(config, page([previewCoupon]))
@@ -222,7 +252,7 @@ const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/admin/orders/coupons', component: AdminPaymentCouponsView },
   { path: '/subscriptions', component: SubscriptionsView },
   { path: '/purchase', component: PaymentView },
-  { path: '/:pathMatch(.*)*', component: previewCouponView ? AdminPaymentCouponsView : previewConfirmationView ? confirmationPreview : previewSubscriptionsView ? SubscriptionsView : PaymentView },
+  { path: '/:pathMatch(.*)*', component: previewCouponView ? AdminPaymentCouponsView : previewConfirmationView ? confirmationPreview : previewSubscriptionsView ? SubscriptionsView : previewOrdersView ? AdminOrdersView : PaymentView },
 ] })
 app.use(pinia).use(i18n).use(router)
 const store = useAppStore()

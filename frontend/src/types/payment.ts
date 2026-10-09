@@ -21,7 +21,7 @@ export type OrderStatus =
 
 export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex'
 
-export type OrderType = 'balance' | 'subscription' | 'reset_card'
+export type OrderType = 'balance' | 'subscription' | 'reset_card' | 'collection'
 
 export type InvoiceStatus = 'PENDING' | 'PROCESSING' | 'ISSUED' | 'REJECTED'
 

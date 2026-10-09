@@ -33,7 +33,7 @@
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.bonusAmount') }}</p>
           <p class="text-sm font-medium text-amber-600 dark:text-amber-400">+{{ creditedAmountSymbol }}{{ (order.bonus_amount ?? 0).toFixed(2) }}</p>
         </div>
-        <div v-if="order.amount !== order.pay_amount || (order.bonus_amount ?? 0) > 0">
+        <div v-if="order.order_type !== 'collection' && (order.amount !== order.pay_amount || (order.bonus_amount ?? 0) > 0)">
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.creditedAmount') }}</p>
           <p class="text-sm font-medium text-gray-900 dark:text-white">{{ creditedAmountSymbol }}{{ order.amount.toFixed(2) }}</p>
         </div>
@@ -103,7 +103,7 @@
           {{ t('payment.orders.cancel') }}
         </button>
         <button
-          v-if="order.status === 'FAILED'"
+          v-if="order.order_type !== 'collection' && order.status === 'FAILED'"
           @click="emit('retry', order)"
           class="btn btn-sm btn-secondary"
         >

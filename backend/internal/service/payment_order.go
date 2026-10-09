@@ -151,6 +151,9 @@ func (s *PaymentService) createOrderWithConfig(ctx context.Context, req CreateOr
 		s.notificationEmailService.RememberRecipientLocale(ctx, req.UserID, user.Email, req.Locale)
 	}
 	orderAmount := req.Amount
+	if req.OrderType == payment.OrderTypeCollection {
+		orderAmount = 0 // cash collection must never imply wallet credit
+	}
 	limitAmount := req.Amount
 	if req.OrderType == payment.OrderTypeResetCard {
 		orderAmount = req.Amount
@@ -1510,6 +1513,8 @@ func (s *PaymentService) createOrderInTxWithOptions(ctx context.Context, req Cre
 		// preset. The client-provided amount can select a preset, but can never
 		// provide the concurrency target itself.
 		b.SetProductSnapshot(buildPaymentBalanceProductSnapshot(req.Amount, orderAmount, payAmount, cfg.RechargeOptions))
+	} else if req.OrderType == payment.OrderTypeCollection {
+		b.SetProductSnapshot(map[string]any{"name": "自定义收款", "type": payment.OrderTypeCollection, "credited_amount": 0, "pay_amount": payAmount})
 	}
 	if req.CouponCode != "" {
 		if req.couponQuote == nil {
@@ -1893,7 +1898,7 @@ func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, user
 	}
 	var used float64
 	for _, o := range orders {
-		if o.OrderType == payment.OrderTypeBalance {
+		if o.OrderType == payment.OrderTypeBalance || o.OrderType == payment.OrderTypeCollection {
 			used += o.PayAmount
 			continue
 		}

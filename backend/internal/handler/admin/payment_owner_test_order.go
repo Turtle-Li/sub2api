@@ -26,6 +26,16 @@ type adminOwnerTestOrderRequest struct {
 // purchase setting disabled.
 // POST /api/v1/admin/payment/owner-test/orders
 func (h *PaymentHandler) CreateOwnerTestOrder(c *gin.Context) {
+	h.createAdministrativeOrder(c, false)
+}
+
+// CreateCollectionOrder records cash without granting administrator credit.
+// POST /api/v1/admin/payment/collection/orders
+func (h *PaymentHandler) CreateCollectionOrder(c *gin.Context) {
+	h.createAdministrativeOrder(c, true)
+}
+
+func (h *PaymentHandler) createAdministrativeOrder(c *gin.Context, collection bool) {
 	// This is deliberately unconditional: a global optional-step-up setting
 	// cannot make a live money mutation available to an API key or a session
 	// without a recent human second factor.
@@ -55,13 +65,19 @@ func (h *PaymentHandler) CreateOwnerTestOrder(c *gin.Context) {
 		return
 	}
 
-	result, err := h.paymentService.CreateOwnerTestOrder(c.Request.Context(), service.OwnerTestOrderRequest{
+	input := service.OwnerTestOrderRequest{
 		AdminUserID:    subject.UserID,
 		AmountFen:      request.AmountFen,
 		PaymentType:    request.PaymentType,
 		IdempotencyKey: key,
 		ClientIP:       c.ClientIP(),
-	})
+	}
+	var result *service.CreateOrderResponse
+	if collection {
+		result, err = h.paymentService.CreateCollectionOrder(c.Request.Context(), input)
+	} else {
+		result, err = h.paymentService.CreateOwnerTestOrder(c.Request.Context(), input)
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

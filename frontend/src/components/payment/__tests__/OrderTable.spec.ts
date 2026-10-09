@@ -122,4 +122,19 @@ describe('OrderTable benefit presentation', () => {
     expect(adminText).not.toContain('payment.orderOps.refundHandling')
     expect(adminText).not.toContain('payment.orderOps.refundReviewRequired')
   })
+
+  it('does not describe a custom collection as an entitlement delivery', () => {
+    const wrapper = mount(OrderTable, {
+      props: {
+        orders: [order({ order_type: 'collection', status: 'COMPLETED', fulfillment_status: 'FULFILLED', amount: 0, pay_amount: 432 })],
+        loading: false,
+        showUser: true,
+      },
+      global: { stubs: { DataTable: DataTableStub } },
+    })
+
+    const text = wrapper.get('[data-test="order-1"]').text()
+    expect(text).toContain('payment.admin.collection.noEntitlement')
+    expect(text).not.toContain('payment.orderOps.fulfillment.fulfilled')
+  })
 })

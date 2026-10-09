@@ -57,7 +57,7 @@
           <span v-if="row.fee_rate > 0" class="ml-1 text-xs text-gray-400" :title="t('payment.orders.fee') + ': ' + row.fee_rate + '%'">
             ({{ row.fee_rate }}%)
           </span>
-          <div v-if="row.amount !== row.pay_amount || (row.bonus_amount ?? 0) > 0" class="text-xs text-gray-500">
+          <div v-if="row.order_type !== 'collection' && (row.amount !== row.pay_amount || (row.bonus_amount ?? 0) > 0)" class="text-xs text-gray-500">
             {{ t('payment.orders.creditedAmount') }}: {{ creditedAmountSymbol }}{{ row.amount.toFixed(2) }}
             <span v-if="(row.bonus_amount ?? 0) > 0" class="ml-1 text-amber-600 dark:text-amber-400">
               ({{ t('payment.orders.bonusIncluded', { amount: creditedAmountSymbol + (row.bonus_amount ?? 0).toFixed(2) }) }})
@@ -106,7 +106,7 @@
             <span class="text-xs">{{ t('payment.orders.cancel') }}</span>
           </button>
           <button
-            v-if="row.status === 'FAILED'"
+            v-if="row.order_type !== 'collection' && row.status === 'FAILED'"
             @click="emit('retry', row)"
             class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
           >
@@ -229,6 +229,7 @@ const orderTypeFilterOptions = computed(() => [
   { value: '', label: t('payment.admin.allOrderTypes') },
   { value: 'balance', label: t('payment.admin.balanceOrder') },
   { value: 'subscription', label: t('payment.admin.subscriptionOrder') },
+  { value: 'collection', label: t('payment.admin.collectionOrder') },
 ])
 
 function canRefundRow(order: PaymentOrder): boolean {

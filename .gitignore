@@ -134,6 +134,7 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/ADMIN_CUSTOM_COLLECTION.md
 !docs/INVOICING.md
 !docs/ORDER_OPERATIONS_20260910.md
 !docs/CREDIT_PARITY_MIGRATION_20260910.md

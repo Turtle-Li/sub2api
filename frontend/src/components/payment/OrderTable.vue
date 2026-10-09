@@ -34,7 +34,8 @@
       </slot>
     </template>
     <template #cell-fulfillment_status="{ row }">
-      <div v-if="showUser" class="space-y-1">
+      <span v-if="row.order_type === 'collection'" class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.collection.noEntitlement') }}</span>
+      <div v-else-if="showUser" class="space-y-1">
         <OrderLifecycleBadge
           v-if="hasRefundEntitlementStatus(row)"
           kind="refundEntitlement"

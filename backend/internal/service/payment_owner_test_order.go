@@ -46,6 +46,7 @@ type OwnerTestOrderRequest struct {
 	PaymentType    string
 	IdempotencyKey string
 	ClientIP       string
+	collection     bool // server-only; never populated by request decoding
 }
 
 type ownerTestRuntimeScope struct {
@@ -145,6 +146,11 @@ func isOwnerTestOrderInsertConflict(err error) bool {
 // from ordinary checkout: it never reads visible provider-source routing and
 // never turns on the persisted customer-purchase switch.
 func (s *PaymentService) CreateOwnerTestOrder(ctx context.Context, input OwnerTestOrderRequest) (*CreateOrderResponse, error) {
+	input.collection = false
+	return s.createAdministrativeOrder(ctx, input)
+}
+
+func (s *PaymentService) createAdministrativeOrder(ctx context.Context, input OwnerTestOrderRequest) (*CreateOrderResponse, error) {
 	ownerCtx, err := s.newOwnerTestOrderContext(input)
 	if err != nil {
 		return nil, err
@@ -170,6 +176,9 @@ func (s *PaymentService) CreateOwnerTestOrder(ctx context.Context, input OwnerTe
 	if err != nil {
 		return nil, err
 	}
+	if input.collection {
+		cfg.MaxAmount = float64(maxCollectionAmountFen) / 100
+	}
 	if err := ownerCtx.attachLedger(cfg); err != nil {
 		return nil, err
 	}
@@ -179,8 +188,8 @@ func (s *PaymentService) CreateOwnerTestOrder(ctx context.Context, input OwnerTe
 		Amount:      ownerCtx.amount,
 		PaymentType: input.PaymentType,
 		ClientIP:    input.ClientIP,
-		OrderType:   payment.OrderTypeBalance,
-		ReturnURL:   ownerTestReturnURL,
+		OrderType:   ownerCtx.orderType(),
+		ReturnURL:   ownerCtx.scope.ReturnURL,
 	}
 	return s.createOrderWithConfig(ctx, req, cfg, &createOrderOptions{ownerTest: ownerCtx})
 }
@@ -193,18 +202,26 @@ func (s *PaymentService) newOwnerTestOrderContext(input OwnerTestOrderRequest) (
 		return nil, infraerrors.BadRequest("INVALID_IDEMPOTENCY_KEY", "Idempotency-Key must be 16 to 80 safe characters")
 	}
 	amount, amountDecimal, err := ownerTestCanonicalAmount(input.AmountFen)
+	if input.collection {
+		amount, amountDecimal, err = collectionCanonicalAmount(input.AmountFen)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if input.PaymentType != payment.TypeAlipay && input.PaymentType != payment.TypeWxpay {
 		return nil, infraerrors.BadRequest("INVALID_PAYMENT_TYPE", "payment_type must be alipay or wxpay")
 	}
-	selection, scope, err := s.ownerTestUnifiedSelection(input.PaymentType)
+	selection, scope, err := s.administrativeUnifiedSelection(input.PaymentType, !input.collection)
 	if err != nil {
 		return nil, err
 	}
 	keyHash := ownerTestSHA256(input.IdempotencyKey)
 	payloadHash := ownerTestPayloadHash(input.AdminUserID, input.AmountFen, input.PaymentType)
+	if input.collection {
+		// Separate the two administrative operations even when callers reuse a key.
+		keyHash = ownerTestSHA256("collection:" + input.IdempotencyKey)
+		payloadHash = ownerTestSHA256("collection:" + payloadHash)
+	}
 	return &ownerTestOrderContext{
 		input:              input,
 		amount:             amount,
@@ -236,6 +253,10 @@ func (s *PaymentService) requireActiveOwnerTestAdmin(ctx context.Context, userID
 }
 
 func (s *PaymentService) ownerTestUnifiedSelection(paymentType string) (*payment.InstanceSelection, ownerTestRuntimeScope, error) {
+	return s.administrativeUnifiedSelection(paymentType, true)
+}
+
+func (s *PaymentService) administrativeUnifiedSelection(paymentType string, strictOwnerTest bool) (*payment.InstanceSelection, ownerTestRuntimeScope, error) {
 	if s == nil || s.unifiedPayment == nil || !s.unifiedPayment.Enabled() {
 		return nil, ownerTestRuntimeScope{}, infraerrors.ServiceUnavailable("OWNER_TEST_UNIFIED_PAYMENT_UNAVAILABLE", "live unified payment is not enabled")
 	}
@@ -254,14 +275,14 @@ func (s *PaymentService) ownerTestUnifiedSelection(paymentType string) (*payment
 		PaymentType:    paymentType,
 		Currency:       payment.DefaultPaymentCurrency,
 	}
-	if scope.Environment != ownerTestEnvironment ||
+	if strictOwnerTest && (scope.Environment != ownerTestEnvironment ||
 		scope.OrganizationID != ownerTestOrganizationID ||
 		scope.ProductID != ownerTestProductID ||
 		scope.AppID != ownerTestAppID ||
 		scope.RequestKeyID != ownerTestRequestKeyID ||
 		scope.BaseURL == "" ||
 		scope.ReturnURL != ownerTestReturnURL ||
-		scope.Currency != "CNY" {
+		scope.Currency != "CNY") {
 		return nil, ownerTestRuntimeScope{}, infraerrors.ServiceUnavailable("OWNER_TEST_UNIFIED_SCOPE_UNAVAILABLE", "live unified payment scope is not the approved owner-test binding")
 	}
 	selection := s.unifiedPayment.Selection(paymentType)
@@ -369,17 +390,20 @@ func (c *ownerTestOrderContext) attachLedger(cfg *PaymentConfig) error {
 		RuntimeScopeSHA256:   c.scopeHash,
 		ProviderRequest: ownerTestProviderRequest{
 			ProductOrderNo:  c.outTradeNo,
-			OrderType:       payment.OrderTypeBalance,
+			OrderType:       c.orderType(),
 			AmountFen:       c.input.AmountFen,
 			Amount:          c.amountDecimal,
 			Currency:        payment.DefaultPaymentCurrency,
 			PaymentType:     c.input.PaymentType,
 			Subject:         "余额充值",
-			ReturnURL:       ownerTestReturnURL,
+			ReturnURL:       c.scope.ReturnURL,
 			ExpiresInSecond: ttl,
 			IdempotencyKey:  "sub2:create:" + c.outTradeNo,
 			MetadataSource:  "sub2",
 		},
+	}
+	if c.input.collection {
+		c.ledger.ProviderRequest.Subject = "自定义收款"
 	}
 	return nil
 }
@@ -408,10 +432,14 @@ func clonePaymentOrderSnapshot(snapshot map[string]any) map[string]any {
 }
 
 func validateOwnerTestOrderInput(req CreateOrderRequest, cfg *PaymentConfig, owner *ownerTestOrderContext) (*dbent.SubscriptionPlan, error) {
-	if owner == nil || cfg == nil || req.UserID != owner.input.AdminUserID || req.OrderType != payment.OrderTypeBalance || req.PaymentType != owner.input.PaymentType {
+	if owner == nil || cfg == nil || req.UserID != owner.input.AdminUserID || req.OrderType != owner.orderType() || req.PaymentType != owner.input.PaymentType {
 		return nil, infraerrors.BadRequest("INVALID_OWNER_TEST_ORDER", "owner test order input is invalid")
 	}
-	if req.Amount != owner.amount || cfg.MinAmount != 0.01 || cfg.MaxAmount != 0.02 ||
+	maxAmount := 0.02
+	if owner.input.collection {
+		maxAmount = float64(maxCollectionAmountFen) / 100
+	}
+	if req.Amount != owner.amount || cfg.MinAmount != 0.01 || cfg.MaxAmount != maxAmount ||
 		cfg.RechargeFeeRate != 0 || cfg.BalanceRechargeMultiplier != 1 || cfg.BalanceDisabled || !cfg.Enabled || len(cfg.RechargeOptions) != 0 {
 		return nil, infraerrors.ServiceUnavailable("OWNER_TEST_CONFIGURATION_INVALID", "owner test payment configuration is invalid")
 	}
@@ -462,12 +490,16 @@ func validateOwnerTestOrderRecord(order *dbent.PaymentOrder, owner *ownerTestOrd
 		return nil, infraerrors.Conflict("OWNER_TEST_IDEMPOTENCY_SCOPE_CONFLICT", "Idempotency-Key belongs to a different unified payment runtime scope")
 	}
 	request := ledger.ProviderRequest
-	if request.ProductOrderNo != order.OutTradeNo || request.OrderType != payment.OrderTypeBalance || request.Amount != owner.amountDecimal ||
-		request.Currency != payment.DefaultPaymentCurrency || request.ReturnURL != ownerTestReturnURL ||
+	creditAmount := owner.amount
+	if owner.input.collection {
+		creditAmount = 0
+	}
+	if request.ProductOrderNo != order.OutTradeNo || request.OrderType != owner.orderType() || request.Amount != owner.amountDecimal ||
+		request.Currency != payment.DefaultPaymentCurrency || request.ReturnURL != owner.scope.ReturnURL ||
 		request.IdempotencyKey != "sub2:create:"+order.OutTradeNo || request.MetadataSource != "sub2" ||
 		request.ExpiresInSecond < 300 || request.ExpiresInSecond > 7200 || request.Subject == "" ||
-		order.UserID != owner.input.AdminUserID || order.OrderType != payment.OrderTypeBalance || order.PaymentType != owner.input.PaymentType ||
-		math.Abs(order.Amount-owner.amount) > 1e-9 || math.Abs(order.PayAmount-owner.amount) > 1e-9 || order.FeeRate != 0 || !paymentOrderUsesUnifiedPay(order) {
+		order.UserID != owner.input.AdminUserID || order.OrderType != owner.orderType() || order.PaymentType != owner.input.PaymentType ||
+		math.Abs(order.Amount-creditAmount) > 1e-9 || math.Abs(order.PayAmount-owner.amount) > 1e-9 || order.FeeRate != 0 || !paymentOrderUsesUnifiedPay(order) {
 		return nil, infraerrors.Conflict("OWNER_TEST_IDEMPOTENCY_METADATA_MISMATCH", "owner test order no longer matches its durable request")
 	}
 	if ledger.Dispatch.Generation < 0 || (ledger.Dispatch.ClaimToken == "" && ledger.Dispatch.LeaseExpiresAt != nil && ledger.Dispatch.LeaseExpiresAt.After(ownerTestTimestamp(time.Now()))) {
@@ -859,8 +891,13 @@ func ownerTestAuditDetail(owner *ownerTestOrderContext) map[string]any {
 	if owner == nil {
 		return map[string]any{"classification": "owner_test"}
 	}
+	classification := "owner_test"
+	if owner.input.collection {
+		classification = "admin_collection"
+	}
 	return map[string]any{
-		"classification":         "owner_test",
+		"classification":         classification,
+		"order_type":             owner.orderType(),
 		"amount_fen":             owner.input.AmountFen,
 		"payment_type":           owner.input.PaymentType,
 		"out_trade_no":           owner.outTradeNo,

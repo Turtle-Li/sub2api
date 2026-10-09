@@ -13,11 +13,19 @@ import type {
   PaymentInvoiceRecord,
   AdminUpdateInvoiceRequest,
   PaymentBanner,
+  CreateOrderResult,
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
 export type PaymentDiscountType = 'fixed' | 'percent'
 export type PaymentDiscountOrderType = 'balance' | 'subscription'
+export type AdminCollectionPaymentType = 'alipay' | 'wxpay'
+
+/** Exact server contract for an administrator-created collection order. */
+export interface CreateCollectionOrderRequest {
+  amount_fen: number
+  payment_type: AdminCollectionPaymentType
+}
 
 export interface PaymentDiscountCoupon {
   id: number
@@ -297,6 +305,16 @@ export const adminPaymentAPI = {
   },
 
   // ==================== Orders ====================
+
+  /**
+   * Create an administrator-only CNY collection order. This order has no
+   * wallet credit or entitlement delivery; preserve the key for retries.
+   */
+  createCollectionOrder(data: CreateCollectionOrderRequest, idempotencyKey: string) {
+    return apiClient.post<CreateOrderResult>('/admin/payment/collection/orders', data, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
+  },
 
   /** Get all orders (paginated, with filters) */
   getOrders(params?: {

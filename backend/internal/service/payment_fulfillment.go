@@ -362,6 +362,8 @@ func (s *PaymentService) executeFulfillmentWithLeaseAcquirer(ctx context.Context
 		return infraerrors.Conflict("COUPON_MANUAL_REVIEW", "coupon capacity must be resolved before fulfillment")
 	}
 	switch o.OrderType {
+	case payment.OrderTypeCollection:
+		return s.executeCollectionFulfillment(ctx, o, acquire)
 	case payment.OrderTypeSubscription:
 		return s.executeSubscriptionFulfillmentWithLeaseAcquirer(ctx, oid, acquire)
 	case payment.OrderTypeResetCard:

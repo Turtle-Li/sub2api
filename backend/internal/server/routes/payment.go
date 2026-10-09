@@ -106,6 +106,7 @@ func RegisterPaymentRoutes(
 		adminGroup.GET("/config", adminPaymentHandler.GetConfig)
 		adminGroup.PUT("/config", adminPaymentHandler.UpdateConfig)
 		adminGroup.POST("/owner-test/orders", adminPaymentHandler.CreateOwnerTestOrder)
+		adminGroup.POST("/collection/orders", adminPaymentHandler.CreateCollectionOrder)
 
 		// Payment-discount category; registration gift codes retain their own endpoints.
 		adminGroup.GET("/coupons", adminPaymentHandler.ListCoupons)

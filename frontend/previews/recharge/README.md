@@ -10,6 +10,8 @@ pnpm exec vite --config previews/recharge/vite.config.ts
 
 打开 `http://127.0.0.1:5199/previews/recharge/index.html?view=coupons` 可查看正式组件“订单管理 → 支付优惠码”（生产路由 `/admin/orders/coupons`）。原注册赠送码仍位于 `/admin/promo-codes`。该视图只提供本地列表、使用记录和审计记录示例，所有写操作仍会被拒绝。
 
+打开 `http://127.0.0.1:5199/previews/recharge/index.html?view=orders` 可查看订单管理页的本地自定义收款弹窗。它只返回固定的本地二维码载荷和订单状态，不会连接支付服务或创建真实订单。
+
 使用实际 PaymentView、AmountInput、SubscriptionPlanCard 与订单摘要组件；外层 AppLayout 替换为本地预览容器。适配器拦截全部 API 请求，拒绝写操作，不创建真实订单。该 HTML 不是生产构建入口。
 
 `catalog.json` 是可直接编辑的示例展示配置，ID、文案、额度、价格只用于预览，不能作为线上覆盖导入文件。月付不赠送；季付一次赠送 2 张；年付每月赠送 1 张，共 12 期。数量、发放节奏、有效期均来自现有 entitlement 字段，组件没有写死周期赠送规则。
