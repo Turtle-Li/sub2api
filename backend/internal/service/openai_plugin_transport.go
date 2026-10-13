@@ -34,7 +34,10 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	if err != nil {
 		return nil, err
 	}
-	if s.pluginManager != nil {
+	// ModelTrace is an observational probe. Keep it on the account-aware
+	// HTTPUpstream path so the configured TLS fingerprint and probe pool are
+	// applied; the plugin protocol does not carry those transport attributes.
+	if s.pluginManager != nil && accountTestMayChangeAvailability(request.Context()) {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, resolvedProxyURL, account)
 		if handled {
 			return response, err

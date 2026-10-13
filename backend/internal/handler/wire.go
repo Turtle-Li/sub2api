@@ -50,6 +50,7 @@ func ProvideAdminHandlers(
 	affiliateHandler *admin.AffiliateHandler,
 	complianceHandler *admin.ComplianceHandler,
 	auditLogHandler *admin.AuditLogHandler,
+	modelTraceHandler *admin.ModelTraceHandler,
 	accountPoolHandler *admin.AccountPoolHandler,
 	proxyPoolHandler *admin.ProxyPoolHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
@@ -101,6 +102,7 @@ func ProvideAdminHandlers(
 		Affiliate:              affiliateHandler,
 		Compliance:             complianceHandler,
 		AuditLog:               auditLogHandler,
+		ModelTrace:             modelTraceHandler,
 		AccountPool:            accountPoolHandler,
 		ProxyPool:              proxyPoolHandler,
 	}
@@ -311,6 +313,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAffiliateHandler,
 	admin.NewComplianceHandler,
 	admin.NewAuditLogHandler,
+	admin.NewModelTraceHandler,
 	admin.NewAccountPoolHandler,
 	admin.NewProxyPoolHandler,
 

@@ -40,6 +40,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/modeltrace',
+    name: 'AdminModelTrace',
+    component: () => import('@/views/admin/ModelTraceView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Model Fingerprint',
+      titleKey: 'admin.modelTrace.title',
+      descriptionKey: 'admin.modelTrace.description'
+    }
+  },
+  {
     path: '/login',
     name: 'Login',
     component: () => import('@/views/auth/LoginView.vue'),

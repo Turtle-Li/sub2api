@@ -145,6 +145,9 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+
+		// 模型真实指纹监控
+		registerModelTraceRoutes(admin, h)
 	}
 
 	// TT Switch has an independent control-plane namespace and UI. It reuses
@@ -172,6 +175,24 @@ func RegisterAdminRoutes(
 			gin.HandlerFunc(stepUpAuth),
 			h.Admin.Setting.TestDesktopStorageConnection,
 		)
+	}
+}
+
+func registerModelTraceRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	if h.Admin == nil || h.Admin.ModelTrace == nil {
+		return
+	}
+	mt := admin.Group("/modeltrace")
+	{
+		mt.GET("/monitors", h.Admin.ModelTrace.ListMonitors)
+		mt.GET("/global-config", h.Admin.ModelTrace.GetGlobalConfig)
+		mt.PUT("/global-config", h.Admin.ModelTrace.UpdateGlobalConfig)
+		mt.PUT("/accounts/:id", h.Admin.ModelTrace.UpdateAccountConfig)
+		mt.DELETE("/accounts/:id", h.Admin.ModelTrace.RemoveAccountMonitor)
+		mt.POST("/accounts/:id/models/:model/run", h.Admin.ModelTrace.ProbeModel)
+		// Model IDs may contain slashes (for example vendor/gpt-4o); keep them
+		// in the query string so Gin does not split the route path.
+		mt.POST("/accounts/:id/models/run", h.Admin.ModelTrace.ProbeModel)
 	}
 }
 
