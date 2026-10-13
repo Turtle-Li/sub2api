@@ -11,6 +11,9 @@ services:
       - "443:443"
     networks:
       - sub2api-candidate-network
+      # IPv6-enabled bridge for the application (lets Sub2 reach IPv6-only
+      # egress proxies); the IPv4-only network still carries grok2api-bridge.
+      - sub2api-candidate-network-v6
     volumes:
       - /opt/sub2api/Caddyfile:/etc/caddy/Caddyfile:ro
       - /opt/sub2api/certs:/etc/sub2api-certs:ro
@@ -24,6 +27,8 @@ services:
 
 networks:
   sub2api-candidate-network:
+    external: true
+  sub2api-candidate-network-v6:
     external: true
 
 volumes:

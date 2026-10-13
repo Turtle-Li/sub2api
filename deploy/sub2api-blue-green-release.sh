@@ -1995,6 +1995,14 @@ if [ "$FEISHU_ENABLED" = true ]; then
   docker volume inspect "$FEISHU_VAULT_VOLUME" >/dev/null 2>&1 || die "Feishu socket volume is missing"
 fi
 docker network inspect "$NETWORK" >/dev/null 2>&1 || die "Docker network $NETWORK does not exist"
+# Caddy resolves the candidate by container name on the shared network. A
+# Caddy recreated from a compose file that predates a network migration would
+# fail only at switch time, so reject it before a candidate is created.
+if container_exists "$CADDY_CONTAINER"; then
+  docker inspect "$CADDY_CONTAINER" --format '{{range $network, $_ := .NetworkSettings.Networks}}{{println $network}}{{end}}' \
+    | grep -qxF "$NETWORK" \
+    || die "Caddy container $CADDY_CONTAINER is not attached to Docker network $NETWORK"
+fi
 docker volume inspect "$DATA_VOLUME" >/dev/null 2>&1 || die "Docker volume $DATA_VOLUME does not exist"
 if [ "${UNIFIED_PAYMENT_ENABLED:-false}" = true ]; then
   docker volume inspect "$UNIFIED_PAYMENT_VAULT_VOLUME" >/dev/null 2>&1 \

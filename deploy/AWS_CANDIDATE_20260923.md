@@ -378,6 +378,38 @@ reassignment must expect `0`; mismatches must stop the operation. Never mutate
 these bindings with SQL. The old relay resources may remain through the
 observation window, but Sub2API no longer depends on them.
 
+## 2026-10-13 IPv6 application network
+
+The host has public IPv6, but the application ran on the IPv4-only bridge
+`sub2api-candidate-network`, so account proxies reachable only over IPv6 failed
+inside the container with `connect: network is unreachable`. The application
+now runs on the dual-stack bridge `sub2api-candidate-network-v6`:
+
+```bash
+printf '%s\n' net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1 \
+  | sudo tee /etc/sysctl.d/99-sub2api-ipv6-forwarding.conf
+sudo sysctl --system
+sudo docker network create --driver bridge --ipv6 \
+  --subnet fd99:5b2:2::/80 --gateway fd99:5b2:2::1 sub2api-candidate-network-v6
+sudo docker network connect sub2api-candidate-network-v6 sub2api-candidate-caddy
+# /etc/sub2api-autodeploy.env
+SUB2API_RUNTIME_GUARD_NETWORK=sub2api-candidate-network-v6
+```
+
+Docker masquerades the ULA subnet to the host's IPv6 address. Because the
+container source address is ULA, RFC 6724 address selection still prefers IPv4
+for dual-stack upstreams, so direct (proxy-less) egress keeps the host IPv4
+address; only IPv6-only destinations such as IPv6 account proxies use IPv6.
+
+Caddy is attached to both networks: the IPv4 network still carries
+`grok2api-bridge`. `compose.proxy.yml` lists both, and the blue-green helper
+refuses to create a candidate when Caddy is not attached to the release
+network. The cutover was blue-green release `ipv6-network-20261013-r2`
+(green -> blue, same image). Its first attempt was rejected by the
+authenticated real-request probe at the 45 s timeout without touching Caddy;
+`SUB2API_RELEASE_REAL_REQUEST_PROBE_TIMEOUT_SECONDS=180` is now set, and
+`install-autodeploy.sh` writes that value.
+
 ## Public automatic TLS and real-request evidence
 
 Cloudflare DNS-only record `65bbd7f20163df4ebd734b9b71279e85` maps

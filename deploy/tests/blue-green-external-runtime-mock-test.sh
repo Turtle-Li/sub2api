@@ -935,6 +935,17 @@ assert_contains "$OUTPUT" 'source container has an invalid SUB2API_FIXED_EGRESS_
 assert_not_contains "$CALLS" 'create '
 cp "$old_env" "$(state_path sub2api)/env"
 
+# Caddy must already share the release network, otherwise it cannot reach the
+# candidate by name after the switch.
+printf '%s\n' legacy-ipv4-network >"$(state_path sub2api-caddy)/networks"
+: >"$CALLS"
+if PRECREATE_ONLY=true run_helper >"$OUTPUT" 2>&1; then
+  fail 'release accepted a Caddy container outside the release network'
+fi
+assert_contains "$OUTPUT" 'is not attached to Docker network sub2api_default'
+assert_not_contains "$CALLS" 'create '
+printf '%s\n' sub2api_default >"$(state_path sub2api-caddy)/networks"
+
 # External prepared targets must be attached to exactly one network and carry
 # exactly the data volume, two read-only CA mounts, and three runtime mounts.
 printf '%s\n' sub2api_default unexpected-network >"$(state_path sub2api-green)/networks"

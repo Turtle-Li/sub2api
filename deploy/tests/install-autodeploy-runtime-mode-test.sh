@@ -336,6 +336,7 @@ assert_contains "$CONFIG_FILE" 'SUB2API_EXTERNAL_CA_FILE=/opt/sub2api/db-host-ca
 assert_contains "$CONFIG_FILE" 'SUB2API_DUAL_NODE_RUNTIME_ENABLED=true'
 assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_BACKGROUND_MODE=preserve-standby'
 assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_REAL_REQUEST_PROBE_ENABLED=true'
+assert_contains "$CONFIG_FILE" 'SUB2API_RELEASE_REAL_REQUEST_PROBE_TIMEOUT_SECONDS=180'
 assert_contains "$CONFIG_FILE" "SUB2API_MAINTENANCE_LOCK_FILE=${MAINTENANCE_LOCK_FILE}"
 [ -x "${APP_DIR}/scripts/sub2api-maintenance-lock.sh" ] \
   || fail 'script-directory maintenance lock helper was not installed'
