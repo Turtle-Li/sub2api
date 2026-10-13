@@ -242,9 +242,8 @@
 ## Upstream update scope
 
 - For v0.2.16 and ModelTrace, read `docs/operations/UPSTREAM_V0216_20261013.md`.
-  The GPT-6.1 Sol subscription long-context exemption applies only to account
-  cost statistics; customer billing keeps the surcharge unless the owner flips
-  `openAISubscriptionLongContextCustomerExempt`.
+  The GPT-6.1 Sol subscription long-context exemption follows upstream for
+  customer billing (owner decision); the fork hidden multiplier still applies.
 
 - For v0.2.14/v0.2.15, read `docs/operations/UPSTREAM_V0215_20261009.md`.
   Preserve profile-aware protocol routing plus legacy OpenCode URL/eligibility

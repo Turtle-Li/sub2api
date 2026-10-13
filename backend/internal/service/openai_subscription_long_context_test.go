@@ -40,17 +40,8 @@ func TestOpenAISubscriptionLongContextExempt(t *testing.T) {
 	}
 }
 
-// 本仓库默认不对客户扣费应用订阅豁免；上游用例显式开启以覆盖上游口径。
-func enableOpenAISubscriptionLongContextCustomerExempt(t *testing.T) {
-	t.Helper()
-	prev := openAISubscriptionLongContextCustomerExempt
-	openAISubscriptionLongContextCustomerExempt = true
-	t.Cleanup(func() { openAISubscriptionLongContextCustomerExempt = prev })
-}
-
 // 同时覆盖远程目录更新、静态兜底、旧计费入口和分组入口，校验真实扣款与账号成本。
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionLongContext(t *testing.T) {
-	enableOpenAISubscriptionLongContextCustomerExempt(t)
 	for _, catalog := range []bool{false, true} {
 		for _, groupMode := range []string{"无分组", "分组关闭", "分组开启"} {
 			for _, accountEnabled := range []bool{false, true} {
@@ -126,7 +117,6 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionLongContext(t *test
 }
 
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolUsesCredentialAndUpstreamModel(t *testing.T) {
-	enableOpenAISubscriptionLongContextCustomerExempt(t)
 	for _, tt := range []struct {
 		name       string
 		model      string
@@ -189,7 +179,6 @@ func TestCalculateCostUnified_ModelLongContextExemptionPreservesCustomIntervals(
 }
 
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.T) {
-	enableOpenAISubscriptionLongContextCustomerExempt(t)
 	for _, totalInput := range []int{271999, 272000, 272001} {
 		for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
 			t.Run(fmt.Sprintf("%s/%d", accountType, totalInput), func(t *testing.T) {
@@ -218,7 +207,6 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.
 }
 
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolExemptionSurvivesRepricing(t *testing.T) {
-	enableOpenAISubscriptionLongContextCustomerExempt(t)
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
@@ -253,39 +241,4 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolExemptionSurvivesRepricing(t *t
 	require.False(t, usageRepo.lastLog.LongContextBillingApplied)
 	require.NotNil(t, usageRepo.lastLog.AccountStatsCost)
 	require.InDelta(t, standardCost*2, *usageRepo.lastLog.AccountStatsCost, 1e-12)
-}
-
-// 本仓库默认：订阅豁免不改变客户扣费，仅作用于账号成本统计。
-func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionKeepsCustomerLongContextByDefault(t *testing.T) {
-	require.False(t, openAISubscriptionLongContextCustomerExempt)
-	for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
-		t.Run(accountType, func(t *testing.T) {
-			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
-			userRepo := &openAIRecordUsageUserRepoStub{}
-			svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
-			apiKey := openAIRecordUsageAPIKeyWithGroup(svc, 1, true)
-			apiKey.GroupID = i64p(1)
-			apiKey.Group.RateMultiplier = 1.1
-			svc.channelService = newTestChannelServiceForStats(t, &Channel{ID: 1, Status: StatusActive}, 1, PlatformOpenAI)
-			err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
-				Result: &OpenAIForwardResult{RequestID: "default-" + accountType, Model: "gpt-6.1-sol", Duration: time.Second,
-					Usage: OpenAIUsage{InputTokens: 300000, OutputTokens: 2000}},
-				APIKey: apiKey, User: &User{ID: 2},
-				Account: &Account{ID: 3, Platform: PlatformOpenAI, Type: accountType,
-					Extra: map[string]any{openAILongContextBillingEnabledKey: true}},
-			})
-			require.NoError(t, err)
-			log := usageRepo.lastLog
-			require.True(t, log.LongContextBillingApplied)
-			wantTotal := (300000*2e-6*2 + 2000*10e-6*1.5) * openAIConsumptionMultiplier("gpt-6.1-sol")
-			require.InDelta(t, wantTotal, log.TotalCost, 1e-12)
-			require.InDelta(t, wantTotal*1.1, userRepo.lastAmount, 1e-12)
-			wantStats := 300000*2e-6*2 + 2000*10e-6*1.5
-			if accountType == AccountTypeOAuth {
-				wantStats = 300000*2e-6 + 2000*10e-6
-			}
-			require.NotNil(t, log.AccountStatsCost)
-			require.InDelta(t, wantStats, *log.AccountStatsCost, 1e-12)
-		})
-	}
 }

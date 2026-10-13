@@ -259,7 +259,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	longContextBillingGate := openAILongContextBillingGate(billingAccount)
 	modelLongContextExempt := openAISubscriptionLongContextExempt(billingAccount, result)
-	customerLongContextExempt := modelLongContextExempt && openAISubscriptionLongContextCustomerExempt
 	cost, err = s.calculateOpenAIRecordUsageCost(
 		ctx,
 		result,
@@ -272,7 +271,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		tokens,
 		serviceTier,
 		longContextBillingGate,
-		customerLongContextExempt,
+		modelLongContextExempt,
 		pricingAt,
 	)
 	if err != nil {
@@ -306,7 +305,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			responseModels := s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, usageBillingModelCandidates(responseModel))
 			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(
 				ctx, result, apiKey, responseModels, multiplier, imageMultiplier,
-				videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingGate, customerLongContextExempt, pricingAt,
+				videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingGate, modelLongContextExempt, pricingAt,
 			)
 			// 基线定价源以 baselineBillingModel 为准：它正是 calculateOpenAIRecordUsageCost
 			// 内部做渠道定价判断时使用的模型，且"首候选有渠道价"必然意味着首候选就是实际
@@ -337,7 +336,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			tokens,
 			"",
 			longContextBillingGate,
-			customerLongContextExempt,
+			modelLongContextExempt,
 			pricingAt,
 		)
 		if standardErr != nil && !isUsagePricingUnavailableError(standardErr) {
@@ -600,11 +599,6 @@ func openAILongContextBillingGate(account *Account) *bool {
 	enabled := account.IsOpenAILongContextBillingEnabled()
 	return &enabled
 }
-
-// openAISubscriptionLongContextCustomerExempt 控制订阅豁免是否作用于客户扣费。
-// 本仓库保留客户侧既有长上下文计费，豁免只用于账号成本统计（反映真实上游成本）；
-// 改为 true 即与上游 v0.2.16 的客户扣费口径一致。
-var openAISubscriptionLongContextCustomerExempt = false
 
 // openAISubscriptionLongContextExempt 按实际凭据和最终发送模型判断订阅豁免。
 // GPT-6.1 Sol 的订阅请求不再收取模型长上下文附加费；API Key 仍使用 API 价卡。
