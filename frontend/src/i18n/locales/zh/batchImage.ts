@@ -185,7 +185,7 @@ export default {
       noCompatibleAccount: '当前密钥所属分组没有可用的批量生图上游账号。请联系管理员检查分组是否绑定了对应平台的可调度账号，以及账号是否支持所选模型。',
       unsupportedProvider: '这个任务使用的批量生图通道当前不可用。请联系管理员检查批量生图通道配置。',
       providerSubmitFailed: '上游批量生图任务提交失败。请联系管理员检查上游账号状态、模型权限或服务状态。',
-      vertexGcsBucketMissing: 'Vertex 批量生图缺少托管 GCS 存储桶配置。请联系管理员配置 BATCH_IMAGE_VERTEX_MANAGED_GCS_BUCKET 后再提交。',
+      vertexGcsBucketMissing: 'Agent Platform (Vertex) 批量生图缺少托管 GCS 存储桶配置。请联系管理员配置 BATCH_IMAGE_VERTEX_MANAGED_GCS_BUCKET 后再提交。',
       queueFailed: '任务队列暂时不可用，批量任务没有成功入队。请联系管理员检查队列服务。',
       billingHoldFailed: '费用冻结失败，批量任务没有成功提交。请联系管理员检查余额冻结或计费服务。',
       groupDisabled: '当前密钥所属分组没有开启批量生图。你可以换一个已开启批量生图的密钥，或联系管理员开启。',

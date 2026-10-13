@@ -1174,13 +1174,14 @@ async function refreshNow() {
 function startCountdown(seconds: number, generation: number, fingerprint: string) {
   if (!isCurrentLifecycle(generation, fingerprint)) return
   remainingSeconds.value = Math.max(0, seconds)
+  const deadline = Date.now() + remainingSeconds.value * 1000
   if (remainingSeconds.value <= 0) {
     requestDeadlineCheck(generation, fingerprint)
     return
   }
   countdownTimer = setInterval(() => {
     if (!isCurrentLifecycle(generation, fingerprint)) return
-    remainingSeconds.value--
+    remainingSeconds.value = Math.max(0, Math.floor((deadline - Date.now()) / 1000))
     if (remainingSeconds.value <= 0) requestDeadlineCheck(generation, fingerprint)
   }, 1000)
 }
