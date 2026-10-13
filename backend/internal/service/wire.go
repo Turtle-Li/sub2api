@@ -718,6 +718,21 @@ func ProvideScheduledTestRunnerService(
 	return svc
 }
 
+// ProvideModelTraceService creates and starts ModelTraceService.
+func ProvideModelTraceService(
+	accountRepo AccountRepository,
+	settingRepo SettingRepository,
+	accountTestSvc *AccountTestService,
+	cfg *config.Config,
+	lockCache LeaderLockCache,
+	db *sql.DB,
+) *ModelTraceService {
+	svc := NewModelTraceService(accountRepo, settingRepo, accountTestSvc, cfg)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, "modeltrace-runner", 2*time.Minute)
+	svc.Start()
+	return svc
+}
+
 // ProvideOpsScheduledReportService creates and starts OpsScheduledReportService.
 func ProvideOpsScheduledReportService(
 	opsService *OpsService,
@@ -1039,6 +1054,7 @@ var ProviderSet = wire.NewSet(
 	ProvideIdempotencyCleanupService,
 	ProvideScheduledTestService,
 	ProvideScheduledTestRunnerService,
+	ProvideModelTraceService,
 	NewGroupCapacityService,
 	NewChannelService,
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),

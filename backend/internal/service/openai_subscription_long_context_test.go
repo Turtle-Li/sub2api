@@ -40,8 +40,17 @@ func TestOpenAISubscriptionLongContextExempt(t *testing.T) {
 	}
 }
 
+// 本仓库默认不对客户扣费应用订阅豁免；上游用例显式开启以覆盖上游口径。
+func enableOpenAISubscriptionLongContextCustomerExempt(t *testing.T) {
+	t.Helper()
+	prev := openAISubscriptionLongContextCustomerExempt
+	openAISubscriptionLongContextCustomerExempt = true
+	t.Cleanup(func() { openAISubscriptionLongContextCustomerExempt = prev })
+}
+
 // 同时覆盖远程目录更新、静态兜底、旧计费入口和分组入口，校验真实扣款与账号成本。
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionLongContext(t *testing.T) {
+	enableOpenAISubscriptionLongContextCustomerExempt(t)
 	for _, catalog := range []bool{false, true} {
 		for _, groupMode := range []string{"无分组", "分组关闭", "分组开启"} {
 			for _, accountEnabled := range []bool{false, true} {
@@ -94,7 +103,8 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionLongContext(t *test
 							require.InDelta(t, 80000*0.1e-6*inputFactor*tierFactor, log.CacheReadCost, 1e-12)
 							require.InDelta(t, 20000*2.5e-6*inputFactor*tierFactor, log.CacheCreationCost, 1e-12)
 							require.InDelta(t, 2000*10e-6*outputFactor*tierFactor, log.OutputCost, 1e-12)
-							wantTotal := (0.458*inputFactor + 0.02*outputFactor) * tierFactor
+							// 本仓库客户扣费叠加隐藏消耗倍率；账号成本仍为参考价。
+							wantTotal := (0.458*inputFactor + 0.02*outputFactor) * tierFactor * openAIConsumptionMultiplier("gpt-6.1-sol")
 							require.InDelta(t, wantTotal, log.TotalCost, 1e-12)
 							require.InDelta(t, wantTotal*1.1, log.ActualCost, 1e-12)
 							require.Equal(t, 1, userRepo.deductCalls)
@@ -116,6 +126,7 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionLongContext(t *test
 }
 
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolUsesCredentialAndUpstreamModel(t *testing.T) {
+	enableOpenAISubscriptionLongContextCustomerExempt(t)
 	for _, tt := range []struct {
 		name       string
 		model      string
@@ -123,11 +134,12 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolUsesCredentialAndUpstreamModel(
 		parentType string
 		wantTotal  float64
 		wantLong   bool
+		hiddenFrom string // 本仓库隐藏消耗倍率取自计费模型
 	}{
-		{name: "客户别名映射到目标", model: "custom", upstream: "gpt-6.1-sol", parentType: AccountTypeOAuth, wantTotal: 0.62},
-		{name: "请求目标映射到旧模型", model: "gpt-6.1-sol", upstream: "gpt-6-sol", parentType: AccountTypeOAuth, wantTotal: 1.23, wantLong: true},
-		{name: "其他订阅模型", model: "gpt-6-sol", parentType: AccountTypeOAuth, wantTotal: 1.23, wantLong: true},
-		{name: "订阅母账号", model: "gpt-6.1-sol", parentType: AccountTypeOAuth, wantTotal: 0.62},
+		{name: "客户别名映射到目标", model: "custom", upstream: "gpt-6.1-sol", parentType: AccountTypeOAuth, wantTotal: 0.62, hiddenFrom: "gpt-6.1-sol"},
+		{name: "请求目标映射到旧模型", model: "gpt-6.1-sol", upstream: "gpt-6-sol", parentType: AccountTypeOAuth, wantTotal: 1.23, wantLong: true, hiddenFrom: "gpt-6.1-sol"},
+		{name: "其他订阅模型", model: "gpt-6-sol", parentType: AccountTypeOAuth, wantTotal: 1.23, wantLong: true, hiddenFrom: "gpt-6-sol"},
+		{name: "订阅母账号", model: "gpt-6.1-sol", parentType: AccountTypeOAuth, wantTotal: 0.62, hiddenFrom: "gpt-6.1-sol"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
@@ -145,7 +157,7 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolUsesCredentialAndUpstreamModel(
 			})
 			require.NoError(t, err)
 			require.Equal(t, tt.wantLong, usageRepo.lastLog.LongContextBillingApplied)
-			require.InDelta(t, tt.wantTotal, usageRepo.lastLog.TotalCost, 1e-12)
+			require.InDelta(t, tt.wantTotal*openAIConsumptionMultiplier(tt.hiddenFrom), usageRepo.lastLog.TotalCost, 1e-12)
 		})
 	}
 }
@@ -161,7 +173,7 @@ func TestCalculateCostUnified_ModelLongContextExemptionPreservesCustomIntervals(
 		}
 		cost, err := service.CalculateCostUnified(input)
 		require.NoError(t, err)
-		require.InDelta(t, 0.6, cost.TotalCost, 1e-12)
+		require.InDelta(t, 0.6*openAIConsumptionMultiplier("gpt-6.1-sol"), cost.TotalCost, 1e-12)
 		require.False(t, cost.LongContextBillingApplied)
 		if withResolver {
 			input.Resolved = &ResolvedPricing{
@@ -171,12 +183,13 @@ func TestCalculateCostUnified_ModelLongContextExemptionPreservesCustomIntervals(
 			}
 			cost, err = service.CalculateCostUnified(input)
 			require.NoError(t, err)
-			require.InDelta(t, 1.8, cost.TotalCost, 1e-12, "管理员显式区间价格应保留")
+			require.InDelta(t, 1.8*openAIConsumptionMultiplier("gpt-6.1-sol"), cost.TotalCost, 1e-12, "管理员显式区间价格应保留")
 		}
 	}
 }
 
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.T) {
+	enableOpenAISubscriptionLongContextCustomerExempt(t)
 	for _, totalInput := range []int{271999, 272000, 272001} {
 		for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
 			t.Run(fmt.Sprintf("%s/%d", accountType, totalInput), func(t *testing.T) {
@@ -205,6 +218,7 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.
 }
 
 func TestOpenAIGatewayServiceRecordUsage_GPT61SolExemptionSurvivesRepricing(t *testing.T) {
+	enableOpenAISubscriptionLongContextCustomerExempt(t)
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
@@ -227,12 +241,51 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolExemptionSurvivesRepricing(t *t
 		ChannelUsageFields: ChannelUsageFields{BillingModelSource: BillingModelSourceResponse},
 	})
 	require.NoError(t, err)
-	// 响应模型改用较低的缓存价；免费 Fast 再按标准档扣款，两次重算均须保留豁免。
+	// 上游：响应模型改用较低的缓存价；免费 Fast 再按标准档扣款，两次重算均须保留豁免。
+	// 本仓库：gpt-6.1-sol 叠加隐藏倍率 2 后比 gpt-6-sol（1.8）更贵，响应模型重算不被采用，
+	// 客户仍按 gpt-6-sol 价卡计费；账号成本按实际发送模型且保留豁免。
 	const standardCost = 220000*2e-6 + 80000*0.1e-6 + 2000*10e-6
-	require.InDelta(t, standardCost*2, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, standardCost*1.1, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, standardCost*1.1, userRepo.lastAmount, 1e-12)
+	const baselineStandardCost = 220000*2e-6 + 80000*0.2e-6 + 2000*10e-6
+	hidden := openAIConsumptionMultiplier("gpt-6-sol")
+	require.InDelta(t, baselineStandardCost*2*hidden, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, baselineStandardCost*hidden*1.1, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, baselineStandardCost*hidden*1.1, userRepo.lastAmount, 1e-12)
 	require.False(t, usageRepo.lastLog.LongContextBillingApplied)
 	require.NotNil(t, usageRepo.lastLog.AccountStatsCost)
 	require.InDelta(t, standardCost*2, *usageRepo.lastLog.AccountStatsCost, 1e-12)
+}
+
+// 本仓库默认：订阅豁免不改变客户扣费，仅作用于账号成本统计。
+func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionKeepsCustomerLongContextByDefault(t *testing.T) {
+	require.False(t, openAISubscriptionLongContextCustomerExempt)
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		t.Run(accountType, func(t *testing.T) {
+			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+			userRepo := &openAIRecordUsageUserRepoStub{}
+			svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
+			apiKey := openAIRecordUsageAPIKeyWithGroup(svc, 1, true)
+			apiKey.GroupID = i64p(1)
+			apiKey.Group.RateMultiplier = 1.1
+			svc.channelService = newTestChannelServiceForStats(t, &Channel{ID: 1, Status: StatusActive}, 1, PlatformOpenAI)
+			err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+				Result: &OpenAIForwardResult{RequestID: "default-" + accountType, Model: "gpt-6.1-sol", Duration: time.Second,
+					Usage: OpenAIUsage{InputTokens: 300000, OutputTokens: 2000}},
+				APIKey: apiKey, User: &User{ID: 2},
+				Account: &Account{ID: 3, Platform: PlatformOpenAI, Type: accountType,
+					Extra: map[string]any{openAILongContextBillingEnabledKey: true}},
+			})
+			require.NoError(t, err)
+			log := usageRepo.lastLog
+			require.True(t, log.LongContextBillingApplied)
+			wantTotal := (300000*2e-6*2 + 2000*10e-6*1.5) * openAIConsumptionMultiplier("gpt-6.1-sol")
+			require.InDelta(t, wantTotal, log.TotalCost, 1e-12)
+			require.InDelta(t, wantTotal*1.1, userRepo.lastAmount, 1e-12)
+			wantStats := 300000*2e-6*2 + 2000*10e-6*1.5
+			if accountType == AccountTypeOAuth {
+				wantStats = 300000*2e-6 + 2000*10e-6
+			}
+			require.NotNil(t, log.AccountStatsCost)
+			require.InDelta(t, wantStats, *log.AccountStatsCost, 1e-12)
+		})
+	}
 }

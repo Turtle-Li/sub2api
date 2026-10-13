@@ -46,6 +46,7 @@ type AdminHandlers struct {
 	Affiliate              *admin.AffiliateHandler
 	Compliance             *admin.ComplianceHandler
 	AuditLog               *admin.AuditLogHandler
+	ModelTrace             *admin.ModelTraceHandler
 	AccountPool            *admin.AccountPoolHandler
 	ProxyPool              *admin.ProxyPoolHandler
 }

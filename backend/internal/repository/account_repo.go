@@ -69,6 +69,7 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_referral_snapshot":    {},
 	"grok_billing_snapshot":      {},
 	"session_window_utilization": {},
+	"modeltrace":                 {},
 }
 
 const postgresParameterBatchSize = 50000
@@ -1550,6 +1551,29 @@ func (r *accountRepository) ListAllWithFilters(ctx context.Context, platform, ac
 		return nil, err
 	}
 	return r.accountsToService(ctx, accounts)
+}
+
+// ListModelTraceAccounts reads only explicitly added monitoring accounts.
+func (r *accountRepository) ListModelTraceAccounts(ctx context.Context) ([]service.Account, error) {
+	accounts, err := r.client.Account.Query().
+		Where(dbaccount.DeletedAtIsNil()).
+		Where(func(s *entsql.Selector) {
+			s.Where(entsql.ExprP("jsonb_typeof(" + s.C(dbaccount.FieldExtra) + "->'modeltrace') = 'object'"))
+		}).
+		Select(dbaccount.FieldID, dbaccount.FieldName, dbaccount.FieldPlatform, dbaccount.FieldType, dbaccount.FieldStatus, dbaccount.FieldExtra).
+		Order(dbent.Asc(dbaccount.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]service.Account, 0, len(accounts))
+	for _, account := range accounts {
+		items = append(items, service.Account{
+			ID: account.ID, Name: account.Name, Platform: account.Platform,
+			Type: account.Type, Status: account.Status, Extra: account.Extra,
+		})
+	}
+	return items, nil
 }
 
 func (r *accountRepository) ListOpsAccountsForStats(ctx context.Context, platformFilter string, groupIDFilter *int64) ([]service.Account, error) {
