@@ -4,15 +4,17 @@ import { flushPromises, mount } from '@vue/test-utils'
 import AccountPoolStrip from '../AccountPoolStrip.vue'
 import AccountPoolSelect from '../AccountPoolSelect.vue'
 import AccountPoolModal from '../AccountPoolModal.vue'
+import AccountPoolAddMembersDialog from '../AccountPoolAddMembersDialog.vue'
 import { poolStatusBuckets, poolStatusSegments } from '../accountPoolStats'
 import type { AccountPool, AccountPoolStats } from '@/api/admin/accountPools'
 
-vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError: vi.fn() }) }))
+vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError: vi.fn(), showSuccess: vi.fn() }) }))
 
-const { listPools, createPool, getPool, listAccounts } = vi.hoisted(() => ({
+const { listPools, createPool, getPool, addMembers, listAccounts } = vi.hoisted(() => ({
   listPools: vi.fn(),
   createPool: vi.fn(),
   getPool: vi.fn(),
+  addMembers: vi.fn(),
   listAccounts: vi.fn()
 }))
 
@@ -21,7 +23,8 @@ vi.mock('@/api/admin', () => ({
     accountPools: {
       list: listPools,
       create: createPool,
-      get: getPool
+      get: getPool,
+      addMembers
     },
     accounts: {
       list: listAccounts
@@ -231,7 +234,8 @@ describe('AccountPoolModal', () => {
     AccountStatusIndicator: true,
     AccountGroupsCell: true,
     BulkEditAccountModal: true,
-    AccountPoolAssignDialog: true
+    AccountPoolAssignDialog: true,
+    AccountPoolAddMembersDialog: true
   }
 
   it('exposes the main-list account actions for every member row', async () => {
@@ -256,5 +260,63 @@ describe('AccountPoolModal', () => {
       expect(wrapper.emitted(event)?.[0]?.[0]).toMatchObject({ id: 42 })
     }
     expect(wrapper.emitted('account-menu')?.[0]?.[1]).toBeInstanceOf(MouseEvent)
+  })
+
+  it('opens the add-accounts picker from the header', async () => {
+    getPool.mockResolvedValue(pool())
+    listAccounts.mockResolvedValue({ items: [], total: 0 })
+    const wrapper = mount(AccountPoolModal, {
+      props: { show: true, poolId: 7, groups: [], proxies: [] },
+      global: { stubs }
+    })
+    await flushPromises()
+
+    const picker = wrapper.findComponent({ name: 'AccountPoolAddMembersDialog' })
+    expect(picker.props('show')).toBe(false)
+    await wrapper.get('[data-testid="account-pool-add-members-open"]').trigger('click')
+    expect(picker.props('show')).toBe(true)
+    expect(picker.props('pool')).toMatchObject({ id: 7 })
+  })
+})
+
+describe('AccountPoolAddMembersDialog', () => {
+  const stubs = {
+    BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+    Pagination: true,
+    SearchInput: true,
+    AccountStatusIndicator: true,
+    AccountGroupsCell: true
+  }
+
+  beforeEach(() => {
+    listAccounts.mockReset()
+    addMembers.mockReset()
+  })
+
+  it('lists unpooled same-platform accounts and adds the selected ones', async () => {
+    listAccounts.mockResolvedValue({
+      items: [
+        { id: 54, name: 'free-54', platform: 'openai', type: 'oauth', status: 'active', schedulable: true, group_ids: [] },
+        { id: 55, name: 'free-55', platform: 'openai', type: 'oauth', status: 'active', schedulable: true, group_ids: [] }
+      ],
+      total: 2
+    })
+    addMembers.mockResolvedValue({ affected: 1 })
+    const wrapper = mount(AccountPoolAddMembersDialog, {
+      props: { show: true, pool: pool({ id: 3, platform: 'openai' }), groups: [] },
+      global: { stubs }
+    })
+    await flushPromises()
+
+    expect(listAccounts).toHaveBeenCalledWith(1, 20, expect.objectContaining({ platform: 'openai', pool: 'none' }))
+    const submit = wrapper.get('[data-testid="account-pool-add-submit"]')
+    expect(submit.attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="account-pool-add-row-55"]').trigger('click')
+    await submit.trigger('click')
+    await flushPromises()
+
+    expect(addMembers).toHaveBeenCalledWith(3, [55])
+    expect(wrapper.emitted('added')).toHaveLength(1)
   })
 })

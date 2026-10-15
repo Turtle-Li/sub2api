@@ -19,6 +19,9 @@
             <Icon name="refresh" size="sm" :class="loading ? 'animate-spin' : ''" />
           </button>
           <button class="btn btn-secondary btn-sm" @click="$emit('edit-pool', pool)">{{ t('admin.accounts.pools.edit') }}</button>
+          <button class="btn btn-secondary btn-sm" data-testid="account-pool-add-members-open" @click="showAddMembersDialog = true">
+            {{ t('admin.accounts.pools.addMembers') }}
+          </button>
           <button class="btn btn-primary btn-sm" :disabled="pool.stats.total === 0" @click="openBulkEdit('pool')">
             {{ t('admin.accounts.pools.editAllMembers') }}
           </button>
@@ -243,6 +246,13 @@
     @close="showAssignDialog = false"
     @assigned="handleMoved"
   />
+  <AccountPoolAddMembersDialog
+    :show="showAddMembersDialog"
+    :pool="pool"
+    :groups="groups"
+    @close="showAddMembersDialog = false"
+    @added="handleMembersAdded"
+  />
   <ConfirmDialog
     :show="showPurgeErrorDialog"
     :title="t('admin.accounts.pools.purgeErrorTitle')"
@@ -281,6 +291,7 @@ import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import { BulkEditAccountModal } from '@/components/account'
 import AccountPoolAssignDialog from './AccountPoolAssignDialog.vue'
+import AccountPoolAddMembersDialog from './AccountPoolAddMembersDialog.vue'
 import { adminAPI } from '@/api/admin'
 import type { AccountPool } from '@/api/admin/accountPools'
 import type { Account, AccountListItem, AccountPlatform, AccountType, AdminGroup, GroupPlatform, Proxy as AccountProxy } from '@/types'
@@ -336,6 +347,7 @@ const bulkEditTarget = ref<{
   selectedTypes?: AccountType[]
 } | null>(null)
 const showAssignDialog = ref(false)
+const showAddMembersDialog = ref(false)
 const showPurgeErrorDialog = ref(false)
 const showDissolveDialog = ref(false)
 const dissolveDeleteMembers = ref(false)
@@ -343,7 +355,7 @@ let loadVersion = 0
 
 const selectedIds = computed(() => Array.from(selected.value))
 const childDialogOpen = computed(() =>
-  showBulkEdit.value || showAssignDialog.value || showPurgeErrorDialog.value || showDissolveDialog.value
+  showBulkEdit.value || showAssignDialog.value || showAddMembersDialog.value || showPurgeErrorDialog.value || showDissolveDialog.value
 )
 const groupsByID = computed(() => new Map(props.groups.map(group => [group.id, group])))
 const groupsForRow = (row: AccountListItem): AdminGroup[] =>
@@ -534,6 +546,11 @@ const releaseSelected = async () => {
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('common.error')))
   }
+  await afterMutation()
+}
+
+const handleMembersAdded = async () => {
+  showAddMembersDialog.value = false
   await afterMutation()
 }
 
