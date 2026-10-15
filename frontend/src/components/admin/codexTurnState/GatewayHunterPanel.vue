@@ -186,7 +186,7 @@
             <span>#{{ p.account_id }}</span>
             <span class="ghp-mono">{{ p.gateway }}</span>
             <span class="ghp-tier" :class="tierClass(p.tier)">{{ tierLabel(p.tier) }}</span>
-            <span class="ghp-faint">{{ p.answer || (p.http_status ? `HTTP ${p.http_status}` : '') }}</span>
+            <span class="ghp-faint">{{ p.answer || p.error || (p.http_status ? `HTTP ${p.http_status}` : '') }}</span>
             <span class="ghp-faint">{{ (p.total_ms / 1000).toFixed(1) }}s</span>
           </div>
         </div>

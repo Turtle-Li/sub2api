@@ -183,3 +183,21 @@ func TestGatewayHunterBareControlFollowsRatio(t *testing.T) {
 	require.True(t, ok)
 	require.Empty(t, gw)
 }
+
+func TestGatewayHunterUpstreamErrorKeepsGatewayResult(t *testing.T) {
+	svc := NewCodexGatewayHunterService(nil, nil, nil, nil, nil)
+	svc.cfg = defaultCodexGatewayHunterConfig()
+	svc.call = func(context.Context, *Account, string, string, string, time.Duration) gatewayProbeResult {
+		return gatewayProbeResult{status: http.StatusOK, tier: GatewayTierError, err: "Our servers are currently overloaded."}
+	}
+	svc.pool["unified-1"] = &gatewayHunterEntry{cookie: "__cflb=x", probes: 3, lastTier: GatewayTierPruned}
+
+	svc.probe(context.Background(), &Account{ID: 9}, "unified-1", "hunt")
+
+	e := svc.pool["unified-1"]
+	require.Equal(t, 3, e.probes)
+	require.Equal(t, GatewayTierPruned, e.lastTier)
+	require.Less(t, time.Since(e.lastProbeAt), time.Duration(svc.cfg.MinProbeIntervalSeconds)*time.Second, "an error retries before a normal probe gap")
+	require.Greater(t, time.Since(e.lastProbeAt), 20*time.Second)
+	require.Equal(t, "Our servers are currently overloaded.", svc.probes[len(svc.probes)-1].Error)
+}

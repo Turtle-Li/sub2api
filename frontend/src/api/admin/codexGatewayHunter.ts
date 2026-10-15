@@ -64,6 +64,7 @@ export interface GatewayHunterProbe {
   ttfb_ms: number
   total_ms: number
   reasoning_tokens: number | null
+  error?: string
 }
 
 export interface GatewayHunterCounters {

@@ -164,6 +164,7 @@ type CodexGatewayHunterProbe struct {
 	TTFBMs          int64  `json:"ttfb_ms"`
 	TotalMs         int64  `json:"total_ms"`
 	ReasoningTokens *int64 `json:"reasoning_tokens"`
+	Error           string `json:"error"`
 }
 
 type CodexGatewayHunterCounters struct {
@@ -904,17 +905,22 @@ func (s *CodexGatewayHunterService) trackLoop(ctx context.Context, cfg CodexGate
 				s.mu.Unlock()
 				continue
 			}
-			full := false
+			full, decided := false, false
 			for i, r := range results {
 				h.accounts[trackers[i].ID] = r.tier
+				if r.tier != GatewayTierError {
+					decided = true
+				}
 				if r.tier == GatewayTierFull {
 					full = true
 					s.confirmWindowLocked(gw, h.start, trackers[i].ID)
 				}
 			}
-			if full {
+			// 一轮全是上游错误（如过载）时无法判断，不计入未满血次数。
+			switch {
+			case full:
 				h.misses = 0
-			} else {
+			case decided:
 				h.misses++
 			}
 			if h.misses >= codexGatewayHunterColdMisses || len(trackers) == 0 {
@@ -1004,11 +1010,16 @@ func (s *CodexGatewayHunterService) probe(ctx context.Context, acc *Account, gw,
 		}
 	}
 	if e := s.pool[gw]; gw != "" && e != nil {
-		e.probes++
-		e.lastTier = r.tier
-		e.lastProbeAt = now
-		if r.tier == GatewayTierFull {
-			e.hits++
+		if r.tier == GatewayTierError {
+			// 上游过载/网络错误说明不了网关档位：不覆盖上次结果，约 10 秒后再排队重测。
+			e.lastProbeAt = now.Add(10*time.Second - time.Duration(s.cfg.MinProbeIntervalSeconds)*time.Second)
+		} else {
+			e.probes++
+			e.lastTier = r.tier
+			e.lastProbeAt = now
+			if r.tier == GatewayTierFull {
+				e.hits++
+			}
 		}
 	}
 	label := gw
@@ -1017,7 +1028,7 @@ func (s *CodexGatewayHunterService) probe(ctx context.Context, acc *Account, gw,
 	}
 	s.probes = append(s.probes, CodexGatewayHunterProbe{At: now.Unix(), Phase: phase, AccountID: acc.ID, Gateway: label,
 		HTTPStatus: r.status, Tier: r.tier, Answer: r.answer, TTFBMs: r.ttfb.Milliseconds(), TotalMs: r.total.Milliseconds(),
-		ReasoningTokens: r.reasoning})
+		ReasoningTokens: r.reasoning, Error: r.errorSummary()})
 	if len(s.probes) > codexGatewayHunterMaxProbes {
 		s.probes = s.probes[len(s.probes)-codexGatewayHunterMaxProbes:]
 	}
@@ -1074,10 +1085,10 @@ func (s *CodexGatewayHunterService) callUpstream(ctx context.Context, account *A
 	enforceCodexIdentityHeadersWithUA(req.Header, "")
 	if cookie != "" {
 		req.Header.Set("Cookie", cookie)
-	} else {
-		// 不带 Cookie 时网关由边缘按连接分配；复用长连接会让同一账号一直落在同一出口和网关上。
-		req.Close = true
 	}
+	// 每次探测用新连接：不带 Cookie 时网关由边缘按连接分配，复用长连接会让同一账号一直落在同一网关上；
+	// 多个探测复用同一条 HTTP/2 连接时上游也更容易返回 overloaded。
+	req.Close = true
 
 	started := time.Now()
 	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFP.ResolveTLSProfile(account))
