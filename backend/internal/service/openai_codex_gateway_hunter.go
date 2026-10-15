@@ -808,7 +808,9 @@ func (s *CodexGatewayHunterService) pickGateway(cfg CodexGatewayHunterConfig) (s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	if rand.Float64() < codexGatewayHunterBareRatio && !s.busy[""] {
+	// 按累计计数控制对照比例；网关都在冷却时工作线程每秒重试，按概率抽会让对照偏多。
+	bareDue := float64(s.counters.BareProbes) < codexGatewayHunterBareRatio*float64(s.counters.Hunts+s.counters.BareProbes+1)
+	if bareDue && !s.busy[""] {
 		s.busy[""] = true
 		return "", true
 	}

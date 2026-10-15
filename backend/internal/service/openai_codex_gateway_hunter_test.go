@@ -161,3 +161,25 @@ func TestGatewayHunterTrackerBudgetRetiresTrackerOnly(t *testing.T) {
 	st.secondary = &high
 	require.Equal(t, "weekly_quota", st.unavailableReason(now, cfg, true))
 }
+
+func TestGatewayHunterBareControlFollowsRatio(t *testing.T) {
+	svc := NewCodexGatewayHunterService(nil, nil, nil, nil, nil)
+	cfg := defaultCodexGatewayHunterConfig()
+
+	gw, ok := svc.pickGateway(cfg)
+	require.True(t, ok)
+	require.Empty(t, gw, "the first probe is a bare control")
+	delete(svc.busy, "")
+	svc.counters.BareProbes = 1
+
+	// 没有可测网关时反复重试也不应再插入对照。
+	for range 50 {
+		_, ok = svc.pickGateway(cfg)
+		require.False(t, ok)
+	}
+
+	svc.counters.Hunts = 12
+	gw, ok = svc.pickGateway(cfg)
+	require.True(t, ok)
+	require.Empty(t, gw)
+}
