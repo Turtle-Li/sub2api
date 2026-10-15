@@ -1074,6 +1074,9 @@ func (s *CodexGatewayHunterService) callUpstream(ctx context.Context, account *A
 	enforceCodexIdentityHeadersWithUA(req.Header, "")
 	if cookie != "" {
 		req.Header.Set("Cookie", cookie)
+	} else {
+		// 不带 Cookie 时网关由边缘按连接分配；复用长连接会让同一账号一直落在同一出口和网关上。
+		req.Close = true
 	}
 
 	started := time.Now()
