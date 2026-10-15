@@ -9,6 +9,7 @@ import (
 type AdminHandlers struct {
 	CodexTurnStatePanel    *admin.CodexTurnStatePanelHandler
 	CodexDegradationProbe  *admin.CodexDegradationProbeHandler
+	CodexGatewayHunter     *admin.CodexGatewayHunterHandler
 	Dashboard              *admin.DashboardHandler
 	User                   *admin.UserHandler
 	Group                  *admin.GroupHandler

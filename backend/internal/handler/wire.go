@@ -13,6 +13,7 @@ import (
 func ProvideAdminHandlers(
 	codexTurnStatePanelHandler *admin.CodexTurnStatePanelHandler,
 	codexDegradationProbeHandler *admin.CodexDegradationProbeHandler,
+	codexGatewayHunterHandler *admin.CodexGatewayHunterHandler,
 	dashboardHandler *admin.DashboardHandler,
 	userHandler *admin.UserHandler,
 	groupHandler *admin.GroupHandler,
@@ -65,6 +66,7 @@ func ProvideAdminHandlers(
 	return &AdminHandlers{
 		CodexTurnStatePanel:    codexTurnStatePanelHandler,
 		CodexDegradationProbe:  codexDegradationProbeHandler,
+		CodexGatewayHunter:     codexGatewayHunterHandler,
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,
 		Group:                  groupHandler,
@@ -279,6 +281,7 @@ var ProviderSet = wire.NewSet(
 	// Admin handlers
 	admin.NewCodexTurnStatePanelHandler,
 	admin.NewCodexDegradationProbeHandler,
+	admin.NewCodexGatewayHunterHandler,
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
 	admin.NewGroupHandlerWithConfig,

@@ -109,6 +109,7 @@ async function mountView() {
         ProbeSourceStatsCard: StatsStub,
         AddMonitoredModelDialog: true,
         ProxySourcesDialog: true,
+        GatewayHunterPanel: true,
       },
     },
   })

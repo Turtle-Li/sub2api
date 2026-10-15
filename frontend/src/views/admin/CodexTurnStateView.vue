@@ -1,306 +1,328 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="text-xs text-gray-500 dark:text-gray-400" data-test="cts-updated">
-          <template v-if="state">
-            {{ t('admin.codexTurnState.updatedAt', { time: formatDateTime(new Date(state.generated_at * 1000)) }) }}
-          </template>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            class="btn btn-sm"
-            :class="autoRefresh ? 'btn-primary' : 'btn-secondary'"
-            data-test="cts-auto-refresh"
-            :title="t('admin.codexTurnState.autoRefreshHint', { seconds: REFRESH_INTERVAL_MS / 1000 })"
-            @click="autoRefresh = !autoRefresh"
-          >
-            <Icon name="sync" size="xs" />
-            <span>{{ t('admin.codexTurnState.autoRefresh') }}</span>
-          </button>
-          <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" data-test="cts-refresh" @click="refreshAll">
-            <Icon name="refresh" size="xs" :class="{ 'animate-spin': loading }" />
-            <span>{{ t('common.refresh') }}</span>
-          </button>
-          <button type="button" class="btn btn-secondary btn-sm" :disabled="!state" data-test="cts-open-proxies" @click="showProxies = true">
-            <Icon name="server" size="xs" />
-            <span>{{ t('admin.codexTurnState.actions.manageProxies') }}</span>
-          </button>
-          <button type="button" class="btn btn-primary btn-sm" :disabled="!state" data-test="cts-open-add" @click="openAdd(null)">
-            <Icon name="plus" size="xs" />
-            <span>{{ t('admin.codexTurnState.actions.addModel') }}</span>
-          </button>
-        </div>
-      </div>
+      <nav class="flex gap-6 border-b border-gray-200 dark:border-dark-700" role="tablist">
+        <button
+          v-for="tab in viewTabs"
+          :key="tab"
+          type="button"
+          role="tab"
+          class="-mb-px border-b-2 px-1 py-2 text-sm"
+          :class="activeView === tab
+            ? 'border-gray-900 font-semibold text-gray-900 dark:border-gray-100 dark:text-white'
+            : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'"
+          :aria-selected="activeView === tab"
+          :data-test="`cts-view-${tab}`"
+          @click="activeView = tab"
+        >
+          {{ t(`admin.codexTurnState.viewTabs.${tab}`) }}
+        </button>
+      </nav>
 
-      <div
-        v-if="loadError"
-        role="alert"
-        class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
-        data-test="cts-load-error"
-      >
-        <div>
-          <div class="font-medium">{{ loadError }}</div>
-          <div class="text-xs opacity-80">{{ state ? t('admin.codexTurnState.staleHint') : t('admin.codexTurnState.unknownHint') }}</div>
-        </div>
-        <button type="button" class="btn btn-secondary" @click="refreshAll">{{ t('common.refresh') }}</button>
-      </div>
+      <GatewayHunterPanel v-if="activeView === 'gateway'" />
 
-      <div
-        v-if="state && !state.probing_enabled"
-        class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200"
-        data-test="cts-paused"
-      >
-        {{ t('admin.codexTurnState.pausedBanner') }}
-      </div>
-      <div
-        v-if="state && !state.proxy_count"
-        class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200"
-      >
-        {{ t('admin.codexTurnState.noProxyBanner') }}
-      </div>
-
-      <div v-if="loading && !state" class="flex h-48 items-center justify-center">
-        <Icon name="refresh" size="lg" class="animate-spin text-primary-600" />
-      </div>
-
-      <template v-if="state">
-        <div class="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-7">
-          <div v-for="card in overviewCards" :key="card.key" class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800">
-            <div class="flex items-center gap-3">
-              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" :class="card.iconClass">
-                <Icon :name="card.icon" size="md" />
-              </div>
-              <div class="min-w-0">
-                <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t(`admin.codexTurnState.overview.${card.key}`) }}</p>
-                <p class="text-xl font-semibold" :class="card.valueClass" :data-test="`cts-overview-${card.key}`">{{ card.value }}</p>
-              </div>
-            </div>
+      <div v-show="activeView === 'tickets'" class="space-y-6">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="text-xs text-gray-500 dark:text-gray-400" data-test="cts-updated">
+            <template v-if="state">
+              {{ t('admin.codexTurnState.updatedAt', { time: formatDateTime(new Date(state.generated_at * 1000)) }) }}
+            </template>
           </div>
-        </div>
-
-        <section class="card p-5" data-test="cts-settings">
-          <div class="flex flex-wrap items-start justify-between gap-6">
-            <div class="space-y-1">
-              <div class="flex items-center gap-3">
-                <Toggle :model-value="state.probing_enabled" data-test="cts-probing-toggle" @update:model-value="setProbing" />
-                <span class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.codexTurnState.settings.probing') }}</span>
-                <span :class="state.probing_enabled ? 'badge badge-success' : 'badge badge-warning'">
-                  {{ state.probing_enabled ? t('admin.codexTurnState.settings.running') : t('admin.codexTurnState.settings.paused') }}
-                </span>
-              </div>
-              <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.codexTurnState.settings.probingHint') }}</p>
-              <p class="text-xs text-gray-500 dark:text-gray-400" data-test="cts-timing">{{ timingSummary }}</p>
-            </div>
-            <form class="flex flex-wrap items-end gap-2" @submit.prevent="saveAdvance">
-              <label class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.codexTurnState.settings.advance') }}
-                <input
-                  v-model.number="advanceInput"
-                  type="number"
-                  min="1"
-                  max="30"
-                  step="1"
-                  class="input mt-1 w-28"
-                  data-test="cts-advance-input"
-                  @input="advanceDirty = true"
-                />
-              </label>
-              <button type="submit" class="btn btn-secondary btn-sm" :disabled="savingSettings || !advanceDirty" data-test="cts-advance-save">{{ t('common.save') }}</button>
-            </form>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="btn btn-sm"
+              :class="autoRefresh ? 'btn-primary' : 'btn-secondary'"
+              data-test="cts-auto-refresh"
+              :title="t('admin.codexTurnState.autoRefreshHint', { seconds: REFRESH_INTERVAL_MS / 1000 })"
+              @click="autoRefresh = !autoRefresh"
+            >
+              <Icon name="sync" size="xs" />
+              <span>{{ t('admin.codexTurnState.autoRefresh') }}</span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" data-test="cts-refresh" @click="refreshAll">
+              <Icon name="refresh" size="xs" :class="{ 'animate-spin': loading }" />
+              <span>{{ t('common.refresh') }}</span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="!state" data-test="cts-open-proxies" @click="showProxies = true">
+              <Icon name="server" size="xs" />
+              <span>{{ t('admin.codexTurnState.actions.manageProxies') }}</span>
+            </button>
+            <button type="button" class="btn btn-primary btn-sm" :disabled="!state" data-test="cts-open-add" @click="openAdd(null)">
+              <Icon name="plus" size="xs" />
+              <span>{{ t('admin.codexTurnState.actions.addModel') }}</span>
+            </button>
           </div>
-          <p v-if="state.settings?.error" class="mt-2 text-xs text-red-600 dark:text-red-400">{{ t('admin.codexTurnState.settings.fileError') }}</p>
-        </section>
-
-        <div class="flex flex-wrap items-center gap-3">
-          <input v-model="searchQuery" type="text" class="input w-full text-xs sm:w-64" :placeholder="t('admin.codexTurnState.filters.search')" data-test="cts-search" />
-          <select v-model="statusFilter" class="input w-full text-xs sm:w-44" data-test="cts-status-filter">
-            <option v-for="option in statusFilters" :key="option" :value="option">{{ t(`admin.codexTurnState.filters.${option}`) }}</option>
-          </select>
-        </div>
-
-        <div v-if="!filteredAccounts.length" class="rounded-xl border border-gray-200 bg-white p-10 text-center text-sm text-gray-500 shadow-sm dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400" data-test="cts-empty">
-          {{ state.accounts.length ? t('admin.codexTurnState.filters.noMatch') : t('admin.codexTurnState.slots.empty') }}
         </div>
 
         <div
-          v-for="account in filteredAccounts"
-          :key="account.id"
-          class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-800"
-          data-test="cts-account"
+          v-if="loadError"
+          role="alert"
+          class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
+          data-test="cts-load-error"
         >
-          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50/50 px-5 py-3 dark:border-dark-700 dark:bg-dark-800/80">
-            <div class="flex items-center gap-2">
-              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ account.name }}</h3>
-              <span class="text-xs text-gray-400">#{{ account.id }}</span>
-              <span class="badge badge-gray">{{ t(`admin.codexTurnState.slots.source.${account.source === 'panel' ? 'panel' : 'config'}`) }}</span>
-            </div>
-            <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <span>{{ t('admin.codexTurnState.slots.advance', { minutes: account.refresh_advance_minutes }) }}</span>
-              <button type="button" class="btn btn-secondary btn-sm" @click="openAdd({ id: account.id, name: account.name })">
-                <Icon name="plus" size="xs" />
-                <span>{{ t('admin.codexTurnState.actions.addModelToAccount') }}</span>
-              </button>
-            </div>
+          <div>
+            <div class="font-medium">{{ loadError }}</div>
+            <div class="text-xs opacity-80">{{ state ? t('admin.codexTurnState.staleHint') : t('admin.codexTurnState.unknownHint') }}</div>
           </div>
-
-          <div v-if="account.error" class="px-5 py-4 text-sm text-red-600 dark:text-red-400" data-test="cts-account-error">
-            {{ t('admin.codexTurnState.slots.accountError', { error: account.error }) }}
-          </div>
-          <div v-else class="overflow-x-auto">
-            <table class="w-full text-left text-sm">
-              <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-900/40 dark:text-gray-400">
-                <tr>
-                  <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.model') }}</th>
-                  <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.renewal') }}</th>
-                  <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.length') }}</th>
-                  <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.remaining') }}</th>
-                  <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.nextProbe') }}</th>
-                  <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.pinnedAt') }}</th>
-                  <th v-if="state.degraded_enabled" class="px-4 py-3">{{ t('admin.codexTurnState.columns.degradation') }}</th>
-                  <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.history') }}</th>
-                  <th class="px-4 py-3 text-right">{{ t('admin.codexTurnState.columns.actions') }}</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-                <tr v-for="slot in account.slots" :key="slot.model" data-test="cts-slot-row">
-                  <td class="px-4 py-3 font-mono font-medium text-gray-900 dark:text-white">{{ slot.model }}</td>
-                  <td class="px-4 py-3">
-                    <span :class="toneBadge(slot.renewal.tone)" :data-test="`cts-renewal-${account.id}-${slot.model}`">{{ slot.renewal.label }}</span>
-                  </td>
-                  <td class="px-4 py-3 font-mono text-xs" :class="slot.expired || slot.length_degraded ? 'text-red-600 dark:text-red-400' : slot.valid ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'">
-                    {{ slot.state_len || '-' }}<span class="text-gray-400"> / {{ slot.target_len }}</span>
-                  </td>
-                  <td class="px-4 py-3 text-xs">
-                    <template v-if="slot.cookie_present">
-                      <div class="font-medium" :class="slot.cookie_remaining_seconds <= 0 ? 'text-red-600 dark:text-red-400' : slot.cookie_remaining_seconds <= 60 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'">
-                        {{ slot.cookie_remaining_seconds > 0 ? t('admin.codexTurnState.slots.cookie', { time: formatSeconds(slot.cookie_remaining_seconds) }) : t('admin.codexTurnState.slots.cookieExpired') }}
-                      </div>
-                      <div class="text-gray-400" :title="slot.expires_at || ''">{{ t('admin.codexTurnState.slots.ticket', { time: formatSeconds(slot.remaining_seconds) }) }}</div>
-                    </template>
-                    <span v-else-if="slot.expired" class="text-red-600 dark:text-red-400">{{ t('admin.codexTurnState.slots.expired') }}</span>
-                    <span v-else-if="slot.valid" :title="slot.expires_at || ''">{{ formatSeconds(slot.remaining_seconds) }}</span>
-                    <span v-else class="text-red-600 dark:text-red-400">{{ t('admin.codexTurnState.slots.none') }}</span>
-                  </td>
-                  <td class="px-4 py-3 text-xs">
-                    <span v-if="slot.backoff_seconds > 0" class="text-amber-600 dark:text-amber-400">{{ t('admin.codexTurnState.slots.backoff', { time: formatSeconds(slot.backoff_seconds) }) }}</span>
-                    <span v-else-if="slot.next_probe_seconds > 0">{{ formatSeconds(slot.next_probe_seconds) }}</span>
-                    <span v-else class="text-amber-600 dark:text-amber-400">{{ t('admin.codexTurnState.slots.probing') }}</span>
-                  </td>
-                  <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(slot.pinned_updated_at) }}</td>
-                  <td v-if="state.degraded_enabled" class="px-4 py-3 text-xs">
-                    <span :class="verdictBadge(slot.degradation)">{{ t(`admin.codexTurnState.verdict.${slot.degradation}`) }}</span>
-                    <div v-if="slot.degradation === 'degraded' && slot.recent_degradation" class="mt-1 text-red-500">
-                      {{ slot.recent_degradation.sent_model }} → {{ slot.recent_degradation.response_model }} ×{{ slot.recent_degradation.count }}
-                    </div>
-                  </td>
-                  <td class="whitespace-nowrap px-4 py-3 font-mono text-xs text-gray-600 dark:text-gray-300" :title="slot.historyTitle" :data-test="`cts-history-${account.id}-${slot.model}`">
-                    {{ slot.historyText }}
-                  </td>
-                  <td class="whitespace-nowrap px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      class="btn btn-secondary btn-sm mr-2"
-                      :disabled="slot.busy"
-                      :data-test="`cts-probe-${account.id}-${slot.model}`"
-                      @click="probeSlot(account.id, slot.model)"
-                    >
-                      {{ slot.busy ? t('admin.codexTurnState.actions.probing') : t('admin.codexTurnState.actions.probeNow') }}
-                    </button>
-                    <button type="button" class="btn btn-danger btn-sm" :data-test="`cts-remove-${account.id}-${slot.model}`" @click="removeSlot(account.id, slot.model)">
-                      {{ t('admin.codexTurnState.actions.remove') }}
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <button type="button" class="btn btn-secondary" @click="refreshAll">{{ t('common.refresh') }}</button>
         </div>
 
-        <section v-if="state.degraded_enabled" class="card p-5" data-test="cts-degraded">
-          <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.codexTurnState.degraded.title', { window: state.degraded_window || '-' }) }}</h2>
-              <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.codexTurnState.degraded.hint') }}</p>
+        <div
+          v-if="state && !state.probing_enabled"
+          class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200"
+          data-test="cts-paused"
+        >
+          {{ t('admin.codexTurnState.pausedBanner') }}
+        </div>
+        <div
+          v-if="state && !state.proxy_count"
+          class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          {{ t('admin.codexTurnState.noProxyBanner') }}
+        </div>
+
+        <div v-if="loading && !state" class="flex h-48 items-center justify-center">
+          <Icon name="refresh" size="lg" class="animate-spin text-primary-600" />
+        </div>
+
+        <template v-if="state">
+          <div class="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-7">
+            <div v-for="card in overviewCards" :key="card.key" class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800">
+              <div class="flex items-center gap-3">
+                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" :class="card.iconClass">
+                  <Icon :name="card.icon" size="md" />
+                </div>
+                <div class="min-w-0">
+                  <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t(`admin.codexTurnState.overview.${card.key}`) }}</p>
+                  <p class="text-xl font-semibold" :class="card.valueClass" :data-test="`cts-overview-${card.key}`">{{ card.value }}</p>
+                </div>
+              </div>
             </div>
-            <button type="button" class="btn btn-secondary btn-sm" :disabled="degradedLoading" data-test="cts-degraded-refresh" @click="refreshDegraded">
-              {{ t('admin.codexTurnState.degraded.recheck') }}
-            </button>
           </div>
-          <p v-if="state.degraded_error" class="mb-2 text-xs text-red-600 dark:text-red-400">{{ t('admin.codexTurnState.degraded.queryFailed') }}</p>
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-sm">
-              <thead class="text-xs uppercase text-gray-500 dark:text-gray-400">
-                <tr>
-                  <th class="px-3 py-2">{{ t('admin.codexTurnState.columns.account') }}</th>
-                  <th class="px-3 py-2">{{ t('admin.codexTurnState.degraded.sentModel') }}</th>
-                  <th class="px-3 py-2">{{ t('admin.codexTurnState.degraded.responseModel') }}</th>
-                  <th class="px-3 py-2 text-right">{{ t('admin.codexTurnState.degraded.count') }}</th>
-                  <th class="px-3 py-2">{{ t('admin.codexTurnState.degraded.lastSeen') }}</th>
-                  <th class="px-3 py-2 text-right">TTFT</th>
-                  <th class="px-3 py-2 text-right">{{ t('admin.codexTurnState.columns.actions') }}</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-                <tr v-if="!state.degraded.length">
-                  <td colspan="7" class="px-3 py-6 text-center text-gray-500 dark:text-gray-400">{{ t('admin.codexTurnState.degraded.empty') }}</td>
-                </tr>
-                <tr v-for="row in state.degraded" :key="`${row.account_id}:${row.sent_model}:${row.response_model}`" data-test="cts-degraded-row">
-                  <td class="px-3 py-2">{{ row.account_name }} <span class="text-xs text-gray-400">#{{ row.account_id }}</span></td>
-                  <td class="px-3 py-2 font-mono text-xs">{{ row.sent_model }}</td>
-                  <td class="px-3 py-2 font-mono text-xs text-red-600 dark:text-red-400">{{ row.response_model }}</td>
-                  <td class="px-3 py-2 text-right">{{ row.count }}</td>
-                  <td class="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{{ formatTimestamp(row.last_seen) }}</td>
-                  <td class="px-3 py-2 text-right text-xs">{{ row.ttft_avg_ms ? `${Math.round(row.ttft_avg_ms)} ms` : '-' }}</td>
-                  <td class="whitespace-nowrap px-3 py-2 text-right">
-                    <span v-if="isMonitored(row.account_id, row.sent_model)" class="text-xs text-gray-400">{{ t('admin.codexTurnState.degraded.monitored') }}</span>
-                    <button v-else type="button" class="btn btn-secondary btn-sm" :data-test="`cts-degraded-add-${row.account_id}`" @click="addFromDegraded(row)">
-                      {{ t('admin.codexTurnState.degraded.add') }}
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+
+          <section class="card p-5" data-test="cts-settings">
+            <div class="flex flex-wrap items-start justify-between gap-6">
+              <div class="space-y-1">
+                <div class="flex items-center gap-3">
+                  <Toggle :model-value="state.probing_enabled" data-test="cts-probing-toggle" @update:model-value="setProbing" />
+                  <span class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.codexTurnState.settings.probing') }}</span>
+                  <span :class="state.probing_enabled ? 'badge badge-success' : 'badge badge-warning'">
+                    {{ state.probing_enabled ? t('admin.codexTurnState.settings.running') : t('admin.codexTurnState.settings.paused') }}
+                  </span>
+                </div>
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.codexTurnState.settings.probingHint') }}</p>
+                <p class="text-xs text-gray-500 dark:text-gray-400" data-test="cts-timing">{{ timingSummary }}</p>
+              </div>
+              <form class="flex flex-wrap items-end gap-2" @submit.prevent="saveAdvance">
+                <label class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.codexTurnState.settings.advance') }}
+                  <input
+                    v-model.number="advanceInput"
+                    type="number"
+                    min="1"
+                    max="30"
+                    step="1"
+                    class="input mt-1 w-28"
+                    data-test="cts-advance-input"
+                    @input="advanceDirty = true"
+                  />
+                </label>
+                <button type="submit" class="btn btn-secondary btn-sm" :disabled="savingSettings || !advanceDirty" data-test="cts-advance-save">{{ t('common.save') }}</button>
+              </form>
+            </div>
+            <p v-if="state.settings?.error" class="mt-2 text-xs text-red-600 dark:text-red-400">{{ t('admin.codexTurnState.settings.fileError') }}</p>
+          </section>
+
+          <div class="flex flex-wrap items-center gap-3">
+            <input v-model="searchQuery" type="text" class="input w-full text-xs sm:w-64" :placeholder="t('admin.codexTurnState.filters.search')" data-test="cts-search" />
+            <select v-model="statusFilter" class="input w-full text-xs sm:w-44" data-test="cts-status-filter">
+              <option v-for="option in statusFilters" :key="option" :value="option">{{ t(`admin.codexTurnState.filters.${option}`) }}</option>
+            </select>
           </div>
-        </section>
 
-        <section class="card p-5" data-test="cts-jobs">
-          <h2 class="mb-3 text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.codexTurnState.jobs.title') }}</h2>
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-sm">
-              <thead class="text-xs uppercase text-gray-500 dark:text-gray-400">
-                <tr>
-                  <th class="px-3 py-2">{{ t('admin.codexTurnState.columns.time') }}</th>
-                  <th class="px-3 py-2">{{ t('admin.codexTurnState.jobs.target') }}</th>
-                  <th class="px-3 py-2">{{ t('admin.codexTurnState.columns.status') }}</th>
-                  <th class="px-3 py-2 text-right">{{ t('admin.codexTurnState.columns.duration') }}</th>
-                  <th class="px-3 py-2">{{ t('admin.codexTurnState.jobs.result') }}</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-                <tr v-if="!recentJobs.length">
-                  <td colspan="5" class="px-3 py-6 text-center text-gray-500 dark:text-gray-400">{{ t('admin.codexTurnState.jobs.empty') }}</td>
-                </tr>
-                <tr v-for="job in recentJobs" :key="job.id" data-test="cts-job-row">
-                  <td class="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{{ formatDateTime(new Date(job.queued_at * 1000)) }}</td>
-                  <td class="px-3 py-2 text-xs">#{{ job.account_id }} <span class="font-mono">{{ job.model || t('admin.codexTurnState.jobs.allModels') }}</span></td>
-                  <td class="px-3 py-2"><span :class="jobBadge(job)">{{ t(`admin.codexTurnState.jobs.status.${job.status}`) }}</span></td>
-                  <td class="px-3 py-2 text-right text-xs">{{ job.finished_at && job.started_at ? formatSeconds(job.finished_at - job.started_at) : '-' }}</td>
-                  <td class="px-3 py-2 text-xs">
-                    <span v-if="job.error" class="text-red-600 dark:text-red-400">{{ job.error }}</span>
-                    <span v-else>{{ t('admin.codexTurnState.jobs.updated', { count: job.updated }) }}</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div v-if="!filteredAccounts.length" class="rounded-xl border border-gray-200 bg-white p-10 text-center text-sm text-gray-500 shadow-sm dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400" data-test="cts-empty">
+            {{ state.accounts.length ? t('admin.codexTurnState.filters.noMatch') : t('admin.codexTurnState.slots.empty') }}
           </div>
-        </section>
 
-        <ProbeSourceStatsCard ref="statsCard" />
+          <div
+            v-for="account in filteredAccounts"
+            :key="account.id"
+            class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-800"
+            data-test="cts-account"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50/50 px-5 py-3 dark:border-dark-700 dark:bg-dark-800/80">
+              <div class="flex items-center gap-2">
+                <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ account.name }}</h3>
+                <span class="text-xs text-gray-400">#{{ account.id }}</span>
+                <span class="badge badge-gray">{{ t(`admin.codexTurnState.slots.source.${account.source === 'panel' ? 'panel' : 'config'}`) }}</span>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span>{{ t('admin.codexTurnState.slots.advance', { minutes: account.refresh_advance_minutes }) }}</span>
+                <button type="button" class="btn btn-secondary btn-sm" @click="openAdd({ id: account.id, name: account.name })">
+                  <Icon name="plus" size="xs" />
+                  <span>{{ t('admin.codexTurnState.actions.addModelToAccount') }}</span>
+                </button>
+              </div>
+            </div>
 
-        <DegradationProbePanel :pinned-accounts="pinnedAccounts" />
-      </template>
+            <div v-if="account.error" class="px-5 py-4 text-sm text-red-600 dark:text-red-400" data-test="cts-account-error">
+              {{ t('admin.codexTurnState.slots.accountError', { error: account.error }) }}
+            </div>
+            <div v-else class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-900/40 dark:text-gray-400">
+                  <tr>
+                    <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.model') }}</th>
+                    <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.renewal') }}</th>
+                    <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.length') }}</th>
+                    <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.remaining') }}</th>
+                    <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.nextProbe') }}</th>
+                    <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.pinnedAt') }}</th>
+                    <th v-if="state.degraded_enabled" class="px-4 py-3">{{ t('admin.codexTurnState.columns.degradation') }}</th>
+                    <th class="px-4 py-3">{{ t('admin.codexTurnState.columns.history') }}</th>
+                    <th class="px-4 py-3 text-right">{{ t('admin.codexTurnState.columns.actions') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr v-for="slot in account.slots" :key="slot.model" data-test="cts-slot-row">
+                    <td class="px-4 py-3 font-mono font-medium text-gray-900 dark:text-white">{{ slot.model }}</td>
+                    <td class="px-4 py-3">
+                      <span :class="toneBadge(slot.renewal.tone)" :data-test="`cts-renewal-${account.id}-${slot.model}`">{{ slot.renewal.label }}</span>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs" :class="slot.expired || slot.length_degraded ? 'text-red-600 dark:text-red-400' : slot.valid ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'">
+                      {{ slot.state_len || '-' }}<span class="text-gray-400"> / {{ slot.target_len }}</span>
+                    </td>
+                    <td class="px-4 py-3 text-xs">
+                      <template v-if="slot.cookie_present">
+                        <div class="font-medium" :class="slot.cookie_remaining_seconds <= 0 ? 'text-red-600 dark:text-red-400' : slot.cookie_remaining_seconds <= 60 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'">
+                          {{ slot.cookie_remaining_seconds > 0 ? t('admin.codexTurnState.slots.cookie', { time: formatSeconds(slot.cookie_remaining_seconds) }) : t('admin.codexTurnState.slots.cookieExpired') }}
+                        </div>
+                        <div class="text-gray-400" :title="slot.expires_at || ''">{{ t('admin.codexTurnState.slots.ticket', { time: formatSeconds(slot.remaining_seconds) }) }}</div>
+                      </template>
+                      <span v-else-if="slot.expired" class="text-red-600 dark:text-red-400">{{ t('admin.codexTurnState.slots.expired') }}</span>
+                      <span v-else-if="slot.valid" :title="slot.expires_at || ''">{{ formatSeconds(slot.remaining_seconds) }}</span>
+                      <span v-else class="text-red-600 dark:text-red-400">{{ t('admin.codexTurnState.slots.none') }}</span>
+                    </td>
+                    <td class="px-4 py-3 text-xs">
+                      <span v-if="slot.backoff_seconds > 0" class="text-amber-600 dark:text-amber-400">{{ t('admin.codexTurnState.slots.backoff', { time: formatSeconds(slot.backoff_seconds) }) }}</span>
+                      <span v-else-if="slot.next_probe_seconds > 0">{{ formatSeconds(slot.next_probe_seconds) }}</span>
+                      <span v-else class="text-amber-600 dark:text-amber-400">{{ t('admin.codexTurnState.slots.probing') }}</span>
+                    </td>
+                    <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(slot.pinned_updated_at) }}</td>
+                    <td v-if="state.degraded_enabled" class="px-4 py-3 text-xs">
+                      <span :class="verdictBadge(slot.degradation)">{{ t(`admin.codexTurnState.verdict.${slot.degradation}`) }}</span>
+                      <div v-if="slot.degradation === 'degraded' && slot.recent_degradation" class="mt-1 text-red-500">
+                        {{ slot.recent_degradation.sent_model }} → {{ slot.recent_degradation.response_model }} ×{{ slot.recent_degradation.count }}
+                      </div>
+                    </td>
+                    <td class="whitespace-nowrap px-4 py-3 font-mono text-xs text-gray-600 dark:text-gray-300" :title="slot.historyTitle" :data-test="`cts-history-${account.id}-${slot.model}`">
+                      {{ slot.historyText }}
+                    </td>
+                    <td class="whitespace-nowrap px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        class="btn btn-secondary btn-sm mr-2"
+                        :disabled="slot.busy"
+                        :data-test="`cts-probe-${account.id}-${slot.model}`"
+                        @click="probeSlot(account.id, slot.model)"
+                      >
+                        {{ slot.busy ? t('admin.codexTurnState.actions.probing') : t('admin.codexTurnState.actions.probeNow') }}
+                      </button>
+                      <button type="button" class="btn btn-danger btn-sm" :data-test="`cts-remove-${account.id}-${slot.model}`" @click="removeSlot(account.id, slot.model)">
+                        {{ t('admin.codexTurnState.actions.remove') }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <section v-if="state.degraded_enabled" class="card p-5" data-test="cts-degraded">
+            <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.codexTurnState.degraded.title', { window: state.degraded_window || '-' }) }}</h2>
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.codexTurnState.degraded.hint') }}</p>
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="degradedLoading" data-test="cts-degraded-refresh" @click="refreshDegraded">
+                {{ t('admin.codexTurnState.degraded.recheck') }}
+              </button>
+            </div>
+            <p v-if="state.degraded_error" class="mb-2 text-xs text-red-600 dark:text-red-400">{{ t('admin.codexTurnState.degraded.queryFailed') }}</p>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead class="text-xs uppercase text-gray-500 dark:text-gray-400">
+                  <tr>
+                    <th class="px-3 py-2">{{ t('admin.codexTurnState.columns.account') }}</th>
+                    <th class="px-3 py-2">{{ t('admin.codexTurnState.degraded.sentModel') }}</th>
+                    <th class="px-3 py-2">{{ t('admin.codexTurnState.degraded.responseModel') }}</th>
+                    <th class="px-3 py-2 text-right">{{ t('admin.codexTurnState.degraded.count') }}</th>
+                    <th class="px-3 py-2">{{ t('admin.codexTurnState.degraded.lastSeen') }}</th>
+                    <th class="px-3 py-2 text-right">TTFT</th>
+                    <th class="px-3 py-2 text-right">{{ t('admin.codexTurnState.columns.actions') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr v-if="!state.degraded.length">
+                    <td colspan="7" class="px-3 py-6 text-center text-gray-500 dark:text-gray-400">{{ t('admin.codexTurnState.degraded.empty') }}</td>
+                  </tr>
+                  <tr v-for="row in state.degraded" :key="`${row.account_id}:${row.sent_model}:${row.response_model}`" data-test="cts-degraded-row">
+                    <td class="px-3 py-2">{{ row.account_name }} <span class="text-xs text-gray-400">#{{ row.account_id }}</span></td>
+                    <td class="px-3 py-2 font-mono text-xs">{{ row.sent_model }}</td>
+                    <td class="px-3 py-2 font-mono text-xs text-red-600 dark:text-red-400">{{ row.response_model }}</td>
+                    <td class="px-3 py-2 text-right">{{ row.count }}</td>
+                    <td class="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{{ formatTimestamp(row.last_seen) }}</td>
+                    <td class="px-3 py-2 text-right text-xs">{{ row.ttft_avg_ms ? `${Math.round(row.ttft_avg_ms)} ms` : '-' }}</td>
+                    <td class="whitespace-nowrap px-3 py-2 text-right">
+                      <span v-if="isMonitored(row.account_id, row.sent_model)" class="text-xs text-gray-400">{{ t('admin.codexTurnState.degraded.monitored') }}</span>
+                      <button v-else type="button" class="btn btn-secondary btn-sm" :data-test="`cts-degraded-add-${row.account_id}`" @click="addFromDegraded(row)">
+                        {{ t('admin.codexTurnState.degraded.add') }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="card p-5" data-test="cts-jobs">
+            <h2 class="mb-3 text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.codexTurnState.jobs.title') }}</h2>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead class="text-xs uppercase text-gray-500 dark:text-gray-400">
+                  <tr>
+                    <th class="px-3 py-2">{{ t('admin.codexTurnState.columns.time') }}</th>
+                    <th class="px-3 py-2">{{ t('admin.codexTurnState.jobs.target') }}</th>
+                    <th class="px-3 py-2">{{ t('admin.codexTurnState.columns.status') }}</th>
+                    <th class="px-3 py-2 text-right">{{ t('admin.codexTurnState.columns.duration') }}</th>
+                    <th class="px-3 py-2">{{ t('admin.codexTurnState.jobs.result') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr v-if="!recentJobs.length">
+                    <td colspan="5" class="px-3 py-6 text-center text-gray-500 dark:text-gray-400">{{ t('admin.codexTurnState.jobs.empty') }}</td>
+                  </tr>
+                  <tr v-for="job in recentJobs" :key="job.id" data-test="cts-job-row">
+                    <td class="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{{ formatDateTime(new Date(job.queued_at * 1000)) }}</td>
+                    <td class="px-3 py-2 text-xs">#{{ job.account_id }} <span class="font-mono">{{ job.model || t('admin.codexTurnState.jobs.allModels') }}</span></td>
+                    <td class="px-3 py-2"><span :class="jobBadge(job)">{{ t(`admin.codexTurnState.jobs.status.${job.status}`) }}</span></td>
+                    <td class="px-3 py-2 text-right text-xs">{{ job.finished_at && job.started_at ? formatSeconds(job.finished_at - job.started_at) : '-' }}</td>
+                    <td class="px-3 py-2 text-xs">
+                      <span v-if="job.error" class="text-red-600 dark:text-red-400">{{ job.error }}</span>
+                      <span v-else>{{ t('admin.codexTurnState.jobs.updated', { count: job.updated }) }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <ProbeSourceStatsCard ref="statsCard" />
+
+          <DegradationProbePanel :pinned-accounts="pinnedAccounts" />
+        </template>
+      </div>
     </div>
 
     <AddMonitoredModelDialog :show="showAdd" :preset-account="addPreset" @close="showAdd = false" @saved="onAdded" />
@@ -316,6 +338,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import AddMonitoredModelDialog from '@/components/admin/codexTurnState/AddMonitoredModelDialog.vue'
 import DegradationProbePanel from '@/components/admin/codexTurnState/DegradationProbePanel.vue'
+import GatewayHunterPanel from '@/components/admin/codexTurnState/GatewayHunterPanel.vue'
 import ProbeSourceStatsCard from '@/components/admin/codexTurnState/ProbeSourceStatsCard.vue'
 import ProxySourcesDialog from '@/components/admin/codexTurnState/ProxySourcesDialog.vue'
 import { describeManagerError } from '@/components/admin/codexTurnState/managerError'
@@ -357,6 +380,9 @@ const statusFilters: StatusFilter[] = ['all', 'healthy', 'attention', 'problem',
 
 const { t } = useI18n()
 const appStore = useAppStore()
+
+const viewTabs = ['gateway', 'tickets'] as const
+const activeView = ref<(typeof viewTabs)[number]>('gateway')
 
 const state = ref<CodexTurnStateSnapshot | null>(null)
 const history = ref<CodexProbeHistory>({})

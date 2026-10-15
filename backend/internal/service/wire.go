@@ -448,6 +448,23 @@ func ProvideOpenAICodexVersionSyncService(
 	return svc
 }
 
+// ProvideCodexGatewayHunterService creates and starts CodexGatewayHunterService.
+// 满血网关监控默认关闭，由管理面板启用；只在持有单例租约的实例上运行。
+func ProvideCodexGatewayHunterService(
+	settingRepo SettingRepository,
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	httpUpstream HTTPUpstream,
+	tlsFP *TLSFingerprintProfileService,
+	lockCache LeaderLockCache,
+	db *sql.DB,
+) *CodexGatewayHunterService {
+	svc := NewCodexGatewayHunterService(settingRepo, accountRepo, proxyRepo, httpUpstream, tlsFP)
+	svc.leaderLock = newSingletonJobLock(lockCache, db, codexGatewayHunterLockKey, codexGatewayHunterLockTTL)
+	svc.Start()
+	return svc
+}
+
 // ProvideClaudeCodeVersionSyncService creates and starts ClaudeCodeVersionSyncService.
 // 出站 Claude Code 身份的版本号靠它跟随官方发布，无需为了跟版本而发新版本；面板可关闭。
 func ProvideClaudeCodeVersionSyncService(
@@ -1030,6 +1047,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	ProvideAccountExpiryService,
 	ProvideOpenAICodexVersionSyncService,
+	ProvideCodexGatewayHunterService,
 	ProvideClaudeCodeVersionSyncService,
 	ProvideProxyExpiryService,
 	ProvideProxyTimezoneBackfillService,

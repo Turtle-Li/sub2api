@@ -38,6 +38,7 @@ func RegisterAdminRoutes(
 
 		// 降智测试：仅测固定 turn-state 票据路径。不能挂在 /codex-turn-state 下，那里是 *path 通配代理。
 		registerCodexDegradationProbeRoutes(admin, h)
+		registerCodexGatewayHunterRoutes(admin, h)
 
 		// 部署与运营合规确认
 		registerAdminComplianceRoutes(admin, h)
@@ -647,6 +648,16 @@ func registerPromoCodeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		promoCodes.PUT("/:id", h.Admin.Promo.Update)
 		promoCodes.DELETE("/:id", h.Admin.Promo.Delete)
 		promoCodes.GET("/:id/usages", h.Admin.Promo.GetUsages)
+	}
+}
+
+func registerCodexGatewayHunterRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	hunter := admin.Group("/codex-gateway-hunter")
+	{
+		hunter.GET("/state", h.Admin.CodexGatewayHunter.State)
+		hunter.PUT("/config", h.Admin.CodexGatewayHunter.UpdateConfig)
+		hunter.POST("/start", h.Admin.CodexGatewayHunter.Start)
+		hunter.POST("/stop", h.Admin.CodexGatewayHunter.Stop)
 	}
 }
 
