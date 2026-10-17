@@ -115,7 +115,7 @@ func TestFetchOpenAIAccountModelsPreservesEmptyCatalog(t *testing.T) {
 	require.Empty(t, models, "an empty upstream catalog must not become a static model list")
 }
 
-func TestResolveOpenAIAccountTestModelOAuthPrefersStableLiveTextModel(t *testing.T) {
+func TestResolveOpenAIAccountTestModelOAuthSkipsRetiredAndPrefersStableLiveTextModel(t *testing.T) {
 	_, calls := newCodexModelsOAuthCacheServer(t, `{"models":[
 		{"slug":"gpt-image-2.5-flare"},
 		{"slug":"gpt-5.6-terra"},
@@ -125,7 +125,8 @@ func TestResolveOpenAIAccountTestModelOAuthPrefersStableLiveTextModel(t *testing
 
 	modelID, err := svc.resolveOpenAIAccountTestModel(context.Background(), newCodexModelsTestAccount(), "")
 	require.NoError(t, err)
-	require.Equal(t, "gpt-5.5", modelID)
+	require.Equal(t, "gpt-5.6-terra", modelID)
+	require.False(t, isRetiredOpenAISubscriptionModel(newCodexModelsTestAccount(), modelID))
 	require.EqualValues(t, 1, calls.Load())
 }
 

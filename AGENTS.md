@@ -241,6 +241,10 @@
 
 ## Upstream update scope
 
+- For v0.2.17, read `docs/operations/UPSTREAM_V0217_20261017.md`. Preserve
+  local collection/reset-card fulfillment, stable refund references, reviewed
+  refund accounting and fixed-egress discovery while adopting upstream fixes.
+
 - For v0.2.16 and ModelTrace, read `docs/operations/UPSTREAM_V0216_20261013.md`.
   The GPT-6.1 Sol subscription long-context exemption follows upstream for
   customer billing (owner decision); the fork hidden multiplier still applies.

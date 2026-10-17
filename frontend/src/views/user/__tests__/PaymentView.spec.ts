@@ -1555,6 +1555,41 @@ describe('PaymentView existing pending order dialog', () => {
     open.mockRestore()
   })
 
+  it('keeps the Stripe client secret out of the resumed existing-order route', async () => {
+    const order = pendingExistingOrder({ payment_type: 'stripe' })
+    createOrder.mockRejectedValue({ reason: 'TOO_MANY_PENDING', metadata: { order_id: order.id } })
+    getOrder.mockResolvedValue({ data: order })
+    resumeOrder.mockResolvedValue({
+      data: {
+        order_id: 77,
+        status: 'PENDING',
+        amount: 88,
+        pay_amount: 88,
+        fee_rate: 0,
+        currency: 'CNY',
+        payment_type: 'stripe',
+        client_secret: 'pi_secret_77',
+        expires_at: '2099-01-01T00:10:00.000Z',
+        out_trade_no: 'SUB2-PENDING-77',
+      },
+    })
+    isMobileDevice.mockReturnValue(false)
+    const open = vi.spyOn(window, 'open').mockReturnValue({ closed: false, close: vi.fn(), location: { href: '' } } as unknown as Window)
+
+    const wrapper = await mountExistingOrderFlow()
+    await submitTooManyPending(wrapper)
+    await wrapper.get('[data-test="open-existing-order"]').trigger('click')
+    await flushPromises()
+
+    const stripeRoutes = routerResolve.mock.calls
+      .map(([location]) => location as unknown as { path?: string; query?: Record<string, unknown> })
+      .filter(location => location?.path === '/payment/stripe')
+    expect(stripeRoutes).toHaveLength(1)
+    expect(stripeRoutes[0].query).toMatchObject({ order_id: '77' })
+    expect(stripeRoutes[0].query).not.toHaveProperty('client_secret')
+    open.mockRestore()
+  })
+
   it('waits for the local cancellation result and keeps an error inline instead of falsely cancelling', async () => {
     const order = pendingExistingOrder()
     const cancellation = deferred<{ data: { message: 'cancelled' } }>()

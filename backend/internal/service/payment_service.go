@@ -179,6 +179,8 @@ type RefundPlan struct {
 	WalletGiftToReserve          float64
 	SubscriptionSecondsToReserve int64
 	SubscriptionNewExpiry        time.Time
+	// deductionHeld 表示扣减已在进入 REFUND_PENDING 前执行并保留，终态收敛时不再重复扣减。
+	deductionHeld bool
 }
 
 type RefundResult struct {

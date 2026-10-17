@@ -187,7 +187,8 @@ func TestAccountTestService_OpenAIOAuthEmptyModelUsesLiveCatalog(t *testing.T) {
 	require.Len(t, upstream.requests, 1)
 	body, err := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, err)
-	require.Equal(t, "gpt-5.5", gjson.GetBytes(body, "model").String())
+	require.Equal(t, "gpt-5.6-terra", gjson.GetBytes(body, "model").String())
+	require.NotContains(t, string(body), "gpt-5.5")
 	require.NotContains(t, string(body), "gpt-5.4")
 }
 

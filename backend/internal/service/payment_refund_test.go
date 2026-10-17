@@ -387,6 +387,36 @@ func TestQueryAndFinalizeRefundDoesNotReconvertPersistedGatewayAmount(t *testing
 	require.Equal(t, "100.00", provider.queryRequests[0].Amount)
 }
 
+func TestQueryAndFinalizeRefundUsesLatestNumberedAuditAndLegacyDeductionChoice(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "query-numbered-audit")
+	createdAt := time.Now().Add(time.Minute)
+	_, err := client.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(order.ID, 10)).
+		SetAction("REFUND_PENDING_2").
+		SetDetail(`{"refundID":"rf_numbered","gatewayAmount":80,"deductionRollbackOK":true,"deduct_balance":false}`).
+		SetOperator("admin").SetCreatedAt(createdAt).Save(ctx)
+	require.NoError(t, err)
+	provider := &refundQueryProviderTestDouble{refundResponse: &payment.RefundResponse{RefundID: "rf_numbered", Status: payment.ProviderStatusSuccess}}
+	restore := replacePaymentProviderFactoryForTest(t, provider)
+	defer restore()
+	deductions := 0
+	svc := &PaymentService{entClient: client, loadBalancer: &captureLoadBalancer{}, userRepo: &mockUserRepo{
+		deductAvailableBalanceFn: func(context.Context, int64, float64) (float64, error) {
+			deductions++
+			return 100, nil
+		},
+	}}
+	result, err := svc.QueryAndFinalizeRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.Zero(t, deductions)
+	require.Equal(t, "rf_numbered", provider.lastQuery.RefundID)
+	require.Equal(t, "80.00", provider.lastQuery.Amount)
+	require.WithinDuration(t, createdAt, provider.lastQuery.RequestedAt, time.Millisecond)
+}
+
 func TestGwRefundRejectsAlipayMerchantIdentitySnapshotMismatch(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
@@ -536,7 +566,7 @@ func TestValidateRefundProviderResponseAcceptsPending(t *testing.T) {
 	require.Error(t, validateRefundProviderResponse(nil))
 }
 
-func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T) {
+func TestFinishRefundPendingMarksOrderPendingAndHoldsDeduction(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 
@@ -594,8 +624,8 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 	require.NotNil(t, result)
 	require.False(t, result.Success)
 	require.Contains(t, result.Warning, "pending confirmation")
-	require.Equal(t, 40.0, rolledBack)
-	require.Zero(t, plan.BalanceToDeduct)
+	require.Zero(t, rolledBack, "deduction must stay held while the gateway refund is pending")
+	require.Equal(t, 40.0, plan.BalanceToDeduct)
 
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
@@ -613,6 +643,11 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 		Count(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, pendingAudits)
+	detail, err := svc.latestRefundPendingDetail(ctx, order.ID)
+	require.NoError(t, err)
+	require.True(t, detail.DeductionHeld)
+	require.Equal(t, payment.DeductionTypeBalance, detail.DeductionType)
+	require.Equal(t, 40.0, detail.BalanceDeducted)
 	successAudits, err := client.PaymentAuditLog.Query().
 		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_SUCCESS")).
 		Count(ctx)
@@ -901,6 +936,26 @@ func TestQueryAndFinalizeRefundFinalizesProviderStatuses(t *testing.T) {
 	}
 }
 
+func TestQueryAndFinalizeRefundPassesPendingAuditTimeToProvider(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "query-requested-at")
+	pendingAudit, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_PENDING")).
+		Only(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client, loadBalancer: &captureLoadBalancer{}, userRepo: &mockUserRepo{}}
+	prov := &refundQueryProviderTestDouble{refundResponse: &payment.RefundResponse{RefundID: "rf_test", Status: payment.ProviderStatusPending}}
+	restore := replacePaymentProviderFactoryForTest(t, prov)
+	defer restore()
+
+	_, err = svc.QueryAndFinalizeRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, "rf_test", prov.lastQuery.RefundID)
+	require.True(t, pendingAudit.CreatedAt.Equal(prov.lastQuery.RequestedAt), "RequestedAt = %v, want %v", prov.lastQuery.RequestedAt, pendingAudit.CreatedAt)
+}
+
 func TestFinalizePendingRefundSuccessRejectsStaleCallerBeforeSecondDeduction(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
@@ -985,6 +1040,11 @@ func TestQueryAndFinalizeRefundUnsupportedProviderReturnsClearError(t *testing.T
 
 func createPendingRefundOrderForTest(t *testing.T, ctx context.Context, client *dbent.Client, suffix string) *dbent.PaymentOrder {
 	t.Helper()
+	return createPendingRefundOrderWithDetailForTest(t, ctx, client, suffix, `{"refundID":"rf_test","deductionRollbackOK":true}`)
+}
+
+func createPendingRefundOrderWithDetailForTest(t *testing.T, ctx context.Context, client *dbent.Client, suffix, pendingDetail string) *dbent.PaymentOrder {
+	t.Helper()
 
 	user, err := client.User.Create().
 		SetEmail(suffix + "@example.com").
@@ -1031,7 +1091,7 @@ func createPendingRefundOrderForTest(t *testing.T, ctx context.Context, client *
 		SetOrderID(strconv.FormatInt(order.ID, 10)).
 		SetAction("REFUND_PENDING").
 		SetOperator("admin").
-		SetDetail(`{"refundID":"rf_test","deductionRollbackOK":true}`).
+		SetDetail(pendingDetail).
 		Save(ctx)
 	require.NoError(t, err)
 	return order
@@ -1072,9 +1132,11 @@ type refundQueryProviderTestDouble struct {
 	refundProviderTestDouble
 	refundResponse *payment.RefundResponse
 	queryRequests  []payment.RefundQueryRequest
+	lastQuery      payment.RefundQueryRequest
 }
 
 func (p *refundQueryProviderTestDouble) QueryRefund(_ context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
 	p.queryRequests = append(p.queryRequests, req)
+	p.lastQuery = req
 	return p.refundResponse, nil
 }

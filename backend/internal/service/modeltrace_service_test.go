@@ -238,13 +238,13 @@ func TestModelTraceCanceledProbeSavesFailure(t *testing.T) {
 }
 
 func TestModelTraceScheduledModelsHaveIndependentBoundedDeadlines(t *testing.T) {
-	cfg := &ModelTraceAccountConfig{Models: map[string]*ModelTraceModelConfig{"gpt-5.4": {}, "gpt-5.5": {}}}
+	cfg := &ModelTraceAccountConfig{Models: map[string]*ModelTraceModelConfig{"gpt-5.4": {}, "gpt-5.6-sol": {}}}
 	repo := &modelTraceContextRepo{modelTraceTestRepo: modelTraceTestRepo{account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, ID: 31, Status: StatusActive, Extra: map[string]any{ModelTraceExtraKey: cfg}}}}
 	svc := NewModelTraceService(repo, &modelTraceTestSettings{}, nil, nil)
 	svc.runAccountCycle(context.Background(), repo.account, cfg)
 	saved := DecodeModelTraceConfig(repo.account.Extra)
 	require.NotNil(t, saved.Models["gpt-5.4"].Latest)
-	require.NotNil(t, saved.Models["gpt-5.5"].Latest)
+	require.NotNil(t, saved.Models["gpt-5.6-sol"].Latest)
 	require.Len(t, repo.readDeadlines, 6)
 	for _, start := range []int{0, 3} {
 		require.True(t, repo.readDeadlines[start].IsZero(), "account cycle must not impose a shared model deadline")

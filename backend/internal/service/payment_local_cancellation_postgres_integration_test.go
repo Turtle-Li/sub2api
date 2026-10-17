@@ -538,14 +538,18 @@ func TestLocalCancellationPostgresRowLockLifecycle(t *testing.T) {
 		waitForLocalCancellationLockWaiters(t, ctx, db, 2)
 		releasePause()
 
-		require.Error(t, <-paidDone, "the deliberately unfulfillable test order still commits the trusted paid claim before fulfillment is attempted")
+		// The deliberately unfulfillable test order still commits the trusted
+		// paid claim before fulfillment; upstream then records it as FAILED.
+		require.NoError(t, <-paidDone)
 		cancelled := <-cancelDone
 		require.NoError(t, cancelled.err)
 		require.Equal(t, checkPaidResultAlreadyPaid, cancelled.result)
 		stored, err := client.PaymentOrder.Get(ctx, order.ID)
 		require.NoError(t, err)
-		require.Equal(t, OrderStatusPaid, stored.Status)
+		require.Equal(t, OrderStatusFailed, stored.Status)
 		require.NotNil(t, stored.PaidAt)
+		require.NotNil(t, stored.FailedReason)
+		require.Equal(t, "unsupported order type: test_only", *stored.FailedReason)
 		var closeJobs int
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM payment_local_cancellation_work WHERE order_id=$1`, order.ID).Scan(&closeJobs))
 		require.Zero(t, closeJobs)
