@@ -586,15 +586,74 @@ func (s *ClineUpstreamService) probeModel(ctx context.Context, account *Account,
 	result.Fallbacks = routing.fallbacks
 	result.Plan = truncate(routing.plan, 240)
 
-	harvest, harvestNote := s.harvestAvailableProviders(ctx, account, model, routing.pipeline)
-	result.HarvestNote = harvestNote
-	result.Upstreams = dedupeClineUpstreams(append(append([]string{}, harvest...), routing.fallbacks...))
+	harvest := s.harvestAvailableProviders(ctx, account, model, routing.pipeline)
+	result.HarvestNote = harvest.Note
+	// 只有网关真的按 only 过滤过，才说明该模型存在可选的渠道池；否则是单一上游，
+	// 钉住没有意义（也不能钉）。
+	result.Pinnable = harvest.Selectable
+	result.Upstreams = dedupeClineUpstreams(append(append([]string{}, harvest.Providers...), routing.fallbacks...))
 	return result
 }
 
+// clineUpstreamHarvest 是一次渠道清单采集的结果。
+type clineUpstreamHarvest struct {
+	// Providers 是候选渠道；Selectable 为 false 时它是「唯一实际上游」而不是可选项。
+	Providers []string
+	// Selectable 为 true 表示网关确实按 only 过滤并在路由层报错，说明该模型有可选渠道池。
+	Selectable bool
+	// Note 是采集说明：失败或「网关忽略限制」时给出原始证据。
+	Note string
+}
+
 // harvestAvailableProviders 故意携带不存在的 only，让网关在路由层报错并列出可用渠道
-// （不产生 token 消耗）。两条管道的清单不一致，必须按管道分别取。
-func (s *ClineUpstreamService) harvestAvailableProviders(ctx context.Context, account *Account, model, pipeline string) ([]string, string) {
+// （不产生 token 消耗）。
+//
+// 三种结果要分开处理，否则会把「没有可选渠道」误判成「可钉住」：
+//  1. 网关按 only 过滤并报错 → 拿到可选渠道池（Selectable=true）；
+//  2. 网关直接忽略 only 并正常应答 → 该模型是单一上游（如 private/* 贡献者模型），
+//     没有可钉的渠道池；此时从成功响应里回读实际上游，作为唯一候选返回；
+//  3. 其它错误 → 原样记录错误片段。
+//
+// 两条管道的写法不同，先按探测到的管道发，再补发另一种，避免管道误判导致漏采。
+func (s *ClineUpstreamService) harvestAvailableProviders(ctx context.Context, account *Account, model, pipeline string) clineUpstreamHarvest {
+	forms := []string{pipeline}
+	if pipeline == ClinePipelineDirect {
+		forms = append(forms, ClinePipelinePlanner)
+	} else {
+		forms = append(forms, ClinePipelineDirect)
+	}
+
+	var (
+		ignoredNote string
+		observed    []string
+		lastErrNote string
+	)
+	for _, form := range forms {
+		providers, note, selectable, observedProvider := s.harvestWithForm(ctx, account, model, form)
+		if selectable && len(providers) > 0 {
+			return clineUpstreamHarvest{Providers: providers, Selectable: true}
+		}
+		if observedProvider != "" {
+			ignoredNote = note
+			observed = []string{observedProvider}
+			break
+		}
+		if note != "" {
+			lastErrNote = note
+		}
+	}
+	if len(observed) > 0 {
+		return clineUpstreamHarvest{Providers: observed, Selectable: false, Note: ignoredNote}
+	}
+	if lastErrNote == "" {
+		lastErrNote = "gateway did not report an error for the placeholder provider"
+	}
+	return clineUpstreamHarvest{Note: truncate(lastErrNote, 400)}
+}
+
+// harvestWithForm 用单一管道写法发一次占位渠道请求。
+// 返回 (渠道清单, 说明, 是否为可选渠道池, 网关忽略限制时回读到的实际上游)。
+func (s *ClineUpstreamService) harvestWithForm(ctx context.Context, account *Account, model, pipeline string) ([]string, string, bool, string) {
 	base := map[string]any{
 		"model":      model,
 		"messages":   []map[string]any{{"role": "user", "content": "hi"}},
@@ -608,20 +667,26 @@ func (s *ClineUpstreamService) harvestAvailableProviders(ctx context.Context, ac
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err.Error()
+		return nil, err.Error(), false, ""
 	}
 	status, respBody, callErr := s.chatCompletion(ctx, account, body, clineUpstreamValidateTimeout)
 	if callErr != nil {
-		return nil, callErr.Error()
+		return nil, callErr.Error(), false, ""
 	}
 	message := clineUpstreamErrorMessage(status, respBody)
 	if message == "" {
-		return nil, "gateway did not report an error for the placeholder provider"
+		// 网关忽略了 only 并正常应答：该模型没有可选渠道池，回读实际上游。
+		actual := parseClineUpstreamRouting(respBody).finalProvider
+		note := "gateway ignored the placeholder provider restriction: this model has a single upstream and cannot be pinned"
+		if actual != "" {
+			note = "gateway ignored the placeholder provider restriction; single upstream observed: " + actual
+		}
+		return nil, note, false, actual
 	}
 	if providers := parseClineAvailableProviders(message, pipeline); len(providers) > 0 {
-		return providers, ""
+		return providers, "", true, ""
 	}
-	return nil, truncate(message, 240)
+	return nil, truncate(message, 240), false, ""
 }
 
 // validateUpstreams 并发地把每个渠道各钉一次，分类真实可用性。

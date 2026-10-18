@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -390,4 +392,80 @@ func TestClineUpstreamStateJSONNeverContainsNullLists(t *testing.T) {
 	require.Contains(t, string(raw), `"exclude":[]`)
 	require.Contains(t, string(raw), `"statuses":{}`)
 	require.NotContains(t, string(raw), `null`)
+}
+
+// clineHarvestUpstream 是渠道清单采集用的最小 HTTPUpstream 假实现。
+type clineHarvestUpstream struct {
+	responses []*http.Response
+	requests  []*http.Request
+	idx       int
+}
+
+func (u *clineHarvestUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	u.requests = append(u.requests, req)
+	resp := u.responses[u.idx]
+	if u.idx < len(u.responses)-1 {
+		u.idx++
+	}
+	return resp, nil
+}
+
+func (u *clineHarvestUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
+}
+
+func clineHarvestResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+// TestHarvestAvailableProviders_SingleUpstreamModel 覆盖 private/* 这类单一上游模型：
+// 网关直接忽略占位渠道限制并正常应答，此时不能声称「可钉住」，而要把实际上游回读出来。
+func TestHarvestAvailableProviders_SingleUpstreamModel(t *testing.T) {
+	upstream := &clineHarvestUpstream{responses: []*http.Response{
+		clineHarvestResponse(http.StatusOK, `{"choices":[{"message":{"content":"hi"}}],"provider_metadata":{"gateway":{"routing":{"canonicalSlug":"private/deepseek-v4p1-flash-contributor","finalProvider":"deepseek"}}}}`),
+	}}
+	account := clineUpstreamTestAccount(nil, nil)
+	account.Credentials["base_url"] = "https://upstream.example"
+	svc := NewClineUpstreamService(&clineAccountRepo{accounts: []Account{*account}}, nil, upstream, &config.Config{})
+
+	harvest := svc.harvestAvailableProviders(context.Background(), account, "cline-pass/deepseek-v4.1-flash", ClinePipelinePlanner)
+	require.False(t, harvest.Selectable, "a gateway that ignores the restriction means there is no selectable pool")
+	require.Equal(t, []string{"deepseek"}, harvest.Providers)
+	require.Contains(t, harvest.Note, "single upstream")
+	require.Contains(t, harvest.Note, "deepseek")
+}
+
+// TestHarvestAvailableProviders_RestrictedPool 覆盖正常情况：网关按 only 过滤并报错，
+// 渠道清单可解析且标记为可选。
+func TestHarvestAvailableProviders_RestrictedPool(t *testing.T) {
+	upstream := &clineHarvestUpstream{responses: []*http.Response{
+		clineHarvestResponse(http.StatusBadRequest, `invalid request: Provider set restricted to: __probe__. Available providers are: alibaba, baseten, deepseek.`),
+	}}
+	account := clineUpstreamTestAccount(nil, nil)
+	account.Credentials["base_url"] = "https://upstream.example"
+	svc := NewClineUpstreamService(&clineAccountRepo{accounts: []Account{*account}}, nil, upstream, &config.Config{})
+
+	harvest := svc.harvestAvailableProviders(context.Background(), account, clineTestModel, ClinePipelinePlanner)
+	require.True(t, harvest.Selectable)
+	require.Equal(t, []string{"alibaba", "baseten", "deepseek"}, harvest.Providers)
+	require.Empty(t, harvest.Note)
+}
+
+// TestHarvestAvailableProviders_JSONErrorOnPlannerPipeline 是这次线上问题的回归：
+// 规划器管道回 JSON 错误体时，以前完全解析不到清单。
+func TestHarvestAvailableProviders_JSONErrorOnPlannerPipeline(t *testing.T) {
+	upstream := &clineHarvestUpstream{responses: []*http.Response{
+		clineHarvestResponse(http.StatusBadRequest, `no allowed providers, {"error":{"message":"no allowed providers","metadata":{"available_providers":["deepseek","novita"]}}}`),
+	}}
+	account := clineUpstreamTestAccount(nil, nil)
+	account.Credentials["base_url"] = "https://upstream.example"
+	svc := NewClineUpstreamService(&clineAccountRepo{accounts: []Account{*account}}, nil, upstream, &config.Config{})
+
+	harvest := svc.harvestAvailableProviders(context.Background(), account, clineTestModel, ClinePipelinePlanner)
+	require.True(t, harvest.Selectable)
+	require.Equal(t, []string{"deepseek", "novita"}, harvest.Providers)
 }

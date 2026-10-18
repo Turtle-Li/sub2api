@@ -150,6 +150,36 @@ fail" cannot both hold. Mitigations, in order of preference:
 allow-list only when `exclude` is non-empty, in which case
 `only = probed − excluded` is injected as well.
 
+## Models with no selectable upstream ("not pinnable")
+
+Some `cline-pass/*` models have **no provider pool at all** — typically
+single-backend or contributor models, whose canonical slug looks like
+`private/<model>-contributor`. Two things happen for them, and both are
+expected, not failures:
+
+- the placeholder-provider request is **not** rejected: the gateway ignores
+  `providerOptions.gateway.only` (and the top-level `provider.only` form) and
+  answers normally, because there is nothing to filter;
+- therefore there is no list to harvest. The probe records the observed
+  upstream instead, marks the model `pinnable=false`, and the page shows a
+  `不可钉` badge plus the reason in the expandable detail row
+  (`渠道清单来源: gateway ignored the placeholder provider restriction; single
+  upstream observed: <provider>`).
+
+For these models pinning is a no-op: leave them on `不钉住`. What you *can* read
+off the row is which upstream they always use, which is the useful answer for
+"is it on the vendor channel?".
+
+The probe tries the detected pipeline form first and then the other form, so a
+misdetected pipeline no longer silently loses the list. The distinction it
+preserves:
+
+| Harvest result | Meaning | `pinnable` |
+| --- | --- | --- |
+| Gateway rejected the placeholder and listed providers | Selectable pool | `true` |
+| Gateway ignored the restriction and answered | Single upstream; the observed provider is recorded | `false` |
+| Other error | Raw error kept in the harvest note | `false` |
+
 ## Admin API
 
 All under the existing admin auth + audit + compliance middleware:

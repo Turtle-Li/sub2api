@@ -30,6 +30,9 @@ export default {
     lastFetched: 'Updated {time}',
     notProbed: 'Not probed',
     noUpstreams: 'No upstream learned yet',
+    notPinnable: 'Not pinnable',
+    singleUpstreamHint:
+      'This model has a single upstream and no selectable provider pool, so pinning has no effect.',
     columns: {
       model: 'Model',
       source: 'Source',
@@ -126,6 +129,9 @@ export default {
       harvestNote: 'Upstream list source',
       harvestOk: 'The upstream list came from the gateway placeholder probe.',
       lastError: 'Last error',
+      pinnable: 'Pinnable',
+      pinnableYes: 'yes',
+      pinnableNo: 'no — single upstream',
       statuses: 'Per-upstream status'
     },
     messages: {

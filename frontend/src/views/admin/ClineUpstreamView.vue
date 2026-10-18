@@ -197,13 +197,23 @@
 
                   <!-- 管道 -->
                   <td class="px-4 py-3.5 align-middle">
-                    <span
-                      class="badge whitespace-nowrap"
-                      :class="pipelineClass(item.meta.pipeline)"
-                      :title="pipelineTitle(item.meta.pipeline)"
-                    >
-                      {{ pipelineLabel(item.meta.pipeline) }}
-                    </span>
+                    <div class="flex flex-col items-start gap-1">
+                      <span
+                        class="badge whitespace-nowrap"
+                        :class="pipelineClass(item.meta.pipeline)"
+                        :title="pipelineTitle(item.meta.pipeline)"
+                      >
+                        {{ pipelineLabel(item.meta.pipeline) }}
+                      </span>
+                      <span
+                        v-if="item.meta.probed_at && !item.meta.pinnable"
+                        class="badge badge-warning whitespace-nowrap"
+                        :title="t('admin.clineUpstream.singleUpstreamHint')"
+                        :data-testid="`cline-upstream-not-pinnable-${item.model}`"
+                      >
+                        {{ t('admin.clineUpstream.notPinnable') }}
+                      </span>
+                    </div>
                   </td>
 
                   <!-- 渠道清单（校验后按状态着色） -->
@@ -264,7 +274,7 @@
                       <button
                         type="button"
                         class="btn btn-secondary btn-sm"
-                        :disabled="!state.supported || busyModel === item.model || !item.meta.upstreams.length"
+                        :disabled="!state.supported || busyModel === item.model || !item.meta.pinnable"
                         :title="t('admin.clineUpstream.actions.validateModel')"
                         @click="validateModel(item.model)"
                       >
@@ -300,6 +310,12 @@
                           <span>
                             {{ t('admin.clineUpstream.detail.probedAt') }}:
                             <span class="text-gray-800 dark:text-gray-200">{{ formatTs(item.meta.probed_at) }}</span>
+                          </span>
+                          <span>
+                            {{ t('admin.clineUpstream.detail.pinnable') }}:
+                            <span class="text-gray-800 dark:text-gray-200">
+                              {{ item.meta.pinnable ? t('admin.clineUpstream.detail.pinnableYes') : t('admin.clineUpstream.detail.pinnableNo') }}
+                            </span>
                           </span>
                           <span>
                             {{ t('admin.clineUpstream.detail.validatedAt') }}:
@@ -406,6 +422,15 @@
             {{ t('admin.clineUpstream.dialog.upstreamsHint') }}
           </p>
 
+          <div
+            v-if="meta && meta.probed_at && !meta.pinnable"
+            class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200"
+            data-testid="cline-upstream-single-upstream-warning"
+          >
+            {{ t('admin.clineUpstream.singleUpstreamHint') }}
+            <span v-if="meta.upstreams.length" class="ml-1 font-mono">{{ meta.upstreams.join(', ') }}</span>
+          </div>
+
           <div v-if="knownUpstreams.length === 0" class="mt-3 rounded-xl border border-dashed border-gray-300 p-4 text-center text-xs text-gray-500 dark:border-dark-600">
             {{ t('admin.clineUpstream.dialog.knownUpstreamsEmpty') }}
           </div>
@@ -421,6 +446,7 @@
                 <input
                   type="checkbox"
                   class="h-4 w-4"
+                  :disabled="meta ? meta.probed_at > 0 && !meta.pinnable : false"
                   :checked="draft.upstreams.includes(upstream)"
                   @change="toggleUpstream(upstream)"
                 />

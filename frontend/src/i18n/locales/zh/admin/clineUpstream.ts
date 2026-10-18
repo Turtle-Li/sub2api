@@ -26,6 +26,8 @@ export default {
     lastFetched: '更新于 {time}',
     notProbed: '未探测',
     noUpstreams: '尚未获得渠道清单',
+    notPinnable: '不可钉',
+    singleUpstreamHint: '该模型只有单一上游、没有可选渠道池，钉住不会生效。',
     columns: {
       model: '模型',
       source: '来源',
@@ -118,6 +120,9 @@ export default {
       harvestNote: '渠道清单来源',
       harvestOk: '渠道清单来自网关的占位渠道探测。',
       lastError: '最近错误',
+      pinnable: '可否钉住',
+      pinnableYes: '可以',
+      pinnableNo: '不可（单一上游）',
       statuses: '各渠道状态'
     },
     messages: {
