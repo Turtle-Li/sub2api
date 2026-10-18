@@ -464,14 +464,14 @@ const draft = reactive<ClineUpstreamPin>({
 const testing = ref(false)
 const testResult = ref<ClineUpstreamTestResult | null>(null)
 
-const configuredCount = computed(() => (state.value?.models || []).filter((item) => item.configured).length)
+const configuredCount = computed(() => asList(state.value?.models).filter((item) => item.configured).length)
 const fetchedAtLabel = computed(() => {
   const seconds = state.value?.fetched_at || 0
   return seconds ? formatDateTime(new Date(seconds * 1000)) : '—'
 })
 
 const editingEntry = computed<ClineUpstreamModelState | null>(
-  () => (state.value?.models || []).find((item) => item.model === editingModel.value) || null
+  () => asList(state.value?.models).find((item) => item.model === editingModel.value) || null
 )
 const meta = computed(() => editingEntry.value?.meta || null)
 const dialogTitle = computed(() =>
@@ -495,6 +495,47 @@ const knownUpstreams = computed(() => {
 function errorMessage(error: unknown, fallback: string): string {
   const candidate = error as { response?: { data?: { message?: string; detail?: string } }; message?: string }
   return candidate?.response?.data?.message || candidate?.response?.data?.detail || candidate?.message || fallback
+}
+
+/**
+ * 后端列表字段在 Go 里是 nil slice 时会序列化成 null，模板里按数组使用会抛
+ * "Cannot read properties of null (reading 'length')"。这里在入口统一补齐，
+ * 保证视图层拿到的永远是数组/对象。
+ */
+function asList<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : []
+}
+
+function normalizeState(raw: ClineUpstreamState | null | undefined): ClineUpstreamState | null {
+  if (!raw) return null
+  return {
+    ...raw,
+    models: asList(raw.models).map((item) => ({
+      ...item,
+      candidates: asList(item.candidates),
+      pin: {
+        mode: item.pin?.mode || 'off',
+        upstreams: asList(item.pin?.upstreams),
+        exclude: asList(item.pin?.exclude),
+        sort: item.pin?.sort || ''
+      },
+      meta: {
+        ...item.meta,
+        upstreams: asList(item.meta?.upstreams),
+        statuses: item.meta?.statuses || {}
+      }
+    }))
+  }
+}
+
+function normalizeTestResult(raw: ClineUpstreamTestResult | null): ClineUpstreamTestResult | null {
+  if (!raw) return null
+  return {
+    ...raw,
+    targets: asList(raw.targets),
+    exclude: asList(raw.exclude),
+    candidates: asList(raw.candidates)
+  }
 }
 
 function sourceLabel(source: string): string {
@@ -595,7 +636,7 @@ async function loadState() {
   loadingState.value = true
   loadError.value = ''
   try {
-    state.value = await getClineUpstreams(selectedAccountId.value)
+    state.value = normalizeState(await getClineUpstreams(selectedAccountId.value))
   } catch (error) {
     state.value = null
     loadError.value = errorMessage(error, t('admin.clineUpstream.messages.loadFailed'))
@@ -610,7 +651,7 @@ async function probeAll() {
   probing.value = true
   try {
     const response = await probeClineUpstreams(selectedAccountId.value)
-    appStore.showSuccess(t('admin.clineUpstream.messages.probed', { count: response.results?.length || 0 }))
+    appStore.showSuccess(t('admin.clineUpstream.messages.probed', { count: asList(response?.results).length }))
     await loadState()
   } catch (error) {
     appStore.showError(errorMessage(error, t('admin.clineUpstream.messages.probeFailed')))
@@ -639,7 +680,7 @@ async function validateModel(model: string) {
   try {
     const result = await validateClineUpstreams(selectedAccountId.value, model)
     appStore.showSuccess(
-      t('admin.clineUpstream.messages.validated', { count: Object.keys(result.statuses || {}).length })
+      t('admin.clineUpstream.messages.validated', { count: Object.keys(result?.statuses || {}).length })
     )
     await loadState()
   } catch (error) {
@@ -651,9 +692,9 @@ async function validateModel(model: string) {
 
 function openDialog(item: ClineUpstreamModelState) {
   editingModel.value = item.model
-  draft.mode = item.pin.mode || 'off'
-  draft.upstreams = [...(item.pin.upstreams || [])]
-  draft.exclude = [...(item.pin.exclude || [])]
+  draft.mode = item.pin?.mode || 'off'
+  draft.upstreams = [...asList(item.pin?.upstreams)]
+  draft.exclude = [...asList(item.pin?.exclude)]
   draft.sort = item.pin.sort || ''
   testResult.value = null
 }
@@ -696,13 +737,15 @@ async function runTest() {
   testing.value = true
   testResult.value = null
   try {
-    testResult.value = await testClineUpstreams(selectedAccountId.value, {
-      model: editingModel.value,
-      mode: draft.mode,
-      upstreams: [...draft.upstreams],
-      exclude: [...draft.exclude],
-      sort: draft.sort
-    })
+    testResult.value = normalizeTestResult(
+      await testClineUpstreams(selectedAccountId.value, {
+        model: editingModel.value,
+        mode: draft.mode,
+        upstreams: [...draft.upstreams],
+        exclude: [...draft.exclude],
+        sort: draft.sort
+      })
+    )
   } catch (error) {
     appStore.showError(errorMessage(error, t('admin.clineUpstream.messages.probeFailed')))
   } finally {
@@ -715,7 +758,7 @@ async function savePins() {
   saving.value = true
   try {
     const pins: Record<string, ClineUpstreamPin> = {}
-    for (const item of state.value.models) {
+    for (const item of asList(state.value.models)) {
       const source = item.model === editingModel.value ? { ...draft } : item.pin
       const isEmpty =
         source.mode === 'off' && source.upstreams.length === 0 && source.exclude.length === 0 && !source.sort
@@ -727,7 +770,7 @@ async function savePins() {
         sort: source.sort
       }
     }
-    state.value = await updateClineUpstreams(selectedAccountId.value, pins)
+    state.value = normalizeState(await updateClineUpstreams(selectedAccountId.value, pins))
     appStore.showSuccess(t('admin.clineUpstream.messages.saved'))
     closeDialog()
   } catch (error) {

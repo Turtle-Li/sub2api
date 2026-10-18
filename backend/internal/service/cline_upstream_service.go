@@ -204,14 +204,37 @@ func (s *ClineUpstreamService) GetState(ctx context.Context, accountID int64) (*
 		state.Models = append(state.Models, ClineUpstreamModelState{
 			Model:      model,
 			Source:     source,
-			Pin:        pin,
-			Meta:       meta,
-			Candidates: candidates,
+			Pin:        normalizeClinePinForJSON(pin),
+			Meta:       normalizeClineMetaForJSON(meta),
+			Candidates: normalizeClineListForJSON(candidates),
 			Configured: !pin.IsZero(),
 		})
 	}
 	sortClineUpstreamModels(state.Models)
 	return state, nil
+}
+
+// normalizeClineListForJSON 保证列表字段序列化成 [] 而不是 null：Go 的 nil slice
+// 会编码成 JSON null，前端按数组使用时会抛 "Cannot read properties of null"。
+func normalizeClineListForJSON(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func normalizeClinePinForJSON(pin ClineUpstreamPin) ClineUpstreamPin {
+	pin.Upstreams = normalizeClineListForJSON(pin.Upstreams)
+	pin.Exclude = normalizeClineListForJSON(pin.Exclude)
+	return pin
+}
+
+func normalizeClineMetaForJSON(meta ClineUpstreamMeta) ClineUpstreamMeta {
+	meta.Upstreams = normalizeClineListForJSON(meta.Upstreams)
+	if meta.Statuses == nil {
+		meta.Statuses = map[string]ClineUpstreamStatus{}
+	}
+	return meta
 }
 
 // UpdatePins 全量覆盖账号的钉住配置（只写 cline_upstream_pins，不动探测快照）。
@@ -280,6 +303,8 @@ func (s *ClineUpstreamService) Probe(ctx context.Context, accountID int64, model
 	metaUpdates := make(map[string]any, len(targets))
 	for _, model := range targets {
 		result := s.probeModel(ctx, account, model)
+		result.Upstreams = normalizeClineListForJSON(result.Upstreams)
+		result.Fallbacks = normalizeClineListForJSON(result.Fallbacks)
 		results = append(results, result)
 		metaUpdates[model] = s.mergeProbeMeta(account, model, result)
 	}
@@ -334,10 +359,13 @@ func (s *ClineUpstreamService) Validate(ctx context.Context, accountID int64, mo
 	}); err != nil {
 		slog.Warn("cline_upstream_validate_persist_failed", "account_id", account.ID, "error", err)
 	}
+	if statuses == nil {
+		statuses = map[string]ClineUpstreamStatus{}
+	}
 	return &ClineUpstreamValidateResult{
 		Model:     model,
 		Pipeline:  meta.Pipeline,
-		Upstreams: meta.Upstreams,
+		Upstreams: normalizeClineListForJSON(meta.Upstreams),
 		Statuses:  statuses,
 		Summary:   summary,
 	}, nil
@@ -379,11 +407,11 @@ func (s *ClineUpstreamService) Test(ctx context.Context, accountID int64, model 
 	status, respBody, callErr := s.chatCompletion(ctx, account, raw, clineUpstreamProbeTimeout)
 	result := &ClineUpstreamTestResult{
 		Model:      model,
-		Targets:    clean.Upstreams,
-		Exclude:    clean.Exclude,
+		Targets:    normalizeClineListForJSON(clean.Upstreams),
+		Exclude:    normalizeClineListForJSON(clean.Exclude),
 		MS:         time.Since(started).Milliseconds(),
 		Pipeline:   meta.Pipeline,
-		Candidates: candidatesForTest(clean, meta),
+		Candidates: normalizeClineListForJSON(candidatesForTest(clean, meta)),
 	}
 	if callErr != nil {
 		result.Error = callErr.Error()

@@ -162,6 +162,86 @@ Capture path (follows the existing upstream-response-model observer pattern):
 Nothing is recorded for platforms whose responses do not declare a provider —
 the column renders `—`.
 
+## Why this is not a `.s2plugin`
+
+The plugin system is a signed out-of-process gRPC **transport replacement** with
+exactly one capability: `openai.oauth.outbound_transport.v1`
+(`plugin_manifest.go` rejects any other capability, and the manifest JSON schema
+pins `platform=openai`, `account_type=oauth`). Concretely, as a plugin with no
+core change:
+
+| Need | Possible? |
+| --- | --- |
+| Mutate the outbound Chat Completions body for a Cline account | **No** — `ShouldRouteOpenAIOAuth` only routes `platform=openai` + `account_type=oauth`; Cline requests never reach the plugin |
+| Add an admin REST endpoint | **No** — there is no plugin route-registration mechanism |
+| Add an admin UI page | **No** — the manifest has only `ui.entrypoint`, rendered as a `sandbox="allow-scripts"` iframe with CSP `connect-src 'none'` inside the built-in Plugins view |
+| Probe Cline with the account's key | **No** — `ResolveOutboundIdentity` returns nil for anything but OpenAI OAuth |
+| Store per-account config | Only for in-scope (openai/oauth) accounts |
+
+Making (a) viable would require a new capability wired in four core places
+(`plugin_manifest.go`, `pluginCapabilityAccountScopeGrants`,
+`hasEnabledOpenAIBinding`, `ShouldRouteOpenAIOAuth`) **and** reimplementing the
+whole Cline upstream transport inside the plugin, because the plugin *is* the
+HTTP client (there is no "core sends, plugin edits the body" hook). (b) and (c)
+would remain impossible. `docs/PLUGIN_DEVELOPMENT.md` §11 says explicitly not to
+declare a capability the host has not implemented.
+
+## Removing the feature later
+
+Everything is additive, so removal is deletion plus a handful of small hunks.
+Two independent halves:
+
+**A. Cline upstream pinning** (the panel and the injection)
+
+Delete:
+
+- `backend/internal/service/cline_upstream_pin.go`
+- `backend/internal/service/cline_upstream_service.go`
+- `backend/internal/service/cline_upstream_pin_test.go`
+- `backend/internal/handler/admin/account_cline_upstream.go`
+- `frontend/src/views/admin/ClineUpstreamView.vue`
+- `frontend/src/views/admin/__tests__/ClineUpstreamView.spec.ts`
+- `frontend/src/api/admin/clineUpstream.ts`
+- `frontend/src/i18n/locales/{en,zh}/admin/clineUpstream.ts`
+
+Revert the small hunks (each is 1–8 lines, all in one place per file):
+
+| File | Hunk |
+| --- | --- |
+| `backend/internal/service/openai_gateway_cc_pipeline.go` | the `body = ApplyClineUpstreamPin(account, body)` line |
+| `backend/internal/service/admin_account.go` | two delete + two preserve entries for the two `Extra` keys |
+| `backend/internal/handler/admin/account_handler.go` | `clineUpstream` field + `SetClineUpstreamService` |
+| `backend/internal/handler/wire.go` | the `clineUpstream` parameter + setter call |
+| `backend/internal/service/wire.go` | `NewClineUpstreamService,` in the provider set |
+| `backend/internal/server/routes/admin.go` | the five `/:id/cline-upstreams` routes |
+| `backend/cmd/server/wire_gen.go` | regenerate with `wire` (do not hand-edit) |
+| `frontend/src/router/index.ts` | the `/admin/cline-upstreams` route record |
+| `frontend/src/components/layout/AppSidebar.vue` | the nav item + `UpstreamPinIcon` |
+| `frontend/src/components/admin/account/AccountActionMenu.vue` | the `isCline` computed + menu button + emit |
+| `frontend/src/views/admin/AccountsView.vue` | `useRouter`, `handleClineUpstream`, the `@cline-upstream` binding |
+| `frontend/src/api/admin/index.ts` | the import, `adminAPI` entry and named export |
+| `frontend/src/i18n/locales/{en,zh}/admin/index.ts` | the namespace import + spread |
+| `frontend/src/i18n/locales/{en,zh}/common.ts` | `nav.clineUpstream` |
+| `frontend/src/i18n/locales/{en,zh}/admin/accounts.ts` | `admin.accounts.clineUpstream` |
+
+Nothing else references the feature; `ApplyClineUpstreamPin` is a no-op for any
+account without a pin, so the injection line can also be left in place safely.
+
+**B. Actual-upstream in the request log** (independent, generally useful)
+
+Keep it if you want the column for other platforms. To drop it: revert the
+`upstream_provider` additions in `usage_log.go`, `openai_gateway_usage.go`,
+`openai_gateway_service.go` (`OpenAIForwardResult`), `upstream_response_model.go`
+(+ its test), the three CC return-path files, `usage_log_repo_{insert,query}.go`,
+`handler/dto/{types,mappers}.go`, and the frontend `types/index.ts`,
+`UsageView.vue`, `UsageTable.vue`, `dashboard.ts` locales. The observer
+bootstrap lines added to the two CC fallbacks are an independent fix (they
+previously recorded no upstream metadata at all) and are worth keeping.
+
+`usage_logs.upstream_provider` is a nullable column with no readers once the
+code is gone; leave it (harmless) or drop it with a new migration — never edit
+migration 262 after it has been applied.
+
 ## Verification performed (local, no deployment)
 
 ```text

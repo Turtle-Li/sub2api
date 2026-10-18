@@ -109,6 +109,29 @@ describe('ClineUpstreamView', () => {
     expect(wrapper.text()).toContain('cline-pass/deepseek-v4-flash')
   })
 
+  it('renders null list fields from the API without crashing', async () => {
+    // Go 把 nil slice 序列化成 null；页面必须容忍（曾经抛 Cannot read properties of null）
+    mocks.getClineUpstreams.mockResolvedValue(
+      stateFixture({
+        models: [
+          {
+            model: 'cline-pass/deepseek-v4-flash',
+            source: 'configured',
+            pin: { mode: 'off', upstreams: null, exclude: null, sort: '' },
+            meta: { pipeline: '', pinnable: false, upstreams: null, statuses: null, last_provider: '', canonical_slug: '', last_error: '', probed_at: 0, validated_at: 0 },
+            candidates: null,
+            configured: false
+          }
+        ]
+      })
+    )
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cline-upstream-table"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('cline-pass/deepseek-v4-flash')
+  })
+
   it('shows the empty state when no cline account exists', async () => {
     mocks.listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
     const wrapper = mountView()
