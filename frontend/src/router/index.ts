@@ -52,6 +52,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/cline-upstreams',
+    name: 'AdminClineUpstreams',
+    component: () => import('@/views/admin/ClineUpstreamView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Cline Upstreams',
+      titleKey: 'admin.clineUpstream.title',
+      descriptionKey: 'admin.clineUpstream.description'
+    }
+  },
+  {
     path: '/login',
     name: 'Login',
     component: () => import('@/views/auth/LoginView.vue'),

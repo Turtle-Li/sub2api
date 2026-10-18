@@ -1,0 +1,336 @@
+//go:build unit
+
+package service
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+)
+
+func clineUpstreamTestAccount(pins, metas map[string]any) *Account {
+	extra := map[string]any{}
+	if pins != nil {
+		extra[ClineUpstreamPinsExtraKey] = pins
+	}
+	if metas != nil {
+		extra[ClineUpstreamMetaExtraKey] = metas
+	}
+	return &Account{
+		ID:          501,
+		Name:        "cline-test",
+		Platform:    PlatformCline,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-cline-test",
+			"base_url": "http://upstream.example",
+		},
+		Extra: extra,
+	}
+}
+
+func clinePinExtra(mode string, upstreams, exclude []string, sort string) map[string]any {
+	toAny := func(values []string) []any {
+		out := make([]any, 0, len(values))
+		for _, value := range values {
+			out = append(out, value)
+		}
+		return out
+	}
+	return map[string]any{
+		"mode":      mode,
+		"upstreams": toAny(upstreams),
+		"exclude":   toAny(exclude),
+		"sort":      sort,
+	}
+}
+
+func clineMetaExtra(pipeline string, upstreams []string) map[string]any {
+	toAny := func(values []string) []any {
+		out := make([]any, 0, len(values))
+		for _, value := range values {
+			out = append(out, value)
+		}
+		return out
+	}
+	return map[string]any{
+		"pipeline":  pipeline,
+		"upstreams": toAny(upstreams),
+		"pinnable":  pipeline != "",
+	}
+}
+
+const clineTestModel = "cline-pass/deepseek-v4-flash"
+
+func clineTestBody() []byte {
+	return []byte(`{"model":"` + clineTestModel + `","messages":[{"role":"user","content":"hi"}],"max_tokens":16}`)
+}
+
+func TestApplyClineUpstreamPin_NoopWithoutConfig(t *testing.T) {
+	body := clineTestBody()
+
+	// 非 Cline 账号
+	openaiAccount := clineUpstreamTestAccount(nil, nil)
+	openaiAccount.Platform = PlatformOpenAI
+	require.Equal(t, body, ApplyClineUpstreamPin(openaiAccount, body))
+
+	// Cline 账号但没有配置
+	require.Equal(t, body, ApplyClineUpstreamPin(clineUpstreamTestAccount(nil, nil), body))
+
+	// 配置了其它模型
+	other := clineUpstreamTestAccount(map[string]any{"cline-pass/other": clinePinExtra(ClinePinModeStrict, []string{"alibaba"}, nil, "")}, nil)
+	require.Equal(t, body, ApplyClineUpstreamPin(other, body))
+}
+
+func TestApplyClineUpstreamPin_StrictPlannerPipeline(t *testing.T) {
+	account := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeStrict, []string{"alibaba"}, nil, "")},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelinePlanner, []string{"alibaba", "baseten"})},
+	)
+	out := ApplyClineUpstreamPin(account, clineTestBody())
+
+	require.Equal(t, []any{"alibaba"}, gjson.GetBytes(out, "providerOptions.gateway.only").Value())
+	require.False(t, gjson.GetBytes(out, "provider").Exists(), "planner pipeline must not receive a top-level provider block")
+	// 请求体其余字段保持原样
+	require.Equal(t, clineTestModel, gjson.GetBytes(out, "model").String())
+	require.Equal(t, "hi", gjson.GetBytes(out, "messages.0.content").String())
+}
+
+func TestApplyClineUpstreamPin_PreferredDirectPipeline(t *testing.T) {
+	account := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModePreferred, []string{"deepseek", "baseten"}, nil, "")},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelineDirect, []string{"deepseek", "baseten", "gmicloud"})},
+	)
+	out := ApplyClineUpstreamPin(account, clineTestBody())
+
+	require.Equal(t, []any{"deepseek", "baseten"}, gjson.GetBytes(out, "provider.order").Value())
+	require.False(t, gjson.GetBytes(out, "providerOptions").Exists(), "direct pipeline must not receive a gateway block")
+}
+
+func TestApplyClineUpstreamPin_UnknownPipelineInjectsBothForms(t *testing.T) {
+	account := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeStrict, []string{"alibaba"}, nil, "")},
+		nil, // 尚未探测：管道未知
+	)
+	out := ApplyClineUpstreamPin(account, clineTestBody())
+
+	require.Equal(t, []any{"alibaba"}, gjson.GetBytes(out, "providerOptions.gateway.only").Value())
+	require.Equal(t, []any{"alibaba"}, gjson.GetBytes(out, "provider.only").Value())
+}
+
+func TestApplyClineUpstreamPin_ExcludeBecomesAllowList(t *testing.T) {
+	account := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeOff, nil, []string{"baseten"}, "")},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelinePlanner, []string{"alibaba", "baseten", "gmicloud"})},
+	)
+	out := ApplyClineUpstreamPin(account, clineTestBody())
+
+	require.Equal(t, []any{"alibaba", "gmicloud"}, gjson.GetBytes(out, "providerOptions.gateway.only").Value())
+}
+
+func TestApplyClineUpstreamPin_ExcludedUpstreamDroppedFromSelection(t *testing.T) {
+	account := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeStrict, []string{"baseten", "alibaba"}, []string{"baseten"}, "")},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelinePlanner, []string{"alibaba", "baseten"})},
+	)
+	out := ApplyClineUpstreamPin(account, clineTestBody())
+
+	require.Equal(t, []any{"alibaba"}, gjson.GetBytes(out, "providerOptions.gateway.only").Value())
+}
+
+func TestApplyClineUpstreamPin_SortMapping(t *testing.T) {
+	planner := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeOff, nil, nil, ClineSortCost)},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelinePlanner, nil)},
+	)
+	require.Equal(t, "cost", gjson.GetBytes(ApplyClineUpstreamPin(planner, clineTestBody()), "providerOptions.gateway.sort").String())
+
+	direct := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeOff, nil, nil, ClineSortTTFT)},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelineDirect, nil)},
+	)
+	require.Equal(t, "latency", gjson.GetBytes(ApplyClineUpstreamPin(direct, clineTestBody()), "provider.sort").String())
+}
+
+func TestApplyClineUpstreamPin_OffModeIgnoresSelectedUpstreams(t *testing.T) {
+	account := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeOff, []string{"alibaba"}, nil, "")},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelinePlanner, []string{"alibaba"})},
+	)
+	require.Equal(t, clineTestBody(), ApplyClineUpstreamPin(account, clineTestBody()))
+}
+
+func TestApplyClineUpstreamPin_KeepsClientProviderFields(t *testing.T) {
+	account := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeStrict, []string{"alibaba"}, nil, "")},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelineDirect, []string{"alibaba"})},
+	)
+	body := []byte(`{"model":"` + clineTestModel + `","messages":[],"provider":{"allow_fallbacks":false}}`)
+	out := ApplyClineUpstreamPin(account, body)
+
+	require.Equal(t, []any{"alibaba"}, gjson.GetBytes(out, "provider.only").Value())
+	require.False(t, gjson.GetBytes(out, "provider.allow_fallbacks").Bool(), "unrelated provider fields must be preserved")
+}
+
+func TestParseClineUpstreamRouting_PlannerEnvelope(t *testing.T) {
+	body := []byte(`{"data":{"choices":[{"message":{"content":"OK","provider_metadata":{"gateway":{"routing":{"canonicalSlug":"deepseek/deepseek-v4-flash","finalProvider":"alibaba","fallbacksAvailable":["baseten"],"planningReasoning":"alibaba won tier 0 over baseten"}}}}}]}}`)
+	routing := parseClineUpstreamRouting(body)
+
+	require.Equal(t, ClinePipelinePlanner, routing.pipeline)
+	require.Equal(t, "alibaba", routing.finalProvider)
+	require.Equal(t, "deepseek/deepseek-v4-flash", routing.canonicalSlug)
+	require.Equal(t, []string{"baseten"}, routing.fallbacks)
+	require.Equal(t, "OK", routing.content)
+}
+
+func TestParseClineUpstreamRouting_DirectTopLevel(t *testing.T) {
+	body := []byte(`{"choices":[{"message":{"content":"OK"}}],"provider":"GMICloud","model":"z-ai/glm-5.3-flash"}`)
+	routing := parseClineUpstreamRouting(body)
+
+	require.Equal(t, ClinePipelineDirect, routing.pipeline)
+	require.Equal(t, "gmicloud", routing.finalProvider)
+	require.Equal(t, "GMICloud", routing.finalProviderName)
+	require.Equal(t, "z-ai/glm-5.3-flash", routing.canonicalSlug)
+}
+
+func TestParseClineAvailableProviders(t *testing.T) {
+	planner := `invalid request: Provider set restricted to: __probe__. Available providers are: alibaba, baseten, gmicloud.`
+	require.Equal(t, []string{"alibaba", "baseten", "gmicloud"}, parseClineAvailableProviders(planner, ClinePipelinePlanner))
+
+	// 错误文本里混入 JSON 片段时必须按 slug 形状过滤
+	noisy := `Available providers are: alibaba, ","type":"invalid_request_error"`
+	require.Equal(t, []string{"alibaba"}, parseClineAvailableProviders(noisy, ClinePipelinePlanner))
+
+	direct := `no allowed providers, {"error":{"message":"no allowed providers","metadata":{"available_providers":["deepseek","baseten"]}}}`
+	require.Equal(t, []string{"deepseek", "baseten"}, parseClineAvailableProviders(direct, ClinePipelineDirect))
+}
+
+func TestClassifyClineUpstreamError(t *testing.T) {
+	cases := []struct {
+		message string
+		want    string
+	}{
+		{"empty response content", ClineUpstreamStatusOK},
+		{"429 temporarily rate limited", ClineUpstreamStatusLimited},
+		{"invalid_request_error: no allowed providers", ClineUpstreamStatusBad},
+		{"Unauthorized: re-authenticate", ClineUpstreamStatusAuth},
+		{"something unexpected", ClineUpstreamStatusUnknown},
+		{"", ClineUpstreamStatusUnknown},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, classifyClineUpstreamError(tc.message), tc.message)
+	}
+}
+
+func TestMergeClineMetaExtraPreservesOtherModels(t *testing.T) {
+	extra := map[string]any{
+		ClineUpstreamMetaExtraKey: map[string]any{
+			"cline-pass/other": map[string]any{"pipeline": ClinePipelineDirect, "upstreams": []any{"deepseek"}},
+		},
+	}
+	merged := mergeClineMetaExtra(extra, map[string]any{
+		clineTestModel: map[string]any{"pipeline": ClinePipelinePlanner, "upstreams": []any{"alibaba"}},
+	})
+
+	require.Len(t, merged, 2)
+	require.Equal(t, ClinePipelineDirect, merged["cline-pass/other"].(map[string]any)["pipeline"])
+	require.Equal(t, ClinePipelinePlanner, merged[clineTestModel].(map[string]any)["pipeline"])
+}
+
+func TestClineUpstreamService_UpdatePinsNormalizesAndDropsEmpty(t *testing.T) {
+	account := clineUpstreamTestAccount(nil, nil)
+	repo := &clineAccountRepo{accounts: []Account{*account}}
+	svc := NewClineUpstreamService(repo, nil, nil, nil)
+
+	err := svc.UpdatePins(context.Background(), account.ID, map[string]ClineUpstreamPin{
+		clineTestModel:     {Mode: "STRICT", Upstreams: []string{" alibaba ", "alibaba", ""}, Sort: "cost"},
+		"cline-pass/empty": {Mode: ClinePinModeOff},
+	})
+	require.NoError(t, err)
+	require.Len(t, repo.extraWrites[account.ID], 1)
+
+	pins, ok := repo.extraWrites[account.ID][0][ClineUpstreamPinsExtraKey].(map[string]any)
+	require.True(t, ok)
+	require.Len(t, pins, 1, "empty pin configs must not be persisted")
+	entry := pins[clineTestModel].(map[string]any)
+	require.Equal(t, ClinePinModeStrict, entry["mode"])
+	require.Equal(t, []string{"alibaba"}, entry["upstreams"])
+	require.Equal(t, ClineSortCost, entry["sort"])
+}
+
+func TestClineUpstreamService_GetStateRejectsNonClineAccount(t *testing.T) {
+	account := clineUpstreamTestAccount(nil, nil)
+	account.Platform = PlatformOpenAI
+	repo := &clineAccountRepo{accounts: []Account{*account}}
+	svc := NewClineUpstreamService(repo, nil, nil, nil)
+
+	_, err := svc.GetState(context.Background(), account.ID)
+	require.Error(t, err)
+}
+
+// TestForwardAsRawChatCompletions_InjectsClineUpstreamPin 验证数据面出站点确实注入钉住字段。
+func TestForwardAsRawChatCompletions_InjectsClineUpstreamPin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := clineTestBody()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_1","object":"chat.completion","model":"` + clineTestModel + `","choices":[{"index":0,"message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	account := clineUpstreamTestAccount(
+		map[string]any{clineTestModel: clinePinExtra(ClinePinModeStrict, []string{"deepseek"}, nil, ClineSortCost)},
+		map[string]any{clineTestModel: clineMetaExtra(ClinePipelinePlanner, []string{"deepseek", "baseten"})},
+	)
+
+	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, []any{"deepseek"}, gjson.GetBytes(upstream.lastBody, "providerOptions.gateway.only").Value())
+	require.Equal(t, "cost", gjson.GetBytes(upstream.lastBody, "providerOptions.gateway.sort").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "provider").Exists())
+}
+
+// TestForwardAsRawChatCompletions_NoPinWithoutClineConfig 确认未配置的 Cline 账号请求体不变。
+func TestForwardAsRawChatCompletions_NoPinWithoutClineConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := clineTestBody()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_2","object":"chat.completion","model":"` + clineTestModel + `","choices":[{"index":0,"message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	_, err := svc.forwardAsRawChatCompletions(context.Background(), c, clineUpstreamTestAccount(nil, nil), body, "")
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "providerOptions").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "provider").Exists())
+}

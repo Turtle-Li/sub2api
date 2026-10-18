@@ -68,7 +68,13 @@ type AccountHandler struct {
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
 	opencodeGoUsage         *service.OpenCodeGoUsageService
+	clineUpstream           *service.ClineUpstreamService
 	cfg                     *config.Config
+}
+
+// SetClineUpstreamService attaches the optional Cline Pass upstream pinning service.
+func (h *AccountHandler) SetClineUpstreamService(clineUpstream *service.ClineUpstreamService) {
+	h.clineUpstream = clineUpstream
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.

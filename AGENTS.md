@@ -322,3 +322,16 @@
 - For the own-admin panel and IP-source management, read `docs/features/own-codex-monitor-panel.md` for the pinned reference, source-statistics limits, private binding and deployment boundaries.
 
 - Read `tools/codex-turn-state-manager/README.md` for the standalone probe and private panel. Follow project deployment records before operating a live instance. Read-only renewal mode does not require the optional degraded-account API.
+
+## Cline Pass upstream pinning
+
+- Read `docs/operations/CLINE_UPSTREAM_PIN_20261018.md` before changing the
+  Cline Pass (`cline-pass/*`) upstream pinning path. Preserve the single
+  injection point in `sendCCUpstreamRequest`, the no-op guarantee for accounts
+  and models without a pin, the two managed `Extra` keys
+  (`cline_upstream_pins` / `cline_upstream_meta`) in the account-update
+  delete/preserve lists, and the two-pipeline write forms (top-level
+  `provider.*` for the direct pipeline, `providerOptions.gateway.*` for the
+  planner pipeline). An upstream merge that rewrites the Chat Completions
+  outbound body must keep `ApplyClineUpstreamPin` applied after protocol
+  conversion.

@@ -200,6 +200,10 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	// 字段，上游 400 "The `reasoning_content` in the thinking mode must be
 	// passed back to the API"。在共用出站点补空格占位，真实明文不覆盖。
 	body = ensureDeepSeekChatReasoningPlaceholders(account, body)
+	// Cline Pass 上游钉住：按账号每模型配置注入 provider / providerOptions.gateway 偏好。
+	// 放在最后一步，确保 /v1/responses→CC 的类型化重建与 Responses 形状的 CC 转换之后注入，
+	// 客户端自带的同名字段不会残留。非 Cline 账号或无配置时原样返回。
+	body = ApplyClineUpstreamPin(account, body)
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	requestCtx := upstreamCtx
 	if account.Platform == PlatformGrok {

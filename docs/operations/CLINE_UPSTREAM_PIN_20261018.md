@@ -1,0 +1,153 @@
+# Cline Pass upstream pinning (2026-10-18)
+
+Owner request: Cline Pass (`cline-pass/*`) subscription models are routed by
+Cline's own gateway, and the upstream provider behind a model can change without
+notice (the reported case is DeepSeek). A community project,
+[`cline-pass-switcher`](https://github.com/munmunjaklin458-afk/cline-pass-switcher),
+documents a way to enumerate, validate and **pin** that upstream. This change
+ports the mechanism into Sub2API instead of running a second proxy.
+
+## Mechanism that was ported (and what was not)
+
+The switcher's measured finding is that a Cline Pass model travels one of two
+routing pipelines, and pinning is written differently for each:
+
+| Pipeline | Backend | Response fingerprint | Pinning field |
+| --- | --- | --- | --- |
+| `direct` | OpenRouter | top-level `provider` + real `model` | top-level `provider.only / order / sort` |
+| `planner` | Vercel AI Gateway | `provider_metadata.gateway.routing` | `providerOptions.gateway.only / order / sort` |
+
+A top-level `provider` block is silently dropped on the planner pipeline, which
+is why "changing the provider" does not work against the official API. Pipeline
+ownership is decided by Cline and can change over time, so the pipeline type is
+a *probed snapshot*, not a constant.
+
+Ported:
+
+- upstream enumeration via a zero-token "fake provider" probe
+  (`only: ["__probe__"]`), which makes the gateway fail at the routing layer and
+  list the real providers — read from the planner error text
+  (`Available providers are: ...`) or from the direct pipeline's embedded
+  `error.metadata.available_providers`;
+- pipeline detection and last-actual-provider read-back from the response;
+- per-model pin configuration (strict / preferred + fallback, exclusions, sort);
+- per-provider validation with `ok / limited / bad / auth / unknown`
+  classification;
+- one-shot pin verification ("test") that reports whether the gateway honoured
+  the pin.
+
+Not ported (Sub2API already owns these): the downstream proxy key, the account
+pool / round-robin scheduling, request history, and OpenAI response unwrapping.
+
+## Where it lives
+
+| Layer | File |
+| --- | --- |
+| Pin config + request-body injection (pure) | `backend/internal/service/cline_upstream_pin.go` |
+| Probe / validate / test service | `backend/internal/service/cline_upstream_service.go` |
+| Data-plane injection point | `backend/internal/service/openai_gateway_cc_pipeline.go` (`sendCCUpstreamRequest`) |
+| Managed-`Extra` protection | `backend/internal/service/admin_account.go` |
+| Admin API | `backend/internal/handler/admin/account_cline_upstream.go`, `backend/internal/server/routes/admin.go` |
+| DI | `backend/internal/service/wire.go`, `backend/internal/handler/wire.go`, regenerated `backend/cmd/server/wire_gen.go` |
+| Admin page | `frontend/src/views/admin/ClineUpstreamView.vue` |
+| Admin API client | `frontend/src/api/admin/clineUpstream.ts` |
+| Account-list entry point | `frontend/src/components/admin/account/AccountActionMenu.vue`, `frontend/src/views/admin/AccountsView.vue` |
+| i18n | `frontend/src/i18n/locales/{en,zh}/admin/clineUpstream.ts` (+ `accounts.ts`, `common.ts` nav key) |
+| Tests | `backend/internal/service/cline_upstream_pin_test.go`, `frontend/src/views/admin/__tests__/ClineUpstreamView.spec.ts` |
+
+## Behaviour contract
+
+- **Storage**: two per-account `Extra` keys, JSONB, **no migration**:
+  `cline_upstream_pins` (`{model: {mode, upstreams, exclude, sort}}`) and
+  `cline_upstream_meta` (`{model: {pipeline, pinnable, upstreams, statuses,
+  last_provider, canonical_slug, probed_at, validated_at, last_error}}`).
+  Both are added to the managed-key delete + preserve lists in
+  `admin_account.go`, so an ordinary account create/edit/bulk update can neither
+  set them nor wipe them; only the dedicated endpoints write them.
+- **Injection point**: `sendCCUpstreamRequest` is the single choke point for
+  every Chat Completions upstream send (raw CC, Responses→CC fallback,
+  Messages→CC fallback). Injecting there — after protocol conversion and after
+  `ensureDeepSeekChatReasoningPlaceholders` — is what makes the pin survive the
+  typed Responses→CC rebuild that drops client-supplied unknown fields.
+- **No-op guarantee**: `ApplyClineUpstreamPin` returns its input slice unchanged
+  for non-Cline accounts, for models without a pin, and when injection fails; it
+  never blocks or rewrites an unrelated field. Only `provider.*` and
+  `providerOptions.gateway.*` keys are written, via `sjson`, so the rest of the
+  body (including client-sent `provider` sub-keys) is preserved.
+- **Modes**:
+  - `off` — no pin. Exclusions and sorting still apply.
+  - `strict` — `only: [first selected upstream]`.
+  - `preferred` — `order: [selected upstreams...]`; the gateway performs the
+    fallback. Sub2API does not run its own retry loop, so `preferred` is the
+    mode that mirrors the switcher's multi-upstream failover.
+- **Exclusions** are never sent as `exclude`/`ignore` (the gateway ignores
+  them); when the probed provider list is known they are converted into an
+  `only` allow-list (`known − excluded`). If the list is unknown the UI warns
+  that exclusions cannot be enforced until the model is probed.
+- **Sort mapping**: Vercel accepts `cost|ttft|tps` as-is; OpenRouter uses
+  `price|latency|throughput`.
+- **Probing is admin-initiated and costs a little quota** (each probe, validate
+  or test sends one minimal real request). Probing requires an API-key Cline
+  account whose base URL is the official `api.cline.bot`; manual pinning still
+  works on custom relays.
+
+## Admin API
+
+All under the existing admin auth + audit + compliance middleware:
+
+| Method | Path |
+| --- | --- |
+| `GET` | `/api/v1/admin/accounts/:id/cline-upstreams` |
+| `PUT` | `/api/v1/admin/accounts/:id/cline-upstreams` |
+| `POST` | `/api/v1/admin/accounts/:id/cline-upstreams/probe` |
+| `POST` | `/api/v1/admin/accounts/:id/cline-upstreams/validate` |
+| `POST` | `/api/v1/admin/accounts/:id/cline-upstreams/test` |
+
+The page is at `/admin/cline-upstreams` (sidebar entry "Cline Upstreams"), and
+the Cline account row's "more" menu links to it with `?account=<id>`.
+
+## Verification performed (local, no deployment)
+
+```text
+go build ./...                                             exit 0
+go vet -tags unit ./internal/service/ ./internal/handler/admin/   exit 0
+go test -tags unit ./internal/service/ -run 'Cline|TestApplyClineUpstreamPin|...'  ok
+go test -tags unit ./internal/server/... ./internal/handler/admin/...             ok
+go run github.com/google/wire/cmd/wire (idempotent; wire_gen.go diff = 2 insertions/1 deletion)
+frontend: vue-tsc --noEmit                                 exit 0
+frontend: vitest localeKeyCompleteness + ClineUpstreamView + AccountActionMenu + AccountsView + api  40 files / 284 tests passed
+frontend: vite build                                       exit 0 (output under the git-ignored backend/internal/web/dist)
+```
+
+Unit tests cover: strict/planner, preferred/direct, unknown pipeline injecting
+both forms, exclusion→allow-list conversion, excluded-upstream removal, sort
+mapping, `off` ignoring selections, preservation of unrelated `provider` keys,
+no-op without config and for non-Cline accounts, routing parse for both
+pipelines, provider-harvest parsing, error classification, meta merge, pin
+normalization on save, and an end-to-end assertion that
+`forwardAsRawChatCompletions` puts `providerOptions.gateway.only/sort` on the
+wire for a pinned Cline account.
+
+## Rollback
+
+The feature is additive and opt-in per account+model:
+
+- With no `cline_upstream_pins` entry the gateway body is byte-identical to
+  before, so reverting the deployment restores previous behaviour with no data
+  change.
+- The `Extra` keys are inert data; they can be cleared per account with
+  `PUT /cline-upstreams` with `{"pins": {}}`, or left in place across a
+  rollback.
+- No migration, no schema change, no background job, no new port or Caddy rule.
+
+## Known limits
+
+- Pinning is per account+model, not per API key or group. A group that mixes
+  several Cline accounts uses each account's own pin.
+- `strict` pins a single upstream; a hard failure does not try the second
+  selection. Use `preferred` when a fallback is wanted.
+- The provider catalogue snapshot is refreshed only by probing, and provider
+  availability (`limited`) is a shared-pool state that changes over time;
+  re-validate before treating a channel as permanently unusable.
+- Observed actual provider is recorded on probe/test, not on every live request,
+  so the data plane keeps zero extra parsing cost.

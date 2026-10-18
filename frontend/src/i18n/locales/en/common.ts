@@ -184,6 +184,7 @@ export default {
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',
     modelTrace: 'Model Fingerprint',
+    clineUpstream: 'Cline Upstreams',
     plugins: 'Plugins',
     proxies: 'Proxies',
     redeemCodes: 'Redeem Codes',

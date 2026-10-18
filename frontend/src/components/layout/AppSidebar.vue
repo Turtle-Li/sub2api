@@ -651,6 +651,22 @@ const FingerprintIcon = {
     )
 }
 
+// Cline 上游钉住：把订阅模型钉到某个上游渠道的靶心示意
+const UpstreamPinIcon = {
+  render: () =>
+    h(
+      'svg',
+      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
+      [
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'M12 3v3m0 12v3M3 12h3m12 0h3M12 8.25a3.75 3.75 0 100 7.5 3.75 3.75 0 000-7.5z'
+        })
+      ]
+    )
+}
+
 const ShieldIcon = {
   render: () =>
     h(
@@ -812,6 +828,7 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/codex-turn-state', label: t('admin.codexTurnState.title'), icon: SignalIcon },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/modeltrace', label: t('nav.modelTrace'), icon: FingerprintIcon },
+    { path: '/admin/cline-upstreams', label: t('nav.clineUpstream'), icon: UpstreamPinIcon },
     { path: '/admin/plugins', label: t('nav.plugins'), icon: PluginIcon, featureFlag: flagPluginManagement },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },

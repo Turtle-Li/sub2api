@@ -184,6 +184,7 @@ export default {
     subscriptions: '订阅管理',
     accounts: '账号管理',
     modelTrace: '模型指纹监控',
+    clineUpstream: 'Cline 上游钉住',
     plugins: '插件管理',
     proxies: 'IP管理',
     redeemCodes: '兑换码',

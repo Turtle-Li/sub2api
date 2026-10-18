@@ -462,6 +462,12 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.GET("/:id/opencode-go-usage", h.Admin.Account.GetOpenCodeGoUsage)
 		accounts.PUT("/:id/opencode-go-usage/auto-refresh", h.Admin.Account.SetOpenCodeGoUsageAutoRefresh)
 		accounts.POST("/:id/opencode-go-usage/refresh", h.Admin.Account.RefreshOpenCodeGoUsage)
+		// Cline Pass 上游钉住：枚举/校验/钉住订阅模型背后的上游渠道。
+		accounts.GET("/:id/cline-upstreams", h.Admin.Account.GetClineUpstreams)
+		accounts.PUT("/:id/cline-upstreams", h.Admin.Account.UpdateClineUpstreams)
+		accounts.POST("/:id/cline-upstreams/probe", h.Admin.Account.ProbeClineUpstreams)
+		accounts.POST("/:id/cline-upstreams/validate", h.Admin.Account.ValidateClineUpstreams)
+		accounts.POST("/:id/cline-upstreams/test", h.Admin.Account.TestClineUpstreams)
 		accounts.DELETE("/:id", h.Admin.Account.Delete)
 		accounts.POST("/:id/test", h.Admin.Account.Test)
 		accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)

@@ -39,6 +39,7 @@ import adminComplianceAPI from './compliance'
 import auditAPI from './audit'
 import attachmentGatewayAPI from './attachmentGateway'
 import pluginsAPI from './plugins'
+import clineUpstreamAPI from './clineUpstream'
 
 /**
  * Unified admin API object for convenient access
@@ -79,7 +80,8 @@ export const adminAPI = {
   compliance: adminComplianceAPI,
   audit: auditAPI,
   attachmentGateway: attachmentGatewayAPI,
-  plugins: pluginsAPI
+  plugins: pluginsAPI,
+  clineUpstream: clineUpstreamAPI
 }
 
 export {
@@ -118,7 +120,8 @@ export {
   adminComplianceAPI,
   auditAPI,
   attachmentGatewayAPI,
-  pluginsAPI
+  pluginsAPI,
+  clineUpstreamAPI
 }
 
 export default adminAPI

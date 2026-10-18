@@ -1015,6 +1015,7 @@ var ProviderSet = wire.NewSet(
 	NewCodexDegradationProbeService,
 	ProvideOllamaCloudUsageService,
 	ProvideOpenCodeGoUsageService,
+	NewClineUpstreamService,
 	ProvideSettingService,
 	NewDataManagementService,
 	ProvideBackupService,

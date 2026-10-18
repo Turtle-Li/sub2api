@@ -762,6 +762,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OpenCodeGoUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
 		delete(normalizedExtra, ModelTraceExtraKey)
+		// Cline 上游钉住配置与探测快照只经 /accounts/:id/cline-upstreams 写入，
+		// 普通账号编辑不得携带，也不得被其清空（见下方保留列表）。
+		delete(normalizedExtra, ClineUpstreamPinsExtraKey)
+		delete(normalizedExtra, ClineUpstreamMetaExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
 			"quota_used",
@@ -781,6 +785,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			OpenAIAutoResetCreditStateExtraKey,
 			PinnedCodexTurnStatesExtraKey,
 			ModelTraceExtraKey,
+			ClineUpstreamPinsExtraKey,
+			ClineUpstreamMetaExtraKey,
 		} {
 			if v, ok := account.Extra[key]; ok {
 				normalizedExtra[key] = v
@@ -1044,6 +1050,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
 	delete(input.Extra, OpenCodeGoUsageAutoRefreshExtraKey)
 	delete(input.Extra, OpenCodeGoUsageSnapshotExtraKey)
+	delete(input.Extra, ClineUpstreamPinsExtraKey)
+	delete(input.Extra, ClineUpstreamMetaExtraKey)
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)

@@ -58,11 +58,13 @@ func ProvideAdminHandlers(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	opencodeGoUsage *service.OpenCodeGoUsageService,
 	claudeResetCredits *service.ClaudeResetCreditService,
+	clineUpstream *service.ClineUpstreamService,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetOpenCodeGoUsageService(opencodeGoUsage)
 	accountHandler.SetClaudeResetCreditService(claudeResetCredits)
+	accountHandler.SetClineUpstreamService(clineUpstream)
 	return &AdminHandlers{
 		CodexTurnStatePanel:    codexTurnStatePanelHandler,
 		CodexDegradationProbe:  codexDegradationProbeHandler,

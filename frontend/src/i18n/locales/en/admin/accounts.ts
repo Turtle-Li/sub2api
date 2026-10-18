@@ -465,6 +465,7 @@ export default {
       },
       clearRateLimit: 'Clear Rate Limit',
       resetQuota: 'Reset Quota',
+      clineUpstream: 'Cline Upstreams',
       quotaLimit: 'Quota Limit',
       quotaLimitPlaceholder: '0 means unlimited',
       quotaLimitHint: 'Set daily/weekly/total spending limits (USD). Anthropic API key accounts can also configure client affinity. Changing limits won\'t reset usage.',
