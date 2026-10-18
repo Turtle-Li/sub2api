@@ -188,8 +188,12 @@ declare a capability the host has not implemented.
 
 ## Removing the feature later
 
+Owner decision (2026-10-19): keep both halves, and deliberately **no** config or
+admin kill switch — when the feature is no longer wanted it will be removed from
+source directly, using the checklist below.
+
 Everything is additive, so removal is deletion plus a handful of small hunks.
-Two independent halves:
+The two halves below are independent.
 
 **A. Cline upstream pinning** (the panel and the injection)
 
@@ -227,16 +231,54 @@ Revert the small hunks (each is 1–8 lines, all in one place per file):
 Nothing else references the feature; `ApplyClineUpstreamPin` is a no-op for any
 account without a pin, so the injection line can also be left in place safely.
 
-**B. Actual-upstream in the request log** (independent, generally useful)
+**B. Actual-upstream in the request log**
 
-Keep it if you want the column for other platforms. To drop it: revert the
-`upstream_provider` additions in `usage_log.go`, `openai_gateway_usage.go`,
-`openai_gateway_service.go` (`OpenAIForwardResult`), `upstream_response_model.go`
-(+ its test), the three CC return-path files, `usage_log_repo_{insert,query}.go`,
-`handler/dto/{types,mappers}.go`, and the frontend `types/index.ts`,
-`UsageView.vue`, `UsageTable.vue`, `dashboard.ts` locales. The observer
-bootstrap lines added to the two CC fallbacks are an independent fix (they
-previously recorded no upstream metadata at all) and are worth keeping.
+Populated only when the upstream response declares a provider, which in practice
+means Cline Pass (planner `finalProvider` / direct `provider`) — but not *only*
+Cline: any account whose base URL points at an OpenRouter-compatible relay that
+echoes a top-level `provider` will fill this column in too. So it is worth
+keeping while any such account exists, and it can be removed together with A
+when neither does.
+
+To drop it:
+
+| File | Hunk |
+| --- | --- |
+| `backend/internal/service/upstream_response_model.go` | `ObserveUpstreamProvider`, `Provider()`, `observedUpstreamProvider`, the provider field, `upstreamProviderMaxLength`, the `bytes` import, and the call inside `ObserveOpenAI` |
+| `backend/internal/service/upstream_response_model_test.go` | the six `TestUpstreamProvider*` tests |
+| `backend/internal/service/openai_gateway_service.go` | `OpenAIForwardResult.UpstreamProvider` |
+| `backend/internal/service/openai_gateway_usage.go` | the `UpstreamProvider:` line in the usage-log literal |
+| `backend/internal/service/usage_log.go` | `UsageLog.UpstreamProvider` |
+| `backend/internal/service/openai_gateway_chat_completions_raw.go` | 2 × `UpstreamProvider: observedUpstreamProvider(c),` |
+| `backend/internal/service/openai_gateway_responses_chat_fallback.go` | 4 × the same line **+ the observer bootstrap** (see below) |
+| `backend/internal/service/openai_gateway_messages_chat_fallback.go` | 3 × the same line **+ the observer bootstrap** (see below) |
+| `backend/internal/repository/usage_log_repo_insert.go` | arg type, the 8 column lists, `$64`, `upstreamProvider` local + arg |
+| `backend/internal/repository/usage_log_repo_query.go` | `usageLogSelectColumns`, the scan var, scan target and assignment |
+| `backend/internal/repository/usage_log_repo_request_type_test.go` | the 4 scan stubs, 2 `sqlmock.AnyArg()` rows, 2 column-substring assertions, the shifted absolute indices |
+| `backend/internal/repository/usage_log_session_id_unit_test.go` | the shifted `usageLogInsertArgTypes` / `prepared.args` indices |
+| `backend/internal/handler/dto/types.go` + `mappers.go` | `AdminUsageLog.UpstreamProvider` and its mapping |
+| `frontend/src/types/index.ts` | `AdminUsageLog.upstream_provider` |
+| `frontend/src/views/admin/UsageView.vue` | the column entry, the export header and the export row value |
+| `frontend/src/components/admin/usage/UsageTable.vue` | `#cell-upstream_provider` |
+| `frontend/src/components/admin/usage/__tests__/UsageTable.spec.ts` | the stub slot + the provider test |
+| `frontend/src/views/admin/__tests__/UsageView.spec.ts` | the i18n mock key, the fixture field, the two export assertions |
+| `frontend/src/i18n/locales/{en,zh}/dashboard.ts` | `usage.upstreamProvider` |
+
+Two things in there are **independent fixes worth keeping even if the column
+goes**: the observer bootstrap added to the Responses→CC and Anthropic→CC
+fallbacks (they previously recorded no upstream response model or service tier
+at all), and migration 262 itself. `usage_logs.upstream_provider` becomes a
+nullable column with no readers; leave it, or drop it with a **new** migration —
+never edit 262 after it has been applied (the runner checksums applied files and
+refuses to start on a change).
+
+**C. Also remove** `AGENTS.md` → the "Cline Pass upstream pinning" section, and
+the `docs/operations/CLINE_UPSTREAM_PIN_20261018.md` file itself.
+
+Suggested order: delete A + B code and their tests, regenerate `wire`, run
+`go build ./... && go test -tags unit ./internal/... ` plus
+`pnpm run check:i18n && pnpm run typecheck && pnpm run test:run`, then decide
+separately whether to drop the column.
 
 `usage_logs.upstream_provider` is a nullable column with no readers once the
 code is gone; leave it (harmless) or drop it with a new migration — never edit
