@@ -1,5 +1,31 @@
 # Cline Pass upstream pinning (2026-10-18)
 
+## Release record
+
+- Fork `main` advanced to `b3ffa338ef24697dd11c059086968a4875bebfb7`
+  (`feat(cline): pin Cline Pass subscription upstreams` + `feat(usage): record
+  the actual upstream provider per request`) on top of the v0.2.17 release
+  commit `1abeac808`.
+- Explicit workflow dispatch
+  `.github/workflows/sub2api-production-deploy.yml` on `main` with
+  `deployment_target=aws-candidate`; run `39146716027` completed **success** in
+  9m49s and built that exact commit.
+- Host evidence `/var/log/sub2api-release/gha-20261018-095729-b3ffa338-61201`:
+  candidate `sub2api-green` created from
+  `sub2api:auto-20261018-095729-b3ffa338`, healthy on attempt 3, authenticated
+  real-request probe `models_status=200 responses_status=200`, Caddy switched
+  `sub2api-blue:8080 -> sub2api-green:8080`, old blue stopped (drain monitor
+  observed zero in-flight requests).
+- Post-release checks: `sub2api-green` up and healthy, Caddy admin and startup
+  views select only `sub2api-green:8080`, public
+  `https://api.turtleligpt.com/health` returns `200`, the stopped
+  `sub2api-blue` container (`sub2api:auto-20261017-094012-03d5ba69`) remains the
+  rollback target, and the new container logged **zero** error-level lines while
+  serving live traffic.
+- Migration `262_usage_log_upstream_provider.sql` applied at container startup;
+  the migration runner fails startup on a failed DDL, and the container started
+  and served normally.
+
 Owner request: Cline Pass (`cline-pass/*`) subscription models are routed by
 Cline's own gateway, and the upstream provider behind a model can change without
 notice (the reported case is DeepSeek). A community project,
