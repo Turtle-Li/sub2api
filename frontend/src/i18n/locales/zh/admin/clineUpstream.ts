@@ -4,6 +4,10 @@ export default {
     description: '枚举、校验并钉住 Cline Pass 订阅模型（cline-pass/*）背后的上游渠道。',
     pipelineHint:
       'Cline Pass 的订阅模型分两条路由管道：直连（OpenRouter，认顶层 provider.only/order/sort）与规划器（Vercel AI Gateway，认 providerOptions.gateway.*）。管道归属由 Cline 侧决定、可能随时间变化，钉住前请先探测。',
+    recommendationLabel: '推荐流程：',
+    recommendationStep1: '① 全部探测',
+    recommendationStep2: '② 校验目标模型',
+    recommendationStep3: '③ 严格钉住官方渠道',
     probeCostHint: '探测、校验与测试都会用该账号发一条极小的真实请求（每次约千分之几美分级）。',
     refresh: '刷新',
     probeAll: '全部探测',
@@ -31,15 +35,23 @@ export default {
       mode: '钉住',
       actions: '操作'
     },
+    pipelineHintDirect: '直连管道（OpenRouter）：钉住写进顶层 provider。',
+    pipelineHintPlanner: '规划器管道（Vercel AI Gateway）：钉住写进 providerOptions.gateway。',
+    pipelineHintUnknown: '尚未探测管道类型，请先探测该模型。',
     source: {
-      subscription: '订阅清单',
-      catalog: '账号目录',
-      configured: '仅本地配置'
+      subscription: '订阅',
+      catalog: '目录',
+      configured: '本地'
+    },
+    sourceHint: {
+      subscription: '来自 Cline 推荐模型接口（Cline Pass 订阅清单）。',
+      catalog: '来自该账号自己的模型目录接口。',
+      configured: '仅本地存在：之前钉住或探测过，Cline 清单里已不再返回。'
     },
     pipeline: {
-      direct: '直连（OpenRouter）',
-      planner: '规划器（Vercel）',
-      unknown: '未知'
+      direct: '直连',
+      planner: '规划器',
+      unknown: '未探测'
     },
     mode: {
       off: '不钉住',
@@ -69,7 +81,7 @@ export default {
       title: '钉住上游 · {model}',
       mode: '模式',
       modeHintOff: '不注入上游偏好；排除与排序仍然生效。',
-      modeHintStrict: '只使用勾选的第一个上游渠道。',
+      modeHintStrict: '只使用勾选的第一个上游渠道；该渠道限流或不可钉时请求会直接失败，建议先「校验」确认可用。',
       modeHintPreferred: '网关按勾选顺序尝试，失败自动回退到下一个。',
       upstreams: '钉住顺序',
       upstreamsHint: '勾选要使用的上游渠道，下方顺序即回退顺序。',

@@ -35,9 +35,17 @@
         </div>
       </div>
 
-      <p class="rounded-xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-800 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-200">
-        {{ t('admin.clineUpstream.pipelineHint') }}
-      </p>
+      <div class="rounded-xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-800 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-200">
+        <p>{{ t('admin.clineUpstream.pipelineHint') }}</p>
+        <p class="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-medium">
+          <span>{{ t('admin.clineUpstream.recommendationLabel') }}</span>
+          <span class="rounded bg-white/70 px-1.5 py-0.5 dark:bg-blue-900/40">{{ t('admin.clineUpstream.recommendationStep1') }}</span>
+          <Icon name="arrowRight" size="xs" class="opacity-60" />
+          <span class="rounded bg-white/70 px-1.5 py-0.5 dark:bg-blue-900/40">{{ t('admin.clineUpstream.recommendationStep2') }}</span>
+          <Icon name="arrowRight" size="xs" class="opacity-60" />
+          <span class="rounded bg-white/70 px-1.5 py-0.5 dark:bg-blue-900/40">{{ t('admin.clineUpstream.recommendationStep3') }}</span>
+        </p>
+      </div>
       <p class="text-xs text-gray-500 dark:text-gray-400">
         {{ t('admin.clineUpstream.probeCostHint') }}
       </p>
@@ -127,73 +135,112 @@
 
         <div v-else-if="state" class="card overflow-hidden dark:bg-dark-800">
           <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700" data-testid="cline-upstream-table">
+            <table class="w-full min-w-[1080px] divide-y divide-gray-200 dark:divide-dark-700" data-testid="cline-upstream-table">
               <thead class="bg-gray-50 dark:bg-dark-900/40">
                 <tr>
-                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <th class="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                     {{ t('admin.clineUpstream.columns.model') }}
                   </th>
-                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    {{ t('admin.clineUpstream.columns.source') }}
-                  </th>
-                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <th class="w-28 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                     {{ t('admin.clineUpstream.columns.pipeline') }}
                   </th>
-                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <th class="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                     {{ t('admin.clineUpstream.columns.upstreams') }}
                   </th>
-                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <th class="w-32 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                     {{ t('admin.clineUpstream.columns.lastProvider') }}
                   </th>
-                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <th class="w-40 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                     {{ t('admin.clineUpstream.columns.mode') }}
                   </th>
-                  <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <th class="w-56 px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                     {{ t('admin.clineUpstream.columns.actions') }}
                   </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-                <tr v-for="item in state.models" :key="item.model" :data-testid="`cline-upstream-row-${item.model}`">
-                  <td class="px-4 py-3">
+                <tr
+                  v-for="item in state.models"
+                  :key="item.model"
+                  class="align-middle transition-colors hover:bg-gray-50/70 dark:hover:bg-dark-700/30"
+                  :data-testid="`cline-upstream-row-${item.model}`"
+                >
+                  <!-- 模型：模型名 + 真实 slug + 来源 -->
+                  <td class="px-4 py-3.5 align-middle">
                     <div class="font-mono text-xs font-medium text-gray-900 dark:text-white">{{ item.model }}</div>
-                    <div v-if="item.meta.canonical_slug && item.meta.canonical_slug !== item.model" class="mt-0.5 text-[11px] text-gray-400">
-                      {{ item.meta.canonical_slug }}
+                    <div class="mt-1 flex min-w-0 items-center gap-2">
+                      <span
+                        class="badge badge-gray whitespace-nowrap"
+                        :title="sourceHint(item.source)"
+                      >
+                        {{ sourceLabel(item.source) }}
+                      </span>
+                      <span
+                        v-if="item.meta.canonical_slug && item.meta.canonical_slug !== item.model"
+                        class="min-w-0 truncate font-mono text-[11px] text-gray-400"
+                        :title="item.meta.canonical_slug"
+                      >
+                        {{ item.meta.canonical_slug }}
+                      </span>
                     </div>
                   </td>
-                  <td class="px-4 py-3">
-                    <span class="badge badge-gray">{{ sourceLabel(item.source) }}</span>
-                  </td>
-                  <td class="px-4 py-3">
-                    <span :class="pipelineClass(item.meta.pipeline)">
+
+                  <!-- 管道 -->
+                  <td class="px-4 py-3.5 align-middle">
+                    <span
+                      class="badge whitespace-nowrap"
+                      :class="pipelineClass(item.meta.pipeline)"
+                      :title="pipelineTitle(item.meta.pipeline)"
+                    >
                       {{ pipelineLabel(item.meta.pipeline) }}
                     </span>
                   </td>
-                  <td class="px-4 py-3">
-                    <div v-if="item.meta.upstreams && item.meta.upstreams.length" class="flex flex-wrap gap-1">
+
+                  <!-- 渠道清单（校验后按状态着色） -->
+                  <td class="px-4 py-3.5 align-middle">
+                    <div v-if="item.meta.upstreams.length" class="flex flex-wrap gap-1.5">
                       <span
                         v-for="upstream in item.meta.upstreams"
                         :key="upstream"
-                        class="badge"
+                        class="badge whitespace-nowrap"
                         :class="statusClass(item.meta.statuses?.[upstream]?.status)"
-                        :title="item.meta.statuses?.[upstream]?.note || ''"
+                        :title="statusTitle(upstream, item)"
                       >
                         {{ upstream }}
                       </span>
                     </div>
                     <span v-else class="text-xs text-gray-400">{{ t('admin.clineUpstream.noUpstreams') }}</span>
                   </td>
-                  <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-300">
-                    {{ item.meta.last_provider || '—' }}
+
+                  <!-- 最近实际渠道 -->
+                  <td class="px-4 py-3.5 align-middle">
+                    <span
+                      v-if="item.meta.last_provider"
+                      class="inline-flex items-center gap-1.5 font-mono text-xs text-gray-700 dark:text-gray-200"
+                    >
+                      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"></span>
+                      <span class="min-w-0 truncate">{{ item.meta.last_provider }}</span>
+                    </span>
+                    <span v-else class="text-xs text-gray-400">—</span>
                   </td>
-                  <td class="px-4 py-3">
-                    <span :class="modeClass(item.pin.mode)">{{ modeLabel(item.pin.mode) }}</span>
-                    <div v-if="item.candidates.length" class="mt-1 font-mono text-[11px] text-gray-400">
+
+                  <!-- 钉住模式 + 候选顺序 -->
+                  <td class="px-4 py-3.5 align-middle">
+                    <span class="badge whitespace-nowrap" :class="modeClass(item.pin.mode)">
+                      {{ modeLabel(item.pin.mode) }}
+                    </span>
+                    <div
+                      v-if="item.candidates.length"
+                      class="mt-1 truncate font-mono text-[11px] text-gray-400"
+                      :title="item.candidates.join(' > ')"
+                    >
                       {{ item.candidates.join(' > ') }}
                     </div>
                   </td>
-                  <td class="px-4 py-3">
-                    <div class="flex flex-wrap items-center justify-end gap-2">
+
+                  <!-- 操作 -->
+                  <td class="px-4 py-3.5 align-middle">
+                    <div class="flex items-center justify-end gap-1.5 whitespace-nowrap">
                       <button
                         type="button"
                         class="btn btn-secondary btn-sm"
@@ -207,7 +254,7 @@
                       <button
                         type="button"
                         class="btn btn-secondary btn-sm"
-                        :disabled="!state.supported || busyModel === item.model || !(item.meta.upstreams && item.meta.upstreams.length)"
+                        :disabled="!state.supported || busyModel === item.model || !item.meta.upstreams.length"
                         :title="t('admin.clineUpstream.actions.validateModel')"
                         @click="validateModel(item.model)"
                       >
@@ -555,6 +602,24 @@ function pipelineClass(pipeline: string): string {
   if (pipeline === 'direct') return `${base} badge-primary`
   if (pipeline === 'planner') return `${base} badge-purple`
   return `${base} badge-gray`
+}
+
+function sourceHint(source: string): string {
+  if (source === 'subscription') return t('admin.clineUpstream.sourceHint.subscription')
+  if (source === 'catalog') return t('admin.clineUpstream.sourceHint.catalog')
+  return t('admin.clineUpstream.sourceHint.configured')
+}
+
+function pipelineTitle(pipeline: string): string {
+  if (pipeline === 'direct') return t('admin.clineUpstream.pipelineHintDirect')
+  if (pipeline === 'planner') return t('admin.clineUpstream.pipelineHintPlanner')
+  return t('admin.clineUpstream.pipelineHintUnknown')
+}
+
+function statusTitle(upstream: string, item: ClineUpstreamModelState): string {
+  const status = item.meta?.statuses?.[upstream]
+  if (!status) return upstream
+  return [upstream, statusLabel(status.status), status.note].filter(Boolean).join(' · ')
 }
 
 function modeLabel(mode: string): string {

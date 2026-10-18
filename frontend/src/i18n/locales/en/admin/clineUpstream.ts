@@ -5,6 +5,10 @@ export default {
       'Enumerate, validate and pin the upstream provider behind Cline Pass subscription models (cline-pass/*).',
     pipelineHint:
       'Cline Pass routes each model through one of two pipelines: direct (OpenRouter, honours top-level provider.only/order/sort) or planner (Vercel AI Gateway, honours providerOptions.gateway.*). The pipeline is decided by Cline and can change over time, so probe before pinning.',
+    recommendationLabel: 'Recommended:',
+    recommendationStep1: '1. Probe all',
+    recommendationStep2: '2. Validate the model',
+    recommendationStep3: '3. Strict-pin the vendor channel',
     probeCostHint:
       'Probe, validate and test each send one tiny real request through this account (a fraction of a cent per call).',
     refresh: 'Refresh',
@@ -35,15 +39,24 @@ export default {
       mode: 'Pin',
       actions: 'Actions'
     },
+    pipelineHintDirect: 'Direct pipeline (OpenRouter): the pin is written as a top-level provider block.',
+    pipelineHintPlanner:
+      'Planner pipeline (Vercel AI Gateway): the pin is written as providerOptions.gateway.',
+    pipelineHintUnknown: 'Pipeline not probed yet. Probe this model first.',
     source: {
       subscription: 'Subscription',
       catalog: 'Catalog',
-      configured: 'Local only'
+      configured: 'Local'
+    },
+    sourceHint: {
+      subscription: 'Listed by the Cline recommended-models endpoint (Cline Pass subscription).',
+      catalog: 'Returned by this account\'s own model catalogue.',
+      configured: 'Only present locally: pinned or probed earlier, no longer listed by Cline.'
     },
     pipeline: {
-      direct: 'Direct (OpenRouter)',
-      planner: 'Planner (Vercel)',
-      unknown: 'Unknown'
+      direct: 'Direct',
+      planner: 'Planner',
+      unknown: 'Not probed'
     },
     mode: {
       off: 'Off',
@@ -73,7 +86,8 @@ export default {
       title: 'Pin upstreams · {model}',
       mode: 'Mode',
       modeHintOff: 'No pinning. Exclusions and sorting still apply.',
-      modeHintStrict: 'Only the first selected upstream is used.',
+      modeHintStrict:
+        'Only the first selected upstream is used. If that upstream is rate limited or cannot be pinned, the request fails — validate it first.',
       modeHintPreferred:
         'The gateway tries the selected upstreams in order and falls back on failure.',
       upstreams: 'Pin order',

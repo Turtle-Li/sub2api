@@ -117,6 +117,39 @@ pool / round-robin scheduling, request history, and OpenAI response unwrapping.
   account whose base URL is the official `api.cline.bot`; manual pinning still
   works on custom relays.
 
+## Picking a channel, and what strict pinning costs
+
+The probed list for a model is the set of upstreams Cline's gateway may use
+(e.g. `cline-pass/deepseek-v4-pro` → alibaba, azure, baseten, deepinfra,
+deepseek, novita). To keep traffic on the model vendor's own channel, pick the
+channel that matches the model family — for DeepSeek models that is `deepseek`,
+for Qwen it is `alibaba`, and so on — and confirm it is actually in that model's
+probed list first.
+
+Recommended order of operations:
+
+1. **Probe** the model to learn its pipeline and channel list.
+2. **Validate** the model. This pins each channel once with a minimal request and
+   marks it `可用 / 限流 / 不可钉 / 密钥异常`. Always do this before pinning:
+   the status is a shared-pool state that changes over time.
+3. **Pin.** `strict` with one channel means "only this channel, nothing else" —
+   which is the point when you do not want third-party channels.
+
+What `strict` costs: if the pinned channel is rate limited (`429`) or cannot be
+pinned for that model (model-id mapping failure → `invalid_request_error`), the
+error is passed straight through to the client, because strict mode has no
+fallback. That is inherent, not a bug: "only the vendor channel" and "never
+fail" cannot both hold. Mitigations, in order of preference:
+
+- re-validate later — shared-pool rate limiting is transient;
+- temporarily switch the model back to `off` and let the planner choose;
+- use `preferred` with the vendor channel first, accepting that the gateway may
+  then fall back to another channel.
+
+`preferred` only writes `order` (a preference). It constrains the gateway to an
+allow-list only when `exclude` is non-empty, in which case
+`only = probed − excluded` is injected as well.
+
 ## Admin API
 
 All under the existing admin auth + audit + compliance middleware:
