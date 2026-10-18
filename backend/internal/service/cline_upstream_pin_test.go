@@ -215,6 +215,25 @@ func TestParseClineAvailableProviders(t *testing.T) {
 	require.Equal(t, []string{"deepseek", "baseten"}, parseClineAvailableProviders(direct, ClinePipelineDirect))
 }
 
+func TestParseClineAvailableProvidersHandlesJSONOnEitherPipeline(t *testing.T) {
+	// 直连管道的 JSON 错误体：以前只在 pipeline==direct 时才解析，导致规划器管道
+	// 误判时渠道清单为空、只剩 fallbacksAvailable 一条。
+	jsonBody := `no allowed providers, {"error":{"message":"no allowed providers","metadata":{"available_providers":["deepseek","alibaba"]}}}`
+	require.Equal(t, []string{"deepseek", "alibaba"}, parseClineAvailableProviders(jsonBody, ClinePipelinePlanner))
+	require.Equal(t, []string{"deepseek", "alibaba"}, parseClineAvailableProviders(jsonBody, ClinePipelineDirect))
+
+	// 规划器文本 + 引号/方括号包裹
+	require.Equal(t, []string{"alibaba", "baseten"}, parseClineAvailableProviders(
+		`Available providers are: ["alibaba","baseten"].`, ClinePipelinePlanner))
+	require.Equal(t, []string{"alibaba"}, parseClineAvailableProviders(
+		"Available providers: 'alibaba'", ClinePipelinePlanner))
+	// 大小写与缺少 are 的写法
+	require.Equal(t, []string{"novita"}, parseClineAvailableProviders(
+		"available providers are: novita", ClinePipelinePlanner))
+	// 真正拿不到清单时必须是空，而不是编造
+	require.Empty(t, parseClineAvailableProviders("model not found", ClinePipelinePlanner))
+}
+
 func TestClassifyClineUpstreamError(t *testing.T) {
 	cases := []struct {
 		message string

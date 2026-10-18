@@ -51,7 +51,7 @@ const (
 )
 
 // clineUpstreamAvailableProvidersPattern 解析规划器管道错误文本里的渠道清单。
-var clineUpstreamAvailableProvidersPattern = regexp.MustCompile(`Available providers are:\s*([^.]+)`)
+var clineUpstreamAvailableProvidersPattern = regexp.MustCompile(`(?i)Available providers(?:\s+are)?\s*:\s*([^.]+)`)
 
 // clineUpstreamProviderSlugPattern 过滤错误文本里混入的 JSON 片段，只保留 slug 形状的渠道名。
 var clineUpstreamProviderSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -707,6 +707,8 @@ func (s *ClineUpstreamService) mergeProbeMeta(account *Account, model string, re
 	} else {
 		entry["last_error"] = ""
 	}
+	// 采集说明是「为什么只有这几个渠道」的原始证据，必须随快照落库，否则刷新页面就丢了。
+	entry["harvest_note"] = truncate(result.HarvestNote, 400)
 	if previous.ValidatedAt != 0 {
 		entry["validated_at"] = previous.ValidatedAt
 	}
@@ -874,34 +876,51 @@ func clineUpstreamErrorMessage(status int, body []byte) string {
 //   - 规划器管道：错误文本里的 "Available providers are: a, b, c"；
 //   - 直连管道：错误文本里内嵌 JSON 的 error.metadata.available_providers。
 func parseClineAvailableProviders(message, pipeline string) []string {
-	if pipeline == ClinePipelineDirect {
-		if index := strings.Index(message, "{"); index >= 0 {
-			if providers := gjson.Get(message[index:], "error.metadata.available_providers"); providers.IsArray() {
-				out := make([]string, 0, len(providers.Array()))
-				for _, item := range providers.Array() {
-					if text := strings.TrimSpace(item.String()); text != "" {
-						out = append(out, text)
-					}
+	_ = pipeline // 两条管道的错误体都可能是 JSON，且实测管道判定可能与清单来源不一致
+	// 1) 错误文本里内嵌 JSON 的 available_providers（直连管道实测，规划器管道也可能出现）。
+	if index := strings.Index(message, "{"); index >= 0 {
+		payload := message[index:]
+		for _, path := range []string{
+			"error.metadata.available_providers",
+			"metadata.available_providers",
+			"error.available_providers",
+			"available_providers",
+		} {
+			providers := gjson.Get(payload, path)
+			if !providers.IsArray() {
+				continue
+			}
+			out := make([]string, 0, len(providers.Array()))
+			for _, item := range providers.Array() {
+				if token := normalizeClineProviderToken(item.String()); clineUpstreamProviderSlugPattern.MatchString(token) {
+					out = append(out, token)
 				}
-				if len(out) > 0 {
-					return out
-				}
+			}
+			if len(out) > 0 {
+				return out
 			}
 		}
 	}
+
+	// 2) 规划器管道的自然语言清单："Available providers are: a, b, c."
 	matches := clineUpstreamAvailableProvidersPattern.FindStringSubmatch(message)
 	if len(matches) < 2 {
 		return nil
 	}
 	out := make([]string, 0, 8)
 	for _, token := range strings.Split(matches[1], ",") {
-		token = strings.TrimSpace(token)
-		// 错误文本里可能混入 JSON 片段（如 ","type":"invalid_request_error"），按 slug 形状过滤。
-		if clineUpstreamProviderSlugPattern.MatchString(token) {
+		// 错误文本里可能混入 JSON 片段（如 ","type":"invalid_request_error"）或引号/括号，
+		// 统一去掉包裹字符后再按 slug 形状过滤。
+		if token = normalizeClineProviderToken(token); clineUpstreamProviderSlugPattern.MatchString(token) {
 			out = append(out, token)
 		}
 	}
 	return out
+}
+
+// normalizeClineProviderToken 去掉引号、方括号、反引号与空白，得到裸渠道名。
+func normalizeClineProviderToken(raw string) string {
+	return strings.Trim(strings.TrimSpace(raw), "[]\"'`")
 }
 
 // classifyClineUpstreamError 把钉住失败分类（与 cline-pass-switcher 的校验地图一致）。

@@ -116,6 +116,18 @@ export default {
       testFailed: 'Test failed',
       selected: '{count} selected'
     },
+    detail: {
+      toggle: 'Show probe details',
+      pipeline: 'Pipeline',
+      canonicalSlug: 'Canonical slug',
+      probedAt: 'Probed',
+      validatedAt: 'Validated',
+      never: 'never',
+      harvestNote: 'Upstream list source',
+      harvestOk: 'The upstream list came from the gateway placeholder probe.',
+      lastError: 'Last error',
+      statuses: 'Per-upstream status'
+    },
     messages: {
       saved: 'Pinning configuration saved',
       saveFailed: 'Failed to save pinning configuration',

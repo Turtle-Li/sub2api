@@ -92,8 +92,10 @@ type ClineUpstreamMeta struct {
 	LastProvider  string                         `json:"last_provider"`
 	CanonicalSlug string                         `json:"canonical_slug"`
 	LastError     string                         `json:"last_error"`
-	ProbedAt      int64                          `json:"probed_at"`
-	ValidatedAt   int64                          `json:"validated_at"`
+	// HarvestNote 是渠道清单采集说明：成功为空，失败时是网关原始错误片段。
+	HarvestNote string `json:"harvest_note"`
+	ProbedAt    int64  `json:"probed_at"`
+	ValidatedAt int64  `json:"validated_at"`
 }
 
 // ClineUpstreamPinForAccount 读取账号在指定模型上的钉住配置；ok=false 表示未配置。
@@ -145,6 +147,7 @@ func ClineUpstreamMetaForAccount(account *Account, model string) (ClineUpstreamM
 		LastProvider:  clineAnyString(raw["last_provider"]),
 		CanonicalSlug: clineAnyString(raw["canonical_slug"]),
 		LastError:     clineAnyString(raw["last_error"]),
+		HarvestNote:   clineAnyString(raw["harvest_note"]),
 		Pinnable:      clineAnyBool(raw["pinnable"]),
 		ProbedAt:      clineAnyInt64(raw["probed_at"]),
 		ValidatedAt:   clineAnyInt64(raw["validated_at"]),

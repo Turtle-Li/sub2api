@@ -47,6 +47,8 @@ export interface ClineUpstreamMeta {
   last_provider: string
   canonical_slug: string
   last_error: string
+  /** 渠道清单采集说明：成功为空，失败时是网关返回的原始错误片段。 */
+  harvest_note: string
   probed_at: number
   validated_at: number
 }

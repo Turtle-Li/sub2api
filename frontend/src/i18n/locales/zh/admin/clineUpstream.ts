@@ -108,6 +108,18 @@ export default {
       testFailed: '测试失败',
       selected: '已选 {count} 个'
     },
+    detail: {
+      toggle: '展开探测详情',
+      pipeline: '管道',
+      canonicalSlug: '真实模型 slug',
+      probedAt: '探测时间',
+      validatedAt: '校验时间',
+      never: '从未',
+      harvestNote: '渠道清单来源',
+      harvestOk: '渠道清单来自网关的占位渠道探测。',
+      lastError: '最近错误',
+      statuses: '各渠道状态'
+    },
     messages: {
       saved: '钉住配置已保存',
       saveFailed: '钉住配置保存失败',

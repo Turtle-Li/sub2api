@@ -159,15 +159,25 @@
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                <template v-for="item in state.models" :key="item.model">
                 <tr
-                  v-for="item in state.models"
-                  :key="item.model"
                   class="align-middle transition-colors hover:bg-gray-50/70 dark:hover:bg-dark-700/30"
                   :data-testid="`cline-upstream-row-${item.model}`"
                 >
                   <!-- 模型：模型名 + 真实 slug + 来源 -->
                   <td class="px-4 py-3.5 align-middle">
-                    <div class="font-mono text-xs font-medium text-gray-900 dark:text-white">{{ item.model }}</div>
+                    <div class="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        class="shrink-0 rounded p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+                        :title="t('admin.clineUpstream.detail.toggle')"
+                        :data-testid="`cline-upstream-detail-toggle-${item.model}`"
+                        @click="toggleDetail(item.model)"
+                      >
+                        <Icon :name="expandedModels.has(item.model) ? 'chevronDown' : 'chevronRight'" size="xs" />
+                      </button>
+                      <span class="font-mono text-xs font-medium text-gray-900 dark:text-white">{{ item.model }}</span>
+                    </div>
                     <div class="mt-1 flex min-w-0 items-center gap-2">
                       <span
                         class="badge badge-gray whitespace-nowrap"
@@ -272,6 +282,79 @@
                     </div>
                   </td>
                 </tr>
+
+                <!-- 探测详情：解释「为什么渠道清单只有这几个」 -->
+                <tr v-if="expandedModels.has(item.model)" :data-testid="`cline-upstream-detail-${item.model}`">
+                  <td colspan="6" class="bg-gray-50/70 px-4 py-3 dark:bg-dark-900/30">
+                    <div class="grid gap-3 text-xs md:grid-cols-2">
+                      <div class="space-y-1.5">
+                        <div class="flex flex-wrap gap-x-4 gap-y-1 text-gray-500 dark:text-gray-400">
+                          <span>
+                            {{ t('admin.clineUpstream.detail.pipeline') }}:
+                            <span class="text-gray-800 dark:text-gray-200">{{ pipelineTitle(item.meta.pipeline) }}</span>
+                          </span>
+                          <span>
+                            {{ t('admin.clineUpstream.detail.canonicalSlug') }}:
+                            <span class="font-mono text-gray-800 dark:text-gray-200">{{ item.meta.canonical_slug || '—' }}</span>
+                          </span>
+                          <span>
+                            {{ t('admin.clineUpstream.detail.probedAt') }}:
+                            <span class="text-gray-800 dark:text-gray-200">{{ formatTs(item.meta.probed_at) }}</span>
+                          </span>
+                          <span>
+                            {{ t('admin.clineUpstream.detail.validatedAt') }}:
+                            <span class="text-gray-800 dark:text-gray-200">{{ formatTs(item.meta.validated_at) }}</span>
+                          </span>
+                        </div>
+                        <div
+                          v-if="item.meta.harvest_note"
+                          class="rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200"
+                        >
+                          <span class="font-medium">{{ t('admin.clineUpstream.detail.harvestNote') }}:</span>
+                          <span class="ml-1 break-all font-mono">{{ item.meta.harvest_note }}</span>
+                        </div>
+                        <div
+                          v-else
+                          class="rounded-lg border border-gray-200 p-2 text-[11px] text-gray-500 dark:border-dark-700 dark:text-gray-400"
+                        >
+                          {{ t('admin.clineUpstream.detail.harvestOk') }}
+                        </div>
+                        <div
+                          v-if="item.meta.last_error"
+                          class="rounded-lg border border-red-200 bg-red-50 p-2 text-[11px] leading-relaxed text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300"
+                        >
+                          <span class="font-medium">{{ t('admin.clineUpstream.detail.lastError') }}:</span>
+                          <span class="ml-1 break-all font-mono">{{ item.meta.last_error }}</span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <div class="mb-1.5 font-medium text-gray-600 dark:text-gray-300">
+                          {{ t('admin.clineUpstream.detail.statuses') }}
+                        </div>
+                        <div v-if="item.meta.upstreams.length" class="space-y-1">
+                          <div
+                            v-for="upstream in item.meta.upstreams"
+                            :key="upstream"
+                            class="flex items-start gap-2"
+                          >
+                            <span class="badge shrink-0 whitespace-nowrap" :class="statusClass(item.meta.statuses?.[upstream]?.status)">
+                              {{ statusLabel(item.meta.statuses?.[upstream]?.status) }}
+                            </span>
+                            <span class="shrink-0 font-mono text-gray-800 dark:text-gray-200">{{ upstream }}</span>
+                            <span class="min-w-0 break-all text-[11px] text-gray-500 dark:text-gray-400">
+                              {{ item.meta.statuses?.[upstream]?.note || '' }}
+                            </span>
+                          </div>
+                        </div>
+                        <div v-else class="text-[11px] text-gray-400">
+                          {{ t('admin.clineUpstream.noUpstreams') }}
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                </template>
               </tbody>
             </table>
           </div>
@@ -501,6 +584,7 @@ const probing = ref(false)
 const busyModel = ref('')
 const saving = ref(false)
 
+const expandedModels = ref<Set<string>>(new Set())
 const editingModel = ref<string | null>(null)
 const draft = reactive<ClineUpstreamPin>({
   mode: 'off',
@@ -569,7 +653,9 @@ function normalizeState(raw: ClineUpstreamState | null | undefined): ClineUpstre
       meta: {
         ...item.meta,
         upstreams: asList(item.meta?.upstreams),
-        statuses: item.meta?.statuses || {}
+        statuses: item.meta?.statuses || {},
+        harvest_note: item.meta?.harvest_note || '',
+        last_error: item.meta?.last_error || ''
       }
     }))
   }
@@ -602,6 +688,17 @@ function pipelineClass(pipeline: string): string {
   if (pipeline === 'direct') return `${base} badge-primary`
   if (pipeline === 'planner') return `${base} badge-purple`
   return `${base} badge-gray`
+}
+
+function toggleDetail(model: string) {
+  const next = new Set(expandedModels.value)
+  if (next.has(model)) next.delete(model)
+  else next.add(model)
+  expandedModels.value = next
+}
+
+function formatTs(seconds: number): string {
+  return seconds ? formatDateTime(new Date(seconds * 1000)) : t('admin.clineUpstream.detail.never')
 }
 
 function sourceHint(source: string): string {
