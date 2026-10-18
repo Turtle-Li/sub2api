@@ -5,6 +5,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -333,4 +334,41 @@ func TestForwardAsRawChatCompletions_NoPinWithoutClineConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, gjson.GetBytes(upstream.lastBody, "providerOptions").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "provider").Exists())
+}
+
+// TestClineUpstreamStateJSONNeverContainsNullLists 固定管理端 JSON 契约：Go 的 nil slice
+// 会编码成 null，前端按数组使用时会抛 "Cannot read properties of null (reading 'length')"。
+// 该 bug 曾在生产页面复现，因此这里直接断言序列化结果。
+func TestClineUpstreamStateJSONNeverContainsNullLists(t *testing.T) {
+	account := clineUpstreamTestAccount(nil, nil)
+	repo := &clineAccountRepo{accounts: []Account{*account}}
+	svc := NewClineUpstreamService(repo, nil, nil, nil)
+
+	state, err := svc.GetState(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+
+	// 无探测快照、无配置的账号：models 可能为空，但字段本身绝不能是 null。
+	raw, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"models":[]`)
+	require.NotContains(t, string(raw), `"models":null`)
+
+	// 构造一个「有模型但无快照」的状态，覆盖 candidates / upstreams / statuses。
+	pin, meta := ClineUpstreamPin{}, ClineUpstreamMeta{}
+	candidates, _ := ClineUpstreamCandidate(pin, meta)
+	modelState := ClineUpstreamModelState{
+		Model:      clineTestModel,
+		Source:     "subscription",
+		Pin:        normalizeClinePinForJSON(pin),
+		Meta:       normalizeClineMetaForJSON(meta),
+		Candidates: normalizeClineListForJSON(candidates),
+	}
+	raw, err = json.Marshal(modelState)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"candidates":[]`)
+	require.Contains(t, string(raw), `"upstreams":[]`)
+	require.Contains(t, string(raw), `"exclude":[]`)
+	require.Contains(t, string(raw), `"statuses":{}`)
+	require.NotContains(t, string(raw), `null`)
 }
