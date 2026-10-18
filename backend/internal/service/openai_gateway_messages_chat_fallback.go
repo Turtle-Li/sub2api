@@ -50,6 +50,11 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	}
 	applyOpenAICompatModelNormalization(&anthropicReq)
 	clientStream := anthropicReq.Stream
+	// 共享的 CC 出站点只在观察器已存在时回读上游 model / provider / service_tier，
+	// 因此 Anthropic→CC 回退必须自己起一个（与 raw CC 路径一致，已存在则复用）。
+	if upstreamResponseModelObserverFromContext(c) == nil {
+		beginUpstreamResponseModelObservation(c)
+	}
 
 	// 2. Anthropic → Chat Completions (direct, no Responses intermediary)
 	chatReq, err := apicompat.AnthropicToChatCompletionsRequestWithMinOutputTokens(
@@ -178,6 +183,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 		UpstreamModel:               upstreamModel,
 		ReasoningEffort:             reasoningEffort,
 		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		UpstreamProvider:            observedUpstreamProvider(c),
 		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:                      false,
 		Duration:                    time.Since(startTime),
@@ -240,6 +246,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 			UpstreamModel:               upstreamModel,
 			ReasoningEffort:             reasoningEffort,
 			UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+			UpstreamProvider:            observedUpstreamProvider(c),
 			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
@@ -277,6 +284,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		UpstreamModel:               upstreamModel,
 		ReasoningEffort:             reasoningEffort,
 		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		UpstreamProvider:            observedUpstreamProvider(c),
 		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:                      true,
 		Duration:                    time.Since(startTime),

@@ -1885,6 +1885,8 @@ export interface AdminUsageLog extends UsageLog {
   upstream_model?: string | null
   upstream_reasoning_effort?: string | null
   upstream_response_model?: string | null
+  // 实际上游渠道（Cline Pass 规划器 finalProvider / OpenRouter provider），仅当上游响应声明时存在
+  upstream_provider?: string | null
   upstream_model_mismatch?: boolean | null
   model_mapping_chain?: string | null
   upstream_request_id?: string | null

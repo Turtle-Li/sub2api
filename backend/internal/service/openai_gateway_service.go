@@ -251,6 +251,11 @@ type OpenAIForwardResult struct {
 	// response before any client-facing rewrite or protocol conversion.
 	UpstreamResponseModel         string
 	UpstreamResponseModelConflict bool
+	// UpstreamProvider is the provider that actually served the request, when the
+	// upstream response declares one: the Cline Pass planner pipeline reports
+	// provider_metadata.gateway.routing.finalProvider, the direct/OpenRouter
+	// pipeline reports a top-level provider. Empty when not declared.
+	UpstreamProvider string
 	// UpstreamResponseServiceTier is the tier the upstream reports having used
 	// (response service_tier: "priority" / "default" / "flex" / ...); "" when not declared.
 	UpstreamResponseServiceTier string

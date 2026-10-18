@@ -32,6 +32,7 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // requested_model
 	"text",        // upstream_model
 	"text",        // upstream_response_model
+	"text",        // upstream_provider
 	"boolean",     // upstream_model_mismatch
 	"bigint",      // group_id
 	"bigint",      // subscription_id
@@ -234,6 +235,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			requested_model,
 			upstream_model,
 			upstream_response_model,
+			upstream_provider,
 			upstream_model_mismatch,
 			group_id,
 			subscription_id,
@@ -295,7 +297,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			$12, $13, $14, $15,
 			$16, $17, $18, $19,
 			$20, $21, $22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63
+			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -695,6 +697,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			requested_model,
 			upstream_model,
 			upstream_response_model,
+			upstream_provider,
 			upstream_model_mismatch,
 			group_id,
 			subscription_id,
@@ -791,6 +794,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				requested_model,
 				upstream_model,
 				upstream_response_model,
+				upstream_provider,
 				upstream_model_mismatch,
 				group_id,
 				subscription_id,
@@ -856,6 +860,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				requested_model,
 				upstream_model,
 				upstream_response_model,
+				upstream_provider,
 				upstream_model_mismatch,
 				group_id,
 				subscription_id,
@@ -961,6 +966,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			requested_model,
 			upstream_model,
 			upstream_response_model,
+			upstream_provider,
 			upstream_model_mismatch,
 			group_id,
 			subscription_id,
@@ -1052,6 +1058,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			requested_model,
 			upstream_model,
 			upstream_response_model,
+			upstream_provider,
 			upstream_model_mismatch,
 			group_id,
 			subscription_id,
@@ -1117,6 +1124,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			requested_model,
 			upstream_model,
 			upstream_response_model,
+			upstream_provider,
 			upstream_model_mismatch,
 			group_id,
 			subscription_id,
@@ -1190,6 +1198,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			requested_model,
 			upstream_model,
 			upstream_response_model,
+			upstream_provider,
 			upstream_model_mismatch,
 			group_id,
 			subscription_id,
@@ -1251,7 +1260,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$12, $13, $14, $15,
 			$16, $17, $18, $19,
 			$20, $21, $22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63
+			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1301,6 +1310,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	}
 	upstreamModel := nullString(log.UpstreamModel)
 	upstreamResponseModel := nullString(log.UpstreamResponseModel)
+	upstreamProvider := nullString(log.UpstreamProvider)
 	upstreamModelMismatch := nullBool(log.UpstreamModelMismatch)
 	currency := log.Currency
 	if normalized, err := service.NormalizePricingCurrency(currency); err == nil {
@@ -1327,6 +1337,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			nullString(&requestedModel),
 			upstreamModel,
 			upstreamResponseModel,
+			upstreamProvider,
 			upstreamModelMismatch,
 			groupID,
 			subscriptionID,

@@ -90,6 +90,17 @@
           </div>
         </template>
 
+        <template #cell-upstream_provider="{ row }">
+          <span
+            v-if="row.upstream_provider"
+            data-testid="upstream-provider-cell"
+            class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700 dark:bg-dark-700 dark:text-dark-200"
+          >
+            {{ row.upstream_provider }}
+          </span>
+          <span v-else class="text-xs text-gray-400">—</span>
+        </template>
+
         <template #cell-reasoning_effort="{ row }">
           <div v-if="hasReasoningEffortMapping(row)" data-testid="reasoning-effort-cell" class="space-y-0.5 text-xs">
             <div class="font-medium text-gray-900 dark:text-white">

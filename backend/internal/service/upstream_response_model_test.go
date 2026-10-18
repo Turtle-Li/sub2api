@@ -336,3 +336,52 @@ func TestNormalizeModelVariantDoesNotChangePersistedMismatch(t *testing.T) {
 
 	require.Nil(t, upstreamModelMismatch("gpt-6-astra", ""), "no declared model stays tri-state NULL")
 }
+
+func TestUpstreamProviderObserverReadsPlannerRoutingMetadata(t *testing.T) {
+	observer := &upstreamResponseModelObserver{}
+	observer.ObserveOpenAI([]byte(`{"choices":[{"delta":{},"finish_reason":"stop"}],"provider_metadata":{"gateway":{"routing":{"canonicalSlug":"deepseek/deepseek-v4-flash","finalProvider":"alibaba"}}}}`), "")
+	require.Equal(t, "alibaba", observer.Provider())
+}
+
+func TestUpstreamProviderObserverSlugifiesDirectProviderDisplayName(t *testing.T) {
+	observer := &upstreamResponseModelObserver{}
+	observer.ObserveOpenAI([]byte(`{"model":"z-ai/glm-5.3-flash","provider":"GMICloud","choices":[{"delta":{"content":"hi"}}]}`), "")
+	require.Equal(t, "gmicloud", observer.Provider())
+}
+
+func TestUpstreamProviderObserverLastDeclarationWins(t *testing.T) {
+	observer := &upstreamResponseModelObserver{}
+	// 直连管道每个 chunk 都回显 provider；规划器管道只在最后一个 chunk 带 routing。
+	observer.ObserveOpenAI([]byte(`{"provider":"Baseten","choices":[{"delta":{"content":"a"}}]}`), "")
+	observer.ObserveOpenAI([]byte(`{"provider_metadata":{"gateway":{"routing":{"finalProvider":"alibaba"}}},"choices":[{"delta":{}}]}`), "")
+	require.Equal(t, "alibaba", observer.Provider())
+}
+
+func TestUpstreamProviderObserverReadsDataEnvelopeAndIgnoresOthers(t *testing.T) {
+	enveloped := &upstreamResponseModelObserver{}
+	enveloped.ObserveOpenAI([]byte(`{"data":{"provider":"deepseek"}}`), "")
+	require.Equal(t, "deepseek", enveloped.Provider())
+
+	plain := &upstreamResponseModelObserver{}
+	plain.ObserveOpenAI([]byte(`{"model":"gpt-5.4","choices":[{"delta":{"content":"hi"}}]}`), "")
+	require.Empty(t, plain.Provider())
+
+	// provider 必须是字符串；对象形态（例如请求回显）不得被当成渠道名。
+	object := &upstreamResponseModelObserver{}
+	object.ObserveOpenAI([]byte(`{"provider":{"only":["alibaba"]},"model":"gpt-5.4"}`), "")
+	require.Empty(t, object.Provider())
+}
+
+func TestUpstreamProviderObserverIsCarriedOnContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	observer := beginUpstreamResponseModelObservation(c)
+	observer.ObserveOpenAI([]byte(`{"provider_metadata":{"gateway":{"routing":{"finalProvider":"baseten"}}}}`), "")
+	require.Equal(t, "baseten", observedUpstreamProvider(c))
+}
+
+func TestUpstreamProviderObserverBoundsUntrustedValue(t *testing.T) {
+	observer := &upstreamResponseModelObserver{}
+	observer.ObserveUpstreamProvider([]byte(`{"provider":"` + strings.Repeat("a", 300) + `"}`))
+	require.Len(t, observer.Provider(), upstreamProviderMaxLength)
+}

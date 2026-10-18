@@ -43,6 +43,11 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 
 	clientStream := responsesReq.Stream
+	// 共享的 CC 出站点只在观察器已存在时回读上游 model / provider / service_tier，
+	// 因此 Responses→CC 回退必须自己起一个（与 raw CC 路径一致，已存在则复用）。
+	if upstreamResponseModelObserverFromContext(c) == nil {
+		beginUpstreamResponseModelObservation(c)
+	}
 	// custom 工具（如 codex 的 exec）降级为 function 工具转发，回程需按名字还原为
 	// custom_tool_call 项，先记下名字集合；tool_search 工具同理，回程还原为
 	// tool_search_call 项；namespace 子工具（如 MCP 工具）摊平转发，回程按映射还原
@@ -177,6 +182,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 		UpstreamModel:               upstreamModel,
 		ReasoningEffort:             reasoningEffort,
 		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		UpstreamProvider:            observedUpstreamProvider(c),
 		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:                      false,
 		Duration:                    time.Since(startTime),
@@ -249,6 +255,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			UpstreamModel:               upstreamModel,
 			ReasoningEffort:             reasoningEffort,
 			UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+			UpstreamProvider:            observedUpstreamProvider(c),
 			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
@@ -265,6 +272,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			UpstreamModel:               upstreamModel,
 			ReasoningEffort:             reasoningEffort,
 			UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+			UpstreamProvider:            observedUpstreamProvider(c),
 			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
@@ -297,6 +305,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		UpstreamModel:               upstreamModel,
 		ReasoningEffort:             reasoningEffort,
 		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		UpstreamProvider:            observedUpstreamProvider(c),
 		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:                      true,
 		Duration:                    time.Since(startTime),

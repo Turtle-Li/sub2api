@@ -37,6 +37,7 @@ const messages: Record<string, string> = {
 	'usage.requestedModel': 'Requested model',
 	'usage.sentUpstreamModel': 'Sent upstream model',
 	'usage.upstreamResponseModel': 'Upstream response model',
+	'usage.upstreamProvider': 'Actual upstream',
 	'usage.upstreamModelMismatch': 'Upstream model mismatch',
 	'common.yes': 'Yes',
 	'common.no': 'No',
@@ -747,6 +748,7 @@ describe('admin UsageView model audit export', () => {
 				model: 'gpt-5.6-sol',
 				upstream_model: 'gpt-5.5',
 				upstream_response_model: 'gpt-5.4',
+				upstream_provider: 'alibaba',
 				upstream_model_mismatch: true,
 				request_type: 'sync',
 				input_tokens: 1,
@@ -795,8 +797,11 @@ describe('admin UsageView model audit export', () => {
 			'Upstream response model',
 			'Upstream model mismatch',
 		])
+		// 实际上游渠道紧随模型审计四列，导出与表格列保持一致
+		expect(headers[8]).toBe('Actual upstream')
 		const row = sheetAddAoa.mock.calls[0][1][0]
 		expect(row.slice(4, 8)).toEqual(['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'Yes'])
+		expect(row[8]).toBe('alibaba')
 		expect(saveAs).toHaveBeenCalledTimes(1)
 	})
 })

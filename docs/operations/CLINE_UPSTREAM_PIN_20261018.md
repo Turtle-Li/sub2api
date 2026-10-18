@@ -106,16 +106,46 @@ All under the existing admin auth + audit + compliance middleware:
 The page is at `/admin/cline-upstreams` (sidebar entry "Cline Upstreams"), and
 the Cline account row's "more" menu links to it with `?account=<id>`.
 
+## Actual upstream in the admin request log
+
+The pin only tells the gateway what to prefer; the authoritative answer is what
+the response declares. That value is now recorded per request and shown in the
+admin request log (`/admin/usage` → 使用记录 → "实际上游渠道" column), so the
+pin can be verified against real traffic instead of only via the page's test
+button.
+
+Capture path (follows the existing upstream-response-model observer pattern):
+
+- `upstream_response_model.go` gains `ObserveUpstreamProvider` /
+  `Provider()` / `observedUpstreamProvider(c)`. It reads
+  `provider_metadata.gateway.routing.finalProvider` (planner) and a top-level
+  `provider` display name (direct, slugified), also accepting a `data.*`
+  envelope. The **last** non-empty declaration wins, because a streaming
+  planner response only carries the routing metadata on its final chunk. A
+  `bytes.Contains(payload, "provider")` guard keeps the extra gjson lookups off
+  the hot path for every other platform.
+- The observer is fed by the shared CC choke point, so streaming and
+  non-streaming are covered by one carrier. The Responses→CC and
+  Anthropic→CC fallbacks now bootstrap the observer themselves (they previously
+  recorded no upstream response metadata at all).
+- The value travels on `OpenAIForwardResult.UpstreamProvider` (gin contexts are
+  unreachable from `RecordUsage`, which takes a plain `context.Context`) and is
+  persisted as `usage_logs.upstream_provider` (migration `262`, nullable
+  `VARCHAR(64)`, no backfill).
+
+Nothing is recorded for platforms whose responses do not declare a provider —
+the column renders `—`.
+
 ## Verification performed (local, no deployment)
 
 ```text
 go build ./...                                             exit 0
-go vet -tags unit ./internal/service/ ./internal/handler/admin/   exit 0
-go test -tags unit ./internal/service/ -run 'Cline|TestApplyClineUpstreamPin|...'  ok
-go test -tags unit ./internal/server/... ./internal/handler/admin/...             ok
+go vet -tags unit ./internal/service/ ./internal/repository/ ./internal/handler/...   exit 0
+go test -tags unit ./internal/service/                     ok (full suite)
+go test -tags unit ./internal/server/... ./internal/handler/... ./internal/repository/ ./migrations/ ./internal/pkg/usagestats/...   ok
 go run github.com/google/wire/cmd/wire (idempotent; wire_gen.go diff = 2 insertions/1 deletion)
 frontend: vue-tsc --noEmit                                 exit 0
-frontend: vitest localeKeyCompleteness + ClineUpstreamView + AccountActionMenu + AccountsView + api  40 files / 284 tests passed
+frontend: vitest (i18n + ClineUpstreamView + AccountActionMenu + AccountsView + UsageView + UsageTable + api)  ok
 frontend: vite build                                       exit 0 (output under the git-ignored backend/internal/web/dist)
 ```
 
@@ -124,13 +154,22 @@ both forms, exclusion→allow-list conversion, excluded-upstream removal, sort
 mapping, `off` ignoring selections, preservation of unrelated `provider` keys,
 no-op without config and for non-Cline accounts, routing parse for both
 pipelines, provider-harvest parsing, error classification, meta merge, pin
-normalization on save, and an end-to-end assertion that
+normalization on save, an end-to-end assertion that
 `forwardAsRawChatCompletions` puts `providerOptions.gateway.only/sort` on the
-wire for a pinned Cline account.
+wire for a pinned Cline account, and — for the request log — planner/direct
+provider extraction, last-declaration-wins, `data.*` envelope, object-shaped
+`provider` rejection, context carry and length bounding, plus the usage-table
+cell and export column.
 
-## Rollback
+## Migration and rollback
 
-The feature is additive and opt-in per account+model:
+Migration `262_usage_log_upstream_provider.sql` is a single additive
+`ADD COLUMN IF NOT EXISTS ... VARCHAR(64)` with a comment; it does not rewrite
+rows and is safe on a live table. Old binaries ignore the extra column, so a
+rollback does not need a reverse migration (the column simply stays NULL for
+new rows written by the old binary).
+
+The feature itself is additive and opt-in per account+model:
 
 - With no `cline_upstream_pins` entry the gateway body is byte-identical to
   before, so reverting the deployment restores previous behaviour with no data
@@ -138,7 +177,7 @@ The feature is additive and opt-in per account+model:
 - The `Extra` keys are inert data; they can be cleared per account with
   `PUT /cline-upstreams` with `{"pins": {}}`, or left in place across a
   rollback.
-- No migration, no schema change, no background job, no new port or Caddy rule.
+- No background job, no new port or Caddy rule.
 
 ## Known limits
 

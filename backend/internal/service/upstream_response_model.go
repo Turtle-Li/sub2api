@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
 
@@ -11,6 +12,9 @@ import (
 const (
 	upstreamResponseModelObserverContextKey = "upstream_response_model_observer"
 	upstreamResponseModelMaxLength          = 200
+	// upstreamProviderMaxLength bounds the stored provider slug; the longest
+	// provider slugs observed on Cline Pass are well under this.
+	upstreamProviderMaxLength = 64
 )
 
 // Model-variant suffixes stripped at query time only. Ported from
@@ -47,6 +51,13 @@ type upstreamResponseModelObserver struct {
 	firstTier         string
 	firstTierConflict bool
 	terminalTier      string
+
+	// provider holds the provider that actually served the request, when the
+	// upstream declares one (Cline Pass planner `finalProvider`, OpenRouter
+	// `provider`). The last declaration wins: the planner pipeline only reports
+	// it on the final chunk, while the direct pipeline repeats it on every
+	// chunk. Observation never affects the forwarding path.
+	provider string
 }
 
 func (o *upstreamResponseModelObserver) Observe(model string, terminal bool) {
@@ -80,6 +91,9 @@ func normalizeObservedUpstreamResponseModel(model string) string {
 }
 
 func (o *upstreamResponseModelObserver) ObserveOpenAI(payload []byte, eventType string) {
+	// The provider declaration is independent of the model: the planner pipeline
+	// reports it only on the final chunk of a stream.
+	o.ObserveUpstreamProvider(payload)
 	model := firstValidTrimmedGJSONString(payload, "response.model", "model")
 	terminal := isUpstreamResponseModelTerminalEvent(eventType)
 	o.Observe(model, terminal)
@@ -96,6 +110,57 @@ func (o *upstreamResponseModelObserver) ObserveOpenAI(payload []byte, eventType 
 	}
 	tier := normalizeObservedOpenAIServiceTier(firstValidTrimmedGJSONString(payload, "response.service_tier", "service_tier"))
 	o.ObserveServiceTier(tier, terminal)
+}
+
+// ObserveUpstreamProvider records the provider that served the response.
+//
+// Two upstream shapes are recognised, matching the Cline Pass routing
+// pipelines documented in cline_upstream_pin.go:
+//   - planner (Vercel AI Gateway): provider_metadata.gateway.routing.finalProvider
+//   - direct (OpenRouter): top-level provider (a display name, slugified)
+//
+// The last non-empty declaration wins, because a streaming planner response
+// only carries the routing metadata on its final chunk. A cheap substring guard
+// keeps the extra gjson lookups off the hot path for every other platform.
+func (o *upstreamResponseModelObserver) ObserveUpstreamProvider(payload []byte) {
+	if o == nil || len(payload) == 0 || !bytes.Contains(payload, []byte("provider")) {
+		return
+	}
+	provider := firstValidTrimmedGJSONString(
+		payload,
+		"provider_metadata.gateway.routing.finalProvider",
+		"data.provider_metadata.gateway.routing.finalProvider",
+	)
+	if provider == "" {
+		provider = normalizeObservedUpstreamProvider(firstValidTrimmedGJSONString(payload, "provider", "data.provider"))
+	}
+	if provider == "" {
+		return
+	}
+	o.provider = provider
+}
+
+// Provider returns the provider reported by the upstream response, or "" when
+// the response never declared one.
+func (o *upstreamResponseModelObserver) Provider() string {
+	if o == nil {
+		return ""
+	}
+	return o.provider
+}
+
+// normalizeObservedUpstreamProvider slugifies a provider display name
+// (e.g. "GMICloud" -> "gmicloud") and bounds the stored length.
+func normalizeObservedUpstreamProvider(provider string) string {
+	provider = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(provider)), "-"))
+	if provider == "" {
+		return ""
+	}
+	runes := []rune(provider)
+	if len(runes) > upstreamProviderMaxLength {
+		provider = string(runes[:upstreamProviderMaxLength])
+	}
+	return provider
 }
 
 func (o *upstreamResponseModelObserver) ObserveAnthropic(payload []byte) {
@@ -222,6 +287,12 @@ func observedUpstreamResponseModel(c *gin.Context) string {
 
 func observedUpstreamResponseModelConflict(c *gin.Context) bool {
 	return upstreamResponseModelObserverFromContext(c).Conflict()
+}
+
+// observedUpstreamProvider returns the provider the upstream response reported
+// having used, or "" when it declared none.
+func observedUpstreamProvider(c *gin.Context) string {
+	return upstreamResponseModelObserverFromContext(c).Provider()
 }
 
 func observedUpstreamResponseServiceTier(c *gin.Context) string {
