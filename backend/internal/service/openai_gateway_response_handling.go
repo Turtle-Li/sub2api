@@ -1346,6 +1346,25 @@ func logOpenAISuccessMissingUsage(ctx context.Context, c *gin.Context, account *
 	).Warn("openai_usage.success_missing_usage")
 }
 
+// unwrapOpenAICompatDataEnvelope strips the {"data":{...},"success":true}
+// envelope that some OpenAI-compatible upstreams (e.g. Cline API) put around
+// non-streaming chat/responses bodies. Clients and protocol converters expect
+// the standard payload; without this, converted Messages come back empty.
+func unwrapOpenAICompatDataEnvelope(body []byte) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return body
+	}
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() || !root.Get("success").IsBool() || root.Get("choices").Exists() {
+		return body
+	}
+	data := root.Get("data")
+	if !data.IsObject() || (!data.Get("choices").Exists() && data.Get("object").String() != "response") {
+		return body
+	}
+	return []byte(data.Raw)
+}
+
 func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return OpenAIUsage{}, false
@@ -1606,6 +1625,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
+	body = unwrapOpenAICompatDataEnvelope(body)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)

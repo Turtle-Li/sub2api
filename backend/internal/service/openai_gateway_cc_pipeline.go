@@ -372,6 +372,7 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 		}
 		return nil, OpenAIUsage{}, fmt.Errorf("read upstream body: %w", err)
 	}
+	respBody = unwrapOpenAICompatDataEnvelope(respBody)
 
 	var ccResp apicompat.ChatCompletionsResponse
 	if err := json.Unmarshal(respBody, &ccResp); err != nil {
