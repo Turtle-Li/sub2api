@@ -96,6 +96,8 @@ type modelPlazaGroup struct {
 	VideoRateMultiplier  float64 `json:"video_rate_multiplier"`
 	// 分组是否启用长上下文阶梯计费；关闭时模型实付列只展示最低档/基础价。
 	LongContextPricingEnabled bool              `json:"long_context_pricing_enabled"`
+	DisplayCurrency           string            `json:"display_currency,omitempty"`
+	DisplayUSDRate            float64           `json:"display_usd_rate,omitempty"`
 	Models                    []modelPlazaModel `json:"models"`
 }
 
@@ -227,6 +229,8 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 		VideoRateIndependent:      g.VideoRateIndependent,
 		VideoRateMultiplier:       g.VideoRateMultiplier,
 		LongContextPricingEnabled: g.LongContextPricingEnabled,
+		DisplayCurrency:           g.DisplayCurrency,
+		DisplayUSDRate:            g.DisplayUSDRate,
 		Models:                    models,
 	}
 	if rate, ok := userRates[g.ID]; ok {

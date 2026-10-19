@@ -58,7 +58,12 @@ type PlazaGroup struct {
 	VideoRateMultiplier  float64
 	// LongContextPricingEnabled 分组是否按上下文长度应用阶梯价；关闭时模型展示的是最低档。
 	LongContextPricingEnabled bool
-	Models                    []PlazaModel
+	// DisplayCurrency/DisplayUSDRate 是该分组价格的展示口径（与扣费一致）：
+	// 订阅分组按 USD 额度计，按量 OpenAI/Anthropic 分组的倍率即「每参考美元的人民币」
+	// 不再乘汇率。未接计费服务时为空，前端回落到全站结算币种。
+	DisplayCurrency string
+	DisplayUSDRate  float64
+	Models          []PlazaModel
 }
 
 // ModelPlazaService 聚合模型广场数据。
@@ -200,6 +205,11 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 		}
 	}
 
+	var policy *PricingCurrencySettings
+	if s.billingService != nil {
+		current := s.billingService.currentCurrencyPolicy()
+		policy = &current
+	}
 	officialMemo := make(map[string]*PlazaOfficialPricing)
 	out := make([]PlazaGroup, 0, len(order))
 	for _, gid := range order {
@@ -214,6 +224,9 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 			return pg.Models[i].Platform < pg.Models[j].Platform
 		})
 		g := groupEnt[gid]
+		if policy != nil {
+			pg.DisplayCurrency, pg.DisplayUSDRate = plazaDisplayCurrency(*policy, g)
+		}
 		for j := range pg.Models {
 			s.fillDisplayPricing(ctx, &pg.Models[j], g)
 			pg.Models[j].OfficialPricing = s.lookupOfficialPricing(ctx, pg.Models[j].Name, officialMemo)
@@ -228,6 +241,17 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+// plazaDisplayCurrency mirrors settleCost/finalizeUsageCurrency for display.
+func plazaDisplayCurrency(policy PricingCurrencySettings, g *Group) (string, float64) {
+	if g.IsSubscriptionType() {
+		return "USD", policy.USDToCNYRate
+	}
+	if policy.SettlementCurrency == "CNY" && usesDirectReferenceRate(g) {
+		return "CNY", 1
+	}
+	return policy.SettlementCurrency, policy.USDToCNYRate
 }
 
 // hidesSurchargedModel 隐藏带内部加价的模型（OpenAI 隐藏扣费倍率或售价倍率，

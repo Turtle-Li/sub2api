@@ -311,6 +311,7 @@ import { useI18n } from 'vue-i18n'
 import { formatScaled, resolveIntervalPrices } from '@/utils/pricing'
 import {
   convertUSDPriceForSettlement,
+  normalizeSettlementCurrency,
   pricingCurrencyFromPublicSettings,
   settlementCurrencySymbol
 } from '@/utils/settlementCurrency'
@@ -357,11 +358,21 @@ const props = defineProps<{
    */
   peakWindow?: string
   peakRateMultiplier?: number | null
+  /** 分组展示币种与汇率（后端按扣费口径给出）；缺省时按全站结算币种换算。 */
+  displayCurrency?: string
+  displayUsdRate?: number
 }>()
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const pricingCurrency = computed(() => pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings))
+const pricingCurrency = computed(() => {
+  const site = pricingCurrencyFromPublicSettings(appStore.cachedPublicSettings)
+  if (!props.displayCurrency) return site
+  return {
+    settlementCurrency: normalizeSettlementCurrency(props.displayCurrency),
+    usdToCNYRate: props.displayUsdRate && props.displayUsdRate > 0 ? props.displayUsdRate : site.usdToCNYRate
+  }
+})
 
 /** 实付分区只从平台拿一个主色,浅底/标题/下划线全部由 scoped CSS 用 color-mix 派生。 */
 const accentStyle = computed(() => ({ '--plaza-accent': platformAccentColor(props.platform ?? '') }))

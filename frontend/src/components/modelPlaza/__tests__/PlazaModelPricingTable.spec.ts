@@ -53,6 +53,8 @@ function mountTable(
     videoRateMultiplier?: number | null
     peakWindow?: string
     peakRateMultiplier?: number | null
+    displayCurrency?: string
+    displayUsdRate?: number
     pricingCurrency?: PublicSettings['pricing_currency']
   }
 ) {
@@ -137,6 +139,29 @@ describe('PlazaModelPricingTable', () => {
     expect(text).toContain('¥25.3125')
     expect(text).toContain('¥ / 1M tokens')
     expect(text).not.toContain('$3.00')
+  })
+
+  it('按分组展示口径显示：按量 OpenAI/Anthropic 分组的参考美元价不再乘汇率', () => {
+    const wrapper = mountTable([tokenModel()], 0.25, null, {
+      pricingCurrency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 },
+      displayCurrency: 'CNY',
+      displayUsdRate: 1
+    })
+    const text = wrapper.text()
+    expect(text).toContain('¥0.75')
+    expect(text).toContain('¥3.75')
+    expect(text).not.toContain('¥5.0625')
+  })
+
+  it('订阅分组按 USD 额度展示', () => {
+    const wrapper = mountTable([tokenModel()], 1, null, {
+      pricingCurrency: { settlement_currency: 'CNY', usd_to_cny_rate: 6.75 },
+      displayCurrency: 'USD',
+      displayUsdRate: 6.75
+    })
+    const text = wrapper.text()
+    expect(text).toContain('$3.00')
+    expect(text).not.toContain('¥')
   })
 
   it('shows all configured reasoning multipliers in level order', () => {

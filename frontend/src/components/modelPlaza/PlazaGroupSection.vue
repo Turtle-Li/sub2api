@@ -65,6 +65,8 @@
         :video-rate-multiplier="group.video_rate_multiplier"
         :peak-window="peakWindow"
         :peak-rate-multiplier="group.peak_rate_multiplier"
+        :display-currency="group.display_currency"
+        :display-usd-rate="group.display_usd_rate"
       />
       <p v-else class="px-5 py-4 text-center text-sm text-gray-400 dark:text-dark-500">
         {{ t('modelPlaza.detail.noModels') }}

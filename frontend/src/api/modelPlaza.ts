@@ -78,6 +78,9 @@ export interface ModelPlazaGroup {
   video_rate_multiplier: number
   /** 分组是否启用长上下文阶梯计费；false 时实付列只展示最低档，官方阶梯仅供参考。 */
   long_context_pricing_enabled: boolean
+  /** 该分组价格的展示币种与汇率（与扣费口径一致）；缺省时按全站结算币种。 */
+  display_currency?: 'USD' | 'CNY'
+  display_usd_rate?: number
   models: PlazaModel[]
 }
 

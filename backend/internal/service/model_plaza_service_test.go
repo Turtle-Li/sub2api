@@ -522,3 +522,28 @@ func TestListPlazaGroups_HidesSurchargedOpenAIModels(t *testing.T) {
 	require.Len(t, out[0].Models, 1)
 	require.Equal(t, "gpt-5.5", out[0].Models[0].Name)
 }
+
+func TestPlazaDisplayCurrency_MatchesSettlement(t *testing.T) {
+	cny := PricingCurrencySettings{SettlementCurrency: "CNY", USDToCNYRate: 6.75}
+	cases := []struct {
+		name     string
+		group    Group
+		currency string
+		rate     float64
+	}{
+		{"standard openai uses direct reference rate", Group{Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard}, "CNY", 1},
+		{"standard anthropic uses direct reference rate", Group{Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeStandard}, "CNY", 1},
+		{"standard deepseek converts USD catalog prices", Group{Platform: PlatformDeepseek, SubscriptionType: SubscriptionTypeStandard}, "CNY", 6.75},
+		{"subscription keeps USD quota units", Group{Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeSubscription}, "USD", 6.75},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			currency, rate := plazaDisplayCurrency(cny, &tc.group)
+			require.Equal(t, tc.currency, currency)
+			require.Equal(t, tc.rate, rate)
+		})
+	}
+	currency, rate := plazaDisplayCurrency(PricingCurrencySettings{SettlementCurrency: "USD", USDToCNYRate: 6.75}, &Group{Platform: PlatformOpenAI, SubscriptionType: SubscriptionTypeStandard})
+	require.Equal(t, "USD", currency)
+	require.Equal(t, 6.75, rate)
+}
