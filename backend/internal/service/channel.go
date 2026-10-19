@@ -346,6 +346,34 @@ func (c *Channel) IsWebSearchEmulationEnabled(platform string) bool {
 	return ok && enabled
 }
 
+// featureKeyModelPlazaHiddenModels lists models that stay priced/routable in
+// this channel but are not shown in the public model plaza (e.g. self-use aliases).
+const featureKeyModelPlazaHiddenModels = "model_plaza_hidden_models"
+
+// IsModelHiddenFromPlaza 报告模型是否在本渠道的「模型广场隐藏」列表中（大小写不敏感）。
+// 只影响广场展示，不影响计费与调度。
+func (c *Channel) IsModelHiddenFromPlaza(model string) bool {
+	if c == nil || c.FeaturesConfig == nil {
+		return false
+	}
+	model = strings.TrimSpace(model)
+	switch hidden := c.FeaturesConfig[featureKeyModelPlazaHiddenModels].(type) {
+	case []any:
+		for _, item := range hidden {
+			if name, ok := item.(string); ok && strings.EqualFold(strings.TrimSpace(name), model) {
+				return true
+			}
+		}
+	case []string:
+		for _, name := range hidden {
+			if strings.EqualFold(strings.TrimSpace(name), model) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // IsBedrockCCCompatEnabled 返回该渠道是否启用了 Bedrock CC 兼容模式。
 // 一旦启用，该渠道下所有请求都会应用 CC 兼容转换，不区分账号 platform。
 func (c *Channel) IsBedrockCCCompatEnabled(platform string) bool {

@@ -547,3 +547,14 @@ func TestPlazaDisplayCurrency_MatchesSettlement(t *testing.T) {
 	require.Equal(t, "USD", currency)
 	require.Equal(t, 6.75, rate)
 }
+
+func TestListPlazaGroups_HidesChannelConfiguredModels(t *testing.T) {
+	ch := plazaPricedChannel(1, "ds", []int64{10}, "deepseek", "deepseek-flash", "deepseek-v4.1-flash-1017")
+	ch.FeaturesConfig = map[string]any{"model_plaza_hidden_models": []any{"DeepSeek-V4.1-Flash-1017 "}}
+	groups := []Group{{ID: 10, Name: "g", Platform: "deepseek", RateMultiplier: 1}}
+	out, err := newPlazaService([]Channel{ch}, groups, nil).ListGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].Models, 1)
+	require.Equal(t, "deepseek-flash", out[0].Models[0].Name)
+}

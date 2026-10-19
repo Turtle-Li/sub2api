@@ -184,7 +184,7 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 				} else if m.Platform != pg.Platform {
 					continue
 				}
-				if s.hidesSurchargedModel(m.Name) {
+				if s.hidesSurchargedModel(m.Name) || ch.IsModelHiddenFromPlaza(m.Name) {
 					continue
 				}
 				key := modelKey{platform: m.Platform, name: m.Name}

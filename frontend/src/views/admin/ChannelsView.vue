@@ -219,6 +219,13 @@
               </p>
             </div>
 
+            <!-- Model plaza hidden models -->
+            <div>
+              <label class="input-label">{{ t('admin.channels.form.plazaHiddenModels') }}</label>
+              <textarea v-model="form.plaza_hidden_models" rows="2" class="input font-mono text-xs" :placeholder="t('admin.channels.form.plazaHiddenModelsPlaceholder')" />
+              <p class="mt-1 text-xs text-gray-400">{{ t('admin.channels.form.plazaHiddenModelsHint') }}</p>
+            </div>
+
             <!-- Billing Basis -->
             <div>
               <label class="input-label">{{ t('admin.channels.form.billingModelSource', 'Billing Basis') }}</label>
@@ -758,6 +765,7 @@ const form = reactive({
   status: 'active',
   restrict_models: false,
   billing_model_source: 'channel_mapped' as string,
+  plaza_hidden_models: '',
   platforms: [] as PlatformSection[],
   apply_pricing_to_account_stats: false,
 })
@@ -1197,6 +1205,15 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
     delete featuresConfig.bedrock_cc_compat
   }
 
+  const plazaHiddenModels = Array.from(new Set(
+    form.plaza_hidden_models.split(/[\s,，]+/).map((name) => name.trim()).filter(Boolean)
+  ))
+  if (plazaHiddenModels.length > 0) {
+    featuresConfig.model_plaza_hidden_models = plazaHiddenModels
+  } else {
+    delete featuresConfig.model_plaza_hidden_models
+  }
+
   return { group_ids: uniqueGroupIds, model_pricing, model_mapping, features_config: featuresConfig }
 }
 
@@ -1366,6 +1383,7 @@ function resetForm() {
   form.status = 'active'
   form.restrict_models = false
   form.billing_model_source = 'channel_mapped'
+  form.plaza_hidden_models = ''
   form.platforms = []
   form.apply_pricing_to_account_stats = false
   activeTab.value = 'basic'
@@ -1388,6 +1406,8 @@ async function openEditDialog(channel: Channel) {
   form.status = channel.status
   form.restrict_models = channel.restrict_models || false
   form.billing_model_source = channel.billing_model_source || 'channel_mapped'
+  const hiddenModels = channel.features_config?.model_plaza_hidden_models
+  form.plaza_hidden_models = Array.isArray(hiddenModels) ? hiddenModels.filter((name) => typeof name === 'string').join(', ') : ''
   form.apply_pricing_to_account_stats = channel.apply_pricing_to_account_stats || false
   // Must load groups first so apiToForm can map groupID → platform
   await Promise.all([loadGroups(), loadAllChannelsForConflict()])
