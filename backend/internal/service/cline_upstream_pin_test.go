@@ -469,3 +469,16 @@ func TestHarvestAvailableProviders_JSONErrorOnPlannerPipeline(t *testing.T) {
 	require.True(t, harvest.Selectable)
 	require.Equal(t, []string{"deepseek", "novita"}, harvest.Providers)
 }
+
+// TestParseClineUpstreamRoutingCapturesRawEvidence 覆盖「私有/单一上游」模型的取证：
+// 只有路由元数据原文能说明它到底被谁服务。
+func TestParseClineUpstreamRoutingCapturesRawEvidence(t *testing.T) {
+	body := []byte(`{"model":"deepseek/deepseek-v4.1-flash","choices":[{"message":{"content":"OK"}}],"provider_metadata":{"gateway":{"routing":{"canonicalSlug":"private/deepseek-v4p1-flash-contributor","finalProvider":"openai-compatible-private","planningReasoning":"single private provider"}}}}`)
+	routing := parseClineUpstreamRouting(body)
+
+	require.Equal(t, "openai-compatible-private", routing.finalProvider)
+	require.Equal(t, "deepseek/deepseek-v4.1-flash", routing.responseModel)
+	require.Equal(t, "private/deepseek-v4p1-flash-contributor", routing.canonicalSlug)
+	require.Contains(t, routing.routingRaw, "openai-compatible-private")
+	require.Contains(t, routing.routingRaw, "single private provider")
+}

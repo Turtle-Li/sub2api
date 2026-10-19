@@ -4,6 +4,8 @@ export default {
     description: '枚举、校验并钉住 Cline Pass 订阅模型（cline-pass/*）背后的上游渠道。',
     pipelineHint:
       'Cline Pass 的订阅模型分两条路由管道：直连（OpenRouter，认顶层 provider.only/order/sort）与规划器（Vercel AI Gateway，认 providerOptions.gateway.*）。管道归属由 Cline 侧决定、可能随时间变化，钉住前请先探测。',
+    manualProbePlaceholder: '手动探测任意模型 ID，如 cline-pass/…',
+    manualProbeHint: '探测还没出现在清单里的模型 ID（例如刚发布的变体）。',
     recommendationLabel: '推荐流程：',
     recommendationStep1: '① 全部探测',
     recommendationStep2: '② 校验目标模型',
@@ -123,6 +125,8 @@ export default {
       pinnable: '可否钉住',
       pinnableYes: '可以',
       pinnableNo: '不可（单一上游）',
+      responseModel: '响应模型',
+      routingRaw: '网关路由元数据',
       statuses: '各渠道状态'
     },
     messages: {

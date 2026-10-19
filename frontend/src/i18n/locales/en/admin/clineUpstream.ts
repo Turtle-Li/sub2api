@@ -5,6 +5,8 @@ export default {
       'Enumerate, validate and pin the upstream provider behind Cline Pass subscription models (cline-pass/*).',
     pipelineHint:
       'Cline Pass routes each model through one of two pipelines: direct (OpenRouter, honours top-level provider.only/order/sort) or planner (Vercel AI Gateway, honours providerOptions.gateway.*). The pipeline is decided by Cline and can change over time, so probe before pinning.',
+    manualProbePlaceholder: 'Probe any model id, e.g. cline-pass/…',
+    manualProbeHint: 'Probe a model id that is not in the list yet (for example a newly released variant).',
     recommendationLabel: 'Recommended:',
     recommendationStep1: '1. Probe all',
     recommendationStep2: '2. Validate the model',
@@ -132,6 +134,8 @@ export default {
       pinnable: 'Pinnable',
       pinnableYes: 'yes',
       pinnableNo: 'no — single upstream',
+      responseModel: 'Response model',
+      routingRaw: 'Gateway routing metadata',
       statuses: 'Per-upstream status'
     },
     messages: {

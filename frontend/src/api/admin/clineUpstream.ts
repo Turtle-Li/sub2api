@@ -49,6 +49,10 @@ export interface ClineUpstreamMeta {
   last_error: string
   /** 渠道清单采集说明：成功为空，失败时是网关返回的原始错误片段。 */
   harvest_note: string
+  /** 上游响应顶层声明的模型。 */
+  response_model: string
+  /** 网关路由元数据原文，用于解释为什么只有这些渠道。 */
+  routing_raw: string
   probed_at: number
   validated_at: number
 }

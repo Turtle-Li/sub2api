@@ -130,6 +130,9 @@ type ClineUpstreamProbeResult struct {
 	MS             int64    `json:"ms"`
 	Upstreams      []string `json:"upstreams"`
 	HarvestNote    string   `json:"harvest_note,omitempty"`
+	// ResponseModel 是上游响应顶层声明的模型；RoutingRaw 是网关路由元数据原文。
+	ResponseModel string `json:"response_model,omitempty"`
+	RoutingRaw    string `json:"routing_raw,omitempty"`
 }
 
 // ClineUpstreamValidateResult 是单模型的全渠道校验地图。
@@ -443,6 +446,10 @@ type clineUpstreamRouting struct {
 	finalProviderName string
 	fallbacks         []string
 	plan              string
+	// responseModel 是响应顶层声明的模型（直连管道为 OpenRouter 真实 id）。
+	responseModel string
+	// routingRaw 是网关路由元数据的原始 JSON，用于解释「为什么只有这个渠道」。
+	routingRaw string
 }
 
 func (s *ClineUpstreamService) loadClineAccount(ctx context.Context, accountID int64) (*Account, error) {
@@ -585,6 +592,8 @@ func (s *ClineUpstreamService) probeModel(ctx context.Context, account *Account,
 	result.CanonicalSlug = routing.canonicalSlug
 	result.Fallbacks = routing.fallbacks
 	result.Plan = truncate(routing.plan, 240)
+	result.ResponseModel = routing.responseModel
+	result.RoutingRaw = routing.routingRaw
 
 	harvest := s.harvestAvailableProviders(ctx, account, model, routing.pipeline)
 	result.HarvestNote = harvest.Note
@@ -774,6 +783,8 @@ func (s *ClineUpstreamService) mergeProbeMeta(account *Account, model string, re
 	}
 	// 采集说明是「为什么只有这几个渠道」的原始证据，必须随快照落库，否则刷新页面就丢了。
 	entry["harvest_note"] = truncate(result.HarvestNote, 400)
+	entry["response_model"] = truncate(result.ResponseModel, 200)
+	entry["routing_raw"] = truncate(result.RoutingRaw, 800)
 	if previous.ValidatedAt != 0 {
 		entry["validated_at"] = previous.ValidatedAt
 	}
@@ -913,6 +924,13 @@ func parseClineUpstreamRouting(body []byte) clineUpstreamRouting {
 		if text := strings.TrimSpace(item.String()); text != "" {
 			result.fallbacks = append(result.fallbacks, text)
 		}
+	}
+	result.responseModel = strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+	// 路由元数据原样留档：私有/单一上游模型只有这一段能说明它到底被谁服务。
+	if routing.Exists() {
+		result.routingRaw = truncate(strings.TrimSpace(routing.Raw), 800)
+	} else if metadata := gjson.GetBytes(payload, "provider_metadata"); metadata.Exists() {
+		result.routingRaw = truncate(strings.TrimSpace(metadata.Raw), 800)
 	}
 	return result
 }

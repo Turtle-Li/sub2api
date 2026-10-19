@@ -32,6 +32,25 @@
             <Icon name="beaker" size="sm" />
             <span>{{ probing ? t('admin.clineUpstream.probing') : t('admin.clineUpstream.probeAll') }}</span>
           </button>
+          <div class="flex items-center gap-1.5">
+            <input
+              v-model="manualModel"
+              class="input w-64"
+              :placeholder="t('admin.clineUpstream.manualProbePlaceholder')"
+              data-testid="cline-upstream-manual-model"
+              @keyup.enter="probeManual"
+            />
+            <button
+              type="button"
+              class="btn btn-secondary"
+              :disabled="probing || !state?.supported || !manualModel.trim()"
+              :title="t('admin.clineUpstream.manualProbeHint')"
+              data-testid="cline-upstream-manual-probe"
+              @click="probeManual"
+            >
+              <Icon name="search" size="sm" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -335,6 +354,17 @@
                         >
                           {{ t('admin.clineUpstream.detail.harvestOk') }}
                         </div>
+                        <div v-if="item.meta.response_model" class="text-gray-500 dark:text-gray-400">
+                          {{ t('admin.clineUpstream.detail.responseModel') }}:
+                          <span class="font-mono text-gray-800 dark:text-gray-200">{{ item.meta.response_model }}</span>
+                        </div>
+                        <div
+                          v-if="item.meta.routing_raw"
+                          class="rounded-lg border border-gray-200 p-2 text-[11px] leading-relaxed text-gray-600 dark:border-dark-700 dark:text-gray-300"
+                        >
+                          <div class="mb-0.5 font-medium">{{ t('admin.clineUpstream.detail.routingRaw') }}</div>
+                          <div class="break-all font-mono text-[10px]">{{ item.meta.routing_raw }}</div>
+                        </div>
                         <div
                           v-if="item.meta.last_error"
                           class="rounded-lg border border-red-200 bg-red-50 p-2 text-[11px] leading-relaxed text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300"
@@ -611,6 +641,7 @@ const busyModel = ref('')
 const saving = ref(false)
 
 const expandedModels = ref<Set<string>>(new Set())
+const manualModel = ref('')
 const editingModel = ref<string | null>(null)
 const draft = reactive<ClineUpstreamPin>({
   mode: 'off',
@@ -681,7 +712,9 @@ function normalizeState(raw: ClineUpstreamState | null | undefined): ClineUpstre
         upstreams: asList(item.meta?.upstreams),
         statuses: item.meta?.statuses || {},
         harvest_note: item.meta?.harvest_note || '',
-        last_error: item.meta?.last_error || ''
+        last_error: item.meta?.last_error || '',
+        response_model: item.meta?.response_model || '',
+        routing_raw: item.meta?.routing_raw || ''
       }
     }))
   }
@@ -859,6 +892,24 @@ async function probeModel(model: string) {
     appStore.showError(errorMessage(error, t('admin.clineUpstream.messages.probeFailed')))
   } finally {
     busyModel.value = ''
+  }
+}
+
+// 手动探测任意模型 ID：用于确认某个 id（例如新发布的 4.1 flash 变体）在 Cline 侧
+// 到底有哪些渠道，而不必先出现在推荐清单里。
+async function probeManual() {
+  const model = manualModel.value.trim()
+  if (!selectedAccountId.value || !model) return
+  probing.value = true
+  try {
+    const response = await probeClineUpstreams(selectedAccountId.value, [model])
+    appStore.showSuccess(t('admin.clineUpstream.messages.probed', { count: asList(response?.results).length }))
+    await loadState()
+    expandedModels.value = new Set([...expandedModels.value, model])
+  } catch (error) {
+    appStore.showError(errorMessage(error, t('admin.clineUpstream.messages.probeFailed')))
+  } finally {
+    probing.value = false
   }
 }
 

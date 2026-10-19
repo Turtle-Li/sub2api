@@ -170,6 +170,29 @@ For these models pinning is a no-op: leave them on `不钉住`. What you *can* r
 off the row is which upstream they always use, which is the useful answer for
 "is it on the vendor channel?".
 
+### Private provider names
+
+The observed provider for such a model is not one of the selectable pool names
+(`deepseek`, `baseten`, …) but a private route name such as
+`openai-compatible-private`. That is the gateway's own label for a
+**non-pool, private provider** configured on Cline's side. It cannot be
+redirected by `provider.only` / `providerOptions.gateway.only`, because there is
+no pool to filter — the model is hard-wired to that route.
+
+To establish what such a route actually is, the probe snapshot keeps two pieces
+of raw evidence, both shown in the expandable detail row:
+
+- **响应模型** (`response_model`): the model the upstream response declares —
+  this is the real upstream model id, so it shows whether the private route
+  serves the official model;
+- **网关路由元数据** (`routing_raw`): the raw `provider_metadata.gateway.routing`
+  object, including `canonicalSlug`, `finalProvider` and `planningReasoning`.
+
+If a model only exposes a private route, the only lever left is **which model id
+is called**. Use the toolbar's manual probe field to probe any id (it does not
+have to be in the Cline list yet); a model that exposes a real pool will show
+the usual channel chips and become pinnable.
+
 The probe tries the detected pipeline form first and then the other form, so a
 misdetected pipeline no longer silently loses the list. The distinction it
 preserves:
