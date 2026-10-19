@@ -28,6 +28,8 @@ export default {
     lastFetched: '更新于 {time}',
     notProbed: '未探测',
     noUpstreams: '尚未获得渠道清单',
+    noPoolHint:
+      '未探测到该模型的可选渠道池（网关忽略了占位探测），钉住可能无效。你仍可在下方强制指定渠道名，并用「测试」验证是否真的生效。',
     notPinnable: '不可钉',
     singleUpstreamHint: '该模型只有单一上游、没有可选渠道池，钉住不会生效。',
     columns: {
@@ -103,6 +105,11 @@ export default {
       knownUpstreams: '已知渠道',
       knownUpstreamsEmpty: '请先探测该模型以获得渠道清单。',
       needProbe: '该模型的渠道清单未知，请先探测；否则排除项无法生效。',
+      manualUpstream: '强制指定渠道名',
+      manualUpstreamPlaceholder: '例如 deepseek',
+      manualUpstreamAdd: '添加',
+      manualUpstreamHint:
+        '探测清单可能不全：网关对未知渠道名可能静默忽略而不是报错。在这里直接填渠道名强制钉住，再用「测试」看网关是否真的采纳。',
       testWithDraft: '用当前设置测试',
       testing: '测试中…',
       testResultTitle: '测试结果',

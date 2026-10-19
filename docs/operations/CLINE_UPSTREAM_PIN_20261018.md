@@ -170,6 +170,25 @@ For these models pinning is a no-op: leave them on `不钉住`. What you *can* r
 off the row is which upstream they always use, which is the useful answer for
 "is it on the vendor channel?".
 
+### `pinnable=false` is an inference, not proof — and you can override it
+
+The "single upstream" verdict is derived from the gateway **ignoring** the
+placeholder probe. That is evidence, not proof: a gateway that silently drops an
+*unknown* provider name would look exactly the same while still honouring a
+*real* one. So the page never blocks the experiment:
+
+- the channel checkboxes are always usable, and the dialog has a **force a
+  channel name** field for a name the probe never listed (`deepseek` on a model
+  whose only listed upstream is `openai-compatible-private`);
+- `测试` reports the adherence verdict for exactly that forced configuration, so
+  "does the gateway honour `deepseek` here?" is answered directly, without
+  saving anything;
+- only after a test reports `adopted` is it worth saving the pin. Saving is what
+  puts the field on live traffic — the injection never consults `pinnable`.
+
+If the test reports `not-adopted` (served by something else) the pin really is
+ignored for that model, and no configuration can change it.
+
 ### Private provider names
 
 The observed provider for such a model is not one of the selectable pool names

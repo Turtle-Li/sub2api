@@ -522,7 +522,7 @@
             class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200"
             data-testid="cline-upstream-single-upstream-warning"
           >
-            {{ t('admin.clineUpstream.singleUpstreamHint') }}
+            {{ t('admin.clineUpstream.noPoolHint') }}
             <span v-if="meta.upstreams.length" class="ml-1 font-mono">{{ meta.upstreams.join(', ') }}</span>
           </div>
 
@@ -541,7 +541,6 @@
                 <input
                   type="checkbox"
                   class="h-4 w-4"
-                  :disabled="meta ? meta.probed_at > 0 && !meta.pinnable : false"
                   :checked="draft.upstreams.includes(upstream)"
                   @change="toggleUpstream(upstream)"
                 />
@@ -583,6 +582,36 @@
                 </button>
               </div>
             </div>
+          </div>
+
+          <!-- 手动指定渠道名：探测清单可能不全（网关对未知渠道名可能静默忽略而不是报错），
+               因此允许直接输入渠道名强制钉住，再用「测试」看是否真的生效。 -->
+          <div class="mt-3">
+            <div class="text-xs font-medium text-gray-600 dark:text-gray-300">
+              {{ t('admin.clineUpstream.dialog.manualUpstream') }}
+            </div>
+            <div class="mt-1.5 flex items-center gap-1.5">
+              <input
+                v-model="customUpstream"
+                class="input w-56 font-mono text-xs"
+                :placeholder="t('admin.clineUpstream.dialog.manualUpstreamPlaceholder')"
+                data-testid="cline-upstream-custom-input"
+                @keyup.enter="addCustomUpstream"
+              />
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="!customUpstream.trim()"
+                data-testid="cline-upstream-custom-add"
+                @click="addCustomUpstream"
+              >
+                <Icon name="plus" size="xs" />
+                <span>{{ t('admin.clineUpstream.dialog.manualUpstreamAdd') }}</span>
+              </button>
+            </div>
+            <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              {{ t('admin.clineUpstream.dialog.manualUpstreamHint') }}
+            </p>
           </div>
 
           <p v-if="!meta?.upstreams?.length" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
@@ -717,6 +746,8 @@ const saving = ref(false)
 
 const expandedModels = ref<Set<string>>(new Set())
 const manualModel = ref('')
+const customUpstream = ref('')
+const extraUpstreams = ref<string[]>([])
 const oneClickOpen = ref(false)
 const editingModel = ref<string | null>(null)
 const draft = reactive<ClineUpstreamPin>({
@@ -751,10 +782,19 @@ const knownUpstreams = computed(() => {
     out.push(trimmed)
   }
   ;(meta.value?.upstreams || []).forEach(push)
+  extraUpstreams.value.forEach(push)
   draft.upstreams.forEach(push)
   draft.exclude.forEach(push)
   return out
 })
+
+function addCustomUpstream() {
+  const name = customUpstream.value.trim()
+  if (!name) return
+  if (!extraUpstreams.value.includes(name)) extraUpstreams.value = [...extraUpstreams.value, name]
+  if (!draft.upstreams.includes(name)) draft.upstreams = [...draft.upstreams, name]
+  customUpstream.value = ''
+}
 
 function errorMessage(error: unknown, fallback: string): string {
   const candidate = error as { response?: { data?: { message?: string; detail?: string } }; message?: string }
@@ -1061,6 +1101,11 @@ function openDialog(item: ClineUpstreamModelState) {
   draft.upstreams = [...asList(item.pin?.upstreams)]
   draft.exclude = [...asList(item.pin?.exclude)]
   draft.sort = item.pin.sort || ''
+  // 之前手动加过的渠道名也要能重新出现（它们不在探测清单里）
+  extraUpstreams.value = [...draft.upstreams, ...draft.exclude].filter(
+    (name) => !(item.meta?.upstreams || []).includes(name)
+  )
+  customUpstream.value = ''
   testResult.value = null
 }
 

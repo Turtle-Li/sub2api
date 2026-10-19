@@ -186,6 +186,42 @@ describe('ClineUpstreamView', () => {
     expect(wrapper.text()).toContain('pin not adopted')
   })
 
+  it('lets the operator force a channel name the probe never listed', async () => {
+    // 探测清单可能不全：网关对未知渠道名可能静默忽略而不是报错，所以要能强制指定并测试。
+    mocks.getClineUpstreams.mockResolvedValue(
+      stateFixture({
+        models: [
+          {
+            model: 'cline-pass/deepseek-v4.1-flash',
+            source: 'subscription',
+            pin: { mode: 'off', upstreams: [], exclude: [], sort: '' },
+            meta: { pipeline: 'planner', pinnable: false, upstreams: ['openai-compatible-private'], statuses: {}, last_provider: 'openai-compatible-private', canonical_slug: 'private/deepseek-v4p1-flash-contributor', last_error: '', harvest_note: 'gateway ignored', response_model: '', routing_raw: '', probed_at: 1, validated_at: 0 },
+            candidates: [],
+            configured: false
+          }
+        ]
+      })
+    )
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="cline-upstream-row-cline-pass/deepseek-v4.1-flash"] button.btn-primary').trigger('click')
+    await flushPromises()
+
+    // 强制指定 deepseek，并切到严格钉住
+    await wrapper.get('[data-testid="cline-upstream-mode-strict"]').trigger('click')
+    await wrapper.get('[data-testid="cline-upstream-custom-input"]').setValue('deepseek')
+    await wrapper.get('[data-testid="cline-upstream-custom-add"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="cline-upstream-test"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.testClineUpstreams).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ model: 'cline-pass/deepseek-v4.1-flash', mode: 'strict', upstreams: ['deepseek'] })
+    )
+  })
+
   it('renders null list fields from the API without crashing', async () => {
     // Go 把 nil slice 序列化成 null；页面必须容忍（曾经抛 Cannot read properties of null）
     mocks.getClineUpstreams.mockResolvedValue(

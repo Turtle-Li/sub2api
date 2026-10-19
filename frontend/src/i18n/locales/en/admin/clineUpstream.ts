@@ -32,6 +32,8 @@ export default {
     lastFetched: 'Updated {time}',
     notProbed: 'Not probed',
     noUpstreams: 'No upstream learned yet',
+    noPoolHint:
+      'No selectable provider pool was detected for this model (the gateway ignored the placeholder probe), so pinning may have no effect. You can still force a channel name below and verify it with Test.',
     notPinnable: 'Not pinnable',
     singleUpstreamHint:
       'This model has a single upstream and no selectable provider pool, so pinning has no effect.',
@@ -112,6 +114,11 @@ export default {
       knownUpstreams: 'Known upstreams',
       knownUpstreamsEmpty: 'Probe this model to learn its upstream list.',
       needProbe: 'Probe this model first: the upstream list is unknown, so exclusions cannot be enforced.',
+      manualUpstream: 'Force a channel name',
+      manualUpstreamPlaceholder: 'e.g. deepseek',
+      manualUpstreamAdd: 'Add',
+      manualUpstreamHint:
+        'The probed list can be incomplete: the gateway may silently ignore an unknown channel name instead of reporting an error. Add a name here to force it, then use Test to see whether the gateway really served it.',
       testWithDraft: 'Test with these settings',
       testing: 'Testing…',
       testResultTitle: 'Test result',
