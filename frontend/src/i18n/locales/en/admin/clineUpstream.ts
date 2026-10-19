@@ -73,7 +73,8 @@ export default {
       limited: 'Rate limited',
       bad: 'Not pinnable',
       auth: 'Key issue',
-      unknown: 'Unknown'
+      unknown: 'Unknown',
+      notAdopted: 'Pin ignored'
     },
     actions: {
       configure: 'Configure',
@@ -137,6 +138,29 @@ export default {
       responseModel: 'Response model',
       routingRaw: 'Gateway routing metadata',
       statuses: 'Per-upstream status'
+    },
+    adherence: {
+      adopted: 'Pin adopted — served by the pinned channel',
+      fallback: 'Pin adopted — served by a fallback channel',
+      notAdopted: 'Pin NOT adopted — served by another channel',
+      violated: 'Excluded channel served the request',
+      unresolved: 'Could not verify: the response named no channel'
+    },
+    oneClick: {
+      button: 'Pin vendor channels',
+      title: 'Pin every model to its vendor channel',
+      description:
+        'Strict-pins each probed model to the channel that matches its vendor, and only when that channel is really in the model list. Everything else is listed as skipped and left untouched.',
+      summary: '{pinned} model(s) will be pinned, {skipped} skipped',
+      columns: { model: 'Model', channel: 'Channel' },
+      skip: {
+        notProbed: 'skipped — not probed yet',
+        notPinnable: 'skipped — single upstream, cannot be pinned',
+        noVendorChannel: 'skipped — no vendor channel in this model list'
+      },
+      nothingToDo: 'Nothing to pin: probe the models first, or no model exposes a vendor channel.',
+      apply: 'Apply',
+      applied: 'Pinned {count} model(s)'
     },
     messages: {
       saved: 'Pinning configuration saved',

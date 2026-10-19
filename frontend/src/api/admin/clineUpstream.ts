@@ -18,7 +18,10 @@ export type ClineUpstreamSort = '' | 'cost' | 'ttft' | 'tps'
 export type ClinePipeline = '' | 'direct' | 'planner'
 
 /** 单渠道实测状态。 */
-export type ClineUpstreamStatusKind = 'ok' | 'limited' | 'bad' | 'auth' | 'unknown'
+export type ClineUpstreamStatusKind = 'ok' | 'limited' | 'bad' | 'auth' | 'unknown' | 'not-adopted'
+
+/** 钉住是否被网关采纳（200 不代表生效，只有响应回读的实际渠道能证明）。 */
+export type ClinePinAdherence = 'adopted' | 'fallback' | 'not-adopted' | 'violated' | 'unresolved'
 
 /** 单个模型的钉住配置。 */
 export interface ClineUpstreamPin {
@@ -110,6 +113,8 @@ export interface ClineUpstreamValidateResult {
 export interface ClineUpstreamTestResult {
   model: string
   ok: boolean
+  /** 本次请求是否真的按钉住执行。 */
+  adherence: ClinePinAdherence
   error?: string
   ms: number
   pipeline: ClinePipeline

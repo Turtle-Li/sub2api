@@ -32,6 +32,16 @@
             <Icon name="beaker" size="sm" />
             <span>{{ probing ? t('admin.clineUpstream.probing') : t('admin.clineUpstream.probeAll') }}</span>
           </button>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="probing || !state?.supported || !state.models.length"
+            data-testid="cline-upstream-one-click"
+            @click="openOneClick"
+          >
+            <Icon name="bolt" size="sm" />
+            <span>{{ t('admin.clineUpstream.oneClick.button') }}</span>
+          </button>
           <div class="flex items-center gap-1.5">
             <input
               v-model="manualModel"
@@ -408,6 +418,61 @@
       </template>
     </div>
 
+    <!-- One-click vendor pinning preview -->
+    <BaseDialog
+      :show="oneClickOpen"
+      :title="t('admin.clineUpstream.oneClick.title')"
+      width="extra-wide"
+      mobile-sheet
+      @close="oneClickOpen = false"
+    >
+      <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.clineUpstream.oneClick.description') }}</p>
+      <p class="mt-2 text-sm font-medium text-gray-800 dark:text-gray-200">
+        {{ t('admin.clineUpstream.oneClick.summary', { pinned: oneClickPlan.pinnable.length, skipped: oneClickPlan.skipped.length }) }}
+      </p>
+      <div class="mt-3 max-h-[50vh] overflow-y-auto rounded-xl border border-gray-200 dark:border-dark-700">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500 dark:bg-dark-900/40">
+            <tr>
+              <th class="px-3 py-2 text-left">{{ t('admin.clineUpstream.oneClick.columns.model') }}</th>
+              <th class="px-3 py-2 text-left">{{ t('admin.clineUpstream.oneClick.columns.channel') }}</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+            <tr v-for="row in oneClickPlan.pinnable" :key="row.model">
+              <td class="px-3 py-2 font-mono">{{ row.model }}</td>
+              <td class="px-3 py-2">
+                <span class="badge badge-success whitespace-nowrap">{{ row.channel }}</span>
+              </td>
+            </tr>
+            <tr v-for="row in oneClickPlan.skipped" :key="row.model" class="text-gray-500 dark:text-gray-400">
+              <td class="px-3 py-2 font-mono">{{ row.model }}</td>
+              <td class="px-3 py-2">{{ t(`admin.clineUpstream.oneClick.skip.${row.reason}`) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-if="!oneClickPlan.pinnable.length" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+        {{ t('admin.clineUpstream.oneClick.nothingToDo') }}
+      </p>
+
+      <template #footer>
+        <button type="button" class="btn btn-secondary" @click="oneClickOpen = false">
+          {{ t('admin.clineUpstream.actions.cancel') }}
+        </button>
+        <button
+          type="button"
+          class="btn btn-primary"
+          :disabled="saving || !oneClickPlan.pinnable.length"
+          data-testid="cline-upstream-one-click-apply"
+          @click="applyOneClick"
+        >
+          <Icon name="check" size="sm" />
+          <span>{{ saving ? t('admin.clineUpstream.actions.saving') : t('admin.clineUpstream.oneClick.apply') }}</span>
+        </button>
+      </template>
+    </BaseDialog>
+
     <!-- Per-model pin dialog -->
     <BaseDialog
       :show="editingModel !== null"
@@ -560,10 +625,20 @@
           </div>
 
           <div v-if="testResult" class="mt-3 space-y-1 text-xs" data-testid="cline-upstream-test-result">
-            <p v-if="!testResult.ok" class="text-red-600 dark:text-red-400">
-              {{ t('admin.clineUpstream.dialog.testFailed') }}: {{ testResult.error }}
+            <p
+              class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium"
+              :class="testResult.ok
+                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                : 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300'"
+              data-testid="cline-upstream-adherence"
+            >
+              <Icon :name="testResult.ok ? 'check' : 'x'" size="xs" />
+              {{ adherenceLabel(testResult.adherence) }}
             </p>
-            <template v-else>
+            <p v-if="!testResult.ok" class="text-red-600 dark:text-red-400">
+              {{ testResult.error }}
+            </p>
+            <template v-if="testResult.ok">
               <p class="text-gray-700 dark:text-gray-300">
                 <span class="font-medium">{{ t('admin.clineUpstream.dialog.testActual') }}:</span>
                 <span class="ml-1 font-mono">{{ testResult.actual_provider || '—' }}</span>
@@ -642,6 +717,7 @@ const saving = ref(false)
 
 const expandedModels = ref<Set<string>>(new Set())
 const manualModel = ref('')
+const oneClickOpen = ref(false)
 const editingModel = ref<string | null>(null)
 const draft = reactive<ClineUpstreamPin>({
   mode: 'off',
@@ -760,6 +836,52 @@ function formatTs(seconds: number): string {
   return seconds ? formatDateTime(new Date(seconds * 1000)) : t('admin.clineUpstream.detail.never')
 }
 
+function adherenceLabel(adherence?: string): string {
+  switch (adherence) {
+    case 'adopted':
+      return t('admin.clineUpstream.adherence.adopted')
+    case 'fallback':
+      return t('admin.clineUpstream.adherence.fallback')
+    case 'not-adopted':
+      return t('admin.clineUpstream.adherence.notAdopted')
+    case 'violated':
+      return t('admin.clineUpstream.adherence.violated')
+    default:
+      return t('admin.clineUpstream.adherence.unresolved')
+  }
+}
+
+function normalizeChannel(value: string): string {
+  return (value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+// 模型家族 → 厂商直供渠道名（两条管道的拼写都列上）。
+const VENDOR_CHANNEL_ALIASES: Record<string, string[]> = {
+  deepseek: ['deepseek'],
+  qwen: ['alibaba'],
+  glm: ['zai', 'z-ai', 'alibaba'],
+  kimi: ['moonshot', 'kimi'],
+  minimax: ['minimax'],
+  mimo: ['xiaomi', 'mimo']
+}
+
+/**
+ * 推荐钉住的渠道：只在该模型的探测渠道池里找厂商直供，找不到就返回 null。
+ * 依次尝试：显式家族别名 → canonical slug 的厂商前缀 → 模型 id 家族名。
+ */
+function recommendedChannel(item: ClineUpstreamModelState): string | null {
+  if (!item.meta?.pinnable || !item.meta.upstreams.length) return null
+  const pool = item.meta.upstreams
+  const family = (item.model.replace(/^cline-pass\//, '').split(/[-.]/)[0] || '').toLowerCase()
+  const vendor = (item.meta.canonical_slug.split('/')[0] || '').toLowerCase()
+  const candidates = [...(VENDOR_CHANNEL_ALIASES[family] || []), vendor, family].filter(Boolean)
+  for (const candidate of candidates) {
+    const hit = pool.find((upstream) => normalizeChannel(upstream) === normalizeChannel(candidate))
+    if (hit) return hit
+  }
+  return null
+}
+
 function sourceHint(source: string): string {
   if (source === 'subscription') return t('admin.clineUpstream.sourceHint.subscription')
   if (source === 'catalog') return t('admin.clineUpstream.sourceHint.catalog')
@@ -807,6 +929,8 @@ function statusLabel(status?: string): string {
       return t('admin.clineUpstream.status.bad')
     case 'auth':
       return t('admin.clineUpstream.status.auth')
+    case 'not-adopted':
+      return t('admin.clineUpstream.status.notAdopted')
     default:
       return t('admin.clineUpstream.status.unknown')
   }
@@ -822,6 +946,8 @@ function statusClass(status?: string): string {
     case 'bad':
       return `${base} badge-danger`
     case 'auth':
+      return `${base} badge-danger`
+    case 'not-adopted':
       return `${base} badge-danger`
     default:
       return `${base} badge-gray`
@@ -989,6 +1115,64 @@ async function runTest() {
     appStore.showError(errorMessage(error, t('admin.clineUpstream.messages.probeFailed')))
   } finally {
     testing.value = false
+  }
+}
+
+type OneClickRow = { model: string; channel: string }
+type OneClickSkip = { model: string; reason: 'notProbed' | 'notPinnable' | 'noVendorChannel' }
+
+// 一键配置只做一件事：在已探测出渠道池、且池里确实有厂商直供渠道的模型上，
+// 严格钉住那个渠道。任何不确定的情况一律跳过，并在弹窗里逐条列明。
+const oneClickPlan = computed<{ pinnable: OneClickRow[]; skipped: OneClickSkip[] }>(() => {
+  const pinnable: OneClickRow[] = []
+  const skipped: OneClickSkip[] = []
+  for (const item of asList(state.value?.models)) {
+    if (!item.meta.probed_at) {
+      skipped.push({ model: item.model, reason: 'notProbed' })
+      continue
+    }
+    if (!item.meta.pinnable) {
+      skipped.push({ model: item.model, reason: 'notPinnable' })
+      continue
+    }
+    const channel = recommendedChannel(item)
+    if (!channel) {
+      skipped.push({ model: item.model, reason: 'noVendorChannel' })
+      continue
+    }
+    pinnable.push({ model: item.model, channel })
+  }
+  return { pinnable, skipped }
+})
+
+function openOneClick() {
+  oneClickOpen.value = true
+}
+
+async function applyOneClick() {
+  if (!selectedAccountId.value || !state.value) return
+  saving.value = true
+  try {
+    const pins: Record<string, ClineUpstreamPin> = {}
+    const recommended = new Map(oneClickPlan.value.pinnable.map((row) => [row.model, row.channel]))
+    for (const item of asList(state.value.models)) {
+      const channel = recommended.get(item.model)
+      if (channel) {
+        pins[item.model] = { mode: 'strict', upstreams: [channel], exclude: [], sort: item.pin?.sort || '' }
+        continue
+      }
+      // 未被推荐的模型保留原配置，避免一键操作顺手清掉手工设置。
+      const current = item.pin
+      const isEmpty = current.mode === 'off' && !current.upstreams.length && !current.exclude.length && !current.sort
+      if (!isEmpty) pins[item.model] = { ...current }
+    }
+    state.value = normalizeState(await updateClineUpstreams(selectedAccountId.value, pins))
+    appStore.showSuccess(t('admin.clineUpstream.oneClick.applied', { count: oneClickPlan.value.pinnable.length }))
+    oneClickOpen.value = false
+  } catch (error) {
+    appStore.showError(errorMessage(error, t('admin.clineUpstream.messages.saveFailed')))
+  } finally {
+    saving.value = false
   }
 }
 

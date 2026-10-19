@@ -109,6 +109,83 @@ describe('ClineUpstreamView', () => {
     expect(wrapper.text()).toContain('cline-pass/deepseek-v4-flash')
   })
 
+  it('plans one-click vendor pinning and skips what it cannot pin', async () => {
+    mocks.getClineUpstreams.mockResolvedValue(
+      stateFixture({
+        models: [
+          {
+            model: 'cline-pass/deepseek-v4-pro',
+            source: 'subscription',
+            pin: { mode: 'off', upstreams: [], exclude: [], sort: '' },
+            meta: { pipeline: 'planner', pinnable: true, upstreams: ['alibaba', 'deepseek'], statuses: {}, last_provider: 'deepseek', canonical_slug: 'deepseek/deepseek-v4-pro', last_error: '', harvest_note: '', response_model: '', routing_raw: '', probed_at: 1, validated_at: 0 },
+            candidates: [],
+            configured: false
+          },
+          {
+            model: 'cline-pass/deepseek-v4.1-flash',
+            source: 'subscription',
+            pin: { mode: 'off', upstreams: [], exclude: [], sort: '' },
+            meta: { pipeline: 'planner', pinnable: false, upstreams: ['openai-compatible-private'], statuses: {}, last_provider: 'openai-compatible-private', canonical_slug: 'private/deepseek-v4p1-flash-contributor', last_error: '', harvest_note: 'single upstream', response_model: '', routing_raw: '', probed_at: 1, validated_at: 0 },
+            candidates: [],
+            configured: false
+          },
+          {
+            model: 'cline-pass/glm-5.3',
+            source: 'subscription',
+            pin: { mode: 'off', upstreams: [], exclude: [], sort: '' },
+            meta: { pipeline: 'planner', pinnable: true, upstreams: ['baseten'], statuses: {}, last_provider: 'baseten', canonical_slug: 'zai/glm-5.3', last_error: '', harvest_note: '', response_model: '', routing_raw: '', probed_at: 1, validated_at: 0 },
+            candidates: [],
+            configured: false
+          }
+        ]
+      })
+    )
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="cline-upstream-one-click"]').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.text()
+    // deepseek-v4-pro 池里有 deepseek -> 钉住；4.1-flash 单一上游 -> 跳过；glm 池里没有 zai/alibaba -> 跳过
+    expect(dialog).toContain('oneClick.summary')
+    await wrapper.get('[data-testid="cline-upstream-one-click-apply"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateClineUpstreams).toHaveBeenCalledTimes(1)
+    const [, pins] = mocks.updateClineUpstreams.mock.calls[0]
+    expect(pins['cline-pass/deepseek-v4-pro']).toMatchObject({ mode: 'strict', upstreams: ['deepseek'] })
+    expect(pins['cline-pass/deepseek-v4.1-flash']).toBeUndefined()
+    expect(pins['cline-pass/glm-5.3']).toBeUndefined()
+  })
+
+  it('reports that the pin was not adopted when another channel served it', async () => {
+    mocks.testClineUpstreams.mockResolvedValue({
+      model: 'cline-pass/deepseek-v4.1-flash',
+      ok: false,
+      adherence: 'not-adopted',
+      error: 'pin not adopted: served by openai-compatible-private',
+      ms: 42,
+      pipeline: 'planner',
+      actual_provider: 'openai-compatible-private',
+      actual_provider_name: 'openai-compatible-private',
+      canonical_slug: '',
+      content: 'OK',
+      targets: ['deepseek'],
+      exclude: [],
+      candidates: ['deepseek']
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="cline-upstream-row-cline-pass/deepseek-v4-flash"] button.btn-primary').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="cline-upstream-test"]').trigger('click')
+    await flushPromises()
+
+    const adherence = wrapper.get('[data-testid="cline-upstream-adherence"]')
+    expect(adherence.text()).toContain('adherence.notAdopted')
+    expect(wrapper.text()).toContain('pin not adopted')
+  })
+
   it('renders null list fields from the API without crashing', async () => {
     // Go 把 nil slice 序列化成 null；页面必须容忍（曾经抛 Cannot read properties of null）
     mocks.getClineUpstreams.mockResolvedValue(

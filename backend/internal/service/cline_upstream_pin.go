@@ -57,6 +57,9 @@ const (
 	ClineUpstreamStatusBad     = "bad"
 	ClineUpstreamStatusAuth    = "auth"
 	ClineUpstreamStatusUnknown = "unknown"
+	// ClineUpstreamStatusNotAdopted 表示请求成功但由别的渠道服务：钉住没生效。
+	// 这是唯一能识破「网关静默丢弃 only」的判定，200 本身不是证据。
+	ClineUpstreamStatusNotAdopted = "not-adopted"
 
 	// clineUpstreamMaxListLen 限制单个列表长度，避免异常配置无限放大请求体。
 	clineUpstreamMaxListLen = 16
@@ -242,15 +245,15 @@ func injectClineUpstreamPrefs(body []byte, pin ClineUpstreamPin, meta ClineUpstr
 	if useGateway {
 		if len(wanted) > 0 {
 			if pin.Mode == ClinePinModeStrict {
-				out = setClineJSONField(out, "providerOptions.gateway.only", []string{wanted[0]})
+				out = setClineJSONField(out, "providerOptions.gateway.only", clineChannelsForPipeline(wanted[:1], ClinePipelinePlanner))
 			} else {
-				out = setClineJSONField(out, "providerOptions.gateway.order", wanted)
+				out = setClineJSONField(out, "providerOptions.gateway.order", clineChannelsForPipeline(wanted, ClinePipelinePlanner))
 				if len(allow) > 0 {
-					out = setClineJSONField(out, "providerOptions.gateway.only", allow)
+					out = setClineJSONField(out, "providerOptions.gateway.only", clineChannelsForPipeline(allow, ClinePipelinePlanner))
 				}
 			}
 		} else if len(allow) > 0 {
-			out = setClineJSONField(out, "providerOptions.gateway.only", allow)
+			out = setClineJSONField(out, "providerOptions.gateway.only", clineChannelsForPipeline(allow, ClinePipelinePlanner))
 		}
 		if sort := clineGatewaySort(pin.Sort); sort != "" {
 			out = setClineJSONField(out, "providerOptions.gateway.sort", sort)
@@ -260,21 +263,30 @@ func injectClineUpstreamPrefs(body []byte, pin ClineUpstreamPin, meta ClineUpstr
 	if useOpenRouter {
 		if len(wanted) > 0 {
 			if pin.Mode == ClinePinModeStrict {
-				out = setClineJSONField(out, "provider.only", []string{wanted[0]})
+				out = setClineJSONField(out, "provider.only", clineChannelsForPipeline(wanted[:1], ClinePipelineDirect))
 			} else {
-				out = setClineJSONField(out, "provider.order", wanted)
+				out = setClineJSONField(out, "provider.order", clineChannelsForPipeline(wanted, ClinePipelineDirect))
 				if len(allow) > 0 {
-					out = setClineJSONField(out, "provider.only", allow)
+					out = setClineJSONField(out, "provider.only", clineChannelsForPipeline(allow, ClinePipelineDirect))
 				}
 			}
 		} else if len(allow) > 0 {
-			out = setClineJSONField(out, "provider.only", allow)
+			out = setClineJSONField(out, "provider.only", clineChannelsForPipeline(allow, ClinePipelineDirect))
 		}
 		if sort := clineOpenRouterSort(pin.Sort); sort != "" {
 			out = setClineJSONField(out, "provider.sort", sort)
 		}
 	}
 
+	return out
+}
+
+// clineChannelsForPipeline 把一组渠道名翻译成目标管道的拼写。
+func clineChannelsForPipeline(names []string, pipeline string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, clineChannelNameForPipeline(name, pipeline))
+	}
 	return out
 }
 
@@ -285,6 +297,97 @@ func setClineJSONField(body []byte, path string, value any) []byte {
 		return body
 	}
 	return next
+}
+
+// normalizeClineSlug 把渠道名归一成可比较形式：两条管道对同一渠道的写法不同
+// （"Together AI" vs togetherai、zai vs z-ai），必须归一后再比较。
+func normalizeClineSlug(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// clineChannelAliases 是两条管道拼写不同的渠道，[planner, direct] 成对。
+// 直接管道把 only 透传给 OpenRouter，未知渠道会被拒绝而不是忽略，所以拼错名字
+// 会让一个本来能成功的请求失败。
+var clineChannelAliases = [][2]string{{"zai", "z-ai"}}
+
+// clineChannelNameForPipeline 把配置里的渠道名翻译成目标管道使用的拼写。
+func clineChannelNameForPipeline(name, pipeline string) string {
+	needle := normalizeClineSlug(name)
+	for _, pair := range clineChannelAliases {
+		if normalizeClineSlug(pair[0]) == needle {
+			if pipeline == ClinePipelineDirect {
+				return pair[1]
+			}
+			return pair[0]
+		}
+		if normalizeClineSlug(pair[1]) == needle {
+			if pipeline == ClinePipelinePlanner {
+				return pair[0]
+			}
+			return pair[1]
+		}
+	}
+	return name
+}
+
+// ClinePinAdherence 报告一次请求是否真的按钉住执行。
+//
+// 200 不能作为证据：网关会静默丢弃无法识别的 only，然后自己挑一个渠道服务。
+// 唯一诚实的判据是响应里回读到的实际渠道。
+type ClinePinAdherence string
+
+const (
+	// ClineAdherenceAdopted 由钉住的渠道服务。
+	ClineAdherenceAdopted ClinePinAdherence = "adopted"
+	// ClineAdherenceFallback 由候选列表里的其它渠道服务（preferred 模式的正常回退）。
+	ClineAdherenceFallback ClinePinAdherence = "fallback"
+	// ClineAdherenceNotAdopted 由候选之外的渠道服务：钉住被忽略了。
+	ClineAdherenceNotAdopted ClinePinAdherence = "not-adopted"
+	// ClineAdherenceViolated 由被排除的渠道服务：排除规则被忽略。
+	ClineAdherenceViolated ClinePinAdherence = "violated"
+	// ClineAdherenceUnresolved 没有钉住目标，或响应没声明实际渠道，无法判定。
+	ClineAdherenceUnresolved ClinePinAdherence = "unresolved"
+)
+
+// EvaluateClinePinAdherence 比较钉住意图与响应回读到的实际渠道。
+func EvaluateClinePinAdherence(pin ClineUpstreamPin, actualProvider string) ClinePinAdherence {
+	actual := normalizeClineSlug(actualProvider)
+	expected := ""
+	if len(pin.Upstreams) > 0 && (pin.Mode == ClinePinModeStrict || pin.Mode == ClinePinModePreferred) {
+		expected = pin.Upstreams[0]
+	}
+	excluded := make(map[string]struct{}, len(pin.Exclude))
+	for _, name := range pin.Exclude {
+		excluded[normalizeClineSlug(name)] = struct{}{}
+	}
+	if actual != "" {
+		if _, isExcluded := excluded[actual]; isExcluded {
+			return ClineAdherenceViolated
+		}
+	}
+	if actual == "" || expected == "" {
+		return ClineAdherenceUnresolved
+	}
+	if actual == normalizeClineSlug(expected) {
+		return ClineAdherenceAdopted
+	}
+	for _, name := range pin.Upstreams[1:] {
+		if actual == normalizeClineSlug(name) {
+			return ClineAdherenceFallback
+		}
+	}
+	return ClineAdherenceNotAdopted
+}
+
+// ClinePinAdherenceOK 报告该判定是否算「钉住被遵守或无法判定」。
+func ClinePinAdherenceOK(adherence ClinePinAdherence) bool {
+	return adherence != ClineAdherenceNotAdopted && adherence != ClineAdherenceViolated
 }
 
 // clineGatewaySort 返回 Vercel AI Gateway 的排序取值（原样）。
@@ -374,7 +477,7 @@ func normalizeClineSort(sort string) string {
 func normalizeClineUpstreamStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case ClineUpstreamStatusOK, ClineUpstreamStatusLimited, ClineUpstreamStatusBad,
-		ClineUpstreamStatusAuth, ClineUpstreamStatusUnknown:
+		ClineUpstreamStatusAuth, ClineUpstreamStatusUnknown, ClineUpstreamStatusNotAdopted:
 		return strings.ToLower(strings.TrimSpace(status))
 	default:
 		return ClineUpstreamStatusUnknown

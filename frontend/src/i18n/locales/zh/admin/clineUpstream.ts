@@ -67,7 +67,8 @@ export default {
       limited: '限流',
       bad: '不可钉',
       auth: '密钥异常',
-      unknown: '未知'
+      unknown: '未知',
+      notAdopted: '未采纳'
     },
     actions: {
       configure: '配置',
@@ -128,6 +129,29 @@ export default {
       responseModel: '响应模型',
       routingRaw: '网关路由元数据',
       statuses: '各渠道状态'
+    },
+    adherence: {
+      adopted: '钉住已生效——由被钉渠道服务',
+      fallback: '钉住已生效——由回退渠道服务',
+      notAdopted: '钉住未生效——由其它渠道服务',
+      violated: '被排除的渠道仍在服务',
+      unresolved: '无法判定——响应未声明实际渠道'
+    },
+    oneClick: {
+      button: '一键钉住官方渠道',
+      title: '一键把模型钉到厂商直供渠道',
+      description:
+        '只对「已探测出渠道池、且池里确实有该厂商直供渠道」的模型执行严格钉住；其余一律跳过并逐条列出，不会改动。',
+      summary: '将钉住 {pinned} 个模型，跳过 {skipped} 个',
+      columns: { model: '模型', channel: '将钉住的渠道' },
+      skip: {
+        notProbed: '跳过——尚未探测',
+        notPinnable: '跳过——单一上游，无法钉住',
+        noVendorChannel: '跳过——该模型的渠道里没有厂商直供'
+      },
+      nothingToDo: '暂无可钉模型：请先探测，或没有任何模型暴露厂商直供渠道。',
+      apply: '应用',
+      applied: '已钉住 {count} 个模型'
     },
     messages: {
       saved: '钉住配置已保存',

@@ -146,8 +146,10 @@ type ClineUpstreamValidateResult struct {
 
 // ClineUpstreamTestResult 是单次钉住验证结果。
 type ClineUpstreamTestResult struct {
-	Model              string   `json:"model"`
-	OK                 bool     `json:"ok"`
+	Model string `json:"model"`
+	OK    bool   `json:"ok"`
+	// Adherence 报告这次请求是否真的按钉住执行：adopted/fallback/not-adopted/violated/unresolved。
+	Adherence          string   `json:"adherence"`
 	Error              string   `json:"error,omitempty"`
 	MS                 int64    `json:"ms"`
 	Pipeline           string   `json:"pipeline"`
@@ -341,7 +343,12 @@ func (s *ClineUpstreamService) Validate(ctx context.Context, accountID int64, mo
 	summary := map[string]int{}
 	merged := map[string]any{}
 	for upstream, status := range statuses {
-		summary[status.Status]++
+		// not-adopted 单独成列会让「不可用」被拆成两个数字；按 bad 汇总，行上保留精确判定。
+		bucket := status.Status
+		if bucket == ClineUpstreamStatusNotAdopted {
+			bucket = ClineUpstreamStatusBad
+		}
+		summary[bucket]++
 		merged[upstream] = map[string]any{
 			"status":     status.Status,
 			"ms":         status.MS,
@@ -425,13 +432,19 @@ func (s *ClineUpstreamService) Test(ctx context.Context, accountID int64, model 
 		return result, nil
 	}
 	routing := parseClineUpstreamRouting(respBody)
-	result.OK = true
 	result.ActualProvider = routing.finalProvider
 	result.ActualProviderName = routing.finalProviderName
 	result.CanonicalSlug = routing.canonicalSlug
 	result.Content = truncate(routing.content, 120)
 	if routing.pipeline != "" {
 		result.Pipeline = routing.pipeline
+	}
+	// 钉住是否被采纳才是这次测试要回答的问题：由别的渠道服务就是没生效。
+	adherence := EvaluateClinePinAdherence(clean, routing.finalProvider)
+	result.Adherence = string(adherence)
+	result.OK = ClinePinAdherenceOK(adherence)
+	if !result.OK {
+		result.Error = "pin not adopted: served by " + firstNonEmpty(routing.finalProvider, "(unknown)")
 	}
 	return result, nil
 }
@@ -736,7 +749,19 @@ func (s *ClineUpstreamService) validateUpstreams(ctx context.Context, account *A
 				entry.Status = ClineUpstreamStatusUnknown
 				entry.Note = truncate(callErr.Error(), 160)
 			case status >= 200 && status < 300:
-				entry.Status = ClineUpstreamStatusOK
+				// 200 不是钉住生效的证据：网关会静默丢弃无法识别的 only 并自行选渠道。
+				// 唯一诚实的判据是响应回读到的实际渠道是否就是被钉的那一个。
+				actual := parseClineUpstreamRouting(respBody).finalProvider
+				switch {
+				case actual == "":
+					entry.Status = ClineUpstreamStatusUnknown
+					entry.Note = "response did not name the serving channel; the pin could not be verified"
+				case normalizeClineSlug(actual) == normalizeClineSlug(upstream):
+					entry.Status = ClineUpstreamStatusOK
+				default:
+					entry.Status = ClineUpstreamStatusNotAdopted
+					entry.Note = truncate("pin not adopted: served by "+actual, 160)
+				}
 			default:
 				message := clineUpstreamErrorMessage(status, respBody)
 				entry.Status = classifyClineUpstreamError(message)

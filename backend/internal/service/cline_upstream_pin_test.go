@@ -482,3 +482,40 @@ func TestParseClineUpstreamRoutingCapturesRawEvidence(t *testing.T) {
 	require.Contains(t, routing.routingRaw, "openai-compatible-private")
 	require.Contains(t, routing.routingRaw, "single private provider")
 }
+
+// TestEvaluateClinePinAdherence 覆盖「200 不代表钉住生效」的判定。
+func TestEvaluateClinePinAdherence(t *testing.T) {
+	strict := ClineUpstreamPin{Mode: ClinePinModeStrict, Upstreams: []string{"deepseek"}}
+	preferred := ClineUpstreamPin{Mode: ClinePinModePreferred, Upstreams: []string{"deepseek", "baseten"}}
+	excluded := ClineUpstreamPin{Mode: ClinePinModeStrict, Upstreams: []string{"deepseek"}, Exclude: []string{"novita"}}
+	auto := ClineUpstreamPin{Mode: ClinePinModeOff}
+
+	require.Equal(t, ClineAdherenceAdopted, EvaluateClinePinAdherence(strict, "deepseek"))
+	// 两条管道拼写不同也必须判为采纳
+	require.Equal(t, ClineAdherenceAdopted, EvaluateClinePinAdherence(
+		ClineUpstreamPin{Mode: ClinePinModeStrict, Upstreams: []string{"zai"}}, "z-ai"))
+	require.Equal(t, ClineAdherenceFallback, EvaluateClinePinAdherence(preferred, "baseten"))
+	// 私有路由忽略 only：请求 200 但由别的渠道服务
+	require.Equal(t, ClineAdherenceNotAdopted, EvaluateClinePinAdherence(strict, "openai-compatible-private"))
+	require.Equal(t, ClineAdherenceViolated, EvaluateClinePinAdherence(excluded, "novita"))
+	require.Equal(t, ClineAdherenceUnresolved, EvaluateClinePinAdherence(strict, ""))
+	require.Equal(t, ClineAdherenceUnresolved, EvaluateClinePinAdherence(auto, "deepseek"))
+
+	require.True(t, ClinePinAdherenceOK(ClineAdherenceAdopted))
+	require.True(t, ClinePinAdherenceOK(ClineAdherenceFallback))
+	require.False(t, ClinePinAdherenceOK(ClineAdherenceNotAdopted))
+	require.False(t, ClinePinAdherenceOK(ClineAdherenceViolated))
+}
+
+// TestInjectClineUpstreamPrefsUsesPipelineSpelling 覆盖两条管道的渠道名拼写差异：
+// 直连管道把 only 透传给 OpenRouter，未知渠道会被拒绝而不是忽略。
+func TestInjectClineUpstreamPrefsUsesPipelineSpelling(t *testing.T) {
+	pin := ClineUpstreamPin{Mode: ClinePinModeStrict, Upstreams: []string{"zai"}}
+	body := clineTestBody()
+
+	planner := injectClineUpstreamPrefs(body, pin, ClineUpstreamMeta{Pipeline: ClinePipelinePlanner})
+	require.Equal(t, []any{"zai"}, gjson.GetBytes(planner, "providerOptions.gateway.only").Value())
+
+	direct := injectClineUpstreamPrefs(body, pin, ClineUpstreamMeta{Pipeline: ClinePipelineDirect})
+	require.Equal(t, []any{"z-ai"}, gjson.GetBytes(direct, "provider.only").Value())
+}

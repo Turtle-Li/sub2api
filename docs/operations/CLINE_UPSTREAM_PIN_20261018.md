@@ -203,6 +203,57 @@ preserves:
 | Gateway ignored the restriction and answered | Single upstream; the observed provider is recorded | `false` |
 | Other error | Raw error kept in the harvest note | `false` |
 
+## A 200 is not evidence the pin was adopted
+
+The gateway silently drops a pin it cannot honour (an unknown `only` value, or a
+model with no provider pool) and then serves the request from wherever it likes.
+So a successful response says nothing about whether the pin worked.
+
+The only honest test is the channel the response reports, compared against what
+was pinned. Every verdict carries this comparison:
+
+| Adherence | Meaning |
+| --- | --- |
+| `adopted` | Served by the pinned channel |
+| `fallback` | Served by another channel in the selected order (`preferred` working as intended) |
+| `not-adopted` | Served by a channel that was **not** selected — the pin was ignored |
+| `violated` | Served by an **excluded** channel — the exclusion was ignored |
+| `unresolved` | No pin target, or the response named no channel |
+
+This is why `校验` (validate) marks a channel usable **only** when the response
+names that channel. The earlier rule — "any 2xx counts as available" — reported
+every channel as available on a model whose pin is ignored, and those false
+verdicts then fed the exclusion allow-list. `not-adopted` is counted as `bad` in
+the summary while the exact verdict stays on the row. `测试` (test) leads with
+the adherence verdict, so "did my pin actually take effect?" is answered
+directly rather than being left to the reader.
+
+The two pipelines also spell one channel differently (`zai` on the Vercel
+gateway vs `z-ai` on OpenRouter). The injection translates the configured name
+into the spelling of the target pipeline, because the direct pipeline passes
+`only` through to OpenRouter, where an unknown provider is **refused** rather
+than ignored — the wrong spelling fails a request the right one would serve.
+
+## One-click vendor pinning
+
+`一键钉住官方渠道` (Pin vendor channels) strict-pins every model whose probed
+channel list actually contains its vendor's channel, and lists everything else
+as skipped:
+
+- model family → channel alias (`deepseek` → `deepseek`, `qwen` → `alibaba`,
+  `glm` → `zai`/`alibaba`, `kimi` → `moonshot`, `minimax` → `minimax`,
+  `mimo` → `xiaomi`), then the canonical slug's vendor prefix, then the model id
+  family;
+- a model is skipped when it has not been probed, when it is not pinnable
+  (single upstream), or when its list has no vendor channel;
+- **the preview is mandatory**: the dialog lists exactly which model gets which
+  channel and why the others are skipped, before anything is written;
+- models that are not recommended keep their existing configuration untouched,
+  so the action never clears a hand-made pin.
+
+It is a convenience over the same API — nothing about it is a separate code
+path, and it cannot pin a model that has no selectable pool.
+
 ## Admin API
 
 All under the existing admin auth + audit + compliance middleware:
