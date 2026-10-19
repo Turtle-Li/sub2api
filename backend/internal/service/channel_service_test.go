@@ -932,6 +932,25 @@ func TestResolveChannelMapping_ExactMapping(t *testing.T) {
 	require.Equal(t, int64(1), result.ChannelID)
 }
 
+func TestResolveChannelMapping_IdentityMappingIsNotARewrite(t *testing.T) {
+	ch := Channel{
+		ID:       1,
+		Status:   StatusActive,
+		GroupIDs: []int64{10},
+		ModelMapping: map[string]map[string]string{
+			"openai": {"gpt-5.6-sol": "gpt-5.6-sol"},
+		},
+	}
+	repo := makeStandardRepo(ch, map[int64]string{10: "openai"})
+	svc := newTestChannelService(repo)
+
+	result := svc.ResolveChannelMapping(context.Background(), 10, "gpt-5.6-sol")
+	require.False(t, result.Mapped)
+	require.Equal(t, "gpt-5.6-sol", result.MappedModel)
+	require.Equal(t, int64(1), result.ChannelID)
+	require.Empty(t, result.BuildModelMappingChain("gpt-5.6-sol", "gpt-5.6-sol"))
+}
+
 func TestResolveChannelMapping_WildcardMapping(t *testing.T) {
 	ch := Channel{
 		ID:       1,

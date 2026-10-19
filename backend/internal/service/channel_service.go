@@ -616,7 +616,9 @@ func resolveMapping(lk *channelLookup, groupID int64, model string) ChannelMappi
 	}
 
 	modelLower := strings.ToLower(model)
-	if mapped := lookupMappingAcrossPlatforms(lk.cache, groupID, lk.platform, modelLower); mapped != "" {
+	// An identity entry (model → same model) only lists the model on the channel
+	// (e.g. for the model plaza); it must not count as a rewrite.
+	if mapped := lookupMappingAcrossPlatforms(lk.cache, groupID, lk.platform, modelLower); mapped != "" && mapped != model {
 		result.MappedModel = mapped
 		result.Mapped = true
 	}
