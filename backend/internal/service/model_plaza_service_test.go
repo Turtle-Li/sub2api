@@ -510,8 +510,8 @@ func TestListGroups_TimePricingPassthrough(t *testing.T) {
 	require.InDelta(t, 0.28e-6, *m.Pricing.InputPrice, 1e-15)
 }
 
-func TestListPlazaGroups_HidesSurchargedOpenAIModels(t *testing.T) {
-	// 带隐藏扣费倍率或售价倍率的模型（6.1 sol、luna 等）暂不进入模型广场。
+func TestListPlazaGroups_ShowsSurchargedOpenAIModels(t *testing.T) {
+	// 隐藏扣费倍率只作用于结算，模型照常在广场按售价展示。
 	channels := []Channel{
 		plazaPricedChannel(1, "openai", []int64{10}, "openai", "gpt-5.5", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-6-luna"),
 	}
@@ -519,8 +519,7 @@ func TestListPlazaGroups_HidesSurchargedOpenAIModels(t *testing.T) {
 	out, err := newPlazaService(channels, groups, nil).ListGroups(context.Background())
 	require.NoError(t, err)
 	require.Len(t, out, 1)
-	require.Len(t, out[0].Models, 1)
-	require.Equal(t, "gpt-5.5", out[0].Models[0].Name)
+	require.Len(t, out[0].Models, 6)
 }
 
 func TestPlazaDisplayCurrency_MatchesSettlement(t *testing.T) {

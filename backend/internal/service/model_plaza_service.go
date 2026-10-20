@@ -184,7 +184,7 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 				} else if m.Platform != pg.Platform {
 					continue
 				}
-				if s.hidesSurchargedModel(m.Name) || ch.IsModelHiddenFromPlaza(m.Name) {
+				if ch.IsModelHiddenFromPlaza(m.Name) {
 					continue
 				}
 				key := modelKey{platform: m.Platform, name: m.Name}
@@ -259,17 +259,6 @@ func plazaDisplayCurrency(policy PricingCurrencySettings, g *Group) (string, flo
 		return "CNY", 1
 	}
 	return policy.SettlementCurrency, policy.USDToCNYRate
-}
-
-// hidesSurchargedModel 隐藏带内部加价的模型（OpenAI 隐藏扣费倍率或售价倍率，
-// 如 gpt-6.1-sol、luna 系列）：这些模型的对外定价尚未确定，暂不进入模型广场。
-// 只影响展示，不影响计费与调度。
-func (s *ModelPlazaService) hidesSurchargedModel(model string) bool {
-	multiplier := openAIConsumptionMultiplier(model)
-	if s.billingService != nil && s.billingService.settingService != nil {
-		multiplier = s.billingService.settingService.OpenAIConsumptionMultiplier(model)
-	}
-	return multiplier != 1 || openAIModelPriceMultiplier(model) != 1
 }
 
 // fillDisplayPricing 把模型的展示定价换成实收口径：
