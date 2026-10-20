@@ -133,8 +133,8 @@ describe('SupportedModelChip', () => {
     await nextTick()
 
     // PricingRow 覆盖基础字段；popover 中的阶梯行走同一结算配置。
-    expect(document.body.textContent).toContain('¥67.5')
-    expect(document.body.textContent).toContain('¥135 / ¥506.25')
+    expect(document.body.textContent).toContain('$67.5')
+    expect(document.body.textContent).toContain('$135 / $506.25')
     expect(document.body.textContent).not.toContain('$20 / $75')
     wrapper.unmount()
   })
@@ -148,9 +148,9 @@ describe('SupportedModelChip', () => {
     await wrapper.find('[tabindex="0"]').trigger('mouseenter')
     await nextTick()
 
-    expect(document.body.textContent).toContain('¥10')
-    expect(document.body.textContent).toContain('¥20 / ¥75')
-    expect(document.body.textContent).not.toContain('¥67.5')
+    expect(document.body.textContent).toContain('$10')
+    expect(document.body.textContent).toContain('$20 / $75')
+    expect(document.body.textContent).not.toContain('$67.5')
     wrapper.unmount()
   })
 })

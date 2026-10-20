@@ -46,7 +46,7 @@ export function formatTokenPricePerMillion(
 
   const fractionDigits = options.fractionDigits ?? 4
   const formatted = pricePerMillion.toFixed(fractionDigits)
-  return options.withCurrencySymbol == false ? formatted : `${options.currency === 'CNY' ? '¥' : '$'}${formatted}`
+  return options.withCurrencySymbol == false ? formatted : `$${formatted}`
 }
 
 // Owner-requested reference display: keep the historical dollar marker and raw

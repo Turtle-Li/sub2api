@@ -839,7 +839,7 @@ function usageTotal(value: number | null | undefined): string {
 
 function quotaMoney(value: number | null | undefined): string {
   if (value == null || value < 0) return '-'
-  return (resultData.value?.unit === 'CNY' ? '¥' : '$') + Number(value).toFixed(2)
+  return '$' + Number(value).toFixed(2)
 }
 
 function fmtNum(val: number | null | undefined): string {

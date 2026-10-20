@@ -228,8 +228,15 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 			pg.DisplayCurrency, pg.DisplayUSDRate = plazaDisplayCurrency(*policy, g)
 		}
 		for j := range pg.Models {
+			card := pg.Models[j].Pricing
+			if groupPricing := matchGroupModelPricing(g, pg.Models[j].Name); groupPricing != nil {
+				card = groupPricing
+			}
 			s.fillDisplayPricing(ctx, &pg.Models[j], g)
 			pg.Models[j].OfficialPricing = s.lookupOfficialPricing(ctx, pg.Models[j].Name, officialMemo)
+			if official := s.officialPricingFromCNYCard(card); official != nil {
+				pg.Models[j].OfficialPricing = official
+			}
 		}
 		out = append(out, *pg)
 	}
@@ -275,6 +282,10 @@ func (s *ModelPlazaService) fillDisplayPricing(ctx context.Context, m *PlazaMode
 	if s.billingService != nil {
 		m.Pricing = s.billingService.pricingCardInUSD(m.Pricing)
 	}
+	if s.showsGroupImagePricing(ctx, m, g) {
+		m.Pricing = s.plazaGroupImagePricing(m.Name, g)
+		return
+	}
 	if s.billingService != nil && s.resolver != nil {
 		sched, err := s.billingService.ResolveContextPricingSchedule(ctx, s.resolver, ContextPricingScheduleInput{
 			Model:    m.Name,
@@ -291,6 +302,62 @@ func (s *ModelPlazaService) fillDisplayPricing(ctx context.Context, m *PlazaMode
 		}
 	}
 	m.Pricing = plazaImageDisplayPricing(m.Pricing, g)
+}
+
+// showsGroupImagePricing 报告图片生成模型是否按张计费（与扣费口径一致）：
+// 没有管理员显式配置的分组/渠道价卡时，图片请求按分组 1K/2K/4K 单价（未配则默认价）计费，
+// 广场此时应展示按张价而不是目录里的 token 价。
+func (s *ModelPlazaService) showsGroupImagePricing(ctx context.Context, m *PlazaModel, g *Group) bool {
+	if s.billingService == nil || s.resolver == nil || g == nil || !s.isImageGenerationModel(m.Name) {
+		return false
+	}
+	resolved := s.resolver.Resolve(ctx, PricingInput{Model: m.Name, GroupID: &g.ID, Group: g})
+	return resolved == nil || (resolved.Source != PricingSourceGroup && resolved.Source != PricingSourceChannel)
+}
+
+func (s *ModelPlazaService) isImageGenerationModel(model string) bool {
+	if IsGPTImageGenerationModel(model) || isImageGenerationModel(model) {
+		return true
+	}
+	if s.pricingService == nil {
+		return false
+	}
+	lp := s.pricingService.GetModelPricing(model)
+	return lp != nil && lp.Mode == "image_generation"
+}
+
+// plazaGroupImagePricing 按 CalculateImageCost 的单价规则给出 1K/2K/4K 按张价（USD，未乘倍率）。
+func (s *ModelPlazaService) plazaGroupImagePricing(model string, g *Group) *ChannelModelPricing {
+	cfg := &ImagePriceConfig{Price1K: g.ImagePrice1K, Price2K: g.ImagePrice2K, Price4K: g.ImagePrice4K}
+	out := &ChannelModelPricing{BillingMode: BillingModeImage}
+	for i, tier := range []string{"1K", "2K", "4K"} {
+		price := s.billingService.getImageUnitPrice(model, tier, cfg)
+		if price <= 0 {
+			continue
+		}
+		out.Intervals = append(out.Intervals, PricingInterval{TierLabel: tier, PerRequestPrice: &price, SortOrder: i})
+	}
+	return out
+}
+
+// officialPricingFromCNYCard 用人民币价卡作为国模的官方参考价：这类价卡按约定直接抄录
+// 厂商国内官网价，比目录里按汇率折算的美元价更准确（目录价换回人民币会出现 20.25 这类尾数）。
+func (s *ModelPlazaService) officialPricingFromCNYCard(card *ChannelModelPricing) *PlazaOfficialPricing {
+	if s.billingService == nil || card == nil || !strings.EqualFold(strings.TrimSpace(card.Currency), "CNY") ||
+		(card.BillingMode != "" && card.BillingMode != BillingModeToken) {
+		return nil
+	}
+	usd := s.billingService.pricingCardInUSD(card)
+	if usd.InputPrice == nil && usd.OutputPrice == nil {
+		return nil
+	}
+	return &PlazaOfficialPricing{
+		InputPrice:        usd.InputPrice,
+		OutputPrice:       usd.OutputPrice,
+		CacheWritePrice:   usd.CacheWritePrice,
+		CacheWrite1hPrice: usd.CacheWrite1hPrice,
+		CacheReadPrice:    usd.CacheReadPrice,
+	}
 }
 
 // plazaPricingFromSchedule 把阶梯表压成展示用的 ChannelModelPricing：

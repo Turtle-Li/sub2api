@@ -82,7 +82,7 @@ describe('UserDashboardStats currency display', () => {
     })
 
     expect(wrapper.text()).not.toContain('Historical usage contains multiple currencies and is not totaled.')
-    expect(wrapper.text()).toContain('¥67.50')
+    expect(wrapper.text()).toContain('$67.50')
     expect(wrapper.text()).toContain('42')
     expect(wrapper.text()).toContain('30')
     expect(wrapper.text()).toContain('$123.4567')

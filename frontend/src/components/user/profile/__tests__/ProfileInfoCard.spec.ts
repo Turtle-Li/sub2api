@@ -225,6 +225,6 @@ describe('ProfileInfoCard', () => {
       global: { stubs: { Icon: true } }
     })
 
-    expect(wrapper.get('[data-testid="profile-overview-metric-balance"]').text()).toContain('¥67.50')
+    expect(wrapper.get('[data-testid="profile-overview-metric-balance"]').text()).toContain('$67.50')
   })
 })

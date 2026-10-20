@@ -548,7 +548,7 @@ describe('user KeysView column settings', () => {
     const wrapper = await mountView()
 
     expect(wrapper.get('[data-test="key-usage-2"]').text()).toContain('$1.00 / $10.00')
-    expect(wrapper.get('[data-test="key-usage-3"]').text()).toContain('¥6.75 / ¥67.50')
+    expect(wrapper.get('[data-test="key-usage-3"]').text()).toContain('$6.75 / $67.50')
     expect(wrapper.get('[data-test="key-usage-3"]').text()).toContain('Mixed historical currencies')
   })
 

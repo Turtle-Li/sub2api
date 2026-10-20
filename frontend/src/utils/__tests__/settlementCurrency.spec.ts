@@ -15,7 +15,7 @@ describe('settlementCurrency', () => {
   })
 
   it('formats an already-migrated wallet amount without converting it again', () => {
-    expect(formatSettlementAmount(67.5, 'CNY')).toBe('¥67.50')
+    expect(formatSettlementAmount(67.5, 'CNY')).toBe('$67.50')
   })
 
   it('converts resolver/catalog USD prices only for a CNY price display', () => {

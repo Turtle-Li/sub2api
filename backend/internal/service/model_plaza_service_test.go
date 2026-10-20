@@ -558,3 +558,45 @@ func TestListPlazaGroups_HidesChannelConfiguredModels(t *testing.T) {
 	require.Len(t, out[0].Models, 1)
 	require.Equal(t, "deepseek-flash", out[0].Models[0].Name)
 }
+
+func TestListGroups_ImageModelShowsGroupPerImagePrices(t *testing.T) {
+	// 同名映射的生图模型按分组 1K/2K/4K 单价展示（未配的档回退默认价），而非目录 token 价。
+	channels := []Channel{{
+		ID: 1, Name: "ch", Status: StatusActive, GroupIDs: []int64{10},
+		ModelMapping: map[string]map[string]string{PlatformOpenAI: {"gpt-image-2": "gpt-image-2", "gpt-5.4": "gpt-5.4"}},
+	}}
+	groups := []Group{{ID: 10, Name: "g", Platform: PlatformOpenAI, RateMultiplier: 1,
+		ImagePrice1K: testPtrFloat64(0.2), ImagePrice2K: testPtrFloat64(0.3)}}
+	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: PlatformOpenAI},
+		newStubPricingServiceFromJSON(t, openAILadderCatalogJSON))
+	out, err := svc.ListGroups(context.Background())
+	require.NoError(t, err)
+	models := plazaModelsByName(out[0].Models)
+
+	image := models["gpt-image-2"].Pricing
+	require.Equal(t, BillingModeImage, image.BillingMode)
+	require.Len(t, image.Intervals, 3)
+	require.InDelta(t, 0.2, *image.Intervals[0].PerRequestPrice, 1e-12)
+	require.InDelta(t, 0.3, *image.Intervals[1].PerRequestPrice, 1e-12)
+	require.InDelta(t, defaultImageGenerationPrice*2, *image.Intervals[2].PerRequestPrice, 1e-12)
+	require.Equal(t, BillingModeToken, models["gpt-5.4"].Pricing.BillingMode)
+}
+
+func TestListGroups_CNYCardIsOfficialReference(t *testing.T) {
+	// 国模人民币价卡即官方价：官方参考价取价卡（换算为 USD 口径），不取目录折算价。
+	channels := []Channel{{
+		ID: 1, Name: "kimi", Status: StatusActive, GroupIDs: []int64{10},
+		ModelPricing: []ChannelModelPricing{{Platform: PlatformKimi, Models: []string{"kimi-k3"}, BillingMode: BillingModeToken,
+			Currency: "CNY", InputPrice: testPtrFloat64(20e-6), OutputPrice: testPtrFloat64(100e-6), CacheReadPrice: testPtrFloat64(2e-6)}},
+	}}
+	groups := []Group{{ID: 10, Name: "g", Platform: PlatformKimi, RateMultiplier: 0.35}}
+	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: PlatformKimi},
+		newStubPricingServiceFromJSON(t, openAILadderCatalogJSON))
+	out, err := svc.ListGroups(context.Background())
+	require.NoError(t, err)
+	official := out[0].Models[0].OfficialPricing
+	require.NotNil(t, official)
+	require.InDelta(t, 20e-6/6.75, *official.InputPrice, 1e-15)
+	require.InDelta(t, 100e-6/6.75, *official.OutputPrice, 1e-15)
+	require.InDelta(t, 2e-6/6.75, *official.CacheReadPrice, 1e-15)
+}

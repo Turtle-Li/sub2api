@@ -134,10 +134,10 @@ describe('PlazaModelPricingTable', () => {
     const text = wrapper.text()
 
     // 实付和官方参考价均为 resolver/catalog USD 数值，显示时一次性换算。
-    expect(text).toContain('¥20.25')
-    expect(text).toContain('¥101.25')
-    expect(text).toContain('¥25.3125')
-    expect(text).toContain('¥ / 1M tokens')
+    expect(text).toContain('$20.25')
+    expect(text).toContain('$101.25')
+    expect(text).toContain('$25.3125')
+    expect(text).toContain('$ / 1M tokens')
     expect(text).not.toContain('$3.00')
   })
 
@@ -148,9 +148,9 @@ describe('PlazaModelPricingTable', () => {
       displayUsdRate: 1
     })
     const text = wrapper.text()
-    expect(text).toContain('¥0.75')
-    expect(text).toContain('¥3.75')
-    expect(text).not.toContain('¥5.0625')
+    expect(text).toContain('$0.75')
+    expect(text).toContain('$3.75')
+    expect(text).not.toContain('$5.0625')
   })
 
   it('订阅分组按 USD 额度展示', () => {

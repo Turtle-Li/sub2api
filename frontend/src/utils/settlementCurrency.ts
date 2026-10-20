@@ -34,8 +34,11 @@ export function pricingCurrencyFromPublicSettings(
   }
 }
 
-export function settlementCurrencySymbol(currency: SettlementCurrency): '$' | '¥' {
-  return currency === 'CNY' ? '¥' : '$'
+// Owner decision (2026-10-20): wallet units are always shown with "$" even in
+// CNY settlement (¥1 paid = 1 unit; OpenAI/Claude rates are quoted against
+// official USD prices). Real payment amounts use components/payment/currency.ts.
+export function settlementCurrencySymbol(_currency: SettlementCurrency): '$' {
+  return '$'
 }
 
 /** Formats an amount that is already denominated in the active wallet unit. */
