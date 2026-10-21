@@ -1,8 +1,9 @@
 # ModelTrace mismatch actions
 
 Date: 2026-10-21. Source baseline: `0251c1c198a61af0740c5a1a465a1f4c0ae8b357`.
-Local implementation; submission, production deployment and live provider or
-Feishu tests are outside this validation.
+Implemented and validated locally on 2026-10-21; production release was
+authorized and verified on 2026-10-22 (Asia/Shanghai), as recorded below.
+Live fingerprint classification and Feishu delivery are outside validation.
 
 ## Behavior
 
@@ -108,5 +109,51 @@ accessibility snapshots in that directory, and
 `.omo/evidence/modeltrace-alerts-code-review.md`. Preview fixtures and captures
 use only synthetic localhost accounts and never load production credentials or
 send a webhook. Existing bundler/browser-data warnings are not expanded into
-unrelated dependency updates. Production deployment and live delivery remain
-unverified.
+unrelated dependency updates. Live fingerprint classification and Feishu
+delivery remain unverified.
+
+## Production release — 2026-10-22
+
+The owner explicitly requested commit, merge and release. The feature was
+fast-forwarded directly to `Turtle-Li/sub2api:main` as
+`6911947637d18634cbc723de089c3a0fea5237b7`, after the checks and independent
+review above. The release used the existing `aws-candidate` production
+environment, restricted image receiver and canonical blue-green/Caddy
+transaction; no deployment helper, credential, schema or policy setting was
+changed.
+
+- Workflow: [39639123498](https://github.com/Turtle-Li/sub2api/actions/runs/39639123498),
+  completed successfully. Image deployment and Caddy configuration both passed;
+  the latter completed at `2026-10-21T17:03:15Z` (01:03:15 on October 22 CST).
+- Target: `srv-aws-sub2api-candidate`, SSH alias `sub2api-aws-candidate`,
+  application root `/opt/sub2api`. Project deployment documents remain the
+  authority for operations and guarded rollback.
+- Active slot: `sub2api-blue`, version `0.2.17`, image
+  `sub2api:auto-20261021-100224-69119476`, exact source label matching the
+  feature commit. Image ID:
+  `sha256:f066f6a5ad52d7dab144ddfcdba59eb60bd6798bfaeeca7bd380a917f188cdc5`.
+- Verified image archive: 87,126,644 bytes, SHA-256
+  `62fac915de96d8ece93f97aaa5ce6373ad636acc6e8691324267c46d40bbec9a`.
+- Independent check at `2026-10-21T17:03:53Z`: container healthy, zero
+  restarts/OOM; host, startup and active Admin Caddy views all select blue;
+  traffic accepting and background active; no retained release transaction.
+  Authenticated liveness/readiness passed, including database/Redis readiness
+  and refund rollback readiness with zero pending reserved entitlements.
+- The release's authenticated real-request probe for `gpt-5.6-sol` returned
+  HTTP 200 for both Models and Responses. This is an ordinary forwarding
+  smoke, not a production fingerprint classification test.
+- Direct origin API/www health, homepage and login returned HTTP 200. Public
+  API/www health and www homepage/login also returned 200; anonymous Models
+  and ModelTrace global-configuration requests returned the expected 401.
+- Release audit: app 5xx, app fatal and Caddy 5xx counts all zero. Independent
+  startup log audit also found zero app 5xx/panic lines. Prior green exited
+  normally with code 0; its `0251c1c1` image remains available for the
+  canonical guarded rollback. No rollback was performed.
+- Host evidence:
+  `/var/log/sub2api-release/gha-20261021-100224-69119476-3941221`;
+  authenticated request results are in `switch.log`.
+
+Notification and scheduling-pause defaults remain off. Operators can configure
+the new global parameters after release. No live alert was sent or account
+paused for validation. The subsequent documentation-only commit records this
+deployment; it does not change the running feature commit above.
