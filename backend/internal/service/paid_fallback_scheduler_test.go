@@ -159,3 +159,36 @@ func TestPaidFallbackContinuationKeepsProviderState(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 2, id)
 }
+
+func TestPaidFallbackContinuationMissingAccountPreservesOrdinaryRouting(t *testing.T) {
+	for _, advanced := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "advanced"}[advanced], func(t *testing.T) {
+			svc, ctx, settings := newPaidFallbackScheduler(t, PlatformOpenAI, advanced)
+			settings.setPaidPolicy(`{"enabled":false}`)
+			require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(ctx, 7, "resp_deleted", 999, time.Minute))
+			groupID := int64(7)
+			selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "resp_deleted", "stateful", "gpt-5.4", nil, OpenAIUpstreamTransportHTTPSSE, "", false, false, false)
+			require.NoError(t, err)
+			require.EqualValues(t, 1, selection.Account.ID)
+			selection.ReleaseFunc()
+		})
+	}
+}
+
+func TestPaidFallbackExcludesNonTextCapabilities(t *testing.T) {
+	for _, capability := range []OpenAIEndpointCapability{OpenAIEndpointCapabilityEmbeddings, OpenAIEndpointCapabilityAlphaSearch} {
+		t.Run(string(capability), func(t *testing.T) {
+			svc, ctx, _ := newPaidFallbackScheduler(t, PlatformOpenAI, false)
+			repo := svc.accountRepo.(paidFallbackAccountRepo)
+			until := time.Now().Add(time.Hour)
+			repo.accounts[0].RateLimitResetAt = &until
+			groupID := int64(7)
+			selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "", "", "gpt-5.4", nil, OpenAIUpstreamTransportHTTPSSE, capability, false, false, false)
+			if selection != nil && selection.ReleaseFunc != nil {
+				defer selection.ReleaseFunc()
+			}
+			require.ErrorIs(t, err, ErrNoAvailableAccounts)
+			require.Nil(t, selection)
+		})
+	}
+}
