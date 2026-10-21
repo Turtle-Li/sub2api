@@ -391,6 +391,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
+	if !paidFallbackAccountInPool(ctx, account) {
+		return "paid_fallback_pool_mismatch"
+	}
 	// account_model composite routes publish an alias that only accounts with an
 	// explicit model mapping own. Both scheduler modes (advanced and legacy) must
 	// enforce ownership before any priority/sticky/transport consideration; a
@@ -1709,6 +1712,9 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
 	if err != nil || account == nil {
 		return account, err
 	}
+	if !paidFallbackAccountInPool(ctx, account) {
+		return nil, errPaidFallbackPoolMismatch
+	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, account) {
 		return nil, nil
 	}
@@ -1731,6 +1737,7 @@ func (s *OpenAIGatewayService) filterGrokFreeQuotaAccountsForOpenAI(ctx context.
 }
 
 func (s *OpenAIGatewayService) filterOpenAIAccountsBySchedulingThreshold(ctx context.Context, accounts []Account) []Account {
+	accounts = filterPaidFallbackPool(ctx, accounts)
 	if len(accounts) == 0 {
 		return accounts
 	}
@@ -1763,7 +1770,7 @@ func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, accou
 	if hydrated == nil {
 		return nil, fmt.Errorf("selected openai account %d not found during hydration", account.ID)
 	}
-	if !supportsHydratedAccountGroupModel(ctx, account, hydrated) {
+	if !paidFallbackAccountInPool(ctx, hydrated) || !supportsHydratedAccountGroupModel(ctx, account, hydrated) {
 		return nil, fmt.Errorf("%w (selected account model mapping changed during hydration)", ErrNoAvailableAccounts)
 	}
 	return hydrated, nil

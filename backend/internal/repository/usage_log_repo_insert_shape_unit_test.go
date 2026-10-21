@@ -129,7 +129,7 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	})
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
-	idx := len(prepared.args) - 5
+	idx := len(prepared.args) - 6
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)
@@ -150,7 +150,7 @@ func TestPrepareUsageLogInsert_SettlementCurrencyWiring(t *testing.T) {
 		Currency: "cny", CreatedAt: time.Now().UTC(),
 	})
 
-	currencyIdx := len(prepared.args) - 2
+	currencyIdx := len(prepared.args) - 3
 	require.Equal(t, "text", usageLogInsertArgTypes[currencyIdx])
 	require.Equal(t, service.PricingCurrencyCNY, prepared.args[currencyIdx])
 

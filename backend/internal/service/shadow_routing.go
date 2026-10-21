@@ -18,7 +18,7 @@ func parentHealthyForShadow(account *Account, lookup func(int64) *Account) bool 
 		return true
 	}
 	parent := lookup(*account.ParentAccountID)
-	if parent == nil {
+	if parent == nil || parent.IsPaidFallback() && !account.IsPaidFallback() {
 		return false
 	}
 	return parent.IsOpenAIOAuth() && parent.IsCredentialUsableForShadow()

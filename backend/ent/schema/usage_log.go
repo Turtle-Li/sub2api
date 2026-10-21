@@ -33,6 +33,7 @@ func (UsageLog) Annotations() []schema.Annotation {
 func (UsageLog) Fields() []ent.Field {
 	return []ent.Field{
 		// 关联字段
+		field.Bool("paid_fallback").Default(false),
 		field.Int64("user_id"),
 		field.Int64("api_key_id"),
 		field.Int64("account_id"),

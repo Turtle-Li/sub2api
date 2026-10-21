@@ -81,6 +81,14 @@ func (s *GatewayService) GatewayProfitControlVetoLatest(ctx context.Context, sel
 }
 
 func profitControlVetoLatest(ctx context.Context, selected *Account, snapshot *SchedulerSnapshotService) (*Account, bool, string) {
+	if fresh, available := refreshPaidFallbackAdmission(ctx, selected); !available {
+		return selected, true, "paid_fallback_account_unavailable"
+	} else {
+		selected = fresh
+	}
+	if reason := paidFallbackAdmissionFailure(ctx, selected); reason != "" {
+		return selected, true, reason
+	}
 	gate, _ := ctx.Value(openAIProfitControlGateCtxKey{}).(*openAIProfitControlGate)
 	if gate == nil || selected == nil {
 		if selected != nil && !supportsHydratedAccountGroupModel(ctx, selected, selected) {
@@ -100,6 +108,9 @@ func profitControlVetoLatest(ctx context.Context, selected *Account, snapshot *S
 			latest = refreshed
 		}
 	}
+	if reason := paidFallbackAdmissionFailure(ctx, latest); reason != "" {
+		return latest, true, reason
+	}
 	if !supportsHydratedAccountGroupModel(ctx, selected, latest) {
 		return latest, true, "model_family_mismatch"
 	}
@@ -108,6 +119,9 @@ func profitControlVetoLatest(ctx context.Context, selected *Account, snapshot *S
 }
 
 func (s *GatewayService) isGatewayAccountProfitEligible(ctx context.Context, account *Account) bool {
+	if !paidFallbackAccountInPool(ctx, account) {
+		return false
+	}
 	vetoed, _ := openAIProfitControlVetoReason(ctx, account)
 	return !vetoed
 }

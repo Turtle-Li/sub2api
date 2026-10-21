@@ -299,8 +299,17 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 // doUpstreamRequest owns cancellation for one attempt, without cancelling the
 // caller's context (which may be detached for billing or reused for retries).
 func doUpstreamRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	finishPaidAttempt, admissionErr := service.BeginPaidFallbackAttempt(req.Context())
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
 	ctx, cancel := context.WithCancel(req.Context())
 	resp, err := servertiming.Do(client, req.WithContext(ctx))
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+	finishPaidAttempt(status, err)
 	if err != nil {
 		cancel()
 		return resp, err

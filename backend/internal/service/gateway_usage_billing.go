@@ -632,6 +632,17 @@ func (s *GatewayService) billingDeps() *billingDeps {
 }
 
 func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usageLog *UsageLog, logKey string) {
+	if usageLog != nil && usageLog.PaidFallback {
+		basis := usageLog.TotalCost
+		if usageLog.AccountStatsCost != nil {
+			basis = *usageLog.AccountStatsCost
+		}
+		accountRate := 1.0
+		if usageLog.AccountRateMultiplier != nil {
+			accountRate = *usageLog.AccountRateMultiplier
+		}
+		logger.LegacyPrintf(logKey, "[PAID FALLBACK USAGE] request=%s account=%d estimated_upstream_usd=%g", usageLog.RequestID, usageLog.AccountID, basis*accountRate)
+	}
 	if repo == nil || usageLog == nil {
 		return
 	}

@@ -1033,7 +1033,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		useMixed = useMixed || mixed
 		for i := range candidates {
 			account := &candidates[i]
-			if seen[account.ID] || !s.isAccountAllowedForPlatform(ctx, account, platform, useMixed, requestedModel...) {
+			if !paidFallbackAccountInPool(ctx, account) || seen[account.ID] || !s.isAccountAllowedForPlatform(ctx, account, platform, useMixed, requestedModel...) {
 				continue
 			}
 			seen[account.ID] = true

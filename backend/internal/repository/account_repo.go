@@ -951,7 +951,8 @@ func lockAndMergeAccountProbeExtra(
 				false
 			),
 			extra -> 'opencode_go_usage_auto_refresh',
-			extra -> 'opencode_go_usage_snapshot'
+			extra -> 'opencode_go_usage_snapshot',
+			extra -> 'paid_fallback'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -980,6 +981,7 @@ func lockAndMergeAccountProbeExtra(
 		currentOllamaSnapshot          []byte
 		currentOpenCodeAutoRefresh     []byte
 		currentOpenCodeSnapshot        []byte
+		currentPaidFallback            []byte
 	)
 	if err := rows.Scan(
 		&identityUnchanged,
@@ -994,6 +996,7 @@ func lockAndMergeAccountProbeExtra(
 		&opencodeGroupIdentityUnchanged,
 		&currentOpenCodeAutoRefresh,
 		&currentOpenCodeSnapshot,
+		&currentPaidFallback,
 	); err != nil {
 		return nil, err
 	}
@@ -1002,6 +1005,13 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
+	if _, explicit := extra[service.PaidFallbackExtraKey]; !explicit && len(currentPaidFallback) > 0 {
+		var marker any
+		if err := json.Unmarshal(currentPaidFallback, &marker); err != nil {
+			return nil, err
+		}
+		extra[service.PaidFallbackExtraKey] = marker
+	}
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,

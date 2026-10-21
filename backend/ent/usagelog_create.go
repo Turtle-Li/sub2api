@@ -27,6 +27,20 @@ type UsageLogCreate struct {
 	conflict []sql.ConflictOption
 }
 
+// SetPaidFallback sets the "paid_fallback" field.
+func (_c *UsageLogCreate) SetPaidFallback(v bool) *UsageLogCreate {
+	_c.mutation.SetPaidFallback(v)
+	return _c
+}
+
+// SetNillablePaidFallback sets the "paid_fallback" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillablePaidFallback(v *bool) *UsageLogCreate {
+	if v != nil {
+		_c.SetPaidFallback(*v)
+	}
+	return _c
+}
+
 // SetUserID sets the "user_id" field.
 func (_c *UsageLogCreate) SetUserID(v int64) *UsageLogCreate {
 	_c.mutation.SetUserID(v)
@@ -711,6 +725,10 @@ func (_c *UsageLogCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *UsageLogCreate) defaults() {
+	if _, ok := _c.mutation.PaidFallback(); !ok {
+		v := usagelog.DefaultPaidFallback
+		_c.mutation.SetPaidFallback(v)
+	}
 	if _, ok := _c.mutation.InputTokens(); !ok {
 		v := usagelog.DefaultInputTokens
 		_c.mutation.SetInputTokens(v)
@@ -799,6 +817,9 @@ func (_c *UsageLogCreate) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (_c *UsageLogCreate) check() error {
+	if _, ok := _c.mutation.PaidFallback(); !ok {
+		return &ValidationError{Name: "paid_fallback", err: errors.New(`ent: missing required field "UsageLog.paid_fallback"`)}
+	}
 	if _, ok := _c.mutation.UserID(); !ok {
 		return &ValidationError{Name: "user_id", err: errors.New(`ent: missing required field "UsageLog.user_id"`)}
 	}
@@ -993,6 +1014,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 		_spec = sqlgraph.NewCreateSpec(usagelog.Table, sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64))
 	)
 	_spec.OnConflict = _c.conflict
+	if value, ok := _c.mutation.PaidFallback(); ok {
+		_spec.SetField(usagelog.FieldPaidFallback, field.TypeBool, value)
+		_node.PaidFallback = value
+	}
 	if value, ok := _c.mutation.RequestID(); ok {
 		_spec.SetField(usagelog.FieldRequestID, field.TypeString, value)
 		_node.RequestID = value
@@ -1257,7 +1282,7 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 // of the `INSERT` statement. For example:
 //
 //	client.UsageLog.Create().
-//		SetUserID(v).
+//		SetPaidFallback(v).
 //		OnConflict(
 //			// Update the row with the new values
 //			// the was proposed for insertion.
@@ -1266,7 +1291,7 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.UsageLogUpsert) {
-//			SetUserID(v+v).
+//			SetPaidFallback(v+v).
 //		}).
 //		Exec(ctx)
 func (_c *UsageLogCreate) OnConflict(opts ...sql.ConflictOption) *UsageLogUpsertOne {
@@ -1301,6 +1326,18 @@ type (
 		*sql.UpdateSet
 	}
 )
+
+// SetPaidFallback sets the "paid_fallback" field.
+func (u *UsageLogUpsert) SetPaidFallback(v bool) *UsageLogUpsert {
+	u.Set(usagelog.FieldPaidFallback, v)
+	return u
+}
+
+// UpdatePaidFallback sets the "paid_fallback" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdatePaidFallback() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldPaidFallback)
+	return u
+}
 
 // SetUserID sets the "user_id" field.
 func (u *UsageLogUpsert) SetUserID(v int64) *UsageLogUpsert {
@@ -2167,6 +2204,20 @@ func (u *UsageLogUpsertOne) Update(set func(*UsageLogUpsert)) *UsageLogUpsertOne
 		set(&UsageLogUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetPaidFallback sets the "paid_fallback" field.
+func (u *UsageLogUpsertOne) SetPaidFallback(v bool) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetPaidFallback(v)
+	})
+}
+
+// UpdatePaidFallback sets the "paid_fallback" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdatePaidFallback() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdatePaidFallback()
+	})
 }
 
 // SetUserID sets the "user_id" field.
@@ -3263,7 +3314,7 @@ func (_c *UsageLogCreateBulk) ExecX(ctx context.Context) {
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.UsageLogUpsert) {
-//			SetUserID(v+v).
+//			SetPaidFallback(v+v).
 //		}).
 //		Exec(ctx)
 func (_c *UsageLogCreateBulk) OnConflict(opts ...sql.ConflictOption) *UsageLogUpsertBulk {
@@ -3337,6 +3388,20 @@ func (u *UsageLogUpsertBulk) Update(set func(*UsageLogUpsert)) *UsageLogUpsertBu
 		set(&UsageLogUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetPaidFallback sets the "paid_fallback" field.
+func (u *UsageLogUpsertBulk) SetPaidFallback(v bool) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetPaidFallback(v)
+	})
+}
+
+// UpdatePaidFallback sets the "paid_fallback" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdatePaidFallback() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdatePaidFallback()
+	})
 }
 
 // SetUserID sets the "user_id" field.

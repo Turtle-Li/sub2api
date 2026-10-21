@@ -14,6 +14,8 @@ const (
 	Label = "usage_log"
 	// FieldID holds the string denoting the id field in the database.
 	FieldID = "id"
+	// FieldPaidFallback holds the string denoting the paid_fallback field in the database.
+	FieldPaidFallback = "paid_fallback"
 	// FieldUserID holds the string denoting the user_id field in the database.
 	FieldUserID = "user_id"
 	// FieldAPIKeyID holds the string denoting the api_key_id field in the database.
@@ -162,6 +164,7 @@ const (
 // Columns holds all SQL columns for usagelog fields.
 var Columns = []string{
 	FieldID,
+	FieldPaidFallback,
 	FieldUserID,
 	FieldAPIKeyID,
 	FieldAccountID,
@@ -223,6 +226,8 @@ func ValidColumn(column string) bool {
 }
 
 var (
+	// DefaultPaidFallback holds the default value on creation for the "paid_fallback" field.
+	DefaultPaidFallback bool
 	// RequestIDValidator is a validator for the "request_id" field. It is called by the builders before save.
 	RequestIDValidator func(string) error
 	// ModelValidator is a validator for the "model" field. It is called by the builders before save.
@@ -305,6 +310,11 @@ type OrderOption func(*sql.Selector)
 // ByID orders the results by the id field.
 func ByID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldID, opts...).ToFunc()
+}
+
+// ByPaidFallback orders the results by the paid_fallback field.
+func ByPaidFallback(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPaidFallback, opts...).ToFunc()
 }
 
 // ByUserID orders the results by the user_id field.

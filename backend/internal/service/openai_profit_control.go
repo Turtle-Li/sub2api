@@ -294,6 +294,7 @@ func ContextWithSelectionProfitGate(ctx context.Context, sel *AccountSelectionRe
 	if sel == nil {
 		return ctx
 	}
+	ctx = ContextWithPaidFallbackSelection(ctx, sel)
 	if sel.groupModelConstraint != nil {
 		ctx = context.WithValue(ctx, accountGroupModelConstraintKey{}, *sel.groupModelConstraint)
 	}
@@ -308,6 +309,12 @@ func ContextWithSelectionProfitGate(ctx context.Context, sel *AccountSelectionRe
 // openAIProfitControlVetoReason 报告利润门是否否决该账号。ctx 中没有门
 // （分组未启用利润控制或本请求跳门）或账号为 nil 时一律放行。
 func openAIProfitControlVetoReason(ctx context.Context, account *Account) (bool, string) {
+	if permit, _ := ctx.Value(paidFallbackPermitKey{}).(*paidFallbackPermit); permit != nil && account != nil && account.IsPaidFallback() {
+		if paidFallbackInvalidRate(account) {
+			return true, openAIProfitFilterReasonInvalidAccountRate
+		}
+		return false, ""
+	}
 	gate, _ := ctx.Value(openAIProfitControlGateCtxKey{}).(*openAIProfitControlGate)
 	if gate == nil || account == nil {
 		return false, ""

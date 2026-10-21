@@ -1025,9 +1025,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					}
 					capacityShedRetryExhaustion.recordRetryExhausted(c.Request.Context(), h.gatewayService, account, failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
+					c.Request = c.Request.WithContext(service.WithPaidFallbackFailure(c.Request.Context(), account, failoverErr.StatusCode))
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					if switchCount >= maxAccountSwitches && h.gatewayService.PaidFallbackRetryAllowed(c.Request.Context(), apiKey.GroupID, account) && switchCount == maxAccountSwitches {
+						c.Request = c.Request.WithContext(service.WithPaidFallbackOnly(c.Request.Context()))
+					} else if switchCount >= maxAccountSwitches {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1601,9 +1604,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					}
 					capacityShedRetryExhaustion.recordRetryExhausted(c.Request.Context(), h.gatewayService, account, failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
+					c.Request = c.Request.WithContext(service.WithPaidFallbackFailure(c.Request.Context(), account, failoverErr.StatusCode))
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					if switchCount >= maxAccountSwitches && h.gatewayService.PaidFallbackRetryAllowed(c.Request.Context(), apiKey.GroupID, account) && switchCount == maxAccountSwitches {
+						c.Request = c.Request.WithContext(service.WithPaidFallbackOnly(c.Request.Context()))
+					} else if switchCount >= maxAccountSwitches {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -2918,9 +2924,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		capacityShedRetryExhaustion.recordRetryExhausted(ctx, h.gatewayService, account, failoverErr)
 		h.gatewayService.RecordOpenAIAccountSwitch()
+		ctx = service.WithPaidFallbackFailure(ctx, account, failoverErr.StatusCode)
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr
-		if switchCount >= maxAccountSwitches {
+		if switchCount >= maxAccountSwitches && h.gatewayService.PaidFallbackRetryAllowed(ctx, apiKey.GroupID, account) && switchCount == maxAccountSwitches {
+			ctx = service.WithPaidFallbackOnly(ctx)
+		} else if switchCount >= maxAccountSwitches {
 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
@@ -3315,6 +3324,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				// 无法中途换号）。本 turn 的准入与计费共用同一 pricingAt。
 				turnBillingCtx := turnBillingAPIKeys.begin(ctx, h.apiKeyService, turn, apiKey)
 				turnCtx, turnAt := h.gatewayService.WithOpenAITurnPricingContext(turnBillingCtx, apiKey.GroupID)
+				turnCtx = service.ContextWithPaidFallbackSelection(turnCtx, selection)
 				if _, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(turnCtx, account); vetoed {
 					reqLog.Info("openai.websocket_turn_profit_vetoed",
 						zap.Int("turn", turn),
@@ -3323,6 +3333,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account is no longer eligible for this connection, please reconnect", nil)
 				}
 				turnPricing.freeze(turnAt)
+				service.RecordPaidFallbackWSAdmission(turnCtx, account.ID, turn)
 				if turn == 1 {
 					return nil
 				}

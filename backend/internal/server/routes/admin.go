@@ -428,6 +428,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 	{
 		accounts.GET("", h.Admin.Account.List)
 		accounts.GET("/upstream-billing-rates", h.Admin.Account.GetUpstreamBillingRates)
+		accounts.PUT("/:id/paid-fallback", h.Admin.Account.SetPaidFallback)
 		accounts.GET("/upstream-billing-probe/settings", h.Admin.Account.GetUpstreamBillingProbeSettings)
 		accounts.PUT("/upstream-billing-probe/settings", h.Admin.Account.UpdateUpstreamBillingProbeSettings)
 		accounts.POST("/upstream-billing-probe/batch", h.Admin.Account.ProbeUpstreamBillingBatch)
@@ -681,6 +682,8 @@ func registerCodexDegradationProbeRoutes(admin *gin.RouterGroup, h *handler.Hand
 func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	adminSettings := admin.Group("/settings")
 	{
+		adminSettings.GET("/paid-fallback", h.Admin.Setting.GetPaidFallbackSettings)
+		adminSettings.PUT("/paid-fallback", h.Admin.Setting.UpdatePaidFallbackSettings)
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.GET("/unified-payment-binding", h.Admin.Setting.GetUnifiedPaymentBinding)
 		adminSettings.POST("/unified-payment-binding", h.Admin.Setting.BindUnifiedPayment)

@@ -374,9 +374,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					}
 					capacityShedRetryExhaustion.recordRetryExhausted(c.Request.Context(), h.gatewayService, account, failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
+					c.Request = c.Request.WithContext(service.WithPaidFallbackFailure(c.Request.Context(), account, failoverErr.StatusCode))
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					if switchCount >= maxAccountSwitches && h.gatewayService.PaidFallbackRetryAllowed(c.Request.Context(), apiKey.GroupID, account) && switchCount == maxAccountSwitches {
+						c.Request = c.Request.WithContext(service.WithPaidFallbackOnly(c.Request.Context()))
+					} else if switchCount >= maxAccountSwitches {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}

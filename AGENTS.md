@@ -1,5 +1,15 @@
 # Sub2API project operations
 
+## Paid fallback accounts
+
+- Before changing paid reserve selection, forwarding admission, usage attribution,
+  or controlled tests, read `docs/features/PAID_FALLBACK_PHASE1_20261022.md`.
+  HTTP and WebSocket share one policy. Keep reserves excluded from ordinary
+  scheduling when disabled; group and authenticated API-key allowlists must both
+  match. Disable the policy to stop spending, rather than clearing account tags.
+  Preserve tags and usage history on rollback; older binaries cannot isolate
+  tagged reserves. Live tests use exclusive test groups, keys and accounts.
+
 ## Multi-model provider accounts
 
 - For OpenCode / Command Code / Cline binding to model-provider groups, read

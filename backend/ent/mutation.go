@@ -50958,6 +50958,7 @@ type UsageLogMutation struct {
 	op                           Op
 	typ                          string
 	id                           *int64
+	paid_fallback                *bool
 	request_id                   *string
 	model                        *string
 	requested_model              *string
@@ -51134,6 +51135,42 @@ func (m *UsageLogMutation) IDs(ctx context.Context) ([]int64, error) {
 	default:
 		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
 	}
+}
+
+// SetPaidFallback sets the "paid_fallback" field.
+func (m *UsageLogMutation) SetPaidFallback(b bool) {
+	m.paid_fallback = &b
+}
+
+// PaidFallback returns the value of the "paid_fallback" field in the mutation.
+func (m *UsageLogMutation) PaidFallback() (r bool, exists bool) {
+	v := m.paid_fallback
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPaidFallback returns the old "paid_fallback" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldPaidFallback(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPaidFallback is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPaidFallback requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPaidFallback: %w", err)
+	}
+	return oldValue.PaidFallback, nil
+}
+
+// ResetPaidFallback resets all changes to the "paid_fallback" field.
+func (m *UsageLogMutation) ResetPaidFallback() {
+	m.paid_fallback = nil
 }
 
 // SetUserID sets the "user_id" field.
@@ -53744,7 +53781,10 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 48)
+	fields := make([]string, 0, 49)
+	if m.paid_fallback != nil {
+		fields = append(fields, usagelog.FieldPaidFallback)
+	}
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -53897,6 +53937,8 @@ func (m *UsageLogMutation) Fields() []string {
 // schema.
 func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 	switch name {
+	case usagelog.FieldPaidFallback:
+		return m.PaidFallback()
 	case usagelog.FieldUserID:
 		return m.UserID()
 	case usagelog.FieldAPIKeyID:
@@ -54002,6 +54044,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 // database failed.
 func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
 	switch name {
+	case usagelog.FieldPaidFallback:
+		return m.OldPaidFallback(ctx)
 	case usagelog.FieldUserID:
 		return m.OldUserID(ctx)
 	case usagelog.FieldAPIKeyID:
@@ -54107,6 +54151,13 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 // type.
 func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 	switch name {
+	case usagelog.FieldPaidFallback:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPaidFallback(v)
+		return nil
 	case usagelog.FieldUserID:
 		v, ok := value.(int64)
 		if !ok {
@@ -54882,6 +54933,9 @@ func (m *UsageLogMutation) ClearField(name string) error {
 // It returns an error if the field is not defined in the schema.
 func (m *UsageLogMutation) ResetField(name string) error {
 	switch name {
+	case usagelog.FieldPaidFallback:
+		m.ResetPaidFallback()
+		return nil
 	case usagelog.FieldUserID:
 		m.ResetUserID()
 		return nil

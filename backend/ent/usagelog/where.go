@@ -55,6 +55,11 @@ func IDLTE(id int64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldLTE(FieldID, id))
 }
 
+// PaidFallback applies equality check predicate on the "paid_fallback" field. It's identical to PaidFallbackEQ.
+func PaidFallback(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldPaidFallback, v))
+}
+
 // UserID applies equality check predicate on the "user_id" field. It's identical to UserIDEQ.
 func UserID(v int64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldUserID, v))
@@ -288,6 +293,16 @@ func CacheTTLOverridden(v bool) predicate.UsageLog {
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldCreatedAt, v))
+}
+
+// PaidFallbackEQ applies the EQ predicate on the "paid_fallback" field.
+func PaidFallbackEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldPaidFallback, v))
+}
+
+// PaidFallbackNEQ applies the NEQ predicate on the "paid_fallback" field.
+func PaidFallbackNEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldPaidFallback, v))
 }
 
 // UserIDEQ applies the EQ predicate on the "user_id" field.

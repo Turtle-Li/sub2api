@@ -32,6 +32,20 @@ func (_u *UsageLogUpdate) Where(ps ...predicate.UsageLog) *UsageLogUpdate {
 	return _u
 }
 
+// SetPaidFallback sets the "paid_fallback" field.
+func (_u *UsageLogUpdate) SetPaidFallback(v bool) *UsageLogUpdate {
+	_u.mutation.SetPaidFallback(v)
+	return _u
+}
+
+// SetNillablePaidFallback sets the "paid_fallback" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillablePaidFallback(v *bool) *UsageLogUpdate {
+	if v != nil {
+		_u.SetPaidFallback(*v)
+	}
+	return _u
+}
+
 // SetUserID sets the "user_id" field.
 func (_u *UsageLogUpdate) SetUserID(v int64) *UsageLogUpdate {
 	_u.mutation.SetUserID(v)
@@ -1154,6 +1168,9 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			}
 		}
 	}
+	if value, ok := _u.mutation.PaidFallback(); ok {
+		_spec.SetField(usagelog.FieldPaidFallback, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.RequestID(); ok {
 		_spec.SetField(usagelog.FieldRequestID, field.TypeString, value)
 	}
@@ -1566,6 +1583,20 @@ type UsageLogUpdateOne struct {
 	fields   []string
 	hooks    []Hook
 	mutation *UsageLogMutation
+}
+
+// SetPaidFallback sets the "paid_fallback" field.
+func (_u *UsageLogUpdateOne) SetPaidFallback(v bool) *UsageLogUpdateOne {
+	_u.mutation.SetPaidFallback(v)
+	return _u
+}
+
+// SetNillablePaidFallback sets the "paid_fallback" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillablePaidFallback(v *bool) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetPaidFallback(*v)
+	}
+	return _u
 }
 
 // SetUserID sets the "user_id" field.
@@ -2719,6 +2750,9 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.PaidFallback(); ok {
+		_spec.SetField(usagelog.FieldPaidFallback, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.RequestID(); ok {
 		_spec.SetField(usagelog.FieldRequestID, field.TypeString, value)

@@ -218,3 +218,25 @@ func TestParentHealthyForShadow(t *testing.T) {
 			"母账号非 OpenAI OAuth 时影子应被挡(fail-closed)")
 	})
 }
+
+func TestParentHealthyForShadowPaidFallbackIsolation(t *testing.T) {
+	for _, parentPaid := range []bool{false, true} {
+		for _, shadowPaid := range []bool{false, true} {
+			parent := &Account{
+				ID:       100,
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Status:   StatusActive,
+				Extra:    map[string]any{PaidFallbackExtraKey: parentPaid},
+			}
+			shadow := &Account{
+				ID:              200,
+				ParentAccountID: &parent.ID,
+				QuotaDimension:  QuotaDimensionSpark,
+				Extra:           map[string]any{PaidFallbackExtraKey: shadowPaid},
+			}
+			require.Equal(t, !parentPaid || shadowPaid, parentHealthyForShadow(shadow, func(int64) *Account { return parent }),
+				"parent paid=%v, shadow paid=%v", parentPaid, shadowPaid)
+		}
+	}
+}
