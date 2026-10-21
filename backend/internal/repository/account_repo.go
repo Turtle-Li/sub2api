@@ -1560,7 +1560,7 @@ func (r *accountRepository) ListModelTraceAccounts(ctx context.Context) ([]servi
 		Where(func(s *entsql.Selector) {
 			s.Where(entsql.ExprP("jsonb_typeof(" + s.C(dbaccount.FieldExtra) + "->'modeltrace') = 'object'"))
 		}).
-		Select(dbaccount.FieldID, dbaccount.FieldName, dbaccount.FieldPlatform, dbaccount.FieldType, dbaccount.FieldStatus, dbaccount.FieldExtra).
+		Select(dbaccount.FieldID, dbaccount.FieldName, dbaccount.FieldPlatform, dbaccount.FieldType, dbaccount.FieldStatus, dbaccount.FieldSchedulable, dbaccount.FieldExtra).
 		Order(dbent.Asc(dbaccount.FieldID)).
 		All(ctx)
 	if err != nil {
@@ -1570,7 +1570,8 @@ func (r *accountRepository) ListModelTraceAccounts(ctx context.Context) ([]servi
 	for _, account := range accounts {
 		items = append(items, service.Account{
 			ID: account.ID, Name: account.Name, Platform: account.Platform,
-			Type: account.Type, Status: account.Status, Extra: account.Extra,
+			Type: account.Type, Status: account.Status,
+			Schedulable: account.Schedulable, Extra: account.Extra,
 		})
 	}
 	return items, nil

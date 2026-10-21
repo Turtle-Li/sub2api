@@ -157,3 +157,31 @@ Notification and scheduling-pause defaults remain off. Operators can configure
 the new global parameters after release. No live alert was sent or account
 paused for validation. The subsequent documentation-only commit records this
 deployment; it does not change the running feature commit above.
+
+## Scheduling badge correction — 2026-10-22
+
+The optimized `ListModelTraceAccounts` query omitted `schedulable` from both
+its selected columns and the service-account projection. The new monitor DTO
+therefore received Go's default `false` for every account and displayed
+“调用已暂停” even when the stored account was schedulable. This was a monitor
+display defect; no scheduling or policy write is part of this correction.
+
+The query now selects and projects the stored field. The PostgreSQL integration
+test `TestModelTraceMonitorsPreserveStoredSchedulingState` creates one enabled
+and one paused account, then exercises the actual repository and
+`ModelTraceService.ListMonitors`. It failed before the correction with both
+accounts reported as paused and passed afterward with their distinct states.
+
+Validation: the regression passed with `CI=true`, `-race`, shuffled order and
+the `integration unit` tags. ModelTrace service/admin/routes tests with race
+detection and shuffled order, repository `go vet`, server build, all 11
+ModelTrace view tests and `git diff --check` passed. Existing frontend
+Browserslist/localStorage warnings remain. Root review found no additional
+defect in this change; a separate QA agent could not run because its fixed
+model conflicts with the owner's requested verification model.
+
+Before release, a read-only production query found four monitored accounts:
+three schedulable and one paused. The signed-in live page showed four paused
+badges. Notification was enabled and automatic pausing disabled; these settings
+and the accounts' stored scheduling flags are preserved. Production release
+and the page's corrected badge count are recorded after deployment below.
