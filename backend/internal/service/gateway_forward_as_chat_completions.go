@@ -239,25 +239,11 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		// SSE 规范允许 `event:xxx`（冒号后无空格）：Kimi 等 Anthropic 兼容上游
-		// 返回紧凑格式，严格匹配 "event: " 会丢弃全部事件（#4653 同根因）。
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
-			continue
-		}
-
-		if !scanner.Scan() {
-			break
-		}
-		payload, ok := extractOpenAISSEDataLine(scanner.Text())
-		if !ok {
-			continue
-		}
-
+	processFrame := func(frame openAICompatSSEFrame) {
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			continue
+			return
 		}
 
 		// message_start carries the initial response structure and cache usage
@@ -291,6 +277,25 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 				}
 			}
 		}
+	}
+	var parser openAICompatSSEFrameParser
+	frameBytes := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		frameBytes += len(line) + 1
+		if frameBytes > maxLineSize {
+			writeGatewayCCError(c, http.StatusBadGateway, "server_error", "Upstream SSE frame exceeds maximum size")
+			return nil, fmt.Errorf("SSE frame exceeds maximum size: %d", maxLineSize)
+		}
+		if frame, ok := parser.AddLine(line); ok {
+			processFrame(frame)
+		}
+		if line == "" {
+			frameBytes = 0
+		}
+	}
+	if frame, ok := parser.Finish(); ok {
+		processFrame(frame)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -462,33 +467,36 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		return false
 	}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		// 与缓冲路径一致：接受 SSE 紧凑格式（冒号后无空格，#4653 同根因）。
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
-			continue
-		}
-
-		if !scanner.Scan() {
-			break
-		}
-		payload, ok := extractOpenAISSEDataLine(scanner.Text())
-		if !ok {
-			continue
-		}
-
+	processFrame := func(frame openAICompatSSEFrame) bool {
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			continue
+			return false
 		}
 
 		// Forward received usage regardless of the client stream_options.
 		// The intermediate Responses converter synthesizes usage even when absent.
 		ccState.IncludeUsage = ccState.IncludeUsage || anthropicChatStreamHasUsage(&event, payload)
 
-		if processAnthropicEvent(&event) {
+		return processAnthropicEvent(&event)
+	}
+	var parser openAICompatSSEFrameParser
+	frameBytes := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		frameBytes += len(line) + 1
+		if frameBytes > maxLineSize {
+			return resultWithUsage(), fmt.Errorf("SSE frame exceeds maximum size: %d", maxLineSize)
+		}
+		if frame, ok := parser.AddLine(line); ok && processFrame(frame) {
 			return resultWithUsage(), nil
 		}
+		if line == "" {
+			frameBytes = 0
+		}
+	}
+	if frame, ok := parser.Finish(); ok && processFrame(frame) {
+		return resultWithUsage(), nil
 	}
 
 	if err := scanner.Err(); err != nil {

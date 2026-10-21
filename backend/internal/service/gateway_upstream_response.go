@@ -865,19 +865,27 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 		eventName := ""
 		dataLine := ""
+		var dataLines []string
 		for _, line := range lines {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "event:") {
 				eventName = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
 				continue
 			}
-			if dataLine == "" && sseDataRe.MatchString(trimmed) {
-				dataLine = sseDataRe.ReplaceAllString(trimmed, "")
+			if sseDataRe.MatchString(trimmed) {
+				data := sseDataRe.ReplaceAllString(trimmed, "")
+				dataLines = append(dataLines, data)
+				if dataLine == "" {
+					dataLine = data
+				}
 			}
 		}
 
 		if eventName == "error" {
 			return nil, dataLine, nil, &sseStreamErrorEventError{RawData: dataLine}
+		}
+		if isAnthropicWebMessageLimitEvent(eventName, strings.Join(dataLines, "\n")) {
+			return nil, "", nil, nil
 		}
 
 		if dataLine == "" {

@@ -248,6 +248,11 @@
 
 ## Upstream update scope
 
+- For Claude web SSE compatibility and Cherry Studio, read
+  `docs/operations/CLAUDE_WEB_SSE_COMPAT_20261021.md`. Preserve complete-frame
+  Chat conversion and native `message_limit` suppression, including passthrough
+  usage drain and keepalive boundaries.
+
 - For account-test instructions, read
   `docs/operations/ACCOUNT_TEST_INSTRUCTIONS_20261021.md`. API Key Responses
   probes omit synthetic Codex instructions; ChatGPT OAuth probes select them
