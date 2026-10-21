@@ -12,8 +12,9 @@ Task: MODELTRACE-20261013 (feature). Source baseline: Turtle-Li/sub2api
   mapping, proxy, outbound identity and TLS profile. No scheduler fallback to
   another account and no credentials sent to a ModelTrace website.
 - MT-3: Errors and insufficient samples are reported separately from model
-  attribution. Results must not automatically disable accounts, change
-  availability, repair turn states, or debit customer balances.
+  attribution. Optional mismatch notification and scheduling pause are governed
+  by `MODELTRACE_ALERTS_20261021.md`; both default to off. Probes do not repair
+  turn states, change provider availability, or debit customer balances.
 - MT-4: Periodic checks are opt-in (disabled by default). Manual tasks survive
   the submitting browser request and have bounded concurrency and execution time.
 - MT-5: Only administrators can use the endpoints/page. Scores describe
@@ -78,8 +79,10 @@ by local implementation.
   its retry budget, and scheduled checks skip accounts inside a rate-limit,
   temporary-unschedulable or overload window.
 - `extra.modeltrace` is server-owned: account edits keep the stored value,
-  account DTOs omit it, duplicates drop it, and writes do not rebuild the
-  scheduler. GPT-4-era mapped models are probed without a reasoning effort.
+  account DTOs omit it, and duplicates drop it. Saving monitoring data does not
+  rebuild the scheduler; the optional mismatch pause uses the existing
+  `SetSchedulable(false)` path. GPT-4-era mapped models are probed without a
+  reasoning effort.
 - Do not reproduce upstream's removal of probe deadlines.
 - Observational probes bypass the optional OpenAI plugin transport because its
   current protocol has no TLS-profile or probe-pool fields. They use the
@@ -99,7 +102,14 @@ configured account/model.
 Use the same requested model and reasoning effort when comparing accounts.
 An attribution to another model is a signal to repeat and inspect; low sample
 counts, unsupported bank candidates and closely related model fingerprints
-limit interpretation. No automatic disablement follows a fingerprint result.
+limit interpretation. Global parameters can enable Feishu notification and/or
+pause new business calls through the anomalous account. Exact matches and
+configured allowed relations pass; `gpt-6.1-sol` → `gpt-6-astra` is allowed by
+default. Failed probes, unsupported detected fingerprints and expected models
+without bank coverage or an explicit allowed relation do not trigger actions.
+Pause applies to the entire account, keeps monitoring available, and requires
+manual recovery in Accounts; a later matching probe does not resume traffic.
+See `MODELTRACE_ALERTS_20261021.md` for configuration and delivery semantics.
 
 Submission and deployment are separate from implementation. No live account
 probe or production deployment is part of local validation.

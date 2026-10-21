@@ -192,3 +192,4 @@ issues/
 !docs/features/
 docs/features/*
 !docs/features/own-codex-monitor-panel.md
+!docs/features/MODELTRACE_ALERTS_20261021.md

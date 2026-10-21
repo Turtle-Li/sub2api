@@ -5,6 +5,36 @@ integration. It is research for the target port; it does not authorize copying
 the upstream account, usage, or platform behavior without the differences in
 `MODELTRACE.md`.
 
+## Update check: 2026-10-21
+
+- The original `xqy2006/ModelTrace` main branch still resolves to
+  `6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2` (2026-10-09), verified with
+  GitHub API, `git ls-remote` and a fresh clone. There is no newer algorithm or
+  bank revision to import. The embedded bank hash below is unchanged.
+- `ZvonimirSun/sub2api` now returns HTTP 404 from repository/API/raw URLs.
+  Its current branch head cannot be verified. The pinned integration commit
+  `3fc21a61ebd18ac3508e3f8f9cfc6d064c4884d2` was recovered from the existing
+  local clone and its source and classifier parity test were inspected.
+  This does not establish whether the inaccessible repository has new commits.
+- The bank includes `gpt-5.6-luna`, `gpt-6-astra` and `gpt-6-sol`, but no
+  `gpt-6.1-sol`. The latter must use an explicit allowed relation; it must not
+  be silently normalized to `gpt-6-sol`.
+- The pinned original guard's
+  [`state.mjs`](https://github.com/xqy2006/ModelTrace/blob/6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2/codex-plugin/modeltrace-guard/scripts/state.mjs)
+  excludes unknown expected models from mismatch decisions. Its repeated
+  confirmation and Codex task halt are specific to its plugin workflow. The
+  local extension evaluates a completed account probe and optionally pauses
+  that account through the existing scheduler boundary, with actions off by
+  default. No classifier, calibration, bank or original license was changed.
+- Recovered integration classifier parity passed. The original guard's Node
+  suite had 169/171 passing tests under Node 26.10.0; failures concerned
+  transport-cache teardown (`ECONNRESET`) and the modified-bank doctor exit
+  code. These are upstream observations, not a claim that its suite is green.
+
+The local alert policy and intentional differences are in
+`MODELTRACE_ALERTS_20261021.md`. Existing MIT attribution for the algorithm and
+LGPL-3.0 obligations of the integration source remain applicable.
+
 ## Fixed sources
 
 - Integration branch: `ZvonimirSun/sub2api`, remote branch `custom`, revision

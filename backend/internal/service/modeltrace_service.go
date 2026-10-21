@@ -32,12 +32,17 @@ const (
 
 // ModelTraceRecord represents one single probe execution record.
 type ModelTraceRecord struct {
-	DetectedModel string                    `json:"detected_model"`
-	Probability   float64                   `json:"probability"`
-	LatencyMs     int64                     `json:"latency_ms"`
-	TestedAt      time.Time                 `json:"tested_at"`
-	Error         string                    `json:"error,omitempty"`
-	Requests      []ModelTraceRequestRecord `json:"requests,omitempty"`
+	DetectedModel      string                    `json:"detected_model"`
+	Probability        float64                   `json:"probability"`
+	LatencyMs          int64                     `json:"latency_ms"`
+	TestedAt           time.Time                 `json:"tested_at"`
+	Error              string                    `json:"error,omitempty"`
+	Requests           []ModelTraceRequestRecord `json:"requests,omitempty"`
+	ExpectedModel      string                    `json:"expected_model,omitempty"`
+	MatchStatus        string                    `json:"match_status,omitempty"`
+	AccountPaused      bool                      `json:"account_paused,omitempty"`
+	NotificationStatus string                    `json:"notification_status,omitempty"`
+	ActionError        string                    `json:"action_error,omitempty"`
 }
 
 type ModelTraceRequestRecord struct {
@@ -57,9 +62,10 @@ type modelTraceRequestsKey struct{}
 
 // ModelTraceModelConfig represents configuration and recent test state for a single model on an account.
 type ModelTraceModelConfig struct {
-	Latest  *ModelTraceRecord  `json:"latest,omitempty"`
-	History []ModelTraceRecord `json:"history,omitempty"`
-	Task    *ModelTraceTask    `json:"task,omitempty"`
+	Latest  *ModelTraceRecord     `json:"latest,omitempty"`
+	History []ModelTraceRecord    `json:"history,omitempty"`
+	Task    *ModelTraceTask       `json:"task,omitempty"`
+	Alert   *ModelTraceAlertState `json:"alert,omitempty"`
 }
 
 // ModelTraceTask is a snapshot of a manually submitted background probe.
@@ -84,11 +90,15 @@ type ModelTraceAccountConfig struct {
 
 // ModelTraceGlobalConfig represents system-wide settings for ModelTrace.
 type ModelTraceGlobalConfig struct {
-	Enabled         bool   `json:"enabled"`          // 全局监控总开关
-	ProbeCount      int    `json:"probe_count"`      // 每个模型探测次数，默认 3
-	IntervalSeconds int    `json:"interval_seconds"` // 探测间隔秒数，默认 1
-	ReasoningEffort string `json:"reasoning_effort"` // 思考强度，默认 "low"
-	CronExpression  string `json:"cron_expression"`  // 全局调度周期
+	Enabled                     bool                `json:"enabled"`          // 全局监控总开关
+	ProbeCount                  int                 `json:"probe_count"`      // 每个模型探测次数，默认 3
+	IntervalSeconds             int                 `json:"interval_seconds"` // 探测间隔秒数，默认 1
+	ReasoningEffort             string              `json:"reasoning_effort"` // 思考强度，默认 "low"
+	CronExpression              string              `json:"cron_expression"`  // 全局调度周期
+	NotifyOnMismatch            bool                `json:"notify_on_mismatch"`
+	PauseOnMismatch             bool                `json:"pause_on_mismatch"`
+	NotificationCooldownMinutes int                 `json:"notification_cooldown_minutes"`
+	AllowedDetections           map[string][]string `json:"allowed_detections"`
 }
 
 // ModelTraceAccountViewItem is used by admin UI to inspect account monitor state.
@@ -97,6 +107,7 @@ type ModelTraceAccountViewItem struct {
 	AccountName string                            `json:"account_name"`
 	Platform    string                            `json:"platform"`
 	Type        string                            `json:"type"`
+	Schedulable bool                              `json:"schedulable"`
 	LastRunAt   *time.Time                        `json:"last_run_at,omitempty"`
 	Models      map[string]*ModelTraceModelConfig `json:"models"`
 }
@@ -108,11 +119,12 @@ type UpdateAccountModelTraceRequest struct {
 
 // ModelTraceService coordinates ModelTrace attribution probes and background checks.
 type ModelTraceService struct {
-	accountRepo    AccountRepository
-	settingRepo    SettingRepository
-	accountTestSvc *AccountTestService
-	cfg            *config.Config
-	leaderLock     *singletonJobLock
+	accountRepo        AccountRepository
+	settingRepo        SettingRepository
+	accountTestSvc     *AccountTestService
+	cfg                *config.Config
+	leaderLock         *singletonJobLock
+	notificationSender FeishuPaymentTextSender
 
 	cron         *cron.Cron
 	startOnce    sync.Once
@@ -138,15 +150,16 @@ func NewModelTraceService(
 ) *ModelTraceService {
 	taskCtx, taskCancel := context.WithCancel(context.Background())
 	return &ModelTraceService{
-		accountRepo:    accountRepo,
-		settingRepo:    settingRepo,
-		accountTestSvc: accountTestSvc,
-		cfg:            cfg,
-		location:       time.Local,
-		taskCtx:        taskCtx,
-		taskCancel:     taskCancel,
-		tasks:          make(map[modelTraceTaskKey]ModelTraceTask),
-		slots:          make(chan struct{}, modelTraceConcurrency),
+		accountRepo:        accountRepo,
+		settingRepo:        settingRepo,
+		accountTestSvc:     accountTestSvc,
+		cfg:                cfg,
+		notificationSender: NewFeishuPaymentTextSender(),
+		location:           time.Local,
+		taskCtx:            taskCtx,
+		taskCancel:         taskCancel,
+		tasks:              make(map[modelTraceTaskKey]ModelTraceTask),
+		slots:              make(chan struct{}, modelTraceConcurrency),
 	}
 }
 
@@ -250,11 +263,13 @@ func modelTraceScheduleDue(expression string, now time.Time) bool {
 // GetGlobalConfig returns the system-wide ModelTrace configuration.
 func (s *ModelTraceService) GetGlobalConfig(ctx context.Context) ModelTraceGlobalConfig {
 	def := ModelTraceGlobalConfig{
-		Enabled:         false,
-		ProbeCount:      3,
-		IntervalSeconds: 1,
-		ReasoningEffort: "low",
-		CronExpression:  ModelTraceDefaultCron,
+		Enabled:                     false,
+		ProbeCount:                  3,
+		IntervalSeconds:             1,
+		ReasoningEffort:             "low",
+		CronExpression:              ModelTraceDefaultCron,
+		NotificationCooldownMinutes: 60,
+		AllowedDetections:           defaultModelTraceAllowedDetections(),
 	}
 	if s.settingRepo == nil {
 		return def
@@ -263,7 +278,8 @@ func (s *ModelTraceService) GetGlobalConfig(ctx context.Context) ModelTraceGloba
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return def
 	}
-	var cfg ModelTraceGlobalConfig
+	cfg := def
+	cfg.AllowedDetections = nil
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return def
 	}
@@ -284,6 +300,9 @@ func (s *ModelTraceService) GetGlobalConfig(ctx context.Context) ModelTraceGloba
 	}
 	if strings.TrimSpace(cfg.CronExpression) == "" {
 		cfg.CronExpression = ModelTraceDefaultCron
+	}
+	if err := normalizeModelTracePolicy(&cfg); err != nil {
+		return def
 	}
 	return cfg
 }
@@ -313,6 +332,9 @@ func (s *ModelTraceService) UpdateGlobalConfig(ctx context.Context, cfg ModelTra
 	}
 	if cfg.ReasoningEffort != "low" && cfg.ReasoningEffort != "medium" && cfg.ReasoningEffort != "high" {
 		return infraerrors.BadRequest("MODELTRACE_CONFIG_INVALID", "invalid reasoning effort")
+	}
+	if err := normalizeModelTracePolicy(&cfg); err != nil {
+		return err
 	}
 
 	bytes, err := json.Marshal(cfg)
@@ -381,6 +403,7 @@ func (s *ModelTraceService) ListMonitors(ctx context.Context) ([]ModelTraceAccou
 			AccountName: acc.Name,
 			Platform:    acc.Platform,
 			Type:        acc.Type,
+			Schedulable: acc.Schedulable,
 			LastRunAt:   cfg.LastRunAt,
 			Models:      models,
 		})
@@ -563,62 +586,16 @@ func (s *ModelTraceService) probeModelLocked(ctx context.Context, accountID int6
 		return nil, infraerrors.BadRequest("MODELTRACE_MODEL_UNSUPPORTED", "ModelTrace requires a supported OpenAI/GPT text model")
 	}
 
+	expectedModel := strings.ToLower(strings.TrimSpace(account.GetMappedModel(modelID)))
 	record := s.executeProbe(ctx, account, modelID)
+	record.ExpectedModel = expectedModel
 	if err := ctx.Err(); err != nil {
 		// Keep a terminal failure visible when the caller cancels the probe.
 		record.Error = err.Error()
 		record.DetectedModel = "Unknown"
 		record.Probability = 0
 	}
-	// Persist using a short independent deadline; the upstream context may be canceled.
-	ctx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer saveCancel()
-	mu := s.getConfigLock(accountID)
-	mu.Lock()
-	defer mu.Unlock()
-	// Upstream requests may take minutes. Reload to preserve edits made meanwhile.
-	account, err = s.accountRepo.GetByID(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Persist result into account.Extra["modeltrace"].Models[modelID]
-	cfg := DecodeModelTraceConfig(account.Extra)
-	if cfg == nil {
-		l.Info("modeltrace.result_discarded", zap.String("reason", "monitor_removed"))
-		return record, nil
-	}
-	if cfg.Models == nil {
-		cfg.Models = make(map[string]*ModelTraceModelConfig)
-	}
-	mCfg, ok := cfg.Models[modelID]
-	// Do not resurrect a monitored model removed while the probe was running.
-	if !ok {
-		l.Info("modeltrace.result_discarded", zap.String("reason", "model_removed"))
-		return record, nil
-	}
-	if !ok || mCfg == nil {
-		mCfg = &ModelTraceModelConfig{}
-		cfg.Models[modelID] = mCfg
-	}
-
-	if mCfg.Latest != nil {
-		history := append([]ModelTraceRecord{*mCfg.Latest}, mCfg.History...)
-		if len(history) > ModelTraceMaxHistory {
-			history = history[:ModelTraceMaxHistory]
-		}
-		mCfg.History = history
-	}
-	mCfg.Latest = record
-	now := time.Now()
-	cfg.LastRunAt = &now
-
-	if updateErr := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{ModelTraceExtraKey: cfg}); updateErr != nil {
-		return nil, fmt.Errorf("save modeltrace result: %w", updateErr)
-	}
-	l.Info("modeltrace.result_saved", zap.Bool("success", record.Error == ""), zap.Int64("latency_ms", record.LatencyMs))
-
-	return record, nil
+	return s.saveProbeResult(ctx, accountID, modelID, record)
 }
 
 // executeProbe performs probe completion rounds with interval checking and ModelTrace attribution.

@@ -8,6 +8,11 @@ export interface ModelTraceRecord {
   tested_at: string
   error?: string
   requests?: ModelTraceRequestRecord[]
+  expected_model?: string
+  match_status?: 'match' | 'mismatch' | 'inconclusive' | 'uncovered'
+  account_paused?: boolean
+  notification_status?: 'sent' | 'failed' | 'cooldown'
+  action_error?: string
 }
 
 export interface ModelTraceRequestRecord {
@@ -42,6 +47,7 @@ export interface ModelTraceMonitorItem {
   account_name: string
   platform: AccountPlatform
   type: AccountType
+  schedulable?: boolean
   last_run_at?: string
   models: Record<string, ModelTraceModelConfig>
 }
@@ -56,6 +62,10 @@ export interface ModelTraceGlobalConfig {
   interval_seconds: number
   reasoning_effort: string
   cron_expression: string
+  notify_on_mismatch: boolean
+  pause_on_mismatch: boolean
+  notification_cooldown_minutes: number
+  allowed_detections: Record<string, string[]>
 }
 
 export const modelTraceAPI = {

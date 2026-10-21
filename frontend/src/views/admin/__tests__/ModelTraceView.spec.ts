@@ -33,17 +33,22 @@ const Pagination = defineComponent({
 function mountView() {
   return mount(ModelTraceView, { global: { stubs: {
     AppLayout: { template: '<main><slot /></main>' }, BaseDialog: Dialog,
-    Toggle, Pagination, Icon: true, PlatformTypeBadge: true,
+    Toggle, Pagination, Icon: true, PlatformTypeBadge: true, RouterLink: { template: '<a><slot /></a>' },
     ConfirmDialog: { props: ['show'], template: '<button v-if="show" @click="$emit(\'confirm\')">confirm-remove</button>' },
   } } })
 }
-const globalConfig = { enabled: false, probe_count: 3, interval_seconds: 1, reasoning_effort: 'low', cron_expression: '*/30 * * * *' }
+const globalConfig = {
+  enabled: false, probe_count: 3, interval_seconds: 1, reasoning_effort: 'low', cron_expression: '*/30 * * * *',
+  notify_on_mismatch: false, pause_on_mismatch: false, notification_cooldown_minutes: 60,
+  allowed_detections: { 'gpt-6.1-sol': ['gpt-6-astra'] },
+}
 
 describe('ModelTrace explicit monitoring setup', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.listMonitors.mockResolvedValue([])
     mocks.getGlobalConfig.mockResolvedValue({ ...globalConfig })
+    mocks.updateGlobalConfig.mockResolvedValue({ success: true, config: { ...globalConfig } })
     mocks.updateAccountConfig.mockResolvedValue(undefined)
     mocks.removeAccountMonitor.mockResolvedValue(undefined)
     mocks.listAccounts.mockResolvedValue({ items: [{ id: 1002, name: 'Selected account', platform: 'openai', type: 'apikey' }], page: 1, total: 40 })
@@ -79,6 +84,63 @@ describe('ModelTrace explicit monitoring setup', () => {
     expect(mocks.updateAccountConfig).toHaveBeenCalledWith(1002, { models: ['gpt-5.4'] })
     expect(mocks.updateGlobalConfig).not.toHaveBeenCalled()
     expect(wrapper.find('select').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('saves notification, pause and allowed matches through global settings', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const settings = wrapper.findAll('button').find(button => button.text() === 'admin.modelTrace.globalSettings')
+    expect(settings).toBeDefined()
+    await settings?.trigger('click')
+    await wrapper.get('#modeltrace-notify').setValue(true)
+    await wrapper.get('#modeltrace-pause').setValue(true)
+    await wrapper.get('#modeltrace-cooldown').setValue(15)
+    await wrapper.get('#modeltrace-allowed').setValue('gpt-6.1-sol = gpt-6-astra\ngpt-6-sol = gpt-6-sol, gpt-6-astra')
+    const save = wrapper.findAll('button').find(button => button.text() === 'common.save')
+    expect(save).toBeDefined()
+    await save?.trigger('click')
+    await flushPromises()
+    expect(mocks.updateGlobalConfig).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: false,
+      notify_on_mismatch: true,
+      pause_on_mismatch: true,
+      notification_cooldown_minutes: 15,
+      allowed_detections: { 'gpt-6.1-sol': ['gpt-6-astra'], 'gpt-6-sol': ['gpt-6-sol', 'gpt-6-astra'] },
+    }))
+    wrapper.unmount()
+  })
+
+  it('keeps invalid or duplicate allowed-match rules out of the save request', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const settings = wrapper.findAll('button').find(button => button.text() === 'admin.modelTrace.globalSettings')
+    await settings?.trigger('click')
+    await wrapper.get('#modeltrace-allowed').setValue('gpt-6.1-sol = gpt-6-astra\nGPT-6.1-SOL = gpt-6-sol')
+    const save = wrapper.findAll('button').find(button => button.text() === 'common.save')
+    await save?.trigger('click')
+    expect(mocks.updateGlobalConfig).not.toHaveBeenCalled()
+    expect(mocks.showError).toHaveBeenCalledWith('admin.modelTrace.allowedDetectionsInvalid')
+    expect(wrapper.find('#modeltrace-allowed').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows mismatches, notification failures and paused calls without treating them as probe errors', async () => {
+    mocks.listMonitors.mockResolvedValue([{
+      account_id: 31, account_name: 'Paused account', platform: 'openai', type: 'oauth', schedulable: false,
+      models: { 'gpt-6.1-sol': { latest: {
+        detected_model: 'gpt-5.6-luna', expected_model: 'gpt-6.1-sol', probability: .95,
+        tested_at: '2026-10-21T14:00:00Z', latency_ms: 123, match_status: 'mismatch',
+        account_paused: true, notification_status: 'failed',
+      } } },
+    }])
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('gpt-5.6-luna')
+    expect(wrapper.text()).toContain('admin.modelTrace.verdict.mismatch')
+    expect(wrapper.text()).toContain('admin.modelTrace.notification.failed')
+    expect(wrapper.text()).toContain('admin.modelTrace.callsPaused')
+    expect(wrapper.text()).not.toContain('admin.modelTrace.probeErrorPrefix')
     wrapper.unmount()
   })
 

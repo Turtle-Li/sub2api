@@ -265,6 +265,10 @@
 - For v0.2.16 and ModelTrace, read `docs/operations/UPSTREAM_V0216_20261013.md`.
   The GPT-6.1 Sol subscription long-context exemption follows upstream for
   customer billing (owner decision); the fork hidden multiplier still applies.
+  ModelTrace contracts and pinned sources are in `docs/features/MODELTRACE.md`
+  and `MODELTRACE_UPSTREAM.md`; mismatch actions are specified in
+  `docs/features/MODELTRACE_ALERTS_20261021.md`. Preserve the default allowed
+  `gpt-6.1-sol` → `gpt-6-astra` relation and opt-in action switches.
 
 - For v0.2.14/v0.2.15, read `docs/operations/UPSTREAM_V0215_20261009.md`.
   Preserve profile-aware protocol routing plus legacy OpenCode URL/eligibility

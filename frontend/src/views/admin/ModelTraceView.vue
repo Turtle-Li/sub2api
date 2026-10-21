@@ -15,6 +15,7 @@
             <Toggle
               :model-value="globalConfig.enabled"
               :disabled="loading || !globalConfigLoaded || updatingGlobalConfig"
+              :aria-label="t('admin.modelTrace.globalSwitch')"
               @update:model-value="toggleGlobalSwitch"
             />
             <span
@@ -131,6 +132,9 @@
                 {{ account.account_name }}
               </span>
               <PlatformTypeBadge :platform="account.platform" :type="account.type" />
+              <RouterLink v-if="account.schedulable === false" to="/admin/accounts" class="text-xs font-medium text-rose-700 underline dark:text-rose-300">
+                {{ t('admin.modelTrace.callsPaused') }}
+              </RouterLink>
 
               <!-- Last run time -->
               <span v-if="account.last_run_at" class="text-xs text-gray-400 dark:text-gray-500">
@@ -222,6 +226,7 @@
                         >
                           {{ cfg.latest.detected_model }}
                         </span>
+                        <ModelTraceResultStatus :record="cfg.latest" class="mt-1" />
                       </template>
                       <span v-else class="text-xs text-gray-400 dark:text-gray-500">
                         {{ t('admin.modelTrace.untested') }}
@@ -463,8 +468,39 @@
               {{ t('admin.modelTrace.globalSwitchHelp') }}
             </p>
           </div>
-          <Toggle v-model="globalForm.enabled" />
+          <Toggle v-model="globalForm.enabled" :aria-label="t('admin.modelTrace.globalSwitch')" />
         </div>
+
+        <fieldset class="space-y-4 border-b border-gray-100 pb-4 dark:border-dark-700">
+          <legend class="mb-3 text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.modelTrace.mismatchPolicy') }}</legend>
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <label for="modeltrace-notify" class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.modelTrace.notifyOnMismatch') }}</label>
+              <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">{{ t('admin.modelTrace.notifyHelp') }}</p>
+            </div>
+            <Toggle id="modeltrace-notify" v-model="globalForm.notify_on_mismatch" :aria-label="t('admin.modelTrace.notifyOnMismatch')" />
+          </div>
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <label for="modeltrace-pause" class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.modelTrace.pauseOnMismatch') }}</label>
+              <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">{{ t('admin.modelTrace.pauseHelp') }}</p>
+            </div>
+            <Toggle id="modeltrace-pause" v-model="globalForm.pause_on_mismatch" :aria-label="t('admin.modelTrace.pauseOnMismatch')" />
+          </div>
+          <div v-if="globalForm.notify_on_mismatch">
+            <label for="modeltrace-cooldown" class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.modelTrace.notificationCooldown') }}</label>
+            <input id="modeltrace-cooldown" v-model.number="globalForm.notification_cooldown_minutes" type="number" min="1" max="1440" class="input mt-1" />
+          </div>
+          <div>
+            <label for="modeltrace-allowed" class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.modelTrace.allowedDetections') }}</label>
+            <textarea id="modeltrace-allowed" v-model="allowedDetectionsInput" rows="3" class="input mt-1 font-mono text-xs" placeholder="gpt-6.1-sol = gpt-6-astra" aria-describedby="modeltrace-allowed-help"></textarea>
+            <p id="modeltrace-allowed-help" class="mt-1 text-xs text-gray-600 dark:text-gray-300">{{ t('admin.modelTrace.allowedDetectionsHelp') }}</p>
+          </div>
+          <details class="text-xs text-gray-600 dark:text-gray-300">
+            <summary class="cursor-pointer font-medium">{{ t('admin.modelTrace.detectionNotes') }}</summary>
+            <p class="mt-2 leading-relaxed">{{ t('admin.modelTrace.detectionNotesHelp') }}</p>
+          </details>
+        </fieldset>
 
         <!-- Probe Count -->
         <div>
@@ -607,7 +643,7 @@
               <td class="whitespace-nowrap px-3 py-2 font-mono text-gray-600 dark:text-gray-300">
                 {{ rec.latency_ms ? `${rec.latency_ms} ms` : '-' }}
               </td>
-              <td class="px-3 py-2">
+              <td class="min-w-44 px-3 py-2">
                 <span
                   v-if="rec.error"
                   class="inline-flex max-w-xs items-center break-words rounded bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 ring-1 ring-inset ring-rose-600/20 dark:bg-rose-900/30 dark:text-rose-300"
@@ -615,6 +651,7 @@
                 >
                   {{ rec.error }}
                 </span>
+                <ModelTraceResultStatus v-else-if="rec.match_status" :record="rec" />
                 <span
                   v-else
                   class="inline-flex items-center rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-900/30 dark:text-emerald-300"
@@ -713,6 +750,8 @@ import Pagination from '@/components/common/Pagination.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
+import ModelTraceResultStatus from '@/components/account/ModelTraceResultStatus.vue'
+import { RouterLink } from 'vue-router'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -792,7 +831,11 @@ const globalConfig = ref<ModelTraceGlobalConfig>({
   probe_count: 3,
   interval_seconds: 1,
   reasoning_effort: 'low',
-  cron_expression: '*/30 * * * *'
+  cron_expression: '*/30 * * * *',
+  notify_on_mismatch: false,
+  pause_on_mismatch: false,
+  notification_cooldown_minutes: 60,
+  allowed_detections: { 'gpt-6.1-sol': ['gpt-6-astra'] }
 })
 const updatingGlobalConfig = ref(false)
 const showGlobalConfigDialog = ref(false)
@@ -802,8 +845,13 @@ const globalForm = reactive<ModelTraceGlobalConfig>({
   probe_count: 3,
   interval_seconds: 1,
   reasoning_effort: 'low',
-  cron_expression: '*/30 * * * *'
+  cron_expression: '*/30 * * * *',
+  notify_on_mismatch: false,
+  pause_on_mismatch: false,
+  notification_cooldown_minutes: 60,
+  allowed_detections: { 'gpt-6.1-sol': ['gpt-6-astra'] }
 })
+const allowedDetectionsInput = ref('')
 
 // Stats
 const totalConfiguredModels = computed(() => {
@@ -853,7 +901,7 @@ async function loadAll() {
       modelTraceAPI.getGlobalConfig()
     ])
     monitors.value = monitorsData
-    globalConfig.value = cfgData
+    globalConfig.value = { ...globalConfig.value, ...cfgData }
     globalConfigLoaded.value = true
   } catch (err: unknown) {
     appStore.showError(extractApiErrorMessage(err, t('common.error')))
@@ -885,18 +933,27 @@ async function toggleGlobalSwitch(val: boolean) {
 
 // Global Config Dialog
 function openGlobalConfigDialog() {
-  globalForm.enabled = globalConfig.value.enabled
-  globalForm.probe_count = globalConfig.value.probe_count
-  globalForm.interval_seconds = globalConfig.value.interval_seconds
-  globalForm.reasoning_effort = globalConfig.value.reasoning_effort
-  globalForm.cron_expression = globalConfig.value.cron_expression
+  Object.assign(globalForm, globalConfig.value)
+  allowedDetectionsInput.value = Object.entries(globalConfig.value.allowed_detections)
+    .map(([model, candidates]) => `${model} = ${candidates.join(', ')}`).join('\n')
   showGlobalConfigDialog.value = true
 }
 
 async function saveGlobalConfig() {
+  const allowed = new Map<string, string[]>()
+  for (const line of allowedDetectionsInput.value.split('\n').filter(line => line.trim())) {
+    const parts = line.split('=')
+    const model = parts[0]?.trim().toLowerCase()
+    const candidates = parts[1]?.split(',').map(candidate => candidate.trim().toLowerCase())
+    if (parts.length !== 2 || !model || !candidates?.length || candidates.some(candidate => !candidate) || allowed.has(model)) {
+      appStore.showError(t('admin.modelTrace.allowedDetectionsInvalid'))
+      return
+    }
+    allowed.set(model, candidates)
+  }
   savingGlobalConfig.value = true
   try {
-    const res = await modelTraceAPI.updateGlobalConfig({ ...globalForm })
+    const res = await modelTraceAPI.updateGlobalConfig({ ...globalForm, allowed_detections: Object.fromEntries(allowed) })
     if (res.config) {
       globalConfig.value = res.config
     }
