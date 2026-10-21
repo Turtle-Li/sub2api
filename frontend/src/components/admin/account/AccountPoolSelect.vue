@@ -1,6 +1,6 @@
 <template>
   <div data-testid="account-pool-select">
-    <label class="input-label">{{ t('admin.accounts.pools.importTarget') }}</label>
+    <label class="input-label">{{ label ?? t('admin.accounts.pools.importTarget') }}</label>
     <Select v-model="selected" :options="options" />
     <div v-if="creating" class="mt-2 flex gap-2">
       <input
@@ -42,27 +42,54 @@ const props = defineProps<{
    */
   platform?: string
   hint?: string
+  label?: string
+  noneLabel?: string
+  /**
+   * Controlled pool list. When provided, the component renders these pools
+   * without fetching and hides inline creation, so callers that already loaded
+   * pools (e.g. the account editor) stay in sync with the main list.
+   */
+  pools?: AccountPool[]
 }>()
 
 const model = defineModel<number | null>({ default: null })
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const pools = ref<AccountPool[]>([])
+const fetchedPools = ref<AccountPool[]>([])
 const creating = ref(false)
 const newPoolName = ref('')
 const submitting = ref(false)
 const NONE = 0
 const CREATE = -1
 
-const options = computed(() => [
-  { value: NONE, label: t('admin.accounts.pools.importTargetNone') },
-  ...pools.value.map(pool => ({
-    value: pool.id,
-    label: props.platform ? `${pool.name} (${pool.stats.total})` : `${pool.name} · ${pool.platform} (${pool.stats.total})`
-  })),
-  ...(props.platform ? [{ value: CREATE, label: t('admin.accounts.pools.createInline') }] : [])
-])
+const isControlled = computed(() => props.pools !== undefined)
+const pools = computed(() => props.pools ?? fetchedPools.value)
+const availablePools = computed(() =>
+  props.platform ? pools.value.filter(pool => pool.platform === props.platform) : pools.value
+)
+
+const options = computed(() => {
+  const items = [
+    { value: NONE, label: props.noneLabel ?? t('admin.accounts.pools.importTargetNone') },
+    ...availablePools.value.map(pool => ({
+      value: pool.id,
+      label: props.platform ? `${pool.name} (${pool.stats.total})` : `${pool.name} · ${pool.platform} (${pool.stats.total})`
+    }))
+  ]
+  // Keep a pooled account's current pool visible even when the caller's pool
+  // list is still loading; otherwise the select would silently show "none".
+  if (model.value != null && !availablePools.value.some(pool => pool.id === model.value)) {
+    items.push({
+      value: model.value,
+      label: t('admin.accounts.pools.currentPoolFallback', { id: model.value })
+    })
+  }
+  if (!isControlled.value && props.platform) {
+    items.push({ value: CREATE, label: t('admin.accounts.pools.createInline') })
+  }
+  return items
+})
 
 const selected = computed({
   get: () => (creating.value ? CREATE : model.value ?? NONE),
@@ -79,7 +106,7 @@ const createPool = async () => {
   submitting.value = true
   try {
     const created = await adminAPI.accountPools.create({ name, platform: props.platform })
-    pools.value = [...pools.value, created]
+    fetchedPools.value = [...fetchedPools.value, created]
     creating.value = false
     newPoolName.value = ''
     model.value = created.id
@@ -94,18 +121,24 @@ let requestSeq = 0
 watch(
   () => props.platform,
   async (platform) => {
-    const seq = ++requestSeq
-    pools.value = []
     creating.value = false
+    // Controlled callers own the list; do not fetch or clear a valid selection.
+    if (isControlled.value) return
+    const seq = ++requestSeq
+    fetchedPools.value = []
+    let loaded = false
     try {
-      const loaded = await adminAPI.accountPools.list(platform || undefined)
+      const result = await adminAPI.accountPools.list(platform || undefined)
       if (seq !== requestSeq) return
-      pools.value = loaded
+      fetchedPools.value = result
+      loaded = true
     } catch (error) {
       // Optional field: without pools only "none" (and create) remain.
       console.error('Failed to load account pools:', error)
     }
-    if (seq === requestSeq && model.value != null && !pools.value.some(pool => pool.id === model.value)) {
+    // Only clear a stale selection after a successful load. A transient list
+    // failure must not silently move the account out of its pool.
+    if (loaded && model.value != null && !availablePools.value.some(pool => pool.id === model.value)) {
       model.value = null
     }
   },

@@ -188,6 +188,57 @@ describe('AccountPoolSelect', () => {
     expect(wrapper.find('[data-testid="account-pool-select-new-name"]').exists()).toBe(false)
   })
 
+  it('uses a controlled pool list for editing without fetching or offering creation', async () => {
+    const wrapper = mount(AccountPoolSelect, {
+      props: {
+        platform: 'grok',
+        pools: [pool()],
+        modelValue: 7,
+        label: 'admin.accounts.pools.editTarget',
+        noneLabel: 'admin.accounts.pools.editTargetNone'
+      },
+      global: { stubs: { Select: SelectStub } }
+    })
+    await flushPromises()
+
+    expect(listPools).not.toHaveBeenCalled()
+    expect(wrapper.get('label').text()).toBe('admin.accounts.pools.editTarget')
+    const labels = wrapper.findAll('option').map(o => o.text())
+    expect(labels[0]).toBe('admin.accounts.pools.editTargetNone')
+    expect(labels).toContain('grok free batch (10)')
+    expect(labels).not.toContain('admin.accounts.pools.createInline')
+  })
+
+  it('keeps the current pool selectable when the controlled list has not loaded', async () => {
+    const wrapper = mount(AccountPoolSelect, {
+      props: { platform: 'grok', pools: [], modelValue: 7 },
+      global: { stubs: { Select: SelectStub } }
+    })
+    await flushPromises()
+
+    expect(listPools).not.toHaveBeenCalled()
+    expect(wrapper.findAll('option').map(o => o.text())).toContain(
+      'admin.accounts.pools.currentPoolFallback:{"id":7}'
+    )
+  })
+
+  it('does not clear a selected pool when loading the list fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    listPools.mockRejectedValue(new Error('offline'))
+    const wrapper = mount(AccountPoolSelect, {
+      props: {
+        platform: 'grok',
+        modelValue: 7,
+        'onUpdate:modelValue': (value: number | null) => wrapper.setProps({ modelValue: value })
+      },
+      global: { stubs: { Select: SelectStub } }
+    })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    errorSpy.mockRestore()
+  })
+
   it('lists every platform without a create option when no platform is given', async () => {
     listPools.mockResolvedValue([pool()])
     const wrapper = mount(AccountPoolSelect, {

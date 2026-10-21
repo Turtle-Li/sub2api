@@ -509,7 +509,16 @@
       @assigned="handleAssignedToPool"
     />
     <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
-    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
+    <EditAccountModal
+      :show="showEdit"
+      :account="edAcc"
+      :proxies="proxies"
+      :groups="groups"
+      :pools="pools"
+      @close="showEdit = false"
+      @updated="handleAccountUpdated"
+      @pool-changed="handleAccountPoolChanged"
+    />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
@@ -1916,6 +1925,8 @@ const handleEdit = async (a: AccountListItem) => {
   if (!account) return
   edAcc.value = account
   showEdit.value = true
+  // The editor offers pool membership, so make sure its choices are current.
+  void loadPools()
 }
 /** Cline 账号：跳到 Cline 上游钉住页并预选该账号。 */
 const handleClineUpstream = (a: Account) => {
@@ -2419,6 +2430,13 @@ const handleProbeUpstreamBilling = async (account: Account) => {
 const handleAccountUpdated = (updatedAccount: Account) => {
   refreshPoolModal()
   patchAccountInList(updatedAccount)
+  enterAutoRefreshSilentWindow()
+}
+/** Pool membership decides which list an account belongs to, so reload both. */
+const handleAccountPoolChanged = () => {
+  refreshPoolModal()
+  void loadPools()
+  void load()
   enterAutoRefreshSilentWindow()
 }
 const formatExportTimestamp = () => {

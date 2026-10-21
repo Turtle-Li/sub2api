@@ -3173,6 +3173,17 @@
         data-tour="account-form-groups"
       />
 
+      <!-- Account pool: pools are display-only containers, so membership can be
+           changed for an existing account without touching its groups/proxy. -->
+      <AccountPoolSelect
+        v-model="targetPoolId"
+        :platform="account?.platform"
+        :pools="pools ?? []"
+        :label="t('admin.accounts.pools.editTarget')"
+        :none-label="poolNoneLabel"
+        :hint="t('admin.accounts.pools.editTargetHint')"
+      />
+
     </form>
 
     <template #footer>
@@ -3232,6 +3243,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 
 import { adminAPI } from '@/api/admin'
+import type { AccountPool } from '@/api/admin/accountPools'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import type {
   Account,
@@ -3259,6 +3271,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import AccountPoolSelect from '@/components/admin/account/AccountPoolSelect.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
@@ -3343,12 +3356,15 @@ interface Props {
   account: Account | null
   proxies: Proxy[]
   groups: AdminGroup[]
+  /** Same-platform pool choices; the editor does not fetch them itself. */
+  pools?: AccountPool[]
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
   updated: [account: Account]
+  'pool-changed': []
 }>()
 
 const { t } = useI18n()
@@ -3501,6 +3517,14 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+// Account pool membership is edited alongside the account but persisted through
+// the pool membership endpoints (the account PUT intentionally ignores it).
+const targetPoolId = ref<number | null>(null)
+const poolNoneLabel = computed(() =>
+  props.account?.pool_id != null
+    ? t('admin.accounts.pools.editTargetRemove')
+    : t('admin.accounts.pools.editTargetNone')
+)
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
 // account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
@@ -4346,6 +4370,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     ? newAccount.status
     : 'active'
   form.group_ids = newAccount.group_ids || []
+  targetPoolId.value = newAccount.pool_id ?? null
   form.expires_at = newAccount.expires_at ?? null
 
   // Load intercept warmup requests setting (applies to all account types)
@@ -5345,6 +5370,39 @@ const persistGrokMediaEligibility = async (accountID: number, updatedAccount: Ac
   return updatedAccount
 }
 
+/**
+ * Applies the pool selector through the dedicated membership endpoints.
+ *
+ * The account PUT does not carry pool_id, so an existing account is moved with
+ * addMembers (also moves between pools) or released with removeMembers. A
+ * failure is reported as a partial save: the account fields are already stored
+ * and the dialog stays open so the operator can retry the pool change.
+ */
+const persistAccountPoolMembership = async (
+  accountID: number,
+  updatedAccount: Account
+): Promise<{ account: Account; changed: boolean }> => {
+  const desiredPoolID = targetPoolId.value ?? null
+  const currentPoolID = props.account?.pool_id ?? null
+  if (desiredPoolID === currentPoolID) {
+    return { account: { ...updatedAccount, pool_id: currentPoolID }, changed: false }
+  }
+
+  try {
+    if (desiredPoolID == null) {
+      await adminAPI.accountPools.removeMembers([accountID])
+    } else {
+      await adminAPI.accountPools.addMembers(desiredPoolID, [accountID])
+    }
+  } catch (error) {
+    throw new Error(t('admin.accounts.pools.editTargetPartial', {
+      error: extractApiErrorMessage(error, t('admin.accounts.pools.assignFailed'))
+    }))
+  }
+
+  return { account: { ...updatedAccount, pool_id: desiredPoolID }, changed: true }
+}
+
 const submitUpdateAccount = async (
   accountID: number,
   updatePayload: Record<string, unknown>,
@@ -5373,8 +5431,20 @@ const submitUpdateAccount = async (
       resultAccount = { ...updatedAccount, proxy_id: fixedEgressProxyChange.proxyID || null }
       originalProxyID.value = fixedEgressProxyChange.proxyID || null
     }
+    let poolChanged = false
+    try {
+      const poolResult = await persistAccountPoolMembership(accountID, resultAccount)
+      resultAccount = poolResult.account
+      poolChanged = poolResult.changed
+    } catch (poolError: any) {
+      // The account fields are already persisted. Publish them before surfacing
+      // the pool error so the list is not left stale if the operator cancels.
+      emit('updated', resultAccount)
+      throw poolError
+    }
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
     emit('updated', resultAccount)
+    if (poolChanged) emit('pool-changed')
     handleClose()
   } catch (error: any) {
     if (error.status === 409 && error.error === 'mixed_channel_warning' && needsMixedChannelCheck()) {

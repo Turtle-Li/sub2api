@@ -586,6 +586,12 @@ export default {
         importTargetMixedHint: 'Only accounts matching the pool platform are added to it; others import normally',
         createInline: 'New pool…',
         createAndSelect: 'Create & select',
+        editTarget: 'Account pool',
+        editTargetNone: 'No pool',
+        editTargetRemove: 'Remove from pool (back to main list)',
+        editTargetHint: 'Move an existing account into or out of a pool. Pooled accounts leave the main list (search still finds them); groups, scheduling and proxies stay unchanged.',
+        editTargetPartial: 'Account saved, but the pool change failed: {error}',
+        currentPoolFallback: 'Current pool (#{id})',
         badge: 'Pool: {name}'
       },
       bulkActions: {

@@ -706,6 +706,12 @@ export default {
         importTargetMixedHint: '仅与账号池平台相同的账号会放入池，其余账号照常导入',
         createInline: '新建账号池…',
         createAndSelect: '创建并选择',
+        editTarget: '账号池',
+        editTargetNone: '不加入账号池',
+        editTargetRemove: '移出账号池（回到主列表）',
+        editTargetHint: '已创建的账号也可在这里加入或移出账号池；加入后不再显示在主列表（搜索仍可找到），分组、调度和代理保持不变。',
+        editTargetPartial: '账号资料已保存，但账号池调整失败：{error}',
+        currentPoolFallback: '当前账号池（#{id}）',
         badge: '池：{name}'
       },
       bulkActions: {

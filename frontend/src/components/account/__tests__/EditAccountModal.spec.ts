@@ -1,16 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import {
   BUILTIN_PLATFORM_CATALOG,
   resetPlatformCatalog,
   setPlatformCatalog
 } from '@/constants/platformCatalog'
 
-const { updateAccountMock, bulkUpdateMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const {
+  updateAccountMock,
+  bulkUpdateMock,
+  checkMixedChannelRiskMock,
+  addPoolMembersMock,
+  removePoolMembersMock,
+  authIsSimpleMode
+} = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   bulkUpdateMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
+  addPoolMembersMock: vi.fn(),
+  removePoolMembersMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
@@ -36,6 +45,11 @@ vi.mock('@/api/admin', () => ({
       update: updateAccountMock,
       bulkUpdate: bulkUpdateMock,
       checkMixedChannelRisk: checkMixedChannelRiskMock
+    },
+    accountPools: {
+      list: vi.fn().mockResolvedValue([]),
+      addMembers: addPoolMembersMock,
+      removeMembers: removePoolMembersMock
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -330,13 +344,18 @@ function buildOpenAIOAuthParentAccount() {
   } as any
 }
 
-function mountModal(account = buildAccount(), renderGroupSelector = false) {
+function mountModal(
+  account = buildAccount(),
+  renderGroupSelector = false,
+  pools: Array<{ id: number; name: string; platform: string; stats: { total: number } }> = []
+) {
   return mount(EditAccountModal, {
     props: {
       show: true,
       account,
       proxies: [],
-      groups: []
+      groups: [],
+      pools: pools as any
     },
     global: {
       stubs: {
@@ -355,6 +374,8 @@ describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
     bulkUpdateMock.mockReset()
+    addPoolMembersMock.mockReset().mockResolvedValue({ affected: 1 })
+    removePoolMembersMock.mockReset().mockResolvedValue({ affected: 1 })
   })
 
   afterEach(() => vi.useRealTimers())
@@ -375,6 +396,60 @@ describe('EditAccountModal', () => {
     expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('modelMappings')).toEqual([
       { from: 'gpt-latest', to: 'deepseek-chat' }
     ])
+  })
+
+  it('moves an existing account into the selected pool on save', async () => {
+    const account = buildAccount()
+    account.pool_id = null
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account, false, [
+      { id: 7, name: 'openai batch', platform: 'openai', stats: { total: 3 } }
+    ])
+
+    await wrapper.get('[data-testid="account-pool-select"] select').setValue('7')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(addPoolMembersMock).toHaveBeenCalledWith(7, [1])
+    expect(removePoolMembersMock).not.toHaveBeenCalled()
+    expect(wrapper.emitted('updated')?.at(-1)?.[0]).toMatchObject({ id: 1, pool_id: 7 })
+    expect(wrapper.emitted('pool-changed')).toHaveLength(1)
+  })
+
+  it('removes a pooled account from its pool when none is selected', async () => {
+    const account = buildAccount()
+    account.pool_id = 7
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account, false, [
+      { id: 7, name: 'openai batch', platform: 'openai', stats: { total: 3 } }
+    ])
+
+    await wrapper.get('[data-testid="account-pool-select"] select').setValue('0')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(removePoolMembersMock).toHaveBeenCalledWith([1])
+    expect(addPoolMembersMock).not.toHaveBeenCalled()
+    expect(wrapper.emitted('updated')?.at(-1)?.[0]).toMatchObject({ id: 1, pool_id: null })
+    expect(wrapper.emitted('pool-changed')).toHaveLength(1)
+  })
+
+  it('leaves pool membership untouched when the selection did not change', async () => {
+    const account = buildAccount()
+    account.pool_id = 7
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account, false, [
+      { id: 7, name: 'openai batch', platform: 'openai', stats: { total: 3 } }
+    ])
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(addPoolMembersMock).not.toHaveBeenCalled()
+    expect(removePoolMembersMock).not.toHaveBeenCalled()
+    expect(wrapper.emitted('pool-changed')).toBeUndefined()
   })
 
   it('sets expiry presets from now instead of extending the saved expiry', async () => {
