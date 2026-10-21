@@ -89,7 +89,9 @@ func (s *OpenAIGatewayService) ordinaryPoolUnavailableForPaidFallback(ctx contex
 	if s.accountRepo == nil || req.GroupID == nil || s.checkChannelPricingRestriction(ctx, req.GroupID, req.RequestedModel) {
 		return false
 	}
-	accounts, err := s.accountRepo.ListByGroup(ctx, *req.GroupID)
+	// Authentication failures persist StatusError before the retry; ListByGroup
+	// returns active accounts only and would hide the failure that admits reserves.
+	accounts, err := s.accountRepo.ListAllWithFilters(ctx, "", "", "", "", *req.GroupID, "")
 	if err != nil {
 		return false
 	}

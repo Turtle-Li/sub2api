@@ -17,8 +17,18 @@ type paidFallbackAccountRepo struct {
 	listErr error
 }
 
-func (r paidFallbackAccountRepo) ListByGroup(_ context.Context, _ int64) ([]Account, error) {
-	return r.accounts, r.listErr
+func (r paidFallbackAccountRepo) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) {
+	return r.ListAllWithFilters(ctx, "", "", StatusActive, "", groupID, "")
+}
+
+func (r paidFallbackAccountRepo) ListAllWithFilters(_ context.Context, _, _, status, _ string, groupID int64, _ string) ([]Account, error) {
+	var accounts []Account
+	for _, account := range r.accounts {
+		if (status == "" || account.Status == status) && openAIStickyAccountMatchesGroup(&account, &groupID) {
+			accounts = append(accounts, account)
+		}
+	}
+	return accounts, r.listErr
 }
 
 func (r paidFallbackAccountRepo) ListModelAvailabilityCandidates(_ context.Context, _ *int64, _ []string, _ bool) ([]Account, error) {

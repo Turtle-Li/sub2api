@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func TestPaidFallbackBusyNormalPoolWaits(t *testing.T) {
 }
 
 func TestPaidFallbackScopeModelAndDependencyDoNotTriggerSpending(t *testing.T) {
-	for _, scenario := range []string{"scope", "model", "dependency", "profit", "retry_cap", "disabled"} {
+	for _, scenario := range []string{"scope", "model", "dependency", "profit", "retry_cap", "disabled", "disabled_status"} {
 		t.Run(scenario, func(t *testing.T) {
 			svc, ctx, _ := newPaidFallbackScheduler(t, PlatformOpenAI, false)
 			repo := paidFallbackTestAccountRepo(t, svc)
@@ -34,6 +35,8 @@ func TestPaidFallbackScopeModelAndDependencyDoNotTriggerSpending(t *testing.T) {
 				ctx = WithPaidFallbackAPIKey(ctx, 12)
 			case "disabled":
 				repo.accounts[0].Schedulable = false
+			case "disabled_status":
+				repo.accounts[0].Status = "disabled"
 			case "model":
 				repo.accounts[0].Credentials = map[string]any{"model_mapping": map[string]any{"different-model": "different-model"}}
 			case "dependency":
@@ -127,5 +130,43 @@ func TestPaidFallbackDeepSeekWBToCline(t *testing.T) {
 		require.NoError(t, err)
 		require.EqualValues(t, 1, selection.Account.ID)
 		selection.ReleaseFunc()
+	}
+}
+
+func TestPaidFallbackDeepSeekAuthErrorTransition(t *testing.T) {
+	for _, advanced := range []bool{false, true} {
+		for _, status := range []int{401, 403} {
+			t.Run(fmt.Sprintf("advanced=%t/status=%d", advanced, status), func(t *testing.T) {
+				svc, ctx, _ := newPaidFallbackScheduler(t, PlatformDeepseek, advanced)
+				repo := paidFallbackTestAccountRepo(t, svc)
+				repo.accounts[0].Credentials = map[string]any{"model_mapping": map[string]any{"deepseek-v4.1-flash": "global:deepseek-v4.1-flash"}}
+				repo.accounts[1].Platform = PlatformCline
+				repo.accounts[1].Credentials = map[string]any{"model_mapping": map[string]any{"deepseek-v4.1-flash": "cline-pass/deepseek-v4.1-flash-1017"}}
+				groupID := int64(7)
+				selectAccount := func(ctx context.Context, excluded map[int64]struct{}) (*AccountSelectionResult, error) {
+					selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "", "auth-transition", "deepseek-v4.1-flash", excluded, OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityChatCompletions, false, false, false, PlatformDeepseek)
+					return selection, err
+				}
+				selection, err := selectAccount(ctx, nil)
+				require.NoError(t, err)
+				require.EqualValues(t, 1, selection.Account.ID)
+				selection.ReleaseFunc()
+				failedCtx := WithPaidFallbackFailure(ctx, selection.Account, status)
+				repo.accounts[0].Status = StatusError
+				repo.accounts[0].Schedulable = false
+				active, err := repo.ListByGroup(ctx, groupID)
+				require.NoError(t, err)
+				require.Len(t, active, 1, "production ListByGroup omits the account marked error after upstream authentication failure")
+				selection, err = selectAccount(failedCtx, map[int64]struct{}{1: {}})
+				require.NoError(t, err)
+				require.EqualValues(t, 2, selection.Account.ID)
+				require.True(t, selection.Account.IsPaidFallback())
+				selection.ReleaseFunc()
+				selection, err = selectAccount(ctx, nil)
+				require.NoError(t, err, "later requests must also observe the persisted runtime error")
+				require.EqualValues(t, 2, selection.Account.ID)
+				selection.ReleaseFunc()
+			})
+		}
 	}
 }

@@ -61,8 +61,20 @@ type paidFallbackHandlerAccounts struct {
 	openAIImagesFailoverAccountRepo
 }
 
-func (r paidFallbackHandlerAccounts) ListByGroup(context.Context, int64) ([]service.Account, error) {
-	return r.accounts, nil
+func (r paidFallbackHandlerAccounts) ListAllWithFilters(_ context.Context, _, _, status, _ string, groupID int64, _ string) ([]service.Account, error) {
+	var accounts []service.Account
+	for _, account := range r.accounts {
+		if status != "" && account.Status != status {
+			continue
+		}
+		for _, id := range account.GroupIDs {
+			if id == groupID {
+				accounts = append(accounts, account)
+				break
+			}
+		}
+	}
+	return accounts, nil
 }
 
 type paidFallbackHandlerUpstream struct {
