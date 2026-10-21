@@ -192,3 +192,35 @@ func TestPaidFallbackExcludesNonTextCapabilities(t *testing.T) {
 		})
 	}
 }
+
+func TestPaidFallbackExcludesResponsesImageGeneration(t *testing.T) {
+	for _, previousID := range []string{"", "resp_paid"} {
+		for _, nativeTool := range []bool{false, true} {
+			t.Run(previousID+map[bool]string{false: "/image_intent", true: "/native_image_tool"}[nativeTool], func(t *testing.T) {
+				svc, ctx, _ := newPaidFallbackScheduler(t, PlatformOpenAI, false)
+				repo := svc.accountRepo.(paidFallbackAccountRepo)
+				until := time.Now().Add(time.Hour)
+				repo.accounts[0].RateLimitResetAt = &until
+				for i := range repo.accounts {
+					if repo.accounts[i].Extra == nil {
+						repo.accounts[i].Extra = make(map[string]any)
+					}
+					repo.accounts[i].Extra["openai_responses_supported"] = true
+				}
+				require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(ctx, 7, "resp_paid", 2, time.Minute))
+				if nativeTool {
+					ctx = WithOpenAIResponsesImageModelRequirements(ctx, []string{"gpt-image-2"})
+				} else {
+					ctx = WithOpenAIImageGenerationIntent(ctx)
+				}
+				groupID := int64(7)
+				selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, previousID, "", "gpt-5.4", nil, OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityResponses, false, false, false)
+				if selection != nil && selection.ReleaseFunc != nil {
+					defer selection.ReleaseFunc()
+				}
+				require.ErrorIs(t, err, ErrNoAvailableAccounts)
+				require.Nil(t, selection)
+			})
+		}
+	}
+}

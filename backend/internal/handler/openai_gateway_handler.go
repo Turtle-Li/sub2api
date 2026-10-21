@@ -3186,6 +3186,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					return service.NewOpenAIWSClientCloseError(securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision), nil)
 				}
 				turnImageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", model, payload)
+				if turnImageIntent && account.IsPaidFallback() {
+					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Image generation is unavailable on paid fallback connections", nil)
+				}
 				if turnImageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, service.ImageGenerationPermissionMessage(), nil)
 				}

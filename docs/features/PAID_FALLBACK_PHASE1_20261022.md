@@ -36,7 +36,7 @@ Local implementation and verification are authorized. No production deployment, 
 
 ## Change report and verification
 
-本地一期代码已实现，默认关闭，未部署、未创建线上账号或 Key，也未提交或推送。此文档同时记录实现边界和后续隔离验收步骤。开发者验证不等于独立 QA、发布批准或用户验收；独立审查代理在本次环境中不可用，尚无独立审查结论。
+一期代码已实现，默认关闭。此文档记录实现边界和隔离验收步骤；当前提交、部署与真实验收状态见文末记录。开发者验证不等于真实供应商验收。
 
 ### 实际范围
 
@@ -47,7 +47,7 @@ Local implementation and verification are authorized. No production deployment, 
 - HTTP 与 WS：是同一种账号策略，不需要用户分开配置。HTTP 每次请求选择账号，WS 在建连时选择账号，在后续轮次检查授权；原有连接不迁移，携带 `previous_response_id` 的继续请求保持原账号绑定。普通池恢复后，新的无状态请求和新连接优先普通账号。DeepSeek 的 HTTP 验收可覆盖共用调度策略，具体账号仍须原生支持所选传输协议。
 - 费用：`usage_logs.paid_fallback` 保存请求发生时的归因，管理员用量 DTO 暴露该字段。沿用原有成本快照，不改变客户收费、余额、订阅或分组归属。付费失败且未返回 usage 时，费用未知，不能当作零费用。
 
-本期没有专用前端面板、飞书通知、持久化失败尝试账本、预算预警或硬预算熔断；这些是后续范围。专用图片接口、legacy compact 以及其他原生平台不开放付费兜底。已有的有界同账号重试仍可能产生多次上游请求，一次额外付费选择不代表只会付费一次。
+本期没有专用前端面板、飞书通知、持久化失败尝试账本、预算预警或硬预算熔断；这些是后续范围。专用图片接口、Responses 内嵌生图工具或生图模型、legacy compact 以及其他原生平台不开放付费兜底；已绑定付费账号的 WS 连接也拒绝后续生图轮次。已有的有界同账号重试仍可能产生多次上游请求，一次额外付费选择不代表只会付费一次。
 
 ### 管理接口
 
@@ -140,3 +140,5 @@ knowledge_candidate: no; project-specific controlled rollout.
 - 新增的付费继续请求预读在绑定账号删除或缓存回退失败时直接返回错误，影响策略关闭时的原有普通继续请求。预读失败现交回原调度流程；普通池的付费隔离过滤仍生效，已确认的付费继续请求仍保持原凭据绑定。
 
 付费兜底仅允许 Chat Completions、文本 Responses/Messages 及共用文本 WS 策略；Embeddings、独立搜索、图像、Live、Seedance 和旧版 compact 不进入付费池。新增 Embeddings/搜索边界用例在修复前均能复现意外选中付费账号。
+
+复审通过后进一步收紧原生 Responses 生图：共用 `responses` 能力不能单独区分文本与内嵌生图，因此额外检查生图意图、原生工具模型及请求模型。新请求与付费继续请求的四个回归场景均在修复前复现了进入付费池；WS 后续轮次在解析生图意图后直接拒绝。

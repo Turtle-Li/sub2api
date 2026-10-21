@@ -24,13 +24,16 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	var decision OpenAIAccountScheduleDecision
 	err := ErrNoAvailableAccounts
 	paidTextCapability := requiredCapability == "" || requiredCapability == OpenAIEndpointCapabilityChatCompletions || requiredCapability == OpenAIEndpointCapabilityResponses
+	paidTextRequest := paidTextCapability && requiredImageCapability == "" && !requireCompact &&
+		!OpenAIImageGenerationIntentFromContext(ctx) && len(openAIResponsesImageModelRequirementsFromContext(ctx)) == 0 &&
+		!isOpenAIImageGenerationModel(requestedModel)
 	if previousResponseID != "" && paidTextCapability {
 		bound, lookupErr := s.paidFallbackContinuationAccount(ctx, groupID, previousResponseID)
 		if lookupErr != nil {
 			return nil, decision, lookupErr
 		}
 		if bound != nil {
-			if !s.settingService.paidFallbackAllowed(ctx, groupID) {
+			if !paidTextRequest || !s.settingService.paidFallbackAllowed(ctx, groupID) {
 				return nil, decision, err
 			}
 			keyID, _ := ctx.Value(paidFallbackAPIKeyKey{}).(int64)
@@ -56,7 +59,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		}
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
-	if (platform != PlatformOpenAI && platform != PlatformDeepseek) || !paidTextCapability || requiredImageCapability != "" || requireCompact || ctx.Err() != nil || !s.settingService.paidFallbackAllowed(ctx, groupID) {
+	if (platform != PlatformOpenAI && platform != PlatformDeepseek) || !paidTextRequest || ctx.Err() != nil || !s.settingService.paidFallbackAllowed(ctx, groupID) {
 		return selection, decision, err
 	}
 	// Provider-owned continuation state cannot be moved between credentials.
