@@ -72,3 +72,46 @@ The initial regression run failed all five API Key cases and four OAuth cases
 under the old implementation. Existing adaptive-provider, compact, image,
 scheduled-test, ModelTrace and ordinary-forwarding tests provide adjacent
 coverage. See the task change report for executed checks and release status.
+
+## Production release — 2026-10-21
+
+The owner authorized commit, merge and release. Fix commit
+`a2cb792eb85700a11f031a9d7ff6efa0068e78e6` was fast-forwarded to fork `main`
+and deployed by GitHub Actions run
+[`39599344999`](https://github.com/Turtle-Li/sub2api/actions/runs/39599344999).
+Both the image release and Caddy configuration steps succeeded; the workflow
+completed at `2026-10-21T12:35:19Z`. Version remains `0.2.17`.
+
+- Target: the existing AWS production host through `aws-candidate`, using the
+  documented verified-image receiver and canonical maintenance lock.
+- Active slot: `sub2api-blue`; image
+  `sub2api:auto-20261021-053409-a2cb792e`, local image ID
+  `sha256:88b8edbbeb2c7ccb8d9174294dbeef93c25f0e15f12e5bc3db545dba27ec06a0`.
+- Compressed archive: 86,988,318 bytes, SHA-256
+  `beb5f687c2cb7e3cee715a103c16cf9dbf97a4772eaac004a6649557172fd219`.
+- Caddy host/startup/Admin views all select blue; traffic is `accepting` and
+  blue is the active background owner. Container healthy, restart count zero,
+  no OOM, no retained Caddy or local-release transaction.
+- Authenticated release smoke: `gpt-5.6-sol` Models and Responses both HTTP 200.
+  Pinned-origin API/www health, homepage and login checks all HTTP 200.
+  Public API health is 200 and anonymous Models is the expected 401. Local
+  anonymous www probes return the same 403 before and after deployment; this
+  does not establish a successful browser journey through that edge.
+- Application/Caddy log audit from `2026-10-21T12:34:00Z` through the
+  post-release check found zero 5xx or panic/fatal lines. Old green drained and
+  exited normally; it remains the prior compatible generation for guarded
+  recovery. No rollback was needed.
+- Host log directory:
+  `/var/log/sub2api-release/gha-20261021-053409-a2cb792e-3692464`.
+
+The source passed 1,255 related checks including subtests with race detection
+and shuffled order; the 10 new request-capture scenarios passed independent
+execution. Changed-file lint is clear; affected-package lint still has 69
+existing findings in unchanged files. Release smoke checks ordinary model
+traffic, while the local public-entry regressions directly inspect account-test
+payloads. No production administrator-test payload was captured.
+
+This release has no database migration. In external dependency mode, the
+application release does not run a local full database backup; the existing
+data-host backup/NAS pipeline remains responsible for database backups. Keep
+the documented drain/readiness/maintenance-lock gates for recovery.
