@@ -183,5 +183,36 @@ model conflicts with the owner's requested verification model.
 Before release, a read-only production query found four monitored accounts:
 three schedulable and one paused. The signed-in live page showed four paused
 badges. Notification was enabled and automatic pausing disabled; these settings
-and the accounts' stored scheduling flags are preserved. Production release
-and the page's corrected badge count are recorded after deployment below.
+and the accounts' stored scheduling flags are preserved.
+
+The owner-authorized fix was fast-forwarded to `main` as
+`cc4f3ab31c603fb0246ba9d905a8b24a56e7b87b` and deployed by successful workflow
+[39656362996](https://github.com/Turtle-Li/sub2api/actions/runs/39656362996).
+Image deployment and Caddy configuration both passed; Caddy completed at
+`2026-10-21T19:00:58Z` (03:00:58 on October 22 CST).
+
+- Active slot: `sub2api-green`, image
+  `sub2api:auto-20261021-120011-cc4f3ab3`, version `0.2.17`; exact source
+  revision matches the fix. Image ID:
+  `sha256:9f398694ee8787d207fc5918277ced07f1c7519662849bf91eb4d75282e0962a`.
+- At `2026-10-21T19:02:36Z`, the container was healthy with zero restarts/OOM,
+  all three Caddy views selected green, traffic was accepting, background was
+  active and no release transaction remained. Authenticated liveness,
+  database/Redis readiness and refund rollback readiness passed; pending
+  reserved reviewed entitlements were zero. Startup app 5xx/panic counts were
+  zero.
+- The canonical authenticated `gpt-5.6-sol` Models/Responses smoke returned
+  200/200. Public API/www health, homepage and login returned 200; anonymous
+  Models and ModelTrace global configuration returned the expected 401.
+- After the signed-in monitor page finished reloading, it displayed four
+  account cards and exactly one paused badge, matching the read-only database
+  aggregate of three schedulable/one paused. The initial page-loading state
+  was excluded from this assertion. Global policy remained enabled with
+  notification on and automatic pause off.
+- Prior blue exited normally with code 0; its `69119476` image remains
+  available for canonical guarded rollback. Host evidence:
+  `/var/log/sub2api-release/gha-20261021-120011-cc4f3ab3-4048124`.
+
+No production fingerprint test, notification send, scheduling update or policy
+update was performed for this validation. The following documentation-only
+commit records the hotfix release without changing its running source.
