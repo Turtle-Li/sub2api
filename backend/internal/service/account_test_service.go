@@ -2911,10 +2911,8 @@ func createOpenAITestPayload(modelID string, isOAuth bool, promptAndEffort ...st
 	// OAuth accounts using ChatGPT internal API require store: false
 	if isOAuth {
 		payload["store"] = false
+		payload["instructions"] = defaultCodexSynthInstructions(modelID)
 	}
-
-	// All accounts require instructions for Responses API
-	payload["instructions"] = openai.DefaultInstructions
 
 	if effort != "" {
 		payload["reasoning"] = map[string]any{"effort": effort}

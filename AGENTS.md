@@ -248,6 +248,11 @@
 
 ## Upstream update scope
 
+- For account-test instructions, read
+  `docs/operations/ACCOUNT_TEST_INSTRUCTIONS_20261021.md`. API Key Responses
+  probes omit synthetic Codex instructions; ChatGPT OAuth probes select them
+  using the normalized upstream model. Preserve this local fix across merges.
+
 - For v0.2.17, read `docs/operations/UPSTREAM_V0217_20261017.md`. Preserve
   local collection/reset-card fulfillment, stable refund references, reviewed
   refund accounting and fixed-egress discovery while adopting upstream fixes.
