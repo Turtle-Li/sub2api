@@ -1204,7 +1204,7 @@ func (s *GatewayService) isAccountSchedulableForModelSelection(ctx context.Conte
 }
 
 func (s *GatewayService) isAccountSchedulableForNativeProtocol(ctx context.Context, account *Account) bool {
-	return account != nil && !(nativeGeminiAccountSelection(ctx) && domain.IsMultiModelPlatform(account.Platform))
+	return account != nil && (!nativeGeminiAccountSelection(ctx) || !domain.IsMultiModelPlatform(account.Platform))
 }
 
 // isAccountInGroup checks if the account belongs to the specified group.

@@ -54,7 +54,8 @@ func TestModelTracePolicyHTTPConfiguration(t *testing.T) {
 	require.NoError(t, response.Body.Close())
 	response, err = server.Client().Get(server.URL + "/global-config")
 	require.NoError(t, err)
-	defer response.Body.Close()
+	responseBody := response.Body
+	defer func() { require.NoError(t, responseBody.Close()) }()
 	var cfg service.ModelTraceGlobalConfig
 	require.NoError(t, json.NewDecoder(response.Body).Decode(&cfg))
 	require.True(t, cfg.NotifyOnMismatch)

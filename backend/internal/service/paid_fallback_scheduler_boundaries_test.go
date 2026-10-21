@@ -26,7 +26,7 @@ func TestPaidFallbackScopeModelAndDependencyDoNotTriggerSpending(t *testing.T) {
 	for _, scenario := range []string{"scope", "model", "dependency", "profit", "retry_cap", "disabled"} {
 		t.Run(scenario, func(t *testing.T) {
 			svc, ctx, _ := newPaidFallbackScheduler(t, PlatformOpenAI, false)
-			repo := svc.accountRepo.(paidFallbackAccountRepo)
+			repo := paidFallbackTestAccountRepo(t, svc)
 			until := time.Now().Add(time.Hour)
 			repo.accounts[0].RateLimitResetAt = &until
 			switch scenario {
@@ -55,7 +55,7 @@ func TestPaidFallbackWebsocketUsesSamePolicy(t *testing.T) {
 	for _, advanced := range []bool{false, true} {
 		svc, ctx, settings := newPaidFallbackScheduler(t, PlatformOpenAI, advanced)
 		svc.cfg = newSchedulerTestOpenAIWSV2Config()
-		repo := svc.accountRepo.(paidFallbackAccountRepo)
+		repo := paidFallbackTestAccountRepo(t, svc)
 		for i := range repo.accounts {
 			if repo.accounts[i].Extra == nil {
 				repo.accounts[i].Extra = map[string]any{}
@@ -87,7 +87,7 @@ func TestPaidFallbackAdmissionRechecksAccountAfterWaiting(t *testing.T) {
 	require.NoError(t, err)
 	defer selection.ReleaseFunc()
 	admissionCtx := ContextWithSelectionProfitGate(ctx, selection)
-	repo := svc.accountRepo.(paidFallbackAccountRepo)
+	repo := paidFallbackTestAccountRepo(t, svc)
 	repo.accounts[1].Schedulable = false
 	_, vetoed, reason := svc.ProfitControlVetoLatest(admissionCtx, selection.Account)
 	require.True(t, vetoed)
@@ -102,7 +102,7 @@ func TestPaidFallbackAdmissionRechecksAccountAfterWaiting(t *testing.T) {
 func TestPaidFallbackDeepSeekWBToCline(t *testing.T) {
 	for _, advanced := range []bool{false, true} {
 		svc, ctx, _ := newPaidFallbackScheduler(t, PlatformDeepseek, advanced)
-		repo := svc.accountRepo.(paidFallbackAccountRepo)
+		repo := paidFallbackTestAccountRepo(t, svc)
 		repo.accounts[0].Credentials = map[string]any{"model_mapping": map[string]any{"deepseek-v4.1-flash": "global:deepseek-v4.1-flash"}}
 		repo.accounts[1].Platform = PlatformCline
 		repo.accounts[1].Credentials = map[string]any{"model_mapping": map[string]any{"deepseek-v4.1-flash": "cline-pass/deepseek-v4.1-flash-1017"}}

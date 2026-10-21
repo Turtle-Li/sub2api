@@ -485,6 +485,27 @@ The feature itself is additive and opt-in per account+model:
 
 ## Known limits
 
+### Reference captured for the 2026-10-22 release checks
+
+The existing upstream relationship was checked against
+`munmunjaklin458-afk/cline-pass-switcher` at revision
+`02538a3137a08948a94f26f17dd4aeff8c029ed1` before the lint-only change to
+`normalizeClineSlug`. This is a new reference snapshot, not a claim about the
+revision used by the original October 18 implementation.
+
+- Source: `server.js`, especially `parseRouting`, `harvestAvailableProviders`,
+  `injectPrefs` and `buildAttempts`; contract: the README's planner/direct
+  pipeline table. The pinned tree has no automated test files or test script.
+- Adopted behavior: planner requests use `providerOptions.gateway`, direct
+  requests use top-level `provider`, and unknown pipelines receive both forms.
+- Intentional differences: Sub2API keeps its existing Go account configuration,
+  alias normalization, managed metadata and final-send injection. Local
+  `cline_upstream_pin_test.go` covers these contracts; no upstream code was
+  copied for this lint change. Explicitly discarding `strings.Builder.WriteRune`
+  results preserves its documented always-nil error behavior.
+- License: MIT, copyright 2026 cline-pass-switcher contributors. Any later copy
+  of source must retain the upstream copyright and permission notice.
+
 - Pinning is per account+model, not per API key or group. A group that mixes
   several Cline accounts uses each account's own pin.
 - `strict` pins a single upstream; a hard failure does not try the second

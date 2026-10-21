@@ -81,7 +81,7 @@ func TestPaidFallbackLocalHTTPFailureRecoveryAndStop(t *testing.T) {
 				svc, baseCtx, settings := newPaidFallbackScheduler(t, platform, false)
 				svc.cfg = rawChatCompletionsTestConfig()
 				svc.httpUpstream = paidFallbackLocalHTTP{client: &http.Client{Timeout: time.Second}}
-				repo := svc.accountRepo.(paidFallbackAccountRepo)
+				repo := paidFallbackTestAccountRepo(t, svc)
 				repo.accounts[0].Credentials = map[string]any{"api_key": "local-normal-test", "base_url": normal.URL}
 				repo.accounts[1].Credentials = map[string]any{"api_key": "local-paid-test", "base_url": paid.URL}
 				model := "gpt-5.4"

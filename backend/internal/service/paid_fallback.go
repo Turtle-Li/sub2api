@@ -107,7 +107,8 @@ func WithPaidFallbackAPIKey(ctx context.Context, apiKeyID int64) context.Context
 // WithPaidFallbackFailure records upstream failures, separately from the mixed
 // scheduler exclusions (which also contain profit and admission vetoes).
 func WithPaidFallbackFailure(ctx context.Context, account *Account, status int) context.Context {
-	if account == nil || account.IsPaidFallback() || !(status == 401 || status == 403 || status == 429 || status >= 500 && status <= 599) {
+	failureStatus := status == 401 || status == 403 || status == 429 || status >= 500 && status <= 599
+	if account == nil || account.IsPaidFallback() || !failureStatus {
 		return ctx
 	}
 	previous, _ := ctx.Value(paidFallbackFailuresKey{}).(map[int64]bool)

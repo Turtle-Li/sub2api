@@ -96,6 +96,13 @@ func selectPaidFallbackTestAccount(svc *OpenAIGatewayService, ctx context.Contex
 	return result, err
 }
 
+func paidFallbackTestAccountRepo(t *testing.T, svc *OpenAIGatewayService) paidFallbackAccountRepo {
+	t.Helper()
+	repo, ok := svc.accountRepo.(paidFallbackAccountRepo)
+	require.True(t, ok)
+	return repo
+}
+
 func TestPaidFallbackSchedulerFailureRecovery(t *testing.T) {
 	for _, platform := range []string{PlatformOpenAI, PlatformDeepseek} {
 		for _, advanced := range []bool{false, true} {
@@ -109,7 +116,7 @@ func TestPaidFallbackSchedulerFailureRecovery(t *testing.T) {
 				require.NoError(t, err)
 				require.EqualValues(t, 1, selection.Account.ID, "paid account has higher priority but remains isolated")
 				selection.ReleaseFunc()
-				repo := svc.accountRepo.(paidFallbackAccountRepo)
+				repo := paidFallbackTestAccountRepo(t, svc)
 				until := time.Now().Add(time.Hour)
 				repo.accounts[0].RateLimitResetAt = &until
 				selection, err = selectPaidFallbackTestAccount(svc, ctx, platform, nil)
@@ -179,7 +186,7 @@ func TestPaidFallbackExcludesNonTextCapabilities(t *testing.T) {
 	for _, capability := range []OpenAIEndpointCapability{OpenAIEndpointCapabilityEmbeddings, OpenAIEndpointCapabilityAlphaSearch} {
 		t.Run(string(capability), func(t *testing.T) {
 			svc, ctx, _ := newPaidFallbackScheduler(t, PlatformOpenAI, false)
-			repo := svc.accountRepo.(paidFallbackAccountRepo)
+			repo := paidFallbackTestAccountRepo(t, svc)
 			until := time.Now().Add(time.Hour)
 			repo.accounts[0].RateLimitResetAt = &until
 			groupID := int64(7)
@@ -198,7 +205,7 @@ func TestPaidFallbackExcludesResponsesImageGeneration(t *testing.T) {
 		for _, nativeTool := range []bool{false, true} {
 			t.Run(previousID+map[bool]string{false: "/image_intent", true: "/native_image_tool"}[nativeTool], func(t *testing.T) {
 				svc, ctx, _ := newPaidFallbackScheduler(t, PlatformOpenAI, false)
-				repo := svc.accountRepo.(paidFallbackAccountRepo)
+				repo := paidFallbackTestAccountRepo(t, svc)
 				until := time.Now().Add(time.Hour)
 				repo.accounts[0].RateLimitResetAt = &until
 				for i := range repo.accounts {

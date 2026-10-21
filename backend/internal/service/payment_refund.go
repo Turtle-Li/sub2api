@@ -441,10 +441,6 @@ func (s *PaymentService) writeRefundSuccessAudit(ctx context.Context, p *RefundP
 	}
 }
 
-func (s *PaymentService) writeRefundPendingAudit(ctx context.Context, oid int64, detail map[string]any) {
-	s.writeRefundAuditLog(ctx, oid, "REFUND_PENDING", "admin", detail)
-}
-
 // writeRefundAuditLog is append-only for refund events. PaymentAuditLog keeps
 // a historical unique (order_id, action) index for fulfillment idempotency;
 // gateway retries and historical recovery may legitimately repeat. The first
@@ -1196,12 +1192,12 @@ func createPaymentAuditLogTx(ctx context.Context, client *dbent.Client, oid int6
 // refundPendingAuditDetail 记录在 REFUND_PENDING 审计日志中。DeductionHeld 为 true 表示
 // 进入 pending 时扣减被保留；旧记录没有该字段，扣减已在 pending 时归还（DeductionRollbackOK）。
 type refundPendingAuditDetail struct {
-	RefundID            string  `json:"refundID"`
-	GatewayAmount       float64 `json:"gatewayAmount"`
-	DeductBalance       bool    `json:"deductBalance"`
-	RefundAmount        float64 `json:"refundAmount"`
-	Reason              string  `json:"reason"`
-	Force               bool    `json:"force"`
+	RefundID      string  `json:"refundID"`
+	GatewayAmount float64 `json:"gatewayAmount"`
+	DeductBalance bool    `json:"deductBalance"`
+	RefundAmount  float64 `json:"refundAmount"`
+	Reason        string  `json:"reason"`
+	Force         bool    `json:"force"`
 	// Always serialized: pre-v0.2.17 readers default a missing value to true
 	// and would deduct a held pending refund again after a rollback.
 	DeductionRollbackOK bool    `json:"deductionRollbackOK"`
