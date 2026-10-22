@@ -84,3 +84,5 @@ knowledge_candidate: no; project-specific feature and rollout contract.
 2026-10-22 独立边界审查报告 `/tmp/paid-fallback-management-boundary-review-20261022.md`（CHANGES_REQUIRED）已据实修复：缺失 Chat Completions public model、辅助请求误计、孤儿记录 24 小时延迟、插入结果不确定以及重复用量扫描。追加修复了通知抑制与投递状态、过期邮件取消和 0=不限语义。该审查不是最终验收，最终冻结源码复审与线上记录另附。
 
 本地已观察到：真实 PostgreSQL 的尝试/费用/UTC 阈值/多实例 claim/恢复竞争用例通过；HTTP 入口与发送边界竞态测试通过；实际 Vue 页面连接全量本地 API fixture，策略保存/白名单保留/立即关闭/读取失败后关闭/数字阈值及清空均通过，桌面 1440 与手机 390 明暗主题无页面横向溢出。截图和驱动脚本在 `.omo/evidence/paid-fallback/`。API fixture 的其他设置默认值不足会产生无关 toast，未将其作为整个设置页验收。
+
+2026-10-22 已通过标准蓝绿发布运行版本 `8fecb5956`，候选实例的实际 GPT 请求先成功，再切换流量。发布、排空和默认关闭证据见 [management release](../operations/PAID_FALLBACK_MANAGEMENT_RELEASE_20261022.md)。DS 隔离验收暂因本机 Vault 生物验证失败而未启动，不能算作已通过。
