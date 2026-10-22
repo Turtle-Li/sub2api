@@ -18,7 +18,7 @@ const (
 	schedulerBucketSetKey          = "sched:buckets"
 	schedulerOutboxWatermarkKey    = "sched:outbox:watermark"
 	schedulerAccountPrefix         = "sched:acc:"
-	schedulerAccountMetaPrefix     = "sched:meta:"
+	schedulerAccountMetaPrefix     = "sched:meta:v2:"
 	schedulerAccountLastUsedPrefix = "sched:acc:last_used:"
 	schedulerAccountRetiredPrefix  = "sched:acc:retired:"
 	schedulerActivePrefix          = "sched:active:"
@@ -1118,6 +1118,7 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		return nil
 	}
 	keys := []string{
+		service.PaidFallbackExtraKey,
 		// Anthropic shared-window and Fable-only threshold checks run on this
 		// projection. UpdateExtra refreshes both payloads without a bucket rebuild.
 		"session_window_utilization",
@@ -1192,7 +1193,7 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 	}
 	filtered := make(map[string]any)
 	for _, key := range keys {
-		if value, ok := extra[key]; ok && value != nil {
+		if value, ok := extra[key]; ok && (value != nil || key == service.PaidFallbackExtraKey) {
 			if key == service.UpstreamBillingProbeExtraKey {
 				filteredProbe := filterSchedulerUpstreamBillingProbe(value)
 				if filteredProbe == nil {
