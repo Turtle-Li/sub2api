@@ -60,3 +60,31 @@ The release outcome is recorded below once verified.
 
 Knowledge candidate: no; this is a project-local monitoring contract documented
 in `MODELTRACE.md`.
+
+## Production release
+
+Deployed on 2026-10-22 at 18:35 CST through the canonical production workflow.
+The implementation commit `7c34b50abb400cb66fc0bb554dc15b7ba1a07879` was
+fast-forwarded to `Turtle-Li/sub2api` main. Workflow
+https://github.com/Turtle-Li/sub2api/actions/runs/39762963708 succeeded with
+`deployment_target=aws-candidate`.
+
+- Target: SSH alias `sub2api-aws-candidate`, application root `/opt/sub2api`.
+- Active slot: `sub2api-green`; image `sub2api:auto-20261022-033505-7c34b50a`.
+- Runtime image ID: `sha256:8bc24799017e2340232364ce4dc73f5572d2eb9a9d798457558c8afa680068ec`.
+- Release evidence: `/var/log/sub2api-release/gha-20261022-033505-7c34b50a-709671`.
+- Real-request gate: models HTTP 200 and Responses HTTP 200 for `gpt-5.6-sol`.
+- Post-release: exact source revision verified, container healthy, zero restarts
+  and no OOM; traffic accepting and background active. Liveness, readiness and
+  refund rollback readiness passed; no panic/fatal entries in the inspected logs.
+- Public API health returned 200. The signed-in Chrome monitoring page was
+  refreshed and displayed all four existing accounts with enabled switches.
+  Production account settings were not changed during verification. A separate
+  Python HTTP client received 403 from the www edge; Chrome access succeeded.
+- Previous blue slot remained running under the controlled drain process at
+  verification time; no manual stop was performed. Release transaction markers
+  were absent after successful completion.
+
+Rollback must use the documented production workflow and preserve draining.
+The previous image predates account switches, so pause global monitoring before
+such a rollback if any account-level pauses must remain effective.
