@@ -20,13 +20,28 @@ The owner authorized deployment and isolated DeepSeek acceptance, conditional on
 
 Source validation before release: full backend unit/integration, frontend tests/build/lint, focused race checks, browser fixtures, source repairs rereview and canary review passed. Current-source CI [39768313991](https://github.com/Turtle-Li/sub2api/actions/runs/39768313991) failed only on the documented G704 finding; security run [39768315833](https://github.com/Turtle-Li/sub2api/actions/runs/39768315833) passed. The earlier build-only artifact is separate from this actual production workflow.
 
-## DeepSeek acceptance boundary
+## DeepSeek acceptance: PASS
 
-The reviewed isolated canary has not run. `infra-vault unlock-run -- run-item-env-file` failed local task-scoped biometric authentication and exited64 before a session key or test credential was injected. Vault status returned `locked`, biometric enrollment remains present, and the non-secret request file was deleted after the bounded attempt. The owner has been asked when to retry local verification. No credential is requested in chat and no bypass is permitted.
+After the first biometric attempt failed before credential injection, the owner explicitly requested a retry and completed local verification. The unchanged, reviewed consumer `.omo/evidence/paid-fallback/live-test.py` (SHA256 `c7c9f0b061ad7bc41d8b2f56f85118781b9a7f707eadf8e3c2de42e72f1eb65f`) completed `smoke` through the bounded Vault injection with exit0. All supplier calls used `deepseek-v4.1-flash` and exclusive fixture user81/group33/WB237/Cline238/keys131+132; the outside-policy control used exclusive group34.
 
-At the final read-only check, both fixture keys and both fixture accounts remained disabled, paid policy was off for fixture group33, attempts remained0, and notifications were absent/default off. No management supplier acceptance or human email was sent.
+| Scenario | Observed result |
+| --- | --- |
+| Policy off, ordinary healthy | WB237,200, ordinary usage, no paid attempt |
+| Policy on, ordinary healthy, streaming | WB237,200 with content, no paid attempt |
+| Ordinary login fault, policy on | Cline238,200 with content, one paid attempt |
+| Second key in the same group | Cline238,200, one paid attempt; no key allowlist |
+| Second key outside enabled groups | 503, no paid attempt |
+| Policy off, ordinary login fault | 502, no paid attempt |
+| Ordinary fault, paid streaming | Cline238,200 with content, one paid attempt |
+| Ordinary recovery with the same session ID | WB237,200, ordinary usage, no paid attempt |
 
-Resume only the pending DeepSeek acceptance; do not redeploy this unchanged runtime. Consumer `.omo/evidence/paid-fallback/live-test.py` SHA256 is `c7c9f0b061ad7bc41d8b2f56f85118781b9a7f707eadf8e3c2de42e72f1eb65f`. Recreate the owner-only metadata request from the private credential reference, obtain intentional local Vault verification, run its bounded `smoke`, and retain cleanup/401/source-fingerprint evidence. Test only fixture user81/group33/WB237/Cline238/keys131+132 and the owned outside-policy control group. Do not modify production GPT accounts/groups or enable customer paid scopes.
+The three new attempts have HTTP-header outcome200, group33/account238/model `deepseek-v4.1-flash`, and all belong to incident `e2cf23a2-b428-472e-96f5-78b4390a5ad6`, opened23:23:43 CST and resolved23:26:07. New usage IDs are911660,911662,911665,911669,911673,911676. The three paid rows estimate USD0.0000411; all six new usage rows estimate USD0.0000681. These are usage-snapshot estimates, not a reconciled supplier bill; older fixture usage is excluded.
+
+Cleanup passed: both keys returned401, exact fixture auth caches were invalidated, both fixture accounts and groups33/34 are disabled, fixture user81 is inactive, and policy is off with group33 retained. Original source-account221/232 configuration fingerprints match before/after. Notifications remain default off; no delivery rows or human email were generated. The non-secret metadata request was deleted, Vault is locked, and this task's biometric grant was revoked.
+
+Post-canary read-only checks through23:28:21 CST observed36 GPT usage records and zero GPT error-log rows during the DS window. Blue remained healthy at source8fec with zero restarts/OOM and API health200. No production GPT account/group was modified and no second deployment was performed.
+
+Local evidence: `.omo/evidence/paid-fallback/management-ds-live-20261022.jsonl`, SHA256 `068d582e19ce1af31013c6fb4d32769c3a5e33105ab0c06667d13a81aa3ee56a`, and `management-ds-postcheck-20261022.txt`. This live acceptance covers DS HTTP and streaming recovery; actual email delivery stayed out of scope and stateful GPT transports rely on the already completed local tests/review rather than induced production faults.
 
 ## Rollback
 

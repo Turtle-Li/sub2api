@@ -11,7 +11,7 @@
   Disable the policy to stop spending, rather than clearing account tags.
   Preserve tags and usage history on rollback; older binaries cannot isolate
   tagged reserves. Live tests use exclusive test groups, keys and accounts.
-  Latest release and pending DeepSeek acceptance are recorded in
+  Latest release and completed DeepSeek acceptance are recorded in
   `docs/operations/PAID_FALLBACK_MANAGEMENT_RELEASE_20261022.md`.
 
 ## Multi-model provider accounts

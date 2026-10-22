@@ -85,4 +85,4 @@ knowledge_candidate: no; project-specific feature and rollout contract.
 
 本地已观察到：真实 PostgreSQL 的尝试/费用/UTC 阈值/多实例 claim/恢复竞争用例通过；HTTP 入口与发送边界竞态测试通过；实际 Vue 页面连接全量本地 API fixture，策略保存/白名单保留/立即关闭/读取失败后关闭/数字阈值及清空均通过，桌面 1440 与手机 390 明暗主题无页面横向溢出。截图和驱动脚本在 `.omo/evidence/paid-fallback/`。API fixture 的其他设置默认值不足会产生无关 toast，未将其作为整个设置页验收。
 
-2026-10-22 已通过标准蓝绿发布运行版本 `8fecb5956`，候选实例的实际 GPT 请求先成功，再切换流量。发布、排空和默认关闭证据见 [management release](../operations/PAID_FALLBACK_MANAGEMENT_RELEASE_20261022.md)。DS 隔离验收暂因本机 Vault 生物验证失败而未启动，不能算作已通过。
+2026-10-22 已通过标准蓝绿发布运行版本 `8fecb5956`，候选实例的实际 GPT 请求先成功，再切换流量。随后 DS 隔离验收八个场景全部通过，包括同分组第二把密钥、普通恢复覆盖付费粘性、流式兜底和关闭/分组外拒绝；三个付费尝试归入同一已恢复事件。测试账号、分组和密钥已禁用，两把密钥均返回401，策略与通知保持关闭。发布及清理证据见 [management release](../operations/PAID_FALLBACK_MANAGEMENT_RELEASE_20261022.md)。
