@@ -103,6 +103,7 @@ func TestModelTraceIncompleteSamplesAreNotAttributed(t *testing.T) {
 	for _, valid := range []int{1, 3} {
 		t.Run(fmt.Sprint(valid), func(t *testing.T) {
 			account := &Account{ID: 89, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "test-token"}}
+			account.Extra = map[string]any{ModelTraceExtraKey: &ModelTraceAccountConfig{Models: map[string]*ModelTraceModelConfig{"gpt-5.4": {}}}}
 			repo := &openAIAccountTestRepo{}
 			repo.accountsByID = map[int64]*Account{account.ID: account}
 			upstream := &queuedHTTPUpstream{}

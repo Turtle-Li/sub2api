@@ -143,7 +143,16 @@
             </div>
 
             <!-- Action buttons -->
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <label class="inline-flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+                <Toggle
+                  :model-value="account.enabled !== false"
+                  :disabled="togglingAccounts[account.account_id]"
+                  :aria-label="t('admin.modelTrace.accountMonitoring', { name: account.account_name })"
+                  @update:model-value="toggleAccountMonitoring(account, $event)"
+                />
+                {{ t(account.enabled === false ? 'admin.modelTrace.monitoringPaused' : 'admin.modelTrace.monitoringActive') }}
+              </label>
               <button
                 type="button"
                 class="btn btn-secondary btn-sm"
@@ -274,7 +283,7 @@
                         <button
                           type="button"
                           class="btn btn-secondary btn-sm"
-                          :disabled="isProbing(account.account_id, String(modelId))"
+                          :disabled="account.enabled === false || togglingAccounts[account.account_id] || isProbing(account.account_id, String(modelId))"
                           @click="handleRunProbe(account, String(modelId))"
                         >
                           <Icon
@@ -759,6 +768,23 @@ const appStore = useAppStore()
 const loading = ref(false)
 const monitors = ref<ModelTraceMonitorItem[]>([])
 const probingMap = reactive<Record<string, boolean>>({})
+const togglingAccounts = reactive<Record<number, boolean>>({})
+
+async function toggleAccountMonitoring(account: ModelTraceMonitorItem, enabled: boolean) {
+  const id = account.account_id
+  if (togglingAccounts[id]) return
+  togglingAccounts[id] = true
+  try {
+    await modelTraceAPI.updateAccountConfig(id, { enabled })
+    const current = monitors.value.find(item => item.account_id === id)
+    if (current) current.enabled = enabled
+    appStore.showSuccess(t(enabled ? 'admin.modelTrace.monitoringResumed' : 'admin.modelTrace.monitoringPauseSaved'))
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  } finally {
+    togglingAccounts[id] = false
+  }
+}
 const globalConfigLoaded = ref(false)
 const showAccountPicker = ref(false)
 const accountSearch = ref('')
@@ -969,7 +995,7 @@ async function saveGlobalConfig() {
 // Single Model Probe
 async function handleRunProbe(account: ModelTraceMonitorItem, modelId: string) {
   const key = `${account.account_id}:${modelId}`
-  if (probingMap[key]) return
+  if (account.enabled === false || togglingAccounts[account.account_id] || probingMap[key]) return
   probingMap[key] = true
 
   try {

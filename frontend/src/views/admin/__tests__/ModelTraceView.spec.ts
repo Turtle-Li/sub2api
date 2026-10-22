@@ -44,6 +44,39 @@ const globalConfig = {
 }
 
 describe('ModelTrace explicit monitoring setup', () => {
+  it('pauses and resumes an account without removing models or history', async () => {
+    const model = { latest: { detected_model: 'gpt-5.4', probability: 0.9, latency_ms: 20, tested_at: '2026-10-22T00:00:00Z' } }
+    mocks.listMonitors.mockResolvedValue([{ account_id: 1, account_name: 'Cooling account', platform: 'openai', type: 'oauth', models: { 'gpt-5.4': model } }])
+    const wrapper = mountView()
+    await flushPromises()
+    const toggle = wrapper.get('[aria-label="admin.modelTrace.accountMonitoring"]')
+    await toggle.setValue(false)
+    await flushPromises()
+    expect(mocks.updateAccountConfig).toHaveBeenLastCalledWith(1, { enabled: false })
+    expect(wrapper.text()).toContain('admin.modelTrace.monitoringPaused')
+    const probe = wrapper.findAll('button').find(button => button.text().includes('admin.modelTrace.runProbe'))
+    expect(probe?.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('gpt-5.4')
+    expect(mocks.removeAccountMonitor).not.toHaveBeenCalled()
+    await toggle.setValue(true)
+    await flushPromises()
+    expect(mocks.updateAccountConfig).toHaveBeenLastCalledWith(1, { enabled: true })
+    expect(probe?.attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('keeps the account enabled if saving its switch fails', async () => {
+    mocks.listMonitors.mockResolvedValue([{ account_id: 1, account_name: 'Account', platform: 'openai', type: 'oauth', models: {} }])
+    mocks.updateAccountConfig.mockRejectedValueOnce(new Error('save failed'))
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[aria-label="admin.modelTrace.accountMonitoring"]').setValue(false)
+    await flushPromises()
+    expect(wrapper.text()).toContain('admin.modelTrace.monitoringActive')
+    expect(mocks.showError).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.listMonitors.mockResolvedValue([])

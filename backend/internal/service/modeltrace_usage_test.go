@@ -36,8 +36,10 @@ func TestModelTraceRecordsActualRequestPathAndFirstToken(t *testing.T) {
 func TestModelTraceFailedAttemptsAreRecorded(t *testing.T) {
 	// With no upstream, every attempted sample must remain inspectable, rather
 	// than only retaining the final aggregate error.
-	svc := NewModelTraceService(nil, &modelTraceTestSettings{}, nil, nil)
-	record := svc.executeProbe(context.Background(), &Account{ID: 31}, "test")
+	account := &Account{ID: 31, Extra: map[string]any{ModelTraceExtraKey: &ModelTraceAccountConfig{Models: map[string]*ModelTraceModelConfig{"test": {}}}}}
+	svc := NewModelTraceService(&modelTraceTestRepo{account: account}, &modelTraceTestSettings{}, nil, nil)
+	t.Cleanup(svc.Stop)
+	record := svc.executeProbe(context.Background(), account, "test")
 	require.Equal(t, "Unknown", record.DetectedModel)
 	require.NotEmpty(t, record.Error)
 	require.Len(t, record.Requests, 4)

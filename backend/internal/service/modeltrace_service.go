@@ -84,6 +84,7 @@ type modelTraceTaskKey struct {
 
 // ModelTraceAccountConfig represents the configuration stored in account.Extra["modeltrace"].
 type ModelTraceAccountConfig struct {
+	Enabled   *bool                             `json:"enabled,omitempty"`
 	LastRunAt *time.Time                        `json:"last_run_at,omitempty"`
 	Models    map[string]*ModelTraceModelConfig `json:"models"` // model_id -> config
 }
@@ -103,6 +104,7 @@ type ModelTraceGlobalConfig struct {
 
 // ModelTraceAccountViewItem is used by admin UI to inspect account monitor state.
 type ModelTraceAccountViewItem struct {
+	Enabled     bool                              `json:"enabled"`
 	AccountID   int64                             `json:"account_id"`
 	AccountName string                            `json:"account_name"`
 	Platform    string                            `json:"platform"`
@@ -114,7 +116,8 @@ type ModelTraceAccountViewItem struct {
 
 // UpdateAccountModelTraceRequest represents payload to configure modeltrace on an account.
 type UpdateAccountModelTraceRequest struct {
-	Models []string `json:"models"`
+	Enabled *bool    `json:"enabled,omitempty"`
+	Models  []string `json:"models"`
 }
 
 // ModelTraceService coordinates ModelTrace attribution probes and background checks.
@@ -399,6 +402,7 @@ func (s *ModelTraceService) ListMonitors(ctx context.Context) ([]ModelTraceAccou
 		s.tasksMu.Unlock()
 
 		items = append(items, ModelTraceAccountViewItem{
+			Enabled:     cfg.IsEnabled(),
 			AccountID:   acc.ID,
 			AccountName: acc.Name,
 			Platform:    acc.Platform,
@@ -420,7 +424,7 @@ func (s *ModelTraceService) RemoveAccountMonitor(ctx context.Context, accountID 
 	return s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{ModelTraceExtraKey: nil})
 }
 
-// UpdateAccountConfig sets only the monitored models for a single account.
+// UpdateAccountConfig updates supplied monitor settings, preserving omitted fields.
 func (s *ModelTraceService) UpdateAccountConfig(ctx context.Context, accountID int64, req UpdateAccountModelTraceRequest) error {
 	if len(req.Models) > modelTraceMaxModels {
 		return infraerrors.BadRequest("MODELTRACE_CONFIG_INVALID", fmt.Sprintf("configure at most %d models per account", modelTraceMaxModels))
@@ -438,6 +442,9 @@ func (s *ModelTraceService) UpdateAccountConfig(ctx context.Context, accountID i
 
 	cfg := DecodeModelTraceConfig(acc.Extra)
 	if cfg == nil {
+		if req.Models == nil {
+			return infraerrors.BadRequest("MODELTRACE_NOT_CONFIGURED", "account is not configured for modeltrace")
+		}
 		cfg = &ModelTraceAccountConfig{
 			Models: make(map[string]*ModelTraceModelConfig),
 		}
@@ -458,7 +465,12 @@ func (s *ModelTraceService) UpdateAccountConfig(ctx context.Context, accountID i
 			currentModels[m] = &ModelTraceModelConfig{}
 		}
 	}
-	cfg.Models = currentModels
+	if req.Models != nil {
+		cfg.Models = currentModels
+	}
+	if req.Enabled != nil {
+		cfg.Enabled = req.Enabled
+	}
 
 	return s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{ModelTraceExtraKey: cfg})
 }
@@ -478,6 +490,9 @@ func (s *ModelTraceService) SubmitProbe(ctx context.Context, accountID int64, mo
 	cfg := DecodeModelTraceConfig(account.Extra)
 	if cfg == nil {
 		return nil, infraerrors.BadRequest("MODELTRACE_NOT_CONFIGURED", "account is not configured for modeltrace")
+	}
+	if !cfg.IsEnabled() {
+		return nil, infraerrors.BadRequest("MODELTRACE_DISABLED", "account monitoring is paused")
 	}
 	if _, ok := cfg.Models[modelID]; !ok {
 		return nil, infraerrors.BadRequest("MODELTRACE_NOT_CONFIGURED", "model is not configured for modeltrace")
@@ -579,6 +594,9 @@ func (s *ModelTraceService) probeModelLocked(ctx context.Context, accountID int6
 	if initialConfig == nil {
 		return nil, fmt.Errorf("account is not configured for modeltrace")
 	}
+	if !initialConfig.IsEnabled() {
+		return nil, infraerrors.BadRequest("MODELTRACE_DISABLED", "account monitoring is paused")
+	}
 	if _, exists := initialConfig.Models[modelID]; !exists {
 		return nil, fmt.Errorf("model is not configured for modeltrace")
 	}
@@ -625,6 +643,22 @@ probeLoop:
 		if ctx.Err() != nil {
 			lastErr = ctx.Err()
 			break
+		}
+		if attempt > 0 {
+			latest, err := s.accountRepo.GetByID(ctx, account.ID)
+			if err != nil {
+				lastErr = err
+				break
+			}
+			current := DecodeModelTraceConfig(latest.Extra)
+			if current == nil || !current.IsEnabled() {
+				lastErr = fmt.Errorf("account monitoring is paused or removed")
+				break
+			}
+			if _, exists := current.Models[modelID]; !exists {
+				lastErr = fmt.Errorf("model is not configured for modeltrace")
+				break
+			}
 		}
 		l := logger.FromContext(ctx)
 		l.Info("modeltrace.request_started", zap.Int("attempt", attempt+1), zap.Int("max_attempts", maxAttempts), zap.Int("valid_samples", len(outputs)), zap.Int("target_samples", targetCount))
@@ -781,7 +815,7 @@ func (s *ModelTraceService) RunScheduledCycle(ctx context.Context) {
 			continue
 		}
 		cfg := DecodeModelTraceConfig(acc.Extra)
-		if cfg == nil || len(cfg.Models) == 0 {
+		if cfg == nil || !cfg.IsEnabled() || len(cfg.Models) == 0 {
 			logger.LegacyPrintf("service.modeltrace", "[ModelTrace] account %d skipped: no monitored models", acc.ID)
 			continue
 		}
@@ -837,7 +871,7 @@ func (s *ModelTraceService) runAccountCycle(ctx context.Context, account *Accoun
 			return
 		}
 		current := DecodeModelTraceConfig(latest.Extra)
-		if current == nil {
+		if current == nil || !current.IsEnabled() {
 			logger.LegacyPrintf("service.modeltrace", "[ModelTrace] account %d stopped: monitor removed", account.ID)
 			return
 		}

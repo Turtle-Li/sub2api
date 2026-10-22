@@ -1,5 +1,10 @@
 export default {
   modelTrace: {
+    accountMonitoring: 'Enable checks for {name}',
+    monitoringActive: 'Checks on',
+    monitoringPaused: 'Checks paused',
+    monitoringResumed: 'Checks resumed with the existing model configuration',
+    monitoringPauseSaved: 'Checks paused; configuration and history retained. In-flight requests may finish, with no further samples.',
     title: 'Model Fingerprint Monitor',
     description: 'Fingerprint checks and alerts.',
     refresh: 'Refresh',

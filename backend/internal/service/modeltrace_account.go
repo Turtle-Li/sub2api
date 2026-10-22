@@ -12,6 +12,10 @@ import (
 // without mistaking ports such as ":443" in transport errors for a status.
 var modelTraceHTTPStatus = regexp.MustCompile(`(?:returned|HTTP) ([45][0-9]{2})\b`)
 
+func (c *ModelTraceAccountConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
 // modelTraceTerminalStatus reports upstream rejections that further attempts in
 // the same probe cannot fix: bad request/parameters, auth, missing model, or
 // rate limiting. Retrying them only burns quota and can extend upstream cooldowns.

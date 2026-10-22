@@ -245,11 +245,14 @@ func TestModelTraceScheduledModelsHaveIndependentBoundedDeadlines(t *testing.T) 
 	saved := DecodeModelTraceConfig(repo.account.Extra)
 	require.NotNil(t, saved.Models["gpt-5.4"].Latest)
 	require.NotNil(t, saved.Models["gpt-5.6-sol"].Latest)
-	require.Len(t, repo.readDeadlines, 6)
-	for _, start := range []int{0, 3} {
+	require.Len(t, repo.readDeadlines, 12)
+	for _, start := range []int{0, 6} {
 		require.True(t, repo.readDeadlines[start].IsZero(), "account cycle must not impose a shared model deadline")
 		require.WithinDuration(t, time.Now().Add(modelTraceTimeout), repo.readDeadlines[start+1], time.Second, "each model probe must have its own bounded deadline")
-		require.WithinDuration(t, time.Now().Add(5*time.Second), repo.readDeadlines[start+2], time.Second)
+		for _, offset := range []int{2, 3, 4} {
+			require.Equal(t, repo.readDeadlines[start+1], repo.readDeadlines[start+offset], "switch rechecks must retain the model deadline")
+		}
+		require.WithinDuration(t, time.Now().Add(5*time.Second), repo.readDeadlines[start+5], time.Second)
 	}
 }
 

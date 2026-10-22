@@ -92,6 +92,15 @@ by local implementation.
 
 ## Use and limitations
 
+Each account card also has an independent monitoring switch. Turning it off
+retains models and history, blocks manual/queued checks and skips scheduled
+checks. Requests already dispatched may finish, but subsequent samples stop;
+late results cannot trigger mismatch actions while paused. Re-enable the same
+account to reuse its configuration. Existing monitors default to enabled. This
+switch is stored in `extra.modeltrace.enabled` and does not change business-call
+scheduling. Config updates preserve omitted fields; explicit `models: []`
+still clears the model list. No database migration is required.
+
 Admin navigation → ModelTrace → add an account → configure GPT model names →
 run a check. Each default check requests three valid challenge samples; the
 upstream retry ceiling is three additional attempts. These requests consume

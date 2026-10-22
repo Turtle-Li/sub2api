@@ -56,7 +56,7 @@ func (s *ModelTraceService) saveProbeResult(ctx context.Context, accountID int64
 	if err := s.accountRepo.UpdateExtra(saveCtx, accountID, map[string]any{ModelTraceExtraKey: cfg}); err != nil {
 		return nil, fmt.Errorf("save modeltrace result: %w", err)
 	}
-	if record.MatchStatus == "mismatch" && (policy.NotifyOnMismatch || policy.PauseOnMismatch) {
+	if cfg.IsEnabled() && record.MatchStatus == "mismatch" && (policy.NotifyOnMismatch || policy.PauseOnMismatch) {
 		actionCtx, actionCancel := context.WithTimeout(ctx, 15*time.Second)
 		defer actionCancel()
 		s.applyMismatchPolicy(actionCtx, account, model, policy)
